@@ -41,7 +41,8 @@ type MessageBroker struct {
 	mu              sync.RWMutex
 	handleCallbacks []func(dto *dto.MessageDTO)
 	interceptor     func(origin types.PeerID, text string) bool
-	connect         func(types.PeerID) // asked to open a connection to a peer that cannot be reached
+	connect         func(types.PeerID)      // asked to open a connection to a peer that cannot be reached
+	useAsRelay      func(types.PeerID) bool // a peer to route through even if it does not advertise (a configured private relay)
 	connMu          sync.Mutex
 	lastConnect     map[types.PeerID]time.Time
 	lastReset       map[types.PeerID]time.Time
@@ -292,8 +293,8 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 	}
 
 	for _, p := range allPeers {
-		if !p.Relays() {
-			continue // a signaling-only node passes on no messages
+		if !p.Relays() && !(s.useAsRelay != nil && s.useAsRelay(p.ID())) {
+			continue // not a relay (a signaling-only node, or a private relay we were not given)
 		}
 		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
 			s.log.Info("MessageBroker: message routed via relay peer", "target", targetID.String()[:8])
@@ -556,6 +557,12 @@ func (s *MessageBroker) SetConnector(f func(types.PeerID)) {
 	s.mu.Lock()
 	s.connect = f
 	s.mu.Unlock()
+}
+
+// SetRelaySelector names peers to route messages through even when they do not advertise as a
+// relay — a private relay the node was configured to use.
+func (s *MessageBroker) SetRelaySelector(f func(types.PeerID) bool) {
+	s.useAsRelay = f
 }
 
 const connectPause = 20 * time.Second

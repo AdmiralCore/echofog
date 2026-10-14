@@ -37,8 +37,9 @@ type RelayServer struct {
 	mailbox *messenger.MailboxManager
 	logger  *slog.Logger
 
-	cfgMu sync.RWMutex
-	cfg   config.RelayServerConfig
+	cfgMu   sync.RWMutex
+	cfg     config.RelayServerConfig
+	allowed map[types.PeerID]bool // when cfg.Private: the peers allowed to use this relay
 
 	circuitsMu sync.RWMutex
 	circuits   map[uint32]*Circuit
@@ -51,6 +52,7 @@ type RelayServer struct {
 	delivered      atomic.Uint64 // mailbox messages handed over when the recipient came back
 	signalRefused  atomic.Uint64 // frames a signaling circuit would not carry
 	refusedMsgs    atomic.Uint64 // messages a signaling node does not relay or keep
+	accessRefused  atomic.Uint64 // requests from peers not allowed on a private relay
 }
 
 // Limits of a signaling circuit: the hole punching exchange is a few small messages, so anything
@@ -85,6 +87,9 @@ type RelayStats struct {
 	SignalingOnly   bool   `json:"signalingOnly"`
 	SignalRefused   uint64 `json:"signalRefused"` // frames a signaling circuit would not carry
 	RefusedMessages uint64 `json:"refusedMessages"`
+	Private         bool   `json:"private"`
+	AllowedPeers    int    `json:"allowedPeers"`  // size of the allow list on a private relay
+	AccessRefused   uint64 `json:"accessRefused"` // requests from peers not on the allow list
 }
 
 // Stats returns the relay totals.
@@ -94,6 +99,7 @@ func (rs *RelayServer) Stats() RelayStats {
 	rs.circuitsMu.RUnlock()
 	rs.cfgMu.RLock()
 	cfg := rs.cfg
+	allowedCount := len(rs.allowed)
 	rs.cfgMu.RUnlock()
 	st := RelayStats{
 		ActiveCircuits:  active,
@@ -107,6 +113,9 @@ func (rs *RelayServer) Stats() RelayStats {
 		SignalingOnly:   cfg.SignalingOnly,
 		SignalRefused:   rs.signalRefused.Load(),
 		RefusedMessages: rs.refusedMsgs.Load(),
+		Private:         cfg.Private,
+		AllowedPeers:    allowedCount,
+		AccessRefused:   rs.accessRefused.Load(),
 	}
 	if rs.mailbox != nil {
 		st.MailboxWaiting = rs.mailbox.Waiting()
@@ -140,8 +149,27 @@ func (rs *RelayServer) SetPolicy(cfg config.RelayServerConfig) {
 	rs.cfgMu.Lock()
 	defer rs.cfgMu.Unlock()
 	rs.cfg = cfg
+	rs.allowed = make(map[types.PeerID]bool, len(cfg.AllowedPeers))
+	for _, s := range cfg.AllowedPeers {
+		if id, err := types.PeerIDFromString(s); err == nil {
+			rs.allowed[id] = true
+		} else {
+			rs.logger.Warn("RelayServer: ignoring malformed allowed peer id", "id", s)
+		}
+	}
 	rs.logger.Info("RelayServer: Dynamic policy updated",
-		"enabled", cfg.Enabled, "price_per_mb", cfg.PricePerMB, "max_circuits", cfg.MaxCircuits)
+		"enabled", cfg.Enabled, "private", cfg.Private, "allowed", len(rs.allowed), "max_circuits", cfg.MaxCircuits)
+}
+
+// servesPeer reports whether this relay will work for a given peer: always on a public relay, and
+// only for the allowed peers on a private one.
+func (rs *RelayServer) servesPeer(id types.PeerID) bool {
+	rs.cfgMu.RLock()
+	defer rs.cfgMu.RUnlock()
+	if !rs.cfg.Private {
+		return true
+	}
+	return rs.allowed[id]
 }
 
 func (rs *RelayServer) GetPolicy() config.RelayServerConfig {
@@ -233,6 +261,16 @@ func (rs *RelayServer) handleCircuitOpenReq(payload []byte, fromPeer types.PeerI
 		resp[4] = 0 // rejected: relay server disabled
 		_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, resp)
 		rs.logger.Debug("RelayServer: CircuitOpen rejected: relay server is disabled", "from", fromPeer.String()[:8])
+		return
+	}
+
+	// A private relay serves only the peers its operator allowed.
+	if !rs.servesPeer(fromPeer) {
+		rs.accessRefused.Add(1)
+		resp := make([]byte, 5)
+		resp[4] = 0 // rejected: not on the allow list
+		_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, resp)
+		rs.logger.Debug("RelayServer: CircuitOpen rejected: peer not allowed on this private relay", "from", fromPeer.String()[:8])
 		return
 	}
 
@@ -416,6 +454,11 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		// not a relay: nothing is passed on or kept for others. Clients that know pick relays
 		// by what peers announce; this is for older ones.
 		rs.refusedMsgs.Add(1)
+		return
+	}
+	if targetID != selfID && !rs.servesPeer(fromPeer) {
+		// a private relay does not pass on or keep messages for peers it was not told to serve
+		rs.accessRefused.Add(1)
 		return
 	}
 	rs.logger.Info("RelayServer: received relay message",

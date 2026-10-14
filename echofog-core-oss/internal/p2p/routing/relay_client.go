@@ -71,6 +71,7 @@ type RelayClient struct {
 	// Market-aware economics & configuration
 	cfgMu       sync.RWMutex
 	cfg         config.RelayClientConfig
+	preferred   map[types.PeerID]bool // relays named in cfg.Relays: used even if they do not advertise
 	spentToday  atomic.Int64
 	relayPrices map[types.PeerID]int64
 	relayPings  map[types.PeerID]time.Duration
@@ -113,9 +114,26 @@ func (rc *RelayClient) SetPolicy(cfg config.RelayClientConfig) {
 	rc.cfgMu.Lock()
 	defer rc.cfgMu.Unlock()
 	rc.cfg = cfg
+	rc.preferred = make(map[types.PeerID]bool, len(cfg.Relays))
+	for _, addr := range cfg.Relays {
+		if _, id, ok := network.SplitPeerAddr(addr); ok {
+			rc.preferred[id] = true
+		} else if id, err := types.PeerIDFromString(addr); err == nil {
+			rc.preferred[id] = true
+		} else {
+			rc.logger.Warn("RelayClient: ignoring malformed relay address", "addr", addr)
+		}
+	}
 	rc.logger.Info("RelayClient: Dynamic policy updated",
 		"enabled", cfg.Enabled, "max_price", cfg.MaxAcceptablePricePerMB,
-		"max_ping", cfg.MaxAcceptablePingMs, "market_aware", cfg.MarketAwareSelection)
+		"max_ping", cfg.MaxAcceptablePingMs, "market_aware", cfg.MarketAwareSelection, "preferred", len(rc.preferred))
+}
+
+// IsPreferred reports whether a relay was named in the config (used even if it does not advertise).
+func (rc *RelayClient) IsPreferred(id types.PeerID) bool {
+	rc.cfgMu.RLock()
+	defer rc.cfgMu.RUnlock()
+	return rc.preferred[id]
 }
 
 func (rc *RelayClient) GetPolicy() config.RelayClientConfig {
@@ -236,11 +254,27 @@ func (rc *RelayClient) GetRankedViableRelays(targetID types.PeerID) []*swarm.Pee
 	return rc.rankedRelays(targetID, (*swarm.Peer).Relays)
 }
 
-// rankedRelays lists the viable peers that offer what is needed, best first.
+// rankedRelays lists the relays to try, best first. Relays named in the config come first and are
+// used even if they do not advertise themselves (a private relay you were given access to); then
+// the viable relays discovered on the open market.
 func (rc *RelayClient) rankedRelays(targetID types.PeerID, offers func(*swarm.Peer) bool) []*swarm.Peer {
 	var ranked []*swarm.Peer
+	seen := map[types.PeerID]bool{}
 	for _, m := range rc.GetMarketStatus() {
-		if m.IsViable && m.PeerID != targetID {
+		if m.PeerID == targetID || m.IsBlacklisted {
+			continue
+		}
+		p := rc.swarm.GetPeer(m.PeerID)
+		if p == nil {
+			continue
+		}
+		if rc.IsPreferred(m.PeerID) {
+			ranked = append(ranked, p)
+			seen[m.PeerID] = true
+		}
+	}
+	for _, m := range rc.GetMarketStatus() {
+		if m.IsViable && m.PeerID != targetID && !seen[m.PeerID] {
 			if p := rc.swarm.GetPeer(m.PeerID); p != nil && offers(p) {
 				ranked = append(ranked, p)
 			}

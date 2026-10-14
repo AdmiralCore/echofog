@@ -118,6 +118,15 @@ func (id PeerID) String() string {
 	return hex.EncodeToString(id[:])
 }
 
+// PeerIDFromString parses a peer ID from its 64-character hex form (the inverse of String).
+func PeerIDFromString(s string) (PeerID, error) {
+	raw, err := hex.DecodeString(s)
+	if err != nil {
+		return PeerID{}, err
+	}
+	return ToPeerID(raw)
+}
+
 func (id PeerID) MarshalText() ([]byte, error) {
 	return []byte(hex.EncodeToString(id[:])), nil
 }

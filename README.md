@@ -56,6 +56,13 @@ Two kinds of public node matter for a healthy network: **relays**, which carry t
 that cannot reach each other directly, and **signaling nodes** (`--signaling`), which only keep the
 DHT and help with hole punching and so cost almost no bandwidth.
 
+A relay can be **public** (the default — it serves anyone) or **private** (`--relay-private`): a
+private relay is not advertised and serves only the peer IDs its operator lists in `--relay-allow`,
+so you can run one on your own VPS for yourself and a few friends. Those friends reach it by adding
+its address with `--relays host:port/<peer id>` (and are added for free with their peer ID on the
+relay side); a client dials and prefers the relays named there even though a private one does not
+advertise itself.
+
 ## Quick start
 
 You need **Go 1.27+**. For the desktop app you also need **Node 18+** and the

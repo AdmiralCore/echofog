@@ -42,6 +42,9 @@ type options struct {
 	noHolePunch          bool
 
 	relay            bool
+	relayPrivate     bool
+	relayAllow       string
+	relays           string
 	signaling        bool
 	relayMaxCircuits int
 
@@ -85,6 +88,9 @@ func parseRunFlags(args []string) options {
 	f.BoolVar(&o.noHolePunch, "no-hole-punch", envBool("ECHOFOG_NO_HOLE_PUNCH", false), "do not try direct connections between peers behind NATs")
 
 	f.BoolVar(&o.relay, "relay", envBool("ECHOFOG_RELAY", true), "relay calls and messages for peers that cannot reach each other directly, and keep messages for offline peers")
+	f.BoolVar(&o.relayPrivate, "relay-private", envBool("ECHOFOG_RELAY_PRIVATE", false), "make the relay private: it is not advertised and serves only the peers listed in --relay-allow")
+	f.StringVar(&o.relayAllow, "relay-allow", getEnv("ECHOFOG_RELAY_ALLOW", ""), "comma-separated peer IDs allowed to use this relay when it is private")
+	f.StringVar(&o.relays, "relays", getEnv("ECHOFOG_RELAYS", ""), "comma-separated relays to connect to and prefer, as host:port/<peer id> (use to reach a private relay you were given access to)")
 	f.BoolVar(&o.signaling, "signaling", envBool("ECHOFOG_SIGNALING", false), "signaling only: keep the DHT and help peers behind NATs connect directly (hole punching), but relay no traffic and keep no messages")
 	f.IntVar(&o.relayMaxCircuits, "relay-max-circuits", int(envInt64("ECHOFOG_RELAY_MAX_CIRCUITS", 200)), "most relayed connections at once")
 
@@ -149,10 +155,24 @@ func (o options) config() *config.AppConfig {
 	cfg.AntiDPI.CamouflageAddr = o.camouflageAddr
 	cfg.Relay.Server.Enabled = o.relay || o.signaling
 	cfg.Relay.Server.SignalingOnly = o.signaling
+	cfg.Relay.Server.Private = o.relayPrivate
+	cfg.Relay.Server.AllowedPeers = splitCSV(o.relayAllow)
+	cfg.Relay.Client.Relays = splitCSV(o.relays)
 	if o.relayMaxCircuits > 0 {
 		cfg.Relay.Server.MaxCircuits = o.relayMaxCircuits
 	}
 	return cfg
+}
+
+// splitCSV turns a comma-separated flag value into a trimmed, non-empty list.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func listenPort(addr string) string {
@@ -269,10 +289,16 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 	}
 	if o.signaling {
 		fmt.Println("Relay:         signaling only: DHT and hole punching help, no traffic is relayed")
+	} else if o.relay && o.relayPrivate {
+		fmt.Printf("Relay:         private, up to %d connections at once, serving %d allowed peer(s)\n", o.relayMaxCircuits, len(splitCSV(o.relayAllow)))
+		fmt.Println("               (not advertised; allowed peers reach it with --relays " + joinAddress(n, o.listenAddr) + ")")
 	} else if o.relay {
-		fmt.Printf("Relay:         on, up to %d connections at once\n", o.relayMaxCircuits)
+		fmt.Printf("Relay:         public, up to %d connections at once\n", o.relayMaxCircuits)
 	} else {
 		fmt.Println("Relay:         off")
+	}
+	if rc := len(splitCSV(o.relays)); rc > 0 {
+		fmt.Printf("Using relays:  %d configured\n", rc)
 	}
 	if o.exit {
 		fmt.Printf("Exit:          sharing, $%s per GB (paid in TON or USDT), %d KB free per client per day\n", o.exitPrice, o.exitFreeKB)

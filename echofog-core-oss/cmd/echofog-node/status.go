@@ -163,8 +163,15 @@ func statsLine(s Status) string {
 		fmt.Fprintf(&b, " | signaling: %d/%d active, %d opened, %s passed on, %d traffic frames and %d messages refused",
 			r.ActiveCircuits, r.MaxCircuits, r.CircuitsOpened, human(r.BytesRouted), r.SignalRefused, r.RefusedMessages)
 	} else if r.Enabled {
-		fmt.Fprintf(&b, " | relay: %d/%d active, %d opened, %s routed, %d msgs passed on, %d kept for offline (%d waiting, %d delivered)",
-			r.ActiveCircuits, r.MaxCircuits, r.CircuitsOpened, human(r.BytesRouted), r.Forwarded, r.Stored, r.MailboxWaiting, r.Delivered)
+		kind := "relay"
+		if r.Private {
+			kind = "private relay"
+		}
+		fmt.Fprintf(&b, " | %s: %d/%d active, %d opened, %s routed, %d msgs passed on, %d kept for offline (%d waiting, %d delivered)",
+			kind, r.ActiveCircuits, r.MaxCircuits, r.CircuitsOpened, human(r.BytesRouted), r.Forwarded, r.Stored, r.MailboxWaiting, r.Delivered)
+		if r.Private {
+			fmt.Fprintf(&b, ", %d allowed, %d refused", r.AllowedPeers, r.AccessRefused)
+		}
 	} else {
 		b.WriteString(" | relay: off")
 	}
@@ -293,7 +300,12 @@ func printStatus(s Status) {
 		fmt.Printf("    connections   %d active of %d, %d opened since start, %s of signals passed on\n", r.ActiveCircuits, r.MaxCircuits, r.CircuitsOpened, human(r.BytesRouted))
 		fmt.Printf("    refused       %d traffic frames, %d messages to relay or keep\n", r.SignalRefused, r.RefusedMessages)
 	} else if r.Enabled {
-		fmt.Println("  Relay:")
+		if r.Private {
+			fmt.Println("  Relay:        private (not advertised)")
+			fmt.Printf("    access        %d allowed peer(s), %d request(s) refused\n", r.AllowedPeers, r.AccessRefused)
+		} else {
+			fmt.Println("  Relay:        public")
+		}
 		fmt.Printf("    connections   %d active of %d, %d opened since start\n", r.ActiveCircuits, r.MaxCircuits, r.CircuitsOpened)
 		fmt.Printf("    traffic       %s routed for others\n", human(r.BytesRouted))
 		fmt.Printf("    messages      %d passed on, %d kept for offline peers (%d waiting, %d delivered)\n", r.Forwarded, r.Stored, r.MailboxWaiting, r.Delivered)

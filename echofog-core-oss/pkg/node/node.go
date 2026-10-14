@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -463,6 +464,9 @@ func (n *Node) Start() error {
 	n.RelayClient = routing.NewRelayClient(n.Swarm, dhtEngine, n.Logger)
 	n.RelayServer.SetPolicy(n.Cfg.Relay.Server)
 	n.RelayClient.SetPolicy(n.Cfg.Relay.Client)
+	// route messages through a configured private relay even though it does not advertise itself
+	n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
+	n.dialConfiguredRelays()
 
 	// Publish node's own PreKeyBundle locally and to DHT for asynchronous E2EE initiation, and keep
 	// it there: the first publication happens before anybody is connected, so it is repeated
@@ -650,10 +654,42 @@ func (n *Node) announcedCaps() handshake.Capability {
 	switch rs := n.Cfg.Relay.Server; {
 	case rs.Enabled && rs.SignalingOnly:
 		caps |= handshake.CapSignal
+	case rs.Enabled && rs.Private:
+		// a private relay is not advertised: strangers must not pick it. The people it allows
+		// reach it by its address (relay.client.relays), which bypasses this advert.
 	case rs.Enabled:
 		caps |= handshake.CapRelay
 	}
 	return caps
+}
+
+// dialConfiguredRelays connects to the relays named in relay.client.relays, so the node can use a
+// private relay it was given access to (by its "host:port/<peer id>" address).
+func (n *Node) dialConfiguredRelays() {
+	for _, addr := range n.Cfg.Relay.Client.Relays {
+		a, id, ok := network.SplitPeerAddr(addr)
+		if !ok {
+			n.Logger.Warn("relay address needs a peer id (host:port/<peer id>)", "addr", addr)
+			continue
+		}
+		n.Swarm.AddPotentialPeer(id, resolveRelayHost(a))
+	}
+}
+
+// resolveRelayHost resolves the host of a relay address, like the bootstrap path does, so a domain
+// name works. A ws:// URL or an unresolvable value is passed through unchanged.
+func resolveRelayHost(addr string) string {
+	if strings.HasPrefix(addr, "ws://") || strings.HasPrefix(addr, "wss://") {
+		return addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if ips, err := net.LookupHost(host); err == nil && len(ips) > 0 {
+		return net.JoinHostPort(ips[0], port)
+	}
+	return addr
 }
 
 func (n *Node) GetRelayServer() *routing.RelayServer {

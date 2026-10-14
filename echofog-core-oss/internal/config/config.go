@@ -123,6 +123,13 @@ type RelayServerConfig struct {
 	// SignalingOnly: pass on only the small messages that start direct connections between
 	// peers behind NATs (hole punching); no calls, files, messages or tunnels are relayed.
 	SignalingOnly bool `json:"signaling_only"`
+	// Private: a personal relay that serves only the peers in AllowedPeers. It does not announce
+	// itself as a relay to the open network, so strangers do not pick it; the people you allow
+	// reach it by its address (see RelayClientConfig.Relays). A public relay (the default) serves
+	// everyone.
+	Private bool `json:"private"`
+	// AllowedPeers lists the peer IDs (64-hex) that may use this relay when it is private.
+	AllowedPeers []string `json:"allowed_peers"`
 }
 
 // RelayClientConfig: how this node picks relays.
@@ -132,6 +139,10 @@ type RelayClientConfig struct {
 	MaxAcceptablePingMs     int   `json:"max_acceptable_ping_ms"`      // <= 0: no limit
 	DailyBudgetLimit        int64 `json:"daily_budget_limit"`
 	MarketAwareSelection    bool  `json:"market_aware_selection"`
+	// Relays are specific relays this node connects to on start-up and prefers over the ones it
+	// discovers, as "host:port/<peer id>" (or a ws:// URL). Use it to reach a private relay you
+	// were given access to; such a relay is used even though it does not advertise itself.
+	Relays []string `json:"relays"`
 }
 
 type RelayConfig struct {

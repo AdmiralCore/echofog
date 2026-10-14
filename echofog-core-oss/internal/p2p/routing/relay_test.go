@@ -75,3 +75,57 @@ func TestRelayClient_ScoringAndMarket(t *testing.T) {
 		t.Fatalf("expected reset daily spent=0, got %d", rc.GetDailySpent())
 	}
 }
+
+func mkID(b byte) types.PeerID { var id types.PeerID; id[0] = b; return id }
+
+func TestRelayServer_PrivateAccess(t *testing.T) {
+	rs := NewRelayServer(nil, nil, nil)
+	allowed, stranger := mkID(1), mkID(2)
+
+	// public (default): everyone is served
+	if !rs.servesPeer(stranger) {
+		t.Fatal("a public relay must serve any peer")
+	}
+
+	rs.SetPolicy(config.RelayServerConfig{
+		Enabled:      true,
+		Private:      true,
+		AllowedPeers: []string{allowed.String(), "not-a-peer-id"},
+	})
+	if got := rs.Stats().AllowedPeers; got != 1 {
+		t.Fatalf("expected 1 valid allowed peer (the malformed one dropped), got %d", got)
+	}
+	if !rs.servesPeer(allowed) {
+		t.Fatal("a private relay must serve an allowed peer")
+	}
+	if rs.servesPeer(stranger) {
+		t.Fatal("a private relay must not serve a peer that is not on the allow list")
+	}
+	if !rs.Stats().Private {
+		t.Fatal("Stats should report the relay as private")
+	}
+}
+
+func TestRelayClient_PreferredRelays(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	pref, other := mkID(7), mkID(8)
+
+	rc.SetPolicy(config.RelayClientConfig{
+		Enabled: true,
+		Relays:  []string{"1.2.3.4:443/" + pref.String(), "garbage"},
+	})
+	if !rc.IsPreferred(pref) {
+		t.Fatal("a relay named in the config must be preferred")
+	}
+	if rc.IsPreferred(other) {
+		t.Fatal("a relay not in the config must not be preferred")
+	}
+	// a bare peer id is also accepted
+	rc.SetPolicy(config.RelayClientConfig{Enabled: true, Relays: []string{other.String()}})
+	if !rc.IsPreferred(other) {
+		t.Fatal("a bare peer id in the config must be preferred")
+	}
+	if rc.IsPreferred(pref) {
+		t.Fatal("the previous preferred relay should be gone after a new policy")
+	}
+}
