@@ -9,6 +9,7 @@
     import ContactsApp from "../../mini-apps/contacts/ContactsApp.svelte";
     import SovereignVPNView from "../views/SovereignVPNView.svelte";
     import WalletView from "../views/WalletView.svelte";
+    import LogsView from "../views/LogsView.svelte";
     import { t } from "svelte-i18n";
 
     function selectTab(id) {
@@ -37,6 +38,8 @@
                     <ContactsApp />
                 {:else if tab.id === "wallet"}
                     <WalletView />
+                {:else if tab.id === "logs"}
+                    <LogsView />
                 {:else}
                     <SovereignVPNView />
                 {/if}

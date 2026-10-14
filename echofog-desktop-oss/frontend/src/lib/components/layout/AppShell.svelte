@@ -5,7 +5,7 @@
     import CallOverlay from "../ui/CallOverlay.svelte";
 
     // Launch scope: communication (chats with calls, contacts), the proxy and its wallet.
-    const PRIMARY = ["chat", "contacts", "vpn", "wallet"];
+    const PRIMARY = ["chat", "contacts", "vpn", "wallet", "logs"];
     const byId = (id) => AVAILABLE_APPS.find((a) => a.id === id);
 
     function go(id) {
