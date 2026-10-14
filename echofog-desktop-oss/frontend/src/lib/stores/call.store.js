@@ -1,6 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import { callService, callState } from '../services/call.service.js';
-import { InviteToCall, GetContacts } from '@wailsjs/go/main/App';
+import { InviteToCall, GetContacts, EndGroupCall } from '@wailsjs/go/main/App';
 import { EventsOn } from '@wailsjs/runtime/runtime';
 import { loadPeerDirectory } from './peers.store.js';
 
@@ -109,6 +109,14 @@ export function initCallEvents() {
     }
 }
 
+/** A call somebody else started (a group call): rings like a direct one. */
+export function ringIncoming({ callId, coordinator, from, alias, chatId }) {
+    const s = get(callState);
+    if (s.inCall || s.connecting || get(incomingCall)) return;
+    incomingCall.set({ callId, coordinator, from, alias, chatId, timestamp: Date.now() });
+    startRingtone();
+}
+
 export async function startCall(peer, withVideo = false) {
     if (get(callState).inCall || get(callState).connecting) return false;
     peerInfo.set({ alias: peer.alias || '', avatar: peer.avatar || '', peerId: peer.peerId || '', chatId: peer.chatId || '' });
@@ -116,7 +124,7 @@ export async function startCall(peer, withVideo = false) {
     resumeAudioContext();
     loadPeerDirectory();
     try {
-        let callId = peer.groupId || '';
+        let callId = peer.callId || peer.groupId || '';
         let coordinator = peer.coordinator || '';
         if (peer.pubKey) {
             const invite = await InviteToCall(peer.pubKey);
@@ -138,7 +146,7 @@ export async function acceptIncomingCall(withVideo = false) {
     if (!inv) return false;
     stopRingtone();
     incomingCall.set(null);
-    peerInfo.set({ alias: inv.alias, avatar: '', peerId: inv.from, chatId: 'd_' + inv.from });
+    peerInfo.set({ alias: inv.alias, avatar: '', peerId: inv.from, chatId: inv.chatId || 'd:' + inv.from });
     stageExpanded.set(true);
     resumeAudioContext();
     loadPeerDirectory();
@@ -158,6 +166,12 @@ export function declineIncomingCall() {
 }
 
 export async function endCall() {
+    // the last person to leave a group call ends it for the group (stops it ringing, removes "join")
+    const st = get(callState);
+    const chat = get(peerInfo).chatId || '';
+    if (chat.startsWith('g:') && st.callId && (st.inCall || st.connecting) && st.members.length <= 1) {
+        try { await EndGroupCall(chat.slice(2), st.callId); } catch (_) { /* the group may be gone */ }
+    }
     await callService.leaveCall();
     callState.update((s) => ({ ...s, error: null }));
 }

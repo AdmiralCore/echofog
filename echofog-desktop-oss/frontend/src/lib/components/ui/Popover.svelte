@@ -1,9 +1,7 @@
 <script>
     /**
      * A menu that opens above (or below) an anchor element. It lives in <body>, above everything,
-     * so no parent clips it, covers it, or traps its scroll (the call bar has a backdrop-filter,
-     * which would otherwise clip an absolutely-positioned menu). Its height follows the room there
-     * is, and it scrolls when the list is long.
+     * so no parent clips it or covers it, and its height follows the room there is: it scrolls.
      */
     import { onMount, onDestroy, createEventDispatcher, tick } from 'svelte';
 
@@ -76,12 +74,13 @@
         overflow-y: auto;
         overscroll-behavior: contain;
         padding: 6px;
-        border-radius: 12px;
-        background: #111214;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-        color: #dbdee1;
-        font-size: 14px;
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        backdrop-filter: blur(18px) saturate(1.4);
+        border: 1px solid var(--line);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3);
+        color: var(--text);
+        font-size: 13.5px;
         animation: pop-in 0.14s ease-out;
     }
     @keyframes pop-in {

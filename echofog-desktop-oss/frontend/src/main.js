@@ -1,40 +1,13 @@
-import './app.css'
-import App from './App.svelte'
-
-let app = null;
+import './app.css';
+import App from './App.svelte';
 
 function start() {
-try {
-  const target = document.getElementById('app');
-  if (target) {
-    // Remove static HTML fallback loader once bundle is ready
-    const loader = document.getElementById('initial-loader');
-    if (loader) {
-      loader.remove();
-    }
-    app = new App({ target });
-  } else {
-    console.error("DOM root #app not found");
-  }
-} catch (err) {
-  console.error("Critical failure during App instantiation:", err);
-  const errBox = document.getElementById('error-box');
-  const msgBox = document.getElementById('loader-msg');
-  if (errBox) {
-    errBox.style.display = 'block';
-    errBox.textContent = 'App Init Error: ' + (err.stack || err.message || err);
-  }
-  if (msgBox) {
-    msgBox.textContent = 'Fatal Startup Error';
-  }
-}
+  return new App({ target: document.getElementById('app') });
 }
 
-// `vite dev` + `?mock` runs the UI against a fake Go core (see lib/dev/wails-mock.js).
+// `npm run dev` with `?mock` runs the UI against a fake core (see lib/dev/mock.js).
 if (import.meta.env.DEV && new URLSearchParams(location.search).has('mock')) {
-  import('./lib/dev/wails-mock.js').then(start);
+  import('./lib/dev/mock.js').then(start);
 } else {
   start();
 }
-
-export default app

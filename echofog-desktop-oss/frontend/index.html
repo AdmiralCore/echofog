@@ -1,57 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8" />
-    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-    <meta name="color-scheme" content="dark light" />
-    <title>EchoFog</title>
-    <script>
-        window.addEventListener('error', function(e) {
-            var box = document.getElementById('error-box');
-            var msg = document.getElementById('loader-msg');
-            if (box) {
-                box.style.display = 'block';
-                box.textContent = 'Runtime error: ' + (e.message || e.error || e);
-            }
-            if (msg) msg.textContent = 'Startup error encountered';
-        });
-        window.addEventListener('unhandledrejection', function(e) {
-            var box = document.getElementById('error-box');
-            var msg = document.getElementById('loader-msg');
-            if (box) {
-                box.style.display = 'block';
-                box.textContent = 'Promise rejection: ' + (e.reason ? (e.reason.message || e.reason) : e);
-            }
-            if (msg) msg.textContent = 'Startup error encountered';
-        });
-
-        // Failsafe watchdog: dismiss static splash once bundle starts executing
-        setTimeout(function() {
-            var loader = document.getElementById('initial-loader');
-            var errorBox = document.getElementById('error-box');
-            if (loader && (!errorBox || errorBox.style.display !== 'block')) {
-                loader.style.opacity = '0';
-                loader.style.transition = 'opacity 0.25s ease-out';
-                loader.style.pointerEvents = 'none';
-                setTimeout(function() { if (loader) loader.remove(); }, 300);
-            }
-        }, 1200);
-    </script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>EchoFog</title>
 </head>
-
-<body style="margin:0;padding:0;background:#000;color:#ffffff;overflow:hidden;">
-    <div id="app">
-        <!-- Static fallback loader visible before JS mounts -->
-        <div id="initial-loader" style="position:fixed;inset:0;background:#000;color:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;z-index:99999;">
-            <div style="width:52px;height:52px;border-radius:14px;background:#ffffff;color:#000000;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:22px;margin-bottom:16px;">EF</div>
-            <div style="font-size:18px;font-weight:700;letter-spacing:-0.02em;margin-bottom:4px;">EchoFog</div>
-            <div style="font-size:12px;color:#71767b;margin-bottom:20px;">Private messenger</div>
-            <div id="loader-msg" style="font-size:11px;color:#a1a1aa;font-family:monospace;padding:6px 14px;background:rgba(255,255,255,0.06);border-radius:9999px;">Starting…</div>
-            <div id="error-box" style="display:none;margin-top:20px;padding:12px 16px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:10px;color:#fca5a5;max-width:440px;font-size:11px;font-family:monospace;white-space:pre-wrap;text-align:left;"></div>
-        </div>
-    </div>
-    <script src="./src/main.js" type="module"></script>
+<body>
+  <div id="app"></div>
+  <script src="./src/main.js" type="module"></script>
 </body>
-
 </html>

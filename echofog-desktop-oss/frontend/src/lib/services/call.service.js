@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
-import { EventsOn } from '@wailsjs/runtime/runtime';
+import { on as EventsOn } from '../api.js';
+import { setSink } from '../sounds.js';
 
 const PREF = 'echofog.devices';
 function loadPrefs() {
@@ -260,7 +261,7 @@ class CallService {
     } else {
       this.notify('This system cannot choose the output device');
     }
-    // (ringtone output routing lives in the OSS sounds module, not in this build)
+    setSink(deviceId);
   }
 
   // One graph per speaker: source -> gain (per-person volume, up to 200%) -> analyser -> out.
