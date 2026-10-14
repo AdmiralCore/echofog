@@ -1,0 +1,6 @@
+go 1.27.0
+
+use (
+	./echofog-core-oss
+	./echofog-desktop-oss
+)

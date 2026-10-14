@@ -1,0 +1,34 @@
+name: testbed
+
+on:
+  schedule:
+    - cron: "5 4 * * *"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "smoke or chaos"
+        default: "chaos"
+
+permissions:
+  contents: read
+
+jobs:
+  scenario:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - name: build the images and run the scenario in Docker
+        run: go run ./testbed/runner -scenario "${{ github.event.inputs.scenario || 'smoke' }}"
+      - name: logs of every node
+        if: failure()
+        run: docker compose -f testbed/docker-compose.yml logs --no-color > testbed-logs.txt || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: testbed-logs
+          path: testbed-logs.txt

@@ -1,0 +1,720 @@
+package node
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"github.com/echofog/echofog-core/internal/network/handshake"
+	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/network/bwprobe"
+	"github.com/echofog/echofog-core/internal/network/exit_gateway"
+	"github.com/echofog/echofog-core/internal/p2p/vpnmarket"
+
+	"github.com/awnumar/memguard"
+	"github.com/dgraph-io/badger/v4"
+	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/crypto"
+	"github.com/echofog/echofog-core/internal/dispatcher"
+	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/mimicry"
+	"github.com/echofog/echofog-core/internal/p2p/dht"
+	"github.com/echofog/echofog-core/internal/p2p/gossip"
+	"github.com/echofog/echofog-core/internal/p2p/holepunch"
+	"github.com/echofog/echofog-core/internal/p2p/routing"
+	"github.com/echofog/echofog-core/internal/p2p/swarm"
+	"github.com/echofog/echofog-core/internal/protection/core/identity"
+	"github.com/echofog/echofog-core/internal/scheduler"
+	"github.com/echofog/echofog-core/internal/services"
+	"github.com/echofog/echofog-core/internal/services/call"
+	"github.com/echofog/echofog-core/internal/services/contacts"
+	"github.com/echofog/echofog-core/internal/services/discovery"
+	"github.com/echofog/echofog-core/internal/services/messenger"
+	"github.com/echofog/echofog-core/internal/storage"
+	"github.com/echofog/echofog-core/internal/wallet/tonwallet"
+	"github.com/echofog/echofog-core/pkg/api/types"
+	"github.com/echofog/echofog-core/pkg/events"
+)
+
+type Node struct {
+	ID     types.PeerID
+	PubKey types.PeerPublicKey
+
+	IsReady bool
+
+	userKey *memguard.Enclave
+
+	identity *identity.ProtectedIdentity
+	crypto   *crypto.CryptoEngine
+
+	Cfg       *config.AppConfig
+	Storage   storage.Storage
+	Transport *network.QuicTransport
+	// Net is what the swarm dials and accepts through: QUIC plus the TCP/TLS fallback
+	Net            *network.FallbackTransport
+	WS             *network.WSTransport // optional: reach this node behind a CDN, and dial ws:// peers
+	Dispatcher     *dispatcher.Dispatcher
+	Swarm          *swarm.Swarm
+	DhtEngine      *dht.EchoFogDHT
+	routingTable   *dht.RoutingTable
+	NAT            *routing.NATManager
+	HolePunch      *holepunch.Service // direct connections between peers behind NATs
+	RelayServer    *routing.RelayServer
+	RelayClient    *routing.RelayClient
+	MailboxManager *messenger.MailboxManager
+	Scheduler      *scheduler.TaskScheduler
+	EventBus       *events.Bus
+	Services       *services.ServiceManager
+
+	Discovery    *discovery.DiscoveryService
+	Messenger    *messenger.MessageBroker
+	Contact      *contacts.ContactService
+	MDNS         *discovery.MDNSService
+	CallManager  *call.CallManager
+	TonWallet    *tonwallet.Wallet
+	Support      *tonwallet.Support // voluntary project share of traffic payments
+	exitLedger   *exit_gateway.Ledger
+	exitLedgerMu sync.Mutex
+	BWProbe      *bwprobe.Prober
+	ExitService  *exit_gateway.ExitService
+	VPNMarket    *vpnmarket.Service
+
+	Logger *slog.Logger
+
+	stopOnce sync.Once
+	Ctx      context.Context
+	Cancel   context.CancelFunc
+}
+
+// logLevel is info, or what ECHOFOG_LOG_LEVEL says (debug, info, warn, error): for finding out why
+// two nodes do not connect.
+func logLevel() slog.Level {
+	var l slog.Level
+	if err := l.UnmarshalText([]byte(os.Getenv("ECHOFOG_LOG_LEVEL"))); err != nil {
+		return slog.LevelInfo
+	}
+	return l
+}
+
+func NewNode(parentCtx context.Context, cfg *config.AppConfig, nodeName string) *Node {
+	if lvl := logLevel(); lvl < slog.LevelInfo {
+		slog.SetLogLoggerLevel(lvl) // the package-level slog calls of the other packages
+	}
+	baseHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel()})
+	namedHandler := baseHandler.WithAttrs([]slog.Attr{slog.String("name", nodeName)})
+
+	eventBus := events.NewBus()
+	busLogHandler := events.NewEventLogHandler(eventBus, slog.LevelInfo)
+	compositeLogger := slog.New(events.NewCompositeHandler(namedHandler, busLogHandler))
+
+	parentCtx, cancel := context.WithCancel(parentCtx)
+
+	return &Node{
+		Cfg:      cfg,
+		Logger:   compositeLogger,
+		EventBus: eventBus,
+		Ctx:      parentCtx,
+		Cancel:   cancel,
+	}
+}
+
+// tcpCamouflageCert returns the certificate the TCP fallback presents. It loads the operator's
+// real certificate for their domain when configured (so an active prober sees a genuine HTTPS
+// site), otherwise it generates a self-signed ECDSA certificate for the mimicked name. The
+// node's ed25519 identity certificate cannot be reused: a Chrome TLS ClientHello offers no
+// ed25519 signature algorithm, so the handshake would fail.
+func (n *Node) tcpCamouflageCert() *tls.Certificate {
+	if cf, kf := n.Cfg.AntiDPI.TLSCertFile, n.Cfg.AntiDPI.TLSKeyFile; cf != "" && kf != "" {
+		cert, err := tls.LoadX509KeyPair(cf, kf)
+		if err != nil {
+			n.Logger.Error("failed to load anti_dpi TLS certificate; falling back to self-signed", "err", err)
+		} else {
+			return &cert
+		}
+	}
+	cert, err := mimicry.GenerateCamouflageCert(n.Cfg.AntiDPI.TLSServerName)
+	if err != nil {
+		n.Logger.Error("failed to generate TCP camouflage certificate; TCP fallback disabled", "err", err)
+		return nil
+	}
+	return &cert
+}
+
+func (n *Node) initDB() error {
+	if n.Storage != nil {
+		return nil
+	}
+	opts := badger.DefaultOptions(n.Cfg.Storage.DatabasePath)
+	opts.Logger = nil
+	opts.ValueLogFileSize = 16 * 1024 * 1024
+	opts.ValueThreshold = 64 * 1024
+	opts.BaseTableSize = 8 * 1024 * 1024
+	opts.MemTableSize = 8 * 1024 * 1024
+
+	_ = os.MkdirAll(n.Cfg.Storage.DatabasePath, 0755)
+
+	// a table left unwritten by a killed process would make badger panic on open
+	if ids, backup, err := storage.RepairUnwrittenTables(n.Cfg.Storage.DatabasePath); err != nil {
+		return fmt.Errorf("the database is damaged and could not be repaired (%w); a copy is in %s", err, backup)
+	} else if len(ids) > 0 {
+		n.Logger.Warn("Database: removed tables that were never written (the app was closed while saving); the last moments may be missing",
+			"tables", ids, "copy_before_repair", backup)
+	}
+
+	db, err := badger.Open(opts)
+	if err != nil {
+		return fmt.Errorf("failed to open badger db: %w", err)
+	}
+	n.Storage = storage.NewBadgerStorage(db)
+	return nil
+}
+
+func (n *Node) IsRegistered() bool {
+	manifestPath := filepath.Join(n.Cfg.Storage.DatabasePath, "MANIFEST")
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		return true
+	}
+	return false
+}
+
+func (n *Node) Register(appPassword []byte, mnemonicPassphrase []byte) (string, error) {
+	if n.IsRegistered() {
+		return "", errors.New("node is already registered, please login")
+	}
+
+	if err := n.initDB(); err != nil {
+		return "", err
+	}
+
+	idMgr := identity.NewProtectedIdentity(n.Storage)
+
+	mnemonic, err := idMgr.GenerateNewIdentity(mnemonicPassphrase)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate identity: %w", err)
+	}
+
+	appPassCopy := make([]byte, len(appPassword))
+	copy(appPassCopy, appPassword)
+	if err = idMgr.Save(appPassCopy); err != nil {
+		return "", fmt.Errorf("failed to save identity: %w", err)
+	}
+
+	if err = idMgr.Load(appPassword, false); err != nil {
+		return "", fmt.Errorf("failed to load identity: %w", err)
+	}
+
+	n.identity = idMgr
+	n.SetUserKey(appPassword)
+	n.IsReady = true
+	n.Logger.Info("New identity created successfully")
+
+	mnemonicBytes, err := mnemonic.Show()
+	if err != nil {
+		return "", fmt.Errorf("failed to read generated mnemonic: %w", err)
+	}
+
+	return string(mnemonicBytes), nil
+}
+
+func (n *Node) Login(appPassword []byte) error {
+	if !n.IsRegistered() {
+		return errors.New("node is not registered, please register first")
+	}
+
+	if err := n.initDB(); err != nil {
+		return err
+	}
+
+	idMgr := identity.NewProtectedIdentity(n.Storage)
+	err := idMgr.Load(appPassword, false)
+	if err != nil {
+		return fmt.Errorf("invalid app password or corrupted identity: %w", err)
+	}
+
+	n.identity = idMgr
+	n.SetUserKey(appPassword)
+	n.IsReady = true
+	n.Logger.Info("Login successful")
+
+	return nil
+}
+
+func (n *Node) SetUserKey(appPassword []byte) {
+	n.userKey = memguard.NewEnclave(appPassword)
+}
+
+func (n *Node) Recover(mnemonic string, mnemonicPassphrase []byte, newAppPassword []byte) error {
+	if n.IsRegistered() {
+		return errors.New("node is already registered on this device, please clear data or use Login")
+	}
+
+	if err := n.initDB(); err != nil {
+		return err
+	}
+
+	idMgr := identity.NewProtectedIdentity(n.Storage)
+
+	err := idMgr.Restore([]byte(mnemonic), mnemonicPassphrase)
+	if err != nil {
+		return fmt.Errorf("failed to recover identity from mnemonic: %w", err)
+	}
+
+	appPassCopy := make([]byte, len(newAppPassword))
+	copy(appPassCopy, newAppPassword)
+	if err = idMgr.Save(appPassCopy); err != nil {
+		return fmt.Errorf("failed to save recovered identity: %w", err)
+	}
+
+	if err = idMgr.Load(newAppPassword, false); err != nil {
+		return fmt.Errorf("failed to load identity after recovery: %w", err)
+	}
+
+	n.identity = idMgr
+	n.SetUserKey(newAppPassword)
+	n.IsReady = true
+	n.Logger.Info("Identity recovered successfully from mnemonic")
+
+	return nil
+}
+
+func (n *Node) Start() error {
+	if !n.IsReady {
+		return errors.New("node is not ready: you must call Login or Register first")
+	}
+
+	n.Logger.Info("EchoFog Core is starting P2P network...", "version", config.CurrentProtocolVersion)
+
+	n.identity.SwitchAccount(0)
+	activeAccount, err := n.identity.GetActiveAccount()
+	if err != nil {
+		return fmt.Errorf("failed to get active account: %w", err)
+	}
+	// messages, contacts and groups are stored encrypted from here on
+	if err := n.sealStorage(activeAccount); err != nil {
+		return fmt.Errorf("failed to open encrypted storage: %w", err)
+	}
+
+	n.ID, _ = n.identity.GetPeerID()
+	privBytes, pubBytes, _ := activeAccount.GetIdentityKey()
+	lockedPriv, err := privBytes.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open private key enclave: %w", err)
+	}
+	defer lockedPriv.Destroy()
+
+	copy(n.PubKey[:], pubBytes)
+
+	tlsConfig, err := n.identity.GenerateTLSConfig()
+	if err != nil {
+		return fmt.Errorf("tls config failed: %w", err)
+	}
+
+	n.Dispatcher = dispatcher.NewDispatcher(n.Ctx)
+	n.Dispatcher.SetLogger(n.Logger)
+	socketBufBytes := n.Cfg.Network.SocketBufferMB * 1024 * 1024
+	n.Transport, err = network.NewQUICTransportWithOptions(
+		n.Cfg.Network.ListenAddr,
+		tlsConfig,
+		network.GetQuicConfig(),
+		n.identity,
+		n.Cfg.Network.ProtocolVersion,
+		network.TransportOptions{
+			DirectSocket:      n.Cfg.Network.DirectSocket,
+			SocketBufferBytes: socketBufBytes,
+			Obfs:              n.Cfg.AntiDPI.Obfs != config.ObfsOff,
+			OwnID:             n.ID,
+			ObfsSecret:        n.Cfg.AntiDPI.ObfsPassword,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("transport initialization failed: %w", err)
+	}
+	n.Transport.SetLogger(n.Logger.With("component", "quic_transport"))
+
+	var tcp *network.TCPTransport
+	if n.Cfg.Network.TCPListenAddr != "off" {
+		// A real certificate for your own domain makes an active prober see a genuine HTTPS site;
+		// without one the node falls back to the self-signed identity certificate (probe-weak).
+		camoCert := n.tcpCamouflageCert()
+		stealth := n.Cfg.AntiDPI.StealthPassword
+		if stealth == "" {
+			stealth = n.Cfg.AntiDPI.ObfsPassword
+		}
+		mcfg := network.MimicryConfigFrom(network.MimicryOptions{
+			StealthPassword: stealth,
+			ServerName:      n.Cfg.AntiDPI.TLSServerName,
+			CamouflageAddr:  n.Cfg.AntiDPI.CamouflageAddr,
+		})
+		if camoCert != nil {
+			tcp = network.NewTCPTransport(*camoCert, mcfg,
+				network.NewDefaultPeerAuthenticator(n.identity, n.Cfg.Network.ProtocolVersion, 5*time.Second))
+			if n.Cfg.AntiDPI.Obfs != config.ObfsOff {
+				tcp.SetNodeKeys(stealth, n.ID)
+			}
+			tcp.SetLogger(n.Logger.With("component", "tcp_transport"))
+			if n.Cfg.AntiDPI.TLSCertFile == "" {
+				n.Logger.Warn("TCP fallback uses a self-signed certificate; set anti_dpi.tls_cert_file for a real one to resist active probing")
+			}
+		}
+	}
+	tcpListen := n.Cfg.Network.TCPListenAddr
+	if tcpListen == "off" {
+		tcpListen = ""
+	}
+	n.Net = network.NewFallbackTransport(n.Transport, tcp, n.Cfg.Network.Transport, tcpListen)
+	n.Net.SetLogger(n.Logger.With("component", "transport"))
+	n.Net.SetTCPRemotePort(n.Cfg.Network.TCPRemotePort)
+	if n.Cfg.Network.AdvertisePort > 0 {
+		n.Net.SetAdvertisedPort(n.Cfg.Network.AdvertisePort)
+	}
+	n.Net.SetCaps(n.announcedCaps())
+
+	n.Swarm = swarm.NewSwarm(n.Ctx, n.Net, n.ID, n.Dispatcher, n.identity, n.Net.ConnChan(), n.Storage, n.Cfg)
+	n.Swarm.SetLogger(n.Logger)
+	n.BWProbe = bwprobe.NewForSwarm(n.Swarm)
+	n.ExitService = exit_gateway.NewExitService()
+	exit_gateway.AttachToSwarm(n.Swarm, n.ExitService)
+
+	// WebSocket transport: lets this node sit behind a CDN (when ws_listen_addr is set) and lets
+	// it dial ws:// / wss:// peers either way
+	if ws := n.buildWSTransport(); ws != nil {
+		n.WS = ws
+		n.Swarm.SetWSTransport(ws)
+		if n.Cfg.Network.WSListenAddr != "" {
+			if err := ws.Listen(n.Cfg.Network.WSListenAddr); err != nil {
+				n.Logger.Error("WebSocket listener failed", "addr", n.Cfg.Network.WSListenAddr, "err", err)
+			} else {
+				n.Logger.Info("WebSocket endpoint listening", "addr", n.Cfg.Network.WSListenAddr, "path", wsPath(n.Cfg))
+			}
+		}
+	}
+
+	// a server node checks once that its ServerHello matches the site it mimics, so an operator
+	// learns if the chosen SNI gives it away; clients (no fallback listener configured) skip it
+	tcpListening := n.Cfg.Network.TCPListenAddr != "" && n.Cfg.Network.TCPListenAddr != "off"
+	if n.Cfg.Network.WSListenAddr != "" || tcpListening {
+		go n.checkCamouflageConformance()
+	}
+
+	gsp := gossip.NewManager(n.Swarm)
+
+	userKey, err := n.userKey.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open user encryption key: %w", err)
+	}
+	defer userKey.Destroy()
+
+	n.initTonWallet()
+
+	x3dhInit, err := crypto.NewX3DHInitializer(activeAccount, n.Storage, userKey.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to initialize X3DH stack: %w", err)
+	}
+
+	n.Discovery = discovery.NewDiscoveryService(n.Storage, gsp, n.Swarm, n.PubKey)
+
+	n.crypto = crypto.NewCryptoEngine(n.ID, activeAccount, x3dhInit.GetEngine(), x3dhInit.GetSessionManager(), n.Swarm, n.Logger)
+
+	n.Contact = contacts.NewContactService(n.Storage, n.Swarm)
+
+	n.Messenger = messenger.NewMessageBroker(n.crypto, n.Swarm, gsp, n.identity, n.Storage.(storage.MessageStorage), n.Contact, n.Logger)
+	n.Swarm.AddObserver(n.Messenger) // sends queued messages when their recipient connects
+	n.Messenger.StartOutbox(n.Ctx)
+
+	routingTable := dht.NewRoutingTable(n.PubKey, n.Storage, n.Swarm)
+	n.routingTable = routingTable
+	dhtEngine := dht.NewEchoFogDHT(routingTable, n.Swarm)
+
+	go n.Dispatcher.Start()
+	if err = n.Net.ListenEarly(n.Ctx); err != nil {
+		return fmt.Errorf("transport listen failed: %w", err)
+	}
+
+	// the port mDNS announces to the local network is the one QUIC actually bound
+	actualPort := n.Transport.UDPPort()
+
+	myID, _ := n.identity.GetPeerID()
+	n.MDNS = discovery.NewMDNS(myID, actualPort, n.Swarm)
+
+	n.DhtEngine = dhtEngine
+	n.initVPNMarket()
+	n.MailboxManager = messenger.NewMailboxManager(n.Storage)
+	n.RelayServer = routing.NewRelayServer(n.Swarm, n.MailboxManager, n.Logger)
+	n.RelayClient = routing.NewRelayClient(n.Swarm, dhtEngine, n.Logger)
+	n.RelayServer.SetPolicy(n.Cfg.Relay.Server)
+	n.RelayClient.SetPolicy(n.Cfg.Relay.Client)
+
+	// Publish node's own PreKeyBundle locally and to DHT for asynchronous E2EE initiation, and keep
+	// it there: the first publication happens before anybody is connected, so it is repeated
+	n.Swarm.SetBundleFetcher(dhtEngine.Get)
+	go n.publishBundleLoop(dhtEngine)
+
+	n.Services = services.NewServiceManager(n.Logger.With("component", "services"))
+
+	routedServices := []services.Service{
+		n.Discovery,
+		n.Messenger,
+		dhtEngine,
+		n.RelayServer,
+	}
+	for _, s := range routedServices {
+		if err := n.Services.RegisterRouted(s, n.Dispatcher); err != nil {
+			return fmt.Errorf("failed to register routed service %s: %w", s.Name(), err)
+		}
+	}
+
+	if n.Contact != nil {
+		_ = n.Services.Register(n.Contact)
+	}
+
+	n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
+	n.CallManager.SetPeerConnector(n.EnsureConnected)
+	_ = n.Services.Register(n.CallManager)
+	// a message to somebody we are not connected to opens the connection (DHT, hole punch, relay)
+	n.Messenger.SetConnector(func(peer types.PeerID) {
+		ctx, cancel := context.WithTimeout(n.Ctx, 25*time.Second)
+		defer cancel()
+		_ = n.EnsureConnected(ctx, peer)
+	})
+
+	if err := n.Services.StartAll(n.Ctx); err != nil {
+		return fmt.Errorf("services startup failed: %w", err)
+	}
+
+	if len(n.Cfg.Network.BootstrapNodes) > 0 {
+		n.Swarm.Bootstrap(n.Cfg.Network.BootstrapNodes)
+	}
+
+	n.Scheduler = scheduler.New(n.Ctx, n.Logger.With("component", "scheduler"))
+	if n.EventBus != nil {
+		n.Swarm.SetEmitter(n.EventBus)
+		n.CallManager.SetEmitter(n.EventBus)
+		n.DhtEngine.SetEmitter(n.EventBus)
+	}
+
+	// a node left without peers (it started offline, its network was cut) joins again by itself
+	_ = n.Scheduler.Schedule("swarm:rejoin", 15*time.Second, func(ctx context.Context) error {
+		if n.Swarm.Rejoin(n.Cfg.Network.BootstrapNodes) {
+			n.Logger.Info("Swarm: no peers left, dialing bootstrap nodes and known peers again")
+		}
+		return nil
+	})
+
+	// peers connected only to signaling nodes have nobody to relay their traffic: find a relay
+	_ = n.Scheduler.Schedule("swarm:relay_peer", 20*time.Second, func(ctx context.Context) error {
+		n.keepRelayPeer()
+		return nil
+	})
+
+	// Periodic Swarm inactive sessions prune (prevents zombie session heap leaks)
+	if n.Swarm != nil {
+		_ = n.Scheduler.Schedule("swarm:sessions_prune", 10*time.Minute, func(ctx context.Context) error {
+			n.Swarm.PruneInactiveSessions(15 * time.Minute)
+			return nil
+		})
+	}
+
+	// Periodic DHT cache cleanup and quotas reset
+	if n.DhtEngine != nil {
+		_ = n.Scheduler.Schedule("dht:cache_prune", 15*time.Minute, func(ctx context.Context) error {
+			n.DhtEngine.PruneExpired()
+			return nil
+		})
+		_ = n.Scheduler.Schedule("dht:quotas_reset", 1*time.Hour, func(ctx context.Context) error {
+			n.DhtEngine.ResetQuotas()
+			return nil
+		})
+	}
+
+	n.startNAT()
+
+	n.Logger.Info("Node P2P network started successfully", "listen_addr", n.Transport.Addr().String())
+	return nil
+}
+
+// publishBundleLoop puts the node's key bundle in the DHT, soon after start-up (when the first
+// connections exist) and then regularly, so that anybody can start an encrypted chat with it
+// without a direct connection.
+func (n *Node) publishBundleLoop(engine *dht.EchoFogDHT) {
+	delays := []time.Duration{2 * time.Second, 10 * time.Second, 40 * time.Second}
+	for i := 0; ; i++ {
+		pause := 10 * time.Minute
+		if i < len(delays) {
+			pause = delays[i]
+		}
+		select {
+		case <-n.Ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		bundle, err := n.Swarm.CreateMyPreKeyBundle()
+		if err != nil {
+			continue
+		}
+		_ = engine.Set(swarm.BundleKey(n.ID), bundle)
+	}
+}
+
+// EnsureConnected connects to a peer by its ID: the DHT gives its address, a plain dial is tried,
+// and when both sides are behind NATs a hole punch coordinated through a relay.
+func (n *Node) EnsureConnected(ctx context.Context, peer types.PeerID) error {
+	if n.Swarm.GetPeer(peer) != nil {
+		return nil
+	}
+	// the peer may be unreachable by a plain dial (behind a NAT); that is not fatal, a hole punch
+	// through a relay can still connect us, so a missing DHT address is not an error here
+	addr, _ := n.DhtEngine.FindPeer(ctx, peer)
+	return n.connectToPeer(ctx, peer, addr)
+}
+
+func (n *Node) Stop() {
+	n.stopOnce.Do(func() {
+		// 1. Cancel root context to signal all background loops
+		if n.Cancel != nil {
+			n.Cancel()
+		}
+		// 2. Stop node-wide scheduled tasks and wait for task completion
+		if n.Scheduler != nil {
+			n.Scheduler.Stop()
+		}
+		// 3. Gracefully stop all services in reverse DAG order
+		if n.Services != nil {
+			_ = n.Services.StopAll()
+		}
+		// 4. Close Swarm connections, streams, and wait for all swarm goroutines
+		if n.Swarm != nil {
+			n.Swarm.Close()
+		}
+		// 5. Stop Dispatcher and drain its worker queues
+		if n.Dispatcher != nil {
+			n.Dispatcher.Stop()
+		}
+		// 6. Close transport network sockets
+		n.closeExitLedger()
+		if n.WS != nil {
+			_ = n.WS.Close()
+		}
+		if n.Net != nil {
+			n.Net.Close()
+		} else if n.Transport != nil {
+			n.Transport.Close()
+		}
+		// 7. FINALLY close BadgerDB when no background goroutine can access it
+		if n.Storage != nil {
+			n.Storage.Close()
+		}
+		n.Logger.Info("Node stopped cleanly")
+	})
+}
+
+func (n *Node) SendMessage(targetID types.PeerID, text string) error {
+	if n.Messenger == nil {
+		return errors.New("messenger not initialized")
+	}
+	return n.Messenger.SendChatMessage(targetID, text)
+}
+
+func (n *Node) GetMailbox() *messenger.MailboxManager {
+	return n.MailboxManager
+}
+
+func (n *Node) GetMessenger() *messenger.MessageBroker {
+	return n.Messenger
+}
+
+// announcedCaps is what the node tells peers it offers: always the DHT; a relay, or only help
+// with hole punching (signaling), or neither.
+func (n *Node) announcedCaps() handshake.Capability {
+	caps := handshake.CapDHTServer
+	switch rs := n.Cfg.Relay.Server; {
+	case rs.Enabled && rs.SignalingOnly:
+		caps |= handshake.CapSignal
+	case rs.Enabled:
+		caps |= handshake.CapRelay
+	}
+	return caps
+}
+
+func (n *Node) GetRelayServer() *routing.RelayServer {
+	return n.RelayServer
+}
+
+func (n *Node) GetRelayClient() *routing.RelayClient {
+	return n.RelayClient
+}
+
+func (n *Node) GetSelfPeerID() types.PeerID {
+	if n.Swarm != nil {
+		return n.Swarm.GetSelfID()
+	}
+	if n.identity != nil {
+		id, _ := n.identity.GetPeerID()
+		return id
+	}
+	return types.PeerID{}
+}
+
+// buildWSTransport makes the optional WebSocket transport, reusing the same camouflage certificate,
+// mimicry config and per-node stealth key as the TCP fallback. It is created even without a
+// listener so the node can dial ws:// peers; Listen is called separately when ws_listen_addr is set.
+func (n *Node) buildWSTransport() *network.WSTransport {
+	cert := n.tcpCamouflageCert()
+	if cert == nil {
+		return nil
+	}
+	stealth := n.Cfg.AntiDPI.StealthPassword
+	if stealth == "" {
+		stealth = n.Cfg.AntiDPI.ObfsPassword
+	}
+	mcfg := network.MimicryConfigFrom(network.MimicryOptions{
+		StealthPassword: stealth,
+		ServerName:      n.Cfg.AntiDPI.TLSServerName,
+		CamouflageAddr:  n.Cfg.AntiDPI.CamouflageAddr,
+	})
+	ws := network.NewWSTransport(*cert, mcfg,
+		network.NewDefaultPeerAuthenticator(n.identity, n.Cfg.Network.ProtocolVersion, 5*time.Second), wsPath(n.Cfg))
+	if n.Cfg.AntiDPI.Obfs != config.ObfsOff {
+		ws.SetNodeKeys(stealth, n.ID)
+	}
+	ws.SetCaps(n.announcedCaps())
+	ws.SetLogger(n.Logger.With("component", "ws_transport"))
+	return ws
+}
+
+func wsPath(cfg *config.AppConfig) string {
+	if cfg.Network.WSPath != "" {
+		return cfg.Network.WSPath
+	}
+	return "/echofog"
+}
+
+// checkCamouflageConformance probes the mimicked site once and logs whether our ServerHello
+// matches its passive fingerprint (TLS version, cipher, key_share group).
+func (n *Node) checkCamouflageConformance() {
+	cert := n.tcpCamouflageCert()
+	if cert == nil {
+		return
+	}
+	serverName := n.Cfg.AntiDPI.TLSServerName
+	if serverName == "" {
+		serverName = "www.microsoft.com"
+	}
+	dest := n.Cfg.AntiDPI.CamouflageAddr
+	if dest == "" {
+		dest = net.JoinHostPort(serverName, "443")
+	}
+	ctx, cancel := context.WithTimeout(n.Ctx, 20*time.Second)
+	defer cancel()
+	verdict, ok := mimicry.CheckServerHelloConformance(ctx, mimicry.BuildServerTLSConfig(*cert), dest, serverName)
+	if ok {
+		n.Logger.Info("Camouflage check: " + verdict)
+	} else {
+		n.Logger.Warn("Camouflage check: " + verdict)
+	}
+}

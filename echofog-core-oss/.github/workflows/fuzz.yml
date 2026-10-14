@@ -1,0 +1,32 @@
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 2 * * *" # every night
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "seconds per fuzz target"
+        default: "120"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - name: fuzz every target
+        run: scripts/fuzz.sh "${{ github.event.inputs.seconds || '60' }}"
+      - name: keep the inputs that broke something
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"

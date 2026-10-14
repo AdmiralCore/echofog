@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package messenger;
+option go_package = "github.com/echofog/echofog-core/internal/services/messenger;messenger";
+
+enum PersonalMessageTypeProto {
+  MsgTypeText = 0;
+  MsgTypePhoto = 1;
+  MsgTypeVoice = 2;
+  MsgTypeCircle = 3;
+  MsgTypeFile = 4;
+  MsgTypeLocation = 5;
+}
+
+message PersonalMessageProto {
+  string id = 1;
+
+  string sender_id = 2;
+
+  PersonalMessageTypeProto type = 3;
+
+  string text = 4;
+  string content_hash = 5;
+  string metadata = 6;
+
+  int64 timestamp = 7;
+
+  string reply_to_id = 8;
+}

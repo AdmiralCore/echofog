@@ -1,0 +1,2 @@
+# a constant named KeyLen (the size of a key), not a key
+7f07674d94ffbe3d024fbbb768d434a55b69fba5:internal/network/dpi/obfs.go:generic-api-key:19

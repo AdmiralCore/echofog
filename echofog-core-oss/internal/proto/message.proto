@@ -1,0 +1,240 @@
+syntax = "proto3";
+
+package p2p;
+option go_package = "github.com/echofog/echofog-core/internal/proto;internal_pb";
+
+
+message Envelope {
+  bytes data = 1;
+  bytes signature = 2;
+  bytes pub_key = 3;
+}
+
+message MessageData {
+  bytes message_id = 1;
+  bytes origin_id = 2;
+  bytes target_id = 3;
+  uint64 timestamp = 4;
+  uint32 hop_limit = 5;
+
+  oneof payload {
+    HandshakeInit handshake_init = 6;
+    Ping ping = 7;
+    Ack ack = 8;
+
+    ChatMessage chat_message = 9; //  no longer supported
+    PeerList peer_list = 10;
+
+    Transaction transfer = 11;
+    HandshakeResponse handshake_response = 12;
+
+    PeerRequest peer_req = 13;
+    PeerResponse peer_res = 14;
+
+    PuzzleChallenge puzzle_challenge = 15;
+    PuzzleSolution puzzle_solution = 16;
+
+    X3DHInit x3dh_init = 17;
+    SecureMessage secure_message = 18;
+    PreKeyBundle pre_key_bundle = 19;
+
+    SessionInitRequest session_req = 20;
+    SessionInitResponse session_res = 21;
+    RelayRequest relay_req = 22;
+    WantList want_list = 23;
+    BlockData block_data = 24;
+
+    FindNodeRequest find_node_req = 25;
+    FindNodeResponse find_node_res = 26;
+
+    FindValueReq find_value_req = 27;
+    FindValueRes find_value_res = 28;
+
+    StoreReq store_req = 29;
+    Pong pong = 30;
+
+    CallSignal call_signal = 31;
+  }
+}
+
+message ChatMessage {
+  bytes encrypted_payload = 1;
+}
+
+message Transaction {
+  bytes asset_id = 1;
+  uint64 amount = 2;
+  string memo = 3;
+}
+
+message HandshakeInit {
+  bytes nonce = 1;
+  uint32 version = 2;
+  bytes network_id = 3;
+  uint32 capabilities = 4;
+  bytes pub_key = 5;
+}
+
+message HandshakeResponse {
+  bytes pub_key = 1;
+  bytes signature = 2;
+  uint32 version = 3;
+  bytes network_id = 4;
+  uint32 capabilities = 5;
+}
+
+message Ping {
+  int64 nonce = 1;
+}
+
+message Pong {
+  int64 nonce = 1;
+}
+
+message PeerList {
+  message Peer {
+    bytes id = 1;
+    string last_known_addr = 2;
+  }
+  repeated Peer peers = 1;
+}
+
+message Ack {
+  bytes ref_message_id = 1;
+}
+
+message PeerInfo {
+  bytes pub_key = 1;
+  string address = 2;
+}
+
+message PeerRequest {
+  uint32 count = 1;
+}
+
+message PeerResponse {
+  repeated PeerInfo peers = 1;
+}
+
+message PuzzleChallenge {
+  bytes prefix = 1;
+  uint32 difficulty = 2;
+}
+
+message PuzzleSolution {
+  uint64 nonce = 1;
+}
+
+message SecureMessage {
+  RatchetHeader header = 1;
+  bytes ciphertext = 2;
+}
+
+message RatchetHeader {
+  bytes ratchet_key = 1;
+  uint32 pn = 2;
+  uint32 n = 3;
+}
+
+message PreKeyBundle {
+  bytes identity_key = 1;
+  bytes signed_pre_key = 2;
+  bytes signature = 3;
+  bytes one_time_pre_key = 4;
+  int64 created_at = 5;
+}
+
+message X3DHInit {
+  bytes ephemeral_key = 1;
+  bytes identity_key = 2;
+  bytes one_time_key_id = 3;
+
+  SecureMessage initial_ciphertext = 4;
+  // the sender's signed key bundle (a swarm bundle record, without one-time prekeys): the receiver
+  // takes the sender's identity key from it and needs no lookup in the network
+  bytes sender_bundle = 5;
+}
+
+enum SessionType {
+  SESSION_UNKNOWN = 0;
+  SESSION_DAG = 1;
+  SESSION_STREAM = 2;
+  SESSION_RPC = 3;
+}
+
+message SessionInitRequest {
+  SessionType type = 1;
+  bytes session_id = 2;
+  bytes context_id = 3;
+  uint32 desired_streams = 4;
+  uint32 protocol_version = 5;
+  bytes padding = 6;
+}
+
+message SessionInitResponse {
+  bool accepted = 1;
+  uint32 allowed_streams = 2;
+  uint64 file_size = 3;
+  bytes accepted_session_id = 4;
+}
+
+message RelayRequest {
+  bytes target_peer_id = 1;
+  bytes forwarded_envelope = 2;
+}
+
+message WantList {
+  repeated bytes wanted_hashes = 1;
+  bool cancel = 2;
+}
+
+message BlockData {
+  bytes hash = 1;
+  bytes data = 2;
+}
+
+message FindNodeRequest {
+  bytes target_id = 1;
+}
+
+message FindNodeResponse {
+  repeated PeerInfo closest_peers = 1;
+}
+
+message DhtRecord {
+  bytes key = 1;
+  bytes value = 2;
+  bytes publisher_pub_key = 3;
+  bytes signature = 4;
+  uint64 timestamp = 5;
+  uint32 ttl = 6;
+}
+
+message StoreReq {
+  DhtRecord record = 1;
+}
+
+message FindValueReq {
+  bytes target_key = 1;
+}
+
+message FindValueRes {
+  DhtRecord record = 1;
+  repeated PeerInfo closest_peers = 2;
+}
+
+message CallSignal {
+  enum CallAction {
+    CALL_UNKNOWN = 0;
+    CALL_REQUEST = 1;
+    CALL_ACCEPT = 2;
+    CALL_REJECT = 3;
+    CALL_HANGUP = 4;
+  }
+  string call_id = 1;
+  CallAction action = 2;
+  bool with_video = 3;
+
+  uint32 delay_ms = 4;
+  bytes padding = 5;
+}

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package storage;
+option go_package = "github.com/echofog/echofog-core/internal/storage;storage";
+
+message PeerStoreEntry {
+  bytes pub_key = 1;
+  string last_known_addr = 2;
+  uint64 last_seen = 3;
+  uint32 trust_score = 4;
+}

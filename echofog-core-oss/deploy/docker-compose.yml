@@ -1,0 +1,34 @@
+# A public EchoFog node: DHT member, relay for peers behind NATs, optionally a paid exit.
+#
+#   cp deploy/.env.example deploy/.env      # and edit it
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml logs -f        # stats line every minute
+#   docker compose -f deploy/docker-compose.yml exec node echofog-node status
+services:
+  node:
+    build: ..
+    image: echofog-node:latest
+    restart: unless-stopped
+    env_file: .env
+    # the identity, the database and the TON wallet cache live here: back it up
+    volumes:
+      - echofog-data:/data
+    ports:
+      # publish 443 so the node blends with normal HTTPS/HTTP3; set ADVERTISE_PORT=443 in .env
+      - "443:4242/udp"    # QUIC (HTTP/3 port): messages, calls, relayed and proxied traffic
+      - "443:4242/tcp"    # TCP fallback (HTTPS port) for networks that block UDP
+    # the node exits cleanly on SIGTERM (database closed); give it time to do so
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    # optional: the identity password as a Docker secret instead of ECHOFOG_PASSWORD
+    # secrets: [echofog_password]
+    # environment: { ECHOFOG_PASSWORD_FILE: /run/secrets/echofog_password }
+
+volumes:
+  echofog-data:
+
+# secrets:
+#   echofog_password:
+#     file: ./echofog_password.txt

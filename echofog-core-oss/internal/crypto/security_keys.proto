@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package crypto;
+option go_package = "github.com/echofog/echofog-core/internal/crypto;crypto";
+
+message EncryptedPrivateKey {
+  bytes salt = 1;
+  bytes nonce = 2;
+  bytes encrypted_key = 3;
+  string algorithm = 4;
+}

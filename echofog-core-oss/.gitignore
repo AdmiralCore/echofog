@@ -1,0 +1,15 @@
+# build output
+/bin/
+/echofog-node
+/echofog-node.exe
+
+# runtime data
+/data/
+.node_password
+
+# editors
+.idea/
+.vscode/
+
+# local notes
+GEMINI.md

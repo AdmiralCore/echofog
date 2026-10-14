@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Linux decides; the other systems are watched until their results are stable
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - run: go build ./...
+      - run: go vet ./...
+      # a few timing tests are sensitive to a loaded runner: gotestsum runs a failed test again
+      - run: go install gotest.tools/gotestsum@latest
+      - run: gotestsum --format testname --rerun-fails=2 --packages=./... -- -count=1 -timeout 15m
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      # the cluster simulations check timing (media delivery ratios, lookups within seconds) that
+      # does not hold at race-detector speed; they run in the normal test job
+      - run: go test -race -count=1 -timeout 25m $(go list ./... | grep -v -e /internal/simulation -e /testbed)
+
+  lint:
+    name: static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck -checks "all,-ST1000,-ST1003,-ST1005,-ST1016,-ST1020,-ST1021,-ST1022,-ST1023" ./...
+      - name: govulncheck (known vulnerabilities in what we use)
+        run: |
+          go run ./scripts/vulncheck
+      - name: gosec (security smells)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -quiet -exclude-generated -severity high -confidence medium ./...
+      - name: gitleaks (secrets in the code and its history)
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@latest
+          gitleaks detect --source . --no-banner --redact --verbose
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+  leaks:
+    name: goroutine leaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+      # packages with goleak in TestMain fail when a test leaves a goroutine behind
+      - run: go test -count=1 ./internal/network/dpi/ ./internal/network/handshake/ ./internal/network/mimicry/ ./internal/services/groups/ ./internal/services/messenger/ ./pkg/api/node/

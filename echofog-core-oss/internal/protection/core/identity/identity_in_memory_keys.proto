@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package identity;
+option go_package = "github.com/echofog/echofog-core/internal/identity;identity";
+
+message IdentityKeysInStorage {
+  bytes encrypted_data = 1;
+  bytes salt = 2;
+  bytes nonce = 3;
+  string algorithm = 4;
+}

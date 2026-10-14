@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The desktop app builds against the core that lies next to it (see the replace in go.mod), so
+# both repositories are checked out side by side.
+env:
+  CORE_REPO: echofog/echofog-core
+
+jobs:
+  build:
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: echofog-desktop-oss
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_REPO }}
+          path: echofog-core-oss
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: echofog-desktop-oss/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: echofog-desktop-oss/frontend/package-lock.json
+      - name: system libraries of the web view (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: frontend
+        working-directory: echofog-desktop-oss/frontend
+        run: |
+          npm ci
+          npm run build
+      - name: go vet and tests
+        working-directory: echofog-desktop-oss
+        run: |
+          go vet ./...
+          go test ./... -count=1
+      - name: build the app
+        working-directory: echofog-desktop-oss
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
+          wails build -s ${{ runner.os == 'Linux' && '-tags webkit2_41' || '' }}
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: echofog-desktop-oss
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_REPO }}
+          path: echofog-core-oss
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: echofog-desktop-oss/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npm audit (what the interface ships)
+        working-directory: echofog-desktop-oss/frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: gitleaks
+        working-directory: echofog-desktop-oss
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@latest
+          gitleaks detect --source . --no-banner --redact --verbose

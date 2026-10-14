@@ -1,0 +1,63 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDefaultsAreSafeForARealNetwork(t *testing.T) {
+	cfg := DefaultConfig("")
+
+	assert.Equal(t, CurrentProtocolVersion, cfg.Network.ProtocolVersion)
+	assert.True(t, cfg.Network.PortMapping, "reachability features are on by default")
+	assert.True(t, cfg.Network.HolePunch)
+	assert.Equal(t, "mainnet", cfg.Ton.Network)
+	assert.Equal(t, "www.microsoft.com", cfg.AntiDPI.TLSServerName)
+
+	for _, addr := range cfg.Network.BootstrapNodes {
+		assert.NotContains(t, addr, "127.0.0.1", "a release must not default to a local bootstrap node")
+	}
+	assert.Zero(t, cfg.Relay.Server.PricePerMB, "relays are free: nothing settles a relay price")
+	assert.Empty(t, cfg.Payments.SupportAddress, "no project address is baked in: the feature stays off until configured")
+}
+
+func TestEachCallGetsItsOwnBootstrapSlice(t *testing.T) {
+	old := DefaultBootstrapNodes
+	DefaultBootstrapNodes = []string{"203.0.113.1:4242"}
+	defer func() { DefaultBootstrapNodes = old }()
+
+	a, b := DefaultConfig(""), DefaultConfig("")
+	a.Network.BootstrapNodes[0] = "changed"
+	assert.Equal(t, "203.0.113.1:4242", b.Network.BootstrapNodes[0], "editing one config must not edit the defaults")
+	assert.Equal(t, "203.0.113.1:4242", DefaultBootstrapNodes[0])
+}
+
+func TestProfilePathsAreSeparate(t *testing.T) {
+	a, b := DefaultConfig("alice"), DefaultConfig("bob")
+	assert.NotEqual(t, a.Storage.DatabasePath, b.Storage.DatabasePath)
+	assert.Equal(t, "db", filepath.Base(a.Storage.DatabasePath))
+	assert.Equal(t, "alice", filepath.Base(filepath.Dir(a.Storage.DatabasePath)))
+}
+
+func TestAvailableProfilesListsDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	none, err := GetAvailableProfiles()
+	require.NoError(t, err)
+	assert.Empty(t, none)
+
+	dir := filepath.Join(home, ".echofog", "profiles")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "alice"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "bob"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "stray-file"), []byte("x"), 0o600))
+
+	got, err := GetAvailableProfiles()
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"alice", "bob"}, got, "files are not profiles")
+}

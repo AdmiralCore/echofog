@@ -1,0 +1,131 @@
+# A small Internet in Docker:
+#
+#   wan 203.0.113.0/24  the "Internet" (a documentation range: nodes treat it as public addresses,
+#                       while 10.x would be seen as private and never be tried for hole punching): public nodes s1, s2, p1, p2 and the outside of three routers
+#   lan_a  behind gw_a, port-restricted cone NAT      nodes a1, a2
+#   lan_b  behind gw_b, symmetric NAT                 nodes b1, b2
+#   lan_c  behind gw_c, port-restricted cone NAT      nodes c1, c2
+#
+# (The LANs are ordinary bridges: Docker's "internal" networks drop everything that leaves the
+# subnet, which includes what a router container forwards. The nodes' default route points at their
+# router, and Docker does not route between bridges, so nothing gets around it.)
+#
+# a <-> c can punch holes through each other; anything with b has to go through a relay. The
+# runner (go run ./testbed/runner) starts it, runs the scenarios and breaks things on purpose.
+# The routers can delay, lose and cut traffic: see NETEM_* and testbed/runner.
+
+x-image: &image
+  image: echofog-testbed
+  build:
+    context: ..
+    dockerfile: testbed/Dockerfile
+
+x-node: &node
+  <<: *image
+  cap_add: [NET_ADMIN]
+  restart: "no"
+  stop_grace_period: 5s
+
+x-gateway: &gateway
+  <<: *image
+  cap_add: [NET_ADMIN]
+  sysctls:
+    net.ipv4.ip_forward: "1"
+  restart: "no"
+  stop_grace_period: 1s
+
+networks:
+  wan:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 203.0.113.0/24 }]
+  lan_a:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.20.1.0/24 }]
+  lan_b:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.20.2.0/24 }]
+  lan_c:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.20.3.0/24 }]
+
+services:
+  # ---- public nodes
+  s1:
+    <<: *node
+    container_name: efbed-s1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: s1, BOOTSTRAP: "${BOOTSTRAP:-}", SIGNALING: "${SEED_SIGNALING:-}" }
+    networks: { wan: { ipv4_address: 203.0.113.11 } }
+  s2:
+    <<: *node
+    container_name: efbed-s2
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: s2, BOOTSTRAP: "${BOOTSTRAP:-}", SIGNALING: "${SEED_SIGNALING:-}" }
+    networks: { wan: { ipv4_address: 203.0.113.12 } }
+  p1:
+    <<: *node
+    container_name: efbed-p1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p1, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { wan: { ipv4_address: 203.0.113.13 } }
+  p2:
+    <<: *node
+    container_name: efbed-p2
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { wan: { ipv4_address: 203.0.113.14 } }
+
+  # ---- routers
+  gw_a:
+    <<: *gateway
+    container_name: efbed-gw_a
+    environment: { ROLE: gateway, NAT: cone, NETEM: "${NETEM_A:-}" }
+    networks:
+      wan: { ipv4_address: 203.0.113.21 }
+      lan_a: { ipv4_address: 10.20.1.2 }
+  gw_b:
+    <<: *gateway
+    container_name: efbed-gw_b
+    environment: { ROLE: gateway, NAT: symmetric, NETEM: "${NETEM_B:-}" }
+    networks:
+      wan: { ipv4_address: 203.0.113.22 }
+      lan_b: { ipv4_address: 10.20.2.2 }
+  gw_c:
+    <<: *gateway
+    container_name: efbed-gw_c
+    environment: { ROLE: gateway, NAT: cone, NETEM: "${NETEM_C:-}" }
+    networks:
+      wan: { ipv4_address: 203.0.113.23 }
+      lan_c: { ipv4_address: 10.20.3.2 }
+
+  # ---- nodes behind the routers
+  a1:
+    <<: *node
+    container_name: efbed-a1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: a1, GATEWAY: 10.20.1.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { lan_a: { ipv4_address: 10.20.1.11 } }
+  a2:
+    <<: *node
+    container_name: efbed-a2
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: a2, GATEWAY: 10.20.1.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { lan_a: { ipv4_address: 10.20.1.12 } }
+  b1:
+    <<: *node
+    container_name: efbed-b1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: b1, GATEWAY: 10.20.2.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { lan_b: { ipv4_address: 10.20.2.11 } }
+  b2:
+    <<: *node
+    container_name: efbed-b2
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: b2, GATEWAY: 10.20.2.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { lan_b: { ipv4_address: 10.20.2.12 } }
+  c1:
+    <<: *node
+    container_name: efbed-c1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c1, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { lan_c: { ipv4_address: 10.20.3.11 } }
+  c2:
+    <<: *node
+    container_name: efbed-c2
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c2, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    networks: { lan_c: { ipv4_address: 10.20.3.12 } }

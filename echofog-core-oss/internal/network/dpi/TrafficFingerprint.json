@@ -1,0 +1,29 @@
+{
+  "profile_name": "Iran_Melli_Bank_App",
+  "target_protocol_mimic": "DTLS",
+  "obfuscation": {
+    "method": "xor_rolling",
+    "key_rotation_seconds": 300,
+    "initial_key": "DE4D8EEF"
+  },
+  "shaping": {
+    "packet_size_distribution": [
+      { "size_range": [100, 200], "probability": 0.45 },
+      { "size_range": [500, 700], "probability": 0.25 },
+      { "size_range": [1200, 1300], "probability": 0.30 }
+    ],
+    "burst_mode": {
+      "enabled": true,
+      "max_packets_in_burst": 5,
+      "min_delay_ms": 10
+    }
+  },
+  "honey_pot": {
+    "active": true,
+    "reaction_type": "standard_error",
+    "mimic_responses": {
+      "on_malformed_tls": "TLS_ALERT_INTERNAL_ERROR",
+      "on_unknown_udp": "ICMP_UNREACHABLE"
+    }
+  }
+}

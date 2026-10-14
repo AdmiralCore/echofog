@@ -1,0 +1,280 @@
+package node
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/network/exit_gateway"
+	"github.com/echofog/echofog-core/internal/p2p/vpnmarket"
+	"github.com/echofog/echofog-core/pkg/api/types"
+	coreNode "github.com/echofog/echofog-core/pkg/node"
+)
+
+// SharingConfig is what the operator offers when sharing the connection
+type SharingConfig struct {
+	PricePerMB int64 `json:"pricePerMb"` // micro-USDT per MB; 49 is about 5 cents a GB. 0 = free
+	FreeTestKB int   `json:"freeTestKb"`
+	UploadKbps int   `json:"uploadKbps"`
+}
+
+// SharingStatus describes the exit service and its DHT advert
+type SharingStatus struct {
+	Enabled     bool          `json:"enabled"`
+	Config      SharingConfig `json:"config"`
+	LastPublish int64         `json:"lastPublish"`
+	ExpiresAt   int64         `json:"expiresAt"`
+	LastError   string        `json:"lastError"`
+	Accepted    uint64        `json:"accepted"`
+	Refused     uint64        `json:"refused"`
+	Bytes       uint64        `json:"bytes"`
+	// PaymentsReady: clients can pay this exit (priced, and the wallet is ready to receive)
+	PaymentsReady bool   `json:"paymentsReady"`
+	PayAddress    string `json:"payAddress"`
+	EarnedUSDT    string `json:"earnedUsdt"` // credited from clients so far
+}
+
+// ExitNode is one exit found in the network, joined with this client's own measurements
+type ExitNode struct {
+	PeerID          string  `json:"peerId"`
+	PricePerMB      int64   `json:"pricePerMb"`
+	FreeTestKB      int     `json:"freeTestKb"`
+	ClaimedKbps     int     `json:"claimedKbps"`
+	MeasuredKbps    int     `json:"measuredKbps"`
+	LatencyMs       float64 `json:"latencyMs"`
+	Score           float64 `json:"score"`
+	Probes          int     `json:"probes"`
+	Successes       int     `json:"successes"`
+	DomainsTried    int     `json:"domainsTried"`
+	DomainsOK       int     `json:"domainsOk"`
+	LastProbe       int64   `json:"lastProbe"`
+	PaymentRequired bool    `json:"paymentRequired"`
+	Connected       bool    `json:"connected"`
+	ExpiresAt       int64   `json:"expiresAt"`
+}
+
+// ProbeReport is the result of one manual check
+type ProbeReport struct {
+	OK              bool    `json:"ok"`
+	LatencyMs       float64 `json:"latencyMs"`
+	MeasuredKbps    int     `json:"measuredKbps"`
+	DomainsTried    int     `json:"domainsTried"`
+	DomainsOK       int     `json:"domainsOk"`
+	PaymentRequired bool    `json:"paymentRequired"`
+}
+
+func (n *NodeApi) market() (*vpnmarket.Service, error) {
+	if n == nil || n.node == nil || n.node.VPNMarket == nil || n.node.ExitService == nil {
+		return nil, errors.New("node is not running")
+	}
+	return n.node.VPNMarket, nil
+}
+
+// StartSharing turns this node into a public exit: it applies the offer, accepts tunnels and keeps an advert in the DHT
+func (n *NodeApi) StartSharing(cfg SharingConfig) error {
+	m, err := n.market()
+	if err != nil {
+		return err
+	}
+	if cfg.UploadKbps <= 0 {
+		cfg.UploadKbps = n.uploadKbps
+	}
+	if cfg.UploadKbps <= 0 {
+		return errors.New("upload speed is unknown: measure it first or enter it manually")
+	}
+	if cfg.FreeTestKB == 0 && cfg.PricePerMB > 0 {
+		cfg.FreeTestKB = 512
+	}
+
+	if cfg.PricePerMB > 0 {
+		// a priced exit must be able to receive money, or clients could never pay it
+		if err := n.startEarning(); err != nil {
+			return errors.New("to charge for traffic the TON wallet must be ready: " + err.Error())
+		}
+	}
+
+	exit := n.node.ExitService
+	exit.SetPolicy(exit_gateway.Policy{PricePerMB: cfg.PricePerMB, FreeBytes: int64(cfg.FreeTestKB) * 1024})
+	exit.SetEnabled(true)
+
+	err = m.Publisher.Start(n.node.Ctx, vpnmarket.ShareConfig{PricePerMB: cfg.PricePerMB, UploadKbps: cfg.UploadKbps, FreeTestKB: cfg.FreeTestKB})
+	if err != nil {
+		exit.SetEnabled(false)
+		n.stopEarning()
+		return err
+	}
+	return nil
+}
+
+// StopSharing withdraws the advert and stops serving other peers
+func (n *NodeApi) StopSharing() error {
+	m, err := n.market()
+	if err != nil {
+		return err
+	}
+	n.node.ExitService.SetEnabled(false)
+	n.stopEarning()
+	return m.Publisher.Stop()
+}
+
+func (n *NodeApi) GetSharingStatus() SharingStatus {
+	m, err := n.market()
+	if err != nil {
+		return SharingStatus{}
+	}
+	ps := m.Publisher.Status()
+	a, r, b := n.node.ExitService.Stats()
+	return SharingStatus{
+		Enabled: n.node.ExitService.Enabled(),
+		Config: SharingConfig{
+			PricePerMB: ps.Config.PricePerMB, FreeTestKB: ps.Config.FreeTestKB, UploadKbps: ps.Config.UploadKbps,
+		},
+		LastPublish: ps.LastPublish, ExpiresAt: ps.ExpiresAt, LastError: ps.LastError,
+		Accepted: a, Refused: r, Bytes: b,
+		PaymentsReady: n.node.ExitService.AccountOf(types.PeerID{}).PayAddress != "",
+		PayAddress:    n.node.ExitService.AccountOf(types.PeerID{}).PayAddress,
+		EarnedUSDT:    n.earnedUSDT(),
+	}
+}
+
+// ListExitNodes returns the verified exits found in the DHT, best rated first
+func (n *NodeApi) ListExitNodes() []ExitNode {
+	m, err := n.market()
+	if err != nil {
+		return []ExitNode{}
+	}
+	out := []ExitNode{}
+	for _, e := range m.Directory.List() {
+		id, _ := e.Advert.ID()
+		out = append(out, ExitNode{
+			PeerID: e.Advert.PeerID, PricePerMB: e.Advert.PricePerMB, FreeTestKB: e.Advert.FreeTestKB,
+			ClaimedKbps: e.Advert.UploadKbps, MeasuredKbps: e.Rating.MeasuredKbps, LatencyMs: e.Rating.LatencyMs,
+			Score: e.Score, Probes: e.Rating.Probes, Successes: e.Rating.Successes,
+			DomainsTried: e.Rating.DomainsTried, DomainsOK: e.Rating.DomainsOK, LastProbe: e.Rating.LastProbe,
+			PaymentRequired: e.Rating.PaymentRequired, Connected: n.node.Swarm.GetPeer(id) != nil,
+			ExpiresAt: e.Advert.ExpiresAt,
+		})
+	}
+	return out
+}
+
+// RefreshExitNodes rescans the DHT and returns how many live exits were found
+func (n *NodeApi) RefreshExitNodes() (int, error) {
+	m, err := n.market()
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return m.Directory.Refresh(ctx), nil
+}
+
+// ProbeExitNode checks one exit now: domain availability through the tunnel and real download speed
+func (n *NodeApi) ProbeExitNode(peerID string) (ProbeReport, error) {
+	m, err := n.market()
+	if err != nil {
+		return ProbeReport{}, err
+	}
+	raw, err := hex.DecodeString(peerID)
+	if err != nil || len(raw) != 32 {
+		return ProbeReport{}, errors.New("invalid peer id")
+	}
+	var id types.PeerID
+	copy(id[:], raw)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := m.Probe(ctx, id)
+	rep := ProbeReport{
+		OK: res.OK, LatencyMs: res.LatencyMs, MeasuredKbps: res.MeasuredKbps,
+		DomainsTried: res.DomainsTried, DomainsOK: res.DomainsOK, PaymentRequired: res.PaymentRequired,
+	}
+	return rep, err
+}
+
+func (n *NodeApi) GetProbeDomains() []string {
+	m, err := n.market()
+	if err != nil {
+		return vpnmarket.DefaultProbeDomains
+	}
+	return m.Domains()
+}
+
+func (n *NodeApi) SetProbeDomains(domains []string) error {
+	m, err := n.market()
+	if err != nil {
+		return err
+	}
+	return m.SetDomains(domains)
+}
+
+// bestExit returns the highest ranked live exit that is not blocked by repeated failures
+func (n *NodeApi) bestExit() (string, error) {
+	m, err := n.market()
+	if err != nil {
+		return "", err
+	}
+	for _, e := range m.Directory.List() {
+		if e.Rating.ConsecutiveFails < 3 {
+			return e.Advert.PeerID, nil
+		}
+	}
+	return "", errors.New("no exit nodes discovered yet")
+}
+
+// ensureConnected dials a peer found through the DHT if there is no live connection yet
+func (n *NodeApi) ensureConnected(id types.PeerID) error {
+	if n.node.Swarm.GetPeer(id) != nil {
+		return nil
+	}
+	if n.node.DhtEngine == nil {
+		return errors.New("exit relay is not connected")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addr, err := n.node.DhtEngine.FindPeer(ctx, id)
+	if err != nil {
+		return errors.New("exit relay is not connected")
+	}
+	return n.node.Swarm.AddPotentialPeerWithCtx(ctx, id, addr)
+}
+
+// StartVPNAt is StartVPN with an explicit loopback listen address
+func (n *NodeApi) StartVPNAt(relayPeerID, listen string) error {
+	return n.startVPN(relayPeerID, listen)
+}
+
+// CheckSites tells which sites open directly and which through an exit, with a real TLS
+// handshake per site. exitPeerID is a peer, "auto" (the exit in use, else the best ranked one) or
+// "" (only the direct check).
+func (n *NodeApi) CheckSites(exitPeerID string, sites []string) ([]coreNode.SiteCheck, error) {
+	if n == nil || n.node == nil || n.node.Swarm == nil {
+		return nil, errors.New("node is not running")
+	}
+	var exit *types.PeerID
+	if exitPeerID == "auto" {
+		n.vpn.mu.Lock()
+		exitPeerID = n.vpn.relayPeer
+		n.vpn.mu.Unlock()
+		if exitPeerID == "" {
+			best, err := n.bestExit()
+			if err != nil {
+				return nil, err
+			}
+			exitPeerID = best
+		}
+	}
+	if exitPeerID != "" {
+		raw, err := hex.DecodeString(exitPeerID)
+		if err != nil || len(raw) != 32 {
+			return nil, errors.New("invalid peer id")
+		}
+		var id types.PeerID
+		copy(id[:], raw)
+		exit = &id
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	return n.node.CheckSites(ctx, exit, sites)
+}

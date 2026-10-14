@@ -1,0 +1,2 @@
+# Findings that were looked at and accepted. One id per line, then the reason.
+GO-2026-4479 pion/dtls v2 (AES-GCM random nonces): only used between the app window and the node on this computer (loopback media bridge); no fixed version exists in the v2 line
