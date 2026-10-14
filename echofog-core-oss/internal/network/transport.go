@@ -32,6 +32,7 @@ const (
 // errSelfDial: the address is this node's own listener.
 var errSelfDial = errors.New("DialEarly: address is already in use")
 
+// GetQuicConfig returns the QUIC settings shared by the listener and every dial.
 func GetQuicConfig() *quic.Config {
 	return &quic.Config{
 		Allow0RTT:             true,
@@ -98,12 +99,14 @@ type QuicTransport struct {
 	guard      atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
 }
 
+// NewQUICTransport creates a QUIC transport listening on addr with default socket options.
 func NewQUICTransport(addr string, tlsCfg *tls.Config, quicCgf *quic.Config, signer handshake.SignerGetterKey, protocolVersion uint32) (*QuicTransport, error) {
 	return NewQUICTransportWithOptions(addr, tlsCfg, quicCgf, signer, protocolVersion, TransportOptions{
 		DirectSocket: false,
 	})
 }
 
+// NewQUICTransportWithOptions creates a QUIC transport with explicit socket and obfuscation options.
 func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.Config, signer handshake.SignerGetterKey, protocolVersion uint32, opts TransportOptions) (*QuicTransport, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -218,12 +221,14 @@ func (q *QuicTransport) UDPPort() int {
 	return 0
 }
 
+// SetLogger sets the logger for this transport.
 func (q *QuicTransport) SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		q.logger = logger
 	}
 }
 
+// SetAuthenticator sets the peer handshake used to authenticate new connections.
 func (q *QuicTransport) SetAuthenticator(a PeerAuthenticator) {
 	if a != nil {
 		q.authenticator = a
@@ -235,6 +240,7 @@ func (q *QuicTransport) SetAuthenticator(a PeerAuthenticator) {
 // mapping of another port, useless for reaching our QUIC listener.
 func (q *QuicTransport) STUNSharesQUICPort() bool { return q.Mux != nil }
 
+// GetSTUNConn returns the packet connection STUN shares with QUIC, or nil when they are separate.
 func (q *QuicTransport) GetSTUNConn() net.PacketConn {
 	if q.Mux != nil {
 		return q.Mux.GetSTUNConn()
@@ -251,10 +257,12 @@ func (q *QuicTransport) GetSTUNConn() net.PacketConn {
 	return q.directStunConn
 }
 
+// Addr returns the local UDP address the transport is bound to.
 func (q *QuicTransport) Addr() net.Addr {
 	return q.addrNet
 }
 
+// Close stops listening and tears the transport down.
 func (q *QuicTransport) Close() error {
 	var err error
 	q.closeOnce.Do(func() {
@@ -270,176 +278,7 @@ func (q *QuicTransport) Close() error {
 	return err
 }
 
-func (q *QuicTransport) ListenEarly(ctx context.Context) error {
-	ln, err := q.tr.ListenEarly(q.tlsCfg, q.quicCgf)
-	if err != nil {
-		return fmt.Errorf("QuicTransport Listen error: %v", err)
-	}
-
-	go q.ConnAcceptor(ctx, ln, q.protocolVersion)
-
-	return nil
-}
-
-// pendingDial lets concurrent callers share one dial to the same address.
-type pendingDial struct {
-	done chan struct{}
-	err  error
-}
-
-// DialEarly connects to addr. Concurrent dials to the same address are coalesced: besides
-// avoiding duplicate connections, two parallel handshakes would share one cached TLS session
-// ticket, which quic-go mutates without synchronisation.
-func (q *QuicTransport) DialEarly(ctx context.Context, addr string) error {
-	if addr == q.addrStr {
-		return errSelfDial
-	}
-
-	q.dialMu.Lock()
-	if q.dialing == nil {
-		q.dialing = make(map[string]*pendingDial)
-	}
-	if p, ok := q.dialing[addr]; ok {
-		q.dialMu.Unlock()
-		select {
-		case <-p.done:
-			return p.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	p := &pendingDial{done: make(chan struct{})}
-	q.dialing[addr] = p
-	q.dialMu.Unlock()
-
-	p.err = q.dial(ctx, addr)
-	q.dialMu.Lock()
-	delete(q.dialing, addr)
-	q.dialMu.Unlock()
-	close(p.done)
-	return p.err
-}
-
-// tlsConfigFor gives every remote address its own session cache. quic-go derives the cache key
-// from the IP only, so peers behind one IP (NAT, one host) would otherwise share and race on
-// one ticket, and 0-RTT would be attempted against the wrong peer.
-func (q *QuicTransport) tlsConfigFor(addr string) *tls.Config {
-	if q.tlsCfg == nil || q.tlsCfg.ClientSessionCache == nil {
-		return q.tlsCfg
-	}
-	q.dialMu.Lock()
-	if q.sessionCaches == nil || len(q.sessionCaches) > 4096 {
-		q.sessionCaches = make(map[string]tls.ClientSessionCache)
-	}
-	cache, ok := q.sessionCaches[addr]
-	if !ok {
-		cache = tls.NewLRUClientSessionCache(1)
-		q.sessionCaches[addr] = cache
-	}
-	q.dialMu.Unlock()
-	cfg := q.tlsCfg.Clone()
-	cfg.ClientSessionCache = cache
-	return cfg
-}
-
-// ExpectPeer tells the transport that the node at addr has peer ID id. With obfuscation on it must
-// be called before dialing addr: the packets to that node are sealed with a key derived from id.
-func (q *QuicTransport) ExpectPeer(addr string, id types.PeerID) {
-	q.book.set(addr, id)
-	if q.obfs == nil {
-		return
-	}
-	ua, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return
-	}
-	_ = q.obfs.Expect(ua.AddrPort(), dpi.NodeKey(q.obfsSecret, id))
-}
-
-func (q *QuicTransport) dial(ctx context.Context, addr string) error {
-	expected, haveExpected := q.book.get(addr)
-	if q.obfs != nil && !haveExpected {
-		return ErrPeerUnknown
-	}
-
-	targetAddres, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return err
-	}
-
-	conn, err := q.tr.Dial(ctx, targetAddres, q.tlsConfigFor(addr), q.quicCgf)
-	if err != nil {
-		return err
-	}
-
-	peerRes, err := q.authenticator.AuthenticateOutbound(ctx, WrapQUIC(conn))
-	if err != nil {
-		conn.CloseWithError(ErrCodeAuthFailed, "auth failed")
-		return fmt.Errorf("outbound authentication failed: %w", err)
-	}
-	if haveExpected && peerRes.PeerID != expected {
-		conn.CloseWithError(ErrCodeAuthFailed, "unexpected peer")
-		return ErrPeerMismatch
-	}
-
-	q.newConn(conn, true, conn.RemoteAddr().String(), peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
-	q.logger.Info("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "outbound", "remote_addr", conn.RemoteAddr().String())
-
-	return nil
-}
-
-func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener, protocolVersion uint32) {
-	defer ln.Close()
-	for {
-		conn, err := ln.Accept(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if err.Error() == "quic: transport closed" {
-				return
-			}
-
-			q.logger.Error("QuicTransport Accept error", "err", err)
-			continue
-		}
-
-		ip := addrOfNet(conn.RemoteAddr())
-		releaseIP, allowed := q.guard.Load().Allow(ip)
-		if !allowed {
-			q.logger.Debug("QuicTransport: address is limited, dropping inbound connection", "remote", conn.RemoteAddr())
-			conn.CloseWithError(ErrCodeSpamDetected, "too many attempts")
-			continue
-		}
-
-		select {
-		case q.handshakeSem <- struct{}{}:
-		default:
-			releaseIP()
-			q.logger.Warn("QuicTransport: concurrent handshakes limit reached, dropping inbound connection", "remote", conn.RemoteAddr())
-			conn.CloseWithError(ErrCodeSpamDetected, "handshake overloaded")
-			continue
-		}
-
-		go func(c *quic.Conn) {
-			defer func() { <-q.handshakeSem }()
-			defer releaseIP()
-
-			peerRes, err := q.authenticator.AuthenticateInbound(ctx, WrapQUIC(c))
-			if err != nil {
-				q.guard.Load().Fail(ip)
-				c.CloseWithError(ErrCodeAuthFailed, "auth failed")
-				q.logger.Debug("QuicTransport inbound authentication error", "err", err, "remote", c.RemoteAddr())
-				return
-			}
-			q.guard.Load().Success(ip)
-
-			q.newConn(c, false, c.RemoteAddr().String(), peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
-			q.logger.Info("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "inbound", "remote_addr", c.RemoteAddr().String())
-		}(conn)
-	}
-}
-
+// ConnChan delivers each newly authenticated peer connection.
 func (q *QuicTransport) ConnChan() <-chan NewConnEvent {
 	return q.connChan
 }
@@ -448,24 +287,6 @@ func (q *QuicTransport) ConnChan() <-chan NewConnEvent {
 func (q *QuicTransport) SetCaps(c handshake.Capability) {
 	if s, ok := q.authenticator.(CapsSetter); ok {
 		s.SetCaps(c)
-	}
-}
-
-func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, PeerID types.PeerID, PeerPubKey types.PeerPublicKey, caps handshake.Capability) {
-	ev := NewConnEvent{
-		Caps:       caps,
-		Conn:       WrapQUIC(conn),
-		Dialable:   true, // a QUIC peer's source address is its listening socket
-		IsOut:      isOut,
-		PeerID:     PeerID,
-		Addr:       addr,
-		PeerPubKey: PeerPubKey,
-	}
-	select {
-	case q.connChan <- ev:
-		q.arrivalNotify(PeerID)
-	case <-q.closed:
-		_ = conn.CloseWithError(ErrCodeNormalClose, "shutting down")
 	}
 }
 
