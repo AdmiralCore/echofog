@@ -50,6 +50,10 @@ export function EndGroupCall(arg1, arg2) {
   return window['go']['main']['App']['EndGroupCall'](arg1, arg2);
 }
 
+export function ExportLogs() {
+  return window['go']['main']['App']['ExportLogs']();
+}
+
 export function ExportTonRecoveryPhrase(arg1) {
   return window['go']['main']['App']['ExportTonRecoveryPhrase'](arg1);
 }
@@ -80,6 +84,18 @@ export function GetGroupInvite(arg1) {
 
 export function GetGroupMessages(arg1, arg2) {
   return window['go']['main']['App']['GetGroupMessages'](arg1, arg2);
+}
+
+export function GetLogFilePath() {
+  return window['go']['main']['App']['GetLogFilePath']();
+}
+
+export function GetLogs(arg1) {
+  return window['go']['main']['App']['GetLogs'](arg1);
+}
+
+export function GetLogsText() {
+  return window['go']['main']['App']['GetLogsText']();
 }
 
 export function GetMyID() {

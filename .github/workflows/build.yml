@@ -1,0 +1,93 @@
+name: build
+
+# Builds the release binaries: the headless node for Linux and Windows, and the desktop app for
+# both. Runs on pushes to main, on version tags, and on demand. Artifacts are attached to the run.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: echofog-node (linux & windows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - name: Build
+        run: |
+          set -eux
+          mkdir -p out
+          for target in linux/amd64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            ext=""; [ "$os" = windows ] && ext=".exe"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w" \
+              -o "out/echofog-node-$os-$arch$ext" ./echofog-core-oss/cmd/echofog-node
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: echofog-node
+          path: out/*
+
+  desktop:
+    name: EchoFog desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Linux WebKit dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # The released wails v2.11.0 binary is built with an old golang.org/x/tools that cannot load
+      # Go 1.27 type information ("package context without types"). Rebuild the same version against
+      # a newer x/tools so it works under Go 1.27.
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          set -eux
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          go mod init wailsbuild
+          go get github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
+          go get golang.org/x/tools@v0.52.0
+          out="$(go env GOPATH)/bin/wails"
+          [ "$RUNNER_OS" = "Windows" ] && out="$out.exe"
+          go build -o "$out" github.com/wailsapp/wails/v2/cmd/wails
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Wails build
+        shell: bash
+        working-directory: echofog-desktop-oss
+        run: |
+          set -eux
+          tags=""
+          [ "$RUNNER_OS" = "Linux" ] && tags="-tags webkit2_41"
+          wails build -s -trimpath $tags
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: echofog-desktop-${{ runner.os }}
+          path: echofog-desktop-oss/build/bin/*

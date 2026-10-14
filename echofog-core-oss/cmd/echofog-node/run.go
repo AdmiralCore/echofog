@@ -15,6 +15,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	api "github.com/echofog/echofog-core/pkg/api/node"
+	"github.com/echofog/echofog-core/pkg/logging"
 	"github.com/echofog/echofog-core/pkg/node"
 )
 
@@ -166,6 +167,9 @@ func runCmd(args []string) int {
 	fmt.Println("EchoFog node", version)
 	if o.logLevel != "" {
 		_ = os.Setenv("ECHOFOG_LOG_LEVEL", o.logLevel) // read by the node's logger
+	}
+	if os.Getenv("ECHOFOG_LOG_FILE") == "" {
+		_ = os.Setenv("ECHOFOG_LOG_FILE", logging.DefaultFilePath()) // persist logs for a running node
 	}
 	if o.obfs != "" && o.obfs != config.ObfsNode && o.obfs != config.ObfsOff {
 		fatal("--obfs: %q is not node or off", o.obfs)

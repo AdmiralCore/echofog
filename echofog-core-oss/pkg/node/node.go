@@ -5,13 +5,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/echofog/echofog-core/internal/network/handshake"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/echofog/echofog-core/internal/network/handshake"
 
 	"github.com/echofog/echofog-core/internal/network/bwprobe"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
@@ -40,6 +41,7 @@ import (
 	"github.com/echofog/echofog-core/internal/wallet/tonwallet"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/events"
+	"github.com/echofog/echofog-core/pkg/logging"
 )
 
 type Node struct {
@@ -106,12 +108,24 @@ func NewNode(parentCtx context.Context, cfg *config.AppConfig, nodeName string) 
 	if lvl := logLevel(); lvl < slog.LevelInfo {
 		slog.SetLogLoggerLevel(lvl) // the package-level slog calls of the other packages
 	}
-	baseHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel()})
-	namedHandler := baseHandler.WithAttrs([]slog.Attr{slog.String("name", nodeName)})
-
 	eventBus := events.NewBus()
 	busLogHandler := events.NewEventLogHandler(eventBus, slog.LevelInfo)
-	compositeLogger := slog.New(events.NewCompositeHandler(namedHandler, busLogHandler))
+	// One logging setup for the whole process: console, the event bus (live UI), an in-memory ring
+	// and a file. Installed as the default slog handler, so every package's slog call is captured,
+	// and the Logs view can show and export it. See pkg/logging.
+	// The log file is opt-in through ECHOFOG_LOG_FILE so unit tests (which spin up many nodes)
+	// do not all fight over one file; the node binary and the desktop app set it. "off" disables
+	// it explicitly. The in-memory ring and the event bus are always on.
+	logFile := os.Getenv("ECHOFOG_LOG_FILE")
+	if logFile == "off" {
+		logFile = ""
+	}
+	compositeLogger := logging.Setup(logging.Options{
+		Level:     logLevel(),
+		FilePath:  logFile,
+		Extra:     []slog.Handler{busLogHandler},
+		BaseAttrs: []slog.Attr{slog.String("name", nodeName)},
+	})
 
 	parentCtx, cancel := context.WithCancel(parentCtx)
 
@@ -610,6 +624,7 @@ func (n *Node) Stop() {
 			n.Storage.Close()
 		}
 		n.Logger.Info("Node stopped cleanly")
+		logging.Close() // flush and release the log file
 	})
 }
 

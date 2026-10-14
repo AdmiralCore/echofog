@@ -1,9 +1,19 @@
 # Build output
 *.exe
+/echofog-core-oss/echofog-node
+
+# Wails build artifacts (the compiled app and its packaging output)
 **/build/bin/
 **/bin/
-/echofog-core-oss/echofog-node
+*.app/
+*.dmg
+*.pkg
+*.syso
 /echofog-desktop-oss/frontend/dist/
+
+# Local logs
+*.log
+*.log.1
 
 # Dependencies fetched locally
 **/node_modules/

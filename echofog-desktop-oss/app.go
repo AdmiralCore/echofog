@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"sync"
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/dto"
+	"github.com/echofog/echofog-core/pkg/logging"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -45,6 +47,10 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.mu.Unlock()
 
+	// persist logs to a file the Logs view can export, unless the user set their own path
+	if os.Getenv("ECHOFOG_LOG_FILE") == "" {
+		_ = os.Setenv("ECHOFOG_LOG_FILE", logging.DefaultFilePath())
+	}
 	runtime.LogInfo(ctx, "Wails frontend connected via bridge")
 }
 

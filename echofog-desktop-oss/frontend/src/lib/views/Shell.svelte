@@ -12,12 +12,14 @@
   import Proxy from './Proxy.svelte';
   import Wallet from './Wallet.svelte';
   import Settings from './Settings.svelte';
+  import Logs from './Logs.svelte';
   import Icon from '../components/ui/Icon.svelte';
 
   const views = [
     { id: 'chats', label: 'Chats', icon: 'message' },
     { id: 'proxy', label: 'Proxy', icon: 'shield' },
     { id: 'wallet', label: 'Wallet', icon: 'wallet' },
+    { id: 'logs', label: 'Logs', icon: 'settings' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ];
   let net = { peerCount: 0, status: 'OFFLINE' };
@@ -69,6 +71,7 @@
       <div class="fill" hidden={$view !== 'chats'}><Chats /></div>
       {#if $view === 'proxy'}<Proxy />{/if}
       {#if $view === 'wallet'}<Wallet />{/if}
+      {#if $view === 'logs'}<Logs />{/if}
       {#if $view === 'settings'}<Settings />{/if}
     </div>
   </main>
