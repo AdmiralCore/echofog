@@ -2,12 +2,10 @@
     import { callService, callState } from '../../services/call.service.js';
     import { toggleMute, toggleDeafen, toggleVideo, toggleScreenShare, endCall, resumeAudioContext } from '../../stores/call.store.js';
     import Icon from '../ui/Icon.svelte';
-    import Popover from '../ui/Popover.svelte';
 
     export let compact = false;
 
-    let menu = ''; // '' | 'audio' | 'camera' | 'quality'
-    let micAnchor, camAnchor, shareAnchor;
+    let menu = ''; // '' | 'devices' | 'quality'
     let measuring = false;
     let measuredKbps = 0;
     let measureError = '';
@@ -19,7 +17,7 @@
 
     function toggleMenu(name) {
         menu = menu === name ? '' : name;
-        if (menu === 'audio' || menu === 'camera') callService.refreshDevices();
+        if (menu === 'devices') callService.refreshDevices();
         if (menu === 'quality' && !measuredKbps && !measuring) measure();
     }
 
@@ -61,8 +59,15 @@
     const mbps = (kbps) => (kbps / 1000).toFixed(kbps % 1000 ? 1 : 0);
 </script>
 
-<div class="bar {compact ? 'compact' : ''}">
-    <div class="split" bind:this={micAnchor}>
+<svelte:window on:keydown={(e) => e.key === 'Escape' && (menu = '')} />
+
+{#if menu}
+    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+    <div class="fixed inset-0 z-40" on:click={() => (menu = '')}></div>
+{/if}
+
+<div class="relative flex items-center justify-center gap-2 {compact ? '' : 'p-1.5 rounded-2xl bg-[#111214]/90 backdrop-blur border border-white/5 shadow-lg'}">
+    <div class="split">
         <button
             class="ctl {s.isMicMuted ? 'ctl-off' : ''}"
             title={s.hasMic ? (s.isMicMuted ? 'Unmute' : 'Mute') : 'No microphone'}
@@ -70,11 +75,11 @@
             aria-pressed={s.isMicMuted}
             on:click={toggleMute}
         >
-            <Icon name={s.isMicMuted ? 'micOff' : 'mic'} size={21} />
+            <Icon name={s.isMicMuted ? 'micOff' : 'mic'} size={22} />
         </button>
         {#if !compact}
-            <button class="ctl-caret" class:open={menu === 'audio'} title="Microphone and speakers" aria-label="Microphone and speakers" on:click={() => toggleMenu('audio')}>
-                <Icon name="chevronUp" size={13} stroke={2.4} />
+            <button class="ctl-caret" title="Audio and video devices" aria-label="Devices" on:click={() => toggleMenu('devices')}>
+                <Icon name="chevronUp" size={14} stroke={2.4} />
             </button>
         {/if}
     </div>
@@ -86,27 +91,22 @@
         aria-pressed={s.isDeafened}
         on:click={toggleDeafen}
     >
-        <Icon name={s.isDeafened ? 'headphonesOff' : 'headphones'} size={21} />
+        <Icon name={s.isDeafened ? 'headphonesOff' : 'headphones'} size={22} />
     </button>
 
     {#if !compact}
-        <div class="split" bind:this={camAnchor}>
-            <button
-                class="ctl {s.isCameraOn ? 'ctl-on' : ''}"
-                title={s.isCameraOn ? 'Turn off camera' : 'Turn on camera'}
-                aria-label={s.isCameraOn ? 'Turn off camera' : 'Turn on camera'}
-                aria-pressed={s.isCameraOn}
-                on:click={toggleVideo}
-            >
-                <Icon name={s.isCameraOn ? 'video' : 'videoOff'} size={21} />
-            </button>
-            <button class="ctl-caret" class:open={menu === 'camera'} title="Choose the camera" aria-label="Camera" on:click={() => toggleMenu('camera')}>
-                <Icon name="chevronUp" size={13} stroke={2.4} />
-            </button>
-        </div>
+        <button
+            class="ctl {s.isCameraOn ? 'ctl-on' : ''}"
+            title={s.isCameraOn ? 'Turn off camera' : 'Turn on camera'}
+            aria-label={s.isCameraOn ? 'Turn off camera' : 'Turn on camera'}
+            aria-pressed={s.isCameraOn}
+            on:click={toggleVideo}
+        >
+            <Icon name={s.isCameraOn ? 'video' : 'videoOff'} size={22} />
+        </button>
     {/if}
 
-    <div class="split" bind:this={shareAnchor}>
+    <div class="split">
         <button
             class="ctl {s.isScreenSharing ? 'ctl-on' : ''}"
             title={s.isScreenSharing ? 'Stop sharing' : 'Share your screen'}
@@ -114,192 +114,174 @@
             aria-pressed={s.isScreenSharing}
             on:click={toggleScreenShare}
         >
-            <Icon name="screenUp" size={21} />
+            <Icon name="screenUp" size={22} />
         </button>
         {#if !compact}
-            <button class="ctl-caret" class:open={menu === 'quality'} title="Stream quality {qLabel ? '· ' + qLabel : ''}" aria-label="Stream quality" on:click={() => toggleMenu('quality')}>
-                <Icon name="chevronUp" size={13} stroke={2.4} />
+            <button class="ctl-caret" title="Stream quality {qLabel ? '· ' + qLabel : ''}" aria-label="Stream quality" on:click={() => toggleMenu('quality')}>
+                <Icon name="chevronUp" size={14} stroke={2.4} />
             </button>
         {/if}
     </div>
 
-    <div class="sep"></div>
+    <div class="w-px h-8 bg-white/10 mx-1"></div>
 
     <button class="ctl ctl-leave" title="Leave call" aria-label="Leave call" on:click={endCall}>
-        <Icon name="hangup" size={21} />
+        <Icon name="hangup" size={22} />
     </button>
+
+    {#if menu === 'devices'}
+        <div class="popover left-0" role="dialog" aria-label="Devices">
+            <p class="pop-title">Input device</p>
+            {#each s.devices.mics as d (d.id)}
+                <button class="pop-row" on:click={() => { callService.setMicDevice(d.id); menu = ''; }}>
+                    <span class="truncate flex-1 text-left">{d.label}</span>
+                    {#if d.id === s.micDeviceId || (!s.micDeviceId && d.id === 'default')}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
+                </button>
+            {:else}
+                <p class="pop-empty">No microphones found</p>
+            {/each}
+            <p class="pop-title mt-2">Camera</p>
+            {#each s.devices.cams as d (d.id)}
+                <button class="pop-row" on:click={() => { callService.setCameraDevice(d.id); menu = ''; }}>
+                    <span class="truncate flex-1 text-left">{d.label}</span>
+                    {#if d.id === s.camDeviceId}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
+                </button>
+            {:else}
+                <p class="pop-empty">No cameras found</p>
+            {/each}
+        </div>
+    {:else if menu === 'quality'}
+        <div class="popover right-14" role="listbox" aria-label="Stream quality">
+            <p class="pop-title">Stream quality</p>
+            {#each s.qualities as q (q.id)}
+                <button class="pop-row {q.id === currentQ ? '!text-white' : ''}" role="option" aria-selected={q.id === currentQ} disabled={!q.fits} on:click={() => pickQuality(q)}>
+                    <span class="flex-1 text-left font-semibold">{q.label}</span>
+                    <span class="text-xs text-[#949ba4]">{mbps(q.bitrateKbps)} Mbps</span>
+                    {#if q.id === currentQ}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
+                </button>
+            {:else}
+                <p class="pop-empty">Loading presets…</p>
+            {/each}
+            <div class="border-t border-white/10 mt-2 pt-2 px-2 text-xs text-[#949ba4]">
+                <div class="flex items-center justify-between">
+                    <span>{#if measuring}Measuring upload…{:else if measuredKbps}Your upload: {mbps(measuredKbps)} Mbps{:else}Upload speed unknown{/if}</span>
+                    <button class="text-[var(--color-accent)] font-semibold disabled:opacity-40" disabled={measuring} on:click={measure}>Measure</button>
+                </div>
+                {#if measureError}<p class="text-[#f23f43] mt-1">{measureError}</p>{/if}
+                <div class="flex gap-1.5 mt-2">
+                    <input class="flex-1 h-8 rounded-md bg-black/40 border border-white/10 px-2 text-white text-xs outline-none focus:border-[var(--color-accent)]" type="number" min="1" placeholder="Upload, Mbps" aria-label="Upload speed in Mbps" bind:value={manualMbps} />
+                    <button class="h-8 px-3 rounded-md bg-white/10 text-white font-semibold hover:bg-white/15" on:click={applyManual}>Set</button>
+                </div>
+                <p class="mt-2 leading-snug">Viewers relay your stream to each other, so 4K60 needs only enough upload for two copies.</p>
+            </div>
+        </div>
+    {/if}
 </div>
 
-{#if menu === 'audio'}
-    <Popover anchor={micAnchor} label="Microphone and speakers" on:close={() => (menu = '')}>
-        <p class="pop-title">Microphone</p>
-        {#each s.devices.mics as d (d.id)}
-            <button class="pop-row" class:sel={d.id === s.micDeviceId || (!s.micDeviceId && d.id === 'default')} on:click={() => callService.setMicDevice(d.id)}>
-                <Icon name="mic" size={15} className="opacity-60" />
-                <span class="label">{d.label}</span>
-                {#if d.id === s.micDeviceId || (!s.micDeviceId && d.id === 'default')}<Icon name="check" size={15} className="tick" />{/if}
-            </button>
-        {:else}
-            <p class="pop-empty">No microphones found</p>
-        {/each}
-        <p class="pop-title">Speakers and headphones</p>
-        <button class="pop-row" class:sel={!s.outDeviceId} on:click={() => callService.setOutputDevice('')}>
-            <Icon name="volume" size={15} className="opacity-60" />
-            <span class="label">System default</span>
-            {#if !s.outDeviceId}<Icon name="check" size={15} className="tick" />{/if}
-        </button>
-        {#each s.devices.outs.filter((d) => d.id && d.id !== 'default') as d (d.id)}
-            <button class="pop-row" class:sel={d.id === s.outDeviceId} on:click={() => callService.setOutputDevice(d.id)}>
-                <Icon name="volume" size={15} className="opacity-60" />
-                <span class="label">{d.label}</span>
-                {#if d.id === s.outDeviceId}<Icon name="check" size={15} className="tick" />{/if}
-            </button>
-        {/each}
-    </Popover>
-{:else if menu === 'camera'}
-    <Popover anchor={camAnchor} label="Camera" on:close={() => (menu = '')}>
-        <p class="pop-title">Camera</p>
-        {#each s.devices.cams as d (d.id)}
-            <button class="pop-row" class:sel={d.id === s.camDeviceId} on:click={() => { callService.setCameraDevice(d.id); menu = ''; }}>
-                <Icon name="video" size={15} className="opacity-60" />
-                <span class="label">{d.label}</span>
-                {#if d.id === s.camDeviceId}<Icon name="check" size={15} className="tick" />{/if}
-            </button>
-        {:else}
-            <p class="pop-empty">No cameras found</p>
-        {/each}
-    </Popover>
-{:else if menu === 'quality'}
-    <Popover anchor={shareAnchor} width={320} label="Stream quality" on:close={() => (menu = '')}>
-        <p class="pop-title">Stream quality</p>
-        {#each s.qualities as q (q.id)}
-            <button class="pop-row" class:sel={q.id === currentQ} role="option" aria-selected={q.id === currentQ} on:click={() => pickQuality(q)}>
-                <span class="label strong">{q.label}</span>
-                {#if !q.fits}<span class="hint" title="Your upload is lower than this stream needs; it may stutter">needs more upload</span>{/if}
-                <span class="rate">{mbps(q.bitrateKbps)} Mbps</span>
-                {#if q.id === currentQ}<Icon name="check" size={15} className="tick" />{/if}
-            </button>
-        {:else}
-            <p class="pop-empty">Loading presets…</p>
-        {/each}
-        <div class="upload">
-            <div class="row">
-                <span class="grow">{#if measuring}Measuring upload…{:else if measuredKbps}Your upload: {mbps(measuredKbps)} Mbps{:else}Upload speed unknown{/if}</span>
-                <button class="link" disabled={measuring} on:click={measure}>Measure</button>
-            </div>
-            {#if measureError}<p class="error">{measureError}</p>{/if}
-            <form class="row" on:submit|preventDefault={applyManual}>
-                <input type="number" min="1" placeholder="Upload, Mbps" aria-label="Upload speed in Mbps" bind:value={manualMbps} />
-                <button type="submit">Set</button>
-            </form>
-            <p class="note-text">Every quality can be chosen; above your upload the picture may stutter. Viewers relay your stream to each other, so 4K60 needs upload for about two copies.</p>
-        </div>
-    </Popover>
-{/if}
-
 <style>
-    .bar {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        padding: 7px;
-        border-radius: 20px;
-        background: rgba(18, 19, 24, 0.78);
-        backdrop-filter: blur(16px) saturate(1.3);
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-    }
-    .bar.compact {
-        padding: 0;
-        background: none;
-        border: none;
-        box-shadow: none;
-        backdrop-filter: none;
-    }
     .ctl {
-        width: 50px;
-        height: 46px;
-        padding: 0;
-        border: none;
+        width: 52px;
+        height: 48px;
         border-radius: 14px;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(255, 255, 255, 0.07);
-        color: #e6e7ea;
-        transition: background 0.15s, color 0.15s, transform 0.1s;
+        background: #2b2d31;
+        color: #dbdee1;
+        transition: background 0.12s, color 0.12s;
     }
-    .ctl:hover:not(:disabled) { background: rgba(255, 255, 255, 0.13); }
-    .ctl:active { transform: scale(0.96); }
-    .ctl-off { background: rgba(240, 80, 80, 0.16); color: #ff7a7a; }
-    .ctl-off:hover:not(:disabled) { background: rgba(240, 80, 80, 0.26); }
-    .ctl-on { background: #f2f3f5; color: #15161a; }
-    .ctl-on:hover:not(:disabled) { background: #ffffff; }
-    .ctl-leave { width: 62px; background: #e5484d; color: #fff; }
-    .ctl-leave:hover:not(:disabled) { background: #d13a3f; }
-    .sep { width: 1px; height: 28px; background: rgba(255, 255, 255, 0.1); margin: 0 2px; }
-    .split { position: relative; display: flex; }
+    .ctl:hover {
+        background: #35373c;
+        color: #fff;
+    }
+    .ctl-off {
+        background: rgba(242, 63, 67, 0.15);
+        color: #f23f43;
+    }
+    .ctl-off:hover {
+        background: rgba(242, 63, 67, 0.25);
+        color: #f23f43;
+    }
+    .ctl-on {
+        background: #fff;
+        color: #111214;
+    }
+    .ctl-on:hover {
+        background: #e3e5e8;
+        color: #111214;
+    }
+    .ctl-leave {
+        width: 64px;
+        background: #da373c;
+        color: #fff;
+    }
+    .ctl-leave:hover {
+        background: #a12828;
+        color: #fff;
+    }
+    .split {
+        position: relative;
+        display: flex;
+    }
     .ctl-caret {
         position: absolute;
-        right: -5px;
-        top: -5px;
+        right: -4px;
+        top: -4px;
         width: 20px;
         height: 20px;
-        padding: 0;
-        border-radius: 999px;
-        background: #1c1d23;
-        color: #b8bcc6;
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 9999px;
+        background: #111214;
+        color: #b5bac1;
+        border: 1px solid rgba(255, 255, 255, 0.12);
         display: flex;
         align-items: center;
         justify-content: center;
-        transition: color 0.15s, background 0.15s, transform 0.15s;
     }
-    .ctl-caret:hover:not(:disabled),
-    .ctl-caret.open { color: #fff; background: var(--accent); border-color: var(--accent); }
-    .ctl-caret.open { transform: rotate(180deg); }
-
-    :global(.pop .pop-title) {
-        padding: 8px 10px 4px;
+    .ctl-caret:hover {
+        color: #fff;
+    }
+    .popover {
+        position: absolute;
+        bottom: calc(100% + 10px);
+        z-index: 50;
+        width: 288px;
+        max-height: min(60vh, 340px);
+        overflow-y: auto;
+        border-radius: 12px;
+        background: #111214;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+        padding: 6px;
+        color: #dbdee1;
+        font-size: 14px;
+    }
+    .pop-title {
+        padding: 6px 8px 4px;
         font-size: 11px;
-        font-weight: 600;
+        font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--faint);
+        letter-spacing: 0.04em;
+        color: #949ba4;
     }
-    :global(.pop .pop-row) {
+    .pop-row {
         width: 100%;
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border: none;
-        border-radius: 9px;
-        background: transparent;
-        color: var(--muted);
-        text-align: left;
-    }
-    :global(.pop .pop-row:hover:not(:disabled)) { background: var(--hover); color: var(--text); }
-    :global(.pop .pop-row.sel) { color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
-    :global(.pop .label) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    :global(.pop .strong) { font-weight: 600; }
-    :global(.pop .tick) { color: var(--accent); }
-    :global(.pop .hint) { font-size: 11px; color: var(--warn); }
-    :global(.pop .rate) { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
-    :global(.pop .pop-empty) { padding: 8px 10px; color: var(--faint); }
-    :global(.pop .upload) {
-        margin-top: 6px;
-        padding: 10px 10px 6px;
-        border-top: 1px solid var(--line);
-        display: flex;
-        flex-direction: column;
         gap: 8px;
-        font-size: 12px;
-        color: var(--muted);
+        padding: 7px 8px;
+        border-radius: 6px;
+        color: #b5bac1;
     }
-    :global(.pop .upload input) { height: 32px; padding: 4px 10px; font-size: 12px; }
-    :global(.pop .upload button) { height: 32px; padding: 0 12px; }
-    :global(.pop .upload .link) { height: auto; padding: 0; background: none; border: none; color: var(--accent); font-weight: 600; }
-    :global(.pop .note-text) { line-height: 1.4; color: var(--faint); }
+    .pop-row:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.06);
+        color: #fff;
+    }
+    .pop-row:disabled {
+        opacity: 0.35;
+        cursor: default;
+    }
+    .pop-empty {
+        padding: 6px 8px;
+        color: #6d6f78;
+    }
 </style>

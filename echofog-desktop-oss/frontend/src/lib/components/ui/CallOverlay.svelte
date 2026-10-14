@@ -19,8 +19,8 @@
     } from '../../stores/call.store.js';
     import { callService, callState, videoStreams } from '../../services/call.service.js';
     import { peerName } from '../../stores/peers.store.js';
-    import { view } from '../../stores/nav.js';
-    import { activeId, openChat } from '../../stores/chats.js';
+    import { openApp, activeTabId } from '../../stores/layout.store.js';
+    import { activeChannelId } from '../../mini-apps/echofog-chat/stores/chat.store.js';
     import Avatar from './Avatar.svelte';
     import Icon from './Icon.svelte';
     import VideoView from '../call/VideoView.svelte';
@@ -46,7 +46,7 @@
     });
 
     $: s = $callState;
-    $: stageVisible = $view === 'chats' && $activeId === $peerInfo.chatId && $stageExpanded;
+    $: stageVisible = $activeTabId === 'chat' && $activeChannelId === $peerInfo.chatId && $stageExpanded;
     $: showMini = $isCallActive && !stageVisible;
     $: focusStream = s.activeStreams.find((st) => st.streamId === (s.focusedStreamId || s.watching[0]) && st.mediaType !== 'camera');
     $: preview = focusStream ? callService.streamFor(focusStream.streamId, s, $videoStreams) : null;
@@ -73,16 +73,16 @@
     async function accept(withVideo) {
         const from = $incomingCall?.from;
         if (from) {
-            openChat($incomingCall.chatId || 'd:' + from); // a group call opens its group
-            view.set('chats');
+            activeChannelId.set('d_' + from);
+            openApp('chat', 'Chats');
         }
         await acceptIncomingCall(withVideo);
     }
 
     function openStage() {
-        if ($peerInfo.chatId) openChat($peerInfo.chatId);
+        if ($peerInfo.chatId) activeChannelId.set($peerInfo.chatId);
         stageExpanded.set(true);
-        view.set('chats');
+        openApp('chat', 'Chats');
     }
 </script>
 

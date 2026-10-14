@@ -5,6 +5,8 @@ import {dto} from '../models';
 import {logging} from '../models';
 import {main} from '../models';
 
+export function AcceptVoucher(arg1:string,arg2:string):Promise<void>;
+
 export function ActiveGroupCall(arg1:string):Promise<node.GroupCall>;
 
 export function AddContact(arg1:dto.ContactDTO):Promise<void>;
@@ -16,6 +18,10 @@ export function AddGroupMember(arg1:string,arg2:string):Promise<void>;
 export function CheckRecoveryPhrase(arg1:string):Promise<string>;
 
 export function CheckSites(arg1:string,arg2:Array<string>):Promise<Array<node.SiteCheck>>;
+
+export function ClaimPeerVoucher(arg1:string):Promise<void>;
+
+export function CommandAI(arg1:string):Promise<string>;
 
 export function ConnectToLocalPeer(arg1:string):Promise<void>;
 
@@ -61,6 +67,8 @@ export function GetNetworkStatus():Promise<Record<string, any>>;
 
 export function GetOnRampURL():Promise<string>;
 
+export function GetPeerBalance(arg1:string):Promise<string>;
+
 export function GetProbeDomains():Promise<Array<string>>;
 
 export function GetProfiles():Promise<Array<string>>;
@@ -86,6 +94,8 @@ export function GetVPNStatus():Promise<node.VPNStatus>;
 export function InviteToCall(arg1:string):Promise<Record<string, string>>;
 
 export function IsRegistered():Promise<boolean>;
+
+export function IssueVoucher(arg1:string,arg2:string,arg3:number):Promise<void>;
 
 export function JoinGroup(arg1:string):Promise<node.GroupDTO>;
 

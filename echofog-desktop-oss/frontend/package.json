@@ -1,5 +1,5 @@
 {
-  "name": "echofog-desktop-ui",
+  "name": "frontend",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,15 +9,18 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@skeletonlabs/skeleton": "^2.11.0",
+    "@skeletonlabs/tw-plugin": "^0.4.1",
     "@sveltejs/vite-plugin-svelte": "^1.0.1",
-    "autoprefixer": "^10.6.1",
-    "postcss": "^8.5.29",
+    "autoprefixer": "^10.4.23",
+    "postcss": "^8.5.6",
     "svelte": "^3.49.0",
     "tailwindcss": "^3.4.19",
     "vite": "^3.0.7"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "svelte-i18n": "^4.0.1"
   }
 }
