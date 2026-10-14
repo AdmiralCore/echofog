@@ -309,7 +309,7 @@ func (rc *RelayClient) HandleRawFrame(msgType net_types.MessageType, payload []b
 		return true
 
 	case net_types.TypeCircuitData:
-		// Fast zero-copy data frame delivered across circuit
+		// a data frame arriving over a circuit this node is an endpoint of
 		rc.handleCircuitData(payload, fromPeer)
 		return true
 

@@ -58,7 +58,7 @@ func StealthKeyFromPassword(password string) []byte {
 	return sum[:]
 }
 
-// DefaultMimicryConfig returns a battle-tested browser mimicry configuration.
+// DefaultMimicryConfig returns the default browser-mimicry settings.
 func DefaultMimicryConfig() *MimicryConfig {
 	return &MimicryConfig{
 		ServerName:   "www.microsoft.com",

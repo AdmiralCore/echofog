@@ -3,10 +3,11 @@ package swarm
 import (
 	"context"
 	"errors"
-	"github.com/echofog/echofog-core/internal/network/handshake"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"github.com/echofog/echofog-core/internal/network/handshake"
 
 	"github.com/echofog/echofog-core/internal/dispatcher"
 	"github.com/echofog/echofog-core/internal/network"

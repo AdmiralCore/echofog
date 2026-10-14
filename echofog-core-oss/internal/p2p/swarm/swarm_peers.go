@@ -1,0 +1,377 @@
+package swarm
+
+import (
+	"bytes"
+
+	"time"
+
+	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/network/router"
+	"github.com/echofog/echofog-core/internal/p2p/peerstore"
+	internal_pb "github.com/echofog/echofog-core/internal/proto"
+	"github.com/echofog/echofog-core/pkg/api/types"
+
+	"google.golang.org/protobuf/proto"
+)
+
+type TopologyObserver interface {
+	OnPeerConnected(peerID types.PeerID, pubKey types.PeerPublicKey, addr string)
+	OnPeerDisconnected(peerID types.PeerID)
+}
+
+// AddPeer registers an authenticated connection; it returns nil when the connection lost a
+// simultaneous-dial tie and was closed. dialable says whether addr is where the peer
+// accepts connections; an inbound TCP connection comes from an ephemeral port, which must not
+// end up in the peer store or the DHT.
+// keepDialedBy reports whether a connection in this direction wins a simultaneous-dial tie.
+func (s *Swarm) keepDialedBy(isOut bool, remote types.PeerID) bool {
+	selfLower := bytes.Compare(s.selfID[:], remote[:]) < 0
+	return isOut == selfLower
+}
+
+// AddPeer records an authenticated connection as an active peer, wiring up its read loops and
+// notifying observers. An existing connection to the same peer is replaced.
+func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool) *Peer {
+
+	s.mu.Lock()
+	if old, exists := s.activePeers[peerID]; exists {
+		if old.Alive() && old.isOut != isOut && !s.keepDialedBy(isOut, peerID) {
+			// both sides dialled at once: each keeps the connection opened by the lower peer ID,
+			// otherwise each could close the one the other kept and lose both
+			s.mu.Unlock()
+			_ = conn.CloseWithError(network.ErrCodeNormalClose, "duplicate connection")
+			return nil
+		}
+		old.Close()
+	}
+	s.mu.Unlock()
+
+	advertised := addr
+	if !dialable {
+		advertised = "" // observers (DHT) and peer exchange only spread addresses that can be dialled back
+	}
+	p := NewPeer(s.ctx, peerPubKey, s.dispatcher, advertised, isOut)
+	p.txBytes = &s.bytesTx
+	pw := network.NewPeerWrapper(p.ctx, conn, peerID)
+
+	if s.peerStore != nil && dialable {
+		s.peerStore.SavePeerAsync(peerPubKey, p.addr, 100)
+	}
+
+	pw.OnData(func(msgType net_types.MessageType, payload []byte, peerID types.PeerID) {
+		s.bytesRx.Add(uint64(len(payload)))
+		// 1. Fast Path: direct O(1) hashmap lookup without Protobuf overhead
+		s.fastHandlersMu.RLock()
+		fastHandler, hasFast := s.fastHandlers[msgType]
+		s.fastHandlersMu.RUnlock()
+		if hasFast && fastHandler != nil {
+			if err := fastHandler(payload, peerID); err != nil {
+				s.logger.Warn("Swarm FastPath: handler error", "type", msgType, "peer", peerID.String(), "err", err)
+			}
+			return
+		}
+
+		// 2. Generic Frame Handlers fallback (e.g. virtual circuits, relaying)
+		s.frameHandlersMu.RLock()
+		for _, h := range s.frameHandlers {
+			if h(msgType, payload, peerID) {
+				s.frameHandlersMu.RUnlock()
+				return
+			}
+		}
+		s.frameHandlersMu.RUnlock()
+
+		// 3. Async Path: Envelope unmarshaling and pushing to dispatcher queue
+		var data internal_pb.Envelope
+		err := proto.Unmarshal(payload, &data)
+		if err != nil {
+			return
+		}
+
+		s.dispatcher.PushMessage(&data, peerID)
+	})
+
+	pw.OnNewStream(func(stream *network.Stream) {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Swarm: panic in OnNewStream handler", "peer", peerID.String(), "panic", r)
+					stream.Close()
+				}
+			}()
+
+			select {
+			case <-s.ctx.Done():
+				stream.Close()
+				return
+			default:
+			}
+
+			stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+			msgType, payload, err := stream.ReadFrame()
+			if err != nil {
+				stream.Close()
+				return
+			}
+
+			switch msgType {
+			case net_types.TypeSessionData:
+				if len(payload) > 16 {
+					stream.Close()
+					return
+				}
+				var sessionID types.SessionID
+				copy(sessionID[:], payload)
+
+				if s.sessionManager.AddStream(sessionID, stream) {
+					stream.ResetDeadline()
+					stream.StartLoops()
+				} else {
+					stream.Close()
+				}
+
+			case net_types.TypeLocalPublicKeyBundleRequest:
+				account, err := s.identity.GetActiveAccount()
+				if err != nil {
+					stream.Close()
+					return
+				}
+
+				bundle, err := account.CreateJITBundle()
+				if err != nil {
+					stream.Close()
+					return
+				}
+
+				protoBundle := &internal_pb.PreKeyBundle{
+					IdentityKey:   bundle.IdentityKey[:],
+					SignedPreKey:  bundle.SignedPreKey[:],
+					Signature:     bundle.Signature[:],
+					OneTimePreKey: joinOPKs(bundle.OneTimeKeys),
+					CreatedAt:     bundle.CreatedAt,
+				}
+
+				bundleBytes, err := proto.Marshal(protoBundle)
+				if err != nil {
+					stream.Close()
+					return
+				}
+
+				stream.WriteFrame(net_types.TypeLocalPublicKeyBundleResponse, bundleBytes)
+				stream.Close()
+			default:
+				s.streamHandlersMu.RLock()
+				sh := s.streamHandlers[msgType]
+				s.streamHandlersMu.RUnlock()
+				if sh != nil {
+					stream.ResetDeadline()
+					sh(stream, payload, peerID)
+					return
+				}
+				s.executeRPC(msgType, payload, stream, peerID)
+			}
+		}()
+	})
+
+	initialProto := router.ProtoDirectQUIC
+	if conn.Protocol() == network.ProtocolTCP {
+		initialProto = router.ProtoTCPTLS
+	} else if s.cfg != nil && s.cfg.AntiDPI.ObfsPassword != "" {
+		initialProto = router.ProtoObfsQUIC
+	}
+	p.SetTransportWithProtocol(pw, initialProto)
+
+	s.mu.Lock()
+	s.activePeers[peerID] = p
+	obs := s.observers
+	s.mu.Unlock()
+
+	// forget the peer once its connection dies, so it is redialled instead of staying a zombie
+	// that silently swallows every frame
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		select {
+		case <-conn.Context().Done():
+		case <-p.ctx.Done():
+		case <-s.ctx.Done():
+			return
+		}
+		s.mu.Lock()
+		current := s.activePeers[peerID] == p
+		if current {
+			delete(s.activePeers, peerID)
+		}
+		obs := s.observers
+		s.mu.Unlock()
+		p.Close()
+		if current {
+			s.notifyPeerDisconnected(obs, peerID)
+			s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})
+		}
+	}()
+
+	s.notifyPeerConnected(obs, peerID, peerPubKey, advertised)
+	s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "connected", "addr": addr})
+
+	return p
+}
+
+func (s *Swarm) notifyPeerConnected(obs []TopologyObserver, peerID types.PeerID, peerPubKey types.PeerPublicKey, addr string) {
+	for _, o := range obs {
+		s.wg.Add(1)
+		go func(observer TopologyObserver) {
+			defer s.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Swarm: panic in OnPeerConnected observer", "peer_id", peerID.String(), "panic", r)
+				}
+			}()
+			select {
+			case <-s.ctx.Done():
+				return
+			default:
+				observer.OnPeerConnected(peerID, peerPubKey, addr)
+			}
+		}(o)
+	}
+}
+
+func (s *Swarm) notifyPeerDisconnected(obs []TopologyObserver, peerID types.PeerID) {
+	for _, o := range obs {
+		s.wg.Add(1)
+		go func(observer TopologyObserver) {
+			defer s.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Swarm: panic in OnPeerDisconnected observer", "peer_id", peerID.String(), "panic", r)
+				}
+			}()
+			select {
+			case <-s.ctx.Done():
+				return
+			default:
+				observer.OnPeerDisconnected(peerID)
+			}
+		}(o)
+	}
+}
+
+// RemovePeer closes the connection to a peer and drops it from the active set.
+func (s *Swarm) RemovePeer(peerID types.PeerID) {
+	s.mu.Lock()
+	if p, ok := s.activePeers[peerID]; ok {
+		p.Close()
+		delete(s.activePeers, peerID)
+
+		obs := s.observers
+		s.mu.Unlock()
+
+		s.notifyPeerDisconnected(obs, peerID)
+		s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})
+		return
+	}
+	s.mu.Unlock()
+}
+
+// GetPeer returns the active peer with this ID, or nil if it is not connected.
+func (s *Swarm) GetPeer(peerID types.PeerID) *Peer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activePeers[peerID]
+}
+
+// GetPeerAddr returns the remote address of a connected peer, or an empty string.
+func (s *Swarm) GetPeerAddr(peerID types.PeerID) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if p, ok := s.activePeers[peerID]; ok {
+		return p.Addr()
+	}
+	return ""
+}
+
+// GetAllPeers returns a snapshot of every currently connected peer.
+func (s *Swarm) GetAllPeers() []*Peer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	res := make([]*Peer, 0, len(s.activePeers))
+	for _, p := range s.activePeers {
+		res = append(res, p)
+	}
+	return res
+}
+
+// ThisIsActivePeer reports whether a peer is currently connected.
+func (s *Swarm) ThisIsActivePeer(peerID types.PeerID) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.activePeers[peerID]
+	return ok
+}
+
+// GetMyRandomPeers returns up to count connected peers chosen at random, e.g. for gossip.
+func (s *Swarm) GetMyRandomPeers(count uint) []*Peer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	res := make([]*Peer, 0, len(s.activePeers))
+
+	var mapCount uint
+
+	for _, p := range s.activePeers {
+		if mapCount >= count {
+			break
+		}
+
+		res = append(res, p)
+		mapCount++
+	}
+	return res
+}
+
+// BanPeer blocks a peer: it is disconnected and refused until unbanned.
+func (s *Swarm) BanPeer(peerID types.PeerID) {
+	if s.peerStore != nil {
+		_ = s.peerStore.BanPeer(peerID)
+	}
+	s.RemovePeer(peerID)
+}
+
+// UnBanPeer lifts a ban set by BanPeer.
+func (s *Swarm) UnBanPeer(peerID types.PeerID) {
+	if s.peerStore != nil {
+		_ = s.peerStore.UnBanPeer(peerID)
+	}
+}
+
+// CheckOnBan reports whether a peer is currently banned.
+func (s *Swarm) CheckOnBan(peerID types.PeerID) bool {
+	if s.peerStore != nil {
+		return s.peerStore.IsBanned(peerID)
+	}
+	return false
+}
+
+// SavePeer stores a peer's address and trust score for reconnecting to it later.
+func (s *Swarm) SavePeer(peerPubKey types.PeerPublicKey, addr string, trustScore uint32) {
+	if s.peerStore != nil {
+		_ = s.peerStore.SavePeer(peerPubKey, addr, trustScore)
+	}
+}
+
+// GetPeerStore returns the store of known peers kept for reconnection.
+func (s *Swarm) GetPeerStore() *peerstore.PeerStore {
+	return s.peerStore
+}
+
+// AddObserver registers a listener notified when peers connect or disconnect.
+func (s *Swarm) AddObserver(o TopologyObserver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observers = append(s.observers, o)
+}

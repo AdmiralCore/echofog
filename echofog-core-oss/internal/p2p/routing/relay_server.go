@@ -21,7 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Circuit represents an active zero-copy bidirectional virtual tunnel between two peers.
+// Circuit is one open two-way tunnel the relay forwards between two peers.
 type Circuit struct {
 	ID          uint32
 	SignalOnly  bool // opened for hole punching messages only
@@ -168,7 +168,8 @@ func (rs *RelayServer) GetSubscribedTypes() []interface{} {
 	}
 }
 
-// HandleRawFrame intercepts low-level circuit switching frames for universal zero-copy relaying.
+// HandleRawFrame handles the circuit frames (open, data, close) this node relays, returning
+// whether the frame was one of them.
 func (rs *RelayServer) HandleRawFrame(msgType net_types.MessageType, payload []byte, fromPeer types.PeerID) bool {
 	switch msgType {
 	case net_types.TypeCircuitOpenRequest:
