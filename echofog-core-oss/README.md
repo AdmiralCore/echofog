@@ -11,13 +11,13 @@ it and through relays when they do not, and pay each other directly.
 
 | Area | Where | Notes |
 |---|---|---|
-| Transport | `internal/network` | QUIC with per-node UDP obfuscation (no shared key); TCP fallback that looks like a browser talking TLS to a real site (uTLS Chrome fingerprint, own domain and certificate, smux streams). See [anti-censorship-transport](docs/anti-censorship-transport.md) |
-| NAT traversal | `internal/network/{natcheck,portmap}`, `internal/p2p/holepunch` | multi-STUN NAT classification, UPnP/NAT-PMP, coordinated hole punching. See [nat-traversal](docs/nat-traversal.md) |
+| Transport | `internal/network` | QUIC with per-node UDP obfuscation (no shared key); TCP fallback that looks like a browser talking TLS to a real site (uTLS Chrome fingerprint, own domain and certificate, smux streams). See anti-censorship-transport |
+| NAT traversal | `internal/network/{natcheck,portmap}`, `internal/p2p/holepunch` | multi-STUN NAT classification, UPnP/NAT-PMP, coordinated hole punching. See nat-traversal |
 | Discovery | `internal/p2p/dht`, `internal/services/discovery` | signed records, mDNS on the local network |
-| Messaging | `internal/services/{messenger,contacts,groups}` | end-to-end encrypted, double ratchet; delivery receipts and an outbox for offline peers; real group protocol (roles, kick/ban, calls). See [messaging](docs/messaging.md) |
+| Messaging | `internal/services/{messenger,contacts,groups}` | end-to-end encrypted, double ratchet; delivery receipts and an outbox for offline peers; real group protocol (roles, kick/ban, calls). See messaging |
 | Calls | `internal/services/call` | relay trees sized by each peer's capacity, so a call scales past what one uplink can carry |
 | Proxy / VPN | `internal/network/{exit_gateway,tunmode,fakedns}`, `internal/p2p/vpnmarket` | SOCKS5 and whole-computer (TUN) modes, TCP and UDP |
-| Payments | `internal/wallet/tonwallet`, `pkg/api/node/exitpay.go` | prepaid chunks in TON or USDT, no account. See [traffic-payments](docs/traffic-payments.md) |
+| Payments | `internal/wallet/tonwallet`, `pkg/api/node/exitpay.go` | prepaid chunks in TON or USDT, no account. See traffic-payments |
 | Embedding API | `pkg/api/node` | what a GUI or another program calls |
 | Node binary | `cmd/echofog-node` | headless node for servers |
 
@@ -35,7 +35,6 @@ make lint vuln fuzz   # static analysis, known vulnerabilities, fuzzing
 make testbed-chaos    # ten nodes behind NATs in Docker, with crashes and cuts
 ```
 
-See [docs/testing.md](docs/testing.md) for what each layer is for.
 
 ## Run a node
 
@@ -63,8 +62,7 @@ Every flag is also an `ECHOFOG_*` environment variable; `echofog-node run -h` li
 - **Logs**: a stats line every minute (`--stats-every`) with peers, relayed traffic and messages,
   exit sessions, earnings and the wallet balance.
 
-Public nodes with Docker and Google Cloud, and why not behind the Cloudflare proxy:
-[docs/deploy.md](docs/deploy.md).
+Public nodes can be run with Docker and on Google Cloud. Detailed public docs are being prepared.
 
 ## Layout
 
@@ -75,7 +73,6 @@ pkg/api/node          API for embedding applications
 pkg/api/types         public types
 pkg/dto, pkg/events   data objects and the event bus
 internal/...          everything else (not importable from outside)
-docs/                 design notes
 ```
 
 ## Status

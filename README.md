@@ -28,7 +28,7 @@ so the two folders must stay side by side.
 
 ## How it works
 
-The detail lives in [`echofog-core-oss/docs/`](echofog-core-oss/docs/); the short version:
+The short version (detailed public docs are being prepared):
 
 - **Transport and anti-censorship.** QUIC first, with every UDP packet obfuscated under a key
   derived from the peer's ID (no key is shared by the whole network, and none is in the binary).
@@ -36,21 +36,21 @@ The detail lives in [`echofog-core-oss/docs/`](echofog-core-oss/docs/); the shor
   a genuine Chrome TLS ClientHello (uTLS), a REALITY-style token hidden in the ClientHello, and
   anyone who connects without a valid token is relayed to the real mimicked site and sees *its*
   certificate. A WebSocket transport lets a node sit behind a CDN such as Cloudflare. See
-  [anti-censorship-transport.md](echofog-core-oss/docs/anti-censorship-transport.md) and the
-  [nDPI classification report](echofog-core-oss/docs/ndpi-report.md).
+  anti-censorship-transport.md and the
+  nDPI classification report.
 - **NAT traversal.** Multi-STUN NAT classification, UPnP/NAT-PMP port mapping and coordinated hole
   punching; a relay is used when a direct path is impossible. See
-  [nat-traversal.md](echofog-core-oss/docs/nat-traversal.md).
+  nat-traversal.md.
 - **Messaging.** End-to-end encrypted (X3DH + Double Ratchet), with delivery receipts, an outbox
   for offline peers, and a real group protocol. See
-  [messaging.md](echofog-core-oss/docs/messaging.md).
+  messaging.md.
 - **Calls.** Media flows over relay trees sized by each peer's uplink, so a call scales past what
   one connection could carry.
 - **Proxy / VPN.** A local SOCKS5 proxy or a whole-computer tunnel (TUN), over an exit someone
   sells on the market. On Windows the TUN driver (Wintun) is embedded and written out on demand, so
   there is nothing extra to install.
 - **Payments.** Prepaid in small chunks, in TON or USDT, with no account. See
-  [traffic-payments.md](echofog-core-oss/docs/traffic-payments.md).
+  traffic-payments.md.
 
 Two kinds of public node matter for a healthy network: **relays**, which carry traffic for peers
 that cannot reach each other directly, and **signaling nodes** (`--signaling`), which only keep the
@@ -71,7 +71,7 @@ make build                       # -> bin/echofog-node
 ```
 
 Running real public nodes (seeds, relays, exits) on a server, with Docker and on Google Cloud, is
-covered step by step in [deploy.md](echofog-core-oss/docs/deploy.md).
+covered step by step in deploy.md.
 
 ### Build the desktop app
 
@@ -95,7 +95,7 @@ make test-calls                  # a 10-node call cluster over QUIC
 make testbed-chaos               # ten nodes behind NATs in Docker, with crashes and cuts
 ```
 
-See [testing.md](echofog-core-oss/docs/testing.md) for what each layer covers.
+See testing.md for what each layer covers.
 
 ## Security model, honestly
 
