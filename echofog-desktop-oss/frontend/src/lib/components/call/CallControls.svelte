@@ -2,10 +2,12 @@
     import { callService, callState } from '../../services/call.service.js';
     import { toggleMute, toggleDeafen, toggleVideo, toggleScreenShare, endCall, resumeAudioContext } from '../../stores/call.store.js';
     import Icon from '../ui/Icon.svelte';
+    import Popover from '../ui/Popover.svelte';
 
     export let compact = false;
 
     let menu = ''; // '' | 'devices' | 'quality'
+    let devAnchor, qAnchor; // the menus open from these buttons and float above everything
     let measuring = false;
     let measuredKbps = 0;
     let measureError = '';
@@ -59,15 +61,8 @@
     const mbps = (kbps) => (kbps / 1000).toFixed(kbps % 1000 ? 1 : 0);
 </script>
 
-<svelte:window on:keydown={(e) => e.key === 'Escape' && (menu = '')} />
-
-{#if menu}
-    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-    <div class="fixed inset-0 z-40" on:click={() => (menu = '')}></div>
-{/if}
-
 <div class="relative flex items-center justify-center gap-2 {compact ? '' : 'p-1.5 rounded-2xl bg-[#111214]/90 backdrop-blur border border-white/5 shadow-lg'}">
-    <div class="split">
+    <div class="split" bind:this={devAnchor}>
         <button
             class="ctl {s.isMicMuted ? 'ctl-off' : ''}"
             title={s.hasMic ? (s.isMicMuted ? 'Unmute' : 'Mute') : 'No microphone'}
@@ -106,7 +101,7 @@
         </button>
     {/if}
 
-    <div class="split">
+    <div class="split" bind:this={qAnchor}>
         <button
             class="ctl {s.isScreenSharing ? 'ctl-on' : ''}"
             title={s.isScreenSharing ? 'Stop sharing' : 'Share your screen'}
@@ -130,8 +125,8 @@
     </button>
 
     {#if menu === 'devices'}
-        <div class="popover left-0" role="dialog" aria-label="Devices">
-            <p class="pop-title">Input device</p>
+        <Popover anchor={devAnchor} width={300} label="Audio and video devices" on:close={() => (menu = '')}>
+            <p class="pop-title">Microphone</p>
             {#each s.devices.mics as d (d.id)}
                 <button class="pop-row" on:click={() => { callService.setMicDevice(d.id); menu = ''; }}>
                     <span class="truncate flex-1 text-left">{d.label}</span>
@@ -140,6 +135,19 @@
             {:else}
                 <p class="pop-empty">No microphones found</p>
             {/each}
+            {#if s.devices.outs && s.devices.outs.length}
+                <p class="pop-title mt-2">Speakers</p>
+                <button class="pop-row" on:click={() => { callService.setOutputDevice(''); menu = ''; }}>
+                    <span class="truncate flex-1 text-left">System default</span>
+                    {#if !s.outDeviceId}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
+                </button>
+                {#each s.devices.outs.filter((d) => d.id && d.id !== 'default') as d (d.id)}
+                    <button class="pop-row" on:click={() => { callService.setOutputDevice(d.id); menu = ''; }}>
+                        <span class="truncate flex-1 text-left">{d.label}</span>
+                        {#if d.id === s.outDeviceId}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
+                    </button>
+                {/each}
+            {/if}
             <p class="pop-title mt-2">Camera</p>
             {#each s.devices.cams as d (d.id)}
                 <button class="pop-row" on:click={() => { callService.setCameraDevice(d.id); menu = ''; }}>
@@ -149,9 +157,9 @@
             {:else}
                 <p class="pop-empty">No cameras found</p>
             {/each}
-        </div>
+        </Popover>
     {:else if menu === 'quality'}
-        <div class="popover right-14" role="listbox" aria-label="Stream quality">
+        <Popover anchor={qAnchor} width={300} label="Stream quality" on:close={() => (menu = '')}>
             <p class="pop-title">Stream quality</p>
             {#each s.qualities as q (q.id)}
                 <button class="pop-row {q.id === currentQ ? '!text-white' : ''}" role="option" aria-selected={q.id === currentQ} disabled={!q.fits} on:click={() => pickQuality(q)}>
@@ -174,7 +182,7 @@
                 </div>
                 <p class="mt-2 leading-snug">Viewers relay your stream to each other, so 4K60 needs only enough upload for two copies.</p>
             </div>
-        </div>
+        </Popover>
     {/if}
 </div>
 
@@ -239,21 +247,6 @@
     }
     .ctl-caret:hover {
         color: #fff;
-    }
-    .popover {
-        position: absolute;
-        bottom: calc(100% + 10px);
-        z-index: 50;
-        width: 288px;
-        max-height: min(60vh, 340px);
-        overflow-y: auto;
-        border-radius: 12px;
-        background: #111214;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-        padding: 6px;
-        color: #dbdee1;
-        font-size: 14px;
     }
     .pop-title {
         padding: 6px 8px 4px;

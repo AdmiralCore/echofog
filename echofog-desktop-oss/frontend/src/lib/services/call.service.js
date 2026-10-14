@@ -1,6 +1,14 @@
 import { writable, get } from 'svelte/store';
 import { EventsOn } from '@wailsjs/runtime/runtime';
 
+const PREF = 'echofog.devices';
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (_) { return {}; }
+}
+function savePrefs(p) {
+  try { localStorage.setItem(PREF, JSON.stringify({ ...loadPrefs(), ...p })); } catch (_) { /* private mode */ }
+}
+
 // The Go bridge offer has a fixed layout, so tracks are attached with replaceTrack and the
 // loopback never renegotiates:
 //   m-lines 0..2   UI capture: mic, camera, screen (Go receives)
@@ -42,9 +50,10 @@ function freshState(prev = {}) {
     reported: {},
     screenStreamId: null,
     cameraStreamId: null,
-    devices: prev.devices || { mics: [], cams: [] },
-    micDeviceId: prev.micDeviceId || '',
-    camDeviceId: prev.camDeviceId || '',
+    devices: prev.devices || { mics: [], cams: [], outs: [] },
+    micDeviceId: prev.micDeviceId ?? loadPrefs().mic ?? '',
+    camDeviceId: prev.camDeviceId ?? loadPrefs().cam ?? '',
+    outDeviceId: prev.outDeviceId ?? loadPrefs().out ?? '',
     notice: null,
   };
 }
@@ -68,6 +77,8 @@ class CallService {
     this.lastSelfSpeaking = false;
     this.noticeTimer = null;
     this.muteOutput = false; // analyse but do not play remote audio (silent previews)
+    // a headset plugged in or removed: the lists follow
+    try { navigator.mediaDevices?.addEventListener('devicechange', () => this.refreshDevices()); } catch (_) { /* no media devices */ }
   }
 
   // --- lifecycle -------------------------------------------------------------------------
@@ -232,9 +243,24 @@ class CallService {
     if (!this.audioCtx) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       this.audioCtx = new Ctx({ latencyHint: 'interactive', sampleRate: 48000 });
+      const out = get(callState).outDeviceId;
+      if (out && typeof this.audioCtx.setSinkId === 'function') this.audioCtx.setSinkId(out).catch(() => {});
     }
     if (this.audioCtx.state === 'suspended') this.audioCtx.resume().catch(() => {});
     return this.audioCtx;
+  }
+
+  /** Where remote voices play: an output device id, '' for the system default. */
+  async setOutputDevice(deviceId) {
+    callState.update((s) => ({ ...s, outDeviceId: deviceId }));
+    savePrefs({ out: deviceId });
+    const ctx = this.ensureAudioContext();
+    if (typeof ctx.setSinkId === 'function') {
+      try { await ctx.setSinkId(deviceId || ''); } catch (e) { this.notify(String(e?.message || e)); }
+    } else {
+      this.notify('This system cannot choose the output device');
+    }
+    // (ringtone output routing lives in the OSS sounds module, not in this build)
   }
 
   // One graph per speaker: source -> gain (per-person volume, up to 200%) -> analyser -> out.
@@ -357,6 +383,7 @@ class CallService {
 
   async setMicDevice(deviceId) {
     callState.update((s) => ({ ...s, micDeviceId: deviceId }));
+    savePrefs({ mic: deviceId });
     if (!this.pc) return;
     const next = await this.openMic().catch((e) => { this.notify(String(e?.message || e)); return null; });
     if (!next) return;
@@ -371,6 +398,7 @@ class CallService {
 
   async setCameraDevice(deviceId) {
     callState.update((s) => ({ ...s, camDeviceId: deviceId }));
+    savePrefs({ cam: deviceId });
     if (get(callState).isCameraOn) {
       await this.stopCamera();
       await this.startCamera();
@@ -385,6 +413,7 @@ class CallService {
         devices: {
           mics: list.filter((d) => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
           cams: list.filter((d) => d.kind === 'videoinput').map((d, i) => ({ id: d.deviceId, label: d.label || `Camera ${i + 1}` })),
+          outs: list.filter((d) => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, label: d.label || `Speakers ${i + 1}` })),
         },
       }));
     } catch (_) { /* no device access */ }
