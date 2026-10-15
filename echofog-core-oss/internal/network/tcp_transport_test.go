@@ -197,10 +197,13 @@ func TestFallbackTransportUsesTCPWhenQUICFails(t *testing.T) {
 		return q
 	}
 
-	// the server's TCP port is free on UDP: nothing answers QUIC there
-	probe, err := net.ListenPacket("udp", "127.0.0.1:0")
+	// The server's TCP listener port, where nothing answers QUIC. Pick it as a free TCP port: the
+	// server must be able to bind it on TCP, or ListenEarly falls back to the QUIC port and the
+	// client would dial a closed one. (Picking a free UDP port and hoping the same number is free on
+	// TCP made this test flaky on Windows.) No QUIC listener sits on this port number either way.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	tcpAddr := probe.LocalAddr().String()
+	tcpAddr := probe.Addr().String()
 	probe.Close()
 
 	server := NewFallbackTransport(newQUIC(ss), newTCP(t, ss, ""), ModeAuto, tcpAddr)

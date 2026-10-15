@@ -14,12 +14,30 @@ import (
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 )
 
-// isPublicNode reports whether this node exposes an explicit inbound TCP/WS listener (and so is
-// visible to active probes). A pure client sets neither address and only dials out.
+// isPublicNode reports whether this node exposes an explicit inbound TCP/WS listener on a
+// non-loopback address (and so is visible to active probes). A pure client sets neither address
+// and only dials out. A listener bound to loopback is not public: that is the CDN / reverse-proxy
+// setup (for example --ws-listen 127.0.0.1:8080 behind Cloudflare), where the outside world sees
+// the CDN's IP and the operator's own domain, so the SNI/IP-mismatch concern does not apply.
 func isPublicNode(cfg *config.AppConfig) bool {
-	publicTCP := cfg.Network.TCPListenAddr != "" && cfg.Network.TCPListenAddr != "off"
-	publicWS := cfg.Network.WSListenAddr != ""
+	tcp := cfg.Network.TCPListenAddr
+	publicTCP := tcp != "" && tcp != "off" && !loopbackListen(tcp)
+	publicWS := cfg.Network.WSListenAddr != "" && !loopbackListen(cfg.Network.WSListenAddr)
 	return publicTCP || publicWS
+}
+
+// loopbackListen reports whether a listen address ("host:port") binds only to loopback.
+// An empty host (":443") listens on every interface, so it is public.
+func loopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // publicListenerConfigError enforces the anti-DPI role split. A pure client raises no inbound

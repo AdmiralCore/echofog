@@ -126,6 +126,7 @@ func (a *App) Login(appPassword string) error {
 	err := a.api.Login(appPassword)
 	if err != nil {
 		slog.Error("Login failed", "profile", profile, "error", err)
+		a.api = nil // the failed node released the database; the next attempt builds a fresh one
 		return err
 	}
 

@@ -71,6 +71,23 @@ func TestIsPublicNode(t *testing.T) {
 	c.Network.TCPListenAddr = ""
 	c.Network.WSListenAddr = ":8443"
 	assert.True(t, isPublicNode(c))
+
+	// behind a CDN or reverse proxy the listener sits on loopback: the world sees the CDN's IP and
+	// the operator's domain, so no mimicry target is needed
+	c.Network.WSListenAddr = "127.0.0.1:8080"
+	assert.False(t, isPublicNode(c), "a WS listener on loopback (CDN in front) is not public")
+	c.Network.WSListenAddr = "[::1]:8080"
+	assert.False(t, isPublicNode(c))
+	c.Network.WSListenAddr = ""
+	c.Network.TCPListenAddr = "localhost:443"
+	assert.False(t, isPublicNode(c))
+	c.Network.TCPListenAddr = "0.0.0.0:443"
+	assert.True(t, isPublicNode(c), "every interface is public")
+	require.NoError(t, publicListenerConfigError(func() *config.AppConfig {
+		x := config.DefaultConfig("")
+		x.Network.WSListenAddr = "127.0.0.1:8080"
+		return x
+	}()), "a CDN-fronted WS node starts without a camouflage target")
 }
 
 func TestNeighborCacheRoundTrip(t *testing.T) {

@@ -250,6 +250,10 @@ func (n *Node) Login(appPassword []byte) error {
 	idMgr := identity.NewProtectedIdentity(n.Storage)
 	err := idMgr.Load(appPassword, false)
 	if err != nil {
+		// release the database: the next attempt (a fresh node, with the right password) must be
+		// able to open it, or one typo locks the user out until the app restarts
+		n.Storage.Close()
+		n.Storage = nil
 		return fmt.Errorf("invalid app password or corrupted identity: %w", err)
 	}
 
@@ -339,7 +343,14 @@ func (n *Node) Recover(mnemonic string, mnemonicPassphrase []byte, newAppPasswor
 	return nil
 }
 
-func (n *Node) Start() error {
+func (n *Node) Start() (err error) {
+	// a start that fails half way must not keep the database, sockets or goroutines it opened: the
+	// caller will try again with a fresh node on the same profile
+	defer func() {
+		if err != nil {
+			n.shutdown(false)
+		}
+	}()
 	if !n.IsReady {
 		return errors.New("node is not ready: you must call Login or Register first")
 	}
@@ -642,7 +653,11 @@ func (n *Node) EnsureConnected(ctx context.Context, peer types.PeerID) error {
 	return n.connectToPeer(ctx, peer, addr)
 }
 
-func (n *Node) Stop() {
+func (n *Node) Stop() { n.shutdown(true) }
+
+// shutdown stops everything the node started. closeLog also releases the shared log file; a failed
+// start keeps it, since the app goes on logging.
+func (n *Node) shutdown(closeLog bool) {
 	n.stopOnce.Do(func() {
 		// 1. Cancel root context to signal all background loops
 		if n.Cancel != nil {
@@ -679,7 +694,9 @@ func (n *Node) Stop() {
 			n.Storage.Close()
 		}
 		n.Logger.Info("Node stopped cleanly")
-		logging.Close() // flush and release the log file
+		if closeLog {
+			logging.Close() // flush and release the log file
+		}
 	})
 }
 
