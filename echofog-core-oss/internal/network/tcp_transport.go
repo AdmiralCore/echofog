@@ -78,11 +78,36 @@ type TCPTransport struct {
 // and a dial to a peer uses the key derived from the peer's ID (see ExpectPeer). secret is an
 // optional extra secret for a private network.
 func (t *TCPTransport) SetNodeKeys(secret string, own types.PeerID) {
+	t.mu.Lock()
 	c := *t.cfg
 	c.AuthKey = mimicry.NodeStealthKey(secret, own)
 	t.cfg = &c
+	t.mu.Unlock()
 	t.secret = secret
 	t.perNode = true
+}
+
+// SetCamouflage switches the site this transport mimics: the certificate it presents, the SNI and
+// the real address unauthenticated visitors are forwarded to. Connections accepted or dialed
+// afterwards use it. A public node that found its camouflage neighbour only after start-up calls
+// this before raising its TCP listener (see FallbackTransport.ListenTCP).
+func (t *TCPTransport) SetCamouflage(cert tls.Certificate, serverName, fallbackAddr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := *t.cfg
+	if serverName != "" {
+		c.ServerName = serverName
+	}
+	c.FallbackAddr = fallbackAddr
+	t.cfg = &c
+	t.serverTLS = mimicry.BuildServerTLSConfig(cert)
+}
+
+// camouflage returns the current mimicry config and server TLS config, as one consistent snapshot.
+func (t *TCPTransport) camouflage() (*mimicry.MimicryConfig, *tls.Config) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cfg, t.serverTLS
 }
 
 // ExpectPeer tells the transport that the node at addr has peer ID id.
@@ -193,7 +218,8 @@ func tuneTCP(c net.Conn) {
 func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	tuneTCP(raw)
 	_ = raw.SetDeadline(time.Now().Add(tcpHandshakeTimeout))
-	conn, isPeer, binding, err := mimicry.ServerHandshake(raw, t.serverTLS, t.cfg)
+	cfg, serverTLS := t.camouflage()
+	conn, isPeer, binding, err := mimicry.ServerHandshake(raw, serverTLS, cfg)
 	if err != nil {
 		releaseSlot()
 		_ = raw.Close()
@@ -201,7 +227,7 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	}
 	if !isPeer {
 		releaseSlot()
-		forwardToRealSite(conn, t.cfg) // idle, not absolute, timeout; never touches the Guard
+		forwardToRealSite(conn, cfg) // idle, not absolute, timeout; never touches the Guard
 		return
 	}
 
@@ -288,14 +314,15 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		deadline = d
 	}
 	_ = raw.SetDeadline(deadline)
-	clientCfg := t.cfg
+	cfg, _ := t.camouflage()
+	clientCfg := cfg
 	expected, haveExpected := t.book.get(addr)
 	if t.perNode {
 		if !haveExpected {
 			_ = raw.Close()
 			return ErrPeerUnknown
 		}
-		c := *t.cfg
+		c := *cfg
 		c.AuthKey = mimicry.NodeStealthKey(t.secret, expected)
 		clientCfg = &c
 	}

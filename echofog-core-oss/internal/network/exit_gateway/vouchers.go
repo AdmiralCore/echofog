@@ -45,7 +45,7 @@ const (
 	// claimSettle: after sending claims, wait this long before reading the result from the chain.
 	claimSettle = 2 * time.Minute
 	// voucherKeepIdle: an account with nothing owed and nothing left is forgotten after this.
-	voucherKeepIdle = 30 * 24 * time.Hour
+	voucherKeepIdle   = 30 * 24 * time.Hour
 	voucherFlushEvery = 5 * time.Second
 )
 
@@ -123,7 +123,7 @@ type voucherAccount struct {
 	PubKey     string `json:"pubkey"`
 	Cumulative string `json:"cumulative"` // latest accepted voucher, nanoton
 	Sig        string `json:"sig"`
-	Credit     int64  `json:"credit"` // bytes bought and not used yet
+	Credit     int64  `json:"credit"`  // bytes bought and not used yet
 	Claimed    string `json:"claimed"` // paid to us on-chain, as last read
 	Deposit    string `json:"deposit"` // as last read
 	WithdrawAt int64  `json:"withdraw_at,omitempty"`

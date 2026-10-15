@@ -111,7 +111,7 @@ func (n *Node) ensureMimicryTarget() {
 	}
 	ctx, cancel := context.WithTimeout(n.Ctx, 20*time.Second)
 	defer cancel()
-	nb, ok := mimicry.ScanForNeighbor(ctx, ownIP, ourProfile, n.Logger)
+	nb, ok := scanForNeighbor(ctx, ownIP, ourProfile, n.Logger)
 	if !ok {
 		return
 	}
@@ -182,4 +182,40 @@ func saveNeighborCache(path string, nb mimicry.Neighbor) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+// mimicryRetryEvery is how often a public node that found no camouflage neighbour at start looks
+// again. Gentle on purpose: the scan touches a few nearby addresses, and hosters dislike scanners.
+var mimicryRetryEvery = 30 * time.Minute
+
+// scanForNeighbor is the neighbour scan; tests replace it so they never touch the network.
+var scanForNeighbor = mimicry.ScanForNeighbor
+
+// retryMimicryTarget keeps looking for a camouflage neighbour for a node that started on UDP only,
+// and raises the TCP listener on addr as soon as one is found, without a restart.
+func (n *Node) retryMimicryTarget(addr string, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-n.Ctx.Done():
+			return
+		case <-t.C:
+		}
+		n.ensureMimicryTarget()
+		if publicListenerConfigError(n.Cfg) != nil {
+			continue
+		}
+		cert := n.tcpCamouflageCert()
+		if cert == nil || n.Net == nil || n.Net.TCP == nil {
+			return
+		}
+		n.Net.TCP.SetCamouflage(*cert, n.Cfg.AntiDPI.TLSServerName, n.Cfg.AntiDPI.CamouflageAddr)
+		if err := n.Net.ListenTCP(addr); err != nil {
+			n.Logger.Warn("ANTI-DPI: found a camouflage site but could not open the TCP listener", "addr", addr, "err", err)
+			continue
+		}
+		n.Logger.Info("ANTI-DPI: camouflage site found, TCP listener is on", "addr", addr, "server_name", n.Cfg.AntiDPI.TLSServerName)
+		return
+	}
 }

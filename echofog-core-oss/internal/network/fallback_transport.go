@@ -152,6 +152,23 @@ func (f *FallbackTransport) ListenEarly(ctx context.Context) error {
 		// A node that wants to accept TCP peers sets network.tcp_listen_addr explicitly.
 		return nil
 	}
+	return f.listenTCP(addr)
+}
+
+// ListenTCP raises the inbound TCP listener on addr after start-up: a public node that had no
+// camouflage target at start runs on UDP only, and turns TCP on once it has one (the caller sets
+// it with TCPTransport.SetCamouflage first).
+func (f *FallbackTransport) ListenTCP(addr string) error {
+	if f.TCP == nil {
+		return errors.New("no TCP transport")
+	}
+	if f.TCP.Addr() != nil {
+		return nil // already listening; a second listener would leak the first
+	}
+	return f.listenTCP(addr)
+}
+
+func (f *FallbackTransport) listenTCP(addr string) error {
 	quicAddr := f.QUIC.Addr().String() // same port number, TCP instead of UDP
 	if err := f.TCP.Listen(addr); err != nil {
 		// a privileged port such as :443 may fail to bind (no root, a container): fall back to

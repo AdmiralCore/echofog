@@ -71,7 +71,7 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.bootstrap, "bootstrap", getEnv("ECHOFOG_BOOTSTRAP", ""), "comma-separated host:port/peerid of nodes to join through (host may be a domain name; default: the built-in seed nodes)")
 
 	f.StringVar(&o.transport, "transport", getEnv("ECHOFOG_TRANSPORT", ""), "auto (QUIC, then TCP), quic, or tcp")
-	f.StringVar(&o.tcpListen, "tcp-listen", getEnv("ECHOFOG_TCP_LISTEN", ""), "TCP fallback listen address, e.g. :443; 'off' disables it")
+	f.StringVar(&o.tcpListen, "tcp-listen", getEnv("ECHOFOG_TCP_LISTEN", ""), "TCP fallback listen address, e.g. :443 (default: the --listen-addr port); 'off' disables it")
 	f.IntVar(&o.tcpRemotePort, "tcp-remote-port", int(envInt64("ECHOFOG_TCP_REMOTE_PORT", 0)), "port peers use for the TCP fallback when it differs from the QUIC port (e.g. 443)")
 	f.StringVar(&o.wsListen, "ws-listen", getEnv("ECHOFOG_WS_LISTEN", ""), "listen for peers over WebSocket on this address, to sit behind a CDN like Cloudflare (e.g. 127.0.0.1:8080 with the CDN in front); empty disables it")
 	f.StringVar(&o.wsPath, "ws-path", getEnv("ECHOFOG_WS_PATH", ""), "HTTP path the WebSocket endpoint answers on (default /echofog)")
@@ -124,8 +124,12 @@ func (o options) config() *config.AppConfig {
 	if o.transport != "" {
 		cfg.Network.Transport = o.transport
 	}
+	// A server node accepts TCP peers by default, on the QUIC port: it is the camouflaged path for
+	// people whose network blocks UDP. --tcp-listen moves it (e.g. :443) or turns it off.
 	if o.tcpListen != "" {
 		cfg.Network.TCPListenAddr = o.tcpListen
+	} else {
+		cfg.Network.TCPListenAddr = o.listenAddr
 	}
 	cfg.Network.TCPRemotePort = o.tcpRemotePort
 	cfg.Network.AdvertisePort = o.advertisePort

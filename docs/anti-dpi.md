@@ -22,14 +22,19 @@ works out of the box.
 
 ### Public node (relay / exit / bridge)
 
-A node that wants to accept inbound TCP or WS connections. It sets an explicit
-`network.tcp_listen_addr` (e.g. `":443"`) and/or `network.ws_listen_addr`. Such a node **is** visible
-to active probes, so it must mimic a real site that is plausible for its own IP:
+A node that accepts inbound TCP or WS connections. `echofog-node` does so by default: its TCP
+listener sits on the QUIC port (`--listen-addr`) unless `--tcp-listen` moves it (e.g. `:443`) or turns
+it `off`. A listener bound to loopback (`127.0.0.1`, `::1`) does not count — that is the CDN /
+reverse-proxy setup, where the world sees the CDN's IP and your own domain. A public listener **is**
+visible to active probes, so it must mimic a real site that is plausible for its own IP:
 
 - `anti_dpi.tls_server_name` — the SNI it presents and mimics.
 - `anti_dpi.camouflage_addr` — the real `host:port` a prober is forwarded to.
 
-**A public node refuses to start its listener unless both are set.** There is no baked-in default
+**A public node opens its TCP/WS listener only once both are set.** Until then it runs on QUIC/UDP
+only (which needs no camouflage), logs a loud `ANTI-DPI` warning, and keeps looking for a neighbour
+every 30 minutes; the TCP listener comes on by itself, without a restart, when one is found. There is
+no baked-in default
 SNI: a shared default such as `www.microsoft.com` served from a residential or VPS IP is itself an
 SNI/IP-mismatch that DPI flags (`www.microsoft.com` does not live on a Hetzner or DigitalOcean IP).
 
@@ -50,8 +55,8 @@ a neighbour to mimic automatically, REALITY-style:
    re-check the cached neighbour and skip scanning entirely while it still holds.
 
 If no nearby site answers like us (for example none offers the same post-quantum key-share group),
-nothing is adopted and the node refuses to start with the guidance below. In that case set a
-neighbour by hand.
+nothing is adopted and the node runs on UDP only (see above), retrying later. To get TCP at once, set
+a neighbour by hand.
 
 #### Choosing the mimicked site manually
 

@@ -406,11 +406,17 @@ func (n *Node) Start() (err error) {
 
 	// A node that exposes an explicit public listener must mimic a real site in its own datacenter,
 	// or it serves a mismatched SNI/IP that DPI flags; a pure client raises no such listener. When a
-	// public node set no mimicry target, try to adopt a real neighbour automatically; if that fails,
-	// refuse to start the listener with guidance.
+	// public node set no mimicry target, try to adopt a real neighbour automatically. If that fails
+	// the node still runs — QUIC/UDP needs no camouflage — but without the public TCP/WS listener,
+	// and keeps looking for a neighbour to turn TCP on later (retryMimicryTarget).
 	n.ensureMimicryTarget()
+	deferredTCP, skipWS := "", false
 	if err := publicListenerConfigError(n.Cfg); err != nil {
-		return err
+		n.Logger.Warn("ANTI-DPI: no camouflage site found, so this node runs on UDP only for now: peers whose network blocks UDP cannot reach it. It keeps looking for a neighbour site and turns TCP on when it finds one; or set anti_dpi.tls_server_name and anti_dpi.camouflage_addr (see docs/anti-dpi.md)", "reason", err)
+		if l := n.Cfg.Network.TCPListenAddr; l != "" && l != "off" && !loopbackListen(l) {
+			deferredTCP = l
+		}
+		skipWS = n.Cfg.Network.WSListenAddr != "" && !loopbackListen(n.Cfg.Network.WSListenAddr)
 	}
 
 	var tcp *network.TCPTransport
@@ -440,8 +446,8 @@ func (n *Node) Start() (err error) {
 		}
 	}
 	tcpListen := n.Cfg.Network.TCPListenAddr
-	if tcpListen == "off" {
-		tcpListen = ""
+	if tcpListen == "off" || deferredTCP != "" {
+		tcpListen = "" // dial out over TCP, accept on it only once a camouflage site is known
 	}
 	n.Net = network.NewFallbackTransport(n.Transport, tcp, n.Cfg.Network.Transport, tcpListen)
 	n.Net.SetLogger(n.Logger.With("component", "transport"))
@@ -463,7 +469,9 @@ func (n *Node) Start() (err error) {
 	if ws := n.buildWSTransport(); ws != nil {
 		n.WS = ws
 		n.Swarm.SetWSTransport(ws)
-		if n.Cfg.Network.WSListenAddr != "" {
+		if n.Cfg.Network.WSListenAddr != "" && skipWS {
+			n.Logger.Warn("ANTI-DPI: the public WebSocket listener stays off until a camouflage site is configured", "addr", n.Cfg.Network.WSListenAddr)
+		} else if n.Cfg.Network.WSListenAddr != "" {
 			if err := ws.Listen(n.Cfg.Network.WSListenAddr); err != nil {
 				n.Logger.Error("WebSocket listener failed", "addr", n.Cfg.Network.WSListenAddr, "err", err)
 			} else {
@@ -474,9 +482,12 @@ func (n *Node) Start() (err error) {
 
 	// a server node checks once that its ServerHello matches the site it mimics, so an operator
 	// learns if the chosen SNI gives it away; clients (no fallback listener configured) skip it
-	tcpListening := n.Cfg.Network.TCPListenAddr != "" && n.Cfg.Network.TCPListenAddr != "off"
-	if n.Cfg.Network.WSListenAddr != "" || tcpListening {
+	tcpListening := tcpListen != ""
+	if (n.Cfg.Network.WSListenAddr != "" && !skipWS) || tcpListening {
 		go n.checkCamouflageConformance()
+	}
+	if deferredTCP != "" && tcp != nil {
+		go n.retryMimicryTarget(deferredTCP, mimicryRetryEvery)
 	}
 
 	gsp := gossip.NewManager(n.Swarm)
