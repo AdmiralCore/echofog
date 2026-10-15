@@ -225,6 +225,9 @@
             <span class="grow">{$t('proxy.whole')}<span class="small muted block">{$t('proxy.wholeAdmin')}</span></span>
             <input type="checkbox" class="switch" checked={vpn.wholeComputer} disabled={busy === 'whole'} on:change={wholeComputer} />
           </label>
+          {#if vpn.wholeComputer}
+            <p class="small leak-warn"><Icon name="shield" size={14} /> {$t('proxy.wholeLeakWarning')}</p>
+          {/if}
           {#if vpn.wholeComputerError}<p class="small error">{vpn.wholeComputerError}</p>{/if}
         {/if}
       {:else}
@@ -445,6 +448,8 @@
   .id { font-size: 12.5px; min-width: 90px; word-break: normal; }
   .chip.ping.good { color: var(--ok); background: var(--ok-soft); }
   .chip.ping.mid { color: var(--warn); background: var(--warn-soft); }
+  .leak-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; margin-top: 2px; }
+  .leak-warn :global(svg) { flex: none; margin-top: 2px; }
   .chip.ping.bad { color: var(--danger); background: var(--danger-soft); }
   .sortrow { gap: 4px; }
   .chip-btn { padding: 4px 12px; font-size: 12px; border-radius: 999px; background: transparent; border-color: var(--line-soft); color: var(--muted); }

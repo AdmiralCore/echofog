@@ -75,11 +75,24 @@
     run(() => restore(phrase, password, passphrase));
   }
 
-  async function del(name) {
-    if (!confirm_($t('auth.confirmDelete', { name }))) return;
-    run(() => removeProfile(name));
+  let delName = '';
+  let delPassword = '';
+
+  function askDelete(name) {
+    delName = delName === name ? '' : name;
+    delPassword = '';
+    error = '';
   }
-  const confirm_ = (msg) => window.confirm(msg);
+  function cancelDelete() {
+    delName = '';
+    delPassword = '';
+  }
+  async function confirmDelete() {
+    if (!delPassword) { error = $t('auth.passwordRequired'); return; }
+    const name = delName;
+    await run(() => removeProfile(name, delPassword));
+    if (!error) { delName = ''; delPassword = ''; }
+  }
 </script>
 
 <div class="wrap">
@@ -112,8 +125,19 @@
               <span class="grow">{name}</span>
               <Icon name="chevronRight" size={16} />
             </button>
-            <button class="icon del" title={$t('auth.deleteProfile')} aria-label={$t('auth.deleteProfileNamed', { name })} on:click={() => del(name)} disabled={busy}><Icon name="trash" size={16} /></button>
+            <button class="icon del" title={$t('auth.deleteProfile')} aria-label={$t('auth.deleteProfileNamed', { name })} aria-expanded={delName === name} on:click={() => askDelete(name)} disabled={busy}><Icon name="trash" size={16} /></button>
           </div>
+          {#if delName === name}
+            <form class="del-confirm stack" on:submit|preventDefault={confirmDelete}>
+              <p class="small muted">{$t('auth.confirmDelete', { name })}</p>
+              <p class="small muted">{$t('auth.deletePasswordHint')}</p>
+              <label>{$t('auth.password')}<input type="password" bind:value={delPassword} autocomplete="off" /></label>
+              <div class="row">
+                <button type="button" class="ghost grow" on:click={cancelDelete} disabled={busy}>{$t('common.cancel')}</button>
+                <button type="submit" class="danger grow" disabled={busy || !delPassword}>{$t('auth.delete')}</button>
+              </div>
+            </form>
+          {/if}
         {/each}
       </div>
       <form class="row" on:submit|preventDefault={() => run(() => choose(newName))}>
@@ -224,6 +248,11 @@
   .pick :global(svg:last-child) { color: var(--faint); transition: transform 0.3s var(--spring); }
   .pick:hover:not(:disabled) :global(svg:last-child) { transform: translateX(3px); color: var(--accent); }
   .del:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+  .del-confirm { padding: 12px; margin: 2px 0 4px; border-radius: 14px; background: var(--raised); border: 1px solid var(--line-soft); animation: pop 0.25s var(--spring) both; }
+  .del-confirm .row { gap: 8px; }
+  .danger { background: var(--danger); color: #fff; }
+  .danger:disabled { opacity: 0.5; }
+  .ghost { background: var(--raised); color: var(--text); border: 1px solid var(--line-soft); }
 
   .who { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 4px 0; }
   .big { height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 14.5px; }

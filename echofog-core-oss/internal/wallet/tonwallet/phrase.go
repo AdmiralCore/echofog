@@ -51,6 +51,10 @@ func candidate(secret []byte, attempt uint32, list []string) []string {
 	binary.BigEndian.PutUint32(ctr[:], attempt)
 	mac.Write(ctr[:])
 	stream := mac.Sum(nil) // 512 bits, 24 words need 264
+	// stream is derived from the secret key, so do not leave it on the heap after the words are
+	// picked. The chosen words themselves are public BIP-39 dictionary entries (shared constants);
+	// the secret is which words in which order, and that is reconstructable only from this stream.
+	defer memguard.WipeBytes(stream)
 
 	out := make([]string, phraseWords)
 	for i := 0; i < phraseWords; i++ {

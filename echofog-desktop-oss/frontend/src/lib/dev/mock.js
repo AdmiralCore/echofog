@@ -250,6 +250,8 @@ const impl = {
   GetProfiles: () => ['demo'],
   SelectProfile: () => null,
   IsRegistered: () => true,
+  // the app password to delete a profile in the preview is "demo"; anything else is refused
+  DeleteProfile: (_name, pw) => { if (pw !== 'demo') throw new Error('wrong app password'); return null; },
   Login: () => null,
   CheckRecoveryPhrase: (p) => {
     const w = p.trim().toLowerCase().split(/\s+/).filter(Boolean);

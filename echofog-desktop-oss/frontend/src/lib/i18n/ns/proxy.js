@@ -19,6 +19,7 @@ export default {
     'proxy.sent': 'Sent',
     'proxy.whole': 'Route the whole computer through the exit',
     'proxy.wholeAdmin': 'Asks for administrator rights.',
+    'proxy.wholeLeakWarning': 'There is no kill switch yet: if EchoFog or its helper stops unexpectedly, your apps fall back to the normal connection and your real IP can be exposed for a moment. DNS is kept inside the tunnel on a best-effort basis. If being seen using a VPN is dangerous for you, turn this off before you close the app, and do not rely on it for high-risk activity until the kill switch ships.',
 
     'proxy.mode.auto': 'Automatic',
     'proxy.mode.manual': 'Choose myself',
@@ -151,6 +152,7 @@ export default {
     'proxy.sent': 'Отправлено',
     'proxy.whole': 'Пустить весь компьютер через выходной узел',
     'proxy.wholeAdmin': 'Нужны права администратора.',
+    'proxy.wholeLeakWarning': 'Аварийного отключения (kill switch) пока нет: если EchoFog или его помощник внезапно остановятся, приложения вернутся к обычному соединению и ваш настоящий IP может на мгновение раскрыться. DNS удерживается внутри туннеля по мере возможности. Если факт использования VPN для вас опасен, выключайте этот режим перед закрытием приложения и не полагайтесь на него в рискованных действиях, пока не появится kill switch.',
 
     'proxy.mode.auto': 'Автоматически',
     'proxy.mode.manual': 'Выбрать самому',

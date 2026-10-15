@@ -56,6 +56,9 @@ func (a *App) SendTon(to string, amountTON string, comment string) (string, erro
 	if nodeAPI == nil {
 		return "", errNodeNotStarted
 	}
+	if err := a.confirmSendAboveThreshold("TON", amountTON, to); err != nil {
+		return "", err
+	}
 	ctx, cancel := a.tonContext(45 * time.Second)
 	defer cancel()
 	return nodeAPI.SendTon(ctx, to, amountTON, comment)
@@ -75,6 +78,9 @@ func (a *App) SendUsdt(to string, amountUSDT string, comment string) (string, er
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return "", errNodeNotStarted
+	}
+	if err := a.confirmSendAboveThreshold("USDT", amountUSDT, to); err != nil {
+		return "", err
 	}
 	ctx, cancel := a.tonContext(45 * time.Second)
 	defer cancel()
@@ -123,6 +129,9 @@ func (a *App) PayForTraffic(asset, to, amount, memo string) (string, error) {
 	if nodeAPI == nil {
 		return "", errNodeNotStarted
 	}
+	if err := a.confirmSendAboveThreshold(asset, amount, to); err != nil {
+		return "", err
+	}
 	ctx, cancel := a.tonContext(90 * time.Second)
 	defer cancel()
 	return nodeAPI.PayForTraffic(ctx, asset, to, amount, memo)
@@ -146,6 +155,9 @@ func (a *App) VaultDeposit(amountTON string) (string, error) {
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return "", errNodeNotStarted
+	}
+	if err := a.confirmSendAboveThreshold("TON", amountTON, "your vault"); err != nil {
+		return "", err
 	}
 	ctx, cancel := a.tonContext(45 * time.Second)
 	defer cancel()
@@ -179,6 +191,10 @@ func (a *App) VaultExecuteWithdraw() (string, error) {
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return "", errNodeNotStarted
+	}
+	// No single amount here (it returns the whole deposit), so always confirm this money move.
+	if err := a.confirmNative("Confirm withdrawal", "Return the vault deposit to your wallet?"); err != nil {
+		return "", err
 	}
 	ctx, cancel := a.tonContext(45 * time.Second)
 	defer cancel()

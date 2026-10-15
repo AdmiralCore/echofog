@@ -64,6 +64,12 @@ func (n *NodeApi) Login(appPassword string) error {
 	return n.node.Login([]byte(appPassword))
 }
 
+// VerifyPassword reports nil when appPassword unlocks the running node's identity. It gates
+// sensitive actions without a second database handle.
+func (n *NodeApi) VerifyPassword(appPassword string) error {
+	return n.node.VerifyPassword([]byte(appPassword))
+}
+
 func (n *NodeApi) Recover(mnemonic string, mnemonicPassphrase string, newAppPassword string) error {
 	// a pasted phrase may differ in case, spaces and line breaks: the same words, the same identity
 	phrase, err := keymanager.CheckPhrase(mnemonic)
@@ -428,8 +434,10 @@ func (n *NodeApi) SetupStreamInfoCallback(fn func(info dto.StreamInfoDTO)) {
 	}
 }
 
-// TriggerPanicButton wipes the identity's key material at once; the node cannot be unlocked
-// again without the recovery phrase.
+// TriggerPanicButton wipes the identity's key material from memory at once, so a device seized
+// while unlocked yields no keys from RAM. It does NOT erase anything on disk: the encrypted
+// identity stays, and the same app password unlocks it again (log in, or restart the app). To make
+// the data unrecoverable, delete the profile. This is a lock, not a self-destruct.
 func (n *NodeApi) TriggerPanicButton() error {
 	return n.node.PanicWipe()
 }

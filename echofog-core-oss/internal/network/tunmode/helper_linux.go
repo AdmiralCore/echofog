@@ -57,8 +57,10 @@ func configure(bypassUDPPort int) (func(), error) {
 		return nil, err
 	}
 	delRules() // left over from a crash
+	delDNSRedirect() // left over from a crash
 	teardown := func() {
 		delRules()
+		delDNSRedirect()
 		if _, err := exec.LookPath("resolvectl"); err == nil {
 			_ = exec.Command("resolvectl", "revert", DeviceName).Run()
 		}
@@ -98,8 +100,50 @@ func configure(bypassUDPPort int) (func(), error) {
 		_ = exec.Command("resolvectl", "dns", DeviceName, tunDNS4).Run()
 		_ = exec.Command("resolvectl", "domain", DeviceName, "~.").Run()
 		_ = exec.Command("resolvectl", "default-route", DeviceName, "true").Run()
+	} else {
+		// No systemd-resolved: fall back to an nftables rule that rewrites every outbound DNS query
+		// to the fake resolver on the TUN, so a configured LAN resolver cannot be reached directly.
+		// Best-effort — it needs nft and has not yet been checked against a live capture, so it is
+		// documented as a limitation and hardened in the follow-up VPN-safety work.
+		if err := addDNSRedirect(); err != nil {
+			fmt.Fprintln(os.Stderr, "tun-helper: DNS stays on the system resolver (no resolvectl, nft fallback failed):", err)
+		}
 	}
 	return teardown, nil
+}
+
+// dnsRedirectTable is a dedicated nftables table so teardown can remove the whole thing at once
+// without touching any rules the user already had.
+const dnsRedirectTable = "echofog_dns"
+
+// addDNSRedirect DNATs outbound DNS (except what already targets the fake resolver) to the TUN's
+// fake DNS, so lookups cannot leave over the physical link. It is only used when systemd-resolved
+// is not present. The node's own traffic is QUIC on its UDP port, not port 53, so it is untouched.
+func addDNSRedirect() error {
+	if _, err := exec.LookPath("nft"); err != nil {
+		return errors.New("nft (nftables) is not installed")
+	}
+	stmts := []string{
+		"add table ip " + dnsRedirectTable,
+		"add chain ip " + dnsRedirectTable + " out { type nat hook output priority -100 ; }",
+		"add rule ip " + dnsRedirectTable + " out udp dport 53 ip daddr != " + tunDNS4 + " dnat to " + tunDNS4,
+		"add rule ip " + dnsRedirectTable + " out tcp dport 53 ip daddr != " + tunDNS4 + " dnat to " + tunDNS4,
+	}
+	for _, s := range stmts {
+		if out, err := exec.Command("nft", strings.Fields(s)...).CombinedOutput(); err != nil {
+			delDNSRedirect()
+			return fmt.Errorf("nft %s: %v: %s", s, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// delDNSRedirect removes the whole table; absence is not an error.
+func delDNSRedirect() {
+	if _, err := exec.LookPath("nft"); err != nil {
+		return
+	}
+	_ = exec.Command("nft", "delete", "table", "ip", dnsRedirectTable).Run()
 }
 
 func flushDNS() {

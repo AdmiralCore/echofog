@@ -12,8 +12,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -59,6 +61,8 @@ type ringSink struct {
 	next int
 	full bool
 	max  int
+
+	level slog.Level // lines below this are not captured to the ring or the file
 
 	file    *os.File
 	fileMax int64
@@ -134,8 +138,8 @@ type Recorder struct {
 	groups []string
 }
 
-func newRecorder(maxEntries int, path string, fileMax int64) *Recorder {
-	s := &ringSink{ring: make([]Entry, maxEntries), max: maxEntries, fileMax: fileMax, path: path}
+func newRecorder(maxEntries int, path string, fileMax int64, level slog.Level) *Recorder {
+	s := &ringSink{ring: make([]Entry, maxEntries), max: maxEntries, fileMax: fileMax, path: path, level: level}
 	if path != "" {
 		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 			s.file = f
@@ -147,7 +151,9 @@ func newRecorder(maxEntries int, path string, fileMax int64) *Recorder {
 	return &Recorder{sink: s}
 }
 
-func (r *Recorder) Enabled(_ context.Context, _ slog.Level) bool { return true }
+// Enabled honours the configured level, so lines below it (for example debug lines when the level
+// is info) are never written to the shareable ring or log file.
+func (r *Recorder) Enabled(_ context.Context, level slog.Level) bool { return level >= r.sink.level }
 
 func (r *Recorder) Handle(_ context.Context, rec slog.Record) error {
 	attrs := make(map[string]string, len(r.attrs)+rec.NumAttrs())
@@ -158,7 +164,9 @@ func (r *Recorder) Handle(_ context.Context, rec slog.Record) error {
 		putAttr(attrs, r.groups, a)
 		return true
 	})
-	r.sink.add(Entry{Time: rec.Time, Level: strings.ToLower(rec.Level.String()), Message: rec.Message, Attrs: attrs})
+	// The ring and file are what the Logs view shows and exports for bug reports, so mask IP
+	// addresses here. The stderr console (a separate handler) keeps them for local debugging.
+	r.sink.add(Entry{Time: rec.Time, Level: strings.ToLower(rec.Level.String()), Message: maskIPs(rec.Message), Attrs: attrs})
 	return nil
 }
 
@@ -191,7 +199,26 @@ func putAttr(m map[string]string, groups []string, a slog.Attr) {
 	if len(groups) > 0 {
 		key = strings.Join(groups, ".") + "." + key
 	}
-	m[key] = redact(a.Key, fmt.Sprint(a.Value.Any()))
+	m[key] = maskIPs(redact(a.Key, fmt.Sprint(a.Value.Any())))
+}
+
+// ipToken matches things that look like an IPv4 or IPv6 address (including compressed "::" forms).
+// A port, if present, follows the match and is left in place, so "203.0.113.7:4001" becomes
+// "[ip]:4001" and connectivity can still be reasoned about without revealing the peer.
+var ipToken = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b|(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f]{0,4}`)
+
+// maskIPs replaces real IP addresses in s with "[ip]". Each candidate is validated with
+// net.ParseIP, so timestamps and hex IDs (which are not valid addresses) are left untouched.
+func maskIPs(s string) string {
+	if s == "" {
+		return s
+	}
+	return ipToken.ReplaceAllStringFunc(s, func(m string) string {
+		if net.ParseIP(m) != nil {
+			return "[ip]"
+		}
+		return m
+	})
 }
 
 // redact hides the value of an attribute whose key looks sensitive, so logs can be shared safely.
@@ -259,7 +286,7 @@ func Setup(o Options) *slog.Logger {
 	if o.FileMax <= 0 {
 		o.FileMax = 8 << 20
 	}
-	rec := newRecorder(o.MaxEntries, o.FilePath, o.FileMax)
+	rec := newRecorder(o.MaxEntries, o.FilePath, o.FileMax, o.Level)
 	storeMu.Lock()
 	store = rec
 	storeMu.Unlock()

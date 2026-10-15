@@ -190,23 +190,48 @@ func (a *App) SelectProfile(profileName string) {
 	a.activeProfile = profileName
 }
 
-func (a *App) DeleteProfile(profileName string) error {
-	a.mu.Lock()
+// DeleteProfile removes a profile and its data. It requires the profile's app password: the method
+// is callable from the WebView, so without the password a compromised page could wipe the user's
+// keys and messages on its own.
+func (a *App) DeleteProfile(profileName string, appPassword string) error {
+	a.mu.RLock()
+	svc := a.profileService
+	activeAPI := a.api
 	isActive := a.activeProfile == profileName
-	if isActive {
+	a.mu.RUnlock()
+	if svc == nil {
+		return errors.New("profile service unavailable")
+	}
+	if appPassword == "" {
+		return errors.New("the app password is required to delete a profile")
+	}
+
+	// The active profile keeps its database open, so the profile service cannot reopen it to check
+	// the password. Verify against the live node first (a typo then leaves the session untouched),
+	// then stop the node to release the database before the directory is removed.
+	if isActive && activeAPI != nil {
+		if err := activeAPI.VerifyPassword(appPassword); err != nil {
+			slog.Warn("Profile deletion refused: wrong app password", "profile", profileName)
+			return errors.New("wrong app password")
+		}
+		a.mu.Lock()
 		if a.api != nil {
 			a.api.StopNode()
 			a.api = nil
 		}
+		a.mu.Unlock()
+	}
+
+	if err := svc.DeleteProfile(profileName, appPassword); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	if a.activeProfile == profileName {
 		a.activeProfile = ""
 	}
-	svc := a.profileService
 	a.mu.Unlock()
-
-	if svc != nil {
-		return svc.DeleteProfile(profileName)
-	}
-	return errors.New("profile service unavailable")
+	return nil
 }
 
 func (a *App) StartNode() error {

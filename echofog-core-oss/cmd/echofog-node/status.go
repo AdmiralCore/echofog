@@ -210,6 +210,38 @@ func human(b uint64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
+// allowedStatusHosts is the set of Host header values the status endpoint accepts, built from the
+// address it actually bound to. It always accepts the loopback names on that port, plus the
+// configured bind host (so binding to a LAN address on purpose keeps working). Everything else is
+// refused, which stops a web page from reading /status through DNS rebinding: the browser connects
+// to 127.0.0.1 but carries the attacker's domain in Host, and that domain is not in this set.
+func allowedStatusHosts(boundAddr string) map[string]bool {
+	host, port, err := net.SplitHostPort(boundAddr)
+	if err != nil {
+		return nil
+	}
+	allowed := map[string]bool{
+		net.JoinHostPort("127.0.0.1", port): true,
+		net.JoinHostPort("localhost", port): true,
+		net.JoinHostPort("::1", port):       true,
+	}
+	if host != "" {
+		allowed[net.JoinHostPort(host, port)] = true
+	}
+	return allowed
+}
+
+// hostGuard rejects requests whose Host header is not in allowed. A nil/empty set accepts nothing.
+func hostGuard(allowed map[string]bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowed[r.Host] {
+			http.Error(w, "forbidden: the status endpoint is reachable only as localhost", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // serveStatus answers GET /status on a local address with the latest snapshot.
 func serveStatus(ctx context.Context, addr string, c *collector) error {
 	if host, _, err := net.SplitHostPort(addr); err == nil {
@@ -233,7 +265,7 @@ func serveStatus(ctx context.Context, addr string, c *collector) error {
 		}
 		_, _ = io.WriteString(w, "ok\n")
 	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: hostGuard(allowedStatusHosts(ln.Addr().String()), mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

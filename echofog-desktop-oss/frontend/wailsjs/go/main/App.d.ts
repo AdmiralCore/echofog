@@ -29,7 +29,7 @@ export function DeleteContact(arg1:string):Promise<void>;
 
 export function DeleteGroup(arg1:string):Promise<void>;
 
-export function DeleteProfile(arg1:string):Promise<void>;
+export function DeleteProfile(arg1:string,arg2:string):Promise<void>;
 
 export function EndGroupCall(arg1:string,arg2:string):Promise<void>;
 

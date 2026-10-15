@@ -32,6 +32,10 @@ func (n *Node) initTonWallet() {
 		return
 	}
 	signer, err := tonwallet.NewPhraseSigner(phrase)
+	// Drop the references to the word list so this slice does not keep the chosen ordering reachable
+	// any longer than needed. The words are public BIP-39 entries and cannot be zeroed (they are
+	// shared constants); the actual TON key now lives sealed in the signer's enclave, and the
+	// secret-derived bytes behind the word choice were wiped inside DeriveRecoveryPhrase.
 	for i := range phrase {
 		phrase[i] = ""
 	}

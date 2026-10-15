@@ -67,8 +67,8 @@ export async function logout() {
   await boot();
 }
 
-export async function removeProfile(name) {
-  await App.DeleteProfile(name);
+export async function removeProfile(name, appPassword) {
+  await App.DeleteProfile(name, appPassword);
   profiles.set((await App.GetProfiles()) || []);
   if (get(profile) === name) profile.set('');
 }

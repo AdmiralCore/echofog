@@ -50,8 +50,8 @@ export function DeleteGroup(arg1) {
   return window['go']['main']['App']['DeleteGroup'](arg1);
 }
 
-export function DeleteProfile(arg1) {
-  return window['go']['main']['App']['DeleteProfile'](arg1);
+export function DeleteProfile(arg1, arg2) {
+  return window['go']['main']['App']['DeleteProfile'](arg1, arg2);
 }
 
 export function EndGroupCall(arg1, arg2) {

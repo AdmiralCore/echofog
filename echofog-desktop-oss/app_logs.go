@@ -10,7 +10,8 @@ import (
 )
 
 // GetLogs returns up to limit of the most recent captured log lines, oldest first (0 = all). The
-// Logs view renders these; sensitive values are already redacted, so they are safe to share.
+// Logs view renders these; sensitive values are redacted and IP addresses are masked, so they are
+// safer to share in a bug report.
 func (a *App) GetLogs(limit int) []logging.Entry {
 	return logging.Recent(limit)
 }

@@ -265,6 +265,46 @@ func (n *Node) SetUserKey(appPassword []byte) {
 	n.userKey = memguard.NewEnclave(appPassword)
 }
 
+// VerifyPassword reports whether appPassword unlocks this logged-in node's identity. It reuses the
+// already-open storage (no second database handle), so it is safe to call on a running node.
+func (n *Node) VerifyPassword(appPassword []byte) error {
+	if n.Storage == nil {
+		return errors.New("node is not logged in")
+	}
+	probe := identity.NewProtectedIdentity(n.Storage)
+	if err := probe.Load(appPassword, false); err != nil {
+		return ErrWrongPassword
+	}
+	return nil
+}
+
+// VerifyProfilePassword reports whether appPassword unlocks the identity stored for cfg's profile,
+// without starting the node or leaving its database open. It opens the profile database, tries to
+// load the identity, then closes the database again so the caller may safely remove the profile
+// directory. Use it to require the real user's password before a destructive action (such as
+// deleting a profile) that the WebView could otherwise trigger with no proof the user is present.
+func VerifyProfilePassword(cfg *config.AppConfig, appPassword []byte) error {
+	n := NewNode(context.Background(), cfg, "verify-password")
+	defer n.Cancel()
+	if !n.IsRegistered() {
+		return errors.New("profile is not registered")
+	}
+	if err := n.initDB(); err != nil {
+		return err
+	}
+	defer func() {
+		if n.Storage != nil {
+			n.Storage.Close()
+			n.Storage = nil
+		}
+	}()
+	idMgr := identity.NewProtectedIdentity(n.Storage)
+	if err := idMgr.Load(appPassword, false); err != nil {
+		return ErrWrongPassword
+	}
+	return nil
+}
+
 func (n *Node) Recover(mnemonic string, mnemonicPassphrase []byte, newAppPassword []byte) error {
 	if n.IsRegistered() {
 		return errors.New("node is already registered on this device, please clear data or use Login")

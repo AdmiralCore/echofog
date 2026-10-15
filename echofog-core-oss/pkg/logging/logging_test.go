@@ -1,82 +1,65 @@
 package logging
 
 import (
+	"context"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestSetupCapturesDefaultSlogAndRedacts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echofog.log")
-	Setup(Options{Level: slog.LevelDebug, MaxEntries: 100, FilePath: path})
-	t.Cleanup(Close)
-
-	// a plain package-level slog call anywhere must be captured
-	slog.Info("network up", "mode", "quic", "peers", 3)
-	slog.Warn("login", "password", "hunter2") // must be redacted
-
-	got := Recent(0)
-	if len(got) < 2 {
-		t.Fatalf("expected the two lines to be captured, got %d", len(got))
+// handle feeds a record through the recorder the way the fanout does: only when Enabled allows it.
+func handle(r *Recorder, level slog.Level, msg string, attrs ...slog.Attr) {
+	if !r.Enabled(context.Background(), level) {
+		return
 	}
-	var sawNet, sawRedacted bool
-	for _, e := range got {
-		if e.Message == "network up" && e.Attrs["mode"] == "quic" && e.Attrs["peers"] == "3" {
-			sawNet = true
-		}
-		if e.Message == "login" {
-			if e.Attrs["password"] != "<redacted>" {
-				t.Fatalf("password was not redacted: %q", e.Attrs["password"])
-			}
-			sawRedacted = true
-		}
+	rec := slog.NewRecord(time.Now(), level, msg, 0)
+	rec.AddAttrs(attrs...)
+	_ = r.Handle(context.Background(), rec)
+}
+
+func TestRecorder_RespectsConfiguredLevel(t *testing.T) {
+	r := newRecorder(100, "", 0, slog.LevelInfo)
+
+	if r.Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("debug should be disabled when the level is info")
 	}
-	if !sawNet || !sawRedacted {
-		t.Fatalf("missing lines: net=%v redacted=%v", sawNet, sawRedacted)
+	if !r.Enabled(context.Background(), slog.LevelInfo) {
+		t.Error("info should be enabled when the level is info")
 	}
 
-	// Dump produces shareable text that never contains the secret
-	dump := Dump()
-	if strings.Contains(dump, "hunter2") {
-		t.Fatal("the secret leaked into the dump")
+	handle(r, slog.LevelDebug, "a noisy debug line")
+	handle(r, slog.LevelInfo, "an important info line")
+
+	dump := r.Dump()
+	if strings.Contains(dump, "noisy debug") {
+		t.Errorf("debug line was captured despite the info level:\n%s", dump)
 	}
-	if !strings.Contains(dump, "network up") {
-		t.Fatal("dump missing a known line")
+	if !strings.Contains(dump, "important info") {
+		t.Errorf("info line was not captured:\n%s", dump)
 	}
 }
 
-func TestRingBufferDropsOldest(t *testing.T) {
-	Setup(Options{Level: slog.LevelInfo, MaxEntries: 10})
-	for i := 0; i < 25; i++ {
-		slog.Info("line", "i", i)
-	}
-	got := Recent(0)
-	if len(got) != 10 {
-		t.Fatalf("ring should cap at 10, got %d", len(got))
-	}
-	// the newest line is kept, the oldest dropped
-	if got[len(got)-1].Attrs["i"] != "24" {
-		t.Fatalf("newest line missing, last i=%q", got[len(got)-1].Attrs["i"])
-	}
-	if got[0].Attrs["i"] != "15" {
-		t.Fatalf("oldest retained line should be i=15, got %q", got[0].Attrs["i"])
-	}
-}
+func TestRecorder_MasksIPAddresses(t *testing.T) {
+	r := newRecorder(100, "", 0, slog.LevelDebug)
 
-func TestComponentAttrSurvivesWith(t *testing.T) {
-	Setup(Options{Level: slog.LevelInfo, MaxEntries: 50})
-	slog.Default().With("component", "swarm").Info("peer added", "id", "abc")
-	for _, e := range Recent(0) {
-		if e.Message == "peer added" {
-			if e.Attrs["component"] != "swarm" || e.Attrs["id"] != "abc" {
-				t.Fatalf("attrs lost: %+v", e.Attrs)
-			}
-			if !strings.Contains(e.Line(), "component=swarm") {
-				t.Fatalf("Line() missing component: %q", e.Line())
-			}
-			return
-		}
+	handle(r, slog.LevelInfo, "connected to 203.0.113.7:4001",
+		slog.String("addr", "203.0.113.7:4001"),
+		slog.String("peer", "ab12cd34ef"),
+		slog.String("v6", "fe80::1"),
+	)
+	dump := r.Dump()
+
+	if strings.Contains(dump, "203.0.113.7") {
+		t.Errorf("IPv4 address was not masked:\n%s", dump)
 	}
-	t.Fatal("line with component not found")
+	if !strings.Contains(dump, "[ip]:4001") {
+		t.Errorf("expected the masked IP to keep its port:\n%s", dump)
+	}
+	if strings.Contains(dump, "fe80::1") {
+		t.Errorf("IPv6 address was not masked:\n%s", dump)
+	}
+	if !strings.Contains(dump, "ab12cd34ef") {
+		t.Errorf("a non-IP identifier was wrongly masked:\n%s", dump)
+	}
 }

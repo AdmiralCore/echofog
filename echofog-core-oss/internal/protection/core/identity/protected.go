@@ -1,17 +1,19 @@
 package identity
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"sync"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/echofog/echofog-core/internal/crypto/keymanager"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -141,6 +143,34 @@ func (p *ProtectedIdentity) SwitchAccount(index uint32) {
 	p.manager.SwitchAccount(index)
 }
 
+// enclaveSigner is the crypto.Signer behind the identity TLS certificate. The ed25519 private key
+// stays inside a memguard enclave; it is unsealed only for the duration of one signature and wiped
+// again immediately. Nothing keeps a plaintext copy of the key alive for the session, so the panic
+// button (which purges every enclave) genuinely removes it from memory — unlike a tls.Certificate
+// built from a parsed key, which would hold the raw bytes on the heap until the process exits.
+type enclaveSigner struct {
+	enclave *memguard.Enclave
+	pub     ed25519.PublicKey
+}
+
+func (s *enclaveSigner) Public() crypto.PublicKey { return s.pub }
+
+func (s *enclaveSigner) Sign(rand io.Reader, message []byte, opts crypto.SignerOpts) ([]byte, error) {
+	buf, err := s.enclave.Open()
+	if err != nil {
+		return nil, errors.New("identity key is unavailable (locked or wiped)")
+	}
+	defer buf.Destroy()
+	// The enclave holds the full 64-byte ed25519 private key (seed || public). Copy it into an
+	// ordinary heap slice for the signing call: ed25519.Sign registers a weak pointer to the key,
+	// which the runtime rejects for memguard's guarded (off-heap) memory. The copy is zeroed again
+	// as soon as the signature is produced, so no plaintext key outlives the call.
+	priv := make(ed25519.PrivateKey, ed25519.PrivateKeySize)
+	copy(priv, buf.Bytes())
+	defer memguard.WipeBytes(priv)
+	return priv.Sign(rand, message, opts)
+}
+
 func (p *ProtectedIdentity) GenerateTLSConfig() (*tls.Config, error) {
 	acManager, err := p.GetActiveAccount()
 	if err != nil {
@@ -151,21 +181,7 @@ func (p *ProtectedIdentity) GenerateTLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	privKeyBuffer, err := privEnc.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer privKeyBuffer.Destroy()
-
-	privKey := make(ed25519.PrivateKey, ed25519.PrivateKeySize)
-	copy(privKey[:32], privKeyBuffer.Bytes())
-	copy(privKey[32:], pub)
-	defer func() {
-		for i := range privKey {
-			privKey[i] = 0
-		}
-	}()
+	signer := &enclaveSigner{enclave: privEnc, pub: pub}
 
 	pubHex := hex.EncodeToString(pub)
 
@@ -182,18 +198,19 @@ func (p *ProtectedIdentity) GenerateTLSConfig() (*tls.Config, error) {
 		BasicConstraintsValid: true,
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, pub, privKey)
+	// The certificate is self-signed with the enclave-backed signer, so the key is never marshalled
+	// to PEM or held in a plain ed25519.PrivateKey.
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, pub, signer)
 	if err != nil {
 		return nil, err
 	}
 
-	privBytes, _ := x509.MarshalPKCS8PrivateKey(privKey)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, err
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  signer,
+	}
+	if leaf, err := x509.ParseCertificate(certDER); err == nil {
+		tlsCert.Leaf = leaf
 	}
 
 	return &tls.Config{

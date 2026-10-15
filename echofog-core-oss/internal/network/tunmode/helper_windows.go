@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 // DeviceName is the adapter name shown in Windows network settings.
@@ -100,7 +101,7 @@ func netsh(args ...string) error {
 // configure gives the adapter its address and DNS and routes everything through it with two
 // /1 routes, which win over the default route without replacing it. The node's own socket is
 // pinned to the physical interface (IP_UNICAST_IF), so the bypass port is not used here.
-// Everything goes away with the adapter, so there is nothing to undo.
+// The routes go away with the adapter; the returned teardown only has to undo the DNS-leak policy.
 func configure(_ int) (func(), error) {
 	if _, err := waitInterface(DeviceName); err != nil {
 		return nil, err
@@ -122,7 +123,75 @@ func configure(_ int) (func(), error) {
 	_ = netsh("interface", "ipv6", "add", "address", DeviceName, tunCIDR6, "store=active")
 	_ = netsh("interface", "ipv6", "add", "route", "::/1", DeviceName, "::", "metric=1", "store=active")
 	_ = netsh("interface", "ipv6", "add", "route", "8000::/1", DeviceName, "::", "metric=1", "store=active")
-	return nil, nil
+
+	// Stop Windows from also querying the physical adapter's DNS servers in parallel (see
+	// enableDNSLeakProtection). Without this the EchoFog adapter is preferred but the ISP still
+	// sees the queries. If it cannot be applied, the tunnel still routes DNS to the fake resolver;
+	// only the parallel leak remains, so this is best-effort, not fatal.
+	revertDNS, err := enableDNSLeakProtection()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tun-helper: DNS leak protection not applied:", err)
+		revertDNS = func() {}
+	}
+	return revertDNS, nil
+}
+
+// dnsPolicyKey holds the machine DNS client policy. The two values below disable Windows "smart
+// multi-homed name resolution", which otherwise sends every lookup to the DNS servers of all
+// interfaces at once — so even with the EchoFog adapter preferred, the physical adapter's resolver
+// (the ISP) still receives the query. OpenVPN's block-outside-dns and WireGuard's firewall rules
+// address the same leak; this policy is the lighter, fully reversible equivalent and fails open
+// (once the adapter is gone Windows simply uses the remaining interface's DNS).
+const dnsPolicyKey = `SOFTWARE\Policies\Microsoft\Windows NT\DNSClient`
+
+var dnsLeakValues = []string{"DisableSmartNameResolution", "DisableParallelAandAAAA"}
+
+// enableDNSLeakProtection sets the policy values and returns a function that restores the previous
+// state exactly (a prior value is put back; a value that did not exist is removed).
+func enableDNSLeakProtection() (func(), error) {
+	return setDWordFlags(registry.LOCAL_MACHINE, dnsPolicyKey, dnsLeakValues)
+}
+
+// setDWordFlags sets each named value to 1 under root\path, creating the key if needed, and returns
+// a function that restores exactly what was there before (prior value, or removal when it was
+// absent). Factored out of enableDNSLeakProtection so the snapshot/restore logic can be tested
+// against a scratch key without administrator rights.
+func setDWordFlags(root registry.Key, path string, names []string) (func(), error) {
+	key, _, err := registry.CreateKey(root, path, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return func() {}, fmt.Errorf("open %s: %w", path, err)
+	}
+	type prior struct {
+		had bool
+		val uint64
+	}
+	saved := make(map[string]prior, len(names))
+	for _, vname := range names {
+		if v, _, err := key.GetIntegerValue(vname); err == nil {
+			saved[vname] = prior{had: true, val: v}
+		} else {
+			saved[vname] = prior{had: false}
+		}
+		if err := key.SetDWordValue(vname, 1); err != nil {
+			key.Close()
+			return func() {}, fmt.Errorf("set %s: %w", vname, err)
+		}
+	}
+	key.Close()
+	return func() {
+		k, err := registry.OpenKey(root, path, registry.SET_VALUE)
+		if err != nil {
+			return
+		}
+		defer k.Close()
+		for vname, p := range saved {
+			if p.had {
+				_ = k.SetDWordValue(vname, uint32(p.val))
+			} else {
+				_ = k.DeleteValue(vname)
+			}
+		}
+	}, nil
 }
 
 func flushDNS() {

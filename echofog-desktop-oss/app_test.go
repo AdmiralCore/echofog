@@ -17,7 +17,7 @@ func (m *mockProfileService) GetProfiles() ([]string, error) {
 	return m.profiles, nil
 }
 
-func (m *mockProfileService) DeleteProfile(name string) error {
+func (m *mockProfileService) DeleteProfile(name string, appPassword string) error {
 	newProfiles := make([]string, 0)
 	for _, p := range m.profiles {
 		if p != name {
@@ -66,7 +66,7 @@ func TestApp_LifecycleAndDefaults(t *testing.T) {
 	}
 
 	// Delete active profile should logout and clear activeProfile
-	err := app.DeleteProfile("vault1")
+	err := app.DeleteProfile("vault1", "app-password")
 	if err != nil {
 		t.Fatalf("unexpected error deleting profile: %v", err)
 	}

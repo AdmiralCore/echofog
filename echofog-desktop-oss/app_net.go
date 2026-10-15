@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
@@ -54,6 +55,14 @@ func (a *App) SetAutoPay(enabled bool, chunkUSDT, dailyCapUSDT string) error {
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return errors.New("node not started")
+	}
+	// Enabling auto-pay authorises recurring spending without a further prompt, so confirm it
+	// natively; turning it off needs no confirmation.
+	if enabled {
+		if err := a.confirmNative("Confirm automatic payments",
+			fmt.Sprintf("Allow EchoFog to pay for traffic automatically, up to %s USDT per day?", dailyCapUSDT)); err != nil {
+			return err
+		}
 	}
 	return nodeAPI.SetAutoPay(enabled, chunkUSDT, dailyCapUSDT)
 }
