@@ -24,6 +24,14 @@
   let scanning = false;
   let qr = '';
 
+  // the chat list can be hidden so the conversation uses the full width; the choice is remembered
+  let listCollapsed = false;
+  try { listCollapsed = localStorage.getItem('echofog.chatsCollapsed') === '1'; } catch (_) {}
+  function toggleList() {
+    listCollapsed = !listCollapsed;
+    try { localStorage.setItem('echofog.chatsCollapsed', listCollapsed ? '1' : '0'); } catch (_) {}
+  }
+
   $: sorted = [...$chats].sort((a, b) => (b.ts || 0) - (a.ts || 0));
   $: active = $chats.find((c) => c.id === $activeId);
   $: showCall = $isCallActive && !!active && $peerInfo.chatId === $activeId && $stageExpanded;
@@ -79,9 +87,11 @@
 </script>
 
 <div class="chats">
+  {#if !listCollapsed}
   <aside>
     <div class="head row">
       <h2 class="grow">Chats</h2>
+      <button class="icon" title="Hide the chat list" aria-label="Hide the chat list" on:click={toggleList}><Icon name="chevronLeft" size={18} /></button>
       <button class="icon" class:on={panel === 'contact'} title="Add contact" aria-label="Add contact" on:click={() => toggle('contact')}><Icon name="userPlus" size={18} /></button>
       <button class="icon" class:on={panel === 'group'} title="New group" aria-label="New group" on:click={() => toggle('group')}><Icon name="users" size={18} /></button>
       <button class="icon" class:on={panel === 'join'} title="Join by invite" aria-label="Join by invite" on:click={() => toggle('join')}><Icon name="link" size={18} /></button>
@@ -153,8 +163,12 @@
       {/each}
     </div>
   </aside>
+  {/if}
 
   <section>
+    {#if listCollapsed}
+      <button class="show-list" title="Show the chat list" aria-label="Show the chat list" on:click={toggleList}><Icon name="chevronRight" size={18} /></button>
+    {/if}
     {#if showCall}
       <div class="call" class:full={maximized}><CallStage title={active.name} bind:maximized /></div>
     {/if}
@@ -186,7 +200,13 @@
   .time { color: var(--faint); font-size: 11.5px; font-weight: 400; }
   .last { color: var(--muted); overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 400; }
   .empty { padding: 16px 12px; }
-  section { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  section { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+  .show-list {
+    position: absolute; z-index: 5; top: 12px; left: 12px;
+    width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    background: var(--raised); border: 1px solid var(--line-soft); color: var(--muted); box-shadow: var(--shadow, 0 4px 14px rgba(0,0,0,0.25));
+  }
+  .show-list:hover { color: var(--text); }
   .call { height: 58%; min-height: 300px; flex: none; background: #000; }
   .call.full { height: 100%; flex: 1; }
   .placeholder { flex: 1; display: grid; place-items: center; color: var(--faint); }

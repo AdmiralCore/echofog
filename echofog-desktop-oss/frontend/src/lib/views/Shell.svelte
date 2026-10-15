@@ -25,6 +25,14 @@
   let net = { peerCount: 0, status: 'OFFLINE' };
   let poll;
 
+  // the apps panel can be collapsed to a narrow icon rail; the choice is remembered
+  let navCollapsed = false;
+  try { navCollapsed = localStorage.getItem('echofog.navCollapsed') === '1'; } catch (_) {}
+  function toggleNav() {
+    navCollapsed = !navCollapsed;
+    try { localStorage.setItem('echofog.navCollapsed', navCollapsed ? '1' : '0'); } catch (_) {}
+  }
+
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
 
   async function refresh() {
@@ -44,25 +52,32 @@
 </script>
 
 <div class="shell">
-  <nav>
+  <nav class:collapsed={navCollapsed}>
     <div class="brand">
       <span class="mark" aria-hidden="true"></span>
-      <span>EchoFog</span>
+      {#if !navCollapsed}<span class="grow">EchoFog</span>{/if}
+      <button class="ghost collapse" title={navCollapsed ? 'Expand' : 'Collapse'} aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} on:click={toggleNav}>
+        <Icon name={navCollapsed ? 'chevronRight' : 'chevronLeft'} size={16} />
+      </button>
     </div>
     {#each views as v}
-      <button class="ghost item" class:active={$view === v.id} on:click={() => view.set(v.id)}>
+      <button class="ghost item" class:active={$view === v.id} title={navCollapsed ? v.label : ''} on:click={() => view.set(v.id)}>
         <Icon name={v.icon} size={18} />
-        <span class="grow">{v.label}</span>
+        {#if !navCollapsed}<span class="grow">{v.label}</span>{/if}
         {#if v.id === 'chats' && $isCallActive}<span class="live" title="In a call"></span>{/if}
         {#if v.id === 'chats' && unread}<span class="badge">{unread}</span>{/if}
       </button>
     {/each}
     <div class="grow" />
-    <div class="status small">
-      <div class="row"><span class="dot" class:on={net.status === 'ONLINE' && net.peerCount > 0} />
-        <span>{net.status === 'ONLINE' ? `${net.peerCount} peer${net.peerCount === 1 ? '' : 's'}` : 'Offline'}</span></div>
-      <div class="faint profile">{$profile}</div>
-    </div>
+    {#if !navCollapsed}
+      <div class="status small">
+        <div class="row"><span class="dot" class:on={net.status === 'ONLINE' && net.peerCount > 0} />
+          <span>{net.status === 'ONLINE' ? `${net.peerCount} peer${net.peerCount === 1 ? '' : 's'}` : 'Offline'}</span></div>
+        <div class="faint profile">{$profile}</div>
+      </div>
+    {:else}
+      <div class="row" style="justify-content:center"><span class="dot" class:on={net.status === 'ONLINE' && net.peerCount > 0} title={net.status === 'ONLINE' ? `${net.peerCount} peers` : 'Offline'} /></div>
+    {/if}
   </nav>
 
   <main>
@@ -84,7 +99,18 @@
   nav {
     width: 200px; flex: none; display: flex; flex-direction: column; gap: 3px;
     padding: 16px 12px; background: var(--panel); border-right: 1px solid var(--line-soft);
+    transition: width 0.16s ease;
   }
+  nav.collapsed { width: 60px; padding: 16px 8px; }
+  nav.collapsed .item { justify-content: center; padding: 9px 0; }
+  nav.collapsed .item.active::before { left: -8px; }
+  .collapse {
+    width: 24px; height: 24px; border-radius: 7px; flex: none; color: var(--muted);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .collapse:hover { color: var(--text); background: var(--raised); }
+  nav.collapsed .brand { justify-content: center; padding: 2px 0 14px; }
+  nav.collapsed .mark { display: none; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; padding: 2px 8px 18px; letter-spacing: -0.01em; }
   .mark {
     width: 26px; height: 26px; border-radius: 8px; flex: none;
