@@ -48,9 +48,12 @@ type NetworkConfig struct {
 
 	// Transport: "auto" (QUIC, TCP/TLS when UDP does not get through), "quic" or "tcp"
 	Transport string `json:"transport"`
-	// TCPListenAddr for the TCP/TLS fallback; empty means the QUIC port number, "off" disables it.
-	// Set ":443" to blend in with normal HTTPS (on Linux binding 443 needs CAP_NET_BIND_SERVICE
-	// or a redirect).
+	// TCPListenAddr for the TCP/TLS fallback. Empty: no inbound TCP listener — a pure client that
+	// only dials out over TCP when UDP is blocked (the common case; needs no domain or certificate).
+	// An explicit address (e.g. ":443") exposes a public TCP listener and then requires
+	// anti_dpi.tls_server_name + anti_dpi.camouflage_addr (see docs/anti-dpi.md); on Linux binding
+	// 443 needs CAP_NET_BIND_SERVICE or a redirect. "off" disables the TCP fallback entirely (the
+	// node will not even dial out over TCP).
 	TCPListenAddr string `json:"tcp_listen_addr"`
 	// TCPRemotePort is the port peers are dialled on for the TCP fallback when the network runs
 	// it on a fixed port (e.g. 443) separate from QUIC. 0 means use the same port as the address.
@@ -189,7 +192,11 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.Network.HolePunch = true
 
 	cfg.AntiDPI.Obfs = ObfsNode
-	cfg.AntiDPI.TLSServerName = "www.microsoft.com"
+	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
+	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public
+	// TCP/WS listener must set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site
+	// in its own datacenter (see docs/anti-dpi.md); a pure client raises no public listener and does
+	// not need them.
 
 	cfg.Relay.Server.Enabled = true
 	cfg.Relay.Server.MaxCircuits = 50

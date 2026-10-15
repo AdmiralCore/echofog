@@ -145,8 +145,9 @@ func (t *WSTransport) handleInbound(conn net.Conn) {
 		return
 	}
 	if !isPeer {
-		_ = conn.SetDeadline(time.Now().Add(time.Minute))
-		mimicry.HandleActiveProbe(inner, t.cfg)
+		// a visitor without a valid token is forwarded to the real site with an idle timeout, as a
+		// genuine connection would be kept; never counted or banned (the WS transport has no Guard)
+		forwardToRealSite(inner, t.cfg)
 		return
 	}
 	mc, err := NewSmuxConn(t.ctx, inner, binding, false)

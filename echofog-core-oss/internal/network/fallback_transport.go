@@ -47,8 +47,8 @@ type FallbackTransport struct {
 	logger    *slog.Logger
 }
 
-// NewFallbackTransport combines q and t. tcpListen is where t listens; empty means the same
-// host and port as QUIC.
+// NewFallbackTransport combines q and t. tcpListen is where t listens; empty means t raises no
+// inbound listener and is used only to dial out (a pure client).
 func NewFallbackTransport(q *QuicTransport, t *TCPTransport, mode, tcpListen string) *FallbackTransport {
 	if mode == "" {
 		mode = ModeAuto
@@ -146,10 +146,13 @@ func (f *FallbackTransport) ListenEarly(ctx context.Context) error {
 		return nil
 	}
 	addr := f.tcpAddr
-	quicAddr := f.QUIC.Addr().String() // same port number, TCP instead of UDP
 	if addr == "" {
-		addr = quicAddr
+		// A pure client: the TCP transport exists only to dial out when UDP is blocked. It raises no
+		// inbound listener, so it never presents a server certificate or a mimicked SNI to a prober.
+		// A node that wants to accept TCP peers sets network.tcp_listen_addr explicitly.
+		return nil
 	}
+	quicAddr := f.QUIC.Addr().String() // same port number, TCP instead of UDP
 	if err := f.TCP.Listen(addr); err != nil {
 		// a privileged port such as :443 may fail to bind (no root, a container): fall back to
 		// the QUIC port so the node is still reachable over TCP, rather than not at all

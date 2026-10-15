@@ -151,27 +151,22 @@ func (t *TCPTransport) acceptLoop(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		ip := addrOfNet(raw.RemoteAddr())
-		releaseIP, allowed := t.guard.Load().Allow(ip)
-		if !allowed {
-			_ = raw.Close() // an address that floods or keeps failing
-			continue
-		}
+		// A global cap on in-flight handshakes bounds our own CPU/goroutine use under a flood. It is
+		// deliberately NOT per address: a real web server never singles out one visitor, so neither
+		// may we. The per-address Guard (rate limit and ban) is applied later, inside handleInbound,
+		// and only to connections that proved knowledge of the stealth token — never to visitors who
+		// are merely forwarded to the real site.
 		select {
 		case t.sem <- struct{}{}:
 		default:
-			releaseIP()
 			_ = raw.Close() // handshake flood
 			continue
 		}
 		go func() {
-			defer func() { <-t.sem }()
-			defer releaseIP()
-			if t.handleInbound(raw) {
-				t.guard.Load().Success(ip)
-			} else {
-				t.guard.Load().Fail(ip)
-			}
+			var once sync.Once
+			release := func() { once.Do(func() { <-t.sem }) }
+			defer release()
+			t.handleInbound(raw, release)
 		}()
 	}
 }
@@ -186,32 +181,57 @@ func tuneTCP(c net.Conn) {
 	}
 }
 
-// handleInbound serves one inbound connection and reports whether it turned out to be a peer
-// (visitors who get the camouflage site and failed handshakes count against the address).
-func (t *TCPTransport) handleInbound(raw net.Conn) bool {
+// handleInbound serves one inbound connection. A visitor that does not present a valid stealth
+// token is forwarded to the real site and is NEVER counted, rate-limited or banned: the mimicked
+// site does not reset such connections, and a prober opening ordinary HTTPS connections (or any
+// NAT/CGNAT behind which many clients share one address) must look exactly like traffic to that
+// site, or the node is singled out. The per-address Guard is consulted only once a valid token
+// proves the peer knows the stealth secret, and from then on a ban can come only from a failed
+// *authenticated* handshake. releaseSlot frees the global handshake-concurrency slot; it is called
+// as soon as the expensive TLS handshake is finished so a long-lived forwarded or authenticated
+// connection never holds it.
+func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	tuneTCP(raw)
 	_ = raw.SetDeadline(time.Now().Add(tcpHandshakeTimeout))
 	conn, isPeer, binding, err := mimicry.ServerHandshake(raw, t.serverTLS, t.cfg)
 	if err != nil {
+		releaseSlot()
 		_ = raw.Close()
-		return false
+		return // a TLS error is not attributed to the address: it may be a probe, a middlebox, or a real browser
 	}
 	if !isPeer {
-		_ = raw.SetDeadline(time.Now().Add(time.Minute))
-		mimicry.HandleActiveProbe(conn, t.cfg)
-		return false
+		releaseSlot()
+		forwardToRealSite(conn, t.cfg) // idle, not absolute, timeout; never touches the Guard
+		return
 	}
+
+	// A valid stealth token was presented: only now does the per-address Guard apply.
+	ip := addrOfNet(raw.RemoteAddr())
+	release, allowed := t.guard.Load().Allow(ip)
+	if !allowed {
+		releaseSlot()
+		_ = conn.Close()
+		return
+	}
+	defer release()
+
 	mc, err := NewSmuxConn(t.ctx, conn, binding, false)
 	if err != nil {
+		releaseSlot()
 		_ = conn.Close()
-		return false
+		t.guard.Load().Fail(ip)
+		return
 	}
 	res, err := t.auth.AuthenticateInbound(t.ctx, mc)
 	if err != nil {
+		releaseSlot()
 		_ = mc.CloseWithError(ErrCodeAuthFailed, "auth failed")
 		t.logger.Debug("TCP inbound authentication failed", "remote", raw.RemoteAddr(), "err", err)
-		return false
+		t.guard.Load().Fail(ip) // a failed handshake from a holder of a valid token
+		return
 	}
+	t.guard.Load().Success(ip)
+	releaseSlot()
 	// the source port is ephemeral; the peer announces where it listens (0: it does not)
 	addr, dialable := raw.RemoteAddr().String(), false
 	actx, cancel := context.WithTimeout(t.ctx, 3*time.Second)
@@ -224,7 +244,35 @@ func (t *TCPTransport) handleInbound(raw net.Conn) bool {
 	_ = raw.SetDeadline(time.Time{})
 	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: dialable, Caps: res.Caps})
 	t.logger.Info("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "inbound", "remote_addr", raw.RemoteAddr().String())
-	return true
+}
+
+// forwardIdleTimeout bounds the forwarded (camouflage) path by inactivity, reset on every read or
+// write, instead of an absolute deadline. A real site keeps an HTTPS connection open for as long as
+// it is used; a fixed absolute cut-off would itself be a timing fingerprint that the mimicked site
+// does not have.
+const forwardIdleTimeout = 2 * time.Minute
+
+// forwardToRealSite hands a visitor to the real site with an idle timeout, so nothing of ours is
+// ever shown and the connection lives as long as a genuine one would.
+func forwardToRealSite(conn net.Conn, cfg *mimicry.MimicryConfig) {
+	mimicry.HandleActiveProbe(&idleConn{Conn: conn, idle: forwardIdleTimeout}, cfg)
+}
+
+// idleConn resets a read/write deadline on each operation, turning an absolute deadline into an
+// idle one.
+type idleConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+func (c *idleConn) Read(b []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
+	return c.Conn.Read(b)
+}
+
+func (c *idleConn) Write(b []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
+	return c.Conn.Write(b)
 }
 
 // Dial connects to a peer listening on addr over TCP.

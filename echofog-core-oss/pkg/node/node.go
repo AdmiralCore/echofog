@@ -393,6 +393,15 @@ func (n *Node) Start() error {
 	}
 	n.Transport.SetLogger(n.Logger.With("component", "quic_transport"))
 
+	// A node that exposes an explicit public listener must mimic a real site in its own datacenter,
+	// or it serves a mismatched SNI/IP that DPI flags; a pure client raises no such listener. When a
+	// public node set no mimicry target, try to adopt a real neighbour automatically; if that fails,
+	// refuse to start the listener with guidance.
+	n.ensureMimicryTarget()
+	if err := publicListenerConfigError(n.Cfg); err != nil {
+		return err
+	}
+
 	var tcp *network.TCPTransport
 	if n.Cfg.Network.TCPListenAddr != "off" {
 		// A real certificate for your own domain makes an active prober see a genuine HTTPS site;
