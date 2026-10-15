@@ -269,7 +269,7 @@
   }
   .msg.mine {
     align-self: flex-end; border: none;
-    background: linear-gradient(135deg, #5f6ff0, #7d5ff0);
+    background: var(--accent);
     color: #fff; border-radius: 16px 16px 6px 16px;
   }
   .msg.mine .meta { color: rgba(255, 255, 255, 0.65); }

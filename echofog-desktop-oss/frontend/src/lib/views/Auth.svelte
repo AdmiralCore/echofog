@@ -171,8 +171,8 @@
   .wrap {
     height: 100%; display: grid; place-items: center; overflow-y: auto; padding: 24px;
     background:
-      radial-gradient(600px 400px at 20% 10%, rgba(123, 140, 255, 0.12), transparent 70%),
-      radial-gradient(500px 380px at 85% 90%, rgba(160, 123, 255, 0.10), transparent 70%),
+      radial-gradient(600px 400px at 20% 10%, rgba(29, 155, 240, 0.12), transparent 70%),
+      radial-gradient(500px 380px at 85% 90%, rgba(29, 155, 240, 0.10), transparent 70%),
       var(--bg);
   }
   .box {
@@ -193,7 +193,7 @@
   .mark {
     width: 44px; height: 44px; border-radius: 13px; flex: none;
     background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), transparent 45%), linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 8px 24px rgba(123, 140, 255, 0.4);
+    box-shadow: 0 8px 24px rgba(29, 155, 240, 0.4);
   }
   .left { text-align: left; }
   .words {

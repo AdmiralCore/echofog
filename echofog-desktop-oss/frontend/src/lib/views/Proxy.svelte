@@ -351,7 +351,7 @@
   }
   .exit:hover { border-color: var(--line); }
   .exit:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
-  .exit.sel { border-color: rgba(123, 140, 255, 0.5); background: color-mix(in srgb, var(--accent) 8%, var(--raised)); }
+  .exit.sel { border-color: rgba(29, 155, 240, 0.5); background: color-mix(in srgb, var(--accent) 8%, var(--raised)); }
   .pick-preview { cursor: default; }
   .radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--faint); flex: none; box-sizing: border-box; }
   .exit.sel .radio { border: 5px solid var(--accent); }
@@ -363,5 +363,5 @@
   .warnchip { color: var(--warn); background: rgba(242, 181, 75, 0.12); }
   .sortrow { gap: 4px; }
   .chip-btn { padding: 3px 10px; font-size: 12px; border-radius: 999px; background: transparent; border-color: var(--line-soft); color: var(--muted); }
-  .chip-btn.on { background: var(--accent-soft); color: var(--text); border-color: rgba(123, 140, 255, 0.35); }
+  .chip-btn.on { background: var(--accent-soft); color: var(--text); border-color: rgba(29, 155, 240, 0.35); }
 </style>

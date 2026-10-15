@@ -115,7 +115,7 @@
   .mark {
     width: 26px; height: 26px; border-radius: 8px; flex: none;
     background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), transparent 45%), linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 4px 14px rgba(123, 140, 255, 0.35);
+    box-shadow: 0 4px 14px rgba(29, 155, 240, 0.35);
   }
   .item {
     position: relative; display: flex; gap: 11px; align-items: center; text-align: left;

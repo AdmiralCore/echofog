@@ -210,7 +210,7 @@
     border-radius: 14px; background: var(--raised); border: 1px solid var(--line-soft);
     transition: border-color 0.15s, background 0.15s;
   }
-  .tile.sel { border-color: rgba(123, 140, 255, 0.45); background: color-mix(in srgb, var(--accent) 7%, var(--raised)); }
+  .tile.sel { border-color: rgba(29, 155, 240, 0.45); background: color-mix(in srgb, var(--accent) 7%, var(--raised)); }
   .pick { display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: none; text-align: left; width: 100%; }
   .pick:hover:not(:disabled) { background: none; border: none; }
   .mark {
