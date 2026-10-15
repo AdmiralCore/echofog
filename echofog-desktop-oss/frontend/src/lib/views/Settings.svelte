@@ -9,6 +9,7 @@
   import { theme } from '../stores/theme.js';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import BootstrapCard from '../components/BootstrapCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
@@ -178,6 +179,8 @@
         <div class="row"><button class="primary" on:click={save}>{$t('common.save')}</button>{#if saved}<span class="small ok saved">{$t('settings.savedRestart')}</span>{/if}</div>
       </div>
     {/if}
+
+    <BootstrapCard />
 
     <div class="card stack danger-card">
       <div class="card-head">

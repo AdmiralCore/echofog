@@ -47,6 +47,9 @@ type persistedSettings struct {
 	Relay *RelaySettingsDTO `json:"relay,omitempty"`
 	// ExitFreePeers are the peers the exit serves for free when sharing the connection.
 	ExitFreePeers []string `json:"exitFreePeers,omitempty"`
+	// BootstrapNodes are nodes the user added to join the network through ("host:port/<peer id>"),
+	// for when the built-in ones are blocked.
+	BootstrapNodes []string `json:"bootstrapNodes,omitempty"`
 }
 
 // loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the
@@ -65,6 +68,11 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 		return persistedSettings{SettingsDTO: settingsFromConfig(c)}, false
 	}
 	applySettings(c, p.SettingsDTO)
+	if boot, err := normalizeBootstrap(p.BootstrapNodes); err == nil {
+		p.BootstrapNodes = boot
+	} else {
+		p.BootstrapNodes = nil
+	}
 	if free, err := normalizePeerIDs(p.ExitFreePeers); err == nil {
 		p.ExitFreePeers = free
 	} else {

@@ -5,7 +5,8 @@
   import { chats } from '../stores/chats.js';
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
   import { loadPeerDirectory } from '../stores/peers.store.js';
-  import { view } from '../stores/nav.js';
+  import { view, focus } from '../stores/nav.js';
+  import { fly } from 'svelte/transition';
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import { displayName } from '../contact.js';
   import { bindSounds } from '../soundsBind.js';
@@ -47,6 +48,17 @@
   $: myName = ($displayName || '').trim() || $profile || $t('shell.me');
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
   $: online = net.status === 'ONLINE' && net.peerCount > 0;
+
+  // offline for a while after start (the built-in nodes may be blocked): offer to add a node by hand
+  let offlineSince = Date.now();
+  let now = Date.now();
+  let bannerHidden = false;
+  $: if (online) offlineSince = now;
+  $: showOffline = !online && !bannerHidden && $view !== 'settings' && now - offlineSince > 20000;
+  function addNode() {
+    focus.set('bootstrap');
+    view.set('settings');
+  }
   $: statusText = net.status === 'ONLINE' ? $t('shell.peers', { n: net.peerCount }) : $t('shell.offline');
 
   async function refresh() {
@@ -60,7 +72,7 @@
     initCallEvents();
     loadPeerDirectory();
     refresh();
-    poll = setInterval(refresh, 5000);
+    poll = setInterval(() => { now = Date.now(); refresh(); }, 5000);
   });
   onDestroy(() => { clearInterval(poll); offSounds(); });
 </script>
@@ -121,6 +133,17 @@
   </nav>
 
   <main>
+    {#if showOffline}
+      <div class="offline" role="status" transition:fly={{ y: -16, duration: 300 }}>
+        <span class="off-ic"><Icon name="globe" size={17} /></span>
+        <div class="grow off-text">
+          <b>{$t('boot.offlineTitle')}</b>
+          <span>{$t('boot.offlineText')}</span>
+        </div>
+        <button class="primary small" on:click={addNode}>{$t('boot.offlineAction')}</button>
+        <button class="icon off-x" title={$t('boot.dismiss')} aria-label={$t('boot.dismiss')} on:click={() => (bannerHidden = true)}><Icon name="close" size={15} /></button>
+      </div>
+    {/if}
     <!-- Chats stays mounted so a running call keeps its video elements -->
     <div class="fill" hidden={$view !== 'chats'}><Chats /></div>
     {#key $view}
@@ -235,6 +258,16 @@
   nav.bottom .item.active .ic { transform: translateY(-1px) scale(1.1); }
   nav.bottom .item.active { color: var(--accent); }
 
+  .offline {
+    position: absolute; z-index: 20; top: 12px; left: 50%; transform: translateX(-50%);
+    width: min(640px, calc(100% - 24px)); display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px;
+    border-radius: 16px; background: var(--glass); backdrop-filter: blur(18px) saturate(1.4);
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); box-shadow: var(--shadow);
+  }
+  .off-ic { width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center; background: var(--warn-soft); color: var(--warn); }
+  .off-text { display: flex; flex-direction: column; font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+  .off-text b { color: var(--text); font-size: 13.5px; }
+  .off-x { width: 30px; height: 30px; }
   main { flex: 1; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; }
   .fill { position: absolute; inset: 0; }
   .fill[hidden] { display: none; }

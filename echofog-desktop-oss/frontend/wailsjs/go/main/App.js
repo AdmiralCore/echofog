@@ -6,6 +6,10 @@ export function ActiveGroupCall(arg1) {
   return window['go']['main']['App']['ActiveGroupCall'](arg1);
 }
 
+export function AddBootstrapNode(arg1) {
+  return window['go']['main']['App']['AddBootstrapNode'](arg1);
+}
+
 export function AddContact(arg1) {
   return window['go']['main']['App']['AddContact'](arg1);
 }
@@ -60,6 +64,10 @@ export function ExportLogs() {
 
 export function ExportTonRecoveryPhrase(arg1) {
   return window['go']['main']['App']['ExportTonRecoveryPhrase'](arg1);
+}
+
+export function GetBootstrapNodes() {
+  return window['go']['main']['App']['GetBootstrapNodes']();
 }
 
 export function GetCallRoster() {
@@ -244,6 +252,10 @@ export function RefreshExitNodes() {
 
 export function Register(arg1, arg2) {
   return window['go']['main']['App']['Register'](arg1, arg2);
+}
+
+export function RemoveBootstrapNode(arg1) {
+  return window['go']['main']['App']['RemoveBootstrapNode'](arg1);
 }
 
 export function RemoveGroupMember(arg1, arg2, arg3) {

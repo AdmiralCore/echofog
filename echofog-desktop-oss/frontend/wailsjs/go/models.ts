@@ -301,6 +301,58 @@ export namespace logging {
 
 export namespace node {
 	
+	export class BootstrapNode {
+	    addr: string;
+	    peerId: string;
+	    link: string;
+	    connected: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BootstrapNode(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.addr = source["addr"];
+	        this.peerId = source["peerId"];
+	        this.link = source["link"];
+	        this.connected = source["connected"];
+	    }
+	}
+	export class BootstrapStatus {
+	    builtIn: BootstrapNode[];
+	    custom: BootstrapNode[];
+	    peers: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BootstrapStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.builtIn = this.convertValues(source["builtIn"], BootstrapNode);
+	        this.custom = this.convertValues(source["custom"], BootstrapNode);
+	        this.peers = source["peers"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ExitNode {
 	    peerId: string;
 	    pricePerMb: number;

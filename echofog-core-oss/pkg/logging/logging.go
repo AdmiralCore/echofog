@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -119,6 +120,9 @@ func (s *ringSink) recent(limit int) []Entry {
 	}
 	out := make([]Entry, len(ordered))
 	copy(out, ordered)
+	// lines logged at the same moment from different goroutines can reach the ring out of order:
+	// order by the time each was logged, keeping arrival order for equal times
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	return out
 }
 

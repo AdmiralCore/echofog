@@ -21,6 +21,23 @@ const DAVE = hex(5);
 const NAMES = { [ALICE]: 'Alice Moreau', [BOB]: 'Bob Ivanov', [CAROL]: 'Carol Chen', [DAVE]: 'Dave Novak' };
 
 const now = Date.now();
+const LOG_LINES = [
+  ['info', 'Swarm: connected', { peer: 'ab12…9f', addr: '203.0.113.7:4001' }], ['debug', 'DHT: refresh bucket', { bucket: '12' }],
+  ['info', 'NAT: classified', { type: 'port-restricted', mapped: 'true' }], ['warn', 'Relay: slow pulse', { ms: '410' }],
+  ['debug', 'Call: link pulse', { relay: 'cd34…01' }], ['error', 'Exit probe failed', { domain: 'youtube.com', reason: 'timeout' }],
+  ['info', 'Messenger: delivered', { to: 'Alice Moreau' }],
+];
+const logsStart = Date.now() - 90 * 1000;
+function logsMock() {
+  const n = Math.floor((Date.now() - logsStart) / 900);
+  return Array.from({ length: Math.min(n, 2000) }, (_, i) => {
+    const k = n - Math.min(n, 2000) + i;
+    const [level, message, attrs] = LOG_LINES[k % LOG_LINES.length];
+    return { time: new Date(logsStart + k * 900).toISOString(), level, message: `${message} #${k}`, attrs };
+  });
+}
+const OFFLINE = new URLSearchParams(location.search).has('offline');
+const bootMock = { builtIn: OFFLINE ? [{ addr: 'seed1.echofog.example:443', peerId: hex(9), link: '', connected: false }] : [], custom: [] };
 const min = 60 * 1000;
 
 // --- event bus (window.runtime) ---------------------------------------------------------------
@@ -244,7 +261,25 @@ const impl = {
   GetMyID: () => SELF,
   GetMyPubKey: () => hex(11),
   Logout: () => null,
-  GetNetworkStatus: () => ({ peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
+  // ?offline: no peers, to see the offline banner and the bootstrap card
+  GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
+  // logs: a new line every 0.9 s, levels mixed
+  GetLogs: () => logsMock(),
+  GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
+  ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
+  GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
+  AddBootstrapNode: (entry) => {
+    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(entry.trim());
+    if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
+    const peerId = m[2].toLowerCase();
+    if (!bootMock.custom.some((n) => n.peerId === peerId)) {
+      const node = { addr: m[1], peerId, link: 'echofog://relay/' + m[1] + '/' + peerId, connected: false };
+      bootMock.custom.push(node);
+      setTimeout(() => { node.connected = true; }, 2500);
+    }
+    return null;
+  },
+  RemoveBootstrapNode: (entry) => { bootMock.custom = bootMock.custom.filter((n) => !entry.toLowerCase().endsWith(n.peerId)); return null; },
   GetSettings: () => ({ ...settingsMock }),
   SetSettings: (v) => { if (v.socketBufferMb < 1 || v.socketBufferMb > 256) throw new Error('socket buffer must be between 1 and 256 MB'); Object.assign(settingsMock, v); return null; },
   AddContactByKey: (key, alias) => {

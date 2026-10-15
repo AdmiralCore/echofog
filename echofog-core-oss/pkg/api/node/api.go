@@ -38,13 +38,18 @@ type NodeApi struct {
 
 	exitFreePeers []string // peers the exit serves for free (persisted; guarded by settingsMu)
 
+	bootstrapBuiltIn []string // bootstrap nodes of this release (guarded by settingsMu)
+	bootstrapCustom  []string // bootstrap nodes the user added (persisted; guarded by settingsMu)
+
 	Logger *slog.Logger
 }
 
 func NewNodeApi(node *node.Node) *NodeApi {
+	builtIn := append([]string(nil), node.Cfg.Network.BootstrapNodes...)
 	saved, chosen := loadPersistedSettings(node.Cfg)
+	setBootstrapConfig(node.Cfg, builtIn, saved.BootstrapNodes)
 	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
-		exitFreePeers: saved.ExitFreePeers}
+		exitFreePeers: saved.ExitFreePeers, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes}
 }
 
 func (n *NodeApi) IsRegistered() bool {

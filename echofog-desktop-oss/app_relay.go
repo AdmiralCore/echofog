@@ -48,3 +48,31 @@ func (a *App) SetExitFreePeers(ids []string) error {
 	}
 	return nodeAPI.SetExitFreePeers(ids)
 }
+
+// GetBootstrapNodes lists the built-in bootstrap nodes and the ones the user added.
+func (a *App) GetBootstrapNodes() (api.BootstrapStatus, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.BootstrapStatus{}, errNodeNotStarted
+	}
+	return nodeAPI.GetBootstrapNodes()
+}
+
+// AddBootstrapNode saves a node to join the network through (a node link or host:port/<peer id>)
+// and connects to it at once; for when the built-in nodes are blocked.
+func (a *App) AddBootstrapNode(entry string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.AddBootstrapNode(entry)
+}
+
+// RemoveBootstrapNode forgets one of the user's bootstrap nodes.
+func (a *App) RemoveBootstrapNode(entry string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.RemoveBootstrapNode(entry)
+}

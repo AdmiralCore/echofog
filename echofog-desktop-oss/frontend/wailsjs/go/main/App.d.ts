@@ -7,6 +7,8 @@ import {main} from '../models';
 
 export function ActiveGroupCall(arg1:string):Promise<node.GroupCall>;
 
+export function AddBootstrapNode(arg1:string):Promise<void>;
+
 export function AddContact(arg1:dto.ContactDTO):Promise<void>;
 
 export function AddContactByKey(arg1:string,arg2:string):Promise<dto.ContactDTO>;
@@ -34,6 +36,8 @@ export function EndGroupCall(arg1:string,arg2:string):Promise<void>;
 export function ExportLogs():Promise<string>;
 
 export function ExportTonRecoveryPhrase(arg1:string):Promise<Array<string>>;
+
+export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
 
 export function GetCallRoster():Promise<dto.CallRosterDTO>;
 
@@ -126,6 +130,8 @@ export function Recover(arg1:string,arg2:string,arg3:string):Promise<void>;
 export function RefreshExitNodes():Promise<number>;
 
 export function Register(arg1:string,arg2:string):Promise<string>;
+
+export function RemoveBootstrapNode(arg1:string):Promise<void>;
 
 export function RemoveGroupMember(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
