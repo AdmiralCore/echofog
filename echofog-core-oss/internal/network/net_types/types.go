@@ -62,6 +62,9 @@ const (
 	// TypeHolePunch carries the coordination messages of a direct-connection attempt between two peers
 	// behind NATs. It travels over a relay, because the peers cannot reach each other yet.
 	TypeHolePunch
+	// TypeExitVoucher offers an exit a signed voucher from the client's TON vault, paying for the
+	// next chunk of traffic. The first frame holds the JSON offer, the reply one JSON frame.
+	TypeExitVoucher
 )
 
 // IsUnreliableType reports whether frames of this type may arrive as unreliable QUIC datagrams.

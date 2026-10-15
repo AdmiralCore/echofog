@@ -194,6 +194,7 @@ type ExitPaymentStatus struct {
 	Pending        bool    `json:"pending"`        // a payment was sent and is not credited yet
 	Note           string  `json:"note"`           // why payments are paused, if they are
 	LastError      string  `json:"lastError"`
+	PaysByVault    bool    `json:"paysByVault"` // paid with vouchers from the TON vault
 }
 
 // payState is the client's payment bookkeeping for the exit it is connected to.
@@ -257,12 +258,39 @@ func (p *payState) saveLocked() {
 type payEnv struct {
 	query func(ctx context.Context) (*exit_gateway.AccountInfo, error)
 	pay   func(ctx context.Context, micro int64, info *exit_gateway.AccountInfo) error
+	// vault tells whether this round pays from the TON vault (nil: never); payVoucher does it.
+	vault      func(ctx context.Context, info *exit_gateway.AccountInfo) bool
+	payVoucher func(ctx context.Context, micro int64, info *exit_gateway.AccountInfo) error
+}
+
+// decideVoucher is decidePayment for an exit paid with vouchers from the vault. Nothing goes
+// on-chain per chunk, so the chunk is small (64 MB) and the next one is bought when 16 MB are
+// left. A voucher is credited at once, so there is never a payment "on its way".
+func decideVoucher(info exit_gateway.AccountInfo, set autoPaySettings, spentToday int64, now, blockedUntil time.Time) payDecision {
+	if !info.TakesVouchers() {
+		return payDecision{}
+	}
+	chunk := max(1, info.PricePerMB*voucherChunkMB)
+	if info.Remaining() >= voucherChunkMB<<20/4 {
+		return payDecision{}
+	}
+	if !set.Enabled {
+		return payDecision{Action: payAsk, Micro: chunk}
+	}
+	if now.Before(blockedUntil) {
+		return payDecision{Reason: "the last voucher was refused, trying again shortly"}
+	}
+	if spentToday+chunk > set.DailyCapMicro {
+		return payDecision{Reason: "the daily limit for automatic payments is reached"}
+	}
+	return payDecision{Action: payNow, Micro: chunk}
 }
 
 // step runs one guard round: read the account, notice a credited or missing payment, and pay the
 // next chunk if the policy says so. It returns how long to wait before the next round.
 func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 	info, err := env.query(ctx)
+	useVault := err == nil && env.vault != nil && env.payVoucher != nil && env.vault(ctx, info)
 	p.mu.Lock()
 	p.loadLocked()
 	now := p.clock()
@@ -288,11 +316,18 @@ func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 
 	spent := p.set.Spent[day(now)]
 	dec := decidePayment(*info, p.set, spent, now, p.pendingUntil, p.blockedUntil)
+	if useVault {
+		dec = decideVoucher(*info, p.set, spent, now, p.blockedUntil)
+	}
 	p.publishLocked(*info, dec, spent, now)
+	p.status.PaysByVault = useVault
 
 	if dec.Action != payNow {
 		wait := payGuardEvery
-		if !p.pendingUntil.IsZero() {
+		switch {
+		case useVault:
+			wait = voucherGuardEvery
+		case !p.pendingUntil.IsZero():
 			wait = payGuardPending
 		}
 		p.mu.Unlock()
@@ -300,7 +335,11 @@ func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 	}
 	p.mu.Unlock()
 
-	payErr := env.pay(ctx, dec.Micro, info)
+	pay := env.pay
+	if useVault {
+		pay = env.payVoucher
+	}
+	payErr := pay(ctx, dec.Micro, info)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -310,6 +349,15 @@ func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 		p.status.LastError = p.lastErr
 		p.blockedUntil = now.Add(payRetryAfter)
 		return payGuardEvery
+	}
+	if useVault {
+		// credited by the exit before it answered: nothing to wait for
+		p.set.Spent[day(now)] += dec.Micro
+		p.lastErr = ""
+		p.saveLocked()
+		p.publishLocked(*info, payDecision{}, p.set.Spent[day(now)], now)
+		p.status.PaysByVault = true
+		return voucherGuardEvery
 	}
 	p.set.Spent[day(now)] += dec.Micro
 	p.pendingUntil = now.Add(payPendingFor)
@@ -484,6 +532,19 @@ func (n *NodeApi) PayExit(ctx context.Context, amountUSDT string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("cannot reach the exit: %w", err)
 	}
+	if n.vaultUsable(ctx, info) {
+		// paid from the vault: credited at once, nothing to wait for on-chain
+		if err := n.payByVoucher(ctx, dialer, info, micro.Int64()); err != nil {
+			return "", err
+		}
+		n.payInit()
+		n.pay.mu.Lock()
+		n.pay.set.Spent[day(n.pay.clock())] += micro.Int64()
+		n.pay.lastErr = ""
+		n.pay.saveLocked()
+		n.pay.mu.Unlock()
+		return "voucher", nil
+	}
 	if !info.CanPay() {
 		return "", errors.New("this exit does not take payments")
 	}
@@ -552,6 +613,12 @@ func (n *NodeApi) startPayGuard() {
 				n.emit("vpn:payment", map[string]any{"usd": amount, "asset": asset})
 			}
 			return err
+		},
+		vault: n.vaultUsable,
+		payVoucher: func(ctx context.Context, micro int64, info *exit_gateway.AccountInfo) error {
+			pctx, c := context.WithTimeout(ctx, 30*time.Second)
+			defer c()
+			return n.payByVoucher(pctx, dialer, info, micro)
 		},
 	}
 	go func() {

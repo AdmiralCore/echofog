@@ -57,6 +57,42 @@ func (n *Node) initTonWallet() {
 	}
 	n.Support = tonwallet.LoadSupport(cacheDir, supportAddr)
 	n.Logger.Info("TON wallet ready", "network", net, "address", w.Address())
+
+	// Vouchers signed to this node and not cashed yet are money: keep cashing them even when the
+	// exit is not shared any more.
+	if p := n.exitVoucherPath(); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			n.exitLedgerMu.Lock()
+			n.openExitVouchersLocked()
+			n.exitLedgerMu.Unlock()
+		}
+	}
+}
+
+func (n *Node) exitVoucherPath() string {
+	if n.Cfg.Storage.DatabasePath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(n.Cfg.Storage.DatabasePath), "ton", "exit-vouchers.json")
+}
+
+// openExitVouchersLocked opens the voucher book once and starts saving it and cashing what it
+// holds for as long as the node runs.
+func (n *Node) openExitVouchersLocked() *exit_gateway.VoucherBook {
+	if n.exitVouchers == nil && n.TonWallet != nil {
+		w := n.TonWallet
+		n.exitVouchers = exit_gateway.NewVoucherBook(n.exitVoucherPath(), w.GlobalID(), w.WalletAddress(), w)
+		n.exitVouchers.Start(n.Ctx)
+		go n.exitVouchers.RunClaims(n.Ctx, exit_gateway.DefaultClaimPolicy())
+	}
+	return n.exitVouchers
+}
+
+// ExitVouchers returns the voucher book once it is open.
+func (n *Node) ExitVouchers() *exit_gateway.VoucherBook {
+	n.exitLedgerMu.Lock()
+	defer n.exitLedgerMu.Unlock()
+	return n.exitVouchers
 }
 
 // ErrWrongPassword is returned when a sensitive export is attempted with a bad app password.
@@ -95,6 +131,7 @@ func (n *Node) EnableExitPayments() error {
 		n.exitLedger.Start()
 	}
 	n.ExitService.SetPayments(n.exitLedger, n.ID, n.TonWallet.Address())
+	n.ExitService.SetVouchers(n.openExitVouchersLocked())
 	return nil
 }
 
@@ -108,9 +145,12 @@ func (n *Node) ExitLedger() *exit_gateway.Ledger {
 // closeExitLedger writes the ledger out when the node stops.
 func (n *Node) closeExitLedger() {
 	n.exitLedgerMu.Lock()
-	l := n.exitLedger
+	l, v := n.exitLedger, n.exitVouchers
 	n.exitLedgerMu.Unlock()
 	if l != nil {
 		l.Close()
+	}
+	if v != nil {
+		_ = v.Flush()
 	}
 }

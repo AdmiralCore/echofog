@@ -83,6 +83,7 @@ type Node struct {
 	TonWallet    *tonwallet.Wallet
 	Support      *tonwallet.Support // voluntary project share of traffic payments
 	exitLedger   *exit_gateway.Ledger
+	exitVouchers *exit_gateway.VoucherBook // vouchers from clients' TON vaults, cashed in the background
 	exitLedgerMu sync.Mutex
 	BWProbe      *bwprobe.Prober
 	ExitService  *exit_gateway.ExitService

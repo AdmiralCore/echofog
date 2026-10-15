@@ -43,3 +43,21 @@ jobs:
           node-version: '20'
       - run: npm ci
       - run: npm run build
+
+  contract:
+    name: Vault contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: echofog-core-oss/contracts/vault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      # rebuild from source: the code the Go app embeds must be exactly this build
+      - run: npm run build
+      - name: Embedded code matches the source
+        run: git diff --exit-code -- ../../internal/wallet/tonwallet/vault_code.boc
+      - run: npm test

@@ -25,6 +25,9 @@ func AttachToSwarm(sw *swarm.Swarm, svc *ExitService) {
 	sw.RegisterStreamHandler(net_types.TypeExitAccount, func(st *network.Stream, _ []byte, peer types.PeerID) {
 		svc.HandleAccountFrom(context.Background(), swarmStream{st}, peer)
 	})
+	sw.RegisterStreamHandler(net_types.TypeExitVoucher, func(st *network.Stream, offer []byte, peer types.PeerID) {
+		svc.HandleVoucherFrom(context.Background(), swarmStream{st}, offer, peer)
+	})
 	sw.RegisterStreamHandler(net_types.TypeExitUDP, func(st *network.Stream, _ []byte, peer types.PeerID) {
 		svc.HandleUDPFrom(context.Background(), swarmStream{st}, peer)
 	})

@@ -231,6 +231,24 @@ type TonWalletDTO struct {
 	Frozen     bool   `json:"frozen"`
 }
 
+// VaultDTO is the user's EchoFogVault: the TON deposit paid proxy nodes are paid from.
+type VaultDTO struct {
+	Address     string `json:"address"`     // the vault contract (EQ… / kQ…)
+	Deployed    bool   `json:"deployed"`    // false until the first deposit
+	DepositTON  string `json:"depositTon"`  // what nodes can still be paid from
+	Closing     bool   `json:"closing"`     // a withdrawal is pending; nodes no longer sell against it
+	WithdrawAt  int64  `json:"withdrawAt"`  // unix seconds when the withdrawal can be completed (0: none)
+	CanFinish   bool   `json:"canFinish"`   // the 24 hours are over: the deposit can be taken back
+	MinFirstTON string `json:"minFirstTon"` // smallest first deposit (it also creates the vault)
+}
+
+// VoucherEarningsDTO is what this node's exit earned from vouchers.
+type VoucherEarningsDTO struct {
+	OwedTON   string `json:"owedTon"`   // signed to us, not cashed yet
+	CashedTON string `json:"cashedTon"` // already paid into our wallet
+	QuoteNano int64  `json:"quoteNano"` // current price in nanoton per MB (0: not taking vouchers)
+}
+
 // SupportDTO is the state of the voluntary project share of traffic payments.
 type SupportDTO struct {
 	Available   bool   `json:"available"`   // false: no project address configured, show nothing

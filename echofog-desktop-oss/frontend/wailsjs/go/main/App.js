@@ -18,6 +18,10 @@ export function AddGroupMember(arg1, arg2) {
   return window['go']['main']['App']['AddGroupMember'](arg1, arg2);
 }
 
+export function AddRelay(arg1) {
+  return window['go']['main']['App']['AddRelay'](arg1);
+}
+
 export function CheckRecoveryPhrase(arg1) {
   return window['go']['main']['App']['CheckRecoveryPhrase'](arg1);
 }
@@ -122,6 +126,10 @@ export function GetProfiles() {
   return window['go']['main']['App']['GetProfiles']();
 }
 
+export function GetRelayStatus() {
+  return window['go']['main']['App']['GetRelayStatus']();
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
@@ -156,6 +164,14 @@ export function GetTonWallet() {
 
 export function GetVPNStatus() {
   return window['go']['main']['App']['GetVPNStatus']();
+}
+
+export function GetVault() {
+  return window['go']['main']['App']['GetVault']();
+}
+
+export function GetVoucherEarnings() {
+  return window['go']['main']['App']['GetVoucherEarnings']();
 }
 
 export function InviteToCall(arg1) {
@@ -266,6 +282,10 @@ export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
 }
 
+export function SetExitFreePeers(arg1) {
+  return window['go']['main']['App']['SetExitFreePeers'](arg1);
+}
+
 export function SetGroupRole(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetGroupRole'](arg1, arg2, arg3);
 }
@@ -280,6 +300,10 @@ export function SetProbeDomains(arg1) {
 
 export function SetProfileService(arg1) {
   return window['go']['main']['App']['SetProfileService'](arg1);
+}
+
+export function SetRelaySettings(arg1) {
+  return window['go']['main']['App']['SetRelaySettings'](arg1);
 }
 
 export function SetSettings(arg1) {
@@ -330,6 +354,10 @@ export function StartVPN(arg1) {
   return window['go']['main']['App']['StartVPN'](arg1);
 }
 
+export function StartVPNVia(arg1) {
+  return window['go']['main']['App']['StartVPNVia'](arg1);
+}
+
 export function StopDiscovery() {
   return window['go']['main']['App']['StopDiscovery']();
 }
@@ -364,6 +392,22 @@ export function UnwatchStream(arg1) {
 
 export function UpdateStreamQuality(arg1, arg2) {
   return window['go']['main']['App']['UpdateStreamQuality'](arg1, arg2);
+}
+
+export function VaultCancelWithdraw() {
+  return window['go']['main']['App']['VaultCancelWithdraw']();
+}
+
+export function VaultDeposit(arg1) {
+  return window['go']['main']['App']['VaultDeposit'](arg1);
+}
+
+export function VaultExecuteWithdraw() {
+  return window['go']['main']['App']['VaultExecuteWithdraw']();
+}
+
+export function VaultRequestWithdraw() {
+  return window['go']['main']['App']['VaultRequestWithdraw']();
 }
 
 export function WatchStream(arg1) {

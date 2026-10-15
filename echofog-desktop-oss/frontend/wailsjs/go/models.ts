@@ -214,6 +214,46 @@ export namespace dto {
 	        this.frozen = source["frozen"];
 	    }
 	}
+	export class VaultDTO {
+	    address: string;
+	    deployed: boolean;
+	    depositTon: string;
+	    closing: boolean;
+	    withdrawAt: number;
+	    canFinish: boolean;
+	    minFirstTon: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VaultDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.address = source["address"];
+	        this.deployed = source["deployed"];
+	        this.depositTon = source["depositTon"];
+	        this.closing = source["closing"];
+	        this.withdrawAt = source["withdrawAt"];
+	        this.canFinish = source["canFinish"];
+	        this.minFirstTon = source["minFirstTon"];
+	    }
+	}
+	export class VoucherEarningsDTO {
+	    owedTon: string;
+	    cashedTon: string;
+	    quoteNano: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new VoucherEarningsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owedTon = source["owedTon"];
+	        this.cashedTon = source["cashedTon"];
+	        this.quoteNano = source["quoteNano"];
+	    }
+	}
 
 }
 
@@ -318,6 +358,7 @@ export namespace node {
 	    pending: boolean;
 	    note: string;
 	    lastError: string;
+	    paysByVault: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ExitPaymentStatus(source);
@@ -341,6 +382,7 @@ export namespace node {
 	        this.pending = source["pending"];
 	        this.note = source["note"];
 	        this.lastError = source["lastError"];
+	        this.paysByVault = source["paysByVault"];
 	    }
 	}
 	export class GroupCall {
@@ -473,6 +515,99 @@ export namespace node {
 	        this.reason = source["reason"];
 	    }
 	}
+	export class RelaySettingsDTO {
+	    server: boolean;
+	    private: boolean;
+	    signalingOnly: boolean;
+	    allowedPeers: string[];
+	    relays: string[];
+	    listenPort: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RelaySettingsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.private = source["private"];
+	        this.signalingOnly = source["signalingOnly"];
+	        this.allowedPeers = source["allowedPeers"];
+	        this.relays = source["relays"];
+	        this.listenPort = source["listenPort"];
+	    }
+	}
+	export class RelayUse {
+	    addr: string;
+	    peerId: string;
+	    connected: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RelayUse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.addr = source["addr"];
+	        this.peerId = source["peerId"];
+	        this.connected = source["connected"];
+	    }
+	}
+	export class RelayStatus {
+	    settings: RelaySettingsDTO;
+	    chosen: boolean;
+	    link: string;
+	    addr: string;
+	    nat: string;
+	    mapped: boolean;
+	    reason: string;
+	    restartNeeded: boolean;
+	    activeCircuits: number;
+	    bytesRouted: number;
+	    forwarded: number;
+	    accessRefused: number;
+	    using: RelayUse[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RelayStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings = this.convertValues(source["settings"], RelaySettingsDTO);
+	        this.chosen = source["chosen"];
+	        this.link = source["link"];
+	        this.addr = source["addr"];
+	        this.nat = source["nat"];
+	        this.mapped = source["mapped"];
+	        this.reason = source["reason"];
+	        this.restartNeeded = source["restartNeeded"];
+	        this.activeCircuits = source["activeCircuits"];
+	        this.bytesRouted = source["bytesRouted"];
+	        this.forwarded = source["forwarded"];
+	        this.accessRefused = source["accessRefused"];
+	        this.using = this.convertValues(source["using"], RelayUse);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class SettingsDTO {
 	    directSocket: boolean;
 	    socketBufferMb: number;
@@ -491,6 +626,7 @@ export namespace node {
 	    pricePerMb: number;
 	    freeTestKb: number;
 	    uploadKbps: number;
+	    freePeers: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new SharingConfig(source);
@@ -501,6 +637,7 @@ export namespace node {
 	        this.pricePerMb = source["pricePerMb"];
 	        this.freeTestKb = source["freeTestKb"];
 	        this.uploadKbps = source["uploadKbps"];
+	        this.freePeers = source["freePeers"];
 	    }
 	}
 	export class SharingStatus {

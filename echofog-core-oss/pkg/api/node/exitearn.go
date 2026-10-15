@@ -106,6 +106,9 @@ func (n *NodeApi) startEarning() error {
 	n.earn.cancel = cancel
 	n.earn.mu.Unlock()
 	go n.node.ExitService.WatchPayments(ctx, tonPaymentSource(w))
+	if book := n.node.ExitVouchers(); book != nil {
+		go n.runVoucherQuotes(ctx, book)
+	}
 	return nil
 }
 

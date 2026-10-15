@@ -13,6 +13,8 @@ export function AddContactByKey(arg1:string,arg2:string):Promise<dto.ContactDTO>
 
 export function AddGroupMember(arg1:string,arg2:string):Promise<void>;
 
+export function AddRelay(arg1:string):Promise<void>;
+
 export function CheckRecoveryPhrase(arg1:string):Promise<string>;
 
 export function CheckSites(arg1:string,arg2:Array<string>):Promise<Array<node.SiteCheck>>;
@@ -65,6 +67,8 @@ export function GetProbeDomains():Promise<Array<string>>;
 
 export function GetProfiles():Promise<Array<string>>;
 
+export function GetRelayStatus():Promise<node.RelayStatus>;
+
 export function GetSettings():Promise<node.SettingsDTO>;
 
 export function GetSharingStatus():Promise<node.SharingStatus>;
@@ -82,6 +86,10 @@ export function GetTonTopUpLink(arg1:string):Promise<string>;
 export function GetTonWallet():Promise<dto.TonWalletDTO>;
 
 export function GetVPNStatus():Promise<node.VPNStatus>;
+
+export function GetVault():Promise<dto.VaultDTO>;
+
+export function GetVoucherEarnings():Promise<dto.VoucherEarningsDTO>;
 
 export function InviteToCall(arg1:string):Promise<Record<string, string>>;
 
@@ -137,6 +145,8 @@ export function SendUsdt(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
 
+export function SetExitFreePeers(arg1:Array<string>):Promise<void>;
+
 export function SetGroupRole(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetPayAsset(arg1:string):Promise<void>;
@@ -144,6 +154,8 @@ export function SetPayAsset(arg1:string):Promise<void>;
 export function SetProbeDomains(arg1:Array<string>):Promise<void>;
 
 export function SetProfileService(arg1:main.ProfileService):Promise<void>;
+
+export function SetRelaySettings(arg1:node.RelaySettingsDTO):Promise<void>;
 
 export function SetSettings(arg1:node.SettingsDTO):Promise<void>;
 
@@ -169,6 +181,8 @@ export function StartStream(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function StartVPN(arg1:string):Promise<void>;
 
+export function StartVPNVia(arg1:string):Promise<void>;
+
 export function StopDiscovery():Promise<void>;
 
 export function StopScreenShare(arg1:string):Promise<void>;
@@ -186,5 +200,13 @@ export function TriggerPanicButton():Promise<void>;
 export function UnwatchStream(arg1:string):Promise<void>;
 
 export function UpdateStreamQuality(arg1:string,arg2:string):Promise<void>;
+
+export function VaultCancelWithdraw():Promise<string>;
+
+export function VaultDeposit(arg1:string):Promise<string>;
+
+export function VaultExecuteWithdraw():Promise<string>;
+
+export function VaultRequestWithdraw():Promise<string>;
 
 export function WatchStream(arg1:string):Promise<void>;

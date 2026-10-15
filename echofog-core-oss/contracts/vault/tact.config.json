@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tact-lang/tact/main/src/config/configSchema.json",
+  "projects": [
+    {
+      "name": "tact",
+      "path": "./contracts/echofog_vault.tact",
+      "output": "./build/EchoFogVault",
+      "options": {
+        "debug": false
+      }
+    }
+  ]
+}

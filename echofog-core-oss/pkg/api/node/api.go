@@ -25,10 +25,11 @@ type NodeApi struct {
 
 	uploadKbps int // declared upstream bandwidth used to size call streams
 
-	vpn  vpnState
-	tun  tunState
-	pay  payState  // client: paying the connected exit
-	earn earnState // operator: booking incoming payments
+	vpn   vpnState
+	tun   tunState
+	pay   payState    // client: paying the connected exit
+	earn  earnState   // operator: booking incoming payments
+	vault vaultClient // client: the TON vault and the vouchers signed from it
 
 	groupsH groupsHolder
 

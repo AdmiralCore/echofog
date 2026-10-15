@@ -49,8 +49,11 @@ The short version (detailed public docs are being prepared):
 - **Proxy / VPN.** A local SOCKS5 proxy or a whole-computer tunnel (TUN), over an exit someone
   sells on the market. On Windows the TUN driver (Wintun) is embedded and written out on demand, so
   there is nothing extra to install.
-- **Payments.** Prepaid in small chunks, in TON or USDT, with no account. See
-  traffic-payments.md.
+- **Payments.** No account and no commission. The user keeps TON in their own small vault
+  contract and signs vouchers off-chain as they use a node; the node collects them every few
+  hours. Paying by direct TON or USDT transfer still works. See
+  [docs/vault-payments.md](docs/vault-payments.md) (in Russian:
+  [vault-payments.ru.md](docs/vault-payments.ru.md)).
 
 Two kinds of public node matter for a healthy network: **relays**, which carry traffic for peers
 that cannot reach each other directly, and **signaling nodes** (`--signaling`), which only keep the
@@ -110,8 +113,8 @@ See testing.md for what each layer covers.
 - The transport hides the *protocol* from a passive observer, and makes an active prober see a real
   website — but it does **not** hide the *existence* of a public node from a censor who crawls the
   DHT. Hiding those needs unlisted bridges (nodes whose address is shared privately).
-- What is **not** done yet: an external audit; testing against a real national DPI; the settlement
-  side of relay/exit payments. Treat prices as advertised, not enforced.
+- What is **not** done yet: an external audit (including of the vault contract, which is on
+  testnet only); testing against a real national DPI; payments for relays (exits only for now).
 
 If you find a weakness, please open an issue or reach the maintainers before disclosing it widely.
 

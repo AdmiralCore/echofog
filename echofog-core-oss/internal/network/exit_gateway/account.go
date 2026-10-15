@@ -26,6 +26,8 @@ type AccountInfo struct {
 	// Assets the exit takes: "USDT", and "TON" credited at the TON/USD rate when it arrives. An
 	// exit that does not say takes USDT only.
 	Assets []string `json:"assets,omitempty"`
+	// Vault: the exit also takes vouchers from the client's TON vault (nil: it does not).
+	Vault *VaultTerms `json:"vault,omitempty"`
 }
 
 // PayAssets are the assets an exit with payments takes.
@@ -46,7 +48,18 @@ func (a AccountInfo) Accepts(asset string) bool {
 
 // Remaining is everything the client can still use, free and paid. Negative means it is in the
 // overdraft; the exit cuts it at -OverdraftBytes.
-func (a AccountInfo) Remaining() int64 { return a.FreeLeft + a.Credit }
+func (a AccountInfo) Remaining() int64 {
+	r := a.FreeLeft + a.Credit
+	if a.Vault != nil {
+		r += a.Vault.Credit
+	}
+	return r
+}
+
+// TakesVouchers reports whether the exit can be paid from the client's vault.
+func (a AccountInfo) TakesVouchers() bool {
+	return a.Enabled && a.PricePerMB > 0 && a.Vault != nil && a.Vault.NanoPerMB > 0 && a.Vault.Node != ""
+}
 
 // CanPay reports whether this exit accepts payments at all.
 func (a AccountInfo) CanPay() bool {
@@ -59,7 +72,7 @@ func (a AccountInfo) BytesFor(micro int64) int64 { return mulDiv(micro, bytesPer
 // AccountOf builds the account the exit would report for peer.
 func (e *ExitService) AccountOf(peer types.PeerID) AccountInfo {
 	e.policyMu.Lock()
-	pol, l, self, addr := e.policy, e.ledger, e.self, e.payAddress
+	pol, l, v, self, addr := e.policy, e.ledger, e.vouchers, e.self, e.payAddress
 	if e.freePeers[peer] {
 		pol.PricePerMB = 0 // on the free list: this peer sees a free exit and never pays
 	}
@@ -79,6 +92,9 @@ func (e *ExitService) AccountOf(peer types.PeerID) AccountInfo {
 		info.Credit, _ = l.Balance(info.Tag)
 		info.MinPayMicro = MinPayMicro
 		info.Assets = PayAssets
+	}
+	if v != nil && pol.PricePerMB > 0 {
+		info.Vault = v.Terms(PayTag(peer, self))
 	}
 	return info
 }

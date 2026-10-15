@@ -132,6 +132,9 @@ type ExitService struct {
 	self       types.PeerID
 	payAddress string
 	onPayment  atomic.Pointer[func(micro, bytes int64)]
+
+	// vouchers from clients' TON vaults (nil: this exit takes none)
+	vouchers *VoucherBook
 }
 
 // SetPayments lets clients pay for traffic: ledger holds their credit, self is this exit's peer ID
@@ -317,15 +320,19 @@ func (e *ExitService) allowance(peer types.PeerID) int64 {
 	if total < 0 {
 		total = 0
 	}
-	l, self := e.ledger, e.self
+	l, v, self := e.ledger, e.vouchers, e.self
 	e.policyMu.Unlock()
 	if l != nil {
 		total += l.Available(PayTag(peer, self))
 	}
+	if v != nil {
+		total += v.Available(PayTag(peer, self))
+	}
 	return total
 }
 
-// consume spends n bytes of the peer's allowance: the free quota first, then paid credit. It is
+// consume spends n bytes of the peer's allowance: the free quota first, then what vouchers paid
+// for, then prepaid credit. It is
 // shared by all of the peer's connections, so many parallel streams cannot multiply the quota. It
 // returns false once the peer has nothing left and the stream must be cut.
 func (e *ExitService) consume(peer types.PeerID, n int64) bool {
@@ -343,14 +350,20 @@ func (e *ExitService) consume(peer types.PeerID, n int64) bool {
 		freeLeft = 0
 	}
 	q.used += n
-	l, self := e.ledger, e.self
+	l, v, self := e.ledger, e.vouchers, e.self
 	e.policyMu.Unlock()
 
 	rest := n - freeLeft
 	if rest <= 0 {
 		return true
 	}
-	return l != nil && l.Consume(PayTag(peer, self), rest)
+	tag := PayTag(peer, self)
+	if v != nil {
+		if rest -= v.Spend(tag, rest); rest <= 0 {
+			return true
+		}
+	}
+	return l != nil && l.Consume(tag, rest)
 }
 
 func (e *ExitService) quotaLocked(peer types.PeerID) *peerQuota {

@@ -127,3 +127,69 @@ func (a *App) PayForTraffic(asset, to, amount, memo string) (string, error) {
 	defer cancel()
 	return nodeAPI.PayForTraffic(ctx, asset, to, amount, memo)
 }
+
+// --- TON VAULT: the deposit paid proxy nodes are paid from with vouchers ---
+
+// GetVault describes the user's vault: address, deposit, and any pending withdrawal.
+func (a *App) GetVault() (dto.VaultDTO, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return dto.VaultDTO{}, errNodeNotStarted
+	}
+	ctx, cancel := a.tonContext(30 * time.Second)
+	defer cancel()
+	return nodeAPI.GetVault(ctx)
+}
+
+// VaultDeposit moves a decimal TON amount from the wallet into the vault; returns the message hash.
+func (a *App) VaultDeposit(amountTON string) (string, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return "", errNodeNotStarted
+	}
+	ctx, cancel := a.tonContext(45 * time.Second)
+	defer cancel()
+	return nodeAPI.VaultDeposit(ctx, amountTON)
+}
+
+// VaultRequestWithdraw starts the 24-hour countdown to taking the deposit back.
+func (a *App) VaultRequestWithdraw() (string, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return "", errNodeNotStarted
+	}
+	ctx, cancel := a.tonContext(45 * time.Second)
+	defer cancel()
+	return nodeAPI.VaultRequestWithdraw(ctx)
+}
+
+// VaultCancelWithdraw stops a pending withdrawal.
+func (a *App) VaultCancelWithdraw() (string, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return "", errNodeNotStarted
+	}
+	ctx, cancel := a.tonContext(45 * time.Second)
+	defer cancel()
+	return nodeAPI.VaultCancelWithdraw(ctx)
+}
+
+// VaultExecuteWithdraw returns the remaining deposit to the wallet once the 24 hours are over.
+func (a *App) VaultExecuteWithdraw() (string, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return "", errNodeNotStarted
+	}
+	ctx, cancel := a.tonContext(45 * time.Second)
+	defer cancel()
+	return nodeAPI.VaultExecuteWithdraw(ctx)
+}
+
+// GetVoucherEarnings reports what this node's exit earned from vouchers (owed and cashed).
+func (a *App) GetVoucherEarnings() dto.VoucherEarningsDTO {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return dto.VoucherEarningsDTO{OwedTON: "0", CashedTON: "0"}
+	}
+	return nodeAPI.GetVoucherEarnings()
+}
