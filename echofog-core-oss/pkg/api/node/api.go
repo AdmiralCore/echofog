@@ -32,12 +32,18 @@ type NodeApi struct {
 
 	groupsH groupsHolder
 
+	relayChosen bool // the user picked the relay settings; false: the defaults are in effect
+	startPort   int  // the listen port the node was configured with when it started
+
+	exitFreePeers []string // peers the exit serves for free (persisted; guarded by settingsMu)
+
 	Logger *slog.Logger
 }
 
 func NewNodeApi(node *node.Node) *NodeApi {
-	loadPersistedSettings(node.Cfg)
-	return &NodeApi{node: node, Logger: node.Logger}
+	saved, chosen := loadPersistedSettings(node.Cfg)
+	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
+		exitFreePeers: saved.ExitFreePeers}
 }
 
 func (n *NodeApi) IsRegistered() bool {

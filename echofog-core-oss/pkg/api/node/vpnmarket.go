@@ -17,6 +17,8 @@ type SharingConfig struct {
 	PricePerMB int64 `json:"pricePerMb"` // micro-USDT per MB; 49 is about 5 cents a GB. 0 = free
 	FreeTestKB int   `json:"freeTestKb"`
 	UploadKbps int   `json:"uploadKbps"`
+	// FreePeers are peer IDs served for free: no quota and no payment, whatever the price.
+	FreePeers []string `json:"freePeers"`
 }
 
 // SharingStatus describes the exit service and its DHT advert
@@ -86,6 +88,13 @@ func (n *NodeApi) StartSharing(cfg SharingConfig) error {
 	if cfg.FreeTestKB == 0 && cfg.PricePerMB > 0 {
 		cfg.FreeTestKB = 512
 	}
+	if cfg.FreePeers != nil {
+		if err := n.SetExitFreePeers(cfg.FreePeers); err != nil {
+			return err
+		}
+	} else {
+		n.applyExitFreePeers()
+	}
 
 	if cfg.PricePerMB > 0 {
 		// a priced exit must be able to receive money, or clients could never pay it
@@ -105,6 +114,49 @@ func (n *NodeApi) StartSharing(cfg SharingConfig) error {
 		return err
 	}
 	return nil
+}
+
+// SetExitFreePeers saves the peers the exit serves for free and applies the list at once, also
+// while sharing.
+func (n *NodeApi) SetExitFreePeers(ids []string) error {
+	if n.node == nil || n.node.Cfg == nil {
+		return errors.New("node is not running")
+	}
+	norm, err := normalizePeerIDs(ids)
+	if err != nil {
+		return err
+	}
+	settingsMu.Lock()
+	err = saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.ExitFreePeers = norm })
+	if err == nil {
+		n.exitFreePeers = norm
+	}
+	settingsMu.Unlock()
+	if err != nil {
+		return err
+	}
+	n.applyExitFreePeers()
+	return nil
+}
+
+// GetExitFreePeers returns the peers the exit serves for free.
+func (n *NodeApi) GetExitFreePeers() []string {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	return append([]string{}, n.exitFreePeers...)
+}
+
+func (n *NodeApi) applyExitFreePeers() {
+	if n.node == nil || n.node.ExitService == nil {
+		return
+	}
+	var ids []types.PeerID
+	for _, s := range n.GetExitFreePeers() {
+		if id, err := types.PeerIDFromString(s); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	n.node.ExitService.SetFreePeers(ids)
 }
 
 // StopSharing withdraws the advert and stops serving other peers
@@ -129,6 +181,7 @@ func (n *NodeApi) GetSharingStatus() SharingStatus {
 		Enabled: n.node.ExitService.Enabled(),
 		Config: SharingConfig{
 			PricePerMB: ps.Config.PricePerMB, FreeTestKB: ps.Config.FreeTestKB, UploadKbps: ps.Config.UploadKbps,
+			FreePeers: n.GetExitFreePeers(),
 		},
 		LastPublish: ps.LastPublish, ExpiresAt: ps.ExpiresAt, LastError: ps.LastError,
 		Accepted: a, Refused: r, Bytes: b,

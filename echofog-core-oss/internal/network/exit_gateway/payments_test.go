@@ -117,6 +117,29 @@ func TestWatchPaymentsPollsAndBacksOff(t *testing.T) {
 	require.Eventually(t, func() bool { c, _ := l.Balance(tag); return c > 0 }, 2*time.Second, 10*time.Millisecond)
 }
 
+// A peer on the free list uses a priced exit without quota or payment; everybody else still pays.
+func TestFreePeersUsePricedExitForNothing(t *testing.T) {
+	svc, _ := paidExit(t, 1000)
+	friend := types.PeerID{7}
+	svc.SetFreePeers([]types.PeerID{friend})
+	assert.Equal(t, 1, svc.FreePeers())
+
+	assert.Equal(t, int64(-1), svc.allowance(friend))
+	for i := 0; i < 5; i++ {
+		require.True(t, svc.consume(friend, 10_000_000), "no quota for a free peer")
+	}
+	info := svc.AccountOf(friend)
+	assert.Zero(t, info.PricePerMB, "a free peer is told the exit is free")
+	assert.False(t, info.CanPay(), "and is never asked to pay")
+
+	assert.Equal(t, int64(1000), svc.allowance(testClient), "others keep the normal offer")
+	assert.False(t, svc.consume(testClient, 2000))
+	assert.True(t, svc.AccountOf(testClient).CanPay())
+
+	svc.SetFreePeers(nil)
+	assert.Equal(t, int64(1000), svc.allowance(friend), "removed from the list: back to the normal offer")
+}
+
 // Two streams of one client share one allowance: the free quota cannot be multiplied.
 func TestParallelStreamsShareOneAllowance(t *testing.T) {
 	svc, _ := paidExit(t, 1000)

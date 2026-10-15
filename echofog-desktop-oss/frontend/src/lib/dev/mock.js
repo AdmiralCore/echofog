@@ -255,7 +255,31 @@ const impl = {
   },
   DeleteContact: (id) => { contacts.splice(contacts.findIndex((c) => c.peer_id === id), 1); return null; },
   GetSharingStatus: () => ({ ...sharingMock }),
-  StartSharing: (cfg) => { Object.assign(sharingMock, { enabled: true, config: cfg, lastPublish: sec(Date.now()) }); return null; },
+  StartSharing: (cfg) => { Object.assign(sharingMock, { enabled: true, config: { ...cfg, freePeers: cfg.freePeers || sharingMock.config.freePeers }, lastPublish: sec(Date.now()) }); return null; },
+  SetExitFreePeers: (ids) => { if (ids.some((x) => !HEX64.test(x))) throw new Error('not a peer ID (64 hex characters)'); sharingMock.config.freePeers = [...ids]; return null; },
+  // relays: what this computer does for others, its link, and the relays it uses (?nat=1 shows the no-link case)
+  GetRelayStatus: () => relayStatus(),
+  SetRelaySettings: (r) => {
+    if ((r.allowedPeers || []).some((x) => !HEX64.test(x))) throw new Error('not a peer ID (64 hex characters)');
+    if (r.listenPort < 0 || r.listenPort > 65535) throw new Error('the listen port must be between 1 and 65535, or 0 for any free port');
+    Object.assign(relayMock, { settings: { ...r, server: r.server || r.signalingOnly }, chosen: true });
+    return null;
+  },
+  AddRelay: (link) => {
+    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(link.trim());
+    if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
+    const addr = m[1] + '/' + m[2].toLowerCase();
+    if (!relayMock.settings.relays.includes(addr)) relayMock.settings.relays.push(addr);
+    relayMock.connectedAt[m[2].toLowerCase()] = Date.now() + 2500;
+    return null;
+  },
+  StartVPNVia: (target) => new Promise((r, j) => setTimeout(() => {
+    const m = /([0-9a-f]{64})\/?$/i.exec(target.trim());
+    if (!m) return j(new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>'));
+    Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', relayPeerId: m[1].toLowerCase() });
+    emit('vpn:started', {});
+    r(null);
+  }, 700)),
   StopSharing: () => { sharingMock.enabled = false; return null; },
   MeasureUploadCapacity: () => new Promise((r) => setTimeout(() => r(38400), 700)),
   RefreshExitNodes: () => new Promise((r) => setTimeout(() => r(2), 400)),
@@ -365,7 +389,38 @@ const groupMembers = [SELF, ALICE, BOB, CAROL, DAVE].map((p) => ({ peerId: p, ro
 const groups = [{ id: 'grp_launch', title: 'EchoFog Launch', kind: 'group', members: 5, myRole: 'owner', readOnly: false, description: 'Release room' }];
 let probeDomains = ['www.google.com:443', 'www.wikipedia.org:443'];
 const settingsMock = { directSocket: false, socketBufferMb: 8 };
-const sharingMock = { enabled: false, config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0 }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
+const HEX64 = /^[0-9a-f]{64}$/;
+const relayMock = {
+  settings: { server: true, private: false, signalingOnly: false, allowedPeers: [], relays: ['relay.example.org:4001/' + hex(12)], listenPort: 0 },
+  chosen: false,
+  startPort: 0,
+  connectedAt: {},
+};
+const relayStatus = () => {
+  const s = relayMock.settings;
+  const behindNat = new URLSearchParams(location.search).has('nat');
+  const addr = behindNat ? '' : `203.0.113.7:${s.listenPort || 51234}/${SELF}`;
+  return {
+    settings: { ...s, allowedPeers: [...s.allowedPeers], relays: [...s.relays] },
+    chosen: relayMock.chosen,
+    link: addr ? 'echofog://relay/' + addr : '',
+    addr,
+    nat: behindNat ? 'cone' : 'cone',
+    mapped: !behindNat,
+    reason: behindNat ? 'This computer is behind a router that does not forward a port to it, so others cannot connect to it. Turn on UPnP or NAT-PMP on the router, or forward the port by hand, or run the relay on a computer with a public IP.' : '',
+    restartNeeded: s.listenPort !== relayMock.startPort,
+    activeCircuits: s.server && !s.signalingOnly ? 2 : 0,
+    bytesRouted: s.server ? 18350000 : 0,
+    forwarded: s.server ? 42 : 0,
+    accessRefused: s.private ? 3 : 0,
+    using: s.relays.map((r) => {
+      const i = r.lastIndexOf('/');
+      const id = r.slice(i + 1);
+      return { addr: r.slice(0, i), peerId: id, connected: Date.now() > (relayMock.connectedAt[id] || 0) };
+    }),
+  };
+};
+const sharingMock = { enabled: false, config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0, freePeers: [BOB] }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
 const supportMock = { available: true, percent: 5, pendingTon: '0', pendingUsdt: '0.35', address: 'UQ-project-mock' };
 const payMock = { active: true, canPay: true, pricePerGb: '0.05', remainingGb: 0.2, needsPayment: true, autoPay: false, chunkUsdt: '1', chunkGb: 20, dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: true, chunkTon: '0.311', pending: false, note: '', lastError: '' };
 const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };

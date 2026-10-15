@@ -40,20 +40,66 @@ func settingsPath(c *config.AppConfig) string {
 	return filepath.Join(filepath.Dir(c.Storage.DatabasePath), settingsFileName)
 }
 
-func loadPersistedSettings(c *config.AppConfig) {
+// persistedSettings is the settings file: the connection settings, and the relay settings once
+// the user has chosen them (until then the defaults apply).
+type persistedSettings struct {
+	SettingsDTO
+	Relay *RelaySettingsDTO `json:"relay,omitempty"`
+	// ExitFreePeers are the peers the exit serves for free when sharing the connection.
+	ExitFreePeers []string `json:"exitFreePeers,omitempty"`
+}
+
+// loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the
+// config (the exit's free list) and whether it held relay settings.
+func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChosen bool) {
+	p.SettingsDTO = settingsFromConfig(c)
 	path := settingsPath(c)
 	if path == "" {
-		return
+		return p, false
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return p, false
 	}
-	s := settingsFromConfig(c)
-	if json.Unmarshal(raw, &s) != nil {
-		return
+	if json.Unmarshal(raw, &p) != nil {
+		return persistedSettings{SettingsDTO: settingsFromConfig(c)}, false
 	}
-	applySettings(c, s)
+	applySettings(c, p.SettingsDTO)
+	if free, err := normalizePeerIDs(p.ExitFreePeers); err == nil {
+		p.ExitFreePeers = free
+	} else {
+		p.ExitFreePeers = nil
+	}
+	if p.Relay != nil {
+		r, err := normalizeRelaySettings(*p.Relay)
+		if err != nil {
+			return p, false // a hand-edited file with a bad entry: keep the defaults rather than half of it
+		}
+		applyRelaySettings(c, r)
+		return p, true
+	}
+	return p, false
+}
+
+// saveSettingsLocked rewrites the settings file with change applied; the caller holds settingsMu.
+func saveSettingsLocked(c *config.AppConfig, change func(*persistedSettings)) error {
+	path := settingsPath(c)
+	if path == "" {
+		return errors.New("profile directory unavailable")
+	}
+	p := persistedSettings{SettingsDTO: settingsFromConfig(c)}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &p)
+	}
+	change(&p)
+	raw, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
 }
 
 func validateSettings(s SettingsDTO) error {
@@ -79,20 +125,9 @@ func (n *NodeApi) SetSettings(s SettingsDTO) error {
 	if err := validateSettings(s); err != nil {
 		return err
 	}
-	path := settingsPath(n.node.Cfg)
-	if path == "" {
-		return errors.New("profile directory unavailable")
-	}
-	raw, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	if err := saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.SettingsDTO = s }); err != nil {
 		return err
 	}
 	applySettings(n.node.Cfg, s)

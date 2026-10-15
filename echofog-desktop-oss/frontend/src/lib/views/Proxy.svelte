@@ -4,6 +4,9 @@
   import { bytes, price, usdPerGb, microPerMb, when, short } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
+  import PeerList from '../components/PeerList.svelte';
+  import RelayCard from '../components/RelayCard.svelte';
+  import { parseRelayLink } from '../contact.js';
 
   let vpn = { running: false, listenAddr: '', relayPeerId: '', bytesRx: 0, bytesTx: 0, activeConns: 0, tunnelReady: false, tunnelNotice: '', wholeComputer: false, wholeComputerSupported: false, wholeComputerError: '' };
   let exits = [];
@@ -11,9 +14,11 @@
   let pay = { active: false, canPay: false, pricePerGb: '0', remainingGb: 0, needsPayment: false, autoPay: false, chunkUsdt: '1', dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: false, chunkTon: '', pending: false, note: '', lastError: '' };
   let payForm = { chunk: '1', cap: '5' };
   let payTouched = false;
-  let sharing = { enabled: false, config: { pricePerMb: 0, freeTestKb: 512, uploadKbps: 0 }, accepted: 0, refused: 0, bytes: 0, lastPublish: 0, lastError: '', paymentsReady: false, earnedUsdt: '0' };
+  let sharing = { enabled: false, config: { pricePerMb: 0, freeTestKb: 512, uploadKbps: 0, freePeers: [] }, accepted: 0, refused: 0, bytes: 0, lastPublish: 0, lastError: '', paymentsReady: false, earnedUsdt: '0' };
   let form = { price: '0', freeKb: 512, mbps: 0 };
-  let mode = 'auto'; // 'auto' | 'manual'
+  let mode = 'auto'; // 'auto' | 'manual' | 'direct'
+  let direct = ''; // 'direct': a relay link, host:port/<peer id> or a peer ID
+  let contacts = [];
   let sortBy = 'best'; // 'best' | 'ping' | 'price' | 'speed'
   let checkingSites = false;
 
@@ -63,6 +68,7 @@
 
   const connect = () => act('connect', async () => {
     if (vpn.running) await App.StopVPN();
+    else if (mode === 'direct') await App.StartVPNVia(direct.trim());
     else await App.StartVPN(selected);
     await refresh();
   });
@@ -112,8 +118,14 @@
         pricePerMb: microPerMb(form.price),
         freeTestKb: Math.min(1024, Math.max(0, Math.round(Number(form.freeKb) || 0))),
         uploadKbps: Math.round((Number(form.mbps) || 0) * 1000),
+        freePeers: sharing.config.freePeers || [],
       });
     }
+    await refresh();
+  });
+
+  const setFreePeers = (ids) => act('free', async () => {
+    await App.SetExitFreePeers(ids);
     await refresh();
   });
 
@@ -127,10 +139,12 @@
   };
   $: sorted = [...exits].sort(SORTS[sortBy]);
   $: best = [...exits].sort(SORTS.best)[0];
-  $: if (mode === 'auto') selected = 'auto';
+  $: if (mode !== 'manual') selected = 'auto';
+  $: directId = parseRelayLink(direct)?.peerId || (/^[0-9a-f]{64}$/i.test(direct.trim()) ? direct.trim().toLowerCase() : '');
+  $: blocked = !vpn.running && ((mode === 'manual' && !selected) || (mode === 'direct' && !directId));
   $: if (mode === 'manual' && selected === 'auto' && sorted.length) selected = sorted[0].peerId;
-  $: checkExit = vpn.running ? (vpn.relayPeerId || 'auto') : mode === 'auto' ? 'auto' : selected;
-  $: checkLabel = vpn.running ? 'the exit you are connected to' : mode === 'auto' ? 'the exit the automatic choice would pick' : 'exit ' + short(selected);
+  $: checkExit = vpn.running ? (vpn.relayPeerId || 'auto') : mode === 'auto' ? 'auto' : mode === 'direct' ? directId || 'auto' : selected;
+  $: checkLabel = vpn.running ? 'the exit you are connected to' : mode === 'auto' || (mode === 'direct' && !directId) ? 'the exit the automatic choice would pick' : 'exit ' + short(checkExit);
 
   const pingClass = (ms) => (!ms ? '' : ms < 80 ? 'good' : ms < 200 ? 'mid' : 'bad');
   const pingText = (ms) => (ms ? Math.round(ms) + ' ms' : 'ping ?');
@@ -143,6 +157,7 @@
 
   onMount(async () => {
     refresh();
+    App.GetContacts().then((c) => (contacts = c || [])).catch(() => {});
     act('scan', () => loadExits(true));
     timers = [
       setInterval(() => { refresh(); loadExits(false).catch(() => {}); }, 15000),
@@ -175,7 +190,7 @@
     <div class="card stack conn" class:running={vpn.running} class:ready={vpn.running && vpn.tunnelReady}>
       <div class="conn-top">
         <button class="power" class:on={vpn.running} on:click={connect}
-          disabled={busy === 'connect' || (!vpn.running && mode === 'manual' && !selected)}
+          disabled={busy === 'connect' || blocked}
           title={vpn.running ? 'Disconnect' : 'Connect'} aria-label={vpn.running ? 'Disconnect' : 'Connect'}>
           {#if busy === 'connect'}<span class="spinner big-spin"></span>{:else}<Icon name="zap" size={26} stroke={2} />{/if}
         </button>
@@ -190,7 +205,7 @@
             {/if}
           </p>
         </div>
-        <button class={vpn.running ? 'danger' : 'primary'} on:click={connect} disabled={busy === 'connect' || (!vpn.running && mode === 'manual' && !selected)}>
+        <button class={vpn.running ? 'danger' : 'primary'} on:click={connect} disabled={busy === 'connect' || blocked}>
           {busy === 'connect' ? 'Working…' : vpn.running ? 'Disconnect' : 'Connect'}
         </button>
       </div>
@@ -213,6 +228,7 @@
         <div class="seg" role="tablist">
           <button role="tab" class:active={mode === 'auto'} aria-selected={mode === 'auto'} on:click={() => (mode = 'auto')}>Automatic</button>
           <button role="tab" class:active={mode === 'manual'} aria-selected={mode === 'manual'} on:click={() => (mode = 'manual')}>Choose myself</button>
+          <button role="tab" class:active={mode === 'direct'} aria-selected={mode === 'direct'} on:click={() => (mode = 'direct')}>Specific node</button>
         </div>
 
         {#if mode === 'auto'}
@@ -232,6 +248,12 @@
             {:else}
               <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> Looking for exits…{:else}No exits found yet.{/if}</p>
             {/if}
+          </div>
+        {:else if mode === 'direct'}
+          <div class="auto">
+            <p class="small muted">Connect through one particular computer, for example a friend who shares their connection with you for free. Paste the relay link they gave you, or their peer ID.</p>
+            <input bind:value={direct} placeholder="echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
+            {#if direct.trim() && !directId}<p class="small error">This is not a relay link, host:port/peer-id or peer ID.</p>{/if}
           </div>
         {:else}
           <div class="row small sortrow">
@@ -259,7 +281,7 @@
             {/each}
           </div>
         {/if}
-        <div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? 'Searching…' : 'Search again'}</button></div>
+        {#if mode !== 'direct'}<div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? 'Searching…' : 'Search again'}</button></div>{/if}
       {/if}
     </div>
 
@@ -339,8 +361,15 @@
           Payments arrive in the wallet of this app, in TON (at the rate when they arrive) or USDT; keep that wallet for traffic only.
         </p>
       {/if}
+      <div class="sub">
+        <div class="eyebrow">Free for these people</div>
+        <p class="small muted">They use your connection without limits and never pay, whatever your price. Changes apply at once.</p>
+        <PeerList ids={sharing.config.freePeers || []} {contacts} disabled={busy === 'free'} label="Free for these people"
+          empty="Nobody: everyone gets the same offer." on:change={(e) => setFreePeers(e.detail)} />
+      </div>
     </div>
 
+    <RelayCard {contacts} />
   </div>
 </div>
 
@@ -354,6 +383,7 @@
   .paywith { align-items: center; gap: 10px; }
   .seg button:disabled { opacity: 0.4; }
   .block { display: block; margin-top: 2px; }
+  .sub { display: flex; flex-direction: column; gap: 8px; }
   .opt { align-items: center; }
   .icon.tiny { width: 24px; height: 24px; border-radius: 7px; }
 

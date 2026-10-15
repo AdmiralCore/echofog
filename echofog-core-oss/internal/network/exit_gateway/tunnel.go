@@ -122,9 +122,10 @@ type ExitService struct {
 	accepted atomic.Uint64
 	refused  atomic.Uint64
 
-	policyMu sync.Mutex
-	policy   Policy
-	quotas   map[types.PeerID]*peerQuota
+	policyMu  sync.Mutex
+	policy    Policy
+	quotas    map[types.PeerID]*peerQuota
+	freePeers map[types.PeerID]bool // served without quota or payment, whatever the price
 
 	// payments (nil: this exit takes none; a priced exit then only serves its free quota)
 	ledger     *Ledger
@@ -273,6 +274,30 @@ func (e *ExitService) SetPolicy(p Policy) {
 	e.policyMu.Unlock()
 }
 
+// SetFreePeers names the peers this exit serves for free: no quota and no payment, whatever the
+// price everybody else pays. The list replaces the previous one.
+func (e *ExitService) SetFreePeers(ids []types.PeerID) {
+	m := make(map[types.PeerID]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	e.policyMu.Lock()
+	e.freePeers = m
+	e.policyMu.Unlock()
+}
+
+// FreePeers returns how many peers are on the free list.
+func (e *ExitService) FreePeers() int {
+	e.policyMu.Lock()
+	defer e.policyMu.Unlock()
+	return len(e.freePeers)
+}
+
+// freeLocked: the peer pays nothing here, because the exit is free or the peer is on the free list.
+func (e *ExitService) freeLocked(peer types.PeerID) bool {
+	return e.policy.PricePerMB <= 0 || e.freePeers[peer]
+}
+
 func (e *ExitService) CurrentPolicy() Policy {
 	e.policyMu.Lock()
 	defer e.policyMu.Unlock()
@@ -280,10 +305,10 @@ func (e *ExitService) CurrentPolicy() Policy {
 }
 
 // allowance is how many bytes the peer may still use right now: its free quota for today plus
-// whatever it has paid for. -1 means this exit is free for everyone.
+// whatever it has paid for. -1 means the exit is free for this peer.
 func (e *ExitService) allowance(peer types.PeerID) int64 {
 	e.policyMu.Lock()
-	if e.policy.PricePerMB <= 0 {
+	if e.freeLocked(peer) {
 		e.policyMu.Unlock()
 		return -1
 	}
@@ -308,7 +333,7 @@ func (e *ExitService) consume(peer types.PeerID, n int64) bool {
 		return true
 	}
 	e.policyMu.Lock()
-	if e.policy.PricePerMB <= 0 {
+	if e.freeLocked(peer) {
 		e.policyMu.Unlock()
 		return true
 	}

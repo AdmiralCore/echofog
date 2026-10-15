@@ -60,6 +60,9 @@ func (a AccountInfo) BytesFor(micro int64) int64 { return mulDiv(micro, bytesPer
 func (e *ExitService) AccountOf(peer types.PeerID) AccountInfo {
 	e.policyMu.Lock()
 	pol, l, self, addr := e.policy, e.ledger, e.self, e.payAddress
+	if e.freePeers[peer] {
+		pol.PricePerMB = 0 // on the free list: this peer sees a free exit and never pays
+	}
 	var freeLeft int64
 	if pol.PricePerMB > 0 {
 		freeLeft = pol.FreeBytes - e.quotaLocked(peer).used

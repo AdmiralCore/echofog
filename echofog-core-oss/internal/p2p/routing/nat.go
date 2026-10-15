@@ -93,6 +93,13 @@ func (m *NATManager) SetPortMapping(addr netip.AddrPort) {
 	m.mu.Unlock()
 }
 
+// PortMapping is the router-assigned external address, or the zero value when there is none.
+func (m *NATManager) PortMapping() netip.AddrPort {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mapped
+}
+
 func (m *NATManager) GetNATProfile() (string, NATType) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
