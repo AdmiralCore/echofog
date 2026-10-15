@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { Html5Qrcode } from 'html5-qrcode';
+  import { t } from '../i18n/index.js';
 
   const dispatch = createEventDispatcher();
   let reader;
@@ -22,7 +23,7 @@
       );
       running = true;
     } catch (err) {
-      error = (err && (err.message || String(err))) || 'The camera is not available.';
+      error = (err && (err.message || String(err))) || $t('chats.qr.noCamera');
     }
   });
 
@@ -34,11 +35,11 @@
 <div class="scan stack tight">
   <div id="qr-reader" />
   {#if error}
-    <p class="error small">Could not use the camera: {error}</p>
+    <p class="error small">{$t('chats.qr.cameraError', { error })}</p>
   {:else}
-    <p class="small muted">Point the camera at the contact's code.</p>
+    <p class="small muted">{$t('chats.qr.hint')}</p>
   {/if}
-  <button on:click={() => dispatch('close')}>Cancel</button>
+  <button on:click={() => dispatch('close')}>{$t('common.cancel')}</button>
 </div>
 
 <style>

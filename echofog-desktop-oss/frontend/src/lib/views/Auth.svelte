@@ -7,6 +7,7 @@
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import { t } from '../i18n/index.js';
 
   let password = '';
   let confirm = '';
@@ -27,7 +28,7 @@
     phraseOk = false;
     const words = p.trim().split(/\s+/).filter(Boolean);
     if (!words.length) { phraseCheck = ''; return; }
-    if (words.length < 12) { phraseCheck = `${words.length} of 12 or 24 words`; return; }
+    if (words.length < 12) { phraseCheck = $t('auth.wordsCount', { n: words.length }); return; }
     checkTimer = setTimeout(async () => {
       try {
         phraseCheck = (await App.CheckRecoveryPhrase(p)) || '';
@@ -61,24 +62,24 @@
   const go = (s) => { reset(); screen.set(s); };
 
   function submitCreate() {
-    if (password.length < 8) return (error = 'Use at least 8 characters.');
-    if (password !== confirm) return (error = 'The passwords do not match.');
+    if (password.length < 8) return (error = $t('auth.tooShort'));
+    if (password !== confirm) return (error = $t('auth.mismatch'));
     run(() => create(password));
   }
 
   async function submitRestore() {
     const problem = await App.CheckRecoveryPhrase(phrase);
     if (problem) return (error = problem);
-    if (password.length < 8) return (error = 'Use at least 8 characters.');
-    if (password !== confirm) return (error = 'The passwords do not match.');
+    if (password.length < 8) return (error = $t('auth.tooShort'));
+    if (password !== confirm) return (error = $t('auth.mismatch'));
     run(() => restore(phrase, password, passphrase));
   }
 
   async function del(name) {
-    if (!confirm_(`Delete profile "${name}" and all its data from this computer? This cannot be undone.`)) return;
+    if (!confirm_($t('auth.confirmDelete', { name }))) return;
     run(() => removeProfile(name));
   }
-  const confirm_ = (t) => window.confirm(t);
+  const confirm_ = (msg) => window.confirm(msg);
 </script>
 
 <div class="wrap">
@@ -86,7 +87,7 @@
   <div class="orb o2" aria-hidden="true"></div>
   <div class="orb o3" aria-hidden="true"></div>
 
-  <button class="icon theme" title={$resolvedTheme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Toggle theme" on:click={toggleTheme}>
+  <button class="icon theme" title={$resolvedTheme === 'dark' ? $t('auth.lightTheme') : $t('auth.darkTheme')} aria-label={$t('auth.toggleTheme')} on:click={toggleTheme}>
     <Icon name={$resolvedTheme === 'dark' ? 'sun' : 'moon'} size={18} />
   </button>
 
@@ -95,14 +96,14 @@
       <span class="mark" aria-hidden="true"><span></span></span>
       <div>
         <h1>EchoFog</h1>
-        <p class="muted small">Messages, calls and proxy without a central server.</p>
+        <p class="muted small">{$t('auth.tagline')}</p>
       </div>
     </div>
 
     {#key $screen}
     <div class="step stack">
     {#if $screen === 'profiles'}
-      <h2>Choose a profile</h2>
+      <h2>{$t('auth.chooseProfile')}</h2>
       <div class="profiles">
         {#each $profiles as name}
           <div class="prof">
@@ -111,78 +112,77 @@
               <span class="grow">{name}</span>
               <Icon name="chevronRight" size={16} />
             </button>
-            <button class="icon del" title="Delete profile" aria-label="Delete profile {name}" on:click={() => del(name)} disabled={busy}><Icon name="trash" size={16} /></button>
+            <button class="icon del" title={$t('auth.deleteProfile')} aria-label={$t('auth.deleteProfileNamed', { name })} on:click={() => del(name)} disabled={busy}><Icon name="trash" size={16} /></button>
           </div>
         {/each}
       </div>
       <form class="row" on:submit|preventDefault={() => run(() => choose(newName))}>
-        <input class="grow" placeholder="New profile name" bind:value={newName} />
-        <button type="submit" class="primary" disabled={busy || !newName.trim()}>Create</button>
+        <input class="grow" placeholder={$t('auth.newProfileName')} bind:value={newName} />
+        <button type="submit" class="primary" disabled={busy || !newName.trim()}>{$t('common.create')}</button>
       </form>
 
     {:else if $screen === 'login'}
       <div class="who">
         <Avatar id={$profile} name={$profile} size={56} />
-        <h2>Welcome back, {$profile}</h2>
+        <h2>{$t('auth.welcomeBack', { name: $profile })}</h2>
       </div>
       <form class="stack" on:submit|preventDefault={() => run(() => login(password))}>
-        <label>Password<input type="password" bind:value={password} autofocus /></label>
-        <button class="primary big" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner light"></span> Unlocking…{:else}<Icon name="lockOpen" size={16} /> Unlock{/if}</button>
+        <label>{$t('auth.password')}<input type="password" bind:value={password} autofocus /></label>
+        <button class="primary big" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner light"></span> {$t('auth.unlocking')}{:else}<Icon name="lockOpen" size={16} /> {$t('auth.unlock')}{/if}</button>
       </form>
       <div class="row links">
-        <button class="ghost small" on:click={() => go('profiles')}>Other profile</button>
+        <button class="ghost small" on:click={() => go('profiles')}>{$t('auth.otherProfile')}</button>
         <span class="grow"></span>
-        <button class="ghost small" on:click={() => go('restore')}>Forgot password</button>
+        <button class="ghost small" on:click={() => go('restore')}>{$t('auth.forgotPassword')}</button>
       </div>
 
     {:else if $screen === 'create' || $screen === 'restore'}
-      <div class="seg" role="tablist" aria-label="New or existing identity">
-        <button role="tab" class:active={$screen === 'create'} aria-selected={$screen === 'create'} on:click={() => go('create')}>New identity</button>
-        <button role="tab" class:active={$screen === 'restore'} aria-selected={$screen === 'restore'} on:click={() => go('restore')}>Recovery phrase</button>
+      <div class="seg" role="tablist" aria-label={$t('auth.newOrExisting')}>
+        <button role="tab" class:active={$screen === 'create'} aria-selected={$screen === 'create'} on:click={() => go('create')}>{$t('auth.newIdentity')}</button>
+        <button role="tab" class:active={$screen === 'restore'} aria-selected={$screen === 'restore'} on:click={() => go('restore')}>{$t('auth.recoveryPhrase')}</button>
       </div>
     {/if}
 
     {#if $screen === 'create'}
-      <h2>Create an identity</h2>
+      <h2>{$t('auth.createTitle')}</h2>
       <p class="muted small">
-        The password encrypts your keys on this computer. It cannot be reset; the recovery phrase shown next is the only backup.
+        {$t('auth.createHint')}
       </p>
       <form class="stack" on:submit|preventDefault={submitCreate}>
-        <label>Password<input type="password" bind:value={password} autofocus /></label>
+        <label>{$t('auth.password')}<input type="password" bind:value={password} autofocus /></label>
         <div class="meter" aria-hidden="true"><span style="width:{Math.min(100, password.length * 8)}%" class:good={password.length >= 12} class:ok={password.length >= 8 && password.length < 12}></span></div>
-        <label>Repeat password<input type="password" bind:value={confirm} /></label>
-        <button class="primary big" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create'}</button>
+        <label>{$t('auth.repeatPassword')}<input type="password" bind:value={confirm} /></label>
+        <button class="primary big" type="submit" disabled={busy}>{busy ? $t('auth.creating') : $t('common.create')}</button>
       </form>
-      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> Back</button></div>{/if}
+      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> {$t('common.back')}</button></div>{/if}
 
     {:else if $screen === 'restore'}
-      <h2>Restore from recovery phrase</h2>
-      <p class="muted small">Type or paste the 12 or 24 words in their order. The same phrase restores the same identity and wallet as in the app or on a server node.</p>
+      <h2>{$t('auth.restoreTitle')}</h2>
+      <p class="muted small">{$t('auth.restoreHint')}</p>
       <form class="stack" on:submit|preventDefault={submitRestore}>
-        <label>Recovery phrase<textarea rows="3" bind:value={phrase} spellcheck="false" autocomplete="off" placeholder="word word word …" /></label>
+        <label>{$t('auth.recoveryPhrase')}<textarea rows="3" bind:value={phrase} spellcheck="false" autocomplete="off" placeholder={$t('auth.phrasePlaceholder')} /></label>
         {#if phraseCheck}<p class="small" class:error={phrase.trim().split(/\s+/).length >= 12} class:faint={phrase.trim().split(/\s+/).length < 12}>{phraseCheck}</p>
-        {:else if phraseOk}<p class="small ok">✓ The phrase is valid.</p>{/if}
+        {:else if phraseOk}<p class="small ok">{$t('auth.phraseValid')}</p>{/if}
         <details>
-          <summary class="small muted">The phrase was made with an extra passphrase</summary>
-          <label class="pp">Extra passphrase<input type="password" bind:value={passphrase} autocomplete="off" /></label>
+          <summary class="small muted">{$t('auth.hasPassphrase')}</summary>
+          <label class="pp">{$t('auth.extraPassphrase')}<input type="password" bind:value={passphrase} autocomplete="off" /></label>
         </details>
-        <label>New password<input type="password" bind:value={password} /></label>
-        <label>Repeat password<input type="password" bind:value={confirm} /></label>
-        <button class="primary big" type="submit" disabled={busy}>{busy ? 'Restoring…' : 'Restore'}</button>
+        <label>{$t('auth.newPassword')}<input type="password" bind:value={password} /></label>
+        <label>{$t('auth.repeatPassword')}<input type="password" bind:value={confirm} /></label>
+        <button class="primary big" type="submit" disabled={busy}>{busy ? $t('auth.restoring') : $t('auth.restore')}</button>
       </form>
-      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> Back</button></div>{/if}
+      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> {$t('common.back')}</button></div>{/if}
 
     {:else if $screen === 'phrase'}
-      <h2>Your recovery phrase</h2>
+      <h2>{$t('auth.phraseTitle')}</h2>
       <p class="muted small">
-        Write these words down in order and keep them offline. Anyone with them controls your identity and wallet.
-        They are shown only once.
+        {$t('auth.phraseHint')}
       </p>
       <ol class="words">
         {#each $recoveryPhrase.split(' ') as w, i}<li style="animation-delay:{i * 18}ms"><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}
       </ol>
-      <label class="row"><input type="checkbox" bind:checked={saved} /> I have written the phrase down</label>
-      <button class="primary big" disabled={!saved || busy} on:click={() => run(phraseSaved)}>Continue</button>
+      <label class="row"><input type="checkbox" bind:checked={saved} /> {$t('auth.phraseSaved')}</label>
+      <button class="primary big" disabled={!saved || busy} on:click={() => run(phraseSaved)}>{$t('auth.continue')}</button>
     {/if}
     </div>
     {/key}

@@ -1,6 +1,8 @@
+import { tr, intlLocale } from './i18n/index.js';
+
 export function bytes(n) {
-  if (!n) return '0 B';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const u = tr('unit.bytes').split(',');
+  if (!n) return '0 ' + u[0];
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return n.toFixed(i === 0 ? 0 : 1) + ' ' + u[i];
@@ -10,15 +12,15 @@ export function bytes(n) {
 export const usdPerGb = (pricePerMb) => (pricePerMb * 1024) / 1e6;
 export const microPerMb = (usd) => Math.max(0, Math.round(((Number(usd) || 0) * 1e6) / 1024));
 export function price(pricePerMb) {
-  if (!pricePerMb) return 'free';
+  if (!pricePerMb) return tr('common.free');
   const v = usdPerGb(pricePerMb);
-  return '$' + v.toFixed(v < 0.1 ? 3 : 2) + '/GB';
+  return '$' + v.toFixed(v < 0.1 ? 3 : 2) + tr('unit.perGb');
 }
 
 export function amount(v) {
   const n = Number(v);
   if (!isFinite(n)) return String(v);
-  return n.toLocaleString(undefined, { maximumFractionDigits: n < 1 ? 4 : 2 });
+  return n.toLocaleString(intlLocale(), { maximumFractionDigits: n < 1 ? 4 : 2 });
 }
 
 // ms accepts seconds or milliseconds.
@@ -32,14 +34,14 @@ export function toMs(ts) {
 }
 
 export function time(ts) {
-  return new Date(toMs(ts)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(toMs(ts)).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' });
 }
 
 export function when(ts) {
   const d = new Date(toMs(ts));
   return new Date().toDateString() === d.toDateString()
     ? time(ts)
-    : d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+    : d.toLocaleDateString(intlLocale(), { day: 'numeric', month: 'short' });
 }
 
 export function short(id, n = 6) {

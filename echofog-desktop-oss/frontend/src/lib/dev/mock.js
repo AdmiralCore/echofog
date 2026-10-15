@@ -382,6 +382,23 @@ const impl = {
   SetSupportPercent: (p) => { if (p < 0 || p > 20) throw new Error('support share must be between 0 and 20 percent'); supportMock.percent = p; return null; },
   GetOnRampURL: () => 'https://example.invalid/buy?address=UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ',
   PayForTraffic: () => new Promise((r) => setTimeout(() => r('c0ffee…mock'), 900)),
+  // the TON deposit for paid nodes: ?vault=none (no deposit yet), ?vault=closing, ?vault=ready (withdrawal can finish)
+  GetVault: () => ({ ...vaultMock, canFinish: vaultMock.closing && Date.now() / 1000 >= vaultMock.withdrawAt }),
+  VaultDeposit: (a) => new Promise((r, j) => setTimeout(() => {
+    const n = Number(a);
+    if (!(n > 0)) return j(new Error('enter an amount in TON'));
+    if (!vaultMock.deployed && n < Number(vaultMock.minFirstTon)) return j(new Error(`the first deposit must be at least ${vaultMock.minFirstTon} TON`));
+    Object.assign(vaultMock, { deployed: true, depositTon: String(+(Number(vaultMock.depositTon) + n - (vaultMock.deployed ? 0 : 0.008)).toFixed(4)) });
+    r('d3p0…mock');
+  }, 900)),
+  VaultRequestWithdraw: () => new Promise((r) => setTimeout(() => { Object.assign(vaultMock, { closing: true, withdrawAt: sec(Date.now()) + 24 * 3600 }); r('w1…mock'); }, 700)),
+  VaultCancelWithdraw: () => new Promise((r) => setTimeout(() => { Object.assign(vaultMock, { closing: false, withdrawAt: 0 }); r('c4…mock'); }, 700)),
+  VaultExecuteWithdraw: () => new Promise((r, j) => setTimeout(() => {
+    if (Date.now() / 1000 < vaultMock.withdrawAt) return j(new Error('the 24 hours are not over yet'));
+    Object.assign(vaultMock, { closing: false, withdrawAt: 0, depositTon: '0' });
+    r('e5…mock');
+  }, 700)),
+  GetVoucherEarnings: () => ({ owedTon: '0.0412', cashedTon: '1.2875', quoteNano: 9800000 }),
   GetTonTopUpLink: (a) => 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ' + (a ? `?amount=${Math.round(Number(a) * 1e9)}` : ''),
 };
 
@@ -422,7 +439,13 @@ const relayStatus = () => {
 };
 const sharingMock = { enabled: false, config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0, freePeers: [BOB] }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
 const supportMock = { available: true, percent: 5, pendingTon: '0', pendingUsdt: '0.35', address: 'UQ-project-mock' };
-const payMock = { active: true, canPay: true, pricePerGb: '0.05', remainingGb: 0.2, needsPayment: true, autoPay: false, chunkUsdt: '1', chunkGb: 20, dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: true, chunkTon: '0.311', pending: false, note: '', lastError: '' };
+const payMock = { active: true, canPay: true, pricePerGb: '0.05', remainingGb: 0.2, needsPayment: true, autoPay: false, chunkUsdt: '1', chunkGb: 20, dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: true, chunkTon: '0.311', pending: false, note: '', lastError: '', paysByVault: true };
+const vaultStage = new URLSearchParams(location.search).get('vault');
+const vaultMock = {
+  address: 'EQDvau1tMockAddressExample00000000000000000000000', deployed: vaultStage !== 'none', depositTon: vaultStage === 'none' ? '0' : '3.25',
+  closing: vaultStage === 'closing' || vaultStage === 'ready', withdrawAt: vaultStage === 'ready' ? sec(now) - 60 : vaultStage === 'closing' ? sec(now) + 17 * 3600 + 23 * 60 : 0,
+  canFinish: false, minFirstTon: '0.1',
+};
 const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
 
 // handy in the console: __emit('group:event', {kind: 'call', groupId: 'grp_launch', title: 'EchoFog Launch', from: '...', callId: 'x', coordinator: '...'})

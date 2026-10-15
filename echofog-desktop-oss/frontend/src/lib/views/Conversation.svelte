@@ -5,6 +5,7 @@
   import { chats, messages, chatError, chatNote, membersVersion, activeId, loadChats, send, deleteContact, leaveGroup } from '../stores/chats.js';
   import { isCallActive, startCall, stageExpanded, peerInfo } from '../stores/call.store.js';
   import { time, short } from '../format.js';
+  import { t, lang } from '../i18n/index.js';
   import Avatar from '../components/ui/Avatar.svelte';
   import Icon from '../components/ui/Icon.svelte';
 
@@ -87,7 +88,7 @@
       if (!c || !fresh) c = await App.StartGroupCall(conv.groupId);
       startCall({ alias: conv.name, callId: c.callId, coordinator: c.coordinator, chatId: conv.id }, video);
     } catch (err) {
-      chatError.set(errText(err, 'Could not start the call'));
+      chatError.set(errText(err, $t('chats.err.call')));
     }
   }
 
@@ -114,7 +115,7 @@
   }
 
   async function removeContact() {
-    if (!window.confirm(`Delete ${conv.name} from contacts? Message history stays on this computer.`)) return;
+    if (!window.confirm($t('chats.confirm.deleteContact', { name: conv.name }))) return;
     try { await deleteContact(conv); } catch (err) { infoError = errText(err); }
   }
 
@@ -132,20 +133,19 @@
   }
 
   function makeOwner(m) {
-    if (!window.confirm(`Make ${senderName(m.peerId)} the owner of ${conv.name}? You will become an admin and cannot undo this yourself.`)) return;
+    if (!window.confirm($t('chats.confirm.makeOwner', { name: senderName(m.peerId), group: conv.name }))) return;
     memberAction(m.peerId, async () => { await App.TransferGroupOwnership(conv.groupId, m.peerId); await loadChats(); });
   }
 
   async function deleteGroup() {
-    if (!window.confirm(`Delete ${conv.name} for everybody? Its messages are removed from every member's computer.`)) return;
+    if (!window.confirm($t('chats.confirm.deleteGroup', { name: conv.name }))) return;
     try { await App.DeleteGroup(conv.groupId); await loadChats(); activeId.set(''); } catch (err) { infoError = errText(err); }
   }
 
   const setRole = (m, role) => memberAction(m.peerId, () => App.SetGroupRole(conv.groupId, m.peerId, role));
 
   function kick(m, ban) {
-    const what = ban ? 'Ban' : 'Remove';
-    if (!window.confirm(`${what} ${senderName(m.peerId)} from the group?`)) return;
+    if (!window.confirm($t(ban ? 'chats.confirm.ban' : 'chats.confirm.remove', { name: senderName(m.peerId) }))) return;
     memberAction(m.peerId, () => App.RemoveGroupMember(conv.groupId, m.peerId, ban));
   }
 
@@ -157,7 +157,7 @@
   }
 
   async function leave() {
-    if (!window.confirm(`Leave ${conv.name}? You will not receive its messages any more.`)) return;
+    if (!window.confirm($t('chats.confirm.leave', { name: conv.name }))) return;
     try { await leaveGroup(conv); } catch (err) { infoError = errText(err); }
   }
 
@@ -172,9 +172,9 @@
   <div class="main">
     <header class:indent>
       {#if back}
-        <button class="icon" title="Back to chats" aria-label="Back to chats" on:click={() => dispatch('back')}><Icon name="arrowLeft" size={19} /></button>
+        <button class="icon" title={$t('chats.backToChats')} aria-label={$t('chats.backToChats')} on:click={() => dispatch('back')}><Icon name="arrowLeft" size={19} /></button>
       {/if}
-      <button class="who" on:click={toggleInfo} title="Chat info">
+      <button class="who" on:click={toggleInfo} title={$t('chats.chatInfo')}>
         <div class="av">
           <Avatar id={conv.peerId || conv.id} name={conv.name} size={40} />
           {#if conv.kind === 'direct'}<span class="presence" class:on={conv.online}></span>{/if}
@@ -182,24 +182,24 @@
         <div class="title">
           <h3>{conv.name}</h3>
           <p class="small" class:online={conv.kind === 'direct' && conv.online}>
-            {#if conv.kind === 'direct'}{conv.online ? 'online' : 'offline'}{:else}{conv.groupKind === 'channel' ? 'channel' : 'group'} · {conv.members} member{conv.members === 1 ? '' : 's'}{/if}
+            {#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{conv.groupKind === 'channel' ? $t('chats.channelLower') : $t('chats.groupLower')} · {$t('chats.members', { n: conv.members })}{/if}
           </p>
         </div>
       </button>
       {#if $isCallActive && $peerInfo.chatId === conv.id && !$stageExpanded}
-        <button class="primary small with-icon" on:click={() => stageExpanded.set(true)}><Icon name="phone" size={14} /> Show call</button>
+        <button class="primary small with-icon" on:click={() => stageExpanded.set(true)}><Icon name="phone" size={14} /> {$t('chats.showCall')}</button>
       {/if}
       <div class="tools">
-        <button class="icon" title="Call" aria-label="Call" on:click={() => call(false)} disabled={$isCallActive}><Icon name="phone" size={18} /></button>
-        <button class="icon" title="Video call" aria-label="Video call" on:click={() => call(true)} disabled={$isCallActive}><Icon name="video" size={19} /></button>
-        <button class="icon" class:on={info} title="Info" aria-label="Info" on:click={toggleInfo}><Icon name="info" size={19} /></button>
+        <button class="icon" title={$t('chats.call')} aria-label={$t('chats.call')} on:click={() => call(false)} disabled={$isCallActive}><Icon name="phone" size={18} /></button>
+        <button class="icon" title={$t('chats.videoCall')} aria-label={$t('chats.videoCall')} on:click={() => call(true)} disabled={$isCallActive}><Icon name="video" size={19} /></button>
+        <button class="icon" class:on={info} title={$t('chats.info')} aria-label={$t('chats.info')} on:click={toggleInfo}><Icon name="info" size={19} /></button>
       </div>
     </header>
 
     <div class="messages" bind:this={scroller}>
       {#each $messages as m, i (m.id)}
         {#if m.system}
-          <div class="system small">{m.text} · {time(m.ts)}</div>
+          <div class="system small">{m.text} · {time(m.ts, $lang)}</div>
         {:else}
           {@const first = !sameGroup($messages[i - 1], m)}
           {@const last = !sameGroup(m, $messages[i + 1])}
@@ -207,20 +207,20 @@
             {#if conv.kind === 'group' && !m.mine && first}<div class="sender small">{senderName(m.sender)}</div>{/if}
             <span class="text">{m.text}</span>
             <span class="meta">
-              {time(m.ts)}
+              {time(m.ts, $lang)}
               {#if m.mine}
-                {#if m.failed}<span class="st err" title="Not sent">!</span>
-                {:else if m.pending}<span class="st" title="Waiting for delivery"><Icon name="check" size={13} stroke={2.4} /></span>
-                {:else}<span class="st" title="Delivered"><Icon name="checks" size={14} stroke={2.2} /></span>{/if}
+                {#if m.failed}<span class="st err" title={$t('chats.st.notSent')}>!</span>
+                {:else if m.pending}<span class="st" title={$t('chats.st.waiting')}><Icon name="check" size={13} stroke={2.4} /></span>
+                {:else}<span class="st" title={$t('chats.st.delivered')}><Icon name="checks" size={14} stroke={2.2} /></span>{/if}
               {/if}
             </span>
           </div>
-          {#if m.failed}<div class="fail-note small">not sent</div>{:else if m.pending && last}<div class="fail-note small pend">waiting for delivery</div>{/if}
+          {#if m.failed}<div class="fail-note small">{$t('chats.note.notSent')}</div>{:else if m.pending && last}<div class="fail-note small pend">{$t('chats.note.waiting')}</div>{/if}
         {/if}
       {:else}
         <div class="empty">
           <Avatar id={conv.peerId || conv.id} name={conv.name} size={64} />
-          <p class="small muted">No messages yet. Say hi to {conv.name}.</p>
+          <p class="small muted">{$t('chats.sayHi', { name: conv.name })}</p>
         </div>
       {/each}
     </div>
@@ -229,12 +229,12 @@
     {#if $chatNote}<p class="muted small bar" transition:fly={{ y: 6, duration: 200 }}>{$chatNote}</p>{/if}
 
     {#if conv.readOnly}
-      <p class="small muted bar ro"><Icon name="lock" size={14} /> Only admins can write in this channel.</p>
+      <p class="small muted bar ro"><Icon name="lock" size={14} /> {$t('chats.readOnly')}</p>
     {:else}
       <form class="composer" on:submit|preventDefault={submit}>
         <div class="field">
-          <textarea bind:this={input} rows="1" placeholder="Write a message…" bind:value={text} on:keydown={keydown} on:input={grow} />
-          <button class="send" class:ready={text.trim()} type="submit" title="Send" aria-label="Send" data-silent disabled={sending || !text.trim()}><Icon name="send" size={17} stroke={2} /></button>
+          <textarea bind:this={input} rows="1" placeholder={$t('chats.writeMessage')} bind:value={text} on:keydown={keydown} on:input={grow} />
+          <button class="send" class:ready={text.trim()} type="submit" title={$t('chats.send')} aria-label={$t('chats.send')} data-silent disabled={sending || !text.trim()}><Icon name="send" size={17} stroke={2} /></button>
         </div>
       </form>
     {/if}
@@ -243,59 +243,59 @@
   {#if info}
     <aside class="info" transition:fly={{ x: 40, duration: 280, opacity: 0 }}>
       <div class="info-head">
-        <span class="eyebrow grow">{conv.kind === 'direct' ? 'Contact' : conv.groupKind === 'channel' ? 'Channel' : 'Group'}</span>
-        <button class="icon" aria-label="Close info" on:click={toggleInfo}><Icon name="close" size={17} /></button>
+        <span class="eyebrow grow">{conv.kind === 'direct' ? $t('chats.contact') : conv.groupKind === 'channel' ? $t('chats.channel') : $t('chats.group')}</span>
+        <button class="icon" aria-label={$t('chats.closeInfo')} on:click={toggleInfo}><Icon name="close" size={17} /></button>
       </div>
       <div class="profile">
         <Avatar id={conv.peerId || conv.id} name={conv.name} size={76} />
         <h2>{conv.name}</h2>
-        <p class="small muted">{#if conv.kind === 'direct'}{conv.online ? 'online' : 'offline'}{:else}{conv.members} member{conv.members === 1 ? '' : 's'}{#if conv.myRole} · you are {conv.myRole}{/if}{/if}</p>
+        <p class="small muted">{#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{$t('chats.members', { n: conv.members })}{#if conv.myRole} · {$t('chats.youAre', { role: $t('chats.role.' + conv.myRole) })}{/if}{/if}</p>
       </div>
 
       {#if conv.kind === 'direct'}
         <div class="block">
-          <div class="eyebrow">Key</div>
+          <div class="eyebrow">{$t('chats.key')}</div>
           <div class="copybox">
-            <span class="mono grow">{conv.pubKey || 'not known yet'}</span>
-            <button class="icon" title="Copy" on:click={() => doCopy('key', conv.pubKey)} disabled={!conv.pubKey}><Icon name={copied === 'key' ? 'check' : 'copy'} size={16} /></button>
+            <span class="mono grow">{conv.pubKey || $t('chats.keyUnknown')}</span>
+            <button class="icon" title={$t('common.copy')} on:click={() => doCopy('key', conv.pubKey)} disabled={!conv.pubKey}><Icon name={copied === 'key' ? 'check' : 'copy'} size={16} /></button>
           </div>
         </div>
-        <button class="danger with-icon wide" on:click={removeContact}><Icon name="trash" size={16} /> Delete contact</button>
+        <button class="danger with-icon wide" on:click={removeContact}><Icon name="trash" size={16} /> {$t('chats.deleteContact')}</button>
       {:else}
         <div class="block">
-          <div class="eyebrow">Invite</div>
+          <div class="eyebrow">{$t('chats.invite')}</div>
           <div class="copybox">
             <span class="mono grow clip">{invite}</span>
-            <button class="icon" title="Copy invite" on:click={() => doCopy('invite', invite)} disabled={!invite}><Icon name={copied === 'invite' ? 'check' : 'copy'} size={16} /></button>
+            <button class="icon" title={$t('chats.copyInvite')} on:click={() => doCopy('invite', invite)} disabled={!invite}><Icon name={copied === 'invite' ? 'check' : 'copy'} size={16} /></button>
           </div>
-          <p class="small faint">Share it with people you want in the group.</p>
+          <p class="small faint">{$t('chats.inviteHint')}</p>
         </div>
 
         <div class="block">
-          <div class="eyebrow">Members · {members.length}</div>
+          <div class="eyebrow">{$t('chats.membersCount', { n: members.length })}</div>
           <div class="members">
             {#each members as m (m.peerId)}
               <div class="member">
                 <div class="row">
-                  <Avatar id={m.peerId} name={m.isMe ? 'you' : senderName(m.peerId)} size={30} />
-                  <span class="grow nm">{m.isMe ? 'you' : senderName(m.peerId)}</span>
+                  <Avatar id={m.peerId} name={m.isMe ? $t('common.you') : senderName(m.peerId)} size={30} />
+                  <span class="grow nm">{m.isMe ? $t('common.you') : senderName(m.peerId)}</span>
                   {#if canAssign(m)}
                     <select value={m.role} disabled={busyMember === m.peerId} on:change={(e) => setRole(m, e.target.value)}>
-                      {#each assignable(m) as r}<option value={r}>{r}</option>{/each}
-                      {#if !ASSIGNABLE.includes(m.role)}<option value={m.role}>{m.role}</option>{/if}
+                      {#each assignable(m) as r}<option value={r}>{$t('chats.role.' + r)}</option>{/each}
+                      {#if !ASSIGNABLE.includes(m.role)}<option value={m.role}>{$t('chats.role.' + m.role)}</option>{/if}
                     </select>
                   {:else}
-                    <span class="chip">{m.role}</span>
+                    <span class="chip">{$t('chats.role.' + m.role)}</span>
                   {/if}
                 </div>
                 {#if (conv.myRole === 'owner' && !m.isMe) || canModerate(m)}
                   <div class="row m-acts">
                     {#if conv.myRole === 'owner' && !m.isMe}
-                      <button class="ghost small" disabled={busyMember === m.peerId} on:click={() => makeOwner(m)}>Make owner</button>
+                      <button class="ghost small" disabled={busyMember === m.peerId} on:click={() => makeOwner(m)}>{$t('chats.makeOwner')}</button>
                     {/if}
                     {#if canModerate(m)}
-                      <button class="ghost small" disabled={busyMember === m.peerId} on:click={() => kick(m, false)}>Remove</button>
-                      {#if myRank >= RANK.admin}<button class="ghost small danger" disabled={busyMember === m.peerId} on:click={() => kick(m, true)}>Ban</button>{/if}
+                      <button class="ghost small" disabled={busyMember === m.peerId} on:click={() => kick(m, false)}>{$t('common.remove')}</button>
+                      {#if myRank >= RANK.admin}<button class="ghost small danger" disabled={busyMember === m.peerId} on:click={() => kick(m, true)}>{$t('chats.ban')}</button>{/if}
                     {/if}
                   </div>
                 {/if}
@@ -307,17 +307,17 @@
         {#if canManage}
           <div class="block">
             <form class="row" on:submit|preventDefault={addMember}>
-              <input class="grow" placeholder="Add a contact by key" bind:value={newMemberKey} spellcheck="false" />
-              <button type="submit" disabled={!newMemberKey.trim() || busyMember === 'add'}>Add</button>
+              <input class="grow" placeholder={$t('chats.addByKey')} bind:value={newMemberKey} spellcheck="false" />
+              <button type="submit" disabled={!newMemberKey.trim() || busyMember === 'add'}>{$t('common.add')}</button>
             </form>
-            <p class="small faint">A person you add sees the group at once only if they have you as a contact; otherwise send them the invite.</p>
+            <p class="small faint">{$t('chats.addHint')}</p>
           </div>
         {/if}
         {#if conv.myRole !== 'owner'}
-          <button class="danger with-icon wide" on:click={leave}><Icon name="logout" size={16} /> Leave group</button>
+          <button class="danger with-icon wide" on:click={leave}><Icon name="logout" size={16} /> {$t('chats.leaveGroup')}</button>
         {:else}
-          <button class="danger with-icon wide" on:click={deleteGroup}><Icon name="trash" size={16} /> Delete group for everyone</button>
-          <p class="small faint">To leave instead, make another member the owner first.</p>
+          <button class="danger with-icon wide" on:click={deleteGroup}><Icon name="trash" size={16} /> {$t('chats.deleteGroup')}</button>
+          <p class="small faint">{$t('chats.ownerLeaveHint')}</p>
         {/if}
       {/if}
       {#if infoError}<p class="error small">{infoError}</p>{/if}

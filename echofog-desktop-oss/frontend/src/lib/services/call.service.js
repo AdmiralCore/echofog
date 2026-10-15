@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { on as EventsOn } from '../api.js';
 import { setSink } from '../sounds.js';
+import { tr } from '../i18n/index.js';
 
 const PREF = 'echofog.devices';
 function loadPrefs() {
@@ -97,12 +98,12 @@ class CallService {
       this.pc = pc;
       pc.ontrack = (ev) => this.onTrack(ev);
 
-      if (!app().JoinRoom) throw new Error('Calls are not available in this build');
+      if (!app().JoinRoom) throw new Error(tr('call.err.unavailable'));
       const offer = await app().JoinRoom(callId, coordPeerId);
       await pc.setRemoteDescription({ type: 'offer', sdp: offer });
 
       const t = pc.getTransceivers();
-      if (t.length < 3 + AUDIO_SLOTS + VIDEO_SLOTS) throw new Error('Unexpected media bridge layout');
+      if (t.length < 3 + AUDIO_SLOTS + VIDEO_SLOTS) throw new Error(tr('call.err.bridge'));
       this.tx = { mic: t[LOCAL.mic], camera: t[LOCAL.camera], screen: t[LOCAL.screen] };
       for (const role of ['mic', 'camera', 'screen']) this.tx[role].direction = 'sendonly';
       this.preferH264(this.tx.camera);
@@ -166,7 +167,7 @@ class CallService {
       callState.update((s) => ({ ...s, speaking: { ...s.speaking, [speaker]: speaking || undefined } }));
     });
     EventsOn('call:kicked', () => {
-      this.leaveCall().then(() => this.notify('You were removed from the call after reports from other members.'));
+      this.leaveCall().then(() => this.notify(tr('call.notice.removed')));
     });
   }
 
@@ -259,7 +260,7 @@ class CallService {
     if (typeof ctx.setSinkId === 'function') {
       try { await ctx.setSinkId(deviceId || ''); } catch (e) { this.notify(String(e?.message || e)); }
     } else {
-      this.notify('This system cannot choose the output device');
+      this.notify(tr('call.notice.noSink'));
     }
     setSink(deviceId);
   }
@@ -351,7 +352,7 @@ class CallService {
     const s = get(callState);
     const track = this.mic?.getAudioTracks()[0];
     if (!track) {
-      this.notify('No microphone available');
+      this.notify(tr('call.notice.noMic'));
       return;
     }
     const muted = !s.isMicMuted;
@@ -412,9 +413,9 @@ class CallService {
       callState.update((s) => ({
         ...s,
         devices: {
-          mics: list.filter((d) => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
-          cams: list.filter((d) => d.kind === 'videoinput').map((d, i) => ({ id: d.deviceId, label: d.label || `Camera ${i + 1}` })),
-          outs: list.filter((d) => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, label: d.label || `Speakers ${i + 1}` })),
+          mics: list.filter((d) => d.kind === 'audioinput').map((d, i) => ({ id: d.deviceId, label: d.label || tr('call.dev.mic', { n: i + 1 }) })),
+          cams: list.filter((d) => d.kind === 'videoinput').map((d, i) => ({ id: d.deviceId, label: d.label || tr('call.dev.cam', { n: i + 1 }) })),
+          outs: list.filter((d) => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, label: d.label || tr('call.dev.out', { n: i + 1 }) })),
         },
       }));
     } catch (_) { /* no device access */ }
@@ -526,7 +527,7 @@ class CallService {
       });
     } catch (err) {
       await app().StopScreenShare?.(streamId);
-      callState.update((c) => ({ ...c, streamError: 'Camera is not available' }));
+      callState.update((c) => ({ ...c, streamError: tr('call.err.camera') }));
       return;
     }
     const track = this.camera.getVideoTracks()[0];
@@ -554,7 +555,7 @@ class CallService {
     const s = get(callState);
     if (!s.watching.includes(streamId)) {
       if (s.watching.length >= VIDEO_SLOTS) {
-        this.notify(`You can watch up to ${VIDEO_SLOTS} streams at once`);
+        this.notify(tr('call.notice.maxStreams', { n: VIDEO_SLOTS }));
         return;
       }
       try {
@@ -615,7 +616,7 @@ class CallService {
     this.applyAllVolumes();
     try {
       await app().ReportCallMember?.(peer, reason);
-      this.notify('Report sent. They are muted for you, and the room removes them if others agree.');
+      this.notify(tr('call.notice.reported'));
     } catch (err) {
       this.notify(String(err?.message || err));
     }
@@ -624,7 +625,7 @@ class CallService {
   async switchRelay(streamId) {
     try {
       await app().RequestRelayChange?.(streamId);
-      this.notify('Switching to another relay…');
+      this.notify(tr('call.notice.switching'));
     } catch (err) {
       this.notify(String(err?.message || err));
     }

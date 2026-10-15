@@ -1,7 +1,8 @@
 name: build
 
 # Builds the release binaries: the headless node for Linux and Windows, and the desktop app for
-# both. Runs on pushes to main, on version tags, and on demand. Artifacts are attached to the run.
+# both. Runs on pushes to main, on version tags, and on demand. Artifacts are attached to the run;
+# a version tag (v1.2.3) also publishes a draft GitHub release with a SHA256SUMS file.
 on:
   push:
     branches: [main]
@@ -23,13 +24,14 @@ jobs:
       - name: Build
         run: |
           set -eux
+          VERSION="${GITHUB_REF_NAME#v}"; [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0-${GITHUB_SHA::7}"
           mkdir -p out
           for target in linux/amd64 windows/amd64; do
             os=${target%/*}; arch=${target#*/}
             ext=""; [ "$os" = windows ] && ext=".exe"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -trimpath -ldflags "-s -w" \
-              -o "out/echofog-node-$os-$arch$ext" ./echofog-core-oss/cmd/echofog-node
+              go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+              -o "out/echofog-node-$VERSION-$os-$arch$ext" ./echofog-core-oss/cmd/echofog-node
           done
           ls -la out
       - uses: actions/upload-artifact@v4
@@ -78,16 +80,46 @@ jobs:
           go build -o "$out" github.com/wailsapp/wails/v2/cmd/wails
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # Wails builds the frontend itself (npm install + npm run build, from wails.json). It has to:
+      # frontend/dist is not in git and main.go embeds it, so never pass -s (skip frontend) here.
       - name: Wails build
         shell: bash
         working-directory: echofog-desktop-oss
         run: |
           set -eux
+          VERSION="${GITHUB_REF_NAME#v}"; [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0-${GITHUB_SHA::7}"
+          # the version shown in the Windows file properties
+          node -e 'const fs=require("fs"),j=JSON.parse(fs.readFileSync("wails.json"));j.info.productVersion=process.argv[1];fs.writeFileSync("wails.json",JSON.stringify(j,null,2))' "$VERSION"
           tags=""
           [ "$RUNNER_OS" = "Linux" ] && tags="-tags webkit2_41"
-          wails build -s -trimpath $tags
+          wails build -clean -trimpath -ldflags "-s -w" $tags
+          test -s frontend/dist/index.html
+          os="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"
+          cd build/bin
+          for f in EchoFog*; do mv "$f" "${f/EchoFog/EchoFog-$VERSION-$os-amd64}"; done
+          ls -la
 
       - uses: actions/upload-artifact@v4
         with:
           name: echofog-desktop-${{ runner.os }}
           path: echofog-desktop-oss/build/bin/*
+
+  release:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: [node, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * | tee SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*

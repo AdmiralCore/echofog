@@ -7,9 +7,10 @@
   import { App, errText } from '../api.js';
   import Icon from './ui/Icon.svelte';
   import { PRESET_SITES, MAX_SELECTED, siteTarget, hostOf, loadCustom, saveCustom } from '../sites.js';
+  import { t } from '../i18n/index.js';
 
   export let exit = 'auto'; // peer id, 'auto', or '' for the direct check only
-  export let exitLabel = 'the automatic exit';
+  export let exitLabel = ''; // defaults to "the automatic exit"
 
   const dispatch = createEventDispatcher();
 
@@ -72,11 +73,11 @@
     }, 400);
   }
 
-  function toggle(t) {
+  function toggle(tile) {
     error = '';
-    if (selected.has(t.target)) selected.delete(t.target);
-    else if (selected.size >= MAX_SELECTED) { error = `At most ${MAX_SELECTED} sites can be selected.`; return; }
-    else selected.add(t.target);
+    if (selected.has(tile.target)) selected.delete(tile.target);
+    else if (selected.size >= MAX_SELECTED) { error = $t('proxy.sites.tooMany', { n: MAX_SELECTED }); return; }
+    else selected.add(tile.target);
     selected = selected;
     persistSelection();
   }
@@ -84,8 +85,8 @@
   function add() {
     addError = '';
     const target = siteTarget(adding);
-    if (!target) { addError = 'Type a site such as example.com'; return; }
-    if (tiles.some((t) => t.target === target)) { addError = 'This site is already in the list'; return; }
+    if (!target) { addError = $t('proxy.sites.typeSite'); return; }
+    if (tiles.some((t) => t.target === target)) { addError = $t('proxy.sites.already'); return; }
     custom = [...custom, { host: hostOf(target) }];
     saveCustom(custom);
     adding = '';
@@ -101,7 +102,7 @@
   }
 
   async function check() {
-    if (!selected.size) { error = 'Select the sites to check.'; return; }
+    if (!selected.size) { error = $t('proxy.sites.selectSome'); return; }
     checking = true;
     error = '';
     const targets = [...selected];
@@ -112,7 +113,7 @@
       for (const r of list) results[r.host] = r;
       results = results;
     } catch (err) {
-      error = errText(err, 'The check failed');
+      error = errText(err, $t('proxy.sites.failed'));
       for (const t of targets) if (results[t]?.pending) delete results[t];
       results = results;
     } finally {
@@ -133,43 +134,43 @@
 <div class="layer" use:portal>
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="backdrop" on:click={close}></div>
-  <div class="dialog" role="dialog" aria-label="Check sites">
+  <div class="dialog" role="dialog" aria-label={$t('proxy.checkSites')}>
     <header>
       <div class="grow">
-        <h2>Check sites</h2>
+        <h2>{$t('proxy.checkSites')}</h2>
         <p class="small muted">
-          Each selected site is opened for real (TLS with its certificate) directly and {exit === '' ? '' : `through ${exitLabel}`}.
-          The selected sites also decide which exit the automatic choice picks.
+          {exit === '' ? $t('proxy.sites.introDirect') : $t('proxy.sites.intro', { label: exitLabel || $t('proxy.sites.autoExit') })}
+          {$t('proxy.sites.introRank')}
         </p>
       </div>
-      <button class="icon" aria-label="Close" on:click={close}><Icon name="close" size={18} /></button>
+      <button class="icon" aria-label={$t('common.close')} on:click={close}><Icon name="close" size={18} /></button>
     </header>
 
     <div class="grid">
-      {#each tiles as t (t.target)}
-        {@const r = results[t.target]}
-        <div class="tile" class:sel={selected.has(t.target)}>
-          <button class="pick" aria-pressed={selected.has(t.target)} title={selected.has(t.target) ? 'Selected: checked and used for the automatic choice' : 'Select'} on:click={() => toggle(t)} data-silent>
-            <span class="mark" style="--c:{t.color}">{t.mark}</span>
-            <span class="name">{t.name}</span>
-            <span class="box">{#if selected.has(t.target)}<Icon name="check" size={12} stroke={3} />{/if}</span>
+      {#each tiles as tile (tile.target)}
+        {@const r = results[tile.target]}
+        <div class="tile" class:sel={selected.has(tile.target)}>
+          <button class="pick" aria-pressed={selected.has(tile.target)} title={selected.has(tile.target) ? $t('proxy.sites.selectedTitle') : $t('proxy.sites.select')} on:click={() => toggle(tile)} data-silent>
+            <span class="mark" style="--c:{tile.color}">{tile.mark}</span>
+            <span class="name">{tile.name}</span>
+            <span class="box">{#if selected.has(tile.target)}<Icon name="check" size={12} stroke={3} />{/if}</span>
           </button>
-          {#if !t.preset}
-            <button class="remove" title="Remove" aria-label="Remove {t.name}" on:click={() => remove(t)} data-silent><Icon name="close" size={12} stroke={2.4} /></button>
+          {#if !tile.preset}
+            <button class="remove" title={$t('common.remove')} aria-label={$t('proxy.sites.removeSite', { name: tile.name })} on:click={() => remove(tile)} data-silent><Icon name="close" size={12} stroke={2.4} /></button>
           {/if}
           <div class="lines">
             <div class="line">
-              <span class="faint">Direct</span>
-              {#if r?.pending}<span class="spin" />{:else if r?.direct}<span class="st" class:good={r.direct.ok} class:bad={!r.direct.ok} title={r.direct.reason || ''}>{r.direct.ok ? `${r.direct.ms} ms` : 'blocked'}</span>{:else}<span class="faint">—</span>{/if}
+              <span class="faint">{$t('proxy.sites.direct')}</span>
+              {#if r?.pending}<span class="spin" />{:else if r?.direct}<span class="st" class:good={r.direct.ok} class:bad={!r.direct.ok} title={r.direct.reason || ''}>{r.direct.ok ? $t('proxy.pingMs', { n: r.direct.ms }) : $t('proxy.sites.blocked')}</span>{:else}<span class="faint">—</span>{/if}
             </div>
             {#if exit !== ''}
               <div class="line">
-                <span class="faint">Proxy</span>
-                {#if r?.pending}<span class="spin" />{:else if r?.exit}<span class="st" class:good={r.exit.ok} class:bad={!r.exit.ok} title={r.exit.reason || ''}>{r.exit.ok ? `${r.exit.ms} ms` : 'fails'}</span>{:else}<span class="faint">—</span>{/if}
+                <span class="faint">{$t('proxy.sites.proxy')}</span>
+                {#if r?.pending}<span class="spin" />{:else if r?.exit}<span class="st" class:good={r.exit.ok} class:bad={!r.exit.ok} title={r.exit.reason || ''}>{r.exit.ok ? $t('proxy.pingMs', { n: r.exit.ms }) : $t('proxy.sites.fails')}</span>{:else}<span class="faint">—</span>{/if}
               </div>
             {/if}
             {#if r && !r.pending && (!r.direct?.ok || (r.exit && !r.exit.ok))}
-              <p class="why">{(!r.direct?.ok && r.direct?.reason) || ''}{r.exit && !r.exit.ok ? `${!r.direct?.ok ? '; ' : ''}proxy: ${r.exit.reason}` : ''}</p>
+              <p class="why">{(!r.direct?.ok && r.direct?.reason) || ''}{r.exit && !r.exit.ok ? `${!r.direct?.ok ? '; ' : ''}${$t('proxy.sites.proxyReason', { reason: r.exit.reason })}` : ''}</p>
             {/if}
           </div>
         </div>
@@ -177,17 +178,17 @@
     </div>
 
     <form class="add row" on:submit|preventDefault={add}>
-      <input class="grow" placeholder="Add a site: example.com" bind:value={adding} spellcheck="false" />
-      <button type="submit" disabled={!adding.trim()}><Icon name="plus" size={16} /> Add</button>
+      <input class="grow" placeholder={$t('proxy.sites.addPlaceholder')} bind:value={adding} spellcheck="false" />
+      <button type="submit" disabled={!adding.trim()}><Icon name="plus" size={16} /> {$t('common.add')}</button>
     </form>
     {#if addError}<p class="small error">{addError}</p>{/if}
 
     <footer class="row">
       <span class="small muted grow">
-        {selected.size} selected{#if done && !checking}{' · '}direct {openDirect} open{#if exit !== ''}, through the proxy {openExit} open{/if}{/if}
+        {$t('proxy.sites.selected', { n: selected.size })}{#if done && !checking}{' · '}{$t('proxy.sites.directOpen', { n: openDirect })}{#if exit !== ''}, {$t('proxy.sites.proxyOpen', { n: openExit })}{/if}{/if}
       </span>
       {#if error}<span class="small error">{error}</span>{/if}
-      <button class="primary" on:click={check} disabled={checking || !selected.size}>{checking ? 'Checking…' : 'Check now'}</button>
+      <button class="primary" on:click={check} disabled={checking || !selected.size}>{checking ? $t('proxy.sites.checking') : $t('proxy.sites.checkNow')}</button>
     </footer>
   </div>
 </div>

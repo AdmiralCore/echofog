@@ -1,20 +1,22 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { App, on, errText, copy } from '../api.js';
-  import { bytes, price, usdPerGb, microPerMb, when, short } from '../format.js';
+  import { bytes, price, usdPerGb, microPerMb, when, short, amount } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
   import PeerList from '../components/PeerList.svelte';
   import RelayCard from '../components/RelayCard.svelte';
   import { parseRelayLink } from '../contact.js';
+  import { t, lang } from '../i18n/index.js';
 
   let vpn = { running: false, listenAddr: '', relayPeerId: '', bytesRx: 0, bytesTx: 0, activeConns: 0, tunnelReady: false, tunnelNotice: '', wholeComputer: false, wholeComputerSupported: false, wholeComputerError: '' };
   let exits = [];
   let selected = 'auto';
-  let pay = { active: false, canPay: false, pricePerGb: '0', remainingGb: 0, needsPayment: false, autoPay: false, chunkUsdt: '1', dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: false, chunkTon: '', pending: false, note: '', lastError: '' };
+  let pay = { active: false, canPay: false, pricePerGb: '0', remainingGb: 0, needsPayment: false, autoPay: false, chunkUsdt: '1', dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: false, chunkTon: '', pending: false, note: '', lastError: '', paysByVault: false };
   let payForm = { chunk: '1', cap: '5' };
   let payTouched = false;
   let sharing = { enabled: false, config: { pricePerMb: 0, freeTestKb: 512, uploadKbps: 0, freePeers: [] }, accepted: 0, refused: 0, bytes: 0, lastPublish: 0, lastError: '', paymentsReady: false, earnedUsdt: '0' };
+  let vouchers = { owedTon: '0', cashedTon: '0', quoteNano: 0 };
   let form = { price: '0', freeKb: 512, mbps: 0 };
   let mode = 'auto'; // 'auto' | 'manual' | 'direct'
   let direct = ''; // 'direct': a relay link, host:port/<peer id> or a peer ID
@@ -45,6 +47,7 @@
     try {
       vpn = await App.GetVPNStatus();
       sharing = await App.GetSharingStatus();
+      try { vouchers = await App.GetVoucherEarnings(); } catch (_) { /* older core */ }
       if (!sharing.enabled && sharing.config?.pricePerMb && form.price === '0') {
         form = { ...form, price: usdPerGb(sharing.config.pricePerMb).toFixed(3), freeKb: sharing.config.freeTestKb };
       }
@@ -81,16 +84,16 @@
   const probe = (id) => act('probe:' + id, async () => {
     const r = await App.ProbeExitNode(id);
     notice = r.paymentRequired
-      ? 'Reachable. This exit asks for payment after its free test traffic.'
+      ? $t('proxy.probe.paid')
       : r.ok
-        ? `Reachable: ${r.domainsOk} of ${r.domainsTried} test sites opened, about ${(r.measuredKbps / 1000).toFixed(1)} Mbit/s.`
-        : 'The exit did not respond.';
+        ? $t('proxy.probe.ok', { ok: r.domainsOk, n: r.domainsTried, mbps: (r.measuredKbps / 1000).toFixed(1) })
+        : $t('proxy.probe.fail');
     await loadExits(false);
   });
 
   const payNow = (amount) => act('pay', async () => {
     await App.PayExit(String(amount));
-    notice = 'Payment sent. It is credited once the network confirms it, usually within half a minute.';
+    notice = $t('proxy.pay.sent');
     await refreshPay();
   });
 
@@ -130,7 +133,7 @@
   });
 
   const speed = (e) => e.measuredKbps || e.claimedKbps || 0;
-  const mbit = (e) => (speed(e) / 1000).toFixed(speed(e) < 10000 ? 1 : 0) + ' Mbit/s';
+  $: mbit = (e) => (speed(e) / 1000).toFixed(speed(e) < 10000 ? 1 : 0) + ' ' + $t('unit.mbps');
   const SORTS = {
     best: (a, b) => (b.score || 0) - (a.score || 0),
     ping: (a, b) => (a.latencyMs || 1e9) - (b.latencyMs || 1e9),
@@ -144,11 +147,11 @@
   $: blocked = !vpn.running && ((mode === 'manual' && !selected) || (mode === 'direct' && !directId));
   $: if (mode === 'manual' && selected === 'auto' && sorted.length) selected = sorted[0].peerId;
   $: checkExit = vpn.running ? (vpn.relayPeerId || 'auto') : mode === 'auto' ? 'auto' : mode === 'direct' ? directId || 'auto' : selected;
-  $: checkLabel = vpn.running ? 'the exit you are connected to' : mode === 'auto' || (mode === 'direct' && !directId) ? 'the exit the automatic choice would pick' : 'exit ' + short(checkExit);
+  $: checkLabel = vpn.running ? $t('proxy.check.connected') : mode === 'auto' || (mode === 'direct' && !directId) ? $t('proxy.check.auto') : $t('proxy.check.exit', { id: short(checkExit) });
 
   const pingClass = (ms) => (!ms ? '' : ms < 80 ? 'good' : ms < 200 ? 'mid' : 'bad');
-  const pingText = (ms) => (ms ? Math.round(ms) + ' ms' : 'ping ?');
-  const sitesText = (e) => (e.domainsTried ? e.domainsOk + '/' + e.domainsTried + ' sites' : 'not checked');
+  $: pingText = (ms) => (ms ? $t('proxy.pingMs', { n: Math.round(ms) }) : $t('proxy.pingUnknown'));
+  $: sitesText = (e) => (e.domainsTried ? $t('proxy.sitesOk', { ok: e.domainsOk, n: e.domainsTried }) : $t('proxy.notChecked'));
 
   async function copyAddr() {
     copied = await copy(vpn.listenAddr);
@@ -179,10 +182,10 @@
   <div class="stack">
     <div class="page-head">
       <div class="grow">
-        <h1>Proxy</h1>
-        <p class="muted small">Go online through another person's connection, or sell yours.</p>
+        <h1>{$t('proxy.title')}</h1>
+        <p class="muted small">{$t('proxy.subtitle')}</p>
       </div>
-      <button class="with-icon" on:click={() => (checkingSites = true)} title="Check which sites open"><Icon name="globe" size={16} /> Check sites</button>
+      <button class="with-icon" on:click={() => (checkingSites = true)} title={$t('proxy.checkSitesTitle')}><Icon name="globe" size={16} /> {$t('proxy.checkSites')}</button>
     </div>
     {#if error}<p class="error small">{error}</p>{/if}
     {#if notice}<p class="ok small">{notice}</p>{/if}
@@ -191,97 +194,97 @@
       <div class="conn-top">
         <button class="power" class:on={vpn.running} on:click={connect}
           disabled={busy === 'connect' || blocked}
-          title={vpn.running ? 'Disconnect' : 'Connect'} aria-label={vpn.running ? 'Disconnect' : 'Connect'}>
+          title={vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')} aria-label={vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')}>
           {#if busy === 'connect'}<span class="spinner big-spin"></span>{:else}<Icon name="zap" size={26} stroke={2} />{/if}
         </button>
         <div class="grow">
-          <h2>{vpn.running ? (vpn.tunnelReady ? 'Connected' : 'Connecting…') : 'Not connected'}</h2>
+          <h2>{vpn.running ? (vpn.tunnelReady ? $t('proxy.connected') : $t('proxy.connecting')) : $t('proxy.notConnected')}</h2>
           <p class="small muted">
             {#if vpn.running}
-              Through {connectedExit ? short(connectedExit.peerId) : short(vpn.relayPeerId)}{connectedExit?.latencyMs ? ' · ' + pingText(connectedExit.latencyMs) : ''}.
-              {vpn.tunnelReady ? '' : vpn.tunnelNotice || 'Waiting for the tunnel…'}
+              {$t('proxy.through', { id: connectedExit ? short(connectedExit.peerId) : short(vpn.relayPeerId) })}{connectedExit?.latencyMs ? ' · ' + pingText(connectedExit.latencyMs) : ''}.
+              {vpn.tunnelReady ? '' : vpn.tunnelNotice || $t('proxy.waitingTunnel')}
             {:else}
-              Your traffic leaves through another person's computer.
+              {$t('proxy.idleHint')}
             {/if}
           </p>
         </div>
         <button class={vpn.running ? 'danger' : 'primary'} on:click={connect} disabled={busy === 'connect' || blocked}>
-          {busy === 'connect' ? 'Working…' : vpn.running ? 'Disconnect' : 'Connect'}
+          {busy === 'connect' ? $t('common.working') : vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')}
         </button>
       </div>
 
       {#if vpn.running}
         <div class="stats">
-          <div class="stat"><span class="eyebrow">SOCKS5 for apps</span>
-            <span class="row"><span class="mono">{vpn.listenAddr}</span><button class="icon tiny" title="Copy" on:click={copyAddr}><Icon name={copied ? 'check' : 'copy'} size={14} /></button></span></div>
-          <div class="stat"><span class="eyebrow">Received</span><span class="num"><Icon name="download" size={14} /> {bytes(vpn.bytesRx)}</span></div>
-          <div class="stat"><span class="eyebrow">Sent</span><span class="num"><Icon name="upload" size={14} /> {bytes(vpn.bytesTx)}</span></div>
+          <div class="stat"><span class="eyebrow">{$t('proxy.socks')}</span>
+            <span class="row"><span class="mono">{vpn.listenAddr}</span><button class="icon tiny" title={$t('common.copy')} on:click={copyAddr}><Icon name={copied ? 'check' : 'copy'} size={14} /></button></span></div>
+          <div class="stat"><span class="eyebrow">{$t('proxy.received')}</span><span class="num"><Icon name="download" size={14} /> {bytes(vpn.bytesRx, $lang)}</span></div>
+          <div class="stat"><span class="eyebrow">{$t('proxy.sent')}</span><span class="num"><Icon name="upload" size={14} /> {bytes(vpn.bytesTx, $lang)}</span></div>
         </div>
         {#if vpn.wholeComputerSupported}
           <label class="row opt">
-            <span class="grow">Route the whole computer through the exit<span class="small muted block">Asks for administrator rights.</span></span>
+            <span class="grow">{$t('proxy.whole')}<span class="small muted block">{$t('proxy.wholeAdmin')}</span></span>
             <input type="checkbox" class="switch" checked={vpn.wholeComputer} disabled={busy === 'whole'} on:change={wholeComputer} />
           </label>
           {#if vpn.wholeComputerError}<p class="small error">{vpn.wholeComputerError}</p>{/if}
         {/if}
       {:else}
         <div class="seg" role="tablist">
-          <button role="tab" class:active={mode === 'auto'} aria-selected={mode === 'auto'} on:click={() => (mode = 'auto')}>Automatic</button>
-          <button role="tab" class:active={mode === 'manual'} aria-selected={mode === 'manual'} on:click={() => (mode = 'manual')}>Choose myself</button>
-          <button role="tab" class:active={mode === 'direct'} aria-selected={mode === 'direct'} on:click={() => (mode = 'direct')}>Specific node</button>
+          <button role="tab" class:active={mode === 'auto'} aria-selected={mode === 'auto'} on:click={() => (mode = 'auto')}>{$t('proxy.mode.auto')}</button>
+          <button role="tab" class:active={mode === 'manual'} aria-selected={mode === 'manual'} on:click={() => (mode = 'manual')}>{$t('proxy.mode.manual')}</button>
+          <button role="tab" class:active={mode === 'direct'} aria-selected={mode === 'direct'} on:click={() => (mode = 'direct')}>{$t('proxy.mode.direct')}</button>
         </div>
 
         {#if mode === 'auto'}
           <div class="auto">
-            <p class="small muted">The app checks exits in the background and connects to the one that opens your sites fastest for the best price. Pick your sites with <b>Check sites</b>.</p>
+            <p class="small muted">{$t('proxy.autoBefore')}<b>{$t('proxy.checkSites')}</b>{$t('proxy.autoAfter')}</p>
             {#if best}
               <div class="exit pick-preview">
                 <span class="ex-ic"><Icon name="globe" size={16} /></span>
                 <span class="id mono">{short(best.peerId)}</span>
                 <span class="chip ping {pingClass(best.latencyMs)}">{pingText(best.latencyMs)}</span>
-                <span class="chip">{best.pricePerMb ? price(best.pricePerMb) : 'Free'}</span>
-                <span class="chip">{speed(best) ? mbit(best) : 'speed ?'}</span>
+                <span class="chip">{best.pricePerMb ? price(best.pricePerMb, $lang) : $t('common.Free')}</span>
+                <span class="chip">{speed(best) ? mbit(best) : $t('proxy.speedUnknown')}</span>
                 <span class="chip">{sitesText(best)}</span>
                 <span class="grow" />
-                <span class="small faint">current best</span>
+                <span class="small faint">{$t('proxy.currentBest')}</span>
               </div>
             {:else}
-              <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> Looking for exits…{:else}No exits found yet.{/if}</p>
+              <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> {$t('proxy.looking')}{:else}{$t('proxy.noExits')}{/if}</p>
             {/if}
           </div>
         {:else if mode === 'direct'}
           <div class="auto">
-            <p class="small muted">Connect through one particular computer, for example a friend who shares their connection with you for free. Paste the relay link they gave you, or their peer ID.</p>
+            <p class="small muted">{$t('proxy.directHint')}</p>
             <input bind:value={direct} placeholder="echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
-            {#if direct.trim() && !directId}<p class="small error">This is not a relay link, host:port/peer-id or peer ID.</p>{/if}
+            {#if direct.trim() && !directId}<p class="small error">{$t('proxy.directBad')}</p>{/if}
           </div>
         {:else}
           <div class="row small sortrow">
-            <span class="faint">Sort</span>
-            {#each [['best', 'Best'], ['ping', 'Ping'], ['price', 'Price'], ['speed', 'Speed']] as [k, label]}
-              <button class="chip-btn" class:on={sortBy === k} on:click={() => (sortBy = k)}>{label}</button>
+            <span class="faint">{$t('proxy.sort')}</span>
+            {#each ['best', 'ping', 'price', 'speed'] as k}
+              <button class="chip-btn" class:on={sortBy === k} on:click={() => (sortBy = k)}>{$t('proxy.sort.' + k)}</button>
             {/each}
           </div>
-          <div class="exits" role="radiogroup" aria-label="Exits">
+          <div class="exits" role="radiogroup" aria-label={$t('proxy.exits')}>
             {#each sorted as e (e.peerId)}
               <div class="exit" class:sel={selected === e.peerId} role="radio" aria-checked={selected === e.peerId} tabindex="0"
                 on:click={() => (selected = e.peerId)} on:keydown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && (selected = e.peerId)}>
                 <span class="radio" />
                 <span class="id mono">{short(e.peerId)}</span>
-                <span class="chip ping {pingClass(e.latencyMs)}" title="Round trip through the exit">{pingText(e.latencyMs)}</span>
-                <span class="chip" title="Price">{e.pricePerMb ? price(e.pricePerMb) : 'Free'}</span>
-                <span class="chip" title={e.measuredKbps ? 'Measured' : 'Claimed by the exit'}>{speed(e) ? (e.measuredKbps ? '' : '~') + mbit(e) : 'speed ?'}</span>
-                <span class="chip" title="Your sites that opened through this exit at the last check">{sitesText(e)}</span>
-                {#if e.paymentRequired}<span class="chip warn">needs payment</span>{/if}
+                <span class="chip ping {pingClass(e.latencyMs)}" title={$t('proxy.pingTitle')}>{pingText(e.latencyMs)}</span>
+                <span class="chip" title={$t('proxy.priceTitle')}>{e.pricePerMb ? price(e.pricePerMb, $lang) : $t('common.Free')}</span>
+                <span class="chip" title={e.measuredKbps ? $t('proxy.measured') : $t('proxy.claimed')}>{speed(e) ? (e.measuredKbps ? '' : '~') + mbit(e) : $t('proxy.speedUnknown')}</span>
+                <span class="chip" title={$t('proxy.sitesTitle')}>{sitesText(e)}</span>
+                {#if e.paymentRequired}<span class="chip warn">{$t('proxy.needsPayment')}</span>{/if}
                 <span class="grow" />
-                <button class="ghost small" on:click|stopPropagation={() => probe(e.peerId)} disabled={!!busy}>{busy === 'probe:' + e.peerId ? 'Testing…' : 'Test'}</button>
+                <button class="ghost small" on:click|stopPropagation={() => probe(e.peerId)} disabled={!!busy}>{busy === 'probe:' + e.peerId ? $t('proxy.testing') : $t('proxy.test')}</button>
               </div>
             {:else}
-              <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> Looking for exits…{:else}No exits found yet.{/if}</p>
+              <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> {$t('proxy.looking')}{:else}{$t('proxy.noExits')}{/if}</p>
             {/each}
           </div>
         {/if}
-        {#if mode !== 'direct'}<div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? 'Searching…' : 'Search again'}</button></div>{/if}
+        {#if mode !== 'direct'}<div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? $t('proxy.searching') : $t('proxy.searchAgain')}</button></div>{/if}
       {/if}
     </div>
 
@@ -290,41 +293,42 @@
         <div class="card-head">
           <span class="ico"><Icon name="coin" size={18} /></span>
           <div class="grow">
-            <h2>Paying this exit</h2>
+            <h2>{$t('proxy.pay.title')} {#if pay.paysByVault}<span class="chip ok live-chip">{$t('proxy.pay.fromDeposit')}</span>{/if}</h2>
             <p class="small muted">
-              ${pay.pricePerGb} per GB. {pay.remainingGb > 0 ? `${pay.remainingGb.toFixed(2)} GB left.` : 'No paid traffic left.'}
-              {pay.pending ? 'A payment is being confirmed.' : ''}
-              Spent today: ${pay.spentTodayUsdt}.
+              {$t('proxy.pay.perGb', { price: pay.pricePerGb })} {pay.remainingGb > 0 ? $t('proxy.pay.left', { gb: pay.remainingGb.toFixed(2) }) : $t('proxy.pay.noneLeft')}
+              {pay.pending ? $t('proxy.pay.pending') : ''}
+              {$t('proxy.pay.spent', { amount: pay.spentTodayUsdt })}
+              {#if pay.paysByVault}{$t('proxy.pay.vaultNote')}{/if}
             </p>
           </div>
         </div>
         {#if pay.note}<p class="note">{pay.note}</p>{/if}
         {#if pay.lastError}<p class="small error">{pay.lastError}</p>{/if}
         <div class="row wrap paywith">
-          <span class="small muted">Pay with</span>
-          <div class="seg" role="radiogroup" aria-label="Pay with">
-            {#each [['auto', 'Automatic'], ['TON', 'TON'], ['USDT', 'USDT']] as [k, label]}
+          <span class="small muted">{$t('proxy.pay.with')}</span>
+          <div class="seg" role="radiogroup" aria-label={$t('proxy.pay.with')}>
+            {#each [['auto', $t('proxy.pay.auto')], ['TON', 'TON'], ['USDT', 'USDT']] as [k, label]}
               <button role="radio" aria-checked={pay.payAsset === k} class:active={pay.payAsset === k}
                 disabled={busy === 'asset' || (k === 'TON' && !pay.takesTon)}
-                title={k === 'auto' ? 'USDT when you have enough of it, otherwise TON' : k === 'TON' && !pay.takesTon ? 'This exit takes USDT only' : ''}
+                title={k === 'auto' ? $t('proxy.pay.autoTitle') : k === 'TON' && !pay.takesTon ? $t('proxy.pay.usdtOnly') : ''}
                 on:click={() => setAsset(k)}>{label}</button>
             {/each}
           </div>
-          {#if pay.chunkTon && pay.payAsset !== 'USDT' && pay.takesTon}<span class="small faint">${payForm.chunk} ≈ {pay.chunkTon} TON now</span>{/if}
+          {#if pay.chunkTon && pay.payAsset !== 'USDT' && pay.takesTon}<span class="small faint">{$t('proxy.pay.tonNow', { usd: payForm.chunk, ton: pay.chunkTon })}</span>{/if}
         </div>
         <div class="row wrap">
-          <label>Top up by, $<input bind:value={payForm.chunk} on:input={() => (payTouched = true)} /></label>
-          <label>Daily limit, $<input bind:value={payForm.cap} on:input={() => (payTouched = true)} /></label>
+          <label>{$t('proxy.pay.chunk')}<input bind:value={payForm.chunk} on:input={() => (payTouched = true)} /></label>
+          <label>{$t('proxy.pay.cap')}<input bind:value={payForm.cap} on:input={() => (payTouched = true)} /></label>
         </div>
         <label class="row opt">
-          <span class="grow">Top up automatically before the traffic runs out, up to the daily limit</span>
+          <span class="grow">{$t('proxy.pay.autoPay')}</span>
           <input type="checkbox" class="switch" checked={pay.autoPay} disabled={busy === 'autopay'} on:change={(e) => saveAutoPay(e.target.checked)} />
         </label>
         <div class="row">
           <button class="primary" on:click={() => payNow(payForm.chunk)} disabled={!pay.canPay || busy === 'pay'}>
-            {busy === 'pay' ? 'Sending…' : `Pay $${payForm.chunk} now`}
+            {busy === 'pay' ? $t('proxy.pay.sending') : $t('proxy.pay.now', { amount: payForm.chunk })}
           </button>
-          {#if payTouched}<button on:click={() => saveAutoPay(pay.autoPay)} disabled={!!busy}>Save amounts</button>{/if}
+          {#if payTouched}<button on:click={() => saveAutoPay(pay.autoPay)} disabled={!!busy}>{$t('proxy.pay.save')}</button>{/if}
         </div>
       </div>
     {/if}
@@ -333,39 +337,50 @@
       <div class="card-head">
         <span class="ico" class:ok={sharing.enabled}><Icon name="upload" size={18} /></span>
         <div class="grow">
-          <h2>Share your connection {#if sharing.enabled}<span class="chip ok live-chip"><span class="pulse"></span> live</span>{/if}</h2>
-          <p class="small muted">Others can use your Internet connection as an exit and pay you for the traffic, in TON or USDT.</p>
+          <h2>{$t('proxy.share.title')} {#if sharing.enabled}<span class="chip ok live-chip"><span class="pulse"></span> {$t('proxy.share.live')}</span>{/if}</h2>
+          <p class="small muted">{$t('proxy.share.hint')}</p>
         </div>
         <button class={sharing.enabled ? 'danger' : 'primary'} on:click={share} disabled={busy === 'share'}>
-          {busy === 'share' ? 'Working…' : sharing.enabled ? 'Stop sharing' : 'Start sharing'}
+          {busy === 'share' ? $t('common.working') : sharing.enabled ? $t('proxy.share.stop') : $t('proxy.share.start')}
         </button>
       </div>
       {#if sharing.enabled}
         <div class="stats">
-          <div class="stat"><span class="eyebrow">Price</span><span class="num">{price(sharing.config.pricePerMb)}</span></div>
-          <div class="stat"><span class="eyebrow">Sessions</span><span class="num">{sharing.accepted} <span class="faint small">/ {sharing.refused} refused</span></span></div>
-          <div class="stat"><span class="eyebrow">Carried</span><span class="num">{bytes(sharing.bytes)}</span></div>
-          {#if sharing.paymentsReady}<div class="stat"><span class="eyebrow">Earned</span><span class="num ok">${sharing.earnedUsdt}</span></div>{/if}
+          <div class="stat"><span class="eyebrow">{$t('proxy.share.price')}</span><span class="num">{price(sharing.config.pricePerMb, $lang)}</span></div>
+          <div class="stat"><span class="eyebrow">{$t('proxy.share.sessions')}</span><span class="num">{sharing.accepted} <span class="faint small">{$t('proxy.share.refused', { n: sharing.refused })}</span></span></div>
+          <div class="stat"><span class="eyebrow">{$t('proxy.share.carried')}</span><span class="num">{bytes(sharing.bytes, $lang)}</span></div>
+          {#if sharing.paymentsReady}<div class="stat"><span class="eyebrow">{$t('proxy.share.earned')}</span><span class="num ok">${sharing.earnedUsdt}</span></div>{/if}
         </div>
-        <p class="small faint">Published {sharing.lastPublish ? when(sharing.lastPublish) : 'not yet'}.</p>
+        <p class="small faint">{$t('proxy.share.published', { when: sharing.lastPublish ? when(sharing.lastPublish, $lang) : $t('proxy.share.notYet') })}</p>
         {#if sharing.lastError}<p class="small error">{sharing.lastError}</p>{/if}
-      {:else}
+      {/if}
+      {#if (sharing.enabled && sharing.paymentsReady) || Number(vouchers.owedTon) > 0 || Number(vouchers.cashedTon) > 0}
+        <div class="sub">
+          <div class="eyebrow">{$t('proxy.share.deposits')}</div>
+          <div class="stats">
+            <div class="stat"><span class="eyebrow">{$t('proxy.share.owed')}</span><span class="num">{amount(vouchers.owedTon, $lang)} TON</span></div>
+            <div class="stat"><span class="eyebrow">{$t('proxy.share.collected')}</span><span class="num ok">{amount(vouchers.cashedTon, $lang)} TON</span></div>
+          </div>
+          <p class="small muted">{$t('proxy.share.depositNote')}</p>
+        </div>
+      {/if}
+      {#if !sharing.enabled}
         <div class="row wrap">
-          <label>Price, $ per GB (0 = free)<input bind:value={form.price} /></label>
-          <label>Free test traffic per client, KB<input type="number" min="0" max="1024" bind:value={form.freeKb} /></label>
-          <label>Upload speed, Mbit/s<input type="number" min="0" bind:value={form.mbps} /></label>
-          <button class="measure" on:click={measure} disabled={!!busy}>{busy === 'measure' ? 'Measuring…' : 'Measure'}</button>
+          <label>{$t('proxy.share.priceLabel')}<input bind:value={form.price} /></label>
+          <label>{$t('proxy.share.freeKb')}<input type="number" min="0" max="1024" bind:value={form.freeKb} /></label>
+          <label>{$t('proxy.share.upload')}<input type="number" min="0" bind:value={form.mbps} /></label>
+          <button class="measure" on:click={measure} disabled={!!busy}>{busy === 'measure' ? $t('proxy.share.measuring') : $t('proxy.share.measure')}</button>
         </div>
         <p class="note">
-          People's traffic will leave from your IP address. Only share a connection you are allowed to share.
-          Payments arrive in the wallet of this app, in TON (at the rate when they arrive) or USDT; keep that wallet for traffic only.
+          {$t('proxy.share.legal')}
+          {$t('proxy.share.wallet')}
         </p>
       {/if}
       <div class="sub">
-        <div class="eyebrow">Free for these people</div>
-        <p class="small muted">They use your connection without limits and never pay, whatever your price. Changes apply at once.</p>
-        <PeerList ids={sharing.config.freePeers || []} {contacts} disabled={busy === 'free'} label="Free for these people"
-          empty="Nobody: everyone gets the same offer." on:change={(e) => setFreePeers(e.detail)} />
+        <div class="eyebrow">{$t('proxy.share.freeFor')}</div>
+        <p class="small muted">{$t('proxy.share.freeHint')}</p>
+        <PeerList ids={sharing.config.freePeers || []} {contacts} disabled={busy === 'free'} label={$t('proxy.share.freeFor')}
+          empty={$t('proxy.share.freeEmpty')} on:change={(e) => setFreePeers(e.detail)} />
       </div>
     </div>
 

@@ -4,6 +4,7 @@
     import { peerName } from '../../stores/peers.store.js';
     import Icon from '../ui/Icon.svelte';
     import Avatar from '../ui/Avatar.svelte';
+    import { t } from '../../i18n/index.js';
 
     export let peer;
     export let x = 0;
@@ -69,7 +70,7 @@
     {#if !isSelf}
         <div class="px-2 pt-1 pb-2">
             <div class="flex items-center justify-between text-[12px] mb-1.5" style="color:var(--muted)">
-                <span class="font-semibold uppercase tracking-wide">User volume</span>
+                <span class="font-semibold uppercase tracking-wide">{$t('call.userVolume')}</span>
                 <span>{volume}%</span>
             </div>
             <input
@@ -79,32 +80,32 @@
                 step="5"
                 value={volume}
                 class="w-full accent-[var(--color-accent)]"
-                aria-label="User volume"
+                aria-label={$t('call.userVolume')}
                 on:input={(e) => callService.setPeerVolume(peer, Number(e.currentTarget.value) / 100)}
             />
         </div>
         <div class="sep"></div>
         <button class="menu-row" role="menuitem" on:click={() => callService.toggleLocalMute(peer)}>
             <Icon name={muted ? 'volume' : 'volumeOff'} size={18} />
-            <span class="flex-1 text-left">{muted ? 'Unmute for me' : 'Mute for me'}</span>
+            <span class="flex-1 text-left">{muted ? $t('call.unmuteForMe') : $t('call.muteForMe')}</span>
             {#if muted}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
         </button>
         <button class="menu-row bad" role="menuitem" disabled={reported} on:click={report}>
             <Icon name="flag" size={18} />
             <span class="flex-1 text-left">
-                {#if reported}Reported{:else if confirmReport}Click again to report{:else}Report spam{/if}
+                {#if reported}{$t('call.reported')}{:else if confirmReport}{$t('call.reportConfirm')}{:else}{$t('call.reportSpam')}{/if}
             </span>
         </button>
         {#if confirmReport && !reported}
             <p class="px-2.5 pb-1.5 text-[12px] leading-snug" style="color:var(--muted)">
-                They are muted for you right away. The room removes them when a third of members report them too.
+                {$t('call.reportNote')}
             </p>
         {/if}
         <div class="sep"></div>
     {/if}
     <button class="menu-row" role="menuitem" on:click={copyId}>
         <Icon name="copy" size={18} />
-        <span class="flex-1 text-left">{copied ? 'Copied' : 'Copy user ID'}</span>
+        <span class="flex-1 text-left">{copied ? $t('common.copied') : $t('call.copyId')}</span>
     </button>
 </div>
 

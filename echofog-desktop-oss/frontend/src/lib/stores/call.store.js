@@ -3,6 +3,7 @@ import { callService, callState } from '../services/call.service.js';
 import { InviteToCall, GetContacts, EndGroupCall } from '@wailsjs/go/main/App';
 import { EventsOn } from '@wailsjs/runtime/runtime';
 import { loadPeerDirectory } from './peers.store.js';
+import { tr } from '../i18n/index.js';
 
 /** What the call is about, for headers and the mini player: { alias, avatar, peerId, chatId } */
 export const peerInfo = writable({ alias: '', avatar: '', peerId: '', chatId: '' });
@@ -50,7 +51,7 @@ export function formatDuration(seconds) {
 }
 
 function errMessage(err) {
-    return (err && (err.message || String(err))) || 'Call failed';
+    return (err && (err.message || String(err))) || tr('call.err.failed');
 }
 
 // --- ringtone: two soft tones, generated so no audio asset is needed -------------------------
@@ -131,7 +132,7 @@ export async function startCall(peer, withVideo = false) {
             callId = invite.callId;
             coordinator = invite.coordinator;
         }
-        if (!callId) throw new Error('Nothing to call');
+        if (!callId) throw new Error(tr('call.err.nothing'));
         await callService.joinCall(callId, coordinator);
         if (withVideo) await callService.startCamera();
         return true;

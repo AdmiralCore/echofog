@@ -17,13 +17,14 @@
   import Logs from './Logs.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import { t } from '../i18n/index.js';
 
   const views = [
-    { id: 'chats', label: 'Chats', icon: 'message' },
-    { id: 'proxy', label: 'Proxy', icon: 'shield' },
-    { id: 'wallet', label: 'Wallet', icon: 'wallet' },
-    { id: 'logs', label: 'Logs', icon: 'terminal' },
-    { id: 'settings', label: 'Settings', icon: 'settings' },
+    { id: 'chats', label: 'shell.chats', icon: 'message' },
+    { id: 'proxy', label: 'shell.proxy', icon: 'shield' },
+    { id: 'wallet', label: 'shell.wallet', icon: 'wallet' },
+    { id: 'logs', label: 'shell.logs', icon: 'terminal' },
+    { id: 'settings', label: 'shell.settings', icon: 'settings' },
   ];
   const ITEM = 44; // item height + gap, for the sliding highlight
 
@@ -43,10 +44,10 @@
   $: bottom = width < 640;
   $: rail = !bottom && (navCollapsed || width < 980);
   $: activeIndex = Math.max(0, views.findIndex((v) => v.id === $view));
-  $: myName = ($displayName || '').trim() || $profile || 'me';
+  $: myName = ($displayName || '').trim() || $profile || $t('shell.me');
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
   $: online = net.status === 'ONLINE' && net.peerCount > 0;
-  $: statusText = net.status === 'ONLINE' ? `${net.peerCount} peer${net.peerCount === 1 ? '' : 's'}` : 'Offline';
+  $: statusText = net.status === 'ONLINE' ? $t('shell.peers', { n: net.peerCount }) : $t('shell.offline');
 
   async function refresh() {
     try { net = await App.GetNetworkStatus(); } catch (_) { /* keep last */ }
@@ -67,13 +68,13 @@
 <svelte:window bind:innerWidth={width} />
 
 <div class="shell" class:bottom>
-  <nav class:rail class:bottom aria-label="Sections">
+  <nav class:rail class:bottom aria-label={$t('shell.sections')}>
     {#if !bottom}
       <div class="brand">
         <span class="mark" aria-hidden="true"><span></span></span>
         <span class="name">EchoFog</span>
         {#if width >= 980}
-          <button class="collapse" title={navCollapsed ? 'Expand' : 'Collapse'} aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} on:click={toggleNav}>
+          <button class="collapse" title={navCollapsed ? $t('shell.expand') : $t('shell.collapse')} aria-label={navCollapsed ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} on:click={toggleNav}>
             <Icon name={navCollapsed ? 'chevronRight' : 'chevronLeft'} size={15} stroke={2.2} />
           </button>
         {/if}
@@ -83,13 +84,13 @@
     <div class="items">
       {#if !bottom}<span class="indicator" style="transform: translateY({activeIndex * ITEM}px)" aria-hidden="true"></span>{/if}
       {#each views as v}
-        <button class="item" class:active={$view === v.id} title={rail || bottom ? v.label : ''} aria-current={$view === v.id ? 'page' : undefined} on:click={() => view.set(v.id)}>
+        <button class="item" class:active={$view === v.id} title={rail || bottom ? $t(v.label) : ''} aria-current={$view === v.id ? 'page' : undefined} on:click={() => view.set(v.id)}>
           <span class="ic">
             <Icon name={v.icon} size={19} />
             {#if v.id === 'chats' && unread && (rail || bottom)}<span class="pip">{unread > 99 ? '99+' : unread}</span>{/if}
-            {#if v.id === 'chats' && $isCallActive}<span class="live" title="In a call"></span>{/if}
+            {#if v.id === 'chats' && $isCallActive}<span class="live" title={$t('shell.inCall')}></span>{/if}
           </span>
-          <span class="label">{v.label}</span>
+          <span class="label">{$t(v.label)}</span>
           {#if v.id === 'chats' && unread && !rail && !bottom}<span class="badge">{unread}</span>{/if}
         </button>
       {/each}
@@ -98,14 +99,14 @@
     {#if !bottom}
       <div class="grow" />
       <div class="foot">
-        <button class="theme" title={$resolvedTheme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Toggle theme" on:click={toggleTheme}>
+        <button class="theme" title={$resolvedTheme === 'dark' ? $t('shell.lightTheme') : $t('shell.darkTheme')} aria-label={$t('shell.toggleTheme')} on:click={toggleTheme}>
           <span class="swap" class:dark={$resolvedTheme === 'dark'}>
             <span class="i sun"><Icon name="sun" size={17} /></span>
             <span class="i moon"><Icon name="moon" size={17} /></span>
           </span>
-          <span class="label">{$resolvedTheme === 'dark' ? 'Dark' : 'Light'} theme</span>
+          <span class="label">{$resolvedTheme === 'dark' ? $t('shell.darkTheme') : $t('shell.lightTheme')}</span>
         </button>
-        <button class="me" title={rail ? `${myName} · ${statusText}` : 'Settings'} on:click={() => view.set('settings')}>
+        <button class="me" title={rail ? `${myName} · ${statusText}` : $t('shell.settings')} on:click={() => view.set('settings')}>
           <span class="av">
             <Avatar id={$profile} name={myName} size={32} />
             <span class="presence" class:on={online}></span>

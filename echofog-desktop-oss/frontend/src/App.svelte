@@ -3,6 +3,7 @@
   import { screen, boot } from './lib/stores/session.js';
   import Auth from './lib/views/Auth.svelte';
   import Shell from './lib/views/Shell.svelte';
+  import { t } from './lib/i18n/index.js';
 
   onMount(boot);
 </script>
@@ -12,7 +13,7 @@
 {:else if $screen === 'loading'}
   <div class="loading">
     <span class="ring" aria-hidden="true"></span>
-    <span class="muted small">Starting…</span>
+    <span class="muted small">{$t('shell.starting')}</span>
   </div>
 {:else}
   <Auth />

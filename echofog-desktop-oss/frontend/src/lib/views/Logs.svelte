@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { App, errText, copy } from '../api.js';
   import Icon from '../components/ui/Icon.svelte';
+  import { t, lang, intlLocale } from '../i18n/index.js';
 
   let entries = [];
   let level = 'all';        // all | debug | info | warn | error
@@ -54,7 +55,7 @@
   }
 
   function fmtTime(t) {
-    try { return new Date(t).toLocaleTimeString(); } catch (_) { return t; }
+    try { return new Date(t).toLocaleTimeString(intlLocale()); } catch (_) { return t; }
   }
 
   function attrLine(attrs) {
@@ -74,39 +75,39 @@
 <div class="logs">
   <div class="page-head">
     <div class="grow">
-      <h1>Logs</h1>
-      <p class="muted small">Everything the app and the node record. Sensitive values are hidden, so this is safe to share in a bug report.</p>
+      <h1>{$t('logs.title')}</h1>
+      <p class="muted small">{$t('logs.subtitle')}</p>
     </div>
   </div>
 
   <div class="bar">
     <div class="seg levels">
       {#each ['all', 'debug', 'info', 'warn', 'error'] as l}
-        <button class:active={level === l} on:click={() => (level = l)}>{l}</button>
+        <button class:active={level === l} on:click={() => (level = l)}>{l === 'all' ? $t('logs.all') : l}</button>
       {/each}
     </div>
     <div class="search">
       <Icon name="search" size={15} />
-      <input placeholder="Filter" bind:value={query} spellcheck="false" />
+      <input placeholder={$t('logs.filter')} bind:value={query} spellcheck="false" />
     </div>
-    <label class="row live"><input type="checkbox" class="switch" bind:checked={autoRefresh} /> Live</label>
+    <label class="row live"><input type="checkbox" class="switch" bind:checked={autoRefresh} /> {$t('logs.live')}</label>
     <div class="row btns">
-      <button class="icon" title="Refresh" aria-label="Refresh" on:click={load}><Icon name="refresh" size={17} /></button>
-      <button class="with-icon small" on:click={copyAll}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? 'Copied' : 'Copy all'}</button>
-      <button class="with-icon small" on:click={saveFile}><Icon name="download" size={14} /> Save</button>
+      <button class="icon" title={$t('common.refresh')} aria-label={$t('common.refresh')} on:click={load}><Icon name="refresh" size={17} /></button>
+      <button class="with-icon small" on:click={copyAll}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? $t('common.copied') : $t('logs.copyAll')}</button>
+      <button class="with-icon small" on:click={saveFile}><Icon name="download" size={14} /> {$t('common.save')}</button>
     </div>
   </div>
 
   {#if error}<div class="small error">{error}</div>{/if}
-  {#if savedPath}<div class="small ok">Saved to {savedPath}</div>{/if}
+  {#if savedPath}<div class="small ok">{$t('logs.savedTo', { path: savedPath })}</div>{/if}
 
   <div class="list">
     {#if filtered.length === 0}
-      <div class="empty">No log lines yet.</div>
+      <div class="empty">{$t('logs.empty')}</div>
     {/if}
     {#each filtered as e}
       <div class="line {e.level}">
-        <span class="time">{fmtTime(e.time)}</span>
+        <span class="time">{fmtTime(e.time, $lang)}</span>
         <span class="lvl">{e.level}</span>
         <span class="msg">{e.message}{#if e.attrs && Object.keys(e.attrs).length}<span class="attrs">  {attrLine(e.attrs)}</span>{/if}</span>
       </div>

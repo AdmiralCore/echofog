@@ -4,6 +4,8 @@
   import { App, errText, copy, openURL } from '../api.js';
   import { amount, when, short } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
+  import VaultCard from '../components/VaultCard.svelte';
+  import { t, lang } from '../i18n/index.js';
 
   let wallet = null;
   let balance = null;
@@ -59,10 +61,10 @@
   function review() {
     sendError = '';
     const n = Number(String(send.amount).replace(',', '.'));
-    if (!send.to.trim()) sendError = 'Enter the recipient address.';
-    else if (!(n > 0)) sendError = 'Enter an amount greater than zero.';
-    else if (balance && n > available) sendError = 'That is more than your balance.';
-    else if (send.asset === 'USDT' && balance && Number(balance.ton) < 0.065) sendError = 'A USDT transfer needs about 0.06 TON for the network fee. Add a little TON first.';
+    if (!send.to.trim()) sendError = $t('wallet.errNoTo');
+    else if (!(n > 0)) sendError = $t('wallet.errAmount');
+    else if (balance && n > available) sendError = $t('wallet.errOverBalance');
+    else if (send.asset === 'USDT' && balance && Number(balance.ton) < 0.065) sendError = $t('wallet.errNeedTon');
     else step = 'review';
   }
 
@@ -105,8 +107,8 @@
   <div class="stack">
     <div class="page-head">
       <div class="grow">
-        <h1>Wallet {#if testnet}<span class="chip warn">testnet</span>{/if}</h1>
-        <p class="muted small">Pay for traffic and get paid for sharing yours. TON network.</p>
+        <h1>{$t('wallet.title')} {#if testnet}<span class="chip warn">testnet</span>{/if}</h1>
+        <p class="muted small">{$t('wallet.subtitle')}</p>
       </div>
     </div>
 
@@ -114,13 +116,13 @@
 
     <div class="hero">
       <div class="hero-main">
-        <div class="eyebrow light">Balance</div>
+        <div class="eyebrow light">{$t('wallet.balance')}</div>
         <div class="balances">
           <div class="bal">
-            <span class="big">{balance ? amount(balance.usdt || 0) : '…'}</span><span class="cur">USDT</span>
+            <span class="big">{balance ? amount(balance.usdt || 0, $lang) : '…'}</span><span class="cur">USDT</span>
           </div>
           <div class="bal second">
-            <span class="mid">{balance ? amount(balance.ton) : '…'}</span><span class="cur">TON</span>
+            <span class="mid">{balance ? amount(balance.ton, $lang) : '…'}</span><span class="cur">TON</span>
             {#if balance?.usdRate}<span class="usd">≈ ${(Number(balance.ton) * balance.usdRate).toFixed(2)}</span>{/if}
           </div>
         </div>
@@ -128,23 +130,25 @@
           <span class="mono">{wallet?.address || '…'}</span>
         </div>
         <div class="row wrap">
-          <button class="glass with-icon" on:click={copyAddress} disabled={!wallet}><Icon name={copied ? 'check' : 'copy'} size={15} />{copied ? 'Copied' : 'Copy address'}</button>
-          {#if onRamp}<button class="glass with-icon" on:click={() => openURL(onRamp)}><Icon name="coin" size={15} /> Buy USDT with a card</button>{/if}
+          <button class="glass with-icon" on:click={copyAddress} disabled={!wallet}><Icon name={copied ? 'check' : 'copy'} size={15} />{copied ? $t('common.copied') : $t('wallet.copyAddress')}</button>
+          {#if onRamp}<button class="glass with-icon" on:click={() => openURL(onRamp)}><Icon name="coin" size={15} /> {$t('wallet.buyCard')}</button>{/if}
         </div>
       </div>
-      {#if qr}<img class="qr" src={qr} alt="Wallet address QR code" />{/if}
+      {#if qr}<img class="qr" src={qr} alt={$t('wallet.qrAlt')} />{/if}
     </div>
 
     <p class="note">
-      This wallet is for traffic payments. Do not keep savings here: the keys live on this computer and anyone who gets into it can spend them.
-      USDT transfers need about 0.06 TON for the network fee.
-      {#if !onRamp}To get USDT, buy it on an exchange or Telegram Wallet and withdraw it to this address using the TON network.{/if}
+      {$t('wallet.note')}
+      {$t('wallet.noteFee')}
+      {#if !onRamp}{$t('wallet.noteGetUsdt')}{/if}
     </p>
+
+    <VaultCard {explorer} balanceTon={balance ? balance.ton : null} on:changed={refresh} />
 
     <div class="card stack">
       <div class="card-head">
         <span class="ico"><Icon name="send" size={18} /></span>
-        <div class="grow"><h2>Send</h2><p class="small muted">Blockchain transfers cannot be reversed.</p></div>
+        <div class="grow"><h2>{$t('wallet.send')}</h2><p class="small muted">{$t('wallet.sendHint')}</p></div>
       </div>
       {#key step}
       <div class="stack step">
@@ -154,34 +158,34 @@
             <button class:active={send.asset === a} on:click={() => (send.asset = a)}>{a}</button>
           {/each}
         </div>
-        <label>Recipient address<input bind:value={send.to} spellcheck="false" placeholder="UQ…" /></label>
+        <label>{$t('wallet.recipient')}<input bind:value={send.to} spellcheck="false" placeholder="UQ…" /></label>
         <div class="row wrap">
-          <label class="amt">Amount
-            <span class="amt-in"><input bind:value={send.amount} placeholder="0.00" inputmode="decimal" /><button class="ghost small max" on:click={() => (send.amount = send.asset === 'TON' ? Math.max(0, available - 0.05).toFixed(4) : String(available))} disabled={!balance}>Max</button></span>
+          <label class="amt">{$t('wallet.amount')}
+            <span class="amt-in"><input bind:value={send.amount} placeholder="0.00" inputmode="decimal" /><button class="ghost small max" on:click={() => (send.amount = send.asset === 'TON' ? Math.max(0, available - 0.05).toFixed(4) : String(available))} disabled={!balance}>{$t('wallet.max')}</button></span>
           </label>
-          <label class="grow">Comment (optional)<input bind:value={send.comment} /></label>
+          <label class="grow">{$t('wallet.comment')}<input bind:value={send.comment} /></label>
         </div>
-        <div><button class="primary" on:click={review}>Review</button></div>
+        <div><button class="primary" on:click={review}>{$t('wallet.review')}</button></div>
       {:else if step === 'review' || step === 'sending'}
         <div class="review">
           <div class="r-amt">{send.amount} <span>{send.asset}</span></div>
-          <div class="small muted">to</div>
+          <div class="small muted">{$t('wallet.to')}</div>
           <div class="mono">{send.to}</div>
           {#if send.comment}<div class="small muted">“{send.comment}”</div>{/if}
         </div>
         <div class="row">
-          <button class="primary" on:click={confirmSend} disabled={step === 'sending'}>{#if step === 'sending'}<span class="spinner"></span> Sending…{:else}Confirm and send{/if}</button>
-          <button on:click={() => (step = 'form')} disabled={step === 'sending'}>Back</button>
+          <button class="primary" on:click={confirmSend} disabled={step === 'sending'}>{#if step === 'sending'}<span class="spinner"></span> {$t('wallet.sending')}{:else}{$t('wallet.confirmSend')}{/if}</button>
+          <button on:click={() => (step = 'form')} disabled={step === 'sending'}>{$t('common.back')}</button>
         </div>
       {:else}
         <div class="done">
           <span class="done-ic"><Icon name="check" size={26} stroke={2.6} /></span>
           <div>
-            <p class="ok"><b>Sent.</b> It shows up in the history once confirmed.</p>
-            <p class="small"><a href={`${explorer}/transaction/${sentHash}`} on:click|preventDefault={() => openURL(`${explorer}/transaction/${sentHash}`)}>View in explorer →</a></p>
+            <p class="ok"><b>{$t('wallet.sentBold')}</b> {$t('wallet.sentAfter')}</p>
+            <p class="small"><a href={`${explorer}/transaction/${sentHash}`} on:click|preventDefault={() => openURL(`${explorer}/transaction/${sentHash}`)}>{$t('wallet.viewExplorer')}</a></p>
           </div>
         </div>
-        <div><button on:click={() => (step = 'form')}>New transfer</button></div>
+        <div><button on:click={() => (step = 'form')}>{$t('wallet.newTransfer')}</button></div>
       {/if}
       </div>
       {/key}
@@ -191,28 +195,28 @@
     <div class="card stack">
       <div class="card-head">
         <span class="ico"><Icon name="refresh" size={18} /></span>
-        <div class="grow"><h2>History</h2></div>
+        <div class="grow"><h2>{$t('wallet.history')}</h2></div>
       </div>
       {#if history.length}
         <div class="txs">
-          {#each history as t (t.hash)}
-            <div class="tx" class:failed={t.failed}>
-              <span class="tx-ic" class:in={t.incoming}><Icon name={t.incoming ? 'download' : 'upload'} size={16} /></span>
+          {#each history as tx (tx.hash)}
+            <div class="tx" class:failed={tx.failed}>
+              <span class="tx-ic" class:in={tx.incoming}><Icon name={tx.incoming ? 'download' : 'upload'} size={16} /></span>
               <div class="grow tx-body">
                 <div class="row">
-                  <span class="grow mono cp">{short(t.counterparty)}</span>
-                  <span class="tx-amt" class:in={t.incoming}>{t.incoming ? '+' : '−'}{amount(t.ton)} {t.asset || 'TON'}</span>
+                  <span class="grow mono cp">{short(tx.counterparty)}</span>
+                  <span class="tx-amt" class:in={tx.incoming}>{tx.incoming ? '+' : '−'}{amount(tx.ton, $lang)} {tx.asset || 'TON'}</span>
                 </div>
                 <div class="row small">
-                  <span class="grow faint ellip">{t.comment || (t.incoming ? 'Received' : 'Sent')}{t.failed ? ' · failed' : ''}</span>
-                  <span class="faint">{when(t.time)}</span>
+                  <span class="grow faint ellip">{tx.comment || (tx.incoming ? $t('wallet.received') : $t('wallet.sent'))}{tx.failed ? ' · ' + $t('wallet.failed') : ''}</span>
+                  <span class="faint">{when(tx.time, $lang)}</span>
                 </div>
               </div>
             </div>
           {/each}
         </div>
       {:else}
-        <p class="small muted">No transactions yet.</p>
+        <p class="small muted">{$t('wallet.noTx')}</p>
       {/if}
     </div>
 
@@ -221,32 +225,32 @@
         <div class="card-head">
           <span class="ico ok"><Icon name="zap" size={18} /></span>
           <div class="grow">
-            <h2>Support the project</h2>
-            <p class="small muted">Optionally add a share on top of what you pay exits. It goes to the project that develops EchoFog. The exit still gets its full price.</p>
+            <h2>{$t('wallet.support')}</h2>
+            <p class="small muted">{$t('wallet.supportHint')}</p>
           </div>
         </div>
         <div class="seg">
           {#each [0, 5, 10] as p}
-            <button class:active={support.percent === p} on:click={() => setShare(p)}>{p === 0 ? 'Off' : p + '%'}</button>
+            <button class:active={support.percent === p} on:click={() => setShare(p)}>{p === 0 ? $t('wallet.off') : p + '%'}</button>
           {/each}
         </div>
         {#if Number(support.pendingUsdt) > 0 || Number(support.pendingTon) > 0}
-          <p class="small faint">Collected and sent in one batch later: {support.pendingUsdt} USDT, {support.pendingTon} TON.</p>
+          <p class="small faint">{$t('wallet.pending', { usdt: support.pendingUsdt, ton: support.pendingTon })}</p>
         {/if}
       </div>
     {/if}
 
     <details class="card">
-      <summary class="muted">Wallet recovery phrase</summary>
+      <summary class="muted">{$t('wallet.phrase')}</summary>
       <div class="stack" style="margin-top: 14px">
         {#if words.length}
           <ol class="words">{#each words as w, i}<li><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}</ol>
-          <div><button on:click={() => (words = [])}>Hide</button></div>
+          <div><button on:click={() => (words = [])}>{$t('common.hide')}</button></div>
         {:else}
-          <p class="small muted">Lets you open this wallet in another TON wallet app. Enter your app password to show it.</p>
+          <p class="small muted">{$t('wallet.phraseHint')}</p>
           <form class="row" on:submit|preventDefault={exportPhrase}>
-            <input type="password" placeholder="App password" bind:value={exportPw} />
-            <button type="submit" disabled={!exportPw}>Show</button>
+            <input type="password" placeholder={$t('wallet.appPassword')} bind:value={exportPw} />
+            <button type="submit" disabled={!exportPw}>{$t('common.show')}</button>
           </form>
           {#if exportError}<p class="error small">{exportError}</p>{/if}
         {/if}

@@ -5,12 +5,13 @@
   import { peerIdFrom } from '../contact.js';
   import { short } from '../format.js';
   import Icon from './ui/Icon.svelte';
+  import { t } from '../i18n/index.js';
 
   export let ids = [];
   export let contacts = [];
   export let disabled = false;
-  export let empty = 'Nobody yet.';
-  export let label = 'People';
+  export let empty = '';
+  export let label = '';
 
   const dispatch = createEventDispatcher();
   let input = '';
@@ -28,7 +29,7 @@
     error = '';
     const id = await peerIdFrom(input, contacts);
     if (!id) {
-      error = 'Paste a peer ID (64 characters) or a contact link.';
+      error = $t('relay.peers.bad');
       return;
     }
     input = '';
@@ -43,22 +44,22 @@
 </script>
 
 <div class="plist">
-  <div class="chips" aria-label={label}>
+  <div class="chips" aria-label={label || $t('relay.peers.label')}>
     {#each ids as id (id)}
       <span class="chip peer" title={id}>
         {#if names[id]}{names[id]} <span class="faint mono">{short(id)}</span>{:else}<span class="mono">{short(id)}</span>{/if}
-        <button class="x" title="Remove" aria-label="Remove {names[id] || short(id)}" {disabled} on:click={() => set(ids.filter((x) => x !== id))}><Icon name="close" size={12} /></button>
+        <button class="x" title={$t('common.remove')} aria-label={$t('relay.peers.removePeer', { name: names[id] || short(id) })} {disabled} on:click={() => set(ids.filter((x) => x !== id))}><Icon name="close" size={12} /></button>
       </span>
     {:else}
-      <span class="small faint">{empty}</span>
+      <span class="small faint">{empty || $t('relay.peers.empty')}</span>
     {/each}
   </div>
   <div class="row add">
-    <input class="grow" bind:value={input} placeholder="Peer ID or contact link" {disabled} on:keydown={(e) => e.key === 'Enter' && add()} />
-    <button on:click={add} disabled={disabled || !input.trim()}>Add</button>
+    <input class="grow" bind:value={input} placeholder={$t('relay.peers.placeholder')} {disabled} on:keydown={(e) => e.key === 'Enter' && add()} />
+    <button on:click={add} disabled={disabled || !input.trim()}>{$t('common.add')}</button>
     {#if pickable.length}
-      <select on:change={pick} {disabled} aria-label="Add a contact">
-        <option value="">From contacts…</option>
+      <select on:change={pick} {disabled} aria-label={$t('relay.peers.addContact')}>
+        <option value="">{$t('relay.peers.fromContacts')}</option>
         {#each pickable as c (c.peer_id)}<option value={c.peer_id.toLowerCase()}>{c.alias || short(c.peer_id)}</option>{/each}
       </select>
     {/if}

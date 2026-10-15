@@ -8,6 +8,7 @@
   import CallStage from '../components/call/CallStage.svelte';
   import { errText, copy } from '../api.js';
   import { when } from '../format.js';
+  import { t, lang } from '../i18n/index.js';
   import { makeContactLink, parseContactInput, displayName, currentDisplayName } from '../contact.js';
   import Conversation from './Conversation.svelte';
   import QRScan from './QRScan.svelte';
@@ -94,16 +95,16 @@
   }
 
   function submitContact() {
-    if (!parsed) { error = 'This is neither a contact link nor a 64-character key.'; return; }
+    if (!parsed) { error = $t('chats.err.notContact'); return; }
     const finalName = name.trim() || parsed.name;
-    if (!finalName) { error = 'Enter a name for the contact.'; return; }
+    if (!finalName) { error = $t('chats.err.noName'); return; }
     run(() => addContact(parsed.key, finalName));
   }
 
   function scanned(e) {
     scanning = false;
     contactInput = e.detail;
-    if (!parseContactInput(contactInput)) error = 'This code is not an EchoFog contact.';
+    if (!parseContactInput(contactInput)) error = $t('chats.err.notEchoFog');
   }
 
   async function copyText(what, text) {
@@ -120,23 +121,23 @@
   {#if (!listCollapsed || narrow) && (!narrow || !active)}
   <aside style={narrow ? '' : `width:${listWidth}px`}>
     <div class="head">
-      <h2 class="grow">Chats</h2>
-      <button class="icon" class:on={panel === 'me'} title="My contact" aria-label="My contact" on:click={() => toggle('me')}><Icon name="qr" size={18} /></button>
-      {#if !narrow}<button class="icon" title="Hide the chat list" aria-label="Hide the chat list" on:click={toggleList}><Icon name="panel" size={18} /></button>{/if}
+      <h2 class="grow">{$t('chats.title')}</h2>
+      <button class="icon" class:on={panel === 'me'} title={$t('chats.myContact')} aria-label={$t('chats.myContact')} on:click={() => toggle('me')}><Icon name="qr" size={18} /></button>
+      {#if !narrow}<button class="icon" title={$t('chats.hideList')} aria-label={$t('chats.hideList')} on:click={toggleList}><Icon name="panel" size={18} /></button>{/if}
     </div>
 
     <div class="actions">
-      <button class="act" class:on={panel === 'contact'} on:click={() => toggle('contact')}><Icon name="userPlus" size={16} /><span>Contact</span></button>
-      <button class="act" class:on={panel === 'group'} on:click={() => toggle('group')}><Icon name="users" size={16} /><span>Group</span></button>
-      <button class="act" class:on={panel === 'join'} on:click={() => toggle('join')}><Icon name="link" size={16} /><span>Join</span></button>
+      <button class="act" class:on={panel === 'contact'} on:click={() => toggle('contact')}><Icon name="userPlus" size={16} /><span>{$t('chats.contact')}</span></button>
+      <button class="act" class:on={panel === 'group'} on:click={() => toggle('group')}><Icon name="users" size={16} /><span>{$t('chats.group')}</span></button>
+      <button class="act" class:on={panel === 'join'} on:click={() => toggle('join')}><Icon name="link" size={16} /><span>{$t('common.join')}</span></button>
     </div>
 
     {#if panel}
       <div class="sheet" transition:slide={{ duration: 260 }}>
         <div class="sheet-in">
           <div class="row sheet-head">
-            <span class="eyebrow grow">{({ contact: 'Add a contact', group: 'New group or channel', join: 'Join by invite', me: 'Your contact' })[panel]}</span>
-            <button class="icon tiny" aria-label="Close" on:click={() => toggle(panel)}><Icon name="close" size={14} stroke={2.2} /></button>
+            <span class="eyebrow grow">{$t('chats.panel.' + panel)}</span>
+            <button class="icon tiny" aria-label={$t('common.close')} on:click={() => toggle(panel)}><Icon name="close" size={14} stroke={2.2} /></button>
           </div>
 
           {#if panel === 'contact'}
@@ -144,36 +145,36 @@
               <QRScan on:scan={scanned} on:close={() => (scanning = false)} />
             {:else}
               <form class="stack tight" on:submit|preventDefault={submitContact}>
-                <textarea rows="3" placeholder="Paste a contact link or key" bind:value={contactInput} spellcheck="false" />
-                <input placeholder={parsed?.name ? `Name (${parsed.name})` : 'Name'} bind:value={name} />
+                <textarea rows="3" placeholder={$t('chats.pasteContact')} bind:value={contactInput} spellcheck="false" />
+                <input placeholder={parsed?.name ? $t('chats.nameWithHint', { name: parsed.name }) : $t('chats.name')} bind:value={name} />
                 <div class="row">
-                  <button class="primary grow" type="submit" disabled={busy || !contactInput.trim()}>Add contact</button>
-                  <button type="button" class="with-icon" on:click={() => (scanning = true)}><Icon name="qr" size={15} /> Scan</button>
+                  <button class="primary grow" type="submit" disabled={busy || !contactInput.trim()}>{$t('chats.addContact')}</button>
+                  <button type="button" class="with-icon" on:click={() => (scanning = true)}><Icon name="qr" size={15} /> {$t('chats.scan')}</button>
                 </div>
               </form>
             {/if}
           {:else if panel === 'group'}
             <form class="stack tight" on:submit|preventDefault={() => run(() => createGroup(name, groupKind))}>
-              <input placeholder="Group name" bind:value={name} />
+              <input placeholder={$t('chats.groupName')} bind:value={name} />
               <div class="seg kind">
-                <button type="button" class:active={groupKind === 'group'} on:click={() => (groupKind = 'group')}>Group</button>
-                <button type="button" class:active={groupKind === 'channel'} on:click={() => (groupKind = 'channel')}>Channel</button>
+                <button type="button" class:active={groupKind === 'group'} on:click={() => (groupKind = 'group')}>{$t('chats.group')}</button>
+                <button type="button" class:active={groupKind === 'channel'} on:click={() => (groupKind = 'channel')}>{$t('chats.channel')}</button>
               </div>
-              <p class="small faint">{groupKind === 'group' ? 'Everyone can write.' : 'Only admins write, others read.'}</p>
-              <button class="primary" type="submit" disabled={busy || !name.trim()}>Create</button>
+              <p class="small faint">{groupKind === 'group' ? $t('chats.groupHint') : $t('chats.channelHint')}</p>
+              <button class="primary" type="submit" disabled={busy || !name.trim()}>{$t('common.create')}</button>
             </form>
           {:else if panel === 'join'}
             <form class="stack tight" on:submit|preventDefault={() => run(() => joinGroup(invite))}>
-              <textarea rows="3" placeholder="Paste the invite" bind:value={invite} spellcheck="false" />
-              <button class="primary" type="submit" disabled={busy || !invite.trim()}>Join</button>
+              <textarea rows="3" placeholder={$t('chats.pasteInvite')} bind:value={invite} spellcheck="false" />
+              <button class="primary" type="submit" disabled={busy || !invite.trim()}>{$t('common.join')}</button>
             </form>
           {:else if panel === 'me'}
             <div class="stack tight">
-              <p class="small muted">Show this code or send the link so people can add you. It carries your name ({currentDisplayName($profile)}) and your key.</p>
-              {#if qr}<img class="qr" src={qr} alt="Your contact code" />{/if}
+              <p class="small muted">{$t('chats.meHint', { name: currentDisplayName($profile) })}</p>
+              {#if qr}<img class="qr" src={qr} alt={$t('chats.qrAlt')} />{/if}
               <div class="row">
-                <button class="grow with-icon center" on:click={() => copyText('link', myLink)}><Icon name={copied === 'link' ? 'check' : 'link'} size={15} />{copied === 'link' ? 'Copied' : 'Copy link'}</button>
-                <button class="grow with-icon center" on:click={() => copyText('key', $me.pubKey)}><Icon name={copied === 'key' ? 'check' : 'key'} size={15} />{copied === 'key' ? 'Copied' : 'Copy key'}</button>
+                <button class="grow with-icon center" on:click={() => copyText('link', myLink)}><Icon name={copied === 'link' ? 'check' : 'link'} size={15} />{copied === 'link' ? $t('common.copied') : $t('chats.copyLink')}</button>
+                <button class="grow with-icon center" on:click={() => copyText('key', $me.pubKey)}><Icon name={copied === 'key' ? 'check' : 'key'} size={15} />{copied === 'key' ? $t('common.copied') : $t('chats.copyKey')}</button>
               </div>
             </div>
           {/if}
@@ -184,8 +185,8 @@
 
     <div class="search">
       <Icon name="search" size={15} />
-      <input placeholder="Search" bind:value={query} spellcheck="false" />
-      {#if query}<button class="icon tiny" aria-label="Clear search" on:click={() => (query = '')}><Icon name="close" size={13} stroke={2.2} /></button>{/if}
+      <input placeholder={$t('common.search')} bind:value={query} spellcheck="false" />
+      {#if query}<button class="icon tiny" aria-label={$t('chats.clearSearch')} on:click={() => (query = '')}><Icon name="close" size={13} stroke={2.2} /></button>{/if}
     </div>
 
     <div class="list">
@@ -198,10 +199,10 @@
           <div class="body">
             <div class="row">
               <span class="grow name">{c.name}</span>
-              {#if c.ts}<span class="time">{when(c.ts)}</span>{/if}
+              {#if c.ts}<span class="time">{when(c.ts, $lang)}</span>{/if}
             </div>
             <div class="row">
-              <span class="grow last">{c.last || (c.kind === 'group' ? `${c.members} member${c.members === 1 ? '' : 's'}` : 'No messages yet')}</span>
+              <span class="grow last">{c.last || (c.kind === 'group' ? $t('chats.members', { n: c.members }) : $t('chats.noMessages'))}</span>
               {#if c.unread}<span class="badge">{c.unread}</span>{/if}
             </div>
           </div>
@@ -209,17 +210,17 @@
       {:else}
         <div class="empty">
           {#if q}
-            <p class="small muted">Nothing found for "{query}".</p>
+            <p class="small muted">{$t('chats.nothingFound', { query })}</p>
           {:else}
             <span class="empty-ic"><Icon name="message" size={22} /></span>
-            <p class="small muted">No chats yet. Add a contact from their link or code, or join a group with an invite.</p>
+            <p class="small muted">{$t('chats.empty')}</p>
           {/if}
         </div>
       {/each}
     </div>
     {#if !narrow}
       <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="resize" title="Drag to resize" on:mousedown|preventDefault={startResize} on:dblclick={() => { listWidth = 320; endResize(); }}></div>
+      <div class="resize" title={$t('chats.dragResize')} on:mousedown|preventDefault={startResize} on:dblclick={() => { listWidth = 320; endResize(); }}></div>
     {/if}
   </aside>
   {/if}
@@ -227,7 +228,7 @@
   {#if !narrow || active}
   <section>
     {#if listCollapsed && !narrow}
-      <button class="show-list" title="Show the chat list" aria-label="Show the chat list" on:click={toggleList}><Icon name="panel" size={17} /></button>
+      <button class="show-list" title={$t('chats.showList')} aria-label={$t('chats.showList')} on:click={toggleList}><Icon name="panel" size={17} /></button>
     {/if}
     {#if showCall}
       <div class="call" class:full={maximized}><CallStage title={active.name} bind:maximized /></div>
@@ -239,8 +240,8 @@
         <div class="ph-art" aria-hidden="true">
           <span class="b b1"></span><span class="b b2"></span><span class="b b3"></span>
         </div>
-        <h3>Select a chat</h3>
-        <p class="small muted">Messages are end-to-end encrypted and travel peer to peer.</p>
+        <h3>{$t('chats.selectChat')}</h3>
+        <p class="small muted">{$t('chats.e2e')}</p>
       </div>
     {/if}
   </section>

@@ -1,3 +1,5 @@
+import { tr } from './i18n/index.js';
+
 // Thin access to the Go side. Every bound method of main.App is reachable as App.Name(...args).
 export const App = new Proxy({}, {
   get(_, name) {
@@ -19,7 +21,7 @@ export function openURL(url) {
   else window.open(url, '_blank', 'noopener');
 }
 
-export function errText(err, fallback = 'Something went wrong') {
+export function errText(err, fallback = tr('shell.somethingWrong')) {
   return (err && (err.message || String(err))) || fallback;
 }
 

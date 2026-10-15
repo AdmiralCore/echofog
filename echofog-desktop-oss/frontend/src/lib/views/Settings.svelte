@@ -9,11 +9,12 @@
   import { theme } from '../stores/theme.js';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
-    { id: 'system', label: 'System', icon: 'monitor' },
-    { id: 'light', label: 'Light', icon: 'sun' },
-    { id: 'dark', label: 'Dark', icon: 'moon' },
+    { id: 'system', label: 'settings.themeSystem', icon: 'monitor' },
+    { id: 'light', label: 'settings.themeLight', icon: 'sun' },
+    { id: 'dark', label: 'settings.themeDark', icon: 'moon' },
   ];
 
   let settings = null;
@@ -66,8 +67,8 @@
   <div class="stack">
     <div class="page-head">
       <div class="grow">
-        <h1>Settings</h1>
-        <p class="muted small">Profile, look and feel, sounds and network.</p>
+        <h1>{$t('settings.title')}</h1>
+        <p class="muted small">{$t('settings.subtitle')}</p>
       </div>
     </div>
     {#if error}<p class="error small">{error}</p>{/if}
@@ -77,18 +78,18 @@
         <Avatar id={$profile} name={($displayName || '').trim() || $profile} size={60} />
         <div class="grow">
           <h2>{($displayName || '').trim() || $profile}</h2>
-          <p class="small muted">Profile “{$profile}”</p>
+          <p class="small muted">{$t('settings.profileNamed', { name: $profile })}</p>
         </div>
-        <button class="with-icon" on:click={signOut}><Icon name="logout" size={16} /> Sign out</button>
+        <button class="with-icon" on:click={signOut}><Icon name="logout" size={16} /> {$t('settings.signOut')}</button>
       </div>
-      <label>Name shown to people who add you
+      <label>{$t('settings.displayName')}
         <input bind:value={$displayName} placeholder={$profile} maxlength="64" />
       </label>
       <div>
-        <div class="lbl">Your key (others add you with it)</div>
+        <div class="lbl">{$t('settings.yourKey')}</div>
         <div class="copybox">
           <span class="mono grow">{$me.pubKey}</span>
-          <button class="icon" title="Copy key" on:click={copyKey}><Icon name={copied ? 'check' : 'copy'} size={16} /></button>
+          <button class="icon" title={$t('settings.copyKey')} on:click={copyKey}><Icon name={copied ? 'check' : 'copy'} size={16} /></button>
         </div>
       </div>
     </div>
@@ -97,19 +98,34 @@
       <div class="card-head">
         <span class="ico"><Icon name="palette" size={19} /></span>
         <div class="grow">
-          <h2>Appearance</h2>
-          <p class="small muted">System follows your Windows light or dark setting.</p>
+          <h2>{$t('settings.appearance')}</h2>
+          <p class="small muted">{$t('settings.appearanceHint')}</p>
         </div>
       </div>
-      <div class="themes" role="radiogroup" aria-label="Theme">
-        {#each THEMES as t}
-          <button class="theme-opt" class:sel={$theme === t.id} role="radio" aria-checked={$theme === t.id} on:click={() => theme.set(t.id)}>
-            <span class="preview {t.id}" aria-hidden="true">
+      <div class="themes" role="radiogroup" aria-label={$t('settings.theme')}>
+        {#each THEMES as th}
+          <button class="theme-opt" class:sel={$theme === th.id} role="radio" aria-checked={$theme === th.id} on:click={() => theme.set(th.id)}>
+            <span class="preview {th.id}" aria-hidden="true">
               <span class="pv-side"></span>
               <span class="pv-main"><span class="pv-b in"></span><span class="pv-b out"></span><span class="pv-b in short"></span></span>
             </span>
-            <span class="row opt-label"><Icon name={t.icon} size={15} /> {t.label}</span>
+            <span class="row opt-label"><Icon name={th.icon} size={15} /> {$t(th.label)}</span>
           </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="card stack">
+      <div class="card-head">
+        <span class="ico"><Icon name="globe" size={19} /></span>
+        <div class="grow">
+          <h2>{$t('settings.language')}</h2>
+          <p class="small muted">{$t('settings.languageHint')}</p>
+        </div>
+      </div>
+      <div class="seg" role="radiogroup" aria-label={$t('settings.language')}>
+        {#each [{ id: 'system', label: $t('settings.langSystem') }, ...LANGUAGES] as l}
+          <button role="radio" class:active={$locale === l.id} aria-checked={$locale === l.id} lang={l.id === 'system' ? undefined : l.id} on:click={() => locale.set(l.id)}>{l.label}</button>
         {/each}
       </div>
     </div>
@@ -118,14 +134,14 @@
       <div class="card-head">
         <span class="ico"><Icon name="bell" size={19} /></span>
         <div class="grow">
-          <h2>Sounds</h2>
-          <p class="small muted">Messages, calls and buttons.</p>
+          <h2>{$t('settings.sounds')}</h2>
+          <p class="small muted">{$t('settings.soundsHint')}</p>
         </div>
-        <input type="checkbox" class="switch" aria-label="Sounds" bind:checked={$soundSettings.enabled} />
+        <input type="checkbox" class="switch" aria-label={$t('settings.sounds')} bind:checked={$soundSettings.enabled} />
       </div>
       <div class="vol row" class:off={!$soundSettings.enabled}>
         <Icon name="volumeOff" size={16} />
-        <input class="grow" type="range" min="0" max="100" step="5" aria-label="Volume" disabled={!$soundSettings.enabled}
+        <input class="grow" type="range" min="0" max="100" step="5" aria-label={$t('settings.volume')} disabled={!$soundSettings.enabled}
           value={Math.round($soundSettings.volume * 100)}
           on:input={(e) => ($soundSettings.volume = e.target.value / 100)}
           on:change={() => play('receive')} />
@@ -133,9 +149,9 @@
         <span class="pct">{Math.round($soundSettings.volume * 100)}%</span>
       </div>
       <div class="row wrap">
-        <span class="small muted">Listen:</span>
-        {#each [['receive', 'Message'], ['send', 'Sent'], ['ring', 'Incoming call'], ['join', 'Join'], ['leave', 'Leave'], ['error', 'Error']] as [name, title]}
-          <button class="small" data-silent disabled={!$soundSettings.enabled} on:click={() => play(name)}>{title}</button>
+        <span class="small muted">{$t('settings.listen')}</span>
+        {#each [['receive', 'settings.sndMessage'], ['send', 'settings.sndSent'], ['ring', 'settings.sndRing'], ['join', 'settings.sndJoin'], ['leave', 'settings.sndLeave'], ['error', 'settings.sndError']] as [name, title]}
+          <button class="small" data-silent disabled={!$soundSettings.enabled} on:click={() => play(name)}>{$t(title)}</button>
         {/each}
       </div>
     </div>
@@ -145,21 +161,21 @@
         <div class="card-head">
           <span class="ico"><Icon name="globe" size={19} /></span>
           <div class="grow">
-            <h2>Network</h2>
-            <p class="small muted">Changes take effect after restart.</p>
+            <h2>{$t('settings.network')}</h2>
+            <p class="small muted">{$t('settings.networkHint')}</p>
           </div>
         </div>
         <label class="row opt">
           <span class="grow">
-            Direct socket
-            <span class="small muted block">Skip NAT discovery for maximum speed. Only for computers with a public IP.</span>
+            {$t('settings.directSocket')}
+            <span class="small muted block">{$t('settings.directSocketHint')}</span>
           </span>
           <input type="checkbox" class="switch" bind:checked={settings.directSocket} />
         </label>
-        <label class="buf">UDP socket buffer, MB (1-256)
+        <label class="buf">{$t('settings.socketBuffer')}
           <input type="number" min="1" max="256" bind:value={settings.socketBufferMb} />
         </label>
-        <div class="row"><button class="primary" on:click={save}>Save</button>{#if saved}<span class="small ok saved">✓ Saved. Takes effect after restart.</span>{/if}</div>
+        <div class="row"><button class="primary" on:click={save}>{$t('common.save')}</button>{#if saved}<span class="small ok saved">{$t('settings.savedRestart')}</span>{/if}</div>
       </div>
     {/if}
 
@@ -167,16 +183,15 @@
       <div class="card-head">
         <span class="ico danger"><Icon name="lock" size={19} /></span>
         <div class="grow">
-          <h2>Emergency lock</h2>
+          <h2>{$t('settings.lockTitle')}</h2>
           <p class="small muted">
-            Erases the decrypted keys from memory at once and stops the node. Everything on disk stays encrypted and can only
-            be opened again with your password or recovery phrase. Type LOCK to enable the button.
+            {$t('settings.lockHint')}
           </p>
         </div>
       </div>
       <div class="row">
         <input class="confirm" bind:value={wipeText} placeholder="LOCK" />
-        <button class="danger solid" disabled={wipeText !== 'LOCK'} on:click={wipe}>Lock now</button>
+        <button class="danger solid" disabled={wipeText !== 'LOCK'} on:click={wipe}>{$t('settings.lockNow')}</button>
       </div>
     </div>
   </div>

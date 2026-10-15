@@ -10,15 +10,11 @@
   import Icon from './ui/Icon.svelte';
   import PeerList from './PeerList.svelte';
   import QRScan from '../views/QRScan.svelte';
+  import { t, lang } from '../i18n/index.js';
 
   export let contacts = [];
 
-  const MODES = [
-    { id: 'off', label: 'Off', text: 'This computer relays nothing for others. Your own calls and messages still work.' },
-    { id: 'public', label: 'Public', text: 'Anyone may relay calls and messages through this computer when they cannot reach each other directly, and offline messages wait here. This helps the network.' },
-    { id: 'private', label: 'Private', text: 'Only the people you list may use this relay, and it is not advertised. Give them your relay link.' },
-    { id: 'signaling', label: 'Signaling only', text: 'Helps peers behind NATs find a direct path to each other, but carries no calls, files or messages.' },
-  ];
+  $: MODES = ['off', 'public', 'private', 'signaling'].map((id) => ({ id, label: $t('relay.mode.' + id), text: $t('relay.mode.' + id + 'Text') }));
 
   let st = null;
   let error = '';
@@ -68,7 +64,7 @@
   async function addRelay(text = addInput) {
     addError = '';
     if (!parseRelayLink(text)) {
-      addError = 'Paste a relay link (echofog://relay/…) or host:port/<peer id>.';
+      addError = $t('relay.badLink');
       return;
     }
     busy = 'add';
@@ -111,80 +107,80 @@
   <div class="card-head">
     <span class="ico" class:ok={st && mode !== 'off'}><Icon name="relay" size={18} /></span>
     <div class="grow">
-      <h2>Relay
+      <h2>{$t('relay.title')}
         {#if st && mode !== 'off'}<span class="chip ok live-chip">{modeInfo.label.toLowerCase()}</span>{/if}
-        {#if st && !st.chosen}<span class="chip warn live-chip" title="You have not changed this yet">default</span>{/if}
+        {#if st && !st.chosen}<span class="chip warn live-chip" title={$t('relay.defaultTitle')}>{$t('relay.default')}</span>{/if}
       </h2>
-      <p class="small muted">Carry calls and messages for people who cannot reach each other directly, and choose the relays you use. This is free: nobody pays for relaying.</p>
+      <p class="small muted">{$t('relay.hint')}</p>
     </div>
   </div>
   {#if error}<p class="small error">{error}</p>{/if}
 
   {#if st}
-    <div class="seg" role="radiogroup" aria-label="Relay mode">
+    <div class="seg" role="radiogroup" aria-label={$t('relay.modeLabel')}>
       {#each MODES as m}
         <button role="radio" aria-checked={mode === m.id} class:active={mode === m.id} disabled={!!busy} on:click={() => setMode(m.id)}>{m.label}</button>
       {/each}
     </div>
     <p class="small muted">{modeInfo.text}</p>
     {#if !st.chosen && mode === 'public'}
-      <p class="note">By default every EchoFog desktop is a public relay, so that people behind strict routers can still call each other. It uses some of your bandwidth while others need it. Pick <b>Off</b> or <b>Private</b> if you would rather not.</p>
+      <p class="note">{$t('relay.defaultNote')}{$t('relay.pickBefore')}<b>{$t('relay.mode.off')}</b>{$t('relay.pickOr')}<b>{$t('relay.mode.private')}</b>{$t('relay.pickAfter')}</p>
     {/if}
 
     {#if mode === 'private'}
       <div class="sub">
-        <div class="eyebrow">Allowed people</div>
-        <PeerList ids={st.settings.allowedPeers} {contacts} disabled={!!busy} label="Allowed people"
-          empty="Nobody yet: the relay serves no one until you add people."
+        <div class="eyebrow">{$t('relay.allowed')}</div>
+        <PeerList ids={st.settings.allowedPeers} {contacts} disabled={!!busy} label={$t('relay.allowed')}
+          empty={$t('relay.allowedEmpty')}
           on:change={(e) => save({ allowedPeers: e.detail }, 'peers')} />
       </div>
     {/if}
 
     {#if relays}
       <div class="sub">
-        <div class="eyebrow">Your relay link</div>
+        <div class="eyebrow">{$t('relay.yourLink')}</div>
         {#if st.link}
           <div class="copybox">
             <span class="mono grow">{st.link}</span>
-            <button class="icon" title="Copy link" on:click={() => copyText(st.link, 'link')}><Icon name={copied === 'link' ? 'check' : 'copy'} size={16} /></button>
-            <button class="icon" class:on={showQR} title="Show QR code" on:click={toggleQR}><Icon name="qr" size={16} /></button>
+            <button class="icon" title={$t('relay.copyLink')} on:click={() => copyText(st.link, 'link')}><Icon name={copied === 'link' ? 'check' : 'copy'} size={16} /></button>
+            <button class="icon" class:on={showQR} title={$t('relay.showQR')} on:click={toggleQR}><Icon name="qr" size={16} /></button>
           </div>
-          {#if showQR && qr}<img class="qr" src={qr} alt="Relay link QR code" width="180" height="180" />{/if}
+          {#if showQR && qr}<img class="qr" src={qr} alt={$t('relay.qrAlt')} width="180" height="180" />{/if}
           <p class="small faint">
-            {st.mapped ? 'Reachable through the port your router forwards.' : 'This computer has a public address.'}
-            {mode === 'private' ? 'Only the people above can use it.' : 'Anyone with the link can use it.'}
+            {st.mapped ? $t('relay.mapped') : $t('relay.public')}
+            {mode === 'private' ? $t('relay.onlyAbove') : $t('relay.anyone')}
           </p>
         {:else}
-          <p class="note">{st.reason || 'Others cannot reach this computer yet.'}</p>
+          <p class="note">{st.reason || $t('relay.unreachable')}</p>
         {/if}
         <div class="row wrap portrow">
-          <label class="port">Listen port (0 = a new one at every start)
+          <label class="port">{$t('relay.port')}
             <input type="number" min="0" max="65535" bind:value={port} />
           </label>
-          <button on:click={savePort} disabled={!!busy || String(st.settings.listenPort) === String(port)}>{busy === 'port' ? 'Saving…' : 'Save port'}</button>
+          <button on:click={savePort} disabled={!!busy || String(st.settings.listenPort) === String(port)}>{busy === 'port' ? $t('relay.saving') : $t('relay.savePort')}</button>
         </div>
-        {#if st.restartNeeded}<p class="small warn">The new port is used after you restart the app.</p>{:else if !st.settings.listenPort}<p class="small faint">With a random port the link changes every time the app starts. Fix a port to keep it.</p>{/if}
-        <p class="small faint">Your peer ID, for someone who runs a private relay: <span class="mono">{$me.id || '…'}</span>
-          {#if $me.id}<button class="icon tiny" title="Copy peer ID" on:click={() => copyText($me.id, 'id')}><Icon name={copied === 'id' ? 'check' : 'copy'} size={13} /></button>{/if}</p>
+        {#if st.restartNeeded}<p class="small warn">{$t('relay.restart')}</p>{:else if !st.settings.listenPort}<p class="small faint">{$t('relay.randomPort')}</p>{/if}
+        <p class="small faint">{$t('relay.yourId')} <span class="mono">{$me.id || '…'}</span>
+          {#if $me.id}<button class="icon tiny" title={$t('relay.copyId')} on:click={() => copyText($me.id, 'id')}><Icon name={copied === 'id' ? 'check' : 'copy'} size={13} /></button>{/if}</p>
       </div>
 
       <div class="stats">
-        <div class="stat"><span class="eyebrow">Relaying now</span><span class="num">{st.activeCircuits}</span></div>
-        <div class="stat"><span class="eyebrow">Carried</span><span class="num">{bytes(st.bytesRouted)}</span></div>
-        <div class="stat"><span class="eyebrow">Messages passed on</span><span class="num">{st.forwarded}</span></div>
-        {#if mode === 'private'}<div class="stat"><span class="eyebrow">Turned away</span><span class="num">{st.accessRefused}</span></div>{/if}
+        <div class="stat"><span class="eyebrow">{$t('relay.now')}</span><span class="num">{st.activeCircuits}</span></div>
+        <div class="stat"><span class="eyebrow">{$t('relay.carried')}</span><span class="num">{bytes(st.bytesRouted, $lang)}</span></div>
+        <div class="stat"><span class="eyebrow">{$t('relay.forwarded')}</span><span class="num">{st.forwarded}</span></div>
+        {#if mode === 'private'}<div class="stat"><span class="eyebrow">{$t('relay.refused')}</span><span class="num">{st.accessRefused}</span></div>{/if}
       </div>
     {/if}
 
     <div class="sub">
-      <div class="eyebrow">Relays you use</div>
-      <p class="small muted">The app finds relays by itself. Add a relay someone gave you (for example their private one) and it is used first.</p>
+      <div class="eyebrow">{$t('relay.using')}</div>
+      <p class="small muted">{$t('relay.usingHint')}</p>
       {#each st.using as r (r.peerId)}
         <div class="relay-row">
-          <span class="dot" class:on={r.connected} title={r.connected ? 'Connected' : 'Not connected'}></span>
+          <span class="dot" class:on={r.connected} title={r.connected ? $t('relay.connectedTitle') : $t('relay.notConnectedTitle')}></span>
           <span class="mono grow">{r.addr} <span class="faint">· {short(r.peerId)}</span></span>
-          <span class="small {r.connected ? 'ok' : 'faint'}">{r.connected ? 'connected' : 'connecting…'}</span>
-          <button class="icon tiny" title="Remove" disabled={!!busy} on:click={() => save({ relays: st.settings.relays.filter((x) => !x.endsWith('/' + r.peerId)) }, 'relays')}><Icon name="trash" size={14} /></button>
+          <span class="small {r.connected ? 'ok' : 'faint'}">{r.connected ? $t('relay.connected') : $t('relay.connecting')}</span>
+          <button class="icon tiny" title={$t('common.remove')} disabled={!!busy} on:click={() => save({ relays: st.settings.relays.filter((x) => !x.endsWith('/' + r.peerId)) }, 'relays')}><Icon name="trash" size={14} /></button>
         </div>
       {/each}
       {#if scanning}
@@ -192,13 +188,13 @@
       {/if}
       <div class="row wrap">
         <input class="grow link-in" bind:value={addInput} placeholder="echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && addRelay()} />
-        <button class="primary" on:click={() => addRelay()} disabled={!!busy || !addInput.trim()}>{busy === 'add' ? 'Adding…' : 'Add relay'}</button>
-        <button class="with-icon" on:click={() => (scanning = true)}><Icon name="qr" size={15} /> Scan</button>
+        <button class="primary" on:click={() => addRelay()} disabled={!!busy || !addInput.trim()}>{busy === 'add' ? $t('relay.adding') : $t('relay.add')}</button>
+        <button class="with-icon" on:click={() => (scanning = true)}><Icon name="qr" size={15} /> {$t('relay.scan')}</button>
       </div>
       {#if addError}<p class="small error">{addError}</p>{/if}
     </div>
   {:else if !error}
-    <p class="small faint row"><span class="spinner"></span> Loading…</p>
+    <p class="small faint row"><span class="spinner"></span> {$t('common.loading')}</p>
   {/if}
 </div>
 

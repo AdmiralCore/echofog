@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { App, waitForBridge, errText } from '../api.js';
+import { tr } from '../i18n/index.js';
 
 // screen: 'loading' | 'profiles' | 'login' | 'create' | 'restore' | 'phrase' | 'app'
 export const screen = writable('loading');
@@ -25,7 +26,7 @@ export async function boot() {
 
 export async function choose(name) {
   name = (name || '').trim();
-  if (!name) throw new Error('Enter a profile name');
+  if (!name) throw new Error(tr('auth.enterProfileName'));
   await App.SelectProfile(name);
   profile.set(name);
   const registered = await App.IsRegistered();

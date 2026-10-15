@@ -4,6 +4,7 @@ import { App, on, errText } from '../api.js';
 import { play } from '../sounds.js';
 import { callState } from '../services/call.service.js';
 import { ringIncoming, incomingCall, declineIncomingCall } from './call.store.js';
+import { tr } from '../i18n/index.js';
 
 const inCall = () => get(callState).inCall;
 
@@ -28,7 +29,7 @@ function directMessage(m) {
     id: m.id || 'm' + m.timestamp,
     mine: !!m.is_mine,
     sender: m.is_mine ? '' : m.sender_id,
-    text: call ? (m.is_mine ? 'Outgoing call' : 'Incoming call') : m.text,
+    text: call ? (m.is_mine ? tr('chats.outgoingCall') : tr('chats.incomingCall')) : m.text,
     system: call,
     pending: !!m.pending,
     ts: toMs(m.timestamp),
@@ -71,7 +72,7 @@ export async function loadChats() {
       items.push(conv);
     }
   } catch (err) {
-    chatError.set(errText(err, 'Could not load contacts'));
+    chatError.set(errText(err, tr('chats.err.loadContacts')));
   }
   try {
     for (const g of (await App.ListGroups()) || []) {
@@ -86,7 +87,7 @@ export async function loadChats() {
       });
     }
   } catch (err) {
-    chatError.set(errText(err, 'Could not load groups'));
+    chatError.set(errText(err, tr('chats.err.loadGroups')));
   }
   const prev = Object.fromEntries(get(chats).map((c) => [c.id, c]));
   chats.set(items.map((c) => ({ ...c, unread: prev[c.id]?.unread || 0 })));
@@ -131,7 +132,7 @@ function listen() {
       case 'removed':
         if (get(activeId) === id) { activeId.set(''); messages.set([]); }
         await loadChats();
-        if (ev.reason === 'deleted') chatNote.set(`"${ev.title || 'The group'}" was deleted by its owner.`);
+        if (ev.reason === 'deleted') chatNote.set(ev.title ? tr('chats.note.deleted', { title: ev.title }) : tr('chats.note.groupDeleted'));
         break;
       case 'history':
         if (get(activeId) === id) await reload();
@@ -141,14 +142,14 @@ function listen() {
         // the call is over: if it was still ringing here, stop
         if (get(incomingCall)?.callId === ev.callId) {
           declineIncomingCall();
-          chatNote.set(`Missed call in ${ev.title || 'the group'}.`);
+          chatNote.set(ev.title ? tr('chats.note.missedCall', { title: ev.title }) : tr('chats.note.missedCallGroup'));
         }
         break;
       case 'call':
         // somebody started a call in a group we are in
         ringIncoming({
           callId: ev.callId, coordinator: ev.coordinator, from: ev.from, chatId: id,
-          alias: `${ev.title || 'Group'}: ${nameOfPeer(ev.from)}`,
+          alias: `${ev.title || tr('chats.groupFallback')}: ${nameOfPeer(ev.from)}`,
         });
         break;
       default:
@@ -199,7 +200,7 @@ async function reload() {
     const last = list[list.length - 1];
     if (last) patch(conv.id, (c) => ({ ...c, last: last.text, ts: last.ts }));
   } catch (err) {
-    chatError.set(errText(err, 'Could not load messages'));
+    chatError.set(errText(err, tr('chats.err.loadMessages')));
   }
 }
 
@@ -211,18 +212,18 @@ export async function send(text) {
   chatNote.set('');
   try {
     if (conv.kind === 'direct') {
-      if (!conv.pubKey) throw new Error('This contact has no key yet. Ask them to share their contact link.');
+      if (!conv.pubKey) throw new Error(tr('chats.err.noKey'));
       await App.SendMessage(conv.pubKey, text);
     } else {
       const m = await App.SendGroupMessage(conv.groupId, text);
-      if (m.queued > 0) chatNote.set(`${m.queued} member${m.queued === 1 ? ' is' : 's are'} offline and will get it when back.`);
-      if (m.failed > 0) chatError.set(`Could not send to ${m.failed} member${m.failed === 1 ? '' : 's'}.`);
+      if (m.queued > 0) chatNote.set(tr('chats.note.queued', { n: m.queued }));
+      if (m.failed > 0) chatError.set(tr('chats.err.failed', { n: m.failed }));
     }
     play('send', { quiet: inCall() });
     await reload();
     return true;
   } catch (err) {
-    chatError.set(errText(err, 'Message was not sent'));
+    chatError.set(errText(err, tr('chats.err.notSent')));
     return false;
   }
 }

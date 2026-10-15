@@ -5,6 +5,7 @@
     import Avatar from '../ui/Avatar.svelte';
     import Icon from '../ui/Icon.svelte';
     import VideoView from './VideoView.svelte';
+    import { t } from '../../i18n/index.js';
 
     export let peer;
     /** camera stream of this person, if any */
@@ -51,14 +52,14 @@
         {/if}
         <span class="truncate">{name}</span>
         {#if isCoordinator && !compact}
-            <span class="text-[10px] font-bold uppercase tracking-wide text-white/50" title="Coordinates this call's relay tree">host</span>
+            <span class="text-[10px] font-bold uppercase tracking-wide text-white/50" title={$t('call.hostTitle')}>{$t('call.host')}</span>
         {/if}
     </div>
 
     <button
         class="more absolute right-2 top-2 w-8 h-8 p-0 border-0 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-        title="More"
-        aria-label="More options for {name}"
+        title={$t('call.more')}
+        aria-label={$t('call.moreFor', { name })}
         on:click|stopPropagation={openMenu}
     >
         <Icon name="more" size={18} />

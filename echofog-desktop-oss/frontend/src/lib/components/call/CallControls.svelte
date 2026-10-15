@@ -3,6 +3,7 @@
     import { toggleMute, toggleDeafen, toggleVideo, toggleScreenShare, endCall, resumeAudioContext } from '../../stores/call.store.js';
     import Icon from '../ui/Icon.svelte';
     import Popover from '../ui/Popover.svelte';
+    import { t } from '../../i18n/index.js';
 
     export let compact = false;
 
@@ -65,15 +66,15 @@
     <div class="split" bind:this={micAnchor}>
         <button
             class="ctl {s.isMicMuted ? 'ctl-off' : ''}"
-            title={s.hasMic ? (s.isMicMuted ? 'Unmute' : 'Mute') : 'No microphone'}
-            aria-label={s.isMicMuted ? 'Unmute' : 'Mute'}
+            title={s.hasMic ? (s.isMicMuted ? $t('call.unmute') : $t('call.mute')) : $t('call.noMic')}
+            aria-label={s.isMicMuted ? $t('call.unmute') : $t('call.mute')}
             aria-pressed={s.isMicMuted}
             on:click={toggleMute}
         >
             <Icon name={s.isMicMuted ? 'micOff' : 'mic'} size={21} />
         </button>
         {#if !compact}
-            <button class="ctl-caret" class:open={menu === 'audio'} title="Microphone and speakers" aria-label="Microphone and speakers" on:click={() => toggleMenu('audio')}>
+            <button class="ctl-caret" class:open={menu === 'audio'} title={$t('call.micAndSpeakers')} aria-label={$t('call.micAndSpeakers')} on:click={() => toggleMenu('audio')}>
                 <Icon name="chevronUp" size={13} stroke={2.4} />
             </button>
         {/if}
@@ -81,8 +82,8 @@
 
     <button
         class="ctl {s.isDeafened ? 'ctl-off' : ''}"
-        title={s.isDeafened ? 'Undeafen' : 'Deafen'}
-        aria-label={s.isDeafened ? 'Undeafen' : 'Deafen'}
+        title={s.isDeafened ? $t('call.undeafen') : $t('call.deafen')}
+        aria-label={s.isDeafened ? $t('call.undeafen') : $t('call.deafen')}
         aria-pressed={s.isDeafened}
         on:click={toggleDeafen}
     >
@@ -93,14 +94,14 @@
         <div class="split" bind:this={camAnchor}>
             <button
                 class="ctl {s.isCameraOn ? 'ctl-on' : ''}"
-                title={s.isCameraOn ? 'Turn off camera' : 'Turn on camera'}
-                aria-label={s.isCameraOn ? 'Turn off camera' : 'Turn on camera'}
+                title={s.isCameraOn ? $t('call.cameraOff') : $t('call.cameraOn')}
+                aria-label={s.isCameraOn ? $t('call.cameraOff') : $t('call.cameraOn')}
                 aria-pressed={s.isCameraOn}
                 on:click={toggleVideo}
             >
                 <Icon name={s.isCameraOn ? 'video' : 'videoOff'} size={21} />
             </button>
-            <button class="ctl-caret" class:open={menu === 'camera'} title="Choose the camera" aria-label="Camera" on:click={() => toggleMenu('camera')}>
+            <button class="ctl-caret" class:open={menu === 'camera'} title={$t('call.chooseCamera')} aria-label={$t('call.camera')} on:click={() => toggleMenu('camera')}>
                 <Icon name="chevronUp" size={13} stroke={2.4} />
             </button>
         </div>
@@ -109,15 +110,15 @@
     <div class="split" bind:this={shareAnchor}>
         <button
             class="ctl {s.isScreenSharing ? 'ctl-on' : ''}"
-            title={s.isScreenSharing ? 'Stop sharing' : 'Share your screen'}
-            aria-label={s.isScreenSharing ? 'Stop sharing' : 'Share your screen'}
+            title={s.isScreenSharing ? $t('call.stopSharing') : $t('call.shareYourScreen')}
+            aria-label={s.isScreenSharing ? $t('call.stopSharing') : $t('call.shareYourScreen')}
             aria-pressed={s.isScreenSharing}
             on:click={toggleScreenShare}
         >
             <Icon name="screenUp" size={21} />
         </button>
         {#if !compact}
-            <button class="ctl-caret" class:open={menu === 'quality'} title="Stream quality {qLabel ? '· ' + qLabel : ''}" aria-label="Stream quality" on:click={() => toggleMenu('quality')}>
+            <button class="ctl-caret" class:open={menu === 'quality'} title="{$t('call.quality')} {qLabel ? '· ' + qLabel : ''}" aria-label={$t('call.quality')} on:click={() => toggleMenu('quality')}>
                 <Icon name="chevronUp" size={13} stroke={2.4} />
             </button>
         {/if}
@@ -125,14 +126,14 @@
 
     <div class="sep"></div>
 
-    <button class="ctl ctl-leave" title="Leave call" aria-label="Leave call" on:click={endCall}>
+    <button class="ctl ctl-leave" title={$t('call.leave')} aria-label={$t('call.leave')} on:click={endCall}>
         <Icon name="hangup" size={21} />
     </button>
 </div>
 
 {#if menu === 'audio'}
-    <Popover anchor={micAnchor} label="Microphone and speakers" on:close={() => (menu = '')}>
-        <p class="pop-title">Microphone</p>
+    <Popover anchor={micAnchor} label={$t('call.micAndSpeakers')} on:close={() => (menu = '')}>
+        <p class="pop-title">{$t('call.microphone')}</p>
         {#each s.devices.mics as d (d.id)}
             <button class="pop-row" class:sel={d.id === s.micDeviceId || (!s.micDeviceId && d.id === 'default')} on:click={() => callService.setMicDevice(d.id)}>
                 <Icon name="mic" size={15} className="opacity-60" />
@@ -140,12 +141,12 @@
                 {#if d.id === s.micDeviceId || (!s.micDeviceId && d.id === 'default')}<Icon name="check" size={15} className="tick" />{/if}
             </button>
         {:else}
-            <p class="pop-empty">No microphones found</p>
+            <p class="pop-empty">{$t('call.noMics')}</p>
         {/each}
-        <p class="pop-title">Speakers and headphones</p>
+        <p class="pop-title">{$t('call.speakers')}</p>
         <button class="pop-row" class:sel={!s.outDeviceId} on:click={() => callService.setOutputDevice('')}>
             <Icon name="volume" size={15} className="opacity-60" />
-            <span class="label">System default</span>
+            <span class="label">{$t('call.systemDefault')}</span>
             {#if !s.outDeviceId}<Icon name="check" size={15} className="tick" />{/if}
         </button>
         {#each s.devices.outs.filter((d) => d.id && d.id !== 'default') as d (d.id)}
@@ -157,8 +158,8 @@
         {/each}
     </Popover>
 {:else if menu === 'camera'}
-    <Popover anchor={camAnchor} label="Camera" on:close={() => (menu = '')}>
-        <p class="pop-title">Camera</p>
+    <Popover anchor={camAnchor} label={$t('call.camera')} on:close={() => (menu = '')}>
+        <p class="pop-title">{$t('call.camera')}</p>
         {#each s.devices.cams as d (d.id)}
             <button class="pop-row" class:sel={d.id === s.camDeviceId} on:click={() => { callService.setCameraDevice(d.id); menu = ''; }}>
                 <Icon name="video" size={15} className="opacity-60" />
@@ -166,33 +167,33 @@
                 {#if d.id === s.camDeviceId}<Icon name="check" size={15} className="tick" />{/if}
             </button>
         {:else}
-            <p class="pop-empty">No cameras found</p>
+            <p class="pop-empty">{$t('call.noCams')}</p>
         {/each}
     </Popover>
 {:else if menu === 'quality'}
-    <Popover anchor={shareAnchor} width={320} label="Stream quality" on:close={() => (menu = '')}>
-        <p class="pop-title">Stream quality</p>
+    <Popover anchor={shareAnchor} width={320} label={$t('call.quality')} on:close={() => (menu = '')}>
+        <p class="pop-title">{$t('call.quality')}</p>
         {#each s.qualities as q (q.id)}
             <button class="pop-row" class:sel={q.id === currentQ} role="option" aria-selected={q.id === currentQ} on:click={() => pickQuality(q)}>
                 <span class="label strong">{q.label}</span>
-                {#if !q.fits}<span class="hint" title="Your upload is lower than this stream needs; it may stutter">needs more upload</span>{/if}
-                <span class="rate">{mbps(q.bitrateKbps)} Mbps</span>
+                {#if !q.fits}<span class="hint" title={$t('call.needsUploadHint')}>{$t('call.needsUpload')}</span>{/if}
+                <span class="rate">{mbps(q.bitrateKbps)} {$t('unit.mbps')}</span>
                 {#if q.id === currentQ}<Icon name="check" size={15} className="tick" />{/if}
             </button>
         {:else}
-            <p class="pop-empty">Loading presets…</p>
+            <p class="pop-empty">{$t('call.loadingPresets')}</p>
         {/each}
         <div class="upload">
             <div class="row">
-                <span class="grow">{#if measuring}Measuring upload…{:else if measuredKbps}Your upload: {mbps(measuredKbps)} Mbps{:else}Upload speed unknown{/if}</span>
-                <button class="link" disabled={measuring} on:click={measure}>Measure</button>
+                <span class="grow">{#if measuring}{$t('call.measuring')}{:else if measuredKbps}{$t('call.yourUpload', { v: mbps(measuredKbps) + ' ' + $t('unit.mbps') })}{:else}{$t('call.uploadUnknown')}{/if}</span>
+                <button class="link" disabled={measuring} on:click={measure}>{$t('call.measure')}</button>
             </div>
             {#if measureError}<p class="error">{measureError}</p>{/if}
             <form class="row" on:submit|preventDefault={applyManual}>
-                <input type="number" min="1" placeholder="Upload, Mbps" aria-label="Upload speed in Mbps" bind:value={manualMbps} />
-                <button type="submit">Set</button>
+                <input type="number" min="1" placeholder={$t('call.uploadPlaceholder')} aria-label={$t('call.uploadAria')} bind:value={manualMbps} />
+                <button type="submit">{$t('call.set')}</button>
             </form>
-            <p class="note-text">Every quality can be chosen; above your upload the picture may stutter. Viewers relay your stream to each other, so 4K60 needs upload for about two copies.</p>
+            <p class="note-text">{$t('call.qualityNote')}</p>
         </div>
     </Popover>
 {/if}

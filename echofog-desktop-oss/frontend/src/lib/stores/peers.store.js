@@ -1,5 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import { GetContacts, GetMyID } from '@wailsjs/go/main/App';
+import { lang, tr } from '../i18n/index.js';
 
 // Who is who: our own peer ID and the contact book, used to label call members and messages.
 export const selfId = writable('');
@@ -21,9 +22,9 @@ export function shortId(id) {
 }
 
 /** peerName returns a human label for a peer ID. */
-export const peerName = derived([selfId, contactsById], ([$self, $contacts]) => (id) => {
-    if (!id) return 'Unknown';
-    if (id === $self) return 'You';
+export const peerName = derived([selfId, contactsById, lang], ([$self, $contacts]) => (id) => {
+    if (!id) return tr('chats.unknown');
+    if (id === $self) return tr('chats.You');
     return $contacts[id]?.alias || shortId(id);
 });
 

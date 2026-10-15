@@ -7,8 +7,9 @@
     import ParticipantMenu from './ParticipantMenu.svelte';
     import CallControls from './CallControls.svelte';
     import Icon from '../ui/Icon.svelte';
+    import { t } from '../../i18n/index.js';
 
-    export let title = 'Call';
+    export let title = '';
     /** maximized: the stage takes the whole chat column */
     export let maximized = false;
 
@@ -43,23 +44,23 @@
     }
 </script>
 
-<section class="relative flex flex-col w-full h-full min-h-0 bg-[#000] text-white select-none" aria-label="Call">
+<section class="relative flex flex-col w-full h-full min-h-0 bg-[#000] text-white select-none" aria-label={$t('call.call')}>
     <header class="h-12 shrink-0 flex items-center justify-between px-4 gap-3">
         <div class="flex items-center gap-2 min-w-0">
             <span class="w-2 h-2 rounded-full {s.inCall ? 'bg-[#23a55a]' : 'bg-[#f0b232] animate-pulse'}"></span>
-            <span class="font-semibold truncate">{title}</span>
+            <span class="font-semibold truncate">{title || $t('call.call')}</span>
             <span class="text-sm text-[#949ba4] shrink-0">
-                {#if s.inCall}{formatDuration($callDuration)} · {members.length} {members.length === 1 ? 'person' : 'people'}{:else}Connecting…{/if}
+                {#if s.inCall}{formatDuration($callDuration)} · {$t('call.people', { n: members.length })}{:else}{$t('call.connecting')}{/if}
             </span>
-            <span class="hidden sm:flex items-center gap-1 text-xs text-[#949ba4] ml-2" title="Media is end-to-end encrypted and relayed peer-to-peer">
-                <Icon name="lock" size={13} /> End-to-end encrypted
+            <span class="hidden sm:flex items-center gap-1 text-xs text-[#949ba4] ml-2" title={$t('call.e2eTitle')}>
+                <Icon name="lock" size={13} /> {$t('call.e2e')}
             </span>
         </div>
         <div class="flex items-center gap-1">
-            <button class="hdr-btn" title={maximized ? 'Show chat' : 'Focus on call'} aria-label={maximized ? 'Show chat' : 'Focus on call'} on:click={() => (maximized = !maximized)}>
+            <button class="hdr-btn" title={maximized ? $t('call.showChat') : $t('call.focusCall')} aria-label={maximized ? $t('call.showChat') : $t('call.focusCall')} on:click={() => (maximized = !maximized)}>
                 <Icon name={maximized ? 'collapse' : 'expand'} size={18} />
             </button>
-            <button class="hdr-btn" title="Minimize call" aria-label="Minimize call" on:click={() => stageExpanded.set(false)}>
+            <button class="hdr-btn" title={$t('call.minimize')} aria-label={$t('call.minimize')} on:click={() => stageExpanded.set(false)}>
                 <Icon name="chevronUp" size={18} />
             </button>
         </div>
