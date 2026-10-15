@@ -360,11 +360,16 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	if a == nil || a.CheckedAt == 0 {
 		return VoucherReply{Error: "cannot check the vault on the TON network, try again shortly"}
 	}
-	b.data.Peers[tag] = key
 	prev := bigOf(a.Cumulative)
 	reply := func() VoucherReply { return VoucherReply{OK: true, Credit: a.Credit, Cumulative: a.Cumulative} }
 	if sv.Cumulative.Cmp(prev) <= 0 {
-		return reply()
+		// A repeat from the peer this vault already pays for is fine (a lost reply). From anyone
+		// else it is a replay: old vouchers are public once claimed on-chain, and binding the
+		// sender to this vault would let them spend its credit.
+		if b.data.Peers[tag] == key {
+			return reply()
+		}
+		return VoucherReply{Error: fmt.Sprintf("%v: this voucher was already used", ErrVoucherRejected)}
 	}
 	deposit := bigOf(a.Deposit)
 	switch {
@@ -389,6 +394,8 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	a.Cumulative, a.Sig = sv.Cumulative.String(), hex.EncodeToString(sv.Signature)
 	a.Credit += bought.Int64()
 	a.Updated = now.Unix()
+	// only a strictly newer voucher binds the sender: nobody but the vault's owner can sign one
+	b.data.Peers[tag] = key
 	b.dirty = true
 	_ = b.flushLocked() // a signed voucher is money: never leave it to the timer
 	return reply()

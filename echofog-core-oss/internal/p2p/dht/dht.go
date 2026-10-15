@@ -23,6 +23,35 @@ import (
 
 const Alpha = 3
 
+// maxLookupQueries bounds the peers one value lookup asks. Peers answer with the peers closest to
+// the key, which point back at each other; without a bound and a seen-set a lookup bounces
+// between them until it times out, redialing every one each time.
+const maxLookupQueries = 32
+
+// valueLookup is the state one lookup shares across its parallel branches: who has been asked.
+type valueLookup struct {
+	mu     sync.Mutex
+	self   types.PeerID
+	seen   map[types.PeerID]bool
+	budget int
+}
+
+func newValueLookup(self types.PeerID) *valueLookup {
+	return &valueLookup{self: self, seen: map[types.PeerID]bool{self: true}, budget: maxLookupQueries}
+}
+
+// claim reports whether p should be asked: not this node, not asked before, budget left.
+func (l *valueLookup) claim(p types.PeerID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.seen[p] || l.budget <= 0 {
+		return false
+	}
+	l.seen[p] = true
+	l.budget--
+	return true
+}
+
 type DHT interface {
 	Get(key []byte) ([]byte, error)
 	Set(key, data []byte) error
@@ -160,9 +189,13 @@ func (d *EchoFogDHT) Get(key []byte) ([]byte, error) {
 	searchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	lookup := newValueLookup(d.swarm.GetSelfID())
 	for _, node := range nodesToQuery {
+		if !lookup.claim(node.ID) {
+			continue
+		}
 		go func(p *PeerNode) {
-			rec, found := d.queryPeerForValue(searchCtx, p.ID, key)
+			rec, found := d.queryPeerForValue(searchCtx, lookup, p.ID, key)
 			if found {
 				select {
 				case fastestResponse <- rec:
@@ -242,7 +275,9 @@ func (d *EchoFogDHT) Set(key []byte, value []byte) error {
 
 }
 
-func (d *EchoFogDHT) queryPeerForValue(ctx context.Context, peerToAsk types.PeerID, targetKey []byte) (*internal_pb.DhtRecord, bool) {
+// queryPeerForValue asks one peer for the record; when it answers with closer peers, those are
+// asked in turn, each at most once per lookup (the caller has claimed peerToAsk already).
+func (d *EchoFogDHT) queryPeerForValue(ctx context.Context, lookup *valueLookup, peerToAsk types.PeerID, targetKey []byte) (*internal_pb.DhtRecord, bool) {
 	msgID := types.NewMessageID()
 
 	req := &internal_pb.MessageData{
@@ -279,13 +314,16 @@ func (d *EchoFogDHT) queryPeerForValue(ctx context.Context, peerToAsk types.Peer
 				copy(pubKey[:], peer.PubKey)
 				d.routingTable.AddOrUpdatePeer(pubKey, peer.Address)
 				pID := types.PeerPubKeyToID(pubKey)
-				if pID != peerToAsk && !d.swarm.ThisIsActivePeer(pID) {
+				if ctx.Err() != nil || !lookup.claim(pID) {
+					continue
+				}
+				if !d.swarm.ThisIsActivePeer(pID) {
 					dialCtx, dialCancel := context.WithTimeout(ctx, 2*time.Second)
 					_ = d.swarm.AddPotentialPeerWithCtx(dialCtx, pID, peer.Address)
 					dialCancel()
 				}
-				if pID != peerToAsk && d.swarm.ThisIsActivePeer(pID) {
-					if nextRec, nextFound := d.queryPeerForValue(ctx, pID, targetKey); nextFound {
+				if d.swarm.ThisIsActivePeer(pID) {
+					if nextRec, nextFound := d.queryPeerForValue(ctx, lookup, pID, targetKey); nextFound {
 						return nextRec, true
 					}
 				}

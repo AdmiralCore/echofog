@@ -76,3 +76,28 @@ func (n *Node) RelayReachability() RelayReachability {
 	}
 	return r
 }
+
+// publicIPs are the addresses the Internet reaches this node at: what NAT discovery observed and
+// what the router's port mapping reports. The exit refuses them as destinations.
+func (n *Node) publicIPs() []net.IP {
+	if n.NAT == nil {
+		return nil
+	}
+	var out []net.IP
+	add := func(hostport string) {
+		host, _, err := net.SplitHostPort(hostport)
+		if err != nil {
+			host = hostport
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			out = append(out, ip)
+		}
+	}
+	if pub, _ := n.NAT.GetNATProfile(); pub != "" {
+		add(pub)
+	}
+	if m := n.NAT.PortMapping(); m.IsValid() {
+		add(m.String())
+	}
+	return out
+}

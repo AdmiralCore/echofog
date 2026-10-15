@@ -116,6 +116,8 @@ type ExitService struct {
 	splicer      *ExitSplicer
 	enabled      atomic.Bool
 	allowPrivate bool
+	local        localNets       // this machine's own subnets, never reachable through the exit
+	selfIPs      func() []net.IP // this exit's public addresses (guarded by policyMu)
 	resolver     func(ctx context.Context, host string) ([]net.IP, error)
 	dialTimeout  time.Duration
 
@@ -226,7 +228,7 @@ func (e *ExitService) connect(ctx context.Context, target string) (net.Conn, byt
 		return nil, resultDenied
 	}
 	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
+	if err != nil || port < 1 || port > 65535 || e.portDenied(port) {
 		return nil, resultDenied
 	}
 
@@ -246,7 +248,7 @@ func (e *ExitService) connect(ctx context.Context, target string) (net.Conn, byt
 	d := &net.Dialer{Timeout: e.dialTimeout}
 	allowed := false
 	for _, ip := range ips {
-		if !e.allowPrivate && blockedIP(ip) {
+		if e.targetBlocked(ip) {
 			continue
 		}
 		allowed = true

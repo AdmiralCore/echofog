@@ -475,3 +475,33 @@ func TestVoucherPaidTunnel(t *testing.T) {
 	assert.Contains(t, r.Error, "free")
 	assert.Nil(t, svc.AccountOf(testClient).Vault)
 }
+
+// A voucher is public once it has been claimed on-chain. Replaying it from another peer must not
+// tie that peer to the victim's vault: it would spend the victim's credit and read its terms.
+func TestVoucherReplayFromAnotherPeerDoesNotBind(t *testing.T) {
+	chain := newFakeChain()
+	b := newTestBook(chain, "")
+	u := newTestUser(t, 1, chain, 1_000_000_000)
+	ctx := context.Background()
+
+	old := u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 64*testNanoPerMB)
+	require.True(t, b.Accept(ctx, "victim", old).OK)
+	require.True(t, b.Accept(ctx, "victim", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 128*testNanoPerMB)).OK)
+
+	for _, replay := range []VoucherOffer{old, u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 128*testNanoPerMB)} {
+		r := b.Accept(ctx, "attacker", replay)
+		assert.False(t, r.OK, "an old or repeated voucher from someone else is refused")
+		assert.Contains(t, r.Error, "already used")
+	}
+	assert.Zero(t, b.Available("attacker"))
+	assert.Zero(t, b.Spend("attacker", 1<<20))
+	if tm := b.Terms("attacker"); tm != nil {
+		assert.Empty(t, tm.Cumulative+tm.Sig, "the victim's voucher is not shown to the attacker")
+		assert.Zero(t, tm.Credit)
+	}
+	assert.Equal(t, int64(128<<20), b.Available("victim"), "the victim keeps the credit")
+
+	// the owner reconnecting under a new peer ID binds again with its next voucher
+	require.True(t, b.Accept(ctx, "victim-2", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 129*testNanoPerMB)).OK)
+	assert.Positive(t, b.Available("victim-2"))
+}

@@ -238,7 +238,7 @@ func (r *udpRelay) resolve(ctx context.Context, target string) (*net.UDPAddr, er
 		return nil, ErrInvalidTarget
 	}
 	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
+	if err != nil || port < 1 || port > 65535 || r.svc.portDenied(port) {
 		return nil, ErrInvalidTarget
 	}
 	var ips []net.IP
@@ -254,7 +254,7 @@ func (r *udpRelay) resolve(ctx context.Context, target string) (*net.UDPAddr, er
 	}
 	var dst *net.UDPAddr
 	for _, ip := range ips {
-		if !r.svc.allowPrivate && blockedIP(ip) {
+		if r.svc.targetBlocked(ip) {
 			continue
 		}
 		if ip.To4() != nil || dst == nil {

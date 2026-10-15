@@ -395,6 +395,7 @@ func (n *Node) Start() error {
 	n.Swarm.SetLogger(n.Logger)
 	n.BWProbe = bwprobe.NewForSwarm(n.Swarm)
 	n.ExitService = exit_gateway.NewExitService()
+	n.ExitService.SetSelfIPs(n.publicIPs)
 	exit_gateway.AttachToSwarm(n.Swarm, n.ExitService)
 
 	// WebSocket transport: lets this node sit behind a CDN (when ws_listen_addr is set) and lets

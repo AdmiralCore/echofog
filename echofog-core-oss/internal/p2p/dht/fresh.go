@@ -25,9 +25,13 @@ func (d *EchoFogDHT) GetFresh(key []byte) ([]byte, error) {
 	defer cancel()
 
 	found := make(chan []byte, len(nodes))
+	lookup := newValueLookup(d.swarm.GetSelfID())
 	for _, node := range nodes {
+		if !lookup.claim(node.ID) {
+			continue
+		}
 		go func(p *PeerNode) {
-			if rec, ok := d.queryPeerForValue(ctx, p.ID, key); ok && rec != nil {
+			if rec, ok := d.queryPeerForValue(ctx, lookup, p.ID, key); ok && rec != nil {
 				found <- rec.Value
 			}
 		}(node)
