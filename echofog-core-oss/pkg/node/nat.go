@@ -99,9 +99,12 @@ func (n *Node) maintainMapping(pm *portmap.NAT) {
 		ext, ok := pm.GetMapping("udp", udpPort)
 		// a router sitting behind another NAT (carrier-grade, double NAT) reports a private
 		// address: the forward then leads nowhere from the Internet, so it must not count
-		if ok && !publicIP(ext.Addr()) {
+		carrier := ok && !publicIP(ext.Addr())
+		if carrier {
+			// the router answered, but its own WAN address is private or 100.64: double/carrier NAT
 			ok = false
 		}
+		n.NAT.SetCarrierNAT(carrier)
 		if ok {
 			n.NAT.SetPortMapping(ext)
 		} else {

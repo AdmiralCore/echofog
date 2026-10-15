@@ -61,6 +61,9 @@ type NATManager struct {
 	natType    NATType
 	publicAddr string
 	mapped     netip.AddrPort // external address of a router port mapping, if any
+	// carrierNAT: a router was found but its own WAN address is private or in 100.64/10, so the
+	// node sits behind a second NAT (carrier-grade or double NAT) and no port forward can reach it.
+	carrierNAT bool
 }
 
 // NewNATManager's conn must be the socket whose NAT mapping matters (the QUIC port), or nil if
@@ -91,6 +94,21 @@ func (m *NATManager) SetPortMapping(addr netip.AddrPort) {
 	m.mu.Lock()
 	m.mapped = addr
 	m.mu.Unlock()
+}
+
+// SetCarrierNAT records whether the router itself is behind another NAT (carrier-grade/double NAT).
+func (m *NATManager) SetCarrierNAT(v bool) {
+	m.mu.Lock()
+	m.carrierNAT = v
+	m.mu.Unlock()
+}
+
+// CarrierNAT reports whether the node is behind a carrier-grade or double NAT, so forwarding a
+// port on the home router cannot make it reachable.
+func (m *NATManager) CarrierNAT() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.carrierNAT
 }
 
 // PortMapping is the router-assigned external address, or the zero value when there is none.

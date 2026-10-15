@@ -49,7 +49,8 @@ type RelayStatus struct {
 	Addr   string `json:"addr"`
 	NAT    string `json:"nat"`
 	Mapped bool   `json:"mapped"`
-	Reason string `json:"reason"` // why there is no link
+	Reason string `json:"reason"` // why there is no link (English; the UI uses Code)
+	Code   string `json:"code"`   // reason code the UI translates: connecting|nomap|cgnat|symmetric
 	// RestartNeeded: the listen port was changed and is not in use yet.
 	RestartNeeded bool `json:"restartNeeded"`
 
@@ -247,7 +248,7 @@ func (n *NodeApi) GetRelayStatus() (RelayStatus, error) {
 	settingsMu.Unlock()
 
 	reach := n.node.RelayReachability()
-	st.Addr, st.NAT, st.Mapped, st.Reason = reach.Addr, reach.NAT, reach.Mapped, reach.Reason
+	st.Addr, st.NAT, st.Mapped, st.Reason, st.Code = reach.Addr, reach.NAT, reach.Mapped, reach.Reason, reach.Code
 	if st.Addr != "" {
 		st.Link = MakeRelayLink(st.Addr)
 	}

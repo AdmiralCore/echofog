@@ -12,7 +12,8 @@ type StreamWrapper struct {
 }
 
 func (s *StreamWrapper) ReadFrame() (net_types.MessageType, []byte, error) {
-	return ReadFrame(s.stream)
+	// The handshake runs before the peer is authenticated, so cap each frame tightly.
+	return ReadFrameLimit(s.stream, HandshakeMaxFrameSize)
 }
 
 func (s *StreamWrapper) WriteFrame(msgType net_types.MessageType, data []byte) error {

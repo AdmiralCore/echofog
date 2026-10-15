@@ -9,6 +9,7 @@
   import { me } from '../stores/session.js';
   import Icon from './ui/Icon.svelte';
   import PeerList from './PeerList.svelte';
+  import NatHelp from './NatHelp.svelte';
   import QRScan from '../views/QRScan.svelte';
   import { t, lang } from '../i18n/index.js';
 
@@ -151,7 +152,7 @@
             {mode === 'private' ? $t('relay.onlyAbove') : $t('relay.anyone')}
           </p>
         {:else}
-          <p class="note">{st.reason || $t('relay.unreachable')}</p>
+          <NatHelp code={st.code} reason={st.reason} port={st.settings.listenPort} />
         {/if}
         <div class="row wrap portrow">
           <label class="port">{$t('relay.port')}

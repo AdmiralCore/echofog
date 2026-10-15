@@ -450,16 +450,18 @@ const relayMock = {
 };
 const relayStatus = () => {
   const s = relayMock.settings;
-  const behindNat = new URLSearchParams(location.search).has('nat');
-  const addr = behindNat ? '' : `203.0.113.7:${s.listenPort || 51234}/${SELF}`;
+  const q = new URLSearchParams(location.search);
+  const natCode = q.has('cgnat') ? 'cgnat' : q.has('symmetric') ? 'symmetric' : q.has('nat') ? 'nomap' : '';
+  const addr = natCode ? '' : `203.0.113.7:${s.listenPort || 51234}/${SELF}`;
   return {
     settings: { ...s, allowedPeers: [...s.allowedPeers], relays: [...s.relays] },
     chosen: relayMock.chosen,
     link: addr ? 'echofog://relay/' + addr : '',
     addr,
-    nat: behindNat ? 'cone' : 'cone',
-    mapped: !behindNat,
-    reason: behindNat ? 'This computer is behind a router that does not forward a port to it, so others cannot connect to it. Turn on UPnP or NAT-PMP on the router, or forward the port by hand, or run the relay on a computer with a public IP.' : '',
+    nat: natCode === 'symmetric' ? 'symmetric' : 'cone',
+    mapped: !natCode,
+    code: natCode,
+    reason: natCode ? 'This computer cannot be reached from the Internet.' : '',
     restartNeeded: s.listenPort !== relayMock.startPort,
     activeCircuits: s.server && !s.signalingOnly ? 2 : 0,
     bytesRouted: s.server ? 18350000 : 0,

@@ -58,6 +58,8 @@ func (p *PeerWrapper) Close() error {
 }
 
 func (p *PeerWrapper) OnData(onData func(msgType net_types.MessageType, payload []byte, peerID types.PeerID)) {
+	// The fast-path callers (datagram loop, gossip stream) route through dispatchData, which
+	// recovers from a panic deep in a handler, so one malformed frame cannot crash the node.
 	p.onData = onData
 }
 
@@ -190,8 +192,21 @@ func (p *PeerWrapper) AcceptDatagramLoop(ctx context.Context) {
 		if !net_types.IsUnreliableType(msgType) {
 			continue // control traffic must arrive over authenticated reliable streams
 		}
-		p.onData(msgType, msg[1:], p.peerID)
+		p.dispatchData(msgType, msg[1:])
 	}
+}
+
+// dispatchData hands a received frame to the data handler, recovering from any panic the handler
+// raises so that a malformed or malicious frame cannot crash the node. The offending frame is
+// dropped; its payload bytes are never logged. Callers must ensure p.onData is non-nil.
+func (p *PeerWrapper) dispatchData(msgType net_types.MessageType, payload []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("PeerWrapper: panic in data handler, dropping frame",
+				"peer", p.peerID.String(), "frame_type", msgType, "panic", r)
+		}
+	}()
+	p.onData(msgType, payload, p.peerID)
 }
 
 func (p *PeerWrapper) AcceptStreamLoop(ctx context.Context) {
@@ -226,7 +241,7 @@ func (p *PeerWrapper) handleGossipStream(stream MuxRecvStream) {
 	}
 
 	if p.onData != nil {
-		p.onData(msgType, msg, p.peerID)
+		p.dispatchData(msgType, msg)
 	}
 }
 

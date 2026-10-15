@@ -43,13 +43,17 @@ type RelayReachability struct {
 	NAT    string `json:"nat"`    // public, cone, symmetric, unknown
 	Mapped bool   `json:"mapped"` // the router forwards a port to us (UPnP / NAT-PMP)
 	Reason string `json:"reason"`
+	// Code is why there is no link, as a stable value the UI translates and maps to advice:
+	// "" (reachable), "connecting", "nomap" (router does not forward a port), "cgnat" (behind a
+	// carrier-grade or double NAT), "symmetric" (NAT changes address per peer).
+	Code string `json:"code"`
 }
 
 // RelayReachability works out the address others can reach this node at, from what NAT discovery
 // and the router port mapping found.
 func (n *Node) RelayReachability() RelayReachability {
 	if n.NAT == nil {
-		return RelayReachability{NAT: "unknown", Reason: "The node is not connected to the network yet."}
+		return RelayReachability{NAT: "unknown", Code: "connecting", Reason: "The node is not connected to the network yet."}
 	}
 	pub, t := n.NAT.GetNATProfile()
 	r := RelayReachability{NAT: t.String()}
@@ -66,12 +70,18 @@ func (n *Node) RelayReachability() RelayReachability {
 			return r
 		}
 	}
-	switch t {
-	case routing.NATUnknown:
+	switch {
+	case t == routing.NATUnknown:
+		r.Code = "connecting"
 		r.Reason = "Still finding out how this computer is connected to the Internet. Try again in a minute."
-	case routing.NATSymmetric:
+	case n.NAT.CarrierNAT():
+		r.Code = "cgnat"
+		r.Reason = "This computer is behind a carrier-grade or double NAT: the router itself has no public address, so forwarding a port cannot help. Ask the Internet provider for a public (\"white\") IP, or run the relay on a computer with a public IP (a VPS)."
+	case t == routing.NATSymmetric:
+		r.Code = "symmetric"
 		r.Reason = "This computer is behind a NAT that changes its address for every peer, and the router does not forward a port to it, so nobody can connect to it directly. Run the relay on a computer with a public IP (a VPS), or forward a port on the router."
 	default:
+		r.Code = "nomap"
 		r.Reason = "This computer is behind a router that does not forward a port to it, so others cannot connect to it. Turn on UPnP or NAT-PMP on the router, or forward the port by hand, or run the relay on a computer with a public IP."
 	}
 	return r

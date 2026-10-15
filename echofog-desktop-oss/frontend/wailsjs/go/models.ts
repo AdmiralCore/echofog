@@ -613,6 +613,7 @@ export namespace node {
 	    nat: string;
 	    mapped: boolean;
 	    reason: string;
+	    code: string;
 	    restartNeeded: boolean;
 	    activeCircuits: number;
 	    bytesRouted: number;
@@ -633,6 +634,7 @@ export namespace node {
 	        this.nat = source["nat"];
 	        this.mapped = source["mapped"];
 	        this.reason = source["reason"];
+	        this.code = source["code"];
 	        this.restartNeeded = source["restartNeeded"];
 	        this.activeCircuits = source["activeCircuits"];
 	        this.bytesRouted = source["bytesRouted"];
