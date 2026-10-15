@@ -194,23 +194,24 @@
 
 <style>
   .layer { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 24px; }
-  .backdrop { position: absolute; inset: 0; background: rgba(5, 6, 9, 0.6); backdrop-filter: blur(4px); animation: fade 0.15s ease-out; }
+  .backdrop { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(6px); animation: fade 0.2s ease-out; }
   .dialog {
     position: relative; width: min(860px, 100%); max-height: min(86vh, 900px);
     display: flex; flex-direction: column; gap: 14px; padding: 20px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 20px;
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55); animation: fade-up 0.18s ease-out;
+    background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg); animation: dialog-in 0.4s var(--spring);
   }
-  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes dialog-in { from { opacity: 0; transform: translateY(14px) scale(0.96); } to { opacity: 1; transform: none; } }
   header { display: flex; gap: 12px; align-items: flex-start; }
   header p { margin-top: 4px; max-width: 640px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 10px; overflow-y: auto; padding: 2px; }
   .tile {
     position: relative; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 10px;
-    border-radius: 14px; background: var(--raised); border: 1px solid var(--line-soft);
-    transition: border-color 0.15s, background 0.15s;
+    border-radius: 16px; background: var(--raised); border: 1.5px solid transparent;
+    transition: border-color var(--dur), background var(--dur), transform 0.3s var(--spring);
   }
-  .tile.sel { border-color: rgba(29, 155, 240, 0.45); background: color-mix(in srgb, var(--accent) 7%, var(--raised)); }
+  .tile:hover { transform: translateY(-2px); }
+  .tile.sel { border-color: var(--accent); background: var(--accent-soft); }
   .pick { display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: none; text-align: left; width: 100%; }
   .pick:hover:not(:disabled) { background: none; border: none; }
   .mark {
@@ -224,17 +225,18 @@
     width: 18px; height: 18px; border-radius: 6px; flex: none; display: grid; place-items: center;
     border: 1.5px solid var(--faint); color: #fff;
   }
-  .tile.sel .box { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; }
+  .box { transition: background 0.2s, transform 0.3s var(--spring); }
+  .tile.sel .box { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; transform: scale(1.1); }
   .remove {
     position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; border-radius: 50%;
-    display: grid; place-items: center; background: var(--hover); color: var(--muted); opacity: 0; transition: opacity 0.15s;
+    display: grid; place-items: center; background: var(--elevated); border: 1px solid var(--line); color: var(--muted); opacity: 0; transition: opacity 0.15s;
   }
   .tile:hover .remove { opacity: 1; }
   .lines { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
   .line { display: flex; justify-content: space-between; align-items: center; }
   .st { font-weight: 600; padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; }
-  .st.good { color: var(--ok); background: rgba(62, 207, 142, 0.12); }
-  .st.bad { color: var(--danger); background: rgba(242, 85, 90, 0.12); }
+  .st.good { color: var(--ok); background: var(--ok-soft); }
+  .st.bad { color: var(--danger); background: var(--danger-soft); }
   .why { color: var(--faint); font-size: 11px; line-height: 1.35; }
   .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

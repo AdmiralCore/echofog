@@ -3,6 +3,7 @@
   import QRCode from 'qrcode';
   import { App, errText, copy, openURL } from '../api.js';
   import { amount, when, short } from '../format.js';
+  import Icon from '../components/ui/Icon.svelte';
 
   let wallet = null;
   let balance = null;
@@ -102,82 +103,114 @@
 
 <div class="page">
   <div class="stack">
-    <h1>Wallet {#if testnet}<span class="small warn">testnet</span>{/if}</h1>
-
-    <p class="note">
-      This wallet is for paying for traffic and receiving payments for it. Do not keep savings here:
-      the keys live on this computer and anyone who gets into it can spend them.
-    </p>
+    <div class="page-head">
+      <div class="grow">
+        <h1>Wallet {#if testnet}<span class="chip warn">testnet</span>{/if}</h1>
+        <p class="muted small">Pay for traffic and get paid for sharing yours. TON network.</p>
+      </div>
+    </div>
 
     {#if netError}<p class="error small">{netError}</p>{/if}
 
-    <div class="card row top">
-      <div class="grow stack tight">
-        <div class="small muted">Balance</div>
+    <div class="hero">
+      <div class="hero-main">
+        <div class="eyebrow light">Balance</div>
         <div class="balances">
-          <div><span class="big">{balance ? amount(balance.usdt || 0) : '…'}</span> USDT</div>
-          <div><span class="big">{balance ? amount(balance.ton) : '…'}</span> TON
-            {#if balance?.usdRate}<span class="small faint">≈ {(Number(balance.ton) * balance.usdRate).toFixed(2)} USD</span>{/if}</div>
+          <div class="bal">
+            <span class="big">{balance ? amount(balance.usdt || 0) : '…'}</span><span class="cur">USDT</span>
+          </div>
+          <div class="bal second">
+            <span class="mid">{balance ? amount(balance.ton) : '…'}</span><span class="cur">TON</span>
+            {#if balance?.usdRate}<span class="usd">≈ ${(Number(balance.ton) * balance.usdRate).toFixed(2)}</span>{/if}
+          </div>
         </div>
-        <div class="small muted" style="margin-top: 8px">Address</div>
-        <div class="mono">{wallet?.address || '…'}</div>
-        <div class="row">
-          <button on:click={copyAddress} disabled={!wallet}>{copied ? 'Copied' : 'Copy address'}</button>
-          {#if onRamp}<button on:click={() => openURL(onRamp)}>Buy USDT with a card</button>{/if}
+        <div class="addr">
+          <span class="mono">{wallet?.address || '…'}</span>
         </div>
-        <p class="small faint">
-          USDT transfers need a little TON (about 0.06) for the network fee.
-          {#if !onRamp}To get USDT, buy it on an exchange or Telegram Wallet and withdraw it to this address using the TON network.{/if}
-        </p>
+        <div class="row wrap">
+          <button class="glass with-icon" on:click={copyAddress} disabled={!wallet}><Icon name={copied ? 'check' : 'copy'} size={15} />{copied ? 'Copied' : 'Copy address'}</button>
+          {#if onRamp}<button class="glass with-icon" on:click={() => openURL(onRamp)}><Icon name="coin" size={15} /> Buy USDT with a card</button>{/if}
+        </div>
       </div>
       {#if qr}<img class="qr" src={qr} alt="Wallet address QR code" />{/if}
     </div>
 
+    <p class="note">
+      This wallet is for traffic payments. Do not keep savings here: the keys live on this computer and anyone who gets into it can spend them.
+      USDT transfers need about 0.06 TON for the network fee.
+      {#if !onRamp}To get USDT, buy it on an exchange or Telegram Wallet and withdraw it to this address using the TON network.{/if}
+    </p>
+
     <div class="card stack">
-      <h2>Send</h2>
+      <div class="card-head">
+        <span class="ico"><Icon name="send" size={18} /></span>
+        <div class="grow"><h2>Send</h2><p class="small muted">Blockchain transfers cannot be reversed.</p></div>
+      </div>
+      {#key step}
+      <div class="stack step">
       {#if step === 'form'}
-        <div class="row wrap">
-          <label class="asset">Asset
-            <select bind:value={send.asset}><option>USDT</option><option>TON</option></select>
-          </label>
-          <label class="grow">Recipient address<input bind:value={send.to} spellcheck="false" /></label>
+        <div class="seg asset-seg">
+          {#each ['USDT', 'TON'] as a}
+            <button class:active={send.asset === a} on:click={() => (send.asset = a)}>{a}</button>
+          {/each}
         </div>
+        <label>Recipient address<input bind:value={send.to} spellcheck="false" placeholder="UQ…" /></label>
         <div class="row wrap">
-          <label class="asset">Amount<input bind:value={send.amount} /></label>
+          <label class="amt">Amount
+            <span class="amt-in"><input bind:value={send.amount} placeholder="0.00" inputmode="decimal" /><button class="ghost small max" on:click={() => (send.amount = send.asset === 'TON' ? Math.max(0, available - 0.05).toFixed(4) : String(available))} disabled={!balance}>Max</button></span>
+          </label>
           <label class="grow">Comment (optional)<input bind:value={send.comment} /></label>
         </div>
         <div><button class="primary" on:click={review}>Review</button></div>
       {:else if step === 'review' || step === 'sending'}
-        <p>Send <b>{send.amount} {send.asset}</b> to <span class="mono">{send.to}</span>{#if send.comment}, comment "{send.comment}"{/if}?</p>
-        <p class="small muted">Blockchain transfers cannot be reversed.</p>
+        <div class="review">
+          <div class="r-amt">{send.amount} <span>{send.asset}</span></div>
+          <div class="small muted">to</div>
+          <div class="mono">{send.to}</div>
+          {#if send.comment}<div class="small muted">“{send.comment}”</div>{/if}
+        </div>
         <div class="row">
-          <button class="primary" on:click={confirmSend} disabled={step === 'sending'}>{step === 'sending' ? 'Sending…' : 'Confirm'}</button>
+          <button class="primary" on:click={confirmSend} disabled={step === 'sending'}>{#if step === 'sending'}<span class="spinner"></span> Sending…{:else}Confirm and send{/if}</button>
           <button on:click={() => (step = 'form')} disabled={step === 'sending'}>Back</button>
         </div>
       {:else}
-        <p class="ok">Sent. It shows up in the history once confirmed.</p>
-        <p class="small"><a href={`${explorer}/transaction/${sentHash}`} on:click|preventDefault={() => openURL(`${explorer}/transaction/${sentHash}`)}>View in explorer</a></p>
+        <div class="done">
+          <span class="done-ic"><Icon name="check" size={26} stroke={2.6} /></span>
+          <div>
+            <p class="ok"><b>Sent.</b> It shows up in the history once confirmed.</p>
+            <p class="small"><a href={`${explorer}/transaction/${sentHash}`} on:click|preventDefault={() => openURL(`${explorer}/transaction/${sentHash}`)}>View in explorer →</a></p>
+          </div>
+        </div>
         <div><button on:click={() => (step = 'form')}>New transfer</button></div>
       {/if}
+      </div>
+      {/key}
       {#if sendError}<p class="error small">{sendError}</p>{/if}
     </div>
 
     <div class="card stack">
-      <h2>History</h2>
+      <div class="card-head">
+        <span class="ico"><Icon name="refresh" size={18} /></span>
+        <div class="grow"><h2>History</h2></div>
+      </div>
       {#if history.length}
-        <table class="small">
-          <thead><tr><th>When</th><th>Amount</th><th>From / to</th><th>Comment</th></tr></thead>
-          <tbody>
-            {#each history as t (t.hash)}
-              <tr class:failed={t.failed}>
-                <td>{when(t.time)}</td>
-                <td class:ok={t.incoming}>{t.incoming ? '+' : '-'}{amount(t.ton)} {t.asset || 'TON'}{t.failed ? ' (failed)' : ''}</td>
-                <td class="mono">{short(t.counterparty)}</td>
-                <td class="muted">{t.comment}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+        <div class="txs">
+          {#each history as t (t.hash)}
+            <div class="tx" class:failed={t.failed}>
+              <span class="tx-ic" class:in={t.incoming}><Icon name={t.incoming ? 'download' : 'upload'} size={16} /></span>
+              <div class="grow tx-body">
+                <div class="row">
+                  <span class="grow mono cp">{short(t.counterparty)}</span>
+                  <span class="tx-amt" class:in={t.incoming}>{t.incoming ? '+' : '−'}{amount(t.ton)} {t.asset || 'TON'}</span>
+                </div>
+                <div class="row small">
+                  <span class="grow faint ellip">{t.comment || (t.incoming ? 'Received' : 'Sent')}{t.failed ? ' · failed' : ''}</span>
+                  <span class="faint">{when(t.time)}</span>
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
       {:else}
         <p class="small muted">No transactions yet.</p>
       {/if}
@@ -185,14 +218,16 @@
 
     {#if support.available}
       <div class="card stack">
-        <h2>Support the project</h2>
-        <p class="small muted">
-          Optionally add a share on top of what you pay exits. It goes to the project that develops EchoFog.
-          The exit still gets its full price.
-        </p>
-        <div class="row">
+        <div class="card-head">
+          <span class="ico ok"><Icon name="zap" size={18} /></span>
+          <div class="grow">
+            <h2>Support the project</h2>
+            <p class="small muted">Optionally add a share on top of what you pay exits. It goes to the project that develops EchoFog. The exit still gets its full price.</p>
+          </div>
+        </div>
+        <div class="seg">
           {#each [0, 5, 10] as p}
-            <button class:on={support.percent === p} on:click={() => setShare(p)}>{p === 0 ? 'Off' : p + '%'}</button>
+            <button class:active={support.percent === p} on:click={() => setShare(p)}>{p === 0 ? 'Off' : p + '%'}</button>
           {/each}
         </div>
         {#if Number(support.pendingUsdt) > 0 || Number(support.pendingTon) > 0}
@@ -203,9 +238,9 @@
 
     <details class="card">
       <summary class="muted">Wallet recovery phrase</summary>
-      <div class="stack" style="margin-top: 12px">
+      <div class="stack" style="margin-top: 14px">
         {#if words.length}
-          <ol class="words">{#each words as w}<li class="mono">{w}</li>{/each}</ol>
+          <ol class="words">{#each words as w, i}<li><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}</ol>
           <div><button on:click={() => (words = [])}>Hide</button></div>
         {:else}
           <p class="small muted">Lets you open this wallet in another TON wallet app. Enter your app password to show it.</p>
@@ -221,12 +256,60 @@
 </div>
 
 <style>
-  .top { align-items: flex-start; gap: 20px; }
-  .balances { display: flex; gap: 32px; }
-  .big { font-size: 22px; font-weight: 600; }
-  .qr { width: 140px; height: 140px; border-radius: var(--radius); }
-  .asset { width: 140px; }
-  .failed { opacity: .5; }
-  summary { cursor: pointer; }
-  .words { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 16px; margin: 0; padding-left: 24px; }
+  .hero {
+    position: relative; overflow: hidden; display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
+    padding: 24px; border-radius: var(--radius-xl); color: #fff;
+    background:
+      radial-gradient(420px 260px at 100% 0%, rgba(255, 255, 255, 0.18), transparent 60%),
+      linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: var(--glow), var(--shadow);
+  }
+  .hero::after {
+    content: ''; position: absolute; width: 260px; height: 260px; right: -80px; bottom: -140px; border-radius: 50%;
+    border: 40px solid rgba(255, 255, 255, 0.07); pointer-events: none;
+  }
+  .hero-main { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 12px; position: relative; z-index: 1; }
+  .eyebrow.light { color: rgba(255, 255, 255, 0.7); }
+  .balances { display: flex; flex-direction: column; gap: 2px; }
+  .bal { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .big { font-size: clamp(30px, 5vw, 40px); font-weight: 750; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .mid { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .cur { font-weight: 600; opacity: 0.8; }
+  .usd { font-size: 13px; opacity: 0.7; }
+  .addr { padding: 8px 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.16); max-width: 520px; }
+  .addr .mono { color: rgba(255, 255, 255, 0.92); }
+  button.glass { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.2); color: #fff; backdrop-filter: blur(6px); }
+  button.glass:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); border-color: rgba(255, 255, 255, 0.3); }
+  .qr { width: 136px; height: 136px; border-radius: 16px; padding: 8px; background: #fff; position: relative; z-index: 1; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); }
+
+  .step { animation: fade-up 0.3s var(--ease); }
+  .asset-seg { min-width: 200px; }
+  .amt { width: 200px; }
+  .amt-in { position: relative; display: block; margin-top: 6px; }
+  .amt-in input { margin: 0; padding-right: 56px; font-variant-numeric: tabular-nums; }
+  .max { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 3px 9px; font-size: 11.5px; color: var(--accent); }
+  .max:active:not(:disabled) { transform: translateY(-50%) scale(0.95); }
+  .review { padding: 16px; border-radius: 16px; background: var(--raised); display: flex; flex-direction: column; gap: 4px; }
+  .r-amt { font-size: 26px; font-weight: 720; letter-spacing: -0.02em; }
+  .r-amt span { font-size: 15px; color: var(--muted); font-weight: 600; }
+  .done { display: flex; align-items: center; gap: 14px; }
+  .done-ic { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); animation: pop 0.45s var(--spring); }
+
+  .txs { display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; }
+  .tx { display: flex; align-items: center; gap: 12px; padding: 9px 8px; border-radius: 12px; transition: background var(--dur); }
+  .tx:hover { background: var(--hover); }
+  .tx.failed { opacity: 0.5; }
+  .tx-ic { width: 36px; height: 36px; border-radius: 12px; flex: none; display: grid; place-items: center; background: var(--raised); color: var(--muted); }
+  .tx-ic.in { background: var(--ok-soft); color: var(--ok); }
+  .tx-body { display: flex; flex-direction: column; gap: 1px; }
+  .cp { font-size: 12.5px; word-break: normal; }
+  .tx-amt { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tx-amt.in { color: var(--ok); }
+  .ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .words { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .words li { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 10px; background: var(--raised); }
+  .words .n { color: var(--faint); font-size: 11px; width: 16px; text-align: right; }
+  .words .mono { word-break: normal; }
 </style>
+

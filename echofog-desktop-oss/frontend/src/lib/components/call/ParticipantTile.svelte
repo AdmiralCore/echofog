@@ -56,7 +56,7 @@
     </div>
 
     <button
-        class="absolute right-2 top-2 w-8 h-8 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+        class="more absolute right-2 top-2 w-8 h-8 p-0 border-0 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
         title="More"
         aria-label="More options for {name}"
         on:click|stopPropagation={openMenu}
@@ -66,6 +66,10 @@
 </div>
 
 <style>
+    .more:hover:not(:disabled) {
+        background: rgba(0, 0, 0, 0.78);
+        border: none;
+    }
     .speaking {
         box-shadow: inset 0 0 0 3px var(--color-success);
     }

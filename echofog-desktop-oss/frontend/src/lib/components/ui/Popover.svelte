@@ -75,16 +75,16 @@
         overscroll-behavior: contain;
         padding: 6px;
         border-radius: 14px;
-        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        background: var(--glass);
         backdrop-filter: blur(18px) saturate(1.4);
-        border: 1px solid var(--line);
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--line-soft);
+        box-shadow: var(--shadow-lg);
         color: var(--text);
         font-size: 13.5px;
-        animation: pop-in 0.14s ease-out;
+        animation: pop-in 0.3s var(--spring);
     }
     @keyframes pop-in {
-        from { opacity: 0; transform: translateY(4px) scale(0.98); }
+        from { opacity: 0; transform: translateY(6px) scale(0.96); }
         to { opacity: 1; transform: none; }
     }
 </style>

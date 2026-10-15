@@ -31,12 +31,12 @@ func main() {
 		Title:     "EchoFog",
 		Width:     1100,
 		Height:    720,
-		MinWidth:  860,
-		MinHeight: 560,
+		MinWidth:  420,
+		MinHeight: 520,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 14, G: 15, B: 17, A: 255},
+		BackgroundColour: &options.RGBA{R: 11, G: 12, B: 16, A: 255},
 		Frameless:        false,
 		Mac: &mac.Options{
 			TitleBar:             mac.TitleBarHidden(),

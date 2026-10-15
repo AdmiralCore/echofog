@@ -42,7 +42,7 @@
         </div>
     {:else}
         <div class="absolute inset-0 flex items-center justify-center bg-[#1e1f22]" style="background:radial-gradient(circle at 50% 40%, rgba(88,101,242,.18), transparent 70%), #1e1f22">
-            <button class="h-9 px-4 rounded-full bg-white text-[#111214] text-sm font-bold flex items-center gap-2 shadow-lg hover:scale-[1.03] transition-transform" on:click={() => callService.watchStream(stream.streamId, !compact)}>
+            <button class="watch h-9 px-4 border-0 rounded-full bg-white text-[#111214] text-sm font-bold flex items-center gap-2 shadow-lg hover:scale-[1.03] transition-transform" on:click={() => callService.watchStream(stream.streamId, !compact)}>
                 <Icon name="eye" size={17} /> Watch stream
             </button>
         </div>
@@ -77,17 +77,24 @@
 </div>
 
 <style>
+    .watch:hover:not(:disabled) {
+        background: #fff;
+        border: none;
+    }
     .tile-btn {
         width: 32px;
         height: 32px;
         border-radius: 8px;
+        padding: 0;
+        border: none;
         background: rgba(0, 0, 0, 0.6);
         color: #fff;
         display: flex;
         align-items: center;
         justify-content: center;
     }
-    .tile-btn:hover {
+    .tile-btn:hover:not(:disabled) {
+        border: none;
         background: rgba(0, 0, 0, 0.85);
     }
     .speaking {

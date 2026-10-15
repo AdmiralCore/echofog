@@ -54,21 +54,21 @@
 <div class="fixed inset-0 z-[200]" on:click={close} on:contextmenu|preventDefault={close}></div>
 <div
     bind:this={menu}
-    class="fixed z-[201] w-64 rounded-xl bg-[#111214] border border-white/10 shadow-2xl p-1.5 text-[14px] text-[#dbdee1]"
+    class="pmenu fixed z-[201] w-64 rounded-2xl p-1.5 text-[14px]"
     style="left:{x}px;top:{y}px"
     role="menu"
 >
     <div class="flex items-center gap-2.5 px-2 py-2">
         <Avatar id={peer} name={$peerName(peer)} size={32} />
         <div class="min-w-0">
-            <p class="font-semibold text-white truncate">{$peerName(peer)}</p>
-            <p class="text-[11px] text-[#949ba4] font-mono truncate">{peer.slice(0, 16)}…</p>
+            <p class="font-semibold truncate" style="color:var(--text)">{$peerName(peer)}</p>
+            <p class="text-[11px] font-mono truncate" style="color:var(--faint)">{peer.slice(0, 16)}…</p>
         </div>
     </div>
 
     {#if !isSelf}
         <div class="px-2 pt-1 pb-2">
-            <div class="flex items-center justify-between text-[12px] text-[#b5bac1] mb-1.5">
+            <div class="flex items-center justify-between text-[12px] mb-1.5" style="color:var(--muted)">
                 <span class="font-semibold uppercase tracking-wide">User volume</span>
                 <span>{volume}%</span>
             </div>
@@ -83,24 +83,24 @@
                 on:input={(e) => callService.setPeerVolume(peer, Number(e.currentTarget.value) / 100)}
             />
         </div>
-        <div class="h-px bg-white/10 my-1"></div>
+        <div class="sep"></div>
         <button class="menu-row" role="menuitem" on:click={() => callService.toggleLocalMute(peer)}>
             <Icon name={muted ? 'volume' : 'volumeOff'} size={18} />
             <span class="flex-1 text-left">{muted ? 'Unmute for me' : 'Mute for me'}</span>
             {#if muted}<Icon name="check" size={16} className="text-[var(--color-accent)]" />{/if}
         </button>
-        <button class="menu-row !text-[#f23f43] hover:!bg-[#f23f43] hover:!text-white" role="menuitem" disabled={reported} on:click={report}>
+        <button class="menu-row bad" role="menuitem" disabled={reported} on:click={report}>
             <Icon name="flag" size={18} />
             <span class="flex-1 text-left">
                 {#if reported}Reported{:else if confirmReport}Click again to report{:else}Report spam{/if}
             </span>
         </button>
         {#if confirmReport && !reported}
-            <p class="px-2.5 pb-1.5 text-[12px] text-[#949ba4] leading-snug">
+            <p class="px-2.5 pb-1.5 text-[12px] leading-snug" style="color:var(--muted)">
                 They are muted for you right away. The room removes them when a third of members report them too.
             </p>
         {/if}
-        <div class="h-px bg-white/10 my-1"></div>
+        <div class="sep"></div>
     {/if}
     <button class="menu-row" role="menuitem" on:click={copyId}>
         <Icon name="copy" size={18} />
@@ -109,21 +109,31 @@
 </div>
 
 <style>
+    .pmenu {
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.4);
+        color: var(--text);
+        border: 1px solid var(--line-soft);
+        box-shadow: var(--shadow-lg);
+        animation: pm-in 0.28s var(--spring);
+        transform-origin: top left;
+    }
+    @keyframes pm-in { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }
+    .sep { height: 1px; background: var(--line-soft); margin: 4px 0; }
     .menu-row {
         display: flex;
         align-items: center;
         gap: 10px;
         width: 100%;
         padding: 7px 10px;
-        border-radius: 6px;
-        color: #dbdee1;
+        border: none;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--text);
+        font-weight: 500;
     }
-    .menu-row:hover:not(:disabled) {
-        background: var(--color-accent);
-        color: #fff;
-    }
-    .menu-row:disabled {
-        opacity: 0.5;
-        cursor: default;
-    }
+    .menu-row:hover:not(:disabled) { background: var(--accent); color: #fff; border: none; }
+    .menu-row.bad { color: var(--danger); }
+    .menu-row.bad:hover:not(:disabled) { background: var(--danger); color: #fff; }
+    .menu-row:disabled { opacity: 0.5; cursor: default; }
 </style>

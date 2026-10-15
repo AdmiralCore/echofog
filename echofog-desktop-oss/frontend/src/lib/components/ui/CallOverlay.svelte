@@ -1,6 +1,7 @@
 <script>
     import { onMount } from 'svelte';
-    import { fade, scale } from 'svelte/transition';
+    import { fade, scale, fly } from 'svelte/transition';
+    import { backOut } from 'svelte/easing';
     import {
         isCallActive,
         peerInfo,
@@ -89,22 +90,23 @@
 <svelte:window on:mousemove={onMove} on:mouseup={onUp} bind:innerHeight={winH} bind:innerWidth={winW} />
 
 {#if $incomingCall}
-    <div class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm" transition:fade={{ duration: 150 }}>
-        <div class="w-[320px] rounded-3xl bg-[#111214] border border-white/10 shadow-2xl p-7 flex flex-col items-center text-white" transition:scale={{ duration: 180, start: 0.94 }} role="alertdialog" aria-label="Incoming call">
+    <div class="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-md" style="background:var(--scrim)" transition:fade={{ duration: 200 }}>
+        <div class="ring-card w-[320px] max-w-[calc(100vw-32px)] rounded-3xl p-7 flex flex-col items-center" transition:scale={{ duration: 320, start: 0.9, easing: backOut }} role="alertdialog" aria-label="Incoming call">
             <div class="relative mb-5">
-                <span class="absolute inset-0 rounded-full bg-[#23a55a]/30 animate-ping"></span>
+                <span class="absolute inset-0 rounded-full animate-ping" style="background:var(--ok-soft)"></span>
+                <span class="absolute -inset-3 rounded-full ring-pulse"></span>
                 <Avatar id={$incomingCall.from} name={$incomingCall.alias} size={96} />
             </div>
             <p class="text-xl font-bold truncate max-w-full">{$incomingCall.alias}</p>
-            <p class="text-sm text-[#949ba4] mt-1">Incoming call…</p>
+            <p class="text-sm mt-1" style="color:var(--muted)">Incoming call…</p>
             <div class="flex items-center gap-5 mt-7">
-                <button class="round bg-[#da373c] hover:bg-[#a12828]" title="Decline" aria-label="Decline" on:click={declineIncomingCall}>
+                <button class="round decline" title="Decline" aria-label="Decline" on:click={declineIncomingCall}>
                     <Icon name="hangup" size={26} />
                 </button>
-                <button class="round bg-[#2b2d31] hover:bg-[#35373c]" title="Accept with video" aria-label="Accept with video" on:click={() => accept(true)}>
+                <button class="round neutral" title="Accept with video" aria-label="Accept with video" on:click={() => accept(true)}>
                     <Icon name="video" size={24} />
                 </button>
-                <button class="round bg-[#23a55a] hover:bg-[#1a8346]" title="Accept" aria-label="Accept" on:click={() => accept(false)}>
+                <button class="round accept" title="Accept" aria-label="Accept" on:click={() => accept(false)}>
                     <Icon name="phone" size={24} />
                 </button>
             </div>
@@ -113,21 +115,22 @@
 {/if}
 
 {#if $callError && !$isCallActive}
-    <div class="fixed z-[10000] top-4 right-4 w-[320px] rounded-xl bg-[#111214] border border-white/10 p-3 shadow-xl text-sm text-white flex gap-3" role="alert" transition:fade={{ duration: 150 }}>
-        <span class="text-[#f23f43] font-semibold">Call failed</span>
-        <span class="flex-1 text-[#b5bac1]">{$callError}</span>
-        <button class="text-[#949ba4] hover:text-white" aria-label="Dismiss" on:click={() => callState.update((c) => ({ ...c, error: null }))}><Icon name="close" size={16} /></button>
+    <div class="toast fixed z-[10000] top-4 right-4 w-[320px] max-w-[calc(100vw-32px)] rounded-2xl p-3 text-sm flex gap-3" role="alert" transition:fly={{ y: -12, duration: 260 }}>
+        <span class="font-semibold" style="color:var(--danger)">Call failed</span>
+        <span class="flex-1" style="color:var(--muted)">{$callError}</span>
+        <button class="dismiss" aria-label="Dismiss" on:click={() => callState.update((c) => ({ ...c, error: null }))}><Icon name="close" size={16} /></button>
     </div>
 {/if}
 
 {#if showMini}
     <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div
-        class="fixed z-[9999] w-[320px] rounded-2xl overflow-hidden bg-[#111214] border border-white/10 shadow-2xl text-white cursor-grab active:cursor-grabbing"
+        class="mini-card fixed z-[9999] w-[320px] rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing"
+        class:dragging={!!drag}
         style="left:{pos.x}px;top:{pos.y}px"
         bind:offsetHeight={miniH}
         on:mousedown={onDown}
-        transition:fade={{ duration: 150 }}
+        transition:scale={{ duration: 260, start: 0.92, easing: backOut }}
     >
         {#if preview}
             <div class="relative aspect-video bg-black">
@@ -136,14 +139,14 @@
             </div>
         {/if}
         <div class="px-3 pt-3 flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full {s.inCall ? 'bg-[#23a55a]' : 'bg-[#f0b232] animate-pulse'}"></span>
+            <span class="w-2 h-2 rounded-full {s.inCall ? '' : 'animate-pulse'}" style="background:{s.inCall ? 'var(--ok)' : 'var(--warn)'}"></span>
             <div class="min-w-0 flex-1">
-                <p class="text-[13px] font-bold text-[#23a55a] leading-tight">{s.inCall ? 'Voice connected' : 'Connecting…'}</p>
-                <p class="text-xs text-[#949ba4] truncate">{$peerInfo.alias || 'Call'}{#if s.inCall} · {formatDuration($callDuration)}{/if}</p>
+                <p class="text-[13px] font-bold leading-tight" style="color:var(--ok)">{s.inCall ? 'Voice connected' : 'Connecting…'}</p>
+                <p class="text-xs truncate" style="color:var(--muted)">{$peerInfo.alias || 'Call'}{#if s.inCall} · {formatDuration($callDuration)}{/if}</p>
             </div>
             <div class="flex -space-x-2">
                 {#each people as p (p)}
-                    <Avatar id={p} name={$peerName(p)} size={26} speaking={!!s.speaking[p]} className="ring-2 ring-[#111214] rounded-full" />
+                    <Avatar id={p} name={$peerName(p)} size={26} speaking={!!s.speaking[p]} className="mini-av rounded-full" />
                 {/each}
             </div>
         </div>
@@ -160,7 +163,7 @@
             <button class="mini" title="Open call" aria-label="Open call" on:click={openStage}>
                 <Icon name="expand" size={18} />
             </button>
-            <button class="mini flex-1 !bg-[#da373c] hover:!bg-[#a12828] !text-white" title="Leave call" aria-label="Leave call" on:click={endCall}>
+            <button class="mini leave flex-1" title="Leave call" aria-label="Leave call" on:click={endCall}>
                 <Icon name="hangup" size={20} />
             </button>
         </div>
@@ -168,39 +171,76 @@
 {/if}
 
 <style>
+    .ring-card {
+        background: var(--elevated);
+        color: var(--text);
+        border: 1px solid var(--line-soft);
+        box-shadow: var(--shadow-lg);
+    }
+    .ring-pulse {
+        border: 2px solid var(--ok);
+        opacity: 0;
+        animation: ring 1.6s var(--ease) infinite;
+    }
+    @keyframes ring {
+        0% { transform: scale(0.85); opacity: 0.7; }
+        100% { transform: scale(1.25); opacity: 0; }
+    }
     .round {
         width: 60px;
         height: 60px;
+        padding: 0;
+        border: none;
         border-radius: 9999px;
         display: flex;
         align-items: center;
         justify-content: center;
         color: #fff;
-        transition: background 0.12s, transform 0.12s;
     }
-    .round:hover {
-        transform: scale(1.05);
+    .round:hover:not(:disabled) { transform: scale(1.08); border: none; }
+    .round.decline, .round.decline:hover:not(:disabled) { background: var(--danger); }
+    .round.accept, .round.accept:hover:not(:disabled) { background: var(--ok); }
+    .round.accept { animation: nudge 1.4s var(--ease) infinite; }
+    .round.neutral { background: var(--raised); color: var(--text); }
+    .round.neutral:hover:not(:disabled) { background: var(--press); }
+    @keyframes nudge {
+        0%, 70%, 100% { transform: rotate(0); }
+        75% { transform: rotate(-12deg); }
+        85% { transform: rotate(10deg); }
+        95% { transform: rotate(-4deg); }
     }
+    .toast {
+        background: var(--elevated);
+        color: var(--text);
+        border: 1px solid var(--line-soft);
+        box-shadow: var(--shadow);
+    }
+    .dismiss { padding: 0; background: none; border: none; color: var(--faint); }
+    .dismiss:hover:not(:disabled) { color: var(--text); background: none; border: none; }
+    .mini-card {
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.4);
+        color: var(--text);
+        border: 1px solid var(--line-soft);
+        box-shadow: var(--shadow-lg);
+        transition: box-shadow 0.2s, transform 0.25s var(--spring);
+    }
+    .mini-card.dragging { transform: scale(1.02); box-shadow: var(--shadow-lg), 0 0 0 2px var(--accent-ring); }
+    :global(.mini-av) { box-shadow: 0 0 0 2px var(--panel); }
     .mini {
         width: 40px;
         height: 36px;
-        border-radius: 10px;
+        padding: 0;
+        border: none;
+        border-radius: 11px;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #2b2d31;
-        color: #dbdee1;
+        background: var(--raised);
+        color: var(--text);
     }
-    .mini:hover {
-        background: #35373c;
-        color: #fff;
-    }
-    .mini-off {
-        background: rgba(242, 63, 67, 0.15);
-        color: #f23f43;
-    }
-    .mini-on {
-        background: #fff;
-        color: #111214;
-    }
+    .mini:hover:not(:disabled) { background: var(--press); border: none; }
+    .mini-off, .mini-off:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+    .mini-on, .mini-on:hover:not(:disabled) { background: var(--accent); color: #fff; }
+    .mini.leave, .mini.leave:hover:not(:disabled) { background: var(--danger); color: #fff; }
 </style>

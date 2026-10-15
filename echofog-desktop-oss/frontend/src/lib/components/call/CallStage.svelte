@@ -116,9 +116,13 @@
         align-items: center;
         justify-content: center;
         color: #b5bac1;
+        padding: 0;
+        border: none;
+        background: transparent;
     }
-    .hdr-btn:hover {
+    .hdr-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.08);
+        border: none;
         color: #fff;
     }
 </style>

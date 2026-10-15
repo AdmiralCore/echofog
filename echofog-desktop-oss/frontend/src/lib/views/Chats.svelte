@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { slide } from 'svelte/transition';
   import QRCode from 'qrcode';
   import { me, profile } from '../stores/session.js';
   import { chats, activeId, loadChats, openChat, addContact, createGroup, joinGroup } from '../stores/chats.js';
@@ -32,7 +33,34 @@
     try { localStorage.setItem('echofog.chatsCollapsed', listCollapsed ? '1' : '0'); } catch (_) {}
   }
 
-  $: sorted = [...$chats].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  // the list can be resized by dragging its edge; the width is remembered
+  let listWidth = 320;
+  try { listWidth = Number(localStorage.getItem('echofog.chatsWidth')) || 320; } catch (_) {}
+  let resizing = null;
+  function startResize(e) {
+    resizing = { x: e.clientX, w: listWidth };
+    document.body.style.cursor = 'col-resize';
+  }
+  function onResize(e) {
+    if (!resizing) return;
+    listWidth = Math.round(Math.max(250, Math.min(460, resizing.w + e.clientX - resizing.x)));
+  }
+  function endResize() {
+    if (!resizing) return;
+    resizing = null;
+    document.body.style.cursor = '';
+    try { localStorage.setItem('echofog.chatsWidth', String(listWidth)); } catch (_) {}
+  }
+
+  // a narrow window shows either the list or the open chat, like a phone
+  let width = 1000;
+  $: narrow = width < 700;
+
+  let query = '';
+  $: q = query.trim().toLowerCase();
+  $: sorted = [...$chats]
+    .filter((c) => !q || (c.name || '').toLowerCase().includes(q) || (c.last || '').toLowerCase().includes(q))
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
   $: active = $chats.find((c) => c.id === $activeId);
   $: showCall = $isCallActive && !!active && $peerInfo.chatId === $activeId && $stageExpanded;
   let maximized = false;
@@ -86,65 +114,85 @@
   }
 </script>
 
-<div class="chats">
-  {#if !listCollapsed}
-  <aside>
-    <div class="head row">
-      <h2 class="grow">Chats</h2>
-      <button class="icon" title="Hide the chat list" aria-label="Hide the chat list" on:click={toggleList}><Icon name="chevronLeft" size={18} /></button>
-      <button class="icon" class:on={panel === 'contact'} title="Add contact" aria-label="Add contact" on:click={() => toggle('contact')}><Icon name="userPlus" size={18} /></button>
-      <button class="icon" class:on={panel === 'group'} title="New group" aria-label="New group" on:click={() => toggle('group')}><Icon name="users" size={18} /></button>
-      <button class="icon" class:on={panel === 'join'} title="Join by invite" aria-label="Join by invite" on:click={() => toggle('join')}><Icon name="link" size={18} /></button>
-      <button class="icon" class:on={panel === 'me'} title="My contact" aria-label="My contact" on:click={() => toggle('me')}><Icon name="qr" size={18} /></button>
-    </div>
-    {#if panel}
-      <p class="panel-title small">{({ contact: 'Add a contact', group: 'New group or channel', join: 'Join by invite', me: 'Your contact' })[panel]}</p>
-    {/if}
+<svelte:window on:mousemove={onResize} on:mouseup={endResize} />
 
-    {#if panel === 'contact'}
-      {#if scanning}
-        <QRScan on:scan={scanned} on:close={() => (scanning = false)} />
-      {:else}
-        <form class="form stack tight" on:submit|preventDefault={submitContact}>
-          <textarea rows="3" placeholder="Paste a contact link or key" bind:value={contactInput} spellcheck="false" />
-          <input placeholder={parsed?.name ? `Name (${parsed.name})` : 'Name'} bind:value={name} />
-          <div class="row">
-            <button class="primary grow" type="submit" disabled={busy || !contactInput.trim()}>Add</button>
-            <button type="button" on:click={() => (scanning = true)}>Scan code</button>
+<div class="chats" class:narrow bind:clientWidth={width} class:resizing={!!resizing}>
+  {#if (!listCollapsed || narrow) && (!narrow || !active)}
+  <aside style={narrow ? '' : `width:${listWidth}px`}>
+    <div class="head">
+      <h2 class="grow">Chats</h2>
+      <button class="icon" class:on={panel === 'me'} title="My contact" aria-label="My contact" on:click={() => toggle('me')}><Icon name="qr" size={18} /></button>
+      {#if !narrow}<button class="icon" title="Hide the chat list" aria-label="Hide the chat list" on:click={toggleList}><Icon name="panel" size={18} /></button>{/if}
+    </div>
+
+    <div class="actions">
+      <button class="act" class:on={panel === 'contact'} on:click={() => toggle('contact')}><Icon name="userPlus" size={16} /><span>Contact</span></button>
+      <button class="act" class:on={panel === 'group'} on:click={() => toggle('group')}><Icon name="users" size={16} /><span>Group</span></button>
+      <button class="act" class:on={panel === 'join'} on:click={() => toggle('join')}><Icon name="link" size={16} /><span>Join</span></button>
+    </div>
+
+    {#if panel}
+      <div class="sheet" transition:slide={{ duration: 260 }}>
+        <div class="sheet-in">
+          <div class="row sheet-head">
+            <span class="eyebrow grow">{({ contact: 'Add a contact', group: 'New group or channel', join: 'Join by invite', me: 'Your contact' })[panel]}</span>
+            <button class="icon tiny" aria-label="Close" on:click={() => toggle(panel)}><Icon name="close" size={14} stroke={2.2} /></button>
           </div>
-        </form>
-      {/if}
-    {:else if panel === 'group'}
-      <form class="form stack tight" on:submit|preventDefault={() => run(() => createGroup(name, groupKind))}>
-        <input placeholder="Group name" bind:value={name} />
-        <select bind:value={groupKind}>
-          <option value="group">Group: everyone can write</option>
-          <option value="channel">Channel: only admins write</option>
-        </select>
-        <button class="primary" type="submit" disabled={busy || !name.trim()}>Create</button>
-      </form>
-    {:else if panel === 'join'}
-      <form class="form stack tight" on:submit|preventDefault={() => run(() => joinGroup(invite))}>
-        <textarea rows="3" placeholder="Paste the invite" bind:value={invite} spellcheck="false" />
-        <button class="primary" type="submit" disabled={busy || !invite.trim()}>Join</button>
-      </form>
-    {:else if panel === 'me'}
-      <div class="form stack tight">
-        <p class="small muted">Show this code or send the link to people so they can add you. It carries your name ({currentDisplayName($profile)}) and your key. Change the name in Settings.</p>
-        {#if qr}<img class="qr" src={qr} alt="Your contact code" />{/if}
-        <div class="row">
-          <button class="grow" on:click={() => copyText('link', myLink)}>{copied === 'link' ? 'Copied' : 'Copy link'}</button>
-          <button class="grow" on:click={() => copyText('key', $me.pubKey)}>{copied === 'key' ? 'Copied' : 'Copy key'}</button>
+
+          {#if panel === 'contact'}
+            {#if scanning}
+              <QRScan on:scan={scanned} on:close={() => (scanning = false)} />
+            {:else}
+              <form class="stack tight" on:submit|preventDefault={submitContact}>
+                <textarea rows="3" placeholder="Paste a contact link or key" bind:value={contactInput} spellcheck="false" />
+                <input placeholder={parsed?.name ? `Name (${parsed.name})` : 'Name'} bind:value={name} />
+                <div class="row">
+                  <button class="primary grow" type="submit" disabled={busy || !contactInput.trim()}>Add contact</button>
+                  <button type="button" class="with-icon" on:click={() => (scanning = true)}><Icon name="qr" size={15} /> Scan</button>
+                </div>
+              </form>
+            {/if}
+          {:else if panel === 'group'}
+            <form class="stack tight" on:submit|preventDefault={() => run(() => createGroup(name, groupKind))}>
+              <input placeholder="Group name" bind:value={name} />
+              <div class="seg kind">
+                <button type="button" class:active={groupKind === 'group'} on:click={() => (groupKind = 'group')}>Group</button>
+                <button type="button" class:active={groupKind === 'channel'} on:click={() => (groupKind = 'channel')}>Channel</button>
+              </div>
+              <p class="small faint">{groupKind === 'group' ? 'Everyone can write.' : 'Only admins write, others read.'}</p>
+              <button class="primary" type="submit" disabled={busy || !name.trim()}>Create</button>
+            </form>
+          {:else if panel === 'join'}
+            <form class="stack tight" on:submit|preventDefault={() => run(() => joinGroup(invite))}>
+              <textarea rows="3" placeholder="Paste the invite" bind:value={invite} spellcheck="false" />
+              <button class="primary" type="submit" disabled={busy || !invite.trim()}>Join</button>
+            </form>
+          {:else if panel === 'me'}
+            <div class="stack tight">
+              <p class="small muted">Show this code or send the link so people can add you. It carries your name ({currentDisplayName($profile)}) and your key.</p>
+              {#if qr}<img class="qr" src={qr} alt="Your contact code" />{/if}
+              <div class="row">
+                <button class="grow with-icon center" on:click={() => copyText('link', myLink)}><Icon name={copied === 'link' ? 'check' : 'link'} size={15} />{copied === 'link' ? 'Copied' : 'Copy link'}</button>
+                <button class="grow with-icon center" on:click={() => copyText('key', $me.pubKey)}><Icon name={copied === 'key' ? 'check' : 'key'} size={15} />{copied === 'key' ? 'Copied' : 'Copy key'}</button>
+              </div>
+            </div>
+          {/if}
+          {#if error}<p class="error small">{error}</p>{/if}
         </div>
       </div>
     {/if}
-    {#if error}<p class="error small form">{error}</p>{/if}
+
+    <div class="search">
+      <Icon name="search" size={15} />
+      <input placeholder="Search" bind:value={query} spellcheck="false" />
+      {#if query}<button class="icon tiny" aria-label="Clear search" on:click={() => (query = '')}><Icon name="close" size={13} stroke={2.2} /></button>{/if}
+    </div>
 
     <div class="list">
       {#each sorted as c (c.id)}
-        <button class="ghost conv" class:sel={c.id === $activeId} on:click={() => openChat(c.id)}>
+        <button class="conv" class:sel={c.id === $activeId} class:unread={c.unread} on:click={() => openChat(c.id)}>
           <div class="avatar">
-            <Avatar id={c.peerId || c.id} name={c.name} size={40} />
+            <Avatar id={c.peerId || c.id} name={c.name} size={44} />
             {#if c.kind === 'direct'}<span class="presence" class:on={c.online} />{:else}<span class="kind">#</span>{/if}
           </div>
           <div class="body">
@@ -159,55 +207,128 @@
           </div>
         </button>
       {:else}
-        <p class="small muted empty">No chats yet. Add a contact from their link or code, or join a group with an invite.</p>
+        <div class="empty">
+          {#if q}
+            <p class="small muted">Nothing found for "{query}".</p>
+          {:else}
+            <span class="empty-ic"><Icon name="message" size={22} /></span>
+            <p class="small muted">No chats yet. Add a contact from their link or code, or join a group with an invite.</p>
+          {/if}
+        </div>
       {/each}
     </div>
+    {#if !narrow}
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <div class="resize" title="Drag to resize" on:mousedown|preventDefault={startResize} on:dblclick={() => { listWidth = 320; endResize(); }}></div>
+    {/if}
   </aside>
   {/if}
 
+  {#if !narrow || active}
   <section>
-    {#if listCollapsed}
-      <button class="show-list" title="Show the chat list" aria-label="Show the chat list" on:click={toggleList}><Icon name="chevronRight" size={18} /></button>
+    {#if listCollapsed && !narrow}
+      <button class="show-list" title="Show the chat list" aria-label="Show the chat list" on:click={toggleList}><Icon name="panel" size={17} /></button>
     {/if}
     {#if showCall}
       <div class="call" class:full={maximized}><CallStage title={active.name} bind:maximized /></div>
     {/if}
     {#if active}
-      {#if !maximized}<Conversation conv={active} />{/if}
+      {#if !maximized}<Conversation conv={active} back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />{/if}
     {:else}
-      <div class="placeholder muted">Select a chat</div>
+      <div class="placeholder">
+        <div class="ph-art" aria-hidden="true">
+          <span class="b b1"></span><span class="b b2"></span><span class="b b3"></span>
+        </div>
+        <h3>Select a chat</h3>
+        <p class="small muted">Messages are end-to-end encrypted and travel peer to peer.</p>
+      </div>
     {/if}
   </section>
+  {/if}
 </div>
 
 <style>
   .chats { display: flex; height: 100%; }
-  aside { width: 320px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line-soft); min-height: 0; background: color-mix(in srgb, var(--panel) 55%, var(--bg)); }
-  .head { padding: 16px 12px 10px 18px; gap: 2px; }
-  .panel-title { padding: 0 18px 6px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; font-size: 11px; }
-  .form { padding: 4px 14px 14px; animation: fade-up 0.15s ease-out; }
-  .qr { width: 168px; height: 168px; border-radius: 12px; align-self: center; padding: 6px; background: #fff; }
-  .list { flex: 1; overflow-y: auto; padding: 4px 8px 8px; }
-  .conv { width: 100%; text-align: left; display: flex; gap: 12px; align-items: center; padding: 9px 10px; border-radius: 12px; margin-bottom: 2px; }
-  .conv.sel { background: var(--accent-soft); }
-  .conv.sel:hover:not(:disabled) { background: var(--accent-soft); }
-  .avatar { position: relative; flex: none; }
-  .presence { position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; background: var(--faint); border: 2.5px solid var(--panel); }
-  .presence.on { background: var(--ok); }
-  .kind { position: absolute; right: -3px; bottom: -3px; width: 17px; height: 17px; border-radius: 6px; background: var(--raised); border: 2px solid var(--panel); color: var(--muted); font-size: 10px; font-weight: 700; display: grid; place-items: center; }
-  .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .name { overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--text); }
-  .time { color: var(--faint); font-size: 11.5px; font-weight: 400; }
-  .last { color: var(--muted); overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 400; }
-  .empty { padding: 16px 12px; }
-  section { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
-  .show-list {
-    position: absolute; z-index: 5; top: 12px; left: 12px;
-    width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-    background: var(--raised); border: 1px solid var(--line-soft); color: var(--muted); box-shadow: var(--shadow, 0 4px 14px rgba(0,0,0,0.25));
+  .chats.resizing { user-select: none; }
+  aside {
+    position: relative; flex: none; display: flex; flex-direction: column; min-height: 0;
+    border-right: 1px solid var(--line-soft); background: var(--panel);
+    animation: slide-in-left 0.32s var(--ease);
   }
-  .show-list:hover { color: var(--text); }
-  .call { height: 58%; min-height: 300px; flex: none; background: #000; }
+  .narrow aside { width: 100%; border-right: none; }
+  @keyframes slide-in-left { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+  .head { display: flex; align-items: center; gap: 2px; padding: 16px 12px 8px 20px; }
+  .head h2 { font-size: 20px; }
+
+  .actions { display: flex; gap: 6px; padding: 4px 14px 10px; }
+  .act {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 8px;
+    font-size: 12.5px; color: var(--muted); background: var(--raised); border-color: transparent; border-radius: 11px;
+  }
+  .act:hover:not(:disabled) { color: var(--text); border-color: transparent; }
+  .act.on, .act.on:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+
+  .sheet { padding: 0 14px 10px; overflow: hidden; }
+  .sheet-in { padding: 12px; border-radius: 16px; background: var(--raised); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; }
+  .sheet-in textarea, .sheet-in input { background: var(--panel); }
+  .sheet-head { margin: -2px -4px -2px 2px; }
+  .icon.tiny { width: 24px; height: 24px; border-radius: 7px; }
+  .kind { align-self: stretch; }
+  .center { justify-content: center; }
+  .qr { width: 176px; height: 176px; border-radius: 16px; align-self: center; padding: 8px; background: #fff; box-shadow: var(--shadow); animation: pop 0.4s var(--spring); }
+
+  .search {
+    display: flex; align-items: center; gap: 8px; margin: 0 14px 8px; padding: 0 6px 0 12px; height: 38px;
+    border-radius: 12px; background: var(--raised); color: var(--faint); border: 1px solid transparent;
+    transition: border-color var(--dur), box-shadow var(--dur), background var(--dur), color var(--dur);
+  }
+  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--panel); color: var(--accent); }
+  .search input { border: none; background: transparent; padding: 0; height: 100%; box-shadow: none; }
+  .search input:focus { box-shadow: none; background: transparent; }
+
+  .list { flex: 1; overflow-y: auto; padding: 2px 8px 10px; }
+  .conv {
+    width: 100%; text-align: left; display: flex; gap: 12px; align-items: center; padding: 9px 10px;
+    border-radius: 14px; margin-bottom: 2px; background: transparent; border: none; font-weight: 400;
+    animation: fade-up 0.3s var(--ease) both;
+  }
+  .conv:hover:not(:disabled) { background: var(--hover); border: none; }
+  .conv:active:not(:disabled) { transform: scale(0.985); }
+  .conv.sel, .conv.sel:hover:not(:disabled) { background: var(--accent-soft); }
+  .avatar { position: relative; flex: none; }
+  .presence { position: absolute; right: -1px; bottom: -1px; width: 13px; height: 13px; border-radius: 50%; background: var(--faint); border: 2.5px solid var(--panel); transition: background 0.3s; }
+  .presence.on { background: var(--ok); }
+  .avatar .kind { position: absolute; right: -3px; bottom: -3px; width: 18px; height: 18px; border-radius: 6px; background: var(--raised); border: 2px solid var(--panel); color: var(--muted); font-size: 10px; font-weight: 750; display: grid; place-items: center; }
+  .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; color: var(--text); }
+  .time { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .conv.unread .time { color: var(--accent); font-weight: 600; }
+  .last { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .conv.unread .last { color: var(--text); }
+  .empty { padding: 28px 18px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+  .empty-ic { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+
+  .resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; z-index: 3; }
+  .resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: var(--accent); opacity: 0; transition: opacity 0.2s; }
+  .resize:hover::after, .resizing .resize::after { opacity: 0.6; }
+
+  section { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--bg); }
+  .narrow section { animation: slide-in-right 0.3s var(--ease); }
+  .show-list {
+    position: absolute; z-index: 5; top: 14px; left: 14px;
+    width: 34px; height: 34px; padding: 0; border-radius: 11px; display: grid; place-items: center;
+    background: var(--panel); border: 1px solid var(--line-soft); color: var(--muted); box-shadow: var(--shadow-sm);
+  }
+  .show-list:hover:not(:disabled) { color: var(--text); background: var(--panel); }
+  .call { height: 58%; min-height: 300px; flex: none; background: #000; transition: height 0.35s var(--ease); }
   .call.full { height: 100%; flex: 1; }
-  .placeholder { flex: 1; display: grid; place-items: center; color: var(--faint); }
+
+  .placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; animation: fade 0.5s ease-out; }
+  .ph-art { position: relative; width: 120px; height: 90px; margin-bottom: 14px; }
+  .b { position: absolute; border-radius: 18px; animation: float 5s ease-in-out infinite; }
+  .b1 { left: 0; top: 10px; width: 72px; height: 34px; background: var(--raised); border: 1px solid var(--line-soft); border-bottom-left-radius: 6px; }
+  .b2 { right: 0; top: 34px; width: 80px; height: 34px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-bottom-right-radius: 6px; animation-delay: -1.6s; box-shadow: var(--glow); }
+  .b3 { left: 14px; top: 62px; width: 46px; height: 24px; background: var(--raised); border: 1px solid var(--line-soft); border-bottom-left-radius: 6px; animation-delay: -3.2s; }
+  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 </style>
+

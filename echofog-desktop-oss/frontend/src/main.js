@@ -1,4 +1,5 @@
 import './app.css';
+import './lib/stores/theme.js';
 import App from './App.svelte';
 
 function start() {

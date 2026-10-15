@@ -4,6 +4,9 @@
     choose, login, create, restore, phraseSaved, removeProfile, errText,
   } from '../stores/session.js';
   import { App } from '../api.js';
+  import { resolvedTheme, toggleTheme } from '../stores/theme.js';
+  import Icon from '../components/ui/Icon.svelte';
+  import Avatar from '../components/ui/Avatar.svelte';
 
   let password = '';
   let confirm = '';
@@ -79,45 +82,63 @@
 </script>
 
 <div class="wrap">
+  <div class="orb o1" aria-hidden="true"></div>
+  <div class="orb o2" aria-hidden="true"></div>
+  <div class="orb o3" aria-hidden="true"></div>
+
+  <button class="icon theme" title={$resolvedTheme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Toggle theme" on:click={toggleTheme}>
+    <Icon name={$resolvedTheme === 'dark' ? 'sun' : 'moon'} size={18} />
+  </button>
+
   <div class="box stack">
     <div class="hero">
-      <span class="mark" aria-hidden="true"></span>
+      <span class="mark" aria-hidden="true"><span></span></span>
       <div>
         <h1>EchoFog</h1>
         <p class="muted small">Messages, calls and proxy without a central server.</p>
       </div>
     </div>
 
+    {#key $screen}
+    <div class="step stack">
     {#if $screen === 'profiles'}
       <h2>Choose a profile</h2>
-      <div class="stack tight">
+      <div class="profiles">
         {#each $profiles as name}
-          <div class="row">
-            <button class="grow left" on:click={() => run(() => choose(name))} disabled={busy}>{name}</button>
-            <button class="ghost danger" on:click={() => del(name)} disabled={busy}>Delete</button>
+          <div class="prof">
+            <button class="pick" on:click={() => run(() => choose(name))} disabled={busy}>
+              <Avatar id={name} {name} size={36} />
+              <span class="grow">{name}</span>
+              <Icon name="chevronRight" size={16} />
+            </button>
+            <button class="icon del" title="Delete profile" aria-label="Delete profile {name}" on:click={() => del(name)} disabled={busy}><Icon name="trash" size={16} /></button>
           </div>
         {/each}
       </div>
       <form class="row" on:submit|preventDefault={() => run(() => choose(newName))}>
         <input class="grow" placeholder="New profile name" bind:value={newName} />
-        <button type="submit" disabled={busy || !newName.trim()}>Create</button>
+        <button type="submit" class="primary" disabled={busy || !newName.trim()}>Create</button>
       </form>
 
     {:else if $screen === 'login'}
-      <h2>Unlock {$profile}</h2>
+      <div class="who">
+        <Avatar id={$profile} name={$profile} size={56} />
+        <h2>Welcome back, {$profile}</h2>
+      </div>
       <form class="stack" on:submit|preventDefault={() => run(() => login(password))}>
         <label>Password<input type="password" bind:value={password} autofocus /></label>
-        <button class="primary" type="submit" disabled={busy || !password}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+        <button class="primary big" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner light"></span> Unlocking…{:else}<Icon name="lockOpen" size={16} /> Unlock{/if}</button>
       </form>
-      <div class="row">
-        <button class="ghost" on:click={() => go('profiles')}>Other profile</button>
-        <button class="ghost" on:click={() => go('restore')}>Forgot password</button>
+      <div class="row links">
+        <button class="ghost small" on:click={() => go('profiles')}>Other profile</button>
+        <span class="grow"></span>
+        <button class="ghost small" on:click={() => go('restore')}>Forgot password</button>
       </div>
 
     {:else if $screen === 'create' || $screen === 'restore'}
       <div class="seg" role="tablist" aria-label="New or existing identity">
         <button role="tab" class:active={$screen === 'create'} aria-selected={$screen === 'create'} on:click={() => go('create')}>New identity</button>
-        <button role="tab" class:active={$screen === 'restore'} aria-selected={$screen === 'restore'} on:click={() => go('restore')}>I have a recovery phrase</button>
+        <button role="tab" class:active={$screen === 'restore'} aria-selected={$screen === 'restore'} on:click={() => go('restore')}>Recovery phrase</button>
       </div>
     {/if}
 
@@ -128,10 +149,11 @@
       </p>
       <form class="stack" on:submit|preventDefault={submitCreate}>
         <label>Password<input type="password" bind:value={password} autofocus /></label>
+        <div class="meter" aria-hidden="true"><span style="width:{Math.min(100, password.length * 8)}%" class:good={password.length >= 12} class:ok={password.length >= 8 && password.length < 12}></span></div>
         <label>Repeat password<input type="password" bind:value={confirm} /></label>
-        <button class="primary" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create'}</button>
+        <button class="primary big" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create'}</button>
       </form>
-      {#if $profiles.length}<div class="row"><button class="ghost" on:click={() => go('profiles')}>Back</button></div>{/if}
+      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> Back</button></div>{/if}
 
     {:else if $screen === 'restore'}
       <h2>Restore from recovery phrase</h2>
@@ -139,16 +161,16 @@
       <form class="stack" on:submit|preventDefault={submitRestore}>
         <label>Recovery phrase<textarea rows="3" bind:value={phrase} spellcheck="false" autocomplete="off" placeholder="word word word …" /></label>
         {#if phraseCheck}<p class="small" class:error={phrase.trim().split(/\s+/).length >= 12} class:faint={phrase.trim().split(/\s+/).length < 12}>{phraseCheck}</p>
-        {:else if phraseOk}<p class="small ok">The phrase is valid.</p>{/if}
+        {:else if phraseOk}<p class="small ok">✓ The phrase is valid.</p>{/if}
         <details>
           <summary class="small muted">The phrase was made with an extra passphrase</summary>
           <label class="pp">Extra passphrase<input type="password" bind:value={passphrase} autocomplete="off" /></label>
         </details>
         <label>New password<input type="password" bind:value={password} /></label>
         <label>Repeat password<input type="password" bind:value={confirm} /></label>
-        <button class="primary" type="submit" disabled={busy}>{busy ? 'Restoring…' : 'Restore'}</button>
+        <button class="primary big" type="submit" disabled={busy}>{busy ? 'Restoring…' : 'Restore'}</button>
       </form>
-      {#if $profiles.length}<button class="ghost" on:click={() => go('profiles')}>Back</button>{/if}
+      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> Back</button></div>{/if}
 
     {:else if $screen === 'phrase'}
       <h2>Your recovery phrase</h2>
@@ -157,50 +179,74 @@
         They are shown only once.
       </p>
       <ol class="words">
-        {#each $recoveryPhrase.split(' ') as w}<li class="mono">{w}</li>{/each}
+        {#each $recoveryPhrase.split(' ') as w, i}<li style="animation-delay:{i * 18}ms"><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}
       </ol>
       <label class="row"><input type="checkbox" bind:checked={saved} /> I have written the phrase down</label>
-      <button class="primary" disabled={!saved || busy} on:click={() => run(phraseSaved)}>Continue</button>
+      <button class="primary big" disabled={!saved || busy} on:click={() => run(phraseSaved)}>Continue</button>
     {/if}
+    </div>
+    {/key}
 
-    {#if error}<p class="error small">{error}</p>{/if}
+    {#if error}<p class="error small err">{error}</p>{/if}
   </div>
 </div>
 
 <style>
   .wrap {
-    height: 100%; display: grid; place-items: center; overflow-y: auto; padding: 24px;
-    background:
-      radial-gradient(600px 400px at 20% 10%, rgba(29, 155, 240, 0.12), transparent 70%),
-      radial-gradient(500px 380px at 85% 90%, rgba(29, 155, 240, 0.10), transparent 70%),
-      var(--bg);
+    position: relative; height: 100%; display: grid; place-items: center; overflow-y: auto; overflow-x: hidden; padding: 24px 16px;
+    background: var(--bg);
   }
+  .orb { position: absolute; border-radius: 50%; filter: blur(70px); opacity: 0.55; pointer-events: none; animation: drift 18s ease-in-out infinite; }
+  .o1 { width: 420px; height: 420px; left: -120px; top: -120px; background: var(--accent); opacity: 0.22; }
+  .o2 { width: 380px; height: 380px; right: -100px; bottom: -120px; background: var(--accent-2); opacity: 0.2; animation-delay: -6s; }
+  .o3 { width: 240px; height: 240px; right: 18%; top: 12%; background: var(--ok); opacity: 0.08; animation-delay: -12s; }
+  @keyframes drift { 0%, 100% { transform: translate(0, 0) scale(1); } 33% { transform: translate(40px, 30px) scale(1.08); } 66% { transform: translate(-30px, 20px) scale(0.95); } }
+  .theme { position: absolute; top: 16px; right: 16px; z-index: 2; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line-soft); }
+
   .box {
-    width: 400px; padding: 28px; border-radius: 20px;
-    background: color-mix(in srgb, var(--panel) 85%, transparent);
-    border: 1px solid var(--line-soft);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(12px);
-    animation: fade-up 0.25s ease-out;
+    position: relative; z-index: 1; width: min(420px, 100%); padding: 30px; border-radius: var(--radius-xl);
+    background: var(--glass); border: 1px solid var(--line-soft);
+    box-shadow: var(--shadow-lg); backdrop-filter: blur(24px) saturate(1.4);
+    animation: rise 0.5s var(--spring);
   }
-  .hero { display: flex; gap: 14px; align-items: center; margin-bottom: 4px; }
-  .seg { display: flex; padding: 3px; gap: 3px; border-radius: 12px; background: var(--raised); border: 1px solid var(--line-soft); }
-  .seg button { flex: 1; border: none; background: transparent; color: var(--muted); padding: 7px 10px; border-radius: 9px; }
-  .seg button:hover:not(:disabled) { background: var(--hover); border: none; }
-  .seg button.active, .seg button.active:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); }
-  details summary { cursor: pointer; }
-  .pp { margin-top: 8px; }
+  .step { animation: fade-up 0.32s var(--ease); }
+  .hero { display: flex; gap: 14px; align-items: center; margin-bottom: 6px; }
   .mark {
-    width: 44px; height: 44px; border-radius: 13px; flex: none;
-    background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), transparent 45%), linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 8px 24px rgba(29, 155, 240, 0.4);
+    width: 48px; height: 48px; border-radius: 15px; flex: none; position: relative; overflow: hidden;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: var(--glow);
   }
-  .left { text-align: left; }
+  .mark span { position: absolute; inset: 11px; border-radius: 50%; border: 3.5px solid rgba(255, 255, 255, 0.95); border-right-color: transparent; transform: rotate(-30deg); animation: spin 6s linear infinite; }
+  .mark::after { content: ''; position: absolute; width: 9px; height: 9px; border-radius: 50%; background: #fff; left: 19.5px; top: 19.5px; }
+
+  .profiles { display: flex; flex-direction: column; gap: 6px; }
+  .prof { display: flex; gap: 6px; align-items: center; }
+  .pick { flex: 1; display: flex; align-items: center; gap: 12px; text-align: left; padding: 8px 12px 8px 8px; border-radius: 14px; color: var(--text); }
+  .pick :global(svg:last-child) { color: var(--faint); transition: transform 0.3s var(--spring); }
+  .pick:hover:not(:disabled) :global(svg:last-child) { transform: translateX(3px); color: var(--accent); }
+  .del:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+
+  .who { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 4px 0; }
+  .big { height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 14.5px; }
+  .spinner.light { border-color: rgba(255, 255, 255, 0.35); border-top-color: #fff; }
+  .links { margin-top: -4px; }
+  .seg { align-self: stretch; }
+  .pp { margin-top: 8px; }
+  .meter { height: 4px; border-radius: 4px; background: var(--raised); overflow: hidden; margin-top: -6px; }
+  .meter span { display: block; height: 100%; background: var(--danger); border-radius: 4px; transition: width 0.3s var(--ease), background 0.3s; }
+  .meter span.ok { background: var(--warn); }
+  .meter span.good { background: var(--ok); }
+
   .words {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 16px;
-    margin: 0; padding: 12px 12px 12px 32px; background: var(--panel);
-    border: 1px solid var(--line); border-radius: var(--radius);
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px;
+    margin: 0; padding: 0; list-style: none;
   }
-  .words li { color: var(--text); font-size: 13px; }
-  .words li::marker { color: var(--faint); font-size: 11px; }
+  .words li {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px;
+    background: var(--raised); border: 1px solid var(--line-soft); animation: pop 0.35s var(--spring) both;
+  }
+  .words .n { color: var(--faint); font-size: 11px; width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+  .words .mono { color: var(--text); font-size: 13px; word-break: normal; }
+  .err { animation: shake 0.4s var(--ease); }
+  @keyframes shake { 0%, 100% { transform: none; } 25% { transform: translateX(-5px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
 </style>
+
