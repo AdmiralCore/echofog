@@ -253,43 +253,67 @@ func (d *EchoFogDHT) Set(key []byte, value []byte) error {
 		_ = d.swarm.GetStorage().Set(RecordKey(key), recBytes)
 	}
 
-	targetID := targetOf(key)
-	nodes := d.routingTable.GetClosestPeers(targetID, Alpha)
-
-	if len(nodes) == 0 {
-		return nil
-	}
-
-	for _, node := range nodes {
-		go func(p *PeerNode) {
-			if !d.swarm.ThisIsActivePeer(p.ID) {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-
-				err := d.swarm.AddPotentialPeerWithCtx(ctx, p.ID, p.Addr)
-				if err != nil {
-					slog.Error("DHT: Network connection failed", "peer", p.ID, "err", err)
-					return
-				}
-			}
-
-			req := &internal_pb.MessageData{
-				Payload: &internal_pb.MessageData_StoreReq{
-					StoreReq: &internal_pb.StoreReq{Record: rec},
-				},
-			}
-
-			err := d.swarm.SendDataForPeer(p.ID, net_types.TypeStore, req)
-			if err != nil {
-				slog.Error("DHT: Failed to send store request", "peer", p.ID, "err", err)
-			} else {
-				slog.Info("DHT: Successfully sent StoreReq", "peer", p.ID)
-			}
-		}(node)
-	}
-
+	go d.replicate(rec, targetOf(key))
 	return nil
+}
 
+// Publishing gives up on a record after this long; the next publish of the same key tries again.
+const replicateTimeout = 30 * time.Second
+
+// replicate stores a signed record on the Alpha closest peers that can actually be reached. It
+// walks the network toward the key first instead of trusting the local table, which in a small
+// network often holds only peers behind NAT at addresses that no longer answer. Peers that cannot
+// be reached are skipped for the next closest ones; that is normal, so it is not an error.
+func (d *EchoFogDHT) replicate(rec *internal_pb.DhtRecord, target types.PeerID) {
+	ctx, cancel := context.WithTimeout(context.Background(), replicateTimeout)
+	defer cancel()
+
+	found, _ := d.iterativeFindNode(ctx, target, nil)
+	// peers we are connected to anyway are a sure place to store, even when the walk found nothing
+	// (found first: the walk's peers are the right ones; mergeClosest would cut a far live peer)
+	candidates := append(found, d.connectedClosest(target)...)
+
+	req := &internal_pb.MessageData{
+		Payload: &internal_pb.MessageData_StoreReq{StoreReq: &internal_pb.StoreReq{Record: rec}},
+	}
+	stored := 0
+	tried := map[types.PeerID]bool{}
+	for _, p := range candidates {
+		if tried[p.ID] {
+			continue
+		}
+		tried[p.ID] = true
+		if stored == Alpha || ctx.Err() != nil {
+			break
+		}
+		if !d.swarm.ThisIsActivePeer(p.ID) {
+			if p.Addr == "" || !d.swarm.AutoDial() {
+				continue
+			}
+			dialCtx, cancelDial := context.WithTimeout(ctx, lookupDialWait)
+			err := d.swarm.AddPotentialPeerWithCtx(dialCtx, p.ID, p.Addr)
+			cancelDial()
+			if err != nil {
+				slog.Debug("DHT: store peer unreachable, trying the next one", "peer", p.ID, "err", err)
+				continue
+			}
+		}
+		if err := d.swarm.SendDataForPeer(p.ID, net_types.TypeStore, req); err != nil {
+			slog.Debug("DHT: store request failed, trying the next peer", "peer", p.ID, "err", err)
+			continue
+		}
+		stored++
+	}
+	slog.Debug("DHT: record published", "replicas", stored, "candidates", len(candidates))
+}
+
+// connectedClosest is every peer we hold a connection to, closest to target first.
+func (d *EchoFogDHT) connectedClosest(target types.PeerID) []*PeerNode {
+	var out []*PeerNode
+	for _, p := range d.swarm.GetAllPeers() {
+		out = append(out, &PeerNode{ID: p.ID()})
+	}
+	return mergeClosest(nil, out, target, d.swarm.GetSelfID())
 }
 
 // queryPeerForValue asks one peer for the record; when it answers with closer peers, those are

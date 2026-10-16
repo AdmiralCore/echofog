@@ -287,3 +287,24 @@ func TestMergeClosestKeepsKInOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestSetStoresOnReachablePeersWhenTheClosestAreDead(t *testing.T) {
+	a, b := newTestNode(t), newTestNode(t)
+	// a's table is full of peers behind NAT at addresses that no longer answer, most of them
+	// closer to the key than b
+	for i := 0; i < 60; i++ {
+		pub, addr := randomPublicPeer()
+		a.dht.routingTable.AddOrUpdatePeer(pub, addr)
+	}
+	a.dial(t, b)
+	a.dht.routingTable.AddOrUpdatePeer(b.pub, b.addr())
+
+	key := swarm.BundleKey(a.id)
+	if err := a.dht.Set(key, []byte("bundle")); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the record lands on the one peer that can be reached", func() bool {
+		raw, err := b.sw.GetStorage().Get(RecordKey(key))
+		return err == nil && len(raw) > 0
+	})
+}
