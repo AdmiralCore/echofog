@@ -65,6 +65,10 @@ const (
 	// TypeExitVoucher offers an exit a signed voucher from the client's TON vault, paying for the
 	// next chunk of traffic. The first frame holds the JSON offer, the reply one JSON frame.
 	TypeExitVoucher
+	// TypeExitDirectory asks a peer for the exit adverts it knows. The reply is one frame holding a
+	// JSON array of adverts exactly as their exits signed them, so the asker verifies each itself.
+	// It is how a client finds exits it has no connection to and whose IDs it has never seen.
+	TypeExitDirectory
 )
 
 // IsUnreliableType reports whether frames of this type may arrive as unreliable QUIC datagrams.

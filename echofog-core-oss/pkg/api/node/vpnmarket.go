@@ -286,13 +286,13 @@ func (n *NodeApi) ensureConnected(id types.PeerID) error {
 	if n.node.DhtEngine == nil {
 		return errors.New("exit relay is not connected")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// an exit behind NAT has no address to dial: the node falls back to a hole punch through a relay
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	addr, err := n.node.DhtEngine.FindPeer(ctx, id)
-	if err != nil {
+	if err := n.node.EnsureConnected(ctx, id); err != nil {
 		return errors.New("exit relay is not connected")
 	}
-	return n.node.Swarm.AddPotentialPeerWithCtx(ctx, id, addr)
+	return nil
 }
 
 // StartVPNAt is StartVPN with an explicit loopback listen address

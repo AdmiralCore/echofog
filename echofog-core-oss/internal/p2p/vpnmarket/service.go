@@ -20,6 +20,9 @@ const (
 	domainsKey       = "vpnmarket:domains"
 )
 
+// earlyRefresh are the waits before the first directory passes after start
+var earlyRefresh = []time.Duration{10 * time.Second, 30 * time.Second, 90 * time.Second}
+
 // DefaultProbeDomains are checked on every exit unless the user sets their own list
 var DefaultProbeDomains = []string{"www.cloudflare.com:443", "www.wikipedia.org:443", "www.google.com:443"}
 
@@ -181,18 +184,19 @@ func (s *Service) LastSync() time.Time {
 // Run refreshes the directory in the background until ctx ends
 func (s *Service) Run(ctx context.Context) {
 	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(10 * time.Second):
-		}
-		for {
-			s.SyncOnce(ctx)
+		// the first passes come quickly: right after start the node is still meeting its peers,
+		// and a list that waits five minutes for the next pass looks like there are no exits
+		for i := 0; ; i++ {
+			wait := refreshInterval
+			if i < len(earlyRefresh) {
+				wait = earlyRefresh[i]
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(refreshInterval):
+			case <-time.After(wait):
 			}
+			s.SyncOnce(ctx)
 		}
 	}()
 }

@@ -346,3 +346,31 @@ func TestDomainsConfig(t *testing.T) {
 	assert.Error(t, svc.SetDomains(many), "more than %d sites", maxProbeDomains)
 	assert.NoError(t, svc.SetDomains(many[:maxProbeDomains]))
 }
+
+func TestDirectoryFindsExitsThroughPeersHints(t *testing.T) {
+	d := newFakeDHT() // the DHT knows nothing: the exit sits behind NAT, nobody can look it up
+	natExit, neighbour, me := newIdentity(t), newIdentity(t), newIdentity(t)
+	require.NoError(t, publisherFor(d, neighbour).Start(context.Background(), ShareConfig{PricePerMB: 5, UploadKbps: 10000}))
+	d.data = map[string][]byte{string(Key(neighbour.id)): d.data[string(Key(neighbour.id))]}
+
+	// a relay we are connected to knows the exit, and the exit names a neighbour
+	relaySays := [][]byte{
+		signedAdvert(t, natExit, func(a *Advert) { a.Neighbors = []string{neighbour.id.String()} }),
+		[]byte("not an advert"),
+		signedAdvert(t, newIdentity(t), func(a *Advert) { a.PricePerMB = -1 }), // fails verification
+	}
+	dir := NewDirectory(d, NewRatingStore(newMemStore()), me.id, nil)
+	dir.SetHints(func(context.Context) [][]byte { return relaySays })
+
+	assert.Equal(t, 2, dir.Refresh(context.Background()), "the exit from the hint, and its neighbour through the DHT")
+	_, ok := dir.Get(natExit.id)
+	assert.True(t, ok)
+
+	// what we pass on verifies at the next peer
+	shared := dir.Shared()
+	require.Len(t, shared, 2)
+	for _, raw := range shared {
+		_, err := Decode(raw, time.Now())
+		assert.NoError(t, err)
+	}
+}

@@ -15,7 +15,13 @@ const (
 	lookupTimeout   = 4 * time.Second
 	neighborsToShow = 6
 	maxCrawlRounds  = 3
+	// MaxShared is the most adverts given to a peer that asks for our directory
+	MaxShared = 64
 )
+
+// HintSource returns exit adverts other peers told us about, still encoded as their exits signed
+// them; nothing in them is trusted until each one verifies.
+type HintSource func(ctx context.Context) [][]byte
 
 // DHTClient is the slice of the DHT the market needs
 type DHTClient interface {
@@ -39,8 +45,27 @@ type Directory struct {
 	peers   func() []types.PeerID
 	now     func() time.Time
 
+	hints HintSource
+
 	mu      sync.RWMutex
 	adverts map[types.PeerID]*Advert
+}
+
+// SetHints makes Refresh also ask peers for the exits they know.
+func (d *Directory) SetHints(h HintSource) { d.hints = h }
+
+// Shared is what we tell a peer that asks for our directory: the live adverts, best first.
+func (d *Directory) Shared() [][]byte {
+	var out [][]byte
+	for _, e := range d.List() {
+		if len(out) >= MaxShared {
+			break
+		}
+		if raw, err := e.Advert.Encode(); err == nil {
+			out = append(out, raw)
+		}
+	}
+	return out
 }
 
 func NewDirectory(dht DHTClient, ratings *RatingStore, self types.PeerID, connected func() []types.PeerID) *Directory {
@@ -154,8 +179,25 @@ func (d *Directory) Refresh(ctx context.Context) int {
 		known[p] = true
 	}
 
-	for round := 0; round < maxCrawlRounds && len(batch) > 0 && ctx.Err() == nil; round++ {
-		found := d.lookupAll(ctx, batch)
+	// exits our peers know: a node connected to an exit behind NAT finds it even when we cannot see
+	// its ID anywhere else; their neighbours are crawled like any others
+	var hinted []*Advert
+	if d.hints != nil {
+		for _, raw := range d.hints(ctx) {
+			a, err := Decode(raw, d.now())
+			if err != nil {
+				continue
+			}
+			if id, err := a.ID(); err == nil && id != d.self {
+				known[id] = true
+				hinted = append(hinted, a)
+			}
+		}
+	}
+
+	for round := 0; round < maxCrawlRounds && (len(batch) > 0 || len(hinted) > 0) && ctx.Err() == nil; round++ {
+		found := append(hinted, d.lookupAll(ctx, batch)...)
+		hinted = nil
 		batch = batch[:0:0]
 		for _, a := range found {
 			d.accept(a)
