@@ -248,6 +248,9 @@ func (s *Swarm) Bootstrap(addrs []string) {
 			continue
 		}
 		addr, id, named := network.SplitPeerAddr(entry)
+		if named && id == s.selfID {
+			continue // a seed node finds itself in the built-in list
+		}
 
 		s.wg.Add(1)
 		go func(a string) {
