@@ -35,6 +35,9 @@ type Publisher struct {
 	now       func() time.Time
 	interval  time.Duration
 
+	// pubMu makes each publish (read the offer, sign, store) one step, so a timed republish that
+	// read the old offer cannot land after an Update or a withdrawal
+	pubMu  sync.Mutex
 	mu     sync.Mutex
 	status PublishStatus
 	cancel context.CancelFunc
@@ -82,9 +85,14 @@ func (p *Publisher) build(enabled bool, cfg ShareConfig) (*Advert, error) {
 }
 
 func (p *Publisher) publish(enabled bool) error {
+	p.pubMu.Lock()
+	defer p.pubMu.Unlock()
 	p.mu.Lock()
-	cfg := p.status.Config
+	cfg, running := p.status.Config, p.status.Running
 	p.mu.Unlock()
+	if enabled && !running {
+		return nil // stopped meanwhile: the withdrawal stands
+	}
 
 	a, err := p.build(enabled, cfg)
 	if err == nil {

@@ -24,17 +24,23 @@ type PeerExpecter interface {
 // SplitPeerAddr splits "host:port/<64 hex characters>" into the address and the peer ID.
 // An address without ID is returned as it is, with ok false.
 func SplitPeerAddr(s string) (addr string, id types.PeerID, ok bool) {
-	i := strings.LastIndexByte(s, '/')
+	// the link the app shows for sharing ("echofog://relay/host:port/<id>") names the same node;
+	// people paste it into a node's bootstrap setting as it is
+	t := strings.TrimPrefix(strings.TrimSpace(s), RelayLinkPrefix)
+	i := strings.LastIndexByte(t, '/')
 	if i < 0 {
 		return s, id, false
 	}
-	raw, err := hex.DecodeString(s[i+1:])
+	raw, err := hex.DecodeString(t[i+1:])
 	if err != nil || len(raw) != len(id) {
 		return s, id, false
 	}
 	copy(id[:], raw)
-	return s[:i], id, true
+	return t[:i], id, true
 }
+
+// RelayLinkPrefix starts the shareable form of a node address: "echofog://relay/<host:port>/<id>".
+const RelayLinkPrefix = "echofog://relay/"
 
 // JoinPeerAddr is the inverse of SplitPeerAddr: the form in which a node is published for others.
 func JoinPeerAddr(addr string, id types.PeerID) string { return addr + "/" + id.String() }
