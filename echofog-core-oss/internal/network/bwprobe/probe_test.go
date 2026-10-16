@@ -16,11 +16,15 @@ type link struct {
 	self     types.PeerID
 	peer     *link
 	delay    time.Duration
+	drop     func([]byte) bool
 }
 
 func (l *link) SendRawFrame(to types.PeerID, _ net_types.MessageType, data []byte) error {
 	if l.peer == nil || to != l.peer.self {
 		return assert.AnError
+	}
+	if l.drop != nil && l.drop(data) {
+		return nil
 	}
 	cp := append([]byte(nil), data...)
 	if l.delay > 0 && len(cp) > headerSize {
@@ -88,4 +92,19 @@ func TestMeasureDownloadSeenByRequester(t *testing.T) {
 
 	_, err = pa.MeasureDownload(context.Background(), b)
 	assert.Error(t, err, "a second request inside the cooldown must be ignored")
+}
+
+func TestMeasureDownloadUsesWhatArrivedWhenTheEndMarkerIsLate(t *testing.T) {
+	var a, b types.PeerID
+	a[0], b[0] = 1, 2
+	la := &link{handlers: map[types.PeerID]func([]byte, types.PeerID) error{}, self: a}
+	// the burster's end marker never makes it: a sender too slow to finish inside its budget
+	lb := &link{handlers: map[types.PeerID]func([]byte, types.PeerID) error{}, self: b, delay: 2 * time.Millisecond,
+		drop: func(f []byte) bool { return len(f) == headerSize && f[0] == kindEnd }}
+	la.peer, lb.peer = lb, la
+	pa, _ := New(la), New(lb)
+
+	kbps, err := pa.MeasureDownload(context.Background(), b)
+	require.NoError(t, err)
+	assert.Greater(t, kbps, 5_000)
 }

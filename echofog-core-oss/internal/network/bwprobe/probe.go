@@ -248,10 +248,30 @@ func (p *Prober) MeasureDownload(ctx context.Context, peer types.PeerID) (int, e
 		}
 		return int(float64(res.bytes) * 8 / 1000 / res.elapsed.Seconds()), nil
 	case <-time.After(maxBurstTime + ackTimeout):
+		// a slow sender can take longer than its burst budget to get the end marker out, while the
+		// data it already sent says enough about the link
+		if kbps, ok := p.partialRate(id); ok {
+			return kbps, nil
+		}
 		return 0, ErrProbeFailed
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
+}
+
+// partialRate is the rate of a download burst whose end marker has not arrived yet.
+func (p *Prober) partialRate(id [8]byte) (int, bool) {
+	p.mu.Lock()
+	st := p.rx[id]
+	p.mu.Unlock()
+	if st == nil || st.bytes == 0 {
+		return 0, false
+	}
+	elapsed := st.last.Sub(st.first)
+	if elapsed < 100*time.Millisecond {
+		return 0, false
+	}
+	return int(float64(st.bytes) * 8 / 1000 / elapsed.Seconds()), true
 }
 
 // finish closes a burst once its end marker arrived: it waits for straggling data frames, then
