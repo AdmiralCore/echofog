@@ -87,7 +87,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
-Mozilla Public License 2.0 (MPL-2.0), see [LICENSE](LICENSE). Changes to EchoFog's own files must
+Mozilla Public License 2.0 (MPL-2.0), see [LICENSE](../LICENSE) at the repository root. Changes to EchoFog's own files must
 stay open under the same license when you distribute them; you may combine EchoFog with code under
 other licenses. Third-party code keeps its own licenses (see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

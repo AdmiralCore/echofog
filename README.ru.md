@@ -111,7 +111,7 @@ make testbed-chaos               # десять нод за NAT в Docker, с п
 
 EchoFog распространяется по [Mozilla Public License 2.0](LICENSE) (MPL-2.0): если вы
 распространяете изменённые файлы EchoFog, они должны остаться открытыми под той же лицензией, но
-сам код можно сочетать с кодом под другими лицензиями. В каждом модуле лежит тот же `LICENSE`.
+сам код можно сочетать с кодом под другими лицензиями.
 Сторонний код сохраняет свои лицензии — см.
 [`echofog-core-oss/THIRD_PARTY_NOTICES.md`](echofog-core-oss/THIRD_PARTY_NOTICES.md). Встроенный
 драйвер Wintun распространяется без изменений с [wintun.net](https://www.wintun.net) на его

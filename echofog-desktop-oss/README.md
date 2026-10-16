@@ -49,5 +49,5 @@ UI sounds are synthesized in the app (`frontend/src/lib/sounds.js`), no sound fi
 
 ## License
 
-Mozilla Public License 2.0 (MPL-2.0), see [LICENSE](LICENSE). The core it builds on is under the
+Mozilla Public License 2.0 (MPL-2.0), see [LICENSE](../LICENSE) at the repository root. The core it builds on is under the
 same license.
