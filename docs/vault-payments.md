@@ -78,7 +78,8 @@ Every payment system has risks. These are ours:
 - **A node that is offline for more than 24 hours** during a user's withdrawal can miss what that
   user owed it.
 - **The contract has not been audited yet.** It is small (about 200 lines) and fully tested, but
-  that does not replace a review by someone else. That is why testnet comes first.
+  that does not replace an independent security audit by a specialist firm. That is why testnet
+  comes first.
 - **Privacy.** Like any payment on TON, a deposit and the node's collection are public: someone
   watching the blockchain can see that your wallet paid a node's wallet. They cannot see what you
   did through it. If this matters to you, use a fresh wallet funded through an exchange.

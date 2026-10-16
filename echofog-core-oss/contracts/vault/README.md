@@ -49,7 +49,7 @@ To try a vault by hand, go to **testnet first**:
 In the app, set `ECHOFOG_TON_NETWORK=testnet` (or `"ton": {"network": "testnet"}` in the config) to
 use testnet end to end.
 
-**Mainnet**: the same with `--mainnet`, only after an external review of the contract. The code
+**Mainnet**: the same with `--mainnet`, only after an independent security audit of the contract by a specialist firm. The code
 is immutable and has no admin key, so a mistake cannot be fixed later; it can only be replaced by
 a new version with new vault addresses.
 

@@ -1,18 +1,57 @@
 # EchoFog
 
-A peer-to-peer messenger with a built-in proxy market, designed to keep working where the network
-is censored. Free end-to-end encrypted chat, voice/video calls and screen sharing; plus an open
-market where anyone can sell their Internet connection as a proxy/VPN exit and get paid in crypto.
+Русская версия: [README.ru.md](README.ru.md)
 
-There is no central server. Peers find each other through a DHT, connect directly when their NATs
-allow it and through relays when they do not, and pay each other directly. The transport tries to
-look like an ordinary browser visiting a big HTTPS site, so a censor's deep-packet inspection sees
-nothing it can single out.
+**A peer-to-peer VPN that is hard to block.** There is no company in the middle: you go online
+through other people's computers, and anyone can run a node and set their own price. The connection
+is disguised as an ordinary browser visiting an ordinary HTTPS site, so a censor's deep-packet
+inspection has little to single out.
 
-> **Status: experimental.** The protocol works end to end in the lab and in a Dockerised test
-> network, but it has **not** had an external security audit and has **not** been tested against a
-> real national DPI. Do not rely on it to protect you in a high-risk setting yet. Feedback and
-> testing — especially from inside censored networks — are exactly what the project needs now.
+As a bonus, EchoFog includes free end-to-end encrypted chat and group calls with screen sharing up
+to 4K60 — no subscription, no central server. Payments for traffic are in TON, with no account and
+no commission.
+
+> **Status: experimental.** EchoFog works end to end in the lab and in a Dockerised test network,
+> but it has **not** had an independent security audit by a specialist organization yet, and it has
+> **not** yet been tested against a real national DPI. Do not rely on it to protect you in a
+> high-risk situation yet. Testing and feedback — especially from inside censored networks — are
+> exactly what the project needs now. See [SECURITY.md](SECURITY.md) for what is and is not
+> protected.
+
+## Documentation
+
+| If you want to… | Read |
+|---|---|
+| use the desktop app: install, VPN, contacts, calls | [Getting started](docs/getting-started.md) |
+| get quick, honest answers (safety, logs, legal risk of sharing) | [FAQ](docs/faq.md) |
+| run a node on a server or at home | [Run a node](docs/run-a-node.md) |
+| fix "this computer cannot be reached from the Internet" | [Reachability](docs/reachability.md) |
+| understand how it works under the hood | [How it works](docs/how-it-works.md) |
+| configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |
+| understand paying for traffic with a TON vault | [Vault payments](docs/vault-payments.md) |
+| know the security status, or report a vulnerability | [SECURITY.md](SECURITY.md) |
+
+Every document has a Russian version next to it (`*.ru.md`).
+
+## How it works, in short
+
+- **No central server.** Nodes find each other through a DHT. They connect directly when their
+  routers allow it, punch through home routers with the help of signaling nodes, and fall back to a
+  relay when nothing else works.
+- **Hard to block.** QUIC first, with every UDP packet disguised under a key tied to the node.
+  When UDP is blocked, the node falls back to TCP that looks like a real browser's HTTPS session; a
+  censor probing the node without the secret token is passed to the real site the node imitates.
+  A node can also sit behind a CDN over WebSocket.
+- **The VPN.** A local SOCKS5 proxy for apps, or the whole computer through a tunnel (on Windows
+  the Wintun driver is built in). Exits compete on an open market; the app can pick one
+  automatically by ping, price, speed and which of your sites open through it.
+- **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Calls and screen sharing
+  travel over relay trees sized by each participant's upload, which is how a stream reaches many
+  viewers without a central server.
+- **Payments.** You keep TON in your own small vault contract and sign vouchers as you use an
+  exit; the exit collects them every few hours. Paying by a direct TON or USDT transfer also works.
+
+The longer version is in [How it works](docs/how-it-works.md).
 
 ## Repository layout
 
@@ -21,69 +60,29 @@ This is a Go workspace (`go.work`) with two modules:
 | Folder | Module | What it is |
 |---|---|---|
 | [`echofog-core-oss/`](echofog-core-oss/) | `github.com/echofog/echofog-core` | the node: transport, crypto, NAT traversal, DHT, messaging, calls, proxy, payments, and the headless `echofog-node` binary for servers |
-| [`echofog-desktop-oss/`](echofog-desktop-oss/) | `github.com/echofog/echofog-desktop` | the desktop app (Wails: Go + WebView, Svelte front-end). The node runs inside it. |
+| [`echofog-desktop-oss/`](echofog-desktop-oss/) | `github.com/echofog/echofog-desktop` | the desktop app (Wails: Go + WebView, Svelte front-end); the node runs inside it |
 
 The desktop module uses the core through a `replace` directive pointing at `../echofog-core-oss`,
 so the two folders must stay side by side.
 
-## How it works
-
-The short version (detailed public docs are being prepared):
-
-- **Transport and anti-censorship.** QUIC first, with every UDP packet obfuscated under a key
-  derived from the peer's ID (no key is shared by the whole network, and none is in the binary).
-  When UDP is blocked, the node falls back to TCP that looks like a real browser's HTTPS session:
-  a genuine Chrome TLS ClientHello (uTLS), a REALITY-style token hidden in the ClientHello, and
-  anyone who connects without a valid token is relayed to the real mimicked site and sees *its*
-  certificate. A WebSocket transport lets a node sit behind a CDN such as Cloudflare. See
-  anti-censorship-transport.md and the
-  nDPI classification report.
-- **NAT traversal.** Multi-STUN NAT classification, UPnP/NAT-PMP port mapping and coordinated hole
-  punching; a relay is used when a direct path is impossible. See
-  nat-traversal.md.
-- **Messaging.** End-to-end encrypted (X3DH + Double Ratchet), with delivery receipts, an outbox
-  for offline peers, and a real group protocol. See
-  messaging.md.
-- **Calls.** Media flows over relay trees sized by each peer's uplink, so a call scales past what
-  one connection could carry.
-- **Proxy / VPN.** A local SOCKS5 proxy or a whole-computer tunnel (TUN), over an exit someone
-  sells on the market. On Windows the TUN driver (Wintun) is embedded and written out on demand, so
-  there is nothing extra to install.
-- **Payments.** No account and no commission. The user keeps TON in their own small vault
-  contract and signs vouchers off-chain as they use a node; the node collects them every few
-  hours. Paying by direct TON or USDT transfer still works. See
-  [docs/vault-payments.md](docs/vault-payments.md) (in Russian:
-  [vault-payments.ru.md](docs/vault-payments.ru.md)).
-
-Two kinds of public node matter for a healthy network: **relays**, which carry traffic for peers
-that cannot reach each other directly, and **signaling nodes** (`--signaling`), which only keep the
-DHT and help with hole punching and so cost almost no bandwidth.
-
-A relay can be **public** (the default — it serves anyone) or **private** (`--relay-private`): a
-private relay is not advertised and serves only the peer IDs its operator lists in `--relay-allow`,
-so you can run one on your own VPS for yourself and a few friends. Those friends reach it by adding
-its address with `--relays host:port/<peer id>` (and are added for free with their peer ID on the
-relay side); a client dials and prefers the relays named there even though a private one does not
-advertise itself.
-
-## Quick start
+## Build from source
 
 You need **Go 1.27+**. For the desktop app you also need **Node 18+** and the
 [Wails CLI](https://wails.io).
 
-### Run a headless node
+Headless node:
 
 ```bash
 cd echofog-core-oss
 make build                       # -> bin/echofog-node
 ./bin/echofog-node init          # create an identity, print the recovery phrase
-./bin/echofog-node run           # join and serve
+./bin/echofog-node run --bootstrap host:port/<peer id>
 ```
 
-Running real public nodes (seeds, relays, exits) on a server, with Docker and on Google Cloud, is
-covered step by step in deploy.md.
+What the flags mean, which ports to open and how to run it in Docker are in
+[Run a node](docs/run-a-node.md).
 
-### Build the desktop app
+Desktop app:
 
 ```bash
 cd echofog-desktop-oss
@@ -91,12 +90,12 @@ wails build                      # -> build/bin/EchoFog(.exe)
 wails dev                        # live reload against the real core
 ```
 
-> Note: the Wails v2.11.0 CLI must be built with a recent `golang.org/x/tools` to work under
-> Go 1.27 (otherwise it fails with `package "context" without types`). Install it with
+> The Wails v2.11.0 CLI must be built with a recent `golang.org/x/tools` to work under Go 1.27
+> (otherwise it fails with `package "context" without types`). Install it with
 > `GOTOOLCHAIN=go1.27.2 go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0` on a machine
 > whose module cache already has `x/tools` ≥ v0.52.
 
-### Test
+Tests:
 
 ```bash
 cd echofog-core-oss
@@ -105,18 +104,11 @@ make test-calls                  # a 10-node call cluster over QUIC
 make testbed-chaos               # ten nodes behind NATs in Docker, with crashes and cuts
 ```
 
-See testing.md for what each layer covers.
+## Contributing and feedback
 
-## Security model, honestly
-
-- Message content is end-to-end encrypted; the node you relay through sees only ciphertext.
-- The transport hides the *protocol* from a passive observer, and makes an active prober see a real
-  website — but it does **not** hide the *existence* of a public node from a censor who crawls the
-  DHT. Hiding those needs unlisted bridges (nodes whose address is shared privately).
-- What is **not** done yet: an external audit (including of the vault contract, which is on
-  testnet only); testing against a real national DPI; payments for relays (exits only for now).
-
-If you find a weakness, please open an issue or reach the maintainers before disclosing it widely.
+Bug reports, test results from censored networks and pull requests are welcome.
+<!-- TODO(owner): link to issues and the EchoFog channel --> Please report security problems
+privately — see [SECURITY.md](SECURITY.md).
 
 ## License
 
