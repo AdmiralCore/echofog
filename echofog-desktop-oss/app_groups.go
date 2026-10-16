@@ -98,6 +98,15 @@ func (a *App) ActiveGroupCall(groupID string) *api.GroupCall {
 	return nil
 }
 
+// KeepGroupCallAlive tells the group the call is still going; the UI calls it while in a group call.
+func (a *App) KeepGroupCallAlive(groupID, callID, coordinator string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.KeepGroupCallAlive(groupID, callID, coordinator)
+}
+
 // TransferGroupOwnership hands the group to another member; the owner becomes an admin.
 func (a *App) TransferGroupOwnership(groupID, memberID string) error {
 	n := a.getAPI()

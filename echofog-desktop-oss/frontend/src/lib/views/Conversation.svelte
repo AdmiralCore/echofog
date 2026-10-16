@@ -2,7 +2,7 @@
   import { afterUpdate, createEventDispatcher, tick } from 'svelte';
   import { fly } from 'svelte/transition';
   import { App, errText, copy } from '../api.js';
-  import { chats, messages, chatError, chatNote, membersVersion, activeId, loadChats, send, deleteContact, leaveGroup } from '../stores/chats.js';
+  import { chats, messages, chatError, chatNote, membersVersion, activeId, activeGroupCalls, loadChats, send, deleteContact, leaveGroup } from '../stores/chats.js';
   import { isCallActive, startCall, stageExpanded, peerInfo } from '../stores/call.store.js';
   import { time, short } from '../format.js';
   import { t, lang } from '../i18n/index.js';
@@ -19,7 +19,9 @@
 
   const RANK = { owner: 100, admin: 50, moderator: 25, member: 10, subscriber: 10, restricted: 1 };
   const ASSIGNABLE = ['admin', 'moderator', 'member', 'restricted'];
-  const FRESH_CALL_SECONDS = 15 * 60;
+
+  $: groupCall = conv.kind === 'group' ? $activeGroupCalls[conv.id] : null;
+  $: inThisCall = $isCallActive && $peerInfo.chatId === conv.id;
 
   let text = '';
   let sending = false;
@@ -82,10 +84,9 @@
       return;
     }
     try {
-      // join a call somebody started a moment ago, otherwise start one: that rings the others
-      let c = await App.ActiveGroupCall(conv.groupId);
-      const fresh = c && Date.now() / 1000 - c.startedAt < FRESH_CALL_SECONDS;
-      if (!c || !fresh) c = await App.StartGroupCall(conv.groupId);
+      // a call already going on in the group is joined; only without one a new call starts (and rings)
+      let c = $activeGroupCalls[conv.id] || (await App.ActiveGroupCall(conv.groupId));
+      if (!c || !c.callId) c = await App.StartGroupCall(conv.groupId);
       startCall({ alias: conv.name, callId: c.callId, coordinator: c.coordinator, chatId: conv.id }, video);
     } catch (err) {
       chatError.set(errText(err, $t('chats.err.call')));
@@ -224,6 +225,14 @@
         </div>
       {/each}
     </div>
+
+    {#if groupCall && !inThisCall}
+      <div class="callbar" transition:fly={{ y: -6, duration: 200 }}>
+        <span class="pulse"></span>
+        <span class="small">{$t('chats.callActive')}</span>
+        <button class="primary small with-icon" on:click={() => call(false)} disabled={$isCallActive}><Icon name="phone" size={14} /> {$t('chats.joinCall')}</button>
+      </div>
+    {/if}
 
     {#if $chatError}<p class="error small bar" transition:fly={{ y: 6, duration: 200 }}>{$chatError}</p>{/if}
     {#if $chatNote}<p class="muted small bar" transition:fly={{ y: 6, duration: 200 }}>{$chatNote}</p>{/if}
@@ -387,6 +396,16 @@
   .empty { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; animation: fade-up 0.4s var(--ease); }
 
   .bar { padding: 6px 20px; }
+  .callbar {
+    display: flex; align-items: center; gap: 10px;
+    margin: 0 16px 8px; padding: 8px 12px;
+    border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+    background: var(--ok-soft);
+    border-radius: 12px;
+  }
+  .callbar .small { flex: 1; }
+  .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .ro { display: flex; align-items: center; gap: 8px; justify-content: center; padding: 14px; border-top: 1px solid var(--line-soft); }
   .composer { padding: 8px clamp(10px, 2.5vw, 20px) 14px; }
   .field {

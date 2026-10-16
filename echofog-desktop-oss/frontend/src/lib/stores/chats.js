@@ -3,7 +3,7 @@ import { writable, get } from 'svelte/store';
 import { App, on, errText } from '../api.js';
 import { play } from '../sounds.js';
 import { callState } from '../services/call.service.js';
-import { ringIncoming, incomingCall, declineIncomingCall } from './call.store.js';
+import { ringIncoming, incomingCall, declineIncomingCall, convergeGroupCall, peerInfo } from './call.store.js';
 import { tr } from '../i18n/index.js';
 
 const inCall = () => get(callState).inCall;
@@ -13,6 +13,27 @@ const CALL_INVITE = 'fogcall://';
 /** Conversations: { id, kind: 'direct' | 'group', name, peerId, pubKey, online, last, ts, unread, readOnly } */
 export const chats = writable([]);
 export const activeId = writable('');
+/** Group calls going on right now, by chat id ('g:<group>'): { callId, coordinator, from } */
+export const activeGroupCalls = writable({});
+
+function setGroupCall(chatId, call) {
+  activeGroupCalls.update((m) => {
+    if (call) return { ...m, [chatId]: call };
+    const { [chatId]: _, ...rest } = m;
+    return rest;
+  });
+}
+
+// the core forgets a call nobody announced for a while: ask it, so finished calls disappear
+async function refreshGroupCalls() {
+  for (const c of get(chats)) {
+    if (c.kind !== 'group') continue;
+    try {
+      const call = await App.ActiveGroupCall(c.groupId);
+      setGroupCall(c.id, call && call.callId ? { callId: call.callId, coordinator: call.coordinator, from: call.from } : null);
+    } catch (_) { /* node not started */ }
+  }
+}
 /** Messages of the open conversation: { id, mine, sender, text, ts, failed, pending } */
 export const messages = writable([]);
 export const chatError = writable('');
@@ -139,6 +160,7 @@ function listen() {
         await refreshLast(id);
         break;
       case 'callend':
+        if (get(activeGroupCalls)[id]?.callId === ev.callId) setGroupCall(id, null);
         // the call is over: if it was still ringing here, stop
         if (get(incomingCall)?.callId === ev.callId) {
           declineIncomingCall();
@@ -147,14 +169,28 @@ function listen() {
         break;
       case 'call':
         // somebody started a call in a group we are in
+        setGroupCall(id, { callId: ev.callId, coordinator: ev.coordinator, from: ev.from });
+        // already in a call of this group: merge the two instead of ringing
+        if ((get(callState).inCall || get(callState).connecting) && get(peerInfo).chatId === id) {
+          await convergeGroupCall(id, ev.callId, ev.coordinator);
+          break;
+        }
         ringIncoming({
           callId: ev.callId, coordinator: ev.coordinator, from: ev.from, chatId: id,
           alias: `${ev.title || tr('chats.groupFallback')}: ${nameOfPeer(ev.from)}`,
         });
         break;
+      case 'callactive':
+        // a call already under way that we had not heard of: show it, do not ring
+        setGroupCall(id, { callId: ev.callId, coordinator: ev.coordinator, from: ev.from });
+        await convergeGroupCall(id, ev.callId, ev.coordinator);
+        break;
       default:
     }
   });
+
+  refreshGroupCalls();
+  setInterval(refreshGroupCalls, 20_000);
 
   // messages that waited for the recipient get confirmed in the background: refresh the marks
   setInterval(() => {

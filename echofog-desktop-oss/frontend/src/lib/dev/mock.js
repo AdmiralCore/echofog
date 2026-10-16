@@ -364,6 +364,7 @@ const impl = {
   EndGroupCall: () => null,
   StartGroupCall: () => ({ callId: 'call_group_demo', coordinator: SELF, from: SELF, startedAt: Math.floor(Date.now() / 1000) }),
   ActiveGroupCall: () => null,
+  KeepGroupCallAlive: () => null,
   InviteToCall: () => ({ callId: 'call_demo', coordinator: SELF }),
   GetStreamQualities: () => qualities,
   SetUploadCapacity: () => null,

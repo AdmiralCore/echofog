@@ -2,6 +2,8 @@
 export default {
   en: {
     'chats.title': 'Chats',
+    'chats.callActive': 'A call is going on in this group',
+    'chats.joinCall': 'Join',
     'chats.myContact': 'My contact',
     'chats.hideList': 'Hide the chat list',
     'chats.showList': 'Show the chat list',
@@ -110,6 +112,8 @@ export default {
   },
   ru: {
     'chats.title': 'Чаты',
+    'chats.callActive': 'В группе идёт звонок',
+    'chats.joinCall': 'Войти',
     'chats.myContact': 'Мой контакт',
     'chats.hideList': 'Скрыть список чатов',
     'chats.showList': 'Показать список чатов',

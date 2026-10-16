@@ -587,3 +587,68 @@ func TestGroupsFacade_AddedMemberAsksForHistory(t *testing.T) {
 	require.NoError(t, a.f.AddMember(g.ID, b.pubHex))
 	assert.Equal(t, []string{"before you"}, texts(t, b, g.ID))
 }
+
+func countEvents(n *testNode, kind string) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	k := 0
+	for _, ev := range n.events {
+		if ev.Kind == kind {
+			k++
+		}
+	}
+	return k
+}
+
+// A group call stays visible while its members keep announcing it, repeats do not ring again, a
+// member who missed the start still sees it (without ringing), and a stale announcement is ignored.
+func TestGroupsFacade_CallStaysLiveWhileAnnounced(t *testing.T) {
+	h := newHub()
+	a, b := h.node(t, newMemStore()), h.node(t, newMemStore())
+	g, _ := a.f.Create("Crew", "", "group")
+	invite, _ := a.f.Invite(g.ID)
+	_, _ = b.f.Join(invite)
+
+	call, err := a.f.StartCall(g.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, countEvents(b, "call"))
+
+	// the same call announced again: still one ring
+	b.f.handle(a.id, encodeWire(groupWire{Kind: "callalive", Group: g.ID, CallID: call.CallID, Coord: call.Coordinator, TS: time.Now().Unix()}))
+	assert.Equal(t, 1, countEvents(b, "call"))
+	assert.Equal(t, 0, countEvents(b, "callactive"), "a call already known and live is not news")
+
+	// a newcomer who missed the start learns of the call from a keep-alive: shown, not rung
+	c := h.node(t, newMemStore())
+	inviteB, _ := b.f.Invite(g.ID)
+	_, _ = c.f.Join(inviteB)
+	c.f.handle(a.id, encodeWire(groupWire{Kind: "callalive", Group: g.ID, CallID: call.CallID, Coord: call.Coordinator, TS: time.Now().Unix()}))
+	assert.Equal(t, 0, countEvents(c, "call"))
+	assert.Equal(t, 1, countEvents(c, "callactive"))
+	active, ok := c.f.ActiveCall(g.ID)
+	require.True(t, ok)
+	assert.Equal(t, call.CallID, active.CallID)
+
+	// an announcement that waited in a queue for long does not ring and does not resurrect
+	stale := h.node(t, newMemStore())
+	inviteC, _ := c.f.Invite(g.ID)
+	_, _ = stale.f.Join(inviteC)
+	stale.f.handle(a.id, encodeWire(groupWire{Kind: "call", Group: g.ID, CallID: call.CallID, Coord: call.Coordinator, TS: time.Now().Add(-10 * time.Minute).Unix()}))
+	assert.Equal(t, 0, countEvents(stale, "call"))
+	_, ok = stale.f.ActiveCall(g.ID)
+	assert.False(t, ok)
+
+	// nobody announces it any more: it is over
+	b.f.mu.Lock()
+	cc := b.f.calls[g.ID]
+	cc.LastSeen = time.Now().Add(-callAliveFor - time.Second).Unix()
+	b.f.calls[g.ID] = cc
+	b.f.mu.Unlock()
+	_, ok = b.f.ActiveCall(g.ID)
+	assert.False(t, ok, "a call nobody announced for callAliveFor is over")
+
+	// KeepCallAlive from a member brings it back for the others
+	require.NoError(t, a.f.KeepCallAlive(g.ID, call.CallID, call.Coordinator))
+	_, ok = b.f.ActiveCall(g.ID)
+	assert.True(t, ok)
+}

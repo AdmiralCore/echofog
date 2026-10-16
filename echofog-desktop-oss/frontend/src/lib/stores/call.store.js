@@ -4,6 +4,7 @@ import { InviteToCall, GetContacts, EndGroupCall } from '@wailsjs/go/main/App';
 import { EventsOn } from '@wailsjs/runtime/runtime';
 import { loadPeerDirectory } from './peers.store.js';
 import { tr } from '../i18n/index.js';
+import { App } from '../api.js';
 
 /** What the call is about, for headers and the mini player: { alias, avatar, peerId, chatId } */
 export const peerInfo = writable({ alias: '', avatar: '', peerId: '', chatId: '' });
@@ -118,8 +119,48 @@ export function ringIncoming({ callId, coordinator, from, alias, chatId }) {
     startRingtone();
 }
 
+// The group call we are in is announced to the group every 45 s (and once on joining), so members
+// who were offline or missed the start see that it is going and join it instead of starting another.
+const GROUP_ALIVE_MS = 45_000;
+let joinCoordinator = '';
+let aliveTimer = null;
+let announcedCall = '';
+
+function announceGroupCall() {
+    const st = get(callState);
+    const chat = get(peerInfo).chatId || '';
+    const coordinator = st.coordinator || joinCoordinator;
+    if (!chat.startsWith('g:') || !st.callId || !coordinator || !(st.inCall || st.connecting)) return;
+    App.KeepGroupCallAlive(chat.slice(2), st.callId, coordinator).catch(() => { /* offline: the next tick retries */ });
+}
+
+callState.subscribe((st) => {
+    const inGroupCall = (st.inCall || st.connecting) && (get(peerInfo).chatId || '').startsWith('g:');
+    if (inGroupCall && !aliveTimer) aliveTimer = setInterval(announceGroupCall, GROUP_ALIVE_MS);
+    if (!inGroupCall && aliveTimer) { clearInterval(aliveTimer); aliveTimer = null; }
+    if (st.inCall && st.callId && st.callId !== announcedCall) { announcedCall = st.callId; announceGroupCall(); }
+    if (!st.inCall && !st.connecting) announcedCall = '';
+});
+
+/**
+ * Two members who press "call" at the same moment each start a call. Whoever is still alone in
+ * theirs moves to the other one, and the lower call ID wins, so everybody ends up in one call.
+ */
+export async function convergeGroupCall(chatId, callId, coordinator) {
+    const st = get(callState);
+    if (!(st.inCall || st.connecting) || get(peerInfo).chatId !== chatId || !st.callId || st.callId === callId) return;
+    if ((st.members || []).length > 1 || callId > st.callId) return;
+    const info = get(peerInfo);
+    const video = st.isCameraOn;
+    const mine = st.callId;
+    try { await EndGroupCall(chatId.slice(2), mine); } catch (_) { /* best effort */ }
+    await callService.leaveCall();
+    await startCall({ alias: info.alias, callId, coordinator, chatId }, video);
+}
+
 export async function startCall(peer, withVideo = false) {
     if (get(callState).inCall || get(callState).connecting) return false;
+    joinCoordinator = peer.coordinator || '';
     peerInfo.set({ alias: peer.alias || '', avatar: peer.avatar || '', peerId: peer.peerId || '', chatId: peer.chatId || '' });
     stageExpanded.set(true);
     resumeAudioContext();
@@ -148,6 +189,7 @@ export async function acceptIncomingCall(withVideo = false) {
     stopRingtone();
     incomingCall.set(null);
     peerInfo.set({ alias: inv.alias, avatar: '', peerId: inv.from, chatId: inv.chatId || 'd:' + inv.from });
+    joinCoordinator = inv.coordinator || '';
     stageExpanded.set(true);
     resumeAudioContext();
     loadPeerDirectory();

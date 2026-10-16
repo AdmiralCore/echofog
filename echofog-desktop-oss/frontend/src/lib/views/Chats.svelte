@@ -3,7 +3,7 @@
   import { slide } from 'svelte/transition';
   import QRCode from 'qrcode';
   import { me, profile } from '../stores/session.js';
-  import { chats, activeId, loadChats, openChat, addContact, createGroup, joinGroup } from '../stores/chats.js';
+  import { chats, activeId, activeGroupCalls, loadChats, openChat, addContact, createGroup, joinGroup } from '../stores/chats.js';
   import { isCallActive, peerInfo, stageExpanded } from '../stores/call.store.js';
   import CallStage from '../components/call/CallStage.svelte';
   import { errText, copy } from '../api.js';
@@ -199,6 +199,7 @@
           <div class="body">
             <div class="row">
               <span class="grow name">{c.name}</span>
+              {#if $activeGroupCalls[c.id]}<span class="oncall" title={$t('chats.callActive')}><Icon name="phone" size={13} /></span>{/if}
               {#if c.ts}<span class="time">{when(c.ts, $lang)}</span>{/if}
             </div>
             <div class="row">
@@ -303,6 +304,7 @@
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; color: var(--text); }
   .time { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .oncall { display: inline-flex; color: var(--ok); }
   .conv.unread .time { color: var(--accent); font-weight: 600; }
   .last { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .conv.unread .last { color: var(--text); }

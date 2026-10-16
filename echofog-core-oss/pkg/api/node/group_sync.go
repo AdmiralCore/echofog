@@ -27,7 +27,7 @@ type wireMember struct {
 }
 
 type groupWire struct {
-	Kind    string                       `json:"k"` // msg join snap add role rm call
+	Kind    string                       `json:"k"` // msg join snap add role rm call callalive callend
 	Group   string                       `json:"g"`
 	ID      string                       `json:"i,omitempty"`
 	Text    string                       `json:"t,omitempty"`
@@ -60,7 +60,7 @@ const (
 
 // GroupEvent tells the application that something changed in a group.
 type GroupEvent struct {
-	Kind        string `json:"kind"` // message members call added removed
+	Kind        string `json:"kind"` // message members call callactive callend added removed
 	GroupID     string `json:"groupId"`
 	Title       string `json:"title,omitempty"`
 	From        string `json:"from,omitempty"`
@@ -76,9 +76,18 @@ type GroupCall struct {
 	Coordinator string `json:"coordinator"`
 	From        string `json:"from"`
 	StartedAt   int64  `json:"startedAt"`
+	LastSeen    int64  `json:"lastSeen"` // when somebody in the call last said it is still going
 }
 
-const callFreshness = 3 * time.Hour
+// A group call is live while its members keep announcing it: everyone in the call repeats the
+// announcement every callAliveEvery (KeepCallAlive), and a call nobody announced for callAliveFor
+// is over, even if its last member vanished without saying goodbye.
+const (
+	callAliveEvery = 45 * time.Second
+	callAliveFor   = 150 * time.Second
+	// an announcement that arrives this late (queued while the peer was unreachable) no longer rings
+	callAnnounceStale = 2 * time.Minute
+)
 
 func encodeWire(w groupWire) string {
 	raw, _ := json.Marshal(w)
@@ -428,13 +437,32 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 		}
 		return f.takeHistory(w)
 
-	case "call":
+	case "call", "callalive":
 		role, err := f.mgr.GetMemberRole(w.Group, origin)
 		if err != nil || role.Permissions&groups.PermJoinVoice == 0 || w.CallID == "" || w.Coord == "" {
 			return nil
 		}
-		f.calls[w.Group] = GroupCall{CallID: w.CallID, Coordinator: w.Coord, From: origin.String(), StartedAt: time.Now().Unix()}
-		ev := GroupEvent{Kind: "call", GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), CallID: w.CallID, Coordinator: w.Coord}
+		now := time.Now()
+		// an announcement held back while the sender was unreachable says nothing about now
+		if w.TS != 0 && now.Sub(time.Unix(w.TS, 0)) > callAnnounceStale {
+			return nil
+		}
+		prev, known := f.calls[w.Group]
+		sameCall := known && prev.CallID == w.CallID
+		c := GroupCall{CallID: w.CallID, Coordinator: w.Coord, From: origin.String(), StartedAt: now.Unix()}
+		if sameCall {
+			c.From, c.StartedAt = prev.From, prev.StartedAt
+		}
+		c.LastSeen = now.Unix()
+		f.calls[w.Group] = c
+		if sameCall && time.Since(time.Unix(prev.LastSeen, 0)) <= callAliveFor {
+			return nil // a call we already know about, still going: nothing new to show
+		}
+		kind := "callactive" // learned of a call already under way: show it, do not ring
+		if w.Kind == "call" {
+			kind = "call" // somebody just started it: ring
+		}
+		ev := GroupEvent{Kind: kind, GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), CallID: w.CallID, Coordinator: w.Coord}
 		return []func(){func() { f.emitEvent(ev) }}
 	}
 	return nil
@@ -548,11 +576,44 @@ func (f *groupsFacade) StartCall(groupID string) (GroupCall, error) {
 		f.mu.Unlock()
 		return GroupCall{}, errors.New("you cannot call in this group")
 	}
-	c := GroupCall{CallID: call.NewInviteSecret(), Coordinator: f.selfID.String(), From: f.selfID.String(), StartedAt: time.Now().Unix()}
+	now := time.Now().Unix()
+	c := GroupCall{CallID: call.NewInviteSecret(), Coordinator: f.selfID.String(), From: f.selfID.String(), StartedAt: now, LastSeen: now}
 	f.calls[groupID] = c
 	f.mu.Unlock()
-	f.broadcast(groupID, groupWire{Kind: "call", Group: groupID, CallID: c.CallID, Coord: c.Coordinator})
+	f.broadcast(groupID, groupWire{Kind: "call", Group: groupID, CallID: c.CallID, Coord: c.Coordinator, TS: now})
 	return c, nil
+}
+
+// KeepCallAlive tells the group that the call is still going. The app calls it every
+// callAliveEvery while this member is in the call; announcements closer together are skipped.
+func (f *groupsFacade) KeepCallAlive(groupID, callID, coordinator string) error {
+	if callID == "" || coordinator == "" {
+		return errors.New("no call")
+	}
+	f.mu.Lock()
+	if err := f.load(); err != nil {
+		f.mu.Unlock()
+		return err
+	}
+	if _, err := f.mgr.GetMemberRole(groupID, f.selfID); err != nil {
+		f.mu.Unlock()
+		return err
+	}
+	now := time.Now().Unix()
+	c, ok := f.calls[groupID]
+	if ok && c.CallID == callID && f.aliveSent[groupID] != 0 && now-f.aliveSent[groupID] < int64(callAliveEvery/time.Second)/2 {
+		f.mu.Unlock()
+		return nil
+	}
+	if !ok || c.CallID != callID {
+		c = GroupCall{CallID: callID, Coordinator: coordinator, From: f.selfID.String(), StartedAt: now}
+	}
+	c.LastSeen = now
+	f.calls[groupID] = c
+	f.aliveSent[groupID] = now
+	f.mu.Unlock()
+	f.broadcast(groupID, groupWire{Kind: "callalive", Group: groupID, CallID: callID, Coord: coordinator, TS: now})
+	return nil
 }
 
 // ActiveCall is the call that a member recently started in the group, if any.
@@ -560,7 +621,7 @@ func (f *groupsFacade) ActiveCall(groupID string) (GroupCall, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c, ok := f.calls[groupID]
-	if !ok || time.Since(time.Unix(c.StartedAt, 0)) > callFreshness {
+	if !ok || time.Since(time.Unix(c.LastSeen, 0)) > callAliveFor {
 		return GroupCall{}, false
 	}
 	return c, true

@@ -85,6 +85,7 @@ type groupsFacade struct {
 	notify     func(GroupEvent)
 	calls      map[string]GroupCall
 	histSent   map[string]time.Time // when history was last handed to whom
+	aliveSent  map[string]int64     // group -> when we last announced our call there (unix s)
 
 	async   bool // handle() sends its follow-ups from a goroutine (set for the real node)
 	nudgeMu sync.Mutex
@@ -99,7 +100,7 @@ func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.I
 		mgr.SetEmitter(em)
 	}
 	return &groupsFacade{mgr: mgr, store: store, selfID: selfID, selfPub: selfPub, sign: sign,
-		sendSilent: sendSilent, isContact: isContact, notify: notify, calls: make(map[string]GroupCall), histSent: make(map[string]time.Time),
+		sendSilent: sendSilent, isContact: isContact, notify: notify, calls: make(map[string]GroupCall), histSent: make(map[string]time.Time), aliveSent: make(map[string]int64),
 		nudged: make(map[types.PeerID]time.Time)}
 }
 
@@ -589,7 +590,16 @@ func (n *NodeApi) StartGroupCall(groupID string) (GroupCall, error) {
 	return f.StartCall(groupID)
 }
 
-// ActiveGroupCall is the call that a member recently started in the group, if there is one.
+// KeepGroupCallAlive tells the group the call is still going; call it periodically while in it.
+func (n *NodeApi) KeepGroupCallAlive(groupID, callID, coordinator string) error {
+	f, err := n.groupsFacade()
+	if err != nil {
+		return err
+	}
+	return f.KeepCallAlive(groupID, callID, coordinator)
+}
+
+// ActiveGroupCall is the call going on in the group, if there is one.
 func (n *NodeApi) ActiveGroupCall(groupID string) (GroupCall, bool) {
 	f, err := n.groupsFacade()
 	if err != nil {
