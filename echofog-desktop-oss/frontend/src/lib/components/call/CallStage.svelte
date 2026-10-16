@@ -22,7 +22,27 @@
     $: screens = s.activeStreams.filter((st) => st.mediaType !== 'camera');
     $: focused = s.focusedStreamId ? s.activeStreams.find((st) => st.streamId === s.focusedStreamId) : null;
     $: tiles = screens.length + members.length;
-    $: cols = tiles <= 1 ? 1 : tiles <= 4 ? 2 : tiles <= 9 ? 3 : 4;
+    // every tile is the same 16:9 box; the column count is whichever makes the boxes biggest
+    const GAP = 12;
+    let gridW = 0;
+    let gridH = 0;
+    $: tile = fitTiles(tiles, gridW, gridH);
+
+    function fitTiles(n, W, H) {
+        if (!n || W <= 0 || H <= 0) return { w: 0, h: 0 };
+        let best = { w: 0, h: 0 };
+        for (let cols = 1; cols <= n; cols++) {
+            const rows = Math.ceil(n / cols);
+            let w = (W - GAP * (cols - 1)) / cols;
+            let h = (w * 9) / 16;
+            if (h * rows + GAP * (rows - 1) > H) {
+                h = (H - GAP * (rows - 1)) / rows;
+                w = (h * 16) / 9;
+            }
+            if (w > best.w) best = { w: Math.floor(w), h: Math.floor(h) };
+        }
+        return best;
+    }
 
     function orderMembers(list, self) {
         // you first, then everybody else in a stable order
@@ -82,13 +102,15 @@
                 </div>
             </div>
         {:else}
-            <div class="grid gap-3 w-full h-full min-h-0 content-center" style="grid-template-columns:repeat({cols}, minmax(0, 1fr)); grid-auto-rows: minmax(0, {tiles <= 2 ? '1fr' : 'auto'});">
-                {#each screens as st (st.streamId)}
-                    <div class="min-h-0 {tiles <= 2 ? 'h-full' : 'aspect-video'}"><StreamTile stream={st} /></div>
-                {/each}
-                {#each members as peer (peer)}
-                    <div class="min-h-0 {tiles <= 2 ? 'h-full' : 'aspect-video'}"><ParticipantTile {peer} camera={cameraOf[peer]} on:menu={openMenu} /></div>
-                {/each}
+            <div class="relative w-full h-full min-h-0 overflow-hidden" bind:clientWidth={gridW} bind:clientHeight={gridH}>
+                <div class="absolute inset-0 flex flex-wrap content-center justify-center" style="gap:{GAP}px">
+                    {#each screens as st (st.streamId)}
+                        <div class="shrink-0" style="width:{tile.w}px;height:{tile.h}px"><StreamTile stream={st} /></div>
+                    {/each}
+                    {#each members as peer (peer)}
+                        <div class="shrink-0" style="width:{tile.w}px;height:{tile.h}px"><ParticipantTile {peer} camera={cameraOf[peer]} on:menu={openMenu} /></div>
+                    {/each}
+                </div>
             </div>
         {/if}
     </div>

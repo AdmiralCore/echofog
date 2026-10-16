@@ -13,6 +13,9 @@
     export let compact = false;
 
     const dispatch = createEventDispatcher();
+    let boxH = 0;
+    // the avatar shrinks with the tile so it never runs under the name label
+    $: avatarSize = Math.round(Math.max(28, Math.min(compact ? 44 : 84, boxH * 0.4 || 84)));
 
     $: isSelf = peer === $callState.self;
     $: speaking = !!$callState.speaking[peer];
@@ -32,13 +35,14 @@
 <div
     class="group relative w-full h-full min-h-0 rounded-xl overflow-hidden bg-[#1e1f22] transition-shadow duration-150"
     class:speaking
+    bind:clientHeight={boxH}
     on:contextmenu|preventDefault={openMenu}
 >
     {#if camera}
         <VideoView stream={camera} fit="cover" mirror={isSelf} />
     {:else}
         <div class="absolute inset-0 flex items-center justify-center" style="background:radial-gradient(circle at 50% 40%, rgba(255,255,255,.05), transparent 70%)">
-            <Avatar id={peer} {name} src={$peerAvatar(peer)} size={compact ? 44 : 84} {speaking} />
+            <Avatar id={peer} {name} src={$peerAvatar(peer)} size={avatarSize} {speaking} />
         </div>
     {/if}
 
