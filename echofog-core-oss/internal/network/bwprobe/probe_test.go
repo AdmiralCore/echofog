@@ -57,12 +57,27 @@ func TestMeasureBestAppliesHeadroomAndHandlesNoPeers(t *testing.T) {
 	_, err := pa.MeasureBest(context.Background(), nil, 3)
 	assert.ErrorIs(t, err, ErrNoPeers)
 
-	raw, err := pa.Measure(context.Background(), b)
-	require.NoError(t, err)
+	// a real measurement goes through (its value is too noisy in memory to compare two of them)
 	best, err := pa.MeasureBest(context.Background(), []types.PeerID{b}, 3)
 	require.NoError(t, err)
 	assert.Greater(t, best, 0)
-	assert.LessOrEqual(t, best, raw*2)
+
+	// the best of several peers, with 20% headroom; failed peers are skipped; maxPeers is honoured
+	var p1, p2, p3, p4 types.PeerID
+	p1[0], p2[0], p3[0], p4[0] = 11, 12, 13, 14
+	rates := map[types.PeerID]int{p1: 40_000, p2: 100_000, p4: 900_000}
+	pa.measure = func(_ context.Context, peer types.PeerID) (int, error) {
+		if r, ok := rates[peer]; ok {
+			return r, nil
+		}
+		return 0, ErrProbeFailed
+	}
+	best, err = pa.MeasureBest(context.Background(), []types.PeerID{p1, p2, p3, p4}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 80_000, best, "80% of the best of the first three (p4 is beyond maxPeers)")
+
+	_, err = pa.MeasureBest(context.Background(), []types.PeerID{p3}, 3)
+	assert.ErrorIs(t, err, ErrProbeFailed, "no peer measured: an error, not a zero rate")
 }
 
 func TestMeasureDownloadSeenByRequester(t *testing.T) {

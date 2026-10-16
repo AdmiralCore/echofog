@@ -23,6 +23,11 @@ const (
 	maxBurstTime  = 2 * time.Second
 	ackTimeout    = 4 * time.Second
 	headerSize    = 1 + 8
+
+	// After the end marker, wait for data frames still in flight: until none has arrived for
+	// endSettle, and never longer than endSettleMax.
+	endSettle    = 150 * time.Millisecond
+	endSettleMax = 1500 * time.Millisecond
 )
 
 var (
@@ -49,6 +54,8 @@ type Prober struct {
 	lastReq map[types.PeerID]time.Time
 	rx      map[[8]byte]*rxState
 	waiting map[[8]byte]chan ackResult
+
+	measure func(ctx context.Context, peer types.PeerID) (int, error) // Measure; tests replace it
 }
 
 type ackResult struct {
@@ -58,6 +65,7 @@ type ackResult struct {
 
 func New(tr Transport) *Prober {
 	p := &Prober{lastReq: make(map[types.PeerID]time.Time), tr: tr, rx: make(map[[8]byte]*rxState), waiting: make(map[[8]byte]chan ackResult)}
+	p.measure = p.Measure
 	tr.RegisterFastFrameHandler(net_types.TypeBandwidthProbe, p.handle)
 	return p
 }
@@ -98,30 +106,10 @@ func (p *Prober) handle(payload []byte, from types.PeerID) error {
 		}
 
 	case kindEnd:
-		p.mu.Lock()
-		st := p.rx[id]
-		delete(p.rx, id)
-		ch := p.waiting[id]
-		p.mu.Unlock()
-
-		if ch != nil {
-			if st != nil {
-				select {
-				case ch <- ackResult{bytes: st.bytes, elapsed: st.last.Sub(st.first)}:
-				default:
-				}
-			}
-			return nil
-		}
-
-		ack := make([]byte, headerSize+16)
-		ack[0] = kindAck
-		copy(ack[1:headerSize], id[:])
-		if st != nil {
-			binary.BigEndian.PutUint64(ack[headerSize:], st.bytes)
-			binary.BigEndian.PutUint64(ack[headerSize+8:], uint64(st.last.Sub(st.first)))
-		}
-		return p.tr.SendRawFrame(from, net_types.TypeBandwidthProbe, ack)
+		// Every frame travels on its own stream and is handled in its own goroutine, so the end
+		// marker can overtake data frames sent before it. Settle first, then count.
+		go p.finish(id, from)
+		return nil
 
 	case kindAck:
 		if len(payload) < headerSize+16 {
@@ -188,7 +176,7 @@ func (p *Prober) MeasureBest(ctx context.Context, peers []types.PeerID, maxPeers
 	best := 0
 	var lastErr error
 	for _, peer := range peers[:maxPeers] {
-		kbps, err := p.Measure(ctx, peer)
+		kbps, err := p.measure(ctx, peer)
 		if err != nil {
 			lastErr = err
 			continue
@@ -264,4 +252,45 @@ func (p *Prober) MeasureDownload(ctx context.Context, peer types.PeerID) (int, e
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
+}
+
+// finish closes a burst once its end marker arrived: it waits for straggling data frames, then
+// hands the result to a local MeasureDownload, or acks it back to the peer that sent the burst.
+func (p *Prober) finish(id [8]byte, from types.PeerID) {
+	deadline := time.Now().Add(endSettleMax)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		st := p.rx[id]
+		quiet := st != nil && time.Since(st.last) >= endSettle
+		p.mu.Unlock()
+		if quiet {
+			break
+		}
+		time.Sleep(endSettle / 4)
+	}
+
+	p.mu.Lock()
+	st := p.rx[id]
+	delete(p.rx, id)
+	ch := p.waiting[id]
+	p.mu.Unlock()
+
+	var res ackResult
+	if st != nil {
+		res = ackResult{bytes: st.bytes, elapsed: st.last.Sub(st.first)}
+	}
+	if ch != nil {
+		select {
+		case ch <- res: // zero bytes when nothing arrived: the caller fails at once instead of timing out
+		default:
+		}
+		return
+	}
+
+	ack := make([]byte, headerSize+16)
+	ack[0] = kindAck
+	copy(ack[1:headerSize], id[:])
+	binary.BigEndian.PutUint64(ack[headerSize:], res.bytes)
+	binary.BigEndian.PutUint64(ack[headerSize+8:], uint64(res.elapsed))
+	_ = p.tr.SendRawFrame(from, net_types.TypeBandwidthProbe, ack)
 }
