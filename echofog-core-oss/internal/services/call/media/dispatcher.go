@@ -56,9 +56,10 @@ type MediaDispatcher struct {
 	watchingStreams  map[string]bool
 	videoSeq         map[string]*atomic.Uint32
 	lastDelivered    map[sourceKey]uint32
-	lastForward      map[string]time.Time  // stream -> last time we sent anything to its children
-	lastFromFeeder   map[linkKey]time.Time // (stream, feeder) -> last frame received from it
-	watchSince       map[linkKey]time.Time // (stream, feeder) -> first time we waited on it
+	missing          map[sourceKey]map[uint32]struct{} // seqs skipped over, waiting out the reorder window
+	lastForward      map[string]time.Time              // stream -> last time we sent anything to its children
+	lastFromFeeder   map[linkKey]time.Time             // (stream, feeder) -> last frame received from it
+	watchSince       map[linkKey]time.Time             // (stream, feeder) -> first time we waited on it
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
@@ -83,6 +84,7 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 		watchingStreams: make(map[string]bool),
 		videoSeq:        make(map[string]*atomic.Uint32),
 		lastDelivered:   make(map[sourceKey]uint32),
+		missing:         make(map[sourceKey]map[uint32]struct{}),
 		lastForward:     make(map[string]time.Time),
 		lastFromFeeder:  make(map[linkKey]time.Time),
 		watchSince:      make(map[linkKey]time.Time),
@@ -288,17 +290,92 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 	d.consumer.OnLocalVideo(&unit)
 }
 
+// A sequence gap only counts as loss if the skipped units are still missing reorderWindow later.
+// Datagrams arrive out of order all the time, and every false alarm used to cost the broadcaster
+// a full IDR frame, whose size then starved the frames after it into mush.
+const (
+	reorderWindow = 200 * time.Millisecond
+	maxTrackedGap = 64
+)
+
 func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 	k := sourceKey{p.Kind, p.Broadcaster, p.StreamID}
+	var gap []uint32
+	lostNow := false
 	d.mu.Lock()
 	last, seen := d.lastDelivered[k]
-	if !seen || int32(p.Seq-last) > 0 {
+	diff := int32(p.Seq - last)
+	switch {
+	case !seen:
 		d.lastDelivered[k] = p.Seq
+	case diff > 0:
+		d.lastDelivered[k] = p.Seq
+		if diff > maxTrackedGap {
+			lostNow = true // too much at once to be reordering
+		} else if diff > 1 {
+			m := d.missing[k]
+			if m == nil {
+				m = make(map[uint32]struct{})
+				d.missing[k] = m
+			}
+			for s := last + 1; s != p.Seq; s++ {
+				m[s] = struct{}{}
+				gap = append(gap, s)
+			}
+		}
+	default:
+		// a late unit filling a gap
+		if m := d.missing[k]; m != nil {
+			delete(m, p.Seq)
+		}
 	}
 	d.mu.Unlock()
-	if seen && int32(p.Seq-last) > 1 && d.OnVideoLoss != nil {
-		d.OnVideoLoss(p.StreamID, p.Broadcaster)
+
+	if lostNow {
+		d.reportVideoLoss(p.StreamID, p.Broadcaster)
 	}
+	if len(gap) == 0 {
+		return
+	}
+	time.AfterFunc(reorderWindow, func() {
+		still := false
+		d.mu.Lock()
+		if m := d.missing[k]; m != nil {
+			for _, s := range gap {
+				if _, ok := m[s]; ok {
+					still = true
+					delete(m, s)
+				}
+			}
+			if len(m) == 0 {
+				delete(d.missing, k)
+			}
+		}
+		d.mu.Unlock()
+		if still {
+			d.reportVideoLoss(p.StreamID, p.Broadcaster)
+		}
+	})
+}
+
+func (d *MediaDispatcher) reportVideoLoss(streamID string, broadcaster types.PeerID) {
+	select {
+	case <-d.stop:
+		return
+	default:
+	}
+	if d.OnVideoLoss != nil {
+		d.OnVideoLoss(streamID, broadcaster)
+	}
+}
+
+// VideoPressure reports how much video the outbox has dropped so far and its deepest queue now;
+// the call layer turns it into a send bitrate for the local encoder.
+func (d *MediaDispatcher) VideoPressure() (dropped uint64, backlog int) {
+	if d.outbox == nil {
+		return 0, 0
+	}
+	return d.outbox.Stats().Dropped[ClassVideo], d.outbox.VideoBacklog()
 }
 
 // BroadcastLocalAudio sends local microphone audio to every voice tree link.

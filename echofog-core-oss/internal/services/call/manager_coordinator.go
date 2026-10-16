@@ -296,7 +296,7 @@ func (m *CallManager) handleKeyframeRequestLocked(room *ActiveRoomState, streamI
 		return
 	}
 	role := captureRole(ann.MediaType)
-	if now.Sub(room.keyframeServed[streamID]) < keyframeMinInterval {
+	if now.Sub(room.keyframeServed[streamID]) < keyframeServeInterval {
 		return
 	}
 	room.keyframeServed[streamID] = now
@@ -333,6 +333,7 @@ func (m *CallManager) runLoop(ctx context.Context, room *ActiveRoomState) {
 			} else {
 				m.memberTickLocked(room, now)
 			}
+			m.rateTickLocked(room, now)
 			if now.Sub(room.lastSeenGC) > time.Second {
 				room.lastSeenGC = now
 				for k, ts := range room.seen {

@@ -462,10 +462,10 @@ class CallService {
       return;
     }
     const track = this.screen.getVideoTracks()[0];
-    track.contentHint = q.fps >= 60 ? 'motion' : 'detail';
+    track.contentHint = 'detail'; // screens carry text: keep it sharp, drop frames first
     track.onended = () => this.stopScreenShare();
     await this.tx.screen.sender.replaceTrack(track);
-    await applySenderQuality(this.tx.screen.sender, q);
+    await applySenderQuality(this.tx.screen.sender, q, true);
     videoStreams.update((v) => ({ ...v, 'local:screen': this.screen }));
     callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id }));
   }
@@ -494,10 +494,10 @@ class CallService {
     }
     const track = this.screen?.getVideoTracks()[0];
     if (track) {
-      track.contentHint = q.fps >= 60 ? 'motion' : 'detail';
+      track.contentHint = 'detail';
       await track.applyConstraints({ width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } }).catch(() => {});
     }
-    await applySenderQuality(this.tx.screen.sender, q);
+    await applySenderQuality(this.tx.screen.sender, q, true);
     callState.update((c) => ({ ...c, streamQualityId: q.id, streamError: null }));
   }
 
@@ -642,7 +642,9 @@ class CallService {
     try {
       const caps = RTCRtpSender.getCapabilities('video');
       if (!caps) return;
-      const h264 = caps.codecs.filter((c) => c.mimeType === 'video/H264');
+      // High profile before Main before Baseline: same bitrate, noticeably more detail
+      const rank = (c) => { const p = /profile-level-id=(..)/i.exec(c.sdpFmtpLine || '')?.[1]?.toLowerCase(); return p === '64' ? 0 : p === '4d' ? 1 : 2; };
+      const h264 = caps.codecs.filter((c) => c.mimeType === 'video/H264').sort((a, b) => rank(a) - rank(b));
       if (h264.length) transceiver.setCodecPreferences(h264);
     } catch (e) {
       console.warn('[CallService] codec preference skipped:', e);
@@ -670,7 +672,9 @@ function rms(analyser, data) {
   return Math.sqrt(sum / data.length);
 }
 
-async function applySenderQuality(sender, quality) {
+// A screen under pressure gives up frame rate and keeps its resolution: blurred text is worse than
+// a lower frame rate. Cameras keep moving and lose detail instead.
+async function applySenderQuality(sender, quality, screen = false) {
   if (!sender) return;
   try {
     const params = sender.getParameters();
@@ -678,7 +682,7 @@ async function applySenderQuality(sender, quality) {
     params.encodings[0].maxBitrate = quality.bitrateKbps * 1000;
     params.encodings[0].maxFramerate = quality.fps;
     params.encodings[0].scaleResolutionDownBy = 1;
-    params.degradationPreference = quality.fps >= 60 ? 'maintain-framerate' : 'maintain-resolution';
+    params.degradationPreference = screen ? 'maintain-resolution' : quality.fps >= 60 ? 'maintain-framerate' : 'balanced';
     await sender.setParameters(params);
   } catch (e) {
     console.warn('[CallService] setParameters failed:', e);

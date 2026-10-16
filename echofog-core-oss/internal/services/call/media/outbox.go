@@ -121,6 +121,26 @@ func (o *Outbox) Stats() OutboxStats {
 	return s
 }
 
+// VideoBacklog is the deepest video queue across peers: a growing backlog means the path
+// cannot carry what we send.
+func (o *Outbox) VideoBacklog() int {
+	if o == nil {
+		return 0
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	deepest := 0
+	for _, q := range o.peers {
+		if n := len(q.video); n > deepest {
+			deepest = n
+		}
+	}
+	return deepest
+}
+
+// VideoQueueLen is the capacity of each peer's video queue.
+const VideoQueueLen = videoQueueLen
+
 func (o *Outbox) queue(peer types.PeerID) *peerQueue {
 	o.mu.Lock()
 	defer o.mu.Unlock()

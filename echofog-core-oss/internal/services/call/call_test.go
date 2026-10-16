@@ -435,7 +435,7 @@ func TestRoom_KeyframeRequestReachesBroadcaster(t *testing.T) {
 	require.Eventually(t, func() bool { return served.Load() > 0 }, 5*time.Second, 20*time.Millisecond)
 
 	// a gap in the stream triggers another request after the rate limit window
-	time.Sleep(keyframeMinInterval + 50*time.Millisecond)
+	time.Sleep(keyframeServeInterval + 50*time.Millisecond)
 	before := served.Load()
 	m.mu.Lock()
 	m.drop = func(t net_types.MessageType, payload []byte) bool {

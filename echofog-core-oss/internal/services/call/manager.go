@@ -44,9 +44,12 @@ const (
 	reconcileInterval       = time.Second
 	pingInterval            = 300 * time.Millisecond
 	keyframeMinInterval     = 300 * time.Millisecond
-	seenFloodTTL            = 10 * time.Second
-	syncRequestInterval     = time.Second
-	connectRetryInterval    = 2 * time.Second
+	// keyframeServeInterval: how often the broadcaster's encoder makes an IDR on request; each one
+	// is huge at 4K, and the frames right after it get starved into blur.
+	keyframeServeInterval = time.Second
+	seenFloodTTL          = 10 * time.Second
+	syncRequestInterval   = time.Second
+	connectRetryInterval  = 2 * time.Second
 	// streamFeederTimeout: feeders pulse every 250 ms, so 700 ms of silence means the link is dead.
 	streamFeederTimeout = 700 * time.Millisecond
 	reparentRetry       = time.Second
@@ -97,6 +100,7 @@ type ActiveRoomState struct {
 	seen           map[floodKey]time.Time
 	keyframeSent   map[string]time.Time
 	keyframeServed map[string]time.Time
+	sendRate       sendRateState
 
 	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq time.Time
 }

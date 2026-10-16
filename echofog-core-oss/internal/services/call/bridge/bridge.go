@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/sdp/v3"
@@ -118,7 +119,20 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 		}
 	}
 
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
+	// Without receiver reports and transport-cc feedback the browser's bandwidth estimate never
+	// leaves its low start value and the encoder smears every moving frame. The real network cap
+	// comes separately, as REMB from SetSendBitrate.
+	registry := &interceptor.Registry{}
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
+		cancel()
+		return nil, err
+	}
+
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(registry))
 	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: []webrtc.ICEServer{}})
 	if err != nil {
 		cancel()
@@ -193,7 +207,7 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 // h264Codecs mirrors the packetization-mode=1 H264 entries of Pion's RegisterDefaultCodecs
 // (same payload types), High profile first. Mode 0 cannot carry the large NAL units of 4K frames.
 func h264Codecs(_ *webrtc.MediaEngine) []webrtc.RTPCodecParameters {
-	fb := []webrtc.RTCPFeedback{{Type: "goog-remb"}, {Type: "ccm", Parameter: "fir"}, {Type: "nack"}, {Type: "nack", Parameter: "pli"}}
+	fb := []webrtc.RTCPFeedback{{Type: "goog-remb"}, {Type: webrtc.TypeRTCPFBTransportCC}, {Type: "ccm", Parameter: "fir"}, {Type: "nack"}, {Type: "nack", Parameter: "pli"}}
 	mk := func(pt webrtc.PayloadType, profile string) webrtc.RTPCodecParameters {
 		return webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
@@ -417,6 +431,18 @@ func (b *LocalMediaBridge) RequestKeyframe(role string) error {
 		return errors.New("no local video track to refresh")
 	}
 	return pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})
+}
+
+// SetSendBitrate caps the UI encoder of a capture role with an RTCP REMB, so it lowers its rate
+// when the network path backs up instead of the path dropping packets at random.
+func (b *LocalMediaBridge) SetSendBitrate(role string, bps uint64) error {
+	b.mu.Lock()
+	pc, ssrc := b.peerConnection, b.localSSRC[role]
+	b.mu.Unlock()
+	if pc == nil || ssrc == 0 {
+		return errors.New("no local video track to limit")
+	}
+	return pc.WriteRTCP([]rtcp.Packet{&rtcp.ReceiverEstimatedMaximumBitrate{Bitrate: float32(bps), SSRCs: []uint32{ssrc}}})
 }
 
 // CreateOffer generates a WebRTC SDP Offer for Wails frontend.

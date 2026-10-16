@@ -338,6 +338,14 @@ func TestMediaDispatcher_VideoTreeWatchingAndLoss(t *testing.T) {
 	send(4) // seq 3 lost
 	_, v = consumer.counts()
 	assert.Equal(t, 2, v)
+	assert.Equal(t, int32(0), losses.Load(), "a gap waits out the reorder window")
+	assert.Eventually(t, func() bool { return losses.Load() == 1 }, time.Second, 5*time.Millisecond)
+
+	// merely reordered units are not loss
+	send(5)
+	send(7)
+	send(6)
+	time.Sleep(reorderWindow + 100*time.Millisecond)
 	assert.Equal(t, int32(1), losses.Load())
 	assert.Equal(t, bytes.Repeat([]byte{2}, 1800), consumer.videoPackets[0].Payload)
 }
