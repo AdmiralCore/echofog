@@ -172,6 +172,13 @@ type AppConfig struct {
 	Ton      TonConfig      `json:"ton"`
 }
 
+// DefaultTonNetwork is the TON network of the built-in wallet: "testnet" while the vault contract
+// has not had an independent security audit, so testers never pay real money. A release build
+// switches it without a code change:
+//
+//	go build -ldflags "-X github.com/echofog/echofog-core/internal/config.DefaultTonNetwork=mainnet"
+var DefaultTonNetwork = "testnet"
+
 // DefaultConfig returns the defaults for a profile. The database lives under the user's home
 // directory, in ~/.echofog/profiles/<profile>.
 func DefaultConfig(profileName string) *AppConfig {
@@ -180,7 +187,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	}
 	cfg := &AppConfig{}
 
-	cfg.Ton.Network = "mainnet"
+	cfg.Ton.Network = DefaultTonNetwork
 
 	cfg.Network.ListenAddr = ":0"
 	cfg.Network.MaxConnections = 100

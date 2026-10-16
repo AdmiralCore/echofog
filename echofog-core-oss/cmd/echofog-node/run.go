@@ -35,6 +35,7 @@ type options struct {
 	stealthPassword      string
 	obfsPassword         string
 	tlsServerName        string
+	tonNetwork           string
 	tlsCert, tlsKey      string
 	camouflageAddr       string
 	stunServers          string
@@ -79,6 +80,7 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.obfs, "obfs", getEnv("ECHOFOG_OBFS", ""), "UDP obfuscation: node (default; keys derive from each node's peer ID) or off")
 	f.StringVar(&o.stealthPassword, "stealth-password", getEnv("ECHOFOG_STEALTH_PASSWORD", ""), "optional extra secret for a private network (TCP camouflage); every node of that network must use the same")
 	f.StringVar(&o.obfsPassword, "obfs-password", getEnv("ECHOFOG_OBFS_PASSWORD", ""), "optional extra secret for a private network (UDP obfuscation); every node of that network must use the same")
+	f.StringVar(&o.tonNetwork, "ton-network", getEnv("ECHOFOG_TON_NETWORK", ""), "TON network of the node's wallet: testnet or mainnet (default: "+config.DefaultTonNetwork+")")
 	f.StringVar(&o.tlsServerName, "tls-server-name", getEnv("ECHOFOG_TLS_SERVER_NAME", ""), "domain the TCP fallback presents; use your own domain together with --tls-cert")
 	f.StringVar(&o.tlsCert, "tls-cert", getEnv("ECHOFOG_TLS_CERT", ""), "PEM certificate for --tls-server-name (without one a self-signed certificate is used)")
 	f.StringVar(&o.tlsKey, "tls-key", getEnv("ECHOFOG_TLS_KEY", ""), "PEM private key for --tls-cert")
@@ -151,6 +153,13 @@ func (o options) config() *config.AppConfig {
 	}
 	cfg.AntiDPI.ObfsPassword = o.obfsPassword
 	cfg.AntiDPI.StealthPassword = o.stealthPassword
+	switch o.tonNetwork {
+	case "":
+	case "testnet", "mainnet":
+		cfg.Ton.Network = o.tonNetwork
+	default:
+		fatal("--ton-network: %q is not testnet or mainnet", o.tonNetwork)
+	}
 	if o.tlsServerName != "" {
 		cfg.AntiDPI.TLSServerName = o.tlsServerName
 	}

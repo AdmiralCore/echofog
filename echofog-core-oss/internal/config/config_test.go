@@ -15,7 +15,7 @@ func TestDefaultsAreSafeForARealNetwork(t *testing.T) {
 	assert.Equal(t, CurrentProtocolVersion, cfg.Network.ProtocolVersion)
 	assert.True(t, cfg.Network.PortMapping, "reachability features are on by default")
 	assert.True(t, cfg.Network.HolePunch)
-	assert.Equal(t, "mainnet", cfg.Ton.Network)
+	assert.Equal(t, "testnet", cfg.Ton.Network, "testers never pay real money until the vault contract is audited; a release build sets DefaultTonNetwork=mainnet")
 	assert.Empty(t, cfg.AntiDPI.TLSServerName, "no SNI is baked in: a shared default on a residential/VPS IP is itself an SNI/IP-mismatch fingerprint; a public node sets its own")
 
 	for _, addr := range cfg.Network.BootstrapNodes {
