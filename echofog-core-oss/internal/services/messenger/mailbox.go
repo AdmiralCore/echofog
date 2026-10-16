@@ -1,6 +1,8 @@
 package messenger
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,9 @@ import (
 const (
 	MailboxPrefix = "mb:v1:"
 	DefaultTTL    = 7 * 24 * time.Hour
+	// DefaultRecipientSeenTTL is how long after a peer last used this relay we keep accepting
+	// offline messages addressed to it.
+	DefaultRecipientSeenTTL = 24 * time.Hour
 )
 
 var (
@@ -23,13 +28,26 @@ var (
 
 	// ErrItemTooLarge indicates a single message exceeds the allowed size limit.
 	ErrItemTooLarge = errors.New("mailbox item exceeds maximum allowed size")
+
+	// ErrRecipientUnknown indicates the relay will not keep a message for a recipient that has not
+	// recently used it. This stops a stranger from filling the node's disk by naming random
+	// recipients that never connect here.
+	ErrRecipientUnknown = errors.New("mailbox refuses message: recipient has not recently used this relay")
 )
 
 type MailboxLimits struct {
 	MaxMessagesPerPeer   int   // Max count of messages held for a single recipient
 	MaxBytesPerPeer      int64 // Max total size of payloads held for a single recipient (bytes)
 	MaxItemSizeBytes     int64 // Max size of a single payload (bytes)
-	MaxTotalStorageBytes int64 // Max total storage for all mailboxes on this node (bytes)
+	MaxTotalStorageBytes int64 // Max total payload storage for all mailboxes on this node (bytes)
+	MaxTotalMessages     int   // Max count of messages held across all mailboxes on this node
+	MaxMessagesPerSender int   // Max count of messages a single sender may have stored across all recipients
+	MaxBytesPerSender    int64 // Max total payload bytes a single sender may have stored (bytes)
+
+	// RequireRecipientSeen, when true, makes Store reject a recipient that has not been marked seen
+	// (via NoteRecipientSeen) within RecipientSeenTTL. RecipientSeenTTL <= 0 means "ever seen".
+	RequireRecipientSeen bool
+	RecipientSeenTTL     time.Duration
 }
 
 func DefaultMailboxLimits() MailboxLimits {
@@ -38,6 +56,11 @@ func DefaultMailboxLimits() MailboxLimits {
 		MaxBytesPerPeer:      10 * 1024 * 1024,  // 10 MB per recipient
 		MaxItemSizeBytes:     1 * 1024 * 1024,   // 1 MB per message
 		MaxTotalStorageBytes: 100 * 1024 * 1024, // 100 MB total node limit
+		MaxTotalMessages:     100000,            // total message count across all mailboxes
+		MaxMessagesPerSender: 2000,              // one sender's share of the message count
+		MaxBytesPerSender:    20 * 1024 * 1024,  // 20 MB one sender may occupy
+		RequireRecipientSeen: true,
+		RecipientSeenTTL:     DefaultRecipientSeenTTL,
 	}
 }
 
@@ -50,16 +73,47 @@ type MailboxItem struct {
 	ExpiresAt   int64        `json:"expires_at"`
 }
 
+// usage is a running (count, bytes) tally kept per recipient and per sender so quotas are checked
+// without rescanning storage on every Store.
+type usage struct {
+	count int
+	bytes int64
+}
+
+// meta is what the manager remembers about one stored item so it can keep the running totals exact
+// when the item is delivered, acknowledged or expires.
+type meta struct {
+	recipient types.PeerID
+	sender    types.PeerID
+	size      int64
+	expiresAt int64
+}
+
 type MailboxManager struct {
 	store  storage.Storage
 	limits MailboxLimits
 	mu     sync.RWMutex
+
+	// running state, rebuilt from storage once on first use (see ensureLoadedLocked)
+	loaded      bool
+	index       map[string]meta         // storage key -> item metadata
+	byRecipient map[types.PeerID]*usage // live tally per recipient
+	bySender    map[types.PeerID]*usage // live tally per sender
+	totalBytes  int64
+	totalCount  int
+
+	seenMu sync.Mutex
+	seen   map[types.PeerID]int64 // recipient -> unix time it last used this relay
 }
 
 func NewMailboxManager(store storage.Storage) *MailboxManager {
 	return &MailboxManager{
-		store:  store,
-		limits: DefaultMailboxLimits(),
+		store:       store,
+		limits:      DefaultMailboxLimits(),
+		index:       make(map[string]meta),
+		byRecipient: make(map[types.PeerID]*usage),
+		bySender:    make(map[types.PeerID]*usage),
+		seen:        make(map[types.PeerID]int64),
 	}
 }
 
@@ -75,47 +129,177 @@ func (m *MailboxManager) GetLimits() MailboxLimits {
 	return m.limits
 }
 
+// NoteRecipientSeen records that a peer used this relay (connected or registered), so messages may
+// be kept for it while it is offline.
+func (m *MailboxManager) NoteRecipientSeen(id types.PeerID) {
+	m.seenMu.Lock()
+	m.seen[id] = time.Now().Unix()
+	m.seenMu.Unlock()
+}
+
+func (m *MailboxManager) recipientSeen(id types.PeerID, ttl time.Duration) bool {
+	m.seenMu.Lock()
+	last, ok := m.seen[id]
+	m.seenMu.Unlock()
+	if !ok {
+		return false
+	}
+	if ttl <= 0 {
+		return true
+	}
+	return time.Now().Unix()-last <= int64(ttl.Seconds())
+}
+
 func (m *MailboxManager) makeKey(recipient types.PeerID, id string) []byte {
 	return []byte(fmt.Sprintf("%s%s:%s", MailboxPrefix, recipient.String(), id))
+}
+
+// storageID derives the per-item id from the sender and payload, server-side. The sender cannot
+// choose it, so it cannot overwrite another peer's stored item by reusing a message id, and two
+// identical submissions collapse to one entry instead of multiplying.
+func storageID(sender types.PeerID, payload []byte) string {
+	h := sha256.New()
+	h.Write(sender[:])
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ensureLoadedLocked rebuilds the running tallies from storage exactly once. Caller holds m.mu.
+func (m *MailboxManager) ensureLoadedLocked() {
+	if m.loaded {
+		return
+	}
+	m.loaded = true
+
+	entries, err := m.store.FindValues([]byte(MailboxPrefix), 0)
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	for _, e := range entries {
+		var item MailboxItem
+		if json.Unmarshal(e.Value, &item) != nil {
+			// unreadable entry: drop it
+			_ = m.store.Delete(e.Key)
+			continue
+		}
+		if item.ExpiresAt > 0 && item.ExpiresAt < now {
+			_ = m.store.Delete(e.Key)
+			continue
+		}
+		m.addLocked(string(e.Key), meta{
+			recipient: item.RecipientID,
+			sender:    item.SenderID,
+			size:      int64(len(item.Payload)),
+			expiresAt: item.ExpiresAt,
+		})
+	}
+}
+
+// addLocked registers an item in the running tallies. Caller holds m.mu.
+func (m *MailboxManager) addLocked(key string, md meta) {
+	m.index[key] = md
+	m.totalBytes += md.size
+	m.totalCount++
+	r := m.byRecipient[md.recipient]
+	if r == nil {
+		r = &usage{}
+		m.byRecipient[md.recipient] = r
+	}
+	r.count++
+	r.bytes += md.size
+	s := m.bySender[md.sender]
+	if s == nil {
+		s = &usage{}
+		m.bySender[md.sender] = s
+	}
+	s.count++
+	s.bytes += md.size
+}
+
+// removeLocked deletes an item from storage and the running tallies. Caller holds m.mu.
+func (m *MailboxManager) removeLocked(key string) {
+	md, ok := m.index[key]
+	if !ok {
+		_ = m.store.Delete([]byte(key))
+		return
+	}
+	delete(m.index, key)
+	_ = m.store.Delete([]byte(key))
+
+	m.totalBytes -= md.size
+	m.totalCount--
+	if r := m.byRecipient[md.recipient]; r != nil {
+		r.count--
+		r.bytes -= md.size
+		if r.count <= 0 {
+			delete(m.byRecipient, md.recipient)
+		}
+	}
+	if s := m.bySender[md.sender]; s != nil {
+		s.count--
+		s.bytes -= md.size
+		if s.count <= 0 {
+			delete(m.bySender, md.sender)
+		}
+	}
 }
 
 // Store saves an offline message/notification with a TTL and quota validation.
 func (m *MailboxManager) Store(item MailboxItem) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
 
-	// 1. Check single item size limit
+	limits := m.limits
 	itemSize := int64(len(item.Payload))
-	if m.limits.MaxItemSizeBytes > 0 && itemSize > m.limits.MaxItemSizeBytes {
+
+	// 1. Single item size limit
+	if limits.MaxItemSizeBytes > 0 && itemSize > limits.MaxItemSizeBytes {
 		return ErrItemTooLarge
 	}
 
-	// 2. Check per-peer quotas (count and total bytes)
-	prefix := []byte(fmt.Sprintf("%s%s:", MailboxPrefix, item.RecipientID.String()))
-	existing, err := m.store.FindValues(prefix, 1000)
-	if err == nil {
-		now := time.Now().Unix()
-		currentCount := 0
-		var currentBytes int64 = 0
+	// 2. Only keep messages for recipients that recently used this relay.
+	if limits.RequireRecipientSeen && !m.recipientSeen(item.RecipientID, limits.RecipientSeenTTL) {
+		return ErrRecipientUnknown
+	}
 
-		for _, e := range existing {
-			var mi MailboxItem
-			if json.Unmarshal(e.Value, &mi) == nil {
-				// Don't count expired items
-				if mi.ExpiresAt == 0 || mi.ExpiresAt >= now {
-					currentCount++
-					currentBytes += int64(len(mi.Payload))
-				}
-			}
-		}
+	// 3. Derive the storage id server-side so the sender cannot overwrite another peer's item.
+	item.ID = storageID(item.SenderID, item.Payload)
+	key := string(m.makeKey(item.RecipientID, item.ID))
 
-		if m.limits.MaxMessagesPerPeer > 0 && currentCount >= m.limits.MaxMessagesPerPeer {
+	// An identical resubmission (same sender + payload for the same recipient) is already stored;
+	// refresh its bytes on disk but do not double-count.
+	if _, exists := m.index[key]; exists {
+		return nil
+	}
+
+	// 4. Per-recipient quotas (count and bytes).
+	if r := m.byRecipient[item.RecipientID]; r != nil {
+		if limits.MaxMessagesPerPeer > 0 && r.count >= limits.MaxMessagesPerPeer {
 			return ErrMailboxFull
 		}
-
-		if m.limits.MaxBytesPerPeer > 0 && (currentBytes+itemSize) > m.limits.MaxBytesPerPeer {
+		if limits.MaxBytesPerPeer > 0 && r.bytes+itemSize > limits.MaxBytesPerPeer {
 			return ErrMailboxFull
 		}
+	}
+
+	// 5. Per-sender quotas (count and bytes), keyed by the authenticated sender.
+	if s := m.bySender[item.SenderID]; s != nil {
+		if limits.MaxMessagesPerSender > 0 && s.count >= limits.MaxMessagesPerSender {
+			return ErrMailboxFull
+		}
+		if limits.MaxBytesPerSender > 0 && s.bytes+itemSize > limits.MaxBytesPerSender {
+			return ErrMailboxFull
+		}
+	}
+
+	// 6. Node-wide total quotas (count and bytes).
+	if limits.MaxTotalMessages > 0 && m.totalCount >= limits.MaxTotalMessages {
+		return ErrMailboxFull
+	}
+	if limits.MaxTotalStorageBytes > 0 && m.totalBytes+itemSize > limits.MaxTotalStorageBytes {
+		return ErrMailboxFull
 	}
 
 	now := time.Now().Unix()
@@ -131,14 +315,23 @@ func (m *MailboxManager) Store(item MailboxItem) error {
 		return fmt.Errorf("failed to marshal mailbox item: %w", err)
 	}
 
-	key := m.makeKey(item.RecipientID, item.ID)
-	return m.store.Set(key, data)
+	if err := m.store.Set([]byte(key), data); err != nil {
+		return err
+	}
+	m.addLocked(key, meta{
+		recipient: item.RecipientID,
+		sender:    item.SenderID,
+		size:      itemSize,
+		expiresAt: item.ExpiresAt,
+	})
+	return nil
 }
 
 // GetPending returns all valid (non-expired) messages for the recipient.
 func (m *MailboxManager) GetPending(recipient types.PeerID) ([]MailboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
 
 	prefix := []byte(fmt.Sprintf("%s%s:", MailboxPrefix, recipient.String()))
 	entries, err := m.store.FindValues(prefix, 1000)
@@ -157,7 +350,7 @@ func (m *MailboxManager) GetPending(recipient types.PeerID) ([]MailboxItem, erro
 
 		// Auto-prune expired message on read
 		if item.ExpiresAt > 0 && item.ExpiresAt < now {
-			_ = m.store.Delete(entry.Key)
+			m.removeLocked(string(entry.Key))
 			continue
 		}
 
@@ -171,10 +364,11 @@ func (m *MailboxManager) GetPending(recipient types.PeerID) ([]MailboxItem, erro
 func (m *MailboxManager) Acknowledge(recipient types.PeerID, itemIDs []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
 
 	for _, id := range itemIDs {
-		key := m.makeKey(recipient, id)
-		_ = m.store.Delete(key)
+		key := string(m.makeKey(recipient, id))
+		m.removeLocked(key)
 	}
 	return nil
 }
@@ -183,9 +377,10 @@ func (m *MailboxManager) Acknowledge(recipient types.PeerID, itemIDs []string) e
 func (m *MailboxManager) CleanupExpired() (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
 
 	prefix := []byte(MailboxPrefix)
-	entries, err := m.store.FindValues(prefix, 5000)
+	entries, err := m.store.FindValues(prefix, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -196,13 +391,13 @@ func (m *MailboxManager) CleanupExpired() (int, error) {
 	for _, entry := range entries {
 		var item MailboxItem
 		if err := json.Unmarshal(entry.Value, &item); err != nil {
-			_ = m.store.Delete(entry.Key)
+			m.removeLocked(string(entry.Key))
 			purged++
 			continue
 		}
 
 		if item.ExpiresAt > 0 && item.ExpiresAt < now {
-			_ = m.store.Delete(entry.Key)
+			m.removeLocked(string(entry.Key))
 			purged++
 		}
 	}
@@ -210,37 +405,21 @@ func (m *MailboxManager) CleanupExpired() (int, error) {
 	return purged, nil
 }
 
-// Waiting returns how many items wait for any recipient (up to 100000 are counted).
+// Waiting returns how many items wait for any recipient.
 func (m *MailboxManager) Waiting() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	entries, err := m.store.FindValues([]byte(MailboxPrefix), 100000)
-	if err != nil {
-		return 0
-	}
-	return len(entries)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
+	return m.totalCount
 }
 
 // Count returns the number of pending items for a recipient.
 func (m *MailboxManager) Count(recipient types.PeerID) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	prefix := []byte(fmt.Sprintf("%s%s:", MailboxPrefix, recipient.String()))
-	entries, err := m.store.FindValues(prefix, 1000)
-	if err != nil {
-		return 0
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
+	if r := m.byRecipient[recipient]; r != nil {
+		return r.count
 	}
-
-	now := time.Now().Unix()
-	count := 0
-	for _, entry := range entries {
-		var item MailboxItem
-		if err := json.Unmarshal(entry.Value, &item); err == nil {
-			if item.ExpiresAt == 0 || item.ExpiresAt >= now {
-				count++
-			}
-		}
-	}
-	return count
+	return 0
 }

@@ -42,6 +42,18 @@ type circuitOpenResult struct {
 	err       error
 }
 
+// pendingKey identifies a circuit open this node initiated: a response or an inbound binding is
+// only honoured for the exact (relay, target) pair we asked for, so a relay cannot answer for a
+// target we never requested and no third peer can satisfy our open.
+type pendingKey struct {
+	relay  types.PeerID
+	target types.PeerID
+}
+
+// maxCircuitsPerRelay bounds how many circuits a single relay may hold open against this node, so
+// one relay (or a peer pretending to be a relay) cannot exhaust our circuit table.
+const maxCircuitsPerRelay = 64
+
 type CircuitDataListener func(circuitID uint32, msgType net_types.MessageType, payload []byte, remotePeer types.PeerID)
 
 type RelayMarketInfo struct {
@@ -64,8 +76,8 @@ type RelayClient struct {
 	circuits      map[uint32]*ClientCircuit
 	peerToCircuit map[types.PeerID]uint32
 	signalCircuit map[types.PeerID]uint32 // circuits for hole punching messages only, never for traffic
-	pendingSignal map[types.PeerID]bool   // circuits being opened: signaling ones
-	pendingOpens  map[types.PeerID]chan circuitOpenResult
+	pendingSignal map[pendingKey]bool     // circuits being opened: signaling ones
+	pendingOpens  map[pendingKey]chan circuitOpenResult
 	blacklisted   map[types.PeerID]time.Time
 
 	// Market-aware economics & configuration
@@ -91,8 +103,8 @@ func NewRelayClient(s *swarm.Swarm, dht *dht.EchoFogDHT, logger *slog.Logger) *R
 		circuits:      make(map[uint32]*ClientCircuit),
 		peerToCircuit: make(map[types.PeerID]uint32),
 		signalCircuit: make(map[types.PeerID]uint32),
-		pendingSignal: make(map[types.PeerID]bool),
-		pendingOpens:  make(map[types.PeerID]chan circuitOpenResult),
+		pendingSignal: make(map[pendingKey]bool),
+		pendingOpens:  make(map[pendingKey]chan circuitOpenResult),
 		blacklisted:   make(map[types.PeerID]time.Time),
 		cfg: config.RelayClientConfig{
 			Enabled:                 true,
@@ -365,25 +377,58 @@ func (rc *RelayClient) handleInboundCircuitOpen(payload []byte, relayPeer types.
 	if err != nil {
 		return
 	}
+	// The relay chose this origin id; it is not authenticated here and is never treated as a
+	// proven identity (messages carried over the circuit are authorised by their signed envelope,
+	// see handleCircuitData). An empty origin is meaningless, so drop it.
+	if originID == (types.PeerID{}) {
+		return
+	}
+	signalOnly := len(payload) >= 37 && payload[36] == 1
 
 	cc := &ClientCircuit{
 		ID:           cid,
 		RelayPeerID:  relayPeer,
 		RemotePeerID: originID,
 		CreatedAt:    time.Now(),
+		SignalOnly:   signalOnly,
 	}
-	cc.SignalOnly = len(payload) >= 37 && payload[36] == 1
+
 	rc.mu.Lock()
+	// Cap how many circuits any one relay may register against us.
+	if rc.circuitsForRelayLocked(relayPeer) >= maxCircuitsPerRelay {
+		rc.mu.Unlock()
+		rc.logger.Warn("RelayClient: refused inbound circuit, per-relay cap reached",
+			"relay", relayPeer.String()[:8])
+		return
+	}
 	rc.circuits[cid] = cc
+	// Only adopt a routing/signalling binding for the claimed origin when we do not already have
+	// one: an inbound open must never overwrite an existing route (that would let anyone who can
+	// reach us hijack where our traffic or hole-punch signals to that peer go).
 	if cc.SignalOnly {
-		rc.signalCircuit[originID] = cid // not for traffic
+		if _, exists := rc.signalCircuit[originID]; !exists {
+			rc.signalCircuit[originID] = cid // not for traffic
+		}
 	} else {
-		rc.peerToCircuit[originID] = cid
+		if _, exists := rc.peerToCircuit[originID]; !exists {
+			rc.peerToCircuit[originID] = cid
+		}
 	}
 	rc.mu.Unlock()
 
 	rc.logger.Info("RelayClient: Inbound virtual circuit established",
 		"circuitID", cid, "origin", originID.String()[:8], "relay", relayPeer.String()[:8])
+}
+
+// circuitsForRelayLocked counts the circuits currently held through a given relay. Caller holds rc.mu.
+func (rc *RelayClient) circuitsForRelayLocked(relay types.PeerID) int {
+	n := 0
+	for _, c := range rc.circuits {
+		if c.RelayPeerID == relay {
+			n++
+		}
+	}
+	return n
 }
 
 func (rc *RelayClient) handleCircuitOpenResponse(payload []byte, fromPeer types.PeerID) {
@@ -399,22 +444,33 @@ func (rc *RelayClient) handleCircuitOpenResponse(payload []byte, fromPeer types.
 	}
 
 	rc.mu.Lock()
+	// Only honour a response for an open we actually initiated through this exact relay. We match
+	// the pending open keyed by (relay=fromPeer, target); a relay cannot claim success for a
+	// target we never asked it about, and no other peer can answer our open.
 	var ch chan circuitOpenResult
-	for pID, pendingCh := range rc.pendingOpens {
-		if targetID == (types.PeerID{}) || pID == targetID {
-			ch = pendingCh
-			targetID = pID
-			break
+	var key pendingKey
+	if targetID != (types.PeerID{}) {
+		k := pendingKey{relay: fromPeer, target: targetID}
+		if pendingCh, ok := rc.pendingOpens[k]; ok {
+			ch, key = pendingCh, k
+		}
+	} else {
+		// Older relays may omit the target; match any pending open to this relay.
+		for k, pendingCh := range rc.pendingOpens {
+			if k.relay == fromPeer {
+				ch, key, targetID = pendingCh, k, k.target
+				break
+			}
 		}
 	}
 
-	if status == 1 && targetID != (types.PeerID{}) {
+	if ch != nil && status == 1 && targetID != (types.PeerID{}) {
 		cc := &ClientCircuit{
 			ID:           cid,
 			RelayPeerID:  fromPeer,
 			RemotePeerID: targetID,
 			CreatedAt:    time.Now(),
-			SignalOnly:   rc.pendingSignal[targetID],
+			SignalOnly:   rc.pendingSignal[key],
 		}
 		rc.circuits[cid] = cc
 		if cc.SignalOnly {
@@ -455,18 +511,28 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 		return
 	}
 
-	// 1. Notify listeners (for file transfers, DHT, RPCs)
+	// A circuit frame is only accepted from the relay that carries this circuit. Otherwise any
+	// peer could inject frames into a circuit it is not part of.
+	if fromPeer != circuit.RelayPeerID {
+		return
+	}
+
+	// 1. Notify listeners (for file transfers, DHT, RPCs). The remote peer id here is the relay's
+	// claim, not a proven identity; listeners must not use it to authorise anything.
 	rc.listenersMu.RLock()
 	for _, l := range rc.listeners {
 		l(cid, innerMsgType, innerData, circuit.RemotePeerID)
 	}
 	rc.listenersMu.RUnlock()
 
-	// 2. If it's a chat message or E2EE envelope, unwrap and deliver to Dispatcher
+	// 2. If it's a chat message or E2EE envelope, unwrap and deliver to Dispatcher. We attribute it
+	// to the transport peer (the relay), never to the circuit's claimed origin: the Dispatcher
+	// verifies the envelope signature and that its OriginId is the signer, so the sender's identity
+	// comes from the signed envelope, not from anything the circuit asserts.
 	if innerMsgType == net_types.TypeChatMessage {
 		var innerEnv internal_pb.Envelope
 		if err := proto.Unmarshal(innerData, &innerEnv); err == nil {
-			rc.swarm.GetDispatcher().PushMessage(&innerEnv, circuit.RemotePeerID)
+			rc.swarm.GetDispatcher().PushMessage(&innerEnv, fromPeer)
 		}
 	}
 }
@@ -478,7 +544,9 @@ func (rc *RelayClient) handleCircuitClose(payload []byte, fromPeer types.PeerID)
 	cid := binary.BigEndian.Uint32(payload[:4])
 
 	rc.mu.Lock()
-	if c, ok := rc.circuits[cid]; ok {
+	if c, ok := rc.circuits[cid]; ok && c.RelayPeerID == fromPeer {
+		// Only the relay carrying the circuit may tear it down; a stray close from anyone else is
+		// ignored so it cannot drop a circuit it is not part of.
 		delete(rc.circuits, cid)
 		if rc.peerToCircuit[c.RemotePeerID] == cid {
 			delete(rc.peerToCircuit, c.RemotePeerID)
@@ -514,16 +582,17 @@ func (rc *RelayClient) openCircuit(ctx context.Context, relayID types.PeerID, ta
 		return 0, fmt.Errorf("relay %s not connected", relayID.String()[:8])
 	}
 
+	key := pendingKey{relay: relayID, target: targetID}
 	ch := make(chan circuitOpenResult, 1)
 	rc.mu.Lock()
-	rc.pendingOpens[targetID] = ch
-	rc.pendingSignal[targetID] = signal
+	rc.pendingOpens[key] = ch
+	rc.pendingSignal[key] = signal
 	rc.mu.Unlock()
 
 	defer func() {
 		rc.mu.Lock()
-		delete(rc.pendingOpens, targetID)
-		delete(rc.pendingSignal, targetID)
+		delete(rc.pendingOpens, key)
+		delete(rc.pendingSignal, key)
 		rc.mu.Unlock()
 	}()
 
