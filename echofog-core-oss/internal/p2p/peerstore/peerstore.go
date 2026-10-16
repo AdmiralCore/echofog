@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -23,6 +24,18 @@ const (
 	bansPrefix       = "bans:peer:"
 )
 
+const (
+	// MaxDialFailures in a row make a peer forgotten: it moved or is gone.
+	MaxDialFailures = 8
+	// ForgetAfter is how long a peer is kept without a successful connection.
+	ForgetAfter = 30 * 24 * time.Hour
+	// maxScan bounds the entries read to sort the history or prune it.
+	maxScan = 5000
+
+	retryBase = 15 * time.Second
+	retryMax  = 6 * time.Hour
+)
+
 // PeerStore handles persistence of known peers, reputation/trust scores, and ban lists.
 // It isolates storage I/O and banning logic away from the core Swarm peer-routing registry.
 type PeerStore struct {
@@ -31,6 +44,8 @@ type PeerStore struct {
 
 	bansMu sync.RWMutex
 	banned map[types.PeerID]bool
+
+	entryMu sync.Mutex // read-modify-write of entries (failures, discovered peers)
 
 	wg     sync.WaitGroup
 	ctx    context.Context
@@ -77,12 +92,22 @@ func (ps *PeerStore) SavePeer(pubKey types.PeerPublicKey, addr string, trustScor
 	if ps.storage == nil {
 		return nil
 	}
+	ps.entryMu.Lock()
+	defer ps.entryMu.Unlock()
 
 	data := &storage.PeerStoreEntry{
 		PubKey:        pubKey[:],
 		LastKnownAddr: addr,
 		LastSeen:      uint64(time.Now().UnixNano()),
 		TrustScore:    trustScore,
+	}
+	return ps.writeEntry(data)
+}
+
+func (ps *PeerStore) writeEntry(data *storage.PeerStoreEntry) error {
+	pubKey, err := types.ToPeerPubKey(data.PubKey)
+	if err != nil {
+		return err
 	}
 	protoData, err := proto.Marshal(data)
 	if err != nil {
@@ -138,34 +163,125 @@ func (ps *PeerStore) GetPeer(peerID types.PeerID) (*storage.PeerStoreEntry, erro
 	return &entry, nil
 }
 
-// GetHistoryConnected returns historical peers up to count (0 = all up to 100).
+// SaveDiscovered keeps a peer another node told us about, for dialing it later. A peer already
+// known keeps its entry: what somebody else says must not replace an address we connected to,
+// nor make a peer gone for weeks look fresh. Returns whether the peer was new.
+func (ps *PeerStore) SaveDiscovered(pubKey types.PeerPublicKey, addr string) bool {
+	if ps.storage == nil || addr == "" {
+		return false
+	}
+	ps.entryMu.Lock()
+	defer ps.entryMu.Unlock()
+	if _, err := ps.storage.Get(ps.savedKey(types.PeerPubKeyToID(pubKey))); err == nil {
+		return false
+	}
+	return ps.writeEntry(&storage.PeerStoreEntry{
+		PubKey:        pubKey[:],
+		LastKnownAddr: addr,
+		LastSeen:      uint64(time.Now().UnixNano()),
+		TrustScore:    50,
+	}) == nil
+}
+
+// RecordDialFailure notes that a peer could not be reached at its address. After
+// MaxDialFailures in a row it is forgotten; a successful connection (SavePeer) clears the count.
+func (ps *PeerStore) RecordDialFailure(peerID types.PeerID) {
+	if ps.storage == nil {
+		return
+	}
+	ps.entryMu.Lock()
+	defer ps.entryMu.Unlock()
+	key := ps.savedKey(peerID)
+	raw, err := ps.storage.Get(key)
+	if err != nil {
+		return
+	}
+	var e storage.PeerStoreEntry
+	if proto.Unmarshal(raw, &e) != nil {
+		_ = ps.storage.Delete(key)
+		return
+	}
+	e.FailCount++
+	e.LastFailed = uint64(time.Now().UnixNano())
+	if e.FailCount >= MaxDialFailures {
+		_ = ps.storage.Delete(key)
+		return
+	}
+	_ = ps.writeEntry(&e)
+}
+
+// DialDue reports whether a peer that failed before is due for another try: the wait doubles
+// with each failure in a row, from 15 seconds up to 6 hours.
+func DialDue(e *storage.PeerStoreEntry, now time.Time) bool {
+	if e.GetFailCount() == 0 {
+		return true
+	}
+	wait := retryMax
+	if e.FailCount < 20 {
+		if w := retryBase << (e.FailCount - 1); w < retryMax {
+			wait = w
+		}
+	}
+	return now.Sub(time.Unix(0, int64(e.GetLastFailed()))) >= wait
+}
+
+func (ps *PeerStore) allEntries() []*storage.PeerStoreEntry {
+	findValues, err := ps.storage.FindValues([]byte(savedPeersPrefix), maxScan)
+	if err != nil {
+		return nil
+	}
+	peers := make([]*storage.PeerStoreEntry, 0, len(findValues))
+	for _, v := range findValues {
+		var peer storage.PeerStoreEntry
+		if err := proto.Unmarshal(v.Value, &peer); err != nil || len(peer.PubKey) != len(types.PeerPublicKey{}) {
+			continue
+		}
+		peers = append(peers, &peer)
+	}
+	return peers
+}
+
+// GetHistoryConnected returns the known peers, most recently seen first, up to count (0 = up
+// to 100). The database orders them by blinded key, which says nothing about how fresh they are.
 func (ps *PeerStore) GetHistoryConnected(count uint) []*storage.PeerStoreEntry {
 	if ps.storage == nil {
 		return nil
 	}
-
 	limit := 100
-	if count > 0 && int(count) < limit {
+	if count > 0 {
 		limit = int(count)
 	}
-
-	findValues, err := ps.storage.FindValues([]byte(savedPeersPrefix), limit)
-	if err != nil {
-		return nil
-	}
-
-	var peers []*storage.PeerStoreEntry
-	for _, v := range findValues {
-		var peer storage.PeerStoreEntry
-		if err := proto.Unmarshal(v.Value, &peer); err != nil {
-			continue
-		}
-		peers = append(peers, &peer)
-		if count > 0 && uint(len(peers)) >= count {
-			break
-		}
+	peers := ps.allEntries()
+	sort.SliceStable(peers, func(i, j int) bool { return peers[i].LastSeen > peers[j].LastSeen })
+	if len(peers) > limit {
+		peers = peers[:limit]
 	}
 	return peers
+}
+
+// Prune forgets peers not seen for ForgetAfter and those that failed MaxDialFailures times in a
+// row; returns how many it removed.
+func (ps *PeerStore) Prune(now time.Time) int {
+	if ps.storage == nil {
+		return 0
+	}
+	ps.entryMu.Lock()
+	defer ps.entryMu.Unlock()
+	cutoff := uint64(now.Add(-ForgetAfter).UnixNano())
+	removed := 0
+	for _, e := range ps.allEntries() {
+		if e.LastSeen >= cutoff && e.FailCount < MaxDialFailures {
+			continue
+		}
+		pub, err := types.ToPeerPubKey(e.PubKey)
+		if err != nil {
+			continue
+		}
+		if ps.storage.Delete(ps.savedKey(types.PeerPubKeyToID(pub))) == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 // BanPeer records a ban flag in both the fast in-memory set and storage.

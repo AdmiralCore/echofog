@@ -42,7 +42,7 @@ func generateRandomPeer() (types.PeerPublicKey, types.PeerID, string) {
 	id := types.PeerPubKeyToID(pub)
 	ipA, _ := rand.Int(rand.Reader, big.NewInt(254))
 	ipB, _ := rand.Int(rand.Reader, big.NewInt(254))
-	addr := fmt.Sprintf("%d.%d.1.1:9000", ipA.Int64()+1, ipB.Int64()+1)
+	addr := fmt.Sprintf("203.%d.%d.1:9000", ipA.Int64()+1, ipB.Int64()+1)
 	return pub, id, addr
 }
 
@@ -118,7 +118,7 @@ func TestRoutingTable_BucketCapacityAndPingEviction(t *testing.T) {
 
 	// Add 20 peers (fills bucket to maximum)
 	for i := 0; i < MaxBucketSize; i++ {
-		rt.AddOrUpdatePeer(peers[i], fmt.Sprintf("192.168.1.%d:9000", i+1))
+		rt.AddOrUpdatePeer(peers[i], fmt.Sprintf("198.51.100.%d:9000", i+1))
 	}
 
 	bucket := rt.buckets[targetBucketIdx]
@@ -134,7 +134,7 @@ func TestRoutingTable_BucketCapacityAndPingEviction(t *testing.T) {
 		return 5 * time.Millisecond, nil
 	})
 
-	rt.AddOrUpdatePeer(peers[MaxBucketSize], "192.168.1.99:9000")
+	rt.AddOrUpdatePeer(peers[MaxBucketSize], "198.51.100.99:9000")
 	time.Sleep(50 * time.Millisecond) // wait for async ping goroutine
 
 	bucket.mu.RLock()
@@ -151,7 +151,7 @@ func TestRoutingTable_BucketCapacityAndPingEviction(t *testing.T) {
 		return 0, errors.New("timeout: peer unreachable")
 	})
 
-	rt.AddOrUpdatePeer(peers[MaxBucketSize+1], "192.168.1.100:9000")
+	rt.AddOrUpdatePeer(peers[MaxBucketSize+1], "198.51.100.100:9000")
 	time.Sleep(50 * time.Millisecond) // wait for eviction
 
 	bucket.mu.RLock()

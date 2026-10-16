@@ -3,6 +3,8 @@ package network
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -68,17 +70,33 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 			}
 			q.guard.Load().Success(ip)
 
-			q.newConn(c, false, c.RemoteAddr().String(), peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
+			addr, dialable := inboundListenAddr(c.RemoteAddr().String(), peerRes.ListenPort)
+			q.newConn(c, false, addr, dialable, peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
 			q.logger.Info("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "inbound", "remote_addr", c.RemoteAddr().String())
 		}(conn)
 	}
 }
 
-func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, PeerID types.PeerID, PeerPubKey types.PeerPublicKey, caps handshake.Capability) {
+// inboundListenAddr is where an inbound peer accepts connections: its source IP with the port it
+// announced. Its source port is not that: behind a port map (Docker publishing 443 to the
+// container's 4242) it is the inner port, which nobody outside can reach. A peer that announced
+// no port is not dialable, so its address stays out of the peer store and the DHT.
+func inboundListenAddr(remote string, announced uint16) (string, bool) {
+	if announced == 0 {
+		return remote, false
+	}
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return remote, false
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(announced))), true
+}
+
+func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, dialable bool, PeerID types.PeerID, PeerPubKey types.PeerPublicKey, caps handshake.Capability) {
 	ev := NewConnEvent{
 		Caps:       caps,
 		Conn:       WrapQUIC(conn),
-		Dialable:   true, // a QUIC peer's source address is its listening socket
+		Dialable:   dialable,
 		IsOut:      isOut,
 		PeerID:     PeerID,
 		Addr:       addr,

@@ -22,6 +22,10 @@ type NegotiatorConfig struct {
 	MyVersion   uint32
 	MyCaps      Capability
 	RequirePoW  bool
+	// ListenPort is the port this node accepts connections on, announced when it dials: the
+	// responder cannot learn it from the source address behind a port map (Docker publishing
+	// 443 to the container's 4242) or with a socket other than the listener. 0 announces none.
+	ListenPort uint16
 	// AntiDDoS is shared by all handshakes of a node so that it sees the arrival rate; nil gives
 	// this negotiator a counter of its own, which stays idle.
 	AntiDDoS *AntiDDoS
@@ -131,6 +135,7 @@ func (n *Negotiator) runInitiatorFlow(binding []byte) (*HandshakeResult, error) 
 		NetworkId:    n.config.MyNetworkID[:],
 		Capabilities: uint32(n.config.MyCaps),
 		PubKey:       myPub,
+		ListenPort:   uint32(n.config.ListenPort),
 	}
 	if err = n.sendProto(net_types.TypeHandshake, &internal_pb.MessageData{
 		Payload: &internal_pb.MessageData_HandshakeInit{HandshakeInit: hello},
@@ -273,12 +278,21 @@ func (n *Negotiator) runResponderFlow(binding []byte) (*HandshakeResult, error) 
 	}
 
 	return &HandshakeResult{
-		PeerID:    types.PeerPubKeyToID(peerPub),
-		PubKey:    peerPub,
-		NetworkID: n.config.MyNetworkID,
-		Caps:      Capability(init.Capabilities),
-		Version:   init.Version,
+		PeerID:     types.PeerPubKeyToID(peerPub),
+		PubKey:     peerPub,
+		NetworkID:  n.config.MyNetworkID,
+		Caps:       Capability(init.Capabilities),
+		Version:    init.Version,
+		ListenPort: listenPortOf(init.ListenPort),
 	}, nil
+}
+
+// listenPortOf is an announced port, or 0 when it is none or not a port at all.
+func listenPortOf(p uint32) uint16 {
+	if p > 0xffff {
+		return 0
+	}
+	return uint16(p)
 }
 
 func (n *Negotiator) IssueChallenge() (prefix []byte, difficulty uint32) {

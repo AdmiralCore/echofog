@@ -7,12 +7,11 @@
 package storage
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -28,6 +27,8 @@ type PeerStoreEntry struct {
 	LastKnownAddr string                 `protobuf:"bytes,2,opt,name=last_known_addr,json=lastKnownAddr,proto3" json:"last_known_addr,omitempty"`
 	LastSeen      uint64                 `protobuf:"varint,3,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
 	TrustScore    uint32                 `protobuf:"varint,4,opt,name=trust_score,json=trustScore,proto3" json:"trust_score,omitempty"`
+	FailCount     uint32                 `protobuf:"varint,5,opt,name=fail_count,json=failCount,proto3" json:"fail_count,omitempty"`    // dial failures since the last successful connection
+	LastFailed    uint64                 `protobuf:"varint,6,opt,name=last_failed,json=lastFailed,proto3" json:"last_failed,omitempty"` // unix nanoseconds of the last failed dial
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -90,17 +91,35 @@ func (x *PeerStoreEntry) GetTrustScore() uint32 {
 	return 0
 }
 
+func (x *PeerStoreEntry) GetFailCount() uint32 {
+	if x != nil {
+		return x.FailCount
+	}
+	return 0
+}
+
+func (x *PeerStoreEntry) GetLastFailed() uint64 {
+	if x != nil {
+		return x.LastFailed
+	}
+	return 0
+}
+
 var File_internal_storage_types_proto protoreflect.FileDescriptor
 
 const file_internal_storage_types_proto_rawDesc = "" +
 	"\n" +
-	"\x1cinternal/storage/types.proto\x12\astorage\"\x8f\x01\n" +
+	"\x1cinternal/storage/types.proto\x12\astorage\"\xcf\x01\n" +
 	"\x0ePeerStoreEntry\x12\x17\n" +
 	"\apub_key\x18\x01 \x01(\fR\x06pubKey\x12&\n" +
 	"\x0flast_known_addr\x18\x02 \x01(\tR\rlastKnownAddr\x12\x1b\n" +
 	"\tlast_seen\x18\x03 \x01(\x04R\blastSeen\x12\x1f\n" +
 	"\vtrust_score\x18\x04 \x01(\rR\n" +
-	"trustScoreB:Z8github.com/echofog/echofog-core/internal/storage;storageb\x06proto3"
+	"trustScore\x12\x1d\n" +
+	"\n" +
+	"fail_count\x18\x05 \x01(\rR\tfailCount\x12\x1f\n" +
+	"\vlast_failed\x18\x06 \x01(\x04R\n" +
+	"lastFailedB:Z8github.com/echofog/echofog-core/internal/storage;storageb\x06proto3"
 
 var (
 	file_internal_storage_types_proto_rawDescOnce sync.Once

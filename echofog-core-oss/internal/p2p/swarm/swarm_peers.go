@@ -218,6 +218,12 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	s.notifyPeerConnected(obs, peerID, peerPubKey, advertised)
 	s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "connected", "addr": addr})
 
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.exchangePeers(p)
+	}()
+
 	return p
 }
 

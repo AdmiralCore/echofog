@@ -15,48 +15,15 @@ import (
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
-
-	"google.golang.org/protobuf/proto"
 )
 
+// findAndConnectToPeers dials the peers this node was connected to before, freshest first,
+// skipping those whose last tries failed until their retry is due.
 func (s *Swarm) findAndConnectToPeers() {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		history := s.GetHistoryConnected(0)
-		for _, peer := range history {
-			select {
-			case <-s.ctx.Done():
-				return
-			default:
-			}
-
-			pubKey, _ := types.ToPeerPubKey(peer.PubKey)
-			peerID := types.PeerPubKeyToID(pubKey)
-
-			s.mu.RLock()
-			if len(s.activePeers) > s.cfg.Network.MaxConnections {
-				s.mu.RUnlock()
-				break
-			}
-			_, ok := s.activePeers[peerID]
-			s.mu.RUnlock()
-			if ok {
-				continue
-			}
-
-			s.wg.Add(1)
-			go func(addr string) {
-				defer s.wg.Done()
-				select {
-				case <-s.ctx.Done():
-					return
-				default:
-					s.expectPeer(addr, peerID)
-					s.connect(addr)
-				}
-			}(peer.GetLastKnownAddr())
-		}
+		s.dialCandidates(s.historyCandidates(startupHistoryDials))
 	}()
 }
 
@@ -111,7 +78,7 @@ func (s *Swarm) connect(addr string) {
 	defer cancel()
 	err := s.dialEarly(ctx, addr)
 	if err != nil {
-		s.logger.Error("Failed to connect to swarm", "err: ", err)
+		s.log().Warn("Failed to connect to swarm", "addr", addr, "err", err)
 		return
 	}
 }
@@ -188,38 +155,29 @@ func (s *Swarm) AddPotentialPeerWithCtx(ctx context.Context, id types.PeerID, ad
 	}
 }
 
-// PingPeer measures the round trip to a peer, dialling it first if it is not connected.
+// PingPeer measures the round trip to a peer, dialling it first if it is not connected. A
+// connected peer whose connection is alive counts as alive even when it does not answer the
+// ping (a node of an older version has no ping handler): the connection proves it is there.
 func (s *Swarm) PingPeer(id types.PeerID, lastAddr string) (time.Duration, error) {
-	s.mu.RLock()
-	_, connected := s.activePeers[id]
-	s.mu.RUnlock()
-
 	start := time.Now()
 
-	if connected {
-		pingData := &internal_pb.MessageData{
+	if p := s.GetPeer(id); p != nil {
+		if !p.Alive() {
+			return 0, errors.New("peer connection is closed")
+		}
+		ping := &internal_pb.MessageData{
 			MessageId: types.NewMessageID(),
 			OriginId:  s.selfID[:],
-			Payload: &internal_pb.MessageData_Ping{
-				Ping: &internal_pb.Ping{Nonce: start.UnixNano()},
-			},
+			Payload:   &internal_pb.MessageData_Ping{Ping: &internal_pb.Ping{Nonce: start.UnixNano()}},
 		}
-
-		env, err := s.SignMessageData(pingData)
-		if err != nil {
-			return 0, err
+		if respType, resp, err := s.SendMessageWithRequest(id, net_types.TypePing, ping); err == nil &&
+			respType == net_types.TypePong && resp.GetPong().GetNonce() == start.UnixNano() {
+			return time.Since(start), nil
 		}
-
-		envBytes, err := proto.Marshal(env)
-		if err != nil {
-			return 0, err
+		if p.Alive() {
+			return time.Since(start), nil
 		}
-
-		_, _, err = s.SendDataWithRequest(id, net_types.TypePing, envBytes)
-		if err != nil {
-			return 0, err
-		}
-		return time.Since(start), nil
+		return 0, errors.New("peer connection closed during ping")
 	}
 
 	if lastAddr == "" {
@@ -230,7 +188,7 @@ func (s *Swarm) PingPeer(id types.PeerID, lastAddr string) (time.Duration, error
 	defer cancel()
 
 	s.expectPeer(lastAddr, id)
-	err := s.netTransport.DialEarly(ctx, lastAddr)
+	err := s.dialEarly(ctx, lastAddr)
 	if err != nil {
 		return 0, fmt.Errorf("peer unreachable at %s: %w", lastAddr, err)
 	}
@@ -291,26 +249,4 @@ func resolveHostPort(ctx context.Context, addr string) string {
 		}
 	}
 	return net.JoinHostPort(pick.String(), port)
-}
-
-// Rejoin is for a node that has lost every peer (it started while offline, or its network was
-// cut): it dials the bootstrap nodes and the peers it was connected to before. It does nothing
-// while any peer is connected. Returns whether there was anybody to dial.
-func (s *Swarm) Rejoin(bootstrap []string) bool {
-	if len(s.GetAllPeers()) > 0 {
-		return false
-	}
-	s.Bootstrap(bootstrap)
-	tried := len(bootstrap) > 0
-	if s.peerStore != nil {
-		for _, e := range s.peerStore.GetHistoryConnected(16) {
-			pub, err := types.ToPeerPubKey(e.GetPubKey())
-			if err != nil || e.GetLastKnownAddr() == "" {
-				continue
-			}
-			s.AddPotentialPeer(types.PeerPubKeyToID(pub), e.GetLastKnownAddr())
-			tried = true
-		}
-	}
-	return tried
 }

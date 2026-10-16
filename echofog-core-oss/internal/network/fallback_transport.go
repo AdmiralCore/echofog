@@ -103,8 +103,12 @@ func (f *FallbackTransport) SetLogger(l *slog.Logger) {
 // port, for networks that run the TCP fallback on a standard port separate from QUIC.
 func (f *FallbackTransport) SetTCPRemotePort(p int) { f.tcpRPort = p }
 
-// SetAdvertisedPort sets the TCP fallback port announced to inbound peers (for a port map).
-func (f *FallbackTransport) SetAdvertisedPort(p int) { f.advPort = p }
+// SetAdvertisedPort sets the port announced to the peers this node dials, for QUIC and the TCP
+// fallback (for a port map).
+func (f *FallbackTransport) SetAdvertisedPort(p int) {
+	f.advPort = p
+	f.QUIC.SetAdvertisedPort(p)
+}
 
 // SetCaps sets what this node announces to peers, on both transports.
 func (f *FallbackTransport) SetCaps(c handshake.Capability) {

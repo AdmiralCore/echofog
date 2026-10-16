@@ -111,7 +111,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 		return ErrPeerMismatch
 	}
 
-	q.newConn(conn, true, conn.RemoteAddr().String(), peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
+	q.newConn(conn, true, conn.RemoteAddr().String(), true, peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
 	q.logger.Info("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "outbound", "remote_addr", conn.RemoteAddr().String())
 
 	return nil

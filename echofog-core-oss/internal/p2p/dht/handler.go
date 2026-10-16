@@ -12,7 +12,7 @@ import (
 )
 
 func (d *EchoFogDHT) Handle(msg *internal_pb.MessageData, peerID types.PeerID) {
-	slog.Info("handle message", "peerID", hex.EncodeToString(peerID[:]))
+	slog.Debug("handle message", "peerID", hex.EncodeToString(peerID[:]))
 
 	switch msg.Payload.(type) {
 	case *internal_pb.MessageData_FindNodeReq:
@@ -42,15 +42,7 @@ func (d *EchoFogDHT) HandleFindNode(msg *internal_pb.MessageData, peerID types.P
 		d.routingTable.AddOrUpdatePeer(p.PubKey(), p.Addr())
 	}
 
-	closestPeers := d.routingTable.GetClosestPeers(targetID, 20)
-
-	peerInfos := make([]*internal_pb.PeerInfo, 0, len(closestPeers))
-	for _, p := range closestPeers {
-		peerInfos = append(peerInfos, &internal_pb.PeerInfo{
-			PubKey:  p.PubKey[:],
-			Address: p.Addr,
-		})
-	}
+	peerInfos := d.closestInfos(targetID, peerID)
 
 	resMsg := &internal_pb.MessageData{
 		MessageId: msg.MessageId,
@@ -63,7 +55,7 @@ func (d *EchoFogDHT) HandleFindNode(msg *internal_pb.MessageData, peerID types.P
 		},
 	}
 
-	slog.Info("[STEP 3: OUT] Sending FindNodeRes", "to", peerID, "foundPeers", len(peerInfos))
+	slog.Debug("DHT: sending FindNodeRes", "to", peerID, "foundPeers", len(peerInfos))
 
 	err := d.swarm.SendDataForPeer(peerID, net_types.TypeFindNodeRes, resMsg)
 	if err != nil {
@@ -80,7 +72,7 @@ func (d *EchoFogDHT) HandleFindNodeResponse(msg *internal_pb.MessageData) {
 	msgIDStr := string(msg.MessageId)
 
 	_, ok := d.pending.Load(msgIDStr)
-	slog.Info("[STEP 4: IN] Handling FindNodeRes", "msgID", hex.EncodeToString(msg.MessageId), "foundInPending", ok)
+	slog.Debug("DHT: handling FindNodeRes", "msgID", hex.EncodeToString(msg.MessageId), "foundInPending", ok)
 
 	if chPtr, ok := d.pending.LoadAndDelete(msgIDStr); ok {
 		ch := chPtr.(chan *internal_pb.FindNodeResponse)
@@ -136,17 +128,9 @@ func (d *EchoFogDHT) HandleFindValue(msg *internal_pb.MessageData, peerID types.
 	}
 
 	if resPayload.Record == nil {
-		targetID, _ := types.ToPeerID(req.TargetKey)
-		closestPeers := d.routingTable.GetClosestPeers(targetID, 20)
-
-		peerInfos := make([]*internal_pb.PeerInfo, 0, len(closestPeers))
-		for _, p := range closestPeers {
-			peerInfos = append(peerInfos, &internal_pb.PeerInfo{
-				PubKey:  p.PubKey[:],
-				Address: p.Addr,
-			})
-		}
-		resPayload.ClosestPeers = peerInfos
+		// the same place in the ID space the asker walks toward: a key such as "bundle:<id>"
+		// is no ID, and read as one it would point every referral at the zero ID
+		resPayload.ClosestPeers = d.closestInfos(targetOf(req.TargetKey), peerID)
 	}
 
 	resMsg := &internal_pb.MessageData{

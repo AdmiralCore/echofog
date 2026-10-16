@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
 )
 
@@ -53,9 +52,9 @@ func normalizeBootstrap(in []string) ([]string, error) {
 	return out, nil
 }
 
-// setBootstrapConfig makes the configured bootstrap list the built-in nodes plus the user's, once
-// each; the scheduler's rejoin reads it, so a node added later is retried when the app goes offline.
-func setBootstrapConfig(c *config.AppConfig, builtIn, custom []string) {
+// bootstrapList is the built-in nodes plus the user's, once each. The node's maintainer dials it,
+// so a node added later is retried when the app goes offline.
+func bootstrapList(builtIn, custom []string) []string {
 	have := map[string]bool{}
 	list := make([]string, 0, len(builtIn)+len(custom))
 	for _, b := range append(append([]string(nil), builtIn...), custom...) {
@@ -64,7 +63,7 @@ func setBootstrapConfig(c *config.AppConfig, builtIn, custom []string) {
 			list = append(list, b)
 		}
 	}
-	c.Network.BootstrapNodes = list
+	return list
 }
 
 func (n *NodeApi) bootstrapNode(entry string) BootstrapNode {
@@ -127,7 +126,7 @@ func (n *NodeApi) AddBootstrapNode(entry string) error {
 	}
 	if err == nil {
 		n.bootstrapCustom = list
-		setBootstrapConfig(n.node.Cfg, n.bootstrapBuiltIn, list)
+		n.node.SetBootstrapNodes(bootstrapList(n.bootstrapBuiltIn, list))
 	}
 	settingsMu.Unlock()
 	if err != nil {
@@ -162,6 +161,6 @@ func (n *NodeApi) RemoveBootstrapNode(entry string) error {
 		return err
 	}
 	n.bootstrapCustom = keep
-	setBootstrapConfig(n.node.Cfg, n.bootstrapBuiltIn, keep)
+	n.node.SetBootstrapNodes(bootstrapList(n.bootstrapBuiltIn, keep))
 	return nil
 }

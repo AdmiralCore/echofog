@@ -91,6 +91,8 @@ type Node struct {
 
 	Logger *slog.Logger
 
+	bootMu sync.Mutex // Cfg.Network.BootstrapNodes is changed by the API while the node runs
+
 	stopOnce sync.Once
 	Ctx      context.Context
 	Cancel   context.CancelFunc
@@ -578,8 +580,10 @@ func (n *Node) Start() (err error) {
 		return fmt.Errorf("services startup failed: %w", err)
 	}
 
-	if len(n.Cfg.Network.BootstrapNodes) > 0 {
-		n.Swarm.Bootstrap(n.Cfg.Network.BootstrapNodes)
+	boot := n.BootstrapNodes()
+	n.Swarm.SetBootstrapNodes(boot)
+	if len(boot) > 0 {
+		n.Swarm.Bootstrap(boot)
 	}
 
 	n.Scheduler = scheduler.New(n.Ctx, n.Logger.With("component", "scheduler"))
@@ -589,13 +593,21 @@ func (n *Node) Start() (err error) {
 		n.DhtEngine.SetEmitter(n.EventBus)
 	}
 
-	// a node left without peers (it started offline, its network was cut) joins again by itself
-	_ = n.Scheduler.Schedule("swarm:rejoin", 15*time.Second, func(ctx context.Context) error {
-		if n.Swarm.Rejoin(n.Cfg.Network.BootstrapNodes) {
-			n.Logger.Info("Swarm: no peers left, dialing bootstrap nodes and known peers again")
+	// a node short of peers (it started offline, its network was cut, its peers left) dials the
+	// bootstrap nodes, the peers it knows and the DHT's, backing off while that does not help
+	_ = n.Scheduler.Schedule("swarm:maintain", 5*time.Second, func(ctx context.Context) error {
+		if dialed := n.Swarm.MaintainPeers(); dialed > 0 {
+			n.Logger.Info("Swarm: short of peers, dialing bootstrap nodes and known peers", "peers", len(n.Swarm.GetAllPeers()), "dialing", dialed)
 		}
 		return nil
 	})
+	if ps := n.Swarm.GetPeerStore(); ps != nil {
+		ps.Prune(time.Now())
+		_ = n.Scheduler.Schedule("peerstore:prune", time.Hour, func(ctx context.Context) error {
+			ps.Prune(time.Now())
+			return nil
+		})
+	}
 
 	// peers connected only to signaling nodes have nobody to relay their traffic: find a relay
 	_ = n.Scheduler.Schedule("swarm:relay_peer", 20*time.Second, func(ctx context.Context) error {
@@ -627,6 +639,24 @@ func (n *Node) Start() (err error) {
 
 	n.Logger.Info("Node P2P network started successfully", "listen_addr", n.Transport.Addr().String())
 	return nil
+}
+
+// SetBootstrapNodes replaces the nodes this node joins the network through; a running node's
+// maintainer uses the new list from its next round.
+func (n *Node) SetBootstrapNodes(list []string) {
+	n.bootMu.Lock()
+	n.Cfg.Network.BootstrapNodes = append([]string(nil), list...)
+	n.bootMu.Unlock()
+	if n.Swarm != nil {
+		n.Swarm.SetBootstrapNodes(list)
+	}
+}
+
+// BootstrapNodes returns a copy of the configured bootstrap list.
+func (n *Node) BootstrapNodes() []string {
+	n.bootMu.Lock()
+	defer n.bootMu.Unlock()
+	return append([]string(nil), n.Cfg.Network.BootstrapNodes...)
 }
 
 // publishBundleLoop puts the node's key bundle in the DHT, soon after start-up (when the first

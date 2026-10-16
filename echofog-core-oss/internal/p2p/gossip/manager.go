@@ -2,7 +2,9 @@ package gossip
 
 import (
 	"sync"
+	"time"
 
+	"github.com/echofog/echofog-core/internal/cache"
 	types2 "github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
@@ -12,14 +14,21 @@ import (
 type Manager struct {
 	swarm *swarm.Swarm
 
-	mu        sync.RWMutex
-	seenCache map[types.MessageID]bool
+	mu        sync.Mutex // makes check-and-mark of a message one step
+	seenCache *cache.Cache[types.MessageID, struct{}]
 }
+
+// A message is remembered long enough to outlive its trip through the network, and the
+// number remembered is bounded: a flood of new IDs must not grow the memory without end.
+const (
+	seenCacheSize = 1 << 16
+	seenCacheTTL  = 30 * time.Minute
+)
 
 func NewManager(swarm *swarm.Swarm) *Manager {
 	return &Manager{
 		swarm:     swarm,
-		seenCache: make(map[types.MessageID]bool),
+		seenCache: cache.New[types.MessageID, struct{}](seenCacheSize, seenCacheTTL),
 	}
 }
 
@@ -29,11 +38,11 @@ func (g *Manager) Broadcast(msgType types2.MessageType, msgData *internal_pb.Mes
 		return
 	}
 	g.mu.Lock()
-	if g.seenCache[mesID] {
+	if g.seenCache.Exists(mesID) {
 		g.mu.Unlock()
 		return
 	}
-	g.seenCache[mesID] = true
+	g.seenCache.Set(mesID, struct{}{})
 	g.mu.Unlock()
 
 	msgData.HopLimit--
@@ -64,11 +73,7 @@ func (g *Manager) HandleIncoming(msgType types2.MessageType, msgData *internal_p
 	if err != nil {
 		return
 	}
-	g.mu.RLock()
-	seen := g.seenCache[mesID]
-	g.mu.RUnlock()
-
-	if seen {
+	if g.seenCache.Exists(mesID) {
 		return
 	}
 

@@ -23,6 +23,20 @@ type DefaultPeerAuthenticator struct {
 	timeout         time.Duration
 	ddos            *handshake.AntiDDoS // how many peers try to connect: sets the puzzle difficulty
 	caps            atomic.Uint32       // what this node offers peers, announced in the handshake
+	listenPort      atomic.Uint32       // where this node accepts connections, announced when it dials
+}
+
+// ListenPortSetter is an authenticator that announces where the node accepts connections.
+type ListenPortSetter interface {
+	SetListenPort(port int)
+}
+
+// SetListenPort sets the port announced to the peers this node dials (0: none).
+func (a *DefaultPeerAuthenticator) SetListenPort(port int) {
+	if port < 0 || port > 0xffff {
+		port = 0
+	}
+	a.listenPort.Store(uint32(port))
 }
 
 // CapsSetter is an authenticator that announces what the node offers.
@@ -54,6 +68,7 @@ func (a *DefaultPeerAuthenticator) negotiator(stream MuxStream) *handshake.Negot
 		MyCaps:      handshake.Capability(a.caps.Load()),
 		RequirePoW:  false,
 		AntiDDoS:    a.ddos,
+		ListenPort:  uint16(a.listenPort.Load()),
 	}, &StreamWrapper{stream: stream})
 }
 

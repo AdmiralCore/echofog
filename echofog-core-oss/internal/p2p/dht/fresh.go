@@ -15,8 +15,7 @@ func (d *EchoFogDHT) KnownPeers() []types.PeerID {
 
 // GetFresh asks the network only and skips the local cache, so expired local copies cannot shadow newer remote records
 func (d *EchoFogDHT) GetFresh(key []byte) ([]byte, error) {
-	targetID, _ := types.ToPeerID(key)
-	nodes := d.routingTable.GetClosestPeers(targetID, Alpha)
+	nodes := d.routingTable.GetClosestPeers(targetOf(key), Alpha)
 	if len(nodes) == 0 {
 		return nil, errors.New("DHT: no peers known to search for value")
 	}

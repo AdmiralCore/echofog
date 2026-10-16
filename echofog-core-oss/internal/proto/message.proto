@@ -73,6 +73,9 @@ message HandshakeInit {
   bytes network_id = 3;
   uint32 capabilities = 4;
   bytes pub_key = 5;
+  // the port the initiator accepts connections on (its advertised port behind a port map);
+  // 0: it does not say, and its source address must not be dialed back
+  uint32 listen_port = 6;
 }
 
 message HandshakeResponse {
@@ -95,6 +98,8 @@ message PeerList {
   message Peer {
     bytes id = 1;
     string last_known_addr = 2;
+    bytes pub_key = 3;
+    uint32 caps = 4; // what the peer announced in its handshake (handshake.Capability)
   }
   repeated Peer peers = 1;
 }

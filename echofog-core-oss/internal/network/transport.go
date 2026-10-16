@@ -78,9 +78,10 @@ type QuicTransport struct {
 
 	connChan chan NewConnEvent
 
-	authenticator PeerAuthenticator
-	handshakeSem  chan struct{}
-	logger        *slog.Logger
+	authenticator  PeerAuthenticator
+	advertisedPort atomic.Uint32 // public port peers dial us on (port map); 0: the UDP port
+	handshakeSem   chan struct{}
+	logger         *slog.Logger
 
 	closeOnce      sync.Once
 	dialMu         sync.Mutex
@@ -201,6 +202,7 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 	}
 
 	qt.guard.Store(handshake.NewGuard(handshake.GuardConfig{}))
+	qt.announceListenPort()
 	return qt, nil
 }
 
@@ -232,6 +234,24 @@ func (q *QuicTransport) SetLogger(logger *slog.Logger) {
 func (q *QuicTransport) SetAuthenticator(a PeerAuthenticator) {
 	if a != nil {
 		q.authenticator = a
+		q.announceListenPort()
+	}
+}
+
+// SetAdvertisedPort sets the port announced to the peers this node dials, when it differs from
+// the UDP port because of a port map; 0 announces the UDP port.
+func (q *QuicTransport) SetAdvertisedPort(p int) {
+	q.advertisedPort.Store(uint32(p))
+	q.announceListenPort()
+}
+
+func (q *QuicTransport) announceListenPort() {
+	p := int(q.advertisedPort.Load())
+	if p == 0 {
+		p = q.UDPPort()
+	}
+	if s, ok := q.authenticator.(ListenPortSetter); ok {
+		s.SetListenPort(p)
 	}
 }
 

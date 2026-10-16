@@ -69,7 +69,22 @@ func (s *Swarm) AddFrameHandler(handler FrameHandler) {
 
 func (s *Swarm) initCoreRPCs() {
 	s.RegisterRPC(net_types.TypeDAGSessionInitRequest, s.sessionManager.HandleDagSessionReq)
+	s.RegisterRPC(net_types.TypePing, s.handlePing)
+	s.RegisterRPC(net_types.TypeGetPeerRequest, s.handlePeerExchange)
 	s.initCoreFastHandlers()
+}
+
+// handlePing answers a liveness check (the DHT asks before it evicts an old peer).
+func (s *Swarm) handlePing(msg *internal_pb.MessageData, _ types.PeerID) (net_types.MessageType, *internal_pb.MessageData, error) {
+	ping := msg.GetPing()
+	if ping == nil {
+		return 0, nil, errors.New("ping: no payload")
+	}
+	return net_types.TypePong, &internal_pb.MessageData{
+		MessageId: msg.MessageId,
+		OriginId:  s.selfID[:],
+		Payload:   &internal_pb.MessageData_Pong{Pong: &internal_pb.Pong{Nonce: ping.Nonce}},
+	}, nil
 }
 
 func (s *Swarm) initCoreFastHandlers() {

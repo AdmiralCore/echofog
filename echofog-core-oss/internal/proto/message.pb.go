@@ -799,12 +799,15 @@ func (x *Transaction) GetMemo() string {
 }
 
 type HandshakeInit struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nonce         []byte                 `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	Version       uint32                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
-	NetworkId     []byte                 `protobuf:"bytes,3,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
-	Capabilities  uint32                 `protobuf:"varint,4,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
-	PubKey        []byte                 `protobuf:"bytes,5,opt,name=pub_key,json=pubKey,proto3" json:"pub_key,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Nonce        []byte                 `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Version      uint32                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	NetworkId    []byte                 `protobuf:"bytes,3,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	Capabilities uint32                 `protobuf:"varint,4,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	PubKey       []byte                 `protobuf:"bytes,5,opt,name=pub_key,json=pubKey,proto3" json:"pub_key,omitempty"`
+	// the port the initiator accepts connections on (its advertised port behind a port map);
+	// 0: it does not say, and its source address must not be dialed back
+	ListenPort    uint32 `protobuf:"varint,6,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -872,6 +875,13 @@ func (x *HandshakeInit) GetPubKey() []byte {
 		return x.PubKey
 	}
 	return nil
+}
+
+func (x *HandshakeInit) GetListenPort() uint32 {
+	if x != nil {
+		return x.ListenPort
+	}
+	return 0
 }
 
 type HandshakeResponse struct {
@@ -2328,6 +2338,8 @@ type PeerList_Peer struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            []byte                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	LastKnownAddr string                 `protobuf:"bytes,2,opt,name=last_known_addr,json=lastKnownAddr,proto3" json:"last_known_addr,omitempty"`
+	PubKey        []byte                 `protobuf:"bytes,3,opt,name=pub_key,json=pubKey,proto3" json:"pub_key,omitempty"`
+	Caps          uint32                 `protobuf:"varint,4,opt,name=caps,proto3" json:"caps,omitempty"` // what the peer announced in its handshake (handshake.Capability)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2374,6 +2386,20 @@ func (x *PeerList_Peer) GetLastKnownAddr() string {
 		return x.LastKnownAddr
 	}
 	return ""
+}
+
+func (x *PeerList_Peer) GetPubKey() []byte {
+	if x != nil {
+		return x.PubKey
+	}
+	return nil
+}
+
+func (x *PeerList_Peer) GetCaps() uint32 {
+	if x != nil {
+		return x.Caps
+	}
+	return 0
 }
 
 var File_internal_proto_message_proto protoreflect.FileDescriptor
@@ -2429,14 +2455,16 @@ const file_internal_proto_message_proto_rawDesc = "" +
 	"\vTransaction\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\fR\aassetId\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x04R\x06amount\x12\x12\n" +
-	"\x04memo\x18\x03 \x01(\tR\x04memo\"\x9b\x01\n" +
+	"\x04memo\x18\x03 \x01(\tR\x04memo\"\xbc\x01\n" +
 	"\rHandshakeInit\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\fR\x05nonce\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\rR\aversion\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x03 \x01(\fR\tnetworkId\x12\"\n" +
 	"\fcapabilities\x18\x04 \x01(\rR\fcapabilities\x12\x17\n" +
-	"\apub_key\x18\x05 \x01(\fR\x06pubKey\"\xa7\x01\n" +
+	"\apub_key\x18\x05 \x01(\fR\x06pubKey\x12\x1f\n" +
+	"\vlisten_port\x18\x06 \x01(\rR\n" +
+	"listenPort\"\xa7\x01\n" +
 	"\x11HandshakeResponse\x12\x17\n" +
 	"\apub_key\x18\x01 \x01(\fR\x06pubKey\x12\x1c\n" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x18\n" +
@@ -2447,12 +2475,14 @@ const file_internal_proto_message_proto_rawDesc = "" +
 	"\x04Ping\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\x03R\x05nonce\"\x1c\n" +
 	"\x04Pong\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\x03R\x05nonce\"t\n" +
+	"\x05nonce\x18\x01 \x01(\x03R\x05nonce\"\xa1\x01\n" +
 	"\bPeerList\x12(\n" +
-	"\x05peers\x18\x01 \x03(\v2\x12.p2p.PeerList.PeerR\x05peers\x1a>\n" +
+	"\x05peers\x18\x01 \x03(\v2\x12.p2p.PeerList.PeerR\x05peers\x1ak\n" +
 	"\x04Peer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12&\n" +
-	"\x0flast_known_addr\x18\x02 \x01(\tR\rlastKnownAddr\"+\n" +
+	"\x0flast_known_addr\x18\x02 \x01(\tR\rlastKnownAddr\x12\x17\n" +
+	"\apub_key\x18\x03 \x01(\fR\x06pubKey\x12\x12\n" +
+	"\x04caps\x18\x04 \x01(\rR\x04caps\"+\n" +
 	"\x03Ack\x12$\n" +
 	"\x0eref_message_id\x18\x01 \x01(\fR\frefMessageId\"=\n" +
 	"\bPeerInfo\x12\x17\n" +

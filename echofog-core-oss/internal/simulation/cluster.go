@@ -194,6 +194,7 @@ func NewIsolatedCluster(t *testing.T, count int) (*Cluster, error) {
 		cfg.Network.ListenAddr = "127.0.0.1:0"
 		cfg.Network.MaxConnections = 100
 		cfg.Network.BootstrapNodes = nil // No auto-connect
+		cfg.Network.NoAutoDial = true    // the tests build their topology by hand
 
 		n := node.NewNode(ctx, cfg, fmt.Sprintf("node-%02d", idx))
 		if _, err := n.Register(appPass, nil); err != nil {

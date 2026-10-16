@@ -41,9 +41,12 @@ func TestSignalingNodeHelpsHolePunchingButRelaysNoTraffic(t *testing.T) {
 	sN, s := startNodeWith(t, "signal", func(c *config.AppConfig) {
 		c.Relay.Server.Enabled = true
 		c.Relay.Server.SignalingOnly = true
+		c.Network.NoAutoDial = true
 	})
-	aN, a := startNodeWith(t, "alice", nil)
-	bN, b := startNodeWith(t, "bob", nil)
+	// alice and bob stand for peers behind NATs: on one machine they would find each other
+	noAutoDial := func(c *config.AppConfig) { c.Network.NoAutoDial = true }
+	aN, a := startNodeWith(t, "alice", noAutoDial)
+	bN, b := startNodeWith(t, "bob", noAutoDial)
 	join := network.JoinPeerAddr(sN.Transport.Addr().String(), sN.ID)
 	require.NoError(t, a.ConnectToPeer(join))
 	require.NoError(t, b.ConnectToPeer(join))

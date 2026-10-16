@@ -11,6 +11,7 @@ import (
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/dispatcher"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/peerstore"
 	"github.com/echofog/echofog-core/internal/protection/core/identity"
@@ -61,6 +62,18 @@ type Swarm struct {
 
 	cfg *config.AppConfig
 
+	addrPolicy atomic.Pointer[network.AddrPolicy] // which peer addresses are handed on and kept
+
+	bootMu    sync.RWMutex
+	bootstrap []string // nodes the maintainer dials when peers run short
+
+	sourcesMu  sync.RWMutex
+	candidates []CandidateSource // more peers to dial (the DHT routing table)
+	learned    []func(pub types.PeerPublicKey, addr string, caps handshake.Capability)
+
+	maint    maintainState
+	autoDial atomic.Bool // dial peers learned from others on our own (network.no_auto_dial unsets)
+
 	bytesRx atomic.Uint64
 	bytesTx atomic.Uint64
 
@@ -89,6 +102,16 @@ func NewSwarm(ctx context.Context, netTransport network.Transport, selfID types.
 
 	s.sessionManager.sender = s
 	s.sessionManager.ctx = s.ctx
+
+	listen := ""
+	if netTransport != nil && netTransport.Addr() != nil {
+		listen = netTransport.Addr().String()
+	}
+	allowPrivate := cfg != nil && cfg.Network.AllowPrivateAddrs
+	s.SetAddrPolicy(network.PolicyFor(listen, allowPrivate))
+	s.autoDial.Store(cfg == nil || !cfg.Network.NoAutoDial)
+	// the start-up dials go first; the maintainer steps in if they are not enough
+	s.maint.next = time.Now().Add(maintainBackoffMin)
 
 	s.wg.Add(1)
 	go s.registrationLoop(connChan)

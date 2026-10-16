@@ -110,6 +110,15 @@ func (n *Node) maintainMapping(pm *portmap.NAT) {
 		} else {
 			n.NAT.SetPortMapping(netip.AddrPort{})
 		}
+		// peers we dial reach us back through the router's forward, which may use another port;
+		// a configured advertise_port (a port map the operator set up) wins
+		if n.Cfg.Network.AdvertisePort == 0 {
+			if ok {
+				n.Transport.SetAdvertisedPort(int(ext.Port()))
+			} else {
+				n.Transport.SetAdvertisedPort(0)
+			}
+		}
 		select {
 		case <-n.Ctx.Done():
 			return

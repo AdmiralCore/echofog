@@ -14,6 +14,7 @@ import (
 	"github.com/echofog/echofog-core/pkg/events"
 
 	"github.com/echofog/echofog-core/internal/cache"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
@@ -70,6 +71,11 @@ type EchoFogDHT struct {
 	peerQuotas *cache.Cache[types.PeerID, int]
 
 	emitter atomic.Pointer[events.Emitter]
+
+	alone  atomic.Bool   // no peer connected: the next connection is a (re)join
+	joined chan struct{} // a (re)join happened: look up our own ID
+	stop   context.CancelFunc
+	done   chan struct{}
 }
 
 type PeerCapabilities struct {
@@ -84,8 +90,15 @@ func NewEchoFogDHT(rt *RoutingTable, swarm *swarm.Swarm) *EchoFogDHT {
 		swarm:        swarm,
 		hotCache:     cache.New[types.PeerID, string](2048, 15*time.Minute),
 		peerQuotas:   cache.New[types.PeerID, int](4096, 1*time.Hour),
+		joined:       make(chan struct{}, 1),
 	}
+	dht.alone.Store(true)
+	rt.SetAddrPolicy(swarm.AddrPolicy())
 	swarm.AddObserver(dht)
+	swarm.AddCandidateSource(dht.dialCandidates)
+	swarm.OnPeerLearned(func(pub types.PeerPublicKey, addr string, _ handshake.Capability) {
+		rt.AddOrUpdatePeer(pub, addr)
+	})
 	return dht
 }
 
@@ -93,20 +106,43 @@ func (d *EchoFogDHT) Name() string {
 	return "EchoFogDHT"
 }
 
+// Start reloads the routing table saved by the last run and keeps the table fresh: a lookup of
+// our own ID whenever the node joins (or rejoins) the network, and a lookup of a random ID in
+// each bucket no lookup went into for a while.
 func (d *EchoFogDHT) Start(ctx context.Context) error {
+	if n := d.routingTable.Load(); n > 0 {
+		slog.Info("DHT: routing table restored", "peers", n)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	d.stop = cancel
+	d.done = make(chan struct{})
+	go d.maintain(ctx)
 	return nil
 }
 
+// Stop ends the maintenance and saves the routing table.
 func (d *EchoFogDHT) Stop() error {
-	return nil
+	if d.stop != nil {
+		d.stop()
+		<-d.done
+	}
+	return d.routingTable.Save()
 }
 
 var ErrDHTEmpty = errors.New("DHT is empty, cannot start routing")
 var ErrPeerLookupTimedOut = errors.New("peer lookup timed out")
 
+// findPeerWait bounds one peer lookup: each step may have to connect to the peer it asks.
+const findPeerWait = 10 * time.Second
+
+// FindPeer returns where a peer accepts connections: from the cache, the routing table or a
+// connection we have, or else by an iterative lookup through the network.
 func (d *EchoFogDHT) FindPeer(ctx context.Context, targetID types.PeerID) (string, error) {
 	if addr, ok := d.hotCache.Get(targetID); ok {
 		return addr, nil
+	}
+	if p := d.swarm.GetPeer(targetID); p != nil && p.Addr() != "" {
+		return p.Addr(), nil
 	}
 
 	closestLocal := d.routingTable.GetClosestPeers(targetID, 1)
@@ -114,36 +150,17 @@ func (d *EchoFogDHT) FindPeer(ctx context.Context, targetID types.PeerID) (strin
 		d.hotCache.Set(targetID, closestLocal[0].Addr)
 		return closestLocal[0].Addr, nil
 	}
-
-	nodesToQuery := d.routingTable.GetClosestPeers(targetID, 3)
-	if len(nodesToQuery) == 0 {
+	if len(closestLocal) == 0 {
 		return "", ErrDHTEmpty
 	}
 
-	fastestResponse := make(chan string, 1)
-
-	searchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	searchCtx, cancel := context.WithTimeout(ctx, findPeerWait)
 	defer cancel()
-
-	for _, node := range nodesToQuery {
-		go func(p *PeerNode) {
-			addr, found := d.queryPeerForNode(searchCtx, p.ID, targetID)
-			if found {
-				select {
-				case fastestResponse <- addr:
-				default:
-				}
-			}
-		}(node)
+	if _, found := d.iterativeFindNode(searchCtx, targetID, &targetID); found != nil && found.Addr != "" {
+		d.hotCache.Set(targetID, found.Addr)
+		return found.Addr, nil
 	}
-
-	select {
-	case <-searchCtx.Done():
-		return "", ErrPeerLookupTimedOut
-	case addr := <-fastestResponse:
-		d.hotCache.Set(targetID, addr)
-		return addr, nil
-	}
+	return "", ErrPeerLookupTimedOut
 }
 
 // targetOf is the place of a key in the ID space: the key itself when it is an ID, the hash of it
@@ -309,17 +326,14 @@ func (d *EchoFogDHT) queryPeerForValue(ctx context.Context, lookup *valueLookup,
 		}
 
 		if len(res.ClosestPeers) > 0 {
-			for _, peer := range res.ClosestPeers {
-				var pubKey types.PeerPublicKey
-				copy(pubKey[:], peer.PubKey)
-				d.routingTable.AddOrUpdatePeer(pubKey, peer.Address)
-				pID := types.PeerPubKeyToID(pubKey)
+			for _, node := range d.takeInfos(res.ClosestPeers) {
+				pID := node.ID
 				if ctx.Err() != nil || !lookup.claim(pID) {
 					continue
 				}
 				if !d.swarm.ThisIsActivePeer(pID) {
 					dialCtx, dialCancel := context.WithTimeout(ctx, 2*time.Second)
-					_ = d.swarm.AddPotentialPeerWithCtx(dialCtx, pID, peer.Address)
+					_ = d.swarm.AddPotentialPeerWithCtx(dialCtx, pID, node.Addr)
 					dialCancel()
 				}
 				if d.swarm.ThisIsActivePeer(pID) {
@@ -336,49 +350,13 @@ func (d *EchoFogDHT) queryPeerForValue(ctx context.Context, lookup *valueLookup,
 	}
 }
 
-func (d *EchoFogDHT) queryPeerForNode(ctx context.Context, peerToAsk, targetID types.PeerID) (string, bool) {
-	msgID := types.NewMessageID()
-
-	req := &internal_pb.MessageData{
-		MessageId: msgID[:],
-		Payload: &internal_pb.MessageData_FindNodeReq{
-			FindNodeReq: &internal_pb.FindNodeRequest{TargetId: targetID[:]},
-		},
-	}
-
-	waitCh := make(chan *internal_pb.FindNodeResponse, 1)
-	d.pending.Store(string(msgID[:]), waitCh)
-
-	defer d.pending.Delete(string(msgID[:]))
-
-	slog.Info("[STEP 1: OUT] Sending FindNodeReq", "msgID", hex.EncodeToString(msgID[:]), "targetID", targetID)
-
-	err := d.swarm.SendDataForPeer(peerToAsk, net_types.TypeFindNode, req)
-	if err != nil {
-		return "", false
-	}
-
-	select {
-	case res := <-waitCh:
-		for _, peer := range res.ClosestPeers {
-			var pubKey types.PeerPublicKey
-			copy(pubKey[:], peer.PubKey)
-			peerID := types.PeerPubKeyToID(pubKey)
-
-			d.routingTable.AddOrUpdatePeer(pubKey, peer.Address)
-
-			if peerID == targetID {
-				return peer.Address, true
-			}
-		}
-		return "", false
-
-	case <-ctx.Done():
-		return "", false
-	}
-}
-
 func (d *EchoFogDHT) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPublicKey, addr string) {
+	if d.alone.CompareAndSwap(true, false) {
+		select {
+		case d.joined <- struct{}{}:
+		default:
+		}
+	}
 	if addr == "" {
 		return // connected, but not reachable at a known address (inbound TCP)
 	}
@@ -388,6 +366,9 @@ func (d *EchoFogDHT) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPubli
 
 func (d *EchoFogDHT) OnPeerDisconnected(peerID types.PeerID) {
 	d.hotCache.Delete(peerID)
+	if d.swarm != nil && len(d.swarm.GetAllPeers()) == 0 {
+		d.alone.Store(true)
+	}
 }
 
 func (d *EchoFogDHT) countRecordFromPeer(peerID types.PeerID) int {

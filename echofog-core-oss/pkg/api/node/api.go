@@ -46,9 +46,9 @@ type NodeApi struct {
 }
 
 func NewNodeApi(node *node.Node) *NodeApi {
-	builtIn := append([]string(nil), node.Cfg.Network.BootstrapNodes...)
+	builtIn := node.BootstrapNodes()
 	saved, chosen := loadPersistedSettings(node.Cfg)
-	setBootstrapConfig(node.Cfg, builtIn, saved.BootstrapNodes)
+	node.SetBootstrapNodes(bootstrapList(builtIn, saved.BootstrapNodes))
 	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes}
 }

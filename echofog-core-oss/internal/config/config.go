@@ -67,6 +67,18 @@ type NetworkConfig struct {
 	// fallback. 0 = use the listen port.
 	AdvertisePort int `json:"advertise_port"`
 
+	// AllowPrivateAddrs lets private, link-local and CGNAT peer addresses into the DHT and peer
+	// exchange: for a network of private addresses only (a LAN, a Docker test cluster). Off, only
+	// public addresses are handed on, as one from somebody's LAN means nothing elsewhere. A node
+	// listening on loopback accepts loopback addresses either way (tests on one machine).
+	AllowPrivateAddrs bool `json:"allow_private_addrs"`
+
+	// NoAutoDial makes the node dial only what it is told to (the bootstrap list at start, explicit
+	// connects, DHT record lookups): no peers from peer exchange, the maintainer or the DHT's own
+	// lookups. For tests that build a fixed topology on one machine, where every node could reach
+	// every other.
+	NoAutoDial bool `json:"no_auto_dial"`
+
 	// WSListenAddr makes the node reachable over WebSocket, so it can sit behind a CDN such as
 	// Cloudflare (the CDN forwards the WebSocket to this address). Empty disables the listener;
 	// the node can still dial ws:// peers without it. Peers reach it at ws(s)://host:port<ws_path>.

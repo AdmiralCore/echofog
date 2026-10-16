@@ -25,6 +25,9 @@ type HandshakeResult struct {
 	NetworkID [32]byte
 	Caps      Capability
 	Version   uint32
+	// ListenPort is where the initiator accepts connections, as it announced (responder side
+	// only; 0 when it announced none).
+	ListenPort uint16
 }
 
 func (c Capability) Has(flag Capability) bool {

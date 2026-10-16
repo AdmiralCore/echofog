@@ -8,4 +8,6 @@ message PeerStoreEntry {
   string last_known_addr = 2;
   uint64 last_seen = 3;
   uint32 trust_score = 4;
+  uint32 fail_count = 5;  // dial failures since the last successful connection
+  uint64 last_failed = 6; // unix nanoseconds of the last failed dial
 }
