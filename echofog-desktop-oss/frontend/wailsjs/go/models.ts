@@ -704,6 +704,7 @@ export namespace node {
 	    lastError: string;
 	    accepted: number;
 	    refused: number;
+	    refusedBy: Record<string, number>;
 	    bytes: number;
 	    paymentsReady: boolean;
 	    payAddress: string;
@@ -722,6 +723,7 @@ export namespace node {
 	        this.lastError = source["lastError"];
 	        this.accepted = source["accepted"];
 	        this.refused = source["refused"];
+	        this.refusedBy = source["refusedBy"];
 	        this.bytes = source["bytes"];
 	        this.paymentsReady = source["paymentsReady"];
 	        this.payAddress = source["payAddress"];
@@ -789,6 +791,11 @@ export namespace node {
 	    bytesTx: number;
 	    tunnelReady: boolean;
 	    tunnelNotice: string;
+	    exitState: string;
+	    refused: number;
+	    lastRefusalReason: string;
+	    lastRefusalHost: string;
+	    lastRefusalAt: number;
 	    wholeComputer: boolean;
 	    wholeComputerSupported: boolean;
 	    wholeComputerError: string;
@@ -807,6 +814,11 @@ export namespace node {
 	        this.bytesTx = source["bytesTx"];
 	        this.tunnelReady = source["tunnelReady"];
 	        this.tunnelNotice = source["tunnelNotice"];
+	        this.exitState = source["exitState"];
+	        this.refused = source["refused"];
+	        this.lastRefusalReason = source["lastRefusalReason"];
+	        this.lastRefusalHost = source["lastRefusalHost"];
+	        this.lastRefusalAt = source["lastRefusalAt"];
 	        this.wholeComputer = source["wholeComputer"];
 	        this.wholeComputerSupported = source["wholeComputerSupported"];
 	        this.wholeComputerError = source["wholeComputerError"];

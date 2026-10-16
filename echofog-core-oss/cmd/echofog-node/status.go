@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/exit_gateway"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/node"
@@ -37,9 +38,11 @@ type ExitStatus struct {
 	PricePerGB string `json:"pricePerGb"` // dollars
 	Sessions   uint64 `json:"sessions"`
 	Refused    uint64 `json:"refused"`
-	Carried    uint64 `json:"carriedBytes"`
-	EarnedUSD  string `json:"earnedUsd"` // credited from clients since the exit started, TON valued on arrival
-	LastError  string `json:"lastError,omitempty"`
+	// RefusedBy splits Refused by reason: "exit disabled", "payment required", "target not allowed", "dial failed"
+	RefusedBy map[string]uint64 `json:"refusedBy,omitempty"`
+	Carried   uint64            `json:"carriedBytes"`
+	EarnedUSD string            `json:"earnedUsd"` // credited from clients since the exit started, TON valued on arrival
+	LastError string            `json:"lastError,omitempty"`
 }
 
 type WalletStatus struct {
@@ -104,7 +107,7 @@ func (c *collector) refresh(ctx context.Context) {
 	if c.o.exit {
 		sh := c.h.GetSharingStatus()
 		st.Exit = &ExitStatus{
-			Enabled: sh.Enabled, PricePerGB: c.o.exitPrice, Sessions: sh.Accepted, Refused: sh.Refused,
+			Enabled: sh.Enabled, PricePerGB: c.o.exitPrice, Sessions: sh.Accepted, Refused: sh.Refused, RefusedBy: sh.RefusedBy,
 			Carried: sh.Bytes, EarnedUSD: sh.EarnedUSDT, LastError: sh.LastError,
 		}
 	}
@@ -176,7 +179,12 @@ func statsLine(s Status) string {
 		b.WriteString(" | relay: off")
 	}
 	if e := s.Exit; e != nil {
-		fmt.Fprintf(&b, " | exit: %d sessions, %s carried, earned $%s", e.Sessions, human(e.Carried), orZero(e.EarnedUSD))
+		state := ""
+		if !e.Enabled {
+			state = "not sharing, "
+		}
+		fmt.Fprintf(&b, " | exit: %s%d sessions, %d refused%s, %s carried, earned $%s",
+			state, e.Sessions, e.Refused, refusedDetail(e.RefusedBy), human(e.Carried), orZero(e.EarnedUSD))
 		if e.LastError != "" {
 			fmt.Fprintf(&b, " (%s)", e.LastError)
 		}
@@ -188,6 +196,20 @@ func statsLine(s Status) string {
 		}
 	}
 	return b.String()
+}
+
+// refusedDetail is " (payment required 3, dial failed 1)", reasons in a fixed order.
+func refusedDetail(by map[string]uint64) string {
+	var parts []string
+	for _, r := range []string{exit_gateway.RefuseDisabled, exit_gateway.RefusePayment, exit_gateway.RefuseTarget, exit_gateway.RefuseDial} {
+		if n := by[r]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", r, n))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 func orZero(s string) string {
@@ -350,7 +372,7 @@ func printStatus(s Status) {
 			state = "not running"
 		}
 		fmt.Printf("  Exit:         %s, $%s per GB\n", state, e.PricePerGB)
-		fmt.Printf("    sessions      %d accepted, %d refused\n", e.Sessions, e.Refused)
+		fmt.Printf("    sessions      %d accepted, %d refused%s\n", e.Sessions, e.Refused, refusedDetail(e.RefusedBy))
 		fmt.Printf("    traffic       %s carried\n", human(e.Carried))
 		fmt.Printf("    earned        $%s\n", orZero(e.EarnedUSD))
 		if e.LastError != "" {

@@ -30,7 +30,9 @@ type SharingStatus struct {
 	LastError   string        `json:"lastError"`
 	Accepted    uint64        `json:"accepted"`
 	Refused     uint64        `json:"refused"`
-	Bytes       uint64        `json:"bytes"`
+	// RefusedBy splits Refused by reason ("exit disabled", "payment required", ...)
+	RefusedBy map[string]uint64 `json:"refusedBy"`
+	Bytes     uint64            `json:"bytes"`
 	// PaymentsReady: clients can pay this exit (priced, and the wallet is ready to receive)
 	PaymentsReady bool   `json:"paymentsReady"`
 	PayAddress    string `json:"payAddress"`
@@ -184,7 +186,7 @@ func (n *NodeApi) GetSharingStatus() SharingStatus {
 			FreePeers: n.GetExitFreePeers(),
 		},
 		LastPublish: ps.LastPublish, ExpiresAt: ps.ExpiresAt, LastError: ps.LastError,
-		Accepted: a, Refused: r, Bytes: b,
+		Accepted: a, Refused: r, Bytes: b, RefusedBy: n.node.ExitService.RefusedByReason(),
 		PaymentsReady: n.node.ExitService.AccountOf(types.PeerID{}).PayAddress != "",
 		PayAddress:    n.node.ExitService.AccountOf(types.PeerID{}).PayAddress,
 		EarnedUSDT:    n.earnedUSDT(),

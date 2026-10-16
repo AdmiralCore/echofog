@@ -8,8 +8,9 @@
   import RelayCard from '../components/RelayCard.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
+  import { me } from '../stores/session.js';
 
-  let vpn = { running: false, listenAddr: '', relayPeerId: '', bytesRx: 0, bytesTx: 0, activeConns: 0, tunnelReady: false, tunnelNotice: '', wholeComputer: false, wholeComputerSupported: false, wholeComputerError: '' };
+  let vpn = { running: false, listenAddr: '', relayPeerId: '', bytesRx: 0, bytesTx: 0, activeConns: 0, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, wholeComputer: false, wholeComputerSupported: false, wholeComputerError: '' };
   let exits = [];
   let selected = 'auto';
   let pay = { active: false, canPay: false, pricePerGb: '0', remainingGb: 0, needsPayment: false, autoPay: false, chunkUsdt: '1', dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: false, chunkTon: '', pending: false, note: '', lastError: '', paysByVault: false };
@@ -166,7 +167,7 @@
       setInterval(() => { refresh(); loadExits(false).catch(() => {}); }, 15000),
       setInterval(() => { if (vpn.running) refreshPay(); }, 5000),
     ];
-    for (const t of ['vpn:started', 'vpn:stopped', 'vpn:whole_computer', 'vpn:payment', 'exit:payment', 'exit:session_started', 'exit:session_closed']) {
+    for (const t of ['vpn:started', 'vpn:stopped', 'vpn:exit_state', 'vpn:whole_computer', 'vpn:payment', 'exit:payment', 'exit:session_started', 'exit:session_closed']) {
       offs.push(on(t, refresh));
     }
   });
@@ -176,6 +177,11 @@
   });
 
   $: connectedExit = exits.find((e) => e.peerId === vpn.relayPeerId);
+  // the peer link being up is not enough: the exit itself says whether it serves us
+  $: exitProblem = vpn.running && ['disabled', 'quota', 'unreachable'].includes(vpn.exitState) ? vpn.exitState : '';
+  $: refusalText = vpn.running && vpn.refused > 0 && vpn.lastRefusalReason
+    ? $t('proxy.refused', { n: vpn.refused, reason: $t('proxy.refusal.' + vpn.lastRefusalReason), host: vpn.lastRefusalHost, when: when(vpn.lastRefusalAt, $lang) })
+    : '';
 </script>
 
 <div class="page">
@@ -190,7 +196,7 @@
     {#if error}<p class="error small">{error}</p>{/if}
     {#if notice}<p class="ok small">{notice}</p>{/if}
 
-    <div class="card stack conn" class:running={vpn.running} class:ready={vpn.running && vpn.tunnelReady}>
+    <div class="card stack conn" class:running={vpn.running} class:ready={vpn.running && vpn.tunnelReady} class:problem={!!exitProblem}>
       <div class="conn-top">
         <button class="power" class:on={vpn.running} on:click={connect}
           disabled={busy === 'connect' || blocked}
@@ -198,11 +204,11 @@
           {#if busy === 'connect'}<span class="spinner big-spin"></span>{:else}<Icon name="zap" size={26} stroke={2} />{/if}
         </button>
         <div class="grow">
-          <h2>{vpn.running ? (vpn.tunnelReady ? $t('proxy.connected') : $t('proxy.connecting')) : $t('proxy.notConnected')}</h2>
+          <h2>{vpn.running ? (vpn.tunnelReady ? $t('proxy.connected') : exitProblem ? $t('proxy.notServing') : $t('proxy.connecting')) : $t('proxy.notConnected')}</h2>
           <p class="small muted">
             {#if vpn.running}
               {$t('proxy.through', { id: connectedExit ? short(connectedExit.peerId) : short(vpn.relayPeerId) })}{connectedExit?.latencyMs ? ' · ' + pingText(connectedExit.latencyMs) : ''}.
-              {vpn.tunnelReady ? '' : vpn.tunnelNotice || $t('proxy.waitingTunnel')}
+              {vpn.tunnelReady || exitProblem ? '' : vpn.exitState === 'checking' ? $t('proxy.exit.checking') : vpn.tunnelNotice || $t('proxy.waitingTunnel')}
             {:else}
               {$t('proxy.idleHint')}
             {/if}
@@ -213,6 +219,16 @@
         </button>
       </div>
 
+      {#if exitProblem}
+        <div class="small exit-warn" role="alert">
+          <Icon name="shield" size={14} />
+          <span>{$t('proxy.exit.' + exitProblem)}
+            {#if exitProblem === 'quota' && $me?.id}<span class="block">{$t('proxy.exit.yourId')} <span class="mono">{$me.id}</span>
+              <button class="icon tiny" title={$t('common.copy')} on:click={() => copy($me.id)}><Icon name="copy" size={12} /></button></span>{/if}
+          </span>
+        </div>
+      {/if}
+      {#if refusalText}<p class="small faint">{refusalText}</p>{/if}
       {#if vpn.running}
         <div class="stats">
           <div class="stat"><span class="eyebrow">{$t('proxy.socks')}</span>
@@ -419,6 +435,7 @@
   }
   .power:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); transform: scale(1.05); }
   .power.on { background: linear-gradient(135deg, var(--ok), color-mix(in srgb, var(--ok) 60%, var(--accent))); color: #fff; border-color: transparent; box-shadow: 0 0 0 6px var(--ok-soft), 0 8px 24px var(--ok-soft); }
+  .conn.running.problem .power.on { background: var(--danger); box-shadow: 0 0 0 6px var(--danger-soft); animation: none; }
   .running:not(.ready) .power.on { animation: breathe 1.6s ease-in-out infinite; }
   .power.on:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
   @keyframes breathe { 0%, 100% { box-shadow: 0 0 0 4px var(--ok-soft); } 50% { box-shadow: 0 0 0 12px transparent; } }
@@ -450,6 +467,9 @@
   .chip.ping.mid { color: var(--warn); background: var(--warn-soft); }
   .leak-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; margin-top: 2px; }
   .leak-warn :global(svg) { flex: none; margin-top: 2px; }
+  .exit-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; }
+  .exit-warn :global(svg) { flex: none; margin-top: 2px; }
+  .exit-warn .mono { word-break: break-all; }
   .chip.ping.bad { color: var(--danger); background: var(--danger-soft); }
   .sortrow { gap: 4px; }
   .chip-btn { padding: 4px 12px; font-size: 12px; border-radius: 999px; background: transparent; border-color: var(--line-soft); color: var(--muted); }

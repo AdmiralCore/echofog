@@ -121,8 +121,11 @@ type ExitService struct {
 	resolver     func(ctx context.Context, host string) ([]net.IP, error)
 	dialTimeout  time.Duration
 
-	accepted atomic.Uint64
-	refused  atomic.Uint64
+	accepted        atomic.Uint64
+	refused         atomic.Uint64
+	refusedBy       refusalCounts
+	refusalLog      *logLimiter
+	logRefusalsOnce sync.Once
 
 	policyMu  sync.Mutex
 	policy    Policy
@@ -193,20 +196,20 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 	defer st.Close()
 
 	if !e.enabled.Load() {
-		e.refused.Add(1)
+		e.refuse(peer, RefuseDisabled)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultDenied})
 		return
 	}
 
 	if e.allowance(peer) == 0 {
-		e.refused.Add(1)
+		e.refuse(peer, RefusePayment)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultPayment})
 		return
 	}
 
 	conn, code := e.connect(ctx, string(target))
 	if code != resultOK {
-		e.refused.Add(1)
+		e.refuse(peer, refuseCode(code))
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{code})
 		return
 	}

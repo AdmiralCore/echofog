@@ -313,7 +313,7 @@ const impl = {
   StartVPNVia: (target) => new Promise((r, j) => setTimeout(() => {
     const m = /([0-9a-f]{64})\/?$/i.exec(target.trim());
     if (!m) return j(new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>'));
-    Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', relayPeerId: m[1].toLowerCase() });
+    Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', exitState: 'ok', relayPeerId: m[1].toLowerCase() });
     emit('vpn:started', {});
     r(null);
   }, 700)),
@@ -409,7 +409,7 @@ const impl = {
   SetAutoPay: (on, chunk, cap) => { if (!(Number(chunk) >= 0.01)) throw new Error('enter the top-up amount in USDT, for example 1'); Object.assign(payMock, { autoPay: on, chunkUsdt: String(chunk), dailyCapUsdt: String(cap) }); return null; },
   PayExit: (amt) => new Promise((r) => setTimeout(() => { Object.assign(payMock, { needsPayment: false, pending: true, remainingGb: 20, spentTodayUsdt: String(Number(payMock.spentTodayUsdt) + Number(amt)) }); r('beef...mock'); }, 800)),
   GetVPNStatus: () => ({ ...vpnMock }),
-  StartVPN: () => { Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', relayPeerId: hex(9) }); emit('vpn:started', {}); return null; },
+  StartVPN: () => { Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: exitMock === 'ok', tunnelNotice: '', exitState: exitMock, relayPeerId: hex(9) }, exitMock === 'ok' ? {} : { refused: 7, lastRefusalReason: exitMock === 'quota' ? 'payment' : 'denied', lastRefusalHost: 'youtube.com:443', lastRefusalAt: sec(now) }); emit('vpn:started', {}); return null; },
   StopVPN: () => { Object.assign(vpnMock, { running: false, wholeComputer: false, tunnelReady: false }); emit('vpn:stopped', {}); return null; },
   SetWholeComputer: (on) => new Promise((r) => setTimeout(() => { vpnMock.wholeComputer = on; r(null); }, on ? 1500 : 300)),
   ListExitNodes: () => [
@@ -480,13 +480,15 @@ const relayStatus = () => {
 const sharingMock = { enabled: false, config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0, freePeers: [BOB] }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
 const supportMock = { available: true, percent: 5, pendingTon: '0', pendingUsdt: '0.35', address: 'UQ-project-mock' };
 const payMock = { active: true, canPay: true, pricePerGb: '0.05', remainingGb: 0.2, needsPayment: true, autoPay: false, chunkUsdt: '1', chunkGb: 20, dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: true, chunkTon: '0.311', pending: false, note: '', lastError: '', paysByVault: true };
+// ?exit=disabled|quota|unreachable: the exit refuses to serve us after connecting
+const exitMock = new URLSearchParams(location.search).get('exit') || 'ok';
 const vaultStage = new URLSearchParams(location.search).get('vault');
 const vaultMock = {
   address: 'EQDvau1tMockAddressExample00000000000000000000000', deployed: vaultStage !== 'none', depositTon: vaultStage === 'none' ? '0' : '3.25',
   closing: vaultStage === 'closing' || vaultStage === 'ready', withdrawAt: vaultStage === 'ready' ? sec(now) - 60 : vaultStage === 'closing' ? sec(now) + 17 * 3600 + 23 * 60 : 0,
   canFinish: false, minFirstTon: '0.1',
 };
-const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
+const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
 
 // handy in the console: __emit('group:event', {kind: 'call', groupId: 'grp_launch', title: 'EchoFog Launch', from: '...', callId: 'x', coordinator: '...'})
 window.__emit = (name, data) => runtimeImpl.EventsEmit(name, data);

@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +57,19 @@ func TestHostGuardBlocksRebinding(t *testing.T) {
 				t.Errorf("Host %q: handler body leaked despite guard", tt.host)
 			}
 		})
+	}
+}
+
+func TestStatsLineShowsRefusedStreams(t *testing.T) {
+	line := statsLine(Status{Peers: 3, Exit: &ExitStatus{
+		Enabled: true, Sessions: 5, Refused: 4,
+		RefusedBy: map[string]uint64{"payment required": 3, "dial failed": 1},
+	}})
+	if !strings.Contains(line, "exit: 5 sessions, 4 refused (payment required 3, dial failed 1)") {
+		t.Fatalf("refusals missing from %q", line)
+	}
+	off := statsLine(Status{Exit: &ExitStatus{Refused: 2, RefusedBy: map[string]uint64{"exit disabled": 2}}})
+	if !strings.Contains(off, "exit: not sharing, 0 sessions, 2 refused (exit disabled 2)") {
+		t.Fatalf("an exit that is off must say so: %q", off)
 	}
 }

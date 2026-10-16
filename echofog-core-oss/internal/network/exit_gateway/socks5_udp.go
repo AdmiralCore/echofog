@@ -127,6 +127,7 @@ func (s *SOCKS5Server) handleUDPAssociate(ctrl net.Conn) {
 	sess, err := ud.DialExitUDP(ctx)
 	cancel()
 	if err != nil {
+		s.noteRefusal("udp", err)
 		s.sendReply(ctrl, 0x05)
 		return
 	}

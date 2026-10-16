@@ -41,6 +41,11 @@ type SOCKS5Server struct {
 	emitter     atomic.Pointer[events.Emitter]
 	fake        *fakedns.Mapper // set in whole-computer mode, guarded by mu
 
+	refused      atomic.Uint64
+	lastRefusal  atomic.Pointer[Refusal]
+	refusalLog   *logLimiter
+	refusalsOnce sync.Once
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -206,6 +211,7 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 
 	p2pStream, err := s.dialer.DialExitStream(ctx, targetAddr)
 	if err != nil {
+		s.noteRefusal(targetAddr, err)
 		s.sendReply(clientConn, 0x05) // Connection refused
 		return
 	}

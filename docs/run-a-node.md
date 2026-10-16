@@ -32,7 +32,10 @@ on a server and in a country where you may do this, and read your hoster's terms
 - `--exit-free-kb 512` is the free test traffic per client per day, in KB (0–1024, default 512). It
   applies when the exit is priced.
 - `--exit-upload-mbps` sets the upload speed to advertise. Without it the node measures it against
-  connected peers first.
+  connected peers first, which fails on a fresh server with no peers yet: set it there (e.g. 100).
+- `--exit-free-peers <id>,<id>` (`ECHOFOG_EXIT_FREE_PEERS`) lists peers served for free, with no
+  daily quota and no payment, such as your own devices. It replaces the free list saved in the data
+  directory (the desktop app edits the same list under **Proxy → Free for these people**).
 - An exit never connects to loopback, private/LAN or CGNAT addresses, or to this machine's own
   networks. It also refuses these destination ports: **25, 465, 587** (mail: they would get your IP
   onto spam blocklists) and **135, 137, 138, 139, 445, 1900** (Windows networking, SMB and SSDP:

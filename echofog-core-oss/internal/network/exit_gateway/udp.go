@@ -149,17 +149,18 @@ func (u *UDPSession) Close() error {
 func (e *ExitService) HandleUDPFrom(ctx context.Context, st FramedStream, peer types.PeerID) {
 	defer st.Close()
 	if !e.enabled.Load() {
-		e.refused.Add(1)
+		e.refuse(peer, RefuseDisabled)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultDenied})
 		return
 	}
 	if e.allowance(peer) == 0 {
-		e.refused.Add(1)
+		e.refuse(peer, RefusePayment)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultPayment})
 		return
 	}
 	conn, err := net.ListenUDP("udp", nil)
 	if err != nil {
+		e.refuse(peer, RefuseDial)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultDialFailed})
 		return
 	}

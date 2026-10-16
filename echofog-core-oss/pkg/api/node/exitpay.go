@@ -586,6 +586,9 @@ func (n *NodeApi) startPayGuard() {
 	if err != nil {
 		return
 	}
+	n.vpn.mu.Lock()
+	relay := n.vpn.relayPeer
+	n.vpn.mu.Unlock()
 	n.payInit()
 	ctx, cancel := context.WithCancel(n.node.Ctx)
 	n.pay.mu.Lock()
@@ -601,7 +604,11 @@ func (n *NodeApi) startPayGuard() {
 		query: func(ctx context.Context) (*exit_gateway.AccountInfo, error) {
 			qctx, c := context.WithTimeout(ctx, 15*time.Second)
 			defer c()
-			return dialer.QueryAccount(qctx)
+			info, err := dialer.QueryAccount(qctx)
+			if ctx.Err() == nil {
+				n.noteExitState(relay, info, err) // the first round runs right after connecting
+			}
+			return info, err
 		},
 		pay: func(ctx context.Context, micro int64, info *exit_gateway.AccountInfo) error {
 			pctx, c := context.WithTimeout(ctx, 90*time.Second)

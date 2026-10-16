@@ -44,7 +44,7 @@ func startSharing(h *api.NodeApi, price int64, freeKB, uploadMbps int) {
 	kbps := uploadMbps * 1000
 	if kbps <= 0 {
 		if !waitForPeers(h, 3*time.Minute) {
-			fmt.Println("Exit sharing not started: no peers to measure upload speed against. Set --exit-upload-mbps.")
+			fmt.Println("Exit sharing not started: no peers to measure upload speed against. Set --exit-upload-mbps (ECHOFOG_EXIT_UPLOAD_MBPS), e.g. 100.")
 			return
 		}
 		measured, err := h.MeasureUploadCapacity()

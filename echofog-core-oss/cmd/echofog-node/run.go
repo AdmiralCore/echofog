@@ -55,6 +55,7 @@ type options struct {
 	exitPrice  string
 	exitFreeKB int
 	exitMbps   int
+	exitFree   string
 
 	statusAddr string
 	statsEvery time.Duration
@@ -102,7 +103,8 @@ func parseRunFlags(args []string) options {
 	f.BoolVar(&o.exit, "exit", envBool("ECHOFOG_EXIT", false), "share this connection as a public exit node and publish it to the DHT")
 	f.StringVar(&o.exitPrice, "exit-price", getEnv("ECHOFOG_EXIT_PRICE", "0"), "exit price in dollars per GB, paid in TON or USDT, e.g. 0.05 (0 = free)")
 	f.IntVar(&o.exitFreeKB, "exit-free-kb", int(envInt64("ECHOFOG_EXIT_FREE_KB", 512)), "free test traffic per client per day in KB (0-1024, used when the exit is priced)")
-	f.IntVar(&o.exitMbps, "exit-upload-mbps", int(envInt64("ECHOFOG_EXIT_UPLOAD_MBPS", 0)), "upload speed to advertise in Mbit/s (0 = measure against peers)")
+	f.IntVar(&o.exitMbps, "exit-upload-mbps", int(envInt64("ECHOFOG_EXIT_UPLOAD_MBPS", 0)), "upload speed to advertise in Mbit/s (0 = measure against peers, which needs peers connected first; set it on a server)")
+	f.StringVar(&o.exitFree, "exit-free-peers", getEnv("ECHOFOG_EXIT_FREE_PEERS", ""), "comma-separated peer IDs this exit serves for free, without quota or payment (e.g. your own devices); replaces the list saved in the data directory")
 
 	f.StringVar(&o.statusAddr, "status-addr", getEnv("ECHOFOG_STATUS_ADDR", "127.0.0.1:7070"), "local address of the status endpoint used by \"status\" and \"wallet\" ('' disables it; keep it on loopback)")
 	every, _ := time.ParseDuration(getEnv("ECHOFOG_STATS_EVERY", "1m"))
@@ -255,6 +257,11 @@ func runCmd(args []string) int {
 	started := time.Now()
 
 	h := api.NewNodeApi(echoNode)
+	if free := splitCSV(o.exitFree); len(free) > 0 {
+		if err := h.SetExitFreePeers(free); err != nil {
+			fatal("--exit-free-peers: %v", err)
+		}
+	}
 	if o.exit {
 		go startSharing(h, price, o.exitFreeKB, o.exitMbps)
 	}
@@ -315,6 +322,9 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 	}
 	if o.exit {
 		fmt.Printf("Exit:          sharing, $%s per GB (paid in TON or USDT), %d KB free per client per day\n", o.exitPrice, o.exitFreeKB)
+		if free := h.GetExitFreePeers(); len(free) > 0 {
+			fmt.Printf("               free without limits for %d peer(s) on the free list\n", len(free))
+		}
 	}
 	if o.useExit != "" {
 		fmt.Printf("SOCKS5 proxy:  %s through exit %s\n", localProxyAddr(o.socks5), o.useExit)
