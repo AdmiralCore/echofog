@@ -75,6 +75,16 @@ func (r *reassembler) add(p *MediaPacket, now time.Time) ([]byte, bool) {
 	return out, true
 }
 
+// have reports which fragments of a pending unit have arrived.
+func (r *reassembler) have(k unitKey) uint16 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if u := r.pending[k]; u != nil {
+		return u.have
+	}
+	return 0
+}
+
 // expire drops incomplete units older than the timeout and reports how many were lost.
 func (r *reassembler) expire(now time.Time) int {
 	r.mu.Lock()

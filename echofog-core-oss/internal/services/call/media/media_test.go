@@ -118,21 +118,21 @@ func newKey(t testing.TB) []byte {
 
 func TestMediaPacket_SealOpenFragmentsAndAAD(t *testing.T) {
 	key := newKey(t)
-	payload := make([]byte, 3500) // > 3 fragments
+	payload := make([]byte, 3500) // 3 fragments
 	_, _ = rand.Read(payload)
 
 	unit := &MediaPacket{Kind: FrameVideo, Seq: 77, Timestamp: 123, Broadcaster: pid(1), StreamID: "screen-1", Payload: payload}
 	frags, err := SealUnit(unit, key)
 	require.NoError(t, err)
-	require.Len(t, frags, 4)
+	require.Len(t, frags, 3)
 
 	var ct []byte
 	for i, raw := range frags {
-		assert.LessOrEqual(t, len(raw), MaxFragmentPayload+fixedHeaderLen+fragFieldsLen+len(unit.StreamID))
+		assert.LessOrEqual(t, len(raw), DatagramBudget)
 		p, err := Decode(raw)
 		require.NoError(t, err)
 		assert.Equal(t, uint8(i), p.FragIdx)
-		assert.Equal(t, uint8(4), p.FragCount)
+		assert.Equal(t, uint8(3), p.FragCount)
 		assert.Equal(t, unit.Broadcaster, p.Broadcaster)
 		ct = append(ct, p.Payload...)
 	}
@@ -156,8 +156,28 @@ func TestMediaPacket_SealOpenFragmentsAndAAD(t *testing.T) {
 
 	_, err = SealUnit(unit, []byte("short"))
 	assert.ErrorIs(t, err, ErrBadKey)
-	_, err = SealUnit(&MediaPacket{Kind: FrameVideo, StreamID: "s", Payload: make([]byte, MaxFragments*MaxFragmentPayload)}, key)
+	_, err = SealUnit(&MediaPacket{Kind: FrameVideo, StreamID: "s", Payload: make([]byte, MaxFragments*fragmentPayload(1))}, key)
 	assert.ErrorIs(t, err, ErrUnitTooLarge)
+}
+
+func TestMediaPacket_UnitThatFitsTravelsAsOneDatagram(t *testing.T) {
+	key := newKey(t)
+	for _, id := range []string{"s", "screen-1", string(bytes.Repeat([]byte{'x'}, MaxStreamIDLen))} {
+		fits := DatagramBudget - SealOverhead(len(id))
+		one, err := SealUnit(&MediaPacket{Kind: FrameVideo, StreamID: id, Payload: make([]byte, fits)}, key)
+		require.NoError(t, err)
+		require.Len(t, one, 1, id)
+		assert.Equal(t, DatagramBudget, len(one[0]), "a full unit uses the whole budget")
+
+		two, err := SealUnit(&MediaPacket{Kind: FrameVideo, StreamID: id, Payload: make([]byte, fits+1)}, key)
+		require.NoError(t, err)
+		require.Len(t, two, 2, id)
+		assert.InDelta(t, len(two[0]), len(two[1]), 1, "fragments are split evenly")
+	}
+	// a typical Chrome RTP packet with a short stream ID is a single datagram
+	one, err := SealUnit(&MediaPacket{Kind: FrameVideo, StreamID: "screen-1", Payload: make([]byte, 1100)}, key)
+	require.NoError(t, err)
+	assert.Len(t, one, 1)
 }
 
 func TestMediaPacket_DecodeRejectsMalformed(t *testing.T) {
@@ -348,6 +368,112 @@ func TestMediaDispatcher_VideoTreeWatchingAndLoss(t *testing.T) {
 	time.Sleep(reorderWindow + 100*time.Millisecond)
 	assert.Equal(t, int32(1), losses.Load())
 	assert.Equal(t, bytes.Repeat([]byte{2}, 1800), consumer.videoPackets[0].Payload)
+}
+
+// A fragment lost between a relay and its child comes back from the relay's ring after a NACK,
+// so the child never asks the broadcaster for a keyframe.
+func TestMediaDispatcher_NackRecoversLostFragment(t *testing.T) {
+	bcast, relay, child, stranger := pid(1), pid(2), pid(3), pid(9)
+	key := newKey(t)
+	manifest := &tree.StreamManifest{
+		StreamID: "s1", Broadcaster: bcast, Epoch: 2, Subscribers: []types.PeerID{relay, child},
+		ParentMap:        map[types.PeerID]types.PeerID{relay: bcast, child: relay},
+		DistributionTree: map[types.PeerID][]types.PeerID{bcast: {relay}, relay: {child}},
+	}
+	relayEngine, childEngine := tree.NewStreamTreeEngine(), tree.NewStreamTreeEngine()
+	relayEngine.ApplyManifest(manifest)
+	childEngine.ApplyManifest(manifest)
+
+	relaySender := &mockSender{}
+	r := NewMediaDispatcher(relay, relaySender, nil, relayEngine)
+	defer r.Close()
+	require.NoError(t, r.SetRoomKey(key))
+
+	consumer := &mockConsumer{}
+	c := NewMediaDispatcher(child, &mockSender{}, consumer, childEngine)
+	defer c.Close()
+	require.NoError(t, c.SetRoomKey(key))
+	c.SetStreamWatching("s1", true)
+	var losses atomic.Int32
+	c.OnVideoLoss = func(string, types.PeerID) { losses.Add(1) }
+	nacks := make(chan []NackEntry, 4)
+	c.OnVideoNack = func(streamID string, lost []NackEntry) {
+		assert.Equal(t, "s1", streamID)
+		nacks <- lost
+	}
+
+	// the relay forwards three two-fragment units; fragment 1 of seq 2 never reaches the child
+	for seq := uint32(1); seq <= 3; seq++ {
+		frags, err := SealUnit(&MediaPacket{Kind: FrameVideo, Seq: seq, Broadcaster: bcast, StreamID: "s1", Payload: bytes.Repeat([]byte{byte(seq)}, 1800)}, key)
+		require.NoError(t, err)
+		require.Len(t, frags, 2)
+		for _, f := range frags {
+			require.NoError(t, r.ProcessIncomingVideo(f, bcast))
+		}
+	}
+	require.Eventually(t, func() bool { return len(relaySender.to(child)) == 6 }, time.Second, 5*time.Millisecond)
+	for _, f := range relaySender.to(child) {
+		if p, _ := Decode(f.data); p.Seq == 2 && p.FragIdx == 1 {
+			continue
+		}
+		require.NoError(t, c.ProcessIncomingVideo(f.data, relay))
+	}
+	_, v := consumer.counts()
+	require.Equal(t, 2, v)
+
+	var lost []NackEntry
+	select {
+	case lost = <-nacks:
+	case <-time.After(reorderWindow):
+		t.Fatal("no NACK before the reorder window ran out")
+	}
+	require.Equal(t, []NackEntry{{Seq: 2, Have: 1}}, lost, "the child already holds fragment 0")
+
+	assert.Empty(t, r.ServeNack(stranger, "s1", lost), "only children may pull from the ring")
+	assert.Zero(t, r.Stats().Retransmitted)
+
+	assert.Empty(t, r.ServeNack(child, "s1", lost), "the relay has the unit, nothing to ask upstream")
+	require.Eventually(t, func() bool { return len(relaySender.to(child)) == 7 }, time.Second, 5*time.Millisecond)
+	resent := relaySender.to(child)[6]
+	p, err := Decode(resent.data)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), p.Seq)
+	assert.Equal(t, uint8(1), p.FragIdx)
+	assert.False(t, resent.reliable, "resent fragments ride datagrams like the original")
+	require.NoError(t, c.ProcessIncomingVideo(resent.data, relay))
+
+	_, v = consumer.counts()
+	assert.Equal(t, 3, v)
+	assert.Equal(t, bytes.Repeat([]byte{2}, 1800), consumer.videoPackets[2].Payload)
+	time.Sleep(reorderWindow + 100*time.Millisecond)
+	assert.Zero(t, losses.Load(), "a recovered unit needs no keyframe")
+	assert.Equal(t, uint64(1), r.Stats().Retransmitted)
+	assert.Positive(t, c.Stats().NackedUnits)
+
+	// a unit the relay never got either is passed upstream, once per holdoff
+	up := r.ServeNack(child, "s1", []NackEntry{{Seq: 40}})
+	assert.Equal(t, []NackEntry{{Seq: 40}}, up)
+	assert.Empty(t, r.ServeNack(child, "s1", []NackEntry{{Seq: 40}}), "already asked a moment ago")
+}
+
+func TestFragRing_EvictsOldFragments(t *testing.T) {
+	r := newFragRing()
+	now := time.Now()
+	r.put("s", 1, 0, 2, []byte("a"), now)
+	r.put("s", 1, 1, 2, []byte("b"), now)
+	r.put("s", 2, 0, 1, []byte("c"), now.Add(retransmitWindow/2))
+
+	send, held, complete := r.lookup("s", 1, 0b01, now)
+	assert.Equal(t, [][]byte{[]byte("b")}, send)
+	assert.Equal(t, uint16(0b11), held)
+	assert.True(t, complete)
+
+	_, _, complete = r.lookup("s", 1, 0, now.Add(retransmitWindow))
+	assert.False(t, complete, "too old to resend")
+	r.expire(now.Add(retransmitWindow))
+	assert.Len(t, r.units, 1)
+	send, _, _ = r.lookup("s", 2, 0, now.Add(retransmitWindow))
+	assert.Len(t, send, 1)
 }
 
 func TestOutbox_SlowPeerDoesNotBlockOthersAndFallsBack(t *testing.T) {

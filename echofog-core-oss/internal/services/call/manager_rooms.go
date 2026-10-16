@@ -62,6 +62,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		m.mu.Unlock()
 		return err
 	}
+	room.Dispatcher.OnVideoNack = m.sendNack
 	room.Dispatcher.OnVideoLoss = func(streamID string, _ types.PeerID) { m.requestKeyframe(streamID) }
 
 	if b, err := bridge.NewLocalMediaBridge(bridge.Options{

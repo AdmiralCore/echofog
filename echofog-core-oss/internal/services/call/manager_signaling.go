@@ -296,6 +296,14 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			m.ensureConnectedLocked(sender)
 		}
 
+	case signaling.ActionNack:
+		var np signaling.NackPayload
+		if decodePayload(env.Payload, &np) == nil {
+			if up := room.Dispatcher.ServeNack(sender, np.StreamID, np.Lost); len(up) > 0 {
+				m.nackUpstreamLocked(room, np.StreamID, up)
+			}
+		}
+
 	case signaling.ActionKeyframeRequest:
 		var streamID string
 		if decodePayload(env.Payload, &streamID) == nil {

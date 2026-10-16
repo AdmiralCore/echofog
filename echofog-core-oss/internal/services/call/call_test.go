@@ -458,6 +458,81 @@ func TestRoom_KeyframeRequestReachesBroadcaster(t *testing.T) {
 	assert.Positive(t, b.cm.KeyframesServed())
 }
 
+// One fragment lost on one tree link is resent by the parent after a NACK: every viewer gets
+// every unit and nobody asks the broadcaster for a keyframe.
+func TestRoom_LostFragmentRecoveredByNack(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 6)
+	b := nodes[3]
+	q, _ := tree.QualityByID("720p30")
+	require.NoError(t, b.cm.StartStream("s", "screen", q))
+	for _, nd := range nodes {
+		if nd != b {
+			require.NoError(t, nd.cm.WatchStream("s"))
+		}
+	}
+	allGot := func(n int) func() bool {
+		return func() bool {
+			for _, nd := range nodes {
+				if nd != b && nd.log.count(media.FrameVideo, b.id, "s") < n {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	// every node holds the full distribution tree before anything is sent
+	require.Eventually(t, func() bool {
+		for _, nd := range nodes {
+			sm, ok := nd.cm.StreamTree("s")
+			if !ok || len(sm.ParentMap) != len(nodes)-1 {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 20*time.Millisecond)
+	require.NoError(t, b.cm.PublishVideo("s", unit(0, 1500))) // seq 1
+	require.Eventually(t, allGot(1), 5*time.Second, 20*time.Millisecond)
+	time.Sleep(keyframeMinInterval) // let the join-time keyframe requests settle
+
+	var dropped atomic.Bool
+	var keyframeRequests, nackSignals atomic.Int32
+	m.mu.Lock()
+	m.drop = func(t net_types.MessageType, payload []byte) bool {
+		switch t {
+		case net_types.TypeCallSignaling:
+			if env, err := signaling.DecodeSignal(payload); err == nil {
+				switch env.Action {
+				case signaling.ActionKeyframeRequest:
+					keyframeRequests.Add(1)
+				case signaling.ActionNack:
+					nackSignals.Add(1)
+				}
+			}
+		case net_types.TypeCallMediaVideo:
+			p, err := media.Decode(payload)
+			// the first copy of fragment 1 of seq 2 is lost, on whichever link carries it first
+			return err == nil && p.Seq == 2 && p.FragIdx == 1 && dropped.CompareAndSwap(false, true)
+		}
+		return false
+	}
+	m.mu.Unlock()
+
+	require.NoError(t, b.cm.PublishVideo("s", unit(1, 1500))) // seq 2, two fragments
+	require.NoError(t, b.cm.PublishVideo("s", unit(2, 1500))) // seq 3 reveals the gap
+	require.Eventually(t, allGot(3), 5*time.Second, 20*time.Millisecond)
+	require.True(t, dropped.Load())
+
+	time.Sleep(300 * time.Millisecond) // past the 200 ms reorder window that would ask for a keyframe
+	assert.Positive(t, nackSignals.Load())
+	assert.Zero(t, keyframeRequests.Load(), "the NACK recovered the unit, no keyframe needed")
+	var retransmitted uint64
+	for _, nd := range nodes {
+		retransmitted += nd.cm.MediaStats().Retransmitted
+	}
+	assert.Positive(t, retransmitted)
+}
+
 func TestRoom_RejectsForgedAndUnauthorizedSignals(t *testing.T) {
 	m := newMesh()
 	nodes, key := newRoom(t, m, 4)

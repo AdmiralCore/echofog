@@ -37,6 +37,8 @@ type DispatcherStats struct {
 	DecryptFailures  uint64
 	Malformed        uint64
 	IncompleteUnits  uint64
+	Retransmitted    uint64 // fragments resent to children from the retransmit ring
+	NackedUnits      uint64 // lost units this node asked its parent to resend
 	Outbox           OutboxStats
 }
 
@@ -60,15 +62,22 @@ type MediaDispatcher struct {
 	lastForward      map[string]time.Time              // stream -> last time we sent anything to its children
 	lastFromFeeder   map[linkKey]time.Time             // (stream, feeder) -> last frame received from it
 	watchSince       map[linkKey]time.Time             // (stream, feeder) -> first time we waited on it
+	nackAsked        map[ringKey]time.Time             // (stream, seq) -> last time we asked upstream
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
 	reasm    *reassembler
+	ring     *fragRing
 
-	// OnVideoLoss fires when a watched stream has a gap; the call layer turns it into a keyframe request.
+	// OnVideoNack fires shortly after a watched stream has a gap; the call layer sends the NACK
+	// to the stream's parent, which resends from its ring.
+	OnVideoNack func(streamID string, lost []NackEntry)
+	// OnVideoLoss fires when a gap outlives the reorder window despite NACKs; the call layer turns
+	// it into a keyframe request.
 	OnVideoLoss func(streamID string, broadcaster types.PeerID)
 
 	audioDelivered, videoDelivered, relayed, duplicates, decryptFailures, malformed, incomplete atomic.Uint64
+	retransmitted, nacked                                                                       atomic.Uint64
 
 	stop chan struct{}
 	once sync.Once
@@ -88,8 +97,10 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 		lastForward:     make(map[string]time.Time),
 		lastFromFeeder:  make(map[linkKey]time.Time),
 		watchSince:      make(map[linkKey]time.Time),
+		nackAsked:       make(map[ringKey]time.Time),
 		dedup:           newDedupTable(),
 		reasm:           newReassembler(),
+		ring:            newFragRing(),
 		stop:            make(chan struct{}),
 	}
 	if sender != nil {
@@ -253,6 +264,7 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 			}
 		}
 		if forwarded {
+			d.ring.put(p.StreamID, p.Seq, p.FragIdx, p.FragCount, rawBytes, now)
 			d.markForwarded(p.StreamID, now)
 		}
 	}
@@ -337,6 +349,8 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 	if len(gap) == 0 {
 		return
 	}
+	time.AfterFunc(nackDelay, func() { d.nackGap(k, gap) })
+	time.AfterFunc(nackRetry, func() { d.nackGap(k, gap) })
 	time.AfterFunc(reorderWindow, func() {
 		still := false
 		d.mu.Lock()
@@ -402,7 +416,8 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 	}
 	d.mu.Unlock()
 
-	frags, err := d.seal(FrameVideo, streamID, ctr.Add(1), videoBytes)
+	seq := ctr.Add(1)
+	frags, err := d.seal(FrameVideo, streamID, seq, videoBytes)
 	if err != nil {
 		return err
 	}
@@ -410,14 +425,19 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 		return nil
 	}
 	subs := d.streamEngine.GetDownstream(streamID, d.selfID)
+	if len(subs) == 0 {
+		return nil
+	}
+	now := time.Now()
+	for i, f := range frags {
+		d.ring.put(streamID, seq, uint8(i), uint8(len(frags)), f, now)
+	}
 	for _, sub := range subs {
 		for _, f := range frags {
 			d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, f)
 		}
 	}
-	if len(subs) > 0 {
-		d.markForwarded(streamID, time.Now())
-	}
+	d.markForwarded(streamID, now)
 	return nil
 }
 
@@ -495,6 +515,8 @@ func (d *MediaDispatcher) Stats() DispatcherStats {
 		DecryptFailures:  d.decryptFailures.Load(),
 		Malformed:        d.malformed.Load(),
 		IncompleteUnits:  d.incomplete.Load(),
+		Retransmitted:    d.retransmitted.Load(),
+		NackedUnits:      d.nacked.Load(),
 	}
 	if d.outbox != nil {
 		s.Outbox = d.outbox.Stats()
@@ -518,7 +540,13 @@ func (d *MediaDispatcher) housekeeping() {
 			lastGC = now
 			d.incomplete.Add(uint64(d.reasm.expire(now)))
 			d.dedup.gc(now, 30*time.Second)
+			d.ring.expire(now)
 			d.mu.Lock()
+			for k, ts := range d.nackAsked {
+				if now.Sub(ts) > time.Second {
+					delete(d.nackAsked, k)
+				}
+			}
 			for k, ts := range d.lastFromFeeder {
 				if now.Sub(ts) > 30*time.Second {
 					delete(d.lastFromFeeder, k)

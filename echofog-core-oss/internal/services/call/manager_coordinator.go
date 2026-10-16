@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -265,7 +266,21 @@ func (m *CallManager) reportLocked(room *ActiveRoomState, reporter types.PeerID,
 }
 
 // ---------------------------------------------------------------------------------------------
-// Keyframes
+// Loss recovery: a NACK to the parent first, a keyframe request once the reorder window runs out
+
+func (m *CallManager) sendNack(streamID string, lost []media.NackEntry) {
+	m.mu.Lock()
+	if room := m.activeRoom; room != nil {
+		m.nackUpstreamLocked(room, streamID, lost)
+	}
+	m.unlockAndFlush()
+}
+
+func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string, lost []media.NackEntry) {
+	if up, ok := room.StreamEngine.GetUpstream(streamID, m.selfID); ok {
+		m.sendLocked(room, up, signaling.ActionNack, signaling.NackPayload{StreamID: streamID, Lost: lost})
+	}
+}
 
 func (m *CallManager) requestKeyframe(streamID string) {
 	m.mu.Lock()

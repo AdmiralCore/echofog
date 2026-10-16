@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -46,6 +47,7 @@ const (
 	ActionAdopt           SignalAction = "adopt"
 	ActionKeyframeRequest SignalAction = "keyframe_request"
 	ActionKicked          SignalAction = "kicked"
+	ActionNack            SignalAction = "nack"
 )
 
 // Kept for source compatibility with older callers.
@@ -128,6 +130,12 @@ type ReparentPayload struct {
 }
 
 // ReportPayload flags a member as sending spam or garbage media.
+// NackPayload asks a node's parent on a stream tree to resend lost units from its retransmit ring.
+type NackPayload struct {
+	StreamID string            `json:"stream_id"`
+	Lost     []media.NackEntry `json:"lost"`
+}
+
 type ReportPayload struct {
 	Target types.PeerID `json:"target"`
 	Reason string       `json:"reason"`

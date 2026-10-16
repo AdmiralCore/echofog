@@ -25,10 +25,17 @@ const (
 const (
 	packetVersion = 2
 
-	// MaxFragmentPayload keeps every fragment (header included) under ~1100 bytes so it fits
-	// into a single QUIC datagram even with a conservative path MTU.
-	MaxFragmentPayload = 1000
-	// MaxFragments bounds the size of a single media unit (16 KB of ciphertext).
+	// DatagramBudget is the largest fragment that is sure to fit one QUIC datagram. quic-go starts
+	// every connection at 1280-byte packets and only grows them after path MTU discovery; until
+	// then SendDatagram refuses payloads over 1280 - 1 (type) - 20 (longest connection ID) - 16
+	// (AEAD tag) = 1243 bytes, and the peer wrapper spends one byte of that on the message type.
+	// UDP obfuscation (internal/network/dpi) wraps the socket under QUIC, so its 12 bytes grow
+	// the UDP packet but do not shrink this budget.
+	DatagramBudget = 1280 - 1 - 20 - 16 - 1
+	// MaxFragmentPayload is the ciphertext one fragment carries with the longest stream ID;
+	// shorter IDs leave room for more (see fragmentPayload).
+	MaxFragmentPayload = DatagramBudget - fixedHeaderLen - fragFieldsLen - MaxStreamIDLen
+	// MaxFragments bounds the size of a single media unit (~18 KB of ciphertext).
 	MaxFragments = 16
 	// MaxStreamIDLen bounds the stream identifier carried in every fragment.
 	MaxStreamIDLen = 64
@@ -38,6 +45,8 @@ const (
 	// fragment trailer of the header: fragIdx(1) fragCount(1)
 	fragFieldsLen = 2
 	keyLen        = 32
+	gcmNonceLen   = 12
+	gcmTagLen     = 16
 )
 
 var (
@@ -134,19 +143,33 @@ func SealUnit(unit *MediaPacket, key []byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	count := (len(ct) + MaxFragmentPayload - 1) / MaxFragmentPayload
+	limit := fragmentPayload(len(unit.StreamID))
+	count := (len(ct) + limit - 1) / limit
 	if count > MaxFragments {
 		return nil, ErrUnitTooLarge
 	}
+	// split evenly instead of leaving a runt tail fragment
+	size := (len(ct) + count - 1) / count
 	out := make([][]byte, 0, count)
 	for i := 0; i < count; i++ {
-		end := min((i+1)*MaxFragmentPayload, len(ct))
+		end := min((i+1)*size, len(ct))
 		frag := *unit
 		frag.FragIdx, frag.FragCount = uint8(i), uint8(count)
-		frag.Payload = ct[i*MaxFragmentPayload : end]
+		frag.Payload = ct[i*size : end]
 		out = append(out, frag.Encode())
 	}
 	return out, nil
+}
+
+// fragmentPayload is how much ciphertext fits next to the header of a stream with this ID length.
+func fragmentPayload(streamIDLen int) int {
+	return DatagramBudget - fixedHeaderLen - fragFieldsLen - streamIDLen
+}
+
+// SealOverhead is what sealing adds to a unit in its first fragment: header, nonce and tag. A unit
+// of at most DatagramBudget - SealOverhead(len(streamID)) bytes travels as one fragment.
+func SealOverhead(streamIDLen int) int {
+	return fixedHeaderLen + fragFieldsLen + streamIDLen + gcmNonceLen + gcmTagLen
 }
 
 // OpenUnit authenticates and decrypts a reassembled unit; hdr supplies the shared header fields.
