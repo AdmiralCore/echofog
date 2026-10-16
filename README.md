@@ -25,6 +25,7 @@ no commission.
 | use the desktop app: install, VPN, contacts, calls | [Getting started](docs/getting-started.md) |
 | get quick, honest answers (safety, logs, legal risk of sharing) | [FAQ](docs/faq.md) |
 | run a node on a server or at home | [Run a node](docs/run-a-node.md) |
+| put a node on a VPS with Docker, step by step | [VPS with Docker](docs/deploy-vps.md) |
 | fix "this computer cannot be reached from the Internet" | [Reachability](docs/reachability.md) |
 | understand how it works under the hood | [How it works](docs/how-it-works.md) |
 | configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |
