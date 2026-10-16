@@ -112,7 +112,10 @@ privately — see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Each module carries its own `LICENSE` file; see
-[`echofog-core-oss/LICENSE`](echofog-core-oss/LICENSE) and
-[`echofog-desktop-oss/LICENSE`](echofog-desktop-oss/LICENSE). The embedded Wintun driver is
-redistributed unmodified from [wintun.net](https://www.wintun.net) under its own terms.
+EchoFog is licensed under the [Mozilla Public License 2.0](LICENSE) (MPL-2.0): changes to
+EchoFog's own files must stay open under the same license when you distribute them, while the code
+can be combined with code under other licenses. Each module carries the same `LICENSE`. Third-party
+code keeps its own licenses — see
+[`echofog-core-oss/THIRD_PARTY_NOTICES.md`](echofog-core-oss/THIRD_PARTY_NOTICES.md). The embedded
+Wintun driver is redistributed unmodified from [wintun.net](https://www.wintun.net) under its own
+terms.

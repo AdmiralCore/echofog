@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "EchoFogVault: per-user TON deposit that proxy nodes are paid from with signed cumulative vouchers",
-  "license": "SEE LICENSE IN ../../LICENSE",
+  "license": "MPL-2.0",
   "scripts": {
     "build": "tact --config tact.config.json && node scripts/copyCode.js",
     "test": "jest --verbose",

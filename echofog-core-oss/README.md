@@ -87,6 +87,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
-GNU Affero General Public License v3.0 (AGPL-3.0), see [LICENSE](LICENSE). Anyone who runs a modified
-version as a network service has to offer its source to the users of that service. Third-party code
-keeps its own licenses (see THIRD_PARTY_NOTICES.md where present).
+Mozilla Public License 2.0 (MPL-2.0), see [LICENSE](LICENSE). Changes to EchoFog's own files must
+stay open under the same license when you distribute them; you may combine EchoFog with code under
+other licenses. Third-party code keeps its own licenses (see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

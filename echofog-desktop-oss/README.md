@@ -49,5 +49,5 @@ UI sounds are synthesized in the app (`frontend/src/lib/sounds.js`), no sound fi
 
 ## License
 
-GNU Affero General Public License v3.0 (AGPL-3.0), see [LICENSE](LICENSE). The core it builds on is
-under the same license.
+Mozilla Public License 2.0 (MPL-2.0), see [LICENSE](LICENSE). The core it builds on is under the
+same license.
