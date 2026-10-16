@@ -173,6 +173,8 @@ export function SetUploadCapacity(arg1:number):Promise<void>;
 
 export function SetVADState(arg1:boolean,arg2:number):Promise<void>;
 
+export function SetVPNAutoSwitch(arg1:boolean):Promise<void>;
+
 export function SetWholeComputer(arg1:boolean):Promise<void>;
 
 export function StartGroupCall(arg1:string):Promise<node.GroupCall>;

@@ -27,9 +27,11 @@ const (
 	// voucherChunkMB: with vouchers nothing goes on-chain per chunk, so chunks can be small and
 	// what is paid ahead stays at a fraction of a cent.
 	voucherChunkMB = 64
+	// voucherMaxChunkMB caps one voucher when the traffic is fast (a minute of 4K is ~250 MB).
+	voucherMaxChunkMB = 1024
 	// voucherGuardEvery: the guard looks more often in voucher mode, so a fast download never
 	// runs through the 16 MB left when the next chunk is bought.
-	voucherGuardEvery = 3 * time.Second
+	voucherGuardEvery = 2 * time.Second
 	// voucherQuoteTolerance: the exit's nanoton price may be this much above ours (rates differ
 	// a little between sources); more and the client pays by transfer instead.
 	voucherQuoteTolerance = 0.05

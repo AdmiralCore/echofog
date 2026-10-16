@@ -9,8 +9,9 @@
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
   import { me } from '../stores/session.js';
+  import { view } from '../stores/nav.js';
 
-  let vpn = { running: false, listenAddr: '', relayPeerId: '', bytesRx: 0, bytesTx: 0, activeConns: 0, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, wholeComputer: false, wholeComputerSupported: false, wholeComputerError: '' };
+  let vpn = { running: false, listenAddr: '', relayPeerId: '', bytesRx: 0, bytesTx: 0, activeConns: 0, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: false, wholeComputerError: '' };
   let exits = [];
   let selected = 'auto';
   let pay = { active: false, canPay: false, pricePerGb: '0', remainingGb: 0, needsPayment: false, autoPay: false, chunkUsdt: '1', dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: false, chunkTon: '', pending: false, note: '', lastError: '', paysByVault: false };
@@ -128,6 +129,13 @@
     await refresh();
   });
 
+  const setAutoSwitch = (on) => act('autoswitch', async () => {
+    await App.SetVPNAutoSwitch(on);
+    await refresh();
+  });
+
+  const topUpDeposit = () => view.set('wallet');
+
   const setFreePeers = (ids) => act('free', async () => {
     await App.SetExitFreePeers(ids);
     await refresh();
@@ -167,7 +175,7 @@
       setInterval(() => { refresh(); loadExits(false).catch(() => {}); }, 15000),
       setInterval(() => { if (vpn.running) refreshPay(); }, 5000),
     ];
-    for (const t of ['vpn:started', 'vpn:stopped', 'vpn:exit_state', 'vpn:whole_computer', 'vpn:payment', 'exit:payment', 'exit:session_started', 'exit:session_closed']) {
+    for (const t of ['vpn:started', 'vpn:stopped', 'vpn:exit_state', 'vpn:searching', 'vpn:switched', 'vpn:whole_computer', 'vpn:payment', 'exit:payment', 'exit:session_started', 'exit:session_closed']) {
       offs.push(on(t, refresh));
     }
   });
@@ -178,6 +186,9 @@
 
   $: connectedExit = exits.find((e) => e.peerId === vpn.relayPeerId);
   // the peer link being up is not enough: the exit itself says whether it serves us
+  // the exit about to be used, to warn before connecting when it is paid
+  $: target = mode === 'manual' ? exits.find((e) => e.peerId === selected) : mode === 'auto' ? best : null;
+  $: switchedRecently = vpn.running && vpn.lastSwitch?.at && Date.now() / 1000 - vpn.lastSwitch.at < 120;
   $: exitProblem = vpn.running && ['disabled', 'quota', 'unreachable'].includes(vpn.exitState) ? vpn.exitState : '';
   $: refusalText = vpn.running && vpn.refused > 0 && vpn.lastRefusalReason
     ? $t('proxy.refused', { n: vpn.refused, reason: $t('proxy.refusal.' + vpn.lastRefusalReason), host: vpn.lastRefusalHost, when: when(vpn.lastRefusalAt, $lang) })
@@ -219,7 +230,12 @@
         </button>
       </div>
 
-      {#if exitProblem}
+      {#if vpn.running && vpn.searching}
+        <p class="small leak-warn row"><span class="spinner"></span> {$t('proxy.searching')}</p>
+      {:else if switchedRecently}
+        <p class="small ok">{$t('proxy.switched', { to: short(vpn.lastSwitch.to), reason: $t('proxy.switchReason.' + vpn.lastSwitch.reason) })}</p>
+      {/if}
+      {#if exitProblem && !vpn.searching}
         <div class="small exit-warn" role="alert">
           <Icon name="shield" size={14} />
           <span>{$t('proxy.exit.' + exitProblem)}
@@ -246,6 +262,10 @@
           {/if}
           {#if vpn.wholeComputerError}<p class="small error">{vpn.wholeComputerError}</p>{/if}
         {/if}
+        <label class="row opt" title={$t('proxy.autoSwitchHint')}>
+          <span class="grow">{$t('proxy.autoSwitch')}<span class="small muted block">{$t('proxy.autoSwitchHint')}</span></span>
+          <input type="checkbox" class="switch" checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.target.checked)} />
+        </label>
       {:else}
         <div class="seg" role="tablist">
           <button role="tab" class:active={mode === 'auto'} aria-selected={mode === 'auto'} on:click={() => (mode = 'auto')}>{$t('proxy.mode.auto')}</button>
@@ -303,6 +323,24 @@
             {/each}
           </div>
         {/if}
+        {#if target && target.pricePerMb > 0}
+          <div class="paid-ahead small">
+            <b class="row"><Icon name="coin" size={14} /> {$t('proxy.paidAhead.title', { price: price(target.pricePerMb, $lang) })}</b>
+            <span>{$t('proxy.paidAhead.free', { kb: target.freeTestKb || 0 })} {#if mode === 'auto'}{$t('proxy.paidAhead.auto')}{/if}</span>
+            <span>{$t('proxy.paidAhead.where')}
+              <span class="tip" title={$t('proxy.pay.srcDepositTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcDeposit')}</span>
+              <span class="tip" title={$t('proxy.pay.srcWalletTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcWallet')}</span>
+            </span>
+            <label class="row opt">
+              <input type="checkbox" checked={pay.autoPay} disabled={busy === 'autopay'} on:change={(e) => saveAutoPay(e.target.checked)} />
+              <span class="grow">{$t('proxy.paidAhead.autoPay', { cap: payForm.cap })}</span>
+            </label>
+          </div>
+        {/if}
+        <label class="row opt" title={$t('proxy.autoSwitchHint')}>
+          <span class="grow">{$t('proxy.autoSwitch')}<span class="small muted block">{$t('proxy.autoSwitchHint')}</span></span>
+          <input type="checkbox" class="switch" checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.target.checked)} />
+        </label>
         {#if mode !== 'direct'}<div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? $t('proxy.searching') : $t('proxy.searchAgain')}</button></div>{/if}
       {/if}
     </div>
@@ -321,6 +359,17 @@
             </p>
           </div>
         </div>
+        {#if pay.needsPayment || pay.remainingGb <= 0}<p class="small leak-warn">{$t('proxy.pay.needLead')}</p>{/if}
+        <div class="row wrap paywith">
+          <span class="small muted">{$t('proxy.pay.source')}</span>
+          <span class="src" class:on={pay.paysByVault} title={$t('proxy.pay.srcDepositTip')}><Icon name="lock" size={13} /> {$t('proxy.pay.srcDeposit')} <Icon name="info" size={12} /></span>
+          <span class="src" class:on={!pay.paysByVault} title={$t('proxy.pay.srcWalletTip')}><Icon name="wallet" size={13} /> {$t('proxy.pay.srcWallet')} <Icon name="info" size={12} /></span>
+          <button class="ghost small" on:click={topUpDeposit}>{$t('proxy.pay.topUpDeposit')}</button>
+        </div>
+        <details class="small muted diff">
+          <summary>{$t('proxy.pay.diffTitle')}</summary>
+          <p>{$t('proxy.pay.diffBody')}</p>
+        </details>
         {#if pay.note}<p class="note">{pay.note}</p>{/if}
         {#if pay.lastError}<p class="small error">{pay.lastError}</p>{/if}
         <div class="row wrap paywith">
@@ -467,6 +516,14 @@
   .chip.ping.mid { color: var(--warn); background: var(--warn-soft); }
   .leak-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; margin-top: 2px; }
   .leak-warn :global(svg) { flex: none; margin-top: 2px; }
+  .paid-ahead { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--warn-soft); line-height: 1.45; }
+  .paid-ahead b { gap: 6px; color: var(--warn); }
+  .paid-ahead input[type='checkbox'] { width: auto; margin: 0; }
+  .tip { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; text-decoration: underline dotted; cursor: help; }
+  .src { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; cursor: help; }
+  .src.on { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .diff summary { cursor: pointer; }
+  .diff p { margin: 6px 0 0; line-height: 1.45; }
   .exit-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; }
   .exit-warn :global(svg) { flex: none; margin-top: 2px; }
   .exit-warn .mono { word-break: break-all; }

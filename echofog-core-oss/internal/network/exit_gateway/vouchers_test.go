@@ -148,7 +148,7 @@ func TestVoucherCreditsWhatItNewlyPaysFor(t *testing.T) {
 	r := b.Accept(context.Background(), "tag-1", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 64*testNanoPerMB))
 	require.True(t, r.OK, r.Error)
 	assert.Equal(t, int64(64<<20), r.Credit, "64 MB paid for")
-	assert.Equal(t, int64(64<<20), b.Available("tag-1"))
+	assert.Equal(t, int64(64<<20+VoucherOverdraftBytes), b.Available("tag-1"), "plus the overdraft of a vault that has paid")
 
 	// the same voucher again (a lost reply, say) credits nothing more; an older one neither
 	r = b.Accept(context.Background(), "tag-1", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 64*testNanoPerMB))
@@ -165,10 +165,35 @@ func TestVoucherCreditsWhatItNewlyPaysFor(t *testing.T) {
 	assert.Equal(t, int64(68<<20), r.Credit)
 	assert.Equal(t, big.NewInt(128*testNanoPerMB).String(), r.Cumulative)
 
-	// what is spent cannot exceed what is there
-	assert.Equal(t, int64(68<<20), b.Spend("tag-1", 100<<20))
+	// what is spent cannot exceed what is there, overdraft included
+	assert.Equal(t, int64(68<<20+VoucherOverdraftBytes), b.Spend("tag-1", 200<<20))
 	assert.Zero(t, b.Available("tag-1"))
 	assert.Zero(t, b.Spend("tag-1", 1))
+	assert.Equal(t, int64(-VoucherOverdraftBytes), b.Terms("tag-1").Credit)
+	assert.Zero(t, b.Terms("tag-1").OverdraftLeft)
+
+	// the next voucher pays the overdraft back first
+	r = b.Accept(context.Background(), "tag-1", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 192*testNanoPerMB))
+	require.True(t, r.OK)
+	assert.Equal(t, int64(64<<20-VoucherOverdraftBytes), r.Credit)
+}
+
+// A vault that has never paid gets no overdraft, nor one that is being withdrawn.
+func TestVoucherOverdraftOnlyForAPayingVault(t *testing.T) {
+	chain := newFakeChain()
+	b := newTestBook(chain, "")
+	assert.Zero(t, b.Available("nobody"))
+	assert.Zero(t, b.Spend("nobody", 1))
+
+	u := newTestUser(t, 1, chain, 1_000_000_000)
+	require.True(t, b.Accept(context.Background(), "t", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, testNanoPerMB)).OK)
+	assert.Equal(t, int64(VoucherOverdraftBytes), b.Terms("t").OverdraftLeft)
+
+	b.mu.Lock()
+	b.data.Accounts[u.vault.StringRaw()].WithdrawAt = 1
+	b.mu.Unlock()
+	assert.Equal(t, int64(bytesPerMB), b.Available("t"), "no overdraft while the deposit is being withdrawn")
+	assert.Zero(t, b.Terms("t").OverdraftLeft)
 }
 
 func TestVoucherRejections(t *testing.T) {
@@ -227,9 +252,17 @@ func TestVoucherRefusedOnceTheVaultIsBeingWithdrawn(t *testing.T) {
 	chain.vaults[u.vault.StringRaw()].WithdrawAt = now.Add(tonwallet.VaultCooldown)
 	chain.mu.Unlock()
 
-	// within a minute the old view is still used, after it the withdrawal is seen
+	// a recent view answers at once (a withdrawal takes a day, the exit can still claim) and is
+	// re-read in the background; after that the withdrawal is seen
 	now = now.Add(2 * vaultCheckEvery)
 	r := b.Accept(ctx, "t", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 2000))
+	assert.True(t, r.OK, "no wait on the chain for a recently checked vault")
+	require.Eventually(t, func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.data.Accounts[u.vault.StringRaw()].WithdrawAt != 0
+	}, 2*time.Second, 10*time.Millisecond)
+	r = b.Accept(ctx, "t", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 3000))
 	assert.False(t, r.OK)
 	assert.Contains(t, r.Error, "withdrawn")
 	assert.Positive(t, r.Credit, "what was already bought stays usable")
@@ -266,7 +299,7 @@ func TestVoucherBookSurvivesARestart(t *testing.T) {
 	require.NoError(t, b.Flush())
 
 	again := newTestBook(chain, path)
-	assert.Equal(t, int64(60<<20), again.Available("t"))
+	assert.Equal(t, int64(60<<20+VoucherOverdraftBytes), again.Available("t"))
 	terms := again.Terms("t")
 	require.NotNil(t, terms)
 	assert.Equal(t, big.NewInt(64*testNanoPerMB).String(), terms.Cumulative)
@@ -465,7 +498,9 @@ func TestVoucherPaidTunnel(t *testing.T) {
 	_, err = io.ReadFull(c, make([]byte, 50_000))
 	require.NoError(t, err)
 	c.Close()
-	require.Eventually(t, func() bool { return book.Available(PayTag(testClient, testExit)) < bytesPerMB-90_000 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return book.Available(PayTag(testClient, testExit)) < VoucherOverdraftBytes+bytesPerMB-90_000
+	}, 2*time.Second, 10*time.Millisecond)
 
 	// a free-listed peer is told so instead of being charged
 	svc.SetFreePeers([]types.PeerID{testClient})
@@ -499,7 +534,7 @@ func TestVoucherReplayFromAnotherPeerDoesNotBind(t *testing.T) {
 		assert.Empty(t, tm.Cumulative+tm.Sig, "the victim's voucher is not shown to the attacker")
 		assert.Zero(t, tm.Credit)
 	}
-	assert.Equal(t, int64(128<<20), b.Available("victim"), "the victim keeps the credit")
+	assert.Equal(t, int64(128<<20+VoucherOverdraftBytes), b.Available("victim"), "the victim keeps the credit (and its overdraft)")
 
 	// the owner reconnecting under a new peer ID binds again with its next voucher
 	require.True(t, b.Accept(ctx, "victim-2", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 129*testNanoPerMB)).OK)

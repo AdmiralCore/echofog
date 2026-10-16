@@ -47,6 +47,10 @@ const (
 	// voucherKeepIdle: an account with nothing owed and nothing left is forgotten after this.
 	voucherKeepIdle   = 30 * 24 * time.Hour
 	voucherFlushEvery = 5 * time.Second
+	// VoucherOverdraftBytes lets a vault that has paid before run this far past zero while its
+	// next voucher is on the way, so a fast download is not cut between two vouchers. The exit
+	// risks at most this much traffic per vault; the next voucher pays it back first.
+	VoucherOverdraftBytes = 32 << 20
 )
 
 var (
@@ -77,7 +81,9 @@ type VaultTerms struct {
 	NanoPerMB int64  `json:"nano_per_mb"` // the exit's price in nanoton, from its USD price
 	Node      string `json:"node"`        // payout address the voucher must name (raw)
 	GlobalID  int32  `json:"global_id"`
-	Credit    int64  `json:"credit"` // voucher-paid bytes left for the caller
+	Credit    int64  `json:"credit"` // voucher-paid bytes left for the caller; negative = overdraft used
+	// OverdraftLeft is how far below zero the caller may still go before the next voucher arrives.
+	OverdraftLeft int64 `json:"overdraft_left,omitempty"`
 	// The latest voucher the exit holds from the caller's vault, so a client that lost its own
 	// record continues from there. The client checks the signature: an exit cannot make it sign
 	// on top of an amount it never signed.
@@ -210,16 +216,26 @@ func (b *VoucherBook) Terms(tag string) *VaultTerms {
 	t := &VaultTerms{NanoPerMB: b.nanoPerMB, Node: b.node.StringRaw(), GlobalID: b.globalID}
 	if a := b.data.Accounts[b.data.Peers[tag]]; a != nil {
 		t.Credit, t.Cumulative, t.Sig = a.Credit, a.Cumulative, a.Sig
+		t.OverdraftLeft = max(0, a.Credit+a.overdraft()) - max(0, a.Credit)
 	}
 	return t
 }
 
-// Available is the voucher-paid bytes tag can still use.
+// overdraft is how far below zero this account may go: only a vault that has paid with a
+// voucher before, still holds a deposit and is not being withdrawn.
+func (a *voucherAccount) overdraft() int64 {
+	if a.WithdrawAt != 0 || bigOf(a.Deposit).Sign() <= 0 || bigOf(a.Cumulative).Sign() <= 0 {
+		return 0
+	}
+	return VoucherOverdraftBytes
+}
+
+// Available is the voucher-paid bytes tag can still use, its overdraft included.
 func (b *VoucherBook) Available(tag string) int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if a := b.data.Accounts[b.data.Peers[tag]]; a != nil && a.Credit > 0 {
-		return a.Credit
+	if a := b.data.Accounts[b.data.Peers[tag]]; a != nil {
+		return max(0, a.Credit+a.overdraft())
 	}
 	return 0
 }
@@ -232,10 +248,14 @@ func (b *VoucherBook) Spend(tag string, n int64) int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	a := b.data.Accounts[b.data.Peers[tag]]
-	if a == nil || a.Credit <= 0 {
+	if a == nil {
 		return 0
 	}
-	used := min(n, a.Credit)
+	left := a.Credit + a.overdraft()
+	if left <= 0 {
+		return 0
+	}
+	used := min(n, left)
 	a.Credit -= used
 	b.dirty = true
 	return used
@@ -348,10 +368,21 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	if price <= 0 {
 		return VoucherReply{Error: "this exit does not take vouchers right now"}
 	}
-	if now.Sub(checked) > vaultCheckEvery {
-		if err := b.refresh(ctx, sv.Vault); err != nil && now.Sub(checked) > vaultStaleOK {
+	switch age := now.Sub(checked); {
+	case age > vaultStaleOK:
+		// never read, or too long ago: the client waits for the chain
+		if err := b.refresh(ctx, sv.Vault); err != nil {
 			return VoucherReply{Error: "cannot check the vault on the TON network, try again shortly"}
 		}
+	case age > vaultCheckEvery:
+		// a recent view is safe (withdrawals take a day): answer now and re-read in the
+		// background, so a voucher never waits seconds on the chain while the client's traffic
+		// runs dry
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = b.refresh(rctx, sv.Vault)
+		}()
 	}
 
 	b.mu.Lock()

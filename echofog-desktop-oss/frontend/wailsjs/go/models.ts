@@ -782,6 +782,24 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class VPNSwitch {
+	    from: string;
+	    to: string;
+	    reason: string;
+	    at: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new VPNSwitch(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from = source["from"];
+	        this.to = source["to"];
+	        this.reason = source["reason"];
+	        this.at = source["at"];
+	    }
+	}
 	export class VPNStatus {
 	    running: boolean;
 	    listenAddr: string;
@@ -792,6 +810,10 @@ export namespace node {
 	    tunnelReady: boolean;
 	    tunnelNotice: string;
 	    exitState: string;
+	    autoSwitch: boolean;
+	    searching: boolean;
+	    switches: number;
+	    lastSwitch: VPNSwitch;
 	    refused: number;
 	    lastRefusalReason: string;
 	    lastRefusalHost: string;
@@ -815,6 +837,10 @@ export namespace node {
 	        this.tunnelReady = source["tunnelReady"];
 	        this.tunnelNotice = source["tunnelNotice"];
 	        this.exitState = source["exitState"];
+	        this.autoSwitch = source["autoSwitch"];
+	        this.searching = source["searching"];
+	        this.switches = source["switches"];
+	        this.lastSwitch = this.convertValues(source["lastSwitch"], VPNSwitch);
 	        this.refused = source["refused"];
 	        this.lastRefusalReason = source["lastRefusalReason"];
 	        this.lastRefusalHost = source["lastRefusalHost"];
@@ -823,6 +849,24 @@ export namespace node {
 	        this.wholeComputerSupported = source["wholeComputerSupported"];
 	        this.wholeComputerError = source["wholeComputerError"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

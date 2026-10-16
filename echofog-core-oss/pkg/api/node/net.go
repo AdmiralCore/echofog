@@ -1,11 +1,13 @@
 package node
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
 
@@ -46,14 +48,28 @@ type VPNStatus struct {
 	ExitState string `json:"exitState"`
 	// Refused counts streams the exit would not carry. The latest one: why ("denied", "payment",
 	// "dial failed", "timed out" or "exit unreachable"), for which host:port, and when (Unix seconds).
-	Refused           uint64 `json:"refused"`
-	LastRefusalReason string `json:"lastRefusalReason"`
-	LastRefusalHost   string `json:"lastRefusalHost"`
-	LastRefusalAt     int64  `json:"lastRefusalAt"`
+	// AutoSwitch: the proxy moves to another exit by itself when this one stops working.
+	// Searching: it is looking for one right now. Switches counts the moves since connecting.
+	AutoSwitch        bool      `json:"autoSwitch"`
+	Searching         bool      `json:"searching"`
+	Switches          int       `json:"switches"`
+	LastSwitch        VPNSwitch `json:"lastSwitch"`
+	Refused           uint64    `json:"refused"`
+	LastRefusalReason string    `json:"lastRefusalReason"`
+	LastRefusalHost   string    `json:"lastRefusalHost"`
+	LastRefusalAt     int64     `json:"lastRefusalAt"`
 	// WholeComputer: every application goes through the exit via the TUN device
 	WholeComputer          bool   `json:"wholeComputer"`
 	WholeComputerSupported bool   `json:"wholeComputerSupported"`
 	WholeComputerError     string `json:"wholeComputerError"`
+}
+
+// VPNSwitch is the last automatic move to another exit.
+type VPNSwitch struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Reason string `json:"reason"` // "lost", "disabled", "unreachable" or "failing"
+	At     int64  `json:"at"`
 }
 
 type vpnState struct {
@@ -62,6 +78,13 @@ type vpnState struct {
 	relayPeer  string
 	exitState  string // see VPNStatus.ExitState
 	exitNotice string
+
+	usingSince time.Time            // when the proxy moved to relayPeer
+	stopWatch  context.CancelFunc   // ends runFailover
+	avoid      map[string]time.Time // exits that failed recently, not chosen again until then
+	searching  bool
+	switches   int
+	lastSwitch VPNSwitch
 }
 
 // Exit states reported in VPNStatus.ExitState.
@@ -84,7 +107,7 @@ func classifyExit(info *exit_gateway.AccountInfo, err error) (state, notice stri
 		return ExitUnreachable, "Exit unreachable: no answer"
 	case !info.Enabled:
 		return ExitDisabled, "This node does not share its connection: its exit is turned off"
-	case info.PricePerMB > 0 && info.Remaining() <= 0:
+	case info.Exhausted():
 		return ExitQuota, "Free traffic used up: pay for traffic or ask the owner to add you to the free list"
 	}
 	return ExitOK, ""
@@ -167,7 +190,7 @@ func (n *NodeApi) GetVPNStatus() VPNStatus {
 	whole, wholeErr := n.wholeComputerStatus()
 	n.vpn.mu.Lock()
 	defer n.vpn.mu.Unlock()
-	st := VPNStatus{TunnelNotice: "Not connected", WholeComputer: whole, WholeComputerError: wholeErr, WholeComputerSupported: n.WholeComputerSupported()}
+	st := VPNStatus{TunnelNotice: "Not connected", WholeComputer: whole, WholeComputerError: wholeErr, WholeComputerSupported: n.WholeComputerSupported(), AutoSwitch: n.autoSwitchOn()}
 	if n.vpn.server == nil {
 		return st
 	}
@@ -184,6 +207,7 @@ func (n *NodeApi) GetVPNStatus() VPNStatus {
 		st.LastRefusalAt = last.At.Unix()
 	}
 	st.ExitState = n.vpn.exitState
+	st.Searching, st.Switches, st.LastSwitch = n.vpn.searching, n.vpn.switches, n.vpn.lastSwitch
 	switch {
 	case !n.relayConnected(n.vpn.relayPeer):
 		st.TunnelNotice = "Exit relay is not connected"
@@ -203,18 +227,23 @@ func (n *NodeApi) StartVPN(relayPeerID string) error {
 }
 
 func (n *NodeApi) startVPN(relayPeerID, listen string) error {
-	if relayPeerID == "auto" {
-		best, err := n.bestExit()
-		if err != nil {
-			return err
-		}
-		relayPeerID = best
-	}
 	if host, _, err := net.SplitHostPort(listen); err != nil || host != "127.0.0.1" {
 		return errors.New("vpn proxy must listen on 127.0.0.1")
 	}
 	if n.node == nil || n.node.Swarm == nil {
 		return errors.New("node is not running")
+	}
+	if relayPeerID == "auto" {
+		// the best rated exit that answers and says it serves us now, not merely the top of the list
+		ctx, cancel := context.WithTimeout(n.node.Ctx, 45*time.Second)
+		best, err := n.pickExit(ctx, n.avoidNow())
+		cancel()
+		if err != nil {
+			if best, err = n.bestExit(); err != nil {
+				return err
+			}
+		}
+		relayPeerID = best
 	}
 	exit, err := n.relayPeerID(relayPeerID)
 	if err != nil {
@@ -239,6 +268,10 @@ func (n *NodeApi) startVPN(relayPeerID, listen string) error {
 	n.vpn.server = srv
 	n.vpn.relayPeer = relayPeerID
 	n.vpn.exitState, n.vpn.exitNotice = ExitChecking, ""
+	n.vpn.usingSince, n.vpn.searching, n.vpn.switches, n.vpn.lastSwitch = time.Now(), false, 0, VPNSwitch{}
+	watch, stop := context.WithCancel(n.node.Ctx)
+	n.vpn.stopWatch = stop
+	go n.runFailover(watch)
 	go n.startPayGuard() // outside the vpn lock: it reads the same state
 	if n.node.EventBus != nil {
 		n.node.EventBus.Emit("vpn:started", map[string]any{"relay": relayPeerID})
@@ -282,8 +315,13 @@ func (n *NodeApi) StopVPN() error {
 	if n.vpn.server == nil {
 		return nil
 	}
+	if n.vpn.stopWatch != nil {
+		n.vpn.stopWatch()
+		n.vpn.stopWatch = nil
+	}
 	err := n.vpn.server.Stop()
 	n.vpn.server = nil
+	n.vpn.searching = false
 	n.vpn.relayPeer = ""
 	n.vpn.exitState, n.vpn.exitNotice = "", ""
 	if n.node != nil && n.node.EventBus != nil {

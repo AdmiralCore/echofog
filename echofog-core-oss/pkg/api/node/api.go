@@ -37,6 +37,7 @@ type NodeApi struct {
 	startPort   int  // the listen port the node was configured with when it started
 
 	exitFreePeers []string // peers the exit serves for free (persisted; guarded by settingsMu)
+	noAutoSwitch  bool     // the proxy keeps its exit even when it fails (persisted; guarded by settingsMu)
 
 	bootstrapBuiltIn []string // bootstrap nodes of this release (guarded by settingsMu)
 	bootstrapCustom  []string // bootstrap nodes the user added (persisted; guarded by settingsMu)
@@ -49,7 +50,7 @@ func NewNodeApi(node *node.Node) *NodeApi {
 	saved, chosen := loadPersistedSettings(node.Cfg)
 	setBootstrapConfig(node.Cfg, builtIn, saved.BootstrapNodes)
 	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
-		exitFreePeers: saved.ExitFreePeers, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes}
+		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes}
 }
 
 func (n *NodeApi) IsRegistered() bool {

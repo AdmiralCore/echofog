@@ -139,6 +139,7 @@ func (s *SOCKS5Server) noteRefusal(target string, err error) {
 	}
 	reason := ExitRefusal(err)
 	s.refused.Add(1)
+	s.health.fail(reason, target)
 	s.lastRefusal.Store(&Refusal{Reason: reason, Host: target, At: time.Now()})
 	s.refusalsOnce.Do(func() { s.refusalLog = newLogLimiter(refusalLogEvery) })
 	if ok, skipped := s.refusalLog.allow(reason); ok {
@@ -152,3 +153,59 @@ func (s *SOCKS5Server) Refusals() (uint64, *Refusal) {
 }
 
 func shortPeer(id types.PeerID) string { return id.String()[:12] }
+
+// streamHealth tells whether the exit still carries anything: how many streams in a row failed
+// in a way that points at the exit rather than at one site, across how many hosts, and when
+// the last one succeeded.
+type streamHealth struct {
+	mu     sync.Mutex
+	streak int
+	hosts  map[string]bool
+	lastOK time.Time
+}
+
+// exitFault: a refusal that says the exit (or the way to it) is broken, not the site.
+func exitFault(reason string) bool {
+	return reason == "dial failed" || reason == "timed out" || reason == "exit unreachable"
+}
+
+func (h *streamHealth) ok() {
+	h.mu.Lock()
+	h.streak, h.hosts, h.lastOK = 0, nil, time.Now()
+	h.mu.Unlock()
+}
+
+func (h *streamHealth) fail(reason, host string) {
+	if !exitFault(reason) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.streak++
+	if h.hosts == nil {
+		h.hosts = map[string]bool{}
+	}
+	if len(h.hosts) < 16 {
+		h.hosts[host] = true
+	}
+}
+
+func (h *streamHealth) reset() {
+	h.mu.Lock()
+	h.streak, h.hosts, h.lastOK = 0, nil, time.Time{}
+	h.mu.Unlock()
+}
+
+// StreamHealth is what the proxy saw since the exit was last changed.
+type StreamHealth struct {
+	FailStreak int       // streams in a row that failed because of the exit
+	FailHosts  int       // distinct hosts among them
+	LastOK     time.Time // zero: none succeeded yet
+}
+
+// Health reports the run of failed streams; a single dead site does not count as a broken exit.
+func (s *SOCKS5Server) Health() StreamHealth {
+	s.health.mu.Lock()
+	defer s.health.mu.Unlock()
+	return StreamHealth{FailStreak: s.health.streak, FailHosts: len(s.health.hosts), LastOK: s.health.lastOK}
+}

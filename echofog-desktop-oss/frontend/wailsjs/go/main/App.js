@@ -338,6 +338,10 @@ export function SetVADState(arg1, arg2) {
   return window['go']['main']['App']['SetVADState'](arg1, arg2);
 }
 
+export function SetVPNAutoSwitch(arg1) {
+  return window['go']['main']['App']['SetVPNAutoSwitch'](arg1);
+}
+
 export function SetWholeComputer(arg1) {
   return window['go']['main']['App']['SetWholeComputer'](arg1);
 }

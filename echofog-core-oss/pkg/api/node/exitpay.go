@@ -210,6 +210,10 @@ type payState struct {
 	blockedUntil time.Time
 	lastErr      string
 	now          func() time.Time
+	// the proxy's traffic rate in bytes/s, measured between guard rounds
+	rate      float64
+	rateBytes uint64
+	rateAt    time.Time
 }
 
 func (p *payState) clock() time.Time {
@@ -261,17 +265,54 @@ type payEnv struct {
 	// vault tells whether this round pays from the TON vault (nil: never); payVoucher does it.
 	vault      func(ctx context.Context, info *exit_gateway.AccountInfo) bool
 	payVoucher func(ctx context.Context, micro int64, info *exit_gateway.AccountInfo) error
+	// traffic is the proxy's total bytes so far (nil: unknown); it sizes vouchers to the speed
+	traffic func() uint64
+}
+
+// voucherSizing is how much to buy per voucher and how early, for traffic running at rate
+// bytes/s: enough for a minute, bought while 20 s are left. A 4K stream at 4 MB/s would empty a
+// fixed 16 MB floor in four seconds, which is about what a voucher round trip takes.
+func voucherSizing(rate float64) (chunkMB, floor int64) {
+	chunkMB, floor = voucherChunkMB, voucherChunkMB<<20/4
+	if rate <= 0 {
+		return
+	}
+	if mb := int64(rate*60)>>20 + 1; mb > chunkMB {
+		chunkMB = min(mb, voucherMaxChunkMB)
+	}
+	floor = max(floor, int64(rate*20))
+	return
+}
+
+// noteTraffic updates the traffic rate (an average that follows changes within ~10 s).
+func (p *payState) noteTraffic(total uint64, now time.Time) {
+	if !p.rateAt.IsZero() && total >= p.rateBytes {
+		if dt := now.Sub(p.rateAt).Seconds(); dt > 0.2 {
+			cur := float64(total-p.rateBytes) / dt
+			p.rate = 0.6*p.rate + 0.4*cur
+			if cur > p.rate {
+				p.rate = cur // speeding up: follow at once, so the next voucher is big enough
+			}
+		}
+	}
+	p.rateBytes, p.rateAt = total, now
 }
 
 // decideVoucher is decidePayment for an exit paid with vouchers from the vault. Nothing goes
 // on-chain per chunk, so the chunk is small (64 MB) and the next one is bought when 16 MB are
 // left. A voucher is credited at once, so there is never a payment "on its way".
 func decideVoucher(info exit_gateway.AccountInfo, set autoPaySettings, spentToday int64, now, blockedUntil time.Time) payDecision {
+	return decideVoucherAt(info, set, spentToday, now, blockedUntil, 0)
+}
+
+// decideVoucherAt is decideVoucher for traffic running at rate bytes/s.
+func decideVoucherAt(info exit_gateway.AccountInfo, set autoPaySettings, spentToday int64, now, blockedUntil time.Time, rate float64) payDecision {
 	if !info.TakesVouchers() {
 		return payDecision{}
 	}
-	chunk := max(1, info.PricePerMB*voucherChunkMB)
-	if info.Remaining() >= voucherChunkMB<<20/4 {
+	chunkMB, floor := voucherSizing(rate)
+	chunk := max(1, info.PricePerMB*chunkMB)
+	if info.Remaining() >= floor {
 		return payDecision{}
 	}
 	if !set.Enabled {
@@ -294,6 +335,9 @@ func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 	p.mu.Lock()
 	p.loadLocked()
 	now := p.clock()
+	if env.traffic != nil {
+		p.noteTraffic(env.traffic(), now)
+	}
 	if err != nil {
 		p.status.Active = false
 		p.lastErr = "cannot reach the exit: " + err.Error()
@@ -317,7 +361,7 @@ func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 	spent := p.set.Spent[day(now)]
 	dec := decidePayment(*info, p.set, spent, now, p.pendingUntil, p.blockedUntil)
 	if useVault {
-		dec = decideVoucher(*info, p.set, spent, now, p.blockedUntil)
+		dec = decideVoucherAt(*info, p.set, spent, now, p.blockedUntil, p.rate)
 	}
 	p.publishLocked(*info, dec, spent, now)
 	p.status.PaysByVault = useVault
@@ -626,6 +670,15 @@ func (n *NodeApi) startPayGuard() {
 			pctx, c := context.WithTimeout(ctx, 30*time.Second)
 			defer c()
 			return n.payByVoucher(pctx, dialer, info, micro)
+		},
+		traffic: func() uint64 {
+			n.vpn.mu.Lock()
+			defer n.vpn.mu.Unlock()
+			if n.vpn.server == nil {
+				return 0
+			}
+			_, rx, tx := n.vpn.server.Stats()
+			return rx + tx
 		},
 	}
 	go func() {

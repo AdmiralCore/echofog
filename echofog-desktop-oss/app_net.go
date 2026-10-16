@@ -41,6 +41,15 @@ func (a *App) SetWholeComputer(on bool) error {
 	return nodeAPI.SetWholeComputer(on)
 }
 
+// SetVPNAutoSwitch: the proxy moves to another working exit by itself when this one stops working.
+func (a *App) SetVPNAutoSwitch(on bool) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.SetVPNAutoSwitch(on)
+}
+
 // GetExitPayment describes what the connected exit costs and what is left of what was paid.
 func (a *App) GetExitPayment() api.ExitPaymentStatus {
 	nodeAPI := a.getAPI()

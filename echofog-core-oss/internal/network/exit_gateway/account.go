@@ -56,6 +56,18 @@ func (a AccountInfo) Remaining() int64 {
 	return r
 }
 
+// Exhausted reports that the exit has nothing left to serve this client with: no free traffic,
+// no paid traffic and no overdraft to bridge the time until the next payment arrives.
+func (a AccountInfo) Exhausted() bool {
+	if !a.Enabled || a.PricePerMB <= 0 || a.Remaining() > 0 {
+		return false
+	}
+	if a.Credit < 0 && a.Credit > -OverdraftBytes {
+		return false // in the ledger overdraft: still served while a transfer confirms
+	}
+	return a.Vault == nil || a.Vault.OverdraftLeft <= 0
+}
+
 // TakesVouchers reports whether the exit can be paid from the client's vault.
 func (a AccountInfo) TakesVouchers() bool {
 	return a.Enabled && a.PricePerMB > 0 && a.Vault != nil && a.Vault.NanoPerMB > 0 && a.Vault.Node != ""

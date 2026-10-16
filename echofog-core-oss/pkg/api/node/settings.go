@@ -50,6 +50,8 @@ type persistedSettings struct {
 	// BootstrapNodes are nodes the user added to join the network through ("host:port/<peer id>"),
 	// for when the built-in ones are blocked.
 	BootstrapNodes []string `json:"bootstrapNodes,omitempty"`
+	// VPNNoAutoSwitch: the proxy stays on the chosen exit even when it stops working.
+	VPNNoAutoSwitch bool `json:"vpnNoAutoSwitch,omitempty"`
 }
 
 // loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the

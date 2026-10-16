@@ -32,7 +32,7 @@ type SOCKS5Server struct {
 	mu         sync.Mutex
 	listenAddr string
 	listener   net.Listener
-	dialer     StreamDialer
+	dialer     StreamDialer // guarded by mu: SetDialer moves the proxy to another exit
 	logger     *slog.Logger
 
 	activeConns atomic.Int64
@@ -45,6 +45,7 @@ type SOCKS5Server struct {
 	lastRefusal  atomic.Pointer[Refusal]
 	refusalLog   *logLimiter
 	refusalsOnce sync.Once
+	health       streamHealth
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -103,6 +104,21 @@ func (s *SOCKS5Server) Stop() error {
 		return err
 	}
 	return nil
+}
+
+// SetDialer moves new connections to another exit. The listener (and a TUN on top of it) stays
+// up, so applications do not notice; connections already open keep their old exit until they end.
+func (s *SOCKS5Server) SetDialer(d StreamDialer) {
+	s.mu.Lock()
+	s.dialer = d
+	s.mu.Unlock()
+	s.health.reset()
+}
+
+func (s *SOCKS5Server) currentDialer() StreamDialer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dialer
 }
 
 // Stats returns current telemetry metrics.
@@ -177,7 +193,7 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	switch reqHeader[1] {
 	case 0x01: // CONNECT
 	case 0x03: // UDP ASSOCIATE (the client's announced address is ignored: it is usually 0.0.0.0:0)
-		if s.dialer == nil {
+		if s.currentDialer() == nil {
 			s.sendReply(clientConn, 0x01)
 			return
 		}
@@ -201,7 +217,8 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	_ = clientConn.SetDeadline(time.Time{})
 
 	// 3. Dial through P2P Exit Gateway
-	if s.dialer == nil {
+	dialer := s.currentDialer()
+	if dialer == nil {
 		s.sendReply(clientConn, 0x01) // General failure
 		return
 	}
@@ -209,12 +226,13 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
-	p2pStream, err := s.dialer.DialExitStream(ctx, targetAddr)
+	p2pStream, err := dialer.DialExitStream(ctx, targetAddr)
 	if err != nil {
 		s.noteRefusal(targetAddr, err)
 		s.sendReply(clientConn, 0x05) // Connection refused
 		return
 	}
+	s.health.ok()
 	defer p2pStream.Close()
 
 	// 4. Send SOCKS5 Success Reply

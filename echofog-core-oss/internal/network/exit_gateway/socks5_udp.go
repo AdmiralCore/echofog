@@ -111,7 +111,7 @@ func udpReply(rawAddr, data []byte) []byte {
 // handleUDPAssociate serves CMD 0x03. The association lives as long as the TCP control
 // connection, as RFC 1928 requires.
 func (s *SOCKS5Server) handleUDPAssociate(ctrl net.Conn) {
-	ud, ok := s.dialer.(UDPDialer)
+	ud, ok := s.currentDialer().(UDPDialer)
 	if !ok {
 		s.sendReply(ctrl, 0x07)
 		return

@@ -13,18 +13,56 @@ var rateURL = "https://tonapi.io/v2/rates?tokens=ton&currencies=usd"
 
 var rateCache struct {
 	sync.Mutex
-	usd float64
-	at  time.Time
+	usd      float64
+	at       time.Time
+	failedAt time.Time // the last failed fetch: callers are not made to wait on it again for a while
+	lastErr  error
 }
+
+// rateFetch lets one fetch run at a time; the cache lock is never held while it waits, so
+// CachedUSDRate (read by the UI every few seconds) never blocks on the network.
+var rateFetch sync.Mutex
+
+// rateRetryAfter: after a failed fetch (the rate API is down or blocked), the cached value is
+// returned at once for this long instead of every caller waiting up to 5 s again.
+const rateRetryAfter = time.Minute
 
 // USDRate returns the TON/USD price, cached 10 minutes. It values TON payments for traffic: the
 // payer adds a margin, and the exit credits at the rate when the payment arrives.
 func USDRate(ctx context.Context) (float64, error) {
+	if usd, ok, err := cachedRate(); ok {
+		return usd, err
+	}
+	rateFetch.Lock()
+	defer rateFetch.Unlock()
+	if usd, ok, err := cachedRate(); ok { // fetched while we waited
+		return usd, err
+	}
+	usd, err := fetchUSDRate(ctx)
+	rateCache.Lock()
+	defer rateCache.Unlock()
+	if err != nil {
+		rateCache.failedAt, rateCache.lastErr = time.Now(), err
+		return rateCache.usd, err
+	}
+	rateCache.usd, rateCache.at, rateCache.failedAt, rateCache.lastErr = usd, time.Now(), time.Time{}, nil
+	return usd, nil
+}
+
+// cachedRate answers from the cache when it is fresh, or when a fetch failed a moment ago.
+func cachedRate() (float64, bool, error) {
 	rateCache.Lock()
 	defer rateCache.Unlock()
 	if rateCache.usd > 0 && time.Since(rateCache.at) < 10*time.Minute {
-		return rateCache.usd, nil
+		return rateCache.usd, true, nil
 	}
+	if !rateCache.failedAt.IsZero() && time.Since(rateCache.failedAt) < rateRetryAfter {
+		return rateCache.usd, true, rateCache.lastErr
+	}
+	return 0, false, nil
+}
+
+func fetchUSDRate(ctx context.Context) (float64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rateURL, nil)
@@ -33,7 +71,7 @@ func USDRate(ctx context.Context) (float64, error) {
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return rateCache.usd, err
+		return 0, err
 	}
 	defer res.Body.Close()
 	var body struct {
@@ -42,13 +80,12 @@ func USDRate(ctx context.Context) (float64, error) {
 		} `json:"rates"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		return rateCache.usd, err
+		return 0, err
 	}
 	usd := body.Rates["TON"].Prices["USD"]
 	if usd <= 0 {
-		return rateCache.usd, fmt.Errorf("no TON/USD rate in response")
+		return 0, fmt.Errorf("no TON/USD rate in response")
 	}
-	rateCache.usd, rateCache.at = usd, time.Now()
 	return usd, nil
 }
 

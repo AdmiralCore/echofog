@@ -127,3 +127,38 @@ func TestSOCKSLogsWhatTheExitRefused(t *testing.T) {
 	assert.Contains(t, out, "exit refused: denied for example.com:80")
 	assert.Equal(t, 1, strings.Count(out, "exit refused"), "the second refusal is folded into the next line")
 }
+
+type okDialer struct{}
+
+func (okDialer) DialExitStream(context.Context, string) (io.ReadWriteCloser, error) {
+	a, b := net.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, b) }()
+	return a, nil
+}
+
+// The proxy moves to another exit without closing its port, and judges the new one afresh.
+func TestSOCKSSwitchesExitAndTracksHealth(t *testing.T) {
+	srv := NewSOCKS5Server("127.0.0.1:0", refusingDialer{err: ErrExitDialFailed})
+	srv.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	require.NoError(t, srv.Start())
+	defer srv.Stop()
+	addr := srv.Addr().String()
+
+	for _, h := range []string{"a.example", "b.example", "a.example"} {
+		assert.Equal(t, byte(0x05), socksReply(t, addr, h, 80))
+	}
+	h := srv.Health()
+	assert.Equal(t, 3, h.FailStreak)
+	assert.Equal(t, 2, h.FailHosts)
+	assert.True(t, h.LastOK.IsZero())
+
+	srv.SetDialer(okDialer{})
+	assert.Zero(t, srv.Health().FailStreak, "a new exit starts with a clean record")
+	assert.Equal(t, byte(0x00), socksReply(t, addr, "a.example", 80), "same port, new exit")
+	assert.False(t, srv.Health().LastOK.IsZero())
+
+	// refusals that are about payment or policy are not counted as a broken exit
+	srv.SetDialer(refusingDialer{err: ErrPaymentRequired})
+	socksReply(t, addr, "a.example", 80)
+	assert.Zero(t, srv.Health().FailStreak)
+}
