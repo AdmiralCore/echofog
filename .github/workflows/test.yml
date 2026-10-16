@@ -27,6 +27,12 @@ jobs:
         run: go vet ./echofog-core-oss/...
       - name: Test core
         run: go test ./echofog-core-oss/... -count=1
+      # main.go embeds frontend/dist, which is not in git (the frontend job builds the real one);
+      # the Go tests only need the folder to exist so the package compiles
+      - name: Placeholder frontend build
+        run: |
+          mkdir -p echofog-desktop-oss/frontend/dist
+          echo '<!doctype html><title>EchoFog</title>' > echofog-desktop-oss/frontend/dist/index.html
       - name: Test desktop (headless)
         run: xvfb-run -a go test -tags webkit2_41 ./echofog-desktop-oss/... -count=1
 
