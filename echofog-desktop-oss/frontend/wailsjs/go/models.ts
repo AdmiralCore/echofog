@@ -442,6 +442,7 @@ export namespace node {
 	    coordinator: string;
 	    from: string;
 	    startedAt: number;
+	    lastSeen: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupCall(source);
@@ -453,6 +454,7 @@ export namespace node {
 	        this.coordinator = source["coordinator"];
 	        this.from = source["from"];
 	        this.startedAt = source["startedAt"];
+	        this.lastSeen = source["lastSeen"];
 	    }
 	}
 	export class GroupDTO {

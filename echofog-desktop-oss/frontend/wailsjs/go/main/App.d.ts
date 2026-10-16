@@ -103,6 +103,8 @@ export function JoinGroup(arg1:string):Promise<node.GroupDTO>;
 
 export function JoinRoom(arg1:string,arg2:string):Promise<string>;
 
+export function KeepGroupCallAlive(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function LeaveGroup(arg1:string):Promise<void>;
 
 export function LeaveRoom():Promise<void>;

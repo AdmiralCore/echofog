@@ -198,6 +198,10 @@ export function JoinRoom(arg1, arg2) {
   return window['go']['main']['App']['JoinRoom'](arg1, arg2);
 }
 
+export function KeepGroupCallAlive(arg1, arg2, arg3) {
+  return window['go']['main']['App']['KeepGroupCallAlive'](arg1, arg2, arg3);
+}
+
 export function LeaveGroup(arg1) {
   return window['go']['main']['App']['LeaveGroup'](arg1);
 }
