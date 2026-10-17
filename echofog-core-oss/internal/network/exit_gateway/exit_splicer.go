@@ -50,28 +50,9 @@ func (s *ExitSplicer) HandleExitStream(ctx context.Context, p2pStream io.ReadWri
 func (s *ExitSplicer) Splice(ctx context.Context, p2pStream io.ReadWriteCloser, tcpConn net.Conn) error {
 	s.logger.Debug("Exit splicing started", "target", tcpConn.RemoteAddr().String())
 
-	// 2. Bidirectional Zero-Copy Splicing between P2P Stream and External TCP Socket
-	errChan := make(chan error, 2)
-
-	// Direction: P2P Stream -> External TCP
-	go func() {
-		_, err := io.Copy(countingWriter{tcpConn, &s.bytesRelayed}, p2pStream)
-		errChan <- err
-	}()
-
-	// Direction: External TCP -> P2P Stream
-	go func() {
-		_, err := io.Copy(countingWriter{p2pStream, &s.bytesRelayed}, tcpConn)
-		errChan <- err
-	}()
-
-	// Wait for stream completion or interruption
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errChan:
-		return err
-	}
+	// both directions until both are done: a client's half-close reaches the target as one
+	count := func(n int) { s.bytesRelayed.Add(uint64(n)) }
+	return relay(ctx, p2pStream, tcpConn, count, count)
 }
 
 // Stats returns the cumulative metrics of this Exit Node.

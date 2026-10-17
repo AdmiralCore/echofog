@@ -311,6 +311,9 @@ func (r *udpRelay) downstream() {
 	for {
 		n, from, err := r.conn.ReadFromUDP(buf)
 		if err != nil {
+			if udpReadTransient(err) {
+				continue
+			}
 			return
 		}
 		key := (&net.UDPAddr{IP: from.IP, Port: from.Port}).String()

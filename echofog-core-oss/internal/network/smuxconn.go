@@ -40,8 +40,10 @@ func smuxConfig() *smux.Config {
 	c.Version = 2 // per-stream flow control: one slow stream cannot stall the others
 	c.KeepAliveInterval = 10 * time.Second
 	c.KeepAliveTimeout = 30 * time.Second
-	c.MaxReceiveBuffer = 8 << 20
-	c.MaxStreamBuffer = 1 << 20
+	// one TCP connection carries every proxied stream: 1 MB per stream held a download near
+	// 50 Mbit/s at 150 ms
+	c.MaxReceiveBuffer = 32 << 20
+	c.MaxStreamBuffer = 4 << 20
 	return c
 }
 
@@ -388,3 +390,5 @@ func (c *smuxConn) ChannelBinding() ([]byte, error) {
 type smuxStream struct{ *smux.Stream }
 
 func (s smuxStream) CancelRead() { _ = s.Stream.Close() }
+
+func (s smuxStream) CloseWrite() error { return s.Stream.CloseWrite() }

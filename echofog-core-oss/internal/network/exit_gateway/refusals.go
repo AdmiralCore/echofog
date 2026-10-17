@@ -164,9 +164,12 @@ type streamHealth struct {
 	lastOK time.Time
 }
 
-// exitFault: a refusal that says the exit (or the way to it) is broken, not the site.
+// exitFault: a refusal that says the exit (or the way to it) is broken, not the site. "dial
+// failed" is the site's: the exit answered that it could not reach it. In whole-computer mode
+// every name gets a fake IP, so a dead domain shows up exactly like that, and a few of them
+// from background apps must not make the app switch exits.
 func exitFault(reason string) bool {
-	return reason == "dial failed" || reason == "timed out" || reason == "exit unreachable"
+	return reason == "timed out" || reason == "exit unreachable"
 }
 
 func (h *streamHealth) ok() {

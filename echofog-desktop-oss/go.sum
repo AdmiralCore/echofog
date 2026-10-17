@@ -198,8 +198,8 @@ github.com/xjasonlyu/tun2socks/v2 v2.6.0 h1:gI9saJT3XgH4e6v9jBuHRLwK7l3aN9YFWec/
 github.com/xjasonlyu/tun2socks/v2 v2.6.0/go.mod h1:35AwqxIxnMkfBfT0UJ1Lku7PZm2ZiZJ8sxHyp0gt1yw=
 github.com/xssnick/tonutils-go v1.18.0 h1:VDH614303RfPQxO4e/GcfrtWbL3WanpHIfxlWVd0Ea0=
 github.com/xssnick/tonutils-go v1.18.0/go.mod h1:4z7dSfiufWiE2SnzgM0IYzlwpJ5UlHyPH45HP0QZNzQ=
-github.com/xtaci/smux v1.5.34 h1:OUA9JaDFHJDT8ZT3ebwLWPAgEfE6sWo2LaTy3anXqwg=
-github.com/xtaci/smux v1.5.34/go.mod h1:OMlQbT5vcgl2gb49mFkYo6SMf+zP3rcjcwQz7ZU7IGY=
+github.com/xtaci/smux v1.5.57 h1:N72VbGoSYxgcm6mPOYX0QzEZNVD3UI/JlVvAtXF+WrY=
+github.com/xtaci/smux v1.5.57/go.mod h1:IGQ9QYrBphmb/4aTnLEcJby0TNr3NV+OslIOMrX825Q=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 go.opentelemetry.io/auto/sdk v1.1.0 h1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=
 go.opentelemetry.io/auto/sdk v1.1.0/go.mod h1:3wSPjt5PWp2RhlCcmmOial7AvC4DQqZb7a7wCow3W8A=

@@ -261,3 +261,34 @@ func TestSOCKS5_DomainNameResolutionAndErrors(t *testing.T) {
 	_, _ = io.ReadFull(connIPv6, resp)
 	assert.Equal(t, byte(0x00), resp[1]) // Success
 }
+
+// A blackholed first address must not use up the dial budget before a working one is tried.
+func TestRaceDialSkipsADeadAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	// 192.0.2.1 (TEST-NET-1) never answers; 127.0.0.1 does
+	c := raceDial(ctx, []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("127.0.0.1")}, port)
+	require.NotNil(t, c)
+	c.Close()
+	assert.Less(t, time.Since(start), time.Second, "the second address is tried after the stagger, not after a timeout")
+	assert.Equal(t, []string{"1.1.1.1", "::1", "8.8.8.8"}, func() (out []string) {
+		for _, ip := range interleaveFamilies([]net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8"), net.ParseIP("::1")}) {
+			out = append(out, ip.String())
+		}
+		return
+	}())
+}

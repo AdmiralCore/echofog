@@ -110,10 +110,21 @@ func udpReply(rawAddr, data []byte) []byte {
 
 // handleUDPAssociate serves CMD 0x03. The association lives as long as the TCP control
 // connection, as RFC 1928 requires.
+//
+// It answers at once and reaches the exit only when the first datagram needs it. In
+// whole-computer mode every DNS query arrives as its own association, and the fake DNS answers
+// most of them here: they must not wait for the exit, cost it a stream, or fail with it.
 func (s *SOCKS5Server) handleUDPAssociate(ctrl net.Conn) {
 	ud, ok := s.currentDialer().(UDPDialer)
 	if !ok {
 		s.sendReply(ctrl, 0x07)
+		return
+	}
+	select {
+	case s.udpSlots <- struct{}{}:
+		defer func() { <-s.udpSlots }()
+	default:
+		s.sendReply(ctrl, 0x01) // a local app opened far too many associations
 		return
 	}
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -121,38 +132,40 @@ func (s *SOCKS5Server) handleUDPAssociate(ctrl net.Conn) {
 		s.sendReply(ctrl, 0x01)
 		return
 	}
-	defer pc.Close()
-
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	sess, err := ud.DialExitUDP(ctx)
-	cancel()
-	if err != nil {
-		s.noteRefusal("udp", err)
-		s.sendReply(ctrl, 0x05)
-		return
-	}
-	defer sess.Close()
-
 	if err := s.sendReplyAddr(ctrl, 0x00, pc.LocalAddr().(*net.UDPAddr)); err != nil {
+		pc.Close()
 		return
 	}
 	_ = ctrl.SetDeadline(time.Time{})
 
-	a := &udpAssoc{srv: s, pc: pc, sess: sess, fake: s.fakeDNS(), raw: make(map[string][]byte)}
-	go a.fromExit()
+	a := &udpAssoc{srv: s, ctrl: ctrl, pc: pc, dialer: ud, fake: s.fakeDNS(), raw: make(map[string][]byte)}
+	defer a.close()
 	go a.fromClient()
 	_, _ = io.Copy(io.Discard, ctrl) // returns when the client closes the control connection
 }
 
-type udpAssoc struct {
-	srv  *SOCKS5Server
-	pc   *net.UDPConn
-	sess *UDPSession
-	fake *fakedns.Mapper
+// pendingUDP is how many datagrams wait for the exit session while it is being opened.
+const pendingUDP = 32
 
-	mu     sync.Mutex
-	client *net.UDPAddr
-	raw    map[string][]byte // address sent to the exit -> address bytes the client used
+type udpAssoc struct {
+	srv    *SOCKS5Server
+	ctrl   net.Conn
+	pc     *net.UDPConn
+	dialer UDPDialer
+	fake   *fakedns.Mapper
+
+	mu      sync.Mutex
+	client  *net.UDPAddr
+	raw     map[string][]byte // address sent to the exit -> address bytes the client used
+	sess    *UDPSession
+	dialing bool
+	pending []pendingDatagram
+	closed  bool
+}
+
+type pendingDatagram struct {
+	data   []byte
+	target string
 }
 
 func (a *udpAssoc) clientAddr() *net.UDPAddr {
@@ -161,11 +174,91 @@ func (a *udpAssoc) clientAddr() *net.UDPAddr {
 	return a.client
 }
 
+// close ends the association: the local port, the exit session and the control connection,
+// so the client learns that the association is gone instead of sending into a dead port.
+func (a *udpAssoc) close() {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
+	a.closed = true
+	sess := a.sess
+	a.mu.Unlock()
+	_ = a.pc.Close()
+	_ = a.ctrl.Close()
+	if sess != nil {
+		_ = sess.Close()
+	}
+}
+
+// send hands a datagram to the exit, opening the session on first use.
+func (a *udpAssoc) send(data []byte, target string) {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
+	if sess := a.sess; sess != nil {
+		a.mu.Unlock()
+		if err := sess.WriteTo(data, target); err != nil {
+			a.close()
+			return
+		}
+		a.srv.bytesTx.Add(uint64(len(data)))
+		return
+	}
+	if len(a.pending) < pendingUDP {
+		a.pending = append(a.pending, pendingDatagram{append([]byte(nil), data...), target})
+	}
+	if a.dialing {
+		a.mu.Unlock()
+		return
+	}
+	a.dialing = true
+	a.mu.Unlock()
+	go a.open()
+}
+
+func (a *udpAssoc) open() {
+	ctx, cancel := context.WithTimeout(a.srv.ctx, 10*time.Second)
+	sess, err := a.dialer.DialExitUDP(ctx)
+	cancel()
+	if err != nil {
+		a.srv.noteRefusal("udp", err)
+		a.close()
+		return
+	}
+	a.srv.health.ok()
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		_ = sess.Close()
+		return
+	}
+	a.sess = sess
+	queued := a.pending
+	a.pending = nil
+	a.mu.Unlock()
+	go a.fromExit(sess)
+	for _, d := range queued {
+		if err := sess.WriteTo(d.data, d.target); err != nil {
+			a.close()
+			return
+		}
+		a.srv.bytesTx.Add(uint64(len(d.data)))
+	}
+}
+
 func (a *udpAssoc) fromClient() {
+	defer a.close()
 	buf := make([]byte, maxDatagram)
 	for {
 		n, from, err := a.pc.ReadFromUDP(buf)
 		if err != nil {
+			if udpReadTransient(err) {
+				continue
+			}
 			return
 		}
 		a.mu.Lock()
@@ -206,19 +299,15 @@ func (a *udpAssoc) fromClient() {
 		}
 		a.raw[target] = rawAddr
 		a.mu.Unlock()
-		if err := a.sess.WriteTo(data, target); err != nil {
-			a.pc.Close()
-			return
-		}
-		a.srv.bytesTx.Add(uint64(len(data)))
+		a.send(data, target)
 	}
 }
 
-func (a *udpAssoc) fromExit() {
+func (a *udpAssoc) fromExit(sess *UDPSession) {
+	defer a.close()
 	for {
-		data, from, err := a.sess.ReadFrom()
+		data, from, err := sess.ReadFrom()
 		if err != nil {
-			a.pc.Close()
 			return
 		}
 		a.mu.Lock()
@@ -229,6 +318,9 @@ func (a *udpAssoc) fromExit() {
 			continue
 		}
 		if _, err := a.pc.WriteToUDP(udpReply(rawAddr, data), client); err != nil {
+			if udpReadTransient(err) {
+				continue
+			}
 			return
 		}
 		a.srv.bytesRx.Add(uint64(len(data)))

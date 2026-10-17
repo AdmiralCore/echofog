@@ -38,9 +38,17 @@ func GetQuicConfig() *quic.Config {
 		Allow0RTT:             true,
 		KeepAlivePeriod:       10 * time.Second,
 		MaxIdleTimeout:        30 * time.Second,
-		MaxIncomingStreams:    1000,
+		MaxIncomingStreams:    4096,
 		MaxIncomingUniStreams: 1000,
 		EnableDatagrams:       true,
+		// Every proxied connection to an exit is a stream of one QUIC connection. quic-go's
+		// defaults (512 KB per stream growing to 6 MB, 15 MB for the connection) cap a single
+		// download near 300 Mbit/s at 150 ms and make short transfers crawl at the start. These
+		// are hysteria's sizes: a full window from the first byte.
+		InitialStreamReceiveWindow:     8 << 20,
+		MaxStreamReceiveWindow:         16 << 20,
+		InitialConnectionReceiveWindow: 20 << 20,
+		MaxConnectionReceiveWindow:     48 << 20,
 	}
 }
 

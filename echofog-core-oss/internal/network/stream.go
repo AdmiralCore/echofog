@@ -124,6 +124,9 @@ func (s *Stream) ResetDeadline() {
 	s.stream.SetDeadline(time.Time{})
 }
 
+// CloseWrite tells the remote we are done sending; it still reads what the remote sends.
+func (s *Stream) CloseWrite() error { return s.stream.CloseWrite() }
+
 // Read and Write use the stream as a plain byte pipe (after the framed preamble).
 func (s *Stream) Read(p []byte) (int, error)  { return s.stream.Read(p) }
 func (s *Stream) Write(p []byte) (int, error) { return s.stream.Write(p) }

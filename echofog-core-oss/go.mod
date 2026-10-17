@@ -26,7 +26,7 @@ require (
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	github.com/xssnick/tonutils-go v1.18.0
-	github.com/xtaci/smux v1.5.34
+	github.com/xtaci/smux v1.5.57
 	go.uber.org/goleak v1.3.0
 	go.uber.org/mock v0.6.0
 	golang.org/x/crypto v0.58.0

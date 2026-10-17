@@ -114,8 +114,8 @@ func TestSOCKSLogsWhatTheExitRefused(t *testing.T) {
 	require.NoError(t, srv.Start())
 	defer srv.Stop()
 
-	assert.Equal(t, byte(0x05), socksReply(t, srv.Addr().String(), "example.com", 80))
-	assert.Equal(t, byte(0x05), socksReply(t, srv.Addr().String(), "example.org", 80))
+	assert.Equal(t, byte(0x02), socksReply(t, srv.Addr().String(), "example.com", 80), "not allowed by ruleset")
+	assert.Equal(t, byte(0x02), socksReply(t, srv.Addr().String(), "example.org", 80))
 
 	n, last := srv.Refusals()
 	assert.Equal(t, uint64(2), n)
@@ -138,14 +138,14 @@ func (okDialer) DialExitStream(context.Context, string) (io.ReadWriteCloser, err
 
 // The proxy moves to another exit without closing its port, and judges the new one afresh.
 func TestSOCKSSwitchesExitAndTracksHealth(t *testing.T) {
-	srv := NewSOCKS5Server("127.0.0.1:0", refusingDialer{err: ErrExitDialFailed})
+	srv := NewSOCKS5Server("127.0.0.1:0", refusingDialer{err: errors.New("stream to exit closed")})
 	srv.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	require.NoError(t, srv.Start())
 	defer srv.Stop()
 	addr := srv.Addr().String()
 
 	for _, h := range []string{"a.example", "b.example", "a.example"} {
-		assert.Equal(t, byte(0x05), socksReply(t, addr, h, 80))
+		assert.Equal(t, byte(0x01), socksReply(t, addr, h, 80), "general failure: the exit is out of reach")
 	}
 	h := srv.Health()
 	assert.Equal(t, 3, h.FailStreak)
@@ -160,5 +160,10 @@ func TestSOCKSSwitchesExitAndTracksHealth(t *testing.T) {
 	// refusals that are about payment or policy are not counted as a broken exit
 	srv.SetDialer(refusingDialer{err: ErrPaymentRequired})
 	socksReply(t, addr, "a.example", 80)
+	assert.Zero(t, srv.Health().FailStreak)
+
+	// nor a site the exit could not reach: a dead domain is not a broken exit
+	srv.SetDialer(refusingDialer{err: ErrExitDialFailed})
+	assert.Equal(t, byte(0x04), socksReply(t, addr, "gone.example", 80), "host unreachable")
 	assert.Zero(t, srv.Health().FailStreak)
 }

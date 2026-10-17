@@ -12,7 +12,8 @@ import (
 // pipeMux adapts a net.Conn to MuxStream for testing the padding layer in isolation.
 type pipeMux struct{ net.Conn }
 
-func (pipeMux) CancelRead() {}
+func (pipeMux) CancelRead()       {}
+func (pipeMux) CloseWrite() error { return nil }
 
 // The padding layer is transparent: whatever is written comes out byte for byte, across the
 // framed start and the plain-copy tail, for many write sizes and when writes cross the budget.

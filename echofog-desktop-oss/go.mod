@@ -87,7 +87,7 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0 // indirect
 	github.com/xssnick/tonutils-go v1.18.0 // indirect
-	github.com/xtaci/smux v1.5.34 // indirect
+	github.com/xtaci/smux v1.5.57 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/metric v1.37.0 // indirect

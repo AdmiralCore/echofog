@@ -18,6 +18,9 @@ type MuxStream interface {
 	SetWriteDeadline(time.Time) error
 	// CancelRead tells the remote to stop sending on this stream.
 	CancelRead()
+	// CloseWrite ends our sending side only: the remote reads EOF and can still answer, like
+	// TCP's half-close. Close ends both sides.
+	CloseWrite() error
 }
 
 // MuxSendStream is the sending half of a one-way stream.
@@ -72,6 +75,9 @@ func WrapQUIC(c *quic.Conn) MuxConn { return quicMuxConn{c} }
 type quicStream struct{ *quic.Stream }
 
 func (s quicStream) CancelRead() { s.Stream.CancelRead(quic.StreamErrorCode(ErrCodeNormalClose)) }
+
+// CloseWrite: a QUIC stream's Close already closes only the sending direction.
+func (s quicStream) CloseWrite() error { return s.Stream.Close() }
 
 type quicRecvStream struct{ *quic.ReceiveStream }
 

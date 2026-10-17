@@ -248,21 +248,96 @@ func (e *ExitService) connect(ctx context.Context, target string) (net.Conn, byt
 		}
 	}
 
-	d := &net.Dialer{Timeout: e.dialTimeout}
-	allowed := false
+	var allowed []net.IP
 	for _, ip := range ips {
-		if e.targetBlocked(ip) {
-			continue
-		}
-		allowed = true
-		if c, err := d.DialContext(dctx, "tcp", net.JoinHostPort(ip.String(), portStr)); err == nil {
-			return c, resultOK
+		if !e.targetBlocked(ip) {
+			allowed = append(allowed, ip)
 		}
 	}
-	if !allowed {
+	if len(allowed) == 0 {
 		return nil, resultDenied
 	}
+	if c := raceDial(dctx, allowed, portStr); c != nil {
+		return c, resultOK
+	}
 	return nil, resultDialFailed
+}
+
+// raceStagger is how long one address gets before the next one is tried alongside it.
+const raceStagger = 250 * time.Millisecond
+
+// raceDial connects to the first address that answers, happy-eyeballs style (RFC 8305): IPv4
+// and IPv6 alternate, and a new attempt starts every raceStagger or as soon as one fails. Tried
+// one after another, a single blackholed address (often IPv6 on an exit without it) used up the
+// whole dial budget before the working one was ever tried.
+func raceDial(ctx context.Context, ips []net.IP, port string) net.Conn {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ips = interleaveFamilies(ips)
+	type result struct {
+		c   net.Conn
+		err error
+	}
+	results := make(chan result, len(ips))
+	var d net.Dialer
+	next, running := 0, 0
+	start := func() {
+		ip := ips[next]
+		next++
+		running++
+		go func() {
+			c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+			results <- result{c, err}
+		}()
+	}
+	start()
+	timer := time.NewTimer(raceStagger)
+	defer timer.Stop()
+	var won net.Conn
+	for running > 0 {
+		select {
+		case r := <-results:
+			running--
+			if r.err == nil {
+				if won == nil {
+					won = r.c
+					cancel() // the others give up; any that still connect are closed below
+				} else {
+					r.c.Close()
+				}
+			} else if won == nil && next < len(ips) {
+				start() // a failure starts the next one at once
+			}
+		case <-timer.C:
+			if won == nil && next < len(ips) {
+				start()
+				timer.Reset(raceStagger)
+			}
+		}
+	}
+	return won
+}
+
+// interleaveFamilies orders addresses v4, v6, v4, v6..., keeping each family's own order.
+func interleaveFamilies(ips []net.IP) []net.IP {
+	var v4, v6 []net.IP
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			v4 = append(v4, ip)
+		} else {
+			v6 = append(v6, ip)
+		}
+	}
+	out := make([]net.IP, 0, len(ips))
+	for i := 0; i < len(v4) || i < len(v6); i++ {
+		if i < len(v4) {
+			out = append(out, v4[i])
+		}
+		if i < len(v6) {
+			out = append(out, v6[i])
+		}
+	}
+	return out
 }
 
 // blockedIP rejects addresses that would let a remote peer reach the exit operator's own machine or LAN
@@ -394,6 +469,14 @@ type meteredStream struct {
 func (m *meteredStream) account(n int) error {
 	if !m.svc.consume(m.peer, int64(n)) {
 		return ErrPaymentRequired
+	}
+	return nil
+}
+
+// CloseWrite passes the half-close on to the stream underneath.
+func (m *meteredStream) CloseWrite() error {
+	if cw, ok := m.FramedStream.(closeWriter); ok {
+		return cw.CloseWrite()
 	}
 	return nil
 }

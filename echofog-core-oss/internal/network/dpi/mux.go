@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -195,6 +196,11 @@ func (f *filteredConn) SetDeadline(t time.Time) error {
 	f.SetReadDeadline(t)
 	return nil
 }
+
+// SyscallConn lets quic-go set the don't-fragment bit on the shared socket. Without it QUIC
+// cannot discover the path MTU and stays at 1280-byte packets for good, which on Windows (one
+// system call per packet) is what caps throughput.
+func (f *filteredConn) SyscallConn() (syscall.RawConn, error) { return f.parent.SyscallConn() }
 
 func (f *filteredConn) SetReadBuffer(bytes int) error  { return f.parent.SetReadBuffer(bytes) }
 func (f *filteredConn) SetWriteBuffer(bytes int) error { return f.parent.SetWriteBuffer(bytes) }

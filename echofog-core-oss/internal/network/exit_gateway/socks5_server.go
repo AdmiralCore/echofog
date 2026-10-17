@@ -1,6 +1,7 @@
 package exit_gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -47,9 +48,20 @@ type SOCKS5Server struct {
 	refusalsOnce sync.Once
 	health       streamHealth
 
+	// caps on what local apps can hold at once: each connection or association costs a
+	// stream to the exit, and the exit link carries a few thousand at most
+	connSlots chan struct{}
+	udpSlots  chan struct{}
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
+
+const (
+	maxSocksConns      = 2048
+	maxSocksUDPAssocs  = 512
+	socksHandshakeTime = 10 * time.Second
+)
 
 // NewSOCKS5Server creates a new local SOCKS5 proxy server.
 func NewSOCKS5Server(listenAddr string, dialer StreamDialer) *SOCKS5Server {
@@ -57,6 +69,8 @@ func NewSOCKS5Server(listenAddr string, dialer StreamDialer) *SOCKS5Server {
 		listenAddr: listenAddr,
 		dialer:     dialer,
 		logger:     slog.Default().With("component", "socks5_server"),
+		connSlots:  make(chan struct{}, maxSocksConns),
+		udpSlots:   make(chan struct{}, maxSocksUDPAssocs),
 	}
 }
 
@@ -73,7 +87,7 @@ func (s *SOCKS5Server) Start() error {
 	s.listener = l
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
-	go s.acceptLoop()
+	go s.acceptLoop(s.ctx, l)
 
 	s.logger.Info("SOCKS5 proxy server started", "addr", s.listener.Addr().String())
 	return nil
@@ -126,24 +140,48 @@ func (s *SOCKS5Server) Stats() (active int64, rx uint64, tx uint64) {
 	return s.activeConns.Load(), s.bytesRx.Load(), s.bytesTx.Load()
 }
 
-func (s *SOCKS5Server) acceptLoop() {
+// acceptLoop serves l until the proxy stops. An accept error that is not the listener closing
+// (too many open files, out of buffers) is waited out, like net/http does: the proxy must not
+// die silently while the app and the TUN on top of it still count on it.
+func (s *SOCKS5Server) acceptLoop(ctx context.Context, l net.Listener) {
+	var backoff time.Duration
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := l.Accept()
 		if err != nil {
-			select {
-			case <-s.ctx.Done():
-				return
-			default:
-				s.logger.Warn("SOCKS5 accept error", "err", err)
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else if backoff *= 2; backoff > time.Second {
+				backoff = time.Second
+			}
+			s.logger.Warn("SOCKS5 accept error, retrying", "err", err, "in", backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
+		backoff = 0
 
+		select {
+		case s.connSlots <- struct{}{}:
+		default:
+			_ = conn.Close() // far more connections than any app needs: refuse rather than fall over
+			continue
+		}
 		s.activeConns.Add(1)
 		go func(c net.Conn) {
+			// stopping the proxy ends its connections too, so nothing keeps using (and paying
+			// for) the exit after the VPN is off
+			stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 			defer func() {
+				stop()
 				_ = c.Close()
 				s.activeConns.Add(-1)
+				<-s.connSlots
 			}()
 			s.handleClient(c)
 		}(conn)
@@ -151,7 +189,7 @@ func (s *SOCKS5Server) acceptLoop() {
 }
 
 func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
-	_ = clientConn.SetDeadline(time.Now().Add(15 * time.Second))
+	_ = clientConn.SetDeadline(time.Now().Add(socksHandshakeTime))
 
 	// 1. SOCKS5 Negotiation / Auth handshake
 	// [VER, NMETHODS, METHODS...]
@@ -170,8 +208,11 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 		return
 	}
 
-	// Server accepts NO AUTH (0x00)
-	// Response: [VER 0x05, METHOD 0x00]
+	// only NO AUTH (0x00); a client that does not offer it gets "no acceptable methods"
+	if !bytes.Contains(methods, []byte{0x00}) {
+		_, _ = clientConn.Write([]byte{0x05, 0xFF})
+		return
+	}
 	if _, err := clientConn.Write([]byte{0x05, 0x00}); err != nil {
 		return
 	}
@@ -179,7 +220,7 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	// 2. Request Details
 	// [VER 0x05, CMD, RSV 0x00, ATYP, DST.ADDR, DST.PORT]
 	reqHeader := make([]byte, 3)
-	if _, err := io.ReadFull(clientConn, reqHeader); err != nil {
+	if _, err := io.ReadFull(clientConn, reqHeader); err != nil || reqHeader[0] != 0x05 {
 		return
 	}
 	targetAddr, rep, err := readSocksAddr(clientConn)
@@ -205,6 +246,10 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	}
 
 	if fake := s.fakeDNS(); fake != nil {
+		if isFakeResolver(targetAddr) {
+			s.serveTCPDNS(clientConn, fake) // DNS over TCP to the TUN's resolver: answered here too
+			return
+		}
 		t, ok := fake.TranslateHostPort(targetAddr)
 		if !ok {
 			s.sendReply(clientConn, 0x04) // Host unreachable: the fake IP is no longer mapped
@@ -229,7 +274,7 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	p2pStream, err := dialer.DialExitStream(ctx, targetAddr)
 	if err != nil {
 		s.noteRefusal(targetAddr, err)
-		s.sendReply(clientConn, 0x05) // Connection refused
+		s.sendReply(clientConn, replyFor(err))
 		return
 	}
 	s.health.ok()
@@ -262,25 +307,11 @@ func (s *SOCKS5Server) sendReplyAddr(clientConn net.Conn, repCode byte, bound *n
 	return err
 }
 
-func (s *SOCKS5Server) spliceP2P(clientConn io.ReadWriter, p2pStream io.ReadWriter) {
-	errChan := make(chan error, 2)
-
-	// Client -> P2P Exit
-	go func() {
-		n, err := io.Copy(p2pStream, clientConn)
-		s.bytesTx.Add(uint64(n))
-		errChan <- err
-	}()
-
-	// P2P Exit -> Client
-	go func() {
-		n, err := io.Copy(clientConn, p2pStream)
-		s.bytesRx.Add(uint64(n))
-		errChan <- err
-	}()
-
-	// Wait for one direction to close
-	<-errChan
+// spliceP2P runs the connection until both sides are done, half-closes included.
+func (s *SOCKS5Server) spliceP2P(clientConn net.Conn, p2pStream io.ReadWriteCloser) {
+	_ = relay(s.ctx, clientConn, p2pStream,
+		func(n int) { s.bytesTx.Add(uint64(n)) },
+		func(n int) { s.bytesRx.Add(uint64(n)) })
 }
 
 // SetEmitter attaches the node event bus for exit-session telemetry
