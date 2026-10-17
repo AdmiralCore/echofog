@@ -21,23 +21,17 @@ func TestEmbeddedWintunIsAValidDLL(t *testing.T) {
 	}
 }
 
-func TestWriteFileIfAbsent(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wintun.dll")
-	data := []byte("driver-bytes")
-	if err := writeFileIfAbsent(path, data); err != nil {
+// A planted wintun.dll beside the exe is replaced, never loaded by the elevated helper.
+func TestWriteFileReplacingOverwritesAPlantedDLL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wintun.dll")
+	if err := os.WriteFile(path, []byte("planted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileReplacing(path, []byte("trusted")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("file not written correctly: %v / %q", err, got)
-	}
-	// a second call must not overwrite an existing file
-	if err := writeFileIfAbsent(path, []byte("different")); err != nil {
-		t.Fatal(err)
-	}
-	got2, _ := os.ReadFile(path)
-	if !bytes.Equal(got2, data) {
-		t.Fatalf("existing file was overwritten: %q", got2)
+	if err != nil || string(got) != "trusted" {
+		t.Fatalf("planted file kept: %v / %q", err, got)
 	}
 }

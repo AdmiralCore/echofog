@@ -114,6 +114,20 @@ func (m *Mapper) TranslateHostPort(addr string) (string, bool) {
 	return net.JoinHostPort(name, port), true
 }
 
+const firefoxCanary = "use-application-dns.net"
+
+const (
+	typeSVCB  dnsmessage.Type = 64
+	typeHTTPS dnsmessage.Type = 65
+)
+
+// realAnswers are names whose true address applications check against a fixed value. Windows
+// shows "No Internet access" unless dns.msftncsi.com resolves to exactly this, and some apps then
+// act offline.
+var realAnswers = map[string]net.IP{
+	"dns.msftncsi.com": net.IPv4(131, 107, 255, 255),
+}
+
 // Answer handles a DNS query locally when it can. A queries for real domain names get a fake IP;
 // AAAA queries get an empty answer so applications fall back to IPv4 (which the TUN captures).
 // Anything else (PTR, TXT, SRV, MX, HTTPS, single-label names) is left for the caller to forward
@@ -135,8 +149,16 @@ func (m *Mapper) Answer(query []byte) (resp []byte, handled bool) {
 	if q.Class != dnsmessage.ClassINET || !strings.Contains(name, ".") || strings.HasSuffix(name, ".local") {
 		return nil, false
 	}
-	switch q.Type {
-	case dnsmessage.TypeA, dnsmessage.TypeAAAA:
+	rcode := dnsmessage.RCodeSuccess
+	switch {
+	case name == firefoxCanary:
+		// Firefox turns its own DNS-over-HTTPS off when this name does not exist; with DoH on,
+		// its lookups would bypass the fake DNS and reach sites by IP the exit cannot name
+		rcode = dnsmessage.RCodeNameError
+	case q.Type == dnsmessage.TypeA, q.Type == dnsmessage.TypeAAAA:
+	case q.Type == typeSVCB, q.Type == typeHTTPS:
+		// no records: forwarded, the real answer would carry ipv4hint/ipv6hint and browsers
+		// would connect to those real addresses, past the name the exit needs
 	default:
 		return nil, false
 	}
@@ -147,7 +169,7 @@ func (m *Mapper) Answer(query []byte) (resp []byte, handled bool) {
 		OpCode:             h.OpCode,
 		RecursionDesired:   h.RecursionDesired,
 		RecursionAvailable: true,
-		RCode:              dnsmessage.RCodeSuccess,
+		RCode:              rcode,
 	})
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
@@ -159,9 +181,13 @@ func (m *Mapper) Answer(query []byte) (resp []byte, handled bool) {
 	if err := b.StartAnswers(); err != nil {
 		return nil, false
 	}
-	if q.Type == dnsmessage.TypeA {
+	if q.Type == dnsmessage.TypeA && rcode == dnsmessage.RCodeSuccess {
 		var a dnsmessage.AResource
-		copy(a.A[:], m.IPFor(name))
+		if real, ok := realAnswers[name]; ok {
+			copy(a.A[:], real.To4())
+		} else {
+			copy(a.A[:], m.IPFor(name))
+		}
 		hdr := dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: answerTTL}
 		if err := b.AResource(hdr, a); err != nil {
 			return nil, false

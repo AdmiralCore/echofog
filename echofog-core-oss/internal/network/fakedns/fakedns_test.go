@@ -105,3 +105,34 @@ func TestPoolWrapsAndRecyclesOldest(t *testing.T) {
 	assert.Equal(t, "new.example", name)
 	assert.NotEqual(t, first, m.IPFor("first.example"))
 }
+
+func TestAnswerPoliciesForBrowsersAndWindows(t *testing.T) {
+	m := New()
+
+	resp, ok := m.Answer(query(t, "use-application-dns.net.", dnsmessage.TypeA))
+	require.True(t, ok)
+	var p dnsmessage.Parser
+	h, err := p.Start(resp)
+	require.NoError(t, err)
+	assert.Equal(t, dnsmessage.RCodeNameError, h.RCode, "Firefox's canary must not exist, so it keeps DoH off")
+
+	resp, ok = m.Answer(query(t, "example.com.", typeHTTPS))
+	require.True(t, ok, "HTTPS records are answered here, never forwarded with real address hints")
+	h, err = p.Start(resp)
+	require.NoError(t, err)
+	assert.Equal(t, dnsmessage.RCodeSuccess, h.RCode)
+	require.NoError(t, p.SkipAllQuestions())
+	_, err = p.AnswerHeader()
+	assert.Equal(t, dnsmessage.ErrSectionDone, err, "no records")
+
+	resp, ok = m.Answer(query(t, "dns.msftncsi.com.", dnsmessage.TypeA))
+	require.True(t, ok)
+	_, err = p.Start(resp)
+	require.NoError(t, err)
+	require.NoError(t, p.SkipAllQuestions())
+	_, err = p.AnswerHeader()
+	require.NoError(t, err)
+	a, err := p.AResource()
+	require.NoError(t, err)
+	assert.Equal(t, net.IPv4(131, 107, 255, 255).To4(), net.IP(a.A[:]), "Windows' connectivity check needs the real address")
+}

@@ -1,11 +1,13 @@
 package tunmode
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -23,50 +25,36 @@ func deviceURL() string { return "tun://" + DeviceName + "?guid=" + deviceGUID }
 
 func preflight() error { return ensureWintun() }
 
-// ensureWintun makes sure wintun.dll can be found by the loader before the adapter is created.
-// It writes the embedded driver next to the executable; if that directory is not writable (e.g.
-// the app is installed under Program Files and not elevated yet), it writes to a per-user cache
-// directory and adds it to the DLL search path instead. A wintun.dll already present next to the
-// executable is left as is, so an operator can override the embedded one.
+// ensureWintun puts the embedded, signed Wintun driver next to the executable before the adapter
+// is created; Wintun is loaded from the application directory only. It runs in the elevated
+// helper, so it trusts nothing already there: a wintun.dll that differs from ours is replaced.
+// Anyone able to drop a file beside the exe (a portable install in the user's folder) would
+// otherwise have their DLL loaded with administrator rights at the next UAC approval.
 func ensureWintun() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	beside := filepath.Join(filepath.Dir(exe), "wintun.dll")
-	if _, err := os.Stat(beside); err == nil {
-		return nil // already there (shipped alongside, or written on an earlier run)
-	}
 	if len(wintunDLL) == 0 {
-		return fmt.Errorf("wintun.dll is missing next to %s and none is embedded for this architecture", filepath.Base(exe))
-	}
-	if err := writeFileIfAbsent(beside, wintunDLL); err == nil {
+		// no embedded driver for this architecture: the one shipped beside the exe is used
+		if _, err := os.Stat(beside); err != nil {
+			return fmt.Errorf("wintun.dll is missing next to %s and none is embedded for this architecture", filepath.Base(exe))
+		}
 		return nil
 	}
-	// fall back to a writable cache directory the loader is told to search
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return fmt.Errorf("cannot place wintun.dll: %w", err)
+	if have, err := os.ReadFile(beside); err == nil && bytes.Equal(have, wintunDLL) {
+		return nil
 	}
-	dir := filepath.Join(cache, "EchoFog")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := writeFileIfAbsent(filepath.Join(dir, "wintun.dll"), wintunDLL); err != nil {
-		return err
-	}
-	if err := windows.SetDllDirectory(dir); err != nil {
-		return fmt.Errorf("wintun.dll written to %s but it could not be added to the DLL search path: %w", dir, err)
+	if err := writeFileReplacing(beside, wintunDLL); err != nil {
+		return fmt.Errorf("cannot put the trusted wintun.dll next to %s: %w", filepath.Base(exe), err)
 	}
 	return nil
 }
 
-// writeFileIfAbsent writes data to a new file at path, via a temp file renamed into place so a
-// torn write never leaves a half-driver behind. If the file appeared meanwhile, it is kept.
-func writeFileIfAbsent(path string, data []byte) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	}
+// writeFileReplacing writes data to path through a temp file renamed over it, so a torn write
+// never leaves a half driver and an existing file is replaced in one step.
+func writeFileReplacing(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".wintun-*.tmp")
 	if err != nil {
 		return err
@@ -119,6 +107,13 @@ func configure(_ int) (func(), error) {
 			return nil, err
 		}
 	}
+	// The netstack behind the adapter takes packets up to mtu and drops bigger ones. Wintun
+	// announces 65535, so without this Windows would hand it large UDP datagrams (big DNS
+	// answers, games) that vanish without an error. TCP is unaffected (MSS), so best effort.
+	mtuArg := "mtu=" + strconv.Itoa(mtu)
+	_ = netsh("interface", "ipv4", "set", "subinterface", DeviceName, mtuArg, "store=active")
+	_ = netsh("interface", "ipv6", "set", "subinterface", DeviceName, mtuArg, "store=active")
+
 	// IPv6 is captured too so it cannot leak around the tunnel; failures (IPv6 disabled) are fine.
 	_ = netsh("interface", "ipv6", "add", "address", DeviceName, tunCIDR6, "store=active")
 	_ = netsh("interface", "ipv6", "add", "route", "::/1", DeviceName, "::", "metric=1", "store=active")

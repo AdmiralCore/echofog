@@ -176,7 +176,7 @@ func (t *WSTransport) Dial(ctx context.Context, url string) error {
 	if t.perNode && !haveExpected {
 		return ErrPeerUnknown
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: tcpHandshakeTimeout, Subprotocols: nil}
+	dialer := websocket.Dialer{HandshakeTimeout: tcpHandshakeTimeout, NetDialContext: DirectDialer(0).DialContext}
 	ws, _, err := dialer.DialContext(ctx, url, http.Header{})
 	if err != nil {
 		return err

@@ -303,8 +303,9 @@ func (c *idleConn) Write(b []byte) (int, error) {
 
 // Dial connects to a peer listening on addr over TCP.
 func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
-	var d net.Dialer
-	raw, err := d.DialContext(ctx, "tcp", addr)
+	// pinned to the real network while whole-computer mode is on: through the TUN this
+	// connection would try to carry itself
+	raw, err := DirectDialer(0).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
