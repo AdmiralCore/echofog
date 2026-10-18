@@ -38,6 +38,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/contacts"
 	"github.com/echofog/echofog-core/internal/services/discovery"
+	"github.com/echofog/echofog-core/internal/services/filexfer"
 	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/internal/wallet/tonwallet"
@@ -89,6 +90,7 @@ type Node struct {
 	BWProbe      *bwprobe.Prober
 	ExitService  *exit_gateway.ExitService
 	VPNMarket    *vpnmarket.Service
+	Files        *filexfer.Service // files sent to and received from contacts
 
 	Logger *slog.Logger
 
@@ -549,6 +551,9 @@ func (n *Node) Start() (err error) {
 	// route messages through a configured private relay even though it does not advertise itself
 	n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
 	n.dialConfiguredRelays()
+	if err := n.startFiles(); err != nil {
+		return fmt.Errorf("file transfers: %w", err)
+	}
 
 	// Publish node's own PreKeyBundle locally and to DHT for asynchronous E2EE initiation, and keep
 	// it there: the first publication happens before anybody is connected, so it is repeated
@@ -718,6 +723,9 @@ func (n *Node) shutdown(closeLog bool) {
 		// 3. Gracefully stop all services in reverse DAG order
 		if n.Services != nil {
 			_ = n.Services.StopAll()
+		}
+		if n.Files != nil {
+			n.Files.Stop() // downloads keep their progress for the next start
 		}
 		// 4. Close Swarm connections, streams, and wait for all swarm goroutines
 		if n.Swarm != nil {

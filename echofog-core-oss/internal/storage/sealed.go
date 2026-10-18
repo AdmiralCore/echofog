@@ -28,6 +28,8 @@ var SealedPrefixes = [][]byte{
 	[]byte("mb:v1:"),
 	[]byte("vpnmarket:"),
 	[]byte("bcache:"),
+	[]byte("fx:"), // file transfers: names, paths and keys
+	[]byte("bm:"), // saved messages
 }
 
 var ErrSealed = errors.New("stored value cannot be opened")

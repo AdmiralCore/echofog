@@ -74,6 +74,9 @@ const (
 	// ID][fragment index][fragment count][2-byte address length]["host:port"][payload].
 	TypeExitUDPToExit
 	TypeExitUDPFromExit
+	// TypeFileXfer carries one frame of a file transfer (see internal/services/filexfer): sealed
+	// end to end, so it travels the same way directly and over a relay circuit.
+	TypeFileXfer
 )
 
 // IsUnreliableType reports whether frames of this type may arrive as unreliable QUIC datagrams.

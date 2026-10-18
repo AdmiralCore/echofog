@@ -159,9 +159,10 @@ func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
 
 func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 	readCh := make(chan *dto.MessageDTO, 100)
-	n.node.Messenger.AddHandleCallback(func(dto *dto.MessageDTO) {
+	n.node.Messenger.AddHandleCallback(func(m *dto.MessageDTO) {
+		c := scrubMessage(*m) // a copy: other callbacks read the same message
 		select {
-		case readCh <- dto:
+		case readCh <- &c:
 		default:
 		}
 	})
@@ -200,6 +201,9 @@ func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint6
 	)
 	if err != nil {
 		return nil, err
+	}
+	for i := range msgs {
+		msgs[i] = scrubMessage(msgs[i])
 	}
 	if raw, derr := hex.DecodeString(contactID); derr == nil && len(raw) == len(types.PeerID{}) {
 		var peer types.PeerID

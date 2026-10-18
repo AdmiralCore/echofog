@@ -282,3 +282,36 @@ type TonTxDTO struct {
 	FeeTON       string `json:"feeTon"`
 	Failed       bool   `json:"failed"`
 }
+
+// FileTransferDTO is a file sent to or received from a contact.
+type FileTransferDTO struct {
+	ID      string `json:"id"`
+	Peer    string `json:"peer"`
+	Dir     string `json:"dir"` // "out": we send it; "in": we receive it
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	Mime    string `json:"mime,omitempty"`
+	State   string `json:"state"` // offered, active, done, declined, cancelled, failed
+	Error   string `json:"error,omitempty"`
+	Path    string `json:"path,omitempty"` // the file on this computer (the source, or the received file once done)
+	Done    int64  `json:"done"`           // bytes received and checked, or sent
+	Rate    int64  `json:"rate"`           // bytes per second, lately
+	Stalled bool   `json:"stalled"`        // nothing moves: the peer is offline or cannot be reached
+	Created int64  `json:"created"`        // unix milliseconds
+	Updated int64  `json:"updated"`
+}
+
+// SavedMessageDTO is a message the user bookmarked: a copy, so it stays even when the chat goes.
+type SavedMessageDTO struct {
+	ID       string `json:"id"`     // chat ID and message ID: one bookmark per message
+	ChatID   string `json:"chatId"` // "d:<peer>" or "g:<group>", as the UI names chats
+	ChatName string `json:"chatName"`
+	MsgID    string `json:"msgId"`
+	Sender   string `json:"sender,omitempty"`
+	Mine     bool   `json:"mine"`
+	Text     string `json:"text"`
+	FileName string `json:"fileName,omitempty"`
+	FileSize int64  `json:"fileSize,omitempty"`
+	Ts       int64  `json:"ts"`      // when the message was written, unix milliseconds
+	SavedAt  int64  `json:"savedAt"` // unix milliseconds
+}

@@ -176,6 +176,8 @@ type RelayConfig struct {
 
 type StorageConfig struct {
 	DatabasePath string `json:"database_path"`
+	// DownloadDir is where received files go; empty: the user's Downloads folder, in "EchoFog".
+	DownloadDir string `json:"download_dir,omitempty"`
 }
 
 // TonConfig selects the TON network of the built-in wallet ("mainnet" | "testnet").
