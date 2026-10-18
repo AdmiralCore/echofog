@@ -6,9 +6,9 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/pkg/api/types"
-	"github.com/quic-go/quic-go"
 )
 
 // ListenEarly starts accepting inbound QUIC connections (0-RTT capable).
@@ -40,6 +40,7 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 			continue
 		}
 
+		q.applyCongestion(conn)
 		ip := addrOfNet(conn.RemoteAddr())
 		releaseIP, allowed := q.guard.Load().Allow(ip)
 		if !allowed {

@@ -52,63 +52,205 @@ type P2PDialer struct {
 
 func NewP2PDialer(open StreamOpener) *P2PDialer { return &P2PDialer{open: open} }
 
-// DialExitStream asks the exit peer to connect to targetAddr and returns the raw byte pipe once it confirms
+// DialExitStream opens a tunnel to targetAddr through the exit peer without waiting for the exit
+// to answer, the way hysteria's fast open does: the request goes out and the stream is returned
+// at once, so the application's first bytes leave together with it instead of one round trip
+// plus the exit's own dial later. The exit's verdict is read on the first Read: a refusal comes
+// back from there as ErrExitDenied, ErrPaymentRequired and so on. ctx bounds the wait for the
+// verdict as well, so it must stay alive until the first Read returned; cancelling it earlier
+// aborts the stream. Callers that need the verdict before anything else use
+// DialExitStreamConfirmed.
 func (d *P2PDialer) DialExitStream(ctx context.Context, targetAddr string) (io.ReadWriteCloser, error) {
+	l, err := d.dialLazy(ctx, targetAddr)
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+// DialExitStreamConfirmed is DialExitStream that returns only once the exit has answered, with
+// its refusal as the error: for checks that only want to know whether the exit carries a target.
+func (d *P2PDialer) DialExitStreamConfirmed(ctx context.Context, targetAddr string) (io.ReadWriteCloser, error) {
+	l, err := d.dialLazy(ctx, targetAddr)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.Verdict(ctx); err != nil {
+		l.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+func (d *P2PDialer) dialLazy(ctx context.Context, targetAddr string) (*lazyExitStream, error) {
 	if d == nil || d.open == nil {
 		return nil, errNoStreamOpener
 	}
 	if len(targetAddr) == 0 || len(targetAddr) > maxTargetLen {
 		return nil, ErrInvalidTarget
 	}
-
 	st, err := d.open(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open stream to exit peer: %w", err)
 	}
-
 	if err := st.WriteFrame(net_types.TypeExitConnect, []byte(targetAddr)); err != nil {
 		st.Close()
 		return nil, err
 	}
+	return newLazyExitStream(ctx, st), nil
+}
 
-	type reply struct {
-		t   net_types.MessageType
-		b   []byte
-		err error
+// verdictErr turns the exit's reply frame into what the client sees.
+func verdictErr(t net_types.MessageType, b []byte) error {
+	if t != net_types.TypeExitConnectResult || len(b) < 1 {
+		return ErrExitProtocol
 	}
-	ch := make(chan reply, 1)
+	switch b[0] {
+	case resultOK:
+		return nil
+	case resultDenied:
+		return ErrExitDenied
+	case resultPayment:
+		return ErrPaymentRequired
+	default:
+		return ErrExitDialFailed
+	}
+}
+
+// VerdictNotifier is implemented by streams whose exit answers after they were handed out.
+type VerdictNotifier interface {
+	// OnVerdict calls f once with the exit's answer: nil when it carries the stream. f is not
+	// called when the stream was closed locally before the answer came.
+	OnVerdict(f func(error))
+}
+
+// lazyExitStream is a tunnel whose exit has not answered yet. One goroutine reads the reply
+// frame; Read waits for it, and Write goes out at once (the exit reads it after its dial).
+type lazyExitStream struct {
+	FramedStream
+	ready  chan struct{} // closed once err is set
+	err    error
+	closed atomic.Bool
+
+	mu       sync.Mutex
+	notify   func(error)
+	notified bool
+}
+
+func newLazyExitStream(ctx context.Context, st FramedStream) *lazyExitStream {
+	l := &lazyExitStream{FramedStream: st, ready: make(chan struct{})}
+	var timedOut atomic.Bool
+	stop := context.AfterFunc(ctx, func() {
+		timedOut.Store(true)
+		_ = st.Close() // the exit never answered in time: the read below fails at once
+	})
 	go func() {
 		t, b, err := st.ReadFrame()
-		ch <- reply{t, b, err}
+		stop()
+		switch {
+		case timedOut.Load():
+			err = ctx.Err()
+		case err == nil:
+			err = verdictErr(t, b)
+		}
+		if err != nil {
+			_ = st.Close()
+		}
+		l.err = err
+		close(l.ready)
+		l.fire()
 	}()
+	return l
+}
 
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			st.Close()
-			return nil, r.err
-		}
-		if r.t != net_types.TypeExitConnectResult || len(r.b) < 1 {
-			st.Close()
-			return nil, ErrExitProtocol
-		}
-		switch r.b[0] {
-		case resultOK:
-			return st, nil
-		case resultDenied:
-			st.Close()
-			return nil, ErrExitDenied
-		case resultPayment:
-			st.Close()
-			return nil, ErrPaymentRequired
-		default:
-			st.Close()
-			return nil, ErrExitDialFailed
-		}
-	case <-ctx.Done():
-		st.Close()
-		return nil, ctx.Err()
+func (l *lazyExitStream) fire() {
+	l.mu.Lock()
+	f := l.notify
+	if f == nil || l.notified {
+		l.mu.Unlock()
+		return
 	}
+	l.notified = true
+	l.mu.Unlock()
+	if l.closed.Load() && l.err != nil {
+		return // closed by us before the answer: nothing was refused
+	}
+	f(l.err)
+}
+
+func (l *lazyExitStream) OnVerdict(f func(error)) {
+	l.mu.Lock()
+	l.notify = f
+	l.mu.Unlock()
+	select {
+	case <-l.ready:
+		l.fire()
+	default:
+	}
+}
+
+// Verdict waits for the exit's answer.
+func (l *lazyExitStream) Verdict(ctx context.Context) error {
+	select {
+	case <-l.ready:
+		return l.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l *lazyExitStream) Read(p []byte) (int, error) {
+	<-l.ready
+	if l.err != nil {
+		return 0, l.err
+	}
+	return l.FramedStream.Read(p)
+}
+
+// Write sends at once. A write that fails before the answer is in (the exit refused and reset the
+// stream) reports the refusal rather than a bare stream error.
+func (l *lazyExitStream) Write(p []byte) (int, error) {
+	n, err := l.FramedStream.Write(p)
+	if err != nil && !l.closed.Load() {
+		<-l.ready
+		if l.err != nil {
+			return n, l.err
+		}
+	}
+	return n, err
+}
+
+func (l *lazyExitStream) CloseWrite() error {
+	if cw, ok := l.FramedStream.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+type deadliner interface {
+	SetDeadline(time.Time) error
+	SetReadDeadline(time.Time) error
+}
+
+// SetDeadline and SetReadDeadline reach the stream underneath; a deadline that passes before
+// the exit answered fails the stream like any other read would.
+func (l *lazyExitStream) SetDeadline(t time.Time) error {
+	if d, ok := l.FramedStream.(deadliner); ok {
+		return d.SetDeadline(t)
+	}
+	return nil
+}
+
+func (l *lazyExitStream) SetReadDeadline(t time.Time) error {
+	if d, ok := l.FramedStream.(deadliner); ok {
+		return d.SetReadDeadline(t)
+	}
+	return nil
+}
+
+func (l *lazyExitStream) Close() error {
+	l.closed.Store(true)
+	return l.FramedStream.Close()
 }
 
 // ExitService is the egress side: it accepts tunnel requests from peers and splices them to the Internet
@@ -219,7 +361,9 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 		return
 	}
 	e.accepted.Add(1)
-	_ = e.splicer.Splice(ctx, &meteredStream{FramedStream: st, svc: e, peer: peer}, conn)
+	m := newMeter(e, peer)
+	defer m.close()
+	_ = e.splicer.Splice(ctx, &meteredStream{FramedStream: st, m: m}, conn)
 }
 
 func (e *ExitService) connect(ctx context.Context, target string) (net.Conn, byte) {
@@ -459,15 +603,141 @@ func (e *ExitService) quotaLocked(peer types.PeerID) *peerQuota {
 	return q
 }
 
+// meterSlice is how much allowance a stream sets aside at a time. Taking it per read meant the
+// exit-wide policy lock, a clock read and, for a paying peer, a sha256 for every chunk.
+const meterSlice = 256 << 10
+
+// meter spends one stream's (or UDP relay's) share of the peer's allowance. It reserves in
+// slices from the shared pools, so parallel streams still cannot multiply a quota: what one
+// holds, the others cannot take. What is left at the end goes back.
+type meter struct {
+	svc  *ExitService
+	peer types.PeerID
+
+	mu     sync.Mutex
+	tag    string    // pay tag, computed once
+	free   int64     // bytes before checking again that the peer still rides free
+	quota  int64     // reserved from today's free quota
+	day    time.Time // the day quota was taken from
+	vouch  int64     // reserved from voucher credit
+	paid   int64     // reserved from prepaid credit
+	cut    bool
+	closed bool
+}
+
+func newMeter(svc *ExitService, peer types.PeerID) *meter { return &meter{svc: svc, peer: peer} }
+
+// spend accounts n bytes; false means the allowance is used up and the traffic must stop.
+func (m *meter) spend(n int) bool {
+	if n <= 0 {
+		return true
+	}
+	need := int64(n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cut {
+		return false
+	}
+	if m.left() < need && !m.closed {
+		m.svc.reserve(m, max(meterSlice, need-m.left()))
+	}
+	if m.left() < need {
+		m.free, m.quota, m.vouch, m.paid = 0, 0, 0, 0 // what was allowed is spent, then refused
+		m.cut = true
+		return false
+	}
+	take := func(pool *int64) {
+		t := min(*pool, need)
+		*pool -= t
+		need -= t
+	}
+	take(&m.free)
+	take(&m.quota)
+	take(&m.vouch)
+	take(&m.paid)
+	return true
+}
+
+func (m *meter) left() int64 { return m.free + m.quota + m.vouch + m.paid }
+
+// close gives back what the stream reserved and did not use.
+func (m *meter) close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
+	m.closed = true
+	m.svc.refund(m)
+	m.free, m.quota, m.vouch, m.paid = 0, 0, 0, 0
+}
+
+// reserve tops m up by up to want bytes: free riding first, then today's free quota, then
+// voucher credit, then prepaid credit. Called with m.mu held.
+func (e *ExitService) reserve(m *meter, want int64) {
+	e.policyMu.Lock()
+	if e.freeLocked(m.peer) {
+		e.policyMu.Unlock()
+		m.free += want
+		return
+	}
+	q := e.quotaLocked(m.peer)
+	got := min(want, max(0, e.policy.FreeBytes-q.used))
+	q.used += got
+	if !m.day.Equal(q.day) {
+		m.day = q.day // yesterday's leftover stays spent; refunds go to today
+	}
+	l, v, self := e.ledger, e.vouchers, e.self
+	e.policyMu.Unlock()
+	m.quota += got
+	want -= got
+	if want <= 0 || (l == nil && v == nil) {
+		return
+	}
+	if m.tag == "" {
+		m.tag = PayTag(m.peer, self)
+	}
+	if v != nil {
+		got := v.Spend(m.tag, want)
+		m.vouch += got
+		want -= got
+	}
+	if l != nil && want > 0 {
+		m.paid += l.Reserve(m.tag, want)
+	}
+}
+
+// refund returns m's unused reservation to the pools it came from. Called with m.mu held.
+func (e *ExitService) refund(m *meter) {
+	if m.quota > 0 {
+		e.policyMu.Lock()
+		if q := e.quotas[m.peer]; q != nil && q.day.Equal(m.day) {
+			q.used = max(0, q.used-m.quota)
+		}
+		e.policyMu.Unlock()
+	}
+	if m.vouch <= 0 && m.paid <= 0 {
+		return
+	}
+	e.policyMu.Lock()
+	l, v := e.ledger, e.vouchers
+	e.policyMu.Unlock()
+	if v != nil {
+		v.Refund(m.tag, m.vouch)
+	}
+	if l != nil {
+		l.Refund(m.tag, m.paid)
+	}
+}
+
 // meteredStream spends the peer's allowance as traffic passes and cuts the tunnel when it runs out
 type meteredStream struct {
 	FramedStream
-	svc  *ExitService
-	peer types.PeerID
+	m *meter
 }
 
 func (m *meteredStream) account(n int) error {
-	if !m.svc.consume(m.peer, int64(n)) {
+	if !m.m.spend(n) {
 		return ErrPaymentRequired
 	}
 	return nil

@@ -3,11 +3,12 @@ package network
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
 
-	"github.com/quic-go/quic-go"
+	"github.com/apernet/quic-go"
 )
 
 // MuxStream is a reliable bidirectional stream inside a peer connection.
@@ -148,5 +149,7 @@ func (q quicMuxConn) ChannelBinding() ([]byte, error) {
 // DatagramTooLargeError: the frame does not fit into one datagram of this connection.
 type DatagramTooLargeError struct{ Size, Max int }
 
-func (e *DatagramTooLargeError) Error() string { return ErrDatagramTooLarge.Error() }
+func (e *DatagramTooLargeError) Error() string {
+	return fmt.Sprintf("%s: %d > %d", ErrDatagramTooLarge, e.Size, e.Max)
+}
 func (e *DatagramTooLargeError) Unwrap() error { return ErrDatagramTooLarge }

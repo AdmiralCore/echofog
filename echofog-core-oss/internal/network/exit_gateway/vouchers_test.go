@@ -476,7 +476,7 @@ func TestVoucherPaidTunnel(t *testing.T) {
 	d := NewP2PDialer(open)
 
 	// nothing paid: refused
-	_, err := d.DialExitStream(context.Background(), target)
+	_, err := d.DialExitStreamConfirmed(context.Background(), target)
 	assert.ErrorIs(t, err, ErrPaymentRequired)
 
 	info := svc.AccountOf(testClient)

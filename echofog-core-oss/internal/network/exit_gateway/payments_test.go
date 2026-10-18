@@ -212,7 +212,7 @@ func TestPaidTunnelLifecycle(t *testing.T) {
 	_, err = io.ReadFull(c, make([]byte, 600))
 	assert.Error(t, err, "the stream is cut when the free quota is gone")
 	c.Close()
-	_, err = dial()
+	_, err = NewP2PDialer(open).DialExitStreamConfirmed(context.Background(), target)
 	assert.ErrorIs(t, err, ErrPaymentRequired)
 
 	// 3. the client pays 0.10 USDT; the exit sees the transfer and credits it

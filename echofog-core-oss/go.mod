@@ -5,6 +5,7 @@ go 1.27.0
 toolchain go1.27.2
 
 require (
+	github.com/apernet/quic-go v0.63.1-0.20261004180939-a10df75c260c
 	github.com/awnumar/memguard v0.23.0
 	github.com/dgraph-io/badger/v4 v4.9.0
 	github.com/google/uuid v1.6.0
@@ -20,9 +21,8 @@ require (
 	github.com/pion/sdp/v3 v3.0.9
 	github.com/pion/stun v0.6.1
 	github.com/pion/webrtc/v3 v3.3.6
-	github.com/quic-go/quic-go v0.58.0
 	github.com/refraction-networking/utls v1.8.2
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	github.com/xssnick/tonutils-go v1.18.0
@@ -43,7 +43,6 @@ require (
 	github.com/awnumar/memcall v0.4.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -71,8 +70,6 @@ require (
 	github.com/pion/transport/v2 v2.2.10 // indirect
 	github.com/pion/transport/v3 v3.1.1 // indirect
 	github.com/pion/turn/v2 v2.1.6 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
@@ -81,10 +78,10 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 )

@@ -62,7 +62,7 @@ func TestPaymentCycleBetweenTwoRealNodes(t *testing.T) {
 	_, err = io.ReadFull(c, make([]byte, 600))
 	assert.Error(t, err, "cut when the free quota runs out")
 	c.Close()
-	_, err = dialer.DialExitStream(ctx, echo)
+	_, err = dialer.DialExitStreamConfirmed(ctx, echo)
 	assert.ErrorIs(t, err, ErrPaymentRequired)
 
 	// 3. the client pays 0.01 USDT (the smallest credited amount) with the tag as the comment

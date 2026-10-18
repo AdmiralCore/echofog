@@ -148,7 +148,8 @@ func (p *PeerWrapper) SendDatagramFrame(msgType net_types.MessageType, data []by
 	err := p.conn.SendDatagram(buf)
 	var tooLarge *DatagramTooLargeError
 	if errors.As(err, &tooLarge) {
-		return fmt.Errorf("%w: %d > %d", ErrDatagramTooLarge, tooLarge.Size, tooLarge.Max)
+		// sizes of data, without the type byte, so a caller can cut its frames to fit
+		return &DatagramTooLargeError{Size: len(data), Max: tooLarge.Max - 1}
 	}
 	return err
 }

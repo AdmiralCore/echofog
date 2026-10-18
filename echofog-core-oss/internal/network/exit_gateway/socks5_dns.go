@@ -47,6 +47,9 @@ func (s *SOCKS5Server) serveTCPDNS(c net.Conn, fake *fakedns.Mapper) {
 		return
 	}
 	var upstream io.ReadWriteCloser
+	// bounds the exit's answer to the upstream dial, which comes with the first reply (fast open)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
 	defer func() {
 		if upstream != nil {
 			upstream.Close()
@@ -65,13 +68,18 @@ func (s *SOCKS5Server) serveTCPDNS(c net.Conn, fake *fakedns.Mapper) {
 				if d == nil {
 					return
 				}
-				ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 				upstream, err = d.DialExitStream(ctx, fallbackDNS)
-				cancel()
 				if err != nil {
 					upstream = nil
 					s.noteRefusal(fallbackDNS, err)
 					return
+				}
+				if v, ok := upstream.(VerdictNotifier); ok {
+					v.OnVerdict(func(err error) {
+						if err != nil {
+							s.noteRefusal(fallbackDNS, err)
+						}
+					})
 				}
 			}
 			if err := writeDNSTCP(upstream, msg); err != nil {

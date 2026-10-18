@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -146,11 +147,16 @@ func TestProxyRemoteCloseReachesClient(t *testing.T) {
 // numbers on a shared CI runner say little:
 //
 //	ECHOFOG_BENCH=1 go test ./internal/network/exit_gateway -run TestProxyThroughput -v
+//
+// ECHOFOG_BENCH_MB sets the transfer size (default 256) and ECHOFOG_CONGESTION the controller.
 func TestProxyThroughput(t *testing.T) {
 	if os.Getenv("ECHOFOG_BENCH") == "" {
 		t.Skip("set ECHOFOG_BENCH=1 to measure")
 	}
-	const size = 256 << 20
+	size := 256 << 20
+	if mb, err := strconv.Atoi(os.Getenv("ECHOFOG_BENCH_MB")); err == nil && mb > 0 {
+		size = mb << 20 // smaller transfers for a shaped (netem) link
+	}
 	chunk := make([]byte, 256<<10)
 	_, _ = rand.Read(chunk)
 	sink := server(t, func(c net.Conn) {

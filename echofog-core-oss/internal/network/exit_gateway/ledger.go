@@ -222,6 +222,44 @@ func (l *Ledger) Consume(tag string, n int64) bool {
 	return true
 }
 
+// Reserve takes up to n bytes of tag's paid credit (overdraft included) and returns how many it
+// got: a stream sets them aside and spends them without coming back here for every read.
+func (l *Ledger) Reserve(tag string, n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	a := l.data.Accounts[tag]
+	if a == nil {
+		return 0
+	}
+	floor := int64(0)
+	if a.EverPaid {
+		floor = -OverdraftBytes
+	}
+	got := min(n, a.CreditBytes-floor)
+	if got <= 0 {
+		return 0
+	}
+	a.CreditBytes -= got
+	l.dirty = true
+	return got
+}
+
+// Refund gives back reserved bytes a stream did not use.
+func (l *Ledger) Refund(tag string, n int64) {
+	if n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if a := l.data.Accounts[tag]; a != nil {
+		a.CreditBytes += n
+		l.dirty = true
+	}
+}
+
 // Available is the number of bytes tag could still spend right now (paid credit plus overdraft).
 func (l *Ledger) Available(tag string) int64 {
 	l.mu.Lock()

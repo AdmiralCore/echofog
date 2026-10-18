@@ -50,15 +50,15 @@ func TestExitLogsAndCountsRefusalsByReason(t *testing.T) {
 	svc := NewExitService()
 
 	// exit off
-	_, err := NewP2PDialer(serve(svc)).DialExitStream(context.Background(), "example.com:443")
+	_, err := NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), "example.com:443")
 	assert.ErrorIs(t, err, ErrExitDenied)
 	// private target
 	svc.SetEnabled(true)
-	_, err = NewP2PDialer(serve(svc)).DialExitStream(context.Background(), "10.0.0.1:80")
+	_, err = NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), "10.0.0.1:80")
 	assert.ErrorIs(t, err, ErrExitDenied)
 	// unresolvable
 	svc.resolver = func(context.Context, string) ([]net.IP, error) { return nil, errors.New("nxdomain") }
-	_, err = NewP2PDialer(serve(svc)).DialExitStream(context.Background(), "nowhere.example:443")
+	_, err = NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), "nowhere.example:443")
 	assert.ErrorIs(t, err, ErrExitDialFailed)
 
 	_, refused, _ := svc.Stats()

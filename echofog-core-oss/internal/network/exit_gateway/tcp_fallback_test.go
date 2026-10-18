@@ -90,6 +90,7 @@ func TestExitAndMediaOverTCPFallback(t *testing.T) {
 	u, err := NewP2PDialer(SwarmOpener(clientSwarm, exitPeer.ID())).DialExitUDP(context.Background())
 	require.NoError(t, err)
 	defer u.Close()
+	assert.False(t, u.Datagrams(), "over TCP the datagrams stay on the stream")
 	require.NoError(t, u.WriteTo([]byte("udp over tcp"), echo.LocalAddr().String()))
 	b, _ := readWithin(t, u, 3*time.Second)
 	assert.Equal(t, "udp over tcp", string(b))

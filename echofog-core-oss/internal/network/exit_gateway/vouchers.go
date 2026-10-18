@@ -261,6 +261,19 @@ func (b *VoucherBook) Spend(tag string, n int64) int64 {
 	return used
 }
 
+// Refund gives back voucher-paid bytes that Spend handed out and a stream did not use.
+func (b *VoucherBook) Refund(tag string, n int64) {
+	if n <= 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if a := b.data.Accounts[b.data.Peers[tag]]; a != nil {
+		a.Credit += n
+		b.dirty = true
+	}
+}
+
 // parseOffer turns an offer into the voucher it claims to sign, for this exit and network.
 func (b *VoucherBook) parseOffer(o VoucherOffer) (tonwallet.SignedVoucher, ed25519.PublicKey, *address.Address, error) {
 	var zero tonwallet.SignedVoucher

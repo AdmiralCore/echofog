@@ -69,9 +69,14 @@ const (
 	// JSON array of adverts exactly as their exits signed them, so the asker verifies each itself.
 	// It is how a client finds exits it has no connection to and whose IDs it has never seen.
 	TypeExitDirectory
+	// TypeExitUDPToExit and TypeExitUDPFromExit carry the datagrams of an exit UDP session as
+	// unreliable QUIC datagrams, outside the session's stream: [4-byte session ID][2-byte packet
+	// ID][fragment index][fragment count][2-byte address length]["host:port"][payload].
+	TypeExitUDPToExit
+	TypeExitUDPFromExit
 )
 
 // IsUnreliableType reports whether frames of this type may arrive as unreliable QUIC datagrams.
 func IsUnreliableType(t MessageType) bool {
-	return t == TypeCallMediaAudio || t == TypeCallMediaVideo
+	return t == TypeCallMediaAudio || t == TypeCallMediaVideo || t == TypeExitUDPToExit || t == TypeExitUDPFromExit
 }

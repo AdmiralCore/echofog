@@ -124,7 +124,7 @@ func TestSwarmExitRefusedWhenOptedOut(t *testing.T) {
 	exitID := clientSwarm.GetAllPeers()[0].ID()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := NewP2PDialer(SwarmOpener(clientSwarm, exitID)).DialExitStream(ctx, echoServer(t))
+	_, err := NewP2PDialer(SwarmOpener(clientSwarm, exitID)).DialExitStreamConfirmed(ctx, echoServer(t))
 	assert.ErrorIs(t, err, ErrExitDenied)
 }
 

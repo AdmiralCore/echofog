@@ -89,7 +89,7 @@ func TestTunnelRoundTripThroughExit(t *testing.T) {
 	require.NoError(t, err)
 
 	buf := make([]byte, 10)
-	conn.(net.Conn).SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.(deadliner).SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, err = io.ReadFull(conn, buf)
 	require.NoError(t, err)
 	assert.Equal(t, "hello exit", string(buf))
@@ -102,7 +102,7 @@ func TestTunnelRoundTripThroughExit(t *testing.T) {
 func TestExitRefusesWhenDisabled(t *testing.T) {
 	svc := NewExitService()
 	svc.allowPrivate = true
-	_, err := NewP2PDialer(serve(svc)).DialExitStream(context.Background(), echoServer(t))
+	_, err := NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), echoServer(t))
 	assert.ErrorIs(t, err, ErrExitDenied)
 }
 
@@ -110,10 +110,10 @@ func TestExitBlocksPrivateTargets(t *testing.T) {
 	svc := NewExitService()
 	svc.SetEnabled(true)
 	for _, target := range []string{"127.0.0.1:80", "192.168.1.1:80", "10.0.0.5:22", "169.254.169.254:80", "100.64.0.1:80", "[::1]:80"} {
-		_, err := NewP2PDialer(serve(svc)).DialExitStream(context.Background(), target)
+		_, err := NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), target)
 		assert.ErrorIs(t, err, ErrExitDenied, target)
 	}
-	_, err := NewP2PDialer(serve(svc)).DialExitStream(context.Background(), "no-port")
+	_, err := NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), "no-port")
 	assert.ErrorIs(t, err, ErrExitDenied)
 }
 
@@ -121,7 +121,7 @@ func TestExitBlocksHostnamesResolvingToPrivate(t *testing.T) {
 	svc := NewExitService()
 	svc.SetEnabled(true)
 	svc.resolver = func(context.Context, string) ([]net.IP, error) { return []net.IP{net.ParseIP("10.1.2.3")}, nil }
-	_, err := NewP2PDialer(serve(svc)).DialExitStream(context.Background(), "evil.example:443")
+	_, err := NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), "evil.example:443")
 	assert.ErrorIs(t, err, ErrExitDenied)
 }
 
@@ -163,7 +163,7 @@ func TestFreeQuotaThenPaymentRequired(t *testing.T) {
 
 	require.Eventually(t, func() bool { return svc.allowance(peer) == 0 }, 2*time.Second, 20*time.Millisecond)
 
-	_, err = NewP2PDialer(open).DialExitStream(context.Background(), target)
+	_, err = NewP2PDialer(open).DialExitStreamConfirmed(context.Background(), target)
 	assert.ErrorIs(t, err, ErrPaymentRequired)
 
 	var other types.PeerID

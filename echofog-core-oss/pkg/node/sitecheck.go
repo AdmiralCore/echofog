@@ -127,7 +127,7 @@ func (n *Node) reachThrough(ctx context.Context, exit types.PeerID, target strin
 	defer cancel()
 	host, _, _ := net.SplitHostPort(target)
 	start := time.Now()
-	stream, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.Swarm, exit)).DialExitStream(ctx, target)
+	stream, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.Swarm, exit)).DialExitStreamConfirmed(ctx, target)
 	if err != nil {
 		return Reach{Reason: reason(err)}
 	}

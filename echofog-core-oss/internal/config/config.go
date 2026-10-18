@@ -48,6 +48,13 @@ type NetworkConfig struct {
 	DirectSocket    bool     `json:"direct_socket"`    // Bypass the DPI/STUN multiplexer for raw 1Gbps+ throughput on public IPs
 	SocketBufferMB  int      `json:"socket_buffer_mb"` // Kernel UDP socket buffer size (MB), defaults to 16-32MB
 
+	// Congestion control of QUIC links: "bbr" (default; keeps its speed on lossy links),
+	// "cubic" (quic-go's own, which collapses at about 1% loss) or "brutal", which sends at
+	// BrutalMbps whatever is lost. Brutal is for a user who knows their upload rate: set too
+	// high it floods the line.
+	Congestion string `json:"congestion,omitempty"`
+	BrutalMbps int    `json:"brutal_mbps,omitempty"`
+
 	// Transport: "auto" (QUIC, TCP/TLS when UDP does not get through), "quic" or "tcp"
 	Transport string `json:"transport"`
 	// TCPListenAddr for the TCP/TLS fallback. Empty: no inbound TCP listener — a pure client that

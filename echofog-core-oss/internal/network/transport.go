@@ -12,10 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apernet/quic-go"
+	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/dpi"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/pkg/api/types"
-	"github.com/quic-go/quic-go"
 )
 
 type QuicErrorCode = quic.ApplicationErrorCode
@@ -73,6 +74,9 @@ type TransportOptions struct {
 	OwnID types.PeerID
 	// ObfsSecret is an optional extra secret mixed into every key, for a private network.
 	ObfsSecret string
+	// Congestion is how connections pace what they send; the zero value is BBR.
+	// ECHOFOG_CONGESTION overrides it (see congestion.FromEnv).
+	Congestion congestion.Config
 }
 
 type QuicTransport struct {
@@ -101,6 +105,8 @@ type QuicTransport struct {
 	udpConn        *net.UDPConn
 	closed         chan struct{}  // closed by Close; connChan itself is never closed (senders race)
 	arrivals       arrivalWaiters // hole punching waits for the peer to show up
+
+	congestion atomic.Pointer[congestion.Config]
 
 	obfs       *dpi.NodeObfs // nil: packets go out as they are
 	obfsSecret string
@@ -210,8 +216,23 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 	}
 
 	qt.guard.Store(handshake.NewGuard(handshake.GuardConfig{}))
+	qt.SetCongestion(opts.Congestion)
 	qt.announceListenPort()
 	return qt, nil
+}
+
+// SetCongestion sets the congestion control of connections made from now on.
+func (q *QuicTransport) SetCongestion(c congestion.Config) {
+	c = congestion.FromEnv(c)
+	q.congestion.Store(&c)
+}
+
+// applyCongestion puts the configured controller on a new connection, before its handshake
+// with the peer, so even that leaves at the right pace.
+func (q *QuicTransport) applyCongestion(conn *quic.Conn) {
+	if c := q.congestion.Load(); c != nil {
+		congestion.Apply(conn, *c)
+	}
 }
 
 // BindToInterface pins the node's UDP socket to a network interface (0 unpins). Whole-computer

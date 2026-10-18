@@ -150,7 +150,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func TestUDPRelayQuotaNeverWrapsToUnlimited(t *testing.T) {
 	svc := NewExitService()
 	svc.SetPolicy(Policy{PricePerMB: 5, FreeBytes: 100})
-	r := &udpRelay{svc: svc}
+	r := &udpRelay{svc: svc, meter: newMeter(svc, types.PeerID{})}
 	assert.True(t, r.account(60))
 	assert.False(t, r.account(60)) // crosses the quota
 	assert.False(t, r.account(1), "an exhausted relay must stay exhausted")
@@ -159,7 +159,7 @@ func TestUDPRelayQuotaNeverWrapsToUnlimited(t *testing.T) {
 func TestMeteredStreamQuotaNeverWrapsToUnlimited(t *testing.T) {
 	svc := NewExitService()
 	svc.SetPolicy(Policy{PricePerMB: 5, FreeBytes: 100})
-	m := &meteredStream{svc: svc}
+	m := &meteredStream{m: newMeter(svc, types.PeerID{})}
 	assert.NoError(t, m.account(60))
 	assert.ErrorIs(t, m.account(60), ErrPaymentRequired)
 	assert.ErrorIs(t, m.account(1), ErrPaymentRequired)

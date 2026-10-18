@@ -100,6 +100,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	q.applyCongestion(conn)
 
 	peerRes, err := q.authenticator.AuthenticateOutbound(ctx, WrapQUIC(conn))
 	if err != nil {

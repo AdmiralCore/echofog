@@ -277,8 +277,24 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 		s.sendReply(clientConn, replyFor(err))
 		return
 	}
-	s.health.ok()
 	defer p2pStream.Close()
+	if v, ok := p2pStream.(VerdictNotifier); ok {
+		// fast open: the exit answers while the application already talks. A refusal can no
+		// longer become a SOCKS error code, so the connection is reset instead, and the reason
+		// still reaches the log, the UI and the failover.
+		v.OnVerdict(func(err error) {
+			if err == nil {
+				s.health.ok()
+				return
+			}
+			s.noteRefusal(targetAddr, err)
+			if tc, ok := clientConn.(*net.TCPConn); ok {
+				_ = tc.SetLinger(0)
+			}
+		})
+	} else {
+		s.health.ok()
+	}
 
 	// 4. Send SOCKS5 Success Reply
 	// [VER 0x05, REP 0x00 (Success), RSV 0x00, ATYP 0x01, BND.ADDR (0.0.0.0), BND.PORT (0)]

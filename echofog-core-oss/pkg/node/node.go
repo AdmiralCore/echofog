@@ -25,6 +25,7 @@ import (
 	"github.com/echofog/echofog-core/internal/crypto"
 	"github.com/echofog/echofog-core/internal/dispatcher"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/internal/p2p/dht"
 	"github.com/echofog/echofog-core/internal/p2p/gossip"
@@ -387,6 +388,11 @@ func (n *Node) Start() (err error) {
 	n.Dispatcher = dispatcher.NewDispatcher(n.Ctx)
 	n.Dispatcher.SetLogger(n.Logger)
 	socketBufBytes := n.Cfg.Network.SocketBufferMB * 1024 * 1024
+	cc, err := congestion.Parse(n.Cfg.Network.Congestion, n.Cfg.Network.BrutalMbps)
+	if err != nil {
+		n.Logger.Warn("network: bad congestion setting, using BBR", "err", err)
+		cc = congestion.Config{Mode: congestion.BBR}
+	}
 	n.Transport, err = network.NewQUICTransportWithOptions(
 		n.Cfg.Network.ListenAddr,
 		tlsConfig,
@@ -399,6 +405,7 @@ func (n *Node) Start() (err error) {
 			Obfs:              n.Cfg.AntiDPI.Obfs != config.ObfsOff,
 			OwnID:             n.ID,
 			ObfsSecret:        n.Cfg.AntiDPI.ObfsPassword,
+			Congestion:        cc,
 		},
 	)
 	if err != nil {
