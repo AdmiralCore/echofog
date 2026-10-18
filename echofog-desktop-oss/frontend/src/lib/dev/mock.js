@@ -77,6 +77,74 @@ const dm = {
 const history = Object.fromEntries(Object.entries(dm).map(([peer, list]) => [peer, list.map(([mine, text, ts, pending], i) => ({
   id: `${peer.slice(0, 4)}-${i}`, text, timestamp: sec(ts), is_mine: mine, sender_id: mine ? SELF : peer, target_id: mine ? peer : SELF, pending: !!pending,
 }))]));
+// a few more days of Alice: links, files, enough text to search through
+history[ALICE].unshift(
+  { id: 'al-old-1', text: 'Morning! The relay docs are at https://github.com/echofog/echofog/blob/main/docs/relay.md, and the anti-DPI notes at www.example.org/anti-dpi.', timestamp: sec(now - 3 * 24 * 60 * min), is_mine: false, sender_id: ALICE, target_id: SELF },
+  { id: 'al-old-2', text: 'Thanks, reading the relay part now', timestamp: sec(now - 3 * 24 * 60 * min + 4 * min), is_mine: true, sender_id: SELF, target_id: ALICE },
+  { id: 'al-old-3', text: 'This one is not a link: javascript:alert(1), neither is file:///C:/Windows', timestamp: sec(now - 3 * 24 * 60 * min + 6 * min), is_mine: false, sender_id: ALICE, target_id: SELF },
+  { id: 'al-y-1', text: 'Here are the screenshots from the relay test', timestamp: sec(now - 30 * 60 * min), is_mine: false, sender_id: ALICE, target_id: SELF },
+);
+const fileMsg = (id, mine, peer, fid, name, size, ts) => ({
+  id, type: 4, text: name, timestamp: sec(ts), is_mine: mine, sender_id: mine ? SELF : peer, target_id: mine ? peer : SELF,
+  metadata: JSON.stringify({ file_name: name, file_size: size, custom: { fid, root: 'ab'.repeat(32) } }),
+});
+const MB = 1 << 20;
+const fxNamed = {
+  shots: { id: 'fx01shots', peer: ALICE, dir: 'in', name: 'relay-test-screenshots.zip', size: 48 * MB + 1234, state: 'done', path: 'C:/Users/demo/Downloads/EchoFog/relay-test-screenshots.zip', done: 48 * MB + 1234, rate: 0, stalled: false, created: now - 29 * 60 * min },
+  build: { id: 'fx02build', peer: ALICE, dir: 'in', name: 'EchoFog-rc2-windows.zip', size: 612 * MB, state: 'offered', path: '', done: 0, rate: 0, stalled: false, created: now - 9 * min },
+  notes: { id: 'fx03notes', peer: ALICE, dir: 'out', name: 'launch-notes.pdf', size: 3 * MB + 77, state: 'done', path: 'C:/Users/demo/Documents/launch-notes.pdf', done: 3 * MB + 77, rate: 0, stalled: false, created: now - 8 * min },
+  video: { id: 'fx04video', peer: BOB, dir: 'out', name: 'demo-call-4k.mp4', size: 1.4 * 1024 * MB, state: 'active', path: 'C:/Users/demo/Videos/demo-call-4k.mp4', done: 0.38 * 1024 * MB, rate: 6.2 * MB, stalled: false, created: now - 2 * 60 * min },
+  setup: { id: 'fx05setup', peer: CAROL, dir: 'in', name: 'setup.exe', size: 9 * MB, state: 'done', path: 'C:/Users/demo/Downloads/EchoFog/setup.exe', done: 9 * MB, rate: 0, stalled: false, created: now - 2 * 24 * 60 * min },
+};
+const fx = Object.fromEntries(Object.values(fxNamed).map((t) => [t.id, t]));
+history[ALICE].splice(4, 0, fileMsg('al-f-1', false, ALICE, 'fx01shots', fxNamed.shots.name, fxNamed.shots.size, now - 29 * 60 * min));
+history[ALICE].push(
+  fileMsg('al-f-2', false, ALICE, 'fx02build', fxNamed.build.name, fxNamed.build.size, now - 9 * min),
+  fileMsg('al-f-3', true, ALICE, 'fx03notes', fxNamed.notes.name, fxNamed.notes.size, now - 8 * min),
+);
+history[ALICE].sort((a, b) => a.timestamp - b.timestamp);
+history[BOB].push(fileMsg('bo-f-1', true, BOB, 'fx04video', fxNamed.video.name, fxNamed.video.size, now - 2 * 60 * min));
+history[CAROL].unshift(fileMsg('ca-f-1', false, CAROL, 'fx05setup', fxNamed.setup.name, fxNamed.setup.size, now - 2 * 24 * 60 * min));
+const pushFx = (t) => { fx[t.id] = t; emit('file:transfer', { ...t }); };
+// runs a transfer to the end, a few percent at a time; a peer that "drops" midway stalls for a while
+function runFx(t, { stallAt = 0 } = {}) {
+  const step = () => {
+    if (t.state !== 'active') return;
+    if (stallAt && t.done >= t.size * stallAt && !t.stalledOnce) {
+      t.stalledOnce = true;
+      Object.assign(t, { stalled: true, rate: 0 });
+      pushFx(t);
+      setTimeout(() => { t.stalled = false; step(); }, 3500);
+      return;
+    }
+    t.rate = Math.round((5 + Math.random() * 4) * MB);
+    t.done = Math.min(t.size, t.done + t.rate / 4);
+    if (t.done >= t.size) Object.assign(t, { state: 'done', rate: 0, path: t.path || 'C:/Users/demo/Downloads/EchoFog/' + t.name });
+    pushFx(t);
+    if (t.state === 'active') setTimeout(step, 250);
+  };
+  setTimeout(step, 250);
+}
+setTimeout(() => runFx(fxNamed.video), 1500);
+const savedMock = [
+  { id: `d:${ALICE}/al-old-1`, chatId: 'd:' + ALICE, chatName: NAMES[ALICE], msgId: 'al-old-1', sender: NAMES[ALICE], mine: false, text: history[ALICE][0].text, ts: now - 3 * 24 * 60 * min, savedAt: now - 60 * min },
+];
+const RISKY = /\.(exe|msi|bat|cmd|com|scr|ps1|vbs|js|jar|lnk|reg|dll|hta|iso)$/i;
+function offerFile(pub, path) {
+  const c = contacts.find((x) => x.pub_key === pub);
+  if (!c) throw new Error('unknown contact');
+  const name = String(path).split(/[\\/]/).pop();
+  const id = 'fx' + Date.now();
+  const t = { id, peer: c.peer_id, dir: 'out', name, size: Math.round((20 + Math.random() * 300) * MB), state: 'offered', path, done: 0, rate: 0, stalled: false, created: Date.now() };
+  const msg = fileMsg('m' + id, true, c.peer_id, id, name, t.size, Date.now());
+  history[c.peer_id] = [...(history[c.peer_id] || []), msg];
+  pushFx(t);
+  emit('new_message', msg);
+  // the contact accepts after a moment (and, for the demo, briefly drops offline midway)
+  setTimeout(() => { t.state = 'active'; pushFx(t); runFx(t, { stallAt: 0.45 }); }, 1800);
+  return { ...t };
+}
+
 const groupMsgs = [
   [ALICE, 'Release candidate is building, ETA 20 minutes', now - 50 * min],
   [BOB, 'Node runner guide is updated with the Docker one-liner', now - 41 * min],
@@ -343,6 +411,44 @@ const impl = {
     const msg = { id: 'm' + Date.now(), text, timestamp: sec(Date.now()), is_mine: true, sender_id: SELF, target_id: c.peer_id };
     history[c.peer_id] = [...(history[c.peer_id] || []), msg];
     return null;
+  },
+  // files: see fx above
+  ListFileTransfers: (peer) => Object.values(fx).filter((t) => !peer || t.peer === peer).map((t) => ({ ...t })),
+  PickAndSendFile: (pub) => new Promise((r) => setTimeout(() => r(offerFile(pub, 'C:/Users/demo/Pictures/holiday-photos.7z')), 300)),
+  SendFile: (pub, path) => offerFile(pub, path),
+  AcceptFile: (id) => {
+    const t = fx[id];
+    if (!t || t.state !== 'offered') throw new Error('the transfer is ' + (t ? t.state : 'gone'));
+    if (t.size > 600 * MB && !t.warned) { t.warned = true; throw new Error('not enough disk space: 612.0 MiB needed, 410.3 MiB free (try again: the preview frees some)'); }
+    Object.assign(t, { state: 'active', path: 'C:/Users/demo/Downloads/EchoFog/' + t.name });
+    pushFx(t);
+    runFx(t);
+    return { ...t };
+  },
+  DeclineFile: (id) => { Object.assign(fx[id], { state: 'declined' }); pushFx(fx[id]); return null; },
+  CancelFile: (id) => { Object.assign(fx[id], { state: 'cancelled', rate: 0 }); pushFx(fx[id]); return null; },
+  IsRiskyFile: (name) => RISKY.test(name),
+  OpenTransferFile: (id, allowRisky) => { if (RISKY.test(fx[id].name) && !allowRisky) throw new Error('this file runs a program when opened'); console.info('[mock] open', fx[id].path); return null; },
+  ShowTransferFile: (id) => { console.info('[mock] show in folder', fx[id].path); return null; },
+  GetDownloadDir: () => 'C:/Users/demo/Downloads/EchoFog',
+  // saved messages
+  ListSavedMessages: () => [...savedMock].sort((a, b) => b.savedAt - a.savedAt),
+  SaveMessage: (m) => {
+    const s = { ...m, id: m.chatId + '/' + m.msgId, savedAt: Date.now() };
+    const i = savedMock.findIndex((x) => x.id === s.id);
+    if (i >= 0) savedMock.splice(i, 1);
+    savedMock.push(s);
+    return s;
+  },
+  UnsaveMessage: (id) => { const i = savedMock.findIndex((x) => x.id === id); if (i >= 0) savedMock.splice(i, 1); return null; },
+  // the preview has no save dialog: the browser downloads the text
+  SaveTextFile: (name, text) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    return name;
   },
   GetPeerBalance: () => 0,
   ListGroups: () => groups,

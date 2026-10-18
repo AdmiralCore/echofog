@@ -278,6 +278,10 @@ func (a *App) startEventListeners(nodeAPI *api.NodeApi, ctx context.Context) {
 		}
 	}()
 
+	nodeAPI.OnFileTransfer(func(t dto.FileTransferDTO) {
+		safeEventsEmit(ctx, "file:transfer", t)
+	})
+
 	nodeAPI.SubscribeGroupEvents(func(ev api.GroupEvent) {
 		safeEventsEmit(ctx, "group:event", ev)
 	})

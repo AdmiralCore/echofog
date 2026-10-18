@@ -5,6 +5,8 @@ import { play } from '../sounds.js';
 import { callState } from '../services/call.service.js';
 import { ringIncoming, incomingCall, declineIncomingCall, convergeGroupCall, peerInfo } from './call.store.js';
 import { tr } from '../i18n/index.js';
+import { clearTransfers } from './files.js';
+import { saved } from './saved.js';
 
 const inCall = () => get(callState).inCall;
 
@@ -44,6 +46,19 @@ export const membersVersion = writable(0);
 
 let listening = false;
 
+const MSG_FILE = 4;
+
+// what a file message offers: the transfer it names, the file's name and size
+function fileOf(m) {
+  if (m.type !== MSG_FILE) return null;
+  let meta = {};
+  try { meta = JSON.parse(m.metadata || '{}') || {}; } catch (_) { /* not JSON: name only */ }
+  return { fid: meta.custom?.fid || '', name: meta.file_name || m.text || '', size: Number(meta.file_size) || 0, mime: meta.mime_type || '' };
+}
+
+/** The line a chat list shows for a message. */
+export const preview = (m) => (m.file ? tr('files.lastFile', { name: m.file.name }) : m.text);
+
 function directMessage(m) {
   const call = (m.text || '').startsWith(CALL_INVITE);
   return {
@@ -54,6 +69,7 @@ function directMessage(m) {
     system: call,
     pending: !!m.pending,
     ts: toMs(m.timestamp),
+    file: fileOf(m),
   };
 }
 
@@ -86,7 +102,7 @@ export async function loadChats() {
         const hist = (await App.GetChatHistory(c.peer_id, 1, 0)) || [];
         if (hist[0]) {
           const m = directMessage(hist[0]);
-          conv.last = m.text;
+          conv.last = preview(m);
           conv.ts = m.ts;
         }
       } catch (_) { /* no history yet */ }
@@ -128,7 +144,7 @@ function listen() {
     const m = directMessage(msg);
     if (!m.mine && !m.system) play('receive', { quiet: inCall() });
     const open = get(activeId) === id;
-    patch(id, (c) => ({ ...c, last: m.text, ts: m.ts, unread: open || m.mine ? c.unread : c.unread + 1 }));
+    patch(id, (c) => ({ ...c, last: preview(m), ts: m.ts, unread: open || m.mine ? c.unread : c.unread + 1 }));
     if (open) messages.update((list) => (list.some((x) => x.id === m.id) ? list : [...list, m]));
   });
 
@@ -234,7 +250,7 @@ async function reload() {
     if (get(activeId) !== conv.id) return;
     messages.set(list);
     const last = list[list.length - 1];
-    if (last) patch(conv.id, (c) => ({ ...c, last: last.text, ts: last.ts }));
+    if (last) patch(conv.id, (c) => ({ ...c, last: preview(last), ts: last.ts }));
   } catch (err) {
     chatError.set(errText(err, tr('chats.err.loadMessages')));
   }
@@ -301,4 +317,6 @@ export function closeChats() {
   activeId.set('');
   messages.set([]);
   chats.set([]);
+  clearTransfers(); // another profile may log in next
+  saved.set([]);
 }

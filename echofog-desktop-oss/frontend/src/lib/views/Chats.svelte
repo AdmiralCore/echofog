@@ -11,6 +11,9 @@
   import { t, lang } from '../i18n/index.js';
   import { makeContactLink, parseContactInput, displayName, currentDisplayName } from '../contact.js';
   import Conversation from './Conversation.svelte';
+  import Saved from './Saved.svelte';
+  import { saved, loadSaved, SAVED_ID } from '../stores/saved.js';
+  import { loadTransfers } from '../stores/files.js';
   import QRScan from './QRScan.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import Icon from '../components/ui/Icon.svelte';
@@ -63,13 +66,20 @@
     .filter((c) => !q || (c.name || '').toLowerCase().includes(q) || (c.last || '').toLowerCase().includes(q))
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));
   $: active = $chats.find((c) => c.id === $activeId);
+  $: showSaved = $activeId === SAVED_ID;
+  $: opened = !!active || showSaved;
+  $: savedRow = !q || $t('saved.title').toLowerCase().includes(q);
   $: showCall = $isCallActive && !!active && $peerInfo.chatId === $activeId && $stageExpanded;
   let maximized = false;
   $: if (!showCall) maximized = false;
   $: parsed = parseContactInput(contactInput);
   $: myLink = $me.pubKey ? makeContactLink(currentDisplayName($profile), $me.pubKey) : '';
 
-  onMount(loadChats);
+  onMount(() => {
+    loadChats();
+    loadSaved();
+    loadTransfers('');
+  });
 
   async function toggle(p) {
     panel = panel === p ? '' : p;
@@ -118,7 +128,7 @@
 <svelte:window on:mousemove={onResize} on:mouseup={endResize} />
 
 <div class="chats" class:narrow bind:clientWidth={width} class:resizing={!!resizing}>
-  {#if (!listCollapsed || narrow) && (!narrow || !active)}
+  {#if (!listCollapsed || narrow) && (!narrow || !opened)}
   <aside style={narrow ? '' : `width:${listWidth}px`}>
     <div class="head">
       <h2 class="grow">{$t('chats.title')}</h2>
@@ -190,6 +200,15 @@
     </div>
 
     <div class="list">
+      {#if savedRow}
+        <button class="conv" class:sel={showSaved} on:click={() => activeId.set(SAVED_ID)}>
+          <div class="avatar"><span class="saved-av"><Icon name="bookmark" size={20} /></span></div>
+          <div class="body">
+            <div class="row"><span class="grow name">{$t('saved.title')}</span></div>
+            <div class="row"><span class="grow last">{$saved.length ? $t('saved.count', { n: $saved.length }) : $t('saved.hint')}</span></div>
+          </div>
+        </button>
+      {/if}
       {#each sorted as c (c.id)}
         <button class="conv" class:sel={c.id === $activeId} class:unread={c.unread} on:click={() => openChat(c.id)}>
           <div class="avatar">
@@ -211,7 +230,7 @@
       {:else}
         <div class="empty">
           {#if q}
-            <p class="small muted">{$t('chats.nothingFound', { query })}</p>
+            {#if !savedRow}<p class="small muted">{$t('chats.nothingFound', { query })}</p>{/if}
           {:else}
             <span class="empty-ic"><Icon name="message" size={22} /></span>
             <p class="small muted">{$t('chats.empty')}</p>
@@ -226,7 +245,7 @@
   </aside>
   {/if}
 
-  {#if !narrow || active}
+  {#if !narrow || opened}
   <section>
     {#if listCollapsed && !narrow}
       <button class="show-list" title={$t('chats.showList')} aria-label={$t('chats.showList')} on:click={toggleList}><Icon name="panel" size={17} /></button>
@@ -234,7 +253,9 @@
     {#if showCall}
       <div class="call" class:full={maximized}><CallStage title={active.name} bind:maximized /></div>
     {/if}
-    {#if active}
+    {#if showSaved}
+      <Saved back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />
+    {:else if active}
       {#if !maximized}<Conversation conv={active} back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />{/if}
     {:else}
       <div class="placeholder">
@@ -300,6 +321,7 @@
   .avatar { position: relative; flex: none; }
   .presence { position: absolute; right: -1px; bottom: -1px; width: 13px; height: 13px; border-radius: 50%; background: var(--faint); border: 2.5px solid var(--panel); transition: background 0.3s; }
   .presence.on { background: var(--ok); }
+  .saved-av { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .avatar .kind { position: absolute; right: -3px; bottom: -3px; width: 18px; height: 18px; border-radius: 6px; background: var(--raised); border: 2px solid var(--panel); color: var(--muted); font-size: 10px; font-weight: 750; display: grid; place-items: center; }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; color: var(--text); }

@@ -37,7 +37,9 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 11, G: 12, B: 16, A: 255},
-		Frameless:        false,
+		// files dropped on a chat are sent; the web view itself never opens a dropped file
+		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true, DisableWebViewDrop: true},
+		Frameless:   false,
 		Mac: &mac.Options{
 			TitleBar:             mac.TitleBarHidden(),
 			Appearance:           mac.NSAppearanceNameDarkAqua,
