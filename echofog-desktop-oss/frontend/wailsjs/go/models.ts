@@ -62,6 +62,44 @@ export namespace dto {
 	        this.last_seen = source["last_seen"];
 	    }
 	}
+	export class FileTransferDTO {
+	    id: string;
+	    peer: string;
+	    dir: string;
+	    name: string;
+	    size: number;
+	    mime?: string;
+	    state: string;
+	    error?: string;
+	    path?: string;
+	    done: number;
+	    rate: number;
+	    stalled: boolean;
+	    created: number;
+	    updated: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileTransferDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.peer = source["peer"];
+	        this.dir = source["dir"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.mime = source["mime"];
+	        this.state = source["state"];
+	        this.error = source["error"];
+	        this.path = source["path"];
+	        this.done = source["done"];
+	        this.rate = source["rate"];
+	        this.stalled = source["stalled"];
+	        this.created = source["created"];
+	        this.updated = source["updated"];
+	    }
+	}
 	export class MessageDTO {
 	    id: string;
 	    is_mine: boolean;
@@ -96,6 +134,38 @@ export namespace dto {
 	        this.reply_to_id = source["reply_to_id"];
 	        this.app_id = source["app_id"];
 	        this.pending = source["pending"];
+	    }
+	}
+	export class SavedMessageDTO {
+	    id: string;
+	    chatId: string;
+	    chatName: string;
+	    msgId: string;
+	    sender?: string;
+	    mine: boolean;
+	    text: string;
+	    fileName?: string;
+	    fileSize?: number;
+	    ts: number;
+	    savedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SavedMessageDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.chatId = source["chatId"];
+	        this.chatName = source["chatName"];
+	        this.msgId = source["msgId"];
+	        this.sender = source["sender"];
+	        this.mine = source["mine"];
+	        this.text = source["text"];
+	        this.fileName = source["fileName"];
+	        this.fileSize = source["fileSize"];
+	        this.ts = source["ts"];
+	        this.savedAt = source["savedAt"];
 	    }
 	}
 	export class StreamQualityDTO {
