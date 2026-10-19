@@ -44,6 +44,16 @@ export function when(ts) {
     : d.toLocaleDateString(intlLocale(), { day: 'numeric', month: 'short' });
 }
 
+/** Country name in the interface language from an ISO code ("NL" -> "Нидерланды"). */
+export function countryName(code) {
+  if (!code) return '';
+  try {
+    return new Intl.DisplayNames([intlLocale()], { type: 'region' }).of(code.toUpperCase()) || code;
+  } catch (_) {
+    return code;
+  }
+}
+
 export function short(id, n = 6) {
   return id ? `${id.slice(0, n)}…${id.slice(-n)}` : '';
 }

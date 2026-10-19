@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/echofog/echofog-core/internal/crypto/keymanager"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
@@ -32,6 +33,9 @@ type NodeApi struct {
 	vault vaultClient // client: the TON vault and the vouchers signed from it
 
 	groupsH groupsHolder
+
+	geoOnce sync.Once
+	geoLoc  *geoLocator // where exits are, looked up online
 
 	relayChosen bool // the user picked the relay settings; false: the defaults are in effect
 	startPort   int  // the listen port the node was configured with when it started

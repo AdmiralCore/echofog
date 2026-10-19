@@ -578,6 +578,7 @@ const impl = {
     for (const s of all) {
       let e = by.get(s.peerId);
       if (!e) { e = { peerId: s.peerId, addr: s.addr, sessions: 0, bytesRx: 0, bytesTx: 0, refused: 0, lastUsed: s.startedAt, lastReadyMs: s.readyMs, lastState: s.lastState, pricePerMb: s.pricePerMb, priceKnown: true, active: false, ...(exitLabels[s.peerId] || {}) }; by.set(s.peerId, e); }
+      Object.assign(e, exitGeo[s.peerId] || {});
       e.sessions++; e.bytesRx += s.bytesRx; e.bytesTx += s.bytesTx; e.refused += s.refused; e.active = e.active || !!s.active;
     }
     return [...by.values()].sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || b.lastUsed - a.lastUsed);
@@ -694,6 +695,7 @@ const vaultMock = {
   closing: vaultStage === 'closing' || vaultStage === 'ready', withdrawAt: vaultStage === 'ready' ? sec(now) - 60 : vaultStage === 'closing' ? sec(now) + 17 * 3600 + 23 * 60 : 0,
   canFinish: false, minFirstTon: '0.1',
 };
+const exitGeo = { '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d': { countryCode: 'NL', city: 'Groningen' }, 'beab718659cea03fbe747c2f1e5ffbef4fd32e9a14bf550802d89b19138a1bf6': { countryCode: 'DE', city: 'Frankfurt am Main' } };
 const exitLabels = { '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d': { name: 'Мой GCP', favorite: true } };
 // exits used before, newest first, as the core's history returns them
 const historyMock = [

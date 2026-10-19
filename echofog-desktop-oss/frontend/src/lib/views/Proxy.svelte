@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { App, on, errText, copy } from '../api.js';
-  import { bytes, price, usdPerGb, microPerMb, when, short, amount, duration } from '../format.js';
+  import { bytes, price, usdPerGb, microPerMb, when, short, amount, duration, countryName } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
   import PeerList from '../components/PeerList.svelte';
@@ -264,7 +264,7 @@
       setInterval(() => { refresh(); loadExits(false).catch(() => {}); }, 15000),
       setInterval(() => { if (vpn.running) refreshPay(); }, 5000),
     ];
-    for (const t of ['vpn:started', 'vpn:stopped', 'vpn:exit_state', 'vpn:searching', 'vpn:switched', 'vpn:whole_computer', 'vpn:payment', 'exit:payment', 'exit:session_started', 'exit:session_closed']) {
+    for (const t of ['vpn:started', 'vpn:stopped', 'vpn:exit_state', 'vpn:searching', 'vpn:switched', 'vpn:whole_computer', 'vpn:payment', 'exit:payment', 'exit:session_started', 'exit:session_closed', 'vpn:exits_located']) {
       offs.push(on(t, refresh));
     }
   });
@@ -477,6 +477,9 @@
                   {#if e.active}<span class="chip ok-chip">{$t('proxy.hist.now')}</span>{/if}
                   {#if e.lastState && e.lastState !== 'ok'}<span class="chip warn">{$t('proxy.hist.state.' + e.lastState)}</span>{/if}
                 </span>
+                {#if e.countryCode}
+                  <span class="small loc" title={e.addr}><Icon name="globe" size={12} /> {countryName(e.countryCode)}{e.city ? ', ' + e.city : ''}</span>
+                {/if}
                 <span class="small faint">
                   {e.lastUsed ? when(e.lastUsed, $lang) : $t('proxy.hist.never')}{e.addr ? ' · ' + e.addr : ''}
                   {#if e.sessions}· <button class="linkish" on:click={() => (openExit = openExit === e.peerId ? '' : e.peerId)}>{$t('proxy.hist.sessions', { n: e.sessions })}</button>{/if}
@@ -729,6 +732,7 @@
   .hist-row.fav:not(.active) { border-color: var(--accent-soft); }
   .hist-main .row { flex-wrap: wrap; gap: 4px 6px; }
   .hist-main b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .loc { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
   .star { color: var(--muted); }
   .star.on { color: #f5b301; }
   .name-input { padding: 4px 8px; font-size: 13px; min-width: 0; width: 100%; max-width: 260px; }

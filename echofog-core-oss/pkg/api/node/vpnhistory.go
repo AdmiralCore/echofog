@@ -291,6 +291,8 @@ type SavedExit struct {
 	PricePerMB  int64  `json:"pricePerMb"`
 	PriceKnown  bool   `json:"priceKnown"`
 	Active      bool   `json:"active"`
+	CountryCode string `json:"countryCode,omitempty"` // ISO 3166 code from a GeoIP lookup of Addr
+	City        string `json:"city,omitempty"`
 }
 
 func loadExitLabels(st storage.Storage) map[string]exitLabel {
@@ -420,6 +422,7 @@ func (n *NodeApi) GetSavedExits() []SavedExit {
 		}
 		return out[i].LastUsed > out[j].LastUsed
 	})
+	n.locateExits(out)
 	return out
 }
 
