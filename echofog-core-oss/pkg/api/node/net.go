@@ -85,6 +85,7 @@ type vpnState struct {
 	searching  bool
 	switches   int
 	lastSwitch VPNSwitch
+	session    *sessionTrack // the exit in use, recorded in the history
 }
 
 // Exit states reported in VPNStatus.ExitState.
@@ -123,6 +124,7 @@ func (n *NodeApi) noteExitState(relay string, info *exit_gateway.AccountInfo, er
 	}
 	changed := state != n.vpn.exitState
 	n.vpn.exitState, n.vpn.exitNotice = state, notice
+	n.noteSessionStateLocked(state)
 	n.vpn.mu.Unlock()
 	if changed {
 		if state == ExitOK {
@@ -269,9 +271,11 @@ func (n *NodeApi) startVPN(relayPeerID, listen string) error {
 	n.vpn.relayPeer = relayPeerID
 	n.vpn.exitState, n.vpn.exitNotice = ExitChecking, ""
 	n.vpn.usingSince, n.vpn.searching, n.vpn.switches, n.vpn.lastSwitch = time.Now(), false, 0, VPNSwitch{}
+	n.beginSessionLocked(relayPeerID)
 	watch, stop := context.WithCancel(n.node.Ctx)
 	n.vpn.stopWatch = stop
 	go n.runFailover(watch)
+	go n.keepSessionSaved(watch)
 	go n.startPayGuard() // outside the vpn lock: it reads the same state
 	if n.node.EventBus != nil {
 		n.node.EventBus.Emit("vpn:started", map[string]any{"relay": relayPeerID})
@@ -319,6 +323,7 @@ func (n *NodeApi) StopVPN() error {
 		n.vpn.stopWatch()
 		n.vpn.stopWatch = nil
 	}
+	n.endSessionLocked("stopped")
 	err := n.vpn.server.Stop()
 	n.vpn.server = nil
 	n.vpn.searching = false

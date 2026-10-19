@@ -229,6 +229,7 @@ func (n *NodeApi) switchExit(from, to, reason string) bool {
 		n.vpn.mu.Unlock()
 		return false
 	}
+	n.endSessionLocked("switched")
 	n.vpn.server.SetDialer(exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, id)))
 	n.vpn.relayPeer = to
 	n.vpn.exitState, n.vpn.exitNotice = ExitChecking, ""
@@ -236,6 +237,7 @@ func (n *NodeApi) switchExit(from, to, reason string) bool {
 	n.vpn.searching = false
 	n.vpn.switches++
 	n.vpn.lastSwitch = VPNSwitch{From: from, To: to, Reason: reason, At: time.Now().Unix()}
+	n.beginSessionLocked(to)
 	n.vpn.mu.Unlock()
 
 	// the payment guard follows the new exit

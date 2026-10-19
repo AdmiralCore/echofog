@@ -95,3 +95,30 @@ func (a *App) PayExit(amountUSDT string) (string, error) {
 	defer cancel()
 	return nodeAPI.PayExit(ctx, amountUSDT)
 }
+
+// GetVPNHistory lists the exits used, newest first, with traffic and how each one served.
+func (a *App) GetVPNHistory() []api.VPNSession {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return nil
+	}
+	return nodeAPI.GetVPNHistory()
+}
+
+// ClearVPNHistory forgets the exits used.
+func (a *App) ClearVPNHistory() error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.ClearVPNHistory()
+}
+
+// ConnectLastExit connects through the exit used most recently.
+func (a *App) ConnectLastExit() error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.ConnectLastExit()
+}

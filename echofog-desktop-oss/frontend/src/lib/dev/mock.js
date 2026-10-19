@@ -551,6 +551,17 @@ const impl = {
   SetAutoPay: (on, chunk, cap) => { if (!(Number(chunk) >= 0.01)) throw new Error('enter the top-up amount in USDT, for example 1'); Object.assign(payMock, { autoPay: on, chunkUsdt: String(chunk), dailyCapUsdt: String(cap) }); return null; },
   PayExit: (amt) => new Promise((r) => setTimeout(() => { Object.assign(payMock, { needsPayment: false, pending: true, remainingGb: 20, spentTodayUsdt: String(Number(payMock.spentTodayUsdt) + Number(amt)) }); r('beef...mock'); }, 800)),
   GetVPNStatus: () => ({ ...vpnMock }),
+  GetVPNHistory: () => {
+    const live = vpnMock.running ? [{ peerId: vpnMock.relayPeerId, addr: '203.0.113.7:443', startedAt: sec(Date.now()) - 600, updatedAt: sec(Date.now()), readyMs: 820, bytesRx: vpnMock.bytesRx || 48e6, bytesTx: vpnMock.bytesTx || 3e6, refused: 2, lastState: vpnMock.exitState, pricePerMb: 49, active: true }] : [];
+    return [...live, ...historyMock];
+  },
+  ClearVPNHistory: () => { historyMock.length = 0; return null; },
+  ConnectLastExit: () => new Promise((r, j) => setTimeout(() => {
+    if (!historyMock.length) return j(new Error('no exit used yet'));
+    Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', exitState: 'ok', relayPeerId: historyMock[0].peerId });
+    emit('vpn:started', {});
+    r(null);
+  }, 700)),
   StartVPN: () => {
     const state = exitMock === 'switch' ? 'ok' : exitMock;
     Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: state === 'ok', tunnelNotice: '', exitState: state, relayPeerId: hex(9) },
@@ -639,6 +650,12 @@ const vaultMock = {
   closing: vaultStage === 'closing' || vaultStage === 'ready', withdrawAt: vaultStage === 'ready' ? sec(now) - 60 : vaultStage === 'closing' ? sec(now) + 17 * 3600 + 23 * 60 : 0,
   canFinish: false, minFirstTon: '0.1',
 };
+// exits used before, newest first, as the core's history returns them
+const historyMock = [
+  { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', addr: '34.158.189.116:443', startedAt: sec(Date.now()) - 3 * 3600, endedAt: sec(Date.now()) - 2 * 3600, updatedAt: sec(Date.now()) - 2 * 3600, readyMs: 640, bytesRx: 1.9e9, bytesTx: 85e6, refused: 309, lastState: 'ok', pricePerMb: 49, endReason: 'stopped' },
+  { peerId: 'beab718659cea03fbe747c2f1e5ffbef4fd32e9a14bf550802d89b19138a1bf6', addr: '34.32.224.253:443', startedAt: sec(Date.now()) - 26 * 3600, endedAt: sec(Date.now()) - 25 * 3600, updatedAt: sec(Date.now()) - 25 * 3600, readyMs: 1450, bytesRx: 420e6, bytesTx: 12e6, refused: 4, lastState: 'ok', pricePerMb: 0, endReason: 'switched' },
+  { peerId: '3df2ff7f53a1d4772d030a628c21028b20abebc573a5fcb692224ae7366b5140', addr: '', startedAt: sec(Date.now()) - 50 * 3600, endedAt: sec(Date.now()) - 49.5 * 3600, updatedAt: sec(Date.now()) - 49.5 * 3600, readyMs: 0, bytesRx: 0, bytesTx: 0, refused: 12, lastState: 'quota', pricePerMb: 98, endReason: 'app_closed' },
+];
 const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
 
 // handy in the console: __emit('group:event', {kind: 'call', groupId: 'grp_launch', title: 'EchoFog Launch', from: '...', callId: 'x', coordinator: '...'})

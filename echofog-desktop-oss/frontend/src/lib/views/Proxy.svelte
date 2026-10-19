@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { App, on, errText, copy } from '../api.js';
-  import { bytes, price, usdPerGb, microPerMb, when, short, amount } from '../format.js';
+  import { bytes, price, usdPerGb, microPerMb, when, short, amount, duration } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
   import PeerList from '../components/PeerList.svelte';
@@ -25,6 +25,9 @@
   let contacts = [];
   let sortBy = 'best'; // 'best' | 'ping' | 'price' | 'speed'
   let checkingSites = false;
+  let history = [];
+  let showAllHistory = false;
+  let copiedLink = '';
 
   let busy = '';
   let error = '';
@@ -54,8 +57,42 @@
         form = { ...form, price: usdPerGb(sharing.config.pricePerMb).toFixed(3), freeKb: sharing.config.freeTestKb };
       }
       await refreshPay();
+      await loadHistory();
     } catch (err) {
       error = errText(err);
+    }
+  }
+
+  async function loadHistory() {
+    try { history = (await App.GetVPNHistory()) || []; } catch (_) { /* older core */ }
+  }
+
+  // the exit's share link: what used to be copied around by hand
+  const exitLink = (s) => (s.addr ? 'echofog://relay/' + s.addr + '/' + s.peerId : s.peerId);
+
+  const connectLast = () => act('connect', async () => {
+    await App.ConnectLastExit();
+    await refresh();
+  });
+
+  const connectTo = (s) => act('connect', async () => {
+    if (vpn.running) await App.StopVPN();
+    await App.StartVPNVia(exitLink(s));
+    await refresh();
+  });
+
+  const clearHistory = () => {
+    if (!confirm($t('proxy.hist.clearConfirm'))) return;
+    act('clear', async () => {
+      await App.ClearVPNHistory();
+      await loadHistory();
+    });
+  };
+
+  async function copyLink(s) {
+    if (await copy(exitLink(s))) {
+      copiedLink = s.peerId + s.startedAt;
+      setTimeout(() => (copiedLink = ''), 1500);
     }
   }
 
@@ -185,6 +222,10 @@
   });
 
   $: connectedExit = exits.find((e) => e.peerId === vpn.relayPeerId);
+  $: lastExit = history.find((s) => !s.active);
+  $: shownHistory = showAllHistory ? history : history.slice(0, 6);
+  $: contactName = (id) => contacts.find((c) => (c.peer_id || '').toLowerCase() === id)?.alias || '';
+  const sessionSeconds = (s) => Math.max(0, (s.active ? Math.floor(Date.now() / 1000) : s.endedAt || s.updatedAt) - s.startedAt);
   // the peer link being up is not enough: the exit itself says whether it serves us
   // the exit about to be used, to warn before connecting when it is paid
   $: target = mode === 'manual' ? exits.find((e) => e.peerId === selected) : mode === 'auto' ? best : null;
@@ -267,6 +308,12 @@
           <input type="checkbox" class="switch" checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.target.checked)} />
         </label>
       {:else}
+        {#if lastExit}
+          <div class="row last-exit">
+            <button class="ghost with-icon" on:click={connectLast} disabled={!!busy}><Icon name="zap" size={14} /> {$t('proxy.last.connect')}</button>
+            <span class="small faint">{$t('proxy.last.hint', { id: contactName(lastExit.peerId) || short(lastExit.peerId), when: when(lastExit.endedAt || lastExit.startedAt, $lang) })}</span>
+          </div>
+        {/if}
         <div class="seg" role="tablist">
           <button role="tab" class:active={mode === 'auto'} aria-selected={mode === 'auto'} on:click={() => (mode = 'auto')}>{$t('proxy.mode.auto')}</button>
           <button role="tab" class:active={mode === 'manual'} aria-selected={mode === 'manual'} on:click={() => (mode = 'manual')}>{$t('proxy.mode.manual')}</button>
@@ -342,6 +389,52 @@
           <input type="checkbox" class="switch" checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.target.checked)} />
         </label>
         {#if mode !== 'direct'}<div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? $t('proxy.searching') : $t('proxy.searchAgain')}</button></div>{/if}
+      {/if}
+    </div>
+
+    <div class="card stack">
+      <div class="card-head row">
+        <div class="grow">
+          <h2>{$t('proxy.hist.title')}</h2>
+          <p class="small muted">{$t('proxy.hist.subtitle')}</p>
+        </div>
+        {#if history.length}<button class="ghost small" on:click={clearHistory} disabled={!!busy}>{$t('proxy.hist.clear')}</button>{/if}
+      </div>
+      {#if history.length}
+        <div class="hist">
+          {#each shownHistory as s (s.peerId + s.startedAt)}
+            <div class="hist-row" class:active={s.active}>
+              <div class="hist-main">
+                <span class="row">
+                  <b class="mono">{contactName(s.peerId) || short(s.peerId)}</b>
+                  {#if s.active}<span class="chip ok-chip">{$t('proxy.hist.now')}</span>{/if}
+                  {#if s.lastState && s.lastState !== 'ok'}<span class="chip warn">{$t('proxy.hist.state.' + s.lastState)}</span>{/if}
+                </span>
+                <span class="small faint">
+                  {when(s.startedAt, $lang)} · {duration(sessionSeconds(s))}{s.addr ? ' · ' + s.addr : ''}{s.endReason ? ' · ' + $t('proxy.hist.end.' + s.endReason) : ''}
+                </span>
+              </div>
+              <div class="hist-stats small">
+                <span title={$t('proxy.received')}><Icon name="download" size={12} /> {bytes(s.bytesRx, $lang)}</span>
+                <span title={$t('proxy.sent')}><Icon name="upload" size={12} /> {bytes(s.bytesTx, $lang)}</span>
+                <span class="faint">{s.readyMs ? $t('proxy.hist.ready', { s: (s.readyMs / 1000).toFixed(1) }) : $t('proxy.hist.neverReady')}</span>
+                {#if s.refused}<span class="faint">{$t('proxy.hist.refused', { n: s.refused })}</span>{/if}
+                <span class="faint">{s.pricePerMb ? price(s.pricePerMb, $lang) : $t('common.Free')}</span>
+              </div>
+              <div class="hist-actions">
+                <button class="icon tiny" title={$t('proxy.hist.copyLink')} aria-label={$t('proxy.hist.copyLink')} on:click={() => copyLink(s)}><Icon name={copiedLink === s.peerId + s.startedAt ? 'check' : 'copy'} size={14} /></button>
+                {#if !(vpn.running && vpn.relayPeerId === s.peerId)}
+                  <button class="ghost small" on:click={() => connectTo(s)} disabled={!!busy}>{$t('proxy.hist.connect')}</button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+        {#if history.length > 6}
+          <div><button class="ghost small" on:click={() => (showAllHistory = !showAllHistory)}>{showAllHistory ? $t('proxy.hist.showLess') : $t('proxy.hist.showAll', { n: history.length })}</button></div>
+        {/if}
+      {:else}
+        <p class="small faint">{$t('proxy.hist.empty')}</p>
       {/if}
     </div>
 
@@ -529,6 +622,17 @@
   .exit-warn .mono { word-break: break-all; }
   .chip.ping.bad { color: var(--danger); background: var(--danger-soft); }
   .sortrow { gap: 4px; }
+  .last-exit { gap: 10px; flex-wrap: wrap; }
+  .hist { display: flex; flex-direction: column; gap: 6px; }
+  .hist-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; }
+  .hist-row.active { border-color: var(--ok); background: var(--ok-soft); }
+  .hist-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .hist-main .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .hist-stats span { display: inline-flex; align-items: center; gap: 4px; }
+  .hist-actions { display: flex; gap: 6px; align-items: center; }
+  .ok-chip { color: var(--ok); }
+  @media (max-width: 720px) { .hist-row { grid-template-columns: 1fr; } }
   .chip-btn { padding: 4px 12px; font-size: 12px; border-radius: 999px; background: transparent; border-color: var(--line-soft); color: var(--muted); }
   .chip-btn.on, .chip-btn.on:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
