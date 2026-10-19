@@ -1,3 +1,5 @@
+Русская версия: [file-transfer.ru.md](file-transfer.ru.md)
+
 # Sending files
 
 A file of any size goes from one contact to another peer to peer: directly over QUIC when the two

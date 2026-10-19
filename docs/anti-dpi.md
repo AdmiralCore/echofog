@@ -1,3 +1,5 @@
+Русская версия: [anti-dpi.ru.md](anti-dpi.ru.md)
+
 # Anti-DPI: camouflage, roles, and what each defence does and does not do
 
 EchoFog's TCP/WebSocket fallback disguises itself as a browser visiting a large HTTPS site: a
