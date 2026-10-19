@@ -20,6 +20,10 @@ const (
 	// FramePulse is an empty hop-by-hop keepalive on a stream tree link. It is never forwarded
 	// or delivered; it only proves the feeder is alive while the stream itself is idle.
 	FramePulse FrameKind = 0x03
+	// FrameStreamAudio is the sound of a stream (the audio of a shared screen). It travels down the
+	// stream's own tree like its video, so only viewers get it, but with its own sequence space
+	// and the audio priority of the outbox. Older nodes drop it as malformed.
+	FrameStreamAudio FrameKind = 0x04
 )
 
 const (

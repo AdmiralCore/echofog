@@ -271,9 +271,10 @@ async function joinRoom() {
   call.audioCtx = ctx;
   const pc = new RTCPeerConnection();
   call.pc = pc;
-  pc.addTransceiver('audio', { direction: 'recvonly' });
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' }); // mic
+  pc.addTransceiver('video', { direction: 'recvonly' }); // camera
+  pc.addTransceiver('video', { direction: 'recvonly' }); // screen
+  pc.addTransceiver('audio', { direction: 'recvonly' }); // screen sound
   for (let i = 0; i < 16; i++) {
     const v = voice(ctx, i);
     call.voices.push(v);
@@ -286,6 +287,12 @@ async function joinRoom() {
     call.painters.push(painter(c));
     const s = c.captureStream(30);
     pc.addTransceiver(s.getVideoTracks()[0], { direction: 'sendonly', streams: [s] });
+  }
+  // the sound of watched streams (s0..s3): a soft chord, so a muted stream is easy to tell apart
+  for (let i = 0; i < 4; i++) {
+    const v = voice(ctx, 20 + i);
+    v.gain.gain.value = 0.08;
+    pc.addTransceiver(v.dest.stream.getAudioTracks()[0], { direction: 'sendonly', streams: [v.dest.stream] });
   }
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -331,13 +338,20 @@ function watch(streamId) {
   call.slots[slot] = { kind: 'video', peer: scenes[streamId]?.owner, streamId };
   call.painters[Number(slot.slice(1))].set(scenes[streamId] || null);
   setTimeout(() => emit('call:media_slot', { slot, kind: 'video', peer: scenes[streamId]?.owner, streamId, active: true }), 300);
+  // screens come with their sound, on the stream sound slot of the same number
+  if (scenes[streamId]?.kind === 'screen') {
+    const s = 's' + slot.slice(1);
+    call.slots[s] = { kind: 'streamaudio', peer: scenes[streamId]?.owner, streamId };
+    setTimeout(() => emit('call:media_slot', { slot: s, kind: 'streamaudio', peer: scenes[streamId]?.owner, streamId, active: true }), 300);
+  }
 }
 
 function unwatch(streamId) {
-  const slot = Object.keys(call.slots).find((k) => call.slots[k].streamId === streamId && k.startsWith('v'));
-  if (!slot) return;
-  delete call.slots[slot];
-  emit('call:media_slot', { slot, kind: 'video', peer: '', streamId, active: false });
+  for (const slot of Object.keys(call.slots).filter((k) => call.slots[k].streamId === streamId && (k.startsWith('v') || k.startsWith('s')))) {
+    const kind = call.slots[slot].kind;
+    delete call.slots[slot];
+    emit('call:media_slot', { slot, kind, peer: '', streamId, active: false });
+  }
 }
 
 function leave() {
@@ -741,7 +755,12 @@ const synthetic = (kind) => {
   return c.captureStream(30);
 };
 navigator.mediaDevices.getUserMedia = async (c) => (c.video ? synthetic('video') : synthetic('audio'));
-navigator.mediaDevices.getDisplayMedia = async () => synthetic('video');
+// a shared screen comes with sound unless the URL has &nosound (as when "share audio" is not ticked)
+navigator.mediaDevices.getDisplayMedia = async () => {
+  const s = synthetic('video');
+  if (!new URLSearchParams(location.search).has('nosound')) synthetic('audio').getAudioTracks().forEach((t) => s.addTrack(t));
+  return s;
+};
 callService.muteOutput = true; // keep the preview silent
 
 if (new URLSearchParams(location.search).has('incoming')) {

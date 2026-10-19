@@ -21,6 +21,7 @@ type fakeUI struct {
 	pc         *webrtc.PeerConnection
 	mic, cam   *webrtc.TrackLocalStaticRTP
 	screen     *webrtc.TrackLocalStaticRTP
+	screenSnd2 *webrtc.TrackLocalStaticRTP // the screen's sound
 	screenSnd  *webrtc.RTPSender
 	mu         sync.Mutex
 	got        map[string][]*rtp.Packet // MediaStream id -> packets
@@ -57,7 +58,7 @@ func newFakeUI(t *testing.T, offer string) (*fakeUI, string) {
 	})
 
 	require.NoError(t, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offer}))
-	require.Len(t, pc.GetTransceivers(), len(localRoles)+AudioSlots+VideoSlots)
+	require.Len(t, pc.GetTransceivers(), len(localRoles)+AudioSlots+VideoSlots+StreamAudioSlots)
 
 	mk := func(mime, id string) *webrtc.TrackLocalStaticRTP {
 		tr, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: mime}, id, "ui-"+id)
@@ -70,6 +71,9 @@ func newFakeUI(t *testing.T, offer string) (*fakeUI, string) {
 	_, err = pc.AddTrack(ui.cam)
 	require.NoError(t, err)
 	ui.screenSnd, err = pc.AddTrack(ui.screen)
+	require.NoError(t, err)
+	ui.screenSnd2 = mk(webrtc.MimeTypeOpus, "screenaudio")
+	_, err = pc.AddTrack(ui.screenSnd2)
 	require.NoError(t, err)
 	go func() {
 		for {
@@ -139,7 +143,7 @@ func TestBridge_PerSourceTracksRolesAndKeyframes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, offer, "a=candidate", "offer must carry ICE candidates: the UI has no trickle channel")
 	assert.Equal(t, 2+VideoSlots, strings.Count(offer, "m=video"), "camera + screen + playback slots")
-	assert.Equal(t, 1+AudioSlots, strings.Count(offer, "m=audio"), "mic + playback slots")
+	assert.Equal(t, 2+AudioSlots+StreamAudioSlots, strings.Count(offer, "m=audio"), "mic + screen audio + voice and stream sound slots")
 	ui, answer := newFakeUI(t, offer)
 	defer ui.pc.Close()
 	require.NoError(t, b.SetRemoteAnswer(answer))
@@ -161,6 +165,7 @@ func TestBridge_PerSourceTracksRolesAndKeyframes(t *testing.T) {
 		_ = ui.mic.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 1, SSRC: 1}, Payload: []byte("mic")})
 		_ = ui.cam.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 1, SSRC: 2}, Payload: []byte("cam")})
 		_ = ui.screen.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 1, SSRC: 3}, Payload: []byte("scr")})
+		_ = ui.screenSnd2.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 1, SSRC: 4}, Payload: []byte("snd")})
 		mu.Lock()
 		defer mu.Unlock()
 		seen := map[string]string{}
@@ -170,7 +175,7 @@ func TestBridge_PerSourceTracksRolesAndKeyframes(t *testing.T) {
 				seen[l.role] = string(p.Payload)
 			}
 		}
-		return seen[RoleMic] == "mic" && seen[RoleCamera] == "cam" && seen[RoleScreen] == "scr"
+		return seen[RoleMic] == "mic" && seen[RoleCamera] == "cam" && seen[RoleScreen] == "scr" && seen[RoleScreenAudio] == "snd"
 	}, 5*time.Second, 50*time.Millisecond)
 
 	// 2. Two speakers land on two different tracks, extensions stripped.
@@ -206,6 +211,21 @@ func TestBridge_PerSourceTracksRolesAndKeyframes(t *testing.T) {
 	}
 	assert.Equal(t, "s2", string(v0[5].Payload))
 	assert.Len(t, b.Slots(), 3) // a0, a1, v0
+
+	// 3b. The sound of a watched stream gets its own slot, not a voice slot, and leaves with it.
+	for i := uint16(0); i < 3; i++ {
+		require.NoError(t, b.PushRemoteStreamAudio(&media.MediaPacket{Kind: media.FrameStreamAudio, Broadcaster: bob, StreamID: "s2", Payload: rtpUnit(t, 0x53, 10+i, 960*uint32(i), "s2-sound")}))
+	}
+	require.Eventually(t, func() bool { return len(ui.packets("efslot-s0")) == 3 }, 5*time.Second, 20*time.Millisecond)
+	mu.Lock()
+	assert.Equal(t, SlotEvent{Slot: "s0", Kind: "streamaudio", Peer: bob.String(), StreamID: "s2", Active: true}, slots[len(slots)-1])
+	mu.Unlock()
+	assert.Len(t, b.Slots(), 4)
+	b.ReleaseVideo("s2")
+	assert.Len(t, b.Slots(), 2, "unwatching frees the stream's video and sound")
+	for i := uint16(3); i < 6; i++ {
+		require.NoError(t, b.PushRemoteVideo(&media.MediaPacket{Broadcaster: bob, StreamID: "s2", Payload: rtpUnit(t, 0x52, 40000+i, 9000*uint32(i), "s2")}))
+	}
 
 	// 4. The UI decoder asking for a keyframe reaches the stream on that slot.
 	ui.mu.Lock()

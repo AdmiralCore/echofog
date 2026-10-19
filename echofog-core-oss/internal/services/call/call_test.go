@@ -747,3 +747,48 @@ func TestRoom_SpamReportsKickAndBan(t *testing.T) {
 	s, _ = nodes[0].cm.Snapshot()
 	assert.Len(t, s.Members, 5)
 }
+
+// The sound of a shared screen reaches the people watching it, relayed down the stream's tree,
+// and nobody else.
+func TestRoom_ScreenSoundReachesOnlyViewers(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 6)
+	a := nodes[1]
+	q, _ := tree.QualityByID("720p30")
+	require.NoError(t, a.cm.StartStream("a-screen", "screen", q))
+	viewers := nodes[2:5] // nodes[0] and nodes[5] do not watch
+	for _, nd := range viewers {
+		require.NoError(t, nd.cm.WatchStream("a-screen"))
+	}
+	require.Eventually(t, func() bool {
+		for _, nd := range nodes {
+			sm, ok := nd.cm.StreamTree("a-screen")
+			if !ok || len(sm.ParentMap) != len(viewers) {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 20*time.Millisecond)
+
+	const units = 50
+	for i := uint32(0); i < units; i++ {
+		require.NoError(t, a.cm.PublishStreamAudio("a-screen", unit(i, 300)))
+		time.Sleep(2 * time.Millisecond)
+	}
+	assert.ErrorIs(t, nodes[2].cm.PublishStreamAudio("a-screen", unit(0, 10)), ErrNoLocalStream, "only the broadcaster sends a stream's sound")
+
+	require.Eventually(t, func() bool {
+		for _, nd := range viewers {
+			if nd.log.count(media.FrameStreamAudio, a.id, "a-screen") < units {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 20*time.Millisecond)
+	for _, nd := range []*testNode{nodes[0], nodes[5]} {
+		assert.Zero(t, nd.log.count(media.FrameStreamAudio, a.id, "a-screen"), "not watching: no sound")
+	}
+	for _, nd := range nodes {
+		assert.Zero(t, nd.cm.MediaStats().Malformed)
+	}
+}

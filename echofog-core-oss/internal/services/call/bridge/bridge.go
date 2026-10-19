@@ -15,15 +15,19 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-// Local capture roles fed by the UI. They map to the first three m-lines of the bridge offer,
+// Local capture roles fed by the UI. They map to the first four m-lines of the bridge offer,
 // in this order, so the UI attaches tracks with replaceTrack and never renegotiates.
 const (
 	RoleMic    = "mic"
 	RoleCamera = "camera"
 	RoleScreen = "screen"
+	// RoleScreenAudio is the sound of the shared screen; it goes out with the screen stream.
+	RoleScreenAudio = "screenaudio"
 )
 
-var localRoles = []string{RoleMic, RoleCamera, RoleScreen}
+var localRoles = []string{RoleMic, RoleCamera, RoleScreen, RoleScreenAudio}
+
+func isAudioRole(role string) bool { return role == RoleMic || role == RoleScreenAudio }
 
 const (
 	// AudioSlots is how many remote speakers can be heard at once; each gets its own track so
@@ -31,6 +35,9 @@ const (
 	AudioSlots = 16
 	// VideoSlots is how many remote streams can be watched at once.
 	VideoSlots = 4
+	// StreamAudioSlots carry the sound of watched streams, one per stream, apart from the voices
+	// so the UI gives a stream its own volume and does not take it for somebody speaking.
+	StreamAudioSlots = VideoSlots
 	// slotReuseIdle: a slot whose source has been silent this long may be handed to a new source.
 	slotReuseIdle = 5 * time.Second
 
@@ -42,10 +49,10 @@ var ErrNoSlot = errors.New("all media slots are busy")
 
 // SlotEvent tells the UI which remote source a playback track carries.
 type SlotEvent struct {
-	Slot     string `json:"slot"`     // "a0".."a15" / "v0".."v3", also the MediaStream id suffix
-	Kind     string `json:"kind"`     // "audio" | "video"
+	Slot     string `json:"slot"`     // "a0".."a15" / "v0".."v3" / "s0".."s3", also the MediaStream id suffix
+	Kind     string `json:"kind"`     // "audio" | "video" | "streamaudio"
 	Peer     string `json:"peer"`     // broadcaster peer ID (hex)
-	StreamID string `json:"streamId"` // stream ID for video, "voice" for audio
+	StreamID string `json:"streamId"` // stream ID for video and stream audio, "voice" for voices
 	Active   bool   `json:"active"`
 }
 
@@ -81,6 +88,7 @@ type LocalMediaBridge struct {
 	peerConnection *webrtc.PeerConnection
 	localSSRC      map[string]uint32 // role -> SSRC of the UI capture track
 	audio, video   []*slot
+	streamAudio    []*slot
 
 	onLocalRTP RTPPacketHandlerCompat
 	onSlot     func(SlotEvent)
@@ -155,11 +163,11 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 		return nil, err
 	}
 
-	// m-lines 0..2: what the UI captures (mic, camera, screen).
+	// m-lines 0..3: what the UI captures (mic, camera, screen, screen audio).
 	h264 := h264Codecs(mediaEngine)
 	for _, role := range localRoles {
 		kind := webrtc.RTPCodecTypeVideo
-		if role == RoleMic {
+		if isAudioRole(role) {
 			kind = webrtc.RTPCodecTypeAudio
 		}
 		t, err := pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly})
@@ -188,6 +196,14 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 			return fail(err)
 		}
 		b.video = append(b.video, s)
+	}
+	// Last, so the voice and video slots keep their places: the sound of watched streams.
+	for i := 0; i < StreamAudioSlots; i++ {
+		s, err := b.addSlot(fmt.Sprintf("s%d", i), "streamaudio", webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: audioClock, Channels: 2}, audioClock)
+		if err != nil {
+			return fail(err)
+		}
+		b.streamAudio = append(b.streamAudio, s)
 	}
 
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
@@ -300,6 +316,11 @@ func (b *LocalMediaBridge) PushRemoteAudio(pkt *media.MediaPacket) error {
 	return b.push(b.audio, peer, peer, "voice", pkt.Payload)
 }
 
+// PushRemoteStreamAudio plays the sound of a watched stream (a full RTP packet) on its own track.
+func (b *LocalMediaBridge) PushRemoteStreamAudio(pkt *media.MediaPacket) error {
+	return b.push(b.streamAudio, pkt.StreamID, pkt.Broadcaster.String(), pkt.StreamID, pkt.Payload)
+}
+
 // PushRemoteVideo plays a remote stream unit (a full RTP packet) on that stream's own track.
 func (b *LocalMediaBridge) PushRemoteVideo(pkt *media.MediaPacket) error {
 	return b.push(b.video, pkt.StreamID, pkt.Broadcaster.String(), pkt.StreamID, pkt.Payload)
@@ -381,7 +402,10 @@ func (s *slot) rewrite(p *rtp.Packet, now time.Time) {
 }
 
 // ReleaseVideo frees the slot of a stream that is no longer watched.
-func (b *LocalMediaBridge) ReleaseVideo(streamID string) { b.release(b.video, streamID, streamID) }
+func (b *LocalMediaBridge) ReleaseVideo(streamID string) {
+	b.release(b.video, streamID, streamID)
+	b.release(b.streamAudio, streamID, streamID)
+}
 
 // ReleaseAudio frees the slot of a member that left.
 func (b *LocalMediaBridge) ReleaseAudio(peer string) { b.release(b.audio, peer, "voice") }
@@ -406,13 +430,13 @@ func (b *LocalMediaBridge) Slots() []SlotEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out []SlotEvent
-	for _, pool := range [][]*slot{b.audio, b.video} {
+	for _, pool := range [][]*slot{b.audio, b.video, b.streamAudio} {
 		for _, s := range pool {
 			if s.owner == "" {
 				continue
 			}
 			sid := "voice"
-			if s.kind == "video" {
+			if s.kind != "audio" {
 				sid = s.owner
 			}
 			out = append(out, SlotEvent{Slot: s.id, Kind: s.kind, Peer: s.peer, StreamID: sid, Active: true})

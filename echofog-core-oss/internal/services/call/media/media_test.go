@@ -546,3 +546,74 @@ func BenchmarkDispatcher_Relay4K(b *testing.B) {
 		_ = d.ProcessIncomingVideo(raw, bcast)
 	}
 }
+
+// The sound of a stream rides the stream's tree: relayed to the children, played only while
+// watching, never counted as video loss and never kept in the retransmission ring.
+func TestMediaDispatcher_StreamAudioFollowsTheStreamTree(t *testing.T) {
+	bcast, self, child := pid(1), pid(2), pid(3)
+	key := newKey(t)
+	engine := tree.NewStreamTreeEngine()
+	engine.ApplyManifest(&tree.StreamManifest{
+		StreamID: "s1", Broadcaster: bcast, Epoch: 2, Subscribers: []types.PeerID{self, child},
+		ParentMap:        map[types.PeerID]types.PeerID{self: bcast, child: self},
+		DistributionTree: map[types.PeerID][]types.PeerID{bcast: {self}, self: {child}},
+	})
+	sender := &mockSender{}
+	consumer := &mockConsumer{}
+	d := NewMediaDispatcher(self, sender, consumer, engine)
+	defer d.Close()
+	require.NoError(t, d.SetRoomKey(key))
+	var losses atomic.Int32
+	d.OnVideoLoss = func(string, types.PeerID) { losses.Add(1) }
+
+	send := func(kind FrameKind, seq uint32, b byte) {
+		frags, err := SealUnit(&MediaPacket{Kind: kind, Seq: seq, Broadcaster: bcast, StreamID: "s1", Payload: bytes.Repeat([]byte{b}, 200)}, key)
+		require.NoError(t, err)
+		for _, f := range frags {
+			require.NoError(t, d.ProcessIncomingVideo(f, bcast))
+		}
+	}
+
+	send(FrameStreamAudio, 1, 0xA1) // not watching: relay only
+	assert.Eventually(t, func() bool { return len(sender.to(child)) == 1 }, time.Second, 5*time.Millisecond)
+	_, v := consumer.counts()
+	assert.Equal(t, 0, v)
+
+	d.SetStreamWatching("s1", true)
+	send(FrameStreamAudio, 2, 0xA2)
+	send(FrameVideo, 2, 0xB2) // same seq, other kind: both are new
+	send(FrameStreamAudio, 9, 0xA9)
+	_, v = consumer.counts()
+	require.Equal(t, 3, v)
+	assert.Equal(t, FrameStreamAudio, consumer.videoPackets[0].Kind)
+	assert.Equal(t, bytes.Repeat([]byte{0xA2}, 200), consumer.videoPackets[0].Payload)
+	assert.Equal(t, FrameVideo, consumer.videoPackets[1].Kind)
+	time.Sleep(reorderWindow + 100*time.Millisecond)
+	assert.Equal(t, int32(0), losses.Load(), "a gap in stream audio is not video loss")
+	sent, _, _ := d.ring.lookup("s1", 9, 0, time.Now())
+	assert.Empty(t, sent, "stream audio is not kept for NACKs")
+}
+
+func TestMediaDispatcher_BroadcastLocalStreamAudio(t *testing.T) {
+	self, child := pid(1), pid(2)
+	key := newKey(t)
+	engine := tree.NewStreamTreeEngine()
+	engine.ApplyManifest(&tree.StreamManifest{
+		StreamID: "s1", Broadcaster: self, Epoch: 1, Subscribers: []types.PeerID{child},
+		ParentMap:        map[types.PeerID]types.PeerID{child: self},
+		DistributionTree: map[types.PeerID][]types.PeerID{self: {child}},
+	})
+	sender := &mockSender{}
+	d := NewMediaDispatcher(self, sender, nil, engine)
+	defer d.Close()
+	require.NoError(t, d.SetRoomKey(key))
+
+	require.NoError(t, d.BroadcastLocalStreamAudio("s1", []byte("opus")))
+	require.Eventually(t, func() bool { return len(sender.to(child)) == 1 }, time.Second, 5*time.Millisecond)
+	f := sender.to(child)[0]
+	assert.Equal(t, net_types.TypeCallMediaVideo, f.kind, "it travels the stream path")
+	p, err := Decode(f.data)
+	require.NoError(t, err)
+	assert.Equal(t, FrameStreamAudio, p.Kind)
+	assert.Equal(t, "s1", p.StreamID)
+}

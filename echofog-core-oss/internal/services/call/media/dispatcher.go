@@ -57,6 +57,7 @@ type MediaDispatcher struct {
 	adopted          map[types.PeerID]bool
 	watchingStreams  map[string]bool
 	videoSeq         map[string]*atomic.Uint32
+	streamAudioSeq   map[string]*atomic.Uint32
 	lastDelivered    map[sourceKey]uint32
 	missing          map[sourceKey]map[uint32]struct{} // seqs skipped over, waiting out the reorder window
 	lastForward      map[string]time.Time              // stream -> last time we sent anything to its children
@@ -92,6 +93,7 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 		adopted:         make(map[types.PeerID]bool),
 		watchingStreams: make(map[string]bool),
 		videoSeq:        make(map[string]*atomic.Uint32),
+		streamAudioSeq:  make(map[string]*atomic.Uint32),
 		lastDelivered:   make(map[sourceKey]uint32),
 		missing:         make(map[sourceKey]map[uint32]struct{}),
 		lastForward:     make(map[string]time.Time),
@@ -238,7 +240,7 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 // ProcessIncomingVideo handles a stream fragment: forward to downstream subscribers, deliver if watching.
 func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.PeerID) error {
 	p, err := Decode(rawBytes)
-	if err != nil || (p.Kind != FrameVideo && p.Kind != FramePulse) {
+	if err != nil || (p.Kind != FrameVideo && p.Kind != FramePulse && p.Kind != FrameStreamAudio) {
 		d.malformed.Add(1)
 		return err
 	}
@@ -256,14 +258,20 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 
 	if d.streamEngine != nil {
 		forwarded := false
+		class := ClassVideo
+		if p.Kind == FrameStreamAudio {
+			class = ClassAudio // a gap in sound is heard, a late video frame is not
+		}
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
 			if child != fromPeer && child != p.Broadcaster {
 				d.relayed.Add(1)
-				d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, rawBytes)
+				d.outbox.Send(child, class, net_types.TypeCallMediaVideo, rawBytes)
 				forwarded = true
 			}
 		}
-		if forwarded {
+		if forwarded && p.Kind == FrameStreamAudio {
+			d.markForwarded(p.StreamID, now)
+		} else if forwarded {
 			d.ring.put(p.StreamID, p.Seq, p.FragIdx, p.FragCount, rawBytes, now)
 			d.markForwarded(p.StreamID, now)
 		}
@@ -295,6 +303,13 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 	if p.Kind == FrameAudio {
 		d.audioDelivered.Add(1)
 		d.consumer.OnLocalAudio(&unit)
+		return
+	}
+	if p.Kind == FrameStreamAudio {
+		// it rides the stream tree, so it reaches the consumer the way video does; the consumer
+		// tells the two apart by Kind. No loss tracking: lost sound is not worth a keyframe.
+		d.audioDelivered.Add(1)
+		d.consumer.OnLocalVideo(&unit)
 		return
 	}
 	d.videoDelivered.Add(1)
@@ -438,6 +453,37 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 		}
 	}
 	d.markForwarded(streamID, now)
+	return nil
+}
+
+// BroadcastLocalStreamAudio sends a unit of a local stream's sound (a screen's audio) to the
+// first hop of that stream's tree. It is not kept for retransmission: by the time a NACK comes
+// back, the sound would be too late to play.
+func (d *MediaDispatcher) BroadcastLocalStreamAudio(streamID string, opusBytes []byte) error {
+	d.mu.Lock()
+	ctr := d.streamAudioSeq[streamID]
+	if ctr == nil {
+		ctr = &atomic.Uint32{}
+		d.streamAudioSeq[streamID] = ctr
+	}
+	d.mu.Unlock()
+
+	frags, err := d.seal(FrameStreamAudio, streamID, ctr.Add(1), opusBytes)
+	if err != nil {
+		return err
+	}
+	if d.streamEngine == nil {
+		return nil
+	}
+	subs := d.streamEngine.GetDownstream(streamID, d.selfID)
+	for _, sub := range subs {
+		for _, f := range frags {
+			d.outbox.Send(sub, ClassAudio, net_types.TypeCallMediaVideo, f)
+		}
+	}
+	if len(subs) > 0 {
+		d.markForwarded(streamID, time.Now())
+	}
 	return nil
 }
 

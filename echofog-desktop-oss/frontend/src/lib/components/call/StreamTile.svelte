@@ -17,6 +17,9 @@
     $: name = $peerName(stream.broadcaster);
     $: label = qualityLabel(stream);
     $: speaking = !!$callState.speaking[stream.broadcaster];
+    $: hasSound = !isOwn && !!callService.soundSlotOf(stream.streamId, $callState);
+    $: soundOn = ($callState.streamVolume[stream.streamId] ?? 1) > 0;
+    $: ownSound = isOwn && stream.streamId === $callState.screenStreamId && $callState.screenAudio;
 
     function qualityLabel(s) {
         if (!s.height) return '';
@@ -52,6 +55,7 @@
     <div class="absolute left-2 top-2 flex items-center gap-1.5">
         <span class="rounded bg-[#f23f43] px-1.5 py-0.5 text-[11px] font-extrabold uppercase text-white tracking-wide">{$t('call.live')}</span>
         {#if label}<span class="rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-bold text-white">{label}</span>{/if}
+        {#if hasSound || ownSound}<span class="rounded bg-black/60 px-1 py-0.5 text-white" title={$t('call.streamHasSound')}><Icon name={hasSound && !soundOn ? 'volumeOff' : 'volume'} size={13} /></span>{/if}
     </div>
     <div class="absolute left-2 bottom-2 max-w-[70%] rounded-md bg-black/60 backdrop-blur px-2 py-1 text-[13px] font-semibold text-white truncate">
         {isOwn ? (stream.mediaType === 'camera' ? $t('call.yourCamera') : $t('call.yourScreen')) : name}
@@ -59,6 +63,12 @@
 
     {#if watching}
         <div class="absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            {#if hasSound}
+                <button class="tile-btn" title={soundOn ? $t('call.streamSoundOff') : $t('call.streamSoundOn')} aria-label={soundOn ? $t('call.streamSoundOff') : $t('call.streamSoundOn')}
+                    on:click={() => callService.setStreamVolume(stream.streamId, soundOn ? 0 : 1)}>
+                    <Icon name={soundOn ? 'volume' : 'volumeOff'} size={17} />
+                </button>
+            {/if}
             {#if !isOwn}
                 <button class="tile-btn" title={$t('call.switchRelayTitle')} aria-label={$t('call.switchRelay')} on:click={() => callService.switchRelay(stream.streamId)}>
                     <Icon name="relay" size={17} />

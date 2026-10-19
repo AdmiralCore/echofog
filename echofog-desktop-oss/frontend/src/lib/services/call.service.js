@@ -13,12 +13,17 @@ function savePrefs(p) {
 
 // The Go bridge offer has a fixed layout, so tracks are attached with replaceTrack and the
 // loopback never renegotiates:
-//   m-lines 0..2   UI capture: mic, camera, screen (Go receives)
-//   then 16 audio  one playback track per remote speaker  (slots a0..a15)
-//   then 4 video   one playback track per watched stream  (slots v0..v3)
-const LOCAL = { mic: 0, camera: 1, screen: 2 };
+//   m-lines 0..3   UI capture: mic, camera, screen, screen sound (Go receives)
+//   then 16 audio  one playback track per remote speaker        (slots a0..a15)
+//   then 4 video   one playback track per watched stream        (slots v0..v3)
+//   then 4 audio   the sound of each watched stream             (slots s0..s3)
+const LOCAL = { mic: 0, camera: 1, screen: 2, screenAudio: 3 };
+const LOCAL_LINES = 4;
 const AUDIO_SLOTS = 16;
 const VIDEO_SLOTS = 4;
+const STREAM_AUDIO_SLOTS = 4;
+// Screen sound is music and films, not speech: stereo and a bitrate Opus sounds clean at.
+const SCREEN_AUDIO_KBPS = 160;
 const SPEAKING_LEVEL = 0.035;
 const AUTO_WATCH_CAMERAS = 3;
 
@@ -48,6 +53,8 @@ function freshState(prev = {}) {
     streamError: null,
     slots: {},             // slot -> { kind, peer, streamId }
     peerVolume: prev.peerVolume || {}, // peer -> 0..2 (1 = 100%)
+    streamVolume: prev.streamVolume || {}, // stream -> 0..2: the sound of a watched stream
+    screenAudio: false,    // our shared screen carries its sound
     localMuted: prev.localMuted || {}, // peer -> true: muted for us only
     reported: {},
     screenStreamId: null,
@@ -100,17 +107,22 @@ class CallService {
 
       if (!app().JoinRoom) throw new Error(tr('call.err.unavailable'));
       const offer = await app().JoinRoom(callId, coordPeerId);
-      await pc.setRemoteDescription({ type: 'offer', sdp: offer });
+      // ask the browser to send the screen's sound in stereo (the bridge forwards it untouched)
+      await pc.setRemoteDescription({ type: 'offer', sdp: opusStereo(offer, [LOCAL.screenAudio]) });
 
       const t = pc.getTransceivers();
-      if (t.length < 3 + AUDIO_SLOTS + VIDEO_SLOTS) throw new Error(tr('call.err.bridge'));
-      this.tx = { mic: t[LOCAL.mic], camera: t[LOCAL.camera], screen: t[LOCAL.screen] };
-      for (const role of ['mic', 'camera', 'screen']) this.tx[role].direction = 'sendonly';
+      if (t.length < LOCAL_LINES + AUDIO_SLOTS + VIDEO_SLOTS) throw new Error(tr('call.err.bridge'));
+      this.tx = { mic: t[LOCAL.mic], camera: t[LOCAL.camera], screen: t[LOCAL.screen], screenAudio: t[LOCAL.screenAudio] };
+      for (const role of ['mic', 'camera', 'screen', 'screenAudio']) this.tx[role].direction = 'sendonly';
       this.preferH264(this.tx.camera);
       this.preferH264(this.tx.screen);
       if (this.mic) await this.tx.mic.sender.replaceTrack(this.mic.getAudioTracks()[0]);
 
-      await pc.setLocalDescription(await pc.createAnswer());
+      // and to decode the sound of watched streams in stereo
+      const answer = await pc.createAnswer();
+      const first = LOCAL_LINES + AUDIO_SLOTS + VIDEO_SLOTS;
+      const streamLines = Array.from({ length: STREAM_AUDIO_SLOTS }, (_, i) => first + i);
+      await pc.setLocalDescription({ type: 'answer', sdp: opusStereo(answer.sdp, streamLines) });
       await waitIceGathering(pc, 1500);
       await app().SubmitCallAnswer(pc.localDescription.sdp);
 
@@ -192,7 +204,7 @@ class CallService {
       else delete slots[ev.slot];
       return { ...s, slots };
     });
-    if (ev.kind === 'audio') this.applyVolume(ev.slot);
+    if (ev.kind === 'audio' || ev.kind === 'streamaudio') this.applyVolume(ev.slot);
   }
 
   onStreamAnnounced(st) {
@@ -225,8 +237,11 @@ class CallService {
     const sid = ev.streams?.[0]?.id || '';
     if (sid.startsWith('efslot-')) return sid.slice(7);
     const idx = this.pc.getTransceivers().indexOf(ev.transceiver);
-    if (idx >= 3 && idx < 3 + AUDIO_SLOTS) return 'a' + (idx - 3);
-    if (idx >= 3 + AUDIO_SLOTS) return 'v' + (idx - 3 - AUDIO_SLOTS);
+    const v0 = LOCAL_LINES + AUDIO_SLOTS;
+    const s0 = v0 + VIDEO_SLOTS;
+    if (idx >= LOCAL_LINES && idx < v0) return 'a' + (idx - LOCAL_LINES);
+    if (idx >= v0 && idx < s0) return 'v' + (idx - v0);
+    if (idx >= s0 && idx < s0 + STREAM_AUDIO_SLOTS) return 's' + (idx - s0);
     return '';
   }
 
@@ -289,9 +304,17 @@ class CallService {
     const a = this.audioSlots.get(slot);
     if (!a) return;
     const s = get(callState);
-    const peer = s.slots[slot]?.peer;
-    let v = peer ? (s.peerVolume[peer] ?? 1) : 1;
-    if (s.isDeafened || (peer && s.localMuted[peer])) v = 0;
+    const info = s.slots[slot];
+    let v;
+    if (slot.startsWith('s')) {
+      // a stream's sound has its own volume, apart from its broadcaster's voice
+      v = info?.streamId ? (s.streamVolume[info.streamId] ?? 1) : 0;
+      if (s.isDeafened) v = 0;
+    } else {
+      const peer = info?.peer;
+      v = peer ? (s.peerVolume[peer] ?? 1) : 1;
+      if (s.isDeafened || (peer && s.localMuted[peer])) v = 0;
+    }
     a.gain.gain.setTargetAtTime(v, this.audioCtx.currentTime, 0.02);
   }
 
@@ -315,6 +338,7 @@ class CallService {
     const s = get(callState);
     const speaking = {};
     for (const [slot, a] of this.audioSlots) {
+      if (slot.startsWith('s')) continue; // a playing film is not somebody speaking
       const peer = s.slots[slot]?.peer;
       if (!peer || s.localMuted[peer] || s.isDeafened) continue;
       if (rms(a.analyser, a.data) > SPEAKING_LEVEL) speaking[peer] = true;
@@ -454,7 +478,15 @@ class CallService {
     try {
       this.screen = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } },
-        audio: false,
+        // the sound of the screen: the picker offers it as "share system audio" / a tab's audio
+        audio: {
+          echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+          channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 },
+          // leave out what this app plays itself, or viewers would hear the call back
+          restrictOwnAudio: true, suppressLocalAudioPlayback: false,
+        },
+        systemAudio: 'include',
+        windowAudio: 'system',
       });
     } catch (err) {
       await app().StopScreenShare?.(streamId);
@@ -466,8 +498,16 @@ class CallService {
     track.onended = () => this.stopScreenShare();
     await this.tx.screen.sender.replaceTrack(track);
     await applySenderQuality(this.tx.screen.sender, q, true);
+    const sound = this.screen.getAudioTracks()[0] || null;
+    if (sound) {
+      sound.contentHint = 'music';
+      await this.tx.screenAudio?.sender.replaceTrack(sound);
+      await applyAudioBitrate(this.tx.screenAudio?.sender, SCREEN_AUDIO_KBPS);
+    } else {
+      this.notify(tr('call.notice.noScreenAudio'));
+    }
     videoStreams.update((v) => ({ ...v, 'local:screen': this.screen }));
-    callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id }));
+    callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id, screenAudio: !!sound }));
   }
 
   async stopScreenShare() {
@@ -475,9 +515,10 @@ class CallService {
     this.screen?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     this.screen = null;
     try { await this.tx?.screen.sender.replaceTrack(null); } catch (_) { /* closed */ }
+    try { await this.tx?.screenAudio?.sender.replaceTrack(null); } catch (_) { /* closed */ }
     if (id) await safeCall('StopScreenShare', id);
     videoStreams.update((v) => { const n = { ...v }; delete n['local:screen']; return n; });
-    callState.update((s) => ({ ...s, isScreenSharing: false, screenStreamId: null, streamQualityId: null, streamError: null,
+    callState.update((s) => ({ ...s, isScreenSharing: false, screenAudio: false, screenStreamId: null, streamQualityId: null, streamError: null,
       focusedStreamId: s.focusedStreamId === id ? null : s.focusedStreamId }));
   }
 
@@ -595,6 +636,17 @@ class CallService {
 
   // --- per-person controls & moderation ----------------------------------------------------
 
+  /** Volume of a watched stream's sound, 0..2 (1 = 100%); 0 mutes it. */
+  setStreamVolume(streamId, volume) {
+    callState.update((s) => ({ ...s, streamVolume: { ...s.streamVolume, [streamId]: volume } }));
+    this.applyAllVolumes();
+  }
+
+  /** The sound slot of a watched stream, or '' while none plays. */
+  soundSlotOf(streamId, $state) {
+    return Object.keys($state.slots).find((k) => $state.slots[k].kind === 'streamaudio' && $state.slots[k].streamId === streamId) || '';
+  }
+
   setPeerVolume(peer, volume) {
     callState.update((s) => ({ ...s, peerVolume: { ...s.peerVolume, [peer]: volume } }));
     this.applyAllVolumes();
@@ -687,6 +739,39 @@ async function applySenderQuality(sender, quality, screen = false) {
   } catch (e) {
     console.warn('[CallService] setParameters failed:', e);
   }
+}
+
+async function applyAudioBitrate(sender, kbps) {
+  if (!sender) return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    params.encodings[0].maxBitrate = kbps * 1000;
+    params.encodings[0].priority = 'high';
+    await sender.setParameters(params);
+  } catch (e) {
+    console.warn('[CallService] audio setParameters failed:', e);
+  }
+}
+
+// opusStereo marks Opus as stereo with a music bitrate on the given m-lines (0-based): in an
+// offer that makes the browser send stereo, in our answer it makes the browser decode stereo.
+export function opusStereo(sdp, lines) {
+  const parts = sdp.split(/\r\n(?=m=)/);
+  const want = new Set(lines.map((i) => i + 1)); // parts[0] is the session part
+  for (let i = 1; i < parts.length; i++) {
+    if (!want.has(i)) continue;
+    const pt = /a=rtpmap:(\d+) opus\/48000/i.exec(parts[i])?.[1];
+    if (!pt) continue;
+    parts[i] = parts[i].replace(new RegExp('a=fmtp:' + pt + ' ([^\\r\\n]*)'), (line, params) => {
+      let out = params;
+      for (const [k, v] of [['stereo', '1'], ['sprop-stereo', '1'], ['maxaveragebitrate', String(SCREEN_AUDIO_KBPS * 1000)]]) {
+        if (!new RegExp('(^|;)\\s*' + k + '=').test(out)) out += ';' + k + '=' + v;
+      }
+      return 'a=fmtp:' + pt + ' ' + out;
+    });
+  }
+  return parts.join('\r\n');
 }
 
 // The Go bridge receives one SDP and has no trickle channel, so send the answer with candidates.

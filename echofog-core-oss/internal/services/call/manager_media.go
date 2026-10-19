@@ -87,15 +87,43 @@ func (m *CallManager) onBridgeRTP(role string, payload []byte) {
 		_ = m.PublishAudio(payload)
 		return
 	}
+	video := role
+	if role == bridge.RoleScreenAudio {
+		video = bridge.RoleScreen // the sound belongs to the screen stream
+	}
 	m.mu.RLock()
 	streamID := ""
 	if m.activeRoom != nil {
-		streamID = m.activeRoom.localByRole[role]
+		streamID = m.activeRoom.localByRole[video]
 	}
 	m.mu.RUnlock()
-	if streamID != "" {
-		_ = m.PublishVideo(streamID, payload)
+	if streamID == "" {
+		return
 	}
+	if role == bridge.RoleScreenAudio {
+		_ = m.PublishStreamAudio(streamID, payload)
+		return
+	}
+	_ = m.PublishVideo(streamID, payload)
+}
+
+// PublishStreamAudio sends one encoded audio unit of a local stream (a screen's sound) down the
+// stream's tree, to its viewers only.
+func (m *CallManager) PublishStreamAudio(streamID string, payload []byte) error {
+	m.mu.RLock()
+	room := m.activeRoom
+	var local bool
+	if room != nil {
+		_, local = room.localStreams[streamID]
+	}
+	m.mu.RUnlock()
+	if room == nil {
+		return ErrNotInCall
+	}
+	if !local {
+		return ErrNoLocalStream
+	}
+	return room.Dispatcher.BroadcastLocalStreamAudio(streamID, payload)
 }
 
 func (m *CallManager) onBridgeSlot(ev bridge.SlotEvent) {
@@ -157,7 +185,7 @@ func (m *CallManager) OnLocalAudio(packet *media.MediaPacket) {
 	}
 }
 
-// OnLocalVideo implements media.LocalMediaConsumer.
+// OnLocalVideo implements media.LocalMediaConsumer: a stream's video, or its sound.
 func (m *CallManager) OnLocalVideo(packet *media.MediaPacket) {
 	m.mu.RLock()
 	room, tap := m.activeRoom, m.OnMedia
@@ -165,7 +193,12 @@ func (m *CallManager) OnLocalVideo(packet *media.MediaPacket) {
 	if tap != nil {
 		tap(packet)
 	}
-	if room != nil && room.Bridge != nil {
-		_ = room.Bridge.PushRemoteVideo(packet)
+	if room == nil || room.Bridge == nil {
+		return
 	}
+	if packet.Kind == media.FrameStreamAudio {
+		_ = room.Bridge.PushRemoteStreamAudio(packet)
+		return
+	}
+	_ = room.Bridge.PushRemoteVideo(packet)
 }
