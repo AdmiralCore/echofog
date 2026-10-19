@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -102,7 +103,11 @@ func (p *Prober) handle(payload []byte, from types.PeerID) error {
 		}
 		p.mu.Unlock()
 		if allowed {
-			go func() { _ = p.burst(context.Background(), from, id) }()
+			go func() {
+				if err := p.burst(context.Background(), from, id); err != nil {
+					slog.Warn("bandwidth probe: could not send the burst", "err", err)
+				}
+			}()
 		}
 
 	case kindEnd:

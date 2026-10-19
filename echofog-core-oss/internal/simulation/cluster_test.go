@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/p2p/dht"
 	"github.com/echofog/echofog-core/internal/p2p/vpnmarket"
 	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -149,6 +150,24 @@ func TestCluster_NodeChurnResilience(t *testing.T) {
 	stableVal := []byte("indestructible_data_across_churn")
 	if err := cluster.Nodes[1].DhtEngine.Set(stableKey, stableVal); err != nil {
 		t.Fatalf("Initial Set failed: %v", err)
+	}
+
+	// Set stores in the background, on the closest peers it can reach after a lookup: wait until
+	// copies exist on other nodes, as they would long before any churn in a real network
+	deadline := time.Now().Add(15 * time.Second)
+	for replicas := 0; time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		replicas = 0
+		for i, n := range cluster.Nodes {
+			if i == 1 {
+				continue
+			}
+			if raw, err := n.Swarm.GetStorage().Get(dht.RecordKey(stableKey)); err == nil && len(raw) > 0 {
+				replicas++
+			}
+		}
+		if replicas >= 2 {
+			break
+		}
 	}
 
 	// Abruptly kill 5 nodes in the middle of the cluster

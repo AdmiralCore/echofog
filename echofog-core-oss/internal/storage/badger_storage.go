@@ -13,6 +13,25 @@ type BadgerStorage struct {
 	db        *badger.DB
 	done      chan struct{} // closed by Close: stops the garbage collection loop
 	closeOnce sync.Once
+
+	// mu makes Close wait for operations under way and later operations fail cleanly: badger
+	// panics ("DB Closed") when an iterator is opened on a closed database, and background loops
+	// (peer upkeep, DHT, sync) can still be finishing a round while the node shuts down.
+	mu     sync.RWMutex
+	closed bool
+}
+
+// ErrClosed is returned by every operation after Close.
+var ErrClosed = errors.New("storage is closed")
+
+// open takes the read lock for one operation; it reports false once the storage is closed.
+func (s *BadgerStorage) open() bool {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return false
+	}
+	return true
 }
 
 func NewBadgerStorage(db *badger.DB) *BadgerStorage {
@@ -25,12 +44,20 @@ func NewBadgerStorage(db *badger.DB) *BadgerStorage {
 }
 
 func (s *BadgerStorage) Update(key, value []byte) error {
+	if !s.open() {
+		return ErrClosed
+	}
+	defer s.mu.RUnlock()
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(key, value)
 	})
 }
 
 func (s *BadgerStorage) UpdateTTL(key, value []byte, ttl time.Duration) error {
+	if !s.open() {
+		return ErrClosed
+	}
+	defer s.mu.RUnlock()
 	return s.db.Update(func(txn *badger.Txn) error {
 		e := badger.NewEntry(key, value).WithTTL(ttl)
 
@@ -39,6 +66,10 @@ func (s *BadgerStorage) UpdateTTL(key, value []byte, ttl time.Duration) error {
 }
 
 func (s *BadgerStorage) Read(key []byte) ([]byte, error) {
+	if !s.open() {
+		return nil, ErrClosed
+	}
+	defer s.mu.RUnlock()
 	var data []byte
 	err := s.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
@@ -56,6 +87,10 @@ func (s *BadgerStorage) Read(key []byte) ([]byte, error) {
 }
 
 func (s *BadgerStorage) Delete(key []byte) error {
+	if !s.open() {
+		return ErrClosed
+	}
+	defer s.mu.RUnlock()
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(key)
 	})
@@ -71,8 +106,12 @@ func (s *BadgerStorage) GCWorker() {
 				return
 			case <-ticker.C:
 			}
+			if !s.open() {
+				return
+			}
 			for s.db.RunValueLogGC(0.5) == nil {
 			}
+			s.mu.RUnlock()
 		}
 	}()
 }
@@ -91,6 +130,10 @@ type Entry struct {
 }
 
 func (s *BadgerStorage) FindValues(prefix []byte, limit int) ([]Entry, error) {
+	if !s.open() {
+		return nil, ErrClosed
+	}
+	defer s.mu.RUnlock()
 	var entries []Entry
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -120,6 +163,10 @@ func (s *BadgerStorage) FindValues(prefix []byte, limit int) ([]Entry, error) {
 }
 
 func (s *BadgerStorage) Exists(key []byte) bool {
+	if !s.open() {
+		return false
+	}
+	defer s.mu.RUnlock()
 	err := s.db.View(func(txn *badger.Txn) error {
 		_, err := txn.Get(key)
 		if err != nil {
@@ -131,6 +178,10 @@ func (s *BadgerStorage) Exists(key []byte) bool {
 }
 
 func (s *BadgerStorage) GetNextID(chatID uint64) (uint64, error) {
+	if !s.open() {
+		return 0, ErrClosed
+	}
+	defer s.mu.RUnlock()
 	key := make([]byte, 16)
 	copy(key[0:8], "seq:msg:")
 	binary.BigEndian.PutUint64(key[8:16], chatID)
@@ -159,6 +210,10 @@ func (s *BadgerStorage) GetNextID(chatID uint64) (uint64, error) {
 }
 
 func (s *BadgerStorage) FindValuesSeek(prefix []byte, startKey []byte, limit int) ([]Entry, error) {
+	if !s.open() {
+		return nil, ErrClosed
+	}
+	defer s.mu.RUnlock()
 	var entries []Entry
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -188,6 +243,11 @@ func (s *BadgerStorage) FindValuesSeek(prefix []byte, startKey []byte, limit int
 }
 
 func (s *BadgerStorage) Close() {
-	s.closeOnce.Do(func() { close(s.done) })
-	s.db.Close()
+	s.closeOnce.Do(func() {
+		close(s.done)
+		s.mu.Lock() // waits for operations under way
+		s.closed = true
+		s.mu.Unlock()
+		s.db.Close()
+	})
 }

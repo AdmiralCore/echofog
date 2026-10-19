@@ -244,6 +244,12 @@ func (p *PeerWrapper) handleGossipStream(stream MuxRecvStream) {
 	if p.onData != nil {
 		p.dispatchData(msgType, msg)
 	}
+	// read on to the end before letting go: cancelling the read of a stream whose FIN is still in
+	// flight sends STOP_SENDING, and the sender's Close then fails ("close called for canceled
+	// stream") although its frame was delivered; a bandwidth probe, for one, stopped on that
+	stream.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	var rest [1]byte
+	_, _ = stream.Read(rest[:])
 }
 
 func (p *PeerWrapper) OpenBidirectionalStream(ctx context.Context) (*Stream, error) {
