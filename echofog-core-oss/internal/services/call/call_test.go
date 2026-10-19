@@ -264,12 +264,16 @@ func TestRoom_TwoStreamsReachEveryViewer(t *testing.T) {
 		assert.Equal(t, ref.Epoch, sm.Epoch)
 	}
 
+	// paced like real media (a frame every few milliseconds), not all at once: an unpaced burst
+	// overflows relay queues, and a unit lost at the very end of a stream has no later unit to
+	// reveal the gap, so nothing could ever recover it
 	const units = 300
 	for i := uint32(0); i < units; i++ {
-		require.NoError(t, a.cm.PublishVideo("a-screen", unit(i, 2400))) // 3 fragments each
+		require.NoError(t, a.cm.PublishVideo("a-screen", unit(i, 2400))) // 2 fragments each
 		require.NoError(t, b.cm.PublishVideo("b-cam", unit(i, 900)))
 		if i%10 == 0 {
 			require.NoError(t, nodes[2].cm.PublishAudio(unit(i/10, 160)))
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 
