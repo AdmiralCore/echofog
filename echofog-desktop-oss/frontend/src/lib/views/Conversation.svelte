@@ -9,6 +9,7 @@
   import { time, short, bytes } from '../format.js';
   import { linkify, mark, linkHost } from '../linkify.js';
   import { t, lang, intlLocale } from '../i18n/index.js';
+  import { ask } from '../stores/dialog.js';
   import Avatar from '../components/ui/Avatar.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Popover from '../components/ui/Popover.svelte';
@@ -129,7 +130,7 @@
   }
 
   async function removeContact() {
-    if (!window.confirm($t('chats.confirm.deleteContact', { name: conv.name }))) return;
+    if (!(await ask({ message: $t('chats.confirm.deleteContact', { name: conv.name }), confirm: $t('common.delete'), danger: true }))) return;
     try { await deleteContact(conv); } catch (err) { infoError = errText(err); }
   }
 
@@ -146,20 +147,20 @@
     }
   }
 
-  function makeOwner(m) {
-    if (!window.confirm($t('chats.confirm.makeOwner', { name: senderName(m.peerId), group: conv.name }))) return;
+  async function makeOwner(m) {
+    if (!(await ask({ message: $t('chats.confirm.makeOwner', { name: senderName(m.peerId), group: conv.name }) }))) return;
     memberAction(m.peerId, async () => { await App.TransferGroupOwnership(conv.groupId, m.peerId); await loadChats(); });
   }
 
   async function deleteGroup() {
-    if (!window.confirm($t('chats.confirm.deleteGroup', { name: conv.name }))) return;
+    if (!(await ask({ message: $t('chats.confirm.deleteGroup', { name: conv.name }), confirm: $t('common.delete'), danger: true }))) return;
     try { await App.DeleteGroup(conv.groupId); await loadChats(); activeId.set(''); } catch (err) { infoError = errText(err); }
   }
 
   const setRole = (m, role) => memberAction(m.peerId, () => App.SetGroupRole(conv.groupId, m.peerId, role));
 
-  function kick(m, ban) {
-    if (!window.confirm($t(ban ? 'chats.confirm.ban' : 'chats.confirm.remove', { name: senderName(m.peerId) }))) return;
+  async function kick(m, ban) {
+    if (!(await ask({ message: $t(ban ? 'chats.confirm.ban' : 'chats.confirm.remove', { name: senderName(m.peerId) }), confirm: $t('common.remove'), danger: true }))) return;
     memberAction(m.peerId, () => App.RemoveGroupMember(conv.groupId, m.peerId, ban));
   }
 
@@ -171,7 +172,7 @@
   }
 
   async function leave() {
-    if (!window.confirm($t('chats.confirm.leave', { name: conv.name }))) return;
+    if (!(await ask({ message: $t('chats.confirm.leave', { name: conv.name }), danger: true }))) return;
     try { await leaveGroup(conv); } catch (err) { infoError = errText(err); }
   }
 

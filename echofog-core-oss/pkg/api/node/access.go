@@ -63,7 +63,8 @@ func (n *NodeApi) GetAccessStatus() (AccessStatus, error) {
 	return st, nil
 }
 
-// SetAccessMode saves the access mode ("public" or "hidden") for the next start of the node.
+// SetAccessMode saves the access mode ("public" or "hidden") for the next start of the node, or
+// for the coming one when the node has not started yet.
 // Isolated is for servers only and is set in the node's configuration.
 func (n *NodeApi) SetAccessMode(mode string) error {
 	if n.node == nil || n.node.Cfg == nil {
@@ -78,6 +79,11 @@ func (n *NodeApi) SetAccessMode(mode string) error {
 		return err
 	}
 	n.nextAccessMode = mode
+	if n.node.Swarm == nil {
+		// chosen before the node first starts (the welcome screen after registering): it applies
+		// to this very start, not only the next one
+		n.node.Cfg.Access.Mode = mode
+	}
 	return nil
 }
 

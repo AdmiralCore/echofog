@@ -3,6 +3,7 @@
   import { screen, boot } from './lib/stores/session.js';
   import Auth from './lib/views/Auth.svelte';
   import Shell from './lib/views/Shell.svelte';
+  import Dialog from './lib/components/ui/Dialog.svelte';
   import { t } from './lib/i18n/index.js';
 
   onMount(boot);
@@ -18,6 +19,7 @@
 {:else}
   <Auth />
 {/if}
+<Dialog />
 
 <style>
   .loading { height: 100%; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center; animation: fade 0.4s ease-out; }

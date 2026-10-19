@@ -1,13 +1,13 @@
 <script>
   import {
     screen, profiles, profile, recoveryPhrase,
-    choose, login, create, restore, phraseSaved, removeProfile, errText,
+    choose, login, create, restore, phraseSaved, chooseAccess, removeProfile, errText,
   } from '../stores/session.js';
   import { App } from '../api.js';
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
-  import { t } from '../i18n/index.js';
+  import { t, lang, locale, LANGUAGES } from '../i18n/index.js';
 
   let password = '';
   let confirm = '';
@@ -20,6 +20,7 @@
   let phraseCheck = ''; // what is wrong with the typed phrase, '' when it is fine
   let phraseOk = false;
   let checkTimer;
+  let accessMode = 'public';
 
   // the words are checked while they are typed, against the same list the core uses
   $: if ($screen === 'restore') checkPhrase(phrase);
@@ -99,6 +100,12 @@
   <div class="orb o1" aria-hidden="true"></div>
   <div class="orb o2" aria-hidden="true"></div>
   <div class="orb o3" aria-hidden="true"></div>
+
+  <div class="langs" role="group" aria-label={$t('auth.language')}>
+    {#each LANGUAGES as l}
+      <button class:on={$lang === l.id} aria-pressed={$lang === l.id} title={l.label} on:click={() => locale.set(l.id)}>{l.id.toUpperCase()}</button>
+    {/each}
+  </div>
 
   <button class="icon theme" title={$resolvedTheme === 'dark' ? $t('auth.lightTheme') : $t('auth.darkTheme')} aria-label={$t('auth.toggleTheme')} on:click={toggleTheme}>
     <Icon name={$resolvedTheme === 'dark' ? 'sun' : 'moon'} size={18} />
@@ -207,6 +214,25 @@
       </ol>
       <label class="row"><input type="checkbox" bind:checked={saved} /> {$t('auth.phraseSaved')}</label>
       <button class="primary big" disabled={!saved || busy} on:click={() => run(phraseSaved)}>{$t('auth.continue')}</button>
+
+    {:else if $screen === 'access'}
+      <h2>{$t('auth.access.title')}</h2>
+      <div class="modes" role="radiogroup" aria-label={$t('auth.access.title')}>
+        {#each ['public', 'hidden'] as m}
+          <button class="mode" class:sel={accessMode === m} role="radio" aria-checked={accessMode === m} on:click={() => (accessMode = m)}>
+            <span class="mode-ico"><Icon name={m === 'public' ? 'globe' : 'lock'} size={18} /></span>
+            <span class="mode-text">
+              <b>{$t('auth.access.' + m + 'Title')}{#if m === 'public'} <span class="rec">{$t('auth.access.recommended')}</span>{/if}</b>
+              <span class="small muted">{$t('auth.access.' + m + 'Text')}</span>
+            </span>
+            <span class="radio" aria-hidden="true"></span>
+          </button>
+        {/each}
+      </div>
+      <p class="small faint">{$t('auth.access.hint')}</p>
+      <button class="primary big" disabled={busy} on:click={() => run(() => chooseAccess(accessMode))}>
+        {#if busy}<span class="spinner light"></span>{/if}{$t('auth.access.start')}
+      </button>
     {/if}
     </div>
     {/key}
@@ -225,7 +251,26 @@
   .o2 { width: 380px; height: 380px; right: -100px; bottom: -120px; background: var(--accent-2); opacity: 0.2; animation-delay: -6s; }
   .o3 { width: 240px; height: 240px; right: 18%; top: 12%; background: var(--ok); opacity: 0.08; animation-delay: -12s; }
   @keyframes drift { 0%, 100% { transform: translate(0, 0) scale(1); } 33% { transform: translate(40px, 30px) scale(1.08); } 66% { transform: translate(-30px, 20px) scale(0.95); } }
-  .theme { position: absolute; top: 16px; right: 16px; z-index: 2; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line-soft); }
+  .langs {
+    position: fixed; top: 16px; left: 16px; z-index: 2; display: flex; gap: 2px; padding: 3px; border-radius: 12px;
+    background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line-soft);
+  }
+  .langs button { padding: 5px 10px; font-size: 12px; font-weight: 600; border: none; border-radius: 9px; background: transparent; color: var(--muted); }
+  .langs button.on, .langs button.on:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .modes { display: flex; flex-direction: column; gap: 8px; }
+  .mode {
+    display: flex; gap: 12px; align-items: flex-start; text-align: left; padding: 12px; border-radius: 14px;
+    background: var(--raised); border: 1px solid var(--line-soft); color: var(--text); transition: border-color 0.2s, background 0.2s;
+    white-space: normal; height: auto; width: 100%; font-weight: normal;
+  }
+  .mode.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .mode-ico { width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--bg); color: var(--accent); }
+  .mode-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+  .mode-text .small { line-height: 1.4; }
+  .rec { font-size: 11px; font-weight: 600; color: var(--ok); margin-left: 4px; }
+  .radio { width: 16px; height: 16px; flex: none; margin-top: 2px; border-radius: 50%; border: 2px solid var(--line); }
+  .mode.sel .radio { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
+  .theme { position: fixed; top: 16px; right: 16px; z-index: 2; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line-soft); }
 
   .box {
     position: relative; z-index: 1; width: min(420px, 100%); padding: 30px; border-radius: var(--radius-xl);

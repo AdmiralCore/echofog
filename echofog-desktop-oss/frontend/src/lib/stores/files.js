@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 import { App, on, errText } from '../api.js';
 import { tr } from '../i18n/index.js';
+import { ask } from './dialog.js';
 
 /**
  * File transfers by ID: { id, peer, dir: 'in'|'out', name, size, state, error, path, done, rate, stalled, created }.
@@ -86,7 +87,7 @@ export const showInFolder = (id) => act(() => App.ShowTransferFile(id));
 export async function openFile(t) {
   let risky = false;
   try { risky = await App.IsRiskyFile(t.name); } catch (_) { /* old core: ask anyway below */ }
-  if (risky && !window.confirm(tr('files.confirmRisky', { name: t.name }))) return;
+  if (risky && !(await ask({ message: tr('files.confirmRisky', { name: t.name }), danger: true }))) return;
   await act(() => App.OpenTransferFile(t.id, risky));
 }
 

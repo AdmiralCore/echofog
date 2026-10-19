@@ -9,6 +9,7 @@
   import AccessCard from '../components/AccessCard.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
+  import { ask } from '../stores/dialog.js';
   import { me } from '../stores/session.js';
   import { view } from '../stores/nav.js';
 
@@ -91,8 +92,8 @@
     await refresh();
   });
 
-  const clearHistory = () => {
-    if (!confirm($t('proxy.hist.clearConfirm'))) return;
+  const clearHistory = async () => {
+    if (!(await ask({ message: $t('proxy.hist.clearConfirm'), confirm: $t('proxy.hist.clear'), danger: true }))) return;
     act('clear', async () => {
       await App.ClearVPNHistory();
       await loadHistory();
@@ -115,8 +116,8 @@
     await loadHistory();
   });
 
-  const forget = (e) => {
-    if (!confirm($t('proxy.hist.forgetConfirm'))) return;
+  const forget = async (e) => {
+    if (!(await ask({ message: $t('proxy.hist.forgetConfirm'), confirm: $t('common.delete'), danger: true }))) return;
     act('forget', async () => {
       await App.ForgetExit(e.peerId);
       await loadHistory();

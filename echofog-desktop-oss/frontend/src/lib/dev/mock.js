@@ -351,10 +351,12 @@ function leave() {
 const impl = {
   GetProfiles: () => ['demo'],
   SelectProfile: () => null,
-  IsRegistered: () => true,
+  // ?mock&fresh walks the first-run path: create, recovery phrase, access choice
+  IsRegistered: () => !new URLSearchParams(location.search).has('fresh'),
   // the app password to delete a profile in the preview is "demo"; anything else is refused
   DeleteProfile: (_name, pw) => { if (pw !== 'demo') throw new Error('wrong app password'); return null; },
   Login: () => null,
+  Register: () => 'abandon ability able about above absent absorb abstract absurd abuse access accident',
   CheckRecoveryPhrase: (p) => {
     const w = p.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (w.length !== 12 && w.length !== 24) return `a recovery phrase has 12 or 24 words, this one has ${w.length}`;

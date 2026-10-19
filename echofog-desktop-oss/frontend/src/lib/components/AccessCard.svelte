@@ -7,6 +7,7 @@
   import { short, when } from '../format.js';
   import Icon from './ui/Icon.svelte';
   import { t, lang } from '../i18n/index.js';
+  import { ask } from '../stores/dialog.js';
 
   export let contacts = [];
 
@@ -49,8 +50,8 @@
   }
 
   const setMode = (id) => id !== mode && run('mode', () => App.SetAccessMode(id));
-  const rotate = () => {
-    if (!confirm($t('access.rotateConfirm'))) return;
+  const rotate = async () => {
+    if (!(await ask({ message: $t('access.rotateConfirm'), confirm: $t('access.rotate') }))) return;
     run('rotate', async () => {
       await App.RotateAccessSecret();
       showQR = false;

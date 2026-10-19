@@ -2,7 +2,7 @@ import { writable, get } from 'svelte/store';
 import { App, waitForBridge, errText } from '../api.js';
 import { tr } from '../i18n/index.js';
 
-// screen: 'loading' | 'profiles' | 'login' | 'create' | 'restore' | 'phrase' | 'app'
+// screen: 'loading' | 'profiles' | 'login' | 'create' | 'restore' | 'phrase' | 'access' | 'app'
 export const screen = writable('loading');
 export const profiles = writable([]);
 export const profile = writable('');
@@ -46,6 +46,12 @@ export async function create(password) {
 
 export async function phraseSaved() {
   recoveryPhrase.set('');
+  screen.set('access'); // a new user chooses who can find this computer before it goes online
+}
+
+/** The welcome choice after registering: public or hidden, then the node starts with it. */
+export async function chooseAccess(mode) {
+  await App.SetAccessMode(mode);
   await start();
 }
 
