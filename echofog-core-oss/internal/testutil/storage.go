@@ -10,7 +10,6 @@ import (
 
 type TestingBadgerStorage struct {
 	St   *storage.BadgerStorage
-	db   *badger.DB
 	once sync.Once
 }
 
@@ -28,12 +27,12 @@ func NewTestingBadgerStorage(t *testing.T) *TestingBadgerStorage {
 
 	return &TestingBadgerStorage{
 		St: st,
-		db: db,
 	}
 }
 
 func (t *TestingBadgerStorage) CloseAndClear() {
 	t.once.Do(func() {
-		t.db.Close()
+		// through the wrapper, so a goroutine still running reads ErrClosed instead of panicking
+		t.St.Close()
 	})
 }
