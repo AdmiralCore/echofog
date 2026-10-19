@@ -122,3 +122,39 @@ func (a *App) ConnectLastExit() error {
 	}
 	return nodeAPI.ConnectLastExit()
 }
+
+// GetSavedExits lists the exits used or starred, one entry each, favourites first.
+func (a *App) GetSavedExits() []api.SavedExit {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return nil
+	}
+	return nodeAPI.GetSavedExits()
+}
+
+// SetExitName names an exit ("" removes the name).
+func (a *App) SetExitName(peerID, name string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.SetExitName(peerID, name)
+}
+
+// SetExitFavorite stars an exit or takes the star away.
+func (a *App) SetExitFavorite(peerID string, on bool) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.SetExitFavorite(peerID, on)
+}
+
+// ForgetExit removes an exit from the history, with its name and star.
+func (a *App) ForgetExit(peerID string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.ForgetExit(peerID)
+}

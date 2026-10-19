@@ -34,7 +34,7 @@ func TestVPNHistoryRecordsSessions(t *testing.T) {
 	api.vpn.mu.Lock()
 	api.beginSessionLocked(exitA)
 	api.vpn.exitState = ExitOK
-	api.noteSessionStateLocked(ExitOK)
+	api.noteSessionStateLocked(ExitOK, 49)
 	api.vpn.mu.Unlock()
 
 	list := api.GetVPNHistory()
@@ -91,4 +91,43 @@ func TestVPNHistoryClearAndCap(t *testing.T) {
 	list := api.GetVPNHistory()
 	require.Len(t, list, 1)
 	assert.Equal(t, exitB, list[0].PeerID)
+}
+
+// The history adds up per exit: one entry per exit however many times it was used, with the
+// user's name and star, starred exits first, and the price the exit itself asked.
+func TestSavedExitsGroupNameAndStar(t *testing.T) {
+	api := historyAPI(t)
+	api.vpn.mu.Lock()
+	api.beginSessionLocked(exitA)
+	api.noteSessionStateLocked(ExitOK, 49)
+	api.endSessionLocked("stopped")
+	api.beginSessionLocked(exitB)
+	api.endSessionLocked("stopped")
+	api.beginSessionLocked(exitA) // in use now
+	api.vpn.mu.Unlock()
+
+	exits := api.GetSavedExits()
+	require.Len(t, exits, 2, "one entry per exit")
+	assert.Equal(t, exitA, exits[0].PeerID, "the most recently used first")
+	assert.Equal(t, 2, exits[0].Sessions)
+	assert.True(t, exits[0].Active)
+	assert.True(t, exits[0].PriceKnown, "an older session knew the price")
+	assert.Equal(t, int64(49), exits[0].PricePerMB)
+	assert.False(t, exits[1].PriceKnown, "never told: shown as unknown, not free")
+
+	require.NoError(t, api.SetExitName(exitB, "  Friend in Warsaw  "))
+	require.NoError(t, api.SetExitFavorite(exitB, true))
+	require.NoError(t, api.SetExitFavorite(exitC, true)) // starred before ever used
+	exits = api.GetSavedExits()
+	require.Len(t, exits, 3)
+	assert.Equal(t, exitB, exits[0].PeerID, "favourites first, most recently used first among them")
+	assert.Equal(t, "Friend in Warsaw", exits[0].Name)
+	assert.Equal(t, exitC, exits[1].PeerID)
+	assert.Zero(t, exits[1].LastUsed)
+	assert.Error(t, api.SetExitName("not-an-id", "x"))
+
+	require.NoError(t, api.ForgetExit(exitB))
+	for _, e := range api.GetSavedExits() {
+		assert.NotEqual(t, exitB, e.PeerID, "forgotten with its sessions and name")
+	}
 }

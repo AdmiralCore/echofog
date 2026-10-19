@@ -27,6 +27,10 @@
   let sortBy = 'best'; // 'best' | 'ping' | 'price' | 'speed'
   let checkingSites = false;
   let history = [];
+  let saved = [];
+  let openExit = '';
+  let renaming = '';
+  let nameDraft = '';
   let showAllHistory = false;
   let copiedLink = '';
   let accessMode = 'public'; // a hidden exit is not published: people use it by its link
@@ -67,7 +71,10 @@
   }
 
   async function loadHistory() {
-    try { history = (await App.GetVPNHistory()) || []; } catch (_) { /* older core */ }
+    try {
+      history = (await App.GetVPNHistory()) || [];
+      saved = (await App.GetSavedExits()) || [];
+    } catch (_) { /* older core */ }
   }
 
   // the exit's share link: what used to be copied around by hand
@@ -92,9 +99,33 @@
     });
   };
 
+  const toggleStar = (e) => act('star', async () => {
+    await App.SetExitFavorite(e.peerId, !e.favorite);
+    await loadHistory();
+  });
+
+  function startRename(e) {
+    renaming = e.peerId;
+    nameDraft = e.name || '';
+  }
+
+  const saveName = (e) => act('rename', async () => {
+    await App.SetExitName(e.peerId, nameDraft);
+    renaming = '';
+    await loadHistory();
+  });
+
+  const forget = (e) => {
+    if (!confirm($t('proxy.hist.forgetConfirm'))) return;
+    act('forget', async () => {
+      await App.ForgetExit(e.peerId);
+      await loadHistory();
+    });
+  };
+
   async function copyLink(s) {
     if (await copy(exitLink(s))) {
-      copiedLink = s.peerId + s.startedAt;
+      copiedLink = s.peerId + (s.startedAt || '');
       setTimeout(() => (copiedLink = ''), 1500);
     }
   }
@@ -244,7 +275,10 @@
 
   $: connectedExit = exits.find((e) => e.peerId === vpn.relayPeerId);
   $: lastExit = history.find((s) => !s.active);
-  $: shownHistory = showAllHistory ? history : history.slice(0, 6);
+  $: shownExits = showAllHistory ? saved : saved.slice(0, 6);
+  $: exitName = (e) => e.name || contactName(e.peerId) || short(e.peerId);
+  $: sessionsOf = (id) => history.filter((s) => s.peerId === id);
+  $: priceText = (e) => (e.pricePerMb ? price(e.pricePerMb, $lang) : e.priceKnown ? $t('common.Free') : $t('proxy.hist.priceUnknown'));
   $: contactName = (id) => contacts.find((c) => (c.peer_id || '').toLowerCase() === id)?.alias || '';
   const sessionSeconds = (s) => Math.max(0, (s.active ? Math.floor(Date.now() / 1000) : s.endedAt || s.updatedAt) - s.startedAt);
   // the peer link being up is not enough: the exit itself says whether it serves us
@@ -332,7 +366,7 @@
         {#if lastExit}
           <div class="row last-exit">
             <button class="ghost with-icon" on:click={connectLast} disabled={!!busy}><Icon name="zap" size={14} /> {$t('proxy.last.connect')}</button>
-            <span class="small faint">{$t('proxy.last.hint', { id: contactName(lastExit.peerId) || short(lastExit.peerId), when: when(lastExit.endedAt || lastExit.startedAt, $lang) })}</span>
+            <span class="small faint">{$t('proxy.last.hint', { id: exitName(saved.find((e) => e.peerId === lastExit.peerId) || lastExit), when: when(lastExit.endedAt || lastExit.startedAt, $lang) })}</span>
           </div>
         {/if}
         <div class="seg" role="tablist">
@@ -423,38 +457,60 @@
         </div>
         {#if history.length}<button class="ghost small" on:click={clearHistory} disabled={!!busy}>{$t('proxy.hist.clear')}</button>{/if}
       </div>
-      {#if history.length}
+      {#if saved.length}
         <div class="hist">
-          {#each shownHistory as s (s.peerId + s.startedAt)}
-            <div class="hist-row" class:active={s.active}>
+          {#each shownExits as e (e.peerId)}
+            <div class="hist-row" class:active={e.active} class:fav={e.favorite}>
               <div class="hist-main">
                 <span class="row">
-                  <b class="mono">{contactName(s.peerId) || short(s.peerId)}</b>
-                  {#if s.active}<span class="chip ok-chip">{$t('proxy.hist.now')}</span>{/if}
-                  {#if s.lastState && s.lastState !== 'ok'}<span class="chip warn">{$t('proxy.hist.state.' + s.lastState)}</span>{/if}
+                  <button class="icon tiny star" class:on={e.favorite} title={e.favorite ? $t('proxy.hist.unstar') : $t('proxy.hist.star')} aria-label={e.favorite ? $t('proxy.hist.unstar') : $t('proxy.hist.star')} on:click={() => toggleStar(e)} disabled={!!busy}>
+                    <Icon name="star" size={15} fill={e.favorite ? 'currentColor' : 'none'} />
+                  </button>
+                  {#if renaming === e.peerId}
+                    <!-- svelte-ignore a11y-autofocus -->
+                    <input class="name-input" bind:value={nameDraft} maxlength="40" placeholder={$t('proxy.hist.namePlaceholder')} autofocus
+                      on:keydown={(ev) => { if (ev.key === 'Enter') saveName(e); if (ev.key === 'Escape') renaming = ''; }} on:blur={() => saveName(e)} />
+                  {:else}
+                    <b class:mono={!e.name && !contactName(e.peerId)} title={e.peerId}>{exitName(e)}</b>
+                    <button class="icon tiny" title={$t('proxy.hist.rename')} aria-label={$t('proxy.hist.rename')} on:click={() => startRename(e)}><Icon name="edit" size={13} /></button>
+                  {/if}
+                  {#if e.active}<span class="chip ok-chip">{$t('proxy.hist.now')}</span>{/if}
+                  {#if e.lastState && e.lastState !== 'ok'}<span class="chip warn">{$t('proxy.hist.state.' + e.lastState)}</span>{/if}
                 </span>
                 <span class="small faint">
-                  {when(s.startedAt, $lang)} · {duration(sessionSeconds(s))}{s.addr ? ' · ' + s.addr : ''}{s.endReason ? ' · ' + $t('proxy.hist.end.' + s.endReason) : ''}
+                  {e.lastUsed ? when(e.lastUsed, $lang) : $t('proxy.hist.never')}{e.addr ? ' · ' + e.addr : ''}
+                  {#if e.sessions}· <button class="linkish" on:click={() => (openExit = openExit === e.peerId ? '' : e.peerId)}>{$t('proxy.hist.sessions', { n: e.sessions })}</button>{/if}
                 </span>
               </div>
               <div class="hist-stats small">
-                <span title={$t('proxy.received')}><Icon name="download" size={12} /> {bytes(s.bytesRx, $lang)}</span>
-                <span title={$t('proxy.sent')}><Icon name="upload" size={12} /> {bytes(s.bytesTx, $lang)}</span>
-                <span class="faint">{s.readyMs ? $t('proxy.hist.ready', { s: (s.readyMs / 1000).toFixed(1) }) : $t('proxy.hist.neverReady')}</span>
-                {#if s.refused}<span class="faint">{$t('proxy.hist.refused', { n: s.refused })}</span>{/if}
-                <span class="faint">{s.pricePerMb ? price(s.pricePerMb, $lang) : $t('common.Free')}</span>
+                <span title={$t('proxy.received')}><Icon name="download" size={12} /> {bytes(e.bytesRx, $lang)}</span>
+                <span title={$t('proxy.sent')}><Icon name="upload" size={12} /> {bytes(e.bytesTx, $lang)}</span>
+                {#if e.sessions}<span class="faint">{e.lastReadyMs ? $t('proxy.hist.ready', { s: (e.lastReadyMs / 1000).toFixed(1) }) : $t('proxy.hist.neverReady')}</span>{/if}
+                {#if e.refused}<span class="faint">{$t('proxy.hist.refused', { n: e.refused })}</span>{/if}
+                <span class="faint">{priceText(e)}</span>
               </div>
               <div class="hist-actions">
-                <button class="icon tiny" title={$t('proxy.hist.copyLink')} aria-label={$t('proxy.hist.copyLink')} on:click={() => copyLink(s)}><Icon name={copiedLink === s.peerId + s.startedAt ? 'check' : 'copy'} size={14} /></button>
-                {#if !(vpn.running && vpn.relayPeerId === s.peerId)}
-                  <button class="ghost small" on:click={() => connectTo(s)} disabled={!!busy}>{$t('proxy.hist.connect')}</button>
+                <button class="icon tiny" title={$t('proxy.hist.copyLink')} aria-label={$t('proxy.hist.copyLink')} on:click={() => copyLink(e)}><Icon name={copiedLink === e.peerId ? 'check' : 'copy'} size={14} /></button>
+                <button class="icon tiny" title={$t('proxy.hist.forget')} aria-label={$t('proxy.hist.forget')} on:click={() => forget(e)} disabled={!!busy || e.active}><Icon name="trash" size={14} /></button>
+                {#if !(vpn.running && vpn.relayPeerId === e.peerId)}
+                  <button class="ghost small" on:click={() => connectTo(e)} disabled={!!busy}>{$t('proxy.hist.connect')}</button>
                 {/if}
               </div>
+              {#if openExit === e.peerId}
+                <div class="sessions small">
+                  {#each sessionsOf(e.peerId) as h (h.id || h.peerId + h.startedAt)}
+                    <div class="session">
+                      <span>{when(h.startedAt, $lang)} · {duration(sessionSeconds(h))}{h.endReason ? ' · ' + $t('proxy.hist.end.' + h.endReason) : h.active ? ' · ' + $t('proxy.hist.now') : ''}</span>
+                      <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
-        {#if history.length > 6}
-          <div><button class="ghost small" on:click={() => (showAllHistory = !showAllHistory)}>{showAllHistory ? $t('proxy.hist.showLess') : $t('proxy.hist.showAll', { n: history.length })}</button></div>
+        {#if saved.length > 6}
+          <div><button class="ghost small" on:click={() => (showAllHistory = !showAllHistory)}>{showAllHistory ? $t('proxy.hist.showLess') : $t('proxy.hist.showAll', { n: saved.length })}</button></div>
         {/if}
       {:else}
         <p class="small faint">{$t('proxy.hist.empty')}</p>
@@ -670,6 +726,17 @@
   .hist-stats span { display: inline-flex; align-items: center; gap: 4px; }
   .hist-actions { display: flex; gap: 6px; align-items: center; }
   .ok-chip { color: var(--ok); }
+  .hist-row.fav:not(.active) { border-color: var(--accent-soft); }
+  .hist-main .row { flex-wrap: wrap; gap: 4px 6px; }
+  .hist-main b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .star { color: var(--muted); }
+  .star.on { color: #f5b301; }
+  .name-input { padding: 4px 8px; font-size: 13px; min-width: 0; width: 100%; max-width: 260px; }
+  .linkish { padding: 0; border: none; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+  .linkish:hover:not(:disabled) { background: none; border: none; text-decoration: underline; }
+  .sessions { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--line-soft); }
+  .session { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .session span { display: inline-flex; align-items: center; gap: 4px; }
   @media (max-width: 720px) { .hist-row { grid-template-columns: 1fr; } }
   .chip-btn { padding: 4px 12px; font-size: 12px; border-radius: 999px; background: transparent; border-color: var(--line-soft); color: var(--muted); }
   .chip-btn.on, .chip-btn.on:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }

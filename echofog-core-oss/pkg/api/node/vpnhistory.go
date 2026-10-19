@@ -2,8 +2,12 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/storage"
@@ -22,6 +26,7 @@ const (
 // VPNSession is one stretch of using one exit: from connecting (or switching to it) until
 // disconnecting, switching away, or the app closing.
 type VPNSession struct {
+	ID        string `json:"id"` // unique per session: two can start within the same second
 	PeerID    string `json:"peerId"`
 	Addr      string `json:"addr,omitempty"` // host:port it was reached at, to reconnect without a lookup
 	StartedAt int64  `json:"startedAt"`
@@ -33,7 +38,8 @@ type VPNSession struct {
 	BytesTx    uint64 `json:"bytesTx"`
 	Refused    uint64 `json:"refused"`
 	LastState  string `json:"lastState,omitempty"`
-	PricePerMB int64  `json:"pricePerMb"` // micro-USD per MB from the exit's advert; 0 free or unknown
+	PricePerMB int64  `json:"pricePerMb"` // micro-USD per MB; 0 free (PriceKnown) or unknown
+	PriceKnown bool   `json:"priceKnown"` // the exit itself told us the price
 	// EndReason: "stopped" (disconnected), "switched" (moved to another exit), "app_closed"
 	EndReason string `json:"endReason,omitempty"`
 	Active    bool   `json:"active"` // the session in use right now (not stored)
@@ -82,7 +88,11 @@ func saveVPNHistory(st storage.Storage, list []VPNSession) error {
 // putSession stores s in place of the stored entry for the same session, or first.
 func putSession(list []VPNSession, s VPNSession) []VPNSession {
 	for i := range list {
-		if list[i].PeerID == s.PeerID && list[i].StartedAt == s.StartedAt {
+		same := list[i].ID != "" && list[i].ID == s.ID
+		if s.ID == "" || list[i].ID == "" { // stored by an older build
+			same = list[i].PeerID == s.PeerID && list[i].StartedAt == s.StartedAt
+		}
+		if same {
 			list[i] = s
 			return list
 		}
@@ -100,7 +110,7 @@ func (n *NodeApi) historyStorage() storage.Storage {
 // beginSessionLocked starts the record for the exit just taken into use. vpn.mu is held.
 func (n *NodeApi) beginSessionLocked(peer string) {
 	now := time.Now()
-	t := &sessionTrack{s: VPNSession{PeerID: peer, StartedAt: now.Unix(), UpdatedAt: now.Unix()}}
+	t := &sessionTrack{s: VPNSession{ID: newSessionID(), PeerID: peer, StartedAt: now.Unix(), UpdatedAt: now.Unix()}}
 	if n.vpn.server != nil {
 		_, t.baseRx, t.baseTx = n.vpn.server.Stats()
 		t.baseRefused, _ = n.vpn.server.Refusals()
@@ -161,13 +171,17 @@ func (n *NodeApi) endSessionLocked(reason string) {
 	n.vpn.session = nil
 }
 
-// noteSessionStateLocked records when the exit first confirmed it serves us.
-func (n *NodeApi) noteSessionStateLocked(state string) {
+// noteSessionStateLocked records when the exit first confirmed it serves us, and the price it
+// asks (-1: it did not say).
+func (n *NodeApi) noteSessionStateLocked(state string, price int64) {
 	t := n.vpn.session
 	if t == nil {
 		return
 	}
 	t.s.LastState = state
+	if price >= 0 {
+		t.s.PricePerMB, t.s.PriceKnown = price, true // what the exit asks, not what an advert said
+	}
 	if state == ExitOK && t.s.ReadyMs == 0 {
 		t.s.ReadyMs = max(1, time.Since(time.Unix(t.s.StartedAt, 0)).Milliseconds())
 	}
@@ -245,4 +259,173 @@ func (n *NodeApi) keepSessionSaved(ctx context.Context) {
 			n.vpn.mu.Unlock()
 		}
 	}
+}
+
+// --- exits as the user knows them: one entry per exit, with a name and a star ---
+
+const (
+	vpnExitLabelsKey = "vpnmarket:exit_labels"
+	maxExitNameLen   = 40
+	maxExitLabels    = 200
+)
+
+// exitLabel is what the user set on an exit.
+type exitLabel struct {
+	Name     string `json:"name,omitempty"`
+	Favorite bool   `json:"favorite,omitempty"`
+}
+
+// SavedExit is one exit with everything the history says about it, newest facts first.
+type SavedExit struct {
+	PeerID      string `json:"peerId"`
+	Name        string `json:"name,omitempty"`
+	Favorite    bool   `json:"favorite"`
+	Addr        string `json:"addr,omitempty"` // the last address it was reached at
+	Sessions    int    `json:"sessions"`
+	BytesRx     uint64 `json:"bytesRx"`
+	BytesTx     uint64 `json:"bytesTx"`
+	Refused     uint64 `json:"refused"`
+	LastUsed    int64  `json:"lastUsed"` // 0: starred but never used
+	LastReadyMs int64  `json:"lastReadyMs,omitempty"`
+	LastState   string `json:"lastState,omitempty"`
+	PricePerMB  int64  `json:"pricePerMb"`
+	PriceKnown  bool   `json:"priceKnown"`
+	Active      bool   `json:"active"`
+}
+
+func loadExitLabels(st storage.Storage) map[string]exitLabel {
+	out := map[string]exitLabel{}
+	if st == nil {
+		return out
+	}
+	if raw, err := st.Get([]byte(vpnExitLabelsKey)); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+func saveExitLabels(st storage.Storage, m map[string]exitLabel) error {
+	if st == nil {
+		return errors.New("node is not running")
+	}
+	for id, l := range m {
+		if l.Name == "" && !l.Favorite {
+			delete(m, id)
+		}
+	}
+	if len(m) > maxExitLabels {
+		return errors.New("too many named exits")
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return st.Set([]byte(vpnExitLabelsKey), raw)
+}
+
+func (n *NodeApi) updateExitLabel(peer string, change func(*exitLabel)) error {
+	id, err := types.PeerIDFromString(strings.ToLower(strings.TrimSpace(peer)))
+	if err != nil {
+		return errors.New("invalid exit ID")
+	}
+	st := n.historyStorage()
+	n.vpn.mu.Lock() // one writer for the labels at a time
+	defer n.vpn.mu.Unlock()
+	m := loadExitLabels(st)
+	l := m[id.String()]
+	change(&l)
+	m[id.String()] = l
+	return saveExitLabels(st, m)
+}
+
+// SetExitName gives an exit a name of the user's choice ("" removes it).
+func (n *NodeApi) SetExitName(peer, name string) error {
+	name = strings.TrimSpace(name)
+	if r := []rune(name); len(r) > maxExitNameLen {
+		name = string(r[:maxExitNameLen])
+	}
+	return n.updateExitLabel(peer, func(l *exitLabel) { l.Name = name })
+}
+
+// SetExitFavorite stars an exit or takes the star away.
+func (n *NodeApi) SetExitFavorite(peer string, on bool) error {
+	return n.updateExitLabel(peer, func(l *exitLabel) { l.Favorite = on })
+}
+
+// ForgetExit removes an exit from the history, with its name and star.
+func (n *NodeApi) ForgetExit(peer string) error {
+	id, err := types.PeerIDFromString(strings.ToLower(strings.TrimSpace(peer)))
+	if err != nil {
+		return errors.New("invalid exit ID")
+	}
+	st := n.historyStorage()
+	n.vpn.mu.Lock()
+	defer n.vpn.mu.Unlock()
+	var keep []VPNSession
+	for _, s := range loadVPNHistory(st) {
+		if s.PeerID != id.String() {
+			keep = append(keep, s)
+		}
+	}
+	if err := saveVPNHistory(st, keep); err != nil {
+		return err
+	}
+	m := loadExitLabels(st)
+	delete(m, id.String())
+	return saveExitLabels(st, m)
+}
+
+// GetSavedExits lists every exit used or starred: favourites first, then the most recently used.
+func (n *NodeApi) GetSavedExits() []SavedExit {
+	sessions := n.GetVPNHistory() // newest first, the one in use included
+	labels := loadExitLabels(n.historyStorage())
+	byID := map[string]*SavedExit{}
+	var order []string
+	for _, s := range sessions {
+		e := byID[s.PeerID]
+		if e == nil {
+			// the newest session of this exit sets what is "last"
+			e = &SavedExit{PeerID: s.PeerID, Addr: s.Addr, LastUsed: s.StartedAt, LastReadyMs: s.ReadyMs,
+				LastState: s.LastState, PricePerMB: s.PricePerMB, PriceKnown: s.PriceKnown}
+			byID[s.PeerID] = e
+			order = append(order, s.PeerID)
+		}
+		if e.Addr == "" {
+			e.Addr = s.Addr
+		}
+		if !e.PriceKnown && s.PriceKnown {
+			e.PricePerMB, e.PriceKnown = s.PricePerMB, true
+		}
+		e.Sessions++
+		e.BytesRx += s.BytesRx
+		e.BytesTx += s.BytesTx
+		e.Refused += s.Refused
+		e.Active = e.Active || s.Active
+	}
+	for id := range labels {
+		if byID[id] == nil {
+			byID[id] = &SavedExit{PeerID: id}
+			order = append(order, id)
+		}
+	}
+	out := make([]SavedExit, 0, len(order))
+	for _, id := range order {
+		e := byID[id]
+		e.Name, e.Favorite = labels[id].Name, labels[id].Favorite
+		out = append(out, *e)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Favorite != out[j].Favorite {
+			return out[i].Favorite
+		}
+		return out[i].LastUsed > out[j].LastUsed
+	})
+	return out
+}
+
+// newSessionID is random: the clock alone repeats on Windows when sessions start back to back.
+func newSessionID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }

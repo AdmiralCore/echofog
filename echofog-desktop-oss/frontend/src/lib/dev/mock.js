@@ -572,6 +572,19 @@ const impl = {
     return [...live, ...historyMock];
   },
   ClearVPNHistory: () => { historyMock.length = 0; return null; },
+  GetSavedExits: () => {
+    const all = [...impl.GetVPNHistory()];
+    const by = new Map();
+    for (const s of all) {
+      let e = by.get(s.peerId);
+      if (!e) { e = { peerId: s.peerId, addr: s.addr, sessions: 0, bytesRx: 0, bytesTx: 0, refused: 0, lastUsed: s.startedAt, lastReadyMs: s.readyMs, lastState: s.lastState, pricePerMb: s.pricePerMb, priceKnown: true, active: false, ...(exitLabels[s.peerId] || {}) }; by.set(s.peerId, e); }
+      e.sessions++; e.bytesRx += s.bytesRx; e.bytesTx += s.bytesTx; e.refused += s.refused; e.active = e.active || !!s.active;
+    }
+    return [...by.values()].sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || b.lastUsed - a.lastUsed);
+  },
+  SetExitName: (id, name) => { exitLabels[id] = { ...(exitLabels[id] || {}), name: name.trim().slice(0, 40) }; return null; },
+  SetExitFavorite: (id, on) => { exitLabels[id] = { ...(exitLabels[id] || {}), favorite: on }; return null; },
+  ForgetExit: (id) => { for (let i = historyMock.length - 1; i >= 0; i--) if (historyMock[i].peerId === id) historyMock.splice(i, 1); delete exitLabels[id]; return null; },
   ConnectLastExit: () => new Promise((r, j) => setTimeout(() => {
     if (!historyMock.length) return j(new Error('no exit used yet'));
     Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', exitState: 'ok', relayPeerId: historyMock[0].peerId });
@@ -681,9 +694,11 @@ const vaultMock = {
   closing: vaultStage === 'closing' || vaultStage === 'ready', withdrawAt: vaultStage === 'ready' ? sec(now) - 60 : vaultStage === 'closing' ? sec(now) + 17 * 3600 + 23 * 60 : 0,
   canFinish: false, minFirstTon: '0.1',
 };
+const exitLabels = { '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d': { name: 'Мой GCP', favorite: true } };
 // exits used before, newest first, as the core's history returns them
 const historyMock = [
   { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', addr: '34.158.189.116:443', startedAt: sec(Date.now()) - 3 * 3600, endedAt: sec(Date.now()) - 2 * 3600, updatedAt: sec(Date.now()) - 2 * 3600, readyMs: 640, bytesRx: 1.9e9, bytesTx: 85e6, refused: 309, lastState: 'ok', pricePerMb: 49, endReason: 'stopped' },
+  { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', addr: '34.158.189.116:443', startedAt: sec(Date.now()) - 5 * 3600, endedAt: sec(Date.now()) - 4.8 * 3600, updatedAt: sec(Date.now()) - 4.8 * 3600, readyMs: 820, bytesRx: 391e3, bytesTx: 307e3, refused: 6, lastState: 'ok', pricePerMb: 49, endReason: 'stopped' },
   { peerId: 'beab718659cea03fbe747c2f1e5ffbef4fd32e9a14bf550802d89b19138a1bf6', addr: '34.32.224.253:443', startedAt: sec(Date.now()) - 26 * 3600, endedAt: sec(Date.now()) - 25 * 3600, updatedAt: sec(Date.now()) - 25 * 3600, readyMs: 1450, bytesRx: 420e6, bytesTx: 12e6, refused: 4, lastState: 'ok', pricePerMb: 0, endReason: 'switched' },
   { peerId: '3df2ff7f53a1d4772d030a628c21028b20abebc573a5fcb692224ae7366b5140', addr: '', startedAt: sec(Date.now()) - 50 * 3600, endedAt: sec(Date.now()) - 49.5 * 3600, updatedAt: sec(Date.now()) - 49.5 * 3600, readyMs: 0, bytesRx: 0, bytesTx: 0, refused: 12, lastState: 'quota', pricePerMb: 98, endReason: 'app_closed' },
 ];

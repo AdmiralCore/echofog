@@ -4,6 +4,7 @@
     export let size = 20;
     export let stroke = 1.9;
     export let className = '';
+    export let fill = 'none';
 
     const P = {
         mic: 'M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3',
@@ -76,6 +77,8 @@
         folder: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z',
         external: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5',
         clock: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
+        star: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z',
+        edit: 'M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4',
     };
 </script>
 
@@ -84,7 +87,7 @@
     width={size}
     height={size}
     viewBox="0 0 24 24"
-    fill="none"
+    {fill}
     stroke="currentColor"
     stroke-width={stroke}
     stroke-linecap="round"

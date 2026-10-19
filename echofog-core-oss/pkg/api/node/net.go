@@ -124,7 +124,11 @@ func (n *NodeApi) noteExitState(relay string, info *exit_gateway.AccountInfo, er
 	}
 	changed := state != n.vpn.exitState
 	n.vpn.exitState, n.vpn.exitNotice = state, notice
-	n.noteSessionStateLocked(state)
+	price := int64(-1)
+	if info != nil && err == nil {
+		price = info.PricePerMB
+	}
+	n.noteSessionStateLocked(state, price)
 	n.vpn.mu.Unlock()
 	if changed {
 		if state == ExitOK {
