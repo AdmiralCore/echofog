@@ -96,17 +96,22 @@ for a node whose job is to carry traffic for people behind the GFW/TSPU.
 
 For such nodes:
 
-- **Do not publish address + ID together in the public DHT.** Distribute the node's address and ID
-  **out of band** (bridge-style: handed to specific users through a side channel), so a censor
-  crawling public data cannot enumerate `(address, ID)` pairs.
-- **Set a shared secret** (`anti_dpi.obfs_password`, or `anti_dpi.stealth_password` for the stealth
-  token specifically). This mixes a secret only your users know into both keys, so even someone who
-  learns the ID cannot forge a token or de-obfuscate without the secret. Treat it as mandatory for
-  bridge-style operation. Do not bake a network-wide secret into a release — each private
-  deployment chooses its own.
-
-(The bridge-mode out-of-band distribution and the matching config surface are being built in a
-follow-up; this document states the operational rule so nodes run safely in the meantime.)
+- **Do not publish address + ID together in the public DHT.** Run the node with
+  `--access hidden` or `--access isolated` (`ECHOFOG_ACCESS` in Docker). It is then not in the DHT,
+  never tells other nodes its address, and its address and ID reach users only in its invitation
+  link (`echofog-node invite`), which you hand to specific people through a side channel. The link
+  also carries an access secret that a peer must prove in the handshake: without it the node sends
+  nothing back, not even its public key. Even someone who learns the address and ID from a leaked
+  link cannot use the node without the current secret, so replace a leaked link with
+  `invite --rotate`. See [Hidden and isolated nodes](hidden-nodes.md).
+- **For a whole closed network, also set a shared secret** (`anti_dpi.obfs_password`, or
+  `anti_dpi.stealth_password` for the stealth token specifically). This mixes a secret only your
+  users know into both transport keys, so even someone who learns the ID cannot forge a token or
+  de-obfuscate the traffic. Unlike the access secret it is not in the invitation link: every node
+  and app of that network must be configured with it. Do not bake a network-wide secret into a
+  release — each private deployment chooses its own.
+- **Keep obfuscation on** (`anti_dpi.obfs=node`, the default). With it off, a scanner that
+  completes the QUIC handshake can read the node's public key from its TLS certificate.
 
 ## First-flight length padding
 

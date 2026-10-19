@@ -143,7 +143,7 @@ ECHOFOG_TLS_SERVER_NAME=<домен сайта>
 ECHOFOG_CAMOUFLAGE_ADDR=<IP сайта>:443
 ```
 
-Подробнее — [Anti-DPI](anti-dpi.md) (пока на английском).
+Подробнее — [Anti-DPI](anti-dpi.ru.md).
 
 ## Обновление
 
