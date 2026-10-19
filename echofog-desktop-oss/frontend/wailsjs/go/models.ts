@@ -320,6 +320,8 @@ export namespace dto {
 	    owedTon: string;
 	    cashedTon: string;
 	    quoteNano: number;
+	    claimProblem?: string;
+	    walletAddr?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new VoucherEarningsDTO(source);
@@ -330,6 +332,8 @@ export namespace dto {
 	        this.owedTon = source["owedTon"];
 	        this.cashedTon = source["cashedTon"];
 	        this.quoteNano = source["quoteNano"];
+	        this.claimProblem = source["claimProblem"];
+	        this.walletAddr = source["walletAddr"];
 	    }
 	}
 
