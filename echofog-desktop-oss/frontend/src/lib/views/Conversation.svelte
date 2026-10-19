@@ -2,7 +2,7 @@
   import { afterUpdate, createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
   import { fly, slide } from 'svelte/transition';
   import { App, errText, copy, openURL } from '../api.js';
-  import { chats, messages, chatError, chatNote, membersVersion, activeId, activeGroupCalls, loadChats, send, deleteContact, leaveGroup } from '../stores/chats.js';
+  import { chats, messages, chatError, chatNote, membersVersion, activeId, activeGroupCalls, loadChats, send, deleteContact, leaveGroup, acceptRequest, dismissRequest, blockPeer, unblockPeer } from '../stores/chats.js';
   import { isCallActive, startCall, stageExpanded, peerInfo } from '../stores/call.store.js';
   import { transfers, fileError, loadTransfers, pickAndSend, sendPaths, openFile, showInFolder } from '../stores/files.js';
   import { savedIds, savedError, toggleSaved, saveAsFile, jumpTo, SAVED_ID } from '../stores/saved.js';
@@ -128,6 +128,21 @@
       setTimeout(() => (copied = ''), 1500);
     }
   }
+
+  let reqName = '';
+  let reqBusy = false;
+  async function reqAction(fn) {
+    reqBusy = true;
+    infoError = '';
+    try { await fn(); } catch (err) { infoError = errText(err); } finally { reqBusy = false; }
+  }
+  const accept = () => reqAction(() => acceptRequest(conv, reqName));
+  const dismiss = () => reqAction(() => dismissRequest(conv));
+  async function block() {
+    if (!(await ask({ message: $t('chats.confirm.block', { name: conv.name }), confirm: $t('chats.block'), danger: true }))) return;
+    await reqAction(() => blockPeer(conv));
+  }
+  const unblock = () => reqAction(() => unblockPeer(conv));
 
   async function removeContact() {
     if (!(await ask({ message: $t('chats.confirm.deleteContact', { name: conv.name }), confirm: $t('common.delete'), danger: true }))) return;
@@ -414,8 +429,28 @@
     {#if $fileError}<p class="error small bar" transition:fly={{ y: 6, duration: 200 }}>{$fileError}</p>{/if}
     {#if $savedError}<p class="error small bar" transition:fly={{ y: 6, duration: 200 }}>{$savedError}</p>{/if}
 
+    {#if conv.kind === 'direct' && conv.blocked}
+      <div class="reqbar">
+        <p class="small"><Icon name="lock" size={14} /> {$t('chats.blockedNote')}</p>
+        <div class="row wrap"><button class="small" on:click={unblock} disabled={reqBusy}>{$t('chats.unblock')}</button></div>
+      </div>
+    {:else if conv.kind === 'direct' && conv.request}
+      <div class="reqbar">
+        <p class="small"><b>{$t('chats.requestHead')}</b> {$t('chats.requestNote')}</p>
+        <div class="row wrap">
+          <input class="grow" bind:value={reqName} placeholder={$t('chats.requestName')} maxlength="64" />
+          <button class="primary small" on:click={accept} disabled={reqBusy}>{$t('chats.acceptRequest')}</button>
+          <button class="small" on:click={dismiss} disabled={reqBusy}>{$t('chats.dismissRequest')}</button>
+          <button class="danger small" on:click={block} disabled={reqBusy}>{$t('chats.block')}</button>
+        </div>
+        {#if infoError}<p class="small error">{infoError}</p>{/if}
+      </div>
+    {/if}
+
     {#if conv.readOnly}
       <p class="small muted bar ro"><Icon name="lock" size={14} /> {$t('chats.readOnly')}</p>
+    {:else if conv.kind === 'direct' && conv.blocked}
+      <!-- no composer: a blocked person gets nothing either way -->
     {:else}
       <form class="composer" on:submit|preventDefault={submit}>
         <div class="field" class:withattach={canSendFiles}>
@@ -478,7 +513,15 @@
           <p class="small faint">{$t('chats.e2eContact')}</p>
         </div>
 
-        <button class="danger with-icon wide" on:click={removeContact}><Icon name="trash" size={16} /> {$t('chats.deleteContact')}</button>
+        {#if conv.blocked}
+          <button class="with-icon wide" on:click={unblock} disabled={reqBusy}><Icon name="lockOpen" size={16} /> {$t('chats.unblock')}</button>
+        {:else}
+          <button class="danger with-icon wide" on:click={block} disabled={reqBusy}><Icon name="lock" size={16} /> {$t('chats.block')}</button>
+          <p class="small faint">{$t('chats.blockHint')}</p>
+        {/if}
+        {#if !conv.request}
+          <button class="danger with-icon wide" on:click={removeContact}><Icon name="trash" size={16} /> {$t('chats.deleteContact')}</button>
+        {/if}
       {:else}
         <div class="block">
           <div class="eyebrow">{$t('chats.invite')}</div>
@@ -736,4 +779,7 @@
   .details { display: flex; flex-direction: column; gap: 9px; padding: 6px 8px 8px; }
   .details > div { display: flex; flex-direction: column; gap: 1px; }
   .tiny-id { font-size: 11px; word-break: break-all; }
+  .reqbar { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 8px; padding: 10px 12px; border-radius: 12px; background: var(--raised); }
+  .reqbar p { margin: 0; line-height: 1.45; }
+  .reqbar input { min-width: 140px; }
 </style>

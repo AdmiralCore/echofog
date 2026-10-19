@@ -12,7 +12,8 @@ const inCall = () => get(callState).inCall;
 
 const CALL_INVITE = 'fogcall://';
 
-/** Conversations: { id, kind: 'direct' | 'group', name, peerId, pubKey, online, last, ts, unread, readOnly } */
+/** Conversations: { id, kind: 'direct' | 'group', name, peerId, pubKey, online, last, ts, unread, readOnly,
+ *  request (a stranger who wrote first, not a contact), blocked } */
 export const chats = writable([]);
 export const activeId = writable('');
 /** Group calls going on right now, by chat id ('g:<group>'): { callId, coordinator, from } */
@@ -93,11 +94,26 @@ function patch(id, fn) {
 export async function loadChats() {
   chatError.set('');
   const items = [];
+  let blocked = new Set();
+  const list = (v) => (Array.isArray(v) ? v : []);
+  try { blocked = new Set(list(await App.GetBlockedPeers()).map((b) => b.peer_id)); } catch (_) { /* older core */ }
+  let requests = [];
+  try { requests = list(await App.GetMessageRequests()); } catch (_) { /* older core */ }
+  const people = [];
   try {
-    for (const c of (await App.GetContacts()) || []) {
+    for (const c of (await App.GetContacts()) || []) people.push({ ...c, request: false });
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.loadContacts')));
+  }
+  for (const r of requests) {
+    if (!people.some((c) => c.peer_id === r.peer_id)) people.push({ peer_id: r.peer_id, pub_key: r.pub_key, alias: '', request: true });
+  }
+  try {
+    for (const c of people) {
       const conv = {
         id: 'd:' + c.peer_id, kind: 'direct', name: c.alias || c.peer_id.slice(0, 8),
         peerId: c.peer_id, pubKey: c.pub_key, online: !!c.is_online, last: '', ts: 0, unread: 0,
+        request: c.request, blocked: blocked.has(c.peer_id),
       };
       try {
         const hist = (await App.GetChatHistory(c.peer_id, 1, 0)) || [];
@@ -141,7 +157,7 @@ function listen() {
     const partner = msg.is_mine ? msg.target_id : msg.sender_id;
     const id = 'd:' + partner;
     const conv = get(chats).find((c) => c.id === id);
-    if (!conv) { loadChats(); return; } // a stranger wrote first: they become a contact
+    if (!conv) { loadChats(); return; } // a stranger wrote first: a message request
     const m = directMessage(msg);
     if (!m.mine && !m.system) play('receive', { quiet: inCall() });
     const open = get(activeId) === id;
@@ -266,6 +282,8 @@ export async function send(text) {
   try {
     if (conv.kind === 'direct') {
       if (!conv.pubKey) throw new Error(tr('chats.err.noKey'));
+      // answering a request accepts it: the stranger becomes a contact
+      if (conv.request) await acceptRequest(conv, '');
       await App.SendMessage(conv.pubKey, text);
     } else {
       const m = await App.SendGroupMessage(conv.groupId, text);
@@ -301,6 +319,31 @@ export async function deleteContact(conv) {
   await App.DeleteContact(conv.peerId);
   activeId.set('');
   messages.set([]);
+  await loadChats();
+}
+
+/** Makes the stranger behind a message request a contact. */
+export async function acceptRequest(conv, name) {
+  await App.AcceptMessageRequest(conv.peerId, (name || '').trim());
+  patch(conv.id, (c) => ({ ...c, request: false, name: (name || '').trim() || c.name }));
+}
+
+/** Removes a request without blocking; the conversation goes until the stranger writes again. */
+export async function dismissRequest(conv) {
+  await App.DismissMessageRequest(conv.peerId);
+  activeId.set('');
+  messages.set([]);
+  await loadChats();
+}
+
+/** Blocks a person: nothing from them arrives any more, and they are not told. */
+export async function blockPeer(conv) {
+  await App.BlockPeer(conv.peerId);
+  await loadChats();
+}
+
+export async function unblockPeer(conv) {
+  await App.UnblockPeer(conv.peerId);
   await loadChats();
 }
 

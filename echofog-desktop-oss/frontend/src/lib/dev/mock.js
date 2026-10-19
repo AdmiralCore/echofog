@@ -84,6 +84,14 @@ history[ALICE].unshift(
   { id: 'al-old-3', text: 'This one is not a link: javascript:alert(1), neither is file:///C:/Windows', timestamp: sec(now - 3 * 24 * 60 * min + 6 * min), is_mine: false, sender_id: ALICE, target_id: SELF },
   { id: 'al-y-1', text: 'Here are the screenshots from the relay test', timestamp: sec(now - 30 * 60 * min), is_mine: false, sender_id: ALICE, target_id: SELF },
 );
+// a stranger who wrote first: a message request, not a contact
+history[DAVE] = [{ id: 'dv-1', text: 'Hi! Got your key in the EchoFog channel. Could you share your exit with me?', timestamp: sec(now - 40 * min), is_mine: false, sender_id: DAVE, target_id: SELF }];
+const privacyMock = {
+  privacy: { messages: 'everyone', calls: 'contacts' },
+  blocked: [],
+  requests: [{ peer_id: DAVE, pub_key: 'pd', first: sec(now - 40 * min), last: sec(now - 40 * min), count: 1 }],
+};
+
 const fileMsg = (id, mine, peer, fid, name, size, ts) => ({
   id, type: 4, text: name, timestamp: sec(ts), is_mine: mine, sender_id: mine ? SELF : peer, target_id: mine ? peer : SELF,
   metadata: JSON.stringify({ file_name: name, file_size: size, custom: { fid, root: 'ab'.repeat(32) } }),
@@ -473,6 +481,29 @@ const impl = {
   })), 900)),
   GetGroupInvite: () => 'fogroup1:demo-invite-0f3a9c1e',
   GetContacts: () => contacts,
+  GetPrivacy: () => ({ ...privacyMock.privacy }),
+  SetPrivacy: (p) => {
+    if (!['everyone', 'contacts'].includes(p.messages) || !['everyone', 'contacts', 'nobody'].includes(p.calls)) throw new Error('messages: everyone or contacts; calls: everyone, contacts or nobody');
+    privacyMock.privacy = { messages: p.messages, calls: p.calls };
+    return null;
+  },
+  GetBlockedPeers: () => privacyMock.blocked.map((b) => ({ ...b })),
+  BlockPeer: (id) => {
+    const alias = contacts.find((c) => c.peer_id === id)?.alias || '';
+    privacyMock.blocked = [{ peer_id: id, alias, at: sec(Date.now()) }, ...privacyMock.blocked.filter((b) => b.peer_id !== id)];
+    privacyMock.requests = privacyMock.requests.filter((r) => r.peer_id !== id);
+    return null;
+  },
+  UnblockPeer: (id) => { privacyMock.blocked = privacyMock.blocked.filter((b) => b.peer_id !== id); return null; },
+  GetMessageRequests: () => privacyMock.requests.map((r) => ({ ...r })),
+  AcceptMessageRequest: (id, alias) => {
+    const r = privacyMock.requests.find((x) => x.peer_id === id);
+    if (!r) throw new Error('no request from this peer');
+    contacts.push({ peer_id: id, pub_key: r.pub_key, alias: alias || 'Unknown User', is_online: true });
+    privacyMock.requests = privacyMock.requests.filter((x) => x.peer_id !== id);
+    return null;
+  },
+  DismissMessageRequest: (id) => { privacyMock.requests = privacyMock.requests.filter((x) => x.peer_id !== id); return null; },
   GetChatHistory: (peer) => [...(history[peer] || [])].reverse(),
   SendMessage: (pub, text) => {
     const c = contacts.find((x) => x.pub_key === pub);

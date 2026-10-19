@@ -94,6 +94,7 @@ type Node struct {
 	Access       *access.Gate    // who may reach this node (hidden and isolated modes)
 	Invites      *access.Keyring // the secrets of the hidden nodes this node was invited to
 	accessMode   atomic.Pointer[string]
+	privacy      privacyHolder // who may write and call (see privacy.go)
 	VPNMarket    *vpnmarket.Service
 	Files        *filexfer.Service // files sent to and received from contacts and groups
 	groupMember  atomic.Pointer[func(group string, peer types.PeerID) bool]
@@ -538,6 +539,7 @@ func (n *Node) Start() (err error) {
 
 	n.Messenger = messenger.NewMessageBroker(n.crypto, n.Swarm, gsp, n.identity, n.Storage.(storage.MessageStorage), n.Contact, n.Logger)
 	n.Swarm.AddObserver(n.Messenger) // sends queued messages when their recipient connects
+	n.Messenger.SetFilter(n.messageVerdict)
 	n.Messenger.StartOutbox(n.Ctx)
 
 	routingTable := dht.NewRoutingTable(n.PubKey, n.Storage, n.Swarm)

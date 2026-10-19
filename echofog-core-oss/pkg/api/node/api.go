@@ -53,6 +53,9 @@ type NodeApi struct {
 func NewNodeApi(node *node.Node) *NodeApi {
 	builtIn := node.BootstrapNodes()
 	saved, chosen := loadPersistedSettings(node.Cfg)
+	if saved.Privacy != nil {
+		_ = node.SetPrivacy(*saved.Privacy) // an invalid hand edit keeps the defaults
+	}
 	node.SetBootstrapNodes(bootstrapList(builtIn, saved.BootstrapNodes))
 	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
@@ -188,8 +191,9 @@ func (n *NodeApi) DeleteContact(peerID string) error {
 	return n.node.Contact.RemoveContact(peerID)
 }
 
+// BanContact blocks a peer (see BlockPeer); it stays in the contacts, so unblocking restores it.
 func (n *NodeApi) BanContact(peerID string) error {
-	return n.node.Contact.RemoveContact(peerID)
+	return n.BlockPeer(peerID)
 }
 
 func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint64) ([]dto.MessageDTO, error) {

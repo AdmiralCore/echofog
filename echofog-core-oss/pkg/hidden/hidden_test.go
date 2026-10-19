@@ -9,8 +9,8 @@ import (
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
 	"github.com/echofog/echofog-core/pkg/api/node"
-	coreNode "github.com/echofog/echofog-core/pkg/node"
 	"github.com/echofog/echofog-core/pkg/dto"
+	coreNode "github.com/echofog/echofog-core/pkg/node"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -43,9 +43,9 @@ func (n *Node) DownloadDir() string {
 // end-to-end encrypted chat messages, and downloads under way when the app closed continue.
 func (n *Node) startFiles() error {
 	n.Files = filexfer.New(filexfer.Options{
-		Store:       n.Storage,
-		Transport:   fileLink{n},
-		Self:        n.GetSelfPeerID(),
+		Store:     n.Storage,
+		Transport: fileLink{n},
+		Self:      n.GetSelfPeerID(),
 		IsMember: func(group string, peer types.PeerID) bool {
 			f := n.groupMember.Load()
 			return f != nil && (*f)(group, peer)
@@ -77,6 +77,9 @@ func (n *Node) startFiles() error {
 		from, err := types.PeerIDFromString(m.SenderID)
 		if err != nil {
 			return
+		}
+		if !n.AcceptsFilesFrom(from) {
+			return // a stranger or a blocked peer: no file offers
 		}
 		offer, ok := OfferFromMetadata(m.Metadata)
 		if !ok {

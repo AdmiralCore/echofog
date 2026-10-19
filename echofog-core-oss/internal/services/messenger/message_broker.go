@@ -41,8 +41,9 @@ type MessageBroker struct {
 	mu              sync.RWMutex
 	handleCallbacks []func(dto *dto.MessageDTO)
 	interceptor     func(origin types.PeerID, text string) bool
-	connect         func(types.PeerID)      // asked to open a connection to a peer that cannot be reached
-	useAsRelay      func(types.PeerID) bool // a peer to route through even if it does not advertise (a configured private relay)
+	filter          func(origin types.PeerID) Verdict // who may write to us (nil: everybody, as contacts)
+	connect         func(types.PeerID)                // asked to open a connection to a peer that cannot be reached
+	useAsRelay      func(types.PeerID) bool           // a peer to route through even if it does not advertise (a configured private relay)
 	connMu          sync.Mutex
 	lastConnect     map[types.PeerID]time.Time
 	lastReset       map[types.PeerID]time.Time
@@ -429,6 +430,17 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		}
 	}
 
+	verdict := Accept
+	s.mu.RLock()
+	filter := s.filter
+	s.mu.RUnlock()
+	if filter != nil {
+		verdict = filter(originID)
+	}
+	if verdict == Drop {
+		return // already confirmed above: the sender sees "delivered" and nothing else
+	}
+
 	myID, _ := s.identity.GetPeerID()
 	myIDHex := hex.EncodeToString(myID[:])
 	senderIDHex := innerMsg.SenderId
@@ -462,13 +474,19 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 			pk := peer.PubKey()
 			pubKeyHex = hex.EncodeToString(pk[:])
 		}
-		s.contacts.NewContact(dto.ContactDTO{
-			PeerID:   senderIDHex,
-			PubKey:   pubKeyHex,
-			Alias:    "Unknown User",
-			IsOnline: true,
-			LastSeen: time.Now().Unix(),
-		})
+		if verdict == AsRequest {
+			// a stranger stays a stranger until the user accepts: no calls, no files, not one of ours
+			_ = s.contacts.NoteRequest(senderIDHex, pubKeyHex)
+			receivedDTO.Request = true
+		} else {
+			s.contacts.NewContact(dto.ContactDTO{
+				PeerID:   senderIDHex,
+				PubKey:   pubKeyHex,
+				Alias:    "Unknown User",
+				IsOnline: true,
+				LastSeen: time.Now().Unix(),
+			})
+		}
 	}
 
 	s.StartCallbackHandlers(&receivedDTO)
@@ -640,6 +658,28 @@ func (s *MessageBroker) ResetSession(peer types.PeerID) error {
 // SetInterceptor installs a hook that sees the text of every authenticated incoming message before
 // it is stored. When it returns true the message is protocol traffic and is not stored or shown.
 // origin is the peer that the end-to-end encryption session belongs to, not a claim in the message.
+// Verdict is what happens to a direct message from a peer.
+type Verdict int
+
+const (
+	// Accept: a contact, the message goes into its chat.
+	Accept Verdict = iota
+	// AsRequest: a stranger, the message is kept as a message request and the sender is not
+	// made a contact.
+	AsRequest
+	// Drop: blocked, or strangers may not write: the message is confirmed (so the sender does not
+	// retry and learns nothing) and thrown away.
+	Drop
+)
+
+// SetFilter decides, for every direct message, whether it is kept and how. Group traffic, which
+// the interceptor takes first, is not filtered here.
+func (s *MessageBroker) SetFilter(f func(origin types.PeerID) Verdict) {
+	s.mu.Lock()
+	s.filter = f
+	s.mu.Unlock()
+}
+
 func (s *MessageBroker) SetInterceptor(h func(origin types.PeerID, text string) bool) {
 	s.mu.Lock()
 	s.interceptor = h

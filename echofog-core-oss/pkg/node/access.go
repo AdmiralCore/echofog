@@ -99,9 +99,7 @@ func (n *Node) initAccess() error {
 		_ = n.saveAccess()
 	})
 	// the owner's contacts get in without a link: calls and messages keep working
-	n.Access.SetAllow(func(id types.PeerID) bool {
-		return n.Contact != nil && n.Contact.Exists(id.String())
-	})
+	n.Access.SetAllow(n.IsContact) // not a stranger who wrote once, not somebody blocked
 	n.Access.Enable(n.gated())
 	if n.gated() && n.Cfg.Access.Secret == "" && st.Secret == "" {
 		if err := n.saveAccess(); err != nil {

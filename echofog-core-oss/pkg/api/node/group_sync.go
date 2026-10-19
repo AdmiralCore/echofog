@@ -274,6 +274,12 @@ func (f *groupsFacade) handle(origin types.PeerID, text string) bool {
 // apply changes the local state for one message and returns what is to be done once the lock is
 // released (network sends, events).
 func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) {
+	if f.blocked != nil && f.blocked(origin) {
+		switch w.Kind {
+		case "msg", "call", "callalive":
+			return nil // what a blocked member says or starts stays out of sight; the group goes on
+		}
+	}
 	switch w.Kind {
 	case "msg":
 		role, err := f.mgr.GetMemberRole(w.Group, origin)

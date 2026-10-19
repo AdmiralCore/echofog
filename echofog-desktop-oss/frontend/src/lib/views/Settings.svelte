@@ -10,6 +10,7 @@
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import BootstrapCard from '../components/BootstrapCard.svelte';
+  import PrivacyCard from '../components/PrivacyCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
@@ -156,6 +157,8 @@
         {/each}
       </div>
     </div>
+
+    <PrivacyCard />
 
     {#if settings}
       <div class="card stack">

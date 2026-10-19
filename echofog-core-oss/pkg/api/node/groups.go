@@ -92,6 +92,7 @@ type groupsFacade struct {
 
 	sendSilent func(target types.PeerID, text string) (queued bool, err error)
 	isContact  func(types.PeerID) bool
+	blocked    func(types.PeerID) bool // peers the user blocked: their messages and calls are ignored
 	notify     func(GroupEvent)
 	calls      map[string]GroupCall
 	histSent   map[string]time.Time // when history was last handed to whom
@@ -496,10 +497,11 @@ func (n *NodeApi) groupsFacade() (*groupsFacade, error) {
 	if n.node.EventBus != nil {
 		em = n.node.EventBus
 	}
-	contact := func(id types.PeerID) bool { return n.node.Contact != nil && n.node.Contact.Exists(id.String()) }
+	contact := n.node.IsContact
 	f := newGroupsFacade(n.node.Storage, n.node.GetSelfPeerID(), ident, n.node.SignIdentity,
 		n.node.Messenger.SendSilent, contact, n.publishGroupEvent, em)
 	f.async = true
+	f.blocked = n.node.IsBlocked
 	f.connect = func(id types.PeerID) {
 		ctx, cancel := context.WithTimeout(n.node.Ctx, 20*time.Second)
 		defer cancel()

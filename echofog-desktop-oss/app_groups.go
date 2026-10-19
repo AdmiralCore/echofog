@@ -195,6 +195,10 @@ func (a *App) emitIncomingCall(ctx context.Context, msg *dto.MessageDTO) {
 	if !ok {
 		return
 	}
+	// a blocked peer, a stranger (unless everyone may call) or anybody when nobody may: no ring
+	if n := a.getAPI(); n == nil || !n.CanRing(msg.SenderID) {
+		return
+	}
 	safeEventsEmit(ctx, "call:incoming", map[string]interface{}{
 		"callId":      callID,
 		"coordinator": coordinator,

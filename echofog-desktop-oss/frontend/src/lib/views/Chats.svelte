@@ -218,6 +218,8 @@
           <div class="body">
             <div class="row">
               <span class="grow name">{c.name}</span>
+              {#if c.request}<span class="tag req" title={$t('chats.requestTitle')}>{$t('chats.requestTag')}</span>{/if}
+              {#if c.blocked}<span class="tag blk" title={$t('chats.blockedTitle')}><Icon name="lock" size={11} /></span>{/if}
               {#if $activeGroupCalls[c.id]}<span class="oncall" title={$t('chats.callActive')}><Icon name="phone" size={13} /></span>{/if}
               {#if c.ts}<span class="time">{when(c.ts, $lang)}</span>{/if}
             </div>
@@ -355,5 +357,8 @@
   .b2 { right: 0; top: 34px; width: 80px; height: 34px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-bottom-right-radius: 6px; animation-delay: -1.6s; box-shadow: var(--glow); }
   .b3 { left: 14px; top: 62px; width: 46px; height: 24px; background: var(--raised); border: 1px solid var(--line-soft); border-bottom-left-radius: 6px; animation-delay: -3.2s; }
   @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+  .tag { flex: none; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 6px; display: inline-flex; align-items: center; }
+  .tag.req { background: var(--accent-soft, rgba(88,101,242,.18)); color: var(--accent, #5865f2); }
+  .tag.blk { background: var(--danger-soft, rgba(242,63,67,.15)); color: var(--danger, #f23f43); }
 </style>
 

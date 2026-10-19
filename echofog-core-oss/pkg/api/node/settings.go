@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/echofog/echofog-core/internal/config"
+	coreNode "github.com/echofog/echofog-core/pkg/node"
 )
 
 const settingsFileName = "ui_settings.json"
@@ -55,6 +56,8 @@ type persistedSettings struct {
 	// AccessMode is who may reach this node from its next start: "public" or "hidden" (see
 	// config.AccessConfig). Empty: what the configuration says.
 	AccessMode string `json:"accessMode,omitempty"`
+	// Privacy is who may write and call; nil: the defaults.
+	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
 
 // loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the

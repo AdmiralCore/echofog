@@ -36,6 +36,8 @@ type MessageDTO struct {
 
 	// Pending: our own message that has not reached the recipient yet and waits in the outbox.
 	Pending bool `json:"pending,omitempty"`
+	// Request: a message from a stranger, kept as a message request (the sender is not a contact).
+	Request bool `json:"request,omitempty"`
 }
 
 type PeerDTO struct {

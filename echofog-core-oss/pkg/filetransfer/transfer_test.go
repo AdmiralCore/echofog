@@ -96,8 +96,15 @@ func waitTransfer(t *testing.T, api *node.NodeApi, id, state string, within time
 	return last
 }
 
+// befriend makes from a contact of to: files from strangers are not offered.
+func befriend(t *testing.T, from, to *node.NodeApi) {
+	t.Helper()
+	require.NoError(t, to.NewContact(dto.ContactDTO{PeerID: from.GetMyID(), PubKey: from.GetMyPubKey(), Alias: "friend"}))
+}
+
 func transfer(t *testing.T, from, to *node.NodeApi, src string, sum [32]byte, size int64) dto.FileTransferDTO {
 	t.Helper()
+	befriend(t, from, to)
 	inbox := to.MessageHandler()
 	var progress []dto.FileTransferDTO
 	stop := to.OnFileTransfer(func(d dto.FileTransferDTO) { progress = append(progress, d) })
@@ -201,6 +208,7 @@ func TestFileTransferResumesAfterRestart(t *testing.T) {
 	const size = 120 << 20
 	src, sum := bigFile(t, t.TempDir(), "video.mp4", size)
 	inbox := bob.MessageHandler()
+	befriend(t, alice, bob)
 	sent, err := alice.SendFile(bob.GetMyPubKey(), src)
 	require.NoError(t, err)
 	id := waitOffer(t, inbox)
@@ -243,6 +251,7 @@ func TestFileTransferCancelAndDecline(t *testing.T) {
 	inbox := bob.MessageHandler()
 
 	small, _ := bigFile(t, t.TempDir(), "notes.txt", 5000)
+	befriend(t, alice, bob)
 	sent, err := alice.SendFile(bob.GetMyPubKey(), small)
 	require.NoError(t, err)
 	id := waitOffer(t, inbox)

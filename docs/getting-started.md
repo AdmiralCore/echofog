@@ -107,7 +107,16 @@ Everything here is free and end-to-end encrypted.
 - **Call.** In a chat, press the phone button for a voice call or the camera button for a video
   call. This works in groups too.
 - **Share your screen.** During a call, press *Share your screen*. The arrow next to it opens
-  *Stream quality*: you can pick up to 4K at 60 fps, but high quality needs a fast upload.
+  *Stream quality*: you can pick up to 4K at 60 fps, but high quality needs a fast upload. To share
+  the sound too, pick a whole screen and tick *Share system audio* in the window that opens (or a
+  browser tab with *Share tab audio*). Only people watching your stream hear it, and each of them
+  can mute it with the speaker button on the stream.
+- **Strangers and blocking.** When somebody who is not in your contacts writes to you, the chat
+  shows up with a *request* label. They cannot call you or send files until you press *Accept*
+  (answering them accepts them too). To stop hearing from somebody, open their chat, press the
+  info button at the top and choose *Block*: their messages, calls, files and group invitations no
+  longer reach you, and they are not told. Who may write to you and who may call you (by default
+  only your contacts) is under **Settings** → *Privacy*, together with the list of blocked people.
 
 ## 7. Theme and language
 
