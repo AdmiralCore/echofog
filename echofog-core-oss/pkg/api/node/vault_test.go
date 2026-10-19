@@ -90,7 +90,9 @@ func TestGuardPaysByVoucherAndDoesNotWait(t *testing.T) {
 	assert.True(t, p.status.PaysByVault)
 
 	// refused (say the vault is being withdrawn): back off, then try again
-	env.payVoucher = func(context.Context, int64, *exit_gateway.AccountInfo) error { return errors.New("the vault cannot pay") }
+	env.payVoucher = func(context.Context, int64, *exit_gateway.AccountInfo) error {
+		return errors.New("the vault cannot pay")
+	}
 	p.step(ctx, env)
 	assert.Contains(t, p.status.LastError, "vault cannot pay")
 	n := len(vouchers)
@@ -146,7 +148,9 @@ func (depositChain) SendClaims(context.Context, []tonwallet.SignedVoucher) ([]st
 type testKey struct{ priv ed25519.PrivateKey }
 
 func (k testKey) SignWalletTransaction(d []byte) ([]byte, error) { return ed25519.Sign(k.priv, d), nil }
-func (k testKey) GetWalletPublicKey() ([]byte, error)            { return k.priv.Public().(ed25519.PublicKey), nil }
+func (k testKey) GetWalletPublicKey() ([]byte, error) {
+	return k.priv.Public().(ed25519.PublicKey), nil
+}
 
 func TestPayByVoucherKeepsOneRunningTotal(t *testing.T) {
 	dir := t.TempDir()
