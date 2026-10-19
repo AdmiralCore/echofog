@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/network/access"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/logging"
 	"github.com/echofog/echofog-core/pkg/node"
@@ -59,6 +60,7 @@ type options struct {
 
 	accessMode   string
 	accessSecret string
+	secretFile   string
 	publicAddrs  string
 
 	statusAddr string
@@ -112,6 +114,7 @@ func parseRunFlags(args []string) options {
 
 	f.StringVar(&o.accessMode, "access", getEnv("ECHOFOG_ACCESS", "public"), "who may reach this node: public (listed, its exit advertised), hidden (uses the network as a client, unlisted, answers only people with its link) or isolated (joins no network at all, people with its link connect to it directly; for a server)")
 	f.StringVar(&o.accessSecret, "access-secret", getEnv("ECHOFOG_ACCESS_SECRET", ""), "access secret of a hidden or isolated node, 22 characters of base64url (default: generated on first start and kept in the data directory); the same secret on several nodes lets one link in everywhere")
+	f.StringVar(&o.secretFile, "access-secret-file", getEnv("ECHOFOG_ACCESS_SECRET_FILE", ""), "file holding the access secret (for example a Docker or Kubernetes secret); used when --access-secret is empty")
 	f.StringVar(&o.publicAddrs, "public-addr", getEnv("ECHOFOG_PUBLIC_ADDR", ""), "comma-separated addresses put into the invitation link (host:port or a ws:// URL), when the observed one is not what people should dial")
 
 	f.StringVar(&o.statusAddr, "status-addr", getEnv("ECHOFOG_STATUS_ADDR", "127.0.0.1:7070"), "local address of the status endpoint used by \"status\" and \"wallet\" ('' disables it; keep it on loopback)")
@@ -194,6 +197,13 @@ func (o options) config() *config.AppConfig {
 		fatal("--access: %q is not public, hidden or isolated", o.accessMode)
 	}
 	cfg.Access.Secret = o.accessSecret
+	if cfg.Access.Secret == "" && o.secretFile != "" {
+		raw, err := os.ReadFile(o.secretFile)
+		if err != nil {
+			fatal("--access-secret-file: %v", err)
+		}
+		cfg.Access.Secret = strings.TrimSpace(string(raw))
+	}
 	cfg.Access.PublicAddrs = splitCSV(o.publicAddrs)
 	return cfg
 }
@@ -362,7 +372,11 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 		}
 	}
 	if o.useExit != "" {
-		fmt.Printf("SOCKS5 proxy:  %s through exit %s\n", localProxyAddr(o.socks5), o.useExit)
+		exit := o.useExit
+		if access.IsLink(exit) {
+			exit = "from the invitation link" // the link carries the secret: keep it out of the log
+		}
+		fmt.Printf("SOCKS5 proxy:  %s through exit %s\n", localProxyAddr(o.socks5), exit)
 	}
 	if o.statusAddr != "" {
 		fmt.Printf("Status:        echofog-node status   (http://%s/status)\n", o.statusAddr)

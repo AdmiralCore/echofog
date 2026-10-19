@@ -234,14 +234,21 @@ func (n *Node) InviteLink() (string, error) {
 }
 
 // linkAddrs are the addresses put in a link: the configured ones, else what the network observes
-// (NAT discovery, the router's port mapping), else the public addresses of this machine.
+// (NAT discovery, the router's port mapping), else the public addresses of this machine. With an
+// advertised port (Docker publishing host 443 to the container's 4242) the observed IP goes with
+// that port: STUN sees the port the container's NAT picked for outgoing packets, which nobody can
+// dial.
 func (n *Node) linkAddrs() []string {
 	if len(n.Cfg.Access.PublicAddrs) > 0 {
 		return append([]string(nil), n.Cfg.Access.PublicAddrs...)
 	}
 	seen := map[string]bool{}
 	var out []string
+	adv := n.Cfg.Network.AdvertisePort
 	add := func(a string) {
+		if host, _, err := net.SplitHostPort(a); err == nil && adv > 0 {
+			a = net.JoinHostPort(host, strconv.Itoa(adv))
+		}
 		if a != "" && !seen[a] {
 			seen[a] = true
 			out = append(out, a)
@@ -254,9 +261,6 @@ func (n *Node) linkAddrs() []string {
 	}
 	if len(out) == 0 && n.Transport != nil {
 		port := n.Transport.UDPPort()
-		if p := n.Cfg.Network.AdvertisePort; p > 0 {
-			port = p
-		}
 		ifaces, _ := net.InterfaceAddrs()
 		for _, ia := range ifaces {
 			ipn, ok := ia.(*net.IPNet)

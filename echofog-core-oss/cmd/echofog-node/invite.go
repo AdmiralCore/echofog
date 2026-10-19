@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/echofog/echofog-core/internal/network/access"
 )
 
 // The invitation link of a running node, over its local status endpoint:
@@ -18,6 +20,8 @@ import (
 //	echofog-node invite --rotate    make a new secret: the old link lets nobody new in
 //	echofog-node invite --list      who joined with the link
 //	echofog-node invite --remove ID take somebody off that list
+//	echofog-node invite --new-secret print a fresh access secret (no node needed), for
+//	                                 ECHOFOG_ACCESS_SECRET or a Docker/Kubernetes secret
 //
 // A request that changes something must carry the X-Echofog header: a web page in a browser on
 // the same machine cannot set it without a preflight the endpoint never answers, so it cannot
@@ -80,11 +84,16 @@ func inviteCmd(args []string) int {
 	rotate := f.Bool("rotate", false, "make a new access secret: the old link lets nobody new in, those who joined stay")
 	list := f.Bool("list", false, "list the peers who joined with the link")
 	remove := f.String("remove", "", "take this peer ID off the list of those who joined")
+	newSecret := f.Bool("new-secret", false, "print a fresh access secret for --access-secret / ECHOFOG_ACCESS_SECRET (needs no running node)")
 	f.Usage = func() {
 		fmt.Fprintln(f.Output(), "Usage: echofog-node invite [flags]\n\nPrints the invitation link of the running node: give it to the people who may use it.")
 		f.PrintDefaults()
 	}
 	_ = f.Parse(args)
+	if *newSecret {
+		fmt.Println(access.EncodeSecret(access.NewSecret()))
+		return 0
+	}
 	base := "http://" + *addr + "/invite"
 	client := &http.Client{Timeout: 10 * time.Second}
 

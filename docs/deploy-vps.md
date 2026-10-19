@@ -98,6 +98,37 @@ The stats line in the log counts refused streams by reason, e.g. `exit: 12 sessi
 per reason every 30 seconds). The app shows on its Proxy page why an exit does not serve it: the
 exit is off, the free traffic is used up, or the exit does not answer.
 
+## An exit only for the people you invite
+
+To keep the exit out of the public list and serve only the people you give a link to, add to
+`deploy/.env` (next to `ECHOFOG_EXIT=true`):
+
+```bash
+ECHOFOG_ACCESS=isolated          # or hidden: see below
+```
+
+then `docker compose -f deploy/docker-compose.yml up -d` and take the link:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec node echofog-node invite
+```
+
+- **isolated**: the node joins no network and dials nobody; people with the link connect straight
+  to the published port. The usual choice for a VPS.
+- **hidden**: the node still uses the network as a client (useful when the port cannot be reached,
+  as the link then also names a relay), but is not listed and relays for nobody.
+
+The link uses the server's public IP (from STUN) with `ECHOFOG_ADVERTISE_PORT` (443 in this
+compose). For a domain, or a server with several IPs, set `ECHOFOG_PUBLIC_ADDR=vpn.example.org:443`.
+The secret is generated on the first start and kept in the `echofog-data` volume, so the link
+survives restarts and updates. `invite --rotate` makes a new link, `invite --list` shows who
+joined, `invite --remove <peer id>` cuts somebody off. To run several servers behind one link, give
+them the same secret: make one with
+`docker compose -f deploy/docker-compose.yml run --rm node invite --new-secret` and put it in
+`ECHOFOG_ACCESS_SECRET` (or a Docker secret with `ECHOFOG_ACCESS_SECRET_FILE`, see the compose
+file). The price stays `ECHOFOG_EXIT_PRICE`; `ECHOFOG_EXIT_UPLOAD_MBPS` is not needed. Details:
+[Hidden and isolated nodes](hidden-nodes.md).
+
 ## TCP fallback
 
 The node accepts TCP only while it imitates a real HTTPS site plausible for its IP. It looks for

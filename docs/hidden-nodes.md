@@ -95,6 +95,7 @@ echofog-node run --access isolated --exit --exit-price 0.05 --public-addr 203.0.
 |---|---|---|
 | `--access` | `ECHOFOG_ACCESS` | `public` (default), `hidden` or `isolated` |
 | `--access-secret` | `ECHOFOG_ACCESS_SECRET` | the access secret, 22 characters of base64url. Empty: one is generated on the first start and kept in the data directory. Give several nodes the same secret to let one link in everywhere, or keep it in a secret store (a Docker or Kubernetes secret). A secret given here cannot be rotated with `invite --rotate`: change it here. |
+| `--access-secret-file` | `ECHOFOG_ACCESS_SECRET_FILE` | read the secret from a file (a Docker or Kubernetes secret) when `--access-secret` is empty |
 | `--public-addr` | `ECHOFOG_PUBLIC_ADDR` | addresses put into the link (`host:port` or a `ws://` URL, comma-separated), when the observed one is not what people should dial: a domain, a port map |
 
 A hidden or isolated node does not need `--exit-upload-mbps`: it advertises no speed.
@@ -106,7 +107,13 @@ echofog-node invite             # print the link
 echofog-node invite --list      # who joined with it
 echofog-node invite --rotate    # new secret: the old link lets nobody new in
 echofog-node invite --remove <peer id>
+echofog-node invite --new-secret  # a fresh secret for --access-secret; needs no running node
 ```
+
+The link carries the address the node observes, with `--advertise-port` when that is set (Docker
+publishing host 443 to the container's 4242). In Docker, run the commands inside the container:
+`docker compose -f deploy/docker-compose.yml exec node echofog-node invite`. The step-by-step
+Docker setup is in [VPS with Docker](deploy-vps.md#an-exit-only-for-the-people-you-invite).
 
 These go through the local status endpoint (`--status-addr`, loopback by default), so they work
 only on the machine the node runs on.

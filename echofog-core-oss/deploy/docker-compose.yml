@@ -1,9 +1,11 @@
-# A public EchoFog node: DHT member, relay for peers behind NATs, optionally a paid exit.
+# An EchoFog node: DHT member, relay for peers behind NATs, optionally a paid exit. With
+# ECHOFOG_ACCESS=hidden or isolated in .env it serves only the people with its invitation link.
 #
 #   cp deploy/.env.example deploy/.env      # and edit it
 #   docker compose -f deploy/docker-compose.yml up -d --build
 #   docker compose -f deploy/docker-compose.yml logs -f        # stats line every minute
 #   docker compose -f deploy/docker-compose.yml exec node echofog-node status
+#   docker compose -f deploy/docker-compose.yml exec node echofog-node invite   # the invitation link
 services:
   node:
     build: ..
@@ -25,6 +27,9 @@ services:
     # optional: the identity password as a Docker secret instead of ECHOFOG_PASSWORD
     # secrets: [echofog_password]
     # environment: { ECHOFOG_PASSWORD_FILE: /run/secrets/echofog_password }
+    # optional: the access secret of a hidden or isolated node as a Docker secret
+    # secrets: [echofog_access_secret]
+    # environment: { ECHOFOG_ACCESS_SECRET_FILE: /run/secrets/echofog_access_secret }
 
 volumes:
   echofog-data:
@@ -32,3 +37,5 @@ volumes:
 # secrets:
 #   echofog_password:
 #     file: ./echofog_password.txt
+#   echofog_access_secret:
+#     file: ./echofog_access_secret.txt

@@ -97,6 +97,7 @@ echofog-node run --access isolated --exit --exit-price 0.05 --public-addr 203.0.
 |---|---|---|
 | `--access` | `ECHOFOG_ACCESS` | `public` (по умолчанию), `hidden` или `isolated` |
 | `--access-secret` | `ECHOFOG_ACCESS_SECRET` | секрет доступа, 22 символа base64url. Пусто — создаётся при первом запуске и хранится в каталоге данных. Дайте нескольким нодам один секрет, чтобы одна ссылка пускала везде, или держите его в хранилище секретов (Docker или Kubernetes secret). Секрет, заданный здесь, нельзя сменить через `invite --rotate`: меняйте его здесь. |
+| `--access-secret-file` | `ECHOFOG_ACCESS_SECRET_FILE` | читать секрет из файла (Docker или Kubernetes secret), если `--access-secret` пуст |
 | `--public-addr` | `ECHOFOG_PUBLIC_ADDR` | адреса для ссылки (`host:port` или `ws://` URL через запятую), когда наблюдаемый адрес не тот, по которому надо подключаться: домен, проброс порта |
 
 Скрытой и изолированной ноде не нужен `--exit-upload-mbps`: она не объявляет скорость.
@@ -108,7 +109,13 @@ echofog-node invite             # показать ссылку
 echofog-node invite --list      # кто вошёл по ней
 echofog-node invite --rotate    # новый секрет: по старой ссылке никто новый не войдёт
 echofog-node invite --remove <peer id>
+echofog-node invite --new-secret  # новый секрет для --access-secret; нода не нужна
 ```
+
+В ссылку идёт адрес, который нода видит снаружи, с портом `--advertise-port`, если он задан
+(Docker публикует порт 443 хоста на 4242 контейнера). В Docker команды запускаются внутри
+контейнера: `docker compose -f deploy/docker-compose.yml exec node echofog-node invite`. Пошагово
+для Docker — в [VPS через Docker](deploy-vps.ru.md#выход-только-для-приглашённых).
 
 Команды идут через локальный status-эндпоинт (`--status-addr`, по умолчанию loopback), поэтому
 работают только на той машине, где запущена нода.
