@@ -878,6 +878,8 @@ export namespace node {
 	    pricePerMb: number;
 	    priceKnown: boolean;
 	    active: boolean;
+	    countryCode?: string;
+	    city?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SavedExit(source);
@@ -899,6 +901,8 @@ export namespace node {
 	        this.pricePerMb = source["pricePerMb"];
 	        this.priceKnown = source["priceKnown"];
 	        this.active = source["active"];
+	        this.countryCode = source["countryCode"];
+	        this.city = source["city"];
 	    }
 	}
 	export class SettingsDTO {
