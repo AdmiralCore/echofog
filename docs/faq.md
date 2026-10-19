@@ -58,7 +58,7 @@ Other people's traffic goes out to the Internet **from your IP address**. To web
 police, it looks like it came from you. Legal responsibility for that traffic is yours, so only
 share a connection you are allowed to share.
 
-Some protection is built in. A public exit refuses to connect to:
+Some protection is built in. Every exit, public or hidden, refuses to connect to:
 
 - your own computer, your local network and private or reserved address ranges;
 - ports used for sending mail (25, 465, 587), so your IP does not end up on spam blocklists;
@@ -88,7 +88,8 @@ pay exits. You can switch it *Off* with one click, and the service does not chan
 
 Your router or provider does not let other computers connect to you directly — usually because of
 NAT, where your router shares one public address among your devices. **Chats, calls and the VPN
-still work.** It only matters if you want to serve others as a relay or an exit. See
+still work.** It only matters if you want to serve others as a relay or a public exit. A hidden
+exit for your own people works without it, through relays. See
 [reachability.md](reachability.md).
 
 ## Can I run my own private node for friends?

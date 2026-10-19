@@ -51,7 +51,7 @@ your traffic goes out to the Internet from:
 - **Choose myself** — pick an exit from the list. You can sort by price, ping and speed.
 - **Specific node** — connect through one computer you know, for example a friend who shares
   their connection with you for free, or a hidden exit you were invited to. Paste the link
-  (`echofog://join?…` or `echofog://relay/…`) or peer ID they gave you.
+  (`echofog://join?…` or `echofog://relay/…`), `host:port/peer-id` or peer ID they gave you.
 
 Press **Connect**. When it says *Connected*, you have two ways to use it:
 
@@ -74,7 +74,26 @@ exits take only what you used, every few hours. How this works, and its current 
 
 The wallet is for traffic only. Its keys live on this computer, so do not keep savings in it.
 
-## 5. Chats, groups and calls
+## 5. Share your connection (optional)
+
+You can also be an exit yourself: other people's traffic then goes out to the Internet through your
+computer, and they pay you your price (or nothing).
+
+1. Decide **who** may use it, under **Proxy → Access to this computer**:
+   - **Public** — anybody can find your exit in their list and use it at your price.
+   - **Hidden** — nobody can find it; only the people you send your **invitation link** to can use
+     it. The mode changes after you restart the app.
+2. In **Share your connection** set the price in dollars per GB (`0` is free) and press
+   **Start sharing**. A public exit also needs your upload speed (*Measure* fills it in).
+3. Public: you are done, people find you on their own. Hidden: copy **Your invitation link** from the
+   *Access* card and send it to your people; they paste it into **Specific node**.
+
+Friends who should never pay go under **Free for these people**. **The traffic of the people you
+serve leaves from your IP address**, and the legal responsibility is yours: read
+[What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection) first. All the
+details of the hidden mode, in plain words: [Hidden and isolated nodes](hidden-nodes.md).
+
+## 6. Chats, groups and calls
 
 Everything here is free and end-to-end encrypted.
 
@@ -90,12 +109,12 @@ Everything here is free and end-to-end encrypted.
 - **Share your screen.** During a call, press *Share your screen*. The arrow next to it opens
   *Stream quality*: you can pick up to 4K at 60 fps, but high quality needs a fast upload.
 
-## 6. Theme and language
+## 7. Theme and language
 
 Open **Settings** → *Appearance*. Choose the theme (*System*, *Light*, *Dark*) and the language
 (*System*, English, Русский). *System* follows your Windows settings.
 
-## 7. If the app shows no connection
+## 8. If the app shows no connection
 
 If a banner says **No connection to the network**, the built-in entry nodes may be blocked where
 you are. The app joins the network through *bootstrap nodes* — the first nodes it connects to.
@@ -109,10 +128,11 @@ you are. The app joins the network through *bootstrap nodes* — the first nodes
 The chip next to *Bootstrap nodes* shows how many peers you are connected to.
 
 A different message, *This computer cannot be reached from the Internet*, is not a problem for
-you: chats, calls and the VPN still work. It only matters if you want to serve others. See
+you: chats, calls and the VPN still work. It only matters if you want to serve others as a relay or
+a public exit (a hidden exit for your own people works without it). See
 [reachability.md](reachability.md).
 
-## 8. Logs and feedback
+## 9. Logs and feedback
 
 If something does not work, open **Logs**. *Copy all* copies the log; *Save* writes it to a file in
 your home folder.

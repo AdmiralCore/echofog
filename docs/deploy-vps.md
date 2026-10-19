@@ -84,7 +84,7 @@ To let people (or just your own devices) browse through this server, set in `dep
 ECHOFOG_EXIT=true
 ECHOFOG_EXIT_PRICE=0.05          # dollars per GB; 0 = free for everyone
 ECHOFOG_EXIT_UPLOAD_MBPS=100     # roughly what the server has; never 0 on a fresh server
-# your own devices ride free, without the daily quota (peer IDs from the app's Settings)
+# your own devices ride free, without the daily quota (peer ID: app, Proxy → Relay → Your peer ID)
 ECHOFOG_EXIT_FREE_PEERS=<peer id>,<peer id>
 ```
 
@@ -146,7 +146,7 @@ Details: [Anti-DPI](anti-dpi.md).
 ## Update
 
 ```bash
-cd ~/EchoFog && git pull
+cd ~/EchoFog && git pull          # the folder you cloned in step 3
 cd echofog-core-oss && docker compose -f deploy/docker-compose.yml up -d --build
 ```
 

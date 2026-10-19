@@ -69,7 +69,8 @@ port, and you want only your people to use it.
 ### Isolated
 
 **What others see:** nothing at all. An isolated node does not even join the network: it connects
-to nobody, not even to the network's entry points. It just sits and waits.
+to no other EchoFog node, not even to the network's entry points. It just sits and waits. (It still
+asks public STUN servers and your router what its outside address is, to put it in the link.)
 
 **What works:** only the people with the link, connecting **directly** to it. There are no relays
 in its link, so it must be reachable from the Internet: a VPS with a public address, with the
@@ -108,8 +109,8 @@ is the most closed mode, and the usual choice for a server.
 5. Under **Access to this computer → Your invitation link**, press the copy button (or the QR-code
    button), and send the link to your people in a messenger you trust.
 
-If the card says that there is no link yet, the app does not know its address yet: wait a minute
-until it is connected to the network.
+If the card says *This computer does not know an address others can reach it at yet*, wait a minute
+until the app is connected to the network.
 
 **Remember:** while your exit is on, the traffic of the people you invited leaves to the Internet
 from **your** address. Read [What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection).
@@ -122,8 +123,8 @@ from **your** address. Read [What happens if I share my connection?](faq.md#what
    characters of its ID. If something is wrong, it says so (see [Problems](#problems-and-what-to-do)).
 4. Press **Connect**.
 
-The app remembers the key. Next time, use **Connect to the last exit** or the connection history: you do
-not need to paste the link again. If the owner later makes a new link, you stay in.
+The app remembers the key. Next time, use **Connect to the last exit** or pick it under **Your exits**: you
+do not need to paste the link again. If the owner later makes a new link, you stay in.
 
 Paying works as with any exit: if the owner set a price, the Proxy screen shows how to pay.
 
@@ -164,6 +165,10 @@ step 3: Docker is installed, the port is open (UDP and TCP 443), and you have `d
 
    It prints one line starting with `echofog://join?`. That is the link to give out. The node also
    prints it in the log at start (`Invite link:`).
+
+   People whose network blocks UDP need the TCP fallback, which in Docker stays off until you set a
+   real site for the node to imitate (`ECHOFOG_TLS_SERVER_NAME`, `ECHOFOG_CAMOUFLAGE_ADDR`): see
+   [TCP fallback](deploy-vps.md#tcp-fallback). UDP alone is enough for most people.
 
 5. Check it from your own computer: paste the link into **Proxy → Specific node** and connect.
    Then, on the server, see who came in:
@@ -250,7 +255,8 @@ To make it free for everybody with the link, set the price to 0.
 ### What the key actually protects
 
 - A stranger who knows your address but not the key gets **no answer**: not a refusal, not your
-  node's ID, nothing. Scanners looking for VPN servers see an empty port.
+  node's ID, nothing. Scanners looking for VPN servers see a silent UDP port, and on the TCP port the
+  ordinary website the node imitates (see [Anti-DPI](anti-dpi.md)).
 - A person with the key proves it **without sending the key itself**, and the proof only works for
   that one connection: somebody who records the traffic cannot reuse it.
 - Even when a hidden node connects to other nodes itself (to relays, for example), they cannot use
@@ -286,7 +292,7 @@ in the settings and restart the nodes.
 | *This link was made by a newer version of EchoFog* | The person who made the link has a newer app. | Update your app. |
 | *This link is for another network (…)* | The link belongs to a different EchoFog-based network (a fork). | Ask for a link for this network, or use that network's app. |
 | *This is not an invitation link…* | Part of the link is missing, often cut off by a messenger. | Ask the person to send it again, for example as a file or a QR code. |
-| *There is no link yet* / `no link yet` | The node does not know its own public address yet. | Wait a minute. On a server, set `ECHOFOG_PUBLIC_ADDR`. |
+| *This computer does not know an address others can reach it at yet* / `no link yet` | The node does not know its own public address yet. | Wait a minute. On a server, set `ECHOFOG_PUBLIC_ADDR`. |
 | *Could not reach the node* | The address in the link does not answer. | Isolated: check that the server is running and UDP (and TCP) 443 is open in the firewall and in the provider's panel. Hidden: ask for a fresh link; its relays may have changed. |
 | I switched to Hidden but nothing changed | The mode changes only after a restart. | Close the app completely and open it again. |
 | My friends cannot call me since I went hidden | They should be able to, if they are in your contacts. | Check that they are in your chat list. |

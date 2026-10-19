@@ -31,6 +31,7 @@ no commission.
 | understand how it works under the hood | [How it works](docs/how-it-works.md) |
 | configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |
 | understand paying for traffic with a TON vault | [Vault payments](docs/vault-payments.md) |
+| send files to contacts and groups | [File transfer](docs/file-transfer.md) |
 | know the security status, or report a vulnerability | [SECURITY.md](SECURITY.md) |
 
 Every document has a Russian version next to it (`*.ru.md`).
@@ -46,7 +47,8 @@ Every document has a Russian version next to it (`*.ru.md`).
   A node can also sit behind a CDN over WebSocket.
 - **The VPN.** A local SOCKS5 proxy for apps, or the whole computer through a tunnel (on Windows
   the Wintun driver is built in). Exits compete on an open market; the app can pick one
-  automatically by ping, price, speed and which of your sites open through it.
+  automatically by ping, price, speed and which of your sites open through it. An exit can also
+  stay hidden and serve only the people it gives an invitation link to.
 - **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Calls and screen sharing
   travel over relay trees sized by each participant's upload, which is how a stream reaches many
   viewers without a central server.

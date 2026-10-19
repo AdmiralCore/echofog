@@ -11,13 +11,15 @@ it and through relays when they do not, and pay each other directly.
 
 | Area | Where | Notes |
 |---|---|---|
-| Transport | `internal/network` | QUIC with per-node UDP obfuscation (no shared key); TCP fallback that looks like a browser talking TLS to a real site (uTLS Chrome fingerprint, own domain and certificate, smux streams). See anti-censorship-transport |
-| NAT traversal | `internal/network/{natcheck,portmap}`, `internal/p2p/holepunch` | multi-STUN NAT classification, UPnP/NAT-PMP, coordinated hole punching. See nat-traversal |
+| Transport | `internal/network` | QUIC with per-node UDP obfuscation (no shared key); TCP fallback that looks like a browser talking TLS to a real site (uTLS Chrome fingerprint, own domain and certificate, smux streams). See [anti-dpi](../docs/anti-dpi.md) |
+| NAT traversal | `internal/network/{natcheck,portmap}`, `internal/p2p/holepunch` | multi-STUN NAT classification, UPnP/NAT-PMP, coordinated hole punching. See [reachability](../docs/reachability.md) |
 | Discovery | `internal/p2p/dht`, `internal/services/discovery` | signed records, mDNS on the local network |
-| Messaging | `internal/services/{messenger,contacts,groups}` | end-to-end encrypted, double ratchet; delivery receipts and an outbox for offline peers; real group protocol (roles, kick/ban, calls). See messaging |
+| Messaging | `internal/services/{messenger,contacts,groups}` | end-to-end encrypted, double ratchet; delivery receipts and an outbox for offline peers; real group protocol (roles, kick/ban, calls). See [how it works](../docs/how-it-works.md#messages) |
+| Files | `internal/services/filexfer` | files to contacts and groups, resumable. See [file transfer](../docs/file-transfer.md) |
 | Calls | `internal/services/call` | relay trees sized by each peer's capacity, so a call scales past what one uplink can carry |
 | Proxy / VPN | `internal/network/{exit_gateway,tunmode,fakedns}`, `internal/p2p/vpnmarket` | SOCKS5 and whole-computer (TUN) modes, TCP and UDP |
-| Payments | `internal/wallet/tonwallet`, `pkg/api/node/exitpay.go` | prepaid chunks in TON or USDT, no account. See traffic-payments |
+| Access | `internal/network/access` | hidden and isolated nodes: the access secret checked in the handshake, hole punch tickets, `echofog://join` invitation links. See [hidden nodes](../docs/hidden-nodes.md) |
+| Payments | `internal/wallet/tonwallet`, `pkg/api/node/exitpay.go` | a TON vault with vouchers, or direct TON or USDT transfers, no account. See [vault payments](../docs/vault-payments.md) |
 | Embedding API | `pkg/api/node` | what a GUI or another program calls |
 | Node binary | `cmd/echofog-node` | headless node for servers |
 
@@ -43,6 +45,7 @@ bin/echofog-node init                               # new identity: prints the r
 bin/echofog-node restore                            # or restore one (asks for the phrase, hidden)
 bin/echofog-node run --data-dir ./data --bootstrap seed1.example.org:4242/<peer id>
 bin/echofog-node status                             # peers, relayed traffic, earnings, wallet
+bin/echofog-node invite                             # invitation link of a hidden or isolated node
 ```
 
 `run` without an identity creates one (or restores it with `--mnemonic-file`), and keeps a
@@ -56,13 +59,20 @@ Every flag is also an `ECHOFOG_*` environment variable; `echofog-node run -h` li
 - **Signaling only** (`--signaling`): the DHT and help with hole punching for peers behind NATs,
   no relayed traffic; cheap in bandwidth.
 - **Exit**: `--exit --exit-price 0.05` sells the connection, dollars per GB, paid in TON or USDT
-  into the node's own wallet; the node books incoming payments by itself.
-- **Use an exit**: `--use-exit auto --socks5 127.0.0.1:1080`, then point a browser or any
-  SOCKS5-aware program at `127.0.0.1:1080`.
+  into the node's own wallet; the node books incoming payments by itself. The exit is public
+  (advertised to everybody) unless the node runs with `--access`.
+- **Access**: `--access hidden` keeps the node unlisted and answers only the people with its
+  invitation link (`echofog-node invite`), its contacts and those who joined before;
+  `--access isolated` also joins no network and only accepts direct connections. See
+  [hidden nodes](../docs/hidden-nodes.md).
+- **Use an exit**: `--use-exit auto --socks5 127.0.0.1:1080` (or a peer ID, or an invitation
+  link in quotes), then point a browser or any SOCKS5-aware program at `127.0.0.1:1080`.
 - **Logs**: a stats line every minute (`--stats-every`) with peers, relayed traffic and messages,
   exit sessions, earnings and the wallet balance.
 
-Public nodes can be run with Docker and on Google Cloud. Detailed public docs are being prepared.
+Docker: `deploy/docker-compose.yml` with `deploy/.env.example`. Step-by-step guides:
+[run a node](../docs/run-a-node.md), [VPS with Docker](../docs/deploy-vps.md),
+[hidden and isolated nodes](../docs/hidden-nodes.md).
 
 ## Layout
 

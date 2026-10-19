@@ -18,8 +18,10 @@ the headless node.
 | **Public relay** | default (`--relay` is on) | Carries calls and messages for peers that cannot connect directly, and keeps messages for people who are offline. This is what makes a call work between two people who are both on mobile internet or behind CGNAT. | Real bandwidth: every relayed call goes in and out through your server |
 | **Private relay** | `--relay-private --relay-allow <peer id>,<peer id>` | A relay only for the peer IDs you list. It is not advertised in the network. Good for yourself and a few friends. | As much as your friends use |
 | **Exit** | `--exit` (add `--exit-price`, `--exit-free-kb`) | Shares your Internet connection as a VPN exit. Other people's traffic leaves the Internet **from your IP**. | As much as your customers use |
+| **Hidden or isolated exit** | `--exit --access hidden` or `--exit --access isolated` | An exit that is not listed anywhere and serves only the people you give its invitation link to. Isolated also joins no network at all. See [Hidden and isolated nodes](hidden-nodes.md). | As much as your people use |
 
-You can combine a relay with an exit. `--relay=false` turns relaying off.
+You can combine a relay with an exit. `--relay=false` turns relaying off. A hidden or isolated node
+is never a relay: `--access hidden|isolated` turns relaying off whatever `--relay` says.
 
 ### About running an exit
 
@@ -148,6 +150,9 @@ stays on UDP only. Set `--tls-server-name` and `--camouflage-addr` by hand to ge
   echofog://relay/<host:port>/<peer id>
   ```
 
+- A **hidden or isolated** node turns away whoever does not have its link, so give out its
+  **invitation link** instead (`echofog-node invite`). An isolated node ignores `--bootstrap`: it
+  joins no network. See [Hidden and isolated nodes](hidden-nodes.md).
 - For a **private relay**, give your friends this address too. In the desktop app they add it under
   **Proxy → Relay → Relays you use**; another node uses `--relays host:port/<peer id>`. You add their
   peer IDs to `--relay-allow`.
@@ -168,6 +173,8 @@ cloud providers charge per GB of outbound traffic, and that adds up fast.
 echofog-node status          # peers, NAT, relay traffic, exit sessions and earnings, wallet
 echofog-node wallet          # the TON wallet address and balance
 echofog-node status --json   # raw JSON
+echofog-node invite          # the invitation link of a hidden or isolated node
+echofog-node invite --list   # who joined with it (--rotate: a new link, --remove <peer id>: cut off)
 ```
 
 These ask the node's status endpoint, which listens on `127.0.0.1:7070` (`--status-addr`;
@@ -192,7 +199,14 @@ blends in with ordinary HTTPS and HTTP/3; `.env.example` sets `ECHOFOG_ADVERTISE
 Open 443/udp and 443/tcp in the firewall. The identity, database and wallet live in the
 `echofog-data` volume: back it up.
 
+For an exit only for the people you invite, set `ECHOFOG_ACCESS=isolated` (or `hidden`) in
+`deploy/.env` and take the link with
+`docker compose -f deploy/docker-compose.yml exec node echofog-node invite`. Step by step:
+[VPS with Docker](deploy-vps.md#an-exit-only-for-the-people-you-invite).
+
 ## Behind a home router?
 
-A node at home works for itself, but to serve others as a relay or exit it must be reachable from
-the Internet. See [reachability.md](reachability.md).
+A node at home works for itself, but to serve others as a relay or public exit it must be reachable
+from the Internet. See [reachability.md](reachability.md). A **hidden** exit is the exception: it
+serves the people it invited from behind a router, through the relays named in its link (see
+[Hidden and isolated nodes](hidden-nodes.md)).

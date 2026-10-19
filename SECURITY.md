@@ -55,9 +55,14 @@ fixed:
   warning next to the switch.
 - **The DHT lists public nodes.** Their address and ID are published together, so a censor who
   crawls the DHT can find them and confirm they are EchoFog nodes. The per-node disguise key only
-  stops blind scanning.
-- **Bridges are not finished.** Unlisted nodes whose address is shared privately, with a mandatory
-  secret, are the answer to the point above; the settings exist, but distribution is not built yet.
+  stops blind scanning. Hidden and isolated nodes are not listed and never tell other nodes their
+  address: see [docs/hidden-nodes.md](docs/hidden-nodes.md).
+- **Hidden nodes are new.** A hidden or isolated node answers only peers that prove its access
+  secret (from its invitation link) in the handshake. Anyone who has the link can use it, so a
+  leaked link has to be replaced (*New link* / `invite --rotate`). With obfuscation off
+  (`--obfs off`) a scanner can still learn the node's ID from its TLS certificate, and the relays
+  named in a hidden node's link change over time. Links are handed out by people; there is no
+  automatic distribution.
 - **Some anti-DPI work is deferred:** a client does not yet present each target node's own imitated
   site name, and there is no extra padding of the first UDP packets yet. See
   [docs/anti-dpi.md](docs/anti-dpi.md).
@@ -78,7 +83,8 @@ What EchoFog tries to protect:
 What it does **not** protect:
 
 - **The fact that you use EchoFog, against a determined censor.** A censor who crawls the DHT can
-  learn the addresses of public nodes and see that you connect to them.
+  learn the addresses of public nodes and see that you connect to them. Hidden and isolated nodes
+  are not in the DHT, but anyone who gets their invitation link can find and use them.
 - **Your destinations, from the exit.** Like any VPN, the exit you use sees which sites you visit
   and can see unencrypted traffic. Use HTTPS. The exit may also see your IP address.
 - **Payment metadata on TON.** The blockchain is public. Your vault, your deposits and the vouchers
@@ -153,9 +159,14 @@ EchoFog — **экспериментальный** проект.
   на мгновение раскрыться. Приложение предупреждает об этом рядом с переключателем.
 - **DHT публикует публичные ноды.** Их адрес и ID лежат там вместе, так что цензор, который обходит
   DHT, может их найти и убедиться, что это ноды EchoFog. Ключ маскировки, привязанный к ноде,
-  защищает только от слепого сканирования.
-- **Мосты не доделаны.** Ответ на предыдущий пункт — неопубликованные ноды, адрес которых
-  передаётся из рук в руки, с обязательным секретом. Настройки для этого есть, а раздачи пока нет.
+  защищает только от слепого сканирования. Скрытые и изолированные ноды в DHT не публикуются и
+  никогда не сообщают другим нодам свой адрес: см. [docs/hidden-nodes.ru.md](docs/hidden-nodes.ru.md).
+- **Скрытые ноды — новинка.** Скрытая или изолированная нода отвечает только тем, кто в
+  рукопожатии доказал знание её секрета доступа (из ссылки-приглашения). Пользоваться ею может
+  любой, у кого есть ссылка, поэтому утёкшую ссылку надо заменить (*Новая ссылка* /
+  `invite --rotate`). С выключенной обфускацией (`--obfs off`) сканер всё ещё может узнать ID ноды
+  по её TLS-сертификату, а релеи, указанные в ссылке скрытой ноды, со временем меняются. Ссылки
+  раздают люди, автоматической раздачи нет.
 - **Часть работы против DPI отложена:** клиент пока не предъявляет имя сайта, под который
   маскируется именно та нода, к которой он подключается, и нет дополнительного выравнивания длины
   первых UDP-пакетов. См. [docs/anti-dpi.md](docs/anti-dpi.md).
@@ -177,7 +188,8 @@ EchoFog — **экспериментальный** проект.
 Что он **не** защищает:
 
 - **Сам факт, что вы пользуетесь EchoFog, — от настойчивого цензора.** Цензор, который обходит DHT,
-  может узнать адреса публичных нод и увидеть, что вы к ним подключаетесь.
+  может узнать адреса публичных нод и увидеть, что вы к ним подключаетесь. Скрытых и изолированных
+  нод в DHT нет, но любой, к кому попала их ссылка-приглашение, может их найти и ими пользоваться.
 - **Куда вы ходите — от выходного узла.** Как и любой VPN, выходной узел видит, какие сайты вы
   открываете, и может видеть незашифрованный трафик. Пользуйтесь HTTPS. Выходной узел может видеть и
   ваш IP-адрес.

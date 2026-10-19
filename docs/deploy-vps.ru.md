@@ -85,7 +85,7 @@ docker compose -f deploy/docker-compose.yml ps
 ECHOFOG_EXIT=true
 ECHOFOG_EXIT_PRICE=0.05          # долларов за ГБ; 0 = бесплатно для всех
 ECHOFOG_EXIT_UPLOAD_MBPS=100     # примерно столько, сколько есть у сервера; на новом сервере не 0
-# ваши устройства ходят бесплатно и без дневного лимита (ID пиров — в Настройках приложения)
+# ваши устройства ходят бесплатно и без дневного лимита (ключ — в приложении: Прокси → Релей → Ваш ключ)
 ECHOFOG_EXIT_FREE_PEERS=<peer id>,<peer id>
 ```
 
@@ -148,7 +148,7 @@ ECHOFOG_CAMOUFLAGE_ADDR=<IP сайта>:443
 ## Обновление
 
 ```bash
-cd ~/EchoFog && git pull
+cd ~/EchoFog && git pull          # папка, куда вы клонировали на шаге 3
 cd echofog-core-oss && docker compose -f deploy/docker-compose.yml up -d --build
 ```
 

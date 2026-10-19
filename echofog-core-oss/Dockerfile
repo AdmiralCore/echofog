@@ -30,6 +30,6 @@ ENV ECHOFOG_DATA_DIR=/data \
 HEALTHCHECK --interval=30s --timeout=6s --start-period=40s --retries=3 \
   CMD ["/usr/local/bin/echofog-node", "status", "--quiet"]
 
-# echofog-node init | restore | run | status | wallet  (see: echofog-node help)
+# echofog-node init | restore | run | status | wallet | invite  (see: echofog-node help)
 ENTRYPOINT ["/usr/local/bin/echofog-node"]
 CMD ["run"]

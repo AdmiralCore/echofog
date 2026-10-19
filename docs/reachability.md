@@ -4,7 +4,8 @@
 
 You may see this on the **Relay** card in the **Proxy** screen. Short answer first: **chats, calls
 and using the VPN all work anyway.** Being reachable only matters if you want to serve others as a
-relay or an exit.
+relay or a public exit. To share your connection with a few people of your own, you do not need it:
+see [below](#sharing-with-your-own-people-without-an-open-port).
 
 ## What is going on
 
@@ -26,7 +27,15 @@ EchoFog tries, in this order:
    message goes through a relay node that both can reach.
 
 So being unreachable never blocks you from using EchoFog. It only means your computer cannot be
-someone else's relay or exit.
+someone else's relay or public exit.
+
+## Sharing with your own people without an open port
+
+If you only want to share your connection with family or friends, switch **Proxy → Access to this
+computer** to **Hidden** and give them your invitation link. A hidden exit keeps a connection to a
+couple of relays and names them in its link, so the people you invited reach you through them (and
+punch through to a direct connection when the routers allow), even if nothing here can be fixed.
+Step by step: [Hidden and isolated nodes](hidden-nodes.md).
 
 ## Which case are you in
 

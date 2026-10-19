@@ -29,10 +29,10 @@ Usage:
 Commands:
   init      create a new identity and print its recovery phrase
   restore   restore an identity from its recovery phrase (asks for it, or --mnemonic-file)
-  run       start the node: DHT, relay for others, optionally a public exit (default command)
+  run       start the node: DHT, relay for others, optionally an exit (default command)
   status    show what the running node does: peers, relayed traffic, exit earnings, wallet
   wallet    show the TON wallet address and balance of the running node
-  invite    print the invitation link of the running node (--rotate, --list, --remove)
+  invite    print the invitation link of the running node (--list, --rotate, --remove, --new-secret)
   version   print the version
 
 Run "echofog-node <command> -h" for the flags of a command. Every flag can also be set with an

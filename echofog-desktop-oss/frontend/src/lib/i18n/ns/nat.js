@@ -3,7 +3,7 @@ export default {
   en: {
     'nat.title': 'This computer cannot be reached from the Internet',
     'nat.connecting': 'Checking how this computer connects…',
-    'nat.worksAnyway': 'Chats, calls and using the VPN all work anyway. Only serving others as a relay or exit needs this.',
+    'nat.worksAnyway': 'Chats, calls and using the VPN all work anyway. Only serving others as a relay or public exit needs this; a hidden exit for your own people works without it.',
     'nat.howTo': 'How to become reachable',
     'nat.hide': 'Hide',
     'nat.footer': 'After forwarding a port or getting a public IP, reopen the app. A node on a rented server with a public IP (a VPS) is reachable with no setup.',
@@ -22,7 +22,7 @@ export default {
   ru: {
     'nat.title': 'До этого компьютера нельзя подключиться из интернета',
     'nat.connecting': 'Определяем, как подключён этот компьютер…',
-    'nat.worksAnyway': 'Чаты, звонки и использование VPN работают в любом случае. Это нужно только чтобы быть релеем или выходом для других.',
+    'nat.worksAnyway': 'Чаты, звонки и использование VPN работают в любом случае. Это нужно только чтобы быть релеем или публичным выходом для других; скрытый выход для своих работает и без этого.',
     'nat.howTo': 'Как стать доступным',
     'nat.hide': 'Скрыть',
     'nat.footer': 'После проброса порта или получения белого IP перезапустите приложение. Нода на арендованном сервере с публичным IP (VPS) доступна без настройки.',

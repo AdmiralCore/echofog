@@ -12,14 +12,15 @@ and links to a deeper document where one exists.
 ## Finding each other without a server
 
 Every EchoFog install has an identity: a key pair created on your computer and backed up by your
-recovery phrase. Your **peer ID** is a fingerprint of your public key (a SHA-256 hash, shown as 64
+recovery phrase. Your **peer ID** (the Relay card in **Proxy** shows it as *Your peer ID*) is a fingerprint of your
+public key (a SHA-256 hash, shown as 64
 hex characters). Nobody hands IDs out, so nobody can take yours away, and anyone who talks to you
 can check that the other end really holds the key behind that ID.
 
 To find a peer by its ID, nodes use a **DHT** (distributed hash table, here Kademlia): a shared
 address book split across all the nodes. Each node keeps a small part of it and knows a few
 neighbours "closer" to any given ID, so a lookup hops from node to node until it reaches someone
-who knows the answer. Exits also publish their offers (price, speed) in the DHT, which is how the
+who knows the answer. Public exits also publish their offers (price, speed) in the DHT, which is how the
 VPN market works without a website.
 
 A fresh install has to know at least one node to join. Those are **bootstrap nodes** (also called
@@ -60,9 +61,11 @@ holds, are in [anti-dpi.md](anti-dpi.md).
   know the node's ID. Public nodes are listed in the DHT with their address and ID together. A
   censor who crawls the DHT can learn both, compute the token, and confirm that an address is an
   EchoFog node.
-- The answer is **unlisted bridges**: nodes whose address and ID are shared privately and protected
-  with an extra secret. The `anti_dpi.obfs_password` / `stealth_password` settings exist, but the
-  bridge-style distribution around them **is not finished yet**.
+- The answer is **hidden and isolated nodes**: they are not in the DHT, never tell other nodes
+  their address, and answer nobody who cannot prove the access secret from their invitation link
+  (`echofog://join?…`). People hand the links out themselves. See [hidden-nodes.md](hidden-nodes.md).
+  For a whole private network there are also the `anti_dpi.obfs_password` / `stealth_password`
+  settings.
 - Some planned hardening is not in this build either (for example, a client presenting each target
   node's own imitated site name). [anti-dpi.md](anti-dpi.md) lists it.
 
@@ -84,8 +87,9 @@ people behind NAT cannot simply dial each other. EchoFog tries, in order:
 
 To find out what kind of NAT you are behind, the app asks several public STUN servers what address
 they see. Chatting, calls and using the VPN all work even if your computer cannot be reached from
-the Internet; only serving others as a relay or exit needs it. If you want to be reachable, see
-[reachability.md](reachability.md).
+the Internet; only serving others as a relay or public exit needs it. A **hidden** exit serves the
+people it invited even from behind a router, through the relays named in its link. If you want to be
+reachable, see [reachability.md](reachability.md).
 
 ## Messages
 
@@ -148,6 +152,10 @@ free) and some free test traffic, and publish the offer in the DHT. Running an e
 people's traffic leaves from your IP address. You can also connect to one specific node, for example
 a friend who shares their connection with you for free (**Specific node**).
 
+**Hidden exits are not on the market.** An exit can also be hidden: it publishes nothing and serves
+only the people it gave an invitation link to (`echofog://join?…`), at its price. You use one by
+pasting the link into **Specific node**. See [hidden-nodes.md](hidden-nodes.md).
+
 **How an exit is chosen automatically.** In **Automatic** mode the app checks exits in the
 background. For each one it opens your sites for real through that exit (by default Cloudflare,
 Wikipedia and Google; you choose your own list, up to 16 sites, under **Check sites**) and measures
@@ -163,13 +171,13 @@ An exit that failed several checks in a row drops far down. The ratings stay on 
 are never published. In **Choose myself** mode you can sort the list by ping, price or speed and pick
 one.
 
-**What an exit refuses to reach.** A public exit only lets traffic out to the Internet. It refuses:
+**What an exit refuses to reach.** Every exit, public or hidden, only lets traffic out to the Internet. It refuses:
 
 - its own machine and network: loopback, private and link-local ranges, carrier-grade NAT space, the
   subnets of its own network interfaces (on IPv6 that covers the whole home network), and its own
   public IP addresses (which would loop back into the operator's router);
 - reserved and special-purpose ranges (documentation, benchmarking, NAT64, 6to4 and similar);
-- ports used for spam and worms: 25, 465 and 587 (mail sending), 135–139 and 445 (Windows file
+- ports used for spam and worms: 25, 465 and 587 (mail sending), 135, 137–139 and 445 (Windows file
   sharing), and 1900 (SSDP).
 
 ## Paying
