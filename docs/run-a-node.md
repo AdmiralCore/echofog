@@ -36,6 +36,8 @@ on a server and in a country where you may do this, and read your hoster's terms
 - `--exit-free-peers <id>,<id>` (`ECHOFOG_EXIT_FREE_PEERS`) lists peers served for free, with no
   daily quota and no payment, such as your own devices. It replaces the free list saved in the data
   directory (the desktop app edits the same list under **Proxy → Free for these people**).
+- `--access hidden` or `--access isolated` keeps the node and its exit to the people you give an
+  invitation link to: nothing is advertised. See [Hidden and isolated nodes](hidden-nodes.md).
 - An exit never connects to loopback, private/LAN or CGNAT addresses, or to this machine's own
   networks. It also refuses these destination ports: **25, 465, 587** (mail: they would get your IP
   onto spam blocklists) and **135, 137, 138, 139, 445, 1900** (Windows networking, SMB and SSDP:
