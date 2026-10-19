@@ -367,3 +367,39 @@ func TestLANAddressesAreFewAndPrivate(t *testing.T) {
 	assert.Len(t, lan(in), 4)
 	assert.Empty(t, lan([]string{"8.8.8.8:53", "169.254.1.1:4242", "[::1]:4242", "10.0.0.1:0"}))
 }
+
+// A hidden node answers a CONNECT, and so gives out its addresses, only with a valid ticket.
+func TestHiddenResponderNeedsTicket(t *testing.T) {
+	ticket := []byte("valid ticket")
+	var asked [][]byte
+	var mu sync.Mutex
+	admit := func(from types.PeerID, got []byte) bool {
+		mu.Lock()
+		asked = append(asked, got)
+		mu.Unlock()
+		return from == idA && string(got) == string(ticket)
+	}
+
+	p := newPair(t, func(_, b *Config) { b.Admit = admit })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := p.a.Connect(ctx, idB)
+	require.Error(t, err, "without a ticket the hidden node stays silent")
+	p.net.mu.Lock()
+	assert.Empty(t, p.net.dials, "nobody was dialed")
+	p.net.mu.Unlock()
+
+	p = newPair(t, func(a, b *Config) {
+		b.Admit = admit
+		a.Ticket = func(peer types.PeerID) []byte {
+			if peer == idB {
+				return ticket
+			}
+			return nil
+		}
+	})
+	require.NoError(t, p.a.Connect(ctx, idB))
+	mu.Lock()
+	assert.Equal(t, ticket, asked[len(asked)-1])
+	mu.Unlock()
+}

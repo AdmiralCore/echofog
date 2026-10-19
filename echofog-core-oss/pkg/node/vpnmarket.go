@@ -72,7 +72,9 @@ func (n *Node) initVPNMarket() {
 	})
 	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
 	n.VPNMarket = vpnmarket.NewService(pub, dir, ratings, st, swarmTunneler{n}, n.BWProbe, swarmConnector{n})
-	n.VPNMarket.Run(n.Ctx)
+	if !n.isolated() {
+		n.VPNMarket.Run(n.Ctx) // an isolated node looks for no exits: it connects to nobody
+	}
 }
 
 // askPeersForExits asks a few connected peers, at once, which exits they know. Relays and

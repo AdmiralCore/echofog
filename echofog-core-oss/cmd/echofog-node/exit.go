@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/access"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 )
 
@@ -39,10 +40,11 @@ func parsePricePerGB(s string) (int64, error) {
 	return int64(usd*1e6/1024 + 0.5), nil
 }
 
-// startSharing publishes this node as a public exit; with no manual speed it measures against connected peers first
-func startSharing(h *api.NodeApi, price int64, freeKB, uploadMbps int) {
+// startSharing makes this node an exit. A public one is published to the DHT, and with no manual
+// speed it measures against connected peers first; a hidden or isolated one advertises nothing.
+func startSharing(h *api.NodeApi, price int64, freeKB, uploadMbps int, gated bool) {
 	kbps := uploadMbps * 1000
-	if kbps <= 0 {
+	if kbps <= 0 && !gated {
 		if !waitForPeers(h, 3*time.Minute) {
 			fmt.Println("Exit sharing not started: no peers to measure upload speed against. Set --exit-upload-mbps (ECHOFOG_EXIT_UPLOAD_MBPS), e.g. 100.")
 			return
@@ -54,13 +56,19 @@ func startSharing(h *api.NodeApi, price int64, freeKB, uploadMbps int) {
 		}
 		kbps = measured
 		fmt.Printf("Measured upload speed: %.1f Mbit/s\n", float64(kbps)/1000)
-	} else if err := h.SetUploadCapacity(kbps); err != nil {
-		fmt.Printf("Exit sharing not started: %v\n", err)
-		return
+	} else if kbps > 0 {
+		if err := h.SetUploadCapacity(kbps); err != nil {
+			fmt.Printf("Exit sharing not started: %v\n", err)
+			return
+		}
 	}
 
 	if err := h.StartSharing(api.SharingConfig{PricePerMB: price, FreeTestKB: freeKB, UploadKbps: kbps}); err != nil {
 		fmt.Printf("Exit sharing not started: %v\n", err)
+		return
+	}
+	if gated {
+		fmt.Println("Exit is on for the people with the invitation link (echofog-node invite); it is not advertised.")
 		return
 	}
 	fmt.Println("Exit node published to the DHT; the advert is refreshed automatically.")
@@ -69,6 +77,14 @@ func startSharing(h *api.NodeApi, price int64, freeKB, uploadMbps int) {
 // startClientVPN waits for exits to be discovered and then opens the local SOCKS5 proxy through the chosen one
 func startClientVPN(h *api.NodeApi, choice, listen string) {
 	listen = localProxyAddr(listen)
+	if access.IsLink(choice) {
+		id, err := h.JoinInvite(choice)
+		if err != nil {
+			fmt.Printf("SOCKS5 proxy not started: the invitation link: %v\n", err)
+			return
+		}
+		choice = id
+	}
 	for attempt := 0; attempt < 20; attempt++ {
 		time.Sleep(10 * time.Second)
 		if choice == "auto" {

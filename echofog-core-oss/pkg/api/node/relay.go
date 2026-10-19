@@ -11,6 +11,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 )
@@ -267,14 +268,21 @@ func (n *NodeApi) GetRelayStatus() (RelayStatus, error) {
 	return st, nil
 }
 
-// StartVPNVia connects the proxy through one particular node: a relay link, "host:port/<peer id>"
-// or a bare peer ID (then looked up in the network). Use it for a friend's exit that lets you in
-// for free, or an exit that is not in the market list.
+// StartVPNVia connects the proxy through one particular node: an invitation link, a relay link,
+// "host:port/<peer id>" or a bare peer ID (then looked up in the network). Use it for a friend's
+// exit that lets you in for free, a hidden exit, or an exit that is not in the market list.
 func (n *NodeApi) StartVPNVia(target string) error {
 	if n.node == nil || n.node.Swarm == nil {
 		return errors.New("node is not running")
 	}
 	target = strings.TrimSpace(target)
+	if access.IsLink(target) {
+		id, err := n.JoinInvite(target)
+		if err != nil {
+			return err
+		}
+		return n.StartVPN(id)
+	}
 	if id, err := types.PeerIDFromString(strings.ToLower(target)); err == nil {
 		return n.StartVPN(id.String())
 	}

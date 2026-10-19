@@ -52,6 +52,9 @@ type persistedSettings struct {
 	BootstrapNodes []string `json:"bootstrapNodes,omitempty"`
 	// VPNNoAutoSwitch: the proxy stays on the chosen exit even when it stops working.
 	VPNNoAutoSwitch bool `json:"vpnNoAutoSwitch,omitempty"`
+	// AccessMode is who may reach this node from its next start: "public" or "hidden" (see
+	// config.AccessConfig). Empty: what the configuration says.
+	AccessMode string `json:"accessMode,omitempty"`
 }
 
 // loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the
@@ -70,6 +73,9 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 		return persistedSettings{SettingsDTO: settingsFromConfig(c)}, false
 	}
 	applySettings(c, p.SettingsDTO)
+	if p.AccessMode == config.AccessPublic || p.AccessMode == config.AccessHidden {
+		c.Access.Mode = p.AccessMode
+	}
 	if boot, err := normalizeBootstrap(p.BootstrapNodes); err == nil {
 		p.BootstrapNodes = boot
 	} else {

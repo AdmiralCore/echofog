@@ -292,6 +292,7 @@ func serveStatus(ctx context.Context, addr string, c *collector) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(c.snapshot())
 	})
+	registerInvite(mux, c)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if c.snapshot().PeerID == "" {
 			http.Error(w, "starting", http.StatusServiceUnavailable)

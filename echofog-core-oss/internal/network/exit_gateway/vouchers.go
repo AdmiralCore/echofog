@@ -489,7 +489,7 @@ func (e *ExitService) HandleVoucherFrom(ctx context.Context, st FramedStream, pa
 	switch {
 	case free:
 		reply.Error = "this exit is free for you"
-	case book == nil || !e.enabled.Load():
+	case book == nil || !e.serves(peer):
 	case json.Unmarshal(payload, &o) != nil:
 		reply.Error = "malformed offer"
 	default:

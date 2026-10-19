@@ -57,6 +57,10 @@ type options struct {
 	exitMbps   int
 	exitFree   string
 
+	accessMode   string
+	accessSecret string
+	publicAddrs  string
+
 	statusAddr string
 	statsEvery time.Duration
 	logLevel   string
@@ -98,13 +102,17 @@ func parseRunFlags(args []string) options {
 	f.IntVar(&o.relayMaxCircuits, "relay-max-circuits", int(envInt64("ECHOFOG_RELAY_MAX_CIRCUITS", 200)), "most relayed connections at once")
 
 	f.StringVar(&o.socks5, "socks5", getEnv("ECHOFOG_SOCKS5", "127.0.0.1:1080"), "local SOCKS5 proxy address used with --use-exit")
-	f.StringVar(&o.useExit, "use-exit", getEnv("ECHOFOG_USE_EXIT", ""), "route the local SOCKS5 proxy through an exit: 'auto' or a peer ID")
+	f.StringVar(&o.useExit, "use-exit", getEnv("ECHOFOG_USE_EXIT", ""), "route the local SOCKS5 proxy through an exit: 'auto', a peer ID or an invitation link (echofog://join?...)")
 
-	f.BoolVar(&o.exit, "exit", envBool("ECHOFOG_EXIT", false), "share this connection as a public exit node and publish it to the DHT")
+	f.BoolVar(&o.exit, "exit", envBool("ECHOFOG_EXIT", false), "share this connection as an exit node (a public node also publishes it to the DHT; a hidden or isolated one serves only the people with its link)")
 	f.StringVar(&o.exitPrice, "exit-price", getEnv("ECHOFOG_EXIT_PRICE", "0"), "exit price in dollars per GB, paid in TON or USDT, e.g. 0.05 (0 = free)")
 	f.IntVar(&o.exitFreeKB, "exit-free-kb", int(envInt64("ECHOFOG_EXIT_FREE_KB", 512)), "free test traffic per client per day in KB (0-1024, used when the exit is priced)")
 	f.IntVar(&o.exitMbps, "exit-upload-mbps", int(envInt64("ECHOFOG_EXIT_UPLOAD_MBPS", 0)), "upload speed to advertise in Mbit/s (0 = measure against peers, which needs peers connected first; set it on a server)")
 	f.StringVar(&o.exitFree, "exit-free-peers", getEnv("ECHOFOG_EXIT_FREE_PEERS", ""), "comma-separated peer IDs this exit serves for free, without quota or payment (e.g. your own devices); replaces the list saved in the data directory")
+
+	f.StringVar(&o.accessMode, "access", getEnv("ECHOFOG_ACCESS", "public"), "who may reach this node: public (listed, its exit advertised), hidden (uses the network as a client, unlisted, answers only people with its link) or isolated (joins no network at all, people with its link connect to it directly; for a server)")
+	f.StringVar(&o.accessSecret, "access-secret", getEnv("ECHOFOG_ACCESS_SECRET", ""), "access secret of a hidden or isolated node, 22 characters of base64url (default: generated on first start and kept in the data directory); the same secret on several nodes lets one link in everywhere")
+	f.StringVar(&o.publicAddrs, "public-addr", getEnv("ECHOFOG_PUBLIC_ADDR", ""), "comma-separated addresses put into the invitation link (host:port or a ws:// URL), when the observed one is not what people should dial")
 
 	f.StringVar(&o.statusAddr, "status-addr", getEnv("ECHOFOG_STATUS_ADDR", "127.0.0.1:7070"), "local address of the status endpoint used by \"status\" and \"wallet\" ('' disables it; keep it on loopback)")
 	every, _ := time.ParseDuration(getEnv("ECHOFOG_STATS_EVERY", "1m"))
@@ -176,6 +184,17 @@ func (o options) config() *config.AppConfig {
 	if o.relayMaxCircuits > 0 {
 		cfg.Relay.Server.MaxCircuits = o.relayMaxCircuits
 	}
+	switch o.accessMode {
+	case "", config.AccessPublic:
+	case config.AccessHidden, config.AccessIsolated:
+		cfg.Access.Mode = o.accessMode
+		// a hidden node is nobody's relay: strangers must not learn it exists
+		cfg.Relay.Server.Enabled = false
+	default:
+		fatal("--access: %q is not public, hidden or isolated", o.accessMode)
+	}
+	cfg.Access.Secret = o.accessSecret
+	cfg.Access.PublicAddrs = splitCSV(o.publicAddrs)
 	return cfg
 }
 
@@ -263,7 +282,7 @@ func runCmd(args []string) int {
 		}
 	}
 	if o.exit {
-		go startSharing(h, price, o.exitFreeKB, o.exitMbps)
+		go startSharing(h, price, o.exitFreeKB, o.exitMbps, echoNode.AccessMode() != config.AccessPublic)
 	}
 	if o.useExit != "" {
 		go startClientVPN(h, o.useExit, o.socks5)
@@ -307,7 +326,23 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 	if w, err := h.GetTonWallet(); err == nil {
 		fmt.Printf("TON wallet:    %s (%s)\n", w.Address, w.Network)
 	}
-	if o.signaling {
+	gated := n.AccessMode() != config.AccessPublic
+	switch n.AccessMode() {
+	case config.AccessHidden:
+		fmt.Println("Access:        hidden: not listed, answers only people with its link and those who joined")
+	case config.AccessIsolated:
+		fmt.Println("Access:        isolated: joins no network, people with its link connect to it directly")
+	}
+	if gated {
+		if link, err := n.InviteLink(); err == nil {
+			fmt.Printf("Invite link:   %s\n", link)
+		} else {
+			fmt.Println("Invite link:   echofog-node invite   (once the node knows its public address)")
+		}
+	}
+	if gated {
+		fmt.Println("Relay:         off (a hidden node relays for nobody)")
+	} else if o.signaling {
 		fmt.Println("Relay:         signaling only: DHT and hole punching help, no traffic is relayed")
 	} else if o.relay && o.relayPrivate {
 		fmt.Printf("Relay:         private, up to %d connections at once, serving %d allowed peer(s)\n", o.relayMaxCircuits, len(splitCSV(o.relayAllow)))

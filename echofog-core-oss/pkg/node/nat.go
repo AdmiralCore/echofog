@@ -49,7 +49,7 @@ func (n *Node) startNAT() {
 	if n.Cfg.Network.PortMapping {
 		go n.runPortMapping()
 	}
-	if n.Cfg.Network.HolePunch {
+	if n.Cfg.Network.HolePunch && !n.isolated() {
 		n.startHolePunch()
 	}
 }
@@ -150,6 +150,8 @@ func (n *Node) startHolePunch() {
 		OwnAddrs:   n.NAT.Candidates,
 		LocalAddrs: n.localAddrs,
 		Connected:  func(p types.PeerID) bool { return n.Swarm.GetPeer(p) != nil },
+		Ticket:     func(p types.PeerID) []byte { return n.Invites.Ticket(p, n.ID) },
+		Admit:      n.admitPunch,
 	})
 	n.HolePunch = svc
 	n.Swarm.RegisterFastFrameHandler(net_types.TypeHolePunch, func(payload []byte, from types.PeerID) error {

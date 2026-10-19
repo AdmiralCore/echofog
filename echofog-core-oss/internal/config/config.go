@@ -11,6 +11,42 @@ import (
 // 101: mutual peer authentication bound to the transport session.
 const CurrentProtocolVersion uint32 = 101
 
+// NetworkName names the network this build belongs to. It goes into invitation links, so the app
+// can tell a link of another network (a fork) from one it cannot read. A fork sets its own at
+// build time:
+//
+//	go build -ldflags "-X github.com/echofog/echofog-core/internal/config.NetworkName=myfork"
+var NetworkName = "echofog"
+
+// Values of AccessConfig.Mode.
+const (
+	// AccessPublic: the node is listed like any other and its exit, when shared, is advertised.
+	AccessPublic = "public"
+	// AccessHidden: the node uses the network as a client (finds peers, relays, hole punching) but
+	// is not listed, does not advertise its exit and answers only the peers it invited, its
+	// contacts and those who joined before.
+	AccessHidden = "hidden"
+	// AccessIsolated: the node does not take part in the network at all. It dials nobody and waits
+	// for the people it invited to connect to it directly. For a VPS with a public address.
+	AccessIsolated = "isolated"
+)
+
+// AccessConfig: who may reach this node.
+type AccessConfig struct {
+	// Mode is AccessPublic (default), AccessHidden or AccessIsolated.
+	Mode string `json:"mode"`
+	// Secret is the access secret of a hidden or isolated node, base64url (22 characters). Empty:
+	// one is generated on first start and kept in the profile. Set it to run several nodes with
+	// one link, or to keep it in a secret store.
+	Secret string `json:"secret,omitempty"`
+	// PublicAddrs are the addresses put into the invitation link ("host:port", or a ws:// URL),
+	// when the ones this node observes are not what people should dial (a domain, a port map).
+	PublicAddrs []string `json:"public_addrs,omitempty"`
+}
+
+// Gated reports whether the node keeps to the people it invited.
+func (a AccessConfig) Gated() bool { return a.Mode == AccessHidden || a.Mode == AccessIsolated }
+
 // Values of AntiDPIConfig.Obfs.
 const (
 	ObfsNode = "node"
@@ -193,6 +229,7 @@ type AppConfig struct {
 	Relay    RelayConfig    `json:"relay"`
 	Storage  StorageConfig  `json:"storage"`
 	Ton      TonConfig      `json:"ton"`
+	Access   AccessConfig   `json:"access"`
 }
 
 // DefaultTonNetwork is the TON network of the built-in wallet: "testnet" while the vault contract
@@ -211,6 +248,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg := &AppConfig{}
 
 	cfg.Ton.Network = DefaultTonNetwork
+	cfg.Access.Mode = AccessPublic
 
 	cfg.Network.ListenAddr = ":0"
 	cfg.Network.MaxConnections = 100

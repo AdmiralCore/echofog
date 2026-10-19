@@ -29,6 +29,13 @@ type NegotiatorConfig struct {
 	// AntiDDoS is shared by all handshakes of a node so that it sees the arrival rate; nil gives
 	// this negotiator a counter of its own, which stays idle.
 	AntiDDoS *AntiDDoS
+	// Admit, when set, decides an inbound handshake before this node says anything: a hidden node
+	// lets in only peers it knows or that prove its access secret (see package access). It gets
+	// the initiator's public key, the channel binding, its nonce and the proof it sent.
+	Admit func(initiatorPub, binding, nonce, proof []byte) bool
+	// AccessProof, when set, gives the proof to send when dialing: the secret of the node being
+	// dialed, bound to this connection, or nil when there is none.
+	AccessProof func(binding, nonce, myPub []byte) []byte
 }
 
 type SignerGetterKey interface {
@@ -71,6 +78,9 @@ const (
 var (
 	ErrBadHandshake    = errors.New("malformed handshake")
 	ErrOldPeerProtocol = errors.New("peer runs an outdated protocol version")
+	// ErrAccessDenied: this node is hidden and the peer neither proved the access secret nor is
+	// one it knows. The peer is told nothing.
+	ErrAccessDenied = errors.New("peer has no access to this node")
 )
 
 // transcript is what each side signs: the role, the transport's channel binding (TLS exporter,
@@ -136,6 +146,9 @@ func (n *Negotiator) runInitiatorFlow(binding []byte) (*HandshakeResult, error) 
 		Capabilities: uint32(n.config.MyCaps),
 		PubKey:       myPub,
 		ListenPort:   uint32(n.config.ListenPort),
+	}
+	if n.config.AccessProof != nil {
+		hello.AccessProof = n.config.AccessProof(binding, myNonce, myPub)
 	}
 	if err = n.sendProto(net_types.TypeHandshake, &internal_pb.MessageData{
 		Payload: &internal_pb.MessageData_HandshakeInit{HandshakeInit: hello},
@@ -221,6 +234,9 @@ func (n *Negotiator) runResponderFlow(binding []byte) (*HandshakeResult, error) 
 	}
 	if init.Version < MinProtocolVersion {
 		return nil, ErrOldPeerProtocol
+	}
+	if n.config.Admit != nil && !n.config.Admit(peerPub[:], binding, init.Nonce, init.AccessProof) {
+		return nil, ErrAccessDenied
 	}
 
 	difficulty := n.antiDDoS.GetDifficulty()

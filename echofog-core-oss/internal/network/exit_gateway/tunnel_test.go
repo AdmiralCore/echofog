@@ -173,3 +173,39 @@ func TestFreeQuotaThenPaymentRequired(t *testing.T) {
 	svc.SetPolicy(Policy{})
 	assert.Equal(t, int64(-1), svc.allowance(peer), "a free exit has no quota")
 }
+
+// A hidden exit serves only the peers it lets in; to anybody else it looks switched off, even
+// over a connection it opened itself.
+func TestHiddenExitServesOnlyAdmittedPeers(t *testing.T) {
+	target := echoServer(t)
+	svc := NewExitService()
+	svc.allowPrivate = true
+	svc.SetEnabled(true)
+	var friend, stranger types.PeerID
+	friend[0], stranger[0] = 1, 2
+	svc.SetAccess(func(id types.PeerID) bool { return id == friend })
+
+	openAs := func(peer types.PeerID) StreamOpener {
+		return func(ctx context.Context) (FramedStream, error) {
+			client, server := newPipePair()
+			go func() {
+				_, tgt, err := server.ReadFrame()
+				if err == nil {
+					svc.HandleTunnelFrom(context.Background(), server, tgt, peer)
+				}
+			}()
+			return client, nil
+		}
+	}
+	_, err := NewP2PDialer(openAs(stranger)).DialExitStreamConfirmed(context.Background(), target)
+	assert.ErrorIs(t, err, ErrExitDenied)
+	assert.False(t, svc.AccountOf(stranger).Enabled, "a stranger is told the exit is off")
+
+	conn, err := NewP2PDialer(openAs(friend)).DialExitStreamConfirmed(context.Background(), target)
+	require.NoError(t, err)
+	conn.Close()
+	assert.True(t, svc.AccountOf(friend).Enabled)
+
+	svc.SetAccess(nil)
+	assert.True(t, svc.AccountOf(stranger).Enabled, "a public exit serves everybody")
+}

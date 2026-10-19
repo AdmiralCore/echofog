@@ -97,7 +97,7 @@ func (e *ExitService) AccountOf(peer types.PeerID) AccountInfo {
 	}
 	e.policyMu.Unlock()
 
-	info := AccountInfo{Version: accountInfoVersion, Enabled: e.enabled.Load(), PricePerMB: pol.PricePerMB, FreeLeft: freeLeft}
+	info := AccountInfo{Version: accountInfoVersion, Enabled: e.serves(peer), PricePerMB: pol.PricePerMB, FreeLeft: freeLeft}
 	if l != nil && addr != "" && pol.PricePerMB > 0 {
 		info.PayAddress = addr
 		info.Tag = PayTag(peer, self)

@@ -76,6 +76,9 @@ message HandshakeInit {
   // the port the initiator accepts connections on (its advertised port behind a port map);
   // 0: it does not say, and its source address must not be dialed back
   uint32 listen_port = 6;
+  // proof that the initiator knows the access secret of a hidden node (HMAC bound to this
+  // connection); empty when it has none. A hidden node answers nobody without it.
+  bytes access_proof = 7;
 }
 
 message HandshakeResponse {

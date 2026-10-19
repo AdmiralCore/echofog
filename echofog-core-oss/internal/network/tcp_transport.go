@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -117,6 +118,14 @@ func (t *TCPTransport) ExpectPeer(addr string, id types.PeerID) { t.book.set(add
 func (t *TCPTransport) SetCaps(c handshake.Capability) {
 	if s, ok := t.auth.(CapsSetter); ok {
 		s.SetCaps(c)
+	}
+}
+
+// SetAccess sets the hidden-node gate and the invitation keyring (see DefaultPeerAuthenticator).
+func (t *TCPTransport) SetAccess(g *access.Gate, k *access.Keyring, hide bool) {
+	if s, ok := t.auth.(AccessSetter); ok {
+		s.SetAccess(g, k)
+		s.HideListenPort(hide)
 	}
 }
 
@@ -337,7 +346,11 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		_ = conn.Close()
 		return err
 	}
-	res, err := t.auth.AuthenticateOutbound(ctx, mc)
+	actx := ctx
+	if haveExpected {
+		actx = WithExpectedPeer(ctx, expected)
+	}
+	res, err := t.auth.AuthenticateOutbound(actx, mc)
 	if err != nil {
 		_ = mc.CloseWithError(ErrCodeAuthFailed, "auth failed")
 		return fmt.Errorf("outbound authentication failed: %w", err)

@@ -273,6 +273,9 @@ type ExitService struct {
 	policy    Policy
 	quotas    map[types.PeerID]*peerQuota
 	freePeers map[types.PeerID]bool // served without quota or payment, whatever the price
+	// access, when set, says who may use this exit at all: a hidden node serves only the peers it
+	// invited, even over the connections it opened itself to strangers (relays, DHT nodes)
+	access atomic.Pointer[func(types.PeerID) bool]
 
 	// payments (nil: this exit takes none; a priced exit then only serves its free quota)
 	ledger     *Ledger
@@ -337,7 +340,7 @@ func (e *ExitService) HandleTunnel(ctx context.Context, st FramedStream, target 
 func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, target []byte, peer types.PeerID) {
 	defer st.Close()
 
-	if !e.enabled.Load() {
+	if !e.serves(peer) {
 		e.refuse(peer, RefuseDisabled)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultDenied})
 		return
@@ -499,6 +502,27 @@ func (e *ExitService) SetPolicy(p Policy) {
 	e.policyMu.Lock()
 	e.policy = p
 	e.policyMu.Unlock()
+}
+
+// SetAccess limits the exit to the peers f admits; nil serves everybody.
+func (e *ExitService) SetAccess(f func(types.PeerID) bool) {
+	if f == nil {
+		e.access.Store(nil)
+		return
+	}
+	e.access.Store(&f)
+}
+
+// serves reports whether the exit is on and serves peer: a peer it does not admit is told the
+// exit is off, as if it were not an exit at all.
+func (e *ExitService) serves(peer types.PeerID) bool {
+	if !e.enabled.Load() {
+		return false
+	}
+	if f := e.access.Load(); f != nil {
+		return (*f)(peer)
+	}
+	return true
 }
 
 // SetFreePeers names the peers this exit serves for free: no quota and no payment, whatever the

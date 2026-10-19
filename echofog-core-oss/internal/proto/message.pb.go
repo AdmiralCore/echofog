@@ -807,7 +807,10 @@ type HandshakeInit struct {
 	PubKey       []byte                 `protobuf:"bytes,5,opt,name=pub_key,json=pubKey,proto3" json:"pub_key,omitempty"`
 	// the port the initiator accepts connections on (its advertised port behind a port map);
 	// 0: it does not say, and its source address must not be dialed back
-	ListenPort    uint32 `protobuf:"varint,6,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	ListenPort uint32 `protobuf:"varint,6,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	// proof that the initiator knows the access secret of a hidden node (HMAC bound to this
+	// connection); empty when it has none. A hidden node answers nobody without it.
+	AccessProof   []byte `protobuf:"bytes,7,opt,name=access_proof,json=accessProof,proto3" json:"access_proof,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -882,6 +885,13 @@ func (x *HandshakeInit) GetListenPort() uint32 {
 		return x.ListenPort
 	}
 	return 0
+}
+
+func (x *HandshakeInit) GetAccessProof() []byte {
+	if x != nil {
+		return x.AccessProof
+	}
+	return nil
 }
 
 type HandshakeResponse struct {
@@ -2455,7 +2465,7 @@ const file_internal_proto_message_proto_rawDesc = "" +
 	"\vTransaction\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\fR\aassetId\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x04R\x06amount\x12\x12\n" +
-	"\x04memo\x18\x03 \x01(\tR\x04memo\"\xbc\x01\n" +
+	"\x04memo\x18\x03 \x01(\tR\x04memo\"\xdf\x01\n" +
 	"\rHandshakeInit\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\fR\x05nonce\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\rR\aversion\x12\x1d\n" +
@@ -2464,7 +2474,8 @@ const file_internal_proto_message_proto_rawDesc = "" +
 	"\fcapabilities\x18\x04 \x01(\rR\fcapabilities\x12\x17\n" +
 	"\apub_key\x18\x05 \x01(\fR\x06pubKey\x12\x1f\n" +
 	"\vlisten_port\x18\x06 \x01(\rR\n" +
-	"listenPort\"\xa7\x01\n" +
+	"listenPort\x12!\n" +
+	"\faccess_proof\x18\a \x01(\fR\vaccessProof\"\xa7\x01\n" +
 	"\x11HandshakeResponse\x12\x17\n" +
 	"\apub_key\x18\x01 \x01(\fR\x06pubKey\x12\x1c\n" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x18\n" +

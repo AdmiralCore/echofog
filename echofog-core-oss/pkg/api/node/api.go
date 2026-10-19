@@ -41,6 +41,7 @@ type NodeApi struct {
 
 	bootstrapBuiltIn []string // bootstrap nodes of this release (guarded by settingsMu)
 	bootstrapCustom  []string // bootstrap nodes the user added (persisted; guarded by settingsMu)
+	nextAccessMode   string   // access mode saved for the next start (guarded by settingsMu)
 
 	Logger *slog.Logger
 }
@@ -50,7 +51,8 @@ func NewNodeApi(node *node.Node) *NodeApi {
 	saved, chosen := loadPersistedSettings(node.Cfg)
 	node.SetBootstrapNodes(bootstrapList(builtIn, saved.BootstrapNodes))
 	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
-		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes}
+		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
+		nextAccessMode: saved.AccessMode}
 }
 
 func (n *NodeApi) IsRegistered() bool {

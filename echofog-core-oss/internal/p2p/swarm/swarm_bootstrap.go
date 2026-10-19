@@ -61,9 +61,18 @@ func (s *Swarm) expectPeer(addr string, id types.PeerID) {
 	}
 }
 
+// ErrIsolated: this node is isolated and dials nobody.
+var ErrIsolated = errors.New("this node is isolated: it does not connect to other nodes")
+
+// SetNoDial stops (or allows again) every outbound connection: an isolated node only accepts.
+func (s *Swarm) SetNoDial(on bool) { s.noDial.Store(on) }
+
 // dialEarly dials addr on the transport its scheme selects: WebSocket for ws:// and wss://,
 // otherwise the QUIC/TCP transport.
 func (s *Swarm) dialEarly(ctx context.Context, addr string) error {
+	if s.noDial.Load() {
+		return ErrIsolated
+	}
 	if isWSAddr(addr) {
 		if s.wsTransport == nil {
 			return errors.New("no WebSocket transport to dial " + addr)

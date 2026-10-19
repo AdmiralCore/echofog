@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
 	"github.com/echofog/echofog-core/internal/p2p/vpnmarket"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -75,7 +76,8 @@ func (n *NodeApi) market() (*vpnmarket.Service, error) {
 	return n.node.VPNMarket, nil
 }
 
-// StartSharing turns this node into a public exit: it applies the offer, accepts tunnels and keeps an advert in the DHT
+// StartSharing turns this node into an exit: it applies the offer and accepts tunnels. A public
+// node also keeps an advert in the DHT; a hidden or isolated one serves only the people it invited.
 func (n *NodeApi) StartSharing(cfg SharingConfig) error {
 	m, err := n.market()
 	if err != nil {
@@ -84,7 +86,9 @@ func (n *NodeApi) StartSharing(cfg SharingConfig) error {
 	if cfg.UploadKbps <= 0 {
 		cfg.UploadKbps = n.uploadKbps
 	}
-	if cfg.UploadKbps <= 0 {
+	gated := n.node.AccessMode() != config.AccessPublic
+	if cfg.UploadKbps <= 0 && !gated {
+		// the advert claims a speed; a hidden exit has no advert
 		return errors.New("upload speed is unknown: measure it first or enter it manually")
 	}
 	if cfg.FreeTestKB == 0 && cfg.PricePerMB > 0 {
@@ -109,6 +113,9 @@ func (n *NodeApi) StartSharing(cfg SharingConfig) error {
 	exit.SetPolicy(exit_gateway.Policy{PricePerMB: cfg.PricePerMB, FreeBytes: int64(cfg.FreeTestKB) * 1024})
 	exit.SetEnabled(true)
 
+	if gated {
+		return nil // a hidden exit is not advertised: the people it invited use it by its link
+	}
 	err = m.Publisher.Start(n.node.Ctx, vpnmarket.ShareConfig{PricePerMB: cfg.PricePerMB, UploadKbps: cfg.UploadKbps, FreeTestKB: cfg.FreeTestKB})
 	if err != nil {
 		exit.SetEnabled(false)

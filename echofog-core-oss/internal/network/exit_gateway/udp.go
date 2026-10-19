@@ -277,7 +277,7 @@ func (e *ExitService) HandleUDPFrom(ctx context.Context, st FramedStream, peer t
 // a session ID, and its datagrams travel outside the stream when the link is QUIC.
 func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types.PeerID, hello []byte) {
 	defer st.Close()
-	if !e.enabled.Load() {
+	if !e.serves(peer) {
 		e.refuse(peer, RefuseDisabled)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultDenied})
 		return

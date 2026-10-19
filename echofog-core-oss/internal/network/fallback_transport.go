@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"log/slog"
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -40,6 +42,7 @@ type FallbackTransport struct {
 
 	mu      sync.Mutex
 	preferT map[string]time.Time // addr -> until when TCP goes first
+	noDial  atomic.Bool          // an isolated node: it only accepts connections
 
 	connChan  chan NewConnEvent
 	closeOnce sync.Once
@@ -115,6 +118,15 @@ func (f *FallbackTransport) SetCaps(c handshake.Capability) {
 	f.QUIC.SetCaps(c)
 	if f.TCP != nil {
 		f.TCP.SetCaps(c)
+	}
+}
+
+// SetAccess sets the hidden-node gate and the invitation keyring on both transports; hide stops
+// announcing where this node listens.
+func (f *FallbackTransport) SetAccess(g *access.Gate, k *access.Keyring, hide bool) {
+	f.QUIC.SetAccess(g, k, hide)
+	if f.TCP != nil {
+		f.TCP.SetAccess(g, k, hide)
 	}
 }
 
@@ -212,9 +224,18 @@ func (f *FallbackTransport) ExpectPeer(addr string, id types.PeerID) {
 	}
 }
 
+// ErrNoDial: this node is isolated and connects to nobody; the people it invited connect to it.
+var ErrNoDial = errors.New("this node is isolated: it does not connect to other nodes")
+
+// SetNoDial stops (or allows again) every outbound connection: an isolated node only accepts.
+func (f *FallbackTransport) SetNoDial(on bool) { f.noDial.Store(on) }
+
 // DialEarly connects to addr ("host:port", the peer's QUIC address; its TCP listener uses the
 // same port number).
 func (f *FallbackTransport) DialEarly(ctx context.Context, addr string) error {
+	if f.noDial.Load() {
+		return ErrNoDial
+	}
 	if f.TCP == nil || f.mode == ModeQUIC {
 		return f.QUIC.DialEarly(ctx, addr)
 	}

@@ -102,7 +102,11 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	}
 	q.applyCongestion(conn)
 
-	peerRes, err := q.authenticator.AuthenticateOutbound(ctx, WrapQUIC(conn))
+	actx := ctx
+	if haveExpected {
+		actx = WithExpectedPeer(ctx, expected)
+	}
+	peerRes, err := q.authenticator.AuthenticateOutbound(actx, WrapQUIC(conn))
 	if err != nil {
 		conn.CloseWithError(ErrCodeAuthFailed, "auth failed")
 		return fmt.Errorf("outbound authentication failed: %w", err)

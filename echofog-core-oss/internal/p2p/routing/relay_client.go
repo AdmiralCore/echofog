@@ -84,6 +84,7 @@ type RelayClient struct {
 	cfgMu       sync.RWMutex
 	cfg         config.RelayClientConfig
 	preferred   map[types.PeerID]bool // relays named in cfg.Relays: used even if they do not advertise
+	invited     map[types.PeerID]bool // relays named in invitation links (AddPreferred)
 	spentToday  atomic.Int64
 	relayPrices map[types.PeerID]int64
 	relayPings  map[types.PeerID]time.Duration
@@ -141,11 +142,25 @@ func (rc *RelayClient) SetPolicy(cfg config.RelayClientConfig) {
 		"max_ping", cfg.MaxAcceptablePingMs, "market_aware", cfg.MarketAwareSelection, "preferred", len(rc.preferred))
 }
 
-// IsPreferred reports whether a relay was named in the config (used even if it does not advertise).
+// IsPreferred reports whether a relay was named in the config or in an invitation link (used even
+// if it does not advertise).
 func (rc *RelayClient) IsPreferred(id types.PeerID) bool {
 	rc.cfgMu.RLock()
 	defer rc.cfgMu.RUnlock()
-	return rc.preferred[id]
+	return rc.preferred[id] || rc.invited[id]
+}
+
+// AddPreferred prefers a relay named in an invitation link: the hidden node it names is reachable
+// through it. It lasts until the node stops; a new policy keeps it.
+func (rc *RelayClient) AddPreferred(id types.PeerID) {
+	rc.cfgMu.Lock()
+	defer rc.cfgMu.Unlock()
+	if rc.invited == nil {
+		rc.invited = make(map[types.PeerID]bool)
+	}
+	if len(rc.invited) < 64 {
+		rc.invited[id] = true
+	}
 }
 
 func (rc *RelayClient) GetPolicy() config.RelayClientConfig {

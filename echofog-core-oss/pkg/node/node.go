@@ -26,6 +26,7 @@ import (
 	"github.com/echofog/echofog-core/internal/crypto"
 	"github.com/echofog/echofog-core/internal/dispatcher"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/internal/p2p/dht"
@@ -90,6 +91,9 @@ type Node struct {
 	exitLedgerMu sync.Mutex
 	BWProbe      *bwprobe.Prober
 	ExitService  *exit_gateway.ExitService
+	Access       *access.Gate    // who may reach this node (hidden and isolated modes)
+	Invites      *access.Keyring // the secrets of the hidden nodes this node was invited to
+	accessMode   atomic.Pointer[string]
 	VPNMarket    *vpnmarket.Service
 	Files        *filexfer.Service // files sent to and received from contacts and groups
 	groupMember  atomic.Pointer[func(group string, peer types.PeerID) bool]
@@ -373,6 +377,12 @@ func (n *Node) Start() (err error) {
 	if err := n.sealStorage(activeAccount); err != nil {
 		return fmt.Errorf("failed to open encrypted storage: %w", err)
 	}
+	if err := n.initAccess(); err != nil {
+		return err
+	}
+	if n.gated() {
+		n.Logger.Info("ACCESS: this node is "+n.AccessMode()+": only the people with its link, its contacts and those who joined before can reach it", "joined", len(n.Access.Joined()))
+	}
 
 	n.ID, _ = n.identity.GetPeerID()
 	privBytes, pubBytes, _ := activeAccount.GetIdentityKey()
@@ -518,6 +528,8 @@ func (n *Node) Start() (err error) {
 		return fmt.Errorf("failed to initialize X3DH stack: %w", err)
 	}
 
+	n.applyAccess()
+
 	n.Discovery = discovery.NewDiscoveryService(n.Storage, gsp, n.Swarm, n.PubKey)
 
 	n.crypto = crypto.NewCryptoEngine(n.ID, activeAccount, x3dhInit.GetEngine(), x3dhInit.GetSessionManager(), n.Swarm, n.Logger)
@@ -552,7 +564,9 @@ func (n *Node) Start() (err error) {
 	n.RelayClient.SetPolicy(n.Cfg.Relay.Client)
 	// route messages through a configured private relay even though it does not advertise itself
 	n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
-	n.dialConfiguredRelays()
+	if !n.isolated() {
+		n.dialConfiguredRelays()
+	}
 	if err := n.startFiles(); err != nil {
 		return fmt.Errorf("file transfers: %w", err)
 	}
@@ -560,7 +574,9 @@ func (n *Node) Start() (err error) {
 	// Publish node's own PreKeyBundle locally and to DHT for asynchronous E2EE initiation, and keep
 	// it there: the first publication happens before anybody is connected, so it is repeated
 	n.Swarm.SetBundleFetcher(dhtEngine.Get)
-	go n.publishBundleLoop(dhtEngine)
+	if !n.isolated() {
+		go n.publishBundleLoop(dhtEngine)
+	}
 
 	n.Services = services.NewServiceManager(n.Logger.With("component", "services"))
 
@@ -595,6 +611,9 @@ func (n *Node) Start() (err error) {
 	}
 
 	boot := n.BootstrapNodes()
+	if n.isolated() {
+		boot = nil // an isolated node joins no network: the people it invited come to it
+	}
 	n.Swarm.SetBootstrapNodes(boot)
 	if len(boot) > 0 {
 		n.Swarm.Bootstrap(boot)
@@ -610,6 +629,9 @@ func (n *Node) Start() (err error) {
 	// a node short of peers (it started offline, its network was cut, its peers left) dials the
 	// bootstrap nodes, the peers it knows and the DHT's, backing off while that does not help
 	_ = n.Scheduler.Schedule("swarm:maintain", 5*time.Second, func(ctx context.Context) error {
+		if n.isolated() {
+			return nil
+		}
 		if dialed := n.Swarm.MaintainPeers(); dialed > 0 {
 			n.Logger.Info("Swarm: short of peers, dialing bootstrap nodes and known peers", "peers", len(n.Swarm.GetAllPeers()), "dialing", dialed)
 		}
@@ -624,10 +646,12 @@ func (n *Node) Start() (err error) {
 	}
 
 	// peers connected only to signaling nodes have nobody to relay their traffic: find a relay
-	_ = n.Scheduler.Schedule("swarm:relay_peer", 20*time.Second, func(ctx context.Context) error {
-		n.keepRelayPeer()
-		return nil
-	})
+	if !n.isolated() {
+		_ = n.Scheduler.Schedule("swarm:relay_peer", 20*time.Second, func(ctx context.Context) error {
+			n.keepRelayPeer()
+			return nil
+		})
+	}
 
 	// Periodic Swarm inactive sessions prune (prevents zombie session heap leaks)
 	if n.Swarm != nil {
@@ -776,6 +800,9 @@ func (n *Node) GetMessenger() *messenger.MessageBroker {
 // announcedCaps is what the node tells peers it offers: always the DHT; a relay, or only help
 // with hole punching (signaling), or neither.
 func (n *Node) announcedCaps() handshake.Capability {
+	if n.gated() {
+		return handshake.CapNone // a hidden node is nobody's relay or DHT server: it is not listed
+	}
 	caps := handshake.CapDHTServer
 	switch rs := n.Cfg.Relay.Server; {
 	case rs.Enabled && rs.SignalingOnly:

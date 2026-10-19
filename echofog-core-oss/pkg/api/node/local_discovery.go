@@ -4,11 +4,15 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/dto"
 )
 
 func (n *NodeApi) StartLocalDiscovery(myAlias string) {
+	if n.node.AccessMode() != config.AccessPublic {
+		return // a hidden node does not announce itself, not even on the local network
+	}
 	err := n.node.MDNS.Start(n.node.Ctx, myAlias)
 	if err != nil {
 		n.node.Logger.Error("Failed to start mDNS", "err", err)

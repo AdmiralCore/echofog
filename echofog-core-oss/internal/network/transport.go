@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/apernet/quic-go"
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/dpi"
 	"github.com/echofog/echofog-core/internal/network/handshake"
@@ -336,6 +337,15 @@ func (q *QuicTransport) ConnChan() <-chan NewConnEvent {
 func (q *QuicTransport) SetCaps(c handshake.Capability) {
 	if s, ok := q.authenticator.(CapsSetter); ok {
 		s.SetCaps(c)
+	}
+}
+
+// SetAccess sets the hidden-node gate and the invitation keyring (see DefaultPeerAuthenticator);
+// hide stops announcing the listen port.
+func (q *QuicTransport) SetAccess(g *access.Gate, k *access.Keyring, hide bool) {
+	if s, ok := q.authenticator.(AccessSetter); ok {
+		s.SetAccess(g, k)
+		s.HideListenPort(hide)
 	}
 }
 

@@ -75,6 +75,11 @@ type Config struct {
 	AllowPrivate bool
 	// ConnectWait overrides how long the initiator waits for the answer to CONNECT (default 8 s).
 	ConnectWait time.Duration
+	// Admit, when set, decides whether to answer a CONNECT from a peer, given the access ticket it
+	// sent: a hidden node answers (and so gives out its addresses) only to the peers it invited.
+	Admit func(from types.PeerID, ticket []byte) bool
+	// Ticket, when set, gives the access ticket to send with a CONNECT to peer (nil: none).
+	Ticket func(peer types.PeerID) []byte
 }
 
 type message struct {
@@ -83,6 +88,8 @@ type message struct {
 	Addr  []string `json:"a,omitempty"`
 	Local []string `json:"l,omitempty"` // LAN addresses, for a peer behind the same NAT
 	Both  bool     `json:"b,omitempty"` // sync: both sides dial
+	// Ticket proves an invitation to a hidden node (connect only; see package access).
+	Ticket []byte `json:"k,omitempty"`
 }
 
 type sessKey struct {
@@ -274,7 +281,11 @@ func (s *Service) attempt(ctx context.Context, peer types.PeerID, both bool) err
 	}()
 
 	start := time.Now()
-	if err := s.send(ctx, peer, message{T: "connect", N: key.n, Addr: addrStrings(own), Local: s.ownLocal()}); err != nil {
+	req := message{T: "connect", N: key.n, Addr: addrStrings(own), Local: s.ownLocal()}
+	if s.cfg.Ticket != nil {
+		req.Ticket = s.cfg.Ticket(peer)
+	}
+	if err := s.send(ctx, peer, req); err != nil {
 		return fmt.Errorf("send CONNECT: %w", err)
 	}
 
@@ -352,6 +363,9 @@ func (s *Service) onAnswer(from types.PeerID, m message) {
 }
 
 func (s *Service) onConnect(from types.PeerID, m message) {
+	if s.cfg.Admit != nil && !s.cfg.Admit(from, m.Ticket) {
+		return
+	}
 	// a new request: rate-limited per peer and in total
 	s.mu.Lock()
 	now := time.Now()
