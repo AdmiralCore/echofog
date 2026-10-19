@@ -145,6 +145,8 @@ export function PayForTraffic(arg1:string,arg2:string,arg3:string,arg4:string):P
 
 export function PickAndSendFile(arg1:string):Promise<dto.FileTransferDTO>;
 
+export function PickAndSendGroupFile(arg1:string):Promise<node.GroupMessageDTO>;
+
 export function ProbeExitNode(arg1:string):Promise<node.ProbeReport>;
 
 export function Recover(arg1:string,arg2:string,arg3:string):Promise<void>;
@@ -168,6 +170,8 @@ export function SaveTextFile(arg1:string,arg2:string):Promise<string>;
 export function SelectProfile(arg1:string):Promise<void>;
 
 export function SendFile(arg1:string,arg2:string):Promise<dto.FileTransferDTO>;
+
+export function SendGroupFile(arg1:string,arg2:string):Promise<node.GroupMessageDTO>;
 
 export function SendGroupMessage(arg1:string,arg2:string):Promise<node.GroupMessageDTO>;
 

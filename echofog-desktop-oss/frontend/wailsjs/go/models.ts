@@ -75,6 +75,10 @@ export namespace dto {
 	    done: number;
 	    rate: number;
 	    stalled: boolean;
+	    group?: string;
+	    members?: number;
+	    delivered?: number;
+	    fetching?: number;
 	    created: number;
 	    updated: number;
 	
@@ -96,6 +100,10 @@ export namespace dto {
 	        this.done = source["done"];
 	        this.rate = source["rate"];
 	        this.stalled = source["stalled"];
+	        this.group = source["group"];
+	        this.members = source["members"];
+	        this.delivered = source["delivered"];
+	        this.fetching = source["fetching"];
 	        this.created = source["created"];
 	        this.updated = source["updated"];
 	    }
@@ -555,6 +563,24 @@ export namespace node {
 	        this.myRole = source["myRole"];
 	    }
 	}
+	export class GroupFileDTO {
+	    id: string;
+	    name: string;
+	    size: number;
+	    mime?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupFileDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.mime = source["mime"];
+	    }
+	}
 	export class GroupMemberDTO {
 	    peerId: string;
 	    role: string;
@@ -583,6 +609,7 @@ export namespace node {
 	    delivered: number;
 	    queued: number;
 	    failed: number;
+	    file?: GroupFileDTO;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupMessageDTO(source);
@@ -599,7 +626,26 @@ export namespace node {
 	        this.delivered = source["delivered"];
 	        this.queued = source["queued"];
 	        this.failed = source["failed"];
+	        this.file = this.convertValues(source["file"], GroupFileDTO);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ProbeReport {
 	    ok: boolean;

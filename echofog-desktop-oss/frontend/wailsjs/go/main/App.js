@@ -282,6 +282,10 @@ export function PickAndSendFile(arg1) {
   return window['go']['main']['App']['PickAndSendFile'](arg1);
 }
 
+export function PickAndSendGroupFile(arg1) {
+  return window['go']['main']['App']['PickAndSendGroupFile'](arg1);
+}
+
 export function ProbeExitNode(arg1) {
   return window['go']['main']['App']['ProbeExitNode'](arg1);
 }
@@ -328,6 +332,10 @@ export function SelectProfile(arg1) {
 
 export function SendFile(arg1, arg2) {
   return window['go']['main']['App']['SendFile'](arg1, arg2);
+}
+
+export function SendGroupFile(arg1, arg2) {
+  return window['go']['main']['App']['SendGroupFile'](arg1, arg2);
 }
 
 export function SendGroupMessage(arg1, arg2) {
