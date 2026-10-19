@@ -247,6 +247,9 @@ type VoucherEarningsDTO struct {
 	OwedTON   string `json:"owedTon"`   // signed to us, not cashed yet
 	CashedTON string `json:"cashedTon"` // already paid into our wallet
 	QuoteNano int64  `json:"quoteNano"` // current price in nanoton per MB (0: not taking vouchers)
+	// ClaimProblem: why what is owed is not being cashed ("" when fine), e.g. an empty wallet
+	ClaimProblem string `json:"claimProblem,omitempty"`
+	WalletAddr   string `json:"walletAddr,omitempty"` // where to send TON for the fee
 }
 
 // SupportDTO is the state of the voluntary project share of traffic payments.

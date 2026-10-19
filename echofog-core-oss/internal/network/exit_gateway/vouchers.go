@@ -158,6 +158,39 @@ type VoucherBook struct {
 	nanoPerMB int64
 	now       func() time.Time
 	checking  map[string]bool // vaults being read from the chain right now
+
+	// claimProblem says why the last claim round could not cash what is owed ("" when fine);
+	// the operator sees it in the stats, the app on its sharing card
+	claimProblem string
+	lastWarned   time.Time
+}
+
+// claimWarnEvery spaces out the log line about vouchers that cannot be cashed: the claim is
+// retried every few minutes, the operator only needs reminding.
+const claimWarnEvery = time.Hour
+
+// ClaimProblem is why owed vouchers are not being cashed, "" when nothing stands in the way.
+func (b *VoucherBook) ClaimProblem() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.claimProblem
+}
+
+// noteClaimResult records the outcome of a claim round and says whether to warn now.
+func (b *VoucherBook) noteClaimResult(problem string) (warn bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.claimProblem = problem
+	if problem == "" {
+		b.lastWarned = time.Time{}
+		return false
+	}
+	now := b.now()
+	if now.Sub(b.lastWarned) < claimWarnEvery {
+		return false
+	}
+	b.lastWarned = now
+	return true
 }
 
 // NewVoucherBook loads the book from path ("" keeps it in memory). node is the exit's payout
@@ -658,9 +691,9 @@ func (b *VoucherBook) RunClaims(ctx context.Context, p ClaimPolicy) {
 			return
 		case <-t.C:
 		}
-		if n, err := b.ClaimOnce(ctx, p); err != nil {
-			slog.Warn("could not cash vouchers, will retry", "err", err)
-		} else if n > 0 {
+		n, err := b.ClaimOnce(ctx, p)
+		b.reportClaim(err)
+		if n > 0 {
 			slog.Debug("voucher claims sent", "count", n)
 		}
 	}
@@ -756,4 +789,29 @@ func (b *VoucherBook) flushLocked() error {
 	}
 	b.dirty = false
 	return nil
+}
+
+// reportClaim turns a claim round's error into the operator's warning. An empty wallet is the
+// usual one: clients have paid (the vouchers are signed), but cashing them is a transaction the
+// node's own wallet pays the fee for.
+func (b *VoucherBook) reportClaim(err error) {
+	problem := ""
+	switch {
+	case err == nil:
+	case errors.Is(err, tonwallet.ErrInsufficientFunds):
+		problem = "the node wallet has no TON to pay the fee for cashing vouchers"
+	default:
+		problem = "cashing vouchers failed: " + err.Error()
+	}
+	if !b.noteClaimResult(problem) {
+		return
+	}
+	owed := tonwallet.FormatTON(b.Owed())
+	if errors.Is(err, tonwallet.ErrInsufficientFunds) {
+		slog.Warn("Vouchers worth "+owed+" TON are waiting to be cashed, but the node wallet has no TON for the fee. "+
+			"Send about 0.1 TON to "+b.node.String()+"; they are cashed within minutes after that.",
+			"owed_ton", owed, "fee_per_voucher_ton", tonwallet.FormatTON(tonwallet.VaultClaimGas))
+		return
+	}
+	slog.Warn("could not cash vouchers, will retry", "owed_ton", owed, "err", err)
 }

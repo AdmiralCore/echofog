@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"path/filepath"
@@ -539,4 +540,23 @@ func TestVoucherReplayFromAnotherPeerDoesNotBind(t *testing.T) {
 	// the owner reconnecting under a new peer ID binds again with its next voucher
 	require.True(t, b.Accept(ctx, "victim-2", u.offer(t, tonwallet.MainnetGlobalID, exitPayout, 129*testNanoPerMB)).OK)
 	assert.Positive(t, b.Available("victim-2"))
+}
+
+// An empty node wallet cannot pay the fee for cashing vouchers: the book says so for the stats
+// and the app, warns once an hour rather than every round, and clears it once cashing works.
+func TestClaimProblemIsReportedAndCleared(t *testing.T) {
+	chain := newFakeChain()
+	b := newTestBook(chain, "")
+	clock := time.Unix(1_800_000_000, 0)
+	b.now = func() time.Time { return clock }
+
+	b.reportClaim(fmt.Errorf("%w: collecting vouchers needs gas", tonwallet.ErrInsufficientFunds))
+	assert.Contains(t, b.ClaimProblem(), "no TON")
+	assert.False(t, b.noteClaimResult(b.ClaimProblem()), "a second failure within the hour is not logged again")
+
+	clock = clock.Add(claimWarnEvery + time.Second)
+	assert.True(t, b.noteClaimResult(b.ClaimProblem()), "but it is after an hour")
+
+	b.reportClaim(nil)
+	assert.Empty(t, b.ClaimProblem(), "cashing worked: nothing to report")
 }

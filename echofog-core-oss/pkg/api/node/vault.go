@@ -270,6 +270,12 @@ func (n *NodeApi) GetVoucherEarnings() dto.VoucherEarningsDTO {
 		out.OwedTON = tonwallet.FormatTON(b.Owed())
 		out.CashedTON = tonwallet.FormatTON(b.Cashed())
 		out.QuoteNano = b.Quote()
+		out.ClaimProblem = b.ClaimProblem()
+		if out.ClaimProblem != "" {
+			if w, err := n.ton(); err == nil {
+				out.WalletAddr = w.Address()
+			}
+		}
 	}
 	return out
 }

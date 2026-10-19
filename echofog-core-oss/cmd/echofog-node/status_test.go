@@ -73,3 +73,15 @@ func TestStatsLineShowsRefusedStreams(t *testing.T) {
 		t.Fatalf("an exit that is off must say so: %q", off)
 	}
 }
+
+func TestStatsLineShowsVouchersAndWhyTheyWait(t *testing.T) {
+	line := statsLine(Status{Exit: &ExitStatus{Enabled: true, OwedTON: "0.74", CashedTON: "0",
+		ClaimProblem: "the node wallet has no TON to pay the fee for cashing vouchers"}})
+	if !strings.Contains(line, "vouchers: 0.74 TON owed, 0 TON cashed (the node wallet has no TON") {
+		t.Fatalf("vouchers missing from %q", line)
+	}
+	quiet := statsLine(Status{Exit: &ExitStatus{Enabled: true, OwedTON: "0", CashedTON: "0"}})
+	if strings.Contains(quiet, "vouchers") {
+		t.Fatalf("no deposit payments: no voucher part, got %q", quiet)
+	}
+}

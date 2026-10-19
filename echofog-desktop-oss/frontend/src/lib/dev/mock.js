@@ -597,7 +597,7 @@ const impl = {
     Object.assign(vaultMock, { closing: false, withdrawAt: 0, depositTon: '0' });
     r('e5…mock');
   }, 700)),
-  GetVoucherEarnings: () => ({ owedTon: '0.0412', cashedTon: '1.2875', quoteNano: 9800000 }),
+  GetVoucherEarnings: () => ({ owedTon: '0.7412', cashedTon: '1.2875', quoteNano: 9800000, claimProblem: 'the node wallet has no TON to pay the fee for cashing vouchers', walletAddr: 'UQBmockWalletAddressForGas0000000000000000000000' }),
   GetTonTopUpLink: (a) => 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ' + (a ? `?amount=${Math.round(Number(a) * 1e9)}` : ''),
 };
 

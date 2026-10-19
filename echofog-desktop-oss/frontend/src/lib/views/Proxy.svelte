@@ -522,6 +522,15 @@
             <div class="stat"><span class="eyebrow">{$t('proxy.share.owed')}</span><span class="num">{amount(vouchers.owedTon, $lang)} TON</span></div>
             <div class="stat"><span class="eyebrow">{$t('proxy.share.collected')}</span><span class="num ok">{amount(vouchers.cashedTon, $lang)} TON</span></div>
           </div>
+          {#if vouchers.claimProblem}
+            <div class="small exit-warn" role="alert">
+              <Icon name="coin" size={14} />
+              <span>{$t('proxy.share.noGas', { owed: amount(vouchers.owedTon, $lang) })}
+                {#if vouchers.walletAddr}<span class="block mono">{vouchers.walletAddr}
+                  <button class="icon tiny" title={$t('common.copy')} on:click={() => copy(vouchers.walletAddr)}><Icon name="copy" size={12} /></button></span>{/if}
+              </span>
+            </div>
+          {/if}
           <p class="small muted">{$t('proxy.share.depositNote')}</p>
         </div>
       {/if}

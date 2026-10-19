@@ -43,6 +43,10 @@ type ExitStatus struct {
 	Carried   uint64            `json:"carriedBytes"`
 	EarnedUSD string            `json:"earnedUsd"` // credited from clients since the exit started, TON valued on arrival
 	LastError string            `json:"lastError,omitempty"`
+	// vouchers from clients' deposits: signed to us and waiting, and already cashed (TON)
+	OwedTON      string `json:"owedTon,omitempty"`
+	CashedTON    string `json:"cashedTon,omitempty"`
+	ClaimProblem string `json:"claimProblem,omitempty"`
 }
 
 type WalletStatus struct {
@@ -110,6 +114,8 @@ func (c *collector) refresh(ctx context.Context) {
 			Enabled: sh.Enabled, PricePerGB: c.o.exitPrice, Sessions: sh.Accepted, Refused: sh.Refused, RefusedBy: sh.RefusedBy,
 			Carried: sh.Bytes, EarnedUSD: sh.EarnedUSDT, LastError: sh.LastError,
 		}
+		v := c.h.GetVoucherEarnings()
+		st.Exit.OwedTON, st.Exit.CashedTON, st.Exit.ClaimProblem = v.OwedTON, v.CashedTON, v.ClaimProblem
 	}
 	if w, err := c.h.GetTonWallet(); err == nil {
 		ws := &WalletStatus{Address: w.Address, Network: w.Network}
@@ -187,6 +193,12 @@ func statsLine(s Status) string {
 			state, e.Sessions, e.Refused, refusedDetail(e.RefusedBy), human(e.Carried), orZero(e.EarnedUSD))
 		if e.LastError != "" {
 			fmt.Fprintf(&b, " (%s)", e.LastError)
+		}
+		if vouchersShown(e) {
+			fmt.Fprintf(&b, ", vouchers: %s TON owed, %s TON cashed", orZero(e.OwedTON), orZero(e.CashedTON))
+			if e.ClaimProblem != "" {
+				fmt.Fprintf(&b, " (%s)", e.ClaimProblem)
+			}
 		}
 	}
 	if w := s.Wallet; w != nil && w.TON != "" {
@@ -374,7 +386,13 @@ func printStatus(s Status) {
 		fmt.Printf("  Exit:         %s, $%s per GB\n", state, e.PricePerGB)
 		fmt.Printf("    sessions      %d accepted, %d refused%s\n", e.Sessions, e.Refused, refusedDetail(e.RefusedBy))
 		fmt.Printf("    traffic       %s carried\n", human(e.Carried))
-		fmt.Printf("    earned        $%s\n", orZero(e.EarnedUSD))
+		fmt.Printf("    earned        $%s (direct payments)\n", orZero(e.EarnedUSD))
+		if vouchersShown(e) {
+			fmt.Printf("    vouchers      %s TON owed by clients' deposits, %s TON cashed\n", orZero(e.OwedTON), orZero(e.CashedTON))
+			if e.ClaimProblem != "" {
+				fmt.Printf("    ! not cashed  %s\n", e.ClaimProblem)
+			}
+		}
 		if e.LastError != "" {
 			fmt.Printf("    last error    %s\n", e.LastError)
 		}
@@ -406,3 +424,10 @@ func printWallet(s Status) {
 		fmt.Printf("    note          balance not refreshed: %s\n", w.Error)
 	}
 }
+
+// vouchersShown: deposit payments exist or wait, so they belong in the report.
+func vouchersShown(e *ExitStatus) bool {
+	return nonZero(e.OwedTON) || nonZero(e.CashedTON) || e.ClaimProblem != ""
+}
+
+func nonZero(v string) bool { return v != "" && strings.Trim(v, "0.") != "" }
