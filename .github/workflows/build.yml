@@ -92,7 +92,7 @@ jobs:
           node -e 'const fs=require("fs"),j=JSON.parse(fs.readFileSync("wails.json"));j.info.productVersion=process.argv[1];fs.writeFileSync("wails.json",JSON.stringify(j,null,2))' "$VERSION"
           tags=""
           [ "$RUNNER_OS" = "Linux" ] && tags="-tags webkit2_41"
-          wails build -clean -trimpath -ldflags "-s -w" $tags
+          wails build -clean -trimpath -ldflags "-s -w -X main.version=$VERSION" $tags
           test -s frontend/dist/index.html
           os="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"
           cd build/bin

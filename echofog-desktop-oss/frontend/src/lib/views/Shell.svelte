@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { App } from '../api.js';
+  import { App, openURL } from '../api.js';
   import { profile } from '../stores/session.js';
   import { chats } from '../stores/chats.js';
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
@@ -28,6 +28,23 @@
     { id: 'settings', label: 'shell.settings', icon: 'settings' },
   ];
   const ITEM = 44; // item height + gap, for the sliding highlight
+
+  // a newer release on GitHub: one quiet banner, until the user closes it for that version
+  const UPDATE_SEEN = 'echofog.updateDismissed';
+  const TELEGRAM = 'https://t.me/EchoFogDev';
+  let update = null;
+  async function checkUpdate() {
+    try {
+      const u = await App.CheckForUpdate();
+      let seen = '';
+      try { seen = localStorage.getItem(UPDATE_SEEN) || ''; } catch (_) { /* private mode */ }
+      if (u?.newer && u.latest !== seen) update = u;
+    } catch (_) { /* offline or GitHub unreachable: nothing to say */ }
+  }
+  function dismissUpdate() {
+    try { localStorage.setItem(UPDATE_SEEN, update.latest); } catch (_) { /* private mode */ }
+    update = null;
+  }
 
   let net = { peerCount: 0, status: 'OFFLINE' };
   let poll;
@@ -68,6 +85,7 @@
   let offSounds = () => {};
 
   onMount(() => {
+    checkUpdate();
     offSounds = bindSounds();
     initCallEvents();
     loadPeerDirectory();
@@ -133,8 +151,21 @@
   </nav>
 
   <main>
+    <div class="banners">
+    {#if update}
+      <div class="banner update" role="status" transition:fly={{ y: -16, duration: 300 }}>
+        <span class="off-ic up-ic"><Icon name="download" size={17} /></span>
+        <div class="grow off-text">
+          <b>{$t('update.title', { v: update.latest })}</b>
+          <span>{$t('update.text', { current: update.current })}</span>
+        </div>
+        <button class="primary small" on:click={() => openURL(update.url)}>{$t('update.download')}</button>
+        <button class="small tg" on:click={() => openURL(TELEGRAM)}>{$t('update.telegram')}</button>
+        <button class="icon off-x" title={$t('boot.dismiss')} aria-label={$t('boot.dismiss')} on:click={dismissUpdate}><Icon name="close" size={15} /></button>
+      </div>
+    {/if}
     {#if showOffline}
-      <div class="offline" role="status" transition:fly={{ y: -16, duration: 300 }}>
+      <div class="banner offline" role="status" transition:fly={{ y: -16, duration: 300 }}>
         <span class="off-ic"><Icon name="globe" size={17} /></span>
         <div class="grow off-text">
           <b>{$t('boot.offlineTitle')}</b>
@@ -144,6 +175,7 @@
         <button class="icon off-x" title={$t('boot.dismiss')} aria-label={$t('boot.dismiss')} on:click={() => (bannerHidden = true)}><Icon name="close" size={15} /></button>
       </div>
     {/if}
+    </div>
     <!-- Chats stays mounted so a running call keeps its video elements -->
     <div class="fill" hidden={$view !== 'chats'}><Chats /></div>
     {#key $view}
@@ -258,12 +290,18 @@
   nav.bottom .item.active .ic { transform: translateY(-1px) scale(1.1); }
   nav.bottom .item.active { color: var(--accent); }
 
-  .offline {
+  .banners {
     position: absolute; z-index: 20; top: 12px; left: 50%; transform: translateX(-50%);
-    width: min(640px, calc(100% - 24px)); display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px;
+    width: min(680px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+  }
+  .banner {
+    pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px;
     border-radius: 16px; background: var(--glass); backdrop-filter: blur(18px) saturate(1.4);
     border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); box-shadow: var(--shadow);
   }
+  .banner.update { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .up-ic { background: var(--accent-soft) !important; color: var(--accent) !important; }
+  .tg { background: var(--raised); color: var(--text); border: 1px solid var(--line-soft); }
   .off-ic { width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center; background: var(--warn-soft); color: var(--warn); }
   .off-text { display: flex; flex-direction: column; font-size: 12.5px; color: var(--muted); line-height: 1.35; }
   .off-text b { color: var(--text); font-size: 13.5px; }

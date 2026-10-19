@@ -350,6 +350,8 @@ function leave() {
 // --- App bindings -----------------------------------------------------------------------------------
 const impl = {
   GetProfiles: () => ['demo'],
+  AppVersion: () => '0.1.0',
+  CheckForUpdate: () => ({ current: '0.1.0', latest: '0.1.1', url: 'https://github.com/AdmiralCore/EchoFog/releases/tag/v0.1.1', newer: true }),
   SelectProfile: () => null,
   // ?mock&fresh walks the first-run path: create, recovery phrase, access choice
   IsRegistered: () => !new URLSearchParams(location.search).has('fresh'),

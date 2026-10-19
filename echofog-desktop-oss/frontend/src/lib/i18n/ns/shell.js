@@ -1,6 +1,10 @@
 // App frame: navigation, theme toggle, status line, startup screen.
 export default {
   en: {
+    'update.title': 'EchoFog v{v} is available',
+    'update.text': 'You have v{current}. Download the new version from GitHub or follow updates in Telegram.',
+    'update.download': 'Download from GitHub',
+    'update.telegram': 'Open @EchoFogDev',
     'shell.starting': 'Starting…',
     'shell.sections': 'Sections',
     'shell.chats': 'Chats',
@@ -22,6 +26,10 @@ export default {
     'shell.somethingWrong': 'Something went wrong',
   },
   ru: {
+    'update.title': 'Доступна новая версия v{v}',
+    'update.text': 'У вас v{current}. Скачайте новую версию с GitHub или следите за новостями в Telegram.',
+    'update.download': 'Скачать с GitHub',
+    'update.telegram': 'Открыть @EchoFogDev',
     'shell.starting': 'Запуск…',
     'shell.sections': 'Разделы',
     'shell.chats': 'Чаты',
