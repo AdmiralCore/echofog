@@ -41,7 +41,8 @@ func (s State) Final() bool {
 // Record is what is kept of a transfer.
 type Record struct {
 	ID      string    `json:"id"`
-	Peer    string    `json:"peer"`
+	Peer    string    `json:"peer"`            // the other side; empty for a file offered to a group
+	Group   string    `json:"group,omitempty"` // set when the file was offered in a group chat
 	Dir     Direction `json:"dir"`
 	Name    string    `json:"name"`
 	Size    int64     `json:"size"`
@@ -53,8 +54,11 @@ type Record struct {
 	ModTime int64     `json:"modTime,omitempty"` // outgoing: the source's modification time when offered
 	State   State     `json:"state"`
 	Error   string    `json:"error,omitempty"`
-	Created int64     `json:"created"`
-	Updated int64     `json:"updated"`
+	// outgoing to a group: the members it was offered to, and those who got all of it
+	Members   []string `json:"members,omitempty"`
+	Delivered []string `json:"delivered,omitempty"`
+	Created   int64    `json:"created"`
+	Updated   int64    `json:"updated"`
 }
 
 func saveRecord(st storage.Storage, r *Record) error {

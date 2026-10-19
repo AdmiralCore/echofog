@@ -41,6 +41,19 @@ type groupWire struct {
 	CallID  string                       `json:"c,omitempty"`
 	Coord   string                       `json:"co,omitempty"`
 	History []wireHistory                `json:"h,omitempty"`
+	File    *wireFile                    `json:"f,omitempty"` // msg: a file posted in the group
+}
+
+// wireFile is a file offer in a group message: one transfer ID and key for all members, each of
+// whom pulls the file from the sender (see filexfer.PrepareGroup). The key stays in the transfer
+// record and never in the stored message.
+type wireFile struct {
+	ID   string `json:"i"`
+	Name string `json:"n"`
+	Size int64  `json:"s"`
+	Mime string `json:"m,omitempty"`
+	Root string `json:"r"`
+	Key  string `json:"k"`
 }
 
 // wireHistory is one old message that an admin hands to a newcomer.
@@ -278,11 +291,25 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 		}
 		f.seq++
 		msg := GroupMessageDTO{ID: w.ID, GroupID: w.Group, Sender: origin.String(), Text: w.Text, Timestamp: ts}
+		var offer func()
+		if w.File != nil {
+			wf := *w.File
+			if f.onFile == nil || wf.ID == "" || wf.Root == "" || wf.Key == "" || wf.Size < 0 {
+				return nil
+			}
+			msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime}
+			group := w.Group
+			offer = func() { f.onFile(origin, group, wf) }
+		}
 		raw, _ := json.Marshal(msg)
 		if f.store.Set(msgKey(w.Group, ts, f.seq), raw) != nil {
 			return nil
 		}
 		ev := GroupEvent{Kind: "message", GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), MessageID: w.ID}
+		if offer != nil {
+			// the transfer is known before the message shows, so it can be accepted at once
+			return []func(){offer, func() { f.emitEvent(ev) }}
+		}
 		return []func(){func() { f.emitEvent(ev) }}
 
 	case "join":

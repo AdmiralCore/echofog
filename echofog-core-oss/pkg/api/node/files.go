@@ -18,6 +18,7 @@ func fileDTO(i filexfer.Info) dto.FileTransferDTO {
 	return dto.FileTransferDTO{
 		ID: i.ID, Peer: i.Peer, Dir: string(i.Dir), Name: i.Name, Size: i.Size, Mime: i.Mime, State: string(i.State),
 		Error: i.Error, Path: i.Path, Done: i.Done, Rate: i.Rate, Stalled: i.Stalled, Created: i.Created, Updated: i.Updated,
+		Group: i.Group, Members: i.Members, Delivered: i.Delivered, Fetching: i.Fetching,
 	}
 }
 

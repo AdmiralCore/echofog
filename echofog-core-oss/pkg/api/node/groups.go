@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call"
+	"github.com/echofog/echofog-core/internal/services/filexfer"
 	"github.com/echofog/echofog-core/internal/services/groups"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -48,15 +49,24 @@ type GroupMemberDTO struct {
 }
 
 type GroupMessageDTO struct {
-	ID        string `json:"id"`
-	GroupID   string `json:"groupId"`
-	Sender    string `json:"sender"`
-	Text      string `json:"text"`
-	Timestamp int64  `json:"timestamp"`
-	IsMine    bool   `json:"isMine"`
-	Delivered int    `json:"delivered"` // members whose node took it at once
-	Queued    int    `json:"queued"`    // members who are offline: it is sent when they are back
-	Failed    int    `json:"failed"`
+	ID        string        `json:"id"`
+	GroupID   string        `json:"groupId"`
+	Sender    string        `json:"sender"`
+	Text      string        `json:"text"`
+	Timestamp int64         `json:"timestamp"`
+	IsMine    bool          `json:"isMine"`
+	Delivered int           `json:"delivered"` // members whose node took it at once
+	Queued    int           `json:"queued"`    // members who are offline: it is sent when they are back
+	Failed    int           `json:"failed"`
+	File      *GroupFileDTO `json:"file,omitempty"` // a file posted in the group (Text is its name)
+}
+
+// GroupFileDTO is the file of a group message; its transfer (GetFileTransfer with ID) has the state.
+type GroupFileDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Mime string `json:"mime,omitempty"`
 }
 
 type groupsHolder struct {
@@ -90,7 +100,12 @@ type groupsFacade struct {
 	async   bool // handle() sends its follow-ups from a goroutine (set for the real node)
 	nudgeMu sync.Mutex
 	connect func(types.PeerID) // asks the node to connect to a member (keys are needed to write to them)
-	nudged  map[types.PeerID]time.Time
+
+	// files: an offer that came in a group message, and the offer for a file we post
+	onFile      func(origin types.PeerID, groupID string, wf wireFile)
+	prepareFile func(groupID string, members []types.PeerID, path string) (filexfer.Offer, error)
+	withdraw    func(id string)
+	nudged      map[types.PeerID]time.Time
 }
 
 func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.IdentityPublicKey, sign groups.SignFunc,
@@ -335,34 +350,89 @@ func msgKey(groupID string, ts int64, seq uint32) []byte {
 	return []byte(groupMsgPrefix + groupID + "/" + hex.EncodeToString(b[:]))
 }
 
+// mayPost checks that we may write in a group.
+func (f *groupsFacade) mayPost(groupID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.load(); err != nil {
+		return err
+	}
+	if _, err := f.mgr.GetGroup(groupID); err != nil {
+		return err
+	}
+	role, err := f.mgr.GetMemberRole(groupID, f.selfID)
+	if err != nil {
+		return errors.New("you are not a member of this group")
+	}
+	if role.Permissions&groups.PermSendMessages == 0 {
+		return errors.New("you cannot post in this group")
+	}
+	return nil
+}
+
+// isMember tells whether peer belongs to the group now (file transfers ask it).
+func (f *groupsFacade) isMember(groupID string, peer types.PeerID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.load() != nil {
+		return false
+	}
+	_, err := f.mgr.GetMemberRole(groupID, peer)
+	return err == nil
+}
+
 func (f *groupsFacade) SendMessage(groupID, text string) (GroupMessageDTO, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || len(text) > maxGroupText {
 		return GroupMessageDTO{}, errors.New("message must be 1-8192 bytes")
 	}
-	f.mu.Lock()
-	if err := f.load(); err != nil {
-		f.mu.Unlock()
+	if err := f.mayPost(groupID); err != nil {
 		return GroupMessageDTO{}, err
 	}
-	if _, err := f.mgr.GetGroup(groupID); err != nil {
-		f.mu.Unlock()
-		return GroupMessageDTO{}, err
-	}
-	role, err := f.mgr.GetMemberRole(groupID, f.selfID)
-	if err != nil {
-		f.mu.Unlock()
-		return GroupMessageDTO{}, errors.New("you are not a member of this group")
-	}
-	if role.Permissions&groups.PermSendMessages == 0 {
-		f.mu.Unlock()
-		return GroupMessageDTO{}, errors.New("you cannot post in this group")
-	}
-	f.mu.Unlock()
+	return f.post(groupID, text, nil)
+}
 
+// SendFile posts a file in a group: one message carries the offer to every member, and each
+// member who accepts pulls the file from this node.
+func (f *groupsFacade) SendFile(groupID, path string) (GroupMessageDTO, error) {
+	if f.prepareFile == nil {
+		return GroupMessageDTO{}, errors.New("file transfer is not available")
+	}
+	if err := f.mayPost(groupID); err != nil {
+		return GroupMessageDTO{}, err
+	}
+	f.mu.Lock()
+	list, err := f.mgr.ListMembers(groupID)
+	f.mu.Unlock()
+	if err != nil {
+		return GroupMessageDTO{}, err
+	}
+	members := make([]types.PeerID, 0, len(list))
+	for _, m := range list {
+		members = append(members, m.PeerID)
+	}
+	offer, err := f.prepareFile(groupID, members, path)
+	if err != nil {
+		return GroupMessageDTO{}, err
+	}
+	msg, err := f.post(groupID, offer.Name, &wireFile{ID: offer.ID, Name: offer.Name, Size: offer.Size, Mime: offer.Mime, Root: offer.Root, Key: offer.Key})
+	if err != nil || (msg.Failed > 0 && msg.Delivered+msg.Queued == 0) {
+		if f.withdraw != nil {
+			f.withdraw(offer.ID)
+		}
+		if err == nil {
+			err = errors.New("the file could not be offered to anyone in the group")
+		}
+		return GroupMessageDTO{}, err
+	}
+	return msg, nil
+}
+
+// post sends a message (with a file offer, when file is set) to the group and keeps it.
+func (f *groupsFacade) post(groupID, text string, file *wireFile) (GroupMessageDTO, error) {
 	now := time.Now().UnixMilli()
 	id := newGroupMessageID()
-	delivered, queued, failed := f.broadcast(groupID, groupWire{Kind: "msg", Group: groupID, ID: id, Text: text, TS: now})
+	delivered, queued, failed := f.broadcast(groupID, groupWire{Kind: "msg", Group: groupID, ID: id, Text: text, TS: now, File: file})
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -370,6 +440,9 @@ func (f *groupsFacade) SendMessage(groupID, text string) (GroupMessageDTO, error
 	msg := GroupMessageDTO{
 		ID: id, GroupID: groupID, Sender: f.selfID.String(),
 		Text: text, Timestamp: now, IsMine: true, Delivered: delivered, Queued: queued, Failed: failed,
+	}
+	if file != nil {
+		msg.File = &GroupFileDTO{ID: file.ID, Name: file.Name, Size: file.Size, Mime: file.Mime}
 	}
 	raw, _ := json.Marshal(msg)
 	if err := f.store.Set(msgKey(groupID, now, f.seq), raw); err != nil {
@@ -432,6 +505,17 @@ func (n *NodeApi) groupsFacade() (*groupsFacade, error) {
 		defer cancel()
 		_ = n.node.EnsureConnected(ctx, id)
 	}
+	if files := n.node.Files; files != nil {
+		f.prepareFile = files.PrepareGroup
+		f.withdraw = files.Withdraw
+		f.onFile = func(origin types.PeerID, groupID string, wf wireFile) {
+			o := filexfer.Offer{ID: wf.ID, Group: groupID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime, Root: wf.Root, Key: wf.Key}
+			if _, err := files.OnOffer(origin, o); err != nil {
+				n.node.Logger.Warn("FileXfer: ignoring a malformed group file offer", "group", groupID, "err", err)
+			}
+		}
+		n.node.SetGroupMemberCheck(f.isMember)
+	}
 	n.node.Messenger.SetInterceptor(f.handle)
 	n.groupsH.f = f
 	return f, nil
@@ -491,6 +575,16 @@ func (n *NodeApi) SendGroupMessage(groupID, text string) (GroupMessageDTO, error
 		return GroupMessageDTO{}, err
 	}
 	return f.SendMessage(groupID, text)
+}
+
+// SendGroupFile posts a file in a group. Every member gets the offer; each who accepts fetches it
+// from this node (the transfer's Delivered counts them).
+func (n *NodeApi) SendGroupFile(groupID, path string) (GroupMessageDTO, error) {
+	f, err := n.groupsFacade()
+	if err != nil {
+		return GroupMessageDTO{}, err
+	}
+	return f.SendFile(groupID, path)
 }
 
 func (n *NodeApi) GetGroupMessages(groupID string, limit int) ([]GroupMessageDTO, error) {

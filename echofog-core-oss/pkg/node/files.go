@@ -45,6 +45,11 @@ func (n *Node) startFiles() error {
 	n.Files = filexfer.New(filexfer.Options{
 		Store:       n.Storage,
 		Transport:   fileLink{n},
+		Self:        n.GetSelfPeerID(),
+		IsMember: func(group string, peer types.PeerID) bool {
+			f := n.groupMember.Load()
+			return f != nil && (*f)(group, peer)
+		},
 		DownloadDir: n.DownloadDir,
 		Connect:     n.EnsureConnected,
 		Logger:      n.Logger,
@@ -107,6 +112,12 @@ func (n *Node) SendFile(peer types.PeerID, path string) (filexfer.Info, error) {
 		return filexfer.Info{}, err
 	}
 	return n.Files.Get(offer.ID)
+}
+
+// SetGroupMemberCheck tells file transfers who belongs to a group now: a member who joined after
+// a file was posted may still fetch it. Group membership lives above the node (pkg/api/node).
+func (n *Node) SetGroupMemberCheck(f func(group string, peer types.PeerID) bool) {
+	n.groupMember.Store(&f)
 }
 
 // OfferFromMetadata reads a file offer out of a message's metadata.

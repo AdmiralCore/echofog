@@ -47,6 +47,23 @@ time. The sender sends a few frames at once and adapts that number to how fast t
 - **Cancel / decline.** Either side can stop a transfer; the partial file is deleted and the other
   side is told.
 
+## In a group
+
+A file posted in a group goes out as one group message (end-to-end encrypted to each member, like
+every group message) with one transfer ID and one key for everybody. Each member who accepts pulls
+the file from the sender with its own transfer, window and progress; the sender serves them all
+from one open file, each from its own queue, and counts who has all of it (shown on its card as
+"downloaded by 2 of 4"). The offer stays open after that for members who accept later, until the
+sender stops sharing, which tells every member.
+
+Since every member holds the key, a member names itself (its peer ID) inside each sealed frame it
+sends to the sender, so the sender knows whom to answer. The sender only answers members: those
+the file was offered to, or whom the group counts as members now (someone who joined later). A
+relay still learns nothing: the name is inside the sealed body. A member could claim to be another
+member, which only makes the sender send that member chunks it did not ask for; it gains nothing
+it could not already download. History handed to a newcomer carries a file message as its name
+only, without the offer.
+
 ## On the receiver's disk
 
 Files land in `Downloads/EchoFog` (or `storage.download_dir`). The name the sender gave is reduced

@@ -293,12 +293,17 @@ type FileTransferDTO struct {
 	Mime    string `json:"mime,omitempty"`
 	State   string `json:"state"` // offered, active, done, declined, cancelled, failed
 	Error   string `json:"error,omitempty"`
-	Path    string `json:"path,omitempty"` // the file on this computer (the source, or the received file once done)
-	Done    int64  `json:"done"`           // bytes received and checked, or sent
-	Rate    int64  `json:"rate"`           // bytes per second, lately
-	Stalled bool   `json:"stalled"`        // nothing moves: the peer is offline or cannot be reached
-	Created int64  `json:"created"`        // unix milliseconds
-	Updated int64  `json:"updated"`
+	Path    string `json:"path,omitempty"`  // the file on this computer (the source, or the received file once done)
+	Done    int64  `json:"done"`            // bytes received and checked, or sent
+	Rate    int64  `json:"rate"`            // bytes per second, lately
+	Stalled bool   `json:"stalled"`         // nothing moves: the peer is offline or cannot be reached
+	Group   string `json:"group,omitempty"` // the group chat the file was posted in
+	// a file we posted in a group: members it was offered to, who got all of it, who fetch it now
+	Members   int   `json:"members,omitempty"`
+	Delivered int   `json:"delivered,omitempty"`
+	Fetching  int   `json:"fetching,omitempty"`
+	Created   int64 `json:"created"` // unix milliseconds
+	Updated   int64 `json:"updated"`
 }
 
 // SavedMessageDTO is a message the user bookmarked: a copy, so it stays even when the chat goes.

@@ -155,7 +155,7 @@ func newSide(t *testing.T, net *fakeNet, id types.PeerID, tune func(*Options)) *
 
 func (s *side) start(t *testing.T, net *fakeNet, tune func(*Options)) {
 	opt := Options{
-		Store: s.store, Transport: fakeLink{net}, DownloadDir: func() string { return s.dir },
+		Store: s.store, Transport: fakeLink{net}, Self: s.id, DownloadDir: func() string { return s.dir },
 		InitialWindow: 8, MaxWindow: 64, MinRTO: 300 * time.Millisecond, StallAfter: 500 * time.Millisecond,
 		Emit: func(i Info) { s.mu.Lock(); s.seen = append(s.seen, i); s.mu.Unlock() },
 	}

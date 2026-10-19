@@ -152,6 +152,40 @@ const groupMsgs = [
   [SELF, 'Great. Let us do a quick voice sync at 18:00', now - 30 * min],
   [CAROL, 'Works for me', now - 29 * min],
 ].map(([from, text, ts], i) => ({ id: 'g' + i, sender: from, text, timestamp: ts, isMine: from === SELF, delivered: 4, failed: 0 }));
+// files posted in the group: one offer to every member, each pulls it from the sender
+const GROUP = 'grp_launch';
+const groupFx = {
+  deck: { id: 'gfx01deck', peer: ALICE, group: GROUP, dir: 'in', name: 'launch-deck-v3.pdf', size: 18 * MB + 512, state: 'offered', path: '', done: 0, rate: 0, stalled: false, created: now - 35 * min },
+  logs: { id: 'gfx02logs', peer: BOB, group: GROUP, dir: 'in', name: 'relay-logs-oct.tar.gz', size: 74 * MB, state: 'done', path: 'C:/Users/demo/Downloads/EchoFog/relay-logs-oct.tar.gz', done: 74 * MB, rate: 0, stalled: false, created: now - 39 * min },
+  build: { id: 'gfx03build', peer: '', group: GROUP, dir: 'out', name: 'EchoFog-rc2-setup.exe', size: 96 * MB, state: 'active', path: 'C:/Users/demo/Builds/EchoFog-rc2-setup.exe', done: 41 * MB, rate: 7 * MB, stalled: false, members: 4, delivered: 2, fetching: 1, created: now - 25 * min },
+};
+Object.values(groupFx).forEach((t) => { fx[t.id] = t; });
+const groupFileMsg = (t, from, ts) => ({ id: 'gm-' + t.id, sender: from, text: t.name, timestamp: ts, isMine: from === SELF, delivered: 4, failed: 0, file: { id: t.id, name: t.name, size: t.size } });
+groupMsgs.push(groupFileMsg(groupFx.deck, ALICE, now - 35 * min), groupFileMsg(groupFx.logs, BOB, now - 39 * min), groupFileMsg(groupFx.build, SELF, now - 25 * min));
+groupMsgs.sort((a, b) => a.timestamp - b.timestamp);
+// the member downloading our build finishes; nobody else is fetching then
+function runGroupShare(t) {
+  const step = () => {
+    if (t.state !== 'active' || !t.fetching) return;
+    t.done = Math.min(t.size, t.done + t.rate / 4);
+    if (t.done >= t.size) Object.assign(t, { delivered: t.delivered + 1, fetching: 0, rate: 0 });
+    pushFx(t);
+    if (t.fetching) setTimeout(step, 250);
+  };
+  setTimeout(step, 250);
+}
+setTimeout(() => runGroupShare(groupFx.build), 2000);
+function postGroupFile(groupId, path) {
+  const name = String(path).split(/[\/]/).pop();
+  const id = 'gfx' + Date.now();
+  const t = { id, peer: '', group: groupId, dir: 'out', name, size: Math.round((5 + Math.random() * 80) * MB), state: 'offered', path, done: 0, rate: 0, stalled: false, members: groupMembers.length - 1, delivered: 0, fetching: 0, created: Date.now() };
+  const m = groupFileMsg(t, SELF, Date.now());
+  groupMsgs.push(m);
+  pushFx(t);
+  // two members start downloading after a moment
+  setTimeout(() => { Object.assign(t, { state: 'active', fetching: 2, rate: 6 * MB }); pushFx(t); runGroupShare(t); }, 1500);
+  return { ...m };
+}
 
 const qualities = [
   ['360p30', '360p 30 fps', 640, 360, 30, 800], ['720p30', '720p 30 fps', 1280, 720, 30, 2500], ['720p60', '720p 60 fps', 1280, 720, 60, 4000],
@@ -416,6 +450,8 @@ const impl = {
   ListFileTransfers: (peer) => Object.values(fx).filter((t) => !peer || t.peer === peer).map((t) => ({ ...t })),
   PickAndSendFile: (pub) => new Promise((r) => setTimeout(() => r(offerFile(pub, 'C:/Users/demo/Pictures/holiday-photos.7z')), 300)),
   SendFile: (pub, path) => offerFile(pub, path),
+  PickAndSendGroupFile: (g) => new Promise((r) => setTimeout(() => r(postGroupFile(g, 'C:/Users/demo/Documents/roadmap-q4.xlsx')), 300)),
+  SendGroupFile: (g, path) => postGroupFile(g, path),
   AcceptFile: (id) => {
     const t = fx[id];
     if (!t || t.state !== 'offered') throw new Error('the transfer is ' + (t ? t.state : 'gone'));

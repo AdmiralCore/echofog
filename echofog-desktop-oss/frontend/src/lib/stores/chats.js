@@ -5,7 +5,7 @@ import { play } from '../sounds.js';
 import { callState } from '../services/call.service.js';
 import { ringIncoming, incomingCall, declineIncomingCall, convergeGroupCall, peerInfo } from './call.store.js';
 import { tr } from '../i18n/index.js';
-import { clearTransfers } from './files.js';
+import { clearTransfers, onGroupPost } from './files.js';
 import { saved } from './saved.js';
 
 const inCall = () => get(callState).inCall;
@@ -82,6 +82,7 @@ function groupMessage(m) {
     ts: m.timestamp,
     failed: m.failed > 0 && m.delivered === 0 && m.queued === 0,
     pending: m.queued > 0,
+    file: m.file ? { fid: m.file.id, name: m.file.name, size: m.file.size, mime: m.file.mime || '' } : null,
   };
 }
 
@@ -279,6 +280,15 @@ export async function send(text) {
     return false;
   }
 }
+
+// a file posted in a group shows like a message we sent
+onGroupPost(async (conv, m) => {
+  if (m.queued > 0) chatNote.set(tr('chats.note.queued', { n: m.queued }));
+  if (m.failed > 0) chatError.set(tr('chats.err.failed', { n: m.failed }));
+  play('send', { quiet: inCall() });
+  if (get(activeId) === conv.id) await reload();
+  else patch(conv.id, (c) => ({ ...c, last: preview(groupMessage(m)), ts: m.timestamp }));
+});
 
 /** Adds a contact from a pasted/scanned link or key; name overrides the one in the link. */
 export async function addContact(key, name) {

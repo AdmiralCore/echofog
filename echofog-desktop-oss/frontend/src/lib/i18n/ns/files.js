@@ -23,6 +23,11 @@ export default {
     'files.st.declined': 'declined',
     'files.st.cancelled': 'cancelled',
     'files.st.failed': 'failed',
+    'files.st.shared': 'offered to the group',
+    'files.delivered': 'Downloaded by {n} of {of}',
+    'files.fetching': { one: '{n} downloading now', other: '{n} downloading now' },
+    'files.stopSharing': 'Stop sharing',
+    'files.stopSharingHint': 'Members who have not downloaded it yet will no longer be able to',
 
     'saved.title': 'Saved messages',
     'saved.short': 'Saved',
@@ -63,6 +68,11 @@ export default {
     'files.st.declined': 'отклонён',
     'files.st.cancelled': 'отменён',
     'files.st.failed': 'ошибка',
+    'files.st.shared': 'предложен группе',
+    'files.delivered': 'Скачали {n} из {of}',
+    'files.fetching': { one: 'сейчас качает {n}', few: 'сейчас качают {n}', many: 'сейчас качают {n}', other: 'сейчас качают {n}' },
+    'files.stopSharing': 'Перестать раздавать',
+    'files.stopSharingHint': 'Те, кто ещё не скачал файл, больше не смогут это сделать',
 
     'saved.title': 'Избранное',
     'saved.short': 'Избранное',

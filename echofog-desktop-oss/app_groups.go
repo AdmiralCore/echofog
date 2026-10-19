@@ -6,6 +6,7 @@ import (
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/dto"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var errNodeNotStarted = errors.New("node not started")
@@ -200,4 +201,34 @@ func (a *App) emitIncomingCall(ctx context.Context, msg *dto.MessageDTO) {
 		"from":        msg.SenderID,
 		"timestamp":   msg.Timestamp,
 	})
+}
+
+// PickAndSendGroupFile lets the user choose a file and posts it in the group: every member gets
+// the offer and fetches the file from this computer. Nil without error: the dialog was closed.
+func (a *App) PickAndSendGroupFile(groupID string) (*api.GroupMessageDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	a.mu.RLock()
+	ctx := a.ctx
+	a.mu.RUnlock()
+	path, err := runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{Title: "Send a file"})
+	if err != nil || path == "" {
+		return nil, err
+	}
+	m, err := n.SendGroupFile(groupID, path)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// SendGroupFile posts a file (dropped on the window) in the group.
+func (a *App) SendGroupFile(groupID string, path string) (api.GroupMessageDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupMessageDTO{}, errNodeNotStarted
+	}
+	return n.SendGroupFile(groupID, path)
 }

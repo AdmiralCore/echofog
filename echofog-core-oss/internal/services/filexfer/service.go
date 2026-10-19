@@ -11,6 +11,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,18 +34,20 @@ type Transport interface {
 
 // Offer is what the receiver learns about a file, inside an end-to-end encrypted message.
 type Offer struct {
-	ID   string
-	Name string
-	Size int64
-	Mime string
-	Root string // hex SHA-256 Merkle root of the chunks
-	Key  string // hex 32-byte secret the transfer frames are sealed with
+	ID    string
+	Group string // set for a file posted in a group chat: every member gets the same offer
+	Name  string
+	Size  int64
+	Mime  string
+	Root  string // hex SHA-256 Merkle root of the chunks
+	Key   string // hex 32-byte secret the transfer frames are sealed with
 }
 
 // Info is a transfer as the user sees it.
 type Info struct {
 	ID      string    `json:"id"`
-	Peer    string    `json:"peer"`
+	Peer    string    `json:"peer"`            // the other side (empty for a file we posted in a group)
+	Group   string    `json:"group,omitempty"` // the group chat the file was posted in
 	Dir     Direction `json:"dir"`
 	Name    string    `json:"name"`
 	Size    int64     `json:"size"`
@@ -55,14 +58,23 @@ type Info struct {
 	Done    int64     `json:"done"`    // bytes received and checked (incoming) or sent (outgoing)
 	Rate    int64     `json:"rate"`    // bytes per second, lately
 	Stalled bool      `json:"stalled"` // nothing moves: the peer is offline or cannot be reached
-	Created int64     `json:"created"`
-	Updated int64     `json:"updated"`
+	// a file we posted in a group: members it was offered to, got all of it, are fetching it now
+	Members   int   `json:"members,omitempty"`
+	Delivered int   `json:"delivered,omitempty"`
+	Fetching  int   `json:"fetching,omitempty"`
+	Created   int64 `json:"created"`
+	Updated   int64 `json:"updated"`
 }
 
 // Options set up a Service.
 type Options struct {
 	Store     storage.Storage
 	Transport Transport
+	// Self is this node: a group member names itself in what it sends to the sender.
+	Self types.PeerID
+	// IsMember, when set, tells whether a peer is (now) a member of a group: besides the members
+	// a group offer went to, the sender serves those it counts.
+	IsMember func(group string, peer types.PeerID) bool
 	// DownloadDir is where accepted files go; it is asked at every accept, so a changed setting applies.
 	DownloadDir func() string
 	MaxSize     int64
@@ -141,7 +153,7 @@ func (s *Service) Start() error {
 		}
 		switch r.Dir {
 		case Outgoing:
-			o := &outgoing{rec: r, id: id, peer: peer, k: k, root: root, queue: make(chan int, 4096)}
+			o := newOutgoing(r, id, peer, k, root)
 			s.mu.Lock()
 			s.out[id] = o
 			s.mu.Unlock()
@@ -190,8 +202,10 @@ func parseRecord(r *Record) (id [idLen]byte, peer types.PeerID, k keys, root Has
 		return id, peer, k, root, errors.New("bad transfer id")
 	}
 	copy(id[:], raw)
-	if peer, err = types.PeerIDFromString(r.Peer); err != nil {
-		return id, peer, k, root, err
+	if r.Peer != "" || r.Group == "" || r.Dir != Outgoing {
+		if peer, err = types.PeerIDFromString(r.Peer); err != nil {
+			return id, peer, k, root, err
+		}
 	}
 	rb, err := hex.DecodeString(r.Root)
 	if err != nil || len(rb) != len(root) {
@@ -213,6 +227,20 @@ func nowMs() int64 { return time.Now().UnixMilli() }
 // Prepare reads and hashes a file to send to peer and returns the offer to put in a message. The
 // file is served from where it is, as long as it does not change.
 func (s *Service) Prepare(peer types.PeerID, path string) (Offer, error) {
+	return s.prepare(peer, "", nil, path)
+}
+
+// PrepareGroup is Prepare for a file posted in a group: one offer (one key) goes to all members,
+// and each member who accepts pulls the file with its own progress. Wants count only from members:
+// those the offer went to, or anyone Options.IsMember still counts as one.
+func (s *Service) PrepareGroup(group string, members []types.PeerID, path string) (Offer, error) {
+	if group == "" {
+		return Offer{}, errors.New("no group")
+	}
+	return s.prepare(types.PeerID{}, group, members, path)
+}
+
+func (s *Service) prepare(peer types.PeerID, group string, members []types.PeerID, path string) (Offer, error) {
 	path = filepath.Clean(path)
 	st, err := os.Stat(path)
 	if err != nil {
@@ -242,19 +270,28 @@ func (s *Service) Prepare(peer types.PeerID, path string) (Offer, error) {
 	root := tree.Root()
 	name := SafeName(filepath.Base(path))
 	r := &Record{
-		ID: hex.EncodeToString(id[:]), Peer: peer.String(), Dir: Outgoing, Name: name, Size: st.Size(),
+		ID: hex.EncodeToString(id[:]), Group: group, Dir: Outgoing, Name: name, Size: st.Size(),
 		Mime: mime.TypeByExtension(filepath.Ext(name)), Root: hex.EncodeToString(root[:]), Key: hex.EncodeToString(secret),
 		Path: path, ModTime: st.ModTime().UnixNano(), State: StateOffered, Created: nowMs(), Updated: nowMs(),
+	}
+	if group == "" {
+		r.Peer = peer.String()
+	}
+	for _, m := range members {
+		if m != s.opt.Self && !slices.Contains(r.Members, m.String()) {
+			r.Members = append(r.Members, m.String())
+		}
 	}
 	if err := saveRecord(s.opt.Store, r); err != nil {
 		return Offer{}, err
 	}
-	o := &outgoing{rec: r, id: id, peer: peer, k: k, root: root, tree: tree, queue: make(chan int, 4096)}
+	o := newOutgoing(r, id, peer, k, root)
+	o.tree = tree
 	s.mu.Lock()
 	s.out[id] = o
 	s.mu.Unlock()
 	s.emit(o.info())
-	return Offer{ID: r.ID, Name: r.Name, Size: r.Size, Mime: r.Mime, Root: r.Root, Key: r.Key}, nil
+	return Offer{ID: r.ID, Group: group, Name: r.Name, Size: r.Size, Mime: r.Mime, Root: r.Root, Key: r.Key}, nil
 }
 
 // Withdraw forgets an offer that never reached the peer (its message could not be sent).
@@ -268,20 +305,31 @@ func (s *Service) Withdraw(id string) {
 	delete(s.out, key)
 	s.mu.Unlock()
 	if o != nil {
-		o.stopWorker()
+		o.stopWorkers()
 	}
 	deleteRecord(s.opt.Store, id)
 }
 
+// outgoing is a file this node offered. A direct transfer has one receiver; a group transfer serves
+// every member who asks, each from its own queue and with its own progress, from one open file.
 type outgoing struct {
 	mu      sync.Mutex
 	rec     *Record
 	id      [idLen]byte
-	peer    types.PeerID
+	peer    types.PeerID // the receiver of a direct transfer; zero for a group
+	members map[types.PeerID]bool
 	k       keys
 	root    Hash
 	tree    *Tree
 	f       *os.File
+	serves  map[types.PeerID]*serving
+	workers int // serve loops running; the file is closed when the last one goes idle
+}
+
+// serving is the sender's side of one receiver.
+type serving struct {
+	peer    types.PeerID
+	state   State // active until the receiver has all of it (done), declined or cancelled
 	queue   chan int
 	working bool
 	quit    chan struct{}
@@ -290,15 +338,53 @@ type outgoing struct {
 	meter   meter
 }
 
+func newOutgoing(r *Record, id [idLen]byte, peer types.PeerID, k keys, root Hash) *outgoing {
+	o := &outgoing{rec: r, id: id, peer: peer, k: k, root: root, serves: map[types.PeerID]*serving{}, members: map[types.PeerID]bool{}}
+	for _, m := range r.Members {
+		if p, err := types.PeerIDFromString(m); err == nil {
+			o.members[p] = true
+		}
+	}
+	return o
+}
+
+func (o *outgoing) group() bool { return o.rec.Group != "" }
+
+// serveFor is the state of one receiver, made on its first want. o.mu is held.
+func (o *outgoing) serveFor(peer types.PeerID) *serving {
+	sv := o.serves[peer]
+	if sv == nil {
+		n := NumChunks(o.rec.Size)
+		sv = &serving{peer: peer, state: StateActive, queue: make(chan int, 4096), sent: make([]byte, (n+7)/8)}
+		o.serves[peer] = sv
+	}
+	return sv
+}
+
 func (o *outgoing) info() Info {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	done := int64(o.nsent) * ChunkSize
+	var done, rate int64
+	fetching := 0
+	for p, sv := range o.serves {
+		d := int64(sv.nsent) * ChunkSize
+		rate += sv.meter.rate()
+		switch {
+		case !o.group() && p == o.peer:
+			done = d
+		case sv.state == StateActive:
+			fetching++
+			done = max(done, d) // the furthest member along
+		case sv.state == StateDone:
+			done = max(done, d)
+		}
+	}
 	if o.rec.State == StateDone || done > o.rec.Size {
 		done = o.rec.Size
 	}
-	return Info{ID: o.rec.ID, Peer: o.rec.Peer, Dir: Outgoing, Name: o.rec.Name, Size: o.rec.Size, Mime: o.rec.Mime,
-		State: o.rec.State, Error: o.rec.Error, Path: o.rec.Path, Done: done, Rate: o.meter.rate(),
+	return Info{ID: o.rec.ID, Peer: o.rec.Peer, Group: o.rec.Group, Dir: Outgoing, Name: o.rec.Name, Size: o.rec.Size, Mime: o.rec.Mime,
+		State: o.rec.State, Error: o.rec.Error, Path: o.rec.Path, Done: done, Rate: rate,
+		Members: len(o.rec.Members), Delivered: len(o.rec.Delivered), Fetching: fetching,
 		Created: o.rec.Created, Updated: o.rec.Updated}
 }
 
@@ -311,13 +397,55 @@ func (o *outgoing) closeFile() {
 	o.mu.Unlock()
 }
 
-func (o *outgoing) stopWorker() {
+func (o *outgoing) stopWorkers() {
 	o.mu.Lock()
-	if o.quit != nil {
-		close(o.quit)
-		o.quit = nil
+	for _, sv := range o.serves {
+		sv.stop()
 	}
 	o.mu.Unlock()
+}
+
+// stop ends the serve loop of one receiver; o.mu is held.
+func (sv *serving) stop() {
+	if sv.quit != nil {
+		close(sv.quit)
+		sv.quit = nil
+	}
+}
+
+// receivers is who should hear that the offer is gone: the receiver of a direct transfer, or every
+// member of the group (those who never asked would otherwise wait on a file that is not coming).
+func (o *outgoing) receivers() []types.PeerID {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.group() {
+		return []types.PeerID{o.peer}
+	}
+	seen := map[types.PeerID]bool{}
+	var out []types.PeerID
+	for p := range o.members {
+		seen[p] = true
+		out = append(out, p)
+	}
+	for p, sv := range o.serves {
+		if !seen[p] && sv.state == StateActive {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// cancelReceivers tells every receiver that the file is no longer served.
+func (s *Service) cancelReceivers(o *outgoing, reason byte) {
+	var wg sync.WaitGroup
+	for _, p := range o.receivers() {
+		wg.Add(1)
+		go func(p types.PeerID) {
+			defer wg.Done()
+			s.sendCancel(p, o.k.toReceiver, o.id, reason)
+		}(p)
+	}
+	wg.Wait()
 }
 
 func (s *Service) setOutState(o *outgoing, st State, msg string) {
@@ -330,16 +458,41 @@ func (s *Service) setOutState(o *outgoing, st State, msg string) {
 	_ = saveRecord(s.opt.Store, o.rec)
 	o.mu.Unlock()
 	if st.Final() {
-		o.stopWorker()
+		o.stopWorkers()
 		o.closeFile()
 	}
 	s.emit(o.info())
+}
+
+// receiverOf tells who sent a frame to us as the sender. In a group every member holds the same
+// key, so each says who it is inside the sealed body; a direct transfer has only the one receiver.
+func (s *Service) receiverOf(o *outgoing, body []byte) (types.PeerID, []byte, bool) {
+	if !o.group() {
+		return o.peer, body, true
+	}
+	var p types.PeerID
+	if len(body) < len(p) {
+		return p, nil, false
+	}
+	copy(p[:], body)
+	o.mu.Lock()
+	ok := o.members[p]
+	o.mu.Unlock()
+	if !ok && s.opt.IsMember != nil {
+		ok = s.opt.IsMember(o.rec.Group, p)
+	}
+	return p, body[len(p):], ok && p != s.opt.Self
 }
 
 func (s *Service) handleWant(o *outgoing, frame []byte) {
 	body, err := open(o.k.toSender, frame)
 	if err != nil {
 		s.drop("open")
+		return
+	}
+	peer, body, ok := s.receiverOf(o, body)
+	if !ok {
+		s.drop("member")
 		return
 	}
 	idx, err := decodeWant(body)
@@ -352,41 +505,54 @@ func (s *Service) handleWant(o *outgoing, frame []byte) {
 	o.mu.Unlock()
 	switch {
 	case state == StateCancelled:
-		s.sendCancel(o.peer, o.k.toReceiver, o.id, reasonCancelled)
+		s.sendCancel(peer, o.k.toReceiver, o.id, reasonCancelled)
 		return
 	case state == StateFailed:
-		s.sendCancel(o.peer, o.k.toReceiver, o.id, reasonUnavailable)
+		s.sendCancel(peer, o.k.toReceiver, o.id, reasonUnavailable)
 		return
 	case state.Final():
 		return
 	case state == StateOffered:
 		s.setOutState(o, StateActive, "")
 	}
+	o.mu.Lock()
+	sv := o.serveFor(peer)
+	ended := sv.state.Final()
+	o.mu.Unlock()
+	if ended {
+		return
+	}
 	for _, i := range idx {
 		select {
-		case o.queue <- i:
+		case sv.queue <- i:
 		default: // full: the receiver asks again
 		}
 	}
-	s.startWorker(o)
+	s.startWorker(o, sv)
 }
 
-func (s *Service) startWorker(o *outgoing) {
+func (s *Service) startWorker(o *outgoing, sv *serving) {
 	o.mu.Lock()
-	if o.working {
+	if sv.working {
 		o.mu.Unlock()
 		return
 	}
-	o.working = true
-	o.quit = make(chan struct{})
-	quit := o.quit
+	sv.working = true
+	sv.quit = make(chan struct{})
+	quit := sv.quit
+	o.workers++
 	o.mu.Unlock()
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.serve(o, quit)
+		idle := s.serve(o, sv, quit)
 		o.mu.Lock()
-		o.working = false
+		sv.working = false
+		o.workers--
+		if idle && o.workers == 0 && o.f != nil {
+			_ = o.f.Close() // reopened (and checked) when a receiver asks again
+			o.f = nil
+		}
 		o.mu.Unlock()
 	}()
 }
@@ -415,9 +581,6 @@ func (s *Service) prepareSource(o *outgoing) error {
 		o.tree = tree
 	}
 	o.f = f
-	if o.sent == nil {
-		o.sent = make([]byte, (o.tree.Leaves()+7)/8)
-	}
 	return nil
 }
 
@@ -461,34 +624,34 @@ func (p *sendPacer) release(took time.Duration, failed bool) {
 	p.mu.Unlock()
 }
 
-// serve answers the receiver's wants in the order they came, a few frames at a time (see sendPacer).
-func (s *Service) serve(o *outgoing, quit chan struct{}) {
+// serve answers one receiver's wants in the order they came, a few frames at a time (see
+// sendPacer). It reports whether it stopped because that receiver went quiet.
+func (s *Service) serve(o *outgoing, sv *serving, quit chan struct{}) (idle bool) {
 	if err := s.prepareSource(o); err != nil {
 		s.log.Warn("FileXfer: cannot serve file", "id", o.rec.ID, "err", err)
 		s.setOutState(o, StateFailed, err.Error())
-		s.sendCancel(o.peer, o.k.toReceiver, o.id, reasonUnavailable)
-		return
+		go s.cancelReceivers(o, reasonUnavailable)
+		return false
 	}
 	pacer := newSendPacer()
 	var sends sync.WaitGroup
 	defer sends.Wait()
 	var broken atomic.Bool
-	idle := time.NewTimer(30 * time.Second)
-	defer idle.Stop()
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
 	for !broken.Load() {
 		var i int
 		select {
-		case i = <-o.queue:
+		case i = <-sv.queue:
 		case <-quit:
-			return
+			return false
 		case <-s.ctx.Done():
-			return
-		case <-idle.C:
+			return false
+		case <-timer.C:
 			sends.Wait()
-			o.closeFile() // reopened (and checked) when the receiver asks again
-			return
+			return true
 		}
-		idle.Reset(30 * time.Second)
+		timer.Reset(30 * time.Second)
 		if i < 0 || i >= o.tree.Leaves() {
 			continue
 		}
@@ -496,7 +659,7 @@ func (s *Service) serve(o *outgoing, quit chan struct{}) {
 		f := o.f
 		o.mu.Unlock()
 		if f == nil {
-			return
+			return false
 		}
 		pacer.acquire()
 		sends.Add(1)
@@ -511,32 +674,33 @@ func (s *Service) serve(o *outgoing, quit chan struct{}) {
 				o.mu.Unlock()
 				if !ended && broken.CompareAndSwap(false, true) {
 					s.setOutState(o, StateFailed, "cannot read the file: "+err.Error())
-					s.sendCancel(o.peer, o.k.toReceiver, o.id, reasonUnavailable)
+					go s.cancelReceivers(o, reasonUnavailable)
 				}
 				return
 			}
 			frame := seal(o.k.toReceiver, kindChunk, o.id, encodeChunk(i, o.tree.Proof(i), buf))
 			ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 			start := time.Now()
-			err := s.opt.Transport.Send(ctx, o.peer, frame)
+			err := s.opt.Transport.Send(ctx, sv.peer, frame)
 			cancel()
 			pacer.release(time.Since(start), err != nil)
 			if err != nil {
 				return // lost: the receiver asks for it again
 			}
 			o.mu.Lock()
-			if o.sent[i/8]&(1<<(i%8)) == 0 {
-				o.sent[i/8] |= 1 << (i % 8)
-				o.nsent++
+			if sv.sent[i/8]&(1<<(i%8)) == 0 {
+				sv.sent[i/8] |= 1 << (i % 8)
+				sv.nsent++
 			}
-			o.meter.add(int64(l))
-			emit := o.meter.due()
+			sv.meter.add(int64(l))
+			emit := sv.meter.due()
 			o.mu.Unlock()
 			if emit {
 				s.emit(o.info())
 			}
 		}(i)
 	}
+	return false
 }
 
 func (s *Service) handleFromReceiver(o *outgoing, kind frameKind, frame []byte) {
@@ -545,16 +709,44 @@ func (s *Service) handleFromReceiver(o *outgoing, kind frameKind, frame []byte) 
 		s.drop("open")
 		return
 	}
-	switch kind {
-	case kindDone:
-		s.setOutState(o, StateDone, "")
-	case kindCancel:
-		if len(body) == 1 && body[0] == reasonDeclined {
+	peer, body, ok := s.receiverOf(o, body)
+	if !ok {
+		s.drop("member")
+		return
+	}
+	declined := len(body) == 1 && body[0] == reasonDeclined
+	if !o.group() {
+		switch {
+		case kind == kindDone:
+			s.setOutState(o, StateDone, "")
+		case declined:
 			s.setOutState(o, StateDeclined, "")
-		} else {
+		default:
 			s.setOutState(o, StateCancelled, "")
 		}
+		return
 	}
+	// in a group, one member is done with the file or does not want it: the others go on
+	o.mu.Lock()
+	sv := o.serveFor(peer)
+	switch {
+	case sv.state == StateDone && kind != kindDone:
+		// a late cancel after the file arrived changes nothing
+	case kind == kindDone:
+		sv.state = StateDone
+		if !slices.Contains(o.rec.Delivered, peer.String()) {
+			o.rec.Delivered = append(o.rec.Delivered, peer.String())
+			o.rec.Updated = nowMs()
+			_ = saveRecord(s.opt.Store, o.rec)
+		}
+	case declined:
+		sv.state = StateDeclined
+	default:
+		sv.state = StateCancelled
+	}
+	sv.stop()
+	o.mu.Unlock()
+	s.emit(o.info())
 }
 
 // ---- receiving -------------------------------------------------------------------------------
@@ -576,7 +768,7 @@ func (s *Service) OnOffer(from types.PeerID, o Offer) (Info, error) {
 	}
 	s.mu.Unlock()
 	r := &Record{
-		ID: o.ID, Peer: from.String(), Dir: Incoming, Name: SafeName(o.Name), Size: o.Size, Mime: o.Mime,
+		ID: o.ID, Peer: from.String(), Group: o.Group, Dir: Incoming, Name: SafeName(o.Name), Size: o.Size, Mime: o.Mime,
 		Root: o.Root, Key: o.Key, State: StateOffered, Created: nowMs(), Updated: nowMs(),
 	}
 	_, peer, k, root, err := parseRecord(r)
@@ -651,7 +843,7 @@ func (in *incoming) doneBytes() int64 {
 func (in *incoming) info() Info {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	return Info{ID: in.rec.ID, Peer: in.rec.Peer, Dir: Incoming, Name: in.rec.Name, Size: in.rec.Size, Mime: in.rec.Mime,
+	return Info{ID: in.rec.ID, Peer: in.rec.Peer, Group: in.rec.Group, Dir: Incoming, Name: in.rec.Name, Size: in.rec.Size, Mime: in.rec.Mime,
 		State: in.rec.State, Error: in.rec.Error, Path: in.rec.Path, Done: in.doneBytes(), Rate: in.meter.rate(),
 		Stalled: in.stalled && in.rec.State == StateActive, Created: in.rec.Created, Updated: in.rec.Updated}
 }
@@ -720,7 +912,7 @@ func (s *Service) Decline(id string) error {
 	in.rec.State, in.rec.Updated = StateDeclined, nowMs()
 	_ = saveRecord(s.opt.Store, in.rec)
 	in.mu.Unlock()
-	go s.sendCancel(in.peer, in.k.toSender, in.id, reasonDeclined)
+	go s.sendUp(in, kindCancel, []byte{reasonDeclined})
 	s.emit(in.info())
 	return nil
 }
@@ -743,7 +935,7 @@ func (s *Service) Cancel(id string) error {
 			return nil
 		}
 		s.setOutState(o, StateCancelled, "")
-		go s.sendCancel(o.peer, o.k.toReceiver, o.id, reasonCancelled)
+		go s.cancelReceivers(o, reasonCancelled)
 		return nil
 	case in != nil:
 		in.mu.Lock()
@@ -753,7 +945,7 @@ func (s *Service) Cancel(id string) error {
 		}
 		in.mu.Unlock()
 		s.endIncoming(in, StateCancelled, "")
-		go s.sendCancel(in.peer, in.k.toSender, in.id, reasonCancelled)
+		go s.sendUp(in, kindCancel, []byte{reasonCancelled})
 		return nil
 	}
 	return errNotFound
@@ -1014,7 +1206,7 @@ func (s *Service) finish(in *incoming) bool {
 	_ = s.opt.Store.Delete(append(append([]byte(nil), bitsPrefix...), in.rec.ID...))
 	go func() {
 		for k := 0; k < 3; k++ { // the sender marks the transfer delivered; a lost frame is no harm
-			s.sendFrame(in.peer, seal(in.k.toSender, kindDone, in.id, nil))
+			s.sendUp(in, kindDone, nil)
 			time.Sleep(time.Second)
 		}
 	}()
@@ -1096,7 +1288,7 @@ func (s *Service) fetch(in *incoming, quit chan struct{}) {
 					batch = batch[:maxWant]
 				}
 				want = want[len(batch):]
-				if !s.sendFrame(in.peer, seal(in.k.toSender, kindWant, in.id, encodeWant(batch))) {
+				if !s.sendUp(in, kindWant, encodeWant(batch)) {
 					ok = false
 					retry = append(retry, batch...)
 					retry = append(retry, want...)
@@ -1274,6 +1466,15 @@ func (s *Service) sendFrame(peer types.PeerID, frame []byte) bool {
 	ctx, cancel := context.WithTimeout(s.ctx, 8*time.Second)
 	defer cancel()
 	return s.opt.Transport.Send(ctx, peer, frame) == nil
+}
+
+// sendUp sends a frame from the receiver to the sender. A group member puts its own ID first: the
+// sender serves every member under the same key and must know whom to answer.
+func (s *Service) sendUp(in *incoming, kind frameKind, body []byte) bool {
+	if in.rec.Group != "" {
+		body = append(append(make([]byte, 0, len(s.opt.Self)+len(body)), s.opt.Self[:]...), body...)
+	}
+	return s.sendFrame(in.peer, seal(in.k.toSender, kind, in.id, body))
 }
 
 func (s *Service) sendCancel(peer types.PeerID, aead cipher.AEAD, id [idLen]byte, reason byte) {

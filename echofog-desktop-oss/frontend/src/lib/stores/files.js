@@ -2,7 +2,11 @@ import { writable } from 'svelte/store';
 import { App, on, errText } from '../api.js';
 import { tr } from '../i18n/index.js';
 
-/** File transfers by ID: { id, peer, dir: 'in'|'out', name, size, state, error, path, done, rate, stalled, created } */
+/**
+ * File transfers by ID: { id, peer, dir: 'in'|'out', name, size, state, error, path, done, rate, stalled, created }.
+ * A file posted in a group also has group; when we posted it, members (it was offered to),
+ * delivered (have all of it) and fetching (are downloading it now).
+ */
 export const transfers = writable({});
 /** The last thing that went wrong with a file, shown under the chat. */
 export const fileError = writable('');
@@ -45,11 +49,33 @@ async function act(fn) {
   }
 }
 
-/** Lets the user pick a file and offers it to the contact. */
-export const pickAndSend = (conv) => act(() => App.PickAndSendFile(conv.pubKey));
+// what the chat does once a file is posted in a group (chats.js sets it: show the message)
+let groupPosted = async () => {};
+export function onGroupPost(fn) {
+  groupPosted = fn;
+}
+
+// posts a file in a group: one message offers it to every member
+function postInGroup(conv, send) {
+  return act(async () => {
+    const m = await send();
+    if (!m || !m.file) return null; // the dialog was closed
+    await groupPosted(conv, m);
+    return refresh(m.file.id);
+  });
+}
+
+/** Lets the user pick a file and offers it to the contact, or posts it in the group. */
+export const pickAndSend = (conv) =>
+  conv.kind === 'group'
+    ? postInGroup(conv, () => App.PickAndSendGroupFile(conv.groupId))
+    : act(() => App.PickAndSendFile(conv.pubKey));
 /** Offers files dropped on the chat. */
 export async function sendPaths(conv, paths) {
-  for (const p of paths || []) await act(() => App.SendFile(conv.pubKey, p));
+  for (const p of paths || []) {
+    if (conv.kind === 'group') await postInGroup(conv, () => App.SendGroupFile(conv.groupId, p));
+    else await act(() => App.SendFile(conv.pubKey, p));
+  }
 }
 export const accept = (id) => act(() => App.AcceptFile(id));
 export const decline = (id) => act(async () => { await App.DeclineFile(id); return refresh(id); });

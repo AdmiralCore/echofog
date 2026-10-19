@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/handshake"
@@ -90,7 +91,8 @@ type Node struct {
 	BWProbe      *bwprobe.Prober
 	ExitService  *exit_gateway.ExitService
 	VPNMarket    *vpnmarket.Service
-	Files        *filexfer.Service // files sent to and received from contacts
+	Files        *filexfer.Service // files sent to and received from contacts and groups
+	groupMember  atomic.Pointer[func(group string, peer types.PeerID) bool]
 
 	Logger *slog.Logger
 

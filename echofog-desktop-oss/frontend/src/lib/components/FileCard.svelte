@@ -9,7 +9,11 @@
   export let mine = false;
 
   $: xfer = $transfers[file.fid];
-  $: state = xfer ? xfer.state : 'unknown';
+  // a file we posted in a group stays offered to the members who have not taken it; it shows
+  // progress only while somebody downloads it, and how many have it
+  $: shared = mine && !!xfer?.group;
+  $: idle = shared && xfer.state === 'active' && !xfer.fetching;
+  $: state = xfer ? (idle ? 'offered' : xfer.state) : 'unknown';
   $: size = xfer ? xfer.size : file.size;
   $: pct = Math.round(progress(xfer) * 100);
   $: left = eta(xfer);
@@ -34,9 +38,14 @@
         {#if state === 'active'}
           {bytes(xfer.done)} / {bytes(size)}{#if xfer.rate} · {$t('files.rate', { v: bytes(xfer.rate) })}{/if}{#if left} · {$t('files.left', { time: duration(left) })}{/if}
         {:else}
-          {bytes(size)} · {#if state === 'unknown'}{$t('files.st.unknown')}{:else if state === 'offered'}{mine ? $t('files.st.waitingAccept') : $t('files.st.offered')}{:else}{$t('files.st.' + state)}{/if}
+          {bytes(size)} · {#if state === 'unknown'}{$t('files.st.unknown')}{:else if shared && state === 'offered'}{$t('files.st.shared')}{:else if state === 'offered'}{mine ? $t('files.st.waitingAccept') : $t('files.st.offered')}{:else}{$t('files.st.' + state)}{/if}
         {/if}
       </span>
+      {#if shared && xfer.members}
+        <span class="sub delivered">
+          <Icon name="check" size={12} /> {$t('files.delivered', { n: xfer.delivered || 0, of: xfer.members })}{#if xfer.fetching} · {$t('files.fetching', { n: xfer.fetching })}{/if}
+        </span>
+      {/if}
     </div>
   </div>
 
@@ -52,6 +61,9 @@
     {#if state === 'offered' && !mine}
       <button class="primary small with-icon" disabled={busy} on:click={() => run(() => accept(file.fid))}><Icon name="download" size={14} /> {$t('files.accept')}</button>
       <button class="ghost small" disabled={busy} on:click={() => run(() => decline(file.fid))}>{$t('files.decline')}</button>
+    {:else if shared && (state === 'active' || state === 'offered')}
+      <button class="ghost small" disabled={busy} title={$t('files.stopSharingHint')} on:click={() => run(() => cancel(file.fid))}>{$t('files.stopSharing')}</button>
+      {#if xfer.path}<button class="ghost small with-icon" on:click={() => showInFolder(file.fid)}><Icon name="folder" size={14} /> {$t('files.showInFolder')}</button>{/if}
     {:else if state === 'active' || (state === 'offered' && mine)}
       <button class="ghost small" disabled={busy} on:click={() => run(() => cancel(file.fid))}>{$t('common.cancel')}</button>
     {:else if state === 'done' && !mine}
@@ -76,6 +88,7 @@
   .what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .name { font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .delivered { display: inline-flex; align-items: center; gap: 4px; }
   .mine .sub { color: rgba(255, 255, 255, 0.78); }
   .bar { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
   .mine .bar { background: rgba(255, 255, 255, 0.25); }

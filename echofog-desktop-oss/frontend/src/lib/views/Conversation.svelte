@@ -42,7 +42,7 @@
 
   let shownId = '';
   $: if (conv.id !== shownId) { shownId = conv.id; info = false; closeSearch(); menu = null; } // another chat closes the panel; a refresh of this one does not
-  $: if (conv.kind === 'direct') loadTransfers(conv.peerId);
+  $: loadTransfers(conv.kind === 'direct' ? conv.peerId : '');
   $: myRank = RANK[conv.myRole] || 0;
   $: canManage = conv.kind === 'group' && myRank >= RANK.admin;
   $: if (info && conv.kind === 'group') { void $membersVersion; loadMembers(); }
@@ -294,8 +294,10 @@
   }
 
   // ---- files -------------------------------------------------------------------------------------
-  $: canSendFiles = conv.kind === 'direct' && !!conv.pubKey && !conv.readOnly;
-  $: chatFiles = conv.kind === 'direct' ? Object.values($transfers).filter((x) => x.peer === conv.peerId).sort((a, b) => b.created - a.created) : [];
+  $: canSendFiles = (conv.kind === 'group' || !!conv.pubKey) && !conv.readOnly;
+  $: chatFiles = Object.values($transfers)
+    .filter((x) => (conv.kind === 'group' ? x.group === conv.groupId : x.peer === conv.peerId && !x.group))
+    .sort((a, b) => b.created - a.created);
   onMount(() => {
     // files dropped on the chat are offered to the contact (Wails hands over their paths)
     window.runtime?.OnFileDrop?.((_x, _y, paths) => {
@@ -444,6 +446,27 @@
         <button class="fact" on:click={() => activeId.set(SAVED_ID)} disabled={!savedHere} title={$t('saved.open')}><span class="faint small">{$t('saved.short')}</span><b>{savedHere}</b></button>
       </div>
 
+      <div class="block">
+        <div class="eyebrow">{$t('files.title', { n: chatFiles.length })}</div>
+        {#if chatFiles.length}
+          <div class="files">
+            {#each chatFiles as f (f.id)}
+              <div class="frow">
+                <Icon name={f.dir === 'out' ? 'upload' : 'download'} size={15} />
+                <div class="grow fmeta">
+                  <span class="fname" title={f.name}>{f.name}</span>
+                  <span class="faint small">{bytes(f.size)} · {f.group && f.dir === 'out' && f.members && !f.fetching && f.state === 'active' ? $t('files.delivered', { n: f.delivered || 0, of: f.members }) : f.state === 'active' ? Math.round((f.done / Math.max(1, f.size)) * 100) + '%' : f.state === 'offered' && f.dir === 'out' ? $t(f.group ? 'files.st.shared' : 'files.st.waitingAccept') : $t('files.st.' + f.state)}</span>
+                </div>
+                {#if f.state === 'done' && f.dir === 'in'}<button class="icon tiny" title={$t('files.open')} aria-label={$t('files.open')} on:click={() => openFile(f)}><Icon name="external" size={14} /></button>{/if}
+                {#if f.path && f.state !== 'failed' && (f.dir === 'out' || f.state === 'done')}<button class="icon tiny" title={$t('files.showInFolder')} aria-label={$t('files.showInFolder')} on:click={() => showInFolder(f.id)}><Icon name="folder" size={14} /></button>{/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="small faint">{$t('files.none')}</p>
+        {/if}
+      </div>
+
       {#if conv.kind === 'direct'}
         <div class="block">
           <div class="eyebrow">{$t('chats.key')}</div>
@@ -454,26 +477,6 @@
           <p class="small faint">{$t('chats.e2eContact')}</p>
         </div>
 
-        <div class="block">
-          <div class="eyebrow">{$t('files.title', { n: chatFiles.length })}</div>
-          {#if chatFiles.length}
-            <div class="files">
-              {#each chatFiles as f (f.id)}
-                <div class="frow">
-                  <Icon name={f.dir === 'out' ? 'upload' : 'download'} size={15} />
-                  <div class="grow fmeta">
-                    <span class="fname" title={f.name}>{f.name}</span>
-                    <span class="faint small">{bytes(f.size)} · {f.state === 'active' ? Math.round((f.done / Math.max(1, f.size)) * 100) + '%' : f.state === 'offered' && f.dir === 'out' ? $t('files.st.waitingAccept') : $t('files.st.' + f.state)}</span>
-                  </div>
-                  {#if f.state === 'done' && f.dir === 'in'}<button class="icon tiny" title={$t('files.open')} aria-label={$t('files.open')} on:click={() => openFile(f)}><Icon name="external" size={14} /></button>{/if}
-                  {#if f.path && f.state !== 'failed' && (f.dir === 'out' || f.state === 'done')}<button class="icon tiny" title={$t('files.showInFolder')} aria-label={$t('files.showInFolder')} on:click={() => showInFolder(f.id)}><Icon name="folder" size={14} /></button>{/if}
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <p class="small faint">{$t('files.none')}</p>
-          {/if}
-        </div>
         <button class="danger with-icon wide" on:click={removeContact}><Icon name="trash" size={16} /> {$t('chats.deleteContact')}</button>
       {:else}
         <div class="block">
