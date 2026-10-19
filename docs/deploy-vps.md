@@ -98,6 +98,12 @@ The stats line in the log counts refused streams by reason, e.g. `exit: 12 sessi
 per reason every 30 seconds). The app shows on its Proxy page why an exit does not serve it: the
 exit is off, the free traffic is used up, or the exit does not answer.
 
+**A priced exit needs a little TON on the node's own wallet.** Clients usually pay from their
+deposit, and collecting that money is a transaction whose fee the node's wallet pays (about
+0.015 TON each). With an empty wallet the payments wait and the stats line says `vouchers: … owed,
+… cashed (the node wallet has no TON …)`. Put 0.1–0.2 TON on the address from `echofog-node status`
+(on testnet: Telegram bot @testgiver_ton_bot). Details: [Getting paid](vault-payments.md#put-a-little-ton-on-the-nodes-wallet-first).
+
 ## An exit only for the people you invite
 
 To keep the exit out of the public list and serve only the people you give a link to, add to

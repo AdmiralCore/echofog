@@ -118,6 +118,44 @@ balance.
 
 ## For node operators
 
+### Put a little TON on the node's wallet first
+
+A priced exit gets paid in two ways, and one of them needs TON on the node's own wallet:
+
+- **Direct payments** (a client sends USDT or TON to the node's wallet) arrive by themselves.
+- **Payments from a client's deposit** (the TON vault, the usual way in the app) do not move until
+  the node collects them. Collecting is a transaction to the client's vault, and like every TON
+  transaction it costs a fee that **the node's wallet pays**: about 0.015 TON per voucher, with
+  0.015 TON kept back for the wallet's own fee.
+
+A new node's wallet is empty, so it cannot collect anything, even though clients have already paid
+(their vouchers are signed and waiting). Put about **0.1–0.2 TON** on it; that covers many
+collections.
+
+1. Find the wallet address:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml exec node echofog-node status
+   ```
+
+   The line `Wallet (testnet): <address>` shows the address, the next one the balance. It is also in every stats line (`wallet: 0 TON`).
+2. Send TON to it. On testnet (the default) take free test TON from the Telegram bot
+   **@testgiver_ton_bot**.
+3. Within five minutes the node collects what clients owe from their deposits (`cashed vouchers` in
+   the log).
+
+**What you see while the wallet is empty:** the stats line ends with
+`vouchers: 0.74 TON owed, 0 TON cashed (the node wallet has no TON to pay the fee for cashing
+vouchers)`, the log says once an hour how much is waiting and the address to top up, and the app's
+sharing card shows the same with a button to copy the address.
+
+**When the node collects:** it checks every 5 minutes. A client who owes 0.05 TON or more, a total
+of 0.2 TON or more, or a client withdrawing their deposit is collected at once; otherwise every
+6 hours. Debts under 0.02 TON wait for the next round, because the fee would cost more than they
+bring.
+
+### The rest
+
 - Turn on payments as before: set a price. If the TON price is known, your node also quotes the
   price in TON, re-checked every 10 minutes from your USD price. Clients check that quote against
   their own rate and refuse it if it is more than 5% higher.
