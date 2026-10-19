@@ -6,6 +6,7 @@
   import SiteCheck from '../components/SiteCheck.svelte';
   import PeerList from '../components/PeerList.svelte';
   import RelayCard from '../components/RelayCard.svelte';
+  import AccessCard from '../components/AccessCard.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
   import { me } from '../stores/session.js';
@@ -28,6 +29,7 @@
   let history = [];
   let showAllHistory = false;
   let copiedLink = '';
+  let accessMode = 'public'; // a hidden exit is not published: people use it by its link
 
   let busy = '';
   let error = '';
@@ -52,6 +54,7 @@
     try {
       vpn = await App.GetVPNStatus();
       sharing = await App.GetSharingStatus();
+      try { accessMode = (await App.GetAccessStatus()).mode; } catch (_) { /* older core */ }
       try { vouchers = await App.GetVoucherEarnings(); } catch (_) { /* older core */ }
       if (!sharing.enabled && sharing.config?.pricePerMb && form.price === '0') {
         form = { ...form, price: usdPerGb(sharing.config.pricePerMb).toFixed(3), freeKb: sharing.config.freeTestKb };
@@ -189,7 +192,25 @@
   $: sorted = [...exits].sort(SORTS[sortBy]);
   $: best = [...exits].sort(SORTS.best)[0];
   $: if (mode !== 'manual') selected = 'auto';
-  $: directId = parseRelayLink(direct)?.peerId || (/^[0-9a-f]{64}$/i.test(direct.trim()) ? direct.trim().toLowerCase() : '');
+  // an invitation link (echofog://join?...) is read by the core: it knows the network and the format
+  let invite = null;
+  let inviteErr = '';
+  $: isInvite = /^echofog:\/\/join\?/i.test(direct.trim());
+  $: readInvite(isInvite ? direct.trim() : '');
+  async function readInvite(text) {
+    invite = null;
+    inviteErr = '';
+    if (!text) return;
+    try {
+      const info = await App.ParseInvite(text);
+      if (text === direct.trim()) invite = info;
+    } catch (err) {
+      const msg = errText(err);
+      const net = /network "([^"]*)"/.exec(msg);
+      inviteErr = /newer version/.test(msg) ? $t('access.tooNew') : net ? $t('access.otherNet', { net: net[1] }) : msg;
+    }
+  }
+  $: directId = isInvite ? invite?.peerId || '' : parseRelayLink(direct)?.peerId || (/^[0-9a-f]{64}$/i.test(direct.trim()) ? direct.trim().toLowerCase() : '');
   $: blocked = !vpn.running && ((mode === 'manual' && !selected) || (mode === 'direct' && !directId));
   $: if (mode === 'manual' && selected === 'auto' && sorted.length) selected = sorted[0].peerId;
   $: checkExit = vpn.running ? (vpn.relayPeerId || 'auto') : mode === 'auto' ? 'auto' : mode === 'direct' ? directId || 'auto' : selected;
@@ -341,8 +362,10 @@
         {:else if mode === 'direct'}
           <div class="auto">
             <p class="small muted">{$t('proxy.directHint')}</p>
-            <input bind:value={direct} placeholder="echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
-            {#if direct.trim() && !directId}<p class="small error">{$t('proxy.directBad')}</p>{/if}
+            <input bind:value={direct} placeholder="echofog://join?… / echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
+            {#if isInvite && inviteErr}<p class="small error">{inviteErr}</p>
+            {:else if isInvite && invite}<p class="small faint">{invite.private ? $t('access.private') : $t('access.publicNode')} · <span class="mono">{short(invite.peerId)}</span></p>
+            {:else if direct.trim() && !directId && !isInvite}<p class="small error">{$t('proxy.directBad')}</p>{/if}
           </div>
         {:else}
           <div class="row small sortrow">
@@ -512,7 +535,11 @@
           <div class="stat"><span class="eyebrow">{$t('proxy.share.carried')}</span><span class="num">{bytes(sharing.bytes, $lang)}</span></div>
           {#if sharing.paymentsReady}<div class="stat"><span class="eyebrow">{$t('proxy.share.earned')}</span><span class="num ok">${sharing.earnedUsdt}</span></div>{/if}
         </div>
-        <p class="small faint">{$t('proxy.share.published', { when: sharing.lastPublish ? when(sharing.lastPublish, $lang) : $t('proxy.share.notYet') })}</p>
+        {#if accessMode === 'public'}
+          <p class="small faint">{$t('proxy.share.published', { when: sharing.lastPublish ? when(sharing.lastPublish, $lang) : $t('proxy.share.notYet') })}</p>
+        {:else}
+          <p class="small faint">{$t('access.sharedHidden')}</p>
+        {/if}
         {#if sharing.lastError}<p class="small error">{sharing.lastError}</p>{/if}
       {/if}
       {#if (sharing.enabled && sharing.paymentsReady) || Number(vouchers.owedTon) > 0 || Number(vouchers.cashedTon) > 0}
@@ -553,6 +580,8 @@
           empty={$t('proxy.share.freeEmpty')} on:change={(e) => setFreePeers(e.detail)} />
       </div>
     </div>
+
+    <AccessCard {contacts} />
 
     <RelayCard {contacts} />
   </div>

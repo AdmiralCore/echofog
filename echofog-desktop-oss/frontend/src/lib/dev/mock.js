@@ -412,8 +412,24 @@ const impl = {
     relayMock.connectedAt[m[2].toLowerCase()] = Date.now() + 2500;
     return null;
   },
+  // access: public or hidden, the invitation link, who joined with it
+  GetAccessStatus: () => ({ ...accessMock, link: accessLink(), joined: accessMock.joined.map((j) => ({ ...j })) }),
+  SetAccessMode: (mode) => {
+    if (mode !== 'public' && mode !== 'hidden') throw new Error('access mode must be public or hidden');
+    accessMock.nextMode = mode === accessMock.mode ? '' : mode;
+    return null;
+  },
+  RotateAccessSecret: () => { accessMock.secret = randomSecret(); return accessLink(); },
+  RemoveJoinedPeer: (id) => { accessMock.joined = accessMock.joined.filter((j) => j.peerId !== id); return null; },
+  ParseInvite: (link) => {
+    const q = new URLSearchParams(link.trim().replace(/^echofog:\/\/join\?/i, ''));
+    if (Number(q.get('v')) > 1) throw new Error('the link was made by a newer version of the app: update it');
+    if (q.get('net') !== 'echofog') throw new Error(`the link is for the network "${q.get('net')}", this app is for another one`);
+    if (!HEX64.test(q.get('id') || '')) throw new Error('broken invitation link: bad node id');
+    return { peerId: q.get('id').toLowerCase(), private: !!q.get('s'), addrs: q.getAll('a').length, relays: q.getAll('r').length, protocol: Number(q.get('p')) || 0 };
+  },
   StartVPNVia: (target) => new Promise((r, j) => setTimeout(() => {
-    const m = /([0-9a-f]{64})\/?$/i.exec(target.trim());
+    const m = /^echofog:\/\/join\?/i.test(target.trim()) ? /[?&]id=([0-9a-f]{64})/i.exec(target) : /([0-9a-f]{64})\/?$/i.exec(target.trim());
     if (!m) return j(new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>'));
     Object.assign(vpnMock, { running: true, listenAddr: '127.0.0.1:1080', tunnelReady: true, tunnelNotice: '', exitState: 'ok', relayPeerId: m[1].toLowerCase() });
     emit('vpn:started', {});
@@ -637,6 +653,21 @@ const relayStatus = () => {
       return { addr: r.slice(0, i), peerId: id, connected: Date.now() > (relayMock.connectedAt[id] || 0) };
     }),
   };
+};
+// ?hidden=1 starts the mock as a hidden node with somebody already joined
+const randomSecret = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const accessMock = {
+  mode: new URLSearchParams(location.search).has('hidden') ? 'hidden' : 'public',
+  nextMode: '',
+  secret: randomSecret(),
+  secretFromConfig: false,
+  network: 'echofog',
+  joined: [{ peerId: ALICE, joinedAt: sec(Date.now()) - 86400 * 3, connected: true }, { peerId: hex(31), joinedAt: sec(Date.now()) - 3600, connected: false }],
+};
+const accessLink = () => {
+  const s = accessMock.mode === 'public' ? '' : '&s=' + accessMock.secret;
+  const r = accessMock.mode === 'public' ? '' : '&r=' + encodeURIComponent('relay.example.org:4001/' + hex(12));
+  return `echofog://join?v=1&net=echofog&p=101&id=${SELF}${s}&a=${encodeURIComponent('203.0.113.7:51234')}${r}`;
 };
 const sharingMock = { enabled: false, config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0, freePeers: [BOB] }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
 const supportMock = { available: true, percent: 5, pendingTon: '0', pendingUsdt: '0.35', address: 'UQ-project-mock' };
