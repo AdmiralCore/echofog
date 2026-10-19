@@ -6,6 +6,10 @@ export function AcceptFile(arg1) {
   return window['go']['main']['App']['AcceptFile'](arg1);
 }
 
+export function AcceptMessageRequest(arg1, arg2) {
+  return window['go']['main']['App']['AcceptMessageRequest'](arg1, arg2);
+}
+
 export function ActiveGroupCall(arg1) {
   return window['go']['main']['App']['ActiveGroupCall'](arg1);
 }
@@ -32,6 +36,10 @@ export function AddRelay(arg1) {
 
 export function AppVersion() {
   return window['go']['main']['App']['AppVersion']();
+}
+
+export function BlockPeer(arg1) {
+  return window['go']['main']['App']['BlockPeer'](arg1);
 }
 
 export function CancelFile(arg1) {
@@ -82,6 +90,10 @@ export function DeleteProfile(arg1, arg2) {
   return window['go']['main']['App']['DeleteProfile'](arg1, arg2);
 }
 
+export function DismissMessageRequest(arg1) {
+  return window['go']['main']['App']['DismissMessageRequest'](arg1);
+}
+
 export function EndGroupCall(arg1, arg2) {
   return window['go']['main']['App']['EndGroupCall'](arg1, arg2);
 }
@@ -100,6 +112,10 @@ export function ForgetExit(arg1) {
 
 export function GetAccessStatus() {
   return window['go']['main']['App']['GetAccessStatus']();
+}
+
+export function GetBlockedPeers() {
+  return window['go']['main']['App']['GetBlockedPeers']();
 }
 
 export function GetBootstrapNodes() {
@@ -150,6 +166,10 @@ export function GetLogsText() {
   return window['go']['main']['App']['GetLogsText']();
 }
 
+export function GetMessageRequests() {
+  return window['go']['main']['App']['GetMessageRequests']();
+}
+
 export function GetMyID() {
   return window['go']['main']['App']['GetMyID']();
 }
@@ -164,6 +184,10 @@ export function GetNetworkStatus() {
 
 export function GetOnRampURL() {
   return window['go']['main']['App']['GetOnRampURL']();
+}
+
+export function GetPrivacy() {
+  return window['go']['main']['App']['GetPrivacy']();
 }
 
 export function GetProbeDomains() {
@@ -426,6 +450,10 @@ export function SetPayAsset(arg1) {
   return window['go']['main']['App']['SetPayAsset'](arg1);
 }
 
+export function SetPrivacy(arg1) {
+  return window['go']['main']['App']['SetPrivacy'](arg1);
+}
+
 export function SetProbeDomains(arg1) {
   return window['go']['main']['App']['SetProbeDomains'](arg1);
 }
@@ -524,6 +552,10 @@ export function TransferGroupOwnership(arg1, arg2) {
 
 export function TriggerPanicButton() {
   return window['go']['main']['App']['TriggerPanicButton']();
+}
+
+export function UnblockPeer(arg1) {
+  return window['go']['main']['App']['UnblockPeer'](arg1);
 }
 
 export function UnsaveMessage(arg1) {

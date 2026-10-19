@@ -1,3 +1,44 @@
+export namespace contacts {
+	
+	export class Blocked {
+	    peer_id: string;
+	    alias?: string;
+	    at: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Blocked(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peer_id = source["peer_id"];
+	        this.alias = source["alias"];
+	        this.at = source["at"];
+	    }
+	}
+	export class Request {
+	    peer_id: string;
+	    pub_key?: string;
+	    first: number;
+	    last: number;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Request(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peer_id = source["peer_id"];
+	        this.pub_key = source["pub_key"];
+	        this.first = source["first"];
+	        this.last = source["last"];
+	        this.count = source["count"];
+	    }
+	}
+
+}
+
 export namespace dto {
 	
 	export class CallMediaSlotDTO {
@@ -122,6 +163,7 @@ export namespace dto {
 	    reply_to_id?: string;
 	    app_id?: string;
 	    pending?: boolean;
+	    request?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MessageDTO(source);
@@ -142,6 +184,7 @@ export namespace dto {
 	        this.reply_to_id = source["reply_to_id"];
 	        this.app_id = source["app_id"];
 	        this.pending = source["pending"];
+	        this.request = source["request"];
 	    }
 	}
 	export class SavedMessageDTO {
@@ -753,6 +796,20 @@ export namespace node {
 	    }
 	}
 	
+	export class Privacy {
+	    messages: string;
+	    calls: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Privacy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.messages = source["messages"];
+	        this.calls = source["calls"];
+	    }
+	}
 	export class ProbeReport {
 	    ok: boolean;
 	    latencyMs: number;

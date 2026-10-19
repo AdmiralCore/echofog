@@ -3,9 +3,12 @@
 import {dto} from '../models';
 import {node} from '../models';
 import {main} from '../models';
+import {contacts} from '../models';
 import {logging} from '../models';
 
 export function AcceptFile(arg1:string):Promise<dto.FileTransferDTO>;
+
+export function AcceptMessageRequest(arg1:string,arg2:string):Promise<void>;
 
 export function ActiveGroupCall(arg1:string):Promise<node.GroupCall>;
 
@@ -20,6 +23,8 @@ export function AddGroupMember(arg1:string,arg2:string):Promise<void>;
 export function AddRelay(arg1:string):Promise<void>;
 
 export function AppVersion():Promise<string>;
+
+export function BlockPeer(arg1:string):Promise<void>;
 
 export function CancelFile(arg1:string):Promise<void>;
 
@@ -45,6 +50,8 @@ export function DeleteGroup(arg1:string):Promise<void>;
 
 export function DeleteProfile(arg1:string,arg2:string):Promise<void>;
 
+export function DismissMessageRequest(arg1:string):Promise<void>;
+
 export function EndGroupCall(arg1:string,arg2:string):Promise<void>;
 
 export function ExportLogs():Promise<string>;
@@ -54,6 +61,8 @@ export function ExportTonRecoveryPhrase(arg1:string):Promise<Array<string>>;
 export function ForgetExit(arg1:string):Promise<void>;
 
 export function GetAccessStatus():Promise<node.AccessStatus>;
+
+export function GetBlockedPeers():Promise<Array<contacts.Blocked>>;
 
 export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
 
@@ -79,6 +88,8 @@ export function GetLogs(arg1:number):Promise<Array<logging.Entry>>;
 
 export function GetLogsText():Promise<string>;
 
+export function GetMessageRequests():Promise<Array<contacts.Request>>;
+
 export function GetMyID():Promise<string>;
 
 export function GetMyPubKey():Promise<string>;
@@ -86,6 +97,8 @@ export function GetMyPubKey():Promise<string>;
 export function GetNetworkStatus():Promise<Record<string, any>>;
 
 export function GetOnRampURL():Promise<string>;
+
+export function GetPrivacy():Promise<node.Privacy>;
 
 export function GetProbeDomains():Promise<Array<string>>;
 
@@ -217,6 +230,8 @@ export function SetGroupRole(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetPayAsset(arg1:string):Promise<void>;
 
+export function SetPrivacy(arg1:node.Privacy):Promise<void>;
+
 export function SetProbeDomains(arg1:Array<string>):Promise<void>;
 
 export function SetProfileService(arg1:main.ProfileService):Promise<void>;
@@ -266,6 +281,8 @@ export function SubmitCallAnswer(arg1:string):Promise<void>;
 export function TransferGroupOwnership(arg1:string,arg2:string):Promise<void>;
 
 export function TriggerPanicButton():Promise<void>;
+
+export function UnblockPeer(arg1:string):Promise<void>;
 
 export function UnsaveMessage(arg1:string):Promise<void>;
 
