@@ -50,7 +50,8 @@ your traffic goes out to the Internet from:
   fastest for the best price. *Check sites* lets you choose which sites it tests.
 - **Choose myself** — pick an exit from the list. You can sort by price, ping and speed.
 - **Specific node** — connect through one computer you know, for example a friend who shares
-  their connection with you for free. Paste the link or peer ID they gave you.
+  their connection with you for free, or a hidden exit you were invited to. Paste the link
+  (`echofog://join?…` or `echofog://relay/…`) or peer ID they gave you.
 
 Press **Connect**. When it says *Connected*, you have two ways to use it:
 
@@ -128,3 +129,5 @@ Send feedback and bug reports as an issue on the project's GitHub page, or in th
 - [FAQ](faq.md) — short, honest answers about privacy, payments and risks.
 - [How it works](how-it-works.md)
 - [Run a node](run-a-node.md) — share your connection or help others get online.
+- [Hidden and isolated nodes](hidden-nodes.md) — share your connection only with the people you
+  choose.

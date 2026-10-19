@@ -65,8 +65,9 @@ Some protection is built in. A public exit refuses to connect to:
 - Windows file-sharing and RPC ports (135, 137-139, 445) and SSDP (1900), which are common
   targets for scanning and worms.
 
-Everything else goes through. Your exit is published to the network so others can find it. Your
-own log can contain addresses that failed to connect. More in [run-a-node.md](run-a-node.md).
+Everything else goes through. A public exit is published to the network so others can find it; a
+hidden one is not, and serves only the people you give a link to (see
+[Hidden and isolated nodes](hidden-nodes.md)). Your own log can contain addresses that failed to connect. More in [run-a-node.md](run-a-node.md).
 
 ## Why TON? Is there a token?
 
@@ -100,8 +101,12 @@ Yes.
   [run-a-node.md](run-a-node.md).
 - **Free VPN for friends.** In the app, open *Proxy* → *Share your connection* and add your
   friends under *Free for these people*. They never pay, whatever your price. They connect with
-  *Specific node* and the link you give them. Note that the exit itself is still public: everyone
-  else gets your normal price.
+  *Specific node* and the link you give them. On its own this keeps the exit public: everyone else
+  can find it and gets your normal price.
+- **A VPN only for your people.** Switch *Proxy* → *Access to this computer* to **Hidden** (or run
+  a server node with `--access isolated`). Your exit then disappears from the network and answers
+  only the people you send its invitation link to. Step by step, in plain words:
+  [Hidden and isolated nodes](hidden-nodes.md).
 
 ## What does the app log and keep?
 
