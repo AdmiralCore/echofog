@@ -30,8 +30,16 @@ export function AddRelay(arg1) {
   return window['go']['main']['App']['AddRelay'](arg1);
 }
 
+export function AppVersion() {
+  return window['go']['main']['App']['AppVersion']();
+}
+
 export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
+}
+
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
 }
 
 export function CheckRecoveryPhrase(arg1) {
