@@ -86,6 +86,10 @@ export function ExportTonRecoveryPhrase(arg1) {
   return window['go']['main']['App']['ExportTonRecoveryPhrase'](arg1);
 }
 
+export function ForgetExit(arg1) {
+  return window['go']['main']['App']['ForgetExit'](arg1);
+}
+
 export function GetAccessStatus() {
   return window['go']['main']['App']['GetAccessStatus']();
 }
@@ -164,6 +168,10 @@ export function GetProfiles() {
 
 export function GetRelayStatus() {
   return window['go']['main']['App']['GetRelayStatus']();
+}
+
+export function GetSavedExits() {
+  return window['go']['main']['App']['GetSavedExits']();
 }
 
 export function GetSettings() {
@@ -390,8 +398,16 @@ export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
 }
 
+export function SetExitFavorite(arg1, arg2) {
+  return window['go']['main']['App']['SetExitFavorite'](arg1, arg2);
+}
+
 export function SetExitFreePeers(arg1) {
   return window['go']['main']['App']['SetExitFreePeers'](arg1);
+}
+
+export function SetExitName(arg1, arg2) {
+  return window['go']['main']['App']['SetExitName'](arg1, arg2);
 }
 
 export function SetGroupRole(arg1, arg2, arg3) {

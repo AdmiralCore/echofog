@@ -863,6 +863,44 @@ export namespace node {
 		}
 	}
 	
+	export class SavedExit {
+	    peerId: string;
+	    name?: string;
+	    favorite: boolean;
+	    addr?: string;
+	    sessions: number;
+	    bytesRx: number;
+	    bytesTx: number;
+	    refused: number;
+	    lastUsed: number;
+	    lastReadyMs?: number;
+	    lastState?: string;
+	    pricePerMb: number;
+	    priceKnown: boolean;
+	    active: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SavedExit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.name = source["name"];
+	        this.favorite = source["favorite"];
+	        this.addr = source["addr"];
+	        this.sessions = source["sessions"];
+	        this.bytesRx = source["bytesRx"];
+	        this.bytesTx = source["bytesTx"];
+	        this.refused = source["refused"];
+	        this.lastUsed = source["lastUsed"];
+	        this.lastReadyMs = source["lastReadyMs"];
+	        this.lastState = source["lastState"];
+	        this.pricePerMb = source["pricePerMb"];
+	        this.priceKnown = source["priceKnown"];
+	        this.active = source["active"];
+	    }
+	}
 	export class SettingsDTO {
 	    directSocket: boolean;
 	    socketBufferMb: number;
@@ -982,6 +1020,7 @@ export namespace node {
 		}
 	}
 	export class VPNSession {
+	    id: string;
 	    peerId: string;
 	    addr?: string;
 	    startedAt: number;
@@ -993,6 +1032,7 @@ export namespace node {
 	    refused: number;
 	    lastState?: string;
 	    pricePerMb: number;
+	    priceKnown: boolean;
 	    endReason?: string;
 	    active: boolean;
 	
@@ -1002,6 +1042,7 @@ export namespace node {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.peerId = source["peerId"];
 	        this.addr = source["addr"];
 	        this.startedAt = source["startedAt"];
@@ -1013,6 +1054,7 @@ export namespace node {
 	        this.refused = source["refused"];
 	        this.lastState = source["lastState"];
 	        this.pricePerMb = source["pricePerMb"];
+	        this.priceKnown = source["priceKnown"];
 	        this.endReason = source["endReason"];
 	        this.active = source["active"];
 	    }

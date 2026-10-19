@@ -47,6 +47,8 @@ export function ExportLogs():Promise<string>;
 
 export function ExportTonRecoveryPhrase(arg1:string):Promise<Array<string>>;
 
+export function ForgetExit(arg1:string):Promise<void>;
+
 export function GetAccessStatus():Promise<node.AccessStatus>;
 
 export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
@@ -86,6 +88,8 @@ export function GetProbeDomains():Promise<Array<string>>;
 export function GetProfiles():Promise<Array<string>>;
 
 export function GetRelayStatus():Promise<node.RelayStatus>;
+
+export function GetSavedExits():Promise<Array<node.SavedExit>>;
 
 export function GetSettings():Promise<node.SettingsDTO>;
 
@@ -199,7 +203,11 @@ export function SetAccessMode(arg1:string):Promise<void>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
 
+export function SetExitFavorite(arg1:string,arg2:boolean):Promise<void>;
+
 export function SetExitFreePeers(arg1:Array<string>):Promise<void>;
+
+export function SetExitName(arg1:string,arg2:string):Promise<void>;
 
 export function SetGroupRole(arg1:string,arg2:string,arg3:string):Promise<void>;
 
