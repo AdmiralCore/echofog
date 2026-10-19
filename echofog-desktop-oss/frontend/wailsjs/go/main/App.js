@@ -42,6 +42,14 @@ export function CheckSites(arg1, arg2) {
   return window['go']['main']['App']['CheckSites'](arg1, arg2);
 }
 
+export function ClearVPNHistory() {
+  return window['go']['main']['App']['ClearVPNHistory']();
+}
+
+export function ConnectLastExit() {
+  return window['go']['main']['App']['ConnectLastExit']();
+}
+
 export function ConnectToLocalPeer(arg1) {
   return window['go']['main']['App']['ConnectToLocalPeer'](arg1);
 }
@@ -184,6 +192,10 @@ export function GetTonTopUpLink(arg1) {
 
 export function GetTonWallet() {
   return window['go']['main']['App']['GetTonWallet']();
+}
+
+export function GetVPNHistory() {
+  return window['go']['main']['App']['GetVPNHistory']();
 }
 
 export function GetVPNStatus() {

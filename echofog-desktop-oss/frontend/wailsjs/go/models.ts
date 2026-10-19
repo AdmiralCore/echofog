@@ -898,6 +898,42 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class VPNSession {
+	    peerId: string;
+	    addr?: string;
+	    startedAt: number;
+	    endedAt?: number;
+	    updatedAt: number;
+	    readyMs?: number;
+	    bytesRx: number;
+	    bytesTx: number;
+	    refused: number;
+	    lastState?: string;
+	    pricePerMb: number;
+	    endReason?: string;
+	    active: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new VPNSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.addr = source["addr"];
+	        this.startedAt = source["startedAt"];
+	        this.endedAt = source["endedAt"];
+	        this.updatedAt = source["updatedAt"];
+	        this.readyMs = source["readyMs"];
+	        this.bytesRx = source["bytesRx"];
+	        this.bytesTx = source["bytesTx"];
+	        this.refused = source["refused"];
+	        this.lastState = source["lastState"];
+	        this.pricePerMb = source["pricePerMb"];
+	        this.endReason = source["endReason"];
+	        this.active = source["active"];
+	    }
+	}
 	export class VPNSwitch {
 	    from: string;
 	    to: string;

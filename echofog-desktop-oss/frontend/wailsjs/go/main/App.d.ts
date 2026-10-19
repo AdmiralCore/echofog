@@ -25,6 +25,10 @@ export function CheckRecoveryPhrase(arg1:string):Promise<string>;
 
 export function CheckSites(arg1:string,arg2:Array<string>):Promise<Array<node.SiteCheck>>;
 
+export function ClearVPNHistory():Promise<void>;
+
+export function ConnectLastExit():Promise<void>;
+
 export function ConnectToLocalPeer(arg1:string):Promise<void>;
 
 export function CreateGroup(arg1:string,arg2:string,arg3:string):Promise<node.GroupDTO>;
@@ -96,6 +100,8 @@ export function GetTonHistory(arg1:number):Promise<Array<dto.TonTxDTO>>;
 export function GetTonTopUpLink(arg1:string):Promise<string>;
 
 export function GetTonWallet():Promise<dto.TonWalletDTO>;
+
+export function GetVPNHistory():Promise<Array<node.VPNSession>>;
 
 export function GetVPNStatus():Promise<node.VPNStatus>;
 
