@@ -86,6 +86,10 @@ export function ExportTonRecoveryPhrase(arg1) {
   return window['go']['main']['App']['ExportTonRecoveryPhrase'](arg1);
 }
 
+export function GetAccessStatus() {
+  return window['go']['main']['App']['GetAccessStatus']();
+}
+
 export function GetBootstrapNodes() {
   return window['go']['main']['App']['GetBootstrapNodes']();
 }
@@ -282,6 +286,10 @@ export function OpenTransferFile(arg1, arg2) {
   return window['go']['main']['App']['OpenTransferFile'](arg1, arg2);
 }
 
+export function ParseInvite(arg1) {
+  return window['go']['main']['App']['ParseInvite'](arg1);
+}
+
 export function PayExit(arg1) {
   return window['go']['main']['App']['PayExit'](arg1);
 }
@@ -322,12 +330,20 @@ export function RemoveGroupMember(arg1, arg2, arg3) {
   return window['go']['main']['App']['RemoveGroupMember'](arg1, arg2, arg3);
 }
 
+export function RemoveJoinedPeer(arg1) {
+  return window['go']['main']['App']['RemoveJoinedPeer'](arg1);
+}
+
 export function ReportCallMember(arg1, arg2) {
   return window['go']['main']['App']['ReportCallMember'](arg1, arg2);
 }
 
 export function RequestRelayChange(arg1) {
   return window['go']['main']['App']['RequestRelayChange'](arg1);
+}
+
+export function RotateAccessSecret() {
+  return window['go']['main']['App']['RotateAccessSecret']();
 }
 
 export function SaveMessage(arg1) {
@@ -364,6 +380,10 @@ export function SendTon(arg1, arg2, arg3) {
 
 export function SendUsdt(arg1, arg2, arg3) {
   return window['go']['main']['App']['SendUsdt'](arg1, arg2, arg3);
+}
+
+export function SetAccessMode(arg1) {
+  return window['go']['main']['App']['SetAccessMode'](arg1);
 }
 
 export function SetAutoPay(arg1, arg2, arg3) {

@@ -47,6 +47,8 @@ export function ExportLogs():Promise<string>;
 
 export function ExportTonRecoveryPhrase(arg1:string):Promise<Array<string>>;
 
+export function GetAccessStatus():Promise<node.AccessStatus>;
+
 export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
 
 export function GetCallRoster():Promise<dto.CallRosterDTO>;
@@ -145,6 +147,8 @@ export function OpenDownloadDir():Promise<void>;
 
 export function OpenTransferFile(arg1:string,arg2:boolean):Promise<void>;
 
+export function ParseInvite(arg1:string):Promise<node.InviteInfo>;
+
 export function PayExit(arg1:string):Promise<string>;
 
 export function PayForTraffic(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
@@ -165,9 +169,13 @@ export function RemoveBootstrapNode(arg1:string):Promise<void>;
 
 export function RemoveGroupMember(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
+export function RemoveJoinedPeer(arg1:string):Promise<void>;
+
 export function ReportCallMember(arg1:string,arg2:string):Promise<void>;
 
 export function RequestRelayChange(arg1:string):Promise<void>;
+
+export function RotateAccessSecret():Promise<string>;
 
 export function SaveMessage(arg1:dto.SavedMessageDTO):Promise<dto.SavedMessageDTO>;
 
@@ -186,6 +194,8 @@ export function SendMessage(arg1:string,arg2:string):Promise<void>;
 export function SendTon(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function SendUsdt(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function SetAccessMode(arg1:string):Promise<void>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
 
