@@ -15,9 +15,11 @@ func (m *CallManager) GetBridgeOffer() (string, error) {
 	defer m.mu.RUnlock()
 
 	if m.activeRoom == nil || m.activeRoom.Bridge == nil {
-		return "", errors.New("call room or media bridge not initialized")
+		err := errors.New("call room or media bridge not initialized")
+		m.logger.Warn("UI asked for a media bridge offer without a bridge", "in_call", m.activeRoom != nil, "err", err)
+		return "", err
 	}
-	return m.activeRoom.Bridge.CreateOffer()
+	return m.activeRoom.Bridge.CreateOffer() // the bridge logs its own failures
 }
 
 // SubmitBridgeAnswer sets the WebRTC SDP Answer from the Wails frontend to complete the loopback handshake.
@@ -26,7 +28,9 @@ func (m *CallManager) SubmitBridgeAnswer(sdpAnswer string) error {
 	defer m.mu.RUnlock()
 
 	if m.activeRoom == nil || m.activeRoom.Bridge == nil {
-		return errors.New("call room or media bridge not initialized")
+		err := errors.New("call room or media bridge not initialized")
+		m.logger.Warn("UI sent a media bridge answer without a bridge", "in_call", m.activeRoom != nil, "err", err)
+		return err
 	}
 	return m.activeRoom.Bridge.SetRemoteAnswer(sdpAnswer)
 }
@@ -84,7 +88,9 @@ func captureRole(mediaType string) string {
 
 func (m *CallManager) onBridgeRTP(role string, payload []byte) {
 	if role == bridge.RoleMic {
-		_ = m.PublishAudio(payload)
+		if err := m.PublishAudio(payload); err != nil {
+			m.publishFailed(role, "", err)
+		}
 		return
 	}
 	video := role
@@ -98,13 +104,32 @@ func (m *CallManager) onBridgeRTP(role string, payload []byte) {
 	}
 	m.mu.RUnlock()
 	if streamID == "" {
+		// the UI sends a capture the room was never told about (StartStream missing or failed)
+		m.debugOnce("nostream:"+role, "Dropped UI capture with no stream started for it", "role", role)
 		return
 	}
+	var err error
 	if role == bridge.RoleScreenAudio {
-		_ = m.PublishStreamAudio(streamID, payload)
+		err = m.PublishStreamAudio(streamID, payload)
+	} else {
+		err = m.PublishVideo(streamID, payload)
+	}
+	if err != nil {
+		m.publishFailed(role, streamID, err)
+	}
+}
+
+// publishFailed logs a local unit that could not be sent, e.g. a video frame too large to seal.
+func (m *CallManager) publishFailed(role, streamID string, err error) {
+	if errors.Is(err, ErrNotInCall) {
+		return // the capture outlives the call by a few packets
+	}
+	if errors.Is(err, ErrNoLocalStream) {
+		// same after a stop; only worth a look if it goes on
+		m.debugOnce("publish:"+role+":stopped", "Dropped local media of a stopped stream", "role", role, "stream", streamID)
 		return
 	}
-	_ = m.PublishVideo(streamID, payload)
+	m.warnOnce("publish:"+role+":"+err.Error(), "Failed to send local media", "role", role, "stream", streamID, "err", err)
 }
 
 // PublishStreamAudio sends one encoded audio unit of a local stream (a screen's sound) down the
@@ -181,7 +206,7 @@ func (m *CallManager) OnLocalAudio(packet *media.MediaPacket) {
 		tap(packet)
 	}
 	if room != nil && room.Bridge != nil {
-		_ = room.Bridge.PushRemoteAudio(packet)
+		_ = room.Bridge.PushRemoteAudio(packet) // the bridge logs failures, rate limited
 	}
 }
 
@@ -196,6 +221,7 @@ func (m *CallManager) OnLocalVideo(packet *media.MediaPacket) {
 	if room == nil || room.Bridge == nil {
 		return
 	}
+	// the bridge logs push failures, rate limited
 	if packet.Kind == media.FrameStreamAudio {
 		_ = room.Bridge.PushRemoteStreamAudio(packet)
 		return

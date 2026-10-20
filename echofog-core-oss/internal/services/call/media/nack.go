@@ -1,10 +1,12 @@
 package media
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -133,7 +135,12 @@ func (r *fragRing) expire(now time.Time) {
 // own parent for. When those arrive they are forwarded to every child as usual, the requester
 // included. A NACK from a peer that is not our child on the stream is ignored.
 func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []NackEntry) []NackEntry {
-	if d.streamEngine == nil || d.outbox == nil || len(lost) == 0 || len(lost) > MaxNackEntries {
+	if d.streamEngine == nil || d.outbox == nil || len(lost) == 0 {
+		return nil
+	}
+	if len(lost) > MaxNackEntries {
+		d.lim.Log(d.log, slog.LevelDebug, "nack-big:"+streamID, "Ignored oversized NACK",
+			"stream", streamID, "from", calllog.Peer(child), "entries", len(lost))
 		return nil
 	}
 	isChild := false
@@ -144,14 +151,19 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 		}
 	}
 	if !isChild {
+		// usually a NACK that crossed a tree update; persistent ones mean the trees disagree
+		d.lim.Log(d.log, slog.LevelDebug, "nack-stranger:"+streamID+":"+child.String(), "Ignored NACK from a peer that is not our child on the stream",
+			"stream", streamID, "from", calllog.Peer(child))
 		return nil
 	}
 	now := time.Now()
 	var upstream []NackEntry
+	sent := 0
 	for _, e := range lost {
 		frags, held, complete := d.ring.lookup(streamID, e.Seq, e.Have, now)
 		for _, f := range frags {
 			d.retransmitted.Add(1)
+			sent++
 			d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, f)
 		}
 		if !complete {
@@ -161,6 +173,15 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 	}
 	upstream = d.holdoff(streamID, upstream, now)
 	d.nacked.Add(uint64(len(upstream)))
+	d.mu.Lock()
+	c := d.streamLocked(streamID)
+	c.Retransmitted += uint64(sent)
+	c.Nacked += uint64(len(upstream))
+	d.mu.Unlock()
+	if len(upstream) > 0 {
+		d.lim.Log(d.log, slog.LevelDebug, "nack-up:"+streamID, "Units a child asked for are not in our ring, asking upstream",
+			"stream", streamID, "child", calllog.Peer(child), "units", len(upstream))
+	}
 	return upstream
 }
 
@@ -191,6 +212,11 @@ func (d *MediaDispatcher) nackGap(k sourceKey, gap []uint32) {
 	}
 	if lost = d.holdoff(k.streamID, lost, now); len(lost) > 0 {
 		d.nacked.Add(uint64(len(lost)))
+		d.mu.Lock()
+		d.streamLocked(k.streamID).Nacked += uint64(len(lost))
+		d.mu.Unlock()
+		d.lim.Log(d.log, slog.LevelDebug, "nack:"+k.streamID, "Asking parent to resend lost video units",
+			"stream", k.streamID, "units", len(lost))
 		cb(k.streamID, lost)
 	}
 }

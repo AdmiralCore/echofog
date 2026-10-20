@@ -3,11 +3,13 @@ package media
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -63,11 +65,30 @@ type Outbox struct {
 	peers map[types.PeerID]*peerQueue
 
 	sent, dropped, failed [3]atomic.Uint64
+
+	// Drops and failed sends happen per frame on a bad link, so they are logged through lim.
+	log *slog.Logger
+	lim *calllog.Limiter
 }
 
 func NewOutbox(sender FrameSender) *Outbox {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Outbox{sender: sender, ctx: ctx, cancel: cancel, peers: make(map[types.PeerID]*peerQueue)}
+	return &Outbox{
+		sender: sender, ctx: ctx, cancel: cancel, peers: make(map[types.PeerID]*peerQueue),
+		log: slog.Default().With("component", "call-media"), lim: calllog.New(calllog.Every),
+	}
+}
+
+// className names a traffic class in logs.
+func className(c TrafficClass) string {
+	switch c {
+	case ClassControl:
+		return "control"
+	case ClassAudio:
+		return "audio"
+	default:
+		return "video"
+	}
 }
 
 // Send enqueues without blocking; it returns false if the frame was dropped.
@@ -91,6 +112,11 @@ func (o *Outbox) Send(peer types.PeerID, class TrafficClass, msgType net_types.M
 		return true
 	default:
 		o.dropped[class].Add(1)
+		// A full queue means the link to this peer cannot keep up; for control it means signals
+		// (joins, tree updates, NACKs) are lost, which is worth a warning on its own.
+		o.lim.Log(o.log, slog.LevelWarn, "drop:"+className(class)+":"+peer.String(),
+			"Outbox queue full, dropping frames", "peer", calllog.Peer(peer), "class", className(class),
+			"dropped_total", o.dropped[class].Load())
 		return false
 	}
 }
@@ -103,6 +129,7 @@ func (o *Outbox) Forget(peer types.PeerID) {
 	o.mu.Unlock()
 	if q != nil {
 		q.cancel()
+		o.log.Debug("Outbox stopped sending to a peer that left", "peer", calllog.Peer(peer))
 	}
 }
 
@@ -203,6 +230,9 @@ func (o *Outbox) deliver(peer types.PeerID, class TrafficClass, f outFrame) {
 	}
 	if err != nil {
 		o.failed[class].Add(1)
+		o.lim.Log(o.log, slog.LevelWarn, "fail:"+className(class)+":"+peer.String(),
+			"Failed to send call frame", "peer", calllog.Peer(peer), "class", className(class),
+			"failed_total", o.failed[class].Load(), "err", err)
 		return
 	}
 	o.sent[class].Add(1)

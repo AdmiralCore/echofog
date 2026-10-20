@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
@@ -96,6 +99,10 @@ type LocalMediaBridge struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	now        func() time.Time
+
+	// The bridge runs per RTP packet; write and parse failures go through lim.
+	log *slog.Logger
+	lim *calllog.Limiter
 }
 
 // RTPPacketHandlerCompat is the callback signature used by the call manager.
@@ -156,6 +163,8 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 		ctx:            ctx,
 		cancel:         cancel,
 		now:            time.Now,
+		log:            slog.Default().With("component", "call-bridge"),
+		lim:            calllog.New(calllog.Every),
 	}
 	fail := func(err error) (*LocalMediaBridge, error) {
 		cancel()
@@ -206,11 +215,36 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 		b.streamAudio = append(b.streamAudio, s)
 	}
 
+	// The loopback to the UI never crosses a network, so a failed or disconnected state means the
+	// webview side went away or broke: from then on the user hears and sees nothing.
+	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
+		switch st {
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected:
+			b.log.Warn("Media bridge to the UI lost", "state", st.String())
+		case webrtc.PeerConnectionStateConnected:
+			b.log.Info("Media bridge to the UI connected")
+		default:
+			b.log.Debug("Media bridge state changed", "state", st.String())
+		}
+	})
+	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
+		if st == webrtc.ICEConnectionStateFailed {
+			b.log.Warn("Media bridge ICE failed")
+			return
+		}
+		b.log.Debug("Media bridge ICE state changed", "state", st.String())
+	})
+	pc.OnSignalingStateChange(func(st webrtc.SignalingState) {
+		b.log.Debug("Media bridge signaling state changed", "state", st.String())
+	})
+
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		role := b.roleOf(receiver)
 		if role == "" {
+			b.log.Warn("Ignored UI track on an unexpected transceiver", "kind", track.Kind().String(), "codec", track.Codec().MimeType)
 			return
 		}
+		b.log.Info("UI capture track started", "role", role, "codec", track.Codec().MimeType, "ssrc", uint32(track.SSRC()))
 		b.mu.Lock()
 		b.localSSRC[role] = uint32(track.SSRC())
 		b.mu.Unlock()
@@ -274,14 +308,25 @@ func (b *LocalMediaBridge) readIncomingTrack(role string, track *webrtc.TrackRem
 		}
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
+			if b.ctx.Err() == nil {
+				// the UI stopped this capture (mic muted, screen share ended) or the bridge broke
+				if errors.Is(err, io.EOF) {
+					b.log.Info("UI capture track ended", "role", role)
+				} else {
+					b.log.Warn("UI capture track read failed", "role", role, "err", err)
+				}
+			}
 			return
 		}
 		if b.onLocalRTP == nil {
 			continue
 		}
-		if raw, err := pkt.Marshal(); err == nil {
-			b.onLocalRTP(role, raw)
+		raw, err := pkt.Marshal()
+		if err != nil {
+			b.lim.Log(b.log, slog.LevelWarn, "marshal:"+role, "Dropped UI capture packet that could not be re-encoded", "role", role, "err", err)
+			continue
 		}
+		b.onLocalRTP(role, raw)
 	}
 }
 
@@ -291,6 +336,9 @@ func (b *LocalMediaBridge) readSlotRTCP(s *slot, sender *webrtc.RTPSender) {
 	for {
 		pkts, _, err := sender.ReadRTCP()
 		if err != nil {
+			if b.ctx.Err() == nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+				b.log.Debug("Playback slot feedback ended", "slot", s.id, "err", err)
+			}
 			return
 		}
 		if s.kind != "video" || b.onKeyframe == nil {
@@ -303,6 +351,7 @@ func (b *LocalMediaBridge) readSlotRTCP(s *slot, sender *webrtc.RTPSender) {
 				owner := s.owner
 				b.mu.Unlock()
 				if owner != "" {
+					b.lim.Log(b.log, slog.LevelDebug, "pli:"+s.id, "UI decoder asked for a keyframe", "slot", s.id, "stream", owner)
 					b.onKeyframe(owner)
 				}
 			}
@@ -329,33 +378,60 @@ func (b *LocalMediaBridge) PushRemoteVideo(pkt *media.MediaPacket) error {
 func (b *LocalMediaBridge) push(pool []*slot, owner, peer, streamID string, unit []byte) error {
 	var p rtp.Packet
 	if err := p.Unmarshal(unit); err != nil {
-		return fmt.Errorf("remote unit is not an RTP packet: %w", err)
+		err = fmt.Errorf("remote unit is not an RTP packet: %w", err)
+		b.lim.Log(b.log, slog.LevelWarn, "unmarshal:"+owner, "Dropped remote media unit that is not RTP",
+			"stream", streamID, "peer", shortHex(peer), "err", err)
+		return err
 	}
 	now := b.now()
 
 	b.mu.Lock()
-	s, ev := b.slotForLocked(pool, owner, peer, streamID, now)
+	s, ev, prev := b.slotForLocked(pool, owner, peer, streamID, now)
 	if s == nil {
 		b.mu.Unlock()
+		// every slot of the pool carries a source that is still playing: this one is not heard or seen
+		b.lim.Log(b.log, slog.LevelWarn, "noslot:"+owner, "No free playback slot, remote media not played",
+			"stream", streamID, "peer", shortHex(peer), "slots", len(pool))
 		return ErrNoSlot
 	}
 	s.rewrite(&p, now)
 	track := s.track
 	b.mu.Unlock()
 
-	if ev != nil && b.onSlot != nil {
-		b.onSlot(*ev)
+	if ev != nil {
+		if prev != "" {
+			b.log.Info("Playback slot taken over from an idle source", "slot", ev.Slot, "kind", ev.Kind, "peer", shortHex(peer), "stream", streamID, "previous", shortHex(prev))
+		} else {
+			b.log.Info("Playback slot assigned", "slot", ev.Slot, "kind", ev.Kind, "peer", shortHex(peer), "stream", streamID)
+		}
+		if b.onSlot != nil {
+			b.onSlot(*ev)
+		}
 	}
-	return track.WriteRTP(&p)
+	if err := track.WriteRTP(&p); err != nil {
+		b.lim.Log(b.log, slog.LevelWarn, "write:"+s.id, "Failed to write remote media to the UI track",
+			"slot", s.id, "stream", streamID, "peer", shortHex(peer), "err", err)
+		return err
+	}
+	return nil
+}
+
+// shortHex shortens a hex peer ID (or a stream ID) the way calllog.Peer does.
+func shortHex(peer string) string {
+	if len(peer) > 12 {
+		return peer[:12]
+	}
+	return peer
 }
 
 // slotForLocked returns the slot of owner, assigning a free or long-idle one if needed.
-func (b *LocalMediaBridge) slotForLocked(pool []*slot, owner, peer, streamID string, now time.Time) (*slot, *SlotEvent) {
+// prev is the owner an idle slot was taken from, if any.
+func (b *LocalMediaBridge) slotForLocked(pool []*slot, owner, peer, streamID string, now time.Time) (*slot, *SlotEvent, string) {
 	var free, idle *slot
 	for _, s := range pool {
 		if s.owner == owner {
 			s.lastUsed = now
-			return s, nil
+			return s, nil, ""
 		}
 		if s.owner == "" && free == nil {
 			free = s
@@ -369,10 +445,11 @@ func (b *LocalMediaBridge) slotForLocked(pool []*slot, owner, peer, streamID str
 		s = idle
 	}
 	if s == nil {
-		return nil, nil
+		return nil, nil, ""
 	}
+	prev := s.owner
 	s.owner, s.peer, s.lastUsed, s.rebase = owner, peer, now, true
-	return s, &SlotEvent{Slot: s.id, Kind: s.kind, Peer: peer, StreamID: streamID, Active: true}
+	return s, &SlotEvent{Slot: s.id, Kind: s.kind, Peer: peer, StreamID: streamID, Active: true}, prev
 }
 
 // rewrite maps the source's RTP numbering onto the slot's continuous numbering and drops header
@@ -420,8 +497,11 @@ func (b *LocalMediaBridge) release(pool []*slot, owner, streamID string) {
 		}
 	}
 	b.mu.Unlock()
-	if ev != nil && b.onSlot != nil {
-		b.onSlot(*ev)
+	if ev != nil {
+		b.log.Info("Playback slot released", "slot", ev.Slot, "kind", ev.Kind, "peer", shortHex(ev.Peer), "stream", streamID)
+		if b.onSlot != nil {
+			b.onSlot(*ev)
+		}
 	}
 }
 
@@ -452,9 +532,15 @@ func (b *LocalMediaBridge) RequestKeyframe(role string) error {
 	pc, ssrc := b.peerConnection, b.localSSRC[role]
 	b.mu.Unlock()
 	if pc == nil || ssrc == 0 {
-		return errors.New("no local video track to refresh")
+		err := errors.New("no local video track to refresh")
+		b.lim.Log(b.log, slog.LevelWarn, "pli-out:"+role, "Cannot ask the UI encoder for a keyframe", "role", role, "err", err)
+		return err
 	}
-	return pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})
+	if err := pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}}); err != nil {
+		b.lim.Log(b.log, slog.LevelWarn, "pli-out:"+role, "Failed to ask the UI encoder for a keyframe", "role", role, "err", err)
+		return err
+	}
+	return nil
 }
 
 // SetSendBitrate caps the UI encoder of a capture role with an RTCP REMB, so it lowers its rate
@@ -464,9 +550,16 @@ func (b *LocalMediaBridge) SetSendBitrate(role string, bps uint64) error {
 	pc, ssrc := b.peerConnection, b.localSSRC[role]
 	b.mu.Unlock()
 	if pc == nil || ssrc == 0 {
-		return errors.New("no local video track to limit")
+		// normal for a moment after a stream starts, before the UI attaches its track
+		err := errors.New("no local video track to limit")
+		b.lim.Log(b.log, slog.LevelDebug, "remb:"+role, "Cannot cap the UI encoder yet", "role", role, "err", err)
+		return err
 	}
-	return pc.WriteRTCP([]rtcp.Packet{&rtcp.ReceiverEstimatedMaximumBitrate{Bitrate: float32(bps), SSRCs: []uint32{ssrc}}})
+	if err := pc.WriteRTCP([]rtcp.Packet{&rtcp.ReceiverEstimatedMaximumBitrate{Bitrate: float32(bps), SSRCs: []uint32{ssrc}}}); err != nil {
+		b.lim.Log(b.log, slog.LevelWarn, "remb:"+role, "Failed to cap the UI encoder bitrate", "role", role, "kbps", bps/1000, "err", err)
+		return err
+	}
+	return nil
 }
 
 // CreateOffer generates a WebRTC SDP Offer for Wails frontend.
@@ -476,17 +569,21 @@ func (b *LocalMediaBridge) CreateOffer() (string, error) {
 
 	offer, err := b.peerConnection.CreateOffer(nil)
 	if err != nil {
+		b.log.Warn("Failed to create media bridge offer", "err", err)
 		return "", err
 	}
 	gathered := webrtc.GatheringCompletePromise(b.peerConnection)
 	if err := b.peerConnection.SetLocalDescription(offer); err != nil {
+		b.log.Warn("Failed to set media bridge offer", "err", err)
 		return "", err
 	}
 	// The UI gets one SDP and no trickle channel, so it must already carry our candidates.
 	select {
 	case <-gathered:
 	case <-time.After(2 * time.Second):
+		b.log.Warn("Media bridge ICE gathering did not finish in time, the offer may lack candidates")
 	}
+	b.log.Info("Media bridge offer created")
 	return b.peerConnection.LocalDescription().SDP, nil
 }
 
@@ -495,7 +592,12 @@ func (b *LocalMediaBridge) SetRemoteAnswer(sdpAnswer string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.peerConnection.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdpAnswer})
+	if err := b.peerConnection.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdpAnswer}); err != nil {
+		b.log.Warn("Rejected media bridge answer from the UI", "err", err)
+		return err
+	}
+	b.log.Info("Media bridge answer applied")
+	return nil
 }
 
 // Close gracefully closes the WebRTC loopback connection.
@@ -505,7 +607,11 @@ func (b *LocalMediaBridge) Close() error {
 	defer b.mu.Unlock()
 
 	if b.peerConnection != nil {
-		return b.peerConnection.Close()
+		if err := b.peerConnection.Close(); err != nil {
+			b.log.Warn("Failed to close media bridge", "err", err)
+			return err
+		}
 	}
+	b.log.Debug("Media bridge closed")
 	return nil
 }

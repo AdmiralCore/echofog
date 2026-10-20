@@ -6,6 +6,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
@@ -15,12 +16,15 @@ import (
 // JoinRoom enters a group call with a specified coordinator and room E2EE key.
 func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey []byte, profile tree.PeerNodeProfile) error {
 	if len(roomKey) != 32 {
+		m.logger.Warn("Call join refused: bad room key", "call_id", calllog.Call(callID), "key_len", len(roomKey))
 		return ErrInvalidRoomKey
 	}
 
 	m.mu.Lock()
 	if m.activeRoom != nil {
+		active := m.activeRoom.CallID
 		m.mu.Unlock()
+		m.logger.Warn("Call join refused: already in a call", "call_id", calllog.Call(callID), "active_call", calllog.Call(active))
 		return ErrCallAlreadyActive
 	}
 
@@ -53,6 +57,9 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		seen:           make(map[floodKey]time.Time),
 		keyframeSent:   make(map[string]time.Time),
 		keyframeServed: make(map[string]time.Time),
+		startedAt:      now,
+		waitingSince:   now,
+		lastStatsLog:   now,
 	}
 
 	room.Dispatcher = media.NewMediaDispatcher(m.selfID, m.sender, m, engine)
@@ -60,6 +67,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		cancel()
 		room.Dispatcher.Close()
 		m.mu.Unlock()
+		m.logger.Warn("Call join failed: room key rejected", "call_id", calllog.Call(callID), "err", err)
 		return err
 	}
 	room.Dispatcher.OnVideoNack = m.sendNack
@@ -71,6 +79,9 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		OnKeyframeNeeded: m.requestKeyframe,
 	}); err == nil {
 		room.Bridge = b
+	} else {
+		// the call still runs (and relays) without it, but the UI gets no audio or video
+		m.logger.Warn("Media bridge could not be created, the call has no local audio or video", "call_id", calllog.Call(callID), "err", err)
 	}
 
 	m.activeRoom = room
@@ -84,7 +95,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		m.sendJoinLocked(room, now)
 	}
 
-	m.logger.Info("Joined call room", "call_id", callID, "coordinator", coordinator.String(), "is_coord", room.IsCoordinator)
+	m.logger.Info("Joined call room", "call_id", calllog.Call(callID), "coordinator", calllog.Peer(coordinator), "is_coord", room.IsCoordinator)
 	m.emit("call:session_started", map[string]any{"call_id": callID, "coordinator": coordinator.String(), "is_coordinator": room.IsCoordinator})
 	m.unlockAndFlush()
 
@@ -114,21 +125,30 @@ func (m *CallManager) LeaveRoom() error {
 			targets = []types.PeerID{room.Coordinator}
 		}
 		if leave, err := m.encodeLocked(room, signaling.ActionLeave, nil); err == nil {
-			sender := m.sender
+			sender, log := m.sender, m.logger
 			for _, t := range targets {
-				go func(t types.PeerID) { _ = sender.SendRawFrame(t, net_types.TypeCallSignaling, leave) }(t)
+				go func(t types.PeerID) {
+					if err := sender.SendRawFrame(t, net_types.TypeCallSignaling, leave); err != nil {
+						// the peer finds out from the missing heartbeats, only later
+						log.Debug("Could not tell a call peer that we left", "peer", calllog.Peer(t), "err", err)
+					}
+				}(t)
 			}
+		} else {
+			m.logger.Warn("Failed to encode call leave signal", "err", err)
 		}
 	}
 
+	m.logSummaryLocked(room)
 	room.Cancel()
 	room.Dispatcher.Close()
 	if room.Bridge != nil {
-		_ = room.Bridge.Close()
+		_ = room.Bridge.Close() // the bridge logs its own close failure
 	}
 	m.activeRoom = nil
 
-	m.logger.Info("Left call room", "call_id", room.CallID)
+	m.logger.Info("Left call room", "call_id", calllog.Call(room.CallID), "was_coord", room.IsCoordinator,
+		"duration", time.Since(room.startedAt).Round(time.Second).String())
 	m.emit("call:session_ended", map[string]any{"call_id": room.CallID})
 	m.mu.Unlock()
 	return nil
@@ -146,6 +166,8 @@ func (m *CallManager) admitLocked(room *ActiveRoomState, peer types.PeerID, prof
 	room.StreamEngine.UpdatePeerProfile(profile)
 	m.ensureConnectedLocked(peer)
 	if !known {
+		m.logger.Info("Call member joined", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer),
+			"members", len(room.ConnectedPeers), "upload_kbps", profile.UploadKbps, "relay_children", profile.MaxRelayChildren)
 		m.rebuildVoiceLocked(room)
 	}
 	m.sendRoomSyncLocked(room, peer)
@@ -159,10 +181,15 @@ func (m *CallManager) sendRoomSyncLocked(room *ActiveRoomState, peer types.PeerI
 	m.sendLocked(room, peer, signaling.ActionRoomSync, rs)
 }
 
-func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerID) {
+// removeMemberLocked drops a member; reason says why ("left", "timeout", "parent lost", "kicked").
+func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerID, reason string) {
 	delete(room.ConnectedPeers, peer)
 	delete(room.memberSeen, peer)
-	m.logger.Info("Removing silent call member", "peer", peer.String())
+	if reason == "left" {
+		m.logger.Info("Call member left", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer), "members", len(room.ConnectedPeers))
+	} else {
+		m.logger.Warn("Removing call member", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer), "reason", reason, "members", len(room.ConnectedPeers))
+	}
 	m.emit("call:member_removed", map[string]any{"call_id": room.CallID, "peer": peer.String()})
 
 	m.rebuildVoiceLocked(room)
@@ -171,6 +198,7 @@ func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerI
 		m.floodLocked(room, signaling.ActionStreamTreeUpdate, sm)
 	}
 	for _, id := range closed {
+		m.logger.Info("Closing stream of a member that is gone", "stream", id, "broadcaster", calllog.Peer(peer))
 		m.floodLocked(room, signaling.ActionStreamClose, id)
 		m.closeStreamLocalLocked(room, id)
 	}
@@ -197,7 +225,10 @@ func (m *CallManager) ensureConnectedLocked(peer types.PeerID) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := connect(ctx, peer); err != nil {
-			m.logger.Debug("Could not reach call peer", "peer", peer.String(), "err", err)
+			// a tree neighbour we cannot reach gets no media from us and sends us none
+			m.warnOnce("connect:"+peer.String(), "Could not reach call peer", "peer", calllog.Peer(peer), "err", err)
+			return
 		}
+		m.logger.Debug("Connected to call peer", "peer", calllog.Peer(peer))
 	}()
 }

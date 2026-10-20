@@ -1,11 +1,13 @@
 package media
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -42,6 +44,15 @@ type DispatcherStats struct {
 	Outbox           OutboxStats
 }
 
+// StreamCounters is what one stream did on this node, for the summary logged when a call ends.
+type StreamCounters struct {
+	UnitsSent     uint64 // units this node broadcast on its own stream
+	Delivered     uint64 // video units decrypted and played here
+	Lost          uint64 // gaps that outlived the reorder window (each costs a keyframe request)
+	Nacked        uint64 // lost units this node asked its parent to resend
+	Retransmitted uint64 // fragments resent to children from the ring
+}
+
 // MediaDispatcher forwards media fragments along the call trees and delivers decrypted units
 // to the local consumer. Relays never decrypt: they forward fragments as received.
 type MediaDispatcher struct {
@@ -64,6 +75,7 @@ type MediaDispatcher struct {
 	lastFromFeeder   map[linkKey]time.Time             // (stream, feeder) -> last frame received from it
 	watchSince       map[linkKey]time.Time             // (stream, feeder) -> first time we waited on it
 	nackAsked        map[ringKey]time.Time             // (stream, seq) -> last time we asked upstream
+	streamStats      map[string]*StreamCounters
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
@@ -79,6 +91,11 @@ type MediaDispatcher struct {
 
 	audioDelivered, videoDelivered, relayed, duplicates, decryptFailures, malformed, incomplete atomic.Uint64
 	retransmitted, nacked                                                                       atomic.Uint64
+
+	// Per-packet problems (garbage from a peer, failed decryption, lost units) are logged through
+	// lim, one line per peer or stream and reason every few seconds.
+	log *slog.Logger
+	lim *calllog.Limiter
 
 	stop chan struct{}
 	once sync.Once
@@ -100,6 +117,9 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 		lastFromFeeder:  make(map[linkKey]time.Time),
 		watchSince:      make(map[linkKey]time.Time),
 		nackAsked:       make(map[ringKey]time.Time),
+		streamStats:     make(map[string]*StreamCounters),
+		log:             slog.Default().With("component", "call-media"),
+		lim:             calllog.New(calllog.Every),
 		dedup:           newDedupTable(),
 		reasm:           newReassembler(),
 		ring:            newFragRing(),
@@ -212,6 +232,7 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 	p, err := Decode(rawBytes)
 	if err != nil || p.Kind != FrameAudio || p.StreamID != voiceStreamID {
 		d.malformed.Add(1)
+		d.logMalformed("audio", fromPeer, p, err)
 		return err
 	}
 	if p.Broadcaster == d.selfID {
@@ -242,6 +263,7 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 	p, err := Decode(rawBytes)
 	if err != nil || (p.Kind != FrameVideo && p.Kind != FramePulse && p.Kind != FrameStreamAudio) {
 		d.malformed.Add(1)
+		d.logMalformed("video", fromPeer, p, err)
 		return err
 	}
 	now := time.Now()
@@ -295,6 +317,9 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 	plain, err := OpenUnit(p, ct, key)
 	if err != nil {
 		d.decryptFailures.Add(1) // tampered, wrong key, or forged header: never play it
+		d.lim.Log(d.log, slog.LevelWarn, "decrypt:"+p.StreamID+":"+p.Broadcaster.String(),
+			"Dropped media unit that failed to decrypt", "stream", p.StreamID, "kind", kindName(p.Kind),
+			"broadcaster", calllog.Peer(p.Broadcaster), "failures_total", d.decryptFailures.Load(), "err", err)
 		return
 	}
 	unit := *p
@@ -330,6 +355,7 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 	var gap []uint32
 	lostNow := false
 	d.mu.Lock()
+	d.streamLocked(p.StreamID).Delivered++
 	last, seen := d.lastDelivered[k]
 	diff := int32(p.Seq - last)
 	switch {
@@ -359,6 +385,8 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 	d.mu.Unlock()
 
 	if lostNow {
+		d.lim.Log(d.log, slog.LevelWarn, "gap:"+p.StreamID, "Video jumped too far ahead to recover, asking for a keyframe",
+			"stream", p.StreamID, "broadcaster", calllog.Peer(p.Broadcaster), "missing_units", diff-1)
 		d.reportVideoLoss(p.StreamID, p.Broadcaster)
 	}
 	if len(gap) == 0 {
@@ -382,6 +410,8 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 		}
 		d.mu.Unlock()
 		if still {
+			d.lim.Log(d.log, slog.LevelWarn, "lost:"+p.StreamID, "Video units lost despite NACKs, asking for a keyframe",
+				"stream", p.StreamID, "broadcaster", calllog.Peer(p.Broadcaster))
 			d.reportVideoLoss(p.StreamID, p.Broadcaster)
 		}
 	})
@@ -393,9 +423,65 @@ func (d *MediaDispatcher) reportVideoLoss(streamID string, broadcaster types.Pee
 		return
 	default:
 	}
+	d.mu.Lock()
+	d.streamLocked(streamID).Lost++
+	d.mu.Unlock()
 	if d.OnVideoLoss != nil {
 		d.OnVideoLoss(streamID, broadcaster)
 	}
+}
+
+// streamLocked returns the counters of a stream, creating them; d.mu must be held.
+func (d *MediaDispatcher) streamLocked(streamID string) *StreamCounters {
+	c := d.streamStats[streamID]
+	if c == nil {
+		c = &StreamCounters{}
+		d.streamStats[streamID] = c
+	}
+	return c
+}
+
+// StreamStats returns the per-stream counters of this node, including its own broadcasts.
+func (d *MediaDispatcher) StreamStats() map[string]StreamCounters {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make(map[string]StreamCounters, len(d.streamStats)+len(d.videoSeq))
+	for id, c := range d.streamStats {
+		out[id] = *c
+	}
+	for id, ctr := range d.videoSeq {
+		c := out[id]
+		c.UnitsSent = uint64(ctr.Load())
+		out[id] = c
+	}
+	return out
+}
+
+// logMalformed reports a fragment that could not be parsed or does not belong on this path; it
+// usually means a peer runs an incompatible version or sends garbage.
+func (d *MediaDispatcher) logMalformed(path string, from types.PeerID, p *MediaPacket, err error) {
+	args := []any{"path", path, "from", calllog.Peer(from), "malformed_total", d.malformed.Load()}
+	if err != nil {
+		args = append(args, "err", err)
+	} else if p != nil {
+		args = append(args, "kind", kindName(p.Kind), "stream", p.StreamID)
+	}
+	d.lim.Log(d.log, slog.LevelWarn, "malformed:"+path+":"+from.String(), "Dropped malformed media fragment", args...)
+}
+
+// kindName names a frame kind in logs.
+func kindName(k FrameKind) string {
+	switch k {
+	case FrameAudio:
+		return "audio"
+	case FrameVideo:
+		return "video"
+	case FramePulse:
+		return "pulse"
+	case FrameStreamAudio:
+		return "streamaudio"
+	}
+	return "unknown"
 }
 
 // VideoPressure reports how much video the outbox has dropped so far and its deepest queue now;
@@ -584,7 +670,12 @@ func (d *MediaDispatcher) housekeeping() {
 				continue
 			}
 			lastGC = now
-			d.incomplete.Add(uint64(d.reasm.expire(now)))
+			if n := d.reasm.expire(now); n > 0 {
+				d.incomplete.Add(uint64(n))
+				// some fragments of these units never came, not even after NACKs
+				d.lim.Log(d.log, slog.LevelWarn, "incomplete", "Dropped media units that never fully arrived",
+					"units", n, "incomplete_total", d.incomplete.Load())
+			}
 			d.dedup.gc(now, 30*time.Second)
 			d.ring.expire(now)
 			d.mu.Lock()

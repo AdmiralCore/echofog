@@ -13,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
@@ -103,6 +104,12 @@ type ActiveRoomState struct {
 	sendRate       sendRateState
 
 	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq time.Time
+
+	// For the log: when the room was entered, and the media counters at the last periodic line.
+	startedAt    time.Time
+	waitingSince time.Time // when this node last started waiting for a place in the voice tree
+	lastStatsLog time.Time
+	lastStats    media.DispatcherStats
 }
 
 // RoomSnapshot is a read-only view of the room, for UI and tests.
@@ -120,6 +127,10 @@ type RoomSnapshot struct {
 type CallManager struct {
 	mu     sync.RWMutex
 	logger *slog.Logger
+	// treeLog carries voice and stream tree changes, so the topology timeline reads on its own.
+	treeLog *slog.Logger
+	// lim folds repeating lines (rejected signals, failed publishes, retries) into one per key.
+	lim *calllog.Limiter
 
 	selfID     types.PeerID
 	swarm      *swarm.Swarm
@@ -170,9 +181,11 @@ func NewCallManager(s *swarm.Swarm, ses *swarm.SessionManager, crypt *crypto.Cry
 	cm.swarm, cm.sesManager, cm.crypto = s, ses, crypt
 
 	if s != nil {
-		s.RegisterFastFrameHandler(net_types.TypeCallSignaling, cm.handleIncomingSignaling)
-		s.RegisterFastFrameHandler(net_types.TypeCallMediaAudio, cm.handleIncomingAudio)
-		s.RegisterFastFrameHandler(net_types.TypeCallMediaVideo, cm.handleIncomingVideo)
+		// The swarm logs every handler error at Warn with no limit, which a bad peer turns into a
+		// flood; the call layer logs them itself, rate limited and with call context.
+		s.RegisterFastFrameHandler(net_types.TypeCallSignaling, cm.inbound("signal", cm.handleIncomingSignaling))
+		s.RegisterFastFrameHandler(net_types.TypeCallMediaAudio, cm.inbound("audio", cm.handleIncomingAudio))
+		s.RegisterFastFrameHandler(net_types.TypeCallMediaVideo, cm.inbound("video", cm.handleIncomingVideo))
 	}
 	return cm
 }
@@ -181,7 +194,9 @@ func NewCallManager(s *swarm.Swarm, ses *swarm.SessionManager, crypt *crypto.Cry
 // signatures, which is only acceptable for in-memory tests.
 func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID types.PeerID) *CallManager {
 	return &CallManager{
-		logger:     slog.Default().With("module", "call_manager"),
+		logger:     slog.Default().With("component", "call"),
+		treeLog:    slog.Default().With("component", "call-tree"),
+		lim:        calllog.New(calllog.Every),
 		selfID:     selfID,
 		sender:     sender,
 		signer:     signer,

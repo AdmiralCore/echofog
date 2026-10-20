@@ -2,9 +2,12 @@ package call
 
 import (
 	"bytes"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
@@ -21,18 +24,27 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 	}
 	if m.signer != nil {
 		if err := env.Verify(); err != nil {
-			return err
+			return fmt.Errorf("%s from %s: %w", env.Action, calllog.Peer(env.Sender), err)
 		}
 	}
 	flooded := signaling.IsFlooded(env.Action)
 	if !flooded && from != env.Sender {
-		return ErrSpoofedSender
+		return fmt.Errorf("%s claims sender %s: %w", env.Action, calllog.Peer(env.Sender), ErrSpoofedSender)
 	}
 
 	m.mu.Lock()
 	room := m.activeRoom
 	if room == nil || room.CallID != env.CallID || env.Sender == m.selfID {
 		m.mu.Unlock()
+		switch {
+		case room == nil:
+			// common for a moment after leaving: the room has not noticed yet
+			m.debugOnce("noroom:"+from.String(), "Ignored call signal while not in a call",
+				"action", env.Action, "from", calllog.Peer(from), "call_id", calllog.Call(env.CallID))
+		case env.Sender != m.selfID:
+			m.debugOnce("othercall:"+from.String(), "Ignored call signal for another call",
+				"action", env.Action, "from", calllog.Peer(from), "call_id", calllog.Call(env.CallID))
+		}
 		return nil
 	}
 
@@ -57,6 +69,20 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 	return nil
 }
 
+// rejectLocked logs a signal that was dropped and returns false. warn marks signals that should
+// never happen between honest, up to date peers (malformed or forged); the rest are usually stale
+// messages crossing a failover and go to Debug.
+func (m *CallManager) rejectLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope, reason string, warn bool) bool {
+	level := slog.LevelDebug
+	if warn {
+		level = slog.LevelWarn
+	}
+	m.lim.Log(m.logger, level, "reject:"+string(env.Action)+":"+reason+":"+env.Sender.String(), "Rejected call signal",
+		"action", env.Action, "reason", reason, "sender", calllog.Peer(env.Sender), "epoch", env.Epoch,
+		"our_epoch", room.Epoch, "coordinator", calllog.Peer(room.Coordinator))
+	return false
+}
+
 // authorityLocked decides whether a coordinator claim (sender at epoch) supersedes ours.
 // Higher epoch wins; on a tie between two coordinators the lower peer ID wins, so a split
 // brain converges to one coordinator.
@@ -75,11 +101,14 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 	switch env.Action {
 	case signaling.ActionTreeManifest:
 		var manifest tree.TreeManifest
-		if decodePayload(env.Payload, &manifest) != nil || manifest.Coordinator != env.Sender || manifest.CallID != room.CallID {
-			return false
+		if decodePayload(env.Payload, &manifest) != nil {
+			return m.rejectLocked(room, env, "malformed", true)
+		}
+		if manifest.Coordinator != env.Sender || manifest.CallID != room.CallID {
+			return m.rejectLocked(room, env, "manifest not signed by its coordinator", true)
 		}
 		if !m.authorityLocked(room, env.Sender, manifest.Epoch) {
-			return false
+			return m.rejectLocked(room, env, "stale epoch", false)
 		}
 		m.applyVoiceManifestLocked(room, &manifest, now)
 		return true
@@ -87,7 +116,7 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 	case signaling.ActionCoordinatorHeartbeat:
 		if env.Sender != room.Coordinator {
 			if !m.authorityLocked(room, env.Sender, env.Epoch) {
-				return false
+				return m.rejectLocked(room, env, "heartbeat from a superseded coordinator", false)
 			}
 			m.setCoordinatorLocked(room, env.Sender, env.Epoch, now)
 		}
@@ -105,18 +134,25 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 	case signaling.ActionCoordinatorElection:
 		var leader types.PeerID
 		if decodePayload(env.Payload, &leader) != nil || leader != env.Sender {
-			return false // only the winner may announce its own election
+			return m.rejectLocked(room, env, "election not announced by its winner", true) // only the winner may announce its own election
 		}
 		if !m.authorityLocked(room, leader, env.Epoch) {
-			return false
+			return m.rejectLocked(room, env, "stale epoch", false)
 		}
 		m.setCoordinatorLocked(room, leader, env.Epoch, now)
 		return true
 
 	case signaling.ActionStreamAnnounce:
 		var ann signaling.StreamAnnouncePayload
-		if env.Sender != room.Coordinator || decodePayload(env.Payload, &ann) != nil {
-			return false
+		if env.Sender != room.Coordinator {
+			return m.rejectLocked(room, env, "not from the coordinator", false)
+		}
+		if decodePayload(env.Payload, &ann) != nil {
+			return m.rejectLocked(room, env, "malformed", true)
+		}
+		if _, known := room.announces[ann.StreamID]; !known {
+			m.logger.Info("Stream announced", "stream", ann.StreamID, "broadcaster", calllog.Peer(ann.Broadcaster),
+				"media", ann.MediaType, "quality", ann.QualityID, "kbps", ann.BitrateKbps)
 		}
 		room.announces[ann.StreamID] = ann
 		m.notifyAnnounceLocked(ann)
@@ -124,16 +160,22 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 
 	case signaling.ActionStreamTreeUpdate:
 		var sm tree.StreamManifest
-		if env.Sender != room.Coordinator || decodePayload(env.Payload, &sm) != nil {
-			return false
+		if env.Sender != room.Coordinator {
+			return m.rejectLocked(room, env, "not from the coordinator", false)
+		}
+		if decodePayload(env.Payload, &sm) != nil {
+			return m.rejectLocked(room, env, "malformed", true)
 		}
 		m.applyStreamManifestLocked(room, &sm)
 		return true
 
 	case signaling.ActionStreamClose:
 		var streamID string
-		if env.Sender != room.Coordinator || decodePayload(env.Payload, &streamID) != nil {
-			return false
+		if env.Sender != room.Coordinator {
+			return m.rejectLocked(room, env, "not from the coordinator", false)
+		}
+		if decodePayload(env.Payload, &streamID) != nil {
+			return m.rejectLocked(room, env, "malformed", true)
 		}
 		m.closeStreamLocalLocked(room, streamID)
 		return true
@@ -141,14 +183,14 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 	case signaling.ActionVADState:
 		var vad signaling.VADPayload
 		if decodePayload(env.Payload, &vad) != nil || vad.Speaker != env.Sender {
-			return false
+			return m.rejectLocked(room, env, "malformed or about another speaker", true)
 		}
 		if cb := m.OnActiveSpeaker; cb != nil {
 			m.later(func() { cb(vad.Speaker, vad.Speaking, vad.AudioDb) })
 		}
 		return true
 	}
-	return false
+	return m.rejectLocked(room, env, "unknown flooded action", false)
 }
 
 func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope) {
@@ -157,10 +199,13 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 	switch env.Action {
 	case signaling.ActionJoin, signaling.ActionMemberHeartbeat:
 		if !room.IsCoordinator {
+			// a member that still thinks we lead (or an election candidate): it retries elsewhere
+			m.rejectLocked(room, env, "not the coordinator", false)
 			return
 		}
 		var jp signaling.JoinPayload
 		if decodePayload(env.Payload, &jp) != nil {
+			m.rejectLocked(room, env, "malformed", true)
 			return
 		}
 		if _, member := room.ConnectedPeers[sender]; member && env.Action == signaling.ActionMemberHeartbeat {
@@ -168,10 +213,11 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			return
 		}
 		if room.banned[sender] {
+			m.rejectLocked(room, env, "banned", true)
 			return
 		}
 		if !signaling.VerifyJoinProof(room.RoomKey, room.CallID, sender, jp.Proof) {
-			m.logger.Warn("Rejected call join without valid room key proof", "peer", sender.String())
+			m.warnOnce("badproof:"+sender.String(), "Rejected call join without valid room key proof", "peer", calllog.Peer(sender))
 			return
 		}
 		m.admitLocked(room, sender, jp.Profile, now)
@@ -179,9 +225,10 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 	case signaling.ActionLeave:
 		if room.IsCoordinator {
 			if _, member := room.ConnectedPeers[sender]; member {
-				m.removeMemberLocked(room, sender)
+				m.removeMemberLocked(room, sender, "left")
 			}
 		} else if sender == room.Coordinator {
+			m.logger.Info("Call coordinator left, electing a new one", "coordinator", calllog.Peer(sender))
 			room.LastCoordPulse = time.Time{} // coordinator left: elect right away
 			room.suspects[sender] = true
 		}
@@ -194,31 +241,48 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 		if _, ok := room.memberSeen[parent]; ok {
 			// confirmed on the next ticks once the parent's own heartbeats stop too
 			if _, already := room.reportedLost[parent]; !already {
+				m.treeLog.Info("Member reported its voice parent silent", "reporter", calllog.Peer(sender), "parent", calllog.Peer(parent))
 				room.reportedLost[parent] = now
 			}
 		}
 
 	case signaling.ActionStreamRegister:
 		var ann signaling.StreamAnnouncePayload
-		if room.IsCoordinator && decodePayload(env.Payload, &ann) == nil && ann.Broadcaster == sender {
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &ann) != nil || ann.Broadcaster != sender {
+			m.rejectLocked(room, env, "malformed or for another broadcaster", true)
+		} else {
 			m.registerStreamLocked(room, ann)
 		}
 
 	case signaling.ActionStreamUnregister:
 		var streamID string
-		if room.IsCoordinator && decodePayload(env.Payload, &streamID) == nil {
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &streamID) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
 			m.unregisterStreamLocked(room, streamID, sender)
 		}
 
 	case signaling.ActionStreamSubscribe:
 		var sub signaling.StreamSubscribePayload
-		if room.IsCoordinator && decodePayload(env.Payload, &sub) == nil && sub.Subscriber == sender {
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &sub) != nil || sub.Subscriber != sender {
+			m.rejectLocked(room, env, "malformed or for another subscriber", true)
+		} else {
 			m.subscribeLocked(room, sub)
 		}
 
 	case signaling.ActionStreamUnsub:
 		var streamID string
-		if room.IsCoordinator && decodePayload(env.Payload, &streamID) == nil {
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &streamID) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
 			m.unsubscribeLocked(room, streamID, sender)
 		}
 
@@ -227,21 +291,31 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 
 	case signaling.ActionStreamReparent:
 		var rp signaling.ReparentPayload
-		if room.IsCoordinator && decodePayload(env.Payload, &rp) == nil {
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &rp) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
 			m.reparentLocked(room, sender, rp, now)
 		}
 
 	case signaling.ActionReport:
 		var rp signaling.ReportPayload
-		if room.IsCoordinator && decodePayload(env.Payload, &rp) == nil {
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &rp) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
 			m.reportLocked(room, sender, rp, now)
 		}
 
 	case signaling.ActionKicked:
-		if sender == room.Coordinator {
+		if sender != room.Coordinator {
+			m.rejectLocked(room, env, "not from the coordinator", true)
+		} else {
 			var reason string
-			_ = decodePayload(env.Payload, &reason)
-			m.logger.Warn("Removed from call by the room", "reason", reason)
+			_ = decodePayload(env.Payload, &reason) // the reason is only for the log and the UI
+			m.logger.Warn("Removed from call by the room", "call_id", calllog.Call(room.CallID), "reason", reason)
 			m.emit("call:kicked", map[string]any{"call_id": room.CallID, "reason": reason})
 			cb := m.OnKicked
 			m.later(func() {
@@ -265,11 +339,14 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 	case signaling.ActionRoomSync:
 		var rs signaling.RoomSyncPayload
 		if decodePayload(env.Payload, &rs) != nil || rs.Voice == nil || rs.Voice.Coordinator != sender {
+			m.rejectLocked(room, env, "malformed or not from its coordinator", true)
 			return
 		}
 		if !m.authorityLocked(room, sender, rs.Voice.Epoch) {
+			m.rejectLocked(room, env, "stale epoch", false)
 			return
 		}
+		m.logger.Debug("Applying room sync", "coordinator", calllog.Peer(sender), "epoch", rs.Voice.Epoch, "streams", len(rs.Streams))
 		if rs.Voice.Epoch > room.Epoch || rs.Voice.Coordinator != room.Coordinator || room.VoiceManifest == nil {
 			m.applyVoiceManifestLocked(room, rs.Voice, now)
 		}
@@ -280,6 +357,7 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 		}
 		for _, id := range room.StreamEngine.ActiveStreams() {
 			if !live[id] {
+				m.logger.Info("Stream missing from room sync, closing it", "stream", id)
 				m.closeStreamLocalLocked(room, id) // its close flood never reached us
 			}
 		}
@@ -292,23 +370,32 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 
 	case signaling.ActionAdopt:
 		if _, member := room.ConnectedPeers[sender]; member {
+			m.treeLog.Info("Adopting a voice child whose parent went silent", "child", calllog.Peer(sender))
 			room.Dispatcher.Adopt(sender)
 			m.ensureConnectedLocked(sender)
+		} else {
+			m.rejectLocked(room, env, "not a member", false)
 		}
 
 	case signaling.ActionNack:
 		var np signaling.NackPayload
-		if decodePayload(env.Payload, &np) == nil {
-			if up := room.Dispatcher.ServeNack(sender, np.StreamID, np.Lost); len(up) > 0 {
-				m.nackUpstreamLocked(room, np.StreamID, up)
-			}
+		if decodePayload(env.Payload, &np) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else if up := room.Dispatcher.ServeNack(sender, np.StreamID, np.Lost); len(up) > 0 {
+			m.nackUpstreamLocked(room, np.StreamID, up)
 		}
 
 	case signaling.ActionKeyframeRequest:
 		var streamID string
-		if decodePayload(env.Payload, &streamID) == nil {
+		if decodePayload(env.Payload, &streamID) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
 			m.handleKeyframeRequestLocked(room, streamID, now)
 		}
+
+	default:
+		// a newer peer may speak actions this build does not know
+		m.rejectLocked(room, env, "unknown action", false)
 	}
 }
 
@@ -356,16 +443,16 @@ func (m *CallManager) sendLocked(room *ActiveRoomState, to types.PeerID, action 
 	}
 	b, err := m.encodeLocked(room, action, data)
 	if err != nil {
-		m.logger.Warn("Failed to encode call signal", "action", action, "err", err)
+		m.warnOnce("encode:"+string(action), "Failed to encode call signal", "action", action, "err", err)
 		return
 	}
-	room.Dispatcher.Outbox().Send(to, media.ClassControl, net_types.TypeCallSignaling, b)
+	room.Dispatcher.Outbox().Send(to, media.ClassControl, net_types.TypeCallSignaling, b) // the outbox logs drops
 }
 
 func (m *CallManager) floodLocked(room *ActiveRoomState, action signaling.SignalAction, data any) {
 	b, err := m.encodeLocked(room, action, data)
 	if err != nil {
-		m.logger.Warn("Failed to encode call signal", "action", action, "err", err)
+		m.warnOnce("encode:"+string(action), "Failed to encode call signal", "action", action, "err", err)
 		return
 	}
 	for _, n := range room.Dispatcher.VoiceNeighbors() {

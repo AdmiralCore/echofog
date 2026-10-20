@@ -2,9 +2,11 @@ package call
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
@@ -26,6 +28,7 @@ func (m *CallManager) ReportMember(peer types.PeerID, reason string) error {
 	if len(reason) > 200 {
 		reason = reason[:200]
 	}
+	m.logger.Info("Reporting call member", "peer", calllog.Peer(peer))
 	m.toCoordinatorLocked(room, signaling.ActionReport, signaling.ReportPayload{Target: peer, Reason: reason})
 	m.unlockAndFlush()
 	return nil
@@ -60,6 +63,8 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 	}
 	room.Epoch++
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
+	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
+		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
 	m.applyVoiceManifestLocked(room, manifest, time.Now())
 	m.floodLocked(room, signaling.ActionTreeManifest, manifest)
 }
@@ -82,23 +87,27 @@ func (m *CallManager) becomeCoordinatorLocked(room *ActiveRoomState, now time.Ti
 	room.ConnectedPeers[m.selfID] = room.MyProfile
 	room.memberSeen[m.selfID] = now
 
-	m.logger.Warn("Took over as call coordinator", "call_id", room.CallID, "previous", old.String(), "epoch", room.Epoch)
+	m.logger.Warn("Took over as call coordinator", "call_id", calllog.Call(room.CallID), "previous", calllog.Peer(old),
+		"epoch", room.Epoch, "members", len(room.ConnectedPeers))
 	m.floodLocked(room, signaling.ActionCoordinatorElection, m.selfID)
 	m.rebuildVoiceLocked(room)
 
 	for _, sm := range room.StreamEngine.Snapshot() {
 		if _, alive := room.ConnectedPeers[sm.Broadcaster]; !alive {
+			m.logger.Info("Closing stream whose broadcaster left with the old coordinator", "stream", sm.StreamID, "broadcaster", calllog.Peer(sm.Broadcaster))
 			m.floodLocked(room, signaling.ActionStreamClose, sm.StreamID)
 			m.closeStreamLocalLocked(room, sm.StreamID)
 			continue
 		}
 		for _, sub := range sm.Subscribers {
 			if _, alive := room.ConnectedPeers[sub]; !alive {
-				_, _ = room.StreamEngine.Unsubscribe(sm.StreamID, sub)
+				_, _ = room.StreamEngine.Unsubscribe(sm.StreamID, sub) // the stream exists, so this cannot fail
 			}
 		}
 		if rebuilt, err := room.StreamEngine.Rebuild(sm.StreamID); err == nil {
 			m.floodLocked(room, signaling.ActionStreamTreeUpdate, rebuilt)
+		} else {
+			m.treeLog.Warn("Could not rebuild stream tree after failover", "stream", sm.StreamID, "err", err)
 		}
 	}
 	// Members cut off from the old tree learn the new state directly.
@@ -131,6 +140,7 @@ func (m *CallManager) setCoordinatorLocked(room *ActiveRoomState, leader types.P
 	if !changed {
 		return
 	}
+	m.logger.Info("Call coordinator changed", "call_id", calllog.Call(room.CallID), "coordinator", calllog.Peer(leader), "epoch", epoch)
 	m.ensureConnectedLocked(leader)
 	room.lastMemberHB = time.Time{} // introduce ourselves to the new coordinator on the next tick
 	m.emit("call:failover_occurred", map[string]any{"call_id": room.CallID, "new_coordinator": leader.String(), "epoch": epoch})
@@ -152,6 +162,10 @@ func (m *CallManager) applyVoiceManifestLocked(room *ActiveRoomState, manifest *
 			}
 		}
 	}
+	var oldAss tree.ParentAssignment
+	if room.VoiceManifest != nil {
+		oldAss = room.VoiceManifest.ParentMap[m.selfID]
+	}
 	room.VoiceManifest = manifest
 	room.Epoch = manifest.Epoch
 	room.IsCoordinator = manifest.Coordinator == m.selfID
@@ -163,7 +177,19 @@ func (m *CallManager) applyVoiceManifestLocked(room *ActiveRoomState, manifest *
 		for id, p := range manifest.Profiles {
 			room.ConnectedPeers[id] = p
 		}
-		_, inTree := manifest.ParentMap[m.selfID]
+		ass, inTree := manifest.ParentMap[m.selfID]
+		switch {
+		case inTree && !room.joined:
+			m.logger.Info("Admitted to the call", "call_id", calllog.Call(room.CallID), "epoch", manifest.Epoch,
+				"members", len(manifest.Profiles), "parent", calllog.Peer(ass.PrimaryParent), "standby", calllog.Peer(ass.StandbyParent),
+				"waited", now.Sub(room.waitingSince).Round(time.Millisecond).String())
+		case !inTree && room.joined:
+			room.waitingSince = now
+			m.treeLog.Warn("Left out of the new voice tree, asking to join again", "epoch", manifest.Epoch)
+		case inTree && ass != oldAss:
+			m.treeLog.Info("Voice parent changed", "epoch", manifest.Epoch, "parent", calllog.Peer(ass.PrimaryParent),
+				"standby", calllog.Peer(ass.StandbyParent), "previous", calllog.Peer(oldAss.PrimaryParent))
+		}
 		room.joined = inTree
 		room.everJoined = room.everJoined || inTree
 	}
@@ -204,8 +230,12 @@ func (m *CallManager) reparentLocked(room *ActiveRoomState, sub types.PeerID, rp
 	}
 	sm, err := room.StreamEngine.Reparent(rp.StreamID, sub, rp.Avoid)
 	if err != nil {
+		m.treeLog.Warn("Could not move stream subscriber to another relay", "stream", rp.StreamID,
+			"subscriber", calllog.Peer(sub), "avoid", calllog.Peer(rp.Avoid), "reason", rp.Reason, "err", err)
 		return
 	}
+	m.treeLog.Info("Moved stream subscriber to another relay", "stream", rp.StreamID, "subscriber", calllog.Peer(sub),
+		"avoid", calllog.Peer(rp.Avoid), "parent", calllog.Peer(sm.ParentMap[sub]), "reason", rp.Reason)
 	m.floodLocked(room, signaling.ActionStreamTreeUpdate, sm)
 	m.afterStreamTreeChangeLocked(room, sm)
 	m.emit("call:relay_changed", map[string]any{"call_id": room.CallID, "stream": rp.StreamID, "subscriber": sub.String(), "avoid": rp.Avoid.String(), "reason": rp.Reason})
@@ -216,12 +246,15 @@ func (m *CallManager) reparentLocked(room *ActiveRoomState, sub types.PeerID, rp
 func (m *CallManager) reportLocked(room *ActiveRoomState, reporter types.PeerID, rp signaling.ReportPayload, now time.Time) {
 	target := rp.Target
 	if target == reporter || target == m.selfID {
+		m.logger.Debug("Ignored report against the reporter or the coordinator", "reporter", calllog.Peer(reporter), "target", calllog.Peer(target))
 		return // the coordinator cannot vote itself out; members can still mute it locally
 	}
 	if _, member := room.ConnectedPeers[target]; !member {
+		m.logger.Debug("Ignored report against a non-member", "reporter", calllog.Peer(reporter), "target", calllog.Peer(target))
 		return
 	}
 	if _, member := room.ConnectedPeers[reporter]; !member {
+		m.logger.Debug("Ignored report from a non-member", "reporter", calllog.Peer(reporter), "target", calllog.Peer(target))
 		return
 	}
 	for _, sm := range room.StreamEngine.Snapshot() {
@@ -247,19 +280,24 @@ func (m *CallManager) reportLocked(room *ActiveRoomState, reporter types.PeerID,
 	}
 	others := len(room.ConnectedPeers) - 1
 	need := max(2, (others+2)/3)
+	m.logger.Info("Call member reported", "reporter", calllog.Peer(reporter), "target", calllog.Peer(target), "votes", votes, "needed", need)
 	m.emit("call:member_reported", map[string]any{"call_id": room.CallID, "target": target.String(), "votes": votes, "needed": need})
 	if votes < need {
 		return
 	}
 
-	m.logger.Warn("Kicking reported call member", "peer", target.String(), "votes", votes)
+	m.logger.Warn("Kicking reported call member", "peer", calllog.Peer(target), "votes", votes)
 	room.banned[target] = true
 	delete(room.reports, target)
 	if kicked, err := m.encodeLocked(room, signaling.ActionKicked, "reported for spam"); err == nil && m.sender != nil {
-		sender := m.sender
-		go func() { _ = sender.SendRawFrame(target, net_types.TypeCallSignaling, kicked) }()
+		sender, log := m.sender, m.logger
+		go func() {
+			if err := sender.SendRawFrame(target, net_types.TypeCallSignaling, kicked); err != nil {
+				log.Debug("Could not tell a kicked member", "peer", calllog.Peer(target), "err", err)
+			}
+		}()
 	}
-	m.removeMemberLocked(room, target)
+	m.removeMemberLocked(room, target, "kicked")
 	if cb := m.OnMemberKicked; cb != nil {
 		m.later(func() { cb(target) })
 	}
@@ -279,7 +317,9 @@ func (m *CallManager) sendNack(streamID string, lost []media.NackEntry) {
 func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string, lost []media.NackEntry) {
 	if up, ok := room.StreamEngine.GetUpstream(streamID, m.selfID); ok {
 		m.sendLocked(room, up, signaling.ActionNack, signaling.NackPayload{StreamID: streamID, Lost: lost})
+		return
 	}
+	m.debugOnce("nack-noup:"+streamID, "Lost video units but no parent to ask on this stream", "stream", streamID, "units", len(lost))
 }
 
 func (m *CallManager) requestKeyframe(streamID string) {
@@ -296,9 +336,11 @@ func (m *CallManager) requestKeyframeLocked(room *ActiveRoomState, streamID stri
 	}
 	up, ok := room.StreamEngine.GetUpstream(streamID, m.selfID)
 	if !ok {
+		m.debugOnce("kf-noup:"+streamID, "Keyframe needed but no parent on this stream", "stream", streamID)
 		return
 	}
 	room.keyframeSent[streamID] = now
+	m.debugOnce("kf:"+streamID, "Asking for a keyframe", "stream", streamID, "parent", calllog.Peer(up))
 	m.sendLocked(room, up, signaling.ActionKeyframeRequest, streamID)
 }
 
@@ -316,10 +358,11 @@ func (m *CallManager) handleKeyframeRequestLocked(room *ActiveRoomState, streamI
 	}
 	room.keyframeServed[streamID] = now
 	m.keyframesServed.Add(1)
+	m.debugOnce("kf-serve:"+streamID, "Serving keyframe request for our stream", "stream", streamID, "role", role)
 	br, cb := room.Bridge, m.OnKeyframeRequest
 	m.later(func() {
 		if br != nil {
-			_ = br.RequestKeyframe(role)
+			_ = br.RequestKeyframe(role) // the bridge logs a failure
 		}
 		if cb != nil {
 			cb(streamID)
@@ -349,6 +392,7 @@ func (m *CallManager) runLoop(ctx context.Context, room *ActiveRoomState) {
 				m.memberTickLocked(room, now)
 			}
 			m.rateTickLocked(room, now)
+			m.statsTickLocked(room, now)
 			if now.Sub(room.lastSeenGC) > time.Second {
 				room.lastSeenGC = now
 				for k, ts := range room.seen {
@@ -373,7 +417,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	}
 	for p, seen := range room.memberSeen {
 		if p != m.selfID && now.Sub(seen) > memberTimeout {
-			m.removeMemberLocked(room, p)
+			m.removeMemberLocked(room, p, "timeout")
 		}
 	}
 	// A child reported its parent silent: drop the parent as soon as its heartbeats confirm it,
@@ -386,7 +430,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 			delete(room.reportedLost, p)
 		case now.Sub(seen) > parentTimeout:
 			delete(room.reportedLost, p)
-			m.removeMemberLocked(room, p)
+			m.removeMemberLocked(room, p, "reported silent by a child")
 		}
 	}
 	if now.Sub(room.lastReconcile) >= reconcileInterval {
@@ -407,7 +451,8 @@ func (m *CallManager) feederWatchdogLocked(room *ActiveRoomState, now time.Time)
 			continue
 		}
 		room.reparentAsked[streamID] = now
-		m.logger.Info("Stream feeder silent, asking for another relay", "stream", streamID, "feeder", feeder.String())
+		m.logger.Warn("Stream feeder silent, asking for another relay", "stream", streamID, "feeder", calllog.Peer(feeder),
+			"silent", room.Dispatcher.FeederSilence(streamID, feeder, now).Round(time.Millisecond).String())
 		m.toCoordinatorLocked(room, signaling.ActionStreamReparent, signaling.ReparentPayload{StreamID: streamID, Avoid: feeder, Reason: "silent"})
 	}
 }
@@ -415,6 +460,11 @@ func (m *CallManager) feederWatchdogLocked(room *ActiveRoomState, now time.Time)
 func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 	if !room.joined {
 		if now.Sub(room.lastJoin) >= joinRetryInterval {
+			if waited := now.Sub(room.waitingSince); waited > 3*joinRetryInterval {
+				// the coordinator is unreachable, rejects our proof, or has us banned
+				m.warnOnce("joinwait", "Still waiting to be admitted to the call", "call_id", calllog.Call(room.CallID),
+					"coordinator", calllog.Peer(room.Coordinator), "waited", waited.Round(time.Second).String())
+			}
 			m.ensureConnectedLocked(room.Coordinator)
 			m.sendJoinLocked(room, now)
 		}
@@ -432,7 +482,11 @@ func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 			room.Dispatcher.UseStandbyParent(ass.StandbyParent)
 			m.ensureConnectedLocked(ass.StandbyParent)
 			m.sendLocked(room, ass.StandbyParent, signaling.ActionAdopt, nil)
-			m.logger.Info("Voice parent silent, switched to standby", "parent", ass.PrimaryParent.String(), "standby", ass.StandbyParent.String())
+			m.treeLog.Warn("Voice parent silent, switched to standby", "parent", calllog.Peer(ass.PrimaryParent), "standby", calllog.Peer(ass.StandbyParent))
+		} else {
+			// nothing to fail over to: voice is cut until the coordinator rebuilds the tree
+			m.lim.Log(m.treeLog, slog.LevelWarn, "parentlost", "Voice parent silent and no standby parent",
+				"parent", calllog.Peer(ass.PrimaryParent), "silent", now.Sub(room.LastTreePulse).Round(time.Millisecond).String())
 		}
 		m.sendLocked(room, room.Coordinator, signaling.ActionParentLost, ass.PrimaryParent)
 	}
@@ -441,6 +495,7 @@ func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 	silent := now.Sub(room.LastCoordPulse)
 	if silent > coordinatorTimeout/2 && now.Sub(room.lastPing) >= pingInterval {
 		room.lastPing = now
+		m.debugOnce("ping", "Coordinator quiet, probing it", "coordinator", calllog.Peer(room.Coordinator), "silent", silent.Round(time.Millisecond).String())
 		m.sendLocked(room, room.Coordinator, signaling.ActionPing, nil)
 	}
 	if room.everJoined && silent > coordinatorTimeout {
@@ -463,7 +518,11 @@ func (m *CallManager) electLocked(room *ActiveRoomState, now time.Time) {
 		if now.Before(room.candidateDeadline) {
 			return
 		}
+		m.logger.Warn("Election candidate stayed silent, trying the next one", "candidate", calllog.Peer(room.candidate))
 		room.suspects[room.candidate] = true
+	} else {
+		m.logger.Warn("Call coordinator silent, electing a new one", "coordinator", calllog.Peer(room.Coordinator),
+			"silent", now.Sub(room.LastCoordPulse).Round(time.Millisecond).String())
 	}
 	room.suspects[room.Coordinator] = true
 
@@ -479,12 +538,14 @@ func (m *CallManager) electLocked(room *ActiveRoomState, now time.Time) {
 	}
 	leader, ok := tree.ElectNewCoordinator(standbys, alive)
 	if !ok {
+		m.warnOnce("noleader", "No coordinator candidate left, the call is stalled", "standbys", len(standbys), "alive", len(alive))
 		return
 	}
 	if leader == m.selfID {
 		m.becomeCoordinatorLocked(room, now)
 		return
 	}
+	m.logger.Info("Waiting for the elected coordinator", "candidate", calllog.Peer(leader))
 	room.candidate, room.candidateDeadline = leader, now.Add(electionWait)
 	m.ensureConnectedLocked(leader)
 	m.sendLocked(room, leader, signaling.ActionJoin, m.joinPayloadLocked(room))

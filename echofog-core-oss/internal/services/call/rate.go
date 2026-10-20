@@ -43,8 +43,13 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 
 	dropped, backlog := room.Dispatcher.VideoPressure()
 	congested := dropped > r.lastDropped || backlog > media.VideoQueueLen/4
+	newDrops := dropped - r.lastDropped
 	r.lastDropped = dropped
 	r.kbps = nextRate(r.kbps, float64(capKbps), float64(rateFloorKbps*len(room.localStreams)), congested)
+	if congested {
+		m.debugOnce("congested", "Upload path congested, lowering the send bitrate",
+			"kbps", int(r.kbps), "cap_kbps", capKbps, "new_drops", newDrops, "backlog", backlog)
+	}
 
 	type limit struct {
 		role string
@@ -57,7 +62,7 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 	}
 	m.later(func() {
 		for _, l := range limits {
-			_ = br.SetSendBitrate(l.role, l.bps)
+			_ = br.SetSendBitrate(l.role, l.bps) // the bridge logs failures, rate limited
 		}
 	})
 }

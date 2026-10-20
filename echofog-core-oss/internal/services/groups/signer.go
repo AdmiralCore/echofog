@@ -26,7 +26,14 @@ type GroupSummary struct {
 }
 
 // CreateGroupSigned signs the genesis through an external signer so the identity key stays in the keystore.
-func (m *GroupManager) CreateGroupSigned(title, description string, gType GroupType, creatorID types.PeerID, creatorPub types.IdentityPublicKey, sign SignFunc) (*GroupGenesisManifest, error) {
+func (m *GroupManager) CreateGroupSigned(title, description string, gType GroupType, creatorID types.PeerID, creatorPub types.IdentityPublicKey, sign SignFunc) (g *GroupGenesisManifest, err error) {
+	defer func() {
+		id := ""
+		if g != nil {
+			id = g.GroupID
+		}
+		m.logOp("create", id, err, "type", gType, "creator", shortPeer(creatorID))
+	}()
 	if gType < GroupTypePrivateGroup || gType > GroupTypeOpenSwarm {
 		return nil, ErrInvalidType
 	}
@@ -88,6 +95,12 @@ func VerifyGenesis(g *GroupGenesisManifest) error {
 // ImportGroup registers a verified foreign genesis; it is a no-op when the group is already known.
 func (m *GroupManager) ImportGroup(g *GroupGenesisManifest) error {
 	if err := VerifyGenesis(g); err != nil {
+		id := ""
+		if g != nil {
+			id = g.GroupID
+		}
+		// a forged or corrupt invite, or one from a build with another manifest format
+		m.logOp("import", id, err)
 		return err
 	}
 	m.mu.RLock()
@@ -98,15 +111,18 @@ func (m *GroupManager) ImportGroup(g *GroupGenesisManifest) error {
 	}
 	// the creator is the owner from the start; everybody else is learned from invites and events
 	m.restore(g, []MemberProfile{{PeerID: g.Creator, PubKey: g.CreatorPub, Role: RoleOwner, JoinedAt: g.CreatedAt}})
+	m.logOp("import", g.GroupID, nil, "type", g.Type, "creator", shortPeer(g.Creator))
 	return nil
 }
 
 // RestoreGroup rebuilds a persisted group with its member list.
 func (m *GroupManager) RestoreGroup(g *GroupGenesisManifest, members []MemberProfile) error {
 	if g == nil || g.GroupID == "" {
+		m.logOp("restore", "", ErrInvalidGenesis)
 		return ErrInvalidGenesis
 	}
 	m.restore(g, members)
+	m.logger().Debug("Restored group", "group_id", g.GroupID, "members", len(members))
 	return nil
 }
 
@@ -128,7 +144,9 @@ func (m *GroupManager) restore(g *GroupGenesisManifest, members []MemberProfile)
 	m.groups[g.GroupID] = state
 	m.mu.Unlock()
 	if _, ok := m.keyEngine.GetCurrentKey(g.GroupID); !ok {
-		_, _ = m.keyEngine.GenerateInitialKey(g.GroupID)
+		if _, err := m.keyEngine.GenerateInitialKey(g.GroupID); err != nil {
+			m.logger().Warn("Could not create the group key", "group_id", g.GroupID, "err", err)
+		}
 	}
 }
 

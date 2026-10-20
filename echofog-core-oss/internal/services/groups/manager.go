@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -35,6 +36,7 @@ type GroupManager struct {
 	groups    map[string]*GroupState
 	keyEngine *KeyRotationEngine
 	emitter   events.Emitter
+	log       *slog.Logger
 }
 
 // NewGroupManager initializes the decentralized group manager.
@@ -42,6 +44,7 @@ func NewGroupManager() *GroupManager {
 	return &GroupManager{
 		groups:    make(map[string]*GroupState),
 		keyEngine: NewKeyRotationEngine(),
+		log:       slog.Default().With("component", "groups"),
 	}
 }
 
@@ -100,13 +103,18 @@ func (m *GroupManager) CreateGroup(title, description string, gType GroupType, c
 	m.mu.Unlock()
 
 	// Generate initial encryption key (Epoch 1)
-	_, _ = m.keyEngine.GenerateInitialKey(groupID)
+	if _, err := m.keyEngine.GenerateInitialKey(groupID); err != nil {
+		// the group exists but has no epoch key: members cannot be given one until a rotation
+		m.logger().Warn("Could not create the group key", "group_id", groupID, "err", err)
+	}
 
+	m.logOp("create", groupID, nil, "type", gType, "creator", shortPeer(creatorID))
 	return genesis, nil
 }
 
 // JoinGroup adds a peer to the group as Member (or Subscriber for channels).
-func (m *GroupManager) JoinGroup(groupID string, member types.PeerID, pubKey types.IdentityPublicKey) error {
+func (m *GroupManager) JoinGroup(groupID string, member types.PeerID, pubKey types.IdentityPublicKey) (err error) {
+	defer func() { m.logOp("join", groupID, err, "member", shortPeer(member)) }()
 	m.mu.RLock()
 	state, exists := m.groups[groupID]
 	m.mu.RUnlock()
@@ -148,7 +156,10 @@ func (m *GroupManager) DemoteMember(groupID string, actor types.PeerID, target t
 	return m.modifyRole(groupID, actor, target, newRoleName, ActionTypeDemote, actorPriv)
 }
 
-func (m *GroupManager) modifyRole(groupID string, actor types.PeerID, target types.PeerID, newRoleName string, actionType ActionType, actorPriv ed25519.PrivateKey) error {
+func (m *GroupManager) modifyRole(groupID string, actor types.PeerID, target types.PeerID, newRoleName string, actionType ActionType, actorPriv ed25519.PrivateKey) (err error) {
+	defer func() {
+		m.logOp("role", groupID, err, "actor", shortPeer(actor), "target", shortPeer(target), "role", newRoleName, "action", actionType)
+	}()
 	m.mu.RLock()
 	state, exists := m.groups[groupID]
 	m.mu.RUnlock()
@@ -213,7 +224,14 @@ func (m *GroupManager) modifyRole(groupID string, actor types.PeerID, target typ
 
 // BanMember permanently bans target and triggers Cryptographic Eviction (Epoch Key Rotation).
 // Returns the newly rotated GroupEpochKey.
-func (m *GroupManager) BanMember(groupID string, actor types.PeerID, target types.PeerID, reason string, actorPriv ed25519.PrivateKey) (*GroupEpochKey, error) {
+func (m *GroupManager) BanMember(groupID string, actor types.PeerID, target types.PeerID, reason string, actorPriv ed25519.PrivateKey) (key *GroupEpochKey, err error) {
+	defer func() {
+		args := []any{"actor", shortPeer(actor), "target", shortPeer(target)}
+		if key != nil {
+			args = append(args, "epoch", key.Epoch)
+		}
+		m.logOp("ban", groupID, err, args...)
+	}()
 	m.mu.RLock()
 	state, exists := m.groups[groupID]
 	m.mu.RUnlock()
@@ -278,7 +296,8 @@ func (m *GroupManager) BanMember(groupID string, actor types.PeerID, target type
 }
 
 // UnbanMember restores a previously banned member.
-func (m *GroupManager) UnbanMember(groupID string, actor types.PeerID, target types.PeerID, actorPriv ed25519.PrivateKey) error {
+func (m *GroupManager) UnbanMember(groupID string, actor types.PeerID, target types.PeerID, actorPriv ed25519.PrivateKey) (err error) {
+	defer func() { m.logOp("unban", groupID, err, "actor", shortPeer(actor), "target", shortPeer(target)) }()
 	m.mu.RLock()
 	state, exists := m.groups[groupID]
 	m.mu.RUnlock()
@@ -328,7 +347,10 @@ func (m *GroupManager) UnbanMember(groupID string, actor types.PeerID, target ty
 }
 
 // DeleteMessage issues a signed MessageTombstone to permanently delete a message.
-func (m *GroupManager) DeleteMessage(groupID string, actor types.PeerID, messageID [16]byte, actorPriv ed25519.PrivateKey) (*MessageTombstone, error) {
+func (m *GroupManager) DeleteMessage(groupID string, actor types.PeerID, messageID [16]byte, actorPriv ed25519.PrivateKey) (_ *MessageTombstone, err error) {
+	defer func() {
+		m.logOp("delete message", groupID, err, "actor", shortPeer(actor), "message", hex.EncodeToString(messageID[:4]))
+	}()
 	m.mu.RLock()
 	state, exists := m.groups[groupID]
 	m.mu.RUnlock()

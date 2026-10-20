@@ -28,7 +28,10 @@ func (m *GroupManager) state(groupID string) (*GroupState, error) {
 func IDOfKey(pub types.IdentityPublicKey) types.PeerID { return sha256.Sum256(pub[:]) }
 
 // ApplyRole sets the role of target on the word of actor.
-func (m *GroupManager) ApplyRole(groupID string, actor, target types.PeerID, roleName string) error {
+func (m *GroupManager) ApplyRole(groupID string, actor, target types.PeerID, roleName string) (err error) {
+	defer func() {
+		m.logOp("remote role", groupID, err, "actor", shortPeer(actor), "target", shortPeer(target), "role", roleName)
+	}()
 	role, err := ResolveRole(roleName)
 	if err != nil {
 		return err
@@ -62,7 +65,17 @@ func (m *GroupManager) ApplyRole(groupID string, actor, target types.PeerID, rol
 // ApplyRemove takes target out of the group on the word of actor: a kick needs the permission to
 // kick, a ban the permission to ban, and in both the actor has to outrank the target. A member may
 // always remove themselves (leave).
-func (m *GroupManager) ApplyRemove(groupID string, actor, target types.PeerID, ban bool) error {
+func (m *GroupManager) ApplyRemove(groupID string, actor, target types.PeerID, ban bool) (err error) {
+	defer func() {
+		op := "remote kick"
+		switch {
+		case actor == target:
+			op = "remote leave"
+		case ban:
+			op = "remote ban"
+		}
+		m.logOp(op, groupID, err, "actor", shortPeer(actor), "target", shortPeer(target))
+	}()
 	st, err := m.state(groupID)
 	if err != nil {
 		return err
@@ -101,7 +114,8 @@ func (m *GroupManager) ApplyRemove(groupID string, actor, target types.PeerID, b
 
 // AddMemberAs adds a member on the word of actor, who needs the permission to manage roles. The
 // peer ID has to be the hash of the key.
-func (m *GroupManager) AddMemberAs(groupID string, actor types.PeerID, member types.PeerID, pub types.IdentityPublicKey) error {
+func (m *GroupManager) AddMemberAs(groupID string, actor types.PeerID, member types.PeerID, pub types.IdentityPublicKey) (err error) {
+	defer func() { m.logOp("remote add", groupID, err, "actor", shortPeer(actor), "member", shortPeer(member)) }()
 	if IDOfKey(pub) != member {
 		return ErrInvalidSignature
 	}
@@ -139,9 +153,10 @@ func addLocked(st *GroupState, member types.PeerID, pub types.IdentityPublicKey)
 // SelfJoin adds a member who announces themselves with the invite in hand.
 func (m *GroupManager) SelfJoin(groupID string, member types.PeerID, pub types.IdentityPublicKey) error {
 	if IDOfKey(pub) != member {
+		m.logOp("self join", groupID, ErrInvalidSignature, "member", shortPeer(member))
 		return ErrInvalidSignature
 	}
-	return m.JoinGroup(groupID, member, pub)
+	return m.JoinGroup(groupID, member, pub) // JoinGroup logs the outcome
 }
 
 // MergeMembers takes over a member list. By default it only adds the members that are not known
@@ -155,19 +170,32 @@ func (m *GroupManager) MergeMembers(groupID string, list []MemberProfile, author
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	added, badKey, banned := 0, 0, 0
+	defer func() {
+		args := []any{"entries", len(list), "added", added, "authoritative", authoritative}
+		if badKey > 0 || banned > 0 {
+			// entries whose ID is not the hash of their key are forged or corrupt
+			m.logger().Warn("Skipped entries of a group member list", "group_id", groupID, "bad_key", badKey, "banned", banned, "entries", len(list))
+		}
+		m.logger().Debug("Merged group member list", append([]any{"group_id", groupID}, args...)...)
+	}()
 	for _, p := range list {
 		if IDOfKey(p.PubKey) != p.PeerID {
+			badKey++
 			continue
 		}
 		role, rerr := ResolveRole(p.Role.Name)
 		if rerr != nil {
+			m.logger().Debug("Unknown role in group member list, taking it as member", "group_id", groupID, "member", shortPeer(p.PeerID), "role", p.Role.Name)
 			role = RoleMember
 		}
 		prof, known := st.Members[p.PeerID]
 		if !known {
 			if err := addLocked(st, p.PeerID, p.PubKey); err != nil {
+				banned++
 				continue
 			}
+			added++
 			prof = st.Members[p.PeerID]
 			if !authoritative && role.Rank >= RoleAdmin.Rank {
 				continue // ranks that only the owner can give
@@ -199,7 +227,10 @@ func demoteOtherOwners(st *GroupState, owner types.PeerID) {
 
 // ApplyTransfer hands the group to target on the word of actor, who has to be its owner; the former
 // owner becomes an admin.
-func (m *GroupManager) ApplyTransfer(groupID string, actor, target types.PeerID) error {
+func (m *GroupManager) ApplyTransfer(groupID string, actor, target types.PeerID) (err error) {
+	defer func() {
+		m.logOp("remote transfer", groupID, err, "actor", shortPeer(actor), "target", shortPeer(target))
+	}()
 	st, err := m.state(groupID)
 	if err != nil {
 		return err
@@ -237,6 +268,10 @@ func (m *GroupManager) IsOwner(groupID string, peer types.PeerID) bool {
 // DropGroup forgets a group (the node was removed from it or left).
 func (m *GroupManager) DropGroup(groupID string) {
 	m.mu.Lock()
+	_, known := m.groups[groupID]
 	delete(m.groups, groupID)
 	m.mu.Unlock()
+	if known {
+		m.logOp("drop", groupID, nil)
+	}
 }
