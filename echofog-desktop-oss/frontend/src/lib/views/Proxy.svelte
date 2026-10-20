@@ -280,6 +280,21 @@
   $: exitName = (e) => e.name || contactName(e.peerId) || short(e.peerId);
   $: sessionsOf = (id) => history.filter((s) => s.peerId === id);
   $: priceText = (e) => (e.pricePerMb ? price(e.pricePerMb, $lang) : e.priceKnown ? $t('common.Free') : $t('proxy.hist.priceUnknown'));
+  // what is left on the exit for us, as it last said; it stays there after we leave
+  $: leftText = (x) => (x.remaining > 0 ? $t('proxy.hist.left', { left: bytes(x.remaining, $lang) }) : $t('proxy.hist.leftNone'));
+  $: leftTitle = (x) => $t('proxy.hist.leftTitle', { when: when(x.remainingAt, $lang) });
+  // streams that did not open: "dial failed" is the site (not reachable from the exit, often a
+  // name with no IPv4), the rest point at the exit or the way to it
+  const SITE_FAIL = 'dial failed';
+  $: refusals = (x) => {
+    const by = x.refusedBy || {};
+    const site = by[SITE_FAIL] || 0;
+    const exit = Object.entries(by).reduce((n, [k, v]) => (k === SITE_FAIL ? n : n + v), 0);
+    const known = site + exit > 0;
+    const title = Object.entries(by).sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${$t('proxy.hist.why.' + k.replace(' ', '_'))}: ${v}`).join('\n');
+    return { site, exit, known, title: (title ? title + '\n\n' : '') + $t('proxy.hist.refusedHelp') };
+  };
   $: contactName = (id) => contacts.find((c) => (c.peer_id || '').toLowerCase() === id)?.alias || '';
   const sessionSeconds = (s) => Math.max(0, (s.active ? Math.floor(Date.now() / 1000) : s.endedAt || s.updatedAt) - s.startedAt);
   // the peer link being up is not enough: the exit itself says whether it serves us
@@ -490,8 +505,11 @@
                 <span title={$t('proxy.received')}><Icon name="download" size={12} /> {bytes(e.bytesRx, $lang)}</span>
                 <span title={$t('proxy.sent')}><Icon name="upload" size={12} /> {bytes(e.bytesTx, $lang)}</span>
                 {#if e.sessions}<span class="faint">{e.lastReadyMs ? $t('proxy.hist.ready', { s: (e.lastReadyMs / 1000).toFixed(1) }) : $t('proxy.hist.neverReady')}</span>{/if}
-                {#if e.refused}<span class="faint">{$t('proxy.hist.refused', { n: e.refused })}</span>{/if}
+                {#if e.refused && !refusals(e).known}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.refused', { n: e.refused })}</span>{/if}
+                {#if refusals(e).exit}<span class="warn-text" title={refusals(e).title}>{$t('proxy.hist.exitFails', { n: refusals(e).exit })}</span>{/if}
+                {#if refusals(e).site}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.siteFails', { n: refusals(e).site })}</span>{/if}
                 <span class="faint">{priceText(e)}</span>
+                {#if e.remainingAt}<span class="left" title={leftTitle(e)}>{leftText(e)}</span>{/if}
               </div>
               <div class="hist-actions">
                 <button class="icon tiny" title={$t('proxy.hist.copyLink')} aria-label={$t('proxy.hist.copyLink')} on:click={() => copyLink(e)}><Icon name={copiedLink === e.peerId ? 'check' : 'copy'} size={14} /></button>
@@ -505,7 +523,7 @@
                   {#each sessionsOf(e.peerId) as h (h.id || h.peerId + h.startedAt)}
                     <div class="session">
                       <span>{when(h.startedAt, $lang)} · {duration(sessionSeconds(h))}{h.endReason ? ' · ' + $t('proxy.hist.end.' + h.endReason) : h.active ? ' · ' + $t('proxy.hist.now') : ''}</span>
-                      <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}</span>
+                      <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}{#if h.remainingAt}<span title={leftTitle(h)}> · {leftText(h)}</span>{/if}</span>
                     </div>
                   {/each}
                 </div>
@@ -729,6 +747,8 @@
   .hist-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
   .hist-stats span { display: inline-flex; align-items: center; gap: 4px; }
   .hist-actions { display: flex; gap: 6px; align-items: center; }
+  .hist-stats .left { color: var(--text); font-weight: 500; }
+  .hist-stats .warn-text { color: var(--warn); }
   .ok-chip { color: var(--ok); }
   .hist-row.fav:not(.active) { border-color: var(--accent-soft); }
   .hist-main .row { flex-wrap: wrap; gap: 4px 6px; }
