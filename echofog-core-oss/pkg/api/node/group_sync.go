@@ -10,6 +10,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/groups"
+	"github.com/echofog/echofog-core/internal/services/groups/senderkeys"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/google/uuid"
 )
@@ -17,13 +18,15 @@ import (
 // Groups have no server: every change is a message to each member, carried like any other chat
 // message (end-to-end encrypted, confirmed, queued while the member is offline) but marked with
 // wirePrefix so that it is never shown as a chat line. The sender of a message is the peer whose
-// encrypted session it came through, so a member cannot speak for another.
+// encrypted session it came through, so a member cannot speak for another; messages of version 2
+// are sealed and signed on top of that (group_keys.go), so they can be handed on by any member.
 const wirePrefix = "fogrp2:"
 
 type wireMember struct {
 	ID   string `json:"id"`
 	Pub  string `json:"p"`
 	Role string `json:"r"`
+	V    int    `json:"v,omitempty"` // the member's version, as far as the sender knows
 }
 
 type groupWire struct {
@@ -42,6 +45,13 @@ type groupWire struct {
 	Coord   string                       `json:"co,omitempty"`
 	History []wireHistory                `json:"h,omitempty"`
 	File    *wireFile                    `json:"f,omitempty"` // msg: a file posted in the group
+
+	V      int                     `json:"v,omitempty"`    // version of the sender (2: sealed messages)
+	Env    *senderkeys.Envelope    `json:"env,omitempty"`  // smsg: a sealed message
+	Envs   []*senderkeys.Envelope  `json:"envs,omitempty"` // envs: sealed messages handed on
+	Epoch  *senderkeys.Epoch       `json:"ep,omitempty"`   // key: an epoch
+	Have   []senderkeys.ChainState `json:"have,omitempty"` // sync: where the asker stands
+	Epochs []senderkeys.EpochID    `json:"eps,omitempty"`  // sync: the epochs the asker holds
 }
 
 // wireFile is a file offer in a group message: one transfer ID and key for all members, each of
@@ -56,12 +66,15 @@ type wireFile struct {
 	Key  string `json:"k"`
 }
 
-// wireHistory is one old message that an admin hands to a newcomer.
+// wireHistory is one old message that an admin hands to a newcomer, with its author's signature
+// (absent for messages of members of an older version), so the admin cannot change it.
 type wireHistory struct {
 	ID     string `json:"i"`
 	Sender string `json:"s"`
 	Text   string `json:"t"`
 	TS     int64  `json:"ts"`
+	Sig    []byte `json:"sig,omitempty"`
+	FD     string `json:"fd,omitempty"`
 }
 
 const (
@@ -132,11 +145,26 @@ func (f *groupsFacade) wireMembers(groupID string) []wireMember {
 	if err != nil {
 		return nil
 	}
+	f.loadCapable()
 	out := make([]wireMember, 0, len(list))
 	for _, m := range list {
-		out = append(out, wireMember{ID: m.PeerID.String(), Pub: hex.EncodeToString(m.PubKey[:]), Role: m.Role.Name})
+		w := wireMember{ID: m.PeerID.String(), Pub: hex.EncodeToString(m.PubKey[:]), Role: m.Role.Name}
+		if m.PeerID == f.selfID || f.capable[m.PeerID] {
+			w.V = wireVersion
+		}
+		out = append(out, w)
 	}
 	return out
+}
+
+// noteVersions takes the versions of the members in a list from an admin or an inviter, so a
+// member seals for those it has not heard from itself yet. Call with f.mu held.
+func (f *groupsFacade) noteVersions(list []wireMember) {
+	for _, w := range list {
+		if id, ok := parsePeer(w.ID); ok && id != f.selfID {
+			f.noteVersion(id, w.V)
+		}
+	}
 }
 
 func memberProfiles(list []wireMember) []groups.MemberProfile {
@@ -157,7 +185,45 @@ func (f *groupsFacade) sendTo(target types.PeerID, w groupWire) (queued bool, er
 	if f.sendSilent == nil {
 		return false, errors.New("messaging is not available")
 	}
+	w.V = wireVersion
 	return f.sendSilent(target, encodeWire(w))
+}
+
+// broadcastMsg sends a group message: sealed (env) to the members that understand it, the old way
+// (legacy) to the others and when there is no envelope.
+func (f *groupsFacade) broadcastMsg(groupID string, legacy groupWire, env *senderkeys.Envelope) (delivered, queued, failed int) {
+	members, err := f.mgr.GetAuthorizedRecipients(groupID)
+	if err != nil {
+		return 0, 0, 0
+	}
+	f.mu.Lock()
+	f.loadCapable()
+	sealed := map[types.PeerID]bool{}
+	for _, m := range members {
+		sealed[m.PeerID] = env != nil && f.capable[m.PeerID]
+	}
+	f.mu.Unlock()
+	for _, m := range members {
+		if m.PeerID == f.selfID {
+			continue
+		}
+		w := legacy
+		if sealed[m.PeerID] {
+			w = groupWire{Kind: "smsg", Group: groupID, Env: env}
+		}
+		q, err := f.sendTo(m.PeerID, w)
+		switch {
+		case err != nil:
+			failed++
+			f.nudge(m.PeerID)
+		case q:
+			queued++
+			f.nudge(m.PeerID)
+		default:
+			delivered++
+		}
+	}
+	return
 }
 
 // broadcast sends w to every member except the node itself and the given ones.
@@ -251,6 +317,11 @@ func (f *groupsFacade) handle(origin types.PeerID, text string) bool {
 	var after []func()
 	f.mu.Lock()
 	if f.load() == nil {
+		f.noteVersion(origin, w.V)
+		if len(f.heard) > 4096 {
+			f.heard = make(map[types.PeerID]time.Time)
+		}
+		f.heard[origin] = time.Now()
 		after = f.apply(origin, w)
 	}
 	f.mu.Unlock()
@@ -271,9 +342,83 @@ func (f *groupsFacade) handle(origin types.PeerID, text string) bool {
 	return true
 }
 
+// Changes to a group travel separately from each author and can arrive out of order: a member
+// who was offline may hear the second owner hand the group on before hearing the first owner
+// make them owner. Such a change is not lost: it waits (deferred) and is tried again after every
+// change that is applied, until it fits or a week has passed.
+const (
+	maxDeferred = 64
+	deferredFor = 7 * 24 * time.Hour
+)
+
+type deferredOp struct {
+	origin types.PeerID
+	w      groupWire
+	at     time.Time
+}
+
+// governs tells whether a kind changes who is in the group or what they may do.
+func governs(kind string) bool {
+	switch kind {
+	case "own", "role", "rm", "snap", "join", "add":
+		return true
+	}
+	return false
+}
+
+// deferOp keeps a change that does not fit yet, when the reason may go away (the author or the
+// target is not known as such yet). Call with f.mu held.
+func (f *groupsFacade) deferOp(origin types.PeerID, w groupWire, err error) {
+	if !errors.Is(err, groups.ErrInsufficientPermissions) && !errors.Is(err, groups.ErrInsufficientRank) &&
+		!errors.Is(err, groups.ErrMemberNotFound) {
+		return
+	}
+	list := f.deferred[w.Group]
+	for _, d := range list {
+		if d.origin == origin && d.w.Kind == w.Kind && d.w.Target == w.Target && d.w.Role == w.Role && d.w.Ban == w.Ban {
+			return
+		}
+	}
+	if len(list) >= maxDeferred {
+		list = list[1:]
+	}
+	f.deferred[w.Group] = append(list, deferredOp{origin, w, time.Now()})
+}
+
+// retryDeferred applies the waiting changes that fit now, over and over while some do. Call with
+// f.mu held.
+func (f *groupsFacade) retryDeferred(groupID string) []func() {
+	var after []func()
+	f.retrying = true
+	defer func() { f.retrying = false }()
+	for progress := true; progress; {
+		progress = false
+		list := f.deferred[groupID]
+		delete(f.deferred, groupID)
+		for _, d := range list {
+			if time.Since(d.at) > deferredFor {
+				continue
+			}
+			if out := f.applyOne(d.origin, d.w); out != nil {
+				after = append(after, out...)
+				progress = true
+			}
+		}
+	}
+	return after
+}
+
 // apply changes the local state for one message and returns what is to be done once the lock is
 // released (network sends, events).
 func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) {
+	after = f.applyOne(origin, w)
+	if after != nil && governs(w.Kind) && !f.retrying && len(f.deferred[w.Group]) > 0 {
+		after = append(after, f.retryDeferred(w.Group)...)
+	}
+	return after
+}
+
+func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func()) {
 	if f.blocked != nil && f.blocked(origin) {
 		switch w.Kind {
 		case "msg", "call", "callalive":
@@ -282,41 +427,43 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 	}
 	switch w.Kind {
 	case "msg":
-		role, err := f.mgr.GetMemberRole(w.Group, origin)
-		if err != nil || role.Permissions&groups.PermSendMessages == 0 || w.ID == "" || w.Text == "" || len(w.Text) > maxGroupText {
-			return nil
-		}
-		if f.store.Exists([]byte(groupSeenPrefix + w.ID)) {
-			return nil
-		}
-		_ = f.store.Set([]byte(groupSeenPrefix+w.ID), []byte{1})
-		now := time.Now().UnixMilli()
-		ts := w.TS
-		if ts <= 0 || ts > now+24*3600*1000 {
-			ts = now
-		}
-		f.seq++
-		msg := GroupMessageDTO{ID: w.ID, GroupID: w.Group, Sender: origin.String(), Text: w.Text, Timestamp: ts}
-		var offer func()
-		if w.File != nil {
-			wf := *w.File
-			if f.onFile == nil || wf.ID == "" || wf.Root == "" || wf.Key == "" || wf.Size < 0 {
-				return nil
+		// the old way: unsealed inside the sender's session, which is what proves who wrote it
+		return f.receiveMessage(origin, w.Group, w.ID, w.TS, w.Text, w.File, nil, "", true)
+
+	case "smsg":
+		return f.takeEnvelope(origin, w.Group, w.Env)
+
+	case "envs":
+		var after []func()
+		for i, v := range w.Envs {
+			if i >= maxEnvsInMsg {
+				break
 			}
-			msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime}
-			group := w.Group
-			offer = func() { f.onFile(origin, group, wf) }
+			after = append(after, f.takeEnvelope(origin, w.Group, v)...)
 		}
-		raw, _ := json.Marshal(msg)
-		if f.store.Set(msgKey(w.Group, ts, f.seq), raw) != nil {
+		return after
+
+	case "key":
+		if !f.acceptEpoch(w.Group, w.Epoch) {
 			return nil
 		}
-		ev := GroupEvent{Kind: "message", GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), MessageID: w.ID}
-		if offer != nil {
-			// the transfer is known before the message shows, so it can be accepted at once
-			return []func(){offer, func() { f.emitEvent(ev) }}
+		// a newer epoch may have been made for somebody who is gone by now (two admins at once)
+		after := f.maybeRotate(w.Group, false)
+		return append(after, f.openPending(w.Group)...)
+
+	case "keyreq":
+		if _, ok := f.member(w.Group, origin); !ok {
+			return nil
 		}
-		return []func(){func() { f.emitEvent(ev) }}
+		k := "keyans/" + w.Group + "/" + origin.String()
+		if last, ok := f.paced[k]; ok && time.Since(last) < syncPause {
+			return nil
+		}
+		f.paced[k] = time.Now()
+		return f.sendEpochs(w.Group, origin)
+
+	case "sync":
+		return f.answerSync(w.Group, origin, w.Have, w.Epochs)
 
 	case "join":
 		pub, ok := parsePub(w.Pub)
@@ -341,6 +488,9 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 			after = append(after, func() { _, _ = f.sendTo(origin, snap) })
 			// the other members only hear of the newcomer from us: they wrote to who they knew
 			after = append(after, func() { f.broadcast(w.Group, newcomer, origin) })
+			// and the newcomer gets the keys (an older group gets its first epoch from its owner)
+			after = append(after, f.maybeRotate(w.Group, false)...)
+			after = append(after, f.sendEpochs(w.Group, origin)...)
 			if chunks := f.historyChunks(w.Group); len(chunks) > 0 {
 				after = append(after, func() { f.sendHistory(origin, w.Group, chunks) })
 			}
@@ -355,9 +505,14 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 		if f.mgr.MergeMembers(w.Group, memberProfiles(w.Members), f.mgr.IsOwner(w.Group, origin)) != nil {
 			return nil
 		}
+		f.noteVersions(w.Members)
 		_ = f.persist(w.Group)
 		title := f.titleOf(w.Group)
-		return []func(){func() { f.nudgeAll(w.Group); f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title}) }}
+		after := []func(){func() { f.nudgeAll(w.Group); f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title}) }}
+		if f.keyring(w.Group).Current() == nil {
+			after = append(after, f.requestKeys(w.Group, origin)...) // a newcomer still without keys
+		}
+		return after
 
 	case "add":
 		// an admin added us to a group; only people we know can do that without our consent
@@ -371,20 +526,29 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 			return nil
 		}
 		_ = f.mgr.MergeMembers(w.Group, memberProfiles(w.Members), false)
+		f.noteVersions(w.Members)
 		if _, err := f.mgr.GetMemberRole(w.Group, f.selfID); err != nil {
 			_ = f.mgr.SelfJoin(w.Group, f.selfID, f.selfPub)
 		}
 		_ = f.persist(w.Group)
 		title := w.Genesis.Title
-		return []func(){func() {
+		after := []func(){func() {
 			f.nudgeAll(w.Group)
 			_, _ = f.sendTo(origin, groupWire{Kind: "histreq", Group: w.Group}) // what was said before us
 			f.emitEvent(GroupEvent{Kind: "added", GroupID: w.Group, Title: title, From: origin.String()})
 		}}
+		if f.keyring(w.Group).Current() == nil {
+			after = append(after, f.requestKeys(w.Group, origin)...)
+		}
+		return after
 
 	case "role":
 		target, ok := parsePeer(w.Target)
-		if !ok || f.mgr.ApplyRole(w.Group, origin, target, w.Role) != nil {
+		if !ok {
+			return nil
+		}
+		if err := f.mgr.ApplyRole(w.Group, origin, target, w.Role); err != nil {
+			f.deferOp(origin, w, err)
 			return nil
 		}
 		_ = f.persist(w.Group)
@@ -399,7 +563,9 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 			return nil
 		}
 		title := f.titleOf(w.Group)
-		if f.mgr.ApplyRemove(w.Group, origin, target, w.Ban) != nil {
+		was, _ := f.member(w.Group, target)
+		if err := f.mgr.ApplyRemove(w.Group, origin, target, w.Ban); err != nil {
+			f.deferOp(origin, w, err)
 			return nil
 		}
 		if target == f.selfID {
@@ -409,13 +575,18 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 			}}
 		}
 		_ = f.persist(w.Group)
-		return []func(){func() {
+		// somebody left or was removed: the epoch they had is replaced by whoever is to do it
+		return append(f.maybeRotate(w.Group, false, departed{target.String(), was.JoinedAt}), func() {
 			f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title, From: origin.String()})
-		}}
+		})
 
 	case "own":
 		target, ok := parsePeer(w.Target)
-		if !ok || f.mgr.ApplyTransfer(w.Group, origin, target) != nil {
+		if !ok {
+			return nil
+		}
+		if err := f.mgr.ApplyTransfer(w.Group, origin, target); err != nil {
+			f.deferOp(origin, w, err)
 			return nil
 		}
 		_ = f.persist(w.Group)
@@ -508,8 +679,51 @@ func role0(f *groupsFacade, groupID string, id types.PeerID) string {
 	return "member"
 }
 
+// receiveMessage keeps a message of sender (checked already: by its signature sig, or by the
+// session it came through) and returns the event to show it. Call with f.mu held.
+func (f *groupsFacade) receiveMessage(sender types.PeerID, groupID, id string, ts int64, text string, file *wireFile, sig []byte, fd string, verified bool) []func() {
+	role, err := f.mgr.GetMemberRole(groupID, sender)
+	if err != nil || role.Permissions&groups.PermSendMessages == 0 || id == "" || text == "" || len(text) > maxGroupText {
+		return nil
+	}
+	if f.blocked != nil && f.blocked(sender) {
+		return nil
+	}
+	if f.store.Exists([]byte(groupSeenPrefix + id)) {
+		return nil
+	}
+	_ = f.store.Set([]byte(groupSeenPrefix+id), []byte{1})
+	now := time.Now().UnixMilli()
+	if ts <= 0 || ts > now+24*3600*1000 {
+		ts = now
+	}
+	f.seq++
+	msg := storedGroupMsg{GroupMessageDTO: GroupMessageDTO{ID: id, GroupID: groupID, Sender: sender.String(), Text: text, Timestamp: ts, Verified: verified}, Sig: sig, FD: fd}
+	var offer func()
+	if file != nil {
+		wf := *file
+		if f.onFile == nil || wf.ID == "" || wf.Root == "" || wf.Key == "" || wf.Size < 0 {
+			return nil
+		}
+		msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime}
+		offer = func() { f.onFile(sender, groupID, wf) }
+	}
+	raw, _ := json.Marshal(msg)
+	if f.store.Set(msgKey(groupID, ts, f.seq), raw) != nil {
+		return nil
+	}
+	ev := GroupEvent{Kind: "message", GroupID: groupID, Title: f.titleOf(groupID), From: sender.String(), MessageID: id}
+	if offer != nil {
+		// the transfer is known before the message shows, so it can be accepted at once
+		return []func(){offer, func() { f.emitEvent(ev) }}
+	}
+	return []func(){func() { f.emitEvent(ev) }}
+}
+
 // forget drops a group and what was said in it from this node.
 func (f *groupsFacade) forget(groupID string) {
+	f.forgetKeys(groupID)
+	delete(f.deferred, groupID)
 	f.mgr.DropGroup(groupID)
 	_ = f.store.Delete([]byte(groupKeyPrefix + groupID))
 	if entries, err := f.store.FindValues([]byte(groupMsgPrefix+groupID+"/"), 100000); err == nil {
@@ -562,12 +776,17 @@ func (f *groupsFacade) Remove(groupID, targetID string, ban bool) error {
 		return explain(err)
 	}
 	_ = f.persist(groupID)
+	// those who stay get a new epoch: the removed member cannot read what comes next
+	rekey := f.maybeRotate(groupID, true)
 	f.mu.Unlock()
 	w := groupWire{Kind: "rm", Group: groupID, Target: targetID, Ban: ban}
 	for _, m := range members {
 		if m.PeerID != f.selfID {
 			_, _ = f.sendTo(m.PeerID, w) // includes the removed member
 		}
+	}
+	for _, fn := range rekey {
+		fn()
 	}
 	return nil
 }
@@ -704,7 +923,7 @@ func (f *groupsFacade) historyChunks(groupID string) []groupWire {
 	cur := groupWire{Kind: "hist", Group: groupID}
 	size := 0
 	for _, e := range entries {
-		var m GroupMessageDTO
+		var m storedGroupMsg
 		if json.Unmarshal(e.Value, &m) != nil || m.ID == "" {
 			continue
 		}
@@ -712,7 +931,7 @@ func (f *groupsFacade) historyChunks(groupID string) []groupWire {
 			chunks = append(chunks, cur)
 			cur, size = groupWire{Kind: "hist", Group: groupID}, 0
 		}
-		cur.History = append(cur.History, wireHistory{ID: m.ID, Sender: m.Sender, Text: m.Text, TS: m.Timestamp})
+		cur.History = append(cur.History, wireHistory{ID: m.ID, Sender: m.Sender, Text: m.Text, TS: m.Timestamp, Sig: m.Sig, FD: m.FD})
 		size += len(m.Text)
 	}
 	if len(cur.History) > 0 {
@@ -750,15 +969,27 @@ func (f *groupsFacade) takeHistory(w groupWire) []func() {
 		if !ok {
 			continue
 		}
-		if _, err := f.mgr.GetMemberRole(w.Group, sender); err != nil {
+		author, ok := f.member(w.Group, sender)
+		if !ok {
 			continue // somebody who is not in the group (any more): not shown
+		}
+		// a signed message must still be what its author wrote; an unsigned one (from a member of an
+		// older version) is taken on the admin's word and shown as unverified
+		verified := false
+		if len(h.Sig) > 0 {
+			c := senderkeys.Content{Group: w.Group, ID: h.ID, TS: h.TS, Sender: h.Sender, Text: h.Text, FileDigest: h.FD, Sig: h.Sig}
+			if c.Verify(author.PubKey[:]) != nil {
+				continue
+			}
+			verified = true
 		}
 		if f.store.Exists([]byte(groupSeenPrefix + h.ID)) {
 			continue
 		}
 		_ = f.store.Set([]byte(groupSeenPrefix+h.ID), []byte{1})
 		f.seq++
-		msg := GroupMessageDTO{ID: h.ID, GroupID: w.Group, Sender: sender.String(), Text: h.Text, Timestamp: h.TS, IsMine: sender == f.selfID}
+		msg := storedGroupMsg{GroupMessageDTO: GroupMessageDTO{ID: h.ID, GroupID: w.Group, Sender: sender.String(), Text: h.Text, Timestamp: h.TS,
+			IsMine: sender == f.selfID, Verified: verified}, Sig: h.Sig, FD: h.FD}
 		raw, _ := json.Marshal(msg)
 		if f.store.Set(msgKey(w.Group, h.TS, f.seq), raw) == nil {
 			stored++

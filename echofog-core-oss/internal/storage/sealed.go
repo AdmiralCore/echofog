@@ -24,6 +24,8 @@ var SealedPrefixes = [][]byte{
 	[]byte("peer:alias:"),
 	[]byte("groups/g/"),
 	[]byte("groups/m/"),
+	[]byte("groups/k/"), // group keys: epochs and chains
+	[]byte("groups/e/"), // sealed group messages kept to hand on
 	[]byte("saved:peers:"),
 	[]byte("mb:v1:"),
 	[]byte("vpnmarket:"),

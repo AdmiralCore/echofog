@@ -15,6 +15,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/filexfer"
 	"github.com/echofog/echofog-core/internal/services/groups"
+	"github.com/echofog/echofog-core/internal/services/groups/senderkeys"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/events"
@@ -59,6 +60,17 @@ type GroupMessageDTO struct {
 	Queued    int           `json:"queued"`    // members who are offline: it is sent when they are back
 	Failed    int           `json:"failed"`
 	File      *GroupFileDTO `json:"file,omitempty"` // a file posted in the group (Text is its name)
+	// Verified: the author is certain, by their signature or because the message came over their
+	// own session. Only history from a member of an older version can be unverified.
+	Verified bool `json:"verified"`
+}
+
+// storedGroupMsg is a message as kept: with its author's signature, so it can be handed to a
+// newcomer as history that cannot be altered on the way.
+type storedGroupMsg struct {
+	GroupMessageDTO
+	Sig []byte `json:"sig,omitempty"`
+	FD  string `json:"fd,omitempty"` // digest of the file offer the signature covers
 }
 
 // GroupFileDTO is the file of a group message; its transfer (GetFileTransfer with ID) has the state.
@@ -107,6 +119,17 @@ type groupsFacade struct {
 	prepareFile func(groupID string, members []types.PeerID, path string) (filexfer.Offer, error)
 	withdraw    func(id string)
 	nudged      map[types.PeerID]time.Time
+
+	// sealed messages (group_keys.go)
+	keyrings  map[string]*senderkeys.Keyring
+	capable   map[types.PeerID]bool // peers that understand sealed messages
+	capLoaded bool
+	paced     map[string]time.Time // when a key request, sync request or sync answer last went
+	envWrites int
+	heard     map[types.PeerID]time.Time // when a group message last came from a peer
+
+	deferred map[string][]deferredOp // changes that came before what they build on
+	retrying bool
 }
 
 func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.IdentityPublicKey, sign groups.SignFunc,
@@ -117,7 +140,9 @@ func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.I
 	}
 	return &groupsFacade{mgr: mgr, store: store, selfID: selfID, selfPub: selfPub, sign: sign,
 		sendSilent: sendSilent, isContact: isContact, notify: notify, calls: make(map[string]GroupCall), histSent: make(map[string]time.Time), aliveSent: make(map[string]int64),
-		nudged: make(map[types.PeerID]time.Time)}
+		nudged: make(map[types.PeerID]time.Time), keyrings: make(map[string]*senderkeys.Keyring),
+		capable: make(map[types.PeerID]bool), paced: make(map[string]time.Time), heard: make(map[types.PeerID]time.Time),
+		deferred: make(map[string][]deferredOp)}
 }
 
 func kindName(t groups.GroupType) string {
@@ -211,6 +236,8 @@ func (f *groupsFacade) Create(title, description, kind string) (GroupDTO, error)
 	if err := f.persist(g.GroupID); err != nil {
 		return GroupDTO{}, err
 	}
+	// the first epoch; without it the group still works, the old way
+	_, _ = f.newEpoch(g.GroupID)
 	return f.toDTO(g, 1), nil
 }
 
@@ -277,6 +304,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 		return GroupDTO{}, err
 	}
 	_ = f.mgr.MergeMembers(g.GroupID, memberProfiles(members), true) // the inviter is trusted
+	f.noteVersions(members)
 	if _, err := f.mgr.GetMemberRole(g.GroupID, f.selfID); err != nil {
 		if err := f.mgr.JoinGroup(g.GroupID, f.selfID, f.selfPub); err != nil {
 			f.mu.Unlock()
@@ -318,10 +346,14 @@ func (f *groupsFacade) AddMember(groupID, pubKeyHex string) error {
 	}
 	g, _ := f.mgr.GetGroup(groupID)
 	members := f.wireMembers(groupID)
+	keys := f.sendEpochs(groupID, id)
 	f.mu.Unlock()
 
-	// the newcomer gets the group, the others get to know the newcomer
+	// the newcomer gets the group and its keys, the others get to know the newcomer
 	_, _ = f.sendTo(id, groupWire{Kind: "add", Group: groupID, Genesis: g, Members: members})
+	for _, fn := range keys {
+		fn()
+	}
 	newcomer := wireMember{ID: id.String(), Pub: hex.EncodeToString(ident[:]), Role: "member"}
 	f.broadcast(groupID, groupWire{Kind: "snap", Group: groupID, Members: []wireMember{newcomer}}, id)
 	return nil
@@ -429,19 +461,35 @@ func (f *groupsFacade) SendFile(groupID, path string) (GroupMessageDTO, error) {
 	return msg, nil
 }
 
-// post sends a message (with a file offer, when file is set) to the group and keeps it.
+// post sends a message (with a file offer, when file is set) to the group and keeps it. It is
+// signed, and sealed for the members that understand sealed messages; the others get it the old way.
 func (f *groupsFacade) post(groupID, text string, file *wireFile) (GroupMessageDTO, error) {
 	now := time.Now().UnixMilli()
 	id := newGroupMessageID()
-	delivered, queued, failed := f.broadcast(groupID, groupWire{Kind: "msg", Group: groupID, ID: id, Text: text, TS: now, File: file})
+	c := senderkeys.Content{Group: groupID, ID: id, TS: now, Sender: f.selfID.String(), Text: text}
+	if file != nil {
+		c.Extra, _ = json.Marshal(file)
+	}
+	var env *senderkeys.Envelope
+	var before []func()
+	if f.sign != nil && c.Sign(f.sign) == nil {
+		f.mu.Lock()
+		env, before = f.seal(groupID, &c)
+		f.mu.Unlock()
+	}
+	for _, fn := range before {
+		fn() // a new epoch reaches the members before the first message sealed in it
+	}
+	legacy := groupWire{Kind: "msg", Group: groupID, ID: id, Text: text, TS: now, File: file}
+	delivered, queued, failed := f.broadcastMsg(groupID, legacy, env)
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
-	msg := GroupMessageDTO{
+	msg := storedGroupMsg{GroupMessageDTO: GroupMessageDTO{
 		ID: id, GroupID: groupID, Sender: f.selfID.String(),
-		Text: text, Timestamp: now, IsMine: true, Delivered: delivered, Queued: queued, Failed: failed,
-	}
+		Text: text, Timestamp: now, IsMine: true, Delivered: delivered, Queued: queued, Failed: failed, Verified: true,
+	}, Sig: c.Sig, FD: c.FileDigest}
 	if file != nil {
 		msg.File = &GroupFileDTO{ID: file.ID, Name: file.Name, Size: file.Size, Mime: file.Mime}
 	}
@@ -449,7 +497,7 @@ func (f *groupsFacade) post(groupID, text string, file *wireFile) (GroupMessageD
 	if err := f.store.Set(msgKey(groupID, now, f.seq), raw); err != nil {
 		return GroupMessageDTO{}, err
 	}
-	return msg, nil
+	return msg.GroupMessageDTO, nil
 }
 
 func (f *groupsFacade) Messages(groupID string, limit int) ([]GroupMessageDTO, error) {
@@ -520,6 +568,7 @@ func (n *NodeApi) groupsFacade() (*groupsFacade, error) {
 	}
 	n.node.Messenger.SetInterceptor(f.handle)
 	n.groupsH.f = f
+	go f.syncLoop(n.node.Ctx) // members hand each other the messages they missed
 	return f, nil
 }
 
