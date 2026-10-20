@@ -158,6 +158,8 @@ export function ListGroups():Promise<Array<node.GroupDTO>>;
 
 export function ListSavedMessages():Promise<Array<dto.SavedMessageDTO>>;
 
+export function LogUI(arg1:string,arg2:string,arg3:string,arg4:Record<string, any>):Promise<void>;
+
 export function Login(arg1:string):Promise<void>;
 
 export function Logout():Promise<void>;

@@ -306,6 +306,10 @@ export function ListSavedMessages() {
   return window['go']['main']['App']['ListSavedMessages']();
 }
 
+export function LogUI(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['LogUI'](arg1, arg2, arg3, arg4);
+}
+
 export function Login(arg1) {
   return window['go']['main']['App']['Login'](arg1);
 }

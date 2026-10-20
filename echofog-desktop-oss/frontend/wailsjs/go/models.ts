@@ -952,11 +952,14 @@ export namespace node {
 	    bytesRx: number;
 	    bytesTx: number;
 	    refused: number;
+	    refusedBy?: Record<string, number>;
 	    lastUsed: number;
 	    lastReadyMs?: number;
 	    lastState?: string;
 	    pricePerMb: number;
 	    priceKnown: boolean;
+	    remaining?: number;
+	    remainingAt?: number;
 	    active: boolean;
 	    countryCode?: string;
 	    city?: string;
@@ -975,11 +978,14 @@ export namespace node {
 	        this.bytesRx = source["bytesRx"];
 	        this.bytesTx = source["bytesTx"];
 	        this.refused = source["refused"];
+	        this.refusedBy = source["refusedBy"];
 	        this.lastUsed = source["lastUsed"];
 	        this.lastReadyMs = source["lastReadyMs"];
 	        this.lastState = source["lastState"];
 	        this.pricePerMb = source["pricePerMb"];
 	        this.priceKnown = source["priceKnown"];
+	        this.remaining = source["remaining"];
+	        this.remainingAt = source["remainingAt"];
 	        this.active = source["active"];
 	        this.countryCode = source["countryCode"];
 	        this.city = source["city"];
@@ -1114,9 +1120,12 @@ export namespace node {
 	    bytesRx: number;
 	    bytesTx: number;
 	    refused: number;
+	    refusedBy?: Record<string, number>;
 	    lastState?: string;
 	    pricePerMb: number;
 	    priceKnown: boolean;
+	    remaining?: number;
+	    remainingAt?: number;
 	    endReason?: string;
 	    active: boolean;
 	
@@ -1136,9 +1145,12 @@ export namespace node {
 	        this.bytesRx = source["bytesRx"];
 	        this.bytesTx = source["bytesTx"];
 	        this.refused = source["refused"];
+	        this.refusedBy = source["refusedBy"];
 	        this.lastState = source["lastState"];
 	        this.pricePerMb = source["pricePerMb"];
 	        this.priceKnown = source["priceKnown"];
+	        this.remaining = source["remaining"];
+	        this.remainingAt = source["remainingAt"];
 	        this.endReason = source["endReason"];
 	        this.active = source["active"];
 	    }
