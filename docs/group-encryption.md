@@ -63,10 +63,30 @@ member can seal under the epoch, so the seal alone does not prove authorship; th
 | The epoch is older than 7 days | the admin who made it, or the owner |
 
 An epoch is replaced as soon as one of the people who may hold it is gone: those it was made for,
-and those who joined after it was made (they got it handed over). Two admins removing two people
+and those this member learned of as members after it got the epoch (they may have got it handed
+over). Both times of that check are the member's own clock, so a creator whose clock runs ahead
+cannot hide a holder. Two admins removing two people
 at the same moment each make an epoch that the other's victim still received; once both removals
 are known, the epoch is replaced again by one made for the members who are left. Every member
 picks the same epoch without talking: the higher number, and for the same number the smaller tag.
+
+### Against key churn
+
+Somebody leaving and joining in a loop, or being kicked and let back in, must not make the admins
+mint key after key:
+
+- In a quiet group the epoch is replaced at once. After an epoch, the next one waits **2 minutes**;
+  every departure in between is covered by that one replacement.
+- When the replacement comes due, a departed member who is **back in the group** is not a reason any
+  more (they would get the new epoch on joining anyway). If everybody is back, no epoch is made.
+- With more than three epochs in the last hour the wait doubles with each further epoch, up to
+  **30 minutes**.
+- An admin answers the same newcomer (member list, history, telling the others) at most once a
+  minute; the keys are handed over every time.
+
+The price: in that wait a departed member's old epoch still seals new messages. They are sent
+nothing (only members get messages, sent or handed on), so this matters only if sealed messages
+leak some other way.
 
 A newcomer does not get a new epoch: they receive the current one. The group hands newcomers the
 last 100 messages anyway, so earlier messages of the current epoch are not a secret from them.
@@ -131,7 +151,8 @@ the message is marked as not verified.
   epoch, two admins removing people at once, a member handing on what the author could not
   deliver, forged messages and forged history, older members, a message arriving before its epoch,
   an older group getting its first epoch, the weekly replacement, restarts, out-of-order owner
-  changes.
+  changes; and key churn: ten leave-and-join loops, kicking somebody who keeps coming back, several
+  departures sharing one epoch, the growing wait.
 - `pkg/api/node/group_fifty_test.go`: **a group of fifty** over 300 random events. People write,
   go offline and come back (often the author is gone again before the reader returns), members are
   kicked, banned and leave, the group changes owner twice and each new owner removes somebody, two

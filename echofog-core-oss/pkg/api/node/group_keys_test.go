@@ -68,6 +68,7 @@ func TestKickReplacesTheEpoch(t *testing.T) {
 
 	require.NoError(t, a.f.Remove(g, c.id.String(), false))
 	m.settle()
+	m.tick(rekeyGap) // the group was made a moment ago: the new epoch waits for the gap
 	assert.Contains(t, c.eventKinds(), "removed")
 	for _, n := range []*meshNode{a, b, d} {
 		cur := n.keyring(g).Current()
@@ -106,6 +107,7 @@ func TestLeaveIsFollowedByANewEpochFromTheOwner(t *testing.T) {
 	a, b, c := ns[0], ns[1], ns[2]
 	require.NoError(t, c.f.Leave(g))
 	m.settle()
+	m.tick(rekeyGap)
 	for _, n := range []*meshNode{a, b} {
 		cur := n.keyring(g).Current()
 		require.NotNil(t, cur)
@@ -129,7 +131,10 @@ func TestConcurrentRemovalsSettleOnOneCleanEpoch(t *testing.T) {
 	require.NoError(t, adm.f.Remove(g, y.id.String(), true))
 	m.paused = false
 	m.settle()
-	m.syncAll(2)
+	m.tick(rekeyGap)
+	m.syncAll(1)
+	m.tick(2 * rekeyGap) // the second replacement (both removals known) waits a gap too
+	m.syncAll(1)
 
 	stay := []*meshNode{owner, adm, ns[4], ns[5]}
 	want := stay[0].current(g)

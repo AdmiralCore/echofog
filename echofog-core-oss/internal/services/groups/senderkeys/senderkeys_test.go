@@ -48,6 +48,9 @@ func TestSealOpenInAndOutOfOrder(t *testing.T) {
 	if !alice.Add(e) || alice.Add(e) {
 		t.Fatal("an epoch is new once")
 	}
+	if alice.LearnedAt(e) == 0 || NewKeyring("g1", "x").LearnedAt(e) != 0 {
+		t.Fatal("when an epoch was learned is kept")
+	}
 	bob.Add(e)
 
 	var envs []*Envelope

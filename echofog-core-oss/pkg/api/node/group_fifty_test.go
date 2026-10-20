@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/services/groups/senderkeys"
 	"github.com/stretchr/testify/assert"
@@ -67,6 +68,7 @@ func TestGroupOfFifty(t *testing.T) {
 		inGroup[n] = true
 	}
 	removedAt := map[*meshNode]int{}
+	removedClock := map[*meshNode]time.Time{}     // when, by the mesh clock
 	stolen := map[*meshNode]*senderkeys.Keyring{} // keys a removed member walked away with
 	away := map[*meshNode]bool{}
 	admins := map[*meshNode]bool{nodes[1]: true, nodes[2]: true, nodes[3]: true}
@@ -103,6 +105,7 @@ func TestGroupOfFifty(t *testing.T) {
 		require.NoError(t, actor.f.Remove(g, target.id.String(), ban), "step %d", step)
 		inGroup[target] = false
 		removedAt[target] = step
+		removedClock[target] = m.now()
 		m.settle()
 	}
 	plain := func(n *meshNode) bool { return !admins[n] && n != curOwner && !n.legacy }
@@ -110,7 +113,10 @@ func TestGroupOfFifty(t *testing.T) {
 	// only the other members can pass on what they wrote
 	goneForever := map[*meshNode]bool{}
 
+	stepClock := map[int]time.Time{}
 	for step := 1; step <= steps; step++ {
+		m.tick(time.Minute) // a minute per step; the nodes' timers run what is due
+		stepClock[step] = m.now()
 		switch {
 		case step == 60 || step == 140:
 			// a kick by an admin (who comes online for it)
@@ -134,6 +140,7 @@ func TestGroupOfFifty(t *testing.T) {
 				require.NoError(t, n.f.Leave(g))
 				inGroup[n] = false
 				removedAt[n] = step
+				removedClock[n] = m.now()
 				m.settle()
 			}
 		case step == 100 || step == 200:
@@ -221,6 +228,7 @@ func TestGroupOfFifty(t *testing.T) {
 		}
 	}
 	m.settle()
+	m.tick(rekeyGapMax) // replacements still waiting come due
 	m.syncAll(4)
 
 	stay := []*meshNode{} // members who are here at the end
@@ -341,10 +349,10 @@ func TestGroupOfFifty(t *testing.T) {
 
 	// 3. one clean epoch, made after the last removal
 	var want senderkeys.EpochID
-	lastRemoval := 0
-	for _, s := range removedAt {
-		if s > lastRemoval {
-			lastRemoval = s
+	var lastRemoval time.Time
+	for _, at := range removedClock {
+		if at.After(lastRemoval) {
+			lastRemoval = at
 		}
 	}
 	for _, n := range stay {
@@ -360,14 +368,20 @@ func TestGroupOfFifty(t *testing.T) {
 		for gone := range removedAt {
 			assert.False(t, cur.Has(gone.id.String()), "the epoch in use was made for a removed member")
 		}
+		assert.GreaterOrEqual(t, cur.CreatedAt, lastRemoval.UnixMilli(), "the epoch in use is older than the last removal")
 	}
-	assert.GreaterOrEqual(t, want.N, uint64(len(removedAt)), "every removal brought a new epoch")
+	// paced replacements: departures close together share an epoch, so there are no more epochs
+	// than removals (and the first one), and usually fewer
+	assert.LessOrEqual(t, want.N, uint64(len(removedAt)+1))
 
-	// 4. the keys of the removed open nothing written after they went
+	// 4. the keys of the removed open nothing sealed in an epoch made after they went; what they
+	// could open in the meantime (the paced gap, or while the admin to replace it was away) is
+	// counted and logged
 	stepOf := map[string]int{}
 	for _, p := range all {
 		stepOf[p.id] = p.step
 	}
+	exposed := 0
 	for _, holder := range stay {
 		if holder.legacy {
 			continue
@@ -384,12 +398,17 @@ func TestGroupOfFifty(t *testing.T) {
 				var c senderkeys.Content
 				require.NoError(t, json.Unmarshal(pt, &c))
 				if s, ok := stepOf[c.ID]; ok && s > removedAt[gone] {
-					t.Errorf("a member removed at step %d opened %q (step %d)", removedAt[gone], c.Text, s)
+					e := holder.keyring(g).Epoch(ce.Env.EpochID())
+					if e != nil && time.UnixMilli(e.CreatedAt).After(removedClock[gone]) {
+						t.Errorf("a member removed at step %d opened %q (step %d) in a later epoch", removedAt[gone], c.Text, s)
+					}
+					exposed++
 				}
 			}
 		}
 		break // one holder's envelopes are enough: they are the same bytes everywhere
 	}
+	t.Logf("epochs: %d for %d removals; messages a removed member could still open (before the replacement): %d", want.N, len(removedAt), exposed)
 }
 
 func roleOf2(t *testing.T, n *meshNode, group string, who *meshNode) string {

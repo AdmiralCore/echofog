@@ -44,6 +44,16 @@ const (
 	syncEvery   = 10 * time.Minute
 	syncFanout  = 3                // members asked by a periodic sync
 	heardRecent = 15 * time.Minute // a member heard from this recently is likely online
+
+	// Replacing the epoch is paced, so somebody leaving and joining over and over (or being
+	// kicked and let back in) cannot make the admins mint key after key: after an epoch, the next
+	// waits rekeyGap, and departures in between are covered by one new epoch. A departed member
+	// who is back by then needs no new epoch at all. With more than rekeyBurst epochs in the last
+	// hour the gap doubles, up to rekeyGapMax.
+	rekeyGap    = 2 * time.Minute
+	rekeyGapMax = 30 * time.Minute
+	rekeyBurst  = 3
+	joinPause   = time.Minute // between answers (members, history) to the same newcomer
 )
 
 var (
@@ -168,12 +178,12 @@ func (f *groupsFacade) newEpoch(groupID string) (*senderkeys.Epoch, error) {
 	if cur := kr.Current(); cur != nil {
 		n = cur.N + 1
 	}
-	e, err := senderkeys.NewEpoch(groupID, n, f.selfID.String(), ids, time.Now(), f.sign)
+	e, err := senderkeys.NewEpoch(groupID, n, f.selfID.String(), ids, f.clock(), f.sign)
 	if err != nil {
 		return nil, err
 	}
 	kr.Add(e)
-	kr.Prune(time.Now())
+	kr.Prune(f.clock())
 	if err := f.saveKeyring(groupID); err != nil {
 		return nil, err
 	}
@@ -196,16 +206,116 @@ type departed struct {
 	joinedAt int64 // unix ms
 }
 
+// clock is the time the key logic goes by (tests set f.now).
+func (f *groupsFacade) clock() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
+// pendingRekey is a replacement of the epoch that waits for the gap since the last one.
+type pendingRekey struct {
+	due   time.Time
+	gone  []departed
+	timer *time.Timer
+}
+
+// rekeyGapFor is how long after the last epoch the next may come: rekeyGap, doubled for every
+// epoch past rekeyBurst made in the last hour.
+func (f *groupsFacade) rekeyGapFor(groupID string) time.Duration {
+	hour := f.clock().Add(-time.Hour).UnixMilli()
+	n := 0
+	for _, e := range f.keyring(groupID).List() {
+		if e.CreatedAt > hour {
+			n++
+		}
+	}
+	gap := rekeyGap
+	for i := rekeyBurst; i < n && gap < rekeyGapMax; i++ {
+		gap *= 2
+	}
+	return min(gap, rekeyGapMax)
+}
+
+// scheduleRekey replaces the epoch now if the gap since the last one has passed, or remembers
+// to do it when it has (departures meanwhile join the same replacement). Call with f.mu held.
+func (f *groupsFacade) scheduleRekey(groupID string, gone []departed) []func() {
+	p := f.rekeys[groupID]
+	if p == nil {
+		p = &pendingRekey{}
+	}
+	p.gone = append(p.gone, gone...)
+	due := f.clock()
+	if cur := f.keyring(groupID).Current(); cur != nil {
+		if at := time.UnixMilli(cur.CreatedAt).Add(f.rekeyGapFor(groupID)); at.After(due) {
+			due = at
+		}
+	}
+	if !due.After(f.clock()) {
+		delete(f.rekeys, groupID)
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		return f.rekeyNow(groupID, p.gone)
+	}
+	p.due = due
+	f.rekeys[groupID] = p
+	if f.async && p.timer == nil {
+		p.timer = time.AfterFunc(due.Sub(f.clock()), f.runDueRekeys)
+	}
+	return nil
+}
+
+// rekeyNow makes the new epoch unless nothing calls for it any more: every departed member is
+// back, no member the epoch was made for is gone, and it is not too old. Call with f.mu held.
+func (f *groupsFacade) rekeyNow(groupID string, gone []departed) []func() {
+	still := gone[:0:0]
+	for _, d := range gone {
+		id, ok := parsePeer(d.id)
+		if !ok {
+			continue
+		}
+		if _, back := f.member(groupID, id); !back {
+			still = append(still, d)
+		}
+	}
+	if len(still) == 0 && !f.tainted(groupID) && !f.keyring(groupID).Stale(f.clock()) {
+		return nil
+	}
+	return f.rotate(groupID)
+}
+
+// runDueRekeys makes the replacements whose time has come and sends them out. The node's timers
+// call it; so does SyncGroups, for a timer lost to a restart.
+func (f *groupsFacade) runDueRekeys() {
+	var after []func()
+	f.mu.Lock()
+	for g, p := range f.rekeys {
+		if p.due.After(f.clock()) {
+			continue
+		}
+		delete(f.rekeys, g)
+		after = append(after, f.rekeyNow(g, p.gone)...)
+	}
+	f.mu.Unlock()
+	for _, fn := range after {
+		fn()
+	}
+}
+
 // tainted tells whether the epoch in use may be held by somebody who is no longer a member: it
-// was made for them, or for somebody else gone since, or they joined after it was made (then it
-// was handed to them).
+// was made for them, or for somebody else gone since, or we learned of them as a member after we
+// got the epoch (then it may have been handed to them). Both times of that last check are this
+// node's own clock, so a creator whose clock runs ahead cannot hide a holder.
 func (f *groupsFacade) tainted(groupID string, gone ...departed) bool {
-	cur := f.keyring(groupID).Current()
+	kr := f.keyring(groupID)
+	cur := kr.Current()
 	if cur == nil {
 		return false
 	}
 	for _, d := range gone {
-		if cur.Has(d.id) || d.joinedAt >= cur.CreatedAt {
+		if cur.Has(d.id) || d.joinedAt >= kr.LearnedAt(cur) {
 			return true
 		}
 	}
@@ -230,18 +340,17 @@ func (f *groupsFacade) maybeRotate(groupID string, actor bool, gone ...departed)
 	}
 	kr := f.keyring(groupID)
 	cur := kr.Current()
-	responsible := actor || f.mgr.IsOwner(groupID, f.selfID) || (cur != nil && cur.Creator == f.selfID.String())
-	switch {
-	case cur == nil:
+	if cur == nil {
 		if !f.mgr.IsOwner(groupID, f.selfID) {
 			return nil // the owner starts the first epoch of an older group
 		}
-	case actor:
-	case responsible && (f.tainted(groupID, gone...) || kr.Stale(time.Now())):
-	default:
+		return f.rotate(groupID)
+	}
+	responsible := actor || f.mgr.IsOwner(groupID, f.selfID) || cur.Creator == f.selfID.String()
+	if !responsible || !(actor || f.tainted(groupID, gone...) || kr.Stale(f.clock())) {
 		return nil
 	}
-	return f.rotate(groupID)
+	return f.scheduleRekey(groupID, gone)
 }
 
 // acceptEpoch keeps an epoch handed over by origin when its creator is an admin of the group and
@@ -265,7 +374,7 @@ func (f *groupsFacade) acceptEpoch(groupID string, e *senderkeys.Epoch) bool {
 	if !kr.Add(e) {
 		return false
 	}
-	kr.Prune(time.Now())
+	kr.Prune(f.clock())
 	_ = f.saveKeyring(groupID)
 	return true
 }
@@ -295,10 +404,10 @@ func (f *groupsFacade) requestKeys(groupID string, peer types.PeerID) []func() {
 		return nil
 	}
 	k := "key/" + groupID + "/" + peer.String()
-	if last, ok := f.paced[k]; ok && time.Since(last) < keyReqPause {
+	if last, ok := f.paced[k]; ok && f.clock().Sub(last) < keyReqPause {
 		return nil
 	}
-	f.paced[k] = time.Now()
+	f.paced[k] = f.clock()
 	w := groupWire{Kind: "keyreq", Group: groupID}
 	return []func(){func() { _, _ = f.sendTo(peer, w) }}
 }
@@ -309,10 +418,10 @@ func (f *groupsFacade) requestSync(groupID string, peer types.PeerID) []func() {
 		return nil
 	}
 	k := "sync/" + groupID + "/" + peer.String()
-	if last, ok := f.paced[k]; ok && time.Since(last) < syncPause {
+	if last, ok := f.paced[k]; ok && f.clock().Sub(last) < syncPause {
 		return nil
 	}
-	f.paced[k] = time.Now()
+	f.paced[k] = f.clock()
 	kr := f.keyring(groupID)
 	var ids []senderkeys.EpochID
 	for _, e := range kr.List() {
@@ -348,7 +457,7 @@ func (f *groupsFacade) seal(groupID string, c *senderkeys.Content) (*senderkeys.
 
 // cacheEnv keeps an envelope for members who missed it. Call with f.mu held.
 func (f *groupsFacade) cacheEnv(groupID string, v *senderkeys.Envelope, from types.PeerID, pending bool) {
-	raw, err := json.Marshal(cachedEnv{Env: v, From: from.String(), At: time.Now().UnixMilli(), Pending: pending})
+	raw, err := json.Marshal(cachedEnv{Env: v, From: from.String(), At: f.clock().UnixMilli(), Pending: pending})
 	if err != nil {
 		return
 	}
@@ -380,7 +489,7 @@ func (f *groupsFacade) pruneEnvs(groupID string) {
 	if err != nil {
 		return
 	}
-	cut := time.Now().Add(-envKeepFor).UnixMilli()
+	cut := f.clock().Add(-envKeepFor).UnixMilli()
 	type aged struct {
 		key []byte
 		at  int64
@@ -498,10 +607,10 @@ func (f *groupsFacade) answerSync(groupID string, requester types.PeerID, have [
 		return nil
 	}
 	k := "answer/" + groupID + "/" + requester.String()
-	if last, ok := f.paced[k]; ok && time.Since(last) < syncPause {
+	if last, ok := f.paced[k]; ok && f.clock().Sub(last) < syncPause {
 		return nil
 	}
-	f.paced[k] = time.Now()
+	f.paced[k] = f.clock()
 	var envs []*senderkeys.Envelope
 	for _, c := range f.cachedEnvs(groupID) {
 		if c.Pending || c.Env.Sender == requester.String() {
@@ -567,6 +676,9 @@ func (f *groupsFacade) SyncGroups() {
 		f.mu.Unlock()
 		return
 	}
+	f.mu.Unlock()
+	f.runDueRekeys()
+	f.mu.Lock()
 	for _, s := range f.mgr.ListGroups() {
 		g := s.Genesis.GroupID
 		after = append(after, f.maybeRotate(g, false)...)
@@ -583,7 +695,7 @@ func (f *groupsFacade) SyncGroups() {
 		// ask members we heard from lately first: they are likely online; a request to somebody
 		// offline only waits in the outbox
 		rand.Shuffle(len(others), func(i, j int) { others[i], others[j] = others[j], others[i] })
-		now := time.Now()
+		now := f.clock()
 		recent := func(p types.PeerID) bool { t, ok := f.heard[p]; return ok && now.Sub(t) < heardRecent }
 		sort.SliceStable(others, func(i, j int) bool { return recent(others[i]) && !recent(others[j]) })
 		if len(others) > syncFanout {

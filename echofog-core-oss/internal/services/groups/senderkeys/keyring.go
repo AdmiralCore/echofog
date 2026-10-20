@@ -33,6 +33,9 @@ type Keyring struct {
 	Epochs map[string]*Epoch `json:"e"`
 	Send   map[string]*chain `json:"tx"` // epoch -> our chain
 	Recv   map[string]*chain `json:"rx"` // epoch + "|" + sender -> their chain
+	// Learned is when this member got each epoch, by its own clock (unix ms): whoever it learned
+	// of as a member after that may have been handed the epoch too.
+	Learned map[string]int64 `json:"lr,omitempty"`
 }
 
 // NewKeyring starts an empty keyring for self in group.
@@ -50,6 +53,9 @@ func (k *Keyring) init() {
 	if k.Recv == nil {
 		k.Recv = map[string]*chain{}
 	}
+	if k.Learned == nil {
+		k.Learned = map[string]int64{}
+	}
 }
 
 // Add keeps an epoch (already verified by the caller) and reports whether it was new.
@@ -63,8 +69,13 @@ func (k *Keyring) Add(e *Epoch) bool {
 		return false
 	}
 	k.Epochs[id] = e
+	k.Learned[id] = time.Now().UnixMilli()
 	return true
 }
+
+// LearnedAt is when this member got the epoch, by its own clock; 0 when not known (a keyring
+// saved by an older version), which callers take as "long ago".
+func (k *Keyring) LearnedAt(e *Epoch) int64 { return k.Learned[e.ID().String()] }
 
 // Epoch returns a known epoch.
 func (k *Keyring) Epoch(id EpochID) *Epoch { return k.Epochs[id.String()] }
@@ -274,6 +285,7 @@ func (k *Keyring) Prune(now time.Time) int {
 		id := e.ID().String()
 		wipe(e.Secret)
 		delete(k.Epochs, id)
+		delete(k.Learned, id)
 		if c := k.Send[id]; c != nil {
 			wipe(c.Key)
 			delete(k.Send, id)

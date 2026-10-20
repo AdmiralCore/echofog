@@ -130,6 +130,9 @@ type groupsFacade struct {
 
 	deferred map[string][]deferredOp // changes that came before what they build on
 	retrying bool
+
+	rekeys map[string]*pendingRekey // epoch replacements waiting for the gap since the last one
+	now    func() time.Time         // the clock of the key logic (tests move it)
 }
 
 func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.IdentityPublicKey, sign groups.SignFunc,
@@ -142,7 +145,7 @@ func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.I
 		sendSilent: sendSilent, isContact: isContact, notify: notify, calls: make(map[string]GroupCall), histSent: make(map[string]time.Time), aliveSent: make(map[string]int64),
 		nudged: make(map[types.PeerID]time.Time), keyrings: make(map[string]*senderkeys.Keyring),
 		capable: make(map[types.PeerID]bool), paced: make(map[string]time.Time), heard: make(map[types.PeerID]time.Time),
-		deferred: make(map[string][]deferredOp)}
+		deferred: make(map[string][]deferredOp), rekeys: make(map[string]*pendingRekey)}
 }
 
 func kindName(t groups.GroupType) string {

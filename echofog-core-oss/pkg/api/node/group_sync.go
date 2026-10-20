@@ -481,8 +481,17 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		after = append(after, func() {
 			f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title, From: origin.String()})
 		})
-		// whoever may manage members tells the newcomer who is in the group
+		// whoever may manage members tells the newcomer who is in the group: once a minute per
+		// newcomer, so leaving and joining in a loop does not flood the group (keys always go)
+		k := "join/" + w.Group + "/" + origin.String()
+		last, answered := f.paced[k]
+		fresh := !answered || f.clock().Sub(last) >= joinPause
+		if role, err := f.mgr.GetMemberRole(w.Group, f.selfID); err == nil && role.Permissions&groups.PermManageRoles != 0 && !fresh {
+			after = append(after, f.maybeRotate(w.Group, false)...)
+			return append(after, f.sendEpochs(w.Group, origin)...)
+		}
 		if role, err := f.mgr.GetMemberRole(w.Group, f.selfID); err == nil && role.Permissions&groups.PermManageRoles != 0 {
+			f.paced[k] = f.clock()
 			snap := groupWire{Kind: "snap", Group: w.Group, Members: f.wireMembers(w.Group)}
 			newcomer := groupWire{Kind: "snap", Group: w.Group, Members: []wireMember{{ID: origin.String(), Pub: w.Pub, Role: role0(f, w.Group, origin)}}}
 			after = append(after, func() { _, _ = f.sendTo(origin, snap) })
@@ -771,13 +780,15 @@ func (f *groupsFacade) Remove(groupID, targetID string, ban bool) error {
 		return err
 	}
 	members, _ := f.mgr.GetAuthorizedRecipients(groupID)
+	was, _ := f.member(groupID, target)
 	if err := f.mgr.ApplyRemove(groupID, f.selfID, target, ban); err != nil {
 		f.mu.Unlock()
 		return explain(err)
 	}
 	_ = f.persist(groupID)
-	// those who stay get a new epoch: the removed member cannot read what comes next
-	rekey := f.maybeRotate(groupID, true)
+	// those who stay get a new epoch: the removed member cannot read what comes next (paced, so
+	// kicking somebody who keeps coming back does not mint a key each time)
+	rekey := f.maybeRotate(groupID, true, departed{targetID, was.JoinedAt})
 	f.mu.Unlock()
 	w := groupWire{Kind: "rm", Group: groupID, Target: targetID, Ban: ban}
 	for _, m := range members {

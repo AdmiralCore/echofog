@@ -26,7 +26,8 @@ type mesh struct {
 	queue  []delivery
 	held   []delivery // outboxes: waiting for the recipient (or the sender) to be online
 	kinds  map[string]int
-	paused bool // nothing is handed over until resume
+	paused bool      // nothing is handed over until resume
+	clock  time.Time // the time of every node's key logic; tick moves it
 }
 
 type delivery struct {
@@ -48,7 +49,32 @@ type meshNode struct {
 	events []GroupEvent
 }
 
-func newMesh() *mesh { return &mesh{nodes: map[types.PeerID]*meshNode{}, kinds: map[string]int{}} }
+func newMesh() *mesh {
+	return &mesh{nodes: map[types.PeerID]*meshNode{}, kinds: map[string]int{}, clock: time.Now()}
+}
+
+func (m *mesh) now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.clock
+}
+
+// tick moves the clock on and runs what the nodes' timers would: epoch replacements that are due.
+func (m *mesh) tick(d time.Duration) {
+	m.mu.Lock()
+	m.clock = m.clock.Add(d)
+	nodes := make([]*meshNode, 0, len(m.nodes))
+	for _, n := range m.nodes {
+		if n.online {
+			nodes = append(nodes, n)
+		}
+	}
+	m.mu.Unlock()
+	for _, n := range nodes {
+		n.f.runDueRekeys()
+	}
+	m.settle()
+}
 
 func (m *mesh) add(t testing.TB) *meshNode {
 	t.Helper()
@@ -72,6 +98,7 @@ func (n *meshNode) start() {
 		func(target types.PeerID, text string) (bool, error) { return n.m.send(id, target, text) },
 		func(types.PeerID) bool { return true },
 		func(ev GroupEvent) { n.evMu.Lock(); n.events = append(n.events, ev); n.evMu.Unlock() }, nil)
+	n.f.now = n.m.now
 }
 
 var v2Kinds = map[string]bool{"smsg": true, "envs": true, "key": true, "keyreq": true, "sync": true}
