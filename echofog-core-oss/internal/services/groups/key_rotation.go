@@ -1,14 +1,23 @@
 package groups
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha512"
 	"errors"
 	"io"
 	"sync"
 	"time"
 
+	"filippo.io/edwards25519"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"golang.org/x/crypto/nacl/box"
+)
+
+// keyRand is where epoch keys come from; tests swap it to make a rotation fail.
+var (
+	defaultKeyRand io.Reader = rand.Reader
+	keyRand                  = defaultKeyRand
 )
 
 // GroupEpochKey represents the symmetric cipher key used to encrypt group messages for a specific epoch.
@@ -38,7 +47,7 @@ func (e *KeyRotationEngine) GenerateInitialKey(groupID string) (*GroupEpochKey, 
 	defer e.mu.Unlock()
 
 	rawKey := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, rawKey); err != nil {
+	if _, err := io.ReadFull(keyRand, rawKey); err != nil {
 		return nil, err
 	}
 
@@ -65,7 +74,7 @@ func (e *KeyRotationEngine) RotateKey(groupID string) (*GroupEpochKey, error) {
 	}
 
 	rawKey := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, rawKey); err != nil {
+	if _, err := io.ReadFull(keyRand, rawKey); err != nil {
 		return nil, err
 	}
 
@@ -113,8 +122,10 @@ func EncryptKeyForMember(rawKey []byte, recipientPub types.IdentityPublicKey) ([
 		return nil, err
 	}
 
-	var recipCurvePub [32]byte
-	copy(recipCurvePub[:], recipientPub[:]) // Map identity public key to Curve25519
+	recipCurvePub, err := curvePublicKey(recipientPub)
+	if err != nil {
+		return nil, err
+	}
 
 	var nonce [24]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
@@ -131,4 +142,48 @@ func EncryptKeyForMember(rawKey []byte, recipientPub types.IdentityPublicKey) ([
 	copy(payload[56:], encrypted)
 
 	return payload, nil
+}
+
+// DecryptKeyForMember opens a payload made by EncryptKeyForMember with the member's identity key.
+func DecryptKeyForMember(payload []byte, recipientPriv ed25519.PrivateKey) ([]byte, error) {
+	if len(payload) < 24+32+box.Overhead {
+		return nil, errors.New("sealed key too short")
+	}
+	if len(recipientPriv) != ed25519.PrivateKeySize {
+		return nil, errors.New("invalid Ed25519 private key size")
+	}
+	var nonce [24]byte
+	var ephemPub [32]byte
+	copy(nonce[:], payload[0:24])
+	copy(ephemPub[:], payload[24:56])
+	curvePriv := curvePrivateKey(recipientPriv)
+	rawKey, ok := box.Open(nil, payload[56:], &nonce, &ephemPub, &curvePriv)
+	if !ok {
+		return nil, errors.New("sealed key cannot be opened with this identity")
+	}
+	return rawKey, nil
+}
+
+// curvePublicKey turns an Ed25519 identity key into the X25519 key of the same pair (the
+// birational map from the Edwards to the Montgomery curve).
+func curvePublicKey(pub types.IdentityPublicKey) ([32]byte, error) {
+	var out [32]byte
+	p, err := new(edwards25519.Point).SetBytes(pub[:])
+	if err != nil {
+		return out, errors.New("identity key is not a valid Ed25519 point")
+	}
+	copy(out[:], p.BytesMontgomery())
+	return out, nil
+}
+
+// curvePrivateKey derives the X25519 scalar of an Ed25519 key the way Ed25519 derives its own:
+// the clamped first half of SHA-512 of the seed.
+func curvePrivateKey(priv ed25519.PrivateKey) [32]byte {
+	h := sha512.Sum512(priv.Seed())
+	var out [32]byte
+	copy(out[:], h[:32])
+	out[0] &= 248
+	out[31] &= 127
+	out[31] |= 64
+	return out
 }

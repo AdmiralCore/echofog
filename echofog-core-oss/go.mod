@@ -5,6 +5,7 @@ go 1.27.0
 toolchain go1.27.2
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/apernet/quic-go v0.63.1-0.20261004180939-a10df75c260c
 	github.com/awnumar/memguard v0.23.0
 	github.com/dgraph-io/badger/v4 v4.9.0
@@ -37,7 +38,6 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.0.6 // indirect
 	github.com/awnumar/memcall v0.4.0 // indirect

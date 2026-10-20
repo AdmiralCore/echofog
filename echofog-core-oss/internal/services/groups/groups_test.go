@@ -16,12 +16,10 @@ func generateTestKeyPair() (types.PeerID, types.IdentityPublicKey, ed25519.Priva
 		panic(err)
 	}
 
-	var peerID types.PeerID
 	var pubIdent types.IdentityPublicKey
-	copy(peerID[:], pub[:32])
 	copy(pubIdent[:], pub[:32])
 
-	return peerID, pubIdent, priv
+	return IDOfKey(pubIdent), pubIdent, priv
 }
 
 func TestGroups_GenesisAndSignatures(t *testing.T) {

@@ -3,6 +3,7 @@ package groups
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -104,11 +105,22 @@ func (m *GroupManager) ApplyRemove(groupID string, actor, target types.PeerID, b
 	} else if t.Role.Rank >= RoleOwner.Rank {
 		return ErrCannotTargetOwner // the owner cannot walk away from their own group
 	}
+	ban = ban && actor != target
+	var newEpochKey *GroupEpochKey
+	if ban {
+		// evict the target from the epoch key as BanMember does, before the ban takes effect
+		if newEpochKey, err = m.keyEngine.RotateKey(groupID); err != nil {
+			return fmt.Errorf("cryptographic key rotation failed: %w", err)
+		}
+	}
 	delete(st.Members, target)
-	if ban && actor != target {
+	if ban {
 		st.Bans[target] = "banned"
 	}
 	m.emit("groups:member_removed", map[string]any{"group_id": groupID, "member": target.String(), "ban": ban})
+	if newEpochKey != nil {
+		m.emit("groups:epoch_rotated", map[string]any{"group_id": groupID, "epoch": newEpochKey.Epoch})
+	}
 	return nil
 }
 

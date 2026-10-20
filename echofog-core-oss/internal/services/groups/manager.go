@@ -55,10 +55,9 @@ func (m *GroupManager) CreateGroup(title, description string, gType GroupType, c
 	}
 
 	creatorPub := creatorPriv.Public().(ed25519.PublicKey)
-	var creatorID types.PeerID
 	var creatorPubIdent types.IdentityPublicKey
-	copy(creatorID[:], creatorPub[:32])
 	copy(creatorPubIdent[:], creatorPub[:32])
+	creatorID := IDOfKey(creatorPubIdent) // VerifyGenesis on other nodes requires the hash of the key
 
 	var salt [16]byte
 	if _, err := io.ReadFull(rand.Reader, salt[:]); err != nil {
@@ -277,18 +276,19 @@ func (m *GroupManager) BanMember(groupID string, actor types.PeerID, target type
 	digest := action.CanonicalHash()
 	copy(action.Signature[:], ed25519.Sign(actorPriv, digest))
 
+	// 3. Cryptographic Eviction: Rotate group epoch key. It comes first so that a failed rotation
+	// leaves no ban behind that the target could still read through.
+	newEpochKey, err := m.keyEngine.RotateKey(groupID)
+	if err != nil {
+		return nil, fmt.Errorf("cryptographic key rotation failed: %w", err)
+	}
+
 	// Mark target banned
 	targetProf.IsBanned = true
 	targetProf.BanReason = reason
 	state.Members[target] = targetProf
 	state.Bans[target] = reason
 	state.ActionLog = append(state.ActionLog, action)
-
-	// 3. Cryptographic Eviction: Rotate group epoch key
-	newEpochKey, err := m.keyEngine.RotateKey(groupID)
-	if err != nil {
-		return nil, fmt.Errorf("cryptographic key rotation failed: %w", err)
-	}
 
 	m.emit("groups:member_evicted", map[string]any{"group_id": groupID, "target": target.String(), "reason": reason})
 	m.emit("groups:epoch_rotated", map[string]any{"group_id": groupID, "epoch": newEpochKey.Epoch})
