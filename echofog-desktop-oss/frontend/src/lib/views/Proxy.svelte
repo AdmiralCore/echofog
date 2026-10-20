@@ -278,6 +278,12 @@
   $: lastExit = history.find((s) => !s.active);
   $: shownExits = showAllHistory ? saved : saved.slice(0, 6);
   $: exitName = (e) => e.name || contactName(e.peerId) || short(e.peerId);
+  // where an exit is, when its location is known (it is looked up for the exits in the history):
+  // "Netherlands, Amsterdam · 5f09…"
+  $: whereExit = (e) => {
+    const geo = e.countryCode ? e : saved.find((s) => s.peerId === e.peerId);
+    return (geo?.countryCode ? countryName(geo.countryCode) + (geo.city ? ', ' + geo.city : '') + ' · ' : '') + short(e.peerId);
+  };
   $: sessionsOf = (id) => history.filter((s) => s.peerId === id);
   $: priceText = (e) => (e.pricePerMb ? price(e.pricePerMb, $lang) : e.priceKnown ? $t('common.Free') : $t('proxy.hist.priceUnknown'));
   // what is left on the exit for us, as it last said; it stays there after we leave
@@ -330,7 +336,7 @@
           <h2>{vpn.running ? (vpn.tunnelReady ? $t('proxy.connected') : exitProblem ? $t('proxy.notServing') : $t('proxy.connecting')) : $t('proxy.notConnected')}</h2>
           <p class="small muted">
             {#if vpn.running}
-              {$t('proxy.through', { id: connectedExit ? short(connectedExit.peerId) : short(vpn.relayPeerId) })}{connectedExit?.latencyMs ? ' · ' + pingText(connectedExit.latencyMs) : ''}.
+              {$t('proxy.through', { id: whereExit(connectedExit || { peerId: vpn.relayPeerId }) })}{connectedExit?.latencyMs ? ' · ' + pingText(connectedExit.latencyMs) : ''}.
               {vpn.tunnelReady || exitProblem ? '' : vpn.exitState === 'checking' ? $t('proxy.exit.checking') : vpn.tunnelNotice || $t('proxy.waitingTunnel')}
             {:else}
               {$t('proxy.idleHint')}
@@ -397,7 +403,7 @@
             {#if best}
               <div class="exit pick-preview">
                 <span class="ex-ic"><Icon name="globe" size={16} /></span>
-                <span class="id mono">{short(best.peerId)}</span>
+                <span class="id mono">{whereExit(best)}</span>
                 <span class="chip ping {pingClass(best.latencyMs)}">{pingText(best.latencyMs)}</span>
                 <span class="chip">{best.pricePerMb ? price(best.pricePerMb, $lang) : $t('common.Free')}</span>
                 <span class="chip">{speed(best) ? mbit(best) : $t('proxy.speedUnknown')}</span>
