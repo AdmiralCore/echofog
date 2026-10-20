@@ -792,3 +792,98 @@ func TestRoom_ScreenSoundReachesOnlyViewers(t *testing.T) {
 		assert.Zero(t, nd.cm.MediaStats().Malformed)
 	}
 }
+
+// parentLostCounter counts ParentLost signals sent by one node, keyed by the reported parent.
+func parentLostCounter(m *mesh, from types.PeerID) func() map[types.PeerID]int {
+	var mu sync.Mutex
+	got := make(map[types.PeerID]int)
+	m.mu.Lock()
+	m.drop = func(t net_types.MessageType, payload []byte) bool {
+		var env signaling.CallSignalEnvelope
+		if t != net_types.TypeCallSignaling || json.Unmarshal(payload, &env) != nil ||
+			env.Action != signaling.ActionParentLost || env.Sender != from {
+			return false
+		}
+		var parent types.PeerID
+		_ = json.Unmarshal(env.Payload, &parent)
+		mu.Lock()
+		got[parent]++
+		mu.Unlock()
+		return false
+	}
+	m.mu.Unlock()
+	return func() map[types.PeerID]int {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make(map[types.PeerID]int, len(got))
+		for k, v := range got {
+			out[k] = v
+		}
+		return out
+	}
+}
+
+// silentParentTicks runs 15 member ticks (1.4 s) of a node whose voice parent went quiet 900 ms
+// ago, with the given standby. The room lock is held throughout, so real pulses cannot interfere.
+func silentParentTicks(nd *testNode, standby types.PeerID) (primary types.PeerID) {
+	nd.cm.mu.Lock()
+	defer nd.cm.unlockAndFlush()
+	room := nd.cm.activeRoom
+	manifest := *room.VoiceManifest
+	manifest.ParentMap = make(map[types.PeerID]tree.ParentAssignment, len(room.VoiceManifest.ParentMap))
+	for k, v := range room.VoiceManifest.ParentMap {
+		manifest.ParentMap[k] = v
+	}
+	ass := manifest.ParentMap[nd.id]
+	ass.StandbyParent = standby
+	manifest.ParentMap[nd.id] = ass
+	room.VoiceManifest = &manifest
+
+	t0 := time.Now()
+	room.LastTreePulse = t0.Add(-900 * time.Millisecond)
+	for k := 0; k < 15; k++ {
+		nd.cm.memberTickLocked(room, t0.Add(time.Duration(k)*tickInterval))
+	}
+	return ass.PrimaryParent
+}
+
+func TestRoom_SilentParentWithoutStandbyIsReportedOncePerSecond(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 4)
+	victim := nodes[1]
+	sent := parentLostCounter(m, victim.id)
+
+	primary := silentParentTicks(victim, types.PeerID{})
+	time.Sleep(300 * time.Millisecond) // the outbox delivers asynchronously
+
+	// t0 and t0+1s: two reports, not one per 100 ms tick
+	assert.Equal(t, map[types.PeerID]int{primary: 2}, sent())
+}
+
+func TestRoom_SilentStandbyParentIsReportedToo(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 4)
+	victim := nodes[1]
+	snap, _ := victim.cm.Snapshot()
+	var standby types.PeerID
+	victim.cm.mu.RLock()
+	primaryNow := victim.cm.activeRoom.VoiceManifest.ParentMap[victim.id].PrimaryParent
+	victim.cm.mu.RUnlock()
+	for _, p := range snap.Members {
+		if p != victim.id && p != primaryNow {
+			standby = p
+			break
+		}
+	}
+	require.NotEqual(t, types.PeerID{}, standby)
+	sent := parentLostCounter(m, victim.id)
+
+	primary := silentParentTicks(victim, standby)
+	time.Sleep(300 * time.Millisecond)
+
+	// t0: fail over and report the primary; t0+1s: the standby is silent too, report both
+	assert.Equal(t, map[types.PeerID]int{primary: 2, standby: 1}, sent())
+	victim.cm.mu.RLock()
+	assert.True(t, victim.cm.activeRoom.usingStandby)
+	victim.cm.mu.RUnlock()
+}

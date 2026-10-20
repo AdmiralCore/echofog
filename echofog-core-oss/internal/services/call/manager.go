@@ -54,7 +54,9 @@ const (
 	// streamFeederTimeout: feeders pulse every 250 ms, so 700 ms of silence means the link is dead.
 	streamFeederTimeout = 700 * time.Millisecond
 	reparentRetry       = time.Second
-	reportWindow        = 10 * time.Minute
+	// parentLostRetry: how often a member with a silent voice parent repeats ParentLost.
+	parentLostRetry = time.Second
+	reportWindow    = 10 * time.Minute
 )
 
 // PeerConnector dials a room member that is not directly connected yet.
@@ -103,7 +105,7 @@ type ActiveRoomState struct {
 	keyframeServed map[string]time.Time
 	sendRate       sendRateState
 
-	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq time.Time
+	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq, lastParentLost time.Time
 
 	// For the log: when the room was entered, and the media counters at the last periodic line.
 	startedAt    time.Time

@@ -9,30 +9,39 @@ import (
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
-// GetBridgeOffer retrieves the WebRTC SDP Offer from the local media loopback bridge.
-func (m *CallManager) GetBridgeOffer() (string, error) {
+// activeBridge returns the media bridge of the current room. The bridge locks itself, and an
+// offer can wait seconds for ICE gathering, so callers use it after m.mu is released: holding
+// even the read lock that long would stall the room tick and signaling behind a pending writer.
+func (m *CallManager) activeBridge() (*bridge.LocalMediaBridge, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	inCall := m.activeRoom != nil
+	if !inCall || m.activeRoom.Bridge == nil {
+		return nil, inCall
+	}
+	return m.activeRoom.Bridge, true
+}
 
-	if m.activeRoom == nil || m.activeRoom.Bridge == nil {
+// GetBridgeOffer retrieves the WebRTC SDP Offer from the local media loopback bridge.
+func (m *CallManager) GetBridgeOffer() (string, error) {
+	br, inCall := m.activeBridge()
+	if br == nil {
 		err := errors.New("call room or media bridge not initialized")
-		m.logger.Warn("UI asked for a media bridge offer without a bridge", "in_call", m.activeRoom != nil, "err", err)
+		m.logger.Warn("UI asked for a media bridge offer without a bridge", "in_call", inCall, "err", err)
 		return "", err
 	}
-	return m.activeRoom.Bridge.CreateOffer() // the bridge logs its own failures
+	return br.CreateOffer() // the bridge logs its own failures
 }
 
 // SubmitBridgeAnswer sets the WebRTC SDP Answer from the Wails frontend to complete the loopback handshake.
 func (m *CallManager) SubmitBridgeAnswer(sdpAnswer string) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.activeRoom == nil || m.activeRoom.Bridge == nil {
+	br, inCall := m.activeBridge()
+	if br == nil {
 		err := errors.New("call room or media bridge not initialized")
-		m.logger.Warn("UI sent a media bridge answer without a bridge", "in_call", m.activeRoom != nil, "err", err)
+		m.logger.Warn("UI sent a media bridge answer without a bridge", "in_call", inCall, "err", err)
 		return err
 	}
-	return m.activeRoom.Bridge.SetRemoteAnswer(sdpAnswer)
+	return br.SetRemoteAnswer(sdpAnswer)
 }
 
 // SetVADState notifies peers whether the local microphone is active.
