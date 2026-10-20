@@ -738,6 +738,7 @@ export namespace node {
 	    queued: number;
 	    failed: number;
 	    file?: GroupFileDTO;
+	    verified: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupMessageDTO(source);
@@ -755,6 +756,7 @@ export namespace node {
 	        this.queued = source["queued"];
 	        this.failed = source["failed"];
 	        this.file = this.convertValues(source["file"], GroupFileDTO);
+	        this.verified = source["verified"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

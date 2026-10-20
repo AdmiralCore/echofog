@@ -112,9 +112,12 @@ limits per person and in total, so strangers cannot fill its disk.
 
 **Groups** have no server either. Every group message and every change (new member, role, ban) is
 sent to each member over that member's own encrypted session, with the same receipts and offline
-queue as a normal chat. The person who created the group is its owner; members can be admins,
-moderators, ordinary members or restricted. Changes are signed, and a member cannot post in another
-member's name.
+queue as a normal chat. On top of that, a message is signed by its author and sealed once for the
+whole group with a key that admins replace whenever somebody leaves or is removed; so any member
+can hand a message on to one the author could not reach, and nobody can change who wrote it,
+history included. The person who created the group is its owner; members can be admins,
+moderators, ordinary members or restricted. The details are in
+[Group encryption](group-encryption.md).
 
 ## Calls and screen sharing
 
