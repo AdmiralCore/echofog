@@ -1,6 +1,9 @@
 import './app.css';
 import './lib/stores/theme.js';
 import App from './App.svelte';
+import { installGlobalErrorLog } from './lib/uilog.js';
+
+installGlobalErrorLog();
 
 function start() {
   return new App({ target: document.getElementById('app') });

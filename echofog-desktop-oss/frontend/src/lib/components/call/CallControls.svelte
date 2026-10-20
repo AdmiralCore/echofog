@@ -4,6 +4,7 @@
     import Icon from '../ui/Icon.svelte';
     import Popover from '../ui/Popover.svelte';
     import { t } from '../../i18n/index.js';
+    import { App } from '../../api.js';
 
     export let compact = false;
 
@@ -28,7 +29,7 @@
         measuring = true;
         measureError = '';
         try {
-            measuredKbps = await window.go.main.App.MeasureUploadCapacity();
+            measuredKbps = await App.MeasureUploadCapacity();
             await callService.loadQualities();
         } catch (e) {
             measureError = String(e?.message || e);
@@ -41,7 +42,7 @@
         const kbps = Math.round(Number(manualMbps) * 1000);
         if (!(kbps > 0)) return;
         try {
-            await window.go.main.App.SetUploadCapacity(kbps);
+            await App.SetUploadCapacity(kbps);
             measuredKbps = kbps;
             await callService.loadQualities();
         } catch (e) {

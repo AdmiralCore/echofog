@@ -1,4 +1,5 @@
 import { tr } from './i18n/index.js';
+import { log } from './uilog.js';
 
 // Thin access to the Go side. Every bound method of main.App is reachable as App.Name(...args).
 export const App = new Proxy({}, {
@@ -6,7 +7,12 @@ export const App = new Proxy({}, {
     return (...args) => {
       const fn = window.go?.main?.App?.[name];
       if (!fn) return Promise.reject(new Error(`${String(name)} is not available`));
-      return fn(...args);
+      // every failed call to the core lands in the log, by method; the arguments do not (they
+      // can be passwords or messages)
+      return Promise.resolve(fn(...args)).catch((err) => {
+        if (name !== 'LogUI') log.warn('api', 'call to the core failed', { method: String(name), err });
+        throw err;
+      });
     };
   },
 });

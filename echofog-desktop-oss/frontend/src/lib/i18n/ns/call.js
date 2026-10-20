@@ -1,6 +1,7 @@
 // Calls: incoming call card, mini player, call stage, controls, device menus, tiles, notices.
 export default {
   en: {
+    'call.notice.screenAudioEcho': 'Viewers may hear the call in your screen sound. Use headphones or share a tab to avoid it.',
     'call.call': 'Call',
     'call.incoming': 'Incoming call',
     'call.incomingDots': 'Incoming call…',
@@ -93,6 +94,7 @@ export default {
     'call.dev.out': 'Speakers {n}',
   },
   ru: {
+    'call.notice.screenAudioEcho': 'Зрители могут слышать звонок в звуке вашего экрана. Чтобы этого не было, наденьте наушники или покажите вкладку.',
     'call.call': 'Звонок',
     'call.incoming': 'Входящий звонок',
     'call.incomingDots': 'Входящий звонок…',

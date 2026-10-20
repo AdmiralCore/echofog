@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { on as EventsOn } from '../api.js';
 import { setSink } from '../sounds.js';
 import { tr } from '../i18n/index.js';
+import { log, errAttrs } from '../uilog.js';
 
 const PREF = 'echofog.devices';
 function loadPrefs() {
@@ -26,6 +27,8 @@ const STREAM_AUDIO_SLOTS = 4;
 const SCREEN_AUDIO_KBPS = 160;
 const SPEAKING_LEVEL = 0.035;
 const AUTO_WATCH_CAMERAS = 3;
+// how often the WebRTC numbers go into the log while in a call
+const STATS_EVERY_MS = 60_000;
 
 const app = () => window.go?.main?.App || {};
 
@@ -96,14 +99,19 @@ class CallService {
     if (this.pc) return true;
     callState.update((s) => ({ ...freshState(s), connecting: true, callId }));
     this.ensureEvents();
+    log.info('call', 'joining the call', { callId, coordinator: short(coordPeerId) });
     try {
       this.ensureAudioContext();
-      this.mic = await this.openMic().catch(() => null);
+      this.mic = await this.openMic().catch((e) => {
+        log.warn('call', 'microphone did not open, joining without it', errAttrs(e, { device: get(callState).micDeviceId ? 'chosen' : 'default' }));
+        return null;
+      });
       callState.update((s) => ({ ...s, hasMic: !!this.mic, isMicMuted: !this.mic }));
 
       const pc = new RTCPeerConnection({ iceServers: [] });
       this.pc = pc;
       pc.ontrack = (ev) => this.onTrack(ev);
+      this.watchConnection(pc);
 
       if (!app().JoinRoom) throw new Error(tr('call.err.unavailable'));
       const offer = await app().JoinRoom(callId, coordPeerId);
@@ -127,13 +135,15 @@ class CallService {
       await app().SubmitCallAnswer(pc.localDescription.sdp);
 
       this.startLevelMonitor();
+      this.startStatsLog();
+      log.info('call', 'joined the call', { callId, mic: !!this.mic, transceivers: t.length, ice: pc.iceGatheringState });
       callState.update((s) => ({ ...s, inCall: true, connecting: false }));
       this.refreshDevices();
       this.loadQualities();
       this.syncFromCore();
       return true;
     } catch (err) {
-      console.error('[CallService] join failed:', err);
+      log.error('call', 'joining the call failed', errAttrs(err, { callId }));
       const message = String(err?.message || err);
       await this.leaveCall();
       callState.update((s) => ({ ...s, error: message }));
@@ -144,6 +154,12 @@ class CallService {
   async leaveCall() {
     clearInterval(this.levelTimer);
     this.levelTimer = null;
+    clearInterval(this.statsTimer);
+    this.statsTimer = null;
+    if (this.pc) {
+      await this.logStats('at leaving').catch(() => {});
+      log.info('call', 'leaving the call', { callId: get(callState).callId });
+    }
     for (const s of [this.mic, this.screen, this.camera]) s?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     this.mic = this.screen = this.camera = null;
     for (const a of this.audioSlots.values()) {
@@ -158,7 +174,7 @@ class CallService {
     this.tx = null;
     const wasIn = get(callState).inCall || get(callState).connecting;
     if (wasIn && app().LeaveRoom) {
-      try { await app().LeaveRoom(); } catch (e) { console.warn('[CallService] LeaveRoom:', e); }
+      try { await app().LeaveRoom(); } catch (e) { log.warn('call', 'leaving the room in the core failed', errAttrs(e)); }
     }
     videoStreams.set({});
     callState.update((s) => ({ ...freshState(s), error: s.error }));
@@ -172,13 +188,14 @@ class CallService {
     EventsOn('call:media_slot', (ev) => this.onSlot(ev));
     EventsOn('call:roster', (r) => this.applyRoster(r));
     EventsOn('call:stream_announced', (st) => this.onStreamAnnounced(st));
-    EventsOn('call:stream_closed', ({ streamId }) => this.onStreamClosed(streamId));
+    EventsOn('call:stream_closed', ({ streamId }) => { log.info('call', 'stream closed', { streamId }); this.onStreamClosed(streamId); });
     EventsOn('call:active_speaker', ({ speaker, speaking }) => {
       // network VAD is a fallback for peers whose audio we do not play (e.g. deafened)
       if (!get(callState).isDeafened) return;
       callState.update((s) => ({ ...s, speaking: { ...s.speaking, [speaker]: speaking || undefined } }));
     });
     EventsOn('call:kicked', () => {
+      log.warn('call', 'removed from the call by the room');
       this.leaveCall().then(() => this.notify(tr('call.notice.removed')));
     });
   }
@@ -188,16 +205,20 @@ class CallService {
       const [roster, slots] = await Promise.all([app().GetCallRoster?.(), app().GetCallSlots?.()]);
       if (roster) this.applyRoster(roster);
       (slots || []).forEach((ev) => this.onSlot(ev));
-    } catch (_) { /* older core */ }
+    } catch (e) { log.warn('call', 'could not read the roster and slots from the core', errAttrs(e)); }
   }
 
   applyRoster(r) {
     if (!r || !r.callId) return;
+    const before = get(callState).members.length;
+    const after = (r.members || []).length;
+    if (before !== after) log.info('call', 'members changed', { from: before, to: after, coordinator: short(r.coordinator) });
     callState.update((s) => ({ ...s, self: r.self || s.self, coordinator: r.coordinator, members: r.members || [] }));
   }
 
   onSlot(ev) {
     if (!ev?.slot) return;
+    log.debug('call', ev.active ? 'playback slot taken' : 'playback slot freed', { slot: ev.slot, kind: ev.kind, peer: short(ev.peer), streamId: ev.streamId });
     callState.update((s) => {
       const slots = { ...s.slots };
       if (ev.active) slots[ev.slot] = { kind: ev.kind, peer: ev.peer, streamId: ev.streamId };
@@ -216,6 +237,7 @@ class CallService {
       activeStreams: [...c.activeStreams.filter((x) => x.streamId !== st.streamId), st],
     }));
     const mine = st.broadcaster === s.self;
+    if (!known) log.info('call', 'stream announced', { streamId: st.streamId, kind: st.mediaType, by: short(st.broadcaster), quality: st.qualityId, mine });
     if (!known && !mine && st.mediaType === 'camera') {
       const cams = s.watching.filter((id) => s.activeStreams.find((x) => x.streamId === id)?.mediaType === 'camera');
       if (cams.length < AUTO_WATCH_CAMERAS) this.watchStream(st.streamId);
@@ -247,7 +269,12 @@ class CallService {
 
   onTrack(ev) {
     const slot = this.slotOf(ev);
-    if (!slot) return;
+    if (!slot) {
+      log.warn('call', 'a track arrived on a line with no slot', { kind: ev.track?.kind, stream: ev.streams?.[0]?.id, line: this.pc?.getTransceivers().indexOf(ev.transceiver) });
+      return;
+    }
+    // tracks end by themselves while in the call only when the bridge drops them; leaving ends all
+    ev.track.onended = () => { if (this.pc) log.info('call', 'remote track ended', { slot, kind: ev.track.kind }); };
     const stream = ev.streams?.[0] || new MediaStream([ev.track]);
     if (ev.track.kind === 'audio') {
       this.attachAudio(slot, stream);
@@ -261,9 +288,15 @@ class CallService {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       this.audioCtx = new Ctx({ latencyHint: 'interactive', sampleRate: 48000 });
       const out = get(callState).outDeviceId;
-      if (out && typeof this.audioCtx.setSinkId === 'function') this.audioCtx.setSinkId(out).catch(() => {});
+      if (out && typeof this.audioCtx.setSinkId === 'function') {
+        this.audioCtx.setSinkId(out).catch((e) => log.warn('call', 'the chosen speakers are not available, playing on the default ones', errAttrs(e)));
+      }
+      this.audioCtx.onstatechange = () => {
+        const st = this.audioCtx?.state;
+        if (st && st !== 'running') log.warn('call', 'audio output stopped', { state: st });
+      };
     }
-    if (this.audioCtx.state === 'suspended') this.audioCtx.resume().catch(() => {});
+    if (this.audioCtx.state === 'suspended') this.audioCtx.resume().catch((e) => log.warn('call', 'audio output could not resume', errAttrs(e)));
     return this.audioCtx;
   }
 
@@ -273,7 +306,7 @@ class CallService {
     savePrefs({ out: deviceId });
     const ctx = this.ensureAudioContext();
     if (typeof ctx.setSinkId === 'function') {
-      try { await ctx.setSinkId(deviceId || ''); } catch (e) { this.notify(String(e?.message || e)); }
+      try { await ctx.setSinkId(deviceId || ''); } catch (e) { log.warn('call', 'switching speakers failed', errAttrs(e)); this.notify(String(e?.message || e)); }
     } else {
       this.notify(tr('call.notice.noSink'));
     }
@@ -289,7 +322,7 @@ class CallService {
     const el = prev?.el || new Audio();
     el.muted = true;
     el.srcObject = stream;
-    el.play().catch(() => {});
+    el.play().catch((e) => log.warn('call', 'remote audio did not start', errAttrs(e, { slot })));
     const source = ctx.createMediaStreamSource(stream);
     const gain = ctx.createGain();
     const analyser = ctx.createAnalyser();
@@ -411,11 +444,23 @@ class CallService {
     callState.update((s) => ({ ...s, micDeviceId: deviceId }));
     savePrefs({ mic: deviceId });
     if (!this.pc) return;
-    const next = await this.openMic().catch((e) => { this.notify(String(e?.message || e)); return null; });
+    const next = await this.openMic().catch((e) => {
+      log.warn('call', 'the chosen microphone did not open', errAttrs(e));
+      this.notify(String(e?.message || e));
+      return null;
+    });
     if (!next) return;
     const track = next.getAudioTracks()[0];
     track.enabled = !get(callState).isMicMuted;
-    await this.tx.mic.sender.replaceTrack(track);
+    try {
+      await this.tx.mic.sender.replaceTrack(track);
+    } catch (e) {
+      log.error('call', 'could not switch the microphone in the call', errAttrs(e));
+      next.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    track.onended = () => log.warn('call', 'microphone stopped (unplugged or taken by the system)');
+    log.info('call', 'microphone switched', { label: track.label });
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = next;
     this.startLevelMonitor();
@@ -442,14 +487,14 @@ class CallService {
           outs: list.filter((d) => d.kind === 'audiooutput').map((d, i) => ({ id: d.deviceId, label: d.label || tr('call.dev.out', { n: i + 1 }) })),
         },
       }));
-    } catch (_) { /* no device access */ }
+    } catch (e) { log.warn('call', 'could not list media devices', errAttrs(e)); }
   }
 
   async loadQualities() {
     try {
       const list = await app().GetStreamQualities?.();
       if (Array.isArray(list) && list.length) callState.update((s) => ({ ...s, qualities: list }));
-    } catch (_) { /* keep defaults */ }
+    } catch (e) { log.warn('call', 'could not read stream qualities, keeping defaults', errAttrs(e)); }
     return get(callState).qualities;
   }
 
@@ -469,20 +514,26 @@ class CallService {
     const q = this.quality(qualityId || get(callState).selectedQualityId);
     const streamId = 'screen_' + Date.now();
     callState.update((s) => ({ ...s, streamError: null }));
+    log.info('screen', 'starting to share the screen', { streamId, quality: q.id });
     try {
       await app().StartStream(streamId, 'screen', q.id); // the core checks upload capacity first
     } catch (err) {
+      log.warn('screen', 'the core refused the stream', errAttrs(err, { streamId, quality: q.id }));
       callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
       return;
     }
+    // System audio carries the call itself: the voices this app plays would go back to the
+    // viewers, who would hear everyone twice. restrictOwnAudio leaves out what this app plays;
+    // where the webview cannot do that, echo cancelling takes the call out of the screen's sound
+    // instead (it uses what the app plays as its reference), at some cost to music.
+    const canExcludeOwn = !!navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio;
     try {
       this.screen = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } },
         // the sound of the screen: the picker offers it as "share system audio" / a tab's audio
         audio: {
-          echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+          echoCancellation: !canExcludeOwn, noiseSuppression: false, autoGainControl: false,
           channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 },
-          // leave out what this app plays itself, or viewers would hear the call back
           restrictOwnAudio: true, suppressLocalAudioPlayback: false,
         },
         systemAudio: 'include',
@@ -490,22 +541,49 @@ class CallService {
       });
     } catch (err) {
       await app().StopScreenShare?.(streamId);
-      if (err?.name !== 'NotAllowedError') callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
+      if (err?.name === 'NotAllowedError') {
+        log.info('screen', 'screen picker closed without choosing', { streamId });
+      } else {
+        log.warn('screen', 'screen capture did not start', errAttrs(err, { streamId }));
+        callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
+      }
       return;
     }
     const track = this.screen.getVideoTracks()[0];
     track.contentHint = 'detail'; // screens carry text: keep it sharp, drop frames first
-    track.onended = () => this.stopScreenShare();
-    await this.tx.screen.sender.replaceTrack(track);
+    track.onended = () => {
+      log.info('screen', 'screen capture ended (stopped from the system bar or the window closed)', { streamId });
+      this.stopScreenShare();
+    };
+    try {
+      await this.tx.screen.sender.replaceTrack(track);
+    } catch (err) {
+      log.error('screen', 'could not put the screen into the call', errAttrs(err, { streamId }));
+      await this.stopScreenShare();
+      callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
+      return;
+    }
     await applySenderQuality(this.tx.screen.sender, q, true);
+    const vs = track.getSettings?.() || {};
     const sound = this.screen.getAudioTracks()[0] || null;
+    let soundGuard = 'none';
     if (sound) {
       sound.contentHint = 'music';
-      await this.tx.screenAudio?.sender.replaceTrack(sound);
+      soundGuard = await this.guardScreenAudio(sound, canExcludeOwn);
+      sound.onended = () => log.info('screen', 'screen sound ended', { streamId });
+      try {
+        await this.tx.screenAudio?.sender.replaceTrack(sound);
+      } catch (err) {
+        log.error('screen', 'could not put the screen sound into the call', errAttrs(err, { streamId }));
+      }
       await applyAudioBitrate(this.tx.screenAudio?.sender, SCREEN_AUDIO_KBPS);
     } else {
       this.notify(tr('call.notice.noScreenAudio'));
     }
+    log.info('screen', 'sharing the screen', {
+      streamId, surface: vs.displaySurface, width: vs.width, height: vs.height, fps: vs.frameRate,
+      sound: !!sound, soundGuard, ...(sound ? audioSettings(sound) : {}),
+    });
     videoStreams.update((v) => ({ ...v, 'local:screen': this.screen }));
     callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id, screenAudio: !!sound }));
   }
@@ -516,7 +594,10 @@ class CallService {
     this.screen = null;
     try { await this.tx?.screen.sender.replaceTrack(null); } catch (_) { /* closed */ }
     try { await this.tx?.screenAudio?.sender.replaceTrack(null); } catch (_) { /* closed */ }
-    if (id) await safeCall('StopScreenShare', id);
+    if (id) {
+      log.info('screen', 'stopped sharing the screen', { streamId: id });
+      await safeCall('StopScreenShare', id);
+    }
     videoStreams.update((v) => { const n = { ...v }; delete n['local:screen']; return n; });
     callState.update((s) => ({ ...s, isScreenSharing: false, screenAudio: false, screenStreamId: null, streamQualityId: null, streamError: null,
       focusedStreamId: s.focusedStreamId === id ? null : s.focusedStreamId }));
@@ -530,13 +611,16 @@ class CallService {
     try {
       await app().UpdateStreamQuality?.(s.screenStreamId, q.id);
     } catch (err) {
+      log.warn('screen', 'the core refused the new quality', errAttrs(err, { streamId: s.screenStreamId, quality: q.id }));
       callState.update((c) => ({ ...c, streamError: String(err?.message || err) }));
       return;
     }
     const track = this.screen?.getVideoTracks()[0];
     if (track) {
       track.contentHint = 'detail';
-      await track.applyConstraints({ width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } }).catch(() => {});
+      await track.applyConstraints({ width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } })
+        .catch((e) => log.warn('screen', 'the capture did not take the new size or frame rate', errAttrs(e, { quality: q.id })));
+      log.info('screen', 'stream quality changed', { streamId: s.screenStreamId, quality: q.id });
     }
     await applySenderQuality(this.tx.screen.sender, q, true);
     callState.update((c) => ({ ...c, streamQualityId: q.id, streamError: null }));
@@ -555,6 +639,7 @@ class CallService {
     try {
       await app().StartStream(streamId, 'camera', q.id);
     } catch (err) {
+      log.warn('camera', 'the core refused the camera stream', errAttrs(err, { streamId, quality: q.id }));
       callState.update((c) => ({ ...c, streamError: String(err?.message || err) }));
       return;
     }
@@ -567,14 +652,26 @@ class CallService {
         audio: false,
       });
     } catch (err) {
+      log.warn('camera', 'camera did not open', errAttrs(err, { streamId, device: s.camDeviceId ? 'chosen' : 'default' }));
       await app().StopScreenShare?.(streamId);
       callState.update((c) => ({ ...c, streamError: tr('call.err.camera') }));
       return;
     }
     const track = this.camera.getVideoTracks()[0];
-    track.onended = () => this.stopCamera();
-    await this.tx.camera.sender.replaceTrack(track);
+    track.onended = () => {
+      log.info('camera', 'camera stopped (unplugged or taken by another app)', { streamId });
+      this.stopCamera();
+    };
+    try {
+      await this.tx.camera.sender.replaceTrack(track);
+    } catch (err) {
+      log.error('camera', 'could not put the camera into the call', errAttrs(err, { streamId }));
+      await this.stopCamera();
+      return;
+    }
     await applySenderQuality(this.tx.camera.sender, q);
+    const cs = track.getSettings?.() || {};
+    log.info('camera', 'camera on', { streamId, width: cs.width, height: cs.height, fps: cs.frameRate });
     videoStreams.update((v) => ({ ...v, 'local:camera': this.camera }));
     callState.update((c) => ({ ...c, isCameraOn: true, cameraStreamId: streamId }));
     this.refreshDevices();
@@ -585,7 +682,10 @@ class CallService {
     this.camera?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     this.camera = null;
     try { await this.tx?.camera.sender.replaceTrack(null); } catch (_) { /* closed */ }
-    if (id) await safeCall('StopScreenShare', id);
+    if (id) {
+      log.info('camera', 'camera off', { streamId: id });
+      await safeCall('StopScreenShare', id);
+    }
     videoStreams.update((v) => { const n = { ...v }; delete n['local:camera']; return n; });
     callState.update((c) => ({ ...c, isCameraOn: false, cameraStreamId: null }));
   }
@@ -601,7 +701,9 @@ class CallService {
       }
       try {
         await app().WatchStream?.(streamId);
+        log.info('call', 'watching a stream', { streamId });
       } catch (err) {
+        log.warn('call', 'could not watch the stream', errAttrs(err, { streamId }));
         this.notify(String(err?.message || err));
         return;
       }
@@ -614,7 +716,7 @@ class CallService {
   }
 
   async unwatchStream(streamId) {
-    try { await app().UnwatchStream?.(streamId); } catch (_) { /* gone */ }
+    try { await app().UnwatchStream?.(streamId); } catch (e) { log.debug('call', 'unwatch failed (stream already gone)', errAttrs(e, { streamId })); }
     callState.update((c) => ({
       ...c,
       watching: c.watching.filter((id) => id !== streamId),
@@ -670,6 +772,7 @@ class CallService {
       await app().ReportCallMember?.(peer, reason);
       this.notify(tr('call.notice.reported'));
     } catch (err) {
+      log.warn('call', 'reporting a member failed', errAttrs(err, { peer: short(peer) }));
       this.notify(String(err?.message || err));
     }
   }
@@ -679,6 +782,7 @@ class CallService {
       await app().RequestRelayChange?.(streamId);
       this.notify(tr('call.notice.switching'));
     } catch (err) {
+      log.warn('call', 'asking for another relay failed', errAttrs(err, { streamId }));
       this.notify(String(err?.message || err));
     }
   }
@@ -698,9 +802,83 @@ class CallService {
       const rank = (c) => { const p = /profile-level-id=(..)/i.exec(c.sdpFmtpLine || '')?.[1]?.toLowerCase(); return p === '64' ? 0 : p === '4d' ? 1 : 2; };
       const h264 = caps.codecs.filter((c) => c.mimeType === 'video/H264').sort((a, b) => rank(a) - rank(b));
       if (h264.length) transceiver.setCodecPreferences(h264);
+      else log.warn('call', 'this webview offers no H264: video will not reach viewers');
     } catch (e) {
-      console.warn('[CallService] codec preference skipped:', e);
+      log.warn('call', 'codec preference skipped', errAttrs(e));
     }
+  }
+
+  // --- diagnostics -------------------------------------------------------------------------
+
+  // The loopback to the Go bridge should never fail; when it does, nothing reaches anybody.
+  watchConnection(pc) {
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === 'failed' || st === 'disconnected') {
+        log.error('call', 'connection to the local media bridge ' + st, { ice: pc.iceConnectionState });
+        this.logStats('at bridge ' + st).catch(() => {});
+      } else {
+        log.info('call', 'media bridge ' + st);
+      }
+    };
+    pc.onicecandidateerror = (ev) => log.warn('call', 'ICE candidate error', { code: ev.errorCode, text: ev.errorText });
+  }
+
+  // Once a minute (and when leaving): what the browser sends and receives, so a frozen stream,
+  // lost packets or an encoder held back by the CPU show up in the log.
+  startStatsLog() {
+    clearInterval(this.statsTimer);
+    this.prevStats = {};
+    this.statsTimer = setInterval(() => this.logStats('periodic').catch(() => {}), STATS_EVERY_MS);
+  }
+
+  async logStats(when) {
+    const pc = this.pc;
+    if (!pc) return;
+    const report = await pc.getStats();
+    const prev = this.prevStats || {};
+    const now = {};
+    const out = [];
+    const inn = [];
+    let lost = 0;
+    report.forEach((r) => {
+      if (r.type === 'outbound-rtp' && r.bytesSent > 0) {
+        now[r.id] = r;
+        const limit = r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '';
+        out.push(`${r.kind}${r.frameWidth ? ` ${r.frameWidth}x${r.frameHeight}@${Math.round(r.framesPerSecond || 0)}` : ''} ${rateKbps(r, prev[r.id])}kbps${limit ? ' limited:' + limit : ''}`);
+        if (limit && prev[r.id]?.qualityLimitationReason !== r.qualityLimitationReason) {
+          log.warn('call', 'our ' + r.kind + ' is held back', { by: limit, width: r.frameWidth, height: r.frameHeight, fps: r.framesPerSecond });
+        }
+      }
+      if (r.type === 'inbound-rtp' && r.bytesReceived > 0) {
+        now[r.id] = r;
+        lost += r.packetsLost || 0;
+        inn.push(`${r.kind} ${rateKbps(r, prev[r.id])}kbps lost:${r.packetsLost || 0}` +
+          (r.kind === 'video' ? ` ${r.frameWidth || 0}x${r.frameHeight || 0}@${Math.round(r.framesPerSecond || 0)} dropped:${r.framesDropped || 0} freezes:${r.freezeCount || 0}` : ''));
+      }
+    });
+    this.prevStats = now;
+    log.info('call', 'media stats ' + when, { state: pc.connectionState, sending: out.join(' | ') || 'nothing', receiving: inn.join(' | ') || 'nothing', lost });
+  }
+
+  // The screen's sound must not carry the call back to the viewers. Returns how it is kept out:
+  // 'own-audio-excluded', 'echo-cancel', or 'none' when neither worked (the user is told).
+  async guardScreenAudio(sound, canExcludeOwn) {
+    const st = sound.getSettings?.() || {};
+    if (canExcludeOwn && st.restrictOwnAudio !== false) return 'own-audio-excluded';
+    if (st.echoCancellation) return 'echo-cancel';
+    try {
+      await sound.applyConstraints({ echoCancellation: true });
+      if (sound.getSettings?.().echoCancellation) {
+        log.warn('screen', 'the webview cannot leave its own sound out of the shared audio; echo cancelling it instead');
+        return 'echo-cancel';
+      }
+    } catch (e) {
+      log.warn('screen', 'echo cancelling the shared audio failed', errAttrs(e));
+    }
+    log.warn('screen', 'the call may be heard in the shared audio: neither own-audio exclusion nor echo cancelling is available');
+    this.notify(tr('call.notice.screenAudioEcho'));
+    return 'none';
   }
 
   getCurrentState() {
@@ -712,9 +890,23 @@ async function safeCall(method, ...args) {
   try {
     return await app()[method]?.(...args);
   } catch (e) {
-    console.warn(`[CallService] ${method}:`, e);
+    log.warn('call', 'call to the core failed', errAttrs(e, { method }));
     return undefined;
   }
+}
+
+const short = (id) => (id ? String(id).slice(0, 12) : '');
+
+function audioSettings(track) {
+  const s = track.getSettings?.() || {};
+  return { soundChannels: s.channelCount, soundRate: s.sampleRate, ownAudioExcluded: s.restrictOwnAudio, echoCancel: s.echoCancellation };
+}
+
+function rateKbps(r, before) {
+  const bytes = r.bytesSent ?? r.bytesReceived ?? 0;
+  const prevBytes = before ? (before.bytesSent ?? before.bytesReceived ?? 0) : 0;
+  const dt = before ? (r.timestamp - before.timestamp) / 1000 : 0;
+  return dt > 0 ? Math.round(((bytes - prevBytes) * 8) / dt / 1000) : 0;
 }
 
 function rms(analyser, data) {
@@ -737,7 +929,7 @@ async function applySenderQuality(sender, quality, screen = false) {
     params.degradationPreference = screen ? 'maintain-resolution' : quality.fps >= 60 ? 'maintain-framerate' : 'balanced';
     await sender.setParameters(params);
   } catch (e) {
-    console.warn('[CallService] setParameters failed:', e);
+    log.warn('call', 'could not set the video bitrate and frame rate', errAttrs(e, { quality: quality.id }));
   }
 }
 
@@ -750,7 +942,7 @@ async function applyAudioBitrate(sender, kbps) {
     params.encodings[0].priority = 'high';
     await sender.setParameters(params);
   } catch (e) {
-    console.warn('[CallService] audio setParameters failed:', e);
+    log.warn('call', 'could not set the audio bitrate', errAttrs(e, { kbps }));
   }
 }
 
