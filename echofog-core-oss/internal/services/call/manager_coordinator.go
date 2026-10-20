@@ -171,6 +171,7 @@ func (m *CallManager) applyVoiceManifestLocked(room *ActiveRoomState, manifest *
 	room.IsCoordinator = manifest.Coordinator == m.selfID
 	room.LastCoordPulse, room.LastTreePulse = now, now
 	room.usingStandby = false
+	room.lastParentLost = time.Time{}
 
 	if !room.IsCoordinator {
 		room.ConnectedPeers = make(map[types.PeerID]tree.PeerNodeProfile, len(manifest.Profiles))
@@ -473,22 +474,10 @@ func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 		m.sendLocked(room, room.Coordinator, signaling.ActionMemberHeartbeat, m.joinPayloadLocked(room))
 	}
 
-	// Parent watchdog: no pulse from upstream means the parent (or the whole room) is gone.
-	if room.joined && room.VoiceManifest != nil && !room.usingStandby && now.Sub(room.LastTreePulse) > parentTimeout {
-		ass := room.VoiceManifest.ParentMap[m.selfID]
-		if ass.StandbyParent != (types.PeerID{}) && ass.StandbyParent != ass.PrimaryParent {
-			room.usingStandby = true
-			room.LastTreePulse = now
-			room.Dispatcher.UseStandbyParent(ass.StandbyParent)
-			m.ensureConnectedLocked(ass.StandbyParent)
-			m.sendLocked(room, ass.StandbyParent, signaling.ActionAdopt, nil)
-			m.treeLog.Warn("Voice parent silent, switched to standby", "parent", calllog.Peer(ass.PrimaryParent), "standby", calllog.Peer(ass.StandbyParent))
-		} else {
-			// nothing to fail over to: voice is cut until the coordinator rebuilds the tree
-			m.lim.Log(m.treeLog, slog.LevelWarn, "parentlost", "Voice parent silent and no standby parent",
-				"parent", calllog.Peer(ass.PrimaryParent), "silent", now.Sub(room.LastTreePulse).Round(time.Millisecond).String())
-		}
-		m.sendLocked(room, room.Coordinator, signaling.ActionParentLost, ass.PrimaryParent)
+	// Parent watchdog: no pulse from upstream means the parent (or the whole room) is gone. It
+	// keeps running on the standby parent, so a standby that dies too is caught as well.
+	if room.joined && room.VoiceManifest != nil && now.Sub(room.LastTreePulse) > parentTimeout {
+		m.parentWatchdogLocked(room, now)
 	}
 
 	// Coordinator watchdog: probe directly before declaring it dead.
@@ -509,6 +498,39 @@ func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 	if room.joined {
 		m.feederWatchdogLocked(room, now)
 	}
+}
+
+// parentWatchdogLocked fails over to the standby parent once, then keeps telling the coordinator
+// which parent went silent until a new manifest re-homes us. The report is repeated at most every
+// parentLostRetry, not on every tick.
+func (m *CallManager) parentWatchdogLocked(room *ActiveRoomState, now time.Time) {
+	ass := room.VoiceManifest.ParentMap[m.selfID]
+	silent := now.Sub(room.LastTreePulse).Round(time.Millisecond).String()
+	if !room.usingStandby && ass.StandbyParent != (types.PeerID{}) && ass.StandbyParent != ass.PrimaryParent {
+		room.usingStandby = true
+		room.LastTreePulse = now
+		room.lastParentLost = now
+		room.Dispatcher.UseStandbyParent(ass.StandbyParent)
+		m.ensureConnectedLocked(ass.StandbyParent)
+		m.sendLocked(room, ass.StandbyParent, signaling.ActionAdopt, nil)
+		m.treeLog.Warn("Voice parent silent, switched to standby", "parent", calllog.Peer(ass.PrimaryParent), "standby", calllog.Peer(ass.StandbyParent))
+		m.sendLocked(room, room.Coordinator, signaling.ActionParentLost, ass.PrimaryParent)
+		return
+	}
+	if now.Sub(room.lastParentLost) < parentLostRetry {
+		return
+	}
+	room.lastParentLost = now
+	// nothing (left) to fail over to: voice is cut until the coordinator rebuilds the tree
+	if room.usingStandby {
+		m.lim.Log(m.treeLog, slog.LevelWarn, "standbylost", "Standby voice parent silent too",
+			"parent", calllog.Peer(ass.PrimaryParent), "standby", calllog.Peer(ass.StandbyParent), "silent", silent)
+		m.sendLocked(room, room.Coordinator, signaling.ActionParentLost, ass.StandbyParent)
+	} else {
+		m.lim.Log(m.treeLog, slog.LevelWarn, "parentlost", "Voice parent silent and no standby parent",
+			"parent", calllog.Peer(ass.PrimaryParent), "silent", silent)
+	}
+	m.sendLocked(room, room.Coordinator, signaling.ActionParentLost, ass.PrimaryParent)
 }
 
 // electLocked runs the deterministic election. Only the winner announces itself; others wait,
