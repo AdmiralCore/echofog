@@ -1,6 +1,7 @@
 package mimicry
 
 import (
+	"crypto/sha256"
 	"io"
 	"net"
 )
@@ -45,6 +46,59 @@ func readClientHelloRecord(conn net.Conn) (buf []byte, ok bool) {
 		return rec[:5+m], false
 	}
 	return rec, true
+}
+
+// extKeyShare is the TLS 1.3 key_share extension (RFC 8446 4.2.8).
+const extKeyShare = 51
+
+// helloBinding is what a client's token is sealed to: a hash of the ClientHello's random and its
+// key_share extension. msg is the handshake message (type byte first, no record header). The
+// session id is not part of it, so the client can compute it before the token is in place.
+func helloBinding(msg []byte) ([]byte, bool) {
+	const randomOff = 4 + 2 // handshake header, client_version
+	const idLenOff = randomOff + 32
+	if len(msg) < idLenOff+1 || msg[0] != 1 {
+		return nil, false
+	}
+	if n := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3]); 4+n > len(msg) {
+		return nil, false // the hello goes on in another record: not one of ours
+	} else {
+		msg = msg[:4+n]
+	}
+	random := msg[randomOff:idLenOff]
+	p := idLenOff + 1 + int(msg[idLenOff]) // past the session id
+	if p+2 > len(msg) {
+		return nil, false
+	}
+	p += 2 + (int(msg[p])<<8 | int(msg[p+1])) // cipher suites
+	if p+1 > len(msg) {
+		return nil, false
+	}
+	p += 1 + int(msg[p]) // compression methods
+	if p+2 > len(msg) {
+		return nil, false
+	}
+	end := p + 2 + (int(msg[p])<<8 | int(msg[p+1]))
+	if end > len(msg) {
+		return nil, false
+	}
+	for p += 2; p+4 <= end; {
+		typ := int(msg[p])<<8 | int(msg[p+1])
+		l := int(msg[p+2])<<8 | int(msg[p+3])
+		p += 4
+		if p+l > end {
+			return nil, false
+		}
+		if typ == extKeyShare {
+			h := sha256.New()
+			h.Write([]byte("echofog-hello-binding-v1"))
+			h.Write(random)
+			h.Write(msg[p : p+l])
+			return h.Sum(nil), true
+		}
+		p += l
+	}
+	return nil, false
 }
 
 // sessionIDFromClientHello extracts the legacy_session_id from a ClientHello record. The layout is

@@ -219,26 +219,26 @@ func TestStealthTokenTimeAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyStealthToken(aead, tok, cache, now); err != nil {
+	if err := verifyStealthToken(aead, tok, nil, cache, now); err != nil {
 		t.Fatalf("a fresh token was refused: %v", err)
 	}
-	if err := verifyStealthToken(aead, tok, cache, now); err != ErrReplayDetected {
+	if err := verifyStealthToken(aead, tok, nil, cache, now); err != ErrReplayDetected {
 		t.Fatalf("a replayed token was accepted: %v", err)
 	}
 	// another node's key does not open it
 	other, _ := DeriveAEAD(NodeStealthKey("", [32]byte{8}))
-	if err := verifyStealthToken(other, tok, newReplayCache(), now); err != ErrInvalidStealthToken {
+	if err := verifyStealthToken(other, tok, nil, newReplayCache(), now); err != ErrInvalidStealthToken {
 		t.Fatalf("a token verified under another node's key: %v", err)
 	}
 	// outside the clock window
 	fresh, _ := GenerateStealthToken(aead)
-	if err := verifyStealthToken(aead, fresh, newReplayCache(), now+ReplayWindowSeconds+5); err != ErrReplayDetected {
+	if err := verifyStealthToken(aead, fresh, nil, newReplayCache(), now+ReplayWindowSeconds+5); err != ErrReplayDetected {
 		t.Fatalf("an expired token was accepted: %v", err)
 	}
 	// a tampered byte breaks the tag
 	fresh2, _ := GenerateStealthToken(aead)
 	fresh2[len(fresh2)-1] ^= 1
-	if err := verifyStealthToken(aead, fresh2, newReplayCache(), now); err != ErrInvalidStealthToken {
+	if err := verifyStealthToken(aead, fresh2, nil, newReplayCache(), now); err != ErrInvalidStealthToken {
 		t.Fatalf("a tampered token was accepted: %v", err)
 	}
 }
@@ -264,7 +264,57 @@ func TestTokenCarriedInClientHelloSessionID(t *testing.T) {
 		t.Fatalf("session id not found or wrong length: %d", len(sid))
 	}
 	aead, _ := DeriveAEAD(cfg.AuthKey)
-	if err := verifyStealthToken(aead, sid, newReplayCache(), time.Now().Unix()); err != nil {
-		t.Fatalf("the session id was not a valid token: %v", err)
+	binding, ok := helloBinding(rec[5:])
+	if !ok {
+		t.Fatal("the hello has no key_share to bind to")
+	}
+	if err := verifyStealthToken(aead, sid, binding, newReplayCache(), time.Now().Unix()); err != nil {
+		t.Fatalf("the session id was not a token bound to its hello: %v", err)
+	}
+	if verifyStealthToken(aead, sid, nil, newReplayCache(), time.Now().Unix()) == nil {
+		t.Fatal("a bound token also passed as an unbound one")
+	}
+}
+
+// A token copied out of a client's hello into a hello of someone else's (another random and
+// key_share, so they could finish TLS with us) is not accepted; in its own hello it is, once.
+func TestTokenDoesNotWorkInAnotherHello(t *testing.T) {
+	cfg := DefaultMimicryConfig()
+	cfg.AuthKey = NodeStealthKey("", [32]byte{4})
+	aead, _ := DeriveAEAD(cfg.AuthKey)
+	hello := func() []byte {
+		srv, cli := net.Pipe()
+		defer srv.Close()
+		defer cli.Close()
+		go func() { _, _, _ = ClientHandshake(cli, cfg) }()
+		rec, ok := readClientHelloRecord(srv)
+		if !ok {
+			t.Fatal("did not read a ClientHello record")
+		}
+		return rec
+	}
+	victim, attacker := hello(), hello()
+	sid, _ := sessionIDFromClientHello(victim)
+	forged := append([]byte(nil), attacker...)
+	asid, _ := sessionIDFromClientHello(forged)
+	copy(asid, sid) // the victim's token in the attacker's hello
+
+	now := time.Now().Unix()
+	cache := newReplayCache()
+	if acceptToken(aead, sid, forged, cache, now) {
+		t.Fatal("a token copied into another hello was accepted")
+	}
+	if !acceptToken(aead, sid, victim, cache, now) {
+		t.Fatal("the token was not accepted in its own hello")
+	}
+	if acceptToken(aead, sid, victim, cache, now) {
+		t.Fatal("the same hello was accepted twice")
+	}
+	// a client of an older version still gets in (unbound token)
+	old, _ := GenerateStealthToken(aead)
+	osid, _ := sessionIDFromClientHello(attacker)
+	copy(osid, old)
+	if !acceptToken(aead, old, attacker, cache, now) {
+		t.Fatal("an unbound token of an older client was refused")
 	}
 }

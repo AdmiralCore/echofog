@@ -61,8 +61,17 @@ func DeriveAEAD(authKey []byte) (cipher.AEAD, error) {
 }
 
 // GenerateStealthToken creates a 32-byte token carrying the current time, to put in the
-// ClientHello session id.
-func GenerateStealthToken(aead cipher.AEAD) ([]byte, error) {
+// ClientHello session id, bound to nothing else in the hello. Older clients send these; new ones
+// send GenerateBoundToken.
+func GenerateStealthToken(aead cipher.AEAD) ([]byte, error) { return generateToken(aead, nil) }
+
+// GenerateBoundToken creates a token sealed to binding (helloBinding of the ClientHello it goes
+// into): the token only verifies inside that very hello, with that random and that key_share.
+func GenerateBoundToken(aead cipher.AEAD, binding []byte) ([]byte, error) {
+	return generateToken(aead, binding)
+}
+
+func generateToken(aead cipher.AEAD, binding []byte) ([]byte, error) {
 	token := make([]byte, StealthTokenLen)
 	nonce := token[:tokenNonceLen]
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -71,21 +80,21 @@ func GenerateStealthToken(aead cipher.AEAD) ([]byte, error) {
 	var ts [tokenTSLen]byte
 	binary.BigEndian.PutUint32(ts[:], uint32(time.Now().Unix()))
 	// seal appends ciphertext+tag after the nonce, filling token[tokenNonceLen:]
-	aead.Seal(token[:tokenNonceLen], nonce, ts[:], nil)
+	aead.Seal(token[:tokenNonceLen], nonce, ts[:], binding)
 	return token, nil
 }
 
 // VerifyStealthToken decrypts a session id, checks the clock drift, and guards against replay.
 func VerifyStealthToken(aead cipher.AEAD, token []byte) error {
-	return verifyStealthToken(aead, token, sharedReplayCache, nowUnix())
+	return verifyStealthToken(aead, token, nil, sharedReplayCache, nowUnix())
 }
 
-func verifyStealthToken(aead cipher.AEAD, token []byte, replay *replayCache, now int64) error {
+func verifyStealthToken(aead cipher.AEAD, token, binding []byte, replay *replayCache, now int64) error {
 	if len(token) != StealthTokenLen {
 		return ErrInvalidStealthToken
 	}
 	nonce := token[:tokenNonceLen]
-	plain, err := aead.Open(nil, nonce, token[tokenNonceLen:], nil)
+	plain, err := aead.Open(nil, nonce, token[tokenNonceLen:], binding)
 	if err != nil || len(plain) != tokenTSLen {
 		return ErrInvalidStealthToken
 	}
@@ -128,6 +137,27 @@ func ClientHandshake(rawConn net.Conn, cfg *MimicryConfig) (net.Conn, []byte, er
 	if err := uconn.BuildHandshakeState(); err != nil {
 		_ = uconn.Close()
 		return nil, nil, fmt.Errorf("mimicry: build client hello: %w", err)
+	}
+	// The token is sealed to this hello's random and key_share. A token on its own proves
+	// nothing then: someone who copies it into a ClientHello of their own (their key_share, so
+	// they could finish the TLS and look at our certificate) gets the real site instead. Copying
+	// the whole hello does let our server answer, but without the client's key_share secret its
+	// answer stays encrypted. So: marshal once with a placeholder id to learn the hello's bytes,
+	// then seal the token to them and marshal again (random and key_share stay as they are).
+	uconn.HandshakeState.Hello.SessionId = make([]byte, StealthTokenLen)
+	if err := uconn.MarshalClientHello(); err != nil {
+		_ = uconn.Close()
+		return nil, nil, fmt.Errorf("mimicry: marshal client hello: %w", err)
+	}
+	bound, ok := helloBinding(uconn.HandshakeState.Hello.Raw)
+	if !ok {
+		_ = uconn.Close()
+		return nil, nil, errors.New("mimicry: client hello has no key_share to bind the token to")
+	}
+	token, err = GenerateBoundToken(aead, bound)
+	if err != nil {
+		_ = uconn.Close()
+		return nil, nil, err
 	}
 	uconn.HandshakeState.Hello.SessionId = token
 	if err := uconn.MarshalClientHello(); err != nil {
@@ -176,7 +206,7 @@ func ServerHandshake(rawConn net.Conn, tlsCfg *tls.Config, cfg *MimicryConfig) (
 	if err != nil {
 		return nil, false, nil, err
 	}
-	if VerifyStealthToken(aead, sid) != nil {
+	if !acceptToken(aead, sid, rec, sharedReplayCache, nowUnix()) {
 		return passOn, false, nil, nil
 	}
 
@@ -191,6 +221,23 @@ func ServerHandshake(rawConn net.Conn, tlsCfg *tls.Config, cfg *MimicryConfig) (
 		return nil, false, nil, fmt.Errorf("mimicry: channel binding: %w", err)
 	}
 	return tlsConn, true, binding, nil
+}
+
+// acceptToken checks the session id of a ClientHello record: a token sealed to that hello (what
+// current clients send), or an unbound token from a client of an older version. A bound token
+// cannot be taken into another hello, and it cannot pass as an unbound one either (the seal
+// differs), so the unbound path only ever helps older clients.
+// TODO: drop the unbound path once older clients are gone from the network.
+func acceptToken(aead cipher.AEAD, sid, rec []byte, replay *replayCache, now int64) bool {
+	if binding, ok := helloBinding(rec[5:]); ok {
+		switch verifyStealthToken(aead, sid, binding, replay, now) {
+		case nil:
+			return true
+		case ErrReplayDetected:
+			return false
+		}
+	}
+	return verifyStealthToken(aead, sid, nil, replay, now) == nil
 }
 
 // prefixConn returns prefix before reading from Conn.
