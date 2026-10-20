@@ -104,7 +104,7 @@ func bigUDPEcho(t *testing.T) *net.UDPConn {
 
 func openExit() *ExitService {
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	return svc
 }

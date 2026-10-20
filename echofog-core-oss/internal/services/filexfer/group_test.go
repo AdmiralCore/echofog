@@ -42,7 +42,7 @@ func offerToGroup(t *testing.T, from *side, group string, to []*side, path strin
 // has it. A member who declines does not stop the others.
 func TestGroupFileToSeveralMembers(t *testing.T) {
 	net, alice, m := groupOf(t, 3, nil)
-	net.lossPct = 5
+	net.setLoss(5)
 	src, data := randomFile(t, alice.dir, "slides.pdf", 120*ChunkSize+77)
 	o := offerToGroup(t, alice, "g1", m, src)
 
@@ -65,7 +65,7 @@ func TestGroupFileToSeveralMembers(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, bytes.Equal(data, got), "the received file differs")
 	}
-	net.lossPct = 0
+	net.setLoss(0)
 	require.Eventually(t, func() bool { i, _ := alice.svc.Get(o.ID); return i.Delivered == 2 && i.Fetching == 0 }, 10*time.Second, 10*time.Millisecond)
 	out, _ = alice.svc.Get(o.ID)
 	assert.Equal(t, StateActive, out.State, "a group offer stays open for the members who have not taken it yet")

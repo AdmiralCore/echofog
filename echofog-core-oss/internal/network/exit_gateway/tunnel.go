@@ -257,7 +257,7 @@ func (l *lazyExitStream) Close() error {
 type ExitService struct {
 	splicer      *ExitSplicer
 	enabled      atomic.Bool
-	allowPrivate bool
+	allowPrivate atomic.Bool     // tests reach loopback; read by stream goroutines
 	local        localNets       // this machine's own subnets, never reachable through the exit
 	selfIPs      func() []net.IP // this exit's public addresses (guarded by policyMu)
 	resolver     func(ctx context.Context, host string) ([]net.IP, error)
@@ -309,7 +309,7 @@ type peerQuota struct {
 
 // AllowPrivateTargets lets the exit reach loopback and LAN addresses. Only for tests and
 // closed deployments: on a public exit it would expose the operator's own network.
-func (e *ExitService) AllowPrivateTargets(on bool) { e.allowPrivate = on }
+func (e *ExitService) AllowPrivateTargets(on bool) { e.allowPrivate.Store(on) }
 
 func NewExitService() *ExitService {
 	return &ExitService{

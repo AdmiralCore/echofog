@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,8 +107,16 @@ func transfer(t *testing.T, from, to *node.NodeApi, src string, sum [32]byte, si
 	t.Helper()
 	befriend(t, from, to)
 	inbox := to.MessageHandler()
-	var progress []dto.FileTransferDTO
-	stop := to.OnFileTransfer(func(d dto.FileTransferDTO) { progress = append(progress, d) })
+	// events arrive on goroutines of their own
+	var (
+		progressMu sync.Mutex
+		progress   []dto.FileTransferDTO
+	)
+	stop := to.OnFileTransfer(func(d dto.FileTransferDTO) {
+		progressMu.Lock()
+		progress = append(progress, d)
+		progressMu.Unlock()
+	})
 	defer stop()
 
 	sent, err := from.SendFile(to.GetMyPubKey(), src)

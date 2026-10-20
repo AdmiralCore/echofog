@@ -80,7 +80,7 @@ func TestEndToEndSocksThroughRealSwarm(t *testing.T) {
 	clientSwarm, clientTr := newSwarm(t)
 
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	AttachToSwarm(exitSwarm, svc)
 
@@ -115,7 +115,7 @@ func TestSwarmExitRefusedWhenOptedOut(t *testing.T) {
 	clientSwarm, clientTr := newSwarm(t)
 
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	AttachToSwarm(exitSwarm, svc)
 
 	require.NoError(t, clientTr.DialEarly(context.Background(), exitTr.Addr().String()))
@@ -133,7 +133,7 @@ func TestRealSwarmDownloadProbeAndTestDial(t *testing.T) {
 	clientSwarm, clientTr := newSwarm(t)
 
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	AttachToSwarm(exitSwarm, svc)
 	bwprobe.NewForSwarm(exitSwarm)

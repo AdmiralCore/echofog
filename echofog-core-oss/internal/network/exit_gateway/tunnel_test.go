@@ -78,7 +78,7 @@ func serve(svc *ExitService) StreamOpener {
 func TestTunnelRoundTripThroughExit(t *testing.T) {
 	target := echoServer(t)
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 
 	conn, err := NewP2PDialer(serve(svc)).DialExitStream(context.Background(), target)
@@ -101,7 +101,7 @@ func TestTunnelRoundTripThroughExit(t *testing.T) {
 
 func TestExitRefusesWhenDisabled(t *testing.T) {
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	_, err := NewP2PDialer(serve(svc)).DialExitStreamConfirmed(context.Background(), echoServer(t))
 	assert.ErrorIs(t, err, ErrExitDenied)
 }
@@ -135,7 +135,7 @@ func TestDialerValidatesInput(t *testing.T) {
 func TestFreeQuotaThenPaymentRequired(t *testing.T) {
 	target := echoServer(t)
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	svc.SetPolicy(Policy{PricePerMB: 5, FreeBytes: 1024})
 
@@ -179,7 +179,7 @@ func TestFreeQuotaThenPaymentRequired(t *testing.T) {
 func TestHiddenExitServesOnlyAdmittedPeers(t *testing.T) {
 	target := echoServer(t)
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	var friend, stranger types.PeerID
 	friend[0], stranger[0] = 1, 2

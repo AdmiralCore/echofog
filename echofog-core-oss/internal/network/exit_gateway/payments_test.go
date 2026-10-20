@@ -23,7 +23,7 @@ var (
 // paidExit is an exit with a 1-MB-priced offer and a ledger, as StartSharing builds it.
 func paidExit(t *testing.T, free int64) (*ExitService, *Ledger) {
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	svc.SetPolicy(Policy{PricePerMB: price49, FreeBytes: free})
 	l := NewLedger("")

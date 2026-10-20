@@ -82,7 +82,7 @@ func TestUDPRelayRoundTripLabelsRepliesWithRequestedName(t *testing.T) {
 	echo := udpEchoServer(t)
 	port := echo.LocalAddr().(*net.UDPAddr).Port
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	svc.resolver = func(_ context.Context, host string) ([]net.IP, error) {
 		if host == "echo.test" {
@@ -135,7 +135,7 @@ func TestUDPRelayDropsPrivateTargets(t *testing.T) {
 
 func TestUDPRelayPaymentRequiredWithoutQuota(t *testing.T) {
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	svc.SetPolicy(Policy{PricePerMB: 5, FreeBytes: 100})
 	var peer types.PeerID

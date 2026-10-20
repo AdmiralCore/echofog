@@ -89,7 +89,7 @@ func (e *ExitService) SetSelfIPs(fn func() []net.IP) {
 
 // targetBlocked reports whether a client may not reach ip.
 func (e *ExitService) targetBlocked(ip net.IP) bool {
-	if e.allowPrivate {
+	if e.allowPrivate.Load() {
 		return false
 	}
 	if blockedIP(ip) || inNets(ip, reservedNets) || e.local.contains(ip) {
@@ -110,5 +110,5 @@ func (e *ExitService) targetBlocked(ip net.IP) bool {
 
 // portDenied reports whether a client may not reach this destination port.
 func (e *ExitService) portDenied(port int) bool {
-	return !e.allowPrivate && deniedPorts[port]
+	return !e.allowPrivate.Load() && deniedPorts[port]
 }

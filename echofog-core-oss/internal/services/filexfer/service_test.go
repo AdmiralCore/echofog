@@ -86,6 +86,19 @@ type fakeNet struct {
 	noCancel atomic.Bool               // cancel frames are lost
 }
 
+// setLoss and setMutate change the link while transfers run: under mu, which Send reads them with.
+func (n *fakeNet) setLoss(pct int64) {
+	n.mu.Lock()
+	n.lossPct = pct
+	n.mu.Unlock()
+}
+
+func (n *fakeNet) setMutate(f func(frame []byte) []byte) {
+	n.mu.Lock()
+	n.mutate = f
+	n.mu.Unlock()
+}
+
 func (n *fakeNet) set(id types.PeerID, s *Service) {
 	n.mu.Lock()
 	n.nodes[id] = s
@@ -206,7 +219,7 @@ func offerTo(t *testing.T, from, to *side, path string) Offer {
 
 func TestTransferOverALossyLink(t *testing.T) {
 	net, alice, bob := pair(t, nil)
-	net.lossPct = 10
+	net.setLoss(10)
 	src, data := randomFile(t, alice.dir, "photos.zip", 3*ChunkSize*50+123)
 	o := offerTo(t, alice, bob, src)
 
@@ -230,7 +243,7 @@ func TestTransferOverALossyLink(t *testing.T) {
 		assert.Contains(t, string(zone), "ZoneId=3")
 	}
 
-	net.lossPct = 0
+	net.setLoss(0)
 	waitState(t, alice.svc, o.ID, StateDone, 10*time.Second)
 	// progress was reported along the way
 	var progress int
@@ -259,12 +272,12 @@ func TestEmptyFile(t *testing.T) {
 func TestAlteredFramesAreDroppedAndRefetched(t *testing.T) {
 	net, alice, bob := pair(t, nil)
 	var n atomic.Int64
-	net.mutate = func(f []byte) []byte {
+	net.setMutate(func(f []byte) []byte {
 		if frameKind(f[1]) == kindChunk && n.Add(1)%5 == 0 {
 			f[len(f)/2] ^= 0x40
 		}
 		return f
-	}
+	})
 	src, data := randomFile(t, alice.dir, "a.bin", 40*ChunkSize)
 	o := offerTo(t, alice, bob, src)
 	_, err := bob.svc.Accept(o.ID)

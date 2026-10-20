@@ -134,7 +134,7 @@ func TestConfirmedDialReturnsTheRefusal(t *testing.T) {
 // Over the real QUIC path: a refused target ends the app's connection with the reason recorded.
 func TestFastOpenRefusalThroughRealSwarm(t *testing.T) {
 	proxy, svc := proxyPair(t)
-	svc.allowPrivate = false // loopback targets are refused now
+	svc.allowPrivate.Store(false) // loopback targets are refused now
 	c, err := socksDial(proxy, echoServer(t))
 	require.NoError(t, err, "fast open: the SOCKS reply is success")
 	defer c.Close()

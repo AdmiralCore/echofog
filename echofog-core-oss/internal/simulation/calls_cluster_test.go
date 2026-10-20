@@ -292,7 +292,11 @@ func TestCluster_Calls_TenNodesTwoStreamers(t *testing.T) {
 		t.Logf("[calls] %s: latency p50=%v p95=%v p99=%v over %d deliveries", phase,
 			percentile(allLat, 0.50), percentile(allLat, 0.95), percentile(allLat, 0.99), len(allLat))
 	}
-	report("steady", make([]uint32, len(streams)), end1, 0.97)
+	steadyMin := 0.97
+	if raceBuild {
+		steadyMin = 0.5 // the stream still flows; corruption and decrypt checks stay strict
+	}
+	report("steady", make([]uint32, len(streams)), end1, steadyMin)
 	for i, s := range streams {
 		t.Logf("[calls] %s published %d units (%d kbps)", s.id, end1[i], s.q.BitrateKbps)
 	}
@@ -351,7 +355,7 @@ func TestCluster_Calls_TenNodesTwoStreamers(t *testing.T) {
 		from2[i] = start2[i] + uint32(perSec*(healTime+500*time.Millisecond).Seconds())
 		require.Less(t, from2[i], end2[i], "publishing window too short to judge recovery")
 	}
-	report("after-crash", from2, end2, 0.97)
+	report("after-crash", from2, end2, steadyMin)
 
 	if os.Getenv("SIM_CALLS_VERBOSE") != "" {
 		for _, n := range c.Nodes {

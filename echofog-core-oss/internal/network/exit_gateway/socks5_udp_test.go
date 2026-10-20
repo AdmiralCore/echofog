@@ -68,7 +68,7 @@ func TestSocksUDPAndFakeDNSThroughRealSwarm(t *testing.T) {
 	clientSwarm, clientTr := newSwarm(t)
 
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	svc.resolver = func(_ context.Context, host string) ([]net.IP, error) {
 		if host == "echo.test" {

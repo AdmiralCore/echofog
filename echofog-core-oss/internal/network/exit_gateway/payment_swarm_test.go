@@ -18,7 +18,7 @@ func TestPaymentCycleBetweenTwoRealNodes(t *testing.T) {
 	clientSwarm, clientTr := newSwarm(t)
 
 	svc := NewExitService()
-	svc.allowPrivate = true
+	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	svc.SetPolicy(Policy{PricePerMB: price49, FreeBytes: 2000})
 	ledger := NewLedger("")

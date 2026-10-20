@@ -38,7 +38,7 @@ func TestTargetBlocked(t *testing.T) {
 		}
 	}
 
-	e.allowPrivate = true
+	e.allowPrivate.Store(true)
 	if e.targetBlocked(net.ParseIP("127.0.0.1")) {
 		t.Error("allowPrivate must let tests reach loopback")
 	}
@@ -56,7 +56,7 @@ func TestPortDenied(t *testing.T) {
 			t.Errorf("port %d is normal and must be allowed", p)
 		}
 	}
-	e.allowPrivate = true
+	e.allowPrivate.Store(true)
 	if e.portDenied(25) {
 		t.Error("allowPrivate lifts the port policy for tests")
 	}
