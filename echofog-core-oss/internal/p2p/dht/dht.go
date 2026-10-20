@@ -173,8 +173,16 @@ func targetOf(key []byte) types.PeerID {
 }
 
 // RecordKey is where a DHT record lives in local storage. Records never touch any other key: what
-// peers store and ask for stays apart from our own data.
-func RecordKey(key []byte) []byte { return append([]byte("dht:rec:"), key...) }
+// peers store and ask for stays apart from our own data. The key is hashed: record keys name
+// peers ("bundle:<id>"), and the database must not list in the open whose records this node
+// holds or looked up. The record itself carries its key, so nothing needs it back.
+func RecordKey(key []byte) []byte {
+	sum := sha256.Sum256(key)
+	return append([]byte(RecordPrefix), hex.EncodeToString(sum[:])...)
+}
+
+// RecordPrefix starts every DHT record key in local storage.
+const RecordPrefix = "dht:rec:"
 
 // localRecord returns the value of a record we hold.
 func (d *EchoFogDHT) localRecord(key []byte) (*internal_pb.DhtRecord, bool) {

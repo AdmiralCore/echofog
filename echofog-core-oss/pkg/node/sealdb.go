@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/echofog/echofog-core/internal/crypto/keymanager"
+	"github.com/echofog/echofog-core/internal/p2p/dht"
 	"github.com/echofog/echofog-core/internal/storage"
 )
 
@@ -27,6 +28,7 @@ func (n *Node) sealStorage(account *keymanager.AccountManager) error {
 	}
 	moved := migrateToSealed(sealed)
 	dropLegacyKeys(n.Storage)
+	dropOpenDHTRecords(n.Storage)
 	if moved > 0 {
 		n.Logger.Info("Database: personal data encrypted", "records", moved)
 	}
@@ -97,6 +99,34 @@ func dropLegacyKeys(raw storage.Storage) {
 		}
 	}
 	_ = raw.Set([]byte(legacyDroppedMarker), []byte{1})
+}
+
+// DHT records used to be stored under their key in the open, and the keys name peers
+// ("bundle:<id>"). They now live under its hash (dht.RecordKey); the old ones are dropped once,
+// the network hands them out again on the next lookup.
+const openDHTDroppedMarker = "system:dht:open-keys-dropped"
+
+func dropOpenDHTRecords(raw storage.Storage) {
+	if raw.Exists([]byte(openDHTDroppedMarker)) {
+		return
+	}
+	if entries, err := raw.FindValues([]byte(dht.RecordPrefix), 0); err == nil {
+		for _, e := range entries {
+			if !hashedRecordKey(e.Key) {
+				_ = raw.Delete(e.Key)
+			}
+		}
+	}
+	_ = raw.Set([]byte(openDHTDroppedMarker), []byte{1})
+}
+
+func hashedRecordKey(key []byte) bool {
+	rest := key[len(dht.RecordPrefix):]
+	if len(rest) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(string(rest))
+	return err == nil
 }
 
 // seqKey is the message counter of a chat (storage.BadgerStorage.GetNextID).

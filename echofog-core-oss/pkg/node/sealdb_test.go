@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/awnumar/memguard"
+	"github.com/echofog/echofog-core/internal/p2p/dht"
 	"github.com/echofog/echofog-core/internal/services/contacts"
 	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/internal/storage"
@@ -88,5 +89,40 @@ func TestOldDatabaseIsSealedOnStart(t *testing.T) {
 	}
 	if msgs, _ = keeper.Getter.GetMessages(0, chat, 10, 0, me, peer); len(msgs) != 3 {
 		t.Fatalf("got %d messages after a new one", len(msgs))
+	}
+}
+
+// DHT records kept under their key in the open (it names a peer) are dropped once; records under
+// the hashed key stay, and the new key shows nothing of the peer.
+func TestOpenDHTRecordKeysAreDropped(t *testing.T) {
+	db := testutil.NewTestingBadgerStorage(t)
+	defer db.CloseAndClear()
+	raw := db.St
+
+	peer := "cc" + hex.EncodeToString(make([]byte, 31))
+	open := append([]byte(dht.RecordPrefix), "bundle:"+peer...)
+	hashed := dht.RecordKey([]byte("bundle:" + peer))
+	if bytes.Contains(hashed, []byte(peer)) {
+		t.Fatalf("the record key %q still names the peer", hashed)
+	}
+	for _, k := range [][]byte{open, hashed} {
+		if err := raw.Set(k, []byte("rec")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dropOpenDHTRecords(raw)
+	if raw.Exists(open) {
+		t.Fatal("the record under the open key is still there")
+	}
+	if !raw.Exists(hashed) {
+		t.Fatal("the record under the hashed key was dropped")
+	}
+
+	// only once: a later open key (which no current code writes) is left alone
+	_ = raw.Set(open, []byte("rec"))
+	dropOpenDHTRecords(raw)
+	if !raw.Exists(open) {
+		t.Fatal("the cleanup ran a second time")
 	}
 }
