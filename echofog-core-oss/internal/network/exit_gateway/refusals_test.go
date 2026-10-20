@@ -122,6 +122,7 @@ func TestSOCKSLogsWhatTheExitRefused(t *testing.T) {
 	require.NotNil(t, last)
 	assert.Equal(t, "denied", last.Reason)
 	assert.Equal(t, "example.org:80", last.Host)
+	assert.Equal(t, map[string]uint64{"denied": 2}, srv.RefusalsByReason(), "counted by reason too")
 
 	out := logs.String()
 	assert.Contains(t, out, "exit refused: denied for example.com:80")

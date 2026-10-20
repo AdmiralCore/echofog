@@ -43,6 +43,7 @@ type SOCKS5Server struct {
 	fake        *fakedns.Mapper // set in whole-computer mode, guarded by mu
 
 	refused      atomic.Uint64
+	refusedBy    refusalTally // by ExitRefusal reason
 	lastRefusal  atomic.Pointer[Refusal]
 	refusalLog   *logLimiter
 	refusalsOnce sync.Once

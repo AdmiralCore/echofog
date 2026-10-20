@@ -34,7 +34,7 @@ func TestVPNHistoryRecordsSessions(t *testing.T) {
 	api.vpn.mu.Lock()
 	api.beginSessionLocked(exitA)
 	api.vpn.exitState = ExitOK
-	api.noteSessionStateLocked(ExitOK, 49)
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{PricePerMB: 49})
 	api.vpn.mu.Unlock()
 
 	list := api.GetVPNHistory()
@@ -99,7 +99,7 @@ func TestSavedExitsGroupNameAndStar(t *testing.T) {
 	api := historyAPI(t)
 	api.vpn.mu.Lock()
 	api.beginSessionLocked(exitA)
-	api.noteSessionStateLocked(ExitOK, 49)
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{PricePerMB: 49})
 	api.endSessionLocked("stopped")
 	api.beginSessionLocked(exitB)
 	api.endSessionLocked("stopped")
@@ -130,4 +130,34 @@ func TestSavedExitsGroupNameAndStar(t *testing.T) {
 	for _, e := range api.GetSavedExits() {
 		assert.NotEqual(t, exitB, e.PeerID, "forgotten with its sessions and name")
 	}
+}
+
+// What is left on an exit stays with it after we leave: its entry shows the balance the exit
+// last reported, from its newest session that heard one, and a session that never heard keeps 0.
+func TestSavedExitsKeepTheRemainingBalance(t *testing.T) {
+	api := historyAPI(t)
+	api.vpn.mu.Lock()
+	api.beginSessionLocked(exitA)
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{Enabled: true, PricePerMB: 49, FreeLeft: 1 << 30,
+		Credit: 2 << 30, Vault: &exit_gateway.VaultTerms{Credit: 1 << 30}})
+	api.endSessionLocked("switched")
+	api.beginSessionLocked(exitB)
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{PricePerMB: 0}) // free exit, no account
+	api.endSessionLocked("switched")
+	api.beginSessionLocked(exitA) // back on A: the exit has not answered yet
+	api.vpn.mu.Unlock()
+
+	byID := map[string]SavedExit{}
+	for _, e := range api.GetSavedExits() {
+		byID[e.PeerID] = e
+	}
+	a := byID[exitA]
+	assert.Equal(t, int64(4<<30), a.Remaining, "free, paid and voucher traffic left on the exit")
+	assert.Positive(t, a.RemainingAt)
+	assert.Zero(t, byID[exitB].RemainingAt, "an exit without payments reports no balance")
+
+	api.vpn.mu.Lock()
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{Enabled: true, Credit: 1 << 30})
+	api.vpn.mu.Unlock()
+	assert.Equal(t, int64(1<<30), api.GetSavedExits()[0].Remaining, "the newest report wins")
 }

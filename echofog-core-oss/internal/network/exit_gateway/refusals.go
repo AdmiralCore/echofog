@@ -139,6 +139,7 @@ func (s *SOCKS5Server) noteRefusal(target string, err error) {
 	}
 	reason := ExitRefusal(err)
 	s.refused.Add(1)
+	s.refusedBy.add(reason)
 	s.health.fail(reason, target)
 	s.lastRefusal.Store(&Refusal{Reason: reason, Host: target, At: time.Now()})
 	s.refusalsOnce.Do(func() { s.refusalLog = newLogLimiter(refusalLogEvery) })
@@ -150,6 +151,35 @@ func (s *SOCKS5Server) noteRefusal(target string, err error) {
 // Refusals returns how many streams the exit refused and the last one (nil: none yet).
 func (s *SOCKS5Server) Refusals() (uint64, *Refusal) {
 	return s.refused.Load(), s.lastRefusal.Load()
+}
+
+// RefusalsByReason returns how many streams failed, by ExitRefusal reason. Most are usually
+// "dial failed": the exit is fine, the site is not reachable from it (often a name with no IPv4).
+func (s *SOCKS5Server) RefusalsByReason() map[string]uint64 { return s.refusedBy.snapshot() }
+
+// refusalTally counts the client's refusals by reason; the reasons are a handful of fixed words.
+type refusalTally struct {
+	mu sync.Mutex
+	by map[string]uint64
+}
+
+func (t *refusalTally) add(reason string) {
+	t.mu.Lock()
+	if t.by == nil {
+		t.by = map[string]uint64{}
+	}
+	t.by[reason]++
+	t.mu.Unlock()
+}
+
+func (t *refusalTally) snapshot() map[string]uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	m := make(map[string]uint64, len(t.by))
+	for k, v := range t.by {
+		m[k] = v
+	}
+	return m
 }
 
 func shortPeer(id types.PeerID) string { return id.String()[:12] }

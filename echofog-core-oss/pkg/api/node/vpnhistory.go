@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/exit_gateway"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -33,13 +34,20 @@ type VPNSession struct {
 	EndedAt   int64  `json:"endedAt,omitempty"` // 0 while it is the session in use
 	UpdatedAt int64  `json:"updatedAt"`
 	// ReadyMs is how long the exit took to confirm it serves us (0: it never did)
-	ReadyMs    int64  `json:"readyMs,omitempty"`
-	BytesRx    uint64 `json:"bytesRx"`
-	BytesTx    uint64 `json:"bytesTx"`
-	Refused    uint64 `json:"refused"`
-	LastState  string `json:"lastState,omitempty"`
-	PricePerMB int64  `json:"pricePerMb"` // micro-USD per MB; 0 free (PriceKnown) or unknown
-	PriceKnown bool   `json:"priceKnown"` // the exit itself told us the price
+	ReadyMs int64  `json:"readyMs,omitempty"`
+	BytesRx uint64 `json:"bytesRx"`
+	BytesTx uint64 `json:"bytesTx"`
+	Refused uint64 `json:"refused"`
+	// RefusedBy splits Refused by why: "dial failed" (the site, not the exit), "timed out",
+	// "exit unreachable", "payment", "denied"
+	RefusedBy  map[string]uint64 `json:"refusedBy,omitempty"`
+	LastState  string            `json:"lastState,omitempty"`
+	PricePerMB int64             `json:"pricePerMb"` // micro-USD per MB; 0 free (PriceKnown) or unknown
+	PriceKnown bool              `json:"priceKnown"` // the exit itself told us the price
+	// Remaining is the traffic left on the exit's account for us (paid, vouchers, free today), as
+	// the exit last reported it at RemainingAt; it stays with that exit after we leave it.
+	Remaining   int64 `json:"remaining,omitempty"`
+	RemainingAt int64 `json:"remainingAt,omitempty"` // 0: the exit never reported its account
 	// EndReason: "stopped" (disconnected), "switched" (moved to another exit), "app_closed"
 	EndReason string `json:"endReason,omitempty"`
 	Active    bool   `json:"active"` // the session in use right now (not stored)
@@ -50,6 +58,7 @@ type VPNSession struct {
 type sessionTrack struct {
 	s                           VPNSession
 	baseRx, baseTx, baseRefused uint64
+	baseRefusedBy               map[string]uint64
 	lastSave                    time.Time
 }
 
@@ -114,6 +123,7 @@ func (n *NodeApi) beginSessionLocked(peer string) {
 	if n.vpn.server != nil {
 		_, t.baseRx, t.baseTx = n.vpn.server.Stats()
 		t.baseRefused, _ = n.vpn.server.Refusals()
+		t.baseRefusedBy = n.vpn.server.RefusalsByReason()
 	}
 	if id, err := types.PeerIDFromString(peer); err == nil && n.node != nil {
 		if n.node.Swarm != nil {
@@ -140,6 +150,15 @@ func (n *NodeApi) refreshSessionLocked() {
 	_, rx, tx := n.vpn.server.Stats()
 	refused, _ := n.vpn.server.Refusals()
 	t.s.BytesRx, t.s.BytesTx, t.s.Refused = rx-t.baseRx, tx-t.baseTx, refused-t.baseRefused
+	t.s.RefusedBy = nil
+	for reason, c := range n.vpn.server.RefusalsByReason() {
+		if d := c - t.baseRefusedBy[reason]; d > 0 {
+			if t.s.RefusedBy == nil {
+				t.s.RefusedBy = map[string]uint64{}
+			}
+			t.s.RefusedBy[reason] = d
+		}
+	}
 	t.s.LastState = n.vpn.exitState
 	t.s.UpdatedAt = time.Now().Unix()
 }
@@ -171,16 +190,19 @@ func (n *NodeApi) endSessionLocked(reason string) {
 	n.vpn.session = nil
 }
 
-// noteSessionStateLocked records when the exit first confirmed it serves us, and the price it
-// asks (-1: it did not say).
-func (n *NodeApi) noteSessionStateLocked(state string, price int64) {
+// noteSessionStateLocked records when the exit first confirmed it serves us, and from its
+// account answer (nil: none) the price it asks and what is left on it for us.
+func (n *NodeApi) noteSessionStateLocked(state string, info *exit_gateway.AccountInfo) {
 	t := n.vpn.session
 	if t == nil {
 		return
 	}
 	t.s.LastState = state
-	if price >= 0 {
-		t.s.PricePerMB, t.s.PriceKnown = price, true // what the exit asks, not what an advert said
+	if info != nil {
+		t.s.PricePerMB, t.s.PriceKnown = info.PricePerMB, true // what the exit asks, not what an advert said
+		if info.Enabled {
+			t.s.Remaining, t.s.RemainingAt = info.Remaining(), time.Now().Unix()
+		}
 	}
 	if state == ExitOK && t.s.ReadyMs == 0 {
 		t.s.ReadyMs = max(1, time.Since(time.Unix(t.s.StartedAt, 0)).Milliseconds())
@@ -277,19 +299,23 @@ type exitLabel struct {
 
 // SavedExit is one exit with everything the history says about it, newest facts first.
 type SavedExit struct {
-	PeerID      string `json:"peerId"`
-	Name        string `json:"name,omitempty"`
-	Favorite    bool   `json:"favorite"`
-	Addr        string `json:"addr,omitempty"` // the last address it was reached at
-	Sessions    int    `json:"sessions"`
-	BytesRx     uint64 `json:"bytesRx"`
-	BytesTx     uint64 `json:"bytesTx"`
-	Refused     uint64 `json:"refused"`
-	LastUsed    int64  `json:"lastUsed"` // 0: starred but never used
-	LastReadyMs int64  `json:"lastReadyMs,omitempty"`
-	LastState   string `json:"lastState,omitempty"`
-	PricePerMB  int64  `json:"pricePerMb"`
-	PriceKnown  bool   `json:"priceKnown"`
+	PeerID      string            `json:"peerId"`
+	Name        string            `json:"name,omitempty"`
+	Favorite    bool              `json:"favorite"`
+	Addr        string            `json:"addr,omitempty"` // the last address it was reached at
+	Sessions    int               `json:"sessions"`
+	BytesRx     uint64            `json:"bytesRx"`
+	BytesTx     uint64            `json:"bytesTx"`
+	Refused     uint64            `json:"refused"`
+	RefusedBy   map[string]uint64 `json:"refusedBy,omitempty"`
+	LastUsed    int64             `json:"lastUsed"` // 0: starred but never used
+	LastReadyMs int64             `json:"lastReadyMs,omitempty"`
+	LastState   string            `json:"lastState,omitempty"`
+	PricePerMB  int64             `json:"pricePerMb"`
+	PriceKnown  bool              `json:"priceKnown"`
+	// Remaining is the traffic left on this exit for us when it last told (RemainingAt, 0: never)
+	Remaining   int64  `json:"remaining,omitempty"`
+	RemainingAt int64  `json:"remainingAt,omitempty"`
 	Active      bool   `json:"active"`
 	CountryCode string `json:"countryCode,omitempty"` // ISO 3166 code from a GeoIP lookup of Addr
 	City        string `json:"city,omitempty"`
@@ -398,10 +424,19 @@ func (n *NodeApi) GetSavedExits() []SavedExit {
 		if !e.PriceKnown && s.PriceKnown {
 			e.PricePerMB, e.PriceKnown = s.PricePerMB, true
 		}
+		if s.RemainingAt > e.RemainingAt {
+			e.Remaining, e.RemainingAt = s.Remaining, s.RemainingAt
+		}
 		e.Sessions++
 		e.BytesRx += s.BytesRx
 		e.BytesTx += s.BytesTx
 		e.Refused += s.Refused
+		for reason, c := range s.RefusedBy {
+			if e.RefusedBy == nil {
+				e.RefusedBy = map[string]uint64{}
+			}
+			e.RefusedBy[reason] += c
+		}
 		e.Active = e.Active || s.Active
 	}
 	for id := range labels {
