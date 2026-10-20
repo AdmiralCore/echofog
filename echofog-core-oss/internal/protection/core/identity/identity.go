@@ -135,6 +135,22 @@ func (m *identityManager) GenerateNewIdentity(passphrase []byte) (*ProtectedMnem
 	return protectedM, nil
 }
 
+// The password becomes the key of the identity root through Argon2id at the second recommended
+// setting of RFC 9106 (t=3, 64 MiB, 4 lanes). Roots sealed before that used t=1; they still open,
+// and are sealed again at the current setting on the next unlock.
+const (
+	kdfCurrent = "argon2id-t3-chacha20"
+	kdfT1      = "argon2id-chacha20" // t=1, 64 MiB, 4 lanes
+)
+
+func passwordKey(passphrase, salt []byte, alg string) []byte {
+	t := uint32(3)
+	if alg == kdfT1 || alg == "" {
+		t = 1
+	}
+	return argon2.IDKey(passphrase, salt, t, 64*1024, 4, 32)
+}
+
 func (m *identityManager) SaveToStorage(passphrase []byte) error {
 	defer memguard.WipeBytes(passphrase)
 
@@ -147,7 +163,7 @@ func (m *identityManager) SaveToStorage(passphrase []byte) error {
 		return err
 	}
 
-	encryptedKey := argon2.IDKey(passphrase, salt, 1, 64*1024, 4, 32)
+	encryptedKey := passwordKey(passphrase, salt, kdfCurrent)
 	defer memguard.WipeBytes(encryptedKey)
 
 	aead, err := chacha20poly1305.NewX(encryptedKey)
@@ -183,7 +199,7 @@ func (m *identityManager) SaveToStorage(passphrase []byte) error {
 		EncryptedData: encryptedData,
 		Salt:          salt,
 		Nonce:         nonce,
-		Algorithm:     "argon2id-chacha20",
+		Algorithm:     kdfCurrent,
 	}
 
 	dataToSave, err := proto.Marshal(protoToSave)
@@ -219,7 +235,7 @@ func (m *identityManager) LoadFromStorage(passphrase []byte, isDuress bool) erro
 		return err
 	}
 
-	encryptedKey := argon2.IDKey(passphrase, protoKeys.Salt, 1, 64*1024, 4, 32)
+	encryptedKey := passwordKey(passphrase, protoKeys.Salt, protoKeys.Algorithm)
 	defer memguard.WipeBytes(encryptedKey)
 
 	aead, err := chacha20poly1305.NewX(encryptedKey)
@@ -243,6 +259,14 @@ func (m *identityManager) LoadFromStorage(passphrase []byte, isDuress bool) erro
 	_ = m.refreshCachedKeys()
 	m.mu.Unlock()
 
+	if protoKeys.Algorithm != kdfCurrent {
+		// SaveToStorage wipes what it is given; the caller's passphrase is wiped by our defer
+		if err := m.SaveToStorage(append([]byte(nil), passphrase...)); err != nil {
+			slog.Warn("could not re-seal the identity at the stronger password setting; it stays at the old one", "err", err)
+		} else {
+			slog.Info("identity re-sealed at the stronger password setting", "from", protoKeys.Algorithm, "to", kdfCurrent)
+		}
+	}
 	return nil
 }
 
