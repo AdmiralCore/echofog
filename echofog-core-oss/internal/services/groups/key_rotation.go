@@ -20,6 +20,13 @@ var (
 	keyRand                  = defaultKeyRand
 )
 
+// Not in use for messages yet. Group messages and group changes travel to each member over that
+// member's own Double Ratchet session (see the messenger), so a banned member is simply sent
+// nothing more, and nothing here protects or exposes a message. The epoch keys below (made at
+// creation, rotated on a ban, sealed to each member's X25519 key) are groundwork for large groups,
+// where one encryption per member per message stops scaling; until a message path uses them they
+// are bookkeeping only, and the docs must not describe group messages as encrypted with them.
+
 // GroupEpochKey represents the symmetric cipher key used to encrypt group messages for a specific epoch.
 type GroupEpochKey struct {
 	GroupID   string `json:"group_id"`
