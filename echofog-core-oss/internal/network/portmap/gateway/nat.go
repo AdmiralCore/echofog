@@ -107,13 +107,19 @@ func discoverNATs(ctx context.Context) ([]NAT, []error) {
 
 	go func() {
 		defer close(pmpCh)
-		nat, err := discoverNATPMP(ctx)
+		// PCP first: a router that speaks it speaks NAT-PMP too, and PCP is the newer of the
+		// two; one that only knows NAT-PMP says so at once, and NAT-PMP is asked then
 		var nats []NAT
 		var errs []error
-		if err != nil {
-			errs = append(errs, err)
-		} else {
+		if nat, err := discoverPCP(ctx); err == nil {
 			nats = append(nats, nat)
+		} else {
+			errs = append(errs, err)
+			if nat, err := discoverNATPMP(ctx); err != nil {
+				errs = append(errs, err)
+			} else {
+				nats = append(nats, nat)
+			}
 		}
 		select {
 		case pmpCh <- natsAndErrs{nats, errs}:

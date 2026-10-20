@@ -44,7 +44,7 @@ const CacheTime = 15 * time.Second
 //   - SSDP (UPnP discovery) waits 5 seconds for responses
 //   - NAT-PMP uses exponential backoff starting at 250ms, up to 9 retries
 //     (total ~32 seconds if exhausted, but typically responds in 1-2 seconds)
-//   - PCP follows similar timing to NAT-PMP
+//   - PCP (asked first, on the NAT-PMP port) uses the same backoff and gives way to NAT-PMP at once
 //   - 10 seconds covers common cases while failing fast when no NAT exists
 const DiscoveryTimeout = 10 * time.Second
 
