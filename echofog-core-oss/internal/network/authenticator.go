@@ -29,6 +29,22 @@ type DefaultPeerAuthenticator struct {
 	hideListen      atomic.Bool         // a hidden node announces no port: nobody spreads its address
 	gate            atomic.Pointer[access.Gate]
 	keys            atomic.Pointer[access.Keyring]
+	screen          atomic.Pointer[handshake.ScreenFunc]
+}
+
+// ScreenSetter is an authenticator that screens inbound peers by the key they claim (see
+// handshake.NegotiatorConfig.Screen).
+type ScreenSetter interface {
+	SetScreen(handshake.ScreenFunc)
+}
+
+// SetScreen sets the screen of inbound handshakes; nil removes it.
+func (a *DefaultPeerAuthenticator) SetScreen(f handshake.ScreenFunc) {
+	if f == nil {
+		a.screen.Store(nil)
+		return
+	}
+	a.screen.Store(&f)
 }
 
 // AccessSetter is an authenticator that keeps a hidden node to the peers it invited (gate, on
@@ -108,6 +124,9 @@ func (a *DefaultPeerAuthenticator) negotiator(ctx context.Context, stream MuxStr
 	}
 	if a.hideListen.Load() {
 		cfg.ListenPort = 0
+	}
+	if f := a.screen.Load(); inbound && f != nil {
+		cfg.Screen = *f
 	}
 	if g := a.gate.Load(); inbound && g != nil && g.Enabled() {
 		cfg.Admit = g.AdmitHandshake

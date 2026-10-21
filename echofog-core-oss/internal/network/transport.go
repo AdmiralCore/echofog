@@ -37,11 +37,14 @@ var errSelfDial = errors.New("DialEarly: address is already in use")
 // GetQuicConfig returns the QUIC settings shared by the listener and every dial.
 func GetQuicConfig() *quic.Config {
 	return &quic.Config{
-		Allow0RTT:             true,
-		KeepAlivePeriod:       10 * time.Second,
-		MaxIdleTimeout:        30 * time.Second,
-		MaxIncomingStreams:    4096,
-		MaxIncomingUniStreams: 1000,
+		Allow0RTT:       true,
+		KeepAlivePeriod: 10 * time.Second,
+		MaxIdleTimeout:  30 * time.Second,
+		// What a peer may keep open at once. Every proxied connection through an exit is a bidi
+		// stream, so a browser behind it needs a few hundred; uni streams carry one gossip frame
+		// each and close at once.
+		MaxIncomingStreams:    MaxBidiStreamsPerPeer,
+		MaxIncomingUniStreams: MaxUniStreamsPerPeer,
 		EnableDatagrams:       true,
 		// Every proxied connection to an exit is a stream of one QUIC connection. quic-go's
 		// defaults (512 KB per stream growing to 6 MB, 15 MB for the connection) cap a single
@@ -113,6 +116,9 @@ type QuicTransport struct {
 	obfsSecret string
 	book       peerBook
 	guard      atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
+
+	retryAlways atomic.Bool         // make every new address prove itself with a QUIC Retry (servers)
+	initials    *handshake.AntiDDoS // new-connection Initials per second: many ask for Retry
 }
 
 // NewQUICTransport creates a QUIC transport listening on addr with default socket options.
@@ -214,7 +220,10 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 		authenticator:   NewDefaultPeerAuthenticator(signer, protocolVersion, 5*time.Second),
 		handshakeSem:    make(chan struct{}, maxConcurrentHandshakes),
 		logger:          slog.Default().With("component", "quic_transport"),
+		initials:        handshake.NewAntiDDoS(),
 	}
+	tr.VerifySourceAddress = qt.verifySourceAddress
+	tr.ConnContext = qt.connContext
 
 	qt.guard.Store(handshake.NewGuard(handshake.GuardConfig{}))
 	qt.SetCongestion(opts.Congestion)

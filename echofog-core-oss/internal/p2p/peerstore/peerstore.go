@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -43,7 +44,10 @@ type PeerStore struct {
 	logger  *slog.Logger
 
 	bansMu sync.RWMutex
-	banned map[types.PeerID]bool
+	banned map[types.PeerID]time.Time // until when; the zero time is for good
+	// bansAll: every stored ban is in banned, so a peer missing there is not banned; false when
+	// there were more than loadBans reads, and storage is asked
+	bansAll bool
 
 	entryMu sync.Mutex // read-modify-write of entries (failures, discovered peers)
 
@@ -57,7 +61,7 @@ func NewPeerStore(store storage.Storage, logger *slog.Logger) *PeerStore {
 	ps := &PeerStore{
 		storage: store,
 		logger:  logger,
-		banned:  make(map[types.PeerID]bool),
+		banned:  make(map[types.PeerID]time.Time),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -67,24 +71,47 @@ func NewPeerStore(store storage.Storage, logger *slog.Logger) *PeerStore {
 	return ps
 }
 
+const (
+	maxLoadedBans = 1000
+	maxCachedBans = 20000
+)
+
 func (ps *PeerStore) loadBans() {
 	if ps.storage == nil {
+		ps.bansAll = true
 		return
 	}
-	values, err := ps.storage.FindValues([]byte(bansPrefix), 1000)
+	values, err := ps.storage.FindValues([]byte(bansPrefix), maxLoadedBans)
 	if err != nil {
 		return
 	}
 	ps.bansMu.Lock()
 	defer ps.bansMu.Unlock()
+	now := time.Now()
 	for _, v := range values {
 		if len(v.Key) > len(bansPrefix) {
 			pBytes := v.Key[len(bansPrefix):]
 			if pID, err := types.ToPeerID(pBytes); err == nil {
-				ps.banned[pID] = true
+				until := banUntil(v.Value)
+				if !until.IsZero() && now.After(until) {
+					_ = ps.storage.Delete(v.Key) // served its time
+					continue
+				}
+				ps.banned[pID] = until
 			}
 		}
 	}
+	ps.bansAll = len(values) < maxLoadedBans
+}
+
+// banUntil reads a stored ban: "true" (older versions) is for good, otherwise the end in unix
+// nanoseconds.
+func banUntil(v []byte) time.Time {
+	n, err := strconv.ParseInt(string(v), 10, 64)
+	if err != nil || n <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 // SavePeer persists or updates a peer's last known address and trust score.
@@ -284,15 +311,39 @@ func (ps *PeerStore) Prune(now time.Time) int {
 	return removed
 }
 
-// BanPeer records a ban flag in both the fast in-memory set and storage.
-func (ps *PeerStore) BanPeer(peerID types.PeerID) error {
+// BanPeer bans a peer for good, in memory and in storage.
+func (ps *PeerStore) BanPeer(peerID types.PeerID) error { return ps.BanPeerFor(peerID, 0) }
+
+// BanPeerFor bans a peer for d (0: for good); the ban survives a restart. A longer ban already in
+// place is kept.
+func (ps *PeerStore) BanPeerFor(peerID types.PeerID, d time.Duration) error {
+	var until time.Time
+	if d > 0 {
+		until = time.Now().Add(d)
+	}
 	ps.bansMu.Lock()
-	ps.banned[peerID] = true
+	if have, ok := ps.banned[peerID]; ok && (have.IsZero() || (!until.IsZero() && have.After(until))) {
+		ps.bansMu.Unlock()
+		return nil
+	}
+	ps.banned[peerID] = until
+	if len(ps.banned) > maxCachedBans {
+		now := time.Now()
+		for id, u := range ps.banned {
+			if !u.IsZero() && now.After(u) {
+				delete(ps.banned, id) // storage keeps it until it is next read, then drops it
+			}
+		}
+	}
 	ps.bansMu.Unlock()
 
 	if ps.storage != nil {
 		key := append([]byte(bansPrefix), peerID[:]...)
-		return ps.storage.Set(key, []byte("true"))
+		val := []byte("true")
+		if !until.IsZero() {
+			val = []byte(strconv.FormatInt(until.UnixNano(), 10))
+		}
+		return ps.storage.Set(key, val)
 	}
 	return nil
 }
@@ -310,25 +361,32 @@ func (ps *PeerStore) UnBanPeer(peerID types.PeerID) error {
 	return nil
 }
 
-// IsBanned checks whether a peer is currently banned.
+// IsBanned checks whether a peer is currently banned. A ban that ran out is lifted here.
 func (ps *PeerStore) IsBanned(peerID types.PeerID) bool {
 	ps.bansMu.RLock()
-	banned, ok := ps.banned[peerID]
+	until, ok := ps.banned[peerID]
+	all := ps.bansAll
 	ps.bansMu.RUnlock()
-	if ok {
-		return banned
-	}
-
-	if ps.storage != nil {
+	if !ok && !all && ps.storage != nil {
+		// not cached: peer IDs are free to make, so unknown ones are looked up, never remembered
 		key := append([]byte(bansPrefix), peerID[:]...)
-		_, err := ps.storage.Get(key)
-		isBan := (err == nil)
+		v, err := ps.storage.Get(key)
+		if err != nil {
+			return false
+		}
+		until, ok = banUntil(v), true
 		ps.bansMu.Lock()
-		ps.banned[peerID] = isBan
+		ps.banned[peerID] = until
 		ps.bansMu.Unlock()
-		return isBan
 	}
-	return false
+	if !ok {
+		return false
+	}
+	if !until.IsZero() && time.Now().After(until) {
+		_ = ps.UnBanPeer(peerID)
+		return false
+	}
+	return true
 }
 
 // Close cancels pending async jobs and waits for in-flight writes to finish.

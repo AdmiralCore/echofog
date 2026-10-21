@@ -41,6 +41,7 @@ type WSTransport interface {
 // addresses starting with ws:// or wss:// are dialed through it.
 func (s *Swarm) SetWSTransport(w WSTransport) {
 	s.wsTransport = w
+	s.shareLimits(w)
 	s.wg.Add(1)
 	go s.registrationLoop(w.ConnChan())
 }

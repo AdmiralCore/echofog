@@ -78,6 +78,8 @@ type Swarm struct {
 	bytesRx atomic.Uint64
 	bytesTx atomic.Uint64
 
+	lim limits // inbound caps, stream slots, misbehaviour scores (limits.go)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -103,6 +105,7 @@ func NewSwarm(ctx context.Context, netTransport network.Transport, selfID types.
 
 	s.sessionManager.sender = s
 	s.sessionManager.ctx = s.ctx
+	s.initLimits()
 
 	listen := ""
 	if netTransport != nil && netTransport.Addr() != nil {
@@ -155,7 +158,18 @@ func (s *Swarm) registrationLoop(ch <-chan network.NewConnEvent) {
 				continue
 			}
 
-			p := s.AddPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable)
+			var release func()
+			if !event.IsOut {
+				r, err := s.admitInbound(event)
+				if err != nil {
+					s.log().Debug("Swarm: inbound peer refused", "peer", event.PeerID.String(), "addr", event.RemoteIP.String(), "reason", err)
+					_ = event.Conn.CloseWithError(network.ErrCodeSpamDetected, "limited")
+					continue
+				}
+				release = r
+			}
+
+			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release)
 			if p == nil {
 				continue // duplicate connection, already closed
 			}

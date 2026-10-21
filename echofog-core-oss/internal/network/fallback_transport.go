@@ -86,6 +86,9 @@ func NewFallbackTransport(q *QuicTransport, t *TCPTransport, mode, tcpListen str
 			}
 		}
 	}
+	if t != nil {
+		t.SetGuard(q.Guard()) // one set of per-address limits for the node, whatever the transport
+	}
 	wg.Add(1)
 	go forward(q.ConnChan())
 	if t != nil {

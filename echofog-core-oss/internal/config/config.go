@@ -47,6 +47,17 @@ type AccessConfig struct {
 // Gated reports whether the node keeps to the people it invited.
 func (a AccessConfig) Gated() bool { return a.Mode == AccessHidden || a.Mode == AccessIsolated }
 
+// Values of AppConfig.Role.
+const (
+	// RoleClient runs everything a person needs: chat, contacts, calls, file transfer, and answers
+	// the pre-key bundle requests that start an encrypted chat. The default.
+	RoleClient = "client"
+	// RoleServer is for a relay or exit on a VPS: it keeps the network part (DHT, peer exchange,
+	// relay with mailboxes for others, signaling, exit, adverts, wallet) and runs none of the chat,
+	// call and file services, so strangers cannot make it decrypt or store anything for itself.
+	RoleServer = "server"
+)
+
 // Values of AntiDPIConfig.Obfs.
 const (
 	ObfsNode = "node"
@@ -121,6 +132,19 @@ type NetworkConfig struct {
 	// lookups. For tests that build a fixed topology on one machine, where every node could reach
 	// every other.
 	NoAutoDial bool `json:"no_auto_dial"`
+
+	// Limits on the peers that connect to this node; 0 is the default, -1 no limit (see "Connections
+	// and bans" in docs/run-a-node.md). MaxConnections above is how many peers the node dials by
+	// itself; these bound what others open towards it.
+	MaxInboundPeers   int `json:"max_inbound_peers,omitempty"`    // default 256, 2048 on a server
+	MaxPeersPerIP     int `json:"max_peers_per_ip,omitempty"`     // at once from one address (16)
+	MaxPeersPerSubnet int `json:"max_peers_per_subnet,omitempty"` // from one /24 or IPv6 /56 (64)
+	MaxIDsPerIP       int `json:"max_ids_per_ip,omitempty"`       // different peer IDs per address in 10 minutes (32)
+	MaxIDsPerSubnet   int `json:"max_ids_per_subnet,omitempty"`   // and per subnet (128)
+	// WSClientIPHeader names the header a CDN puts the client's address in (CF-Connecting-IP for
+	// Cloudflare), so the limits count WebSocket peers by their own address and not the CDN's.
+	// Set it only when the WebSocket listener is reachable through the CDN alone.
+	WSClientIPHeader string `json:"ws_client_ip_header,omitempty"`
 
 	// WSListenAddr makes the node reachable over WebSocket, so it can sit behind a CDN such as
 	// Cloudflare (the CDN forwards the WebSocket to this address). Empty disables the listener;
@@ -230,7 +254,12 @@ type AppConfig struct {
 	Storage  StorageConfig  `json:"storage"`
 	Ton      TonConfig      `json:"ton"`
 	Access   AccessConfig   `json:"access"`
+	// Role is RoleClient (default, also when empty) or RoleServer.
+	Role string `json:"role,omitempty"`
 }
+
+// IsServer reports whether the node runs as a server: network services only, no chat or calls.
+func (c *AppConfig) IsServer() bool { return c != nil && c.Role == RoleServer }
 
 // DefaultTonNetwork is the TON network of the built-in wallet: "testnet" while the vault contract
 // has not had an independent security audit, so testers never pay real money. A release build
@@ -249,6 +278,7 @@ func DefaultConfig(profileName string) *AppConfig {
 
 	cfg.Ton.Network = DefaultTonNetwork
 	cfg.Access.Mode = AccessPublic
+	cfg.Role = RoleClient
 
 	cfg.Network.ListenAddr = ":0"
 	cfg.Network.MaxConnections = 100

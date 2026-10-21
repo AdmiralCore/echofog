@@ -22,7 +22,7 @@ const (
 )
 
 const (
-	smuxMaxStreams    = 1000 // like QUIC MaxIncomingStreams
+	smuxMaxStreams    = MaxBidiStreamsPerPeer // like QUIC MaxIncomingStreams
 	smuxAcceptBacklog = 64
 	smuxDatagramQueue = 2048 // ~2 s of a 4K stream
 	smuxMaxDatagram   = 64 << 10

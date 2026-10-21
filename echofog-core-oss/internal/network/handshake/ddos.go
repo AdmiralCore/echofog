@@ -32,6 +32,11 @@ const (
 	heavyBits  = 20 // about a million hashes: tens of milliseconds
 	floodBits  = 22 // a few million hashes: a fraction of a second
 	minPoWBits = 16 // when a node is configured to always ask
+
+	// StrangerPoWBits is the puzzle a server asks of peers it does not know even when calm: about
+	// 16 thousand hashes, a few milliseconds on a desktop and tens on a phone (see
+	// TestStrangerPuzzleLatency), nothing to a real user and a cost per identity to a flood.
+	StrangerPoWBits = 14
 )
 
 func NewAntiDDoS() *AntiDDoS { return &AntiDDoS{now: time.Now} }
@@ -94,6 +99,14 @@ type GuardConfig struct {
 	// CountLoopback applies the limits to 127.0.0.1 too (tests); by default local connections are
 	// not limited.
 	CountLoopback bool
+
+	// Limits on authenticated inbound peers (see AdmitPeer); 0 means the default, negative no limit.
+	MaxPeersPerIP     int // peers connected from one address at once
+	MaxPeersPerSubnet int // from one /24 (IPv4) or /56 (IPv6) at once
+	// Peer IDs cost nothing: an address may present only so many different ones within IDWindow.
+	MaxIDsPerIP     int
+	MaxIDsPerSubnet int
+	IDWindow        time.Duration
 }
 
 func (c GuardConfig) withDefaults() GuardConfig {
@@ -115,18 +128,29 @@ func (c GuardConfig) withDefaults() GuardConfig {
 	if c.BanFor <= 0 {
 		c.BanFor = 15 * time.Minute
 	}
+	c.MaxPeersPerIP = orDefault(c.MaxPeersPerIP, DefaultMaxPeersPerIP)
+	c.MaxPeersPerSubnet = orDefault(c.MaxPeersPerSubnet, DefaultMaxPeersPerSubnet)
+	c.MaxIDsPerIP = orDefault(c.MaxIDsPerIP, DefaultMaxIDsPerIP)
+	c.MaxIDsPerSubnet = orDefault(c.MaxIDsPerSubnet, DefaultMaxIDsPerSubnet)
+	if c.IDWindow <= 0 {
+		c.IDWindow = DefaultIDWindow
+	}
 	return c
 }
 
 // Guard limits what one remote address can do before it is authenticated: how fast it may open
 // connections, how many handshakes it may run at once, and how many it may fail. An address that
-// keeps failing (scanners, broken or hostile software) is banned for a while.
+// keeps failing (scanners, broken or hostile software) is banned for a while. Once a peer is
+// authenticated the Guard also bounds how many peers, and how many different peer IDs, one address
+// and its subnet hold (see AdmitPeer). All transports of a node share one Guard.
 type Guard struct {
 	cfg GuardConfig
 	now func() time.Time
 
-	mu  sync.Mutex
-	ips map[netip.Addr]*ipState
+	mu    sync.Mutex
+	ips   map[netip.Addr]*ipState
+	addrs map[netip.Addr]*peerSet   // authenticated inbound peers by address
+	subs  map[netip.Prefix]*peerSet // and by subnet
 }
 
 type ipState struct {
@@ -139,7 +163,13 @@ type ipState struct {
 }
 
 func NewGuard(cfg GuardConfig) *Guard {
-	return &Guard{cfg: cfg.withDefaults(), now: time.Now, ips: make(map[netip.Addr]*ipState)}
+	return &Guard{
+		cfg:   cfg.withDefaults(),
+		now:   time.Now,
+		ips:   make(map[netip.Addr]*ipState),
+		addrs: make(map[netip.Addr]*peerSet),
+		subs:  make(map[netip.Prefix]*peerSet),
+	}
 }
 
 const maxTrackedAddrs = 20000
@@ -166,7 +196,7 @@ func (g *Guard) Allow(ip netip.Addr) (release func(), ok bool) {
 		st = &ipState{tokens: float64(g.cfg.Burst), last: now}
 		g.ips[ip] = st
 	}
-	if now.Before(st.bannedUntil) {
+	if now.Before(st.bannedUntil) || g.fullLocked(ip) {
 		return nil, false
 	}
 	st.tokens += now.Sub(st.last).Seconds() * g.cfg.Refill
