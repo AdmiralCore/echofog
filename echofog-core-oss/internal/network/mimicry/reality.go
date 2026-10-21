@@ -60,18 +60,13 @@ func DeriveAEAD(authKey []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// GenerateStealthToken creates a 32-byte token carrying the current time, to put in the
-// ClientHello session id, bound to nothing else in the hello. Older clients send these; new ones
-// send GenerateBoundToken.
-func GenerateStealthToken(aead cipher.AEAD) ([]byte, error) { return generateToken(aead, nil) }
-
-// GenerateBoundToken creates a token sealed to binding (helloBinding of the ClientHello it goes
-// into): the token only verifies inside that very hello, with that random and that key_share.
+// GenerateBoundToken creates a 32-byte token carrying the current time, to put in the ClientHello
+// session id, sealed to binding (helloBinding of that hello): the token only verifies inside that
+// very hello, with that random and that key_share.
 func GenerateBoundToken(aead cipher.AEAD, binding []byte) ([]byte, error) {
-	return generateToken(aead, binding)
-}
-
-func generateToken(aead cipher.AEAD, binding []byte) ([]byte, error) {
+	if len(binding) == 0 {
+		return nil, errors.New("mimicry: a token needs the hello it is bound to")
+	}
 	token := make([]byte, StealthTokenLen)
 	nonce := token[:tokenNonceLen]
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -84,11 +79,8 @@ func generateToken(aead cipher.AEAD, binding []byte) ([]byte, error) {
 	return token, nil
 }
 
-// VerifyStealthToken decrypts a session id, checks the clock drift, and guards against replay.
-func VerifyStealthToken(aead cipher.AEAD, token []byte) error {
-	return verifyStealthToken(aead, token, nil, sharedReplayCache, nowUnix())
-}
-
+// verifyStealthToken decrypts a session id sealed to binding, checks the clock drift, and guards
+// against replay.
 func verifyStealthToken(aead cipher.AEAD, token, binding []byte, replay *replayCache, now int64) error {
 	if len(token) != StealthTokenLen {
 		return ErrInvalidStealthToken
@@ -127,11 +119,6 @@ func ClientHandshake(rawConn net.Conn, cfg *MimicryConfig) (net.Conn, []byte, er
 		_ = uconn.Close()
 		return nil, nil, err
 	}
-	token, err := GenerateStealthToken(aead)
-	if err != nil {
-		_ = uconn.Close()
-		return nil, nil, err
-	}
 	// build the Chrome ClientHello, then replace its random session id with our token and
 	// re-marshal; the token is 32 bytes, the size Chrome uses, so nothing on the wire stands out
 	if err := uconn.BuildHandshakeState(); err != nil {
@@ -154,7 +141,7 @@ func ClientHandshake(rawConn net.Conn, cfg *MimicryConfig) (net.Conn, []byte, er
 		_ = uconn.Close()
 		return nil, nil, errors.New("mimicry: client hello has no key_share to bind the token to")
 	}
-	token, err = GenerateBoundToken(aead, bound)
+	token, err := GenerateBoundToken(aead, bound)
 	if err != nil {
 		_ = uconn.Close()
 		return nil, nil, err
@@ -223,21 +210,12 @@ func ServerHandshake(rawConn net.Conn, tlsCfg *tls.Config, cfg *MimicryConfig) (
 	return tlsConn, true, binding, nil
 }
 
-// acceptToken checks the session id of a ClientHello record: a token sealed to that hello (what
-// current clients send), or an unbound token from a client of an older version. A bound token
-// cannot be taken into another hello, and it cannot pass as an unbound one either (the seal
-// differs), so the unbound path only ever helps older clients.
-// TODO: drop the unbound path once older clients are gone from the network.
+// acceptToken checks the session id of a ClientHello record: it must be a token sealed to that
+// very hello. A token copied into another hello does not open, and a hello without a key_share
+// carries no token of ours.
 func acceptToken(aead cipher.AEAD, sid, rec []byte, replay *replayCache, now int64) bool {
-	if binding, ok := helloBinding(rec[5:]); ok {
-		switch verifyStealthToken(aead, sid, binding, replay, now) {
-		case nil:
-			return true
-		case ErrReplayDetected:
-			return false
-		}
-	}
-	return verifyStealthToken(aead, sid, nil, replay, now) == nil
+	binding, ok := helloBinding(rec[5:])
+	return ok && verifyStealthToken(aead, sid, binding, replay, now) == nil
 }
 
 // prefixConn returns prefix before reading from Conn.

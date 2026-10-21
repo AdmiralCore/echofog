@@ -10,7 +10,8 @@ func FuzzVerifyStealthToken(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	good, err := GenerateStealthToken(aead)
+	binding := []byte("random and key_share of one hello")
+	good, err := GenerateBoundToken(aead, binding)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -20,7 +21,7 @@ func FuzzVerifyStealthToken(f *testing.F) {
 	f.Add([]byte("GET / HTTP/1.1\r\n\r\n"))
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, token []byte) {
-		err := VerifyStealthToken(aead, token)
+		err := verifyStealthToken(aead, token, binding, nil, nowUnix())
 		if err == nil && len(token) != StealthTokenLen {
 			t.Fatalf("accepted a token of %d bytes", len(token))
 		}
@@ -39,11 +40,12 @@ func FuzzStealthTokenWrongKey(f *testing.F) {
 		if err1 != nil || err2 != nil {
 			t.Skip()
 		}
-		token, err := GenerateStealthToken(a1)
+		binding := []byte("random and key_share of one hello")
+		token, err := GenerateBoundToken(a1, binding)
 		if err != nil {
 			t.Skip()
 		}
-		if VerifyStealthToken(a2, token) == nil {
+		if verifyStealthToken(a2, token, binding, nil, nowUnix()) == nil {
 			t.Fatalf("a token verified under another key")
 		}
 	})

@@ -3,12 +3,14 @@ package mimicry
 import (
 	"bufio"
 	"bytes"
+	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -215,31 +217,42 @@ func TestStealthTokenTimeAndReplay(t *testing.T) {
 	}
 	cache := newReplayCache()
 	now := time.Now().Unix()
-	tok, err := GenerateStealthToken(aead)
+	binding := []byte("random and key_share of one hello")
+	tok, err := GenerateBoundToken(aead, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyStealthToken(aead, tok, nil, cache, now); err != nil {
+	if err := verifyStealthToken(aead, tok, binding, cache, now); err != nil {
 		t.Fatalf("a fresh token was refused: %v", err)
 	}
-	if err := verifyStealthToken(aead, tok, nil, cache, now); err != ErrReplayDetected {
+	if err := verifyStealthToken(aead, tok, binding, cache, now); err != ErrReplayDetected {
 		t.Fatalf("a replayed token was accepted: %v", err)
 	}
 	// another node's key does not open it
 	other, _ := DeriveAEAD(NodeStealthKey("", [32]byte{8}))
-	if err := verifyStealthToken(other, tok, nil, newReplayCache(), now); err != ErrInvalidStealthToken {
+	if err := verifyStealthToken(other, tok, binding, newReplayCache(), now); err != ErrInvalidStealthToken {
 		t.Fatalf("a token verified under another node's key: %v", err)
 	}
+	// nor does another hello, or none at all
+	if err := verifyStealthToken(aead, tok, []byte("another hello"), newReplayCache(), now); err != ErrInvalidStealthToken {
+		t.Fatalf("a token verified for another hello: %v", err)
+	}
+	if err := verifyStealthToken(aead, tok, nil, newReplayCache(), now); err != ErrInvalidStealthToken {
+		t.Fatalf("a token verified bound to nothing: %v", err)
+	}
 	// outside the clock window
-	fresh, _ := GenerateStealthToken(aead)
-	if err := verifyStealthToken(aead, fresh, nil, newReplayCache(), now+ReplayWindowSeconds+5); err != ErrReplayDetected {
+	fresh, _ := GenerateBoundToken(aead, binding)
+	if err := verifyStealthToken(aead, fresh, binding, newReplayCache(), now+ReplayWindowSeconds+5); err != ErrReplayDetected {
 		t.Fatalf("an expired token was accepted: %v", err)
 	}
 	// a tampered byte breaks the tag
-	fresh2, _ := GenerateStealthToken(aead)
+	fresh2, _ := GenerateBoundToken(aead, binding)
 	fresh2[len(fresh2)-1] ^= 1
-	if err := verifyStealthToken(aead, fresh2, nil, newReplayCache(), now); err != ErrInvalidStealthToken {
+	if err := verifyStealthToken(aead, fresh2, binding, newReplayCache(), now); err != ErrInvalidStealthToken {
 		t.Fatalf("a tampered token was accepted: %v", err)
+	}
+	if _, err := GenerateBoundToken(aead, nil); err == nil {
+		t.Fatal("a token was made bound to nothing")
 	}
 }
 
@@ -310,11 +323,27 @@ func TestTokenDoesNotWorkInAnotherHello(t *testing.T) {
 	if acceptToken(aead, sid, victim, cache, now) {
 		t.Fatal("the same hello was accepted twice")
 	}
-	// a client of an older version still gets in (unbound token)
-	old, _ := GenerateStealthToken(aead)
+	// a token sealed to nothing (what clients sent before tokens were bound) is not accepted
+	old, err := generateUnboundForTest(aead)
+	if err != nil {
+		t.Fatal(err)
+	}
 	osid, _ := sessionIDFromClientHello(attacker)
 	copy(osid, old)
-	if !acceptToken(aead, old, attacker, cache, now) {
-		t.Fatal("an unbound token of an older client was refused")
+	if acceptToken(aead, old, attacker, cache, now) {
+		t.Fatal("an unbound token was accepted")
 	}
+}
+
+// generateUnboundForTest seals a token the way clients did before tokens were bound to their hello.
+func generateUnboundForTest(aead cipher.AEAD) ([]byte, error) {
+	token := make([]byte, StealthTokenLen)
+	nonce := token[:tokenNonceLen]
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	var ts [tokenTSLen]byte
+	binary.BigEndian.PutUint32(ts[:], uint32(time.Now().Unix()))
+	aead.Seal(token[:tokenNonceLen], nonce, ts[:], nil)
+	return token, nil
 }
