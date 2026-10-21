@@ -55,6 +55,45 @@ func (s *ExitSplicer) Splice(ctx context.Context, p2pStream io.ReadWriteCloser, 
 	return relay(ctx, p2pStream, tcpConn, count, count)
 }
 
+// SpliceFor is Splice that ends the pair once it moved nothing either way for idle, or once it
+// lived for life (0 turns either off). Both sides are closed, as at any other end.
+func (s *ExitSplicer) SpliceFor(ctx context.Context, p2pStream io.ReadWriteCloser, tcpConn net.Conn, idle, life time.Duration) error {
+	if idle <= 0 && life <= 0 {
+		return s.Splice(ctx, p2pStream, tcpConn)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	start := time.Now()
+	var last atomic.Int64
+	last.Store(start.UnixNano())
+	count := func(n int) {
+		s.bytesRelayed.Add(uint64(n))
+		last.Store(time.Now().UnixNano())
+	}
+	every := 30 * time.Second
+	for _, d := range []time.Duration{idle, life} {
+		if d > 0 {
+			every = min(every, max(d/4, 10*time.Millisecond))
+		}
+	}
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				if (idle > 0 && now.Sub(time.Unix(0, last.Load())) > idle) || (life > 0 && now.Sub(start) > life) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return relay(ctx, p2pStream, tcpConn, count, count)
+}
+
 // Stats returns the cumulative metrics of this Exit Node.
 func (s *ExitSplicer) Stats() (servedStreams uint64, totalBytes uint64) {
 	return s.totalServedStreams.Load(), s.bytesRelayed.Load()

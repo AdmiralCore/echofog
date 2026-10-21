@@ -52,6 +52,8 @@ type options struct {
 	relays           string
 	signaling        bool
 	relayMaxCircuits int
+	relayLimits      config.RelayServerConfig // only the limit fields are used
+	relayIdle        time.Duration
 
 	socks5, useExit string
 
@@ -60,6 +62,9 @@ type options struct {
 	exitFreeKB int
 	exitMbps   int
 	exitFree   string
+	exitLimits config.ExitConfig
+	exitIdle   time.Duration
+	exitLife   time.Duration
 
 	accessMode   string
 	accessSecret string
@@ -112,7 +117,18 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.relayAllow, "relay-allow", getEnv("ECHOFOG_RELAY_ALLOW", ""), "comma-separated peer IDs allowed to use this relay when it is private")
 	f.StringVar(&o.relays, "relays", getEnv("ECHOFOG_RELAYS", ""), "comma-separated relays to connect to and prefer, as host:port/<peer id> (use to reach a private relay you were given access to)")
 	f.BoolVar(&o.signaling, "signaling", envBool("ECHOFOG_SIGNALING", false), "signaling only: keep the DHT and help peers behind NATs connect directly (hole punching), but relay no traffic and keep no messages")
-	f.IntVar(&o.relayMaxCircuits, "relay-max-circuits", int(envInt64("ECHOFOG_RELAY_MAX_CIRCUITS", 200)), "most relayed connections at once")
+	f.IntVar(&o.relayMaxCircuits, "relay-max-circuits", int(envInt64("ECHOFOG_RELAY_MAX_CIRCUITS", config.DefaultRelayMaxCircuits)), "most relayed connections at once")
+	// limits on what one peer can take from the relay: 0 keeps the default, -1 removes the limit
+	rl := &o.relayLimits
+	f.IntVar(&rl.MaxCircuitsPerPeer, "relay-circuits-per-peer", int(envInt64("ECHOFOG_RELAY_CIRCUITS_PER_PEER", 0)), "most relayed connections one peer may hold (0 = default 16, -1 = no limit)")
+	f.IntVar(&rl.MaxCircuitsPerIP, "relay-circuits-per-ip", int(envInt64("ECHOFOG_RELAY_CIRCUITS_PER_IP", 0)), "most relayed connections the peers of one IP address may hold; a /24 gets twice that (0 = default 32, -1 = no limit)")
+	f.IntVar(&rl.ReservedCircuitsPct, "relay-reserved-pct", int(envInt64("ECHOFOG_RELAY_RESERVED_PCT", 0)), "percent of --relay-max-circuits kept for peers connected 10 minutes or more (0 = default 25, -1 = none)")
+	f.DurationVar(&o.relayIdle, "relay-idle", envDuration("ECHOFOG_RELAY_IDLE", 5*time.Minute), "a relayed connection that moved less than --relay-idle-kb in this time is closed (0 = never)")
+	f.IntVar(&rl.CircuitIdleKB, "relay-idle-kb", int(envInt64("ECHOFOG_RELAY_IDLE_KB", 0)), "see --relay-idle (0 = default 32)")
+	f.Int64Var(&rl.CircuitMaxMB, "relay-circuit-mb", envInt64("ECHOFOG_RELAY_CIRCUIT_MB", 0), "most MB one relayed connection may carry (0 = default 4096, -1 = no limit)")
+	f.Int64Var(&rl.PeerMaxMBPerDay, "relay-peer-mb-per-day", envInt64("ECHOFOG_RELAY_PEER_MB_PER_DAY", 0), "most MB the relayed connections of one peer may carry a day (0 = default 16384, -1 = no limit)")
+	f.IntVar(&rl.PeerMaxMbps, "relay-peer-mbps", int(envInt64("ECHOFOG_RELAY_PEER_MBPS", 0)), "speed of one peer's relayed connections in Mbit/s (0 = default 50, -1 = no limit)")
+	f.IntVar(&rl.MaxMbps, "relay-mbps", int(envInt64("ECHOFOG_RELAY_MBPS", 0)), "speed of everything relayed through this node in Mbit/s (0 = no limit)")
 
 	f.StringVar(&o.socks5, "socks5", getEnv("ECHOFOG_SOCKS5", "127.0.0.1:1080"), "local SOCKS5 proxy address used with --use-exit")
 	f.StringVar(&o.useExit, "use-exit", getEnv("ECHOFOG_USE_EXIT", ""), "route the local SOCKS5 proxy through an exit: 'auto', a peer ID or an invitation link (echofog://join?...)")
@@ -121,6 +137,16 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.exitPrice, "exit-price", getEnv("ECHOFOG_EXIT_PRICE", "0"), "exit price in dollars per GB, paid in TON or USDT, e.g. 0.05 (0 = free)")
 	f.IntVar(&o.exitFreeKB, "exit-free-kb", int(envInt64("ECHOFOG_EXIT_FREE_KB", 512)), "free test traffic per client per day in KB (0-1024, used when the exit is priced)")
 	f.IntVar(&o.exitMbps, "exit-upload-mbps", int(envInt64("ECHOFOG_EXIT_UPLOAD_MBPS", 0)), "upload speed to advertise in Mbit/s (0 = measure against peers, which needs peers connected first; set it on a server)")
+	// limits on what peers can take from the exit: 0 keeps the default, -1 removes the limit
+	el := &o.exitLimits
+	f.IntVar(&el.MaxStreams, "exit-max-streams", int(envInt64("ECHOFOG_EXIT_MAX_STREAMS", 0)), "most connections the exit serves at once (0 = default 4096, -1 = no limit)")
+	f.IntVar(&el.MaxStreamsPerPeer, "exit-streams-per-peer", int(envInt64("ECHOFOG_EXIT_STREAMS_PER_PEER", 0)), "most connections one client may have open through the exit (0 = default 256, -1 = no limit)")
+	f.IntVar(&el.MaxStreamsPerIP, "exit-streams-per-ip", int(envInt64("ECHOFOG_EXIT_STREAMS_PER_IP", 0)), "most connections the clients of one IP address may have open (0 = default 512, -1 = no limit)")
+	f.IntVar(&el.MaxUDPPerPeer, "exit-udp-per-peer", int(envInt64("ECHOFOG_EXIT_UDP_PER_PEER", 0)), "most UDP sessions one client may have open (0 = default 32, -1 = no limit)")
+	f.DurationVar(&o.exitIdle, "exit-idle", envDuration("ECHOFOG_EXIT_IDLE", 5*time.Minute), "close a TCP connection through the exit that moved nothing for this long (0 = never)")
+	f.DurationVar(&o.exitLife, "exit-max-lifetime", envDuration("ECHOFOG_EXIT_MAX_LIFETIME", 0), "close a TCP connection through the exit after this long, busy or not (0 = never)")
+	f.IntVar(&el.FreePeerMbps, "exit-free-peer-mbps", int(envInt64("ECHOFOG_EXIT_FREE_PEER_MBPS", 0)), "on a free exit, the speed of one client in Mbit/s (0 = default 50, -1 = no limit)")
+	f.IntVar(&el.FreeIPMbps, "exit-free-ip-mbps", int(envInt64("ECHOFOG_EXIT_FREE_IP_MBPS", 0)), "on a free exit, the speed of all the clients of one IP address in Mbit/s (0 = default 100, -1 = no limit)")
 	f.StringVar(&o.exitFree, "exit-free-peers", getEnv("ECHOFOG_EXIT_FREE_PEERS", ""), "comma-separated peer IDs this exit serves for free, without quota or payment (e.g. your own devices); replaces the list saved in the data directory")
 
 	f.StringVar(&o.accessMode, "access", getEnv("ECHOFOG_ACCESS", "public"), "who may reach this node: public (listed, its exit advertised), hidden (uses the network as a client, unlisted, answers only people with its link) or isolated (joins no network at all, people with its link connect to it directly; for a server)")
@@ -215,6 +241,10 @@ func (o options) config() *config.AppConfig {
 	if o.relayMaxCircuits > 0 {
 		cfg.Relay.Server.MaxCircuits = o.relayMaxCircuits
 	}
+	applyRelayLimits(&cfg.Relay.Server, o.relayLimits, o.relayIdle)
+	cfg.Exit = o.exitLimits
+	cfg.Exit.IdleSeconds = durationSeconds(o.exitIdle)
+	cfg.Exit.MaxLifetimeSeconds = max(0, durationSeconds(o.exitLife))
 	switch o.accessMode {
 	case "", config.AccessPublic:
 	case config.AccessHidden, config.AccessIsolated:
@@ -443,4 +473,37 @@ func joinAddress(n *node.Node, listen string) string {
 		port = strconv.Itoa(n.Cfg.Network.AdvertisePort)
 	}
 	return host + ":" + port + "/" + n.ID.String()
+}
+
+// applyRelayLimits copies the limit fields of l into the relay server config; idle is the
+// --relay-idle duration.
+func applyRelayLimits(s *config.RelayServerConfig, l config.RelayServerConfig, idle time.Duration) {
+	s.MaxCircuitsPerPeer = l.MaxCircuitsPerPeer
+	s.MaxCircuitsPerIP = l.MaxCircuitsPerIP
+	s.ReservedCircuitsPct = l.ReservedCircuitsPct
+	s.CircuitIdleSeconds = durationSeconds(idle)
+	s.CircuitIdleKB = l.CircuitIdleKB
+	s.CircuitMaxMB = l.CircuitMaxMB
+	s.PeerMaxMBPerDay = l.PeerMaxMBPerDay
+	s.PeerMaxMbps = l.PeerMaxMbps
+	s.MaxMbps = l.MaxMbps
+}
+
+// durationSeconds turns a duration flag into a config's seconds: 0 (off) becomes -1, the
+// config's "no limit", since 0 there means the default.
+func durationSeconds(d time.Duration) int {
+	if d <= 0 {
+		return -1
+	}
+	return max(1, int(d/time.Second))
+}
+
+// envDuration reads a duration ("5m", "90s") from the environment.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
 }

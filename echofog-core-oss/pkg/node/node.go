@@ -494,6 +494,7 @@ func (n *Node) Start() (err error) {
 	}
 	n.ExitService = exit_gateway.NewExitService()
 	n.ExitService.SetSelfIPs(n.publicIPs)
+	n.ExitService.SetLimits(exit_gateway.LimitsFromConfig(n.Cfg.Exit))
 	exit_gateway.AttachToSwarm(n.Swarm, n.ExitService)
 
 	// WebSocket transport: lets this node sit behind a CDN (when ws_listen_addr is set) and lets

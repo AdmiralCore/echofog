@@ -287,6 +287,13 @@ func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultPayment})
 		return
 	}
+	release, ok := e.acquire(peer, true)
+	if !ok {
+		e.refuse(peer, RefuseBusy)
+		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultBusy})
+		return
+	}
+	defer release()
 	conn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		e.refuse(peer, RefuseDial)
@@ -299,7 +306,9 @@ func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types
 	defer cancel()
 	m := newMeter(e, peer)
 	defer m.close()
-	relay := &udpRelay{svc: e, st: st, conn: conn, peer: peer, meter: m, cancel: cancel,
+	p, unpace := e.paceFor(peer)
+	defer unpace()
+	relay := &udpRelay{svc: e, st: st, conn: conn, peer: peer, meter: m, pace: p, cancel: cancel,
 		labels: make(map[string]string), resolved: make(map[string]*net.UDPAddr),
 		pending: make(map[string][][]byte), failed: make(map[string]time.Time)}
 
@@ -353,6 +362,7 @@ type udpRelay struct {
 	conn   *net.UDPConn
 	peer   types.PeerID
 	meter  *meter
+	pace   *pace // nil: not slowed down
 	cancel context.CancelFunc
 
 	dg   *dgramSender   // nil: replies ride the stream
@@ -501,6 +511,9 @@ func (r *udpRelay) send(ctx context.Context, target string, payload []byte) {
 
 func (r *udpRelay) out(dst *net.UDPAddr, payload []byte) {
 	r.touch()
+	if !r.pace.allow(len(payload)) {
+		return // over the fair share: dropped, as a congested link would
+	}
 	if !r.account(len(payload)) {
 		r.cancel()
 		return
@@ -573,6 +586,9 @@ func (r *udpRelay) downstream() {
 			continue // only answers from destinations the client contacted
 		}
 		r.touch()
+		if !r.pace.allow(n) {
+			continue
+		}
 		if !r.account(n) {
 			return
 		}

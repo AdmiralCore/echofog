@@ -192,6 +192,10 @@ func statsLine(s Status) string {
 		if r.Private {
 			fmt.Fprintf(&b, ", %d allowed, %d refused", r.AllowedPeers, r.AccessRefused)
 		}
+		if r.LimitRefused+r.RateDropped+r.BudgetClosed > 0 {
+			fmt.Fprintf(&b, ", limits: %d opens refused, %d frames dropped, %d closed over budget",
+				r.LimitRefused, r.RateDropped, r.BudgetClosed)
+		}
 	} else {
 		b.WriteString(" | relay: off")
 	}
@@ -232,7 +236,7 @@ func roleLine(s Status) string {
 // refusedDetail is " (payment required 3, dial failed 1)", reasons in a fixed order.
 func refusedDetail(by map[string]uint64) string {
 	var parts []string
-	for _, r := range []string{exit_gateway.RefuseDisabled, exit_gateway.RefusePayment, exit_gateway.RefuseTarget, exit_gateway.RefuseDial} {
+	for _, r := range []string{exit_gateway.RefuseDisabled, exit_gateway.RefusePayment, exit_gateway.RefuseTarget, exit_gateway.RefuseDial, exit_gateway.RefuseBusy, exit_gateway.RefuseRate} {
 		if n := by[r]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%s %d", r, n))
 		}

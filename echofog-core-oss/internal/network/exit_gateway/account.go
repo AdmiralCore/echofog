@@ -114,6 +114,10 @@ func (e *ExitService) AccountOf(peer types.PeerID) AccountInfo {
 // HandleAccountFrom answers a TypeExitAccount request with the caller's account.
 func (e *ExitService) HandleAccountFrom(_ context.Context, st FramedStream, peer types.PeerID) {
 	defer st.Close()
+	if !e.allowQuery(peer) {
+		e.refuse(peer, RefuseRate) // the client sees the stream end and asks again later
+		return
+	}
 	raw, err := json.Marshal(e.AccountOf(peer))
 	if err != nil {
 		return

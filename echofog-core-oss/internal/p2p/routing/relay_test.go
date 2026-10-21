@@ -13,8 +13,8 @@ func TestRelayServer_PolicyAndLimits(t *testing.T) {
 
 	// Check default policy
 	policy := rs.GetPolicy()
-	if !policy.Enabled || policy.MaxCircuits != 50 {
-		t.Fatalf("expected default enabled=true max_circuits=50, got %+v", policy)
+	if !policy.Enabled || policy.MaxCircuits != config.DefaultRelayMaxCircuits {
+		t.Fatalf("expected default enabled=true max_circuits=200, got %+v", policy)
 	}
 
 	// Update policy
