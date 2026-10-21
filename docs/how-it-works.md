@@ -183,6 +183,17 @@ one.
 - ports used for spam and worms: 25, 465 and 587 (mail sending), 135, 137–139 and 445 (Windows file
   sharing), and 1900 (SSDP).
 
+## Protecting the nodes
+
+Anyone can make as many identities as they like, so a node never trusts that one identity is one
+person: it limits peers and identities per address and per subnet, bans peers that misbehave, asks
+strangers for a proof of work and answers a forged address only after a QUIC Retry, and gives every
+peer only a share of its queue, its relay and its exit. Requests that could make it send much more
+than it received (speed probes, peer lists) have budgets for the whole node, and everything it
+stores for others (offline mail, DHT records, keys handed out) expires and is bounded. A node on a
+VPS runs in the server role: no chat, calls or file transfer, so strangers cannot make it decrypt or
+store anything for them. More in [Protecting a node](node-security.md).
+
 ## Paying
 
 There is no account and no commission. You keep TON in your own small vault contract, and while you

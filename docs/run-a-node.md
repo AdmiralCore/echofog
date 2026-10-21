@@ -10,6 +10,11 @@ the headless node.
 > organization, and it has not been tested against a real national DPI. Do not put more TON into a
 > node's wallet than you are ready to lose.
 
+What a public node is protected against (floods, free identities, amplification, a full disk) and
+how to tune it is explained in [Protecting a node](node-security.md); the flags are in the sections
+[Connections and bans](#connections-and-bans), [Built-in limits against abuse](#built-in-limits-against-abuse)
+and [Relay and exit limits](#relay-and-exit-limits) below.
+
 ## Pick a role
 
 | Role | How to turn it on | What it does | Bandwidth |

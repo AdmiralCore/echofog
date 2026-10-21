@@ -162,6 +162,21 @@ ECHOFOG_CAMOUFLAGE_ADDR=<site IP>:443
 
 Details: [Anti-DPI](anti-dpi.md).
 
+## Hardening
+
+The setup above already runs the node in the server role (`ECHOFOG_ROLE=server`): no chat, calls or
+file transfer, only what a relay and an exit need. Limits against floods, free identities and abuse
+are on by default. Two things are worth setting yourself in `deploy/.env`:
+
+- `ECHOFOG_RELAY_MBPS` below your plan's uplink, so relayed traffic leaves room for the exit and
+  the node itself;
+- `ECHOFOG_WS_CLIENT_IP_HEADER=CF-Connecting-IP` if WebSocket goes through Cloudflare and its port
+  is reachable only through the CDN.
+
+Keep only the node's port open in the provider's firewall. What each protection does, how to see it
+in `status` and the log, and what it does not cover (a flood that fills the uplink needs the
+provider's DDoS protection): [Protecting a node](node-security.md).
+
 ## Update
 
 ```bash

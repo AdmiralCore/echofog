@@ -69,6 +69,16 @@ Everything else goes through. A public exit is published to the network so other
 hidden one is not, and serves only the people you give a link to (see
 [Hidden and isolated nodes](hidden-nodes.md)). Your own log can contain addresses that failed to connect. More in [run-a-node.md](run-a-node.md).
 
+## Can someone overload or attack my node?
+
+They can try, and the node defends itself. Making a new identity is free, so it counts addresses
+as well: at most so many peers and identities from one address or subnet, bans for peers that
+misbehave, a proof of work for strangers on a server, budgets so that a small request never makes
+the node send a lot, and limits on what anyone can take from the relay and the exit. On a VPS the
+server role also turns off chat, calls and file transfer, which a relay does not need. What no node
+can stop on its own is a flood bigger than its connection: that needs the provider's DDoS
+protection. Details in [Protecting a node](node-security.md).
+
 ## Why TON? Is there a token?
 
 There is **no EchoFog token**. Payments use TON and USDT on the TON network, because transfers

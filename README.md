@@ -26,6 +26,7 @@ no commission.
 | get quick, honest answers (safety, logs, legal risk of sharing) | [FAQ](docs/faq.md) |
 | run a node on a server or at home | [Run a node](docs/run-a-node.md) |
 | put a node on a VPS with Docker, step by step | [VPS with Docker](docs/deploy-vps.md) |
+| protect a public node from floods, fake identities and abuse | [Protecting a node](docs/node-security.md) |
 | run an exit only for the people you invite | [Hidden and isolated nodes](docs/hidden-nodes.md) |
 | fix "this computer cannot be reached from the Internet" | [Reachability](docs/reachability.md) |
 | understand how it works under the hood | [How it works](docs/how-it-works.md) |
