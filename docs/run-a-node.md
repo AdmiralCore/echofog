@@ -235,3 +235,17 @@ A node at home works for itself, but to serve others as a relay or public exit i
 from the Internet. See [reachability.md](reachability.md). A **hidden** exit is the exception: it
 serves the people it invited from behind a router, through the relays named in its link (see
 [Hidden and isolated nodes](hidden-nodes.md)).
+
+## Built-in limits against abuse
+
+A peer ID costs nothing to make, so every limit below holds for all peers together, not only per
+peer. The defaults suit a VPS; none needs setting.
+
+| What | Limit |
+| --- | --- |
+| Speed probes other peers ask for (12 MB each) | one per peer every 5 s, two at once, 48 MB a minute in all. `--bwprobe-mb-per-min` changes the budget (below 12 turns answering off); `--no-bwprobe-serve` turns it off. Measuring exits yourself is not affected. |
+| Peer lists | answered only to the connected peer asking, at most 16 peers, once per peer every 10 s, 120 answers a minute; lists are taken in only when this node asked, and only public addresses |
+| Known-peer store | peers only heard of are no longer saved past 2000 entries |
+| Offline messages | expired ones are purged every 10 minutes and stop counting against quotas; at most 100 000 recipients remembered |
+| DHT records | deleted when their own TTL ends; at most 10 000 held and 5000 new ones an hour |
+| Prekeys handed out on request | unused ones go after 72 hours; at most 2048 kept, oldest first out |

@@ -19,6 +19,10 @@ const (
 	// DefaultRecipientSeenTTL is how long after a peer last used this relay we keep accepting
 	// offline messages addressed to it.
 	DefaultRecipientSeenTTL = 24 * time.Hour
+	// MaxSeenRecipients bounds the table of recipients that used this relay.
+	MaxSeenRecipients = 100000
+	// CleanupInterval is how often the node purges expired items (see CleanupExpired).
+	CleanupInterval = 10 * time.Minute
 )
 
 var (
@@ -101,6 +105,7 @@ type MailboxManager struct {
 	bySender    map[types.PeerID]*usage // live tally per sender
 	totalBytes  int64
 	totalCount  int
+	lastPurge   int64 // unix second of the last purgeExpiredLocked
 
 	seenMu sync.Mutex
 	seen   map[types.PeerID]int64 // recipient -> unix time it last used this relay
@@ -132,9 +137,34 @@ func (m *MailboxManager) GetLimits() MailboxLimits {
 // NoteRecipientSeen records that a peer used this relay (connected or registered), so messages may
 // be kept for it while it is offline.
 func (m *MailboxManager) NoteRecipientSeen(id types.PeerID) {
+	now := time.Now().Unix()
+	ttl := m.GetLimits().RecipientSeenTTL
 	m.seenMu.Lock()
-	m.seen[id] = time.Now().Unix()
-	m.seenMu.Unlock()
+	defer m.seenMu.Unlock()
+	if _, ok := m.seen[id]; !ok && len(m.seen) >= MaxSeenRecipients {
+		// peer IDs are free: a full table first drops who is past the TTL, then anybody, down to
+		// 90% so that the walk is not repeated on every new recipient
+		m.pruneSeenLocked(now, ttl)
+		for k := range m.seen {
+			if len(m.seen) < MaxSeenRecipients*9/10 {
+				break
+			}
+			delete(m.seen, k)
+		}
+	}
+	m.seen[id] = now
+}
+
+// pruneSeenLocked forgets recipients last seen more than ttl ago. Caller holds m.seenMu.
+func (m *MailboxManager) pruneSeenLocked(now int64, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	for k, last := range m.seen {
+		if now-last > int64(ttl.Seconds()) {
+			delete(m.seen, k)
+		}
+	}
 }
 
 func (m *MailboxManager) recipientSeen(id types.PeerID, ttl time.Duration) bool {
@@ -245,35 +275,11 @@ func (m *MailboxManager) removeLocked(key string) {
 	}
 }
 
-// Store saves an offline message/notification with a TTL and quota validation.
-func (m *MailboxManager) Store(item MailboxItem) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureLoadedLocked()
+func (md meta) expired(now int64) bool { return md.expiresAt > 0 && md.expiresAt < now }
 
-	limits := m.limits
-	itemSize := int64(len(item.Payload))
-
-	// 1. Single item size limit
-	if limits.MaxItemSizeBytes > 0 && itemSize > limits.MaxItemSizeBytes {
-		return ErrItemTooLarge
-	}
-
-	// 2. Only keep messages for recipients that recently used this relay.
-	if limits.RequireRecipientSeen && !m.recipientSeen(item.RecipientID, limits.RecipientSeenTTL) {
-		return ErrRecipientUnknown
-	}
-
-	// 3. Derive the storage id server-side so the sender cannot overwrite another peer's item.
-	item.ID = storageID(item.SenderID, item.Payload)
-	key := string(m.makeKey(item.RecipientID, item.ID))
-
-	// An identical resubmission (same sender + payload for the same recipient) is already stored;
-	// refresh its bytes on disk but do not double-count.
-	if _, exists := m.index[key]; exists {
-		return nil
-	}
-
+// quotaLocked checks the per-recipient, per-sender and node-wide quotas for one more item.
+// Caller holds m.mu.
+func (m *MailboxManager) quotaLocked(limits MailboxLimits, item MailboxItem, itemSize int64) error {
 	// 4. Per-recipient quotas (count and bytes).
 	if r := m.byRecipient[item.RecipientID]; r != nil {
 		if limits.MaxMessagesPerPeer > 0 && r.count >= limits.MaxMessagesPerPeer {
@@ -301,8 +307,67 @@ func (m *MailboxManager) Store(item MailboxItem) error {
 	if limits.MaxTotalStorageBytes > 0 && m.totalBytes+itemSize > limits.MaxTotalStorageBytes {
 		return ErrMailboxFull
 	}
+	return nil
+}
 
+// purgeExpiredLocked removes every item past its expiry, going by the in-memory index, and
+// returns how many. Caller holds m.mu.
+func (m *MailboxManager) purgeExpiredLocked(now int64) int {
+	m.lastPurge = now
+	purged := 0
+	for key, md := range m.index {
+		if md.expired(now) {
+			m.removeLocked(key)
+			purged++
+		}
+	}
+	return purged
+}
+
+// Store saves an offline message/notification with a TTL and quota validation.
+func (m *MailboxManager) Store(item MailboxItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
+
+	limits := m.limits
+	itemSize := int64(len(item.Payload))
+
+	// 1. Single item size limit
+	if limits.MaxItemSizeBytes > 0 && itemSize > limits.MaxItemSizeBytes {
+		return ErrItemTooLarge
+	}
+
+	// 2. Only keep messages for recipients that recently used this relay.
+	if limits.RequireRecipientSeen && !m.recipientSeen(item.RecipientID, limits.RecipientSeenTTL) {
+		return ErrRecipientUnknown
+	}
+
+	// 3. Derive the storage id server-side so the sender cannot overwrite another peer's item.
+	item.ID = storageID(item.SenderID, item.Payload)
+	key := string(m.makeKey(item.RecipientID, item.ID))
+
+	// An identical resubmission (same sender + payload for the same recipient) is already stored;
+	// refresh its bytes on disk but do not double-count.
 	now := time.Now().Unix()
+	if md, exists := m.index[key]; exists {
+		if !md.expired(now) {
+			return nil
+		}
+		m.removeLocked(key) // expired: store it afresh
+	}
+
+	// 4-6. Quotas. Items past their expiry count against none: when one would refuse, the expired
+	// items are purged first and the quotas checked again.
+	// The purge walks the whole index, so a sender held at its quota gets at most one a second.
+	err := m.quotaLocked(limits, item, itemSize)
+	if err != nil && now != m.lastPurge && m.purgeExpiredLocked(now) > 0 {
+		err = m.quotaLocked(limits, item, itemSize)
+	}
+	if err != nil {
+		return err
+	}
+
 	if item.CreatedAt == 0 {
 		item.CreatedAt = now
 	}
@@ -373,35 +438,19 @@ func (m *MailboxManager) Acknowledge(recipient types.PeerID, itemIDs []string) e
 	return nil
 }
 
-// CleanupExpired scans and purges all expired messages across all recipients.
+// CleanupExpired purges all expired messages across all recipients, and forgets recipients that
+// have not used this relay within RecipientSeenTTL. The node runs it every CleanupInterval.
 func (m *MailboxManager) CleanupExpired() (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureLoadedLocked()
-
-	prefix := []byte(MailboxPrefix)
-	entries, err := m.store.FindValues(prefix, 0)
-	if err != nil {
-		return 0, err
-	}
-
 	now := time.Now().Unix()
-	purged := 0
+	m.mu.Lock()
+	m.ensureLoadedLocked()
+	purged := m.purgeExpiredLocked(now)
+	ttl := m.limits.RecipientSeenTTL
+	m.mu.Unlock()
 
-	for _, entry := range entries {
-		var item MailboxItem
-		if err := json.Unmarshal(entry.Value, &item); err != nil {
-			m.removeLocked(string(entry.Key))
-			purged++
-			continue
-		}
-
-		if item.ExpiresAt > 0 && item.ExpiresAt < now {
-			m.removeLocked(string(entry.Key))
-			purged++
-		}
-	}
-
+	m.seenMu.Lock()
+	m.pruneSeenLocked(now, ttl)
+	m.seenMu.Unlock()
 	return purged, nil
 }
 

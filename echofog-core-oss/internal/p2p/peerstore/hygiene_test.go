@@ -152,3 +152,32 @@ func TestSaveDiscoveredKeepsWhatWeKnow(t *testing.T) {
 		t.Fatalf("history has %d entries, want the 2 valid ones", n)
 	}
 }
+
+func TestSaveDiscoveredStopsAtTheCap(t *testing.T) {
+	st, cleanup := createTestStorage(t)
+	defer cleanup()
+	ps := NewPeerStore(st, nil)
+	defer ps.Close()
+
+	ps.stored, ps.countAt = MaxStored-1, time.Now()
+	pub, _ := randomPubKey(t)
+	if !ps.SaveDiscovered(pub, "203.0.113.9:1") {
+		t.Fatal("room for one more")
+	}
+	pub2, _ := randomPubKey(t)
+	if ps.SaveDiscovered(pub2, "203.0.113.10:1") {
+		t.Fatal("a full store takes in no more peers it only heard of")
+	}
+	pub3, id3 := randomPubKey(t)
+	if err := ps.SavePeer(pub3, "203.0.113.11:1", 50); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.GetPeer(id3); err != nil {
+		t.Fatal("a peer we connected to is saved whatever the cap")
+	}
+	ps.Prune(time.Now())
+	pub4, _ := randomPubKey(t)
+	if !ps.SaveDiscovered(pub4, "203.0.113.12:1") {
+		t.Fatal("after a prune the store is counted again and has room")
+	}
+}

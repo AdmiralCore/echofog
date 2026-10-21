@@ -43,6 +43,8 @@ type options struct {
 	stunServers          string
 	noPortMapping        bool
 	noHolePunch          bool
+	noBWProbe            bool
+	bwProbeMBPerMin      int
 
 	relay            bool
 	relayPrivate     bool
@@ -97,6 +99,8 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.stunServers, "stun-servers", getEnv("ECHOFOG_STUN_SERVERS", ""), "comma-separated STUN servers (default: a built-in list)")
 	f.BoolVar(&o.noPortMapping, "no-port-mapping", envBool("ECHOFOG_NO_PORT_MAPPING", false), "do not ask the router to forward our port (UPnP / NAT-PMP)")
 	f.BoolVar(&o.noHolePunch, "no-hole-punch", envBool("ECHOFOG_NO_HOLE_PUNCH", false), "do not try direct connections between peers behind NATs")
+	f.BoolVar(&o.noBWProbe, "no-bwprobe-serve", envBool("ECHOFOG_NO_BWPROBE_SERVE", false), "do not answer other peers' download speed probes (12 MB bursts)")
+	f.IntVar(&o.bwProbeMBPerMin, "bwprobe-mb-per-min", int(envInt64("ECHOFOG_BWPROBE_MB_PER_MIN", 0)), "most MB a minute this node sends answering speed probes, all peers together (0 = 48)")
 
 	f.BoolVar(&o.relay, "relay", envBool("ECHOFOG_RELAY", true), "relay calls and messages for peers that cannot reach each other directly, and keep messages for offline peers")
 	f.BoolVar(&o.relayPrivate, "relay-private", envBool("ECHOFOG_RELAY_PRIVATE", false), "make the relay private: it is not advertised and serves only the peers listed in --relay-allow")
@@ -170,6 +174,8 @@ func (o options) config() *config.AppConfig {
 	if o.noHolePunch {
 		cfg.Network.HolePunch = false
 	}
+	cfg.Network.NoBWProbeServe = o.noBWProbe
+	cfg.Network.BWProbeMBPerMin = o.bwProbeMBPerMin
 	if o.obfs != "" {
 		cfg.AntiDPI.Obfs = o.obfs
 	}

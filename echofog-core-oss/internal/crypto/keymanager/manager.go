@@ -57,6 +57,10 @@ type AccountManager struct {
 	mu         sync.Mutex
 	storageKey *memguard.Enclave
 	lastPurge  time.Time
+
+	opkMu      sync.Mutex // the count of one-time prekeys handed out on request
+	jitCount   int
+	jitCounted bool
 }
 
 func NewKeyManagerWithMnemonic(mnemonic []byte, passphrase []byte, storage storage.Storage) (*KeyManager, error) {
