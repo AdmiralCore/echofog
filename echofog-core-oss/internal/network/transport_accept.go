@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -64,6 +65,10 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 
 			peerRes, err := q.authenticator.AuthenticateInbound(ctx, WrapQUIC(c))
 			if err != nil {
+				if errors.Is(err, handshake.ErrPeerRefused) {
+					c.CloseWithError(ErrCodeSpamDetected, "full") // the node is full, the peer did nothing wrong
+					return
+				}
 				q.guard.Load().Fail(ip)
 				c.CloseWithError(ErrCodeAuthFailed, "auth failed")
 				q.logger.Debug("QuicTransport inbound authentication error", "err", err, "remote", c.RemoteAddr())
@@ -73,7 +78,7 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 
 			addr, dialable := inboundListenAddr(c.RemoteAddr().String(), peerRes.ListenPort)
 			q.newConn(c, false, addr, dialable, peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
-			q.logger.Info("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "inbound", "remote_addr", c.RemoteAddr().String())
+			q.logger.Debug("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "inbound", "remote_addr", c.RemoteAddr().String())
 		}(conn)
 	}
 }
@@ -102,6 +107,7 @@ func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, dialab
 		PeerID:     PeerID,
 		Addr:       addr,
 		PeerPubKey: PeerPubKey,
+		RemoteIP:   addrOfNet(conn.RemoteAddr()),
 	}
 	select {
 	case q.connChan <- ev:

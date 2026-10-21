@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/abuse"
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
@@ -39,6 +40,46 @@ type SessionManager struct {
 	sender SessionResponseSender
 
 	ctx context.Context
+
+	report func(types.PeerID, abuse.Reason) // misbehaving peers go here (the swarm); may be nil
+}
+
+// Limits on sessions peers open towards this node.
+const (
+	MaxSessionsPerPeer = 16
+	MaxSessions        = 512
+	MaxStreamsPerSess  = 32
+)
+
+var (
+	errSessionsFull     = errors.New("too many sessions")
+	errSessionDuplicate = errors.New("session id in use")
+)
+
+func (sm *SessionManager) reportPeer(id types.PeerID, r abuse.Reason) {
+	if sm.report != nil {
+		sm.report(id, r)
+	}
+}
+
+// admitIncoming checks, under sm.mu, that a peer may open one more session with this ID.
+func (sm *SessionManager) admitIncomingLocked(sid types.SessionID, peerID types.PeerID) error {
+	if _, taken := sm.sessions[sid]; taken {
+		// never replace a session, least of all one of another peer
+		return errSessionDuplicate
+	}
+	if len(sm.sessions) >= MaxSessions {
+		return errSessionsFull
+	}
+	n := 0
+	for _, s := range sm.sessions {
+		if s.PeerID == peerID && !s.IsOutgoing {
+			if n++; n >= MaxSessionsPerPeer {
+				return errSessionsFull
+			}
+		}
+	}
+	return nil
 }
 
 func NewSessionManager() *SessionManager {
@@ -186,6 +227,16 @@ func (sm *SessionManager) AddStream(sessionID types.SessionID, stream *network.S
 	if !ok {
 		return false
 	}
+	// a stream joins only a session with the peer it came from, and only so many
+	if stream != nil && stream.RemoteID != transfer.PeerID {
+		return false
+	}
+	transfer.Mu.Lock()
+	full := len(transfer.Streams) >= MaxStreamsPerSess
+	transfer.Mu.Unlock()
+	if full {
+		return false
+	}
 
 	if stream != nil && transfer.IsOutgoing {
 		err := stream.WriteFrame(net_types.TypeSessionData, sessionID[:])
@@ -237,6 +288,7 @@ func (sm *SessionManager) HandleDagSessionReq(msg *internal_pb.MessageData, peer
 
 	resp, err := sm.prepareSessionAndGetResponse(req.SessionId, peerID, req.DesiredStreams, SessionImportanceLow)
 	if err != nil {
+		sm.reportPeer(peerID, abuse.Refused)
 		return 0, nil, err
 	}
 
@@ -265,7 +317,14 @@ func (sm *SessionManager) prepareSessionAndGetResponse(sidBinary []byte, peerID 
 
 	ses := NewSession(sm.ctx, [16]byte(sessionID), SessionTypeDag, peerID, false)
 
-	sm.AddSession([16]byte(sessionID), ses)
+	sm.mu.Lock()
+	if err := sm.admitIncomingLocked([16]byte(sessionID), peerID); err != nil {
+		sm.mu.Unlock()
+		ses.Cancel()
+		return nil, err
+	}
+	sm.sessions[[16]byte(sessionID)] = ses
+	sm.mu.Unlock()
 
 	sm.mu.RLock()
 	handler, ok := sm.handlers[SessionTypeDag]

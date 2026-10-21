@@ -69,6 +69,11 @@ type options struct {
 	statusAddr string
 	statsEvery time.Duration
 	logLevel   string
+
+	maxPeers, maxConnections      int
+	maxPeersPerIP, maxPeersPerNet int
+	maxIDsPerIP, maxIDsPerNet     int
+	wsClientIPHeader              string
 }
 
 func parseRunFlags(args []string) options {
@@ -127,6 +132,14 @@ func parseRunFlags(args []string) options {
 	every, _ := time.ParseDuration(getEnv("ECHOFOG_STATS_EVERY", "1m"))
 	f.DurationVar(&o.statsEvery, "stats-every", every, "how often to log a line with peers, relayed traffic and earnings (0 = never)")
 	f.StringVar(&o.logLevel, "log-level", getEnv("ECHOFOG_LOG_LEVEL", "info"), "debug, info, warn or error")
+
+	f.IntVar(&o.maxPeers, "max-peers", int(envInt64("ECHOFOG_MAX_PEERS", 0)), "most peers connected to this node by their own dial (0 = default: 256, 2048 on a server; -1 = no limit)")
+	f.IntVar(&o.maxConnections, "max-connections", int(envInt64("ECHOFOG_MAX_CONNECTIONS", 0)), "how many peers the node dials by itself (0 = default: 100)")
+	f.IntVar(&o.maxPeersPerIP, "max-peers-per-ip", int(envInt64("ECHOFOG_MAX_PEERS_PER_IP", 0)), "most peers connected from one address at once (0 = default: 16; -1 = no limit)")
+	f.IntVar(&o.maxPeersPerNet, "max-peers-per-subnet", int(envInt64("ECHOFOG_MAX_PEERS_PER_SUBNET", 0)), "most peers connected from one /24 or IPv6 /56 at once (0 = default: 64; -1 = no limit)")
+	f.IntVar(&o.maxIDsPerIP, "max-ids-per-ip", int(envInt64("ECHOFOG_MAX_IDS_PER_IP", 0)), "most different peer IDs one address may connect with in 10 minutes (0 = default: 32; -1 = no limit)")
+	f.IntVar(&o.maxIDsPerNet, "max-ids-per-subnet", int(envInt64("ECHOFOG_MAX_IDS_PER_SUBNET", 0)), "the same per /24 or IPv6 /56 (0 = default: 128; -1 = no limit)")
+	f.StringVar(&o.wsClientIPHeader, "ws-client-ip-header", getEnv("ECHOFOG_WS_CLIENT_IP_HEADER", ""), "header the CDN in front of --ws-listen puts the client address in (CF-Connecting-IP for Cloudflare), so limits count WebSocket peers by their own address; only when the listener is reachable through the CDN alone")
 	f.Usage = func() {
 		fmt.Fprintln(f.Output(), "Usage: echofog-node run [flags]\n\nStarts the node. Without an identity in the data directory it creates one and prints the\nrecovery phrase (or restores one with --mnemonic-file).")
 		f.PrintDefaults()
@@ -220,6 +233,15 @@ func (o options) config() *config.AppConfig {
 		cfg.Access.Secret = strings.TrimSpace(string(raw))
 	}
 	cfg.Access.PublicAddrs = splitCSV(o.publicAddrs)
+	if o.maxConnections > 0 {
+		cfg.Network.MaxConnections = o.maxConnections
+	}
+	cfg.Network.MaxInboundPeers = o.maxPeers
+	cfg.Network.MaxPeersPerIP = o.maxPeersPerIP
+	cfg.Network.MaxPeersPerSubnet = o.maxPeersPerNet
+	cfg.Network.MaxIDsPerIP = o.maxIDsPerIP
+	cfg.Network.MaxIDsPerSubnet = o.maxIDsPerNet
+	cfg.Network.WSClientIPHeader = o.wsClientIPHeader
 	return cfg
 }
 

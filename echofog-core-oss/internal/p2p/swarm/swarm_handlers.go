@@ -2,10 +2,10 @@ package swarm
 
 import (
 	"errors"
-	"log/slog"
 
 	"time"
 
+	"github.com/echofog/echofog-core/internal/abuse"
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/network/router"
@@ -164,23 +164,28 @@ func (s *Swarm) executeRPC(msgType net_types.MessageType, payload []byte, stream
 
 	stream.SetDeadline(time.Now().Add(30 * time.Second))
 
+	// a request comes over the peer's own connection and must be signed by it, so whatever is
+	// wrong with it is the peer's doing; logs stay at debug level, a peer must not fill them
 	var env internal_pb.Envelope
 	if err := proto.Unmarshal(payload, &env); err != nil {
+		s.ReportPeer(peerID, abuse.BadFrame)
 		return
 	}
 
 	if !s.CheckSign(&env) {
-		slog.Warn("RPC: Invalid signature")
+		s.log().Debug("RPC: invalid signature", "peer", peerID.String())
+		s.ReportPeer(peerID, abuse.BadSignature)
 		return
 	}
 
 	var msg internal_pb.MessageData
 	if err := proto.Unmarshal(env.Data, &msg); err != nil {
+		s.ReportPeer(peerID, abuse.BadFrame)
 		return
 	}
-	// the request comes over the peer's own connection: it must be signed by that peer
 	if types.PeerPubKeyToID(types.PeerPublicKey(env.PubKey)) != peerID {
-		slog.Warn("RPC: request not signed by the peer that sent it")
+		s.log().Debug("RPC: request not signed by the peer that sent it", "peer", peerID.String())
+		s.ReportPeer(peerID, abuse.BadSignature)
 		return
 	}
 
@@ -189,13 +194,14 @@ func (s *Swarm) executeRPC(msgType net_types.MessageType, payload []byte, stream
 	s.rpcMu.RUnlock()
 
 	if !exists {
-		slog.Warn("RPC: No handler for", "type", msgType)
+		s.log().Debug("RPC: no handler", "type", msgType, "peer", peerID.String())
+		s.ReportPeer(peerID, abuse.Refused)
 		return
 	}
 
 	respType, respMsg, err := handler(&msg, peerID)
 	if err != nil || respMsg == nil {
-		slog.Error("RPC: Handler failed", "err", err)
+		s.log().Debug("RPC: handler failed", "type", msgType, "peer", peerID.String(), "err", err)
 		return
 	}
 

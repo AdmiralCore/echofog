@@ -262,7 +262,9 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 		releaseSlot()
 		_ = mc.CloseWithError(ErrCodeAuthFailed, "auth failed")
 		t.logger.Debug("TCP inbound authentication failed", "remote", raw.RemoteAddr(), "err", err)
-		t.guard.Load().Fail(ip) // a failed handshake from a holder of a valid token
+		if !errors.Is(err, handshake.ErrPeerRefused) {
+			t.guard.Load().Fail(ip) // a failed handshake from a holder of a valid token
+		}
 		return
 	}
 	t.guard.Load().Success(ip)
@@ -277,8 +279,8 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	}
 	cancel()
 	_ = raw.SetDeadline(time.Time{})
-	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: dialable, Caps: res.Caps})
-	t.logger.Info("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "inbound", "remote_addr", raw.RemoteAddr().String())
+	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: dialable, Caps: res.Caps, RemoteIP: ip})
+	t.logger.Debug("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "inbound", "remote_addr", raw.RemoteAddr().String())
 }
 
 // forwardIdleTimeout bounds the forwarded (camouflage) path by inactivity, reset on every read or
@@ -364,7 +366,7 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		return err
 	}
 	_ = raw.SetDeadline(time.Time{})
-	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: true, Caps: res.Caps})
+	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: true, Caps: res.Caps, RemoteIP: addrOfNet(raw.RemoteAddr())})
 	t.logger.Info("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "outbound", "remote_addr", addr)
 	return nil
 }

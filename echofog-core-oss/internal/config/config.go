@@ -133,6 +133,19 @@ type NetworkConfig struct {
 	// every other.
 	NoAutoDial bool `json:"no_auto_dial"`
 
+	// Limits on the peers that connect to this node; 0 is the default, -1 no limit (see "Connections
+	// and bans" in docs/run-a-node.md). MaxConnections above is how many peers the node dials by
+	// itself; these bound what others open towards it.
+	MaxInboundPeers   int `json:"max_inbound_peers,omitempty"`    // default 256, 2048 on a server
+	MaxPeersPerIP     int `json:"max_peers_per_ip,omitempty"`     // at once from one address (16)
+	MaxPeersPerSubnet int `json:"max_peers_per_subnet,omitempty"` // from one /24 or IPv6 /56 (64)
+	MaxIDsPerIP       int `json:"max_ids_per_ip,omitempty"`       // different peer IDs per address in 10 minutes (32)
+	MaxIDsPerSubnet   int `json:"max_ids_per_subnet,omitempty"`   // and per subnet (128)
+	// WSClientIPHeader names the header a CDN puts the client's address in (CF-Connecting-IP for
+	// Cloudflare), so the limits count WebSocket peers by their own address and not the CDN's.
+	// Set it only when the WebSocket listener is reachable through the CDN alone.
+	WSClientIPHeader string `json:"ws_client_ip_header,omitempty"`
+
 	// WSListenAddr makes the node reachable over WebSocket, so it can sit behind a CDN such as
 	// Cloudflare (the CDN forwards the WebSocket to this address). Empty disables the listener;
 	// the node can still dial ws:// peers without it. Peers reach it at ws(s)://host:port<ws_path>.

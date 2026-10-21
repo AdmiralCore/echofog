@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/netip"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/network/handshake"
 
@@ -37,6 +39,11 @@ type Peer struct {
 
 	caps atomic.Uint32 // what the peer announced it offers (handshake.Capability)
 
+	ip             netip.Addr   // where an inbound peer connected from (limits and bans count against it)
+	connectedAt    time.Time    // a long-lived peer is kept when the node is full
+	release        func()       // gives back its place in the per-address limits; nil for outbound
+	pendingStreams atomic.Int32 // streams it opened whose first frame has not come yet
+
 	dispatcher *dispatcher.Dispatcher
 }
 
@@ -44,14 +51,15 @@ func NewPeer(ctx context.Context, peerPubKey types.PeerPublicKey, dispatcher *di
 	ctx, cancel := context.WithCancel(ctx)
 
 	return &Peer{
-		id:         types.PeerPubKeyToID(peerPubKey),
-		pubKey:     peerPubKey,
-		addr:       addr,
-		isOut:      isOut,
-		sendChan:   make(chan *internal_pb.Envelope, 100),
-		ctx:        ctx,
-		cancel:     cancel,
-		dispatcher: dispatcher,
+		id:          types.PeerPubKeyToID(peerPubKey),
+		pubKey:      peerPubKey,
+		addr:        addr,
+		isOut:       isOut,
+		sendChan:    make(chan *internal_pb.Envelope, 100),
+		ctx:         ctx,
+		cancel:      cancel,
+		dispatcher:  dispatcher,
+		connectedAt: time.Now(),
 	}
 }
 

@@ -36,7 +36,14 @@ type NegotiatorConfig struct {
 	// AccessProof, when set, gives the proof to send when dialing: the secret of the node being
 	// dialed, bound to this connection, or nil when there is none.
 	AccessProof func(binding, nonce, myPub []byte) []byte
+	// Screen, when set, looks at an inbound peer's claimed key before this node signs anything for
+	// it: it may ask a puzzle of at least minBits (a server asks strangers for one), or refuse the
+	// peer outright when the node is full (ErrPeerRefused). The key is not proven yet.
+	Screen ScreenFunc
 }
+
+// ScreenFunc decides what an inbound peer must do to be let in, by the key it claims.
+type ScreenFunc func(initiatorPub types.PeerPublicKey) (minBits uint32, refuse bool)
 
 type SignerGetterKey interface {
 	GetPublicKey() ([]byte, error)
@@ -81,6 +88,8 @@ var (
 	// ErrAccessDenied: this node is hidden and the peer neither proved the access secret nor is
 	// one it knows. The peer is told nothing.
 	ErrAccessDenied = errors.New("peer has no access to this node")
+	// ErrPeerRefused: the node is full and lets in only peers it knows; the peer did nothing wrong.
+	ErrPeerRefused = errors.New("node is full")
 )
 
 // transcript is what each side signs: the role, the transport's channel binding (TLS exporter,
@@ -242,6 +251,18 @@ func (n *Negotiator) runResponderFlow(binding []byte) (*HandshakeResult, error) 
 	difficulty := n.antiDDoS.GetDifficulty()
 	if n.config.RequirePoW && difficulty < minPoWBits {
 		difficulty = minPoWBits
+	}
+	if n.config.Screen != nil {
+		minBits, refuse := n.config.Screen(peerPub)
+		if refuse {
+			return nil, ErrPeerRefused
+		}
+		if minBits > maxPuzzleDifficulty {
+			minBits = maxPuzzleDifficulty
+		}
+		if difficulty < minBits {
+			difficulty = minBits
+		}
 	}
 	if difficulty > 0 {
 		prefix, _ := n.IssueChallenge()

@@ -2,9 +2,11 @@ package swarm
 
 import (
 	"bytes"
+	"net/netip"
 
 	"time"
 
+	"github.com/echofog/echofog-core/internal/abuse"
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/network/router"
@@ -33,6 +35,12 @@ func (s *Swarm) keepDialedBy(isOut bool, remote types.PeerID) bool {
 // AddPeer records an authenticated connection as an active peer, wiring up its read loops and
 // notifying observers. An existing connection to the same peer is replaced.
 func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool) *Peer {
+	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil)
+}
+
+// addPeer is AddPeer for a connection that came from ip and holds a place in the per-address
+// limits, which release gives back once the peer is gone (both may be zero).
+func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func()) *Peer {
 
 	s.mu.Lock()
 	if old, exists := s.activePeers[peerID]; exists {
@@ -41,6 +49,9 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			// otherwise each could close the one the other kept and lose both
 			s.mu.Unlock()
 			_ = conn.CloseWithError(network.ErrCodeNormalClose, "duplicate connection")
+			if release != nil {
+				release()
+			}
 			return nil
 		}
 		old.Close()
@@ -53,6 +64,8 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	}
 	p := NewPeer(s.ctx, peerPubKey, s.dispatcher, advertised, isOut)
 	p.txBytes = &s.bytesTx
+	p.ip = ip
+	p.release = release
 	pw := network.NewPeerWrapper(p.ctx, conn, peerID)
 
 	if s.peerStore != nil && dialable {
@@ -98,9 +111,23 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	})
 
 	pw.OnNewStream(func(stream *network.Stream) {
+		if !s.acquireStream(p) {
+			stream.Close()
+			s.ReportPeer(peerID, abuse.Flood)
+			return
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer s.lim.streams.Add(-1)
+			pending := true
+			firstFrame := func() {
+				if pending {
+					pending = false
+					p.pendingStreams.Add(-1)
+				}
+			}
+			defer firstFrame()
 			defer func() {
 				if r := recover(); r != nil {
 					s.logger.Error("Swarm: panic in OnNewStream handler", "peer", peerID.String(), "panic", r)
@@ -118,6 +145,7 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			stream.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 			msgType, payload, err := stream.ReadFrame()
+			firstFrame()
 			if err != nil {
 				stream.Close()
 				return
@@ -132,6 +160,7 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			case net_types.TypeSessionData:
 				if len(payload) > 16 {
 					stream.Close()
+					s.ReportPeer(peerID, abuse.BadFrame)
 					return
 				}
 				var sessionID types.SessionID
@@ -142,6 +171,7 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 					stream.StartLoops()
 				} else {
 					stream.Close()
+					s.ReportPeer(peerID, abuse.Refused)
 				}
 
 			case net_types.TypeLocalPublicKeyBundleRequest:
@@ -221,6 +251,10 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 		obs := s.observers
 		s.mu.Unlock()
 		p.Close()
+		s.noteLongLived(p)
+		if p.release != nil {
+			p.release()
+		}
 		if current {
 			s.notifyPeerDisconnected(obs, peerID)
 			s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})

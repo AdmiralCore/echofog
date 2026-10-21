@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/access"
@@ -46,6 +48,10 @@ type WSTransport struct {
 	logger *slog.Logger
 
 	upgrader websocket.Upgrader
+
+	sem      chan struct{}                   // handshakes in flight, as for TCP
+	guard    atomic.Pointer[handshake.Guard] // per-address limits, shared with the other transports
+	ipHeader atomic.Pointer[string]          // header naming the client behind a CDN (SetClientIPHeader)
 }
 
 // NewWSTransport makes a WebSocket transport that upgrades requests on path. cert is presented only
@@ -56,12 +62,13 @@ func NewWSTransport(cert tls.Certificate, cfg *mimicry.MimicryConfig, auth PeerA
 		path = "/"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &WSTransport{
+	t := &WSTransport{
 		cfg:       cfg,
 		serverTLS: mimicry.BuildServerTLSConfig(cert),
 		auth:      auth,
 		path:      path,
 		connChan:  make(chan NewConnEvent, 32),
+		sem:       make(chan struct{}, tcpMaxHandshakes),
 		ctx:       ctx,
 		cancel:    cancel,
 		logger:    slog.Default().With("component", "ws_transport"),
@@ -72,6 +79,53 @@ func NewWSTransport(cert tls.Certificate, cfg *mimicry.MimicryConfig, auth PeerA
 			CheckOrigin:      func(*http.Request) bool { return true },
 		},
 	}
+	t.guard.Store(handshake.NewGuard(handshake.GuardConfig{}))
+	return t
+}
+
+// SetGuard replaces the per-address limits of inbound connections; a node shares one Guard
+// between all its transports.
+func (t *WSTransport) SetGuard(g *handshake.Guard) {
+	if g != nil {
+		t.guard.Store(g)
+	}
+}
+
+// Guard is the per-address limiter of inbound connections.
+func (t *WSTransport) Guard() *handshake.Guard { return t.guard.Load() }
+
+// SetScreen sets the screen of inbound handshakes (see handshake.NegotiatorConfig.Screen).
+func (t *WSTransport) SetScreen(f handshake.ScreenFunc) {
+	if s, ok := t.auth.(ScreenSetter); ok {
+		s.SetScreen(f)
+	}
+}
+
+// SetClientIPHeader names the HTTP header a CDN puts the client's address in (Cloudflare:
+// CF-Connecting-IP). Behind a CDN every connection comes from one of its edge addresses, which
+// per-address limits would lump together. Set it only when the listener is reachable through the
+// CDN alone: anyone who can reach it directly can write any address into the header. Empty uses
+// the connection's own source address.
+func (t *WSTransport) SetClientIPHeader(h string) {
+	h = strings.TrimSpace(h)
+	t.ipHeader.Store(&h)
+}
+
+// clientIP is the address per-address limits count a request against.
+func (t *WSTransport) clientIP(r *http.Request) netip.Addr {
+	if h := t.ipHeader.Load(); h != nil && *h != "" {
+		v := r.Header.Get(*h)
+		if i := strings.IndexByte(v, ','); i >= 0 { // X-Forwarded-For: client, proxy1, ...
+			v = v[:i]
+		}
+		if ip, err := netip.ParseAddr(strings.TrimSpace(v)); err == nil {
+			return ip.Unmap()
+		}
+	}
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return ap.Addr().Unmap()
+	}
+	return netip.Addr{}
 }
 
 func (t *WSTransport) SetLogger(l *slog.Logger) {
@@ -139,40 +193,75 @@ func (t *WSTransport) handleRequest(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ws, err := t.upgrader.Upgrade(w, r, nil)
-	if err != nil {
+	// the same global cap on handshakes in flight as TCP; as there, it is not per address, and the
+	// per-address Guard applies only once a valid token is seen (see TCPTransport.acceptLoop)
+	select {
+	case t.sem <- struct{}{}:
+	default:
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
-	go t.handleInbound(newWSConn(ws))
+	ws, err := t.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		<-t.sem
+		return
+	}
+	ip := t.clientIP(r)
+	go func() {
+		var once sync.Once
+		release := func() { once.Do(func() { <-t.sem }) }
+		defer release()
+		t.handleInbound(newWSConn(ws), ip, release)
+	}()
 }
 
-func (t *WSTransport) handleInbound(conn net.Conn) {
+// handleInbound serves one inbound WebSocket like TCPTransport.handleInbound: a visitor without a
+// valid token is forwarded to the real site and never counted; a token holder goes through the
+// Guard, and its failed handshakes count against ip.
+func (t *WSTransport) handleInbound(conn net.Conn, ip netip.Addr, releaseSlot func()) {
 	_ = conn.SetDeadline(time.Now().Add(tcpHandshakeTimeout))
 	inner, isPeer, binding, err := mimicry.ServerHandshake(conn, t.serverTLS, t.cfg)
 	if err != nil {
+		releaseSlot()
 		_ = conn.Close()
 		return
 	}
 	if !isPeer {
-		// a visitor without a valid token is forwarded to the real site with an idle timeout, as a
-		// genuine connection would be kept; never counted or banned (the WS transport has no Guard)
+		releaseSlot()
+		// forwarded to the real site with an idle timeout, as a genuine connection would be kept
 		forwardToRealSite(inner, t.cfg)
 		return
 	}
+	guard := t.guard.Load()
+	release, allowed := guard.Allow(ip)
+	if !allowed {
+		releaseSlot()
+		_ = inner.Close()
+		return
+	}
+	defer release()
 	mc, err := NewSmuxConn(t.ctx, inner, binding, false)
 	if err != nil {
+		releaseSlot()
 		_ = inner.Close()
+		guard.Fail(ip)
 		return
 	}
 	res, err := t.auth.AuthenticateInbound(t.ctx, mc)
 	if err != nil {
+		releaseSlot()
 		_ = mc.CloseWithError(ErrCodeAuthFailed, "auth failed")
+		if !errors.Is(err, handshake.ErrPeerRefused) {
+			guard.Fail(ip)
+		}
 		return
 	}
+	guard.Success(ip)
+	releaseSlot()
 	_ = conn.SetDeadline(time.Time{})
 	// a WebSocket peer's source is the CDN or an ephemeral port; it is not dialable back as ws
-	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: conn.RemoteAddr().String(), Dialable: false, Caps: res.Caps})
-	t.logger.Info("Peer authenticated over WebSocket", "peer_id", res.PeerID, "direction", "inbound")
+	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: conn.RemoteAddr().String(), Dialable: false, Caps: res.Caps, RemoteIP: ip})
+	t.logger.Debug("Peer authenticated over WebSocket", "peer_id", res.PeerID, "direction", "inbound")
 }
 
 // Dial connects to a peer at a ws:// or wss:// URL (the peer ID is kept via ExpectPeer, as for

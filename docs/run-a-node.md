@@ -229,6 +229,48 @@ For an exit only for the people you invite, set `ECHOFOG_ACCESS=isolated` (or `h
 `docker compose -f deploy/docker-compose.yml exec node echofog-node invite`. Step by step:
 [VPS with Docker](deploy-vps.md#an-exit-only-for-the-people-you-invite).
 
+## Connections and bans
+
+A node with a public address gets connections from anyone, and a peer ID costs nothing to make. So
+the node counts addresses as well as identities, and the defaults below suit most nodes. Each limit
+has a flag and an environment variable (in the config file: the same names under `network`, e.g.
+`max_inbound_peers`); `-1` turns a limit off.
+
+| Flag | Environment | Default | Limits |
+|---|---|---|---|
+| `--max-peers` | `ECHOFOG_MAX_PEERS` | 256, 2048 on a server | peers connected to this node by their own dial |
+| `--max-connections` | `ECHOFOG_MAX_CONNECTIONS` | 100 | peers the node dials by itself |
+| `--max-peers-per-ip` | `ECHOFOG_MAX_PEERS_PER_IP` | 16 | peers from one address at once |
+| `--max-peers-per-subnet` | `ECHOFOG_MAX_PEERS_PER_SUBNET` | 64 | peers from one /24 (IPv6: /56) at once |
+| `--max-ids-per-ip` | `ECHOFOG_MAX_IDS_PER_IP` | 32 | different peer IDs from one address in 10 minutes |
+| `--max-ids-per-subnet` | `ECHOFOG_MAX_IDS_PER_SUBNET` | 128 | the same for one /24 (IPv6: /56) |
+
+- **When the node is full**, a peer it knows (one it was connected to before, one that stayed
+  connected for 10 minutes within the last day) takes the place of the youngest stranger. A
+  stranger is turned away inside the handshake, before the node signs anything for it. Long-lived
+  peers are never pushed out.
+- **Per peer:** at most 1024 streams open at once (every connection proxied through an exit is
+  one), 64 of them still waiting for their first frame, 16 file-transfer sessions (512 for the
+  whole node), and an eighth of the incoming message queue, so one peer cannot crowd out the others.
+- **Bans.** Bad signatures, broken frames, floods that keep hitting a limit and requests the node
+  keeps refusing earn a peer points, which halve every 10 minutes. At 100 points the peer is
+  banned for an hour (the ban survives a restart); when the identities behind one address earn 200
+  between them, the address is refused for 15 minutes. As before, an address whose handshakes keep
+  failing is refused for 15 minutes. Connections from the node's own machine (127.0.0.1) are
+  never banned, and private addresses (a LAN, a Docker network) have no subnet limits.
+- **Handshakes.** When more than 25 new connections a second arrive, and always on a server
+  (`role: server`), a new address must first answer a QUIC Retry: forged source addresses then cost
+  the node no TLS work. A server also asks peers it does not know for a small proof of work (a few
+  milliseconds on a computer, tens on a phone); under a flood every node asks everyone for a bigger
+  one.
+- **Behind a CDN** every WebSocket peer seems to come from the CDN's addresses. Set
+  `--ws-client-ip-header CF-Connecting-IP` (Cloudflare; `ECHOFOG_WS_CLIENT_IP_HEADER`) so the limits
+  count each peer by its own address, but only when the WebSocket port can be reached through the
+  CDN alone: anyone who reaches it directly can write any address into that header.
+
+A ban shows in the log as `banning a misbehaving peer` or `banning an address`; dropped messages
+are summed up in one `Dispatcher: dropping messages` line at most every 10 seconds.
+
 ## Behind a home router?
 
 A node at home works for itself, but to serve others as a relay or public exit it must be reachable
