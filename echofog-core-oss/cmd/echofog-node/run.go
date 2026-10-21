@@ -27,6 +27,7 @@ type options struct {
 	mnemonicFile string
 	noCreate     bool
 	bootstrap    string
+	role         string
 
 	transport, tcpListen string
 	tcpRemotePort        int
@@ -76,6 +77,7 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.mnemonic, "mnemonic", getEnv("ECHOFOG_MNEMONIC", ""), "on first start, restore this identity instead of creating one (prefer --mnemonic-file)")
 	f.StringVar(&o.mnemonicFile, "mnemonic-file", getEnv("ECHOFOG_MNEMONIC_FILE", ""), "on first start, restore the identity from the recovery phrase in this file")
 	f.BoolVar(&o.noCreate, "no-create", envBool("ECHOFOG_NO_CREATE", false), "refuse to start without an identity instead of creating a new one")
+	f.StringVar(&o.role, "role", getEnv("ECHOFOG_ROLE", config.RoleClient), "client (chat, calls, file transfer and everything else) or server (a relay or exit on a VPS: network services only; nobody can chat with or call this node, mail for others still passes)")
 	f.StringVar(&o.bootstrap, "bootstrap", getEnv("ECHOFOG_BOOTSTRAP", ""), "comma-separated host:port/peerid of nodes to join through (host may be a domain name; default: the built-in seed nodes)")
 
 	f.StringVar(&o.transport, "transport", getEnv("ECHOFOG_TRANSPORT", ""), "auto (QUIC, then TCP), quic, or tcp")
@@ -133,6 +135,13 @@ func (o options) config() *config.AppConfig {
 	cfg := config.DefaultConfig("")
 	cfg.Network.ListenAddr = o.listenAddr
 	cfg.Storage.DatabasePath = filepath.Join(o.keys.dataDir, "db")
+	switch o.role {
+	case "", config.RoleClient:
+	case config.RoleServer:
+		cfg.Role = config.RoleServer
+	default:
+		fatal("--role: %q is not client or server", o.role)
+	}
 	if b := splitList(o.bootstrap); len(b) > 0 {
 		cfg.Network.BootstrapNodes = b
 	}
@@ -333,6 +342,11 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 	fmt.Printf("Peer ID:       %s\n", peerID)
 	fmt.Printf("Listening on:  %s (UDP, and TCP for the fallback)\n", o.listenAddr)
 	fmt.Printf("Join address:  %s\n", joinAddress(n, o.listenAddr))
+	if n.Cfg.IsServer() {
+		fmt.Println("Role:          server: no chat, calls or file transfer on this node; relay, mailboxes for others, DHT and exit run")
+	} else {
+		fmt.Println("Role:          client (a relay or exit on a VPS needs only --role server)")
+	}
 	if w, err := h.GetTonWallet(); err == nil {
 		fmt.Printf("TON wallet:    %s (%s)\n", w.Address, w.Network)
 	}

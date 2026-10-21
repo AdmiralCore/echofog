@@ -23,6 +23,26 @@ the headless node.
 You can combine a relay with an exit. `--relay=false` turns relaying off. A hidden or isolated node
 is never a relay: `--access hidden|isolated` turns relaying off whatever `--relay` says.
 
+### Server or client
+
+`--role` (env `ECHOFOG_ROLE`) says whether the node is also somebody's messenger:
+
+- **`--role server`**, for a VPS that is a relay, a signaling node or an exit. The node keeps the
+  network part: the DHT, peer exchange, relaying with mailboxes for offline people, signaling and
+  hole punching help, the exit, its adverts and the exit directory, the speed probe, the status
+  endpoint and the TON wallet that collects payouts. It turns off chat and groups, contacts and
+  message requests, calls, file transfer, and the pre-key bundle that lets people start an
+  encrypted chat with it. Frames of those kinds are dropped on arrival, before any decryption or
+  disk write, so a stranger cannot make the server work or store anything for itself. The Docker
+  setup in `deploy/` uses this role.
+- **`--role client`** (the default for the binary and the desktop app) runs everything, chat and
+  calls included.
+
+Nobody can chat with or call a server-role node directly: it has no inbox and publishes no keys
+to start a chat with. Mail **between other people** still passes through it and waits in its
+mailbox while the recipient is offline, as with any relay. `echofog-node status` shows the role
+and how many frames for the turned-off services it has dropped.
+
 ### About running an exit
 
 Be clear about what this means: websites, your provider and the police see the traffic of your
@@ -62,6 +82,9 @@ on a server and in a country where you may do this, and read your hoster's terms
 ```bash
 echofog-node run --data-dir ./echofog-data --bootstrap <host:port/peer id>
 ```
+
+On a VPS that only relays or shares an exit, add `--role server` (see
+[Server or client](#server-or-client)).
 
 On the first start the node creates a new identity and prints a **recovery phrase** once, in a box.
 Write it down and keep it offline. It restores the node's identity **and its TON wallet**. If you
@@ -170,7 +193,7 @@ cloud providers charge per GB of outbound traffic, and that adds up fast.
 ## Check on it
 
 ```bash
-echofog-node status          # peers, NAT, relay traffic, exit sessions and earnings, wallet
+echofog-node status          # role, peers, NAT, relay traffic, exit sessions and earnings, wallet
 echofog-node wallet          # the TON wallet address and balance
 echofog-node status --json   # raw JSON
 echofog-node invite          # the invitation link of a hidden or isolated node
@@ -197,7 +220,9 @@ docker compose -f deploy/docker-compose.yml exec node echofog-node status
 The compose file publishes host port **443** (UDP and TCP) to the container's 4242, so that the node
 blends in with ordinary HTTPS and HTTP/3; `.env.example` sets `ECHOFOG_ADVERTISE_PORT=443` to match.
 Open 443/udp and 443/tcp in the firewall. The identity, database and wallet live in the
-`echofog-data` volume: back it up.
+`echofog-data` volume: back it up. The compose file runs the node with `ECHOFOG_ROLE=server`
+(no chat or calls of its own, see [Server or client](#server-or-client)); set
+`ECHOFOG_ROLE=client` in `deploy/.env` for the full set.
 
 For an exit only for the people you invite, set `ECHOFOG_ACCESS=isolated` (or `hidden`) in
 `deploy/.env` and take the link with

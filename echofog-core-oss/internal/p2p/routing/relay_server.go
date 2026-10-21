@@ -587,8 +587,12 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		"target", targetID.String()[:8],
 		"self", selfID.String()[:8])
 
-	// 1. If target is self: unwrap envelope and pass to dispatcher
+	// 1. If target is self: unwrap envelope and pass to dispatcher, unless this node runs no
+	// messenger (server role) and has nobody to give it to
 	if targetID == selfID {
+		if rs.swarm.Drops(net_types.TypeChatMessage) {
+			return
+		}
 		var innerEnv internal_pb.Envelope
 		if err = proto.Unmarshal(req.ForwardedEnvelope, &innerEnv); err == nil {
 			rs.swarm.GetDispatcher().PushMessage(&innerEnv, fromPeer)

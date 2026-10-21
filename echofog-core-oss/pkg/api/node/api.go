@@ -163,11 +163,20 @@ func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
 	var targetPubKey types.PeerID
 	copy(targetPubKey[:], hash[:])
 
+	if n.node.Messenger == nil {
+		return errNoChat
+	}
 	return n.node.Messenger.SendChatMessage(targetPubKey, text)
 }
 
+// errNoChat: a server-role node runs no messenger or contacts.
+var errNoChat = errors.New("chat is off on a server-role node")
+
 func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 	readCh := make(chan *dto.MessageDTO, 100)
+	if n.node.Messenger == nil {
+		return readCh // nothing ever arrives
+	}
 	n.node.Messenger.AddHandleCallback(func(m *dto.MessageDTO) {
 		c := scrubMessage(*m) // a copy: other callbacks read the same message
 		select {
@@ -180,14 +189,23 @@ func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 }
 
 func (n *NodeApi) GetContacts() ([]dto.ContactDTO, error) {
+	if n.node.Contact == nil {
+		return nil, errNoChat
+	}
 	return n.node.Contact.GiveMyContacts()
 }
 
 func (n *NodeApi) NewContact(contact dto.ContactDTO) error {
+	if n.node.Contact == nil {
+		return errNoChat
+	}
 	return n.node.Contact.NewContact(contact)
 }
 
 func (n *NodeApi) DeleteContact(peerID string) error {
+	if n.node.Contact == nil {
+		return errNoChat
+	}
 	return n.node.Contact.RemoveContact(peerID)
 }
 
@@ -197,6 +215,9 @@ func (n *NodeApi) BanContact(peerID string) error {
 }
 
 func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint64) ([]dto.MessageDTO, error) {
+	if n.node.Messenger == nil {
+		return nil, errNoChat
+	}
 	myID := n.GetMyID()
 
 	chatID := messenger.GenerateLocalChatID(myID, contactID, false)
@@ -466,6 +487,9 @@ func (n *NodeApi) ResetEncryptionSession(peerID string) error {
 	}
 	var id types.PeerID
 	copy(id[:], raw)
+	if n.node.Messenger == nil {
+		return errNoChat
+	}
 	return n.node.Messenger.ResetSession(id)
 }
 

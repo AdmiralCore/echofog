@@ -47,6 +47,8 @@ nano deploy/.env
 The settings that matter most:
 
 ```bash
+# server: relay, mailboxes for others, DHT, exit; no chat, calls or files of its own
+ECHOFOG_ROLE=server
 # signaling only (DHT + help with hole punching, no traffic) — cheap; or false for a full relay
 ECHOFOG_SIGNALING=false
 ECHOFOG_RELAY=true
@@ -56,6 +58,14 @@ ECHOFOG_ADVERTISE_PORT=443
 # empty for the very first node; otherwise the join address of a node already running
 ECHOFOG_BOOTSTRAP=
 ```
+
+`ECHOFOG_ROLE=server` is what a VPS needs: the node runs the network services and none of the
+messenger ones (chat, contacts, calls, file transfer), and drops frames of those kinds on arrival
+without decrypting or storing them. Nobody can chat with or call the node itself, but messages
+between other people still pass through it and wait in its mailbox while the recipient is
+offline. The compose file uses `server` even when `.env` has no `ECHOFOG_ROLE` (an older copy);
+set `ECHOFOG_ROLE=client` only if you want to use the node as your own messenger too. Details:
+[Server or client](run-a-node.md#server-or-client).
 
 ## 4. Start
 
@@ -69,6 +79,9 @@ restores the node's identity and wallet. It also prints a **Join address**:
 `<this server's public IP or domain>:443/<peer id>`. Put the server's IP in front: that is what
 other nodes use in `ECHOFOG_BOOTSTRAP` and what app users paste into **Settings → Bootstrap
 nodes**.
+
+The startup summary in the log and
+`docker compose -f deploy/docker-compose.yml exec node echofog-node status` show `Role: server`.
 
 Check that it is healthy:
 

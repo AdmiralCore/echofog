@@ -1,4 +1,5 @@
-# An EchoFog node: DHT member, relay for peers behind NATs, optionally a paid exit. With
+# An EchoFog node: DHT member, relay for peers behind NATs, optionally a paid exit. It runs as a
+# server (ECHOFOG_ROLE=server): no chat, calls or file transfer of its own. With
 # ECHOFOG_ACCESS=hidden or isolated in .env it serves only the people with its invitation link.
 #
 #   cp deploy/.env.example deploy/.env      # and edit it
@@ -12,6 +13,16 @@ services:
     image: echofog-node:latest
     restart: unless-stopped
     env_file: .env
+    environment:
+      # a VPS node is a server unless .env says otherwise (an .env from before the role existed
+      # has no ECHOFOG_ROLE)
+      ECHOFOG_ROLE: ${ECHOFOG_ROLE:-server}
+      # optional: the identity password as a Docker secret instead of ECHOFOG_PASSWORD (with
+      # "secrets: [echofog_password]" below)
+      # ECHOFOG_PASSWORD_FILE: /run/secrets/echofog_password
+      # optional: the access secret of a hidden or isolated node as a Docker secret (with
+      # "secrets: [echofog_access_secret]" below)
+      # ECHOFOG_ACCESS_SECRET_FILE: /run/secrets/echofog_access_secret
     # the identity, the database and the TON wallet cache live here: back it up
     volumes:
       - echofog-data:/data
@@ -24,12 +35,8 @@ services:
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
-    # optional: the identity password as a Docker secret instead of ECHOFOG_PASSWORD
-    # secrets: [echofog_password]
-    # environment: { ECHOFOG_PASSWORD_FILE: /run/secrets/echofog_password }
-    # optional: the access secret of a hidden or isolated node as a Docker secret
-    # secrets: [echofog_access_secret]
-    # environment: { ECHOFOG_ACCESS_SECRET_FILE: /run/secrets/echofog_access_secret }
+    # optional: Docker secrets for the variables commented out under environment above
+    # secrets: [echofog_password, echofog_access_secret]
 
 volumes:
   echofog-data:

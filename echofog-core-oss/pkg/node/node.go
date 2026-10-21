@@ -29,6 +29,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/mimicry"
+	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/dht"
 	"github.com/echofog/echofog-core/internal/p2p/gossip"
 	"github.com/echofog/echofog-core/internal/p2p/holepunch"
@@ -524,23 +525,32 @@ func (n *Node) Start() (err error) {
 
 	n.initTonWallet()
 
-	x3dhInit, err := crypto.NewX3DHInitializer(activeAccount, n.Storage, userKey.Bytes())
-	if err != nil {
-		return fmt.Errorf("failed to initialize X3DH stack: %w", err)
+	server := n.Cfg.IsServer()
+	if server {
+		// a relay or exit holds no chats: frames for the services it does not run cost a map
+		// lookup, before any signature check, decryption or disk write
+		n.Swarm.DropFrameTypes(serverDroppedTypes...)
+		n.Logger.Info("ROLE: server: chat, calls, file transfer and pre-key bundles are off; relay, mailboxes for others, DHT, signaling and exit run")
 	}
 
 	n.applyAccess()
 
 	n.Discovery = discovery.NewDiscoveryService(n.Storage, gsp, n.Swarm, n.PubKey)
 
-	n.crypto = crypto.NewCryptoEngine(n.ID, activeAccount, x3dhInit.GetEngine(), x3dhInit.GetSessionManager(), n.Swarm, n.Logger)
+	if !server {
+		x3dhInit, err := crypto.NewX3DHInitializer(activeAccount, n.Storage, userKey.Bytes())
+		if err != nil {
+			return fmt.Errorf("failed to initialize X3DH stack: %w", err)
+		}
+		n.crypto = crypto.NewCryptoEngine(n.ID, activeAccount, x3dhInit.GetEngine(), x3dhInit.GetSessionManager(), n.Swarm, n.Logger)
 
-	n.Contact = contacts.NewContactService(n.Storage, n.Swarm)
+		n.Contact = contacts.NewContactService(n.Storage, n.Swarm)
 
-	n.Messenger = messenger.NewMessageBroker(n.crypto, n.Swarm, gsp, n.identity, n.Storage.(storage.MessageStorage), n.Contact, n.Logger)
-	n.Swarm.AddObserver(n.Messenger) // sends queued messages when their recipient connects
-	n.Messenger.SetFilter(n.messageVerdict)
-	n.Messenger.StartOutbox(n.Ctx)
+		n.Messenger = messenger.NewMessageBroker(n.crypto, n.Swarm, gsp, n.identity, n.Storage.(storage.MessageStorage), n.Contact, n.Logger)
+		n.Swarm.AddObserver(n.Messenger) // sends queued messages when their recipient connects
+		n.Messenger.SetFilter(n.messageVerdict)
+		n.Messenger.StartOutbox(n.Ctx)
+	}
 
 	routingTable := dht.NewRoutingTable(n.PubKey, n.Storage, n.Swarm)
 	n.routingTable = routingTable
@@ -564,30 +574,34 @@ func (n *Node) Start() (err error) {
 	n.RelayClient = routing.NewRelayClient(n.Swarm, dhtEngine, n.Logger)
 	n.RelayServer.SetPolicy(n.Cfg.Relay.Server)
 	n.RelayClient.SetPolicy(n.Cfg.Relay.Client)
-	// route messages through a configured private relay even though it does not advertise itself
-	n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
+	if !server {
+		// route messages through a configured private relay even though it does not advertise itself
+		n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
+	}
 	if !n.isolated() {
 		n.dialConfiguredRelays()
 	}
-	if err := n.startFiles(); err != nil {
-		return fmt.Errorf("file transfers: %w", err)
+	if !server {
+		if err := n.startFiles(); err != nil {
+			return fmt.Errorf("file transfers: %w", err)
+		}
 	}
 
 	// Publish node's own PreKeyBundle locally and to DHT for asynchronous E2EE initiation, and keep
-	// it there: the first publication happens before anybody is connected, so it is repeated
+	// it there: the first publication happens before anybody is connected, so it is repeated. A
+	// server publishes none: nobody can open a chat with it.
 	n.Swarm.SetBundleFetcher(dhtEngine.Get)
-	if !n.isolated() {
+	if !n.isolated() && !server {
 		go n.publishBundleLoop(dhtEngine)
 	}
 
 	n.Services = services.NewServiceManager(n.Logger.With("component", "services"))
 
-	routedServices := []services.Service{
-		n.Discovery,
-		n.Messenger,
-		dhtEngine,
-		n.RelayServer,
+	routedServices := []services.Service{n.Discovery}
+	if !server {
+		routedServices = append(routedServices, n.Messenger)
 	}
+	routedServices = append(routedServices, dhtEngine, n.RelayServer)
 	for _, s := range routedServices {
 		if err := n.Services.RegisterRouted(s, n.Dispatcher); err != nil {
 			return fmt.Errorf("failed to register routed service %s: %w", s.Name(), err)
@@ -598,15 +612,17 @@ func (n *Node) Start() (err error) {
 		_ = n.Services.Register(n.Contact)
 	}
 
-	n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
-	n.CallManager.SetPeerConnector(n.EnsureConnected)
-	_ = n.Services.Register(n.CallManager)
-	// a message to somebody we are not connected to opens the connection (DHT, hole punch, relay)
-	n.Messenger.SetConnector(func(peer types.PeerID) {
-		ctx, cancel := context.WithTimeout(n.Ctx, 25*time.Second)
-		defer cancel()
-		_ = n.EnsureConnected(ctx, peer)
-	})
+	if !server {
+		n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
+		n.CallManager.SetPeerConnector(n.EnsureConnected)
+		_ = n.Services.Register(n.CallManager)
+		// a message to somebody we are not connected to opens the connection (DHT, hole punch, relay)
+		n.Messenger.SetConnector(func(peer types.PeerID) {
+			ctx, cancel := context.WithTimeout(n.Ctx, 25*time.Second)
+			defer cancel()
+			_ = n.EnsureConnected(ctx, peer)
+		})
+	}
 
 	if err := n.Services.StartAll(n.Ctx); err != nil {
 		return fmt.Errorf("services startup failed: %w", err)
@@ -624,7 +640,9 @@ func (n *Node) Start() (err error) {
 	n.Scheduler = scheduler.New(n.Ctx, n.Logger.With("component", "scheduler"))
 	if n.EventBus != nil {
 		n.Swarm.SetEmitter(n.EventBus)
-		n.CallManager.SetEmitter(n.EventBus)
+		if n.CallManager != nil {
+			n.CallManager.SetEmitter(n.EventBus)
+		}
 		n.DhtEngine.SetEmitter(n.EventBus)
 	}
 
@@ -782,6 +800,26 @@ func (n *Node) shutdown(closeLog bool) {
 			logging.Close() // flush and release the log file
 		}
 	})
+}
+
+// serverDroppedTypes are the inbound frame and stream types a server-role node discards on
+// arrival: direct chat (and group) messages, call signaling and media, file transfer, and requests
+// for its pre-key bundle. RelayMessageRequest is not among them: it carries mail for others.
+var serverDroppedTypes = []net_types.MessageType{
+	net_types.TypeChatMessage,
+	net_types.TypeCallSignaling,
+	net_types.TypeCallMediaAudio,
+	net_types.TypeCallMediaVideo,
+	net_types.TypeFileXfer,
+	net_types.TypeLocalPublicKeyBundleRequest,
+}
+
+// Role is the node's role: config.RoleServer or config.RoleClient.
+func (n *Node) Role() string {
+	if n.Cfg.IsServer() {
+		return config.RoleServer
+	}
+	return config.RoleClient
 }
 
 func (n *Node) SendMessage(targetID types.PeerID, text string) error {

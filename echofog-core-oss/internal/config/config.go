@@ -47,6 +47,17 @@ type AccessConfig struct {
 // Gated reports whether the node keeps to the people it invited.
 func (a AccessConfig) Gated() bool { return a.Mode == AccessHidden || a.Mode == AccessIsolated }
 
+// Values of AppConfig.Role.
+const (
+	// RoleClient runs everything a person needs: chat, contacts, calls, file transfer, and answers
+	// the pre-key bundle requests that start an encrypted chat. The default.
+	RoleClient = "client"
+	// RoleServer is for a relay or exit on a VPS: it keeps the network part (DHT, peer exchange,
+	// relay with mailboxes for others, signaling, exit, adverts, wallet) and runs none of the chat,
+	// call and file services, so strangers cannot make it decrypt or store anything for itself.
+	RoleServer = "server"
+)
+
 // Values of AntiDPIConfig.Obfs.
 const (
 	ObfsNode = "node"
@@ -230,7 +241,12 @@ type AppConfig struct {
 	Storage  StorageConfig  `json:"storage"`
 	Ton      TonConfig      `json:"ton"`
 	Access   AccessConfig   `json:"access"`
+	// Role is RoleClient (default, also when empty) or RoleServer.
+	Role string `json:"role,omitempty"`
 }
+
+// IsServer reports whether the node runs as a server: network services only, no chat or calls.
+func (c *AppConfig) IsServer() bool { return c != nil && c.Role == RoleServer }
 
 // DefaultTonNetwork is the TON network of the built-in wallet: "testnet" while the vault contract
 // has not had an independent security audit, so testers never pay real money. A release build
@@ -249,6 +265,7 @@ func DefaultConfig(profileName string) *AppConfig {
 
 	cfg.Ton.Network = DefaultTonNetwork
 	cfg.Access.Mode = AccessPublic
+	cfg.Role = RoleClient
 
 	cfg.Network.ListenAddr = ":0"
 	cfg.Network.MaxConnections = 100

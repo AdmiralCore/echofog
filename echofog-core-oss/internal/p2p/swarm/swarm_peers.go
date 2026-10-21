@@ -61,6 +61,11 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 
 	pw.OnData(func(msgType net_types.MessageType, payload []byte, peerID types.PeerID) {
 		s.bytesRx.Add(uint64(len(payload)))
+		// 0. a type this node runs no service for costs one map lookup, nothing more
+		if s.Drops(msgType) {
+			s.dropped(msgType, peerID)
+			return
+		}
 		// 1. Fast Path: direct O(1) hashmap lookup without Protobuf overhead
 		s.fastHandlersMu.RLock()
 		fastHandler, hasFast := s.fastHandlers[msgType]
@@ -117,6 +122,11 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 				stream.Close()
 				return
 			}
+			if s.Drops(msgType) {
+				s.dropped(msgType, peerID)
+				stream.Close()
+				return
+			}
 
 			switch msgType {
 			case net_types.TypeSessionData:
@@ -135,6 +145,8 @@ func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 				}
 
 			case net_types.TypeLocalPublicKeyBundleRequest:
+				// a server-role node drops these above: it holds no chats, so it hands out no
+				// bundle and never mints a one-time prekey for a stranger's request
 				account, err := s.identity.GetActiveAccount()
 				if err != nil {
 					stream.Close()

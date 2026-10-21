@@ -35,6 +35,8 @@ type Swarm struct {
 	frameHandlers   []FrameHandler
 	frameHandlersMu sync.RWMutex
 
+	drop dropState // frame types discarded on arrival (DropFrameTypes)
+
 	logger *slog.Logger
 	wg     sync.WaitGroup
 

@@ -544,7 +544,7 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	// to the transport peer (the relay), never to the circuit's claimed origin: the Dispatcher
 	// verifies the envelope signature and that its OriginId is the signer, so the sender's identity
 	// comes from the signed envelope, not from anything the circuit asserts.
-	if innerMsgType == net_types.TypeChatMessage {
+	if innerMsgType == net_types.TypeChatMessage && !rc.swarm.Drops(net_types.TypeChatMessage) {
 		var innerEnv internal_pb.Envelope
 		if err := proto.Unmarshal(innerData, &innerEnv); err == nil {
 			rc.swarm.GetDispatcher().PushMessage(&innerEnv, fromPeer)

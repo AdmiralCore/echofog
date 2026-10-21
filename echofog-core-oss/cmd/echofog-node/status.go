@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
 	api "github.com/echofog/echofog-core/pkg/api/node"
@@ -21,8 +22,11 @@ import (
 
 // Status is what a running node reports about itself.
 type Status struct {
-	Version   string             `json:"version"`
-	PeerID    string             `json:"peerId"`
+	Version string `json:"version"`
+	PeerID  string `json:"peerId"`
+	Role    string `json:"role"` // "client" or "server"
+	// Dropped counts the chat, call, file and bundle frames a server-role node discarded on arrival
+	Dropped   uint64             `json:"droppedFrames,omitempty"`
 	JoinAddr  string             `json:"joinAddr"`
 	NAT       string             `json:"nat"`
 	StartedAt int64              `json:"startedAt"`
@@ -96,10 +100,14 @@ func (c *collector) refresh(ctx context.Context) {
 	st := Status{
 		Version:   version,
 		PeerID:    c.n.ID.String(),
+		Role:      c.n.Role(),
 		JoinAddr:  joinAddress(c.n, c.o.listenAddr),
 		StartedAt: c.started.Unix(),
 		UpdatedAt: time.Now().Unix(),
 		Peers:     len(c.h.GetPeers()),
+	}
+	if c.n.Swarm != nil {
+		st.Dropped = c.n.Swarm.DroppedFrames()
 	}
 	if c.n.NAT != nil {
 		_, kind := c.n.NAT.GetNATProfile()
@@ -167,6 +175,9 @@ func (c *collector) logEvery(ctx context.Context, every time.Duration) {
 func statsLine(s Status) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s stats peers=%d", time.Now().Format("2006-01-02 15:04:05"), s.Peers)
+	if s.Role == config.RoleServer {
+		fmt.Fprintf(&b, " role=server dropped=%d", s.Dropped)
+	}
 	r := s.Relay
 	if r.Enabled && r.SignalingOnly {
 		fmt.Fprintf(&b, " | signaling: %d/%d active, %d opened, %s passed on, %d traffic frames and %d messages refused",
@@ -208,6 +219,14 @@ func statsLine(s Status) string {
 		}
 	}
 	return b.String()
+}
+
+// roleLine describes the role for "status"; an older node reports none and was a client.
+func roleLine(s Status) string {
+	if s.Role == config.RoleServer {
+		return fmt.Sprintf("server: no chat, calls or file transfer here (%d frames for them dropped)", s.Dropped)
+	}
+	return "client: chat, calls and file transfer on"
 }
 
 // refusedDetail is " (payment required 3, dial failed 1)", reasons in a fixed order.
@@ -357,6 +376,7 @@ func printStatus(s Status) {
 	fmt.Printf("EchoFog node %s, up %s\n", s.Version, time.Since(time.Unix(s.StartedAt, 0)).Round(time.Second))
 	fmt.Printf("  Peer ID:      %s\n", s.PeerID)
 	fmt.Printf("  Join address: %s\n", s.JoinAddr)
+	fmt.Println("  Role:         " + roleLine(s))
 	if s.NAT != "" {
 		fmt.Printf("  NAT:          %s\n", s.NAT)
 	}
