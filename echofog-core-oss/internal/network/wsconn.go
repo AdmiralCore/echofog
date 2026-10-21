@@ -66,12 +66,18 @@ func (c *wsConn) RemoteAddr() net.Addr { return c.ws.RemoteAddr() }
 func (c *wsConn) SetReadDeadline(t time.Time) error {
 	return c.ws.SetReadDeadline(t)
 }
+
+// SetWriteDeadline takes the write lock: gorilla keeps the write deadline in a plain field that
+// WriteMessage reads, so setting it while smux writes (the handshake deadline is cleared once the
+// peer is authenticated) would race.
 func (c *wsConn) SetWriteDeadline(t time.Time) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
 	return c.ws.SetWriteDeadline(t)
 }
 func (c *wsConn) SetDeadline(t time.Time) error {
 	if err := c.ws.SetReadDeadline(t); err != nil {
 		return err
 	}
-	return c.ws.SetWriteDeadline(t)
+	return c.SetWriteDeadline(t)
 }

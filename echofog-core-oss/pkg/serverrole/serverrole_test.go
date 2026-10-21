@@ -11,8 +11,8 @@ import (
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
 	"github.com/echofog/echofog-core/internal/network/net_types"
-	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
+	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/dto"
@@ -56,8 +56,9 @@ func connected(a, b *coreNode.Node) bool {
 }
 
 // chatKeys are the keys a node writes for chats, sessions, one-time prekeys and message requests:
-// none may appear on a server because a stranger wrote to it.
-var chatKeys = []string{"opk:", "opkused:", "sess:", "m:", "outbox/", "seen/", "msgreq:", "contacts:", "fogack1:", "fogreset1:"}
+// none may appear on a server because a stranger wrote to it ("jopk:" holds prekeys handed out
+// on request).
+var chatKeys = []string{"opk:", "jopk:", "opkused:", "sess:", "m:", "outbox/", "seen/", "msgreq:", "contacts:", "fogack1:", "fogreset1:"}
 
 // snapshot is every key of the node's database under chatKeys, with a copy of its value.
 func snapshot(t *testing.T, n *coreNode.Node) map[string][]byte {

@@ -26,6 +26,7 @@ var SealedPrefixes = [][]byte{
 	[]byte("groups/m/"),
 	[]byte("groups/k/"), // group keys: epochs and chains
 	[]byte("groups/e/"), // sealed group messages kept to hand on
+	[]byte("dht:rec:"),  // DHT records: each carries its key ("bundle:<peer>"), whose records we hold
 	[]byte("saved:peers:"),
 	[]byte("mb:v1:"),
 	[]byte("vpnmarket:"),
