@@ -190,6 +190,30 @@ type RelayServerConfig struct {
 	Private bool `json:"private"`
 	// AllowedPeers lists the peer IDs (64-hex) that may use this relay when it is private.
 	AllowedPeers []string `json:"allowed_peers"`
+
+	// Limits on what peers can take from this relay. For each of them 0 means the built-in
+	// default (shown in brackets) and a negative value means no limit.
+
+	// MaxCircuitsPerPeer: circuits one peer may hold open at once [16].
+	MaxCircuitsPerPeer int `json:"max_circuits_per_peer,omitempty"`
+	// MaxCircuitsPerIP: circuits the peers of one IP address (an IPv6 /64) may hold at once [32];
+	// one IPv4 /24 or IPv6 /48 may hold twice that. Loopback and LAN addresses are not limited.
+	MaxCircuitsPerIP int `json:"max_circuits_per_ip,omitempty"`
+	// ReservedCircuitsPct: share of MaxCircuits kept for peers connected for 10 minutes or more,
+	// so a burst of fresh identities cannot take every slot [25].
+	ReservedCircuitsPct int `json:"reserved_circuits_pct,omitempty"`
+	// CircuitIdleSeconds and CircuitIdleKB: a circuit that moved less than CircuitIdleKB in the
+	// last CircuitIdleSeconds is idle and closed [300 s, 32 KB].
+	CircuitIdleSeconds int `json:"circuit_idle_seconds,omitempty"`
+	CircuitIdleKB      int `json:"circuit_idle_kb,omitempty"`
+	// CircuitMaxMB: most one circuit may carry before it is closed [4096].
+	CircuitMaxMB int64 `json:"circuit_max_mb,omitempty"`
+	// PeerMaxMBPerDay: most the circuits one peer opened may carry in a day (UTC) [16384].
+	PeerMaxMBPerDay int64 `json:"peer_max_mb_per_day,omitempty"`
+	// PeerMaxMbps: speed of all the circuits one peer opened, in Mbit/s [50].
+	PeerMaxMbps int `json:"peer_max_mbps,omitempty"`
+	// MaxMbps: speed of everything this node relays through circuits, in Mbit/s [no limit].
+	MaxMbps int `json:"max_mbps,omitempty"`
 }
 
 // RelayClientConfig: how this node picks relays.
@@ -205,9 +229,34 @@ type RelayClientConfig struct {
 	Relays []string `json:"relays"`
 }
 
+// DefaultRelayMaxCircuits is how many circuits a relay carries at once unless told otherwise.
+const DefaultRelayMaxCircuits = 200
+
 type RelayConfig struct {
 	Server RelayServerConfig `json:"server"`
 	Client RelayClientConfig `json:"client"`
+}
+
+// ExitConfig limits what peers can take from this node's exit when it shares one. For each field
+// 0 means the built-in default (shown in brackets) and a negative value means no limit.
+type ExitConfig struct {
+	// MaxStreams: TCP tunnels and UDP sessions the exit serves at once, all peers together [4096].
+	MaxStreams int `json:"max_streams,omitempty"`
+	// MaxStreamsPerPeer and MaxStreamsPerIP: the same for one peer, and for the peers of one IP
+	// address (an IPv6 /64) [256, 512]. Loopback and LAN addresses are not limited per IP.
+	MaxStreamsPerPeer int `json:"max_streams_per_peer,omitempty"`
+	MaxStreamsPerIP   int `json:"max_streams_per_ip,omitempty"`
+	// MaxUDPPerPeer: UDP sessions (each one an exit socket) one peer may hold [32].
+	MaxUDPPerPeer int `json:"max_udp_per_peer,omitempty"`
+	// IdleSeconds: a TCP tunnel that moved nothing either way for this long is closed [300].
+	IdleSeconds int `json:"idle_seconds,omitempty"`
+	// MaxLifetimeSeconds: a TCP tunnel is closed after this long, busy or not [no limit].
+	MaxLifetimeSeconds int `json:"max_lifetime_seconds,omitempty"`
+	// FreePeerMbps and FreeIPMbps: on a free exit, the speed one peer, and all the peers of one
+	// IP address together, may use, so nobody takes the whole uplink [50, 100]. Peers on the free
+	// list (the operator's own devices) and paying peers are not slowed down.
+	FreePeerMbps int `json:"free_peer_mbps,omitempty"`
+	FreeIPMbps   int `json:"free_ip_mbps,omitempty"`
 }
 
 type StorageConfig struct {
@@ -227,6 +276,7 @@ type AppConfig struct {
 	AntiDPI  AntiDPIConfig  `json:"anti_dpi"`
 	Payments PaymentsConfig `json:"payments"`
 	Relay    RelayConfig    `json:"relay"`
+	Exit     ExitConfig     `json:"exit"`
 	Storage  StorageConfig  `json:"storage"`
 	Ton      TonConfig      `json:"ton"`
 	Access   AccessConfig   `json:"access"`
@@ -267,7 +317,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	// not need them.
 
 	cfg.Relay.Server.Enabled = true
-	cfg.Relay.Server.MaxCircuits = 50
+	cfg.Relay.Server.MaxCircuits = DefaultRelayMaxCircuits
 
 	cfg.Relay.Client.Enabled = true
 	cfg.Relay.Client.MaxAcceptablePingMs = 250

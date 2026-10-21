@@ -9,12 +9,12 @@ import (
 // A single peer must not be able to hold more than the per-peer cap of circuits, even while the
 // node-wide MaxCircuits is nowhere near full.
 func TestRelayServer_PerPeerCircuitCap(t *testing.T) {
-	rs := NewRelayServer(nil, nil, nil) // default policy: enabled, public, MaxCircuits=50
+	rs := NewRelayServer(nil, nil, nil) // default policy: enabled, public, MaxCircuits=200
 	attacker := mkID(0x66)
 
 	// The attacker already holds its full share of circuits.
 	rs.circuitsMu.Lock()
-	for i := 0; i < maxCircuitsPerPeer; i++ {
+	for i := 0; i < defaultCircuitsPerPeer; i++ {
 		rs.circuits[uint32(1000+i)] = &Circuit{ID: uint32(1000 + i), PeerA: attacker, PeerB: mkID(byte(i))}
 	}
 	rs.circuitsMu.Unlock()
@@ -25,8 +25,11 @@ func TestRelayServer_PerPeerCircuitCap(t *testing.T) {
 
 	rs.circuitsMu.RLock()
 	defer rs.circuitsMu.RUnlock()
-	if n := rs.circuitsForPeerLocked(attacker); n != maxCircuitsPerPeer {
-		t.Fatalf("per-peer cap not enforced: peer holds %d circuits, want %d", n, maxCircuitsPerPeer)
+	if n := rs.circuitsForPeerLocked(attacker); n != defaultCircuitsPerPeer {
+		t.Fatalf("per-peer cap not enforced: peer holds %d circuits, want %d", n, defaultCircuitsPerPeer)
+	}
+	if rs.limitRefused.Load() != 1 {
+		t.Fatalf("the refusal must be counted, got %d", rs.limitRefused.Load())
 	}
 }
 
@@ -49,7 +52,7 @@ func TestRelayServer_ReapIdleCircuits(t *testing.T) {
 	rs.circuits[3] = staleCreated
 	rs.circuitsMu.Unlock()
 
-	reaped := rs.reapIdleCircuits(idleCircuitTimeout)
+	reaped := rs.reapIdleCircuits(defaultCircuitIdle, defaultCircuitIdleKB<<10)
 	if reaped != 2 {
 		t.Fatalf("expected 2 idle circuits reaped, got %d", reaped)
 	}

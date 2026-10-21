@@ -23,9 +23,11 @@ const (
 	RefusePayment  = "payment required"   // the free quota is used up and nothing is paid
 	RefuseTarget   = "target not allowed" // private address, blocked port or a malformed target
 	RefuseDial     = "dial failed"        // the exit could not reach the target
+	RefuseBusy     = "too many streams"   // the peer, its address or the whole exit is at its stream cap
+	RefuseRate     = "too many requests"  // account or voucher requests faster than the exit answers them
 )
 
-var refuseReasons = [...]string{RefuseDisabled, RefusePayment, RefuseTarget, RefuseDial}
+var refuseReasons = [...]string{RefuseDisabled, RefusePayment, RefuseTarget, RefuseDial, RefuseBusy, RefuseRate}
 
 // logLimiter lets one log line per key through every interval and counts the ones it holds back.
 type logLimiter struct {
@@ -90,6 +92,8 @@ func refuseCode(code byte) string {
 		return RefusePayment
 	case resultDialFailed:
 		return RefuseDial
+	case resultBusy:
+		return RefuseBusy
 	default:
 		return RefuseTarget
 	}
@@ -118,6 +122,8 @@ func ExitRefusal(err error) string {
 		return "denied"
 	case errors.Is(err, ErrExitDialFailed):
 		return "dial failed"
+	case errors.Is(err, ErrExitBusy):
+		return "busy"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
 	default:

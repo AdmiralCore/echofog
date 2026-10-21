@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/ratelimit"
 	"github.com/echofog/echofog-core/internal/wallet/tonwallet"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/xssnick/tonutils-go/address"
@@ -51,6 +52,16 @@ const (
 	// next voucher is on the way, so a fast download is not cut between two vouchers. The exit
 	// risks at most this much traffic per vault; the next voucher pays it back first.
 	VoucherOverdraftBytes = 32 << 20
+
+	// A voucher from a vault the exit does not know costs two chain reads, and anyone can make up
+	// a vault: such lookups are limited per peer and for the whole exit, and a vault found empty is
+	// not read again for vaultEmptyTTL. Known vaults are not limited.
+	vaultLookupRate      = 0.1 // per peer: one every 10 s...
+	vaultLookupBurst     = 3   // ...after a few at once
+	vaultLookupRateAll   = 2   // the whole exit, a second
+	vaultLookupBurstAll  = 10
+	vaultEmptyTTL        = 30 * time.Second
+	vaultEmptyRemembered = 4096
 )
 
 var (
@@ -157,7 +168,11 @@ type VoucherBook struct {
 	dirty     bool
 	nanoPerMB int64
 	now       func() time.Time
-	checking  map[string]bool // vaults being read from the chain right now
+	checking  map[string]bool      // vaults being read from the chain right now
+	empty     map[string]time.Time // unknown vaults found empty -> when
+
+	lookups   *ratelimit.Keyed[string] // chain lookups of unknown vaults, per pay tag
+	lookupAll *ratelimit.Bucket        // ... for the whole exit
 
 	// claimProblem says why the last claim round could not cash what is owed ("" when fine);
 	// the operator sees it in the stats, the app on its sharing card
@@ -196,7 +211,10 @@ func (b *VoucherBook) noteClaimResult(problem string) (warn bool) {
 // NewVoucherBook loads the book from path ("" keeps it in memory). node is the exit's payout
 // address, the one vouchers must name.
 func NewVoucherBook(path string, globalID int32, node *address.Address, chain VaultChain) *VoucherBook {
-	b := &VoucherBook{globalID: globalID, node: node, chain: chain, path: path, now: time.Now, checking: map[string]bool{}}
+	b := &VoucherBook{globalID: globalID, node: node, chain: chain, path: path, now: time.Now, checking: map[string]bool{},
+		empty:     map[string]time.Time{},
+		lookups:   ratelimit.NewKeyed[string](vaultLookupRate, vaultLookupBurst, vaultEmptyRemembered),
+		lookupAll: ratelimit.NewBucket(vaultLookupRateAll, vaultLookupBurstAll)}
 	b.data.Accounts = map[string]*voucherAccount{}
 	b.data.Peers = map[string]string{}
 	if path != "" {
@@ -371,6 +389,12 @@ func (b *VoucherBook) refresh(ctx context.Context, vault *address.Address) error
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	a := b.data.Accounts[key]
+	if a == nil && (!info.Deployed || info.Deposit == nil || info.Deposit.Sign() <= 0) {
+		// nothing to keep: an account is opened for a vault only once it holds money, so made-up
+		// vaults do not fill the book (which is saved to disk and kept for a month)
+		b.noteEmptyLocked(key)
+		return nil
+	}
 	if a == nil {
 		a = &voucherAccount{Cumulative: "0", Claimed: "0", Deposit: "0"}
 		b.data.Accounts[key] = a
@@ -417,6 +441,14 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	switch age := now.Sub(checked); {
 	case age > vaultStaleOK:
 		// never read, or too long ago: the client waits for the chain
+		if a == nil {
+			if b.knownEmpty(key, now) {
+				return VoucherReply{Error: fmt.Sprintf("%v: the vault is empty", ErrVaultUnusable)}
+			}
+			if !b.lookups.AllowAt(tag, 1, now) || !b.lookupAll.AllowAt(1, now) {
+				return VoucherReply{Error: "too many vault checks, try again shortly"}
+			}
+		}
 		if err := b.refresh(ctx, sv.Vault); err != nil {
 			return VoucherReply{Error: "cannot check the vault on the TON network, try again shortly"}
 		}
@@ -434,6 +466,9 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	a = b.data.Accounts[key]
+	if a == nil && !b.empty[key].IsZero() {
+		return VoucherReply{Error: fmt.Sprintf("%v: the vault is empty", ErrVaultUnusable)}
+	}
 	if a == nil || a.CheckedAt == 0 {
 		return VoucherReply{Error: "cannot check the vault on the TON network, try again shortly"}
 	}
@@ -478,6 +513,35 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	return reply()
 }
 
+// knownEmpty: an unknown vault was found empty a moment ago. A failed read is not remembered:
+// the chain may answer the next time, and the lookup limits already bound the retries.
+func (b *VoucherBook) knownEmpty(key string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	at, ok := b.empty[key]
+	if ok && now.Sub(at) > vaultEmptyTTL {
+		delete(b.empty, key)
+		return false
+	}
+	return ok
+}
+
+// noteEmptyLocked remembers that an unknown vault holds nothing. Called with b.mu held.
+func (b *VoucherBook) noteEmptyLocked(key string) {
+	now := b.now()
+	if len(b.empty) >= vaultEmptyRemembered {
+		for k, at := range b.empty {
+			if now.Sub(at) > vaultEmptyTTL {
+				delete(b.empty, k)
+			}
+		}
+		if len(b.empty) >= vaultEmptyRemembered {
+			clear(b.empty) // all recent: forgetting costs a few chain reads, within the limits
+		}
+	}
+	b.empty[key] = now
+}
+
 // HandleVoucherFrom answers a TypeExitVoucher request: the first frame holds the offer.
 func (e *ExitService) HandleVoucherFrom(ctx context.Context, st FramedStream, payload []byte, peer types.PeerID) {
 	defer st.Close()
@@ -487,6 +551,9 @@ func (e *ExitService) HandleVoucherFrom(ctx context.Context, st FramedStream, pa
 	reply := VoucherReply{Error: "this exit does not take vouchers"}
 	var o VoucherOffer
 	switch {
+	case !e.offers.Allow(peer, 1):
+		e.refuse(peer, RefuseRate)
+		reply.Error = "too many voucher offers, try again shortly"
 	case free:
 		reply.Error = "this exit is free for you"
 	case book == nil || !e.serves(peer):

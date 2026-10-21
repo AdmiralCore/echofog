@@ -64,8 +64,11 @@ func (n *Node) initVPNMarket() {
 	ratings := vpnmarket.NewRatingStore(st)
 	dir := vpnmarket.NewDirectory(n.DhtEngine, ratings, n.ID, n.connectedPeerIDs)
 	dir.SetHints(n.askPeersForExits)
-	n.Swarm.RegisterStreamHandler(net_types.TypeExitDirectory, func(st *network.Stream, _ []byte, _ types.PeerID) {
+	n.Swarm.RegisterStreamHandler(net_types.TypeExitDirectory, func(st *network.Stream, _ []byte, peer types.PeerID) {
 		defer st.Close()
+		if n.ExitService != nil && !n.ExitService.AllowQuery(peer) {
+			return // asked too often: the stream ends without an answer
+		}
 		if raw, err := json.Marshal(dir.Shared()); err == nil {
 			_ = st.WriteFrame(net_types.TypeExitDirectory, raw)
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
+	"github.com/echofog/echofog-core/internal/ratelimit"
 	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +31,11 @@ type Circuit struct {
 	CreatedAt   time.Time
 	LastActive  atomic.Int64 // unix nanoseconds; frames in both directions update it concurrently
 	BytesRouted uint64
+
+	ipKey, netKey string        // the initiator's address keys for the per-IP caps ("" when not limited)
+	use           *peerUse      // the initiator's budgets; nil for a signaling circuit
+	periodStart   time.Time     // start of the current idle period; reaper only (under circuitsMu)
+	periodBytes   atomic.Uint64 // bytes carried in the current idle period
 }
 
 type RelayServer struct {
@@ -44,6 +50,22 @@ type RelayServer struct {
 	circuitsMu sync.RWMutex
 	circuits   map[uint32]*Circuit
 
+	lim        relayLimits // limitsOf(cfg), guarded by cfgMu
+	nodeBucket *ratelimit.Bucket
+	useMu      sync.Mutex
+	use        map[types.PeerID]*peerUse // per initiating peer: bytes today and speed
+
+	peersMu     sync.Mutex
+	connectedAt map[types.PeerID]time.Time // when each connected peer connected
+	addrOf      func(types.PeerID) string  // a connected peer's remote address
+
+	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
+	fullReply *ratelimit.Keyed[types.PeerID] // "mailbox full" answers per peer
+
+	logMu      sync.Mutex
+	logLast    map[string]time.Time
+	logSkipped map[string]int
+
 	// totals since the node started, for the operator
 	circuitsOpened atomic.Uint64
 	bytesRouted    atomic.Uint64
@@ -53,6 +75,9 @@ type RelayServer struct {
 	signalRefused  atomic.Uint64 // frames a signaling circuit would not carry
 	refusedMsgs    atomic.Uint64 // messages a signaling node does not relay or keep
 	accessRefused  atomic.Uint64 // requests from peers not allowed on a private relay
+	limitRefused   atomic.Uint64 // circuits refused by a circuit cap
+	rateDropped    atomic.Uint64 // frames dropped by a speed limit
+	budgetClosed   atomic.Uint64 // circuits closed for using up a byte budget
 }
 
 // Limits of a signaling circuit: the hole punching exchange is a few small messages, so anything
@@ -62,15 +87,8 @@ const (
 	signalCircuitLife  = 2 * time.Minute
 )
 
-// Circuit resource bounds. maxCircuitsPerPeer stops one peer from opening the whole circuit table
-// on its own (the MaxCircuits config is a node-wide cap; this is per initiator). idleCircuitTimeout
-// is how long a circuit may carry no frames before it is reaped, so abandoned circuits (and ones
-// opened only to occupy a slot) do not linger.
-const (
-	maxCircuitsPerPeer = 16
-	idleCircuitTimeout = 5 * time.Minute
-	circuitReapEvery   = 1 * time.Minute
-)
+// circuitReapEvery: how often idle circuits are looked for (the limits are in relay_limits.go).
+const circuitReapEvery = 1 * time.Minute
 
 // signalFrameAllowed: hole punching messages only, within the circuit's byte and time budget.
 func signalFrameAllowed(c *Circuit, frame []byte) bool {
@@ -100,6 +118,9 @@ type RelayStats struct {
 	Private         bool   `json:"private"`
 	AllowedPeers    int    `json:"allowedPeers"`  // size of the allow list on a private relay
 	AccessRefused   uint64 `json:"accessRefused"` // requests from peers not on the allow list
+	LimitRefused    uint64 `json:"limitRefused"`  // circuits refused by a per-peer, per-IP or table cap
+	RateDropped     uint64 `json:"rateDropped"`   // frames dropped by a speed limit
+	BudgetClosed    uint64 `json:"budgetClosed"`  // circuits closed for using up a byte budget
 }
 
 // Stats returns the relay totals.
@@ -126,6 +147,9 @@ func (rs *RelayServer) Stats() RelayStats {
 		Private:         cfg.Private,
 		AllowedPeers:    allowedCount,
 		AccessRefused:   rs.accessRefused.Load(),
+		LimitRefused:    rs.limitRefused.Load(),
+		RateDropped:     rs.rateDropped.Load(),
+		BudgetClosed:    rs.budgetClosed.Load(),
 	}
 	if rs.mailbox != nil {
 		st.MailboxWaiting = rs.mailbox.Waiting()
@@ -145,10 +169,24 @@ func NewRelayServer(s *swarm.Swarm, mailbox *messenger.MailboxManager, logger *s
 		cfg: config.RelayServerConfig{
 			Enabled:     true,
 			PricePerMB:  0,
-			MaxCircuits: 50,
+			MaxCircuits: config.DefaultRelayMaxCircuits,
 		},
+		use:         make(map[types.PeerID]*peerUse),
+		connectedAt: make(map[types.PeerID]time.Time),
+		reqLimit:    ratelimit.NewKeyed[types.PeerID](relayReqRate, relayReqBurst, limiterPeers),
+		fullReply:   ratelimit.NewKeyed[types.PeerID](fullReplyRate, fullReplyBurst, limiterPeers),
+		logLast:     make(map[string]time.Time),
+		logSkipped:  make(map[string]int),
 	}
+	rs.lim = limitsOf(rs.cfg)
+	rs.nodeBucket = ratelimit.NewBucket(rs.lim.nodeRate, rateBurst(rs.lim.nodeRate))
 	if s != nil {
+		rs.addrOf = func(id types.PeerID) string {
+			if p := s.GetPeer(id); p != nil {
+				return p.RemoteAddr()
+			}
+			return ""
+		}
 		s.AddObserver(rs)
 		s.AddFrameHandler(rs.HandleRawFrame)
 	}
@@ -159,6 +197,13 @@ func (rs *RelayServer) SetPolicy(cfg config.RelayServerConfig) {
 	rs.cfgMu.Lock()
 	defer rs.cfgMu.Unlock()
 	rs.cfg = cfg
+	rs.lim = limitsOf(cfg)
+	rs.nodeBucket.SetRate(rs.lim.nodeRate, rateBurst(rs.lim.nodeRate))
+	rs.useMu.Lock()
+	for _, u := range rs.use {
+		u.bucket.SetRate(rs.lim.peerRate, rateBurst(rs.lim.peerRate))
+	}
+	rs.useMu.Unlock()
 	rs.allowed = make(map[types.PeerID]bool, len(cfg.AllowedPeers))
 	for _, s := range cfg.AllowedPeers {
 		if id, err := types.PeerIDFromString(s); err == nil {
@@ -168,7 +213,14 @@ func (rs *RelayServer) SetPolicy(cfg config.RelayServerConfig) {
 		}
 	}
 	rs.logger.Info("RelayServer: Dynamic policy updated",
-		"enabled", cfg.Enabled, "private", cfg.Private, "allowed", len(rs.allowed), "max_circuits", cfg.MaxCircuits)
+		"enabled", cfg.Enabled, "private", cfg.Private, "allowed", len(rs.allowed), "max_circuits", rs.lim.maxCircuits)
+}
+
+// policy returns the configuration and the limits it sets.
+func (rs *RelayServer) policy() (config.RelayServerConfig, relayLimits) {
+	rs.cfgMu.RLock()
+	defer rs.cfgMu.RUnlock()
+	return rs.cfg, rs.lim
 }
 
 // servesPeer reports whether this relay will work for a given peer: always on a public relay, and
@@ -197,8 +249,8 @@ func (rs *RelayServer) Start(ctx context.Context) error {
 	return nil
 }
 
-// reapLoop periodically drops circuits that have carried no frames for idleCircuitTimeout, so
-// abandoned circuits (and ones opened only to hold a slot) free their place in the table.
+// reapLoop periodically drops idle circuits, so abandoned circuits (and ones opened only to hold
+// a slot) free their place in the table, and forgets the peers the limiters no longer need.
 func (rs *RelayServer) reapLoop(ctx context.Context) {
 	ticker := time.NewTicker(circuitReapEvery)
 	defer ticker.Stop()
@@ -207,52 +259,85 @@ func (rs *RelayServer) reapLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rs.reapIdleCircuits(idleCircuitTimeout)
+			_, lim := rs.policy()
+			rs.reapIdleCircuits(lim.idle, lim.idleBytes)
+			rs.reqLimit.Prune()
+			rs.fullReply.Prune()
 		}
 	}
 }
 
-// reapIdleCircuits removes every circuit whose last activity is older than maxIdle and notifies the
-// still-connected participants. It returns how many circuits were reaped.
-func (rs *RelayServer) reapIdleCircuits(maxIdle time.Duration) int {
-	cutoff := time.Now().Add(-maxIdle).UnixNano()
+// reapIdleCircuits closes the idle circuits and notifies the still-connected participants. A
+// circuit is idle when it carried no frame for maxIdle, or less than minBytes over the last
+// maxIdle: a trickle of tiny frames does not keep a slot. A signaling circuit is closed once its
+// life is over. It returns how many circuits were reaped.
+func (rs *RelayServer) reapIdleCircuits(maxIdle time.Duration, minBytes uint64) int {
+	now := time.Now()
+	cutoff := now.Add(-maxIdle).UnixNano()
 
-	type closed struct {
-		cid   uint32
-		peerA types.PeerID
-		peerB types.PeerID
-	}
-	var toClose []closed
-
+	var toClose []*Circuit
+	holding := make(map[types.PeerID]bool)
 	rs.circuitsMu.Lock()
 	for cid, c := range rs.circuits {
 		last := c.LastActive.Load()
 		if last == 0 {
 			last = c.CreatedAt.UnixNano()
 		}
-		if last < cutoff {
+		idle := maxIdle > 0 && last < cutoff
+		if c.periodStart.IsZero() {
+			c.periodStart = c.CreatedAt
+		}
+		if maxIdle > 0 && now.Sub(c.periodStart) >= maxIdle {
+			if c.periodBytes.Swap(0) < minBytes {
+				idle = true
+			}
+			c.periodStart = now
+		}
+		if c.SignalOnly && now.Sub(c.CreatedAt) > signalCircuitLife {
+			idle = true
+		}
+		if idle {
 			delete(rs.circuits, cid)
-			toClose = append(toClose, closed{cid: cid, peerA: c.PeerA, peerB: c.PeerB})
+			toClose = append(toClose, c)
+		} else {
+			holding[c.PeerA] = true
 		}
 	}
 	rs.circuitsMu.Unlock()
 
 	for _, c := range toClose {
-		closePkt := make([]byte, 4)
-		binary.BigEndian.PutUint32(closePkt, c.cid)
-		if rs.swarm != nil {
-			if p := rs.swarm.GetPeer(c.peerA); p != nil {
-				_ = p.SendRaw(net_types.TypeCircuitClose, closePkt)
-			}
-			if p := rs.swarm.GetPeer(c.peerB); p != nil {
-				_ = p.SendRaw(net_types.TypeCircuitClose, closePkt)
-			}
-		}
+		rs.notifyClosed(c.ID, c.PeerA, c.PeerB)
 	}
+	rs.pruneUse(holding, now)
 	if len(toClose) > 0 {
-		rs.logger.Info("RelayServer: reaped idle circuits", "count", len(toClose))
+		rs.logger.Debug("RelayServer: reaped idle circuits", "count", len(toClose))
 	}
 	return len(toClose)
+}
+
+// notifyClosed tells the given ends of a circuit that it is gone.
+func (rs *RelayServer) notifyClosed(cid uint32, peers ...types.PeerID) {
+	if rs.swarm == nil {
+		return
+	}
+	closePkt := make([]byte, 4)
+	binary.BigEndian.PutUint32(closePkt, cid)
+	for _, id := range peers {
+		if p := rs.swarm.GetPeer(id); p != nil {
+			_ = p.SendRaw(net_types.TypeCircuitClose, closePkt)
+		}
+	}
+}
+
+// closeCircuit removes a circuit and tells both ends.
+func (rs *RelayServer) closeCircuit(c *Circuit) {
+	rs.circuitsMu.Lock()
+	_, ok := rs.circuits[c.ID]
+	delete(rs.circuits, c.ID)
+	rs.circuitsMu.Unlock()
+	if ok {
+		rs.notifyClosed(c.ID, c.PeerA, c.PeerB)
+	}
 }
 
 // circuitsForPeerLocked counts the circuits a given peer initiated (is PeerA of). Caller holds circuitsMu.
@@ -328,9 +413,7 @@ func (rs *RelayServer) handleCircuitOpenReq(payload []byte, fromPeer types.PeerI
 		return
 	}
 
-	rs.cfgMu.RLock()
-	cfg := rs.cfg
-	rs.cfgMu.RUnlock()
+	cfg, lim := rs.policy()
 
 	// a client asks for a signaling circuit with one more byte after the target
 	signal := len(payload) == 33 && payload[32] == 1
@@ -354,38 +437,42 @@ func (rs *RelayServer) handleCircuitOpenReq(payload []byte, fromPeer types.PeerI
 		return
 	}
 
-	// 2. Check active circuits quota (DoS protection): node-wide, and per initiating peer.
-	rs.circuitsMu.RLock()
-	currentCircuits := len(rs.circuits)
-	perPeer := rs.circuitsForPeerLocked(fromPeer)
-	rs.circuitsMu.RUnlock()
-
-	if cfg.MaxCircuits > 0 && currentCircuits >= cfg.MaxCircuits {
-		resp := make([]byte, 5)
-		resp[4] = 0 // rejected: max circuits quota reached
+	// 2. Circuit caps (DoS protection): the table, the share fresh peers may take, and what one
+	// peer, one IP address and one subnet may hold. Checked here cheaply and again when the
+	// circuit goes in, under the same lock, so parallel opens cannot overshoot.
+	ipKey, netKey := rs.addrKeys(fromPeer)
+	now := time.Now()
+	established := rs.established(fromPeer, now)
+	var use *peerUse
+	if !signal && !cfg.SignalingOnly {
+		use = rs.useOf(fromPeer, lim)
+	}
+	refuse := func(reason string) {
+		rs.limitRefused.Add(1)
+		resp := make([]byte, 5) // status 0: rejected
 		_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, resp)
-		rs.logger.Warn("RelayServer: CircuitOpen rejected: circuit quota full",
-			"active", currentCircuits, "max", cfg.MaxCircuits, "from", fromPeer.String()[:8])
+		rs.warnLimited(reason, "from", fromPeer.String()[:8], "max_circuits", lim.maxCircuits)
+	}
+	if use != nil && use.exhausted(lim, now) {
+		refuse("daily relay budget used up")
 		return
 	}
-
-	if perPeer >= maxCircuitsPerPeer {
-		resp := make([]byte, 5)
-		resp[4] = 0 // rejected: this peer already holds its share of circuits
-		_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, resp)
-		rs.logger.Warn("RelayServer: CircuitOpen rejected: per-peer circuit cap reached",
-			"peer", fromPeer.String()[:8], "held", perPeer, "cap", maxCircuitsPerPeer)
+	rs.circuitsMu.RLock()
+	reason := rs.admitLocked(fromPeer, ipKey, netKey, established, lim)
+	rs.circuitsMu.RUnlock()
+	if reason != "" {
+		refuse(reason)
 		return
 	}
 
 	targetID, err := types.ToPeerID(payload[:32])
 	if err != nil {
-		rs.logger.Warn("RelayServer: invalid target peer ID in CircuitOpen", "err", err)
+		rs.logger.Debug("RelayServer: invalid target peer ID in CircuitOpen", "err", err)
 		return
 	}
 
 	// A circuit to ourselves makes no sense and would let a peer loop frames back through us.
-	if targetID == rs.swarm.GetSelfID() {
+	if rs.swarm == nil || targetID == rs.swarm.GetSelfID() {
 		resp := make([]byte, 5)
 		resp[4] = 0 // rejected: target is this relay
 		_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, resp)
@@ -413,15 +500,29 @@ func (rs *RelayServer) handleCircuitOpenReq(payload []byte, fromPeer types.PeerI
 	}
 
 	circuit := &Circuit{
-		ID:         cid,
-		PeerA:      fromPeer,
-		PeerB:      targetID,
-		CreatedAt:  time.Now(),
-		SignalOnly: signal || cfg.SignalingOnly,
+		ID:          cid,
+		PeerA:       fromPeer,
+		PeerB:       targetID,
+		CreatedAt:   now,
+		SignalOnly:  signal || cfg.SignalingOnly,
+		ipKey:       ipKey,
+		netKey:      netKey,
+		use:         use,
+		periodStart: now,
 	}
 
-	circuit.LastActive.Store(time.Now().UnixNano())
+	circuit.LastActive.Store(now.UnixNano())
 	rs.circuitsMu.Lock()
+	if reason := rs.admitLocked(fromPeer, ipKey, netKey, established, lim); reason != "" {
+		rs.circuitsMu.Unlock()
+		refuse(reason)
+		return
+	}
+	if _, taken := rs.circuits[cid]; taken {
+		rs.circuitsMu.Unlock()
+		_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, make([]byte, 5))
+		return
+	}
 	rs.circuits[cid] = circuit
 	rs.circuitsMu.Unlock()
 	rs.circuitsOpened.Add(1)
@@ -442,7 +543,7 @@ func (rs *RelayServer) handleCircuitOpenReq(payload []byte, fromPeer types.PeerI
 	copy(respOrigin[5:], targetID[:])
 	_ = rs.sendRawFrame(fromPeer, net_types.TypeCircuitOpenResponse, respOrigin)
 
-	rs.logger.Info("RelayServer: Virtual Circuit established",
+	rs.logger.Debug("RelayServer: Virtual Circuit established",
 		"circuitID", cid, "peerA", fromPeer.String()[:8], "peerB", targetID.String()[:8])
 }
 
@@ -489,12 +590,29 @@ func (rs *RelayServer) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 		return
 	}
 
+	n := uint64(len(payload))
+	now := time.Now()
+	if !circuit.SignalOnly {
+		_, lim := rs.policy()
+		switch rs.chargeFrame(circuit, n, lim, now) {
+		case frameDrop:
+			rs.rateDropped.Add(1)
+			return
+		case frameOverBudget:
+			rs.budgetClosed.Add(1)
+			rs.closeCircuit(circuit)
+			rs.warnLimited("relay byte budget used up, circuit closed", "peer", circuit.PeerA.String()[:8])
+			return
+		}
+	}
+
 	// Zero-copy passthrough of the circuit data frame!
 	_ = destPeer.SendRaw(net_types.TypeCircuitData, payload)
 
-	circuit.LastActive.Store(time.Now().UnixNano())
-	atomic.AddUint64(&circuit.BytesRouted, uint64(len(payload)))
-	rs.bytesRouted.Add(uint64(len(payload)))
+	circuit.LastActive.Store(now.UnixNano())
+	circuit.periodBytes.Add(n)
+	atomic.AddUint64(&circuit.BytesRouted, n)
+	rs.bytesRouted.Add(n)
 }
 
 // handleCircuitClose removes the circuit and informs the remaining peer.
@@ -527,7 +645,7 @@ func (rs *RelayServer) handleCircuitClose(payload []byte, fromPeer types.PeerID)
 		if otherPeer := rs.swarm.GetPeer(otherID); otherPeer != nil {
 			_ = otherPeer.SendRaw(net_types.TypeCircuitClose, payload)
 		}
-		rs.logger.Info("RelayServer: Virtual Circuit closed", "circuitID", cid)
+		rs.logger.Debug("RelayServer: Virtual Circuit closed", "circuitID", cid)
 	}
 }
 
@@ -546,13 +664,13 @@ func (rs *RelayServer) sendRawFrame(peerID types.PeerID, msgType net_types.Messa
 func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerID) {
 	req := msg.GetRelayReq()
 	if req == nil {
-		rs.logger.Warn("RelayServer: received empty RelayReq")
+		rs.logger.Debug("RelayServer: received empty RelayReq")
 		return
 	}
 
 	targetID, err := types.ToPeerID(req.TargetPeerId)
 	if err != nil {
-		rs.logger.Warn("RelayServer: invalid target peer ID", "err", err)
+		rs.logger.Debug("RelayServer: invalid target peer ID", "err", err)
 		return
 	}
 
@@ -564,7 +682,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	selfID := rs.swarm.GetSelfID()
 	if targetID != selfID && (oErr != nil || originID == (types.PeerID{})) {
 		rs.refusedMsgs.Add(1)
-		rs.logger.Warn("RelayServer: refused relay request with no authenticated origin")
+		rs.warnLimited("relay request with no authenticated origin", "from", fromPeer.String()[:8])
 		return
 	}
 
@@ -582,7 +700,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		rs.accessRefused.Add(1)
 		return
 	}
-	rs.logger.Info("RelayServer: received relay message",
+	rs.logger.Debug("RelayServer: received relay message",
 		"from", fromPeer.String()[:8],
 		"target", targetID.String()[:8],
 		"self", selfID.String()[:8])
@@ -592,54 +710,77 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		var innerEnv internal_pb.Envelope
 		if err = proto.Unmarshal(req.ForwardedEnvelope, &innerEnv); err == nil {
 			rs.swarm.GetDispatcher().PushMessage(&innerEnv, fromPeer)
-			rs.logger.Info("RelayServer: Delivered relay message to local dispatcher", "from", fromPeer.String()[:8])
+			rs.logger.Debug("RelayServer: Delivered relay message to local dispatcher", "from", fromPeer.String()[:8])
 		} else {
-			rs.logger.Error("RelayServer: failed to unmarshal forwarded envelope", "err", err)
+			rs.logger.Debug("RelayServer: failed to unmarshal forwarded envelope", "err", err)
 		}
 		return
 	}
 
+	// Work for others is limited per origin: every message may cost a signature, a send to the
+	// next hop and a mailbox write, so one identity cannot keep the node busy with them.
+	if !rs.reqLimit.Allow(originID, 1) {
+		rs.refusedMsgs.Add(1)
+		rs.warnLimited("relay requests from one origin too fast", "origin", originID.String()[:8])
+		return
+	}
+
 	// 2. If target is directly connected to this node in Swarm: deliver immediately!
-	if rs.swarm.ThisIsActivePeer(targetID) {
+	direct := rs.swarm.ThisIsActivePeer(targetID)
+	if direct {
 		var innerEnv internal_pb.Envelope
 		if err = proto.Unmarshal(req.ForwardedEnvelope, &innerEnv); err == nil {
 			peer := rs.swarm.GetPeer(targetID)
 			if peer != nil {
 				_ = peer.Send(net_types.TypeChatMessage, &innerEnv)
 				rs.forwarded.Add(1)
-				rs.logger.Info("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
+				rs.logger.Debug("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
 				return
 			}
 		}
 	}
 
+	// A message that has travelled far enough can only go to the mailbox: when the mailbox would
+	// refuse it anyway, say so now, before any work is done for it.
+	if !direct && msg.HopLimit <= 1 {
+		if reason := rs.mailboxRefuses(targetID, len(req.ForwardedEnvelope)); reason != nil {
+			rs.refusedMsgs.Add(1)
+			rs.replyMailboxFull(fromPeer, selfID)
+			rs.logger.Debug("RelayServer: mailbox would refuse, dropped early", "err", reason, "target", targetID.String()[:8])
+			return
+		}
+	}
+
 	// 3. Multi-hop: Forward to next peer in the chain (not the one who just sent it to us).
-	// The request is ours now, signed by us; the envelope inside stays the sender's.
+	// The request is ours now, signed by us (once, whatever the number of candidates tried); the
+	// envelope inside stays the sender's.
 	forwarded := false
-	hop := &internal_pb.MessageData{
-		MessageId: msg.MessageId,
-		OriginId:  selfID.ToBytes(),
-		TargetId:  msg.TargetId,
-		Timestamp: msg.Timestamp,
-		HopLimit:  msg.HopLimit - 1,
-		Payload:   msg.Payload,
-	}
-	if msg.HopLimit <= 1 {
-		hop = nil // travelled far enough: keep it in the mailbox below
-	}
-	allPeers := rs.swarm.GetAllPeers()
-	for _, nextPeer := range allPeers {
-		nextPeerID := nextPeer.ID()
-		if hop != nil && nextPeerID != fromPeer && nextPeer.Relays() {
-			relayEnv, err := rs.swarm.SignMessageData(hop)
-			if err == nil {
-				if err := nextPeer.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
-					rs.logger.Info("RelayServer: forwarded relay message to next hop",
-						"next", nextPeerID.String()[:8], "target", targetID.String()[:8])
-					forwarded = true
-					rs.forwarded.Add(1)
+	if msg.HopLimit > 1 {
+		hop := &internal_pb.MessageData{
+			MessageId: msg.MessageId,
+			OriginId:  selfID.ToBytes(),
+			TargetId:  msg.TargetId,
+			Timestamp: msg.Timestamp,
+			HopLimit:  msg.HopLimit - 1,
+			Payload:   msg.Payload,
+		}
+		var relayEnv *internal_pb.Envelope
+		for _, nextPeer := range rs.swarm.GetAllPeers() {
+			nextPeerID := nextPeer.ID()
+			if nextPeerID == fromPeer || !nextPeer.Relays() {
+				continue
+			}
+			if relayEnv == nil {
+				if relayEnv, err = rs.swarm.SignMessageData(hop); err != nil {
 					break
 				}
+			}
+			if err := nextPeer.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
+				rs.logger.Debug("RelayServer: forwarded relay message to next hop",
+					"next", nextPeerID.String()[:8], "target", targetID.String()[:8])
+				forwarded = true
+				rs.forwarded.Add(1)
+				break
 			}
 		}
 	}
@@ -662,29 +803,65 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 
 		if err = rs.mailbox.Store(item); err == nil {
 			rs.stored.Add(1)
-			rs.logger.Info("RelayServer: saved message to offline Mailbox",
-				"target", targetID.String()[:8], "msgID", msgID[:8])
+			rs.logger.Debug("RelayServer: saved message to offline Mailbox",
+				"target", targetID.String()[:8], "msgID", msgID)
 		} else {
-			rs.logger.Warn("RelayServer: failed to store in mailbox", "err", err, "target", targetID.String()[:8])
+			rs.logger.Debug("RelayServer: failed to store in mailbox", "err", err, "target", targetID.String()[:8])
 			// Send network error back to sender peer so it searches for another relay via DHT!
-			if senderPeer := rs.swarm.GetPeer(fromPeer); senderPeer != nil {
-				rejMsg := &internal_pb.MessageData{
-					MessageId: types.NewMessageID(),
-					OriginId:  selfID.ToBytes(),
-					TargetId:  fromPeer[:],
-					Timestamp: uint64(time.Now().UnixNano()),
-				}
-				if rejEnv, rErr := rs.swarm.SignMessageData(rejMsg); rErr == nil {
-					_ = senderPeer.Send(net_types.TypeMailboxFull, rejEnv)
-					rs.logger.Info("RelayServer: Sent TypeMailboxFull error to sender", "sender", fromPeer.String()[:8])
-				}
-			}
+			rs.replyMailboxFull(fromPeer, selfID)
 		}
+	}
+}
+
+// mailboxRefuses says why the mailbox would not take a message of size bytes for recipient, from
+// its limits and running counts alone (nil when it might take it). It is the cheap part of
+// MailboxManager.Store; Store still decides.
+func (rs *RelayServer) mailboxRefuses(recipient types.PeerID, size int) error {
+	if rs.mailbox == nil {
+		return messenger.ErrMailboxFull
+	}
+	l := rs.mailbox.GetLimits()
+	switch {
+	case l.MaxItemSizeBytes > 0 && int64(size) > l.MaxItemSizeBytes:
+		return messenger.ErrItemTooLarge
+	case l.MaxTotalMessages > 0 && rs.mailbox.Waiting() >= l.MaxTotalMessages:
+		return messenger.ErrMailboxFull
+	case l.MaxMessagesPerPeer > 0 && rs.mailbox.Count(recipient) >= l.MaxMessagesPerPeer:
+		return messenger.ErrMailboxFull
+	}
+	return nil
+}
+
+// replyMailboxFull tells the sending peer that this node keeps no more messages, so it looks for
+// another relay. The answer is signed, so a peer gets one only every few seconds.
+func (rs *RelayServer) replyMailboxFull(to, selfID types.PeerID) {
+	if !rs.fullReply.Allow(to, 1) {
+		return
+	}
+	senderPeer := rs.swarm.GetPeer(to)
+	if senderPeer == nil {
+		return
+	}
+	rejMsg := &internal_pb.MessageData{
+		MessageId: types.NewMessageID(),
+		OriginId:  selfID.ToBytes(),
+		TargetId:  to[:],
+		Timestamp: uint64(time.Now().UnixNano()),
+	}
+	if rejEnv, rErr := rs.swarm.SignMessageData(rejMsg); rErr == nil {
+		_ = senderPeer.Send(net_types.TypeMailboxFull, rejEnv)
+		rs.logger.Debug("RelayServer: Sent TypeMailboxFull error to sender", "sender", to.String()[:8])
 	}
 }
 
 // OnPeerConnected reacts when any peer connects to this node.
 func (rs *RelayServer) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPublicKey, addr string) {
+	rs.peersMu.Lock()
+	if _, ok := rs.connectedAt[peerID]; !ok {
+		rs.connectedAt[peerID] = time.Now()
+	}
+	rs.peersMu.Unlock()
+
 	if rs.mailbox == nil {
 		return
 	}
@@ -723,6 +900,10 @@ func (rs *RelayServer) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPub
 }
 
 func (rs *RelayServer) OnPeerDisconnected(peerID types.PeerID) {
+	rs.peersMu.Lock()
+	delete(rs.connectedAt, peerID)
+	rs.peersMu.Unlock()
+
 	// Clean up any circuits where this disconnected peer was a participant
 	rs.circuitsMu.Lock()
 	defer rs.circuitsMu.Unlock()

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/ratelimit"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -20,6 +22,9 @@ const (
 	resultDenied     byte = 1
 	resultDialFailed byte = 2
 	resultPayment    byte = 3
+	// resultBusy: the exit is at a stream cap (the peer's, its address's or its own). An older
+	// client reads it as a failed dial, which does not make it give up on the exit either.
+	resultBusy byte = 4
 
 	maxTargetLen = 300
 )
@@ -29,6 +34,7 @@ var (
 	ErrExitDisabled    = errors.New("exit node is not accepting traffic")
 	ErrExitDenied      = errors.New("exit node refused the target")
 	ErrExitDialFailed  = errors.New("exit node could not reach the target")
+	ErrExitBusy        = errors.New("exit node is serving too many streams, try again shortly")
 	ErrExitProtocol    = errors.New("exit node sent an invalid reply")
 	ErrBlockedAddress  = errors.New("target address is private, loopback or otherwise not allowed")
 	ErrInvalidTarget   = errors.New("invalid target address")
@@ -112,6 +118,8 @@ func verdictErr(t net_types.MessageType, b []byte) error {
 		return ErrExitDenied
 	case resultPayment:
 		return ErrPaymentRequired
+	case resultBusy:
+		return ErrExitBusy
 	default:
 		return ErrExitDialFailed
 	}
@@ -285,6 +293,14 @@ type ExitService struct {
 
 	// vouchers from clients' TON vaults (nil: this exit takes none)
 	vouchers *VoucherBook
+
+	// limits on what peers can take (limits and addrOf are guarded by slots.mu)
+	limits  Limits
+	addrOf  func(types.PeerID) string
+	slots   streamSlots
+	shaper  shaper
+	queries *ratelimit.Keyed[types.PeerID] // account requests per peer
+	offers  *ratelimit.Keyed[types.PeerID] // voucher offers per peer
 }
 
 // SetPayments lets clients pay for traffic: ledger holds their credit, self is this exit's peer ID
@@ -312,14 +328,18 @@ type peerQuota struct {
 func (e *ExitService) AllowPrivateTargets(on bool) { e.allowPrivate.Store(on) }
 
 func NewExitService() *ExitService {
-	return &ExitService{
+	e := &ExitService{
 		splicer:     NewExitSplicer(8 * time.Second),
 		dialTimeout: 8 * time.Second,
 		quotas:      make(map[types.PeerID]*peerQuota),
 		resolver: func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		},
+		queries: ratelimit.NewKeyed[types.PeerID](queryRate, queryBurst, quotaPeers),
+		offers:  ratelimit.NewKeyed[types.PeerID](offerRate, offerBurst, quotaPeers),
 	}
+	e.SetLimits(DefaultLimits())
+	return e
 }
 
 func (e *ExitService) SetEnabled(on bool) { e.enabled.Store(on) }
@@ -352,6 +372,14 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 		return
 	}
 
+	release, ok := e.acquire(peer, false)
+	if !ok {
+		e.refuse(peer, RefuseBusy)
+		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultBusy})
+		return
+	}
+	defer release()
+
 	conn, code := e.connect(ctx, string(target))
 	if code != resultOK {
 		e.refuse(peer, refuseCode(code))
@@ -366,7 +394,10 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 	e.accepted.Add(1)
 	m := newMeter(e, peer)
 	defer m.close()
-	_ = e.splicer.Splice(ctx, &meteredStream{FramedStream: st, m: m}, conn)
+	p, unpace := e.paceFor(peer)
+	defer unpace()
+	lim := e.CurrentLimits()
+	_ = e.splicer.SpliceFor(ctx, &meteredStream{FramedStream: st, m: m, pace: p}, conn, lim.Idle, lim.MaxLifetime)
 }
 
 func (e *ExitService) connect(ctx context.Context, target string) (net.Conn, byte) {
@@ -618,13 +649,38 @@ func (e *ExitService) quotaLocked(peer types.PeerID) *peerQuota {
 	q := e.quotas[peer]
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	if q == nil || q.day.Before(today) {
-		if len(e.quotas) > 10000 {
-			e.quotas = make(map[types.PeerID]*peerQuota)
+		if q == nil && len(e.quotas) >= quotaPeers {
+			e.pruneQuotasLocked(today)
 		}
 		q = &peerQuota{day: today}
 		e.quotas[peer] = q
 	}
 	return q
+}
+
+// pruneQuotasLocked makes room in the quota table: yesterday's entries go first, then the ones
+// that used nothing, then the half that used least. Wiping the table instead, as it once did,
+// gave every peer its free quota back as soon as enough fresh identities had asked.
+func (e *ExitService) pruneQuotasLocked(today time.Time) {
+	for id, q := range e.quotas {
+		if q.day.Before(today) || q.used <= 0 {
+			delete(e.quotas, id)
+		}
+	}
+	if len(e.quotas) < quotaPeers {
+		return
+	}
+	used := make([]int64, 0, len(e.quotas))
+	for _, q := range e.quotas {
+		used = append(used, q.used)
+	}
+	slices.Sort(used)
+	cut := used[len(used)/2]
+	for id, q := range e.quotas {
+		if q.used <= cut && len(e.quotas) >= quotaPeers/2 {
+			delete(e.quotas, id)
+		}
+	}
 }
 
 // meterSlice is how much allowance a stream sets aside at a time. Taking it per read meant the
@@ -757,7 +813,8 @@ func (e *ExitService) refund(m *meter) {
 // meteredStream spends the peer's allowance as traffic passes and cuts the tunnel when it runs out
 type meteredStream struct {
 	FramedStream
-	m *meter
+	m    *meter
+	pace *pace // nil: not slowed down
 }
 
 func (m *meteredStream) account(n int) error {
@@ -782,6 +839,7 @@ func (m *meteredStream) Read(p []byte) (int, error) {
 		// crosses the limit is dropped, so a client cannot get free traffic by sending a big one
 		return 0, aerr
 	}
+	m.pace.throttle(n)
 	return n, err
 }
 
@@ -790,5 +848,6 @@ func (m *meteredStream) Write(p []byte) (int, error) {
 	if aerr := m.account(n); aerr != nil && err == nil {
 		err = aerr
 	}
+	m.pace.throttle(n)
 	return n, err
 }

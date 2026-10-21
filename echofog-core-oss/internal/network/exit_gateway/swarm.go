@@ -23,6 +23,12 @@ var _ io.ReadWriteCloser = swarmStream{}
 
 // AttachToSwarm makes this node answer incoming exit tunnel requests (they are refused unless the service is enabled)
 func AttachToSwarm(sw *swarm.Swarm, svc *ExitService) {
+	svc.SetAddrOf(func(id types.PeerID) string {
+		if p := sw.GetPeer(id); p != nil {
+			return p.RemoteAddr()
+		}
+		return ""
+	})
 	sw.RegisterStreamHandler(net_types.TypeExitConnect, func(st *network.Stream, target []byte, peer types.PeerID) {
 		svc.HandleTunnelFrom(context.Background(), swarmStream{st, sw}, target, peer)
 	})

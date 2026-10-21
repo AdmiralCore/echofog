@@ -165,7 +165,8 @@ cloud providers charge per GB of outbound traffic, and that adds up fast.
 
 - For a **relay** (or an exit), prefer a VPS plan with generous or unmetered traffic.
 - Keep **metered cloud VMs as signaling nodes** (`--signaling`).
-- `--relay-max-circuits` (default 200) limits how many relayed connections run at once.
+- `--relay-max-circuits` (default 200) limits how many relayed connections run at once, and
+  `--relay-mbps` their total speed (see [Relay and exit limits](#relay-and-exit-limits)).
 
 ## Check on it
 
@@ -210,3 +211,51 @@ A node at home works for itself, but to serve others as a relay or public exit i
 from the Internet. See [reachability.md](reachability.md). A **hidden** exit is the exception: it
 serves the people it invited from behind a router, through the relays named in its link (see
 [Hidden and isolated nodes](hidden-nodes.md)).
+
+## Relay and exit limits
+
+Identities cost nothing, so a relay or an exit never assumes one peer is one person. Out of the box
+a node caps what peers can take; the defaults fit a small VPS, and each one has a flag (and an
+`ECHOFOG_*` variable). For the number flags `0` keeps the default and `-1` removes the limit.
+
+**Relay** (relayed connections, "circuits"):
+
+| Flag | Default | What it limits |
+|---|---|---|
+| `--relay-max-circuits` | 200 | circuits at once, everybody together |
+| `--relay-reserved-pct` | 25 | share of them kept for peers connected 10 minutes or more, so a burst of fresh identities cannot take every slot |
+| `--relay-circuits-per-peer` | 16 | circuits one peer holds |
+| `--relay-circuits-per-ip` | 32 | circuits the peers of one IP address hold (a /24 gets twice that) |
+| `--relay-idle`, `--relay-idle-kb` | 5m, 32 | a circuit moving less than 32 KB in 5 minutes is closed, even if it sends tiny frames to look alive |
+| `--relay-circuit-mb` | 4096 | MB one circuit carries before it is closed |
+| `--relay-peer-mb-per-day` | 16384 | MB the circuits of one peer carry a day |
+| `--relay-peer-mbps` | 50 | speed of one peer's circuits, Mbit/s (enough for a 4K call) |
+| `--relay-mbps` | no limit | speed of everything the node relays, Mbit/s: set it below your uplink |
+
+Signaling circuits (hole punching) keep their own tighter limit, 64 KB over 2 minutes. Messages kept
+for offline peers are limited per sender and in total by the mailbox, and the relay drops a message
+the mailbox would refuse before doing any work for it.
+
+**Exit:**
+
+| Flag | Default | What it limits |
+|---|---|---|
+| `--exit-max-streams` | 4096 | connections and UDP sessions at once, everybody together |
+| `--exit-streams-per-peer` | 256 | ... for one client |
+| `--exit-streams-per-ip` | 512 | ... for the clients of one IP address |
+| `--exit-udp-per-peer` | 32 | UDP sessions (each one a socket on the server) one client holds |
+| `--exit-idle` | 5m | a TCP connection that moved nothing for this long is closed (0: never) |
+| `--exit-max-lifetime` | none | a TCP connection is closed after this long, busy or not |
+| `--exit-free-peer-mbps` | 50 | on a free exit, the speed of one client, Mbit/s |
+| `--exit-free-ip-mbps` | 100 | on a free exit, the speed of all the clients of one IP address |
+
+A client over a stream cap is told the exit is busy and tries again; it does not switch exits over
+it. Paying clients and the peers on your free list (`--exit-free-peers`) are never slowed down.
+Account, voucher and exit-directory requests are answered a few a second per peer, and a voucher
+from a vault the exit does not know is checked on the TON network at most once every 10 seconds per
+peer (an empty vault is remembered for 30 seconds), so made-up vaults cannot keep the node busy.
+
+Loopback and LAN addresses are not limited per IP: a test cluster, or a node behind a local reverse
+proxy, would otherwise count as one client. The stats line shows how often the relay limits were
+hit (`limits: ... opens refused, ... frames dropped`), and `status` lists exit refusals by reason
+(`too many streams`, `too many requests`).
