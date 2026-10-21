@@ -55,7 +55,7 @@ ECHOFOG_RELAY=true
 # share this server's connection as a paid exit (other people's traffic leaves from its IP)
 ECHOFOG_EXIT=false
 ECHOFOG_ADVERTISE_PORT=443
-# empty for the very first node; otherwise the join address of a node already running
+# empty: join through the built-in node; or join addresses of nodes you know (they replace it)
 ECHOFOG_BOOTSTRAP=
 ```
 

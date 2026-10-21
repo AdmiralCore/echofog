@@ -164,11 +164,18 @@ stays on UDP only. Set `--tls-server-name` and `--camouflage-addr` by hand to ge
 
 ## Join the network
 
-- `--bootstrap host:port/<peer id>` (comma-separated for several) names the nodes to join through.
-  The host may be a domain. The peer ID is required: each node's traffic is disguised with a key tied
-  to its ID. This open-source build has no built-in seed nodes unless they were added at build time,
-  so pass at least one. <!-- TODO(owner): list of public seed nodes / where to find them -->
-  The very first node of a new network starts without `--bootstrap`.
+- **Built-in node.** The build carries one public node of the project to join through,
+  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
+  (`DefaultBootstrapNodes` in `internal/config/config.go`); a release can add more at build time
+  (`-ldflags "-X github.com/echofog/echofog-core/internal/config.SeedNodes=host:port/<peer id>,..."`).
+  Without `--bootstrap` the node joins through these.
+- `--bootstrap host:port/<peer id>` (env `ECHOFOG_BOOTSTRAP`, comma-separated for several) names
+  the nodes to join through **instead of** the built-in ones; list the built-in node too if you want
+  it as well. The host may be a domain. The peer ID is required: each node's traffic is disguised
+  with a key tied to its ID. If the built-in node is blocked where you are, pass a node you know.
+- **A separate network** of your own: point `--bootstrap` of every node at your first node. That
+  first node itself still dials the built-in one at start; there is no switch for that yet, so for a
+  network with no link to the public one, build with `DefaultBootstrapNodes` empty.
 - At startup the node prints its **Join address**: `host:port/<peer id>`. Until the node has learned
   its public IP, the host shows as a placeholder; `echofog-node status` shows it later.
 - Share it with others. Another `echofog-node` uses it in `--bootstrap`. Desktop users add it in
