@@ -298,7 +298,7 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 			continue // not a relay (a signaling-only node, or a private relay we were not given)
 		}
 		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
-			s.log.Info("MessageBroker: message routed via relay peer", "target", targetID.String()[:8])
+			s.log.Debug("MessageBroker: message routed via relay peer", "target", targetID.String()[:8])
 			return nil
 		}
 	}
@@ -350,7 +350,7 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 	case *internal_pb.MessageData_ChatMessage:
 		cm := payload.ChatMessage
 		if cm == nil || len(cm.EncryptedPayload) == 0 {
-			s.log.Warn("Received empty ChatMessage payload", "peer", peerID)
+			s.log.Debug("Received empty ChatMessage payload", "peer", peerID)
 			return
 		}
 		magic := cm.EncryptedPayload[0]
@@ -361,12 +361,12 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		case 0x01: // ChaCha20 tier
 			key, found := s.GetSharedKey(originID)
 			if !found {
-				s.log.Error("Received ChaCha20 message without known shared key", "origin", originID)
+				s.log.Debug("Received ChaCha20 message without known shared key", "origin", originID)
 				return
 			}
 			plaintext, err = encrypt_decrypt.DecryptChaCha(key, raw)
 		default:
-			s.log.Warn("Unknown ChatMessage magic tier", "magic", magic)
+			s.log.Debug("Unknown ChatMessage magic tier", "magic", magic)
 			return
 		}
 	}
@@ -381,22 +381,22 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 					return
 				}
 			}
-			s.log.Error("Decryption failed or plaintext is nil", "peer", peerID, "err", err)
+			s.log.Debug("Decryption failed or plaintext is nil", "peer", peerID, "err", err)
 			s.sessionBroken(originID)
 			return
 		}
-		s.log.Error("Decryption failed or plaintext is nil", "peer", peerID, "err", err)
+		s.log.Debug("Decryption failed or plaintext is nil", "peer", peerID, "err", err)
 		return
 	}
 
 	innerMsg := &PersonalMessageProto{}
 	if err = proto.Unmarshal(plaintext, innerMsg); err != nil {
-		s.log.Error("Failed to unmarshal inner PersonalMessage", "err", err)
+		s.log.Debug("Failed to unmarshal inner PersonalMessage", "err", err)
 		return
 	}
 	// the sender named inside is only a claim; who it is comes from the signed origin
 	if innerMsg.SenderId != hex.EncodeToString(originID[:]) {
-		s.log.Warn("MessageBroker: message names another sender than the one that sent it", "peer", originID.String()[:8])
+		s.log.Debug("MessageBroker: message names another sender than the one that sent it", "peer", originID.String()[:8])
 		return
 	}
 
@@ -461,7 +461,7 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 	receivedDTO := ProtoToDTO(innerMsg, myIDHex, myIDHex)
 	receivedDTO.TargetPubKey = hex.EncodeToString(msg.OriginId)
 
-	s.log.Info("Message received!",
+	s.log.Debug("Message received!",
 		"from", receivedDTO.SenderID,
 		"type", receivedDTO.Type,
 		"app_id", receivedDTO.AppID,

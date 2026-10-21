@@ -59,7 +59,7 @@ func (d *EchoFogDHT) HandleFindNode(msg *internal_pb.MessageData, peerID types.P
 
 	err := d.swarm.SendDataForPeer(peerID, net_types.TypeFindNodeRes, resMsg)
 	if err != nil {
-		slog.Warn("DHT: Failed to send FindNodeRes", "peer", peerID, "err", err)
+		slog.Debug("DHT: Failed to send FindNodeRes", "peer", peerID, "err", err)
 	}
 }
 
@@ -90,18 +90,23 @@ func (d *EchoFogDHT) HandleStore(msg *internal_pb.MessageData, peerID types.Peer
 	}
 
 	if err := CheckRecord(req.Record, nil); err != nil {
-		slog.Warn("DHT: Rejected fake or malicious record", "from", peerID, "key", fmt.Sprintf("%.24q", req.Record.Key), "err", err)
+		slog.Debug("DHT: Rejected fake or malicious record", "from", peerID, "key", fmt.Sprintf("%.24q", req.Record.Key), "err", err)
 		d.emit("security:poisoning_detected", map[string]any{"peer": peerID.String(), "reason": err.Error()})
 		return
 	}
 
 	if d.countRecordFromPeer(peerID) > 1000 {
-		slog.Info("Spam from peer", "from", peerID)
+		slog.Debug("DHT: peer over its hourly store quota", "from", peerID)
 		return
 	}
 
-	if held, ok := d.localRecord(req.Record.Key); ok && !newerThan(req.Record, held) {
+	held, ok := d.localRecord(req.Record.Key)
+	if ok && !newerThan(req.Record, held) {
 		slog.Debug("DHT: kept the newer record", "from", peerID)
+		return
+	}
+	if !ok && !d.admitNewRecord() {
+		slog.Debug("DHT: record store full, refused a new record", "from", peerID)
 		return
 	}
 
@@ -143,7 +148,7 @@ func (d *EchoFogDHT) HandleFindValue(msg *internal_pb.MessageData, peerID types.
 
 	err := d.swarm.SendDataForPeer(peerID, net_types.TypeFindValueRes, resMsg)
 	if err != nil {
-		slog.Error("DHT: Failed to send FindValueRes", "peer", peerID, "err", err)
+		slog.Debug("DHT: Failed to send FindValueRes", "peer", peerID, "err", err)
 	}
 }
 

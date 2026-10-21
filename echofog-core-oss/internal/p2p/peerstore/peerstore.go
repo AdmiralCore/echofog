@@ -31,6 +31,8 @@ const (
 	ForgetAfter = 30 * 24 * time.Hour
 	// maxScan bounds the entries read to sort the history or prune it.
 	maxScan = 5000
+	// MaxStored is the most entries kept before peers only heard of (SaveDiscovered) are refused.
+	MaxStored = 2000
 
 	retryBase = 15 * time.Second
 	retryMax  = 6 * time.Hour
@@ -46,6 +48,8 @@ type PeerStore struct {
 	banned map[types.PeerID]bool
 
 	entryMu sync.Mutex // read-modify-write of entries (failures, discovered peers)
+	stored  int        // entries in storage as of countAt, plus discovered ones written since
+	countAt time.Time
 
 	wg     sync.WaitGroup
 	ctx    context.Context
@@ -175,12 +179,25 @@ func (ps *PeerStore) SaveDiscovered(pubKey types.PeerPublicKey, addr string) boo
 	if _, err := ps.storage.Get(ps.savedKey(types.PeerPubKeyToID(pubKey))); err == nil {
 		return false
 	}
-	return ps.writeEntry(&storage.PeerStoreEntry{
+	// what others tell us must not fill the disk: past MaxStored entries only peers we connected
+	// to are kept (SavePeer), until Prune makes room
+	now := time.Now()
+	if ps.countAt.IsZero() || now.Sub(ps.countAt) > time.Minute {
+		ps.stored, ps.countAt = len(ps.allEntries()), now
+	}
+	if ps.stored >= MaxStored {
+		return false
+	}
+	ok := ps.writeEntry(&storage.PeerStoreEntry{
 		PubKey:        pubKey[:],
 		LastKnownAddr: addr,
-		LastSeen:      uint64(time.Now().UnixNano()),
+		LastSeen:      uint64(now.UnixNano()),
 		TrustScore:    50,
 	}) == nil
+	if ok {
+		ps.stored++
+	}
+	return ok
 }
 
 // RecordDialFailure notes that a peer could not be reached at its address. After
@@ -267,6 +284,7 @@ func (ps *PeerStore) Prune(now time.Time) int {
 	}
 	ps.entryMu.Lock()
 	defer ps.entryMu.Unlock()
+	ps.countAt = time.Time{} // recount after this
 	cutoff := uint64(now.Add(-ForgetAfter).UnixNano())
 	removed := 0
 	for _, e := range ps.allEntries() {

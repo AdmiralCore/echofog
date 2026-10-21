@@ -132,8 +132,14 @@ func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, err
 }
 
 // CreateJITBundle makes a bundle with one fresh one-time prekey, for a peer that asks directly.
+// These prekeys are kept apart from the published ones, for JITOPKRetention and at most
+// MaxJITOPKs of them (see StoredJITOPKs).
 func (am *AccountManager) CreateJITBundle() (*PublicBundle, error) {
-	return am.CreateBundleWithOPKs(1)
+	pub, err := am.newJITOPK()
+	if err != nil {
+		return nil, err
+	}
+	return am.CreateMyBundle([][32]byte{pub})
 }
 
 // CreateBundleWithOPKs makes a signed bundle with n fresh one-time prekeys. A bundle published to

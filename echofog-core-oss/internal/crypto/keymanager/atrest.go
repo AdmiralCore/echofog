@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/awnumar/memguard"
@@ -25,10 +26,18 @@ const (
 	SignedPreKeyRetention = 35 * 24 * time.Hour
 	// OPKRetention: a one-time prekey nobody used in this time was in a bundle that expired.
 	OPKRetention = 35 * 24 * time.Hour
+	// JITOPKRetention: a one-time prekey handed to a peer that asked for our bundle directly is
+	// used at once by a peer that means to start a session; one unused this long never will be.
+	JITOPKRetention = 72 * time.Hour
+	// MaxJITOPKs is the most one-time prekeys handed out on request kept at once. Past it the
+	// oldest go, so a peer asking over and over, under ever new IDs, cannot fill the disk. The
+	// prekeys of published bundles are kept apart and never evicted for these.
+	MaxJITOPKs = 2048
 
 	spkCurrentKey = "spk:current"
 	spkOldPrefix  = "spk:old:"
 	opkPrefix     = "opk:"
+	jitOPKPrefix  = "jopk:"
 )
 
 var ErrSealedOpen = errors.New("sealed value cannot be opened")
@@ -126,7 +135,11 @@ func timedSecret(created time.Time, priv []byte) []byte {
 }
 
 func (am *AccountManager) storeOPK(pub [32]byte, priv []byte) error {
-	name := append([]byte(opkPrefix), pub[:]...)
+	return am.storeOPKAt(opkPrefix, pub, priv)
+}
+
+func (am *AccountManager) storeOPKAt(prefix string, pub [32]byte, priv []byte) error {
+	name := append([]byte(prefix), pub[:]...)
 	plain := timedSecret(time.Now(), priv)
 	defer memguard.WipeBytes(plain)
 	sealed, err := am.seal(name, plain)
@@ -141,7 +154,10 @@ func (am *AccountManager) OpenOPK(pub [32]byte) (*memguard.Enclave, error) {
 	name := append([]byte(opkPrefix), pub[:]...)
 	data, err := am.storage.Get(name)
 	if err != nil {
-		return nil, ErrOPKNotFound
+		name = append([]byte(jitOPKPrefix), pub[:]...)
+		if data, err = am.storage.Get(name); err != nil {
+			return nil, ErrOPKNotFound
+		}
 	}
 	plain, err := am.open(name, data, 32)
 	memguard.WipeBytes(data)
@@ -160,7 +176,101 @@ func (am *AccountManager) OpenOPK(pub [32]byte) (*memguard.Enclave, error) {
 
 // DeleteOPK uses up a one-time prekey: a second session with it is impossible.
 func (am *AccountManager) DeleteOPK(pub [32]byte) error {
+	if jit := append([]byte(jitOPKPrefix), pub[:]...); am.storage.Exists(jit) {
+		am.opkMu.Lock()
+		defer am.opkMu.Unlock()
+		if err := am.storage.Delete(jit); err != nil {
+			return err
+		}
+		if am.jitCount > 0 {
+			am.jitCount--
+		}
+		return nil
+	}
 	return am.storage.Delete(append([]byte(opkPrefix), pub[:]...))
+}
+
+// newJITOPK makes and stores a one-time prekey for a bundle handed out on request, making room
+// first when MaxJITOPKs are stored.
+func (am *AccountManager) newJITOPK() ([32]byte, error) {
+	am.opkMu.Lock()
+	defer am.opkMu.Unlock()
+	if !am.jitCounted || am.jitCount >= MaxJITOPKs {
+		am.sweepJITLocked(time.Now())
+	}
+	pub, privEnc, err := GenerateSingleOPK()
+	if err != nil {
+		return pub, err
+	}
+	locked, err := privEnc.Open()
+	if err != nil {
+		return pub, ErrEnclaveOpenFailed
+	}
+	err = am.storeOPKAt(jitOPKPrefix, pub, locked.Bytes())
+	locked.Destroy()
+	if err != nil {
+		return pub, ErrSaveOPKFailed
+	}
+	am.jitCount++
+	return pub, nil
+}
+
+// StoredJITOPKs is how many one-time prekeys handed out on request are stored and unused.
+func (am *AccountManager) StoredJITOPKs() int {
+	am.opkMu.Lock()
+	defer am.opkMu.Unlock()
+	if !am.jitCounted {
+		am.sweepJITLocked(time.Now())
+	}
+	return am.jitCount
+}
+
+// SweepJITOPKs deletes the one-time prekeys handed out on request more than JITOPKRetention ago,
+// and returns how many are left.
+func (am *AccountManager) SweepJITOPKs() int {
+	am.opkMu.Lock()
+	defer am.opkMu.Unlock()
+	am.sweepJITLocked(time.Now())
+	return am.jitCount
+}
+
+// sweepJITLocked deletes the handed-out prekeys past JITOPKRetention and, when MaxJITOPKs are
+// still stored, the oldest down to three quarters of it, then counts what is left. Caller holds
+// am.opkMu.
+func (am *AccountManager) sweepJITLocked(now time.Time) {
+	entries, err := am.storage.FindValues([]byte(jitOPKPrefix), 0)
+	if err != nil {
+		return
+	}
+	type aged struct {
+		key     []byte
+		created time.Time
+	}
+	kept := make([]aged, 0, len(entries))
+	for _, e := range entries {
+		plain, err := am.open(e.Key, e.Value, -1)
+		if err != nil || len(plain) != 40 {
+			memguard.WipeBytes(plain)
+			kept = append(kept, aged{e.Key, time.Time{}}) // undated: first to go when full
+			continue
+		}
+		created := time.Unix(int64(binary.BigEndian.Uint64(plain[:8])), 0)
+		memguard.WipeBytes(plain)
+		if now.Sub(created) > JITOPKRetention {
+			_ = am.storage.Delete(e.Key)
+			continue
+		}
+		kept = append(kept, aged{e.Key, created})
+	}
+	if len(kept) >= MaxJITOPKs {
+		sort.Slice(kept, func(i, j int) bool { return kept[i].created.Before(kept[j].created) })
+		drop := len(kept) - MaxJITOPKs*3/4
+		for _, k := range kept[:drop] {
+			_ = am.storage.Delete(k.key)
+		}
+		kept = kept[drop:]
+	}
+	am.jitCount, am.jitCounted = len(kept), true
 }
 
 // purgeOld drops one-time prekeys and replaced signed prekeys that no valid bundle names any more.
@@ -178,7 +288,7 @@ func (am *AccountManager) purgeOld() {
 		prefix string
 		keep   time.Duration
 		legacy int
-	}{{opkPrefix, OPKRetention, 32}, {spkOldPrefix, SignedPreKeyRetention, 40}} {
+	}{{opkPrefix, OPKRetention, 32}, {jitOPKPrefix, JITOPKRetention, -1}, {spkOldPrefix, SignedPreKeyRetention, 40}} {
 		entries, err := am.storage.FindValues([]byte(p.prefix), 0)
 		if err != nil {
 			continue
@@ -198,4 +308,7 @@ func (am *AccountManager) purgeOld() {
 			}
 		}
 	}
+	am.opkMu.Lock()
+	am.jitCounted = false // count the handed-out prekeys again
+	am.opkMu.Unlock()
 }

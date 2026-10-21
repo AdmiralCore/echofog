@@ -70,6 +70,13 @@ type EchoFogDHT struct {
 	quotasMu   sync.Mutex
 	peerQuotas *cache.Cache[types.PeerID, int]
 
+	// records held and new ones stored this hour, all peers together (see records.go)
+	recMu      sync.Mutex
+	records    int
+	recCounted bool
+	storesHour int
+	sweepMu    sync.Mutex
+
 	emitter atomic.Pointer[events.Emitter]
 
 	alone  atomic.Bool   // no peer connected: the next connection is a (re)join
@@ -191,8 +198,8 @@ func (d *EchoFogDHT) localRecord(key []byte) (*internal_pb.DhtRecord, bool) {
 		return nil, false
 	}
 	var rec internal_pb.DhtRecord
-	if proto.Unmarshal(raw, &rec) != nil {
-		return nil, false
+	if proto.Unmarshal(raw, &rec) != nil || recordExpired(&rec, time.Now()) {
+		return nil, false // the sweep deletes it
 	}
 	return &rec, true
 }
@@ -420,12 +427,16 @@ func (d *EchoFogDHT) PruneExpired() {
 	if prunedHot > 0 || prunedQuotas > 0 {
 		slog.Debug("DHT: Pruned expired cache entries", "hot_cache", prunedHot, "quotas", prunedQuotas)
 	}
+	d.SweepRecords(time.Now())
 }
 
 func (d *EchoFogDHT) ResetQuotas() {
 	d.quotasMu.Lock()
-	defer d.quotasMu.Unlock()
 	d.peerQuotas.Clear()
+	d.quotasMu.Unlock()
+	d.recMu.Lock()
+	d.storesHour = 0
+	d.recMu.Unlock()
 }
 
 func PackRecordForSigning(key []byte, value []byte, ts uint64, ttl uint32) []byte {

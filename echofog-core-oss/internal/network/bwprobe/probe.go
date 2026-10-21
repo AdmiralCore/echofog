@@ -29,7 +29,26 @@ const (
 	// endSettle, and never longer than endSettleMax.
 	endSettle    = 150 * time.Millisecond
 	endSettleMax = 1500 * time.Millisecond
+
+	// maxTrackedPeers bounds the per-peer interval table, maxFinishing the end markers settling at
+	// once. Peer IDs cost nothing, so neither may grow with how many a sender makes up.
+	maxTrackedPeers = 4096
+	maxFinishing    = 32
 )
+
+// Limits bound what answering other peers' download probes costs this node. A peer ID is free, so
+// the per-peer interval alone bounds nothing: the node-wide budget is what holds.
+type Limits struct {
+	Serve          bool          // answer download probe requests at all
+	PerPeerEvery   time.Duration // at most one burst per peer this often
+	MaxConcurrent  int           // bursts in flight at once, node-wide
+	BytesPerMinute int64         // burst bytes per minute, node-wide
+}
+
+// DefaultLimits answers probes: one burst per peer every 5 s, two at a time, 48 MB a minute.
+func DefaultLimits() Limits {
+	return Limits{Serve: true, PerPeerEvery: 5 * time.Second, MaxConcurrent: 2, BytesPerMinute: 4 * maxBurstBytes}
+}
 
 var (
 	ErrNoPeers     = errors.New("no connected peers to measure against")
@@ -51,10 +70,15 @@ type rxState struct {
 type Prober struct {
 	tr Transport
 
-	mu      sync.Mutex
-	lastReq map[types.PeerID]time.Time
-	rx      map[[8]byte]*rxState
-	waiting map[[8]byte]chan ackResult
+	mu        sync.Mutex
+	limits    Limits
+	lastReq   map[types.PeerID]time.Time
+	serving   int       // bursts in flight for other peers
+	tokens    float64   // burst bytes the node-wide budget has left
+	refilled  time.Time // when tokens were last topped up
+	finishing int       // end markers settling
+	rx        map[[8]byte]*rxState
+	waiting   map[[8]byte]chan ackResult
 
 	measure func(ctx context.Context, peer types.PeerID) (int, error) // Measure; tests replace it
 }
@@ -66,9 +90,74 @@ type ackResult struct {
 
 func New(tr Transport) *Prober {
 	p := &Prober{lastReq: make(map[types.PeerID]time.Time), tr: tr, rx: make(map[[8]byte]*rxState), waiting: make(map[[8]byte]chan ackResult)}
+	p.limits = DefaultLimits()
+	p.tokens = float64(p.limits.BytesPerMinute)
+	p.refilled = time.Now()
 	p.measure = p.Measure
 	tr.RegisterFastFrameHandler(net_types.TypeBandwidthProbe, p.handle)
 	return p
+}
+
+// SetLimits replaces the limits on answering other peers' probes; Serve false stops answering.
+// Measuring other peers is not affected.
+func (p *Prober) SetLimits(l Limits) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.limits = l
+	if p.tokens > float64(l.BytesPerMinute) {
+		p.tokens = float64(l.BytesPerMinute)
+	}
+}
+
+// Limits returns the limits on answering other peers' probes.
+func (p *Prober) Limits() Limits {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.limits
+}
+
+// admitLocked decides whether a download probe request gets a burst and reserves a whole burst of
+// the node-wide budget for it; served gives back what was not sent. Caller holds p.mu.
+func (p *Prober) admitLocked(from types.PeerID, now time.Time) bool {
+	l := p.limits
+	if !l.Serve || l.MaxConcurrent <= 0 || l.BytesPerMinute < maxBurstBytes {
+		return false
+	}
+	if last, ok := p.lastReq[from]; ok && now.Sub(last) < l.PerPeerEvery {
+		return false
+	}
+	if p.serving >= l.MaxConcurrent {
+		return false
+	}
+	p.tokens = min(p.tokens+now.Sub(p.refilled).Seconds()*float64(l.BytesPerMinute)/60, float64(l.BytesPerMinute))
+	p.refilled = now
+	if p.tokens < maxBurstBytes {
+		return false
+	}
+	if _, ok := p.lastReq[from]; !ok && len(p.lastReq) >= maxTrackedPeers {
+		for id, t := range p.lastReq {
+			if now.Sub(t) >= l.PerPeerEvery {
+				delete(p.lastReq, id)
+			}
+		}
+		if len(p.lastReq) >= maxTrackedPeers {
+			return false
+		}
+	}
+	p.lastReq[from] = now
+	p.tokens -= maxBurstBytes
+	p.serving++
+	return true
+}
+
+// served ends a burst admitted by admitLocked, returning the bytes it did not send to the budget.
+func (p *Prober) served(sent int) {
+	p.mu.Lock()
+	p.serving--
+	if unsent := maxBurstBytes - sent; unsent > 0 {
+		p.tokens = min(p.tokens+float64(unsent), float64(p.limits.BytesPerMinute))
+	}
+	p.mu.Unlock()
 }
 
 func (p *Prober) handle(payload []byte, from types.PeerID) error {
@@ -96,24 +185,37 @@ func (p *Prober) handle(payload []byte, from types.PeerID) error {
 
 	case kindReq:
 		p.mu.Lock()
-		last := p.lastReq[from]
-		allowed := time.Since(last) > 5*time.Second
-		if allowed {
-			p.lastReq[from] = time.Now()
-		}
+		allowed := p.admitLocked(from, time.Now())
 		p.mu.Unlock()
 		if allowed {
 			go func() {
-				if err := p.burst(context.Background(), from, id); err != nil {
-					slog.Warn("bandwidth probe: could not send the burst", "err", err)
+				sent, err := p.burstN(context.Background(), from, id)
+				p.served(sent)
+				if err != nil {
+					slog.Debug("bandwidth probe: could not send the burst", "err", err)
 				}
 			}()
 		}
 
 	case kindEnd:
 		// Every frame travels on its own stream and is handled in its own goroutine, so the end
-		// marker can overtake data frames sent before it. Settle first, then count.
-		go p.finish(id, from)
+		// marker can overtake data frames sent before it. Settle first, then count. A flood of
+		// end markers gets a bounded number of settling goroutines; our own probes always do.
+		p.mu.Lock()
+		busy := p.finishing >= maxFinishing && p.waiting[id] == nil
+		if !busy {
+			p.finishing++
+		}
+		p.mu.Unlock()
+		if busy {
+			return nil
+		}
+		go func() {
+			p.finish(id, from)
+			p.mu.Lock()
+			p.finishing--
+			p.mu.Unlock()
+		}()
 		return nil
 
 	case kindAck:
@@ -201,25 +303,32 @@ func (p *Prober) MeasureBest(ctx context.Context, peers []types.PeerID, maxPeers
 
 // burst sends the data frames and the end marker for one probe id
 func (p *Prober) burst(ctx context.Context, peer types.PeerID, id [8]byte) error {
+	_, err := p.burstN(ctx, peer, id)
+	return err
+}
+
+// burstN is burst that also returns how many data bytes went out.
+func (p *Prober) burstN(ctx context.Context, peer types.PeerID, id [8]byte) (int, error) {
 	frame := make([]byte, frameSize)
 	frame[0] = kindData
 	copy(frame[1:headerSize], id[:])
 	_, _ = rand.Read(frame[headerSize:])
 
 	start := time.Now()
-	for sent := 0; sent < maxBurstBytes && time.Since(start) < maxBurstTime; sent += len(frame) {
+	sent := 0
+	for ; sent < maxBurstBytes && time.Since(start) < maxBurstTime; sent += len(frame) {
 		if err := ctx.Err(); err != nil {
-			return err
+			return sent, err
 		}
 		if err := p.tr.SendRawFrame(peer, net_types.TypeBandwidthProbe, frame); err != nil {
-			return err
+			return sent, err
 		}
 	}
 
 	end := make([]byte, headerSize)
 	end[0] = kindEnd
 	copy(end[1:], id[:])
-	return p.tr.SendRawFrame(peer, net_types.TypeBandwidthProbe, end)
+	return sent, p.tr.SendRawFrame(peer, net_types.TypeBandwidthProbe, end)
 }
 
 // MeasureDownload asks the peer to burst data at us and returns the goodput in kbps that we observed

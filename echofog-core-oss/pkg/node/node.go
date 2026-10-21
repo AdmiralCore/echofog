@@ -484,6 +484,13 @@ func (n *Node) Start() (err error) {
 	n.Swarm = swarm.NewSwarm(n.Ctx, n.Net, n.ID, n.Dispatcher, n.identity, n.Net.ConnChan(), n.Storage, n.Cfg)
 	n.Swarm.SetLogger(n.Logger)
 	n.BWProbe = bwprobe.NewForSwarm(n.Swarm)
+	if l := bwprobe.DefaultLimits(); n.Cfg.Network.NoBWProbeServe || n.Cfg.Network.BWProbeMBPerMin > 0 {
+		l.Serve = !n.Cfg.Network.NoBWProbeServe
+		if mb := n.Cfg.Network.BWProbeMBPerMin; mb > 0 {
+			l.BytesPerMinute = int64(mb) << 20
+		}
+		n.BWProbe.SetLimits(l)
+	}
 	n.ExitService = exit_gateway.NewExitService()
 	n.ExitService.SetSelfIPs(n.publicIPs)
 	exit_gateway.AttachToSwarm(n.Swarm, n.ExitService)
@@ -660,6 +667,14 @@ func (n *Node) Start() (err error) {
 		_ = n.Scheduler.Schedule("swarm:sessions_prune", 10*time.Minute, func(ctx context.Context) error {
 			n.Swarm.PruneInactiveSessions(15 * time.Minute)
 			return nil
+		})
+	}
+
+	// expired offline messages stop taking disk and quota, and old recipients are forgotten
+	if n.MailboxManager != nil {
+		_ = n.Scheduler.Schedule("mailbox:cleanup", messenger.CleanupInterval, func(ctx context.Context) error {
+			_, err := n.MailboxManager.CleanupExpired()
+			return err
 		})
 	}
 
