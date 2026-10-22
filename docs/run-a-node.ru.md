@@ -164,8 +164,9 @@ sudo ufw allow 4242/tcp
 
 ## Подключение к сети
 
-- **Встроенная нода.** В сборке есть одна публичная нода проекта, через которую входить в сеть:
-  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
+- **Встроенные ноды.** В сборке есть публичные ноды проекта, через которые можно входить в сеть:
+  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d` и
+  `34.32.224.253:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
   (`DefaultBootstrapNodes` в `internal/config/config.go`); релиз может добавить ещё при сборке
   (`-ldflags "-X github.com/echofog/echofog-core/internal/config.SeedNodes=host:port/<ключ>,..."`).
   Без `--bootstrap` нода входит через них.

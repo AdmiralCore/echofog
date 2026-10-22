@@ -69,6 +69,7 @@ const (
 // users in Settings.
 var DefaultBootstrapNodes = []string{
 	"34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d",
+	"34.32.224.253:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d",
 }
 
 // SeedNodes adds seed nodes at build time, comma-separated host:port/peerid (the host may be a

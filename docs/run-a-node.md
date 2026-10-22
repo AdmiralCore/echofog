@@ -163,8 +163,9 @@ stays on UDP only. Set `--tls-server-name` and `--camouflage-addr` by hand to ge
 
 ## Join the network
 
-- **Built-in node.** The build carries one public node of the project to join through,
-  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
+- **Built-in nodes.** The build carries public entry nodes of the project to join through:
+  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d` and
+  `34.32.224.253:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
   (`DefaultBootstrapNodes` in `internal/config/config.go`); a release can add more at build time
   (`-ldflags "-X github.com/echofog/echofog-core/internal/config.SeedNodes=host:port/<peer id>,..."`).
   Without `--bootstrap` the node joins through these.
