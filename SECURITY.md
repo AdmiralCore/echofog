@@ -95,7 +95,9 @@ What it does **not** protect:
 
 Please report security problems **privately**, not in a public issue:
 
-<!-- TODO(owner): contact -->
+- Email: [admiralcore1970@gmail.com](mailto:admiralcore1970@gmail.com)
+- Telegram: [@EchoFogDev](https://t.me/EchoFogDev)
+- Or via GitHub [Private vulnerability reporting](https://github.com/AdmiralCore/echofog/security/advisories/new)
 
 Tell us what you found, how to reproduce it and what an attacker could do with it. Please give the
 maintainers reasonable time to fix it and ship the fix before you disclose it publicly. People in
@@ -202,7 +204,9 @@ EchoFog — **экспериментальный** проект.
 
 Пожалуйста, сообщайте о проблемах безопасности **приватно**, а не в публичном issue:
 
-<!-- TODO(owner): contact -->
+- Email: [admiralcore1970@gmail.com](mailto:admiralcore1970@gmail.com)
+- Telegram: [@EchoFogDev](https://t.me/EchoFogDev)
+- Либо через [приватные отчеты об уязвимостях на GitHub](https://github.com/AdmiralCore/echofog/security/advisories/new)
 
 Опишите, что нашли, как это воспроизвести и что с этим может сделать атакующий. Дайте, пожалуйста,
 мейнтейнерам разумное время, чтобы исправить проблему и выпустить исправление, прежде чем
