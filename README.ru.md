@@ -7,6 +7,8 @@ English version: [README.md](README.md)
 свою цену может кто угодно. Соединение выглядит как обычный браузер, который открывает обычный
 HTTPS-сайт, так что системе DPI у цензора почти не за что зацепиться.
 
+<p align="center"><a href="https://github.com/AdmiralCore/echofog/releases/download/v0.1.0/demo.ru.mp4"><img src="https://github.com/AdmiralCore/echofog/releases/download/v0.1.0/demo.ru.gif" alt="EchoFog: подключение через P2P-выход, зашифрованный чат со звонком в 4K60 и TON-кошелёк" width="960"></a></p>
+
 Бонусом в EchoFog есть бесплатные чаты со сквозным шифрованием и групповые звонки с демонстрацией
 экрана до 4K60 — без подписки и без центрального сервера. Трафик оплачивается в TON, без аккаунта и
 без комиссии.

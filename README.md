@@ -7,6 +7,8 @@ through other people's computers, and anyone can run a node and set their own pr
 is disguised as an ordinary browser visiting an ordinary HTTPS site, so a censor's deep-packet
 inspection has little to single out.
 
+<p align="center"><a href="https://github.com/AdmiralCore/echofog/releases/download/v0.1.0/demo.mp4"><img src="https://github.com/AdmiralCore/echofog/releases/download/v0.1.0/demo.gif" alt="EchoFog desktop: connecting through a P2P exit, an end-to-end encrypted chat with a 4K60 call, and the TON wallet" width="960"></a></p>
+
 As a bonus, EchoFog includes free end-to-end encrypted chat and group calls with screen sharing up
 to 4K60 — no subscription, no central server. Payments for traffic are in TON, with no account and
 no commission.

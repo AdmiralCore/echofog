@@ -142,6 +142,9 @@ func TestCluster_Calls_TenNodesTwoStreamers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("cluster test")
 	}
+	if raceBuild {
+		t.Skip("10-node media simulation cluster is too CPU-heavy under -race on 2-core runners; tested in non-race CI job")
+	}
 	nodeCount := getClusterNodeCount(10)
 	c, err := NewCluster(t, nodeCount)
 	require.NoError(t, err)
@@ -326,6 +329,7 @@ func TestCluster_Calls_TenNodesTwoStreamers(t *testing.T) {
 	t.Logf("[calls] crashing relay %s (feeds %d viewers)", victim.ID.String()[:8], len(sm.DistributionTree[victim.ID]))
 	crashAt := time.Now()
 	_ = victim.Net.Close() // QUIC and the TCP fallback: a crashed node answers neither
+	victim.Stop()          // stop background tasks and avoid ghost coordinator elections
 	delete(alive, victim.ID)
 
 	// Publish through the failure while measuring, in parallel, how long the room takes to heal.
