@@ -31,6 +31,9 @@ func getClusterNodeCount(defaultCount int) int {
 
 // TestCluster_DHTMultiNodeMesh tests multi-node reading and writing across the Kademlia DHT mesh.
 func TestCluster_DHTMultiNodeMesh(t *testing.T) {
+	if raceBuild {
+		t.Skip("cluster simulation skipped under race detector; tested in non-race CI job")
+	}
 	nodeCount := getClusterNodeCount(15)
 	t.Logf("=== Starting %d-Node DHT Network Simulation ===", nodeCount)
 
@@ -134,6 +137,9 @@ func TestCluster_DHTMultiNodeMesh(t *testing.T) {
 // TestCluster_NodeChurnResilience tests that the network and DHT remain operational
 // even when 25% of nodes suddenly go offline.
 func TestCluster_NodeChurnResilience(t *testing.T) {
+	if raceBuild {
+		t.Skip("cluster simulation skipped under race detector; tested in non-race CI job")
+	}
 	nodeCount := getClusterNodeCount(12)
 	t.Logf("=== Starting %d-Node Churn & Fault-Tolerance Test ===", nodeCount)
 
@@ -201,6 +207,9 @@ func TestCluster_NodeChurnResilience(t *testing.T) {
 // 4. Reactive Mailbox Flush: Node 4 reconnects to Node 3; Node 3 immediately delivers the pending message, and deletes it from storage.
 // 5. Mailbox TTL & Auto-cleanup: Expired messages are automatically purged by CleanupExpired.
 func TestCluster_MultiHop_And_OfflineMailbox(t *testing.T) {
+	if raceBuild {
+		t.Skip("cluster simulation skipped under race detector; tested in non-race CI job")
+	}
 	t.Log("=== Starting 4-Node Multi-Hop & Offline Mailbox Simulation ===")
 
 	cluster, err := NewIsolatedCluster(t, 4)
@@ -358,6 +367,9 @@ func TestCluster_MultiHop_And_OfflineMailbox(t *testing.T) {
 // and zero-copy streaming of arbitrary payload types (file chunks, DHT packets, etc.)
 // between two isolated peers (Node A and Node B) connected ONLY through an intermediate Relay R.
 func TestCluster_VirtualCircuit_UniversalRelay(t *testing.T) {
+	if raceBuild {
+		t.Skip("cluster simulation skipped under race detector; tested in non-race CI job")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

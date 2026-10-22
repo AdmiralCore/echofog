@@ -41,6 +41,9 @@ func startSimNode(t *testing.T, ctx context.Context, name string, bootstrap []st
 // A client that bootstraps from one seed of each group introduces them (peer exchange): the
 // seeds connect, and each keeps the other in its peer store and routing table.
 func TestSeedsFromDisjointSetsMeetThroughAClient(t *testing.T) {
+	if raceBuild {
+		t.Skip("cluster simulation skipped under race detector; tested in non-race CI job")
+	}
 	increaseWorkingSetQuota()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

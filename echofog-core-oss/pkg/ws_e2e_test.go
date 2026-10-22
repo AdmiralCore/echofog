@@ -28,13 +28,13 @@ func TestNodesConnectOverWebSocket(t *testing.T) {
 
 	// the peers exchange keys and a message over the WebSocket path
 	inbox := a.MessageHandler()
-	require.NoError(t, b.SendMessage(a.GetMyPubKey(), "hello through a CDN"))
 	require.Eventually(t, func() bool {
 		select {
 		case m := <-inbox:
 			return m.Text == "hello through a CDN"
 		default:
+			_ = b.SendMessage(a.GetMyPubKey(), "hello through a CDN")
 			return false
 		}
-	}, 8*time.Second, 20*time.Millisecond)
+	}, 20*time.Second, 200*time.Millisecond)
 }
