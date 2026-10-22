@@ -11,7 +11,7 @@ built in. This guide walks you through the desktop app, step by step. It takes a
 
 ## 1. Get the app
 
-Download the app from the project's Releases page. <!-- TODO(owner): link -->
+Download the app from the project's [Releases page](https://github.com/AdmiralCore/echofog/releases).
 
 - **Windows:** the file is called `EchoFog-<version>-windows-amd64.exe`. There is nothing to
   install: just run it. The file is not code-signed yet, so Windows SmartScreen may warn you about
@@ -128,8 +128,7 @@ Open **Settings** → *Appearance*. Choose the theme (*System*, *Light*, *Dark*)
 If a banner says **No connection to the network**, the built-in entry nodes may be blocked where
 you are. The app joins the network through *bootstrap nodes* — the first nodes it connects to.
 
-1. Get a node address from a friend who runs a node, or from the EchoFog channel.
-   <!-- TODO(owner): link -->
+1. Get a node address from a friend who runs a node, or from the [EchoFog channel](https://t.me/EchoFogDev).
 2. Press **Add a node** on the banner (or open **Settings** → *Bootstrap nodes*).
 3. Paste the address and press **Add and connect**. It looks like `echofog://relay/…` or
    `host:port/peer-id`. The peer ID part is required.
@@ -150,8 +149,7 @@ your home folder.
 addresses are masked automatically, but node IDs, sites you checked and contact names can stay in
 the logs. Read what you send, and post logs only where you trust the readers.
 
-Send feedback and bug reports as an issue on the project's GitHub page, or in the EchoFog channel.
-<!-- TODO(owner): link --> Security problems: see [SECURITY.md](../SECURITY.md).
+Send feedback and bug reports as an [issue on the project's GitHub page](https://github.com/AdmiralCore/echofog/issues), or in the [EchoFog channel](https://t.me/EchoFogDev). Security problems: see [SECURITY.md](../SECURITY.md).
 
 ## Next
 

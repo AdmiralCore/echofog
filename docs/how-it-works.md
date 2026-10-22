@@ -27,7 +27,7 @@ A fresh install has to know at least one node to join. Those are **bootstrap nod
 seed nodes). A release can carry a built-in list, but **the list may be empty in a given build**,
 and built-in nodes can be blocked. So you can add your own: in the app, **Settings → Bootstrap
 nodes**, paste a node link (`echofog://relay/…`) or `host:port/<peer id>` from a friend or from the
-project's channel <!-- TODO(owner): link -->. The peer ID is required, because each node's traffic is
+project's [channel](https://t.me/EchoFogDev). The peer ID is required, because each node's traffic is
 disguised with a key tied to its ID (see the next section). Once you are connected to anyone, the
 DHT gives you the rest of the network.
 

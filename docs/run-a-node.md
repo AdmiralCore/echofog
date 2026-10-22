@@ -73,8 +73,7 @@ on a server and in a country where you may do this, and read your hoster's terms
 ## Get the binary
 
 - **Prebuilt:** CI builds `echofog-node` for Linux (amd64) and Windows (amd64) on every push to
-  `main`; a version tag also makes a release with a `SHA256SUMS` file. Download it from the Releases
-  page. <!-- TODO(owner): releases link -->
+  `main`; a version tag also makes a release with a `SHA256SUMS` file. Download it from the [Releases page](https://github.com/AdmiralCore/echofog/releases).
 - **From source** (Go 1.27+):
 
   ```bash
