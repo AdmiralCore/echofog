@@ -64,16 +64,23 @@ func (n *Node) initVPNMarket() {
 	ratings := vpnmarket.NewRatingStore(st)
 	dir := vpnmarket.NewDirectory(n.DhtEngine, ratings, n.ID, n.connectedPeerIDs)
 	dir.SetHints(n.askPeersForExits)
+	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
 	n.Swarm.RegisterStreamHandler(net_types.TypeExitDirectory, func(st *network.Stream, _ []byte, peer types.PeerID) {
 		defer st.Close()
 		if n.ExitService != nil && !n.ExitService.AllowQuery(peer) {
 			return // asked too often: the stream ends without an answer
 		}
-		if raw, err := json.Marshal(dir.Shared()); err == nil {
+		shared := dir.Shared()
+		if own := pub.Current(); own != nil {
+			shared = append([][]byte{own}, shared...) // ours first, within the same cap
+			if len(shared) > vpnmarket.MaxShared {
+				shared = shared[:vpnmarket.MaxShared]
+			}
+		}
+		if raw, err := json.Marshal(shared); err == nil {
 			_ = st.WriteFrame(net_types.TypeExitDirectory, raw)
 		}
 	})
-	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
 	n.VPNMarket = vpnmarket.NewService(pub, dir, ratings, st, swarmTunneler{n}, n.BWProbe, swarmConnector{n})
 	if !n.isolated() {
 		n.VPNMarket.Run(n.Ctx) // an isolated node looks for no exits: it connects to nobody

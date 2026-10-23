@@ -308,3 +308,35 @@ func TestSetStoresOnReachablePeersWhenTheClosestAreDead(t *testing.T) {
 		return err == nil && len(raw) > 0
 	})
 }
+
+// The same table full of dead peers must not hide a value a connected peer holds: a lookup starts
+// from the peers it can reach.
+func TestGetFindsTheValueWhenTheClosestAreDead(t *testing.T) {
+	a, b := newTestNode(t), newTestNode(t)
+	b.dial(t, a)
+	key := swarm.BundleKey(b.id)
+	if err := b.dht.Set(key, []byte("advert")); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the record is on a", func() bool {
+		raw, err := a.sw.GetStorage().Get(RecordKey(key))
+		return err == nil && len(raw) > 0
+	})
+
+	c := newTestNode(t)
+	for i := 0; i < 60; i++ {
+		pub, addr := randomPublicPeer()
+		c.dht.routingTable.AddOrUpdatePeer(pub, addr)
+	}
+	c.dial(t, a)
+	c.dht.routingTable.AddOrUpdatePeer(a.pub, a.addr())
+
+	got, err := c.dht.GetFresh(key)
+	if err != nil || string(got) != "advert" {
+		t.Fatalf("GetFresh = %q, %v", got, err)
+	}
+	got, err = c.dht.Get(key)
+	if err != nil || string(got) != "advert" {
+		t.Fatalf("Get = %q, %v", got, err)
+	}
+}

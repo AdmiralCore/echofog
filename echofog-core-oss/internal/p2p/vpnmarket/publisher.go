@@ -41,6 +41,7 @@ type Publisher struct {
 	mu     sync.Mutex
 	status PublishStatus
 	cancel context.CancelFunc
+	last   []byte // the advert last stored while sharing, nil when withdrawn
 }
 
 func NewPublisher(dht DHTClient, signer Signer, self types.PeerID, pub types.PeerPublicKey, neighbors func() []string) *Publisher {
@@ -98,12 +99,20 @@ func (p *Publisher) publish(enabled bool) error {
 	if err == nil {
 		var raw []byte
 		if raw, err = a.Encode(); err == nil {
+			if enabled {
+				p.mu.Lock()
+				p.last = raw // handed out directly too, whether the DHT took it or not
+				p.mu.Unlock()
+			}
 			err = p.dht.Set(Key(p.self), raw)
 		}
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if !enabled {
+		p.last = nil
+	}
 	if err != nil {
 		p.status.LastError = err.Error()
 		return err
@@ -182,6 +191,21 @@ func (p *Publisher) Stop() error {
 		return nil
 	}
 	return p.publish(false)
+}
+
+// Current returns this node's own advert while it shares its connection publicly, nil otherwise.
+// Peers asking for the exits we know get it first: a client connected to us finds us even when
+// its DHT lookups reach only stale nodes.
+func (p *Publisher) Current() []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.status.Running || p.last == nil {
+		return nil
+	}
+	if a, err := Decode(p.last, p.now()); err != nil || a == nil {
+		return nil // expired: the next republish brings a fresh one
+	}
+	return p.last
 }
 
 func (p *Publisher) Status() PublishStatus {

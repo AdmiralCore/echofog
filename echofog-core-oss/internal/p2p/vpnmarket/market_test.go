@@ -58,9 +58,10 @@ func (s *memStore) Exists(k []byte) bool { _, ok := s.m[string(k)]; return ok }
 func (s *memStore) Close()               {}
 
 type fakeDHT struct {
-	mu    sync.Mutex
-	data  map[string][]byte
-	peers []types.PeerID
+	mu      sync.Mutex
+	data    map[string][]byte
+	peers   []types.PeerID
+	failSet bool
 }
 
 func newFakeDHT() *fakeDHT { return &fakeDHT{data: map[string][]byte{}} }
@@ -68,6 +69,9 @@ func newFakeDHT() *fakeDHT { return &fakeDHT{data: map[string][]byte{}} }
 func (f *fakeDHT) Set(k, v []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failSet {
+		return errors.New("no peers to store on")
+	}
 	f.data[string(k)] = append([]byte(nil), v...)
 	return nil
 }
@@ -373,4 +377,27 @@ func TestDirectoryFindsExitsThroughPeersHints(t *testing.T) {
 		_, err := Decode(raw, time.Now())
 		assert.NoError(t, err)
 	}
+}
+
+// A sharing exit hands out its own advert; one that could not start, or stopped, has none.
+func TestPublisherCurrentAdvert(t *testing.T) {
+	d := newFakeDHT()
+	d.failSet = true
+	i := newIdentity(t)
+	p := publisherFor(d, i)
+	assert.Nil(t, p.Current(), "not sharing yet")
+
+	_ = p.Start(context.Background(), ShareConfig{PricePerMB: 7, UploadKbps: 20000, FreeTestKB: 256})
+	assert.Nil(t, p.Current(), "a failed start does not share")
+
+	d.failSet = false
+	require.NoError(t, p.Start(context.Background(), ShareConfig{PricePerMB: 7, UploadKbps: 20000, FreeTestKB: 256}))
+	a, err := Decode(p.Current(), time.Now())
+	require.NoError(t, err)
+	assert.True(t, a.Enabled)
+	id, _ := a.ID()
+	assert.Equal(t, i.id, id)
+
+	require.NoError(t, p.Stop())
+	assert.Nil(t, p.Current(), "withdrawn")
 }

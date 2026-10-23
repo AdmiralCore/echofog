@@ -211,7 +211,7 @@ func (d *EchoFogDHT) Get(key []byte) ([]byte, error) {
 	}
 
 	targetID := targetOf(key)
-	nodesToQuery := d.routingTable.GetClosestPeers(targetID, Alpha)
+	nodesToQuery := d.startNodes(targetID)
 	if len(nodesToQuery) == 0 {
 		return nil, errors.New("DHT: no peers known to search for value")
 	}
