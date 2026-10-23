@@ -3,6 +3,8 @@ package dispatcher
 import (
 	"context"
 	"crypto/ed25519"
+	"io"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -182,4 +184,17 @@ func TestDispatcher_DropsForgedOrigin(t *testing.T) {
 	if n := handler.handled.Load(); n != 1 {
 		t.Fatalf("want only the honest message handled, got %d", n)
 	}
+}
+
+// A relay without room answers with a bare signed MessageData (TypeMailboxFull) that has no
+// payload; with debug logging on, routing it dereferenced a nil type and panicked.
+func TestDispatcher_RoutesPayloadlessMessage(t *testing.T) {
+	d := NewDispatcher(context.Background())
+	d.SetLogger(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("a message without payload panicked: %v", r)
+		}
+	}()
+	d.route(&internal_pb.MessageData{MessageId: []byte("full")}, types.PeerID{})
 }

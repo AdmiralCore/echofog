@@ -44,6 +44,7 @@ type MessageBroker struct {
 	filter          func(origin types.PeerID) Verdict // who may write to us (nil: everybody, as contacts)
 	connect         func(types.PeerID)                // asked to open a connection to a peer that cannot be reached
 	useAsRelay      func(types.PeerID) bool           // a peer to route through even if it does not advertise (a configured private relay)
+	relayFull       func(types.PeerID) bool           // a relay that said it keeps no more messages, skipped for a while
 	connMu          sync.Mutex
 	lastConnect     map[types.PeerID]time.Time
 	lastReset       map[types.PeerID]time.Time
@@ -296,6 +297,9 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 	for _, p := range allPeers {
 		if !p.Relays() && !(s.useAsRelay != nil && s.useAsRelay(p.ID())) {
 			continue // not a relay (a signaling-only node, or a private relay we were not given)
+		}
+		if s.relayFull != nil && s.relayFull(p.ID()) {
+			continue // it answered the last message with "mailbox full"
 		}
 		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
 			s.log.Debug("MessageBroker: message routed via relay peer", "target", targetID.String()[:8])
@@ -581,6 +585,11 @@ func (s *MessageBroker) SetConnector(f func(types.PeerID)) {
 // relay — a private relay the node was configured to use.
 func (s *MessageBroker) SetRelaySelector(f func(types.PeerID) bool) {
 	s.useAsRelay = f
+}
+
+// SetRelayFullCheck names relays that refused to keep our messages lately; they are not used then.
+func (s *MessageBroker) SetRelayFullCheck(f func(types.PeerID) bool) {
+	s.relayFull = f
 }
 
 const connectPause = 20 * time.Second

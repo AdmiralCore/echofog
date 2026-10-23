@@ -588,6 +588,7 @@ func (n *Node) Start() (err error) {
 	if !server {
 		// route messages through a configured private relay even though it does not advertise itself
 		n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
+		n.Messenger.SetRelayFullCheck(n.RelayClient.IsFull)
 	}
 	if !n.isolated() {
 		n.dialConfiguredRelays()

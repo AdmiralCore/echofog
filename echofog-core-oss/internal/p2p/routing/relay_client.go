@@ -378,6 +378,11 @@ func (rc *RelayClient) HandleRawFrame(msgType net_types.MessageType, payload []b
 		rc.handleCircuitClose(payload, fromPeer)
 		return true
 
+	case net_types.TypeMailboxFull:
+		// the relay keeps no more messages (or none at all, a server without a mailbox)
+		rc.MarkRelayFull(fromPeer)
+		return true
+
 	default:
 		return false
 	}
@@ -771,10 +776,21 @@ func (rc *RelayClient) SendRoutedEnvelope(ctx context.Context, targetID types.Pe
 	return ErrNoRelaysAvailable
 }
 
+// IsFull tells whether relayID answered with TypeMailboxFull in the last minutes.
+func (rc *RelayClient) IsFull(relayID types.PeerID) bool {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	until, ok := rc.blacklisted[relayID]
+	return ok && time.Now().Before(until)
+}
+
 // MarkRelayFull temporarily blacklists a relay node when it sends TypeMailboxFull error.
 func (rc *RelayClient) MarkRelayFull(relayID types.PeerID) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
+	if until, ok := rc.blacklisted[relayID]; ok && time.Now().Before(until) {
+		return // already known: every refused message repeats it
+	}
 	rc.blacklisted[relayID] = time.Now().Add(10 * time.Minute)
 	rc.logger.Warn("RelayClient: Relay node marked full, searching for alternative relays",
 		"relay", relayID.String()[:8])

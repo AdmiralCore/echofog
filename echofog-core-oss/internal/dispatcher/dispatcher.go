@@ -7,6 +7,7 @@ import (
 
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -225,7 +226,7 @@ func (d *Dispatcher) processPacket(packet IngressPacket) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			d.log().Error("Dispatcher: Panic in packet processing", "panic", r, "peer", packet.PeerID.String())
+			d.log().Error("Dispatcher: Panic in packet processing", "panic", r, "peer", packet.PeerID.String(), "stack", string(debug.Stack()))
 		}
 	}()
 
@@ -287,6 +288,9 @@ func originMatchesSigner(msg *internal_pb.MessageData, signer types.PeerPublicKe
 }
 
 func (d *Dispatcher) route(msg *internal_pb.MessageData, fromPeer types.PeerID) {
+	if msg.Payload == nil {
+		return // a bare signed notice (MailboxFull): its frame type says it all, no handler takes it
+	}
 	payloadType := reflect.TypeOf(msg.Payload)
 
 	if l := d.log(); l.Enabled(d.ctx, slog.LevelDebug) {

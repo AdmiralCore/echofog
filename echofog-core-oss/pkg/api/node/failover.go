@@ -24,6 +24,8 @@ const (
 	lostChecks       = 2                // rounds without the peer link before it counts as gone
 	pickTries        = 4                // exits asked per search
 	refreshAtMostAt  = time.Minute      // the network is searched for exits at most this often
+	reviveEvery      = 15 * time.Second // with no other exit, the one in use is redialed this often
+	stuckLogEvery    = time.Minute      // "no other exit" is logged again at most this often
 )
 
 // Why the proxy left an exit.
@@ -141,7 +143,8 @@ func (n *NodeApi) pickExit(ctx context.Context, avoid map[string]bool) (string, 
 // runFailover watches the exit in use until ctx ends.
 func (n *NodeApi) runFailover(ctx context.Context) {
 	lost := 0
-	var lastRefresh time.Time
+	var lastRefresh, lastRevive, lastStuckLog time.Time
+	stuckWhy := ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -166,6 +169,7 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 		reason := exitFailure(exitCheck{Lost: lost, State: state, Health: srv.Health(), Using: now.Sub(since)}, now)
 		if reason == "" {
 			n.setSearching(false)
+			stuckWhy = ""
 			continue
 		}
 		n.setSearching(true)
@@ -191,13 +195,51 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 		}
 		n.vpn.mu.Unlock()
 		if err != nil {
-			slog.Warn("exit is not working and no other exit serves us yet", "exit", relay[:min(12, len(relay))], "why", reason)
+			// nothing else serves us: the exit in use may well come back (its link dropped, it
+			// was busy for a moment), and nothing else would dial it again while it is avoided
+			if time.Since(lastRevive) >= reviveEvery {
+				lastRevive = time.Now()
+				if n.reviveExit(ctx, relay) {
+					lost = 0
+					stuckWhy = ""
+					continue
+				}
+			}
+			if reason != stuckWhy || time.Since(lastStuckLog) >= stuckLogEvery {
+				stuckWhy, lastStuckLog = reason, time.Now()
+				slog.Warn("exit is not working and no other exit serves us yet", "exit", relay[:min(12, len(relay))], "why", reason)
+			}
 			continue
 		}
 		if n.switchExit(relay, next, reason) {
 			lost = 0
 		}
 	}
+}
+
+// reviveExit connects again to the exit in use and asks it whether it serves us; when it does, the
+// proxy stays on it and it is no longer avoided.
+func (n *NodeApi) reviveExit(ctx context.Context, relay string) bool {
+	pid, err := n.relayPeerID(relay)
+	if err != nil || n.node == nil || n.node.Swarm == nil {
+		return false
+	}
+	if err := n.ensureConnected(pid); err != nil || ctx.Err() != nil {
+		return false
+	}
+	qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	info, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, pid)).QueryAccount(qctx)
+	cancel()
+	n.noteExitState(relay, info, err)
+	if state, _ := classifyExit(info, err); state != ExitOK {
+		return false
+	}
+	n.vpn.mu.Lock()
+	delete(n.vpn.avoid, relay)
+	n.vpn.mu.Unlock()
+	n.setSearching(false)
+	slog.Info("the exit in use answers again", "exit", relay[:min(12, len(relay))])
+	return true
 }
 
 // avoidNow lists the exits that failed recently.
