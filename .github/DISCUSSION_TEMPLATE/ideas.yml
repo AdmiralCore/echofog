@@ -1,0 +1,24 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One idea per discussion, please. Vote with 👍 for the ones you want: the most wanted go to the roadmap first.
+        Одна идея — одно обсуждение. Голосуйте 👍 за то, что нужно вам: самые востребованные идеи попадают в план первыми.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem / Проблема
+      description: What is hard or impossible now, and for whom. / Что сейчас трудно или невозможно и для кого.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea / Идея
+      description: What you would like EchoFog to do. / Что должен делать EchoFog.
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: Alternatives, other apps / Альтернативы, как сделано у других

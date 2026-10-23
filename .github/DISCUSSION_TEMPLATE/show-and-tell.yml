@@ -1,0 +1,17 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Show your node, your setup or a test you ran. Leave out anything that identifies you or exposes a hidden node: no addresses or invitation links of nodes meant to stay private.
+        Покажите свою ноду, настройку или проведённый тест. Не публикуйте ничего, что вас выдаёт или раскрывает скрытую ноду: никаких адресов и ссылок-приглашений нод, которые должны оставаться приватными.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you built or tested / Что сделали или проверили
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Hosting and region (optional) / Хостинг и регион (необязательно)
+      placeholder: Hetzner CX22, Finland

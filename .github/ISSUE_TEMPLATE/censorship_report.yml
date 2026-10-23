@@ -1,0 +1,77 @@
+name: Censorship test report / Отчёт о блокировке
+description: How EchoFog behaves in a censored network, whether it works or not. / Как EchoFog ведёт себя в сети с цензурой, работает или нет.
+labels: [dpi-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports that **it works** are as useful as reports that it does not. Post nothing that identifies you: no real name, no full IP address, no exact location. A country and a provider are enough.
+
+        Отчёты о том, что **всё работает**, так же полезны, как о том, что не работает. Не публикуйте ничего, что вас выдаёт: ни имени, ни полного IP-адреса, ни точного места. Достаточно страны и провайдера.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result / Результат
+      options:
+        - Works / Работает
+        - Works but slow or unstable / Работает, но медленно или нестабильно
+        - Worked, then got blocked / Работало, потом заблокировали
+        - Does not connect / Не подключается
+    validations:
+      required: true
+  - type: input
+    id: country
+    attributes:
+      label: Country / Страна
+      placeholder: Russia, Iran, China, Turkmenistan…
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and network / Провайдер и сеть
+      description: The ISP or mobile operator and the kind of connection. / Провайдер или оператор и тип подключения.
+      placeholder: MTS mobile 4G, Rostelecom home fiber, university Wi-Fi…
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / Версия
+      placeholder: v0.10.0
+    validations:
+      required: true
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What works / Что работает
+      description: Tick what you could check. / Отметьте то, что удалось проверить.
+      options:
+        - label: QUIC over UDP / QUIC по UDP
+        - label: TCP fallback (TLS) / Резервный TCP (TLS)
+        - label: WebSocket through a CDN / WebSocket через CDN
+        - label: Messages / Сообщения
+        - label: Calls / Звонки
+        - label: VPN through an exit / VPN через выход
+  - type: dropdown
+    id: node
+    attributes:
+      label: Node / Нода
+      options:
+        - Built-in public nodes / Встроенные публичные ноды
+        - My own or a friend's public node / Своя или знакомого (публичная)
+        - Hidden node with an invitation / Скрытая нода по приглашению
+        - Not sure / Не знаю
+  - type: textarea
+    id: details
+    attributes:
+      label: What you saw / Что видели
+      description: When it started, how long it lasted, whether other VPNs work on the same network. / Когда началось, сколько длилось, работают ли другие VPN в этой сети.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (optional) / Лог (необязательно)
+      description: Check it for anything that identifies you before posting. / Проверьте, нет ли в нём того, что вас выдаёт.
+      render: text

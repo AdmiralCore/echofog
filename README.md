@@ -114,7 +114,12 @@ make testbed-chaos               # ten nodes behind NATs in Docker, with crashes
 
 ## Contributing and feedback
 
-Bug reports, test results from censored networks and pull requests are welcome. Feel free to open an [issue](https://github.com/AdmiralCore/echofog/issues), follow our [Telegram channel](https://t.me/EchoFogDev), or join the [community group](https://t.me/+YOrxcYNWQzo1YThi). Please report security problems privately — see [SECURITY.md](SECURITY.md).
+Bug reports, test results from censored networks and pull requests are welcome.
+
+- **A bug, or a test from a censored network** (whether it works or not): open an [issue](https://github.com/AdmiralCore/echofog/issues/new/choose) and pick the form.
+- **A question or an idea**: start a [discussion](https://github.com/AdmiralCore/echofog/discussions). Vote with 👍 for the ideas you want.
+- **Chat and quick help**, mostly in Russian: the [community group](https://t.me/+YOrxcYNWQzo1YThi) on Telegram. News: the [Telegram channel](https://t.me/EchoFogDev).
+- **A security problem**: report it privately, see [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -1,0 +1,68 @@
+name: Bug report / Ошибка
+description: Something in the app or a node does not work as it should. / Что-то в приложении или ноде работает не так.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Search [existing issues](https://github.com/AdmiralCore/echofog/issues) first.
+        If a connection is blocked in your country, use the **Censorship test report** form instead.
+        Security problems go to [private reporting](https://github.com/AdmiralCore/echofog/security/advisories/new), not here.
+
+        Спасибо за отчёт. Сначала поищите среди [существующих issues](https://github.com/AdmiralCore/echofog/issues).
+        Если соединение блокируют в вашей стране, используйте форму **Censorship test report**.
+        Уязвимости — через [приватный отчёт](https://github.com/AdmiralCore/echofog/security/advisories/new), не сюда.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Where / Где
+      options:
+        - Desktop app / Приложение
+        - Node (echofog-node, Docker) / Нода
+        - VPN or exit / VPN или выход
+        - Chat or groups / Чат или группы
+        - Calls or screen sharing / Звонки или демонстрация экрана
+        - File transfer / Передача файлов
+        - Wallet or payments (TON) / Кошелёк или оплата
+        - Docs / Документация
+        - Other / Другое
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / Версия
+      description: Settings → About, or `echofog-node --version`. / Настройки → О программе или `echofog-node --version`.
+      placeholder: v0.10.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / ОС
+      placeholder: Windows 11, Ubuntu 24.04, Docker on Debian 12…
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / Что произошло
+      description: What you did, what you expected and what you got instead. / Что делали, что ожидали и что получили.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / Как повторить
+      placeholder: |
+        1.
+        2.
+        3.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log / Лог
+      description: |
+        The app writes `echofog.log` to `%LOCALAPPDATA%\EchoFog` on Windows; a node logs to its console or `docker logs`. Passwords and keys are blanked and IPs masked, but node IDs and contact names can stay, so check it before posting.
+        Приложение пишет `echofog.log` в `%LOCALAPPDATA%\EchoFog` на Windows; нода — в консоль или `docker logs`. Пароли и ключи вычищены, IP замаскированы, но ID нод и имена контактов могут остаться, поэтому проверьте лог перед отправкой.
+      render: text

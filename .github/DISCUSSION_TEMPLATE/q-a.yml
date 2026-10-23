@@ -1,0 +1,17 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [docs](https://github.com/AdmiralCore/echofog/tree/main/docs) and the [FAQ](https://github.com/AdmiralCore/echofog/blob/main/docs/faq.md) first. When you get an answer, mark it so the next person finds it.
+        Сначала загляните в [документацию](https://github.com/AdmiralCore/echofog/tree/main/docs) и [FAQ](https://github.com/AdmiralCore/echofog/blob/main/docs/faq.ru.md). Когда получите ответ, отметьте его, чтобы следующий человек нашёл его быстрее.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / Вопрос
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Version and OS / Версия и ОС
+      placeholder: v0.10.0, Windows 11
