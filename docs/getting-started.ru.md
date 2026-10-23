@@ -160,7 +160,7 @@ EchoFog — это VPN, который работает напрямую меж�
 IP-адреса скрываются автоматически. Но ID узлов, проверенные сайты и имена контактов в логах могут
 остаться. Читайте, что отправляете, и выкладывайте логи только там, где доверяете читателям.
 
-Отзывы и сообщения об ошибках оставляйте в [issues на GitHub-странице проекта](https://github.com/AdmiralCore/echofog/issues), в [канале EchoFog](https://t.me/EchoFogDev) или в [чате сообщества](https://t.me/+YOrxcYNWQzo1YThi). О проблемах с безопасностью — см. [SECURITY.md](../SECURITY.md#по-русски).
+Отзывы и сообщения об ошибках оставляйте в [issues на GitHub-странице проекта](https://github.com/AdmiralCore/echofog/issues), в [канале EchoFog](https://t.me/EchoFogDev) или в [чате сообщества](https://t.me/+3N3EKWXi-ow3MzBi). О проблемах с безопасностью — см. [SECURITY.md](../SECURITY.md#по-русски).
 
 ## Что дальше
 

@@ -118,7 +118,7 @@ Bug reports, test results from censored networks and pull requests are welcome.
 
 - **A bug, or a test from a censored network** (whether it works or not): open an [issue](https://github.com/AdmiralCore/echofog/issues/new/choose) and pick the form.
 - **A question or an idea**: start a [discussion](https://github.com/AdmiralCore/echofog/discussions). Vote with 👍 for the ideas you want.
-- **Chat and quick help**, mostly in Russian: the [community group](https://t.me/+YOrxcYNWQzo1YThi) on Telegram. News: the [Telegram channel](https://t.me/EchoFogDev).
+- **Chat and quick help**, mostly in Russian: the [community group](https://t.me/+3N3EKWXi-ow3MzBi) on Telegram. News: the [Telegram channel](https://t.me/EchoFogDev).
 - **A security problem**: report it privately, see [SECURITY.md](SECURITY.md).
 
 ## License

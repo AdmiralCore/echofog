@@ -149,7 +149,7 @@ your home folder.
 addresses are masked automatically, but node IDs, sites you checked and contact names can stay in
 the logs. Read what you send, and post logs only where you trust the readers.
 
-Send feedback and bug reports as an [issue on the project's GitHub page](https://github.com/AdmiralCore/echofog/issues), in the [EchoFog channel](https://t.me/EchoFogDev), or in the [community chat](https://t.me/+YOrxcYNWQzo1YThi). Security problems: see [SECURITY.md](../SECURITY.md).
+Send feedback and bug reports as an [issue on the project's GitHub page](https://github.com/AdmiralCore/echofog/issues), in the [EchoFog channel](https://t.me/EchoFogDev), or in the [community chat](https://t.me/+3N3EKWXi-ow3MzBi). Security problems: see [SECURITY.md](../SECURITY.md).
 
 ## Next
 

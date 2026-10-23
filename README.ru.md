@@ -117,7 +117,7 @@ make testbed-chaos               # десять нод за NAT в Docker, с п
 
 - **Ошибка или проверка в сети с цензурой** (работает или нет): создайте [issue](https://github.com/AdmiralCore/echofog/issues/new/choose) и выберите форму.
 - **Вопрос или идея**: начните [обсуждение](https://github.com/AdmiralCore/echofog/discussions). Голосуйте 👍 за идеи, которые нужны вам.
-- **Общение и быстрая помощь**: [группа сообщества](https://t.me/+YOrxcYNWQzo1YThi) в Telegram. Новости: [канал в Telegram](https://t.me/EchoFogDev).
+- **Общение и быстрая помощь**: [группа сообщества](https://t.me/+3N3EKWXi-ow3MzBi) в Telegram. Новости: [канал в Telegram](https://t.me/EchoFogDev).
 - **Уязвимость**: сообщите приватно, см. [SECURITY.md](SECURITY.md#по-русски).
 
 ## Лицензия
