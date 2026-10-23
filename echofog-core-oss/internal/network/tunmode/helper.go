@@ -30,6 +30,7 @@ const (
 
 // HelperMain runs the elevated helper; args follow HelperFlag. It returns the exit code.
 func HelperMain(args []string) int {
+	hardenHelper()
 	fs := flag.NewFlagSet("tun-helper", flag.ContinueOnError)
 	socks := fs.String("socks", "", "node SOCKS5 address")
 	ctl := fs.String("ctl", "", "node control address")

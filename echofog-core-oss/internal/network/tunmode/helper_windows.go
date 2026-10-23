@@ -23,14 +23,24 @@ const deviceGUID = "{7E4C6A1E-EF06-4F0D-9C2A-5E3C0F0E0F06}"
 
 func deviceURL() string { return "tun://" + DeviceName + "?guid=" + deviceGUID }
 
-func preflight() error { return ensureWintun() }
+func preflight() error { return loadWintun() }
 
-// ensureWintun puts the embedded, signed Wintun driver next to the executable before the adapter
-// is created; Wintun is loaded from the application directory only. It runs in the elevated
-// helper, so it trusts nothing already there: a wintun.dll that differs from ours is replaced.
-// Anyone able to drop a file beside the exe (a portable install in the user's folder) would
-// otherwise have their DLL loaded with administrator rights at the next UAC approval.
-func ensureWintun() error {
+// hardenHelper runs first in the elevated helper. The helper is the app's own exe, which people
+// start from Downloads or the desktop, folders any program of theirs can drop files into; a DLL
+// planted there must not be loaded with administrator rights. From here on DLLs loaded by name
+// come from System32 only.
+func hardenHelper() {
+	if err := windows.SetDefaultDllDirectories(windows.LOAD_LIBRARY_SEARCH_SYSTEM32); err != nil {
+		fmt.Fprintln(os.Stderr, "tun-helper: cannot restrict the DLL search path:", err)
+	}
+}
+
+// loadWintun loads the embedded, signed Wintun driver from a folder only administrators can write
+// to (Program Files\EchoFog), by its full path, before the adapter is created. The tunnel library
+// loads "wintun.dll" by name later and gets this module, which is already loaded. The driver used
+// to be put beside the exe and loaded from there: in Downloads another program could swap it
+// between the write and the load, and ransomware protection often refused the write on the desktop.
+func loadWintun() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -43,13 +53,56 @@ func ensureWintun() error {
 		}
 		return nil
 	}
-	if have, err := os.ReadFile(beside); err == nil && bytes.Equal(have, wintunDLL) {
-		return nil
+	dir, err := wintunDir()
+	if err != nil {
+		return err
 	}
-	if err := writeFileReplacing(beside, wintunDLL); err != nil {
-		return fmt.Errorf("cannot put the trusted wintun.dll next to %s: %w", filepath.Base(exe), err)
+	path, err := installWintun(dir, wintunDLL)
+	if err != nil {
+		return fmt.Errorf("cannot install the Wintun driver in %s: %w", dir, err)
+	}
+	if _, err := windows.LoadLibraryEx(path, 0, windows.LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|windows.LOAD_LIBRARY_SEARCH_SYSTEM32); err != nil {
+		return fmt.Errorf("load %s: %w", path, err)
+	}
+	// an older version left its copy beside the exe; ours is not needed there any more
+	if have, err := os.ReadFile(beside); err == nil && bytes.Equal(have, wintunDLL) {
+		_ = os.Remove(beside)
 	}
 	return nil
+}
+
+// wintunDir is Program Files\EchoFog: created by the elevated helper, it inherits the Program Files
+// permissions, so only administrators can change what is in it.
+func wintunDir() (string, error) {
+	pf, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil {
+		return "", fmt.Errorf("find Program Files: %w", err)
+	}
+	return filepath.Join(pf, "EchoFog"), nil
+}
+
+// installWintun makes sure dir holds exactly data as wintun.dll and returns its path.
+func installWintun(dir string, data []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "wintun.dll")
+	if have, err := os.ReadFile(path); err == nil && bytes.Equal(have, data) {
+		return path, nil
+	}
+	if err := writeFileReplacing(path, data); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// system32 is where netsh and ipconfig are run from: the helper's working directory is the exe's
+// folder, so a bare name must not be looked up anywhere else.
+func system32(name string) string {
+	if dir, err := windows.GetSystemDirectory(); err == nil {
+		return filepath.Join(dir, name)
+	}
+	return name
 }
 
 // writeFileReplacing writes data to path through a temp file renamed over it, so a torn write
@@ -77,7 +130,7 @@ func writeFileReplacing(path string, data []byte) error {
 }
 
 func netsh(args ...string) error {
-	cmd := exec.Command("netsh", args...)
+	cmd := exec.Command(system32("netsh.exe"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -190,7 +243,7 @@ func setDWordFlags(root registry.Key, path string, names []string) (func(), erro
 }
 
 func flushDNS() {
-	cmd := exec.Command("ipconfig", "/flushdns")
+	cmd := exec.Command(system32("ipconfig.exe"), "/flushdns")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Run()
 }

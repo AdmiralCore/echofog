@@ -56,7 +56,7 @@ func configure(bypassUDPPort int) (func(), error) {
 	if _, err := waitInterface(DeviceName); err != nil {
 		return nil, err
 	}
-	delRules() // left over from a crash
+	delRules()       // left over from a crash
 	delDNSRedirect() // left over from a crash
 	teardown := func() {
 		delRules()
@@ -171,3 +171,6 @@ func launchElevated(exe string, args []string) error {
 }
 
 func DefaultInterfaceIndex() (int, error) { return 0, nil }
+
+// hardenHelper has nothing to do on Linux: the helper finds no libraries beside the binary.
+func hardenHelper() {}

@@ -145,7 +145,9 @@ You go online through another person's computer: an **exit**. There are two ways
   through the exit.
 - **Route the whole computer through the exit** — a TUN device (a virtual network card) takes the
   traffic of every app. It asks for administrator rights. On Windows the driver it needs (Wintun) is
-  built into the app and written out when needed, so there is nothing extra to install. **There is no
+  built into the app and written out when needed, so there is nothing extra to install. It goes to
+  `C:\Program Files\EchoFog`, where only administrators can change it, and nowhere next to the exe:
+  the app can be run from Downloads or the desktop. **There is no
   kill switch yet:** if EchoFog or its helper stops unexpectedly, your apps fall back to your normal
   connection and your real IP can be exposed for a moment. DNS is kept inside the tunnel on a
   best-effort basis.
