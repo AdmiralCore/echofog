@@ -157,7 +157,20 @@ func TestSavedExitsKeepTheRemainingBalance(t *testing.T) {
 	assert.Zero(t, byID[exitB].RemainingAt, "an exit without payments reports no balance")
 
 	api.vpn.mu.Lock()
-	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{Enabled: true, Credit: 1 << 30})
+	api.beginSessionLocked(exitB)
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{Enabled: true}) // a free exit that answers
+	api.endSessionLocked("switched")
+	api.beginSessionLocked(exitA)
+	api.vpn.mu.Unlock()
+	for _, e := range api.GetSavedExits() {
+		if e.PeerID == exitB {
+			assert.Equal(t, int64(FreeRemaining), e.Remaining, "a free exit has no balance to run out, not zero left")
+			assert.Positive(t, e.RemainingAt)
+		}
+	}
+
+	api.vpn.mu.Lock()
+	api.noteSessionStateLocked(ExitOK, &exit_gateway.AccountInfo{Enabled: true, PricePerMB: 49, Credit: 1 << 30})
 	api.vpn.mu.Unlock()
 	assert.Equal(t, int64(1<<30), api.GetSavedExits()[0].Remaining, "the newest report wins")
 }

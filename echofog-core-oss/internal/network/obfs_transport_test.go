@@ -119,7 +119,12 @@ func TestPerNodeObfs_DetectsImpostorOnOpenPort(t *testing.T) {
 	client.ExpectPeer(server.Addr().String(), other)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	assert.ErrorIs(t, client.DialEarly(ctx, server.Addr().String()), ErrPeerMismatch)
+	err = client.DialEarly(ctx, server.Addr().String())
+	assert.ErrorIs(t, err, ErrPeerMismatch)
+	var mismatch *PeerMismatchError
+	if assert.ErrorAs(t, err, &mismatch) {
+		assert.Equal(t, s1.id(), mismatch.Got, "the error names who did answer")
+	}
 }
 
 // A scanner firing QUIC packets, or random bytes, at an obfuscating node gets no reply at all.

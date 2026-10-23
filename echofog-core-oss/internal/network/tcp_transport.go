@@ -359,7 +359,7 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 	}
 	if haveExpected && res.PeerID != expected {
 		_ = mc.CloseWithError(ErrCodeAuthFailed, "unexpected peer")
-		return ErrPeerMismatch
+		return &PeerMismatchError{Got: res.PeerID}
 	}
 	if err := mc.(*smuxConn).announcePort(uint16(t.advertisedPort.Load())); err != nil {
 		_ = mc.CloseWithError(ErrCodeNormalClose, "announce failed")

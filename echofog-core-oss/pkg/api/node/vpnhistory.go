@@ -46,6 +46,7 @@ type VPNSession struct {
 	PriceKnown bool              `json:"priceKnown"` // the exit itself told us the price
 	// Remaining is the traffic left on the exit's account for us (paid, vouchers, free today), as
 	// the exit last reported it at RemainingAt; it stays with that exit after we leave it.
+	// FreeRemaining: the exit is free for us, so nothing runs out.
 	Remaining   int64 `json:"remaining,omitempty"`
 	RemainingAt int64 `json:"remainingAt,omitempty"` // 0: the exit never reported its account
 	// EndReason: "stopped" (disconnected), "switched" (moved to another exit), "app_closed"
@@ -190,6 +191,9 @@ func (n *NodeApi) endSessionLocked(reason string) {
 	n.vpn.session = nil
 }
 
+// FreeRemaining is the Remaining of an exit that is free for us.
+const FreeRemaining = -1
+
 // noteSessionStateLocked records when the exit first confirmed it serves us, and from its
 // account answer (nil: none) the price it asks and what is left on it for us.
 func (n *NodeApi) noteSessionStateLocked(state string, info *exit_gateway.AccountInfo) {
@@ -202,6 +206,9 @@ func (n *NodeApi) noteSessionStateLocked(state string, info *exit_gateway.Accoun
 		t.s.PricePerMB, t.s.PriceKnown = info.PricePerMB, true // what the exit asks, not what an advert said
 		if info.Enabled {
 			t.s.Remaining, t.s.RemainingAt = info.Remaining(), time.Now().Unix()
+			if info.PricePerMB <= 0 {
+				t.s.Remaining = FreeRemaining // free for us: there is no balance to run out
+			}
 		}
 	}
 	if state == ExitOK && t.s.ReadyMs == 0 {

@@ -65,6 +65,9 @@ func (s *Swarm) expectPeer(addr string, id types.PeerID) {
 // ErrIsolated: this node is isolated and dials nobody.
 var ErrIsolated = errors.New("this node is isolated: it does not connect to other nodes")
 
+// ErrSelfAddr: the address is this node's own; it is not dialed again.
+var ErrSelfAddr = errors.New("this address is this node's own")
+
 // SetNoDial stops (or allows again) every outbound connection: an isolated node only accepts.
 func (s *Swarm) SetNoDial(on bool) { s.noDial.Store(on) }
 
@@ -74,13 +77,27 @@ func (s *Swarm) dialEarly(ctx context.Context, addr string) error {
 	if s.noDial.Load() {
 		return ErrIsolated
 	}
+	if _, self := s.selfAddrs.Load(addr); self {
+		return ErrSelfAddr
+	}
+	var err error
 	if isWSAddr(addr) {
 		if s.wsTransport == nil {
 			return errors.New("no WebSocket transport to dial " + addr)
 		}
-		return s.wsTransport.Dial(ctx, addr)
+		err = s.wsTransport.Dial(ctx, addr)
+	} else {
+		err = s.netTransport.DialEarly(ctx, addr)
 	}
-	return s.netTransport.DialEarly(ctx, addr)
+	// a stale record (an old ID of ours at our address) leads back here: remember the address
+	var mismatch *network.PeerMismatchError
+	if errors.As(err, &mismatch) && mismatch.Got == s.selfID {
+		if _, seen := s.selfAddrs.LoadOrStore(addr, true); !seen {
+			s.log().Info("Swarm: an address announced for another peer is this node's own; not dialing it again", "addr", addr)
+		}
+		return ErrSelfAddr
+	}
+	return err
 }
 
 func (s *Swarm) connect(addr string) {

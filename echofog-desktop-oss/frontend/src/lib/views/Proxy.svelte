@@ -515,7 +515,7 @@
                 {#if refusals(e).exit}<span class="warn-text" title={refusals(e).title}>{$t('proxy.hist.exitFails', { n: refusals(e).exit })}</span>{/if}
                 {#if refusals(e).site}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.siteFails', { n: refusals(e).site })}</span>{/if}
                 <span class="faint">{priceText(e)}</span>
-                {#if e.remainingAt}<span class="left" title={leftTitle(e)}>{leftText(e)}</span>{/if}
+                {#if e.remainingAt && e.remaining >= 0}<span class="left" title={leftTitle(e)}>{leftText(e)}</span>{/if}
               </div>
               <div class="hist-actions">
                 <button class="icon tiny" title={$t('proxy.hist.copyLink')} aria-label={$t('proxy.hist.copyLink')} on:click={() => copyLink(e)}><Icon name={copiedLink === e.peerId ? 'check' : 'copy'} size={14} /></button>
@@ -529,7 +529,7 @@
                   {#each sessionsOf(e.peerId) as h (h.id || h.peerId + h.startedAt)}
                     <div class="session">
                       <span>{when(h.startedAt, $lang)} · {duration(sessionSeconds(h))}{h.endReason ? ' · ' + $t('proxy.hist.end.' + h.endReason) : h.active ? ' · ' + $t('proxy.hist.now') : ''}</span>
-                      <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}{#if h.remainingAt}<span title={leftTitle(h)}> · {leftText(h)}</span>{/if}</span>
+                      <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}{#if h.remainingAt && h.remaining >= 0}<span title={leftTitle(h)}> · {leftText(h)}</span>{/if}</span>
                     </div>
                   {/each}
                 </div>

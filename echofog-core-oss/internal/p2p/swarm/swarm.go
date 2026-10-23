@@ -76,6 +76,9 @@ type Swarm struct {
 	maint    maintainState
 	autoDial atomic.Bool // dial peers learned from others on our own (network.no_auto_dial unsets)
 	noDial   atomic.Bool // an isolated node: it dials nobody, the people it invited connect to it
+	// selfAddrs are addresses that turned out to be this node's own (announced in the DHT or by
+	// peers under an older ID): dialing them again would only reach ourselves
+	selfAddrs sync.Map
 
 	bytesRx atomic.Uint64
 	bytesTx atomic.Uint64

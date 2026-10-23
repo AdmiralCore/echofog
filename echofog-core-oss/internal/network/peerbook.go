@@ -16,6 +16,13 @@ var ErrPeerUnknown = errors.New("network: the peer ID of this address is unknown
 // ErrPeerMismatch: the node that answered is not the one the address was announced for.
 var ErrPeerMismatch = errors.New("network: the node at this address has another peer ID than expected")
 
+// PeerMismatchError is ErrPeerMismatch with the peer ID that did answer, so the caller can tell a
+// stale address of someone else from its own address announced under an old ID.
+type PeerMismatchError struct{ Got types.PeerID }
+
+func (e *PeerMismatchError) Error() string        { return ErrPeerMismatch.Error() }
+func (e *PeerMismatchError) Is(target error) bool { return target == ErrPeerMismatch }
+
 // PeerExpecter is implemented by transports that need to know whose address they dial.
 type PeerExpecter interface {
 	ExpectPeer(addr string, id types.PeerID)

@@ -313,7 +313,7 @@ func (t *WSTransport) Dial(ctx context.Context, url string) error {
 	}
 	if haveExpected && res.PeerID != expected {
 		_ = mc.CloseWithError(ErrCodeAuthFailed, "unexpected peer")
-		return ErrPeerMismatch
+		return &PeerMismatchError{Got: res.PeerID}
 	}
 	_ = conn.SetDeadline(time.Time{})
 	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: url, Dialable: true, Caps: res.Caps})

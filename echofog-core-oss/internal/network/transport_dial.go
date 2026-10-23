@@ -113,7 +113,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	}
 	if haveExpected && peerRes.PeerID != expected {
 		conn.CloseWithError(ErrCodeAuthFailed, "unexpected peer")
-		return ErrPeerMismatch
+		return &PeerMismatchError{Got: peerRes.PeerID}
 	}
 
 	q.newConn(conn, true, conn.RemoteAddr().String(), true, peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
