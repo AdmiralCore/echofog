@@ -247,6 +247,7 @@ func (t *WSTransport) handleInbound(conn net.Conn, ip netip.Addr, releaseSlot fu
 		guard.Fail(ip)
 		return
 	}
+	mc.(*smuxConn).ws = true
 	res, err := t.auth.AuthenticateInbound(t.ctx, mc)
 	if err != nil {
 		releaseSlot()
@@ -302,6 +303,7 @@ func (t *WSTransport) Dial(ctx context.Context, url string) error {
 		_ = inner.Close()
 		return err
 	}
+	mc.(*smuxConn).ws = true
 	actx := ctx
 	if haveExpected {
 		actx = WithExpectedPeer(ctx, expected)

@@ -62,10 +62,37 @@ type MuxConn interface {
 const (
 	ProtocolQUIC = "quic"
 	ProtocolTCP  = "tcp"
+	// ws is not a Protocol (a WebSocket link reports "tcp"): LinkKind tells it apart for the logs
+	linkWS = "ws"
 
 	channelBindingLabel = "EXPORTER-echofog-peer-handshake"
 	channelBindingLen   = 32
 )
+
+// LinkKind names what carries c, for the logs: "quic" (UDP), "tcp" (TLS over TCP) or "ws"
+// (WebSocket, possibly through a CDN).
+func LinkKind(c MuxConn) string {
+	if s, ok := c.(*smuxConn); ok && s.ws {
+		return linkWS
+	}
+	return c.Protocol()
+}
+
+// DescribeLink is LinkKind with both ends, e.g. "quic [::]:60585->203.0.113.7:443": which socket
+// of ours talks to which address.
+func DescribeLink(c MuxConn) string {
+	if c == nil {
+		return ""
+	}
+	local, remote := "?", "?"
+	if a := c.LocalAddr(); a != nil {
+		local = a.String()
+	}
+	if a := c.RemoteAddr(); a != nil {
+		remote = a.String()
+	}
+	return LinkKind(c) + " " + local + "->" + remote
+}
 
 // quicMuxConn adapts *quic.Conn.
 type quicMuxConn struct{ c *quic.Conn }

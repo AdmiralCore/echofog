@@ -130,10 +130,11 @@ func (n *NodeApi) noteExitState(relay string, info *exit_gateway.AccountInfo, er
 	n.noteSessionStateLocked(state, info)
 	n.vpn.mu.Unlock()
 	if changed {
+		link := n.exitLink(relay)
 		if state == ExitOK {
-			slog.Info("exit is serving us", "exit", relay)
+			slog.Info("exit is serving us", "exit", relay, "link", link)
 		} else {
-			slog.Warn("exit is not serving us", "exit", relay, "state", state, "why", notice)
+			slog.Warn("exit is not serving us", "exit", relay, "state", state, "why", notice, "link", link)
 		}
 		n.emit("vpn:exit_state", map[string]any{"state": state, "notice": notice})
 	}
@@ -181,6 +182,19 @@ func (n *NodeApi) relayPeerID(hexID string) (types.PeerID, error) {
 	}
 	copy(id[:], raw)
 	return id, nil
+}
+
+// exitLink describes the connection to the exit ("quic [::]:60585->203.0.113.7:443"), "none"
+// when there is none: the logs say what the traffic rode on when something went wrong.
+func (n *NodeApi) exitLink(hexID string) string {
+	id, err := n.relayPeerID(hexID)
+	if err != nil || n.node == nil || n.node.Swarm == nil {
+		return "none"
+	}
+	if l := n.node.Swarm.LinkOf(id); l != "" {
+		return l
+	}
+	return "none"
 }
 
 func (n *NodeApi) relayConnected(hexID string) bool {

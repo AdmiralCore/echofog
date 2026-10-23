@@ -145,6 +145,7 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 	lost := 0
 	var lastRefresh, lastRevive, lastStuckLog time.Time
 	stuckWhy := ""
+	var linkOf, link string // the exit link last seen, for logging when it changes
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,6 +162,18 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 			lost = 0
 		} else {
 			lost++
+		}
+		if now := n.exitLink(relay); relay != linkOf || now != link {
+			short := relay[:min(12, len(relay))]
+			switch {
+			case now == "none" && relay == linkOf:
+				slog.Warn("the link to the exit is gone", "exit", short, "was", link)
+			case relay == linkOf:
+				slog.Info("the exit is reached over another link", "exit", short, "link", now, "was", link)
+			default:
+				slog.Info("link to the exit", "exit", short, "link", now)
+			}
+			linkOf, link = relay, now
 		}
 		if !n.autoSwitchOn() {
 			continue

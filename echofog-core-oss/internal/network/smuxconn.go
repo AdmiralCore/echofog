@@ -68,6 +68,7 @@ type smuxConn struct {
 	dgramInMu    sync.Mutex
 	dgramInOpen  bool
 	closeOnce    sync.Once
+	ws           bool // the TLS runs inside a WebSocket
 }
 
 // NewSmuxConn runs smux over an established (TLS) connection. binding is the TLS channel

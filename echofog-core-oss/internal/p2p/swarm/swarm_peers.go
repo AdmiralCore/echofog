@@ -2,6 +2,9 @@ package swarm
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"log/slog"
 	"net/netip"
 
 	"time"
@@ -250,6 +253,9 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 		}
 		obs := s.observers
 		s.mu.Unlock()
+		if current {
+			s.logLinkClosed(peerID, conn, time.Since(p.connectedAt))
+		}
 		p.Close()
 		s.noteLongLived(p)
 		if p.release != nil {
@@ -328,6 +334,38 @@ func (s *Swarm) RemovePeer(peerID types.PeerID) {
 		return
 	}
 	s.mu.Unlock()
+}
+
+// logLinkClosed says which connection to a peer ended, after how long and why. People send these
+// logs in: "the VPN dropped" is only clear with what link it was on and what ended it. A client
+// has a handful of peers and logs it as info; a server, with thousands coming and going, as debug.
+func (s *Swarm) logLinkClosed(peerID types.PeerID, conn network.MuxConn, lasted time.Duration) {
+	why := "closed"
+	if err := context.Cause(conn.Context()); err != nil && !errors.Is(err, context.Canceled) {
+		why = err.Error()
+	}
+	level := slog.LevelInfo
+	if s.Drops(net_types.TypeChatMessage) {
+		level = slog.LevelDebug
+	}
+	s.log().Log(s.ctx, level, "Swarm: connection to peer ended", "peer", peerID.String()[:12],
+		"link", network.DescribeLink(conn), "lasted", lasted.Round(time.Second).String(), "why", why)
+}
+
+// LinkOf describes the connection to a peer ("quic [::]:60585->203.0.113.7:443"), "" when there
+// is none.
+func (s *Swarm) LinkOf(peerID types.PeerID) string {
+	p := s.GetPeer(peerID)
+	if p == nil {
+		return ""
+	}
+	p.mu.RLock()
+	tw := p.transport
+	p.mu.RUnlock()
+	if tw == nil {
+		return ""
+	}
+	return network.DescribeLink(tw.GetConn())
 }
 
 // GetPeer returns the active peer with this ID, or nil if it is not connected.
