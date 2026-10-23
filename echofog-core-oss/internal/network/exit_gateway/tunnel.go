@@ -298,6 +298,7 @@ type ExitService struct {
 	limits  Limits
 	addrOf  func(types.PeerID) string
 	slots   streamSlots
+	udp     udpRelays // UDP sessions per peer, for replacing the stalest one
 	shaper  shaper
 	budget  freeBudget                     // daily and monthly caps of a free exit
 	queries *ratelimit.Keyed[types.PeerID] // account requests per peer

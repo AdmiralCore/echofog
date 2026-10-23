@@ -15,10 +15,22 @@ import (
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
+// udpIdleTimeout closes a relay nobody used for a while (QUIC, games, calls keep it alive).
+// udpDNSIdleTimeout is the same for a relay that only ever sent DNS queries: an answer comes in
+// milliseconds, and every lookup a computer makes opens a session of its own, so keeping them two
+// minutes used up the peer's sessions while browsing. Variables so tests can shorten them.
+var (
+	udpIdleTimeout    = 2 * time.Minute
+	udpDNSIdleTimeout = 15 * time.Second
+	udpIdleCheck      = 5 * time.Second
+)
+
+// udpEvictIdle: when a peer is out of sessions, its least recently used one that moved nothing for
+// this long is closed for the new one, as a NAT box does, instead of refusing the new one.
+var udpEvictIdle = 5 * time.Second
+
 const (
-	// udpIdleTimeout closes a relay nobody used for a while (DNS, QUIC, games keep it alive).
-	udpIdleTimeout = 2 * time.Minute
-	maxDatagram    = 65535
+	maxDatagram = 65535
 	// maxUDPTargets bounds the per-association resolution cache.
 	maxUDPTargets = 1024
 )
@@ -129,6 +141,9 @@ func (d *P2PDialer) DialExitUDP(ctx context.Context) (*UDPSession, error) {
 		case resultPayment:
 			st.Close()
 			return nil, ErrPaymentRequired
+		case resultBusy:
+			st.Close()
+			return nil, ErrExitBusy
 		default:
 			st.Close()
 			return nil, ErrExitDenied
@@ -288,6 +303,9 @@ func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types
 		return
 	}
 	release, ok := e.acquire(peer, true)
+	if !ok && e.udp.evictOldest(peer) {
+		release, ok = e.acquire(peer, true)
+	}
 	if !ok {
 		e.refuse(peer, RefuseBusy)
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultBusy})
@@ -310,7 +328,9 @@ func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types
 	defer unpace()
 	relay := &udpRelay{svc: e, st: st, conn: conn, peer: peer, meter: m, pace: p, cancel: cancel,
 		labels: make(map[string]string), resolved: make(map[string]*net.UDPAddr),
-		pending: make(map[string][][]byte), failed: make(map[string]time.Time)}
+		pending: make(map[string][][]byte), failed: make(map[string]time.Time), release: release}
+	e.udp.add(relay)
+	defer e.udp.remove(relay)
 
 	reply := []byte{resultOK}
 	if len(hello) > 0 && hello[0]&udpHelloDatagrams != 0 {
@@ -375,7 +395,22 @@ type udpRelay struct {
 	pending  map[string][][]byte     // "host:port" being resolved -> datagrams waiting for it
 	failed   map[string]time.Time    // "host:port" that did not resolve -> when
 	lastUse  time.Time
+	nonDNS   bool // it sent something else than DNS queries: the long idle timeout applies
 	writeMu  sync.Mutex
+
+	release func() // gives the stream slot back; safe to call more than once
+}
+
+// evict closes the relay and gives its slot back at once, for a new session of the same peer.
+func (r *udpRelay) evict() {
+	r.release()
+	r.cancel()
+}
+
+func (r *udpRelay) idleFor() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Since(r.lastUse)
 }
 
 func (r *udpRelay) touch() {
@@ -385,17 +420,22 @@ func (r *udpRelay) touch() {
 }
 
 func (r *udpRelay) watchIdle(ctx context.Context, cancel context.CancelFunc) {
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(udpIdleCheck)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			r.release() // the slot is free now, not when the stream reader notices
 			_ = r.conn.Close()
 			_ = r.st.Close()
 			return
 		case <-t.C:
 			r.mu.Lock()
-			idle := time.Since(r.lastUse) > udpIdleTimeout
+			limit := udpIdleTimeout
+			if !r.nonDNS {
+				limit = udpDNSIdleTimeout
+			}
+			idle := time.Since(r.lastUse) > limit
 			r.mu.Unlock()
 			if idle {
 				cancel()
@@ -510,7 +550,12 @@ func (r *udpRelay) send(ctx context.Context, target string, payload []byte) {
 }
 
 func (r *udpRelay) out(dst *net.UDPAddr, payload []byte) {
-	r.touch()
+	r.mu.Lock()
+	r.lastUse = time.Now()
+	if dst.Port != 53 {
+		r.nonDNS = true
+	}
+	r.mu.Unlock()
 	if !r.pace.allow(len(payload)) {
 		return // over the fair share: dropped, as a congested link would
 	}
@@ -606,4 +651,55 @@ func (r *udpRelay) downstream() {
 			return
 		}
 	}
+}
+
+// udpRelays lists the UDP sessions the exit serves per peer, so a peer out of sessions can have
+// its stalest one replaced.
+type udpRelays struct {
+	mu     sync.Mutex
+	byPeer map[types.PeerID]map[*udpRelay]struct{}
+}
+
+func (u *udpRelays) add(r *udpRelay) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.byPeer == nil {
+		u.byPeer = map[types.PeerID]map[*udpRelay]struct{}{}
+	}
+	if u.byPeer[r.peer] == nil {
+		u.byPeer[r.peer] = map[*udpRelay]struct{}{}
+	}
+	u.byPeer[r.peer][r] = struct{}{}
+}
+
+func (u *udpRelays) remove(r *udpRelay) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if set := u.byPeer[r.peer]; set != nil {
+		delete(set, r)
+		if len(set) == 0 {
+			delete(u.byPeer, r.peer)
+		}
+	}
+}
+
+// evictOldest closes the peer's least recently used session if it moved nothing for udpEvictIdle,
+// and says whether it did.
+func (u *udpRelays) evictOldest(peer types.PeerID) bool {
+	u.mu.Lock()
+	var oldest *udpRelay
+	var idle time.Duration
+	for r := range u.byPeer[peer] {
+		if d := r.idleFor(); d > idle {
+			oldest, idle = r, d
+		}
+	}
+	if oldest == nil || idle < udpEvictIdle {
+		u.mu.Unlock()
+		return false
+	}
+	delete(u.byPeer[peer], oldest)
+	u.mu.Unlock()
+	oldest.evict()
+	return true
 }
