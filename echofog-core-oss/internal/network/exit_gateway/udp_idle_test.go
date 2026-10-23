@@ -11,9 +11,9 @@ import (
 )
 
 func shortUDPTimers(t *testing.T, dns, evict time.Duration) {
-	idle, dnsIdle, check, ev := udpIdleTimeout, udpDNSIdleTimeout, udpIdleCheck, udpEvictIdle
-	udpIdleTimeout, udpDNSIdleTimeout, udpIdleCheck, udpEvictIdle = time.Hour, dns, 20*time.Millisecond, evict
-	t.Cleanup(func() { udpIdleTimeout, udpDNSIdleTimeout, udpIdleCheck, udpEvictIdle = idle, dnsIdle, check, ev })
+	before := udpTimers.Load()
+	udpTimers.Store(&udpTimerSet{idle: time.Hour, dnsIdle: dns, check: 20 * time.Millisecond, evict: evict})
+	t.Cleanup(func() { udpTimers.Store(before) })
 }
 
 // A session that only asked DNS ends soon after; one that carries anything else stays open.

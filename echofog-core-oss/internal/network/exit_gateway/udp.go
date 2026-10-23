@@ -9,25 +9,31 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
-// udpIdleTimeout closes a relay nobody used for a while (QUIC, games, calls keep it alive).
-// udpDNSIdleTimeout is the same for a relay that only ever sent DNS queries: an answer comes in
-// milliseconds, and every lookup a computer makes opens a session of its own, so keeping them two
-// minutes used up the peer's sessions while browsing. Variables so tests can shorten them.
-var (
-	udpIdleTimeout    = 2 * time.Minute
-	udpDNSIdleTimeout = 15 * time.Second
-	udpIdleCheck      = 5 * time.Second
-)
+// udpTimerSet holds the UDP session timers. They sit behind an atomic pointer so tests can shorten
+// them while sessions of an earlier test still read them.
+type udpTimerSet struct {
+	// idle closes a relay nobody used for a while (QUIC, games, calls keep it alive). dnsIdle is
+	// the same for a relay that only ever sent DNS queries: an answer comes in milliseconds, and
+	// every lookup a computer makes opens a session of its own, so keeping them two minutes used
+	// up the peer's sessions while browsing. check is how often both are looked at.
+	idle, dnsIdle, check time.Duration
+	// evict: when a peer is out of sessions, its least recently used one that moved nothing for
+	// this long is closed for the new one, as a NAT box does, instead of refusing the new one.
+	evict time.Duration
+}
 
-// udpEvictIdle: when a peer is out of sessions, its least recently used one that moved nothing for
-// this long is closed for the new one, as a NAT box does, instead of refusing the new one.
-var udpEvictIdle = 5 * time.Second
+var udpTimers atomic.Pointer[udpTimerSet]
+
+func init() {
+	udpTimers.Store(&udpTimerSet{idle: 2 * time.Minute, dnsIdle: 15 * time.Second, check: 5 * time.Second, evict: 5 * time.Second})
+}
 
 const (
 	maxDatagram = 65535
@@ -420,7 +426,7 @@ func (r *udpRelay) touch() {
 }
 
 func (r *udpRelay) watchIdle(ctx context.Context, cancel context.CancelFunc) {
-	t := time.NewTicker(udpIdleCheck)
+	t := time.NewTicker(udpTimers.Load().check)
 	defer t.Stop()
 	for {
 		select {
@@ -431,9 +437,10 @@ func (r *udpRelay) watchIdle(ctx context.Context, cancel context.CancelFunc) {
 			return
 		case <-t.C:
 			r.mu.Lock()
-			limit := udpIdleTimeout
+			timers := udpTimers.Load()
+			limit := timers.idle
 			if !r.nonDNS {
-				limit = udpDNSIdleTimeout
+				limit = timers.dnsIdle
 			}
 			idle := time.Since(r.lastUse) > limit
 			r.mu.Unlock()
@@ -683,7 +690,7 @@ func (u *udpRelays) remove(r *udpRelay) {
 	}
 }
 
-// evictOldest closes the peer's least recently used session if it moved nothing for udpEvictIdle,
+// evictOldest closes the peer's least recently used session if it moved nothing for the evict timer,
 // and says whether it did.
 func (u *udpRelays) evictOldest(peer types.PeerID) bool {
 	u.mu.Lock()
@@ -694,7 +701,7 @@ func (u *udpRelays) evictOldest(peer types.PeerID) bool {
 			oldest, idle = r, d
 		}
 	}
-	if oldest == nil || idle < udpEvictIdle {
+	if oldest == nil || idle < udpTimers.Load().evict {
 		u.mu.Unlock()
 		return false
 	}
