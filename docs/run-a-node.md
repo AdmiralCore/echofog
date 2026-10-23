@@ -164,11 +164,14 @@ stays on UDP only. Set `--tls-server-name` and `--camouflage-addr` by hand to ge
 ## Join the network
 
 - **Built-in nodes.** The build carries public entry nodes of the project to join through:
-  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d` and
-  `34.32.224.253:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
+  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`,
+  `34.32.224.253:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d` and
+  `echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
   (`DefaultBootstrapNodes` in `internal/config/config.go`); a release can add more at build time
   (`-ldflags "-X github.com/echofog/echofog-core/internal/config.SeedNodes=host:port/<peer id>,..."`).
-  Without `--bootstrap` the node joins through these.
+  Without `--bootstrap` the node joins through these. The name is resolved when the node starts,
+  so it keeps working when the entry node moves to another server; the addresses are there for
+  networks where its DNS is blocked.
 - `--bootstrap host:port/<peer id>` (env `ECHOFOG_BOOTSTRAP`, comma-separated for several) names
   the nodes to join through **instead of** the built-in ones; list the built-in node too if you want
   it as well. The host may be a domain. The peer ID is required: each node's traffic is disguised
