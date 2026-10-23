@@ -51,6 +51,9 @@ type ExitStatus struct {
 	OwedTON      string `json:"owedTon,omitempty"`
 	CashedTON    string `json:"cashedTon,omitempty"`
 	ClaimProblem string `json:"claimProblem,omitempty"`
+	// free traffic given away this calendar month, and the monthly cap (0: none)
+	FreeMonthBytes uint64 `json:"freeMonthBytes,omitempty"`
+	FreeMonthCap   uint64 `json:"freeMonthCap,omitempty"`
 }
 
 type WalletStatus struct {
@@ -124,6 +127,9 @@ func (c *collector) refresh(ctx context.Context) {
 		}
 		v := c.h.GetVoucherEarnings()
 		st.Exit.OwedTON, st.Exit.CashedTON, st.Exit.ClaimProblem = v.OwedTON, v.CashedTON, v.ClaimProblem
+		if used, limit := c.n.ExitService.FreeMonth(); limit > 0 {
+			st.Exit.FreeMonthBytes, st.Exit.FreeMonthCap = uint64(used), uint64(limit)
+		}
 	}
 	if w, err := c.h.GetTonWallet(); err == nil {
 		ws := &WalletStatus{Address: w.Address, Network: w.Network}
@@ -209,6 +215,9 @@ func statsLine(s Status) string {
 		if e.LastError != "" {
 			fmt.Fprintf(&b, " (%s)", e.LastError)
 		}
+		if e.FreeMonthCap > 0 {
+			fmt.Fprintf(&b, ", free this month %s of %s", human(e.FreeMonthBytes), human(e.FreeMonthCap))
+		}
 		if vouchersShown(e) {
 			fmt.Fprintf(&b, ", vouchers: %s TON owed, %s TON cashed", orZero(e.OwedTON), orZero(e.CashedTON))
 			if e.ClaimProblem != "" {
@@ -236,7 +245,7 @@ func roleLine(s Status) string {
 // refusedDetail is " (payment required 3, dial failed 1)", reasons in a fixed order.
 func refusedDetail(by map[string]uint64) string {
 	var parts []string
-	for _, r := range []string{exit_gateway.RefuseDisabled, exit_gateway.RefusePayment, exit_gateway.RefuseTarget, exit_gateway.RefuseDial, exit_gateway.RefuseBusy, exit_gateway.RefuseRate} {
+	for _, r := range []string{exit_gateway.RefuseDisabled, exit_gateway.RefusePayment, exit_gateway.RefuseTarget, exit_gateway.RefuseDial, exit_gateway.RefuseBusy, exit_gateway.RefuseRate, exit_gateway.RefuseFreeLimit} {
 		if n := by[r]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%s %d", r, n))
 		}
@@ -411,6 +420,9 @@ func printStatus(s Status) {
 		fmt.Printf("  Exit:         %s, $%s per GB\n", state, e.PricePerGB)
 		fmt.Printf("    sessions      %d accepted, %d refused%s\n", e.Sessions, e.Refused, refusedDetail(e.RefusedBy))
 		fmt.Printf("    traffic       %s carried\n", human(e.Carried))
+		if e.FreeMonthCap > 0 {
+			fmt.Printf("    free          %s of %s given away this month\n", human(e.FreeMonthBytes), human(e.FreeMonthCap))
+		}
 		fmt.Printf("    earned        $%s (direct payments)\n", orZero(e.EarnedUSD))
 		if vouchersShown(e) {
 			fmt.Printf("    vouchers      %s TON owed by clients' deposits, %s TON cashed\n", orZero(e.OwedTON), orZero(e.CashedTON))

@@ -22,6 +22,12 @@ type Limits struct {
 	// On a free exit: bytes a second one peer, and the peers of one IP together, may use.
 	FreePeerRate float64
 	FreeIPRate   float64
+
+	// On a free exit: bytes one peer, and the peers of one IP together, may take in a day (UTC),
+	// and the whole exit in a month (UTC). 0: no cap, which is the default.
+	FreePeerDaily int64
+	FreeIPDaily   int64
+	FreeMonthly   int64
 }
 
 // Built-in exit limits; config.ExitConfig overrides each of them (0 keeps these).
@@ -70,6 +76,10 @@ func LimitsFromConfig(c config.ExitConfig) Limits {
 		MaxLifetime:  time.Duration(max(0, c.MaxLifetimeSeconds)) * time.Second,
 		FreePeerRate: mbps(c.FreePeerMbps, defaultFreePeerMbps),
 		FreeIPRate:   mbps(c.FreeIPMbps, defaultFreeIPMbps),
+
+		FreePeerDaily: max(0, c.FreePeerMBPerDay) << 20,
+		FreeIPDaily:   max(0, c.FreeIPMBPerDay) << 20,
+		FreeMonthly:   max(0, c.FreeGBPerMonth) << 30,
 	}
 }
 

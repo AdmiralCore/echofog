@@ -19,15 +19,16 @@ const refusalLogEvery = 30 * time.Second
 
 // Why an exit refused a stream.
 const (
-	RefuseDisabled = "exit disabled"      // the node does not share its connection
-	RefusePayment  = "payment required"   // the free quota is used up and nothing is paid
-	RefuseTarget   = "target not allowed" // private address, blocked port or a malformed target
-	RefuseDial     = "dial failed"        // the exit could not reach the target
-	RefuseBusy     = "too many streams"   // the peer, its address or the whole exit is at its stream cap
-	RefuseRate     = "too many requests"  // account or voucher requests faster than the exit answers them
+	RefuseDisabled  = "exit disabled"      // the node does not share its connection
+	RefusePayment   = "payment required"   // the free quota is used up and nothing is paid
+	RefuseTarget    = "target not allowed" // private address, blocked port or a malformed target
+	RefuseDial      = "dial failed"        // the exit could not reach the target
+	RefuseBusy      = "too many streams"   // the peer, its address or the whole exit is at its stream cap
+	RefuseRate      = "too many requests"  // account or voucher requests faster than the exit answers them
+	RefuseFreeLimit = "free limit reached" // a free exit's daily or monthly cap is used up
 )
 
-var refuseReasons = [...]string{RefuseDisabled, RefusePayment, RefuseTarget, RefuseDial, RefuseBusy, RefuseRate}
+var refuseReasons = [...]string{RefuseDisabled, RefusePayment, RefuseTarget, RefuseDial, RefuseBusy, RefuseRate, RefuseFreeLimit}
 
 // logLimiter lets one log line per key through every interval and counts the ones it holds back.
 type logLimiter struct {

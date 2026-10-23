@@ -341,6 +341,22 @@ the mailbox would refuse before doing any work for it.
 | `--exit-max-lifetime` | none | a TCP connection is closed after this long, busy or not |
 | `--exit-free-peer-mbps` | 50 | on a free exit, the speed of one client, Mbit/s |
 | `--exit-free-ip-mbps` | 100 | on a free exit, the speed of all the clients of one IP address |
+| `--exit-free-mb-per-day` | none | on a free exit, the MB one client may take a day (UTC) |
+| `--exit-free-ip-mb-per-day` | none | on a free exit, the MB all the clients of one IP address may take a day |
+| `--exit-free-gb-per-month` | none | on a free exit, the GB the whole exit gives away in a calendar month (UTC) |
+
+The traffic caps are off by default. They are for a server whose traffic you pay for by the GB:
+without them, one client with a torrent can use up a month of prepaid traffic in a few days. Set the
+per-client and per-address caps together, because a new peer ID costs nothing. When a cap is used
+up, the exit refuses new connections (`free limit reached` in `status`) and cuts the ones that run
+over; the daily caps start again at midnight UTC and the monthly one on the first of the month. The
+month total is kept in `exit-free-budget.json` in the data directory, so a restart does not reset
+it; `status` shows how much of it is used. For example, 330 GB a month with no client
+taking more than 3 GB a day:
+
+```bash
+echofog-node --exit --exit-free-mb-per-day 3072 --exit-free-ip-mb-per-day 6144 --exit-free-gb-per-month 330
+```
 
 A client over a stream cap is told the exit is busy and tries again; it does not switch exits over
 it. Paying clients and the peers on your free list (`--exit-free-peers`) are never slowed down.

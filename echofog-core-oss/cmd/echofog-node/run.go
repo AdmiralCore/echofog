@@ -147,6 +147,9 @@ func parseRunFlags(args []string) options {
 	f.DurationVar(&o.exitLife, "exit-max-lifetime", envDuration("ECHOFOG_EXIT_MAX_LIFETIME", 0), "close a TCP connection through the exit after this long, busy or not (0 = never)")
 	f.IntVar(&el.FreePeerMbps, "exit-free-peer-mbps", int(envInt64("ECHOFOG_EXIT_FREE_PEER_MBPS", 0)), "on a free exit, the speed of one client in Mbit/s (0 = default 50, -1 = no limit)")
 	f.IntVar(&el.FreeIPMbps, "exit-free-ip-mbps", int(envInt64("ECHOFOG_EXIT_FREE_IP_MBPS", 0)), "on a free exit, the speed of all the clients of one IP address in Mbit/s (0 = default 100, -1 = no limit)")
+	f.Int64Var(&el.FreePeerMBPerDay, "exit-free-mb-per-day", envInt64("ECHOFOG_EXIT_FREE_MB_PER_DAY", 0), "on a free exit, the MB one client may take a day (UTC) (0 = no cap)")
+	f.Int64Var(&el.FreeIPMBPerDay, "exit-free-ip-mb-per-day", envInt64("ECHOFOG_EXIT_FREE_IP_MB_PER_DAY", 0), "on a free exit, the MB all the clients of one IP address may take a day (UTC) (0 = no cap)")
+	f.Int64Var(&el.FreeGBPerMonth, "exit-free-gb-per-month", envInt64("ECHOFOG_EXIT_FREE_GB_PER_MONTH", 0), "on a free exit, the GB the whole exit gives away a calendar month (UTC); then it refuses new connections until the month ends (0 = no cap)")
 	f.StringVar(&o.exitFree, "exit-free-peers", getEnv("ECHOFOG_EXIT_FREE_PEERS", ""), "comma-separated peer IDs this exit serves for free, without quota or payment (e.g. your own devices); replaces the list saved in the data directory")
 
 	f.StringVar(&o.accessMode, "access", getEnv("ECHOFOG_ACCESS", "public"), "who may reach this node: public (listed, its exit advertised), hidden (uses the network as a client, unlisted, answers only people with its link) or isolated (joins no network at all, people with its link connect to it directly; for a server)")

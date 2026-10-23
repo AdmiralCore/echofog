@@ -287,6 +287,15 @@ type ExitConfig struct {
 	// list (the operator's own devices) and paying peers are not slowed down.
 	FreePeerMbps int `json:"free_peer_mbps,omitempty"`
 	FreeIPMbps   int `json:"free_ip_mbps,omitempty"`
+	// FreePeerMBPerDay and FreeIPMBPerDay: on a free exit, the traffic one peer, and all the peers
+	// of one IP address together, may take in a day (UTC), in MB; FreeGBPerMonth: the traffic the
+	// whole exit gives away in a calendar month (UTC), in GB, after which it refuses new streams
+	// until the month ends. For an operator whose own traffic is paid for by the GB. Unlike the
+	// fields above, 0 (and a negative value) means no cap, which is the default. Peers on the free
+	// list are never counted.
+	FreePeerMBPerDay int64 `json:"free_peer_mb_per_day,omitempty"`
+	FreeIPMBPerDay   int64 `json:"free_ip_mb_per_day,omitempty"`
+	FreeGBPerMonth   int64 `json:"free_gb_per_month,omitempty"`
 }
 
 type StorageConfig struct {

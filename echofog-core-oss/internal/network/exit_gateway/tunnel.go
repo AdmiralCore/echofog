@@ -299,6 +299,7 @@ type ExitService struct {
 	addrOf  func(types.PeerID) string
 	slots   streamSlots
 	shaper  shaper
+	budget  freeBudget                     // daily and monthly caps of a free exit
 	queries *ratelimit.Keyed[types.PeerID] // account requests per peer
 	offers  *ratelimit.Keyed[types.PeerID] // voucher offers per peer
 }
@@ -367,7 +368,7 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 	}
 
 	if e.allowance(peer) == 0 {
-		e.refuse(peer, RefusePayment)
+		e.refuse(peer, e.paymentRefusal())
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultPayment})
 		return
 	}
@@ -587,12 +588,17 @@ func (e *ExitService) CurrentPolicy() Policy {
 }
 
 // allowance is how many bytes the peer may still use right now: its free quota for today plus
-// whatever it has paid for. -1 means the exit is free for this peer.
+// whatever it has paid for. -1 means the exit is free for this peer, with no cap.
 func (e *ExitService) allowance(peer types.PeerID) int64 {
+	lim := e.CurrentLimits()
 	e.policyMu.Lock()
 	if e.freeLocked(peer) {
+		budgeted := e.budgetedLocked(peer, lim)
 		e.policyMu.Unlock()
-		return -1
+		if !budgeted {
+			return -1
+		}
+		return e.freeLeft(peer, e.budgetKey(peer), lim)
 	}
 	q := e.quotaLocked(peer)
 	total := e.policy.FreeBytes - q.used
@@ -694,15 +700,19 @@ type meter struct {
 	svc  *ExitService
 	peer types.PeerID
 
-	mu     sync.Mutex
-	tag    string    // pay tag, computed once
-	free   int64     // bytes before checking again that the peer still rides free
-	quota  int64     // reserved from today's free quota
-	day    time.Time // the day quota was taken from
-	vouch  int64     // reserved from voucher credit
-	paid   int64     // reserved from prepaid credit
-	cut    bool
-	closed bool
+	mu   sync.Mutex
+	tag  string // pay tag, computed once
+	free int64  // bytes before checking again that the peer still rides free
+	// budgeted: free was taken from the free exit's caps, counted against bip on bday
+	budgeted bool
+	bip      string
+	bday     time.Time
+	quota    int64     // reserved from today's free quota
+	day      time.Time // the day quota was taken from
+	vouch    int64     // reserved from voucher credit
+	paid     int64     // reserved from prepaid credit
+	cut      bool
+	closed   bool
 }
 
 func newMeter(svc *ExitService, peer types.PeerID) *meter { return &meter{svc: svc, peer: peer} }
@@ -755,10 +765,21 @@ func (m *meter) close() {
 // reserve tops m up by up to want bytes: free riding first, then today's free quota, then
 // voucher credit, then prepaid credit. Called with m.mu held.
 func (e *ExitService) reserve(m *meter, want int64) {
+	lim := e.CurrentLimits()
 	e.policyMu.Lock()
 	if e.freeLocked(m.peer) {
+		budgeted := e.budgetedLocked(m.peer, lim)
 		e.policyMu.Unlock()
-		m.free += want
+		if !budgeted {
+			m.free += want
+			return
+		}
+		if !m.budgeted {
+			m.budgeted, m.bip = true, e.budgetKey(m.peer)
+		}
+		got, day := e.takeFree(m.peer, m.bip, want, lim)
+		m.bday = day // yesterday's leftover stays usable; refunds go to today
+		m.free += got
 		return
 	}
 	q := e.quotaLocked(m.peer)
@@ -789,6 +810,9 @@ func (e *ExitService) reserve(m *meter, want int64) {
 
 // refund returns m's unused reservation to the pools it came from. Called with m.mu held.
 func (e *ExitService) refund(m *meter) {
+	if m.budgeted {
+		e.giveBackFree(m.peer, m.bip, m.bday, m.free)
+	}
 	if m.quota > 0 {
 		e.policyMu.Lock()
 		if q := e.quotas[m.peer]; q != nil && q.day.Equal(m.day) {

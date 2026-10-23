@@ -495,6 +495,9 @@ func (n *Node) Start() (err error) {
 	n.ExitService = exit_gateway.NewExitService()
 	n.ExitService.SetSelfIPs(n.publicIPs)
 	n.ExitService.SetLimits(exit_gateway.LimitsFromConfig(n.Cfg.Exit))
+	if n.Cfg.Storage.DatabasePath != "" {
+		n.ExitService.SetFreeBudgetFile(filepath.Join(filepath.Dir(n.Cfg.Storage.DatabasePath), "exit-free-budget.json"))
+	}
 	exit_gateway.AttachToSwarm(n.Swarm, n.ExitService)
 
 	// WebSocket transport: lets this node sit behind a CDN (when ws_listen_addr is set) and lets
@@ -792,6 +795,9 @@ func (n *Node) shutdown(closeLog bool) {
 		// 4. Close Swarm connections, streams, and wait for all swarm goroutines
 		if n.Swarm != nil {
 			n.Swarm.Close()
+		}
+		if n.ExitService != nil {
+			n.ExitService.FlushFreeBudget() // streams are closed: what they gave away is counted
 		}
 		// 5. Stop Dispatcher and drain its worker queues
 		if n.Dispatcher != nil {

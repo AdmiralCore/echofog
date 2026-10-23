@@ -63,7 +63,7 @@ type UDPSession struct {
 	in    chan udpPacket // from datagrams and from the stream
 	ended chan struct{}  // the stream is gone; rerr says why
 	rerr  error
-	done  chan struct{}  // closed by Close
+	done  chan struct{} // closed by Close
 	once  sync.Once
 }
 
@@ -283,7 +283,7 @@ func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types
 		return
 	}
 	if e.allowance(peer) == 0 {
-		e.refuse(peer, RefusePayment)
+		e.refuse(peer, e.paymentRefusal())
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultPayment})
 		return
 	}
