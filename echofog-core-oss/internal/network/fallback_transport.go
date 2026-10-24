@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"log/slog"
@@ -272,14 +273,38 @@ func (f *FallbackTransport) DialEarly(ctx context.Context, addr string) error {
 	if terr != nil {
 		return fmt.Errorf("quic: %v; tcp: %w", qerr, terr)
 	}
+	f.preferTCP(addr)
+	f.logger.Info("QUIC did not get through, connected over TCP", "addr", addr, "quic_err", qerr)
+	return nil
+}
+
+// PreferTCP makes the dials to addr try TCP first for a while: QUIC got through the handshake
+// there but then stopped carrying anything, as networks that throttle UDP after the first packets
+// do. A dial that finds no TCP listener still falls back to QUIC.
+func (f *FallbackTransport) PreferTCP(addr string) {
+	if f.TCP == nil || f.mode != ModeAuto || addr == "" {
+		return
+	}
+	if !f.tcpFirst(addr) {
+		f.logger.Info("QUIC stalled after connecting: the next connections there try TCP first", "addr", addr, "for", tcpPreferenceTTL)
+	}
+	f.preferTCP(addr)
+}
+
+func (f *FallbackTransport) preferTCP(addr string) {
 	f.mu.Lock()
 	if len(f.preferT) > 4096 {
 		f.preferT = make(map[string]time.Time)
 	}
 	f.preferT[addr] = time.Now().Add(tcpPreferenceTTL)
 	f.mu.Unlock()
-	f.logger.Info("QUIC did not get through, connected over TCP", "addr", addr, "quic_err", qerr)
-	return nil
+}
+
+// IsIdleTimeout tells whether err is a QUIC connection that ended because nothing came from the
+// peer for the idle timeout, keep-alives included: the path stopped carrying UDP.
+func IsIdleTimeout(err error) bool {
+	var idle *quic.IdleTimeoutError
+	return errors.As(err, &idle)
 }
 
 func (f *FallbackTransport) tcpFirst(addr string) bool {

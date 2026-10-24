@@ -240,9 +240,21 @@ func (n *NodeApi) reviveExit(ctx context.Context, relay string) bool {
 	if err := n.ensureConnected(pid); err != nil || ctx.Err() != nil {
 		return false
 	}
-	qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-	info, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, pid)).QueryAccount(qctx)
-	cancel()
+	query := func() (*exit_gateway.AccountInfo, error) {
+		qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		defer cancel()
+		return exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, pid)).QueryAccount(qctx)
+	}
+	info, err := query()
+	// connected, yet no answer: a QUIC link whose UDP went quiet after the handshake looks alive
+	// until its idle timeout, and the dial that made it will make the same one again. Drop it
+	// and connect again, over TCP first.
+	if err != nil && ctx.Err() == nil && n.node.Swarm.ResetQUICLink(pid) {
+		if cerr := n.ensureConnected(pid); cerr != nil || ctx.Err() != nil {
+			return false
+		}
+		info, err = query()
+	}
 	n.noteExitState(relay, info, err)
 	if state, _ := classifyExit(info, err); state != ExitOK {
 		return false

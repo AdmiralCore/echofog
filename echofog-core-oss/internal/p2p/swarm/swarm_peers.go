@@ -256,6 +256,9 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 		if current {
 			s.logLinkClosed(peerID, conn, time.Since(p.connectedAt))
 		}
+		if p.isOut && network.LinkKind(conn) == network.ProtocolQUIC && network.IsIdleTimeout(context.Cause(conn.Context())) {
+			s.preferTCP(conn) // UDP to this address went silent: TCP first next time
+		}
 		p.Close()
 		s.noteLongLived(p)
 		if p.release != nil {
@@ -350,6 +353,35 @@ func (s *Swarm) logLinkClosed(peerID types.PeerID, conn network.MuxConn, lasted 
 	}
 	s.log().Log(s.ctx, level, "Swarm: connection to peer ended", "peer", peerID.String()[:12],
 		"link", network.DescribeLink(conn), "lasted", lasted.Round(time.Second).String(), "why", why)
+}
+
+// tcpPreferrer is the FallbackTransport: it can be told to dial an address over TCP first.
+type tcpPreferrer interface{ PreferTCP(addr string) }
+
+func (s *Swarm) preferTCP(conn network.MuxConn) {
+	if t, ok := s.netTransport.(tcpPreferrer); ok && conn.RemoteAddr() != nil {
+		t.PreferTCP(conn.RemoteAddr().String())
+	}
+}
+
+// ResetQUICLink drops the connection to a peer when it rides QUIC, and makes the redial try TCP
+// first: for a link that is up on paper but does not carry requests any more. It says whether it
+// dropped one.
+func (s *Swarm) ResetQUICLink(peerID types.PeerID) bool {
+	p := s.GetPeer(peerID)
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	tw := p.transport
+	p.mu.RUnlock()
+	if tw == nil || network.LinkKind(tw.GetConn()) != network.ProtocolQUIC {
+		return false
+	}
+	s.preferTCP(tw.GetConn())
+	s.log().Info("Swarm: dropping a QUIC link that stopped answering", "peer", peerID.String()[:12], "link", network.DescribeLink(tw.GetConn()))
+	s.RemovePeer(peerID)
+	return true
 }
 
 // LinkOf describes the connection to a peer ("quic [::]:60585->203.0.113.7:443"), "" when there

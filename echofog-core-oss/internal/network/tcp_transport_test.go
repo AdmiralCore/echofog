@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -318,4 +320,42 @@ func TestTCPTransportAnnouncesConfiguredPort(t *testing.T) {
 	_, port, err := net.SplitHostPort(in.Addr)
 	require.NoError(t, err)
 	assert.Equal(t, "45443", port, "the announced dial-back port was not used")
+}
+
+// QUIC connected but then went silent (UDP throttled after the handshake): after PreferTCP the
+// next dial to that address goes over TCP although QUIC would still connect.
+func TestFallbackTransportPreferTCPAfterAStall(t *testing.T) {
+	ss, cs := newTestSigner(t), newTestSigner(t)
+	newQUIC := func(s testSigner) *QuicTransport {
+		cert := testCert(t)
+		cfg := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"echo-fog-protocole"}, InsecureSkipVerify: true, ClientAuth: tls.RequestClientCert}
+		q, err := NewQUICTransport("127.0.0.1:0", cfg, GetQuicConfig(), s, 101)
+		require.NoError(t, err)
+		return q
+	}
+	sq := newQUIC(ss)
+	addr := sq.Addr().String()
+	server := NewFallbackTransport(sq, newTCP(t, ss, ""), ModeAuto, addr) // TCP on the QUIC port number
+	client := NewFallbackTransport(newQUIC(cs), newTCP(t, cs, ""), ModeAuto, "off-test")
+	t.Cleanup(func() { server.Close(); client.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, server.ListenEarly(ctx))
+
+	require.NoError(t, client.DialEarly(context.Background(), addr))
+	first := nextConn(t, client.ConnChan())
+	assert.Equal(t, ProtocolQUIC, first.Conn.Protocol(), "QUIC works, so it goes first")
+	_ = first.Conn.CloseWithError(ErrCodeNormalClose, "test")
+
+	client.PreferTCP(addr)
+	require.NoError(t, client.DialEarly(context.Background(), addr))
+	second := nextConn(t, client.ConnChan())
+	assert.Equal(t, ProtocolTCP, second.Conn.Protocol(), "after a stall TCP goes first")
+	assert.Equal(t, ss.id(), second.PeerID)
+}
+
+func TestIsIdleTimeout(t *testing.T) {
+	assert.True(t, IsIdleTimeout(fmt.Errorf("conn: %w", &quic.IdleTimeoutError{})))
+	assert.False(t, IsIdleTimeout(context.Canceled))
+	assert.False(t, IsIdleTimeout(nil))
 }
