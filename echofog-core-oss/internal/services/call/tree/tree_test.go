@@ -262,3 +262,39 @@ func BenchmarkVoiceTree_100Peers(b *testing.B) {
 		_ = BuildVoiceTopology("bench-room", uint64(i), coordID, profiles)
 	}
 }
+
+// A member reached only through relays is fed by the coordinator, has no standby parent to fail
+// over to, relays for nobody, and is the last choice for coordinator.
+func TestVoiceTree_RelayOnlyMemberHangsUnderCoordinator(t *testing.T) {
+	coord, c1, c2, b2 := makePeerID(1), makePeerID(2), makePeerID(3), makePeerID(4)
+	profiles := []PeerNodeProfile{
+		{PeerID: coord, UploadKbps: 20000},
+		{PeerID: c1, MaxRelayChildren: 2, UploadKbps: 20000},
+		{PeerID: c2, MaxRelayChildren: 2, UploadKbps: 20000},
+		{PeerID: b2, MaxRelayChildren: 2, UploadKbps: 90000, RelayOnly: true},
+	}
+	m := BuildVoiceTopology("room", 1, coord, profiles)
+
+	assert.Equal(t, ParentAssignment{PrimaryParent: coord, StandbyParent: coord}, m.ParentMap[b2])
+	assert.Empty(t, m.ChildrenMap[b2])
+	for _, p := range []types.PeerID{c1, c2} {
+		assert.NotEqual(t, b2, m.ParentMap[p].PrimaryParent)
+		assert.NotEqual(t, b2, m.ParentMap[p].StandbyParent)
+	}
+	assert.Equal(t, b2, m.StandbyCoordinators[len(m.StandbyCoordinators)-1])
+}
+
+// A stream subscriber reached only through relays is fed by the broadcaster and never relays.
+func TestStreamTree_RelayOnlySubscriberIsFedByBroadcaster(t *testing.T) {
+	e := NewStreamTreeEngine()
+	bc, c1, b2 := makePeerID(1), makePeerID(2), makePeerID(3)
+	_, err := e.RegisterStream("s", bc, "screen", 2500, PeerNodeProfile{PeerID: bc, UploadKbps: 2500})
+	require.NoError(t, err)
+	_, err = e.Subscribe("s", c1, PeerNodeProfile{PeerID: c1, MaxRelayChildren: 4, UploadKbps: 20000})
+	require.NoError(t, err)
+	sm, err := e.Subscribe("s", b2, PeerNodeProfile{PeerID: b2, MaxRelayChildren: 4, UploadKbps: 20000, RelayOnly: true})
+	require.NoError(t, err)
+
+	assert.Equal(t, bc, sm.ParentMap[b2], "the broadcaster feeds it, even beyond its fanout")
+	assert.Equal(t, 0, RelayCapacity(PeerNodeProfile{MaxRelayChildren: 4, UploadKbps: 20000, RelayOnly: true}, 2500, false))
+}

@@ -352,7 +352,9 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			return
 		}
 		m.logger.Debug("Applying room sync", "coordinator", calllog.Peer(sender), "epoch", rs.Voice.Epoch, "streams", len(rs.Streams))
-		if rs.Voice.Epoch > room.Epoch || rs.Voice.Coordinator != room.Coordinator || room.VoiceManifest == nil {
+		// a member not admitted yet takes it even at our epoch: one that yielded a room it led
+		// alone took the coordinator's epoch, and would otherwise keep its own manifest forever
+		if rs.Voice.Epoch > room.Epoch || rs.Voice.Coordinator != room.Coordinator || room.VoiceManifest == nil || !room.joined {
 			m.applyVoiceManifestLocked(room, rs.Voice, now)
 		}
 		live := make(map[string]bool, len(rs.Streams))

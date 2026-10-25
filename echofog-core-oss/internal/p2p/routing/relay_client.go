@@ -35,6 +35,43 @@ type ClientCircuit struct {
 	RelayPeerID  types.PeerID
 	RemotePeerID types.PeerID
 	CreatedAt    time.Time
+
+	lastRecv   atomic.Int64 // unix nanos of the last frame that came in over the circuit
+	lastProbe  atomic.Int64 // unix nanos of the last probe we sent
+	probeSince atomic.Int64 // unix nanos of the first probe still unanswered; 0 when answered
+}
+
+// Liveness of a circuit. A circuit can die without a close reaching us: the far end lost its
+// line, or the relay dropped it while its close notice was lost. Nothing else would ever tell, and
+// every frame we send then goes nowhere. So while we send over a circuit that has been quiet, we
+// probe it (an inner TypePing the far end answers with TypePong); a circuit that answers nothing
+// for circuitDeadAfter is dropped, and the next send opens a new one.
+const (
+	circuitProbeAfter = time.Second            // quiet this long while we send: probe
+	circuitProbeEvery = 500 * time.Millisecond // probes at most this often
+	circuitDeadAfter  = 4 * time.Second        // probes unanswered this long: the circuit is dead
+	// circuitStaleAfter: a route quiet this long gives way to a newer circuit from the same peer
+	// (an inbound open, or frames arriving over another circuit). A live route is never taken over.
+	circuitStaleAfter = 2 * time.Second
+)
+
+// lastHeard is when anything last came in over the circuit, or when it was made.
+func (c *ClientCircuit) lastHeard() time.Time {
+	if t := c.lastRecv.Load(); t != 0 {
+		return time.Unix(0, t)
+	}
+	return c.CreatedAt
+}
+
+// dead: probed for circuitDeadAfter without an answer.
+func (c *ClientCircuit) dead(now time.Time) bool {
+	since := c.probeSince.Load()
+	return since != 0 && now.Sub(time.Unix(0, since)) > circuitDeadAfter
+}
+
+// stale: nothing came in for circuitStaleAfter.
+func (c *ClientCircuit) stale(now time.Time) bool {
+	return c.dead(now) || now.Sub(c.lastHeard()) > circuitStaleAfter
 }
 
 type circuitOpenResult struct {
@@ -119,8 +156,78 @@ func NewRelayClient(s *swarm.Swarm, dht *dht.EchoFogDHT, logger *slog.Logger) *R
 	}
 	if s != nil {
 		s.AddFrameHandler(rc.HandleRawFrame)
+		s.AddObserver(rc)
 	}
 	return rc
+}
+
+// OnPeerConnected is part of swarm.TopologyObserver.
+func (rc *RelayClient) OnPeerConnected(types.PeerID, types.PeerPublicKey, string) {}
+
+// OnPeerDisconnected forgets the circuits through a relay that went away: the relay dropped them
+// with the link, and a route left behind would make every send to that peer fail instead of
+// opening a new circuit.
+func (rc *RelayClient) OnPeerDisconnected(peer types.PeerID) {
+	rc.mu.Lock()
+	n := 0
+	for cid, c := range rc.circuits {
+		if c.RelayPeerID == peer {
+			rc.forgetLocked(cid, c)
+			n++
+		}
+	}
+	rc.mu.Unlock()
+	if n > 0 {
+		rc.logger.Debug("RelayClient: relay gone, dropped its circuits", "relay", peer.String()[:8], "circuits", n)
+	}
+}
+
+// forgetLocked removes a circuit and the routes that point at it. Caller holds rc.mu.
+func (rc *RelayClient) forgetLocked(cid uint32, c *ClientCircuit) {
+	delete(rc.circuits, cid)
+	if rc.peerToCircuit[c.RemotePeerID] == cid {
+		delete(rc.peerToCircuit, c.RemotePeerID)
+	}
+	if rc.signalCircuit[c.RemotePeerID] == cid {
+		delete(rc.signalCircuit, c.RemotePeerID)
+	}
+}
+
+// dropDead removes a circuit found dead and tells its relay, which frees the slot and tells the
+// far end.
+func (rc *RelayClient) dropDead(cid uint32, c *ClientCircuit) {
+	rc.mu.Lock()
+	cur, ok := rc.circuits[cid]
+	if ok && cur == c {
+		rc.forgetLocked(cid, c)
+	}
+	rc.mu.Unlock()
+	if !ok || cur != c {
+		return
+	}
+	rc.logger.Info("RelayClient: circuit stopped answering, dropped it", "circuitID", cid,
+		"peer", c.RemotePeerID.String()[:8], "relay", c.RelayPeerID.String()[:8],
+		"quiet", time.Since(c.lastHeard()).Round(100*time.Millisecond).String())
+	if rc.swarm != nil {
+		if relay := rc.swarm.GetPeer(c.RelayPeerID); relay != nil {
+			closePkt := make([]byte, 4)
+			binary.BigEndian.PutUint32(closePkt, cid)
+			_ = relay.SendRaw(net_types.TypeCircuitClose, closePkt)
+		}
+	}
+}
+
+// routeLocked is the circuit for traffic to target and whether it is still alive. Caller holds rc.mu.
+func (rc *RelayClient) routeLocked(target types.PeerID, now time.Time) (uint32, *ClientCircuit, bool) {
+	cid, ok := rc.peerToCircuit[target]
+	if !ok {
+		return 0, nil, false
+	}
+	c := rc.circuits[cid]
+	if c == nil {
+		return 0, nil, false
+	}
+	return cid, c, !c.dead(now)
 }
 
 func (rc *RelayClient) SetPolicy(cfg config.RelayClientConfig) {
@@ -425,12 +532,15 @@ func (rc *RelayClient) handleInboundCircuitOpen(payload []byte, relayPeer types.
 	// Only adopt a routing/signalling binding for the claimed origin when we do not already have
 	// one: an inbound open must never overwrite an existing route (that would let anyone who can
 	// reach us hijack where our traffic or hole-punch signals to that peer go).
+	// A route that has gone quiet is the exception: the peer opening a new circuit to us is the
+	// sign the old one died on its side, and keeping it would send our traffic nowhere.
 	if cc.SignalOnly {
 		if _, exists := rc.signalCircuit[originID]; !exists {
 			rc.signalCircuit[originID] = cid // not for traffic
 		}
 	} else {
-		if _, exists := rc.peerToCircuit[originID]; !exists {
+		old, exists := rc.peerToCircuit[originID]
+		if oc := rc.circuits[old]; !exists || oc == nil || oc.stale(cc.CreatedAt) {
 			rc.peerToCircuit[originID] = cid
 		}
 	}
@@ -537,6 +647,20 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 		return
 	}
 
+	now := time.Now()
+	circuit.lastRecv.Store(now.UnixNano())
+	circuit.probeSince.Store(0)
+	if !circuit.SignalOnly {
+		rc.followLiveCircuit(cid, circuit, now)
+	}
+	switch innerMsgType {
+	case net_types.TypePing:
+		_ = rc.sendFrame(circuit, cid, net_types.TypePong, nil)
+		return
+	case net_types.TypePong:
+		return
+	}
+
 	// 1. Notify listeners (for file transfers, DHT, RPCs). The remote peer id here is the relay's
 	// claim, not a proven identity; listeners must not use it to authorise anything.
 	rc.listenersMu.RLock()
@@ -557,6 +681,30 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	}
 }
 
+// followLiveCircuit makes a circuit that carries frames from its peer the route to that peer when
+// the current route has gone quiet: the peer moved to a new circuit (after a cut, or through
+// another relay) and the old one would swallow what we send.
+func (rc *RelayClient) followLiveCircuit(cid uint32, c *ClientCircuit, now time.Time) {
+	rc.mu.RLock()
+	cur, ok := rc.peerToCircuit[c.RemotePeerID]
+	oc := rc.circuits[cur]
+	rc.mu.RUnlock()
+	if ok && (cur == cid || (oc != nil && !oc.stale(now))) {
+		return
+	}
+	rc.mu.Lock()
+	cur2, ok2 := rc.peerToCircuit[c.RemotePeerID]
+	switched := ok2 == ok && cur2 == cur && rc.circuits[cid] == c
+	if switched {
+		rc.peerToCircuit[c.RemotePeerID] = cid
+	}
+	rc.mu.Unlock()
+	if switched && ok {
+		rc.logger.Debug("RelayClient: following the circuit the peer now uses", "peer", c.RemotePeerID.String()[:8],
+			"circuitID", cid, "previous", cur)
+	}
+}
+
 func (rc *RelayClient) handleCircuitClose(payload []byte, fromPeer types.PeerID) {
 	if len(payload) < 4 {
 		return
@@ -567,13 +715,7 @@ func (rc *RelayClient) handleCircuitClose(payload []byte, fromPeer types.PeerID)
 	if c, ok := rc.circuits[cid]; ok && c.RelayPeerID == fromPeer {
 		// Only the relay carrying the circuit may tear it down; a stray close from anyone else is
 		// ignored so it cannot drop a circuit it is not part of.
-		delete(rc.circuits, cid)
-		if rc.peerToCircuit[c.RemotePeerID] == cid {
-			delete(rc.peerToCircuit, c.RemotePeerID)
-		}
-		if rc.signalCircuit[c.RemotePeerID] == cid {
-			delete(rc.signalCircuit, c.RemotePeerID)
-		}
+		rc.forgetLocked(cid, c)
 	}
 	rc.mu.Unlock()
 }
@@ -587,7 +729,7 @@ func (rc *RelayClient) OpenCircuit(ctx context.Context, relayID types.PeerID, ta
 // punching messages only, which signaling nodes grant too.
 func (rc *RelayClient) openCircuit(ctx context.Context, relayID types.PeerID, targetID types.PeerID, signal bool) (uint32, error) {
 	rc.mu.RLock()
-	if cid, ok := rc.peerToCircuit[targetID]; ok {
+	if cid, _, ok := rc.routeLocked(targetID, time.Now()); ok {
 		rc.mu.RUnlock()
 		return cid, nil
 	}
@@ -640,7 +782,23 @@ func (rc *RelayClient) SendCircuitData(circuitID uint32, msgType net_types.Messa
 	if !ok {
 		return ErrCircuitNotFound
 	}
+	now := time.Now()
+	if circuit.dead(now) {
+		rc.dropDead(circuitID, circuit)
+		return ErrCircuitNotFound
+	}
+	if err := rc.sendFrame(circuit, circuitID, msgType, payload); err != nil {
+		return err
+	}
+	rc.probe(circuit, circuitID, now)
+	return nil
+}
 
+// sendFrame puts one frame on the circuit.
+func (rc *RelayClient) sendFrame(circuit *ClientCircuit, circuitID uint32, msgType net_types.MessageType, payload []byte) error {
+	if rc.swarm == nil {
+		return errors.New("no swarm")
+	}
 	relayPeer := rc.swarm.GetPeer(circuit.RelayPeerID)
 	if relayPeer == nil {
 		return fmt.Errorf("relay %s disconnected", circuit.RelayPeerID.String()[:8])
@@ -654,11 +812,32 @@ func (rc *RelayClient) SendCircuitData(circuitID uint32, msgType net_types.Messa
 	return relayPeer.SendRaw(net_types.TypeCircuitData, frame)
 }
 
-// CircuitTo is the open circuit to targetID, if there is one.
+// probe asks the far end of a circuit we send over to answer when the circuit has been quiet. A
+// signaling circuit carries hole punching messages only, so it is never probed.
+func (rc *RelayClient) probe(c *ClientCircuit, cid uint32, now time.Time) {
+	if c.SignalOnly || now.Sub(c.lastHeard()) < circuitProbeAfter {
+		return
+	}
+	last := c.lastProbe.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < circuitProbeEvery {
+		return
+	}
+	if !c.lastProbe.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	c.probeSince.CompareAndSwap(0, now.UnixNano())
+	_ = rc.sendFrame(c, cid, net_types.TypePing, nil)
+}
+
+// CircuitTo is the open circuit to targetID, if there is one. A circuit found dead is dropped
+// (see circuitDeadAfter), so the caller opens a new one.
 func (rc *RelayClient) CircuitTo(targetID types.PeerID) (uint32, bool) {
 	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	cid, ok := rc.peerToCircuit[targetID]
+	cid, c, ok := rc.routeLocked(targetID, time.Now())
+	rc.mu.RUnlock()
+	if !ok && c != nil {
+		rc.dropDead(cid, c)
+	}
 	return cid, ok
 }
 

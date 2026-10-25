@@ -14,7 +14,11 @@ type PeerNodeProfile struct {
 	RTT               time.Duration `json:"rtt"`                 // RTT to current coordinator
 	PacketLossPercent float32       `json:"packet_loss_percent"` // Recent packet loss
 	IsMobile          bool          `json:"is_mobile"`           // If true, should ideally be leaf
-	LastHeartbeat     time.Time     `json:"last_heartbeat"`
+	// RelayOnly: reachable only through relay circuits (a symmetric NAT). It relays for nobody
+	// and is fed by the coordinator (voice) or the broadcaster (a stream), never by a member that
+	// would have to find a relay to it first.
+	RelayOnly     bool      `json:"relay_only,omitempty"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
 }
 
 // ParentAssignment defines upstream connections for a peer.

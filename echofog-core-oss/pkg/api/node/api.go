@@ -299,6 +299,7 @@ func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
 		PeerID:           n.node.ID,
 		UploadKbps:       n.callUploadKbps(),
 		MaxRelayChildren: n.node.CallRelayCapacity(),
+		RelayOnly:        n.node.CallRelayOnly(),
 		RTT:              10 * time.Millisecond,
 		LastHeartbeat:    time.Now(),
 	}

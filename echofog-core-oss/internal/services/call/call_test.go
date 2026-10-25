@@ -887,3 +887,48 @@ func TestRoom_SilentStandbyParentIsReportedToo(t *testing.T) {
 	assert.True(t, victim.cm.activeRoom.usingStandby)
 	victim.cm.mu.RUnlock()
 }
+
+// A "feeder silent" report naming the coordinator (stale, from a member that was cut off) must
+// not make the coordinator remove itself from its own room.
+func TestRoom_StaleReportAboutCoordinatorIsIgnored(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	coord := nodes[0]
+
+	coord.cm.mu.Lock()
+	room := coord.cm.activeRoom
+	coord.cm.reparentLocked(room, nodes[1].id, signaling.ReparentPayload{StreamID: "s", Avoid: coord.id, Reason: "silent"}, time.Now())
+	_, reported := room.reportedLost[coord.id]
+	for k := 1; k <= 30; k++ {
+		coord.cm.coordinatorTickLocked(room, time.Now().Add(time.Duration(k)*tickInterval))
+	}
+	_, still := room.ConnectedPeers[coord.id]
+	coord.cm.mu.Unlock()
+
+	assert.False(t, reported, "a report about the coordinator itself is not recorded")
+	assert.True(t, still, "the coordinator stays in its own room")
+}
+
+// A member cut off for longer than the timeouts takes over; once its line is back the two halves
+// become one room again.
+func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	cut := nodes[1]
+
+	m.kill(cut.id)
+	require.Eventually(t, func() bool {
+		s, ok := cut.cm.Snapshot()
+		return ok && s.IsCoordinator
+	}, 6*time.Second, 50*time.Millisecond, "the cut-off member takes over alone")
+	require.Eventually(t, func() bool {
+		s, _ := nodes[0].cm.Snapshot()
+		return len(s.Members) == 2
+	}, 6*time.Second, 50*time.Millisecond, "the coordinator drops it")
+
+	m.mu.Lock()
+	delete(m.dead, cut.id)
+	m.mu.Unlock()
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 6*time.Second, 50*time.Millisecond,
+		"one room again: %v", dumpRoom(nodes, nil))
+}

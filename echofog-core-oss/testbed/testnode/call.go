@@ -100,7 +100,7 @@ func (t *testNode) callJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	roomID, key := call.DeriveRoom(in.CallID)
 	prof := tree.PeerNodeProfile{PeerID: t.n.ID, UploadKbps: 20000, MaxRelayChildren: t.n.CallRelayCapacity(),
-		RTT: 10 * time.Millisecond, LastHeartbeat: time.Now()}
+		RTT: 10 * time.Millisecond, LastHeartbeat: time.Now(), RelayOnly: t.n.CallRelayOnly()}
 	reply(w, map[string]bool{"ok": true}, t.n.CallManager.JoinRoom(roomID, coord, key, prof))
 }
 

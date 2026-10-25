@@ -58,7 +58,12 @@ func (m *CallManager) Snapshot() (RoomSnapshot, bool) {
 
 func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 	profiles := make([]tree.PeerNodeProfile, 0, len(room.ConnectedPeers))
-	for _, p := range room.ConnectedPeers {
+	for id, p := range room.ConnectedPeers {
+		// a member we reach only through a relay most likely has no direct link to the others
+		// either: it gets voice from us, never from a member that would first have to find a relay
+		if m.relayedLocked(id) {
+			p.RelayOnly = true
+		}
 		profiles = append(profiles, p)
 	}
 	room.Epoch++
@@ -252,7 +257,8 @@ func (m *CallManager) upstreamLocked(room *ActiveRoomState) types.PeerID {
 // reparentLocked (coordinator) moves sub away from a relay. A "silent" report also starts the
 // fast liveness check of that relay, exactly like a voice ParentLost.
 func (m *CallManager) reparentLocked(room *ActiveRoomState, sub types.PeerID, rp signaling.ReparentPayload, now time.Time) {
-	if rp.Reason == "silent" {
+	if rp.Reason == "silent" && rp.Avoid != m.selfID {
+		// (a report about us is stale, from a member that was cut off: we know we are alive)
 		if _, member := room.memberSeen[rp.Avoid]; member {
 			if _, already := room.reportedLost[rp.Avoid]; !already {
 				room.reportedLost[rp.Avoid] = now
@@ -454,7 +460,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 		m.floodLocked(room, signaling.ActionCoordinatorHeartbeat, hb)
 	}
 	for p, seen := range room.memberSeen {
-		if p != m.selfID && now.Sub(seen) > memberTimeout {
+		if p != m.selfID && now.Sub(seen) > m.waitLocked(p, memberTimeout, relayMemberTimeout) {
 			m.removeMemberLocked(room, p, "timeout")
 		}
 	}
@@ -464,9 +470,9 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	for p, reportedAt := range room.reportedLost {
 		seen, member := room.memberSeen[p]
 		switch {
-		case !member || seen.After(reportedAt.Add(memberHeartbeatInterval)):
+		case !member || p == m.selfID || seen.After(reportedAt.Add(memberHeartbeatInterval)):
 			delete(room.reportedLost, p)
-		case now.Sub(seen) > parentTimeout:
+		case now.Sub(seen) > m.waitLocked(p, parentTimeout, relayParentTimeout):
 			delete(room.reportedLost, p)
 			m.removeMemberLocked(room, p, "reported silent by a child")
 		}
@@ -482,7 +488,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 // pulse idle links every 250 ms, so silence means a dead relay or a broken link.
 func (m *CallManager) feederWatchdogLocked(room *ActiveRoomState, now time.Time) {
 	for streamID, feeder := range room.StreamEngine.Upstreams(m.selfID) {
-		if room.Dispatcher.FeederSilence(streamID, feeder, now) < streamFeederTimeout {
+		if room.Dispatcher.FeederSilence(streamID, feeder, now) < m.waitLocked(feeder, streamFeederTimeout, relayFeederTimeout) {
 			continue
 		}
 		if now.Sub(room.reparentAsked[streamID]) < reparentRetry {
@@ -513,18 +519,20 @@ func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 
 	// Parent watchdog: no pulse from upstream means the parent (or the whole room) is gone. It
 	// keeps running on the standby parent, so a standby that dies too is caught as well.
-	if room.joined && room.VoiceManifest != nil && now.Sub(room.LastTreePulse) > parentTimeout {
+	if room.joined && room.VoiceManifest != nil &&
+		now.Sub(room.LastTreePulse) > m.waitLocked(m.upstreamLocked(room), parentTimeout, relayParentTimeout) {
 		m.parentWatchdogLocked(room, now)
 	}
 
 	// Coordinator watchdog: probe directly before declaring it dead.
 	silent := now.Sub(room.LastCoordPulse)
-	if silent > coordinatorTimeout/2 && now.Sub(room.lastPing) >= pingInterval {
+	coordWait := m.waitLocked(room.Coordinator, coordinatorTimeout, relayCoordinatorTimeout)
+	if silent > coordWait/2 && now.Sub(room.lastPing) >= pingInterval {
 		room.lastPing = now
 		m.debugOnce("ping", "Coordinator quiet, probing it", "coordinator", calllog.Peer(room.Coordinator), "silent", silent.Round(time.Millisecond).String())
 		m.sendLocked(room, room.Coordinator, signaling.ActionPing, nil)
 	}
-	if room.everJoined && silent > coordinatorTimeout {
+	if room.everJoined && silent > coordWait {
 		m.electLocked(room, now)
 	}
 
@@ -605,7 +613,7 @@ func (m *CallManager) electLocked(room *ActiveRoomState, now time.Time) {
 		return
 	}
 	m.logger.Info("Waiting for the elected coordinator", "candidate", calllog.Peer(leader))
-	room.candidate, room.candidateDeadline = leader, now.Add(electionWait)
+	room.candidate, room.candidateDeadline = leader, now.Add(m.waitLocked(leader, electionWait, relayElectionWait))
 	m.ensureConnectedLocked(leader)
 	m.sendLocked(room, leader, signaling.ActionJoin, m.joinPayloadLocked(room))
 }

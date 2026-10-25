@@ -59,6 +59,19 @@ const (
 	reportWindow    = 10 * time.Minute
 )
 
+// The watchdogs above are tuned for direct links. A peer reached only through a relay circuit (a
+// symmetric NAT, common on mobile networks) has an extra hop that hiccups, and a circuit that died
+// takes a few seconds to be found and replaced; on direct timings every such hiccup would remove
+// the member or start an election and split the room. So the watchdogs watching such a peer wait
+// longer.
+const (
+	relayMemberTimeout      = 8 * time.Second
+	relayParentTimeout      = 2 * time.Second
+	relayCoordinatorTimeout = 6 * time.Second
+	relayElectionWait       = 3 * time.Second
+	relayFeederTimeout      = 2 * time.Second
+)
+
 // PeerConnector dials a room member that is not directly connected yet.
 type PeerConnector func(ctx context.Context, peer types.PeerID) error
 
@@ -199,6 +212,26 @@ func NewCallManager(s *swarm.Swarm, ses *swarm.SessionManager, crypt *crypto.Cry
 
 // newCallManager builds a manager over an arbitrary transport. A nil signer disables signal
 // signatures, which is only acceptable for in-memory tests.
+// relayAware is a FrameSender that can tell which peers it reaches only through a relay.
+type relayAware interface {
+	Relayed(peer types.PeerID) bool
+}
+
+// relayedLocked: this node reaches peer only through a relay circuit, not over a direct link.
+func (m *CallManager) relayedLocked(peer types.PeerID) bool {
+	r, ok := m.sender.(relayAware)
+	return ok && peer != m.selfID && peer != (types.PeerID{}) && r.Relayed(peer)
+}
+
+// waitLocked is how long a watchdog watching peer waits: direct, or relayed when peer is reached
+// only through a relay.
+func (m *CallManager) waitLocked(peer types.PeerID, direct, relayed time.Duration) time.Duration {
+	if m.relayedLocked(peer) {
+		return relayed
+	}
+	return direct
+}
+
 func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID types.PeerID) *CallManager {
 	return &CallManager{
 		logger:     slog.Default().With("component", "call"),

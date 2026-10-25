@@ -42,14 +42,16 @@ func BuildVoiceTopology(callID string, epoch uint64, coordinator types.PeerID, p
 	}
 	manifest.Profiles[coordinator] = coordProfile
 
-	var relays, leaves []PeerNodeProfile
+	var relays, leaves, relayOnly []PeerNodeProfile
 	seen := map[types.PeerID]bool{coordinator: true}
 	for _, p := range profiles {
 		if seen[p.PeerID] {
 			continue
 		}
 		seen[p.PeerID] = true
-		if p.IsMobile || p.MaxRelayChildren <= 0 {
+		if p.RelayOnly {
+			relayOnly = append(relayOnly, p)
+		} else if p.IsMobile || p.MaxRelayChildren <= 0 {
 			leaves = append(leaves, p)
 		} else {
 			relays = append(relays, p)
@@ -66,11 +68,15 @@ func BuildVoiceTopology(callID string, epoch uint64, coordinator types.PeerID, p
 	}
 	byScore(relays)
 	byScore(leaves)
+	byScore(relayOnly)
 
 	for _, r := range relays {
 		manifest.StandbyCoordinators = append(manifest.StandbyCoordinators, r.PeerID)
 	}
 	for _, l := range leaves {
+		manifest.StandbyCoordinators = append(manifest.StandbyCoordinators, l.PeerID)
+	}
+	for _, l := range relayOnly {
 		manifest.StandbyCoordinators = append(manifest.StandbyCoordinators, l.PeerID)
 	}
 
@@ -94,6 +100,14 @@ func BuildVoiceTopology(callID string, epoch uint64, coordinator types.PeerID, p
 			capacity[child] = node.MaxRelayChildren
 			attached = append(attached, child)
 		}
+	}
+
+	// The coordinator feeds the members reached only through relays itself, beyond its fanout if
+	// need be: it already has a circuit to each of them (their join came over it), and a standby
+	// parent would be a member without one, so they get none.
+	for _, node := range relayOnly {
+		manifest.ParentMap[node.PeerID] = ParentAssignment{PrimaryParent: coordinator, StandbyParent: coordinator}
+		manifest.ChildrenMap[coordinator] = append(manifest.ChildrenMap[coordinator], node.PeerID)
 	}
 
 	return manifest

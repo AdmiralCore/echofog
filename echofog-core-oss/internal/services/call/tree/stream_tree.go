@@ -48,7 +48,7 @@ func RelayCapacity(p PeerNodeProfile, bitrateKbps int, isBroadcaster bool) int {
 		}
 		return clamp(p.UploadKbps/bitrateKbps, 1, MaxStreamFanout)
 	}
-	if p.IsMobile || p.MaxRelayChildren <= 0 {
+	if p.IsMobile || p.RelayOnly || p.MaxRelayChildren <= 0 {
 		return 0
 	}
 	if bitrateKbps <= 0 {
@@ -452,8 +452,11 @@ func (e *StreamTreeEngine) attachLocked(s *StreamManifest, sub types.PeerID) {
 	excluded := e.excludedLocked(s, sub)
 	candidates := make([]types.PeerID, 0, len(s.Subscribers))
 	candidates = append(candidates, s.Broadcaster)
+	relayOnly := e.profileLocked(s, sub).RelayOnly
 	for _, p := range s.Subscribers {
-		if _, attached := s.ParentMap[p]; attached && !excluded[p] {
+		// a subscriber reached only through relays is fed by the broadcaster, never by a
+		// viewer that would have to find a relay to it first
+		if _, attached := s.ParentMap[p]; attached && !excluded[p] && !relayOnly {
 			candidates = append(candidates, p)
 		}
 	}

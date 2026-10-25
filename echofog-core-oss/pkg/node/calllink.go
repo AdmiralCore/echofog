@@ -10,8 +10,10 @@ import (
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
-// circuitRetry is how often a circuit to a peer without a direct link is tried again.
-const circuitRetry = 5 * time.Second
+// circuitRetry is how often a circuit to a peer without a direct link is tried again. A dead
+// circuit is dropped by the relay client after a few seconds of silence; the new one should not
+// wait much longer.
+const circuitRetry = 2 * time.Second
 
 var errOpeningCircuit = errors.New("not connected; opening a relay circuit")
 
@@ -30,6 +32,12 @@ type callLink struct {
 
 func newCallLink(n *Node) *callLink {
 	return &callLink{n: n, opening: map[types.PeerID]time.Time{}, viaWarn: map[types.PeerID]bool{}}
+}
+
+// Relayed tells the call that peer is reached only through a relay: its watchdogs then allow for
+// the extra hop, and the voice tree has the coordinator feed it.
+func (l *callLink) Relayed(peer types.PeerID) bool {
+	return l.n.Swarm.GetPeer(peer) == nil
 }
 
 func (l *callLink) SendRawFrame(peer types.PeerID, t net_types.MessageType, payload []byte) error {

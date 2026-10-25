@@ -203,6 +203,16 @@ func orDialErr(err error) error {
 // can reach (public address, or a forwarded port) relays for four; behind a cone NAT it can only
 // serve peers it manages to punch through to, so two; behind a symmetric NAT, or while its NAT is
 // still unknown, none: assigning it children would hand the call to links that cannot be built.
+// CallRelayOnly: behind a symmetric NAT, so the other participants of a call reach this node only
+// through relay circuits.
+func (n *Node) CallRelayOnly() bool {
+	if n.NAT == nil || n.loopbackOnly() {
+		return false
+	}
+	_, t := n.NAT.GetNATProfile()
+	return t == routing.NATSymmetric
+}
+
 func (n *Node) CallRelayCapacity() int {
 	if n.NAT == nil || n.loopbackOnly() {
 		return 4

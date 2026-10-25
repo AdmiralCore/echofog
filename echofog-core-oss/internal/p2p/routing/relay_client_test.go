@@ -3,6 +3,7 @@ package routing
 import (
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -38,10 +39,10 @@ func TestRelayClient_InboundOpen_DoesNotHijackExistingRoute(t *testing.T) {
 	realRelay, attacker := mkID(0x20), mkID(0x66)
 	bob := mkID(0x0b)
 
-	// Bob is already reachable over a legitimate circuit through realRelay.
+	// Bob is already reachable over a legitimate circuit through realRelay, which carries frames.
 	const legitCID = 1001
 	rc.mu.Lock()
-	rc.circuits[legitCID] = &ClientCircuit{ID: legitCID, RelayPeerID: realRelay, RemotePeerID: bob}
+	rc.circuits[legitCID] = &ClientCircuit{ID: legitCID, RelayPeerID: realRelay, RemotePeerID: bob, CreatedAt: time.Now()}
 	rc.peerToCircuit[bob] = legitCID
 	rc.mu.Unlock()
 
@@ -141,5 +142,113 @@ func TestRelayClient_OpenResponse_OnlyFromRequestedRelay(t *testing.T) {
 	rc.mu.RUnlock()
 	if !bound || gotCID != 1234 {
 		t.Fatalf("a response from the requested relay must bind the circuit, got cid=%d bound=%v", gotCID, bound)
+	}
+}
+
+// A route that has gone quiet gives way to a new inbound circuit from the same peer: the peer
+// opening a new circuit means the old one died on its side.
+func TestRelayClient_InboundOpen_ReplacesQuietRoute(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	relay, bob := mkID(0x20), mkID(0x0b)
+
+	const oldCID = 1001
+	rc.mu.Lock()
+	rc.circuits[oldCID] = &ClientCircuit{ID: oldCID, RelayPeerID: relay, RemotePeerID: bob,
+		CreatedAt: time.Now().Add(-time.Minute)}
+	rc.circuits[oldCID].lastRecv.Store(time.Now().Add(-circuitStaleAfter - time.Second).UnixNano())
+	rc.peerToCircuit[bob] = oldCID
+	rc.mu.Unlock()
+
+	rc.handleInboundCircuitOpen(inboundOpen(2002, bob), relay)
+
+	if cid, ok := rc.CircuitTo(bob); !ok || cid != 2002 {
+		t.Fatalf("a quiet route must give way to the new circuit, got cid=%d ok=%v", cid, ok)
+	}
+}
+
+// Frames arriving over another circuit from the peer move a quiet route to that circuit; they never
+// take over a route that still carries frames.
+func TestRelayClient_CircuitData_FollowsTheLiveCircuit(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	relay, bob := mkID(0x50), mkID(0x0b)
+
+	rc.mu.Lock()
+	rc.circuits[1] = &ClientCircuit{ID: 1, RelayPeerID: relay, RemotePeerID: bob, CreatedAt: time.Now()}
+	rc.circuits[2] = &ClientCircuit{ID: 2, RelayPeerID: relay, RemotePeerID: bob, CreatedAt: time.Now()}
+	rc.peerToCircuit[bob] = 1
+	rc.mu.Unlock()
+
+	frame := func(cid uint32) []byte {
+		b := make([]byte, 5)
+		binary.BigEndian.PutUint32(b[:4], cid)
+		b[4] = byte(net_types.TypeHolePunch)
+		return b
+	}
+	rc.handleCircuitData(frame(2), relay)
+	if cid, _ := rc.CircuitTo(bob); cid != 1 {
+		t.Fatalf("a live route must stay, got %d", cid)
+	}
+
+	rc.circuits[1].lastRecv.Store(time.Now().Add(-circuitStaleAfter - time.Second).UnixNano())
+	rc.handleCircuitData(frame(2), relay)
+	if cid, _ := rc.CircuitTo(bob); cid != 2 {
+		t.Fatalf("a quiet route must follow the circuit that carries frames, got %d", cid)
+	}
+}
+
+// A circuit probed for circuitDeadAfter without an answer is dropped, so the next send opens a new
+// one instead of sending into the void; an answer clears the probe.
+func TestRelayClient_DeadCircuitIsDropped(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	relay, bob := mkID(0x50), mkID(0x0b)
+
+	c := &ClientCircuit{ID: 7, RelayPeerID: relay, RemotePeerID: bob, CreatedAt: time.Now().Add(-time.Minute)}
+	rc.mu.Lock()
+	rc.circuits[7] = c
+	rc.peerToCircuit[bob] = 7
+	rc.mu.Unlock()
+
+	c.probeSince.Store(time.Now().Add(-circuitDeadAfter / 2).UnixNano())
+	if _, ok := rc.CircuitTo(bob); !ok {
+		t.Fatal("a circuit probed for a short while is still used")
+	}
+	pong := make([]byte, 5)
+	binary.BigEndian.PutUint32(pong[:4], 7)
+	pong[4] = byte(net_types.TypePong)
+	rc.handleCircuitData(pong, relay)
+	if c.probeSince.Load() != 0 {
+		t.Fatal("an answer must clear the probe")
+	}
+
+	c.probeSince.Store(time.Now().Add(-circuitDeadAfter - time.Second).UnixNano())
+	if _, ok := rc.CircuitTo(bob); ok {
+		t.Fatal("a circuit that stopped answering must not be used")
+	}
+	rc.mu.RLock()
+	_, kept := rc.circuits[7]
+	rc.mu.RUnlock()
+	if kept {
+		t.Fatal("a dead circuit must be dropped")
+	}
+}
+
+// The circuits through a relay that disconnected are forgotten; others stay.
+func TestRelayClient_RelayGoneDropsItsCircuits(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	gone, other, bob, carol := mkID(0x50), mkID(0x51), mkID(0x0b), mkID(0x0c)
+
+	rc.mu.Lock()
+	rc.circuits[1] = &ClientCircuit{ID: 1, RelayPeerID: gone, RemotePeerID: bob, CreatedAt: time.Now()}
+	rc.circuits[2] = &ClientCircuit{ID: 2, RelayPeerID: other, RemotePeerID: carol, CreatedAt: time.Now()}
+	rc.peerToCircuit[bob], rc.peerToCircuit[carol] = 1, 2
+	rc.mu.Unlock()
+
+	rc.OnPeerDisconnected(gone)
+
+	if _, ok := rc.CircuitTo(bob); ok {
+		t.Fatal("the route through a relay that went away must be forgotten")
+	}
+	if _, ok := rc.CircuitTo(carol); !ok {
+		t.Fatal("routes through other relays must stay")
 	}
 }
