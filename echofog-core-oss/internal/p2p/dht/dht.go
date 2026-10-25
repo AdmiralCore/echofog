@@ -33,8 +33,9 @@ type EchoFogDHT struct {
 
 	// peerID -> IP:Port (Bounded LRU + TTL to eliminate memory leaks and stale IPs)
 	hotCache *cache.Cache[types.PeerID, string]
-	// peers that did not answer a dial lately: out of the table and of lookups (see lookup.go)
-	unreachable *cache.Cache[types.PeerID, struct{}]
+	// peers that did not answer a dial lately, with the address tried: out of the table and not
+	// asked by lookups, but still found by ID (see markUnreachable)
+	unreachable *cache.Cache[types.PeerID, string]
 	// what recent value lookups came to, by key: the value found, or that none was. The exit
 	// directory and messaging ask for the same keys again within seconds; a walk per ask would
 	// cost round trips for an answer that cannot have changed yet. Memory only, never on disk.
@@ -75,7 +76,7 @@ func NewEchoFogDHT(rt *RoutingTable, swarm *swarm.Swarm) *EchoFogDHT {
 		routingTable: rt,
 		swarm:        swarm,
 		hotCache:     cache.New[types.PeerID, string](2048, 15*time.Minute),
-		unreachable:  cache.New[types.PeerID, struct{}](4096, unreachableFor),
+		unreachable:  cache.New[types.PeerID, string](4096, unreachableFor),
 		recent:       cache.New[string, []byte](1024, recentValueFor),
 		misses:       cache.New[string, struct{}](4096, missFor),
 		peerQuotas:   cache.New[types.PeerID, int](4096, 1*time.Hour),
@@ -152,15 +153,27 @@ func (d *EchoFogDHT) FindPeer(ctx context.Context, targetID types.PeerID) (strin
 		d.hotCache.Set(targetID, closestLocal[0].Addr)
 		return closestLocal[0].Addr, nil
 	}
+	// a peer marked unreachable is still the peer the caller wants: the mark only keeps lookups
+	// from waiting on it as a hop. Its last address comes back when the network names no newer
+	// one; the caller dials it on its own terms and falls back to a hole punch.
+	remembered := d.unreachableAddr(targetID)
 	if len(closestLocal) == 0 && len(d.swarm.GetAllPeers()) == 0 {
+		if remembered != "" {
+			return remembered, nil
+		}
 		return "", ErrDHTEmpty
 	}
 
 	searchCtx, cancel := context.WithTimeout(ctx, findPeerWait)
 	defer cancel()
 	if res := d.newLookup(targetID, nil, &targetID).run(searchCtx); res.found != nil && res.found.Addr != "" {
-		d.hotCache.Set(targetID, res.found.Addr)
+		if !d.isUnreachable(targetID) {
+			d.hotCache.Set(targetID, res.found.Addr)
+		}
 		return res.found.Addr, nil
+	}
+	if remembered != "" {
+		return remembered, nil
 	}
 	return "", ErrPeerLookupTimedOut
 }

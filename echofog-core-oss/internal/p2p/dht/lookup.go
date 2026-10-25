@@ -339,7 +339,7 @@ func (d *EchoFogDHT) dialOnce(ctx context.Context, id types.PeerID, addr string)
 			cancel()
 			// a verdict on the peer only when this node could dial at all
 			if a.err != nil && !errors.Is(a.err, swarm.ErrIsolated) && len(d.swarm.GetAllPeers()) > 0 {
-				d.markUnreachable(id)
+				d.markUnreachable(id, addr)
 			}
 			d.dialsMu.Lock()
 			delete(d.dials, id)
@@ -371,10 +371,13 @@ func (d *EchoFogDHT) connectedClosest(target types.PeerID) []*PeerNode {
 	return mergeClosest(nil, d.connectedPeers(), target, d.swarm.GetSelfID())
 }
 
-// markUnreachable notes that a peer did not answer at its address: it leaves the table, and
-// lookups skip it for unreachableFor however often other nodes name it.
-func (d *EchoFogDHT) markUnreachable(id types.PeerID) {
-	d.unreachable.Set(id, struct{}{})
+// markUnreachable notes that a peer did not answer at addr: it leaves the table, and lookups do
+// not ask it (or route through it) for unreachableFor however often other nodes name it. The
+// mark only keeps it out of the way of other lookups: whoever wants that very peer (a call, a
+// chat, an exit) still gets its address, from the network or this mark, and dials it or punches
+// through to it on their own terms (see FindPeer).
+func (d *EchoFogDHT) markUnreachable(id types.PeerID, addr string) {
+	d.unreachable.Set(id, addr)
 	d.routingTable.RemovePeer(id)
 	d.hotCache.Delete(id)
 }
@@ -382,6 +385,12 @@ func (d *EchoFogDHT) markUnreachable(id types.PeerID) {
 func (d *EchoFogDHT) isUnreachable(id types.PeerID) bool {
 	_, ok := d.unreachable.Get(id)
 	return ok
+}
+
+// unreachableAddr is the address a marked peer did not answer at, "" when it is not marked.
+func (d *EchoFogDHT) unreachableAddr(id types.PeerID) string {
+	addr, _ := d.unreachable.Get(id)
+	return addr
 }
 
 // mergeClosest adds the new nodes to the list, once each and never this node, keeping the K
@@ -404,7 +413,9 @@ func mergeClosest(list, add []*PeerNode, target, self types.PeerID) []*PeerNode 
 }
 
 // takeInfos turns peers named in an answer into routing table entries: valid keys only, never
-// this node, only addresses the policy keeps, and none known to be unreachable.
+// this node, only addresses the policy keeps. A peer marked unreachable is returned (a lookup for
+// that very peer is done once somebody names it) but does not go back into the table; lookup.add
+// keeps it from being asked.
 func (d *EchoFogDHT) takeInfos(infos []*internal_pb.PeerInfo) []*PeerNode {
 	policy := d.routingTable.AddrPolicy()
 	self := d.swarm.GetSelfID()
@@ -415,10 +426,12 @@ func (d *EchoFogDHT) takeInfos(infos []*internal_pb.PeerInfo) []*PeerNode {
 			continue
 		}
 		id := types.PeerPubKeyToID(pub)
-		if id == self || d.isUnreachable(id) {
+		if id == self {
 			continue
 		}
-		d.routingTable.AddOrUpdatePeer(pub, info.GetAddress())
+		if !d.isUnreachable(id) {
+			d.routingTable.AddOrUpdatePeer(pub, info.GetAddress())
+		}
 		out = append(out, &PeerNode{ID: id, PubKey: pub, Addr: info.GetAddress(), LastSeen: time.Now()})
 	}
 	return out

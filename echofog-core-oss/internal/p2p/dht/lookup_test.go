@@ -1,6 +1,7 @@
 package dht
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -62,6 +63,55 @@ func TestDeadPeersAreEvictedAndNotDialedAgain(t *testing.T) {
 		if id == dead {
 			t.Fatal("an unreachable peer named in an answer went back into the table")
 		}
+	}
+}
+
+// The mark keeps a peer from being asked as a hop, not from being found: a call or a chat that
+// wants that very peer gets the address another node knows it at, and the peer stays out of the
+// table.
+func TestMarkedPeerIsStillFoundByItsID(t *testing.T) {
+	a, b, d := newTestNode(t), newTestNode(t), newTestNode(t)
+	a.dial(t, b)
+	b.dht.routingTable.AddOrUpdatePeer(d.pub, d.addr())
+	a.dht.markUnreachable(d.id, "127.0.0.1:9") // an old address that did not answer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addr, err := a.dht.FindPeer(ctx, d.id)
+	if err != nil || addr != d.addr() {
+		t.Fatalf("FindPeer = %q, %v; want the address b knows, %q", addr, err, d.addr())
+	}
+	for _, id := range a.dht.KnownPeers() {
+		if id == d.id {
+			t.Fatal("finding a marked peer put it back into the table")
+		}
+	}
+	if !a.dht.isUnreachable(d.id) {
+		t.Fatal("finding a peer is not reaching it: the mark stays until a connection")
+	}
+}
+
+// Nobody names a marked peer: its last address comes back rather than nothing, so the caller
+// can still dial it or punch through to it.
+func TestMarkedPeerFallsBackToItsLastAddress(t *testing.T) {
+	a, b := newTestNode(t), newTestNode(t)
+	a.dial(t, b)
+	var gone types.PeerID
+	gone[0] = 0x42
+	a.dht.markUnreachable(gone, "203.0.113.7:4242")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addr, err := a.dht.FindPeer(ctx, gone)
+	if err != nil || addr != "203.0.113.7:4242" {
+		t.Fatalf("FindPeer = %q, %v; want the remembered address", addr, err)
+	}
+
+	// a connection to it ends the mark
+	a.dht.markUnreachable(b.id, "203.0.113.8:1")
+	a.dht.OnPeerConnected(b.id, b.pub, b.addr())
+	if a.dht.isUnreachable(b.id) {
+		t.Fatal("a connection does not clear the mark")
 	}
 }
 
