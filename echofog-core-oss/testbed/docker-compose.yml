@@ -75,6 +75,25 @@ services:
     environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p2, BOOTSTRAP: "${BOOTSTRAP:-}" }
     networks: { wan: { ipv4_address: 203.0.113.14 } }
 
+  # ---- for the VPN scenarios: two exits in the server role, as on a VPS, and a web server that
+  # stands in for the Internet (started only by -scenario vpn, load and soak)
+  x1:
+    <<: *node
+    container_name: efbed-x1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x1, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
+    networks: { wan: { ipv4_address: 203.0.113.15 } }
+  x2:
+    <<: *node
+    container_name: efbed-x2
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x2, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
+    networks: { wan: { ipv4_address: 203.0.113.16 } }
+  web:
+    <<: *image
+    container_name: efbed-web
+    environment: { ROLE: web }
+    restart: "no"
+    networks: { wan: { ipv4_address: 203.0.113.30 } }
+
   # ---- routers
   gw_a:
     <<: *gateway

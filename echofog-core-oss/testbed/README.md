@@ -26,7 +26,16 @@ Needs Docker with Compose (Docker Desktop is enough, also on Windows). Nothing l
 go run ./testbed/runner -scenario smoke          # ~3 minutes
 go run ./testbed/runner -scenario chaos          # smoke, then 3 minutes of failures
 go run ./testbed/runner -scenario chaos -chaos-for 10m -seed 42   # the same failures again
+go run ./testbed/runner -scenario vpn            # ~8 minutes: people using an exit while it breaks
+go run ./testbed/runner -scenario load           # ~3 minutes: many downloads at once through one exit
+go run ./testbed/runner -scenario soak -soak-for 2h   # steady use for hours, graphing resources
 ```
+
+Every run keeps the logs of all containers in `testbed/out/<time>-<scenario>/`, with
+`summary.txt`: crashes, errors and race reports found in them, how often each container started,
+and the warnings that came most often. A client that fails a VPN check leaves `fail-*.log` there with
+what it knew at that moment and its last 90 seconds of log. `LOG_LEVEL=debug` before the command
+makes the nodes log everything.
 
 The runner starts everything, checks and stops everything. If a check fails the containers stay
 up for a look (`docker logs efbed-a1`), and the seed to repeat the run is printed.
@@ -34,6 +43,25 @@ up for a look (`docker logs efbed-a1`), and the seed to repeat the run is printe
 **smoke** checks that all ten nodes find each other; that every node can write to every other node
 (90 messages, most to somebody it has never talked to) and each arrives exactly once; that a group
 of all ten forms, and that a message from each member reaches each member.
+
+The VPN scenarios add two exits in the server role, as on a VPS (`x1`, `x2` at 203.0.113.15-16),
+and a web server standing in for the Internet (`web`, 203.0.113.30), which serves files with their
+SHA-256 so a client can tell a whole download from a damaged one. The six nodes behind the routers
+are the people.
+
+**vpn** connects everybody to `x1`, downloads 8 MB each and checks it, disconnects and connects
+again `-cycles` times per client, cuts each router off for 20 s, kills `x1` (the clients must move
+to `x2`), freezes the exit most clients use (they must move back to `x1`, which is up again by
+then), puts 15 % loss and 150 ms delay on a router, lets one node fail handshakes with `x1` and then
+connects its neighbour behind the same router, and places a call through the symmetric NAT. Each
+time a client must work again within `-recover` (60 s); the report gives median, p90 and worst.
+
+**load** runs 64, 16 and 256 downloads at once from every client through one exit and wants 99 %
+of them whole; afterwards the exit must give its goroutines, sockets and memory back.
+
+**soak** keeps people browsing and writing for `-soak-for`, breaks something every few minutes
+(`-soak-chaos=false` to leave it in peace), writes goroutines, heap, open files and peers of every
+node to `metrics.csv` every 30 s, and fails a node whose numbers grow from start to end.
 
 **chaos** repeats that, and then, for a few minutes, writes to random nodes all the time while it
 breaks things at random: `kill -9` and restart of a node, freezing a node (it stops answering but

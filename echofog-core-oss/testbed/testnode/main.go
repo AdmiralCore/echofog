@@ -42,8 +42,15 @@ func main() {
 		stun      = flag.String("stun", "203.0.113.11:3478", "STUN server; the lab has no Internet, so this stays unanswered")
 		transport = flag.String("transport", "", "auto, quic or tcp")
 		signaling = flag.Bool("signaling", os.Getenv("SIGNALING") != "", "signaling only: DHT and hole punching help, no relayed traffic")
+		server    = flag.Bool("server", os.Getenv("SERVER") != "", "server role, as on a VPS: relay, DHT and exit, no chat")
+		exit      = flag.Bool("exit", os.Getenv("EXIT") != "", "share the connection as a free exit")
+		web       = flag.String("web", "", "run only the lab's web server on this address, no node")
 	)
 	flag.Parse()
+	if *web != "" {
+		serveWeb(*web)
+		return
+	}
 
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
 		log.Fatal(err)
@@ -61,6 +68,10 @@ func main() {
 	if *signaling {
 		cfg.Relay.Server.Enabled = true
 		cfg.Relay.Server.SignalingOnly = true
+	}
+	if *server {
+		cfg.Role = config.RoleServer
+		cfg.Relay.Server.Enabled = true
 	}
 	for _, b := range strings.Split(*bootstrap, ",") {
 		if b = strings.TrimSpace(b); b != "" {
@@ -84,6 +95,11 @@ func main() {
 	}
 
 	t := &testNode{name: *name, started: time.Now(), n: n, api: a}
+	if *exit {
+		if err := t.startExit(); err != nil {
+			log.Fatalf("exit: %v", err)
+		}
+	}
 	srv := &http.Server{Addr: *httpAddr, Handler: t.routes()}
 	go func() {
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
@@ -125,6 +141,7 @@ func (t *testNode) routes() http.Handler {
 	mux.HandleFunc("/group/send", t.groupSend)
 	mux.HandleFunc("/group/messages", t.groupMessages)
 	mux.HandleFunc("/group/members", t.groupMembers)
+	t.vpnRoutes(mux)
 	return mux
 }
 

@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group) or chaos (the same, with failures)")
+	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), vpn, load or soak (an exit and its users)")
 	chaosFor = flag.Duration("chaos-for", 3*time.Minute, "how long failures are injected")
 	settle   = flag.Duration("settle", 3*time.Minute, "how long after the chaos messages may still arrive")
 	seed     = flag.Int64("seed", 0, "random seed of the chaos (0: time)")
@@ -91,7 +91,12 @@ type status struct {
 
 // call talks to the control interface of a node from inside its container.
 func call(n, method, path string, in, out any) error {
-	args := []string{"exec", container(n), "curl", "-sS", "-m", "20", "-X", method, "-w", "\n%{http_code}"}
+	return callT(n, method, path, in, out, 20*time.Second)
+}
+
+// callT is call with its own time limit, for requests that download through the VPN.
+func callT(n, method, path string, in, out any, limit time.Duration) error {
+	args := []string{"exec", container(n), "curl", "-sS", "-m", fmt.Sprint(int(limit.Seconds())), "-X", method, "-w", "\n%{http_code}"}
 	if in != nil {
 		raw, _ := json.Marshal(in)
 		args = append(args, "-H", "Content-Type: application/json", "-d", string(raw))
@@ -142,7 +147,7 @@ func allNodeNames() []string {
 	return append(append([]string{}, publicNodes...), lanNodes...)
 }
 
-func bringUp() map[string]*node {
+func bringUp(extra ...string) map[string]*node {
 	logf("tearing down what is left of an earlier run")
 	_, _ = compose(nil, "down", "-v", "--remove-orphans")
 	if !*noBuild {
@@ -167,7 +172,7 @@ func bringUp() map[string]*node {
 	boot := fmt.Sprintf("203.0.113.11:4242/%s,203.0.113.12:4242/%s", nodes["s1"].id, nodes["s2"].id)
 	logf("starting the rest, bootstrapping through s1 and s2")
 	rest := []string{"up", "-d"}
-	for _, n := range allNodeNames() {
+	for _, n := range append(allNodeNames(), extra...) {
 		if n != "s1" && n != "s2" {
 			rest = append(rest, n)
 		}
@@ -175,9 +180,9 @@ func bringUp() map[string]*node {
 	if out, err := compose([]string{"BOOTSTRAP=" + boot}, rest...); err != nil {
 		fatalf("up: %v\n%s", err, out)
 	}
-	for _, name := range allNodeNames() {
+	for _, name := range append(allNodeNames(), extra...) {
 		name := name
-		if nodes[name] != nil {
+		if nodes[name] != nil || name == "web" {
 			continue
 		}
 		if !waitFor(name+" to answer", 90*time.Second, func() bool { _, err := statusOf(name); return err == nil }) {
@@ -701,7 +706,12 @@ func main() {
 	if out, err := run("docker", "info", "--format", "{{.ServerVersion}}"); err != nil {
 		fatalf("Docker is not running: %v %s", err, out)
 	}
-	nodes := bringUp()
+	var extra []string
+	if *scenario == "vpn" || *scenario == "load" || *scenario == "soak" {
+		extra = []string{"x1", "x2", "web"}
+	}
+	out := prepareOut()
+	nodes := bringUp(extra...)
 	l := &ledger{}
 	v := &verdict{}
 
@@ -713,6 +723,12 @@ func main() {
 	}()
 
 	switch *scenario {
+	case "vpn":
+		vpnScenario(nodes, v, out)
+	case "load":
+		loadScenario(nodes, v, out)
+	case "soak":
+		soakScenario(nodes, v, l, out)
 	case "smoke":
 		smoke(nodes, v, l)
 	case "chaos":
@@ -726,6 +742,8 @@ func main() {
 		fatalf("unknown scenario %q", *scenario)
 	}
 
+	fmt.Println()
+	collectLogs(out)
 	fmt.Println()
 	if len(v.failed) > 0 {
 		logf("%d check(s) failed:", len(v.failed))

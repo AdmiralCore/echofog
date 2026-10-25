@@ -35,6 +35,10 @@ gateway)
   exec sleep infinity
   ;;
 
+web)
+  exec testnode -web ":80"
+  ;;
+
 node)
   if [ -n "${GATEWAY:-}" ]; then
     ip route replace default via "$GATEWAY"
