@@ -87,6 +87,12 @@ services:
     container_name: efbed-x2
     environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x2, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
     networks: { wan: { ipv4_address: 203.0.113.16 } }
+  # a hidden exit for friends: not in the DHT, it answers only people with its invitation link
+  h1:
+    <<: *node
+    container_name: efbed-h1
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: h1, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", ACCESS: hidden, PUBLIC_ADDR: "203.0.113.17:4242" }
+    networks: { wan: { ipv4_address: 203.0.113.17 } }
   web:
     <<: *image
     container_name: efbed-web

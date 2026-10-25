@@ -30,6 +30,7 @@ type testNode struct {
 	started time.Time
 	n       *node.Node
 	api     *api.NodeApi
+	rx      *callRx
 }
 
 func main() {
@@ -45,6 +46,8 @@ func main() {
 		server    = flag.Bool("server", os.Getenv("SERVER") != "", "server role, as on a VPS: relay, DHT and exit, no chat")
 		exit      = flag.Bool("exit", os.Getenv("EXIT") != "", "share the connection as a free exit")
 		web       = flag.String("web", "", "run only the lab's web server on this address, no node")
+		access    = flag.String("access", os.Getenv("ACCESS"), "public, hidden or isolated")
+		pubAddr   = flag.String("public-addr", os.Getenv("PUBLIC_ADDR"), "address put into the invitation link")
 	)
 	flag.Parse()
 	if *web != "" {
@@ -72,6 +75,12 @@ func main() {
 	if *server {
 		cfg.Role = config.RoleServer
 		cfg.Relay.Server.Enabled = true
+	}
+	if *access != "" {
+		cfg.Access.Mode = *access
+	}
+	if *pubAddr != "" {
+		cfg.Access.PublicAddrs = []string{*pubAddr}
 	}
 	for _, b := range strings.Split(*bootstrap, ",") {
 		if b = strings.TrimSpace(b); b != "" {
@@ -142,6 +151,10 @@ func (t *testNode) routes() http.Handler {
 	mux.HandleFunc("/group/messages", t.groupMessages)
 	mux.HandleFunc("/group/members", t.groupMembers)
 	t.vpnRoutes(mux)
+	t.callRoutes(mux)
+	mux.HandleFunc("/access", t.accessStatus)
+	mux.HandleFunc("/access/kick", t.accessKick)
+	mux.HandleFunc("/exits", t.exits)
 	return mux
 }
 

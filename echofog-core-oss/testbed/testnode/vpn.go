@@ -377,3 +377,29 @@ func blob(seed string, size int64) []byte {
 	}
 	return out
 }
+
+// accessStatus is the node's access mode, its invitation link and who joined with it.
+func (t *testNode) accessStatus(w http.ResponseWriter, _ *http.Request) {
+	st, err := t.api.GetAccessStatus()
+	reply(w, st, err)
+}
+
+// accessKick takes a person's access away, as the owner of a hidden node does in the app.
+func (t *testNode) accessKick(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Peer string }
+	if err := body(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	reply(w, map[string]bool{"ok": true}, t.api.RemoveJoinedPeer(in.Peer))
+}
+
+// exits is the exit list the app shows, after looking the network over again.
+func (t *testNode) exits(w http.ResponseWriter, _ *http.Request) {
+	_, _ = t.api.RefreshExitNodes()
+	ids := []string{}
+	for _, e := range t.api.ListExitNodes() {
+		ids = append(ids, e.PeerID)
+	}
+	reply(w, ids, nil)
+}

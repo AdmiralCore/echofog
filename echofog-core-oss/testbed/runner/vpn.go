@@ -88,7 +88,7 @@ func vpnStatusOf(client string) vpnState {
 // joinAddr is how a client reaches a public node inside the lab.
 func joinAddr(nodes map[string]*node, name string) string {
 	ip := map[string]string{"s1": "203.0.113.11", "s2": "203.0.113.12", "p1": "203.0.113.13", "p2": "203.0.113.14",
-		"x1": "203.0.113.15", "x2": "203.0.113.16"}[name]
+		"x1": "203.0.113.15", "x2": "203.0.113.16", "h1": "203.0.113.17"}[name]
 	return ip + ":4242/" + nodes[name].id
 }
 

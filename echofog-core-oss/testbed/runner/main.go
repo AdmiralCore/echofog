@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), vpn, load or soak (an exit and its users)")
+	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), vpn, load, soak (an exit and its users), hidden (an exit for friends) or call (voice and video)")
 	chaosFor = flag.Duration("chaos-for", 3*time.Minute, "how long failures are injected")
 	settle   = flag.Duration("settle", 3*time.Minute, "how long after the chaos messages may still arrive")
 	seed     = flag.Int64("seed", 0, "random seed of the chaos (0: time)")
@@ -707,8 +707,11 @@ func main() {
 		fatalf("Docker is not running: %v %s", err, out)
 	}
 	var extra []string
-	if *scenario == "vpn" || *scenario == "load" || *scenario == "soak" {
+	switch *scenario {
+	case "vpn", "load", "soak":
 		extra = []string{"x1", "x2", "web"}
+	case "hidden":
+		extra = []string{"x1", "h1", "web"}
 	}
 	out := prepareOut()
 	nodes := bringUp(extra...)
@@ -729,6 +732,10 @@ func main() {
 		loadScenario(nodes, v, out)
 	case "soak":
 		soakScenario(nodes, v, l, out)
+	case "hidden":
+		hiddenScenario(nodes, v, out)
+	case "call":
+		callScenario(nodes, v, out)
 	case "smoke":
 		smoke(nodes, v, l)
 	case "chaos":
