@@ -23,6 +23,14 @@ neighbours "closer" to any given ID, so a lookup hops from node to node until it
 who knows the answer. Public exits also publish their offers (price, speed) in the DHT, which is how the
 VPN market works without a website.
 
+A lookup asks up to 16 nodes at once, the ones it is already connected to first, and stops as
+soon as somebody hands the record over or once the closest nodes have all answered without it.
+A node that does not answer at its address is dropped from the table and left alone for ten
+minutes, however often other nodes still name it: the network is small and clients come and go,
+so without that memory every lookup would wait on the same departed peers. What a lookup came to
+is kept for a short while (half a minute for a record found, a quarter for a key nobody held);
+**Refresh** on the exit list walks the network again regardless.
+
 A fresh install has to know at least one node to join. Those are **bootstrap nodes** (also called
 seed nodes). A release can carry a built-in list, but **the list may be empty in a given build**,
 and built-in nodes can be blocked. So you can add your own: in the app, **Settings → Bootstrap

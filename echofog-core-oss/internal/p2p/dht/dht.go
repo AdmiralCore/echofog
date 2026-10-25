@@ -22,37 +22,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const Alpha = 3
-
-// maxLookupQueries bounds the peers one value lookup asks. Peers answer with the peers closest to
-// the key, which point back at each other; without a bound and a seen-set a lookup bounces
-// between them until it times out, redialing every one each time.
-const maxLookupQueries = 32
-
-// valueLookup is the state one lookup shares across its parallel branches: who has been asked.
-type valueLookup struct {
-	mu     sync.Mutex
-	self   types.PeerID
-	seen   map[types.PeerID]bool
-	budget int
-}
-
-func newValueLookup(self types.PeerID) *valueLookup {
-	return &valueLookup{self: self, seen: map[types.PeerID]bool{self: true}, budget: maxLookupQueries}
-}
-
-// claim reports whether p should be asked: not this node, not asked before, budget left.
-func (l *valueLookup) claim(p types.PeerID) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.seen[p] || l.budget <= 0 {
-		return false
-	}
-	l.seen[p] = true
-	l.budget--
-	return true
-}
-
 type DHT interface {
 	Get(key []byte) ([]byte, error)
 	Set(key, data []byte) error
@@ -64,6 +33,16 @@ type EchoFogDHT struct {
 
 	// peerID -> IP:Port (Bounded LRU + TTL to eliminate memory leaks and stale IPs)
 	hotCache *cache.Cache[types.PeerID, string]
+	// peers that did not answer a dial lately: out of the table and of lookups (see lookup.go)
+	unreachable *cache.Cache[types.PeerID, struct{}]
+	// what recent value lookups came to, by key: the value found, or that none was. The exit
+	// directory and messaging ask for the same keys again within seconds; a walk per ask would
+	// cost round trips for an answer that cannot have changed yet. Memory only, never on disk.
+	recent *cache.Cache[string, []byte]
+	misses *cache.Cache[string, struct{}]
+
+	dialsMu sync.Mutex
+	dials   map[types.PeerID]*dialAttempt // dials in progress, one per peer (see dialOnce)
 
 	pending sync.Map
 
@@ -96,7 +75,11 @@ func NewEchoFogDHT(rt *RoutingTable, swarm *swarm.Swarm) *EchoFogDHT {
 		routingTable: rt,
 		swarm:        swarm,
 		hotCache:     cache.New[types.PeerID, string](2048, 15*time.Minute),
+		unreachable:  cache.New[types.PeerID, struct{}](4096, unreachableFor),
+		recent:       cache.New[string, []byte](1024, recentValueFor),
+		misses:       cache.New[string, struct{}](4096, missFor),
 		peerQuotas:   cache.New[types.PeerID, int](4096, 1*time.Hour),
+		dials:        map[types.PeerID]*dialAttempt{},
 		joined:       make(chan struct{}, 1),
 	}
 	dht.alone.Store(true)
@@ -138,9 +121,21 @@ func (d *EchoFogDHT) Stop() error {
 
 var ErrDHTEmpty = errors.New("DHT is empty, cannot start routing")
 var ErrPeerLookupTimedOut = errors.New("peer lookup timed out")
+var ErrValueNotFound = errors.New("value not found in network")
+var ErrNoPeers = errors.New("DHT: no peers known to search for value")
 
-// findPeerWait bounds one peer lookup: each step may have to connect to the peer it asks.
-const findPeerWait = 10 * time.Second
+const (
+	// findPeerWait bounds one peer lookup: each step may have to connect to the peer it asks.
+	findPeerWait = 10 * time.Second
+	// valueLookupWait bounds one value lookup; a lookup normally ends well before, once the
+	// closest peers have all answered.
+	valueLookupWait = 6 * time.Second
+	// recentValueFor is how long a value found is answered from memory, far below how often
+	// records are republished. missFor is how long a key nobody held is: long enough to absorb a
+	// burst of asks for the same key, short enough that a record just published is found soon.
+	recentValueFor = 30 * time.Second
+	missFor        = 15 * time.Second
+)
 
 // FindPeer returns where a peer accepts connections: from the cache, the routing table or a
 // connection we have, or else by an iterative lookup through the network.
@@ -157,15 +152,15 @@ func (d *EchoFogDHT) FindPeer(ctx context.Context, targetID types.PeerID) (strin
 		d.hotCache.Set(targetID, closestLocal[0].Addr)
 		return closestLocal[0].Addr, nil
 	}
-	if len(closestLocal) == 0 {
+	if len(closestLocal) == 0 && len(d.swarm.GetAllPeers()) == 0 {
 		return "", ErrDHTEmpty
 	}
 
 	searchCtx, cancel := context.WithTimeout(ctx, findPeerWait)
 	defer cancel()
-	if _, found := d.iterativeFindNode(searchCtx, targetID, &targetID); found != nil && found.Addr != "" {
-		d.hotCache.Set(targetID, found.Addr)
-		return found.Addr, nil
+	if res := d.newLookup(targetID, nil, &targetID).run(searchCtx); res.found != nil && res.found.Addr != "" {
+		d.hotCache.Set(targetID, res.found.Addr)
+		return res.found.Addr, nil
 	}
 	return "", ErrPeerLookupTimedOut
 }
@@ -209,41 +204,35 @@ func (d *EchoFogDHT) Get(key []byte) ([]byte, error) {
 		slog.Debug("DHT: Found value locally", "key", hex.EncodeToString(key)[:8])
 		return rec.Value, nil
 	}
+	return d.findValue(key)
+}
 
-	targetID := targetOf(key)
-	nodesToQuery := d.startNodes(targetID)
-	if len(nodesToQuery) == 0 {
-		return nil, errors.New("DHT: no peers known to search for value")
+// findValue walks the network for a record: a lookup toward the place of the key in the ID
+// space that ends as soon as a peer hands the record over, or once the closest peers have all
+// answered without it. What a lookup came to lately is answered from memory.
+func (d *EchoFogDHT) findValue(key []byte) ([]byte, error) {
+	k := string(key)
+	if v, ok := d.recent.Get(k); ok {
+		return v, nil
 	}
-
-	fastestResponse := make(chan *internal_pb.DhtRecord, 1)
-
-	searchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, ok := d.misses.Get(k); ok {
+		return nil, ErrValueNotFound
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), valueLookupWait)
 	defer cancel()
-
-	lookup := newValueLookup(d.swarm.GetSelfID())
-	for _, node := range nodesToQuery {
-		if !lookup.claim(node.ID) {
-			continue
-		}
-		go func(p *PeerNode) {
-			rec, found := d.queryPeerForValue(searchCtx, lookup, p.ID, key)
-			if found {
-				select {
-				case fastestResponse <- rec:
-				default:
-				}
-			}
-		}(node)
+	res := d.newLookup(targetOf(key), key, nil).run(ctx)
+	if res.record != nil {
+		// kept in memory only: on disk, what we looked up would show whom we talk to
+		d.recent.Set(k, res.record.Value)
+		return res.record.Value, nil
 	}
-
-	select {
-	case <-searchCtx.Done():
-		return nil, errors.New("value lookup timed out or not found in network")
-	case rec := <-fastestResponse:
-		// not kept: what we looked up would show whom we talk to
-		return rec.Value, nil
+	if res.asked == 0 {
+		return nil, ErrNoPeers
 	}
+	if ctx.Err() == nil {
+		d.misses.Set(k, struct{}{}) // the lookup converged: nobody near the key holds it
+	}
+	return nil, ErrValueNotFound
 }
 
 func (d *EchoFogDHT) Set(key []byte, value []byte) error {
@@ -267,126 +256,53 @@ func (d *EchoFogDHT) Set(key []byte, value []byte) error {
 	if recBytes, err := proto.Marshal(rec); err == nil {
 		_ = d.swarm.GetStorage().Set(RecordKey(key), recBytes)
 	}
+	d.recent.Delete(string(key))
+	d.misses.Delete(string(key))
 
 	go d.replicate(rec, targetOf(key))
 	return nil
 }
 
-// Publishing gives up on a record after this long; the next publish of the same key tries again.
-const replicateTimeout = 30 * time.Second
+// The walk toward a key before publishing gives up after this long; the peers it reached by
+// then are the ones stored on.
+const replicateTimeout = 10 * time.Second
 
-// replicate stores a signed record on the Alpha closest peers that can actually be reached. It
-// walks the network toward the key first instead of trusting the local table, which in a small
-// network often holds only peers behind NAT at addresses that no longer answer. Peers that cannot
-// be reached are skipped for the next closest ones; that is normal, so it is not an error.
+// replicate stores a signed record on the closest peers that can actually be reached. The
+// Replicas closest among the peers we are connected to get it at once: in a small network those
+// are the entry nodes, where everybody's lookups start, so the record can be read right away.
+// Then a walk toward the key finds the closest live peers in the network (the local table often
+// holds only peers that left), and the Replicas closest of those get it as well. The walk
+// connects to the peers it asks, so they can be stored on without another dial.
 func (d *EchoFogDHT) replicate(rec *internal_pb.DhtRecord, target types.PeerID) {
 	ctx, cancel := context.WithTimeout(context.Background(), replicateTimeout)
 	defer cancel()
 
-	found, _ := d.iterativeFindNode(ctx, target, nil)
-	// peers we are connected to anyway are a sure place to store, even when the walk found nothing
-	// (found first: the walk's peers are the right ones; mergeClosest would cut a far live peer)
-	candidates := append(found, d.connectedClosest(target)...)
-
 	req := &internal_pb.MessageData{
 		Payload: &internal_pb.MessageData_StoreReq{StoreReq: &internal_pb.StoreReq{Record: rec}},
 	}
-	stored := 0
 	tried := map[types.PeerID]bool{}
-	for _, p := range candidates {
-		if tried[p.ID] {
-			continue
-		}
-		tried[p.ID] = true
-		if stored == Alpha || ctx.Err() != nil {
-			break
-		}
-		if !d.swarm.ThisIsActivePeer(p.ID) {
-			if p.Addr == "" || !d.swarm.AutoDial() {
+	store := func(candidates []*PeerNode) int {
+		stored := 0
+		for _, p := range candidates {
+			if stored == Replicas {
+				break
+			}
+			if tried[p.ID] || !d.swarm.ThisIsActivePeer(p.ID) {
 				continue
 			}
-			dialCtx, cancelDial := context.WithTimeout(ctx, lookupDialWait)
-			err := d.swarm.AddPotentialPeerWithCtx(dialCtx, p.ID, p.Addr)
-			cancelDial()
-			if err != nil {
-				slog.Debug("DHT: store peer unreachable, trying the next one", "peer", p.ID, "err", err)
+			tried[p.ID] = true
+			if err := d.swarm.SendDataForPeer(p.ID, net_types.TypeStore, req); err != nil {
+				slog.Debug("DHT: store request failed, trying the next peer", "peer", p.ID, "err", err)
 				continue
 			}
+			stored++
 		}
-		if err := d.swarm.SendDataForPeer(p.ID, net_types.TypeStore, req); err != nil {
-			slog.Debug("DHT: store request failed, trying the next peer", "peer", p.ID, "err", err)
-			continue
-		}
-		stored++
+		return stored
 	}
-	slog.Debug("DHT: record published", "replicas", stored, "candidates", len(candidates))
-}
-
-// connectedClosest is every peer we hold a connection to, closest to target first.
-func (d *EchoFogDHT) connectedClosest(target types.PeerID) []*PeerNode {
-	var out []*PeerNode
-	for _, p := range d.swarm.GetAllPeers() {
-		out = append(out, &PeerNode{ID: p.ID()})
-	}
-	return mergeClosest(nil, out, target, d.swarm.GetSelfID())
-}
-
-// queryPeerForValue asks one peer for the record; when it answers with closer peers, those are
-// asked in turn, each at most once per lookup (the caller has claimed peerToAsk already).
-func (d *EchoFogDHT) queryPeerForValue(ctx context.Context, lookup *valueLookup, peerToAsk types.PeerID, targetKey []byte) (*internal_pb.DhtRecord, bool) {
-	msgID := types.NewMessageID()
-
-	req := &internal_pb.MessageData{
-		MessageId: msgID[:],
-		Payload: &internal_pb.MessageData_FindValueReq{
-			FindValueReq: &internal_pb.FindValueReq{TargetKey: targetKey},
-		},
-	}
-
-	waitCh := make(chan *internal_pb.FindValueRes, 1)
-	d.pending.Store(string(msgID[:]), waitCh)
-
-	defer d.pending.Delete(string(msgID[:]))
-
-	err := d.swarm.SendDataForPeer(peerToAsk, net_types.TypeFindValue, req)
-	if err != nil {
-		return nil, false
-	}
-
-	select {
-	case res := <-waitCh:
-		if res.Record != nil {
-			// only signed records, and only for the key that was asked
-			if err := CheckRecord(res.Record, targetKey); err != nil {
-				slog.Warn("DHT: Peer sent invalid record during Get", "peer", peerToAsk, "err", err)
-				return nil, false
-			}
-			return res.Record, true
-		}
-
-		if len(res.ClosestPeers) > 0 {
-			for _, node := range d.takeInfos(res.ClosestPeers) {
-				pID := node.ID
-				if ctx.Err() != nil || !lookup.claim(pID) {
-					continue
-				}
-				if !d.swarm.ThisIsActivePeer(pID) {
-					dialCtx, dialCancel := context.WithTimeout(ctx, 2*time.Second)
-					_ = d.swarm.AddPotentialPeerWithCtx(dialCtx, pID, node.Addr)
-					dialCancel()
-				}
-				if d.swarm.ThisIsActivePeer(pID) {
-					if nextRec, nextFound := d.queryPeerForValue(ctx, lookup, pID, targetKey); nextFound {
-						return nextRec, true
-					}
-				}
-			}
-		}
-		return nil, false
-
-	case <-ctx.Done():
-		return nil, false
-	}
+	near := store(d.connectedClosest(target))
+	res := d.newLookup(target, nil, nil).run(ctx)
+	walked := store(res.closest)
+	slog.Debug("DHT: record published", "on_connected", near, "on_closest", walked, "closest_found", len(res.closest))
 }
 
 func (d *EchoFogDHT) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPublicKey, addr string) {
@@ -396,6 +312,7 @@ func (d *EchoFogDHT) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPubli
 		default:
 		}
 	}
+	d.unreachable.Delete(peerID) // reachable after all
 	if addr == "" {
 		return // connected, but not reachable at a known address (inbound TCP)
 	}
@@ -424,6 +341,9 @@ func (d *EchoFogDHT) countRecordFromPeer(peerID types.PeerID) int {
 func (d *EchoFogDHT) PruneExpired() {
 	prunedHot := d.hotCache.PruneExpired()
 	prunedQuotas := d.peerQuotas.PruneExpired()
+	d.unreachable.PruneExpired()
+	d.recent.PruneExpired()
+	d.misses.PruneExpired()
 	if prunedHot > 0 || prunedQuotas > 0 {
 		slog.Debug("DHT: Pruned expired cache entries", "hot_cache", prunedHot, "quotas", prunedQuotas)
 	}

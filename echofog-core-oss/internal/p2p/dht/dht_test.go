@@ -16,8 +16,11 @@ import (
 func TestDHT_HotCacheStressAndEviction(t *testing.T) {
 	// Create an EchoFogDHT with our leak-free generic caches
 	d := &EchoFogDHT{
-		hotCache:   cache.New[types.PeerID, string](100, 50*time.Millisecond),
-		peerQuotas: cache.New[types.PeerID, int](200, 100*time.Millisecond),
+		hotCache:    cache.New[types.PeerID, string](100, 50*time.Millisecond),
+		peerQuotas:  cache.New[types.PeerID, int](200, 100*time.Millisecond),
+		unreachable: cache.New[types.PeerID, struct{}](100, 50*time.Millisecond),
+		recent:      cache.New[string, []byte](100, 50*time.Millisecond),
+		misses:      cache.New[string, struct{}](100, 50*time.Millisecond),
 	}
 
 	const workers = 40

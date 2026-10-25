@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"log/slog"
 	mrand "math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
@@ -53,34 +54,49 @@ func (d *EchoFogDHT) maintain(ctx context.Context) {
 func (d *EchoFogDHT) SelfLookup(ctx context.Context) int {
 	ctx, cancel := context.WithTimeout(ctx, selfLookupWait)
 	defer cancel()
-	closest, _ := d.iterativeFindNode(ctx, d.swarm.GetSelfID(), nil)
-	slog.Debug("DHT: self lookup done", "closest", len(closest), "table", d.routingTable.Len())
-	return len(closest)
+	res := d.newLookup(d.swarm.GetSelfID(), nil, nil).run(ctx)
+	slog.Debug("DHT: self lookup done", "closest", len(res.closest), "table", d.routingTable.Len())
+	return len(res.closest)
 }
 
 // RefreshStaleBuckets runs a lookup of a random ID in buckets no lookup went into lately.
 // Returns how many it refreshed.
 func (d *EchoFogDHT) RefreshStaleBuckets(ctx context.Context) int {
+	age := bucketRefreshMin + time.Duration(mrand.Int64N(int64(bucketRefreshMax-bucketRefreshMin)))
+	return d.refreshBuckets(ctx, age, maxRefreshesPerTick)
+}
+
+// RefreshAllBuckets refreshes every bucket that holds peers, however recently a lookup went into
+// it (tools and measurements; the maintainer refreshes stale ones only).
+func (d *EchoFogDHT) RefreshAllBuckets(ctx context.Context) int {
+	return d.refreshBuckets(ctx, 0, IDLengthBits)
+}
+
+func (d *EchoFogDHT) refreshBuckets(ctx context.Context, age time.Duration, limit int) int {
 	if len(d.swarm.GetAllPeers()) == 0 {
 		return 0 // nobody to ask; the rejoin lookup covers it once a peer is back
 	}
-	age := bucketRefreshMin + time.Duration(mrand.Int64N(int64(bucketRefreshMax-bucketRefreshMin)))
 	stale := d.routingTable.staleBuckets(time.Now(), age)
-	if len(stale) > maxRefreshesPerTick {
+	if len(stale) > limit {
 		mrand.Shuffle(len(stale), func(i, j int) { stale[i], stale[j] = stale[j], stale[i] })
-		stale = stale[:maxRefreshesPerTick]
+		stale = stale[:limit]
 	}
+	// the buckets are refreshed at once: each lookup is bounded on its own, and one that runs into
+	// peers that left must not hold up the others (or the next rejoin lookup)
+	var wg sync.WaitGroup
 	for _, idx := range stale {
-		if ctx.Err() != nil {
-			break
-		}
 		var random [32]byte
 		_, _ = rand.Read(random[:])
 		target := randomIDInBucket(d.swarm.GetSelfID(), idx, random)
-		lctx, cancel := context.WithTimeout(ctx, refreshWait)
-		d.iterativeFindNode(lctx, target, nil)
-		cancel()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lctx, cancel := context.WithTimeout(ctx, refreshWait)
+			defer cancel()
+			d.newLookup(target, nil, nil).run(lctx)
+		}()
 	}
+	wg.Wait()
 	return len(stale)
 }
 
@@ -92,7 +108,7 @@ func (d *EchoFogDHT) dialCandidates(max int) []swarm.DialCandidate {
 		if len(out) >= max {
 			break
 		}
-		if p.Addr == "" || d.swarm.ThisIsActivePeer(p.ID) {
+		if p.Addr == "" || d.swarm.ThisIsActivePeer(p.ID) || d.isUnreachable(p.ID) {
 			continue
 		}
 		out = append(out, swarm.DialCandidate{ID: p.ID, Addr: p.Addr})
