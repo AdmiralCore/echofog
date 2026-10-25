@@ -110,8 +110,13 @@ type ActiveRoomState struct {
 	// For the log: when the room was entered, and the media counters at the last periodic line.
 	startedAt    time.Time
 	waitingSince time.Time // when this node last started waiting for a place in the voice tree
-	lastStatsLog time.Time
-	lastStats    media.DispatcherStats
+	// formerCoordinator is the coordinator this node took over from. Alone in the room, it keeps
+	// knocking there: a member cut off for a few seconds elects itself, and without the knock it
+	// stayed alone in a call of its own while the others went on without it.
+	formerCoordinator types.PeerID
+	lastRejoinProbe   time.Time
+	lastStatsLog      time.Time
+	lastStats         media.DispatcherStats
 }
 
 // RoomSnapshot is a read-only view of the room, for UI and tests.

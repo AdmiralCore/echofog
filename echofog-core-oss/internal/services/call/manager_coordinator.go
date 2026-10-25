@@ -69,12 +69,42 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 	m.floodLocked(room, signaling.ActionTreeManifest, manifest)
 }
 
+// aloneLocked: this node is the coordinator of a room nobody else is in.
+func (m *CallManager) aloneLocked(room *ActiveRoomState) bool {
+	if !room.IsCoordinator {
+		return false
+	}
+	for p := range room.ConnectedPeers {
+		if p != m.selfID {
+			return false
+		}
+	}
+	return true
+}
+
+// yieldLocked gives up a room this node coordinates alone for the room of leader, which still
+// has the others: the two halves of a call split by a cut line become one again. The epoch goes
+// back to leader's, or its heartbeats and manifests would count as stale.
+func (m *CallManager) yieldLocked(room *ActiveRoomState, leader types.PeerID, epoch uint64, now time.Time) {
+	m.logger.Info("Back to the coordinator that kept the call going", "call_id", calllog.Call(room.CallID),
+		"coordinator", calllog.Peer(leader), "epoch", epoch, "our_epoch", room.Epoch)
+	room.Epoch = epoch
+	room.formerCoordinator = types.PeerID{}
+	room.joined = false
+	room.waitingSince = now
+	m.setCoordinatorLocked(room, leader, epoch, now)
+	m.sendJoinLocked(room, now)
+}
+
 // becomeCoordinatorLocked takes over the room after an election this node won.
 func (m *CallManager) becomeCoordinatorLocked(room *ActiveRoomState, now time.Time) {
 	old := room.Coordinator
 	room.Coordinator, room.IsCoordinator = m.selfID, true
 	room.candidate = types.PeerID{}
 	room.Epoch++
+	if old != m.selfID {
+		room.formerCoordinator = old
+	}
 
 	room.memberSeen = make(map[types.PeerID]time.Time, len(room.ConnectedPeers))
 	for p := range room.ConnectedPeers {
@@ -408,6 +438,13 @@ func (m *CallManager) runLoop(ctx context.Context, room *ActiveRoomState) {
 }
 
 func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time) {
+	if f := room.formerCoordinator; f != (types.PeerID{}) && m.aloneLocked(room) && now.Sub(room.lastRejoinProbe) >= joinRetryInterval {
+		// alone after taking over: the old coordinator may well be alive with the others, and
+		// answering this with its heartbeat brings us back (see yieldLocked)
+		room.lastRejoinProbe = now
+		m.ensureConnectedLocked(f)
+		m.sendLocked(room, f, signaling.ActionJoin, m.joinPayloadLocked(room))
+	}
 	if now.Sub(room.lastCoordHB) >= coordHeartbeatInterval {
 		room.lastCoordHB = now
 		hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64)}

@@ -115,10 +115,15 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 
 	case signaling.ActionCoordinatorHeartbeat:
 		if env.Sender != room.Coordinator {
-			if !m.authorityLocked(room, env.Sender, env.Epoch) {
+			switch {
+			case m.aloneLocked(room):
+				// we took over while cut off and nobody followed: the sender has the call
+				m.yieldLocked(room, env.Sender, env.Epoch, now)
+			case !m.authorityLocked(room, env.Sender, env.Epoch):
 				return m.rejectLocked(room, env, "heartbeat from a superseded coordinator", false)
+			default:
+				m.setCoordinatorLocked(room, env.Sender, env.Epoch, now)
 			}
-			m.setCoordinatorLocked(room, env.Sender, env.Epoch, now)
 		}
 		room.LastCoordPulse = now
 		if from == m.upstreamLocked(room) {
