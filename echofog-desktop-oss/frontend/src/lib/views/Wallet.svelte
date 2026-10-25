@@ -5,6 +5,7 @@
   import { amount, when, short } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import VaultCard from '../components/VaultCard.svelte';
+  import TestnetNotice from '../components/TestnetNotice.svelte';
   import { t, lang } from '../i18n/index.js';
 
   let wallet = null;
@@ -111,6 +112,8 @@
         <p class="muted small">{$t('wallet.subtitle')}</p>
       </div>
     </div>
+
+    <TestnetNotice />
 
     {#if netError}<p class="error small">{netError}</p>{/if}
 

@@ -7,6 +7,7 @@
   import PeerList from '../components/PeerList.svelte';
   import RelayCard from '../components/RelayCard.svelte';
   import AccessCard from '../components/AccessCard.svelte';
+  import TestnetNotice from '../components/TestnetNotice.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
   import { ask } from '../stores/dialog.js';
@@ -452,6 +453,7 @@
         {#if target && target.pricePerMb > 0}
           <div class="paid-ahead small">
             <b class="row"><Icon name="coin" size={14} /> {$t('proxy.paidAhead.title', { price: price(target.pricePerMb, $lang) })}</b>
+            <TestnetNotice compact />
             <span>{$t('proxy.paidAhead.free', { kb: target.freeTestKb || 0 })} {#if mode === 'auto'}{$t('proxy.paidAhead.auto')}{/if}</span>
             <span>{$t('proxy.paidAhead.where')}
               <span class="tip" title={$t('proxy.pay.srcDepositTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcDeposit')}</span>
@@ -559,6 +561,7 @@
             </p>
           </div>
         </div>
+        <TestnetNotice compact />
         {#if pay.needsPayment || pay.remainingGb <= 0}<p class="small leak-warn">{$t('proxy.pay.needLead')}</p>{/if}
         <div class="row wrap paywith">
           <span class="small muted">{$t('proxy.pay.source')}</span>
@@ -633,6 +636,7 @@
             <div class="stat"><span class="eyebrow">{$t('proxy.share.owed')}</span><span class="num">{amount(vouchers.owedTon, $lang)} TON</span></div>
             <div class="stat"><span class="eyebrow">{$t('proxy.share.collected')}</span><span class="num ok">{amount(vouchers.cashedTon, $lang)} TON</span></div>
           </div>
+          <TestnetNotice compact />
           {#if vouchers.claimProblem}
             <div class="small exit-warn" role="alert">
               <Icon name="coin" size={14} />

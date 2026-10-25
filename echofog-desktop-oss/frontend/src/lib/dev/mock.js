@@ -600,7 +600,8 @@ const impl = {
     return null;
   },
   RequestRelayChange: () => null,
-  GetTonWallet: () => ({ address: 'UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', rawAddress: '0:0000…', network: 'mainnet', topUpLink: 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', frozen: false }),
+  // ?testnet: the wallet is on the TON testnet, to see the test-coins notice on the money screens
+  GetTonWallet: () => ({ address: 'UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', rawAddress: '0:0000…', network: new URLSearchParams(location.search).has('testnet') ? 'testnet' : 'mainnet', topUpLink: 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', frozen: false }),
   GetTonBalance: () => ({ nano: '2483100000', ton: '2.4831', deployed: true, usdRate: 5.42, usdtAvailable: true, usdt: '25.5' }),
   GetTonHistory: () => [
     { hash: 'a1', time: sec(now - 40 * min), incoming: false, ton: '0.05', counterparty: 'UQCx1nodeOperatorAddressExample000000000000000', comment: 'echofog: 4.8 GB via node 7f3a', feeTon: '0.004', failed: false },
