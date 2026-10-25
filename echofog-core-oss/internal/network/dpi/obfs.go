@@ -26,6 +26,11 @@ const (
 	KeyLen = blake2b.Size256
 
 	maxPeerKeys = 16384
+
+	// heardFor is how long the key a packet from an address opened with is used to answer it.
+	// A live QUIC connection sends far more often; after that, a dial to the address uses the key
+	// of the node it is meant for again.
+	heardFor = 30 * time.Second
 )
 
 var (
@@ -50,13 +55,25 @@ func NodeKey(secret string, id [32]byte) []byte {
 // [salt][payload XOR keystream(key, salt)][tag]. A node seals what it sends to a peer with the
 // peer's key (known from the peer ID it dialed) and what it sends to anybody else with its own
 // key; it opens what it receives with the key of the sender's address if it has one, and with
-// its own key otherwise.
+// its own key otherwise. Once a packet from an address has opened, what goes back to that
+// address is sealed with the same key: the answer goes to whoever really speaks from there.
 type NodeObfs struct {
 	own [KeyLen]byte
 
 	mu    sync.RWMutex
 	peers map[netip.AddrPort][KeyLen]byte
 	byIP  map[netip.Addr][][KeyLen]byte
+	// heard is the key the last packet from an address opened with. The expected key of an
+	// address can belong to another node: two computers behind one NAT, where the router gave
+	// the first the outside port the second announces, so this node expects the second there
+	// while the first dials in from it. Answering the first with the second's key made its
+	// handshake fail for ever, while the second, from another port, connected fine.
+	heard map[netip.AddrPort]heardKey
+}
+
+type heardKey struct {
+	key [KeyLen]byte
+	at  time.Time
 }
 
 // NewNodeObfs creates the obfuscator of a node with the given own key (see NodeKey).
@@ -64,7 +81,8 @@ func NewNodeObfs(ownKey []byte) (*NodeObfs, error) {
 	if len(ownKey) != KeyLen {
 		return nil, ErrBadKeyLen
 	}
-	o := &NodeObfs{peers: make(map[netip.AddrPort][KeyLen]byte), byIP: make(map[netip.Addr][][KeyLen]byte)}
+	o := &NodeObfs{peers: make(map[netip.AddrPort][KeyLen]byte), byIP: make(map[netip.Addr][][KeyLen]byte),
+		heard: make(map[netip.AddrPort]heardKey)}
 	copy(o.own[:], ownKey)
 	return o, nil
 }
@@ -111,13 +129,41 @@ func (o *NodeObfs) Expect(addr netip.AddrPort, key []byte) error {
 func (o *NodeObfs) sendKey(addr net.Addr) [KeyLen]byte {
 	if ap, ok := addrPortOf(addr); ok {
 		o.mu.RLock()
+		h, heard := o.heard[ap]
 		k, found := o.peers[ap]
 		o.mu.RUnlock()
+		// whoever really speaks from the address is answered, as long as it still speaks: a dial
+		// to the node expected there (that may be another node behind the same NAT) must not cut
+		// the connection that lives on the address
+		if heard && time.Since(h.at) < heardFor {
+			return h.key
+		}
 		if found {
 			return k
 		}
 	}
 	return o.own
+}
+
+// noteHeard records that a packet from addr opened with key, so the answer is sealed with it.
+func (o *NodeObfs) noteHeard(addr net.Addr, key *[KeyLen]byte) {
+	ap, ok := addrPortOf(addr)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	o.mu.RLock()
+	have, found := o.heard[ap]
+	o.mu.RUnlock()
+	if found && have.key == *key && now.Sub(have.at) < time.Second {
+		return // the common case: nothing changes, no write lock per packet
+	}
+	o.mu.Lock()
+	if len(o.heard) >= maxPeerKeys {
+		o.heard = make(map[netip.AddrPort]heardKey)
+	}
+	o.heard[ap] = heardKey{key: *key, at: now}
+	o.mu.Unlock()
 }
 
 // candidates are the keys a packet from addr may have been sealed with, most likely first: the
@@ -253,6 +299,7 @@ func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		c.cands = c.obfs.candidates(addr, c.cands)
 		for i := range c.cands {
 			if n, ok := open(&c.cands[i], c.readBuf[:raw], p); ok {
+				c.obfs.noteHeard(addr, &c.cands[i])
 				return n, addr, nil
 			}
 		}

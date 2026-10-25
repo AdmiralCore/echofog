@@ -267,3 +267,49 @@ func TestExpectIsBounded(t *testing.T) {
 		t.Fatal("a key of the wrong size was accepted")
 	}
 }
+
+// Two computers behind one NAT: B expects node C at the address A really dials in from (the
+// router gave A the outside port C announces). A dials B; B must answer A with a key A can open,
+// not with C's. Before the fix A's handshake failed for ever while C connected fine.
+func TestAnswerGoesToWhoeverSpeaksFromTheAddress(t *testing.T) {
+	p := newPair(t)
+	_, keyC := newObfs(t, 3)
+	aAddr := p.ra.LocalAddr().(*net.UDPAddr).AddrPort()
+	_ = p.ob.Expect(aAddr, keyC) // B believes C lives at A's address
+	_ = p.oa.Expect(p.rb.LocalAddr().(*net.UDPAddr).AddrPort(), p.keyB)
+
+	if _, err := p.a.WriteTo([]byte("hello from A"), p.rb.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	got, from, err := readOne(t, p.b, 2*time.Second)
+	if err != nil || string(got) != "hello from A" {
+		t.Fatalf("B got %q err=%v", got, err)
+	}
+	if _, err := p.b.WriteTo([]byte("answer"), from); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := readOne(t, p.a, 2*time.Second); err != nil || string(got) != "answer" {
+		t.Fatalf("A could not read B's answer (%q, %v): it was sealed for C", got, err)
+	}
+
+	// a dial by B to the node it expects there must not cut A off while A still speaks
+	_ = p.ob.Expect(aAddr, keyC)
+	if _, err := p.b.WriteTo([]byte("still you"), from); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := readOne(t, p.a, 2*time.Second); err != nil || string(got) != "still you" {
+		t.Fatalf("A was cut off by B's dial to C (%q, %v)", got, err)
+	}
+
+	// once A has been silent for a while, the address gets the key of the node B expects there
+	p.ob.mu.Lock()
+	h := p.ob.heard[aAddr]
+	h.at = time.Now().Add(-2 * heardFor)
+	p.ob.heard[aAddr] = h
+	p.ob.mu.Unlock()
+	var want [KeyLen]byte
+	copy(want[:], keyC)
+	if k := p.ob.sendKey(p.ra.LocalAddr()); k != want {
+		t.Fatal("after A went silent a dial must use the key of the node it is meant for")
+	}
+}
