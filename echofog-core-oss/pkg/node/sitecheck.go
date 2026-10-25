@@ -31,8 +31,21 @@ const (
 type Reach struct {
 	OK     bool   `json:"ok"`
 	Ms     int    `json:"ms"`
-	Reason string `json:"reason,omitempty"` // why it did not open, in words
+	Code   string `json:"code,omitempty"`   // why it did not open, one of the Reach* codes, for the UI to word
+	Reason string `json:"reason,omitempty"` // the same in English, with the error itself when no code fits
 }
+
+// Why a site did not open (Reach.Code).
+const (
+	ReachPayment = "payment" // the exit asks for payment
+	ReachDNS     = "dns"     // the name did not resolve: a DNS block, or no such site
+	ReachCert    = "cert"    // a certificate that does not verify: the connection is intercepted
+	ReachTimeout = "timeout" // no answer
+	ReachReset   = "reset"   // the connection was cut, as DPI blocking does
+	ReachRefused = "refused" // nothing listens there
+	ReachExit    = "exit"    // the exit could not reach the site
+	ReachOther   = "other"
+)
 
 // SiteCheck is the result for one site: directly and, when an exit was given, through it.
 type SiteCheck struct {
@@ -116,7 +129,7 @@ func (n *Node) reachDirect(ctx context.Context, target string) Reach {
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: siteCheckRoots}}
 	conn, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
-		return Reach{Reason: reason(err)}
+		return failed(err)
 	}
 	_ = conn.Close()
 	return Reach{OK: true, Ms: int(time.Since(start).Milliseconds())}
@@ -129,7 +142,7 @@ func (n *Node) reachThrough(ctx context.Context, exit types.PeerID, target strin
 	start := time.Now()
 	stream, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.Swarm, exit)).DialExitStreamConfirmed(ctx, target)
 	if err != nil {
-		return Reach{Reason: reason(err)}
+		return failed(err)
 	}
 	conn := &streamConn{rwc: stream}
 	defer conn.Close()
@@ -137,45 +150,64 @@ func (n *Node) reachThrough(ctx context.Context, exit types.PeerID, target strin
 	defer stop()
 	tc := tls.Client(conn, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: siteCheckRoots})
 	if err := tc.HandshakeContext(ctx); err != nil {
-		return Reach{Reason: reason(err)}
+		return failed(err)
 	}
 	return Reach{OK: true, Ms: int(time.Since(start).Milliseconds())}
 }
 
-// reason puts a failed check in words a user understands.
-func reason(err error) string {
+func failed(err error) Reach {
+	code := reachCode(err)
+	r := Reach{Code: code, Reason: reachWords[code]}
+	if code == ReachOther {
+		r.Reason = err.Error()
+	}
+	return r
+}
+
+var reachWords = map[string]string{
+	ReachPayment: "the exit asks for payment",
+	ReachDNS:     "name not found",
+	ReachCert:    "wrong certificate (intercepted)",
+	ReachTimeout: "no answer",
+	ReachReset:   "connection reset (blocked)",
+	ReachRefused: "refused",
+	ReachExit:    "the exit could not reach it",
+}
+
+// reachCode says why a check failed.
+func reachCode(err error) string {
 	var dnsErr *net.DNSError
 	var certErr *tls.CertificateVerificationError
 	var unknownAuth x509.UnknownAuthorityError
 	var hostErr x509.HostnameError
 	switch {
 	case errors.Is(err, exit_gateway.ErrPaymentRequired):
-		return "the exit asks for payment"
+		return ReachPayment
 	case errors.As(err, &dnsErr):
-		return "name not found"
+		return ReachDNS
 	case errors.As(err, &certErr), errors.As(err, &unknownAuth), errors.As(err, &hostErr):
-		return "wrong certificate (intercepted)"
+		return ReachCert
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
-		return "no answer"
+		return ReachTimeout
 	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed):
-		return "connection reset (blocked)"
+		return ReachReset
 	case errors.Is(err, syscall.ECONNREFUSED):
-		return "refused"
+		return ReachRefused
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "actively refused") || strings.Contains(msg, "connection refused") {
-		return "refused"
+	switch {
+	case strings.Contains(msg, "actively refused") || strings.Contains(msg, "connection refused"):
+		return ReachRefused
+	case strings.Contains(msg, "could not reach the target"):
+		return ReachExit
+	case strings.Contains(msg, "forcibly closed") || strings.Contains(msg, "reset by peer"):
+		return ReachReset
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
+		return ReachTimeout
+	case strings.Contains(msg, "no such host"):
+		return ReachDNS
 	}
-	if strings.Contains(msg, "could not reach the target") {
-		return "the exit could not reach it"
-	}
-	if strings.Contains(msg, "forcibly closed") || strings.Contains(msg, "reset by peer") {
-		return "connection reset (blocked)"
-	}
-	if strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline") {
-		return "no answer"
-	}
-	return msg
+	return ReachOther
 }
 
 // streamConn lets TLS run over a tunnel stream. Deadlines are carried by the context: when it

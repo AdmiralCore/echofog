@@ -31,6 +31,9 @@ export function siteTarget(input) {
 
 export const hostOf = (target) => target.replace(/:443$/, '');
 
+/** Several sites typed or pasted at once: split on spaces, commas, semicolons and new lines. */
+export const splitSites = (input) => String(input || '').split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+
 const CUSTOM = 'echofog.sites.custom';
 
 /** Sites the user added: [{ host, name }] */

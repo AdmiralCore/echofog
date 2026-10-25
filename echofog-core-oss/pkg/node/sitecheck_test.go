@@ -80,13 +80,16 @@ func TestCheckSitesDirectAndThroughAnExit(t *testing.T) {
 
 	assert.False(t, res[1].Direct.OK)
 	assert.Equal(t, "wrong certificate (intercepted)", res[1].Direct.Reason)
+	assert.Equal(t, node.ReachCert, res[1].Direct.Code)
 	assert.False(t, res[1].Exit.OK)
 	assert.Equal(t, "wrong certificate (intercepted)", res[1].Exit.Reason)
 
 	assert.False(t, res[2].Direct.OK)
 	assert.Equal(t, "refused", res[2].Direct.Reason)
+	assert.Equal(t, node.ReachRefused, res[2].Direct.Code)
 	assert.False(t, res[2].Exit.OK)
 	assert.Equal(t, "the exit could not reach it", res[2].Exit.Reason)
+	assert.Equal(t, node.ReachExit, res[2].Exit.Code)
 
 	// without an exit only the direct check runs
 	res, err = client.CheckSites(ctx, nil, []string{good})

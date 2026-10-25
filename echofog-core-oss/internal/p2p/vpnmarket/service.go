@@ -18,6 +18,8 @@ const (
 	autoProbesPerRun = 3
 	maxProbeDomains  = 16
 	domainsKey       = "vpnmarket:domains"
+	customSitesKey   = "vpnmarket:custom_sites"
+	maxCustomSites   = 64
 )
 
 // earlyRefresh are the waits before the first directory passes after start
@@ -71,6 +73,49 @@ func (s *Service) Domains() []string {
 		}
 	}
 	return append([]string(nil), DefaultProbeDomains...)
+}
+
+// DomainsSaved tells whether the user ever chose the sites to check, so the app does not replace
+// that choice with its starter set.
+func (s *Service) DomainsSaved() bool {
+	raw, err := s.store.Get([]byte(domainsKey))
+	return err == nil && len(raw) > 0
+}
+
+// SavedDomains is the user's own choice as stored, possibly empty; Domains puts the defaults in
+// for an empty one, since probing needs something to check.
+func (s *Service) SavedDomains() []string {
+	d := []string{}
+	if raw, err := s.store.Get([]byte(domainsKey)); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &d)
+	}
+	return d
+}
+
+// CustomSites returns the sites the user added to the check list (host:port), selected or not.
+func (s *Service) CustomSites() []string {
+	var d []string
+	if raw, err := s.store.Get([]byte(customSitesKey)); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &d)
+	}
+	return d
+}
+
+// SetCustomSites stores the sites the user added to the check list.
+func (s *Service) SetCustomSites(sites []string) error {
+	if len(sites) > maxCustomSites {
+		return errors.New("at most 64 sites can be added")
+	}
+	for _, d := range sites {
+		if len(d) == 0 || len(d) > 253 {
+			return errors.New("invalid site")
+		}
+	}
+	raw, err := json.Marshal(sites)
+	if err != nil {
+		return err
+	}
+	return s.store.Set([]byte(customSitesKey), raw)
 }
 
 // SetDomains stores the list of host:port targets used to check availability through exits

@@ -1,31 +1,38 @@
 <script>
   /**
    * Which sites open directly and which through the proxy. Selected tiles are checked, and they are
-   * also the sites the app uses to rank exits for the automatic choice.
+   * also the sites the app uses to rank exits for the automatic choice. Both lists — the selected
+   * sites and the ones the user added — are kept by the node, so they survive restarts.
    */
-  import { onMount, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, tick, createEventDispatcher } from 'svelte';
   import { App, errText } from '../api.js';
   import Icon from './ui/Icon.svelte';
-  import { PRESET_SITES, MAX_SELECTED, siteTarget, hostOf, loadCustom, saveCustom } from '../sites.js';
+  import { PRESET_SITES, MAX_SELECTED, siteTarget, hostOf, loadCustom, saveCustom, splitSites } from '../sites.js';
   import { t } from '../i18n/index.js';
 
   export let exit = 'auto'; // peer id, 'auto', or '' for the direct check only
   export let exitLabel = ''; // defaults to "the automatic exit"
 
   const dispatch = createEventDispatcher();
+  const presetTargets = new Set(PRESET_SITES.map((p) => siteTarget(p.host)));
 
-  let custom = loadCustom();
+  let custom = loadCustom().map((c) => siteTarget(c.host)).filter(Boolean); // added sites, host:port
   let selected = new Set();
   let results = {}; // target -> { direct, exit }
   let checking = false;
   let error = '';
   let adding = '';
   let addError = '';
+  let fresh = new Set(); // tiles just added, highlighted for a moment
   let saveTimer;
+  let gridEl;
 
   $: tiles = [
     ...PRESET_SITES.map((p) => ({ ...p, target: siteTarget(p.host), preset: true })),
-    ...custom.map((c) => ({ name: c.name || hostOf(siteTarget(c.host)), host: c.host, target: siteTarget(c.host), mark: (c.name || c.host).replace(/^www\./, '').slice(0, 2), color: colorFor(c.host), preset: false })),
+    ...custom.map((target) => {
+      const name = hostOf(target).replace(/^www\./, '');
+      return { name, host: hostOf(target), target, mark: name.slice(0, 2), color: colorFor(name), preset: false };
+    }),
   ].filter((t) => t.target);
   $: done = Object.keys(results).length;
   $: openDirect = tiles.filter((t) => results[t.target]?.direct?.ok).length;
@@ -37,40 +44,54 @@
     return `hsl(${h} 55% 55%)`;
   }
 
-  const TOUCHED = 'echofog.sites.touched';
-  const touched = () => { try { return !!localStorage.getItem(TOUCHED); } catch (_) { return false; } };
-  const markTouched = () => { try { localStorage.setItem(TOUCHED, '1'); } catch (_) { /* private mode */ } };
   // what a new user checks: the services most often blocked
   const starter = () => new Set(PRESET_SITES.filter((p) => ['YouTube', 'Discord', 'Instagram', 'X', 'WhatsApp', 'Telegram'].includes(p.name)).map((p) => siteTarget(p.host)));
 
   onMount(async () => {
-    if (!touched()) {
+    let lists = null;
+    try { lists = await App.GetSiteLists(); } catch (_) { /* an older core, or the preview */ }
+    if (!lists) return legacyLoad();
+    // sites added by older versions lived only in this window's storage: move them to the node
+    const merged = [...(lists.custom || []), ...custom].filter((d) => d && !presetTargets.has(d));
+    // a selected site that is not a tile yet becomes an added one
+    for (const d of lists.selected || []) if (!presetTargets.has(d)) merged.push(d);
+    const unique = [...new Set(merged)];
+    custom = unique;
+    if (unique.length !== (lists.custom || []).length) saveCustomSites();
+    if (lists.chosen) {
+      selected = new Set(lists.selected || []);
+    } else {
       selected = starter();
-      markTouched();
-      persistSelection();
-      return;
-    }
-    try {
-      const domains = (await App.GetProbeDomains()) || [];
-      const known = new Set(PRESET_SITES.map((p) => siteTarget(p.host)));
-      // sites the core checks that are not tiles yet become custom tiles
-      const extra = domains.filter((d) => !known.has(d) && !custom.some((c) => siteTarget(c.host) === d));
-      if (extra.length) {
-        custom = [...custom, ...extra.map((d) => ({ host: hostOf(d) }))];
-        saveCustom(custom);
-      }
-      selected = new Set(domains);
-      if (!selected.size) selected = starter();
-    } catch (_) {
-      selected = starter();
+      persistSelection(true);
     }
   });
 
-  function persistSelection() {
+  async function legacyLoad() {
+    try {
+      const domains = (await App.GetProbeDomains()) || [];
+      for (const d of domains) if (!presetTargets.has(d) && !custom.includes(d)) custom = [...custom, d];
+      selected = domains.length ? new Set(domains) : starter();
+    } catch (_) {
+      selected = starter();
+    }
+  }
+
+  // a selection change is saved shortly after the last click, and at once when the dialog closes
+  function persistSelection(now = false) {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
+    const save = async () => {
+      saveTimer = null;
       try { await App.SetProbeDomains([...selected]); } catch (err) { error = errText(err); }
-    }, 400);
+    };
+    if (now) save();
+    else saveTimer = setTimeout(save, 400);
+  }
+
+  onDestroy(() => { if (saveTimer) persistSelection(true); });
+
+  async function saveCustomSites() {
+    saveCustom(custom.map((host) => ({ host }))); // a copy in this window, for an older core
+    try { await App.SetCustomSites(custom); } catch (_) { /* an older core keeps them in this window only */ }
   }
 
   function toggle(tile) {
@@ -82,44 +103,82 @@
     persistSelection();
   }
 
-  function add() {
+  // Add one site or several at once ("vk.com ya.ru, gosuslugi.ru" or a pasted list): each is
+  // added, selected while there is room, and checked right away.
+  async function add() {
     addError = '';
-    const target = siteTarget(adding);
-    if (!target) { addError = $t('proxy.sites.typeSite'); return; }
-    if (tiles.some((t) => t.target === target)) { addError = $t('proxy.sites.already'); return; }
-    custom = [...custom, { host: hostOf(target) }];
-    saveCustom(custom);
+    const bad = [], added = [];
+    for (const s of splitSites(adding)) {
+      const target = siteTarget(s);
+      if (!target) bad.push(s);
+      else if (!tiles.some((t) => t.target === target) && !added.includes(target)) added.push(target);
+    }
+    if (!added.length) {
+      addError = bad.length ? $t('proxy.sites.typeSite') : $t('proxy.sites.already');
+      return;
+    }
+    custom = [...custom, ...added];
+    saveCustomSites();
+    let full = false;
+    for (const target of added) {
+      if (selected.size < MAX_SELECTED) selected.add(target);
+      else full = true;
+    }
+    selected = selected;
+    persistSelection();
     adding = '';
-    if (selected.size < MAX_SELECTED) { selected.add(target); selected = selected; persistSelection(); }
+    if (bad.length) addError = $t('proxy.sites.notSites', { list: bad.join(', ') });
+    else if (full) addError = $t('proxy.sites.addedNotSelected', { n: MAX_SELECTED });
+    fresh = new Set(added);
+    setTimeout(() => { fresh = new Set(); }, 1600);
+    await tick();
+    gridEl?.querySelector(`[data-target="${CSS.escape(added[added.length - 1])}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const toCheck = added.filter((d) => selected.has(d));
+    if (toCheck.length && !checking) runCheck(toCheck);
   }
 
   function remove(t) {
-    custom = custom.filter((c) => siteTarget(c.host) !== t.target);
-    saveCustom(custom);
+    custom = custom.filter((d) => d !== t.target);
+    saveCustomSites();
     if (selected.delete(t.target)) { selected = selected; persistSelection(); }
     delete results[t.target];
     results = results;
   }
 
-  async function check() {
+  function check() {
     if (!selected.size) { error = $t('proxy.sites.selectSome'); return; }
+    runCheck([...selected]);
+  }
+
+  async function runCheck(targets) {
     checking = true;
     error = '';
-    const targets = [...selected];
     for (const t of targets) results[t] = { pending: true };
     results = results;
     try {
       const list = (await App.CheckSites(exit, targets)) || [];
       for (const r of list) results[r.host] = r;
-      results = results;
     } catch (err) {
       error = errText(err, $t('proxy.sites.failed'));
+    } finally {
       for (const t of targets) if (results[t]?.pending) delete results[t];
       results = results;
-    } finally {
       checking = false;
     }
   }
+
+  // Why a site did not open, in the user's language; the raw reason stays in the tooltip.
+  const WHY = ['payment', 'cert', 'timeout', 'reset', 'refused', 'exit'];
+  function whyText(reach, path) {
+    if (!reach || reach.ok) return '';
+    const code = reach.code || '';
+    if (code === 'dns') return $t(path === 'direct' ? 'proxy.sites.why.dnsDirect' : 'proxy.sites.why.dnsExit');
+    if (WHY.includes(code)) return $t('proxy.sites.why.' + code);
+    if (code === 'other') return $t('proxy.sites.why.other');
+    return reach.reason || ''; // an older core sends no code
+  }
+  // the short badge: what blocking looks like, or just "did not open"
+  const looksBlocked = (reach) => ['dns', 'cert', 'timeout', 'reset'].includes(reach?.code || 'reset');
 
   const close = () => dispatch('close');
 
@@ -146,10 +205,10 @@
       <button class="icon" aria-label={$t('common.close')} on:click={close}><Icon name="close" size={18} /></button>
     </header>
 
-    <div class="grid">
+    <div class="grid" bind:this={gridEl}>
       {#each tiles as tile (tile.target)}
         {@const r = results[tile.target]}
-        <div class="tile" class:sel={selected.has(tile.target)}>
+        <div class="tile" class:sel={selected.has(tile.target)} class:fresh={fresh.has(tile.target)} data-target={tile.target}>
           <button class="pick" aria-pressed={selected.has(tile.target)} title={selected.has(tile.target) ? $t('proxy.sites.selectedTitle') : $t('proxy.sites.select')} on:click={() => toggle(tile)} data-silent>
             <span class="mark" style="--c:{tile.color}">{tile.mark}</span>
             <span class="name">{tile.name}</span>
@@ -161,7 +220,7 @@
           <div class="lines">
             <div class="line">
               <span class="faint">{$t('proxy.sites.direct')}</span>
-              {#if r?.pending}<span class="spin" />{:else if r?.direct}<span class="st" class:good={r.direct.ok} class:bad={!r.direct.ok} title={r.direct.reason || ''}>{r.direct.ok ? $t('proxy.pingMs', { n: r.direct.ms }) : $t('proxy.sites.blocked')}</span>{:else}<span class="faint">—</span>{/if}
+              {#if r?.pending}<span class="spin" />{:else if r?.direct}<span class="st" class:good={r.direct.ok} class:bad={!r.direct.ok} title={r.direct.reason || ''}>{r.direct.ok ? $t('proxy.pingMs', { n: r.direct.ms }) : looksBlocked(r.direct) ? $t('proxy.sites.blocked') : $t('proxy.sites.fails')}</span>{:else}<span class="faint">—</span>{/if}
             </div>
             {#if exit !== ''}
               <div class="line">
@@ -170,7 +229,9 @@
               </div>
             {/if}
             {#if r && !r.pending && (!r.direct?.ok || (r.exit && !r.exit.ok))}
-              <p class="why">{(!r.direct?.ok && r.direct?.reason) || ''}{r.exit && !r.exit.ok ? `${!r.direct?.ok ? '; ' : ''}${$t('proxy.sites.proxyReason', { reason: r.exit.reason })}` : ''}</p>
+              {@const dw = whyText(r.direct, 'direct')}
+              {@const ew = r.exit ? whyText(r.exit, 'exit') : ''}
+              <p class="why" title={[r.direct?.reason, r.exit?.reason].filter(Boolean).join(' · ')}>{dw}{dw && ew ? '; ' : ''}{ew ? $t('proxy.sites.proxyReason', { reason: ew }) : ''}</p>
             {/if}
           </div>
         </div>
@@ -178,7 +239,7 @@
     </div>
 
     <form class="add row" on:submit|preventDefault={add}>
-      <input class="grow" placeholder={$t('proxy.sites.addPlaceholder')} bind:value={adding} spellcheck="false" />
+      <input class="grow" placeholder={$t('proxy.sites.addPlaceholder')} bind:value={adding} on:input={() => (addError = '')} spellcheck="false" autocomplete="off" />
       <button type="submit" disabled={!adding.trim()}><Icon name="plus" size={16} /> {$t('common.add')}</button>
     </form>
     {#if addError}<p class="small error">{addError}</p>{/if}
@@ -213,6 +274,8 @@
   }
   .tile:hover { transform: translateY(-2px); }
   .tile.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .tile.fresh { animation: fresh 1.6s ease-out; }
+  @keyframes fresh { 0%, 30% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
   .pick { display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: none; text-align: left; width: 100%; }
   .pick:hover:not(:disabled) { background: none; border: none; }
   .mark {
@@ -232,7 +295,8 @@
     position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; border-radius: 50%;
     display: grid; place-items: center; background: var(--elevated); border: 1px solid var(--line); color: var(--muted); opacity: 0; transition: opacity 0.15s;
   }
-  .tile:hover .remove { opacity: 1; }
+  .tile:hover .remove, .remove:focus-visible { opacity: 1; }
+  @media (hover: none) { .remove { opacity: 1; } }
   .lines { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
   .line { display: flex; justify-content: space-between; align-items: center; }
   .st { font-weight: 600; padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; }

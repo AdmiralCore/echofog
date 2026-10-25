@@ -61,6 +61,25 @@ func (a *App) GetProbeDomains() []string {
 	return nodeAPI.GetProbeDomains()
 }
 
+// GetSiteLists returns the sites of the Check sites dialog: selected, added by the user, and
+// whether the user ever chose.
+func (a *App) GetSiteLists() (api.SiteLists, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.SiteLists{}, errNodeNotStarted
+	}
+	return nodeAPI.GetSiteLists()
+}
+
+// SetCustomSites saves the sites the user added to the Check sites dialog.
+func (a *App) SetCustomSites(sites []string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SetCustomSites(sites)
+}
+
 func (a *App) SetProbeDomains(domains []string) error {
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {

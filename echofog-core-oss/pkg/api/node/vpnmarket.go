@@ -263,6 +263,39 @@ func (n *NodeApi) GetProbeDomains() []string {
 	return m.Domains()
 }
 
+// SiteLists is what the Check sites dialog keeps: the sites it checks and ranks exits by, the
+// sites the user added, and whether the user ever chose (else the dialog offers a starter set).
+type SiteLists struct {
+	Selected []string `json:"selected"`
+	Custom   []string `json:"custom"`
+	Chosen   bool     `json:"chosen"`
+}
+
+// GetSiteLists returns the Check sites lists, kept by the node so they survive restarts.
+func (n *NodeApi) GetSiteLists() (SiteLists, error) {
+	m, err := n.market()
+	if err != nil {
+		return SiteLists{}, err
+	}
+	l := SiteLists{Selected: m.Domains(), Custom: m.CustomSites(), Chosen: m.DomainsSaved()}
+	if l.Chosen {
+		l.Selected = m.SavedDomains()
+	}
+	if l.Custom == nil {
+		l.Custom = []string{}
+	}
+	return l, nil
+}
+
+// SetCustomSites saves the sites the user added to the Check sites dialog.
+func (n *NodeApi) SetCustomSites(sites []string) error {
+	m, err := n.market()
+	if err != nil {
+		return err
+	}
+	return m.SetCustomSites(sites)
+}
+
 func (n *NodeApi) SetProbeDomains(domains []string) error {
 	m, err := n.market()
 	if err != nil {

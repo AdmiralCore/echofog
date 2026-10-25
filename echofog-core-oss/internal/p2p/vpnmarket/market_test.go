@@ -401,3 +401,21 @@ func TestPublisherCurrentAdvert(t *testing.T) {
 	require.NoError(t, p.Stop())
 	assert.Nil(t, p.Current(), "withdrawn")
 }
+
+// The Check sites lists live in the node's store: added sites, and whether the user ever chose.
+func TestCustomSitesAndChosenFlag(t *testing.T) {
+	svc, _ := newService(t, fakeTunnel{}, nil, okConnector{})
+	assert.False(t, svc.DomainsSaved(), "nothing chosen yet: the app may offer its starter set")
+	assert.Empty(t, svc.CustomSites())
+
+	require.NoError(t, svc.SetCustomSites([]string{"vk.com:443", "ya.ru:443"}))
+	assert.Equal(t, []string{"vk.com:443", "ya.ru:443"}, svc.CustomSites())
+	require.NoError(t, svc.SetDomains([]string{"vk.com:443"}))
+	assert.True(t, svc.DomainsSaved())
+	require.NoError(t, svc.SetDomains([]string{}))
+	assert.True(t, svc.DomainsSaved(), "an empty choice is still a choice")
+	assert.Empty(t, svc.SavedDomains())
+	assert.Equal(t, DefaultProbeDomains, svc.Domains(), "probing still has sites to check")
+
+	assert.Error(t, svc.SetCustomSites(make([]string, maxCustomSites+1)))
+}
