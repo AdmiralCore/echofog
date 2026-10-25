@@ -20,8 +20,12 @@ const (
 	DefaultServerMaxInboundPeers = 2048
 
 	// maxPendingStreamsPerPeer: streams a peer opened whose first frame has not come yet. A peer
-	// that opens streams and sends nothing would otherwise hold a goroutine per stream.
-	maxPendingStreamsPerPeer = 64
+	// that opens streams and sends nothing would otherwise hold a goroutine per stream (for at
+	// most the 5 s first-frame deadline; QUIC caps a peer's open streams at MaxBidiStreamsPerPeer
+	// anyway). It was 64: a VPN client carries every tab of a browser over one link to its exit,
+	// and a page that opened a hundred connections had some closed without a word and its user
+	// scored as a flood, which a few busy minutes turned into a ban from the exit.
+	maxPendingStreamsPerPeer = 512
 	// maxStreamHandlers bounds the goroutines serving streams of all peers together.
 	maxStreamHandlers = 16384
 
