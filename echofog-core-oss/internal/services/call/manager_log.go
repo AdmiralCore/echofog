@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -26,6 +27,29 @@ func (m *CallManager) inbound(kind string, h func([]byte, types.PeerID) error) f
 		}
 		return nil
 	}
+}
+
+// HandleRelayedFrame takes a call frame that came over a relay circuit instead of a direct link:
+// from somebody behind a symmetric NAT, which no hole punch gets through. from is what the circuit
+// claims; signals carry their own signature and media its room encryption, so a relay can neither
+// forge nor read them.
+func (m *CallManager) HandleRelayedFrame(t net_types.MessageType, payload []byte, from types.PeerID) {
+	switch t {
+	case net_types.TypeCallSignaling:
+		_ = m.inbound("signal", m.handleIncomingSignaling)(payload, from)
+	case net_types.TypeCallMediaAudio:
+		_ = m.inbound("audio", m.handleIncomingAudio)(payload, from)
+	case net_types.TypeCallMediaVideo:
+		_ = m.inbound("video", m.handleIncomingVideo)(payload, from)
+	}
+}
+
+// SetFrameSender replaces how call frames reach peers (the node adds relay circuits for peers it
+// has no direct link to). It must be set before a call starts.
+func (m *CallManager) SetFrameSender(s media.FrameSender) {
+	m.mu.Lock()
+	m.sender = s
+	m.mu.Unlock()
 }
 
 // warnOnce logs a rate-limited warning; key should name the event and whatever it is about.

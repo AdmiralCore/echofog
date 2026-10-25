@@ -654,6 +654,31 @@ func (rc *RelayClient) SendCircuitData(circuitID uint32, msgType net_types.Messa
 	return relayPeer.SendRaw(net_types.TypeCircuitData, frame)
 }
 
+// CircuitTo is the open circuit to targetID, if there is one.
+func (rc *RelayClient) CircuitTo(targetID types.PeerID) (uint32, bool) {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	cid, ok := rc.peerToCircuit[targetID]
+	return cid, ok
+}
+
+// OpenCircuitTo opens a circuit to targetID through the best relay that grants one.
+func (rc *RelayClient) OpenCircuitTo(ctx context.Context, targetID types.PeerID) (uint32, error) {
+	if cid, ok := rc.CircuitTo(targetID); ok {
+		return cid, nil
+	}
+	for _, relayPeer := range rc.GetRankedViableRelays(targetID) {
+		openCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		cid, err := rc.OpenCircuit(openCtx, relayPeer.ID(), targetID)
+		cancel()
+		if err == nil {
+			rc.logger.Info("RelayClient: opened a circuit", "target", targetID.String()[:8], "relay", relayPeer.ID().String()[:8])
+			return cid, nil
+		}
+	}
+	return 0, ErrNoRelaysAvailable
+}
+
 // SendUniversal automatically delivers ANY payload (files, DHT, messages) to targetID:
 // 1. Direct P2P if connected.
 // 2. Over existing Virtual Circuit if established.

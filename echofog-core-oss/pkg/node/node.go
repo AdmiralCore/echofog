@@ -626,7 +626,26 @@ func (n *Node) Start() (err error) {
 
 	if !server {
 		n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
-		n.CallManager.SetPeerConnector(n.EnsureConnected)
+		n.CallManager.SetPeerConnector(func(ctx context.Context, peer types.PeerID) error {
+			err := n.EnsureConnected(ctx, peer)
+			if err != nil && n.RelayClient != nil {
+				// no direct link (a symmetric NAT): a relay circuit, open before the first frame
+				// needs it, so the call's watchdogs do not take the wait for a dead peer
+				_, err = n.RelayClient.OpenCircuitTo(ctx, peer)
+			}
+			return err
+		})
+		if n.RelayClient != nil {
+			// peers no hole punch reaches (a symmetric NAT) take part through relay circuits
+			n.CallManager.SetFrameSender(newCallLink(n))
+			cm := n.CallManager
+			n.RelayClient.AddDataListener(func(_ uint32, t net_types.MessageType, payload []byte, remote types.PeerID) {
+				switch t {
+				case net_types.TypeCallSignaling, net_types.TypeCallMediaAudio, net_types.TypeCallMediaVideo:
+					cm.HandleRelayedFrame(t, payload, remote)
+				}
+			})
+		}
 		_ = n.Services.Register(n.CallManager)
 		// a message to somebody we are not connected to opens the connection (DHT, hole punch, relay)
 		n.Messenger.SetConnector(func(peer types.PeerID) {
