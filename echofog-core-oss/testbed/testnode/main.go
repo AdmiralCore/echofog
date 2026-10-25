@@ -44,6 +44,8 @@ func main() {
 		transport = flag.String("transport", "", "auto, quic or tcp")
 		signaling = flag.Bool("signaling", os.Getenv("SIGNALING") != "", "signaling only: DHT and hole punching help, no relayed traffic")
 		server    = flag.Bool("server", os.Getenv("SERVER") != "", "server role, as on a VPS: relay, DHT and exit, no chat")
+		coverSNI  = flag.String("cover-sni", os.Getenv("TLS_SERVER_NAME"), "SNI the TCP fallback mimics (with -cover-addr: TCP listener on the P2P port)")
+		coverAddr = flag.String("cover-addr", os.Getenv("CAMOUFLAGE_ADDR"), "the real site probes of the TCP fallback are sent to")
 		exit      = flag.Bool("exit", os.Getenv("EXIT") != "", "share the connection as a free exit")
 		web       = flag.String("web", "", "run only the lab's web server on this address, no node")
 		access    = flag.String("access", os.Getenv("ACCESS"), "public, hidden or isolated")
@@ -75,6 +77,10 @@ func main() {
 	if *server {
 		cfg.Role = config.RoleServer
 		cfg.Relay.Server.Enabled = true
+	}
+	if *coverSNI != "" && *coverAddr != "" {
+		cfg.AntiDPI.TLSServerName, cfg.AntiDPI.CamouflageAddr = *coverSNI, *coverAddr
+		cfg.Network.TCPListenAddr = *listen
 	}
 	if *access != "" {
 		cfg.Access.Mode = *access

@@ -29,7 +29,20 @@ go run ./testbed/runner -scenario chaos -chaos-for 10m -seed 42   # the same fai
 go run ./testbed/runner -scenario vpn            # ~8 minutes: people using an exit while it breaks
 go run ./testbed/runner -scenario load           # ~3 minutes: many downloads at once through one exit
 go run ./testbed/runner -scenario soak -soak-for 2h   # steady use for hours, graphing resources
+go run ./testbed/runner -scenario hidden         # an exit for friends, reached only by its link
+go run ./testbed/runner -scenario call           # a call across the three NATs, voice and video counted
+go run ./testbed/runner -scenario censor         # how EchoFog's traffic looks to DPI at the border
 ```
+
+**censor** records what leaves each router while people use the VPN over QUIC and over the TCP
+fallback, write to each other, and one of them visits the cover site as a browser (the control).
+`testbed/censor` reads each capture as a censor would: what protocol each flow shows, its SNI and
+whether the address hosts that site, its ClientHello fingerprint (GREASE or not), whether a QUIC
+packet is real QUIC (it decrypts the Initial with the keys of its own connection ID, as GFW and
+TSPU do), and whether the first data would be blocked by the Great Firewall's "fully encrypted"
+rule. With the `echofog-ndpi` image (build `testbed/ndpigen`) nDPI classifies the same captures.
+The run prints a visibility score, the share of EchoFog's bytes a GFW-like censor could single
+out, and writes the per-flow table to `censor-report.txt`; `-strict` fails while it is above 0.
 
 Every run keeps the logs of all containers in `testbed/out/<time>-<scenario>/`, with
 `summary.txt`: crashes, errors and race reports found in them, how often each container started,

@@ -80,7 +80,7 @@ services:
   x1:
     <<: *node
     container_name: efbed-x1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x1, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x1, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443" }
     networks: { wan: { ipv4_address: 203.0.113.15 } }
   x2:
     <<: *node
@@ -147,7 +147,7 @@ services:
   c1:
     <<: *node
     container_name: efbed-c1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c1, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c1, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", TRANSPORT: "${TRANSPORT_C1:-}" }
     networks: { lan_c: { ipv4_address: 10.20.3.11 } }
   c2:
     <<: *node

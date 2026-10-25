@@ -8,7 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /testnode ./testbed/testnode
 
 FROM alpine:3.21
-RUN apk add --no-cache iproute2 iproute2-tc iptables curl ca-certificates tzdata
+RUN apk add --no-cache iproute2 iproute2-tc iptables curl ca-certificates tzdata tcpdump
 COPY --from=build /testnode /usr/local/bin/testnode
 COPY testbed/entrypoint.sh /usr/local/bin/entrypoint.sh
 # a Windows checkout may have turned the line endings into CRLF, which makes the shebang fail

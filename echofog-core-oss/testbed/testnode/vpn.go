@@ -5,13 +5,20 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -352,10 +359,27 @@ func serveWeb(addr string) {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = w.Write(data)
 	})
-	log.Printf("web server on %s", addr)
+	// HTTPS on 443 as well: a node's TCP fallback mimics this site and sends probes to it, and a
+	// plain HTTPS visit to it is the control of the censor scenario
+	go func() {
+		srv := &http.Server{Addr: ":443", Handler: mux, TLSConfig: &tls.Config{Certificates: []tls.Certificate{selfSigned()}}}
+		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("https: %v", err)
+		}
+	}()
+	log.Printf("web server on %s and :443", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// selfSigned is the certificate of the lab's cover site.
+func selfSigned() tls.Certificate {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "cover.lab"},
+		DNSNames: []string{"cover.lab"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour)}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 var blobCache sync.Map // seed/size -> []byte

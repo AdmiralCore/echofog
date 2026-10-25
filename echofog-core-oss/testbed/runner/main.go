@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), vpn, load, soak (an exit and its users), hidden (an exit for friends) or call (voice and video)")
+	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), vpn, load, soak (an exit and its users), hidden (an exit for friends), call (voice and video) or censor (how the traffic looks to DPI)")
 	chaosFor = flag.Duration("chaos-for", 3*time.Minute, "how long failures are injected")
 	settle   = flag.Duration("settle", 3*time.Minute, "how long after the chaos messages may still arrive")
 	seed     = flag.Int64("seed", 0, "random seed of the chaos (0: time)")
@@ -177,7 +177,7 @@ func bringUp(extra ...string) map[string]*node {
 			rest = append(rest, n)
 		}
 	}
-	if out, err := compose([]string{"BOOTSTRAP=" + boot}, rest...); err != nil {
+	if out, err := compose(append([]string{"BOOTSTRAP=" + boot}, extraEnv...), rest...); err != nil {
 		fatalf("up: %v\n%s", err, out)
 	}
 	for _, name := range append(allNodeNames(), extra...) {
@@ -710,6 +710,9 @@ func main() {
 	switch *scenario {
 	case "vpn", "load", "soak":
 		extra = []string{"x1", "x2", "web"}
+	case "censor":
+		extra = []string{"x1", "x2", "web"}
+		extraEnv = []string{"TRANSPORT_C1=tcp"} // c1 shows the TCP fallback
 	case "hidden":
 		extra = []string{"x1", "h1", "web"}
 	}
@@ -734,6 +737,8 @@ func main() {
 		soakScenario(nodes, v, l, out)
 	case "hidden":
 		hiddenScenario(nodes, v, out)
+	case "censor":
+		censorScenario(nodes, v, out)
 	case "call":
 		callScenario(nodes, v, out)
 	case "smoke":
