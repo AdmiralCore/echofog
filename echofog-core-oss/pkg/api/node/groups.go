@@ -2,12 +2,14 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -649,24 +651,39 @@ func (n *NodeApi) GetGroupMessages(groupID string, limit int) ([]GroupMessageDTO
 	return f.Messages(groupID, limit)
 }
 
-func (n *NodeApi) InviteToCall(pubKeyHex string) (callID string, coordinator string, err error) {
+// CallInvite is what InviteToCall sent: the call to join, and the invitation message with its
+// state, so the caller can tell whether the other side has been reached at all (see
+// MessageDTO.State; OnMessageState reports when it changes).
+type CallInvite struct {
+	CallID      string `json:"callId"`
+	Coordinator string `json:"coordinator"`
+	MessageID   string `json:"messageId"`
+	State       string `json:"state"`
+}
+
+func (n *NodeApi) InviteToCall(pubKeyHex string) (CallInvite, error) {
 	pub, derr := hex.DecodeString(strings.TrimSpace(pubKeyHex))
 	if derr != nil || len(pub) != 32 {
-		return "", "", errors.New("peer key must be 32 bytes of hex")
+		return CallInvite{}, errors.New("peer key must be 32 bytes of hex")
 	}
 	if n.node == nil || n.node.Messenger == nil {
-		return "", "", errors.New("node not started")
+		return CallInvite{}, errors.New("node not started")
 	}
 	self := n.GetMyID()
 	if self == "" {
-		return "", "", errors.New("identity not available")
+		return CallInvite{}, errors.New("identity not available")
 	}
-	callID = call.NewInviteSecret()
+	hash := sha256.Sum256(pub)
+	var target types.PeerID
+	copy(target[:], hash[:])
+	callID := call.NewInviteSecret()
 	text := fmt.Sprintf("%s%s/%s", CallInvitePrefix, callID, self)
-	if err := n.SendMessage(pubKeyHex, text); err != nil {
-		return "", "", err
+	msgID, state, err := n.node.Messenger.SendChatMessageState(target, text)
+	if err != nil {
+		return CallInvite{}, err
 	}
-	return callID, self, nil
+	slog.Info("call invitation sent", "peer", target.String()[:8], "state", state)
+	return CallInvite{CallID: callID, Coordinator: self, MessageID: msgID, State: state}, nil
 }
 
 const CallInvitePrefix = "fogcall://"

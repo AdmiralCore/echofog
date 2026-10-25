@@ -164,11 +164,11 @@ func (a *App) InviteToCall(pubKeyHex string) (map[string]string, error) {
 	if n == nil {
 		return nil, errNodeNotStarted
 	}
-	callID, coordinator, err := n.InviteToCall(pubKeyHex)
+	inv, err := n.InviteToCall(pubKeyHex)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{"callId": callID, "coordinator": coordinator}, nil
+	return map[string]string{"callId": inv.CallID, "coordinator": inv.Coordinator, "messageId": inv.MessageID, "state": inv.State}, nil
 }
 
 func (a *App) GetSettings() (api.SettingsDTO, error) {

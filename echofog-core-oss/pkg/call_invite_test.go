@@ -36,9 +36,12 @@ func TestCallInviteReachesTheCalleeAndBothJoin(t *testing.T) {
 	require.NoError(t, alice.ConnectToPeer(network.JoinPeerAddr(bobN.Transport.Addr().String(), bobN.ID)))
 	require.Eventually(t, func() bool { return len(alice.GetPeers()) > 0 && len(bob.GetPeers()) > 0 }, 5*time.Second, 50*time.Millisecond)
 
-	callID, coordinator, err := alice.InviteToCall(bob.GetMyPubKey())
+	inv, err := alice.InviteToCall(bob.GetMyPubKey())
 	require.NoError(t, err)
+	callID, coordinator := inv.CallID, inv.Coordinator
 	assert.Equal(t, aliceN.ID.String(), coordinator)
+	assert.NotEmpty(t, inv.MessageID)
+	assert.Equal(t, "sent", inv.State, "connected directly: the invitation went out at once")
 
 	var gotCall, gotCoord string
 	require.Eventually(t, func() bool {

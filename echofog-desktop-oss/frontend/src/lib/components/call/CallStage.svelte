@@ -1,7 +1,7 @@
 <script>
     import { fade } from 'svelte/transition';
     import { callService, callState, videoStreams } from '../../services/call.service.js';
-    import { callDuration, formatDuration, stageExpanded } from '../../stores/call.store.js';
+    import { callDuration, formatDuration, stageExpanded, waitingKey } from '../../stores/call.store.js';
     import ParticipantTile from './ParticipantTile.svelte';
     import StreamTile from './StreamTile.svelte';
     import ParticipantMenu from './ParticipantMenu.svelte';
@@ -70,7 +70,7 @@
             <span class="w-2 h-2 rounded-full {s.inCall ? 'bg-[#23a55a]' : 'bg-[#f0b232] animate-pulse'}"></span>
             <span class="font-semibold truncate">{title || $t('call.call')}</span>
             <span class="text-sm text-[#949ba4] shrink-0">
-                {#if s.inCall}{formatDuration($callDuration)} · {$t('call.people', { n: members.length })}{:else}{$t('call.connecting')}{/if}
+                {#if s.inCall}{formatDuration($callDuration)} · {$t('call.people', { n: members.length })}{:else}{$t(waitingKey(s))}{/if}
             </span>
             <span class="hidden sm:flex items-center gap-1 text-xs text-[#949ba4] ml-2" title={$t('call.e2eTitle')}>
                 <Icon name="lock" size={13} /> {$t('call.e2e')}

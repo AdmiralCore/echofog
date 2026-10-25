@@ -135,7 +135,7 @@ func (s *Swarm) AddPotentialPeer(id types.PeerID, addr string) {
 		case <-s.ctx.Done():
 			return
 		default:
-			s.logger.Info("Swarm: Attempting automatic local connection", "addr", addr)
+			s.logger.Debug("Swarm: Attempting automatic local connection", "addr", addr)
 			ctx, cancel := context.WithTimeout(s.ctx, time.Second*5)
 			defer cancel()
 			s.expectPeer(addr, id)
@@ -157,7 +157,7 @@ func (s *Swarm) AddPotentialPeerWithCtx(ctx context.Context, id types.PeerID, ad
 		return nil
 	}
 
-	slog.Info("Swarm: Dialing peer...", "id", id, "addr", addr)
+	slog.Debug("Swarm: Dialing peer...", "id", id, "addr", addr)
 	s.expectPeer(addr, id)
 	err := s.dialEarly(ctx, addr)
 	if err != nil {

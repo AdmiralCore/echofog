@@ -277,6 +277,10 @@ func (a *App) startEventListeners(nodeAPI *api.NodeApi, ctx context.Context) {
 			a.emitIncomingCall(ctx, msg)
 		}
 	}()
+	// a message of ours was handed to a relay, confirmed by the recipient, or given up
+	nodeAPI.OnMessageState(func(ev api.MessageStateDTO) {
+		safeEventsEmit(ctx, "message:state", ev)
+	})
 
 	nodeAPI.OnFileTransfer(func(t dto.FileTransferDTO) {
 		safeEventsEmit(ctx, "file:transfer", t)

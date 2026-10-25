@@ -5,6 +5,7 @@
     import {
         isCallActive,
         peerInfo,
+        waitingKey,
         incomingCall,
         callError,
         callDuration,
@@ -142,7 +143,7 @@
         <div class="px-3 pt-3 flex items-center gap-2">
             <span class="w-2 h-2 rounded-full {s.inCall ? '' : 'animate-pulse'}" style="background:{s.inCall ? 'var(--ok)' : 'var(--warn)'}"></span>
             <div class="min-w-0 flex-1">
-                <p class="text-[13px] font-bold leading-tight" style="color:var(--ok)">{s.inCall ? $t('call.voiceConnected') : $t('call.connecting')}</p>
+                <p class="text-[13px] font-bold leading-tight" style="color:var(--ok)">{s.inCall ? $t('call.voiceConnected') : $t(waitingKey(s))}</p>
                 <p class="text-xs truncate" style="color:var(--muted)">{$peerInfo.alias || $t('call.call')}{#if s.inCall} · {formatDuration($callDuration)}{/if}</p>
             </div>
             <div class="flex -space-x-2">

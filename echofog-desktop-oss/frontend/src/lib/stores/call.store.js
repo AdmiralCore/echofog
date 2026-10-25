@@ -15,6 +15,12 @@ export const stageExpanded = writable(true);
 
 export const isCallActive = derived(callState, ($s) => $s.inCall || $s.connecting);
 
+/** The i18n key of what the caller is waiting for: the invitation's state until the call connects. */
+export function waitingKey(s) {
+    const st = s && s.invite && s.invite.state;
+    return st && !s.inCall ? 'call.invite.' + st : 'call.connecting';
+}
+
 export const callStatus = derived(callState, ($s) => {
     if ($s.inCall) return 'active';
     if ($s.connecting) return 'connecting';
@@ -90,6 +96,12 @@ export function initCallEvents() {
     eventsReady = true;
     callService.ensureEvents();
     try {
+        // the invitation we sent moved on: a relay took it, the other side confirmed it, or it expired
+        EventsOn('message:state', (ev) => {
+            const inv = get(callState).invite;
+            if (!ev || !inv || inv.id !== ev.id) return;
+            callState.update((s) => ({ ...s, invite: { ...inv, state: ev.state } }));
+        });
         EventsOn('call:incoming', async (ev) => {
             if (!ev || get(callState).inCall || get(callState).connecting) return;
             let alias = '';
@@ -172,6 +184,7 @@ export async function startCall(peer, withVideo = false) {
             const invite = await InviteToCall(peer.pubKey);
             callId = invite.callId;
             coordinator = invite.coordinator;
+            callState.update((s) => ({ ...s, invite: { id: invite.messageId || '', state: invite.state || '' } }));
         }
         if (!callId) throw new Error(tr('call.err.nothing'));
         await callService.joinCall(callId, coordinator);

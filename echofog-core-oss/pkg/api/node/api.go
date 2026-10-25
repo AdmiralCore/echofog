@@ -172,6 +172,24 @@ func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
 // errNoChat: a server-role node runs no messenger or contacts.
 var errNoChat = errors.New("chat is off on a server-role node")
 
+// MessageStateDTO: a message of ours was handed on ("sent"), confirmed by the recipient
+// ("delivered") or given up ("expired").
+type MessageStateDTO struct {
+	PeerID string `json:"peer_id"`
+	ID     string `json:"id"`
+	State  string `json:"state"`
+}
+
+// OnMessageState calls cb whenever the state of a message of ours changes.
+func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
+	if n.node == nil || n.node.Messenger == nil {
+		return
+	}
+	n.node.Messenger.OnMessageState(func(ev messenger.MessageState) {
+		cb(MessageStateDTO{PeerID: ev.Target.String(), ID: ev.ID, State: ev.State})
+	})
+}
+
 func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 	readCh := make(chan *dto.MessageDTO, 100)
 	if n.node.Messenger == nil {
@@ -239,9 +257,12 @@ func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint6
 	if raw, derr := hex.DecodeString(contactID); derr == nil && len(raw) == len(types.PeerID{}) {
 		var peer types.PeerID
 		copy(peer[:], raw)
-		if pending := n.node.Messenger.PendingIDs(peer); len(pending) > 0 {
+		if pending := n.node.Messenger.PendingStates(peer); len(pending) > 0 {
 			for i := range msgs {
-				msgs[i].Pending = msgs[i].IsMine && pending[msgs[i].ID]
+				if msgs[i].IsMine {
+					msgs[i].State = pending[msgs[i].ID]
+					msgs[i].Pending = msgs[i].State != ""
+				}
 			}
 		}
 	}

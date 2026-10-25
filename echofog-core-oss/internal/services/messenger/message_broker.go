@@ -48,7 +48,9 @@ type MessageBroker struct {
 	connMu          sync.Mutex
 	lastConnect     map[types.PeerID]time.Time
 	lastReset       map[types.PeerID]time.Time
-	recent          *recentMessages // which message a ratchet header carried, to confirm repeats
+	lastKnock       map[types.PeerID]time.Time
+	stateCallbacks  []func(MessageState) // told when a message of ours went out, was confirmed or expired
+	recent          *recentMessages      // which message a ratchet header carried, to confirm repeats
 
 	myIDHexed string
 }
@@ -120,6 +122,19 @@ func (s *MessageBroker) SendChatMessagePlain(targetID types.PeerID, text string,
 
 // SendChatMessageWithTier sends a message using the requested cryptographic tier and application options
 func (s *MessageBroker) SendChatMessageWithTier(targetID types.PeerID, text string, tier EncryptionTier, opts SendOptions) error {
+	_, _, err := s.sendWithTier(targetID, text, tier, opts)
+	return err
+}
+
+// SendChatMessageState sends text end-to-end encrypted and returns the message id and its state:
+// StateSent when the peer or a relay took it, StateOffline when it waits for a way to the peer,
+// StateKeys when it waits for the peer's keys.
+func (s *MessageBroker) SendChatMessageState(targetID types.PeerID, text string) (id, state string, err error) {
+	return s.sendWithTier(targetID, text, TierX3DH, SendOptions{})
+}
+
+// sendWithTier is the one send path; see SendChatMessageState for what it returns.
+func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier EncryptionTier, opts SendOptions) (string, string, error) {
 	meta := opts.Metadata
 	if meta == nil {
 		meta = &MessageMetadata{}
@@ -146,7 +161,7 @@ func (s *MessageBroker) SendChatMessageWithTier(targetID types.PeerID, text stri
 
 	innerBytes, err := proto.Marshal(innerMsg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal inner msg: %w", err)
+		return "", "", fmt.Errorf("failed to marshal inner msg: %w", err)
 	}
 
 	var msg *internal_pb.MessageData
@@ -157,26 +172,29 @@ func (s *MessageBroker) SendChatMessageWithTier(targetID types.PeerID, text stri
 		msg, encErr = s.encryptX3DH(targetID, innerBytes)
 		if encErr != nil {
 			if opts.noTrack {
-				return encErr // receipts are not worth keeping
+				return "", "", encErr // receipts are not worth keeping
 			}
 			// no keys for this peer yet (never met, not connected): keep the message and encrypt it
 			// when the peer is reachable
 			if err := s.trackIntent(targetID, innerMsg.Id, innerBytes); err != nil {
-				return fmt.Errorf("could not encrypt or queue the message: %w", err)
+				return "", "", fmt.Errorf("could not encrypt or queue the message: %w", err)
 			}
+			// the keys are in the DHT, when it answers; meanwhile ask the peer for them through
+			// whatever carries messages (a relay keeps the ask while the peer is away)
+			s.sendKnock(targetID, false)
 			s.wantConnection(targetID)
 			if opts.onQueued != nil {
 				opts.onQueued()
 			}
 			if opts.Silent {
-				return nil
+				return innerMsg.Id, StateKeys, nil
 			}
 			msgDto, err := s.SavePrivateMessage(targetID, innerMsg)
 			if err != nil {
-				return err
+				return "", "", err
 			}
 			s.StartCallbackHandlers(&msgDto)
-			return nil
+			return innerMsg.Id, StateKeys, nil
 		}
 
 	case TierChaCha20:
@@ -185,12 +203,12 @@ func (s *MessageBroker) SendChatMessageWithTier(targetID types.PeerID, text stri
 			if storedKey, ok := s.GetSharedKey(targetID); ok && len(storedKey) == 32 {
 				key = storedKey
 			} else {
-				return errors.New("chacha20 requires a 32-byte shared key (none provided or registered)")
+				return "", "", errors.New("chacha20 requires a 32-byte shared key (none provided or registered)")
 			}
 		}
 		ciphertext, err := encrypt_decrypt.EncryptChaCha(key, innerBytes)
 		if err != nil {
-			return fmt.Errorf("chacha20 encryption failed: %w", err)
+			return "", "", fmt.Errorf("chacha20 encryption failed: %w", err)
 		}
 		// Magic prefix 0x01: ChaCha20 ciphertext
 		payload := append([]byte{0x01}, ciphertext...)
@@ -224,17 +242,19 @@ func (s *MessageBroker) SendChatMessageWithTier(targetID types.PeerID, text stri
 		}
 
 	default:
-		return fmt.Errorf("unsupported encryption tier: %v", tier)
+		return "", "", fmt.Errorf("unsupported encryption tier: %v", tier)
 	}
 
 	delivered := s.deliver(targetID, msg)
 	if !opts.noTrack {
 		// keep it until the recipient confirms (a retry follows if it never does)
 		if err := s.track(targetID, innerMsg.Id, msg, innerBytes, delivered); err != nil && !delivered {
-			return fmt.Errorf("could not send or queue the message: %w", err)
+			return "", "", fmt.Errorf("could not send or queue the message: %w", err)
 		}
 	}
+	state := StateSent
 	if !delivered {
+		state = StateOffline
 		s.wantConnection(targetID)
 		if opts.onQueued != nil {
 			opts.onQueued()
@@ -242,20 +262,21 @@ func (s *MessageBroker) SendChatMessageWithTier(targetID types.PeerID, text stri
 	}
 
 	if opts.Silent {
-		return nil
+		return innerMsg.Id, state, nil
 	}
 	msgDto, err := s.SavePrivateMessage(targetID, innerMsg)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	s.StartCallbackHandlers(&msgDto)
-	return nil
+	return innerMsg.Id, state, nil
 }
 
 // deliver hands msg to the peer directly or through a relay and reports whether somebody took it.
 func (s *MessageBroker) deliver(targetID types.PeerID, msg *internal_pb.MessageData) bool {
 	if err := s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg); err == nil {
+		s.log.Info("MessageBroker: message sent to the peer directly", "peer", targetID.String()[:8])
 		return true
 	}
 	return s.sendViaRelay(targetID, msg) == nil
@@ -302,7 +323,7 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 			continue // it answered the last message with "mailbox full"
 		}
 		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
-			s.log.Debug("MessageBroker: message routed via relay peer", "target", targetID.String()[:8])
+			s.log.Info("MessageBroker: message handed to a relay", "peer", targetID.String()[:8], "relay", p.ID().String()[:8])
 			return nil
 		}
 	}
@@ -404,6 +425,12 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		return
 	}
 
+	// the peer sends its keys (and may ask for ours): the first message between two nodes that
+	// never met, when the DHT does not hand out their bundles
+	if strings.HasPrefix(innerMsg.Text, knockPrefix) {
+		s.handleKnock(originID, innerMsg.Text)
+		return
+	}
 	// the peer cannot read us: its session with us is gone or never matched ours
 	if strings.HasPrefix(innerMsg.Text, resetPrefix) {
 		s.sessionReset(originID)
@@ -687,6 +714,30 @@ func (s *MessageBroker) SetFilter(f func(origin types.PeerID) Verdict) {
 	s.mu.Lock()
 	s.filter = f
 	s.mu.Unlock()
+}
+
+// MessageState says what became of a message of ours (see the State constants).
+type MessageState struct {
+	Target types.PeerID
+	ID     string
+	State  string
+}
+
+// OnMessageState calls cb whenever a message of ours is handed on, confirmed or given up.
+func (s *MessageBroker) OnMessageState(cb func(MessageState)) {
+	s.mu.Lock()
+	s.stateCallbacks = append(s.stateCallbacks, cb)
+	s.mu.Unlock()
+}
+
+func (s *MessageBroker) noteState(target types.PeerID, id, state string) {
+	s.mu.RLock()
+	cbs := make([]func(MessageState), len(s.stateCallbacks))
+	copy(cbs, s.stateCallbacks)
+	s.mu.RUnlock()
+	for _, cb := range cbs {
+		go cb(MessageState{Target: target, ID: id, State: state})
+	}
 }
 
 func (s *MessageBroker) SetInterceptor(h func(origin types.PeerID, text string) bool) {

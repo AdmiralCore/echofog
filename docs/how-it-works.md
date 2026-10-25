@@ -118,6 +118,17 @@ they recently used can hold the encrypted message in a **mailbox** and hand it o
 back (also up to 7 days). A relay only keeps mail for people who have used it recently, and has size
 limits per person and in total, so strangers cannot fill its disk.
 
+**The first message to somebody you never met** needs their public keys. The app looks them up in
+the DHT; when the DHT does not answer (a small network, a table full of nodes that are gone), it
+sends its own signed keys to the recipient the same way as any message, through a relay and its
+mailbox, and the recipient answers with theirs. So a contact added by key gets your message even
+when the two of you have never been online at the same time and the lookup fails.
+
+**What the marks in a chat mean.** Under a message of yours: a clock means the app is waiting for
+the recipient's keys or for a way to reach them (they are offline and no relay has taken the message
+yet), one check means the recipient or a relay took it, two checks mean the recipient's app confirmed
+it. The same states tell you what a call you placed is waiting for, until it connects.
+
 **Groups** have no server either. Every group message and every change (new member, role, ban) is
 sent to each member over that member's own encrypted session, with the same receipts and offline
 queue as a normal chat. On top of that, a message is signed by its author and sealed once for the

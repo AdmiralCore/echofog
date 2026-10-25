@@ -28,11 +28,21 @@ const (
 	outboxMaxItems = 5000
 )
 
+// What a message of ours is waiting for, as the chat shows it.
+const (
+	StateKeys      = "keys"      // the recipient's keys: it was never met and the DHT has not answered
+	StateOffline   = "offline"   // a way to the recipient: neither it nor a relay has taken the message
+	StateSent      = "sent"      // the recipient or a relay took it; no receipt yet
+	StateDelivered = "delivered" // the recipient confirmed it
+	StateExpired   = "expired"   // given up after outboxTTL without a receipt
+)
+
 type outboxItem struct {
 	ID       string       `json:"id"` // the inner message id, shown as "pending" in the chat
 	Target   types.PeerID `json:"target"`
 	Data     []byte       `json:"data,omitempty"`   // marshalled MessageData
 	Intent   []byte       `json:"intent,omitempty"` // not encrypted yet: the inner message, waiting for keys
+	Sent     bool         `json:"sent,omitempty"`   // the recipient or a relay took it at least once
 	Created  int64        `json:"created"`
 	Attempts int          `json:"attempts"`
 	Next     int64        `json:"next"` // unix nano: do not retry before
@@ -74,6 +84,7 @@ func (s *MessageBroker) track(target types.PeerID, id string, msg *internal_pb.M
 	it := outboxItem{ID: id, Target: target, Data: data, Intent: inner, Created: now.UnixNano(), Next: now.UnixNano()}
 	if delivered {
 		it.Attempts = 1
+		it.Sent = true
 		it.Next = now.Add(backoff(0)).UnixNano()
 	}
 	raw, err := json.Marshal(it)
@@ -112,16 +123,27 @@ func (s *MessageBroker) outboxEntries(prefix string) []storage.Entry {
 	return entries
 }
 
-// PendingIDs are the ids of the messages to target that the recipient has not confirmed yet.
-func (s *MessageBroker) PendingIDs(target types.PeerID) map[string]bool {
-	out := make(map[string]bool)
+// PendingStates maps the ids of the messages to target that the recipient has not confirmed yet
+// to what each one waits for (StateKeys, StateOffline or StateSent).
+func (s *MessageBroker) PendingStates(target types.PeerID) map[string]string {
+	out := make(map[string]string)
 	for _, e := range s.outboxEntries(outboxFolder(s.kv, target)) {
 		var it outboxItem
 		if json.Unmarshal(e.Value, &it) == nil {
-			out[it.ID] = true
+			out[it.ID] = it.state()
 		}
 	}
 	return out
+}
+
+func (it outboxItem) state() string {
+	switch {
+	case len(it.Data) == 0:
+		return StateKeys
+	case it.Sent:
+		return StateSent
+	}
+	return StateOffline
 }
 
 // forgetCiphertexts drops the encrypted form of everything waiting for target: the session it was
@@ -146,6 +168,8 @@ func (s *MessageBroker) confirm(target types.PeerID, id string) {
 		var it outboxItem
 		if json.Unmarshal(e.Value, &it) == nil && it.ID == id {
 			_ = s.kv.Delete(e.Key)
+			s.log.Info("MessageBroker: message delivered", "peer", target.String()[:8])
+			s.noteState(target, id, StateDelivered)
 			return
 		}
 	}
@@ -169,6 +193,8 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 		}
 		if now.Sub(time.Unix(0, it.Created)) > outboxTTL {
 			_ = s.kv.Delete(e.Key)
+			s.log.Warn("MessageBroker: giving up on a message nobody took in a week", "peer", it.Target.String()[:8], "state", it.state())
+			s.noteState(it.Target, it.ID, StateExpired)
 			continue
 		}
 		if !force && it.Next > now.UnixNano() {
@@ -178,6 +204,7 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 			// not encrypted yet: possible once the peer's keys are known
 			enc, err := s.encryptX3DH(it.Target, it.Intent)
 			if err != nil {
+				s.sendKnock(it.Target, false)
 				s.wantConnection(it.Target)
 				it.Next = now.Add(backoff(it.Attempts)).UnixNano()
 				it.Attempts++
@@ -200,6 +227,10 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 		}
 		if s.deliver(it.Target, &msg) {
 			sent++
+			if !it.Sent {
+				it.Sent = true
+				s.noteState(it.Target, it.ID, StateSent)
+			}
 		} else {
 			s.wantConnection(it.Target)
 		}

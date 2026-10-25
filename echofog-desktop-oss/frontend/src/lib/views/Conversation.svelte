@@ -300,7 +300,7 @@
     await saveAsFile(m, conv.name);
   }
   const fullTime = (ts) => new Date(ts || 0).toLocaleString(intlLocale(), { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const stateOf = (m) => (m.failed ? 'notSent' : m.pending ? 'waiting' : 'delivered');
+  const stateOf = (m) => (m.failed ? 'notSent' : m.pending ? (m.state || 'waiting') : 'delivered');
 
   // ---- links -------------------------------------------------------------------------------------
   function openLink(e, href) {
@@ -401,12 +401,12 @@
               {time(m.ts, $lang)}
               {#if m.mine}
                 {#if m.failed}<span class="st err" title={$t('chats.st.notSent')}>!</span>
-                {:else if m.pending}<span class="st" title={$t('chats.st.waiting')}><Icon name="check" size={13} stroke={2.4} /></span>
+                {:else if m.pending}<span class="st" title={$t('chats.st.' + stateOf(m))}><Icon name={m.state === 'sent' ? 'check' : 'clock'} size={13} stroke={2.4} /></span>
                 {:else}<span class="st" title={$t('chats.st.delivered')}><Icon name="checks" size={14} stroke={2.2} /></span>{/if}
               {/if}
             </span>
           </div>
-          {#if m.failed}<div class="fail-note small">{$t('chats.note.notSent')}</div>{:else if m.pending && last}<div class="fail-note small pend">{$t('chats.note.waiting')}</div>{/if}
+          {#if m.failed}<div class="fail-note small">{$t('chats.note.notSent')}</div>{:else if m.pending && last}<div class="fail-note small pend">{$t('chats.note.' + stateOf(m))}</div>{/if}
         {/if}
       {:else}
         <div class="empty">

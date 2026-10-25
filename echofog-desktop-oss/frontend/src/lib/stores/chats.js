@@ -69,6 +69,7 @@ function directMessage(m) {
     text: call ? (m.is_mine ? tr('chats.outgoingCall') : tr('chats.incomingCall')) : m.text,
     system: call,
     pending: !!m.pending,
+    state: m.state || '',
     ts: toMs(m.timestamp),
     file: fileOf(m),
   };
@@ -163,6 +164,15 @@ function listen() {
     const open = get(activeId) === id;
     patch(id, (c) => ({ ...c, last: preview(m), ts: m.ts, unread: open || m.mine ? c.unread : c.unread + 1 }));
     if (open) messages.update((list) => (list.some((x) => x.id === m.id) ? list : [...list, m]));
+  });
+
+  // a message of ours moved on: handed to a relay, confirmed by the recipient, or given up
+  on('message:state', (ev) => {
+    if (!ev || !ev.id) return;
+    const done = ev.state === 'delivered' || ev.state === 'expired';
+    messages.update((list) => list.map((m) => (m.id === ev.id
+      ? { ...m, pending: !done, state: done ? '' : ev.state, failed: ev.state === 'expired' }
+      : m)));
   });
 
   on('group:event', async (ev) => {

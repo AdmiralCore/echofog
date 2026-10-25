@@ -35,7 +35,10 @@ type MessageDTO struct {
 	AppID     string `json:"app_id,omitempty"`
 
 	// Pending: our own message that has not reached the recipient yet and waits in the outbox.
-	Pending bool `json:"pending,omitempty"`
+	// State says what it waits for: "keys" (the recipient's keys), "offline" (a way to the
+	// recipient) or "sent" (a relay or the recipient took it, no receipt yet).
+	Pending bool   `json:"pending,omitempty"`
+	State   string `json:"state,omitempty"`
 	// Request: a message from a stranger, kept as a message request (the sender is not a contact).
 	Request bool `json:"request,omitempty"`
 }
