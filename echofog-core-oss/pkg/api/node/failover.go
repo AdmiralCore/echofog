@@ -103,6 +103,12 @@ func (n *NodeApi) avoidedLocked(now time.Time) map[string]bool {
 // pickExit finds an exit that is connected or reachable and says it serves us right now, best
 // rated first, skipping avoid. Exits that fail the check are added to avoid.
 func (n *NodeApi) pickExit(ctx context.Context, avoid map[string]bool) (string, error) {
+	return n.pickExitFrom(ctx, avoid, false)
+}
+
+// pickExitFrom is pickExit; lastResort also tries exits with a bad record: when nothing else is
+// left, an exit that failed a while ago may well work again (it was restarted, its link came back).
+func (n *NodeApi) pickExitFrom(ctx context.Context, avoid map[string]bool, lastResort bool) (string, error) {
 	m, err := n.market()
 	if err != nil {
 		return "", err
@@ -113,7 +119,8 @@ func (n *NodeApi) pickExit(ctx context.Context, avoid map[string]bool) (string, 
 	tries := 0
 	for _, e := range m.Directory.List() {
 		id := e.Advert.PeerID
-		if avoid[id] || e.Rating.ConsecutiveFails >= 3 || (e.Rating.DomainsTried > 0 && e.Rating.DomainsOK == 0) {
+		badRecord := e.Rating.ConsecutiveFails >= 3 || (e.Rating.DomainsTried > 0 && e.Rating.DomainsOK == 0)
+		if avoid[id] || (badRecord && !lastResort) {
 			continue
 		}
 		pid, err := n.relayPeerID(id)
@@ -207,6 +214,16 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 			}
 		}
 		n.vpn.mu.Unlock()
+		if err != nil {
+			// every other exit failed in the last minutes; one of them may work again by now (it
+			// was restarted, its link came back), which beats waiting for this one. Avoiding is a
+			// preference, not a ban: without this, the clients of an exit that froze sat without
+			// Internet next to the other exit, back for minutes, for the ten minutes of avoidance.
+			next, err = n.pickExitFrom(ctx, map[string]bool{relay: true}, true)
+			if err == nil {
+				slog.Info("going back to an exit that failed earlier: nothing else serves us", "exit", next[:min(12, len(next))])
+			}
+		}
 		if err != nil {
 			// nothing else serves us: the exit in use may well come back (its link dropped, it
 			// was busy for a moment), and nothing else would dial it again while it is avoided
