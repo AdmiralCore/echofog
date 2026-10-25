@@ -112,6 +112,8 @@ export function GetSettings():Promise<node.SettingsDTO>;
 
 export function GetSharingStatus():Promise<node.SharingStatus>;
 
+export function GetSiteLists():Promise<node.SiteLists>;
+
 export function GetStreamQualities():Promise<Array<dto.StreamQualityDTO>>;
 
 export function GetSupport():Promise<dto.SupportDTO>;
@@ -221,6 +223,8 @@ export function SendUsdt(arg1:string,arg2:string,arg3:string):Promise<string>;
 export function SetAccessMode(arg1:string):Promise<void>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
+
+export function SetCustomSites(arg1:Array<string>):Promise<void>;
 
 export function SetExitFavorite(arg1:string,arg2:boolean):Promise<void>;
 

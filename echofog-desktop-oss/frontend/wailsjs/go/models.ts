@@ -163,6 +163,7 @@ export namespace dto {
 	    reply_to_id?: string;
 	    app_id?: string;
 	    pending?: boolean;
+	    state?: string;
 	    request?: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -184,6 +185,7 @@ export namespace dto {
 	        this.reply_to_id = source["reply_to_id"];
 	        this.app_id = source["app_id"];
 	        this.pending = source["pending"];
+	        this.state = source["state"];
 	        this.request = source["request"];
 	    }
 	}
@@ -837,6 +839,7 @@ export namespace node {
 	export class Reach {
 	    ok: boolean;
 	    ms: number;
+	    code?: string;
 	    reason?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -847,6 +850,7 @@ export namespace node {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
 	        this.ms = source["ms"];
+	        this.code = source["code"];
 	        this.reason = source["reason"];
 	    }
 	}
@@ -1110,6 +1114,22 @@ export namespace node {
 		    }
 		    return a;
 		}
+	}
+	export class SiteLists {
+	    selected: string[];
+	    custom: string[];
+	    chosen: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SiteLists(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.selected = source["selected"];
+	        this.custom = source["custom"];
+	        this.chosen = source["chosen"];
+	    }
 	}
 	export class VPNSession {
 	    id: string;

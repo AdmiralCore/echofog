@@ -214,6 +214,10 @@ export function GetSharingStatus() {
   return window['go']['main']['App']['GetSharingStatus']();
 }
 
+export function GetSiteLists() {
+  return window['go']['main']['App']['GetSiteLists']();
+}
+
 export function GetStreamQualities() {
   return window['go']['main']['App']['GetStreamQualities']();
 }
@@ -432,6 +436,10 @@ export function SetAccessMode(arg1) {
 
 export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
+}
+
+export function SetCustomSites(arg1) {
+  return window['go']['main']['App']['SetCustomSites'](arg1);
 }
 
 export function SetExitFavorite(arg1, arg2) {
