@@ -236,6 +236,12 @@ func (s *Swarm) Bootstrap(addrs []string) {
 		if named && id == s.selfID {
 			continue // a seed node finds itself in the built-in list
 		}
+		if named && s.ThisIsActivePeer(id) {
+			// already connected: a second connection replaced the first, and every relay circuit
+			// riding on the first (a call, a VPN through a relay, a file) died with it. A node
+			// short of peers dialed its bootstrap nodes every 15 s to a few minutes, and did that.
+			continue
+		}
 
 		s.wg.Add(1)
 		go func(a string) {

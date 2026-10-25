@@ -246,3 +246,23 @@ func TestBootstrapListIsCopied(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Dialing a bootstrap node we are connected to must not open a second connection: it replaced
+// the first, and the relay circuits on the first (calls, a VPN through a relay) died with it.
+func TestBootstrapSkipsConnectedNodes(t *testing.T) {
+	a, _ := newTestSwarm(t)
+	b, bTr := newTestSwarm(t)
+	connect(t, a, b, bTr)
+	before := a.GetPeer(b.selfID)
+	require := func(ok bool, msg string) {
+		t.Helper()
+		if !ok {
+			t.Fatal(msg)
+		}
+	}
+	require(before != nil, "not connected")
+
+	a.Bootstrap([]string{network.JoinPeerAddr(bTr.Addr().String(), b.selfID)})
+	time.Sleep(1500 * time.Millisecond)
+	require(a.GetPeer(b.selfID) == before, "the connection to an already connected bootstrap node was replaced")
+}
