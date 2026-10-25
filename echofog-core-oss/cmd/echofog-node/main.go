@@ -7,6 +7,7 @@
 //	echofog-node status               what a running node does: peers, relayed traffic, earnings
 //	echofog-node wallet               the TON wallet of a running node
 //	echofog-node invite               the invitation link of a running node
+//	echofog-node clean                drop what the node learned from the network (stopped node)
 //	echofog-node version
 package main
 
@@ -33,6 +34,7 @@ Commands:
   status    show what the running node does: peers, relayed traffic, exit earnings, wallet
   wallet    show the TON wallet address and balance of the running node
   invite    print the invitation link of the running node (--list, --rotate, --remove, --new-secret)
+  clean     drop stale network data (DHT records, known peers, ratings) of a stopped node
   version   print the version
 
 Run "echofog-node <command> -h" for the flags of a command. Every flag can also be set with an
@@ -60,6 +62,8 @@ func main() {
 		os.Exit(statusCmd(args, true))
 	case "invite":
 		os.Exit(inviteCmd(args))
+	case "clean":
+		os.Exit(cleanCmd(args))
 	case "version", "--version", "-version":
 		fmt.Println("echofog-node", version)
 	case "help", "-h", "--help":

@@ -185,3 +185,23 @@ cd echofog-core-oss && docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 The identity, database and wallet live in the `echofog-data` volume and survive updates.
+
+## Clearing stale data
+
+The node cleans up after itself: DHT records expire, peers that stay unreachable are forgotten,
+mail older than a week is dropped. When it holds something stale anyway (a node that moved or got
+a new key, a lot of departed peers after a big test), drop what it learned from the network; it
+learns it again within minutes:
+
+```bash
+cd ~/EchoFog/echofog-core-oss
+docker compose -f deploy/docker-compose.yml stop node
+docker compose -f deploy/docker-compose.yml run --rm node clean            # --dry-run to count first
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+This drops DHT records, known peers and their addresses, exit ratings and cached key bundles. It
+never touches the identity, the wallet, the exit's ledger, the access secret or who joined a
+hidden node. `--mail` also drops the mail kept for offline people (they lose it), `--bans` the bans
+of misbehaving peers. Do not remove the `echofog-data` volume to "clean": that throws away the
+node's key, and every link and client that knows it stops working.
