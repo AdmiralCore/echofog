@@ -10,7 +10,9 @@ import (
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +31,11 @@ const (
 	quicAttemptTimeout = 4 * time.Second
 	// tcpPreferenceTTL: once QUIC failed for an address, use TCP first for a while.
 	tcpPreferenceTTL = 10 * time.Minute
+	// transportRaceStagger: the preferred transport gets this head start before the other is
+	// launched alongside it, so a working network pays nothing for the race.
+	transportRaceStagger = 300 * time.Millisecond
+	// envMemoryTTL: how long the transport that won on a given local network is remembered.
+	envMemoryTTL = 30 * time.Minute
 )
 
 // FallbackTransport is the node's Transport: it listens on QUIC and on TCP (same port number)
@@ -45,6 +52,11 @@ type FallbackTransport struct {
 	mu      sync.Mutex
 	preferT map[string]time.Time // addr -> until when TCP goes first
 	noDial  atomic.Bool          // an isolated node: it only accepts connections
+
+	envMu    sync.Mutex
+	envCache string               // fingerprint of the current local network, cached briefly
+	envAt    time.Time            // when envCache was taken
+	envMem   map[string]envRecord // network fingerprint -> the transport that won there last
 
 	connChan  chan NewConnEvent
 	closeOnce sync.Once
@@ -265,36 +277,112 @@ func (f *FallbackTransport) DialEarly(ctx context.Context, addr string) error {
 	if f.mode == ModeTCP {
 		return f.TCP.Dial(ctx, f.tcpDialAddr(addr))
 	}
-	if f.tcpFirst(addr) {
-		if err := f.TCP.Dial(ctx, f.tcpDialAddr(addr)); err == nil {
-			return nil
+	return f.raceDial(ctx, addr)
+}
+
+// raceDial launches the QUIC and TCP-fallback dials together (happy-eyeballs at the transport
+// level) and takes whichever connects first, cancelling the loser. The transport known to work on
+// this network — this address stalled QUIC before (preferT), or UDP lost here last time
+// (per-network memory) — gets a head start, so a settled network pays nothing for the race while a
+// freshly UDP-blocked one no longer waits out a full QUIC timeout before it ever tries TCP. If both
+// transports still connect, the swarm drops the duplicate by peer ID.
+func (f *FallbackTransport) raceDial(ctx context.Context, addr string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	tcpFirst := f.tcpFirst(addr) || f.envPrefersTCP()
+
+	type result struct {
+		tcp bool
+		err error
+	}
+	results := make(chan result, 2)
+
+	quicBudget := quicAttemptTimeout
+	if d, ok := ctx.Deadline(); ok {
+		if left := time.Until(d); left < quicBudget {
+			quicBudget = left
 		}
-		return f.QUIC.DialEarly(ctx, addr)
+	}
+	dialQUIC := func() {
+		qctx, qcancel := context.WithTimeout(ctx, quicBudget)
+		err := f.QUIC.DialEarly(qctx, addr)
+		qcancel()
+		results <- result{tcp: false, err: err}
+	}
+	dialTCP := func() {
+		results <- result{tcp: true, err: f.TCP.Dial(ctx, f.tcpDialAddr(addr))}
 	}
 
-	// QUIC gets at most half of the caller's budget, so TCP still has time when UDP is dead
-	budget := quicAttemptTimeout
-	if d, ok := ctx.Deadline(); ok {
-		if half := time.Until(d) / 2; half < budget {
-			budget = half
+	// start the preferred transport now, the other after the stagger (or at once if the first one
+	// fails before then)
+	var startOther func()
+	if tcpFirst {
+		go dialTCP()
+		startOther = func() { go dialQUIC() }
+	} else {
+		go dialQUIC()
+		startOther = func() { go dialTCP() }
+	}
+
+	timer := time.NewTimer(transportRaceStagger)
+	defer timer.Stop()
+
+	var quicErr, tcpErr error
+	haveQUICErr, haveTCPErr := false, false
+	for pending := 1; pending > 0; {
+		select {
+		case <-timer.C:
+			if startOther != nil {
+				startOther()
+				startOther = nil
+				pending++
+			}
+		case r := <-results:
+			pending--
+			if r.err == nil {
+				cancel() // the loser gives up; if it still connects the swarm drops the duplicate
+				if r.tcp {
+					f.onTCPWon(addr)
+				} else {
+					f.recordEnv(false)
+				}
+				return nil
+			}
+			if r.tcp {
+				tcpErr, haveTCPErr = r.err, true
+			} else {
+				quicErr, haveQUICErr = r.err, true
+				if errors.Is(r.err, errSelfDial) {
+					return r.err
+				}
+			}
+			if startOther != nil {
+				startOther() // the first transport failed before the stagger: start the other now
+				startOther = nil
+				pending++
+			}
 		}
 	}
-	qctx, cancel := context.WithTimeout(ctx, budget)
-	qerr := f.QUIC.DialEarly(qctx, addr)
-	cancel()
-	if qerr == nil || ctx.Err() != nil {
-		return qerr
+
+	switch {
+	case haveQUICErr && haveTCPErr:
+		return fmt.Errorf("quic: %v; tcp: %w", quicErr, tcpErr)
+	case haveTCPErr:
+		return tcpErr
+	default:
+		return quicErr
 	}
-	if errors.Is(qerr, errSelfDial) {
-		return qerr
-	}
-	terr := f.TCP.Dial(ctx, f.tcpDialAddr(addr))
-	if terr != nil {
-		return fmt.Errorf("quic: %v; tcp: %w", qerr, terr)
+}
+
+// onTCPWon records that TCP got through on this network and this address: TCP goes first next time
+// there, so a UDP-blocked network stops paying the QUIC head start on every connection.
+func (f *FallbackTransport) onTCPWon(addr string) {
+	f.recordEnv(true)
+	if !f.tcpFirst(addr) {
+		f.logger.Info("QUIC did not get through, connected over TCP", "addr", addr)
 	}
 	f.preferTCP(addr)
-	f.logger.Info("QUIC did not get through, connected over TCP", "addr", addr, "quic_err", qerr)
-	return nil
 }
 
 // PreferTCP makes the dials to addr try TCP first for a while: QUIC got through the handshake
@@ -335,6 +423,74 @@ func (f *FallbackTransport) tcpFirst(addr string) bool {
 		return false
 	}
 	return ok
+}
+
+// envRecord remembers which transport won on a given local network, and when.
+type envRecord struct {
+	tcp bool
+	at  time.Time
+}
+
+// networkEnv fingerprints the local network environment as the sorted set of active, non-loopback
+// interface addresses — a cheap, portable stand-in for "which network am I on". It changes when the
+// device moves to another network, so the memory of a censored network does not bias the dials once
+// the device is back on an open one. The value is cached for a few seconds to keep per-dial cost low.
+func (f *FallbackTransport) networkEnv() string {
+	f.envMu.Lock()
+	if f.envCache != "" && time.Since(f.envAt) < 5*time.Second {
+		env := f.envCache
+		f.envMu.Unlock()
+		return env
+	}
+	f.envMu.Unlock()
+
+	ifaces, _ := net.Interfaces()
+	var parts []string
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := ifi.Addrs()
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLinkLocalUnicast() {
+				parts = append(parts, ifi.Name+":"+ipn.IP.String())
+			}
+		}
+	}
+	sort.Strings(parts)
+	env := strings.Join(parts, ",")
+
+	f.envMu.Lock()
+	f.envCache, f.envAt = env, time.Now()
+	f.envMu.Unlock()
+	return env
+}
+
+// envPrefersTCP reports whether TCP won on the current network recently.
+func (f *FallbackTransport) envPrefersTCP() bool {
+	env := f.networkEnv()
+	f.envMu.Lock()
+	defer f.envMu.Unlock()
+	r, ok := f.envMem[env]
+	if !ok {
+		return false
+	}
+	if time.Since(r.at) > envMemoryTTL {
+		delete(f.envMem, env)
+		return false
+	}
+	return r.tcp
+}
+
+// recordEnv remembers that tcp (or QUIC) won on the current network.
+func (f *FallbackTransport) recordEnv(tcp bool) {
+	env := f.networkEnv()
+	f.envMu.Lock()
+	if f.envMem == nil || len(f.envMem) > 64 {
+		f.envMem = make(map[string]envRecord)
+	}
+	f.envMem[env] = envRecord{tcp: tcp, at: time.Now()}
+	f.envMu.Unlock()
 }
 
 func (f *FallbackTransport) Close() error {
