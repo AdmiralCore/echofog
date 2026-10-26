@@ -205,6 +205,19 @@ type AntiDPIConfig struct {
 	// A node announces handshake.CapTunnelPadding only when this is on, and a peer pads to it only
 	// when it sees that capability, so old nodes interoperate in the plain (unpadded) mode.
 	TunnelPadding bool `json:"tunnel_padding"`
+
+	// RegionAwareObfs uses the cheaper noise obfuscation for connections that stay inside this
+	// node's own country or on the local network, and keeps QUIC-REALITY for cross-border ones.
+	// REALITY mimics an allowed foreign site so a connection survives a censoring border; a
+	// connection that never crosses one does not need it. A peer whose country cannot be placed
+	// stays on REALITY, so this never weakens a cross-border link. Off by default; opt-in, because
+	// "same country" is not safe where domestic traffic is censored too (noise is what GFW-style
+	// DPI flags): turn it on only on networks that do not censor inside their own borders.
+	RegionAwareObfs bool `json:"region_aware_obfs"`
+	// HomeCountry pins this node's own country as an ISO 3166-1 alpha-2 code (e.g. "DE"). Empty
+	// lets the node place its own public address with GeoIP; set it when that lookup is blocked, or
+	// to fix the region signal in a controlled network.
+	HomeCountry string `json:"home_country,omitempty"`
 }
 
 // FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
@@ -429,6 +442,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.AntiDPI.Obfs = ObfsNode
 	cfg.AntiDPI.FlowShaping = DefaultFlowShapingConfig()
 	cfg.AntiDPI.TunnelPadding = true
+	cfg.AntiDPI.RegionAwareObfs = false // opt-in: safe only where domestic traffic is not censored
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public
 	// TCP/WS listener must set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site

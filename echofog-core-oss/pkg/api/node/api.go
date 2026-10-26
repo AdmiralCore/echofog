@@ -93,6 +93,8 @@ func (n *NodeApi) StartNode() error {
 	if err := n.node.Start(); err != nil {
 		return err
 	}
+	// domestic connections use the cheaper noise obfs; cross-border keeps REALITY
+	n.applyRegionObfs()
 	// create the group service now: it listens for group messages from the first moment on
 	_, _ = n.groupsFacade()
 	return nil
