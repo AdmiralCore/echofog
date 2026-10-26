@@ -107,3 +107,16 @@ func TestSNIThatTheAddressDoesNotHostIsAtRisk(t *testing.T) {
 	assert.Contains(t, flows[0].Verdict(), "AT RISK")
 	assert.Equal(t, "blends in", flows[1].Verdict())
 }
+
+func TestLongHeavyFlows(t *testing.T) {
+	flows := []Flow{
+		{Duration: 10 * time.Minute, BytesUp: 1 << 20, BytesDn: 80 << 20}, // a long download through one connection
+		{Duration: 10 * time.Minute, BytesUp: 1 << 10, BytesDn: 1 << 20},  // long but light: a chat that stays open
+		{Duration: 5 * time.Second, BytesDn: 80 << 20},                    // heavy but short: one big file
+	}
+	MarkLongHeavy(flows, 2*time.Minute, 20<<20)
+	assert.True(t, flows[0].LongHeavy)
+	assert.False(t, flows[1].LongHeavy)
+	assert.False(t, flows[2].LongHeavy)
+	assert.Contains(t, Report(flows[:1], func(netip.AddrPort) string { return "" }), "LONG+HEAVY")
+}

@@ -33,6 +33,19 @@ type Flow struct {
 	// SNIForeign: the SNI names a site the server's address does not host. A censor resolves the
 	// name and finds other addresses; set by CheckSNI.
 	SNIForeign bool
+
+	// LongHeavy: one connection that lasted long and carried a lot, which an ordinary visit to a
+	// site rarely does however well each packet looks; set by MarkLongHeavy. It is about the shape
+	// of the flow, so it is shown apart from the verdict on what the packets look like.
+	LongHeavy bool
+}
+
+// MarkLongHeavy marks the flows that lasted at least minDur and carried at least minBytes.
+func MarkLongHeavy(flows []Flow, minDur time.Duration, minBytes int) {
+	for i := range flows {
+		f := &flows[i]
+		f.LongHeavy = f.Duration >= minDur && f.BytesUp+f.BytesDn >= minBytes
+	}
 }
 
 // CheckSNI marks flows whose SNI is not one the server's address really hosts. hosted lists, per
@@ -207,7 +220,7 @@ func Analyze(pcapPath string) ([]Flow, error) {
 // Report renders flows as a table; label names the server addresses ("x1", "web", ...).
 func Report(flows []Flow, label func(netip.AddrPort) string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-5s %-24s %-14s %8s %9s %-18s %-22s %s\n", "proto", "server", "looks like", "duration", "bytes", "SNI", "fingerprint", "verdict")
+	fmt.Fprintf(&b, "%-5s %-24s %-14s %8s %9s %-10s %-18s %-22s %s\n", "proto", "server", "looks like", "duration", "bytes", "shape", "SNI", "fingerprint", "verdict")
 	for _, f := range flows {
 		fp := "-"
 		if f.Hello != nil {
@@ -221,8 +234,12 @@ func Report(flows []Flow, label func(netip.AddrPort) string) string {
 		if sni == "" {
 			sni = "-"
 		}
-		fmt.Fprintf(&b, "%-5s %-24.24s %-14.14s %8s %9s %-18.18s %-22.22s %s\n", f.Proto, srv, f.Looks,
-			f.Duration.Round(time.Second), human(f.BytesUp+f.BytesDn), sni, fp, f.Verdict())
+		shape := "-"
+		if f.LongHeavy {
+			shape = "LONG+HEAVY"
+		}
+		fmt.Fprintf(&b, "%-5s %-24.24s %-14.14s %8s %9s %-10s %-18.18s %-22.22s %s\n", f.Proto, srv, f.Looks,
+			f.Duration.Round(time.Second), human(f.BytesUp+f.BytesDn), shape, sni, fp, f.Verdict())
 	}
 	return b.String()
 }

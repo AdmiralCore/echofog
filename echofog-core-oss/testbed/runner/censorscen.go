@@ -23,6 +23,11 @@ import (
 var (
 	extraEnv []string // environment for the nodes the runner starts after s1 and s2
 	strict   = flag.Bool("strict", false, "censor: fail when an EchoFog flow is at risk (today's baseline fails)")
+	// the shape of the flows: one long connection that carries a lot does not look like a visit to
+	// a site, however its packets look (step 6 of the anti-DPI plan is measured with these)
+	censorFor  = flag.Duration("censor-for", 0, "censor: also keep downloading through the exit this long (a1 over QUIC, c1 over TCP), next to a browser's short visits")
+	heavyAfter = flag.Duration("heavy-after", 2*time.Minute, "censor: a flow this long ...")
+	heavyMB    = flag.Int("heavy-mb", 20, "censor: ... that carried this many MB counts as long and heavy")
 )
 
 var labNames = map[string]string{
@@ -84,6 +89,9 @@ func censorScenario(nodes map[string]*node, v *verdict, out string) {
 		l.sendDM(nodes, "c2", "a2", fmt.Sprintf("censor back %d", i))
 	}
 	wg.Wait()
+	if *censorFor > 0 {
+		sustained(nodes, *censorFor)
+	}
 	waitDelivered(nodes, l, time.Minute)
 	time.Sleep(3 * time.Second)
 
@@ -103,6 +111,7 @@ func censorScenario(nodes map[string]*node, v *verdict, out string) {
 			continue
 		}
 		// what DNS would say each lab address hosts: x1 mimics the cover site, which is web's
+		censor.MarkLongHeavy(flows, *heavyAfter, *heavyMB<<20)
 		censor.CheckSNI(flows, map[netip.Addr][]string{
 			netip.MustParseAddr("203.0.113.15"): {"cover.lab"},
 			netip.MustParseAddr("203.0.113.30"): {"cover.lab"},
@@ -121,6 +130,8 @@ func censorScenario(nodes map[string]*node, v *verdict, out string) {
 		}
 	}
 	v.check(control, "the control, a browser visiting the cover site, is seen as TLS to cover.lab")
+
+	shapeReport(all)
 
 	// sum EchoFog's flows up by what a censor would make of them, bytes weighted
 	type agg struct{ flows, bytes int }
@@ -188,4 +199,89 @@ func ndpi(pcap string, report *strings.Builder) {
 		}
 	}
 	fmt.Fprintf(report, "-- nDPI on %s\n%s\n\n", filepath.Base(pcap), strings.Join(firstN(keep, 60), "\n"))
+}
+
+// sustained keeps a1 (QUIC) and c1 (TCP fallback) downloading through x1 for d, and b1 visiting
+// the cover site as a browser does, a new connection for each page, for the same time.
+func sustained(nodes map[string]*node, d time.Duration) {
+	logf("for %s: a1 and c1 keep downloading through x1, b1 keeps browsing the cover site", d)
+	end := time.Now().Add(d)
+	var wg sync.WaitGroup
+	for _, c := range []string{"a1", "c1"} {
+		wg.Add(1)
+		go func(c string) {
+			defer wg.Done()
+			got := 0
+			for i := 0; time.Now().Before(end); i++ {
+				if r := fetch(c, blobURL(4<<20, fmt.Sprintf("long-%s-%d", c, i)), 60*time.Second); r.OK {
+					got += 4
+				}
+			}
+			logf("      %s downloaded %d MB through x1", c, got)
+		}(c)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; time.Now().Before(end); i++ {
+			_, _ = run("docker", "exec", container("b1"), "curl", "-sk", "-o", "/dev/null", "--resolve", "cover.lab:443:203.0.113.30",
+				fmt.Sprintf("https://cover.lab/blob?size=%d&seed=browse-%d", 256<<10, i))
+			time.Sleep(time.Second)
+		}
+	}()
+	wg.Wait()
+}
+
+// shapeReport prints, for EchoFog's flows to the exits and for the browser control, the longest
+// flow, the biggest, and how many count as long and heavy: what step 6 has to bring down to the
+// control's level.
+func shapeReport(all []censor.Flow) {
+	type row struct {
+		flows, heavy, heavyBytes, bytes int
+		longest                         time.Duration
+		biggest                         int
+	}
+	rows := map[string]*row{}
+	var order []string
+	for _, f := range all {
+		var group string
+		switch labLabel(f.Server) {
+		case "web":
+			group = "browser control (tcp)"
+		case "x1", "x2":
+			group = "EchoFog to an exit (" + f.Proto + ")"
+		default:
+			continue
+		}
+		if f.Looks == "no data" {
+			continue
+		}
+		r := rows[group]
+		if r == nil {
+			r = &row{}
+			rows[group] = r
+			order = append(order, group)
+		}
+		b := f.BytesUp + f.BytesDn
+		r.flows++
+		r.bytes += b
+		r.longest = max(r.longest, f.Duration)
+		r.biggest = max(r.biggest, b)
+		if f.LongHeavy {
+			r.heavy++
+			r.heavyBytes += b
+		}
+	}
+	sort.Strings(order)
+	fmt.Println()
+	logf("flow shape (long and heavy: at least %s and %d MB in one connection):", *heavyAfter, *heavyMB)
+	logf("  %-28s %6s %9s %9s %11s %s", "", "flows", "longest", "biggest", "long+heavy", "share of bytes in them")
+	for _, g := range order {
+		r := rows[g]
+		share := 0.0
+		if r.bytes > 0 {
+			share = 100 * float64(r.heavyBytes) / float64(r.bytes)
+		}
+		logf("  %-28s %6d %9s %8.1fMB %11d %5.1f%%", g, r.flows, r.longest.Round(time.Second), float64(r.biggest)/(1<<20), r.heavy, share)
+	}
 }
