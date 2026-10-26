@@ -251,6 +251,14 @@ func (f *FallbackTransport) ExpectPeer(addr string, id types.PeerID) {
 	}
 }
 
+// SetRegionNoise installs the region policy on the QUIC transport: a camouflaged peer the policy
+// places in this node's own region is dialed over noise instead of QUIC-REALITY. The TCP fallback
+// keeps its TLS mimicry — a domestic network rarely blocks UDP, so the noise QUIC path is the one
+// used there, and TCP mimicry stays available for the cross-border case.
+func (f *FallbackTransport) SetRegionNoise(fn func(addr string) bool) {
+	f.QUIC.SetRegionNoise(fn)
+}
+
 // ExpectPeerSNI tells both transports whose address addr is and its camouflage SNI; see PeerExpecter.
 func (f *FallbackTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
 	f.QUIC.ExpectPeerSNI(addr, id, sni)

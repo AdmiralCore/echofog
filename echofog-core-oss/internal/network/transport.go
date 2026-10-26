@@ -118,6 +118,9 @@ type QuicTransport struct {
 	ownID       types.PeerID
 	realityConn *QuicRealityConn
 	book        peerBook
+
+	regionMu sync.RWMutex
+	regionFn func(addr string) bool // same-region predicate; nil keeps REALITY for every camouflaged peer
 	guard       atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
 
 	retryAlways atomic.Bool         // make every new address prove itself with a QUIC Retry (servers)

@@ -113,8 +113,35 @@ func (q *QuicTransport) ExpectPeer(addr string, id types.PeerID) {
 	}
 }
 
+// SetRegionNoise installs the region policy: a predicate that reports whether the node at addr is
+// in this node's own region (its own country, or the local network). When it is, a camouflage SNI
+// is ignored and the peer is dialed over the cheaper noise obfuscation instead of QUIC-REALITY:
+// REALITY mimics an allowed foreign site so a connection survives a censoring border, which a
+// connection that never crosses one does not need. nil (the default) keeps REALITY for every
+// camouflaged peer, the behaviour before the region signal.
+func (q *QuicTransport) SetRegionNoise(fn func(addr string) bool) {
+	q.regionMu.Lock()
+	q.regionFn = fn
+	q.regionMu.Unlock()
+}
+
+// sameRegion reports whether the region policy places addr in this node's own region.
+func (q *QuicTransport) sameRegion(addr string) bool {
+	q.regionMu.RLock()
+	fn := q.regionFn
+	q.regionMu.RUnlock()
+	return fn != nil && fn(addr)
+}
+
 // ExpectPeerSNI tells the transport that the node at addr has peer ID id and camouflage SNI sni.
 func (q *QuicTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
+	if sni != "" && q.sameRegion(addr) {
+		// Same region (same country, or the local network): REALITY's cover-site mimicry buys
+		// nothing for a connection that never crosses a censoring border, so drop the SNI and use
+		// the cheaper noise obfuscation instead.
+		q.ExpectPeer(addr, id)
+		return
+	}
 	q.book.setSNI(addr, id, sni)
 	ua, err := net.ResolveUDPAddr("udp", addr)
 	if err == nil {
