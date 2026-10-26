@@ -42,6 +42,12 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 		}
 
 		q.applyCongestion(conn)
+		if q.realityConn != nil {
+			go func(c *quic.Conn) {
+				<-c.Context().Done()
+				q.realityConn.UnmarkConnection(c.RemoteAddr())
+			}(conn)
+		}
 		ip := addrOfNet(conn.RemoteAddr())
 		releaseIP, allowed := q.guard.Load().Allow(ip)
 		if !allowed {

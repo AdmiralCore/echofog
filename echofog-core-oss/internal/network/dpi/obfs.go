@@ -70,8 +70,8 @@ type NodeObfs struct {
 	// handshake fail for ever, while the second, from another port, connected fine.
 	heard map[netip.AddrPort]heardKey
 
-	rawPeers map[netip.AddrPort]bool
-	rawAll   bool
+	rawPeers            map[netip.AddrPort]bool
+	allowRawFallthrough bool
 }
 
 type heardKey struct {
@@ -109,20 +109,28 @@ func (o *NodeObfs) SetRaw(addr netip.AddrPort, raw bool) {
 	}
 }
 
-// SetRawAll sets whether all traffic is treated as raw (used on public camouflage nodes).
-func (o *NodeObfs) SetRawAll(raw bool) {
+// SetRawAll sets whether unauthenticated traffic is allowed to fall through as raw (on camouflage nodes).
+func (o *NodeObfs) SetRawAll(allow bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.rawAll = raw
+	o.allowRawFallthrough = allow
 }
 
-// IsRaw reports whether addr is marked as raw (plain QUIC), or if rawAll is active.
+// AllowsRawFallthrough reports whether non-noise packets should fall through as raw (used on camouflage nodes).
+func (o *NodeObfs) AllowsRawFallthrough() bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.allowRawFallthrough
+}
+
+// IsRaw reports whether addr is marked as raw (plain QUIC). A camouflage node does not decide raw
+// here for unknown addresses: ReadFrom first tries to open a packet as noise, and only a packet
+// that does not open falls through as raw (AllowsRawFallthrough). Answering an address raw before
+// that attempt would send a noise peer's first packet, which has not yet been heard, straight to
+// quic-go and never open it.
 func (o *NodeObfs) IsRaw(addr net.Addr) bool {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	if o.rawAll {
-		return true
-	}
 	if ap, ok := addrPortOf(addr); ok {
 		return o.rawPeers[ap]
 	}
@@ -206,6 +214,18 @@ func (o *NodeObfs) noteHeard(addr net.Addr, key *[KeyLen]byte) {
 	}
 	o.heard[ap] = heardKey{key: *key, at: now}
 	o.mu.Unlock()
+}
+
+// IsNoiseHeard reports whether addr recently sent a packet that successfully opened with noise obfuscation.
+func (o *NodeObfs) IsNoiseHeard(addr net.Addr) bool {
+	ap, ok := addrPortOf(addr)
+	if !ok {
+		return false
+	}
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	h, found := o.heard[ap]
+	return found && time.Since(h.at) < heardFor
 }
 
 // candidates are the keys a packet from addr may have been sealed with, most likely first: the
@@ -330,14 +350,14 @@ func WrapPacketConn(conn net.PacketConn, obfs *NodeObfs) net.PacketConn {
 	return base
 }
 
-func isQUICInitial(b []byte) bool {
-	if len(b) < 7 || b[0]&0x80 == 0 {
-		return false
-	}
-	if b[1] != 0 || b[2] != 0 || b[3] != 0 || b[4] != 1 {
-		return false
-	}
-	return (b[0]>>4)&0x03 == 0
+// Unwrap returns the underlying raw packet connection.
+func (c *ObfsPacketConn) Unwrap() net.PacketConn {
+	return c.Conn
+}
+
+// Unwrap returns the underlying raw packet connection.
+func (c *ObfsPacketConnUDP) Unwrap() net.PacketConn {
+	return c.ObfsPacketConn.Conn
 }
 
 func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -348,10 +368,7 @@ func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		if err != nil {
 			return 0, addr, err
 		}
-		if c.obfs.IsRaw(addr) || isQUICInitial(c.readBuf[:raw]) {
-			if ap, ok := addrPortOf(addr); ok {
-				c.obfs.SetRaw(ap, true)
-			}
+		if c.obfs.IsRaw(addr) {
 			n := copy(p, c.readBuf[:raw])
 			return n, addr, nil
 		}
@@ -361,6 +378,10 @@ func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				c.obfs.noteHeard(addr, &c.cands[i])
 				return n, addr, nil
 			}
+		}
+		if c.obfs.AllowsRawFallthrough() {
+			n := copy(p, c.readBuf[:raw])
+			return n, addr, nil
 		}
 		// not for us: a scanner, a stray packet, or a peer with another key
 	}
