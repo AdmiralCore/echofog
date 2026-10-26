@@ -3,9 +3,11 @@ package mimicry
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 
 	"golang.org/x/crypto/hkdf"
 )
@@ -49,19 +51,6 @@ func readVarint(b []byte) (uint64, int, bool) {
 		v = v<<8 | uint64(b[i])
 	}
 	return v, n, true
-}
-
-func appendVarint(b []byte, v uint64) []byte {
-	switch {
-	case v < 64:
-		return append(b, byte(v))
-	case v < 16384:
-		return binary.BigEndian.AppendUint16(b, uint16(v)|0x4000)
-	case v < 1073741824:
-		return binary.BigEndian.AppendUint32(b, uint32(v)|0x80000000)
-	default:
-		return binary.BigEndian.AppendUint64(b, v|0xc000000000000000)
-	}
 }
 
 // IsQUICInitial checks if a packet begins with a QUIC v1 Initial header.
@@ -249,174 +238,69 @@ func readAllCryptoData(plain []byte) []byte {
 	return out
 }
 
-// quicHelloBinding binds the stealth token to the ClientHello's 32-byte random and the QUIC DCID.
-func quicHelloBinding(random, dcid []byte) []byte {
-	h := sha256.New()
-	h.Write([]byte("echofog-quic-hello-binding-v1"))
-	h.Write(random)
-	h.Write(dcid)
-	return h.Sum(nil)
+// quicRandomBinding is the fixed AAD the QUIC stealth token is sealed under. The token is carried
+// as the ClientHello's 32-byte random itself, so it cannot be bound to that random; instead it is
+// sealed with the node's per-node auth key (DeriveAEAD) under this constant AAD, and the replay
+// cache (keyed on the token bytes) stops a captured Initial being reused. Tampering with the random
+// breaks the token's own AEAD tag, so a forged ClientHello fails to authenticate and is handed to
+// the cover site. Chrome's first visit to a site sends no QUIC token at all, so keeping the auth in
+// the random leaves the Initial's Token field empty, as Chrome's is.
+func quicRandomBinding() []byte {
+	h := sha256.Sum256([]byte("echofog-quic-random-token-v1"))
+	return h[:]
 }
 
-// InjectInitialToken inserts a 32-byte stealth authentication token into a client's Initial packet header.
-// The token is cryptographically bound to the ClientHello random and the connection's DCID.
-func InjectInitialToken(pkt []byte, authKey []byte) (newPkt []byte, dcid []byte, ok bool) {
-	h, plain, key, iv, err := parseAndUnmaskInitial(pkt, true)
-	if err != nil {
-		return nil, nil, false
-	}
-	clientHello := readAllCryptoData(plain)
-	if len(clientHello) < 38 || clientHello[0] != 1 {
-		return nil, nil, false
-	}
-	random := clientHello[6:38]
-	bound := quicHelloBinding(random, h.dcid)
-
+// GenerateQUICRandomToken makes a fresh 32-byte stealth token to carry as a QUIC ClientHello random.
+// It is exactly StealthTokenLen (nonce || AES-GCM(timestamp) || tag), the size of a TLS random, so
+// it is indistinguishable from an ordinary ClientHello random on the wire.
+func GenerateQUICRandomToken(authKey []byte) ([]byte, error) {
 	aead, err := DeriveAEAD(authKey)
 	if err != nil {
-		return nil, nil, false
+		return nil, err
 	}
-	token, err := GenerateBoundToken(aead, bound)
-	if err != nil {
-		return nil, nil, false
-	}
-
-	// Reconstruct the packet with the token in the Initial header:
-	// b[:tokOff] | varint(32) | token(32) | length_varint | pn | payload | rest
-	var out []byte
-	out = append(out, pkt[:h.tokOff]...)
-	out = appendVarint(out, uint64(len(token)))
-	out = append(out, token...)
-
-	newPNOff := len(out)
-	// Append length varint covering packet number + ciphertext
-	out = appendVarint(out, uint64(h.length))
-	actualPNOff := len(out)
-
-	// Build new unmasked header for AEAD authentication
-	newHdr := append([]byte(nil), out...)
-	newHdr[0] = h.hdr0
-	for i := 0; i < h.pnLen; i++ {
-		newHdr = append(newHdr, byte(h.pn>>(8*(h.pnLen-1-i))))
-	}
-
-	// Re-encrypt payload with the new header as AAD
-	kb, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, nil, false
-	}
-	gaead, err := cipher.NewGCM(kb)
-	if err != nil {
-		return nil, nil, false
-	}
-	nonce := append([]byte(nil), iv...)
-	for i := 0; i < 8; i++ {
-		nonce[len(nonce)-1-i] ^= byte(h.pn >> (8 * i))
-	}
-	sealed := gaead.Seal(nil, nonce, plain, newHdr)
-
-	// Append packet number bytes (temporarily unmasked)
-	for i := 0; i < h.pnLen; i++ {
-		out = append(out, byte(h.pn>>(8*(h.pnLen-1-i))))
-	}
-	out = append(out, sealed...)
-
-	// Append any trailing coalesced packets in the datagram
-	if len(pkt) > h.end {
-		out = append(out, pkt[h.end:]...)
-	}
-
-	// Re-apply header protection on sample from payload
-	initialSecret := hkdf.Extract(sha256.New, h.dcid, quicV1Salt)
-	secret := hkdfExpandLabel(initialSecret, "client in", 32)
-	hpKey := hkdfExpandLabel(secret, "quic hp", 16)
-	hb, err := aes.NewCipher(hpKey)
-	if err != nil {
-		return nil, nil, false
-	}
-	var mask [16]byte
-	hb.Encrypt(mask[:], out[actualPNOff+4:actualPNOff+20])
-
-	out[0] = h.hdr0 ^ (mask[0] & 0x0f)
-	for i := 0; i < h.pnLen; i++ {
-		out[actualPNOff+i] ^= mask[1+i]
-	}
-
-	_ = newPNOff
-	return out, h.dcid, true
+	return GenerateBoundToken(aead, quicRandomBinding())
 }
 
-// StripInitialToken removes the stealth token from an authenticated Initial packet header,
-// returning the clean Initial packet with Token Length = 0 for the standard quic-go listener.
-func StripInitialToken(pkt []byte) (cleanPkt []byte, ok bool) {
-	h, plain, key, iv, err := parseAndUnmaskInitial(pkt, true)
-	if err != nil || h.tokLen != StealthTokenLen {
-		return pkt, false
-	}
-
-	// Build clean packet with tokLen = 0:
-	var out []byte
-	out = append(out, pkt[:h.tokOff]...)
-	out = append(out, 0x00) // token length = 0
-
-	out = appendVarint(out, uint64(h.length))
-	actualPNOff := len(out)
-
-	cleanHdr := append([]byte(nil), out...)
-	cleanHdr[0] = h.hdr0
-	for i := 0; i < h.pnLen; i++ {
-		cleanHdr = append(cleanHdr, byte(h.pn>>(8*(h.pnLen-1-i))))
-	}
-
-	kb, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, false
-	}
-	gaead, err := cipher.NewGCM(kb)
-	if err != nil {
-		return nil, false
-	}
-	nonce := append([]byte(nil), iv...)
-	for i := 0; i < 8; i++ {
-		nonce[len(nonce)-1-i] ^= byte(h.pn >> (8 * i))
-	}
-	sealed := gaead.Seal(nil, nonce, plain, cleanHdr)
-
-	for i := 0; i < h.pnLen; i++ {
-		out = append(out, byte(h.pn>>(8*(h.pnLen-1-i))))
-	}
-	out = append(out, sealed...)
-
-	if len(pkt) > h.end {
-		out = append(out, pkt[h.end:]...)
-	}
-
-	initialSecret := hkdf.Extract(sha256.New, h.dcid, quicV1Salt)
-	secret := hkdfExpandLabel(initialSecret, "client in", 32)
-	hpKey := hkdfExpandLabel(secret, "quic hp", 16)
-	hb, err := aes.NewCipher(hpKey)
-	if err != nil {
-		return nil, false
-	}
-	var mask [16]byte
-	hb.Encrypt(mask[:], out[actualPNOff+4:actualPNOff+20])
-
-	out[0] = h.hdr0 ^ (mask[0] & 0x0f)
-	for i := 0; i < h.pnLen; i++ {
-		out[actualPNOff+i] ^= mask[1+i]
-	}
-
-	return out, true
+// tokenFirstReader yields token first, then draws from rest. A REALITY QUIC client dial hands this
+// to the TLS stack as its randomness source: apernet's ChromeParrot reads the 32-byte ClientHello
+// random as its first read, so the token lands there, and every later read (GREASE, key shares,
+// ...) is ordinary cryptographic randomness.
+type tokenFirstReader struct {
+	token []byte
+	rest  io.Reader
 }
 
-// VerifyQUICInitialToken verifies whether an incoming Initial packet carries a valid stealth token
-// bound to its ClientHello (checked either in Initial Token field or in legacy_session_id).
-func VerifyQUICInitialToken(pkt []byte, authKey []byte) (valid bool, dcid []byte) {
-	return VerifyQUICInitialTokenAt(pkt, authKey, nowUnix())
+func (r *tokenFirstReader) Read(p []byte) (int, error) {
+	if len(r.token) > 0 {
+		n := copy(p, r.token)
+		r.token = r.token[n:]
+		return n, nil
+	}
+	return r.rest.Read(p)
 }
 
-// VerifyQUICInitialTokenAt verifies the token against a specific timestamp (useful for tests and replay checks).
-func VerifyQUICInitialTokenAt(pkt []byte, authKey []byte, now int64) (valid bool, dcid []byte) {
+// QUICInitialRand returns the randomness source for a REALITY QUIC client dial (ChromeParrot): the
+// freshly generated stealth token as the first 32 bytes, cryptographic randomness thereafter. Set
+// it as tls.Config.Rand; the ClientHello random then carries the token and the server authenticates
+// the dial from it, without a QUIC Token-field artefact that a real Chrome would never send.
+func QUICInitialRand(authKey []byte) (io.Reader, error) {
+	token, err := GenerateQUICRandomToken(authKey)
+	if err != nil {
+		return nil, err
+	}
+	return &tokenFirstReader{token: token, rest: rand.Reader}, nil
+}
+
+// VerifyQUICInitialRandomToken checks whether a client Initial carries a valid stealth token as its
+// ClientHello random, sealed under authKey. It returns the DCID either way (so the caller can track
+// the connection), and false for anyone without the node's key: a stranger, scanner or active probe
+// the caller then hands to the cover site.
+func VerifyQUICInitialRandomToken(pkt []byte, authKey []byte) (valid bool, dcid []byte) {
+	return VerifyQUICInitialRandomTokenAt(pkt, authKey, nowUnix())
+}
+
+// VerifyQUICInitialRandomTokenAt verifies against a specific time (for tests and replay checks).
+func VerifyQUICInitialRandomTokenAt(pkt []byte, authKey []byte, now int64) (valid bool, dcid []byte) {
 	h, plain, _, _, err := parseAndUnmaskInitial(pkt, true)
 	if err != nil {
 		return false, nil
@@ -425,33 +309,14 @@ func VerifyQUICInitialTokenAt(pkt []byte, authKey []byte, now int64) (valid bool
 	if len(clientHello) < 38 || clientHello[0] != 1 {
 		return false, h.dcid
 	}
-
 	random := clientHello[6:38]
-	bound := quicHelloBinding(random, h.dcid)
-
 	aead, err := DeriveAEAD(authKey)
 	if err != nil {
 		return false, h.dcid
 	}
-
-	// 1. Check in QUIC Initial Token field
-	if h.tokLen == StealthTokenLen {
-		token := pkt[h.tokOff+h.tokLenN : h.tokOff+h.tokLenN+StealthTokenLen]
-		if err := verifyStealthToken(aead, token, bound, sharedReplayCache, now); err == nil {
-			return true, h.dcid
-		}
+	if verifyStealthToken(aead, random, quicRandomBinding(), sharedReplayCache, now) == nil {
+		return true, h.dcid
 	}
-
-	// 2. Also check if helloBinding (TCP-style with key_share) matches
-	if b2, ok := helloBinding(clientHello); ok {
-		if h.tokLen == StealthTokenLen {
-			token := pkt[h.tokOff+h.tokLenN : h.tokOff+h.tokLenN+StealthTokenLen]
-			if err := verifyStealthToken(aead, token, b2, sharedReplayCache, now); err == nil {
-				return true, h.dcid
-			}
-		}
-	}
-
 	return false, h.dcid
 }
 

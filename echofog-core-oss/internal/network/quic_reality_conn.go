@@ -340,7 +340,7 @@ func (c *QuicRealityConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			}
 
 			if mimicry.IsQUICInitial(p[:n]) {
-				valid, dcid := mimicry.VerifyQUICInitialToken(p[:n], authKey)
+				valid, dcid := mimicry.VerifyQUICInitialRandomToken(p[:n], authKey)
 				isAuthed := c.isAuthed(addr, dcid)
 
 				if !valid && !isAuthed {
@@ -360,10 +360,8 @@ func (c *QuicRealityConn) ReadFrom(p []byte) (int, net.Addr, error) {
 					}
 				}
 
-				if clean, ok := mimicry.StripInitialToken(p[:n]); ok {
-					copy(p, clean)
-					return len(clean), addr, nil
-				}
+				// The stealth token rides in the ClientHello random, a genuine part of the
+				// handshake, so the Initial goes to quic-go unchanged: nothing to strip.
 				return n, addr, nil
 			}
 
@@ -382,32 +380,9 @@ func (c *QuicRealityConn) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 func (c *QuicRealityConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	// Client dialing camouflage node: inject stealth token into QUIC Initial packet
-	if mimicry.IsQUICInitial(p) && c.qt != nil {
-		addrStr := addr.String()
-		sni, hasSNI := c.qt.book.getSNI(addrStr)
-		expectedID, haveExpected := c.qt.book.get(addrStr)
-		if !haveExpected {
-			if ua, ok := addr.(*net.UDPAddr); ok {
-				expectedID, haveExpected = c.qt.book.get(ua.AddrPort().String())
-				if !hasSNI {
-					sni, hasSNI = c.qt.book.getSNI(ua.AddrPort().String())
-				}
-			}
-		}
-		if !hasSNI && haveExpected {
-			sni, hasSNI = c.qt.book.getSNIByID(expectedID)
-		}
-
-		if hasSNI && sni != "" && haveExpected {
-			authKey := mimicry.NodeStealthKey(c.qt.obfsSecret, expectedID)
-			if modified, dcid, ok := mimicry.InjectInitialToken(p, authKey); ok {
-				c.markAuthed(addr, dcid)
-				p = modified
-			}
-		}
-	}
-
+	// A REALITY client's stealth token travels in the ClientHello random, set on the dial's TLS
+	// randomness source (see QuicTransport.dial / mimicry.QUICInitialRand), not injected into the
+	// Initial here: the first Initial then has an empty Token field, as a real Chrome's does.
 	c.followRebinding(p, addr)
 	return c.base.WriteTo(p, addr)
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/dpi"
+	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -160,6 +161,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	}
 
 	quicCfg := q.quicCgf
+	realityCfg := quicCfg
 	if tlsCfg.ServerName != "" {
 		tlsCfg.Certificates = nil
 		tlsCfg.NextProtos = []string{"h3"}
@@ -167,6 +169,26 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 
 		if q.obfs != nil {
 			q.obfs.SetRaw(targetAddres.AddrPort(), true)
+		}
+
+		// REALITY client dial: shape the first Initial like a real Chrome's first visit to a site.
+		//   - 1250-byte Initials (quic-go's default is larger), via InitialPacketSize.
+		//   - The stealth token rides in the ClientHello random (tls.Config.Rand below), so the
+		//     Initial's Token field is empty, as Chrome's is (a token only follows a NEW_TOKEN from
+		//     an earlier visit).
+		// crypto/tls already offers the X25519MLKEM768 key share and a GREASE transport parameter, so
+		// those match Chrome too. We do NOT use apernet's ChromeParrot here: its uTLS handshake drops
+		// the TLS exporter, which EchoFog's peer-auth channel binding needs, and its ClientHello still
+		// lacks the GREASE a real Chrome sends (tracked as a quic-go dependency follow-up). Only this
+		// ephemeral, one-connection-per-dial config is reshaped; the shared listener and noise dials
+		// keep quic-go's own.
+		if q.realityConn != nil && haveExpected {
+			if r, rerr := mimicry.QUICInitialRand(mimicry.NodeStealthKey(q.obfsSecret, expected)); rerr == nil {
+				tlsCfg.Rand = r
+				reality := *quicCfg
+				reality.InitialPacketSize = 1250
+				realityCfg = &reality
+			}
 		}
 	}
 
@@ -184,7 +206,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 				pconn = NewQuicRealityConn(uconn, q)
 			}
 			ephemeralTr = &quic.Transport{Conn: pconn}
-			conn, dialErr = ephemeralTr.Dial(ctx, targetAddres, tlsCfg, quicCfg)
+			conn, dialErr = ephemeralTr.Dial(ctx, targetAddres, tlsCfg, realityCfg)
 			if dialErr != nil {
 				_ = ephemeralTr.Close()
 				_ = uconn.Close()

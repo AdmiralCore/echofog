@@ -33,26 +33,10 @@ func generateTestCert(name string) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}
 }
 
-// clientInterceptorConn wraps client's PacketConn to inject the stealth token into Initial packets
-type clientInterceptorConn struct {
-	net.PacketConn
-	authKey []byte
-}
-
-func (c *clientInterceptorConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	if IsQUICInitial(p) {
-		if modified, _, ok := InjectInitialToken(p, c.authKey); ok {
-			p = modified
-		}
-	}
-	return c.PacketConn.WriteTo(p, addr)
-}
-
-func (c *clientInterceptorConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	return c.PacketConn.ReadFrom(p)
-}
-
-// serverInterceptorConn wraps server's PacketConn to verify and strip the stealth token
+// serverInterceptorConn wraps the server's PacketConn to verify the stealth token carried in the
+// ClientHello random. The token is a genuine part of the handshake, so an authenticated Initial is
+// passed to quic-go unchanged (nothing to strip); a stranger's is dropped (a real node forwards it
+// to the cover site).
 type serverInterceptorConn struct {
 	net.PacketConn
 	authKey    []byte
@@ -72,7 +56,7 @@ func (s *serverInterceptorConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			return n, addr, err
 		}
 		if IsQUICInitial(p[:n]) {
-			valid, dcid := VerifyQUICInitialToken(p[:n], s.authKey)
+			valid, dcid := VerifyQUICInitialRandomToken(p[:n], s.authKey)
 			dcidStr := string(dcid)
 
 			s.mu.Lock()
@@ -91,10 +75,6 @@ func (s *serverInterceptorConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			}
 			s.mu.Unlock()
 
-			if clean, ok := StripInitialToken(p[:n]); ok {
-				copy(p, clean)
-				return len(clean), addr, nil
-			}
 			return n, addr, nil
 		}
 		return n, addr, nil
@@ -151,20 +131,23 @@ func TestQUICReality_FullHandshake(t *testing.T) {
 	require.NoError(t, err)
 	defer cliUDP.Close()
 
-	cliConn := &clientInterceptorConn{
-		PacketConn: cliUDP,
-		authKey:    authKey,
-	}
-	cliTr := &quic.Transport{Conn: cliConn}
+	cliTr := &quic.Transport{Conn: cliUDP}
 	defer cliTr.Close()
 
+	// The stealth token travels in the ClientHello random, seeded through tls.Config.Rand, exactly
+	// as the production REALITY dial does; no per-packet injection.
+	initialRand, err := QUICInitialRand(authKey)
+	require.NoError(t, err)
 	clientTLS := &tls.Config{
 		ServerName:         "cover.lab",
 		NextProtos:         []string{"h3"},
 		InsecureSkipVerify: true,
+		Rand:               initialRand,
 	}
+	// Stock crypto/tls, as the production REALITY dial uses: it reads the ClientHello random from
+	// tls.Config.Rand first, so the token lands there. InitialPacketSize mirrors the 1250-byte dial.
 	clientQUIC := &quic.Config{
-		ChromeParrot: true,
+		InitialPacketSize: 1250,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
