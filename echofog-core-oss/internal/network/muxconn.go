@@ -174,8 +174,10 @@ func (q quicMuxConn) ChannelBinding() (res []byte, err error) {
 			err = fmt.Errorf("tls export keying material not available: %v", r)
 		}
 	}()
-	st := q.c.ConnectionState().TLS
-	return st.ExportKeyingMaterial(channelBindingLabel, nil, channelBindingLen)
+	// Conn.ExportKeyingMaterial, not ConnectionState().TLS.ExportKeyingMaterial: the REALITY dial
+	// parrots Chrome via uTLS (patched apernet/quic-go fork), whose reconstructed tls.ConnectionState
+	// cannot carry the exporter. The fork's method routes to the right exporter for either path.
+	return q.c.ExportKeyingMaterial(channelBindingLabel, nil, channelBindingLen)
 }
 
 // DatagramTooLargeError: the frame does not fit into one datagram of this connection.

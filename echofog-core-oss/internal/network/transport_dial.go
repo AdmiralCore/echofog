@@ -199,21 +199,27 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 		}
 
 		// REALITY client dial: shape the first Initial like a real Chrome's first visit to a site.
-		//   - 1250-byte Initials (quic-go's default is larger), via InitialPacketSize.
-		//   - The stealth token rides in the ClientHello random (tls.Config.Rand below), so the
-		//     Initial's Token field is empty, as Chrome's is (a token only follows a NEW_TOKEN from
-		//     an earlier visit).
-		// crypto/tls already offers the X25519MLKEM768 key share and a GREASE transport parameter, so
-		// those match Chrome too. We do NOT use apernet's ChromeParrot here: its uTLS handshake drops
-		// the TLS exporter, which EchoFog's peer-auth channel binding needs, and its ClientHello still
-		// lacks the GREASE a real Chrome sends (tracked as a quic-go dependency follow-up). Only this
-		// ephemeral, one-connection-per-dial config is reshaped; the shared listener and noise dials
-		// keep quic-go's own.
+		//   - ChromeParrot makes quic-go send Chrome's ClientHello (via uTLS) and Chrome's transport
+		//     parameters: real GREASE (a GREASE cipher, GREASE-typed extensions, a GREASE key share
+		//     and version), the X25519MLKEM768 key share, and a GREASE transport parameter. Without
+		//     it the wire carried Go's crypto/tls fingerprint, which a JA3/JA4 censor blocks.
+		//   - 1250-byte Initials (ChromeParrot also pins this), via InitialPacketSize.
+		//   - The stealth token rides in the ClientHello random (tls.Config.Rand below): uTLS reads
+		//     the 32-byte random as its first rand draw, so the token lands there and the Initial's
+		//     Token field stays empty, as Chrome's is (a token only follows a NEW_TOKEN from an
+		//     earlier visit). GREASE values are drawn from a later, fixed-size seed, so they do not
+		//     disturb the token.
+		// This needs the patched apernet/quic-go fork (see go.mod replace): stock ChromeParrot adds
+		// the GREASE but its uTLS handshake cannot carry the TLS exporter EchoFog's peer-auth channel
+		// binding needs; the fork exposes it (Conn.ExportKeyingMaterial, used by quicMuxConn). Only
+		// this ephemeral, one-connection-per-dial config is reshaped; the shared listener and noise
+		// dials keep quic-go's own.
 		if q.realityConn != nil && haveExpected {
 			if r, rerr := mimicry.QUICInitialRand(mimicry.NodeStealthKey(q.obfsSecret, expected)); rerr == nil {
 				tlsCfg.Rand = r
 				reality := *quicCfg
 				reality.InitialPacketSize = 1250
+				reality.ChromeParrot = true
 				realityCfg = &reality
 			}
 		}
@@ -233,6 +239,13 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 				pconn = NewQuicRealityConn(uconn, q)
 			}
 			ephemeralTr = &quic.Transport{Conn: pconn}
+			if realityCfg.ChromeParrot {
+				// Chrome's QUIC client uses a zero-length source connection ID; match it so the
+				// parrot is not given away by an 8-byte SCID quic-go would otherwise generate. Safe
+				// here only because this transport carries exactly one connection per dial, which is
+				// what ZeroLengthConnectionIDGenerator requires.
+				ephemeralTr.ConnectionIDGenerator = quic.ZeroLengthConnectionIDGenerator{}
+			}
 			conn, dialErr = ephemeralTr.Dial(ctx, targetAddres, tlsCfg, realityCfg)
 			if dialErr != nil {
 				_ = ephemeralTr.Close()

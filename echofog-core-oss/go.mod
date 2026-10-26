@@ -89,3 +89,10 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
 	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 )
+
+// Local fork of apernet/quic-go: adds real Chrome GREASE (a GREASE cipher suite, a GREASE-typed
+// extension and a GREASE key share) to the QUIC-REALITY ClientHello, and exposes the uTLS TLS
+// exporter so the ChromeParrot path keeps EchoFog's peer-auth channel binding. The copy under
+// third_party/ is the upstream module at the version above with exactly those two changes, so it
+// can be diffed against upstream. See third_party/quic-go/ECHOFOG-PATCH.md.
+replace github.com/apernet/quic-go => ./third_party/quic-go
