@@ -621,7 +621,7 @@ func (n *NodeApi) exitDialer() (*exit_gateway.P2PDialer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, exit)), nil
+	return exit_gateway.NewSwarmP2PDialer(n.node.Swarm, exit), nil
 }
 
 // startPayGuard watches the exit's balance while the proxy runs.

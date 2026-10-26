@@ -7,10 +7,31 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
+
+// swarmPadsPeer reports whether tunnels between this node and peer id use the TLS-in-TLS padding:
+// both this node's toggle is on (so it announced CapTunnelPadding and will strip padding) and the
+// peer announced the same capability. Both ends compute this identically, so a peer pair agrees.
+func swarmPadsPeer(sw *swarm.Swarm, id types.PeerID) bool {
+	if sw == nil || !sw.PadsTunnels() {
+		return false
+	}
+	p := sw.GetPeer(id)
+	return p != nil && p.Caps().Has(handshake.CapTunnelPadding)
+}
+
+// NewSwarmP2PDialer builds a P2PDialer to exit over sw, with the TLS-in-TLS padding gated on the
+// exit peer's advertised capability. Prefer this over NewP2PDialer(SwarmOpener(...)) so every
+// tunnel to a padding-capable exit is padded consistently.
+func NewSwarmP2PDialer(sw *swarm.Swarm, exit types.PeerID) *P2PDialer {
+	d := NewP2PDialer(SwarmOpener(sw, exit))
+	d.pad = func() bool { return swarmPadsPeer(sw, exit) }
+	return d
+}
 
 // swarmStream is a peer stream; sw lets a UDP session on it reach the peer with datagrams.
 type swarmStream struct {
@@ -31,6 +52,7 @@ func AttachToSwarm(sw *swarm.Swarm, svc *ExitService) {
 		}
 		return ""
 	})
+	svc.SetPadData(func(id types.PeerID) bool { return swarmPadsPeer(sw, id) })
 	sw.RegisterStreamHandler(net_types.TypeExitConnect, func(st *network.Stream, target []byte, peer types.PeerID) {
 		svc.HandleTunnelFrom(context.Background(), swarmStream{st, sw}, target, peer)
 	})

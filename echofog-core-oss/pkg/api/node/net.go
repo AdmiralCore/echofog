@@ -277,7 +277,7 @@ func (n *NodeApi) startVPN(relayPeerID, listen string) error {
 	if n.vpn.server != nil {
 		return errors.New("vpn already running")
 	}
-	srv := exit_gateway.NewSOCKS5Server(listen, exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, exit)))
+	srv := exit_gateway.NewSOCKS5Server(listen, exit_gateway.NewSwarmP2PDialer(n.node.Swarm, exit))
 	if n.node.EventBus != nil {
 		srv.SetEmitter(n.node.EventBus)
 	}

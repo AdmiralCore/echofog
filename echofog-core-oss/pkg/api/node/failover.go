@@ -135,7 +135,7 @@ func (n *NodeApi) pickExitFrom(ctx context.Context, avoid map[string]bool, lastR
 			continue
 		}
 		qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-		info, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, pid)).QueryAccount(qctx)
+		info, err := exit_gateway.NewSwarmP2PDialer(n.node.Swarm, pid).QueryAccount(qctx)
 		cancel()
 		if state, _ := classifyExit(info, err); state != ExitOK {
 			slog.Info("exit skipped", "exit", id[:12], "state", state)
@@ -260,7 +260,7 @@ func (n *NodeApi) reviveExit(ctx context.Context, relay string) bool {
 	query := func() (*exit_gateway.AccountInfo, error) {
 		qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 		defer cancel()
-		return exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, pid)).QueryAccount(qctx)
+		return exit_gateway.NewSwarmP2PDialer(n.node.Swarm, pid).QueryAccount(qctx)
 	}
 	info, err := query()
 	// connected, yet no answer: a QUIC link whose UDP went quiet after the handshake looks alive
@@ -314,7 +314,7 @@ func (n *NodeApi) switchExit(from, to, reason string) bool {
 		return false
 	}
 	n.endSessionLocked("switched")
-	n.vpn.server.SetDialer(exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(n.node.Swarm, id)))
+	n.vpn.server.SetDialer(exit_gateway.NewSwarmP2PDialer(n.node.Swarm, id))
 	n.vpn.relayPeer = to
 	n.vpn.exitState, n.vpn.exitNotice = ExitChecking, ""
 	n.vpn.usingSince = time.Now()

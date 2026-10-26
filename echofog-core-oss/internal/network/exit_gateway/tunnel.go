@@ -54,9 +54,20 @@ type StreamOpener func(ctx context.Context) (FramedStream, error)
 // P2PDialer implements StreamDialer by tunnelling every connection through one exit peer
 type P2PDialer struct {
 	open StreamOpener
+	// pad, when set and true at dial time, wraps the data phase in the TLS-in-TLS padding. The
+	// decision is per exit peer (its capabilities), so it is the same for every tunnel to it.
+	pad func() bool
 }
 
 func NewP2PDialer(open StreamOpener) *P2PDialer { return &P2PDialer{open: open} }
+
+// maybePad wraps l in the padding layer when the exit peer supports it, else returns it as is.
+func (d *P2PDialer) maybePad(l *lazyExitStream) io.ReadWriteCloser {
+	if d.pad != nil && d.pad() {
+		return newTunnelPad(l)
+	}
+	return l
+}
 
 // DialExitStream opens a tunnel to targetAddr through the exit peer without waiting for the exit
 // to answer, the way hysteria's fast open does: the request goes out and the stream is returned
@@ -71,7 +82,7 @@ func (d *P2PDialer) DialExitStream(ctx context.Context, targetAddr string) (io.R
 	if err != nil {
 		return nil, err
 	}
-	return l, nil
+	return d.maybePad(l), nil
 }
 
 // DialExitStreamConfirmed is DialExitStream that returns only once the exit has answered, with
@@ -85,7 +96,7 @@ func (d *P2PDialer) DialExitStreamConfirmed(ctx context.Context, targetAddr stri
 		l.Close()
 		return nil, err
 	}
-	return l, nil
+	return d.maybePad(l), nil
 }
 
 func (d *P2PDialer) dialLazy(ctx context.Context, targetAddr string) (*lazyExitStream, error) {
@@ -294,6 +305,10 @@ type ExitService struct {
 	// vouchers from clients' TON vaults (nil: this exit takes none)
 	vouchers *VoucherBook
 
+	// padData, when set, reports whether the data phase of a tunnel to this peer is padded
+	// (TLS-in-TLS defense). Set at AttachToSwarm; nil leaves padding off.
+	padData atomic.Pointer[func(types.PeerID) bool]
+
 	// limits on what peers can take (limits and addrOf are guarded by slots.mu)
 	limits  Limits
 	addrOf  func(types.PeerID) string
@@ -399,7 +414,13 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 	p, unpace := e.paceFor(peer)
 	defer unpace()
 	lim := e.CurrentLimits()
-	_ = e.splicer.SpliceFor(ctx, &meteredStream{FramedStream: st, m: m, pace: p}, conn, lim.Idle, lim.MaxLifetime)
+	// Strip the TLS-in-TLS padding below the meter, so billing counts the client's real bytes, not
+	// the pad. Both sides agree on whether to pad from the peer's capabilities (see padData).
+	data := FramedStream(st)
+	if f := e.padData.Load(); f != nil && (*f)(peer) {
+		data = newTunnelPad(st)
+	}
+	_ = e.splicer.SpliceFor(ctx, &meteredStream{FramedStream: data, m: m, pace: p}, conn, lim.Idle, lim.MaxLifetime)
 }
 
 func (e *ExitService) connect(ctx context.Context, target string) (net.Conn, byte) {

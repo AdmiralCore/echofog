@@ -55,6 +55,10 @@ type Swarm struct {
 	cardAge      time.Time // when card was made
 	announcedSNI string
 
+	// padsTunnels mirrors whether this node announced handshake.CapTunnelPadding, so exit-tunnel
+	// wiring can decide to pad without recomputing the gating logic that lives in the node layer.
+	padsTunnels atomic.Bool
+
 	peerSNIMu sync.RWMutex
 	peerSNIs  map[types.PeerID]string
 	netTransport network.Transport

@@ -28,7 +28,7 @@ func (t swarmTunneler) TestDial(ctx context.Context, exit types.PeerID, target s
 	dctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	start := time.Now()
-	conn, err := exit_gateway.NewP2PDialer(exit_gateway.SwarmOpener(t.n.Swarm, exit)).DialExitStreamConfirmed(dctx, target)
+	conn, err := exit_gateway.NewSwarmP2PDialer(t.n.Swarm, exit).DialExitStreamConfirmed(dctx, target)
 	if err != nil {
 		return 0, err
 	}

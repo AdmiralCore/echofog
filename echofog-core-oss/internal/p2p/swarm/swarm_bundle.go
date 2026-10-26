@@ -276,6 +276,13 @@ func (s *Swarm) GetAnnouncedSNI() string {
 	return s.announcedSNI
 }
 
+// SetPadsTunnels records whether this node announced the exit-tunnel padding capability. The node
+// layer sets it from announcedCaps() so it tracks gating; exit-tunnel wiring reads PadsTunnels().
+func (s *Swarm) SetPadsTunnels(v bool) { s.padsTunnels.Store(v) }
+
+// PadsTunnels reports whether this node pads exit-tunnel data phases (it announced CapTunnelPadding).
+func (s *Swarm) PadsTunnels() bool { return s.padsTunnels.Load() }
+
 // SetPeerSNI associates a peer with their camouflage SNI.
 func (s *Swarm) SetPeerSNI(id types.PeerID, sni string) {
 	s.peerSNIMu.Lock()

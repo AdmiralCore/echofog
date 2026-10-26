@@ -14,6 +14,11 @@ const (
 	// CapSignal: the node passes on the few small messages that start a direct connection
 	// between peers behind NATs (hole punching), but relays no traffic.
 	CapSignal Capability = 1 << 5
+	// CapTunnelPadding: the node speaks the padded exit-tunnel data phase (Vision-style framing
+	// that breaks the TLS-in-TLS size/timing fingerprint). A node announces it only when it is
+	// willing to strip that framing (anti_dpi.tunnel_padding on), so a peer may pad to it iff it
+	// sees this bit. Both sides compute the same decision: localToggle && peer.Caps().Has(this).
+	CapTunnelPadding Capability = 1 << 6
 )
 
 // DefaultCaps is what a node announces unless told otherwise: it relays and serves the DHT.

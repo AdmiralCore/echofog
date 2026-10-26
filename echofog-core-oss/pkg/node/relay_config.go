@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
 )
 
@@ -28,6 +29,9 @@ func (n *Node) ApplyRelayConfig() {
 	}
 	if n.WS != nil {
 		n.WS.SetCaps(caps)
+	}
+	if n.Swarm != nil {
+		n.Swarm.SetPadsTunnels(caps.Has(handshake.CapTunnelPadding))
 	}
 }
 

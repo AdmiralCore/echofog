@@ -10,7 +10,7 @@ import (
 
 // CurrentProtocolVersion is the peer protocol version this build speaks.
 // 101: mutual peer authentication bound to the transport session.
-const CurrentProtocolVersion uint32 = 101
+const CurrentProtocolVersion uint32 = 102
 
 // NetworkName names the network this build belongs to. It goes into invitation links, so the app
 // can tell a link of another network (a fork) from one it cannot read. A fork sets its own at
@@ -199,6 +199,12 @@ type AntiDPIConfig struct {
 
 	// FlowShaping bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
 	FlowShaping FlowShapingConfig `json:"flow_shaping"`
+
+	// TunnelPadding turns on the TLS-in-TLS defense: the opening of each exit-tunnel data phase is
+	// carried in padded frames so a censor cannot see the inner TLS handshake's size/timing shape.
+	// A node announces handshake.CapTunnelPadding only when this is on, and a peer pads to it only
+	// when it sees that capability, so old nodes interoperate in the plain (unpadded) mode.
+	TunnelPadding bool `json:"tunnel_padding"`
 }
 
 // FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
@@ -422,6 +428,7 @@ func DefaultConfig(profileName string) *AppConfig {
 
 	cfg.AntiDPI.Obfs = ObfsNode
 	cfg.AntiDPI.FlowShaping = DefaultFlowShapingConfig()
+	cfg.AntiDPI.TunnelPadding = true
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public
 	// TCP/WS listener must set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site

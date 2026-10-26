@@ -108,6 +108,16 @@ func (e *ExitService) SetAddrOf(f func(types.PeerID) string) {
 	e.slots.mu.Unlock()
 }
 
+// SetPadData tells the exit which peers' tunnels use the TLS-in-TLS padding (so it strips it before
+// splicing); nil leaves padding off.
+func (e *ExitService) SetPadData(f func(types.PeerID) bool) {
+	if f == nil {
+		e.padData.Store(nil)
+		return
+	}
+	e.padData.Store(&f)
+}
+
 // streamSlots counts the streams the exit serves, so one peer, one address or everybody together
 // stays within the caps. Its maps hold only peers and addresses with something open.
 type streamSlots struct {

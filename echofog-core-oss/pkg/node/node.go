@@ -487,6 +487,7 @@ func (n *Node) Start() (err error) {
 
 	n.Swarm = swarm.NewSwarm(n.Ctx, n.Net, n.ID, n.Dispatcher, n.identity, n.Net.ConnChan(), n.Storage, n.Cfg)
 	n.Swarm.SetLogger(n.Logger)
+	n.Swarm.SetPadsTunnels(n.announcedCaps().Has(handshake.CapTunnelPadding))
 	if n.Cfg.AntiDPI.TLSServerName != "" {
 		n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
 	}
@@ -892,6 +893,11 @@ func (n *Node) announcedCaps() handshake.Capability {
 		return handshake.CapNone // a hidden node is nobody's relay or DHT server: it is not listed
 	}
 	caps := handshake.CapDHTServer
+	if n.Cfg.AntiDPI.TunnelPadding {
+		// announce the TLS-in-TLS padding so peers may pad their exit tunnels to us (and we strip
+		// it). A hidden node returns CapNone above and stays unpadded — consistent on both ends.
+		caps |= handshake.CapTunnelPadding
+	}
 	switch rs := n.Cfg.Relay.Server; {
 	case rs.Enabled && rs.SignalingOnly:
 		caps |= handshake.CapSignal
