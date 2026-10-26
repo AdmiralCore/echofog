@@ -32,6 +32,7 @@ type Publisher struct {
 	self      types.PeerID
 	pub       types.PeerPublicKey
 	neighbors func() []string
+	sni       string
 	now       func() time.Time
 	interval  time.Duration
 
@@ -46,6 +47,13 @@ type Publisher struct {
 
 func NewPublisher(dht DHTClient, signer Signer, self types.PeerID, pub types.PeerPublicKey, neighbors func() []string) *Publisher {
 	return &Publisher{dht: dht, signer: signer, self: self, pub: pub, neighbors: neighbors, now: time.Now, interval: RepublishInterval}
+}
+
+// SetSNI sets the camouflage SNI advertised with this node's exit offer.
+func (p *Publisher) SetSNI(sni string) {
+	p.mu.Lock()
+	p.sni = sni
+	p.mu.Unlock()
 }
 
 func (c ShareConfig) validate() error {
@@ -70,6 +78,7 @@ func (p *Publisher) build(enabled bool, cfg ShareConfig) (*Advert, error) {
 		PricePerMB: cfg.PricePerMB,
 		UploadKbps: cfg.UploadKbps,
 		FreeTestKB: cfg.FreeTestKB,
+		SNI:        p.sni,
 		IssuedAt:   now.Unix(),
 		ExpiresAt:  now.Add(AdvertTTL).Unix(),
 	}

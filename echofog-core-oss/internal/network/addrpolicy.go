@@ -46,7 +46,14 @@ func (p AddrPolicy) Shareable(addr string) bool {
 		}
 		host = u.Hostname()
 	} else {
-		h, port, err := net.SplitHostPort(addr)
+		clean := addr
+		if qIdx := strings.IndexByte(clean, '?'); qIdx >= 0 {
+			clean = clean[:qIdx]
+		}
+		if sIdx := strings.IndexByte(clean, '/'); sIdx >= 0 {
+			clean = clean[:sIdx]
+		}
+		h, port, err := net.SplitHostPort(clean)
 		if err != nil || port == "" || port == "0" {
 			return false
 		}

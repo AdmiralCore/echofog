@@ -19,6 +19,7 @@ type StoredBundleRecord struct {
 	PeerID    types.PeerID        `json:"peer_id"`
 	PubKey    types.PeerPublicKey `json:"pub_key"`
 	BundleRaw []byte              `json:"bundle_raw"`
+	SNI       string              `json:"sni,omitempty"`
 }
 
 // BundleFetcher looks a value up in the network (the DHT): the key bundles of peers that are not
@@ -83,6 +84,9 @@ func (s *Swarm) bundleFromRecord(peerID types.PeerID, data []byte) (*keymanager.
 	}
 	if types.PeerPubKeyToID(record.PubKey) != peerID {
 		return nil, errors.New("the bundle does not belong to this peer")
+	}
+	if record.SNI != "" {
+		s.SetPeerSNI(peerID, record.SNI)
 	}
 	var protoBundle internal_pb.PreKeyBundle
 	if err := proto.Unmarshal(record.BundleRaw, &protoBundle); err != nil {
@@ -205,7 +209,7 @@ func (s *Swarm) IdentityCard() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	card, err := json.Marshal(StoredBundleRecord{PeerID: s.selfID, PubKey: s.GetMyPubKey(), BundleRaw: raw})
+	card, err := json.Marshal(StoredBundleRecord{PeerID: s.selfID, PubKey: s.GetMyPubKey(), BundleRaw: raw, SNI: s.announcedSNI})
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +255,47 @@ func (s *Swarm) CreateMyPreKeyBundle() ([]byte, error) {
 		PeerID:    s.selfID,
 		PubKey:    s.selfPubKey,
 		BundleRaw: rawProto,
+		SNI:       s.announcedSNI,
 	}
 
 	return json.Marshal(record)
+}
+
+// SetAnnouncedSNI sets the camouflage SNI included in identity cards and prekey bundles.
+func (s *Swarm) SetAnnouncedSNI(sni string) {
+	s.cardMu.Lock()
+	s.announcedSNI = sni
+	s.card = nil // invalidate cached card so next IdentityCard() builds fresh
+	s.cardMu.Unlock()
+}
+
+// GetAnnouncedSNI returns the node's own camouflage SNI.
+func (s *Swarm) GetAnnouncedSNI() string {
+	s.cardMu.Lock()
+	defer s.cardMu.Unlock()
+	return s.announcedSNI
+}
+
+// SetPeerSNI associates a peer with their camouflage SNI.
+func (s *Swarm) SetPeerSNI(id types.PeerID, sni string) {
+	s.peerSNIMu.Lock()
+	if s.peerSNIs == nil {
+		s.peerSNIs = make(map[types.PeerID]string)
+	}
+	s.peerSNIs[id] = sni
+	s.peerSNIMu.Unlock()
+
+	if p := s.GetPeer(id); p != nil && p.Addr() != "" {
+		s.expectPeer(p.Addr(), id)
+	}
+}
+
+// GetPeerSNI returns the known camouflage SNI of a peer.
+func (s *Swarm) GetPeerSNI(id types.PeerID) string {
+	s.peerSNIMu.RLock()
+	defer s.peerSNIMu.RUnlock()
+	if s.peerSNIs != nil {
+		return s.peerSNIs[id]
+	}
+	return ""
 }

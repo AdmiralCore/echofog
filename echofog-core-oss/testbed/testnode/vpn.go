@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apernet/quic-go/http3"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 )
 
@@ -365,6 +366,16 @@ func serveWeb(addr string) {
 		srv := &http.Server{Addr: ":443", Handler: mux, TLSConfig: &tls.Config{Certificates: []tls.Certificate{selfSigned()}}}
 		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("https: %v", err)
+		}
+	}()
+	go func() {
+		h3srv := &http3.Server{
+			Addr:      ":443",
+			Handler:   mux,
+			TLSConfig: &tls.Config{Certificates: []tls.Certificate{selfSigned()}},
+		}
+		if err := h3srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("http3: %v", err)
 		}
 	}()
 	log.Printf("web server on %s and :443", addr)

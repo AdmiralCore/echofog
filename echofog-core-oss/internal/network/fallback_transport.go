@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"github.com/apernet/quic-go"
@@ -175,6 +176,16 @@ func (f *FallbackTransport) ListenEarly(ctx context.Context) error {
 	return f.listenTCP(addr)
 }
 
+// SetCamouflage configures both QUIC and TCP transports to mimic the camouflage site.
+func (f *FallbackTransport) SetCamouflage(cert tls.Certificate, serverName, fallbackAddr string) {
+	if f.QUIC != nil {
+		f.QUIC.SetCamouflage(cert, serverName, fallbackAddr)
+	}
+	if f.TCP != nil {
+		f.TCP.SetCamouflage(cert, serverName, fallbackAddr)
+	}
+}
+
 // ListenTCP raises the inbound TCP listener on addr after start-up: a public node that had no
 // camouflage target at start runs on UDP only, and turns TCP on once it has one (the caller sets
 // it with TCPTransport.SetCamouflage first).
@@ -225,6 +236,14 @@ func (f *FallbackTransport) ExpectPeer(addr string, id types.PeerID) {
 	f.QUIC.ExpectPeer(addr, id)
 	if f.TCP != nil {
 		f.TCP.ExpectPeer(f.tcpDialAddr(addr), id)
+	}
+}
+
+// ExpectPeerSNI tells both transports whose address addr is and its camouflage SNI; see PeerExpecter.
+func (f *FallbackTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
+	f.QUIC.ExpectPeerSNI(addr, id, sni)
+	if f.TCP != nil {
+		f.TCP.ExpectPeerSNI(f.tcpDialAddr(addr), id, sni)
 	}
 }
 

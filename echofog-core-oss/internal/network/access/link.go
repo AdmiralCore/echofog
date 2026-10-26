@@ -48,6 +48,7 @@ type Invite struct {
 	Secret   []byte   // nil: a public node, no secret needed
 	Addrs    []string // "host:port" or ws(s):// URLs, to dial directly
 	Relays   []string // "host:port/<relay peer id>", through which the node can be reached
+	SNI      string   // target node's camouflage SNI to use for TLS/QUIC
 }
 
 // IsLink reports whether text looks like an invitation link (it may still be unreadable).
@@ -67,6 +68,9 @@ func FormatLink(inv Invite) string {
 	if inv.Secret != nil {
 		q.Set("s", base64.RawURLEncoding.EncodeToString(inv.Secret))
 	}
+	if inv.SNI != "" {
+		q.Set("sni", inv.SNI)
+	}
 	for _, a := range inv.Addrs {
 		q.Add("a", a)
 	}
@@ -77,7 +81,7 @@ func FormatLink(inv Invite) string {
 	var b strings.Builder
 	b.WriteString(linkPrefix)
 	first := true
-	for _, k := range []string{"v", "net", "p", "id", "s", "a", "r"} {
+	for _, k := range []string{"v", "net", "p", "id", "s", "sni", "a", "r"} {
 		for _, v := range q[k] {
 			if !first {
 				b.WriteByte('&')
@@ -126,6 +130,7 @@ func ParseLink(text, network string) (Invite, error) {
 			return Invite{}, errors.New("broken invitation link: bad secret")
 		}
 	}
+	inv.SNI = strings.TrimSpace(q.Get("sni"))
 	inv.Addrs = q["a"]
 	inv.Relays = q["r"]
 	if len(inv.Addrs) > 16 || len(inv.Relays) > 16 {

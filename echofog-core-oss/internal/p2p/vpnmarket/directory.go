@@ -249,6 +249,16 @@ func (d *Directory) List() []Entry {
 	return out
 }
 
+// SNI returns the camouflage SNI of an advertised exit, or "" when unknown.
+func (d *Directory) SNI(id types.PeerID) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if a, ok := d.adverts[id]; ok && a != nil {
+		return a.SNI
+	}
+	return ""
+}
+
 // TopNeighbors lists the best known exit IDs for embedding in our own advert
 func (d *Directory) TopNeighbors() []string {
 	var out []string

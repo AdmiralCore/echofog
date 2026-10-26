@@ -53,8 +53,28 @@ func (q *QuicTransport) DialEarly(ctx context.Context, addr string) error {
 // from the IP only, so peers behind one IP (NAT, one host) would otherwise share and race on
 // one ticket, and 0-RTT would be attempted against the wrong peer.
 func (q *QuicTransport) tlsConfigFor(addr string) *tls.Config {
+	var cfg *tls.Config
+	if q.tlsCfg != nil {
+		cfg = q.tlsCfg.Clone()
+	} else {
+		cfg = &tls.Config{}
+	}
+	if sni, ok := q.book.getSNI(addr); ok && sni != "" {
+		cfg.ServerName = sni
+	} else if id, ok := q.book.get(addr); ok {
+		if s, ok2 := q.book.getSNIByID(id); ok2 && s != "" {
+			cfg.ServerName = s
+		}
+	}
+	if cfg.ServerName != "" {
+		cfg.Certificates = nil
+		cfg.NextProtos = []string{"h3"}
+		cfg.InsecureSkipVerify = true
+	} else {
+		cfg.NextProtos = []string{"echo-fog-protocole"}
+	}
 	if q.tlsCfg == nil || q.tlsCfg.ClientSessionCache == nil {
-		return q.tlsCfg
+		return cfg
 	}
 	q.dialMu.Lock()
 	if q.sessionCaches == nil || len(q.sessionCaches) > 4096 {
@@ -66,7 +86,6 @@ func (q *QuicTransport) tlsConfigFor(addr string) *tls.Config {
 		q.sessionCaches[addr] = cache
 	}
 	q.dialMu.Unlock()
-	cfg := q.tlsCfg.Clone()
 	cfg.ClientSessionCache = cache
 	return cfg
 }
@@ -75,14 +94,41 @@ func (q *QuicTransport) tlsConfigFor(addr string) *tls.Config {
 // be called before dialing addr: the packets to that node are sealed with a key derived from id.
 func (q *QuicTransport) ExpectPeer(addr string, id types.PeerID) {
 	q.book.set(addr, id)
+	ua, err := net.ResolveUDPAddr("udp", addr)
+	if err == nil {
+		q.book.set(ua.String(), id)
+	}
 	if q.obfs == nil {
 		return
 	}
-	ua, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return
 	}
 	_ = q.obfs.Expect(ua.AddrPort(), dpi.NodeKey(q.obfsSecret, id))
+	if sni, ok := q.book.getSNI(addr); ok && sni != "" {
+		q.obfs.SetRaw(ua.AddrPort(), true)
+	} else if s, ok := q.book.getSNIByID(id); ok && s != "" {
+		q.obfs.SetRaw(ua.AddrPort(), true)
+	}
+}
+
+// ExpectPeerSNI tells the transport that the node at addr has peer ID id and camouflage SNI sni.
+func (q *QuicTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
+	q.book.setSNI(addr, id, sni)
+	ua, err := net.ResolveUDPAddr("udp", addr)
+	if err == nil {
+		q.book.setSNI(ua.String(), id, sni)
+	}
+	if q.obfs == nil {
+		return
+	}
+	if err != nil {
+		return
+	}
+	_ = q.obfs.Expect(ua.AddrPort(), dpi.NodeKey(q.obfsSecret, id))
+	if sni != "" {
+		q.obfs.SetRaw(ua.AddrPort(), true)
+	}
 }
 
 func (q *QuicTransport) dial(ctx context.Context, addr string) error {
@@ -95,8 +141,35 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	if !haveExpected {
+		expected, haveExpected = q.book.get(targetAddres.String())
+	}
 
-	conn, err := q.tr.Dial(ctx, targetAddres, q.tlsConfigFor(addr), q.quicCgf)
+	tlsCfg := q.tlsConfigFor(addr)
+	if tlsCfg.ServerName == "" {
+		if s, ok := q.book.getSNI(targetAddres.String()); ok && s != "" {
+			tlsCfg.ServerName = s
+		} else if s, ok := q.book.getSNI(addr); ok && s != "" {
+			tlsCfg.ServerName = s
+		} else if haveExpected {
+			if s, ok := q.book.getSNIByID(expected); ok && s != "" {
+				tlsCfg.ServerName = s
+			}
+		}
+	}
+
+	quicCfg := q.quicCgf
+	if tlsCfg.ServerName != "" {
+		tlsCfg.Certificates = nil
+		tlsCfg.NextProtos = []string{"h3"}
+		tlsCfg.InsecureSkipVerify = true
+
+		if q.obfs != nil {
+			q.obfs.SetRaw(targetAddres.AddrPort(), true)
+		}
+	}
+
+	conn, err := q.tr.Dial(ctx, targetAddres, tlsCfg, quicCfg)
 	if err != nil {
 		return err
 	}

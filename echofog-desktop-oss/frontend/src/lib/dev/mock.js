@@ -655,10 +655,10 @@ const impl = {
   SetVPNAutoSwitch: (on) => { vpnMock.autoSwitch = on; return null; },
   StopVPN: () => { Object.assign(vpnMock, { running: false, wholeComputer: false, tunnelReady: false }); emit('vpn:stopped', {}); return null; },
   SetWholeComputer: (on) => new Promise((r) => setTimeout(() => { vpnMock.wholeComputer = on; r(null); }, on ? 1500 : 300)),
-  ListExitNodes: () => [
+  ListExitNodes: () => (MARKET ? marketExits : [
     { peerId: hex(9), pricePerMb: 49, claimedKbps: 50000, measuredKbps: 41000, latencyMs: 38, domainsOk: 3, domainsTried: 3, freeTestKb: 512, probes: 4, successes: 4, score: 0.86, connected: true },
     { peerId: hex(10), pricePerMb: 0, claimedKbps: 20000, measuredKbps: 0, latencyMs: 112, domainsOk: 0, domainsTried: 0, freeTestKb: 0, probes: 0, successes: 0, score: 0.4, connected: false },
-  ],
+  ]),
   GetSupport: () => ({ ...supportMock }),
   SetSupportPercent: (p) => { if (p < 0 || p > 20) throw new Error('support share must be between 0 and 20 percent'); supportMock.percent = p; return null; },
   GetOnRampURL: () => 'https://example.invalid/buy?address=UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ',
@@ -756,6 +756,17 @@ const historyMock = [
   { peerId: 'beab718659cea03fbe747c2f1e5ffbef4fd32e9a14bf550802d89b19138a1bf6', addr: '34.32.224.253:443', startedAt: sec(Date.now()) - 26 * 3600, endedAt: sec(Date.now()) - 25 * 3600, updatedAt: sec(Date.now()) - 25 * 3600, readyMs: 1450, bytesRx: 420e6, bytesTx: 12e6, refused: 4, lastState: 'ok', pricePerMb: 0, endReason: 'switched' },
   { peerId: '3df2ff7f53a1d4772d030a628c21028b20abebc573a5fcb692224ae7366b5140', addr: '', startedAt: sec(Date.now()) - 50 * 3600, endedAt: sec(Date.now()) - 49.5 * 3600, updatedAt: sec(Date.now()) - 49.5 * 3600, readyMs: 0, bytesRx: 0, bytesTx: 0, refused: 12, lastState: 'quota', pricePerMb: 98, endReason: 'app_closed' },
 ];
+// ?market: a fuller list of exits in several countries, free and paid, as the market shows it
+const MARKET = new URLSearchParams(location.search).has('market');
+const marketExits = [
+  ['NL', 'Amsterdam', 49, 94000, 28, 6, 6, 0.93],
+  ['DE', 'Frankfurt am Main', 0, 52000, 41, 6, 6, 0.88],
+  ['FI', 'Helsinki', 25, 71000, 47, 5, 6, 0.8],
+  ['PL', 'Warsaw', 0, 18000, 63, 6, 6, 0.74],
+  ['SE', 'Stockholm', 98, 120000, 52, 4, 6, 0.66],
+].map(([countryCode, city, pricePerMb, measuredKbps, latencyMs, domainsOk, domainsTried, score], i) => ({
+  peerId: hex(60 + i), countryCode, city, pricePerMb, claimedKbps: measuredKbps, measuredKbps, latencyMs, domainsOk, domainsTried, freeTestKb: pricePerMb ? 512 : 0, probes: 6, successes: 6, score, connected: false,
+}));
 const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
 
 // handy in the console: __emit('group:event', {kind: 'call', groupId: 'grp_launch', title: 'EchoFog Launch', from: '...', callId: 'x', coordinator: '...'})

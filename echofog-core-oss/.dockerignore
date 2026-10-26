@@ -3,3 +3,4 @@
 **/*.test
 docs
 deploy/.env
+testbed/out

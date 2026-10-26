@@ -39,6 +39,7 @@ type Advert struct {
 	IssuedAt   int64    `json:"issued_at"`
 	ExpiresAt  int64    `json:"expires_at"`
 	Sig        []byte   `json:"sig,omitempty"`
+	SNI        string   `json:"sni,omitempty"`
 }
 
 // Signer produces an ed25519 signature with the node identity
@@ -122,6 +123,15 @@ func (a *Advert) Verify(now time.Time) error {
 	if a.PricePerMB < 0 || a.PricePerMB > MaxPricePerMB || a.UploadKbps < 0 || a.UploadKbps > MaxUploadKbps ||
 		a.FreeTestKB < 0 || a.FreeTestKB > MaxFreeTestKB || len(a.Neighbors) > MaxNeighbors {
 		return fmt.Errorf("%w: value out of range", ErrAdvertInvalid)
+	}
+	if len(a.SNI) > 253 {
+		return fmt.Errorf("%w: SNI domain too long", ErrAdvertInvalid)
+	}
+	for i := 0; i < len(a.SNI); i++ {
+		c := a.SNI[i]
+		if c < 0x21 || c > 0x7e || c == ':' || c == '/' {
+			return fmt.Errorf("%w: invalid character in SNI", ErrAdvertInvalid)
+		}
 	}
 	for _, n := range a.Neighbors {
 		if raw, err := hex.DecodeString(n); err != nil || len(raw) != 32 {

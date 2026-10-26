@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"math/rand/v2"
+	"net/url"
+	"strings"
 
+	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
@@ -78,9 +81,17 @@ func (s *Swarm) shareablePeers(exclude types.PeerID, n int) *internal_pb.PeerLis
 			break
 		}
 		id, pub := p.ID(), p.PubKey()
+		addr := p.Addr()
+		sni := s.GetPeerSNI(id)
+		if id == s.selfID && sni == "" {
+			sni = s.GetAnnouncedSNI()
+		}
+		if sni != "" && !strings.Contains(addr, "?sni=") {
+			addr += "?sni=" + url.QueryEscape(sni)
+		}
 		list.Peers = append(list.Peers, &internal_pb.PeerList_Peer{
 			Id:            id[:],
-			LastKnownAddr: p.Addr(),
+			LastKnownAddr: addr,
 			PubKey:        pub[:],
 			Caps:          uint32(p.Caps()),
 		})
@@ -116,6 +127,13 @@ func (s *Swarm) learnPeers(from types.PeerID, list *internal_pb.PeerList) int {
 			continue
 		}
 		addr := e.GetLastKnownAddr()
+		cleanAddr, _, sni, _ := network.SplitPeerAddrSNI(addr)
+		if sni != "" {
+			s.SetPeerSNI(id, sni)
+		}
+		if cleanAddr != "" {
+			addr = cleanAddr
+		}
 		if !policy.Shareable(addr) || s.CheckOnBan(id) {
 			continue
 		}

@@ -207,10 +207,21 @@ func (n *Node) retryMimicryTarget(addr string, every time.Duration) {
 			continue
 		}
 		cert := n.tcpCamouflageCert()
-		if cert == nil || n.Net == nil || n.Net.TCP == nil {
+		if cert == nil || n.Net == nil {
 			return
 		}
-		n.Net.TCP.SetCamouflage(*cert, n.Cfg.AntiDPI.TLSServerName, n.Cfg.AntiDPI.CamouflageAddr)
+		if n.Net.TCP != nil {
+			n.Net.TCP.SetCamouflage(*cert, n.Cfg.AntiDPI.TLSServerName, n.Cfg.AntiDPI.CamouflageAddr)
+		}
+		if n.Net.QUIC != nil {
+			n.Net.QUIC.SetCamouflage(*cert, n.Cfg.AntiDPI.TLSServerName, n.Cfg.AntiDPI.CamouflageAddr)
+		}
+		if n.Swarm != nil {
+			n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
+		}
+		if n.Net.TCP == nil {
+			return
+		}
 		if err := n.Net.ListenTCP(addr); err != nil {
 			n.Logger.Warn("ANTI-DPI: found a camouflage site but could not open the TCP listener", "addr", addr, "err", err)
 			continue

@@ -27,6 +27,9 @@ var errAddrRefused = errors.New("address refused")
 // node no TLS work and no state. The packet goes out through the obfuscation layer like every
 // reply, sealed with this node's key, which is what the dialer expects from it.
 func (q *QuicTransport) verifySourceAddress(net.Addr) bool {
+	if q.realityConn != nil && q.realityConn.serverMode {
+		return false
+	}
 	q.initials.Note()
 	return q.retryAlways.Load() || q.initials.Rate() >= retryRate
 }

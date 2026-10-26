@@ -70,32 +70,39 @@ type RelayUse struct {
 	Connected bool   `json:"connected"`
 }
 
-// ParseRelayAddr reads a relay link, a "host:port/<peer id>" address or a ws:// URL ending in the
-// peer ID, and returns the address and the peer.
-func ParseRelayAddr(s string) (addr string, id types.PeerID, err error) {
+// ParseRelayAddrSNI reads a relay link, a "host:port/<peer id>" address or a ws:// URL ending in the
+// peer ID, and returns the address, the peer ID, and the camouflage SNI (if present).
+func ParseRelayAddrSNI(s string) (addr string, id types.PeerID, sni string, err error) {
 	s = strings.TrimSpace(s)
 	if len(s) >= len(RelayLinkPrefix) && strings.EqualFold(s[:len(RelayLinkPrefix)], RelayLinkPrefix) {
 		s = s[len(RelayLinkPrefix):]
 	}
 	s = strings.TrimRight(s, "/")
-	a, id, ok := network.SplitPeerAddr(s)
+	a, id, sni, ok := network.SplitPeerAddrSNI(s)
 	if !ok {
-		return "", id, errors.New("a relay address needs the peer ID at the end: host:port/<64 hex characters>")
+		return "", id, "", errors.New("a relay address needs the peer ID at the end: host:port/<64 hex characters>")
 	}
 	if strings.HasPrefix(a, "ws://") || strings.HasPrefix(a, "wss://") {
 		if len(a) <= len("wss://") {
-			return "", id, errors.New("the ws:// address has no host")
+			return "", id, "", errors.New("the ws:// address has no host")
 		}
-		return a, id, nil
+		return a, id, sni, nil
 	}
 	host, port, err := net.SplitHostPort(a)
 	if err != nil || host == "" {
-		return "", id, fmt.Errorf("%q is not host:port", a)
+		return "", id, "", fmt.Errorf("%q is not host:port", a)
 	}
 	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
-		return "", id, fmt.Errorf("%q is not a port", port)
+		return "", id, "", fmt.Errorf("%q is not a port", port)
 	}
-	return a, id, nil
+	return a, id, sni, nil
+}
+
+// ParseRelayAddr reads a relay link, a "host:port/<peer id>" address or a ws:// URL ending in the
+// peer ID, and returns the address and the peer.
+func ParseRelayAddr(s string) (addr string, id types.PeerID, err error) {
+	a, id, _, err := ParseRelayAddrSNI(s)
+	return a, id, err
 }
 
 // MakeRelayLink is the link form of a "host:port/<peer id>" address.
@@ -286,17 +293,26 @@ func (n *NodeApi) StartVPNVia(target string) error {
 	if id, err := types.PeerIDFromString(strings.ToLower(target)); err == nil {
 		return n.StartVPN(id.String())
 	}
-	a, id, err := ParseRelayAddr(target)
+	a, id, sni, err := ParseRelayAddrSNI(target)
 	if err != nil {
 		return err
 	}
 	if id == n.node.ID {
 		return errors.New("this is your own node")
 	}
+	resolved := coreNode.ResolveRelayHost(a)
+	if sni != "" {
+		if n.node.Net != nil {
+			n.node.Net.ExpectPeerSNI(resolved, id, sni)
+		}
+		if n.node.Swarm != nil {
+			n.node.Swarm.SetPeerSNI(id, sni)
+		}
+	}
 	if n.node.Swarm.GetPeer(id) == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := n.node.Swarm.AddPotentialPeerWithCtx(ctx, id, coreNode.ResolveRelayHost(a)); err != nil {
+		if err := n.node.Swarm.AddPotentialPeerWithCtx(ctx, id, resolved); err != nil {
 			return fmt.Errorf("could not reach %s: %w", a, err)
 		}
 	}

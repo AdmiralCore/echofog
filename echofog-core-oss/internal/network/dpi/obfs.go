@@ -69,6 +69,9 @@ type NodeObfs struct {
 	// while the first dials in from it. Answering the first with the second's key made its
 	// handshake fail for ever, while the second, from another port, connected fine.
 	heard map[netip.AddrPort]heardKey
+
+	rawPeers map[netip.AddrPort]bool
+	rawAll   bool
 }
 
 type heardKey struct {
@@ -81,10 +84,49 @@ func NewNodeObfs(ownKey []byte) (*NodeObfs, error) {
 	if len(ownKey) != KeyLen {
 		return nil, ErrBadKeyLen
 	}
-	o := &NodeObfs{peers: make(map[netip.AddrPort][KeyLen]byte), byIP: make(map[netip.Addr][][KeyLen]byte),
-		heard: make(map[netip.AddrPort]heardKey)}
+	o := &NodeObfs{
+		peers:    make(map[netip.AddrPort][KeyLen]byte),
+		byIP:     make(map[netip.Addr][][KeyLen]byte),
+		heard:    make(map[netip.AddrPort]heardKey),
+		rawPeers: make(map[netip.AddrPort]bool),
+	}
 	copy(o.own[:], ownKey)
 	return o, nil
+}
+
+// SetRaw marks an address as raw (plain QUIC), bypassing obfuscation both ways.
+func (o *NodeObfs) SetRaw(addr netip.AddrPort, raw bool) {
+	addr = normalize(addr)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.rawPeers == nil {
+		o.rawPeers = make(map[netip.AddrPort]bool)
+	}
+	if raw {
+		o.rawPeers[addr] = true
+	} else {
+		delete(o.rawPeers, addr)
+	}
+}
+
+// SetRawAll sets whether all traffic is treated as raw (used on public camouflage nodes).
+func (o *NodeObfs) SetRawAll(raw bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.rawAll = raw
+}
+
+// IsRaw reports whether addr is marked as raw (plain QUIC), or if rawAll is active.
+func (o *NodeObfs) IsRaw(addr net.Addr) bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if o.rawAll {
+		return true
+	}
+	if ap, ok := addrPortOf(addr); ok {
+		return o.rawPeers[ap]
+	}
+	return false
 }
 
 func normalize(ap netip.AddrPort) netip.AddrPort {
@@ -288,6 +330,16 @@ func WrapPacketConn(conn net.PacketConn, obfs *NodeObfs) net.PacketConn {
 	return base
 }
 
+func isQUICInitial(b []byte) bool {
+	if len(b) < 7 || b[0]&0x80 == 0 {
+		return false
+	}
+	if b[1] != 0 || b[2] != 0 || b[3] != 0 || b[4] != 1 {
+		return false
+	}
+	return (b[0]>>4)&0x03 == 0
+}
+
 func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
@@ -295,6 +347,13 @@ func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		raw, addr, err := c.Conn.ReadFrom(c.readBuf)
 		if err != nil {
 			return 0, addr, err
+		}
+		if c.obfs.IsRaw(addr) || isQUICInitial(c.readBuf[:raw]) {
+			if ap, ok := addrPortOf(addr); ok {
+				c.obfs.SetRaw(ap, true)
+			}
+			n := copy(p, c.readBuf[:raw])
+			return n, addr, nil
 		}
 		c.cands = c.obfs.candidates(addr, c.cands)
 		for i := range c.cands {
@@ -308,6 +367,9 @@ func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 func (c *ObfsPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if c.obfs.IsRaw(addr) {
+		return c.Conn.WriteTo(p, addr)
+	}
 	key := c.obfs.sendKey(addr)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()

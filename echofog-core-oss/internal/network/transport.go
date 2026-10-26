@@ -17,6 +17,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/dpi"
 	"github.com/echofog/echofog-core/internal/network/handshake"
+	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -112,10 +113,12 @@ type QuicTransport struct {
 
 	congestion atomic.Pointer[congestion.Config]
 
-	obfs       *dpi.NodeObfs // nil: packets go out as they are
-	obfsSecret string
-	book       peerBook
-	guard      atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
+	obfs        *dpi.NodeObfs // nil: packets go out as they are
+	obfsSecret  string
+	ownID       types.PeerID
+	realityConn *QuicRealityConn
+	book        peerBook
+	guard       atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
 
 	retryAlways atomic.Bool         // make every new address prove itself with a QUIC Retry (servers)
 	initials    *handshake.AntiDDoS // new-connection Initials per second: many ask for Retry
@@ -216,12 +219,17 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 		Mux:             mux,
 		obfs:            obfs,
 		obfsSecret:      opts.ObfsSecret,
+		ownID:           opts.OwnID,
 		directSocket:    opts.DirectSocket,
 		authenticator:   NewDefaultPeerAuthenticator(signer, protocolVersion, 5*time.Second),
 		handshakeSem:    make(chan struct{}, maxConcurrentHandshakes),
 		logger:          slog.Default().With("component", "quic_transport"),
 		initials:        handshake.NewAntiDDoS(),
 	}
+	realityConn := NewQuicRealityConn(tr.Conn, qt)
+	qt.realityConn = realityConn
+	tr.Conn = realityConn
+
 	tr.VerifySourceAddress = qt.verifySourceAddress
 	tr.ConnContext = qt.connContext
 
@@ -229,6 +237,23 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 	qt.SetCongestion(opts.Congestion)
 	qt.announceListenPort()
 	return qt, nil
+}
+
+// SetCamouflage configures this transport to masquerade as the target site:
+// it presents cert on TLS handshakes, advertises ALPN ["h3", "echo-fog-protocole"],
+// and passes unauthenticated active probes through to fallbackAddr.
+func (q *QuicTransport) SetCamouflage(cert tls.Certificate, serverName, fallbackAddr string) {
+	if q.tlsCfg != nil {
+		q.tlsCfg.Certificates = []tls.Certificate{cert}
+		q.tlsCfg.NextProtos = []string{"h3", "echo-fog-protocole"}
+	}
+	if q.realityConn != nil {
+		authKey := mimicry.NodeStealthKey(q.obfsSecret, q.ownID)
+		q.realityConn.SetCamouflage(authKey, fallbackAddr)
+	}
+	if q.obfs != nil {
+		q.obfs.SetRawAll(true)
+	}
 }
 
 // SetCongestion sets the congestion control of connections made from now on.

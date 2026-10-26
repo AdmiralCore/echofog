@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
@@ -429,10 +432,18 @@ func (d *EchoFogDHT) takeInfos(infos []*internal_pb.PeerInfo) []*PeerNode {
 		if id == self {
 			continue
 		}
-		if !d.isUnreachable(id) {
-			d.routingTable.AddOrUpdatePeer(pub, info.GetAddress())
+		addr := info.GetAddress()
+		cleanAddr, _, sni, _ := network.SplitPeerAddrSNI(addr)
+		if sni != "" && d.swarm != nil {
+			d.swarm.SetPeerSNI(id, sni)
 		}
-		out = append(out, &PeerNode{ID: id, PubKey: pub, Addr: info.GetAddress(), LastSeen: time.Now()})
+		if cleanAddr != "" {
+			addr = cleanAddr
+		}
+		if !d.isUnreachable(id) {
+			d.routingTable.AddOrUpdatePeer(pub, addr)
+		}
+		out = append(out, &PeerNode{ID: id, PubKey: pub, Addr: addr, LastSeen: time.Now()})
 	}
 	return out
 }
@@ -451,7 +462,17 @@ func (d *EchoFogDHT) closestInfos(target, asker types.PeerID) []*internal_pb.Pee
 			continue
 		}
 		pub := p.PubKey
-		out = append(out, &internal_pb.PeerInfo{PubKey: pub[:], Address: p.Addr})
+		addr := p.Addr
+		if d.swarm != nil {
+			sni := d.swarm.GetPeerSNI(p.ID)
+			if p.ID == d.swarm.GetSelfID() && sni == "" {
+				sni = d.swarm.GetAnnouncedSNI()
+			}
+			if sni != "" && !strings.Contains(addr, "?sni=") {
+				addr += "?sni=" + url.QueryEscape(sni)
+			}
+		}
+		out = append(out, &internal_pb.PeerInfo{PubKey: pub[:], Address: addr})
 	}
 	return out
 }

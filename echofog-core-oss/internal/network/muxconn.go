@@ -163,12 +163,17 @@ func (q quicMuxConn) CloseWithError(code QuicErrorCode, reason string) error {
 	return q.c.CloseWithError(code, reason)
 }
 
-func (q quicMuxConn) ChannelBinding() ([]byte, error) {
+func (q quicMuxConn) ChannelBinding() (res []byte, err error) {
 	select {
 	case <-q.c.HandshakeComplete():
 	case <-q.c.Context().Done():
 		return nil, q.c.Context().Err()
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("tls export keying material not available: %v", r)
+		}
+	}()
 	st := q.c.ConnectionState().TLS
 	return st.ExportKeyingMaterial(channelBindingLabel, nil, channelBindingLen)
 }

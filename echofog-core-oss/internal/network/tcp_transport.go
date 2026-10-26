@@ -114,6 +114,11 @@ func (t *TCPTransport) camouflage() (*mimicry.MimicryConfig, *tls.Config) {
 // ExpectPeer tells the transport that the node at addr has peer ID id.
 func (t *TCPTransport) ExpectPeer(addr string, id types.PeerID) { t.book.set(addr, id) }
 
+// ExpectPeerSNI tells the transport that the node at addr has peer ID id and camouflage SNI sni.
+func (t *TCPTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
+	t.book.setSNI(addr, id, sni)
+}
+
 // SetCaps sets what this node announces to peers in the handshake.
 func (t *TCPTransport) SetCaps(c handshake.Capability) {
 	if s, ok := t.auth.(CapsSetter); ok {
@@ -329,6 +334,10 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 	cfg, _ := t.camouflage()
 	clientCfg := cfg
 	expected, haveExpected := t.book.get(addr)
+	sni, haveSNI := t.book.getSNI(addr)
+	if !haveSNI && haveExpected {
+		sni, haveSNI = t.book.getSNIByID(expected)
+	}
 	if t.perNode {
 		if !haveExpected {
 			_ = raw.Close()
@@ -336,6 +345,13 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		}
 		c := *cfg
 		c.AuthKey = mimicry.NodeStealthKey(t.secret, expected)
+		if haveSNI && sni != "" {
+			c.ServerName = sni
+		}
+		clientCfg = &c
+	} else if haveSNI && sni != "" {
+		c := *cfg
+		c.ServerName = sni
 		clientCfg = &c
 	}
 	conn, binding, err := mimicry.ClientHandshake(raw, clientCfg)

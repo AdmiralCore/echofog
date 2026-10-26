@@ -53,6 +53,10 @@ type Swarm struct {
 	cardMu       sync.Mutex
 	card         []byte    // our bundle record without one-time prekeys, sent with init packets
 	cardAge      time.Time // when card was made
+	announcedSNI string
+
+	peerSNIMu sync.RWMutex
+	peerSNIs  map[types.PeerID]string
 	netTransport network.Transport
 	wsTransport  WSTransport // optional: dial and listen over WebSocket (behind a CDN)
 

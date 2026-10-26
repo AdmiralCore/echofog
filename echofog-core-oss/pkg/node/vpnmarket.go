@@ -65,6 +65,9 @@ func (n *Node) initVPNMarket() {
 	dir := vpnmarket.NewDirectory(n.DhtEngine, ratings, n.ID, n.connectedPeerIDs)
 	dir.SetHints(n.askPeersForExits)
 	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
+	if n.Cfg.AntiDPI.TLSServerName != "" {
+		pub.SetSNI(n.Cfg.AntiDPI.TLSServerName)
+	}
 	n.Swarm.RegisterStreamHandler(net_types.TypeExitDirectory, func(st *network.Stream, _ []byte, peer types.PeerID) {
 		defer st.Close()
 		if n.ExitService != nil && !n.ExitService.AllowQuery(peer) {

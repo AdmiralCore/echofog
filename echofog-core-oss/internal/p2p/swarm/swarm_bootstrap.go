@@ -34,6 +34,7 @@ func (s *Swarm) findAndConnectToPeers() {
 type WSTransport interface {
 	Dial(ctx context.Context, url string) error
 	ExpectPeer(addr string, id types.PeerID)
+	ExpectPeerSNI(addr string, id types.PeerID, sni string)
 	ConnChan() <-chan network.NewConnEvent
 }
 
@@ -51,14 +52,27 @@ func isWSAddr(addr string) bool {
 }
 
 func (s *Swarm) expectPeer(addr string, id types.PeerID) {
+	sni := s.GetPeerSNI(id)
+	if sni == "" {
+		_, _, extSNI, _ := network.SplitPeerAddrSNI(addr)
+		sni = extSNI
+	}
 	if isWSAddr(addr) {
 		if s.wsTransport != nil {
-			s.wsTransport.ExpectPeer(addr, id)
+			if sni != "" {
+				s.wsTransport.ExpectPeerSNI(addr, id, sni)
+			} else {
+				s.wsTransport.ExpectPeer(addr, id)
+			}
 		}
 		return
 	}
 	if e, ok := s.netTransport.(network.PeerExpecter); ok {
-		e.ExpectPeer(addr, id)
+		if sni != "" {
+			e.ExpectPeerSNI(addr, id, sni)
+		} else {
+			e.ExpectPeer(addr, id)
+		}
 	}
 }
 

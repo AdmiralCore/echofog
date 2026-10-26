@@ -218,6 +218,7 @@ func (n *Node) InviteLink() (string, error) {
 		Protocol: n.Cfg.Network.ProtocolVersion,
 		Peer:     n.ID,
 		Addrs:    n.linkAddrs(),
+		SNI:      n.Cfg.AntiDPI.TLSServerName,
 	}
 	if n.gated() {
 		inv.Secret = n.Access.Secret()
@@ -307,6 +308,11 @@ func (n *Node) JoinInvite(ctx context.Context, inv access.Invite) (types.PeerID,
 		}
 		if err := n.saveInvites(); err != nil {
 			return types.PeerID{}, err
+		}
+	}
+	if inv.SNI != "" {
+		for _, a := range inv.Addrs {
+			n.Net.ExpectPeerSNI(ResolveRelayHost(a), inv.Peer, inv.SNI)
 		}
 	}
 	if n.Swarm.GetPeer(inv.Peer) != nil {

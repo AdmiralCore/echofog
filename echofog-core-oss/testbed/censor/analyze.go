@@ -157,7 +157,7 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		if p.proto == 6 && len(st.upStream) < 16<<10 {
 			st.upStream = append(st.upStream, p.payload...)
 		}
-		if p.proto == 17 && st.quic.crypto == nil || p.proto == 17 && len(st.quic.crypto) < 8 && f.Packets <= 6 {
+		if p.proto == 17 && (st.quic.crypto == nil || f.Packets <= 6) {
 			q := openInitials(p.payload)
 			if st.quic.crypto == nil {
 				st.quic = q

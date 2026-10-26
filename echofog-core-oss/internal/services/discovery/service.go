@@ -4,9 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	netpkg "github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/gossip"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
@@ -196,6 +199,12 @@ func (g *peerGetter) Handle(msg *internal_pb.MessageData, peerID types.PeerID) {
 		if id == self || id == peerID || net.Banned(id) {
 			continue
 		}
+		_, _, sni, _ := netpkg.SplitPeerAddrSNI(p.Address)
+		if sni != "" {
+			if sn, ok := net.(interface{ SetPeerSNI(types.PeerID, string) }); ok {
+				sn.SetPeerSNI(id, sni)
+			}
+		}
 		net.SaveDiscovered(pubKey, p.Address)
 	}
 }
@@ -293,6 +302,10 @@ func (n swarmNet) SaveDiscovered(pub types.PeerPublicKey, addr string) bool {
 	return false
 }
 
+func (n swarmNet) SetPeerSNI(id types.PeerID, sni string) {
+	n.s.SetPeerSNI(id, sni)
+}
+
 func (n swarmNet) Shareable(exclude types.PeerID, max int) []*internal_pb.PeerInfo {
 	policy := n.s.AddrPolicy()
 	peers := n.s.GetAllPeers()
@@ -306,7 +319,15 @@ func (n swarmNet) Shareable(exclude types.PeerID, max int) []*internal_pb.PeerIn
 			continue
 		}
 		pub := p.PubKey()
-		out = append(out, &internal_pb.PeerInfo{PubKey: pub[:], Address: p.Addr()})
+		addr := p.Addr()
+		sni := n.s.GetPeerSNI(p.ID())
+		if p.ID() == n.s.GetSelfID() && sni == "" {
+			sni = n.s.GetAnnouncedSNI()
+		}
+		if sni != "" && !strings.Contains(addr, "?sni=") {
+			addr += "?sni=" + url.QueryEscape(sni)
+		}
+		out = append(out, &internal_pb.PeerInfo{PubKey: pub[:], Address: addr})
 	}
 	return out
 }

@@ -145,6 +145,10 @@ func (t *WSTransport) SetNodeKeys(secret string, own types.PeerID) {
 
 func (t *WSTransport) ExpectPeer(addr string, id types.PeerID) { t.book.set(addr, id) }
 
+func (t *WSTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
+	t.book.setSNI(addr, id, sni)
+}
+
 func (t *WSTransport) SetCaps(c handshake.Capability) {
 	if s, ok := t.auth.(CapsSetter); ok {
 		s.SetCaps(c)
@@ -288,9 +292,20 @@ func (t *WSTransport) Dial(ctx context.Context, url string) error {
 	_ = conn.SetDeadline(deadline)
 
 	clientCfg := t.cfg
+	sni, haveSNI := t.book.getSNI(url)
+	if !haveSNI && haveExpected {
+		sni, haveSNI = t.book.getSNIByID(expected)
+	}
 	if t.perNode {
 		c := *t.cfg
 		c.AuthKey = mimicry.NodeStealthKey(t.secret, expected)
+		if haveSNI && sni != "" {
+			c.ServerName = sni
+		}
+		clientCfg = &c
+	} else if haveSNI && sni != "" {
+		c := *t.cfg
+		c.ServerName = sni
 		clientCfg = &c
 	}
 	inner, binding, err := mimicry.ClientHandshake(conn, clientCfg)

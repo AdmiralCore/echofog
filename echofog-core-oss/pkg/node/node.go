@@ -445,10 +445,13 @@ func (n *Node) Start() (err error) {
 	}
 
 	var tcp *network.TCPTransport
+	camoCert := n.tcpCamouflageCert()
+	if camoCert != nil && n.Cfg.AntiDPI.TLSServerName != "" && n.Cfg.AntiDPI.CamouflageAddr != "" {
+		n.Transport.SetCamouflage(*camoCert, n.Cfg.AntiDPI.TLSServerName, n.Cfg.AntiDPI.CamouflageAddr)
+	}
 	if n.Cfg.Network.TCPListenAddr != "off" {
 		// A real certificate for your own domain makes an active prober see a genuine HTTPS site;
 		// without one the node falls back to the self-signed identity certificate (probe-weak).
-		camoCert := n.tcpCamouflageCert()
 		stealth := n.Cfg.AntiDPI.StealthPassword
 		if stealth == "" {
 			stealth = n.Cfg.AntiDPI.ObfsPassword
@@ -484,6 +487,9 @@ func (n *Node) Start() (err error) {
 
 	n.Swarm = swarm.NewSwarm(n.Ctx, n.Net, n.ID, n.Dispatcher, n.identity, n.Net.ConnChan(), n.Storage, n.Cfg)
 	n.Swarm.SetLogger(n.Logger)
+	if n.Cfg.AntiDPI.TLSServerName != "" {
+		n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
+	}
 	n.BWProbe = bwprobe.NewForSwarm(n.Swarm)
 	if l := bwprobe.DefaultLimits(); n.Cfg.Network.NoBWProbeServe || n.Cfg.Network.BWProbeMBPerMin > 0 {
 		l.Serve = !n.Cfg.Network.NoBWProbeServe
