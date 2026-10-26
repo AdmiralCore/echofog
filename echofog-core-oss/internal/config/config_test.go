@@ -23,6 +23,12 @@ func TestDefaultsAreSafeForARealNetwork(t *testing.T) {
 	}
 	assert.Zero(t, cfg.Relay.Server.PricePerMB, "relays are free: nothing settles a relay price")
 	assert.Empty(t, cfg.Payments.SupportAddress, "no project address is baked in: the feature stays off until configured")
+
+	assert.Equal(t, 3, cfg.AntiDPI.FlowShaping.MaxConnections)
+	assert.Equal(t, 8, cfg.AntiDPI.FlowShaping.MaxConcurrency)
+	assert.Equal(t, int64(15*1024*1024), cfg.AntiDPI.FlowShaping.MaxBytesMin)
+	assert.Equal(t, int64(25*1024*1024), cfg.AntiDPI.FlowShaping.MaxBytesMax)
+	assert.Equal(t, 500, cfg.AntiDPI.FlowShaping.MaxStreamsPerConn)
 }
 
 func TestEachCallGetsItsOwnBootstrapSlice(t *testing.T) {

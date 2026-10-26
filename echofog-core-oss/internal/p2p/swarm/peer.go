@@ -224,3 +224,35 @@ func (p *Peer) Relays() bool {
 
 // Signals tells whether the peer passes on hole punching messages (a relay does too).
 func (p *Peer) Signals() bool { return p.Relays() || p.Caps().Has(handshake.CapSignal) }
+
+// ActiveStreams returns the number of active streams on the underlying transport.
+func (p *Peer) ActiveStreams() int {
+	p.mu.RLock()
+	tw := p.transport
+	p.mu.RUnlock()
+	if tw != nil {
+		return tw.ActiveStreams()
+	}
+	return 0
+}
+
+// DrainAndClose waits up to timeout for active streams to finish, then closes the peer.
+func (p *Peer) DrainAndClose(timeout time.Duration) {
+	go func() {
+		deadline := time.After(timeout)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if p.ActiveStreams() == 0 {
+				p.Close()
+				return
+			}
+			select {
+			case <-deadline:
+				p.Close()
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}

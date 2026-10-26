@@ -267,3 +267,8 @@ func (s *Swarm) emit(topic string, payload any) {
 func (s *Swarm) TrafficStats() (rx uint64, tx uint64) {
 	return s.bytesRx.Load(), s.bytesTx.Load()
 }
+
+// Config returns the AppConfig this Swarm was created with, or nil.
+func (s *Swarm) Config() *config.AppConfig {
+	return s.cfg
+}

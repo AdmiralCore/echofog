@@ -85,6 +85,11 @@ var ErrSelfAddr = errors.New("this address is this node's own")
 // SetNoDial stops (or allows again) every outbound connection: an isolated node only accepts.
 func (s *Swarm) SetNoDial(on bool) { s.noDial.Store(on) }
 
+// DialEarly dials addr on the transport its scheme selects.
+func (s *Swarm) DialEarly(ctx context.Context, addr string) error {
+	return s.dialEarly(ctx, addr)
+}
+
 // dialEarly dials addr on the transport its scheme selects: WebSocket for ws:// and wss://,
 // otherwise the QUIC/TCP transport.
 func (s *Swarm) dialEarly(ctx context.Context, addr string) error {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/dpi"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -169,9 +170,42 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 		}
 	}
 
-	conn, err := q.tr.Dial(ctx, targetAddres, tlsCfg, quicCfg)
-	if err != nil {
-		return err
+	var conn *quic.Conn
+	var dialErr error
+	var ephemeralTr *quic.Transport
+	var uconn *net.UDPConn
+	if tlsCfg.ServerName != "" {
+		laddr := &net.UDPAddr{IP: net.IPv4zero, Port: 0}
+		var lerr error
+		uconn, lerr = net.ListenUDP("udp", laddr)
+		if lerr == nil {
+			var pconn net.PacketConn = uconn
+			if q.realityConn != nil {
+				pconn = NewQuicRealityConn(uconn, q)
+			}
+			ephemeralTr = &quic.Transport{Conn: pconn}
+			conn, dialErr = ephemeralTr.Dial(ctx, targetAddres, tlsCfg, quicCfg)
+			if dialErr != nil {
+				_ = ephemeralTr.Close()
+				_ = uconn.Close()
+				conn = nil
+				ephemeralTr = nil
+				uconn = nil
+			}
+		}
+	}
+	if conn == nil {
+		conn, dialErr = q.tr.Dial(ctx, targetAddres, tlsCfg, quicCfg)
+	}
+	if dialErr != nil {
+		return dialErr
+	}
+	if ephemeralTr != nil && uconn != nil {
+		go func() {
+			<-conn.Context().Done()
+			_ = ephemeralTr.Close()
+			_ = uconn.Close()
+		}()
 	}
 	q.applyCongestion(conn)
 

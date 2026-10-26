@@ -57,7 +57,7 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			}
 			return nil
 		}
-		old.Close()
+		old.DrainAndClose(15 * time.Second)
 	}
 	s.mu.Unlock()
 

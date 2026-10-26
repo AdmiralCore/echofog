@@ -281,3 +281,10 @@ func (p *PeerWrapper) removeStream(id uint64) {
 	delete(p.streams, id)
 	p.streamsMu.Unlock()
 }
+
+// ActiveStreams returns the number of active open streams on this peer connection.
+func (p *PeerWrapper) ActiveStreams() int {
+	p.streamsMu.RLock()
+	defer p.streamsMu.RUnlock()
+	return len(p.streams)
+}

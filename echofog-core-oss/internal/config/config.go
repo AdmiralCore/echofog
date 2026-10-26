@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // CurrentProtocolVersion is the peer protocol version this build speaks.
@@ -195,6 +196,69 @@ type AntiDPIConfig struct {
 	// CamouflageAddr is the real "host:port" an active probe is transparently forwarded to
 	// (normally a benign page on your own domain). Empty serves a small static page instead.
 	CamouflageAddr string `json:"camouflage_addr"`
+
+	// FlowShaping bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
+	FlowShaping FlowShapingConfig `json:"flow_shaping"`
+}
+
+// FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
+type FlowShapingConfig struct {
+	MaxConnections     int           `json:"max_connections"`
+	MaxConcurrency     int           `json:"max_concurrency"`
+	MaxBytesMin        int64         `json:"max_bytes_min"`
+	MaxBytesMax        int64         `json:"max_bytes_max"`
+	MaxConnLifetimeMin time.Duration `json:"max_conn_lifetime_min"`
+	MaxConnLifetimeMax time.Duration `json:"max_conn_lifetime_max"`
+	MaxStreamsPerConn  int           `json:"max_streams_per_conn"`
+	MinDialInterval    time.Duration `json:"min_dial_interval"`
+}
+
+// DefaultFlowShapingConfig returns the default FlowShaping settings.
+func DefaultFlowShapingConfig() FlowShapingConfig {
+	return FlowShapingConfig{
+		MaxConnections:     3,
+		MaxConcurrency:     8,
+		MaxBytesMin:        15 * 1024 * 1024,
+		MaxBytesMax:        25 * 1024 * 1024,
+		MaxConnLifetimeMin: 60 * time.Second,
+		MaxConnLifetimeMax: 100 * time.Second,
+		MaxStreamsPerConn:  500,
+		MinDialInterval:    450 * time.Millisecond,
+	}
+}
+
+// Normalize fills in missing or invalid parameters with safe defaults.
+func (c *FlowShapingConfig) Normalize() {
+	if c.MaxConnections <= 0 {
+		c.MaxConnections = 3
+	}
+	if c.MaxConcurrency <= 0 {
+		c.MaxConcurrency = 8
+	}
+	if c.MaxBytesMin <= 0 {
+		c.MaxBytesMin = 15 * 1024 * 1024
+	}
+	if c.MaxBytesMax <= 0 {
+		c.MaxBytesMax = 25 * 1024 * 1024
+	}
+	if c.MaxBytesMax < c.MaxBytesMin {
+		c.MaxBytesMax = c.MaxBytesMin
+	}
+	if c.MaxConnLifetimeMin <= 0 {
+		c.MaxConnLifetimeMin = 60 * time.Second
+	}
+	if c.MaxConnLifetimeMax <= 0 {
+		c.MaxConnLifetimeMax = 100 * time.Second
+	}
+	if c.MaxConnLifetimeMax < c.MaxConnLifetimeMin {
+		c.MaxConnLifetimeMax = c.MaxConnLifetimeMin
+	}
+	if c.MaxStreamsPerConn <= 0 {
+		c.MaxStreamsPerConn = 500
+	}
+	if c.MinDialInterval <= 0 {
+		c.MinDialInterval = 450 * time.Millisecond
+	}
 }
 
 // PaymentsConfig covers the wallet-related options of the interface.
@@ -357,6 +421,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.Network.HolePunch = true
 
 	cfg.AntiDPI.Obfs = ObfsNode
+	cfg.AntiDPI.FlowShaping = DefaultFlowShapingConfig()
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public
 	// TCP/WS listener must set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site
