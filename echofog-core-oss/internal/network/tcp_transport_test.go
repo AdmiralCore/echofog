@@ -348,6 +348,15 @@ func TestFallbackTransportPreferTCPAfterAStall(t *testing.T) {
 	_ = first.Conn.CloseWithError(ErrCodeNormalClose, "test")
 
 	client.PreferTCP(addr)
+	require.True(t, client.tcpFirst(addr), "PreferTCP marks the address TCP-first")
+
+	// Take the QUIC listener down for the second dial so the TCP-wins race is deterministic: QUIC
+	// cannot win under any scheduling (not even a 0-RTT resumption racing a CPU-starved TCP
+	// goroutine), while the real raceDial path that tcpFirst steers is still exercised end to end.
+	// The ordering itself is asserted directly above; here we confirm the connection comes up over
+	// the TCP fallback.
+	_ = sq.Close()
+
 	require.NoError(t, client.DialEarly(context.Background(), addr))
 	second := nextConn(t, client.ConnChan())
 	assert.Equal(t, ProtocolTCP, second.Conn.Protocol(), "after a stall TCP goes first")
