@@ -115,8 +115,19 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 		var pPool *PeerSessionPool
 		sessionDialer := func(ctx context.Context) (StreamOpener, func() error, error) {
 			camouflage := sw.IsCamouflagePeer(exit)
-			rotating := pPool != nil && pPool.TotalSessions() > 0
-			if camouflage || rotating {
+			hasSessions := pPool != nil && pPool.TotalSessions() > 0
+			// A rotation dials a fresh connection to the exit to get a new 5-tuple. The swarm keeps
+			// one connection per peer, so that dial replaces and (after a drain timeout) force-closes
+			// the connection the current traffic rides. A single large download is one stream that
+			// cannot be split across connections, so rotating while it is in flight cuts it off. Defer
+			// the rotation dial until no stream is active; a long transfer then holds the connection
+			// until it finishes and rotation resumes once it drains. First contact with a camouflage
+			// exit is not a rotation — it must still dial its REALITY connection to replace the reused
+			// noise one — so only a rotation is gated, never that first dial.
+			noActive := pPool == nil || !pPool.HasActiveStreams()
+			dialCamouflage := camouflage && (!hasSessions || noActive)
+			dialRotate := !camouflage && hasSessions && noActive
+			if dialCamouflage || dialRotate {
 				p := sw.GetPeer(exit)
 				if p != nil {
 					addr := p.Addr()
@@ -125,7 +136,7 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 					}
 					if addr != "" {
 						switch {
-						case camouflage:
+						case dialCamouflage:
 							// The exit is a camouflage node (it advertises a cover SNI). Its tunnel must
 							// run over a REALITY connection, not a noise connection reused from the mesh
 							// bootstrap: a noise connection to a camouflage node does not serve the tunnel
@@ -136,7 +147,7 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 							// rotation a distinct flow without the ephemeral-socket marker.
 							sw.ExpectPeerAddr(addr, exit)
 							_ = sw.DialEarly(ctx, addr)
-						case rotating:
+						case dialRotate:
 							// Non-camouflage exit, rotating: dial a fresh connection to rotate the physical
 							// socket/5-tuple. The ephemeral-socket marker gives even the noise path a new
 							// 5-tuple, so a rotated noise tunnel is a distinct flow to a censor rather than

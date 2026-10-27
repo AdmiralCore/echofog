@@ -295,6 +295,27 @@ func (p *PeerSessionPool) TotalSessions() int64 {
 	return p.nextSessionID.Load()
 }
 
+// HasActiveStreams reports whether any session, active or draining, still carries an open stream.
+// The exit rotation path checks it before dialing a fresh connection: the swarm keeps one
+// connection per peer, so a fresh dial force-closes the connection a transfer rides. Deferring the
+// dial while a stream is in flight lets a long download (which cannot be split across connections)
+// finish instead of being cut off at the drain timeout.
+func (p *PeerSessionPool) HasActiveStreams() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, s := range p.active {
+		if s.activeStreams.Load() > 0 {
+			return true
+		}
+	}
+	for _, s := range p.draining {
+		if s.activeStreams.Load() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // OpenStream selects an active session or creates a new one and opens a stream.
 func (p *PeerSessionPool) OpenStream(ctx context.Context) (FramedStream, error) {
 	for {
