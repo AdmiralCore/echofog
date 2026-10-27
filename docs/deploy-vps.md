@@ -160,6 +160,11 @@ ECHOFOG_TLS_SERVER_NAME=<site domain>
 ECHOFOG_CAMOUFLAGE_ADDR=<site IP>:443
 ```
 
+The same two lines turn on the UDP disguise too: clients will reach the node the way Chrome would
+open that site over HTTP/3. If the site itself speaks HTTP/3, a probe on UDP gets its real answer.
+Invitation links of a hidden node carry the site name by themselves; give out a public address as
+`<IP>:443/<peer id>?sni=<site domain>` so that the first connection is disguised as well.
+
 Details: [Anti-DPI](anti-dpi.md).
 
 ## Hardening

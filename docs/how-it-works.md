@@ -42,40 +42,46 @@ DHT gives you the rest of the network.
 ## Getting through the censor
 
 Censors use DPI (deep packet inspection: equipment that looks inside traffic to recognise and block
-protocols). EchoFog tries three ways to get through, in this order.
+protocols). It checks which protocol a connection speaks, which site it names and whether that site
+lives at that address, what the server does when the censor connects to it himself, and how the
+connection behaves over time.
 
-1. **QUIC over UDP, obfuscated.** QUIC is the fast, modern transport also used by HTTP/3. On top of
-   it, every UDP packet is scrambled under a key derived from the receiving node's ID, so packets
-   look like random bytes. There is no key shared by the whole network and none is baked into the
-   program.
-2. **TCP that looks like a browser visiting a real HTTPS site.** When UDP is blocked, the app falls
-   back to TCP. It opens the connection with a genuine Chrome TLS greeting (made with the uTLS
-   library, so its fingerprint matches real Chrome) and hides a small secret token inside it, in
-   the style of REALITY. A server node checks the token. Anyone who connects **without** the token,
-   such as a censor's probe, is quietly passed through to the real website the node imitates and
-   sees that site's real certificate and pages. Such visitors are never counted, slowed down or
-   banned, so probing does not single the node out.
-3. **WebSocket behind a CDN.** A node can also sit behind a CDN such as Cloudflare, so the censor
-   sees a connection to the CDN and to the operator's own domain.
+- **QUIC that looks like HTTP/3.** A public node can imitate a real site in its own datacenter.
+  A client connecting to it sends the same QUIC greeting Chrome sends to that site, with that
+  site's name in it. A small secret token, tied to that exact greeting, tells the node who is a
+  client. Anyone without it, such as a censor's probe, is passed on to the real site and gets the
+  real site's answer.
+- **TCP that looks like a browser visiting the same site**, for networks that block UDP: a genuine
+  Chrome TLS greeting (made with the uTLS library), the token hidden inside it, and the same pass-on
+  for anyone without the token. Such visitors are never counted, slowed down or banned, so probing
+  does not single the node out.
+- **Both at once.** The app dials QUIC and TCP together and keeps the first that connects. If QUIC
+  connects and then goes quiet, it moves to TCP. It remembers what worked on each network, so the
+  next connection there goes straight to it.
+- **Inside the tunnel**, the first few kilobytes are padded, so the handshake of the HTTPS site you
+  open through the VPN does not show through by its sizes. Connections to an exit are replaced every
+  few minutes or tens of megabytes, so no single one runs for an hour carrying gigabytes, which
+  browsers do not do.
+- **WebSocket behind a CDN.** A node can also sit behind a CDN such as Cloudflare, so the censor
+  sees a connection to the CDN and to the operator's own domain.
 
-A desktop app is a pure client: it opens no inbound TCP listener at all, so there is nothing on
-your computer for a prober to find. Public server nodes must imitate a plausible site in their own
-datacenter; they can find one automatically. The details, and how to run a node so the disguise
-holds, are in [anti-dpi.md](anti-dpi.md).
+A desktop app is a pure client: it opens no inbound port at all, so there is nothing on your
+computer for a prober to find. The details, the lab measurements, and how to run a node so the
+disguise holds are in [anti-dpi.md](anti-dpi.md).
 
 **The limits, honestly:**
 
-- The per-node key only stops **blind** scanning, where the censor sees an IP address but does not
-  know the node's ID. Public nodes are listed in the DHT with their address and ID together. A
-  censor who crawls the DHT can learn both, compute the token, and confirm that an address is an
-  EchoFog node.
+- Only the path from you to the exit is disguised. Traffic between nodes (the DHT, relays) is
+  scrambled so that it looks like random bytes, and GFW has a rule for exactly that kind of traffic.
+- The token key is derived from the node's ID, and public nodes are listed in the DHT with their
+  address and ID together. A censor who crawls the DHT can compute the token and confirm that an
+  address is an EchoFog node.
 - The answer is **hidden and isolated nodes**: they are not in the DHT, never tell other nodes
   their address, and answer nobody who cannot prove the access secret from their invitation link
   (`echofog://join?…`). People hand the links out themselves. See [hidden-nodes.md](hidden-nodes.md).
   For a whole private network there are also the `anti_dpi.obfs_password` / `stealth_password`
   settings.
-- Some planned hardening is not in this build either (for example, a client presenting each target
-  node's own imitated site name). [anti-dpi.md](anti-dpi.md) lists it.
+- Everything above was tested in a lab, not yet against a real national DPI.
 
 ## Connecting through home routers
 
@@ -115,8 +121,18 @@ In plain words, the scheme (the same family as Signal's) is:
 **Offline delivery.** Your app keeps each message until the recipient's app sends back an encrypted
 receipt, and resends it with growing pauses (for up to 7 days). If the recipient is offline, a relay
 they recently used can hold the encrypted message in a **mailbox** and hand it over when they come
-back (also up to 7 days). A relay only keeps mail for people who have used it recently, and has size
-limits per person and in total, so strangers cannot fill its disk.
+back (also up to 7 days). Each app picks up to three relays it is connected to as its mailboxes and
+names them in its signed key record, so a sender that cannot reach you takes the mail straight to
+one of those. A relay only keeps mail for people who have used it recently (it remembers them across
+a restart), and has size limits per person and in total, so strangers cannot fill its disk. If the
+recipient vanished without closing the connection, the relay notices the silence within seconds and
+keeps the message instead of pushing it into a dead link.
+
+**The chat history** is a log of events inside the encrypted session: messages, replies, threads,
+edits, deletions, reactions and pins. When two apps connect they exchange what the other missed,
+so a chat looks the same on both sides after a break. The contact list shows who is online right
+now, and a call invitation that reaches you more than two minutes late shows as a missed call
+instead of ringing.
 
 **The first message to somebody you never met** needs their public keys. The app looks them up in
 the DHT; when the DHT does not answer (a small network, a table full of nodes that are gone), it
@@ -126,7 +142,8 @@ when the two of you have never been online at the same time and the lookup fails
 
 **What the marks in a chat mean.** Under a message of yours: a clock means the app is waiting for
 the recipient's keys or for a way to reach them (they are offline and no relay has taken the message
-yet), one check means the recipient or a relay took it, two checks mean the recipient's app confirmed
+yet), one check means the recipient or a relay took it (a pale check: it is waiting at a relay),
+two checks mean the recipient's app confirmed
 it. The same states tell you what a call you placed is waiting for, until it connects.
 
 **Groups** have no server either. Every group message and every change (new member, role, ban) is
@@ -155,6 +172,11 @@ That is why **4K at 60 fps** is possible without a company's servers: the 4K60 p
 The available presets go from 360p30 up to 4K60; the app checks that your upload can feed at least
 one person at the quality you pick.
 
+A participant nobody can reach directly (both sides behind strict NATs, say) is reached through a
+relay circuit, and the call stays one call. A public relay gives each peer up to 50 Mbit/s by
+default: enough for one 4K60 stream, tight for several. Calls do not go through the VPN exit, so
+the exit's speed limit does not touch them.
+
 ## The VPN
 
 You go online through another person's computer: an **exit**. There are two ways to use it, on the
@@ -175,6 +197,10 @@ You go online through another person's computer: an **exit**. There are two ways
 free) and some free test traffic, and publish the offer in the DHT. Running an exit means other
 people's traffic leaves from your IP address. You can also connect to one specific node, for example
 a friend who shares their connection with you for free (**Specific node**).
+
+A free exit gives each client up to 50 Mbit/s by default (100 Mbit/s for all clients behind one IP
+address), so one person cannot take the whole connection; paying clients and the operator's own
+devices are not limited. The operator can change this.
 
 **Hidden exits are not on the market.** An exit can also be hidden: it publishes nothing and serves
 only the people it gave an invitation link to (`echofog://join?…`), at its price. You use one by

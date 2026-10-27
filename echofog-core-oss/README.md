@@ -11,13 +11,13 @@ it and through relays when they do not, and pay each other directly.
 
 | Area | Where | Notes |
 |---|---|---|
-| Transport | `internal/network` | QUIC with per-node UDP obfuscation (no shared key); TCP fallback that looks like a browser talking TLS to a real site (uTLS Chrome fingerprint, own domain and certificate, smux streams). See [anti-dpi](../docs/anti-dpi.md) |
+| Transport | `internal/network` | QUIC to a camouflage node shaped like Chrome's HTTP/3 to a real neighbouring site (token in the ClientHello random, strangers forwarded to the site; apernet/quic-go fork in `third_party/quic-go`); per-node UDP obfuscation between other nodes (no shared key); TCP fallback that looks like Chrome over TLS to the same site (uTLS, smux streams); QUIC and TCP dialed together with per-network memory. See [anti-dpi](../docs/anti-dpi.md) |
 | NAT traversal | `internal/network/{natcheck,portmap}`, `internal/p2p/holepunch` | multi-STUN NAT classification, UPnP/NAT-PMP, coordinated hole punching. See [reachability](../docs/reachability.md) |
 | Discovery | `internal/p2p/dht`, `internal/services/discovery` | signed records, mDNS on the local network |
 | Messaging | `internal/services/{messenger,contacts,groups}` | end-to-end encrypted, double ratchet; delivery receipts and an outbox for offline peers; real group protocol (roles, kick/ban, calls). See [how it works](../docs/how-it-works.md#messages) |
 | Files | `internal/services/filexfer` | files to contacts and groups, resumable. See [file transfer](../docs/file-transfer.md) |
 | Calls | `internal/services/call` | relay trees sized by each peer's capacity, so a call scales past what one uplink can carry |
-| Proxy / VPN | `internal/network/{exit_gateway,tunmode,fakedns}`, `internal/p2p/vpnmarket` | SOCKS5 and whole-computer (TUN) modes, TCP and UDP |
+| Proxy / VPN | `internal/network/{exit_gateway,tunmode,fakedns}`, `internal/p2p/vpnmarket` | SOCKS5 and whole-computer (TUN) modes, TCP and UDP; a pool of up to three rotating connections to an exit, and padding of each tunnel's first kilobytes |
 | Access | `internal/network/access` | hidden and isolated nodes: the access secret checked in the handshake, hole punch tickets, `echofog://join` invitation links. See [hidden nodes](../docs/hidden-nodes.md) |
 | Payments | `internal/wallet/tonwallet`, `pkg/api/node/exitpay.go` | a TON vault with vouchers, or direct TON or USDT transfers, no account. See [vault payments](../docs/vault-payments.md) |
 | Embedding API | `pkg/api/node` | what a GUI or another program calls |
@@ -25,7 +25,7 @@ it and through relays when they do not, and pay each other directly.
 
 ## Build
 
-Go 1.27 or newer.
+Go 1.27.3 or newer.
 
 ```bash
 make build            # bin/echofog-node
@@ -36,6 +36,9 @@ make test-race        # race detector, in Docker
 make lint vuln fuzz   # static analysis, known vulnerabilities, fuzzing
 make testbed-chaos    # ten nodes behind NATs in Docker, with crashes and cuts
 ```
+
+How the traffic looks to a censor is measured with `go run ./testbed/runner -scenario censor`
+(see [testbed/README.md](testbed/README.md)).
 
 
 ## Run a node

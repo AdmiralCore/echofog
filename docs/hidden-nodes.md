@@ -255,8 +255,9 @@ To make it free for everybody with the link, set the price to 0.
 ### What the key actually protects
 
 - A stranger who knows your address but not the key gets **no answer**: not a refusal, not your
-  node's ID, nothing. Scanners looking for VPN servers see a silent UDP port, and on the TCP port the
-  ordinary website the node imitates (see [Anti-DPI](anti-dpi.md)).
+  node's ID, nothing. Scanners looking for VPN servers see the ordinary website the node imitates,
+  on TCP and, if that site speaks HTTP/3, on UDP; a node that imitates no site keeps its UDP port
+  silent (see [Anti-DPI](anti-dpi.md)).
 - A person with the key proves it **without sending the key itself**, and the proof only works for
   that one connection: somebody who records the traffic cannot reuse it.
 - Even when a hidden node connects to other nodes itself (to relays, for example), they cannot use

@@ -52,6 +52,22 @@ whole-computer mode has no kill switch yet: if the app stops unexpectedly, your 
 a moment. If being caught is dangerous for you, do not rely on it yet. See
 [anti-dpi.md](anti-dpi.md) and [SECURITY.md](../SECURITY.md).
 
+What we can say: in our lab, with a program that reads traffic the way GFW and TSPU are known to,
+every VPN tunnel to an exit looked like an ordinary HTTP/3 or HTTPS visit, and
+with UDP blocked the VPN came up in under a second. The traffic between nodes still looks like
+random bytes, which is easier to flag. A real censor may check things our lab does not.
+
+## Does the disguise slow the VPN down?
+
+Barely. On one computer, one stream carried 40 MB/s over plain QUIC and 37 MB/s with the disguise
+(the older random-looking obfuscation: 31 MB/s). The padding against inner-handshake detection
+covers only the first few kilobytes of each connection.
+
+What you will notice more is the exit's own limit: a free exit gives each client up to 50 Mbit/s
+by default (about 6 MB/s), so that one person cannot take the whole connection. The operator can
+change it, and paying clients are not limited. Calls do not go through the exit, so this limit
+does not touch them.
+
 ## What happens if I share my connection?
 
 Other people's traffic goes out to the Internet **from your IP address**. To websites, and to the

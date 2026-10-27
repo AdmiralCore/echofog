@@ -48,6 +48,31 @@ fixed:
   identity key in memory. All three are fixed. Large wallet sends now ask for confirmation, and
   logs mask IP addresses.
 
+Between 20 and 27 October more work landed, part of it after problems found in our own testing:
+
+- **Floods and free identities.** A peer ID costs nothing, so public nodes now limit peers and
+  identities per address and per subnet, make strangers answer a QUIC Retry and a small proof of
+  work, ban misbehaving peers and addresses, cap what one peer can take from the relay and the
+  exit, and keep budgets so a small request cannot make the node send a lot. See
+  [docs/node-security.md](docs/node-security.md).
+- **Stolen camouflage tokens.** The secret token a client shows a camouflage node was only weakly
+  tied to the rest of the TLS greeting, so an observer could copy it into a greeting of his own and
+  reach the node's real TLS. On TCP it is now sealed to its ClientHello, and on QUIC to the key
+  share of the same ClientHello. Replayed, altered and copied greetings are sent to the imitated
+  site like any stranger.
+- **UDP that looked like random bytes.** The main UDP path to an exit now looks like Chrome
+  opening the imitated site over HTTP/3, so GFW's "fully encrypted traffic" rule has nothing to
+  catch there (see the open item about traffic between nodes below).
+- **Proxies given away by their shape.** The browser's own TLS handshake inside the tunnel is now
+  hidden by padding, and connections to an exit are rotated so none of them runs for an hour
+  carrying gigabytes. Rotation never cuts a download in progress.
+- **Slow recovery when UDP is blocked.** QUIC and TCP are now tried together; with UDP dropped the
+  VPN worked after 0.8 s in the lab instead of 37 s.
+- **Weaker password hashing than intended.** Identity keys are now protected with Argon2id at the
+  RFC 9106 setting (t=3, 64 MiB, 4 lanes).
+
+The lab numbers are in [docs/anti-dpi.md](docs/anti-dpi.md#measurements).
+
 ## Known limitations (still open)
 
 - **No kill switch in whole-computer mode.** If EchoFog or its helper stops unexpectedly, apps fall
@@ -63,9 +88,15 @@ fixed:
   (`--obfs off`) a scanner can still learn the node's ID from its TLS certificate, and the relays
   named in a hidden node's link change over time. Links are handed out by people; there is no
   automatic distribution.
-- **Some anti-DPI work is deferred:** a client does not yet present each target node's own imitated
-  site name, and there is no extra padding of the first UDP packets yet. See
-  [docs/anti-dpi.md](docs/anti-dpi.md).
+- **Traffic between nodes is not disguised.** Only the path from a client to a camouflage exit
+  looks like HTTP/3 or HTTPS. Links between nodes (DHT, peer exchange, relays) still use the
+  random-looking obfuscation, which GFW-style rules can flag, so a node inside a censoring country
+  can be picked out by them.
+- **Some anti-DPI pieces are not finished.** The defence against TSPU's freeze of TCP connections
+  after about 16 KB has a config switch (`anti_dpi.micro_chunk_tcp`) that does nothing in this
+  build. The `Join address` printed by `echofog-node` does not carry the site name yet, so a first
+  connection made from it goes out undisguised. `echofog-node` cannot change the anti-DPI settings
+  that have no flag. See [docs/anti-dpi.md](docs/anti-dpi.md).
 - **Payments are new.** The vault contract is on testnet only and unaudited; relays are not paid yet
   (only exits).
 
@@ -75,9 +106,9 @@ What EchoFog tries to protect:
 
 - **The content of your messages and calls.** They are end-to-end encrypted. Relays, mailboxes and
   other nodes in between see only ciphertext.
-- **The protocol, from passive observers.** Someone watching the wire should see random-looking UDP
-  or what looks like a browser talking to an ordinary HTTPS site. A probe that connects to a server
-  node without the right token sees the real site that node imitates.
+- **The protocol, from passive observers.** Someone watching your connection to an exit should see
+  what looks like a browser opening an ordinary site over HTTP/3 or HTTPS. A probe that connects to a
+  camouflage node without the right token sees the real site that node imitates.
 - **Data on your disk.** It is encrypted and opens only with your password or recovery phrase.
 
 What it does **not** protect:
@@ -154,6 +185,31 @@ EchoFog — **экспериментальный** проект.
   блокировка** оставляла в памяти копию ключа личности. Все три исправлены. Кроме того, крупные
   переводы из кошелька теперь требуют подтверждения, а в логах IP-адреса скрыты.
 
+С 20 по 27 октября сделано ещё кое-что, частью после проблем, найденных нашими же тестами:
+
+- **Наплыв соединений и бесплатные ID.** Peer ID ничего не стоит, поэтому публичные ноды теперь
+  ограничивают пиров и ID на адрес и подсеть, заставляют незнакомых пройти QUIC Retry и небольшое
+  доказательство работы, банят пиров и адреса, которые ведут себя плохо, ограничивают, сколько один
+  пир может взять у релея и выхода, и держат бюджеты, чтобы маленький запрос не заставлял ноду
+  отправлять много данных. См. [docs/node-security.ru.md](docs/node-security.ru.md).
+- **Украденные токены маскировки.** Секретный токен, который клиент показывает ноде с маскировкой,
+  был слабо связан с остальным TLS-приветствием, так что наблюдатель мог переложить его в своё
+  приветствие и добраться до настоящего TLS ноды. В TCP токен теперь запечатан в свой ClientHello, в
+  QUIC — привязан к key_share того же ClientHello. Повторённые, изменённые и скопированные
+  приветствия уходят на изображаемый сайт, как от любого постороннего.
+- **UDP, похожий на случайные байты.** Основной UDP-путь до выхода теперь выглядит как Chrome,
+  который открывает изображаемый сайт по HTTP/3, так что правилу GFW о «полностью зашифрованном
+  трафике» там не за что зацепиться (про трафик между нодами — ниже, в открытых пунктах).
+- **Прокси выдавала форма трафика.** TLS-рукопожатие браузера внутри туннеля теперь прячется
+  добивкой, а соединения с выходом меняются, чтобы ни одно не жило час и не везло гигабайты.
+  Начатую закачку ротация не обрывает.
+- **Долгое восстановление, когда закрыт UDP.** Теперь QUIC и TCP пробуются одновременно; при
+  закрытом UDP в лаборатории VPN заработал через 0,8 с вместо 37 с.
+- **Хеширование пароля слабее задуманного.** Ключи личности теперь защищены Argon2id с параметрами
+  из RFC 9106 (t=3, 64 МиБ, 4 потока).
+
+Лабораторные цифры — в [docs/anti-dpi.ru.md](docs/anti-dpi.ru.md#замеры).
+
 ### Известные ограничения (пока не решены)
 
 - **Нет аварийного отключения (kill switch) в режиме «весь компьютер».** Если EchoFog или его
@@ -169,9 +225,15 @@ EchoFog — **экспериментальный** проект.
   `invite --rotate`). С выключенной обфускацией (`--obfs off`) сканер всё ещё может узнать ID ноды
   по её TLS-сертификату, а релеи, указанные в ссылке скрытой ноды, со временем меняются. Ссылки
   раздают люди, автоматической раздачи нет.
-- **Часть работы против DPI отложена:** клиент пока не предъявляет имя сайта, под который
-  маскируется именно та нода, к которой он подключается, и нет дополнительного выравнивания длины
-  первых UDP-пакетов. См. [docs/anti-dpi.ru.md](docs/anti-dpi.ru.md).
+- **Трафик между нодами не замаскирован.** Как HTTP/3 или HTTPS выглядит только путь от клиента до
+  выхода с маскировкой. Связи между нодами (DHT, обмен пирами, релеи) всё ещё идут со старой
+  обфускацией, похожей на случайные байты, а её могут отметить правила в духе GFW, так что ноду
+  внутри страны с цензурой можно вычислить по ним.
+- **Часть защиты от DPI не доделана.** Для защиты от «заморозки» TCP-соединений ТСПУ примерно после
+  16 КБ есть переключатель в конфиге (`anti_dpi.micro_chunk_tcp`), но в этой сборке он ничего не
+  делает. `Join address`, который печатает `echofog-node`, пока не содержит имени сайта, поэтому
+  первое подключение по нему уходит без маскировки. Настройки маскировки, у которых нет флага,
+  `echofog-node` поменять не может. См. [docs/anti-dpi.ru.md](docs/anti-dpi.ru.md).
 - **Платежи совсем новые.** Контракт-хранилище работает только в тестовой сети и не проходил аудит;
   релеям пока не платят (только выходным узлам).
 
@@ -181,10 +243,10 @@ EchoFog — **экспериментальный** проект.
 
 - **Содержимое сообщений и звонков.** Оно зашифровано end-to-end. Релеи, почтовые ящики и другие
   ноды по дороге видят только шифротекст.
-- **Сам протокол — от пассивного наблюдателя.** Тот, кто смотрит на трафик, должен видеть
-  случайный на вид UDP или то, что похоже на браузер, открывающий обычный HTTPS-сайт. Зонд, который
-  подключается к серверной ноде без правильного токена, видит настоящий сайт, под который она
-  маскируется.
+- **Сам протокол — от пассивного наблюдателя.** Тот, кто смотрит на ваше соединение с выходом,
+  должен видеть то, что похоже на браузер, открывающий обычный сайт по HTTP/3 или HTTPS. Зонд,
+  который подключается к ноде с маскировкой без правильного токена, видит настоящий сайт, под
+  который она маскируется.
 - **Данные на диске.** Они зашифрованы и открываются только паролем или фразой восстановления.
 
 Что он **не** защищает:

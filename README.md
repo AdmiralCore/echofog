@@ -45,10 +45,10 @@ Every document has a Russian version next to it (`*.ru.md`).
 - **No central server.** Nodes find each other through a DHT. They connect directly when their
   routers allow it, punch through home routers with the help of signaling nodes, and fall back to a
   relay when nothing else works.
-- **Hard to block.** QUIC first, with every UDP packet disguised under a key tied to the node.
-  When UDP is blocked, the node falls back to TCP that looks like a real browser's HTTPS session; a
-  censor probing the node without the secret token is passed to the real site the node imitates.
-  A node can also sit behind a CDN over WebSocket.
+- **Hard to block.** To a censor, the connection to an exit looks like Chrome opening a real site
+  next to the exit's server: HTTP/3 over QUIC, or HTTPS over TCP when UDP is blocked. The app tries
+  both at once and keeps whichever gets through. A censor that connects to the node himself, without
+  the secret token, lands on that real site. A node can also sit behind a CDN over WebSocket.
 - **The VPN.** A local SOCKS5 proxy for apps, or the whole computer through a tunnel (on Windows
   the Wintun driver is built in). Exits compete on an open market; the app can pick one
   automatically by ping, price, speed and which of your sites open through it. An exit can also
@@ -60,6 +60,45 @@ Every document has a Russian version next to it (`*.ru.md`).
   exit; the exit collects them every few hours. Paying by a direct TON or USDT transfer also works.
 
 The longer version is in [How it works](docs/how-it-works.md).
+
+## What a node defends itself against
+
+| Threat | What the node does |
+|---|---|
+| DPI recognising the protocol | Chrome-shaped QUIC and TLS with the name of a real neighbouring site; the first kilobytes of every tunnel padded so the browser's own handshake inside does not show; connections rotated so no single one runs for an hour carrying gigabytes ([Anti-DPI](docs/anti-dpi.md)) |
+| A censor probing the node | without the token, a probe reaches the real site and sees its certificate and pages; an ordinary node stays silent; a replayed, altered or copied handshake counts as a probe |
+| UDP blocked or throttled | QUIC and TCP are dialed together; a QUIC link that connects and then goes silent is moved to TCP; the winner is remembered per network, across restarts |
+| Connection floods and free fake identities | caps per address and per subnet, a QUIC Retry and a small proof of work for strangers, bans that survive a restart |
+| A small request that makes the node send a lot | node-wide budgets for speed probes and peer lists |
+| Filling its disk or memory | quotas and expiry for offline mail, DHT records and handed-out keys |
+| One user taking the whole relay or exit | per-peer and per-address limits; a free exit gives each client up to 50 Mbit/s by default |
+| Fake payments keeping it busy | unknown vaults checked at most every 10 s per peer |
+| Being found at all | hidden and isolated nodes stay out of the DHT and answer only invitation links ([Hidden nodes](docs/hidden-nodes.md)) |
+
+What no node can stop by itself: a flood bigger than its uplink, an attacker with thousands of real
+addresses, and a censor who crawls the DHT for the addresses of public nodes. The traffic between
+nodes (as opposed to client to exit) still uses the older random-looking obfuscation, which a
+GFW-style rule can flag. Details: [Protecting a node](docs/node-security.md), [SECURITY.md](SECURITY.md).
+
+## Measured in the lab
+
+From the Docker test network (`echofog-core-oss/testbed`), three runs in a row on 27 October 2026.
+A program playing the censor read the traffic at every border while three clients used the VPN for
+three minutes (about 2 GB) and a browser visited the imitated site for comparison. This is a lab,
+not a real national DPI.
+
+| Measurement | Result |
+|---|---|
+| EchoFog bytes a GFW-like rule set would flag | 0.0 / 0.0 / 0.1% (on 25 October, before the QUIC disguise: 100%) |
+| VPN tunnels to the exit read as ordinary HTTP/3 or HTTPS | all; 5 small mesh links to the exit and 15 to other nodes still look like noise |
+| VPN moved to another exit during a run | never |
+| HTTPS visits through the VPN given away by the inner handshake | 0 of 24 |
+| First page through the VPN with UDP dropped at the border | 0.7 s (before the QUIC/TCP race: 37 s) |
+| 300 MB in one stream while connections rotate; 72 downloads at once | whole; 72 of 72 |
+| One stream over loopback, plain QUIC / disguised / random-looking | 40 / 37 / 31 MB/s |
+| One client through a free exit | 50 Mbit/s, the exit's default per-client limit |
+
+How each number is taken, and what is still missing: [Anti-DPI](docs/anti-dpi.md#measurements).
 
 ## Repository layout
 
@@ -75,7 +114,7 @@ so the two folders must stay side by side.
 
 ## Build from source
 
-You need **Go 1.27+**. For the desktop app you also need **Node 18+** and the
+You need **Go 1.27.3+**. For the desktop app you also need **Node 18+** and the
 [Wails CLI](https://wails.io).
 
 Headless node:
@@ -100,7 +139,7 @@ wails dev                        # live reload against the real core
 
 > The Wails v2.11.0 CLI must be built with a recent `golang.org/x/tools` to work under Go 1.27
 > (otherwise it fails with `package "context" without types`). Install it with
-> `GOTOOLCHAIN=go1.27.2 go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0` on a machine
+> `GOTOOLCHAIN=go1.27.3 go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0` on a machine
 > whose module cache already has `x/tools` ≥ v0.52.
 
 Tests:

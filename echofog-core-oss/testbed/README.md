@@ -43,6 +43,9 @@ TSPU do), and whether the first data would be blocked by the Great Firewall's "f
 rule. With the `echofog-ndpi` image (build `testbed/ndpigen`) nDPI classifies the same captures.
 The run prints a visibility score, the share of EchoFog's bytes a GFW-like censor could single
 out, and writes the per-flow table to `censor-report.txt`; `-strict` fails while it is above 0.
+`-censor-for 3m` also keeps two clients downloading through the exit for that long and reports the
+shape of the flows: how many connections were both long and heavy (`-heavy-after`, 2 minutes, and
+`-heavy-mb`, 20 MB, by default), which a browser never makes.
 
 Every run keeps the logs of all containers in `testbed/out/<time>-<scenario>/`, with
 `summary.txt`: crashes, errors and race reports found in them, how often each container started,

@@ -74,7 +74,7 @@ on a server and in a country where you may do this, and read your hoster's terms
 
 - **Prebuilt:** CI builds `echofog-node` for Linux (amd64) and Windows (amd64) on every push to
   `main`; a version tag also makes a release with a `SHA256SUMS` file. Download it from the [Releases page](https://github.com/AdmiralCore/echofog/releases).
-- **From source** (Go 1.27+):
+- **From source** (Go 1.27.3+):
 
   ```bash
   cd echofog-core-oss
@@ -136,9 +136,10 @@ publishes 443 to the node's 4242), tell the node with `--advertise-port 443` (an
 
 ## Anti-DPI camouflage, in plain words
 
-The TCP fallback pretends to be a browser visiting a real HTTPS site. To be believable, the site it
-pretends to be should live right next to your server, in the same network. Details:
-[anti-dpi.md](anti-dpi.md).
+A public node pretends to be a real HTTPS site: on UDP clients reach it as Chrome would reach that
+site over HTTP/3, on TCP as Chrome over HTTPS, and anyone without the secret token is passed on to
+the real site. To be believable, the site should live right next to your server, in the same
+network. Details: [anti-dpi.md](anti-dpi.md).
 
 - **Automatic (default).** A public node looks for a real HTTPS site among its neighbours in its own
   `/24` (the 256 addresses around its IP). It scans gently, so the hoster does not take it for a port
@@ -154,12 +155,17 @@ pretends to be should live right next to your server, in the same network. Detai
   ```
 
   This also skips the scan. `--tls-cert` / `--tls-key` let you serve a real certificate for a domain
-  you own; without them a self-signed one is used.
+  you own; without them a self-signed one is used. A site that also speaks HTTP/3 is better: a
+  probe on UDP then gets an answer from it too.
+- **Give out the address with the site name.** The `Join address` the node prints does not include
+  it yet. Add it yourself, `host:port/<peer id>?sni=<site>`, so that people's first connection is
+  already disguised.
 
 **Cloud VMs with a private interface address.** On some providers the VM's own network interface
 has a private address and the public IP is NATed in front of it (Google Cloud works this way).
 There the node cannot see its public neighbours, so automatic discovery is skipped and the node
-stays on UDP only. Set `--tls-server-name` and `--camouflage-addr` by hand to get TCP.
+stays on UDP only, without the HTTP/3 disguise. Set `--tls-server-name` and `--camouflage-addr` by
+hand to get TCP and the disguise.
 
 ## Join the network
 
