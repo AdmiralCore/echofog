@@ -114,7 +114,9 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 	if !ok || pool.IsClosed() {
 		var pPool *PeerSessionPool
 		sessionDialer := func(ctx context.Context) (StreamOpener, func() error, error) {
-			if pPool != nil && pPool.TotalSessions() > 0 {
+			camouflage := sw.IsCamouflagePeer(exit)
+			rotating := pPool != nil && pPool.TotalSessions() > 0
+			if camouflage || rotating {
 				p := sw.GetPeer(exit)
 				if p != nil {
 					addr := p.Addr()
@@ -122,10 +124,25 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 						addr = p.RemoteAddr()
 					}
 					if addr != "" {
-						// Dial a fresh connection to exit to rotate the physical socket/5-tuple. The
-						// ephemeral-socket marker gives even the noise path a new 5-tuple, so a rotated
-						// noise tunnel is a distinct flow to a censor rather than reusing the main socket.
-						_ = sw.DialEarly(network.WithEphemeralSocket(ctx), addr)
+						switch {
+						case camouflage:
+							// The exit is a camouflage node (it advertises a cover SNI). Its tunnel must
+							// run over a REALITY connection, not a noise connection reused from the mesh
+							// bootstrap: a noise connection to a camouflage node does not serve the tunnel
+							// and the exit goes silent (the client idles out and moves to another exit).
+							// Register the SNI so the dial uses REALITY and dial — on first use to replace
+							// a reused noise connection, on rotation to rotate the REALITY connection. A
+							// REALITY dial always gets its own fresh socket/5-tuple, so this also gives the
+							// rotation a distinct flow without the ephemeral-socket marker.
+							sw.ExpectPeerAddr(addr, exit)
+							_ = sw.DialEarly(ctx, addr)
+						case rotating:
+							// Non-camouflage exit, rotating: dial a fresh connection to rotate the physical
+							// socket/5-tuple. The ephemeral-socket marker gives even the noise path a new
+							// 5-tuple, so a rotated noise tunnel is a distinct flow to a censor rather than
+							// reusing the main socket.
+							_ = sw.DialEarly(network.WithEphemeralSocket(ctx), addr)
+						}
 					}
 				}
 			}
