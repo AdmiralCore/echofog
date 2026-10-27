@@ -38,12 +38,12 @@ func (s *Swarm) keepDialedBy(isOut bool, remote types.PeerID) bool {
 // AddPeer records an authenticated connection as an active peer, wiring up its read loops and
 // notifying observers. An existing connection to the same peer is replaced.
 func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool) *Peer {
-	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil)
+	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil, false)
 }
 
 // addPeer is AddPeer for a connection that came from ip and holds a place in the per-address
 // limits, which release gives back once the peer is gone (both may be zero).
-func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func()) *Peer {
+func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func(), reality bool) *Peer {
 
 	s.mu.Lock()
 	if old, exists := s.activePeers[peerID]; exists {
@@ -52,6 +52,20 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			// otherwise each could close the one the other kept and lose both
 			s.mu.Unlock()
 			_ = conn.CloseWithError(network.ErrCodeNormalClose, "duplicate connection")
+			if release != nil {
+				release()
+			}
+			return nil
+		}
+		// Never downgrade a camouflage exit's camouflaged connection (QUIC-REALITY or TCP mimicry)
+		// to a plain QUIC noise one: noise does not serve its tunnel and a censor would flag the
+		// bulk bytes. Keep the camouflaged connection and drop the incoming QUIC noise one. A TCP
+		// fallback connection is itself camouflaged, so it is allowed to replace (e.g. when UDP is
+		// blocked and the client falls back to TCP).
+		if quicNoise(conn.Protocol(), reality) && old.Alive() && old.primaryIsCamouflaged() &&
+			s.exitPoolFor(peerID) != nil && s.IsCamouflagePeer(peerID) {
+			s.mu.Unlock()
+			_ = conn.CloseWithError(network.ErrCodeNormalClose, "keeping camouflaged connection to camouflage exit")
 			if release != nil {
 				release()
 			}
@@ -69,12 +83,81 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	p.txBytes = &s.bytesTx
 	p.ip = ip
 	p.release = release
+	p.primaryReality = reality
 	pw := network.NewPeerWrapper(p.ctx, conn, peerID)
 
 	if s.peerStore != nil && dialable {
 		s.peerStore.SavePeerAsync(peerPubKey, p.addr, 100)
 	}
 
+	s.attachStreamHandlers(pw, p, peerID)
+
+	initialProto := router.ProtoDirectQUIC
+	if conn.Protocol() == network.ProtocolTCP {
+		initialProto = router.ProtoTCPTLS
+	} else if s.cfg != nil && s.cfg.AntiDPI.ObfsPassword != "" {
+		initialProto = router.ProtoObfsQUIC
+	}
+	p.SetTransportWithProtocol(pw, initialProto)
+
+	s.mu.Lock()
+	s.activePeers[peerID] = p
+	obs := s.observers
+	s.mu.Unlock()
+
+	// forget the peer once its connection dies, so it is redialled instead of staying a zombie
+	// that silently swallows every frame
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		select {
+		case <-conn.Context().Done():
+		case <-p.ctx.Done():
+		case <-s.ctx.Done():
+			return
+		}
+		s.mu.Lock()
+		current := s.activePeers[peerID] == p
+		if current {
+			delete(s.activePeers, peerID)
+		}
+		obs := s.observers
+		s.mu.Unlock()
+		if current {
+			s.logLinkClosed(peerID, conn, time.Since(p.connectedAt))
+		}
+		if p.isOut && network.LinkKind(conn) == network.ProtocolQUIC && network.IsIdleTimeout(context.Cause(conn.Context())) {
+			s.preferTCP(conn) // UDP to this address went silent: TCP first next time
+		}
+		p.Close()
+		s.noteLongLived(p)
+		if p.release != nil {
+			p.release()
+		}
+		if current {
+			s.notifyPeerDisconnected(obs, peerID)
+			s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})
+		}
+	}()
+
+	s.notifyPeerConnected(obs, peerID, peerPubKey, advertised)
+	s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "connected", "addr": addr})
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.exchangePeers(p)
+	}()
+
+	return p
+}
+
+// attachStreamHandlers wires the data and stream callbacks on a peer connection: the fast-path
+// frame router, the generic frame handlers, the async envelope path, and the per-stream accept
+// loop that feeds session data, serves prekey bundles, and dispatches stream RPCs. Both the
+// primary connection in addPeer and the extra parallel links of an exit pool use it, so every
+// connection to a peer handles incoming frames and streams identically.
+func (s *Swarm) attachStreamHandlers(pw *network.PeerWrapper, p *Peer, peerID types.PeerID) {
 	pw.OnData(func(msgType net_types.MessageType, payload []byte, peerID types.PeerID) {
 		s.bytesRx.Add(uint64(len(payload)))
 		// 0. a type this node runs no service for costs one map lookup, nothing more
@@ -221,65 +304,6 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			}
 		}()
 	})
-
-	initialProto := router.ProtoDirectQUIC
-	if conn.Protocol() == network.ProtocolTCP {
-		initialProto = router.ProtoTCPTLS
-	} else if s.cfg != nil && s.cfg.AntiDPI.ObfsPassword != "" {
-		initialProto = router.ProtoObfsQUIC
-	}
-	p.SetTransportWithProtocol(pw, initialProto)
-
-	s.mu.Lock()
-	s.activePeers[peerID] = p
-	obs := s.observers
-	s.mu.Unlock()
-
-	// forget the peer once its connection dies, so it is redialled instead of staying a zombie
-	// that silently swallows every frame
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		select {
-		case <-conn.Context().Done():
-		case <-p.ctx.Done():
-		case <-s.ctx.Done():
-			return
-		}
-		s.mu.Lock()
-		current := s.activePeers[peerID] == p
-		if current {
-			delete(s.activePeers, peerID)
-		}
-		obs := s.observers
-		s.mu.Unlock()
-		if current {
-			s.logLinkClosed(peerID, conn, time.Since(p.connectedAt))
-		}
-		if p.isOut && network.LinkKind(conn) == network.ProtocolQUIC && network.IsIdleTimeout(context.Cause(conn.Context())) {
-			s.preferTCP(conn) // UDP to this address went silent: TCP first next time
-		}
-		p.Close()
-		s.noteLongLived(p)
-		if p.release != nil {
-			p.release()
-		}
-		if current {
-			s.notifyPeerDisconnected(obs, peerID)
-			s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})
-		}
-	}()
-
-	s.notifyPeerConnected(obs, peerID, peerPubKey, advertised)
-	s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "connected", "addr": addr})
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.exchangePeers(p)
-	}()
-
-	return p
 }
 
 func (s *Swarm) notifyPeerConnected(obs []TopologyObserver, peerID types.PeerID, peerPubKey types.PeerPublicKey, addr string) {

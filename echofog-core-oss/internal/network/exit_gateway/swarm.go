@@ -83,6 +83,9 @@ func ResetSwarmPools() {
 	defer swarmPoolsMu.Unlock()
 	for k, p := range swarmPools {
 		_ = p.Close()
+		if k.sw != nil {
+			k.sw.UnmarkExitPeer(k.exit)
+		}
 		delete(swarmPools, k)
 	}
 }
@@ -109,6 +112,11 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 	cfg.Normalize()
 	key := swarmPoolKey{sw: sw, exit: exit}
 
+	// Let the swarm keep several concurrent connections to this exit (a parallel session pool)
+	// instead of one. Tunnel streams then spread across them, so a single stalled or
+	// censor-killed connection does not stall the VPN. Mesh peers are never marked.
+	sw.MarkExitPeer(exit, cfg.MaxConnections)
+
 	swarmPoolsMu.Lock()
 	pool, ok := swarmPools[key]
 	if !ok || pool.IsClosed() {
@@ -116,6 +124,13 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 		sessionDialer := func(ctx context.Context) (StreamOpener, func() error, error) {
 			camouflage := sw.IsCamouflagePeer(exit)
 			hasSessions := pPool != nil && pPool.TotalSessions() > 0
+			if hasSessions {
+				// The tunnel is already up on an established connection, so this dial is a
+				// rotation: have the swarm add a fresh parallel link rather than replace the
+				// existing one. First contact (hasSessions == false) is left alone so the initial
+				// mesh/REALITY connection is set up normally.
+				sw.SetExitAccumulate(exit)
+			}
 			// A rotation dials a fresh connection to the exit to get a new 5-tuple. The swarm keeps
 			// one connection per peer, so that dial replaces and (after a drain timeout) force-closes
 			// the connection the current traffic rides. A single large download is one stream that
@@ -158,11 +173,14 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 				}
 			}
 			op := func(ctx context.Context) (FramedStream, error) {
-				streams, err := sw.OpenNewStreams(ctx, exit, 1)
+				// Spread the stream across the exit's parallel connections (least-loaded link),
+				// so one connection does not carry all tunnel traffic. With a single connection
+				// this is identical to opening one stream on it.
+				st, err := sw.OpenExitStream(ctx, exit)
 				if err != nil {
 					return nil, err
 				}
-				return swarmStream{streams[0], sw}, nil
+				return swarmStream{st, sw}, nil
 			}
 			return op, nil, nil
 		}
