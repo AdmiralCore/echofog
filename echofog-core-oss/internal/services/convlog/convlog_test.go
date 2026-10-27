@@ -322,6 +322,40 @@ func TestUnreadAndMarkRead(t *testing.T) {
 	}
 }
 
+// A message written without having seen mine (at the same time, or while we were apart) carries a
+// clock no later than my last message, yet it is new to me: it counts as unread until I read.
+func TestAMessageThatCrossedMineIsUnread(t *testing.T) {
+	a, b := newAccount(t), newAccount(t)
+	la, lb := replica(t, a), replica(t, b)
+	ca, cb := DM(a.id, b.id), DM(b.id, a.id)
+	mustF(t)(lb.AppendMessage(cb, "mine", 0, "", EventID{}, EventID{}))
+	mustF(t)(lb.AppendMessage(cb, "mine too", 0, "", EventID{}, EventID{}))
+	theirs, _ := mustF(t)(la.AppendMessage(ca, "written before seeing yours", 0, "", EventID{}, EventID{}))
+	ingest(t, lb, cb, theirs)
+	if meta, _ := lb.Meta(cb); meta.Unread != 1 {
+		t.Fatalf("unread %d, want 1", meta.Unread)
+	}
+	page, _, err := lb.History(cb, "", 10)
+	if err != nil || len(page) != 3 {
+		t.Fatalf("history: %v, %d messages", err, len(page))
+	}
+	if err := lb.MarkRead(cb, mustID(t, page[0].ID)); err != nil {
+		t.Fatal(err)
+	}
+	if meta, _ := lb.Meta(cb); meta.Unread != 0 {
+		t.Fatalf("unread after reading to the end %d", meta.Unread)
+	}
+}
+
+func mustID(t *testing.T, s string) EventID {
+	t.Helper()
+	id, err := ParseEventID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func TestStrangersAndClockSpamAreRejected(t *testing.T) {
 	a, b, x := newAccount(t), newAccount(t), newAccount(t)
 	lb := replica(t, b)

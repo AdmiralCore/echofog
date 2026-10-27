@@ -359,7 +359,9 @@ func (t *txn) applyMsg(e *Event, idHex, author, ba string, store *[]byte) error 
 			if e.Lamport > t.meta.ReadLamport {
 				t.meta.ReadLamport, t.meta.Unread = e.Lamport, 0
 			}
-		} else if e.Lamport > t.meta.ReadLamport {
+		} else {
+			// new to me whatever its clock: one written without having seen my last message sorts
+			// before it, below the read point, and is still unread (MarkRead counts again)
 			t.meta.Unread++
 		}
 	} else {
