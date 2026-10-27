@@ -164,6 +164,42 @@ func (m *GroupManager) ListGroups() []GroupSummary {
 	return out
 }
 
+// Bans returns who is banned from a group, with the reason.
+func (m *GroupManager) Bans(groupID string) map[types.PeerID]string {
+	m.mu.RLock()
+	st, ok := m.groups[groupID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	out := make(map[types.PeerID]string, len(st.Bans))
+	for id, reason := range st.Bans {
+		out[id] = reason
+	}
+	return out
+}
+
+// RestoreBans puts back the bans of a restored group: a ban outlives a restart, so the banned
+// peer cannot be added again.
+func (m *GroupManager) RestoreBans(groupID string, bans map[types.PeerID]string) {
+	m.mu.RLock()
+	st, ok := m.groups[groupID]
+	m.mu.RUnlock()
+	if !ok {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for id, reason := range bans {
+		if _, member := st.Members[id]; member {
+			continue // added again by an admin since: the ban was lifted
+		}
+		st.Bans[id] = reason
+	}
+}
+
 // GetGroup returns the genesis manifest of a group.
 func (m *GroupManager) GetGroup(groupID string) (*GroupGenesisManifest, error) {
 	m.mu.RLock()

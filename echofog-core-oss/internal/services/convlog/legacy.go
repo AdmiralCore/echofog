@@ -114,6 +114,17 @@ func Peek(raw []byte) (kind uint32, thread bool) {
 	return e.Kind, len(e.Thread) > 0
 }
 
+// PeekConv reads an event's conversation id without checking the event.
+func PeekConv(raw []byte) (ConvID, bool) {
+	var e Event
+	var c ConvID
+	if proto.Unmarshal(raw, &e) != nil || len(e.Conv) != convIDLen {
+		return c, false
+	}
+	copy(c[:], e.Conv)
+	return c, true
+}
+
 // HasMessage reports whether the conversation holds a message with this id (an event or a legacy
 // message).
 func (l *Log) HasMessage(c Conv, id EventID) bool {

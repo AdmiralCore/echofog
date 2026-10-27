@@ -216,41 +216,63 @@ already know the node id); documented in the user docs.
 
 ## 7. Groups
 
-- Group events are `Event`s sealed in sender-key envelopes (new wire kind `cev`), fanned out as
-  today to capable members; legacy members keep receiving the old forms.
-- Sync of group logs uses section 5 between members, not the envelope cache, so history no longer
-  expires with epoch keys.
-- **Large groups** (above `meshLimit` = 50): the sender pushes to at most 8 members (online first)
-  plus their mailboxes; everyone else converges through anti-entropy. Cost per message becomes
-  O(1) for the sender instead of O(members).
-- **Epoch keys**: every removal or ban rotates the sender-key epoch at once (no rekey gap), so a
-  removed member cannot read anything sent afterwards. The legacy `KeyRotationEngine` (which never
-  protected messages) is retired. Bans are persisted.
+- **Per-group mode.** The group wire version is now 3 ("speaks the log"; 2 = sealed messages). A
+  group runs on the log once every member is known to speak version 3 (`groupsFacade.LogMode`);
+  until then it runs the old way, its messages are mirrored into the log as legacy messages, and
+  the operations (replies, threads, edits, deletes, reactions, pins) return `ErrNeedsUpgrade`.
+- **Transport.** A group event is sealed with the group's sender key in the same `smsg` envelope as
+  a sealed message, its plaintext marked by `fogcev1\0` (`pkg/api/node/group_log.go`). It therefore
+  gets the epochs, the envelope cache, the per-sender gap repair and the envelope sync that sealed
+  messages have; `takeEnvelope` hands it to the log and drops it unless its author is the member
+  that sealed it. A node of version 2 cannot parse it as a message and ignores it.
+- **Sync** of group logs uses section 5 between members as well (on connect for the groups both are
+  in, and every 10 min with up to 3 connected members), so history no longer depends on the
+  envelope cache (7 days, 3000 per group).
+- **Large groups** (above `meshLimit` = 50): the author pushes to at most 8 members, connected ones
+  first; everyone else converges through envelope sync and log sync. O(1) per message for the
+  author instead of O(members).
+- **Epoch keys.** Rekeys stay paced (2 min, up to 30 min under churn), so after a removal the
+  epoch in use may still be held by the removed member for a while (*tainted*). Nothing new is
+  sealed with a tainted epoch any more: in either mode the message or event goes to the remaining
+  members in their own 1:1 sessions until the new epoch is out. (This was a real gap: messages sent
+  in that window were readable by the member just removed.)
+- **Bans** are persisted in the group record and restored on start; before, a ban lived only in
+  memory and the banned peer could be added back after a restart.
+- **Permissions.** Participant = current member; pin = members with `PermManageGroup` or
+  `PermDeleteMessages`; deleting others' messages = `PermDeleteMessages`. Events need
+  `PermSendMessages` (so in a read-only channel, readers cannot react yet).
+- The legacy `KeyRotationEngine` is left in place: it never protected messages and still does not
+  (sender-key epochs do); removing it is cleanup for later.
 
 ## 8. Delivery fixes
 
 | Finding | Fix |
 |---|---|
-| F7 half-open link | a direct send to a peer silent for longer than its keep-alive also leaves a copy in the recipient's mailbox relay |
-| F5 call to an offline callee | the invite's message state is surfaced as a call state: `unreachable` (keys/offline) vs `ringing` (delivered) |
-| F3 premature "sent" | a relay-path message is `relayed` until a relay accepts it into the mailbox; `sent` after |
-| F6 receipts | the receipt uses the tier of the message it confirms |
+| F7 half-open link | a message the peer took directly but did not confirm after 2 retries also goes to its mailbox on each further retry (the peer drops the second copy); no hot-path liveness tracking needed |
+| F5 call to an offline callee | caller: the invite's message state maps to "not reachable" (keys/offline/relayed), "calling" (sent), "ringing" (delivered); callee: an invitation older than 2 min raises `call:missed`, not a ring |
+| F3 premature "sent" | new state `relayed`: a relay took it while the recipient is away; `sent` now means the recipient's device took it |
+| F6 receipts | **won't fix, by design**: only the X3DH/ratchet tiers authenticate the sender, and a receipt must be authenticated (else anyone holding a pre-shared key could forge "delivered") |
+| relay drop on reconnect | a relay hands stored mail to a reconnected recipient on connect and again ~10 s later, and drops it only then (it used to drop it as soon as the first write went out, losing it if that frame on a fresh connection was lost) |
 
 ## 9. API
 
-Core (`pkg/api/node`), all identifiers hex strings, timestamps in **milliseconds**:
+Core (`pkg/api/node/conversations.go`), all identifiers hex strings, timestamps in
+**milliseconds**; a chat is a `ChatRef{kind: "dm"|"group", id}`:
 
-- `Conversations() []ConversationDTO`
-- `History(chat ChatRef, before Cursor, limit) Page[MessageViewDTO]` — newest first, cursor based
-- `Thread(chat, rootID, after Cursor, limit) Page[MessageViewDTO]`
-- `Pins(chat) []MessageViewDTO`, `MessageView(chat, id)`
-- `Send(chat, SendRequest{text, type, replyTo, thread, attachment}) (MessageViewDTO, error)`
-- `Edit(chat, id, text)`, `Delete(chat, id)`, `React(chat, id, emoji, on)`, `Pin(chat, id, on)`
-- `MarkRead(chat, upToID)`
-- events: `conv:message` (new or changed view), `conv:state` (delivery state by id), `conv:list`
+- `Conversations() []ConversationDTO` — with `unread`, `request` (a stranger's chat) and
+  `upgraded` (the chat runs on the log)
+- `ChatHistory(ref, cursor, limit) ChatPage` — newest first, cursor based; thread comments excluded
+- `ChatThread(ref, rootID, cursor, limit) ChatPage` — oldest first
+- `ChatPins(ref)`, `ChatMessage(ref, id)`
+- `ChatSend(ref, SendRequest{text, replyTo, thread}) ChatMessage`
+- `ChatEdit`, `ChatDelete`, `ChatReact(ref, id, emoji, on)`, `ChatPin(ref, id, on)`, `ChatMarkRead`
+- `SubscribeConversations(cb)` → desktop event `conv:change` (`{ref, conversation, messages}`);
+  delivery states keep coming as `message:state` (now with `relayed`); a call invitation older than
+  2 min raises `call:missed` instead of `call:incoming`.
 
-The old methods (`SendMessage`, `GetMessages`, group message calls) stay and are served from the
-log. The full frontend contract is in `docs/frontend-conversation-log-spec.ru.md` (repo root).
+The desktop exposes them as Wails methods in `echofog-desktop-oss/app_chat.go`. The old methods
+(`SendMessage`, `GetMessages`, `SendGroupMessage`, `GetGroupMessages`) stay and are served from the
+log.
 
 ## 10. Testing
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call"
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/services/filexfer"
 	"github.com/echofog/echofog-core/internal/services/groups"
 	"github.com/echofog/echofog-core/internal/services/groups/senderkeys"
@@ -92,6 +93,7 @@ type groupsHolder struct {
 type groupRecord struct {
 	Genesis *groups.GroupGenesisManifest `json:"genesis"`
 	Members []groups.MemberProfile       `json:"members"`
+	Bans    map[string]string            `json:"bans,omitempty"` // peer id hex -> reason
 }
 
 type groupsFacade struct {
@@ -123,10 +125,19 @@ type groupsFacade struct {
 	nudged      map[types.PeerID]time.Time
 
 	// sealed messages (group_keys.go)
-	keyrings  map[string]*senderkeys.Keyring
-	capable   map[types.PeerID]bool // peers that understand sealed messages
-	capLoaded bool
-	paced     map[string]time.Time // when a key request, sync request or sync answer last went
+	keyrings   map[string]*senderkeys.Keyring
+	capable    map[types.PeerID]bool // peers that understand sealed messages
+	logCapable map[types.PeerID]bool // peers that speak the conversation log (version 3)
+	capLoaded  bool
+
+	// the conversation log (conversations.go): a group's events, and its old-style messages so
+	// the chat shows everything in one place
+	onEvent   func(groupID string, origin types.PeerID, raw []byte)
+	onLegacy  func(groupID string, m GroupMessageDTO)
+	sendEvent func(target types.PeerID, text string, raw []byte, track bool) error
+	connected func(types.PeerID) bool
+	onJoined  func(groupID string, peer types.PeerID) // a newcomer and the admin who let it in: sync the log now
+	paced     map[string]time.Time                    // when a key request, sync request or sync answer last went
 	envWrites int
 	heard     map[types.PeerID]time.Time // when a group message last came from a peer
 
@@ -186,7 +197,15 @@ func (f *groupsFacade) load() error {
 		if json.Unmarshal(e.Value, &rec) != nil || rec.Genesis == nil {
 			continue
 		}
-		_ = f.mgr.RestoreGroup(rec.Genesis, rec.Members)
+		if f.mgr.RestoreGroup(rec.Genesis, rec.Members) == nil && len(rec.Bans) > 0 {
+			bans := make(map[types.PeerID]string, len(rec.Bans))
+			for s, reason := range rec.Bans {
+				if id, ok := parsePeer(s); ok {
+					bans[id] = reason
+				}
+			}
+			f.mgr.RestoreBans(rec.Genesis.GroupID, bans)
+		}
 	}
 	f.loaded = true
 	return nil
@@ -201,7 +220,14 @@ func (f *groupsFacade) persist(groupID string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(groupRecord{Genesis: g, Members: members})
+	rec := groupRecord{Genesis: g, Members: members}
+	if bans := f.mgr.Bans(groupID); len(bans) > 0 {
+		rec.Bans = make(map[string]string, len(bans))
+		for id, reason := range bans {
+			rec.Bans[id.String()] = reason
+		}
+	}
+	raw, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
@@ -531,18 +557,28 @@ func (f *groupsFacade) Messages(groupID string, limit int) ([]GroupMessageDTO, e
 	return out, nil
 }
 
+// groupsFacade returns the group service, making it on first use; the conversation log comes up
+// with it, so a group's log traffic finds it from the first moment on.
 func (n *NodeApi) groupsFacade() (*groupsFacade, error) {
+	f, made, err := n.openGroups()
+	if made {
+		_, _ = n.convsFacade()
+	}
+	return f, err
+}
+
+func (n *NodeApi) openGroups() (*groupsFacade, bool, error) {
 	n.groupsH.mu.Lock()
 	defer n.groupsH.mu.Unlock()
 	if n.groupsH.f != nil {
-		return n.groupsH.f, nil
+		return n.groupsH.f, false, nil
 	}
 	if n.node == nil || n.node.Storage == nil || n.node.Messenger == nil {
-		return nil, errors.New("node not started")
+		return nil, false, errors.New("node not started")
 	}
 	pub, err := n.node.IdentityPublicKey()
 	if err != nil || len(pub) != 32 {
-		return nil, errors.New("identity not available")
+		return nil, false, errors.New("identity not available")
 	}
 	var ident types.IdentityPublicKey
 	copy(ident[:], pub)
@@ -572,9 +608,10 @@ func (n *NodeApi) groupsFacade() (*groupsFacade, error) {
 		n.node.SetGroupMemberCheck(f.isMember)
 	}
 	n.node.Messenger.SetInterceptor(f.handle)
+	n.hookGroupsToLog(f)
 	n.groupsH.f = f
 	go f.syncLoop(n.node.Ctx) // members hand each other the messages they missed
-	return f, nil
+	return f, true, nil
 }
 
 func (n *NodeApi) CreateGroup(title, description, kind string) (GroupDTO, error) {
@@ -630,7 +667,28 @@ func (n *NodeApi) SendGroupMessage(groupID, text string) (GroupMessageDTO, error
 	if err != nil {
 		return GroupMessageDTO{}, err
 	}
-	return f.SendMessage(groupID, text)
+	if f.LogMode(groupID) {
+		if _, cerr := n.convsFacade(); cerr == nil {
+			m, err := n.ChatSend(ChatRef{Kind: convlog.KindGroup, ID: groupID}, SendRequest{Text: text})
+			if err != nil {
+				return GroupMessageDTO{}, err
+			}
+			return groupDTOOf(groupID, m), nil
+		}
+	}
+	d, err := f.SendMessage(groupID, text)
+	n.mirrorOwnGroupPost(groupID, d, err)
+	return d, err
+}
+
+// mirrorOwnGroupPost records a message we posted the old way in the conversation log too.
+func (n *NodeApi) mirrorOwnGroupPost(groupID string, d GroupMessageDTO, err error) {
+	if err != nil {
+		return
+	}
+	if cf, cerr := n.convsFacade(); cerr == nil {
+		cf.mirrorGroup(groupID, d)
+	}
 }
 
 // SendGroupFile posts a file in a group. Every member gets the offer; each who accepts fetches it
@@ -640,13 +698,34 @@ func (n *NodeApi) SendGroupFile(groupID, path string) (GroupMessageDTO, error) {
 	if err != nil {
 		return GroupMessageDTO{}, err
 	}
-	return f.SendFile(groupID, path)
+	d, err := f.SendFile(groupID, path)
+	n.mirrorOwnGroupPost(groupID, d, err)
+	return d, err
 }
 
+// GetGroupMessages returns a group's messages, oldest first. A group on the conversation log is
+// read from the log (edits applied, deleted messages left out).
 func (n *NodeApi) GetGroupMessages(groupID string, limit int) ([]GroupMessageDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
+	}
+	if f.LogMode(groupID) {
+		if _, cerr := n.convsFacade(); cerr == nil {
+			if limit <= 0 || limit > 500 {
+				limit = 500
+			}
+			page, err := n.ChatHistory(ChatRef{Kind: convlog.KindGroup, ID: groupID}, "", limit)
+			if err == nil {
+				out := make([]GroupMessageDTO, 0, len(page.Messages))
+				for i := len(page.Messages) - 1; i >= 0; i-- {
+					if m := page.Messages[i]; !m.Deleted {
+						out = append(out, groupDTOOf(groupID, m))
+					}
+				}
+				return out, nil
+			}
+		}
 	}
 	return f.Messages(groupID, limit)
 }

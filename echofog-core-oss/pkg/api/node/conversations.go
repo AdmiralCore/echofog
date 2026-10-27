@@ -17,6 +17,13 @@ import (
 // every operation on one — edit, delete, reaction, pin, reply, comment in a thread — is a signed
 // event that syncs between the participants. See docs/design/conversation-log.md.
 
+// ChatMessage is a message as a chat shows it: every operation on it resolved (the text after
+// edits, deleted, reactions, pin, replies in its thread) and, for my own, its delivery state.
+type ChatMessage = convlog.Message
+
+// ChatReaction is one emoji on a message and who set it.
+type ChatReaction = convlog.Reaction
+
 // ChatRef names a chat: a direct chat with a peer (Kind "dm", ID its peer id hex) or a group (Kind
 // "group", ID the group id).
 type ChatRef struct {
@@ -26,19 +33,23 @@ type ChatRef struct {
 
 // ConversationDTO is one entry of the chat list.
 type ConversationDTO struct {
-	Ref     ChatRef          `json:"ref"`
-	Conv    string           `json:"conv"`
-	Last    *convlog.Message `json:"last,omitempty"`
-	LastTS  int64            `json:"lastTs"` // ms
-	Unread  int              `json:"unread"`
-	Request bool             `json:"request"` // a stranger's chat: shown among the message requests
+	Ref     ChatRef      `json:"ref"`
+	Conv    string       `json:"conv"`
+	Title   string       `json:"title,omitempty"` // a group's title (a direct chat is named by the contact)
+	Last    *ChatMessage `json:"last,omitempty"`
+	LastTS  int64        `json:"lastTs"` // ms
+	Unread  int          `json:"unread"`
+	Request bool         `json:"request"` // a stranger's chat: shown among the message requests
+	// Upgraded: the chat runs on the log, so replies, threads, edits, deletes, reactions and pins
+	// work. A group runs on it once every member's app does; until then only plain messages.
+	Upgraded bool `json:"upgraded"`
 }
 
 // ChatPage is one page of a chat or a thread; Next is the cursor of the following page, "" at the
 // end.
 type ChatPage struct {
-	Messages []convlog.Message `json:"messages"`
-	Next     string            `json:"next"`
+	Messages []ChatMessage `json:"messages"`
+	Next     string        `json:"next"`
 }
 
 // SendRequest is a message to send.
@@ -51,14 +62,16 @@ type SendRequest struct {
 // ConvChange is pushed to the app when a chat changes: the chat-list entry and the messages that
 // are new or changed.
 type ConvChange struct {
-	Ref          ChatRef           `json:"ref"`
-	Conversation ConversationDTO   `json:"conversation"`
-	Messages     []convlog.Message `json:"messages"`
+	Ref          ChatRef         `json:"ref"`
+	Conversation ConversationDTO `json:"conversation"`
+	Messages     []ChatMessage   `json:"messages"`
 }
 
 var (
-	errGroupLogLater = errors.New("group chats move to the conversation log in a later step")
-	errBadChat       = errors.New("unknown chat")
+	// ErrNeedsUpgrade: the group does not run on the log yet (a member's app is older), so only
+	// plain messages work in it.
+	ErrNeedsUpgrade = errors.New("not every member of this group has updated the app yet")
+	errBadChat      = errors.New("unknown chat")
 )
 
 // stateDelivered: my message, confirmed by the recipient (it left the outbox).
@@ -103,6 +116,7 @@ func (n *NodeApi) convsFacade() (*convsFacade, error) {
 	f := &convsFacade{n: n, broker: n.node.Messenger, st: n.node.Storage, self: n.node.GetSelfPeerID(),
 		capable: map[types.PeerID]bool{}, lastHello: map[types.PeerID]time.Time{}}
 	f.log = convlog.New(n.node.Storage, pub, n.node.SignIdentity)
+	f.log.SetGroupPolicy(groupPolicy{n: n})
 	f.log.OnChange(f.onChange)
 	n.node.Messenger.SetEventSink(f.sink)
 	n.node.Messenger.AddHandleCallback(f.onPlain)
@@ -111,6 +125,7 @@ func (n *NodeApi) convsFacade() (*convsFacade, error) {
 	}
 	n.convsH.f = f
 	go f.migrate()
+	go f.antiEntropy()
 	return f, nil
 }
 
@@ -132,7 +147,11 @@ func (n *NodeApi) convRef(ref ChatRef) (convlog.Conv, error) {
 		copy(peer[:], raw)
 		return convlog.DM(n.node.GetSelfPeerID(), peer), nil
 	case convlog.KindGroup:
-		return convlog.Conv{}, errGroupLogLater
+		gf, err := n.groupsFacade()
+		if err != nil || !gf.isMember(ref.ID, n.node.GetSelfPeerID()) {
+			return convlog.Conv{}, errBadChat
+		}
+		return convlog.Group(ref.ID), nil
 	}
 	return convlog.Conv{}, errBadChat
 }
@@ -195,19 +214,58 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 			return false
 		}
 		go func() {
-			for _, r := range f.log.HandleSync(origin, m, nil) {
+			// events synced into a group: its listeners reload, as after the old history handover
+			group, before := f.syncTarget(m)
+			for _, r := range f.log.HandleSync(origin, m, f.groupConv) {
 				f.sendSync(origin, r)
+			}
+			if group != "" {
+				if meta, ok := f.log.Meta(convlog.Group(group)); ok && string(meta.Digest()) != string(before) {
+					f.groupHistoryArrived(group)
+				}
 			}
 		}()
 		return false
 	}
-	_, fresh, err := f.log.Ingest(convlog.DM(f.self, origin), msg.ConvEvent)
+	c, ok := f.convOfEvent(origin, msg.ConvEvent)
+	if !ok {
+		return false
+	}
+	id, fresh, err := f.log.Ingest(c, msg.ConvEvent)
 	if err != nil {
 		f.n.node.Logger.Debug("Conversations: event refused", "peer", origin.String()[:8], "err", err)
 		return false
 	}
 	kind, _ := convlog.Peek(msg.ConvEvent)
+	if c.Kind == convlog.KindGroup {
+		// a group event in a member's own session (the group's epoch was not clean): the group's
+		// listeners hear of a message, the direct chat's do not
+		if fresh && kind == convlog.KindMsg {
+			f.groupMessageArrived(c.Group, origin, id)
+		}
+		return false
+	}
 	return fresh && kind == convlog.KindMsg
+}
+
+// convOfEvent finds the conversation an event a peer sent us belongs to: our direct chat with it,
+// or a group we share with it.
+func (f *convsFacade) convOfEvent(origin types.PeerID, raw []byte) (convlog.Conv, bool) {
+	id, ok := convlog.PeekConv(raw)
+	if !ok {
+		return convlog.Conv{}, false
+	}
+	if dm := convlog.DM(f.self, origin); dm.ID == id {
+		return dm, true
+	}
+	c, ok := f.groupConv(id)
+	if !ok {
+		return convlog.Conv{}, false
+	}
+	if gf, err := f.n.groupsFacade(); err != nil || !gf.isMember(c.Group, origin) {
+		return convlog.Conv{}, false
+	}
+	return c, true
 }
 
 // onPlain mirrors a message that came or went the old way (a file message, a peer that has not
@@ -247,7 +305,7 @@ func (f *convsFacade) OnPeerConnected(peer types.PeerID, _ types.PeerPublicKey, 
 	}
 	f.lastHello[peer] = time.Now()
 	f.mu.Unlock()
-	go f.sendSync(peer, f.log.Hello([]convlog.Conv{convlog.DM(f.self, peer)}))
+	go f.sendSync(peer, f.log.Hello(f.sharedConvs(peer)))
 }
 
 // OnPeerDisconnected is part of the swarm observer.
@@ -267,6 +325,15 @@ func (f *convsFacade) sendSync(peer types.PeerID, m *convlog.Sync) {
 // for a node that has not upgraded); an operation only to a peer that speaks the log — any other
 // gets it through sync once it does.
 func (f *convsFacade) sendEvent(c convlog.Conv, raw []byte, id convlog.EventID, kind uint32, text string, replyTo string) (string, error) {
+	if c.Kind == convlog.KindGroup {
+		gf, err := f.n.groupsFacade()
+		if err != nil {
+			return "", err
+		}
+		track := kind == convlog.KindMsg || kind == convlog.KindEdit || kind == convlog.KindDelete
+		gf.postEvent(c.Group, raw, track, text)
+		return "", nil
+	}
 	peer := c.Peer
 	opts := messenger.SendOptions{ID: id.String(), ConvEvent: raw}
 	switch kind {
@@ -318,8 +385,17 @@ func (f *convsFacade) conversation(c convlog.Conv, meta convlog.Meta) Conversati
 			}
 		}
 	}
-	if c.Kind == convlog.KindDM && f.n.node != nil {
-		d.Request = !f.n.node.IsContact(c.Peer)
+	switch c.Kind {
+	case convlog.KindDM:
+		if f.n.node != nil {
+			d.Request = !f.n.node.IsContact(c.Peer)
+		}
+		d.Upgraded = f.isCapable(c.Peer)
+	case convlog.KindGroup:
+		if gf, err := f.n.groupsFacade(); err == nil {
+			d.Title = gf.titleOf(c.Group)
+			d.Upgraded = gf.LogMode(c.Group)
+		}
 	}
 	return d
 }
@@ -406,6 +482,7 @@ func (n *NodeApi) Conversations() ([]ConversationDTO, error) {
 		return nil, err
 	}
 	f.migrate()
+	f.migrateGroups()
 	metas, err := f.log.Conversations()
 	if err != nil {
 		return nil, err
@@ -447,6 +524,7 @@ func (n *NodeApi) chat(ref ChatRef) (*convsFacade, convlog.Conv, error) {
 		return nil, convlog.Conv{}, err
 	}
 	f.migrate()
+	f.migrateGroups()
 	c, err := n.convRef(ref)
 	return f, c, err
 }
@@ -483,7 +561,7 @@ func (n *NodeApi) ChatThread(ref ChatRef, root, cursor string, limit int) (ChatP
 }
 
 // ChatPins returns the pinned messages of a chat, most recently pinned first.
-func (n *NodeApi) ChatPins(ref ChatRef) ([]convlog.Message, error) {
+func (n *NodeApi) ChatPins(ref ChatRef) ([]ChatMessage, error) {
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return nil, err
@@ -493,7 +571,7 @@ func (n *NodeApi) ChatPins(ref ChatRef) ([]convlog.Message, error) {
 }
 
 // ChatMessage returns one message.
-func (n *NodeApi) ChatMessage(ref ChatRef, id string) (convlog.Message, error) {
+func (n *NodeApi) ChatMessage(ref ChatRef, id string) (ChatMessage, error) {
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return convlog.Message{}, err
@@ -510,7 +588,7 @@ func (n *NodeApi) ChatMessage(ref ChatRef, id string) (convlog.Message, error) {
 }
 
 // ChatSend sends a message: plain, an answer to another (ReplyTo) or a comment in a thread (Thread).
-func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (convlog.Message, error) {
+func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return convlog.Message{}, err
@@ -522,6 +600,25 @@ func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (convlog.Message, error
 	thread, err := parseRef(req.Thread)
 	if err != nil {
 		return convlog.Message{}, err
+	}
+	if c.Kind == convlog.KindGroup {
+		gf, err := n.groupsFacade()
+		if err != nil {
+			return convlog.Message{}, err
+		}
+		if !gf.LogMode(c.Group) {
+			// the group still runs the old way: a plain message, shown in the chat all the same
+			if req.ReplyTo != "" || req.Thread != "" {
+				return convlog.Message{}, ErrNeedsUpgrade
+			}
+			d, err := gf.SendMessage(c.Group, req.Text)
+			if err != nil {
+				return convlog.Message{}, err
+			}
+			f.mirrorGroup(c.Group, d)
+			m, _ := f.log.Message(c, convlog.LegacyID(d.ID))
+			return m, nil
+		}
 	}
 	raw, id, err := f.log.AppendMessage(c, req.Text, 0, "", reply, thread)
 	if err != nil {
@@ -545,6 +642,11 @@ func (n *NodeApi) chatOp(ref ChatRef, target string, kind uint32, do func(*convl
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err
+	}
+	if c.Kind == convlog.KindGroup {
+		if gf, err := n.groupsFacade(); err != nil || !gf.LogMode(c.Group) {
+			return ErrNeedsUpgrade
+		}
 	}
 	tid, err := convlog.ParseEventID(target)
 	if err != nil {

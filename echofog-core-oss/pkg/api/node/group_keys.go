@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/services/groups"
 	"github.com/echofog/echofog-core/internal/services/groups/senderkeys"
+	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -30,10 +32,15 @@ import (
 // Members of an older version get the message the old way, unsealed inside their session.
 
 const (
-	wireVersion     = 2 // the version of the group messages this node sends: 2 = sealed messages
+	// wireVersion is the version of the group messages this node sends: 2 = sealed messages, 3 =
+	// the conversation log (events sealed the same way). A member is sealedVersion-capable when it
+	// speaks 2 or more.
+	wireVersion     = 3
+	sealedVersion   = 2
 	groupKeysPrefix = "groups/k/"
 	groupEnvPrefix  = "groups/e/"
-	groupCapKey     = "groups/k/_cap" // peers known to understand version 2
+	groupCapKey     = "groups/k/_cap"  // peers known to understand version 2
+	groupLogCapKey  = "groups/k/_cap3" // peers known to speak the conversation log (version 3)
 
 	envKeepFor  = 7 * 24 * time.Hour // envelopes kept for members who missed them
 	envKeepMax  = 3000               // per group
@@ -111,12 +118,19 @@ func (f *groupsFacade) loadCapable() {
 		return
 	}
 	f.capLoaded = true
-	if raw, err := f.store.Get([]byte(groupCapKey)); err == nil {
+	if f.logCapable == nil {
+		f.logCapable = map[types.PeerID]bool{}
+	}
+	for key, set := range map[string]map[types.PeerID]bool{groupCapKey: f.capable, groupLogCapKey: f.logCapable} {
+		raw, err := f.store.Get([]byte(key))
+		if err != nil {
+			continue
+		}
 		var ids []string
 		if json.Unmarshal(raw, &ids) == nil {
 			for _, s := range ids {
 				if id, ok := parsePeer(s); ok {
-					f.capable[id] = true
+					set[id] = true
 				}
 			}
 		}
@@ -125,20 +139,41 @@ func (f *groupsFacade) loadCapable() {
 
 // noteVersion remembers that peer speaks version v. Call with f.mu held.
 func (f *groupsFacade) noteVersion(peer types.PeerID, v int) {
-	if v < wireVersion {
+	if v < sealedVersion {
 		return
 	}
 	f.loadCapable()
+	if v >= wireVersion && !f.logCapable[peer] {
+		f.logCapable[peer] = true
+		saveIDs(f.store, groupLogCapKey, f.logCapable)
+	}
 	if f.capable[peer] {
 		return
 	}
 	f.capable[peer] = true
-	ids := make([]string, 0, len(f.capable))
-	for id := range f.capable {
+	saveIDs(f.store, groupCapKey, f.capable)
+}
+
+func saveIDs(st storage.Storage, key string, set map[types.PeerID]bool) {
+	ids := make([]string, 0, len(set))
+	for id := range set {
 		ids = append(ids, id.String())
 	}
 	raw, _ := json.Marshal(ids)
-	_ = f.store.Set([]byte(groupCapKey), raw)
+	_ = st.Set([]byte(key), raw)
+}
+
+// memberVersion is the version we know a member speaks, as told to others in member lists. Call
+// with f.mu held.
+func (f *groupsFacade) memberVersion(id types.PeerID) int {
+	f.loadCapable()
+	switch {
+	case id == f.selfID || f.logCapable[id]:
+		return wireVersion
+	case f.capable[id]:
+		return sealedVersion
+	}
+	return 0
 }
 
 // member returns a current (not banned) member. Call with f.mu held.
@@ -439,6 +474,11 @@ func (f *groupsFacade) requestSync(groupID string, peer types.PeerID) []func() {
 // the old way). Call with f.mu held; the returned sends hand a new epoch out, before the message.
 func (f *groupsFacade) seal(groupID string, c *senderkeys.Content) (*senderkeys.Envelope, []func()) {
 	before := f.maybeRotate(groupID, false)
+	if f.tainted(groupID) {
+		// somebody no longer a member holds the epoch in use and the next one is not made yet
+		// (rekeys are paced): nothing new is sealed with it, members get it in their own sessions
+		return nil, before
+	}
 	kr := f.keyring(groupID)
 	if kr.Current() == nil {
 		return nil, before
@@ -557,6 +597,9 @@ func (f *groupsFacade) takeEnvelope(origin types.PeerID, groupID string, v *send
 	}
 	if err != nil {
 		return nil
+	}
+	if bytes.HasPrefix(plain, cevMagic) {
+		return f.takeEvent(origin, groupID, sender, v, plain[len(cevMagic):])
 	}
 	var c senderkeys.Content
 	if json.Unmarshal(plain, &c) != nil || c.Group != groupID || c.Sender != v.Sender ||

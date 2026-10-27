@@ -145,13 +145,10 @@ func (f *groupsFacade) wireMembers(groupID string) []wireMember {
 	if err != nil {
 		return nil
 	}
-	f.loadCapable()
 	out := make([]wireMember, 0, len(list))
 	for _, m := range list {
-		w := wireMember{ID: m.PeerID.String(), Pub: hex.EncodeToString(m.PubKey[:]), Role: m.Role.Name}
-		if m.PeerID == f.selfID || f.capable[m.PeerID] {
-			w.V = wireVersion
-		}
+		w := wireMember{ID: m.PeerID.String(), Pub: hex.EncodeToString(m.PubKey[:]), Role: m.Role.Name,
+			V: f.memberVersion(m.PeerID)}
 		out = append(out, w)
 	}
 	return out
@@ -503,6 +500,11 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 			if chunks := f.historyChunks(w.Group); len(chunks) > 0 {
 				after = append(after, func() { f.sendHistory(origin, w.Group, chunks) })
 			}
+			// a group on the log hands its history over by syncing the log with the newcomer
+			if f.onJoined != nil && f.logModeLocked(w.Group) {
+				hook, g := f.onJoined, w.Group
+				after = append(after, func() { hook(g, origin) })
+			}
 		}
 		return after
 
@@ -520,6 +522,10 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		after := []func(){func() { f.nudgeAll(w.Group); f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title}) }}
 		if f.keyring(w.Group).Current() == nil {
 			after = append(after, f.requestKeys(w.Group, origin)...) // a newcomer still without keys
+			if f.onJoined != nil && f.logModeLocked(w.Group) {
+				hook, g := f.onJoined, w.Group
+				after = append(after, func() { hook(g, origin) }) // and without the group's history
+			}
 		}
 		return after
 
@@ -722,11 +728,16 @@ func (f *groupsFacade) receiveMessage(sender types.PeerID, groupID, id string, t
 		return nil
 	}
 	ev := GroupEvent{Kind: "message", GroupID: groupID, Title: f.titleOf(groupID), From: sender.String(), MessageID: id}
+	mirror := func() {
+		if f.onLegacy != nil {
+			f.onLegacy(groupID, msg.GroupMessageDTO) // the chat shows it with the log's messages
+		}
+	}
 	if offer != nil {
 		// the transfer is known before the message shows, so it can be accepted at once
-		return []func(){offer, func() { f.emitEvent(ev) }}
+		return []func(){offer, mirror, func() { f.emitEvent(ev) }}
 	}
-	return []func(){func() { f.emitEvent(ev) }}
+	return []func(){mirror, func() { f.emitEvent(ev) }}
 }
 
 // forget drops a group and what was said in it from this node.
