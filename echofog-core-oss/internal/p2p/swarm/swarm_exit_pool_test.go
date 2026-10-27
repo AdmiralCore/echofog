@@ -36,11 +36,19 @@ type fakeMuxConn struct {
 	cancel  context.CancelFunc
 	opened  atomic.Int32
 	openErr error
+	proto   string
 }
 
 func newFakeMuxConn(parent context.Context, id int) *fakeMuxConn {
 	ctx, cancel := context.WithCancel(parent)
-	return &fakeMuxConn{id: id, ctx: ctx, cancel: cancel}
+	return &fakeMuxConn{id: id, ctx: ctx, cancel: cancel, proto: network.ProtocolQUIC}
+}
+
+// newFakeTCPConn is a fake TCP/mimicry link — camouflaged like the real TCP fallback.
+func newFakeTCPConn(parent context.Context, id int) *fakeMuxConn {
+	c := newFakeMuxConn(parent, id)
+	c.proto = network.ProtocolTCP
+	return c
 }
 
 func (c *fakeMuxConn) OpenStreamSync(ctx context.Context) (network.MuxStream, error) {
@@ -83,7 +91,7 @@ func (c *fakeMuxConn) CloseWithError(network.QuicErrorCode, string) error {
 	return nil
 }
 func (c *fakeMuxConn) Context() context.Context      { return c.ctx }
-func (c *fakeMuxConn) Protocol() string              { return network.ProtocolQUIC }
+func (c *fakeMuxConn) Protocol() string              { return c.proto }
 func (c *fakeMuxConn) ChannelBinding() ([]byte, error) { return make([]byte, 32), nil }
 
 var _ network.MuxConn = (*fakeMuxConn)(nil)
@@ -318,6 +326,41 @@ func TestExitPool_TunnelStreamsNeverRideNoiseLinkToCamouflageExit(t *testing.T) 
 	for _, st := range streams {
 		st.Close()
 	}
+}
+
+func TestExitPool_TCPFallbackLinkToCamouflageExitIsEligible(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+
+	// c1's path: the only connection to the camouflage exit is a TCP-fallback (mimicry) link, not
+	// QUIC-REALITY. It must still be usable — the whole TCP transport is camouflaged.
+	var pub types.PeerPublicKey
+	pub[0] = 42
+	exit := types.PeerPubKeyToID(pub)
+	p := NewPeer(ctx, pub, dispatcher.NewDispatcher(ctx), "203.0.113.7:443", true)
+	tcpConn := newFakeTCPConn(ctx, 1)
+	p.transport = network.NewPeerWrapper(p.ctx, tcpConn, exit)
+	p.primaryReality = false // TCP mimicry, not QUIC-REALITY, but still camouflaged
+	s.mu.Lock()
+	s.activePeers[exit] = p
+	s.mu.Unlock()
+	s.SetPeerSNI(exit, "www.example.com")
+	s.MarkExitPeer(exit, 3)
+
+	st, err := s.OpenExitStream(ctx, exit)
+	require.NoError(t, err, "a TCP-fallback link to a camouflage exit must carry the tunnel")
+	require.NotNil(t, st)
+	require.Equal(t, int32(1), tcpConn.opened.Load(), "the stream rode the TCP link")
+	st.Close()
+
+	// A QUIC noise link to the same camouflage exit is still never used.
+	noiseConn := newFakeMuxConn(ctx, 2) // QUIC
+	p.addExitLink(network.NewPeerWrapper(p.ctx, noiseConn, exit), false)
+	for i := 0; i < 6; i++ {
+		st, err := s.OpenExitStream(ctx, exit)
+		require.NoError(t, err)
+		st.Close()
+	}
+	require.Equal(t, int32(0), noiseConn.opened.Load(), "a QUIC noise link to a camouflage exit is never used")
 }
 
 func TestExitPool_RealityConnReplacesNoisePrimaryForCamouflageExit(t *testing.T) {

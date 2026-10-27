@@ -259,6 +259,18 @@ func (p *Peer) primaryIsReality() bool {
 	return p.primaryReality
 }
 
+// primaryIsCamouflaged reports whether the primary connection is safe to carry tunnel traffic to a
+// camouflage exit: a QUIC-REALITY link, or any TCP/WS link (the TCP fallback is browser-TLS
+// mimicry). Only a plain QUIC noise link is not.
+func (p *Peer) primaryIsCamouflaged() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.transport == nil {
+		return false
+	}
+	return !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)
+}
+
 // exitLink is one parallel connection of an exit peer's session pool. reality records whether it
 // is a QUIC-REALITY connection, so a camouflage exit's tunnel streams are kept off any noise link.
 type exitLink struct {
@@ -319,15 +331,16 @@ func (p *Peer) oldestIdleExtraLink() *network.PeerWrapper {
 
 // openTunnelStream opens one bidirectional stream to this peer on the least-loaded live link,
 // spreading tunnel traffic across the pool so no single connection carries it all. When
-// requireReality is set (a camouflage exit), only QUIC-REALITY links are considered, so a tunnel
-// stream never rides a noise connection a censor would flag; it returns an error if the peer has
-// no live REALITY link. For a mesh peer (no extra links, requireReality false) it is the primary
-// transport.
-func (p *Peer) openTunnelStream(ctx context.Context, requireReality bool) (*network.Stream, error) {
+// camouflageExit is set, only camouflaged links are considered — QUIC-REALITY or any TCP/WS
+// (mimicry) link — so a tunnel stream never rides a plain QUIC noise connection a censor would
+// flag; it returns an error if the peer has no live camouflaged link. For a mesh peer (no extra
+// links, camouflageExit false) it is the primary transport.
+func (p *Peer) openTunnelStream(ctx context.Context, camouflageExit bool) (*network.Stream, error) {
 	p.mu.RLock()
 	var best *network.PeerWrapper
 	bestLoad := -1
-	if p.transport != nil && p.transport.GetConn().Context().Err() == nil && (!requireReality || p.primaryReality) {
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil &&
+		(!camouflageExit || !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)) {
 		best = p.transport
 		bestLoad = p.transport.ActiveStreams()
 	}
@@ -335,7 +348,7 @@ func (p *Peer) openTunnelStream(ctx context.Context, requireReality bool) (*netw
 		if l.pw.GetConn().Context().Err() != nil {
 			continue
 		}
-		if requireReality && !l.reality {
+		if camouflageExit && quicNoise(l.pw.GetConn().Protocol(), l.reality) {
 			continue
 		}
 		if load := l.pw.ActiveStreams(); best == nil || load < bestLoad {
@@ -346,8 +359,8 @@ func (p *Peer) openTunnelStream(ctx context.Context, requireReality bool) (*netw
 	p.mu.RUnlock()
 
 	if best == nil {
-		if requireReality {
-			return nil, errors.New("camouflage exit has no live REALITY link to open a stream on")
+		if camouflageExit {
+			return nil, errors.New("camouflage exit has no live camouflaged (REALITY or TCP) link to open a stream on")
 		}
 		return nil, errors.New("peer has no live link to open a stream on")
 	}

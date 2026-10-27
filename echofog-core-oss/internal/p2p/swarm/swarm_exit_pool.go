@@ -20,6 +20,14 @@ type exitPoolState struct {
 	accumulate atomic.Bool
 }
 
+// quicNoise reports whether a connection is a QUIC noise-obfs link — the only kind unsafe to carry
+// tunnel traffic to a camouflage exit. A QUIC-REALITY link (reality) and any TCP/WS link (the TCP
+// fallback is itself browser-TLS mimicry, so it is already camouflaged) are both fine; only a plain
+// QUIC noise link would show a censor the bulk bytes as "random". proto is MuxConn.Protocol().
+func quicNoise(proto string, reality bool) bool {
+	return proto == network.ProtocolQUIC && !reality
+}
+
 // MarkExitPeer marks exit as a peer that runs a parallel session pool of up to maxConns concurrent
 // connections. The exit gateway calls it when it builds the pool. Mesh peers are never marked and
 // keep strict one-connection-per-peer semantics. Marking is idempotent; it only updates the cap.
@@ -87,16 +95,17 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 		return false // no live primary yet: let addPeer establish it
 	}
 
-	// A camouflage exit must carry its tunnel only over REALITY connections: a noise link would
-	// show a censor the bulk bytes "in the clear". Never accumulate a noise connection to one, and
-	// if the primary is still noise, hand this REALITY connection to addPeer so it replaces (and
-	// upgrades) the primary instead of sitting beside a noise one.
+	// A camouflage exit must carry its tunnel only over camouflaged connections — QUIC-REALITY or a
+	// TCP/WS mimicry link — never a plain QUIC noise link, which would show a censor the bulk bytes
+	// "in the clear". Reject a QUIC noise connection, and if the primary is not camouflaged (a stale
+	// QUIC noise link), hand this one to addPeer so it replaces (upgrades) the primary instead of
+	// sitting beside it.
 	if s.IsCamouflagePeer(event.PeerID) {
-		if !event.Reality {
-			_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "non-REALITY link to camouflage exit")
+		if quicNoise(event.Conn.Protocol(), event.Reality) {
+			_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "QUIC noise link to camouflage exit")
 			return true
 		}
-		if !p.primaryIsReality() {
+		if !p.primaryIsCamouflaged() {
 			return false
 		}
 	}

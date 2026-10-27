@@ -57,12 +57,15 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			}
 			return nil
 		}
-		// Never downgrade a camouflage exit's REALITY connection to noise. A noise connection to a
-		// camouflage node does not serve its tunnel and a censor would flag the bulk bytes; keep the
-		// REALITY one and drop the incoming noise connection.
-		if !reality && old.Alive() && old.primaryIsReality() && s.exitPoolFor(peerID) != nil && s.IsCamouflagePeer(peerID) {
+		// Never downgrade a camouflage exit's camouflaged connection (QUIC-REALITY or TCP mimicry)
+		// to a plain QUIC noise one: noise does not serve its tunnel and a censor would flag the
+		// bulk bytes. Keep the camouflaged connection and drop the incoming QUIC noise one. A TCP
+		// fallback connection is itself camouflaged, so it is allowed to replace (e.g. when UDP is
+		// blocked and the client falls back to TCP).
+		if quicNoise(conn.Protocol(), reality) && old.Alive() && old.primaryIsCamouflaged() &&
+			s.exitPoolFor(peerID) != nil && s.IsCamouflagePeer(peerID) {
 			s.mu.Unlock()
-			_ = conn.CloseWithError(network.ErrCodeNormalClose, "keeping REALITY connection to camouflage exit")
+			_ = conn.CloseWithError(network.ErrCodeNormalClose, "keeping camouflaged connection to camouflage exit")
 			if release != nil {
 				release()
 			}
