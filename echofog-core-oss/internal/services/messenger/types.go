@@ -55,6 +55,19 @@ type SendOptions struct {
 	// never stored in the chat history of this node.
 	Silent bool
 
+	// ID replaces the random message id: a conversation-log event id, so receipts and delivery
+	// states name the event.
+	ID string
+	// ConvEvent / ConvSync carry a conversation-log event or sync message (package convlog).
+	ConvEvent []byte
+	ConvSync  []byte
+	// NoTrack sends once and does not wait for a receipt (sync traffic, reactions: the log's sync
+	// makes up for a loss).
+	NoTrack bool
+	// DirectOnly hands the message only to the peer itself, never to a relay mailbox (sync
+	// traffic, which is useless to an absent peer).
+	DirectOnly bool
+
 	onQueued func() // called when the message could not go out at once
 	noTrack  bool   // receipts: do not wait for a receipt of the receipt
 }

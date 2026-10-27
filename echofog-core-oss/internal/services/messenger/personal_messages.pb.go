@@ -7,12 +7,11 @@
 package messenger
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -81,15 +80,19 @@ func (PersonalMessageTypeProto) EnumDescriptor() ([]byte, []int) {
 }
 
 type PersonalMessageProto struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	Id            string                   `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	SenderId      string                   `protobuf:"bytes,2,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
-	Type          PersonalMessageTypeProto `protobuf:"varint,3,opt,name=type,proto3,enum=messenger.PersonalMessageTypeProto" json:"type,omitempty"`
-	Text          string                   `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
-	ContentHash   string                   `protobuf:"bytes,5,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
-	Metadata      string                   `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	Timestamp     int64                    `protobuf:"varint,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	ReplyToId     string                   `protobuf:"bytes,8,opt,name=reply_to_id,json=replyToId,proto3" json:"reply_to_id,omitempty"`
+	state       protoimpl.MessageState   `protogen:"open.v1"`
+	Id          string                   `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SenderId    string                   `protobuf:"bytes,2,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
+	Type        PersonalMessageTypeProto `protobuf:"varint,3,opt,name=type,proto3,enum=messenger.PersonalMessageTypeProto" json:"type,omitempty"`
+	Text        string                   `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
+	ContentHash string                   `protobuf:"bytes,5,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	Metadata    string                   `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Timestamp   int64                    `protobuf:"varint,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ReplyToId   string                   `protobuf:"bytes,8,opt,name=reply_to_id,json=replyToId,proto3" json:"reply_to_id,omitempty"`
+	// A conversation-log event (convlog.Event) or sync message (convlog.Sync). A message with an
+	// event also fills text/type/metadata for its text, so an older node still shows it.
+	ConvEvent     []byte `protobuf:"bytes,9,opt,name=conv_event,json=convEvent,proto3" json:"conv_event,omitempty"`
+	ConvSync      []byte `protobuf:"bytes,10,opt,name=conv_sync,json=convSync,proto3" json:"conv_sync,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -180,11 +183,25 @@ func (x *PersonalMessageProto) GetReplyToId() string {
 	return ""
 }
 
+func (x *PersonalMessageProto) GetConvEvent() []byte {
+	if x != nil {
+		return x.ConvEvent
+	}
+	return nil
+}
+
+func (x *PersonalMessageProto) GetConvSync() []byte {
+	if x != nil {
+		return x.ConvSync
+	}
+	return nil
+}
+
 var File_internal_services_messenger_personal_messages_proto protoreflect.FileDescriptor
 
 const file_internal_services_messenger_personal_messages_proto_rawDesc = "" +
 	"\n" +
-	"3internal/services/messenger/personal_messages.proto\x12\tmessenger\"\x8d\x02\n" +
+	"3internal/services/messenger/personal_messages.proto\x12\tmessenger\"\xc9\x02\n" +
 	"\x14PersonalMessageProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x127\n" +
@@ -193,7 +210,11 @@ const file_internal_services_messenger_personal_messages_proto_rawDesc = "" +
 	"\fcontent_hash\x18\x05 \x01(\tR\vcontentHash\x12\x1a\n" +
 	"\bmetadata\x18\x06 \x01(\tR\bmetadata\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x12\x1e\n" +
-	"\vreply_to_id\x18\b \x01(\tR\treplyToId*\x88\x01\n" +
+	"\vreply_to_id\x18\b \x01(\tR\treplyToId\x12\x1d\n" +
+	"\n" +
+	"conv_event\x18\t \x01(\fR\tconvEvent\x12\x1b\n" +
+	"\tconv_sync\x18\n" +
+	" \x01(\fR\bconvSync*\x88\x01\n" +
 	"\x18PersonalMessageTypeProto\x12\x0f\n" +
 	"\vMsgTypeText\x10\x00\x12\x10\n" +
 	"\fMsgTypePhoto\x10\x01\x12\x10\n" +

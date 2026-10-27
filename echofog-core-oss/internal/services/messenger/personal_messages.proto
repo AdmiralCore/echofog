@@ -26,4 +26,9 @@ message PersonalMessageProto {
   int64 timestamp = 7;
 
   string reply_to_id = 8;
+
+  // A conversation-log event (convlog.Event) or sync message (convlog.Sync). A message with an
+  // event also fills text/type/metadata for its text, so an older node still shows it.
+  bytes conv_event = 9;
+  bytes conv_sync = 10;
 }

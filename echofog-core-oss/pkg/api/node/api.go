@@ -33,6 +33,7 @@ type NodeApi struct {
 	vault vaultClient // client: the TON vault and the vouchers signed from it
 
 	groupsH groupsHolder
+	convsH  convsHolder
 
 	geoOnce sync.Once
 	geoLoc  *geoLocator // where exits are, looked up online
@@ -95,7 +96,9 @@ func (n *NodeApi) StartNode() error {
 	}
 	// domestic connections use the cheaper noise obfs; cross-border keeps REALITY
 	n.applyRegionObfs()
-	// create the group service now: it listens for group messages from the first moment on
+	// create the conversation logs and the group service now: they listen for chat traffic from
+	// the first moment on
+	_, _ = n.convsFacade()
 	_, _ = n.groupsFacade()
 	return nil
 }
@@ -175,6 +178,10 @@ func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
 	if n.node.Messenger == nil {
 		return errNoChat
 	}
+	if _, err := n.convsFacade(); err == nil {
+		_, err := n.ChatSend(ChatRef{Kind: "dm", ID: hex.EncodeToString(targetPubKey[:])}, SendRequest{Text: text})
+		return err
+	}
 	return n.node.Messenger.SendChatMessage(targetPubKey, text)
 }
 
@@ -244,6 +251,9 @@ func (n *NodeApi) BanContact(peerID string) error {
 func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint64) ([]dto.MessageDTO, error) {
 	if n.node.Messenger == nil {
 		return nil, errNoChat
+	}
+	if _, err := n.convsFacade(); err == nil {
+		return n.plainHistory(contactID, limit)
 	}
 	myID := n.GetMyID()
 

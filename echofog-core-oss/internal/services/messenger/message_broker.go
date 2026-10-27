@@ -41,6 +41,7 @@ type MessageBroker struct {
 	mu              sync.RWMutex
 	handleCallbacks []func(dto *dto.MessageDTO)
 	interceptor     func(origin types.PeerID, text string) bool
+	eventSink       EventSink                         // conversation-log traffic (nil: treated as plain messages)
 	filter          func(origin types.PeerID) Verdict // who may write to us (nil: everybody, as contacts)
 	connect         func(types.PeerID)                // asked to open a connection to a peer that cannot be reached
 	useAsRelay      func(types.PeerID) bool           // a peer to route through even if it does not advertise (a configured private relay)
@@ -147,6 +148,9 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 		meta.NumericAppID = ResolveNumericAppID(meta.AppID)
 	}
 	encodedMeta := EncodeMetadata(meta)
+	if opts.NoTrack {
+		opts.noTrack = true
+	}
 
 	innerMsg := &PersonalMessageProto{
 		Id:          uuid.New().String(),
@@ -157,6 +161,11 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 		Metadata:    encodedMeta,
 		Timestamp:   time.Now().UnixNano(),
 		ReplyToId:   opts.ReplyToID,
+		ConvEvent:   opts.ConvEvent,
+		ConvSync:    opts.ConvSync,
+	}
+	if opts.ID != "" {
+		innerMsg.Id = opts.ID
 	}
 
 	innerBytes, err := proto.Marshal(innerMsg)
@@ -245,7 +254,12 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 		return "", "", fmt.Errorf("unsupported encryption tier: %v", tier)
 	}
 
-	delivered := s.deliver(targetID, msg)
+	var delivered bool
+	if opts.DirectOnly {
+		delivered = s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg) == nil
+	} else {
+		delivered = s.deliver(targetID, msg)
+	}
 	if !opts.noTrack {
 		// keep it until the recipient confirms (a retry follows if it never does)
 		if err := s.track(targetID, innerMsg.Id, msg, innerBytes, delivered); err != nil && !delivered {
@@ -464,12 +478,31 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 	verdict := Accept
 	s.mu.RLock()
 	filter := s.filter
+	sink := s.eventSink
 	s.mu.RUnlock()
 	if filter != nil {
 		verdict = filter(originID)
 	}
 	if verdict == Drop {
 		return // already confirmed above: the sender sees "delivered" and nothing else
+	}
+
+	// conversation-log traffic goes to the log; a message among it still reaches the contacts and
+	// the listeners below, but the log keeps it rather than the plain history
+	store := true
+	if len(innerMsg.ConvEvent) > 0 || len(innerMsg.ConvSync) > 0 {
+		if sink == nil {
+			// the log is not up yet: a message still has its text, anything else is dropped (sync
+			// brings it again)
+			if innerMsg.Text == "" {
+				return
+			}
+		} else {
+			if !authenticated || !sink(originID, innerMsg, verdict == AsRequest) {
+				return
+			}
+			store = false
+		}
 	}
 
 	myID, _ := s.identity.GetPeerID()
@@ -484,9 +517,10 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		appID = ResolveNumericAppID(meta.AppID)
 	}
 
-	err = s.keeper.Setter.SaveMessage(appID, chatID, innerMsg)
-	if err != nil {
-		s.log.Error("Failed to save message to DB", "err", err, "app_id", appID)
+	if store {
+		if err = s.keeper.Setter.SaveMessage(appID, chatID, innerMsg); err != nil {
+			s.log.Error("Failed to save message to DB", "err", err, "app_id", appID)
+		}
 	}
 
 	receivedDTO := ProtoToDTO(innerMsg, myIDHex, myIDHex)
@@ -744,6 +778,27 @@ func (s *MessageBroker) SetInterceptor(h func(origin types.PeerID, text string) 
 	s.mu.Lock()
 	s.interceptor = h
 	s.mu.Unlock()
+}
+
+// EventSink takes the conversation-log traffic of a message (msg.ConvEvent / msg.ConvSync) from an
+// authenticated peer the privacy filter lets through; request says the peer is a stranger. It
+// reports whether the message was a chat message (as opposed to an operation or sync traffic):
+// those still reach the contacts and the message listeners, but are not stored as plain messages.
+type EventSink func(origin types.PeerID, msg *PersonalMessageProto, request bool) (isMessage bool)
+
+// SetEventSink sets where conversation-log traffic goes.
+func (s *MessageBroker) SetEventSink(f EventSink) {
+	s.mu.Lock()
+	s.eventSink = f
+	s.mu.Unlock()
+}
+
+// SendEvent sends conversation-log traffic to a peer; see SendOptions for ID, ConvEvent, ConvSync,
+// NoTrack and DirectOnly. text, typ and metadata are what an older node shows for a message.
+func (s *MessageBroker) SendEvent(targetID types.PeerID, text string, opts SendOptions) (state string, err error) {
+	opts.Silent = true // the log keeps it, not the plain history
+	_, state, err = s.sendWithTier(targetID, text, TierX3DH, opts)
+	return state, err
 }
 
 // SendSilent sends protocol traffic that is not stored in the chat history. queued says the message
