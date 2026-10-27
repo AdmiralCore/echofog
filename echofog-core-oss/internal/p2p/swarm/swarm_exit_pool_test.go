@@ -700,3 +700,35 @@ func (r *recordingTransport) DialEarly(ctx context.Context, addr string) error {
 	r.addr.Store(addr)
 	return r.lateRegisterTransport.DialEarly(ctx, addr)
 }
+
+// A link that has been up longer than freshLinkAge takes no new stream: a fresh pool link is dialed
+// first and the stream rides it, so an old link left alone never wakes up to carry a burst.
+func TestExitPool_StaleLinkGetsAFreshLinkBeforeANewStream(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, old := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.MarkExitPeer(exit, 3)
+	p.mu.Lock()
+	p.primarySince = time.Now().Add(-2 * freshLinkAge)
+	p.mu.Unlock()
+
+	fresh := newFakeMuxConn(ctx, 1)
+	tr := &lateRegisterTransport{}
+	tr.onDial = func(int) {
+		s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true})
+	}
+	s.netTransport = tr
+
+	st, err := s.OpenExitStream(ctx, exit)
+	require.NoError(t, err)
+	st.Close()
+	require.Equal(t, int32(1), tr.dials.Load(), "a fresh pool link was dialed")
+	require.Equal(t, int32(1), fresh.opened.Load(), "the stream rode the fresh link")
+	require.Equal(t, int32(0), old.opened.Load(), "never the stale one")
+
+	// The fresh link is young: the next stream needs no dial.
+	st, err = s.OpenExitStream(ctx, exit)
+	require.NoError(t, err)
+	st.Close()
+	require.Equal(t, int32(1), tr.dials.Load())
+}

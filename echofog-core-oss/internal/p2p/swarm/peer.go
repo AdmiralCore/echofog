@@ -62,6 +62,10 @@ type Peer struct {
 	// is busy: retiring it would cut the stream off before it starts. Guarded by mu.
 	opening map[*network.PeerWrapper]int
 
+	// primarySince is when the current primary connection came up: connectedAt, or the moment a
+	// pool link was promoted, keeping that link's own start. Guarded by mu.
+	primarySince time.Time
+
 	dispatcher *dispatcher.Dispatcher
 }
 
@@ -293,12 +297,13 @@ func (p *Peer) hasCamouflagedLink() bool {
 type exitLink struct {
 	pw      *network.PeerWrapper
 	reality bool
+	since   time.Time // when the link was added
 }
 
 // addExitLink records an additional parallel connection to this peer (an exit's session pool).
 func (p *Peer) addExitLink(pw *network.PeerWrapper, reality bool) {
 	p.mu.Lock()
-	p.extraLinks = append(p.extraLinks, exitLink{pw: pw, reality: reality})
+	p.extraLinks = append(p.extraLinks, exitLink{pw: pw, reality: reality, since: time.Now()})
 	p.mu.Unlock()
 }
 
@@ -329,6 +334,7 @@ func (p *Peer) promoteExitLink(proto func(network.MuxConn) router.TransportProto
 	p.extraLinks = append(p.extraLinks[:best], p.extraLinks[best+1:]...)
 	dead := p.transport
 	p.primaryReality = next.reality
+	p.primarySince = next.since
 	p.mu.Unlock()
 
 	p.SetTransportWithProtocol(next.pw, proto(next.pw.GetConn()))
@@ -403,6 +409,29 @@ func (p *Peer) newestLinkLocked(camouflageExit bool) *network.PeerWrapper {
 		return p.transport
 	}
 	return nil
+}
+
+// newestLinkAge is how long the link a new tunnel stream would ride (newestLinkLocked) has been up;
+// ok is false when there is none.
+func (p *Peer) newestLinkAge(camouflageExit bool) (age time.Duration, ok bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	newest := p.newestLinkLocked(camouflageExit)
+	if newest == nil {
+		return 0, false
+	}
+	if newest != p.transport {
+		for _, l := range p.extraLinks {
+			if l.pw == newest {
+				return time.Since(l.since), true
+			}
+		}
+	}
+	since := p.primarySince
+	if since.IsZero() {
+		since = p.connectedAt
+	}
+	return time.Since(since), true
 }
 
 // retireOldLinks closes every link but the newest that carries no stream and has none being

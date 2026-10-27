@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
@@ -13,6 +14,7 @@ import (
 // exitPoolState marks a peer the local node tunnels through as an exit that runs a parallel
 // session pool. maxConns caps how many concurrent connections the swarm keeps to it.
 type exitPoolState struct {
+	freshMu  sync.Mutex // one fresh-link dial at a time (OpenExitStream)
 	maxConns int
 	addr     string        // where the exit was last reached, to redial it once its peer is gone; exitMu
 	stop     chan struct{} // ends the retire loop when the exit is unmarked
@@ -20,6 +22,15 @@ type exitPoolState struct {
 
 // retireEvery is how often a marked exit's old, idle links are looked for and closed.
 const retireEvery = time.Second
+
+// A new tunnel stream never starts on a link older than freshLinkAge: a fresh pool link is dialed
+// first (waiting up to freshLinkWait for it). Otherwise a link left alone when the newer ones
+// ended would take the next burst of traffic and become, to a censor, one connection that lived
+// for minutes and carried tens of megabytes — what flow shaping exists to prevent.
+const (
+	freshLinkAge  = time.Minute
+	freshLinkWait = 3 * time.Second
+)
 
 // maxInboundPoolLinks caps how many connections the exit side keeps to one client that opens
 // parallel pool links: the client's own cap plus one, for the fresh link the client attaches
@@ -225,7 +236,73 @@ func (s *Swarm) OpenExitStream(ctx context.Context, exit types.PeerID) (*network
 	if p == nil {
 		return nil, errors.New("exit peer is not connected")
 	}
+	if st := s.exitPoolFor(exit); st != nil {
+		s.freshenExitLink(ctx, exit, st, camouflage)
+		if np := s.GetPeer(exit); np != nil {
+			p = np
+		}
+	}
 	return p.openTunnelStream(ctx, camouflage)
+}
+
+// freshenExitLink dials a fresh pool link to a marked exit when the link a new stream would ride
+// is older than freshLinkAge, and waits a little for it. If none comes up in time the stream
+// rides the old link: an old link beats a failed stream.
+func (s *Swarm) freshenExitLink(ctx context.Context, exit types.PeerID, st *exitPoolState, camouflage bool) {
+	stale := func() bool {
+		p := s.GetPeer(exit)
+		if p == nil {
+			return false
+		}
+		age, ok := p.newestLinkAge(camouflage)
+		return ok && age > freshLinkAge
+	}
+	if !stale() {
+		return
+	}
+	st.freshMu.Lock()
+	defer st.freshMu.Unlock()
+	if !stale() { // another stream freshened it meanwhile
+		return
+	}
+	p := s.GetPeer(exit)
+	if p == nil {
+		return
+	}
+	if p.retireOldLinks(camouflage); p.LinkCount() >= st.maxConns {
+		return // every link carries a transfer: a new one would be refused, do not wait for it
+	}
+	addr := s.exitAddr(exit, p)
+	if addr == "" {
+		return
+	}
+	dctx, cancel := context.WithTimeout(ctx, freshLinkWait)
+	defer cancel()
+	s.dialPoolLink(dctx, exit, addr, camouflage)
+	tick := time.NewTicker(camouflageLinkPoll)
+	defer tick.Stop()
+	for stale() {
+		select {
+		case <-dctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// dialPoolLink dials an extra parallel link to the exit at addr, announced as a pool link so both
+// ends keep it beside the others: REALITY (its own socket) for a camouflage exit, otherwise noise
+// on a socket of its own.
+func (s *Swarm) dialPoolLink(ctx context.Context, exit types.PeerID, addr string, camouflage bool) {
+	dctx := network.WithPoolLink(ctx)
+	if camouflage {
+		s.expectPeer(addr, exit)
+	} else {
+		dctx = network.WithEphemeralSocket(dctx)
+	}
+	if err := s.dialEarly(dctx, addr); err != nil {
+		s.log().Debug("Swarm: pool link dial to exit failed", "peer", exit.String()[:12], "err", err)
+	}
 }
 
 const (
