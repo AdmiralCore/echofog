@@ -147,7 +147,7 @@ function offerFile(pub, path) {
   const msg = fileMsg('m' + id, true, c.peer_id, id, name, t.size, Date.now());
   history[c.peer_id] = [...(history[c.peer_id] || []), msg];
   pushFx(t);
-  emit('new_message', msg);
+  logFile('d:' + c.peer_id, SELF, msg.metadata, name);
   // the contact accepts after a moment (and, for the demo, briefly drops offline midway)
   setTimeout(() => { t.state = 'active'; pushFx(t); runFx(t, { stallAt: 0.45 }); }, 1800);
   return { ...t };
@@ -190,6 +190,7 @@ function postGroupFile(groupId, path) {
   const m = groupFileMsg(t, SELF, Date.now());
   groupMsgs.push(m);
   pushFx(t);
+  logFile('g:' + groupId, SELF, JSON.stringify({ group_file: { id, name, size: t.size } }), name);
   // two members start downloading after a moment
   setTimeout(() => { Object.assign(t, { state: 'active', fetching: 2, rate: 6 * MB }); pushFx(t); runGroupShare(t); }, 1500);
   return { ...m };
@@ -769,6 +770,223 @@ const marketExits = [
 }));
 const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
 
+// --- conversation log (Chat* methods and conv:change) ---------------------------------------------
+// The preview's chats as the core's log serves them, with a few answers, comments, edits, deletes,
+// reactions and pins to look at. Carol runs an old version and "Old Friends" has a member who
+// does, so the hints for those show too.
+const clog = {}; // chat id ('d:<peer>' | 'g:<group>') -> { ref, msgs (oldest first), unread, upgraded }
+let clock = 0;
+const evid = () => Array.from({ length: 32 }, () => ((Math.random() * 16) | 0).toString(16)).join('');
+function lmsg(chat, o) {
+  const m = { id: evid(), conv: chat, author: SELF, ts: Date.now(), lamport: ++clock, type: 0, text: '', edited: false, deleted: false, pinned: false, reactions: [], ...o };
+  m.mine = m.author === SELF;
+  if (m.mine && chat.startsWith('d:') && !m.state) m.state = 'delivered';
+  return m;
+}
+const keyOf = (ref) => (ref.kind === 'group' ? 'g:' : 'd:') + ref.id;
+function chatOf(ref) {
+  const k = keyOf(ref);
+  // a contact or a group with nothing written yet
+  if (!clog[k] && (ref.kind === 'dm' || groups.some((g) => g.id === ref.id))) clog[k] = { ref: { kind: ref.kind, id: ref.id }, msgs: [], unread: 0, upgraded: true };
+  if (!clog[k]) throw new Error('unknown chat');
+  return clog[k];
+}
+const find = (c, id) => {
+  const m = c.msgs.find((x) => x.id === id);
+  if (!m) throw new Error('not found');
+  return m;
+};
+function shown(c, m) {
+  const v = {
+    ...m,
+    reactions: m.reactions.filter((r) => r.by.length).map((r) => ({ emoji: r.emoji, by: [...r.by], count: r.by.length, mine: r.by.includes(SELF) })),
+    replies: c.msgs.filter((x) => x.thread === m.id && !x.deleted).length,
+  };
+  if (m.deleted) Object.assign(v, { text: '', metadata: '', reactions: [] });
+  return v;
+}
+function convOf(k) {
+  const c = clog[k];
+  const top = c.msgs.filter((m) => !m.thread);
+  const last = top[top.length - 1];
+  return {
+    ref: c.ref, conv: k, title: c.ref.kind === 'group' ? groups.find((g) => g.id === c.ref.id)?.title : undefined,
+    last: last ? shown(c, last) : undefined, lastTs: last ? last.ts : 0, unread: c.unread,
+    request: c.ref.kind === 'dm' && !contacts.some((x) => x.peer_id === c.ref.id), upgraded: c.upgraded,
+  };
+}
+const logChanged = (k, ...msgs) => emit('conv:change', { ref: clog[k].ref, conversation: convOf(k), messages: msgs.map((m) => shown(clog[k], m)) });
+function logArrived(k, m) {
+  clog[k].msgs.push(m);
+  if (!m.mine && !m.thread) clog[k].unread++;
+  const root = m.thread && clog[k].msgs.find((x) => x.id === m.thread);
+  logChanged(k, m, ...(root ? [root] : []));
+}
+const reactWith = (m, emoji, ...by) => m.reactions.push({ emoji, by });
+
+(function seedLog() {
+  for (const [peer, list] of Object.entries(history)) {
+    const k = 'd:' + peer;
+    clog[k] = {
+      ref: { kind: 'dm', id: peer }, unread: 0, upgraded: peer !== CAROL,
+      msgs: list.map((h) => lmsg(k, { author: h.is_mine ? SELF : peer, ts: h.timestamp * 1000, text: h.text, type: h.type || 0, metadata: h.metadata, state: h.pending ? 'relayed' : undefined })),
+    };
+  }
+  const al = clog['d:' + ALICE].msgs;
+  const byText = (s) => al.find((m) => m.text.startsWith(s));
+  byText('Morning!').pinned = true;
+  byText('Morning!').pinnedAt = now - 2 * 24 * 60 * min;
+  byText('Yes, the 10-node').edited = true;
+  byText('Yes, the 10-node').editedAt = now - 26 * 60 * min + 5 * min;
+  byText('Heal time').replyTo = byText('Hey! Did you see').id;
+  reactWith(byText('Nice. Want to jump'), '👍', SELF);
+  reactWith(byText('Hey! Did you see'), '🔥', SELF, ALICE);
+  const gone = lmsg('d:' + ALICE, { author: ALICE, ts: now - 13 * min, text: 'wrong chat, sorry', deleted: true });
+  al.splice(al.indexOf(byText('Nice. Want to jump')), 0, gone);
+  const root = byText('Morning!');
+  al.push(
+    lmsg('d:' + ALICE, { author: SELF, ts: root.ts + 30 * min, text: 'The anti-DPI notes are out of date, I will fix the REALITY part', thread: root.id }),
+    lmsg('d:' + ALICE, { author: ALICE, ts: root.ts + 34 * min, text: 'Thanks! Ping me when it is up', thread: root.id }),
+  );
+  clog['d:' + ALICE].unread = 2;
+  // a long history with Carol: pages of it load as the chat scrolls up
+  clog['d:' + CAROL].msgs.unshift(...Array.from({ length: 120 }, (_, i) => lmsg('d:' + CAROL, {
+    author: i % 3 ? CAROL : SELF, ts: now - (40 - i / 4) * 24 * 60 * min, text: `Old message #${i + 1}`,
+  })));
+  clog['d:' + DAVE].unread = 1;
+
+  const k = 'g:' + GROUP;
+  clog[k] = {
+    ref: { kind: 'group', id: GROUP }, unread: 1, upgraded: true,
+    msgs: groupMsgs.map((g) => lmsg(k, {
+      author: g.sender, ts: g.timestamp, text: g.text,
+      metadata: g.file ? JSON.stringify({ group_file: { id: g.file.id, name: g.file.name, size: g.file.size } }) : undefined,
+    })),
+  };
+  const gm = clog[k].msgs;
+  const gText = (s) => gm.find((m) => m.text.startsWith(s));
+  reactWith(gText('Release candidate'), '🔥', BOB, CAROL, SELF);
+  reactWith(gText('Release candidate'), '🚀', DAVE);
+  Object.assign(gText('Great. Let us do'), { pinned: true, pinnedAt: now - 29 * min });
+  const guide = gText('Node runner guide');
+  gm.push(
+    lmsg(k, { author: CAROL, ts: guide.ts + 3 * min, text: 'Does it cover ARM boards?', thread: guide.id }),
+    lmsg(k, { author: BOB, ts: guide.ts + 5 * min, text: 'Yes, the image is multi-arch now', thread: guide.id }),
+    lmsg(k, { author: ALICE, ts: guide.ts + 9 * min, text: 'Tested on a Pi 5, works', thread: guide.id }),
+  );
+  gText('Works for me').replyTo = gText('Great. Let us do').id;
+
+  groups.push({ id: 'grp_old', title: 'Old Friends', kind: 'group', members: 3, myRole: 'member', readOnly: false, description: '' });
+  clog['g:grp_old'] = {
+    ref: { kind: 'group', id: 'grp_old' }, unread: 0, upgraded: false,
+    msgs: [
+      lmsg('g:grp_old', { author: CAROL, ts: now - 5 * 60 * min, text: 'Board games on Friday?' }),
+      lmsg('g:grp_old', { author: SELF, ts: now - 4 * 60 * min, text: 'In!' }),
+    ],
+  };
+  // the clocks follow the times of the seeded messages
+  clock = 0;
+  Object.values(clog).flatMap((c) => c.msgs).sort((a, b) => a.ts - b.ts).forEach((m) => { m.lamport = ++clock; });
+  Object.values(clog).forEach((c) => c.msgs.sort((a, b) => a.lamport - b.lamport));
+})();
+
+const NOT_UPGRADED = 'not every member of this group has updated the app yet';
+Object.assign(impl, {
+  ChatList: () => Object.keys(clog).map(convOf).filter((d) => d.last).sort((a, b) => b.lastTs - a.lastTs),
+  ChatHistory: (ref, cursor, limit) => {
+    const c = chatOf(ref);
+    const rev = c.msgs.filter((m) => !m.thread).sort((a, b) => b.lamport - a.lamport);
+    const from = cursor ? rev.findIndex((m) => m.id === cursor) + 1 : 0;
+    const page = rev.slice(from, from + (limit || 50));
+    return { messages: page.map((m) => shown(c, m)), next: from + page.length < rev.length ? page[page.length - 1].id : '' };
+  },
+  ChatThread: (ref, root) => {
+    const c = chatOf(ref);
+    return { messages: c.msgs.filter((m) => m.thread === root).sort((a, b) => a.lamport - b.lamport).map((m) => shown(c, m)), next: '' };
+  },
+  ChatPins: (ref) => {
+    const c = chatOf(ref);
+    return c.msgs.filter((m) => m.pinned && !m.deleted).sort((a, b) => b.pinnedAt - a.pinnedAt).map((m) => shown(c, m));
+  },
+  ChatMessage: (ref, id) => { const c = chatOf(ref); return shown(c, find(c, id)); },
+  ChatSend: (ref, req) => {
+    const c = chatOf(ref);
+    const k = keyOf(ref);
+    if (!c.upgraded && ref.kind === 'group' && (req.replyTo || req.thread)) throw new Error(NOT_UPGRADED);
+    if (!req.text || req.text.length > 16384) throw new Error('bad event body');
+    const offline = ref.id === CAROL;
+    const m = lmsg(k, { text: req.text, replyTo: req.replyTo || undefined, thread: req.thread || undefined, state: ref.kind === 'dm' ? (offline ? 'relayed' : 'sent') : undefined });
+    c.msgs.push(m);
+    const root = m.thread && c.msgs.find((x) => x.id === m.thread);
+    logChanged(k, m, ...(root ? [root] : []));
+    if (ref.kind === 'dm' && !offline) {
+      setTimeout(() => { m.state = 'delivered'; emit('message:state', { peer_id: ref.id, id: m.id, state: 'delivered' }); logChanged(k, m); }, 900);
+    }
+    if (ref.id === ALICE && !m.thread) {
+      // Alice likes it, and answers a question with a quote
+      setTimeout(() => { reactWith(m, '👍', ALICE); logChanged(k, m); }, 1800);
+      if (req.text.trim().endsWith('?')) setTimeout(() => logArrived(k, lmsg(k, { author: ALICE, text: 'Good question, let me check', replyTo: m.id })), 3200);
+    }
+    return shown(c, m);
+  },
+  ChatEdit: (ref, id, text) => {
+    const c = chatOf(ref);
+    if (!c.upgraded && ref.kind === 'group') throw new Error(NOT_UPGRADED);
+    const m = find(c, id);
+    if (!m.mine || m.deleted) throw new Error('not allowed');
+    if (!text) throw new Error('bad event body');
+    Object.assign(m, { text, edited: true, editedAt: Date.now() });
+    logChanged(keyOf(ref), m);
+    return null;
+  },
+  ChatDelete: (ref, id) => {
+    const c = chatOf(ref);
+    if (!c.upgraded && ref.kind === 'group') throw new Error(NOT_UPGRADED);
+    const m = find(c, id);
+    const mod = ref.kind === 'group' && ['owner', 'admin', 'moderator'].includes(groups.find((g) => g.id === ref.id)?.myRole);
+    if (!m.mine && !mod) throw new Error('not allowed');
+    Object.assign(m, { deleted: true, deletedBy: SELF, pinned: false });
+    logChanged(keyOf(ref), m);
+    return null;
+  },
+  ChatReact: (ref, id, emoji, on) => {
+    const c = chatOf(ref);
+    if (!c.upgraded && ref.kind === 'group') throw new Error(NOT_UPGRADED);
+    const m = find(c, id);
+    let r = m.reactions.find((x) => x.emoji === emoji);
+    if (!r) m.reactions.push((r = { emoji, by: [] }));
+    r.by = r.by.filter((p) => p !== SELF);
+    if (on) r.by.push(SELF);
+    m.reactions.sort((a, b) => (a.emoji < b.emoji ? -1 : 1));
+    logChanged(keyOf(ref), m);
+    return null;
+  },
+  ChatPin: (ref, id, on) => {
+    const c = chatOf(ref);
+    if (!c.upgraded && ref.kind === 'group') throw new Error(NOT_UPGRADED);
+    const m = find(c, id);
+    Object.assign(m, { pinned: on, pinnedAt: Date.now(), pinnedBy: SELF });
+    logChanged(keyOf(ref), m);
+    return null;
+  },
+  ChatMarkRead: (ref) => {
+    const c = chatOf(ref);
+    if (c.unread) { c.unread = 0; logChanged(keyOf(ref)); }
+    return null;
+  },
+});
+
+// a file sent or posted lands in the log like any message
+function logFile(k, author, metadata, name) {
+  const c = chatOf(k.startsWith('g:') ? { kind: 'group', id: k.slice(2) } : { kind: 'dm', id: k.slice(2) });
+  const m = lmsg(k, { author, text: name, type: k.startsWith('d:') ? 4 : 0, metadata });
+  c.msgs.push(m);
+  logChanged(k, m);
+}
+
+// Bob writes a little after the preview opens: a new message in a chat that is not open
+setTimeout(() => logArrived('d:' + BOB, lmsg('d:' + BOB, { author: BOB, text: 'Are you around? The wallet draft has a question for you' })), 12000);
+
 // handy in the console: __emit('group:event', {kind: 'call', groupId: 'grp_launch', title: 'EchoFog Launch', from: '...', callId: 'x', coordinator: '...'})
 window.__emit = (name, data) => runtimeImpl.EventsEmit(name, data);
 window.__ids = { SELF, ALICE, BOB, CAROL, DAVE };
@@ -814,6 +1032,15 @@ if (new URLSearchParams(location.search).has('incoming')) {
     if (!listeners.get('call:incoming')?.size) return;
     clearInterval(wait);
     setTimeout(() => emit('call:incoming', { callId: 'call_in', coordinator: ALICE, from: ALICE, timestamp: Date.now() }), 1500);
+  }, 200);
+}
+
+if (new URLSearchParams(location.search).has('missed')) {
+  // an invitation that waited at a relay too long: shown as missed, does not ring
+  const wait = setInterval(() => {
+    if (!listeners.get('call:missed')?.size) return;
+    clearInterval(wait);
+    setTimeout(() => emit('call:missed', { callId: 'call_old', coordinator: BOB, from: BOB, timestamp: Date.now() - 10 * min }), 1500);
   }, 200);
 }
 

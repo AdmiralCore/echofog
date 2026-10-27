@@ -2,7 +2,10 @@
   import { afterUpdate, createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
   import { fly, slide } from 'svelte/transition';
   import { App, errText, copy, openURL } from '../api.js';
-  import { chats, messages, chatError, chatNote, membersVersion, activeId, activeGroupCalls, loadChats, send, deleteContact, leaveGroup, acceptRequest, dismissRequest, blockPeer, unblockPeer } from '../stores/chats.js';
+  import {
+    chats, messages, chatError, chatNote, membersVersion, activeId, activeGroupCalls, loadChats, send, deleteContact, leaveGroup, acceptRequest, dismissRequest, blockPeer, unblockPeer,
+    hasOlder, pins, thread, quotes, loadOlder, fetchQuote, openThread, closeThread, editMessage, deleteMessage, react, pinMessage, markRead, preview,
+  } from '../stores/chats.js';
   import { isCallActive, startCall, stageExpanded, peerInfo } from '../stores/call.store.js';
   import { transfers, fileError, loadTransfers, pickAndSend, sendPaths, openFile, showInFolder } from '../stores/files.js';
   import { savedIds, savedError, toggleSaved, saveAsFile, jumpTo, SAVED_ID } from '../stores/saved.js';
@@ -10,6 +13,7 @@
   import { linkify, mark, linkHost } from '../linkify.js';
   import { t, lang, intlLocale } from '../i18n/index.js';
   import { ask } from '../stores/dialog.js';
+  import { me } from '../stores/session.js';
   import Avatar from '../components/ui/Avatar.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Popover from '../components/ui/Popover.svelte';
@@ -32,7 +36,6 @@
   let text = '';
   let sending = false;
   let scroller;
-  let lastCount = 0;
   let info = false;
   let members = [];
   let invite = '';
@@ -42,36 +45,149 @@
   let busyMember = '';
 
   let shownId = '';
-  $: if (conv.id !== shownId) { shownId = conv.id; info = false; closeSearch(); menu = null; } // another chat closes the panel; a refresh of this one does not
+  // another chat closes the panels and the draft's answer; a refresh of this one does not
+  $: if (conv.id !== shownId) {
+    shownId = conv.id;
+    info = false;
+    closeSearch();
+    menu = null;
+    replyTo = null;
+    editing = null;
+    newestId = '';
+    lastRead = '';
+    pinIdx = 0;
+    atBottom = true;
+  }
   $: loadTransfers(conv.kind === 'direct' ? conv.peerId : '');
   $: myRank = RANK[conv.myRole] || 0;
   $: canManage = conv.kind === 'group' && myRank >= RANK.admin;
   $: if (info && conv.kind === 'group') { void $membersVersion; loadMembers(); }
 
+  // ---- what the log lets me do here ------------------------------------------------------------
+  // A group whose members have not all updated runs the old way: plain messages only.
+  $: isGroup = conv.kind === 'group';
+  $: logOps = !isGroup || conv.upgraded !== false; // null: not known yet (nothing written): let the core decide
+  $: canWrite = !conv.readOnly && !(conv.kind === 'direct' && conv.blocked);
+  $: canReply = logOps && canWrite;
+  $: canReact = logOps && !conv.readOnly; // the readers of a channel cannot react (yet)
+  $: canPin = logOps && (!isGroup || myRank >= RANK.moderator);
+  $: canEdit = (m) => logOps && m.mine && !m.deleted && !m.file && m.type === 0;
+  $: canDelete = (m) => logOps && !m.deleted && (m.mine || (isGroup && myRank >= RANK.moderator));
+  const QUICK = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+  $: myId = $me.id;
+
+  $: byId = Object.fromEntries($messages.map((m) => [m.id, m]));
+  $: quoteOf = (id) => byId[id] || $quotes[id] || null;
+  // an answer to a message not loaded: fetch the quoted one
+  $: $messages.forEach((m) => { if (m.replyTo && !byId[m.replyTo]) fetchQuote(m.replyTo); });
+
+  // ---- scrolling ---------------------------------------------------------------------------------
+  // The end of the chat stays in view while I am there; scrolling to the top loads older messages
+  // without moving what is on screen.
+  let newestId = '';
+  let atBottom = true;
+  let prepending = null; // { height, top, firstId } before an older page is put in front
+
   afterUpdate(() => {
     if (pendingJump && $messages.some((m) => m.id === pendingJump)) {
       const id = pendingJump;
       pendingJump = '';
-      lastCount = $messages.length;
+      newestId = $messages[$messages.length - 1].id;
       reveal(id);
       return;
     }
-    if (scroller && $messages.length !== lastCount) {
-      // one new message glides into view; opening a chat jumps straight to the end
-      const smooth = lastCount > 0 && $messages.length - lastCount <= 2 && $messages.length > lastCount;
-      lastCount = $messages.length;
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    if (!scroller) return;
+    if (prepending && $messages.length && $messages[0].id !== prepending.firstId) {
+      scroller.scrollTop = scroller.scrollHeight - prepending.height + prepending.top;
+      prepending = null;
+      return;
     }
+    const last = $messages[$messages.length - 1];
+    const id = last ? last.id : '';
+    if (id !== newestId) {
+      // opening a chat jumps straight to the end; a new message glides into view
+      const first = !newestId;
+      newestId = id;
+      if (first || atBottom || (last && last.mine)) {
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: first ? 'auto' : 'smooth' });
+        atBottom = true;
+        readSoon();
+      }
+    }
+    // a first page that does not fill the window: fetch more until it does
+    if (!prepending && $hasOlder && scroller.scrollHeight <= scroller.clientHeight + 40) older();
   });
+
+  function onScroll() {
+    atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    if (scroller.scrollTop < 160 && $hasOlder && !prepending) older();
+    if (atBottom) readSoon();
+  }
+
+  async function older() {
+    prepending = { height: scroller.scrollHeight, top: scroller.scrollTop, firstId: $messages[0]?.id || '' };
+    if (!(await loadOlder())) prepending = null;
+  }
+
+  // ---- read -------------------------------------------------------------------------------------
+  // The chat counts as read up to its newest message once that is on screen in a window in front.
+  let lastRead = '';
+  let readTimer;
+  function readSoon() {
+    clearTimeout(readTimer);
+    readTimer = setTimeout(() => {
+      const last = $messages[$messages.length - 1];
+      if (!last || !atBottom || !document.hasFocus()) return;
+      if (last.id === lastRead && !conv.unread) return;
+      lastRead = last.id;
+      markRead(last.id);
+    }, 1000);
+  }
+
+  // ---- composing --------------------------------------------------------------------------------
+  let replyTo = null; // the message answered
+  let editing = null; // my message whose text is being changed
 
   async function submit() {
     if (!text.trim() || sending) return;
     sending = true;
-    const ok = await send(text);
+    let ok;
+    if (editing) {
+      ok = editing.text === text.trim() || (await editMessage(editing.id, text));
+      if (ok) editing = null;
+    } else {
+      ok = await send(text, { replyTo: replyTo ? replyTo.id : '' });
+      if (ok) replyTo = null;
+    }
     if (ok) text = '';
     sending = false;
     await tick();
     grow();
+  }
+
+  async function startReply(m) {
+    menu = null;
+    editing = null;
+    replyTo = m;
+    await tick();
+    input?.focus();
+  }
+
+  async function startEdit(m) {
+    menu = null;
+    replyTo = null;
+    editing = m;
+    text = m.text;
+    await tick();
+    grow();
+    input?.focus();
+  }
+
+  function cancelCompose() {
+    if (editing) text = '';
+    editing = null;
+    replyTo = null;
+    tick().then(grow);
   }
 
   // the composer grows with its text up to a few lines
@@ -89,6 +205,13 @@
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
+    } else if (e.key === 'Escape' && (editing || replyTo)) {
+      e.preventDefault();
+      cancelCompose();
+    } else if (e.key === 'ArrowUp' && !text) {
+      // the last message of mine opens for editing, as in other messengers
+      const mine = [...$messages].reverse().find((m) => canEdit(m));
+      if (mine) { e.preventDefault(); startEdit(mine); }
     }
   }
 
@@ -120,6 +243,67 @@
   function toggleInfo() {
     info = !info;
     infoError = '';
+    if (info) closeThread();
+  }
+
+  // ---- threads (comments under a message) ------------------------------------------------------
+  let threadText = '';
+  let threadSending = false;
+  let threadInput;
+  $: threadRoot = $thread ? quoteOf($thread.root) : null;
+  $: if ($thread && !threadRoot) fetchQuote($thread.root);
+
+  async function showThread(m) {
+    menu = null;
+    info = false;
+    await openThread(m.id);
+    await tick();
+    threadInput?.focus();
+  }
+  let editingComment = null;
+  async function editComment(m) {
+    menu = null;
+    editingComment = m;
+    threadText = m.text;
+    await tick();
+    threadInput?.focus();
+  }
+  async function sendComment() {
+    if (!threadText.trim() || threadSending || !$thread) return;
+    threadSending = true;
+    const ok = editingComment
+      ? editingComment.text === threadText.trim() || (await editMessage(editingComment.id, threadText))
+      : await send(threadText, { threadRoot: $thread.root });
+    if (ok) { threadText = ''; editingComment = null; }
+    threadSending = false;
+  }
+  function threadKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendComment(); }
+    else if (e.key === 'Escape' && editingComment) { e.preventDefault(); editingComment = null; threadText = ''; }
+    else if (e.key === 'Escape') { e.preventDefault(); closeThread(); }
+  }
+  $: if (!$thread) editingComment = null;
+
+  // ---- pins ---------------------------------------------------------------------------------------
+  // The bar shows the newest pin; a click goes to it and moves on to the one pinned before it.
+  let pinIdx = 0;
+  $: if (pinIdx >= $pins.length) pinIdx = 0;
+  $: shownPin = $pins[pinIdx] || null;
+  function nextPin() {
+    if (!shownPin) return;
+    goTo(shownPin.id);
+    pinIdx = (pinIdx + 1) % $pins.length;
+  }
+
+  // scrolls to a message, loading older pages until it is there (a pin or a quote far back)
+  async function goTo(id) {
+    for (let i = 0; i < 40 && !$messages.some((m) => m.id === id); i++) {
+      if (!$hasOlder) break;
+      prepending = { height: scroller.scrollHeight, top: scroller.scrollTop, firstId: $messages[0]?.id || '' };
+      if (!(await loadOlder())) { prepending = null; break; }
+      await tick();
+    }
+    reveal(id);
   }
 
   async function doCopy(what, value) {
@@ -278,7 +462,7 @@
     if (m.system) return;
     if (e.type === 'contextmenu' && e.target.closest('a')) return; // a link keeps its own menu
     e.preventDefault();
-    menu = { m, anchor: e.currentTarget.closest('.msg') || e.currentTarget, details: false };
+    menu = { m, anchor: e.currentTarget.closest('.msg, .comment') || e.currentTarget, details: false };
     menuNote = '';
   }
   async function menuCopy() {
@@ -299,8 +483,27 @@
     menu = null;
     await saveAsFile(m, conv.name);
   }
+  const reacted = (m, emoji) => m.reactions.some((r) => r.emoji === emoji && r.mine);
+  function toggleReaction(m, emoji) {
+    menu = null;
+    react(m.id, emoji, !reacted(m, emoji));
+  }
+  function menuPin() {
+    const m = menu.m;
+    menu = null;
+    pinMessage(m.id, !m.pinned);
+  }
+  async function menuDelete() {
+    const m = menu.m;
+    menu = null;
+    const msg = m.mine ? $t('chats.confirm.deleteMsg') : $t('chats.confirm.deleteTheirs', { name: senderName(m.sender) });
+    if (!(await ask({ message: msg, confirm: $t('chats.deleteForAll'), danger: true }))) return;
+    if (editing && editing.id === m.id) cancelCompose();
+    deleteMessage(m.id);
+  }
   const fullTime = (ts) => new Date(ts || 0).toLocaleString(intlLocale(), { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const stateOf = (m) => (m.failed ? 'notSent' : m.pending ? (m.state || 'waiting') : 'delivered');
+  const authorName = (m) => (m.mine ? $t('chats.You') : conv.kind === 'group' ? senderName(m.sender) : conv.name);
 
   // ---- links -------------------------------------------------------------------------------------
   function openLink(e, href) {
@@ -314,21 +517,28 @@
   $: chatFiles = Object.values($transfers)
     .filter((x) => (conv.kind === 'group' ? x.group === conv.groupId : x.peer === conv.peerId && !x.group))
     .sort((a, b) => b.created - a.created);
+  // the area shrinks when a bar appears above it (pins) or the composer grows: stay at the end
+  const ro = new ResizeObserver(() => {
+    if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight;
+  });
   onMount(() => {
+    if (scroller) ro.observe(scroller);
     // files dropped on the chat are offered to the contact (Wails hands over their paths)
     window.runtime?.OnFileDrop?.((_x, _y, paths) => {
       if (canSendFiles && paths?.length) sendPaths(conv, paths);
     }, true);
   });
   onDestroy(() => {
+    ro.disconnect();
+    clearTimeout(readTimer);
     unJump();
     window.runtime?.OnFileDropOff?.();
   });
 
   // ---- info --------------------------------------------------------------------------------------
-  $: firstTs = $messages.find((m) => !m.system)?.ts || 0;
+  $: firstTs = $hasOlder ? 0 : $messages.find((m) => !m.system)?.ts || 0;
   $: savedHere = [...$savedIds].filter((id) => id.startsWith(conv.id + '/')).length;
-  $: msgCount = $messages.filter((m) => !m.system).length;
+  $: msgCount = $messages.filter((m) => !m.system && !m.deleted).length;
   const sinceDate = (ts) => (ts ? new Date(ts).toLocaleDateString(intlLocale(), { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—');
 </script>
 
@@ -374,7 +584,26 @@
       </div>
     {/if}
 
-    <div class="messages" bind:this={scroller}>
+    {#if shownPin}
+      <button class="pinbar" on:click={nextPin} title={$t('chats.goToPin')} transition:slide={{ duration: 180 }}>
+        <span class="pin-ic"><Icon name="pin" size={15} /></span>
+        <span class="grow pin-body">
+          <span class="pin-head">{$t('chats.pinned')}{#if $pins.length > 1} · {pinIdx + 1}/{$pins.length}{/if}</span>
+          <span class="pin-text">{preview(shownPin)}</span>
+        </span>
+        {#if canPin}
+          <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+          <span class="icon tiny unpin" title={$t('chats.unpin')} on:click|stopPropagation={() => pinMessage(shownPin.id, false)}><Icon name="close" size={13} stroke={2.2} /></span>
+        {/if}
+      </button>
+    {/if}
+
+    {#if isGroup && conv.upgraded === false}
+      <p class="small upg">{$t('chats.groupNotUpgraded')}</p>
+    {/if}
+
+    <div class="messages" bind:this={scroller} on:scroll={onScroll}>
+      {#if $hasOlder}<div class="older small faint">{$t('chats.loadingOlder')}</div>{/if}
       {#each $messages as m, i (m.id)}
         {#if i === 0 || dayKey($messages[i - 1].ts) !== dayKey(m.ts)}
           <div class="day"><span>{dayLabel(m.ts, $lang)}</span></div>
@@ -386,25 +615,53 @@
           {@const last = !sameGroup(m, $messages[i + 1]) || dayKey($messages[i + 1].ts) !== dayKey(m.ts)}
           {@const isSaved = $savedIds.has(conv.id + '/' + m.id)}
           <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="msg" data-mid={m.id} class:mine={m.mine} class:pending={m.pending} class:failed={m.failed} class:first class:last
+          <div class="msg" data-mid={m.id} class:mine={m.mine} class:pending={m.pending} class:failed={m.failed} class:first class:last class:gone={m.deleted}
             class:hit={q && matches.includes(m.id)} class:current={m.id === currentMatch} class:flash={m.id === flashId}
-            on:contextmenu={(e) => openMenu(e, m)}>
+            on:contextmenu={(e) => openMenu(e, m)} on:dblclick={() => canReply && !m.deleted && startReply(m)}>
             {#if conv.kind === 'group' && !m.mine && first}<div class="sender small">{senderName(m.sender)}</div>{/if}
             <button class="more" title={$t('chats.msgActions')} aria-label={$t('chats.msgActions')} on:click={(e) => openMenu(e, m)}><Icon name="chevronDown" size={15} /></button>
-            {#if m.file}
+            {#if m.replyTo && !m.deleted}
+              {@const qm = quoteOf(m.replyTo)}
+              <button class="quote" on:click|stopPropagation={() => goTo(m.replyTo)} disabled={!qm}>
+                {#if qm}
+                  <b>{authorName(qm)}</b>
+                  <span>{preview(qm)}</span>
+                {:else}
+                  <span class="faint">{$t('chats.quoteUnavailable')}</span>
+                {/if}
+              </button>
+            {/if}
+            {#if m.deleted}
+              <span class="text gone-text"><Icon name="trash" size={13} /> {$t('chats.deletedMsg')}</span>
+            {:else if m.withheld}
+              <span class="text gone-text">{$t('chats.withheld')}</span>
+            {:else if m.file}
               <FileCard file={m.file} mine={m.mine} />
             {:else}
               <span class="text">{#each mark(linkify(m.text), q) as p}{#if p.href}<a href={p.href} title={linkHost(p.href)} rel="noreferrer noopener" on:click={(e) => openLink(e, p.href)}>{#if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}</a>{:else if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>
             {/if}
             <span class="meta">
+              {#if m.pinned}<span class="saved-mark" title={$t('chats.pinned')}><Icon name="pin" size={11} stroke={2.4} /></span>{/if}
               {#if isSaved}<span class="saved-mark" title={$t('saved.saved')}><Icon name="bookmark" size={11} stroke={2.4} /></span>{/if}
+              {#if m.edited && !m.deleted}<span class="edited" title={fullTime(m.editedAt)}>{$t('chats.edited')}</span>{/if}
               {time(m.ts, $lang)}
-              {#if m.mine}
+              {#if m.mine && conv.kind === 'direct' && !m.deleted}
                 {#if m.failed}<span class="st err" title={$t('chats.st.notSent')}>!</span>
-                {:else if m.pending}<span class="st" title={$t('chats.st.' + stateOf(m))}><Icon name={m.state === 'sent' ? 'check' : 'clock'} size={13} stroke={2.4} /></span>
+                {:else if m.pending}<span class="st" class:relayed={m.state === 'relayed'} title={$t('chats.st.' + stateOf(m))}><Icon name={m.state === 'sent' || m.state === 'relayed' ? 'check' : 'clock'} size={13} stroke={2.4} /></span>
                 {:else}<span class="st" title={$t('chats.st.delivered')}><Icon name="checks" size={14} stroke={2.2} /></span>{/if}
               {/if}
             </span>
+            {#if !m.deleted && m.reactions.length}
+              <div class="reactions">
+                {#each m.reactions as r (r.emoji)}
+                  <button class="rx" class:on={r.mine} disabled={!canReact} title={r.by.map((p) => (p === myId ? $t('chats.You') : senderName(p))).join(', ')}
+                    on:click|stopPropagation={() => react(m.id, r.emoji, !r.mine)}>{r.emoji}<span>{r.count}</span></button>
+                {/each}
+              </div>
+            {/if}
+            {#if !m.deleted && m.replies > 0}
+              <button class="replies" on:click|stopPropagation={() => showThread(m)}><Icon name="message" size={13} /> {$t('chats.comments', { n: m.replies })}</button>
+            {/if}
           </div>
           {#if m.failed}<div class="fail-note small">{$t('chats.note.notSent')}</div>{:else if m.pending && last}<div class="fail-note small pend">{$t('chats.note.' + stateOf(m))}</div>{/if}
         {/if}
@@ -453,8 +710,18 @@
       <!-- no composer: a blocked person gets nothing either way -->
     {:else}
       <form class="composer" on:submit|preventDefault={submit}>
-        <div class="field" class:withattach={canSendFiles}>
-          {#if canSendFiles}
+        {#if replyTo || editing}
+          <div class="draft-ctx" transition:slide={{ duration: 150 }}>
+            <Icon name={editing ? 'edit' : 'reply'} size={16} />
+            <button type="button" class="grow ctx-body" on:click={() => goTo((editing || replyTo).id)}>
+              <b>{editing ? $t('chats.editing') : $t('chats.replyingTo', { name: authorName(replyTo) })}</b>
+              <span>{preview(editing || replyTo)}</span>
+            </button>
+            <button type="button" class="icon tiny" title={$t('common.cancel')} aria-label={$t('common.cancel')} on:click={cancelCompose}><Icon name="close" size={14} stroke={2.2} /></button>
+          </div>
+        {/if}
+        <div class="field" class:withattach={canSendFiles && !editing}>
+          {#if canSendFiles && !editing}
             <button type="button" class="attach" title={$t('files.attach')} aria-label={$t('files.attach')} on:click={() => pickAndSend(conv)}><Icon name="paperclip" size={18} /></button>
           {/if}
           <textarea bind:this={input} rows="1" placeholder={$t('chats.writeMessage')} bind:value={text} on:keydown={keydown} on:input={grow} />
@@ -477,7 +744,7 @@
       </div>
 
       <div class="facts">
-        <div><span class="faint small">{$t('chats.factMessages')}</span><b>{msgCount}</b></div>
+        <div><span class="faint small">{$t('chats.factMessages')}</span><b>{msgCount}{$hasOlder ? '+' : ''}</b></div>
         <div><span class="faint small">{$t('chats.factSince')}</span><b>{sinceDate(firstTs)}</b></div>
         <button class="fact" on:click={() => activeId.set(SAVED_ID)} disabled={!savedHere} title={$t('saved.open')}><span class="faint small">{$t('saved.short')}</span><b>{savedHere}</b></button>
       </div>
@@ -585,23 +852,99 @@
     </aside>
   {/if}
 
+  {#if $thread && !info}
+    <aside class="info thread" transition:fly={{ x: 40, duration: 280, opacity: 0 }}>
+      <div class="info-head">
+        <span class="eyebrow grow">{$t('chats.threadTitle')}</span>
+        <button class="icon" aria-label={$t('common.close')} on:click={closeThread}><Icon name="close" size={17} /></button>
+      </div>
+      {#if threadRoot}
+        <button class="root" on:click={() => goTo(threadRoot.id)}>
+          <b class="small">{authorName(threadRoot)}</b>
+          <span>{threadRoot.deleted ? $t('chats.deletedMsg') : preview(threadRoot)}</span>
+          <span class="faint small">{time(threadRoot.ts, $lang)}</span>
+        </button>
+      {/if}
+      <div class="comments">
+        {#each $thread.messages as c (c.id)}
+          <!-- svelte-ignore a11y-no-static-element-interactions -->
+          <div class="comment" class:mine={c.mine} data-cid={c.id} on:contextmenu={(e) => openMenu(e, c)}>
+            <Avatar id={c.mine ? myId : c.sender} name={authorName(c)} size={28} />
+            <div class="grow c-body">
+              <div class="c-head small"><b>{authorName(c)}</b><span class="faint">{time(c.ts, $lang)}{#if c.edited && !c.deleted} · {$t('chats.edited')}{/if}</span>
+                <button class="more" title={$t('chats.msgActions')} aria-label={$t('chats.msgActions')} on:click={(e) => openMenu(e, c)}><Icon name="chevronDown" size={14} /></button>
+              </div>
+              {#if c.deleted}
+                <span class="gone-text small">{$t('chats.deletedMsg')}</span>
+              {:else}
+                <span class="text">{#each linkify(c.text) as p}{#if p.href}<a href={p.href} title={linkHost(p.href)} rel="noreferrer noopener" on:click={(e) => openLink(e, p.href)}>{p.text}</a>{:else}{p.text}{/if}{/each}</span>
+              {/if}
+              {#if !c.deleted && c.reactions.length}
+                <div class="reactions">
+                  {#each c.reactions as r (r.emoji)}
+                    <button class="rx" class:on={r.mine} disabled={!canReact} on:click={() => react(c.id, r.emoji, !r.mine)}>{r.emoji}<span>{r.count}</span></button>
+                  {/each}
+                </div>
+              {/if}
+              {#if c.mine && conv.kind === 'direct' && c.pending}<span class="small faint">{$t('chats.note.' + stateOf(c))}</span>{/if}
+            </div>
+          </div>
+        {:else}
+          <p class="small faint">{$t('chats.noComments')}</p>
+        {/each}
+      </div>
+      {#if canReply}
+        <form class="composer thread-composer" on:submit|preventDefault={sendComment}>
+          {#if editingComment}
+            <div class="draft-ctx">
+              <Icon name="edit" size={16} />
+              <span class="grow ctx-body"><b>{$t('chats.editing')}</b><span>{preview(editingComment)}</span></span>
+              <button type="button" class="icon tiny" title={$t('common.cancel')} aria-label={$t('common.cancel')} on:click={() => { editingComment = null; threadText = ''; }}><Icon name="close" size={14} stroke={2.2} /></button>
+            </div>
+          {/if}
+          <div class="field">
+            <textarea bind:this={threadInput} rows="1" placeholder={$t('chats.writeComment')} bind:value={threadText} on:keydown={threadKey} />
+            <button class="send" class:ready={threadText.trim()} type="submit" title={$t('chats.send')} aria-label={$t('chats.send')} data-silent disabled={threadSending || !threadText.trim()}><Icon name="send" size={17} stroke={2} /></button>
+          </div>
+        </form>
+      {/if}
+    </aside>
+  {/if}
+
   {#if menu}
     <Popover anchor={menu.anchor} width={270} label={$t('chats.msgActions')} on:close={() => (menu = null)}>
       <div class="menu">
         {#if menu.details}
           <div class="details">
             <div><span class="faint small">{$t('chats.det.sent')}</span><span>{fullTime(menu.m.ts)}</span></div>
-            <div><span class="faint small">{$t('chats.det.from')}</span><span>{menu.m.mine ? $t('chats.You') : conv.kind === 'group' ? senderName(menu.m.sender) : conv.name}</span></div>
-            {#if menu.m.mine}<div><span class="faint small">{$t('chats.det.state')}</span><span>{$t('chats.st.' + stateOf(menu.m))}</span></div>{/if}
+            <div><span class="faint small">{$t('chats.det.from')}</span><span>{authorName(menu.m)}</span></div>
+            {#if menu.m.edited}<div><span class="faint small">{$t('chats.det.edited')}</span><span>{fullTime(menu.m.editedAt)}</span></div>{/if}
+            {#if menu.m.mine && conv.kind === 'direct'}<div><span class="faint small">{$t('chats.det.state')}</span><span>{$t('chats.st.' + stateOf(menu.m))}</span></div>{/if}
             {#if menu.m.file}<div><span class="faint small">{$t('chats.det.file')}</span><span>{menu.m.file.name} · {bytes(menu.m.file.size)}</span></div>{/if}
             <div><span class="faint small">{$t('chats.det.id')}</span><span class="mono tiny-id">{menu.m.id}</span></div>
             <p class="small faint">{$t('chats.det.e2e')}</p>
           </div>
         {:else}
-          <button class="item" on:click={menuCopy}><Icon name="copy" size={16} /> {menu.m.file ? $t('chats.copyName') : $t('chats.copyText')}</button>
-          <button class="item" on:click={menuSave}><Icon name="bookmark" size={16} /> {$savedIds.has(conv.id + '/' + menu.m.id) ? $t('saved.remove') : $t('saved.add')}</button>
-          {#if !menu.m.file && menu.m.text}<button class="item" on:click={menuSaveFile}><Icon name="download" size={16} /> {$t('chats.saveAsFile')}</button>{/if}
+          {@const m = menu.m}
+          {#if canReact && !m.deleted}
+            <div class="quick">
+              {#each QUICK as emoji}
+                <button class="qr" class:on={reacted(m, emoji)} title={emoji} on:click={() => toggleReaction(m, emoji)}>{emoji}</button>
+              {/each}
+            </div>
+          {/if}
+          {#if canReply && !m.deleted && !m.thread}<button class="item" on:click={() => startReply(m)}><Icon name="reply" size={16} /> {$t('chats.reply')}</button>{/if}
+          {#if canReply && !m.deleted && !m.thread}<button class="item" on:click={() => showThread(m)}><Icon name="message" size={16} /> {m.replies ? $t('chats.comments', { n: m.replies }) : $t('chats.comment')}</button>{/if}
+          {#if canEdit(m)}<button class="item" on:click={() => (m.thread ? editComment(m) : startEdit(m))}><Icon name="edit" size={16} /> {$t('chats.edit')}</button>{/if}
+          {#if canPin && !m.deleted && !m.thread}<button class="item" on:click={menuPin}><Icon name="pin" size={16} /> {m.pinned ? $t('chats.unpin') : $t('chats.pin')}</button>{/if}
+          {#if !m.deleted}
+            <button class="item" on:click={menuCopy}><Icon name="copy" size={16} /> {m.file ? $t('chats.copyName') : $t('chats.copyText')}</button>
+            {#if !m.thread}<button class="item" on:click={menuSave}><Icon name="bookmark" size={16} /> {$savedIds.has(conv.id + '/' + m.id) ? $t('saved.remove') : $t('saved.add')}</button>{/if}
+            {#if !m.file && m.text}<button class="item" on:click={menuSaveFile}><Icon name="download" size={16} /> {$t('chats.saveAsFile')}</button>{/if}
+          {/if}
           <button class="item" on:click={() => (menu = { ...menu, details: true })}><Icon name="info" size={16} /> {$t('chats.details')}</button>
+          {#if canDelete(m)}<button class="item danger-item" on:click={menuDelete}><Icon name="trash" size={16} /> {$t('chats.deleteForAll')}</button>{/if}
+          {#if conv.kind === 'direct' && conv.upgraded === false && !m.deleted}<p class="small faint menu-hint">{$t('chats.oldPeerHint')}</p>{/if}
           {#if menuNote}<p class="small note-ok">{menuNote}</p>{/if}
         {/if}
       </div>
@@ -779,6 +1122,93 @@
   .details { display: flex; flex-direction: column; gap: 9px; padding: 6px 8px 8px; }
   .details > div { display: flex; flex-direction: column; gap: 1px; }
   .tiny-id { font-size: 11px; word-break: break-all; }
+  /* pins, the old-group banner, older pages */
+  .pinbar {
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 12px 6px 16px; border: none; border-radius: 0;
+    border-bottom: 1px solid var(--line-soft); background: var(--panel); text-align: left; font-weight: 400; position: relative; z-index: 1;
+  }
+  .pinbar:hover:not(:disabled) { background: var(--hover); border: none; border-bottom: 1px solid var(--line-soft); }
+  .pin-ic { color: var(--accent); display: inline-flex; }
+  .pin-body { min-width: 0; display: flex; flex-direction: column; border-left: 2px solid var(--accent); padding-left: 8px; }
+  .pin-head { color: var(--accent); font-size: 12px; font-weight: 650; }
+  .pin-text { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .unpin { width: 26px; height: 26px; display: grid; place-items: center; color: var(--faint); border-radius: 8px; }
+  .unpin:hover { background: var(--raised); color: var(--text); }
+  .upg { margin: 0; padding: 7px 18px; background: var(--warn-soft, var(--raised)); color: var(--muted); border-bottom: 1px solid var(--line-soft); }
+  .older { align-self: center; padding: 6px 0 2px; }
+
+  /* answers, deleted and edited messages, reactions, comment counts */
+  .quote {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; min-width: 120px; margin: 2px 0 5px; padding: 3px 8px;
+    border: none; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); text-align: left; font-weight: 400;
+    font-size: 12.5px; line-height: 1.35; color: inherit;
+  }
+  .quote:hover:not(:disabled) { border: none; border-left: 3px solid var(--accent); filter: brightness(1.05); background: var(--accent-soft); }
+  .quote:disabled { opacity: 1; cursor: default; }
+  .quote b { color: var(--accent); font-weight: 650; }
+  .quote span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg.mine .quote { background: rgba(255, 255, 255, 0.16); border-left-color: rgba(255, 255, 255, 0.85); }
+  .msg.mine .quote b { color: #fff; }
+  .gone-text { display: inline-flex; align-items: center; gap: 5px; font-style: italic; color: var(--faint); }
+  .msg.gone { opacity: 0.85; }
+  .msg.mine .gone-text { color: rgba(255, 255, 255, 0.8); }
+  .edited { font-style: italic; margin-right: 2px; }
+  .st.relayed { opacity: 0.65; }
+  .reactions { clear: both; display: flex; flex-wrap: wrap; gap: 4px; padding-top: 6px; }
+  .rx {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 13px; font-weight: 500; line-height: 1.5;
+    border: 1px solid var(--line-soft); background: var(--raised); color: var(--text);
+  }
+  .rx span { font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .rx.on { border-color: var(--accent); background: var(--accent-soft); }
+  .rx.on span { color: var(--accent); font-weight: 650; }
+  .rx:disabled { opacity: 1; cursor: default; }
+  .msg.mine .rx { background: rgba(255, 255, 255, 0.16); border-color: transparent; color: #fff; }
+  .msg.mine .rx span { color: rgba(255, 255, 255, 0.85); }
+  .msg.mine .rx.on { background: rgba(255, 255, 255, 0.32); border-color: rgba(255, 255, 255, 0.7); }
+  .replies {
+    clear: both; display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 4px 2px 0; width: 100%;
+    border: none; border-top: 1px solid var(--line-soft); border-radius: 0; background: transparent; color: var(--accent); font-size: 12.5px; font-weight: 600;
+  }
+  .replies:hover:not(:disabled) { background: transparent; border: none; border-top: 1px solid var(--line-soft); text-decoration: underline; }
+  .msg.mine .replies { color: #fff; border-top-color: rgba(255, 255, 255, 0.25); }
+
+  /* the answer or edit under way, above the composer */
+  .draft-ctx { display: flex; align-items: center; gap: 10px; padding: 4px 6px 8px 14px; color: var(--accent); }
+  .ctx-body {
+    min-width: 0; display: flex; flex-direction: column; align-items: flex-start; padding: 0 0 0 9px; border: none; border-left: 2px solid var(--accent);
+    border-radius: 0; background: transparent; text-align: left; font-weight: 400; color: var(--text);
+  }
+  .ctx-body:hover:not(:disabled) { background: transparent; border: none; border-left: 2px solid var(--accent); }
+  .ctx-body b { color: var(--accent); font-size: 12.5px; font-weight: 650; }
+  .ctx-body span { max-width: 100%; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* comments */
+  .thread { gap: 10px; padding-bottom: 0; }
+  .root {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: none; border-left: 3px solid var(--accent);
+    border-radius: 10px; background: var(--raised); text-align: left; font-weight: 400;
+  }
+  .root:hover:not(:disabled) { border: none; border-left: 3px solid var(--accent); background: var(--hover); }
+  .root span:not(.faint) { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
+  .comments { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .comment { display: flex; gap: 10px; padding: 7px 6px; border-radius: 10px; position: relative; }
+  .comment:hover { background: var(--hover); }
+  .c-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .c-head { display: flex; align-items: baseline; gap: 6px; }
+  .c-head b { font-weight: 650; }
+  .comment .more { position: absolute; top: 6px; right: 6px; opacity: 0; width: 22px; height: 22px; padding: 0; border-radius: 7px; border: none; display: grid; place-items: center; background: var(--panel); color: var(--muted); }
+  .comment:hover .more, .comment .more:focus-visible { opacity: 1; }
+  .thread-composer { position: sticky; bottom: 0; padding: 8px 0 14px; background: var(--panel); }
+  .thread-composer .field { padding-left: 14px; }
+
+  /* the message menu */
+  .quick { display: flex; justify-content: space-between; gap: 2px; padding: 2px 4px 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line-soft); }
+  .qr { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: transparent; font-size: 19px; line-height: 1; display: grid; place-items: center; }
+  .qr:hover:not(:disabled) { background: var(--hover); border: none; transform: scale(1.12); }
+  .qr.on { background: var(--accent-soft); }
+  .danger-item { color: var(--danger); }
+  .menu-hint { padding: 4px 10px 2px; line-height: 1.4; }
   .reqbar { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 8px; padding: 10px 12px; border-radius: 12px; background: var(--raised); }
   .reqbar p { margin: 0; line-height: 1.45; }
   .reqbar input { min-width: 140px; }
