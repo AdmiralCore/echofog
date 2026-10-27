@@ -18,6 +18,23 @@ type pendingDial struct {
 	err  error
 }
 
+// ephemeralSocketKey marks a dial that must open its own fresh UDP socket (a new 5-tuple) instead
+// of sharing the node's main listener.
+type ephemeralSocketKey struct{}
+
+// WithEphemeralSocket marks ctx so that even a noise dial opens its own ephemeral UDP socket,
+// giving the connection a distinct 5-tuple. Flow-shaping rotation sets it on exit-tunnel re-dials
+// so each rotated flow looks separate to a censor; the REALITY path already uses a fresh socket
+// per dial regardless. Ordinary node<->node noise dials leave it unset and keep the main socket.
+func WithEphemeralSocket(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ephemeralSocketKey{}, true)
+}
+
+func ephemeralSocketRequested(ctx context.Context) bool {
+	v, _ := ctx.Value(ephemeralSocketKey{}).(bool)
+	return v
+}
+
 // DialEarly connects to addr. Concurrent dials to the same address are coalesced: besides
 // avoiding duplicate connections, two parallel handshakes would share one cached TLS session
 // ticket, which quic-go mutates without synchronisation.
@@ -229,14 +246,26 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	var dialErr error
 	var ephemeralTr *quic.Transport
 	var uconn *net.UDPConn
-	if tlsCfg.ServerName != "" {
+	reality := tlsCfg.ServerName != ""
+	// A fresh per-dial socket (its own 5-tuple) is always used for a REALITY dial, and for a noise
+	// dial that asked for one (flow-shaping rotation). Without it a rotated noise exit tunnel would
+	// go out from the shared main socket and reuse its 5-tuple, so a censor would still see one
+	// continuous flow instead of several short, rotated ones.
+	if reality || ephemeralSocketRequested(ctx) {
 		laddr := &net.UDPAddr{IP: net.IPv4zero, Port: 0}
 		var lerr error
 		uconn, lerr = net.ListenUDP("udp", laddr)
 		if lerr == nil {
 			var pconn net.PacketConn = uconn
-			if q.realityConn != nil {
-				pconn = NewQuicRealityConn(uconn, q)
+			if reality {
+				if q.realityConn != nil {
+					pconn = NewQuicRealityConn(uconn, q)
+				}
+			} else if q.obfs != nil {
+				// Mask the ephemeral socket with the node's shared obfuscator so the rotated noise
+				// flow keys exactly as the main socket would: the peer was already Expect()ed, and
+				// the obfuscator tracks keys per remote address, which does not change on rotation.
+				pconn = dpi.WrapPacketConn(uconn, q.obfs)
 			}
 			ephemeralTr = &quic.Transport{Conn: pconn}
 			if realityCfg.ChromeParrot {

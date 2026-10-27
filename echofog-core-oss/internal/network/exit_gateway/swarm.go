@@ -122,8 +122,10 @@ func SwarmOpenerWithConfig(sw *swarm.Swarm, exit types.PeerID, cfg config.FlowSh
 						addr = p.RemoteAddr()
 					}
 					if addr != "" {
-						// Dial a fresh connection to exit to rotate the physical socket/5-tuple
-						_ = sw.DialEarly(ctx, addr)
+						// Dial a fresh connection to exit to rotate the physical socket/5-tuple. The
+						// ephemeral-socket marker gives even the noise path a new 5-tuple, so a rotated
+						// noise tunnel is a distinct flow to a censor rather than reusing the main socket.
+						_ = sw.DialEarly(network.WithEphemeralSocket(ctx), addr)
 					}
 				}
 			}
