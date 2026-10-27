@@ -46,6 +46,50 @@ export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }
 
+export function ChatDelete(arg1, arg2) {
+  return window['go']['main']['App']['ChatDelete'](arg1, arg2);
+}
+
+export function ChatEdit(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatEdit'](arg1, arg2, arg3);
+}
+
+export function ChatHistory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatHistory'](arg1, arg2, arg3);
+}
+
+export function ChatList() {
+  return window['go']['main']['App']['ChatList']();
+}
+
+export function ChatMarkRead(arg1, arg2) {
+  return window['go']['main']['App']['ChatMarkRead'](arg1, arg2);
+}
+
+export function ChatMessage(arg1, arg2) {
+  return window['go']['main']['App']['ChatMessage'](arg1, arg2);
+}
+
+export function ChatPin(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatPin'](arg1, arg2, arg3);
+}
+
+export function ChatPins(arg1) {
+  return window['go']['main']['App']['ChatPins'](arg1);
+}
+
+export function ChatReact(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatReact'](arg1, arg2, arg3, arg4);
+}
+
+export function ChatSend(arg1, arg2) {
+  return window['go']['main']['App']['ChatSend'](arg1, arg2);
+}
+
+export function ChatThread(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatThread'](arg1, arg2, arg3, arg4);
+}
+
 export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }

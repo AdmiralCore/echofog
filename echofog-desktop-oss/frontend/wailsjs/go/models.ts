@@ -39,6 +39,105 @@ export namespace contacts {
 
 }
 
+export namespace convlog {
+	
+	export class Reaction {
+	    emoji: string;
+	    count: number;
+	    by: string[];
+	    mine: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Reaction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.emoji = source["emoji"];
+	        this.count = source["count"];
+	        this.by = source["by"];
+	        this.mine = source["mine"];
+	    }
+	}
+	export class Message {
+	    id: string;
+	    conv: string;
+	    author: string;
+	    mine: boolean;
+	    ts: number;
+	    lamport: number;
+	    type: number;
+	    text: string;
+	    metadata?: string;
+	    replyTo?: string;
+	    thread?: string;
+	    edited: boolean;
+	    editedAt?: number;
+	    deleted: boolean;
+	    deletedBy?: string;
+	    withheld?: boolean;
+	    pinned: boolean;
+	    pinnedBy?: string;
+	    pinnedAt?: number;
+	    reactions: Reaction[];
+	    replies: number;
+	    lastReplyAt?: number;
+	    legacy?: boolean;
+	    state?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Message(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.conv = source["conv"];
+	        this.author = source["author"];
+	        this.mine = source["mine"];
+	        this.ts = source["ts"];
+	        this.lamport = source["lamport"];
+	        this.type = source["type"];
+	        this.text = source["text"];
+	        this.metadata = source["metadata"];
+	        this.replyTo = source["replyTo"];
+	        this.thread = source["thread"];
+	        this.edited = source["edited"];
+	        this.editedAt = source["editedAt"];
+	        this.deleted = source["deleted"];
+	        this.deletedBy = source["deletedBy"];
+	        this.withheld = source["withheld"];
+	        this.pinned = source["pinned"];
+	        this.pinnedBy = source["pinnedBy"];
+	        this.pinnedAt = source["pinnedAt"];
+	        this.reactions = this.convertValues(source["reactions"], Reaction);
+	        this.replies = source["replies"];
+	        this.lastReplyAt = source["lastReplyAt"];
+	        this.legacy = source["legacy"];
+	        this.state = source["state"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace dto {
 	
 	export class CallMediaSlotDTO {
@@ -561,6 +660,96 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class ChatPage {
+	    messages: convlog.Message[];
+	    next: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.messages = this.convertValues(source["messages"], convlog.Message);
+	        this.next = source["next"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ChatRef {
+	    kind: string;
+	    id: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.id = source["id"];
+	    }
+	}
+	export class ConversationDTO {
+	    ref: ChatRef;
+	    conv: string;
+	    title?: string;
+	    last?: convlog.Message;
+	    lastTs: number;
+	    unread: number;
+	    request: boolean;
+	    upgraded: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConversationDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ref = this.convertValues(source["ref"], ChatRef);
+	        this.conv = source["conv"];
+	        this.title = source["title"];
+	        this.last = this.convertValues(source["last"], convlog.Message);
+	        this.lastTs = source["lastTs"];
+	        this.unread = source["unread"];
+	        this.request = source["request"];
+	        this.upgraded = source["upgraded"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ExitNode {
 	    peerId: string;
 	    pricePerMb: number;
@@ -995,6 +1184,22 @@ export namespace node {
 	        this.active = source["active"];
 	        this.countryCode = source["countryCode"];
 	        this.city = source["city"];
+	    }
+	}
+	export class SendRequest {
+	    text: string;
+	    replyTo?: string;
+	    thread?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SendRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.replyTo = source["replyTo"];
+	        this.thread = source["thread"];
 	    }
 	}
 	export class SettingsDTO {
