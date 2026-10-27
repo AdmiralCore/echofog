@@ -118,6 +118,17 @@ func (e *ExitService) SetPadData(f func(types.PeerID) bool) {
 	e.padData.Store(&f)
 }
 
+// SetMicroChunk tells the exit which peers' tunnels are carried in sub-16KB micro-chunks (so it
+// reassembles them before splicing); nil leaves micro-chunking off. It takes precedence over the
+// padding for a peer it admits.
+func (e *ExitService) SetMicroChunk(f func(types.PeerID) bool) {
+	if f == nil {
+		e.microChunk.Store(nil)
+		return
+	}
+	e.microChunk.Store(&f)
+}
+
 // streamSlots counts the streams the exit serves, so one peer, one address or everybody together
 // stays within the caps. Its maps hold only peers and addresses with something open.
 type streamSlots struct {
