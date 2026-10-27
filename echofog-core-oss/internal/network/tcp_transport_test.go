@@ -335,7 +335,9 @@ func TestFallbackTransportPreferTCPAfterAStall(t *testing.T) {
 	}
 	sq := newQUIC(ss)
 	addr := sq.Addr().String()
-	server := NewFallbackTransport(sq, newTCP(t, ss, ""), ModeAuto, addr) // TCP on the QUIC port number
+	// The server accepts QUIC only at first (no inbound TCP listener yet), so the first dial can
+	// only come up over QUIC — no race to lose under a loaded CPU.
+	server := NewFallbackTransport(sq, newTCP(t, ss, ""), ModeAuto, "")
 	client := NewFallbackTransport(newQUIC(cs), newTCP(t, cs, ""), ModeAuto, "off-test")
 	t.Cleanup(func() { server.Close(); client.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -347,6 +349,8 @@ func TestFallbackTransportPreferTCPAfterAStall(t *testing.T) {
 	assert.Equal(t, ProtocolQUIC, first.Conn.Protocol(), "QUIC works, so it goes first")
 	_ = first.Conn.CloseWithError(ErrCodeNormalClose, "test")
 
+	// Now the node also accepts TCP on the QUIC port number, and a stall marks the address TCP-first.
+	require.NoError(t, server.ListenTCP(addr))
 	client.PreferTCP(addr)
 	require.True(t, client.tcpFirst(addr), "PreferTCP marks the address TCP-first")
 
