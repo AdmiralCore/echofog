@@ -244,6 +244,28 @@ func (s *Swarm) AddPotentialPeerWithCtx(ctx context.Context, id types.PeerID, ad
 	}
 }
 
+// Answers reports whether a connected peer answers a ping (within the request timeout, 5s). Unlike
+// PingPeer it does not take an open connection for an answer: it is how a link that died without
+// either side noticing is told from one that is merely quiet.
+func (s *Swarm) Answers(id types.PeerID) bool {
+	p := s.GetPeer(id)
+	if p == nil || !p.Alive() {
+		return false
+	}
+	nonce := time.Now().UnixNano()
+	ping := &internal_pb.MessageData{
+		MessageId: types.NewMessageID(),
+		OriginId:  s.selfID[:],
+		Payload:   &internal_pb.MessageData_Ping{Ping: &internal_pb.Ping{Nonce: nonce}},
+	}
+	respType, resp, err := s.SendMessageWithRequest(id, net_types.TypePing, ping)
+	if err != nil || respType != net_types.TypePong || resp.GetPong().GetNonce() != nonce {
+		return false
+	}
+	p.heard()
+	return true
+}
+
 // PingPeer measures the round trip to a peer, dialling it first if it is not connected. A
 // connected peer whose connection is alive counts as alive even when it does not answer the
 // ping (a node of an older version has no ping handler): the connection proves it is there.

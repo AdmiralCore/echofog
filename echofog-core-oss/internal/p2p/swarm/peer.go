@@ -41,6 +41,7 @@ type Peer struct {
 
 	ip             netip.Addr   // where an inbound peer connected from (limits and bans count against it)
 	connectedAt    time.Time    // a long-lived peer is kept when the node is full
+	lastHeard      atomic.Int64 // unix nanoseconds of the last frame or stream it sent us
 	release        func()       // gives back its place in the per-address limits; nil for outbound
 	pendingStreams atomic.Int32 // streams it opened whose first frame has not come yet
 
@@ -246,6 +247,19 @@ func (p *Peer) Caps() handshake.Capability { return handshake.Capability(p.caps.
 // without a handshake) counts as one, as every node did before the announcement was used.
 // ConnectedAt is when the connection to the peer came up.
 func (p *Peer) ConnectedAt() time.Time { return p.connectedAt }
+
+func (p *Peer) heard() { p.lastHeard.Store(time.Now().UnixNano()) }
+
+// HeardWithin reports whether the peer sent anything in the last d (connecting counts). An open
+// connection alone proves little: a peer that vanished keeps it until the transport's idle
+// timeout, about a minute later.
+func (p *Peer) HeardWithin(d time.Duration) bool {
+	last := p.lastHeard.Load()
+	if c := p.connectedAt.UnixNano(); c > last {
+		last = c
+	}
+	return time.Since(time.Unix(0, last)) < d
+}
 
 func (p *Peer) Relays() bool {
 	c := p.Caps()

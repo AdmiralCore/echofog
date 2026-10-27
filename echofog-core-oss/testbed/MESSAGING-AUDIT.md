@@ -215,18 +215,21 @@ two peers share only a ChaCha/plain relationship and have no ratchet session, th
 behind a knock/key exchange, so the sender keeps retransmitting the original until X3DH converges.
 Works eventually; adds latency and traffic. **Fix:** out of scope — documented.
 
-### F7 — (GAP, observed in the lab) The relay mailbox is bypassed when the sender holds a half-open link
-Observed directly by `-scenario messaging`: when the recipient is killed abruptly, the sender keeps
-"successfully" writing to its still-open QUIC link (the idle timeout has not elapsed), so `deliver`
-reports success and the message is **never handed to a relay mailbox**. Offline delivery then relies
-entirely on the sender's own outbox flushing when the link truly dies and is re-established on
-reconnect — not on relay store-and-forward. The lab run showed exactly this: for the offline flow
-no relay's `stored` counter moved, yet the message arrived after the recipient returned. This is not
-data loss (the outbox is durable for 7 days), but it means the mailbox path — the only mechanism
-that survives the **sender** also going offline before the recipient returns — is not exercised in
-the common "peer crashed" case. **Fix:** out of scope (would need `deliver` to detect a stale link
-faster, e.g. a shorter keep-alive / write confirmation before reporting success) — documented. The
-scenario reports which mechanism carried each offline message rather than assuming the mailbox.
+### F7 — (FIXED) The relay mailbox is bypassed while a dead link looks open
+Observed directly by `-scenario messaging`: when the recipient is killed abruptly, every node that
+was connected to it keeps the QUIC link open until the idle timeout (~60 s). Two places wrote into
+it "successfully":
+- the **sender**, when it had a direct link: `deliver` reported success, no relay was tried;
+- the **relays** (the case the lab hit: trace `s2: fwd+4`): `RelayServer.Handle` saw the recipient
+  as an active peer and forwarded into the dead link instead of storing.
+
+The message then lived only in the sender's outbox — lost if the sender went offline too.
+**Fix:** the sender sends a direct message that stays unconfirmed after two retries through its
+mailbox relays too (`halfOpenAfter`). A relay that forwards to a recipient it has not heard from
+for 15 s (`Peer.HeardWithin`, stamped on every inbound frame or stream) pings it (`Swarm.Answers`,
+5 s). If there is no answer, the message also goes into the mailbox, and one ping covers everything
+forwarded meanwhile. The recipient drops a duplicate by id. The scenario now gates on a relay
+having kept the offline message.
 
 ---
 

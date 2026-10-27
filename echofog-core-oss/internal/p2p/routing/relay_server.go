@@ -56,9 +56,11 @@ type RelayServer struct {
 	use        map[types.PeerID]*peerUse // per initiating peer: bytes today and speed
 
 	peersMu     sync.Mutex
-	connectedAt map[types.PeerID]time.Time // when each connected peer connected
-	delivering  map[types.PeerID]bool      // stored mail being handed to a reconnected peer
-	addrOf      func(types.PeerID) string  // a connected peer's remote address
+	connectedAt map[types.PeerID]time.Time               // when each connected peer connected
+	delivering  map[types.PeerID]bool                    // stored mail being handed to a reconnected peer
+	probing     map[types.PeerID][]messenger.MailboxItem // forwarded to a silent peer, kept if it does not answer
+	addrOf      func(types.PeerID) string                // a connected peer's remote address
+	answers     func(types.PeerID) bool                  // whether a connected peer answers a ping
 
 	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
 	fullReply *ratelimit.Keyed[types.PeerID] // "mailbox full" answers per peer
@@ -188,6 +190,7 @@ func NewRelayServer(s *swarm.Swarm, mailbox *messenger.MailboxManager, logger *s
 			}
 			return ""
 		}
+		rs.answers = s.Answers
 		s.AddObserver(rs)
 		s.AddFrameHandler(rs.HandleRawFrame)
 	}
@@ -740,6 +743,9 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 				_ = peer.Send(net_types.TypeChatMessage, &innerEnv)
 				rs.forwarded.Add(1)
 				rs.logger.Debug("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
+				if !peer.HeardWithin(relayHeardFresh) && rs.mailbox != nil {
+					rs.keepUnlessAnswered(mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope))
+				}
 				return
 			}
 		}
@@ -792,30 +798,74 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 
 	// 4. If target is offline (or unreachable): store in friendly Mailbox!
 	if !forwarded && rs.mailbox != nil {
-		msgID := hex.EncodeToString(msg.MessageId)
-		if msgID == "" {
-			msgID = fmt.Sprintf("relay-%d", time.Now().UnixNano())
-		}
-
-		item := messenger.MailboxItem{
-			ID:          msgID,
-			RecipientID: targetID,
-			SenderID:    originID, // the authenticated signer, used for the per-sender quota
-			Payload:     req.ForwardedEnvelope,
-			CreatedAt:   time.Now().Unix(),
-			ExpiresAt:   time.Now().Add(7 * 24 * time.Hour).Unix(),
-		}
-
+		item := mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope)
 		if err = rs.mailbox.Store(item); err == nil {
 			rs.stored.Add(1)
 			rs.logger.Debug("RelayServer: saved message to offline Mailbox",
-				"target", targetID.String()[:8], "msgID", msgID)
+				"target", targetID.String()[:8], "msgID", item.ID)
 		} else {
 			rs.logger.Debug("RelayServer: failed to store in mailbox", "err", err, "target", targetID.String()[:8])
 			// Send network error back to sender peer so it searches for another relay via DHT!
 			rs.replyMailboxFull(fromPeer, selfID)
 		}
 	}
+}
+
+// mailboxItemOf is a relayed message as the mailbox keeps it for recipient.
+func mailboxItemOf(msg *internal_pb.MessageData, recipient, origin types.PeerID, envelope []byte) messenger.MailboxItem {
+	msgID := hex.EncodeToString(msg.MessageId)
+	if msgID == "" {
+		msgID = fmt.Sprintf("relay-%d", time.Now().UnixNano())
+	}
+	return messenger.MailboxItem{
+		ID:          msgID,
+		RecipientID: recipient,
+		SenderID:    origin, // the authenticated signer, used for the per-sender quota
+		Payload:     envelope,
+		CreatedAt:   time.Now().Unix(),
+		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour).Unix(),
+	}
+}
+
+// A recipient can vanish (killed, unplugged, its network gone) without this node noticing: its
+// connection stays open here until the transport's idle timeout, about a minute, and everything
+// forwarded to it meanwhile is lost — and with it the message, if its sender goes away too. So a
+// recipient not heard from for relayHeardFresh is pinged after the forward, and one that does not
+// answer gets the message in its mailbox as well; it is handed over when the recipient connects
+// again, and dropped by id if the forward did arrive after all. One ping covers every message
+// forwarded while it is under way.
+const relayHeardFresh = 15 * time.Second
+
+func (rs *RelayServer) keepUnlessAnswered(item messenger.MailboxItem) {
+	id := item.RecipientID
+	rs.peersMu.Lock()
+	if rs.probing == nil {
+		rs.probing = map[types.PeerID][]messenger.MailboxItem{}
+	}
+	waiting, busy := rs.probing[id]
+	rs.probing[id] = append(waiting, item)
+	rs.peersMu.Unlock()
+	if busy {
+		return
+	}
+	go func() {
+		answered := rs.answers != nil && rs.answers(id)
+		rs.peersMu.Lock()
+		items := rs.probing[id]
+		delete(rs.probing, id)
+		rs.peersMu.Unlock()
+		if answered {
+			return
+		}
+		for _, it := range items {
+			if err := rs.mailbox.Store(it); err != nil {
+				rs.logger.Debug("RelayServer: a silent recipient's mailbox refused a copy", "err", err, "target", id.String()[:8])
+				continue
+			}
+			rs.stored.Add(1)
+		}
+		rs.logger.Info("RelayServer: recipient did not answer, kept its messages", "peer", id.String()[:8], "count", len(items))
+	}()
 }
 
 // mailboxRefuses says why the mailbox would not take a message of size bytes for recipient, from

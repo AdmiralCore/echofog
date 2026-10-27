@@ -355,8 +355,7 @@ func flowOfflineStoreAndForward(nodes map[string]*node, v *verdict, out string) 
 	}
 	f.left, f.leftOK = "yes (API accepted while recipient offline)", true
 
-	// Did any relay take it into its mailbox? (Diagnostic, not a pass/fail gate: delivery to an
-	// offline peer is also valid via the sender's own outbox flushing on reconnect — see below.)
+	// Did any relay take it into its mailbox? (checked below)
 	stored := waitFor("the message to be stored at a relay mailbox", 30*time.Second, func() bool {
 		s := sampleRelays(allNodeNames())
 		for n := range s {
@@ -404,19 +403,22 @@ func flowOfflineStoreAndForward(nodes map[string]*node, v *verdict, out string) 
 		f.acked = "NO (sender still pending)"
 	}
 	// Delivery to an offline peer is valid two ways: a relay mailbox stores it and hands it over on
-	// reconnect, or the sender's own outbox flushes when the link returns. The hard check is
-	// end-to-end arrival; which mechanism was used is reported, not gated (the relay mailbox is only
-	// used when the sender has already lost its direct link at send time — see MESSAGING-AUDIT.md F7).
+	// reconnect, or the sender's own outbox flushes when the link returns. A killed recipient keeps
+	// its connections at the relays open until their idle timeout (a minute); a relay that has not
+	// heard from it pings it after forwarding and keeps the message when it does not answer. So the
+	// mailbox must have it: otherwise the message lives only in the sender's outbox, and is lost if
+	// the sender goes offline too.
 	if f.reOK {
 		if stored {
 			f.note = "relay mailbox stored and handed it over (" + pathStr(storePath) + ")"
 		} else {
-			f.note = "delivered via the sender's outbox on reconnect; relay mailbox-store not observed (sender held a half-open link at send time — audit F7)"
+			f.note = "delivered via the sender's outbox on reconnect; no relay kept it (forwarded into the dead link)"
 		}
 	} else {
 		f.note = "stored at a relay=" + yn(stored) + "; neither the mailbox nor the sender outbox delivered it"
 	}
 	logf("[offline] mechanism: %s", f.note)
+	v.check(stored, "[offline] a relay kept the message while %s was down", to)
 	v.check(f.reOK, "[offline] %s received the message after reconnecting", to)
 	v.check(f.ackOK, "[offline] the sender saw the offline message confirmed")
 	v.check(f.ok(), "[offline] delivery to an offline peer, end to end (via %s)", pathStr(f.path))

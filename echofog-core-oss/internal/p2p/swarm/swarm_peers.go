@@ -187,6 +187,7 @@ func (s *Swarm) linkProto(conn network.MuxConn) router.TransportProtocol {
 func (s *Swarm) attachStreamHandlers(pw *network.PeerWrapper, p *Peer, peerID types.PeerID) {
 	pw.OnData(func(msgType net_types.MessageType, payload []byte, peerID types.PeerID) {
 		s.bytesRx.Add(uint64(len(payload)))
+		p.heard()
 		// 0. a type this node runs no service for costs one map lookup, nothing more
 		if s.Drops(msgType) {
 			s.dropped(msgType, peerID)
@@ -224,6 +225,7 @@ func (s *Swarm) attachStreamHandlers(pw *network.PeerWrapper, p *Peer, peerID ty
 	})
 
 	pw.OnNewStream(func(stream *network.Stream) {
+		p.heard()
 		if !s.acquireStream(p) {
 			stream.Close()
 			s.ReportPeer(peerID, abuse.Flood)

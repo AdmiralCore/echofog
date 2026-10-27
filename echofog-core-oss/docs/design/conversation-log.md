@@ -248,7 +248,7 @@ already know the node id); documented in the user docs.
 
 | Finding | Fix |
 |---|---|
-| F7 half-open link | a message the peer took directly but did not confirm after 2 retries also goes to its mailbox on each further retry (the peer drops the second copy); no hot-path liveness tracking needed |
+| F7 half-open link | sender side: a message the peer took directly but did not confirm after 2 retries also goes to its mailbox on each further retry (the peer drops the second copy). Relay side (the lab's case: the relays, not the sender, held the dead link): a relay forwarding to a recipient it has not heard from for 15 s pings it after the forward and keeps the message in the mailbox when there is no answer within 5 s; one ping covers everything forwarded meanwhile. The only hot-path cost is an atomic timestamp per inbound frame |
 | F5 call to an offline callee | caller: the invite's message state maps to "not reachable" (keys/offline/relayed), "calling" (sent), "ringing" (delivered); callee: an invitation older than 2 min raises `call:missed`, not a ring |
 | F3 premature "sent" | new state `relayed`: a relay took it while the recipient is away; `sent` now means the recipient's device took it |
 | F6 receipts | **won't fix, by design**: only the X3DH/ratchet tiers authenticate the sender, and a receipt must be authenticated (else anyone holding a pre-shared key could forge "delivered") |
