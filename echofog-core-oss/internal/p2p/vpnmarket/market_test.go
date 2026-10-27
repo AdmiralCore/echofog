@@ -338,6 +338,80 @@ func TestProbeTreatsPaymentRequiredAsReachableAndFailuresAsFailures(t *testing.T
 	assert.Equal(t, 1, r.ConsecutiveFails, "a failed connection counts as a failed probe")
 }
 
+type countingBW struct {
+	kbps  int
+	calls int
+}
+
+func (c *countingBW) MeasureDownload(context.Context, types.PeerID) (int, error) {
+	c.calls++
+	return c.kbps, nil
+}
+
+// The background check of exits sends no download burst: a dozen MB over the plain mesh link to
+// every exit, from every node, is the noise a censor flags. Only a check the user asks for does.
+func TestAutoProbeSendsNoDownloadBurst(t *testing.T) {
+	bw := &countingBW{kbps: 30000}
+	d := newFakeDHT()
+	exit, me := newIdentity(t), newIdentity(t)
+	require.NoError(t, publisherFor(d, exit).Start(context.Background(), ShareConfig{PricePerMB: 5, UploadKbps: 40000}))
+	d.peers = []types.PeerID{exit.id}
+	st := newMemStore()
+	rs := NewRatingStore(st)
+	svc := NewService(publisherFor(d, me), NewDirectory(d, rs, me.id, nil), rs, st, fakeTunnel{delay: 30 * time.Millisecond}, bw, okConnector{})
+
+	assert.Equal(t, 1, svc.SyncOnce(context.Background()))
+	r, ok := rs.Get(exit.id)
+	require.True(t, ok)
+	assert.Equal(t, 1, r.Probes, "the exit was checked")
+	assert.Equal(t, 3, r.DomainsOK)
+	assert.InDelta(t, 30, r.LatencyMs, 1)
+	assert.Zero(t, bw.calls, "no download burst in a background check")
+	assert.Zero(t, r.MeasuredKbps)
+
+	_, err := svc.Probe(context.Background(), exit.id)
+	require.NoError(t, err)
+	assert.Equal(t, 1, bw.calls, "a check asked for by the user measures the speed")
+	r, _ = rs.Get(exit.id)
+	assert.Equal(t, 30000, r.MeasuredKbps)
+}
+
+// What a tunnel really delivered is a lower bound on the exit's speed: it raises the rating, never
+// lowers it, and a slow stretch (the user asked for little) never ranks an exit below unmeasured.
+func TestThroughputOnlyRaisesTheMeasuredSpeed(t *testing.T) {
+	svc, rs := newService(t, fakeTunnel{}, nil, okConnector{})
+	var exit, unknown, slowProbed types.PeerID
+	exit[0], unknown[0], slowProbed[0] = 1, 2, 3
+	adv := &Advert{UploadKbps: 50000}
+	now := time.Now()
+	require.NoError(t, rs.RecordAdvert(exit, adv, now))
+	require.NoError(t, rs.RecordAdvert(slowProbed, adv, now))
+	unmeasured, _ := rs.Get(exit)
+
+	require.NoError(t, svc.NoteThroughput(exit, 10000))
+	r, _ := rs.Get(exit)
+	assert.Zero(t, r.MeasuredKbps, "10 of 50 Mbit/s says how much was asked, not what the exit can do")
+
+	require.NoError(t, svc.NoteThroughput(exit, 40000))
+	r, _ = rs.Get(exit)
+	assert.Equal(t, 40000, r.MeasuredKbps)
+	assert.Greater(t, Score(r, adv), Score(unmeasured, adv), "an exit seen delivering near its claim ranks above an unmeasured one")
+
+	require.NoError(t, svc.NoteThroughput(exit, 20000))
+	require.NoError(t, svc.NoteThroughput(exit, 0))
+	r, _ = rs.Get(exit)
+	assert.Equal(t, 40000, r.MeasuredKbps, "a slower stretch later does not lower it")
+
+	require.NoError(t, svc.NoteThroughput(unknown, 40000))
+	_, ok := rs.Get(unknown)
+	assert.False(t, ok, "an exit never seen in an advert gets no rating from traffic")
+
+	require.NoError(t, rs.RecordProbe(slowProbed, ProbeResult{At: now, OK: true, MeasuredKbps: 5000}))
+	require.NoError(t, svc.NoteThroughput(slowProbed, 8000))
+	r, _ = rs.Get(slowProbed)
+	assert.Equal(t, 8000, r.MeasuredKbps, "once measured, any faster real rate raises it")
+}
+
 func TestDomainsConfig(t *testing.T) {
 	svc, _ := newService(t, fakeTunnel{}, nil, okConnector{})
 	assert.Equal(t, DefaultProbeDomains, svc.Domains())

@@ -157,6 +157,7 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 	var lastRefresh, lastRevive, lastStuckLog time.Time
 	stuckWhy := ""
 	var linkOf, link string // the exit link last seen, for logging when it changes
+	var rate tunnelRate
 	for {
 		select {
 		case <-ctx.Done():
@@ -169,6 +170,8 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 		if srv == nil {
 			return
 		}
+		_, rx, _ := srv.Stats()
+		n.noteTunnelRate(&rate, relay, rx, since)
 		if n.relayConnected(relay) {
 			lost = 0
 		} else {

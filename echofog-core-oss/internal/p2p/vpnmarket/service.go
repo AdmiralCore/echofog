@@ -137,6 +137,13 @@ func (s *Service) SetDomains(domains []string) error {
 
 // Probe checks one exit: tunnel reachability to each domain and the real download speed it can deliver
 func (s *Service) Probe(ctx context.Context, peer types.PeerID) (ProbeResult, error) {
+	return s.probe(ctx, peer, true)
+}
+
+// probe is Probe; measure false leaves out the download burst. Background checks do: the burst is
+// some 12 MB over the plain mesh link to the exit, a fully encrypted looking spike a censor flags,
+// from every node for every exit it rates. Their speed comes from real use instead (NoteThroughput).
+func (s *Service) probe(ctx context.Context, peer types.PeerID, measure bool) (ProbeResult, error) {
 	res := ProbeResult{At: s.now()}
 
 	if err := s.connector.Ensure(ctx, peer); err != nil {
@@ -166,7 +173,7 @@ func (s *Service) Probe(ctx context.Context, peer types.PeerID) (ProbeResult, er
 	}
 	res.OK = res.DomainsOK > 0 || res.PaymentRequired
 
-	if res.OK && s.bandwidth != nil {
+	if measure && res.OK && s.bandwidth != nil {
 		bctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		if kbps, err := s.bandwidth.MeasureDownload(bctx, peer); err == nil {
 			res.MeasuredKbps = kbps
@@ -212,11 +219,16 @@ func (s *Service) SyncOnce(ctx context.Context) int {
 			continue
 		}
 		pctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-		_, _ = s.Probe(pctx, id)
+		_, _ = s.probe(pctx, id, false)
 		cancel()
 		probed++
 	}
 	return n
+}
+
+// NoteThroughput records the download rate a tunnel through peer actually delivered, in kbps.
+func (s *Service) NoteThroughput(peer types.PeerID, kbps int) error {
+	return s.Ratings.RecordThroughput(peer, kbps)
 }
 
 // LastSync returns when the directory was last refreshed

@@ -147,11 +147,35 @@ func (s *RatingStore) RecordProbe(peer types.PeerID, res ProbeResult) error {
 	return s.put(peer, r)
 }
 
+// RecordThroughput folds in a download rate a tunnel through peer really delivered. The exit can do
+// at least that, so it only ever raises the measured speed. How fast a tunnel runs also depends on
+// how much the user asked for, so a rate that would rank an exit below an unmeasured one (with
+// neutralHonesty) is not taken: only a burst of a speed check shows what an exit cannot do.
+func (s *RatingStore) RecordThroughput(peer types.PeerID, kbps int) error {
+	if kbps <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.get(peer)
+	if r == nil || kbps <= r.MeasuredKbps {
+		return nil
+	}
+	if r.MeasuredKbps == 0 && float64(kbps) < neutralHonesty*float64(r.ClaimedKbps) {
+		return nil
+	}
+	r.MeasuredKbps = kbps
+	return s.put(peer, r)
+}
+
+// neutralHonesty is the bandwidth honesty of an exit whose speed was never measured
+const neutralHonesty = 0.7
+
 // Score ranks an exit from 0 to 1: reliability, honesty of the claimed bandwidth, latency, reachable domains and price
 func Score(r Rating, a *Advert) float64 {
 	reliability := (float64(r.Successes) + 1) / (float64(r.Probes) + 2)
 
-	honesty := 0.7
+	honesty := neutralHonesty
 	if r.ClaimedKbps > 0 && r.MeasuredKbps > 0 {
 		honesty = math.Min(1, float64(r.MeasuredKbps)/float64(r.ClaimedKbps))
 	}
