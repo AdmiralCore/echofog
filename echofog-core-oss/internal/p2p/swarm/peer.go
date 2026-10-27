@@ -271,6 +271,23 @@ func (p *Peer) primaryIsCamouflaged() bool {
 	return !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)
 }
 
+// hasCamouflagedLink reports whether any live connection to this peer — the primary or a pool
+// link — is camouflaged (QUIC-REALITY or TCP/WS mimicry), i.e. can carry a camouflage exit's tunnel.
+func (p *Peer) hasCamouflagedLink() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil &&
+		!quicNoise(p.transport.GetConn().Protocol(), p.primaryReality) {
+		return true
+	}
+	for _, l := range p.extraLinks {
+		if l.pw.GetConn().Context().Err() == nil && !quicNoise(l.pw.GetConn().Protocol(), l.reality) {
+			return true
+		}
+	}
+	return false
+}
+
 // exitLink is one parallel connection of an exit peer's session pool. reality records whether it
 // is a QUIC-REALITY connection, so a camouflage exit's tunnel streams are kept off any noise link.
 type exitLink struct {

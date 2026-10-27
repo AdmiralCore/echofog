@@ -84,14 +84,18 @@ func (c *fakeMuxConn) SendDatagram([]byte) error { return nil }
 func (c *fakeMuxConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return nil, c.block(ctx)
 }
-func (c *fakeMuxConn) LocalAddr() net.Addr  { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10000 + c.id} }
-func (c *fakeMuxConn) RemoteAddr() net.Addr { return &net.TCPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 443} }
+func (c *fakeMuxConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10000 + c.id}
+}
+func (c *fakeMuxConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 443}
+}
 func (c *fakeMuxConn) CloseWithError(network.QuicErrorCode, string) error {
 	c.cancel()
 	return nil
 }
-func (c *fakeMuxConn) Context() context.Context      { return c.ctx }
-func (c *fakeMuxConn) Protocol() string              { return c.proto }
+func (c *fakeMuxConn) Context() context.Context        { return c.ctx }
+func (c *fakeMuxConn) Protocol() string                { return c.proto }
 func (c *fakeMuxConn) ChannelBinding() ([]byte, error) { return make([]byte, 32), nil }
 
 var _ network.MuxConn = (*fakeMuxConn)(nil)
@@ -398,4 +402,123 @@ func extraConns(p *Peer) []*network.PeerWrapper {
 		res = append(res, l.pw)
 	}
 	return res
+}
+
+// lateRegisterTransport answers a dial at once and registers the connection it made only later,
+// as the real transport does (the dial returns, registrationLoop adds the peer afterwards). onDial
+// gets the 1-based dial number and does that registration.
+type lateRegisterTransport struct {
+	answerTransport
+	dials  atomic.Int32
+	onDial func(n int)
+}
+
+func (l *lateRegisterTransport) DialEarly(context.Context, string) error {
+	n := int(l.dials.Add(1))
+	go l.onDial(n)
+	return nil
+}
+
+// replacePrimary swaps the peer's primary connection, as addPeer does when a newer connection
+// replaces the old one.
+func replacePrimary(p *Peer, conn *fakeMuxConn, reality bool) {
+	p.mu.Lock()
+	p.transport = network.NewPeerWrapper(p.ctx, conn, p.ID())
+	p.primaryReality = reality
+	p.mu.Unlock()
+}
+
+// The launchpad failure: the only link to the camouflage exit is a noise one, and the REALITY dial
+// registers its connection only after the dial returned. The tunnel stream must wait for that
+// REALITY link instead of failing at once — a failing exit makes the VPN fail over to another
+// exit, whose tunnel then runs over noise.
+func TestExitPool_StreamWaitsForLateRealityLinkToCamouflageExit(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, noiseConn := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.SetPeerSNI(exit, "www.example.com")
+	s.MarkExitPeer(exit, 3)
+
+	realityConn := newFakeMuxConn(ctx, 1)
+	tr := &lateRegisterTransport{}
+	tr.onDial = func(int) {
+		time.Sleep(100 * time.Millisecond)
+		replacePrimary(p, realityConn, true)
+	}
+	s.netTransport = tr
+
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	st, err := s.OpenExitStream(sctx, exit)
+	require.NoError(t, err, "the stream must wait for the REALITY link, not fail the exit")
+	st.Close()
+	require.Equal(t, int32(1), realityConn.opened.Load(), "the stream rode the REALITY link")
+	require.Equal(t, int32(0), noiseConn.opened.Load(), "never the noise link")
+	require.Equal(t, int32(1), tr.dials.Load())
+}
+
+// A REALITY dial that joins a noise dial already in flight to the same address gets that noise
+// connection back. The swarm must notice the exit still has no camouflaged link and dial again.
+func TestExitPool_RedialsWhenUpgradeDialYieldsNoise(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, _ := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.SetPeerSNI(exit, "www.example.com")
+	s.MarkExitPeer(exit, 3)
+
+	noiseAgain := newFakeMuxConn(ctx, 1)
+	realityConn := newFakeMuxConn(ctx, 2)
+	tr := &lateRegisterTransport{}
+	tr.onDial = func(n int) {
+		if n == 1 {
+			replacePrimary(p, noiseAgain, false) // the joined mesh dial: noise again
+			return
+		}
+		replacePrimary(p, realityConn, true)
+	}
+	s.netTransport = tr
+
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	st, err := s.OpenExitStream(sctx, exit)
+	require.NoError(t, err)
+	st.Close()
+	require.Equal(t, int32(2), tr.dials.Load(), "dialed again after the first dial brought noise")
+	require.Equal(t, int32(1), realityConn.opened.Load())
+	require.Equal(t, int32(0), noiseAgain.opened.Load())
+}
+
+// When no camouflaged link comes up, the stream fails once its context ends — it never falls back
+// to the noise link.
+func TestExitPool_NoCamouflagedLinkFailsWithoutUsingNoise(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, noiseConn := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.SetPeerSNI(exit, "www.example.com")
+	s.MarkExitPeer(exit, 3)
+	tr := &lateRegisterTransport{onDial: func(int) {}}
+	s.netTransport = tr
+
+	sctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	_, err := s.OpenExitStream(sctx, exit)
+	require.Error(t, err)
+	require.Equal(t, int32(0), noiseConn.opened.Load())
+	require.GreaterOrEqual(t, tr.dials.Load(), int32(1))
+}
+
+// An ordinary (non-camouflage) exit is never redialed: its noise link carries the tunnel as before.
+func TestExitPool_OrdinaryExitOpensOnNoiseWithoutDialing(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, noiseConn := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.MarkExitPeer(exit, 3)
+	tr := &lateRegisterTransport{onDial: func(int) {}}
+	s.netTransport = tr
+
+	st, err := s.OpenExitStream(ctx, exit)
+	require.NoError(t, err)
+	st.Close()
+	require.Equal(t, int32(1), noiseConn.opened.Load())
+	require.Equal(t, int32(0), tr.dials.Load())
 }
