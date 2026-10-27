@@ -100,6 +100,9 @@ export function initCallEvents() {
         EventsOn('message:state', (ev) => {
             const inv = get(callState).invite;
             if (!ev || !inv || inv.id !== ev.id) return;
+            // a state never goes back (a retry can be reported after the confirmation)
+            const reached = { keys: 1, offline: 1, relayed: 2, sent: 3, delivered: 4, expired: 5 };
+            if ((reached[ev.state] || 0) < (reached[inv.state] || 0)) return;
             callState.update((s) => ({ ...s, invite: { ...inv, state: ev.state } }));
         });
         EventsOn('call:incoming', async (ev) => {

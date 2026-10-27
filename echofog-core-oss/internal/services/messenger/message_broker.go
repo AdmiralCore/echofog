@@ -52,7 +52,10 @@ type MessageBroker struct {
 	lastReset       map[types.PeerID]time.Time
 	lastKnock       map[types.PeerID]time.Time
 	stateCallbacks  []func(MessageState) // told when a message of ours went out, was confirmed or expired
-	recent          *recentMessages      // which message a ratchet header carried, to confirm repeats
+	stateMu         sync.Mutex
+	stateQ          []MessageState  // states not yet told to the callbacks, in the order they happened
+	stateRunning    bool            // a goroutine is telling them
+	recent          *recentMessages // which message a ratchet header carried, to confirm repeats
 
 	myIDHexed string
 }
@@ -802,13 +805,37 @@ func (s *MessageBroker) OnMessageState(cb func(MessageState)) {
 	s.mu.Unlock()
 }
 
+// noteState tells the callbacks, off the caller's goroutine but in order: a message confirmed a
+// moment after it went out must not look as if it went out after it was confirmed.
 func (s *MessageBroker) noteState(target types.PeerID, id, state string) {
-	s.mu.RLock()
-	cbs := make([]func(MessageState), len(s.stateCallbacks))
-	copy(cbs, s.stateCallbacks)
-	s.mu.RUnlock()
-	for _, cb := range cbs {
-		go cb(MessageState{Target: target, ID: id, State: state})
+	s.stateMu.Lock()
+	s.stateQ = append(s.stateQ, MessageState{Target: target, ID: id, State: state})
+	start := !s.stateRunning
+	s.stateRunning = true
+	s.stateMu.Unlock()
+	if start {
+		go s.runStateCallbacks()
+	}
+}
+
+// runStateCallbacks tells the callbacks of the queued states and ends when none are left.
+func (s *MessageBroker) runStateCallbacks() {
+	for {
+		s.stateMu.Lock()
+		if len(s.stateQ) == 0 {
+			s.stateRunning = false
+			s.stateMu.Unlock()
+			return
+		}
+		ev := s.stateQ[0]
+		s.stateQ = s.stateQ[1:]
+		s.stateMu.Unlock()
+		s.mu.RLock()
+		cbs := append(([]func(MessageState))(nil), s.stateCallbacks...)
+		s.mu.RUnlock()
+		for _, cb := range cbs {
+			cb(ev)
+		}
 	}
 }
 

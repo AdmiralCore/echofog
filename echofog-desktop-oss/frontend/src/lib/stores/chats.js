@@ -81,10 +81,18 @@ function fileOf(m) {
   return { fid: meta.custom?.fid || '', name: meta.file_name || m.text || '', size: Number(meta.file_size) || 0, mime: meta.mime_type || '' };
 }
 
+// the furthest state each message of mine was reported in, for the messages the report beat to
+// the screen (a fast confirmation comes before ChatSend returns)
+const reported = new Map();
+function report(id, state) {
+  reported.set(id, furthest(reported.get(id) || '', state));
+  if (reported.size > 500) reported.delete(reported.keys().next().value);
+}
+
 /** A message as the screen shows it, from the core's ChatMessage. */
 export function norm(m) {
   const call = (m.text || '').startsWith(CALL_INVITE);
-  const state = m.mine ? m.state || '' : '';
+  const state = m.mine ? furthest(m.state || '', reported.get(m.id) || '') : '';
   return {
     id: m.id,
     lamport: m.lamport || 0,
@@ -124,13 +132,19 @@ function beforeInThread(a, b) {
   return a.lamport - b.lamport || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
+// How far a message of mine got. A state never goes back: the events can cross (a retry that went
+// out as the confirmation came in, or ChatSend's answer arriving after the confirmation).
+const REACHED = { keys: 1, offline: 1, relayed: 2, sent: 3, delivered: 4, expired: 5 };
+const furthest = (a, b) => ((REACHED[b] || 0) >= (REACHED[a] || 0) ? b : a);
+const withState = (m, state) => ({ ...m, state, pending: !!state && state !== 'delivered' && state !== 'expired', failed: state === 'expired' });
+
 // puts m in place in list (by id), or in order; one older than all of list belongs to a page not
 // loaded yet when there is one, and is left out
 function upsert(list, m, cmp, olderUnloaded) {
   const i = list.findIndex((x) => x.id === m.id);
   if (i >= 0) {
     const next = list.slice();
-    next[i] = m;
+    next[i] = list[i].state && m.state ? withState(m, furthest(list[i].state, m.state)) : m;
     return next;
   }
   if (olderUnloaded && list.length && cmp(m, list[0]) < 0) return list;
@@ -247,7 +261,8 @@ function listen() {
   // a message of ours moved on: handed to a relay, taken by the recipient's device, confirmed, or given up
   on('message:state', (ev) => {
     if (!ev || !ev.id) return;
-    const set = (m) => (m.id === ev.id ? { ...m, state: ev.state, pending: ev.state !== 'delivered' && ev.state !== 'expired', failed: ev.state === 'expired' } : m);
+    report(ev.id, ev.state);
+    const set = (m) => (m.id === ev.id ? withState(m, furthest(m.state, ev.state)) : m);
     messages.update((list) => list.map(set));
     thread.update((th) => (th ? { ...th, messages: th.messages.map(set) } : th));
   });
