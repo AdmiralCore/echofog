@@ -295,14 +295,8 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 	return innerMsg.Id, state, nil
 }
 
-// deliver hands msg to the peer directly or through a relay and reports whether somebody took it.
-func (s *MessageBroker) deliver(targetID types.PeerID, msg *internal_pb.MessageData) bool {
-	ok, _ := s.deliverVia(targetID, msg)
-	return ok
-}
-
-// deliverVia is deliver that also says whether the peer itself took the message (direct) or a
-// relay did.
+// deliverVia hands msg to the peer directly or through a relay and reports whether somebody took it
+// and whether that was the peer itself (direct) or a relay.
 func (s *MessageBroker) deliverVia(targetID types.PeerID, msg *internal_pb.MessageData) (ok, direct bool) {
 	if err := s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg); err == nil {
 		s.log.Info("MessageBroker: message sent to the peer directly", "peer", targetID.String()[:8])

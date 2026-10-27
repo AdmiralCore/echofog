@@ -264,10 +264,3 @@ func validEmoji(s string) bool {
 	}
 	return true
 }
-
-// refID converts a reference field to an id (zero when empty).
-func refID(b []byte) EventID {
-	var id EventID
-	copy(id[:], b)
-	return id
-}

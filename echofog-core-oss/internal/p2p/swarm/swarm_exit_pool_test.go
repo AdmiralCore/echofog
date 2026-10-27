@@ -449,27 +449,6 @@ func TestExitPool_RealityConnReplacesNoisePrimaryForCamouflageExit(t *testing.T)
 	require.Equal(t, 1, p.LinkCount(), "no extra link added; the replacement happens in addPeer")
 }
 
-// linkLoads returns the active-stream count of every live link (primary first, then extras).
-func linkLoads(p *Peer) []int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	loads := []int{p.transport.ActiveStreams()}
-	for _, l := range p.extraLinks {
-		loads = append(loads, l.pw.ActiveStreams())
-	}
-	return loads
-}
-
-func extraConns(p *Peer) []*network.PeerWrapper {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	res := make([]*network.PeerWrapper, 0, len(p.extraLinks))
-	for _, l := range p.extraLinks {
-		res = append(res, l.pw)
-	}
-	return res
-}
-
 // lateRegisterTransport answers a dial at once and registers the connection it made only later,
 // as the real transport does (the dial returns, registrationLoop adds the peer afterwards). onDial
 // gets the 1-based dial number and does that registration.
