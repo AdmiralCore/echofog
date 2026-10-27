@@ -125,8 +125,9 @@ const (
 	antiEntropyFanout = 3
 )
 
-// antiEntropy compares, every so often, each group's log with a few connected members: that is how
-// the members of a big group get what was pushed to others, and anybody what it missed.
+// antiEntropy compares, every so often, each group's log with a few connected members and each
+// direct chat with the other side when it is connected: that is how the members of a big group get
+// what was pushed to others, and anybody what it missed.
 func (f *convsFacade) antiEntropy() {
 	if f.n.node == nil {
 		return
@@ -140,7 +141,19 @@ func (f *convsFacade) antiEntropy() {
 		case <-time.After(wait):
 		}
 		f.syncGroups()
+		f.syncDirect()
 		wait = antiEntropyEvery
+	}
+}
+
+func (f *convsFacade) syncDirect() {
+	if f.n.node.Swarm == nil {
+		return
+	}
+	for _, p := range f.n.node.Swarm.GetAllPeers() {
+		if f.isCapable(p.ID()) {
+			f.sendSync(p.ID(), f.log.Hello([]convlog.Conv{convlog.DM(f.self, p.ID())}))
+		}
 	}
 }
 

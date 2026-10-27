@@ -97,8 +97,15 @@ type convsFacade struct {
 	migMu sync.Mutex // one migration at a time
 }
 
-// helloEvery is the least time between two sync openings with one peer.
-const helloEvery = 30 * time.Second
+// helloEvery is the least time between two sync openings with one peer while it stays connected;
+// helloAgain is when a new connection's opening is repeated. The first frames on a fresh connection
+// can be lost (the two sides dialled each other and one connection replaced the other), and a sync
+// message is sent once, untracked: without the repeat, what the peer missed (a reaction, a pin) would
+// wait for the next connection.
+const (
+	helloEvery = 30 * time.Second
+	helloAgain = 8 * time.Second
+)
 
 func (n *NodeApi) convsFacade() (*convsFacade, error) {
 	n.convsH.mu.Lock()
@@ -306,10 +313,19 @@ func (f *convsFacade) OnPeerConnected(peer types.PeerID, _ types.PeerPublicKey, 
 	f.lastHello[peer] = time.Now()
 	f.mu.Unlock()
 	go f.sendSync(peer, f.log.Hello(f.sharedConvs(peer)))
+	time.AfterFunc(helloAgain, func() {
+		if f.n.node.Ctx.Err() == nil && f.n.node.Swarm.GetPeer(peer) != nil {
+			f.sendSync(peer, f.log.Hello(f.sharedConvs(peer)))
+		}
+	})
 }
 
-// OnPeerDisconnected is part of the swarm observer.
-func (f *convsFacade) OnPeerDisconnected(types.PeerID) {}
+// OnPeerDisconnected lets the next connection open a sync at once.
+func (f *convsFacade) OnPeerDisconnected(peer types.PeerID) {
+	f.mu.Lock()
+	delete(f.lastHello, peer)
+	f.mu.Unlock()
+}
 
 // --- sending ---------------------------------------------------------------------------------
 
