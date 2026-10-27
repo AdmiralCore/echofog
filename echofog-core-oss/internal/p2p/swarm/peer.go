@@ -53,7 +53,7 @@ type Peer struct {
 	// tunnel streams spread across transport and these, so a single stalled or censor-killed
 	// connection does not stall the VPN (openTunnelStream picks the least-loaded live link). A
 	// mesh peer never has any; its control plane keeps using transport alone. Guarded by mu.
-	extraLinks []*network.PeerWrapper
+	extraLinks []exitLink
 
 	dispatcher *dispatcher.Dispatcher
 }
@@ -91,7 +91,7 @@ func (p *Peer) Close() {
 		_ = tw.Close()
 	}
 	for _, l := range extra {
-		_ = l.Close()
+		_ = l.pw.Close()
 	}
 }
 
@@ -252,13 +252,6 @@ func (p *Peer) ActiveStreams() int {
 	return 0
 }
 
-// setPrimaryReality records whether the primary connection is QUIC-REALITY.
-func (p *Peer) setPrimaryReality(reality bool) {
-	p.mu.Lock()
-	p.primaryReality = reality
-	p.mu.Unlock()
-}
-
 // primaryIsReality reports whether the primary connection is QUIC-REALITY.
 func (p *Peer) primaryIsReality() bool {
 	p.mu.RLock()
@@ -266,10 +259,17 @@ func (p *Peer) primaryIsReality() bool {
 	return p.primaryReality
 }
 
+// exitLink is one parallel connection of an exit peer's session pool. reality records whether it
+// is a QUIC-REALITY connection, so a camouflage exit's tunnel streams are kept off any noise link.
+type exitLink struct {
+	pw      *network.PeerWrapper
+	reality bool
+}
+
 // addExitLink records an additional parallel connection to this peer (an exit's session pool).
-func (p *Peer) addExitLink(pw *network.PeerWrapper) {
+func (p *Peer) addExitLink(pw *network.PeerWrapper, reality bool) {
 	p.mu.Lock()
-	p.extraLinks = append(p.extraLinks, pw)
+	p.extraLinks = append(p.extraLinks, exitLink{pw: pw, reality: reality})
 	p.mu.Unlock()
 }
 
@@ -278,7 +278,7 @@ func (p *Peer) addExitLink(pw *network.PeerWrapper) {
 func (p *Peer) removeExitLink(pw *network.PeerWrapper) {
 	p.mu.Lock()
 	for i, l := range p.extraLinks {
-		if l == pw {
+		if l.pw == pw {
 			p.extraLinks = append(p.extraLinks[:i], p.extraLinks[i+1:]...)
 			break
 		}
@@ -296,7 +296,7 @@ func (p *Peer) LinkCount() int {
 		n++
 	}
 	for _, l := range p.extraLinks {
-		if l.GetConn().Context().Err() == nil {
+		if l.pw.GetConn().Context().Err() == nil {
 			n++
 		}
 	}
@@ -310,37 +310,45 @@ func (p *Peer) oldestIdleExtraLink() *network.PeerWrapper {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, l := range p.extraLinks {
-		if l.ActiveStreams() == 0 {
-			return l
+		if l.pw.ActiveStreams() == 0 {
+			return l.pw
 		}
 	}
 	return nil
 }
 
-// openTunnelStream opens one bidirectional stream to this peer on the least-loaded live link
-// (the primary transport or an extra link), spreading tunnel traffic across the pool so no single
-// connection carries it all. It falls back to the primary transport when there are no extra links,
-// which is the only case a mesh peer ever sees.
-func (p *Peer) openTunnelStream(ctx context.Context) (*network.Stream, error) {
+// openTunnelStream opens one bidirectional stream to this peer on the least-loaded live link,
+// spreading tunnel traffic across the pool so no single connection carries it all. When
+// requireReality is set (a camouflage exit), only QUIC-REALITY links are considered, so a tunnel
+// stream never rides a noise connection a censor would flag; it returns an error if the peer has
+// no live REALITY link. For a mesh peer (no extra links, requireReality false) it is the primary
+// transport.
+func (p *Peer) openTunnelStream(ctx context.Context, requireReality bool) (*network.Stream, error) {
 	p.mu.RLock()
 	var best *network.PeerWrapper
 	bestLoad := -1
-	if p.transport != nil && p.transport.GetConn().Context().Err() == nil {
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil && (!requireReality || p.primaryReality) {
 		best = p.transport
 		bestLoad = p.transport.ActiveStreams()
 	}
 	for _, l := range p.extraLinks {
-		if l.GetConn().Context().Err() != nil {
+		if l.pw.GetConn().Context().Err() != nil {
 			continue
 		}
-		if load := l.ActiveStreams(); best == nil || load < bestLoad {
-			best = l
+		if requireReality && !l.reality {
+			continue
+		}
+		if load := l.pw.ActiveStreams(); best == nil || load < bestLoad {
+			best = l.pw
 			bestLoad = load
 		}
 	}
 	p.mu.RUnlock()
 
 	if best == nil {
+		if requireReality {
+			return nil, errors.New("camouflage exit has no live REALITY link to open a stream on")
+		}
 		return nil, errors.New("peer has no live link to open a stream on")
 	}
 	return best.OpenBidirectionalStream(ctx)

@@ -117,7 +117,7 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 
 	pw := network.NewPeerWrapper(p.ctx, event.Conn, event.PeerID)
 	s.attachStreamHandlers(pw, p, event.PeerID)
-	p.addExitLink(pw)
+	p.addExitLink(pw, event.Reality)
 	go pw.StartLoops()
 
 	// Prune this link from the peer when its connection dies, so a stalled or censor-killed
@@ -146,12 +146,14 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 }
 
 // OpenExitStream opens one bidirectional stream to a marked exit, spreading it across the parallel
-// connections of its session pool (the least-loaded live link). For a peer with no extra links it
-// is the primary connection, so it behaves exactly like opening a single stream.
+// connections of its session pool (the least-loaded live link). For a camouflage exit only
+// QUIC-REALITY links are used, so a tunnel stream never rides a noise connection a censor would
+// flag. For a peer with no extra links it is the primary connection, so it behaves exactly like
+// opening a single stream.
 func (s *Swarm) OpenExitStream(ctx context.Context, exit types.PeerID) (*network.Stream, error) {
 	p := s.GetPeer(exit)
 	if p == nil {
 		return nil, errors.New("exit peer is not connected")
 	}
-	return p.openTunnelStream(ctx)
+	return p.openTunnelStream(ctx, s.IsCamouflagePeer(exit))
 }

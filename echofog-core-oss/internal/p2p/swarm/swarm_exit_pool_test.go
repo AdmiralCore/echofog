@@ -286,6 +286,44 @@ func TestExitPool_CamouflageExitKeepsOnlyRealityLinks(t *testing.T) {
 	require.True(t, p.primaryIsReality(), "the primary to a camouflage exit must be REALITY")
 }
 
+func TestExitPool_TunnelStreamsNeverRideNoiseLinkToCamouflageExit(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, primaryConn := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.SetPeerSNI(exit, "www.example.com")
+	p.mu.Lock()
+	p.primaryReality = true // the primary is REALITY (EnsureExitReality ran before the pool)
+	p.mu.Unlock()
+	s.MarkExitPeer(exit, 3)
+
+	// Simulate a noise link having slipped into the pool (e.g. dialed during an early window before
+	// the SNI was known). A tunnel stream must still never be opened on it.
+	noiseConn := newFakeMuxConn(ctx, 7)
+	noisePW := network.NewPeerWrapper(p.ctx, noiseConn, exit)
+	p.addExitLink(noisePW, false)
+
+	// Add a second REALITY link so spreading has a real choice of REALITY targets.
+	realityConn := newFakeMuxConn(ctx, 8)
+	realityPW := network.NewPeerWrapper(p.ctx, realityConn, exit)
+	p.addExitLink(realityPW, true)
+
+	streams := make([]*network.Stream, 0, 12)
+	for i := 0; i < 12; i++ {
+		st, err := s.OpenExitStream(ctx, exit)
+		require.NoError(t, err)
+		streams = append(streams, st)
+	}
+
+	require.Equal(t, int32(0), noiseConn.opened.Load(),
+		"no tunnel stream may be opened on a noise link to a camouflage exit")
+	require.Equal(t, int32(12), primaryConn.opened.Load()+realityConn.opened.Load(),
+		"every stream rode a REALITY link (primary or REALITY extra)")
+
+	for _, st := range streams {
+		st.Close()
+	}
+}
+
 func TestExitPool_RealityConnReplacesNoisePrimaryForCamouflageExit(t *testing.T) {
 	s, ctx := newExitPoolSwarm(t)
 	p, _ := addPrimaryPeer(ctx, s, 0) // primaryReality defaults to false (a noise bootstrap link)
@@ -308,7 +346,7 @@ func linkLoads(p *Peer) []int {
 	defer p.mu.RUnlock()
 	loads := []int{p.transport.ActiveStreams()}
 	for _, l := range p.extraLinks {
-		loads = append(loads, l.ActiveStreams())
+		loads = append(loads, l.pw.ActiveStreams())
 	}
 	return loads
 }
@@ -316,5 +354,9 @@ func linkLoads(p *Peer) []int {
 func extraConns(p *Peer) []*network.PeerWrapper {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return append([]*network.PeerWrapper(nil), p.extraLinks...)
+	res := make([]*network.PeerWrapper, 0, len(p.extraLinks))
+	for _, l := range p.extraLinks {
+		res = append(res, l.pw)
+	}
+	return res
 }
