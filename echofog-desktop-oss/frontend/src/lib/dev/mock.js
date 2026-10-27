@@ -985,7 +985,32 @@ function logFile(k, author, metadata, name) {
 }
 
 // Bob writes a little after the preview opens: a new message in a chat that is not open
-setTimeout(() => logArrived('d:' + BOB, lmsg('d:' + BOB, { author: BOB, text: 'Are you around? The wallet draft has a question for you' })), 12000);
+const BRIDGE = new URLSearchParams(location.search).get('bridge');
+if (!BRIDGE) setTimeout(() => logArrived('d:' + BOB, lmsg('d:' + BOB, { author: BOB, text: 'Are you around? The wallet draft has a question for you' })), 12000);
+
+// ?mock&bridge=<port>: chats from a real node instead (core-oss pkg/chatlogtest TestUIBridge serves
+// two, Alice on 7601 and Bob on 7602); everything else stays mocked.
+if (BRIDGE) {
+  const base = 'http://127.0.0.1:' + BRIDGE;
+  const BRIDGED = ['GetMyID', 'GetMyPubKey', 'GetContacts', 'GetBlockedPeers', 'GetMessageRequests', 'AcceptMessageRequest',
+    'DismissMessageRequest', 'BlockPeer', 'UnblockPeer', 'ListGroups', 'ListGroupMembers', 'GetGroupInvite', 'SetGroupRole',
+    'ChatList', 'ChatHistory', 'ChatThread', 'ChatPins', 'ChatMessage', 'ChatSend', 'ChatEdit', 'ChatDelete', 'ChatReact', 'ChatPin', 'ChatMarkRead'];
+  for (const name of BRIDGED) {
+    impl[name] = async (...args) => {
+      const r = await fetch(`${base}/call/${name}`, { method: 'POST', body: JSON.stringify(args) });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j.result;
+    };
+  }
+  impl.ActiveGroupCall = () => null;
+  impl.ListSavedMessages = () => [];
+  new EventSource(base + '/events').onmessage = (e) => {
+    const { name, data } = JSON.parse(e.data);
+    runtimeImpl.EventsEmit(name, data);
+  };
+  console.info('[wails-mock] chats bridged to', base);
+}
 
 // handy in the console: __emit('group:event', {kind: 'call', groupId: 'grp_launch', title: 'EchoFog Launch', from: '...', callId: 'x', coordinator: '...'})
 window.__emit = (name, data) => runtimeImpl.EventsEmit(name, data);
