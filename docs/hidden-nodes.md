@@ -154,7 +154,8 @@ step 3: Docker is installed, the port is open (UDP and TCP 443), and you have `d
 3. Start (or restart) the node:
 
    ```bash
-   docker compose -f deploy/docker-compose.yml up -d --build
+   docker compose -f deploy/docker-compose.yml pull
+   docker compose -f deploy/docker-compose.yml up -d
    ```
 
 4. Get the link:

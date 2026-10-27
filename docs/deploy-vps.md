@@ -70,7 +70,8 @@ set `ECHOFOG_ROLE=client` only if you want to use the node as your own messenger
 ## 4. Start
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
 docker compose -f deploy/docker-compose.yml logs -f
 ```
 
@@ -185,11 +186,31 @@ provider's DDoS protection): [Protecting a node](node-security.md).
 ## Update
 
 ```bash
-cd ~/EchoFog && git pull          # the folder you cloned in step 3
-cd echofog-core-oss && docker compose -f deploy/docker-compose.yml up -d --build
+cd ~/EchoFog && git pull          # the folder you cloned in step 3; brings a changed compose file
+cd echofog-core-oss
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 The identity, database and wallet live in the `echofog-data` volume and survive updates.
+
+### The ready-made image
+
+The compose file runs `ghcr.io/admiralcore/echofog-node:latest`, which GitHub builds from every
+push to `main` (for `amd64` and `arm64`), so the server downloads about 30 MB and compiles nothing.
+A build is ready about ten minutes after the push; until then `pull` keeps the previous one. Every
+build is also tagged with its commit, e.g. `sha-4d6bfaa`: put
+`ECHOFOG_IMAGE=ghcr.io/admiralcore/echofog-node:sha-4d6bfaa` in `deploy/.env` to stay on one build or
+to go back to it.
+
+To build from your checkout instead (needs about 4 GB of free disk), add the build file:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml up -d --build
+```
+
+If a build stops with `no space left on device`, old build layers filled the disk:
+`docker builder prune -af` and `docker image prune -af` free them without touching the node's data.
 
 ## Clearing stale data
 

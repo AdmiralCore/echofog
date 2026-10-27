@@ -157,7 +157,8 @@ Docker установлен, порт открыт (UDP и TCP 443), файл `d
 3. Запустите (или перезапустите) ноду:
 
    ```bash
-   docker compose -f deploy/docker-compose.yml up -d --build
+   docker compose -f deploy/docker-compose.yml pull
+   docker compose -f deploy/docker-compose.yml up -d
    ```
 
 4. Возьмите ссылку:

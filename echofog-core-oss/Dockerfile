@@ -1,6 +1,9 @@
 # Multi-stage build of a headless EchoFog node: a static binary in a small non-root image.
 
-FROM golang:1.27.3-alpine AS builder
+# The builder runs on the build machine's own platform and cross-compiles for the target one, so a
+# multi-platform build (amd64 + arm64) does not compile Go under emulation.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS builder
+ARG TARGETOS TARGETARCH
 RUN apk add --no-cache git ca-certificates tzdata
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -10,7 +13,7 @@ COPY third_party ./third_party
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /echofog-node ./cmd/echofog-node
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /echofog-node ./cmd/echofog-node
 
 FROM alpine:3.21
 RUN apk --no-cache add ca-certificates tzdata \

@@ -2,15 +2,20 @@
 # server (ECHOFOG_ROLE=server): no chat, calls or file transfer of its own. With
 # ECHOFOG_ACCESS=hidden or isolated in .env it serves only the people with its invitation link.
 #
+# It runs the ready-made image that GitHub builds from main (ghcr.io/admiralcore/echofog-node),
+# so the server compiles nothing. To build from this checkout instead, add
+# -f deploy/docker-compose.build.yml to every command and --build to up.
+#
 #   cp deploy/.env.example deploy/.env      # and edit it
-#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml pull           # also how you update
+#   docker compose -f deploy/docker-compose.yml up -d
 #   docker compose -f deploy/docker-compose.yml logs -f        # stats line every minute
 #   docker compose -f deploy/docker-compose.yml exec node echofog-node status
 #   docker compose -f deploy/docker-compose.yml exec node echofog-node invite   # the invitation link
 services:
   node:
-    build: ..
-    image: echofog-node:latest
+    # ECHOFOG_IMAGE in .env pins another tag, e.g. ghcr.io/admiralcore/echofog-node:sha-4d6bfaa
+    image: ${ECHOFOG_IMAGE:-ghcr.io/admiralcore/echofog-node:latest}
     restart: unless-stopped
     env_file: .env
     environment:

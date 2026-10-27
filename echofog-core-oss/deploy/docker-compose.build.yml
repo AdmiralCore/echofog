@@ -1,0 +1,8 @@
+# Builds the node image from this checkout instead of pulling the published one. Needs about 4 GB
+# of free disk for the Go build. Use it on top of the main file:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml up -d --build
+services:
+  node:
+    build: ..
+    image: echofog-node:local

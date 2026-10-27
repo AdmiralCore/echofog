@@ -70,7 +70,8 @@ ECHOFOG_BOOTSTRAP=
 ## 4. Запустите
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
 docker compose -f deploy/docker-compose.yml logs -f
 ```
 
@@ -188,11 +189,31 @@ ECHOFOG_CAMOUFLAGE_ADDR=<IP сайта>:443
 ## Обновление
 
 ```bash
-cd ~/EchoFog && git pull          # папка, куда вы клонировали на шаге 3
-cd echofog-core-oss && docker compose -f deploy/docker-compose.yml up -d --build
+cd ~/EchoFog && git pull          # папка, куда вы клонировали на шаге 3; подтянет изменённый compose-файл
+cd echofog-core-oss
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 Личность, база и кошелёк лежат в томе `echofog-data` и переживают обновления.
+
+### Готовый образ
+
+Compose-файл запускает `ghcr.io/admiralcore/echofog-node:latest`, который GitHub собирает при
+каждом пуше в `main` (для `amd64` и `arm64`), так что сервер скачивает около 30 МБ и ничего не
+компилирует. Сборка готова примерно через десять минут после пуша; до этого `pull` оставляет
+предыдущую. У каждой сборки есть и метка с коммитом, например `sha-4d6bfaa`: впишите
+`ECHOFOG_IMAGE=ghcr.io/admiralcore/echofog-node:sha-4d6bfaa` в `deploy/.env`, чтобы остаться на одной
+сборке или вернуться к ней.
+
+Чтобы собрать из своей копии кода (нужно около 4 ГБ свободного места), добавьте файл сборки:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml up -d --build
+```
+
+Если сборка падает с `no space left on device`, диск забили старые слои сборки:
+`docker builder prune -af` и `docker image prune -af` освобождают их, не трогая данные ноды.
 
 ## Очистка устаревших данных
 

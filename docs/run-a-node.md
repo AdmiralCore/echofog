@@ -229,12 +229,15 @@ for health checks. The node also logs a stats line every minute (`--stats-every`
 
 ## Docker
 
-The repository has a `Dockerfile` and a compose file in `echofog-core-oss/deploy/`:
+The repository has a `Dockerfile` and a compose file in `echofog-core-oss/deploy/`. The compose file
+runs the ready-made image `ghcr.io/admiralcore/echofog-node` that GitHub builds from `main`; to build
+from source, see [VPS with Docker](deploy-vps.md#the-ready-made-image).
 
 ```bash
 cd echofog-core-oss
 cp deploy/.env.example deploy/.env       # then edit it
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
 docker compose -f deploy/docker-compose.yml logs -f          # the recovery phrase is printed here on first start
 docker compose -f deploy/docker-compose.yml exec node echofog-node status
 ```

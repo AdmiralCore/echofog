@@ -233,12 +233,15 @@ health-check. Ещё нода раз в минуту пишет в лог стр
 
 ## Docker
 
-В репозитории есть `Dockerfile` и compose-файл в `echofog-core-oss/deploy/`:
+В репозитории есть `Dockerfile` и compose-файл в `echofog-core-oss/deploy/`. Compose-файл запускает
+готовый образ `ghcr.io/admiralcore/echofog-node`, который GitHub собирает из `main`; как собрать из
+исходников — в [VPS с Docker](deploy-vps.ru.md#готовый-образ).
 
 ```bash
 cd echofog-core-oss
 cp deploy/.env.example deploy/.env       # и поправьте его
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
 docker compose -f deploy/docker-compose.yml logs -f          # тут при первом старте будет фраза восстановления
 docker compose -f deploy/docker-compose.yml exec node echofog-node status
 ```
