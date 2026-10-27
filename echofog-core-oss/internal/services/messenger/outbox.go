@@ -26,13 +26,17 @@ const (
 	outboxTTL      = 7 * 24 * time.Hour
 	outboxInterval = 3 * time.Second
 	outboxMaxItems = 5000
+	// halfOpenAfter: retries of a message the peer took directly but never confirmed, after which a
+	// copy also goes to its mailbox (audit F7)
+	halfOpenAfter = 2
 )
 
 // What a message of ours is waiting for, as the chat shows it.
 const (
 	StateKeys      = "keys"      // the recipient's keys: it was never met and the DHT has not answered
 	StateOffline   = "offline"   // a way to the recipient: neither it nor a relay has taken the message
-	StateSent      = "sent"      // the recipient or a relay took it; no receipt yet
+	StateRelayed   = "relayed"   // a relay took it for the recipient (who is away); no receipt yet
+	StateSent      = "sent"      // the recipient's device took it; no receipt yet
 	StateDelivered = "delivered" // the recipient confirmed it
 	StateExpired   = "expired"   // given up after outboxTTL without a receipt
 )
@@ -40,9 +44,10 @@ const (
 type outboxItem struct {
 	ID       string       `json:"id"` // the inner message id, shown as "pending" in the chat
 	Target   types.PeerID `json:"target"`
-	Data     []byte       `json:"data,omitempty"`   // marshalled MessageData
-	Intent   []byte       `json:"intent,omitempty"` // not encrypted yet: the inner message, waiting for keys
-	Sent     bool         `json:"sent,omitempty"`   // the recipient or a relay took it at least once
+	Data     []byte       `json:"data,omitempty"`    // marshalled MessageData
+	Intent   []byte       `json:"intent,omitempty"`  // not encrypted yet: the inner message, waiting for keys
+	Sent     bool         `json:"sent,omitempty"`    // the recipient or a relay took it at least once
+	Relayed  bool         `json:"relayed,omitempty"` // a relay took it, the recipient's device not yet
 	Created  int64        `json:"created"`
 	Attempts int          `json:"attempts"`
 	Next     int64        `json:"next"` // unix nano: do not retry before
@@ -70,6 +75,11 @@ func backoff(n int) time.Duration {
 
 // track keeps msg until target confirms it. delivered says the first attempt already went out.
 func (s *MessageBroker) track(target types.PeerID, id string, msg *internal_pb.MessageData, inner []byte, delivered bool) error {
+	return s.trackVia(target, id, msg, inner, delivered, false)
+}
+
+// trackVia is track that also records that a relay, not the peer, took the message.
+func (s *MessageBroker) trackVia(target types.PeerID, id string, msg *internal_pb.MessageData, inner []byte, delivered, relayed bool) error {
 	data, err := gproto.Marshal(msg)
 	if err != nil {
 		return err
@@ -84,7 +94,7 @@ func (s *MessageBroker) track(target types.PeerID, id string, msg *internal_pb.M
 	it := outboxItem{ID: id, Target: target, Data: data, Intent: inner, Created: now.UnixNano(), Next: now.UnixNano()}
 	if delivered {
 		it.Attempts = 1
-		it.Sent = true
+		it.Sent, it.Relayed = true, relayed
 		it.Next = now.Add(backoff(0)).UnixNano()
 	}
 	raw, err := json.Marshal(it)
@@ -140,6 +150,8 @@ func (it outboxItem) state() string {
 	switch {
 	case len(it.Data) == 0:
 		return StateKeys
+	case it.Sent && it.Relayed:
+		return StateRelayed
 	case it.Sent:
 		return StateSent
 	}
@@ -225,10 +237,20 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 			_ = s.kv.Delete(e.Key)
 			continue
 		}
-		if s.deliver(it.Target, &msg) {
+		if ok, direct := s.deliverVia(it.Target, &msg); ok {
 			sent++
-			if !it.Sent {
-				it.Sent = true
+			if direct && it.Sent && !it.Relayed && it.Attempts >= halfOpenAfter {
+				// it went to the peer directly before and no receipt came back: the link may be
+				// half-open (the peer is gone and the transport has not noticed yet), so a copy also
+				// goes to the peer's mailbox; the peer drops whichever arrives second
+				_ = s.sendViaRelay(it.Target, &msg)
+			}
+			switch {
+			case !it.Sent:
+				it.Sent, it.Relayed = true, !direct
+				s.noteState(it.Target, it.ID, it.state())
+			case it.Relayed && direct:
+				it.Relayed = false
 				s.noteState(it.Target, it.ID, StateSent)
 			}
 		} else {

@@ -255,19 +255,23 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 		return "", "", fmt.Errorf("unsupported encryption tier: %v", tier)
 	}
 
-	var delivered bool
+	var delivered, direct bool
 	if opts.DirectOnly {
 		delivered = s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg) == nil
+		direct = delivered
 	} else {
-		delivered = s.deliver(targetID, msg)
+		delivered, direct = s.deliverVia(targetID, msg)
 	}
 	if !opts.noTrack {
 		// keep it until the recipient confirms (a retry follows if it never does)
-		if err := s.track(targetID, innerMsg.Id, msg, innerBytes, delivered); err != nil && !delivered {
+		if err := s.trackVia(targetID, innerMsg.Id, msg, innerBytes, delivered, delivered && !direct); err != nil && !delivered {
 			return "", "", fmt.Errorf("could not send or queue the message: %w", err)
 		}
 	}
 	state := StateSent
+	if delivered && !direct {
+		state = StateRelayed
+	}
 	if !delivered {
 		state = StateOffline
 		s.wantConnection(targetID)
@@ -290,11 +294,18 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 
 // deliver hands msg to the peer directly or through a relay and reports whether somebody took it.
 func (s *MessageBroker) deliver(targetID types.PeerID, msg *internal_pb.MessageData) bool {
+	ok, _ := s.deliverVia(targetID, msg)
+	return ok
+}
+
+// deliverVia is deliver that also says whether the peer itself took the message (direct) or a
+// relay did.
+func (s *MessageBroker) deliverVia(targetID types.PeerID, msg *internal_pb.MessageData) (ok, direct bool) {
 	if err := s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg); err == nil {
 		s.log.Info("MessageBroker: message sent to the peer directly", "peer", targetID.String()[:8])
-		return true
+		return true, true
 	}
-	return s.sendViaRelay(targetID, msg) == nil
+	return s.sendViaRelay(targetID, msg) == nil, false
 }
 
 func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.MessageData) error {

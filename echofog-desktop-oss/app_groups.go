@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"time"
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/dto"
@@ -199,13 +200,22 @@ func (a *App) emitIncomingCall(ctx context.Context, msg *dto.MessageDTO) {
 	if n := a.getAPI(); n == nil || !n.CanRing(msg.SenderID) {
 		return
 	}
-	safeEventsEmit(ctx, "call:incoming", map[string]interface{}{
+	event := "call:incoming"
+	if time.Since(time.Unix(0, msg.Timestamp)) > ringWindow {
+		// an invitation that waited (in a relay's mailbox, while we were away): the call is long
+		// over, so it shows as missed rather than ringing
+		event = "call:missed"
+	}
+	safeEventsEmit(ctx, event, map[string]interface{}{
 		"callId":      callID,
 		"coordinator": coordinator,
 		"from":        msg.SenderID,
 		"timestamp":   msg.Timestamp,
 	})
 }
+
+// ringWindow is how old a call invitation may be and still ring (generous for clocks that differ).
+const ringWindow = 2 * time.Minute
 
 // PickAndSendGroupFile lets the user choose a file and posts it in the group: every member gets
 // the offer and fetches the file from this computer. Nil without error: the dialog was closed.

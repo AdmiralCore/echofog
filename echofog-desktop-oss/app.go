@@ -289,6 +289,10 @@ func (a *App) startEventListeners(nodeAPI *api.NodeApi, ctx context.Context) {
 	nodeAPI.SubscribeGroupEvents(func(ev api.GroupEvent) {
 		safeEventsEmit(ctx, "group:event", ev)
 	})
+	// a chat changed: a new or changed message, or its place in the chat list (unread, last message)
+	nodeAPI.SubscribeConversations(func(ch api.ConvChange) {
+		safeEventsEmit(ctx, "conv:change", ch)
+	})
 
 	peerCh := nodeAPI.PeerDiscoveryHandler()
 	go func() {

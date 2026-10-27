@@ -57,6 +57,7 @@ type RelayServer struct {
 
 	peersMu     sync.Mutex
 	connectedAt map[types.PeerID]time.Time // when each connected peer connected
+	delivering  map[types.PeerID]bool      // stored mail being handed to a reconnected peer
 	addrOf      func(types.PeerID) string  // a connected peer's remote address
 
 	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
@@ -886,32 +887,75 @@ func (rs *RelayServer) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPub
 	// stranger would otherwise fill our disk by naming random recipients).
 	rs.mailbox.NoteRecipientSeen(peerID)
 
-	pending, err := rs.mailbox.GetPending(peerID)
-	if err != nil || len(pending) == 0 {
+	rs.peersMu.Lock()
+	if rs.delivering == nil {
+		rs.delivering = map[types.PeerID]bool{}
+	}
+	busy := rs.delivering[peerID]
+	rs.delivering[peerID] = true
+	rs.peersMu.Unlock()
+	if busy {
+		return // a run for this peer is under way and will deliver everything
+	}
+	sent := rs.sendStored(peerID)
+	if len(sent) == 0 {
+		rs.doneDelivering(peerID)
 		return
 	}
+	rs.delivered.Add(uint64(len(sent))) // handed over; dropped after the second pass
+	go rs.finishStored(peerID, sent)
+}
 
+// A reconnected recipient gets its stored mail twice — when it connects and once more a little
+// later — and only then is the mail dropped, if the recipient is still connected. A write on a
+// fresh connection that never reaches the recipient's handlers no longer loses the mail; the
+// recipient drops the repeat (messages are deduplicated by id). Tests shorten the pause.
+var storedSecondPass = 10 * time.Second
+
+func (rs *RelayServer) doneDelivering(peerID types.PeerID) {
+	rs.peersMu.Lock()
+	delete(rs.delivering, peerID)
+	rs.peersMu.Unlock()
+}
+
+func (rs *RelayServer) finishStored(peerID types.PeerID, sent map[string]bool) {
+	defer rs.doneDelivering(peerID)
+	time.Sleep(storedSecondPass)
+	if rs.swarm.GetPeer(peerID) == nil {
+		return // gone again: the mail stays for its next visit
+	}
+	for id := range rs.sendStored(peerID) {
+		sent[id] = true
+	}
+	ids := make([]string, 0, len(sent))
+	for id := range sent {
+		ids = append(ids, id)
+	}
+	_ = rs.mailbox.Acknowledge(peerID, ids)
+	rs.logger.Info("RelayServer: Delivered stored mailbox items to reconnected peer",
+		"peer", peerID.String()[:8], "count", len(ids))
+}
+
+// sendStored hands the peer everything stored for it and returns the ids that went out.
+func (rs *RelayServer) sendStored(peerID types.PeerID) map[string]bool {
+	out := map[string]bool{}
 	peer := rs.swarm.GetPeer(peerID)
 	if peer == nil {
-		return
+		return out
 	}
-
-	var deliveredIDs []string
+	pending, err := rs.mailbox.GetPending(peerID)
+	if err != nil {
+		return out
+	}
 	for _, item := range pending {
 		var innerEnv internal_pb.Envelope
 		if err := proto.Unmarshal(item.Payload, &innerEnv); err == nil {
 			if err := peer.Send(net_types.TypeChatMessage, &innerEnv); err == nil {
-				deliveredIDs = append(deliveredIDs, item.ID)
+				out[item.ID] = true
 			}
 		}
 	}
-
-	if len(deliveredIDs) > 0 {
-		rs.delivered.Add(uint64(len(deliveredIDs)))
-		_ = rs.mailbox.Acknowledge(peerID, deliveredIDs)
-		rs.logger.Info("RelayServer: Delivered stored mailbox items to reconnected peer",
-			"peer", peerID.String()[:8], "count", len(deliveredIDs))
-	}
+	return out
 }
 
 func (rs *RelayServer) OnPeerDisconnected(peerID types.PeerID) {

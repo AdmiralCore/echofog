@@ -57,6 +57,10 @@ func TestPendingStatesFollowTheOutbox(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	assert.Equal(t, MessageState{Target: peer, ID: "sent", State: StateDelivered}, events[0])
 
+	// a relay took it while the peer was away: that is not the peer's device
+	require.NoError(t, s.trackVia(peer, "relayed", enc, []byte("hi"), true, true))
+	assert.Equal(t, StateRelayed, s.PendingStates(peer)["relayed"])
+
 	// an ask goes once per pause per peer
 	assert.True(t, s.knockDue(peer))
 	assert.False(t, s.knockDue(peer))

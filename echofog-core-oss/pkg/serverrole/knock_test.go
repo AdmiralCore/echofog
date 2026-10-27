@@ -65,7 +65,7 @@ func TestFirstMessageWithoutTheDHTGoesThroughTheRelay(t *testing.T) {
 	assert.True(t, waitFor(inbox, "fogcall://", 30*time.Second), "the invitation never reached Bob")
 	require.Eventually(t, func() bool { return len(aN.Messenger.PendingStates(bob)) == 0 }, 20*time.Second, 100*time.Millisecond,
 		"Bob's receipt never came back")
-	assert.True(t, seen(messenger.StateSent), "the UI is told when a relay took it")
+	assert.True(t, seen(messenger.StateRelayed), "the UI is told when a relay took it")
 	assert.True(t, seen(messenger.StateDelivered), "and when Bob confirmed it")
 	assert.False(t, connected(aN, bN), "it all went through the relay")
 	assert.Positive(t, rN.RelayServer.Stats().Forwarded, "the relay passed the messages on")
