@@ -53,10 +53,11 @@ type FallbackTransport struct {
 	preferT map[string]time.Time // addr -> until when TCP goes first
 	noDial  atomic.Bool          // an isolated node: it only accepts connections
 
-	envMu    sync.Mutex
-	envCache string               // fingerprint of the current local network, cached briefly
-	envAt    time.Time            // when envCache was taken
-	envMem   map[string]envRecord // network fingerprint -> the transport that won there last
+	envMu        sync.Mutex
+	envCache     string               // fingerprint of the current local network, cached briefly
+	envAt        time.Time            // when envCache was taken
+	envComputing bool                 // a background refresh of envCache is in flight
+	envMem       map[string]envRecord // network fingerprint -> the transport that won there last
 
 	connChan  chan NewConnEvent
 	closeOnce sync.Once
@@ -439,19 +440,39 @@ type envRecord struct {
 	at  time.Time
 }
 
-// networkEnv fingerprints the local network environment as the sorted set of active, non-loopback
-// interface addresses — a cheap, portable stand-in for "which network am I on". It changes when the
-// device moves to another network, so the memory of a censored network does not bias the dials once
-// the device is back on an open one. The value is cached for a few seconds to keep per-dial cost low.
+// networkEnvTTL is how long a network fingerprint is reused before a fresh one is computed.
+const networkEnvTTL = 5 * time.Second
+
+// networkEnv returns the fingerprint of the local network environment (the sorted set of active,
+// non-loopback interface addresses) — a cheap, portable stand-in for "which network am I on". It
+// changes when the device moves to another network, so the memory of a censored network does not
+// bias the dials once the device is back on an open one.
+//
+// Enumerating interfaces is a syscall (net.Interfaces + Addrs per interface), which on some systems
+// is slow and, called from every dial, serialises a burst of reconnect attempts badly enough to
+// starve the handshakes they are racing. So the fingerprint is computed in the background and the
+// dial path only ever reads the cached value: a cold or stale cache returns the last known value
+// (empty until the first refresh lands) and kicks off one refresh. The memory is best-effort — an
+// empty fingerprint just means "no preference yet", i.e. the safe QUIC-first default.
 func (f *FallbackTransport) networkEnv() string {
 	f.envMu.Lock()
-	if f.envCache != "" && time.Since(f.envAt) < 5*time.Second {
-		env := f.envCache
-		f.envMu.Unlock()
-		return env
+	defer f.envMu.Unlock()
+	if time.Since(f.envAt) >= networkEnvTTL && !f.envComputing {
+		f.envComputing = true
+		go f.refreshNetworkEnv()
 	}
-	f.envMu.Unlock()
+	return f.envCache
+}
 
+// refreshNetworkEnv computes the current fingerprint off the dial path and stores it.
+func (f *FallbackTransport) refreshNetworkEnv() {
+	env := computeNetworkEnv()
+	f.envMu.Lock()
+	f.envCache, f.envAt, f.envComputing = env, time.Now(), false
+	f.envMu.Unlock()
+}
+
+func computeNetworkEnv() string {
 	ifaces, _ := net.Interfaces()
 	var parts []string
 	for _, ifi := range ifaces {
@@ -466,17 +487,15 @@ func (f *FallbackTransport) networkEnv() string {
 		}
 	}
 	sort.Strings(parts)
-	env := strings.Join(parts, ",")
-
-	f.envMu.Lock()
-	f.envCache, f.envAt = env, time.Now()
-	f.envMu.Unlock()
-	return env
+	return strings.Join(parts, ",")
 }
 
 // envPrefersTCP reports whether TCP won on the current network recently.
 func (f *FallbackTransport) envPrefersTCP() bool {
 	env := f.networkEnv()
+	if env == "" {
+		return false // the network is not fingerprinted yet: no preference, QUIC-first default
+	}
 	f.envMu.Lock()
 	defer f.envMu.Unlock()
 	r, ok := f.envMem[env]
@@ -493,6 +512,9 @@ func (f *FallbackTransport) envPrefersTCP() bool {
 // recordEnv remembers that tcp (or QUIC) won on the current network.
 func (f *FallbackTransport) recordEnv(tcp bool) {
 	env := f.networkEnv()
+	if env == "" {
+		return // network not fingerprinted yet: nothing to key the memory on
+	}
 	f.envMu.Lock()
 	if f.envMem == nil || len(f.envMem) > 64 {
 		f.envMem = make(map[string]envRecord)
