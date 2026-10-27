@@ -103,12 +103,13 @@ func (n *NodeApi) avoidedLocked(now time.Time) map[string]bool {
 // pickExit finds an exit that is connected or reachable and says it serves us right now, best
 // rated first, skipping avoid. Exits that fail the check are added to avoid.
 func (n *NodeApi) pickExit(ctx context.Context, avoid map[string]bool) (string, error) {
-	return n.pickExitFrom(ctx, avoid, false)
+	return n.pickExitFrom(ctx, avoid, false, false)
 }
 
 // pickExitFrom is pickExit; lastResort also tries exits with a bad record: when nothing else is
 // left, an exit that failed a while ago may well work again (it was restarted, its link came back).
-func (n *NodeApi) pickExitFrom(ctx context.Context, avoid map[string]bool, lastResort bool) (string, error) {
+// camouflageOnly keeps to camouflage exits (see runFailover).
+func (n *NodeApi) pickExitFrom(ctx context.Context, avoid map[string]bool, lastResort, camouflageOnly bool) (string, error) {
 	m, err := n.market()
 	if err != nil {
 		return "", err
@@ -125,6 +126,9 @@ func (n *NodeApi) pickExitFrom(ctx context.Context, avoid map[string]bool, lastR
 		}
 		pid, err := n.relayPeerID(id)
 		if err != nil || pid == n.node.ID {
+			continue
+		}
+		if camouflageOnly && e.Advert.SNI == "" && !n.node.Swarm.IsCamouflagePeer(pid) {
 			continue
 		}
 		if tries++; tries > pickTries || ctx.Err() != nil {
@@ -201,11 +205,15 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 		avoid := n.avoidedLocked(now)
 		n.vpn.mu.Unlock()
 
-		next, err := n.pickExit(ctx, avoid)
+		// A user on a camouflage exit is never moved to an ordinary one: its tunnel would cross the
+		// border as noise, the very thing a censor flags, however briefly the camouflage exit failed.
+		// With no other camouflage exit, the proxy stays and the exit in use is redialed below.
+		camouflageOnly := n.isCamouflageExit(relay)
+		next, err := n.pickExitFrom(ctx, avoid, false, camouflageOnly)
 		if err != nil && time.Since(lastRefresh) > refreshAtMostAt {
 			lastRefresh = time.Now()
 			_, _ = n.RefreshExitNodes() // look for exits we have not seen yet
-			next, err = n.pickExit(ctx, avoid)
+			next, err = n.pickExitFrom(ctx, avoid, false, camouflageOnly)
 		}
 		n.vpn.mu.Lock()
 		for id := range avoid { // remember the ones that failed the check as well
@@ -219,7 +227,7 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 			// was restarted, its link came back), which beats waiting for this one. Avoiding is a
 			// preference, not a ban: without this, the clients of an exit that froze sat without
 			// Internet next to the other exit, back for minutes, for the ten minutes of avoidance.
-			next, err = n.pickExitFrom(ctx, map[string]bool{relay: true}, true)
+			next, err = n.pickExitFrom(ctx, map[string]bool{relay: true}, true, camouflageOnly)
 			if err == nil {
 				slog.Info("going back to an exit that failed earlier: nothing else serves us", "exit", next[:min(12, len(next))])
 			}
@@ -245,6 +253,15 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 			lost = 0
 		}
 	}
+}
+
+// isCamouflageExit reports whether the exit relay mimics a real site (it has a known SNI).
+func (n *NodeApi) isCamouflageExit(relay string) bool {
+	if n.node == nil || n.node.Swarm == nil {
+		return false
+	}
+	id, err := n.relayPeerID(relay)
+	return err == nil && n.node.Swarm.IsCamouflagePeer(id)
 }
 
 // releaseExitPool drops the session pool and the parallel links to the exit the proxy no longer uses.

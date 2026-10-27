@@ -95,12 +95,24 @@ func (s *Swarm) IsCamouflagePeer(id types.PeerID) bool {
 // earlier market/account probe (those are dialed by peer ID before the SNI is registered, and a noise
 // connection to a camouflage node does not serve the tunnel: the exit goes silent and the client
 // switches away). Call it once at VPN start, after the SNI is registered, before opening exit
-// streams; it returns once the camouflaged link is registered or ctx ends. A no-op for a peer with
-// no known SNI (an ordinary exit keeps its noise connection). OpenExitStream does the same before
-// every tunnel stream, so a camouflaged link that dies later is redialed rather than failed over.
+// streams. It always dials a fresh connection, even when a camouflaged one is up: that one may be
+// stale (a QUIC link whose UDP was cut since looks alive until its idle timeout), and the dial races
+// QUIC against TCP, so a network that now blocks UDP gets a working TCP link at once. It returns once
+// a camouflaged link is registered or ctx ends. A no-op for a peer with no known SNI (an ordinary
+// exit keeps its noise connection). OpenExitStream makes sure of a camouflaged link before every
+// tunnel stream, so one that dies later is redialed rather than failed over.
 func (s *Swarm) EnsureExitReality(ctx context.Context, exit types.PeerID) {
 	if s.GetPeerSNI(exit) == "" {
 		return
+	}
+	if p := s.GetPeer(exit); p != nil {
+		addr := p.Addr()
+		if addr == "" {
+			addr = p.RemoteAddr()
+		}
+		if addr != "" {
+			s.dialCamouflaged(ctx, exit, addr)
+		}
 	}
 	if err := s.ensureCamouflagedLink(ctx, exit); err != nil {
 		s.log().Warn("Swarm: no camouflaged link to the camouflage exit yet", "peer", exit.String()[:12], "err", err)

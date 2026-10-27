@@ -51,9 +51,16 @@ type Peer struct {
 	// extraLinks are additional data-carrying connections to the same peer, besides transport.
 	// They exist only for an exit peer whose session pool runs several parallel connections:
 	// tunnel streams spread across transport and these, so a single stalled or censor-killed
-	// connection does not stall the VPN (openTunnelStream picks the least-loaded live link). A
-	// mesh peer never has any; its control plane keeps using transport alone. Guarded by mu.
+	// connection does not stall the VPN. New tunnel streams go to the newest link
+	// (openTunnelStream) and older links are closed once idle (retireOldLinks), so each connection
+	// carries about one session's worth of bytes, as flow shaping wants. A mesh peer never has any;
+	// its control plane keeps using transport alone. Guarded by mu.
 	extraLinks []exitLink
+
+	// opening counts, per link, the tunnel streams chosen to open on it whose stream is not yet
+	// registered on the link (ActiveStreams counts a stream only once it is open). A link with one
+	// is busy: retiring it would cut the stream off before it starts. Guarded by mu.
+	opening map[*network.PeerWrapper]int
 
 	dispatcher *dispatcher.Dispatcher
 }
@@ -372,56 +379,95 @@ func (p *Peer) LinkCount() int {
 	return n
 }
 
-// oldestIdleExtraLink returns the earliest-added extra link that carries no active stream, so a
-// rotation can drain an idle connection to make room for a fresh one without ever cutting off a
-// transfer in flight. It returns nil when every extra link is busy.
-func (p *Peer) oldestIdleExtraLink() *network.PeerWrapper {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	for _, l := range p.extraLinks {
-		if l.pw.ActiveStreams() == 0 {
-			return l.pw
-		}
-	}
-	return nil
+// linkBusyLocked reports whether pw carries a stream or one is being opened on it. p.mu held.
+func (p *Peer) linkBusyLocked(pw *network.PeerWrapper) bool {
+	return pw.ActiveStreams() > 0 || p.opening[pw] > 0
 }
 
-// openTunnelStream opens one bidirectional stream to this peer on the least-loaded live link,
-// spreading tunnel traffic across the pool so no single connection carries it all. When
-// camouflageExit is set, only camouflaged links are considered — QUIC-REALITY or any TCP/WS
-// (mimicry) link — so a tunnel stream never rides a plain QUIC noise connection a censor would
-// flag; it returns an error if the peer has no live camouflaged link. For a mesh peer (no extra
-// links, camouflageExit false) it is the primary transport.
-func (p *Peer) openTunnelStream(ctx context.Context, camouflageExit bool) (*network.Stream, error) {
-	p.mu.RLock()
-	var best *network.PeerWrapper
-	bestLoad := -1
-	if p.transport != nil && p.transport.GetConn().Context().Err() == nil &&
-		(!camouflageExit || !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)) {
-		best = p.transport
-		bestLoad = p.transport.ActiveStreams()
-	}
-	for _, l := range p.extraLinks {
+// newestLinkLocked returns the most recently added live link — the last live extra link, else
+// the primary — skipping QUIC noise links when camouflageExit is set; nil if there is none. p.mu
+// held. (A promoted link was the oldest extra, so the primary is never newer than an extra.)
+func (p *Peer) newestLinkLocked(camouflageExit bool) *network.PeerWrapper {
+	for i := len(p.extraLinks) - 1; i >= 0; i-- {
+		l := p.extraLinks[i]
 		if l.pw.GetConn().Context().Err() != nil {
 			continue
 		}
 		if camouflageExit && quicNoise(l.pw.GetConn().Protocol(), l.reality) {
 			continue
 		}
-		if load := l.pw.ActiveStreams(); best == nil || load < bestLoad {
-			best = l.pw
-			bestLoad = load
-		}
+		return l.pw
 	}
-	p.mu.RUnlock()
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil &&
+		(!camouflageExit || !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)) {
+		return p.transport
+	}
+	return nil
+}
 
+// retireOldLinks closes every link but the newest that carries no stream and has none being
+// opened: its share of the rotation is done. This includes the primary — the watcher then makes a
+// remaining link the primary — so no connection to an exit lives on carrying gigabytes. A busy old
+// link is left alone and retired once its transfer ends. Returns how many links it closed.
+func (p *Peer) retireOldLinks(camouflageExit bool) int {
+	p.mu.Lock()
+	newest := p.newestLinkLocked(camouflageExit)
+	if newest == nil {
+		p.mu.Unlock()
+		return 0
+	}
+	var retire []*network.PeerWrapper
+	var keep []exitLink
+	for _, l := range p.extraLinks {
+		if l.pw != newest && !p.linkBusyLocked(l.pw) {
+			retire = append(retire, l.pw)
+			continue
+		}
+		keep = append(keep, l)
+	}
+	p.extraLinks = keep
+	if p.transport != nil && p.transport != newest && p.transport.GetConn().Context().Err() == nil &&
+		!p.linkBusyLocked(p.transport) {
+		retire = append(retire, p.transport)
+	}
+	p.mu.Unlock()
+	for _, pw := range retire {
+		_ = pw.Close()
+	}
+	return len(retire)
+}
+
+// openTunnelStream opens one bidirectional stream to this peer on its newest live link, so the
+// streams of a fresh session ride the fresh connection its rotation dialed and the older ones drain.
+// The link is reserved until the stream is registered on it, so retireOldLinks never closes a link
+// a stream is being opened on. When camouflageExit is set, only camouflaged links are considered —
+// QUIC-REALITY or any TCP/WS (mimicry) link — so a tunnel stream never rides a plain QUIC noise
+// connection a censor would flag; it returns an error if the peer has no live camouflaged link. For
+// a mesh peer (no extra links, camouflageExit false) it is the primary transport.
+func (p *Peer) openTunnelStream(ctx context.Context, camouflageExit bool) (*network.Stream, error) {
+	p.mu.Lock()
+	best := p.newestLinkLocked(camouflageExit)
 	if best == nil {
+		p.mu.Unlock()
 		if camouflageExit {
 			return nil, errors.New("camouflage exit has no live camouflaged (REALITY or TCP) link to open a stream on")
 		}
 		return nil, errors.New("peer has no live link to open a stream on")
 	}
-	return best.OpenBidirectionalStream(ctx)
+	if p.opening == nil {
+		p.opening = make(map[*network.PeerWrapper]int)
+	}
+	p.opening[best]++
+	p.mu.Unlock()
+
+	st, err := best.OpenBidirectionalStream(ctx)
+
+	p.mu.Lock()
+	if p.opening[best]--; p.opening[best] <= 0 {
+		delete(p.opening, best)
+	}
+	p.mu.Unlock()
+	return st, err
 }
 
 // DrainAndClose waits up to timeout for active streams to finish, then closes the peer.

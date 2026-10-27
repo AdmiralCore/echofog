@@ -14,11 +14,17 @@ import (
 // session pool. maxConns caps how many concurrent connections the swarm keeps to it.
 type exitPoolState struct {
 	maxConns int
+	addr     string        // where the exit was last reached, to redial it once its peer is gone; exitMu
+	stop     chan struct{} // ends the retire loop when the exit is unmarked
 }
 
+// retireEvery is how often a marked exit's old, idle links are looked for and closed.
+const retireEvery = time.Second
+
 // maxInboundPoolLinks caps how many connections the exit side keeps to one client that opens
-// parallel pool links: the client's own cap plus one, for a fresh link that arrives before the
-// client has closed the idle one it replaces.
+// parallel pool links: the client's own cap plus one, for the fresh link the client attaches
+// before it retires an old one. The exit never closes a client's link to make room — the client
+// may be opening a stream on it — it refuses the new one instead.
 const maxInboundPoolLinks = 4
 
 // quicNoise reports whether a connection is a QUIC noise-obfs link — the only kind unsafe to carry
@@ -45,18 +51,66 @@ func (s *Swarm) MarkExitPeer(exit types.PeerID, maxConns int) {
 		st.maxConns = maxConns
 		return
 	}
-	s.exitPools[exit] = &exitPoolState{maxConns: maxConns}
+	st := &exitPoolState{maxConns: maxConns, stop: make(chan struct{})}
+	s.exitPools[exit] = st
+	s.wg.Add(1)
+	go s.retireLoop(exit, st.stop)
+}
+
+// retireLoop closes the old links to a marked exit once they are idle (see Peer.retireOldLinks):
+// a link whose transfers ended while no new link came would otherwise live on.
+func (s *Swarm) retireLoop(exit types.PeerID, stop <-chan struct{}) {
+	defer s.wg.Done()
+	t := time.NewTicker(retireEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+		}
+		if p := s.GetPeer(exit); p != nil {
+			p.retireOldLinks(s.IsCamouflagePeer(exit))
+		}
+	}
 }
 
 // UnmarkExitPeer forgets that exit ran a parallel pool and closes the extra links to it (the other
 // end prunes them as they close), so the exit is again a mesh peer with one connection.
 func (s *Swarm) UnmarkExitPeer(exit types.PeerID) {
 	s.exitMu.Lock()
-	delete(s.exitPools, exit)
+	if st := s.exitPools[exit]; st != nil {
+		close(st.stop)
+		delete(s.exitPools, exit)
+	}
 	s.exitMu.Unlock()
 	if p := s.GetPeer(exit); p != nil {
 		p.closeExitLinks()
 	}
+}
+
+// exitAddr is the address p is reached at, remembered for a marked exit so it can be redialed after
+// the peer is gone; with p nil it is the remembered one.
+func (s *Swarm) exitAddr(exit types.PeerID, p *Peer) string {
+	addr := ""
+	if p != nil {
+		if addr = p.Addr(); addr == "" {
+			addr = p.RemoteAddr()
+		}
+	}
+	s.exitMu.Lock()
+	defer s.exitMu.Unlock()
+	st := s.exitPools[exit]
+	switch {
+	case st == nil:
+	case addr != "":
+		st.addr = addr
+	default:
+		addr = st.addr
+	}
+	return addr
 }
 
 func (s *Swarm) exitPoolFor(exit types.PeerID) *exitPoolState {
@@ -108,18 +162,16 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 		}
 	}
 
+	camouflage := event.IsOut && s.IsCamouflagePeer(event.PeerID)
+	if event.IsOut && p.LinkCount() >= maxConns {
+		p.retireOldLinks(camouflage) // make room by closing old idle links, never a busy one
+	}
 	if p.LinkCount() >= maxConns {
-		// At capacity: rotate by draining an old idle link to free a slot. Never drain a link
-		// with a stream in flight — a transfer must not be cut off mid-way (the same guarantee
-		// the pool's rotation gate relies on). If every extra link is busy, reject this dial and
-		// keep the current connections; the pool retries once a link frees up.
-		victim := p.oldestIdleExtraLink()
-		if victim == nil {
-			_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "exit pool full")
-			return true
-		}
-		p.removeExitLink(victim)
-		_ = victim.Close()
+		// Still full: every link carries a transfer (or, on the exit side, the client keeps its
+		// links). Refuse the new link rather than close one a stream may be on; the pool dials again
+		// at its next rotation.
+		_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "exit pool full")
+		return true
 	}
 
 	pw := network.NewPeerWrapper(p.ctx, event.Conn, event.PeerID)
@@ -147,6 +199,10 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 			"link", network.DescribeLink(conn), "links_left", p.LinkCount())
 	}()
 
+	if event.IsOut {
+		// The fresh link now takes the new streams; the older ones are closed as soon as they are idle.
+		p.retireOldLinks(camouflage)
+	}
 	s.log().Debug("Swarm: added parallel exit link", "peer", event.PeerID.String()[:12],
 		"link", network.DescribeLink(event.Conn), "links", p.LinkCount(), "max", maxConns)
 	return true
@@ -177,6 +233,15 @@ const (
 	camouflageLinkSettle = time.Second           // how long it may take to register before redialing
 )
 
+// dialCamouflaged dials the camouflage exit at addr with its SNI registered, so the connection is
+// REALITY, or browser-TLS mimicry over TCP when QUIC does not get through.
+func (s *Swarm) dialCamouflaged(ctx context.Context, exit types.PeerID, addr string) {
+	s.expectPeer(addr, exit)
+	if err := s.dialEarly(ctx, addr); err != nil {
+		s.log().Debug("Swarm: camouflaged dial to exit failed", "peer", exit.String()[:12], "err", err)
+	}
+}
+
 // ensureCamouflagedLink makes sure a camouflage exit has a live camouflaged link (QUIC-REALITY or
 // TCP mimicry) and, if it has none, dials one and waits until the swarm has registered it, dialing
 // again until ctx ends. A one-shot upgrade at VPN start is not enough: the dial returns before its
@@ -190,23 +255,16 @@ func (s *Swarm) ensureCamouflagedLink(ctx context.Context, exit types.PeerID) er
 	defer tick.Stop()
 	for {
 		p := s.GetPeer(exit)
+		// with the peer gone (its link died, e.g. UDP was cut), this is the address it was last at
+		addr := s.exitAddr(exit, p)
 		if p != nil && p.hasCamouflagedLink() {
 			return nil
 		}
 		dialed := false
-		if p != nil {
-			addr := p.Addr()
-			if addr == "" {
-				addr = p.RemoteAddr()
-			}
-			if addr != "" {
-				s.log().Info("Swarm: camouflage exit has no camouflaged link, dialing one", "peer", exit.String()[:12], "addr", addr)
-				s.expectPeer(addr, exit) // register the SNI so the dial uses REALITY (or TCP mimicry)
-				if err := s.dialEarly(ctx, addr); err != nil {
-					s.log().Debug("Swarm: camouflaged dial to exit failed", "peer", exit.String()[:12], "err", err)
-				}
-				dialed = true
-			}
+		if addr != "" {
+			s.log().Info("Swarm: camouflage exit has no camouflaged link, dialing one", "peer", exit.String()[:12], "addr", addr)
+			s.dialCamouflaged(ctx, exit, addr)
+			dialed = true
 		}
 
 		settle := time.NewTimer(camouflageLinkSettle)
