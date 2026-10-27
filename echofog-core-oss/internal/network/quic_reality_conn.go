@@ -148,6 +148,16 @@ type QuicRealityConn struct {
 	authedAddrs map[string]bool
 	authedDCIDs map[string]string // dcid -> client addr string
 
+	// connRefs counts live connections per client address. A NAT puts several of a client's
+	// connections behind one outside address (e.g. a control connection and a data/exit connection,
+	// or an old connection draining while its replacement is live), so the marks that keep a REALITY
+	// connection alive -- authedAddrs, authedDCIDs and the obfs raw flag -- must be cleared only when
+	// the LAST connection from an address closes. Clearing them when any one closes would make the
+	// obfs layer treat the remaining live connections' raw QUIC as noise, drop it, and stall them.
+	// MarkConnection bumps the count when a connection is accepted; UnmarkConnection drops it when the
+	// connection ends and clears the address's marks at zero.
+	connRefs map[string]int
+
 	// A QUIC-REALITY client's NAT may give it a new outside port mid-connection. quic-go follows
 	// the client to the new address, which must get raw QUIC too: sealed as noise, the answers
 	// would never open and the connection would die. Connection IDs cannot tell which connection
@@ -278,6 +288,7 @@ func NewQuicRealityConn(conn net.PacketConn, qt *QuicTransport) *QuicRealityConn
 		qt:          qt,
 		authedAddrs: make(map[string]bool),
 		authedDCIDs: make(map[string]string),
+		connRefs:    make(map[string]int),
 		pending:     make(map[string]*pendingHello),
 	}
 }
@@ -352,7 +363,22 @@ func (c *QuicRealityConn) markAuthed(addr net.Addr, dcid []byte) {
 	}
 }
 
-// UnmarkConnection cleans up authenticated state when a peer connection closes.
+// MarkConnection records a newly accepted connection from addr, so UnmarkConnection knows how many
+// connections share the address and clears its marks only when the last one closes. Call it once per
+// accepted connection, paired with one UnmarkConnection when that connection ends, using the same
+// address for both (capture it at accept, since the connection may migrate before it closes).
+func (c *QuicRealityConn) MarkConnection(addr net.Addr) {
+	if addr == nil {
+		return
+	}
+	c.mu.Lock()
+	c.connRefs[addr.String()]++
+	c.mu.Unlock()
+}
+
+// UnmarkConnection cleans up authenticated state when a peer connection closes -- but only once the
+// last connection from the address has closed, so a NAT'd client that keeps several connections
+// behind one address does not lose the marks that keep its live connections raw.
 func (c *QuicRealityConn) UnmarkConnection(addr net.Addr) {
 	if addr == nil {
 		return
@@ -360,6 +386,11 @@ func (c *QuicRealityConn) UnmarkConnection(addr net.Addr) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	addrStr := addr.String()
+	if n := c.connRefs[addrStr]; n > 1 {
+		c.connRefs[addrStr] = n - 1
+		return // other live connections still use this address; keep its marks
+	}
+	delete(c.connRefs, addrStr)
 	delete(c.authedAddrs, addrStr)
 	for d, a := range c.authedDCIDs {
 		if a == addrStr {

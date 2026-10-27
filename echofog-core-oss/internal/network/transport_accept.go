@@ -43,10 +43,17 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 
 		q.applyCongestion(conn)
 		if q.realityConn != nil {
-			go func(c *quic.Conn) {
+			// Capture the address at accept so MarkConnection and UnmarkConnection use the same key
+			// even if the connection migrates before it closes. A NAT'd client keeps several
+			// connections behind one address; the reality conn reference-counts them and clears the
+			// address's raw/authed marks only when the last one closes, so closing one does not stall
+			// the others.
+			raddr := conn.RemoteAddr()
+			q.realityConn.MarkConnection(raddr)
+			go func(c *quic.Conn, addr net.Addr) {
 				<-c.Context().Done()
-				q.realityConn.UnmarkConnection(c.RemoteAddr())
-			}(conn)
+				q.realityConn.UnmarkConnection(addr)
+			}(conn, raddr)
 		}
 		ip := addrOfNet(conn.RemoteAddr())
 		releaseIP, allowed := q.guard.Load().Allow(ip)
