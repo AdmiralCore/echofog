@@ -333,9 +333,13 @@ func TestCluster_MultiHop_And_OfflineMailbox(t *testing.T) {
 		t.Fatal("Timeout waiting for mailbox message flush upon reconnection")
 	}
 
-	time.Sleep(200 * time.Millisecond)
-	// Verify mailbox was acknowledged and pruned
+	// Verify mailbox was pruned. The relay hands stored mail over again ten seconds after the
+	// reconnect (the first frame on a fresh connection can be lost) and drops it only then.
 	remainingInMailbox := node3.GetMailbox().Count(node4.ID)
+	for deadline := time.Now().Add(15 * time.Second); remainingInMailbox != 0 && time.Now().Before(deadline); {
+		time.Sleep(200 * time.Millisecond)
+		remainingInMailbox = node3.GetMailbox().Count(node4.ID)
+	}
 	if remainingInMailbox != 0 {
 		t.Fatalf("Mailbox should be empty after delivery, but still contains %d items", remainingInMailbox)
 	}
