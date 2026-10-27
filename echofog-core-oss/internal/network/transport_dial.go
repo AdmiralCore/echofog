@@ -35,6 +35,21 @@ func ephemeralSocketRequested(ctx context.Context) bool {
 	return v
 }
 
+// poolLinkKey marks a dial that opens an extra parallel link of an exit session pool.
+type poolLinkKey struct{}
+
+// WithPoolLink marks ctx so the connection a dial makes is announced (handshake.CapPoolLink) as an
+// extra parallel link of an exit session pool: both ends keep it beside the existing connection to
+// the peer instead of replacing that one. Only the exit pool's rotation dials set it.
+func WithPoolLink(ctx context.Context) context.Context {
+	return context.WithValue(ctx, poolLinkKey{}, true)
+}
+
+func poolLinkRequested(ctx context.Context) bool {
+	v, _ := ctx.Value(poolLinkKey{}).(bool)
+	return v
+}
+
 // DialEarly connects to addr. Concurrent dials to the same address are coalesced: besides
 // avoiding duplicate connections, two parallel handshakes would share one cached TLS session
 // ticket, which quic-go mutates without synchronisation.
@@ -43,11 +58,17 @@ func (q *QuicTransport) DialEarly(ctx context.Context, addr string) error {
 		return errSelfDial
 	}
 
+	// a pool link is a connection of its own: it must not be merged into (or swallow) an ordinary
+	// dial to the same address, which would replace the connection the pool sits beside
+	key := addr
+	if poolLinkRequested(ctx) {
+		key += "#pool"
+	}
 	q.dialMu.Lock()
 	if q.dialing == nil {
 		q.dialing = make(map[string]*pendingDial)
 	}
-	if p, ok := q.dialing[addr]; ok {
+	if p, ok := q.dialing[key]; ok {
 		q.dialMu.Unlock()
 		select {
 		case <-p.done:
@@ -57,12 +78,12 @@ func (q *QuicTransport) DialEarly(ctx context.Context, addr string) error {
 		}
 	}
 	p := &pendingDial{done: make(chan struct{})}
-	q.dialing[addr] = p
+	q.dialing[key] = p
 	q.dialMu.Unlock()
 
 	p.err = q.dial(ctx, addr)
 	q.dialMu.Lock()
-	delete(q.dialing, addr)
+	delete(q.dialing, key)
 	q.dialMu.Unlock()
 	close(p.done)
 	return p.err
@@ -314,7 +335,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 		return &PeerMismatchError{Got: peerRes.PeerID}
 	}
 
-	q.newConn(conn, true, conn.RemoteAddr().String(), true, peerRes.PeerID, peerRes.PubKey, peerRes.Caps, reality)
+	q.newConn(conn, true, conn.RemoteAddr().String(), true, peerRes.PeerID, peerRes.PubKey, peerRes.Caps, reality, poolLinkRequested(ctx))
 	q.logger.Info("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "outbound", "remote_addr", conn.RemoteAddr().String())
 
 	return nil

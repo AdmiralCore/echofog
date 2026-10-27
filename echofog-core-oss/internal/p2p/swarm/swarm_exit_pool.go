@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
@@ -12,15 +11,15 @@ import (
 )
 
 // exitPoolState marks a peer the local node tunnels through as an exit that runs a parallel
-// session pool. maxConns caps how many concurrent connections the swarm keeps to it. accumulate
-// latches true once the tunnel is established (the first rotation dial): before that the first
-// connection is set up normally (including a noise->REALITY upgrade of the mesh link to a
-// camouflage exit, which must replace, not accumulate); after it, each further dial adds a
-// parallel link instead of replacing the single one.
+// session pool. maxConns caps how many concurrent connections the swarm keeps to it.
 type exitPoolState struct {
-	maxConns   int
-	accumulate atomic.Bool
+	maxConns int
 }
+
+// maxInboundPoolLinks caps how many connections the exit side keeps to one client that opens
+// parallel pool links: the client's own cap plus one, for a fresh link that arrives before the
+// client has closed the idle one it replaces.
+const maxInboundPoolLinks = 4
 
 // quicNoise reports whether a connection is a QUIC noise-obfs link — the only kind unsafe to carry
 // tunnel traffic to a camouflage exit. A QUIC-REALITY link (reality) and any TCP/WS link (the TCP
@@ -57,37 +56,31 @@ func (s *Swarm) UnmarkExitPeer(exit types.PeerID) {
 	delete(s.exitPools, exit)
 }
 
-// SetExitAccumulate latches a marked exit into accumulate mode: from now on a fresh dial to it
-// adds a parallel connection instead of replacing the existing one. The exit gateway calls it on
-// a rotation dial (once the tunnel is already established), never on first contact.
-func (s *Swarm) SetExitAccumulate(exit types.PeerID) {
-	s.exitMu.RLock()
-	st := s.exitPools[exit]
-	s.exitMu.RUnlock()
-	if st != nil {
-		st.accumulate.Store(true)
-	}
-}
-
 func (s *Swarm) exitPoolFor(exit types.PeerID) *exitPoolState {
 	s.exitMu.RLock()
 	defer s.exitMu.RUnlock()
 	return s.exitPools[exit]
 }
 
-// tryAttachExitLink attaches an outbound connection to a marked exit as an extra parallel link on
-// its existing peer, instead of letting addPeer replace the single connection. It returns true
-// only when it took ownership of event.Conn (attached it, or deliberately rejected it because the
-// pool is full and every link is busy). It returns false — leaving the connection for addPeer — on
-// first contact (no primary yet, so the mesh/REALITY connection is set up normally) and for any
-// peer that is not a marked, accumulating exit.
+// tryAttachExitLink attaches a pool link (event.PoolLink) as an extra parallel connection on the
+// existing peer, instead of letting addPeer replace the single connection. Both ends do this for
+// the same connection: the client because its exit pool dialed it, the exit because the client
+// announced it in the handshake — so neither end closes the connection the other keeps using. It
+// returns true only when it took ownership of event.Conn (attached it, or deliberately rejected it
+// because the pool is full and every link is busy). It returns false — leaving the connection for
+// addPeer — for an ordinary connection and when there is no live connection to the peer yet (the
+// pool link then simply becomes the primary).
 func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
-	if !event.IsOut {
-		return false // only our own rotation dials accumulate; inbound follows the mesh rule
-	}
-	st := s.exitPoolFor(event.PeerID)
-	if st == nil || !st.accumulate.Load() {
+	if !event.PoolLink {
 		return false
+	}
+	maxConns := maxInboundPoolLinks
+	if event.IsOut {
+		st := s.exitPoolFor(event.PeerID)
+		if st == nil {
+			return false // the pool was torn down meanwhile
+		}
+		maxConns = st.maxConns
 	}
 
 	s.mu.RLock()
@@ -112,7 +105,7 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 		}
 	}
 
-	if p.LinkCount() >= st.maxConns {
+	if p.LinkCount() >= maxConns {
 		// At capacity: rotate by draining an old idle link to free a slot. Never drain a link
 		// with a stream in flight — a transfer must not be cut off mid-way (the same guarantee
 		// the pool's rotation gate relies on). If every extra link is busy, reject this dial and
@@ -152,7 +145,7 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 	}()
 
 	s.log().Debug("Swarm: added parallel exit link", "peer", event.PeerID.String()[:12],
-		"link", network.DescribeLink(event.Conn), "links", p.LinkCount(), "max", st.maxConns)
+		"link", network.DescribeLink(event.Conn), "links", p.LinkCount(), "max", maxConns)
 	return true
 }
 

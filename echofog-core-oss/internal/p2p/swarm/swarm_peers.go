@@ -92,13 +92,7 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 
 	s.attachStreamHandlers(pw, p, peerID)
 
-	initialProto := router.ProtoDirectQUIC
-	if conn.Protocol() == network.ProtocolTCP {
-		initialProto = router.ProtoTCPTLS
-	} else if s.cfg != nil && s.cfg.AntiDPI.ObfsPassword != "" {
-		initialProto = router.ProtoObfsQUIC
-	}
-	p.SetTransportWithProtocol(pw, initialProto)
+	p.SetTransportWithProtocol(pw, s.linkProto(conn))
 
 	s.mu.Lock()
 	s.activePeers[peerID] = p
@@ -110,34 +104,7 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		select {
-		case <-conn.Context().Done():
-		case <-p.ctx.Done():
-		case <-s.ctx.Done():
-			return
-		}
-		s.mu.Lock()
-		current := s.activePeers[peerID] == p
-		if current {
-			delete(s.activePeers, peerID)
-		}
-		obs := s.observers
-		s.mu.Unlock()
-		if current {
-			s.logLinkClosed(peerID, conn, time.Since(p.connectedAt))
-		}
-		if p.isOut && network.LinkKind(conn) == network.ProtocolQUIC && network.IsIdleTimeout(context.Cause(conn.Context())) {
-			s.preferTCP(conn) // UDP to this address went silent: TCP first next time
-		}
-		p.Close()
-		s.noteLongLived(p)
-		if p.release != nil {
-			p.release()
-		}
-		if current {
-			s.notifyPeerDisconnected(obs, peerID)
-			s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})
-		}
+		s.watchPeerLinks(p, peerID, conn)
 	}()
 
 	s.notifyPeerConnected(obs, peerID, peerPubKey, advertised)
@@ -150,6 +117,66 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	}()
 
 	return p
+}
+
+// watchPeerLinks waits for the peer's primary connection conn to die and then forgets the peer, so
+// it is redialled instead of staying a zombie — unless a parallel pool link is still up, which
+// then becomes the primary and is watched in turn.
+func (s *Swarm) watchPeerLinks(p *Peer, peerID types.PeerID, conn network.MuxConn) {
+	for {
+		select {
+		case <-conn.Context().Done():
+		case <-p.ctx.Done():
+		case <-s.ctx.Done():
+			return
+		}
+		// The primary died but a parallel pool link to the peer is still up: carry on over that
+		// one instead of dropping the peer (and every link with it). The other end does the same,
+		// so a pool never collapses because the one connection that came first went away.
+		if p.ctx.Err() != nil {
+			break
+		}
+		next := p.promoteExitLink(s.linkProto)
+		if next == nil {
+			break
+		}
+		s.log().Info("Swarm: primary link to peer died, a parallel link carries on", "peer", peerID.String()[:12],
+			"was", network.DescribeLink(conn), "link", network.DescribeLink(next.GetConn()))
+		conn = next.GetConn()
+	}
+	s.mu.Lock()
+	current := s.activePeers[peerID] == p
+	if current {
+		delete(s.activePeers, peerID)
+	}
+	obs := s.observers
+	s.mu.Unlock()
+	if current {
+		s.logLinkClosed(peerID, conn, time.Since(p.connectedAt))
+	}
+	if p.isOut && network.LinkKind(conn) == network.ProtocolQUIC && network.IsIdleTimeout(context.Cause(conn.Context())) {
+		s.preferTCP(conn) // UDP to this address went silent: TCP first next time
+	}
+	p.Close()
+	s.noteLongLived(p)
+	if p.release != nil {
+		p.release()
+	}
+	if current {
+		s.notifyPeerDisconnected(obs, peerID)
+		s.emit("network:peer_state_changed", map[string]any{"peer": peerID.String(), "state": "disconnected"})
+	}
+}
+
+// linkProto is the router protocol of a connection, for the peer's transport router.
+func (s *Swarm) linkProto(conn network.MuxConn) router.TransportProtocol {
+	if conn.Protocol() == network.ProtocolTCP {
+		return router.ProtoTCPTLS
+	}
+	if s.cfg != nil && s.cfg.AntiDPI.ObfsPassword != "" {
+		return router.ProtoObfsQUIC
+	}
+	return router.ProtoDirectQUIC
 }
 
 // attachStreamHandlers wires the data and stream callbacks on a peer connection: the fast-path

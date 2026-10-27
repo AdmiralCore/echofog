@@ -302,6 +302,42 @@ func (p *Peer) addExitLink(pw *network.PeerWrapper, reality bool) {
 	p.mu.Unlock()
 }
 
+// promoteExitLink makes a live parallel pool link the peer's primary connection once the primary
+// has died, preferring a camouflaged link over a QUIC noise one, and returns it; nil when the
+// primary is still alive or no live link is left. proto gives the router protocol of a connection.
+func (p *Peer) promoteExitLink(proto func(network.MuxConn) router.TransportProtocol) *network.PeerWrapper {
+	p.mu.Lock()
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil {
+		p.mu.Unlock()
+		return nil
+	}
+	best := -1
+	for i, l := range p.extraLinks {
+		if l.pw.GetConn().Context().Err() != nil {
+			continue
+		}
+		if best < 0 || (quicNoise(p.extraLinks[best].pw.GetConn().Protocol(), p.extraLinks[best].reality) &&
+			!quicNoise(l.pw.GetConn().Protocol(), l.reality)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		p.mu.Unlock()
+		return nil
+	}
+	next := p.extraLinks[best]
+	p.extraLinks = append(p.extraLinks[:best], p.extraLinks[best+1:]...)
+	dead := p.transport
+	p.primaryReality = next.reality
+	p.mu.Unlock()
+
+	p.SetTransportWithProtocol(next.pw, proto(next.pw.GetConn()))
+	if dead != nil {
+		_ = dead.Close()
+	}
+	return next.pw
+}
+
 // removeExitLink drops pw from the extra-link set (e.g. once its connection died). It does not
 // close pw; the caller owns that.
 func (p *Peer) removeExitLink(pw *network.PeerWrapper) {

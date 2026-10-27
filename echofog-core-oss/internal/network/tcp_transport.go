@@ -284,7 +284,7 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	}
 	cancel()
 	_ = raw.SetDeadline(time.Time{})
-	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: dialable, Caps: res.Caps, RemoteIP: ip})
+	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: dialable, Caps: res.Caps, RemoteIP: ip, PoolLink: res.Caps.Has(handshake.CapPoolLink)})
 	t.logger.Debug("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "inbound", "remote_addr", raw.RemoteAddr().String())
 }
 
@@ -382,7 +382,7 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		return err
 	}
 	_ = raw.SetDeadline(time.Time{})
-	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: true, Caps: res.Caps, RemoteIP: addrOfNet(raw.RemoteAddr())})
+	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: true, Caps: res.Caps, RemoteIP: addrOfNet(raw.RemoteAddr()), PoolLink: poolLinkRequested(ctx)})
 	t.logger.Info("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "outbound", "remote_addr", addr)
 	return nil
 }
