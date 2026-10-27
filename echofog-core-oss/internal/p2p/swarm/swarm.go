@@ -198,7 +198,7 @@ func (s *Swarm) registrationLoop(ch <-chan network.NewConnEvent) {
 				continue
 			}
 
-			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release)
+			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release, event.Reality)
 			if p == nil {
 				continue // duplicate connection, already closed
 			}

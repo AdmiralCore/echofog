@@ -44,6 +44,10 @@ type Peer struct {
 	release        func()       // gives back its place in the per-address limits; nil for outbound
 	pendingStreams atomic.Int32 // streams it opened whose first frame has not come yet
 
+	// primaryReality reports whether the primary transport is a QUIC-REALITY connection. For a
+	// camouflage exit it must be true; the swarm never downgrades such a peer's primary to noise.
+	primaryReality bool
+
 	// extraLinks are additional data-carrying connections to the same peer, besides transport.
 	// They exist only for an exit peer whose session pool runs several parallel connections:
 	// tunnel streams spread across transport and these, so a single stalled or censor-killed
@@ -246,6 +250,20 @@ func (p *Peer) ActiveStreams() int {
 		return tw.ActiveStreams()
 	}
 	return 0
+}
+
+// setPrimaryReality records whether the primary connection is QUIC-REALITY.
+func (p *Peer) setPrimaryReality(reality bool) {
+	p.mu.Lock()
+	p.primaryReality = reality
+	p.mu.Unlock()
+}
+
+// primaryIsReality reports whether the primary connection is QUIC-REALITY.
+func (p *Peer) primaryIsReality() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.primaryReality
 }
 
 // addExitLink records an additional parallel connection to this peer (an exit's session pool).

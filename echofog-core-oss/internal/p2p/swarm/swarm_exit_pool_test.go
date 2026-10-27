@@ -253,6 +253,55 @@ func TestExitPool_MeshPeerStaysSingleConnection(t *testing.T) {
 	require.Equal(t, 1, p.LinkCount())
 }
 
+func TestExitPool_CamouflageExitKeepsOnlyRealityLinks(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, _ := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+
+	// A camouflage exit with a REALITY primary.
+	s.SetPeerSNI(exit, "www.example.com")
+	require.True(t, s.IsCamouflagePeer(exit))
+	p.mu.Lock()
+	p.primaryReality = true
+	p.mu.Unlock()
+
+	s.MarkExitPeer(exit, 3)
+	s.SetExitAccumulate(exit)
+
+	// A REALITY rotation dial attaches as a pool link.
+	realityConn := newFakeMuxConn(ctx, 1)
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: realityConn, IsOut: true, Reality: true}))
+	require.Equal(t, 2, p.LinkCount())
+
+	// A noise connection to the same camouflage exit is refused outright and closed — it must never
+	// carry tunnel bytes a censor could flag.
+	noiseConn := newFakeMuxConn(ctx, 2)
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: noiseConn, IsOut: true, Reality: false}),
+		"a noise link to a camouflage exit is owned (and closed), never attached")
+	require.Equal(t, 2, p.LinkCount(), "the noise connection must not become a pool link")
+	require.Error(t, noiseConn.Context().Err(), "the noise connection should be closed")
+
+	// The primary is REALITY and the only connections that were ever admitted as extra links were
+	// REALITY ones (the noise connection above was rejected), so every pool link is REALITY.
+	require.True(t, p.primaryIsReality(), "the primary to a camouflage exit must be REALITY")
+}
+
+func TestExitPool_RealityConnReplacesNoisePrimaryForCamouflageExit(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, _ := addPrimaryPeer(ctx, s, 0) // primaryReality defaults to false (a noise bootstrap link)
+	exit := p.ID()
+	s.SetPeerSNI(exit, "www.example.com")
+	s.MarkExitPeer(exit, 3)
+	s.SetExitAccumulate(exit)
+
+	// While the primary is still noise, a REALITY connection is NOT accumulated beside it: it is
+	// handed back to addPeer to replace (upgrade) the primary. tryAttachExitLink returns false.
+	realityConn := newFakeMuxConn(ctx, 1)
+	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: realityConn, IsOut: true, Reality: true}),
+		"a REALITY link must replace a noise primary, not sit beside it")
+	require.Equal(t, 1, p.LinkCount(), "no extra link added; the replacement happens in addPeer")
+}
+
 // linkLoads returns the active-stream count of every live link (primary first, then extras).
 func linkLoads(p *Peer) []int {
 	p.mu.RLock()

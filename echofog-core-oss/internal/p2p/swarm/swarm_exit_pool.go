@@ -87,6 +87,20 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 		return false // no live primary yet: let addPeer establish it
 	}
 
+	// A camouflage exit must carry its tunnel only over REALITY connections: a noise link would
+	// show a censor the bulk bytes "in the clear". Never accumulate a noise connection to one, and
+	// if the primary is still noise, hand this REALITY connection to addPeer so it replaces (and
+	// upgrades) the primary instead of sitting beside a noise one.
+	if s.IsCamouflagePeer(event.PeerID) {
+		if !event.Reality {
+			_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "non-REALITY link to camouflage exit")
+			return true
+		}
+		if !p.primaryIsReality() {
+			return false
+		}
+	}
+
 	if p.LinkCount() >= st.maxConns {
 		// At capacity: rotate by draining an old idle link to free a slot. Never drain a link
 		// with a stream in flight — a transfer must not be cut off mid-way (the same guarantee

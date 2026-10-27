@@ -38,12 +38,12 @@ func (s *Swarm) keepDialedBy(isOut bool, remote types.PeerID) bool {
 // AddPeer records an authenticated connection as an active peer, wiring up its read loops and
 // notifying observers. An existing connection to the same peer is replaced.
 func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool) *Peer {
-	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil)
+	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil, false)
 }
 
 // addPeer is AddPeer for a connection that came from ip and holds a place in the per-address
 // limits, which release gives back once the peer is gone (both may be zero).
-func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func()) *Peer {
+func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func(), reality bool) *Peer {
 
 	s.mu.Lock()
 	if old, exists := s.activePeers[peerID]; exists {
@@ -52,6 +52,17 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 			// otherwise each could close the one the other kept and lose both
 			s.mu.Unlock()
 			_ = conn.CloseWithError(network.ErrCodeNormalClose, "duplicate connection")
+			if release != nil {
+				release()
+			}
+			return nil
+		}
+		// Never downgrade a camouflage exit's REALITY connection to noise. A noise connection to a
+		// camouflage node does not serve its tunnel and a censor would flag the bulk bytes; keep the
+		// REALITY one and drop the incoming noise connection.
+		if !reality && old.Alive() && old.primaryIsReality() && s.exitPoolFor(peerID) != nil && s.IsCamouflagePeer(peerID) {
+			s.mu.Unlock()
+			_ = conn.CloseWithError(network.ErrCodeNormalClose, "keeping REALITY connection to camouflage exit")
 			if release != nil {
 				release()
 			}
@@ -69,6 +80,7 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	p.txBytes = &s.bytesTx
 	p.ip = ip
 	p.release = release
+	p.primaryReality = reality
 	pw := network.NewPeerWrapper(p.ctx, conn, peerID)
 
 	if s.peerStore != nil && dialable {
