@@ -215,7 +215,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 		// this ephemeral, one-connection-per-dial config is reshaped; the shared listener and noise
 		// dials keep quic-go's own.
 		if q.realityConn != nil && haveExpected {
-			if r, rerr := mimicry.QUICInitialRand(mimicry.NodeStealthKey(q.obfsSecret, expected)); rerr == nil {
+			if r, rerr := mimicry.QUICInitialRand(mimicry.NodeStealthKey(q.obfsSecret, expected), tlsCfg.NextProtos); rerr == nil {
 				tlsCfg.Rand = r
 				reality := *quicCfg
 				reality.InitialPacketSize = 1250

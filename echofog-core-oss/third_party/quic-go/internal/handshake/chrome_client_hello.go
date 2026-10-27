@@ -2,6 +2,9 @@ package handshake
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"slices"
 
 	utls "github.com/refraction-networking/utls"
@@ -96,6 +99,63 @@ func chromeQUICClientHelloSpec(alpn []string) *utls.ClientHelloSpec {
 			&utls.UtlsGREASEExtension{},
 		}),
 	}
+}
+
+// ChromeParrotKeyShare builds the Chrome QUIC ClientHello with rand as the TLS randomness source and
+// returns the raw key_share extension body — the same bytes a server reads off the wire
+// (client_shares length, then each share's group, length and key).
+//
+// It builds only as far as ApplyPreset, which is where uTLS generates the ephemeral key shares from
+// config.rand and writes them back into the spec's KeyShareExtension. A QUIC ClientHello reads the
+// client random first, then (no legacy_session_id, per RFC 9001) the GREASE seed, then the shares, all
+// from config.rand; for a HelloCustom preset uTLS never regenerates them, so the shares read here are
+// exactly what the live handshake sends. The hello is discarded.
+//
+// EchoFog uses this to bind its stealth token to the key_share. The token rides in the ClientHello
+// random, which is drawn before the shares, so it cannot be sealed to the shares in one build. Instead
+// the dial predicts the shares here with a deterministic rand, seals the token to them, and dials for
+// real with the same deterministic rand so the live handshake reproduces the identical shares.
+func ChromeParrotKeyShare(rand io.Reader, alpn []string) ([]byte, error) {
+	spec := chromeQUICClientHelloSpec(alpn)
+	uConf := &utls.Config{
+		Rand:                   rand,
+		MinVersion:             utls.VersionTLS13,
+		MaxVersion:             utls.VersionTLS13,
+		InsecureSkipVerify:     true,
+		SessionTicketsDisabled: true,
+		NextProtos:             alpn,
+	}
+	conn := utls.UQUICClient(&utls.QUICConfig{TLSConfig: uConf}, utls.HelloCustom)
+	if err := conn.ApplyPreset(spec); err != nil {
+		return nil, fmt.Errorf("building Chrome ClientHello to read its key_share: %w", err)
+	}
+	for _, ext := range spec.Extensions {
+		ks, ok := ext.(*utls.KeyShareExtension)
+		if !ok {
+			continue
+		}
+		return marshalKeyShareBody(ks.KeyShares), nil
+	}
+	return nil, errors.New("Chrome ClientHello spec has no key_share extension")
+}
+
+// marshalKeyShareBody encodes resolved key shares as the key_share extension body appears on the wire:
+// a 16-bit client_shares length, then each share's 16-bit group, 16-bit key length and key. This
+// matches uTLS's own marshalling (KeyShareExtension.Read) and what a server extracts from a ClientHello.
+func marshalKeyShareBody(shares []utls.KeyShare) []byte {
+	total := 0
+	for _, ks := range shares {
+		total += 4 + len(ks.Data)
+	}
+	body := make([]byte, 2, 2+total)
+	body[0] = byte(total >> 8)
+	body[1] = byte(total)
+	for _, ks := range shares {
+		g := uint16(ks.Group)
+		body = append(body, byte(g>>8), byte(g), byte(len(ks.Data)>>8), byte(len(ks.Data)))
+		body = append(body, ks.Data...)
+	}
+	return body
 }
 
 // extensionTrustAnchors is the TLS trust_anchors extension
