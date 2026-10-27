@@ -90,7 +90,7 @@ func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener
 			q.guard.Load().Success(ip)
 
 			addr, dialable := inboundListenAddr(c.RemoteAddr().String(), peerRes.ListenPort)
-			q.newConn(c, false, addr, dialable, peerRes.PeerID, peerRes.PubKey, peerRes.Caps)
+			q.newConn(c, false, addr, dialable, peerRes.PeerID, peerRes.PubKey, peerRes.Caps, false, peerRes.Caps.Has(handshake.CapPoolLink))
 			q.logger.Debug("Peer authenticated and TLS confirmed", "peer_id", peerRes.PeerID, "direction", "inbound", "remote_addr", c.RemoteAddr().String())
 		}(conn)
 	}
@@ -111,7 +111,7 @@ func inboundListenAddr(remote string, announced uint16) (string, bool) {
 	return net.JoinHostPort(host, strconv.Itoa(int(announced))), true
 }
 
-func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, dialable bool, PeerID types.PeerID, PeerPubKey types.PeerPublicKey, caps handshake.Capability) {
+func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, dialable bool, PeerID types.PeerID, PeerPubKey types.PeerPublicKey, caps handshake.Capability, reality, poolLink bool) {
 	ev := NewConnEvent{
 		Caps:       caps,
 		Conn:       WrapQUIC(conn),
@@ -121,6 +121,8 @@ func (q *QuicTransport) newConn(conn *quic.Conn, isOut bool, addr string, dialab
 		Addr:       addr,
 		PeerPubKey: PeerPubKey,
 		RemoteIP:   addrOfNet(conn.RemoteAddr()),
+		Reality:    reality,
+		PoolLink:   poolLink,
 	}
 	select {
 	case q.connChan <- ev:

@@ -125,6 +125,9 @@ func (a *DefaultPeerAuthenticator) negotiator(ctx context.Context, stream MuxStr
 	if a.hideListen.Load() {
 		cfg.ListenPort = 0
 	}
+	if !inbound && poolLinkRequested(ctx) {
+		cfg.MyCaps |= handshake.CapPoolLink
+	}
 	if f := a.screen.Load(); inbound && f != nil {
 		cfg.Screen = *f
 	}

@@ -52,3 +52,31 @@ func TestEphemeralSocket_NoiseDialRotatesFiveTuple(t *testing.T) {
 	assert.NotEqual(t, client.tr.UDPPort(), eph2, "a rotated noise dial must not reuse the main socket")
 	assert.NotEqual(t, eph1, eph2, "each rotated noise dial must be a distinct 5-tuple")
 }
+
+// A pool link is announced in the handshake: the exit sees the client's rotation dial flagged as a
+// pool link (and keeps it beside the existing connection), while an ordinary dial is not flagged.
+func TestPoolLink_FlagReachesBothEnds(t *testing.T) {
+	server := newObfsNode(t, false, "")
+	client := newObfsNode(t, false, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, server.tr.ListenEarly(ctx))
+	client.tr.ExpectPeer(server.addr(), server.id)
+
+	dial := func(ctx context.Context) (out, in NewConnEvent) {
+		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dcancel()
+		require.NoError(t, client.tr.DialEarly(dctx, server.addr()))
+		return nextConn(t, client.tr.ConnChan()), nextConn(t, server.tr.ConnChan())
+	}
+
+	out, in := dial(context.Background())
+	assert.False(t, out.PoolLink, "an ordinary dial is not a pool link")
+	assert.False(t, in.PoolLink, "an ordinary dial is not announced as a pool link")
+
+	out, in = dial(WithPoolLink(WithEphemeralSocket(context.Background())))
+	assert.True(t, out.PoolLink, "the dialer knows its pool link")
+	assert.True(t, in.PoolLink, "the exit learns from the handshake that it is a pool link")
+	assert.Equal(t, client.id, in.PeerID)
+}

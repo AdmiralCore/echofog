@@ -265,7 +265,7 @@ func (t *WSTransport) handleInbound(conn net.Conn, ip netip.Addr, releaseSlot fu
 	releaseSlot()
 	_ = conn.SetDeadline(time.Time{})
 	// a WebSocket peer's source is the CDN or an ephemeral port; it is not dialable back as ws
-	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: conn.RemoteAddr().String(), Dialable: false, Caps: res.Caps, RemoteIP: ip})
+	t.emit(NewConnEvent{Conn: mc, IsOut: false, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: conn.RemoteAddr().String(), Dialable: false, Caps: res.Caps, RemoteIP: ip, PoolLink: res.Caps.Has(handshake.CapPoolLink)})
 	t.logger.Debug("Peer authenticated over WebSocket", "peer_id", res.PeerID, "direction", "inbound")
 }
 
@@ -333,7 +333,7 @@ func (t *WSTransport) Dial(ctx context.Context, url string) error {
 		return &PeerMismatchError{Got: res.PeerID}
 	}
 	_ = conn.SetDeadline(time.Time{})
-	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: url, Dialable: true, Caps: res.Caps})
+	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: url, Dialable: true, Caps: res.Caps, PoolLink: poolLinkRequested(ctx)})
 	t.logger.Info("Peer authenticated over WebSocket", "peer_id", res.PeerID, "direction", "outbound", "url", url)
 	return nil
 }

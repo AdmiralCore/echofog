@@ -19,6 +19,11 @@ const (
 	// willing to strip that framing (anti_dpi.tunnel_padding on), so a peer may pad to it iff it
 	// sees this bit. Both sides compute the same decision: localToggle && peer.Caps().Has(this).
 	CapTunnelPadding Capability = 1 << 6
+	// CapPoolLink is not a node capability but a per-connection flag the dialing side sets: this
+	// connection is an extra parallel link of an exit session pool, to be kept beside the existing
+	// connection to the same peer instead of replacing it. A node that does not know the bit
+	// ignores it and replaces as before.
+	CapPoolLink Capability = 1 << 7
 )
 
 // DefaultCaps is what a node announces unless told otherwise: it relays and serves the DHT.

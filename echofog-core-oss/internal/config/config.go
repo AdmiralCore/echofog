@@ -245,12 +245,15 @@ type FlowShapingConfig struct {
 // DefaultFlowShapingConfig returns the default FlowShaping settings.
 func DefaultFlowShapingConfig() FlowShapingConfig {
 	return FlowShapingConfig{
+		// MaxConnections bounds the parallel session pool to one exit: the swarm keeps up to this
+		// many concurrent connections and spreads streams across them, so a single stalled or
+		// censor-killed connection does not stall the VPN (2-4 is the useful range).
 		MaxConnections:     3,
 		MaxConcurrency:     8,
 		MaxBytesMin:        15 * 1024 * 1024,
-		MaxBytesMax:        25 * 1024 * 1024,
-		MaxConnLifetimeMin: 60 * time.Second,
-		MaxConnLifetimeMax: 100 * time.Second,
+		MaxBytesMax:        45 * 1024 * 1024,
+		MaxConnLifetimeMin: 120 * time.Second,
+		MaxConnLifetimeMax: 300 * time.Second,
 		MaxStreamsPerConn:  500,
 		MinDialInterval:    450 * time.Millisecond,
 	}
@@ -268,16 +271,16 @@ func (c *FlowShapingConfig) Normalize() {
 		c.MaxBytesMin = 15 * 1024 * 1024
 	}
 	if c.MaxBytesMax <= 0 {
-		c.MaxBytesMax = 25 * 1024 * 1024
+		c.MaxBytesMax = 45 * 1024 * 1024
 	}
 	if c.MaxBytesMax < c.MaxBytesMin {
 		c.MaxBytesMax = c.MaxBytesMin
 	}
 	if c.MaxConnLifetimeMin <= 0 {
-		c.MaxConnLifetimeMin = 60 * time.Second
+		c.MaxConnLifetimeMin = 120 * time.Second
 	}
 	if c.MaxConnLifetimeMax <= 0 {
-		c.MaxConnLifetimeMax = 100 * time.Second
+		c.MaxConnLifetimeMax = 300 * time.Second
 	}
 	if c.MaxConnLifetimeMax < c.MaxConnLifetimeMin {
 		c.MaxConnLifetimeMax = c.MaxConnLifetimeMin

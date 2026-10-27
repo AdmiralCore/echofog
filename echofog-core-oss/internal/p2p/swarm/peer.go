@@ -44,6 +44,17 @@ type Peer struct {
 	release        func()       // gives back its place in the per-address limits; nil for outbound
 	pendingStreams atomic.Int32 // streams it opened whose first frame has not come yet
 
+	// primaryReality reports whether the primary transport is a QUIC-REALITY connection. For a
+	// camouflage exit it must be true; the swarm never downgrades such a peer's primary to noise.
+	primaryReality bool
+
+	// extraLinks are additional data-carrying connections to the same peer, besides transport.
+	// They exist only for an exit peer whose session pool runs several parallel connections:
+	// tunnel streams spread across transport and these, so a single stalled or censor-killed
+	// connection does not stall the VPN (openTunnelStream picks the least-loaded live link). A
+	// mesh peer never has any; its control plane keeps using transport alone. Guarded by mu.
+	extraLinks []exitLink
+
 	dispatcher *dispatcher.Dispatcher
 }
 
@@ -69,6 +80,8 @@ func (p *Peer) Close() {
 	p.mu.Lock()
 	r := p.router
 	tw := p.transport
+	extra := p.extraLinks
+	p.extraLinks = nil
 	p.mu.Unlock()
 
 	if r != nil {
@@ -76,6 +89,9 @@ func (p *Peer) Close() {
 	}
 	if tw != nil {
 		_ = tw.Close()
+	}
+	for _, l := range extra {
+		_ = l.pw.Close()
 	}
 }
 
@@ -234,6 +250,174 @@ func (p *Peer) ActiveStreams() int {
 		return tw.ActiveStreams()
 	}
 	return 0
+}
+
+// primaryIsReality reports whether the primary connection is QUIC-REALITY.
+func (p *Peer) primaryIsReality() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.primaryReality
+}
+
+// primaryIsCamouflaged reports whether the primary connection is safe to carry tunnel traffic to a
+// camouflage exit: a QUIC-REALITY link, or any TCP/WS link (the TCP fallback is browser-TLS
+// mimicry). Only a plain QUIC noise link is not.
+func (p *Peer) primaryIsCamouflaged() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.transport == nil {
+		return false
+	}
+	return !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)
+}
+
+// hasCamouflagedLink reports whether any live connection to this peer — the primary or a pool
+// link — is camouflaged (QUIC-REALITY or TCP/WS mimicry), i.e. can carry a camouflage exit's tunnel.
+func (p *Peer) hasCamouflagedLink() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil &&
+		!quicNoise(p.transport.GetConn().Protocol(), p.primaryReality) {
+		return true
+	}
+	for _, l := range p.extraLinks {
+		if l.pw.GetConn().Context().Err() == nil && !quicNoise(l.pw.GetConn().Protocol(), l.reality) {
+			return true
+		}
+	}
+	return false
+}
+
+// exitLink is one parallel connection of an exit peer's session pool. reality records whether it
+// is a QUIC-REALITY connection, so a camouflage exit's tunnel streams are kept off any noise link.
+type exitLink struct {
+	pw      *network.PeerWrapper
+	reality bool
+}
+
+// addExitLink records an additional parallel connection to this peer (an exit's session pool).
+func (p *Peer) addExitLink(pw *network.PeerWrapper, reality bool) {
+	p.mu.Lock()
+	p.extraLinks = append(p.extraLinks, exitLink{pw: pw, reality: reality})
+	p.mu.Unlock()
+}
+
+// promoteExitLink makes a live parallel pool link the peer's primary connection once the primary
+// has died, preferring a camouflaged link over a QUIC noise one, and returns it; nil when the
+// primary is still alive or no live link is left. proto gives the router protocol of a connection.
+func (p *Peer) promoteExitLink(proto func(network.MuxConn) router.TransportProtocol) *network.PeerWrapper {
+	p.mu.Lock()
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil {
+		p.mu.Unlock()
+		return nil
+	}
+	best := -1
+	for i, l := range p.extraLinks {
+		if l.pw.GetConn().Context().Err() != nil {
+			continue
+		}
+		if best < 0 || (quicNoise(p.extraLinks[best].pw.GetConn().Protocol(), p.extraLinks[best].reality) &&
+			!quicNoise(l.pw.GetConn().Protocol(), l.reality)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		p.mu.Unlock()
+		return nil
+	}
+	next := p.extraLinks[best]
+	p.extraLinks = append(p.extraLinks[:best], p.extraLinks[best+1:]...)
+	dead := p.transport
+	p.primaryReality = next.reality
+	p.mu.Unlock()
+
+	p.SetTransportWithProtocol(next.pw, proto(next.pw.GetConn()))
+	if dead != nil {
+		_ = dead.Close()
+	}
+	return next.pw
+}
+
+// removeExitLink drops pw from the extra-link set (e.g. once its connection died). It does not
+// close pw; the caller owns that.
+func (p *Peer) removeExitLink(pw *network.PeerWrapper) {
+	p.mu.Lock()
+	for i, l := range p.extraLinks {
+		if l.pw == pw {
+			p.extraLinks = append(p.extraLinks[:i], p.extraLinks[i+1:]...)
+			break
+		}
+	}
+	p.mu.Unlock()
+}
+
+// LinkCount is how many live connections this peer currently holds: the primary transport plus
+// every still-open extra link.
+func (p *Peer) LinkCount() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	n := 0
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil {
+		n++
+	}
+	for _, l := range p.extraLinks {
+		if l.pw.GetConn().Context().Err() == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// oldestIdleExtraLink returns the earliest-added extra link that carries no active stream, so a
+// rotation can drain an idle connection to make room for a fresh one without ever cutting off a
+// transfer in flight. It returns nil when every extra link is busy.
+func (p *Peer) oldestIdleExtraLink() *network.PeerWrapper {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, l := range p.extraLinks {
+		if l.pw.ActiveStreams() == 0 {
+			return l.pw
+		}
+	}
+	return nil
+}
+
+// openTunnelStream opens one bidirectional stream to this peer on the least-loaded live link,
+// spreading tunnel traffic across the pool so no single connection carries it all. When
+// camouflageExit is set, only camouflaged links are considered — QUIC-REALITY or any TCP/WS
+// (mimicry) link — so a tunnel stream never rides a plain QUIC noise connection a censor would
+// flag; it returns an error if the peer has no live camouflaged link. For a mesh peer (no extra
+// links, camouflageExit false) it is the primary transport.
+func (p *Peer) openTunnelStream(ctx context.Context, camouflageExit bool) (*network.Stream, error) {
+	p.mu.RLock()
+	var best *network.PeerWrapper
+	bestLoad := -1
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil &&
+		(!camouflageExit || !quicNoise(p.transport.GetConn().Protocol(), p.primaryReality)) {
+		best = p.transport
+		bestLoad = p.transport.ActiveStreams()
+	}
+	for _, l := range p.extraLinks {
+		if l.pw.GetConn().Context().Err() != nil {
+			continue
+		}
+		if camouflageExit && quicNoise(l.pw.GetConn().Protocol(), l.reality) {
+			continue
+		}
+		if load := l.pw.ActiveStreams(); best == nil || load < bestLoad {
+			best = l.pw
+			bestLoad = load
+		}
+	}
+	p.mu.RUnlock()
+
+	if best == nil {
+		if camouflageExit {
+			return nil, errors.New("camouflage exit has no live camouflaged (REALITY or TCP) link to open a stream on")
+		}
+		return nil, errors.New("peer has no live link to open a stream on")
+	}
+	return best.OpenBidirectionalStream(ctx)
 }
 
 // DrainAndClose waits up to timeout for active streams to finish, then closes the peer.
