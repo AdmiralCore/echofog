@@ -1,11 +1,22 @@
 package quic
 
 import (
+	"io"
 	"time"
 
+	"github.com/apernet/quic-go/internal/handshake"
 	"github.com/apernet/quic-go/internal/protocol"
 	"github.com/apernet/quic-go/internal/wire"
 )
+
+// ChromeParrotKeyShare returns the key_share extension body of the ClientHello a ChromeParrot client
+// would send with rand as its TLS randomness source (alpn as its ALPN). It builds and discards a
+// throwaway ClientHello; see handshake.ChromeParrotKeyShare. A caller that reuses the same
+// deterministic rand for an actual dial gets the identical key_share on the wire, which is how EchoFog
+// binds its stealth token (carried in the ClientHello random) to the key_share.
+func ChromeParrotKeyShare(rand io.Reader, alpn []string) ([]byte, error) {
+	return handshake.ChromeParrotKeyShare(rand, alpn)
+}
 
 // Values a Chrome-parroting client pins. Advertising Chrome's transport
 // parameter shape while carrying quic-go's own numbers would defeat the point.

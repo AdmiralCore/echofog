@@ -34,15 +34,31 @@ func generateTestCert(name string) tls.Certificate {
 }
 
 // serverInterceptorConn wraps the server's PacketConn to verify the stealth token carried in the
-// ClientHello random. The token is a genuine part of the handshake, so an authenticated Initial is
-// passed to quic-go unchanged (nothing to strip); a stranger's is dropped (a real node forwards it
-// to the cover site).
+// ClientHello random. The token is bound to the ClientHello's key_share, which (with ML-KEM) spans
+// both of a client's Initials, so the interceptor buffers a source's Initials until the ClientHello
+// reassembles, then verifies the whole flight once. A verified flight is replayed to quic-go unchanged
+// (the token is a genuine part of the handshake, nothing to strip); a stranger's is dropped (a real
+// node forwards it to the cover site). This mirrors QuicRealityConn's buffered gated routing in
+// miniature.
 type serverInterceptorConn struct {
 	net.PacketConn
 	authKey    []byte
 	mu         sync.Mutex
 	authed     map[string]bool
 	authedDCID map[string]bool
+	pending    map[string]*intPending
+	drain      []intPkt
+}
+
+type intPending struct {
+	frags map[int][]byte
+	raws  [][]byte
+	dcid  []byte
+}
+
+type intPkt struct {
+	b    []byte
+	addr net.Addr
 }
 
 func (s *serverInterceptorConn) WriteTo(p []byte, addr net.Addr) (int, error) {
@@ -51,33 +67,65 @@ func (s *serverInterceptorConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 
 func (s *serverInterceptorConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
+		s.mu.Lock()
+		if len(s.drain) > 0 {
+			d := s.drain[0]
+			s.drain = s.drain[1:]
+			s.mu.Unlock()
+			return copy(p, d.b), d.addr, nil
+		}
+		s.mu.Unlock()
+
 		n, addr, err := s.PacketConn.ReadFrom(p)
 		if err != nil {
 			return n, addr, err
 		}
-		if IsQUICInitial(p[:n]) {
-			valid, dcid := VerifyQUICInitialRandomToken(p[:n], s.authKey)
-			dcidStr := string(dcid)
-
-			s.mu.Lock()
-			isAuthed := s.authed[addr.String()] || (len(dcid) > 0 && s.authedDCID[dcidStr])
-			s.mu.Unlock()
-
-			if !valid && !isAuthed {
-				// Reject or forward active probe
-				continue
-			}
-
-			s.mu.Lock()
-			s.authed[addr.String()] = true
-			if len(dcid) > 0 {
-				s.authedDCID[dcidStr] = true
-			}
-			s.mu.Unlock()
-
+		if !IsQUICInitial(p[:n]) {
 			return n, addr, nil
 		}
-		return n, addr, nil
+
+		key := addr.String()
+		dcid, frags, okDec := QUICInitialCrypto(p[:n])
+		raw := append([]byte(nil), p[:n]...)
+
+		s.mu.Lock()
+		if s.authed[key] || (len(dcid) > 0 && s.authedDCID[string(dcid)]) {
+			s.mu.Unlock()
+			return n, addr, nil
+		}
+		if s.pending == nil {
+			s.pending = map[string]*intPending{}
+		}
+		ph := s.pending[key]
+		if ph == nil {
+			ph = &intPending{frags: map[int][]byte{}}
+			s.pending[key] = ph
+		}
+		ph.raws = append(ph.raws, raw)
+		if okDec {
+			if ph.dcid == nil && len(dcid) > 0 {
+				ph.dcid = dcid
+			}
+			ph.frags = MergeCryptoFrags(ph.frags, frags)
+		}
+		hello := AssembleClientHello(ph.frags)
+		if !QUICClientHelloComplete(hello) {
+			s.mu.Unlock()
+			continue // keep buffering
+		}
+		delete(s.pending, key)
+		if !VerifyQUICClientHelloToken(hello, s.authKey) {
+			s.mu.Unlock()
+			continue // stranger: a real node forwards it to the cover site
+		}
+		s.authed[key] = true
+		if len(ph.dcid) > 0 {
+			s.authedDCID[string(ph.dcid)] = true
+		}
+		for _, r := range ph.raws {
+			s.drain = append(s.drain, intPkt{b: r, addr: addr})
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -135,8 +183,9 @@ func TestQUICReality_FullHandshake(t *testing.T) {
 	defer cliTr.Close()
 
 	// The stealth token travels in the ClientHello random, seeded through tls.Config.Rand, exactly
-	// as the production REALITY dial does; no per-packet injection.
-	initialRand, err := QUICInitialRand(authKey)
+	// as the production REALITY dial does; no per-packet injection. QUICInitialRand predicts the
+	// ChromeParrot key_share from a deterministic stream and binds the token to it.
+	initialRand, err := QUICInitialRand(authKey, []string{"h3"})
 	require.NoError(t, err)
 	clientTLS := &tls.Config{
 		ServerName:         "cover.lab",
@@ -144,10 +193,12 @@ func TestQUICReality_FullHandshake(t *testing.T) {
 		InsecureSkipVerify: true,
 		Rand:               initialRand,
 	}
-	// Stock crypto/tls, as the production REALITY dial uses: it reads the ClientHello random from
-	// tls.Config.Rand first, so the token lands there. InitialPacketSize mirrors the 1250-byte dial.
+	// ChromeParrot with 1250-byte Initials, exactly as the production REALITY dial does: uTLS reads the
+	// ClientHello random from tls.Config.Rand first, so the token lands there, and the same deterministic
+	// stream reproduces the key_share the token is bound to.
 	clientQUIC := &quic.Config{
 		InitialPacketSize: 1250,
+		ChromeParrot:      true,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
