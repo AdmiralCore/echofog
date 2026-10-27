@@ -1,6 +1,6 @@
 # Multi-stage build of a headless EchoFog node: a static binary in a small non-root image.
 
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 RUN apk add --no-cache git ca-certificates tzdata
 WORKDIR /build
 COPY go.mod go.sum ./

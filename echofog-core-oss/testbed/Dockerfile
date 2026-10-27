@@ -1,6 +1,6 @@
 # Image of the test bed: the test node and the tools that make a Linux container behave like a
 # router (NAT, latency, loss) or a victim of one (iptables, tc).
-FROM golang:1.27-alpine AS build
+FROM golang:1.27.3-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 # third_party holds the local apernet/quic-go fork that go.mod replaces to; go mod download must see

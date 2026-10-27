@@ -20,7 +20,7 @@ Built with [Wails](https://wails.io) (Go + WebView) and Svelte.
 
 ## Build
 
-Requirements: Go 1.27+, Node 18+, the Wails CLI v2.11.0 built with a recent `golang.org/x/tools`
+Requirements: Go 1.27.3+, Node 18+, the Wails CLI v2.11.0 built with a recent `golang.org/x/tools`
 (see [Build from source](../README.md#build-from-source) for why and how).
 The core is expected next to this folder (`../echofog-core-oss`, see the `replace` in `go.mod`).
 

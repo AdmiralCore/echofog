@@ -1,6 +1,6 @@
 # Builds nDPI from source and the EchoFog traffic generator, then captures loopback while the
 # generator runs and classifies the capture with ndpiReader.
-FROM golang:1.27 AS gobuild
+FROM golang:1.27.3 AS gobuild
 WORKDIR /src
 COPY go.mod go.sum ./
 # third_party holds the local apernet/quic-go fork that go.mod replaces to; go mod download must see

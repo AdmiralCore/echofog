@@ -1,8 +1,8 @@
 module github.com/echofog/echofog-desktop
 
-go 1.27.0
+go 1.27.3
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	github.com/echofog/echofog-core v0.0.0-20260117181931-f18778355f0a

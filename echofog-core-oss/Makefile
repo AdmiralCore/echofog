@@ -33,7 +33,7 @@ testbed-chaos:
 
 # The race detector needs cgo and a Linux toolchain; run it in Docker when the host cannot.
 test-race:
-	docker run --rm -v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27 sh -c 'go test -race -count=1 $$(go list ./... | grep -v -e /internal/simulation -e /testbed)'
+	docker run --rm -v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27.3 sh -c 'go test -race -count=1 $$(go list ./... | grep -v -e /internal/simulation -e /testbed)'
 
 # Call trees: unit tests and the 10-node QUIC cluster
 test-calls:
@@ -53,7 +53,7 @@ test-calls-tcp:
 # Whole-computer mode on a real Linux TUN (needs root and /dev/net/tun), inside Docker
 test-tun:
 	docker run --rm --cap-add NET_ADMIN --device /dev/net/tun --add-host echo.test:127.0.0.1 \
-		-v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27 \
+		-v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27.3 \
 		sh -c "apt-get update -qq && apt-get install -y -qq iproute2 >/dev/null && go test -tags tune2e -run TestLinuxTunEndToEnd -count=1 -v ./internal/network/tunmode/"
 
 clean:
