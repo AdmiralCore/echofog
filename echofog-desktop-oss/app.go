@@ -293,6 +293,10 @@ func (a *App) startEventListeners(nodeAPI *api.NodeApi, ctx context.Context) {
 	nodeAPI.SubscribeConversations(func(ch api.ConvChange) {
 		safeEventsEmit(ctx, "conv:change", ch)
 	})
+	// a connection to a peer came up or went away: the contact's online mark
+	nodeAPI.OnPeerState(func(ev api.PeerStateDTO) {
+		safeEventsEmit(ctx, "peer:state", ev)
+	})
 
 	peerCh := nodeAPI.PeerDiscoveryHandler()
 	go func() {

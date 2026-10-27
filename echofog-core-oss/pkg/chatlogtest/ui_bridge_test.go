@@ -115,6 +115,7 @@ func newBridge(api *node.NodeApi, stop func()) http.Handler {
 	api.SubscribeConversations(func(ch node.ConvChange) { b.emit("conv:change", ch) })
 	api.OnMessageState(func(ev node.MessageStateDTO) { b.emit("message:state", ev) })
 	api.SubscribeGroupEvents(func(ev node.GroupEvent) { b.emit("group:event", ev) })
+	api.OnPeerState(func(ev node.PeerStateDTO) { b.emit("peer:state", ev) })
 	mux := http.NewServeMux()
 	mux.HandleFunc("/call/", b.call)
 	mux.HandleFunc("/events", b.events)

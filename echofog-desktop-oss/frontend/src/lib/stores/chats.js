@@ -258,6 +258,11 @@ function listen() {
 
   on('conv:change', (ev) => { if (ev && ev.ref) changed(ev); });
 
+  // a connection to a contact came up or went away
+  on('peer:state', (ev) => {
+    if (ev && ev.peer_id) patch('d:' + ev.peer_id, (c) => ({ ...c, online: !!ev.online }));
+  });
+
   // a message of ours moved on: handed to a relay, taken by the recipient's device, confirmed, or given up
   on('message:state', (ev) => {
     if (!ev || !ev.id) return;

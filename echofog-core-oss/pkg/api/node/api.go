@@ -18,6 +18,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/dto"
+	"github.com/echofog/echofog-core/pkg/events"
 	"github.com/echofog/echofog-core/pkg/node"
 )
 
@@ -229,7 +230,50 @@ func (n *NodeApi) GetContacts() ([]dto.ContactDTO, error) {
 	if n.node.Contact == nil {
 		return nil, errNoChat
 	}
-	return n.node.Contact.GiveMyContacts()
+	contacts, err := n.node.Contact.GiveMyContacts()
+	if err != nil {
+		return nil, err
+	}
+	for i := range contacts {
+		contacts[i].IsOnline = n.peerOnline(contacts[i].PeerID)
+	}
+	return contacts, nil
+}
+
+// peerOnline says whether the swarm has a live connection to the peer (hex id).
+func (n *NodeApi) peerOnline(peerID string) bool {
+	if n.node.Swarm == nil {
+		return false
+	}
+	id, err := types.PeerIDFromString(peerID)
+	return err == nil && n.node.Swarm.GetPeer(id) != nil
+}
+
+// PeerStateDTO says that the connection to a peer came up or went away.
+type PeerStateDTO struct {
+	PeerID string `json:"peer_id"`
+	Online bool   `json:"online"`
+}
+
+// OnPeerState calls cb whenever a connection to a peer comes up or goes away, so a contact's
+// online mark follows it without reloading the contacts.
+func (n *NodeApi) OnPeerState(cb func(PeerStateDTO)) func() {
+	if n.node == nil || n.node.EventBus == nil {
+		return func() {}
+	}
+	return n.node.EventBus.On("network:peer_state_changed", func(ev events.Event) {
+		m, ok := ev.Payload.(map[string]any)
+		if !ok {
+			return
+		}
+		peer, _ := m["peer"].(string)
+		if peer == "" {
+			return
+		}
+		// the bus runs each handler on its own goroutine, so a quick drop and redial can arrive out
+		// of order: report what the swarm holds now rather than what the event said
+		cb(PeerStateDTO{PeerID: peer, Online: n.peerOnline(peer)})
+	})
 }
 
 func (n *NodeApi) NewContact(contact dto.ContactDTO) error {
