@@ -1,8 +1,6 @@
 module github.com/echofog/echofog-core
 
-go 1.27.0
-
-toolchain go1.27.2
+go 1.27.3
 
 require (
 	filippo.io/edwards25519 v1.2.0
