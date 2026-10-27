@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), vpn, load, soak (an exit and its users), hidden (an exit for friends), call (voice and video) or censor (how the traffic looks to DPI)")
+	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), messaging (message/group/offline/call/stream delivery audit with a trace), vpn, load, soak (an exit and its users), hidden (an exit for friends), call (voice and video) or censor (how the traffic looks to DPI)")
 	chaosFor = flag.Duration("chaos-for", 3*time.Minute, "how long failures are injected")
 	settle   = flag.Duration("settle", 3*time.Minute, "how long after the chaos messages may still arrive")
 	seed     = flag.Int64("seed", 0, "random seed of the chaos (0: time)")
@@ -741,6 +741,8 @@ func main() {
 		censorScenario(nodes, v, out)
 	case "call":
 		callScenario(nodes, v, out)
+	case "messaging":
+		messagingScenario(nodes, v, out)
 	case "smoke":
 		smoke(nodes, v, l)
 	case "chaos":
@@ -757,6 +759,7 @@ func main() {
 	fmt.Println()
 	collectLogs(out)
 	fmt.Println()
+	printDeliverySummary() // the delivery trace + error summary, last, when a scenario recorded flows
 	if len(v.failed) > 0 {
 		logf("%d check(s) failed:", len(v.failed))
 		for _, f := range v.failed {

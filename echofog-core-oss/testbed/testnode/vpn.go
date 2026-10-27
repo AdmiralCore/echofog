@@ -335,6 +335,10 @@ func (t *testNode) metrics(w http.ResponseWriter, r *http.Request) {
 	if rs := t.n.GetRelayServer(); rs != nil {
 		st := rs.Stats()
 		out["relayCircuits"], out["relayStored"], out["relayForwarded"] = st.ActiveCircuits, st.Stored, st.Forwarded
+		// Delivered = stored mailbox items handed to a recipient when it reconnected;
+		// MailboxWaiting = items still held. Both are needed to trace offline store-and-forward:
+		// without them "stored but never delivered" is indistinguishable from "delivered".
+		out["relayDelivered"], out["relayMailboxWaiting"] = st.Delivered, st.MailboxWaiting
 	}
 	v := t.api.GetVPNStatus()
 	if v.Running {
