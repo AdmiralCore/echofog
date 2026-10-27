@@ -58,6 +58,8 @@ type FallbackTransport struct {
 	envAt        time.Time            // when envCache was taken
 	envComputing bool                 // a background refresh of envCache is in flight
 	envMem       map[string]envRecord // network fingerprint -> the transport that won there last
+	envPath      string               // when set, envMem is persisted here across restarts
+	envSaveCh    chan struct{}        // signals the background writer; nil when persistence is off
 
 	connChan  chan NewConnEvent
 	closeOnce sync.Once
@@ -521,6 +523,7 @@ func (f *FallbackTransport) recordEnv(tcp bool) {
 	}
 	f.envMem[env] = envRecord{tcp: tcp, at: time.Now()}
 	f.envMu.Unlock()
+	f.signalEnvSave() // persist off the dial path when a store is configured
 }
 
 func (f *FallbackTransport) Close() error {

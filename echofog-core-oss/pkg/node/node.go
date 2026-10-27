@@ -479,6 +479,11 @@ func (n *Node) Start() (err error) {
 	}
 	n.Net = network.NewFallbackTransport(n.Transport, tcp, n.Cfg.Network.Transport, tcpListen)
 	n.Net.SetLogger(n.Logger.With("component", "transport"))
+	if n.Cfg.Storage.DatabasePath != "" {
+		// Remember which transport won per local network across restarts, so a censored network
+		// does not re-pay the QUIC-stall learning cost every launch. Lives in the node data dir.
+		n.Net.SetEnvMemoryPath(filepath.Join(n.Cfg.Storage.DatabasePath, "transport-memory.json"))
+	}
 	n.Net.SetTCPRemotePort(n.Cfg.Network.TCPRemotePort)
 	if n.Cfg.Network.AdvertisePort > 0 {
 		n.Net.SetAdvertisedPort(n.Cfg.Network.AdvertisePort)
