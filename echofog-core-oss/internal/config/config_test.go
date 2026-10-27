@@ -27,7 +27,7 @@ func TestDefaultsAreSafeForARealNetwork(t *testing.T) {
 	assert.Equal(t, 3, cfg.AntiDPI.FlowShaping.MaxConnections)
 	assert.Equal(t, 8, cfg.AntiDPI.FlowShaping.MaxConcurrency)
 	assert.Equal(t, int64(15*1024*1024), cfg.AntiDPI.FlowShaping.MaxBytesMin)
-	assert.Equal(t, int64(45*1024*1024), cfg.AntiDPI.FlowShaping.MaxBytesMax)
+	assert.Equal(t, int64(25*1024*1024), cfg.AntiDPI.FlowShaping.MaxBytesMax)
 	assert.Equal(t, 500, cfg.AntiDPI.FlowShaping.MaxStreamsPerConn)
 
 	assert.False(t, cfg.AntiDPI.RegionAwareObfs, "region-aware obfs is opt-in: 'same country' is not safe where domestic traffic is censored too")

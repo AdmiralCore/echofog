@@ -61,14 +61,6 @@ type Swarm struct {
 
 	peerSNIMu sync.RWMutex
 	peerSNIs  map[types.PeerID]string
-
-	// exitPools marks peers that run a parallel session pool (the exit a VPN tunnels through):
-	// addPeer keeps several concurrent connections to such a peer instead of one, and tunnel
-	// streams spread across them. A mesh peer is never marked and keeps strict one-connection
-	// semantics. Guarded by exitMu.
-	exitMu    sync.RWMutex
-	exitPools map[types.PeerID]*exitPoolState
-
 	netTransport network.Transport
 	wsTransport  WSTransport // optional: dial and listen over WebSocket (behind a CDN)
 
@@ -121,7 +113,6 @@ func NewSwarm(ctx context.Context, netTransport network.Transport, selfID types.
 		netTransport:   netTransport,
 		peerStore:      peerstore.NewPeerStore(storage, nil),
 		fastHandlers:   make(map[net_types.MessageType]FastFrameHandler),
-		exitPools:      make(map[types.PeerID]*exitPoolState),
 		logger:         slog.Default().With("component", "swarm"),
 	}
 
@@ -191,14 +182,7 @@ func (s *Swarm) registrationLoop(ch <-chan network.NewConnEvent) {
 				release = r
 			}
 
-			// An exit peer running a parallel session pool keeps several concurrent connections:
-			// attach this one as an extra link alongside the existing primary instead of
-			// replacing it. Returns true only when it took ownership of the connection.
-			if s.tryAttachExitLink(event) {
-				continue
-			}
-
-			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release, event.Reality)
+			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release)
 			if p == nil {
 				continue // duplicate connection, already closed
 			}
