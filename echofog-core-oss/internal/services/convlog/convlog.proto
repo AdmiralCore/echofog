@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package convlog;
+option go_package = "github.com/echofog/echofog-core/internal/services/convlog;convlog";
+
+// Event is one entry of a conversation log: a message or an operation on one. It is signed by its
+// author over the canonical encoding in event.go (fields 1..11, the body by its hash), so whoever
+// relays or serves it cannot change it. Future envelope-level additions go in ext; kind-specific
+// ones in body.
+message Event {
+  bytes  conv     = 1;  // 16-byte conversation id
+  bytes  author   = 2;  // the author's 32-byte Ed25519 identity public key
+  uint64 seq      = 3;  // per (conv, author): 1, 2, 3, ... never reused
+  uint64 lamport  = 4;  // max(lamport of everything the author had seen in conv) + 1
+  int64  ts_ms    = 5;  // the author's clock, for display only
+  uint32 kind     = 6;
+  bytes  target   = 7;  // the event this one acts on (edit, delete, react, pin)
+  bytes  reply_to = 8;  // the message this one answers
+  bytes  thread   = 9;  // the root message of the thread this one belongs to
+  bytes  body      = 10;
+  bytes  ext       = 11;
+  bytes  body_hash = 12; // set instead of body once the body was stripped (a deleted message);
+                         // the signature covers SHA-256(body), so a stripped event still verifies
+  bytes  sig       = 15;
+}
+
+message MsgBody {
+  string text     = 1;
+  uint32 type     = 2;  // as messenger.PersonalMessageTypeProto; 100 = system line
+  string metadata = 3;  // JSON, as messenger.MessageMetadata (files)
+}
+
+message EditBody {
+  string text = 1;
+}
+
+message ReactBody {
+  string emoji = 1;
+  bool   on    = 2;
+}
+
+message PinBody {
+  bool on = 1;
+}
+
+// Sync is the anti-entropy exchange between two participants of a conversation.
+message Sync {
+  oneof m {
+    Hello      hello  = 1;
+    Want       want   = 2;
+    Events     events = 3;
+  }
+}
+
+message Hello {
+  repeated HelloItem items = 1;
+}
+
+message HelloItem {
+  bytes conv   = 1;
+  bytes digest = 2;  // 8 bytes of SHA-256 over the sorted version vector
+}
+
+message Want {
+  bytes           conv = 1;
+  repeated Have   have = 2;
+}
+
+message Have {
+  bytes  author = 1;
+  uint64 seq    = 2;  // the highest seq held with no gap below it
+}
+
+message Events {
+  bytes          conv   = 1;
+  repeated bytes events = 2;  // encoded Event messages
+  bool           more   = 3;
+}

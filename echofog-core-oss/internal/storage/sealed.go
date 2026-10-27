@@ -35,6 +35,7 @@ var SealedPrefixes = [][]byte{
 	[]byte("bm:"),      // saved messages
 	[]byte("blocked:"), // people the user blocked
 	[]byte("msgreq:"),  // strangers who wrote first
+	[]byte("cl/"),      // conversation logs: events, message views, sync state
 }
 
 var ErrSealed = errors.New("stored value cannot be opened")
