@@ -44,6 +44,13 @@ type Peer struct {
 	release        func()       // gives back its place in the per-address limits; nil for outbound
 	pendingStreams atomic.Int32 // streams it opened whose first frame has not come yet
 
+	// extraLinks are additional data-carrying connections to the same peer, besides transport.
+	// They exist only for an exit peer whose session pool runs several parallel connections:
+	// tunnel streams spread across transport and these, so a single stalled or censor-killed
+	// connection does not stall the VPN (openTunnelStream picks the least-loaded live link). A
+	// mesh peer never has any; its control plane keeps using transport alone. Guarded by mu.
+	extraLinks []*network.PeerWrapper
+
 	dispatcher *dispatcher.Dispatcher
 }
 
@@ -69,6 +76,8 @@ func (p *Peer) Close() {
 	p.mu.Lock()
 	r := p.router
 	tw := p.transport
+	extra := p.extraLinks
+	p.extraLinks = nil
 	p.mu.Unlock()
 
 	if r != nil {
@@ -76,6 +85,9 @@ func (p *Peer) Close() {
 	}
 	if tw != nil {
 		_ = tw.Close()
+	}
+	for _, l := range extra {
+		_ = l.Close()
 	}
 }
 
@@ -234,6 +246,86 @@ func (p *Peer) ActiveStreams() int {
 		return tw.ActiveStreams()
 	}
 	return 0
+}
+
+// addExitLink records an additional parallel connection to this peer (an exit's session pool).
+func (p *Peer) addExitLink(pw *network.PeerWrapper) {
+	p.mu.Lock()
+	p.extraLinks = append(p.extraLinks, pw)
+	p.mu.Unlock()
+}
+
+// removeExitLink drops pw from the extra-link set (e.g. once its connection died). It does not
+// close pw; the caller owns that.
+func (p *Peer) removeExitLink(pw *network.PeerWrapper) {
+	p.mu.Lock()
+	for i, l := range p.extraLinks {
+		if l == pw {
+			p.extraLinks = append(p.extraLinks[:i], p.extraLinks[i+1:]...)
+			break
+		}
+	}
+	p.mu.Unlock()
+}
+
+// LinkCount is how many live connections this peer currently holds: the primary transport plus
+// every still-open extra link.
+func (p *Peer) LinkCount() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	n := 0
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil {
+		n++
+	}
+	for _, l := range p.extraLinks {
+		if l.GetConn().Context().Err() == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// oldestIdleExtraLink returns the earliest-added extra link that carries no active stream, so a
+// rotation can drain an idle connection to make room for a fresh one without ever cutting off a
+// transfer in flight. It returns nil when every extra link is busy.
+func (p *Peer) oldestIdleExtraLink() *network.PeerWrapper {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, l := range p.extraLinks {
+		if l.ActiveStreams() == 0 {
+			return l
+		}
+	}
+	return nil
+}
+
+// openTunnelStream opens one bidirectional stream to this peer on the least-loaded live link
+// (the primary transport or an extra link), spreading tunnel traffic across the pool so no single
+// connection carries it all. It falls back to the primary transport when there are no extra links,
+// which is the only case a mesh peer ever sees.
+func (p *Peer) openTunnelStream(ctx context.Context) (*network.Stream, error) {
+	p.mu.RLock()
+	var best *network.PeerWrapper
+	bestLoad := -1
+	if p.transport != nil && p.transport.GetConn().Context().Err() == nil {
+		best = p.transport
+		bestLoad = p.transport.ActiveStreams()
+	}
+	for _, l := range p.extraLinks {
+		if l.GetConn().Context().Err() != nil {
+			continue
+		}
+		if load := l.ActiveStreams(); best == nil || load < bestLoad {
+			best = l
+			bestLoad = load
+		}
+	}
+	p.mu.RUnlock()
+
+	if best == nil {
+		return nil, errors.New("peer has no live link to open a stream on")
+	}
+	return best.OpenBidirectionalStream(ctx)
 }
 
 // DrainAndClose waits up to timeout for active streams to finish, then closes the peer.

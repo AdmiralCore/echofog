@@ -31,13 +31,14 @@ func TestHasActiveStreams(t *testing.T) {
 	assert.False(t, pool.HasActiveStreams(), "the only stream is closed")
 }
 
-// Rotation must not force-close a transfer that is still in flight. The swarm keeps one connection
-// per peer, so dialing a fresh connection to rotate the 5-tuple replaces and (after a drain
-// timeout) force-closes the connection the transfer rides. A single large download is one stream
-// that cannot be split across connections, so it would die. This test, over two real swarms,
-// drives a long stream past the pool's byte budget, opens a small stream next to it (what triggers
-// rotation), and asserts the 5-tuple did not rotate and the long stream still carries data. Once
-// nothing is in flight, rotation is free to dial a fresh 5-tuple again.
+// Rotation must not force-close a transfer that is still in flight. An exit now runs a parallel
+// session pool: a rotation dials a fresh connection (a new 5-tuple) and adds it alongside the
+// others, draining only idle links, so the connection a transfer rides is never cut off. A single
+// large download is one stream that cannot be split across connections, so force-closing its
+// connection would kill it. This test, over two real swarms, drives a long stream past the pool's
+// byte budget, opens a small stream next to it (what triggers rotation), and asserts the link the
+// big transfer rides did not change and the long stream still carries data. Once nothing is in
+// flight, rotation is free to dial a fresh 5-tuple again — as an added parallel connection.
 func TestRotation_DoesNotForceCloseActiveStream(t *testing.T) {
 	ResetSwarmPools()
 	t.Cleanup(ResetSwarmPools)
@@ -117,8 +118,13 @@ func TestRotation_DoesNotForceCloseActiveStream(t *testing.T) {
 	require.NoError(t, small.Close())
 	require.NoError(t, big.Close())
 
+	// While the big stream rode the pool it stayed on a single connection the whole time.
+	require.Equal(t, 1, clientSwarm.GetPeer(exitID).LinkCount(),
+		"no parallel link should have been dialled while a transfer was in flight")
+
 	// With nothing in flight, push the reusable session past its budget, then one more stream is
-	// free to rotate to a fresh 5-tuple.
+	// free to rotate: the pool dials a fresh 5-tuple and keeps it as an added parallel connection
+	// (the primary link the earlier transfer rode is untouched).
 	time.Sleep(20 * time.Millisecond)
 	filler, err := dialer.DialExitStream(ctx, target)
 	require.NoError(t, err)
@@ -130,7 +136,9 @@ func TestRotation_DoesNotForceCloseActiveStream(t *testing.T) {
 	require.NoError(t, err)
 	defer trigger.Close()
 	require.Eventually(t, func() bool {
-		return clientSwarm.LinkOf(exitID) != link0
+		return clientSwarm.GetPeer(exitID).LinkCount() >= 2
 	}, 5*time.Second, 100*time.Millisecond,
-		"rotation should dial a fresh 5-tuple once no stream is in flight")
+		"rotation should dial a fresh 5-tuple as an added parallel connection once no stream is in flight")
+	assert.Equal(t, link0, clientSwarm.LinkOf(exitID),
+		"the original connection stays as a pool member; rotation adds a link, it does not replace")
 }
