@@ -206,6 +206,16 @@ type AntiDPIConfig struct {
 	// when it sees that capability, so old nodes interoperate in the plain (unpadded) mode.
 	TunnelPadding bool `json:"tunnel_padding"`
 
+	// MicroChunkTCP turns on sub-16KB micro-chunking of the exit-tunnel TCP fallback data phase, to
+	// defeat the Russian TSPU "TCP freeze after ~16KB" behaviour (a single TCP socket to a foreign
+	// datacentre is throttled once its cumulative bytes cross ~16 KB). The tunnel is carried as
+	// self-describing chunks tagged (TunnelID, Seq), reassembled at the exit, and the writer rotates
+	// to a fresh socket before any one crosses the freeze counter. Off by default and opt-in: it adds
+	// per-chunk framing overhead and only helps on networks that run the TSPU freeze, so turn it on
+	// for Russian egress (or let the region signal engage it where HomeCountry/GeoIP places the path
+	// in RU). The normal path and the single-region testbed are untouched when it is off.
+	MicroChunkTCP bool `json:"micro_chunk_tcp"`
+
 	// RegionAwareObfs uses the cheaper noise obfuscation for connections that stay inside this
 	// node's own country or on the local network, and keeps QUIC-REALITY for cross-border ones.
 	// REALITY mimics an allowed foreign site so a connection survives a censoring border; a
@@ -446,6 +456,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.AntiDPI.FlowShaping = DefaultFlowShapingConfig()
 	cfg.AntiDPI.TunnelPadding = true
 	cfg.AntiDPI.RegionAwareObfs = false // opt-in: safe only where domestic traffic is not censored
+	cfg.AntiDPI.MicroChunkTCP = false   // opt-in: only helps where the TSPU ~16 KB TCP freeze runs
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public
 	// TCP/WS listener must set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site

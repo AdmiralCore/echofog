@@ -57,9 +57,27 @@ type P2PDialer struct {
 	// pad, when set and true at dial time, wraps the data phase in the TLS-in-TLS padding. The
 	// decision is per exit peer (its capabilities), so it is the same for every tunnel to it.
 	pad func() bool
+	// chunk, when set and true at dial time, carries the data phase in sub-16KB micro-chunks to
+	// defeat the Russian TSPU ~16 KB TCP freeze (see micro_chunk.go). It is mutually exclusive with
+	// pad in this wiring and takes precedence. Off (nil) by default.
+	chunk func() bool
+	// rotate, when set, yields fresh streams to the same exit so the chunk writer can ride new
+	// sockets; nil keeps the single stream (framing only, no per-socket freeze defeat yet). Supplied
+	// by the swarm/session layer separately.
+	rotate rotator
 }
 
 func NewP2PDialer(open StreamOpener) *P2PDialer { return &P2PDialer{open: open} }
+
+// wrapData applies the gated data-phase layer: micro-chunking when engaged, else the TLS-in-TLS
+// padding when the exit supports it, else the stream as it is. Both gates are off by default, so a
+// node that opts into neither gets exactly today's path.
+func (d *P2PDialer) wrapData(l *lazyExitStream) io.ReadWriteCloser {
+	if d.chunk != nil && d.chunk() {
+		return newChunkedConn(l, d.rotate)
+	}
+	return d.maybePad(l)
+}
 
 // maybePad wraps l in the padding layer when the exit peer supports it, else returns it as is.
 func (d *P2PDialer) maybePad(l *lazyExitStream) io.ReadWriteCloser {
@@ -82,7 +100,7 @@ func (d *P2PDialer) DialExitStream(ctx context.Context, targetAddr string) (io.R
 	if err != nil {
 		return nil, err
 	}
-	return d.maybePad(l), nil
+	return d.wrapData(l), nil
 }
 
 // DialExitStreamConfirmed is DialExitStream that returns only once the exit has answered, with
@@ -96,7 +114,7 @@ func (d *P2PDialer) DialExitStreamConfirmed(ctx context.Context, targetAddr stri
 		l.Close()
 		return nil, err
 	}
-	return d.maybePad(l), nil
+	return d.wrapData(l), nil
 }
 
 func (d *P2PDialer) dialLazy(ctx context.Context, targetAddr string) (*lazyExitStream, error) {
@@ -309,6 +327,11 @@ type ExitService struct {
 	// (TLS-in-TLS defense). Set at AttachToSwarm; nil leaves padding off.
 	padData atomic.Pointer[func(types.PeerID) bool]
 
+	// microChunk, when set, reports whether the data phase of a tunnel from this peer is carried in
+	// sub-16KB micro-chunks (RU TSPU freeze defense, see micro_chunk.go). It takes precedence over
+	// padData for that peer. nil leaves micro-chunking off, which is the default.
+	microChunk atomic.Pointer[func(types.PeerID) bool]
+
 	// limits on what peers can take (limits and addrOf are guarded by slots.mu)
 	limits  Limits
 	addrOf  func(types.PeerID) string
@@ -414,10 +437,13 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 	p, unpace := e.paceFor(peer)
 	defer unpace()
 	lim := e.CurrentLimits()
-	// Strip the TLS-in-TLS padding below the meter, so billing counts the client's real bytes, not
-	// the pad. Both sides agree on whether to pad from the peer's capabilities (see padData).
+	// Reassemble / strip the data-phase layer below the meter, so billing counts the client's real
+	// bytes, not the framing. Both sides agree on which layer from the peer's capabilities/config:
+	// micro-chunking (RU TSPU freeze defense) takes precedence over the TLS-in-TLS padding.
 	data := FramedStream(st)
-	if f := e.padData.Load(); f != nil && (*f)(peer) {
+	if f := e.microChunk.Load(); f != nil && (*f)(peer) {
+		data = newChunkedConnExit(st)
+	} else if f := e.padData.Load(); f != nil && (*f)(peer) {
 		data = newTunnelPad(st)
 	}
 	_ = e.splicer.SpliceFor(ctx, &meteredStream{FramedStream: data, m: m, pace: p}, conn, lim.Idle, lim.MaxLifetime)
