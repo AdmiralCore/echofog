@@ -20,19 +20,9 @@ import (
 	"golang.org/x/crypto/ed25519"
 )
 
-type WalletApprovalPrompt struct {
-	Origin      string `json:"origin"`      // e.g. "miniapp:chess", "system", "ui"
-	Description string `json:"description"` // e.g. "Send 10 FOG to Bob"
-	Amount      int64  `json:"amount"`
-	ToAddress   string `json:"to_address"`
-}
-
-type WalletApprovalHandler func(prompt WalletApprovalPrompt) (bool, error)
-
 type ProtectedIdentity struct {
-	manager         *identityManager
-	approvalHandler WalletApprovalHandler
-	mu              sync.RWMutex
+	manager *identityManager
+	mu      sync.RWMutex
 }
 
 func NewProtectedIdentity(st storage.Storage) *ProtectedIdentity {
@@ -95,34 +85,10 @@ func (p *ProtectedIdentity) GetPublicKey() ([]byte, error) {
 	return p.manager.GetPublicKey()
 }
 
-func (p *ProtectedIdentity) SetWalletApprovalHandler(handler WalletApprovalHandler) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.approvalHandler = handler
-}
-
 func (p *ProtectedIdentity) SignWalletTransaction(data []byte) ([]byte, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.manager.SignWalletTransaction(data)
-}
-
-func (p *ProtectedIdentity) RequestWalletSign(prompt WalletApprovalPrompt, data []byte) ([]byte, error) {
-	p.mu.RLock()
-	handler := p.approvalHandler
-	p.mu.RUnlock()
-
-	if handler != nil {
-		approved, err := handler(prompt)
-		if err != nil {
-			return nil, err
-		}
-		if !approved {
-			return nil, errors.New("transaction rejected by user")
-		}
-	}
-
-	return p.SignWalletTransaction(data)
 }
 
 func (p *ProtectedIdentity) GetWalletPublicKey() ([]byte, error) {
