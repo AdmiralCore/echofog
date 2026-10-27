@@ -252,13 +252,6 @@ func (p *Peer) ActiveStreams() int {
 	return 0
 }
 
-// primaryIsReality reports whether the primary connection is QUIC-REALITY.
-func (p *Peer) primaryIsReality() bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.primaryReality
-}
-
 // primaryIsCamouflaged reports whether the primary connection is safe to carry tunnel traffic to a
 // camouflage exit: a QUIC-REALITY link, or any TCP/WS link (the TCP fallback is browser-TLS
 // mimicry). Only a plain QUIC noise link is not.
@@ -336,6 +329,17 @@ func (p *Peer) promoteExitLink(proto func(network.MuxConn) router.TransportProto
 		_ = dead.Close()
 	}
 	return next.pw
+}
+
+// closeExitLinks closes and forgets every extra pool link, keeping the primary connection.
+func (p *Peer) closeExitLinks() {
+	p.mu.Lock()
+	extra := p.extraLinks
+	p.extraLinks = nil
+	p.mu.Unlock()
+	for _, l := range extra {
+		_ = l.pw.Close()
+	}
 }
 
 // removeExitLink drops pw from the extra-link set (e.g. once its connection died). It does not

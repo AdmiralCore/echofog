@@ -48,12 +48,15 @@ func (s *Swarm) MarkExitPeer(exit types.PeerID, maxConns int) {
 	s.exitPools[exit] = &exitPoolState{maxConns: maxConns}
 }
 
-// UnmarkExitPeer forgets that exit ran a parallel pool, so future connections to it follow the
-// mesh one-connection rule again. Existing extra links are left to drain on their own.
+// UnmarkExitPeer forgets that exit ran a parallel pool and closes the extra links to it (the other
+// end prunes them as they close), so the exit is again a mesh peer with one connection.
 func (s *Swarm) UnmarkExitPeer(exit types.PeerID) {
 	s.exitMu.Lock()
-	defer s.exitMu.Unlock()
 	delete(s.exitPools, exit)
+	s.exitMu.Unlock()
+	if p := s.GetPeer(exit); p != nil {
+		p.closeExitLinks()
+	}
 }
 
 func (s *Swarm) exitPoolFor(exit types.PeerID) *exitPoolState {

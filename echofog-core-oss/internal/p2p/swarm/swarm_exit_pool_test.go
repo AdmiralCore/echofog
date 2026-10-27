@@ -312,7 +312,7 @@ func TestExitPool_CamouflageExitKeepsOnlyRealityLinks(t *testing.T) {
 
 	// The primary is REALITY and the only connections that were ever admitted as extra links were
 	// REALITY ones (the noise connection above was rejected), so every pool link is REALITY.
-	require.True(t, p.primaryIsReality(), "the primary to a camouflage exit must be REALITY")
+	require.True(t, p.primaryReality, "the primary to a camouflage exit must be REALITY")
 }
 
 func TestExitPool_TunnelStreamsNeverRideNoiseLinkToCamouflageExit(t *testing.T) {
@@ -571,3 +571,21 @@ func TestExitPool_PoolLinkTakesOverWhenPrimaryDies(t *testing.T) {
 	require.Eventually(t, func() bool { return s.GetPeer(exit) == nil }, 2*time.Second, 10*time.Millisecond,
 		"with no link left the peer is dropped")
 }
+
+// Once the proxy stops using an exit, its pool links are closed; the primary stays as a mesh link.
+func TestExitPool_UnmarkClosesPoolLinks(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	p, primary := addPrimaryPeer(ctx, s, 0)
+	exit := p.ID()
+	s.MarkExitPeer(exit, 3)
+	link := newFakeMuxConn(ctx, 1)
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: link, IsOut: true, PoolLink: true}))
+	require.Equal(t, 2, p.LinkCount())
+
+	s.UnmarkExitPeer(exit)
+	require.Error(t, link.Context().Err(), "the pool link should be closed")
+	require.NoError(t, primary.Context().Err(), "the primary stays")
+	require.Equal(t, 1, p.LinkCount())
+	require.Nil(t, s.exitPoolFor(exit))
+}
+

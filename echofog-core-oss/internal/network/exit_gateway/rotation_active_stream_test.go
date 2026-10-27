@@ -7,29 +7,9 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
-	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestHasActiveStreams(t *testing.T) {
-	cfg := config.DefaultFlowShapingConfig()
-	cfg.MinDialInterval = time.Millisecond
-	pool := NewPeerSessionPoolWithDialer(types.PeerID{}, cfg,
-		func(ctx context.Context) (StreamOpener, func() error, error) {
-			return func(ctx context.Context) (FramedStream, error) { return newMockStream(), nil }, nil, nil
-		})
-	defer pool.Close()
-
-	assert.False(t, pool.HasActiveStreams(), "no streams opened yet")
-
-	st, err := pool.OpenStream(context.Background())
-	require.NoError(t, err)
-	assert.True(t, pool.HasActiveStreams(), "a stream is open")
-
-	require.NoError(t, st.Close())
-	assert.False(t, pool.HasActiveStreams(), "the only stream is closed")
-}
 
 // Rotation must not force-close a transfer that is still in flight. An exit now runs a parallel
 // session pool: a rotation dials a fresh connection (a new 5-tuple), announced as a pool link, and
@@ -40,8 +20,8 @@ func TestHasActiveStreams(t *testing.T) {
 // rotation), and asserts that both ends now hold two links, the link the big transfer rides is
 // still the primary, and the long stream still carries data.
 func TestRotation_DoesNotForceCloseActiveStream(t *testing.T) {
-	ResetSwarmPools()
-	t.Cleanup(ResetSwarmPools)
+	resetSwarmPools()
+	t.Cleanup(resetSwarmPools)
 
 	exitSwarm, exitTr := newSwarm(t)
 	clientSwarm, clientTr := newSwarm(t)

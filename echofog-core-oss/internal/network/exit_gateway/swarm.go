@@ -77,17 +77,23 @@ var (
 	swarmPools   = make(map[swarmPoolKey]*PeerSessionPool)
 )
 
-// ResetSwarmPools closes and clears all cached session pools (useful for tests and resets).
-func ResetSwarmPools() {
-	swarmPoolsMu.Lock()
-	defer swarmPoolsMu.Unlock()
-	for k, p := range swarmPools {
-		_ = p.Close()
-		if k.sw != nil {
-			k.sw.UnmarkExitPeer(k.exit)
-		}
-		delete(swarmPools, k)
+// ReleaseSwarmPool drops the session pool to exit, once the proxy no longer tunnels through it (the
+// VPN stopped or moved to another exit): its sessions are closed, the parallel links to the exit are
+// closed, and the exit is again an ordinary peer with one connection. Without this, every exit ever
+// used kept its pool links open. Safe to call for an exit with no pool.
+func ReleaseSwarmPool(sw *swarm.Swarm, exit types.PeerID) {
+	if sw == nil {
+		return
 	}
+	key := swarmPoolKey{sw: sw, exit: exit}
+	swarmPoolsMu.Lock()
+	pool := swarmPools[key]
+	delete(swarmPools, key)
+	swarmPoolsMu.Unlock()
+	if pool != nil {
+		_ = pool.Close()
+	}
+	sw.UnmarkExitPeer(exit)
 }
 
 // SwarmOpener opens tunnel streams to one specific exit peer with flow shaping and session rotation.

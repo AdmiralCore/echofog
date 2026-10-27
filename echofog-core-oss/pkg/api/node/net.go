@@ -350,6 +350,7 @@ func (n *NodeApi) StopVPN() error {
 	}
 	n.endSessionLocked("stopped")
 	err := n.vpn.server.Stop()
+	n.releaseExitPool(n.vpn.relayPeer)
 	n.vpn.server = nil
 	n.vpn.searching = false
 	n.vpn.relayPeer = ""

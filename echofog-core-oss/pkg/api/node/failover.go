@@ -247,6 +247,16 @@ func (n *NodeApi) runFailover(ctx context.Context) {
 	}
 }
 
+// releaseExitPool drops the session pool and the parallel links to the exit the proxy no longer uses.
+func (n *NodeApi) releaseExitPool(relay string) {
+	if relay == "" || n.node == nil || n.node.Swarm == nil {
+		return
+	}
+	if id, err := n.relayPeerID(relay); err == nil {
+		exit_gateway.ReleaseSwarmPool(n.node.Swarm, id)
+	}
+}
+
 // reviveExit connects again to the exit in use and asks it whether it serves us; when it does, the
 // proxy stays on it and it is no longer avoided.
 func (n *NodeApi) reviveExit(ctx context.Context, relay string) bool {
@@ -315,6 +325,7 @@ func (n *NodeApi) switchExit(from, to, reason string) bool {
 	}
 	n.endSessionLocked("switched")
 	n.vpn.server.SetDialer(exit_gateway.NewSwarmP2PDialer(n.node.Swarm, id))
+	n.releaseExitPool(from)
 	n.vpn.relayPeer = to
 	n.vpn.exitState, n.vpn.exitNotice = ExitChecking, ""
 	n.vpn.usingSince = time.Now()

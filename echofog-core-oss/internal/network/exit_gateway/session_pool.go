@@ -224,7 +224,6 @@ func (s *ManagedSession) SetCreatedAt(t time.Time)       { s.createdAt = t }
 type PeerSessionPool struct {
 	peerID        types.PeerID
 	cfg           config.FlowShapingConfig
-	opener        StreamOpener
 	sessionDialer func(ctx context.Context) (StreamOpener, func() error, error)
 
 	mu            sync.Mutex
@@ -236,18 +235,6 @@ type PeerSessionPool struct {
 	stopCh        chan struct{}
 	drainTimeout  time.Duration
 	nextSessionID atomic.Int64
-}
-
-// NewPeerSessionPool creates a new pool using a StreamOpener.
-func NewPeerSessionPool(peerID types.PeerID, cfg config.FlowShapingConfig, opener StreamOpener) *PeerSessionPool {
-	cfg.Normalize()
-	return &PeerSessionPool{
-		peerID:       peerID,
-		cfg:          cfg,
-		opener:       opener,
-		drainTimeout: 15 * time.Second,
-		stopCh:       make(chan struct{}),
-	}
 }
 
 // NewPeerSessionPoolWithDialer creates a new pool with a custom dialer function for creating sessions.
@@ -262,13 +249,6 @@ func NewPeerSessionPoolWithDialer(peerID types.PeerID, cfg config.FlowShapingCon
 	}
 }
 
-// SetDrainTimeout sets the timeout for waiting on active streams to finish during session drain.
-func (p *PeerSessionPool) SetDrainTimeout(d time.Duration) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.drainTimeout = d
-}
-
 // IsClosed reports whether the pool is closed.
 func (p *PeerSessionPool) IsClosed() bool {
 	p.mu.Lock()
@@ -276,44 +256,9 @@ func (p *PeerSessionPool) IsClosed() bool {
 	return p.closed
 }
 
-// ActiveSessions returns a snapshot of active sessions.
-func (p *PeerSessionPool) ActiveSessions() []*ManagedSession {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]*ManagedSession(nil), p.active...)
-}
-
-// DrainingSessions returns a snapshot of draining sessions.
-func (p *PeerSessionPool) DrainingSessions() []*ManagedSession {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]*ManagedSession(nil), p.draining...)
-}
-
 // TotalSessions returns the number of sessions created by the pool.
 func (p *PeerSessionPool) TotalSessions() int64 {
 	return p.nextSessionID.Load()
-}
-
-// HasActiveStreams reports whether any session, active or draining, still carries an open stream.
-// The exit rotation path checks it before dialing a fresh connection: the swarm keeps one
-// connection per peer, so a fresh dial force-closes the connection a transfer rides. Deferring the
-// dial while a stream is in flight lets a long download (which cannot be split across connections)
-// finish instead of being cut off at the drain timeout.
-func (p *PeerSessionPool) HasActiveStreams() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, s := range p.active {
-		if s.activeStreams.Load() > 0 {
-			return true
-		}
-	}
-	for _, s := range p.draining {
-		if s.activeStreams.Load() > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // OpenStream selects an active session or creates a new one and opens a stream.
@@ -434,19 +379,9 @@ func (p *PeerSessionPool) getOrDialSession(ctx context.Context) (*ManagedSession
 	// 3. Create the new session outside p.mu.
 	p.mu.Unlock()
 
-	var op StreamOpener
-	var closeFn func() error
-	var err error
-
-	if p.sessionDialer != nil {
-		op, closeFn, err = p.sessionDialer(ctx)
-		if err != nil {
-			return nil, err
-		}
-	} else if p.opener != nil {
-		op = p.opener
-	} else {
-		return nil, errors.New("no stream opener configured in session pool")
+	op, closeFn, err := p.sessionDialer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	id := p.nextSessionID.Add(1)

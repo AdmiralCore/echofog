@@ -163,7 +163,7 @@ func TestRotation_ByteThreshold(t *testing.T) {
 	_, err = st1.Write(make([]byte, 150))
 	require.NoError(t, err)
 
-	active := pool.ActiveSessions()
+	active := pool.activeSessions()
 	require.Len(t, active, 1)
 	assert.True(t, active[0].ShouldRotate())
 
@@ -178,11 +178,11 @@ func TestRotation_ByteThreshold(t *testing.T) {
 	assert.Equal(t, int32(2), sessionDials.Load(), "should have dialed a second session due to byte rotation")
 
 	// First session should now be draining, second session is active
-	active = pool.ActiveSessions()
+	active = pool.activeSessions()
 	require.Len(t, active, 1)
 	assert.Equal(t, int64(2), active[0].ID())
 
-	draining := pool.DrainingSessions()
+	draining := pool.drainingSessions()
 	require.Len(t, draining, 1)
 	assert.Equal(t, int64(1), draining[0].ID())
 	assert.True(t, draining[0].IsDraining())
@@ -220,7 +220,7 @@ func TestRotation_LifetimeExceeded(t *testing.T) {
 	// Wait for lifetime to expire
 	time.Sleep(50 * time.Millisecond)
 
-	active := pool.ActiveSessions()
+	active := pool.activeSessions()
 	require.Len(t, active, 1)
 	assert.True(t, active[0].ShouldRotate(), "session lifetime should be exceeded")
 
@@ -230,7 +230,7 @@ func TestRotation_LifetimeExceeded(t *testing.T) {
 	defer st2.Close()
 
 	assert.Equal(t, int32(2), sessionDials.Load(), "should have rotated to a new session")
-	assert.Len(t, pool.DrainingSessions(), 1)
+	assert.Len(t, pool.drainingSessions(), 1)
 }
 
 func TestRotation_GracefulDrain(t *testing.T) {
@@ -260,7 +260,7 @@ func TestRotation_GracefulDrain(t *testing.T) {
 			return newMockStream(), nil
 		}, closeFn, nil
 	})
-	pool.SetDrainTimeout(100 * time.Millisecond)
+	pool.setDrainTimeout(100 * time.Millisecond)
 	defer pool.Close()
 
 	// Open stream 1
@@ -279,7 +279,7 @@ func TestRotation_GracefulDrain(t *testing.T) {
 	defer st2.Close()
 
 	// Session 1 is draining, but st1 is still open!
-	draining := pool.DrainingSessions()
+	draining := pool.drainingSessions()
 	require.Len(t, draining, 1)
 	assert.Equal(t, int32(1), draining[0].ActiveStreams(), "session 1 should still have 1 active stream")
 	assert.False(t, session1Closed.Load(), "session 1 closeFn must not be called while stream is active")
@@ -294,7 +294,7 @@ func TestRotation_GracefulDrain(t *testing.T) {
 
 	// Wait for drain to finish
 	require.Eventually(t, func() bool {
-		return session1Closed.Load() && len(pool.DrainingSessions()) == 0
+		return session1Closed.Load() && len(pool.drainingSessions()) == 0
 	}, 200*time.Millisecond, 10*time.Millisecond, "session 1 should close and be removed from draining list once stream closes")
 }
 
@@ -330,7 +330,7 @@ func TestPacingRateLimiter_AndThroughputContinuity(t *testing.T) {
 	_, err = st1.Write(make([]byte, 200)) // exceeds 100 byte limit
 	require.NoError(t, err)
 
-	active := pool.ActiveSessions()
+	active := pool.activeSessions()
 	require.Len(t, active, 1)
 	assert.True(t, active[0].ShouldRotate(), "session should want to rotate")
 
@@ -449,8 +449,8 @@ func TestCountingStream_InterfacePassThrough(t *testing.T) {
 }
 
 func TestSwarmOpenerIntegration(t *testing.T) {
-	ResetSwarmPools()
-	defer ResetSwarmPools()
+	resetSwarmPools()
+	defer resetSwarmPools()
 
 	peerID := types.PeerID{1, 2, 3}
 	cfg := config.FlowShapingConfig{

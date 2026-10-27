@@ -95,8 +95,7 @@ type chunkWriter struct {
 	rotate   rotator      // nil: never rotate
 	tunnelID uint64
 	seq      uint32
-	sockSent int // bytes written on the current underlying stream
-	hdr      [chunkHdrLen]byte
+	sockSent int    // bytes written on the current underlying stream
 	buf      []byte // header+data scratch, grown as needed
 	finSent  bool
 }

@@ -247,11 +247,6 @@ func assembleFromFrags(parts map[int][]byte) []byte {
 	return out
 }
 
-// readAllCryptoData collects all contiguous CRYPTO frame data from a single Initial's plaintext.
-func readAllCryptoData(plain []byte) []byte {
-	return assembleFromFrags(cryptoFrags(plain))
-}
-
 // QUICInitialCrypto decrypts a client QUIC v1 Initial and returns its DCID and the CRYPTO fragments it
 // carries, keyed by stream offset. ok is false if pkt is not a decryptable client Initial. A server
 // merges the fragments of a source's Initials to reassemble the ClientHello, which spans two Initials.
