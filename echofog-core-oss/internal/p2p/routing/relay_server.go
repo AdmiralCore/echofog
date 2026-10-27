@@ -859,6 +859,17 @@ func (rs *RelayServer) replyMailboxFull(to, selfID types.PeerID) {
 }
 
 // OnPeerConnected reacts when any peer connects to this node.
+// RefreshSeen marks every connected peer as a recipient of this relay again, so that one that
+// stays connected for days keeps its mailbox.
+func (rs *RelayServer) RefreshSeen() {
+	if rs.mailbox == nil {
+		return
+	}
+	for _, p := range rs.swarm.GetAllPeers() {
+		rs.mailbox.NoteRecipientSeen(p.ID())
+	}
+}
+
 func (rs *RelayServer) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPublicKey, addr string) {
 	rs.peersMu.Lock()
 	if _, ok := rs.connectedAt[peerID]; !ok {

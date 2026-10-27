@@ -23,8 +23,9 @@ func TestMailbox_CleanupPurgesExpiredFromDiskAndTallies(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("purged %d (%v), want 1", n, err)
 	}
-	if m.Waiting() != 1 || len(st.m) != 1 {
-		t.Fatalf("waiting %d, on disk %d; want 1 and 1", m.Waiting(), len(st.m))
+	onDisk, _ := st.FindValues([]byte(MailboxPrefix), 0) // mail only: the recipient's registration stays
+	if m.Waiting() != 1 || len(onDisk) != 1 {
+		t.Fatalf("waiting %d, on disk %d; want 1 and 1", m.Waiting(), len(onDisk))
 	}
 }
 

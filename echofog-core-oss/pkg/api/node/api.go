@@ -58,9 +58,12 @@ func NewNodeApi(node *node.Node) *NodeApi {
 		_ = node.SetPrivacy(*saved.Privacy) // an invalid hand edit keeps the defaults
 	}
 	node.SetBootstrapNodes(bootstrapList(builtIn, saved.BootstrapNodes))
-	return &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
+	api := &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}
+	// the conversation logs take chat traffic from the very first message on
+	node.OnMessengerReady(func() { _, _ = api.convsFacade() })
+	return api
 }
 
 func (n *NodeApi) IsRegistered() bool {

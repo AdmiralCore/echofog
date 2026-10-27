@@ -20,6 +20,9 @@ type StoredBundleRecord struct {
 	PubKey    types.PeerPublicKey `json:"pub_key"`
 	BundleRaw []byte              `json:"bundle_raw"`
 	SNI       string              `json:"sni,omitempty"`
+	// Mbox are the relays that keep the peer's mail while it is away, signed by it (MboxSig).
+	Mbox    []MailboxHint `json:"mbox,omitempty"`
+	MboxSig []byte        `json:"mbox_sig,omitempty"`
 }
 
 // BundleFetcher looks a value up in the network (the DHT): the key bundles of peers that are not
@@ -87,6 +90,9 @@ func (s *Swarm) bundleFromRecord(peerID types.PeerID, data []byte) (*keymanager.
 	}
 	if record.SNI != "" {
 		s.SetPeerSNI(peerID, record.SNI)
+	}
+	if len(record.Mbox) > 0 && verifyMailboxes(record.PubKey, record.Mbox, record.MboxSig) {
+		s.rememberMailboxes(peerID, record.Mbox)
 	}
 	var protoBundle internal_pb.PreKeyBundle
 	if err := proto.Unmarshal(record.BundleRaw, &protoBundle); err != nil {
@@ -209,7 +215,9 @@ func (s *Swarm) IdentityCard() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	card, err := json.Marshal(StoredBundleRecord{PeerID: s.selfID, PubKey: s.GetMyPubKey(), BundleRaw: raw, SNI: s.announcedSNI})
+	rec := StoredBundleRecord{PeerID: s.selfID, PubKey: s.GetMyPubKey(), BundleRaw: raw, SNI: s.announcedSNI}
+	rec.Mbox, rec.MboxSig = s.signedMailboxesLocked()
+	card, err := json.Marshal(rec)
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +265,9 @@ func (s *Swarm) CreateMyPreKeyBundle() ([]byte, error) {
 		BundleRaw: rawProto,
 		SNI:       s.announcedSNI,
 	}
+	s.cardMu.Lock()
+	record.Mbox, record.MboxSig = s.signedMailboxesLocked()
+	s.cardMu.Unlock()
 
 	return json.Marshal(record)
 }

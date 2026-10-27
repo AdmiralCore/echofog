@@ -195,17 +195,21 @@ SyncEvents { conv, events: [bytes], more: bool }       // events the asker lacks
 
 Offline delivery must not depend on sharing a relay by luck.
 
-1. Each node picks up to 3 **mailbox relays** among relay-capable peers it keeps connected (stable,
-   reachable; reuse the same ones while they work).
-2. It **registers** with them (`MailboxRegister`, signed, renewed every 30 min). The relay persists
-   the registration with a 24 h TTL — this replaces the in-memory "recipient seen" gate, so a relay
-   restart no longer refuses everyone.
-3. It **advertises** them: in the bundle record (`StoredBundleRecord.Mbox`: relay peer ids +
-   addresses + expiry; republished with the bundle every 10 min) and directly to contacts when
-   connected. No new DHT key type — old nodes store the record unchanged and ignore the field.
-4. A sender that cannot reach the recipient directly tries, in order: the recipient's advertised
-   mailbox relays (connecting to them if needed), then its own relays as today.
-5. The recipient keeps connections to its mailbox relays and drains them on connect.
+1. Each node picks up to 3 **mailbox relays** among the relays it is connected to: the ones in use
+   while they stay connected, then the longest-connected (`pkg/node/mailbox_rendezvous.go`, every
+   2 min). Never a peer it chats with (a contact or a message request): its availability is tied
+   to the very conversations the mailbox stands in for.
+2. **Registration is the connection.** A relay notes every connected peer as a recipient it keeps
+   mail for; the note is now persisted (key `mbs:<blinded peer>`, peer id in the sealed value, 24 h
+   TTL) and refreshed for long-lived connections, so a relay restart no longer refuses everyone.
+3. It **advertises** them in its bundle record and identity card (`StoredBundleRecord.Mbox`: relay
+   peer ids, addresses, expiry; signed with the identity key in `MboxSig`, so a peer passing the
+   record on cannot redirect the mail). The bundle is republished at once when the choice changes,
+   else every 10 min. No new DHT key type — old nodes store the record unchanged.
+4. A sender's relay order puts the recipient's mailbox relays first. When the recipient cannot be
+   reached, the connector looks its hints up (cached, else the DHT record), connects to the relays,
+   and flushes the recipient's queue through them.
+5. The recipient stays connected to its mailbox relays and drains them on connect.
 
 Privacy cost: the bundle record reveals which relays a node uses for mail. Acceptable (contacts
 already know the node id); documented in the user docs.

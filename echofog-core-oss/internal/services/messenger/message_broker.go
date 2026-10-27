@@ -46,6 +46,7 @@ type MessageBroker struct {
 	connect         func(types.PeerID)                // asked to open a connection to a peer that cannot be reached
 	useAsRelay      func(types.PeerID) bool           // a peer to route through even if it does not advertise (a configured private relay)
 	relayFull       func(types.PeerID) bool           // a relay that said it keeps no more messages, skipped for a while
+	mailboxesOf     func(types.PeerID) []types.PeerID // the relays a recipient named for its mail, tried first
 	connMu          sync.Mutex
 	lastConnect     map[types.PeerID]time.Time
 	lastReset       map[types.PeerID]time.Time
@@ -329,8 +330,34 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 		return errors.New("no active peers to relay message")
 	}
 
+	// the relays the recipient named for its mail come first: they keep it for sure; then any
+	// other relay we are connected to
+	s.mu.RLock()
+	mailboxesOf := s.mailboxesOf
+	s.mu.RUnlock()
+	var mailboxes map[types.PeerID]bool
+	if mailboxesOf != nil {
+		var first []*swarm.Peer
+		mailboxes = map[types.PeerID]bool{}
+		for _, id := range mailboxesOf(targetID) {
+			if p := s.sw.GetPeer(id); p != nil && !mailboxes[id] {
+				mailboxes[id] = true
+				first = append(first, p)
+			}
+		}
+		if len(first) > 0 {
+			rest := make([]*swarm.Peer, 0, len(allPeers))
+			for _, p := range allPeers {
+				if !mailboxes[p.ID()] {
+					rest = append(rest, p)
+				}
+			}
+			allPeers = append(first, rest...)
+		}
+	}
+
 	for _, p := range allPeers {
-		if !p.Relays() && !(s.useAsRelay != nil && s.useAsRelay(p.ID())) {
+		if !p.Relays() && !(s.useAsRelay != nil && s.useAsRelay(p.ID())) && !mailboxes[p.ID()] {
 			continue // not a relay (a signaling-only node, or a private relay we were not given)
 		}
 		if s.relayFull != nil && s.relayFull(p.ID()) {
@@ -777,6 +804,14 @@ func (s *MessageBroker) noteState(target types.PeerID, id, state string) {
 func (s *MessageBroker) SetInterceptor(h func(origin types.PeerID, text string) bool) {
 	s.mu.Lock()
 	s.interceptor = h
+	s.mu.Unlock()
+}
+
+// SetMailboxResolver sets how to find the relays a recipient named for its mail (they are tried
+// first when the recipient cannot be reached directly).
+func (s *MessageBroker) SetMailboxResolver(f func(types.PeerID) []types.PeerID) {
+	s.mu.Lock()
+	s.mailboxesOf = f
 	s.mu.Unlock()
 }
 

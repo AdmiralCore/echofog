@@ -244,6 +244,9 @@ func (p *Peer) Caps() handshake.Capability { return handshake.Capability(p.caps.
 
 // Relays tells whether the peer relays traffic for others. A peer that announced nothing (added
 // without a handshake) counts as one, as every node did before the announcement was used.
+// ConnectedAt is when the connection to the peer came up.
+func (p *Peer) ConnectedAt() time.Time { return p.connectedAt }
+
 func (p *Peer) Relays() bool {
 	c := p.Caps()
 	return c == handshake.CapNone || c.Has(handshake.CapRelay)

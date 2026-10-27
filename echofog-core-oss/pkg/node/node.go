@@ -54,6 +54,11 @@ type Node struct {
 	ID     types.PeerID
 	PubKey types.PeerPublicKey
 
+	bundleNow chan struct{} // asks publishBundleLoop to publish at once (the mailbox relays changed)
+
+	hookMu         sync.Mutex
+	messengerHooks []func() // run once the messenger exists, before it receives anything
+
 	IsReady bool
 
 	userKey *memguard.Enclave
@@ -145,11 +150,12 @@ func NewNode(parentCtx context.Context, cfg *config.AppConfig, nodeName string) 
 	parentCtx, cancel := context.WithCancel(parentCtx)
 
 	return &Node{
-		Cfg:      cfg,
-		Logger:   compositeLogger,
-		EventBus: eventBus,
-		Ctx:      parentCtx,
-		Cancel:   cancel,
+		Cfg:       cfg,
+		Logger:    compositeLogger,
+		EventBus:  eventBus,
+		Ctx:       parentCtx,
+		Cancel:    cancel,
+		bundleNow: make(chan struct{}, 1),
 	}
 }
 
@@ -573,6 +579,13 @@ func (n *Node) Start() (err error) {
 		n.Swarm.AddObserver(n.Messenger) // sends queued messages when their recipient connects
 		n.Messenger.SetFilter(n.messageVerdict)
 		n.Messenger.StartOutbox(n.Ctx)
+		n.hookMu.Lock()
+		hooks := n.messengerHooks
+		n.messengerHooks = nil
+		n.hookMu.Unlock()
+		for _, h := range hooks {
+			h()
+		}
 	}
 
 	routingTable := dht.NewRoutingTable(n.PubKey, n.Storage, n.Swarm)
@@ -659,12 +672,19 @@ func (n *Node) Start() (err error) {
 			})
 		}
 		_ = n.Services.Register(n.CallManager)
-		// a message to somebody we are not connected to opens the connection (DHT, hole punch, relay)
+		// a message to somebody we are not connected to opens the connection (DHT, hole punch,
+		// relay); if the peer is away, the way to the relays that keep its mail
 		n.Messenger.SetConnector(func(peer types.PeerID) {
 			ctx, cancel := context.WithTimeout(n.Ctx, 25*time.Second)
 			defer cancel()
-			_ = n.EnsureConnected(ctx, peer)
+			if n.EnsureConnected(ctx, peer) != nil {
+				n.reachMailboxes(ctx, peer)
+			}
 		})
+		n.Messenger.SetMailboxResolver(n.Swarm.MailboxPeers)
+		if !n.isolated() {
+			go n.mailboxLoop()
+		}
 	}
 
 	if err := n.Services.StartAll(n.Ctx); err != nil {
@@ -727,6 +747,9 @@ func (n *Node) Start() (err error) {
 	// expired offline messages stop taking disk and quota, and old recipients are forgotten
 	if n.MailboxManager != nil {
 		_ = n.Scheduler.Schedule("mailbox:cleanup", messenger.CleanupInterval, func(ctx context.Context) error {
+			if n.RelayServer != nil {
+				n.RelayServer.RefreshSeen() // recipients connected for days keep their mailboxes
+			}
 			_, err := n.MailboxManager.CleanupExpired()
 			return err
 		})
@@ -782,6 +805,7 @@ func (n *Node) publishBundleLoop(engine *dht.EchoFogDHT) {
 		case <-n.Ctx.Done():
 			return
 		case <-time.After(pause):
+		case <-n.bundleNow:
 		}
 		bundle, err := n.Swarm.CreateMyPreKeyBundle()
 		if err != nil {

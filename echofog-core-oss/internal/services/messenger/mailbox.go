@@ -107,8 +107,10 @@ type MailboxManager struct {
 	totalCount  int
 	lastPurge   int64 // unix second of the last purgeExpiredLocked
 
-	seenMu sync.Mutex
-	seen   map[types.PeerID]int64 // recipient -> unix time it last used this relay
+	seenMu     sync.Mutex
+	seen       map[types.PeerID]int64 // recipient -> unix time it last used this relay
+	seenSaved  map[types.PeerID]int64 // when each was last written to the store
+	seenLoaded bool
 }
 
 func NewMailboxManager(store storage.Storage) *MailboxManager {
@@ -119,6 +121,62 @@ func NewMailboxManager(store storage.Storage) *MailboxManager {
 		byRecipient: make(map[types.PeerID]*usage),
 		bySender:    make(map[types.PeerID]*usage),
 		seen:        make(map[types.PeerID]int64),
+		seenSaved:   make(map[types.PeerID]int64),
+	}
+}
+
+// SeenPrefix keys the recipients that used this relay, with when: kept on disk so that a restart
+// does not make the relay refuse their mail until each comes back. Who they are stays out of the
+// key (it is blinded) and in the sealed value.
+const SeenPrefix = "mbs:"
+
+type seenRecord struct {
+	Peer string `json:"p"`
+	At   int64  `json:"t"` // unix seconds
+}
+
+func (m *MailboxManager) seenKey(id types.PeerID) []byte {
+	return []byte(SeenPrefix + storage.BlindID(m.store, hex.EncodeToString(id[:])))
+}
+
+// seenSaveEvery bounds how often one recipient's mark is written.
+const seenSaveEvery = int64(time.Hour / time.Second)
+
+// loadSeenLocked reads the recipients kept on disk once, dropping those past ttl. Caller holds
+// m.seenMu (and possibly m.mu: it must not take it).
+func (m *MailboxManager) loadSeenLocked(seenTTL time.Duration) {
+	if m.seenLoaded || m.store == nil {
+		return
+	}
+	m.seenLoaded = true
+	entries, err := m.store.FindValues([]byte(SeenPrefix), 0)
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	ttl := int64(seenTTL.Seconds())
+	for _, e := range entries {
+		var rec seenRecord
+		if json.Unmarshal(e.Value, &rec) != nil {
+			_ = m.store.Delete(e.Key)
+			continue
+		}
+		raw, err := hex.DecodeString(rec.Peer)
+		if err != nil || len(raw) != len(types.PeerID{}) {
+			_ = m.store.Delete(e.Key)
+			continue
+		}
+		at := rec.At
+		if ttl > 0 && now-at > ttl {
+			_ = m.store.Delete(e.Key)
+			continue
+		}
+		var id types.PeerID
+		copy(id[:], raw)
+		if at > m.seen[id] {
+			m.seen[id] = at
+		}
+		m.seenSaved[id] = at
 	}
 }
 
@@ -141,6 +199,13 @@ func (m *MailboxManager) NoteRecipientSeen(id types.PeerID) {
 	ttl := m.GetLimits().RecipientSeenTTL
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
+	m.loadSeenLocked(ttl)
+	if m.store != nil && now-m.seenSaved[id] >= seenSaveEvery {
+		m.seenSaved[id] = now
+		if raw, err := json.Marshal(seenRecord{Peer: hex.EncodeToString(id[:]), At: now}); err == nil {
+			_ = m.store.Set(m.seenKey(id), raw)
+		}
+	}
 	if _, ok := m.seen[id]; !ok && len(m.seen) >= MaxSeenRecipients {
 		// peer IDs are free: a full table first drops who is past the TTL, then anybody, down to
 		// 90% so that the walk is not repeated on every new recipient
@@ -169,6 +234,7 @@ func (m *MailboxManager) pruneSeenLocked(now int64, ttl time.Duration) {
 
 func (m *MailboxManager) recipientSeen(id types.PeerID, ttl time.Duration) bool {
 	m.seenMu.Lock()
+	m.loadSeenLocked(ttl)
 	last, ok := m.seen[id]
 	m.seenMu.Unlock()
 	if !ok {

@@ -54,6 +54,10 @@ type Swarm struct {
 	card         []byte    // our bundle record without one-time prekeys, sent with init packets
 	cardAge      time.Time // when card was made
 	announcedSNI string
+	mailboxes    []MailboxHint // the relays that keep our mail while we are away (under cardMu)
+
+	mbxMu sync.Mutex
+	mbx   map[types.PeerID][]MailboxHint // other peers' mailbox relays, as their records named them
 
 	// padsTunnels mirrors whether this node announced handshake.CapTunnelPadding, so exit-tunnel
 	// wiring can decide to pad without recomputing the gating logic that lives in the node layer.
