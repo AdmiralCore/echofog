@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/access"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/logging"
@@ -461,7 +462,8 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 }
 
 // joinAddress is what other nodes put in --bootstrap to join through this one. The public IP is
-// known once a STUN server or a peer has told us; until then it is a placeholder.
+// known once a STUN server or a peer has told us; until then it is a placeholder. A camouflage node
+// adds its SNI (?sni=), so a client's very first connection to it is REALITY rather than noise.
 func joinAddress(n *node.Node, listen string) string {
 	host := "<this server's public IP or domain>"
 	if n.NAT != nil {
@@ -475,7 +477,7 @@ func joinAddress(n *node.Node, listen string) string {
 	if n.Cfg.Network.AdvertisePort > 0 {
 		port = strconv.Itoa(n.Cfg.Network.AdvertisePort)
 	}
-	return host + ":" + port + "/" + n.ID.String()
+	return network.JoinPeerAddrWithSNI(host+":"+port, n.ID, n.Cfg.AntiDPI.TLSServerName)
 }
 
 // applyRelayLimits copies the limit fields of l into the relay server config; idle is the

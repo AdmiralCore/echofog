@@ -589,3 +589,16 @@ func TestExitPool_UnmarkClosesPoolLinks(t *testing.T) {
 	require.Nil(t, s.exitPoolFor(exit))
 }
 
+// A join address with ?sni= (as echofog-node prints it for a camouflage node) registers the SNI, so
+// the bootstrap dial and every later one to that node use REALITY.
+func TestBootstrapKeepsSNIFromJoinAddress(t *testing.T) {
+	s, _ := newExitPoolSwarm(t)
+	s.netTransport = &lateRegisterTransport{onDial: func(int) {}}
+	var pub types.PeerPublicKey
+	pub[0] = 5
+	id := types.PeerPubKeyToID(pub)
+
+	s.Bootstrap([]string{network.JoinPeerAddrWithSNI("203.0.113.15:4242", id, "cover.lab")})
+	s.wg.Wait()
+	require.Equal(t, "cover.lab", s.GetPeerSNI(id))
+}

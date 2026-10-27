@@ -275,16 +275,20 @@ func (s *Swarm) PingPeer(id types.PeerID, lastAddr string) (time.Duration, error
 
 // Bootstrap dials the given nodes. With obfuscation on each entry must name the node:
 // "host:port/<peer id>" (network.JoinPeerAddr).
-// Bootstrap dials the given nodes ("host:port/peerid"; the host may be a name, so a seed node can
-// move to another IP without a new release).
+// Bootstrap dials the given nodes ("host:port/peerid", optionally "?sni=" for a camouflage node, as
+// echofog-node prints its join address; the host may be a name, so a seed node can move to another
+// IP without a new release).
 func (s *Swarm) Bootstrap(addrs []string) {
 	for _, entry := range addrs {
 		if entry == "" {
 			continue
 		}
-		addr, id, named := network.SplitPeerAddr(entry)
+		addr, id, sni, named := network.SplitPeerAddrSNI(entry)
 		if named && id == s.selfID {
 			continue // a seed node finds itself in the built-in list
+		}
+		if named && sni != "" {
+			s.SetPeerSNI(id, sni) // as if the DHT had announced it: dials to it use REALITY
 		}
 		if named && s.ThisIsActivePeer(id) {
 			// already connected: a second connection replaced the first, and every relay circuit
