@@ -207,18 +207,18 @@ func (s *ManagedSession) Close() error {
 	return err
 }
 
-func (s *ManagedSession) ID() int64                   { return s.id }
-func (s *ManagedSession) BytesMoved() int64           { return s.bytesMoved.Load() }
-func (s *ManagedSession) ActiveStreams() int32        { return s.activeStreams.Load() }
-func (s *ManagedSession) TotalStreams() int64         { return s.totalStreams.Load() }
-func (s *ManagedSession) IsDraining() bool            { return s.draining.Load() }
-func (s *ManagedSession) CreatedAt() time.Time        { return s.createdAt }
-func (s *ManagedSession) MaxLifetime() time.Duration  { return s.maxLifetime }
-func (s *ManagedSession) MaxBytes() int64             { return s.maxBytes }
-func (s *ManagedSession) MaxStreams() int             { return s.maxStreams }
-func (s *ManagedSession) SetMaxBytes(b int64)         { s.maxBytes = b }
+func (s *ManagedSession) ID() int64                      { return s.id }
+func (s *ManagedSession) BytesMoved() int64              { return s.bytesMoved.Load() }
+func (s *ManagedSession) ActiveStreams() int32           { return s.activeStreams.Load() }
+func (s *ManagedSession) TotalStreams() int64            { return s.totalStreams.Load() }
+func (s *ManagedSession) IsDraining() bool               { return s.draining.Load() }
+func (s *ManagedSession) CreatedAt() time.Time           { return s.createdAt }
+func (s *ManagedSession) MaxLifetime() time.Duration     { return s.maxLifetime }
+func (s *ManagedSession) MaxBytes() int64                { return s.maxBytes }
+func (s *ManagedSession) MaxStreams() int                { return s.maxStreams }
+func (s *ManagedSession) SetMaxBytes(b int64)            { s.maxBytes = b }
 func (s *ManagedSession) SetMaxLifetime(d time.Duration) { s.maxLifetime = d }
-func (s *ManagedSession) SetCreatedAt(t time.Time)    { s.createdAt = t }
+func (s *ManagedSession) SetCreatedAt(t time.Time)       { s.createdAt = t }
 
 // PeerSessionPool manages active and draining sessions for a target peer ID.
 type PeerSessionPool struct {

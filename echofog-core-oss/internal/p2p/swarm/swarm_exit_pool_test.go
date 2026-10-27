@@ -76,14 +76,18 @@ func (c *fakeMuxConn) SendDatagram([]byte) error { return nil }
 func (c *fakeMuxConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return nil, c.block(ctx)
 }
-func (c *fakeMuxConn) LocalAddr() net.Addr  { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10000 + c.id} }
-func (c *fakeMuxConn) RemoteAddr() net.Addr { return &net.TCPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 443} }
+func (c *fakeMuxConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10000 + c.id}
+}
+func (c *fakeMuxConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 443}
+}
 func (c *fakeMuxConn) CloseWithError(network.QuicErrorCode, string) error {
 	c.cancel()
 	return nil
 }
-func (c *fakeMuxConn) Context() context.Context      { return c.ctx }
-func (c *fakeMuxConn) Protocol() string              { return network.ProtocolQUIC }
+func (c *fakeMuxConn) Context() context.Context        { return c.ctx }
+func (c *fakeMuxConn) Protocol() string                { return network.ProtocolQUIC }
 func (c *fakeMuxConn) ChannelBinding() ([]byte, error) { return make([]byte, 32), nil }
 
 var _ network.MuxConn = (*fakeMuxConn)(nil)
