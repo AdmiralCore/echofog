@@ -76,6 +76,45 @@ func (s *Swarm) expectPeer(addr string, id types.PeerID) {
 	}
 }
 
+// ExpectPeerAddr registers, with the transport, that the node at addr is peer id and (if known) its
+// camouflage SNI, so a dial to addr uses the right obfuscation: REALITY for a camouflage node across
+// a censoring border, noise otherwise. The exit gateway calls it before dialing a camouflage exit so
+// the tunnel runs over a REALITY connection rather than a noise connection reused from the mesh.
+func (s *Swarm) ExpectPeerAddr(addr string, id types.PeerID) {
+	s.expectPeer(addr, id)
+}
+
+// IsCamouflagePeer reports whether the swarm knows a camouflage SNI for id (a node that mimics a
+// cover site). The exit gateway uses it to force REALITY on an exit tunnel to such a node.
+func (s *Swarm) IsCamouflagePeer(id types.PeerID) bool {
+	return s.GetPeerSNI(id) != ""
+}
+
+// EnsureExitReality makes sure the connection to a camouflage exit (a node with a known SNI) is a
+// REALITY connection, replacing any noise connection left to it by the mesh bootstrap or by an
+// earlier market/account probe (those are dialed by peer ID before the SNI is registered, and a noise
+// connection to a camouflage node does not serve the tunnel: the exit goes silent and the client
+// switches away). Call it once at VPN start, after the SNI is registered, before opening exit
+// streams. A no-op for a peer with no known SNI (an ordinary exit keeps its noise connection).
+func (s *Swarm) EnsureExitReality(ctx context.Context, exit types.PeerID) {
+	if s.GetPeerSNI(exit) == "" {
+		return
+	}
+	p := s.GetPeer(exit)
+	if p == nil {
+		return
+	}
+	addr := p.Addr()
+	if addr == "" {
+		addr = p.RemoteAddr()
+	}
+	if addr == "" {
+		return
+	}
+	s.expectPeer(addr, exit) // register the SNI so the dial uses REALITY
+	_ = s.dialEarly(ctx, addr)
+}
+
 // ErrIsolated: this node is isolated and dials nobody.
 var ErrIsolated = errors.New("this node is isolated: it does not connect to other nodes")
 

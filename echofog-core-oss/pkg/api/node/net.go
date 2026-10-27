@@ -271,6 +271,14 @@ func (n *NodeApi) startVPN(relayPeerID, listen string) error {
 	if err := n.ensureConnected(exit); err != nil {
 		return err
 	}
+	// A camouflage exit's tunnel must run over a REALITY connection. The mesh bootstrap, or an earlier
+	// market/account probe, may have left a noise connection to it (dialed by peer ID before the SNI
+	// was registered), and a noise connection to a camouflage node does not serve the tunnel. Now that
+	// the SNI is registered (StartVPNVia, or discovery), replace any such connection with REALITY
+	// before the proxy opens exit streams.
+	rctx, rcancel := context.WithTimeout(n.node.Ctx, 15*time.Second)
+	n.node.Swarm.EnsureExitReality(rctx, exit)
+	rcancel()
 
 	n.vpn.mu.Lock()
 	defer n.vpn.mu.Unlock()

@@ -3,6 +3,9 @@
 FROM golang:1.27 AS gobuild
 WORKDIR /src
 COPY go.mod go.sum ./
+# third_party holds the local apernet/quic-go fork that go.mod replaces to; go mod download must see
+# its go.mod to build the module graph, so it has to be present before the dependency-cache step.
+COPY third_party ./third_party
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/ndpigen ./testbed/ndpigen

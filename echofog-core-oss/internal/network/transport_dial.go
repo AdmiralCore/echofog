@@ -8,6 +8,7 @@ import (
 
 	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/dpi"
+	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -15,6 +16,23 @@ import (
 type pendingDial struct {
 	done chan struct{}
 	err  error
+}
+
+// ephemeralSocketKey marks a dial that must open its own fresh UDP socket (a new 5-tuple) instead
+// of sharing the node's main listener.
+type ephemeralSocketKey struct{}
+
+// WithEphemeralSocket marks ctx so that even a noise dial opens its own ephemeral UDP socket,
+// giving the connection a distinct 5-tuple. Flow-shaping rotation sets it on exit-tunnel re-dials
+// so each rotated flow looks separate to a censor; the REALITY path already uses a fresh socket
+// per dial regardless. Ordinary node<->node noise dials leave it unset and keep the main socket.
+func WithEphemeralSocket(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ephemeralSocketKey{}, true)
+}
+
+func ephemeralSocketRequested(ctx context.Context) bool {
+	v, _ := ctx.Value(ephemeralSocketKey{}).(bool)
+	return v
 }
 
 // DialEarly connects to addr. Concurrent dials to the same address are coalesced: besides
@@ -187,6 +205,7 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 	}
 
 	quicCfg := q.quicCgf
+	realityCfg := quicCfg
 	if tlsCfg.ServerName != "" {
 		tlsCfg.Certificates = nil
 		tlsCfg.NextProtos = []string{"h3"}
@@ -195,23 +214,68 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 		if q.obfs != nil {
 			q.obfs.SetRaw(targetAddres.AddrPort(), true)
 		}
+
+		// REALITY client dial: shape the first Initial like a real Chrome's first visit to a site.
+		//   - ChromeParrot makes quic-go send Chrome's ClientHello (via uTLS) and Chrome's transport
+		//     parameters: real GREASE (a GREASE cipher, GREASE-typed extensions, a GREASE key share
+		//     and version), the X25519MLKEM768 key share, and a GREASE transport parameter. Without
+		//     it the wire carried Go's crypto/tls fingerprint, which a JA3/JA4 censor blocks.
+		//   - 1250-byte Initials (ChromeParrot also pins this), via InitialPacketSize.
+		//   - The stealth token rides in the ClientHello random (tls.Config.Rand below): uTLS reads
+		//     the 32-byte random as its first rand draw, so the token lands there and the Initial's
+		//     Token field stays empty, as Chrome's is (a token only follows a NEW_TOKEN from an
+		//     earlier visit). GREASE values are drawn from a later, fixed-size seed, so they do not
+		//     disturb the token.
+		// This needs the patched apernet/quic-go fork (see go.mod replace): stock ChromeParrot adds
+		// the GREASE but its uTLS handshake cannot carry the TLS exporter EchoFog's peer-auth channel
+		// binding needs; the fork exposes it (Conn.ExportKeyingMaterial, used by quicMuxConn). Only
+		// this ephemeral, one-connection-per-dial config is reshaped; the shared listener and noise
+		// dials keep quic-go's own.
+		if q.realityConn != nil && haveExpected {
+			if r, rerr := mimicry.QUICInitialRand(mimicry.NodeStealthKey(q.obfsSecret, expected), tlsCfg.NextProtos); rerr == nil {
+				tlsCfg.Rand = r
+				reality := *quicCfg
+				reality.InitialPacketSize = 1250
+				reality.ChromeParrot = true
+				realityCfg = &reality
+			}
+		}
 	}
 
 	var conn *quic.Conn
 	var dialErr error
 	var ephemeralTr *quic.Transport
 	var uconn *net.UDPConn
-	if tlsCfg.ServerName != "" {
+	reality := tlsCfg.ServerName != ""
+	// A fresh per-dial socket (its own 5-tuple) is always used for a REALITY dial, and for a noise
+	// dial that asked for one (flow-shaping rotation). Without it a rotated noise exit tunnel would
+	// go out from the shared main socket and reuse its 5-tuple, so a censor would still see one
+	// continuous flow instead of several short, rotated ones.
+	if reality || ephemeralSocketRequested(ctx) {
 		laddr := &net.UDPAddr{IP: net.IPv4zero, Port: 0}
 		var lerr error
 		uconn, lerr = net.ListenUDP("udp", laddr)
 		if lerr == nil {
 			var pconn net.PacketConn = uconn
-			if q.realityConn != nil {
-				pconn = NewQuicRealityConn(uconn, q)
+			if reality {
+				if q.realityConn != nil {
+					pconn = NewQuicRealityConn(uconn, q)
+				}
+			} else if q.obfs != nil {
+				// Mask the ephemeral socket with the node's shared obfuscator so the rotated noise
+				// flow keys exactly as the main socket would: the peer was already Expect()ed, and
+				// the obfuscator tracks keys per remote address, which does not change on rotation.
+				pconn = dpi.WrapPacketConn(uconn, q.obfs)
 			}
 			ephemeralTr = &quic.Transport{Conn: pconn}
-			conn, dialErr = ephemeralTr.Dial(ctx, targetAddres, tlsCfg, quicCfg)
+			if realityCfg.ChromeParrot {
+				// Chrome's QUIC client uses a zero-length source connection ID; match it so the
+				// parrot is not given away by an 8-byte SCID quic-go would otherwise generate. Safe
+				// here only because this transport carries exactly one connection per dial, which is
+				// what ZeroLengthConnectionIDGenerator requires.
+				ephemeralTr.ConnectionIDGenerator = quic.ZeroLengthConnectionIDGenerator{}
+			}
+			conn, dialErr = ephemeralTr.Dial(ctx, targetAddres, tlsCfg, realityCfg)
 			if dialErr != nil {
 				_ = ephemeralTr.Close()
 				_ = uconn.Close()
