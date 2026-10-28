@@ -350,6 +350,10 @@ export function JoinGroup(arg1) {
   return window['go']['main']['App']['JoinGroup'](arg1);
 }
 
+export function JoinInvite(arg1) {
+  return window['go']['main']['App']['JoinInvite'](arg1);
+}
+
 export function JoinRoom(arg1, arg2) {
   return window['go']['main']['App']['JoinRoom'](arg1, arg2);
 }
@@ -648,6 +652,10 @@ export function StopVPN() {
 
 export function SubmitCallAnswer(arg1) {
   return window['go']['main']['App']['SubmitCallAnswer'](arg1);
+}
+
+export function TakeStartLink() {
+  return window['go']['main']['App']['TakeStartLink']();
 }
 
 export function TransferGroupOwnership(arg1, arg2) {

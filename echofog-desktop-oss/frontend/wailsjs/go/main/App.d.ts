@@ -181,6 +181,8 @@ export function IsRiskyFile(arg1:string):Promise<boolean>;
 
 export function JoinGroup(arg1:string):Promise<node.GroupDTO>;
 
+export function JoinInvite(arg1:string):Promise<string>;
+
 export function JoinRoom(arg1:string,arg2:string):Promise<string>;
 
 export function KeepGroupCallAlive(arg1:string,arg2:string,arg3:string):Promise<void>;
@@ -330,6 +332,8 @@ export function StopSharing():Promise<void>;
 export function StopVPN():Promise<void>;
 
 export function SubmitCallAnswer(arg1:string):Promise<void>;
+
+export function TakeStartLink():Promise<string>;
 
 export function TransferGroupOwnership(arg1:string,arg2:string):Promise<void>;
 

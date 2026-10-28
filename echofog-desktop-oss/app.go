@@ -52,6 +52,7 @@ func (a *App) startup(ctx context.Context) {
 		_ = os.Setenv("ECHOFOG_LOG_FILE", logging.DefaultFilePath())
 	}
 	runtime.LogInfo(ctx, "Wails frontend connected via bridge")
+	a.serveLinkHandoff(ctx)
 }
 
 // Safe helpers

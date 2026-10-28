@@ -371,6 +371,15 @@ function leave() {
 }
 
 // --- App bindings -----------------------------------------------------------------------------------
+// the invitation link of a public node, as the address the relay and bootstrap lists keep (core: linkEntry)
+const linkEntryMock = (text) => {
+  text = text.trim();
+  if (!/^echofog:\/\/join\?/i.test(text)) return text;
+  const q = new URLSearchParams(text.replace(/^echofog:\/\/join\?/i, ''));
+  if (q.get('s')) throw new Error('this is an invitation to a hidden node: join it instead');
+  if (!q.get('a')) throw new Error('the link names no address to reach the node at');
+  return q.get('a') + '/' + (q.get('id') || '').toLowerCase();
+};
 const impl = {
   GetProfiles: () => ['demo'],
   AppVersion: () => '0.1.0',
@@ -400,7 +409,7 @@ const impl = {
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
   AddBootstrapNode: (entry) => {
-    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(entry.trim());
+    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(linkEntryMock(entry));
     if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
     const peerId = m[2].toLowerCase();
     if (!bootMock.custom.some((n) => n.peerId === peerId)) {
@@ -432,7 +441,7 @@ const impl = {
     return null;
   },
   AddRelay: (link) => {
-    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(link.trim());
+    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(linkEntryMock(link));
     if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
     const addr = m[1] + '/' + m[2].toLowerCase();
     if (!relayMock.settings.relays.includes(addr)) relayMock.settings.relays.push(addr);
@@ -453,8 +462,10 @@ const impl = {
     if (Number(q.get('v')) > 1) throw new Error('the link was made by a newer version of the app: update it');
     if (q.get('net') !== 'echofog') throw new Error(`the link is for the network "${q.get('net')}", this app is for another one`);
     if (!HEX64.test(q.get('id') || '')) throw new Error('broken invitation link: bad node id');
-    return { peerId: q.get('id').toLowerCase(), private: !!q.get('s'), addrs: q.getAll('a').length, relays: q.getAll('r').length, protocol: Number(q.get('p')) || 0 };
+    return { peerId: q.get('id').toLowerCase(), private: !!q.get('s'), addrs: q.getAll('a').length, relays: q.getAll('r').length, protocol: Number(q.get('p')) || 0, server: q.get('srv') === '1', sni: q.get('sni') || '' };
   },
+  JoinInvite: (link) => new Promise((r) => setTimeout(() => r((/[?&]id=([0-9a-f]{64})/i.exec(link) || [])[1] || ''), 500)),
+  TakeStartLink: () => new URLSearchParams(location.search).get('link') || '',
   StartVPNVia: (target) => new Promise((r, j) => setTimeout(() => {
     const m = /^echofog:\/\/join\?/i.test(target.trim()) ? /[?&]id=([0-9a-f]{64})/i.exec(target) : /([0-9a-f]{64})\/?$/i.exec(target.trim());
     if (!m) return j(new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>'));

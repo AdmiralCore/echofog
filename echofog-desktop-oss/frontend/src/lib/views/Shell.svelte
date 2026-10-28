@@ -1,6 +1,8 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { App, openURL } from '../api.js';
+  import { App, openURL, on } from '../api.js';
+  import { openLinkDialog, looksLikeLink } from '../links.js';
+  import OpenLink from '../components/OpenLink.svelte';
   import { profile } from '../stores/session.js';
   import { chats } from '../stores/chats.js';
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
@@ -83,8 +85,28 @@
   }
 
   let offSounds = () => {};
+  let offLink = () => {};
+
+  // EchoFog links: Ctrl+L opens the dialog; a link pasted outside a text field, a link clicked in a
+  // browser while the app runs, and the link that started the app all open it with the link in it
+  const typing = (el) => el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  function onKey(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      openLinkDialog('');
+    }
+  }
+  function onPaste(e) {
+    if (typing(document.activeElement)) return;
+    const text = e.clipboardData?.getData('text') || '';
+    if (!looksLikeLink(text)) return;
+    e.preventDefault();
+    openLinkDialog(text.trim());
+  }
 
   onMount(() => {
+    offLink = on('link:open', (link) => openLinkDialog(link || ''));
+    App.TakeStartLink().then((link) => { if (link) openLinkDialog(link); }).catch(() => {});
     checkUpdate();
     offSounds = bindSounds();
     initCallEvents();
@@ -92,10 +114,11 @@
     refresh();
     poll = setInterval(() => { now = Date.now(); refresh(); }, 5000);
   });
-  onDestroy(() => { clearInterval(poll); offSounds(); });
+  onDestroy(() => { clearInterval(poll); offSounds(); offLink(); });
 </script>
 
-<svelte:window bind:innerWidth={width} />
+<svelte:window bind:innerWidth={width} on:keydown={onKey} on:paste={onPaste} />
+<OpenLink />
 
 <div class="shell" class:bottom>
   <nav class:rail class:bottom aria-label={$t('shell.sections')}>

@@ -1223,6 +1223,8 @@ export namespace node {
 	    addrs: number;
 	    relays: number;
 	    protocol: number;
+	    server: boolean;
+	    sni?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new InviteInfo(source);
@@ -1235,6 +1237,8 @@ export namespace node {
 	        this.addrs = source["addrs"];
 	        this.relays = source["relays"];
 	        this.protocol = source["protocol"];
+	        this.server = source["server"];
+	        this.sni = source["sni"];
 	    }
 	}
 	

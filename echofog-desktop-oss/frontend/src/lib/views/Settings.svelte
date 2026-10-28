@@ -10,6 +10,7 @@
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import BootstrapCard from '../components/BootstrapCard.svelte';
+  import { openLinkDialog } from '../links.js';
   import PrivacyCard from '../components/PrivacyCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
@@ -182,6 +183,17 @@
         <div class="row"><button class="primary" on:click={save}>{$t('common.save')}</button>{#if saved}<span class="small ok saved">{$t('settings.savedRestart')}</span>{/if}</div>
       </div>
     {/if}
+
+    <div class="card stack">
+      <div class="card-head">
+        <span class="ico"><Icon name="link" size={19} /></span>
+        <div class="grow">
+          <h2>{$t('links.title')}</h2>
+          <p class="small muted">{$t('links.hint')}</p>
+        </div>
+        <button class="primary" on:click={() => openLinkDialog('')}>{$t('links.open')}</button>
+      </div>
+    </div>
 
     <BootstrapCard />
 

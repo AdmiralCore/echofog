@@ -3,6 +3,7 @@
   import { slide } from 'svelte/transition';
   import QRCode from 'qrcode';
   import { me, profile } from '../stores/session.js';
+  import { openLinkDialog } from '../links.js';
   import { chats, activeId, activeGroupCalls, loadChats, openChat, addContact, createGroup, joinGroup } from '../stores/chats.js';
   import { isCallActive, peerInfo, stageExpanded } from '../stores/call.store.js';
   import CallStage from '../components/call/CallStage.svelte';
@@ -159,6 +160,7 @@
           <button class="nm-item" on:click={() => startNew('contact')}><Icon name="userPlus" size={17} /><span>{$t('chats.newContact')}</span></button>
           <button class="nm-item" on:click={() => startNew('group')}><Icon name="users" size={17} /><span>{$t('chats.newSpace')}</span></button>
           <button class="nm-item" on:click={() => startNew('join')}><Icon name="link" size={17} /><span>{$t('chats.joinInvite')}</span></button>
+          <button class="nm-item" on:click={() => { newMenu = false; openLinkDialog(''); }}><Icon name="link" size={17} /><span>{$t('links.title')}</span><kbd class="small faint">Ctrl+L</kbd></button>
         </div>
       </Popover>
     {/if}

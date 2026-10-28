@@ -25,6 +25,17 @@ func main() {
 	}
 	mime.AddExtensionType(".webm", "video/webm")
 
+	// started by a clicked echofog:// link: an EchoFog window that already runs takes it
+	if link := linkFromArgs(os.Args[1:]); link != "" {
+		if handOffLink(link) {
+			return
+		}
+		startLinkMu.Lock()
+		startLink = link
+		startLinkMu.Unlock()
+	}
+	registerLinkScheme()
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{
