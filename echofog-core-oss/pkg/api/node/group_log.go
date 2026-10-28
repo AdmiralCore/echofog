@@ -190,3 +190,19 @@ func (f *groupsFacade) memberChange(groupID string, b *convlog.MemberBody) {
 		f.onMember(groupID, b)
 	}
 }
+
+// joinedAfter reports whether we joined the group after ts (ms): a message older than our joining is
+// history handed over, not news.
+func (f *groupsFacade) joinedAfter(groupID string, ts int64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.member(groupID, f.selfID)
+	if !ok || m.JoinedAt == 0 {
+		return false
+	}
+	joined := m.JoinedAt
+	if joined < 1e12 { // seconds
+		joined *= 1000
+	}
+	return ts > 0 && ts < joined
+}

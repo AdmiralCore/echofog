@@ -359,3 +359,38 @@ func (m *members) add(ev memberEv) {
 	copy(m.evs[i+1:], m.evs[i:])
 	m.evs[i] = ev
 }
+
+// admittedLater is the role of an author who is not a member at p but is let in later, without
+// having been removed or banned before p: a member's first messages are written concurrently with
+// the event that lets them in (they joined with the invitation and wrote at once), and land before
+// it in the log's order. Nobody gains anything they would not have once let in, and what a removed
+// member writes after the removal stays refused.
+func (m *members) admittedLater(rules GroupRules, c Conv, author types.PeerID, pub []byte, p pos) (Role, bool) {
+	var role Role
+	found, removed := false, false
+	final, _, ok := m.walk(rules, c, func(ev memberEv, before *memberState, allowed bool) bool {
+		if ev.at.less(p) {
+			if allowed && (ev.body.Action == MemberRemove || ev.body.Action == MemberBan) && bytes.Equal(ev.body.Member, pub) {
+				removed = true
+			}
+			return true
+		}
+		if removed {
+			return false
+		}
+		if before != nil {
+			if r, in := before.roles[author]; in {
+				role, found = r, true
+				return false
+			}
+		}
+		return true
+	})
+	if !ok || removed {
+		return Role{}, false
+	}
+	if !found && final != nil {
+		role, found = final.roles[author]
+	}
+	return role, found
+}

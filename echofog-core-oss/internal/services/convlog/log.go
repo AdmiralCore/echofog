@@ -112,7 +112,7 @@ func (l *Log) membersOf(bc string) *members {
 }
 
 // rightsAt is what author may do at point p of c. Call with l.mu held.
-func (l *Log) rightsAt(c Conv, bc string, author types.PeerID, p pos) Rights {
+func (l *Log) rightsAt(c Conv, bc string, author types.PeerID, pub []byte, p pos) Rights {
 	switch c.Kind {
 	case KindDM:
 		if author == l.self || author == c.Peer {
@@ -123,12 +123,18 @@ func (l *Log) rightsAt(c Conv, bc string, author types.PeerID, p pos) Rights {
 		if rules == nil {
 			return Rights{}
 		}
-		st, ok := l.membersOf(bc).stateAt(rules, c, p)
+		m := l.membersOf(bc)
+		st, ok := m.stateAt(rules, c, p)
 		if !ok {
 			return rules.Current(c, author)
 		}
 		if r, in := st.roles[author]; in {
 			return rightsOf(r)
+		}
+		if p != atEnd && len(pub) == authorLen {
+			if r, later := m.admittedLater(rules, c, author, pub, p); later {
+				return rightsOf(r)
+			}
 		}
 	}
 	return Rights{}
@@ -141,14 +147,14 @@ var atEnd = pos{L: ^uint64(0)}
 func (l *Log) RightsOf(c Conv, peer types.PeerID) Rights {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.rightsAt(c, l.bc(c.ID), peer, atEnd)
+	return l.rightsAt(c, l.bc(c.ID), peer, nil, atEnd)
 }
 
 // Participant reports whether peer takes part in c now.
 func (l *Log) Participant(c Conv, peer types.PeerID) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.rightsAt(c, l.bc(c.ID), peer, atEnd).Member
+	return l.rightsAt(c, l.bc(c.ID), peer, nil, atEnd).Member
 }
 
 // known reports whether author's events in c are kept even when not allowed: a participant of a
@@ -159,7 +165,12 @@ func (l *Log) known(c Conv, bc string, e *Event) bool {
 	case KindDM:
 		return author == l.self || author == c.Peer
 	case KindGroup:
-		if l.rightsAt(c, bc, author, atEnd).Member {
+		if l.rightsAt(c, bc, author, nil, atEnd).Member {
+			return true
+		}
+		// a member the group service knows whose admission has not reached the log yet: keep its
+		// event, the admission brings it in (a rebuild)
+		if rules := l.groupRules(); rules != nil && rules.Current(c, author).Member {
 			return true
 		}
 		return l.membersOf(bc).mentions(author, e.Author)
@@ -354,7 +365,7 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 	if e.Kind == KindMember {
 		err = l.applyMember(t, e, at, raw, mode)
 	} else {
-		rights := l.rightsAt(t.c, t.bc, authorID, at)
+		rights := l.rightsAt(t.c, t.bc, authorID, e.Author, at)
 		if !rights.Member {
 			return ErrNotParticipant
 		}

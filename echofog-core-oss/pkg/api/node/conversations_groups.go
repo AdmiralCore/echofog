@@ -95,6 +95,9 @@ func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 		if kind, _ := convlog.Peek(raw); kind == convlog.KindMsg {
 			if e, _, err := convlog.Decode(raw); err == nil {
 				f.groupMessageArrived(groupID, convlog.AuthorID(e), id)
+				if gf.joinedAfter(groupID, e.TsMs) {
+					f.historySoon(groupID) // what was said before we joined, handed over by a member
+				}
 			}
 		}
 	}
@@ -447,4 +450,24 @@ func (f *convsFacade) spread(groupID string, from types.PeerID, raw []byte) {
 			sent++
 		}
 	}
+}
+
+// historySoon tells the app, once for a burst, that a group's earlier messages came in (a newcomer's
+// history arrives through the log's sync or the group's envelope sync, whichever is first).
+func (f *convsFacade) historySoon(groupID string) {
+	f.mu.Lock()
+	if f.historyTimers == nil {
+		f.historyTimers = map[string]*time.Timer{}
+	}
+	if _, pending := f.historyTimers[groupID]; pending {
+		f.mu.Unlock()
+		return
+	}
+	f.historyTimers[groupID] = time.AfterFunc(300*time.Millisecond, func() {
+		f.mu.Lock()
+		delete(f.historyTimers, groupID)
+		f.mu.Unlock()
+		f.groupHistoryArrived(groupID)
+	})
+	f.mu.Unlock()
 }

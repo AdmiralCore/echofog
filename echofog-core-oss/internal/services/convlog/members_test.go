@@ -342,3 +342,30 @@ func TestLegacyHistorySurvivesRebuild(t *testing.T) {
 }
 
 func signWith(a account, m []byte) []byte { return ed25519.Sign(a.priv, m) }
+
+// A newcomer who joined with the invitation and wrote at once: the event letting it in comes from an
+// admin concurrently and lands after its message in the log's order. The message counts once the
+// admission is there; a removed member's later message still does not.
+func TestNewcomersFirstMessageCountsOnceLetIn(t *testing.T) {
+	f, y := newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("g5")
+	lf := groupReplica(t, f, rules)
+	r := member(t, lf, c, roster(f, "owner"))
+	early := forgeNext(t, y, c, 1, 2, "first words")
+	// the admin's admission, written later in the log's order than y's message
+	for i := 0; i < 3; i++ {
+		say(t, lf, c, "filler")
+	}
+	join := member(t, lf, c, &MemberBody{Action: MemberJoin, Member: y.pub})
+
+	other := groupReplica(t, newAccount(t), rules)
+	ingest(t, other, c, r)
+	_, _, _ = other.Ingest(c, early) // y is nobody yet
+	ingest(t, other, c, join)
+	_, _, _ = other.Ingest(c, early) // offered again by sync
+	other.RebuildIfNeeded(c)
+	if !texts(t, other, c)["first words"] {
+		t.Fatal("the newcomer's first message was lost")
+	}
+}

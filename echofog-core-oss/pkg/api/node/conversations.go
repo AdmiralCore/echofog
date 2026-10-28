@@ -111,12 +111,13 @@ type convsFacade struct {
 	st     storage.Storage
 	self   types.PeerID
 
-	mu        sync.Mutex
-	capable   map[types.PeerID]bool
-	lastHello map[types.PeerID]time.Time
-	syncIn    map[types.PeerID]*syncWindow // sync messages taken from each peer lately
-	joinAsked map[string]time.Time         // groups where we asked the log to let us in
-	lastRev   map[convlog.ConvID]uint64    // the newest change handed to the app, per chat
+	mu            sync.Mutex
+	capable       map[types.PeerID]bool
+	lastHello     map[types.PeerID]time.Time
+	syncIn        map[types.PeerID]*syncWindow // sync messages taken from each peer lately
+	joinAsked     map[string]time.Time         // groups where we asked the log to let us in
+	lastRev       map[convlog.ConvID]uint64    // the newest change handed to the app, per chat
+	historyTimers map[string]*time.Timer       // groups whose earlier messages are coming in
 
 	migMu sync.Mutex // one migration at a time
 }
