@@ -5,7 +5,7 @@
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
 
-  export let file; // { fid, name, size } from the message
+  export let file; // { fid, name, size, thumb, w, h } from the message
   export let mine = false;
 
   $: xfer = $transfers[file.fid];
@@ -26,7 +26,12 @@
   }
 </script>
 
-<div class="file" class:mine>
+<div class="file" class:mine class:pic={!!file.thumb}>
+  {#if file.thumb}
+    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-noninteractive-element-interactions -->
+    <img class="thumb" src={file.thumb} alt={file.name} style="aspect-ratio:{file.w} / {file.h}"
+      class:open={state === 'done' && !mine} on:click={() => state === 'done' && !mine && openFile(xfer)} />
+  {/if}
   <div class="top">
     <span class="ic" class:done={state === 'done'}>
       {#if state === 'active'}<Icon name={mine ? 'upload' : 'download'} size={18} />{:else}<Icon name="file" size={18} />{/if}
@@ -76,6 +81,9 @@
 </div>
 
 <style>
+  .thumb { display: block; width: 100%; max-width: 300px; max-height: 260px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; background: var(--raised); }
+  .thumb.open { cursor: zoom-in; }
+  .file.pic { min-width: 220px; }
   .file { display: flex; flex-direction: column; gap: 8px; min-width: min(280px, 60vw); max-width: 360px; padding: 2px 0 2px; }
   .top { display: flex; gap: 10px; align-items: center; }
   .ic {

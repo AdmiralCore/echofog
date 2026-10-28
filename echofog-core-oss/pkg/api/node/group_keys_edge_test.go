@@ -151,7 +151,7 @@ func TestSealedFileOffer(t *testing.T) {
 	a.say(t, g, "warm up")
 	var offered []wireFile
 	b.f.onFile = func(_ types.PeerID, _ string, wf wireFile) { offered = append(offered, wf) }
-	_, err := a.f.post(g, "notes.pdf", &wireFile{ID: "f1", Name: "notes.pdf", Size: 10, Root: "r", Key: "k"})
+	_, err := a.f.post(g, "notes.pdf", &wireFile{ID: "f1", Name: "notes.pdf", Size: 10, Root: "r", Key: "k", Thumb: "AAAA", TW: 4, TH: 3})
 	require.NoError(t, err)
 	m.settle()
 	require.Len(t, offered, 1)
@@ -165,6 +165,8 @@ func TestSealedFileOffer(t *testing.T) {
 	}
 	require.NotNil(t, withFile)
 	assert.True(t, withFile.Verified)
+	assert.Equal(t, "AAAA", withFile.File.Thumb, "a picture's thumbnail rides the signed offer")
+	assert.Equal(t, 4, withFile.File.TW)
 }
 
 func TestSyncAnswersAndRequestsAreBounded(t *testing.T) {

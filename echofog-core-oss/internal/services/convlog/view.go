@@ -69,7 +69,7 @@ type View struct {
 	LastReplyTS int64 `json:"last_reply_ts,omitempty"` // ms
 	// ThreadTitle names the thread under the message (last writer wins).
 	ThreadTitle *Reg `json:"thread_title,omitempty"`
-	Stripped    bool  `json:"stripped,omitempty"`      // its event no longer carries the body
+	Stripped    bool `json:"stripped,omitempty"` // its event no longer carries the body
 }
 
 const maxEditRefs = 64
@@ -201,7 +201,14 @@ type FileRef struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 	Mime string `json:"mime,omitempty"`
+	// Thumb is a picture's thumbnail (base64 JPEG, sent with the offer), W and H its size.
+	Thumb string `json:"thumb,omitempty"`
+	W     int    `json:"w,omitempty"`
+	H     int    `json:"h,omitempty"`
 }
+
+// maxThumb bounds a thumbnail read from a message (the sender makes them about 6 KB).
+const maxThumb = 16 << 10
 
 // MsgCan is what I may do with one message.
 type MsgCan struct {
@@ -223,16 +230,22 @@ const CallInvitePrefix = "fogcall://"
 func fileOf(typ uint32, text, metadata string) *FileRef {
 	var meta struct {
 		GroupFile *struct {
-			ID   string      `json:"id"`
-			Name string      `json:"name"`
-			Size json.Number `json:"size"`
-			Mime string      `json:"mime"`
+			ID    string      `json:"id"`
+			Name  string      `json:"name"`
+			Size  json.Number `json:"size"`
+			Mime  string      `json:"mime"`
+			Thumb string      `json:"thumb"`
+			TW    int         `json:"tw"`
+			TH    int         `json:"th"`
 		} `json:"group_file"`
 		FileName string      `json:"file_name"`
 		FileSize json.Number `json:"file_size"`
 		MimeType string      `json:"mime_type"`
 		Custom   struct {
-			FID string `json:"fid"`
+			FID   string `json:"fid"`
+			Thumb string `json:"thumb"`
+			TW    int    `json:"tw"`
+			TH    int    `json:"th"`
 		} `json:"custom"`
 	}
 	if metadata != "" {
@@ -240,7 +253,7 @@ func fileOf(typ uint32, text, metadata string) *FileRef {
 	}
 	if g := meta.GroupFile; g != nil {
 		n, _ := g.Size.Int64()
-		return &FileRef{ID: g.ID, Name: g.Name, Size: n, Mime: g.Mime}
+		return withThumb(&FileRef{ID: g.ID, Name: g.Name, Size: n, Mime: g.Mime}, g.Thumb, g.TW, g.TH)
 	}
 	if typ != msgTypeFile {
 		return nil
@@ -250,7 +263,14 @@ func fileOf(typ uint32, text, metadata string) *FileRef {
 		name = text
 	}
 	n, _ := meta.FileSize.Int64()
-	return &FileRef{ID: meta.Custom.FID, Name: name, Size: n, Mime: meta.MimeType}
+	return withThumb(&FileRef{ID: meta.Custom.FID, Name: name, Size: n, Mime: meta.MimeType}, meta.Custom.Thumb, meta.Custom.TW, meta.Custom.TH)
+}
+
+func withThumb(f *FileRef, thumb string, w, h int) *FileRef {
+	if thumb != "" && len(thumb) <= maxThumb && w > 0 && h > 0 && w <= 512 && h <= 512 {
+		f.Thumb, f.W, f.H = thumb, w, h
+	}
+	return f
 }
 
 // Render resolves the view for display; self is my peer id hex.

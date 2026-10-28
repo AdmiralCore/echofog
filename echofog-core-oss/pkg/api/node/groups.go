@@ -91,6 +91,20 @@ type GroupFileDTO struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 	Mime string `json:"mime,omitempty"`
+	// a picture's thumbnail (base64 JPEG) and its size
+	Thumb string `json:"thumb,omitempty"`
+	TW    int    `json:"tw,omitempty"`
+	TH    int    `json:"th,omitempty"`
+}
+
+// maxThumb bounds a thumbnail somebody else sent (ours are about 6 KB).
+const maxThumb = 16 << 10
+
+func thumbOK(s string) string {
+	if len(s) > maxThumb {
+		return ""
+	}
+	return s
 }
 
 type groupsHolder struct {
@@ -513,7 +527,11 @@ func (f *groupsFacade) SendFile(groupID, path string) (GroupMessageDTO, error) {
 	if err != nil {
 		return GroupMessageDTO{}, err
 	}
-	msg, err := f.post(groupID, offer.Name, &wireFile{ID: offer.ID, Name: offer.Name, Size: offer.Size, Mime: offer.Mime, Root: offer.Root, Key: offer.Key})
+	wf := &wireFile{ID: offer.ID, Name: offer.Name, Size: offer.Size, Mime: offer.Mime, Root: offer.Root, Key: offer.Key}
+	if thumb, w, h, ok := filexfer.Thumbnail(path); ok {
+		wf.Thumb, wf.TW, wf.TH = thumb, w, h // the members see the picture before they fetch it
+	}
+	msg, err := f.post(groupID, offer.Name, wf)
 	if err != nil || (msg.Failed > 0 && msg.Delivered+msg.Queued == 0) {
 		if f.withdraw != nil {
 			f.withdraw(offer.ID)
@@ -556,7 +574,7 @@ func (f *groupsFacade) post(groupID, text string, file *wireFile) (GroupMessageD
 		Text: text, Timestamp: now, IsMine: true, Delivered: delivered, Queued: queued, Failed: failed, Verified: true,
 	}, Sig: c.Sig, FD: c.FileDigest}
 	if file != nil {
-		msg.File = &GroupFileDTO{ID: file.ID, Name: file.Name, Size: file.Size, Mime: file.Mime}
+		msg.File = &GroupFileDTO{ID: file.ID, Name: file.Name, Size: file.Size, Mime: file.Mime, Thumb: file.Thumb, TW: file.TW, TH: file.TH}
 	}
 	raw, _ := json.Marshal(msg)
 	if err := f.store.Set(msgKey(groupID, now, f.seq), raw); err != nil {

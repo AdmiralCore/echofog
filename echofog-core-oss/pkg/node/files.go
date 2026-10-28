@@ -107,6 +107,10 @@ func (n *Node) SendFile(peer types.PeerID, path string) (filexfer.Info, error) {
 		FileName: offer.Name, FileSize: offer.Size, FileKeyHex: offer.Key, MimeType: offer.Mime,
 		Custom: map[string]any{"fid": offer.ID, "root": offer.Root},
 	}
+	// a picture travels with its thumbnail, so the chat shows it before it is fetched
+	if thumb, w, h, ok := filexfer.Thumbnail(path); ok {
+		meta.Custom["thumb"], meta.Custom["tw"], meta.Custom["th"] = thumb, w, h
+	}
 	err = n.Messenger.SendChatMessageWithTier(peer, offer.Name, messenger.TierX3DH, messenger.SendOptions{
 		Type: messenger.PersonalMessageTypeProto_MsgTypeFile, ContentHash: offer.Root, Metadata: meta,
 	})

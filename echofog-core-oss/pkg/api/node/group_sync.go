@@ -67,6 +67,10 @@ type wireFile struct {
 	Mime string `json:"m,omitempty"`
 	Root string `json:"r"`
 	Key  string `json:"k"`
+	// a picture's thumbnail (base64 JPEG) and its size, signed with the offer
+	Thumb string `json:"t,omitempty"`
+	TW    int    `json:"tw,omitempty"`
+	TH    int    `json:"th,omitempty"`
 }
 
 // wireHistory is one old message that an admin hands to a newcomer, with its author's signature
@@ -750,7 +754,7 @@ func (f *groupsFacade) receiveMessage(sender types.PeerID, groupID, id string, t
 		if f.onFile == nil || wf.ID == "" || wf.Root == "" || wf.Key == "" || wf.Size < 0 {
 			return nil
 		}
-		msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime}
+		msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime, Thumb: thumbOK(wf.Thumb), TW: wf.TW, TH: wf.TH}
 		offer = func() { f.onFile(sender, groupID, wf) }
 	}
 	raw, _ := json.Marshal(msg)

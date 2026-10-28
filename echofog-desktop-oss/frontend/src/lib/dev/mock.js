@@ -811,7 +811,7 @@ function kindOf(m) {
   let meta = {};
   try { meta = m.metadata ? JSON.parse(m.metadata) : {}; } catch (_) { /* not JSON */ }
   if (meta.group_file) return { kind: 'file', file: { id: meta.group_file.id, name: meta.group_file.name, size: Number(meta.group_file.size) || 0, mime: meta.group_file.mime || '' } };
-  if (m.type === 4) return { kind: 'file', file: { id: meta.custom?.fid || '', name: meta.file_name || m.text, size: Number(meta.file_size) || 0, mime: meta.mime_type || '' } };
+  if (m.type === 4) return { kind: 'file', file: { id: meta.custom?.fid || '', name: meta.file_name || m.text, size: Number(meta.file_size) || 0, mime: meta.mime_type || '', thumb: meta.custom?.thumb, w: meta.custom?.tw, h: meta.custom?.th } };
   return { kind: 'text' };
 }
 // the ranks of the group service: the preview plays the core, which decides who may do what
@@ -958,6 +958,24 @@ const spaceChans = {
   );
 })();
 const chanUnread = { dev: 2, design: 1 };
+
+// a photo Alice sent, with the thumbnail that travels with the offer
+(function seedPhoto() {
+  const c = document.createElement('canvas');
+  c.width = 192; c.height = 128;
+  const g = c.getContext('2d');
+  const sky = g.createLinearGradient(0, 0, 0, 128);
+  sky.addColorStop(0, '#ff9a5a'); sky.addColorStop(1, '#5b3fa3');
+  g.fillStyle = sky; g.fillRect(0, 0, 192, 128);
+  g.fillStyle = '#ffd36b'; g.beginPath(); g.arc(96, 86, 22, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#1d1a3a'; g.fillRect(0, 96, 192, 32);
+  const thumb = c.toDataURL('image/jpeg', 0.7).split(',')[1];
+  const k = 'd:' + ALICE;
+  clog[k].msgs.push(lmsg(k, {
+    author: ALICE, ts: Date.now() - 3 * 60 * 1000, text: 'sunset.jpg', type: 4, lamport: ++clock,
+    metadata: JSON.stringify({ file_name: 'sunset.jpg', file_size: 2400000, mime_type: 'image/jpeg', custom: { fid: 'photo1', thumb, tw: 192, th: 128 } }),
+  }));
+})();
 Object.assign(impl, {
   // every contact, request and group, written to or not, as the core lists them
   ChatList: () => {

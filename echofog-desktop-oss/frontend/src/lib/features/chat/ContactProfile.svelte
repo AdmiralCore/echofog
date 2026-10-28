@@ -153,7 +153,10 @@
       {#if att.media.length}
         <div class="grid">
           {#each att.media as m (m.id)}
-            <button class="tile" title={m.file.name} on:click={() => goTo(m)}><Icon name="image" size={20} /><span class="tname">{m.file.name}</span></button>
+            <button class="tile" class:has={!!m.file.thumb} title={m.file.name} on:click={() => goTo(m)}>
+              {#if m.file.thumb}<img src={'data:image/jpeg;base64,' + m.file.thumb} alt={m.file.name} />
+              {:else}<Icon name="image" size={20} /><span class="tname">{m.file.name}</span>{/if}
+            </button>
           {/each}
         </div>
       {:else if loaded}<p class="small faint">{$t('chats.noMedia')}</p>{/if}
@@ -230,6 +233,8 @@
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
   .tile { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; border: none; border-radius: 10px; background: var(--raised); color: var(--muted); }
   .tile:hover:not(:disabled) { background: var(--hover); border: none; color: var(--text); }
+  .tile.has { padding: 0; overflow: hidden; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .tname { font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .frow { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: none; border-radius: 10px; background: transparent; color: var(--muted); text-align: left; font-weight: 400; }
   .frow:hover:not(:disabled) { background: var(--hover); border: none; }

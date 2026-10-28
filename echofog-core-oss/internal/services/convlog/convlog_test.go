@@ -534,6 +534,8 @@ func TestMessageKinds(t *testing.T) {
 			&FileRef{ID: "f1", Name: "a.pdf", Size: 1200, Mime: "application/pdf"}},
 		{0, "b.png", `{"group_file":{"id":"g1","name":"b.png","size":"77","mime":"image/png"}}`, "file",
 			&FileRef{ID: "g1", Name: "b.png", Size: 77, Mime: "image/png"}},
+		{4, "c.jpg", `{"file_name":"c.jpg","file_size":9,"custom":{"fid":"f2","thumb":"QUJD","tw":192,"th":128}}`, "file",
+			&FileRef{ID: "f2", Name: "c.jpg", Size: 9, Thumb: "QUJD", W: 192, H: 128}},
 	}
 	for _, c := range cases {
 		v := View{Present: true, Type: c.typ, Text: c.text, Metadata: c.meta}

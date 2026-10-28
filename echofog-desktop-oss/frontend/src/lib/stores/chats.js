@@ -103,7 +103,11 @@ export function norm(m) {
     system: call || m.kind === 'system',
     type: m.type || 0,
     ts: m.ts || 0,
-    file: m.deleted || !m.file ? null : { fid: m.file.id, name: m.file.name, size: m.file.size || 0, mime: m.file.mime || '' },
+    file: m.deleted || !m.file ? null : {
+      fid: m.file.id, name: m.file.name, size: m.file.size || 0, mime: m.file.mime || '',
+      // a picture's thumbnail, sent with the offer: the chat shows it before the file is fetched
+      thumb: m.file.thumb ? 'data:image/jpeg;base64,' + m.file.thumb : '', w: m.file.w || 0, h: m.file.h || 0,
+    },
     can: m.can || {},
     state,
     pending: !!state && state !== 'delivered' && state !== 'expired',
