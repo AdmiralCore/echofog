@@ -296,7 +296,7 @@ func (s *Swarm) freshenExitLink(ctx context.Context, exit types.PeerID, st *exit
 func (s *Swarm) dialPoolLink(ctx context.Context, exit types.PeerID, addr string, camouflage bool) {
 	dctx := network.WithPoolLink(ctx)
 	if camouflage {
-		s.expectPeer(addr, exit)
+		_ = s.expectPeer(addr, exit)
 	} else {
 		dctx = network.WithEphemeralSocket(dctx)
 	}
@@ -313,7 +313,7 @@ const (
 // dialCamouflaged dials the camouflage exit at addr with its SNI registered, so the connection is
 // REALITY, or browser-TLS mimicry over TCP when QUIC does not get through.
 func (s *Swarm) dialCamouflaged(ctx context.Context, exit types.PeerID, addr string) {
-	s.expectPeer(addr, exit)
+	_ = s.expectPeer(addr, exit)
 	if err := s.dialEarly(ctx, addr); err != nil {
 		s.log().Debug("Swarm: camouflaged dial to exit failed", "peer", exit.String()[:12], "err", err)
 	}

@@ -922,6 +922,9 @@ func (n *Node) announcedCaps() handshake.Capability {
 		return handshake.CapNone // a hidden node is nobody's relay or DHT server: it is not listed
 	}
 	caps := handshake.CapDHTServer
+	if n.Cfg.IsServer() {
+		caps |= handshake.CapServer
+	}
 	if n.Cfg.AntiDPI.TunnelPadding {
 		// announce the TLS-in-TLS padding so peers may pad their exit tunnels to us (and we strip
 		// it). A hidden node returns CapNone above and stays unpadded — consistent on both ends.

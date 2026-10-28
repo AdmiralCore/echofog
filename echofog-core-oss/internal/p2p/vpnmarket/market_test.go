@@ -493,3 +493,22 @@ func TestCustomSitesAndChosenFlag(t *testing.T) {
 
 	assert.Error(t, svc.SetCustomSites(make([]string, maxCustomSites+1)))
 }
+
+// The camouflage SNI in an exit's advert reaches whoever dials the exit: the directory hands it to
+// the node as it takes the advert in, so the first dial to an exit known only from the market is
+// REALITY, not noise. A withdrawn advert and the node's own are not passed on.
+func TestDirectoryPassesOnTheAdvertisedSNI(t *testing.T) {
+	d := newFakeDHT()
+	cam, ordinary, me := newIdentity(t), newIdentity(t), newIdentity(t)
+	pc := publisherFor(d, cam)
+	pc.SetSNI("cover.example")
+	require.NoError(t, pc.Start(context.Background(), ShareConfig{PricePerMB: 5, UploadKbps: 10000}))
+	require.NoError(t, publisherFor(d, ordinary).Start(context.Background(), ShareConfig{PricePerMB: 5, UploadKbps: 10000}))
+
+	got := map[types.PeerID]string{}
+	dir := NewDirectory(d, NewRatingStore(newMemStore()), me.id, nil)
+	dir.SetSNIHook(func(id types.PeerID, sni string) { got[id] = sni })
+	d.peers = []types.PeerID{cam.id, ordinary.id}
+	require.Equal(t, 2, dir.Refresh(context.Background()))
+	assert.Equal(t, map[types.PeerID]string{cam.id: "cover.example"}, got, "only the camouflage exit has an SNI to pass on")
+}

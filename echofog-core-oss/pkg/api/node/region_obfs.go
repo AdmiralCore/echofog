@@ -28,6 +28,11 @@ func (n *NodeApi) applyRegionObfs() {
 		return
 	}
 	n.node.Net.SetRegionNoise(n.peerInHomeRegion)
+	if n.node.Swarm != nil {
+		// the same signal lets the swarm dial a server of this country over noise: a link that never
+		// crosses the border is no reason to hold it back (see Swarm.noiseDialRefused)
+		n.node.Swarm.SetSameRegionFunc(n.peerInHomeRegion)
+	}
 }
 
 // peerInHomeRegion reports whether the node reachable at addr ("host:port") is in this node's own

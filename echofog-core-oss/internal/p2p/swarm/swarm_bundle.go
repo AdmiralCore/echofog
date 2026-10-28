@@ -297,14 +297,24 @@ func (s *Swarm) PadsTunnels() bool { return s.padsTunnels.Load() }
 // SetPeerSNI associates a peer with their camouflage SNI.
 func (s *Swarm) SetPeerSNI(id types.PeerID, sni string) {
 	s.peerSNIMu.Lock()
-	if s.peerSNIs == nil {
-		s.peerSNIs = make(map[types.PeerID]string)
+	if s.peerFacts == nil {
+		s.peerFacts = make(map[types.PeerID]peerFact)
 	}
-	s.peerSNIs[id] = sni
+	f, known := s.peerFacts[id]
+	if !known && len(s.peerFacts) >= maxPeerFacts {
+		s.peerSNIMu.Unlock()
+		return
+	}
+	changed := f.sni != sni
+	f.sni = sni
+	s.peerFacts[id] = f
 	s.peerSNIMu.Unlock()
+	if changed {
+		s.persistPeerFact(id, f)
+	}
 
 	if p := s.GetPeer(id); p != nil && p.Addr() != "" {
-		s.expectPeer(p.Addr(), id)
+		_ = s.expectPeer(p.Addr(), id)
 	}
 }
 
@@ -312,8 +322,5 @@ func (s *Swarm) SetPeerSNI(id types.PeerID, sni string) {
 func (s *Swarm) GetPeerSNI(id types.PeerID) string {
 	s.peerSNIMu.RLock()
 	defer s.peerSNIMu.RUnlock()
-	if s.peerSNIs != nil {
-		return s.peerSNIs[id]
-	}
-	return ""
+	return s.peerFacts[id].sni
 }

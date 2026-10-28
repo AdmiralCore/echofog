@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math/rand/v2"
-	"net/url"
-	"strings"
 
-	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
@@ -76,19 +73,25 @@ func (s *Swarm) shareablePeers(exclude types.PeerID, n int) *internal_pb.PeerLis
 	rand.Shuffle(len(rest), func(i, j int) { rest[i], rest[j] = rest[j], rest[i] })
 
 	list := &internal_pb.PeerList{}
+	// A node tells whoever asks how it is to be dialed: the camouflage SNI of its cover site and
+	// that it is a server. The entry has no host (the asker dialed it, so it has the address), only
+	// the annotation. Without it a peer meets a camouflage node first through a third party, which
+	// may know the address but not the SNI, and the first connection to it is noise.
+	if own := s.AnnotatedAddr(s.selfID, ""); own != "" {
+		pub := s.GetMyPubKey()
+		self := &internal_pb.PeerList_Peer{Id: s.selfID[:], LastKnownAddr: own, PubKey: pub[:]}
+		if s.cfg != nil && s.cfg.IsServer() {
+			self.Caps = uint32(handshake.CapServer)
+		}
+		list.Peers = append(list.Peers, self)
+	}
 	for _, p := range append(pref, rest...) {
 		if len(list.Peers) >= n {
 			break
 		}
 		id, pub := p.ID(), p.PubKey()
 		addr := p.Addr()
-		sni := s.GetPeerSNI(id)
-		if id == s.selfID && sni == "" {
-			sni = s.GetAnnouncedSNI()
-		}
-		if sni != "" && !strings.Contains(addr, "?sni=") {
-			addr += "?sni=" + url.QueryEscape(sni)
-		}
+		addr = s.AnnotatedAddr(id, addr)
 		list.Peers = append(list.Peers, &internal_pb.PeerList_Peer{
 			Id:            id[:],
 			LastKnownAddr: addr,
@@ -123,17 +126,23 @@ func (s *Swarm) learnPeers(from types.PeerID, list *internal_pb.PeerList) int {
 			continue
 		}
 		id := types.PeerPubKeyToID(pub)
-		if (len(e.GetId()) > 0 && !bytes.Equal(e.GetId(), id[:])) || id == s.selfID || id == from {
+		if (len(e.GetId()) > 0 && !bytes.Equal(e.GetId(), id[:])) || id == s.selfID {
+			continue
+		}
+		if id == from {
+			// the peer on the other end describing itself: its SNI and role, no address to take
+			s.LearnPeerAddr(id, e.GetLastKnownAddr())
+			if handshake.Capability(e.GetCaps()).Has(handshake.CapServer) {
+				s.SetPeerServer(id, true)
+			}
 			continue
 		}
 		addr := e.GetLastKnownAddr()
-		cleanAddr, _, sni, _ := network.SplitPeerAddrSNI(addr)
-		if sni != "" {
-			s.SetPeerSNI(id, sni)
+		addr = s.LearnPeerAddr(id, addr)
+		if handshake.Capability(e.GetCaps()).Has(handshake.CapServer) {
+			s.SetPeerServer(id, true)
 		}
-		if cleanAddr != "" {
-			addr = cleanAddr
-		}
+		s.SetPeerClient(id, handshake.Capability(e.GetCaps()))
 		if !policy.Shareable(addr) || s.CheckOnBan(id) {
 			continue
 		}

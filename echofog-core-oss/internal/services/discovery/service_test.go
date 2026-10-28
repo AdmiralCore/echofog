@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	netpkg "github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -44,7 +45,7 @@ func (f *fakeNet) Send(id types.PeerID, mt net_types.MessageType, _ *internal_pb
 }
 func (f *fakeNet) Shareable(types.PeerID, int) []*internal_pb.PeerInfo { return nil }
 func (f *fakeNet) Accept(addr string) bool {
-	ap, err := netip.ParseAddrPort(addr)
+	ap, err := netip.ParseAddrPort(netpkg.ParseAddrInfo(addr).Addr) // like the real policy, blind to the query
 	return err == nil && ap.Addr().IsGlobalUnicast() && !ap.Addr().IsPrivate()
 }
 func (f *fakeNet) Banned(types.PeerID) bool { return false }
@@ -177,5 +178,46 @@ func TestOutstandingRequestsAreBounded(t *testing.T) {
 	}
 	if !d.getter.expect(id(1<<15), now.Add(RequestTimeout+time.Second)) {
 		t.Fatal("expired requests make room")
+	}
+}
+
+// learnNet is a fakeNet that also learns what an address carries, as the swarm does.
+type learnNet struct {
+	*fakeNet
+	sni map[types.PeerID]string
+}
+
+func (l *learnNet) LearnPeerAddr(id types.PeerID, addr string) string {
+	info := netpkg.ParseAddrInfo(addr)
+	if info.SNI != "" {
+		l.sni[id] = info.SNI
+	}
+	return info.Addr
+}
+
+// A peer list entry with the SNI of a camouflage node is stored as the plain address and the SNI
+// is kept: the address with "?sni=..." left on it could not be dialed later, and without the SNI
+// the dial would be noise.
+func TestPeerListKeepsTheSNIAndStoresAPlainAddress(t *testing.T) {
+	for _, withLearner := range []bool{true, false} {
+		base := newFakeNet()
+		var net network = base
+		l := &learnNet{fakeNet: base, sni: map[types.PeerID]string{}}
+		if withLearner {
+			net = l
+		}
+		d := newService(nil, nil, net, types.PeerPublicKey{})
+		from := id(1)
+		if err := d.RequestPeers(from, 8); err != nil {
+			t.Fatal(err)
+		}
+		cam, camID := peerInfo(t, "203.0.113.5:4242?sni=cover.lab&srv=1")
+		d.Handle(res(cam), from)
+		if got := base.saved[camID]; got != "203.0.113.5:4242" {
+			t.Fatalf("learner=%v: stored %q, want the plain address", withLearner, got)
+		}
+		if withLearner && l.sni[camID] != "cover.lab" {
+			t.Fatalf("the SNI was not kept: %v", l.sni)
+		}
 	}
 }

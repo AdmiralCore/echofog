@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
+	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -175,5 +176,35 @@ func TestRecentLookupsAreAnsweredFromMemory(t *testing.T) {
 	}
 	if _, ok := b.dht.recent.Get(string(key)); ok {
 		t.Fatal("the owner remembers its own key")
+	}
+}
+
+// An address in a DHT answer carries the SNI and the role of the node it names: they are kept, and
+// the routing table gets the plain host:port, which can be dialed.
+func TestTakeInfosKeepsTheCamouflageAndStoresAPlainAddress(t *testing.T) {
+	a := newTestNode(t)
+	pub, _ := randomPublicPeer()
+	id := types.PeerPubKeyToID(pub)
+
+	nodes := a.dht.takeInfos([]*internal_pb.PeerInfo{{PubKey: pub[:], Address: "203.0.113.7:4242?sni=cover.example&srv=1"}})
+	if len(nodes) != 1 || nodes[0].Addr != "203.0.113.7:4242" {
+		t.Fatalf("the address handed on is not the plain one: %+v", nodes)
+	}
+	if got := a.sw.GetPeerSNI(id); got != "cover.example" {
+		t.Fatalf("SNI = %q", got)
+	}
+	if !a.sw.IsServerPeer(id) {
+		t.Fatal("the server role was lost")
+	}
+	// and a node passes on what it knows with the same annotation
+	infos := a.dht.closestInfos(id, types.PeerID{})
+	found := false
+	for _, in := range infos {
+		if in.Address == "203.0.113.7:4242?sni=cover.example&srv=1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("an answer must carry the SNI and the role: %+v", infos)
 	}
 }

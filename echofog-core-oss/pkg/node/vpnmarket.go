@@ -64,6 +64,8 @@ func (n *Node) initVPNMarket() {
 	ratings := vpnmarket.NewRatingStore(st)
 	dir := vpnmarket.NewDirectory(n.DhtEngine, ratings, n.ID, n.connectedPeerIDs)
 	dir.SetHints(n.askPeersForExits)
+	// the SNI an exit advertises is the one to dial it with, however its address reached us
+	dir.SetSNIHook(n.Swarm.SetPeerSNI)
 	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
 	if n.Cfg.AntiDPI.TLSServerName != "" {
 		pub.SetSNI(n.Cfg.AntiDPI.TLSServerName)

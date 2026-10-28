@@ -63,8 +63,9 @@ type Swarm struct {
 	// wiring can decide to pad without recomputing the gating logic that lives in the node layer.
 	padsTunnels atomic.Bool
 
-	peerSNIMu sync.RWMutex
-	peerSNIs  map[types.PeerID]string
+	peerSNIMu  sync.RWMutex
+	peerFacts  map[types.PeerID]peerFact // camouflage SNI and server flag per peer (swarm_servers.go)
+	sameRegion func(addr string) bool    // region policy of the noise guard, nil: nothing is in the home region
 
 	// exitPools marks peers that run a parallel session pool (the exit a VPN tunnels through):
 	// addPeer keeps several concurrent connections to such a peer instead of one, and tunnel
@@ -129,6 +130,7 @@ func NewSwarm(ctx context.Context, netTransport network.Transport, selfID types.
 		logger:         slog.Default().With("component", "swarm"),
 	}
 
+	s.loadPeerFacts()
 	s.sessionManager.sender = s
 	s.sessionManager.ctx = s.ctx
 	s.initLimits()

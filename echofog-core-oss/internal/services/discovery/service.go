@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -199,13 +197,15 @@ func (g *peerGetter) Handle(msg *internal_pb.MessageData, peerID types.PeerID) {
 		if id == self || id == peerID || net.Banned(id) {
 			continue
 		}
-		_, _, sni, _ := netpkg.SplitPeerAddrSNI(p.Address)
-		if sni != "" {
-			if sn, ok := net.(interface{ SetPeerSNI(types.PeerID, string) }); ok {
-				sn.SetPeerSNI(id, sni)
-			}
+		addr := p.Address
+		if l, ok := net.(interface {
+			LearnPeerAddr(types.PeerID, string) string
+		}); ok {
+			addr = l.LearnPeerAddr(id, addr) // SNI and server flag kept, the plain address stored
+		} else {
+			addr = netpkg.ParseAddrInfo(addr).Addr
 		}
-		net.SaveDiscovered(pubKey, p.Address)
+		net.SaveDiscovered(pubKey, addr)
 	}
 }
 
@@ -306,6 +306,10 @@ func (n swarmNet) SetPeerSNI(id types.PeerID, sni string) {
 	n.s.SetPeerSNI(id, sni)
 }
 
+func (n swarmNet) LearnPeerAddr(id types.PeerID, addr string) string {
+	return n.s.LearnPeerAddr(id, addr)
+}
+
 func (n swarmNet) Shareable(exclude types.PeerID, max int) []*internal_pb.PeerInfo {
 	policy := n.s.AddrPolicy()
 	peers := n.s.GetAllPeers()
@@ -320,13 +324,7 @@ func (n swarmNet) Shareable(exclude types.PeerID, max int) []*internal_pb.PeerIn
 		}
 		pub := p.PubKey()
 		addr := p.Addr()
-		sni := n.s.GetPeerSNI(p.ID())
-		if p.ID() == n.s.GetSelfID() && sni == "" {
-			sni = n.s.GetAnnouncedSNI()
-		}
-		if sni != "" && !strings.Contains(addr, "?sni=") {
-			addr += "?sni=" + url.QueryEscape(sni)
-		}
+		addr = n.s.AnnotatedAddr(p.ID(), addr)
 		out = append(out, &internal_pb.PeerInfo{PubKey: pub[:], Address: addr})
 	}
 	return out

@@ -228,6 +228,11 @@ type AntiDPIConfig struct {
 	// lets the node place its own public address with GeoIP; set it when that lookup is blocked, or
 	// to fix the region signal in a controlled network.
 	HomeCountry string `json:"home_country,omitempty"`
+	// AllowNoiseToServers lets a client dial a server-role node across the border over noise when
+	// that node has no known camouflage SNI. Off by default: noise across a border is what a censor
+	// flags, so the client waits for the SNI (it arrives with the address) or does not dial. Turn it
+	// on to reach your own servers that have no cover site, from a network that does not censor.
+	AllowNoiseToServers bool `json:"allow_noise_to_servers,omitempty"`
 }
 
 // FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.

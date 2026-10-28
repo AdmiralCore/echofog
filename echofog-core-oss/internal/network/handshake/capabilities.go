@@ -24,6 +24,10 @@ const (
 	// connection to the same peer instead of replacing it. A node that does not know the bit
 	// ignores it and replaces as before.
 	CapPoolLink Capability = 1 << 7
+	// CapServer: the node runs in the server role (a relay or exit on a VPS). A censored client
+	// reaches such a node over REALITY, never over noise; a peer that sees this bit on a node whose
+	// camouflage SNI it does not know holds back instead of dialing it with noise.
+	CapServer Capability = 1 << 8
 )
 
 // DefaultCaps is what a node announces unless told otherwise: it relays and serves the DHT.

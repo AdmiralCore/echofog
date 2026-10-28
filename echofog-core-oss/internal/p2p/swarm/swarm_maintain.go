@@ -204,7 +204,7 @@ func (s *Swarm) historyCandidates(n int) []DialCandidate {
 		if id == s.selfID || s.ThisIsActivePeer(id) {
 			continue
 		}
-		out = append(out, DialCandidate{ID: id, Addr: e.GetLastKnownAddr()})
+		out = append(out, DialCandidate{ID: id, Addr: s.LearnPeerAddr(id, e.GetLastKnownAddr())})
 	}
 	return out
 }
@@ -244,7 +244,11 @@ func (s *Swarm) dialCandidates(cands []DialCandidate) {
 			defer func() { <-sem }()
 			ctx, cancel := context.WithTimeout(s.ctx, candidateDialWait)
 			defer cancel()
-			s.expectPeer(c.Addr, c.ID)
+			if err := s.expectPeer(c.Addr, c.ID); err != nil {
+				// not a failure of the peer: it is waiting for its camouflage SNI to reach us
+				s.log().Debug("Swarm: known peer not dialed", "peer", c.ID.String(), "addr", c.Addr, "err", err)
+				return
+			}
 			if err := s.dialEarly(ctx, c.Addr); err != nil {
 				if s.ctx.Err() == nil && s.peerStore != nil {
 					s.peerStore.RecordDialFailure(c.ID)

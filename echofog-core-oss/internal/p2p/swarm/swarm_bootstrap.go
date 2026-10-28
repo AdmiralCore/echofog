@@ -51,12 +51,25 @@ func isWSAddr(addr string) bool {
 	return strings.HasPrefix(addr, "ws://") || strings.HasPrefix(addr, "wss://")
 }
 
-func (s *Swarm) expectPeer(addr string, id types.PeerID) {
+// expectPeer tells the transport whose address addr is, and its camouflage SNI if one is known, so a
+// dial to it uses the right obfuscation. It returns ErrNoiseDialRefused, and the dial must not be
+// made, when noise is all that is left for reaching a server across a border (see noiseDialRefused).
+func (s *Swarm) expectPeer(addr string, id types.PeerID) error {
+	info := network.ParseAddrInfo(addr)
+	if info.Server {
+		s.SetPeerServer(id, true)
+	}
 	sni := s.GetPeerSNI(id)
 	if sni == "" {
-		_, _, extSNI, _ := network.SplitPeerAddrSNI(addr)
-		sni = extSNI
+		sni = info.SNI
+		if sni != "" {
+			s.SetPeerSNI(id, sni)
+		}
 	}
+	if sni == "" && s.noiseDialRefused(id, addr) {
+		return ErrNoiseDialRefused
+	}
+	addr = info.Addr
 	if isWSAddr(addr) {
 		if s.wsTransport != nil {
 			if sni != "" {
@@ -65,7 +78,7 @@ func (s *Swarm) expectPeer(addr string, id types.PeerID) {
 				s.wsTransport.ExpectPeer(addr, id)
 			}
 		}
-		return
+		return nil
 	}
 	if e, ok := s.netTransport.(network.PeerExpecter); ok {
 		if sni != "" {
@@ -74,6 +87,7 @@ func (s *Swarm) expectPeer(addr string, id types.PeerID) {
 			e.ExpectPeer(addr, id)
 		}
 	}
+	return nil
 }
 
 // ExpectPeerAddr registers, with the transport, that the node at addr is peer id and (if known) its
@@ -81,7 +95,7 @@ func (s *Swarm) expectPeer(addr string, id types.PeerID) {
 // a censoring border, noise otherwise. The exit gateway calls it before dialing a camouflage exit so
 // the tunnel runs over a REALITY connection rather than a noise connection reused from the mesh.
 func (s *Swarm) ExpectPeerAddr(addr string, id types.PeerID) {
-	s.expectPeer(addr, id)
+	_ = s.expectPeer(addr, id)
 }
 
 // IsCamouflagePeer reports whether the swarm knows a camouflage SNI for id (a node that mimics a
@@ -200,7 +214,10 @@ func (s *Swarm) AddPotentialPeer(id types.PeerID, addr string) {
 			s.logger.Debug("Swarm: Attempting automatic local connection", "addr", addr)
 			ctx, cancel := context.WithTimeout(s.ctx, time.Second*5)
 			defer cancel()
-			s.expectPeer(addr, id)
+			if err := s.expectPeer(addr, id); err != nil {
+				s.logger.Debug("Swarm: not dialing discovered peer", "addr", addr, "err", err)
+				return
+			}
 			err := s.dialEarly(ctx, addr)
 			if err != nil {
 				s.logger.Debug("Swarm: Failed to dial discovered peer", "addr", addr, "err", err)
@@ -220,7 +237,9 @@ func (s *Swarm) AddPotentialPeerWithCtx(ctx context.Context, id types.PeerID, ad
 	}
 
 	slog.Debug("Swarm: Dialing peer...", "id", id, "addr", addr)
-	s.expectPeer(addr, id)
+	if err := s.expectPeer(addr, id); err != nil {
+		return err
+	}
 	err := s.dialEarly(ctx, addr)
 	if err != nil {
 		return err
@@ -298,7 +317,9 @@ func (s *Swarm) PingPeer(id types.PeerID, lastAddr string) (time.Duration, error
 	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
 	defer cancel()
 
-	s.expectPeer(lastAddr, id)
+	if err := s.expectPeer(lastAddr, id); err != nil {
+		return 0, err
+	}
 	err := s.dialEarly(ctx, lastAddr)
 	if err != nil {
 		return 0, fmt.Errorf("peer unreachable at %s: %w", lastAddr, err)
@@ -317,12 +338,16 @@ func (s *Swarm) Bootstrap(addrs []string) {
 		if entry == "" {
 			continue
 		}
-		addr, id, sni, named := network.SplitPeerAddrSNI(entry)
+		info := network.ParseAddrInfo(entry)
+		addr, id, sni, named := info.Addr, info.ID, info.SNI, info.Named
 		if named && id == s.selfID {
 			continue // a seed node finds itself in the built-in list
 		}
 		if named && sni != "" {
 			s.SetPeerSNI(id, sni) // as if the DHT had announced it: dials to it use REALITY
+		}
+		if named && info.Server {
+			s.SetPeerServer(id, true)
 		}
 		if named && s.ThisIsActivePeer(id) {
 			// already connected: a second connection replaced the first, and every relay circuit
@@ -342,7 +367,10 @@ func (s *Swarm) Bootstrap(addrs []string) {
 			// obfuscation keys are bound to the address packets come from: an IP, not a name
 			a = resolveHostPort(s.ctx, a)
 			if named {
-				s.expectPeer(a, id)
+				if err := s.expectPeer(a, id); err != nil {
+					s.log().Warn("Swarm: not dialing a bootstrap node", "addr", a, "err", err)
+					return
+				}
 			}
 			s.connect(a)
 		}(addr)

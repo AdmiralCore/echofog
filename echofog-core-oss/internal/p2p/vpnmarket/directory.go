@@ -46,6 +46,9 @@ type Directory struct {
 	now     func() time.Time
 
 	hints HintSource
+	// onSNI is told the camouflage SNI of every exit whose advert is taken in, so the node dials
+	// that exit as REALITY from the first packet, however it came to know the exit.
+	onSNI func(id types.PeerID, sni string)
 
 	mu      sync.RWMutex
 	adverts map[types.PeerID]*Advert
@@ -53,6 +56,9 @@ type Directory struct {
 
 // SetHints makes Refresh also ask peers for the exits they know.
 func (d *Directory) SetHints(h HintSource) { d.hints = h }
+
+// SetSNIHook installs the callback that learns the SNI of an advertised exit (see onSNI).
+func (d *Directory) SetSNIHook(fn func(id types.PeerID, sni string)) { d.onSNI = fn }
 
 // Shared is what we tell a peer that asks for our directory: the live adverts, best first.
 func (d *Directory) Shared() [][]byte {
@@ -159,8 +165,8 @@ func (d *Directory) accept(a *Advert) {
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if old, ok := d.adverts[id]; ok && old.IssuedAt > a.IssuedAt {
+		d.mu.Unlock()
 		return
 	}
 	if !a.Enabled {
@@ -169,6 +175,10 @@ func (d *Directory) accept(a *Advert) {
 		d.adverts[id] = a
 	}
 	_ = d.ratings.RecordAdvert(id, a, d.now())
+	d.mu.Unlock()
+	if a.Enabled && a.SNI != "" && d.onSNI != nil && id != d.self {
+		d.onSNI(id, a.SNI)
+	}
 }
 
 // Refresh scans known peers and the neighbours they advertise; it returns the number of live exits
