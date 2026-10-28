@@ -233,6 +233,29 @@ user's node over noise: users dial servers. `anti_dpi.allow_noise_to_servers` sw
 for people who run their own servers without a cover site, from a network that does not censor.
 Addresses typed in by hand (`ConnectToPeer`) are the user's own choice and are dialed as given.
 
+### Guards: a user's node keeps few links across the border
+
+A user's node does not build a mesh of its own across a censoring border: every link it dials there
+is a flow a censor can look at. It holds two or three **guards** instead, camouflaged servers (a
+site name known, reached over REALITY on QUIC or browser TLS on TCP), and takes the rest of the
+network from them. Peer exchange runs over the guards. A DHT lookup asks the guards, which walk the
+DHT themselves and answer with the record or the closest peers they reached (the protocol is
+unchanged; an older server answers from its own table, as before). Peers the node dials itself —
+peer exchange, the maintainer, a lookup's referrals — are dialed across the border only if they are
+guards. What the user asked for (a contact, a call, a relay, an exit) is dialed as before.
+
+Guards are picked from the bootstrap nodes and the known servers with a site name, spread over
+networks, and kept for 30 to 60 days. A guard that is gone for 90 seconds gets a stand-in beside it;
+one that stays gone for 20 minutes while the node still has other links is dropped. With no guard up
+the node may dial any camouflaged server (never over noise) until it has guards again, so a failing
+guard never leaves it without a network. The choice survives restarts.
+
+`anti_dpi.guard_mode` (`--guard-mode`, `ECHOFOG_GUARD_MODE`): `auto` (default) and `on` engage it on
+every node that is not in the server role; `off` leaves the mesh dialing as it was. Local-network
+addresses, and with `region_aware_obfs` the node's own country, are dialed directly either way; a
+country that cannot be placed counts as across the border. A guard adds one hop to a lookup and does
+not sit in the data path of a VPN tunnel, which runs straight to the exit.
+
 ### What the node checks for you
 
 At start-up a public node connects to the imitated site once and logs whether its own ServerHello
