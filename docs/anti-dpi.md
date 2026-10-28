@@ -256,6 +256,19 @@ addresses, and with `region_aware_obfs` the node's own country, are dialed direc
 country that cannot be placed counts as across the border. A guard adds one hop to a lookup and does
 not sit in the data path of a VPN tunnel, which runs straight to the exit.
 
+### Users across the border meet at a relay
+
+In guard mode two users' nodes do not link directly across a border: a direct link is noise or a
+hole punch, a flow of its own between two strangers. A call, a stream, a file or a message to a
+user whose address is across the border goes through a **circuit on a camouflaged relay** instead:
+one of the node's guards if the peer is connected to it too, else one of the peer's own relays (the
+mailbox relays named in its record, with their site names), which the node then connects to as a
+server. The node does not answer a hole-punch request from such a peer either. A node the user
+listed (an invitation, a bootstrap entry) is linked to directly, and so are peers on the local
+network and, with `region_aware_obfs`, in the node's own country. Relaying is free within the
+relay's limits; a relay may carry a price in its advert (`relay_price_per_mb`, 0 = free), which
+clients note and nothing bills yet.
+
 ### What the node checks for you
 
 At start-up a public node connects to the imitated site once and logs whether its own ServerHello
