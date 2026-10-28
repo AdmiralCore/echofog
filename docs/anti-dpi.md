@@ -164,8 +164,11 @@ plan is to use it only as a slow last resort, after QUIC and an entry node insid
 If `tls_server_name` and `camouflage_addr` are not set, a public node finds a site to imitate by
 itself:
 
-1. It finds its own public IPv4 address. If that is private or CGNAT, it stops: its neighbours are
-   not real sites.
+1. It finds its own public IPv4 address. On a cloud machine or in Docker the interface has a private
+   address, so it takes the one from `public_addrs` (`ECHOFOG_PUBLIC_ADDR`) or the one STUN observed
+   instead. With neither, or behind CGNAT, it stops: its neighbours are not real sites. STUN answers
+   a little after start-up, so on such a machine the first scan may come with the retry 30 minutes
+   later; `ECHOFOG_PUBLIC_ADDR` makes it start at once.
 2. It looks at nearby addresses in its own `/24` (20 on each side of its own, in random order, at
    most 4 at a time, 100-200 ms apart) and stops at the first site that speaks TLS 1.3 and whose
    ServerHello (version, cipher, key-share group) matches its own. It goes slowly on purpose:

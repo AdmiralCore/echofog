@@ -104,7 +104,7 @@ func (n *Node) ensureMimicryTarget() {
 		n.Logger.Info("anti-DPI: the cached camouflage neighbour is gone; scanning again", "was", nb.ServerName)
 	}
 
-	ownIP, ok := egressIPv4()
+	ownIP, ok := n.neighbourScanIP()
 	if !ok {
 		n.Logger.Warn("anti-DPI: could not determine a public IPv4 address for neighbour discovery; set anti_dpi.tls_server_name and camouflage_addr manually")
 		return
@@ -143,6 +143,40 @@ func ownServerProfile() (mimicry.ServerProfile, error) {
 
 // egressIPv4 returns the local IPv4 address the kernel would use to reach the internet. On a VPS or
 // relay that is the public IP; no packet is sent (UDP "connect" only selects a route).
+// neighbourScanIP is the public IPv4 address whose /24 holds the node's neighbours. On a cloud
+// machine (Google Cloud, AWS) and in Docker the interface has a private address, so the one the
+// operator gave for the invitation link (public_addrs) or the one STUN observed is used instead.
+func (n *Node) neighbourScanIP() (netip.Addr, bool) {
+	public := func(a netip.Addr) bool {
+		a = a.Unmap()
+		return a.Is4() && !a.IsPrivate() && !a.IsLoopback() && !a.IsLinkLocalUnicast() &&
+			!netip.MustParsePrefix("100.64.0.0/10").Contains(a)
+	}
+	if a, ok := localIPv4(); ok && public(a) {
+		return a, true
+	}
+	var cands []string
+	if n.Cfg != nil {
+		cands = append(cands, n.Cfg.Access.PublicAddrs...)
+	}
+	for _, ip := range n.publicIPs() {
+		cands = append(cands, ip.String())
+	}
+	for _, c := range cands {
+		host := c
+		if h, _, err := net.SplitHostPort(c); err == nil {
+			host = h
+		}
+		if a, err := netip.ParseAddr(host); err == nil && public(a) {
+			return a.Unmap(), true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+// localIPv4 is the interface address the node sends from (a variable for tests).
+var localIPv4 = egressIPv4
+
 func egressIPv4() (netip.Addr, bool) {
 	c, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {

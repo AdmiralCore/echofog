@@ -152,8 +152,9 @@ file). The price stays `ECHOFOG_EXIT_PRICE`; `ECHOFOG_EXIT_UPLOAD_MBPS` is not n
 ## TCP fallback
 
 The node accepts TCP only while it imitates a real HTTPS site plausible for its IP. It looks for
-one in its own subnet by itself; inside Docker it often cannot, so it runs on UDP only and logs an
-`ANTI-DPI` warning. To turn TCP on, set a real TLS 1.3 site hosted in the same datacenter and its
+one among its neighbours (20 addresses on each side of its own) by itself, around the address in
+`ECHOFOG_PUBLIC_ADDR` or the one STUN observed. When none of them is a real site with a domain
+name, it runs on UDP only and logs an `ANTI-DPI` warning. To turn TCP on, set a real TLS 1.3 site hosted in the same datacenter and its
 IP in `deploy/.env`, then run `up -d` again:
 
 ```bash
