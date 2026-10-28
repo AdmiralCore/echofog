@@ -68,6 +68,7 @@ type Swarm struct {
 	sameRegion func(addr string) bool    // region policy of the noise guard, nil: nothing is in the home region
 	explicit   map[types.PeerID]struct{} // peers the operator listed (bootstrap): dialed whatever they announce
 	guards     guardSet                  // the camouflaged servers a user's node keeps its cross-border links to (swarm_guards.go)
+	guardsFree atomic.Bool               // guard_mode "auto" stands down: the node is placed in a country that does not censor (swarm_guard_auto.go)
 
 	// exitPools marks peers that run a parallel session pool (the exit a VPN tunnels through):
 	// addPeer keeps several concurrent connections to such a peer instead of one, and tunnel

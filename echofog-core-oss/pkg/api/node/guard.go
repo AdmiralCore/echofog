@@ -33,6 +33,10 @@ type GuardStatus struct {
 	Connected int           `json:"connected"`
 	Wanted    int           `json:"wanted"`
 	Guards    []GuardServer `json:"guards"`
+	// Country is the node's own country (ISO code, "" not known yet). StoodDown: "auto" holds no
+	// guards because that country does not censor (guard_auto.go).
+	Country   string `json:"country,omitempty"`
+	StoodDown bool   `json:"stoodDown,omitempty"`
 }
 
 // GetGuardStatus reports how the node enters the network and its guards.
@@ -49,6 +53,7 @@ func (n *NodeApi) GetGuardStatus() (GuardStatus, error) {
 		return st, nil
 	}
 	st.Active = n.node.Swarm.GuardModeActive()
+	st.Country, st.StoodDown = n.homeCountry(), n.node.Swarm.GuardsFree() && mode == config.GuardAuto
 	for _, g := range n.node.Swarm.Guards() {
 		st.Guards = append(st.Guards, GuardServer{PeerID: g.ID.String(), Addr: g.Addr, Connected: g.Connected})
 		if g.Connected {

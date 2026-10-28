@@ -63,6 +63,9 @@
     {/each}
   </div>
 
+  {#if st.stoodDown}
+    <p class="small faint">{$t('guard.stoodDown', { cc: st.country })}</p>
+  {/if}
   {#if st.active}
     <div class="status">
       {#if st.connected > 0}
@@ -72,6 +75,7 @@
         <span class="dot wait"></span>
         {$t('guard.connecting')}
       {/if}
+      {#if st.mode === 'auto' && st.country}<span class="faint">· {$t('guard.censoring', { cc: st.country })}</span>{/if}
     </div>
     {#if st.guards.length}
       <ul class="guards">
@@ -80,7 +84,7 @@
         {/each}
       </ul>
     {/if}
-  {:else}
+  {:else if !st.stoodDown}
     <p class="small muted">{$t('guard.offNote')}</p>
   {/if}
 

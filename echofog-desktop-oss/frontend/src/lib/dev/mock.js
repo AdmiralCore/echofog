@@ -411,9 +411,12 @@ const impl = {
   guardMock: undefined,
   GetGuardStatus() {
     this.guardMock ??= 'auto';
-    const active = this.guardMock !== 'off';
+    // ?country=DE: the app is placed in a country that does not censor, so "auto" stands down
+    const country = (new URLSearchParams(location.search).get('country') || 'RU').toUpperCase();
+    const stoodDown = this.guardMock === 'auto' && !['RU', 'BY', 'IR', 'CN'].includes(country);
+    const active = this.guardMock !== 'off' && !stoodDown;
     return {
-      mode: this.guardMock, active, wanted: active ? 3 : 0,
+      mode: this.guardMock, active, country, stoodDown, wanted: active ? 3 : 0,
       connected: active ? 2 : 0,
       guards: active ? [
         { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', connected: true },

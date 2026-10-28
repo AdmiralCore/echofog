@@ -100,6 +100,8 @@ func (n *NodeApi) StartNode() error {
 	}
 	// domestic connections use the cheaper noise obfs; cross-border keeps REALITY
 	n.applyRegionObfs()
+	// guard_mode "auto" stands down in a country that does not censor
+	go n.runGuardAuto()
 	// create the conversation logs and the group service now: they listen for chat traffic from
 	// the first moment on
 	_, _ = n.convsFacade()
