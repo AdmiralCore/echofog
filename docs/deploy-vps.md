@@ -151,21 +151,37 @@ file). The price stays `ECHOFOG_EXIT_PRICE`; `ECHOFOG_EXIT_UPLOAD_MBPS` is not n
 
 ## TCP fallback
 
-The node accepts TCP only while it imitates a real HTTPS site plausible for its IP. It looks for
-one among its neighbours (20 addresses on each side of its own) by itself, around the address in
-`ECHOFOG_PUBLIC_ADDR` or the one STUN observed. When none of them is a real site with a domain
-name, it runs on UDP only and logs an `ANTI-DPI` warning. To turn TCP on, set a real TLS 1.3 site hosted in the same datacenter and its
-IP in `deploy/.env`, then run `up -d` again:
+The node imitates a real website from its own datacenter: clients reach it the way Chrome would
+open that site, and a censor who connects without the secret lands on the real site. You do not
+need a domain for this. The node finds such a site by itself: first among the 20 addresses on each
+side of its own, at start-up; if none fits, it searches the whole `/24` and the `/24`s next to it in
+the background (at most every 12 hours, slowly, since hosters dislike port scans). It only takes a
+site with a publicly trusted certificate for a real domain that answers TLS 1.3 exactly like the
+node does. Until it has one it runs on UDP only and logs an `ANTI-DPI` warning; it turns TCP on by
+itself once it finds one.
+
+To see the sites at once, or to choose one yourself, run in `deploy/`:
+
+```bash
+docker compose run --rm node camouflage
+```
+
+It probes the same addresses (a few minutes) and prints the two lines for `deploy/.env`:
 
 ```bash
 ECHOFOG_TLS_SERVER_NAME=<site domain>
 ECHOFOG_CAMOUFLAGE_ADDR=<site IP>:443
 ```
 
+Then run `docker compose up -d` and send people the new link from `invite`. If it finds nothing,
+there is no suitable site near your server. A site of your own then works too: point a domain at
+another small server in the same datacenter and serve it over HTTPS with a real certificate (Caddy
+does this by itself).
+
 The same two lines turn on the UDP disguise too: clients will reach the node the way Chrome would
 open that site over HTTP/3. If the site itself speaks HTTP/3, a probe on UDP gets its real answer.
 Invitation links of a hidden node carry the site name by themselves; give out a public address as
-`<IP>:443/<peer id>?sni=<site domain>` so that the first connection is disguised as well.
+`<IP>:443/<peer id>?sni=<site domain>&srv=1` so that the first connection is disguised as well.
 
 Details: [Anti-DPI](anti-dpi.md).
 

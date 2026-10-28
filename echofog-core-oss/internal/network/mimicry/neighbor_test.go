@@ -36,6 +36,17 @@ func startSite(t *testing.T, serverTLS *tls.Config) string {
 	return ln.Addr().String()
 }
 
+// trust makes the scanner accept cert (self-signed) as if a public CA had issued it.
+func trust(t *testing.T, cert tls.Certificate) {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+	prev := neighborRoots
+	neighborRoots = x509.NewCertPool()
+	neighborRoots.AddCert(leaf)
+	t.Cleanup(func() { neighborRoots = prev })
+}
+
 func ourTestProfile(t *testing.T, cert tls.Certificate) ServerProfile {
 	t.Helper()
 	p, err := OwnServerProfile(BuildServerTLSConfig(cert))
@@ -44,20 +55,21 @@ func ourTestProfile(t *testing.T, cert tls.Certificate) ServerProfile {
 }
 
 func TestProbeNeighborAcceptsAMatchingSite(t *testing.T) {
-	cert, err := GenerateCamouflageCert("neighbour.example")
+	cert, err := GenerateCamouflageCert("neighbour-site.com")
 	require.NoError(t, err)
 	serverTLS := BuildServerTLSConfig(cert)
+	trust(t, cert)
 	addr := startSite(t, serverTLS)
 	ours := ourTestProfile(t, cert)
 
 	nb, ok := probeNeighbor(context.Background(), addr, ours)
 	require.True(t, ok, "a TLS 1.3 site that answers like us must be accepted")
-	assert.Equal(t, "neighbour.example", nb.ServerName, "the SNI is taken from the site's certificate")
+	assert.Equal(t, "neighbour-site.com", nb.ServerName, "the SNI is taken from the site's certificate")
 	assert.Equal(t, addr, nb.Addr)
 }
 
 func TestProbeNeighborRejectsMismatchedServerHello(t *testing.T) {
-	cert, err := GenerateCamouflageCert("neighbour.example")
+	cert, err := GenerateCamouflageCert("neighbour-site.com")
 	require.NoError(t, err)
 	ours := ourTestProfile(t, cert) // ours: AES-128-GCM, X25519MLKEM768
 
@@ -78,12 +90,13 @@ func TestProbeNeighborRejectsMismatchedServerHello(t *testing.T) {
 }
 
 func TestVerifyNeighbor(t *testing.T) {
-	cert, err := GenerateCamouflageCert("neighbour.example")
+	cert, err := GenerateCamouflageCert("neighbour-site.com")
 	require.NoError(t, err)
+	trust(t, cert)
 	addr := startSite(t, BuildServerTLSConfig(cert))
 	ours := ourTestProfile(t, cert)
 
-	assert.True(t, VerifyNeighbor(context.Background(), Neighbor{ServerName: "neighbour.example", Addr: addr}, ours))
+	assert.True(t, VerifyNeighbor(context.Background(), Neighbor{ServerName: "neighbour-site.com", Addr: addr}, ours))
 	assert.False(t, VerifyNeighbor(context.Background(), Neighbor{ServerName: "someone.else", Addr: addr}, ours),
 		"a neighbour whose certificate no longer names the expected domain is not verified")
 	assert.False(t, VerifyNeighbor(context.Background(), Neighbor{ServerName: "x", Addr: "127.0.0.1:1"}, ours),
@@ -124,12 +137,53 @@ func TestScanSkipsPrivateAddresses(t *testing.T) {
 	}
 }
 
-func TestPickServerNamePrefersConcreteThenWildcard(t *testing.T) {
-	mk := func(names ...string) tls.ConnectionState {
-		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{{DNSNames: names}}}
+// A name is taken only when it is a public domain the certificate is trusted for: a plain name
+// before a wildcard (which becomes www.), never an internal or IP name, never an untrusted chain.
+func TestPickServerName(t *testing.T) {
+	mk := func(names ...string) (tls.ConnectionState, tls.Certificate) {
+		cert, err := GenerateCamouflageCert(names[0])
+		require.NoError(t, err)
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		require.NoError(t, err)
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}, cert
 	}
-	assert.Equal(t, "real.example", pickServerName(mk("real.example")))
-	assert.Equal(t, "www.wild.example", pickServerName(mk("*.wild.example")), "a wildcard becomes a concrete www host")
-	assert.Equal(t, "concrete.example", pickServerName(mk("*.wild.example", "concrete.example")), "a concrete name wins over a wildcard")
-	assert.Equal(t, "", pickServerName(mk()))
+	now := time.Now()
+	cs, cert := mk("real-site.com")
+	assert.Equal(t, "", pickServerName(cs, now), "a self-signed certificate is no public site")
+	trust(t, cert)
+	assert.Equal(t, "real-site.com", pickServerName(cs, now))
+
+	for _, bad := range []string{"kubernetes", "kubernetes.default.svc", "34.12.240.83", "db.cluster.local", "host.internal"} {
+		cs, cert := mk(bad)
+		trust(t, cert)
+		assert.Equalf(t, "", pickServerName(cs, now), "%q is not a site a browser visits", bad)
+	}
+	assert.Equal(t, "", pickServerName(tls.ConnectionState{}, now))
+}
+
+func TestUsableServerName(t *testing.T) {
+	for _, ok := range []string{"aifraud.ru", "www.example-shop.de", "a.b.co.uk", "xn--80ak6aa92e.xn--p1ai"} {
+		assert.Truef(t, usableServerName(ok), "%s", ok)
+	}
+	for _, bad := range []string{"kubernetes", "kubernetes.default.svc", "10.0.0.1", "34.12.240.83", "x.local", "-a.com", "a..com", "site.test", "my_host.com"} {
+		assert.Falsef(t, usableServerName(bad), "%s", bad)
+	}
+}
+
+func TestWideCandidatesCoverTheBlockOwnFirst(t *testing.T) {
+	own := netip.MustParseAddr("34.158.189.116")
+	cands := WideCandidates(own)
+	assert.Len(t, cands, 253+4*254)
+	seen := map[netip.Addr]bool{}
+	for i, c := range cands {
+		b := c.As4()
+		assert.NotEqual(t, own, c)
+		assert.False(t, seen[c], "duplicate %s", c)
+		seen[c] = true
+		if i < 253 {
+			assert.Equal(t, byte(189), b[2], "the own /24 comes first")
+		} else {
+			assert.Contains(t, []byte{187, 188, 190, 191}, b[2])
+		}
+	}
 }

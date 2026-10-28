@@ -77,7 +77,10 @@ const neighborCacheName = "anti_dpi_neighbour.json"
 // not set them: first from the on-disk cache (if the remembered neighbour is still alive and still
 // answers like us), otherwise from a gentle scan of nearby IPs. If nothing is found the fields stay
 // empty and publicListenerConfigError then refuses the listener with guidance.
-func (n *Node) ensureMimicryTarget() {
+// ensureMimicryTarget gives a public node a site to imitate when the operator set none: the cached
+// neighbour, or one found nearby. With wide (the background retry) and nothing nearby, it also runs
+// the slow wide search, at most every wideScanEvery.
+func (n *Node) ensureMimicryTarget(wide bool) {
 	if !isPublicNode(n.Cfg) {
 		return
 	}
@@ -112,6 +115,16 @@ func (n *Node) ensureMimicryTarget() {
 	ctx, cancel := context.WithTimeout(n.Ctx, 20*time.Second)
 	defer cancel()
 	nb, ok := scanForNeighbor(ctx, ownIP, ourProfile, n.Logger)
+	cancel()
+	if !ok && wide && time.Since(n.wideScanAt) >= wideScanEvery {
+		n.wideScanAt = time.Now()
+		wctx, wcancel := context.WithTimeout(n.Ctx, 15*time.Minute)
+		nb, ok = scanWide(wctx, ownIP, ourProfile, n.Logger)
+		wcancel()
+		if !ok {
+			n.Logger.Warn("anti-DPI: no site to imitate in this hosting block either; set anti_dpi.tls_server_name and camouflage_addr by hand, see 'echofog-node camouflage'", "next_wide_search", n.wideScanAt.Add(wideScanEvery).Format(time.RFC3339))
+		}
+	}
 	if !ok {
 		return
 	}
@@ -141,8 +154,6 @@ func ownServerProfile() (mimicry.ServerProfile, error) {
 	return mimicry.OwnServerProfile(mimicry.BuildServerTLSConfig(cert))
 }
 
-// egressIPv4 returns the local IPv4 address the kernel would use to reach the internet. On a VPS or
-// relay that is the public IP; no packet is sent (UDP "connect" only selects a route).
 // neighbourScanIP is the public IPv4 address whose /24 holds the node's neighbours. On a cloud
 // machine (Google Cloud, AWS) and in Docker the interface has a private address, so the one the
 // operator gave for the invitation link (public_addrs) or the one STUN observed is used instead.
@@ -177,6 +188,8 @@ func (n *Node) neighbourScanIP() (netip.Addr, bool) {
 // localIPv4 is the interface address the node sends from (a variable for tests).
 var localIPv4 = egressIPv4
 
+// egressIPv4 returns the local IPv4 address the kernel would use to reach the internet. On a VPS or
+// relay that is the public IP; no packet is sent (UDP "connect" only selects a route).
 func egressIPv4() (netip.Addr, bool) {
 	c, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
@@ -225,6 +238,13 @@ var mimicryRetryEvery = 30 * time.Minute
 // scanForNeighbor is the neighbour scan; tests replace it so they never touch the network.
 var scanForNeighbor = mimicry.ScanForNeighbor
 
+// scanWide is the slow search of the whole hosting block (a variable for tests), run at most every
+// wideScanEvery: it probes about 1 300 addresses, and hosters dislike scanners.
+var (
+	scanWide      = mimicry.ScanWide
+	wideScanEvery = 12 * time.Hour
+)
+
 // retryMimicryTarget keeps looking for a camouflage neighbour for a node that started on UDP only,
 // and raises the TCP listener on addr as soon as one is found, without a restart.
 func (n *Node) retryMimicryTarget(addr string, every time.Duration) {
@@ -236,7 +256,7 @@ func (n *Node) retryMimicryTarget(addr string, every time.Duration) {
 			return
 		case <-t.C:
 		}
-		n.ensureMimicryTarget()
+		n.ensureMimicryTarget(true)
 		if publicListenerConfigError(n.Cfg) != nil {
 			continue
 		}

@@ -16,7 +16,10 @@ import (
 // fakeScan replaces the neighbour scan so tests never touch the network; found switches the result.
 func fakeScan(t *testing.T, found *atomic.Bool) {
 	t.Helper()
-	prev, prevEvery, prevIP := scanForNeighbor, mimicryRetryEvery, localIPv4
+	prev, prevEvery, prevIP, prevWide := scanForNeighbor, mimicryRetryEvery, localIPv4, scanWide
+	scanWide = func(context.Context, netip.Addr, mimicry.ServerProfile, *slog.Logger) (mimicry.Neighbor, bool) {
+		return mimicry.Neighbor{}, false
+	}
 	localIPv4 = func() (netip.Addr, bool) { return netip.MustParseAddr("203.0.113.9"), true }
 	scanForNeighbor = func(context.Context, netip.Addr, mimicry.ServerProfile, *slog.Logger) (mimicry.Neighbor, bool) {
 		if found.Load() {
@@ -25,7 +28,7 @@ func fakeScan(t *testing.T, found *atomic.Bool) {
 		return mimicry.Neighbor{}, false
 	}
 	mimicryRetryEvery = 50 * time.Millisecond
-	t.Cleanup(func() { scanForNeighbor, mimicryRetryEvery, localIPv4 = prev, prevEvery, prevIP })
+	t.Cleanup(func() { scanForNeighbor, mimicryRetryEvery, localIPv4, scanWide = prev, prevEvery, prevIP, prevWide })
 }
 
 func publicNode(t *testing.T) *Node {
@@ -92,4 +95,36 @@ func TestNeighbourScanUsesThePublicAddress(t *testing.T) {
 	localIPv4 = func() (netip.Addr, bool) { return netip.MustParseAddr("203.0.113.9"), true }
 	ip, _ = n.neighbourScanIP()
 	require.Equal(t, "203.0.113.9", ip.String(), "a public interface address wins")
+}
+
+// When nothing nearby fits, the background retry searches the whole hosting block, but not more
+// often than wideScanEvery; a site found that way is adopted like a near one.
+func TestRetrySearchesWiderWhenNothingIsNear(t *testing.T) {
+	var found atomic.Bool
+	fakeScan(t, &found)
+	var wide atomic.Int32
+	var wideFinds atomic.Bool
+	scanWide = func(context.Context, netip.Addr, mimicry.ServerProfile, *slog.Logger) (mimicry.Neighbor, bool) {
+		wide.Add(1)
+		if wideFinds.Load() {
+			return mimicry.Neighbor{ServerName: "far.example.net", Addr: "192.0.2.99:443"}, true
+		}
+		return mimicry.Neighbor{}, false
+	}
+	mimicryRetryEvery = time.Hour // the test drives the retries itself
+	n := publicNode(t)
+	require.NoError(t, n.Start())
+	t.Cleanup(n.Stop)
+	require.Zero(t, wide.Load(), "start-up never runs the wide search")
+	n.ensureMimicryTarget(true)
+	n.ensureMimicryTarget(true)
+	require.Equal(t, int32(1), wide.Load(), "the wide search runs at most every wideScanEvery")
+	require.Empty(t, n.Cfg.AntiDPI.TLSServerName)
+
+	n.wideScanAt = time.Now().Add(-wideScanEvery)
+	wideFinds.Store(true)
+	n.ensureMimicryTarget(true)
+	require.Equal(t, int32(2), wide.Load())
+	require.Equal(t, "far.example.net", n.Cfg.AntiDPI.TLSServerName)
+	require.Equal(t, "192.0.2.99:443", n.Cfg.AntiDPI.CamouflageAddr)
 }

@@ -112,6 +112,9 @@ type Node struct {
 	stopOnce sync.Once
 	Ctx      context.Context
 	Cancel   context.CancelFunc
+
+	// wideScanAt is when the wide search for a camouflage neighbour last ran (anti_dpi.go).
+	wideScanAt time.Time
 }
 
 // logLevel is info, or what ECHOFOG_LOG_LEVEL says (debug, info, warn, error): for finding out why
@@ -440,7 +443,7 @@ func (n *Node) Start() (err error) {
 	// public node set no mimicry target, try to adopt a real neighbour automatically. If that fails
 	// the node still runs — QUIC/UDP needs no camouflage — but without the public TCP/WS listener,
 	// and keeps looking for a neighbour to turn TCP on later (retryMimicryTarget).
-	n.ensureMimicryTarget()
+	n.ensureMimicryTarget(false)
 	deferredTCP, skipWS := "", false
 	if err := publicListenerConfigError(n.Cfg); err != nil {
 		n.Logger.Warn("ANTI-DPI: no camouflage site found, so this node runs on UDP only for now: peers whose network blocks UDP cannot reach it. It keeps looking for a neighbour site and turns TCP on when it finds one; or set anti_dpi.tls_server_name and anti_dpi.camouflage_addr (see docs/anti-dpi.md)", "reason", err)

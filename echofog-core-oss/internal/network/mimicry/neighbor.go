@@ -3,6 +3,7 @@ package mimicry
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"log/slog"
 	"math/rand"
 	"net"
@@ -20,8 +21,14 @@ import (
 // like ours is accepted, or the passive fingerprint would still differ.
 //
 // The scan is deliberately gentle: hosters such as Hetzner, OVH and DigitalOcean strike a VPS for
-// aggressive outbound port scanning. We probe only a handful of nearby addresses, a few at a time,
-// with a pause between launches, and stop at the first match.
+// aggressive outbound port scanning. At start-up we probe only a handful of nearby addresses, a few
+// at a time, with a pause between launches, and stop at the first match. When none of them fits,
+// a slower wide search (WideCandidates: the whole /24, then the /24s next to it) runs now and then
+// in the background.
+//
+// Only a site with a publicly trusted certificate for a real domain name is taken: a self-signed
+// certificate, an internal name (a Kubernetes API server answers as "kubernetes.default.svc") or an
+// IP address in place of a name is not a site a browser visits, so imitating it would stand out.
 
 // Neighbor is a real site next to our IP that we can mimic.
 type Neighbor struct {
@@ -35,6 +42,7 @@ const (
 	neighborDialTimeout     = 3 * time.Second // per-candidate TLS dial budget
 	neighborPaceMinMS       = 100             // pause between launching connects
 	neighborPaceMaxMS       = 200
+	neighborWideBlocks      = 2 // the wide search also covers this many /24s on each side of ours
 )
 
 // ScanForNeighbor looks for a mimickable site in ownIP's /24 whose ServerHello matches ourProfile,
@@ -49,7 +57,68 @@ func ScanForNeighbor(ctx context.Context, ownIP netip.Addr, ourProfile ServerPro
 	if logger != nil {
 		logger.Info("anti-DPI: scanning for a camouflage neighbour", "near", ownIP.String(), "candidates", len(cands))
 	}
+	return scanFirst(ctx, cands, ourProfile, logger)
+}
 
+// ScanWide is the slow background search: every address of ownIP's /24, then of the /24s next to
+// it (the same hosting block), in that order, at the same gentle pace as ScanForNeighbor. It stops
+// at the first match. A full run probes about 1 300 addresses and takes a few minutes.
+func ScanWide(ctx context.Context, ownIP netip.Addr, ourProfile ServerProfile, logger *slog.Logger) (Neighbor, bool) {
+	ownIP = ownIP.Unmap()
+	if !ownIP.Is4() || isPrivateOrReserved(ownIP) {
+		return Neighbor{}, false
+	}
+	cands := WideCandidates(ownIP)
+	if logger != nil {
+		logger.Info("anti-DPI: searching wider for a camouflage neighbour", "near", ownIP.String(), "candidates", len(cands))
+	}
+	return scanFirst(ctx, cands, ourProfile, logger)
+}
+
+// FindNeighbors probes cands at the gentle pace and returns up to max sites that fit, for an
+// operator choosing one by hand (echofog-node camouflage). progress, if set, hears of each probe.
+func FindNeighbors(ctx context.Context, cands []netip.Addr, ourProfile ServerProfile, max int, progress func(done, total int)) []Neighbor {
+	var mu sync.Mutex
+	var found []Neighbor
+	done := 0
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sem := make(chan struct{}, neighborScanConcurrency)
+	var wg sync.WaitGroup
+	for _, ip := range cands {
+		select {
+		case sem <- struct{}{}:
+		case <-cctx.Done():
+		}
+		if cctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(ip netip.Addr) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			nb, ok := probeNeighbor(cctx, net.JoinHostPort(ip.String(), "443"), ourProfile)
+			mu.Lock()
+			defer mu.Unlock()
+			done++
+			if ok && len(found) < max {
+				found = append(found, nb)
+				if len(found) == max {
+					cancel()
+				}
+			}
+			if progress != nil {
+				progress(done, len(cands))
+			}
+		}(ip)
+		pace(cctx)
+	}
+	wg.Wait()
+	return found
+}
+
+// scanFirst probes cands a few at a time and returns the first site that fits.
+func scanFirst(ctx context.Context, cands []netip.Addr, ourProfile ServerProfile, logger *slog.Logger) (Neighbor, bool) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	result := make(chan Neighbor, 1)
@@ -127,34 +196,86 @@ func probeNeighbor(ctx context.Context, addr string, ourProfile ServerProfile) (
 	if p.Version != ourProfile.Version || p.Cipher != ourProfile.Cipher || p.Group != ourProfile.Group {
 		return Neighbor{}, false // a different ServerHello would still be a passive mismatch
 	}
-	name := pickServerName(cs)
+	name := pickServerName(cs, time.Now())
 	if name == "" {
 		return Neighbor{}, false
 	}
 	return Neighbor{ServerName: name, Addr: addr}, true
 }
 
-// pickServerName reads a concrete hostname from the site's certificate to present as SNI. A plain
-// DNS name is preferred; a wildcard such as *.example.com is turned into www.example.com.
-func pickServerName(cs tls.ConnectionState) string {
+// pickServerName reads a concrete hostname from the site's certificate to present as SNI: a real
+// domain name the certificate is valid for under the system's trusted roots. A plain DNS name is
+// preferred; a wildcard such as *.example.com is turned into www.example.com. "" if there is none.
+func pickServerName(cs tls.ConnectionState, now time.Time) string {
 	if len(cs.PeerCertificates) == 0 {
 		return ""
 	}
-	var wildcard string
-	for _, name := range cs.PeerCertificates[0].DNSNames {
-		name = strings.TrimSpace(strings.ToLower(name))
-		if name == "" || strings.Contains(name, " ") {
-			continue
-		}
-		if strings.HasPrefix(name, "*.") {
-			if wildcard == "" {
-				wildcard = "www." + name[2:]
-			}
-			continue
-		}
-		return name
+	leaf := cs.PeerCertificates[0]
+	inter := x509.NewCertPool()
+	for _, c := range cs.PeerCertificates[1:] {
+		inter.AddCert(c)
 	}
-	return wildcard
+	var plain, wild []string
+	for _, name := range leaf.DNSNames {
+		name = strings.TrimSpace(strings.ToLower(name))
+		if strings.HasPrefix(name, "*.") {
+			if n := "www." + name[2:]; usableServerName(n) {
+				wild = append(wild, n)
+			}
+		} else if usableServerName(name) {
+			plain = append(plain, name)
+		}
+	}
+	for _, name := range append(plain, wild...) {
+		if _, err := leaf.Verify(x509.VerifyOptions{DNSName: name, Intermediates: inter, Roots: neighborRoots, CurrentTime: now}); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
+// neighborRoots are the roots a neighbour's certificate must chain to; nil is the system's (tests
+// set their own).
+var neighborRoots *x509.CertPool
+
+// internalSuffixes are names that never reach a browser: cluster, LAN and reserved test domains.
+var internalSuffixes = []string{".local", ".localhost", ".internal", ".svc", ".cluster", ".lan", ".home",
+	".corp", ".intranet", ".test", ".example", ".invalid", ".localdomain", ".arpa"}
+
+// usableServerName reports whether name is a public domain name a browser could ask for: at least
+// two labels of letters, digits and hyphens, a top-level domain of letters, no internal suffix.
+func usableServerName(name string) bool {
+	if len(name) < 4 || len(name) > 253 || !strings.Contains(name, ".") {
+		return false
+	}
+	for _, sfx := range internalSuffixes {
+		if strings.HasSuffix(name, sfx) {
+			return false
+		}
+	}
+	labels := strings.Split(name, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for _, r := range l {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	tld := labels[len(labels)-1]
+	if len(tld) < 2 {
+		return false
+	}
+	for _, r := range tld {
+		if r < 'a' || r > 'z' {
+			if !strings.HasPrefix(tld, "xn--") {
+				return false // a TLD is letters (or punycode): this rules out IP addresses too
+			}
+		}
+	}
+	return true
 }
 
 // nearbyCandidates returns host addresses within ownIP's /24, within ±span of its last octet,
@@ -173,6 +294,34 @@ func nearbyCandidates(ownIP netip.Addr, span int) []netip.Addr {
 		out = append(out, netip.AddrFrom4(c))
 	}
 	rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+	return out
+}
+
+// WideCandidates are the addresses the wide search probes, in order: the rest of ownIP's /24 in
+// random order, then each /24 next to it (nearest first), each in random order.
+func WideCandidates(ownIP netip.Addr) []netip.Addr {
+	ownIP = ownIP.Unmap()
+	b := ownIP.As4()
+	block := func(third int) []netip.Addr {
+		out := make([]netip.Addr, 0, 254)
+		for h := 1; h <= 254; h++ {
+			c := b
+			c[2], c[3] = byte(third), byte(h)
+			if a := netip.AddrFrom4(c); a != ownIP {
+				out = append(out, a)
+			}
+		}
+		rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+		return out
+	}
+	out := block(int(b[2]))
+	for d := 1; d <= neighborWideBlocks; d++ {
+		for _, third := range []int{int(b[2]) - d, int(b[2]) + d} {
+			if third >= 0 && third <= 255 {
+				out = append(out, block(third)...)
+			}
+		}
+	}
 	return out
 }
 

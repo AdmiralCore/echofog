@@ -177,7 +177,15 @@ itself:
    saves both to `anti_dpi_neighbour.json`. After a restart it checks the saved neighbour again
    and skips the scan while it still answers.
 
-If no neighbour fits, the node stays on UDP only and keeps trying.
+Only a site with a certificate from a publicly trusted CA for a real domain name counts. A
+self-signed certificate, an internal name (a Kubernetes API server answers as
+`kubernetes.default.svc`) or an IP address in place of a name is not a site browsers visit.
+
+If no neighbour fits, the node stays on UDP only and keeps trying every 30 minutes. From the first
+retry on it also searches wider, at most every 12 hours: every address of its `/24`, then of the two
+`/24`s on each side (about 1 300 addresses, at the same slow pace, a few minutes in all).
+`echofog-node camouflage` runs the same search at once and prints what it finds, with the lines for
+`deploy/.env`.
 
 ### Choosing the site by hand
 

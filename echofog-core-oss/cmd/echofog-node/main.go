@@ -8,6 +8,7 @@
 //	echofog-node wallet               the TON wallet of a running node
 //	echofog-node invite               the invitation link of a running node
 //	echofog-node clean                drop what the node learned from the network (stopped node)
+//	echofog-node camouflage           find real sites next to this server for the node to imitate
 //	echofog-node version
 package main
 
@@ -35,6 +36,7 @@ Commands:
   wallet    show the TON wallet address and balance of the running node
   invite    print the invitation link of the running node (--list, --rotate, --remove, --new-secret)
   clean     drop stale network data (DHT records, known peers, ratings) of a stopped node
+  camouflage  find real sites next to this server that the node can pretend to be
   version   print the version
 
 Run "echofog-node <command> -h" for the flags of a command. Every flag can also be set with an
@@ -64,6 +66,8 @@ func main() {
 		os.Exit(inviteCmd(args))
 	case "clean":
 		os.Exit(cleanCmd(args))
+	case "camouflage":
+		os.Exit(camouflageCmd(args))
 	case "version", "--version", "-version":
 		fmt.Println("echofog-node", version)
 	case "help", "-h", "--help":
