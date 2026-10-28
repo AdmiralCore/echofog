@@ -99,13 +99,23 @@ Everything here is free and end-to-end encrypted.
 
 - **Give your contact.** In **Chats**, press the QR-code button (*My contact*). Show the code or
   press *Copy link* and send the link to a friend.
-- **Add a contact.** Press *Contact*, paste their link (or key), type a name and press
-  *Add contact*. Or press *Scan* and point the camera at their code.
-- **Create a group.** Press *Group*, type a name, choose *Group* (everyone writes) or *Channel*
-  (only admins write) and press *Create*. To invite people, open the chat's *Info* and use
-  *Copy invite*. They join with *Join* → paste the invite.
+- **Add a contact.** Press the pencil button at the top of **Chats** (*New*) and choose
+  *Add a contact*. Paste their link (or key), type a name and press *Add contact*. Or press *Scan*
+  and point the camera at their code.
+- **Create a space.** *New* → *New space*, type a name, choose *Group* (everyone writes) or
+  *Channel* (only admins write) and press *Create*. To invite people, press the gear next to the
+  space's name and use *Copy invite*. They join with *New* → *Join by invite*.
+- **Channels and voice rooms.** In a space, the column on the left lists its text channels and
+  voice rooms. Admins add them with *+*, and change a channel with the gear that shows when you
+  hover over it (or a right click): name, topic, "only admins post", order, remove. You can also
+  drag channels to reorder them. Click a voice room to join it; the people inside are listed under
+  it.
+- **Threads.** Right-click a message and choose *Comment* to start a thread. The speech-bubble
+  button at the top of a space lists the channel's threads.
+- **A contact's profile.** Click the name at the top of a chat. Click the name to rename them and
+  the picture to set one (only you see both). Below are *Media*, *Files* and *Links* from your chat.
 - **Call.** In a chat, press the phone button for a voice call or the camera button for a video
-  call. This works in groups too.
+  call. In a space with voice rooms you call by joining a room.
 - **Share your screen.** During a call, press *Share your screen*. The arrow next to it opens
   *Stream quality*: you can pick up to 4K at 60 fps, but high quality needs a fast upload. To share
   the sound too, pick a whole screen and tick *Share system audio* in the window that opens (or a

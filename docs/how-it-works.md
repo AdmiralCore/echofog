@@ -146,11 +146,29 @@ yet), one check means the recipient or a relay took it (a pale check: it is wait
 two checks mean the recipient's app confirmed
 it. The same states tell you what a call you placed is waiting for, until it connects.
 
-**Spaces.** A group can have text channels and voice rooms beside its main chat, as on a
-community server, but with no server: the channels are named parts of the group's one encrypted
-log, so they share its members, roles and history. Whoever may manage the group adds or removes
-them. A voice room is a call that stays open: members see who started it and join when they like,
-and it never rings anybody.
+**Spaces.** A group can have text channels and voice rooms next to its main chat, like a
+community server, but there is no server. Channels are parts of the group's one encrypted log, so
+they share its members, roles and history. Admins add, rename, reorder and remove them, give a
+channel a topic, or make it an announcements channel where only admins post and the others comment.
+A voice room is a call that stays open: you see who is in it and join when you like, and nobody's
+phone rings. In a space with voice rooms, calls happen in the rooms, so its header has no call
+buttons.
+
+**Threads.** Any message can get comments. In a space each channel lists its threads, and the
+author of a message (or a moderator) can give its thread a name.
+
+**Who may do what in a group** is part of the group's log too: the creator writes down who is in
+the group, and every join, role change, removal and ban after that is an entry in the log. Each
+device checks a message against the members and roles at the point where it sits in the log, so
+all devices agree even if entries arrive in a different order. A member who leaves keeps what they
+wrote while they were in, and someone who joins later sees it.
+
+**Contacts.** You can rename a contact and give them a picture. Both stay on your device; the
+contact is not told. Their profile also lists the photos, files and links from your chat.
+
+**Pictures.** When you send a photo (JPEG, PNG or GIF), your app makes a small preview, about 6 KB,
+and sends it with the file offer. The other side sees the picture right away, before downloading
+the file or without downloading it at all.
 
 **Groups** have no server either. Every group message and every change (new member, role, ban) is
 sent to each member over that member's own encrypted session, with the same receipts and offline

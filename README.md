@@ -53,9 +53,12 @@ Every document has a Russian version next to it (`*.ru.md`).
   the Wintun driver is built in). Exits compete on an open market; the app can pick one
   automatically by ping, price, speed and which of your sites open through it. An exit can also
   stay hidden and serve only the people it gives an invitation link to.
-- **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Calls and screen sharing
-  travel over relay trees sized by each participant's upload, which is how a stream reaches many
-  viewers without a central server.
+- **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Replies, threads, edits,
+  reactions and pins work in every chat, and a chat looks the same on both phones after a break.
+  A group can be a space with text channels and voice rooms, like a community server without the
+  server. Pictures arrive with a small preview, so you see them before downloading. Calls and screen
+  sharing travel over relay trees sized by each participant's upload, which is how a stream reaches
+  many viewers without a central server.
 - **Payments.** You keep TON in your own small vault contract and sign vouchers as you use an
   exit; the exit collects them every few hours. Paying by a direct TON or USDT transfer also works.
 
