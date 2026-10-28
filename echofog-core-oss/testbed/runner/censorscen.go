@@ -32,7 +32,7 @@ var (
 
 var labNames = map[string]string{
 	"203.0.113.11": "s1", "203.0.113.12": "s2", "203.0.113.13": "p1", "203.0.113.14": "p2",
-	"203.0.113.15": "x1", "203.0.113.16": "x2", "203.0.113.17": "h1", "203.0.113.30": "web",
+	"203.0.113.15": "x1", "203.0.113.16": "x2", "203.0.113.17": "h1", "203.0.113.18": "x3", "203.0.113.30": "web",
 	"203.0.113.21": "gw_a", "203.0.113.22": "gw_b", "203.0.113.23": "gw_c",
 }
 
@@ -113,7 +113,13 @@ func censorScenario(nodes map[string]*node, v *verdict, out string) {
 		// what DNS would say each lab address hosts: x1 mimics the cover site, which is web's
 		censor.MarkLongHeavy(flows, *heavyAfter, *heavyMB<<20)
 		censor.CheckSNI(flows, map[netip.Addr][]string{
+			netip.MustParseAddr("203.0.113.11"): {"cover.lab"},
+			netip.MustParseAddr("203.0.113.12"): {"cover.lab"},
+			netip.MustParseAddr("203.0.113.13"): {"cover.lab"},
+			netip.MustParseAddr("203.0.113.14"): {"cover.lab"},
 			netip.MustParseAddr("203.0.113.15"): {"cover.lab"},
+			netip.MustParseAddr("203.0.113.16"): {"cover.lab"},
+			netip.MustParseAddr("203.0.113.17"): {"cover.lab"},
 			netip.MustParseAddr("203.0.113.30"): {"cover.lab"},
 		})
 		fmt.Fprintf(&report, "== leaving %s (%s)\n%s\n", gw, strings.Join(lanOfGW[gw], ", "), censor.Report(flows, labLabel))

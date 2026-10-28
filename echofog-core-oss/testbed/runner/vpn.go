@@ -90,7 +90,7 @@ func joinAddr(nodes map[string]*node, name string) string {
 	ip := map[string]string{"s1": "203.0.113.11", "s2": "203.0.113.12", "p1": "203.0.113.13", "p2": "203.0.113.14",
 		"x1": "203.0.113.15", "x2": "203.0.113.16", "h1": "203.0.113.17"}[name]
 	addr := ip + ":4242/" + nodes[name].id
-	if name == "x1" {
+	if name != "web" { // every public node has the cover site
 		addr += "?sni=cover.lab"
 	}
 	return addr

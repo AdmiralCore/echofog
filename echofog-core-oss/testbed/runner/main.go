@@ -169,7 +169,9 @@ func bringUp(extra ...string) map[string]*node {
 		s, _ := statusOf(n)
 		nodes[n] = &node{name: n, id: s.ID, pubKey: s.PubKey}
 	}
-	boot := fmt.Sprintf("203.0.113.11:4242/%s,203.0.113.12:4242/%s", nodes["s1"].id, nodes["s2"].id)
+	// the seeds are listed with their cover site's name, as a release lists its own: a node that
+	// joins through them is camouflaged from its first packet
+	boot := fmt.Sprintf("203.0.113.11:4242/%s?sni=cover.lab,203.0.113.12:4242/%s?sni=cover.lab", nodes["s1"].id, nodes["s2"].id)
 	logf("starting the rest, bootstrapping through s1 and s2")
 	rest := []string{"up", "-d"}
 	for _, n := range append(allNodeNames(), extra...) {

@@ -12,6 +12,9 @@
 #
 # a <-> c can punch holes through each other; anything with b has to go through a relay. The
 # runner (go run ./testbed/runner) starts it, runs the scenarios and breaks things on purpose.
+# Every public node is a server (the role of a VPS) with a cover site, as a node on a VPS finds one in its own
+# datacenter: here they all mimic the lab's web server (cover.lab). Only x3, the legacy exit of the launchpad's
+# failover phase, has none.
 # The routers can delay, lose and cut traffic: see NETEM_* and testbed/runner.
 
 x-image: &image
@@ -57,22 +60,22 @@ services:
   s1:
     <<: *node
     container_name: efbed-s1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: s1, BOOTSTRAP: "${BOOTSTRAP:-}", SIGNALING: "${SEED_SIGNALING:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: s1, SERVER: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}", SIGNALING: "${SEED_SIGNALING:-}" }
     networks: { wan: { ipv4_address: 203.0.113.11 } }
   s2:
     <<: *node
     container_name: efbed-s2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: s2, BOOTSTRAP: "${BOOTSTRAP:-}", SIGNALING: "${SEED_SIGNALING:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: s2, SERVER: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}", SIGNALING: "${SEED_SIGNALING:-}" }
     networks: { wan: { ipv4_address: 203.0.113.12 } }
   p1:
     <<: *node
     container_name: efbed-p1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p1, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p1, SERVER: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}" }
     networks: { wan: { ipv4_address: 203.0.113.13 } }
   p2:
     <<: *node
     container_name: efbed-p2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: p2, SERVER: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}" }
     networks: { wan: { ipv4_address: 203.0.113.14 } }
 
   # ---- for the VPN scenarios: two exits in the server role, as on a VPS, and a web server that
@@ -85,13 +88,20 @@ services:
   x2:
     <<: *node
     container_name: efbed-x2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x2, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x2, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443" }
     networks: { wan: { ipv4_address: 203.0.113.16 } }
+  # a legacy exit without a cover site: it can only be reached over noise. Only the failover phase of
+  # the launchpad starts it, to be the ordinary exit a client on a camouflage exit must never be moved to
+  x3:
+    <<: *node
+    container_name: efbed-x3
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x3, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
+    networks: { wan: { ipv4_address: 203.0.113.18 } }
   # a hidden exit for friends: not in the DHT, it answers only people with its invitation link
   h1:
     <<: *node
     container_name: efbed-h1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: h1, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", ACCESS: hidden, PUBLIC_ADDR: "203.0.113.17:4242" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: h1, TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", ACCESS: hidden, PUBLIC_ADDR: "203.0.113.17:4242" }
     networks: { wan: { ipv4_address: 203.0.113.17 } }
   web:
     <<: *image
