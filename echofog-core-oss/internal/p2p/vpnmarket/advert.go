@@ -40,6 +40,10 @@ type Advert struct {
 	ExpiresAt  int64    `json:"expires_at"`
 	Sig        []byte   `json:"sig,omitempty"`
 	SNI        string   `json:"sni,omitempty"`
+	// RelayPricePerMB is what this node asks for relaying circuits (calls between users behind
+	// NATs, streams, files) in micro-USDT per MB; 0 is free. A hook for a paid tier: nothing is
+	// billed yet, and a client only notes the price.
+	RelayPricePerMB int64 `json:"relay_price_per_mb,omitempty"`
 }
 
 // Signer produces an ed25519 signature with the node identity
@@ -123,6 +127,9 @@ func (a *Advert) Verify(now time.Time) error {
 	if a.PricePerMB < 0 || a.PricePerMB > MaxPricePerMB || a.UploadKbps < 0 || a.UploadKbps > MaxUploadKbps ||
 		a.FreeTestKB < 0 || a.FreeTestKB > MaxFreeTestKB || len(a.Neighbors) > MaxNeighbors {
 		return fmt.Errorf("%w: value out of range", ErrAdvertInvalid)
+	}
+	if a.RelayPricePerMB < 0 || a.RelayPricePerMB > MaxPricePerMB {
+		return fmt.Errorf("%w: relay price out of range", ErrAdvertInvalid)
 	}
 	if len(a.SNI) > 253 {
 		return fmt.Errorf("%w: SNI domain too long", ErrAdvertInvalid)

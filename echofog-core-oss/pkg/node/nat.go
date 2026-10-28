@@ -173,6 +173,13 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 	if n.Swarm.GetPeer(peer) != nil {
 		return nil
 	}
+	if n.Swarm.UserLinkViaRelay(peer, addr) {
+		// guard mode: a user's node across the border is not dialed or punched to, which is noise
+		// or a flow of its own to a stranger. Both of us meet at a camouflaged relay; the callers
+		// carry on over a circuit, as they do for a peer no hole punch reaches.
+		n.meetViaRelay(ctx, peer)
+		return swarm.ErrUserLinkViaRelay
+	}
 	var dialErr error
 	if addr != "" {
 		dctx, cancel := context.WithTimeout(ctx, 4*time.Second)

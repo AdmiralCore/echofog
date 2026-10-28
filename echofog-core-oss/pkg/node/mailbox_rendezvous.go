@@ -100,7 +100,8 @@ func (n *Node) RefreshMailboxes() {
 	}
 	hints := make([]swarm.MailboxHint, 0, len(chosen))
 	for _, p := range chosen {
-		hints = append(hints, swarm.MailboxHint{Peer: p.ID().String(), Addr: p.Addr(), Until: now.Add(mailboxHintTTL).Unix()})
+		// with its camouflage SNI and role, so whoever dials it from the hint dials it disguised
+		hints = append(hints, swarm.MailboxHint{Peer: p.ID().String(), Addr: n.Swarm.AnnotatedAddr(p.ID(), p.Addr()), Until: now.Add(mailboxHintTTL).Unix()})
 	}
 	n.Swarm.SetMailboxHints(hints)
 	n.publishBundleNow()
@@ -125,6 +126,38 @@ func (n *Node) publishBundleNow() {
 // reachMailboxes connects to the relays that keep peer's mail (asking the network for the peer's
 // current record if we know none), then hands them what waits for the peer.
 func (n *Node) reachMailboxes(ctx context.Context, peer types.PeerID) {
+	if n.connectHintRelays(ctx, peer) && n.Messenger != nil {
+		n.Messenger.FlushOutbox(peer)
+	}
+}
+
+// meetViaRelay makes a circuit to a user's node possible without a direct link: through a relay
+// both of us are connected to (a guard, as a rule), or else one of the peer's own relays, named
+// in its record, which we then connect to as a camouflaged server.
+func (n *Node) meetViaRelay(ctx context.Context, peer types.PeerID) {
+	if n.RelayClient == nil {
+		return
+	}
+	if _, ok := n.RelayClient.CircuitTo(peer); ok {
+		return
+	}
+	try := func() error {
+		cctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		defer cancel()
+		_, err := n.RelayClient.OpenCircuitTo(cctx, peer)
+		return err
+	}
+	if try() == nil {
+		return
+	}
+	if n.connectHintRelays(ctx, peer) {
+		_ = try()
+	}
+}
+
+// connectHintRelays connects to the relays that keep peer's mail and reports whether one is
+// connected.
+func (n *Node) connectHintRelays(ctx context.Context, peer types.PeerID) bool {
 	hints := n.Swarm.MailboxHintsOf(peer)
 	if len(hints) == 0 {
 		hints = n.Swarm.RefreshMailboxHints(peer)
@@ -144,16 +177,16 @@ func (n *Node) reachMailboxes(ctx context.Context, peer types.PeerID) {
 			reached = true
 			continue
 		}
-		if err := n.EnsureConnected(ctx, id); err != nil && h.Addr != "" {
-			// through the swarm: a relay (a server) whose camouflage SNI we know is dialed with it,
-			// and one we do not know it for is not dialed over noise across a border
+		if h.Addr != "" {
+			// through the swarm: the hint's address carries the relay's camouflage SNI, and a relay
+			// we know none for is not dialed over noise across a border
 			_ = n.Swarm.AddPotentialPeerWithCtx(ctx, id, h.Addr)
+		} else {
+			_ = n.EnsureConnected(ctx, id)
 		}
 		if n.Swarm.GetPeer(id) != nil {
 			reached = true
 		}
 	}
-	if reached && n.Messenger != nil {
-		n.Messenger.FlushOutbox(peer)
-	}
+	return reached
 }

@@ -447,3 +447,36 @@ func (s *Swarm) ServesUsers() bool { return s != nil && s.cfg != nil && s.cfg.Is
 
 // IsUserPeer reports whether the peer is known to be a user's node (not a server).
 func (s *Swarm) IsUserPeer(id types.PeerID) bool { return s.isClientPeer(id) }
+
+// ErrUserLinkViaRelay: a user's node is across the border, and the link to it is not made direct:
+// the traffic goes through a camouflaged relay (a circuit), because a direct link between two
+// users is noise or a hole punch, which a censor can flag.
+var ErrUserLinkViaRelay = errors.New("swarm: a user's node across the border is reached through a relay, not directly")
+
+// UserLinkViaRelay reports whether the node must not link directly (a dial, a hole punch) to the
+// peer at addr ("" if no address is known): in guard mode, a peer that is not a camouflaged server
+// and not one the user listed (an invitation, a bootstrap node), at an address across the border.
+// With no address known the peer counts as across the border: unknown is across. The traffic to
+// such a peer goes through relays, in the first place the node's guards.
+func (s *Swarm) UserLinkViaRelay(id types.PeerID, addr string) bool {
+	if !s.GuardModeActive() || s.isExplicitPeer(id) || s.IsGuard(id) {
+		return false
+	}
+	if s.GetPeerSNI(id) != "" || s.IsServerPeer(id) {
+		return false // a server: REALITY with its SNI, or held back by the noise rule
+	}
+	info := network.ParseAddrInfo(addr)
+	if info.SNI != "" {
+		return false
+	}
+	if info.Addr == "" {
+		return true
+	}
+	return s.acrossBorder(info.Addr)
+}
+
+// GuardDialRefused is guardDialRefused for the node layer: a dial it starts on its own to a peer it
+// has no reason to talk to.
+func (s *Swarm) GuardDialRefused(id types.PeerID, addr string) bool {
+	return s.guardDialRefused(id, addr)
+}

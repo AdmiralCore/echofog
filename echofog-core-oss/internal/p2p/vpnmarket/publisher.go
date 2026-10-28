@@ -33,6 +33,7 @@ type Publisher struct {
 	pub       types.PeerPublicKey
 	neighbors func() []string
 	sni       string
+	relayFee  func() int64 // what this node asks for relaying, advertised with its offer
 	now       func() time.Time
 	interval  time.Duration
 
@@ -53,6 +54,14 @@ func NewPublisher(dht DHTClient, signer Signer, self types.PeerID, pub types.Pee
 func (p *Publisher) SetSNI(sni string) {
 	p.mu.Lock()
 	p.sni = sni
+	p.mu.Unlock()
+}
+
+// SetRelayPrice sets where the price this node asks for relaying circuits is read from when the
+// advert is made.
+func (p *Publisher) SetRelayPrice(fee func() int64) {
+	p.mu.Lock()
+	p.relayFee = fee
 	p.mu.Unlock()
 }
 
@@ -81,6 +90,11 @@ func (p *Publisher) build(enabled bool, cfg ShareConfig) (*Advert, error) {
 		SNI:        p.sni,
 		IssuedAt:   now.Unix(),
 		ExpiresAt:  now.Add(AdvertTTL).Unix(),
+	}
+	if p.relayFee != nil {
+		if fee := p.relayFee(); fee > 0 && fee <= MaxPricePerMB {
+			a.RelayPricePerMB = fee
+		}
 	}
 	if enabled && p.neighbors != nil {
 		a.Neighbors = p.neighbors()

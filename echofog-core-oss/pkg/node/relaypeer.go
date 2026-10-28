@@ -37,6 +37,9 @@ func (n *Node) keepRelayPeer() {
 		if c.ID == n.ID || connected[c.ID] || c.Addr == "" || n.Swarm.CheckOnBan(c.ID) {
 			continue
 		}
+		if n.Swarm.GuardDialRefused(c.ID, c.Addr) {
+			continue // guard mode: not across the border outside the guards
+		}
 		n.Swarm.AddPotentialPeer(c.ID, c.Addr)
 		dialed++
 	}

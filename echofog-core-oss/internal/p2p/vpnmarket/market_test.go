@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -511,4 +512,15 @@ func TestDirectoryPassesOnTheAdvertisedSNI(t *testing.T) {
 	d.peers = []types.PeerID{cam.id, ordinary.id}
 	require.Equal(t, 2, dir.Refresh(context.Background()))
 	assert.Equal(t, map[types.PeerID]string{cam.id: "cover.example"}, got, "only the camouflage exit has an SNI to pass on")
+}
+
+// A node's relay price rides with its advert, and a free relay adds nothing to it.
+func TestRelayPriceInAdvert(t *testing.T) {
+	a := &Advert{Version: AdvertVersion, Enabled: true, RelayPricePerMB: 42}
+	assert.Equal(t, int64(42), a.RelayPricePerMB)
+	raw, err := json.Marshal(a)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"relay_price_per_mb":42`)
+	free, _ := json.Marshal(&Advert{Version: AdvertVersion})
+	assert.NotContains(t, string(free), "relay_price", "a free relay adds nothing to the advert")
 }

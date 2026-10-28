@@ -308,3 +308,35 @@ func TestNeedsPeersInGuardMode(t *testing.T) {
 	s.planGuards(time.Now(), []guardCandidate{{p.ID(), "203.0.113.7:443"}})
 	assert.False(t, s.NeedsPeers(), "a connected guard that relays is")
 }
+
+// The user-to-user rule: which links between users are made through relays instead.
+func TestUserLinkViaRelay(t *testing.T) {
+	const public = "198.51.100.7:4242"
+	user, server := idOf(1), idOf(2)
+	cases := []struct {
+		name  string
+		setup func(s *Swarm)
+		id    types.PeerID
+		addr  string
+		via   bool
+	}{
+		{"a user across the border: through a relay", func(s *Swarm) {}, user, public, true},
+		{"a user, no address known: unknown is across", func(s *Swarm) {}, user, "", true},
+		{"a user on the local network: direct", func(s *Swarm) {}, user, "192.168.1.8:4242", false},
+		{"a user in the home region: direct", func(s *Swarm) { s.SetSameRegionFunc(func(string) bool { return true }) }, user, public, false},
+		{"a user in another region: through a relay", func(s *Swarm) { s.SetSameRegionFunc(func(string) bool { return false }) }, user, public, true},
+		{"a camouflaged server: direct (REALITY)", func(s *Swarm) { s.SetPeerSNI(server, "cover.example") }, server, public, false},
+		{"a server by its address: direct", func(s *Swarm) {}, server, public + "?sni=cover.example&srv=1", false},
+		{"a server known by role: left to the noise rule", func(s *Swarm) { s.SetPeerServer(server, true) }, server, public, false},
+		{"a node the user listed (an invitation): direct", func(s *Swarm) { s.MarkExplicitPeer(user) }, user, public, false},
+		{"mode off: direct", func(s *Swarm) { withGuardMode(s, config.GuardOff) }, user, public, false},
+		{"a server of ours: direct", func(s *Swarm) { withRole(s, config.RoleServer) }, user, public, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := newTestSwarm(t)
+			c.setup(s)
+			assert.Equal(t, c.via, s.UserLinkViaRelay(c.id, c.addr))
+		})
+	}
+}

@@ -49,6 +49,8 @@ type Directory struct {
 	// onSNI is told the camouflage SNI of every exit whose advert is taken in, so the node dials
 	// that exit as REALITY from the first packet, however it came to know the exit.
 	onSNI func(id types.PeerID, sni string)
+	// onRelayPrice is told the relay price of every advert taken in
+	onRelayPrice func(id types.PeerID, pricePerMB int64)
 
 	mu      sync.RWMutex
 	adverts map[types.PeerID]*Advert
@@ -56,6 +58,11 @@ type Directory struct {
 
 // SetHints makes Refresh also ask peers for the exits they know.
 func (d *Directory) SetHints(h HintSource) { d.hints = h }
+
+// SetRelayPriceHook installs the callback that learns what an advertised node asks for relaying.
+func (d *Directory) SetRelayPriceHook(fn func(id types.PeerID, pricePerMB int64)) {
+	d.onRelayPrice = fn
+}
 
 // SetSNIHook installs the callback that learns the SNI of an advertised exit (see onSNI).
 func (d *Directory) SetSNIHook(fn func(id types.PeerID, sni string)) { d.onSNI = fn }
@@ -178,6 +185,9 @@ func (d *Directory) accept(a *Advert) {
 	d.mu.Unlock()
 	if a.Enabled && a.SNI != "" && d.onSNI != nil && id != d.self {
 		d.onSNI(id, a.SNI)
+	}
+	if a.Enabled && d.onRelayPrice != nil && id != d.self {
+		d.onRelayPrice(id, a.RelayPricePerMB)
 	}
 }
 

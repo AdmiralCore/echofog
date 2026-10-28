@@ -328,6 +328,7 @@ func (n *Node) JoinInvite(ctx context.Context, inv access.Invite) (types.PeerID,
 			return types.PeerID{}, err
 		}
 	}
+	n.Swarm.MarkExplicitPeer(inv.Peer) // the user chose this node: it is linked to directly, not through relays
 	if inv.Server {
 		n.Swarm.SetPeerServer(inv.Peer, true)
 	}
@@ -397,7 +398,8 @@ func (n *Node) ForgetInvite(id types.PeerID) error {
 // out its addresses) only to the peers it lets in.
 func (n *Node) admitPunch(from types.PeerID, ticket []byte) bool {
 	if n.Access == nil || !n.Access.Enabled() {
-		return true
+		// guard mode: no hole punch with a user across the border; the traffic goes through relays
+		return !n.Swarm.UserLinkViaRelay(from, "")
 	}
 	return n.Access.AdmitTicket(from, ticket)
 }

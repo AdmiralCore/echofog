@@ -456,14 +456,23 @@ func (rc *RelayClient) rankedRelays(targetID types.PeerID, offers func(*swarm.Pe
 			seen[m.PeerID] = true
 		}
 	}
+	// The node's guards come first among the rest: they are camouflaged servers it already holds a
+	// link to, so a circuit through one adds no flow across the border, and a peer that also has
+	// that server as a guard is reached at once.
+	var guards, others []*swarm.Peer
 	for _, m := range rc.GetMarketStatus() {
 		if m.IsViable && m.PeerID != targetID && !seen[m.PeerID] {
 			if p := rc.swarm.GetPeer(m.PeerID); p != nil && offers(p) {
-				ranked = append(ranked, p)
+				if rc.swarm.IsGuard(m.PeerID) {
+					guards = append(guards, p)
+				} else {
+					others = append(others, p)
+				}
 			}
 		}
 	}
-	return ranked
+	ranked = append(ranked, guards...)
+	return append(ranked, others...)
 }
 
 // SendSignal delivers a hole punching message to targetID: directly, over a circuit that exists,
@@ -974,7 +983,7 @@ func (rc *RelayClient) SendUniversal(ctx context.Context, targetID types.PeerID,
 	// 4. Query DHT
 	if rc.dht != nil {
 		addr, dErr := rc.dht.FindPeer(ctx, targetID)
-		if dErr == nil && addr != "" {
+		if dErr == nil && addr != "" && !rc.swarm.UserLinkViaRelay(targetID, addr) {
 			rc.swarm.Bootstrap([]string{network.JoinPeerAddr(addr, targetID)})
 		}
 	}
@@ -1041,7 +1050,7 @@ func (rc *RelayClient) SendRoutedEnvelope(ctx context.Context, targetID types.Pe
 
 	if rc.dht != nil {
 		addr, dErr := rc.dht.FindPeer(ctx, targetID)
-		if dErr == nil && addr != "" {
+		if dErr == nil && addr != "" && !rc.swarm.UserLinkViaRelay(targetID, addr) {
 			rc.swarm.Bootstrap([]string{network.JoinPeerAddr(addr, targetID)})
 		}
 	}

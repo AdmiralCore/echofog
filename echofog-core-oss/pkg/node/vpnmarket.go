@@ -66,9 +66,15 @@ func (n *Node) initVPNMarket() {
 	dir.SetHints(n.askPeersForExits)
 	// the SNI an exit advertises is the one to dial it with, however its address reached us
 	dir.SetSNIHook(n.Swarm.SetPeerSNI)
+	if n.RelayClient != nil {
+		dir.SetRelayPriceHook(n.RelayClient.SetRelayPrice) // noted for the choice of relay; nothing is billed
+	}
 	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
 	if n.Cfg.AntiDPI.TLSServerName != "" {
 		pub.SetSNI(n.Cfg.AntiDPI.TLSServerName)
+	}
+	if n.RelayServer != nil {
+		pub.SetRelayPrice(func() int64 { return n.RelayServer.GetPolicy().PricePerMB })
 	}
 	n.Swarm.RegisterStreamHandler(net_types.TypeExitDirectory, func(st *network.Stream, _ []byte, peer types.PeerID) {
 		defer st.Close()
