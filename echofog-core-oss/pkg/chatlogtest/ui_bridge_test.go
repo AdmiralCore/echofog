@@ -101,6 +101,14 @@ var bridged = map[string]string{
 	"ChatList":     "Conversations", "ChatHistory": "ChatHistory", "ChatThread": "ChatThread", "ChatPins": "ChatPins",
 	"ChatMessage": "ChatMessage", "ChatSend": "ChatSend", "ChatEdit": "ChatEdit", "ChatDelete": "ChatDelete",
 	"ChatReact": "ChatReact", "ChatPin": "ChatPin", "ChatMarkRead": "ChatMarkRead",
+	// spaces: channels and voice rooms
+	"ChatChannels": "ChatChannels", "ChatChannelSave": "ChatChannelSave", "ChatChannelRemove": "ChatChannelRemove",
+	"StartRoomCall": "StartRoomCall", "KeepRoomCallAlive": "KeepRoomCallAlive", "EndRoomCall": "EndRoomCall",
+	// calls: the page's WebRTC loopback talks to this node's media bridge on localhost
+	"InviteToCall": "InviteToCall", "JoinRoom": "JoinCall", "SubmitCallAnswer": "SubmitCallAnswer", "LeaveRoom": "LeaveCall",
+	"GetCallRoster": "GetCallRoster", "GetCallSlots": "GetCallSlots", "GetStreamQualities": "ListStreamQualities",
+	"StartStream": "StartStream", "UpdateStreamQuality": "UpdateStreamQuality", "StopScreenShare": "StopScreenShare",
+	"WatchStream": "WatchStream", "UnwatchStream": "UnwatchStream", "SetUploadCapacity": "SetUploadCapacity", "SetVADState": "SetVADState",
 }
 
 type bridge struct {
@@ -116,6 +124,31 @@ func newBridge(api *node.NodeApi, stop func()) http.Handler {
 	api.OnMessageState(func(ev node.MessageStateDTO) { b.emit("message:state", ev) })
 	api.SubscribeGroupEvents(func(ev node.GroupEvent) { b.emit("group:event", ev) })
 	api.OnPeerState(func(ev node.PeerStateDTO) { b.emit("peer:state", ev) })
+	// the call events the desktop forwards (app.go)
+	api.SetupStreamInfoCallback(func(info dto.StreamInfoDTO) { b.emit("call:stream_announced", info) })
+	api.SetupCallCallbacks(
+		func(speaker string, speaking bool, db float32) {
+			b.emit("call:active_speaker", map[string]any{"speaker": speaker, "speaking": speaking, "db": db})
+		},
+		nil,
+		func(streamID string) { b.emit("call:stream_closed", map[string]any{"streamId": streamID}) },
+		func(epoch uint64, coordinator string) {
+			b.emit("call:topology_updated", map[string]any{"epoch": epoch, "coordinator": coordinator})
+			b.emit("call:roster", api.GetCallRoster())
+		},
+	)
+	api.SetupCallMediaCallbacks(
+		func(slot dto.CallMediaSlotDTO) { b.emit("call:media_slot", slot) },
+		func(reason string) { b.emit("call:kicked", map[string]any{"reason": reason}) },
+	)
+	inbox := api.MessageHandler()
+	go func() {
+		for m := range inbox {
+			if callID, coordinator, ok := node.ParseCallInvite(m.Text); ok && !m.IsMine {
+				b.emit("call:incoming", map[string]any{"callId": callID, "coordinator": coordinator, "from": m.SenderID, "timestamp": m.Timestamp})
+			}
+		}
+	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/call/", b.call)
 	mux.HandleFunc("/events", b.events)

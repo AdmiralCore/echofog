@@ -46,11 +46,13 @@ type DispatcherStats struct {
 
 // StreamCounters is what one stream did on this node, for the summary logged when a call ends.
 type StreamCounters struct {
-	UnitsSent     uint64 // units this node broadcast on its own stream
-	Delivered     uint64 // video units decrypted and played here
-	Lost          uint64 // gaps that outlived the reorder window (each costs a keyframe request)
-	Nacked        uint64 // lost units this node asked its parent to resend
-	Retransmitted uint64 // fragments resent to children from the ring
+	UnitsSent      uint64 // units this node broadcast on its own stream
+	Delivered      uint64 // video units decrypted and played here
+	Lost           uint64 // gaps that outlived the reorder window (each costs a keyframe request)
+	Nacked         uint64 // lost units this node asked its parent to resend
+	Retransmitted  uint64 // fragments resent to children from the ring
+	SoundSent      uint64 // units of the stream's sound this node broadcast (a shared screen's audio)
+	SoundDelivered uint64 // units of the stream's sound decrypted and played here
 }
 
 // MediaDispatcher forwards media fragments along the call trees and delivers decrypted units
@@ -334,6 +336,9 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 		// it rides the stream tree, so it reaches the consumer the way video does; the consumer
 		// tells the two apart by Kind. No loss tracking: lost sound is not worth a keyframe.
 		d.audioDelivered.Add(1)
+		d.mu.Lock()
+		d.streamLocked(p.StreamID).SoundDelivered++
+		d.mu.Unlock()
 		d.consumer.OnLocalVideo(&unit)
 		return
 	}
@@ -452,6 +457,11 @@ func (d *MediaDispatcher) StreamStats() map[string]StreamCounters {
 	for id, ctr := range d.videoSeq {
 		c := out[id]
 		c.UnitsSent = uint64(ctr.Load())
+		out[id] = c
+	}
+	for id, ctr := range d.streamAudioSeq {
+		c := out[id]
+		c.SoundSent = uint64(ctr.Load())
 		out[id] = c
 	}
 	return out

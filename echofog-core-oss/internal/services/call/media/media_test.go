@@ -592,6 +592,7 @@ func TestMediaDispatcher_StreamAudioFollowsTheStreamTree(t *testing.T) {
 	assert.Equal(t, int32(0), losses.Load(), "a gap in stream audio is not video loss")
 	sent, _, _ := d.ring.lookup("s1", 9, 0, time.Now())
 	assert.Empty(t, sent, "stream audio is not kept for NACKs")
+	assert.Equal(t, uint64(2), d.StreamStats()["s1"].SoundDelivered, "the summary counts the sound played here")
 }
 
 func TestMediaDispatcher_BroadcastLocalStreamAudio(t *testing.T) {
@@ -616,4 +617,5 @@ func TestMediaDispatcher_BroadcastLocalStreamAudio(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, FrameStreamAudio, p.Kind)
 	assert.Equal(t, "s1", p.StreamID)
+	assert.Equal(t, uint64(1), d.StreamStats()["s1"].SoundSent, "the summary counts the sound sent")
 }
