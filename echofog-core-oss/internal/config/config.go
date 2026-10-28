@@ -66,13 +66,13 @@ const (
 )
 
 // DefaultBootstrapNodes are the public nodes a fresh install joins the network through
-// ("host:port/<peer id>"). Operators add their own with the bootstrap option of the node, and app
+// ("host:port/<peer id>?sni=<site it imitates>&srv=1", so the very first dial is disguised). Operators add their own with the bootstrap option of the node, and app
 // users in Settings. The name stays valid when the node moves to another server; the addresses
 // still work where its DNS is blocked.
 var DefaultBootstrapNodes = []string{
-	"34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d",
-	"34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0",
-	"echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d",
+	"34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1",
+	"34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0?sni=aifraud.ru&srv=1",
+	"echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1",
 }
 
 // SeedNodes adds seed nodes at build time, comma-separated host:port/peerid (the host may be a

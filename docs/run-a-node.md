@@ -170,9 +170,9 @@ hand to get TCP and the disguise.
 ## Join the network
 
 - **Built-in nodes.** The build carries public entry nodes of the project to join through:
-  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`,
-  `34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0` and
-  `echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
+  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1`,
+  `34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0?sni=aifraud.ru&srv=1` and
+  `echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1`
   (`DefaultBootstrapNodes` in `internal/config/config.go`); a release can add more at build time
   (`-ldflags "-X github.com/echofog/echofog-core/internal/config.SeedNodes=host:port/<peer id>,..."`).
   Without `--bootstrap` the node joins through these. The name is resolved when the node starts,

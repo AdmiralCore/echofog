@@ -171,9 +171,9 @@ sudo ufw allow 4242/tcp
 ## Подключение к сети
 
 - **Встроенные ноды.** В сборке есть публичные ноды проекта, через которые можно входить в сеть:
-  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`,
-  `34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0` и
-  `echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d`
+  `34.158.189.116:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1`,
+  `34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0?sni=aifraud.ru&srv=1` и
+  `echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1`
   (`DefaultBootstrapNodes` в `internal/config/config.go`); релиз может добавить ещё при сборке
   (`-ldflags "-X github.com/echofog/echofog-core/internal/config.SeedNodes=host:port/<ключ>,..."`).
   Без `--bootstrap` нода входит через них. Имя разрешается при запуске, поэтому оно продолжает
