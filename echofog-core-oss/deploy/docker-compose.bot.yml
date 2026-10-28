@@ -1,0 +1,18 @@
+# A Telegram bot next to the node: it hands out passes (personal links with a term) and, if you set
+# a price, sells them for Telegram Stars. It talks to the node's operator API inside this compose
+# network, so no port is published. Settings are in .env (TG_* and ECHOFOG_API_*), see
+# deploy/tg-bot/README.md.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.bot.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.bot.yml logs -f bot
+services:
+  bot:
+    build: ./tg-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ECHOFOG_API_URL: http://node:8090/api/v1
+    depends_on: [node]
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }

@@ -148,6 +148,10 @@ curl -s -H "Authorization: Bearer $T" -X POST http://127.0.0.1:8090/api/v1/passe
 
 ### A Telegram bot that sells a monthly subscription
 
+There is a ready one: [echofog-core-oss/deploy/tg-bot](../echofog-core-oss/deploy/tg-bot/README.md).
+It hands out passes to the people you name and, if you set a price, sells them for Telegram Stars.
+It starts with one more compose file next to the node. How it works inside:
+
 1. A user writes `/buy` to your bot. The bot shows a payment button of whatever payment service
    you use.
 2. The payment service tells the bot the payment went through.
