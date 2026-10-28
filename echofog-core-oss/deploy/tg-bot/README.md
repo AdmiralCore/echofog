@@ -62,8 +62,10 @@ mode.
 | `/my` | anyone | their own pass and link |
 | `/paysupport` | anyone | a question about a payment |
 
-The texts people see are in Russian. They are right in `bot.py`; change them as you like, then run
-`up -d --build` again.
+The bot answers in Russian to people whose Telegram is set to Russian (or Ukrainian, Belarusian,
+Kazakh) and in English to everybody else. `TG_LANG=en` or `TG_LANG=ru` in `.env` fixes one language
+for everybody. The texts are in `TEXT` at the top of `bot.py`; change them or add a language, then
+run `up -d --build` again.
 
 ## Worth knowing
 

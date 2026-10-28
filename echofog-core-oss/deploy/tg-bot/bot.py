@@ -6,7 +6,9 @@
 /refund USER CHARGE (admins) give the Stars back and revoke that user's pass
 /buy                TG_DAYS days for TG_STARS_PRICE Stars (off while the price is 0)
 /my                 your own pass and its link
-See README.md next to this file. The texts people see are in Russian; change them freely.
+It answers in Russian to people whose Telegram is in Russian (or Ukrainian, Belarusian, Kazakh)
+and in English to everybody else; TG_LANG=ru or en fixes one. The texts are in TEXT below.
+See README.md next to this file.
 """
 import asyncio
 import os
@@ -23,8 +25,45 @@ ADMINS = {int(x) for x in os.environ.get("TG_ADMIN_IDS", "").replace(" ", "").sp
 PRICE = int(os.environ.get("TG_STARS_PRICE", "0"))
 DAYS = float(os.environ.get("TG_DAYS", "30"))
 DEVICES = int(os.environ.get("TG_DEVICES", "2"))
-STATES = {"active": "действует", "expired": "срок вышел", "used_up": "трафик кончился", "revoked": "отозван"}
+LANG = os.environ.get("TG_LANG", "")
+
+TEXT = {
+    "ru": {
+        "my": "/my — ваш пропуск и ссылка", "buy": "/buy — {days:g} дней VPN за {price} ⭐",
+        "support": "/paysupport — вопрос по оплате",
+        "admin": "Админ: /pass ИМЯ [ДНЕЙ], /revoke ID, /list, /refund USER CHARGE",
+        "active": "действует", "expired": "срок вышел", "used_up": "трафик кончился", "revoked": "отозван",
+        "until": "до", "no_end": "бессрочно", "devices": "устройств {n} из {max}",
+        "how": "В EchoFog: Прокси → Конкретная нода → вставьте ссылку.",
+        "pass_usage": "/pass ИМЯ [ДНЕЙ]", "none": "Пропусков пока нет.", "no_pass": "У вас пока нет пропуска.",
+        "not_sold": "Здесь пропуска не продаются.", "invoice": "{days:g} дней, устройств: {devices}",
+        "thanks": "Спасибо! ", "refund_usage": "/refund USER CHARGE (их присылает бот при каждой оплате)",
+        "refunded": "Звёзды возвращены, пропуск отозван.",
+        "paysupport": "Напишите владельцу бота: оплату можно вернуть.", "failed": "Не получилось: {e}",
+    },
+    "en": {
+        "my": "/my — your pass and its link", "buy": "/buy — {days:g} days of VPN for {price} ⭐",
+        "support": "/paysupport — a question about a payment",
+        "admin": "Admin: /pass NAME [DAYS], /revoke ID, /list, /refund USER CHARGE",
+        "active": "active", "expired": "expired", "used_up": "traffic used up", "revoked": "revoked",
+        "until": "until", "no_end": "no end", "devices": "devices {n} of {max}",
+        "how": "In EchoFog: Proxy → Specific node → paste the link.",
+        "pass_usage": "/pass NAME [DAYS]", "none": "No passes yet.", "no_pass": "You have no pass yet.",
+        "not_sold": "Passes are not sold here.", "invoice": "{days:g} days, {devices} devices",
+        "thanks": "Thank you! ", "refund_usage": "/refund USER CHARGE (the bot sends them with every payment)",
+        "refunded": "Stars refunded, pass revoked.",
+        "paysupport": "Write to the owner of this bot: a payment can be refunded.", "failed": "That did not work: {e}",
+    },
+}
 dp = Dispatcher()
+
+
+def t(user, key, **kw):
+    """The text key in the language of user's Telegram."""
+    lang = LANG if LANG in TEXT else "en"
+    if LANG not in TEXT and (getattr(user, "language_code", None) or "").lower().startswith(("ru", "uk", "be", "kk")):
+        lang = "ru"
+    return TEXT[lang][key].format(**kw)
 
 
 async def call(method, path, body=None):
@@ -47,12 +86,12 @@ async def grant(label, days):
     return await call("POST", f"/passes/{old['id']}/extend", {"days": days})
 
 
-def card(p):
-    term = "до " + datetime.fromtimestamp(p["expires"]).strftime("%d.%m.%Y") if p.get("expires") else "бессрочно"
-    state = STATES.get(p["state"], p["state"])
-    return (f"{p['label']}: {state}, {term}, устройств {len(p['devices'])} из {p['maxDevices']}\n"
-            f"ID {p['id']}\n\n<code>{p['link']}</code>\n\n"
-            "В EchoFog: Прокси → Конкретная нода → вставьте ссылку.")
+def card(user, p):
+    end = p.get("expires")
+    term = t(user, "until") + " " + datetime.fromtimestamp(end).strftime("%d.%m.%Y") if end else t(user, "no_end")
+    devices = t(user, "devices", n=len(p["devices"]), max=p["maxDevices"])
+    return (f"{p['label']}: {t(user, p['state'])}, {term}, {devices}\nID {p['id']}\n\n"
+            f"<code>{p['link']}</code>\n\n{t(user, 'how')}")
 
 
 def admin(m: Message):
@@ -61,47 +100,47 @@ def admin(m: Message):
 
 @dp.message(Command("start", "help"))
 async def start(m: Message):
-    text = "/my — ваш пропуск и ссылка"
-    if PRICE:
-        text = f"/buy — {DAYS:g} дней VPN за {PRICE} ⭐\n{text}\n/paysupport — вопрос по оплате"
-    if admin(m):
-        text += "\n\nАдмин: /pass ИМЯ [ДНЕЙ], /revoke ID, /list, /refund USER CHARGE"
-    await m.answer(text)
+    u = m.from_user
+    lines = ([t(u, "buy", days=DAYS, price=PRICE)] if PRICE else []) + [t(u, "my")]
+    lines += [t(u, "support")] if PRICE else []
+    lines += ["", t(u, "admin")] if admin(m) else []
+    await m.answer("\n".join(lines))
 
 
 @dp.message(Command("pass"), admin)
 async def give(m: Message, command: CommandObject):
     args = (command.args or "").split()
     if not args:
-        return await m.answer("/pass ИМЯ [ДНЕЙ]")
+        return await m.answer(t(m.from_user, "pass_usage"))
     days = float(args[1]) if len(args) > 1 else 0
-    await m.answer(card(await grant("friend:" + args[0], days)), parse_mode="HTML")
+    await m.answer(card(m.from_user, await grant("friend:" + args[0], days)), parse_mode="HTML")
 
 
 @dp.message(Command("revoke"), admin)
 async def revoke(m: Message, command: CommandObject):
-    await m.answer(card(await call("POST", f"/passes/{command.args}/revoke")), parse_mode="HTML")
+    await m.answer(card(m.from_user, await call("POST", f"/passes/{command.args}/revoke")), parse_mode="HTML")
 
 
 @dp.message(Command("list"), admin)
 async def listing(m: Message):
-    passes = await call("GET", "/passes")
-    lines = [f"{p['id']}  {STATES.get(p['state'], p['state'])}  {p['label']}" for p in passes]
-    await m.answer("\n".join(lines) or "Пропусков пока нет.")
+    lines = [f"{p['id']}  {t(m.from_user, p['state'])}  {p['label']}" for p in await call("GET", "/passes")]
+    await m.answer("\n".join(lines) or t(m.from_user, "none"))
 
 
 @dp.message(Command("my"))
 async def my(m: Message):
     p = await pass_of(f"tg:{m.from_user.id}")
-    await m.answer(card(p) if p else "У вас пока нет пропуска." + (" /buy" if PRICE else ""), parse_mode="HTML")
+    text = card(m.from_user, p) if p else t(m.from_user, "no_pass") + (" /buy" if PRICE else "")
+    await m.answer(text, parse_mode="HTML")
 
 
 @dp.message(Command("buy"))
 async def buy(m: Message, bot: Bot):
     if not PRICE:
-        return await m.answer("Здесь пропуска не продаются.")
-    await bot.send_invoice(m.chat.id, title="EchoFog VPN", description=f"{DAYS:g} дней, устройств: {DEVICES}",
-                           payload="pass", currency="XTR", prices=[LabeledPrice(label="VPN", amount=PRICE)])
+        return await m.answer(t(m.from_user, "not_sold"))
+    text = t(m.from_user, "invoice", days=DAYS, devices=DEVICES)
+    await bot.send_invoice(m.chat.id, title="EchoFog VPN", description=text, payload="pass",
+                           currency="XTR", prices=[LabeledPrice(label="VPN", amount=PRICE)])
 
 
 @dp.pre_checkout_query()
@@ -112,31 +151,31 @@ async def checkout(q: PreCheckoutQuery):
 @dp.message(F.successful_payment)
 async def paid(m: Message, bot: Bot):
     p = await grant(f"tg:{m.from_user.id}", DAYS)
-    await m.answer("Спасибо! " + card(p), parse_mode="HTML")
+    await m.answer(t(m.from_user, "thanks") + card(m.from_user, p), parse_mode="HTML")
     for a in ADMINS:  # what /refund needs, if it comes to that
-        await bot.send_message(a, f"Оплата: /refund {m.from_user.id} {m.successful_payment.telegram_payment_charge_id}")
+        await bot.send_message(a, f"⭐ {PRICE}: /refund {m.from_user.id} {m.successful_payment.telegram_payment_charge_id}")
 
 
 @dp.message(Command("refund"), admin)
 async def refund(m: Message, command: CommandObject, bot: Bot):
     args = (command.args or "").split()
     if len(args) != 2:
-        return await m.answer("/refund USER CHARGE (их присылает бот при каждой оплате)")
+        return await m.answer(t(m.from_user, "refund_usage"))
     await bot.refund_star_payment(int(args[0]), args[1])
     if p := await pass_of(f"tg:{args[0]}"):
         await call("POST", f"/passes/{p['id']}/revoke")
-    await m.answer("Звёзды возвращены, пропуск отозван.")
+    await m.answer(t(m.from_user, "refunded"))
 
 
 @dp.message(Command("paysupport"))
 async def support(m: Message):
-    await m.answer("Напишите владельцу бота: оплату можно вернуть.")
+    await m.answer(t(m.from_user, "paysupport"))
 
 
 @dp.errors()
 async def failed(event):
     if msg := getattr(event.update, "message", None):
-        await msg.answer(f"Не получилось: {event.exception}")
+        await msg.answer(t(msg.from_user, "failed", e=event.exception))
 
 
 if __name__ == "__main__":
