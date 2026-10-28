@@ -45,6 +45,8 @@ type EchoFogDHT struct {
 	dialsMu sync.Mutex
 	dials   map[types.PeerID]*dialAttempt // dials in progress, one per peer (see dialOnce)
 
+	proxy proxyState // lookups run for users' nodes (proxy.go)
+
 	pending sync.Map
 
 	quotasMu   sync.Mutex

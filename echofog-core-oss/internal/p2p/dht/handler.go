@@ -1,6 +1,7 @@
 package dht
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -42,8 +43,21 @@ func (d *EchoFogDHT) HandleFindNode(msg *internal_pb.MessageData, peerID types.P
 		d.routingTable.AddOrUpdatePeer(p.PubKey(), p.Addr())
 	}
 
-	peerInfos := d.closestInfos(targetID, peerID)
+	if d.proxyLookup(peerID, func(ctx context.Context) {
+		lk := d.newLookup(targetID, nil, nil)
+		lk.exclude(peerID)
+		peerInfos := d.infosOf(lk.run(ctx).closest, peerID)
+		if len(peerInfos) == 0 {
+			peerInfos = d.closestInfos(targetID, peerID)
+		}
+		d.sendFindNodeRes(msg, peerID, peerInfos)
+	}) {
+		return
+	}
+	d.sendFindNodeRes(msg, peerID, d.closestInfos(targetID, peerID))
+}
 
+func (d *EchoFogDHT) sendFindNodeRes(msg *internal_pb.MessageData, peerID types.PeerID, peerInfos []*internal_pb.PeerInfo) {
 	resMsg := &internal_pb.MessageData{
 		MessageId: msg.MessageId,
 		OriginId:  d.routingTable.myID[:],
@@ -132,12 +146,32 @@ func (d *EchoFogDHT) HandleFindValue(msg *internal_pb.MessageData, peerID types.
 		resPayload.Record = rec
 	}
 
+	if resPayload.Record == nil && d.proxyLookup(peerID, func(ctx context.Context) {
+		lk := d.newLookup(targetOf(req.TargetKey), req.TargetKey, nil)
+		lk.exclude(peerID)
+		res := lk.run(ctx)
+		if res.record != nil {
+			resPayload.Record = res.record
+		} else if infos := d.infosOf(res.closest, peerID); len(infos) > 0 {
+			resPayload.ClosestPeers = infos
+		} else {
+			resPayload.ClosestPeers = d.closestInfos(targetOf(req.TargetKey), peerID)
+		}
+		d.sendFindValueRes(msg, peerID, resPayload)
+	}) {
+		return
+	}
+
 	if resPayload.Record == nil {
 		// the same place in the ID space the asker walks toward: a key such as "bundle:<id>"
 		// is no ID, and read as one it would point every referral at the zero ID
 		resPayload.ClosestPeers = d.closestInfos(targetOf(req.TargetKey), peerID)
 	}
 
+	d.sendFindValueRes(msg, peerID, resPayload)
+}
+
+func (d *EchoFogDHT) sendFindValueRes(msg *internal_pb.MessageData, peerID types.PeerID, resPayload *internal_pb.FindValueRes) {
 	resMsg := &internal_pb.MessageData{
 		MessageId: msg.MessageId,
 		TargetId:  peerID[:],

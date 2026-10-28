@@ -705,7 +705,7 @@ func (n *Node) Start() (err error) {
 	}
 	n.Swarm.SetBootstrapNodes(boot)
 	if len(boot) > 0 {
-		n.Swarm.Bootstrap(boot)
+		n.Swarm.ConnectBootstrap(boot)
 	}
 
 	n.Scheduler = scheduler.New(n.Ctx, n.Logger.With("component", "scheduler"))

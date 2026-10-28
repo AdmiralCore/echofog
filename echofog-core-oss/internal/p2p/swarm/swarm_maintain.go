@@ -128,6 +128,19 @@ func offersRelay(c handshake.Capability) bool {
 // relays or signals (without one, a node behind a NAT cannot be reached by anybody).
 func (s *Swarm) NeedsPeers() bool {
 	peers := s.GetAllPeers()
+	if s.GuardModeActive() {
+		// the node asks its guards for the rest of the network: it is short when none is up, or
+		// none relays (the guards add themselves, see maintainGuards)
+		if s.guardsUp() == 0 {
+			return true
+		}
+		for _, p := range peers {
+			if p.Signals() {
+				return false
+			}
+		}
+		return true
+	}
 	if len(peers) < MinPeers {
 		return true
 	}
@@ -157,6 +170,9 @@ func (s *Swarm) MaintainPeers() int {
 	if !s.AutoDial() {
 		return 0
 	}
+	if s.GuardModeActive() {
+		s.maintainGuards()
+	}
 	if !s.NeedsPeers() {
 		s.maint.reset()
 		return 0
@@ -165,7 +181,7 @@ func (s *Swarm) MaintainPeers() int {
 		return 0
 	}
 	boot := s.BootstrapNodes()
-	s.Bootstrap(boot)
+	s.ConnectBootstrap(boot)
 
 	cands := s.historyCandidates(historyDials)
 	s.sourcesMu.RLock()
@@ -233,6 +249,9 @@ func (s *Swarm) dialCandidates(cands []DialCandidate) {
 		}
 		if s.ThisIsActivePeer(c.ID) {
 			continue
+		}
+		if s.guardDialRefused(c.ID, c.Addr) {
+			continue // guard mode: this one is learned about from the guards, not dialed
 		}
 		if max := s.maxConnections(); max > 0 && len(s.GetAllPeers()) >= max {
 			break

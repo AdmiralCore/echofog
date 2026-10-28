@@ -29,7 +29,10 @@ func (n *testNode) addr() string { return n.tr.Addr().String() }
 
 // newTestNode runs a swarm on loopback with a DHT routed to it, as the node does. Peer exchange
 // and the maintainer do not dial: these tests build their topology by hand.
-func newTestNode(t *testing.T) *testNode {
+func newTestNode(t *testing.T) *testNode { return newTestNodeRole(t, "") }
+
+// newTestNodeRole is newTestNode with the node in the given role (config.RoleServer for a server).
+func newTestNodeRole(t *testing.T, role string) *testNode {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	im, st := testutil.SetupTestIdentity(t)
@@ -49,6 +52,7 @@ func newTestNode(t *testing.T) *testNode {
 	go disp.Start()
 	cfg := config.DefaultConfig("")
 	cfg.Network.NoAutoDial = true
+	cfg.Role = role
 	sw := swarm.NewSwarm(ctx, tr, id, disp, im, tr.ConnChan(), st.St, cfg)
 	d := NewEchoFogDHT(NewRoutingTable(sw.GetMyPubKey(), st.St, sw), sw)
 	for _, typ := range d.GetSubscribedTypes() {

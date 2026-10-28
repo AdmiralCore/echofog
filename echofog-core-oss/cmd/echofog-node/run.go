@@ -36,6 +36,7 @@ type options struct {
 	wsListen, wsPath     string
 	advertisePort        int
 	obfs                 string
+	guardMode            string
 	stealthPassword      string
 	obfsPassword         string
 	tlsServerName        string
@@ -103,6 +104,7 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.wsPath, "ws-path", getEnv("ECHOFOG_WS_PATH", ""), "HTTP path the WebSocket endpoint answers on (default /echofog)")
 	f.IntVar(&o.advertisePort, "advertise-port", int(envInt64("ECHOFOG_ADVERTISE_PORT", 0)), "public port peers use to reach this node when it differs from the listen port (e.g. 443 when a port map publishes host 443 to this node); 0 = the listen port")
 	f.StringVar(&o.obfs, "obfs", getEnv("ECHOFOG_OBFS", ""), "UDP obfuscation: node (default; keys derive from each node's peer ID) or off")
+	f.StringVar(&o.guardMode, "guard-mode", getEnv("ECHOFOG_GUARD_MODE", ""), "guard mode of a user's node: auto (default; on for every node that is not a server), on or off. On: two or three camouflaged guard servers carry its links across a border, instead of a mesh of its own (docs/anti-dpi.md)")
 	f.StringVar(&o.stealthPassword, "stealth-password", getEnv("ECHOFOG_STEALTH_PASSWORD", ""), "optional extra secret for a private network (TCP camouflage); every node of that network must use the same")
 	f.StringVar(&o.obfsPassword, "obfs-password", getEnv("ECHOFOG_OBFS_PASSWORD", ""), "optional extra secret for a private network (UDP obfuscation); every node of that network must use the same")
 	f.StringVar(&o.tonNetwork, "ton-network", getEnv("ECHOFOG_TON_NETWORK", ""), "TON network of the node's wallet: testnet or mainnet (default: "+config.DefaultTonNetwork+")")
@@ -227,6 +229,9 @@ func (o options) config() *config.AppConfig {
 	if o.obfs != "" {
 		cfg.AntiDPI.Obfs = o.obfs
 	}
+	if o.guardMode != "" {
+		cfg.AntiDPI.GuardMode = o.guardMode
+	}
 	cfg.AntiDPI.ObfsPassword = o.obfsPassword
 	cfg.AntiDPI.StealthPassword = o.stealthPassword
 	switch o.tonNetwork {
@@ -313,6 +318,9 @@ func runCmd(args []string) int {
 	}
 	if o.obfs != "" && o.obfs != config.ObfsNode && o.obfs != config.ObfsOff {
 		fatal("--obfs: %q is not node or off", o.obfs)
+	}
+	if g := o.guardMode; g != "" && g != config.GuardAuto && g != config.GuardOn && g != config.GuardOff {
+		fatal("--guard-mode: %q is not auto, on or off", g)
 	}
 	price, err := parsePricePerGB(o.exitPrice)
 	if err != nil {

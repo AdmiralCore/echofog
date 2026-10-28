@@ -28,6 +28,8 @@ const (
 
 	// nodeQueryTimeout is how long a connected peer gets to answer one query.
 	nodeQueryTimeout = 2 * time.Second
+	// guardQueryTimeout is how long a guard gets: a lookup it runs for us (see proxy.go).
+	guardQueryTimeout = 6 * time.Second
 	// lookupDialWait is how long a lookup waits to connect to a peer it was referred to.
 	lookupDialWait = 2 * time.Second
 
@@ -87,6 +89,11 @@ type queryResult struct {
 	nodes  []*PeerNode
 	record *internal_pb.DhtRecord
 	err    error
+}
+
+// exclude keeps a peer out of the lookup: it is never asked and never named in the result.
+func (l *lookup) exclude(id types.PeerID) {
+	l.index[id] = &candidate{node: &PeerNode{ID: id}, state: candFailed}
 }
 
 // newLookup starts from the K closest peers in the table and every peer connected now: in a
@@ -293,7 +300,11 @@ func (l *lookup) ask(ctx context.Context, c *candidate) queryResult {
 		out.err = err
 		return out
 	}
-	qctx, cancel := context.WithTimeout(ctx, nodeQueryTimeout)
+	wait := nodeQueryTimeout
+	if d.swarm.IsGuard(p.ID) {
+		wait = guardQueryTimeout // the guard walks the DHT for us before it answers
+	}
+	qctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	select {
 	case res := <-nodeCh:
@@ -336,10 +347,12 @@ func (d *EchoFogDHT) dialOnce(ctx context.Context, id types.PeerID, addr string)
 		d.dials[id] = a
 		go func() {
 			dialCtx, cancel := context.WithTimeout(context.Background(), lookupDialWait)
-			a.err = d.swarm.AddPotentialPeerWithCtx(dialCtx, id, addr)
+			a.err = d.swarm.DialMeshPeer(dialCtx, id, addr)
 			cancel()
-			// a verdict on the peer only when this node could dial at all
-			if a.err != nil && !errors.Is(a.err, swarm.ErrIsolated) && len(d.swarm.GetAllPeers()) > 0 {
+			// a verdict on the peer only when this node could dial at all, and did: a dial that
+			// guard mode held back says nothing about the peer
+			if a.err != nil && !errors.Is(a.err, swarm.ErrIsolated) && !errors.Is(a.err, swarm.ErrGuardDialRefused) &&
+				!errors.Is(a.err, swarm.ErrNoiseDialRefused) && len(d.swarm.GetAllPeers()) > 0 {
 				d.markUnreachable(id, addr)
 			}
 			d.dialsMu.Lock()
@@ -447,8 +460,13 @@ func (d *EchoFogDHT) takeInfos(infos []*internal_pb.PeerInfo) []*PeerNode {
 // closestInfos is what this node answers a lookup toward target with: the K closest peers it
 // knows whose address the policy lets out, never the asker.
 func (d *EchoFogDHT) closestInfos(target, asker types.PeerID) []*internal_pb.PeerInfo {
+	return d.infosOf(d.routingTable.GetClosestPeers(target, K+1), asker)
+}
+
+// infosOf turns peers into the entries of an answer: at most K, never the asker, only addresses
+// the policy lets out, each with its camouflage SNI and role.
+func (d *EchoFogDHT) infosOf(closest []*PeerNode, asker types.PeerID) []*internal_pb.PeerInfo {
 	policy := d.routingTable.AddrPolicy()
-	closest := d.routingTable.GetClosestPeers(target, K+1)
 	out := make([]*internal_pb.PeerInfo, 0, len(closest))
 	for _, p := range closest {
 		if len(out) == K {

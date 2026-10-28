@@ -63,6 +63,11 @@ const (
 const (
 	ObfsNode = "node"
 	ObfsOff  = "off"
+
+	// anti_dpi.guard_mode values
+	GuardAuto = "auto"
+	GuardOn   = "on"
+	GuardOff  = "off"
 )
 
 // DefaultBootstrapNodes are the public nodes a fresh install joins the network through
@@ -233,6 +238,15 @@ type AntiDPIConfig struct {
 	// flags, so the client waits for the SNI (it arrives with the address) or does not dial. Turn it
 	// on to reach your own servers that have no cover site, from a network that does not censor.
 	AllowNoiseToServers bool `json:"allow_noise_to_servers,omitempty"`
+	// GuardMode keeps a user's node from building a mesh of its own across a censoring border: it
+	// holds links to two or three camouflaged guard servers (REALITY over QUIC, or browser TLS over
+	// TCP), picked from the known servers and kept for weeks, and asks them for what the mesh would
+	// have been dialed for (peer exchange, DHT lookups; a guard walks the DHT on the user's behalf).
+	// "auto" (the default) and "on" engage it on every node that is not in the server role; "off"
+	// leaves the mesh dialing as it was. Peers on the local network, and in the home region where
+	// region_aware_obfs allows it, are dialed directly either way; a country that cannot be placed
+	// counts as across the border.
+	GuardMode string `json:"guard_mode,omitempty"`
 }
 
 // FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
@@ -461,7 +475,8 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.AntiDPI.FlowShaping = DefaultFlowShapingConfig()
 	cfg.AntiDPI.TunnelPadding = true
 	cfg.AntiDPI.RegionAwareObfs = false // opt-in: safe only where domestic traffic is not censored
-	cfg.AntiDPI.MicroChunkTCP = false   // opt-in: only helps where the TSPU ~16 KB TCP freeze runs
+	cfg.AntiDPI.GuardMode = GuardAuto
+	cfg.AntiDPI.MicroChunkTCP = false // opt-in: only helps where the TSPU ~16 KB TCP freeze runs
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public
 	// TCP/WS listener must set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site
