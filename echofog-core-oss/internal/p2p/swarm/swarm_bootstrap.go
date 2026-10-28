@@ -240,7 +240,9 @@ func (s *Swarm) AddPotentialPeerWithCtx(ctx context.Context, id types.PeerID, ad
 	if err := s.expectPeer(addr, id); err != nil {
 		return err
 	}
-	err := s.dialEarly(ctx, addr)
+	// an annotated address ("host:port?sni=...&srv=1", as mailbox hints carry) is dialed at its
+	// host:port; expectPeer took what the annotations say
+	err := s.dialEarly(ctx, network.ParseAddrInfo(addr).Addr)
 	if err != nil {
 		return err
 	}
