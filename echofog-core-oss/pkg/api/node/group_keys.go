@@ -41,6 +41,7 @@ const (
 	groupEnvPrefix  = "groups/e/"
 	groupCapKey     = "groups/k/_cap"  // peers known to understand version 2
 	groupLogCapKey  = "groups/k/_cap3" // peers known to speak the conversation log (version 3)
+	groupOldKey     = "groups/k/_old"  // peers last heard speaking a version before the log
 
 	envKeepFor  = 7 * 24 * time.Hour // envelopes kept for members who missed them
 	envKeepMax  = 3000               // per group
@@ -121,7 +122,10 @@ func (f *groupsFacade) loadCapable() {
 	if f.logCapable == nil {
 		f.logCapable = map[types.PeerID]bool{}
 	}
-	for key, set := range map[string]map[types.PeerID]bool{groupCapKey: f.capable, groupLogCapKey: f.logCapable} {
+	if f.oldPeers == nil {
+		f.oldPeers = map[types.PeerID]bool{}
+	}
+	for key, set := range map[string]map[types.PeerID]bool{groupCapKey: f.capable, groupLogCapKey: f.logCapable, groupOldKey: f.oldPeers} {
 		raw, err := f.store.Get([]byte(key))
 		if err != nil {
 			continue
@@ -139,10 +143,19 @@ func (f *groupsFacade) loadCapable() {
 
 // noteVersion remembers that peer speaks version v. Call with f.mu held.
 func (f *groupsFacade) noteVersion(peer types.PeerID, v int) {
+	f.loadCapable()
+	if old := v < wireVersion; old != f.oldPeers[peer] {
+		// what keeps a group off the log: a member heard speaking an older version
+		if old {
+			f.oldPeers[peer] = true
+		} else {
+			delete(f.oldPeers, peer)
+		}
+		saveIDs(f.store, groupOldKey, f.oldPeers)
+	}
 	if v < sealedVersion {
 		return
 	}
-	f.loadCapable()
 	if v >= wireVersion && !f.logCapable[peer] {
 		f.logCapable[peer] = true
 		saveIDs(f.store, groupLogCapKey, f.logCapable)

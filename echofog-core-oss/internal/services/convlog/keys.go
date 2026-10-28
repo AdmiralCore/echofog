@@ -17,6 +17,7 @@ const (
 	pfxThread = "cl/t/" // bc/root/lamport/id -> id: a thread, oldest first
 	pfxPin    = "cl/p/" // bc/id           -> id: pinned messages
 	pfxMeta   = "cl/v/" // bc              -> Meta
+	pfxMember = "cl/m/" // bc/lamport/id   -> event bytes: a group's membership history
 )
 
 func (l *Log) bc(c ConvID) string { return storage.BlindID(l.st, "conv:"+c.String()) }
@@ -70,3 +71,9 @@ func pinPrefix(bc string) []byte { return bs(pfxPin + bc + "/") }
 func pinKey(bc, id string) []byte { return bs(pfxPin + bc + "/" + id) }
 
 func metaKey(bc string) []byte { return bs(pfxMeta + bc) }
+
+func memberPrefix(bc string) []byte { return bs(pfxMember + bc + "/") }
+
+func memberKey(bc string, lamport uint64, id string) []byte {
+	return key(memberPrefix(bc), be64(lamport), bs("/"+id))
+}

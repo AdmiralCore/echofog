@@ -14,7 +14,7 @@ func (a *App) ChatList() ([]api.ConversationDTO, error) {
 	if n == nil {
 		return nil, errNodeNotStarted
 	}
-	return n.Conversations()
+	return n.ChatRows()
 }
 
 // ChatHistory is a page of a chat, newest first; pass "" for the newest page and the returned

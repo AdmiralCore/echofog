@@ -1,7 +1,9 @@
 package convlog
 
 import (
+	"encoding/json"
 	"sort"
+	"strings"
 )
 
 // Reg is one last-writer-wins register: the operation with the greatest (L, A, S) wins, the same
@@ -178,6 +180,72 @@ type Message struct {
 	// State is the delivery state of my own message (keys, offline, relayed, sent, delivered),
 	// filled in by the caller from the outbox.
 	State string `json:"state,omitempty"`
+
+	// Kind is what the message is: "text", "file", "call" (an invitation to a call) or "system"
+	// (a line the app wrote itself).
+	Kind string `json:"kind"`
+	// File is the file a file message offers (nil for any other kind, and once deleted).
+	File *FileRef `json:"file,omitempty"`
+	// Can is what I may do with the message, filled in by the caller.
+	Can MsgCan `json:"can"`
+}
+
+// FileRef is a file a message offers: the transfer to fetch it by, its name, size and type.
+type FileRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Mime string `json:"mime,omitempty"`
+}
+
+// MsgCan is what I may do with one message.
+type MsgCan struct {
+	Edit   bool `json:"edit"`
+	Delete bool `json:"delete"`
+	Pin    bool `json:"pin"`
+	React  bool `json:"react"`
+	Reply  bool `json:"reply"`
+}
+
+// Message types the view tells apart (as messenger.PersonalMessageTypeProto).
+const msgTypeFile uint32 = 4
+
+// CallInvitePrefix starts the text of an invitation to a call.
+const CallInvitePrefix = "fogcall://"
+
+// fileOf reads the file a message offers from its metadata: a group file ({"group_file": ...}) or
+// a direct one ({"file_name", "file_size", "mime_type", "custom": {"fid"}}).
+func fileOf(typ uint32, text, metadata string) *FileRef {
+	var meta struct {
+		GroupFile *struct {
+			ID   string      `json:"id"`
+			Name string      `json:"name"`
+			Size json.Number `json:"size"`
+			Mime string      `json:"mime"`
+		} `json:"group_file"`
+		FileName string      `json:"file_name"`
+		FileSize json.Number `json:"file_size"`
+		MimeType string      `json:"mime_type"`
+		Custom   struct {
+			FID string `json:"fid"`
+		} `json:"custom"`
+	}
+	if metadata != "" {
+		_ = json.Unmarshal([]byte(metadata), &meta)
+	}
+	if g := meta.GroupFile; g != nil {
+		n, _ := g.Size.Int64()
+		return &FileRef{ID: g.ID, Name: g.Name, Size: n, Mime: g.Mime}
+	}
+	if typ != msgTypeFile {
+		return nil
+	}
+	name := meta.FileName
+	if name == "" {
+		name = text
+	}
+	n, _ := meta.FileSize.Int64()
+	return &FileRef{ID: meta.Custom.FID, Name: name, Size: n, Mime: meta.MimeType}
 }
 
 // Render resolves the view for display; self is my peer id hex.
@@ -188,9 +256,20 @@ func (v *View) Render(conv, self string) Message {
 		ReplyTo: v.ReplyTo, Thread: v.Thread, Replies: v.Replies, LastReplyAt: v.LastReplyTS,
 		Legacy: v.Legacy, Withheld: v.Withheld, Reactions: []Reaction{},
 	}
+	m.Kind = "text"
+	switch {
+	case v.Type == MsgTypeSystem:
+		m.Kind = "system"
+	case strings.HasPrefix(v.Text, CallInvitePrefix):
+		m.Kind = "call"
+	default:
+		if f := fileOf(v.Type, v.Text, v.Metadata); f != nil {
+			m.Kind, m.File = "file", f
+		}
+	}
 	if del, by := v.deleted(); del {
 		m.Deleted, m.DeletedBy = true, by
-		m.Text, m.Metadata, m.Withheld = "", "", false
+		m.Text, m.Metadata, m.Withheld, m.File = "", "", false, nil
 	} else if e, ok := v.edit(); ok {
 		m.Text, m.Edited, m.EditedAt = e.Text, true, e.TS
 	}

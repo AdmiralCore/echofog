@@ -43,6 +43,21 @@ type ConversationDTO struct {
 	// Upgraded: the chat runs on the log, so replies, threads, edits, deletes, reactions and pins
 	// work. A group runs on it once every member's app does; until then only plain messages.
 	Upgraded bool `json:"upgraded"`
+
+	// Kind is "direct", "group" or "channel"; Name is what the list shows (the contact's alias,
+	// the group's title).
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	// a direct chat: the other side, whether it is connected, whether I blocked it
+	PeerID  string `json:"peerId,omitempty"`
+	PubKey  string `json:"pubKey,omitempty"`
+	Online  bool   `json:"online"`
+	Blocked bool   `json:"blocked"`
+	// a group: my role and how many are in it
+	Role    string `json:"role,omitempty"`
+	Members int    `json:"members,omitempty"`
+	// Can is what I may do in the chat.
+	Can ConvCan `json:"can"`
 }
 
 // ChatPage is one page of a chat or a thread; Next is the cursor of the following page, "" at the
@@ -65,6 +80,10 @@ type ConvChange struct {
 	Ref          ChatRef         `json:"ref"`
 	Conversation ConversationDTO `json:"conversation"`
 	Messages     []ChatMessage   `json:"messages"`
+	// Reload: the whole chat was computed again (a membership change); read it afresh.
+	Reload bool `json:"reload,omitempty"`
+	// Rev grows with every change; one older than the last one seen for a chat is stale.
+	Rev uint64 `json:"rev"`
 }
 
 var (
@@ -93,6 +112,9 @@ type convsFacade struct {
 	mu        sync.Mutex
 	capable   map[types.PeerID]bool
 	lastHello map[types.PeerID]time.Time
+	syncIn    map[types.PeerID]*syncWindow // sync messages taken from each peer lately
+	joinAsked map[string]time.Time         // groups where we asked the log to let us in
+	lastRev   map[convlog.ConvID]uint64    // the newest change handed to the app, per chat
 
 	migMu sync.Mutex // one migration at a time
 }
@@ -121,10 +143,12 @@ func (n *NodeApi) convsFacade() (*convsFacade, error) {
 		return nil, errors.New("identity not available")
 	}
 	f := &convsFacade{n: n, broker: n.node.Messenger, st: n.node.Storage, self: n.node.GetSelfPeerID(),
-		capable: map[types.PeerID]bool{}, lastHello: map[types.PeerID]time.Time{}}
+		capable: map[types.PeerID]bool{}, lastHello: map[types.PeerID]time.Time{},
+		syncIn: map[types.PeerID]*syncWindow{}, joinAsked: map[string]time.Time{}, lastRev: map[convlog.ConvID]uint64{}}
 	f.log = convlog.New(n.node.Storage, pub, n.node.SignIdentity)
-	f.log.SetGroupPolicy(groupPolicy{n: n})
+	f.log.SetGroupRules(groupRules{n: n})
 	f.log.OnChange(f.onChange)
+	n.node.Messenger.OnMessageState(f.noteFinal)
 	n.node.Messenger.SetEventSink(f.sink)
 	n.node.Messenger.AddHandleCallback(f.onPlain)
 	if n.node.Swarm != nil {
@@ -216,6 +240,9 @@ func (f *convsFacade) isCapable(peer types.PeerID) bool {
 func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessageProto, _ bool) bool {
 	f.markCapable(origin)
 	if len(msg.ConvSync) > 0 {
+		if !f.takeSync(origin) {
+			return false // more sync than any honest peer sends: drop it, the next Hello resumes
+		}
 		m, err := convlog.DecodeSync(msg.ConvSync)
 		if err != nil {
 			return false
@@ -229,6 +256,9 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 			if group != "" {
 				if meta, ok := f.log.Meta(convlog.Group(group)); ok && string(meta.Digest()) != string(before) {
 					f.groupHistoryArrived(group)
+					if gf, err := f.n.groupsFacade(); err == nil {
+						f.openGroupMembership(gf, group) // the roster may have come: are we in it?
+					}
 				}
 			}
 		}()
@@ -245,6 +275,9 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 	}
 	kind, _ := convlog.Peek(msg.ConvEvent)
 	if c.Kind == convlog.KindGroup {
+		if fresh {
+			f.spread(c.Group, origin, msg.ConvEvent)
+		}
 		// a group event in a member's own session (the group's epoch was not clean): the group's
 		// listeners hear of a message, the direct chat's do not
 		if fresh && kind == convlog.KindMsg {
@@ -384,6 +417,8 @@ func (f *convsFacade) withStates(c convlog.Conv, msgs []convlog.Message) []convl
 		}
 		if s, ok := pending[msgs[i].ID]; ok {
 			msgs[i].State = s
+		} else if f.expired(msgs[i].ID) {
+			msgs[i].State = messenger.StateExpired
 		} else {
 			msgs[i].State = stateDelivered
 		}
@@ -407,18 +442,40 @@ func (f *convsFacade) conversation(c convlog.Conv, meta convlog.Meta) Conversati
 			d.Request = !f.n.node.IsContact(c.Peer)
 		}
 		d.Upgraded = f.isCapable(c.Peer)
+		d.PubKey = f.pubKeyOf(c.Peer)
 	case convlog.KindGroup:
 		if gf, err := f.n.groupsFacade(); err == nil {
 			d.Title = gf.titleOf(c.Group)
 			d.Upgraded = gf.LogMode(c.Group)
 		}
 	}
+	f.describe(&d, c)
+	if d.Last != nil {
+		d.Last = &f.withCan(c, []convlog.Message{*d.Last}, &d)[0]
+	}
 	return d
 }
 
 func (f *convsFacade) onChange(ch convlog.Change) {
-	out := ConvChange{Ref: refOf(ch.Conv), Conversation: f.conversation(ch.Conv, ch.Meta),
-		Messages: f.withStates(ch.Conv, ch.Messages)}
+	f.mu.Lock()
+	stale := ch.Rev != 0 && ch.Rev < f.lastRev[ch.Conv.ID] && !ch.Rebuilt
+	if ch.Rev > f.lastRev[ch.Conv.ID] {
+		f.lastRev[ch.Conv.ID] = ch.Rev
+	}
+	f.mu.Unlock()
+	if stale {
+		// it lost the race to a newer change of the same chat: its conversation state is old, so
+		// the current one goes with its messages
+		if len(ch.Messages) == 0 {
+			return
+		}
+		if meta, ok := f.log.Meta(ch.Conv); ok {
+			ch.Meta = meta
+		}
+	}
+	conv := f.conversation(ch.Conv, ch.Meta)
+	out := ConvChange{Ref: refOf(ch.Conv), Conversation: conv,
+		Messages: f.withCan(ch.Conv, f.withStates(ch.Conv, ch.Messages), &conv), Reload: ch.Rebuilt, Rev: ch.Rev}
 	f.n.convsH.mu.Lock()
 	subs := append(([]func(ConvChange))(nil), f.n.convsH.subs...)
 	f.n.convsH.mu.Unlock()
@@ -491,28 +548,8 @@ func (f *convsFacade) migrate() {
 
 // --- API -------------------------------------------------------------------------------------
 
-// Conversations lists the chats, most recently active first.
-func (n *NodeApi) Conversations() ([]ConversationDTO, error) {
-	f, err := n.convsFacade()
-	if err != nil {
-		return nil, err
-	}
-	f.migrate()
-	f.migrateGroups()
-	metas, err := f.log.Conversations()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ConversationDTO, 0, len(metas))
-	for _, m := range metas {
-		c, ok := convOfMeta(m)
-		if !ok {
-			continue
-		}
-		out = append(out, f.conversation(c, m))
-	}
-	return out, nil
-}
+// Conversations lists the chats, most recently active first (see ChatRows).
+func (n *NodeApi) Conversations() ([]ConversationDTO, error) { return n.ChatRows() }
 
 func convOfMeta(m convlog.Meta) (convlog.Conv, bool) {
 	id, err := convlog.ParseConvID(m.Conv)
@@ -556,7 +593,7 @@ func (n *NodeApi) ChatHistory(ref ChatRef, cursor string, limit int) (ChatPage, 
 	if err != nil {
 		return ChatPage{}, err
 	}
-	return ChatPage{Messages: f.withStates(c, msgs), Next: next}, nil
+	return ChatPage{Messages: f.dress(c, msgs), Next: next}, nil
 }
 
 // ChatThread returns a page of the thread under root, oldest first.
@@ -573,7 +610,7 @@ func (n *NodeApi) ChatThread(ref ChatRef, root, cursor string, limit int) (ChatP
 	if err != nil {
 		return ChatPage{}, err
 	}
-	return ChatPage{Messages: f.withStates(c, msgs), Next: next}, nil
+	return ChatPage{Messages: f.dress(c, msgs), Next: next}, nil
 }
 
 // ChatPins returns the pinned messages of a chat, most recently pinned first.
@@ -583,7 +620,7 @@ func (n *NodeApi) ChatPins(ref ChatRef) ([]ChatMessage, error) {
 		return nil, err
 	}
 	msgs, err := f.log.Pins(c)
-	return f.withStates(c, msgs), err
+	return f.dress(c, msgs), err
 }
 
 // ChatMessage returns one message.
@@ -600,7 +637,7 @@ func (n *NodeApi) ChatMessage(ref ChatRef, id string) (ChatMessage, error) {
 	if !ok {
 		return convlog.Message{}, convlog.ErrNotFound
 	}
-	return f.withStates(c, []convlog.Message{m})[0], nil
+	return f.dress(c, []convlog.Message{m})[0], nil
 }
 
 // ChatSend sends a message: plain, an answer to another (ReplyTo) or a comment in a thread (Thread).
@@ -633,7 +670,7 @@ func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
 			}
 			f.mirrorGroup(c.Group, d)
 			m, _ := f.log.Message(c, convlog.LegacyID(d.ID))
-			return m, nil
+			return f.dress(c, []convlog.Message{m})[0], nil
 		}
 	}
 	raw, id, err := f.log.AppendMessage(c, req.Text, 0, "", reply, thread)
@@ -642,6 +679,7 @@ func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
 	}
 	state, sendErr := f.sendEvent(c, raw, id, convlog.KindMsg, req.Text, req.ReplyTo)
 	m, _ := f.log.Message(c, id)
+	m = f.dress(c, []convlog.Message{m})[0]
 	if state != "" {
 		m.State = state
 	}
@@ -748,3 +786,48 @@ func pendingOnly(s string) string {
 	}
 	return s
 }
+
+// --- limits and final states ---------------------------------------------------------------
+
+const (
+	syncWindowLen = 10 * time.Second
+	// syncWindowMax: sync messages taken from one peer per window. An honest sync of a few chats
+	// is a handful of Hello/Want/Events; a big history comes in pages paced by our own Wants.
+	syncWindowMax = 40
+)
+
+type syncWindow struct {
+	start time.Time
+	n     int
+}
+
+// takeSync counts a sync message from peer and reports whether it is within the limit.
+func (f *convsFacade) takeSync(peer types.PeerID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w := f.syncIn[peer]
+	now := time.Now()
+	if w == nil || now.Sub(w.start) > syncWindowLen {
+		if len(f.syncIn) > 4096 {
+			f.syncIn = map[types.PeerID]*syncWindow{}
+		}
+		w = &syncWindow{start: now}
+		f.syncIn[peer] = w
+	}
+	w.n++
+	return w.n <= syncWindowMax
+}
+
+func (f *convsFacade) expiredKey(id string) []byte {
+	return []byte("cl/x/exp/" + storage.BlindID(f.st, id))
+}
+
+// noteFinal remembers a message of ours that was given up: it left the outbox without a receipt,
+// and must not look delivered.
+func (f *convsFacade) noteFinal(s messenger.MessageState) {
+	if s.State == messenger.StateExpired && s.ID != "" {
+		_ = f.st.Set(f.expiredKey(s.ID), []byte{1})
+	}
+}
+
+func (f *convsFacade) expired(id string) bool { return f.st.Exists(f.expiredKey(id)) }

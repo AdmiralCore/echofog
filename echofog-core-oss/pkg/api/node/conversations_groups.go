@@ -2,7 +2,9 @@ package node
 
 import (
 	"encoding/hex"
+
 	"encoding/json"
+	"google.golang.org/protobuf/proto"
 	"math/rand/v2"
 	"time"
 
@@ -15,32 +17,65 @@ import (
 // Group chats on the conversation log: who may do what in a group, which group an event names, a
 // group's events and old-style messages, and the sync between members.
 
-// groupPolicy: members take part; admins and moderators pin; who may delete others' messages
-// (moderators) may delete anyone's.
-type groupPolicy struct{ n *NodeApi }
+// groupRules tells the log about our groups: their founders, the roles, and (until a group's log
+// holds its roster) who may do what now.
+type groupRules struct{ n *NodeApi }
 
-func (p groupPolicy) role(c convlog.Conv, a types.PeerID) (groups.Role, bool) {
+func (p groupRules) facade() (*groupsFacade, bool) {
 	gf, err := p.n.groupsFacade()
-	if err != nil {
-		return groups.Role{}, false
+	return gf, err == nil
+}
+
+// Current: members take part and write if their role lets them; admins and moderators pin; who
+// may delete others' messages (moderators) may delete anyone's.
+func (p groupRules) Current(c convlog.Conv, a types.PeerID) convlog.Rights {
+	gf, ok := p.facade()
+	if !ok {
+		return convlog.Rights{}
 	}
-	return gf.role(c.Group, a)
+	r, ok := gf.role(c.Group, a)
+	if !ok {
+		return convlog.Rights{}
+	}
+	return convlog.Rights{Member: true, Send: r.Permissions&groups.PermSendMessages != 0,
+		Pin:      r.Permissions&(groups.PermManageGroup|groups.PermDeleteMessages) != 0,
+		Moderate: r.Permissions&groups.PermDeleteMessages != 0}
 }
 
-func (p groupPolicy) Participant(c convlog.Conv, a types.PeerID) bool {
-	_, ok := p.role(c, a)
-	return ok
+func (p groupRules) Founder(c convlog.Conv) (types.PeerID, bool) {
+	gf, ok := p.facade()
+	if !ok {
+		return types.PeerID{}, false
+	}
+	g, err := gf.mgr.GetGroup(c.Group)
+	if err != nil || groups.VerifyGenesis(g) != nil {
+		return types.PeerID{}, false
+	}
+	return g.Creator, true
 }
 
-func (p groupPolicy) CanPin(c convlog.Conv, a types.PeerID) bool {
-	r, ok := p.role(c, a)
-	return ok && r.Permissions&(groups.PermManageGroup|groups.PermDeleteMessages) != 0
+func (groupRules) Role(name string) (convlog.Role, bool) {
+	r, err := groups.ResolveRole(name)
+	if err != nil {
+		return convlog.Role{}, false
+	}
+	return convlog.Role{Name: r.Name, Rank: r.Rank, Perms: uint32(r.Permissions)}, true
 }
 
-func (p groupPolicy) CanModerate(c convlog.Conv, a types.PeerID) bool {
-	r, ok := p.role(c, a)
-	return ok && r.Permissions&groups.PermDeleteMessages != 0
+func (p groupRules) DefaultRole(c convlog.Conv) string {
+	if gf, ok := p.facade(); ok {
+		if g, err := gf.mgr.GetGroup(c.Group); err == nil && g.Type == groups.GroupTypePublicChannel {
+			return groups.RoleChannelSubscriber.Name
+		}
+	}
+	return groups.RoleMember.Name
 }
+
+// the log's permission bits are the group service's
+var _ = [1]struct{}{}[uint32(groups.PermSendMessages)^convlog.PermSend|
+	uint32(groups.PermDeleteMessages)^convlog.PermDelete|uint32(groups.PermKickMembers)^convlog.PermKick|
+	uint32(groups.PermBanMembers)^convlog.PermBan|uint32(groups.PermManageRoles)^convlog.PermManageRoles|
+	uint32(groups.PermManageGroup)^convlog.PermManageGroup]
 
 // hookGroupsToLog connects the group service to the conversation log: the events that come sealed
 // in group envelopes, the old-style messages (mirrored, so the chat shows everything), the way to
@@ -55,6 +90,7 @@ func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 		if err != nil || !fresh {
 			return
 		}
+		f.spread(groupID, origin, raw)
 		if kind, _ := convlog.Peek(raw); kind == convlog.KindMsg {
 			if e, _, err := convlog.Decode(raw); err == nil {
 				f.groupMessageArrived(groupID, convlog.AuthorID(e), id)
@@ -75,6 +111,13 @@ func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 	}
 	gf.connected = func(id types.PeerID) bool {
 		return n.node != nil && n.node.Swarm != nil && n.node.Swarm.GetPeer(id) != nil
+	}
+	gf.onMember = func(groupID string, b *convlog.MemberBody) {
+		f, err := n.convsFacade()
+		if err != nil {
+			return
+		}
+		f.postMember(groupID, b)
 	}
 	gf.onJoined = func(groupID string, peer types.PeerID) {
 		if f, err := n.convsFacade(); err == nil {
@@ -140,6 +183,7 @@ func (f *convsFacade) antiEntropy() {
 			return
 		case <-time.After(wait):
 		}
+		f.openMembership()
 		f.syncGroups()
 		f.syncDirect()
 		wait = antiEntropyEvery
@@ -303,4 +347,103 @@ func groupDTOOf(groupID string, m convlog.Message) GroupMessageDTO {
 		}
 	}
 	return d
+}
+
+// postMember writes a membership event of ours to a group's log and hands it to the members. One
+// the log does not allow yet (our roster or our own admission has not arrived) is kept and sent
+// all the same: it takes effect once what allows it is in the log.
+func (f *convsFacade) postMember(groupID string, b *convlog.MemberBody) {
+	body, err := proto.Marshal(b)
+	if err != nil {
+		return
+	}
+	c := convlog.Group(groupID)
+	raw, id, err := f.log.AppendKept(c, convlog.Draft{Kind: convlog.KindMember, Body: body})
+	if err != nil || raw == nil {
+		return
+	}
+	_, _ = f.sendEvent(c, raw, id, convlog.KindMember, "", "")
+}
+
+// openMembership has the founder write the roster of each of its groups whose log has none yet,
+// and has us ask to be let in where the log's membership does not have us although the group
+// does (we joined while nobody who may let members in was around).
+func (f *convsFacade) openMembership() {
+	gf, err := f.n.groupsFacade()
+	if err != nil {
+		return
+	}
+	list, err := gf.List()
+	if err != nil {
+		return
+	}
+	for _, g := range list {
+		f.openGroupMembership(gf, g.ID)
+	}
+}
+
+func (f *convsFacade) openGroupMembership(gf *groupsFacade, groupID string) {
+	if !gf.LogMode(groupID) || !gf.isMember(groupID, f.self) {
+		return
+	}
+	c := convlog.Group(groupID)
+	if !f.log.HasRoster(c) {
+		if founder, ok := (groupRules{n: f.n}).Founder(c); ok && founder == f.self {
+			gf.mu.Lock()
+			roster := gf.rosterLocked(groupID)
+			gf.mu.Unlock()
+			if roster != nil {
+				f.postMember(groupID, roster)
+			}
+		}
+		return
+	}
+	if !f.log.Participant(c, f.self) {
+		// once an hour at most: a refusal (a ban) must not fill the log with requests
+		f.mu.Lock()
+		asked := time.Since(f.joinAsked[groupID]) < time.Hour
+		if !asked {
+			f.joinAsked[groupID] = time.Now()
+		}
+		f.mu.Unlock()
+		if !asked {
+			f.postMember(groupID, memberBody(convlog.MemberJoin, gf.selfPub, ""))
+		}
+	}
+}
+
+// spreadFanout is how many members each member hands a big group's fresh event on to.
+const spreadFanout = 3
+
+// spread passes an event that just reached us in a big group on to a few connected members: the
+// author pushes to only pushFanout of them, and without this the others would wait for the next
+// anti-entropy round (minutes). Each member passes an event on once, the first time it has it,
+// so it reaches everybody in a few hops at about spreadFanout messages per member.
+func (f *convsFacade) spread(groupID string, from types.PeerID, raw []byte) {
+	gf, err := f.n.groupsFacade()
+	if err != nil || gf.sendEvent == nil {
+		return
+	}
+	e, _, err := convlog.Decode(raw)
+	if err != nil {
+		return
+	}
+	author := convlog.AuthorID(e)
+	members, err := gf.mgr.GetAuthorizedRecipients(groupID)
+	if err != nil || len(members) <= meshLimit {
+		return
+	}
+	rand.Shuffle(len(members), func(i, j int) { members[i], members[j] = members[j], members[i] })
+	sent := 0
+	for _, m := range members {
+		if sent == spreadFanout {
+			break
+		}
+		if m.PeerID == f.self || m.PeerID == from || m.PeerID == author || gf.connected == nil || !gf.connected(m.PeerID) {
+			continue
+		}
+		if gf.sendEvent(m.PeerID, "", raw, false) == nil {
+			sent++
+		}
+	}
 }

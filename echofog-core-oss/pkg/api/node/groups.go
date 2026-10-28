@@ -50,7 +50,16 @@ type GroupMemberDTO struct {
 	Role     string `json:"role"`
 	JoinedAt int64  `json:"joinedAt"`
 	IsMe     bool   `json:"isMe"`
+	// what I may do to this member: remove, ban, give one of Roles (its present role included),
+	// hand the group over to them
+	CanKick     bool     `json:"canKick"`
+	CanBan      bool     `json:"canBan"`
+	Roles       []string `json:"roles,omitempty"`
+	CanTransfer bool     `json:"canTransfer"`
 }
+
+// assignableRoles are the roles a manager may give, highest first.
+var assignableRoles = []groups.Role{groups.RoleAdmin, groups.RoleModerator, groups.RoleMember, groups.RoleRestricted}
 
 type GroupMessageDTO struct {
 	ID        string        `json:"id"`
@@ -128,11 +137,13 @@ type groupsFacade struct {
 	keyrings   map[string]*senderkeys.Keyring
 	capable    map[types.PeerID]bool // peers that understand sealed messages
 	logCapable map[types.PeerID]bool // peers that speak the conversation log (version 3)
+	oldPeers   map[types.PeerID]bool // peers last heard speaking a version before the log
 	capLoaded  bool
 
 	// the conversation log (conversations.go): a group's events, and its old-style messages so
 	// the chat shows everything in one place
 	onEvent   func(groupID string, origin types.PeerID, raw []byte)
+	onMember  func(groupID string, b *convlog.MemberBody) // a membership change of ours, for the log
 	onLegacy  func(groupID string, m GroupMessageDTO)
 	sendEvent func(target types.PeerID, text string, raw []byte, track bool) error
 	connected func(types.PeerID) bool
@@ -269,7 +280,12 @@ func (f *groupsFacade) Create(title, description, kind string) (GroupDTO, error)
 	}
 	// the first epoch; without it the group still works, the old way
 	_, _ = f.newEpoch(g.GroupID)
-	return f.toDTO(g, 1), nil
+	roster := f.rosterLocked(g.GroupID)
+	dto := f.toDTO(g, 1)
+	f.mu.Unlock()
+	f.memberChange(g.GroupID, roster) // the membership starts on the log
+	f.mu.Lock()
+	return dto, nil
 }
 
 func (f *groupsFacade) List() ([]GroupDTO, error) {
@@ -387,6 +403,7 @@ func (f *groupsFacade) AddMember(groupID, pubKeyHex string) error {
 	}
 	newcomer := wireMember{ID: id.String(), Pub: hex.EncodeToString(ident[:]), Role: "member"}
 	f.broadcast(groupID, groupWire{Kind: "snap", Group: groupID, Members: []wireMember{newcomer}}, id)
+	f.memberChange(groupID, memberBody(convlog.MemberJoin, ident, ""))
 	return nil
 }
 
@@ -400,9 +417,24 @@ func (f *groupsFacade) Members(groupID string) ([]GroupMemberDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+	me, meErr := f.mgr.GetMemberRole(groupID, f.selfID)
 	out := make([]GroupMemberDTO, 0, len(members))
 	for _, m := range members {
-		out = append(out, GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID})
+		d := GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID}
+		if meErr == nil && !d.IsMe {
+			over := groups.CanAdminister(me, m.Role) // the same rules the group service applies
+			d.CanKick = over && groups.HasPermission(me, groups.PermKickMembers)
+			d.CanBan = over && groups.HasPermission(me, groups.PermBanMembers)
+			if over && groups.HasPermission(me, groups.PermManageRoles) {
+				for _, r := range assignableRoles {
+					if groups.CanAssignRole(me, r) || r.Name == m.Role.Name {
+						d.Roles = append(d.Roles, r.Name)
+					}
+				}
+			}
+			d.CanTransfer = me.Rank >= groups.RoleOwner.Rank
+		}
+		out = append(out, d)
 	}
 	return out, nil
 }

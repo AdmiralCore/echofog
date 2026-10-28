@@ -43,6 +43,21 @@ message PinBody {
   bool on = 1;
 }
 
+// MemberBody changes who is in a group and with which role. The group's founder opens its
+// membership with a roster; after that every join, role change, removal and ban is an event, and
+// what anyone may do at a point of the log follows from the ones before that point.
+message MemberBody {
+  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban
+  bytes  member = 2;            // the member's 32-byte identity public key (not for a roster)
+  string role   = 3;            // role: the new role; join: the role given (empty: the default)
+  repeated RosterEntry roster = 4;
+}
+
+message RosterEntry {
+  bytes  member = 1;  // 32-byte identity public key
+  string role   = 2;
+}
+
 // Sync is the anti-entropy exchange between two participants of a conversation.
 message Sync {
   oneof m {

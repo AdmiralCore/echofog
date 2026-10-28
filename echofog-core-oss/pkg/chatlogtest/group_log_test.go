@@ -26,7 +26,8 @@ func upgraded(t *testing.T, api *node.NodeApi, group string) bool {
 
 // A group whose members all run the log gets everything a direct chat has: replies, threads,
 // reactions, pins (admins only), edits and deletes (authors only), on every member's device. A
-// removed member gets nothing said after it left.
+// removed member gets nothing said after it left, and what it said before stays: a newcomer who
+// joins later gets it with the rest of the history.
 func TestGroupChatRunsOnTheLog(t *testing.T) {
 	aliceN, alice := startNode(t, "alice")
 	_, bob := startNode(t, "bob")
@@ -98,6 +99,10 @@ func TestGroupChatRunsOnTheLog(t *testing.T) {
 		eventually(t, "every member ends with the same message", func() bool { return settled(a) })
 	}
 
+	said, err := carol.ChatSend(ref, node.SendRequest{Text: "carol was here"})
+	require.NoError(t, err)
+	eventually(t, "alice has carol's message", func() bool { _, ok := find(t, alice, ref, said.ID); return ok })
+
 	// Carol is removed; what is said after that does not reach her
 	require.NoError(t, alice.RemoveGroupMember(g.ID, carolN.ID.String(), false))
 	eventually(t, "bob sees carol leave", func() bool {
@@ -112,4 +117,23 @@ func TestGroupChatRunsOnTheLog(t *testing.T) {
 	for _, m := range page.Messages {
 		require.NotEqual(t, after.ID, m.ID, "a removed member got a message said after it left")
 	}
+
+	// Dave joins after carol left and gets the history, carol's message in it
+	_, dave := startNode(t, "dave")
+	_, err = dave.Conversations()
+	require.NoError(t, err)
+	require.NoError(t, dave.ConnectToPeer(joinOf(aliceN)))
+	eventually(t, "dave reaches alice", func() bool { return len(dave.GetPeers()) >= 1 })
+	invite, err = alice.GetGroupInvite(g.ID)
+	require.NoError(t, err)
+	_, err = dave.JoinGroup(invite)
+	require.NoError(t, err)
+	eventually(t, "dave gets the history, with what carol said before she left", func() bool {
+		_, ok1 := find(t, dave, ref, said.ID)
+		_, ok2 := find(t, dave, ref, after.ID)
+		return ok1 && ok2
+	})
+	reply, err := dave.ChatSend(ref, node.SendRequest{Text: "hello from dave"})
+	require.NoError(t, err)
+	eventually(t, "the newcomer's message reaches the others", func() bool { _, ok := find(t, bob, ref, reply.ID); return ok })
 }

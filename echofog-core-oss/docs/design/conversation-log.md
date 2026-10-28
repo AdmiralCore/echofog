@@ -238,9 +238,37 @@ already know the node id); documented in the user docs.
   in that window were readable by the member just removed.)
 - **Bans** are persisted in the group record and restored on start; before, a ban lived only in
   memory and the banned peer could be added back after a restart.
-- **Permissions.** Participant = current member; pin = members with `PermManageGroup` or
-  `PermDeleteMessages`; deleting others' messages = `PermDeleteMessages`. Events need
-  `PermSendMessages` (so in a read-only channel, readers cannot react yet).
+- **Membership on the log** (`convlog/members.go`, kind `MEMBER` = 6). The founder (named by the
+  signed genesis) opens a group's membership with a **roster** (who is in it, with which role);
+  after it every join, role change, removal and ban is an event of the group's log, written by
+  whoever did it. What an author may do at a point of the log follows from the membership events
+  *before that point* in log order, so every device decides the same whatever the arrival order,
+  and a member who was removed keeps what they wrote while in the group (a newcomer who syncs
+  later sees it). Rules: a join is self-written (anyone holding the invitation, with the default
+  role) or written by a member with `PermManageRoles`; role changes and removals need the
+  permission and a higher rank (the owner is untouchable; ownership moves only from the owner, who
+  becomes an admin); bans need `PermBanMembers`. Before the roster the roster's own state counts;
+  until a group's log has a roster at all, the group's present state decides, as before. The
+  founder writes the roster at creation, and for a group from before on its next start; an admin
+  writes the join of a newcomer it lets in, and a member that finds itself left out after a sync
+  asks to be let in itself (once an hour at most).
+- **Permissions at that point.** Participant = member then; writing = `PermSendMessages` (so a
+  channel's readers read, react, and do not write); pin = `PermManageGroup` or
+  `PermDeleteMessages`; deleting others' messages = `PermDeleteMessages`.
+- **Refused events are kept.** An event that is well formed and signed by somebody in the
+  conversation (or in its membership history), but not allowed, is stored without effects: it
+  fills its author's sequence, so the version vector moves on and sync stops offering it, and a
+  rebuild weighs it again. Events from total strangers are dropped.
+- **Rebuild.** A membership event that sits before events already applied (or held) marks the
+  conversation; its views are computed again from the stored events in log order (live: at once;
+  sync: once at the end of the page). Legacy history keeps its messages and places. Sync answers
+  send membership events first, so most events apply right the first time.
+- **Sync guards.** A sync page that moves nothing (the digest did not change) is not asked for
+  again; a peer gets at most 40 sync messages per 10 s.
+- **Big groups** pass a fresh event on to 3 connected members each (once, the first time they
+  have it), so it reaches everybody in a few hops instead of waiting for anti-entropy.
+- **Log mode** waits only for members last heard speaking an older version; one never heard from
+  counts as current (second-hand lists only ever tell that somebody is newer).
 - The legacy `KeyRotationEngine` is left in place: it never protected messages and still does not
   (sender-key epochs do); removing it is cleanup for later.
 
@@ -255,6 +283,14 @@ already know the node id); documented in the user docs.
 | relay drop on reconnect | a relay hands stored mail to a reconnected recipient on connect and again ~10 s later, and drops it only then (it used to drop it as soon as the first write went out, losing it if that frame on a fresh connection was lost) |
 
 ## 9. API
+
+The chat list comes whole from `ChatRows` (`Conversations`, Wails `ChatList`): contacts, requests
+and groups, each with `kind` (direct/group/channel), `name`, presence, block, role, member count
+and `can` (send, files, react, pin, manage, invite, call). Every message carries `kind`
+(text/file/call/system), a normalized `file`, and `can` (edit, delete, pin, react, reply); group
+members carry `canKick`, `canBan`, `roles` and `canTransfer`. A `conv:change` with `reload` means
+the chat was rebuilt; `rev` orders changes. The app holds no copy of the rules.
+
 
 Core (`pkg/api/node/conversations.go`), all identifiers hex strings, timestamps in
 **milliseconds**; a chat is a `ChatRef{kind: "dm"|"group", id}`:

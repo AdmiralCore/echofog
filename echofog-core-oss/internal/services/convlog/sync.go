@@ -70,7 +70,7 @@ func (l *Log) HandleSync(from types.PeerID, m *Sync, groups Resolver) []*Sync {
 		var out []*Sync
 		for _, it := range x.Hello.GetItems() {
 			c, ok := l.resolve(from, it.Conv, groups)
-			if !ok || !l.policy(c).Participant(c, from) {
+			if !ok || !l.Participant(c, from) {
 				continue
 			}
 			l.mu.Lock()
@@ -85,22 +85,32 @@ func (l *Log) HandleSync(from types.PeerID, m *Sync, groups Resolver) []*Sync {
 		return out
 	case *Sync_Want:
 		c, ok := l.resolve(from, x.Want.GetConv(), groups)
-		if !ok || !l.policy(c).Participant(c, from) {
+		if !ok || !l.Participant(c, from) {
 			return nil
 		}
 		return l.answer(c, x.Want.GetHave())
 	case *Sync_Events:
 		c, ok := l.resolve(from, x.Events.GetConv(), groups)
-		if !ok || !l.policy(c).Participant(c, from) {
+		if !ok || !l.Participant(c, from) {
 			return nil
 		}
+		l.mu.Lock()
+		before := l.loadMeta(l.bc(c.ID), c).Digest()
+		l.mu.Unlock()
 		for _, raw := range x.Events.GetEvents() {
-			_, _, _ = l.Ingest(c, raw) // a bad event does not stop the others
+			_, _, _ = l.ingest(c, raw, false) // a bad event does not stop the others
 		}
+		l.RebuildIfNeeded(c)
 		if x.Events.GetMore() {
 			l.mu.Lock()
-			want := l.wantLocked(c, l.loadMeta(l.bc(c.ID), c))
+			meta := l.loadMeta(l.bc(c.ID), c)
+			progressed := !bytes.Equal(meta.Digest(), before)
+			want := l.wantLocked(c, meta)
 			l.mu.Unlock()
+			if !progressed {
+				// the page held nothing we could take: asking again would bring the same page
+				return nil
+			}
 			return []*Sync{want}
 		}
 	}
@@ -160,8 +170,29 @@ func (l *Log) answer(c Conv, have []*Have) []*Sync {
 		return true
 	}
 
+	// membership first: it decides what the other events may do, so they apply right the first time
+	// instead of waiting for a rebuild
+	sent := map[string]bool{}
 	full := false
+	if c.Kind == KindGroup {
+		if entries, err := l.st.FindValues(memberPrefix(bc), 0); err == nil {
+			for _, en := range entries {
+				e, _, err := Decode(en.Value)
+				if err != nil || e.Seq <= theirs[peerHex(AuthorID(e))] {
+					continue
+				}
+				if !add(en.Value) {
+					full = true
+					break
+				}
+				sent[string(en.Value)] = true
+			}
+		}
+	}
 	for author, max := range meta.Max {
+		if full {
+			break
+		}
 		from := theirs[author]
 		if max <= from {
 			continue
@@ -172,6 +203,9 @@ func (l *Log) answer(c Conv, have []*Have) []*Sync {
 			continue
 		}
 		for _, e := range entries {
+			if sent[string(e.Value)] {
+				continue
+			}
 			if !add(e.Value) {
 				full = true
 				break

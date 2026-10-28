@@ -517,3 +517,29 @@ func TestSealedStoreWorks(t *testing.T) {
 		}
 	}
 }
+
+// A message says what it is: the two file formats come out as one, an invitation to a call as a
+// call, an app line as a system line.
+func TestMessageKinds(t *testing.T) {
+	cases := []struct {
+		typ        uint32
+		text, meta string
+		kind       string
+		file       *FileRef
+	}{
+		{0, "hello", "", "text", nil},
+		{0, CallInvitePrefix + "abc", "", "call", nil},
+		{MsgTypeSystem, "joined", "", "system", nil},
+		{4, "a.pdf", `{"file_name":"a.pdf","file_size":1200,"mime_type":"application/pdf","custom":{"fid":"f1"}}`, "file",
+			&FileRef{ID: "f1", Name: "a.pdf", Size: 1200, Mime: "application/pdf"}},
+		{0, "b.png", `{"group_file":{"id":"g1","name":"b.png","size":"77","mime":"image/png"}}`, "file",
+			&FileRef{ID: "g1", Name: "b.png", Size: 77, Mime: "image/png"}},
+	}
+	for _, c := range cases {
+		v := View{Present: true, Type: c.typ, Text: c.text, Metadata: c.meta}
+		m := v.Render("conv", "me")
+		if m.Kind != c.kind || (c.file == nil) != (m.File == nil) || (c.file != nil && *c.file != *m.File) {
+			t.Errorf("%q: kind %q file %+v", c.text, m.Kind, m.File)
+		}
+	}
+}

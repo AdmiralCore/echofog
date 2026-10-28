@@ -28,25 +28,20 @@ var (
 // maxEmojiPerMessage bounds the distinct reactions on one message.
 const maxEmojiPerMessage = 64
 
-// Policy decides who may do what in conversations of one kind.
-type Policy interface {
-	Participant(c Conv, author types.PeerID) bool
-	CanPin(c Conv, author types.PeerID) bool
-	CanModerate(c Conv, author types.PeerID) bool
-}
-
-type dmPolicy struct{ self types.PeerID }
-
-func (p dmPolicy) Participant(c Conv, a types.PeerID) bool { return a == p.self || a == c.Peer }
-func (p dmPolicy) CanPin(c Conv, a types.PeerID) bool      { return p.Participant(c, a) }
-func (p dmPolicy) CanModerate(Conv, types.PeerID) bool     { return false }
-
 // Change is what one applied event changed, for the app.
 type Change struct {
 	Conv     Conv
 	Meta     Meta
 	Messages []Message // messages whose state changed, resolved
+	// Rev grows with every change of the log; listeners called concurrently can drop a change
+	// older than one they already have.
+	Rev uint64
+	// Rebuilt: the whole conversation was computed again (a membership change); reload it.
+	Rebuilt bool
 }
+
+// nextRev numbers a change. Call with l.mu held, so the numbers follow the order of the writes.
+func (l *Log) nextRev() uint64 { return atomic.AddUint64(&l.rev, 1) }
 
 // Log keeps the conversation logs of one account.
 type Log struct {
@@ -57,12 +52,14 @@ type Log struct {
 	sign    func([]byte) ([]byte, error)
 	now     func() time.Time
 
-	mu          sync.Mutex
-	groupPolicy atomic.Value // policyBox
-	listeners   []func(Change)
+	mu        sync.Mutex
+	rules     atomic.Value // rulesBox
+	listeners []func(Change)
+	members   map[string]*members // by blinded conversation id; loaded on first use
+	rev       uint64
 }
 
-type policyBox struct{ p Policy }
+type rulesBox struct{ r GroupRules }
 
 // New returns the log of the account with identity key selfPub; sign signs with it.
 func New(st storage.Storage, selfPub []byte, sign func([]byte) ([]byte, error)) *Log {
@@ -70,14 +67,21 @@ func New(st storage.Storage, selfPub []byte, sign func([]byte) ([]byte, error)) 
 	copy(pub[:], selfPub)
 	self := types.PeerPubKeyToID(pub)
 	return &Log{st: st, self: self, selfHex: peerHex(self), selfPub: append([]byte(nil), selfPub...),
-		sign: sign, now: time.Now}
+		sign: sign, now: time.Now, members: map[string]*members{}}
 }
 
 // Self is this account's peer id.
 func (l *Log) Self() types.PeerID { return l.self }
 
-// SetGroupPolicy sets who may do what in groups (members, roles).
-func (l *Log) SetGroupPolicy(p Policy) { l.groupPolicy.Store(policyBox{p}) }
+// SetGroupRules tells the log about groups: their founders, roles and present state.
+func (l *Log) SetGroupRules(r GroupRules) { l.rules.Store(rulesBox{r}) }
+
+func (l *Log) groupRules() GroupRules {
+	if b, ok := l.rules.Load().(rulesBox); ok {
+		return b.r
+	}
+	return nil
+}
 
 // OnChange registers f to hear about every applied event.
 func (l *Log) OnChange(f func(Change)) {
@@ -86,23 +90,82 @@ func (l *Log) OnChange(f func(Change)) {
 	l.mu.Unlock()
 }
 
-func (l *Log) policy(c Conv) Policy {
-	if c.Kind == KindGroup {
-		if b, ok := l.groupPolicy.Load().(policyBox); ok && b.p != nil {
-			return b.p
+// membersOf is the membership history of a group's log. Call with l.mu held.
+func (l *Log) membersOf(bc string) *members {
+	if m, ok := l.members[bc]; ok {
+		return m
+	}
+	m := &members{}
+	if entries, err := l.st.FindValues(memberPrefix(bc), 0); err == nil {
+		for _, en := range entries {
+			e, id, err := Decode(en.Value)
+			if err != nil || e.Kind != KindMember {
+				continue
+			}
+			if b, ok := decodeMember(e); ok {
+				m.add(memberEv{at: pos{e.Lamport, id.String()}, author: AuthorID(e), body: b})
+			}
 		}
 	}
-	if c.Kind == KindDM {
-		return dmPolicy{self: l.self}
-	}
-	return denyAll{}
+	l.members[bc] = m
+	return m
 }
 
-type denyAll struct{}
+// rightsAt is what author may do at point p of c. Call with l.mu held.
+func (l *Log) rightsAt(c Conv, bc string, author types.PeerID, p pos) Rights {
+	switch c.Kind {
+	case KindDM:
+		if author == l.self || author == c.Peer {
+			return Rights{Member: true, Send: true, Pin: true}
+		}
+	case KindGroup:
+		rules := l.groupRules()
+		if rules == nil {
+			return Rights{}
+		}
+		st, ok := l.membersOf(bc).stateAt(rules, c, p)
+		if !ok {
+			return rules.Current(c, author)
+		}
+		if r, in := st.roles[author]; in {
+			return rightsOf(r)
+		}
+	}
+	return Rights{}
+}
 
-func (denyAll) Participant(Conv, types.PeerID) bool { return false }
-func (denyAll) CanPin(Conv, types.PeerID) bool      { return false }
-func (denyAll) CanModerate(Conv, types.PeerID) bool { return false }
+// atEnd is a point after every event.
+var atEnd = pos{L: ^uint64(0)}
+
+// RightsOf is what peer may do in c now.
+func (l *Log) RightsOf(c Conv, peer types.PeerID) Rights {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.rightsAt(c, l.bc(c.ID), peer, atEnd)
+}
+
+// Participant reports whether peer takes part in c now.
+func (l *Log) Participant(c Conv, peer types.PeerID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.rightsAt(c, l.bc(c.ID), peer, atEnd).Member
+}
+
+// known reports whether author's events in c are kept even when not allowed: a participant of a
+// direct chat, or anyone in a group's membership history. Call with l.mu held.
+func (l *Log) known(c Conv, bc string, e *Event) bool {
+	author := AuthorID(e)
+	switch c.Kind {
+	case KindDM:
+		return author == l.self || author == c.Peer
+	case KindGroup:
+		if l.rightsAt(c, bc, author, atEnd).Member {
+			return true
+		}
+		return l.membersOf(bc).mentions(author, e.Author)
+	}
+	return false
+}
 
 func (l *Log) notify(ch *Change) {
 	if ch == nil {
@@ -111,6 +174,9 @@ func (l *Log) notify(ch *Change) {
 	l.mu.Lock()
 	ls := append(([]func(Change))(nil), l.listeners...)
 	l.mu.Unlock()
+	if ch.Rev == 0 {
+		ch.Rev = l.nextRev()
+	}
 	for _, f := range ls {
 		f(*ch)
 	}
@@ -157,6 +223,7 @@ type txn struct {
 	views   map[string]*View
 	order   []string
 	changed map[string]bool
+	synced  bool // the event came by sync: history, not news
 }
 
 func (l *Log) newTxn(c Conv, bc string, meta *Meta) *txn {
@@ -206,7 +273,7 @@ func (t *txn) commit(marker []byte, id string) error {
 }
 
 func (t *txn) change() *Change {
-	ch := &Change{Conv: t.c, Meta: *t.meta}
+	ch := &Change{Conv: t.c, Meta: *t.meta, Rev: t.l.nextRev()}
 	ids := make([]string, 0, len(t.changed))
 	for id := range t.changed {
 		ids = append(ids, id)
@@ -224,6 +291,7 @@ type indexEntry struct {
 	A string `json:"a"`
 	S uint64 `json:"s"`
 	F bool   `json:"f,omitempty"` // stored as a fork
+	R bool   `json:"r,omitempty"` // kept but not allowed: no effects
 }
 
 func hexRef(b []byte) string {
@@ -261,69 +329,154 @@ func (t *txn) stripEdits(v *View) {
 	}
 }
 
-// apply applies one verified event; store is what will be written for it (it may be stripped).
-func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool) error {
+// applyMode says how an event reaches apply.
+type applyMode int
+
+const (
+	modeNew        applyMode = iota // a new event: stored with its effects
+	modeReplay                      // a stored event, applied again by a rebuild
+	modeReplayFork                  // a stored event of an equivocating author, applied again
+)
+
+// apply applies one verified event: its effects on the views, and the bookkeeping of the version
+// vector. raw is its encoding (what is stored for it unless the event's content has to go).
+func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode applyMode) error {
 	authorID := AuthorID(e)
 	author := peerHex(authorID)
-	pol := l.policy(t.c)
-	if !pol.Participant(t.c, authorID) {
-		return ErrNotParticipant
-	}
+	idHex := id.String()
+	at := pos{e.Lamport, idHex}
 	if !own && e.Lamport > t.meta.MaxLamport+maxLamportJump {
 		return ErrClock
 	}
-	idHex := id.String()
-	ba := l.ba(author)
-	ekey := eventKey(t.bc, ba, e.Seq)
-	fork := l.st.Exists(ekey)
 	store := raw
 
 	var err error
-	switch e.Kind {
-	case KindMsg:
-		err = t.applyMsg(e, idHex, author, ba, &store)
-	case KindEdit:
-		err = t.applyEdit(e, author, &store)
-	case KindDelete:
-		err = t.applyDelete(e, author, authorID, pol)
-	case KindReact:
-		err = t.applyReact(e, author)
-	case KindPin:
-		err = t.applyPin(e, author, authorID, pol)
+	if e.Kind == KindMember {
+		err = l.applyMember(t, e, at, raw, mode)
+	} else {
+		rights := l.rightsAt(t.c, t.bc, authorID, at)
+		if !rights.Member {
+			return ErrNotParticipant
+		}
+		switch e.Kind {
+		case KindMsg:
+			if !rights.Send {
+				return ErrForbidden
+			}
+			err = t.applyMsg(e, idHex, author, &store)
+		case KindEdit:
+			err = t.applyEdit(e, author, &store)
+		case KindDelete:
+			err = t.applyDelete(e, author, rights)
+		case KindReact:
+			err = t.applyReact(e, author)
+		case KindPin:
+			if !rights.Pin {
+				return ErrForbidden
+			}
+			err = t.applyPin(e, author)
+		}
 	}
 	if err != nil {
 		return err
 	}
-
-	if fork {
-		t.head = append(t.head, storage.Entry{Key: forkKey(t.bc, idHex), Value: store})
-		if t.meta.Forks == nil {
-			t.meta.Forks = map[string]uint64{}
-		}
-		t.meta.Forks[author] = e.Seq
-	} else {
-		t.head = append(t.head, storage.Entry{Key: ekey, Value: store})
-		if e.Seq > t.meta.Max[author] {
-			t.meta.Max[author] = e.Seq
-		}
-		if e.Seq == t.meta.VV[author]+1 {
-			n := e.Seq
-			for l.st.Exists(eventKey(t.bc, ba, n+1)) {
-				n++
-			}
-			t.meta.VV[author] = n
-		}
-	}
+	l.keep(t, e, idHex, raw, store, mode)
 	if e.Lamport > t.meta.MaxLamport {
 		t.meta.MaxLamport = e.Lamport
-	}
-	if author == l.selfHex && e.Seq > t.meta.OwnSeq {
-		t.meta.OwnSeq = e.Seq // ours, possibly handed back by a peer after a restore
 	}
 	return nil
 }
 
-func (t *txn) applyMsg(e *Event, idHex, author, ba string, store *[]byte) error {
+// keep stores an event (new) or its rewritten form (replay) and advances the version vector.
+func (l *Log) keep(t *txn, e *Event, idHex string, raw, store []byte, mode applyMode) {
+	author := peerHex(AuthorID(e))
+	ba := l.ba(author)
+	ekey := eventKey(t.bc, ba, e.Seq)
+	switch mode {
+	case modeReplay:
+		if !bytes.Equal(store, raw) {
+			t.put(ekey, store)
+		}
+	case modeReplayFork:
+		if !bytes.Equal(store, raw) {
+			t.put(forkKey(t.bc, idHex), store)
+		}
+		return
+	default:
+		if l.st.Exists(ekey) {
+			// a second event under one (author, seq): an equivocating author
+			t.head = append(t.head, storage.Entry{Key: forkKey(t.bc, idHex), Value: store})
+			if t.meta.Forks == nil {
+				t.meta.Forks = map[string]uint64{}
+			}
+			t.meta.Forks[author] = e.Seq
+			return
+		}
+		t.head = append(t.head, storage.Entry{Key: ekey, Value: store})
+	}
+	if e.Seq > t.meta.Max[author] {
+		t.meta.Max[author] = e.Seq
+	}
+	if e.Seq == t.meta.VV[author]+1 {
+		n := e.Seq
+		for l.st.Exists(eventKey(t.bc, ba, n+1)) {
+			n++
+		}
+		t.meta.VV[author] = n
+	}
+	if author == l.selfHex && e.Seq > t.meta.OwnSeq {
+		t.meta.OwnSeq = e.Seq // ours, possibly handed back by a peer after a restore
+	}
+}
+
+// applyMember takes a membership event: it joins the group's membership history whether or not it
+// is allowed (a membership event that comes later but sits earlier in the log may allow it).
+func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) error {
+	if t.c.Kind != KindGroup {
+		return ErrForbidden
+	}
+	b, ok := decodeMember(e)
+	if !ok {
+		return ErrBadBody
+	}
+	m := l.membersOf(t.bc)
+	if mode == modeNew {
+		t.put(memberKey(t.bc, e.Lamport, at.ID), raw)
+		m.add(memberEv{at: at, author: AuthorID(e), body: b})
+	}
+	rules := l.groupRules()
+	if rules == nil || !m.allowed(rules, t.c, at) {
+		return ErrForbidden
+	}
+	if mode == modeNew && (e.Lamport <= t.meta.MaxLamport || e.Lamport <= t.meta.HeldLamport) {
+		// it changes who could do what at points already applied or held
+		t.meta.Rebuild = true
+	}
+	return nil
+}
+
+// rejectable reports whether an event refused with err is still kept: it was well formed and
+// signed by somebody who takes part, it just may not do this (yet). Kept, it fills its author's
+// sequence (so the version vector moves on and sync stops offering it) and a rebuild weighs it
+// again after a membership change.
+func rejectable(err error) bool {
+	return err == ErrForbidden || err == ErrBadBody || err == ErrClock || err == ErrNotParticipant
+}
+
+// keepRejected stores an event that was not allowed, without effects.
+func (l *Log) keepRejected(t *txn, e *Event, id EventID, raw []byte) {
+	t.views, t.order, t.changed = map[string]*View{}, nil, map[string]bool{}
+	t.sets, t.dels, t.head = nil, nil, nil
+	if e.Kind == KindMember && t.c.Kind == KindGroup {
+		if b, ok := decodeMember(e); ok {
+			t.put(memberKey(t.bc, e.Lamport, id.String()), raw)
+			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, author: AuthorID(e), body: b})
+		}
+	}
+	l.keep(t, e, id.String(), raw, raw, modeNew)
+}
+
+func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 	var body MsgBody
 	stripped := Stripped(e)
 	if !stripped {
@@ -359,9 +512,10 @@ func (t *txn) applyMsg(e *Event, idHex, author, ba string, store *[]byte) error 
 			if e.Lamport > t.meta.ReadLamport {
 				t.meta.ReadLamport, t.meta.Unread = e.Lamport, 0
 			}
-		} else {
+		} else if !t.synced || e.Lamport > t.meta.ReadLamport {
 			// new to me whatever its clock: one written without having seen my last message sorts
-			// before it, below the read point, and is still unread (MarkRead counts again)
+			// before it, below the read point, and is still unread (MarkRead counts again). Old
+			// history that came by sync is not news.
 			t.meta.Unread++
 		}
 	} else {
@@ -408,18 +562,18 @@ func (t *txn) applyEdit(e *Event, author string, store *[]byte) error {
 	return nil
 }
 
-func (t *txn) applyDelete(e *Event, author string, authorID types.PeerID, pol Policy) error {
+func (t *txn) applyDelete(e *Event, author string, rights Rights) error {
 	target := hexRef(e.Target)
 	v := t.view(target)
 	mod := false
 	if v.Present {
 		if v.Author != author {
-			if !pol.CanModerate(t.c, authorID) {
+			if !rights.Moderate {
 				return ErrForbidden
 			}
 			mod = true
 		}
-	} else if pol.CanModerate(t.c, authorID) {
+	} else if rights.Moderate {
 		mod = true
 	}
 	v.applyDelete(Reg{L: e.Lamport, A: author, S: e.Seq, TS: e.TsMs, Mod: mod})
@@ -451,10 +605,7 @@ func (t *txn) applyReact(e *Event, author string) error {
 	return nil
 }
 
-func (t *txn) applyPin(e *Event, author string, authorID types.PeerID, pol Policy) error {
-	if !pol.CanPin(t.c, authorID) {
-		return ErrForbidden
-	}
+func (t *txn) applyPin(e *Event, author string) error {
 	var body PinBody
 	if err := proto.Unmarshal(e.Body, &body); err != nil {
 		return ErrBadBody
@@ -474,7 +625,15 @@ func (t *txn) applyPin(e *Event, author string, authorID types.PeerID, pol Polic
 }
 
 // Ingest applies an event that came from the network. It reports false for one already held.
+// An event the author may not write (yet) is kept without effects and reported with its error.
 func (l *Log) Ingest(c Conv, raw []byte) (EventID, bool, error) {
+	return l.ingest(c, raw, true)
+}
+
+// ingest applies one event; live is false for one that came by sync, which is history rather than
+// news (it counts as unread only above the reader's point), and whose membership changes are
+// rebuilt once at the end of the sync page instead of after every event.
+func (l *Log) ingest(c Conv, raw []byte, live bool) (EventID, bool, error) {
 	e, id, err := Decode(raw)
 	if err != nil {
 		return EventID{}, false, err
@@ -491,22 +650,41 @@ func (l *Log) Ingest(c Conv, raw []byte) (EventID, bool, error) {
 		return id, false, nil
 	}
 	t := l.newTxn(c, bc, l.loadMeta(bc, c))
-	if err := l.apply(t, e, id, raw, false); err != nil {
+	t.synced = !live
+	if aerr := l.apply(t, e, id, raw, false, modeNew); aerr != nil {
+		if !rejectable(aerr) || !l.known(c, bc, e) {
+			l.mu.Unlock()
+			return id, false, aerr
+		}
+		t = l.newTxn(c, bc, l.loadMeta(bc, c))
+		l.keepRejected(t, e, id, raw)
+		if aerr != ErrClock && e.Lamport > t.meta.HeldLamport {
+			t.meta.HeldLamport = e.Lamport
+		}
+		err = t.commit(l.marker(e, true), id.String())
 		l.mu.Unlock()
-		return id, false, err
+		if err != nil {
+			return id, false, err
+		}
+		return id, false, aerr
 	}
-	err = t.commit(l.marker(e), id.String())
+	err = t.commit(l.marker(e, false), id.String())
 	var ch *Change
 	if err == nil {
 		ch = t.change()
+		if live && t.meta.Rebuild {
+			if rc, rerr := l.rebuildLocked(c, bc); rerr == nil {
+				ch = rc
+			}
+		}
 	}
 	l.mu.Unlock()
 	l.notify(ch)
 	return id, err == nil, err
 }
 
-func (l *Log) marker(e *Event) []byte {
-	raw, _ := json.Marshal(indexEntry{A: peerHex(AuthorID(e)), S: e.Seq})
+func (l *Log) marker(e *Event, rejected bool) []byte {
+	raw, _ := json.Marshal(indexEntry{A: peerHex(AuthorID(e)), S: e.Seq, R: rejected})
 	return raw
 }
 
@@ -549,6 +727,29 @@ type Draft struct {
 
 // Append writes an event of this account and returns its encoded form, to send to the others.
 func (l *Log) Append(c Conv, d Draft) ([]byte, EventID, error) {
+	return l.append(c, d, false)
+}
+
+// AppendKept is Append for an event that may not be allowed yet (a membership change that waits for
+// what allows it to arrive): such an event is kept without effects and returned to be sent.
+func (l *Log) AppendKept(c Conv, d Draft) ([]byte, EventID, error) {
+	return l.append(c, d, true)
+}
+
+// HasRoster reports whether a group's log holds its founder's roster (its membership is on the
+// log).
+func (l *Log) HasRoster(c Conv) bool {
+	rules := l.groupRules()
+	if c.Kind != KindGroup || rules == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, _, ok := l.membersOf(l.bc(c.ID)).walk(rules, c, nil)
+	return ok
+}
+
+func (l *Log) append(c Conv, d Draft, keepRefused bool) ([]byte, EventID, error) {
 	l.mu.Lock()
 	bc := l.bc(c.ID)
 	meta := l.loadMeta(bc, c)
@@ -578,14 +779,32 @@ func (l *Log) Append(c Conv, d Draft) ([]byte, EventID, error) {
 	}
 	id := idOf(e)
 	t := l.newTxn(c, bc, meta)
-	if err := l.apply(t, e, id, raw, true); err != nil {
+	if err := l.apply(t, e, id, raw, true, modeNew); err != nil {
+		if !keepRefused || !rejectable(err) {
+			l.mu.Unlock()
+			return nil, id, err
+		}
+		t = l.newTxn(c, bc, l.loadMeta(bc, c))
+		l.keepRejected(t, e, id, raw)
+		if e.Lamport > t.meta.MaxLamport {
+			t.meta.MaxLamport = e.Lamport // our clock moves on, so our next event comes after it
+		}
+		err = t.commit(l.marker(e, true), id.String())
 		l.mu.Unlock()
-		return nil, id, err
+		if err != nil {
+			return nil, id, err
+		}
+		return raw, id, nil
 	}
-	err = t.commit(l.marker(e), id.String())
+	err = t.commit(l.marker(e, false), id.String())
 	var ch *Change
 	if err == nil {
 		ch = t.change()
+		if t.meta.Rebuild {
+			if rc, rerr := l.rebuildLocked(c, bc); rerr == nil {
+				ch = rc
+			}
+		}
 	}
 	l.mu.Unlock()
 	l.notify(ch)
@@ -789,7 +1008,7 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 	t.views = map[string]*View{} // nothing about the message changed
 	t.order = nil
 	err = t.commit(nil, "")
-	ch := &Change{Conv: c, Meta: *meta}
+	ch := &Change{Conv: c, Meta: *meta, Rev: l.nextRev()}
 	l.mu.Unlock()
 	if err == nil {
 		l.notify(ch)

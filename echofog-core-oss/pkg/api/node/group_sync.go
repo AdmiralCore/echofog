@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"strings"
 	"time"
 
@@ -158,7 +159,9 @@ func (f *groupsFacade) wireMembers(groupID string) []wireMember {
 // member seals for those it has not heard from itself yet. Call with f.mu held.
 func (f *groupsFacade) noteVersions(list []wireMember) {
 	for _, w := range list {
-		if id, ok := parsePeer(w.ID); ok && id != f.selfID {
+		// second hand: a member the lister has not heard from is listed as old, so a list only
+		// ever tells us that somebody is newer
+		if id, ok := parsePeer(w.ID); ok && id != f.selfID && w.V >= sealedVersion {
 			f.noteVersion(id, w.V)
 		}
 	}
@@ -489,6 +492,9 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		}
 		if role, err := f.mgr.GetMemberRole(w.Group, f.selfID); err == nil && role.Permissions&groups.PermManageRoles != 0 {
 			f.paced[k] = f.clock()
+			// the newcomer's membership on the log, written by whoever may let members in
+			join := memberBody(convlog.MemberJoin, pub, "")
+			after = append(after, func() { f.memberChange(w.Group, join) })
 			snap := groupWire{Kind: "snap", Group: w.Group, Members: f.wireMembers(w.Group)}
 			newcomer := groupWire{Kind: "snap", Group: w.Group, Members: []wireMember{{ID: origin.String(), Pub: w.Pub, Role: role0(f, w.Group, origin)}}}
 			after = append(after, func() { _, _ = f.sendTo(origin, snap) })
@@ -773,9 +779,11 @@ func (f *groupsFacade) SetRole(groupID, targetID, role string) error {
 		f.mu.Unlock()
 		return explain(err)
 	}
+	was, _ := f.member(groupID, target)
 	_ = f.persist(groupID)
 	f.mu.Unlock()
 	f.broadcast(groupID, groupWire{Kind: "role", Group: groupID, Target: targetID, Role: role})
+	f.memberChange(groupID, memberBody(convlog.MemberRole, was.PubKey, role))
 	return nil
 }
 
@@ -810,6 +818,11 @@ func (f *groupsFacade) Remove(groupID, targetID string, ban bool) error {
 	for _, fn := range rekey {
 		fn()
 	}
+	action := convlog.MemberRemove
+	if ban {
+		action = convlog.MemberBan
+	}
+	f.memberChange(groupID, memberBody(action, was.PubKey, ""))
 	return nil
 }
 
@@ -830,6 +843,7 @@ func (f *groupsFacade) Leave(groupID string) error {
 		return errors.New("the owner cannot leave the group")
 	}
 	f.mu.Unlock()
+	f.memberChange(groupID, memberBody(convlog.MemberRemove, f.selfPub, ""))
 	f.broadcast(groupID, groupWire{Kind: "rm", Group: groupID, Target: f.selfID.String()})
 	f.mu.Lock()
 	f.forget(groupID)
@@ -1039,9 +1053,11 @@ func (f *groupsFacade) TransferOwnership(groupID, targetID string) error {
 		f.mu.Unlock()
 		return explain(err)
 	}
+	was, _ := f.member(groupID, target)
 	_ = f.persist(groupID)
 	f.mu.Unlock()
 	f.broadcast(groupID, groupWire{Kind: "own", Group: groupID, Target: targetID})
+	f.memberChange(groupID, memberBody(convlog.MemberRole, was.PubKey, groups.RoleOwner.Name))
 	return nil
 }
 

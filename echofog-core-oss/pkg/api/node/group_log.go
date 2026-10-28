@@ -48,7 +48,10 @@ func (f *groupsFacade) takeEvent(origin types.PeerID, groupID string, sender typ
 	return after
 }
 
-// logModeLocked reports whether every member of the group speaks the log. Call with f.mu held.
+// logModeLocked reports whether the group runs on the log: no member was last heard speaking an
+// older version. A member we have not heard from yet counts as speaking it (every build
+// since the log does), so one member who never comes back does not hold the group back forever.
+// Call with f.mu held.
 func (f *groupsFacade) logModeLocked(groupID string) bool {
 	members, err := f.mgr.GetAuthorizedRecipients(groupID)
 	if err != nil {
@@ -56,7 +59,7 @@ func (f *groupsFacade) logModeLocked(groupID string) bool {
 	}
 	f.loadCapable()
 	for _, m := range members {
-		if m.PeerID != f.selfID && !f.logCapable[m.PeerID] {
+		if m.PeerID != f.selfID && f.oldPeers[m.PeerID] {
 			return false
 		}
 	}
@@ -157,4 +160,33 @@ func (f *groupsFacade) postEvent(groupID string, raw []byte, track bool, text st
 		}
 	}
 	return delivered, queued, failed
+}
+
+// memberBody is a membership change of one member.
+func memberBody(action uint32, member types.IdentityPublicKey, role string) *convlog.MemberBody {
+	return &convlog.MemberBody{Action: action, Member: append([]byte(nil), member[:]...), Role: role}
+}
+
+// rosterLocked is the group's present membership, as the founder writes it to open the log's
+// membership. Call with f.mu held.
+func (f *groupsFacade) rosterLocked(groupID string) *convlog.MemberBody {
+	list, err := f.mgr.ListMembers(groupID)
+	if err != nil {
+		return nil
+	}
+	b := &convlog.MemberBody{Action: convlog.MemberRoster}
+	for _, m := range list {
+		if m.IsBanned {
+			continue
+		}
+		b.Roster = append(b.Roster, &convlog.RosterEntry{Member: append([]byte(nil), m.PubKey[:]...), Role: m.Role.Name})
+	}
+	return b
+}
+
+// memberChange hands a membership change of ours to the group's log. Call without f.mu.
+func (f *groupsFacade) memberChange(groupID string, b *convlog.MemberBody) {
+	if b != nil && f.onMember != nil {
+		f.onMember(groupID, b)
+	}
 }

@@ -56,6 +56,13 @@ type Meta struct {
 
 	ReadLamport uint64 `json:"read_lamport,omitempty"` // everything up to here was read
 	Unread      int    `json:"unread,omitempty"`
+
+	// Rebuild: a membership change arrived that sits before events already applied; the views are
+	// computed again from the stored events (see Log.rebuild).
+	Rebuild bool `json:"rebuild,omitempty"`
+	// HeldLamport is the highest clock of an event kept without effects (not allowed, yet): a
+	// membership event at or below it may change what that event was allowed to do.
+	HeldLamport uint64 `json:"held_lamport,omitempty"`
 }
 
 func newMeta(c Conv) *Meta {
