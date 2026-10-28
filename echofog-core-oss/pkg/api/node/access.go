@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -115,6 +117,8 @@ type InviteInfo struct {
 	Addrs    int    `json:"addrs"`
 	Relays   int    `json:"relays"`
 	Protocol uint32 `json:"protocol"`
+	Server   bool   `json:"server"`        // the node is a server (a relay or exit on a VPS)
+	SNI      string `json:"sni,omitempty"` // the site the node's traffic looks like
 }
 
 // ParseInvite reads an invitation link. It tells a link of another network (a fork) and one made
@@ -124,7 +128,8 @@ func (n *NodeApi) ParseInvite(link string) (InviteInfo, error) {
 	if err != nil {
 		return InviteInfo{}, err
 	}
-	return InviteInfo{PeerID: inv.Peer.String(), Private: inv.Secret != nil, Addrs: len(inv.Addrs), Relays: len(inv.Relays), Protocol: inv.Protocol}, nil
+	return InviteInfo{PeerID: inv.Peer.String(), Private: inv.Secret != nil, Addrs: len(inv.Addrs), Relays: len(inv.Relays),
+		Protocol: inv.Protocol, Server: inv.Server, SNI: inv.SNI}, nil
 }
 
 // JoinInvite stores the invitation and connects to the node it names; it returns the node's peer ID.
@@ -155,4 +160,25 @@ func (n *NodeApi) ForgetInvite(peerID string) error {
 		return errors.New("invalid peer id")
 	}
 	return n.node.ForgetInvite(id)
+}
+
+// linkEntry turns the invitation link of a public node into the address entry the relay and
+// bootstrap lists keep, host:port/<peer id> with its SNI and role; anything else is returned as it
+// is. A hidden node's link is joined, not listed.
+func linkEntry(link string) (string, error) {
+	link = strings.TrimSpace(link)
+	if !access.IsLink(link) {
+		return link, nil
+	}
+	inv, err := access.ParseLink(link, config.NetworkName)
+	if err != nil {
+		return "", err
+	}
+	if inv.Secret != nil {
+		return "", errors.New("this is an invitation to a hidden node: join it instead")
+	}
+	if len(inv.Addrs) == 0 {
+		return "", errors.New("the link names no address to reach the node at")
+	}
+	return network.JoinPeerAddrInfo(inv.Addrs[0], inv.Peer, inv.SNI, inv.Server), nil
 }

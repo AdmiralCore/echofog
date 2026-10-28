@@ -108,6 +108,10 @@ func (n *NodeApi) AddBootstrapNode(entry string) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}
+	entry, err := linkEntry(entry)
+	if err != nil {
+		return err
+	}
 	parsed, err := normalizeBootstrap([]string{entry})
 	if err != nil {
 		return err

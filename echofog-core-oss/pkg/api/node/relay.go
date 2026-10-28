@@ -243,6 +243,9 @@ func (n *NodeApi) AddRelay(link string) error {
 	if err != nil {
 		return err
 	}
+	if link, err = linkEntry(link); err != nil {
+		return err
+	}
 	info, err := ParseRelayAddrInfo(link)
 	if err != nil {
 		return err
