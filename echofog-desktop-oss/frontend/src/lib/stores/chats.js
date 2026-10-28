@@ -9,15 +9,14 @@ import { saved } from './saved.js';
 
 const inCall = () => get(callState).inCall;
 
-const CALL_INVITE = 'fogcall://';
-
 // Chats run on the core's conversation log (ChatList, ChatHistory, ChatSend… and the conv:change
 // event): every chat, direct or group, is a list of messages that can be answered, commented,
 // edited, deleted, reacted to and pinned. See echofog-core-oss/docs/design/conversation-log.md.
 
-/** Conversations: { id ('d:<peer>' | 'g:<group>'), kind: 'direct' | 'group', ref, name, peerId, pubKey, online,
- *  last (preview line), ts, unread, readOnly, request (a stranger who wrote first), blocked,
- *  upgraded (direct: the other side runs the log; group: every member does; null: nothing written yet) } */
+/** Conversations: { id ('d:<peer>' | 'g:<group>'), kind: 'direct' | 'group', groupKind ('group' | 'channel'), ref,
+ *  name, peerId, pubKey, groupId, online, last (preview line), lastId, ts, unread, request (a stranger who wrote
+ *  first), blocked, myRole, members, upgraded (the chat runs on the log), can (what I may do here, from the core:
+ *  send, files, react, pin, manage, invite, call), readOnly (= !can.send) }. The core decides every right. */
 export const chats = writable([]);
 export const activeId = writable('');
 /** Group calls going on right now, by chat id ('g:<group>'): { callId, coordinator, from } */
@@ -60,26 +59,11 @@ export const membersVersion = writable(0);
 let listening = false;
 let olderCursor = '';
 
-const MSG_FILE = 4;
-const MSG_SYSTEM = 100;
 const PAGE = 50;
 
 /** The core's name for a chat. */
 export const refOf = (conv) => (conv.kind === 'group' ? { kind: 'group', id: conv.groupId } : { kind: 'dm', id: conv.peerId });
 const chatIdOf = (ref) => (ref.kind === 'group' ? 'g:' : 'd:') + ref.id;
-
-// what a file message offers: the transfer it names, the file's name and size
-function fileOf(m) {
-  let meta = null;
-  if (m.metadata) {
-    try { meta = JSON.parse(m.metadata); } catch (_) { /* not JSON: name only */ }
-  }
-  const g = meta && meta.group_file;
-  if (g) return { fid: g.id, name: g.name, size: Number(g.size) || 0, mime: g.mime || '' };
-  if (m.type !== MSG_FILE) return null;
-  meta = meta || {};
-  return { fid: meta.custom?.fid || '', name: meta.file_name || m.text || '', size: Number(meta.file_size) || 0, mime: meta.mime_type || '' };
-}
 
 // the furthest state each message of mine was reported in, for the messages the report beat to
 // the screen (a fast confirmation comes before ChatSend returns)
@@ -91,7 +75,7 @@ function report(id, state) {
 
 /** A message as the screen shows it, from the core's ChatMessage. */
 export function norm(m) {
-  const call = (m.text || '').startsWith(CALL_INVITE);
+  const call = m.kind === 'call';
   const state = m.mine ? furthest(m.state || '', reported.get(m.id) || '') : '';
   return {
     id: m.id,
@@ -99,10 +83,11 @@ export function norm(m) {
     mine: !!m.mine,
     sender: m.mine ? '' : m.author,
     text: call ? (m.mine ? tr('chats.outgoingCall') : tr('chats.incomingCall')) : m.text || '',
-    system: call || m.type === MSG_SYSTEM,
+    system: call || m.kind === 'system',
     type: m.type || 0,
     ts: m.ts || 0,
-    file: m.deleted ? null : fileOf(m),
+    file: m.deleted || !m.file ? null : { fid: m.file.id, name: m.file.name, size: m.file.size || 0, mime: m.file.mime || '' },
+    can: m.can || {},
     state,
     pending: !!state && state !== 'delivered' && state !== 'expired',
     failed: state === 'expired',
@@ -157,62 +142,31 @@ function patch(id, fn) {
   chats.update((list) => list.map((c) => (c.id === id ? fn(c) : c)));
 }
 
-// the parts of a list row the log knows
-const fromLog = (d) => ({
-  last: d.last ? preview(norm(d.last)) : '',
-  lastId: d.last ? d.last.id : '',
-  ts: d.lastTs || 0,
-  unread: d.unread || 0,
-  upgraded: !!d.upgraded,
-});
+// a chat-list row from the core's entry
+function rowOf(d) {
+  const can = d.can || {};
+  const group = d.ref.kind === 'group';
+  return {
+    id: chatIdOf(d.ref), kind: group ? 'group' : 'direct', groupKind: d.kind === 'channel' ? 'channel' : 'group', ref: d.ref,
+    name: d.name || (group ? d.title : d.ref.id.slice(0, 8)), peerId: group ? '' : d.ref.id, pubKey: d.pubKey || '', groupId: group ? d.ref.id : '',
+    online: !!d.online, blocked: !!d.blocked, request: !!d.request, myRole: d.role || '', members: d.members || 0,
+    can, readOnly: !can.send,
+    last: d.last ? preview(norm(d.last)) : '', lastId: d.last ? d.last.id : '', ts: d.lastTs || 0, unread: d.unread || 0,
+    upgraded: !!d.upgraded,
+  };
+}
+
+// the newest change seen per chat: one that lost a race to a newer one is stale
+const revs = new Map();
 
 export async function loadChats() {
   chatError.set('');
-  const items = [];
-  let blocked = new Set();
-  const list = (v) => (Array.isArray(v) ? v : []);
-  try { blocked = new Set(list(await App.GetBlockedPeers()).map((b) => b.peer_id)); } catch (_) { /* older core */ }
-  let requests = [];
-  try { requests = list(await App.GetMessageRequests()); } catch (_) { /* older core */ }
-  const logged = {};
   try {
-    for (const d of list(await App.ChatList())) logged[chatIdOf(d.ref)] = d;
+    const rows = await App.ChatList();
+    chats.set((Array.isArray(rows) ? rows : []).map(rowOf));
   } catch (err) {
     chatError.set(errText(err, tr('chats.err.loadMessages')));
   }
-  const people = [];
-  try {
-    for (const c of (await App.GetContacts()) || []) people.push({ ...c, request: false });
-  } catch (err) {
-    chatError.set(errText(err, tr('chats.err.loadContacts')));
-  }
-  for (const r of requests) {
-    if (!people.some((c) => c.peer_id === r.peer_id)) people.push({ peer_id: r.peer_id, pub_key: r.pub_key, alias: '', request: true });
-  }
-  for (const c of people) {
-    const id = 'd:' + c.peer_id;
-    const d = logged[id];
-    items.push({
-      id, kind: 'direct', ref: { kind: 'dm', id: c.peer_id }, name: c.alias || c.peer_id.slice(0, 8),
-      peerId: c.peer_id, pubKey: c.pub_key, online: !!c.is_online, last: '', lastId: '', ts: 0, unread: 0, upgraded: null,
-      ...(d ? fromLog(d) : {}),
-      request: c.request, blocked: blocked.has(c.peer_id),
-    });
-  }
-  try {
-    for (const g of (await App.ListGroups()) || []) {
-      const id = 'g:' + g.id;
-      const d = logged[id];
-      items.push({
-        id, kind: 'group', ref: { kind: 'group', id: g.id }, name: g.title, groupId: g.id, members: g.members, myRole: g.myRole,
-        readOnly: g.readOnly, groupKind: g.kind, last: '', lastId: '', ts: g.createdAt || 0, unread: 0, upgraded: null,
-        ...(d ? fromLog(d) : {}),
-      });
-    }
-  } catch (err) {
-    chatError.set(errText(err, tr('chats.err.loadGroups')));
-  }
-  chats.set(items);
   listen();
 }
 
@@ -220,6 +174,10 @@ export async function loadChats() {
 async function changed(ev) {
   const id = chatIdOf(ev.ref);
   const d = ev.conversation;
+  if (ev.rev) {
+    if (ev.rev < (revs.get(id) || 0) && !(ev.messages || []).length) return;
+    revs.set(id, Math.max(ev.rev, revs.get(id) || 0));
+  }
   let row = get(chats).find((c) => c.id === id);
   const fresh = !row;
   if (fresh) {
@@ -231,8 +189,13 @@ async function changed(ev) {
   const open = get(activeId) === id;
   const arrived = d.last && !d.last.mine && (fresh || d.last.id !== row.lastId);
   if (arrived && msgs.some((m) => m.id === d.last.id && !m.system)) play('receive', { quiet: inCall() });
-  patch(id, (c) => ({ ...c, ...fromLog(d), unread: open && get(focused) ? 0 : d.unread || 0 }));
+  patch(id, (c) => ({ ...c, ...rowOf(d), unread: open && get(focused) ? 0 : d.unread || 0 }));
   if (!open) return;
+  if (ev.reload) {
+    // the chat was computed again (who may do what changed): read it afresh
+    await reloadOpen();
+    return;
+  }
 
   messages.update((list) => msgs.filter((m) => !m.thread).reduce((l, m) => upsert(l, m, before, get(hasOlder)), list));
   const th = get(thread);
@@ -352,6 +315,14 @@ export async function openChat(id) {
   chatNote.set('');
   await reload();
   loadPins();
+}
+
+// the open chat read afresh: its newest page, its pins and its open thread
+async function reloadOpen() {
+  await reload();
+  loadPins();
+  const th = get(thread);
+  if (th) openThread(th.root);
 }
 
 // the newest page of the open chat

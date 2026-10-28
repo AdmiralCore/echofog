@@ -562,7 +562,15 @@ const impl = {
     groupMsgs.push(m);
     return m;
   },
-  ListGroupMembers: () => groupMembers.map((m) => ({ ...m, isMe: m.peerId === SELF })),
+  ListGroupMembers: () => {
+    const me = RANKS[groupMembers.find((m) => m.peerId === SELF)?.role] || 0;
+    return groupMembers.map((m) => {
+      const isMe = m.peerId === SELF;
+      const over = !isMe && (RANKS[m.role] || 0) < 100 && me > (RANKS[m.role] || 0);
+      const roles = over && me >= RANKS.admin ? ['admin', 'moderator', 'member', 'restricted'].filter((r) => RANKS[r] < me || r === m.role) : undefined;
+      return { ...m, isMe, canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
+    });
+  },
   SetGroupRole: (_g, id, role) => { const m = groupMembers.find((x) => x.peerId === id); if (!m) throw new Error('this person is not in the group'); m.role = role; return null; },
   RemoveGroupMember: (_g, id) => { const i = groupMembers.findIndex((x) => x.peerId === id); if (i < 0) throw new Error('this person is not in the group'); groupMembers.splice(i, 1); return null; },
   AddGroupMember: (_g, key) => { if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error('member key must be 32 bytes of hex'); groupMembers.push({ peerId: hex(40 + groupMembers.length), role: 'member' }); return null; },
@@ -796,24 +804,62 @@ const find = (c, id) => {
   if (!m) throw new Error('not found');
   return m;
 };
+// what the core says a message is, and the file it offers (the two metadata formats as one)
+function kindOf(m) {
+  if (m.type === 100) return { kind: 'system' };
+  if ((m.text || '').startsWith('fogcall://')) return { kind: 'call' };
+  let meta = {};
+  try { meta = m.metadata ? JSON.parse(m.metadata) : {}; } catch (_) { /* not JSON */ }
+  if (meta.group_file) return { kind: 'file', file: { id: meta.group_file.id, name: meta.group_file.name, size: Number(meta.group_file.size) || 0, mime: meta.group_file.mime || '' } };
+  if (m.type === 4) return { kind: 'file', file: { id: meta.custom?.fid || '', name: meta.file_name || m.text, size: Number(meta.file_size) || 0, mime: meta.mime_type || '' } };
+  return { kind: 'text' };
+}
+// the ranks of the group service: the preview plays the core, which decides who may do what
+const RANKS = { owner: 100, admin: 50, moderator: 25, member: 10, subscriber: 10, restricted: 1 };
 function shown(c, m) {
+  const row = convOf(keyOf(c.ref), false);
   const v = {
     ...m,
+    ...kindOf(m),
     reactions: m.reactions.filter((r) => r.by.length).map((r) => ({ emoji: r.emoji, by: [...r.by], count: r.by.length, mine: r.by.includes(SELF) })),
     replies: c.msgs.filter((x) => x.thread === m.id && !x.deleted).length,
   };
-  if (m.deleted) Object.assign(v, { text: '', metadata: '', reactions: [] });
+  const live = !m.deleted;
+  const mod = c.ref.kind === 'group' && (RANKS[row.role] || 0) >= RANKS.moderator;
+  v.can = {
+    edit: row.upgraded && live && m.mine && v.kind === 'text',
+    delete: row.upgraded && live && (m.mine || mod),
+    pin: live && !m.thread && row.can.pin,
+    react: live && row.can.react,
+    reply: live && row.can.send,
+  };
+  if (m.deleted) Object.assign(v, { text: '', metadata: '', reactions: [], file: undefined });
   return v;
 }
-function convOf(k) {
+function convOf(k, withLast = true) {
   const c = clog[k];
   const top = c.msgs.filter((m) => !m.thread);
   const last = top[top.length - 1];
-  return {
-    ref: c.ref, conv: k, title: c.ref.kind === 'group' ? groups.find((g) => g.id === c.ref.id)?.title : undefined,
-    last: last ? shown(c, last) : undefined, lastTs: last ? last.ts : 0, unread: c.unread,
-    request: c.ref.kind === 'dm' && !contacts.some((x) => x.peer_id === c.ref.id), upgraded: c.upgraded,
+  const d = {
+    ref: c.ref, conv: k, lastTs: last ? last.ts : 0, unread: c.unread, upgraded: c.upgraded,
+    request: c.ref.kind === 'dm' && !contacts.some((x) => x.peer_id === c.ref.id),
   };
+  if (c.ref.kind === 'dm') {
+    const ct = contacts.find((x) => x.peer_id === c.ref.id);
+    const rq = privacyMock.requests.find((x) => x.peer_id === c.ref.id);
+    const blocked = privacyMock.blocked.some((b) => b.peer_id === c.ref.id);
+    const pub = ct?.pub_key || rq?.pub_key || '';
+    Object.assign(d, { kind: 'direct', name: ct?.alias || c.ref.id.slice(0, 8), peerId: c.ref.id, pubKey: pub, online: !!ct?.is_online, blocked,
+      can: { send: !blocked, files: !blocked && !!pub, react: c.upgraded && !blocked, pin: c.upgraded, call: !blocked && !!pub } });
+  } else {
+    const g = groups.find((x) => x.id === c.ref.id) || {};
+    const rank = RANKS[g.myRole] || 0;
+    const send = !g.readOnly;
+    Object.assign(d, { kind: g.kind === 'channel' ? 'channel' : 'group', name: g.title, title: g.title, role: g.myRole, members: g.members,
+      can: { send, files: send, react: c.upgraded && !!g.myRole, pin: c.upgraded && rank >= RANKS.moderator, manage: rank >= RANKS.admin, invite: true, call: true } });
+  }
+  if (withLast && last) d.last = shown(c, last);
+  return d;
 }
 const logChanged = (k, ...msgs) => emit('conv:change', { ref: clog[k].ref, conversation: convOf(k), messages: msgs.map((m) => shown(clog[k], m)) });
 function logArrived(k, m) {
@@ -892,7 +938,13 @@ const reactWith = (m, emoji, ...by) => m.reactions.push({ emoji, by });
 
 const NOT_UPGRADED = 'not every member of this group has updated the app yet';
 Object.assign(impl, {
-  ChatList: () => Object.keys(clog).map(convOf).filter((d) => d.last).sort((a, b) => b.lastTs - a.lastTs),
+  // every contact, request and group, written to or not, as the core lists them
+  ChatList: () => {
+    contacts.forEach((c) => chatOf({ kind: 'dm', id: c.peer_id }));
+    privacyMock.requests.forEach((r) => chatOf({ kind: 'dm', id: r.peer_id }));
+    groups.forEach((g) => chatOf({ kind: 'group', id: g.id }));
+    return Object.keys(clog).map((k) => convOf(k)).sort((a, b) => b.lastTs - a.lastTs);
+  },
   ChatHistory: (ref, cursor, limit) => {
     const c = chatOf(ref);
     const rev = c.msgs.filter((m) => !m.thread).sort((a, b) => b.lamport - a.lamport);
