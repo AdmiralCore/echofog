@@ -46,6 +46,9 @@ export namespace convlog {
 	    name: string;
 	    size: number;
 	    mime?: string;
+	    thumb?: string;
+	    w?: number;
+	    h?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileRef(source);
@@ -57,6 +60,9 @@ export namespace convlog {
 	        this.name = source["name"];
 	        this.size = source["size"];
 	        this.mime = source["mime"];
+	        this.thumb = source["thumb"];
+	        this.w = source["w"];
+	        this.h = source["h"];
 	    }
 	}
 	export class MsgCan {
@@ -1112,6 +1118,9 @@ export namespace node {
 	    name: string;
 	    size: number;
 	    mime?: string;
+	    thumb?: string;
+	    tw?: number;
+	    th?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupFileDTO(source);
@@ -1123,6 +1132,9 @@ export namespace node {
 	        this.name = source["name"];
 	        this.size = source["size"];
 	        this.mime = source["mime"];
+	        this.thumb = source["thumb"];
+	        this.tw = source["tw"];
+	        this.th = source["th"];
 	    }
 	}
 	export class GroupMemberDTO {
