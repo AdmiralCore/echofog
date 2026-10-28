@@ -32,7 +32,7 @@ type wireMember struct {
 }
 
 type groupWire struct {
-	Kind    string                       `json:"k"` // msg join snap add role rm call callalive callend
+	Kind    string                       `json:"k"` // msg join snap add role rm call callalive callend rcall rcallalive
 	Group   string                       `json:"g"`
 	ID      string                       `json:"i,omitempty"`
 	Text    string                       `json:"t,omitempty"`
@@ -71,6 +71,9 @@ type wireFile struct {
 	Thumb string `json:"t,omitempty"`
 	TW    int    `json:"tw,omitempty"`
 	TH    int    `json:"th,omitempty"`
+	// where in a space it was posted: the channel ("" the main one) and the thread's root
+	Channel string `json:"ch,omitempty"`
+	Thread  string `json:"rt,omitempty"`
 }
 
 // wireHistory is one old message that an admin hands to a newcomer, with its author's signature
@@ -432,7 +435,7 @@ func (f *groupsFacade) apply(origin types.PeerID, w groupWire) (after []func()) 
 func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func()) {
 	if f.blocked != nil && f.blocked(origin) {
 		switch w.Kind {
-		case "msg", "call", "callalive":
+		case "msg", "call", "callalive", "rcall", "rcallalive":
 			return nil // what a blocked member says or starts stays out of sight; the group goes on
 		}
 	}
@@ -684,7 +687,10 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		}
 		return nil
 
-	case "call", "callalive":
+	case "call", "callalive", "rcall", "rcallalive":
+		if (w.Kind == "rcall" || w.Kind == "rcallalive") && w.Room == "" {
+			return nil
+		}
 		role, err := f.mgr.GetMemberRole(w.Group, origin)
 		if err != nil || role.Permissions&groups.PermJoinVoice == 0 || w.CallID == "" || w.Coord == "" {
 			return nil
@@ -754,7 +760,8 @@ func (f *groupsFacade) receiveMessage(sender types.PeerID, groupID, id string, t
 		if f.onFile == nil || wf.ID == "" || wf.Root == "" || wf.Key == "" || wf.Size < 0 {
 			return nil
 		}
-		msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime, Thumb: thumbOK(wf.Thumb), TW: wf.TW, TH: wf.TH}
+		msg.File = &GroupFileDTO{ID: wf.ID, Name: wf.Name, Size: wf.Size, Mime: wf.Mime, Thumb: thumbOK(wf.Thumb), TW: wf.TW, TH: wf.TH,
+			Channel: wf.Channel, Thread: wf.Thread}
 		offer = func() { f.onFile(sender, groupID, wf) }
 	}
 	raw, _ := json.Marshal(msg)
@@ -897,7 +904,7 @@ func (f *groupsFacade) StartCall(groupID, room string) (GroupCall, error) {
 	f.calls[callKey(groupID, room)] = c
 	f.inCall[callKey(groupID, room)] = map[types.PeerID]int64{f.selfID: now}
 	f.mu.Unlock()
-	f.broadcast(groupID, groupWire{Kind: "call", Group: groupID, Room: room, CallID: c.CallID, Coord: c.Coordinator, TS: now})
+	f.broadcast(groupID, groupWire{Kind: callKind(room, "call"), Group: groupID, Room: room, CallID: c.CallID, Coord: c.Coordinator, TS: now})
 	return c, nil
 }
 
@@ -932,8 +939,18 @@ func (f *groupsFacade) KeepCallAlive(groupID, room, callID, coordinator string) 
 	f.noteInCall(key, f.selfID, true)
 	f.aliveSent[key] = now
 	f.mu.Unlock()
-	f.broadcast(groupID, groupWire{Kind: "callalive", Group: groupID, Room: room, CallID: callID, Coord: coordinator, TS: now})
+	f.broadcast(groupID, groupWire{Kind: callKind(room, "callalive"), Group: groupID, Room: room, CallID: callID, Coord: coordinator, TS: now})
 	return nil
+}
+
+// callKind is the wire kind that announces a call. A voice room's call has kinds of its own: a
+// build from before voice rooms does not know the room field and would take "call" for the
+// group's own call and ring every member; a kind it does not know it ignores.
+func callKind(room, kind string) string {
+	if room != "" {
+		return "r" + kind
+	}
+	return kind
 }
 
 // ActiveCall is the call that a member recently started in the group, if any.

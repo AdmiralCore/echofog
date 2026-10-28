@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,7 +62,7 @@ func TestGroupFileToTwoMembers(t *testing.T) {
 
 	const size = 24<<20 + 4321
 	src, sum := bigFile(t, t.TempDir(), "report.pdf", size)
-	posted, err := alice.SendGroupFile(g.ID, src)
+	posted, err := alice.SendGroupFile(g.ID, "", "", src)
 	require.NoError(t, err)
 	require.NotNil(t, posted.File)
 	assert.Equal(t, "report.pdf", posted.Text)
@@ -93,4 +94,67 @@ func TestGroupFileToTwoMembers(t *testing.T) {
 	}, 15*time.Second, 50*time.Millisecond, "the sender learns that both have it")
 	o, _ := alice.GetFileTransfer(id)
 	assert.Equal(t, "active", o.State, "a group file stays offered")
+}
+
+// hasFile reports whether page holds the message offering file id.
+func hasFile(page node.ChatPage, id string) bool {
+	for _, m := range page.Messages {
+		if m.File != nil && m.File.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// A file posted in a channel of a space, or in a thread, shows there for the other members, not
+// in the main channel.
+func TestGroupFileInChannelAndThread(t *testing.T) {
+	aN, alice := fileNode(t, "gchan-alice", nil)
+	_, bob := fileNode(t, "gchan-bob", nil)
+	require.NoError(t, bob.ConnectToPeer(network.JoinPeerAddr(aN.Transport.Addr().String(), aN.ID)))
+	require.Eventually(t, func() bool { return len(alice.GetPeers()) >= 1 }, 10*time.Second, 50*time.Millisecond)
+
+	g, err := alice.CreateGroup("Space", "", "group")
+	require.NoError(t, err)
+	invite, err := alice.GetGroupInvite(g.ID)
+	require.NoError(t, err)
+	_, err = bob.JoinGroup(invite)
+	require.NoError(t, err)
+	ref := node.ChatRef{Kind: convlog.KindGroup, ID: g.ID}
+	var ch node.ChannelDTO
+	require.Eventually(t, func() bool {
+		ch, err = alice.ChatChannelSave(ref, node.ChannelSpec{Name: "photos"})
+		return err == nil
+	}, 15*time.Second, 100*time.Millisecond, "the space should take a channel")
+	in := node.ChatRef{Kind: convlog.KindGroup, ID: g.ID, Channel: ch.ID}
+	require.Eventually(t, func() bool {
+		list, _ := bob.ChatChannels(ref)
+		return len(list) > 0
+	}, 15*time.Second, 100*time.Millisecond, "bob learns of the channel")
+
+	src, _ := bigFile(t, t.TempDir(), "cat.jpg", 4096)
+	posted, err := alice.SendGroupFile(g.ID, ch.ID, "", src)
+	require.NoError(t, err)
+	id := posted.File.ID
+	for _, r := range []*node.NodeApi{alice, bob} {
+		require.Eventually(t, func() bool {
+			page, _ := r.ChatHistory(in, "", 50)
+			return hasFile(page, id)
+		}, 15*time.Second, 50*time.Millisecond, "the file shows in its channel")
+		main, _ := r.ChatHistory(ref, "", 50)
+		assert.False(t, hasFile(main, id), "the file is not in the main channel")
+	}
+
+	root, err := alice.ChatSend(in, node.SendRequest{Text: "comments here"})
+	require.NoError(t, err)
+	src2, _ := bigFile(t, t.TempDir(), "dog.jpg", 4096)
+	posted, err = alice.SendGroupFile(g.ID, ch.ID, root.ID, src2)
+	require.NoError(t, err)
+	id = posted.File.ID
+	require.Eventually(t, func() bool {
+		page, _ := bob.ChatThread(in, root.ID, "", 50)
+		return hasFile(page, id)
+	}, 15*time.Second, 50*time.Millisecond, "the file shows in the thread")
+	page, _ := bob.ChatHistory(in, "", 50)
+	assert.False(t, hasFile(page, id), "a comment is not in the channel's own history")
 }

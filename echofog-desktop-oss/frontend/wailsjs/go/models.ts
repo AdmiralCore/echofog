@@ -1121,6 +1121,8 @@ export namespace node {
 	    thumb?: string;
 	    tw?: number;
 	    th?: number;
+	    channel?: string;
+	    thread?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupFileDTO(source);
@@ -1135,6 +1137,8 @@ export namespace node {
 	        this.thumb = source["thumb"];
 	        this.tw = source["tw"];
 	        this.th = source["th"];
+	        this.channel = source["channel"];
+	        this.thread = source["thread"];
 	    }
 	}
 	export class GroupMemberDTO {

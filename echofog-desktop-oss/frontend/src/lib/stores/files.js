@@ -66,15 +66,16 @@ function postInGroup(conv, send) {
   });
 }
 
-/** Lets the user pick a file and offers it to the contact, or posts it in the group. */
-export const pickAndSend = (conv) =>
+/** Lets the user pick a file and offers it to the contact, or posts it in the group: in a space, in
+ *  the channel shown ('' the main one) or the thread under root. */
+export const pickAndSend = (conv, channel = '', thread = '') =>
   conv.kind === 'group'
-    ? postInGroup(conv, () => App.PickAndSendGroupFile(conv.groupId))
+    ? postInGroup(conv, () => App.PickAndSendGroupFile(conv.groupId, channel, thread))
     : act(() => App.PickAndSendFile(conv.pubKey));
-/** Offers files dropped on the chat. */
-export async function sendPaths(conv, paths) {
+/** Offers files dropped on the chat (in a group, where pickAndSend posts). */
+export async function sendPaths(conv, paths, channel = '', thread = '') {
   for (const p of paths || []) {
-    if (conv.kind === 'group') await postInGroup(conv, () => App.SendGroupFile(conv.groupId, p));
+    if (conv.kind === 'group') await postInGroup(conv, () => App.SendGroupFile(conv.groupId, channel, thread, p));
     else await act(() => App.SendFile(conv.pubKey, p));
   }
 }

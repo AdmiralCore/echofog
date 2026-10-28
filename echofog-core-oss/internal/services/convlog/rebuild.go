@@ -158,6 +158,28 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 		}
 		t.put(indexKey(bc, se.id.String()), l.marker(se.e, rejected))
 	}
+	// a legacy message posted live in a channel or a thread (a file) keeps its place there
+	for id, v := range legacy {
+		switch {
+		case v.Thread != "":
+			t.put(threadKey(bc, v.Thread, v.Lamport, id), []byte(id))
+			root := t.view(v.Thread)
+			root.Replies++
+			if v.TS > root.LastReplyTS {
+				root.LastReplyTS = v.TS
+			}
+			t.touch(v.Thread)
+		case v.Channel != "":
+			t.put(chanOrderKey(bc, v.Channel, v.Lamport, id), []byte(id))
+			st := meta.chan_(v.Channel)
+			if v.Lamport >= st.LastLamport {
+				st.LastLamport, st.LastID, st.LastTS = v.Lamport, id, v.TS
+			}
+			if v.Lamport >= meta.LastLamport {
+				meta.LastLamport, meta.LastID, meta.LastTS = v.Lamport, id, v.TS
+			}
+		}
+	}
 	// pins from the final views: one transaction of puts and deletes would not keep their order
 	kept := t.sets[:0]
 	for _, en := range t.sets {

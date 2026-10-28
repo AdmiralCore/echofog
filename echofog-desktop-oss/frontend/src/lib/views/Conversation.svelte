@@ -235,7 +235,7 @@
   onMount(() => {
     // files dropped on the chat are offered to the contact or posted to the group
     window.runtime?.OnFileDrop?.((_x, _y, paths) => {
-      if (conv.can.files && paths?.length) sendPaths(conv, paths);
+      if (conv.can.files && paths?.length) sendPaths(conv, paths, $activeChannel);
     }, true);
   });
   onDestroy(() => window.runtime?.OnFileDropOff?.());
@@ -286,7 +286,7 @@
       <Composer bind:this={composer} bind:text {replyTo} {editing} replyName={replyTo ? $authorName(replyTo) : ''}
         files={conv.can.files} busy={sending}
         placeholder={conv.kind === 'group' ? $t('chats.writeIn', { name: channelName || $t('chats.mainChannel') }) : $t('chats.writeMessage')}
-        on:submit={submit} on:cancel={cancelCompose} on:editlast={editLast} on:attach={() => pickAndSend(conv)} on:goto={(e) => list?.goTo(e.detail)} />
+        on:submit={submit} on:cancel={cancelCompose} on:editlast={editLast} on:attach={() => pickAndSend(conv, $activeChannel)} on:goto={(e) => list?.goTo(e.detail)} />
     {/if}
   </div>
 

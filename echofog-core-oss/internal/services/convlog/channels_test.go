@@ -118,3 +118,68 @@ func TestReadOnlyChannelAndThreads(t *testing.T) {
 		t.Fatalf("threads: %+v", threads)
 	}
 }
+
+// A file posted in a channel or a thread travels the old way (a legacy message) and lands there,
+// also after a rebuild; one that names a channel the log does not have lands in the main one.
+func TestLegacyMessageInAChannelOrThread(t *testing.T) {
+	f, x := newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("space")
+	lf := groupReplica(t, f, rules)
+	member(t, lf, c, roster(f, "owner", x, "member"))
+	if _, _, err := lf.AppendChannel(c, ChannelSpec{ID: "photos", Name: "photos"}); err != nil {
+		t.Fatal(err)
+	}
+	_, root, err := lf.AppendMessageIn(c, "photos", "look", 0, "", EventID{}, EventID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lf.AddLegacy(c, []Legacy{
+		{ID: "f1", Author: x.id, TS: 1, Text: "cat.jpg", Channel: "photos"},
+		{ID: "f2", Author: x.id, TS: 2, Text: "dog.jpg", Thread: root.String()},
+		{ID: "f3", Author: x.id, TS: 3, Text: "lost.jpg", Channel: "nowhere"},
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	check := func(when string) {
+		t.Helper()
+		ch, _, _ := lf.HistoryIn(c, "photos", "", 50)
+		main, _, _ := lf.History(c, "", 50)
+		th, _, _ := lf.Thread(c, root, "", 50)
+		texts := func(ms []Message) (out []string) {
+			for _, m := range ms {
+				out = append(out, m.Text)
+			}
+			return
+		}
+		if got := texts(ch); len(got) != 2 || !contains(got, "cat.jpg") || !contains(got, "look") {
+			t.Fatalf("%s: channel %v", when, got)
+		}
+		if got := texts(main); len(got) != 1 || got[0] != "lost.jpg" {
+			t.Fatalf("%s: main %v", when, got)
+		}
+		if got := texts(th); len(got) != 1 || got[0] != "dog.jpg" {
+			t.Fatalf("%s: thread %v", when, got)
+		}
+		if m, _ := lf.Message(c, root); m.Replies != 1 {
+			t.Fatalf("%s: root has %d replies", when, m.Replies)
+		}
+	}
+	check("live")
+	lf.mu.Lock()
+	_, err = lf.rebuildLocked(c, lf.bc(c.ID))
+	lf.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("after a rebuild")
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

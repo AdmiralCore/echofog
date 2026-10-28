@@ -217,9 +217,10 @@ func (a *App) emitIncomingCall(ctx context.Context, msg *dto.MessageDTO) {
 // ringWindow is how old a call invitation may be and still ring (generous for clocks that differ).
 const ringWindow = 2 * time.Minute
 
-// PickAndSendGroupFile lets the user choose a file and posts it in the group: every member gets
-// the offer and fetches the file from this computer. Nil without error: the dialog was closed.
-func (a *App) PickAndSendGroupFile(groupID string) (*api.GroupMessageDTO, error) {
+// PickAndSendGroupFile lets the user choose a file and posts it in the group, in a channel of a
+// space ("" the main one) or in the thread under root ("" none): every member gets the offer and
+// fetches the file from this computer. Nil without error: the dialog was closed.
+func (a *App) PickAndSendGroupFile(groupID, channel, thread string) (*api.GroupMessageDTO, error) {
 	n := a.getAPI()
 	if n == nil {
 		return nil, errNodeNotStarted
@@ -231,18 +232,18 @@ func (a *App) PickAndSendGroupFile(groupID string) (*api.GroupMessageDTO, error)
 	if err != nil || path == "" {
 		return nil, err
 	}
-	m, err := n.SendGroupFile(groupID, path)
+	m, err := n.SendGroupFile(groupID, channel, thread, path)
 	if err != nil {
 		return nil, err
 	}
 	return &m, nil
 }
 
-// SendGroupFile posts a file (dropped on the window) in the group.
-func (a *App) SendGroupFile(groupID string, path string) (api.GroupMessageDTO, error) {
+// SendGroupFile posts a file (dropped on the window) in the group, like PickAndSendGroupFile.
+func (a *App) SendGroupFile(groupID, channel, thread, path string) (api.GroupMessageDTO, error) {
 	n := a.getAPI()
 	if n == nil {
 		return api.GroupMessageDTO{}, errNodeNotStarted
 	}
-	return n.SendGroupFile(groupID, path)
+	return n.SendGroupFile(groupID, channel, thread, path)
 }

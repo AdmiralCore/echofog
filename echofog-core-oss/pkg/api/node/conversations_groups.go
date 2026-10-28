@@ -288,8 +288,12 @@ func (f *convsFacade) mirrorGroup(groupID string, m GroupMessageDTO) {
 			meta = string(raw)
 		}
 	}
+	var channel, thread string
+	if m.File != nil {
+		channel, thread = m.File.Channel, m.File.Thread
+	}
 	_, _ = f.log.AddLegacy(convlog.Group(groupID), []convlog.Legacy{{ID: m.ID, Author: author, TS: m.Timestamp,
-		Text: m.Text, Metadata: meta}}, true)
+		Text: m.Text, Metadata: meta, Channel: channel, Thread: thread}}, true)
 }
 
 const migratedGroupsKey = "cl/x/migrated-groups-v1"

@@ -95,6 +95,9 @@ type GroupFileDTO struct {
 	Thumb string `json:"thumb,omitempty"`
 	TW    int    `json:"tw,omitempty"`
 	TH    int    `json:"th,omitempty"`
+	// Channel and Thread are where in a space it was posted ("" the main channel, no thread)
+	Channel string `json:"channel,omitempty"`
+	Thread  string `json:"thread,omitempty"`
 }
 
 // maxThumb bounds a thumbnail somebody else sent (ours are about 6 KB).
@@ -506,7 +509,7 @@ func (f *groupsFacade) SendMessage(groupID, text string) (GroupMessageDTO, error
 
 // SendFile posts a file in a group: one message carries the offer to every member, and each
 // member who accepts pulls the file from this node.
-func (f *groupsFacade) SendFile(groupID, path string) (GroupMessageDTO, error) {
+func (f *groupsFacade) SendFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
 	if f.prepareFile == nil {
 		return GroupMessageDTO{}, errors.New("file transfer is not available")
 	}
@@ -527,7 +530,8 @@ func (f *groupsFacade) SendFile(groupID, path string) (GroupMessageDTO, error) {
 	if err != nil {
 		return GroupMessageDTO{}, err
 	}
-	wf := &wireFile{ID: offer.ID, Name: offer.Name, Size: offer.Size, Mime: offer.Mime, Root: offer.Root, Key: offer.Key}
+	wf := &wireFile{ID: offer.ID, Name: offer.Name, Size: offer.Size, Mime: offer.Mime, Root: offer.Root, Key: offer.Key,
+		Channel: channel, Thread: thread}
 	if thumb, w, h, ok := filexfer.Thumbnail(path); ok {
 		wf.Thumb, wf.TW, wf.TH = thumb, w, h // the members see the picture before they fetch it
 	}
@@ -574,7 +578,8 @@ func (f *groupsFacade) post(groupID, text string, file *wireFile) (GroupMessageD
 		Text: text, Timestamp: now, IsMine: true, Delivered: delivered, Queued: queued, Failed: failed, Verified: true,
 	}, Sig: c.Sig, FD: c.FileDigest}
 	if file != nil {
-		msg.File = &GroupFileDTO{ID: file.ID, Name: file.Name, Size: file.Size, Mime: file.Mime, Thumb: file.Thumb, TW: file.TW, TH: file.TH}
+		msg.File = &GroupFileDTO{ID: file.ID, Name: file.Name, Size: file.Size, Mime: file.Mime, Thumb: file.Thumb, TW: file.TW, TH: file.TH,
+			Channel: file.Channel, Thread: file.Thread}
 	}
 	raw, _ := json.Marshal(msg)
 	if err := f.store.Set(msgKey(groupID, now, f.seq), raw); err != nil {
@@ -743,14 +748,20 @@ func (n *NodeApi) mirrorOwnGroupPost(groupID string, d GroupMessageDTO, err erro
 	}
 }
 
-// SendGroupFile posts a file in a group. Every member gets the offer; each who accepts fetches it
+// SendGroupFile posts a file in a group: in a channel of a space ("" the main one), or as a comment
+// in the thread under root ("" none). Every member gets the offer; each who accepts fetches it
 // from this node (the transfer's Delivered counts them).
-func (n *NodeApi) SendGroupFile(groupID, path string) (GroupMessageDTO, error) {
+func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupMessageDTO{}, err
 	}
-	d, err := f.SendFile(groupID, path)
+	if thread != "" {
+		if _, err := convlog.ParseEventID(thread); err != nil {
+			return GroupMessageDTO{}, err
+		}
+	}
+	d, err := f.SendFile(groupID, channel, thread, path)
 	n.mirrorOwnGroupPost(groupID, d, err)
 	return d, err
 }

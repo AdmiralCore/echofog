@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -679,6 +681,38 @@ func TestGroupsFacade_VoiceRoomCallDoesNotRing(t *testing.T) {
 
 	require.NoError(t, a.f.EndCall(g.ID, "lounge", room.CallID))
 	assert.Empty(t, b.f.ActiveRoomCalls(g.ID))
+}
+
+// A build from before voice rooms reads "call" as the group's own call and rings, whatever room
+// it names. A voice room's call is announced under kinds such a build does not know, and a room
+// kind that names no room is dropped.
+func TestGroupsFacade_VoiceRoomCallIsNotAGroupCallOnTheWire(t *testing.T) {
+	h := newHub()
+	a, b := h.node(t, newMemStore()), h.node(t, newMemStore())
+	g, _ := a.f.Create("Crew", "", "group")
+	invite, _ := a.f.Invite(g.ID)
+	_, _ = b.f.Join(invite)
+
+	h.mu.Lock()
+	h.offline[b.id] = true
+	h.mu.Unlock()
+	room, err := a.f.StartCall(g.ID, "lounge")
+	require.NoError(t, err)
+	require.NoError(t, a.f.KeepCallAlive(g.ID, "lounge", room.CallID, room.Coordinator))
+	h.mu.Lock()
+	var kinds []string
+	for _, m := range h.waiting[b.id] {
+		var w groupWire
+		if strings.HasPrefix(m.text, wirePrefix) && json.Unmarshal([]byte(strings.TrimPrefix(m.text, wirePrefix)), &w) == nil && w.CallID != "" {
+			kinds = append(kinds, w.Kind)
+		}
+	}
+	h.mu.Unlock()
+	assert.Equal(t, []string{"rcall", "rcallalive"}, kinds)
+
+	b.f.handle(a.id, encodeWire(groupWire{Kind: "rcall", Group: g.ID, CallID: "x", Coord: a.id.String()}))
+	_, groupCall := b.f.ActiveCall(g.ID, "")
+	assert.False(t, groupCall, "a room kind without a room is no call at all")
 }
 
 // Who is in a voice room: everybody who announced it lately, until they say they left.

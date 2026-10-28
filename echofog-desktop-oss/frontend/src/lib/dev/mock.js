@@ -183,14 +183,14 @@ function runGroupShare(t) {
   setTimeout(step, 250);
 }
 setTimeout(() => runGroupShare(groupFx.build), 2000);
-function postGroupFile(groupId, path) {
+function postGroupFile(groupId, path, channel = '', thread = '') {
   const name = String(path).split(/[\/]/).pop();
   const id = 'gfx' + Date.now();
   const t = { id, peer: '', group: groupId, dir: 'out', name, size: Math.round((5 + Math.random() * 80) * MB), state: 'offered', path, done: 0, rate: 0, stalled: false, members: groupMembers.length - 1, delivered: 0, fetching: 0, created: Date.now() };
   const m = groupFileMsg(t, SELF, Date.now());
   groupMsgs.push(m);
   pushFx(t);
-  logFile('g:' + groupId, SELF, JSON.stringify({ group_file: { id, name, size: t.size } }), name);
+  logFile('g:' + groupId, SELF, JSON.stringify({ group_file: { id, name, size: t.size } }), name, { channel: channel || undefined, thread: thread || undefined });
   // two members start downloading after a moment
   setTimeout(() => { Object.assign(t, { state: 'active', fetching: 2, rate: 6 * MB }); pushFx(t); runGroupShare(t); }, 1500);
   return { ...m };
@@ -516,8 +516,8 @@ const impl = {
   ListFileTransfers: (peer) => Object.values(fx).filter((t) => !peer || t.peer === peer).map((t) => ({ ...t })),
   PickAndSendFile: (pub) => new Promise((r) => setTimeout(() => r(offerFile(pub, 'C:/Users/demo/Pictures/holiday-photos.7z')), 300)),
   SendFile: (pub, path) => offerFile(pub, path),
-  PickAndSendGroupFile: (g) => new Promise((r) => setTimeout(() => r(postGroupFile(g, 'C:/Users/demo/Documents/roadmap-q4.xlsx')), 300)),
-  SendGroupFile: (g, path) => postGroupFile(g, path),
+  PickAndSendGroupFile: (g, ch, th) => new Promise((r) => setTimeout(() => r(postGroupFile(g, 'C:/Users/demo/Documents/roadmap-q4.xlsx', ch, th)), 300)),
+  SendGroupFile: (g, ch, th, path) => postGroupFile(g, path, ch, th),
   AcceptFile: (id) => {
     const t = fx[id];
     if (!t || t.state !== 'offered') throw new Error('the transfer is ' + (t ? t.state : 'gone'));
@@ -1132,9 +1132,9 @@ Object.assign(impl, {
 });
 
 // a file sent or posted lands in the log like any message
-function logFile(k, author, metadata, name) {
+function logFile(k, author, metadata, name, where = {}) {
   const c = chatOf(k.startsWith('g:') ? { kind: 'group', id: k.slice(2) } : { kind: 'dm', id: k.slice(2) });
-  const m = lmsg(k, { author, text: name, type: k.startsWith('d:') ? 4 : 0, metadata });
+  const m = lmsg(k, { author, text: name, type: k.startsWith('d:') ? 4 : 0, metadata, ...where });
   c.msgs.push(m);
   logChanged(k, m);
 }

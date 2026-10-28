@@ -23,6 +23,12 @@ type Legacy struct {
 	Type     uint32
 	Metadata string
 	ReplyTo  string // the old id of the message it answers
+	// Channel is the group channel it was posted in ("" the main one) and Thread the log id of the
+	// thread's root it comments on; both only for a live message (a file posted in a channel or a
+	// thread). One that names a channel or root this log does not have, or a channel the author may
+	// not post in, lands in the main channel.
+	Channel string
+	Thread  string
 }
 
 // LegacyID is the id a legacy message has in the log: the same on both sides, since both know the
@@ -66,6 +72,32 @@ func (l *Log) AddLegacy(c Conv, msgs []Legacy, live bool) ([]Message, error) {
 		if live {
 			meta.MaxLamport++
 			v.Lamport = meta.MaxLamport
+			v.Channel, v.Thread = l.legacyPlace(t, c, m)
+		}
+		switch {
+		case live && v.Thread != "":
+			t.put(threadKey(bc, v.Thread, v.Lamport, id), []byte(id))
+			root := t.view(v.Thread)
+			root.Replies++
+			if v.TS > root.LastReplyTS {
+				root.LastReplyTS = v.TS
+			}
+			t.touch(v.Thread)
+		case live && v.Channel != "":
+			t.put(chanOrderKey(bc, v.Channel, v.Lamport, id), []byte(id))
+			st := meta.chan_(v.Channel)
+			if v.Lamport >= st.LastLamport {
+				st.LastLamport, st.LastID, st.LastTS = v.Lamport, id, v.TS
+			}
+			if v.Lamport >= meta.LastLamport {
+				meta.LastLamport, meta.LastID, meta.LastTS = v.Lamport, id, v.TS
+			}
+			if v.Author == l.selfHex {
+				st.ReadLamport, st.Unread = v.Lamport, 0
+			} else {
+				st.Unread++
+			}
+		case live:
 			t.put(orderKey(bc, v.Lamport, id), []byte(id))
 			if v.Lamport >= meta.LastLamport {
 				meta.LastLamport, meta.LastID, meta.LastTS = v.Lamport, id, v.TS
@@ -75,7 +107,7 @@ func (l *Log) AddLegacy(c Conv, msgs []Legacy, live bool) ([]Message, error) {
 			} else {
 				meta.Unread++
 			}
-		} else {
+		default:
 			t.put(legacyOrder(bc, v.TS, id), []byte(id))
 			if meta.LastID == "" || (meta.LastLamport == 0 && v.TS > meta.LastTS) {
 				meta.LastID, meta.LastTS = id, v.TS
@@ -103,6 +135,31 @@ func (l *Log) AddLegacy(c Conv, msgs []Legacy, live bool) ([]Message, error) {
 		return nil, err
 	}
 	return ch.Messages, nil
+}
+
+// legacyPlace is where a live legacy message goes: its channel and thread when this log has them
+// and the author may post there, else the main channel. Call with l.mu held.
+func (l *Log) legacyPlace(t *txn, c Conv, m Legacy) (channel, thread string) {
+	if c.Kind != KindGroup {
+		return "", ""
+	}
+	if m.Thread != "" {
+		if root := t.view(m.Thread); root.Present && root.Thread == "" {
+			return root.Channel, m.Thread
+		}
+		return "", ""
+	}
+	if m.Channel == "" || !validChannelID(m.Channel) {
+		return "", ""
+	}
+	ch, ok := t.channel(m.Channel)
+	if !ok || ch.Removed || ch.Voice {
+		return "", ""
+	}
+	if ch.ReadOnly && !l.rightsAt(c, t.bc, m.Author, nil, atEnd).Manage {
+		return "", ""
+	}
+	return m.Channel, ""
 }
 
 // Peek reads an event's kind and thread without checking it (for one that was just ingested).
