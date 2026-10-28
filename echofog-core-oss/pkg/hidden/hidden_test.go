@@ -172,3 +172,24 @@ func TestInviteOfAnotherNetwork(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"echofog"`)
 }
+
+// A public node with an address names only that address in its link, not the relays it happens to
+// be connected to; a hidden node names them, since they are how it is reached from behind a NAT.
+func TestOnlyAHiddenNodeNamesRelaysInItsLink(t *testing.T) {
+	rN, _ := startNode(t, "relay", t.TempDir()+"/db", nil)
+	defer rN.Stop()
+	join := network.JoinPeerAddr(rN.Transport.Addr().String(), rN.ID)
+	for _, mode := range []string{"", config.AccessHidden} {
+		n, api := startNode(t, "node-"+mode, t.TempDir()+"/db", hiddenMode(mode))
+		require.NoError(t, api.ConnectToPeer(join))
+		require.Eventually(t, func() bool { return connected(n, rN) }, 5*time.Second, 50*time.Millisecond)
+		inv, err := api.ParseInvite(link(t, n))
+		require.NoError(t, err)
+		if mode == "" {
+			assert.Empty(t, inv.Relays, "a public node names no relay")
+		} else {
+			assert.NotEmpty(t, inv.Relays, "a hidden node names its relays")
+		}
+		n.Stop()
+	}
+}

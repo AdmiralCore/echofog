@@ -224,7 +224,10 @@ func (n *Node) InviteLink() (string, error) {
 	if n.gated() {
 		inv.Secret = n.Access.Secret()
 	}
-	if !n.isolated() {
+	// relays help to reach a hidden node, or one with no address yet; a public node with an
+	// address is dialed there, and naming whatever relays it happens to be connected to would hand
+	// out other people's nodes with its link
+	if !n.isolated() && (n.gated() || len(inv.Addrs) == 0) {
 		inv.Relays = n.linkRelays()
 	}
 	if len(inv.Addrs) == 0 && len(inv.Relays) == 0 {
