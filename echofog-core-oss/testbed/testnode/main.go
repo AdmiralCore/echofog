@@ -88,6 +88,9 @@ func main() {
 	if *pubAddr != "" {
 		cfg.Access.PublicAddrs = []string{*pubAddr}
 	}
+	// a lab node knows only the nodes it is given: never the built-in seeds, or a test run on a
+	// developer's machine joins the real network from their home address
+	cfg.Network.BootstrapNodes = nil
 	for _, b := range strings.Split(*bootstrap, ",") {
 		if b = strings.TrimSpace(b); b != "" {
 			cfg.Network.BootstrapNodes = append(cfg.Network.BootstrapNodes, b)
