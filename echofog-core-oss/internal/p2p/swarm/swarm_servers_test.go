@@ -266,3 +266,37 @@ func TestBootstrapEntryFactsAreTakenInBeforeTheDial(t *testing.T) {
 	assert.False(t, s.noiseDialRefused(cam, "198.51.100.9:4242"), "camouflaged: dialed as REALITY")
 	assert.True(t, s.noiseDialRefused(bare, "198.51.100.10:4242"), "a server of unknown SNI is not dialed over noise")
 }
+
+// A user's node is told apart from a server by the node that passes its address on, so a server
+// that learns it through the DHT or peer exchange, where it never saw its handshake, does not dial
+// it over noise either.
+func TestServerLearnsAUsersNodeFromTheAddress(t *testing.T) {
+	// the node that knows the user's node from its handshake passes the address on with srv=0
+	teller, _ := newTestSwarm(t)
+	userPub := randomPub()
+	user := types.PeerPubKeyToID(userPub)
+	p, _ := addPrimaryPeer(context.Background(), teller, 9)
+	_ = p
+	teller.SetPeerClient(user, handshake.CapRelay|handshake.CapDHTServer)
+	sent := teller.AnnotatedAddr(user, "198.51.100.40:4242")
+	assert.Equal(t, "198.51.100.40:4242?srv=0", sent)
+
+	// a server takes it in and then holds back
+	server, _ := newTestSwarm(t)
+	withRole(server, config.RoleServer)
+	assert.False(t, server.noiseDialRefused(user, "198.51.100.40:4242"), "unknown until told")
+	assert.Equal(t, "198.51.100.40:4242", server.LearnPeerAddr(user, sent))
+	assert.True(t, server.isClientPeer(user))
+	assert.True(t, server.noiseDialRefused(user, "198.51.100.40:4242"))
+
+	// a server stays a server whatever a third party says
+	srv := idOf(0x51)
+	server.SetPeerServer(srv, true)
+	server.LearnPeerAddr(srv, "198.51.100.41:4242?srv=0")
+	assert.False(t, server.isClientPeer(srv))
+	assert.False(t, server.noiseDialRefused(srv, "198.51.100.41:4242"))
+
+	// this node's own address is a user's when it is not a server
+	assert.Equal(t, "198.51.100.42:4242?srv=0", teller.AnnotatedAddr(teller.selfID, "198.51.100.42:4242"))
+	assert.Empty(t, teller.AnnotatedAddr(teller.selfID, ""), "no entry about itself to put in a peer list")
+}

@@ -76,3 +76,13 @@ func TestJoinPeerAddrInfoRoundTrip(t *testing.T) {
 	// the old helper still gives the same SNI form
 	assert.Equal(t, JoinPeerAddrInfo("1.2.3.4:1", id, "x.lab", false), JoinPeerAddrWithSNI("1.2.3.4:1", id, "x.lab"))
 }
+
+// srv=0 says the node is a user's node; no srv says nothing (an older node).
+func TestAddrInfoClientRole(t *testing.T) {
+	assert.Equal(t, AddrInfo{Addr: "1.2.3.4:4242", Client: true}, ParseAddrInfo("1.2.3.4:4242?srv=0"))
+	assert.Equal(t, AddrInfo{Addr: "1.2.3.4:4242", SNI: "x.lab", Server: true}, ParseAddrInfo("1.2.3.4:4242?sni=x.lab&srv=1"))
+	assert.Equal(t, AddrInfo{Addr: "1.2.3.4:4242"}, ParseAddrInfo("1.2.3.4:4242?sni="))
+	assert.Equal(t, "1.2.3.4:4242?srv=0", AnnotateAddrRole("1.2.3.4:4242", "", RoleClient))
+	assert.Equal(t, "1.2.3.4:4242?srv=0", AnnotateAddrRole("1.2.3.4:4242?srv=0", "", RoleClient), "once")
+	assert.Equal(t, "1.2.3.4:4242", AnnotateAddrRole("1.2.3.4:4242", "", RoleUnknown))
+}

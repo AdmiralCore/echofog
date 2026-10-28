@@ -57,6 +57,9 @@ type AddrInfo struct {
 	Named  bool         // the string carried a peer ID
 	SNI    string
 	Server bool
+	// Client: the node that handed the address on knows it to be a user's node (srv=0). Neither
+	// Server nor Client: it does not know, as an older node does not.
+	Client bool
 }
 
 // ParseAddrInfo reads "host:port[/<peer id>][?sni=...&srv=1]", also in the echofog://relay/ link
@@ -73,6 +76,7 @@ func ParseAddrInfo(s string) AddrInfo {
 		if vals, err := url.ParseQuery(queryPart); err == nil {
 			info.SNI = vals.Get("sni")
 			info.Server = vals.Get(srvParam) == "1"
+			info.Client = vals.Get(srvParam) == "0"
 		}
 	}
 	i := strings.LastIndexByte(t, '/')
@@ -94,14 +98,36 @@ func ParseAddrInfo(s string) AddrInfo {
 // srvParam marks, in an address query, a node that runs in the server role.
 const srvParam = "srv"
 
+// AddrRole is what is known of a node's role when its address is passed on.
+type AddrRole uint8
+
+const (
+	RoleUnknown AddrRole = iota
+	RoleServer           // srv=1
+	RoleClient           // srv=0: a user's node, which a server has no use for dialing
+)
+
 // AnnotateAddr puts a node's SNI and server flag into the query of a published address, once: an
 // address that already carries them is returned as it is.
 func AnnotateAddr(addr, sni string, server bool) string {
+	role := RoleUnknown
+	if server {
+		role = RoleServer
+	}
+	return AnnotateAddrRole(addr, sni, role)
+}
+
+// AnnotateAddrRole is AnnotateAddr that can also say the node is a user's node.
+func AnnotateAddrRole(addr, sni string, role AddrRole) string {
 	if sni != "" && !strings.Contains(addr, "sni=") {
 		addr = appendQuery(addr, "sni="+url.QueryEscape(sni))
 	}
-	if server && !strings.Contains(addr, srvParam+"=") {
-		addr = appendQuery(addr, srvParam+"=1")
+	if role != RoleUnknown && !strings.Contains(addr, srvParam+"=") {
+		v := "1"
+		if role == RoleClient {
+			v = "0"
+		}
+		addr = appendQuery(addr, srvParam+"="+v)
 	}
 	return addr
 }

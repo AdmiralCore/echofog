@@ -113,14 +113,25 @@ func (s *Swarm) IsServerPeer(id types.PeerID) bool {
 // facts come from its configuration.
 func (s *Swarm) AnnotatedAddr(id types.PeerID, addr string) string {
 	sni := s.GetPeerSNI(id)
-	server := s.IsServerPeer(id)
+	role := network.RoleUnknown
+	switch {
+	case s.IsServerPeer(id):
+		role = network.RoleServer
+	case s.isClientPeer(id):
+		role = network.RoleClient
+	}
 	if id == s.selfID {
 		if sni == "" {
 			sni = s.GetAnnouncedSNI()
 		}
-		server = server || (s.cfg != nil && s.cfg.IsServer())
+		switch {
+		case s.cfg != nil && s.cfg.IsServer():
+			role = network.RoleServer
+		case addr != "":
+			role = network.RoleClient // our own address is a user's: say so, to the servers that would dial it
+		}
 	}
-	return network.AnnotateAddr(addr, sni, server)
+	return network.AnnotateAddrRole(addr, sni, role)
 }
 
 // LearnPeerAddr takes in an address another node passed on, "host:port[?sni=..&srv=1]": it records
@@ -132,6 +143,8 @@ func (s *Swarm) LearnPeerAddr(id types.PeerID, addr string) string {
 	}
 	if info.Server {
 		s.SetPeerServer(id, true)
+	} else if info.Client {
+		s.SetPeerClient(id, handshake.CapRelay) // any announced capabilities: it is a node, not a server
 	}
 	return info.Addr
 }
