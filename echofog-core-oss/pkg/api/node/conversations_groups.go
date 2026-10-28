@@ -39,7 +39,8 @@ func (p groupRules) Current(c convlog.Conv, a types.PeerID) convlog.Rights {
 	}
 	return convlog.Rights{Member: true, Send: r.Permissions&groups.PermSendMessages != 0,
 		Pin:      r.Permissions&(groups.PermManageGroup|groups.PermDeleteMessages) != 0,
-		Moderate: r.Permissions&groups.PermDeleteMessages != 0}
+		Moderate: r.Permissions&groups.PermDeleteMessages != 0,
+		Manage:   r.Permissions&(groups.PermManageGroup|groups.PermManageRoles) != 0}
 }
 
 func (p groupRules) Founder(c convlog.Conv) (types.PeerID, bool) {

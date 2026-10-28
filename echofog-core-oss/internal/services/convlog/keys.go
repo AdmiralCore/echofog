@@ -18,6 +18,8 @@ const (
 	pfxPin    = "cl/p/" // bc/id           -> id: pinned messages
 	pfxMeta   = "cl/v/" // bc              -> Meta
 	pfxMember = "cl/m/" // bc/lamport/id   -> event bytes: a group's membership history
+	pfxChan   = "cl/c/" // bc/channel      -> Channel
+	pfxChanO  = "cl/q/" // bc/channel/^lamport/id -> id: a channel's history, newest first
 )
 
 func (l *Log) bc(c ConvID) string { return storage.BlindID(l.st, "conv:"+c.String()) }
@@ -73,6 +75,16 @@ func pinKey(bc, id string) []byte { return bs(pfxPin + bc + "/" + id) }
 func metaKey(bc string) []byte { return bs(pfxMeta + bc) }
 
 func memberPrefix(bc string) []byte { return bs(pfxMember + bc + "/") }
+
+func channelPrefix(bc string) []byte { return bs(pfxChan + bc + "/") }
+
+func channelKey(bc, id string) []byte { return bs(pfxChan + bc + "/" + id) }
+
+func chanOrderPrefix(bc, channel string) []byte { return bs(pfxChanO + bc + "/" + channel + "/") }
+
+func chanOrderKey(bc, channel string, lamport uint64, id string) []byte {
+	return key(chanOrderPrefix(bc, channel), be64(^lamport), bs("/"+id))
+}
 
 func memberKey(bc string, lamport uint64, id string) []byte {
 	return key(memberPrefix(bc), be64(lamport), bs("/"+id))

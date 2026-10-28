@@ -46,6 +46,18 @@ export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }
 
+export function ChatChannelRemove(arg1, arg2) {
+  return window['go']['main']['App']['ChatChannelRemove'](arg1, arg2);
+}
+
+export function ChatChannelSave(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatChannelSave'](arg1, arg2, arg3, arg4);
+}
+
+export function ChatChannels(arg1) {
+  return window['go']['main']['App']['ChatChannels'](arg1);
+}
+
 export function ChatDelete(arg1, arg2) {
   return window['go']['main']['App']['ChatDelete'](arg1, arg2);
 }
@@ -140,6 +152,10 @@ export function DismissMessageRequest(arg1) {
 
 export function EndGroupCall(arg1, arg2) {
   return window['go']['main']['App']['EndGroupCall'](arg1, arg2);
+}
+
+export function EndRoomCall(arg1, arg2, arg3) {
+  return window['go']['main']['App']['EndRoomCall'](arg1, arg2, arg3);
 }
 
 export function ExportLogs() {
@@ -324,6 +340,10 @@ export function JoinRoom(arg1, arg2) {
 
 export function KeepGroupCallAlive(arg1, arg2, arg3) {
   return window['go']['main']['App']['KeepGroupCallAlive'](arg1, arg2, arg3);
+}
+
+export function KeepRoomCallAlive(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['KeepRoomCallAlive'](arg1, arg2, arg3, arg4);
 }
 
 export function LeaveGroup(arg1) {
@@ -560,6 +580,10 @@ export function StartLocalDiscovery(arg1) {
 
 export function StartNode() {
   return window['go']['main']['App']['StartNode']();
+}
+
+export function StartRoomCall(arg1, arg2) {
+  return window['go']['main']['App']['StartRoomCall'](arg1, arg2);
 }
 
 export function StartScreenShare(arg1, arg2) {

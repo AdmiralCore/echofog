@@ -53,6 +53,19 @@ message MemberBody {
   repeated RosterEntry roster = 4;
 }
 
+// EventExt rides in Event.ext (signed, kept when the body is stripped).
+message EventExt {
+  string channel = 1;  // a group's channel the message is in; empty: the main one
+}
+
+// ChannelBody creates, renames or removes a channel of a group (last writer wins per id).
+message ChannelBody {
+  string id      = 1;
+  string name    = 2;
+  bool   voice   = 3;  // a voice room rather than a text channel
+  bool   removed = 4;
+}
+
 message RosterEntry {
   bytes  member = 1;  // 32-byte identity public key
   string role   = 2;

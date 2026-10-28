@@ -83,7 +83,7 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		}
 		d.Role = role.Name
 		r := f.myRights(c)
-		manage := role.Permissions&groups.PermManageRoles != 0
+		manage := role.Permissions&(groups.PermManageRoles|groups.PermManageGroup) != 0
 		d.Can = ConvCan{Send: r.Send, Files: r.Send && role.Permissions&groups.PermSendMedia != 0,
 			React: d.Upgraded && r.Member, Pin: d.Upgraded && r.Pin, Manage: manage,
 			Invite: manage || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),

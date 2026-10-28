@@ -375,6 +375,8 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 				return ErrForbidden
 			}
 			err = t.applyPin(e, author)
+		case KindChannel:
+			err = t.applyChannel(e, author, rights)
 		}
 	}
 	if err != nil {
@@ -489,6 +491,7 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 	v.Author, v.Seq, v.Lamport, v.TS = author, e.Seq, e.Lamport, e.TsMs
 	v.Type, v.Text, v.Metadata = body.Type, body.Text, body.Metadata
 	v.ReplyTo, v.Thread = hexRef(e.ReplyTo), hexRef(e.Thread)
+	v.Channel = channelOf(e)
 	v.Stripped = stripped
 	del, _ := v.deleted()
 	if del {
@@ -503,7 +506,25 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 	} else if stripped {
 		v.Withheld = true
 	}
-	if v.Thread == "" {
+	if v.Thread == "" && v.Channel != "" {
+		// a message in one of a group's channels: that channel's history and reader; the
+		// conversation's last message is the newest of all its channels
+		t.put(chanOrderKey(t.bc, v.Channel, e.Lamport, idHex), []byte(idHex))
+		st := t.meta.chan_(v.Channel)
+		if e.Lamport >= st.LastLamport {
+			st.LastLamport, st.LastID, st.LastTS = e.Lamport, idHex, e.TsMs
+		}
+		if e.Lamport >= t.meta.LastLamport {
+			t.meta.LastLamport, t.meta.LastID, t.meta.LastTS = e.Lamport, idHex, e.TsMs
+		}
+		if author == t.l.selfHex {
+			if e.Lamport > st.ReadLamport {
+				st.ReadLamport, st.Unread = e.Lamport, 0
+			}
+		} else if !t.synced || e.Lamport > st.ReadLamport {
+			st.Unread++
+		}
+	} else if v.Thread == "" {
 		t.put(orderKey(t.bc, e.Lamport, idHex), []byte(idHex))
 		if e.Lamport >= t.meta.LastLamport {
 			t.meta.LastLamport, t.meta.LastID, t.meta.LastTS = e.Lamport, idHex, e.TsMs
@@ -723,6 +744,7 @@ type Draft struct {
 	ReplyTo EventID
 	Thread  EventID
 	Body    []byte
+	Ext     []byte
 }
 
 // Append writes an event of this account and returns its encoded form, to send to the others.
@@ -758,7 +780,7 @@ func (l *Log) append(c Conv, d Draft, keepRefused bool) ([]byte, EventID, error)
 		seq = m + 1
 	}
 	e := &Event{Conv: c.ID[:], Author: l.selfPub, Seq: seq, Lamport: meta.MaxLamport + 1,
-		TsMs: l.now().UnixMilli(), Kind: d.Kind, Body: d.Body}
+		TsMs: l.now().UnixMilli(), Kind: d.Kind, Body: d.Body, Ext: d.Ext}
 	if !d.Target.IsZero() {
 		e.Target = d.Target[:]
 	}

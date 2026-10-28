@@ -41,6 +41,44 @@ export namespace contacts {
 
 export namespace convlog {
 	
+	export class FileRef {
+	    id: string;
+	    name: string;
+	    size: number;
+	    mime?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.mime = source["mime"];
+	    }
+	}
+	export class MsgCan {
+	    edit: boolean;
+	    delete: boolean;
+	    pin: boolean;
+	    react: boolean;
+	    reply: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MsgCan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.edit = source["edit"];
+	        this.delete = source["delete"];
+	        this.pin = source["pin"];
+	        this.react = source["react"];
+	        this.reply = source["reply"];
+	    }
+	}
 	export class Reaction {
 	    emoji: string;
 	    count: number;
@@ -71,6 +109,7 @@ export namespace convlog {
 	    metadata?: string;
 	    replyTo?: string;
 	    thread?: string;
+	    channel?: string;
 	    edited: boolean;
 	    editedAt?: number;
 	    deleted: boolean;
@@ -84,6 +123,9 @@ export namespace convlog {
 	    lastReplyAt?: number;
 	    legacy?: boolean;
 	    state?: string;
+	    kind: string;
+	    file?: FileRef;
+	    can: MsgCan;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -102,6 +144,7 @@ export namespace convlog {
 	        this.metadata = source["metadata"];
 	        this.replyTo = source["replyTo"];
 	        this.thread = source["thread"];
+	        this.channel = source["channel"];
 	        this.edited = source["edited"];
 	        this.editedAt = source["editedAt"];
 	        this.deleted = source["deleted"];
@@ -115,6 +158,9 @@ export namespace convlog {
 	        this.lastReplyAt = source["lastReplyAt"];
 	        this.legacy = source["legacy"];
 	        this.state = source["state"];
+	        this.kind = source["kind"];
+	        this.file = this.convertValues(source["file"], FileRef);
+	        this.can = this.convertValues(source["can"], MsgCan);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -135,6 +181,7 @@ export namespace convlog {
 		    return a;
 		}
 	}
+	
 
 }
 
@@ -660,6 +707,68 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class GroupCall {
+	    room?: string;
+	    callId: string;
+	    coordinator: string;
+	    from: string;
+	    startedAt: number;
+	    lastSeen: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupCall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.room = source["room"];
+	        this.callId = source["callId"];
+	        this.coordinator = source["coordinator"];
+	        this.from = source["from"];
+	        this.startedAt = source["startedAt"];
+	        this.lastSeen = source["lastSeen"];
+	    }
+	}
+	export class ChannelDTO {
+	    id: string;
+	    name: string;
+	    voice: boolean;
+	    unread: number;
+	    lastTs: number;
+	    call?: GroupCall;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChannelDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.voice = source["voice"];
+	        this.unread = source["unread"];
+	        this.lastTs = source["lastTs"];
+	        this.call = this.convertValues(source["call"], GroupCall);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ChatPage {
 	    messages: convlog.Message[];
 	    next: string;
@@ -695,6 +804,7 @@ export namespace node {
 	export class ChatRef {
 	    kind: string;
 	    id: string;
+	    channel?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatRef(source);
@@ -704,6 +814,31 @@ export namespace node {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.id = source["id"];
+	        this.channel = source["channel"];
+	    }
+	}
+	export class ConvCan {
+	    send: boolean;
+	    files: boolean;
+	    react: boolean;
+	    pin: boolean;
+	    manage: boolean;
+	    invite: boolean;
+	    call: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConvCan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.send = source["send"];
+	        this.files = source["files"];
+	        this.react = source["react"];
+	        this.pin = source["pin"];
+	        this.manage = source["manage"];
+	        this.invite = source["invite"];
+	        this.call = source["call"];
 	    }
 	}
 	export class ConversationDTO {
@@ -715,6 +850,15 @@ export namespace node {
 	    unread: number;
 	    request: boolean;
 	    upgraded: boolean;
+	    kind: string;
+	    name: string;
+	    peerId?: string;
+	    pubKey?: string;
+	    online: boolean;
+	    blocked: boolean;
+	    role?: string;
+	    members?: number;
+	    can: ConvCan;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConversationDTO(source);
@@ -730,6 +874,15 @@ export namespace node {
 	        this.unread = source["unread"];
 	        this.request = source["request"];
 	        this.upgraded = source["upgraded"];
+	        this.kind = source["kind"];
+	        this.name = source["name"];
+	        this.peerId = source["peerId"];
+	        this.pubKey = source["pubKey"];
+	        this.online = source["online"];
+	        this.blocked = source["blocked"];
+	        this.role = source["role"];
+	        this.members = source["members"];
+	        this.can = this.convertValues(source["can"], ConvCan);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -834,26 +987,7 @@ export namespace node {
 	        this.paysByVault = source["paysByVault"];
 	    }
 	}
-	export class GroupCall {
-	    callId: string;
-	    coordinator: string;
-	    from: string;
-	    startedAt: number;
-	    lastSeen: number;
 	
-	    static createFrom(source: any = {}) {
-	        return new GroupCall(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.callId = source["callId"];
-	        this.coordinator = source["coordinator"];
-	        this.from = source["from"];
-	        this.startedAt = source["startedAt"];
-	        this.lastSeen = source["lastSeen"];
-	    }
-	}
 	export class GroupDTO {
 	    id: string;
 	    title: string;
@@ -905,6 +1039,10 @@ export namespace node {
 	    role: string;
 	    joinedAt: number;
 	    isMe: boolean;
+	    canKick: boolean;
+	    canBan: boolean;
+	    roles?: string[];
+	    canTransfer: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupMemberDTO(source);
@@ -916,6 +1054,10 @@ export namespace node {
 	        this.role = source["role"];
 	        this.joinedAt = source["joinedAt"];
 	        this.isMe = source["isMe"];
+	        this.canKick = source["canKick"];
+	        this.canBan = source["canBan"];
+	        this.roles = source["roles"];
+	        this.canTransfer = source["canTransfer"];
 	    }
 	}
 	export class GroupMessageDTO {

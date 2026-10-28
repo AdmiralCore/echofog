@@ -29,6 +29,8 @@ type ChatReaction = convlog.Reaction
 type ChatRef struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
+	// Channel is a group's channel ("" the main one); history, sending and reading follow it.
+	Channel string `json:"channel,omitempty"`
 }
 
 // ConversationDTO is one entry of the chat list.
@@ -427,7 +429,7 @@ func (f *convsFacade) withStates(c convlog.Conv, msgs []convlog.Message) []convl
 }
 
 func (f *convsFacade) conversation(c convlog.Conv, meta convlog.Meta) ConversationDTO {
-	d := ConversationDTO{Ref: refOf(c), Conv: meta.Conv, LastTS: meta.LastTS, Unread: meta.Unread}
+	d := ConversationDTO{Ref: refOf(c), Conv: meta.Conv, LastTS: meta.LastTS, Unread: meta.UnreadAll()}
 	if meta.LastID != "" {
 		if id, err := convlog.ParseEventID(meta.LastID); err == nil {
 			if m, ok := f.log.Message(c, id); ok {
@@ -589,7 +591,7 @@ func (n *NodeApi) ChatHistory(ref ChatRef, cursor string, limit int) (ChatPage, 
 	if err != nil {
 		return ChatPage{}, err
 	}
-	msgs, next, err := f.log.History(c, cursor, limit)
+	msgs, next, err := f.log.HistoryIn(c, ref.Channel, cursor, limit)
 	if err != nil {
 		return ChatPage{}, err
 	}
@@ -673,7 +675,7 @@ func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
 			return f.dress(c, []convlog.Message{m})[0], nil
 		}
 	}
-	raw, id, err := f.log.AppendMessage(c, req.Text, 0, "", reply, thread)
+	raw, id, err := f.log.AppendMessageIn(c, ref.Channel, req.Text, 0, "", reply, thread)
 	if err != nil {
 		return convlog.Message{}, err
 	}
@@ -752,7 +754,7 @@ func (n *NodeApi) ChatMarkRead(ref ChatRef, id string) error {
 	if err != nil {
 		return err
 	}
-	return f.log.MarkRead(c, eid)
+	return f.log.MarkReadIn(c, ref.Channel, eid)
 }
 
 // plainHistory serves the old GetMessages from the log: newest first, edits applied, deleted

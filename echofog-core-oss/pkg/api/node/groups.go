@@ -863,7 +863,7 @@ func (n *NodeApi) StartGroupCall(groupID string) (GroupCall, error) {
 	if err != nil {
 		return GroupCall{}, err
 	}
-	return f.StartCall(groupID)
+	return f.StartCall(groupID, "")
 }
 
 // KeepGroupCallAlive tells the group the call is still going; call it periodically while in it.
@@ -872,7 +872,7 @@ func (n *NodeApi) KeepGroupCallAlive(groupID, callID, coordinator string) error 
 	if err != nil {
 		return err
 	}
-	return f.KeepCallAlive(groupID, callID, coordinator)
+	return f.KeepCallAlive(groupID, "", callID, coordinator)
 }
 
 // ActiveGroupCall is the call going on in the group, if there is one.
@@ -881,7 +881,7 @@ func (n *NodeApi) ActiveGroupCall(groupID string) (GroupCall, bool) {
 	if err != nil {
 		return GroupCall{}, false
 	}
-	return f.ActiveCall(groupID)
+	return f.ActiveCall(groupID, "")
 }
 
 // TransferGroupOwnership hands the group to another member; the owner becomes an admin.
@@ -908,5 +908,5 @@ func (n *NodeApi) EndGroupCall(groupID, callID string) error {
 	if err != nil {
 		return err
 	}
-	return f.EndCall(groupID, callID)
+	return f.EndCall(groupID, "", callID)
 }

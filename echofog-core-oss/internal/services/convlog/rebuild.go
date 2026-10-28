@@ -105,7 +105,8 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	}
 	var dels [][]byte
 	var legacyOrder []storage.Entry
-	for _, pfx := range [][]byte{bs(pfxView + bc + "/"), bs(pfxThread + bc + "/"), bs(pfxPin + bc + "/"), bs(pfxIndex + bc + "/")} {
+	for _, pfx := range [][]byte{bs(pfxView + bc + "/"), bs(pfxThread + bc + "/"), bs(pfxPin + bc + "/"), bs(pfxIndex + bc + "/"),
+		bs(pfxChanO + bc + "/"), channelPrefix(bc)} {
 		entries, err := l.st.FindValues(pfx, 0)
 		if err != nil {
 			return nil, err
@@ -129,6 +130,9 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 
 	meta := newMeta(c)
 	meta.ReadLamport, meta.OwnSeq = old.ReadLamport, old.OwnSeq
+	for id, st := range old.Chans {
+		meta.chan_(id).ReadLamport = st.ReadLamport
+	}
 	t := l.newTxn(c, bc, meta)
 	t.synced = true // the unread count is computed afresh below
 	for id, v := range legacy {
@@ -190,6 +194,9 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 		return nil, err
 	}
 	l.countUnread(bc, meta)
+	for id, st := range meta.Chans {
+		st.Unread = l.countAbove(chanOrderPrefix(bc, id), st.ReadLamport, bc, meta.Conv)
+	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err

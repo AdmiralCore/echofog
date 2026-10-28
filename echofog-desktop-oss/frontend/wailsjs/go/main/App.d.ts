@@ -29,6 +29,12 @@ export function BlockPeer(arg1:string):Promise<void>;
 
 export function CancelFile(arg1:string):Promise<void>;
 
+export function ChatChannelRemove(arg1:node.ChatRef,arg2:string):Promise<void>;
+
+export function ChatChannelSave(arg1:node.ChatRef,arg2:string,arg3:string,arg4:boolean):Promise<node.ChannelDTO>;
+
+export function ChatChannels(arg1:node.ChatRef):Promise<Array<node.ChannelDTO>>;
+
 export function ChatDelete(arg1:node.ChatRef,arg2:string):Promise<void>;
 
 export function ChatEdit(arg1:node.ChatRef,arg2:string,arg3:string):Promise<void>;
@@ -76,6 +82,8 @@ export function DeleteProfile(arg1:string,arg2:string):Promise<void>;
 export function DismissMessageRequest(arg1:string):Promise<void>;
 
 export function EndGroupCall(arg1:string,arg2:string):Promise<void>;
+
+export function EndRoomCall(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function ExportLogs():Promise<string>;
 
@@ -168,6 +176,8 @@ export function JoinGroup(arg1:string):Promise<node.GroupDTO>;
 export function JoinRoom(arg1:string,arg2:string):Promise<string>;
 
 export function KeepGroupCallAlive(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function KeepRoomCallAlive(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function LeaveGroup(arg1:string):Promise<void>;
 
@@ -286,6 +296,8 @@ export function StartGroupCall(arg1:string):Promise<node.GroupCall>;
 export function StartLocalDiscovery(arg1:string):Promise<boolean>;
 
 export function StartNode():Promise<void>;
+
+export function StartRoomCall(arg1:string,arg2:string):Promise<node.GroupCall>;
 
 export function StartScreenShare(arg1:string,arg2:number):Promise<void>;
 

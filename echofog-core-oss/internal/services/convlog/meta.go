@@ -63,6 +63,9 @@ type Meta struct {
 	// HeldLamport is the highest clock of an event kept without effects (not allowed, yet): a
 	// membership event at or below it may change what that event was allowed to do.
 	HeldLamport uint64 `json:"held_lamport,omitempty"`
+
+	// Chans: a group's channels other than the main one, where each ends and where its reader is.
+	Chans map[string]*ChanStat `json:"chans,omitempty"`
 }
 
 func newMeta(c Conv) *Meta {

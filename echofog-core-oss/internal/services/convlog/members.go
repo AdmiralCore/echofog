@@ -54,11 +54,13 @@ type Rights struct {
 	Send     bool // may write messages
 	Pin      bool // may pin for everyone
 	Moderate bool // may delete other people's messages
+	Manage   bool // may change the group's channels
 }
 
 func rightsOf(r Role) Rights {
 	return Rights{Member: true, Send: r.Perms&PermSend != 0,
-		Pin: r.Perms&(PermManageGroup|PermDelete) != 0, Moderate: r.Perms&PermDelete != 0}
+		Pin: r.Perms&(PermManageGroup|PermDelete) != 0, Moderate: r.Perms&PermDelete != 0,
+		Manage: r.Perms&(PermManageGroup|PermManageRoles) != 0}
 }
 
 // GroupRules is what the log needs to know about groups from the group service.

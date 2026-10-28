@@ -352,7 +352,7 @@ func TestGroupsFacade_CallRingsEveryMember(t *testing.T) {
 	inviteB, _ := b.f.Invite(g.ID)
 	_, _ = c.f.Join(inviteB)
 
-	call, err := a.f.StartCall(g.ID)
+	call, err := a.f.StartCall(g.ID, "")
 	require.NoError(t, err)
 	assert.Equal(t, a.id.String(), call.Coordinator)
 
@@ -370,7 +370,7 @@ func TestGroupsFacade_CallRingsEveryMember(t *testing.T) {
 		assert.Equal(t, a.id.String(), got.Coordinator)
 		assert.Equal(t, "Crew", got.Title)
 
-		active, ok := n.f.ActiveCall(g.ID)
+		active, ok := n.f.ActiveCall(g.ID, "")
 		require.True(t, ok)
 		assert.Equal(t, call.CallID, active.CallID)
 	}
@@ -378,7 +378,7 @@ func TestGroupsFacade_CallRingsEveryMember(t *testing.T) {
 	// somebody outside the group cannot ring it
 	outsider := h.node(t, newMemStore())
 	b.f.handle(outsider.id, encodeWire(groupWire{Kind: "call", Group: g.ID, CallID: "x", Coord: "y"}))
-	active, _ := b.f.ActiveCall(g.ID)
+	active, _ := b.f.ActiveCall(g.ID, "")
 	assert.Equal(t, call.CallID, active.CallID)
 }
 
@@ -497,30 +497,30 @@ func TestGroupsFacade_CallEndsWhenTheLastPersonLeaves(t *testing.T) {
 	_, _ = b.f.Join(invite)
 	_, _ = c.f.Join(invite)
 
-	call, err := a.f.StartCall(g.ID)
+	call, err := a.f.StartCall(g.ID, "")
 	require.NoError(t, err)
-	_, ok := b.f.ActiveCall(g.ID)
+	_, ok := b.f.ActiveCall(g.ID, "")
 	require.True(t, ok)
 
-	require.NoError(t, a.f.EndCall(g.ID, call.CallID))
+	require.NoError(t, a.f.EndCall(g.ID, "", call.CallID))
 	for _, n := range []*testNode{a, b, c} {
-		_, ok := n.f.ActiveCall(g.ID)
+		_, ok := n.f.ActiveCall(g.ID, "")
 		assert.False(t, ok, "the call is over for everybody")
 	}
 	assert.Contains(t, b.eventKinds(), "callend")
-	assert.Error(t, a.f.EndCall(g.ID, ""), "without an id there is nothing to end once the call is gone")
+	assert.Error(t, a.f.EndCall(g.ID, "", ""), "without an id there is nothing to end once the call is gone")
 
 	// an end message for another call does not end the current one
-	call2, _ := a.f.StartCall(g.ID)
+	call2, _ := a.f.StartCall(g.ID, "")
 	b.f.handle(a.id, encodeWire(groupWire{Kind: "callend", Group: g.ID, CallID: "some-old-call"}))
-	active, ok := b.f.ActiveCall(g.ID)
+	active, ok := b.f.ActiveCall(g.ID, "")
 	require.True(t, ok)
 	assert.Equal(t, call2.CallID, active.CallID)
 
 	// somebody outside the group cannot end it
 	outsider := h.node(t, newMemStore())
 	b.f.handle(outsider.id, encodeWire(groupWire{Kind: "callend", Group: g.ID, CallID: call2.CallID}))
-	_, ok = b.f.ActiveCall(g.ID)
+	_, ok = b.f.ActiveCall(g.ID, "")
 	assert.True(t, ok)
 }
 
@@ -609,7 +609,7 @@ func TestGroupsFacade_CallStaysLiveWhileAnnounced(t *testing.T) {
 	invite, _ := a.f.Invite(g.ID)
 	_, _ = b.f.Join(invite)
 
-	call, err := a.f.StartCall(g.ID)
+	call, err := a.f.StartCall(g.ID, "")
 	require.NoError(t, err)
 	require.Equal(t, 1, countEvents(b, "call"))
 
@@ -625,7 +625,7 @@ func TestGroupsFacade_CallStaysLiveWhileAnnounced(t *testing.T) {
 	c.f.handle(a.id, encodeWire(groupWire{Kind: "callalive", Group: g.ID, CallID: call.CallID, Coord: call.Coordinator, TS: time.Now().Unix()}))
 	assert.Equal(t, 0, countEvents(c, "call"))
 	assert.Equal(t, 1, countEvents(c, "callactive"))
-	active, ok := c.f.ActiveCall(g.ID)
+	active, ok := c.f.ActiveCall(g.ID, "")
 	require.True(t, ok)
 	assert.Equal(t, call.CallID, active.CallID)
 
@@ -635,7 +635,7 @@ func TestGroupsFacade_CallStaysLiveWhileAnnounced(t *testing.T) {
 	_, _ = stale.f.Join(inviteC)
 	stale.f.handle(a.id, encodeWire(groupWire{Kind: "call", Group: g.ID, CallID: call.CallID, Coord: call.Coordinator, TS: time.Now().Add(-10 * time.Minute).Unix()}))
 	assert.Equal(t, 0, countEvents(stale, "call"))
-	_, ok = stale.f.ActiveCall(g.ID)
+	_, ok = stale.f.ActiveCall(g.ID, "")
 	assert.False(t, ok)
 
 	// nobody announces it any more: it is over
@@ -644,11 +644,39 @@ func TestGroupsFacade_CallStaysLiveWhileAnnounced(t *testing.T) {
 	cc.LastSeen = time.Now().Add(-callAliveFor - time.Second).Unix()
 	b.f.calls[g.ID] = cc
 	b.f.mu.Unlock()
-	_, ok = b.f.ActiveCall(g.ID)
+	_, ok = b.f.ActiveCall(g.ID, "")
 	assert.False(t, ok, "a call nobody announced for callAliveFor is over")
 
 	// KeepCallAlive from a member brings it back for the others
-	require.NoError(t, a.f.KeepCallAlive(g.ID, call.CallID, call.Coordinator))
-	_, ok = b.f.ActiveCall(g.ID)
+	require.NoError(t, a.f.KeepCallAlive(g.ID, "", call.CallID, call.Coordinator))
+	_, ok = b.f.ActiveCall(g.ID, "")
 	assert.True(t, ok)
+}
+
+// A call in a voice room does not ring the members: they see it going on in that room, apart from
+// the group's own call, and it ends on its own.
+func TestGroupsFacade_VoiceRoomCallDoesNotRing(t *testing.T) {
+	h := newHub()
+	a, b := h.node(t, newMemStore()), h.node(t, newMemStore())
+	g, _ := a.f.Create("Crew", "", "group")
+	invite, _ := a.f.Invite(g.ID)
+	_, _ = b.f.Join(invite)
+
+	room, err := a.f.StartCall(g.ID, "lounge")
+	require.NoError(t, err)
+	b.mu.Lock()
+	var rang, seen bool
+	for _, ev := range b.events {
+		rang = rang || ev.Kind == "call"
+		seen = seen || (ev.Kind == "callactive" && ev.Room == "lounge" && ev.CallID == room.CallID)
+	}
+	b.mu.Unlock()
+	assert.False(t, rang, "a voice room must not ring")
+	assert.True(t, seen, "the members see the room's call")
+	_, groupCall := b.f.ActiveCall(g.ID, "")
+	assert.False(t, groupCall, "the room's call is not the group's call")
+	assert.Equal(t, room.CallID, b.f.ActiveRoomCalls(g.ID)["lounge"].CallID)
+
+	require.NoError(t, a.f.EndCall(g.ID, "lounge", room.CallID))
+	assert.Empty(t, b.f.ActiveRoomCalls(g.ID))
 }

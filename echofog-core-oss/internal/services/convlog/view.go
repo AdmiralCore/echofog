@@ -50,6 +50,7 @@ type View struct {
 	Metadata string `json:"meta,omitempty"`
 	ReplyTo  string `json:"reply_to,omitempty"`
 	Thread   string `json:"thread,omitempty"`
+	Channel  string `json:"channel,omitempty"`  // a group's channel ("" the main one)
 	Withheld bool   `json:"withheld,omitempty"` // arrived without its body and no delete explains it
 
 	// Edits keeps each editor's latest edit; only the author's counts (see Render), but the author
@@ -165,6 +166,7 @@ type Message struct {
 	Metadata    string     `json:"metadata,omitempty"`
 	ReplyTo     string     `json:"replyTo,omitempty"`
 	Thread      string     `json:"thread,omitempty"`
+	Channel     string     `json:"channel,omitempty"`
 	Edited      bool       `json:"edited"`
 	EditedAt    int64      `json:"editedAt,omitempty"`
 	Deleted     bool       `json:"deleted"`
@@ -253,7 +255,7 @@ func (v *View) Render(conv, self string) Message {
 	m := Message{
 		ID: v.ID, Conv: conv, Author: v.Author, Mine: v.Author == self && self != "",
 		TS: v.TS, Lamport: v.Lamport, Type: v.Type, Text: v.Text, Metadata: v.Metadata,
-		ReplyTo: v.ReplyTo, Thread: v.Thread, Replies: v.Replies, LastReplyAt: v.LastReplyTS,
+		ReplyTo: v.ReplyTo, Thread: v.Thread, Channel: v.Channel, Replies: v.Replies, LastReplyAt: v.LastReplyTS,
 		Legacy: v.Legacy, Withheld: v.Withheld, Reactions: []Reaction{},
 	}
 	m.Kind = "text"
