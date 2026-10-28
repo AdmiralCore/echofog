@@ -222,6 +222,10 @@ Compose-файл запускает `ghcr.io/admiralcore/echofog-node:latest`, �
 `ECHOFOG_IMAGE=ghcr.io/admiralcore/echofog-node:sha-4d6bfaa` в `deploy/.env`, чтобы остаться на одной
 сборке или вернуться к ней.
 
+`main` — стабильная ветка: туда попадает то, что уже проверено. Новое сначала уходит в `dev` и
+собирается как `ghcr.io/admiralcore/echofog-node:dev`. Ставьте его на сервер для проверок
+(`ECHOFOG_IMAGE=ghcr.io/admiralcore/echofog-node:dev`), а не на тот, которым пользуются люди.
+
 Чтобы собрать из своей копии кода (нужно около 4 ГБ свободного места), добавьте файл сборки:
 
 ```bash

@@ -1,11 +1,11 @@
 name: build
 
 # Builds the release binaries: the headless node for Linux and Windows, and the desktop app for
-# both. Runs on pushes to main, on version tags, and on demand. Artifacts are attached to the run;
+# both. Runs on pushes to main and dev, on version tags, and on demand. Artifacts are attached to the run;
 # a version tag (v1.2.3) also publishes a draft GitHub release with a SHA256SUMS file.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   workflow_dispatch:
 

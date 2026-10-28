@@ -220,6 +220,10 @@ build is also tagged with its commit, e.g. `sha-4d6bfaa`: put
 `ECHOFOG_IMAGE=ghcr.io/admiralcore/echofog-node:sha-4d6bfaa` in `deploy/.env` to stay on one build or
 to go back to it.
 
+`main` is the stable branch: what goes there was tested first. New work lands in `dev` and is built
+as `ghcr.io/admiralcore/echofog-node:dev`. Use it on a server you test on
+(`ECHOFOG_IMAGE=ghcr.io/admiralcore/echofog-node:dev`), not on one people depend on.
+
 To build from your checkout instead (needs about 4 GB of free disk), add the build file:
 
 ```bash

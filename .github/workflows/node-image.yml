@@ -2,11 +2,11 @@ name: node-image
 
 # Builds the Docker image of the headless node and publishes it to the GitHub Container Registry
 # as ghcr.io/<owner>/echofog-node, for linux/amd64 and linux/arm64, so a VPS only pulls it instead
-# of compiling (which needs a few GB of disk). Tags: latest and sha-<commit> on pushes to main,
-# 1.2.3 and 1.2 on version tags.
+# of compiling (which needs a few GB of disk). Tags: latest on pushes to main (stable), dev on pushes
+# to dev (what is being tested), sha-<commit> on both, 1.2.3 and 1.2 on version tags.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   workflow_dispatch:
 
@@ -44,6 +44,7 @@ jobs:
           images: ${{ steps.names.outputs.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
