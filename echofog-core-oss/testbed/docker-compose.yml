@@ -162,5 +162,5 @@ services:
   c2:
     <<: *node
     container_name: efbed-c2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c2, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c2, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_C2:-}" }
     networks: { lan_c: { ipv4_address: 10.20.3.12 } }

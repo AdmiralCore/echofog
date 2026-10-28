@@ -82,6 +82,9 @@ func main() {
 		cfg.AntiDPI.TLSServerName, cfg.AntiDPI.CamouflageAddr = *coverSNI, *coverAddr
 		cfg.Network.TCPListenAddr = *listen
 	}
+	if g := os.Getenv("GUARD_MODE"); g != "" {
+		cfg.AntiDPI.GuardMode = g
+	}
 	if *access != "" {
 		cfg.Access.Mode = *access
 	}
@@ -161,6 +164,7 @@ func (t *testNode) routes() http.Handler {
 	mux.HandleFunc("/group/members", t.groupMembers)
 	t.vpnRoutes(mux)
 	t.callRoutes(mux)
+	t.guardRoutes(mux)
 	mux.HandleFunc("/access", t.accessStatus)
 	mux.HandleFunc("/access/kick", t.accessKick)
 	mux.HandleFunc("/exits", t.exits)

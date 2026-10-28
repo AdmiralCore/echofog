@@ -430,8 +430,23 @@ func waitDelivered(nodes map[string]*node, l *ledger, timeout time.Duration) (mi
 	}
 }
 
-func smoke(nodes map[string]*node, v *verdict, l *ledger) groupInfo {
-	meshUp(nodes, 2*time.Minute)
+// chatters are the nodes that chat: the lab's public nodes run in the server role (as on a VPS),
+// which has no chat.
+func chatters(nodes map[string]*node) map[string]*node {
+	out := map[string]*node{}
+	for name, n := range nodes {
+		switch name {
+		case "s1", "s2", "p1", "p2", "x1", "x2", "x3", "h1":
+		default:
+			out[name] = n
+		}
+	}
+	return out
+}
+
+func smoke(all map[string]*node, v *verdict, l *ledger) groupInfo {
+	meshUp(all, 2*time.Minute)
+	nodes := chatters(all)
 
 	logf("every node writes to every other node (%d messages), most of them for the first time", len(nodes)*(len(nodes)-1))
 	start := time.Now()
