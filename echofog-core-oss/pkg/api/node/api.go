@@ -156,8 +156,12 @@ func (n *NodeApi) GetMyPubKey() string {
 func (n *NodeApi) ConnectToPeer(addr string) error {
 	ctx, cancel := context.WithTimeout(n.node.Ctx, 15*time.Second)
 	defer cancel()
-	host, id, sni, named := network.SplitPeerAddrSNI(addr)
+	info := network.ParseAddrInfo(addr)
+	host, id, sni, named := info.Addr, info.ID, info.SNI, info.Named
 	if named {
+		if info.Server && n.node.Swarm != nil {
+			n.node.Swarm.SetPeerServer(id, true)
+		}
 		if sni != "" {
 			n.node.Net.ExpectPeerSNI(host, id, sni)
 			if n.node.Swarm != nil {

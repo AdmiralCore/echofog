@@ -119,3 +119,20 @@ func TestKeyring(t *testing.T) {
 	assert.Nil(t, k.Get(peer(1)))
 	assert.ErrorIs(t, k.Set(peer(1), []byte{1}), ErrBadSecret)
 }
+
+// The link of a server carries its cover site's name and its role, so whoever follows it dials the
+// node as REALITY, and never as noise if a later path loses the SNI.
+func TestLinkCarriesSNIAndServerRole(t *testing.T) {
+	inv := Invite{Network: "echofog", Peer: peer(9), Addrs: []string{"203.0.113.5:4242"}, SNI: "cover.example", Server: true,
+		Relays: []string{"203.0.113.6:4242/" + peer(8).String() + "?sni=cover.example&srv=1"}}
+	got, err := ParseLink(FormatLink(inv), "echofog")
+	require.NoError(t, err)
+	assert.Equal(t, "cover.example", got.SNI)
+	assert.True(t, got.Server)
+	assert.Equal(t, inv.Relays, got.Relays, "the relay's own SNI and role survive the link")
+
+	plain, err := ParseLink(FormatLink(Invite{Network: "echofog", Peer: peer(9), Addrs: []string{"203.0.113.5:4242"}}), "echofog")
+	require.NoError(t, err)
+	assert.False(t, plain.Server)
+	assert.Empty(t, plain.SNI)
+}

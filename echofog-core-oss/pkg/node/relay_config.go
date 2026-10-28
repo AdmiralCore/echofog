@@ -70,7 +70,9 @@ func (n *Node) RelayReachability() RelayReachability {
 			if !r.Mapped && n.Cfg.Network.AdvertisePort > 0 {
 				port = strconv.Itoa(n.Cfg.Network.AdvertisePort)
 			}
-			r.Addr = network.JoinPeerAddr(net.JoinHostPort(host, port), n.ID)
+			// the link people paste into --bootstrap or a relay list: with the cover site's name and
+			// the server role, so the first dial of whoever uses it is not noise
+			r.Addr = network.JoinPeerAddrInfo(net.JoinHostPort(host, port), n.ID, n.Cfg.AntiDPI.TLSServerName, n.Cfg.IsServer())
 			return r
 		}
 	}

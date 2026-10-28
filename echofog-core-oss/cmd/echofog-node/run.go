@@ -17,6 +17,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/access"
 	api "github.com/echofog/echofog-core/pkg/api/node"
+	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/logging"
 	"github.com/echofog/echofog-core/pkg/node"
 )
@@ -477,7 +478,15 @@ func joinAddress(n *node.Node, listen string) string {
 	if n.Cfg.Network.AdvertisePort > 0 {
 		port = strconv.Itoa(n.Cfg.Network.AdvertisePort)
 	}
-	return network.JoinPeerAddrWithSNI(host+":"+port, n.ID, n.Cfg.AntiDPI.TLSServerName)
+	return composeJoin(host+":"+port, n.ID, n.Cfg)
+}
+
+// composeJoin is the join address of a node: its host:port and peer ID, and what has to travel with
+// them. A node with a cover site gives its SNI (the first connection to it is REALITY, not noise),
+// and a node in the server role says so (a client then never dials it across a border over noise,
+// even if some other path loses its SNI).
+func composeJoin(hostPort string, id types.PeerID, cfg *config.AppConfig) string {
+	return network.JoinPeerAddrInfo(hostPort, id, cfg.AntiDPI.TLSServerName, cfg.IsServer())
 }
 
 // applyRelayLimits copies the limit fields of l into the relay server config; idle is the

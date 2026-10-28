@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
@@ -35,4 +36,22 @@ func TestRelayReachability(t *testing.T) {
 	r = n.RelayReachability()
 	assert.Empty(t, r.Addr)
 	assert.NotEmpty(t, r.Reason, "the forward is gone: no link")
+}
+
+// The address a node offers for pasting carries its cover site and its role; announced caps say
+// "server" only for the server role, and a hidden node says nothing at all.
+func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}}
+	n.NAT = routing.NewNATManager(nil, slog.Default())
+	n.NAT.SetPortMapping(netip.MustParseAddrPort("203.0.113.5:40001"))
+	assert.NotContains(t, n.RelayReachability().Addr, "srv=1")
+	assert.False(t, n.announcedCaps().Has(handshake.CapServer))
+
+	n.Cfg.Role = config.RoleServer
+	n.Cfg.AntiDPI.TLSServerName = "cover.example"
+	assert.Equal(t, "203.0.113.5:40001/"+n.ID.String()+"?sni=cover.example&srv=1", n.RelayReachability().Addr)
+	assert.True(t, n.announcedCaps().Has(handshake.CapServer))
+
+	n.Cfg.Access.Mode = config.AccessHidden
+	assert.Equal(t, handshake.CapNone, n.announcedCaps(), "a hidden node announces nothing")
 }

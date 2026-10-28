@@ -36,11 +36,12 @@ func normalizeBootstrap(in []string) ([]string, error) {
 		if strings.TrimSpace(s) == "" {
 			continue
 		}
-		a, id, err := ParseRelayAddr(s)
+		info, err := ParseRelayAddrInfo(s)
 		if err != nil {
 			return nil, err
 		}
-		e := network.JoinPeerAddr(a, id)
+		// keep the SNI and the server flag: they are what lets the first dial be REALITY
+		e := network.JoinPeerAddrInfo(info.Addr, info.ID, info.SNI, info.Server)
 		if !seen[strings.ToLower(e)] {
 			seen[strings.ToLower(e)] = true
 			out = append(out, e)

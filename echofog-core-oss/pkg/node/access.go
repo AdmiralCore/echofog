@@ -219,6 +219,7 @@ func (n *Node) InviteLink() (string, error) {
 		Peer:     n.ID,
 		Addrs:    n.linkAddrs(),
 		SNI:      n.Cfg.AntiDPI.TLSServerName,
+		Server:   n.Cfg.IsServer(),
 	}
 	if n.gated() {
 		inv.Secret = n.Access.Secret()
@@ -283,7 +284,8 @@ func (n *Node) linkRelays() []string {
 			break
 		}
 		if (p.Relays() || p.Signals()) && p.Addr() != "" {
-			out = append(out, network.JoinPeerAddr(p.Addr(), p.ID()))
+			// the relay's SNI and role go with it: whoever follows the link dials it as we do
+			out = append(out, network.JoinPeerAddrInfo(p.Addr(), p.ID(), n.Swarm.GetPeerSNI(p.ID()), n.Swarm.IsServerPeer(p.ID())))
 		}
 	}
 	return out
@@ -310,7 +312,11 @@ func (n *Node) JoinInvite(ctx context.Context, inv access.Invite) (types.PeerID,
 			return types.PeerID{}, err
 		}
 	}
+	if inv.Server {
+		n.Swarm.SetPeerServer(inv.Peer, true)
+	}
 	if inv.SNI != "" {
+		n.Swarm.SetPeerSNI(inv.Peer, inv.SNI) // remembered: every later dial to it is camouflaged too
 		for _, a := range inv.Addrs {
 			n.Net.ExpectPeerSNI(ResolveRelayHost(a), inv.Peer, inv.SNI)
 		}
@@ -328,9 +334,16 @@ func (n *Node) JoinInvite(ctx context.Context, inv access.Invite) (types.PeerID,
 		}
 	}
 	for _, r := range inv.Relays {
-		addr, relay, ok := network.SplitPeerAddr(r)
+		rinfo := network.ParseAddrInfo(r)
+		addr, relay, ok := rinfo.Addr, rinfo.ID, rinfo.Named
 		if !ok || relay == n.ID {
 			continue
+		}
+		if rinfo.SNI != "" {
+			n.Swarm.SetPeerSNI(relay, rinfo.SNI)
+		}
+		if rinfo.Server {
+			n.Swarm.SetPeerServer(relay, true)
 		}
 		if n.Swarm.GetPeer(relay) == nil {
 			dctx, cancel := context.WithTimeout(ctx, 6*time.Second)

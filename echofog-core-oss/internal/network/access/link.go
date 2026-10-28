@@ -49,6 +49,7 @@ type Invite struct {
 	Addrs    []string // "host:port" or ws(s):// URLs, to dial directly
 	Relays   []string // "host:port/<relay peer id>", through which the node can be reached
 	SNI      string   // target node's camouflage SNI to use for TLS/QUIC
+	Server   bool     // the node runs in the server role: never to be dialed across a border over noise
 }
 
 // IsLink reports whether text looks like an invitation link (it may still be unreadable).
@@ -71,6 +72,9 @@ func FormatLink(inv Invite) string {
 	if inv.SNI != "" {
 		q.Set("sni", inv.SNI)
 	}
+	if inv.Server {
+		q.Set("srv", "1")
+	}
 	for _, a := range inv.Addrs {
 		q.Add("a", a)
 	}
@@ -81,7 +85,7 @@ func FormatLink(inv Invite) string {
 	var b strings.Builder
 	b.WriteString(linkPrefix)
 	first := true
-	for _, k := range []string{"v", "net", "p", "id", "s", "sni", "a", "r"} {
+	for _, k := range []string{"v", "net", "p", "id", "s", "sni", "srv", "a", "r"} {
 		for _, v := range q[k] {
 			if !first {
 				b.WriteByte('&')
@@ -131,6 +135,7 @@ func ParseLink(text, network string) (Invite, error) {
 		}
 	}
 	inv.SNI = strings.TrimSpace(q.Get("sni"))
+	inv.Server = q.Get("srv") == "1"
 	inv.Addrs = q["a"]
 	inv.Relays = q["r"]
 	if len(inv.Addrs) > 16 || len(inv.Relays) > 16 {

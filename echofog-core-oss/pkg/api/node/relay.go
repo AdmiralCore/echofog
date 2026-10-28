@@ -73,29 +73,39 @@ type RelayUse struct {
 // ParseRelayAddrSNI reads a relay link, a "host:port/<peer id>" address or a ws:// URL ending in the
 // peer ID, and returns the address, the peer ID, and the camouflage SNI (if present).
 func ParseRelayAddrSNI(s string) (addr string, id types.PeerID, sni string, err error) {
+	info, err := ParseRelayAddrInfo(s)
+	return info.Addr, info.ID, info.SNI, err
+}
+
+// ParseRelayAddrInfo is ParseRelayAddrSNI with everything that travels with the address: the
+// camouflage SNI and whether the node runs in the server role. A list that is saved and read back
+// (bootstrap nodes, preferred relays) must keep both, or its entries are dialed over noise.
+func ParseRelayAddrInfo(s string) (network.AddrInfo, error) {
+	var zero network.AddrInfo
 	s = strings.TrimSpace(s)
 	if len(s) >= len(RelayLinkPrefix) && strings.EqualFold(s[:len(RelayLinkPrefix)], RelayLinkPrefix) {
 		s = s[len(RelayLinkPrefix):]
 	}
 	s = strings.TrimRight(s, "/")
-	a, id, sni, ok := network.SplitPeerAddrSNI(s)
-	if !ok {
-		return "", id, "", errors.New("a relay address needs the peer ID at the end: host:port/<64 hex characters>")
+	info := network.ParseAddrInfo(s)
+	a := info.Addr
+	if !info.Named {
+		return zero, errors.New("a relay address needs the peer ID at the end: host:port/<64 hex characters>")
 	}
 	if strings.HasPrefix(a, "ws://") || strings.HasPrefix(a, "wss://") {
 		if len(a) <= len("wss://") {
-			return "", id, "", errors.New("the ws:// address has no host")
+			return zero, errors.New("the ws:// address has no host")
 		}
-		return a, id, sni, nil
+		return info, nil
 	}
 	host, port, err := net.SplitHostPort(a)
 	if err != nil || host == "" {
-		return "", id, "", fmt.Errorf("%q is not host:port", a)
+		return zero, fmt.Errorf("%q is not host:port", a)
 	}
 	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
-		return "", id, "", fmt.Errorf("%q is not a port", port)
+		return zero, fmt.Errorf("%q is not a port", port)
 	}
-	return a, id, sni, nil
+	return info, nil
 }
 
 // ParseRelayAddr reads a relay link, a "host:port/<peer id>" address or a ws:// URL ending in the
@@ -124,11 +134,11 @@ func normalizeRelaySettings(r RelaySettingsDTO) (RelaySettingsDTO, error) {
 		if strings.TrimSpace(s) == "" {
 			continue
 		}
-		a, id, err := ParseRelayAddr(s)
+		info, err := ParseRelayAddrInfo(s)
 		if err != nil {
 			return r, err
 		}
-		if k := network.JoinPeerAddr(a, id); !seen[k] {
+		if k := network.JoinPeerAddrInfo(info.Addr, info.ID, info.SNI, info.Server); !seen[k] {
 			seen[k] = true
 			relays = append(relays, k)
 		}
@@ -233,14 +243,14 @@ func (n *NodeApi) AddRelay(link string) error {
 	if err != nil {
 		return err
 	}
-	a, id, err := ParseRelayAddr(link)
+	info, err := ParseRelayAddrInfo(link)
 	if err != nil {
 		return err
 	}
-	if n.node.ID == id {
+	if n.node.ID == info.ID {
 		return errors.New("this is your own relay")
 	}
-	cur.Relays = append(cur.Relays, network.JoinPeerAddr(a, id))
+	cur.Relays = append(cur.Relays, network.JoinPeerAddrInfo(info.Addr, info.ID, info.SNI, info.Server))
 	return n.SetRelaySettings(cur)
 }
 

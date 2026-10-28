@@ -144,9 +144,10 @@ func (n *Node) reachMailboxes(ctx context.Context, peer types.PeerID) {
 			reached = true
 			continue
 		}
-		if err := n.EnsureConnected(ctx, id); err != nil && h.Addr != "" && n.Net != nil {
-			n.Net.ExpectPeer(h.Addr, id)
-			_ = n.Net.DialEarly(ctx, h.Addr)
+		if err := n.EnsureConnected(ctx, id); err != nil && h.Addr != "" {
+			// through the swarm: a relay (a server) whose camouflage SNI we know is dialed with it,
+			// and one we do not know it for is not dialed over noise across a border
+			_ = n.Swarm.AddPotentialPeerWithCtx(ctx, id, h.Addr)
 		}
 		if n.Swarm.GetPeer(id) != nil {
 			reached = true
