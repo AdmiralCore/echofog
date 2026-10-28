@@ -203,6 +203,25 @@ disguised. Without it the first connection goes out as noise, and the client lea
 only after it has joined. The `Join address` that `echofog-node` prints already has `?sni=` when
 the node has a camouflage site, and invitation links of hidden nodes carry it too.
 
+A server's site name, and the fact that it is a server (`&srv=1` in the address), travel with its
+address everywhere: the join address, invitation links (also the relays inside them), bootstrap and
+relay lists, peer exchange, the DHT and the exit market. A node also tells every peer it exchanges
+peers with how it is to be dialed, and each node keeps what it learned across restarts. Before this
+an address learned from a third party could arrive without the name, or with `?sni=...` stuck to
+the `host:port` so it could not be dialed at all.
+
+### A client does not dial a server across a border over noise
+
+A server announces the server role in its handshake (`CapServer`) and in its address. A client that
+knows a server's site name dials it disguised. If it knows the node is a server but not its site
+name (an old address, a list that lost it), it does **not** dial it with noise across a border: it
+waits for the name, which arrives with the next peer exchange, or does not dial. A country that
+cannot be placed counts as across the border; addresses on the local network, and (with
+`region_aware_obfs`) in the node's own country, are exempt. A server, in turn, does not dial a
+user's node over noise: users dial servers. `anti_dpi.allow_noise_to_servers` switches the rule off
+for people who run their own servers without a cover site, from a network that does not censor.
+Addresses typed in by hand (`ConnectToPeer`) are the user's own choice and are dialed as given.
+
 ### What the node checks for you
 
 At start-up a public node connects to the imitated site once and logs whether its own ServerHello
@@ -248,8 +267,8 @@ For such nodes:
 ## Settings that `echofog-node` cannot change yet
 
 `echofog-node` builds its settings from flags and has no config file. So `tunnel_padding` (on),
-`flow_shaping` (the defaults above), `region_aware_obfs` (off), `home_country` and
-`micro_chunk_tcp` (off) stay at their defaults on a server. The desktop app reads them from its
+`flow_shaping` (the defaults above), `region_aware_obfs` (off), `home_country`,
+`allow_noise_to_servers` (off) and `micro_chunk_tcp` (off) stay at their defaults on a server. The desktop app reads them from its
 config.
 
 ## Measurements
