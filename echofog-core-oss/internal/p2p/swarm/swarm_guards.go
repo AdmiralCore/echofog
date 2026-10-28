@@ -109,6 +109,18 @@ func (s *Swarm) Guards() []GuardInfo {
 	return out
 }
 
+// GuardsWanted is how many guards the node aims to hold at once.
+func (s *Swarm) GuardsWanted() int { return guardsWanted }
+
+// RefreshGuards runs a guard round now: after the mode changed, it starts holding guards (or lets
+// the kept ones go on the next rounds). Safe when guard mode is off.
+func (s *Swarm) RefreshGuards() {
+	if s == nil {
+		return
+	}
+	s.maintainGuards()
+}
+
 // IsGuard reports whether id is one of this node's guards.
 func (s *Swarm) IsGuard(id types.PeerID) bool {
 	s.guards.mu.Lock()

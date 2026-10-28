@@ -121,6 +121,8 @@ export function GetGroupInvite(arg1:string):Promise<string>;
 
 export function GetGroupMessages(arg1:string,arg2:number):Promise<Array<node.GroupMessageDTO>>;
 
+export function GetGuardStatus():Promise<node.GuardStatus>;
+
 export function GetLogFilePath():Promise<string>;
 
 export function GetLogs(arg1:number):Promise<Array<logging.Entry>>;
@@ -280,6 +282,8 @@ export function SetExitFreePeers(arg1:Array<string>):Promise<void>;
 export function SetExitName(arg1:string,arg2:string):Promise<void>;
 
 export function SetGroupRole(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function SetGuardMode(arg1:string):Promise<void>;
 
 export function SetPayAsset(arg1:string):Promise<void>;
 

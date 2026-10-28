@@ -230,6 +230,10 @@ export function GetGroupMessages(arg1, arg2) {
   return window['go']['main']['App']['GetGroupMessages'](arg1, arg2);
 }
 
+export function GetGuardStatus() {
+  return window['go']['main']['App']['GetGuardStatus']();
+}
+
 export function GetLogFilePath() {
   return window['go']['main']['App']['GetLogFilePath']();
 }
@@ -548,6 +552,10 @@ export function SetExitName(arg1, arg2) {
 
 export function SetGroupRole(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetGroupRole'](arg1, arg2, arg3);
+}
+
+export function SetGuardMode(arg1) {
+  return window['go']['main']['App']['SetGuardMode'](arg1);
 }
 
 export function SetPayAsset(arg1) {

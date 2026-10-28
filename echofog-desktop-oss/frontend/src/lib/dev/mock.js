@@ -408,6 +408,21 @@ const impl = {
   GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
+  guardMock: undefined,
+  GetGuardStatus() {
+    this.guardMock ??= 'auto';
+    const active = this.guardMock !== 'off';
+    return {
+      mode: this.guardMock, active, wanted: active ? 3 : 0,
+      connected: active ? 2 : 0,
+      guards: active ? [
+        { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', connected: true },
+        { peerId: '98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0', connected: true },
+      ] : [],
+    };
+  },
+  SetGuardMode(mode) { this.guardMock = mode; },
+
   AddBootstrapNode: (entry) => {
     const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(linkEntryMock(entry));
     if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');

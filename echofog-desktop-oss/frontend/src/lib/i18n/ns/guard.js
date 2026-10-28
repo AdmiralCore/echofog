@@ -1,0 +1,31 @@
+// How the app enters the network (guard mode), on the Settings screen.
+export default {
+  en: {
+    'guard.title': 'Joining the network',
+    'guard.hint': 'How this app talks to the EchoFog network. On by default, it goes through a few camouflaged guard servers instead of connecting to everyone itself, so your address is not spread around.',
+    'guard.mode.auto': 'Automatic',
+    'guard.mode.autoHint': 'Guards abroad, direct at home',
+    'guard.mode.on': 'Always through guards',
+    'guard.mode.onHint': 'Safest; a little slower',
+    'guard.mode.off': 'Direct',
+    'guard.mode.offHint': 'Old way; your address is seen more',
+    'guard.through': { one: 'Connected through {n} guard', other: 'Connected through {n} guards' },
+    'guard.connecting': 'Looking for guards…',
+    'guard.offNote': 'The app connects to the network directly. Other nodes it meets see your address.',
+    'guard.exitNote': 'This is about how the app joins the network. The VPN that carries your browsing is chosen on the Proxy page and has its own disguise.',
+  },
+  ru: {
+    'guard.title': 'Вход в сеть',
+    'guard.hint': 'Как приложение общается с сетью EchoFog. По умолчанию оно ходит через несколько замаскированных охранных узлов, а не связывается со всеми само, поэтому ваш адрес не расходится по сети.',
+    'guard.mode.auto': 'Автоматически',
+    'guard.mode.autoHint': 'Через охрану за границей, напрямую дома',
+    'guard.mode.on': 'Всегда через охрану',
+    'guard.mode.onHint': 'Безопаснее; чуть медленнее',
+    'guard.mode.off': 'Напрямую',
+    'guard.mode.offHint': 'По-старому; ваш адрес видят чаще',
+    'guard.through': { one: 'Подключено через {n} охранный узел', few: 'Подключено через {n} охранных узла', many: 'Подключено через {n} охранных узлов', other: 'Подключено через {n} охранных узла' },
+    'guard.connecting': 'Ищу охранные узлы…',
+    'guard.offNote': 'Приложение подключается к сети напрямую. Узлы, с которыми оно связывается, видят ваш адрес.',
+    'guard.exitNote': 'Это про то, как приложение заходит в сеть. VPN-выход, через который идёт ваш интернет, выбирается на вкладке «Прокси» и маскируется отдельно.',
+  },
+};

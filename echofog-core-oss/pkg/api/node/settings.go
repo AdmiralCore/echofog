@@ -56,6 +56,9 @@ type persistedSettings struct {
 	// AccessMode is who may reach this node from its next start: "public" or "hidden" (see
 	// config.AccessConfig). Empty: what the configuration says.
 	AccessMode string `json:"accessMode,omitempty"`
+	// GuardMode is how this node enters the network: "auto" (the default), "on" or "off" (see
+	// config.AntiDPIConfig.GuardMode). Empty: what the configuration says.
+	GuardMode string `json:"guardMode,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
@@ -78,6 +81,9 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 	applySettings(c, p.SettingsDTO)
 	if p.AccessMode == config.AccessPublic || p.AccessMode == config.AccessHidden {
 		c.Access.Mode = p.AccessMode
+	}
+	if p.GuardMode == config.GuardAuto || p.GuardMode == config.GuardOn || p.GuardMode == config.GuardOff {
+		c.AntiDPI.GuardMode = p.GuardMode
 	}
 	if boot, err := normalizeBootstrap(p.BootstrapNodes); err == nil {
 		p.BootstrapNodes = boot

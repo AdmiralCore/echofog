@@ -10,6 +10,7 @@
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import BootstrapCard from '../components/BootstrapCard.svelte';
+  import GuardCard from '../components/GuardCard.svelte';
   import { openLinkDialog } from '../links.js';
   import PrivacyCard from '../components/PrivacyCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
@@ -194,6 +195,8 @@
         <button class="primary" on:click={() => openLinkDialog('')}>{$t('links.open')}</button>
       </div>
     </div>
+
+    <GuardCard />
 
     <BootstrapCard />
 
