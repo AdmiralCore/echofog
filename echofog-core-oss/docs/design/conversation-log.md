@@ -272,6 +272,24 @@ already know the node id); documented in the user docs.
 - The legacy `KeyRotationEngine` is left in place: it never protected messages and still does not
   (sender-key epochs do); removing it is cleanup for later.
 
+## 7a. Spaces: channels and voice rooms
+
+A group is a **space**: one log, with named parts (`convlog/channels.go`).
+
+- A message names its channel in the signed `Event.ext` (`EventExt.channel`); the main channel
+  is the empty id, which every message from before channels is in. The ext is kept when a deleted
+  message's body is stripped, so a channel never loses its messages' places.
+- Kind `CHANNEL` = 7 (`ChannelBody{id, name, voice, removed}`) creates, renames and removes a
+  channel; last writer wins per id; the channels are ordered by their earliest write. Writing it
+  needs `PermManageGroup` or `PermManageRoles` at that point of the log (rights as in section 7).
+- Storage: `cl/c/<bc>/<id>` the channel, `cl/q/<bc>/<id>/<^lamport>/<id>` its history (the main
+  channel keeps `cl/o`); the meta keeps a last message, unread count and read point per channel.
+- Membership, rights, sync and the rebuild are the group's: a channel needs no keys, roster or
+  sync of its own, and a space of many channels costs one log.
+- A **voice room** is a channel with `voice` set. Joining it joins the group's call in that room:
+  group calls are keyed by room (wire field `rm`), and a room's call is announced to the members as
+  going on (`callactive`) and never rings. The group's own call (room "") rings as before.
+
 ## 8. Delivery fixes
 
 | Finding | Fix |
@@ -283,6 +301,11 @@ already know the node id); documented in the user docs.
 | relay drop on reconnect | a relay hands stored mail to a reconnected recipient on connect and again ~10 s later, and drops it only then (it used to drop it as soon as the first write went out, losing it if that frame on a fresh connection was lost) |
 
 ## 9. API
+
+Spaces: `ChatRef.channel` picks a channel for history, sending and reading; `ChatChannels`,
+`ChatChannelSave(ref, id, name, voice)` (id "" creates) and `ChatChannelRemove`; voice rooms are
+joined with `StartRoomCall(group, room)`, kept with `KeepRoomCallAlive` and ended with
+`EndRoomCall`.
 
 The chat list comes whole from `ChatRows` (`Conversations`, Wails `ChatList`): contacts, requests
 and groups, each with `kind` (direct/group/channel), `name`, presence, block, role, member count

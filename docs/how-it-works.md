@@ -146,6 +146,12 @@ yet), one check means the recipient or a relay took it (a pale check: it is wait
 two checks mean the recipient's app confirmed
 it. The same states tell you what a call you placed is waiting for, until it connects.
 
+**Spaces.** A group can have text channels and voice rooms beside its main chat, as on a
+community server, but with no server: the channels are named parts of the group's one encrypted
+log, so they share its members, roles and history. Whoever may manage the group adds or removes
+them. A voice room is a call that stays open: members see who started it and join when they like,
+and it never rings anybody.
+
 **Groups** have no server either. Every group message and every change (new member, role, ban) is
 sent to each member over that member's own encrypted session, with the same receipts and offline
 queue as a normal chat. On top of that, a message is signed by its author and sealed once for the
