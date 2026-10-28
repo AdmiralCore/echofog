@@ -85,10 +85,16 @@ func (r *callRx) tap(p *media.MediaPacket) {
 }
 
 func (t *testNode) callJoin(w http.ResponseWriter, r *http.Request) {
-	var in struct{ CallID, Coordinator string }
+	var in struct {
+		CallID, Coordinator string
+		UploadKbps          int // what this node says it can send; 20000 when absent
+	}
 	if err := body(r, &in); err != nil {
 		reply(w, nil, err)
 		return
+	}
+	if in.UploadKbps <= 0 {
+		in.UploadKbps = 20000
 	}
 	if t.n.CallManager == nil {
 		reply(w, nil, errors.New("no calls on this node"))
@@ -99,7 +105,7 @@ func (t *testNode) callJoin(w http.ResponseWriter, r *http.Request) {
 		copy(coord[:], raw)
 	}
 	roomID, key := call.DeriveRoom(in.CallID)
-	prof := tree.PeerNodeProfile{PeerID: t.n.ID, UploadKbps: 20000, MaxRelayChildren: t.n.CallRelayCapacity(),
+	prof := tree.PeerNodeProfile{PeerID: t.n.ID, UploadKbps: in.UploadKbps, MaxRelayChildren: t.n.CallRelayCapacity(),
 		RTT: 10 * time.Millisecond, LastHeartbeat: time.Now(), RelayOnly: t.n.CallRelayOnly()}
 	reply(w, map[string]bool{"ok": true}, t.n.CallManager.JoinRoom(roomID, coord, key, prof))
 }
