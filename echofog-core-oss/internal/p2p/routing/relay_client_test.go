@@ -252,3 +252,47 @@ func TestRelayClient_RelayGoneDropsItsCircuits(t *testing.T) {
 		t.Fatal("routes through other relays must stay")
 	}
 }
+
+// A frame that overtakes its circuit's open (the relay forwards them on different streams) is kept
+// for a moment and delivered once the open arrives; a frame from another relay, or one older than
+// earlyFrameTTL, is not.
+func TestRelayClient_CircuitData_BeforeTheOpenIsDelivered(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	relay, other, alice := mkID(0x51), mkID(0x66), mkID(0x0a)
+
+	var got int
+	rc.AddDataListener(func(_ uint32, mt net_types.MessageType, _ []byte, from types.PeerID) {
+		if mt == net_types.TypeHolePunch && from == alice {
+			got++
+		}
+	})
+	frame := func(cid uint32) []byte {
+		b := make([]byte, 5)
+		binary.BigEndian.PutUint32(b[:4], cid)
+		b[4] = byte(net_types.TypeHolePunch)
+		return b
+	}
+
+	rc.handleCircuitData(frame(21), relay)
+	rc.handleCircuitData(frame(21), other) // not the relay that opens it
+	if got != 0 {
+		t.Fatalf("delivered before the open: %d", got)
+	}
+	rc.handleInboundCircuitOpen(inboundOpen(21, alice), relay)
+	if got != 1 {
+		t.Fatalf("the early frame should arrive once, got %d", got)
+	}
+
+	rc.mu.Lock()
+	rc.keepEarly(22, relay, frame(22), time.Now().Add(-2*earlyFrameTTL))
+	rc.mu.Unlock()
+	rc.handleInboundCircuitOpen(inboundOpen(22, alice), relay)
+	if got != 1 {
+		t.Fatalf("a stale early frame was delivered")
+	}
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	if len(rc.early) != 1 || rc.early[0].relay != other {
+		t.Fatalf("only the other relay's frame should wait (until it expires): %+v", rc.early)
+	}
+}

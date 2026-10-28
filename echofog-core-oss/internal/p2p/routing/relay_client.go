@@ -116,6 +116,7 @@ type RelayClient struct {
 	pendingSignal map[pendingKey]bool     // circuits being opened: signaling ones
 	pendingOpens  map[pendingKey]chan circuitOpenResult
 	blacklisted   map[types.PeerID]time.Time
+	early         []earlyFrame // frames that came before their circuit's open (see handleCircuitData)
 
 	// Market-aware economics & configuration
 	cfgMu       sync.RWMutex
@@ -128,6 +129,54 @@ type RelayClient struct {
 
 	listenersMu sync.RWMutex
 	listeners   []CircuitDataListener
+}
+
+// earlyFrame is a circuit frame that arrived before the circuit was opened. A relay forwards the
+// open and the first data frame on different streams, so the data can overtake the open: the
+// first hole punching message on a fresh signaling circuit was lost that way.
+type earlyFrame struct {
+	cid     uint32
+	relay   types.PeerID
+	payload []byte
+	at      time.Time
+}
+
+const (
+	maxEarlyFrames   = 32
+	maxEarlyFrameLen = 64 << 10
+	earlyFrameTTL    = 3 * time.Second
+)
+
+// keepEarly holds a frame for a circuit not opened yet, for a short while. Call with rc.mu held.
+func (rc *RelayClient) keepEarly(cid uint32, relay types.PeerID, payload []byte, now time.Time) {
+	kept := rc.early[:0]
+	for _, f := range rc.early {
+		if now.Sub(f.at) < earlyFrameTTL {
+			kept = append(kept, f)
+		}
+	}
+	rc.early = kept
+	if len(rc.early) >= maxEarlyFrames || len(payload) > maxEarlyFrameLen {
+		return
+	}
+	rc.early = append(rc.early, earlyFrame{cid: cid, relay: relay, payload: append([]byte(nil), payload...), at: now})
+}
+
+// takeEarly removes and returns the frames kept for circuit cid through relay. Call with rc.mu held.
+func (rc *RelayClient) takeEarly(cid uint32, relay types.PeerID, now time.Time) [][]byte {
+	var out [][]byte
+	kept := rc.early[:0]
+	for _, f := range rc.early {
+		switch {
+		case now.Sub(f.at) >= earlyFrameTTL:
+		case f.cid == cid && f.relay == relay:
+			out = append(out, f.payload)
+		default:
+			kept = append(kept, f)
+		}
+	}
+	rc.early = kept
+	return out
 }
 
 func NewRelayClient(s *swarm.Swarm, dht *dht.EchoFogDHT, logger *slog.Logger) *RelayClient {
@@ -544,10 +593,14 @@ func (rc *RelayClient) handleInboundCircuitOpen(payload []byte, relayPeer types.
 			rc.peerToCircuit[originID] = cid
 		}
 	}
+	early := rc.takeEarly(cid, relayPeer, time.Now())
 	rc.mu.Unlock()
 
 	rc.logger.Info("RelayClient: Inbound virtual circuit established",
 		"circuitID", cid, "origin", originID.String()[:8], "relay", relayPeer.String()[:8])
+	for _, f := range early {
+		rc.handleCircuitData(f, relayPeer)
+	}
 }
 
 // circuitsForRelayLocked counts the circuits currently held through a given relay. Caller holds rc.mu.
@@ -594,6 +647,7 @@ func (rc *RelayClient) handleCircuitOpenResponse(payload []byte, fromPeer types.
 		}
 	}
 
+	var early [][]byte
 	if ch != nil && status == 1 && targetID != (types.PeerID{}) {
 		cc := &ClientCircuit{
 			ID:           cid,
@@ -608,8 +662,12 @@ func (rc *RelayClient) handleCircuitOpenResponse(payload []byte, fromPeer types.
 		} else {
 			rc.peerToCircuit[targetID] = cid
 		}
+		early = rc.takeEarly(cid, fromPeer, time.Now())
 	}
 	rc.mu.Unlock()
+	for _, f := range early {
+		rc.handleCircuitData(f, fromPeer) // the far end answered before the relay confirmed
+	}
 
 	if ch != nil {
 		var res circuitOpenResult
@@ -638,7 +696,18 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	rc.mu.RUnlock()
 
 	if !exists {
-		return
+		// it may have overtaken the circuit's open: kept briefly, delivered once the open is in
+		rc.mu.Lock()
+		if _, exists = rc.circuits[cid]; !exists {
+			rc.keepEarly(cid, fromPeer, payload, time.Now())
+		}
+		rc.mu.Unlock()
+		if !exists {
+			return
+		}
+		rc.mu.RLock()
+		circuit = rc.circuits[cid]
+		rc.mu.RUnlock()
 	}
 
 	// A circuit frame is only accepted from the relay that carries this circuit. Otherwise any

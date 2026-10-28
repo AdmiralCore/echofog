@@ -76,7 +76,9 @@ func TestSignalingNodeHelpsHolePunchingButRelaysNoTraffic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	require.NoError(t, aN.RelayClient.SendSignal(ctx, bN.ID, net_types.TypeHolePunch, []byte("punch")))
-	require.Eventually(t, func() bool { return punches.Load() == 1 }, 5*time.Second, 20*time.Millisecond)
+	if !assert.Eventually(t, func() bool { return punches.Load() == 1 }, 5*time.Second, 20*time.Millisecond) {
+		t.Fatalf("punches %d, others %d", punches.Load(), others.Load())
+	}
 
 	// traffic does not: no circuit for it, and nothing smuggled through the signaling circuit
 	assert.Error(t, aN.RelayClient.SendUniversal(ctx, bN.ID, net_types.TypeCircuitData, []byte("traffic")), "a circuit for traffic was granted")
