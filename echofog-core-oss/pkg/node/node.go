@@ -97,8 +97,9 @@ type Node struct {
 	exitLedgerMu sync.Mutex
 	BWProbe      *bwprobe.Prober
 	ExitService  *exit_gateway.ExitService
-	Access       *access.Gate    // who may reach this node (hidden and isolated modes)
-	Invites      *access.Keyring // the secrets of the hidden nodes this node was invited to
+	Access       *access.Gate     // who may reach this node (hidden and isolated modes)
+	Passes       *access.Passbook // personal invitations of a hidden node (passes.go)
+	Invites      *access.Keyring  // the secrets of the hidden nodes this node was invited to
 	accessMode   atomic.Pointer[string]
 	privacy      privacyHolder // who may write and call (see privacy.go)
 	VPNMarket    *vpnmarket.Service
@@ -112,6 +113,8 @@ type Node struct {
 	stopOnce sync.Once
 	Ctx      context.Context
 	Cancel   context.CancelFunc
+
+	passesDirty atomic.Bool // traffic counted on passes, not yet saved (passes.go)
 
 	// wideScanAt is when the wide search for a camouflage neighbour last ran (anti_dpi.go).
 	wideScanAt time.Time
@@ -391,6 +394,7 @@ func (n *Node) Start() (err error) {
 	if err := n.initAccess(); err != nil {
 		return err
 	}
+	n.initPasses()
 	if n.gated() {
 		n.Logger.Info("ACCESS: this node is "+n.AccessMode()+": only the people with its link, its contacts and those who joined before can reach it", "joined", len(n.Access.Joined()))
 	}
@@ -566,6 +570,7 @@ func (n *Node) Start() (err error) {
 	}
 
 	n.applyAccess()
+	go n.sweepPasses()
 
 	n.Discovery = discovery.NewDiscoveryService(n.Storage, gsp, n.Swarm, n.PubKey)
 
@@ -857,6 +862,9 @@ func (n *Node) shutdown(closeLog bool) {
 		}
 		if n.ExitService != nil {
 			n.ExitService.FlushFreeBudget() // streams are closed: what they gave away is counted
+		}
+		if n.passesDirty.Load() {
+			_ = n.savePasses() // the traffic counted since the last save
 		}
 		// 5. Stop Dispatcher and drain its worker queues
 		if n.Dispatcher != nil {

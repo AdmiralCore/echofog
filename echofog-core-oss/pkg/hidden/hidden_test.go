@@ -193,3 +193,60 @@ func TestOnlyAHiddenNodeNamesRelaysInItsLink(t *testing.T) {
 		n.Stop()
 	}
 }
+
+// A pass is a personal link: its person gets in and may use the exit, a second device beyond the
+// pass's one is refused, a revoked pass drops its device and keeps it out, and extending it lets
+// the device back in. The pass and its device survive a restart.
+func TestPassesOfAHiddenNode(t *testing.T) {
+	hDB := t.TempDir() + "/db"
+	hN, h := startNode(t, "seller", hDB, hiddenMode(config.AccessHidden))
+	aN, a := startNode(t, "buyer", t.TempDir()+"/db", nil)
+	defer aN.Stop()
+	bN, b := startNode(t, "buyer-laptop", t.TempDir()+"/db", nil)
+	defer bN.Stop()
+	require.NoError(t, h.StartSharing(node.SharingConfig{}))
+	hN.Cfg.Access.PublicAddrs = []string{hN.Transport.Addr().String()}
+
+	p, err := h.CreatePass(node.PassRequest{Label: "order 1", Days: 30, Devices: 1, GB: 5})
+	require.NoError(t, err)
+	assert.Equal(t, "active", p.State)
+	assert.NotEqual(t, link(t, hN), p.Link, "a pass has a link of its own")
+
+	_, err = a.JoinInvite(p.Link)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return connected(hN, aN) }, 5*time.Second, 50*time.Millisecond)
+	assert.True(t, exitAccount(t, aN, hN).Enabled, "the buyer may use the exit")
+	assert.Empty(t, hN.Access.Joined(), "a pass's device is not on the shared link's list")
+
+	_, err = b.JoinInvite(p.Link)
+	assert.Error(t, err, "a second device on a one-device pass")
+
+	got, err := h.GetPass(p.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Devices, 1)
+	assert.Equal(t, aN.ID.String(), got.Devices[0].PeerID)
+
+	_, err = h.RevokePass(p.ID)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return !connected(hN, aN) }, 5*time.Second, 50*time.Millisecond)
+	assert.Error(t, a.ConnectToPeer(network.JoinPeerAddr(hN.Transport.Addr().String(), hN.ID)), "revoked: kept out")
+
+	_, err = h.ExtendPass(p.ID, node.PassRequest{Days: 30})
+	require.NoError(t, err)
+	require.NoError(t, a.ConnectToPeer(network.JoinPeerAddr(hN.Transport.Addr().String(), hN.ID)), "extended: back in")
+
+	aN.Swarm.RemovePeer(hN.ID)
+	hN.Stop()
+	hN, h = startNode(t, "seller", hDB, hiddenMode(config.AccessHidden))
+	defer hN.Stop()
+	got, err = h.GetPass(p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "order 1", got.Label)
+	assert.Len(t, got.Devices, 1, "the device is remembered")
+	require.NoError(t, a.ConnectToPeer(network.JoinPeerAddr(hN.Transport.Addr().String(), hN.ID)))
+
+	pub, _ := startNode(t, "public", t.TempDir()+"/db", nil)
+	defer pub.Stop()
+	_, err = node.NewNodeApi(pub).CreatePass(node.PassRequest{})
+	assert.ErrorIs(t, err, coreNode.ErrPassesNeedHidden)
+}

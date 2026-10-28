@@ -35,6 +35,8 @@ services:
       # publish 443 so the node blends with normal HTTPS/HTTP3; set ADVERTISE_PORT=443 in .env
       - "443:4242/udp"    # QUIC (HTTP/3 port): messages, calls, relayed and proxied traffic
       - "443:4242/tcp"    # TCP fallback (HTTPS port) for networks that block UDP
+      # the operator API (ECHOFOG_API_ADDR in .env), for a bot or a site on this same server only
+      # - "127.0.0.1:8090:8090"
     # the node exits cleanly on SIGTERM (database closed); give it time to do so
     stop_grace_period: 20s
     logging:

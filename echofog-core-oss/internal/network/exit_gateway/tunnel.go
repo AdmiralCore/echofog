@@ -313,6 +313,9 @@ type ExitService struct {
 	// access, when set, says who may use this exit at all: a hidden node serves only the peers it
 	// invited, even over the connections it opened itself to strangers (relays, DHT nodes)
 	access atomic.Pointer[func(types.PeerID) bool]
+	// meter counts every byte a peer moves through the exit, before any price or quota: the
+	// owner's own allowance (a pass's traffic). It reports false to cut the peer off.
+	meter atomic.Pointer[func(types.PeerID, int64) bool]
 
 	// payments (nil: this exit takes none; a priced exit then only serves its free quota)
 	ledger     *Ledger
@@ -593,6 +596,15 @@ func (e *ExitService) SetAccess(f func(types.PeerID) bool) {
 	e.access.Store(&f)
 }
 
+// SetMeter installs the owner's traffic counter (see ExitService.meter); nil removes it.
+func (e *ExitService) SetMeter(f func(types.PeerID, int64) bool) {
+	if f == nil {
+		e.meter.Store(nil)
+		return
+	}
+	e.meter.Store(&f)
+}
+
 // serves reports whether the exit is on and serves peer: a peer it does not admit is told the
 // exit is off, as if it were not an exit at all.
 func (e *ExitService) serves(peer types.PeerID) bool {
@@ -774,6 +786,10 @@ func (m *meter) spend(n int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cut {
+		return false
+	}
+	if own := m.svc.meter.Load(); own != nil && !(*own)(m.peer, need) {
+		m.cut = true // the owner's allowance (a pass) is spent
 		return false
 	}
 	if m.left() < need && !m.closed {

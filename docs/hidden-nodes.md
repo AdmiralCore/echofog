@@ -236,6 +236,12 @@ How it works, in plain words:
   the new link to the people you still want.
 - **Your contacts** get in without any link (so they can call you), and do not appear in the list.
 
+**A link per person, with a term.** Instead of one link for everybody, a server can give each
+person their own link with an end date, a number of devices and, if you want, a traffic limit:
+`echofog-node pass new --days 30`. Revoking one does not touch the others, and a bot or a website
+can make and extend them when people pay you your own way. See
+[Operator API: your own payment and moderation](operator-api.md).
+
 ## Money: the link is access, not free traffic
 
 The link lets people **in**. They still pay the price you set, like on any exit; the first small

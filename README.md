@@ -30,6 +30,7 @@ no commission.
 | put a node on a VPS with Docker, step by step | [VPS with Docker](docs/deploy-vps.md) |
 | protect a public node from floods, fake identities and abuse | [Protecting a node](docs/node-security.md) |
 | run an exit only for the people you invite | [Hidden and isolated nodes](docs/hidden-nodes.md) |
+| take payment your own way (a bot, a site) and give each person a link with a term | [Operator API](docs/operator-api.md) |
 | fix "this computer cannot be reached from the Internet" | [Reachability](docs/reachability.md) |
 | understand how it works under the hood | [How it works](docs/how-it-works.md) |
 | configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |

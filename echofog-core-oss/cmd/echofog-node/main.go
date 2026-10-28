@@ -7,6 +7,7 @@
 //	echofog-node status               what a running node does: peers, relayed traffic, earnings
 //	echofog-node wallet               the TON wallet of a running node
 //	echofog-node invite               the invitation link of a running node
+//	echofog-node pass                 personal invitation links with a term (a hidden node)
 //	echofog-node clean                drop what the node learned from the network (stopped node)
 //	echofog-node camouflage           find real sites next to this server for the node to imitate
 //	echofog-node version
@@ -35,6 +36,7 @@ Commands:
   status    show what the running node does: peers, relayed traffic, exit earnings, wallet
   wallet    show the TON wallet address and balance of the running node
   invite    print the invitation link of the running node (--list, --rotate, --remove, --new-secret)
+  pass      personal links of a hidden node with a term, devices and traffic (list, new, extend, revoke)
   clean     drop stale network data (DHT records, known peers, ratings) of a stopped node
   camouflage  find real sites next to this server that the node can pretend to be
   version   print the version
@@ -64,6 +66,8 @@ func main() {
 		os.Exit(statusCmd(args, true))
 	case "invite":
 		os.Exit(inviteCmd(args))
+	case "pass", "passes":
+		os.Exit(passCmd(args))
 	case "clean":
 		os.Exit(cleanCmd(args))
 	case "camouflage":

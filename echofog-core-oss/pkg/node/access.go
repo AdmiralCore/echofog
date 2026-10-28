@@ -132,6 +132,7 @@ func (n *Node) applyAccess() {
 	}
 	if hide {
 		n.ExitService.SetAccess(n.Access.Allowed)
+		n.ExitService.SetMeter(n.Passes.Charge) // a pass's traffic allowance
 	}
 	if n.isolated() {
 		n.Net.SetNoDial(true)
@@ -210,6 +211,18 @@ func (n *Node) RemoveJoined(id types.PeerID) error {
 // InviteLink is the link others use to reach this node: its addresses and, when it is hidden or
 // isolated, its access secret.
 func (n *Node) InviteLink() (string, error) {
+	if n.Access == nil {
+		return "", errors.New("node is not running")
+	}
+	var secret []byte
+	if n.gated() {
+		secret = n.Access.Secret()
+	}
+	return n.inviteLinkWith(secret)
+}
+
+// inviteLinkWith is the invitation link carrying secret: the shared one, or a pass's.
+func (n *Node) inviteLinkWith(secret []byte) (string, error) {
 	if n.Access == nil || n.Swarm == nil {
 		return "", errors.New("node is not running")
 	}
@@ -222,7 +235,7 @@ func (n *Node) InviteLink() (string, error) {
 		Server:   n.Cfg.IsServer(),
 	}
 	if n.gated() {
-		inv.Secret = n.Access.Secret()
+		inv.Secret = secret
 	}
 	// relays help to reach a hidden node, or one with no address yet; a public node with an
 	// address is dialed there, and naming whatever relays it happens to be connected to would hand

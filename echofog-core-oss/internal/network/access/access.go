@@ -79,7 +79,16 @@ type Gate struct {
 	joined  map[types.PeerID]int64 // unix time of joining
 	allow   func(types.PeerID) bool
 	onJoin  func(types.PeerID)
+	passes  *Passbook
 	now     func() time.Time
+}
+
+// SetPasses lets the devices of active passes in, and lets a stranger in who proves an active
+// pass's secret (binding it to that pass). nil: no passes.
+func (g *Gate) SetPasses(b *Passbook) {
+	g.mu.Lock()
+	g.passes = b
+	g.mu.Unlock()
 }
 
 // NewGate returns an open gate: it lets everybody in until Enable.
@@ -174,9 +183,21 @@ func (g *Gate) Remove(id types.PeerID) bool {
 func (g *Gate) Allowed(id types.PeerID) bool {
 	g.mu.RLock()
 	_, joined := g.joined[id]
-	enabled, allow := g.enabled, g.allow
+	enabled, allow, passes := g.enabled, g.allow, g.passes
 	g.mu.RUnlock()
-	return !enabled || joined || (allow != nil && allow(id))
+	if !enabled {
+		return true
+	}
+	if passes != nil && passes.Bound(id) {
+		return passes.Allows(id) // a device of a pass follows its pass, even if it joined otherwise
+	}
+	return joined || (allow != nil && allow(id))
+}
+
+func (g *Gate) passbook() *Passbook {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.passes
 }
 
 // AdmitHandshake decides an inbound handshake: the peer is allowed already, or proof shows it
@@ -189,15 +210,23 @@ func (g *Gate) AdmitHandshake(initiatorPub, binding, nonce, proof []byte) bool {
 	if g.Allowed(id) {
 		return true
 	}
-	secret := g.Secret()
-	if secret == nil || len(proof) != sha256.Size {
+	if len(proof) != sha256.Size {
 		return false
 	}
-	if !hmac.Equal(proof, HandshakeProof(secret, binding, nonce, initiatorPub)) {
-		return false
+	proves := func(secret []byte) bool {
+		return hmac.Equal(proof, HandshakeProof(secret, binding, nonce, initiatorPub))
 	}
-	g.join(id)
-	return true
+	if pb := g.passbook(); pb != nil && pb.Bound(id) {
+		return pb.admit(id, proves) // a device of a pass gets in only through that pass
+	}
+	if secret := g.Secret(); secret != nil && proves(secret) {
+		g.join(id)
+		return true
+	}
+	if pb := g.passbook(); pb != nil {
+		return pb.admit(id, proves)
+	}
+	return false
 }
 
 // AdmitTicket decides a hole punch request from peer. A relay can replay a ticket it carried, but
@@ -206,19 +235,25 @@ func (g *Gate) AdmitTicket(id types.PeerID, ticket []byte) bool {
 	if g.Allowed(id) {
 		return true
 	}
-	secret := g.Secret()
-	if secret == nil || len(ticket) != ticketLen {
+	if len(ticket) != ticketLen {
 		return false
 	}
 	minute := int64(binary.BigEndian.Uint64(ticket[:8]))
 	if d := g.now().Unix()/60 - minute; d > ticketSkew || d < -ticketSkew {
 		return false
 	}
-	if !hmac.Equal(ticket[8:], ticketMAC(secret, id, ticket[:8])) {
-		return false
+	proves := func(secret []byte) bool { return hmac.Equal(ticket[8:], ticketMAC(secret, id, ticket[:8])) }
+	if pb := g.passbook(); pb != nil && pb.Bound(id) {
+		return pb.admit(id, proves)
 	}
-	g.join(id)
-	return true
+	if secret := g.Secret(); secret != nil && proves(secret) {
+		g.join(id)
+		return true
+	}
+	if pb := g.passbook(); pb != nil {
+		return pb.admit(id, proves)
+	}
+	return false
 }
 
 func (g *Gate) join(id types.PeerID) {

@@ -121,3 +121,29 @@ func BenchmarkMeterSpend(b *testing.B) {
 		}
 	})
 }
+
+// The owner's meter (a pass's traffic allowance) sees every byte, even on a free exit, and cuts the
+// stream when it says no.
+func TestOwnerMeterCutsAStream(t *testing.T) {
+	svc, _ := paidExit(t, 1<<30)
+	var seen int64
+	svc.SetMeter(func(peer types.PeerID, n int64) bool {
+		if peer != testClient {
+			return true
+		}
+		seen += n
+		return seen <= 3000
+	})
+	m := newMeter(svc, testClient)
+	defer m.close()
+	assert.True(t, m.spend(1500))
+	assert.True(t, m.spend(1500))
+	assert.False(t, m.spend(1500), "past the owner's allowance")
+	assert.False(t, m.spend(1), "a cut stream stays cut")
+	assert.Equal(t, int64(4500), seen)
+
+	svc.SetMeter(nil)
+	m2 := newMeter(svc, testClient)
+	defer m2.close()
+	assert.True(t, m2.spend(1500), "without a meter only the exit's own rules apply")
+}

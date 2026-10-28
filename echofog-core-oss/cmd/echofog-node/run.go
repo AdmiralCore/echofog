@@ -74,6 +74,8 @@ type options struct {
 	publicAddrs  string
 
 	statusAddr string
+	apiAddr    string
+	apiToken   string
 	statsEvery time.Duration
 	logLevel   string
 
@@ -160,6 +162,8 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.publicAddrs, "public-addr", getEnv("ECHOFOG_PUBLIC_ADDR", ""), "comma-separated addresses put into the invitation link (host:port or a ws:// URL), when the observed one is not what people should dial")
 
 	f.StringVar(&o.statusAddr, "status-addr", getEnv("ECHOFOG_STATUS_ADDR", "127.0.0.1:7070"), "local address of the status endpoint used by \"status\" and \"wallet\" ('' disables it; keep it on loopback)")
+	f.StringVar(&o.apiAddr, "api-addr", getEnv("ECHOFOG_API_ADDR", ""), "address of the operator API (passes for your own payment or moderation, see docs/operator-api.md); '' = off. Needs --api-token")
+	f.StringVar(&o.apiToken, "api-token", getEnv("ECHOFOG_API_TOKEN", ""), "token the operator API requires (\"Authorization: Bearer <token>\"), at least 16 characters")
 	every, _ := time.ParseDuration(getEnv("ECHOFOG_STATS_EVERY", "1m"))
 	f.DurationVar(&o.statsEvery, "stats-every", every, "how often to log a line with peers, relayed traffic and earnings (0 = never)")
 	f.StringVar(&o.logLevel, "log-level", getEnv("ECHOFOG_LOG_LEVEL", "info"), "debug, info, warn or error")
@@ -376,6 +380,13 @@ func runCmd(args []string) int {
 	if o.statusAddr != "" {
 		if err := serveStatus(ctx, o.statusAddr, col); err != nil {
 			fmt.Printf("Status endpoint not started: %v\n", err)
+		}
+	}
+	if o.apiAddr != "" {
+		if err := serveOperatorAPI(ctx, o.apiAddr, o.apiToken, h); err != nil {
+			fmt.Println("Operator API not started:", err)
+		} else {
+			fmt.Printf("Operator API:  http://%s/api/v1/ (Bearer token)\n", o.apiAddr)
 		}
 	}
 	if o.statsEvery > 0 {
