@@ -453,13 +453,16 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 			return VoucherReply{Error: "cannot check the vault on the TON network, try again shortly"}
 		}
 	case age > vaultCheckEvery:
-		// a recent view is safe (withdrawals take a day): answer now and re-read in the
+		// a recent view is safe (withdrawals take a day): answer from it now and re-read in the
 		// background, so a voucher never waits seconds on the chain while the client's traffic
-		// runs dry
-		go func() {
-			rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_ = b.refresh(rctx, sv.Vault)
+		// runs dry. The re-read starts once this answer is made, so it is always the view the
+		// answer was based on, not one the re-read may or may not have replaced already.
+		defer func() {
+			go func() {
+				rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_ = b.refresh(rctx, sv.Vault)
+			}()
 		}()
 	}
 
