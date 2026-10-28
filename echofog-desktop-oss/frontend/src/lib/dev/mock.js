@@ -937,6 +937,25 @@ const reactWith = (m, emoji, ...by) => m.reactions.push({ emoji, by });
 })();
 
 const NOT_UPGRADED = 'not every member of this group has updated the app yet';
+
+// The launch group is a space: two text channels and a voice room with a call going on.
+const spaceChans = {
+  [GROUP]: [
+    { id: 'dev', name: 'dev', voice: false },
+    { id: 'design', name: 'design', voice: false },
+    { id: 'lounge', name: 'Lounge', voice: true, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300 } },
+  ],
+};
+(function seedChannels() {
+  const k = 'g:' + GROUP;
+  const t0 = Date.now() - 40 * 60 * 1000;
+  clog[k].msgs.push(
+    lmsg(k, { author: BOB, ts: t0, text: 'Moving the relay discussion here', channel: 'dev', lamport: ++clock }),
+    lmsg(k, { author: ALICE, ts: t0 + 60000, text: 'The flake is in the reconnect path, PR soon', channel: 'dev', lamport: ++clock }),
+    lmsg(k, { author: CAROL, ts: t0 + 120000, text: 'New icons are in the drive', channel: 'design', lamport: ++clock }),
+  );
+})();
+const chanUnread = { dev: 2, design: 1 };
 Object.assign(impl, {
   // every contact, request and group, written to or not, as the core lists them
   ChatList: () => {
@@ -947,7 +966,7 @@ Object.assign(impl, {
   },
   ChatHistory: (ref, cursor, limit) => {
     const c = chatOf(ref);
-    const rev = c.msgs.filter((m) => !m.thread).sort((a, b) => b.lamport - a.lamport);
+    const rev = c.msgs.filter((m) => !m.thread && (m.channel || '') === (ref.channel || '')).sort((a, b) => b.lamport - a.lamport);
     const from = cursor ? rev.findIndex((m) => m.id === cursor) + 1 : 0;
     const page = rev.slice(from, from + (limit || 50));
     return { messages: page.map((m) => shown(c, m)), next: from + page.length < rev.length ? page[page.length - 1].id : '' };
@@ -967,7 +986,7 @@ Object.assign(impl, {
     if (!c.upgraded && ref.kind === 'group' && (req.replyTo || req.thread)) throw new Error(NOT_UPGRADED);
     if (!req.text || req.text.length > 16384) throw new Error('bad event body');
     const offline = ref.id === CAROL;
-    const m = lmsg(k, { text: req.text, replyTo: req.replyTo || undefined, thread: req.thread || undefined, state: ref.kind === 'dm' ? (offline ? 'relayed' : 'sent') : undefined });
+    const m = lmsg(k, { text: req.text, replyTo: req.replyTo || undefined, thread: req.thread || undefined, channel: ref.channel || undefined, state: ref.kind === 'dm' ? (offline ? 'relayed' : 'sent') : undefined });
     c.msgs.push(m);
     const root = m.thread && c.msgs.find((x) => x.id === m.thread);
     logChanged(k, m, ...(root ? [root] : []));
@@ -1021,7 +1040,26 @@ Object.assign(impl, {
     logChanged(keyOf(ref), m);
     return null;
   },
+  ChatChannels: (ref) => (spaceChans[ref.id] || []).map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, call: ch.voice ? ch.call : undefined })),
+  ChatChannelSave: (ref, id, name, voice) => {
+    const g = groups.find((x) => x.id === ref.id);
+    if (!['owner', 'admin'].includes(g?.myRole)) throw new Error('not allowed');
+    const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
+    const ch = list.find((x) => x.id === id) || { id: id || 'c' + Date.now().toString(36), voice };
+    Object.assign(ch, { name });
+    if (!list.includes(ch)) list.push(ch);
+    return { ...ch, unread: 0, lastTs: 0 };
+  },
+  ChatChannelRemove: (ref, id) => { spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id); return null; },
+  StartRoomCall: (gid, room) => {
+    const ch = (spaceChans[gid] || []).find((x) => x.id === room);
+    if (!ch.call) ch.call = { room, callId: 'call_room_' + room, coordinator: SELF, from: SELF, startedAt: sec(Date.now()) };
+    return ch.call;
+  },
+  KeepRoomCallAlive: () => null,
+  EndRoomCall: (gid, room) => { const ch = (spaceChans[gid] || []).find((x) => x.id === room); if (ch) delete ch.call; return null; },
   ChatMarkRead: (ref) => {
+    if (ref.channel) { chanUnread[ref.channel] = 0; return null; }
     const c = chatOf(ref);
     if (c.unread) { c.unread = 0; logChanged(keyOf(ref)); }
     return null;

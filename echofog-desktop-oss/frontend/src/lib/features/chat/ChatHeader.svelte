@@ -11,6 +11,7 @@
   export let indent = false;
   export let searching = false;
   export let info = false;
+  export let channel = ''; // the name of the channel shown, in a space
 
   const dispatch = createEventDispatcher();
 </script>
@@ -25,7 +26,7 @@
       {#if conv.kind === 'direct'}<span class="presence" class:on={conv.online}></span>{/if}
     </div>
     <div class="title">
-      <h3>{conv.name}</h3>
+      <h3>{conv.name}{#if channel}<span class="chan-title"> · #{channel}</span>{/if}</h3>
       <p class="small" class:online={conv.kind === 'direct' && conv.online}>
         {#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{conv.groupKind === 'channel' ? $t('chats.channelLower') : $t('chats.groupLower')} · {$t('chats.members', { n: conv.members })}{/if}
       </p>

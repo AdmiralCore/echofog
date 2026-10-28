@@ -3,7 +3,7 @@
   import { derived, writable } from 'svelte/store';
   import { fly } from 'svelte/transition';
   import { App, errText, openURL } from '../api.js';
-  import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage } from '../stores/chats.js';
+  import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel } from '../stores/chats.js';
   import { isCallActive, startCall, peerInfo } from '../stores/call.store.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
   import { savedError } from '../stores/saved.js';
@@ -20,6 +20,7 @@
   import MessageMenu from '../features/chat/MessageMenu.svelte';
   import RequestBar from '../features/chat/RequestBar.svelte';
   import ChatInfo from '../features/chat/ChatInfo.svelte';
+  import ChannelBar from '../features/chat/ChannelBar.svelte';
   import { provideChat } from '../features/chat/context.js';
   import '../features/chat/chat.css';
 
@@ -60,6 +61,7 @@
 
   // ---- switching chats: panels close, the draft of each chat is kept ------------------------------
   let shownId = '';
+  let shownChannel = '';
   let info = false;
   let menu = null; // { m, anchor }
   let text = '';
@@ -67,15 +69,18 @@
   let editing = null;
   let sending = false;
   $: if (conv.id !== shownId) switchTo(conv.id);
+  // the draft's key: the chat, and in a space the channel shown
+  const draftKey = () => shownId + (shownChannel ? '/' + shownChannel : '');
   function switchTo(id) {
-    keepDraft(shownId, { text, replyTo, editing });
+    keepDraft(draftKey(), { text, replyTo, editing });
     shownId = id;
+    shownChannel = '';
     ({ text, replyTo, editing } = draftOf(id));
     info = false;
     menu = null;
     closeSearch();
   }
-  onDestroy(() => keepDraft(shownId, { text, replyTo, editing }));
+  onDestroy(() => keepDraft(draftKey(), { text, replyTo, editing }));
   $: loadTransfers(conv.kind === 'direct' ? conv.peerId : '');
 
   // ---- composing ---------------------------------------------------------------------------------
@@ -159,6 +164,22 @@
       chatError.set(errText(err, $t('chats.err.call')));
     }
   }
+  // a space's voice room: its call is joined (or started, without ringing anybody)
+  async function joinRoom(room) {
+    try {
+      const c = await App.StartRoomCall(conv.groupId, room.id);
+      startCall({ alias: `${conv.name} · ${room.name}`, callId: c.callId, coordinator: c.coordinator, chatId: conv.id, room: room.id }, false);
+    } catch (err) {
+      chatError.set(errText(err, $t('chats.err.call')));
+    }
+  }
+  $: channelName = $activeChannel ? $channels.find((c) => c.id === $activeChannel)?.name || '' : '';
+  // a draft per channel: switching channels keeps what was being written in each
+  $: if ($activeChannel !== shownChannel) {
+    keepDraft(draftKey(), { text, replyTo, editing });
+    shownChannel = $activeChannel;
+    ({ text, replyTo, editing } = draftOf(draftKey()));
+  }
   $: groupCall = conv.kind === 'group' ? $activeGroupCalls[conv.id] : null;
   $: inThisCall = $isCallActive && $peerInfo.chatId === conv.id;
 
@@ -208,9 +229,12 @@
 
 <svelte:window on:keydown={windowKey} />
 
-<div class="conv">
+<div class="chat-screen">
+  {#if conv.kind === 'group'}
+    <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} />
+  {/if}
   <div class="main">
-    <ChatHeader {conv} {back} {indent} {searching} {info} on:back={() => dispatch('back')} on:info={toggleInfo}
+    <ChatHeader {conv} {back} {indent} {searching} {info} channel={channelName} on:back={() => dispatch('back')} on:info={toggleInfo}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}

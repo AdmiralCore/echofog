@@ -146,7 +146,9 @@ function announceGroupCall() {
     const chat = get(peerInfo).chatId || '';
     const coordinator = st.coordinator || joinCoordinator;
     if (!chat.startsWith('g:') || !st.callId || !coordinator || !(st.inCall || st.connecting)) return;
-    App.KeepGroupCallAlive(chat.slice(2), st.callId, coordinator).catch(() => { /* offline: the next tick retries */ });
+    const room = get(peerInfo).room || '';
+    const keep = room ? App.KeepRoomCallAlive(chat.slice(2), room, st.callId, coordinator) : App.KeepGroupCallAlive(chat.slice(2), st.callId, coordinator);
+    keep.catch(() => { /* offline: the next tick retries */ });
 }
 
 callState.subscribe((st) => {
@@ -163,7 +165,7 @@ callState.subscribe((st) => {
  */
 export async function convergeGroupCall(chatId, callId, coordinator) {
     const st = get(callState);
-    if (!(st.inCall || st.connecting) || get(peerInfo).chatId !== chatId || !st.callId || st.callId === callId) return;
+    if (!(st.inCall || st.connecting) || get(peerInfo).chatId !== chatId || get(peerInfo).room || !st.callId || st.callId === callId) return;
     if ((st.members || []).length > 1 || callId > st.callId) return;
     const info = get(peerInfo);
     const video = st.isCameraOn;
@@ -176,7 +178,7 @@ export async function convergeGroupCall(chatId, callId, coordinator) {
 export async function startCall(peer, withVideo = false) {
     if (get(callState).inCall || get(callState).connecting) return false;
     joinCoordinator = peer.coordinator || '';
-    peerInfo.set({ alias: peer.alias || '', avatar: peer.avatar || '', peerId: peer.peerId || '', chatId: peer.chatId || '' });
+    peerInfo.set({ alias: peer.alias || '', avatar: peer.avatar || '', peerId: peer.peerId || '', chatId: peer.chatId || '', room: peer.room || '' });
     stageExpanded.set(true);
     resumeAudioContext();
     loadPeerDirectory();
@@ -229,7 +231,11 @@ export async function endCall() {
     const st = get(callState);
     const chat = get(peerInfo).chatId || '';
     if (chat.startsWith('g:') && st.callId && (st.inCall || st.connecting) && st.members.length <= 1) {
-        try { await EndGroupCall(chat.slice(2), st.callId); } catch (_) { /* the group may be gone */ }
+        const room = get(peerInfo).room || '';
+        try {
+            if (room) await App.EndRoomCall(chat.slice(2), room, st.callId);
+            else await EndGroupCall(chat.slice(2), st.callId);
+        } catch (_) { /* the group may be gone */ }
     }
     await callService.leaveCall();
     callState.update((s) => ({ ...s, error: null }));

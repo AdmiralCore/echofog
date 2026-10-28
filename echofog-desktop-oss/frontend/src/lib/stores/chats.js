@@ -40,6 +40,9 @@ async function refreshGroupCalls() {
     } catch (_) { /* node not started */ }
   }
 }
+/** The open group's channels and voice rooms (ChatChannels), and the channel shown ('' the main one). */
+export const channels = writable([]);
+export const activeChannel = writable('');
 /** Messages of the open conversation, oldest first (see norm). Comments in threads are not here. */
 export const messages = writable([]);
 /** Whether the open conversation has older messages than those loaded. */
@@ -93,6 +96,7 @@ export function norm(m) {
     failed: state === 'expired',
     replyTo: m.replyTo || '',
     thread: m.thread || '',
+    channel: m.channel || '',
     edited: !!m.edited,
     editedAt: m.editedAt || 0,
     deleted: !!m.deleted,
@@ -197,7 +201,9 @@ async function changed(ev) {
     return;
   }
 
-  messages.update((list) => msgs.filter((m) => !m.thread).reduce((l, m) => upsert(l, m, before, get(hasOlder)), list));
+  const here = get(activeChannel);
+  messages.update((list) => msgs.filter((m) => !m.thread && m.channel === here).reduce((l, m) => upsert(l, m, before, get(hasOlder)), list));
+  if (row.kind === 'group' && (msgs.some((m) => m.channel) || here)) loadChannels();
   const th = get(thread);
   if (th) {
     const inThread = msgs.filter((m) => m.thread === th.root);
@@ -260,6 +266,7 @@ function listen() {
         if (get(activeId) === id) await reload();
         break;
       case 'callend':
+        if (ev.room) { if (get(activeId) === id) loadChannels(); break; } // a voice room's call
         if (get(activeGroupCalls)[id]?.callId === ev.callId) setGroupCall(id, null);
         // the call is over: if it was still ringing here, stop
         if (get(incomingCall)?.callId === ev.callId) {
@@ -281,6 +288,7 @@ function listen() {
         });
         break;
       case 'callactive':
+        if (ev.room) { if (get(activeId) === id) loadChannels(); break; } // a voice room: shown in the room's row
         // a call already under way that we had not heard of: show it, do not ring
         setGroupCall(id, { callId: ev.callId, coordinator: ev.coordinator, from: ev.from });
         await convergeGroupCall(id, ev.callId, ev.coordinator);
@@ -299,6 +307,8 @@ function nameOfPeer(peerId) {
 }
 
 const openConv = () => get(chats).find((c) => c.id === get(activeId));
+/** The core's name for the open chat's shown channel. */
+const openRef = (conv) => (get(activeChannel) ? { ...conv.ref, channel: get(activeChannel) } : conv.ref);
 
 function closeOpen() {
   activeId.set('');
@@ -311,10 +321,62 @@ function closeOpen() {
 
 export async function openChat(id) {
   closeOpen();
+  activeChannel.set('');
+  channels.set([]);
   activeId.set(id);
   chatNote.set('');
   await reload();
   loadPins();
+  loadChannels();
+}
+
+/** Shows another channel of the open group ('' the main one). */
+export async function openChannel(id) {
+  if (get(activeChannel) === id) return;
+  activeChannel.set(id);
+  messages.set([]);
+  hasOlder.set(false);
+  thread.set(null);
+  await reload();
+}
+
+/** Reads the open group's channels and voice rooms again (unread counts, calls going on). */
+export async function loadChannels() {
+  const conv = openConv();
+  if (!conv || conv.kind !== 'group') return;
+  try {
+    const list = (await App.ChatChannels(conv.ref)) || [];
+    if (get(activeId) !== conv.id) return;
+    channels.set(list);
+    if (get(activeChannel) && !list.some((c) => c.id === get(activeChannel) && !c.voice)) openChannel(''); // removed
+  } catch (_) { /* an older core: no channels */ }
+}
+
+/** Creates a channel (or a voice room) in the open group. */
+export async function createChannel(name, voice) {
+  const conv = openConv();
+  if (!conv || !name.trim()) return null;
+  try {
+    const ch = await App.ChatChannelSave(conv.ref, '', name.trim(), !!voice);
+    await loadChannels();
+    return ch;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return null;
+  }
+}
+
+/** Removes a channel of the open group. */
+export async function removeChannel(id) {
+  const conv = openConv();
+  if (!conv) return;
+  try {
+    await App.ChatChannelRemove(conv.ref, id);
+    if (get(activeChannel) === id) await openChannel('');
+    await loadChannels();
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+  }
 }
 
 // the open chat read afresh: its newest page, its pins and its open thread
@@ -330,7 +392,7 @@ async function reload() {
   const conv = openConv();
   if (!conv) return;
   try {
-    const page = await App.ChatHistory(conv.ref, '', PAGE);
+    const page = await App.ChatHistory(openRef(conv), '', PAGE);
     if (get(activeId) !== conv.id) return;
     olderCursor = page.next || '';
     hasOlder.set(!!olderCursor);
@@ -347,7 +409,7 @@ export async function loadOlder() {
   if (!conv || !olderCursor || loadingOlder) return false;
   loadingOlder = true;
   try {
-    const page = await App.ChatHistory(conv.ref, olderCursor, PAGE);
+    const page = await App.ChatHistory(openRef(conv), olderCursor, PAGE);
     if (get(activeId) !== conv.id) return false;
     olderCursor = page.next || '';
     hasOlder.set(!!olderCursor);
@@ -407,7 +469,7 @@ export async function send(text, { replyTo = '', threadRoot = '' } = {}) {
   try {
     // answering a request accepts it: the stranger becomes a contact
     if (conv.kind === 'direct' && conv.request) await acceptRequest(conv, '');
-    const m = norm(await App.ChatSend(conv.ref, { text, replyTo, thread: threadRoot }));
+    const m = norm(await App.ChatSend(openRef(conv), { text, replyTo, thread: threadRoot }));
     // shown at once; the core's change event follows with the same message
     if (get(activeId) === conv.id && m.id) {
       if (m.thread) thread.update((th) => (th && th.root === m.thread ? { ...th, messages: upsert(th.messages, m, beforeInThread, false) } : th));
@@ -453,7 +515,8 @@ export async function markRead(id) {
   const conv = openConv();
   if (!conv || !id) return;
   patch(conv.id, (c) => ({ ...c, unread: 0 }));
-  try { await App.ChatMarkRead(conv.ref, id); } catch (_) { /* counted again next time */ }
+  try { await App.ChatMarkRead(openRef(conv), id); } catch (_) { /* counted again next time */ }
+  loadChannels();
 }
 
 // a file posted in a group shows like a message we sent (the log brings the message itself)
