@@ -147,6 +147,11 @@ func allNodeNames() []string {
 	return append(append([]string{}, publicNodes...), lanNodes...)
 }
 
+// afterGateways, when set, runs once the routers are up and before any node behind them starts: the
+// censor scenario starts its captures there, so they see the first packet of every connection a
+// node makes, not the middle of the ones it opened while the test bed came up.
+var afterGateways func()
+
 func bringUp(extra ...string) map[string]*node {
 	logf("tearing down what is left of an earlier run")
 	_, _ = compose(nil, "down", "-v", "--remove-orphans")
@@ -171,6 +176,9 @@ func bringUp(extra ...string) map[string]*node {
 	}
 	// the seeds are listed with their cover site's name, as a release lists its own: a node that
 	// joins through them is camouflaged from its first packet
+	if afterGateways != nil {
+		afterGateways()
+	}
 	boot := fmt.Sprintf("203.0.113.11:4242/%s?sni=cover.lab,203.0.113.12:4242/%s?sni=cover.lab", nodes["s1"].id, nodes["s2"].id)
 	logf("starting the rest, bootstrapping through s1 and s2")
 	rest := []string{"up", "-d"}
@@ -715,6 +723,7 @@ func main() {
 	case "censor":
 		extra = []string{"x1", "x2", "web"}
 		extraEnv = []string{"TRANSPORT_C1=tcp"} // c1 shows the TCP fallback
+		afterGateways = startCensorCapture
 	case "hidden":
 		extra = []string{"x1", "h1", "web"}
 	}

@@ -38,13 +38,30 @@ var labNames = map[string]string{
 
 func labLabel(a netip.AddrPort) string { return labNames[a.Addr().String()] }
 
-func censorScenario(nodes map[string]*node, v *verdict, out string) {
-	// record what leaves each network, from before any connection of the test opens: a censor
-	// learns most from the first packets of a connection
+var captureStarted bool
+
+// startCensorCapture records what leaves each network, from before any node behind it starts: a
+// censor learns most from the first packets of a connection, and a connection a node opened while
+// the test bed came up would otherwise show only its middle, which no rule can tell from noise.
+func startCensorCapture() {
 	for _, gw := range gateways {
+		// the router writes the name of its outside interface once it is configured
+		for i := 0; i < 30; i++ {
+			if o, err := run("docker", "exec", container(gw), "cat", "/tmp/wan_if"); err == nil && o != "" {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 		_, _ = run("docker", "exec", "-d", container(gw), "tcpdump", "-i", wanIf(gw), "-s", "0", "-U", "-w", "/tmp/wan.pcap", "ip")
 	}
 	time.Sleep(2 * time.Second)
+	captureStarted = true
+}
+
+func censorScenario(nodes map[string]*node, v *verdict, out string) {
+	if !captureStarted {
+		startCensorCapture()
+	}
 	// c1 speaks TCP only, and only x1 has a TCP listener (with a cover site): it joins through x1,
 	// as a client whose network blocks UDP joins through a node with the fallback
 	if err := callT("c1", "POST", "/dial", map[string]string{"addr": joinAddr(nodes, "x1")}, nil, 40*time.Second); err != nil {
