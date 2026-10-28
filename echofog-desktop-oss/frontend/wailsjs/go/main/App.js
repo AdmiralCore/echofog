@@ -46,12 +46,20 @@ export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }
 
+export function ChatAttachments(arg1) {
+  return window['go']['main']['App']['ChatAttachments'](arg1);
+}
+
+export function ChatChannelMove(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatChannelMove'](arg1, arg2, arg3);
+}
+
 export function ChatChannelRemove(arg1, arg2) {
   return window['go']['main']['App']['ChatChannelRemove'](arg1, arg2);
 }
 
-export function ChatChannelSave(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['ChatChannelSave'](arg1, arg2, arg3, arg4);
+export function ChatChannelSave(arg1, arg2) {
+  return window['go']['main']['App']['ChatChannelSave'](arg1, arg2);
 }
 
 export function ChatChannels(arg1) {
@@ -100,6 +108,14 @@ export function ChatSend(arg1, arg2) {
 
 export function ChatThread(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ChatThread'](arg1, arg2, arg3, arg4);
+}
+
+export function ChatThreadTitle(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatThreadTitle'](arg1, arg2, arg3);
+}
+
+export function ChatThreads(arg1) {
+  return window['go']['main']['App']['ChatThreads'](arg1);
 }
 
 export function CheckForUpdate() {
@@ -354,6 +370,10 @@ export function LeaveRoom() {
   return window['go']['main']['App']['LeaveRoom']();
 }
 
+export function LeaveRoomCall(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LeaveRoomCall'](arg1, arg2, arg3);
+}
+
 export function ListExitNodes() {
   return window['go']['main']['App']['ListExitNodes']();
 }
@@ -500,6 +520,10 @@ export function SetAccessMode(arg1) {
 
 export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
+}
+
+export function SetContactProfile(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetContactProfile'](arg1, arg2, arg3);
 }
 
 export function SetCustomSites(arg1) {

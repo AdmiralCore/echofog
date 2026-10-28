@@ -482,13 +482,17 @@ func (x *EventExt) GetChannel() string {
 	return ""
 }
 
-// ChannelBody creates, renames or removes a channel of a group (last writer wins per id).
+// ChannelBody creates, changes or removes a channel of a group: the whole channel as it is to be
+// (last writer wins per id).
 type ChannelBody struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Voice         bool                   `protobuf:"varint,3,opt,name=voice,proto3" json:"voice,omitempty"` // a voice room rather than a text channel
 	Removed       bool                   `protobuf:"varint,4,opt,name=removed,proto3" json:"removed,omitempty"`
+	Topic         string                 `protobuf:"bytes,5,opt,name=topic,proto3" json:"topic,omitempty"`                        // a line under the name
+	ReadOnly      bool                   `protobuf:"varint,6,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"` // only those who may manage the group write in it (announcements)
+	Position      int32                  `protobuf:"varint,7,opt,name=position,proto3" json:"position,omitempty"`                 // the channels' order among their kind, lowest first
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -551,6 +555,72 @@ func (x *ChannelBody) GetRemoved() bool {
 	return false
 }
 
+func (x *ChannelBody) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *ChannelBody) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *ChannelBody) GetPosition() int32 {
+	if x != nil {
+		return x.Position
+	}
+	return 0
+}
+
+// ThreadBody names the thread under a message (kind THREAD; last writer wins per root).
+type ThreadBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ThreadBody) Reset() {
+	*x = ThreadBody{}
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ThreadBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ThreadBody) ProtoMessage() {}
+
+func (x *ThreadBody) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ThreadBody.ProtoReflect.Descriptor instead.
+func (*ThreadBody) Descriptor() ([]byte, []int) {
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ThreadBody) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
 type RosterEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Member        []byte                 `protobuf:"bytes,1,opt,name=member,proto3" json:"member,omitempty"` // 32-byte identity public key
@@ -561,7 +631,7 @@ type RosterEntry struct {
 
 func (x *RosterEntry) Reset() {
 	*x = RosterEntry{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[8]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -573,7 +643,7 @@ func (x *RosterEntry) String() string {
 func (*RosterEntry) ProtoMessage() {}
 
 func (x *RosterEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[8]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -586,7 +656,7 @@ func (x *RosterEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RosterEntry.ProtoReflect.Descriptor instead.
 func (*RosterEntry) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{8}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RosterEntry) GetMember() []byte {
@@ -618,7 +688,7 @@ type Sync struct {
 
 func (x *Sync) Reset() {
 	*x = Sync{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[9]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +700,7 @@ func (x *Sync) String() string {
 func (*Sync) ProtoMessage() {}
 
 func (x *Sync) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[9]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +713,7 @@ func (x *Sync) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Sync.ProtoReflect.Descriptor instead.
 func (*Sync) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{9}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Sync) GetM() isSync_M {
@@ -711,7 +781,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[10]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -723,7 +793,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[10]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -736,7 +806,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{10}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Hello) GetItems() []*HelloItem {
@@ -756,7 +826,7 @@ type HelloItem struct {
 
 func (x *HelloItem) Reset() {
 	*x = HelloItem{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[11]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -768,7 +838,7 @@ func (x *HelloItem) String() string {
 func (*HelloItem) ProtoMessage() {}
 
 func (x *HelloItem) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[11]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -781,7 +851,7 @@ func (x *HelloItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HelloItem.ProtoReflect.Descriptor instead.
 func (*HelloItem) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{11}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *HelloItem) GetConv() []byte {
@@ -808,7 +878,7 @@ type Want struct {
 
 func (x *Want) Reset() {
 	*x = Want{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[12]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -820,7 +890,7 @@ func (x *Want) String() string {
 func (*Want) ProtoMessage() {}
 
 func (x *Want) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[12]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -833,7 +903,7 @@ func (x *Want) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Want.ProtoReflect.Descriptor instead.
 func (*Want) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{12}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Want) GetConv() []byte {
@@ -860,7 +930,7 @@ type Have struct {
 
 func (x *Have) Reset() {
 	*x = Have{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[13]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -872,7 +942,7 @@ func (x *Have) String() string {
 func (*Have) ProtoMessage() {}
 
 func (x *Have) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[13]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -885,7 +955,7 @@ func (x *Have) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Have.ProtoReflect.Descriptor instead.
 func (*Have) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{13}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Have) GetAuthor() []byte {
@@ -913,7 +983,7 @@ type Events struct {
 
 func (x *Events) Reset() {
 	*x = Events{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -925,7 +995,7 @@ func (x *Events) String() string {
 func (*Events) ProtoMessage() {}
 
 func (x *Events) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -938,7 +1008,7 @@ func (x *Events) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Events.ProtoReflect.Descriptor instead.
 func (*Events) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{14}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Events) GetConv() []byte {
@@ -1000,12 +1070,18 @@ const file_internal_services_convlog_convlog_proto_rawDesc = "" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12,\n" +
 	"\x06roster\x18\x04 \x03(\v2\x14.convlog.RosterEntryR\x06roster\"$\n" +
 	"\bEventExt\x12\x18\n" +
-	"\achannel\x18\x01 \x01(\tR\achannel\"a\n" +
+	"\achannel\x18\x01 \x01(\tR\achannel\"\xb0\x01\n" +
 	"\vChannelBody\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05voice\x18\x03 \x01(\bR\x05voice\x12\x18\n" +
-	"\aremoved\x18\x04 \x01(\bR\aremoved\"9\n" +
+	"\aremoved\x18\x04 \x01(\bR\aremoved\x12\x14\n" +
+	"\x05topic\x18\x05 \x01(\tR\x05topic\x12\x1b\n" +
+	"\tread_only\x18\x06 \x01(\bR\breadOnly\x12\x1a\n" +
+	"\bposition\x18\a \x01(\x05R\bposition\"\"\n" +
+	"\n" +
+	"ThreadBody\x12\x14\n" +
+	"\x05title\x18\x01 \x01(\tR\x05title\"9\n" +
 	"\vRosterEntry\x12\x16\n" +
 	"\x06member\x18\x01 \x01(\fR\x06member\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\"\x83\x01\n" +
@@ -1042,7 +1118,7 @@ func file_internal_services_convlog_convlog_proto_rawDescGZIP() []byte {
 	return file_internal_services_convlog_convlog_proto_rawDescData
 }
 
-var file_internal_services_convlog_convlog_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_internal_services_convlog_convlog_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_internal_services_convlog_convlog_proto_goTypes = []any{
 	(*Event)(nil),       // 0: convlog.Event
 	(*MsgBody)(nil),     // 1: convlog.MsgBody
@@ -1052,21 +1128,22 @@ var file_internal_services_convlog_convlog_proto_goTypes = []any{
 	(*MemberBody)(nil),  // 5: convlog.MemberBody
 	(*EventExt)(nil),    // 6: convlog.EventExt
 	(*ChannelBody)(nil), // 7: convlog.ChannelBody
-	(*RosterEntry)(nil), // 8: convlog.RosterEntry
-	(*Sync)(nil),        // 9: convlog.Sync
-	(*Hello)(nil),       // 10: convlog.Hello
-	(*HelloItem)(nil),   // 11: convlog.HelloItem
-	(*Want)(nil),        // 12: convlog.Want
-	(*Have)(nil),        // 13: convlog.Have
-	(*Events)(nil),      // 14: convlog.Events
+	(*ThreadBody)(nil),  // 8: convlog.ThreadBody
+	(*RosterEntry)(nil), // 9: convlog.RosterEntry
+	(*Sync)(nil),        // 10: convlog.Sync
+	(*Hello)(nil),       // 11: convlog.Hello
+	(*HelloItem)(nil),   // 12: convlog.HelloItem
+	(*Want)(nil),        // 13: convlog.Want
+	(*Have)(nil),        // 14: convlog.Have
+	(*Events)(nil),      // 15: convlog.Events
 }
 var file_internal_services_convlog_convlog_proto_depIdxs = []int32{
-	8,  // 0: convlog.MemberBody.roster:type_name -> convlog.RosterEntry
-	10, // 1: convlog.Sync.hello:type_name -> convlog.Hello
-	12, // 2: convlog.Sync.want:type_name -> convlog.Want
-	14, // 3: convlog.Sync.events:type_name -> convlog.Events
-	11, // 4: convlog.Hello.items:type_name -> convlog.HelloItem
-	13, // 5: convlog.Want.have:type_name -> convlog.Have
+	9,  // 0: convlog.MemberBody.roster:type_name -> convlog.RosterEntry
+	11, // 1: convlog.Sync.hello:type_name -> convlog.Hello
+	13, // 2: convlog.Sync.want:type_name -> convlog.Want
+	15, // 3: convlog.Sync.events:type_name -> convlog.Events
+	12, // 4: convlog.Hello.items:type_name -> convlog.HelloItem
+	14, // 5: convlog.Want.have:type_name -> convlog.Have
 	6,  // [6:6] is the sub-list for method output_type
 	6,  // [6:6] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name
@@ -1079,7 +1156,7 @@ func file_internal_services_convlog_convlog_proto_init() {
 	if File_internal_services_convlog_convlog_proto != nil {
 		return
 	}
-	file_internal_services_convlog_convlog_proto_msgTypes[9].OneofWrappers = []any{
+	file_internal_services_convlog_convlog_proto_msgTypes[10].OneofWrappers = []any{
 		(*Sync_Hello)(nil),
 		(*Sync_Want)(nil),
 		(*Sync_Events)(nil),
@@ -1090,7 +1167,7 @@ func file_internal_services_convlog_convlog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_services_convlog_convlog_proto_rawDesc), len(file_internal_services_convlog_convlog_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -67,6 +67,8 @@ type View struct {
 
 	Replies     int   `json:"replies,omitempty"`       // messages in its thread
 	LastReplyTS int64 `json:"last_reply_ts,omitempty"` // ms
+	// ThreadTitle names the thread under the message (last writer wins).
+	ThreadTitle *Reg `json:"thread_title,omitempty"`
 	Stripped    bool  `json:"stripped,omitempty"`      // its event no longer carries the body
 }
 
@@ -178,6 +180,7 @@ type Message struct {
 	Reactions   []Reaction `json:"reactions"`
 	Replies     int        `json:"replies"`
 	LastReplyAt int64      `json:"lastReplyAt,omitempty"`
+	ThreadTitle string     `json:"threadTitle,omitempty"`
 	Legacy      bool       `json:"legacy,omitempty"`
 	// State is the delivery state of my own message (keys, offline, relayed, sent, delivered),
 	// filled in by the caller from the outbox.
@@ -257,6 +260,9 @@ func (v *View) Render(conv, self string) Message {
 		TS: v.TS, Lamport: v.Lamport, Type: v.Type, Text: v.Text, Metadata: v.Metadata,
 		ReplyTo: v.ReplyTo, Thread: v.Thread, Channel: v.Channel, Replies: v.Replies, LastReplyAt: v.LastReplyTS,
 		Legacy: v.Legacy, Withheld: v.Withheld, Reactions: []Reaction{},
+	}
+	if v.ThreadTitle != nil {
+		m.ThreadTitle = v.ThreadTitle.Text
 	}
 	m.Kind = "text"
 	switch {

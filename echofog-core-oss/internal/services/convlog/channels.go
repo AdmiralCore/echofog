@@ -19,9 +19,10 @@ import (
 const KindChannel uint32 = 7
 
 const (
-	maxChannelID   = 32
-	maxChannelName = 64
-	maxChannels    = 200
+	maxChannelID    = 32
+	maxChannelName  = 64
+	maxChannelTopic = 256
+	maxChannels     = 200
 )
 
 // Channel is one channel of a group as the app shows it.
@@ -29,9 +30,19 @@ type Channel struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Voice   bool   `json:"voice"`
-	Removed bool   `json:"removed,omitempty"`
-	Reg     Reg    `json:"reg"`     // the last write that set it
-	Created uint64 `json:"created"` // the clock of its earliest write: the channels' order
+	Removed  bool   `json:"removed,omitempty"`
+	Topic    string `json:"topic,omitempty"`
+	ReadOnly bool   `json:"readOnly,omitempty"` // only those who may manage the group write in it
+	Position int32  `json:"position"`           // the order among channels of its kind
+	Reg      Reg    `json:"reg"`                // the last write that set it
+	Created  uint64 `json:"created"`            // the clock of its earliest write: ties in order
+}
+
+// ChannelSpec is a channel as a manager wants it.
+type ChannelSpec struct {
+	ID, Name, Topic         string
+	Voice, ReadOnly, Remove bool
+	Position                int32
 }
 
 // ChanStat is where a channel's history ends and where its reader is.
@@ -101,24 +112,12 @@ func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
 		return ErrForbidden
 	}
 	var b ChannelBody
-	if proto.Unmarshal(e.Body, &b) != nil || !validChannelID(b.Id) || len(b.Name) > maxChannelName || !validText(b.Name) || (b.Name == "" && !b.Removed) {
+	if proto.Unmarshal(e.Body, &b) != nil || !validChannelID(b.Id) || len(b.Name) > maxChannelName || !validText(b.Name) ||
+		(b.Name == "" && !b.Removed) || len(b.Topic) > maxChannelTopic || !validText(b.Topic) {
 		return ErrBadBody
 	}
 	k := channelKey(t.bc, b.Id)
-	var cur Channel
-	known := false
-	if t.l.st.Exists(k) {
-		if raw, err := t.l.st.Get(k); err == nil && json.Unmarshal(raw, &cur) == nil {
-			known = true
-		}
-	}
-	for _, s := range t.sets { // written earlier in this transaction (a rebuild)
-		if string(s.Key) == string(k) {
-			if json.Unmarshal(s.Value, &cur) == nil {
-				known = true
-			}
-		}
-	}
+	cur, known := t.channel(b.Id)
 	if !known {
 		if n, err := t.l.st.FindValues(channelPrefix(t.bc), maxChannels+1); err == nil && len(n) >= maxChannels {
 			return ErrForbidden
@@ -129,7 +128,8 @@ func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
 	if known && cur.Created < created {
 		created = cur.Created
 	}
-	next := Channel{ID: b.Id, Name: b.Name, Voice: b.Voice, Removed: b.Removed, Reg: reg, Created: created}
+	next := Channel{ID: b.Id, Name: b.Name, Voice: b.Voice, Removed: b.Removed, Topic: b.Topic, ReadOnly: b.ReadOnly,
+		Position: b.Position, Reg: reg, Created: created}
 	if known && !reg.after(cur.Reg) {
 		next = cur // an older write: the channel keeps the newer one, and the earlier creation
 		next.Created = created
@@ -141,7 +141,32 @@ func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
 		return err
 	}
 	t.put(k, raw)
+	if e.Lamport <= t.meta.MaxLamport {
+		// a late change of who may write in it (read-only) weighs the messages around it again
+		t.meta.Rebuild = true
+	}
 	return nil
+}
+
+// channel is a channel's state as this transaction sees it (written earlier in it, as a rebuild
+// does, or stored).
+func (t *txn) channel(id string) (Channel, bool) {
+	k := channelKey(t.bc, id)
+	var cur Channel
+	known := false
+	if t.l.st.Exists(k) {
+		if raw, err := t.l.st.Get(k); err == nil && json.Unmarshal(raw, &cur) == nil {
+			known = true
+		}
+	}
+	for _, s := range t.sets {
+		if string(s.Key) == string(k) {
+			if json.Unmarshal(s.Value, &cur) == nil {
+				known = true
+			}
+		}
+	}
+	return cur, known
 }
 
 // Channels lists a group's channels, oldest first, without the removed ones.
@@ -159,6 +184,9 @@ func (l *Log) Channels(c Conv) []Channel {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Position != out[j].Position {
+			return out[i].Position < out[j].Position
+		}
 		if out[i].Created != out[j].Created {
 			return out[i].Created < out[j].Created
 		}
@@ -167,12 +195,24 @@ func (l *Log) Channels(c Conv) []Channel {
 	return out
 }
 
-// AppendChannel creates (a new id), renames or removes a channel of a group.
-func (l *Log) AppendChannel(c Conv, id, name string, voice, removed bool) ([]byte, EventID, error) {
-	if !validChannelID(id) || len(name) > maxChannelName || !validText(name) || (name == "" && !removed) {
+// AppendChannel writes a channel of a group as s says (a new id creates it).
+func (l *Log) AppendChannel(c Conv, s ChannelSpec) ([]byte, EventID, error) {
+	if !validChannelID(s.ID) || len(s.Name) > maxChannelName || !validText(s.Name) || (s.Name == "" && !s.Remove) ||
+		len(s.Topic) > maxChannelTopic || !validText(s.Topic) {
 		return nil, EventID{}, ErrBadBody
 	}
-	return l.Append(c, Draft{Kind: KindChannel, Body: encodeBody(&ChannelBody{Id: id, Name: name, Voice: voice, Removed: removed})})
+	return l.Append(c, Draft{Kind: KindChannel, Body: encodeBody(&ChannelBody{Id: s.ID, Name: s.Name, Voice: s.Voice,
+		Removed: s.Remove, Topic: s.Topic, ReadOnly: s.ReadOnly, Position: s.Position})})
+}
+
+// ChannelOf is one channel of a group (false: none such, or removed).
+func (l *Log) ChannelOf(c Conv, id string) (Channel, bool) {
+	for _, ch := range l.Channels(c) {
+		if ch.ID == id {
+			return ch, true
+		}
+	}
+	return Channel{}, false
 }
 
 // AppendMessageIn writes a message to a channel of c ("" for the main one).

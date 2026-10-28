@@ -680,3 +680,20 @@ func TestGroupsFacade_VoiceRoomCallDoesNotRing(t *testing.T) {
 	require.NoError(t, a.f.EndCall(g.ID, "lounge", room.CallID))
 	assert.Empty(t, b.f.ActiveRoomCalls(g.ID))
 }
+
+// Who is in a voice room: everybody who announced it lately, until they say they left.
+func TestGroupsFacade_VoiceRoomShowsWhoIsIn(t *testing.T) {
+	h := newHub()
+	a, b := h.node(t, newMemStore()), h.node(t, newMemStore())
+	g, _ := a.f.Create("Crew", "", "group")
+	invite, _ := a.f.Invite(g.ID)
+	_, _ = b.f.Join(invite)
+
+	room, err := a.f.StartCall(g.ID, "lounge")
+	require.NoError(t, err)
+	require.NoError(t, b.f.KeepCallAlive(g.ID, "lounge", room.CallID, room.Coordinator))
+	assert.ElementsMatch(t, []string{a.id.String(), b.id.String()}, a.f.ActiveRoomCalls(g.ID)["lounge"].Members)
+
+	b.f.LeaveCall(g.ID, "lounge", room.CallID)
+	assert.Equal(t, []string{a.id.String()}, a.f.ActiveRoomCalls(g.ID)["lounge"].Members)
+}

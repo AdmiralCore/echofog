@@ -46,10 +46,10 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 			return
 		}
 		d.Online = f.n.peerOnline(peer)
+		if alias, avatar, _, ok := f.n.contactOf(peer); ok {
+			d.Name, d.Avatar = alias, avatar
+		}
 		if cs := f.n.node.Contact; cs != nil {
-			if alias, err := cs.GetPeerAlias(peer); err == nil {
-				d.Name = alias
-			}
 			d.Blocked = cs.IsBlocked(peer)
 		}
 		if d.Name == "" {

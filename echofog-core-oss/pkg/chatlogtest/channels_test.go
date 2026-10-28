@@ -32,11 +32,11 @@ func TestSpaceChannelsTravel(t *testing.T) {
 	ref := groupRef(g.ID)
 	eventually(t, "the group runs on the log", func() bool { return upgraded(t, alice, g.ID) && upgraded(t, bob, g.ID) })
 
-	dev, err := alice.ChatChannelSave(ref, "", "dev", false)
+	dev, err := alice.ChatChannelSave(ref, node.ChannelSpec{Name: "dev"})
 	require.NoError(t, err)
-	_, err = alice.ChatChannelSave(ref, "", "Lounge", true)
+	_, err = alice.ChatChannelSave(ref, node.ChannelSpec{Name: "Lounge", Voice: true})
 	require.NoError(t, err)
-	_, err = bob.ChatChannelSave(ref, "", "mine", false)
+	_, err = bob.ChatChannelSave(ref, node.ChannelSpec{Name: "mine"})
 	require.Error(t, err, "a member does not make channels")
 	eventually(t, "bob sees both channels", func() bool {
 		chans, err := bob.ChatChannels(ref)

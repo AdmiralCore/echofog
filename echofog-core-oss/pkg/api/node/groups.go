@@ -120,8 +120,9 @@ type groupsFacade struct {
 	blocked    func(types.PeerID) bool // peers the user blocked: their messages and calls are ignored
 	notify     func(GroupEvent)
 	calls      map[string]GroupCall
-	histSent   map[string]time.Time // when history was last handed to whom
-	aliveSent  map[string]int64     // group -> when we last announced our call there (unix s)
+	histSent   map[string]time.Time              // when history was last handed to whom
+	aliveSent  map[string]int64                  // group -> when we last announced our call there (unix s)
+	inCall     map[string]map[types.PeerID]int64 // call key -> who announced being in it, when (unix s)
 
 	async   bool // handle() sends its follow-ups from a goroutine (set for the real node)
 	nudgeMu sync.Mutex
@@ -167,6 +168,7 @@ func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.I
 	}
 	return &groupsFacade{mgr: mgr, store: store, selfID: selfID, selfPub: selfPub, sign: sign,
 		sendSilent: sendSilent, isContact: isContact, notify: notify, calls: make(map[string]GroupCall), histSent: make(map[string]time.Time), aliveSent: make(map[string]int64),
+		inCall: make(map[string]map[types.PeerID]int64),
 		nudged: make(map[types.PeerID]time.Time), keyrings: make(map[string]*senderkeys.Keyring),
 		capable: make(map[types.PeerID]bool), paced: make(map[string]time.Time), heard: make(map[types.PeerID]time.Time),
 		deferred: make(map[string][]deferredOp), rekeys: make(map[string]*pendingRekey)}

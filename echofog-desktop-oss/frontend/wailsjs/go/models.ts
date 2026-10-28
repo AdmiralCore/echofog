@@ -121,6 +121,7 @@ export namespace convlog {
 	    reactions: Reaction[];
 	    replies: number;
 	    lastReplyAt?: number;
+	    threadTitle?: string;
 	    legacy?: boolean;
 	    state?: string;
 	    kind: string;
@@ -156,6 +157,7 @@ export namespace convlog {
 	        this.reactions = this.convertValues(source["reactions"], Reaction);
 	        this.replies = source["replies"];
 	        this.lastReplyAt = source["lastReplyAt"];
+	        this.threadTitle = source["threadTitle"];
 	        this.legacy = source["legacy"];
 	        this.state = source["state"];
 	        this.kind = source["kind"];
@@ -709,6 +711,7 @@ export namespace node {
 	}
 	export class GroupCall {
 	    room?: string;
+	    members?: string[];
 	    callId: string;
 	    coordinator: string;
 	    from: string;
@@ -722,6 +725,7 @@ export namespace node {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.room = source["room"];
+	        this.members = source["members"];
 	        this.callId = source["callId"];
 	        this.coordinator = source["coordinator"];
 	        this.from = source["from"];
@@ -733,8 +737,12 @@ export namespace node {
 	    id: string;
 	    name: string;
 	    voice: boolean;
+	    topic?: string;
+	    readOnly: boolean;
+	    position: number;
 	    unread: number;
 	    lastTs: number;
+	    canSend: boolean;
 	    call?: GroupCall;
 	
 	    static createFrom(source: any = {}) {
@@ -746,8 +754,12 @@ export namespace node {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.voice = source["voice"];
+	        this.topic = source["topic"];
+	        this.readOnly = source["readOnly"];
+	        this.position = source["position"];
 	        this.unread = source["unread"];
 	        this.lastTs = source["lastTs"];
+	        this.canSend = source["canSend"];
 	        this.call = this.convertValues(source["call"], GroupCall);
 	    }
 	
@@ -769,6 +781,83 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class ChannelSpec {
+	    id: string;
+	    name: string;
+	    voice: boolean;
+	    topic: string;
+	    readOnly: boolean;
+	    position: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChannelSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.voice = source["voice"];
+	        this.topic = source["topic"];
+	        this.readOnly = source["readOnly"];
+	        this.position = source["position"];
+	    }
+	}
+	export class ChatLink {
+	    url: string;
+	    messageId: string;
+	    author: string;
+	    mine: boolean;
+	    ts: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatLink(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.messageId = source["messageId"];
+	        this.author = source["author"];
+	        this.mine = source["mine"];
+	        this.ts = source["ts"];
+	    }
+	}
+	export class ChatAttachments {
+	    media: convlog.Message[];
+	    files: convlog.Message[];
+	    links: ChatLink[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatAttachments(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.media = this.convertValues(source["media"], convlog.Message);
+	        this.files = this.convertValues(source["files"], convlog.Message);
+	        this.links = this.convertValues(source["links"], ChatLink);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class ChatPage {
 	    messages: convlog.Message[];
 	    next: string;
@@ -854,6 +943,7 @@ export namespace node {
 	    name: string;
 	    peerId?: string;
 	    pubKey?: string;
+	    avatar?: string;
 	    online: boolean;
 	    blocked: boolean;
 	    role?: string;
@@ -878,6 +968,7 @@ export namespace node {
 	        this.name = source["name"];
 	        this.peerId = source["peerId"];
 	        this.pubKey = source["pubKey"];
+	        this.avatar = source["avatar"];
 	        this.online = source["online"];
 	        this.blocked = source["blocked"];
 	        this.role = source["role"];

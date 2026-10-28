@@ -58,12 +58,21 @@ message EventExt {
   string channel = 1;  // a group's channel the message is in; empty: the main one
 }
 
-// ChannelBody creates, renames or removes a channel of a group (last writer wins per id).
+// ChannelBody creates, changes or removes a channel of a group: the whole channel as it is to be
+// (last writer wins per id).
 message ChannelBody {
-  string id      = 1;
-  string name    = 2;
-  bool   voice   = 3;  // a voice room rather than a text channel
-  bool   removed = 4;
+  string id        = 1;
+  string name      = 2;
+  bool   voice     = 3;  // a voice room rather than a text channel
+  bool   removed   = 4;
+  string topic     = 5;  // a line under the name
+  bool   read_only = 6;  // only those who may manage the group write in it (announcements)
+  int32  position  = 7;  // the channels' order among their kind, lowest first
+}
+
+// ThreadBody names the thread under a message (kind THREAD; last writer wins per root).
+message ThreadBody {
+  string title = 1;
 }
 
 message RosterEntry {

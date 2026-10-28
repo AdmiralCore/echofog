@@ -16,13 +16,67 @@ func (a *App) ChatChannels(ref api.ChatRef) ([]api.ChannelDTO, error) {
 	return n.ChatChannels(ref)
 }
 
-// ChatChannelSave creates a channel (id "") or renames one; voice makes it a voice room.
-func (a *App) ChatChannelSave(ref api.ChatRef, id, name string, voice bool) (api.ChannelDTO, error) {
+// ChatChannelSave creates a channel (spec.ID "") or changes one: name, topic, read-only.
+func (a *App) ChatChannelSave(ref api.ChatRef, spec api.ChannelSpec) (api.ChannelDTO, error) {
 	n := a.getAPI()
 	if n == nil {
 		return api.ChannelDTO{}, errNodeNotStarted
 	}
-	return n.ChatChannelSave(ref, id, name, voice)
+	return n.ChatChannelSave(ref, spec)
+}
+
+// ChatChannelMove puts a channel at index among the channels of its kind.
+func (a *App) ChatChannelMove(ref api.ChatRef, id string, index int) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatChannelMove(ref, id, index)
+}
+
+// ChatThreads are a channel's messages with comments, the most recently active first.
+func (a *App) ChatThreads(ref api.ChatRef) ([]api.ChatMessage, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.ChatThreads(ref)
+}
+
+// ChatThreadTitle names the thread under a message.
+func (a *App) ChatThreadTitle(ref api.ChatRef, root, title string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatThreadTitle(ref, root, title)
+}
+
+// ChatAttachments are a chat's media, files and links, newest first.
+func (a *App) ChatAttachments(ref api.ChatRef) (api.ChatAttachments, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.ChatAttachments{}, errNodeNotStarted
+	}
+	return n.ChatAttachments(ref)
+}
+
+// SetContactProfile renames a contact and sets the picture shown for it (on this device only).
+func (a *App) SetContactProfile(peerID, alias, avatarBase64 string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.SetContactProfile(peerID, alias, avatarBase64)
+}
+
+// LeaveRoomCall says we left a voice room whose call others stay in.
+func (a *App) LeaveRoomCall(groupID, room, callID string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.LeaveRoomCall(groupID, room, callID)
 }
 
 // ChatChannelRemove removes a channel.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/echofog/echofog-core/internal/services/convlog"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,12 +102,15 @@ type GroupEvent struct {
 
 // GroupCall is a call that a member started in a group.
 type GroupCall struct {
-	Room        string `json:"room,omitempty"` // the voice room ("" the group's own call)
-	CallID      string `json:"callId"`
-	Coordinator string `json:"coordinator"`
-	From        string `json:"from"`
-	StartedAt   int64  `json:"startedAt"`
-	LastSeen    int64  `json:"lastSeen"` // when somebody in the call last said it is still going
+	Room string `json:"room,omitempty"` // the voice room ("" the group's own call)
+	// Members are who is in the call: those who announced it lately (everybody in a call repeats
+	// the announcement every callAliveEvery) and have not said they left.
+	Members     []string `json:"members,omitempty"`
+	CallID      string   `json:"callId"`
+	Coordinator string   `json:"coordinator"`
+	From        string   `json:"from"`
+	StartedAt   int64    `json:"startedAt"`
+	LastSeen    int64    `json:"lastSeen"` // when somebody in the call last said it is still going
 }
 
 // A group call is live while its members keep announcing it: everyone in the call repeats the
@@ -635,6 +639,7 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		}
 		if c, ok := f.calls[callKey(w.Group, w.Room)]; ok && c.CallID == w.CallID {
 			delete(f.calls, callKey(w.Group, w.Room))
+			delete(f.inCall, callKey(w.Group, w.Room))
 		}
 		ev := GroupEvent{Kind: "callend", GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), CallID: w.CallID, Room: w.Room}
 		return []func(){func() { f.emitEvent(ev) }}
@@ -665,6 +670,16 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		}
 		return f.takeHistory(w)
 
+	case "callleave":
+		// a member left a voice room's call without ending it
+		key := callKey(w.Group, w.Room)
+		if c, ok := f.calls[key]; ok && c.CallID == w.CallID {
+			delete(f.inCall[key], origin)
+			ev := GroupEvent{Kind: "callactive", GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), CallID: w.CallID, Coordinator: c.Coordinator, Room: w.Room}
+			return []func(){func() { f.emitEvent(ev) }}
+		}
+		return nil
+
 	case "call", "callalive":
 		role, err := f.mgr.GetMemberRole(w.Group, origin)
 		if err != nil || role.Permissions&groups.PermJoinVoice == 0 || w.CallID == "" || w.Coord == "" {
@@ -683,6 +698,12 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		}
 		c.LastSeen = now.Unix()
 		f.calls[callKey(w.Group, w.Room)] = c
+		f.noteInCall(callKey(w.Group, w.Room), origin, sameCall)
+		if w.Room != "" {
+			// a voice room shows who is in it: every announcement may change that
+			ev := GroupEvent{Kind: "callactive", GroupID: w.Group, Title: f.titleOf(w.Group), From: origin.String(), CallID: w.CallID, Coordinator: w.Coord, Room: w.Room}
+			return []func(){func() { f.emitEvent(ev) }}
+		}
 		if sameCall && time.Since(time.Unix(prev.LastSeen, 0)) <= callAliveFor {
 			return nil // a call we already know about, still going: nothing new to show
 		}
@@ -870,6 +891,7 @@ func (f *groupsFacade) StartCall(groupID, room string) (GroupCall, error) {
 	now := time.Now().Unix()
 	c := GroupCall{Room: room, CallID: call.NewInviteSecret(), Coordinator: f.selfID.String(), From: f.selfID.String(), StartedAt: now, LastSeen: now}
 	f.calls[callKey(groupID, room)] = c
+	f.inCall[callKey(groupID, room)] = map[types.PeerID]int64{f.selfID: now}
 	f.mu.Unlock()
 	f.broadcast(groupID, groupWire{Kind: "call", Group: groupID, Room: room, CallID: c.CallID, Coord: c.Coordinator, TS: now})
 	return c, nil
@@ -899,9 +921,11 @@ func (f *groupsFacade) KeepCallAlive(groupID, room, callID, coordinator string) 
 	}
 	if !ok || c.CallID != callID {
 		c = GroupCall{Room: room, CallID: callID, Coordinator: coordinator, From: f.selfID.String(), StartedAt: now}
+		delete(f.inCall, key) // another call in this room: its own list of who is in it
 	}
 	c.LastSeen = now
 	f.calls[key] = c
+	f.noteInCall(key, f.selfID, true)
 	f.aliveSent[key] = now
 	f.mu.Unlock()
 	f.broadcast(groupID, groupWire{Kind: "callalive", Group: groupID, Room: room, CallID: callID, Coord: coordinator, TS: now})
@@ -916,6 +940,7 @@ func (f *groupsFacade) ActiveCall(groupID, room string) (GroupCall, bool) {
 	if !ok || time.Since(time.Unix(c.LastSeen, 0)) > callAliveFor {
 		return GroupCall{}, false
 	}
+	c.Members = f.membersInLocked(callKey(groupID, room))
 	return c, true
 }
 
@@ -1099,6 +1124,7 @@ func (f *groupsFacade) EndCall(groupID, room, callID string) error {
 	if c, ok := f.calls[callKey(groupID, room)]; ok && (callID == "" || c.CallID == callID) {
 		callID = c.CallID
 		delete(f.calls, callKey(groupID, room))
+		delete(f.inCall, callKey(groupID, room))
 	}
 	f.mu.Unlock()
 	if callID == "" {
@@ -1123,8 +1149,41 @@ func (f *groupsFacade) ActiveRoomCalls(groupID string) map[string]GroupCall {
 	out := map[string]GroupCall{}
 	for k, c := range f.calls {
 		if c.Room != "" && k == callKey(groupID, c.Room) && time.Since(time.Unix(c.LastSeen, 0)) <= callAliveFor {
+			c.Members = f.membersInLocked(k)
 			out[c.Room] = c
 		}
 	}
 	return out
+}
+
+// noteInCall records that peer is in the call key; a new call (fresh false) starts its list anew.
+// Call with f.mu held.
+func (f *groupsFacade) noteInCall(key string, peer types.PeerID, fresh bool) {
+	if !fresh || f.inCall[key] == nil {
+		f.inCall[key] = map[types.PeerID]int64{}
+	}
+	f.inCall[key][peer] = time.Now().Unix()
+}
+
+// membersInLocked are who announced being in the call key lately, in a stable order.
+func (f *groupsFacade) membersInLocked(key string) []string {
+	var out []string
+	for id, seen := range f.inCall[key] {
+		if time.Since(time.Unix(seen, 0)) <= callAliveFor {
+			out = append(out, id.String())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// LeaveCall says we left a voice room's call that others stay in.
+func (f *groupsFacade) LeaveCall(groupID, room, callID string) {
+	f.mu.Lock()
+	key := callKey(groupID, room)
+	if m := f.inCall[key]; m != nil {
+		delete(m, f.selfID)
+	}
+	f.mu.Unlock()
+	f.broadcast(groupID, groupWire{Kind: "callleave", Group: groupID, Room: room, CallID: callID})
 }

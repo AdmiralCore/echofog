@@ -29,9 +29,13 @@ export function BlockPeer(arg1:string):Promise<void>;
 
 export function CancelFile(arg1:string):Promise<void>;
 
+export function ChatAttachments(arg1:node.ChatRef):Promise<node.ChatAttachments>;
+
+export function ChatChannelMove(arg1:node.ChatRef,arg2:string,arg3:number):Promise<void>;
+
 export function ChatChannelRemove(arg1:node.ChatRef,arg2:string):Promise<void>;
 
-export function ChatChannelSave(arg1:node.ChatRef,arg2:string,arg3:string,arg4:boolean):Promise<node.ChannelDTO>;
+export function ChatChannelSave(arg1:node.ChatRef,arg2:node.ChannelSpec):Promise<node.ChannelDTO>;
 
 export function ChatChannels(arg1:node.ChatRef):Promise<Array<node.ChannelDTO>>;
 
@@ -56,6 +60,10 @@ export function ChatReact(arg1:node.ChatRef,arg2:string,arg3:string,arg4:boolean
 export function ChatSend(arg1:node.ChatRef,arg2:node.SendRequest):Promise<convlog.Message>;
 
 export function ChatThread(arg1:node.ChatRef,arg2:string,arg3:string,arg4:number):Promise<node.ChatPage>;
+
+export function ChatThreadTitle(arg1:node.ChatRef,arg2:string,arg3:string):Promise<void>;
+
+export function ChatThreads(arg1:node.ChatRef):Promise<Array<convlog.Message>>;
 
 export function CheckForUpdate():Promise<main.UpdateInfo>;
 
@@ -183,6 +191,8 @@ export function LeaveGroup(arg1:string):Promise<void>;
 
 export function LeaveRoom():Promise<void>;
 
+export function LeaveRoomCall(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function ListExitNodes():Promise<Array<node.ExitNode>>;
 
 export function ListFileTransfers(arg1:string):Promise<Array<dto.FileTransferDTO>>;
@@ -256,6 +266,8 @@ export function SendUsdt(arg1:string,arg2:string,arg3:string):Promise<string>;
 export function SetAccessMode(arg1:string):Promise<void>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
+
+export function SetContactProfile(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetCustomSites(arg1:Array<string>):Promise<void>;
 

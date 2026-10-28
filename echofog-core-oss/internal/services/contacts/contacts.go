@@ -46,7 +46,28 @@ func (c *ContactService) GetPeerAlias(peerID string) (string, error) {
 }
 
 func (c *ContactService) UpdateContact(contact *dto.ContactDTO) error {
-	return errors.New("")
+	if contact == nil || !c.Exists(contact.PeerID) {
+		return errors.New("not a contact")
+	}
+	return c.NewContact(*contact)
+}
+
+// SetProfile renames a contact and sets the picture shown for it ("" removes it).
+func (c *ContactService) SetProfile(peerID, alias, avatarBase64 string) error {
+	list, err := c.GiveMyContacts()
+	if err != nil {
+		return err
+	}
+	for _, ct := range list {
+		if ct.PeerID == peerID {
+			if alias != "" {
+				ct.Alias = alias
+			}
+			ct.Avatar = avatarBase64
+			return c.UpdateContact(&ct)
+		}
+	}
+	return errors.New("not a contact")
 }
 
 func (c *ContactService) RemoveContact(peerID string) error {

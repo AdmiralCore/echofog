@@ -53,6 +53,7 @@ type ConversationDTO struct {
 	// a direct chat: the other side, whether it is connected, whether I blocked it
 	PeerID  string `json:"peerId,omitempty"`
 	PubKey  string `json:"pubKey,omitempty"`
+	Avatar  string `json:"avatar,omitempty"` // the picture I set for the contact (base64)
 	Online  bool   `json:"online"`
 	Blocked bool   `json:"blocked"`
 	// a group: my role and how many are in it

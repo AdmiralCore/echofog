@@ -374,6 +374,11 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			if !rights.Send {
 				return ErrForbidden
 			}
+			if ch := channelOf(e); ch != "" && len(e.Thread) == 0 {
+				if st, ok := t.channel(ch); ok && st.ReadOnly && !rights.Manage {
+					return ErrForbidden // an announcements channel: only managers post (others comment)
+				}
+			}
 			err = t.applyMsg(e, idHex, author, &store)
 		case KindEdit:
 			err = t.applyEdit(e, author, &store)
@@ -388,6 +393,8 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			err = t.applyPin(e, author)
 		case KindChannel:
 			err = t.applyChannel(e, author, rights)
+		case KindThread:
+			err = t.applyThread(e, author, rights)
 		}
 	}
 	if err != nil {
