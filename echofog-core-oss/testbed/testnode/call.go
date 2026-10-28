@@ -143,10 +143,16 @@ func (t *testNode) callTalk(w http.ResponseWriter, r *http.Request) {
 	reply(w, map[string]bool{"ok": true}, nil)
 }
 
-// callStream starts a 720p30 screen share and sends 30 units a second down its tree.
+// callStream starts a screen share and sends units down its tree: 720p30 as 3000-byte units, 30 a
+// second, or with ?q=<quality id> (2160p60, say) the rate of that quality in the 1200-byte units of
+// RTP, so a 4K stream puts its real load on the relays.
 func (t *testNode) callStream(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	q, err := tree.QualityByID("720p30")
+	qid := r.URL.Query().Get("q")
+	if qid == "" {
+		qid = "720p30"
+	}
+	q, err := tree.QualityByID(qid)
 	if err != nil {
 		reply(w, nil, err)
 		return
@@ -155,19 +161,29 @@ func (t *testNode) callStream(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
+	size, perSec := 3000, 30.0
+	if qid != "720p30" {
+		size, perSec = 1200, float64(q.BitrateKbps)*1000/8/1200
+	}
 	stop := make(chan struct{})
 	t.rx.mu.Lock()
 	t.rx.streamer = stop
 	t.rx.mu.Unlock()
 	go func() {
-		tk := time.NewTicker(33 * time.Millisecond)
+		const tick = 10 * time.Millisecond
+		tk := time.NewTicker(tick)
 		defer tk.Stop()
-		for seq := uint32(0); ; seq++ {
+		owed := 0.0
+		for seq := uint32(0); ; {
 			select {
 			case <-stop:
 				return
 			case <-tk.C:
-				_ = t.n.CallManager.PublishVideo(id, unit(seq, 3000))
+				owed += perSec * tick.Seconds()
+				for ; owed >= 1; owed-- {
+					_ = t.n.CallManager.PublishVideo(id, unit(seq, size))
+					seq++
+				}
 			}
 		}
 	}()
