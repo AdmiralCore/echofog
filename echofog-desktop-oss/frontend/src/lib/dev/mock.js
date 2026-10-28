@@ -1084,7 +1084,11 @@ if (BRIDGE) {
   const base = 'http://127.0.0.1:' + BRIDGE;
   const BRIDGED = ['GetMyID', 'GetMyPubKey', 'GetContacts', 'GetBlockedPeers', 'GetMessageRequests', 'AcceptMessageRequest',
     'DismissMessageRequest', 'BlockPeer', 'UnblockPeer', 'ListGroups', 'ListGroupMembers', 'GetGroupInvite', 'SetGroupRole',
-    'ChatList', 'ChatHistory', 'ChatThread', 'ChatPins', 'ChatMessage', 'ChatSend', 'ChatEdit', 'ChatDelete', 'ChatReact', 'ChatPin', 'ChatMarkRead'];
+    'ChatList', 'ChatHistory', 'ChatThread', 'ChatPins', 'ChatMessage', 'ChatSend', 'ChatEdit', 'ChatDelete', 'ChatReact', 'ChatPin', 'ChatMarkRead',
+    'ChatChannels', 'ChatChannelSave', 'ChatChannelRemove', 'StartRoomCall', 'KeepRoomCallAlive', 'EndRoomCall',
+    // calls: the page's WebRTC loopback talks to the node's own media bridge
+    'InviteToCall', 'JoinRoom', 'SubmitCallAnswer', 'LeaveRoom', 'GetCallRoster', 'GetCallSlots', 'GetStreamQualities', 'StartStream',
+    'UpdateStreamQuality', 'StopScreenShare', 'WatchStream', 'UnwatchStream', 'SetUploadCapacity', 'SetVADState'];
   for (const name of BRIDGED) {
     impl[name] = async (...args) => {
       const r = await fetch(`${base}/call/${name}`, { method: 'POST', body: JSON.stringify(args) });
@@ -1120,10 +1124,19 @@ window.go = {
 };
 
 // No permission prompts in the preview: synthetic mic, camera and screen.
-const synthetic = (kind) => {
+const synthetic = (kind, toneHz = 0) => {
   if (kind === 'audio') {
     const ctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
+    if (toneHz) {
+      // a shared screen's sound: a tone the viewers can measure
+      const osc = ctx.createOscillator();
+      osc.frequency.value = toneHz;
+      const g = ctx.createGain();
+      g.gain.value = 0.2;
+      osc.connect(g).connect(dest);
+      osc.start();
+    }
     return dest.stream;
   }
   const c = document.createElement('canvas');
@@ -1136,7 +1149,7 @@ navigator.mediaDevices.getUserMedia = async (c) => (c.video ? synthetic('video')
 // a shared screen comes with sound unless the URL has &nosound (as when "share audio" is not ticked)
 navigator.mediaDevices.getDisplayMedia = async () => {
   const s = synthetic('video');
-  if (!new URLSearchParams(location.search).has('nosound')) synthetic('audio').getAudioTracks().forEach((t) => s.addTrack(t));
+  if (!new URLSearchParams(location.search).has('nosound')) synthetic('audio', 440).getAudioTracks().forEach((t) => s.addTrack(t));
   return s;
 };
 callService.muteOutput = true; // keep the preview silent

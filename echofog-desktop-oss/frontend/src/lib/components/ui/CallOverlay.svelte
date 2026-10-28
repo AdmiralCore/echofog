@@ -7,6 +7,7 @@
         peerInfo,
         waitingKey,
         incomingCall,
+        callEnded,
         callError,
         callDuration,
         formatDuration,
@@ -113,6 +114,14 @@
                 </button>
             </div>
         </div>
+    </div>
+{/if}
+
+{#if $callEnded && !$isCallActive && !$callError}
+    <div class="toast fixed z-[10000] top-4 right-4 w-[320px] max-w-[calc(100vw-32px)] rounded-2xl p-3 text-sm flex gap-3" role="status" transition:fly={{ y: -12, duration: 260 }}>
+        <span class="font-semibold">{$t('call.ended')}</span>
+        <span class="flex-1" style="color:var(--muted)">{$callEnded}</span>
+        <button class="dismiss" aria-label={$t('call.dismiss')} on:click={() => callEnded.set('')}><Icon name="close" size={16} /></button>
     </div>
 {/if}
 

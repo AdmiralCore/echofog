@@ -14,6 +14,8 @@ export const callDuration = writable(0);
 export const stageExpanded = writable(true);
 
 export const isCallActive = derived(callState, ($s) => $s.inCall || $s.connecting);
+/** Why the last call ended on its own (the other side hung up, nobody answered): a short note. */
+export const callEnded = writable('');
 
 /** The i18n key of what the caller is waiting for: the invitation's state until the call connects. */
 export function waitingKey(s) {
@@ -39,6 +41,63 @@ export const callControls = derived(callState, ($s) => ({
 
 let timerInterval = null;
 let eventsReady = false;
+
+// --- a direct call ends with the other side -------------------------------------------------
+// The core keeps a room open while anybody is in it: in a call between two people, the one left
+// behind would sit alone in it, and the other's next call would not even ring (it comes as an
+// invitation to a new room while this one still counts as "in a call"). So a direct call ends
+// here when the other person leaves, and when nobody comes at all.
+const NO_ANSWER_MS = 60_000; // the caller waits this long for the other side to join
+const GONE_MS = 10_000; // who accepted waits this long for a caller who already hung up
+let directRole = ''; // 'caller' | 'callee' while in a direct call
+let peak = 0; // the most members seen in the current call
+let aloneTimer = null;
+
+function endedBy(key) {
+    callEnded.set(tr(key));
+    setTimeout(() => callEnded.update((v) => (v === tr(key) ? '' : v)), 6000);
+}
+
+let ending = false;
+async function endDirect(key) {
+    clearTimeout(aloneTimer);
+    aloneTimer = null;
+    if (ending || !(get(callState).inCall || get(callState).connecting)) return;
+    ending = true;
+    try {
+        await endCall();
+        endedBy(key);
+    } finally {
+        ending = false;
+    }
+}
+
+callState.subscribe(($s) => {
+    const direct = (get(peerInfo).chatId || '').startsWith('d:');
+    if (!($s.inCall || $s.connecting) || !direct || !directRole) {
+        if (!($s.inCall || $s.connecting)) { peak = 0; directRole = ''; }
+        clearTimeout(aloneTimer);
+        aloneTimer = null;
+        return;
+    }
+    const n = ($s.members || []).length;
+    if (n > peak) peak = n;
+    if (peak >= 2 && n <= 1 && $s.inCall) {
+        // the other person left (or their app went away and the room timed them out)
+        setTimeout(() => endDirect('call.notice.otherLeft'), 0);
+        return;
+    }
+    if (n <= 1 && !aloneTimer && $s.inCall) {
+        const wait = directRole === 'caller' ? NO_ANSWER_MS : GONE_MS;
+        aloneTimer = setTimeout(() => {
+            aloneTimer = null;
+            if ((get(callState).members || []).length <= 1) endDirect(directRole === 'caller' ? 'call.notice.noAnswer' : 'call.notice.alreadyEnded');
+        }, wait);
+    } else if (n >= 2 && aloneTimer) {
+        clearTimeout(aloneTimer);
+        aloneTimer = null;
+    }
+});
 
 callState.subscribe(($s) => {
     if ($s.inCall && !timerInterval) {
@@ -83,7 +142,20 @@ function startRingtone() {
     } catch (_) { /* audio unavailable */ }
 }
 
+// a call nobody answers stops ringing after a while (the caller gave up, or hung up before we answered)
+const RING_MS = 45_000;
+let ringTimer = null;
+function ringUntilAnswered(callId) {
+    clearTimeout(ringTimer);
+    ringTimer = setTimeout(() => {
+        if (get(incomingCall)?.callId !== callId) return;
+        declineIncomingCall();
+        endedBy('call.notice.missed');
+    }, RING_MS);
+}
+
 function stopRingtone() {
+    clearTimeout(ringTimer);
     if (!ring) return;
     clearInterval(ring.timer);
     ring.osc.forEach((o) => { try { o.stop(); } catch (_) { /* stopped */ } });
@@ -106,7 +178,14 @@ export function initCallEvents() {
             callState.update((s) => ({ ...s, invite: { ...inv, state: ev.state } }));
         });
         EventsOn('call:incoming', async (ev) => {
-            if (!ev || get(callState).inCall || get(callState).connecting) return;
+            if (!ev) return;
+            const st = get(callState);
+            if (st.inCall || st.connecting) {
+                const info = get(peerInfo);
+                // the same person calling again: they hung up and this call is stale
+                if ((info.chatId || '').startsWith('d:') && info.peerId === ev.from) await endCall();
+                // anybody else rings as a second call; answering it ends this one
+            }
             let alias = '';
             try {
                 const contacts = (await GetContacts()) || [];
@@ -120,6 +199,7 @@ export function initCallEvents() {
                 timestamp: ev.timestamp,
             });
             startRingtone();
+            ringUntilAnswered(ev.callId);
         });
     } catch (err) {
         console.warn('Call events unavailable:', err);
@@ -128,10 +208,10 @@ export function initCallEvents() {
 
 /** A call somebody else started (a group call): rings like a direct one. */
 export function ringIncoming({ callId, coordinator, from, alias, chatId }) {
-    const s = get(callState);
-    if (s.inCall || s.connecting || get(incomingCall)) return;
+    if (get(incomingCall)) return;
     incomingCall.set({ callId, coordinator, from, alias, chatId, timestamp: Date.now() });
     startRingtone();
+    ringUntilAnswered(callId);
 }
 
 // The group call we are in is announced to the group every 45 s (and once on joining), so members
@@ -179,6 +259,8 @@ export async function startCall(peer, withVideo = false) {
     if (get(callState).inCall || get(callState).connecting) return false;
     joinCoordinator = peer.coordinator || '';
     peerInfo.set({ alias: peer.alias || '', avatar: peer.avatar || '', peerId: peer.peerId || '', chatId: peer.chatId || '', room: peer.room || '' });
+    directRole = peer.pubKey ? 'caller' : '';
+    callEnded.set('');
     stageExpanded.set(true);
     resumeAudioContext();
     loadPeerDirectory();
@@ -206,7 +288,10 @@ export async function acceptIncomingCall(withVideo = false) {
     if (!inv) return false;
     stopRingtone();
     incomingCall.set(null);
+    if (get(callState).inCall || get(callState).connecting) await endCall(); // a second call: this one ends
     peerInfo.set({ alias: inv.alias, avatar: '', peerId: inv.from, chatId: inv.chatId || 'd:' + inv.from });
+    directRole = inv.chatId && !inv.chatId.startsWith('d:') ? '' : 'callee';
+    callEnded.set('');
     joinCoordinator = inv.coordinator || '';
     stageExpanded.set(true);
     resumeAudioContext();
