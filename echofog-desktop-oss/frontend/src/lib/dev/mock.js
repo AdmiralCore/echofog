@@ -849,7 +849,7 @@ function convOf(k, withLast = true) {
     const rq = privacyMock.requests.find((x) => x.peer_id === c.ref.id);
     const blocked = privacyMock.blocked.some((b) => b.peer_id === c.ref.id);
     const pub = ct?.pub_key || rq?.pub_key || '';
-    Object.assign(d, { kind: 'direct', name: ct?.alias || c.ref.id.slice(0, 8), peerId: c.ref.id, pubKey: pub, online: !!ct?.is_online, blocked,
+    Object.assign(d, { kind: 'direct', name: ct?.alias || c.ref.id.slice(0, 8), peerId: c.ref.id, pubKey: pub, online: !!ct?.is_online, blocked, avatar: ct?.avatar || '',
       can: { send: !blocked, files: !blocked && !!pub, react: c.upgraded && !blocked, pin: c.upgraded, call: !blocked && !!pub } });
   } else {
     const g = groups.find((x) => x.id === c.ref.id) || {};
@@ -941,9 +941,11 @@ const NOT_UPGRADED = 'not every member of this group has updated the app yet';
 // The launch group is a space: two text channels and a voice room with a call going on.
 const spaceChans = {
   [GROUP]: [
-    { id: 'dev', name: 'dev', voice: false },
-    { id: 'design', name: 'design', voice: false },
-    { id: 'lounge', name: 'Lounge', voice: true, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300 } },
+    { id: 'dev', name: 'dev', voice: false, topic: 'builds, bugs, releases', position: 0 },
+    { id: 'design', name: 'design', voice: false, position: 1 },
+    { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
+    { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
+    { id: 'stream', name: 'Stream', voice: true, position: 1 },
   ],
 };
 (function seedChannels() {
@@ -1040,20 +1042,65 @@ Object.assign(impl, {
     logChanged(keyOf(ref), m);
     return null;
   },
-  ChatChannels: (ref) => (spaceChans[ref.id] || []).map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, call: ch.voice ? ch.call : undefined })),
-  ChatChannelSave: (ref, id, name, voice) => {
+  ChatChannels: (ref) => {
+    const g = groups.find((x) => x.id === ref.id);
+    const manager = ['owner', 'admin'].includes(g?.myRole);
+    return (spaceChans[ref.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
+      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.readOnly || manager, call: ch.voice ? ch.call : undefined }));
+  },
+  ChatChannelSave: (ref, spec) => {
     const g = groups.find((x) => x.id === ref.id);
     if (!['owner', 'admin'].includes(g?.myRole)) throw new Error('not allowed');
     const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
-    const ch = list.find((x) => x.id === id) || { id: id || 'c' + Date.now().toString(36), voice };
-    Object.assign(ch, { name });
+    const ch = list.find((x) => x.id === spec.id) || { id: spec.id || 'c' + Date.now().toString(36), voice: spec.voice, position: list.length };
+    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly });
     if (!list.includes(ch)) list.push(ch);
     return { ...ch, unread: 0, lastTs: 0 };
   },
+  ChatChannelMove: (ref, id, index) => {
+    const list = spaceChans[ref.id] || [];
+    const ch = list.find((x) => x.id === id);
+    const same = list.filter((x) => x.voice === ch.voice && x.id !== id).sort((a, b) => a.position - b.position);
+    same.splice(index, 0, ch);
+    same.forEach((x, i) => { x.position = i; });
+    return null;
+  },
+  ChatThreads: (ref) => {
+    const c = chatOf(ref);
+    return c.msgs.filter((m) => !m.thread && (m.channel || '') === (ref.channel || '') && c.msgs.some((x) => x.thread === m.id))
+      .map((m) => shown(c, m)).sort((a, b) => b.ts - a.ts);
+  },
+  ChatThreadTitle: (ref, root, title) => {
+    const c = chatOf(ref);
+    const m = find(c, root);
+    m.threadTitle = title;
+    logChanged(keyOf(ref), m);
+    return null;
+  },
+  ChatAttachments: (ref) => {
+    const c = chatOf(ref);
+    const out = { media: [], files: [], links: [] };
+    for (const m of [...c.msgs].reverse()) {
+      if (m.deleted) continue;
+      const v = shown(c, m);
+      if (v.file) (/\.(png|jpe?g|gif|webp|mp4|mov)$/i.test(v.file.name) || /^(image|video)\//.test(v.file.mime || '') ? out.media : out.files).push(v);
+      for (const u of (m.text || '').match(/https?:\/\/[^\s]+/g) || []) out.links.push({ url: u, messageId: m.id, author: m.author, mine: m.mine, ts: m.ts });
+    }
+    return out;
+  },
+  SetContactProfile: (peer, alias, avatar) => {
+    const ct = contacts.find((x) => x.peer_id === peer);
+    if (!ct) throw new Error('not a contact');
+    if (alias) ct.alias = alias;
+    ct.avatar = avatar;
+    return null;
+  },
+  LeaveRoomCall: (gid, room) => { const ch = (spaceChans[gid] || []).find((x) => x.id === room); if (ch?.call) ch.call.members = (ch.call.members || []).filter((p) => p !== SELF); return null; },
   ChatChannelRemove: (ref, id) => { spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id); return null; },
   StartRoomCall: (gid, room) => {
     const ch = (spaceChans[gid] || []).find((x) => x.id === room);
-    if (!ch.call) ch.call = { room, callId: 'call_room_' + room, coordinator: SELF, from: SELF, startedAt: sec(Date.now()) };
+    if (!ch.call) ch.call = { room, callId: 'call_room_' + room, coordinator: SELF, from: SELF, startedAt: sec(Date.now()), members: [] };
+    if (!ch.call.members.includes(SELF)) ch.call.members.push(SELF);
     return ch.call;
   },
   KeepRoomCallAlive: () => null,

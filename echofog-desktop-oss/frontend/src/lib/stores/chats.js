@@ -40,6 +40,20 @@ async function refreshGroupCalls() {
     } catch (_) { /* node not started */ }
   }
 }
+/** Chats whose new messages make no sound (kept on this device). */
+export const muted = writable(new Set((() => {
+  try { return JSON.parse(localStorage.getItem('echofog.muted') || '[]'); } catch (_) { return []; }
+})()));
+export function toggleMuted(id) {
+  muted.update((s) => {
+    const next = new Set(s);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    try { localStorage.setItem('echofog.muted', JSON.stringify([...next])); } catch (_) { /* private mode */ }
+    return next;
+  });
+}
+
 /** The open group's channels and voice rooms (ChatChannels), and the channel shown ('' the main one). */
 export const channels = writable([]);
 export const activeChannel = writable('');
@@ -104,6 +118,7 @@ export function norm(m) {
     pinned: !!m.pinned,
     reactions: m.reactions || [],
     replies: m.replies || 0,
+    threadTitle: m.threadTitle || '',
   };
 }
 
@@ -146,6 +161,13 @@ function patch(id, fn) {
   chats.update((list) => list.map((c) => (c.id === id ? fn(c) : c)));
 }
 
+/** A picture kept as base64 (a contact's), as an image address; '' without one. */
+export function avatarSrc(b64) {
+  if (!b64) return '';
+  const type = b64.startsWith('/9j/') ? 'jpeg' : b64.startsWith('iVBOR') ? 'png' : b64.startsWith('R0lG') ? 'gif' : 'webp';
+  return `data:image/${type};base64,${b64}`;
+}
+
 // a chat-list row from the core's entry
 function rowOf(d) {
   const can = d.can || {};
@@ -154,6 +176,7 @@ function rowOf(d) {
     id: chatIdOf(d.ref), kind: group ? 'group' : 'direct', groupKind: d.kind === 'channel' ? 'channel' : 'group', ref: d.ref,
     name: d.name || (group ? d.title : d.ref.id.slice(0, 8)), peerId: group ? '' : d.ref.id, pubKey: d.pubKey || '', groupId: group ? d.ref.id : '',
     online: !!d.online, blocked: !!d.blocked, request: !!d.request, myRole: d.role || '', members: d.members || 0,
+    avatar: avatarSrc(d.avatar),
     can, readOnly: !can.send,
     last: d.last ? preview(norm(d.last)) : '', lastId: d.last ? d.last.id : '', ts: d.lastTs || 0, unread: d.unread || 0,
     upgraded: !!d.upgraded,
@@ -192,7 +215,7 @@ async function changed(ev) {
   const msgs = (ev.messages || []).map(norm);
   const open = get(activeId) === id;
   const arrived = d.last && !d.last.mine && (fresh || d.last.id !== row.lastId);
-  if (arrived && msgs.some((m) => m.id === d.last.id && !m.system)) play('receive', { quiet: inCall() });
+  if (arrived && !get(muted).has(id) && msgs.some((m) => m.id === d.last.id && !m.system)) play('receive', { quiet: inCall() });
   patch(id, (c) => ({ ...c, ...rowOf(d), unread: open && get(focused) ? 0 : d.unread || 0 }));
   if (!open) return;
   if (ev.reload) {
@@ -357,12 +380,62 @@ export async function createChannel(name, voice) {
   const conv = openConv();
   if (!conv || !name.trim()) return null;
   try {
-    const ch = await App.ChatChannelSave(conv.ref, '', name.trim(), !!voice);
+    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: !!voice, topic: '', readOnly: false, position: 0 });
     await loadChannels();
     return ch;
   } catch (err) {
     chatError.set(errText(err, tr('chats.err.channel')));
     return null;
+  }
+}
+
+/** Changes a channel of the open group: { id, name, topic, readOnly, position }. */
+export async function saveChannel(ch) {
+  const conv = openConv();
+  if (!conv) return false;
+  try {
+    await App.ChatChannelSave(conv.ref, { id: ch.id, name: ch.name.trim(), voice: !!ch.voice, topic: (ch.topic || '').trim(), readOnly: !!ch.readOnly, position: ch.position || 0 });
+    await loadChannels();
+    return true;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return false;
+  }
+}
+
+/** Puts a channel at index among the channels of its kind. */
+export async function moveChannel(id, index) {
+  const conv = openConv();
+  if (!conv) return;
+  try {
+    await App.ChatChannelMove(conv.ref, id, index);
+    await loadChannels();
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+  }
+}
+
+/** The open channel's threads (messages with comments), the most recently active first. */
+export const threads = writable([]);
+export async function loadThreads() {
+  const conv = openConv();
+  if (!conv) return;
+  try {
+    const list = ((await App.ChatThreads(openRef(conv))) || []).map(norm);
+    if (get(activeId) === conv.id) threads.set(list);
+  } catch (_) { threads.set([]); }
+}
+
+/** Names the thread under a message ('' clears the name). */
+export async function setThreadTitle(rootId, title) {
+  const conv = openConv();
+  if (!conv) return false;
+  try {
+    await App.ChatThreadTitle(conv.ref, rootId, title);
+    return true;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.threadTitle')));
+    return false;
   }
 }
 

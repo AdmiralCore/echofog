@@ -20,7 +20,9 @@
   import MessageMenu from '../features/chat/MessageMenu.svelte';
   import RequestBar from '../features/chat/RequestBar.svelte';
   import ChatInfo from '../features/chat/ChatInfo.svelte';
+  import ContactProfile from '../features/chat/ContactProfile.svelte';
   import ChannelBar from '../features/chat/ChannelBar.svelte';
+  import ThreadsList from '../features/chat/ThreadsList.svelte';
   import { provideChat } from '../features/chat/context.js';
   import '../features/chat/chat.css';
 
@@ -63,6 +65,7 @@
   let shownId = '';
   let shownChannel = '';
   let info = false;
+  let threadsOpen = false; // a space's list of threads
   let menu = null; // { m, anchor }
   let text = '';
   let replyTo = null;
@@ -145,8 +148,14 @@
     menu = { m, anchor: e.currentTarget.closest('.msg, .comment') || e.currentTarget };
   }
 
+  function toggleThreads() {
+    threadsOpen = !threadsOpen;
+    if (threadsOpen) { info = false; closeThread(); }
+  }
+
   function toggleInfo() {
     info = !info;
+    if (info) threadsOpen = false;
     if (info) closeThread();
   }
 
@@ -173,7 +182,12 @@
       chatError.set(errText(err, $t('chats.err.call')));
     }
   }
-  $: channelName = $activeChannel ? $channels.find((c) => c.id === $activeChannel)?.name || '' : '';
+  $: shownChan = $activeChannel ? $channels.find((c) => c.id === $activeChannel) || null : null;
+  $: channelName = shownChan ? shownChan.name : '';
+  $: hasRooms = $channels.some((c) => c.voice);
+  // in a channel only managers post to, the others comment
+  $: canPost = conv.can.send && (!shownChan || shownChan.canSend !== false);
+  $: if ($thread) threadsOpen = false;
   // a draft per channel: switching channels keeps what was being written in each
   $: if ($activeChannel !== shownChannel) {
     keepDraft(draftKey(), { text, replyTo, editing });
@@ -231,10 +245,10 @@
 
 <div class="chat-screen">
   {#if conv.kind === 'group'}
-    <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} />
+    <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; }} />
   {/if}
   <div class="main">
-    <ChatHeader {conv} {back} {indent} {searching} {info} channel={channelName} on:back={() => dispatch('back')} on:info={toggleInfo}
+    <ChatHeader {conv} {back} {indent} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}
@@ -266,17 +280,26 @@
 
     {#if conv.kind === 'direct' && conv.blocked}
       <!-- no composer: a blocked person gets nothing either way -->
-    {:else if !conv.can.send}
-      <p class="small muted bar ro"><Icon name="lock" size={14} /> {$t('chats.readOnly')}</p>
+    {:else if !canPost}
+      <p class="small muted bar ro"><Icon name="lock" size={14} /> {conv.can.send ? $t('chats.readOnlyChannelNote') : $t('chats.readOnly')}</p>
     {:else}
       <Composer bind:this={composer} bind:text {replyTo} {editing} replyName={replyTo ? $authorName(replyTo) : ''}
-        files={conv.can.files} busy={sending} placeholder={$t('chats.writeMessage')}
+        files={conv.can.files} busy={sending}
+        placeholder={conv.kind === 'group' ? $t('chats.writeIn', { name: channelName || $t('chats.mainChannel') }) : $t('chats.writeMessage')}
         on:submit={submit} on:cancel={cancelCompose} on:editlast={editLast} on:attach={() => pickAndSend(conv)} on:goto={(e) => list?.goTo(e.detail)} />
     {/if}
   </div>
 
   {#if info}
-    <ChatInfo {conv} on:close={toggleInfo} />
+    {#if conv.kind === 'direct'}
+      <ContactProfile {conv} on:close={toggleInfo} on:call={(e) => call(e.detail)} />
+    {:else}
+      <ChatInfo {conv} on:close={toggleInfo} />
+    {/if}
+  {/if}
+
+  {#if threadsOpen && !info && !$thread}
+    <ThreadsList on:close={() => (threadsOpen = false)} />
   {/if}
 
   {#if $thread && !info}

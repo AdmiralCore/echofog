@@ -315,6 +315,11 @@ export async function endCall() {
     // the last person to leave a group call ends it for the group (stops it ringing, removes "join")
     const st = get(callState);
     const chat = get(peerInfo).chatId || '';
+    // leaving a voice room that others stay in: they are told, the room's call goes on
+    const roomLeft = get(peerInfo).room || '';
+    if (chat.startsWith('g:') && roomLeft && st.callId && (st.inCall || st.connecting) && st.members.length > 1) {
+        try { await App.LeaveRoomCall(chat.slice(2), roomLeft, st.callId); } catch (_) { /* best effort */ }
+    }
     if (chat.startsWith('g:') && st.callId && (st.inCall || st.connecting) && st.members.length <= 1) {
         const room = get(peerInfo).room || '';
         try {

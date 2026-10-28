@@ -17,6 +17,7 @@
   import QRScan from './QRScan.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import Icon from '../components/ui/Icon.svelte';
+  import Popover from '../components/ui/Popover.svelte';
 
   let panel = ''; // '' | 'contact' | 'group' | 'join' | 'me'
   let contactInput = '';
@@ -65,6 +66,21 @@
   $: sorted = [...$chats]
     .filter((c) => !q || (c.name || '').toLowerCase().includes(q) || (c.last || '').toLowerCase().includes(q))
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  // spaces (groups) first, then the people
+  $: spaces = sorted.filter((c) => c.kind === 'group');
+  $: people = sorted.filter((c) => c.kind !== 'group');
+  $: sections = [
+    { key: 'spaces', title: $t('chats.sectionSpaces'), list: spaces },
+    { key: 'people', title: $t('chats.sectionPeople'), list: people },
+  ].filter((s) => s.list.length);
+
+  // the one "new" button: a menu of what can be started
+  let newBtn;
+  let newMenu = false;
+  function startNew(p) {
+    newMenu = false;
+    toggle(p);
+  }
   $: active = $chats.find((c) => c.id === $activeId);
   $: showSaved = $activeId === SAVED_ID;
   $: opened = !!active || showSaved;
@@ -132,15 +148,20 @@
   <aside style={narrow ? '' : `width:${listWidth}px`}>
     <div class="head">
       <h2 class="grow">{$t('chats.title')}</h2>
+      <button class="icon new" bind:this={newBtn} class:on={newMenu || ['contact', 'group', 'join'].includes(panel)} title={$t('chats.new')} aria-label={$t('chats.new')} on:click={() => (newMenu = !newMenu)}><Icon name="edit" size={18} /></button>
       <button class="icon" class:on={panel === 'me'} title={$t('chats.myContact')} aria-label={$t('chats.myContact')} on:click={() => toggle('me')}><Icon name="qr" size={18} /></button>
       {#if !narrow}<button class="icon" title={$t('chats.hideList')} aria-label={$t('chats.hideList')} on:click={toggleList}><Icon name="panel" size={18} /></button>{/if}
     </div>
 
-    <div class="actions">
-      <button class="act" class:on={panel === 'contact'} on:click={() => toggle('contact')}><Icon name="userPlus" size={16} /><span>{$t('chats.contact')}</span></button>
-      <button class="act" class:on={panel === 'group'} on:click={() => toggle('group')}><Icon name="users" size={16} /><span>{$t('chats.group')}</span></button>
-      <button class="act" class:on={panel === 'join'} on:click={() => toggle('join')}><Icon name="link" size={16} /><span>{$t('common.join')}</span></button>
-    </div>
+    {#if newMenu}
+      <Popover anchor={newBtn} width={250} label={$t('chats.new')} on:close={() => (newMenu = false)}>
+        <div class="newmenu">
+          <button class="nm-item" on:click={() => startNew('contact')}><Icon name="userPlus" size={17} /><span>{$t('chats.newContact')}</span></button>
+          <button class="nm-item" on:click={() => startNew('group')}><Icon name="users" size={17} /><span>{$t('chats.newSpace')}</span></button>
+          <button class="nm-item" on:click={() => startNew('join')}><Icon name="link" size={17} /><span>{$t('chats.joinInvite')}</span></button>
+        </div>
+      </Popover>
+    {/if}
 
     {#if panel}
       <div class="sheet" transition:slide={{ duration: 260 }}>
@@ -209,10 +230,12 @@
           </div>
         </button>
       {/if}
-      {#each sorted as c (c.id)}
+      {#each sections as sec (sec.key)}
+      <div class="section">{sec.title}</div>
+      {#each sec.list as c (c.id)}
         <button class="conv" class:sel={c.id === $activeId} class:unread={c.unread} on:click={() => openChat(c.id)}>
           <div class="avatar">
-            <Avatar id={c.peerId || c.id} name={c.name} size={44} />
+            <Avatar id={c.peerId || c.id} name={c.name} src={c.avatar} size={44} />
             {#if c.kind === 'direct'}<span class="presence" class:on={c.online} />{:else}<span class="kind">#</span>{/if}
           </div>
           <div class="body">
@@ -229,6 +252,7 @@
             </div>
           </div>
         </button>
+      {/each}
       {:else}
         <div class="empty">
           {#if q}
@@ -285,13 +309,11 @@
   .head { display: flex; align-items: center; gap: 2px; padding: 16px 12px 8px 20px; }
   .head h2 { font-size: 20px; }
 
-  .actions { display: flex; gap: 6px; padding: 4px 14px 10px; }
-  .act {
-    flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 8px;
-    font-size: 12.5px; color: var(--muted); background: var(--raised); border-color: transparent; border-radius: 11px;
-  }
-  .act:hover:not(:disabled) { color: var(--text); border-color: transparent; }
-  .act.on, .act.on:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+  .head .new { border: 1px solid var(--line); border-radius: 11px; margin-right: 4px; }
+  .newmenu { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
+  .nm-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border: none; border-radius: 10px; background: transparent; text-align: left; font-weight: 500; }
+  .nm-item:hover:not(:disabled) { background: var(--hover); border: none; }
+  .section { padding: 10px 12px 4px; font-size: 11.5px; font-weight: 650; color: var(--faint); letter-spacing: 0.02em; }
 
   .sheet { padding: 0 14px 10px; overflow: hidden; }
   .sheet-in { padding: 12px; border-radius: 16px; background: var(--raised); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; }

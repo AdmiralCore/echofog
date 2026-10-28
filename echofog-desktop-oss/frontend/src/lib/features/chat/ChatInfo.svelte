@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { fly } from 'svelte/transition';
   import { App, errText, copy } from '../../api.js';
-  import { messages, hasOlder, membersVersion, activeId, loadChats, deleteContact, leaveGroup, blockPeer, unblockPeer } from '../../stores/chats.js';
+  import { messages, hasOlder, membersVersion, activeId, loadChats, leaveGroup } from '../../stores/chats.js';
   import { transfers, openFile, showInFolder } from '../../stores/files.js';
   import { savedIds, SAVED_ID } from '../../stores/saved.js';
   import { bytes } from '../../format.js';
@@ -12,8 +12,8 @@
   import Icon from '../../components/ui/Icon.svelte';
   import { useChat } from './context.js';
 
-  /** The side panel about the chat: facts, files, and the contact or the group (its members). What I
-   *  may do to each member comes from the core (canKick, canBan, roles, canTransfer). */
+  /** A group's side panel (a contact has ContactProfile): facts, files, the invitation and the
+   *  members. What I may do to each member comes from the core (canKick, canBan, roles, canTransfer). */
   export let conv;
 
   const chat = useChat();
@@ -26,7 +26,6 @@
   let copied = '';
   let newMemberKey = '';
   let busy = ''; // the member being changed, or 'add'
-  let reqBusy = false;
 
   $: group = conv.kind === 'group';
   $: if (group) { void $membersVersion; loadMembers(conv.groupId); }
@@ -84,19 +83,7 @@
     if (!(await ask({ message: $t('chats.confirm.deleteGroup', { name: conv.name }), confirm: $t('common.delete'), danger: true }))) return;
     try { await App.DeleteGroup(conv.groupId); await loadChats(); activeId.set(''); } catch (err) { error = errText(err); }
   }
-  async function req(fn) {
-    reqBusy = true;
-    error = '';
-    try { await fn(); } catch (err) { error = errText(err); } finally { reqBusy = false; }
-  }
-  async function block() {
-    if (!(await ask({ message: $t('chats.confirm.block', { name: conv.name }), confirm: $t('chats.block'), danger: true }))) return;
-    await req(() => blockPeer(conv));
-  }
-  async function removeContact() {
-    if (!(await ask({ message: $t('chats.confirm.deleteContact', { name: conv.name }), confirm: $t('common.delete'), danger: true }))) return;
-    try { await deleteContact(conv); } catch (err) { error = errText(err); }
-  }
+
 
   $: firstTs = $hasOlder ? 0 : $messages.find((m) => !m.system)?.ts || 0;
   $: savedHere = [...$savedIds].filter((id) => id.startsWith(conv.id + '/')).length;
@@ -109,7 +96,7 @@
 
 <aside class="info" transition:fly={{ x: 40, duration: 280, opacity: 0 }}>
   <div class="info-head">
-    <span class="eyebrow grow">{conv.kind === 'direct' ? $t('chats.contact') : conv.groupKind === 'channel' ? $t('chats.channel') : $t('chats.group')}</span>
+    <span class="eyebrow grow">{$t('chats.spaceSettings')}</span>
     <button class="icon" aria-label={$t('chats.closeInfo')} on:click={() => dispatch('close')}><Icon name="close" size={17} /></button>
   </div>
   <div class="profile">
@@ -145,27 +132,7 @@
     {/if}
   </div>
 
-  {#if conv.kind === 'direct'}
-    <div class="block">
-      <div class="eyebrow">{$t('chats.key')}</div>
-      <div class="copybox">
-        <span class="mono grow">{conv.pubKey || $t('chats.keyUnknown')}</span>
-        <button class="icon" title={$t('common.copy')} on:click={() => doCopy('key', conv.pubKey)} disabled={!conv.pubKey}><Icon name={copied === 'key' ? 'check' : 'copy'} size={16} /></button>
-      </div>
-      <p class="small faint">{$t('chats.e2eContact')}</p>
-    </div>
-
-    {#if conv.blocked}
-      <button class="with-icon wide" on:click={() => req(() => unblockPeer(conv))} disabled={reqBusy}><Icon name="lockOpen" size={16} /> {$t('chats.unblock')}</button>
-    {:else}
-      <button class="danger with-icon wide" on:click={block} disabled={reqBusy}><Icon name="lock" size={16} /> {$t('chats.block')}</button>
-      <p class="small faint">{$t('chats.blockHint')}</p>
-    {/if}
-    {#if !conv.request}
-      <button class="danger with-icon wide" on:click={removeContact}><Icon name="trash" size={16} /> {$t('chats.deleteContact')}</button>
-    {/if}
-  {:else}
-    {#if invite}
+  {#if invite}
       <div class="block">
         <div class="eyebrow">{$t('chats.invite')}</div>
         <div class="copybox">
@@ -220,6 +187,5 @@
       <button class="danger with-icon wide" on:click={deleteGroup}><Icon name="trash" size={16} /> {$t('chats.deleteGroup')}</button>
       <p class="small faint">{$t('chats.ownerLeaveHint')}</p>
     {/if}
-  {/if}
   {#if error}<p class="error small">{error}</p>{/if}
 </aside>

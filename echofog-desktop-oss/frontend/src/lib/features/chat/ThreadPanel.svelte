@@ -1,7 +1,7 @@
 <script>
   import { onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { thread, closeThread, send, editMessage, react, preview, fetchQuote } from '../../stores/chats.js';
+  import { thread, closeThread, send, editMessage, react, preview, fetchQuote, setThreadTitle } from '../../stores/chats.js';
   import { draftOf, keepDraft } from '../../stores/drafts.js';
   import { me } from '../../stores/session.js';
   import { time } from '../../format.js';
@@ -47,6 +47,20 @@
   }
   onDestroy(() => keepDraft(key, { text, editing }));
 
+  // the thread's name: its root's author or a moderator names it (in a group)
+  let naming = false;
+  let titleText = '';
+  $: canName = conv.kind === 'group' && root && !root.deleted && root.can && root.can.delete;
+  function startNaming() {
+    naming = true;
+    titleText = root.threadTitle || '';
+  }
+  async function saveTitle() {
+    const r = root;
+    naming = false;
+    if (r && titleText.trim() !== (r.threadTitle || '')) await setThreadTitle(r.id, titleText.trim());
+  }
+
   /** Starts changing a comment of mine. */
   export function edit(m) {
     editing = m;
@@ -67,7 +81,15 @@
 
 <aside class="info thread" transition:fly={{ x: 40, duration: 280, opacity: 0 }}>
   <div class="info-head">
-    <span class="eyebrow grow">{$t('chats.threadTitle')}</span>
+    {#if naming}
+      <form class="grow th-title-form" on:submit|preventDefault={saveTitle}>
+        <!-- svelte-ignore a11y-autofocus -->
+        <input bind:value={titleText} maxlength="100" placeholder={$t('chats.threadName')} autofocus on:blur={saveTitle} on:keydown={(e) => e.key === 'Escape' && (naming = false)} />
+      </form>
+    {:else}
+      <span class="eyebrow grow th-title">{root && root.threadTitle ? root.threadTitle : $t('chats.threadTitle')}</span>
+      {#if canName}<button class="icon tiny" title={$t('chats.threadName')} aria-label={$t('chats.threadName')} on:click={startNaming}><Icon name="edit" size={14} /></button>{/if}
+    {/if}
     <button class="icon" aria-label={$t('common.close')} on:click={closeThread}><Icon name="close" size={17} /></button>
   </div>
   {#if root}
@@ -110,3 +132,8 @@
       on:submit={submit} on:cancel={() => { editing = null; text = ''; }} on:escape={closeThread} on:goto={(e) => chat.goTo(e.detail)} />
   {/if}
 </aside>
+
+<style>
+  .th-title { text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .th-title-form input { padding: 6px 10px; font-size: 14px; }
+</style>
