@@ -69,8 +69,10 @@ run `up -d --build` again.
 
 ## Worth knowing
 
-- **The link is the key.** The bot sends it only to the buyer, or to you. If it leaks: `/revoke`,
-  then `/pass` or a new purchase gives a new one.
+- **The link is the key.** The bot sends it only to the buyer, or to you. Extending a pass keeps
+  its link, so if a link leaks, revoke it (`/revoke ID`), delete it on the server
+  (`docker compose exec node echofog-node pass delete ID`), and then `/pass` or a new purchase makes
+  a pass with a new link.
 - **Stars** collect on the bot's balance. You can withdraw them to TON through Fragment, under
   Telegram's rules and with the delay Telegram sets.
 - **Refunds.** Telegram expects a paid bot to answer `/paysupport`, and can refund Stars. Answer
