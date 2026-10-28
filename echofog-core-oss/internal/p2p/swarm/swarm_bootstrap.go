@@ -349,6 +349,9 @@ func (s *Swarm) Bootstrap(addrs []string) {
 		if named && info.Server {
 			s.SetPeerServer(id, true)
 		}
+		if named {
+			s.MarkExplicitPeer(id)
+		}
 		if named && s.ThisIsActivePeer(id) {
 			// already connected: a second connection replaced the first, and every relay circuit
 			// riding on the first (a call, a VPN through a relay, a file) died with it. A node

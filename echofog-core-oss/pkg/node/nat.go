@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/portmap"
 	"github.com/echofog/echofog-core/internal/p2p/holepunch"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
+	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -178,6 +180,10 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 		cancel()
 		if dialErr == nil {
 			return nil
+		}
+		if errors.Is(dialErr, swarm.ErrNoiseDialRefused) {
+			// held back on purpose: a hole punch is the same noise toward the same address
+			return dialErr
 		}
 	}
 	if n.HolePunch == nil || !n.NAT.CanBePunched() {

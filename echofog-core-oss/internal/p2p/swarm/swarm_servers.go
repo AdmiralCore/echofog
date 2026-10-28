@@ -19,7 +19,7 @@ import (
 
 // ErrNoiseDialRefused: the peer is a server whose camouflage SNI is not known, it is across a
 // border, and noise is the only way left to dial it. The dial is not made.
-var ErrNoiseDialRefused = errors.New("swarm: not dialing a server across the border over noise (its camouflage SNI is unknown)")
+var ErrNoiseDialRefused = errors.New("swarm: not dialing across the border over noise (a server whose camouflage SNI is unknown, or a user's node from a server)")
 
 const (
 	peerFactsPrefix = "peerfacts:"
@@ -53,6 +53,26 @@ func (s *Swarm) SetPeerClient(id types.PeerID, caps handshake.Capability) {
 	s.peerFacts[id] = f
 	s.peerSNIMu.Unlock()
 	s.persistPeerFact(id, f)
+}
+
+// MarkExplicitPeer records that the operator listed the peer (a bootstrap node, an invitation): it
+// is dialed whatever it announces.
+func (s *Swarm) MarkExplicitPeer(id types.PeerID) {
+	s.peerSNIMu.Lock()
+	if s.explicit == nil {
+		s.explicit = make(map[types.PeerID]struct{})
+	}
+	if len(s.explicit) < maxPeerFacts {
+		s.explicit[id] = struct{}{}
+	}
+	s.peerSNIMu.Unlock()
+}
+
+func (s *Swarm) isExplicitPeer(id types.PeerID) bool {
+	s.peerSNIMu.RLock()
+	defer s.peerSNIMu.RUnlock()
+	_, ok := s.explicit[id]
+	return ok
 }
 
 // isClientPeer reports whether the peer is known to be an ordinary user's node.
@@ -185,9 +205,9 @@ func (s *Swarm) acrossBorder(addr string) bool {
 
 // noiseDialRefused reports whether a dial to the peer at addr must not be made. For a client: the
 // peer is a server (its address said so, or its handshake did) with no known camouflage SNI, so the
-// only way to reach it is noise, and addr is across a border. For a server: the peer is a user's
-// node (announced capabilities without CapServer), which can only be reached over noise. Unknown
-// country counts as across. anti_dpi.allow_noise_to_servers lifts the rule for people who run their
+// only way to reach it is noise, and addr is across a border. For a server: the peer is not known
+// to be a server and was not listed explicitly, so it is a user's node or an unknown one, and
+// addr is across a border. Unknown country counts as across. anti_dpi.allow_noise_to_servers lifts the rule for people who run their
 // own servers without a cover site outside any censored network.
 func (s *Swarm) noiseDialRefused(id types.PeerID, addr string) bool {
 	if s.cfg == nil || s.cfg.AntiDPI.AllowNoiseToServers {
@@ -200,10 +220,16 @@ func (s *Swarm) noiseDialRefused(id types.PeerID, addr string) bool {
 		return false
 	}
 	if s.cfg.IsServer() {
-		// A server has no use for dialing a user's node: users dial servers, and a link the server
-		// opens to one crosses the user's border as noise, the very thing a censor flags. (A user
-		// behind a NAT cannot be reached that way anyway.)
-		return s.isClientPeer(id) && s.acrossBorder(network.ParseAddrInfo(addr).Addr)
+		// A server dials servers, and the nodes it was told to (its bootstrap list). It has no use
+		// for dialing a user's node, or a node that nobody has said is a server: users dial servers,
+		// and a link the server opens to a user crosses the user's border as noise, the very thing a
+		// censor flags. (A user behind a NAT cannot be reached that way anyway.) A node of an older
+		// version does not say it is a server, so it is dialed only when listed explicitly; it can
+		// dial this one.
+		if s.IsServerPeer(id) || s.isExplicitPeer(id) {
+			return false
+		}
+		return s.acrossBorder(network.ParseAddrInfo(addr).Addr)
 	}
 	if !s.IsServerPeer(id) {
 		return false

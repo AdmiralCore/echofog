@@ -68,11 +68,17 @@ func TestNoiseDialRefused(t *testing.T) {
 			s.SetPeerClient(other, handshake.CapRelay|handshake.CapDHTServer)
 			withRole(s, config.RoleServer)
 		}, other, public, true},
-		{"a server dialing an unknown peer: dialed", func(s *Swarm) { withRole(s, config.RoleServer) }, other, public, false},
-		{"a server dialing a hidden node (announces nothing): dialed", func(s *Swarm) {
+		{"a server dialing an unknown peer: refused", func(s *Swarm) { withRole(s, config.RoleServer) }, other, public, true},
+		{"a server dialing a peer listed explicitly: dialed", func(s *Swarm) { s.MarkExplicitPeer(other); withRole(s, config.RoleServer) }, other, public, false},
+		{"a server dialing an unknown peer on the local network: dialed", func(s *Swarm) { withRole(s, config.RoleServer) }, other, "192.168.1.9:4242", false},
+		{"a server dialing an unknown peer of its own region: dialed", func(s *Swarm) {
+			withRole(s, config.RoleServer)
+			s.SetSameRegionFunc(func(string) bool { return true })
+		}, other, public, false},
+		{"a server dialing a hidden node (announces nothing): refused unless listed", func(s *Swarm) {
 			s.SetPeerClient(other, handshake.CapNone)
 			withRole(s, config.RoleServer)
-		}, other, public, false},
+		}, other, public, true},
 		{"a server dialing a user's node on the local network: dialed", func(s *Swarm) {
 			s.SetPeerClient(other, handshake.CapRelay)
 			withRole(s, config.RoleServer)
@@ -261,6 +267,7 @@ func TestBootstrapEntryFactsAreTakenInBeforeTheDial(t *testing.T) {
 		"198.51.100.9:4242/" + cam.String() + "?sni=cover.example&srv=1",
 		"198.51.100.10:4242/" + bare.String() + "?srv=1",
 	})
+	assert.True(t, s.isExplicitPeer(cam) && s.isExplicitPeer(bare), "a bootstrap entry is the operator's own choice")
 	waitFor(t, "the facts of both entries", func() bool { return s.IsServerPeer(cam) && s.IsServerPeer(bare) })
 	assert.Equal(t, "cover.example", s.GetPeerSNI(cam))
 	assert.False(t, s.noiseDialRefused(cam, "198.51.100.9:4242"), "camouflaged: dialed as REALITY")
@@ -284,7 +291,7 @@ func TestServerLearnsAUsersNodeFromTheAddress(t *testing.T) {
 	// a server takes it in and then holds back
 	server, _ := newTestSwarm(t)
 	withRole(server, config.RoleServer)
-	assert.False(t, server.noiseDialRefused(user, "198.51.100.40:4242"), "unknown until told")
+	assert.True(t, server.noiseDialRefused(user, "198.51.100.40:4242"), "a server does not dial a node nobody said is a server")
 	assert.Equal(t, "198.51.100.40:4242", server.LearnPeerAddr(user, sent))
 	assert.True(t, server.isClientPeer(user))
 	assert.True(t, server.noiseDialRefused(user, "198.51.100.40:4242"))
