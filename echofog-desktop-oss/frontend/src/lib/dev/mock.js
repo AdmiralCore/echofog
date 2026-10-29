@@ -641,15 +641,41 @@ recent problems (the last 1 warnings and errors, cleaned):
     groupMsgs.push(m);
     return m;
   },
-  ListGroupMembers: () => {
-    const me = RANKS[groupMembers.find((m) => m.peerId === SELF)?.role] || 0;
+  ListGroupMembers: (gid) => {
+    const defs = groupRoles[gid] || {};
+    const rankOf = (r) => RANKS[r] || defs[r]?.rank || 0;
+    const me = rankOf(groupMembers.find((m) => m.peerId === SELF)?.role);
+    const assignable = ['admin', ...Object.keys(defs), 'moderator', 'member', 'restricted'].sort((a, b) => rankOf(b) - rankOf(a));
     return groupMembers.map((m) => {
       const isMe = m.peerId === SELF;
-      const over = !isMe && (RANKS[m.role] || 0) < 100 && me > (RANKS[m.role] || 0);
-      const roles = over && me >= RANKS.admin ? ['admin', 'moderator', 'member', 'restricted'].filter((r) => RANKS[r] < me || r === m.role) : undefined;
-      return { ...m, isMe, online: isMe || m.peerId.charCodeAt(0) % 2 === 0, canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
+      const over = !isMe && rankOf(m.role) < 100 && me > rankOf(m.role);
+      const roles = over && me >= RANKS.admin ? assignable.filter((r) => rankOf(r) < me || r === m.role) : undefined;
+      return { ...m, roleTitle: defs[m.role]?.title || '', roleColor: defs[m.role]?.color || 0, isMe, online: isMe || m.peerId.charCodeAt(0) % 2 === 0,
+        canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
     });
   },
+  GroupRoles: (gid) => {
+    const defs = groupRoles[gid] || {};
+    const me = RANKS[groups.find((x) => x.id === gid)?.myRole] || 0;
+    const count = (id) => groupMembers.filter((m) => m.role === id).length;
+    const list = [...BUILTIN_ROLES.map((r) => ({ ...r, title: '', color: 0, ...(defs[r.id] || {}), builtin: true })),
+      ...Object.values(defs).filter((r) => !RANKS[r.id]).map((r) => ({ ...r, builtin: false }))];
+    return list.sort((a, b) => b.rank - a.rank).map((r) => ({ ...r, members: count(r.id), canEdit: me >= RANKS.admin && r.rank < 100 && (me >= 100 || r.rank < me), canRemove: !r.builtin && me >= RANKS.admin }));
+  },
+  GroupRoleSave: (gid, r) => {
+    const defs = (groupRoles[gid] = groupRoles[gid] || {});
+    const id = r.id || 'r-' + Date.now().toString(16).slice(-8);
+    if (!r.builtin && (r.rank < 1 || r.rank >= 100)) throw new Error('you may change only roles below your own, granting only what you may do yourself');
+    defs[id] = { id, title: r.title, color: r.color, rank: RANKS[id] || r.rank, perms: r.perms };
+    return { ...r, id };
+  },
+  GroupRoleRemove: (gid, id) => {
+    delete (groupRoles[gid] || {})[id];
+    groupMembers.forEach((m) => { if (m.role === id) m.role = 'member'; });
+    return null;
+  },
+  ChatMainChannel: (ref) => ({ ...(mainChans[ref.id] || {}), canSend: true }),
+  ChatMainChannelSave: (ref, spec) => { mainChans[ref.id] = { name: spec.name, topic: spec.topic, readOnly: spec.readOnly, slowSecs: spec.slowSecs, open: spec.open }; return null; },
   SetGroupRole: (_g, id, role) => { const m = groupMembers.find((x) => x.peerId === id); if (!m) throw new Error('this person is not in the group'); m.role = role; return null; },
   RemoveGroupMember: (_g, id) => { const i = groupMembers.findIndex((x) => x.peerId === id); if (i < 0) throw new Error('this person is not in the group'); groupMembers.splice(i, 1); return null; },
   AddGroupMember: (_g, key) => { if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error('member key must be 32 bytes of hex'); groupMembers.push({ peerId: hex(40 + groupMembers.length), role: 'member' }); return null; },
@@ -781,7 +807,7 @@ recent problems (the last 1 warnings and errors, cleaned):
   GetTonTopUpLink: (a) => 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ' + (a ? `?amount=${Math.round(Number(a) * 1e9)}` : ''),
 };
 
-const groupMembers = [SELF, ALICE, BOB, CAROL, DAVE].map((p) => ({ peerId: p, role: p === SELF ? 'owner' : p === ALICE ? 'admin' : 'member' }));
+const groupMembers = [SELF, ALICE, BOB, CAROL, DAVE].map((p) => ({ peerId: p, role: p === SELF ? 'owner' : p === ALICE ? 'admin' : p === CAROL ? 'helper' : 'member' }));
 const groups = [{ id: 'grp_launch', title: 'EchoFog Launch', kind: 'group', members: 5, myRole: 'owner', readOnly: false, description: 'Release room' }];
 let probeDomains = ['www.google.com:443', 'www.wikipedia.org:443'];
 const settingsMock = { directSocket: false, socketBufferMb: 8 };
@@ -946,7 +972,8 @@ function convOf(k, withLast = true) {
     const rank = RANKS[g.myRole] || 0;
     const send = !g.readOnly;
     Object.assign(d, { kind: g.kind === 'channel' ? 'channel' : 'group', name: g.title, title: g.title, role: g.myRole, members: g.members,
-      can: { send, files: send, react: c.upgraded && !!g.myRole, pin: c.upgraded && rank >= RANKS.moderator, manage: rank >= RANKS.admin, invite: true, call: true } });
+      can: { send, files: send, links: send, threads: true, react: c.upgraded && !!g.myRole, pin: c.upgraded && rank >= RANKS.moderator, manage: rank >= RANKS.admin,
+        channels: rank >= RANKS.admin, roles: rank >= RANKS.admin, invite: true, call: true, stream: true } });
   }
   if (withLast && last) d.last = shown(c, last);
   return d;
@@ -1031,13 +1058,21 @@ const NOT_UPGRADED = 'not every member of this group has updated the app yet';
 // The launch group is a space: two text channels and a voice room with a call going on.
 const spaceChans = {
   [GROUP]: [
-    { id: 'dev', name: 'dev', voice: false, topic: 'builds, bugs, releases', position: 0 },
-    { id: 'design', name: 'design', voice: false, position: 1 },
+    { id: 'dev', name: 'dev', voice: false, topic: 'builds, bugs, releases', position: 0, parent: 'build' },
+    { id: 'design', name: 'design', voice: false, position: 1, slowSecs: 30 },
     { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
     { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
-    { id: 'stream', name: 'Stream', voice: true, position: 1 },
+    { id: 'stream', name: 'Stream', voice: true, position: 1, parent: 'build' },
+    { id: 'build', name: 'Build', category: true, position: 0 },
   ],
 };
+// the main channel's settings, and the roles a group defined, by group
+const mainChans = { [GROUP]: { name: '', topic: 'everything else', readOnly: false, slowSecs: 0, open: '' } };
+const BUILTIN_ROLES = [
+  { id: 'owner', rank: 100, perms: 0x7fff }, { id: 'admin', rank: 50, perms: 0x7fff & ~(1 << 8) },
+  { id: 'moderator', rank: 25, perms: 0x3607 | (1 << 4) | (1 << 5) | (1 << 11) }, { id: 'member', rank: 10, perms: 0x3607 }, { id: 'restricted', rank: 1, perms: 1 << 12 },
+];
+const groupRoles = { [GROUP]: { helper: { id: 'helper', title: 'Helper', color: 0x46a758, rank: 30, perms: 0x3607 | (1 << 11) } } };
 (function seedChannels() {
   const k = 'g:' + GROUP;
   const t0 = Date.now() - 40 * 60 * 1000;
@@ -1154,21 +1189,22 @@ Object.assign(impl, {
     const g = groups.find((x) => x.id === ref.id);
     const manager = ['owner', 'admin'].includes(g?.myRole);
     return (spaceChans[ref.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
-      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.readOnly || manager, call: ch.voice ? ch.call : undefined }));
+      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.category && (!ch.readOnly || manager), call: ch.voice ? ch.call : undefined }));
   },
   ChatChannelSave: (ref, spec) => {
     const g = groups.find((x) => x.id === ref.id);
     if (!['owner', 'admin'].includes(g?.myRole)) throw new Error('not allowed');
     const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
     const ch = list.find((x) => x.id === spec.id) || { id: spec.id || 'c' + Date.now().toString(36), voice: spec.voice, position: list.length };
-    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly });
+    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly, parent: spec.parent || '', slowSecs: spec.slowSecs || 0, category: ch.category ?? !!spec.category });
     if (!list.includes(ch)) list.push(ch);
     return { ...ch, unread: 0, lastTs: 0 };
   },
   ChatChannelMove: (ref, id, index) => {
     const list = spaceChans[ref.id] || [];
     const ch = list.find((x) => x.id === id);
-    const same = list.filter((x) => x.voice === ch.voice && x.id !== id).sort((a, b) => a.position - b.position);
+    const kind = (x) => (x.category ? 2 : x.voice ? 1 : 0);
+    const same = list.filter((x) => kind(x) === kind(ch) && x.id !== id).sort((a, b) => a.position - b.position);
     same.splice(index, 0, ch);
     same.forEach((x, i) => { x.position = i; });
     return null;
@@ -1204,7 +1240,11 @@ Object.assign(impl, {
     return null;
   },
   LeaveRoomCall: (gid, room) => { const ch = (spaceChans[gid] || []).find((x) => x.id === room); if (ch?.call) ch.call.members = (ch.call.members || []).filter((p) => p !== SELF); return null; },
-  ChatChannelRemove: (ref, id) => { spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id); return null; },
+  ChatChannelRemove: (ref, id) => {
+    spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id);
+    spaceChans[ref.id].forEach((x) => { if (x.parent === id) x.parent = ''; });
+    return null;
+  },
   StartRoomCall: (gid, room) => {
     const ch = (spaceChans[gid] || []).find((x) => x.id === room);
     if (!ch.call) ch.call = { room, callId: 'call_room_' + room, coordinator: SELF, from: SELF, startedAt: sec(Date.now()), members: [] };

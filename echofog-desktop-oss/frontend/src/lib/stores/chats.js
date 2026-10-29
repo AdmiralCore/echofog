@@ -57,6 +57,8 @@ export function toggleMuted(id) {
 /** The open group's channels and voice rooms (ChatChannels), and the channel shown ('' the main one). */
 export const channels = writable([]);
 export const activeChannel = writable('');
+/** The open group's main channel settings (ChatMainChannel): { name, topic, readOnly, slowSecs, open, canSend }. */
+export const mainChannel = writable({});
 /** Messages of the open conversation, oldest first (see norm). Comments in threads are not here. */
 export const messages = writable([]);
 /** Whether the open conversation has older messages than those loaded. */
@@ -350,11 +352,15 @@ export async function openChat(id) {
   closeOpen();
   activeChannel.set('');
   channels.set([]);
+  mainChannel.set({});
   activeId.set(id);
   chatNote.set('');
   await reload();
   loadPins();
-  loadChannels();
+  await loadChannels();
+  // a group set to open on one of its channels
+  const open = get(mainChannel).open;
+  if (open && get(activeId) === id && !get(activeChannel)) openChannel(open);
 }
 
 /** Shows another channel of the open group ('' the main one). */
@@ -375,16 +381,35 @@ export async function loadChannels() {
     const list = (await App.ChatChannels(conv.ref)) || [];
     if (get(activeId) !== conv.id) return;
     channels.set(list);
-    if (get(activeChannel) && !list.some((c) => c.id === get(activeChannel) && !c.voice)) openChannel(''); // removed
+    if (get(activeChannel) && !list.some((c) => c.id === get(activeChannel) && !c.voice && !c.category)) openChannel(''); // removed
   } catch (_) { /* an older core: no channels */ }
+  try {
+    const main = (await App.ChatMainChannel(conv.ref)) || {};
+    if (get(activeId) === conv.id) mainChannel.set(main);
+  } catch (_) { /* an older core: no settings of the main channel */ }
 }
 
-/** Creates a channel (or a voice room) in the open group. */
-export async function createChannel(name, voice) {
+/** Changes the open group's main channel: { name, topic, readOnly, slowSecs, open }. */
+export async function saveMainChannel(spec) {
+  const conv = openConv();
+  if (!conv) return false;
+  try {
+    await App.ChatMainChannelSave(conv.ref, { id: '', name: (spec.name || '').trim(), voice: false, topic: (spec.topic || '').trim(), readOnly: !!spec.readOnly,
+      position: 0, parent: '', category: false, slowSecs: spec.slowSecs || 0, open: spec.open || '' });
+    await loadChannels();
+    return true;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return false;
+  }
+}
+
+/** Creates a category of the open group: a heading its channels and rooms sit under. */
+export async function createCategory(name) {
   const conv = openConv();
   if (!conv || !name.trim()) return null;
   try {
-    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: !!voice, topic: '', readOnly: false, position: 0 });
+    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: false, topic: '', readOnly: false, position: 0, parent: '', category: true, slowSecs: 0, open: '' });
     await loadChannels();
     return ch;
   } catch (err) {
@@ -393,12 +418,27 @@ export async function createChannel(name, voice) {
   }
 }
 
-/** Changes a channel of the open group: { id, name, topic, readOnly, position }. */
+/** Creates a channel (or a voice room) in the open group, in a category (parent) or none. */
+export async function createChannel(name, voice, parent = '') {
+  const conv = openConv();
+  if (!conv || !name.trim()) return null;
+  try {
+    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: !!voice, topic: '', readOnly: false, position: 0, parent, category: false, slowSecs: 0, open: '' });
+    await loadChannels();
+    return ch;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return null;
+  }
+}
+
+/** Changes a channel or a category of the open group: { id, name, topic, readOnly, position, parent, slowSecs }. */
 export async function saveChannel(ch) {
   const conv = openConv();
   if (!conv) return false;
   try {
-    await App.ChatChannelSave(conv.ref, { id: ch.id, name: ch.name.trim(), voice: !!ch.voice, topic: (ch.topic || '').trim(), readOnly: !!ch.readOnly, position: ch.position || 0 });
+    await App.ChatChannelSave(conv.ref, { id: ch.id, name: ch.name.trim(), voice: !!ch.voice, topic: (ch.topic || '').trim(), readOnly: !!ch.readOnly,
+      position: ch.position || 0, parent: ch.parent || '', category: !!ch.category, slowSecs: ch.slowSecs || 0, open: '' });
     await loadChannels();
     return true;
   } catch (err) {

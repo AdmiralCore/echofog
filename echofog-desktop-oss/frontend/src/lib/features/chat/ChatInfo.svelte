@@ -10,6 +10,8 @@
   import { ask } from '../../stores/dialog.js';
   import Avatar from '../../components/ui/Avatar.svelte';
   import Icon from '../../components/ui/Icon.svelte';
+  import GroupRoles from './GroupRoles.svelte';
+  import { hexColor } from '../../perms.js';
   import { useChat } from './context.js';
 
   /** A group's side panel (a contact has ContactProfile): facts, files, the invitation and the
@@ -26,6 +28,15 @@
   let copied = '';
   let newMemberKey = '';
   let busy = ''; // the member being changed, or 'add'
+  let roles = []; // the group's roles (GroupRoles)
+
+  // a role's name: a group's own title, else the built-in one
+  $: roleLabel = (id, title) => {
+    const r = roles.find((x) => x.id === id);
+    if (title || r?.title) return title || r.title;
+    return r && !r.builtin ? id : $t('chats.role.' + id);
+  };
+  $: roleColor = (id) => hexColor(roles.find((x) => x.id === id)?.color || 0);
 
   $: group = conv.kind === 'group';
   $: if (group) { void $membersVersion; loadMembers(conv.groupId); }
@@ -102,7 +113,7 @@
   <div class="profile">
     <Avatar id={conv.peerId || conv.id} name={conv.name} size={76} />
     <h2>{conv.name}</h2>
-    <p class="small muted">{#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{$t('chats.members', { n: conv.members })}{#if conv.myRole} · {$t('chats.youAre', { role: $t('chats.role.' + conv.myRole) })}{/if}{/if}</p>
+    <p class="small muted">{#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{$t('chats.members', { n: conv.members })}{#if conv.myRole} · {$t('chats.youAre', { role: roleLabel(conv.myRole) })}{/if}{/if}</p>
   </div>
 
   <div class="facts">
@@ -143,6 +154,8 @@
       </div>
     {/if}
 
+    {#if group}<GroupRoles {conv} on:roles={(e) => (roles = e.detail)} />{/if}
+
     <div class="block">
       <div class="eyebrow">{$t('chats.membersCount', { n: members.length })}</div>
       <div class="members">
@@ -155,12 +168,13 @@
               </span>
               <span class="grow nm">{nameOfMember(m)}</span>
               {#if m.roles && m.roles.length}
+                {#if roleColor(m.role)}<span class="role-dot" style:background={roleColor(m.role)}></span>{/if}
                 <select value={m.role} disabled={busy === m.peerId} on:change={(e) => setRole(m, e.target.value)}>
-                  {#each m.roles as r}<option value={r}>{$t('chats.role.' + r)}</option>{/each}
-                  {#if !m.roles.includes(m.role)}<option value={m.role}>{$t('chats.role.' + m.role)}</option>{/if}
+                  {#each m.roles as r}<option value={r}>{roleLabel(r)}</option>{/each}
+                  {#if !m.roles.includes(m.role)}<option value={m.role}>{roleLabel(m.role, m.roleTitle)}</option>{/if}
                 </select>
               {:else}
-                <span class="chip">{$t('chats.role.' + m.role)}</span>
+                <span class="chip" style:color={roleColor(m.role) || null}>{roleLabel(m.role, m.roleTitle)}</span>
               {/if}
             </div>
             {#if m.canTransfer || m.canKick || m.canBan}
@@ -192,3 +206,7 @@
     {/if}
   {#if error}<p class="error small">{error}</p>{/if}
 </aside>
+
+<style>
+  .role-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+</style>

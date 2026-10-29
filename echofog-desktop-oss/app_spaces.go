@@ -114,3 +114,22 @@ func (a *App) EndRoomCall(groupID, room, callID string) error {
 	}
 	return n.EndRoomCall(groupID, room, callID)
 }
+
+// ChatMainChannel is the settings of a group's main channel.
+func (a *App) ChatMainChannel(ref api.ChatRef) (api.ChannelDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.ChannelDTO{}, errNodeNotStarted
+	}
+	return n.ChatMainChannel(ref)
+}
+
+// ChatMainChannelSave changes the settings of a group's main channel: name, topic, read-only, slow
+// mode, the channel the group opens on.
+func (a *App) ChatMainChannelSave(ref api.ChatRef, spec api.ChannelSpec) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatMainChannelSave(ref, spec)
+}

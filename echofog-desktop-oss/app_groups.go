@@ -52,7 +52,35 @@ func (a *App) AddGroupMember(groupID string, pubKeyHex string) error {
 	return n.AddGroupMember(groupID, pubKeyHex)
 }
 
-// SetGroupRole gives a member the role admin, moderator, member or restricted.
+// GroupRoles lists a group's roles, highest first: the built-in ones and its own.
+func (a *App) GroupRoles(groupID string) ([]api.GroupRoleDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupRoles(groupID)
+}
+
+// GroupRoleSave defines a role of a group (r.ID "": a new one) or changes one.
+func (a *App) GroupRoleSave(groupID string, r api.GroupRoleDTO) (api.GroupRoleDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupRoleDTO{}, errNodeNotStarted
+	}
+	return n.GroupRoleSave(groupID, r)
+}
+
+// GroupRoleRemove removes a role the group defined; its members get the default role.
+func (a *App) GroupRoleRemove(groupID, roleID string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupRoleRemove(groupID, roleID)
+}
+
+// SetGroupRole gives a member a role: a built-in one (admin, moderator, member, restricted) or one
+// the group defined.
 func (a *App) SetGroupRole(groupID, memberID, role string) error {
 	n := a.getAPI()
 	if n == nil {
