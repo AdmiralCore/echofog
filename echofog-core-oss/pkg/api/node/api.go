@@ -48,6 +48,8 @@ type NodeApi struct {
 	bootstrapBuiltIn []string // bootstrap nodes of this release (guarded by settingsMu)
 	bootstrapCustom  []string // bootstrap nodes the user added (persisted; guarded by settingsMu)
 	nextAccessMode   string   // access mode saved for the next start (guarded by settingsMu)
+	nextProxy        *string  // proxy saved for the next start, nil: not changed (guarded by settingsMu)
+	nextCallRoute    string   // call route saved for the next start (guarded by settingsMu)
 
 	Logger *slog.Logger
 }

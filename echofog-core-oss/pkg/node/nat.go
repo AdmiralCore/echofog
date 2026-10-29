@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/natcheck"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/network/portmap"
@@ -46,6 +47,10 @@ func (n *Node) startNAT() {
 
 	if n.loopbackOnly() {
 		return // simulations and tests: there is no NAT to look at
+	}
+	if !n.natShowsAddr() {
+		// behind a proxy: STUN, port mapping and hole punching would all show our address
+		return
 	}
 	go n.NAT.StartKeepAlive(n.Ctx)
 	if n.Cfg.Network.PortMapping {
@@ -173,7 +178,7 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 	if n.Swarm.GetPeer(peer) != nil {
 		return nil
 	}
-	if n.Swarm.UserLinkViaRelay(peer, addr) {
+	if !network.DirectRequested(ctx) && n.Swarm.UserLinkViaRelay(peer, addr) {
 		// guard mode: a user's node across the border is not dialed or punched to, which is noise
 		// or a flow of its own to a stranger. Both of us meet at a camouflaged relay; the callers
 		// carry on over a circuit, as they do for a peer no hole punch reaches.

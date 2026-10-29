@@ -524,12 +524,13 @@ func (s *Swarm) IsUserPeer(id types.PeerID) bool { return s.isClientPeer(id) }
 var ErrUserLinkViaRelay = errors.New("swarm: a user's node across the border is reached through a relay, not directly")
 
 // UserLinkViaRelay reports whether the node must not link directly (a dial, a hole punch) to the
-// peer at addr ("" if no address is known): in guard mode, a peer that is not a camouflaged server
+// peer at addr ("" if no address is known): behind a proxy, or in guard mode, a peer that is not a camouflaged server
 // and not one the user listed (an invitation, a bootstrap node), at an address across the border.
 // With no address known the peer counts as across the border: unknown is across. The traffic to
 // such a peer goes through relays, in the first place the node's guards.
 func (s *Swarm) UserLinkViaRelay(id types.PeerID, addr string) bool {
-	if !s.GuardModeActive() || s.isExplicitPeer(id) || s.IsGuard(id) {
+	proxied := network.OutboundProxy() != ""
+	if !(s.GuardModeActive() || proxied) || s.isExplicitPeer(id) || s.IsGuard(id) {
 		return false
 	}
 	if s.GetPeerSNI(id) != "" || s.IsServerPeer(id) {
@@ -538,6 +539,12 @@ func (s *Swarm) UserLinkViaRelay(id types.PeerID, addr string) bool {
 	info := network.ParseAddrInfo(addr)
 	if info.SNI != "" {
 		return false
+	}
+	if proxied {
+		// behind a proxy (Tor) a user's node is met at a relay: a hole punch would show our
+		// address, and a dial of its own through the proxy rarely finds a listener; only one on
+		// the local network is reached directly
+		return network.Proxied(context.Background(), info.Addr)
 	}
 	if info.Addr == "" {
 		return true

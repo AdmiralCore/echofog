@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/network"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 )
 
@@ -62,6 +63,12 @@ type persistedSettings struct {
 	// PinnedGuards are relays the user chose to always route through (annotated addresses). Once the
 	// user has pinned any from the app, this list owns anti_dpi.pinned_guards.
 	PinnedGuards []string `json:"pinnedGuards,omitempty"`
+	// Proxy is the SOCKS5 proxy (Tor) the node goes out through, once the user set one from the app
+	// (ProxySet; "" then means none even when the configuration names one). CallRoute is how calls
+	// go: "auto", "direct" or "relay" (see config.NetworkConfig).
+	ProxySet  bool   `json:"proxySet,omitempty"`
+	Proxy     string `json:"proxy,omitempty"`
+	CallRoute string `json:"callRoute,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
@@ -87,6 +94,14 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 	}
 	if p.GuardMode == config.GuardAuto || p.GuardMode == config.GuardOn || p.GuardMode == config.GuardOff {
 		c.AntiDPI.GuardMode = p.GuardMode
+	}
+	if p.ProxySet {
+		if a, err := network.NormalizeProxyAddr(p.Proxy); err == nil {
+			c.Network.Proxy = a
+		}
+	}
+	if r, err := normalizeCallRoute(p.CallRoute); err == nil && p.CallRoute != "" {
+		c.Network.CallRoute = r
 	}
 	if pins, err := normalizePinnedGuards(p.PinnedGuards); err == nil {
 		p.PinnedGuards = pins

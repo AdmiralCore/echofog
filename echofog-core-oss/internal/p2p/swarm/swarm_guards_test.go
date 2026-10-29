@@ -395,3 +395,21 @@ func TestPinnedGuardKeepsAutoOn(t *testing.T) {
 	withGuardMode(s, config.GuardOff)
 	assert.False(t, s.GuardModeActive(), "off: direct even with a pinned relay")
 }
+
+// Behind a proxy a user's node is met at a relay (a hole punch would show our address), without
+// guard mode too; servers, listed peers and the local network are not.
+func TestUserLinkViaRelayBehindProxy(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	withGuardMode(s, config.GuardOff)
+	user := idOf(60)
+	assert.False(t, s.UserLinkViaRelay(user, "203.0.113.60:4242"), "no proxy, no guards: direct")
+
+	require.NoError(t, network.SetOutboundProxy("127.0.0.1:9150"))
+	t.Cleanup(func() { _ = network.SetOutboundProxy("") })
+	assert.True(t, s.UserLinkViaRelay(user, "203.0.113.60:4242"))
+	assert.True(t, s.UserLinkViaRelay(user, ""), "no address known")
+	assert.False(t, s.UserLinkViaRelay(user, "192.168.1.60:4242"), "the local network")
+
+	server := guardServer(s, 1, 10)
+	assert.False(t, s.UserLinkViaRelay(server.id, server.addr), "a camouflaged server is dialed through the proxy")
+}

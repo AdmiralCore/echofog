@@ -389,6 +389,9 @@ func resolveHostPort(ctx context.Context, addr string) string {
 	if err != nil || net.ParseIP(host) != nil {
 		return addr
 	}
+	if network.Proxied(ctx, addr) {
+		return addr // the proxy resolves the name: a lookup from here would leave this computer
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)

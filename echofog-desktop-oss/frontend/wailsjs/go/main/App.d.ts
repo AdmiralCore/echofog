@@ -67,6 +67,8 @@ export function ChatThreads(arg1:node.ChatRef):Promise<Array<convlog.Message>>;
 
 export function CheckForUpdate():Promise<main.UpdateInfo>;
 
+export function CheckProxy(arg1:string):Promise<void>;
+
 export function CheckRecoveryPhrase(arg1:string):Promise<string>;
 
 export function CheckSites(arg1:string,arg2:Array<string>):Promise<Array<node.SiteCheck>>;
@@ -144,6 +146,8 @@ export function GetPrivacy():Promise<node.Privacy>;
 export function GetProbeDomains():Promise<Array<string>>;
 
 export function GetProfiles():Promise<Array<string>>;
+
+export function GetProxySettings():Promise<node.ProxyStatus>;
 
 export function GetRelayStatus():Promise<node.RelayStatus>;
 
@@ -294,6 +298,8 @@ export function SetPrivacy(arg1:node.Privacy):Promise<void>;
 export function SetProbeDomains(arg1:Array<string>):Promise<void>;
 
 export function SetProfileService(arg1:main.ProfileService):Promise<void>;
+
+export function SetProxySettings(arg1:string,arg2:string):Promise<void>;
 
 export function SetRelaySettings(arg1:node.RelaySettingsDTO):Promise<void>;
 

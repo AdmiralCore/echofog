@@ -414,6 +414,10 @@ func (n *Node) Start() (err error) {
 		return fmt.Errorf("tls config failed: %w", err)
 	}
 
+	if err := n.applyProxy(); err != nil {
+		return fmt.Errorf("network.proxy: %w", err)
+	}
+
 	n.Dispatcher = dispatcher.NewDispatcher(n.Ctx)
 	n.Dispatcher.SetLogger(n.Logger)
 	socketBufBytes := n.Cfg.Network.SocketBufferMB * 1024 * 1024
@@ -659,15 +663,7 @@ func (n *Node) Start() (err error) {
 
 	if !server {
 		n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
-		n.CallManager.SetPeerConnector(func(ctx context.Context, peer types.PeerID) error {
-			err := n.EnsureConnected(ctx, peer)
-			if err != nil && n.RelayClient != nil {
-				// no direct link (a symmetric NAT): a relay circuit, open before the first frame
-				// needs it, so the call's watchdogs do not take the wait for a dead peer
-				_, err = n.RelayClient.OpenCircuitTo(ctx, peer)
-			}
-			return err
-		})
+		n.CallManager.SetPeerConnector(n.connectForCall)
 		if n.RelayClient != nil {
 			// peers no hole punch reaches (a symmetric NAT) take part through relay circuits
 			n.CallManager.SetFrameSender(newCallLink(n))

@@ -122,6 +122,10 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function CheckProxy(arg1) {
+  return window['go']['main']['App']['CheckProxy'](arg1);
+}
+
 export function CheckRecoveryPhrase(arg1) {
   return window['go']['main']['App']['CheckRecoveryPhrase'](arg1);
 }
@@ -276,6 +280,10 @@ export function GetProbeDomains() {
 
 export function GetProfiles() {
   return window['go']['main']['App']['GetProfiles']();
+}
+
+export function GetProxySettings() {
+  return window['go']['main']['App']['GetProxySettings']();
 }
 
 export function GetRelayStatus() {
@@ -576,6 +584,10 @@ export function SetProbeDomains(arg1) {
 
 export function SetProfileService(arg1) {
   return window['go']['main']['App']['SetProfileService'](arg1);
+}
+
+export function SetProxySettings(arg1, arg2) {
+  return window['go']['main']['App']['SetProxySettings'](arg1, arg2);
 }
 
 export function SetRelaySettings(arg1) {

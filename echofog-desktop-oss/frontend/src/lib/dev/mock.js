@@ -431,6 +431,20 @@ const impl = {
     };
   },
   SetGuardMode(mode) { this.guardMock = mode; },
+  proxyMock: { proxy: '', callRoute: 'auto', running: '', runningRoute: 'auto', runningCallRoute: 'auto' },
+  GetProxySettings() {
+    const m = this.proxyMock;
+    return { ...m, restart: m.proxy !== m.running || m.callRoute !== (m.runningRoute || 'auto') };
+  },
+  SetProxySettings(proxy, callRoute) {
+    const p = proxy.replace(/^socks5h?:\/\//i, '');
+    if (p && !/^[^:]+:\d+$/.test(p)) throw new Error(`"${p}" is not host:port (for Tor Browser: 127.0.0.1:9150)`);
+    this.proxyMock = { ...this.proxyMock, proxy: p, callRoute };
+  },
+  CheckProxy(addr) {
+    if (addr.endsWith(':9150')) return;
+    throw new Error(`through the proxy ${addr}: dial tcp ${addr}: connectex: No connection could be made because the target machine actively refused it.`);
+  },
   PinGuard(entry) {
     const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?(?:\?.*sni=([^&]+))?/i.exec(linkEntryMock(entry));
     if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');

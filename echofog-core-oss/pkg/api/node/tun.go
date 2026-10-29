@@ -48,6 +48,11 @@ func (n *NodeApi) SetWholeComputer(on bool) error {
 	if n.tun.ctl.Running() {
 		return nil
 	}
+	if n.node.ProxyOn() {
+		// the proxy's own connections (tor) would go into the TUN, and the tunnel goes out through
+		// the proxy: a loop that takes the computer offline
+		return errors.New("whole-computer mode does not work while the app goes through a proxy (Tor): turn the proxy off in Settings, or set it per app")
+	}
 
 	n.vpn.mu.Lock()
 	srv, relay, state, notice := n.vpn.server, n.vpn.relayPeer, n.vpn.exitState, n.vpn.exitNotice

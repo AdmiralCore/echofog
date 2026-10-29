@@ -124,3 +124,48 @@ func TestPinnedGuards_PersistAndApply(t *testing.T) {
 	assert.Error(t, empty.PinGuard(entry))
 	assert.Error(t, empty.UnpinGuard(entry))
 }
+
+func TestProxySettings_PersistForNextStart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultConfig("t")
+	cfg.Storage.DatabasePath = filepath.Join(dir, "db")
+	api := &NodeApi{node: &node.Node{Cfg: cfg}}
+
+	st, err := api.GetProxySettings()
+	require.NoError(t, err)
+	assert.Equal(t, "", st.Proxy)
+	assert.Equal(t, config.CallAuto, st.CallRoute)
+	assert.False(t, st.Restart)
+
+	assert.Error(t, api.SetProxySettings("localhost", ""), "no port")
+	assert.Error(t, api.SetProxySettings("", "sometimes"))
+
+	// not started yet (no swarm): it applies to this very start
+	require.NoError(t, api.SetProxySettings("socks5://127.0.0.1:9150", config.CallDirect))
+	assert.Equal(t, "127.0.0.1:9150", cfg.Network.Proxy)
+	st, _ = api.GetProxySettings()
+	assert.Equal(t, "127.0.0.1:9150", st.Proxy)
+	assert.Equal(t, "127.0.0.1:9150", st.Running)
+	assert.Equal(t, config.CallDirect, st.RunningCallRoute)
+	assert.False(t, st.Restart)
+
+	fresh := config.DefaultConfig("t")
+	fresh.Storage.DatabasePath = cfg.Storage.DatabasePath
+	fresh.Network.Proxy = "127.0.0.1:1080" // the configuration names one; the app's choice wins
+	loadPersistedSettings(fresh)
+	assert.Equal(t, "127.0.0.1:9150", fresh.Network.Proxy, "reloaded on the next start")
+	assert.Equal(t, config.CallDirect, fresh.Network.CallRoute)
+
+	// turned off from the app: off, even though the configuration names a proxy
+	require.NoError(t, api.SetProxySettings("", config.CallAuto))
+	fresh2 := config.DefaultConfig("t")
+	fresh2.Storage.DatabasePath = cfg.Storage.DatabasePath
+	fresh2.Network.Proxy = "127.0.0.1:1080"
+	loadPersistedSettings(fresh2)
+	assert.Equal(t, "", fresh2.Network.Proxy)
+
+	empty := &NodeApi{}
+	_, err = empty.GetProxySettings()
+	assert.Error(t, err)
+	assert.Error(t, empty.SetProxySettings("", ""))
+}

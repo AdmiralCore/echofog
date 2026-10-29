@@ -248,7 +248,9 @@ func (f *FallbackTransport) listenTCP(addr string) error {
 
 // ExpectPeer tells both transports whose address addr is; see PeerExpecter.
 func (f *FallbackTransport) ExpectPeer(addr string, id types.PeerID) {
-	f.QUIC.ExpectPeer(addr, id)
+	if !proxyResolvesName(addr) { // the QUIC side looks the name up here, which the proxy is there to avoid
+		f.QUIC.ExpectPeer(addr, id)
+	}
 	if f.TCP != nil {
 		f.TCP.ExpectPeer(f.tcpDialAddr(addr), id)
 	}
@@ -264,7 +266,9 @@ func (f *FallbackTransport) SetRegionNoise(fn func(addr string) bool) {
 
 // ExpectPeerSNI tells both transports whose address addr is and its camouflage SNI; see PeerExpecter.
 func (f *FallbackTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
-	f.QUIC.ExpectPeerSNI(addr, id, sni)
+	if !proxyResolvesName(addr) { // the QUIC side looks the name up here, which the proxy is there to avoid
+		f.QUIC.ExpectPeerSNI(addr, id, sni)
+	}
 	if f.TCP != nil {
 		f.TCP.ExpectPeerSNI(f.tcpDialAddr(addr), id, sni)
 	}
@@ -281,6 +285,13 @@ func (f *FallbackTransport) SetNoDial(on bool) { f.noDial.Store(on) }
 func (f *FallbackTransport) DialEarly(ctx context.Context, addr string) error {
 	if f.noDial.Load() {
 		return ErrNoDial
+	}
+	if Proxied(ctx, addr) {
+		// a proxy (Tor) carries TCP only, and a QUIC dial beside it would show our address
+		if f.TCP == nil {
+			return ErrProxyNeedsTCP
+		}
+		return f.TCP.Dial(ctx, f.tcpDialAddr(addr))
 	}
 	if f.TCP == nil || f.mode == ModeQUIC {
 		return f.QUIC.DialEarly(ctx, addr)

@@ -321,7 +321,7 @@ func (c *idleConn) Write(b []byte) (int, error) {
 func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 	// pinned to the real network while whole-computer mode is on: through the TUN this
 	// connection would try to carry itself
-	raw, err := DirectDialer(0).DialContext(ctx, "tcp", addr)
+	raw, err := dialTCPOut(ctx, addr) // through the proxy when one is set
 	if err != nil {
 		return err
 	}

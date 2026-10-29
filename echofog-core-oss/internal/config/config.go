@@ -64,6 +64,11 @@ const (
 	ObfsNode = "node"
 	ObfsOff  = "off"
 
+	// network.call_route values
+	CallAuto   = "auto"
+	CallDirect = "direct"
+	CallRelay  = "relay"
+
 	// anti_dpi.guard_mode values
 	GuardAuto = "auto"
 	GuardOn   = "on"
@@ -161,6 +166,18 @@ type NetworkConfig struct {
 	WSListenAddr string `json:"ws_listen_addr"`
 	// WSPath is the HTTP path the WebSocket endpoint answers on (default "/echofog").
 	WSPath string `json:"ws_path"`
+
+	// Proxy is a SOCKS5 proxy the node's own connections go out through ("127.0.0.1:9050" for tor,
+	// "127.0.0.1:9150" for Tor Browser; a socks5:// or socks5h:// prefix is accepted). Set, the node
+	// dials over TCP only (Tor carries no UDP), host names are resolved by the proxy, and the things
+	// that would show its own address are off: no hole punching, port mapping or STUN, unless
+	// CallRoute is "direct". Peers on the local network are still dialed directly. Empty: no proxy.
+	Proxy string `json:"proxy,omitempty"`
+	// CallRoute is how calls reach the other side: "auto" (a direct link where one can be made, a
+	// relay where guard mode or the proxy keeps the address hidden), "direct" (a direct link even
+	// with the proxy or guards on: the other side sees this computer's address, and calls stay fast)
+	// or "relay" (never a direct link of its own: only a relay sees the address).
+	CallRoute string `json:"call_route,omitempty"`
 
 	// STUNServers are asked which public address they see us at. Empty uses a built-in list of
 	// servers from unrelated operators; replace it for networks where those are blocked.

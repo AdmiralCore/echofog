@@ -1340,6 +1340,26 @@ export namespace node {
 	        this.paymentRequired = source["paymentRequired"];
 	    }
 	}
+	export class ProxyStatus {
+	    proxy: string;
+	    callRoute: string;
+	    running: string;
+	    runningCallRoute: string;
+	    restart: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proxy = source["proxy"];
+	        this.callRoute = source["callRoute"];
+	        this.running = source["running"];
+	        this.runningCallRoute = source["runningCallRoute"];
+	        this.restart = source["restart"];
+	    }
+	}
 	export class Reach {
 	    ok: boolean;
 	    ms: number;
