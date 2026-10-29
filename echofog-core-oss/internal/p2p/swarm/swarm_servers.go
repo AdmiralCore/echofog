@@ -185,22 +185,31 @@ func (s *Swarm) acrossBorder(addr string) bool {
 	if isWSAddr(addr) {
 		return true
 	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return false
-		}
-		if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1]&0xC0 == 64 { // carrier-grade NAT
-			return false
-		}
+	if onLocalNetwork(addr) {
+		return false
 	}
 	s.peerSNIMu.RLock()
 	fn := s.sameRegion
 	s.peerSNIMu.RUnlock()
 	return fn == nil || !fn(addr)
+}
+
+// onLocalNetwork reports whether addr (host:port or a bare host) is a private, loopback,
+// link-local, unspecified or carrier-grade NAT address: one that no border lies on the way to.
+func onLocalNetwork(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return true
+	}
+	v4 := ip.To4()
+	return v4 != nil && v4[0] == 100 && v4[1]&0xC0 == 64 // carrier-grade NAT
 }
 
 // noiseDialRefused reports whether a dial to the peer at addr must not be made. For a client: the

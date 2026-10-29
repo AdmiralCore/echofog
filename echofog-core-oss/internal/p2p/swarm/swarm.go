@@ -69,6 +69,7 @@ type Swarm struct {
 	explicit   map[types.PeerID]struct{} // peers the operator listed (bootstrap): dialed whatever they announce
 	guards     guardSet                  // the camouflaged servers a user's node keeps its cross-border links to (swarm_guards.go)
 	guardsFree atomic.Bool               // guard_mode "auto" stands down: the node is placed in a country that does not censor (swarm_guard_auto.go)
+	invited    inboundInvited            // peers let in with an invitation: guard mode takes them from abroad (swarm_guard_inbound.go)
 
 	domestic atomic.Pointer[func(addr string) bool] // servers of the own country (swarm_guard_domestic.go)
 

@@ -35,6 +35,7 @@ func newLimitedSwarm(t *testing.T, edit func(*config.AppConfig)) *Swarm {
 	t.Helper()
 	s, _ := newTestSwarm(t)
 	cfg := *s.cfg
+	cfg.AntiDPI.GuardMode = config.GuardOff // the limits alone: guard mode refuses the test addresses as from abroad
 	edit(&cfg)
 	s.cfg = &cfg
 	n := cfg.Network

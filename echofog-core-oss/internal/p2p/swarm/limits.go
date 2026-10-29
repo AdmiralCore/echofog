@@ -83,6 +83,7 @@ func (s *Swarm) initLimits() {
 	if sc, ok := s.netTransport.(screenSetter); ok {
 		sc.SetScreen(s.screenPeer)
 	}
+	s.hideListenInGuardMode(s.netTransport)
 	if r, ok := s.netTransport.(interface{ SetRetryAlways(bool) }); ok && s.cfg.IsServer() {
 		r.SetRetryAlways(true)
 	}
@@ -100,6 +101,7 @@ func (s *Swarm) shareLimits(t any) {
 	if sc, ok := t.(screenSetter); ok {
 		sc.SetScreen(s.screenPeer)
 	}
+	s.hideListenInGuardMode(t)
 	if h, ok := t.(interface{ SetClientIPHeader(string) }); ok && s.cfg != nil {
 		h.SetClientIPHeader(s.cfg.Network.WSClientIPHeader)
 	}
@@ -221,6 +223,9 @@ func (s *Swarm) screenPeer(pub types.PeerPublicKey) (uint32, bool) {
 // of the youngest inbound stranger; a stranger is turned away. On success release must be called
 // once the peer is gone.
 func (s *Swarm) admitInbound(ev network.NewConnEvent) (func(), error) {
+	if s.inboundAcrossBorderRefused(ev) {
+		return nil, errInboundAcrossBorder
+	}
 	g := s.lim.guard.Load()
 	release, err := g.AdmitPeer(ev.RemoteIP, ev.PeerID)
 	if err != nil {

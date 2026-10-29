@@ -134,6 +134,7 @@ func (n *Node) applyAccess() {
 		n.ExitService.SetAccess(n.Access.Allowed)
 		n.ExitService.SetMeter(n.Passes.Charge) // a pass's traffic allowance
 	}
+	n.Swarm.SetInboundInvited(n.Access.Invited) // guard mode still takes them from across the border
 	if n.isolated() {
 		n.Net.SetNoDial(true)
 		n.Swarm.SetNoDial(true) // also for WebSocket peers
