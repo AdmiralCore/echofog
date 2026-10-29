@@ -647,7 +647,7 @@ recent problems (the last 1 warnings and errors, cleaned):
       const isMe = m.peerId === SELF;
       const over = !isMe && (RANKS[m.role] || 0) < 100 && me > (RANKS[m.role] || 0);
       const roles = over && me >= RANKS.admin ? ['admin', 'moderator', 'member', 'restricted'].filter((r) => RANKS[r] < me || r === m.role) : undefined;
-      return { ...m, isMe, canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
+      return { ...m, isMe, online: isMe || m.peerId.charCodeAt(0) % 2 === 0, canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
     });
   },
   SetGroupRole: (_g, id, role) => { const m = groupMembers.find((x) => x.peerId === id); if (!m) throw new Error('this person is not in the group'); m.role = role; return null; },

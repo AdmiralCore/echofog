@@ -50,6 +50,7 @@ type GroupMemberDTO struct {
 	Role     string `json:"role"`
 	JoinedAt int64  `json:"joinedAt"`
 	IsMe     bool   `json:"isMe"`
+	Online   bool   `json:"online"` // the node has a link to them now (oneself: always)
 	// what I may do to this member: remove, ban, give one of Roles (its present role included),
 	// hand the group over to them
 	CanKick     bool     `json:"canKick"`
@@ -143,7 +144,8 @@ type groupsFacade struct {
 
 	async   bool // handle() sends its follow-ups from a goroutine (set for the real node)
 	nudgeMu sync.Mutex
-	connect func(types.PeerID) // asks the node to connect to a member (keys are needed to write to them)
+	connect func(types.PeerID)      // asks the node to connect to a member (keys are needed to write to them)
+	online  func(types.PeerID) bool // whether the node has a link to a member now
 
 	// files: an offer that came in a group message, and the offer for a file we post
 	onFile      func(origin types.PeerID, groupID string, wf wireFile)
@@ -440,6 +442,7 @@ func (f *groupsFacade) Members(groupID string) ([]GroupMemberDTO, error) {
 	out := make([]GroupMemberDTO, 0, len(members))
 	for _, m := range members {
 		d := GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID}
+		d.Online = d.IsMe || (f.online != nil && f.online(m.PeerID))
 		if meErr == nil && !d.IsMe {
 			over := groups.CanAdminister(me, m.Role) // the same rules the group service applies
 			d.CanKick = over && groups.HasPermission(me, groups.PermKickMembers)
@@ -648,6 +651,7 @@ func (n *NodeApi) openGroups() (*groupsFacade, bool, error) {
 		n.node.Messenger.SendSilent, contact, n.publishGroupEvent, em)
 	f.async = true
 	f.blocked = n.node.IsBlocked
+	f.online = func(id types.PeerID) bool { return n.node.Swarm != nil && n.node.Swarm.GetPeer(id) != nil }
 	f.connect = func(id types.PeerID) {
 		ctx, cancel := context.WithTimeout(n.node.Ctx, 20*time.Second)
 		defer cancel()

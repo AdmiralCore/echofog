@@ -16,6 +16,7 @@
 .chat-screen .av { position: relative; flex: none; }
 .chat-screen .presence { position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; background: var(--faint); border: 2.5px solid var(--panel); }
 .chat-screen .presence.on { background: var(--ok); }
+.chat-screen .member .av { position: relative; display: inline-flex; flex: none; }
 .chat-screen .title { min-width: 0; }
 .chat-screen .title h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-screen .title p { color: var(--faint); }

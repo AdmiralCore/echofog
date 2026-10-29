@@ -149,7 +149,10 @@
         {#each members as m (m.peerId)}
           <div class="member">
             <div class="row">
-              <Avatar id={m.peerId} name={nameOfMember(m)} size={30} />
+              <span class="av" title={m.online ? $t('common.online') : $t('common.offline')}>
+                <Avatar id={m.peerId} name={nameOfMember(m)} size={30} />
+                <span class="presence" class:on={m.online}></span>
+              </span>
               <span class="grow nm">{nameOfMember(m)}</span>
               {#if m.roles && m.roles.length}
                 <select value={m.role} disabled={busy === m.peerId} on:change={(e) => setRole(m, e.target.value)}>
