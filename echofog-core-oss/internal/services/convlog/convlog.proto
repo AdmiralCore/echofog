@@ -51,6 +51,10 @@ message MemberBody {
   bytes  member = 2;            // the member's 32-byte identity public key (not for a roster)
   string role   = 3;            // role: the new role; join: the role given (empty: the default)
   repeated RosterEntry roster = 4;
+  // remove, ban: the member's last sequence number the author had seen. Everyone refuses their
+  // events numbered after it unless they are let in again later: an author picks the Lamport of
+  // their events, so without this a removed member could write "before" the removal. 0: not said.
+  uint64 upto_seq = 5;
 }
 
 // EventExt rides in Event.ext (signed, kept when the body is stripped).

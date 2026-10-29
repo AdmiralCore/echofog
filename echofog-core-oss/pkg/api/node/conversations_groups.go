@@ -361,11 +361,20 @@ func groupDTOOf(groupID string, m convlog.Message) GroupMessageDTO {
 // the log does not allow yet (our roster or our own admission has not arrived) is kept and sent
 // all the same: it takes effect once what allows it is in the log.
 func (f *convsFacade) postMember(groupID string, b *convlog.MemberBody) {
+	c := convlog.Group(groupID)
+	if (b.Action == convlog.MemberRemove || b.Action == convlog.MemberBan) && len(b.Member) == 32 && b.UptoSeq == 0 {
+		// the last of their events that counts: nothing they write after this is let in, wherever
+		// they place it in the log's order
+		var pub types.PeerPublicKey
+		copy(pub[:], b.Member)
+		if id := types.PeerPubKeyToID(pub); id != f.n.node.ID {
+			b.UptoSeq = f.log.AuthorSeq(c, id)
+		}
+	}
 	body, err := proto.Marshal(b)
 	if err != nil {
 		return
 	}
-	c := convlog.Group(groupID)
 	raw, id, err := f.log.AppendKept(c, convlog.Draft{Kind: convlog.KindMember, Body: body})
 	if err != nil || raw == nil {
 		return

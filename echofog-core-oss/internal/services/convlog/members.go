@@ -91,6 +91,7 @@ func (p pos) less(o pos) bool {
 // memberEv is one membership event of a group's log.
 type memberEv struct {
 	at     pos
+	seq    uint64 // the author's sequence number of the event
 	author types.PeerID
 	body   *MemberBody
 }
@@ -393,4 +394,46 @@ func (m *members) admittedLater(rules GroupRules, c Conv, author types.PeerID, p
 		role, found = final.roles[author]
 	}
 	return role, found
+}
+
+// cutOff reports whether an event numbered seq by the member pub, at p, comes after their removal
+// or ban and must be refused. An author picks the Lamport of their events, so a removed member could
+// place new ones before the removal, where they still were a member. Their sequence numbers only
+// grow, though: a removal says the last one that counts (MemberBody.upto_seq; for a member who left,
+// the leaving event's own), and a later one counts only at a point after they were let in again.
+func (m *members) cutOff(rules GroupRules, c Conv, author types.PeerID, pub []byte, seq uint64, p pos) bool {
+	type cut struct {
+		upto     uint64
+		rejoined bool
+		at       pos
+	}
+	var cuts []cut
+	m.walk(rules, c, func(ev memberEv, _ *memberState, allowed bool) bool {
+		if !allowed || !bytes.Equal(ev.body.Member, pub) {
+			return true
+		}
+		switch ev.body.Action {
+		case MemberRemove, MemberBan:
+			upto := ev.body.UptoSeq
+			if ev.author == author {
+				upto = ev.seq // they left: nothing of theirs after the leaving counts
+			}
+			if upto > 0 {
+				cuts = append(cuts, cut{upto: upto})
+			}
+		case MemberJoin:
+			for i := range cuts {
+				if !cuts[i].rejoined {
+					cuts[i].rejoined, cuts[i].at = true, ev.at
+				}
+			}
+		}
+		return true
+	})
+	for _, k := range cuts {
+		if seq > k.upto && (!k.rejoined || !k.at.less(p)) {
+			return true
+		}
+	}
+	return false
 }

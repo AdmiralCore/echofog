@@ -370,11 +370,15 @@ func (x *PinBody) GetOn() bool {
 // membership with a roster; after that every join, role change, removal and ban is an event, and
 // what anyone may do at a point of the log follows from the ones before that point.
 type MemberBody struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Action        uint32                 `protobuf:"varint,1,opt,name=action,proto3" json:"action,omitempty"` // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban
-	Member        []byte                 `protobuf:"bytes,2,opt,name=member,proto3" json:"member,omitempty"`  // the member's 32-byte identity public key (not for a roster)
-	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`      // role: the new role; join: the role given (empty: the default)
-	Roster        []*RosterEntry         `protobuf:"bytes,4,rep,name=roster,proto3" json:"roster,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Action uint32                 `protobuf:"varint,1,opt,name=action,proto3" json:"action,omitempty"` // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban
+	Member []byte                 `protobuf:"bytes,2,opt,name=member,proto3" json:"member,omitempty"`  // the member's 32-byte identity public key (not for a roster)
+	Role   string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`      // role: the new role; join: the role given (empty: the default)
+	Roster []*RosterEntry         `protobuf:"bytes,4,rep,name=roster,proto3" json:"roster,omitempty"`
+	// remove, ban: the member's last sequence number the author had seen. Everyone refuses their
+	// events numbered after it unless they are let in again later: an author picks the Lamport of
+	// their events, so without this a removed member could write "before" the removal. 0: not said.
+	UptoSeq       uint64 `protobuf:"varint,5,opt,name=upto_seq,json=uptoSeq,proto3" json:"upto_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -435,6 +439,13 @@ func (x *MemberBody) GetRoster() []*RosterEntry {
 		return x.Roster
 	}
 	return nil
+}
+
+func (x *MemberBody) GetUptoSeq() uint64 {
+	if x != nil {
+		return x.UptoSeq
+	}
+	return 0
 }
 
 // EventExt rides in Event.ext (signed, kept when the body is stripped).
@@ -1062,13 +1073,14 @@ const file_internal_services_convlog_convlog_proto_rawDesc = "" +
 	"\x05emoji\x18\x01 \x01(\tR\x05emoji\x12\x0e\n" +
 	"\x02on\x18\x02 \x01(\bR\x02on\"\x19\n" +
 	"\aPinBody\x12\x0e\n" +
-	"\x02on\x18\x01 \x01(\bR\x02on\"~\n" +
+	"\x02on\x18\x01 \x01(\bR\x02on\"\x99\x01\n" +
 	"\n" +
 	"MemberBody\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\rR\x06action\x12\x16\n" +
 	"\x06member\x18\x02 \x01(\fR\x06member\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12,\n" +
-	"\x06roster\x18\x04 \x03(\v2\x14.convlog.RosterEntryR\x06roster\"$\n" +
+	"\x06roster\x18\x04 \x03(\v2\x14.convlog.RosterEntryR\x06roster\x12\x19\n" +
+	"\bupto_seq\x18\x05 \x01(\x04R\auptoSeq\"$\n" +
 	"\bEventExt\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\"\xb0\x01\n" +
 	"\vChannelBody\x12\x0e\n" +

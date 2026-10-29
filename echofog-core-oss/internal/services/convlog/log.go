@@ -103,7 +103,7 @@ func (l *Log) membersOf(bc string) *members {
 				continue
 			}
 			if b, ok := decodeMember(e); ok {
-				m.add(memberEv{at: pos{e.Lamport, id.String()}, author: AuthorID(e), body: b})
+				m.add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, author: AuthorID(e), body: b})
 			}
 		}
 	}
@@ -369,6 +369,11 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 		if !rights.Member {
 			return ErrNotParticipant
 		}
+		if t.c.Kind == KindGroup && !own {
+			if rules := l.groupRules(); rules != nil && l.membersOf(t.bc).cutOff(rules, t.c, authorID, e.Author, e.Seq, at) {
+				return ErrNotParticipant // written after their removal, placed before it
+			}
+		}
 		switch e.Kind {
 		case KindMsg:
 			if !rights.Send {
@@ -462,7 +467,7 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 	m := l.membersOf(t.bc)
 	if mode == modeNew {
 		t.put(memberKey(t.bc, e.Lamport, at.ID), raw)
-		m.add(memberEv{at: at, author: AuthorID(e), body: b})
+		m.add(memberEv{at: at, seq: e.Seq, author: AuthorID(e), body: b})
 	}
 	rules := l.groupRules()
 	if rules == nil || !m.allowed(rules, t.c, at) {
@@ -471,6 +476,19 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 	if mode == modeNew && (e.Lamport <= t.meta.MaxLamport || e.Lamport <= t.meta.HeldLamport) {
 		// it changes who could do what at points already applied or held
 		t.meta.Rebuild = true
+	}
+	if mode == modeNew && (b.Action == MemberRemove || b.Action == MemberBan) && len(b.Member) == authorLen {
+		// a removal cuts off the member's later events wherever they sit: if some are applied
+		// already, placed before it, weigh them again
+		if target, ok := pubToID(b.Member); ok {
+			upto := b.UptoSeq
+			if target == AuthorID(e) {
+				upto = e.Seq
+			}
+			if upto > 0 && t.meta.Max[peerHex(target)] > upto {
+				t.meta.Rebuild = true
+			}
+		}
 	}
 	return nil
 }
@@ -490,7 +508,7 @@ func (l *Log) keepRejected(t *txn, e *Event, id EventID, raw []byte) {
 	if e.Kind == KindMember && t.c.Kind == KindGroup {
 		if b, ok := decodeMember(e); ok {
 			t.put(memberKey(t.bc, e.Lamport, id.String()), raw)
-			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, author: AuthorID(e), body: b})
+			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, author: AuthorID(e), body: b})
 		}
 	}
 	l.keep(t, e, id.String(), raw, raw, modeNew)
@@ -787,6 +805,14 @@ func (l *Log) HasRoster(c Conv) bool {
 	defer l.mu.Unlock()
 	_, _, ok := l.membersOf(l.bc(c.ID)).walk(rules, c, nil)
 	return ok
+}
+
+// AuthorSeq is the highest sequence number of author's events this log has: what a removal of
+// them records as the last that counts (MemberBody.upto_seq).
+func (l *Log) AuthorSeq(c Conv, author types.PeerID) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loadMeta(l.bc(c.ID), c).Max[peerHex(author)]
 }
 
 func (l *Log) append(c Conv, d Draft, keepRefused bool) ([]byte, EventID, error) {
