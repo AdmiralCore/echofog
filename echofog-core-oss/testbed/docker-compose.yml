@@ -40,6 +40,9 @@ x-gateway: &gateway
 networks:
   wan:
     driver: bridge
+    # an engine that protects a container from packets routed in from another network (Docker 28+)
+    # would drop what the routers forward to the public nodes
+    driver_opts: { com.docker.network.bridge.gateway_mode_ipv4: nat-unprotected }
     ipam:
       config: [{ subnet: 203.0.113.0/24 }]
   lan_a:
@@ -83,25 +86,25 @@ services:
   x1:
     <<: *node
     container_name: efbed-x1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x1, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x1, EXIT_UNLIMITED: "${EXIT_UNLIMITED:-}", BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443" }
     networks: { wan: { ipv4_address: 203.0.113.15 } }
   x2:
     <<: *node
     container_name: efbed-x2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x2, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x2, EXIT_UNLIMITED: "${EXIT_UNLIMITED:-}", BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443" }
     networks: { wan: { ipv4_address: 203.0.113.16 } }
   # a legacy exit without a cover site: it can only be reached over noise. Only the failover phase of
   # the launchpad starts it, to be the ordinary exit a client on a camouflage exit must never be moved to
   x3:
     <<: *node
     container_name: efbed-x3
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x3, BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: x3, EXIT_UNLIMITED: "${EXIT_UNLIMITED:-}", BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1" }
     networks: { wan: { ipv4_address: 203.0.113.18 } }
   # a hidden exit for friends: not in the DHT, it answers only people with its invitation link
   h1:
     <<: *node
     container_name: efbed-h1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: h1, TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", ACCESS: hidden, PUBLIC_ADDR: "203.0.113.17:4242" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: h1, EXIT_UNLIMITED: "${EXIT_UNLIMITED:-}", TLS_SERVER_NAME: cover.lab, CAMOUFLAGE_ADDR: "203.0.113.30:443", BOOTSTRAP: "${BOOTSTRAP:-}", SERVER: "1", EXIT: "1", ACCESS: hidden, PUBLIC_ADDR: "203.0.113.17:4242" }
     networks: { wan: { ipv4_address: 203.0.113.17 } }
   web:
     <<: *image

@@ -65,7 +65,11 @@ func (t *testNode) callInvite(w http.ResponseWriter, r *http.Request) {
 // an exit would refuse, so private and reserved targets are allowed here, and only here.
 func (t *testNode) startExit() error {
 	t.n.ExitService.AllowPrivateTargets(true)
-	if err := t.api.StartSharing(api.SharingConfig{UploadKbps: 100_000}); err != nil {
+	upload := 100_000
+	if os.Getenv("EXIT_UNLIMITED") != "" {
+		upload = 4_000_000
+	}
+	if err := t.api.StartSharing(api.SharingConfig{UploadKbps: upload}); err != nil {
 		return err
 	}
 	log.Printf("testnode %s: sharing its connection as a free exit", t.name)

@@ -85,6 +85,9 @@ func main() {
 	if g := os.Getenv("GUARD_MODE"); g != "" {
 		cfg.AntiDPI.GuardMode = g
 	}
+	if os.Getenv("EXIT_UNLIMITED") != "" { // the lab measures the roads, not the free exit's speed limit
+		cfg.Exit.FreePeerMbps, cfg.Exit.FreeIPMbps = -1, -1
+	}
 	if g := os.Getenv("TCP_ROTATE"); g != "" {
 		cfg.AntiDPI.TCPRotate = g
 	}
