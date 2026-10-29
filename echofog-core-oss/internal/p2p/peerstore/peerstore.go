@@ -55,9 +55,12 @@ type PeerStore struct {
 	stored  int        // entries in storage as of countAt, plus discovered ones written since
 	countAt time.Time
 
-	wg     sync.WaitGroup
-	ctx    context.Context
-	cancel context.CancelFunc
+	// asyncMu orders Add on wg against Close: a WaitGroup must not gain a job while Wait runs
+	asyncMu sync.Mutex
+	closed  bool
+	wg      sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func NewPeerStore(store storage.Storage, logger *slog.Logger) *PeerStore {
@@ -163,7 +166,13 @@ func (ps *PeerStore) writeEntry(data *storage.PeerStoreEntry) error {
 
 // SavePeerAsync safely writes peer metadata in the background tracking active goroutines.
 func (ps *PeerStore) SavePeerAsync(pubKey types.PeerPublicKey, addr string, trustScore uint32) {
+	ps.asyncMu.Lock()
+	if ps.closed {
+		ps.asyncMu.Unlock()
+		return // closing: no new writes
+	}
 	ps.wg.Add(1)
+	ps.asyncMu.Unlock()
 	go func() {
 		defer ps.wg.Done()
 		select {
@@ -409,6 +418,9 @@ func (ps *PeerStore) IsBanned(peerID types.PeerID) bool {
 
 // Close cancels pending async jobs and waits for in-flight writes to finish.
 func (ps *PeerStore) Close() error {
+	ps.asyncMu.Lock()
+	ps.closed = true
+	ps.asyncMu.Unlock()
 	ps.cancel()
 	ps.wg.Wait()
 	return nil

@@ -76,14 +76,17 @@ func (s *memStore) Close()               {}
 
 // fakeNet carries frames between services, losing, altering or refusing them on request.
 type fakeNet struct {
-	mu       sync.Mutex
-	nodes    map[types.PeerID]*Service
-	lossPct  int64                     // frames silently lost, in percent
-	mutate   func(frame []byte) []byte // changes a frame on the way (nil: none)
-	down     atomic.Bool               // nothing gets through, sends fail
-	chunks   atomic.Int64              // chunk frames delivered
-	hold     atomic.Bool               // chunk frames are lost (control frames still pass)
-	noCancel atomic.Bool               // cancel frames are lost
+	mu      sync.Mutex
+	nodes   map[types.PeerID]*Service
+	lossPct int64                     // frames silently lost, in percent
+	mutate  func(frame []byte) []byte // changes a frame on the way (nil: none)
+	down    atomic.Bool               // nothing gets through, sends fail
+	chunks  atomic.Int64              // chunk frames delivered
+	// downAfter, when set, takes the link down once that many chunk frames got through: a cut in
+	// the middle of a transfer however fast the machine runs it
+	downAfter atomic.Int64
+	hold      atomic.Bool // chunk frames are lost (control frames still pass)
+	noCancel  atomic.Bool // cancel frames are lost
 }
 
 // setLoss and setMutate change the link while transfers run: under mu, which Send reads them with.
@@ -132,7 +135,9 @@ func (l fakeLink) Send(_ context.Context, peer types.PeerID, frame []byte) error
 		return nil
 	}
 	if len(f) > 1 && frameKind(f[1]) == kindChunk {
-		n.chunks.Add(1)
+		if c := n.chunks.Add(1); c >= n.downAfter.Load() && n.downAfter.Load() > 0 {
+			n.down.Store(true)
+		}
 	}
 	go dst.HandleFrame(f)
 	return nil
@@ -479,17 +484,17 @@ func TestResumesAfterRestart(t *testing.T) {
 	net, alice, bob := pair(t, nil)
 	src, data := randomFile(t, alice.dir, "backup.tar", 500*ChunkSize+999)
 	o := offerTo(t, alice, bob, src)
+	net.downAfter.Store(150) // the link goes down by itself 150 chunks in (of 501)
 	_, err := bob.svc.Accept(o.ID)
 	require.NoError(t, err)
-	require.Eventually(t, func() bool { i, _ := bob.svc.Get(o.ID); return i.Done > 100*ChunkSize }, 20*time.Second, time.Millisecond)
-
-	net.down.Store(true)
+	require.Eventually(t, net.down.Load, 20*time.Second, time.Millisecond)
 	time.Sleep(100 * time.Millisecond) // frames under way land
 	bob.svc.Stop()
 	alice.svc.Stop()
 	mid, _ := bob.svc.Get(o.ID)
 	require.Less(t, mid.Done, mid.Size, "the test needs an unfinished download")
 
+	net.downAfter.Store(0)
 	net.chunks.Store(0)
 	net.down.Store(false)
 	alice.start(t, net, nil)
