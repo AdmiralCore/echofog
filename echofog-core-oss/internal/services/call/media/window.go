@@ -17,7 +17,10 @@ type windowSlot struct {
 	used bool
 }
 
-// replayWindow is an SRTP-style sliding window: O(1) per fragment, no allocations.
+// replayWindow is an SRTP-style sliding window: O(1) per fragment, no allocations. Fragments carry
+// their sequence number in the clear and are checked here before anything authenticates them, so
+// only a unit that decrypted moves the window (commit): a forged fragment with a far-ahead number
+// would otherwise push the window past the real stream and mute its source for everyone downstream.
 type replayWindow struct {
 	highest  uint32
 	started  bool
@@ -28,14 +31,11 @@ type replayWindow struct {
 // check returns true if the fragment is new and records it; false for duplicates or stale fragments.
 func (w *replayWindow) check(seq uint32, frag uint8, now time.Time) bool {
 	w.lastSeen = now
-	if !w.started {
-		w.started, w.highest = true, seq
-	}
-	diff := int32(seq - w.highest) // serial arithmetic handles uint32 wrap-around
-	if diff > 0 {
-		w.highest = seq
-	} else if -diff >= replayWindowSize {
-		return false
+	if w.started {
+		// serial arithmetic handles uint32 wrap-around
+		if diff := int32(seq - w.highest); diff <= 0 && -diff >= replayWindowSize {
+			return false // too old
+		}
 	}
 	slot := &w.slots[seq%replayWindowSize]
 	if !slot.used || slot.seq != seq {
@@ -47,6 +47,13 @@ func (w *replayWindow) check(seq uint32, frag uint8, now time.Time) bool {
 	}
 	slot.mask |= bit
 	return true
+}
+
+// commit records an authenticated unit: only these move the window forward.
+func (w *replayWindow) commit(seq uint32) {
+	if !w.started || int32(seq-w.highest) > 0 {
+		w.started, w.highest = true, seq
+	}
 }
 
 type sourceKey struct {
@@ -75,6 +82,16 @@ func (t *dedupTable) accept(p *MediaPacket, now time.Time) bool {
 		t.windows[k] = w
 	}
 	return w.check(p.Seq, p.FragIdx, now)
+}
+
+// commit moves the window of the packet's source to its sequence number, once the unit decrypted.
+func (t *dedupTable) commit(p *MediaPacket) {
+	k := sourceKey{p.Kind, p.Broadcaster, p.StreamID}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if w := t.windows[k]; w != nil {
+		w.commit(p.Seq)
+	}
 }
 
 // gc drops windows of sources that went silent.

@@ -66,6 +66,7 @@ type MediaDispatcher struct {
 	mu               sync.RWMutex
 	roomKey          []byte
 	voiceManifest    *tree.TreeManifest
+	inCall           map[types.PeerID]bool // every peer the voice tree names, built with it
 	upstreamOverride types.PeerID
 	adopted          map[types.PeerID]bool
 	watchingStreams  map[string]bool
@@ -92,6 +93,7 @@ type MediaDispatcher struct {
 	OnVideoLoss func(streamID string, broadcaster types.PeerID)
 
 	audioDelivered, videoDelivered, relayed, duplicates, decryptFailures, malformed, incomplete atomic.Uint64
+	outsiders                                                                                   atomic.Uint64 // media from a peer outside the call, dropped
 	retransmitted, nacked                                                                       atomic.Uint64
 
 	// Per-packet problems (garbage from a peer, failed decryption, lost units) are logged through
@@ -165,6 +167,30 @@ func (d *MediaDispatcher) SetVoiceManifest(manifest *tree.TreeManifest) {
 	d.voiceManifest = manifest
 	d.upstreamOverride = types.PeerID{}
 	d.adopted = make(map[types.PeerID]bool)
+	d.inCall = callPeers(manifest)
+}
+
+// callPeers is every peer a voice tree names: its coordinator and standbys, the members it places
+// and their primary and standby parents, and every link of its children map.
+func callPeers(m *tree.TreeManifest) map[types.PeerID]bool {
+	if m == nil {
+		return nil
+	}
+	out := map[types.PeerID]bool{m.Coordinator: true}
+	for _, s := range m.StandbyCoordinators {
+		out[s] = true
+	}
+	for id, a := range m.ParentMap {
+		out[id], out[a.PrimaryParent], out[a.StandbyParent] = true, true, true
+	}
+	for id, kids := range m.ChildrenMap {
+		out[id] = true
+		for _, k := range kids {
+			out[k] = true
+		}
+	}
+	delete(out, types.PeerID{})
+	return out
 }
 
 // UseStandbyParent routes voice through the standby parent until the next manifest arrives.
@@ -240,6 +266,10 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 	if p.Broadcaster == d.selfID {
 		return nil // our own audio echoed back through a failover link
 	}
+	if !d.fromCall(fromPeer, p.Broadcaster) {
+		d.outsiders.Add(1)
+		return nil
+	}
 	now := time.Now()
 	if !d.dedup.accept(p, now) {
 		d.duplicates.Add(1)
@@ -273,6 +303,10 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 	d.lastFromFeeder[linkKey{p.StreamID, fromPeer}] = now
 	d.mu.Unlock()
 	if p.Kind == FramePulse || p.Broadcaster == d.selfID {
+		return nil
+	}
+	if !d.fromCall(fromPeer, p.Broadcaster) {
+		d.outsiders.Add(1)
 		return nil
 	}
 	if !d.dedup.accept(p, now) {
@@ -324,6 +358,7 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 			"broadcaster", calllog.Peer(p.Broadcaster), "failures_total", d.decryptFailures.Load(), "err", err)
 		return
 	}
+	d.dedup.commit(p) // authentic: now it may move the replay window
 	unit := *p
 	unit.FragIdx, unit.FragCount, unit.Payload = 0, 1, plain
 
@@ -707,4 +742,18 @@ func (d *MediaDispatcher) housekeeping() {
 			d.mu.Unlock()
 		}
 	}
+}
+
+// fromCall reports whether media relayed by from, from broadcaster, may be taken: both are in the
+// call's voice tree (the coordinator, a member placed in it, a child we adopted, the parent we
+// were moved to). A peer outside the call that knows its ID gets nothing in, and cannot fill the
+// replay windows with forged sequence numbers. With no tree known yet, everything is taken.
+func (d *MediaDispatcher) fromCall(from, broadcaster types.PeerID) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.voiceManifest == nil {
+		return true
+	}
+	in := func(id types.PeerID) bool { return d.inCall[id] || id == d.upstreamOverride || d.adopted[id] }
+	return in(from) && in(broadcaster)
 }

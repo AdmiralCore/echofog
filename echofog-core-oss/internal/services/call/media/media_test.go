@@ -211,20 +211,44 @@ func TestReplayWindow(t *testing.T) {
 	var w replayWindow
 	now := time.Now()
 	assert.True(t, w.check(100, 0, now))
+	w.commit(100) // the unit decrypted
 	assert.False(t, w.check(100, 0, now), "duplicate")
 	assert.True(t, w.check(100, 1, now), "other fragment of same unit")
 	assert.True(t, w.check(99, 0, now), "late but inside window")
 	assert.True(t, w.check(2000, 0, now))
+	w.commit(2000)
 	assert.False(t, w.check(2000-replayWindowSize, 0, now), "too old")
 	assert.True(t, w.check(2000-replayWindowSize+1, 0, now))
 
 	// uint32 wrap-around
 	var wrap replayWindow
-	assert.True(t, wrap.check(^uint32(0)-1, 0, now))
-	assert.True(t, wrap.check(^uint32(0), 0, now))
-	assert.True(t, wrap.check(0, 0, now))
-	assert.True(t, wrap.check(1, 0, now))
+	for _, s := range []uint32{^uint32(0) - 1, ^uint32(0), 0, 1} {
+		assert.True(t, wrap.check(s, 0, now))
+		wrap.commit(s)
+	}
 	assert.False(t, wrap.check(^uint32(0), 0, now))
+}
+
+// A forged fragment with a far-ahead sequence number (never authenticated, so never committed)
+// does not move the window: the real stream right behind it still gets through. It used to jump
+// the window past the source and mute it for everyone downstream.
+func TestReplayWindowIgnoresUnauthenticatedJumps(t *testing.T) {
+	now := time.Now()
+	var first replayWindow
+	assert.True(t, first.check(1<<31, 0, now), "the forged first fragment")
+	assert.True(t, first.check(5, 0, now), "a forged first packet does not set the window")
+
+	var w replayWindow
+	for s := uint32(10); s < 20; s++ {
+		require.True(t, w.check(s, 0, now))
+		w.commit(s)
+	}
+	assert.True(t, w.check(20+1<<31-1, 0, now), "the forged fragment far ahead")
+	for s := uint32(20); s < 30; s++ {
+		assert.True(t, w.check(s, 0, now), "the real stream after the forgery: %d", s)
+		w.commit(s)
+	}
+	assert.False(t, w.check(15, 0, now), "still a duplicate")
 }
 
 func TestReassembler_OutOfOrderAndExpiry(t *testing.T) {
@@ -618,4 +642,36 @@ func TestMediaDispatcher_BroadcastLocalStreamAudio(t *testing.T) {
 	assert.Equal(t, FrameStreamAudio, p.Kind)
 	assert.Equal(t, "s1", p.StreamID)
 	assert.Equal(t, uint64(1), d.StreamStats()["s1"].SoundSent, "the summary counts the sound sent")
+}
+
+// Media from a peer the voice tree does not name is dropped: neither delivered, relayed, nor let
+// into the replay windows, whoever it claims to come from.
+func TestMediaDispatcher_DropsMediaFromOutsideTheCall(t *testing.T) {
+	coord, self, leaf, outsider := pid(1), pid(2), pid(3), pid(7)
+	key := newKey(t)
+	sender, consumer := &mockSender{}, &mockConsumer{}
+	d := NewMediaDispatcher(self, sender, consumer, tree.NewStreamTreeEngine())
+	defer d.Close()
+	require.NoError(t, d.SetRoomKey(key))
+	d.SetVoiceManifest(&tree.TreeManifest{
+		Coordinator: coord,
+		ParentMap:   map[types.PeerID]tree.ParentAssignment{self: {PrimaryParent: coord}, leaf: {PrimaryParent: self}},
+		ChildrenMap: map[types.PeerID][]types.PeerID{coord: {self}, self: {leaf}},
+	})
+
+	// an outsider relays, and one claims to be the coordinator: both dropped
+	frags, err := SealUnit(&MediaPacket{Kind: FrameAudio, Seq: 1, Broadcaster: outsider, StreamID: "voice", Payload: []byte("x")}, key)
+	require.NoError(t, err)
+	require.NoError(t, d.ProcessIncomingAudio(frags[0], outsider))
+	frags, _ = SealUnit(&MediaPacket{Kind: FrameAudio, Seq: 1 << 30, Broadcaster: coord, StreamID: "voice", Payload: []byte("forged")}, key)
+	require.NoError(t, d.ProcessIncomingAudio(frags[0], outsider))
+	time.Sleep(50 * time.Millisecond)
+	a, _ := consumer.counts()
+	assert.Equal(t, 0, a, "nothing from outside the call is played")
+	assert.Empty(t, sender.to(leaf), "nor relayed")
+
+	// the coordinator's real audio still gets through
+	frags, _ = SealUnit(&MediaPacket{Kind: FrameAudio, Seq: 2, Broadcaster: coord, StreamID: "voice", Payload: []byte("real")}, key)
+	require.NoError(t, d.ProcessIncomingAudio(frags[0], coord))
+	assert.Eventually(t, func() bool { a, _ := consumer.counts(); return a == 1 }, time.Second, 5*time.Millisecond)
 }
