@@ -502,6 +502,7 @@ func (n *Node) Start() (err error) {
 		n.Net.SetEnvMemoryPath(filepath.Join(n.Cfg.Storage.DatabasePath, "transport-memory.json"))
 	}
 	n.Net.SetTCPRemotePort(n.Cfg.Network.TCPRemotePort)
+	n.applyTCPRotate()
 	if n.Cfg.Network.AdvertisePort > 0 {
 		n.Net.SetAdvertisedPort(n.Cfg.Network.AdvertisePort)
 	}

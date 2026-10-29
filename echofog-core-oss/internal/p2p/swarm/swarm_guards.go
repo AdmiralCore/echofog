@@ -374,9 +374,14 @@ func (s *Swarm) planGuards(now time.Time, cands, pinned []guardCandidate) []*gua
 			}
 		}
 		rand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
-		// connected servers first (a link that already works), then spread over networks: a
-		// second guard in the /16 of a first one adds little
+		// servers of the own country first where the node layer says that matters (the TSPU
+		// freeze), then connected servers (a link that already works), then spread over
+		// networks: a second guard in the /16 of a first one adds little
 		sort.SliceStable(pool, func(i, j int) bool {
+			di, dj := s.isDomestic(pool[i].addr), s.isDomestic(pool[j].addr)
+			if di != dj {
+				return di
+			}
 			ci, cj := s.ThisIsActivePeer(pool[i].id), s.ThisIsActivePeer(pool[j].id)
 			return ci && !cj
 		})

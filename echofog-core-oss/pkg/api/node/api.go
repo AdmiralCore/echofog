@@ -108,6 +108,8 @@ func (n *NodeApi) StartNode() error {
 	}
 	// domestic connections use the cheaper noise obfs; cross-border keeps REALITY
 	n.applyRegionObfs()
+	// tcp_rotate "auto": rotate the TCP links across the border from a country with the TSPU freeze
+	n.applyTCPRotateAuto()
 	// guard_mode "auto" stands down in a country that does not censor
 	go n.runGuardAuto()
 	// create the conversation logs and the group service now: they listen for chat traffic from

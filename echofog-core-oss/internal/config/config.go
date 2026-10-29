@@ -73,6 +73,11 @@ const (
 	GuardAuto = "auto"
 	GuardOn   = "on"
 	GuardOff  = "off"
+
+	// anti_dpi.tcp_rotate values
+	TCPRotateAuto = "auto"
+	TCPRotateOn   = "on"
+	TCPRotateOff  = "off"
 )
 
 // DefaultBootstrapNodes are the public nodes a fresh install joins the network through
@@ -237,6 +242,13 @@ type AntiDPIConfig struct {
 	// for Russian egress (or let the region signal engage it where HomeCountry/GeoIP places the path
 	// in RU). The normal path and the single-region testbed are untouched when it is off.
 	MicroChunkTCP bool `json:"micro_chunk_tcp"`
+	// TCPRotate answers the same freeze at the link: the TCP fallback is carried by short TCP
+	// connections, each moved on from before it has carried 12 KB in either direction, and the
+	// streams above do not notice (internal/network/rotconn.go). "on" rotates every TCP link this
+	// node dials; "off" never does; "auto" (the default) rotates the links to addresses across the
+	// border from a country that runs the freeze, and to an address where a plain link froze. A
+	// server takes rotating links whatever this says. micro_chunk_tcp true means "on".
+	TCPRotate string `json:"tcp_rotate,omitempty"`
 
 	// RegionAwareObfs uses the cheaper noise obfuscation for connections that stay inside this
 	// node's own country or on the local network, and keeps QUIC-REALITY for cross-border ones.
@@ -497,6 +509,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.AntiDPI.TunnelPadding = true
 	cfg.AntiDPI.RegionAwareObfs = false // opt-in: safe only where domestic traffic is not censored
 	cfg.AntiDPI.GuardMode = GuardAuto
+	cfg.AntiDPI.TCPRotate = TCPRotateAuto
 	cfg.AntiDPI.MicroChunkTCP = false // opt-in: only helps where the TSPU ~16 KB TCP freeze runs
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public

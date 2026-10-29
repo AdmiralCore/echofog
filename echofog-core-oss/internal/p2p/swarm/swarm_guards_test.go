@@ -413,3 +413,22 @@ func TestUserLinkViaRelayBehindProxy(t *testing.T) {
 	server := guardServer(s, 1, 10)
 	assert.False(t, s.UserLinkViaRelay(server.id, server.addr), "a camouflaged server is dialed through the proxy")
 }
+
+// Where the node layer names the own country's servers (behind the TSPU freeze), the guards are
+// picked there first; without it nothing is preferred.
+func TestGuardsPreferTheOwnCountry(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	var cands []guardCandidate
+	for i := 0; i < 6; i++ {
+		cands = append(cands, guardServer(s, byte(i), byte(10+i)))
+	}
+	home := map[string]bool{cands[4].addr: true, cands[5].addr: true}
+	s.SetDomesticFunc(func(addr string) bool { return home[addr] })
+	s.planGuards(time.Now(), cands, nil)
+	got := map[string]bool{}
+	for _, g := range s.Guards() {
+		got[g.Addr] = true
+	}
+	require.Len(t, got, guardsWanted)
+	assert.True(t, got[cands[4].addr] && got[cands[5].addr], "both servers of the own country are guards: %v", got)
+}
