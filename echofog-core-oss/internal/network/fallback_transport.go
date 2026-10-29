@@ -31,6 +31,9 @@ const (
 	quicAttemptTimeout = 4 * time.Second
 	// tcpPreferenceTTL: once QUIC failed for an address, use TCP first for a while.
 	tcpPreferenceTTL = 10 * time.Minute
+	// tcpRotatingPreferenceTTL: where the TCP link has to rotate (the TSPU freeze) it costs a
+	// connection every few KB, so QUIC is tried again sooner
+	tcpRotatingPreferenceTTL = 2 * time.Minute
 	// transportRaceStagger: the preferred transport gets this head start before the other is
 	// launched alongside it, so a working network pays nothing for the race.
 	transportRaceStagger = 300 * time.Millisecond
@@ -264,6 +267,21 @@ func (f *FallbackTransport) SetRegionNoise(fn func(addr string) bool) {
 	f.QUIC.SetRegionNoise(fn)
 }
 
+// SetTCPRotate says for which addresses the TCP fallback is dialed with link rotation (see
+// rotconn.go), the answer to the TSPU freeze; the addresses a link froze at are rotated anyway.
+func (f *FallbackTransport) SetTCPRotate(fn func(addr string) bool) {
+	if f.TCP != nil {
+		f.TCP.SetRotatePolicy(fn)
+	}
+}
+
+// SetTCPRotateOff stops rotation altogether (anti_dpi.tcp_rotate "off").
+func (f *FallbackTransport) SetTCPRotateOff(off bool) {
+	if f.TCP != nil {
+		f.TCP.SetRotateOff(off)
+	}
+}
+
 // ExpectPeerSNI tells both transports whose address addr is and its camouflage SNI; see PeerExpecter.
 func (f *FallbackTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
 	if !proxyResolvesName(addr) { // the QUIC side looks the name up here, which the proxy is there to avoid
@@ -421,11 +439,15 @@ func (f *FallbackTransport) PreferTCP(addr string) {
 }
 
 func (f *FallbackTransport) preferTCP(addr string) {
+	ttl := tcpPreferenceTTL
+	if f.TCP != nil && f.TCP.shouldRotate(f.tcpDialAddr(addr)) {
+		ttl = tcpRotatingPreferenceTTL
+	}
 	f.mu.Lock()
 	if len(f.preferT) > 4096 {
 		f.preferT = make(map[string]time.Time)
 	}
-	f.preferT[addr] = time.Now().Add(tcpPreferenceTTL)
+	f.preferT[addr] = time.Now().Add(ttl)
 	f.mu.Unlock()
 }
 

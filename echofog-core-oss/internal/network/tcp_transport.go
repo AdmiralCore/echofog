@@ -73,6 +73,7 @@ type TCPTransport struct {
 	secret  string
 	book    peerBook
 	guard   atomic.Pointer[handshake.Guard]
+	rot     rotState
 }
 
 // SetNodeKeys makes the stealth key per node: this node accepts the key derived from its own ID,
@@ -233,7 +234,8 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	tuneTCP(raw)
 	_ = raw.SetDeadline(time.Now().Add(tcpHandshakeTimeout))
 	cfg, serverTLS := t.camouflage()
-	conn, isPeer, binding, err := mimicry.ServerHandshake(raw, serverTLS, cfg)
+	cc := newCountConn(raw)
+	conn, isPeer, binding, err := mimicry.ServerHandshake(cc, serverTLS, cfg)
 	if err != nil {
 		releaseSlot()
 		_ = raw.Close()
@@ -242,6 +244,24 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	if !isPeer {
 		releaseSlot()
 		forwardToRealSite(conn, cfg) // idle, not absolute, timeout; never touches the Guard
+		return
+	}
+
+	// A client that rotates its links opens every carrier with an ATTACH. A spare joins its session
+	// and is done (it has no turn at the per-address limits, see attachSpare); anything else is
+	// counted below like any other connection.
+	conn, br, kind, rotID, serr := t.sniffRotating(conn)
+	if serr != nil {
+		releaseSlot()
+		_ = conn.Close()
+		return
+	}
+	if kind == rotSpare {
+		releaseSlot()
+		if !t.attachSpare(conn, cc, br, rotID) {
+			_ = conn.Close() // a spare of a session this server does not have
+		}
+		_ = raw.SetDeadline(time.Time{})
 		return
 	}
 
@@ -254,6 +274,13 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 		return
 	}
 	defer release()
+	if kind == rotFirst {
+		if conn = t.openRotating(conn, cc, br, rotID); conn == nil {
+			releaseSlot()
+			_ = raw.Close()
+			return
+		}
+	}
 
 	mc, err := NewSmuxConn(t.ctx, conn, binding, false)
 	if err != nil {
@@ -354,10 +381,22 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		c.ServerName = sni
 		clientCfg = &c
 	}
-	conn, binding, err := mimicry.ClientHandshake(raw, clientCfg)
+	cc := newCountConn(raw)
+	conn, binding, err := mimicry.ClientHandshake(cc, clientCfg)
 	if err != nil {
 		_ = raw.Close()
 		return err
+	}
+	rotating := t.shouldRotate(addr)
+	if rotating {
+		cfgForSpares := clientCfg
+		conn, err = t.rotateClient(conn, cc, func(ctx context.Context, id [16]byte) (*rotCarrier, error) {
+			return t.dialCarrier(ctx, addr, id, cfgForSpares)
+		})
+		if err != nil {
+			_ = raw.Close()
+			return err
+		}
 	}
 	mc, err := NewSmuxConn(t.ctx, conn, binding, true)
 	if err != nil {
@@ -382,6 +421,9 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 		return err
 	}
 	_ = raw.SetDeadline(time.Time{})
+	if !rotating {
+		t.watchFreeze(mc, cc, addr)
+	}
 	t.emit(NewConnEvent{Conn: mc, IsOut: true, PeerID: res.PeerID, PeerPubKey: res.PubKey, Addr: addr, Dialable: true, Caps: res.Caps, RemoteIP: addrOfNet(raw.RemoteAddr()), PoolLink: poolLinkRequested(ctx)})
 	t.logger.Info("Peer authenticated over TCP", "peer_id", res.PeerID, "direction", "outbound", "remote_addr", addr)
 	return nil
