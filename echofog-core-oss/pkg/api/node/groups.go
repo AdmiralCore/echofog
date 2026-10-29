@@ -60,6 +60,10 @@ type GroupMemberDTO struct {
 	CanBan      bool     `json:"canBan"`
 	Roles       []string `json:"roles,omitempty"`
 	CanTransfer bool     `json:"canTransfer"`
+	// Timeout: until when they may not write (unix seconds, 0 none); CanTimeout: I may give or
+	// lift one (a member below my rank, and I may remove members)
+	Timeout    int64 `json:"timeout,omitempty"`
+	CanTimeout bool  `json:"canTimeout"`
 }
 
 type GroupMessageDTO struct {
@@ -443,6 +447,10 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 	dto := f.toDTO(known, len(list))
 	f.mu.Unlock()
 
+	if tok != nil {
+		// the invitation we came with: our own join on the group's log names it
+		_ = f.store.Set([]byte(joinViaPrefix+g.GroupID), []byte(tok.N))
+	}
 	// let the members know who joined (offline ones get it when they are back)
 	f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:]), Inv: tok})
 	return dto, nil
@@ -758,11 +766,7 @@ func (n *NodeApi) ListGroups() ([]GroupDTO, error) {
 }
 
 func (n *NodeApi) GetGroupInvite(groupID string) (string, error) {
-	f, err := n.groupsFacade()
-	if err != nil {
-		return "", err
-	}
-	return f.Invite(groupID)
+	return n.quickInvite(groupID)
 }
 
 func (n *NodeApi) JoinGroup(invite string) (GroupDTO, error) {
@@ -786,7 +790,20 @@ func (n *NodeApi) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
 	if err != nil {
 		return nil, err
 	}
-	return f.Members(groupID)
+	list, err := f.Members(groupID)
+	if err != nil {
+		return list, err
+	}
+	if cf, err := n.convsFacade(); err == nil && cf.log.HasRoster(convlog.Group(groupID)) {
+		c := convlog.Group(groupID)
+		for i := range list {
+			if id, ok := parsePeer(list[i].PeerID); ok {
+				list[i].Timeout = cf.log.TimeoutOf(c, id)
+			}
+			list[i].CanTimeout = list[i].CanKick // the log's rule: who may remove, a lower rank
+		}
+	}
+	return list, nil
 }
 
 func (n *NodeApi) SendGroupMessage(groupID, text string) (GroupMessageDTO, error) {

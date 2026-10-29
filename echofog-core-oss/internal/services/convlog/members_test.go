@@ -14,7 +14,10 @@ import (
 type testRules struct {
 	founder types.PeerID
 	channel bool
+	private bool // joining takes an invitation (InviteRules)
 }
+
+func (r testRules) NeedsInvite(Conv) bool { return r.private }
 
 // the group service's built-in roles
 const testWriter = PermSend | PermMedia | PermVoice | PermLinks | PermThreads | PermReact | PermInvite

@@ -161,6 +161,9 @@ func (l *Log) RightsIn(c Conv, peer types.PeerID, channel string) Rights {
 	if c.Kind != KindGroup || !r.Member {
 		return r
 	}
+	if l.timeoutLocked(c, bc, peer) > 0 {
+		return muted(r)
+	}
 	ch, ok := l.storedChannel(bc, channel)
 	if !ok || len(ch.Overrides) == 0 {
 		return r

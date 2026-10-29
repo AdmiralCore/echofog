@@ -168,6 +168,9 @@ func (m *GroupManager) SelfJoin(groupID string, member types.PeerID, pub types.I
 		m.logOp("self join", groupID, ErrInvalidSignature, "member", shortPeer(member))
 		return ErrInvalidSignature
 	}
+	if _, err := m.GetMemberRole(groupID, member); err == nil {
+		return nil // already in: a repeated join keeps their role (an admin stays an admin)
+	}
 	return m.JoinGroup(groupID, member, pub) // JoinGroup logs the outcome
 }
 

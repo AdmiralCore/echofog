@@ -126,6 +126,7 @@ func (p pos) less(o pos) bool {
 type memberEv struct {
 	at     pos
 	seq    uint64 // the author's sequence number of the event
+	ts     int64  // the author's clock, ms (display)
 	author types.PeerID
 	body   *MemberBody
 }
@@ -137,10 +138,11 @@ type members struct {
 
 // memberState is who is in a group, and with which role, at one point of its log.
 type memberState struct {
-	roles   map[types.PeerID]Role
-	banned  map[types.PeerID]bool
-	defs    map[string]Role // roles defined on the log: custom ones, and changed built-in ones
-	invites map[string]*Invite
+	roles    map[types.PeerID]Role
+	banned   map[types.PeerID]bool
+	defs     map[string]Role // roles defined on the log: custom ones, and changed built-in ones
+	invites  map[string]*Invite
+	timeouts map[types.PeerID]timeout
 }
 
 func newMemberState() *memberState {
@@ -153,6 +155,12 @@ func (s *memberState) clone() *memberState {
 		defs: make(map[string]Role, len(s.defs)), invites: make(map[string]*Invite, len(s.invites))}
 	for k, v := range s.invites {
 		out.invites[k] = v // copied on write (invite, useInvite)
+	}
+	if len(s.timeouts) > 0 {
+		out.timeouts = make(map[types.PeerID]timeout, len(s.timeouts))
+		for k, v := range s.timeouts {
+			out.timeouts[k] = v
+		}
 	}
 	for k, v := range s.roles {
 		out.roles[k] = v
@@ -208,6 +216,10 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 		if !validInvite(b.Invite) {
 			return nil, false
 		}
+	case MemberTimeout:
+		if len(b.Member) != authorLen || b.Until < 0 {
+			return nil, false
+		}
 	case MemberDefine:
 		d := b.Def
 		if d == nil || !validRoleID(d.Id) || len(d.Title) > maxRoleTitle || !validText(d.Title) || d.Color > 0xFFFFFF ||
@@ -227,6 +239,8 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, at pos
 		return s.define(rules, c, author, b.Def)
 	case MemberInvite:
 		return s.invite(rules, author, at, b.Invite)
+	case MemberTimeout:
+		return s.timeoutStep(author, b)
 	}
 	target, ok := pubToID(b.Member)
 	if !ok {
@@ -256,6 +270,11 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, at pos
 			// anyone holding an invitation joins on their own, with the group's default role
 			if name != rules.DefaultRole(c) {
 				return false
+			}
+			if ir, ok := rules.(InviteRules); ok && ir.NeedsInvite(c) {
+				if inv, ok := s.invites[b.Via]; !ok || inv.Approval {
+					return false // no invitation that lets them in by itself
+				}
 			}
 		} else if !isMember || actor.Perms&PermManageRoles == 0 || (actor.Rank < ownerRank && r.Rank >= actor.Rank) {
 			return false

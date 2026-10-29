@@ -16,6 +16,17 @@ import (
 // everywhere, whichever member let the newcomer in. Two members letting people in at the same
 // moment may go past the limit by the joins they did not see yet.
 
+// In a group that takes invitations (a private one, InviteRules), a member who writes their own
+// join counts only with an invitation that lets them in by itself (one that asks for approval
+// does not): knowing the group's ID is not enough to be on its member list.
+
+// InviteRules is what GroupRules tells, when it can, about a group's way in.
+type InviteRules interface {
+	// NeedsInvite: joining takes an invitation (a private group); an open room or a channel's
+	// readers join freely.
+	NeedsInvite(c Conv) bool
+}
+
 // MemberInvite makes or revokes an invitation (body.invite).
 const MemberInvite uint32 = 8
 
@@ -26,15 +37,17 @@ const (
 
 // Invite is an invitation of a group as the log has it.
 type Invite struct {
-	N       string       `json:"n"`
-	Exp     int64        `json:"exp"`
-	Uses    uint32       `json:"uses,omitempty"`
-	Used    uint32       `json:"used"`
-	Role    string       `json:"role,omitempty"`
-	Label   string       `json:"label,omitempty"`
-	Revoked bool         `json:"revoked,omitempty"`
-	Issuer  types.PeerID `json:"-"`
-	Created uint64       `json:"-"` // the clock of the event that made it: the order of the list
+	N       string `json:"n"`
+	Exp     int64  `json:"exp"`
+	Uses    uint32 `json:"uses,omitempty"`
+	Used    uint32 `json:"used"`
+	Role    string `json:"role,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Revoked bool   `json:"revoked,omitempty"`
+	// Approval: who comes with it waits until someone who lets members in accepts them
+	Approval bool         `json:"approval,omitempty"`
+	Issuer   types.PeerID `json:"-"`
+	Created  uint64       `json:"-"` // the clock of the event that made it: the order of the list
 }
 
 // Spent reports whether the invitation lets nobody in any more by its count or a revocation.
@@ -75,7 +88,8 @@ func (s *memberState) invite(rules GroupRules, author types.PeerID, at pos, d *I
 			return false
 		}
 	}
-	s.invites[d.N] = &Invite{N: d.N, Exp: d.Exp, Uses: d.Uses, Role: d.Role, Label: d.Label, Issuer: author, Created: at.L}
+	s.invites[d.N] = &Invite{N: d.N, Exp: d.Exp, Uses: d.Uses, Role: d.Role, Label: d.Label, Approval: d.Approval,
+		Issuer: author, Created: at.L}
 	return true
 }
 

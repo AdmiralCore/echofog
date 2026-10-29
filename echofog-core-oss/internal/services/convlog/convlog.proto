@@ -47,11 +47,11 @@ message PinBody {
 // membership with a roster; after that every join, role change, removal and ban is an event, and
 // what anyone may do at a point of the log follows from the ones before that point.
 message MemberBody {
-  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role, 8 invite
+  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role, 8 invite, 9 timeout
   bytes  member = 2;            // the member's 32-byte identity public key (not for a roster)
   string role   = 3;            // role: the new role; join: the role given (empty: the default)
   repeated RosterEntry roster = 4;
-  // remove, ban: the member's last sequence number the author had seen. Everyone refuses their
+  // remove, ban, timeout: the member's last sequence number the author had seen. Everyone refuses their
   // events numbered after it unless they are let in again later: an author picks the Lamport of
   // their events, so without this a removed member could write "before" the removal. 0: not said.
   uint64 upto_seq = 5;
@@ -59,6 +59,9 @@ message MemberBody {
   InviteDef invite = 7;         // invite: an invitation made or revoked
   // join: the invitation (InviteDef.n) the member came in with; it counts as one of its uses
   string via = 8;
+  // timeout: until when the member may not write or react, unix seconds (now or earlier lifts it);
+  // upto_seq says their last event before it, as for a removal
+  int64 until = 9;
 }
 
 // InviteDef is an invitation to a group: who may invite makes one (with how long it lets people
@@ -71,6 +74,7 @@ message InviteDef {
   string role    = 4; // the role they get; empty: the group's default one
   string label   = 5; // a note for the members who manage invitations
   bool   revoked = 6;
+  bool   approval = 7; // who comes with it waits until someone who lets members in accepts them
 }
 
 // RoleDef is a role of a group as its definition says: a custom one, or a built-in one whose

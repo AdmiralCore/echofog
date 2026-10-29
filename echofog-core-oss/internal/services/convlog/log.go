@@ -113,7 +113,7 @@ func (l *Log) membersOf(bc string) *members {
 				continue
 			}
 			if b, ok := decodeMember(e); ok {
-				m.add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, author: AuthorID(e), body: b})
+				m.add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, ts: e.TsMs, author: AuthorID(e), body: b})
 			}
 		}
 	}
@@ -157,7 +157,12 @@ var atEnd = pos{L: ^uint64(0)}
 func (l *Log) RightsOf(c Conv, peer types.PeerID) Rights {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.rightsAt(c, l.bc(c.ID), peer, nil, atEnd)
+	bc := l.bc(c.ID)
+	r := l.rightsAt(c, bc, peer, nil, atEnd)
+	if c.Kind == KindGroup && r.Member && l.timeoutLocked(c, bc, peer) > 0 {
+		r = muted(r)
+	}
+	return r
 }
 
 // Participant reports whether peer takes part in c now.
@@ -385,6 +390,11 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 				return ErrNotParticipant // written after their removal, placed before it
 			}
 		}
+		if t.c.Kind == KindGroup && timedOutKind(e.Kind) {
+			if rules := l.groupRules(); rules != nil && l.membersOf(t.bc).timedOut(rules, t.c, authorID, e.Seq, e.TsMs) {
+				return ErrForbidden // written during their timeout
+			}
+		}
 		if t.c.Kind == KindGroup && e.Kind != KindChannel && e.Kind != KindThread {
 			// what the author may do in the channel the event acts in
 			if ch, ok := t.channel(t.eventChannel(e)); ok && len(ch.Overrides) > 0 {
@@ -502,7 +512,7 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 	m := l.membersOf(t.bc)
 	if mode == modeNew {
 		t.put(memberKey(t.bc, e.Lamport, at.ID), raw)
-		m.add(memberEv{at: at, seq: e.Seq, author: AuthorID(e), body: b})
+		m.add(memberEv{at: at, seq: e.Seq, ts: e.TsMs, author: AuthorID(e), body: b})
 	}
 	rules := l.groupRules()
 	if rules == nil || !m.allowed(rules, t.c, at) {
@@ -515,7 +525,7 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 		// it changes who could do what at points already applied or held
 		t.meta.Rebuild = true
 	}
-	if mode == modeNew && (b.Action == MemberRemove || b.Action == MemberBan) && len(b.Member) == authorLen {
+	if mode == modeNew && (b.Action == MemberRemove || b.Action == MemberBan || b.Action == MemberTimeout) && len(b.Member) == authorLen {
 		// a removal cuts off the member's later events wherever they sit: if some are applied
 		// already, placed before it, weigh them again
 		if target, ok := pubToID(b.Member); ok {
@@ -546,7 +556,7 @@ func (l *Log) keepRejected(t *txn, e *Event, id EventID, raw []byte) {
 	if e.Kind == KindMember && t.c.Kind == KindGroup {
 		if b, ok := decodeMember(e); ok {
 			t.put(memberKey(t.bc, e.Lamport, id.String()), raw)
-			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, author: AuthorID(e), body: b})
+			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, ts: e.TsMs, author: AuthorID(e), body: b})
 		}
 	}
 	l.keep(t, e, id.String(), raw, raw, modeNew)

@@ -522,60 +522,22 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		if _, err := f.mgr.GetGroup(w.Group); err != nil {
 			return nil
 		}
-		if _, already := f.member(w.Group, origin); !already && f.needsInvite(w.Group) && !f.inviteValid(w.Group, w.Inv) {
+		_, already := f.member(w.Group, origin)
+		if !already && f.needsInvite(w.Group) && !f.inviteValid(w.Group, w.Inv) {
 			slog.Info("Refused a join without a valid invitation", "group_id", w.Group, "peer", origin.String()[:8])
 			return nil
 		}
-		if err := f.mgr.SelfJoin(w.Group, origin, pub); err != nil {
-			return nil
-		}
-		_ = f.persist(w.Group)
-		title := f.titleOf(w.Group)
-		after = append(after, func() {
-			f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title, From: origin.String()})
-		})
-		// whoever may manage members tells the newcomer who is in the group: once a minute per
-		// newcomer, so leaving and joining in a loop does not flood the group (keys always go)
-		k := "join/" + w.Group + "/" + origin.String()
-		last, answered := f.paced[k]
-		fresh := !answered || f.clock().Sub(last) >= joinPause
-		if role, err := f.mgr.GetMemberRole(w.Group, f.selfID); err == nil && role.Permissions&groups.PermManageRoles != 0 && !fresh {
-			after = append(after, f.maybeRotate(w.Group, false)...)
-			return append(after, f.sendEpochs(w.Group, origin)...)
-		}
-		if role, err := f.mgr.GetMemberRole(w.Group, f.selfID); err == nil && role.Permissions&groups.PermManageRoles != 0 {
-			f.paced[k] = f.clock()
-			// the newcomer's membership on the log, written by whoever may let members in
-			join := memberBody(convlog.MemberJoin, pub, "")
-			if w.Inv != nil && f.inviteState != nil {
-				if st, ok := f.inviteState(w.Group, w.Inv.N); ok {
-					join.Via = st.N // one of the invitation's uses, counted on the log
-					if st.Role != "" {
-						// the role the invitation gives, from whoever lets the newcomer in
-						target, role := origin.String(), st.Role
-						after = append(after, func() { _ = f.SetRole(w.Group, target, role) })
-					}
+		via := ""
+		if w.Inv != nil && f.inviteState != nil {
+			if st, ok := f.inviteState(w.Group, w.Inv.N); ok {
+				via = st.N
+				if st.Approval && !already {
+					// the invitation asks for someone to accept the newcomer: a request waits
+					return f.noteRequestLocked(w.Group, origin, w.Pub, st)
 				}
 			}
-			after = append(after, func() { f.memberChange(w.Group, join) })
-			snap := groupWire{Kind: "snap", Group: w.Group, Members: f.wireMembers(w.Group)}
-			newcomer := groupWire{Kind: "snap", Group: w.Group, Members: []wireMember{{ID: origin.String(), Pub: w.Pub, Role: role0(f, w.Group, origin)}}}
-			after = append(after, func() { _, _ = f.sendTo(origin, snap) })
-			// the other members only hear of the newcomer from us: they wrote to who they knew
-			after = append(after, func() { f.broadcast(w.Group, newcomer, origin) })
-			// and the newcomer gets the keys (an older group gets its first epoch from its owner)
-			after = append(after, f.maybeRotate(w.Group, false)...)
-			after = append(after, f.sendEpochs(w.Group, origin)...)
-			if chunks := f.historyChunks(w.Group); len(chunks) > 0 {
-				after = append(after, func() { f.sendHistory(origin, w.Group, chunks) })
-			}
-			// a group on the log hands its history over by syncing the log with the newcomer
-			if f.onJoined != nil && f.logModeLocked(w.Group) {
-				hook, g := f.onJoined, w.Group
-				after = append(after, func() { hook(g, origin) })
-			}
 		}
-		return after
+		return f.admitLocked(w.Group, origin, w.Pub, pub, via)
 
 	case "snap":
 		role, err := f.mgr.GetMemberRole(w.Group, origin)
@@ -1296,4 +1258,63 @@ func (f *groupsFacade) removedOnLog(groupID string, author types.PeerID, memberP
 	for _, fn := range after {
 		fn()
 	}
+}
+
+// admitLocked lets a newcomer in (who came with the invitation via, "" none known): into the
+// group's list here, and, from whoever may let members in, onto the log, with the member list,
+// the keys and the history. Call with f.mu held; run what it returns after.
+func (f *groupsFacade) admitLocked(groupID string, origin types.PeerID, pubHex string, pub types.IdentityPublicKey, via string) (after []func()) {
+	if err := f.mgr.SelfJoin(groupID, origin, pub); err != nil {
+		return nil
+	}
+	_ = f.persist(groupID)
+	f.dropRequestLocked(groupID, origin)
+	title := f.titleOf(groupID)
+	after = append(after, func() {
+		f.emitEvent(GroupEvent{Kind: "members", GroupID: groupID, Title: title, From: origin.String()})
+	})
+	// whoever may manage members tells the newcomer who is in the group: once a minute per
+	// newcomer, so leaving and joining in a loop does not flood the group (keys always go)
+	k := "join/" + groupID + "/" + origin.String()
+	last, answered := f.paced[k]
+	fresh := !answered || f.clock().Sub(last) >= joinPause
+	role, err := f.mgr.GetMemberRole(groupID, f.selfID)
+	if err != nil || role.Permissions&groups.PermManageRoles == 0 {
+		return after
+	}
+	if !fresh {
+		after = append(after, f.maybeRotate(groupID, false)...)
+		return append(after, f.sendEpochs(groupID, origin)...)
+	}
+	f.paced[k] = f.clock()
+	// the newcomer's membership on the log, written by whoever may let members in
+	join := memberBody(convlog.MemberJoin, pub, "")
+	if via != "" && f.inviteState != nil {
+		if st, ok := f.inviteState(groupID, via); ok {
+			join.Via = st.N // one of the invitation's uses, counted on the log
+			if st.Role != "" {
+				// the role the invitation gives, from whoever lets the newcomer in
+				target, role := origin.String(), st.Role
+				after = append(after, func() { _ = f.SetRole(groupID, target, role) })
+			}
+		}
+	}
+	after = append(after, func() { f.memberChange(groupID, join) })
+	snap := groupWire{Kind: "snap", Group: groupID, Members: f.wireMembers(groupID)}
+	newcomer := groupWire{Kind: "snap", Group: groupID, Members: []wireMember{{ID: origin.String(), Pub: pubHex, Role: role0(f, groupID, origin)}}}
+	after = append(after, func() { _, _ = f.sendTo(origin, snap) })
+	// the other members only hear of the newcomer from us: they wrote to who they knew
+	after = append(after, func() { f.broadcast(groupID, newcomer, origin) })
+	// and the newcomer gets the keys (an older group gets its first epoch from its owner)
+	after = append(after, f.maybeRotate(groupID, false)...)
+	after = append(after, f.sendEpochs(groupID, origin)...)
+	if chunks := f.historyChunks(groupID); len(chunks) > 0 {
+		after = append(after, func() { f.sendHistory(origin, groupID, chunks) })
+	}
+	// a group on the log hands its history over by syncing the log with the newcomer
+	if f.onJoined != nil && f.logModeLocked(groupID) {
+		hook := f.onJoined
+		after = append(after, func() { hook(groupID, origin) })
+	}
+	return after
 }

@@ -59,6 +59,12 @@ func (groupRules) Role(name string) (convlog.Role, bool) {
 	return convlog.Role{Name: r.Name, Rank: r.Rank, Perms: uint32(r.Permissions)}, true
 }
 
+// NeedsInvite: a private group counts a member's own join only with an invitation.
+func (p groupRules) NeedsInvite(c convlog.Conv) bool {
+	gf, ok := p.facade()
+	return ok && gf.needsInvite(c.Group)
+}
+
 func (p groupRules) DefaultRole(c convlog.Conv) string {
 	if gf, ok := p.facade(); ok {
 		if g, err := gf.mgr.GetGroup(c.Group); err == nil && g.Type == groups.GroupTypePublicChannel {
@@ -367,7 +373,7 @@ func groupDTOOf(groupID string, m convlog.Message) GroupMessageDTO {
 // all the same: it takes effect once what allows it is in the log.
 func (f *convsFacade) postMember(groupID string, b *convlog.MemberBody) {
 	c := convlog.Group(groupID)
-	if (b.Action == convlog.MemberRemove || b.Action == convlog.MemberBan) && len(b.Member) == 32 && b.UptoSeq == 0 {
+	if (b.Action == convlog.MemberRemove || b.Action == convlog.MemberBan || b.Action == convlog.MemberTimeout) && len(b.Member) == 32 && b.UptoSeq == 0 {
 		// the last of their events that counts: nothing they write after this is let in, wherever
 		// they place it in the log's order
 		var pub types.PeerPublicKey
@@ -429,7 +435,17 @@ func (f *convsFacade) openGroupMembership(gf *groupsFacade, groupID string) {
 		}
 		f.mu.Unlock()
 		if !asked {
-			f.postMember(groupID, memberBody(convlog.MemberJoin, gf.selfPub, ""))
+			join := memberBody(convlog.MemberJoin, gf.selfPub, "")
+			if via, err := gf.store.Get([]byte(joinViaPrefix + groupID)); err == nil {
+				join.Via = string(via)
+			}
+			if join.Via == "" && gf.needsInvite(groupID) {
+				// a private group counts our own join only with an invitation: ask those who let
+				// members in, who have us on their list, to write it
+				gf.broadcast(groupID, groupWire{Kind: "join", Group: groupID, Pub: hex.EncodeToString(gf.selfPub[:])})
+			} else {
+				f.postMember(groupID, join)
+			}
 		}
 	}
 }

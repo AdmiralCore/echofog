@@ -110,17 +110,19 @@ func mayInvite(role groups.Role) bool {
 
 // GroupInviteDTO is one invitation of a group.
 type GroupInviteDTO struct {
-	N       string `json:"n"`
-	Label   string `json:"label,omitempty"`
-	Exp     int64  `json:"exp"`            // unix seconds
-	Uses    uint32 `json:"uses,omitempty"` // 0: no limit
-	Used    uint32 `json:"used"`
-	Role    string `json:"role,omitempty"`
-	Issuer  string `json:"issuer"`
-	Mine    bool   `json:"mine"`
-	State   string `json:"state"`             // active, used, expired, revoked
-	Link    string `json:"link,omitempty"`    // ours only: its maker keeps it
-	WebLink string `json:"webLink,omitempty"` // its https form
+	N     string `json:"n"`
+	Label string `json:"label,omitempty"`
+	Exp   int64  `json:"exp"`            // unix seconds
+	Uses  uint32 `json:"uses,omitempty"` // 0: no limit
+	Used  uint32 `json:"used"`
+	Role  string `json:"role,omitempty"`
+	// Approval: who comes with it waits until someone who lets members in accepts them
+	Approval bool   `json:"approval,omitempty"`
+	Issuer   string `json:"issuer"`
+	Mine     bool   `json:"mine"`
+	State    string `json:"state"`             // active, used, expired, revoked
+	Link     string `json:"link,omitempty"`    // ours only: its maker keeps it
+	WebLink  string `json:"webLink,omitempty"` // its https form
 	// CanRevoke: its maker, or who manages roles
 	CanRevoke bool `json:"canRevoke"`
 }
@@ -131,6 +133,8 @@ type GroupInviteSpec struct {
 	Hours int    `json:"hours"` // how long it lets people in: 1 hour to 31 days
 	Uses  uint32 `json:"uses"`  // 0: no limit
 	Role  string `json:"role"`  // "": the group's default role
+	// Approval: who comes with it waits until someone who lets members in accepts them
+	Approval bool `json:"approval"`
 }
 
 const invLinkPrefix = "grp/invlink/" // + group + "/" + n: the links of invitations we made
@@ -158,7 +162,7 @@ func (n *NodeApi) GroupInvites(groupID string) ([]GroupInviteDTO, error) {
 	out := []GroupInviteDTO{}
 	for _, i := range f.log.Invites(c) {
 		d := GroupInviteDTO{N: i.N, Label: i.Label, Exp: i.Exp, Uses: i.Uses, Used: i.Used, Role: i.Role,
-			Issuer: i.Issuer.String(), Mine: i.Issuer == f.self, State: "active"}
+			Approval: i.Approval, Issuer: i.Issuer.String(), Mine: i.Issuer == f.self, State: "active"}
 		switch {
 		case i.Revoked:
 			d.State = "revoked"
@@ -194,7 +198,8 @@ func (n *NodeApi) GroupInviteCreate(groupID string, spec GroupInviteSpec) (Group
 	if err != nil {
 		return GroupInviteDTO{}, err
 	}
-	raw, id, err := f.log.AppendInvite(c, &convlog.InviteDef{N: tok.N, Exp: tok.Exp, Uses: spec.Uses, Role: spec.Role, Label: label})
+	raw, id, err := f.log.AppendInvite(c, &convlog.InviteDef{N: tok.N, Exp: tok.Exp, Uses: spec.Uses, Role: spec.Role, Label: label,
+		Approval: spec.Approval})
 	if err != nil {
 		if err == convlog.ErrForbidden {
 			return GroupInviteDTO{}, errors.New("your role may not make this invitation (a role in it needs the right to manage roles, below your own)")
@@ -203,7 +208,7 @@ func (n *NodeApi) GroupInviteCreate(groupID string, spec GroupInviteSpec) (Group
 	}
 	_, _ = f.sendEvent(c, raw, id, convlog.KindMember, "", "")
 	_ = gf.store.Set([]byte(invLinkPrefix+groupID+"/"+tok.N), []byte(link))
-	return GroupInviteDTO{N: tok.N, Label: label, Exp: tok.Exp, Uses: spec.Uses, Role: spec.Role, Issuer: f.self.String(),
+	return GroupInviteDTO{N: tok.N, Label: label, Exp: tok.Exp, Uses: spec.Uses, Role: spec.Role, Approval: spec.Approval, Issuer: f.self.String(),
 		Mine: true, State: "active", Link: link, WebLink: GroupWebLink(link), CanRevoke: true}, nil
 }
 

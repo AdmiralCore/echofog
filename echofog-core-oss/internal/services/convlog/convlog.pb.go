@@ -371,18 +371,21 @@ func (x *PinBody) GetOn() bool {
 // what anyone may do at a point of the log follows from the ones before that point.
 type MemberBody struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
-	Action uint32                 `protobuf:"varint,1,opt,name=action,proto3" json:"action,omitempty"` // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role, 8 invite
+	Action uint32                 `protobuf:"varint,1,opt,name=action,proto3" json:"action,omitempty"` // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role, 8 invite, 9 timeout
 	Member []byte                 `protobuf:"bytes,2,opt,name=member,proto3" json:"member,omitempty"`  // the member's 32-byte identity public key (not for a roster)
 	Role   string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`      // role: the new role; join: the role given (empty: the default)
 	Roster []*RosterEntry         `protobuf:"bytes,4,rep,name=roster,proto3" json:"roster,omitempty"`
-	// remove, ban: the member's last sequence number the author had seen. Everyone refuses their
+	// remove, ban, timeout: the member's last sequence number the author had seen. Everyone refuses their
 	// events numbered after it unless they are let in again later: an author picks the Lamport of
 	// their events, so without this a removed member could write "before" the removal. 0: not said.
 	UptoSeq uint64     `protobuf:"varint,5,opt,name=upto_seq,json=uptoSeq,proto3" json:"upto_seq,omitempty"`
 	Def     *RoleDef   `protobuf:"bytes,6,opt,name=def,proto3" json:"def,omitempty"`       // define: the role as it is to be
 	Invite  *InviteDef `protobuf:"bytes,7,opt,name=invite,proto3" json:"invite,omitempty"` // invite: an invitation made or revoked
 	// join: the invitation (InviteDef.n) the member came in with; it counts as one of its uses
-	Via           string `protobuf:"bytes,8,opt,name=via,proto3" json:"via,omitempty"`
+	Via string `protobuf:"bytes,8,opt,name=via,proto3" json:"via,omitempty"`
+	// timeout: until when the member may not write or react, unix seconds (now or earlier lifts it);
+	// upto_seq says their last event before it, as for a removal
+	Until         int64 `protobuf:"varint,9,opt,name=until,proto3" json:"until,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -473,6 +476,13 @@ func (x *MemberBody) GetVia() string {
 	return ""
 }
 
+func (x *MemberBody) GetUntil() int64 {
+	if x != nil {
+		return x.Until
+	}
+	return 0
+}
+
 // InviteDef is an invitation to a group: who may invite makes one (with how long it lets people
 // in, how many, and the role they get), the one who made it or who manages roles revokes it. The
 // link carries a token signed by its maker with the same n; who lets a newcomer in checks both.
@@ -484,6 +494,7 @@ type InviteDef struct {
 	Role          string                 `protobuf:"bytes,4,opt,name=role,proto3" json:"role,omitempty"`   // the role they get; empty: the group's default one
 	Label         string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"` // a note for the members who manage invitations
 	Revoked       bool                   `protobuf:"varint,6,opt,name=revoked,proto3" json:"revoked,omitempty"`
+	Approval      bool                   `protobuf:"varint,7,opt,name=approval,proto3" json:"approval,omitempty"` // who comes with it waits until someone who lets members in accepts them
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -556,6 +567,13 @@ func (x *InviteDef) GetLabel() string {
 func (x *InviteDef) GetRevoked() bool {
 	if x != nil {
 		return x.Revoked
+	}
+	return false
+}
+
+func (x *InviteDef) GetApproval() bool {
+	if x != nil {
+		return x.Approval
 	}
 	return false
 }
@@ -1376,7 +1394,7 @@ const file_internal_services_convlog_convlog_proto_rawDesc = "" +
 	"\x05emoji\x18\x01 \x01(\tR\x05emoji\x12\x0e\n" +
 	"\x02on\x18\x02 \x01(\bR\x02on\"\x19\n" +
 	"\aPinBody\x12\x0e\n" +
-	"\x02on\x18\x01 \x01(\bR\x02on\"\xfb\x01\n" +
+	"\x02on\x18\x01 \x01(\bR\x02on\"\x91\x02\n" +
 	"\n" +
 	"MemberBody\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\rR\x06action\x12\x16\n" +
@@ -1386,14 +1404,16 @@ const file_internal_services_convlog_convlog_proto_rawDesc = "" +
 	"\bupto_seq\x18\x05 \x01(\x04R\auptoSeq\x12\"\n" +
 	"\x03def\x18\x06 \x01(\v2\x10.convlog.RoleDefR\x03def\x12*\n" +
 	"\x06invite\x18\a \x01(\v2\x12.convlog.InviteDefR\x06invite\x12\x10\n" +
-	"\x03via\x18\b \x01(\tR\x03via\"\x83\x01\n" +
+	"\x03via\x18\b \x01(\tR\x03via\x12\x14\n" +
+	"\x05until\x18\t \x01(\x03R\x05until\"\x9f\x01\n" +
 	"\tInviteDef\x12\f\n" +
 	"\x01n\x18\x01 \x01(\tR\x01n\x12\x10\n" +
 	"\x03exp\x18\x02 \x01(\x03R\x03exp\x12\x12\n" +
 	"\x04uses\x18\x03 \x01(\rR\x04uses\x12\x12\n" +
 	"\x04role\x18\x04 \x01(\tR\x04role\x12\x14\n" +
 	"\x05label\x18\x05 \x01(\tR\x05label\x12\x18\n" +
-	"\arevoked\x18\x06 \x01(\bR\arevoked\"\x89\x01\n" +
+	"\arevoked\x18\x06 \x01(\bR\arevoked\x12\x1a\n" +
+	"\bapproval\x18\a \x01(\bR\bapproval\"\x89\x01\n" +
 	"\aRoleDef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x14\n" +

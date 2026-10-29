@@ -27,6 +27,8 @@ type ConvCan struct {
 	Invite   bool `json:"invite"`   // hand out the group's invitation
 	Call     bool `json:"call"`     // start or join a call
 	Stream   bool `json:"stream"`   // share a screen or a camera
+	// MutedUntil: I am in a timeout until then (unix seconds; 0 none)
+	MutedUntil int64 `json:"mutedUntil,omitempty"`
 }
 
 // myRights is what I may do in c now: in a group whose log has no roster yet, by the group's
@@ -92,7 +94,7 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		d.Can = ConvCan{Send: r.Send, Files: r.Send && r.Media, Links: r.Links, Threads: r.Threads,
 			React: d.Upgraded && r.React, Pin: d.Upgraded && r.Pin, Manage: manage, Channels: r.Manage, Roles: r.Roles,
 			Invite: r.Invite || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),
-			Call:   r.Voice, Stream: r.Voice && r.Stream}
+			Call:   r.Voice, Stream: r.Voice && r.Stream, MutedUntil: f.log.TimeoutOf(c, f.self)}
 	}
 }
 

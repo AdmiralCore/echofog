@@ -129,3 +129,38 @@ func TestManagedInvitationsAndTheirForms(t *testing.T) {
 	owner.f.mu.Unlock()
 	assert.Len(t, listed, 1, "only the owner lets newcomers in")
 }
+
+// With an invitation that asks for approval the newcomer is not let in at once: a request waits
+// with whoever may let members in, who accepts it (the newcomer is in) or not.
+func TestApprovalInvitationsWaitForAnAnswer(t *testing.T) {
+	h := newHub()
+	owner, x := h.node(t, newMemStore()), h.node(t, newMemStore())
+	g, err := owner.f.Create("Crew", "", "group")
+	require.NoError(t, err)
+	invite, err := owner.f.Invite(g.ID)
+	require.NoError(t, err)
+	tok := tokenOf(t, invite)
+	owner.f.inviteState = func(_, n string) (convlog.Invite, bool) {
+		return convlog.Invite{N: tok.N, Exp: tok.Exp, Approval: true, Label: "stream"}, n == tok.N
+	}
+	owner.f.handle(x.id, encodeWire(groupWire{Kind: "join", Group: g.ID, Pub: x.pubHex, Inv: tok}))
+	assert.Equal(t, "", roleOf(t, owner, g.ID, x), "not let in before an answer")
+	owner.f.mu.Lock()
+	reqs := owner.f.requestsLocked(g.ID)
+	owner.f.mu.Unlock()
+	require.Len(t, reqs, 1)
+	assert.Equal(t, "stream", reqs[0].Label)
+
+	pub, ok := parsePub(reqs[0].Pub)
+	require.True(t, ok)
+	owner.f.mu.Lock()
+	after := owner.f.admitLocked(g.ID, x.id, reqs[0].Pub, pub, reqs[0].Via)
+	owner.f.mu.Unlock()
+	for _, fn := range after {
+		fn()
+	}
+	assert.NotEqual(t, "", roleOf(t, owner, g.ID, x), "accepted: in")
+	owner.f.mu.Lock()
+	assert.Empty(t, owner.f.requestsLocked(g.ID), "the request went")
+	owner.f.mu.Unlock()
+}
