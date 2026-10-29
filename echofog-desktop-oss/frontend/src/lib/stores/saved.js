@@ -2,7 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import { App, errText } from '../api.js';
 import { tr } from '../i18n/index.js';
 
-/** Bookmarked messages, the latest saved first: { id, chatId, chatName, msgId, sender, mine, text, fileName, fileSize, ts, savedAt } */
+/** Bookmarked messages, the latest saved first: { id, chatId, chatName, msgId, channel, thread, sender, mine, text, fileName, fileSize, ts, savedAt } */
 export const saved = writable([]);
 /** IDs ("<chat>/<message>") of the saved messages, for the bookmark marks in chats. */
 export const savedIds = derived(saved, (list) => new Set(list.map((m) => m.id)));
@@ -30,7 +30,7 @@ export async function toggleSaved(conv, m, senderName) {
       return false;
     }
     const s = await App.SaveMessage({
-      id: '', chatId: conv.id, chatName: conv.name, msgId: m.id, sender: m.mine ? '' : senderName || m.sender || '', mine: !!m.mine,
+      id: '', chatId: conv.id, chatName: conv.name, msgId: m.id, channel: m.channel || '', thread: m.thread || '', sender: m.mine ? '' : senderName || m.sender || '', mine: !!m.mine,
       text: m.text || '', fileName: m.file?.name || '', fileSize: m.file?.size || 0, ts: m.ts || 0, savedAt: 0,
     });
     saved.update((list) => [s, ...list.filter((x) => x.id !== s.id)]);

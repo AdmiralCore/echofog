@@ -320,6 +320,10 @@ type SavedMessageDTO struct {
 	ChatID   string `json:"chatId"` // "d:<peer>" or "g:<group>", as the UI names chats
 	ChatName string `json:"chatName"`
 	MsgID    string `json:"msgId"`
+	// Channel and Thread say where in a group the message is: its channel ("" the main one) and,
+	// for a comment, the root message of its thread. "Go to" opens them; older bookmarks lack them.
+	Channel  string `json:"channel,omitempty"`
+	Thread   string `json:"thread,omitempty"`
 	Sender   string `json:"sender,omitempty"`
 	Mine     bool   `json:"mine"`
 	Text     string `json:"text"`

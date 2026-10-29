@@ -3,7 +3,7 @@
   import { createEventDispatcher } from 'svelte';
   import { fly } from 'svelte/transition';
   import { saved, savedError, unsave, saveAsFile, jumpTo } from '../stores/saved.js';
-  import { chats, openChat } from '../stores/chats.js';
+  import { chats, openChat, openChannel, openThread } from '../stores/chats.js';
   import { copy, openURL } from '../api.js';
   import { bytes, when, time } from '../format.js';
   import { linkify, mark, linkHost } from '../linkify.js';
@@ -21,10 +21,14 @@
   $: list = $saved.filter((m) => !q || (m.text + ' ' + (m.fileName || '') + ' ' + m.chatName).toLowerCase().includes(q));
   $: known = new Set($chats.map((c) => c.id));
 
+  // to where the message is: the chat, then its channel, then (a comment) its thread, whose root
+  // is the message the chat scrolls to
   async function go(m) {
     if (!known.has(m.chatId)) return;
-    jumpTo.set({ chatId: m.chatId, msgId: m.msgId });
     await openChat(m.chatId);
+    if (m.channel) await openChannel(m.channel);
+    jumpTo.set({ chatId: m.chatId, msgId: m.thread || m.msgId });
+    if (m.thread) await openThread(m.thread);
   }
 
   async function doCopy(m) {
