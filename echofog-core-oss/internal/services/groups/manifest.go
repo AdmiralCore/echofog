@@ -18,15 +18,26 @@ const (
 type PermissionMask uint32
 
 const (
-	PermSendMessages   PermissionMask = 1 << 0 // Write text messages
-	PermSendMedia      PermissionMask = 1 << 1 // Send files/photos/audio
-	PermJoinVoice      PermissionMask = 1 << 2 // Speak in voice backbone tree
-	PermPublishStream  PermissionMask = 1 << 3 // Broadcast screen/webcam stream
-	PermDeleteMessages PermissionMask = 1 << 4 // Delete other users' messages (Tombstone)
-	PermKickMembers    PermissionMask = 1 << 5 // Kick member temporarily
-	PermBanMembers     PermissionMask = 1 << 6 // Permanent ban + cryptographic key eviction
-	PermManageRoles    PermissionMask = 1 << 7 // Promote/demote members of lower rank
-	PermManageGroup    PermissionMask = 1 << 8 // Modify name/avatar/description
+	PermSendMessages   PermissionMask = 1 << 0  // Write text messages
+	PermSendMedia      PermissionMask = 1 << 1  // Send files/photos/audio
+	PermJoinVoice      PermissionMask = 1 << 2  // Speak in voice backbone tree
+	PermPublishStream  PermissionMask = 1 << 3  // Broadcast screen/webcam stream
+	PermDeleteMessages PermissionMask = 1 << 4  // Delete other users' messages (Tombstone)
+	PermKickMembers    PermissionMask = 1 << 5  // Kick member temporarily
+	PermBanMembers     PermissionMask = 1 << 6  // Permanent ban + cryptographic key eviction
+	PermManageRoles    PermissionMask = 1 << 7  // Promote/demote members of lower rank
+	PermManageGroup    PermissionMask = 1 << 8  // Modify name/avatar/description
+	PermLinks          PermissionMask = 1 << 9  // Post links
+	PermThreads        PermissionMask = 1 << 10 // Write in threads (comments)
+	PermPin            PermissionMask = 1 << 11 // Pin messages for everyone
+	PermReact          PermissionMask = 1 << 12 // React to messages
+	PermInvite         PermissionMask = 1 << 13 // Hand out invitations
+	PermManageChannels PermissionMask = 1 << 14 // Create, change and order channels and categories
+
+	PermAll PermissionMask = 1<<15 - 1
+
+	// permWriter is what a member who takes part may do
+	permWriter = PermSendMessages | PermSendMedia | PermJoinVoice | PermLinks | PermThreads | PermReact | PermInvite
 )
 
 // Role defines hierarchy rank and permission bitmask.
@@ -34,45 +45,45 @@ type Role struct {
 	Name        string         `json:"name"`
 	Rank        int            `json:"rank"` // 100=Owner, 50=Admin, 25=Moderator, 10=Member, 1=Restricted
 	Permissions PermissionMask `json:"permissions"`
+	Title       string         `json:"title,omitempty"` // a custom role's (or a renamed built-in one's) name
+	Color       uint32         `json:"color,omitempty"` // 0xRRGGBB
 }
 
 var (
 	RoleOwner = Role{
-		Name: "owner",
-		Rank: 100,
-		Permissions: PermSendMessages | PermSendMedia | PermJoinVoice | PermPublishStream |
-			PermDeleteMessages | PermKickMembers | PermBanMembers | PermManageRoles | PermManageGroup,
+		Name:        "owner",
+		Rank:        100,
+		Permissions: PermAll,
 	}
 
 	RoleAdmin = Role{
-		Name: "admin",
-		Rank: 50,
-		Permissions: PermSendMessages | PermSendMedia | PermJoinVoice | PermPublishStream |
-			PermDeleteMessages | PermKickMembers | PermBanMembers | PermManageRoles,
+		Name:        "admin",
+		Rank:        50,
+		Permissions: PermAll &^ PermManageGroup,
 	}
 
 	RoleModerator = Role{
 		Name:        "moderator",
 		Rank:        25,
-		Permissions: PermSendMessages | PermSendMedia | PermJoinVoice | PermDeleteMessages | PermKickMembers,
+		Permissions: permWriter | PermDeleteMessages | PermKickMembers | PermPin,
 	}
 
 	RoleMember = Role{
 		Name:        "member",
 		Rank:        10,
-		Permissions: PermSendMessages | PermSendMedia | PermJoinVoice,
+		Permissions: permWriter,
 	}
 
 	RoleChannelSubscriber = Role{
 		Name:        "subscriber",
 		Rank:        10,
-		Permissions: 0, // Read-only by default in channels
+		Permissions: PermReact, // Read-only by default in channels
 	}
 
 	RoleRestricted = Role{
 		Name:        "restricted",
 		Rank:        1,
-		Permissions: 0, // Muted / Read-only
+		Permissions: PermReact, // Muted / Read-only
 	}
 )
 

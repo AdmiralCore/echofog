@@ -76,3 +76,16 @@ func VerifyTombstoneSignature(t *MessageTombstone) bool {
 	pubKey := ed25519.PublicKey(t.ActorPub[:])
 	return ed25519.Verify(pubKey, digest, t.Signature[:])
 }
+
+// validRoleName: a role's name as a group's log may define it ([a-z0-9-], at most 32).
+func validRoleName(s string) bool {
+	if s == "" || len(s) > 32 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return false
+		}
+	}
+	return true
+}

@@ -46,8 +46,10 @@ type GroupDTO struct {
 }
 
 type GroupMemberDTO struct {
-	PeerID   string `json:"peerId"`
-	Role     string `json:"role"`
+	PeerID    string `json:"peerId"`
+	Role      string `json:"role"`
+	RoleTitle string `json:"roleTitle,omitempty"` // a custom (or renamed) role's name
+	RoleColor uint32 `json:"roleColor,omitempty"` // 0xRRGGBB
 	JoinedAt int64  `json:"joinedAt"`
 	IsMe     bool   `json:"isMe"`
 	Online   bool   `json:"online"` // the node has a link to them now (oneself: always)
@@ -58,9 +60,6 @@ type GroupMemberDTO struct {
 	Roles       []string `json:"roles,omitempty"`
 	CanTransfer bool     `json:"canTransfer"`
 }
-
-// assignableRoles are the roles a manager may give, highest first.
-var assignableRoles = []groups.Role{groups.RoleAdmin, groups.RoleModerator, groups.RoleMember, groups.RoleRestricted}
 
 type GroupMessageDTO struct {
 	ID        string        `json:"id"`
@@ -176,6 +175,10 @@ type groupsFacade struct {
 	retrying bool
 
 	rekeys map[string]*pendingRekey // epoch replacements waiting for the gap since the last one
+
+	// the groups' role definitions on their logs, by group and role (group_roles.go)
+	rolesMu  sync.Mutex
+	roleDefs map[string]map[string]groups.Role
 	now    func() time.Time         // the clock of the key logic (tests move it)
 }
 
@@ -337,7 +340,7 @@ func (f *groupsFacade) Invite(groupID string) (string, error) {
 	if f.needsInvite(groupID) {
 		role, err := f.mgr.GetMemberRole(groupID, f.selfID)
 		if err != nil || !mayInvite(role) {
-			return "", errors.New("a restricted member cannot invite to a private group")
+			return "", errors.New("your role may not invite to this group")
 		}
 		if tok, err = f.newInviteToken(groupID); err != nil {
 			return "", err
@@ -450,16 +453,23 @@ func (f *groupsFacade) Members(groupID string) ([]GroupMemberDTO, error) {
 		return nil, err
 	}
 	me, meErr := f.mgr.GetMemberRole(groupID, f.selfID)
+	var assignable []groups.Role // the roles a manager may give, highest first: not the owner's
+	for _, r := range f.roles(groupID) {
+		if r.Rank < groups.RoleOwner.Rank {
+			assignable = append(assignable, r)
+		}
+	}
 	out := make([]GroupMemberDTO, 0, len(members))
 	for _, m := range members {
-		d := GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID}
+		d := GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, RoleTitle: m.Role.Title, RoleColor: m.Role.Color,
+			JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID}
 		d.Online = d.IsMe || (f.online != nil && f.online(m.PeerID))
 		if meErr == nil && !d.IsMe {
 			over := groups.CanAdminister(me, m.Role) // the same rules the group service applies
 			d.CanKick = over && groups.HasPermission(me, groups.PermKickMembers)
 			d.CanBan = over && groups.HasPermission(me, groups.PermBanMembers)
 			if over && groups.HasPermission(me, groups.PermManageRoles) {
-				for _, r := range assignableRoles {
+				for _, r := range assignable {
 					if groups.CanAssignRole(me, r) || r.Name == m.Role.Name {
 						d.Roles = append(d.Roles, r.Name)
 					}
@@ -531,6 +541,10 @@ func (f *groupsFacade) SendFile(groupID, channel, thread, path string) (GroupMes
 		return GroupMessageDTO{}, err
 	}
 	f.mu.Lock()
+	if r, ok := f.role(groupID, f.selfID); !ok || r.Permissions&groups.PermSendMedia == 0 {
+		f.mu.Unlock()
+		return GroupMessageDTO{}, errors.New("your role may not send files here")
+	}
 	list, err := f.mgr.ListMembers(groupID)
 	f.mu.Unlock()
 	if err != nil {

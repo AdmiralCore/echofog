@@ -33,7 +33,7 @@ func (m *GroupManager) ApplyRole(groupID string, actor, target types.PeerID, rol
 	defer func() {
 		m.logOp("remote role", groupID, err, "actor", shortPeer(actor), "target", shortPeer(target), "role", roleName)
 	}()
-	role, err := ResolveRole(roleName)
+	role, err := m.resolveRole(groupID, roleName)
 	if err != nil {
 		return err
 	}
@@ -196,10 +196,15 @@ func (m *GroupManager) MergeMembers(groupID string, list []MemberProfile, author
 			badKey++
 			continue
 		}
-		role, rerr := ResolveRole(p.Role.Name)
+		role, rerr := m.resolveRole(groupID, p.Role.Name)
 		if rerr != nil {
+			// a custom role whose definition has not reached us yet: a member's rights under its
+			// name until it does (RefreshRoles)
 			m.logger().Debug("Unknown role in group member list, taking it as member", "group_id", groupID, "member", shortPeer(p.PeerID), "role", p.Role.Name)
 			role = RoleMember
+			if validRoleName(p.Role.Name) {
+				role.Name = p.Role.Name
+			}
 		}
 		prof, known := st.Members[p.PeerID]
 		if !known {

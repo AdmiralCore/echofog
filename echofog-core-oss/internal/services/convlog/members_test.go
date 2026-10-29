@@ -16,12 +16,15 @@ type testRules struct {
 	channel bool
 }
 
+// the group service's built-in roles
+const testWriter = PermSend | PermMedia | PermVoice | PermLinks | PermThreads | PermReact | PermInvite
+
 var testRoles = map[string]Role{
-	"owner":      {Name: "owner", Rank: 100, Perms: PermSend | PermDelete | PermKick | PermBan | PermManageRoles | PermManageGroup},
-	"admin":      {Name: "admin", Rank: 50, Perms: PermSend | PermDelete | PermKick | PermBan | PermManageRoles},
-	"moderator":  {Name: "moderator", Rank: 25, Perms: PermSend | PermDelete | PermKick},
-	"member":     {Name: "member", Rank: 10, Perms: PermSend},
-	"subscriber": {Name: "subscriber", Rank: 10},
+	"owner":      {Name: "owner", Rank: 100, Perms: PermAll},
+	"admin":      {Name: "admin", Rank: 50, Perms: PermAll &^ PermManageGroup},
+	"moderator":  {Name: "moderator", Rank: 25, Perms: testWriter | PermDelete | PermKick | PermPin},
+	"member":     {Name: "member", Rank: 10, Perms: testWriter},
+	"subscriber": {Name: "subscriber", Rank: 10, Perms: PermReact},
 }
 
 func (r testRules) Current(Conv, types.PeerID) Rights { return Rights{} }

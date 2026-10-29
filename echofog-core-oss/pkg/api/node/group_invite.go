@@ -12,7 +12,8 @@ import (
 )
 
 // An invitation to a private group carries a token: a random number and an end, signed by a member
-// who may invite (any member who takes part: not a restricted one or a channel's reader). A "join"
+// who may invite (whose role has the permission: by default any member who takes part, not a
+// restricted one or a channel's reader). A "join"
 // is taken only with a valid one. Without it the invitation was only the group's genesis and its
 // member list, so anyone who once saw a link, or learnt the group's ID, could send "join" to an
 // admin and be handed the keys and the history.
@@ -82,7 +83,7 @@ func (f *groupsFacade) inviteValid(groupID string, t *inviteToken) bool {
 	return err == nil && mayInvite(role)
 }
 
-// mayInvite: the role takes part in the group (it may write), so its invitations let people in.
+// mayInvite: the role may hand out invitations, so its invitations let people in.
 func mayInvite(role groups.Role) bool {
-	return groups.HasPermission(role, groups.PermSendMessages)
+	return groups.HasPermission(role, groups.PermInvite)
 }

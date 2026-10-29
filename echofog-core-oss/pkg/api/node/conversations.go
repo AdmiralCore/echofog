@@ -681,6 +681,11 @@ func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
 			return f.dress(c, []convlog.Message{m})[0], nil
 		}
 	}
+	if thread.IsZero() {
+		if err := f.slowWait(c, ref.Channel); err != nil {
+			return convlog.Message{}, err
+		}
+	}
 	raw, id, err := f.log.AppendMessageIn(c, ref.Channel, req.Text, 0, "", reply, thread)
 	if err != nil {
 		return convlog.Message{}, err

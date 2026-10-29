@@ -189,7 +189,10 @@ func memberProfiles(list []wireMember) []groups.MemberProfile {
 		id, ok1 := parsePeer(w.ID)
 		pub, ok2 := parsePub(w.Pub)
 		role, err := groups.ResolveRole(w.Role)
-		if ok1 && ok2 && err == nil {
+		if err != nil {
+			role = groups.Role{Name: w.Role} // a group's own role: MergeMembers resolves it
+		}
+		if ok1 && ok2 && w.Role != "" {
 			out = append(out, groups.MemberProfile{PeerID: id, PubKey: pub, Role: role})
 		}
 	}

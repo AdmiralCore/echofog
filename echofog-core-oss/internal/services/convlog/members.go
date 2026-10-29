@@ -3,6 +3,7 @@ package convlog
 import (
 	"bytes"
 	"sort"
+	"strings"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"google.golang.org/protobuf/proto"
@@ -26,42 +27,75 @@ const (
 	MemberRemove uint32 = 4
 	MemberBan    uint32 = 5
 	MemberUnban  uint32 = 6
+	MemberDefine uint32 = 7 // defines a role (body.def)
 )
 
 // Permission bits of a role, the same values as the group service's.
 const (
-	PermSend        uint32 = 1 << 0
-	PermDelete      uint32 = 1 << 4
-	PermKick        uint32 = 1 << 5
-	PermBan         uint32 = 1 << 6
-	PermManageRoles uint32 = 1 << 7
-	PermManageGroup uint32 = 1 << 8
+	PermSend           uint32 = 1 << 0  // write messages
+	PermMedia          uint32 = 1 << 1  // send files
+	PermVoice          uint32 = 1 << 2  // join calls and voice rooms
+	PermStream         uint32 = 1 << 3  // share a screen or a camera
+	PermDelete         uint32 = 1 << 4  // delete other people's messages
+	PermKick           uint32 = 1 << 5  // remove members
+	PermBan            uint32 = 1 << 6  // ban members
+	PermManageRoles    uint32 = 1 << 7  // give members roles, define roles
+	PermManageGroup    uint32 = 1 << 8  // the group's name, description, picture
+	PermLinks          uint32 = 1 << 9  // post links
+	PermThreads        uint32 = 1 << 10 // write in threads (comments)
+	PermPin            uint32 = 1 << 11 // pin for everyone
+	PermReact          uint32 = 1 << 12 // react to messages
+	PermInvite         uint32 = 1 << 13 // hand out invitations
+	PermManageChannels uint32 = 1 << 14 // create, change and order channels and categories
+
+	PermAll uint32 = 1<<15 - 1
 )
 
 // ownerRank is the rank of a group's owner: nobody acts on them.
 const ownerRank = 100
 
+const (
+	maxRoleID    = 32
+	maxRoleTitle = 32
+	maxRoles     = 50 // custom roles of a group
+)
+
 // Role is a member's role in a group.
 type Role struct {
-	Name  string
+	Name  string // its id
+	Title string // what the app shows ("" the name)
+	Color uint32 // 0xRRGGBB, 0 none
 	Rank  int
 	Perms uint32
 }
 
 // Rights are what an author may do at one point of a conversation.
 type Rights struct {
-	Member   bool // takes part: may react, edit and delete their own messages
+	Member   bool // takes part: may edit and delete their own messages
 	Send     bool // may write messages
+	Media    bool // may send files
+	Links    bool // may post links
+	Threads  bool // may write in threads
+	React    bool // may react
 	Pin      bool // may pin for everyone
 	Moderate bool // may delete other people's messages
 	Manage   bool // may change the group's channels
+	Invite   bool // may hand out invitations
+	Voice    bool // may join calls and voice rooms
+	Stream   bool // may share a screen or a camera
+	Roles    bool // may give roles and define them
 }
 
-func rightsOf(r Role) Rights {
-	return Rights{Member: true, Send: r.Perms&PermSend != 0,
-		Pin: r.Perms&(PermManageGroup|PermDelete) != 0, Moderate: r.Perms&PermDelete != 0,
-		Manage: r.Perms&(PermManageGroup|PermManageRoles) != 0}
+// PermRights are the rights of a member whose role has the permission bits perms.
+func PermRights(perms uint32) Rights {
+	has := func(p uint32) bool { return perms&p != 0 }
+	return Rights{Member: true, Send: has(PermSend), Media: has(PermMedia), Links: has(PermLinks),
+		Threads: has(PermThreads), React: has(PermReact), Pin: has(PermPin), Moderate: has(PermDelete),
+		Manage: has(PermManageChannels), Invite: has(PermInvite), Voice: has(PermVoice), Stream: has(PermStream),
+		Roles: has(PermManageRoles)}
 }
+
+func rightsOf(r Role) Rights { return PermRights(r.Perms) }
 
 // GroupRules is what the log needs to know about groups from the group service.
 type GroupRules interface {
@@ -105,18 +139,37 @@ type members struct {
 type memberState struct {
 	roles  map[types.PeerID]Role
 	banned map[types.PeerID]bool
+	defs   map[string]Role // roles defined on the log: custom ones, and changed built-in ones
+}
+
+func newMemberState() *memberState {
+	return &memberState{roles: map[types.PeerID]Role{}, banned: map[types.PeerID]bool{}, defs: map[string]Role{}}
 }
 
 func (s *memberState) clone() *memberState {
-	out := &memberState{roles: make(map[types.PeerID]Role, len(s.roles)), banned: make(map[types.PeerID]bool, len(s.banned))}
+	out := &memberState{roles: make(map[types.PeerID]Role, len(s.roles)), banned: make(map[types.PeerID]bool, len(s.banned)),
+		defs: make(map[string]Role, len(s.defs))}
 	for k, v := range s.roles {
 		out.roles[k] = v
 	}
 	for k, v := range s.banned {
 		out.banned[k] = v
 	}
+	for k, v := range s.defs {
+		out.defs[k] = v
+	}
 	return out
 }
+
+// role resolves a role's name: as the log defines it, or built in.
+func (s *memberState) role(rules GroupRules, name string) (Role, bool) {
+	if r, ok := s.defs[name]; ok {
+		return r, true
+	}
+	return rules.Role(name)
+}
+
+func validRoleID(s string) bool { return len(s) <= maxRoleID && validChannelID(s) }
 
 func pubToID(b []byte) (types.PeerID, bool) {
 	if len(b) != authorLen {
@@ -146,6 +199,12 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 		if len(b.Member) != authorLen {
 			return nil, false
 		}
+	case MemberDefine:
+		d := b.Def
+		if d == nil || !validRoleID(d.Id) || len(d.Title) > maxRoleTitle || !validText(d.Title) || d.Color > 0xFFFFFF ||
+			d.Perms&^PermAll != 0 {
+			return nil, false
+		}
 	default:
 		return nil, false
 	}
@@ -154,6 +213,9 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 
 // step applies one membership event (not a roster) to s and reports whether it was allowed.
 func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *MemberBody) bool {
+	if b.Action == MemberDefine {
+		return s.define(rules, c, author, b.Def)
+	}
 	target, ok := pubToID(b.Member)
 	if !ok {
 		return false
@@ -174,7 +236,7 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *Mem
 		if name == "" {
 			name = rules.DefaultRole(c)
 		}
-		r, ok := rules.Role(name)
+		r, ok := s.role(rules, name)
 		if !ok {
 			return false
 		}
@@ -189,7 +251,7 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *Mem
 		s.roles[target] = r
 		return true
 	case MemberRole:
-		r, ok := rules.Role(b.Role)
+		r, ok := s.role(rules, b.Role)
 		if !ok || !isMember || !targetIn || actor.Perms&PermManageRoles == 0 {
 			return false
 		}
@@ -199,7 +261,7 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *Mem
 				return false
 			}
 			s.roles[target] = r
-			if admin, ok := rules.Role("admin"); ok {
+			if admin, ok := s.role(rules, "admin"); ok {
 				s.roles[author] = admin
 			}
 			return true
@@ -238,9 +300,75 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *Mem
 	return false
 }
 
+// define takes a role's definition. Who may manage roles defines roles below their own rank (the
+// owner any but the owner's) and grants no permission they do not hold: nobody makes a role that
+// may do more than they may. A built-in role keeps its rank and cannot go; the owner's is not
+// changed. A custom role that goes leaves its members with the group's default role.
+func (s *memberState) define(rules GroupRules, c Conv, author types.PeerID, d *RoleDef) bool {
+	actor, isMember := s.roles[author]
+	if !isMember || actor.Perms&PermManageRoles == 0 {
+		return false
+	}
+	owner := actor.Rank >= ownerRank
+	builtin, isBuiltin := rules.Role(d.Id)
+	cur, exists := s.role(rules, d.Id)
+	if exists && (cur.Rank >= ownerRank || (!owner && cur.Rank >= actor.Rank)) {
+		return false
+	}
+	if d.Removed {
+		if isBuiltin || !exists {
+			return false
+		}
+		def, ok := s.role(rules, rules.DefaultRole(c))
+		if !ok {
+			return false
+		}
+		delete(s.defs, d.Id)
+		for id, r := range s.roles {
+			if r.Name == d.Id {
+				s.roles[id] = def
+			}
+		}
+		return true
+	}
+	next := Role{Name: d.Id, Title: d.Title, Color: d.Color, Rank: int(d.Rank), Perms: d.Perms}
+	if isBuiltin {
+		next.Rank = builtin.Rank
+	} else if next.Rank < 1 || next.Rank >= ownerRank || (!owner && next.Rank >= actor.Rank) {
+		return false
+	}
+	var had uint32
+	if exists {
+		had = cur.Perms
+	}
+	if !owner && (next.Perms&^had)&^actor.Perms != 0 {
+		return false // grants what the author may not do
+	}
+	if !exists && s.customRoles(rules) >= maxRoles {
+		return false
+	}
+	s.defs[d.Id] = next
+	for id, r := range s.roles {
+		if r.Name == d.Id {
+			s.roles[id] = next
+		}
+	}
+	return true
+}
+
+func (s *memberState) customRoles(rules GroupRules) int {
+	n := 0
+	for id := range s.defs {
+		if _, b := rules.Role(id); !b {
+			n++
+		}
+	}
+	return n
+}
+
 // rosterState is the state a roster sets.
 func rosterState(rules GroupRules, b *MemberBody) *memberState {
-	s := &memberState{roles: map[types.PeerID]Role{}, banned: map[types.PeerID]bool{}}
+	s := newMemberState()
 	for _, r := range b.Roster {
 		id, ok := pubToID(r.Member)
 		if !ok {
@@ -436,4 +564,36 @@ func (m *members) cutOff(rules GroupRules, c Conv, author types.PeerID, pub []by
 		}
 	}
 	return false
+}
+
+// DMRights are what both sides of a direct chat may do.
+var DMRights = Rights{Member: true, Send: true, Media: true, Links: true, Threads: true, React: true, Pin: true,
+	Voice: true, Stream: true}
+
+// msgAllowed: a message's content is within its author's rights (files, links). A stripped one (a
+// deleted message) was weighed when it came.
+func msgAllowed(e *Event, r Rights) bool {
+	if Stripped(e) || r.Media && r.Links {
+		return true
+	}
+	var b MsgBody
+	if proto.Unmarshal(e.Body, &b) != nil {
+		return true // applyMsg refuses it
+	}
+	return (r.Media || b.Metadata == "") && (r.Links || !HasLink(b.Text))
+}
+
+// editAllowed: an edit puts in no link its author may not post.
+func editAllowed(e *Event, r Rights) bool {
+	if r.Links || Stripped(e) {
+		return true
+	}
+	var b EditBody
+	return proto.Unmarshal(e.Body, &b) != nil || !HasLink(b.Text)
+}
+
+// HasLink reports whether a text holds a link (what a role without the right to post links may not).
+func HasLink(text string) bool {
+	t := strings.ToLower(text)
+	return strings.Contains(t, "://") || strings.Contains(t, "www.")
 }

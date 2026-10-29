@@ -126,7 +126,7 @@ func (l *Log) rightsAt(c Conv, bc string, author types.PeerID, pub []byte, p pos
 	switch c.Kind {
 	case KindDM:
 		if author == l.self || author == c.Peer {
-			return Rights{Member: true, Send: true, Pin: true}
+			return DMRights
 		}
 	case KindGroup:
 		rules := l.groupRules()
@@ -387,20 +387,29 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 		}
 		switch e.Kind {
 		case KindMsg:
-			if !rights.Send {
-				return ErrForbidden
+			if len(e.Thread) == 0 && !rights.Send || len(e.Thread) > 0 && !rights.Threads {
+				return ErrForbidden // a comment in a thread takes the right to comment, not to post
 			}
-			if ch := channelOf(e); ch != "" && len(e.Thread) == 0 {
-				if st, ok := t.channel(ch); ok && st.ReadOnly && !rights.Manage {
+			if t.c.Kind == KindGroup {
+				if st, ok := t.channel(channelOf(e)); ok && (st.Category || len(e.Thread) == 0 && st.ReadOnly && !rights.Manage) {
 					return ErrForbidden // an announcements channel: only managers post (others comment)
 				}
 			}
+			if !msgAllowed(e, rights) {
+				return ErrForbidden
+			}
 			err = t.applyMsg(e, idHex, author, &store)
 		case KindEdit:
+			if !editAllowed(e, rights) {
+				return ErrForbidden
+			}
 			err = t.applyEdit(e, author, &store)
 		case KindDelete:
 			err = t.applyDelete(e, author, rights)
 		case KindReact:
+			if !rights.React {
+				return ErrForbidden
+			}
 			err = t.applyReact(e, author)
 		case KindPin:
 			if !rights.Pin {
@@ -827,6 +836,58 @@ func (l *Log) AuthorSeq(c Conv, author types.PeerID) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.loadMeta(l.bc(c.ID), c).Max[peerHex(author)]
+}
+
+// Roles are the roles a group's log defines now: its custom ones and the built-in ones it changed.
+func (l *Log) Roles(c Conv) []Role {
+	rules := l.groupRules()
+	if c.Kind != KindGroup || rules == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st, _, ok := l.membersOf(l.bc(c.ID)).walk(rules, c, nil)
+	if !ok {
+		return nil
+	}
+	out := make([]Role, 0, len(st.defs))
+	for _, r := range st.defs {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rank != out[j].Rank {
+			return out[i].Rank > out[j].Rank
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// AppendRole defines a role of a group (d.Removed: a custom one goes).
+func (l *Log) AppendRole(c Conv, d *RoleDef) ([]byte, EventID, error) {
+	if c.Kind != KindGroup {
+		return nil, EventID{}, ErrForbidden
+	}
+	body, err := proto.Marshal(&MemberBody{Action: MemberDefine, Def: d})
+	if err != nil {
+		return nil, EventID{}, err
+	}
+	if _, ok := decodeMember(&Event{Kind: KindMember, Body: body}); !ok {
+		return nil, EventID{}, ErrBadBody
+	}
+	// weighed first: a refused membership event would stay in the history kept in memory
+	rules := l.groupRules()
+	if rules == nil {
+		return nil, EventID{}, ErrForbidden
+	}
+	l.mu.Lock()
+	st, _, ok := l.membersOf(l.bc(c.ID)).walk(rules, c, nil)
+	allowed := ok && st.clone().define(rules, c, l.self, d)
+	l.mu.Unlock()
+	if !allowed {
+		return nil, EventID{}, ErrForbidden
+	}
+	return l.Append(c, Draft{Kind: KindMember, Body: body})
 }
 
 func (l *Log) append(c Conv, d Draft, keepRefused bool) ([]byte, EventID, error) {

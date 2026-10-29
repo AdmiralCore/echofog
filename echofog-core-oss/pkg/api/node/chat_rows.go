@@ -15,20 +15,25 @@ import (
 
 // ConvCan is what I may do in a chat.
 type ConvCan struct {
-	Send   bool `json:"send"`   // write messages
-	Files  bool `json:"files"`  // send files
-	React  bool `json:"react"`  // react to messages
-	Pin    bool `json:"pin"`    // pin for everyone
-	Manage bool `json:"manage"` // change the group: members' roles, its settings
-	Invite bool `json:"invite"` // hand out the group's invitation
-	Call   bool `json:"call"`   // start or join a call
+	Send     bool `json:"send"`     // write messages
+	Files    bool `json:"files"`    // send files
+	Links    bool `json:"links"`    // post links
+	Threads  bool `json:"threads"`  // write in threads
+	React    bool `json:"react"`    // react to messages
+	Pin      bool `json:"pin"`      // pin for everyone
+	Manage   bool `json:"manage"`   // change the group: members' roles, its settings
+	Channels bool `json:"channels"` // create, change and order channels and categories
+	Roles    bool `json:"roles"`    // give roles and define them
+	Invite   bool `json:"invite"`   // hand out the group's invitation
+	Call     bool `json:"call"`     // start or join a call
+	Stream   bool `json:"stream"`   // share a screen or a camera
 }
 
 // myRights is what I may do in c now: in a group whose log has no roster yet, by the group's
 // present state.
 func (f *convsFacade) myRights(c convlog.Conv) convlog.Rights {
 	if c.Kind == convlog.KindDM {
-		return convlog.Rights{Member: true, Send: true, Pin: true}
+		return convlog.DMRights
 	}
 	if !f.log.HasRoster(c) {
 		return (groupRules{n: f.n}).Current(c, f.self)
@@ -55,8 +60,8 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		if d.Name == "" {
 			d.Name = peer[:8]
 		}
-		d.Can = ConvCan{Send: !d.Blocked, Files: !d.Blocked && d.PubKey != "", React: d.Upgraded && !d.Blocked,
-			Pin: d.Upgraded, Call: !d.Blocked && d.PubKey != ""}
+		d.Can = ConvCan{Send: !d.Blocked, Files: !d.Blocked && d.PubKey != "", Links: !d.Blocked, Threads: !d.Blocked,
+			React: d.Upgraded && !d.Blocked, Pin: d.Upgraded, Call: !d.Blocked && d.PubKey != "", Stream: !d.Blocked}
 	case convlog.KindGroup:
 		d.Kind = "group"
 		gf, err := f.n.groupsFacade()
@@ -83,11 +88,11 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		}
 		d.Role = role.Name
 		r := f.myRights(c)
-		manage := role.Permissions&(groups.PermManageRoles|groups.PermManageGroup) != 0
-		d.Can = ConvCan{Send: r.Send, Files: r.Send && role.Permissions&groups.PermSendMedia != 0,
-			React: d.Upgraded && r.Member, Pin: d.Upgraded && r.Pin, Manage: manage,
-			Invite: manage || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),
-			Call:   role.Permissions&groups.PermJoinVoice != 0}
+		manage := role.Permissions&(groups.PermManageRoles|groups.PermManageGroup|groups.PermManageChannels) != 0
+		d.Can = ConvCan{Send: r.Send, Files: r.Send && r.Media, Links: r.Links, Threads: r.Threads,
+			React: d.Upgraded && r.React, Pin: d.Upgraded && r.Pin, Manage: manage, Channels: r.Manage, Roles: r.Roles,
+			Invite: r.Invite || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),
+			Call:   r.Voice, Stream: r.Voice && r.Stream}
 	}
 }
 

@@ -47,7 +47,7 @@ message PinBody {
 // membership with a roster; after that every join, role change, removal and ban is an event, and
 // what anyone may do at a point of the log follows from the ones before that point.
 message MemberBody {
-  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban
+  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role
   bytes  member = 2;            // the member's 32-byte identity public key (not for a roster)
   string role   = 3;            // role: the new role; join: the role given (empty: the default)
   repeated RosterEntry roster = 4;
@@ -55,6 +55,19 @@ message MemberBody {
   // events numbered after it unless they are let in again later: an author picks the Lamport of
   // their events, so without this a removed member could write "before" the removal. 0: not said.
   uint64 upto_seq = 5;
+  RoleDef def = 6;              // define: the role as it is to be
+}
+
+// RoleDef is a role of a group as its definition says: a custom one, or a built-in one whose
+// permissions, title or colour were changed (a built-in one keeps its rank). Those who may manage
+// roles write it, for roles below their own rank, granting no permission they do not hold.
+message RoleDef {
+  string id      = 1;  // [a-z0-9-], at most 32; a built-in role's name changes that role
+  string title   = 2;  // what the app shows; empty: the id
+  uint32 color   = 3;  // 0xRRGGBB; 0: none
+  int32  rank    = 4;  // 1..99 for a custom role; members act only on lower ranks
+  uint32 perms   = 5;  // permission bits
+  bool   removed = 6;  // a custom role goes; its members get the group's default role
 }
 
 // EventExt rides in Event.ext (signed, kept when the body is stripped).
@@ -63,7 +76,8 @@ message EventExt {
 }
 
 // ChannelBody creates, changes or removes a channel of a group: the whole channel as it is to be
-// (last writer wins per id).
+// (last writer wins per id). The entry with the empty id is the main channel's: its name, topic,
+// read-only, slow mode and the channel the group opens on.
 message ChannelBody {
   string id        = 1;
   string name      = 2;
@@ -72,6 +86,10 @@ message ChannelBody {
   string topic     = 5;  // a line under the name
   bool   read_only = 6;  // only those who may manage the group write in it (announcements)
   int32  position  = 7;  // the channels' order among their kind, lowest first
+  string parent    = 8;  // the category the channel is in; empty: none
+  bool   category  = 9;  // a category: a heading the channels with it as parent sit under
+  uint32 slow_secs = 10; // slow mode: seconds a member waits between their messages in it
+  string open      = 11; // the main channel's entry (id ""): the channel the group opens on
 }
 
 // ThreadBody names the thread under a message (kind THREAD; last writer wins per root).

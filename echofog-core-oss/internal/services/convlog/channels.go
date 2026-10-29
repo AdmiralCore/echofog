@@ -13,7 +13,9 @@ import (
 // remove them. Membership, rights and sync stay those of the group's one log, so a channel needs no
 // keys, no sync and no roster of its own. A voice room is a channel the app joins as a call. The
 // main channel has the empty id and is every message without a channel (all the history from
-// before channels).
+// before channels). Its settings (name, topic, read-only, slow mode, the channel the group opens on)
+// are the channel entry with the empty id. A category is an entry of its own that channels name as
+// their parent: a heading for text channels and voice rooms alike.
 
 // KindChannel creates, renames or removes a channel (body ChannelBody).
 const KindChannel uint32 = 7
@@ -23,26 +25,48 @@ const (
 	maxChannelName  = 64
 	maxChannelTopic = 256
 	maxChannels     = 200
+	maxSlowSecs     = 6 * 60 * 60
 )
 
 // Channel is one channel of a group as the app shows it.
 type Channel struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Voice   bool   `json:"voice"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Voice    bool   `json:"voice"`
 	Removed  bool   `json:"removed,omitempty"`
 	Topic    string `json:"topic,omitempty"`
 	ReadOnly bool   `json:"readOnly,omitempty"` // only those who may manage the group write in it
 	Position int32  `json:"position"`           // the order among channels of its kind
+	Parent   string `json:"parent,omitempty"`   // the category it is in
+	Category bool   `json:"category,omitempty"` // a category, not a channel
+	SlowSecs uint32 `json:"slowSecs,omitempty"` // slow mode: seconds between a member's messages
+	Open     string `json:"open,omitempty"`     // the main entry: the channel the group opens on
 	Reg      Reg    `json:"reg"`                // the last write that set it
 	Created  uint64 `json:"created"`            // the clock of its earliest write: ties in order
 }
 
 // ChannelSpec is a channel as a manager wants it.
 type ChannelSpec struct {
-	ID, Name, Topic         string
-	Voice, ReadOnly, Remove bool
-	Position                int32
+	ID, Name, Topic, Parent, Open     string
+	Voice, ReadOnly, Remove, Category bool
+	Position                          int32
+	SlowSecs                          uint32
+}
+
+// validChannel: a channel entry is well formed. The main one (id "") is no voice room, no category,
+// not in one, and does not go; a category is in none and is no voice room.
+func validChannel(id, name, topic, parent, open string, voice, removed, category bool, slow uint32) bool {
+	if len(name) > maxChannelName || !validText(name) || len(topic) > maxChannelTopic || !validText(topic) ||
+		slow > maxSlowSecs || parent != "" && (!validChannelID(parent) || parent == id) || open != "" && !validChannelID(open) {
+		return false
+	}
+	if id == "" {
+		return !voice && !removed && !category && parent == ""
+	}
+	if open != "" || category && (voice || parent != "") {
+		return false
+	}
+	return validChannelID(id) && (name != "" || removed)
 }
 
 // ChanStat is where a channel's history ends and where its reader is.
@@ -112,8 +136,8 @@ func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
 		return ErrForbidden
 	}
 	var b ChannelBody
-	if proto.Unmarshal(e.Body, &b) != nil || !validChannelID(b.Id) || len(b.Name) > maxChannelName || !validText(b.Name) ||
-		(b.Name == "" && !b.Removed) || len(b.Topic) > maxChannelTopic || !validText(b.Topic) {
+	if proto.Unmarshal(e.Body, &b) != nil ||
+		!validChannel(b.Id, b.Name, b.Topic, b.Parent, b.Open, b.Voice, b.Removed, b.Category, b.SlowSecs) {
 		return ErrBadBody
 	}
 	k := channelKey(t.bc, b.Id)
@@ -129,11 +153,11 @@ func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
 		created = cur.Created
 	}
 	next := Channel{ID: b.Id, Name: b.Name, Voice: b.Voice, Removed: b.Removed, Topic: b.Topic, ReadOnly: b.ReadOnly,
-		Position: b.Position, Reg: reg, Created: created}
+		Position: b.Position, Parent: b.Parent, Category: b.Category, SlowSecs: b.SlowSecs, Open: b.Open, Reg: reg, Created: created}
 	if known && !reg.after(cur.Reg) {
 		next = cur // an older write: the channel keeps the newer one, and the earlier creation
 		next.Created = created
-	} else if b.Name == "" {
+	} else if b.Name == "" && b.Id != "" {
 		next.Name = cur.Name
 	}
 	raw, err := json.Marshal(next)
@@ -179,7 +203,7 @@ func (l *Log) Channels(c Conv) []Channel {
 	out := make([]Channel, 0, len(entries))
 	for _, en := range entries {
 		var ch Channel
-		if json.Unmarshal(en.Value, &ch) == nil && !ch.Removed {
+		if json.Unmarshal(en.Value, &ch) == nil && !ch.Removed && ch.ID != "" {
 			out = append(out, ch)
 		}
 	}
@@ -197,12 +221,22 @@ func (l *Log) Channels(c Conv) []Channel {
 
 // AppendChannel writes a channel of a group as s says (a new id creates it).
 func (l *Log) AppendChannel(c Conv, s ChannelSpec) ([]byte, EventID, error) {
-	if !validChannelID(s.ID) || len(s.Name) > maxChannelName || !validText(s.Name) || (s.Name == "" && !s.Remove) ||
-		len(s.Topic) > maxChannelTopic || !validText(s.Topic) {
+	if !validChannel(s.ID, s.Name, s.Topic, s.Parent, s.Open, s.Voice, s.Remove, s.Category, s.SlowSecs) {
 		return nil, EventID{}, ErrBadBody
 	}
 	return l.Append(c, Draft{Kind: KindChannel, Body: encodeBody(&ChannelBody{Id: s.ID, Name: s.Name, Voice: s.Voice,
-		Removed: s.Remove, Topic: s.Topic, ReadOnly: s.ReadOnly, Position: s.Position})})
+		Removed: s.Remove, Topic: s.Topic, ReadOnly: s.ReadOnly, Position: s.Position, Parent: s.Parent,
+		Category: s.Category, SlowSecs: s.SlowSecs, Open: s.Open})})
+}
+
+// MainChannel is the settings of a group's main channel (zero when nobody set them).
+func (l *Log) MainChannel(c Conv) Channel {
+	raw, err := l.st.Get(channelKey(l.bc(c.ID), ""))
+	var ch Channel
+	if err == nil {
+		_ = json.Unmarshal(raw, &ch)
+	}
+	return ch
 }
 
 // ChannelOf is one channel of a group (false: none such, or removed).

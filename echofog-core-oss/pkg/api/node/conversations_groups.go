@@ -26,8 +26,7 @@ func (p groupRules) facade() (*groupsFacade, bool) {
 	return gf, err == nil
 }
 
-// Current: members take part and write if their role lets them; admins and moderators pin; who
-// may delete others' messages (moderators) may delete anyone's.
+// Current: what a member's role lets them do, by the group service's present state.
 func (p groupRules) Current(c convlog.Conv, a types.PeerID) convlog.Rights {
 	gf, ok := p.facade()
 	if !ok {
@@ -37,10 +36,7 @@ func (p groupRules) Current(c convlog.Conv, a types.PeerID) convlog.Rights {
 	if !ok {
 		return convlog.Rights{}
 	}
-	return convlog.Rights{Member: true, Send: r.Permissions&groups.PermSendMessages != 0,
-		Pin:      r.Permissions&(groups.PermManageGroup|groups.PermDeleteMessages) != 0,
-		Moderate: r.Permissions&groups.PermDeleteMessages != 0,
-		Manage:   r.Permissions&(groups.PermManageGroup|groups.PermManageRoles) != 0}
+	return convlog.PermRights(uint32(r.Permissions))
 }
 
 func (p groupRules) Founder(c convlog.Conv) (types.PeerID, bool) {
@@ -82,6 +78,8 @@ var _ = [1]struct{}{}[uint32(groups.PermSendMessages)^convlog.PermSend|
 // in group envelopes, the old-style messages (mirrored, so the chat shows everything), the way to
 // hand an event to one member in its own session, and who is connected.
 func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
+	gf.mgr.SetRoleResolver(gf.resolveRole)
+	go n.followAllRoles(gf)
 	gf.onEvent = func(groupID string, origin types.PeerID, raw []byte) {
 		f, err := n.convsFacade()
 		if err != nil {
@@ -494,9 +492,14 @@ func (f *convsFacade) followMembers(groupID string, changes []convlog.MemberChan
 	if err != nil {
 		return
 	}
+	roles := false
 	for _, m := range changes {
+		roles = roles || m.Action == convlog.MemberDefine
 		if (m.Action == convlog.MemberRemove || m.Action == convlog.MemberBan) && m.Author != f.n.node.ID && len(m.Member) == 32 {
 			gf.removedOnLog(groupID, m.Author, m.Member, m.Action == convlog.MemberBan)
 		}
+	}
+	if roles {
+		f.n.followRoles(groupID)
 	}
 }
