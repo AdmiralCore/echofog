@@ -3,8 +3,10 @@ package node
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
@@ -28,6 +30,80 @@ type tunState struct {
 
 	watchMu   sync.Mutex // unwindTun also runs from the helper's exit callback, outside mu
 	stopWatch context.CancelFunc
+
+	// killSwitch: nothing gets out around the exit while whole-computer mode is on — not when
+	// the exit drops, the app is switching exits, the network changes or the app crashes (the
+	// helper then holds the traffic until the app comes back; see tunmode/hold.go). On by default.
+	killSwitch atomic.Bool
+	holdFile   string // where a holding helper says how to reach it; "" the default (tests set it)
+}
+
+func (n *NodeApi) holdPath() string {
+	if n.tun.holdFile != "" {
+		return n.tun.holdFile
+	}
+	return tunmode.DefaultHoldFile()
+}
+
+// KillSwitchHeld reports whether a helper from an earlier run holds the computer's traffic: the
+// app went away without turning whole-computer mode off, and with the kill switch on nothing gets
+// out until it reconnects or the user lets the traffic go (ReleaseKillSwitch). Works before login.
+func KillSwitchHeld() bool { return tunmode.Held(tunmode.DefaultHoldFile()) }
+
+// ReleaseKillSwitch lets the computer back on its own network after a held kill switch.
+func ReleaseKillSwitch() error {
+	if err := tunmode.ReleaseHold(tunmode.DefaultHoldFile()); err != nil {
+		return err
+	}
+	network.SetDirectInterface(0)
+	return nil
+}
+
+// KillSwitchOn reports whether the kill switch is on.
+func (n *NodeApi) KillSwitchOn() bool { return n.tun.killSwitch.Load() }
+
+// SetKillSwitch saves the kill switch and applies it at once, to a running TUN too.
+func (n *NodeApi) SetKillSwitch(on bool) error {
+	if n.node == nil || n.node.Cfg == nil {
+		return errors.New("node is not running")
+	}
+	settingsMu.Lock()
+	err := saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.KillSwitch = &on })
+	settingsMu.Unlock()
+	if err != nil {
+		return err
+	}
+	n.tun.killSwitch.Store(on)
+	if n.tun.ctl.Running() {
+		_ = n.tun.ctl.SetHold(on)
+	}
+	return nil
+}
+
+// pinHeldNode keeps the node's own traffic off a TUN that a helper from an earlier run still
+// holds: it would otherwise go into the blocked tunnel and never reach an exit to adopt it with.
+// It runs before the node starts; adopting pins the transport itself.
+func (n *NodeApi) pinHeldNode() int {
+	if !tunmode.Held(n.holdPath()) {
+		return 0
+	}
+	idx, err := tunmode.PhysicalInterfaceIndex()
+	if err != nil || idx == 0 {
+		return 0
+	}
+	network.SetDirectInterface(idx)
+	return idx
+}
+
+// adoptHeldTun turns whole-computer mode back on through the helper that held the traffic, once
+// the exit serves us again: the kill switch then lets the traffic flow without a new prompt.
+func (n *NodeApi) adoptHeldTun() {
+	if n.tun.ctl.Running() || !tunmode.Held(n.holdPath()) {
+		return
+	}
+	if err := n.SetWholeComputer(true); err != nil {
+		slog.Warn("kill switch: could not take the held tunnel over", "err", err)
+	}
 }
 
 // WholeComputerSupported reports whether this OS can route all traffic through EchoFog.
@@ -36,15 +112,22 @@ func (n *NodeApi) WholeComputerSupported() bool { return tunmode.Supported() }
 // SetWholeComputer turns whole-computer mode on or off. Turning it on asks for administrator
 // rights (UAC on Windows, polkit on Linux) and requires the proxy to be running.
 func (n *NodeApi) SetWholeComputer(on bool) error {
-	if n == nil || n.node == nil || n.node.Transport == nil {
+	if n == nil {
+		return errors.New("node is not running")
+	}
+	if !on {
+		// off must always reach the helper (a node half stopped included): a kill switch that
+		// missed the STOP would hold the computer's traffic after a deliberate stop
+		n.tun.mu.Lock()
+		n.disableTunLocked()
+		n.tun.mu.Unlock()
+		return nil
+	}
+	if n.node == nil || n.node.Transport == nil {
 		return errors.New("node is not running")
 	}
 	n.tun.mu.Lock()
 	defer n.tun.mu.Unlock()
-	if !on {
-		n.disableTunLocked()
-		return nil
-	}
 	if n.tun.ctl.Running() {
 		return nil
 	}
@@ -76,8 +159,16 @@ func (n *NodeApi) SetWholeComputer(on bool) error {
 		return errors.New("the proxy must listen on 127.0.0.1")
 	}
 
-	// Read the physical interface before the TUN takes over the routes.
-	ifIndex, err := tunmode.DefaultInterfaceIndex()
+	// Read the physical interface before the TUN takes over the routes; a helper that holds them
+	// from an earlier run (the kill switch) has them already, so look past its adapter.
+	held := tunmode.Held(n.holdPath())
+	var ifIndex int
+	var err error
+	if held {
+		ifIndex, err = tunmode.PhysicalInterfaceIndex()
+	} else {
+		ifIndex, err = tunmode.DefaultInterfaceIndex()
+	}
 	if err != nil {
 		return err
 	}
@@ -98,12 +189,17 @@ func (n *NodeApi) SetWholeComputer(on bool) error {
 		n.unwindTun()
 		n.emit("vpn:whole_computer", map[string]any{"on": false, "error": err.Error()})
 	})
-	err = n.tun.ctl.Start(context.Background(), socks, n.node.Transport.UDPPort())
+	if held {
+		err = n.tun.ctl.Adopt(n.holdPath(), n.node.Transport.UDPPort())
+	} else {
+		err = n.tun.ctl.Start(context.Background(), socks, n.node.Transport.UDPPort(), n.holdPath())
+	}
 	if err != nil {
 		n.unwindTun()
 		n.tun.lastErr = err.Error()
 		return err
 	}
+	_ = n.tun.ctl.SetHold(n.tun.killSwitch.Load())
 	n.tun.lastErr = ""
 	n.watchInterface(ifIndex)
 	n.emit("vpn:whole_computer", map[string]any{"on": true})
@@ -131,12 +227,30 @@ func (n *NodeApi) watchInterface(ifIndex int) {
 				continue
 			}
 			n.tun.mu.Lock()
-			if ctx.Err() == nil {
+			if ctx.Err() != nil {
+				n.tun.mu.Unlock()
+				return
+			}
+			if !n.tun.killSwitch.Load() {
 				n.tun.lastErr = "the network changed; turn whole-computer mode on again"
 				n.disableTunLocked()
+				n.tun.mu.Unlock()
+				return
+			}
+			// kill switch: the TUN stays (nothing gets out around it); the node follows the
+			// network to the interface the computer uses now, or waits blocked for one
+			if idx, err := tunmode.PhysicalInterfaceIndex(); err == nil && idx != ifIndex && interfaceUsable(idx) {
+				if n.node.Transport.BindToInterface(idx) == nil {
+					network.SetDirectInterface(idx)
+					slog.Info("kill switch: the network changed, following it", "from", ifIndex, "to", idx)
+					ifIndex = idx
+					n.tun.lastErr = ""
+				}
+			} else if n.tun.lastErr == "" {
+				n.tun.lastErr = "no network: the internet stays blocked until one is back (kill switch)"
+				n.emit("vpn:whole_computer", map[string]any{"on": true, "error": n.tun.lastErr})
 			}
 			n.tun.mu.Unlock()
-			return
 		}
 	}()
 }

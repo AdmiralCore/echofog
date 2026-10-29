@@ -62,6 +62,10 @@ type VPNStatus struct {
 	WholeComputer          bool   `json:"wholeComputer"`
 	WholeComputerSupported bool   `json:"wholeComputerSupported"`
 	WholeComputerError     string `json:"wholeComputerError"`
+	// KillSwitch is on; Blocked: whole-computer mode is up but no exit serves us right now, so
+	// the kill switch keeps every application offline rather than on the real address.
+	KillSwitch bool `json:"killSwitch"`
+	Blocked    bool `json:"blocked"`
 }
 
 // VPNSwitch is the last automatic move to another exit.
@@ -133,6 +137,7 @@ func (n *NodeApi) noteExitState(relay string, info *exit_gateway.AccountInfo, er
 		link := n.exitLink(relay)
 		if state == ExitOK {
 			slog.Info("exit is serving us", "exit", relay, "link", link)
+			go n.adoptHeldTun() // a kill switch from an earlier run lets the traffic flow again
 		} else {
 			slog.Warn("exit is not serving us", "exit", relay, "state", state, "why", notice, "link", link)
 		}
@@ -205,11 +210,12 @@ func (n *NodeApi) relayConnected(hexID string) bool {
 	return n.node.Swarm.GetPeer(id) != nil
 }
 
-func (n *NodeApi) GetVPNStatus() VPNStatus {
+func (n *NodeApi) GetVPNStatus() (st VPNStatus) {
 	whole, wholeErr := n.wholeComputerStatus()
 	n.vpn.mu.Lock()
 	defer n.vpn.mu.Unlock()
-	st := VPNStatus{TunnelNotice: "Not connected", WholeComputer: whole, WholeComputerError: wholeErr, WholeComputerSupported: n.WholeComputerSupported(), AutoSwitch: n.autoSwitchOn()}
+	st = VPNStatus{TunnelNotice: "Not connected", WholeComputer: whole, WholeComputerError: wholeErr, WholeComputerSupported: n.WholeComputerSupported(), AutoSwitch: n.autoSwitchOn(), KillSwitch: n.tun.killSwitch.Load()}
+	defer func() { st.Blocked = st.WholeComputer && !st.TunnelReady }()
 	if n.vpn.server == nil {
 		return st
 	}
@@ -289,6 +295,10 @@ func (n *NodeApi) startVPN(relayPeerID, listen string) error {
 	if n.node.EventBus != nil {
 		srv.SetEmitter(n.node.EventBus)
 	}
+	if n.tun.ctl.Running() && n.tun.fake != nil {
+		// the TUN stayed up across a switch of exits (kill switch): same fake IPs, same names
+		srv.SetFakeDNS(n.tun.fake)
+	}
 	if err := srv.Start(); err != nil {
 		return err
 	}
@@ -336,9 +346,23 @@ func (n *NodeApi) GetExitGatewayStatus() ExitGatewayStatus {
 func (n *NodeApi) StopVPN() error {
 	n.stopPayGuard()
 	// the TUN must go first: with the proxy gone it would cut every application off
-	if n.node != nil && n.node.Transport != nil {
-		_ = n.SetWholeComputer(false)
+	_ = n.SetWholeComputer(false)
+	return n.stopProxy()
+}
+
+// StopVPNForSwitch stops the proxy to connect through another exit next. With the kill switch on
+// and whole-computer mode up, the TUN stays: until the next exit serves us nothing gets out,
+// instead of every application going out on the real address for the gap (and after it, if the
+// user did not turn whole-computer mode on again).
+func (n *NodeApi) StopVPNForSwitch() error {
+	if !n.tun.killSwitch.Load() || !n.tun.ctl.Running() {
+		return n.StopVPN()
 	}
+	n.stopPayGuard()
+	return n.stopProxy()
+}
+
+func (n *NodeApi) stopProxy() error {
 	n.vpn.mu.Lock()
 	defer n.vpn.mu.Unlock()
 	if n.vpn.server == nil {

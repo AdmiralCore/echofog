@@ -195,6 +195,8 @@ export function KeepGroupCallAlive(arg1:string,arg2:string,arg3:string):Promise<
 
 export function KeepRoomCallAlive(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
+export function KillSwitchHeld():Promise<boolean>;
+
 export function LeaveGroup(arg1:string):Promise<void>;
 
 export function LeaveRoom():Promise<void>;
@@ -243,6 +245,8 @@ export function RefreshExitNodes():Promise<number>;
 
 export function Register(arg1:string,arg2:string):Promise<string>;
 
+export function ReleaseKillSwitch():Promise<void>;
+
 export function RemoveBootstrapNode(arg1:string):Promise<void>;
 
 export function RemoveGroupMember(arg1:string,arg2:string,arg3:boolean):Promise<void>;
@@ -290,6 +294,8 @@ export function SetExitName(arg1:string,arg2:string):Promise<void>;
 export function SetGroupRole(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetGuardMode(arg1:string):Promise<void>;
+
+export function SetKillSwitch(arg1:boolean):Promise<void>;
 
 export function SetPayAsset(arg1:string):Promise<void>;
 
@@ -342,6 +348,8 @@ export function StopScreenShare(arg1:string):Promise<void>;
 export function StopSharing():Promise<void>;
 
 export function StopVPN():Promise<void>;
+
+export function StopVPNForSwitch():Promise<void>;
 
 export function SubmitCallAnswer(arg1:string):Promise<void>;
 

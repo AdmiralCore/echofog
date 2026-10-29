@@ -61,7 +61,9 @@ func (c *Controller) Running() bool {
 
 // Start launches the elevated helper and waits until the TUN device is up. socksAddr is the
 // node's local proxy; bypassUDPPort is the node's own UDP port, which must not enter the TUN.
-func (c *Controller) Start(ctx context.Context, socksAddr string, bypassUDPPort int) error {
+// holdFile, when set, turns the kill switch on (see hold.go): a helper whose node goes away
+// without Stop keeps the traffic blocked and says in that file how to adopt or release it.
+func (c *Controller) Start(ctx context.Context, socksAddr string, bypassUDPPort int, holdFile string) error {
 	launch := c.launch
 	if launch == nil {
 		if !Supported() {
@@ -96,6 +98,9 @@ func (c *Controller) Start(ctx context.Context, socksAddr string, bypassUDPPort 
 		"-ctl", ln.Addr().String(),
 		"-token", token,
 		"-bypass-udp-port", strconv.Itoa(bypassUDPPort),
+	}
+	if holdFile != "" {
+		args = append(args, "-hold", holdFile)
 	}
 	if err := launch(exe, args); err != nil {
 		return err
@@ -173,7 +178,14 @@ func (c *Controller) watch(conn net.Conn, done chan struct{}) {
 }
 
 // Stop tells the helper to remove the TUN device and waits briefly for the connection to end.
-func (c *Controller) Stop() {
+func (c *Controller) Stop() { c.close(true) }
+
+// Release lets go of the helper without STOP: with the kill switch on it keeps the traffic
+// blocked until a node adopts it (Adopt) or releases it (ReleaseHold); without, it takes the TUN
+// down as Stop does.
+func (c *Controller) Release() { c.close(false) }
+
+func (c *Controller) close(stop bool) {
 	c.mu.Lock()
 	conn, done := c.conn, c.done
 	c.conn = nil
@@ -181,9 +193,86 @@ func (c *Controller) Stop() {
 	if conn == nil {
 		return
 	}
+	if stop {
+		_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = io.WriteString(conn, cmdStop+"\n")
+	}
 	_ = conn.Close()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
 	}
+}
+
+// SetHold turns the kill switch of the running helper on or off.
+func (c *Controller) SetHold(on bool) error {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return errors.New("whole-computer mode is off")
+	}
+	v := "0"
+	if on {
+		v = "1"
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err := io.WriteString(conn, cmdHold+" "+v+"\n")
+	_ = conn.SetWriteDeadline(time.Time{})
+	return err
+}
+
+// Adopt takes over a helper that holds the traffic (the kill switch, after the node went away),
+// as Start would launch one, but without the administrator prompt. bypassUDPPort is this node's
+// UDP port.
+func (c *Controller) Adopt(holdFile string, bypassUDPPort int) error {
+	c.mu.Lock()
+	if c.conn != nil {
+		c.mu.Unlock()
+		return errors.New("whole-computer mode is already on")
+	}
+	c.mu.Unlock()
+	st, ok := ReadHold(holdFile)
+	if !ok {
+		return errNoHold
+	}
+	conn, r, err := dialHold(st, 3*time.Second)
+	if err != nil {
+		_ = os.Remove(holdFile) // stale: the helper is gone
+		return errNoHold
+	}
+	if _, err := io.WriteString(conn, cmdAdopt+" "+strconv.Itoa(bypassUDPPort)+"\n"); err != nil {
+		conn.Close()
+		return err
+	}
+	line, err := r.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("the helper did not answer: %w", err)
+	}
+	if line = strings.TrimSpace(line); line != lineUp {
+		conn.Close()
+		return errors.New(strings.TrimPrefix(line, linePrefErr))
+	}
+	_ = conn.SetDeadline(time.Time{})
+	done := make(chan struct{})
+	c.mu.Lock()
+	c.conn, c.done = conn, done
+	c.mu.Unlock()
+	go c.watch(conn, done)
+	return nil
+}
+
+// Held reports whether a helper holds the traffic (the hold file names one that answers).
+func Held(holdFile string) bool {
+	st, ok := ReadHold(holdFile)
+	if !ok {
+		return false
+	}
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(st.Port)), time.Second)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
 }

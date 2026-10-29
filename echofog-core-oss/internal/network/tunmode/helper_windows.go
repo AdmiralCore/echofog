@@ -2,7 +2,9 @@ package tunmode
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -265,6 +268,42 @@ func launchElevated(exe string, args []string) error {
 		return fmt.Errorf("start the helper: %w", err)
 	}
 	return nil
+}
+
+// rebypass is not needed on Windows: the node pins its own sockets to the physical interface.
+func rebypass(int) error { return nil }
+
+// PhysicalInterfaceIndex is the interface the default route goes out of, the EchoFog adapter
+// left aside: what the node pins its own sockets to while the TUN holds the routes (the kill
+// switch keeps it up across a crash and a change of network, when DefaultInterfaceIndex would
+// only find the adapter). 0 and an error: no network to go out on.
+func PhysicalInterfaceIndex() (int, error) {
+	tun := -1
+	if ifc, err := net.InterfaceByName(DeviceName); err == nil {
+		tun = ifc.Index
+	}
+	var table *windows.MibIpForwardTable2
+	if err := windows.GetIpForwardTable2(windows.AF_INET, &table); err != nil {
+		return 0, fmt.Errorf("read the routing table: %w", err)
+	}
+	defer windows.FreeMibTable(unsafe.Pointer(table))
+	best, bestMetric := 0, uint32(math.MaxUint32)
+	for _, r := range table.Rows() {
+		if r.DestinationPrefix.PrefixLength != 0 || int(r.InterfaceIndex) == tun {
+			continue
+		}
+		ifc, err := net.InterfaceByIndex(int(r.InterfaceIndex))
+		if err != nil || ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if r.Metric < bestMetric {
+			best, bestMetric = int(r.InterfaceIndex), r.Metric
+		}
+	}
+	if best == 0 {
+		return 0, errors.New("no network connection")
+	}
+	return best, nil
 }
 
 // DefaultInterfaceIndex is the interface Internet traffic uses right now. It must be read before

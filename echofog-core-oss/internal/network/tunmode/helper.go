@@ -36,6 +36,7 @@ func HelperMain(args []string) int {
 	ctl := fs.String("ctl", "", "node control address")
 	token := fs.String("token", "", "control token")
 	bypass := fs.Int("bypass-udp-port", 0, "node UDP port kept off the TUN")
+	holdFile := fs.String("hold", "", "kill switch: keep blocking when the node goes away, and say here how to reach the helper")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -91,12 +92,14 @@ func HelperMain(args []string) int {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	closed := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, conn); close(closed) }()
-	select {
-	case <-closed:
-	case <-sig:
+	stop := make(chan struct{})
+	go func() { <-sig; close(stop) }()
+	s := &helperSession{
+		holdFile: *holdFile, hold: *holdFile != "", socks: *socks,
+		flush: flushDNS, rebypass: rebypass,
+		logf: func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) },
 	}
+	s.run(conn, stop)
 	return 0
 }
 

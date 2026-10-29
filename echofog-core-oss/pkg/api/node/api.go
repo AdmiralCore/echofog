@@ -64,6 +64,7 @@ func NewNodeApi(node *node.Node) *NodeApi {
 	api := &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}
+	api.tun.killSwitch.Store(saved.KillSwitch == nil || *saved.KillSwitch)
 	// the conversation logs take chat traffic from the very first message on
 	node.OnMessengerReady(func() { _, _ = api.convsFacade() })
 	return api
@@ -97,8 +98,13 @@ func (n *NodeApi) Recover(mnemonic string, mnemonicPassphrase string, newAppPass
 }
 
 func (n *NodeApi) StartNode() error {
+	// a kill switch from an earlier run holds the traffic: the node's own goes around it
+	pinned := n.pinHeldNode()
 	if err := n.node.Start(); err != nil {
 		return err
+	}
+	if pinned != 0 && n.node.Transport != nil {
+		_ = n.node.Transport.BindToInterface(pinned)
 	}
 	// domestic connections use the cheaper noise obfs; cross-border keeps REALITY
 	n.applyRegionObfs()
@@ -112,6 +118,11 @@ func (n *NodeApi) StartNode() error {
 }
 
 func (n *NodeApi) StopNode() {
+	// leaving on purpose: take whole-computer mode down, or the kill switch would hold the
+	// computer's traffic as it does after a crash
+	if n.tun.ctl.Running() {
+		_ = n.StopVPN()
+	}
 	if n.node != nil {
 		n.node.Stop()
 	}

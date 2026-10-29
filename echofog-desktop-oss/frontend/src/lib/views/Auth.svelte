@@ -22,6 +22,13 @@
   let checkTimer;
   let accessMode = 'public';
 
+  // the kill switch held the computer's traffic after EchoFog went away: say so before login
+  let held = false;
+  App.KillSwitchHeld().then((h) => (held = h)).catch(() => {});
+  async function unblock() {
+    try { await App.ReleaseKillSwitch(); held = false; } catch (err) { error = errText(err); }
+  }
+
   // the words are checked while they are typed, against the same list the core uses
   $: if ($screen === 'restore') checkPhrase(phrase);
   function checkPhrase(p) {
@@ -119,6 +126,13 @@
         <p class="muted small">{$t('auth.tagline')}</p>
       </div>
     </div>
+
+    {#if held}
+      <div class="killed" role="alert">
+        <span class="small">{$t('proxy.killHeld')}</span>
+        <button class="ghost" on:click={unblock}>{$t('proxy.killUnblock')}</button>
+      </div>
+    {/if}
 
     {#key $screen}
     <div class="step stack">
@@ -322,5 +336,6 @@
   .words .mono { color: var(--text); font-size: 13px; word-break: normal; }
   .err { animation: shake 0.4s var(--ease); }
   @keyframes shake { 0%, 100% { transform: none; } 25% { transform: translateX(-5px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+  .killed { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid #c98a00; border-radius: 10px; background: color-mix(in srgb, #c98a00 12%, transparent); }
 </style>
 

@@ -688,7 +688,7 @@ const impl = {
   GetExitPayment: () => ({ ...payMock }),
   SetAutoPay: (on, chunk, cap) => { if (!(Number(chunk) >= 0.01)) throw new Error('enter the top-up amount in USDT, for example 1'); Object.assign(payMock, { autoPay: on, chunkUsdt: String(chunk), dailyCapUsdt: String(cap) }); return null; },
   PayExit: (amt) => new Promise((r) => setTimeout(() => { Object.assign(payMock, { needsPayment: false, pending: true, remainingGb: 20, spentTodayUsdt: String(Number(payMock.spentTodayUsdt) + Number(amt)) }); r('beef...mock'); }, 800)),
-  GetVPNStatus: () => ({ ...vpnMock }),
+  GetVPNStatus: () => ({ ...vpnMock, blocked: vpnMock.wholeComputer && !(vpnMock.running && vpnMock.tunnelReady) }),
   GetVPNHistory: () => {
     const live = vpnMock.running ? [{ peerId: vpnMock.relayPeerId, addr: '203.0.113.7:443', startedAt: sec(Date.now()) - 600, updatedAt: sec(Date.now()), readyMs: 820, bytesRx: vpnMock.bytesRx || 48e6, bytesTx: vpnMock.bytesTx || 3e6, refused: 788, refusedBy: { 'dial failed': 786, 'timed out': 2 }, remaining: 20.7e9, remainingAt: sec(Date.now()), lastState: vpnMock.exitState, pricePerMb: 49, active: true }] : [];
     return [...live, ...historyMock];
@@ -726,6 +726,16 @@ const impl = {
   },
   SetVPNAutoSwitch: (on) => { vpnMock.autoSwitch = on; return null; },
   StopVPN: () => { Object.assign(vpnMock, { running: false, wholeComputer: false, tunnelReady: false }); emit('vpn:stopped', {}); return null; },
+  // ?held: the kill switch holds the traffic after a crash (shown before login too)
+  killHeld: new URLSearchParams(location.search).has('held'),
+  KillSwitchHeld() { return this.killHeld; },
+  ReleaseKillSwitch() { this.killHeld = false; },
+  SetKillSwitch: (on) => { vpnMock.killSwitch = on; },
+  StopVPNForSwitch: () => {
+    Object.assign(vpnMock, { running: false, tunnelReady: false, wholeComputer: vpnMock.killSwitch && vpnMock.wholeComputer });
+    emit('vpn:stopped', {});
+    return null;
+  },
   SetWholeComputer: (on) => new Promise((r) => setTimeout(() => { vpnMock.wholeComputer = on; r(null); }, on ? 1500 : 300)),
   ListExitNodes: () => (MARKET ? marketExits : [
     { peerId: hex(9), pricePerMb: 49, claimedKbps: 50000, measuredKbps: 41000, latencyMs: 38, domainsOk: 3, domainsTried: 3, freeTestKb: 512, probes: 4, successes: 4, score: 0.86, connected: true },
@@ -839,7 +849,7 @@ const marketExits = [
 ].map(([countryCode, city, pricePerMb, measuredKbps, latencyMs, domainsOk, domainsTried, score], i) => ({
   peerId: hex(60 + i), countryCode, city, pricePerMb, claimedKbps: measuredKbps, measuredKbps, latencyMs, domainsOk, domainsTried, freeTestKb: pricePerMb ? 512 : 0, probes: 6, successes: 6, score, connected: false,
 }));
-const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
+const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '', killSwitch: true };
 
 // --- conversation log (Chat* methods and conv:change) ---------------------------------------------
 // The preview's chats as the core's log serves them, with a few answers, comments, edits, deletes,

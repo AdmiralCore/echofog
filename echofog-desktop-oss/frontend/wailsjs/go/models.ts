@@ -1756,6 +1756,8 @@ export namespace node {
 	    wholeComputer: boolean;
 	    wholeComputerSupported: boolean;
 	    wholeComputerError: string;
+	    killSwitch: boolean;
+	    blocked: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new VPNStatus(source);
@@ -1783,6 +1785,8 @@ export namespace node {
 	        this.wholeComputer = source["wholeComputer"];
 	        this.wholeComputerSupported = source["wholeComputerSupported"];
 	        this.wholeComputerError = source["wholeComputerError"];
+	        this.killSwitch = source["killSwitch"];
+	        this.blocked = source["blocked"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

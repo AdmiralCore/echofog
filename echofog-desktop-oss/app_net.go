@@ -158,3 +158,29 @@ func (a *App) ForgetExit(peerID string) error {
 	}
 	return nodeAPI.ForgetExit(peerID)
 }
+
+// StopVPNForSwitch stops the proxy before connecting through another exit; with the kill switch
+// on, whole-computer mode stays up and blocks the gap instead of letting apps out directly.
+func (a *App) StopVPNForSwitch() error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return nil
+	}
+	return nodeAPI.StopVPNForSwitch()
+}
+
+// SetKillSwitch turns the kill switch of whole-computer mode on or off.
+func (a *App) SetKillSwitch(on bool) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node not started")
+	}
+	return nodeAPI.SetKillSwitch(on)
+}
+
+// KillSwitchHeld reports whether the kill switch holds the computer's traffic after EchoFog went
+// away without turning whole-computer mode off. It works before login.
+func (a *App) KillSwitchHeld() bool { return api.KillSwitchHeld() }
+
+// ReleaseKillSwitch lets the computer back on its own network after a held kill switch.
+func (a *App) ReleaseKillSwitch() error { return api.ReleaseKillSwitch() }

@@ -378,6 +378,10 @@ export function KeepRoomCallAlive(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['KeepRoomCallAlive'](arg1, arg2, arg3, arg4);
 }
 
+export function KillSwitchHeld() {
+  return window['go']['main']['App']['KillSwitchHeld']();
+}
+
 export function LeaveGroup(arg1) {
   return window['go']['main']['App']['LeaveGroup'](arg1);
 }
@@ -474,6 +478,10 @@ export function Register(arg1, arg2) {
   return window['go']['main']['App']['Register'](arg1, arg2);
 }
 
+export function ReleaseKillSwitch() {
+  return window['go']['main']['App']['ReleaseKillSwitch']();
+}
+
 export function RemoveBootstrapNode(arg1) {
   return window['go']['main']['App']['RemoveBootstrapNode'](arg1);
 }
@@ -568,6 +576,10 @@ export function SetGroupRole(arg1, arg2, arg3) {
 
 export function SetGuardMode(arg1) {
   return window['go']['main']['App']['SetGuardMode'](arg1);
+}
+
+export function SetKillSwitch(arg1) {
+  return window['go']['main']['App']['SetKillSwitch'](arg1);
 }
 
 export function SetPayAsset(arg1) {
@@ -672,6 +684,10 @@ export function StopSharing() {
 
 export function StopVPN() {
   return window['go']['main']['App']['StopVPN']();
+}
+
+export function StopVPNForSwitch() {
+  return window['go']['main']['App']['StopVPNForSwitch']();
 }
 
 export function SubmitCallAnswer(arg1) {

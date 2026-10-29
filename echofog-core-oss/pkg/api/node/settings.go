@@ -66,9 +66,11 @@ type persistedSettings struct {
 	// Proxy is the SOCKS5 proxy (Tor) the node goes out through, once the user set one from the app
 	// (ProxySet; "" then means none even when the configuration names one). CallRoute is how calls
 	// go: "auto", "direct" or "relay" (see config.NetworkConfig).
-	ProxySet  bool   `json:"proxySet,omitempty"`
-	Proxy     string `json:"proxy,omitempty"`
-	CallRoute string `json:"callRoute,omitempty"`
+	// KillSwitch: whole-computer mode lets nothing out around the exit; nil: on (the default).
+	KillSwitch *bool  `json:"killSwitch,omitempty"`
+	ProxySet   bool   `json:"proxySet,omitempty"`
+	Proxy      string `json:"proxy,omitempty"`
+	CallRoute  string `json:"callRoute,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
