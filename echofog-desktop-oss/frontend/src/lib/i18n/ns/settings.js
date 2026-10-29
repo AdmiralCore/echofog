@@ -46,7 +46,7 @@ export default {
     'settings.socketBuffer': 'UDP socket buffer, MB (1-256)',
     'settings.savedRestart': '✓ Saved. Takes effect after restart.',
     'settings.lockTitle': 'Emergency lock',
-    'settings.lockHint': 'Erases the decrypted keys from memory at once and stops the node. Everything on disk stays encrypted and can only be opened again with your password or recovery phrase. Type LOCK to enable the button.',
+    'settings.lockHint': 'Erases your keys (identity, wallet, database) from memory at once, stops the node and the VPN, and closes the app, so the chat keys and the messages it had open go with it. Everything on disk stays encrypted and opens again only with your password or recovery phrase. Type LOCK to enable the button.',
     'settings.lockNow': 'Lock now',
   },
   ru: {
@@ -95,7 +95,7 @@ export default {
     'settings.socketBuffer': 'Буфер UDP-сокета, МБ (1–256)',
     'settings.savedRestart': '✓ Сохранено. Вступит в силу после перезапуска.',
     'settings.lockTitle': 'Экстренная блокировка',
-    'settings.lockHint': 'Сразу стирает расшифрованные ключи из памяти и останавливает ноду. Всё на диске остаётся зашифрованным, открыть его можно только паролем или фразой восстановления. Введите LOCK, чтобы включить кнопку.',
+    'settings.lockHint': 'Сразу стирает ваши ключи (личность, кошелёк, база) из памяти, останавливает ноду и VPN и закрывает приложение, чтобы вместе с ним ушли ключи чатов и открытые сообщения. Всё на диске остаётся зашифрованным, открыть его можно только паролем или фразой восстановления. Введите LOCK, чтобы включить кнопку.',
     'settings.lockNow': 'Заблокировать',
   },
 };

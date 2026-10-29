@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -70,8 +72,57 @@ func (a *App) confirmNative(title, message string) error {
 // confirmSendAboveThreshold prompts for confirmation when amount of asset meets the asset's
 // threshold. Below it, it is a no-op.
 func (a *App) confirmSendAboveThreshold(asset, amount, to string) error {
+	key := strings.ToUpper(strings.TrimSpace(asset))
 	if !aboveThreshold(amount, thresholdFor(asset)) {
-		return nil
+		// a small send goes through unprompted, but small sends add up: many of them would drain
+		// the wallet one at a time, so once the sends left unconfirmed within the hour reach the
+		// threshold, this one is confirmed too
+		v, _ := strconv.ParseFloat(strings.TrimSpace(amount), 64)
+		if quietSends.add(key, v, time.Now()) < thresholdFor(asset) {
+			return nil
+		}
 	}
-	return a.confirmNative("Confirm transfer", fmt.Sprintf("Send %s %s to\n%s?", amount, strings.ToUpper(asset), to))
+	if err := a.confirmNative("Confirm transfer", fmt.Sprintf("Send %s %s to\n%s?", amount, key, to)); err != nil {
+		return err
+	}
+	quietSends.reset(key)
+	return nil
+}
+
+// quietSends adds up the sends that went through without a prompt, per asset, over an hour.
+var quietSends = &quietLedger{sends: map[string][]quietSend{}}
+
+const quietWindow = time.Hour
+
+type quietSend struct {
+	at     time.Time
+	amount float64
+}
+
+type quietLedger struct {
+	mu    sync.Mutex
+	sends map[string][]quietSend
+}
+
+// add records amount for asset and returns the total sent unprompted within the window,
+// this one included.
+func (l *quietLedger) add(asset string, amount float64, now time.Time) float64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	kept := l.sends[asset][:0]
+	total := amount
+	for _, s := range l.sends[asset] {
+		if now.Sub(s.at) < quietWindow {
+			kept = append(kept, s)
+			total += s.amount
+		}
+	}
+	l.sends[asset] = append(kept, quietSend{now, amount})
+	return total
+}
+
+func (l *quietLedger) reset(asset string) {
+	l.mu.Lock()
+	delete(l.sends, asset)
+	l.mu.Unlock()
 }

@@ -91,6 +91,10 @@ func (a *App) PayExit(amountUSDT string) (string, error) {
 	if nodeAPI == nil {
 		return "", errors.New("node not started")
 	}
+	// a payment the page asks for, like any other send: confirmed natively above the threshold
+	if err := a.confirmSendAboveThreshold("USDT", amountUSDT, "the exit you are connected to"); err != nil {
+		return "", err
+	}
 	ctx, cancel := a.tonContext(90 * time.Second)
 	defer cancel()
 	return nodeAPI.PayExit(ctx, amountUSDT)
