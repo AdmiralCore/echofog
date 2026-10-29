@@ -83,6 +83,15 @@ func (l *Log) HandleSync(from types.PeerID, m *Sync, groups Resolver) []*Sync {
 			}
 		}
 		return out
+	case *Sync_Ihave:
+		c, ok := l.resolve(from, x.Ihave.GetConv(), groups)
+		if !ok || !l.Participant(c, from) {
+			return nil
+		}
+		if l.Behind(c, x.Ihave.GetHave()) {
+			return []*Sync{l.Want(c)}
+		}
+		return nil
 	case *Sync_Want:
 		c, ok := l.resolve(from, x.Want.GetConv(), groups)
 		if !ok || !l.Participant(c, from) {
@@ -230,4 +239,34 @@ func (l *Log) answer(c Conv, have []*Have) []*Sync {
 		out[len(out)-1].GetEvents().More = true
 	}
 	return out
+}
+
+// Announce is an IHave of c: the newest seq held of each of authors (peer ids).
+func (l *Log) Announce(c Conv, authors []types.PeerID) *Sync {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	meta := l.loadMeta(l.bc(c.ID), c)
+	ih := &IHave{Conv: append([]byte(nil), c.ID[:]...)}
+	for _, a := range authors {
+		if seq := meta.Max[peerHex(a)]; seq > 0 {
+			ih.Have = append(ih.Have, &Have{Author: append([]byte(nil), a[:]...), Seq: seq})
+		}
+	}
+	return &Sync{M: &Sync_Ihave{Ihave: ih}}
+}
+
+// Behind reports whether a peer holds events of c we lack, by what it announced.
+func (l *Log) Behind(c Conv, have []*Have) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	meta := l.loadMeta(l.bc(c.ID), c)
+	for _, h := range have {
+		if len(h.GetAuthor()) != len(types.PeerID{}) {
+			continue
+		}
+		if meta.VV[hex.EncodeToString(h.GetAuthor())] < h.GetSeq() {
+			return true
+		}
+	}
+	return false
 }

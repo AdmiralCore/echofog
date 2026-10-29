@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/pkg/api/types"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -160,4 +161,49 @@ func mustFind(t *testing.T, l *Log, prefix []byte) [][]byte {
 		out = append(out, e.Value)
 	}
 	return out
+}
+
+// An announcement (IHave) of a member who holds more of an author than we do brings a Want, and
+// that Want brings what we lacked; an announcement of what we hold already brings nothing.
+func TestAnnouncementsMendALostPush(t *testing.T) {
+	f, x, y := newAccount(t), newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("lazy1")
+	lf, lx, ly := groupReplica(t, f, rules), groupReplica(t, x, rules), groupReplica(t, y, rules)
+	groups := func(id ConvID) (Conv, bool) { return c, id == c.ID }
+	r := member(t, lf, c, roster(f, "owner", x, "member", y, "member"))
+	ingest(t, lx, c, r)
+	ingest(t, ly, c, r)
+	var raws [][]byte
+	for _, s := range []string{"one", "two", "three"} {
+		raw, _ := say(t, lf, c, s)
+		raws = append(raws, raw)
+	}
+	ingest(t, lx, c, raws...)
+	ingest(t, ly, c, raws[0]) // the pushes of "two" and "three" to y were lost
+
+	roundTrip := func(m *Sync) *Sync {
+		raw, err := EncodeSync(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := DecodeSync(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	replies := ly.HandleSync(x.id, roundTrip(lx.Announce(c, []types.PeerID{f.id})), groups)
+	if len(replies) != 1 || replies[0].GetWant() == nil {
+		t.Fatalf("an announcement of more brought %v", replies)
+	}
+	for _, ans := range lx.HandleSync(y.id, roundTrip(replies[0]), groups) {
+		ly.HandleSync(x.id, roundTrip(ans), groups)
+	}
+	if got := texts(t, ly, c); !got["two"] || !got["three"] {
+		t.Fatalf("after the announcement: %v", got)
+	}
+	if again := ly.HandleSync(x.id, roundTrip(lx.Announce(c, []types.PeerID{f.id})), groups); len(again) != 0 {
+		t.Fatalf("an announcement of what is held brought %v", again)
+	}
 }

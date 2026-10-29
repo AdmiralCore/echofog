@@ -137,7 +137,17 @@ message Sync {
     Hello      hello  = 1;
     Want       want   = 2;
     Events     events = 3;
+    IHave      ihave  = 4;
   }
+}
+
+// IHave announces, in a big group, the newest events a member holds of some authors: those an
+// event was not pushed to learn of it, and ask (Want) if they lack it. Lazy push, as in Plumtree:
+// the push goes to a few, the announcement to more, and a lost push is mended in seconds instead
+// of at the next anti-entropy round.
+message IHave {
+  bytes         conv = 1;
+  repeated Have have = 2; // author and the highest seq held of them
 }
 
 message Hello {

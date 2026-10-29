@@ -118,6 +118,7 @@ type convsFacade struct {
 	syncIn        map[types.PeerID]*syncWindow // sync messages taken from each peer lately
 	joinAsked     map[string]time.Time         // groups where we asked the log to let us in
 	wantAsked     map[string]time.Time         // peer/conv: when we last asked that peer for what we lack (pullGap)
+	lazy          map[string]*lazyBatch        // big groups: events of the moment, announced together (group_lazy.go)
 	lastRev       map[convlog.ConvID]uint64    // the newest change handed to the app, per chat
 	historyTimers map[string]*time.Timer       // groups whose earlier messages are coming in
 
@@ -255,7 +256,14 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 		go func() {
 			// events synced into a group: its listeners reload, as after the old history handover
 			group, before := f.syncTarget(m)
-			for _, r := range f.log.HandleSync(origin, m, f.groupConv) {
+			replies := f.log.HandleSync(origin, m, f.groupConv)
+			if ih, ok := m.M.(*convlog.Sync_Ihave); ok && len(replies) > 0 {
+				// an announcement showed a lack: ask one announcer, not every one of them
+				if id, err := convlog.ParseConvID(hex.EncodeToString(ih.Ihave.GetConv())); err != nil || !f.askAnnouncer(convlog.Conv{ID: id}) {
+					replies = nil
+				}
+			}
+			for _, r := range replies {
 				f.sendSync(origin, r)
 			}
 			if group != "" {
@@ -282,6 +290,7 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 	if c.Kind == convlog.KindGroup {
 		if fresh {
 			f.spread(c.Group, origin, msg.ConvEvent)
+			f.pullGap(origin, c, msg.ConvEvent)
 		}
 		// a group event in a member's own session (the group's epoch was not clean): the group's
 		// listeners hear of a message, the direct chat's do not
@@ -386,6 +395,7 @@ func (f *convsFacade) sendEvent(c convlog.Conv, raw []byte, id convlog.EventID, 
 		}
 		track := kind == convlog.KindMsg || kind == convlog.KindEdit || kind == convlog.KindDelete
 		gf.postEvent(c.Group, raw, track, text)
+		f.announce(c.Group, f.self) // lazy push: the members it was not pushed to hear of it
 		return "", nil
 	}
 	peer := c.Peer

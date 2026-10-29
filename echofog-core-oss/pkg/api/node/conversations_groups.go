@@ -474,6 +474,7 @@ func (f *convsFacade) spread(groupID string, from types.PeerID, raw []byte) {
 		return
 	}
 	author := convlog.AuthorID(e)
+	f.announce(groupID, author) // and, a moment later, announced to more of them
 	members, err := gf.mgr.GetAuthorizedRecipients(groupID)
 	if err != nil || len(members) <= meshLimit {
 		return

@@ -1013,6 +1013,7 @@ type Sync struct {
 	//	*Sync_Hello
 	//	*Sync_Want
 	//	*Sync_Events
+	//	*Sync_Ihave
 	M             isSync_M `protobuf_oneof:"m"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1082,6 +1083,15 @@ func (x *Sync) GetEvents() *Events {
 	return nil
 }
 
+func (x *Sync) GetIhave() *IHave {
+	if x != nil {
+		if x, ok := x.M.(*Sync_Ihave); ok {
+			return x.Ihave
+		}
+	}
+	return nil
+}
+
 type isSync_M interface {
 	isSync_M()
 }
@@ -1098,11 +1108,73 @@ type Sync_Events struct {
 	Events *Events `protobuf:"bytes,3,opt,name=events,proto3,oneof"`
 }
 
+type Sync_Ihave struct {
+	Ihave *IHave `protobuf:"bytes,4,opt,name=ihave,proto3,oneof"`
+}
+
 func (*Sync_Hello) isSync_M() {}
 
 func (*Sync_Want) isSync_M() {}
 
 func (*Sync_Events) isSync_M() {}
+
+func (*Sync_Ihave) isSync_M() {}
+
+// IHave announces, in a big group, the newest events a member holds of some authors: those an
+// event was not pushed to learn of it, and ask (Want) if they lack it. Lazy push, as in Plumtree:
+// the push goes to a few, the announcement to more, and a lost push is mended in seconds instead
+// of at the next anti-entropy round.
+type IHave struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Conv          []byte                 `protobuf:"bytes,1,opt,name=conv,proto3" json:"conv,omitempty"`
+	Have          []*Have                `protobuf:"bytes,2,rep,name=have,proto3" json:"have,omitempty"` // author and the highest seq held of them
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IHave) Reset() {
+	*x = IHave{}
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IHave) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IHave) ProtoMessage() {}
+
+func (x *IHave) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IHave.ProtoReflect.Descriptor instead.
+func (*IHave) Descriptor() ([]byte, []int) {
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *IHave) GetConv() []byte {
+	if x != nil {
+		return x.Conv
+	}
+	return nil
+}
+
+func (x *IHave) GetHave() []*Have {
+	if x != nil {
+		return x.Have
+	}
+	return nil
+}
 
 type Hello struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1113,7 +1185,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1125,7 +1197,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[14]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1138,7 +1210,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{14}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Hello) GetItems() []*HelloItem {
@@ -1158,7 +1230,7 @@ type HelloItem struct {
 
 func (x *HelloItem) Reset() {
 	*x = HelloItem{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[15]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1170,7 +1242,7 @@ func (x *HelloItem) String() string {
 func (*HelloItem) ProtoMessage() {}
 
 func (x *HelloItem) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[15]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1183,7 +1255,7 @@ func (x *HelloItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HelloItem.ProtoReflect.Descriptor instead.
 func (*HelloItem) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{15}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *HelloItem) GetConv() []byte {
@@ -1210,7 +1282,7 @@ type Want struct {
 
 func (x *Want) Reset() {
 	*x = Want{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[16]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1222,7 +1294,7 @@ func (x *Want) String() string {
 func (*Want) ProtoMessage() {}
 
 func (x *Want) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[16]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1235,7 +1307,7 @@ func (x *Want) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Want.ProtoReflect.Descriptor instead.
 func (*Want) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{16}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Want) GetConv() []byte {
@@ -1262,7 +1334,7 @@ type Have struct {
 
 func (x *Have) Reset() {
 	*x = Have{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[17]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1274,7 +1346,7 @@ func (x *Have) String() string {
 func (*Have) ProtoMessage() {}
 
 func (x *Have) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[17]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1287,7 +1359,7 @@ func (x *Have) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Have.ProtoReflect.Descriptor instead.
 func (*Have) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{17}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Have) GetAuthor() []byte {
@@ -1315,7 +1387,7 @@ type Events struct {
 
 func (x *Events) Reset() {
 	*x = Events{}
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[18]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1327,7 +1399,7 @@ func (x *Events) String() string {
 func (*Events) ProtoMessage() {}
 
 func (x *Events) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_services_convlog_convlog_proto_msgTypes[18]
+	mi := &file_internal_services_convlog_convlog_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1340,7 +1412,7 @@ func (x *Events) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Events.ProtoReflect.Descriptor instead.
 func (*Events) Descriptor() ([]byte, []int) {
-	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{18}
+	return file_internal_services_convlog_convlog_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Events) GetConv() []byte {
@@ -1446,12 +1518,16 @@ const file_internal_services_convlog_convlog_proto_rawDesc = "" +
 	"\x05title\x18\x01 \x01(\tR\x05title\"9\n" +
 	"\vRosterEntry\x12\x16\n" +
 	"\x06member\x18\x01 \x01(\fR\x06member\x12\x12\n" +
-	"\x04role\x18\x02 \x01(\tR\x04role\"\x83\x01\n" +
+	"\x04role\x18\x02 \x01(\tR\x04role\"\xab\x01\n" +
 	"\x04Sync\x12&\n" +
 	"\x05hello\x18\x01 \x01(\v2\x0e.convlog.HelloH\x00R\x05hello\x12#\n" +
 	"\x04want\x18\x02 \x01(\v2\r.convlog.WantH\x00R\x04want\x12)\n" +
-	"\x06events\x18\x03 \x01(\v2\x0f.convlog.EventsH\x00R\x06eventsB\x03\n" +
-	"\x01m\"1\n" +
+	"\x06events\x18\x03 \x01(\v2\x0f.convlog.EventsH\x00R\x06events\x12&\n" +
+	"\x05ihave\x18\x04 \x01(\v2\x0e.convlog.IHaveH\x00R\x05ihaveB\x03\n" +
+	"\x01m\">\n" +
+	"\x05IHave\x12\x12\n" +
+	"\x04conv\x18\x01 \x01(\fR\x04conv\x12!\n" +
+	"\x04have\x18\x02 \x03(\v2\r.convlog.HaveR\x04have\"1\n" +
 	"\x05Hello\x12(\n" +
 	"\x05items\x18\x01 \x03(\v2\x12.convlog.HelloItemR\x05items\"7\n" +
 	"\tHelloItem\x12\x12\n" +
@@ -1480,7 +1556,7 @@ func file_internal_services_convlog_convlog_proto_rawDescGZIP() []byte {
 	return file_internal_services_convlog_convlog_proto_rawDescData
 }
 
-var file_internal_services_convlog_convlog_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_internal_services_convlog_convlog_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_internal_services_convlog_convlog_proto_goTypes = []any{
 	(*Event)(nil),        // 0: convlog.Event
 	(*MsgBody)(nil),      // 1: convlog.MsgBody
@@ -1496,27 +1572,30 @@ var file_internal_services_convlog_convlog_proto_goTypes = []any{
 	(*ThreadBody)(nil),   // 11: convlog.ThreadBody
 	(*RosterEntry)(nil),  // 12: convlog.RosterEntry
 	(*Sync)(nil),         // 13: convlog.Sync
-	(*Hello)(nil),        // 14: convlog.Hello
-	(*HelloItem)(nil),    // 15: convlog.HelloItem
-	(*Want)(nil),         // 16: convlog.Want
-	(*Have)(nil),         // 17: convlog.Have
-	(*Events)(nil),       // 18: convlog.Events
+	(*IHave)(nil),        // 14: convlog.IHave
+	(*Hello)(nil),        // 15: convlog.Hello
+	(*HelloItem)(nil),    // 16: convlog.HelloItem
+	(*Want)(nil),         // 17: convlog.Want
+	(*Have)(nil),         // 18: convlog.Have
+	(*Events)(nil),       // 19: convlog.Events
 }
 var file_internal_services_convlog_convlog_proto_depIdxs = []int32{
 	12, // 0: convlog.MemberBody.roster:type_name -> convlog.RosterEntry
 	7,  // 1: convlog.MemberBody.def:type_name -> convlog.RoleDef
 	6,  // 2: convlog.MemberBody.invite:type_name -> convlog.InviteDef
 	10, // 3: convlog.ChannelBody.overrides:type_name -> convlog.RoleOverride
-	14, // 4: convlog.Sync.hello:type_name -> convlog.Hello
-	16, // 5: convlog.Sync.want:type_name -> convlog.Want
-	18, // 6: convlog.Sync.events:type_name -> convlog.Events
-	15, // 7: convlog.Hello.items:type_name -> convlog.HelloItem
-	17, // 8: convlog.Want.have:type_name -> convlog.Have
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	15, // 4: convlog.Sync.hello:type_name -> convlog.Hello
+	17, // 5: convlog.Sync.want:type_name -> convlog.Want
+	19, // 6: convlog.Sync.events:type_name -> convlog.Events
+	14, // 7: convlog.Sync.ihave:type_name -> convlog.IHave
+	18, // 8: convlog.IHave.have:type_name -> convlog.Have
+	16, // 9: convlog.Hello.items:type_name -> convlog.HelloItem
+	18, // 10: convlog.Want.have:type_name -> convlog.Have
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_internal_services_convlog_convlog_proto_init() }
@@ -1528,6 +1607,7 @@ func file_internal_services_convlog_convlog_proto_init() {
 		(*Sync_Hello)(nil),
 		(*Sync_Want)(nil),
 		(*Sync_Events)(nil),
+		(*Sync_Ihave)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1535,7 +1615,7 @@ func file_internal_services_convlog_convlog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_services_convlog_convlog_proto_rawDesc), len(file_internal_services_convlog_convlog_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
