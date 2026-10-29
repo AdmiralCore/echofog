@@ -62,9 +62,11 @@ const (
 	rotRetireGrace = 3 * time.Second
 	rotResend      = 4 * time.Second  // unacknowledged for this long: sent again
 	rotGrace       = 45 * time.Second // a session with no carrier at all lives this long
-	rotMaxDials    = 3
-	rotMaxCarriers = 8 // a session holds no more than this many at once
-	rotSpares      = 2
+	rotMaxDials    = 3                // dials at once while the link is quiet
+	rotMaxCarriers = 20               // a session holds no more than this many at once
+	rotSpares      = 2                // spare carriers kept ready while the link is quiet
+	rotMaxSpares   = 12               // ... and at most this many while data waits for one
+	rotShrinkAfter = 8 * time.Second
 )
 
 var errRotProtocol = errors.New("rotating connection: protocol error")
@@ -180,6 +182,8 @@ type rotConn struct {
 	carriers   []*rotCarrier
 	active     *rotCarrier
 	dialing    int
+	want       int       // spare carriers wanted now: grows when data waits for a carrier, shrinks when none does
+	stalledAt  time.Time // when data last waited for a carrier
 	dialFails  int
 	emptySince time.Time
 
@@ -197,7 +201,7 @@ func newRotConn(isClient bool, id [16]byte, opt rotOptions) *rotConn {
 	if opt.Grace <= 0 {
 		opt.Grace = rotGrace
 	}
-	r := &rotConn{opt: opt, isClient: isClient, id: id, ooo: map[uint64][]byte{}, stop: make(chan struct{})}
+	r := &rotConn{opt: opt, want: opt.Spares, isClient: isClient, id: id, ooo: map[uint64][]byte{}, stop: make(chan struct{})}
 	r.cond = sync.NewCond(&r.mu)
 	go r.writeLoop()
 	go r.watchdog()
@@ -239,7 +243,7 @@ func (r *rotConn) ensureSparesLocked() {
 	if !r.isClient || r.opt.Dial == nil || r.closed {
 		return
 	}
-	for r.liveLocked()+r.dialing < 1+r.opt.Spares && r.dialing < rotMaxDials {
+	for r.liveLocked()+r.dialing < 1+r.want && r.dialing < max(rotMaxDials, r.want) {
 		r.dialing++
 		delay := time.Duration(0)
 		if r.dialFails > 0 {
@@ -295,6 +299,9 @@ func (r *rotConn) watchdog() {
 			return
 		}
 		if !r.closed && r.isClient {
+			if r.want > r.opt.Spares && time.Since(r.stalledAt) > rotShrinkAfter {
+				r.want-- // the speed dropped: fewer spares idle on the server
+			}
 			r.ensureSparesLocked()
 		}
 		// bytes the peer has not acknowledged for a while may have gone down a carrier that did not
@@ -305,6 +312,18 @@ func (r *rotConn) watchdog() {
 			r.cond.Broadcast()
 		}
 		r.mu.Unlock()
+	}
+}
+
+// growLocked: the pool of spares is too small for the speed, so the client wants more of them. It
+// is called when this side's data waits for a carrier, and, since a download starves the server
+// (which cannot dial) and not the client, when the peer retires a carrier and fewer than half the
+// spares are left.
+func (r *rotConn) growLocked() {
+	r.stalledAt = time.Now()
+	if r.want < rotMaxSpares {
+		r.want = min(rotMaxSpares, r.want*2)
+		r.ensureSparesLocked()
 	}
 }
 
@@ -347,6 +366,8 @@ func (r *rotConn) writeLoop() {
 		}
 		c := r.usableLocked()
 		if c == nil {
+			// data waits for a carrier: the pool is too small for this speed, ask for more
+			r.growLocked()
 			r.cond.Wait()
 			r.mu.Unlock()
 			continue
@@ -505,6 +526,9 @@ func (r *rotConn) onRetire(c *rotCarrier) {
 		c.sentRetire = true
 	}
 	off := r.recvOff
+	if r.isClient && 2*r.liveLocked() < 1+r.want {
+		r.growLocked()
+	}
 	r.ensureSparesLocked()
 	r.cond.Broadcast()
 	r.mu.Unlock()

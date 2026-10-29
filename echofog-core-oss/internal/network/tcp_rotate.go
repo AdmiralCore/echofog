@@ -15,11 +15,12 @@ import (
 // spare carriers, how a server joins them to a session.
 
 const (
-	frozenFor     = 6 * time.Hour // an address that froze a link is dialed with rotation for this long
-	freezeMinRx   = 6 << 10       // a link that had carried this much ...
-	freezeMaxRx   = 256 << 10     // ... but not past this ...
-	freezeQuietAt = 15 * time.Second
-	maxRotSession = 8192
+	frozenFor       = 6 * time.Hour // an address that froze a link is dialed with rotation for this long
+	freezeMinRx     = 6 << 10       // a link that had carried this much ...
+	freezeMaxRx     = 256 << 10     // ... but not past this ...
+	freezeQuietAt   = 15 * time.Second
+	maxRotSession   = 8192
+	maxCarrierDials = 24 // carrier dials in flight at once, all rotating links of the transport together
 )
 
 // rotState is the transport side of rotation: the policy, what froze, and the sessions a server
@@ -31,6 +32,7 @@ type rotState struct {
 	budget   int
 	frozen   map[string]time.Time
 	sessions map[[16]byte]*rotConn
+	slots    chan struct{} // a place for each carrier dial in flight (see dialSlot)
 }
 
 // SetRotatePolicy says for which addresses a link is dialed with rotation (nil: none, except the
@@ -104,6 +106,25 @@ func (t *TCPTransport) watchFreeze(mc MuxConn, cc *countConn, addr string) {
 	}()
 }
 
+// dialSlot waits for a place among the carrier dials in flight and returns the function that gives
+// it back. A rotating link opens a connection every few KB, and a pool that grows when it is slow
+// would, with many links on a slow network, only slow it more; the cap keeps the dials of all the
+// links together at a number a router and a server can serve.
+func (t *TCPTransport) dialSlot(ctx context.Context) (func(), error) {
+	t.rot.mu.Lock()
+	if t.rot.slots == nil {
+		t.rot.slots = make(chan struct{}, maxCarrierDials)
+	}
+	slots := t.rot.slots
+	t.rot.mu.Unlock()
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (t *TCPTransport) rotOpts() rotOptions {
 	t.rot.mu.Lock()
 	defer t.rot.mu.Unlock()
@@ -121,7 +142,14 @@ func (t *TCPTransport) rotateClient(first net.Conn, cc *countConn, dial func(ctx
 		return nil, err
 	}
 	o := t.rotOpts()
-	o.Dial = func(ctx context.Context) (*rotCarrier, error) { return dial(ctx, id) }
+	o.Dial = func(ctx context.Context) (*rotCarrier, error) {
+		release, err := t.dialSlot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		return dial(ctx, id)
+	}
 	rc := newRotConn(true, id, o)
 	rc.addCarrier(newRotCarrier(first, cc, nil))
 	return rc, nil

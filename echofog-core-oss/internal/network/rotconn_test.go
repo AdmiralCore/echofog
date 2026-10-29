@@ -28,7 +28,10 @@ type rotLab struct {
 	opened  bool
 }
 
-func newRotLab(t *testing.T, budget int) *rotLab {
+func newRotLab(t *testing.T, budget int) *rotLab { return newRotLabSlow(t, budget, 0) }
+
+// newRotLabSlow: every spare carrier takes dialDelay to open, as on a network with a long round trip.
+func newRotLabSlow(t *testing.T, budget int, dialDelay time.Duration) *rotLab {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -48,6 +51,7 @@ func newRotLab(t *testing.T, budget int) *rotLab {
 	var id [16]byte
 	_, _ = rand.Read(id[:])
 	dial := func() (*rotCarrier, error) {
+		time.Sleep(dialDelay)
 		raw, err := net.Dial("tcp", ln.Addr().String())
 		if err != nil {
 			return nil, err
@@ -253,5 +257,41 @@ func TestRotConn_FreezeCannotCatchIt(t *testing.T) {
 		if c.rx.Load() > freeze && c.tx.Load() > freeze {
 			t.Fatalf("a carrier went past the freeze count: in %d out %d", c.rx.Load(), c.tx.Load())
 		}
+	}
+}
+
+// When data waits for a carrier, the client asks for more spares; when the speed drops, it lets
+// them go.
+func TestRotConn_PoolGrowsWhenDataWaits(t *testing.T) {
+	l := newRotLabSlow(t, 6<<10, 40*time.Millisecond)
+	data := make([]byte, 400<<10)
+	_, _ = rand.Read(data)
+	var peak int
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+			l.client.mu.Lock()
+			peak = max(peak, l.client.want)
+			l.client.mu.Unlock()
+		}
+	}()
+	go pump(t, l.server, data, 4000)
+	got := readAll(t, l.client, len(data))
+	close(stop)
+	if !bytes.Equal(got, data) {
+		t.Fatal("bytes changed")
+	}
+	l.client.mu.Lock()
+	defer l.client.mu.Unlock()
+	if peak <= rotSpares {
+		t.Fatalf("the pool stayed at %d spares though the data waited for carriers", peak)
+	}
+	if peak > rotMaxSpares {
+		t.Fatalf("the pool grew to %d, past %d", peak, rotMaxSpares)
 	}
 }
