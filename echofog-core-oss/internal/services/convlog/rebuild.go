@@ -97,7 +97,7 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 		for _, en := range entries {
 			var v View
 			if json.Unmarshal(en.Value, &v) == nil && v.Legacy && v.Present {
-				v.Edits, v.EditRefs, v.Deletes, v.Reacts, v.Pin = nil, nil, nil, nil, nil
+				v.Edits, v.EditRefs, v.Deletes, v.Reacts, v.Pin, v.ThreadTitle = nil, nil, nil, nil, nil, nil
 				v.Replies, v.LastReplyTS = 0, 0
 				legacy[v.ID] = &v
 			}

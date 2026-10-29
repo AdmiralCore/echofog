@@ -117,6 +117,7 @@ type convsFacade struct {
 	lastHello     map[types.PeerID]time.Time
 	syncIn        map[types.PeerID]*syncWindow // sync messages taken from each peer lately
 	joinAsked     map[string]time.Time         // groups where we asked the log to let us in
+	wantAsked     map[string]time.Time         // peer/conv: when we last asked that peer for what we lack (pullGap)
 	lastRev       map[convlog.ConvID]uint64    // the newest change handed to the app, per chat
 	historyTimers map[string]*time.Timer       // groups whose earlier messages are coming in
 

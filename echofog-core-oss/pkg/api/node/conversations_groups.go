@@ -98,7 +98,14 @@ func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 		if err != nil {
 			return
 		}
-		id, fresh, err := f.log.Ingest(convlog.Group(groupID), raw)
+		c := convlog.Group(groupID)
+		id, fresh, err := f.log.Ingest(c, raw)
+		if err == nil && fresh {
+			f.pullGap(origin, c, raw)
+		} else if err == convlog.ErrNotParticipant || err == convlog.ErrForbidden {
+			// not taken as it came (what allows it has not reached us yet): ask the sender
+			f.wantSoon(origin, c)
+		}
 		if err != nil || !fresh {
 			return
 		}
@@ -179,7 +186,7 @@ func (f *convsFacade) sharedConvs(peer types.PeerID) []convlog.Conv {
 
 const (
 	antiEntropyFirst  = 30 * time.Second
-	antiEntropyEvery  = 10 * time.Minute
+	antiEntropyEvery  = 2 * time.Minute
 	antiEntropyFanout = 3
 )
 
@@ -525,4 +532,44 @@ func (f *convsFacade) followMembers(groupID string, changes []convlog.MemberChan
 	if roles {
 		f.n.followRoles(groupID)
 	}
+}
+
+// wantPause is the least time between two asks of one peer for what we lack in one group.
+const wantPause = 20 * time.Second
+
+// pullGap asks the sender of a pushed event for what we lack when the event shows a hole below
+// it in its author's sequence (an earlier push did not reach us): without this the hole waited
+// for the next anti-entropy round, minutes later, with a few members picked at random.
+func (f *convsFacade) pullGap(from types.PeerID, c convlog.Conv, raw []byte) {
+	e, _, err := convlog.Decode(raw)
+	if err != nil {
+		return
+	}
+	meta, ok := f.log.Meta(c)
+	if !ok {
+		return
+	}
+	author := convlog.AuthorID(e)
+	if meta.VV[hex.EncodeToString(author[:])] < e.Seq {
+		f.wantSoon(from, c)
+	}
+}
+
+// wantSoon sends from a Want for c, at most once per wantPause.
+func (f *convsFacade) wantSoon(from types.PeerID, c convlog.Conv) {
+	if from == f.self {
+		return
+	}
+	k := from.String() + "/" + c.ID.String()
+	f.mu.Lock()
+	if f.wantAsked == nil {
+		f.wantAsked = map[string]time.Time{}
+	}
+	if time.Since(f.wantAsked[k]) < wantPause {
+		f.mu.Unlock()
+		return
+	}
+	f.wantAsked[k] = time.Now()
+	f.mu.Unlock()
+	go f.sendSync(from, f.log.Want(c))
 }
