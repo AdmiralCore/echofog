@@ -177,7 +177,7 @@ func (s *Swarm) dialEarly(ctx context.Context, addr string) error {
 }
 
 func (s *Swarm) connect(addr string) {
-	ctx, cancel := context.WithTimeout(s.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeout(s.ctx, network.DialBudget(time.Second*3))
 	defer cancel()
 	err := s.dialEarly(ctx, addr)
 	if err != nil {
@@ -212,7 +212,7 @@ func (s *Swarm) AddPotentialPeer(id types.PeerID, addr string) {
 			return
 		default:
 			s.logger.Debug("Swarm: Attempting automatic local connection", "addr", addr)
-			ctx, cancel := context.WithTimeout(s.ctx, time.Second*5)
+			ctx, cancel := context.WithTimeout(s.ctx, network.DialBudget(time.Second*5))
 			defer cancel()
 			if err := s.expectPeer(addr, id); err != nil {
 				s.logger.Debug("Swarm: not dialing discovered peer", "addr", addr, "err", err)

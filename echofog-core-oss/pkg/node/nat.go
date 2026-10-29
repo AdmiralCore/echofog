@@ -187,7 +187,7 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 	}
 	var dialErr error
 	if addr != "" {
-		dctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		dctx, cancel := context.WithTimeout(ctx, network.DialBudget(4*time.Second))
 		dialErr = n.Swarm.AddPotentialPeerWithCtx(dctx, peer, addr)
 		cancel()
 		if dialErr == nil {

@@ -166,3 +166,15 @@ func proxyResolvesName(addr string) bool {
 	_, err := netip.ParseAddr(host)
 	return err != nil && host != "localhost"
 }
+
+// proxyDialMin is the least time a dial gets behind a proxy: a Tor circuit to a new address takes
+// seconds of its own before the handshake even starts, and a cold Tor longer still.
+const proxyDialMin = 30 * time.Second
+
+// DialBudget is how long a dial that would get d may take: d, or more behind a proxy.
+func DialBudget(d time.Duration) time.Duration {
+	if OutboundProxy() == "" {
+		return d
+	}
+	return max(d, proxyDialMin)
+}

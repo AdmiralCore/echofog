@@ -442,7 +442,7 @@ func (s *Swarm) dialGuard(g *guard) {
 	go func() {
 		defer s.wg.Done()
 		addr := resolveHostPort(s.ctx, g.addr)
-		ctx, cancel := context.WithTimeout(s.ctx, guardDialWait)
+		ctx, cancel := context.WithTimeout(s.ctx, network.DialBudget(guardDialWait))
 		defer cancel()
 		err := s.expectPeer(addr, g.id)
 		if err == nil {
