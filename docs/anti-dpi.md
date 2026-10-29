@@ -148,14 +148,33 @@ disguise. A peer whose country cannot be placed keeps the disguise. It is **off 
 because inside a country that also censors domestic traffic, noise is exactly what gets flagged.
 `anti_dpi.home_country` (e.g. `"DE"`) fixes the node's own country when the GeoIP lookup is blocked.
 
-## Not working yet: Russia's 16 KB freeze
+## Russia's 16 KB freeze
 
-TSPU in Russia has been seen to freeze a TCP connection to a foreign datacenter after roughly
-16 KB. The config has a switch for a defence, `anti_dpi.micro_chunk_tcp`: carry the tunnel in
-chunks under that size over several connections and put them back together at the exit. **In this
-build the switch does nothing:** the chunk format is written and tested, but neither the client nor
-the exit uses it yet. A new connection every 15 KB would also cost too much speed for video, so the
-plan is to use it only as a slow last resort, after QUIC and an entry node inside the country.
+TSPU in Russia has been seen to freeze a TCP connection to a foreign datacenter once the server has
+sent about 16 KB on it: the connection stays open and goes silent. QUIC (UDP) is not hit by it. The
+test bed reproduces it (`testbed/censor/freeze.go`, a router rule), and without a defence a client
+whose network lets only TCP through gets nothing: no page, no download.
+
+Three things answer it, in this order:
+
+1. **QUIC first.** The node dials QUIC and falls back to TCP only when QUIC does not get through.
+   Where a TCP link has to rotate (below), the preference for TCP lasts two minutes, not ten, so
+   QUIC is tried again soon.
+2. **A guard inside the country.** Behind the freeze (the node's own country is Russia), guard mode
+   picks guards in the node's own country first. That link never crosses the border; the guard
+   relays what has to. It needs the GeoIP of the guard's address (or `anti_dpi.home_country` for
+   the node itself).
+3. **Link rotation, the last resort** (`anti_dpi.tcp_rotate`, flag `--tcp-rotate`). One TCP link is
+   carried by many short TCP connections. Each side counts what it put on a connection, the TLS
+   handshake included, and moves to a spare connection before 12 KB; the streams above do not
+   notice. A server takes rotating links from any client. `on` rotates every TCP link the node
+   dials, `off` never, `auto` (the default) rotates links that cross the border from Russia, and the
+   links to an address where a plain link went silent after a few KB (learned for six hours, which
+   costs the first link 30 to 75 seconds in the test bed). `micro_chunk_tcp` true now means `on`.
+
+Rotation costs a connection every 8-10 KB, so it is slow: in the test bed 1.6-4 MB/s at 1 ms round
+trip, against 5.5 MB/s without the freeze. On a real network with a real round trip it is a lot
+less. It is for messages, pages and slow video, not for 4K.
 
 ## Setting up a public node
 
