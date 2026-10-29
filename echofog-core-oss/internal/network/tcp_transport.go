@@ -250,23 +250,25 @@ func (t *TCPTransport) handleInbound(raw net.Conn, releaseSlot func()) {
 	// A client that rotates its links opens every carrier with an ATTACH. A spare joins its session
 	// and is done (it has no turn at the per-address limits, see attachSpare); anything else is
 	// counted below like any other connection.
+	// A valid stealth token was presented: only now does the per-address Guard apply.
+	ip := addrOfNet(raw.RemoteAddr())
 	conn, br, kind, rotID, serr := t.sniffRotating(conn)
 	if serr != nil {
 		releaseSlot()
 		_ = conn.Close()
+		t.guard.Load().Fail(ip) // a holder of a valid token who then sent nothing, or garbage
 		return
 	}
 	if kind == rotSpare {
 		releaseSlot()
 		if !t.attachSpare(conn, cc, br, rotID) {
 			_ = conn.Close() // a spare of a session this server does not have
+			t.guard.Load().Fail(ip)
 		}
 		_ = raw.SetDeadline(time.Time{})
 		return
 	}
 
-	// A valid stealth token was presented: only now does the per-address Guard apply.
-	ip := addrOfNet(raw.RemoteAddr())
 	release, allowed := t.guard.Load().Allow(ip)
 	if !allowed {
 		releaseSlot()

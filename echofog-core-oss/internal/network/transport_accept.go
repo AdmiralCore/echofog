@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/handshake"
@@ -27,17 +28,29 @@ func (q *QuicTransport) ListenEarly(ctx context.Context) error {
 // ConnAcceptor accepts connections from the listener, authenticates each peer, and emits it on ConnChan.
 func (q *QuicTransport) ConnAcceptor(ctx context.Context, ln *quic.EarlyListener, protocolVersion uint32) {
 	defer ln.Close()
+	var lastErrLog time.Time
 	for {
 		conn, err := ln.Accept(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			if err.Error() == "quic: transport closed" {
+			// closed for good: the error carries its cause ("quic: transport closed: …"), so it is
+			// matched by kind; matching the bare text left the loop spinning on it, logging every turn
+			if errors.Is(err, quic.ErrTransportClosed) || errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 				return
 			}
-
-			q.logger.Error("QuicTransport Accept error", "err", err)
+			// anything else: say so at most once a second and give the CPU back, so an error that
+			// repeats on every call cannot turn this loop into a busy one
+			if now := time.Now(); now.Sub(lastErrLog) >= time.Second {
+				lastErrLog = now
+				q.logger.Error("QuicTransport Accept error", "err", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
 			continue
 		}
 
