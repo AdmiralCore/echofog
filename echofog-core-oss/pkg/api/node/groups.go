@@ -333,7 +333,17 @@ func (f *groupsFacade) Invite(groupID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.wireMembers(groupID)})
+	var tok *inviteToken
+	if f.needsInvite(groupID) {
+		role, err := f.mgr.GetMemberRole(groupID, f.selfID)
+		if err != nil || !mayInvite(role) {
+			return "", errors.New("a restricted member cannot invite to a private group")
+		}
+		if tok, err = f.newInviteToken(groupID); err != nil {
+			return "", err
+		}
+	}
+	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.wireMembers(groupID), Inv: tok})
 	if err != nil {
 		return "", err
 	}
@@ -344,6 +354,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 	invite = strings.TrimSpace(invite)
 	var g *groups.GroupGenesisManifest
 	var members []wireMember
+	var tok *inviteToken
 	switch {
 	case strings.HasPrefix(invite, inviteScheme2):
 		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(invite, inviteScheme2))
@@ -351,7 +362,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 		if err != nil || json.Unmarshal(raw, &w) != nil || w.Genesis == nil {
 			return GroupDTO{}, errors.New("malformed invite")
 		}
-		g, members = w.Genesis, w.Members
+		g, members, tok = w.Genesis, w.Members, w.Inv
 	case strings.HasPrefix(invite, inviteScheme):
 		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(invite, inviteScheme))
 		var old groups.GroupGenesisManifest
@@ -389,7 +400,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 	f.mu.Unlock()
 
 	// let the members know who joined (offline ones get it when they are back)
-	f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:])})
+	f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:]), Inv: tok})
 	return dto, nil
 }
 

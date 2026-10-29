@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/echofog/echofog-core/internal/services/convlog"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -47,7 +48,8 @@ type groupWire struct {
 	Room    string                       `json:"rm,omitempty"` // a call: the voice room it is in ("" the group's own call)
 	Coord   string                       `json:"co,omitempty"`
 	History []wireHistory                `json:"h,omitempty"`
-	File    *wireFile                    `json:"f,omitempty"` // msg: a file posted in the group
+	File    *wireFile                    `json:"f,omitempty"`   // msg: a file posted in the group
+	Inv     *inviteToken                 `json:"inv,omitempty"` // invite, join: what lets the newcomer into a private group
 
 	V      int                     `json:"v,omitempty"`    // version of the sender (2: sealed messages)
 	Env    *senderkeys.Envelope    `json:"env,omitempty"`  // smsg: a sealed message
@@ -485,6 +487,10 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 			return nil
 		}
 		if _, err := f.mgr.GetGroup(w.Group); err != nil {
+			return nil
+		}
+		if _, already := f.member(w.Group, origin); !already && f.needsInvite(w.Group) && !f.inviteValid(w.Group, w.Inv) {
+			slog.Info("Refused a join without a valid invitation", "group_id", w.Group, "peer", origin.String()[:8])
 			return nil
 		}
 		if err := f.mgr.SelfJoin(w.Group, origin, pub); err != nil {
