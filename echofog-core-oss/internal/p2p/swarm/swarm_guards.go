@@ -85,7 +85,7 @@ type guardSet struct {
 
 // GuardModeActive reports whether this node holds guards: it is not in the server role and
 // anti_dpi.guard_mode is "on", or "auto" with obfuscation on (the default) and the node not placed in
-// a country that does not censor (SetGuardsFree).
+// a country that does not censor (SetGuardsFree), or "auto" with a relay the user pinned.
 func (s *Swarm) GuardModeActive() bool {
 	if s == nil || s.cfg == nil || s.cfg.IsServer() {
 		return false
@@ -95,6 +95,9 @@ func (s *Swarm) GuardModeActive() bool {
 		return false
 	case config.GuardOn:
 		return true
+	}
+	if len(s.cfg.AntiDPI.PinnedGuards) > 0 {
+		return true // the user pinned a relay to go in through: that holds even where auto stands down
 	}
 	return s.cfg.AntiDPI.Obfs == config.ObfsNode && !s.guardsFree.Load()
 }

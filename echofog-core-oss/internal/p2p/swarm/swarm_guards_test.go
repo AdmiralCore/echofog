@@ -380,3 +380,18 @@ func TestPinnedGuardHeldBesideFill(t *testing.T) {
 	assert.True(t, s.IsGuard(pin.id), "pinned guard is among the guards")
 	assert.GreaterOrEqual(t, len(s.Guards()), guardsWanted, "the rest still fill up to wanted")
 }
+
+// A pinned relay keeps guard mode on where "auto" would stand down (a country that does not
+// censor); "off" still means direct.
+func TestPinnedGuardKeepsAutoOn(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	withGuardMode(s, config.GuardAuto)
+	s.SetGuardsFree(true)
+	assert.False(t, s.GuardModeActive(), "auto in a free country, nothing pinned: off")
+
+	s.cfg.AntiDPI.PinnedGuards = []string{network.JoinPeerAddrInfo("198.51.100.9:443", idOf(9), "cover.example", true)}
+	assert.True(t, s.GuardModeActive(), "a pinned relay: on")
+
+	withGuardMode(s, config.GuardOff)
+	assert.False(t, s.GuardModeActive(), "off: direct even with a pinned relay")
+}

@@ -69,7 +69,7 @@ func (n *NodeApi) GetGuardStatus() (GuardStatus, error) {
 		return st, nil
 	}
 	st.Active = n.node.Swarm.GuardModeActive()
-	st.Country, st.StoodDown = n.homeCountry(), n.node.Swarm.GuardsFree() && mode == config.GuardAuto
+	st.Country, st.StoodDown = n.homeCountry(), n.node.Swarm.GuardsFree() && mode == config.GuardAuto && !st.Active
 	for _, g := range n.node.Swarm.Guards() {
 		pid := g.ID.String()
 		st.Guards = append(st.Guards, GuardServer{PeerID: pid, Addr: g.Addr, Connected: g.Connected, Pinned: pinnedIDs[pid]})

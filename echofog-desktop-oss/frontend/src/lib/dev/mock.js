@@ -414,7 +414,7 @@ const impl = {
     this.guardMock ??= 'auto';
     // ?country=DE: the app is placed in a country that does not censor, so "auto" stands down
     const country = (new URLSearchParams(location.search).get('country') || 'RU').toUpperCase();
-    const stoodDown = this.guardMock === 'auto' && !['RU', 'BY', 'IR', 'CN'].includes(country);
+    const stoodDown = this.guardMock === 'auto' && !this.pinnedMock.length && !['RU', 'BY', 'IR', 'CN'].includes(country);
     const active = this.guardMock !== 'off' && !stoodDown;
     const pinnedGuards = active
       ? this.pinnedMock.map((p) => ({ peerId: p.peerId, addr: p.addr, connected: true, pinned: true }))
