@@ -82,6 +82,14 @@ export function ChatList() {
   return window['go']['main']['App']['ChatList']();
 }
 
+export function ChatMainChannel(arg1) {
+  return window['go']['main']['App']['ChatMainChannel'](arg1);
+}
+
+export function ChatMainChannelSave(arg1, arg2) {
+  return window['go']['main']['App']['ChatMainChannelSave'](arg1, arg2);
+}
+
 export function ChatMarkRead(arg1, arg2) {
   return window['go']['main']['App']['ChatMarkRead'](arg1, arg2);
 }
@@ -348,6 +356,18 @@ export function GetVault() {
 
 export function GetVoucherEarnings() {
   return window['go']['main']['App']['GetVoucherEarnings']();
+}
+
+export function GroupRoleRemove(arg1, arg2) {
+  return window['go']['main']['App']['GroupRoleRemove'](arg1, arg2);
+}
+
+export function GroupRoleSave(arg1, arg2) {
+  return window['go']['main']['App']['GroupRoleSave'](arg1, arg2);
+}
+
+export function GroupRoles(arg1) {
+  return window['go']['main']['App']['GroupRoles'](arg1);
 }
 
 export function InviteToCall(arg1) {

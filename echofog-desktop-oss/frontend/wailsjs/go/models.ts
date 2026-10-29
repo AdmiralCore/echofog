@@ -752,6 +752,10 @@ export namespace node {
 	    topic?: string;
 	    readOnly: boolean;
 	    position: number;
+	    parent?: string;
+	    category?: boolean;
+	    slowSecs?: number;
+	    open?: string;
 	    unread: number;
 	    lastTs: number;
 	    canSend: boolean;
@@ -769,6 +773,10 @@ export namespace node {
 	        this.topic = source["topic"];
 	        this.readOnly = source["readOnly"];
 	        this.position = source["position"];
+	        this.parent = source["parent"];
+	        this.category = source["category"];
+	        this.slowSecs = source["slowSecs"];
+	        this.open = source["open"];
 	        this.unread = source["unread"];
 	        this.lastTs = source["lastTs"];
 	        this.canSend = source["canSend"];
@@ -800,6 +808,10 @@ export namespace node {
 	    topic: string;
 	    readOnly: boolean;
 	    position: number;
+	    parent: string;
+	    category: boolean;
+	    slowSecs: number;
+	    open: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChannelSpec(source);
@@ -813,6 +825,10 @@ export namespace node {
 	        this.topic = source["topic"];
 	        this.readOnly = source["readOnly"];
 	        this.position = source["position"];
+	        this.parent = source["parent"];
+	        this.category = source["category"];
+	        this.slowSecs = source["slowSecs"];
+	        this.open = source["open"];
 	    }
 	}
 	export class ChatLink {
@@ -939,11 +955,16 @@ export namespace node {
 	export class ConvCan {
 	    send: boolean;
 	    files: boolean;
+	    links: boolean;
+	    threads: boolean;
 	    react: boolean;
 	    pin: boolean;
 	    manage: boolean;
+	    channels: boolean;
+	    roles: boolean;
 	    invite: boolean;
 	    call: boolean;
+	    stream: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConvCan(source);
@@ -953,11 +974,16 @@ export namespace node {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.send = source["send"];
 	        this.files = source["files"];
+	        this.links = source["links"];
+	        this.threads = source["threads"];
 	        this.react = source["react"];
 	        this.pin = source["pin"];
 	        this.manage = source["manage"];
+	        this.channels = source["channels"];
+	        this.roles = source["roles"];
 	        this.invite = source["invite"];
 	        this.call = source["call"];
+	        this.stream = source["stream"];
 	    }
 	}
 	export class ConversationDTO {
@@ -1168,6 +1194,8 @@ export namespace node {
 	export class GroupMemberDTO {
 	    peerId: string;
 	    role: string;
+	    roleTitle?: string;
+	    roleColor?: number;
 	    joinedAt: number;
 	    isMe: boolean;
 	    online: boolean;
@@ -1184,6 +1212,8 @@ export namespace node {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.peerId = source["peerId"];
 	        this.role = source["role"];
+	        this.roleTitle = source["roleTitle"];
+	        this.roleColor = source["roleColor"];
 	        this.joinedAt = source["joinedAt"];
 	        this.isMe = source["isMe"];
 	        this.online = source["online"];
@@ -1242,6 +1272,34 @@ export namespace node {
 		    }
 		    return a;
 		}
+	}
+	export class GroupRoleDTO {
+	    id: string;
+	    title: string;
+	    color: number;
+	    rank: number;
+	    perms: number;
+	    builtin: boolean;
+	    members: number;
+	    canEdit: boolean;
+	    canRemove: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupRoleDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.color = source["color"];
+	        this.rank = source["rank"];
+	        this.perms = source["perms"];
+	        this.builtin = source["builtin"];
+	        this.members = source["members"];
+	        this.canEdit = source["canEdit"];
+	        this.canRemove = source["canRemove"];
+	    }
 	}
 	export class GuardServer {
 	    peerId: string;

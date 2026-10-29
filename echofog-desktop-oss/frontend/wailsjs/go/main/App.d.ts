@@ -47,6 +47,10 @@ export function ChatHistory(arg1:node.ChatRef,arg2:string,arg3:number):Promise<n
 
 export function ChatList():Promise<Array<node.ConversationDTO>>;
 
+export function ChatMainChannel(arg1:node.ChatRef):Promise<node.ChannelDTO>;
+
+export function ChatMainChannelSave(arg1:node.ChatRef,arg2:node.ChannelSpec):Promise<void>;
+
 export function ChatMarkRead(arg1:node.ChatRef,arg2:string):Promise<void>;
 
 export function ChatMessage(arg1:node.ChatRef,arg2:string):Promise<convlog.Message>;
@@ -180,6 +184,12 @@ export function GetVPNStatus():Promise<node.VPNStatus>;
 export function GetVault():Promise<dto.VaultDTO>;
 
 export function GetVoucherEarnings():Promise<dto.VoucherEarningsDTO>;
+
+export function GroupRoleRemove(arg1:string,arg2:string):Promise<void>;
+
+export function GroupRoleSave(arg1:string,arg2:node.GroupRoleDTO):Promise<node.GroupRoleDTO>;
+
+export function GroupRoles(arg1:string):Promise<Array<node.GroupRoleDTO>>;
 
 export function InviteToCall(arg1:string):Promise<Record<string, string>>;
 
