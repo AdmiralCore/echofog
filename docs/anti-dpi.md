@@ -172,9 +172,11 @@ Three things answer it, in this order:
    links to an address where a plain link went silent after a few KB (learned for six hours, which
    costs the first link 30 to 75 seconds in the test bed). `micro_chunk_tcp` true now means `on`.
 
-Rotation costs a connection every 8-10 KB, so it is slow: in the test bed 1.6-4 MB/s at 1 ms round
-trip, against 5.5 MB/s without the freeze. On a real network with a real round trip it is a lot
-less. It is for messages, pages and slow video, not for 4K.
+Rotation costs a connection every 8-10 KB, so it is slow. The number of spare connections follows
+the speed (two while the link is quiet, up to twelve while data waits for one). In the test bed it
+gives 5-12 MB/s at a 1 ms round trip and about 1 MB/s at 50 ms, against 80 MB/s for a plain TCP
+connection with no freeze. On a real network the round trip is what counts. It is for messages,
+pages and slow video, not for 4K.
 
 ## Setting up a public node
 
