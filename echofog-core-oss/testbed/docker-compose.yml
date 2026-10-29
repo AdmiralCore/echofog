@@ -137,30 +137,30 @@ services:
   a1:
     <<: *node
     container_name: efbed-a1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: a1, GATEWAY: 10.20.1.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: a1, GATEWAY: 10.20.1.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}" }
     networks: { lan_a: { ipv4_address: 10.20.1.11 } }
   a2:
     <<: *node
     container_name: efbed-a2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: a2, GATEWAY: 10.20.1.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: a2, GATEWAY: 10.20.1.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}" }
     networks: { lan_a: { ipv4_address: 10.20.1.12 } }
   b1:
     <<: *node
     container_name: efbed-b1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: b1, GATEWAY: 10.20.2.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: b1, GATEWAY: 10.20.2.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}" }
     networks: { lan_b: { ipv4_address: 10.20.2.11 } }
   b2:
     <<: *node
     container_name: efbed-b2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: b2, GATEWAY: 10.20.2.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: b2, GATEWAY: 10.20.2.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}" }
     networks: { lan_b: { ipv4_address: 10.20.2.12 } }
   c1:
     <<: *node
     container_name: efbed-c1
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c1, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}", TRANSPORT: "${TRANSPORT_C1:-}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c1, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_USERS:-}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}", TRANSPORT: "${TRANSPORT_C1:-}" }
     networks: { lan_c: { ipv4_address: 10.20.3.11 } }
   c2:
     <<: *node
     container_name: efbed-c2
-    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c2, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_C2:-${GUARD_MODE_USERS:-}}" }
+    environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c2, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_C2:-${GUARD_MODE_USERS:-}}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}" }
     networks: { lan_c: { ipv4_address: 10.20.3.12 } }

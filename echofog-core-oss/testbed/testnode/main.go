@@ -85,6 +85,9 @@ func main() {
 	if g := os.Getenv("GUARD_MODE"); g != "" {
 		cfg.AntiDPI.GuardMode = g
 	}
+	if g := os.Getenv("TCP_ROTATE"); g != "" {
+		cfg.AntiDPI.TCPRotate = g
+	}
 	if *access != "" {
 		cfg.Access.Mode = *access
 	}

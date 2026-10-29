@@ -18,6 +18,7 @@ type Flow struct {
 	Packets  int
 	BytesUp  int // client to server, IP bytes
 	BytesDn  int
+	PayDn    int // server to client, TCP/UDP payload bytes (what a byte counter on the flow adds up)
 
 	// What the wire shows.
 	Looks  string // "TLS", "QUIC", "QUIC-shaped noise", "HTTP", "random", "other"
@@ -89,6 +90,7 @@ func (f Flow) Verdict() string {
 type flowKey struct {
 	proto    uint8
 	cli, srv netip.AddrPort
+	gen      int // a source port reused by a later connection starts the next generation
 }
 
 // Analyze reads a capture and returns its flows, the busiest first. A TCP flow's client is the
@@ -107,12 +109,23 @@ func Analyze(pcapPath string) ([]Flow, error) {
 	}
 	flows := map[flowKey]*state{}
 	var order []flowKey
+	gens := map[flowKey]int{} // the generation of a pair of addresses now in use
 	for _, p := range pkts {
-		k := flowKey{p.proto, p.src, p.dst}
+		base := flowKey{proto: p.proto, cli: p.src, srv: p.dst}
+		k := base
+		k.gen = gens[base]
 		up := true
 		st, ok := flows[k]
+		if ok && p.proto == 6 && p.syn && st.f.Packets > 4 {
+			// a new connection from a port that already carried one: a flow of its own
+			gens[base]++
+			k.gen = gens[base]
+			st, ok = nil, false
+		}
 		if !ok {
-			if rev, ok2 := flows[flowKey{p.proto, p.dst, p.src}]; ok2 {
+			rb := flowKey{proto: p.proto, cli: p.dst, srv: p.src}
+			rb.gen = gens[rb]
+			if rev, ok2 := flows[rb]; ok2 {
 				st, up = rev, false
 			}
 		}
@@ -133,6 +146,7 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		f.Duration = p.at.Sub(f.Start)
 		if !up {
 			f.BytesDn += p.size
+			f.PayDn += len(p.payload)
 			continue
 		}
 		f.BytesUp += p.size
