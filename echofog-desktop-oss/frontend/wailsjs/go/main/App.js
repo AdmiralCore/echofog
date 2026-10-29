@@ -378,6 +378,18 @@ export function GroupInvites(arg1) {
   return window['go']['main']['App']['GroupInvites'](arg1);
 }
 
+export function GroupJoinDecide(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupJoinDecide'](arg1, arg2, arg3);
+}
+
+export function GroupJoinRequests(arg1) {
+  return window['go']['main']['App']['GroupJoinRequests'](arg1);
+}
+
+export function GroupModerationLog(arg1) {
+  return window['go']['main']['App']['GroupModerationLog'](arg1);
+}
+
 export function GroupRoleRemove(arg1, arg2) {
   return window['go']['main']['App']['GroupRoleRemove'](arg1, arg2);
 }
@@ -388,6 +400,10 @@ export function GroupRoleSave(arg1, arg2) {
 
 export function GroupRoles(arg1) {
   return window['go']['main']['App']['GroupRoles'](arg1);
+}
+
+export function GroupTimeout(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupTimeout'](arg1, arg2, arg3);
 }
 
 export function InviteToCall(arg1) {

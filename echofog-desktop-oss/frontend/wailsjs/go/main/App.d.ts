@@ -195,11 +195,19 @@ export function GroupInviteRevoke(arg1:string,arg2:string):Promise<void>;
 
 export function GroupInvites(arg1:string):Promise<Array<node.GroupInviteDTO>>;
 
+export function GroupJoinDecide(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
+export function GroupJoinRequests(arg1:string):Promise<Array<node.GroupJoinRequestDTO>>;
+
+export function GroupModerationLog(arg1:string):Promise<Array<convlog.ModEntry>>;
+
 export function GroupRoleRemove(arg1:string,arg2:string):Promise<void>;
 
 export function GroupRoleSave(arg1:string,arg2:node.GroupRoleDTO):Promise<node.GroupRoleDTO>;
 
 export function GroupRoles(arg1:string):Promise<Array<node.GroupRoleDTO>>;
+
+export function GroupTimeout(arg1:string,arg2:string,arg3:number):Promise<void>;
 
 export function InviteToCall(arg1:string):Promise<Record<string, string>>;
 

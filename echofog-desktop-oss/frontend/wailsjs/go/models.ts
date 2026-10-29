@@ -189,6 +189,34 @@ export namespace convlog {
 		    return a;
 		}
 	}
+	export class ModEntry {
+	    ts: number;
+	    actor: string;
+	    action: string;
+	    target?: string;
+	    role?: string;
+	    detail?: string;
+	    until?: number;
+	    message?: string;
+	    channel?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ts = source["ts"];
+	        this.actor = source["actor"];
+	        this.action = source["action"];
+	        this.target = source["target"];
+	        this.role = source["role"];
+	        this.detail = source["detail"];
+	        this.until = source["until"];
+	        this.message = source["message"];
+	        this.channel = source["channel"];
+	    }
+	}
 	
 	export class Override {
 	    role: string;
@@ -1005,6 +1033,7 @@ export namespace node {
 	    invite: boolean;
 	    call: boolean;
 	    stream: boolean;
+	    mutedUntil?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConvCan(source);
@@ -1024,6 +1053,7 @@ export namespace node {
 	        this.invite = source["invite"];
 	        this.call = source["call"];
 	        this.stream = source["stream"];
+	        this.mutedUntil = source["mutedUntil"];
 	    }
 	}
 	export class ConversationDTO {
@@ -1238,6 +1268,7 @@ export namespace node {
 	    uses?: number;
 	    used: number;
 	    role?: string;
+	    approval?: boolean;
 	    issuer: string;
 	    mine: boolean;
 	    state: string;
@@ -1257,6 +1288,7 @@ export namespace node {
 	        this.uses = source["uses"];
 	        this.used = source["used"];
 	        this.role = source["role"];
+	        this.approval = source["approval"];
 	        this.issuer = source["issuer"];
 	        this.mine = source["mine"];
 	        this.state = source["state"];
@@ -1270,6 +1302,7 @@ export namespace node {
 	    hours: number;
 	    uses: number;
 	    role: string;
+	    approval: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupInviteSpec(source);
@@ -1281,6 +1314,23 @@ export namespace node {
 	        this.hours = source["hours"];
 	        this.uses = source["uses"];
 	        this.role = source["role"];
+	        this.approval = source["approval"];
+	    }
+	}
+	export class GroupJoinRequestDTO {
+	    peerId: string;
+	    ts: number;
+	    invite?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupJoinRequestDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.ts = source["ts"];
+	        this.invite = source["invite"];
 	    }
 	}
 	export class GroupMemberDTO {
@@ -1295,6 +1345,8 @@ export namespace node {
 	    canBan: boolean;
 	    roles?: string[];
 	    canTransfer: boolean;
+	    timeout?: number;
+	    canTimeout: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupMemberDTO(source);
@@ -1313,6 +1365,8 @@ export namespace node {
 	        this.canBan = source["canBan"];
 	        this.roles = source["roles"];
 	        this.canTransfer = source["canTransfer"];
+	        this.timeout = source["timeout"];
+	        this.canTimeout = source["canTimeout"];
 	    }
 	}
 	export class GroupMessageDTO {
