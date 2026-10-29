@@ -133,3 +133,22 @@ func (a *App) ChatMainChannelSave(ref api.ChatRef, spec api.ChannelSpec) error {
 	}
 	return n.ChatMainChannelSave(ref, spec)
 }
+
+// ChatChannelPlace puts a channel, a voice room or the main channel (id "") in a category.
+func (a *App) ChatChannelPlace(ref api.ChatRef, id, parent string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatChannelPlace(ref, id, parent)
+}
+
+// ChatCategoriesSetup turns a space's two default headings into categories it can rename, remove
+// and fill with channels of either kind; it returns their ids, text then voice.
+func (a *App) ChatCategoriesSetup(ref api.ChatRef, textName, voiceName string) ([]string, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.ChatCategoriesSetup(ref, textName, voiceName)
+}

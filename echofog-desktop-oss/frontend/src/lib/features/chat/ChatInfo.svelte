@@ -1,7 +1,7 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { App, errText, copy } from '../../api.js';
+  import { App, errText } from '../../api.js';
   import { messages, hasOlder, membersVersion, activeId, loadChats, leaveGroup } from '../../stores/chats.js';
   import { transfers, openFile, showInFolder } from '../../stores/files.js';
   import { savedIds, SAVED_ID } from '../../stores/saved.js';
@@ -11,6 +11,7 @@
   import Avatar from '../../components/ui/Avatar.svelte';
   import Icon from '../../components/ui/Icon.svelte';
   import GroupRoles from './GroupRoles.svelte';
+  import GroupInvites from './GroupInvites.svelte';
   import { hexColor } from '../../perms.js';
   import { useChat } from './context.js';
 
@@ -23,9 +24,7 @@
   const dispatch = createEventDispatcher();
 
   let members = [];
-  let invite = '';
   let error = '';
-  let copied = '';
   let newMemberKey = '';
   let busy = ''; // the member being changed, or 'add'
   let roles = []; // the group's roles (GroupRoles)
@@ -44,19 +43,12 @@
   async function loadMembers(id) {
     try {
       members = (await App.ListGroupMembers(id)) || [];
-      invite = conv.can.invite ? await App.GetGroupInvite(id) : '';
       error = '';
     } catch (err) {
       error = errText(err);
     }
   }
 
-  async function doCopy(what, value) {
-    if (await copy(value)) {
-      copied = what;
-      setTimeout(() => (copied = ''), 1500);
-    }
-  }
 
   async function memberAction(id, fn) {
     busy = id;
@@ -143,16 +135,7 @@
     {/if}
   </div>
 
-  {#if invite}
-      <div class="block">
-        <div class="eyebrow">{$t('chats.invite')}</div>
-        <div class="copybox">
-          <span class="mono grow clip">{invite}</span>
-          <button class="icon" title={$t('chats.copyInvite')} on:click={() => doCopy('invite', invite)}><Icon name={copied === 'invite' ? 'check' : 'copy'} size={16} /></button>
-        </div>
-        <p class="small faint">{$t('chats.inviteHint')}</p>
-      </div>
-    {/if}
+  {#if group}<GroupInvites {conv} {roles} />{/if}
 
     {#if group}<GroupRoles {conv} on:roles={(e) => (roles = e.detail)} />{/if}
 

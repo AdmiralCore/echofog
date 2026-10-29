@@ -559,7 +559,17 @@ recent problems (the last 1 warnings and errors, cleaned):
       exit: exit === '' ? undefined : /spotify/.test(target) ? { ok: false, ms: 0, reason: 'the exit could not reach it' } : { ok: true, ms: ms + 60 },
     };
   })), 900)),
-  GetGroupInvite: () => 'fogroup1:demo-invite-0f3a9c1e',
+  GetGroupInvite: () => 'fogroup2:ZGVtby1pbnZpdGUtMGYzYTljMWU',
+  GroupInvites: (gid) => (groupInvites[gid] || []).map((i) => ({ ...i, state: i.revoked ? 'revoked' : i.uses && i.used >= i.uses ? 'used' : 'active', canRevoke: !i.revoked })),
+  GroupInviteCreate: (gid, spec) => {
+    const n = Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32);
+    const link = 'fogroup2:ZGVtby0' + n;
+    const inv = { n, label: spec.label, exp: sec(Date.now()) + spec.hours * 3600, uses: spec.uses, used: 0, role: spec.role, issuer: SELF, mine: true,
+      link, webLink: 'https://admiralcore.github.io/echofog/join/#group/' + link.slice(9) };
+    (groupInvites[gid] = groupInvites[gid] || []).unshift(inv);
+    return { ...inv, state: 'active', canRevoke: true };
+  },
+  GroupInviteRevoke: (gid, n) => { const i = (groupInvites[gid] || []).find((x) => x.n === n); if (i) i.revoked = true; return null; },
   GetContacts: () => contacts,
   GetPrivacy: () => ({ ...privacyMock.privacy }),
   SetPrivacy: (p) => {
@@ -675,7 +685,22 @@ recent problems (the last 1 warnings and errors, cleaned):
     return null;
   },
   ChatMainChannel: (ref) => ({ ...(mainChans[ref.id] || {}), canSend: true }),
-  ChatMainChannelSave: (ref, spec) => { mainChans[ref.id] = { name: spec.name, topic: spec.topic, readOnly: spec.readOnly, slowSecs: spec.slowSecs, open: spec.open }; return null; },
+  ChatMainChannelSave: (ref, spec) => { mainChans[ref.id] = { ...(mainChans[ref.id] || {}), name: spec.name, topic: spec.topic, readOnly: spec.readOnly, slowSecs: spec.slowSecs, open: spec.open, overrides: spec.overrides || [] }; return null; },
+  ChatChannelPlace: (ref, id, parent) => {
+    if (id === '') { mainChans[ref.id] = { ...(mainChans[ref.id] || {}), parent }; return null; }
+    const ch = (spaceChans[ref.id] || []).find((x) => x.id === id);
+    if (ch) ch.parent = parent;
+    return null;
+  },
+  ChatCategoriesSetup: (ref, textName, voiceName) => {
+    const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
+    if (list.some((x) => x.category)) throw new Error('the space has categories already');
+    const ids = ['cat-text-' + Date.now().toString(36), 'cat-voice-' + Date.now().toString(36)];
+    list.forEach((x) => { x.parent = x.voice ? ids[1] : ids[0]; });
+    list.push({ id: ids[0], name: textName, category: true, position: 0 }, { id: ids[1], name: voiceName, category: true, position: 1 });
+    mainChans[ref.id] = { ...(mainChans[ref.id] || {}), parent: ids[0] };
+    return ids;
+  },
   SetGroupRole: (_g, id, role) => { const m = groupMembers.find((x) => x.peerId === id); if (!m) throw new Error('this person is not in the group'); m.role = role; return null; },
   RemoveGroupMember: (_g, id) => { const i = groupMembers.findIndex((x) => x.peerId === id); if (i < 0) throw new Error('this person is not in the group'); groupMembers.splice(i, 1); return null; },
   AddGroupMember: (_g, key) => { if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error('member key must be 32 bytes of hex'); groupMembers.push({ peerId: hex(40 + groupMembers.length), role: 'member' }); return null; },
@@ -1058,15 +1083,17 @@ const NOT_UPGRADED = 'not every member of this group has updated the app yet';
 // The launch group is a space: two text channels and a voice room with a call going on.
 const spaceChans = {
   [GROUP]: [
-    { id: 'dev', name: 'dev', voice: false, topic: 'builds, bugs, releases', position: 0, parent: 'build' },
+    { id: 'dev', name: 'dev', voice: false, topic: 'builds, bugs, releases', position: 0 },
     { id: 'design', name: 'design', voice: false, position: 1, slowSecs: 30 },
     { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
     { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
-    { id: 'stream', name: 'Stream', voice: true, position: 1, parent: 'build' },
-    { id: 'build', name: 'Build', category: true, position: 0 },
+    { id: 'stream', name: 'Stream', voice: true, position: 1 },
   ],
 };
 // the main channel's settings, and the roles a group defined, by group
+const groupInvites = {
+  [GROUP]: [{ n: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', label: 'stream viewers', exp: sec(Date.now()) + 3 * 86400, uses: 25, used: 7, role: '', issuer: ALICE, mine: false }],
+};
 const mainChans = { [GROUP]: { name: '', topic: 'everything else', readOnly: false, slowSecs: 0, open: '' } };
 const BUILTIN_ROLES = [
   { id: 'owner', rank: 100, perms: 0x7fff }, { id: 'admin', rank: 50, perms: 0x7fff & ~(1 << 8) },
@@ -1189,14 +1216,14 @@ Object.assign(impl, {
     const g = groups.find((x) => x.id === ref.id);
     const manager = ['owner', 'admin'].includes(g?.myRole);
     return (spaceChans[ref.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
-      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.category && (!ch.readOnly || manager), call: ch.voice ? ch.call : undefined }));
+      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.category && (!ch.readOnly || manager), canJoin: !!ch.voice, call: ch.voice ? ch.call : undefined }));
   },
   ChatChannelSave: (ref, spec) => {
     const g = groups.find((x) => x.id === ref.id);
     if (!['owner', 'admin'].includes(g?.myRole)) throw new Error('not allowed');
     const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
     const ch = list.find((x) => x.id === spec.id) || { id: spec.id || 'c' + Date.now().toString(36), voice: spec.voice, position: list.length };
-    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly, parent: spec.parent || '', slowSecs: spec.slowSecs || 0, category: ch.category ?? !!spec.category });
+    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly, parent: spec.parent || '', slowSecs: spec.slowSecs || 0, category: ch.category ?? !!spec.category, overrides: spec.overrides || [] });
     if (!list.includes(ch)) list.push(ch);
     return { ...ch, unread: 0, lastTs: 0 };
   },
@@ -1243,6 +1270,7 @@ Object.assign(impl, {
   ChatChannelRemove: (ref, id) => {
     spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id);
     spaceChans[ref.id].forEach((x) => { if (x.parent === id) x.parent = ''; });
+    if (mainChans[ref.id]?.parent === id) mainChans[ref.id].parent = '';
     return null;
   },
   StartRoomCall: (gid, room) => {

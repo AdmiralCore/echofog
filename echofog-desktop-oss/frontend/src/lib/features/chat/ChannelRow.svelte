@@ -23,7 +23,7 @@
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div class="chan-row" class:over draggable={manage} on:dragstart on:dragover on:dragleave on:drop on:contextmenu={(e) => dispatch('edit', e)}>
   {#if ch.voice}
-    <button class="chan room" class:here={inRoom === ch.id} disabled={!conv.can.call || ($isCallActive && inRoom !== ch.id)}
+    <button class="chan room" class:here={inRoom === ch.id} disabled={!(ch.canJoin ?? conv.can.call) || ($isCallActive && inRoom !== ch.id)}
       title={inRoom === ch.id ? $t('chats.inRoom') : $t('chats.joinRoom')} on:click={() => inRoom !== ch.id && dispatch('room', ch)}>
       <span class="vol"><Icon name="volume" size={15} /></span><span class="grow nm">{ch.name}</span>
     </button>

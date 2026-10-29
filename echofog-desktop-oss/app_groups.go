@@ -275,3 +275,30 @@ func (a *App) SendGroupFile(groupID, channel, thread, path string) (api.GroupMes
 	}
 	return n.SendGroupFile(groupID, channel, thread, path)
 }
+
+// GroupInvites lists a private group's invitations, the newest first.
+func (a *App) GroupInvites(groupID string) ([]api.GroupInviteDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupInvites(groupID)
+}
+
+// GroupInviteCreate makes an invitation: how long it lets people in, how many, with which role.
+func (a *App) GroupInviteCreate(groupID string, spec api.GroupInviteSpec) (api.GroupInviteDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupInviteDTO{}, errNodeNotStarted
+	}
+	return n.GroupInviteCreate(groupID, spec)
+}
+
+// GroupInviteRevoke ends an invitation: nobody new comes in with it.
+func (a *App) GroupInviteRevoke(groupID, nonce string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupInviteRevoke(groupID, nonce)
+}

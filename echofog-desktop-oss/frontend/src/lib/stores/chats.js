@@ -395,12 +395,40 @@ export async function saveMainChannel(spec) {
   if (!conv) return false;
   try {
     await App.ChatMainChannelSave(conv.ref, { id: '', name: (spec.name || '').trim(), voice: false, topic: (spec.topic || '').trim(), readOnly: !!spec.readOnly,
-      position: 0, parent: '', category: false, slowSecs: spec.slowSecs || 0, open: spec.open || '' });
+      position: 0, parent: '', category: false, slowSecs: spec.slowSecs || 0, open: spec.open || '', overrides: spec.overrides || [] });
     await loadChannels();
     return true;
   } catch (err) {
     chatError.set(errText(err, tr('chats.err.channel')));
     return false;
+  }
+}
+
+/** Puts a channel, a room or the main channel ('') of the open group in a category ('' none). */
+export async function placeChannel(id, parent) {
+  const conv = openConv();
+  if (!conv) return false;
+  try {
+    await App.ChatChannelPlace(conv.ref, id, parent || '');
+    await loadChannels();
+    return true;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return false;
+  }
+}
+
+/** Turns the open group's default headings (text, voice) into categories: [textId, voiceId], or null. */
+export async function setupCategories() {
+  const conv = openConv();
+  if (!conv) return null;
+  try {
+    const ids = await App.ChatCategoriesSetup(conv.ref, tr('chats.text'), tr('chats.voice'));
+    await loadChannels();
+    return ids;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return null;
   }
 }
 
@@ -432,13 +460,13 @@ export async function createChannel(name, voice, parent = '') {
   }
 }
 
-/** Changes a channel or a category of the open group: { id, name, topic, readOnly, position, parent, slowSecs }. */
+/** Changes a channel or a category of the open group: { id, name, topic, readOnly, position, parent, slowSecs, overrides }. */
 export async function saveChannel(ch) {
   const conv = openConv();
   if (!conv) return false;
   try {
     await App.ChatChannelSave(conv.ref, { id: ch.id, name: ch.name.trim(), voice: !!ch.voice, topic: (ch.topic || '').trim(), readOnly: !!ch.readOnly,
-      position: ch.position || 0, parent: ch.parent || '', category: !!ch.category, slowSecs: ch.slowSecs || 0, open: '' });
+      position: ch.position || 0, parent: ch.parent || '', category: !!ch.category, slowSecs: ch.slowSecs || 0, open: '', overrides: ch.overrides || [] });
     await loadChannels();
     return true;
   } catch (err) {

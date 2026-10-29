@@ -10,17 +10,48 @@ import { parseContactInput, parseRelayLink } from './contact.js';
 //   fogroup1:… / fogroup2:…      an invitation to a group
 
 // The https form of a link (see site/join): messengers make it tappable, and the EchoFog link
-// rides after "#", which never reaches the page's server.
+// rides after "#", which never reaches the page's server. Contacts and group invitations have one
+// too: echofog://contact/… and echofog://group/… stand for fogcontact1:… and fogroup2:…, so the
+// page (and the OS, which hands echofog:// links to the app) can open them.
 export const WEB_LINK_BASE = 'https://admiralcore.github.io/echofog/join/#';
 
-/** The echofog:// link an https page carries after "#" (any page: a fork has its own); other text as it is. */
+// an EchoFog link somewhere in a text (a messenger adds words around it, or a dot after it)
+const FIND = /(https?:\/\/[^\s#]+#\S+|echofog:\/\/\S+|fogcontact1:\S+|fogroup[12]:\S+)/i;
+
+/**
+ * The EchoFog link a text holds, in the app's own form: echofog://join… and echofog://relay/…,
+ * fogcontact1:… for a contact, fogroup1:/fogroup2:… for a group. It takes the https form from any
+ * page (a fork has its own), a link that was percent-encoded on the way, and a link with words
+ * around it. Other text comes back as it is.
+ */
 export function fromWebLink(text) {
-  const t = (text || '').trim();
-  const m = /^https?:\/\/[^#\s]+#(.+)$/i.exec(t);
-  if (!m) return text;
-  if (/^echofog:\/\//i.test(m[1])) return m[1];
-  if (/^(join\?|relay\/)/i.test(m[1])) return 'echofog://' + m[1];
-  return text;
+  const raw = (text || '').trim();
+  const found = FIND.exec(raw);
+  if (!found) return text;
+  let t = found[1].replace(/[.,;:!?)\]»"'”’>]+$/, '');
+  const web = /^https?:\/\/[^#\s]+#(.+)$/i.exec(t);
+  if (web) {
+    let frag = web[1];
+    if (/^(echofog|fogroup[12]|fogcontact1)%3A/i.test(frag)) {
+      try { frag = decodeURIComponent(frag); } catch (_) { /* as it is */ }
+    }
+    if (/^(echofog:\/\/|fogroup[12]:|fogcontact1:)/i.test(frag)) t = frag;
+    else if (/^(join\?|relay\/|group\/|contact\/)/i.test(frag)) t = 'echofog://' + frag;
+    else return text;
+  }
+  const app = /^echofog:\/\/(group|contact)\/([A-Za-z0-9_-]+)\/?$/i.exec(t);
+  if (app) return (app[1].toLowerCase() === 'group' ? 'fogroup2:' : 'fogcontact1:') + app[2];
+  return t;
+}
+
+/** The https form of a link to hand people (a page that opens the app): '' for other text. */
+export function webLinkOf(link) {
+  const t = (link || '').trim();
+  let m;
+  if ((m = /^fogroup2:([A-Za-z0-9_-]+)$/.exec(t))) return WEB_LINK_BASE + 'group/' + m[1];
+  if ((m = /^fogcontact1:([A-Za-z0-9_-]+)$/.exec(t))) return WEB_LINK_BASE + 'contact/' + m[1];
+  if ((m = /^echofog:\/\/(.+)$/i.exec(t))) return WEB_LINK_BASE + m[1];
+  return '';
 }
 
 /** What a pasted text is: { kind: 'join' | 'node' | 'contact' | 'group', … } or null. */
@@ -37,7 +68,10 @@ export function classifyLink(text) {
 }
 
 /** Whether the text looks like a link worth offering to open (not a bare key typed in a chat). */
-export const looksLikeLink = (text) => /^(echofog:\/\/|fogcontact1:|fogroup[12]:)/i.test(fromWebLink((text || '').trim()).trim());
+export const looksLikeLink = (text) => {
+  const t = (text || '').trim();
+  return t.length < 64 * 1024 && /^(echofog:\/\/|fogcontact1:|fogroup[12]:)/i.test(fromWebLink(t).trim());
+};
 
 /** The open-link dialog: null when closed, else { text } (the text may be empty). */
 export const openLink = writable(null);

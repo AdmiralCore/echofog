@@ -4,7 +4,7 @@
   import { fly } from 'svelte/transition';
   import { App, errText, openURL } from '../api.js';
   import { classifyLink, fromWebLink, openLinkDialog } from '../links.js';
-  import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel } from '../stores/chats.js';
+  import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel, mainChannel } from '../stores/chats.js';
   import { isCallActive, startCall, peerInfo } from '../stores/call.store.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
   import { savedError } from '../stores/saved.js';
@@ -187,8 +187,9 @@
   $: shownChan = $activeChannel ? $channels.find((c) => c.id === $activeChannel) || null : null;
   $: channelName = shownChan ? shownChan.name : '';
   $: hasRooms = $channels.some((c) => c.voice);
-  // in a channel only managers post to, the others comment
-  $: canPost = conv.can.send && (!shownChan || shownChan.canSend !== false);
+  // in a channel only managers post to, the others comment; a channel's overrides can also let a
+  // role post there that may not elsewhere, or keep it from posting
+  $: canPost = shownChan ? shownChan.canSend !== false : conv.kind === 'group' && $mainChannel.canSend !== undefined ? $mainChannel.canSend : conv.can.send;
   $: if ($thread) threadsOpen = false;
   // a draft per channel: switching channels keeps what was being written in each
   $: if ($activeChannel !== shownChannel) {
