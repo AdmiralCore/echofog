@@ -461,6 +461,10 @@ func (f *convsFacade) conversation(c convlog.Conv, meta convlog.Meta) Conversati
 }
 
 func (f *convsFacade) onChange(ch convlog.Change) {
+	if len(ch.Members) > 0 && ch.Conv.Kind == convlog.KindGroup {
+		// before the staleness check: a removal must reach the group service whatever raced it
+		go f.followMembers(ch.Conv.Group, ch.Members)
+	}
 	f.mu.Lock()
 	stale := ch.Rev != 0 && ch.Rev < f.lastRev[ch.Conv.ID] && !ch.Rebuilt
 	if ch.Rev > f.lastRev[ch.Conv.ID] {

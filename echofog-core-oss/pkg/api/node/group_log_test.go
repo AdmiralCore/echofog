@@ -164,3 +164,50 @@ func TestAnOlderMemberKeepsTheGroupOffTheLog(t *testing.T) {
 	old.say(t, g.ID, "hi")
 	assert.False(t, a.f.LogMode(g.ID))
 }
+
+// A ban that reaches a member only by the group's log, not by the remover's "rm" message (the
+// member was away and that message was lost), still takes the banned peer off its list: it no
+// longer hands them the group's keys or lets them back in. A removal that came both ways counts
+// once.
+func TestBanByTheLogReachesAMemberWhoMissedTheMessage(t *testing.T) {
+	m := newMesh()
+	g, ns := newGroupOf(t, m, 3)
+	a, b, c := ns[0], ns[1], ns[2]
+
+	m.setOnline(b, false)
+	require.NoError(t, a.f.Remove(g, c.id.String(), true))
+	// the "rm" for b is lost on the way
+	m.mu.Lock()
+	keep := m.held[:0]
+	for _, d := range m.held {
+		if d.to != b.id {
+			keep = append(keep, d)
+		}
+	}
+	m.held = keep
+	m.mu.Unlock()
+	m.setOnline(b, true)
+	m.settle()
+
+	b.f.mu.Lock()
+	_, still := b.f.member(g, c.id)
+	b.f.mu.Unlock()
+	require.True(t, still, "the test needs b to have missed the removal")
+
+	b.f.removedOnLog(g, a.id, c.pub, true) // the ban event of the log arrives
+	m.settle()
+	b.f.mu.Lock()
+	_, still = b.f.member(g, c.id)
+	b.f.mu.Unlock()
+	assert.False(t, still, "the log's ban takes c off b's list")
+
+	b.f.removedOnLog(g, a.id, c.pub, true) // again, as when the "rm" also comes: nothing changes
+	m.settle()
+
+	// a member cannot use the log path to remove somebody it may not
+	b.f.removedOnLog(g, c.id, a.pub, true)
+	b.f.mu.Lock()
+	_, ownerIn := b.f.member(g, a.id)
+	b.f.mu.Unlock()
+	assert.True(t, ownerIn, "a removal by somebody without the right is refused by the group service")
+}

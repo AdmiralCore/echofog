@@ -38,6 +38,16 @@ type Change struct {
 	Rev uint64
 	// Rebuilt: the whole conversation was computed again (a membership change); reload it.
 	Rebuilt bool
+	// Members are the membership events this change applied that were allowed: what the group
+	// service has to follow (a removal or a ban takes the member's keys away).
+	Members []MemberChange
+}
+
+// MemberChange is one allowed membership event of a group's log.
+type MemberChange struct {
+	Author types.PeerID
+	Member []byte // 32-byte identity public key (empty for a roster)
+	Action uint32
 }
 
 // nextRev numbers a change. Call with l.mu held, so the numbers follow the order of the writes.
@@ -235,6 +245,7 @@ type txn struct {
 	order   []string
 	changed map[string]bool
 	synced  bool // the event came by sync: history, not news
+	members []MemberChange
 }
 
 func (l *Log) newTxn(c Conv, bc string, meta *Meta) *txn {
@@ -284,7 +295,7 @@ func (t *txn) commit(marker []byte, id string) error {
 }
 
 func (t *txn) change() *Change {
-	ch := &Change{Conv: t.c, Meta: *t.meta, Rev: t.l.nextRev()}
+	ch := &Change{Conv: t.c, Meta: *t.meta, Rev: t.l.nextRev(), Members: t.members}
 	ids := make([]string, 0, len(t.changed))
 	for id := range t.changed {
 		ids = append(ids, id)
@@ -472,6 +483,9 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 	rules := l.groupRules()
 	if rules == nil || !m.allowed(rules, t.c, at) {
 		return ErrForbidden
+	}
+	if mode == modeNew {
+		t.members = append(t.members, MemberChange{Author: AuthorID(e), Member: append([]byte(nil), b.Member...), Action: b.Action})
 	}
 	if mode == modeNew && (e.Lamport <= t.meta.MaxLamport || e.Lamport <= t.meta.HeldLamport) {
 		// it changes who could do what at points already applied or held

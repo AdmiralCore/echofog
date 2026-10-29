@@ -1208,3 +1208,43 @@ func (f *groupsFacade) LeaveCall(groupID, room, callID string) {
 	f.mu.Unlock()
 	f.broadcast(groupID, groupWire{Kind: "callleave", Group: groupID, Room: room, CallID: callID})
 }
+
+// removedOnLog applies a removal or a ban that came by the group's log, as an "rm" message from
+// its author would: the group service checks the author may do it, the member's epoch is
+// replaced, and a member removed in our absence no longer gets keys or is let back in by us.
+func (f *groupsFacade) removedOnLog(groupID string, author types.PeerID, memberPub []byte, ban bool) {
+	var pub types.PeerPublicKey
+	copy(pub[:], memberPub)
+	target := types.PeerPubKeyToID(pub)
+	f.mu.Lock()
+	if err := f.load(); err != nil {
+		f.mu.Unlock()
+		return
+	}
+	was, in := f.member(groupID, target)
+	if !in {
+		f.mu.Unlock()
+		return // the "rm" came first, or they were never on our list
+	}
+	title := f.titleOf(groupID)
+	if err := f.mgr.ApplyRemove(groupID, author, target, ban); err != nil {
+		f.mu.Unlock()
+		return
+	}
+	var after []func()
+	if target == f.selfID {
+		f.forget(groupID)
+		after = append(after, func() {
+			f.emitEvent(GroupEvent{Kind: "removed", GroupID: groupID, Title: title, From: author.String()})
+		})
+	} else {
+		_ = f.persist(groupID)
+		after = append(f.maybeRotate(groupID, false, departed{target.String(), was.JoinedAt}), func() {
+			f.emitEvent(GroupEvent{Kind: "members", GroupID: groupID, Title: title, From: author.String()})
+		})
+	}
+	f.mu.Unlock()
+	for _, fn := range after {
+		fn()
+	}
+}

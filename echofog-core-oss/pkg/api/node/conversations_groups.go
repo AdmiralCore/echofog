@@ -484,3 +484,19 @@ func (f *convsFacade) historySoon(groupID string) {
 	})
 	f.mu.Unlock()
 }
+
+// followMembers hands the removals and bans of a group's log to the group service. They used to
+// reach it only through the "rm" message the remover sends once to the members it reaches; a
+// member away at that moment kept the removed one on its list, handed it the group's keys when
+// asked and let it back in. A removal the service already has (the "rm" came too) changes nothing.
+func (f *convsFacade) followMembers(groupID string, changes []convlog.MemberChange) {
+	gf, err := f.n.groupsFacade()
+	if err != nil {
+		return
+	}
+	for _, m := range changes {
+		if (m.Action == convlog.MemberRemove || m.Action == convlog.MemberBan) && m.Author != f.n.node.ID && len(m.Member) == 32 {
+			gf.removedOnLog(groupID, m.Author, m.Member, m.Action == convlog.MemberBan)
+		}
+	}
+}
