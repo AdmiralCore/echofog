@@ -41,8 +41,10 @@ type Channel struct {
 	Category bool   `json:"category,omitempty"` // a category, not a channel
 	SlowSecs uint32 `json:"slowSecs,omitempty"` // slow mode: seconds between a member's messages
 	Open     string `json:"open,omitempty"`     // the main entry: the channel the group opens on
-	Reg      Reg    `json:"reg"`                // the last write that set it
-	Created  uint64 `json:"created"`            // the clock of its earliest write: ties in order
+	// Overrides are what roles may do here otherwise than in the group (overrides.go)
+	Overrides []Override `json:"overrides,omitempty"`
+	Reg       Reg        `json:"reg"`     // the last write that set it
+	Created   uint64     `json:"created"` // the clock of its earliest write: ties in order
 }
 
 // ChannelSpec is a channel as a manager wants it.
@@ -51,17 +53,18 @@ type ChannelSpec struct {
 	Voice, ReadOnly, Remove, Category bool
 	Position                          int32
 	SlowSecs                          uint32
+	Overrides                         []Override
 }
 
-// validChannel: a channel entry is well formed. The main one (id "") is no voice room, no category,
-// not in one, and does not go; a category is in none and is no voice room.
+// validChannel: a channel entry is well formed. The main one (id "") is no voice room and no
+// category and does not go (it may sit in a category); a category is in none and is no voice room.
 func validChannel(id, name, topic, parent, open string, voice, removed, category bool, slow uint32) bool {
 	if len(name) > maxChannelName || !validText(name) || len(topic) > maxChannelTopic || !validText(topic) ||
 		slow > maxSlowSecs || parent != "" && (!validChannelID(parent) || parent == id) || open != "" && !validChannelID(open) {
 		return false
 	}
 	if id == "" {
-		return !voice && !removed && !category && parent == ""
+		return !voice && !removed && !category
 	}
 	if open != "" || category && (voice || parent != "") {
 		return false
@@ -130,18 +133,27 @@ func (m *Meta) UnreadAll() int {
 	return n
 }
 
-// applyChannel takes a channel event: who may change the group's channels may write it.
-func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
+// applyChannel takes a channel event: who may change the group's channels may write it; a change
+// of its overrides only as overridesChange allows (actor: the author's role there, if the group's
+// membership is on the log).
+func (t *txn) applyChannel(e *Event, author string, rights Rights, actor *Role, st *memberState) error {
 	if t.c.Kind != KindGroup || !rights.Manage {
 		return ErrForbidden
 	}
 	var b ChannelBody
 	if proto.Unmarshal(e.Body, &b) != nil ||
-		!validChannel(b.Id, b.Name, b.Topic, b.Parent, b.Open, b.Voice, b.Removed, b.Category, b.SlowSecs) {
+		!validChannel(b.Id, b.Name, b.Topic, b.Parent, b.Open, b.Voice, b.Removed, b.Category, b.SlowSecs) ||
+		!validOverrides(b.Overrides) || len(b.Overrides) > 0 && b.Category {
 		return ErrBadBody
 	}
 	k := channelKey(t.bc, b.Id)
 	cur, known := t.channel(b.Id)
+	if rules := t.l.groupRules(); rules != nil && st != nil && actor != nil &&
+		!st.overridesChange(rules, *actor, cur.Overrides, overridesOf(b.Overrides)) {
+		return ErrForbidden
+	} else if actor == nil && len(b.Overrides) > 0 {
+		return ErrForbidden // overrides need the membership on the log: ranks decide who sets them
+	}
 	if !known {
 		if n, err := t.l.st.FindValues(channelPrefix(t.bc), maxChannels+1); err == nil && len(n) >= maxChannels {
 			return ErrForbidden
@@ -153,7 +165,8 @@ func (t *txn) applyChannel(e *Event, author string, rights Rights) error {
 		created = cur.Created
 	}
 	next := Channel{ID: b.Id, Name: b.Name, Voice: b.Voice, Removed: b.Removed, Topic: b.Topic, ReadOnly: b.ReadOnly,
-		Position: b.Position, Parent: b.Parent, Category: b.Category, SlowSecs: b.SlowSecs, Open: b.Open, Reg: reg, Created: created}
+		Position: b.Position, Parent: b.Parent, Category: b.Category, SlowSecs: b.SlowSecs, Open: b.Open,
+		Overrides: overridesOf(b.Overrides), Reg: reg, Created: created}
 	if known && !reg.after(cur.Reg) {
 		next = cur // an older write: the channel keeps the newer one, and the earlier creation
 		next.Created = created
@@ -221,22 +234,29 @@ func (l *Log) Channels(c Conv) []Channel {
 
 // AppendChannel writes a channel of a group as s says (a new id creates it).
 func (l *Log) AppendChannel(c Conv, s ChannelSpec) ([]byte, EventID, error) {
-	if !validChannel(s.ID, s.Name, s.Topic, s.Parent, s.Open, s.Voice, s.Remove, s.Category, s.SlowSecs) {
+	ov := overridesProto(s.Overrides)
+	if !validChannel(s.ID, s.Name, s.Topic, s.Parent, s.Open, s.Voice, s.Remove, s.Category, s.SlowSecs) || !validOverrides(ov) {
 		return nil, EventID{}, ErrBadBody
 	}
 	return l.Append(c, Draft{Kind: KindChannel, Body: encodeBody(&ChannelBody{Id: s.ID, Name: s.Name, Voice: s.Voice,
 		Removed: s.Remove, Topic: s.Topic, ReadOnly: s.ReadOnly, Position: s.Position, Parent: s.Parent,
-		Category: s.Category, SlowSecs: s.SlowSecs, Open: s.Open})})
+		Category: s.Category, SlowSecs: s.SlowSecs, Open: s.Open, Overrides: ov})})
 }
 
 // MainChannel is the settings of a group's main channel (zero when nobody set them).
 func (l *Log) MainChannel(c Conv) Channel {
-	raw, err := l.st.Get(channelKey(l.bc(c.ID), ""))
-	var ch Channel
-	if err == nil {
-		_ = json.Unmarshal(raw, &ch)
-	}
+	ch, _ := l.storedChannel(l.bc(c.ID), "")
 	return ch
+}
+
+// storedChannel is a channel's stored entry ("" the main one's), removed ones too.
+func (l *Log) storedChannel(bc, id string) (Channel, bool) {
+	raw, err := l.st.Get(channelKey(bc, id))
+	var ch Channel
+	if err != nil || json.Unmarshal(raw, &ch) != nil {
+		return Channel{}, false
+	}
+	return ch, true
 }
 
 // ChannelOf is one channel of a group (false: none such, or removed).

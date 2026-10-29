@@ -16,7 +16,9 @@ import (
 
 // The invitation link of a running node, over its local status endpoint:
 //
-//	echofog-node invite             print the link
+//	echofog-node invite             print the link: its https form (messengers make it tappable;
+//	                                the page opens the app) and the echofog:// one
+//	echofog-node invite --app       print only the echofog:// link
 //	echofog-node invite --rotate    make a new secret: the old link lets nobody new in
 //	echofog-node invite --list      who joined with the link
 //	echofog-node invite --remove ID take somebody off that list
@@ -84,9 +86,10 @@ func inviteCmd(args []string) int {
 	rotate := f.Bool("rotate", false, "make a new access secret: the old link lets nobody new in, those who joined stay")
 	list := f.Bool("list", false, "list the peers who joined with the link")
 	remove := f.String("remove", "", "take this peer ID off the list of those who joined")
+	appOnly := f.Bool("app", false, "print only the echofog:// link, not its https form")
 	newSecret := f.Bool("new-secret", false, "print a fresh access secret for --access-secret / ECHOFOG_ACCESS_SECRET (needs no running node)")
 	f.Usage = func() {
-		fmt.Fprintln(f.Output(), "Usage: echofog-node invite [flags]\n\nPrints the invitation link of the running node: give it to the people who may use it.")
+		fmt.Fprintln(f.Output(), "Usage: echofog-node invite [flags]\n\nPrints the invitation link of the running node, as an https page link and as an echofog://\nlink: give either to the people who may use it.")
 		f.PrintDefaults()
 	}
 	_ = f.Parse(args)
@@ -160,6 +163,9 @@ func inviteCmd(args []string) int {
 	if st.Link == "" {
 		fmt.Fprintf(os.Stderr, "no link yet: %s\n", st.LinkError)
 		return 1
+	}
+	if web := access.WebLink(st.Link); web != "" && !*appOnly {
+		fmt.Println(web)
 	}
 	fmt.Println(st.Link)
 	if st.Mode == "public" {

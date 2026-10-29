@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/services/groups"
 )
 
@@ -48,11 +51,16 @@ func (f *groupsFacade) needsInvite(groupID string) bool {
 
 // newInviteToken signs an invitation of ours. Call with f.mu held.
 func (f *groupsFacade) newInviteToken(groupID string) (*inviteToken, error) {
+	return f.newInviteTokenFor(groupID, inviteTTL)
+}
+
+// newInviteTokenFor signs an invitation of ours that lets people in for ttl. Call with f.mu held.
+func (f *groupsFacade) newInviteTokenFor(groupID string, ttl time.Duration) (*inviteToken, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	t := &inviteToken{N: hex.EncodeToString(nonce), Exp: f.clock().Add(inviteTTL).Unix(), Iss: hex.EncodeToString(f.selfPub[:])}
+	t := &inviteToken{N: hex.EncodeToString(nonce), Exp: f.clock().Add(ttl).Unix(), Iss: hex.EncodeToString(f.selfPub[:])}
 	sig, err := f.sign(inviteDigest(groupID, t.N, t.Exp, t.Iss))
 	if err != nil {
 		return nil, err
@@ -80,10 +88,142 @@ func (f *groupsFacade) inviteValid(groupID string, t *inviteToken) bool {
 		return false
 	}
 	role, err := f.mgr.GetMemberRole(groupID, id)
-	return err == nil && mayInvite(role)
+	if err != nil || !mayInvite(role) {
+		return false
+	}
+	// an invitation the group's log keeps: not used up, not revoked (who made it may end it early)
+	if f.inviteState != nil {
+		if st, ok := f.inviteState(groupID, t.N); ok && (st.Spent() || now.Unix() > st.Exp) {
+			return false
+		}
+	}
+	return true
 }
 
 // mayInvite: the role may hand out invitations, so its invitations let people in.
 func mayInvite(role groups.Role) bool {
 	return groups.HasPermission(role, groups.PermInvite)
+}
+
+// Managed invitations: made on the group's log with how long they let people in, how many and
+// with which role, listed for the members who invite, and revoked there (convlog/invites.go).
+
+// GroupInviteDTO is one invitation of a group.
+type GroupInviteDTO struct {
+	N       string `json:"n"`
+	Label   string `json:"label,omitempty"`
+	Exp     int64  `json:"exp"`            // unix seconds
+	Uses    uint32 `json:"uses,omitempty"` // 0: no limit
+	Used    uint32 `json:"used"`
+	Role    string `json:"role,omitempty"`
+	Issuer  string `json:"issuer"`
+	Mine    bool   `json:"mine"`
+	State   string `json:"state"`             // active, used, expired, revoked
+	Link    string `json:"link,omitempty"`    // ours only: its maker keeps it
+	WebLink string `json:"webLink,omitempty"` // its https form
+	// CanRevoke: its maker, or who manages roles
+	CanRevoke bool `json:"canRevoke"`
+}
+
+// GroupInviteSpec is an invitation as the app wants it made.
+type GroupInviteSpec struct {
+	Label string `json:"label"`
+	Hours int    `json:"hours"` // how long it lets people in: 1 hour to 31 days
+	Uses  uint32 `json:"uses"`  // 0: no limit
+	Role  string `json:"role"`  // "": the group's default role
+}
+
+const invLinkPrefix = "grp/invlink/" // + group + "/" + n: the links of invitations we made
+
+func (n *NodeApi) invitesLog(groupID string) (*convsFacade, convlog.Conv, *groupsFacade, error) {
+	gf, err := n.groupsFacade()
+	if err != nil {
+		return nil, convlog.Conv{}, nil, err
+	}
+	if !gf.needsInvite(groupID) {
+		return nil, convlog.Conv{}, nil, errors.New("anyone with the group's link may join it: it takes no invitations")
+	}
+	f, c, err := n.roleLog(groupID)
+	return f, c, gf, err
+}
+
+// GroupInvites lists a private group's invitations, the newest first.
+func (n *NodeApi) GroupInvites(groupID string) ([]GroupInviteDTO, error) {
+	f, c, gf, err := n.invitesLog(groupID)
+	if err != nil {
+		return nil, err
+	}
+	me := f.log.RightsOf(c, f.self)
+	now := time.Now().Unix()
+	out := []GroupInviteDTO{}
+	for _, i := range f.log.Invites(c) {
+		d := GroupInviteDTO{N: i.N, Label: i.Label, Exp: i.Exp, Uses: i.Uses, Used: i.Used, Role: i.Role,
+			Issuer: i.Issuer.String(), Mine: i.Issuer == f.self, State: "active"}
+		switch {
+		case i.Revoked:
+			d.State = "revoked"
+		case i.Spent():
+			d.State = "used"
+		case now > i.Exp:
+			d.State = "expired"
+		}
+		if d.Mine {
+			if raw, err := gf.store.Get([]byte(invLinkPrefix + groupID + "/" + i.N)); err == nil {
+				d.Link = string(raw)
+				d.WebLink = GroupWebLink(d.Link)
+			}
+		}
+		d.CanRevoke = !i.Revoked && (d.Mine || me.Roles)
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// GroupInviteCreate makes an invitation to a private group and returns it with its link.
+func (n *NodeApi) GroupInviteCreate(groupID string, spec GroupInviteSpec) (GroupInviteDTO, error) {
+	f, c, gf, err := n.invitesLog(groupID)
+	if err != nil {
+		return GroupInviteDTO{}, err
+	}
+	ttl := time.Duration(spec.Hours) * time.Hour
+	if ttl < time.Hour || ttl > inviteMaxTTL {
+		return GroupInviteDTO{}, errors.New("an invitation lasts from an hour to 31 days")
+	}
+	label := strings.TrimSpace(spec.Label)
+	link, tok, err := gf.inviteFor(groupID, ttl)
+	if err != nil {
+		return GroupInviteDTO{}, err
+	}
+	raw, id, err := f.log.AppendInvite(c, &convlog.InviteDef{N: tok.N, Exp: tok.Exp, Uses: spec.Uses, Role: spec.Role, Label: label})
+	if err != nil {
+		if err == convlog.ErrForbidden {
+			return GroupInviteDTO{}, errors.New("your role may not make this invitation (a role in it needs the right to manage roles, below your own)")
+		}
+		return GroupInviteDTO{}, err
+	}
+	_, _ = f.sendEvent(c, raw, id, convlog.KindMember, "", "")
+	_ = gf.store.Set([]byte(invLinkPrefix+groupID+"/"+tok.N), []byte(link))
+	return GroupInviteDTO{N: tok.N, Label: label, Exp: tok.Exp, Uses: spec.Uses, Role: spec.Role, Issuer: f.self.String(),
+		Mine: true, State: "active", Link: link, WebLink: GroupWebLink(link), CanRevoke: true}, nil
+}
+
+// GroupInviteRevoke ends an invitation: nobody new comes in with it.
+func (n *NodeApi) GroupInviteRevoke(groupID, nonce string) error {
+	f, c, _, err := n.invitesLog(groupID)
+	if err != nil {
+		return err
+	}
+	cur, ok := f.log.InviteOf(c, nonce)
+	if !ok {
+		return errors.New("no such invitation")
+	}
+	raw, id, err := f.log.AppendInvite(c, &convlog.InviteDef{N: nonce, Exp: cur.Exp, Revoked: true})
+	if err != nil {
+		if err == convlog.ErrForbidden {
+			return errors.New("only its maker or who manages roles revokes an invitation")
+		}
+		return err
+	}
+	_, _ = f.sendEvent(c, raw, id, convlog.KindMember, "", "")
+	return nil
 }

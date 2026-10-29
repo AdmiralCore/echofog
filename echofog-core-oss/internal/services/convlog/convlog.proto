@@ -47,7 +47,7 @@ message PinBody {
 // membership with a roster; after that every join, role change, removal and ban is an event, and
 // what anyone may do at a point of the log follows from the ones before that point.
 message MemberBody {
-  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role
+  uint32 action = 1;            // 1 roster, 2 join, 3 role, 4 remove, 5 ban, 6 unban, 7 define a role, 8 invite
   bytes  member = 2;            // the member's 32-byte identity public key (not for a roster)
   string role   = 3;            // role: the new role; join: the role given (empty: the default)
   repeated RosterEntry roster = 4;
@@ -56,6 +56,21 @@ message MemberBody {
   // their events, so without this a removed member could write "before" the removal. 0: not said.
   uint64 upto_seq = 5;
   RoleDef def = 6;              // define: the role as it is to be
+  InviteDef invite = 7;         // invite: an invitation made or revoked
+  // join: the invitation (InviteDef.n) the member came in with; it counts as one of its uses
+  string via = 8;
+}
+
+// InviteDef is an invitation to a group: who may invite makes one (with how long it lets people
+// in, how many, and the role they get), the one who made it or who manages roles revokes it. The
+// link carries a token signed by its maker with the same n; who lets a newcomer in checks both.
+message InviteDef {
+  string n       = 1; // the token's nonce, hex
+  int64  exp     = 2; // until when it lets people in, unix seconds
+  uint32 uses    = 3; // how many people it lets in; 0: no limit
+  string role    = 4; // the role they get; empty: the group's default one
+  string label   = 5; // a note for the members who manage invitations
+  bool   revoked = 6;
 }
 
 // RoleDef is a role of a group as its definition says: a custom one, or a built-in one whose
@@ -90,6 +105,16 @@ message ChannelBody {
   bool   category  = 9;  // a category: a heading the channels with it as parent sit under
   uint32 slow_secs = 10; // slow mode: seconds a member waits between their messages in it
   string open      = 11; // the main channel's entry (id ""): the channel the group opens on
+  // what roles may do in this channel otherwise than in the group: "*" (everyone) first, then the
+  // member's own role; only the channel's permissions (writing, files, links, comments, reactions,
+  // pins, voice, streams, deleting others' messages) can be changed here
+  repeated RoleOverride overrides = 12;
+}
+
+message RoleOverride {
+  string role  = 1; // a role's id, or "*" for everyone
+  uint32 allow = 2; // permission bits granted here
+  uint32 deny  = 3; // permission bits taken here
 }
 
 // ThreadBody names the thread under a message (kind THREAD; last writer wins per root).

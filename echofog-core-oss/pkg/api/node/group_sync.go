@@ -171,6 +171,36 @@ func (f *groupsFacade) wireMembers(groupID string) []wireMember {
 	return out
 }
 
+// inviteMembers are the members an invitation names: the inviter and those who let newcomers in
+// (they hand the newcomer the whole list), so the invitation stays short enough for a messenger
+// whatever the group's size.
+func (f *groupsFacade) inviteMembers(groupID string) []wireMember {
+	const most = 16
+	all := f.wireMembers(groupID)
+	out := make([]wireMember, 0, most)
+	for _, w := range all {
+		id, ok := parsePeer(w.ID)
+		if !ok {
+			continue
+		}
+		if r, err := f.mgr.GetMemberRole(groupID, id); id == f.selfID || err == nil && groups.HasPermission(r, groups.PermManageRoles) {
+			out = append(out, w)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ID == f.selfID.String() || out[j].ID == f.selfID.String() {
+			return out[i].ID == f.selfID.String()
+		}
+		ri, _ := groups.ResolveRole(out[i].Role)
+		rj, _ := groups.ResolveRole(out[j].Role)
+		return ri.Rank > rj.Rank
+	})
+	if len(out) > most {
+		out = out[:most]
+	}
+	return out
+}
+
 // noteVersions takes the versions of the members in a list from an admin or an inviter, so a
 // member seals for those it has not heard from itself yet. Call with f.mu held.
 func (f *groupsFacade) noteVersions(list []wireMember) {
@@ -517,6 +547,16 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 			f.paced[k] = f.clock()
 			// the newcomer's membership on the log, written by whoever may let members in
 			join := memberBody(convlog.MemberJoin, pub, "")
+			if w.Inv != nil && f.inviteState != nil {
+				if st, ok := f.inviteState(w.Group, w.Inv.N); ok {
+					join.Via = st.N // one of the invitation's uses, counted on the log
+					if st.Role != "" {
+						// the role the invitation gives, from whoever lets the newcomer in
+						target, role := origin.String(), st.Role
+						after = append(after, func() { _ = f.SetRole(w.Group, target, role) })
+					}
+				}
+			}
 			after = append(after, func() { f.memberChange(w.Group, join) })
 			snap := groupWire{Kind: "snap", Group: w.Group, Members: f.wireMembers(w.Group)}
 			newcomer := groupWire{Kind: "snap", Group: w.Group, Members: []wireMember{{ID: origin.String(), Pub: w.Pub, Role: role0(f, w.Group, origin)}}}

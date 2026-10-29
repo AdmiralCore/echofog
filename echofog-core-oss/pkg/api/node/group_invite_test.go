@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,4 +85,47 @@ func TestOpenGroupsNeedNoInvitation(t *testing.T) {
 		owner.f.handle(x.id, encodeWire(groupWire{Kind: "join", Group: g.ID, Pub: x.pubHex}))
 		assert.NotEqual(t, "", roleOf(t, owner, g.ID, x), kind+": joins without a token")
 	}
+}
+
+// An invitation the group's log has used up or revoked lets nobody else in, though its token is
+// still signed and in time; an https or echofog://group/ form of an invitation joins like the
+// invitation itself; and an invitation names only those who let newcomers in, not every member.
+func TestManagedInvitationsAndTheirForms(t *testing.T) {
+	h := newHub()
+	owner, a, b, c := h.node(t, newMemStore()), h.node(t, newMemStore()), h.node(t, newMemStore()), h.node(t, newMemStore())
+	g, err := owner.f.Create("Crew", "", "group")
+	require.NoError(t, err)
+	invite, err := owner.f.Invite(g.ID)
+	require.NoError(t, err)
+	tok := tokenOf(t, invite)
+
+	state := convlog.Invite{N: tok.N, Exp: tok.Exp, Uses: 1}
+	owner.f.inviteState = func(_, n string) (convlog.Invite, bool) { return state, n == tok.N }
+	join := func(n *testNode) string {
+		owner.f.handle(n.id, encodeWire(groupWire{Kind: "join", Group: g.ID, Pub: n.pubHex, Inv: tok}))
+		return roleOf(t, owner, g.ID, n)
+	}
+	assert.NotEqual(t, "", join(a), "an invitation with a use left lets in")
+	state.Used = 1
+	assert.Equal(t, "", join(b), "a used-up invitation lets nobody else in")
+	state.Used, state.Revoked = 0, true
+	assert.Equal(t, "", join(b), "a revoked invitation lets nobody in")
+
+	// the forms of the link
+	web := GroupWebLink(invite)
+	require.True(t, strings.HasPrefix(web, "https://"), web)
+	assert.Equal(t, invite, groupInviteText("join us: "+web))
+	assert.Equal(t, invite, groupInviteText("echofog://group/"+strings.TrimPrefix(invite, inviteScheme2)))
+	_, err = c.f.Join(web)
+	require.NoError(t, err, "the https form joins")
+
+	// many plain members: the invitation stays short
+	for i := 0; i < 30; i++ {
+		n := h.node(t, newMemStore())
+		require.NoError(t, owner.f.AddMember(g.ID, n.pubHex))
+	}
+	owner.f.mu.Lock()
+	listed := owner.f.inviteMembers(g.ID)
+	owner.f.mu.Unlock()
+	assert.Len(t, listed, 1, "only the owner lets newcomers in")
 }

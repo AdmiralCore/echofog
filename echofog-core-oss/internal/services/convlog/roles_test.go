@@ -1,6 +1,10 @@
 package convlog
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func rightsIn(l *Log, c Conv, a account) Rights { return l.RightsOf(c, a.id) }
 
@@ -196,5 +200,173 @@ func TestCategoriesAndTheMainChannel(t *testing.T) {
 	}
 	if _, _, err := lx.AppendChannel(c, ChannelSpec{ID: "", Name: "mine"}); err != ErrForbidden {
 		t.Fatalf("a member changed the main channel: %v", err)
+	}
+}
+
+// A channel's overrides decide what roles may do in it, on every replica: here everyone is
+// denied writing and reacting in #news but may comment, moderators may write; the owner is never
+// held back. Who manages channels sets overrides only for roles below their own rank and grants
+// nothing they may not do themselves.
+func TestChannelOverrides(t *testing.T) {
+	f, a, m, x := newAccount(t), newAccount(t), newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("over1")
+	lf, la, lm, lx := groupReplica(t, f, rules), groupReplica(t, a, rules), groupReplica(t, m, rules), groupReplica(t, x, rules)
+	all := []*Log{lf, la, lm, lx}
+	spread := func(raw []byte) {
+		for _, l := range all {
+			_, _, _ = l.Ingest(c, raw)
+		}
+	}
+	spread(member(t, lf, c, roster(f, "owner", a, "admin", m, "moderator", x, "member")))
+	news, _, err := lf.AppendChannel(c, ChannelSpec{ID: "news", Name: "news", Overrides: []Override{
+		{Role: Everyone, Deny: PermSend | PermReact}, {Role: "moderator", Allow: PermSend}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spread(news)
+	if _, _, err := lx.AppendMessageIn(c, "news", "a member posts", 0, "", EventID{}, EventID{}); err != ErrForbidden {
+		t.Fatalf("a member posted where everyone is denied: %v", err)
+	}
+	post, postID, err := lm.AppendMessageIn(c, "news", "a moderator posts", 0, "", EventID{}, EventID{})
+	if err != nil {
+		t.Fatalf("a moderator allowed to post cannot: %v", err)
+	}
+	spread(post)
+	if _, _, err := lx.AppendMessageIn(c, "news", "a comment", 0, "", EventID{}, postID); err != nil {
+		t.Fatalf("a member cannot comment: %v", err)
+	}
+	if _, _, err := lx.AppendReact(c, postID, "👍", true); err != ErrForbidden {
+		t.Fatalf("a member reacted where everyone is denied: %v", err)
+	}
+	if _, _, err := lf.AppendMessageIn(c, "news", "the owner posts", 0, "", EventID{}, EventID{}); err != nil {
+		t.Fatalf("the owner was held back: %v", err)
+	}
+	if r := lx.RightsIn(c, x.id, "news"); r.Send || !r.Threads || r.React {
+		t.Fatalf("a member's rights in #news: %+v", r)
+	}
+	if r := lx.RightsIn(c, x.id, ""); !r.Send || !r.React {
+		t.Fatalf("a member's rights in the main channel: %+v", r)
+	}
+	// a member's message posted elsewhere still counts there
+	hi, _, err := lx.AppendMessage(c, "in the main one", 0, "", EventID{}, EventID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spread(hi)
+	for _, l := range all {
+		if !texts(t, l, c)["in the main one"] {
+			t.Fatal("a message in the main channel was refused")
+		}
+	}
+
+	// the admin: not for a role at their own rank, nothing they may not do
+	for _, ov := range [][]Override{
+		{{Role: "admin", Deny: PermSend}},
+		{{Role: Everyone, Deny: PermSend | PermReact}, {Role: "moderator", Allow: PermSend}, {Role: "owner", Deny: PermSend}},
+	} {
+		if _, _, err := la.AppendChannel(c, ChannelSpec{ID: "news", Name: "news", Overrides: ov}); err != ErrForbidden {
+			t.Fatalf("the admin set %+v: %v", ov, err)
+		}
+	}
+	if _, _, err := la.AppendChannel(c, ChannelSpec{ID: "news", Name: "news", Overrides: []Override{{Role: Everyone, Allow: PermKick}}}); err != ErrBadBody {
+		t.Fatalf("a group permission in a channel override: %v", err)
+	}
+	// a channel manager below the admin, who may not delete others' messages, cannot grant that
+	def, _, err := lf.AppendRole(c, &RoleDef{Id: "chman", Rank: 30, Perms: testWriter | PermManageChannels})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spread(def)
+	spread(member(t, lf, c, &MemberBody{Action: MemberRole, Member: m.pub, Role: "chman"}))
+	if _, _, err := lm.AppendChannel(c, ChannelSpec{ID: "news", Name: "news", Overrides: []Override{
+		{Role: Everyone, Deny: PermSend | PermReact}, {Role: "member", Allow: PermDelete}}}); err != ErrForbidden {
+		t.Fatalf("a channel manager granted what they may not do: %v", err)
+	}
+	// the admin may rename the channel: the overrides they did not change stay
+	ren, _, err := la.AppendChannel(c, ChannelSpec{ID: "news", Name: "announcements", Overrides: []Override{
+		{Role: Everyone, Deny: PermSend | PermReact}, {Role: "moderator", Allow: PermSend}}})
+	if err != nil {
+		t.Fatalf("the admin cannot rename a channel with overrides: %v", err)
+	}
+	spread(ren)
+	if ch, ok := lx.ChannelOf(c, "news"); !ok || ch.Name != "announcements" || len(ch.Overrides) != 2 {
+		t.Fatalf("after the rename: %+v", ch)
+	}
+}
+
+func nonce(b byte) string { return strings.Repeat(string("0123456789abcdef"[b%16]), 32) }
+
+// An invitation on the log counts its uses where everyone sees them: past its limit, or once it is
+// revoked, a join that names it is refused on every replica, whoever let the newcomer in. Only who
+// may invite makes one, only who manages roles gives it a role, and only its maker or who manages
+// roles revokes it.
+func TestInvitationsCountTheirUses(t *testing.T) {
+	f, a, x, r := newAccount(t), newAccount(t), newAccount(t), newAccount(t)
+	ys := []account{newAccount(t), newAccount(t), newAccount(t)}
+	rules := testRules{founder: f.id}
+	c := Group("inv1")
+	lf, la, lx := groupReplica(t, f, rules), groupReplica(t, a, rules), groupReplica(t, x, rules)
+	all := []*Log{lf, la, lx}
+	spread := func(raw []byte) {
+		for _, l := range all {
+			_, _, _ = l.Ingest(c, raw)
+		}
+	}
+	spread(member(t, lf, c, roster(f, "owner", a, "admin", x, "member", r, "subscriber")))
+	exp := time.Now().Add(time.Hour).Unix()
+	inv, _, err := lf.AppendInvite(c, &InviteDef{N: nonce(1), Exp: exp, Uses: 2, Label: "for the team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spread(inv)
+	mine, _, err := lx.AppendInvite(c, &InviteDef{N: nonce(2), Exp: exp})
+	if err != nil {
+		t.Fatalf("a member cannot invite: %v", err)
+	}
+	spread(mine)
+	if _, _, err := lx.AppendInvite(c, &InviteDef{N: nonce(3), Exp: exp, Role: "moderator"}); err != ErrForbidden {
+		t.Fatalf("a member made an invitation that gives a role: %v", err)
+	}
+	if _, _, err := la.AppendInvite(c, &InviteDef{N: nonce(4), Exp: exp, Role: "admin"}); err != ErrForbidden {
+		t.Fatalf("an admin made an invitation to their own rank: %v", err)
+	}
+
+	// two come in with the team's invitation, let in by different members; the third is refused
+	for i, y := range ys {
+		admitter := lf
+		if i == 1 {
+			admitter = la
+		}
+		spread(member(t, admitter, c, &MemberBody{Action: MemberJoin, Member: y.pub, Via: nonce(1)}))
+		in := i < 2
+		for _, l := range all {
+			if l.Participant(c, y.id) != in {
+				t.Fatalf("newcomer %d in: %v, want %v", i, !in, in)
+			}
+		}
+	}
+	if i, ok := lx.InviteOf(c, nonce(1)); !ok || i.Used != 2 || !i.Spent() || i.Label != "for the team" {
+		t.Fatalf("the team's invitation: %+v", i)
+	}
+
+	// revoking: not somebody else's without managing roles; the maker's own, or by an admin
+	if _, _, err := lx.AppendInvite(c, &InviteDef{N: nonce(1), Exp: exp, Revoked: true}); err != ErrForbidden {
+		t.Fatalf("a member revoked somebody else's invitation: %v", err)
+	}
+	rev, _, err := la.AppendInvite(c, &InviteDef{N: nonce(2), Exp: exp, Revoked: true})
+	if err != nil {
+		t.Fatalf("an admin cannot revoke: %v", err)
+	}
+	spread(rev)
+	late := newAccount(t)
+	spread(member(t, lf, c, &MemberBody{Action: MemberJoin, Member: late.pub, Via: nonce(2)}))
+	for _, l := range all {
+		if l.Participant(c, late.id) {
+			t.Fatal("a revoked invitation let somebody in")
+		}
+	}
+	if n := len(lf.Invites(c)); n != 2 {
+		t.Fatalf("invitations: %d", n)
 	}
 }

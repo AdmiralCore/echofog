@@ -450,6 +450,9 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 	if gated {
 		if link, err := n.InviteLink(); err == nil {
 			fmt.Printf("Invite link:   %s\n", link)
+			if web := access.WebLink(link); web != "" {
+				fmt.Printf("               %s\n", web)
+			}
 		} else {
 			fmt.Println("Invite link:   echofog-node invite   (once the node knows its public address)")
 		}

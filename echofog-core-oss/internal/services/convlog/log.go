@@ -385,6 +385,16 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 				return ErrNotParticipant // written after their removal, placed before it
 			}
 		}
+		if t.c.Kind == KindGroup && e.Kind != KindChannel && e.Kind != KindThread {
+			// what the author may do in the channel the event acts in
+			if ch, ok := t.channel(t.eventChannel(e)); ok && len(ch.Overrides) > 0 {
+				if role, _, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at); ok {
+					in := PermRights(ch.PermsIn(role))
+					in.Manage, in.Invite, in.Roles = rights.Manage, rights.Invite, rights.Roles
+					rights = in
+				}
+			}
+		}
 		switch e.Kind {
 		case KindMsg:
 			if len(e.Thread) == 0 && !rights.Send || len(e.Thread) > 0 && !rights.Threads {
@@ -417,7 +427,12 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			}
 			err = t.applyPin(e, author)
 		case KindChannel:
-			err = t.applyChannel(e, author, rights)
+			var actor *Role
+			role, st, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at)
+			if ok {
+				actor = &role
+			}
+			err = t.applyChannel(e, author, rights, actor, st)
 		case KindThread:
 			err = t.applyThread(e, author, rights)
 		}

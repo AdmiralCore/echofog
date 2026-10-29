@@ -26,8 +26,8 @@ func WebLink(link string) string {
 }
 
 // FromWebLink turns the https form of a link back into the echofog:// link it carries, from any
-// page whose fragment is one ("#join?…", "#relay/…", or a whole "#echofog://…"). Other text comes
-// back as it is.
+// page whose fragment is one ("#join?…", "#relay/…", "#group/…", "#contact/…", or a whole
+// "#echofog://…"). Other text comes back as it is.
 func FromWebLink(text string) string {
 	t := strings.TrimSpace(text)
 	lower := strings.ToLower(t)
@@ -43,7 +43,7 @@ func FromWebLink(text string) string {
 	switch {
 	case strings.HasPrefix(lf, appScheme):
 		return frag
-	case strings.HasPrefix(lf, "join?"), strings.HasPrefix(lf, "relay/"):
+	case strings.HasPrefix(lf, "join?"), strings.HasPrefix(lf, "relay/"), strings.HasPrefix(lf, "group/"), strings.HasPrefix(lf, "contact/"):
 		return appScheme + frag
 	}
 	return text

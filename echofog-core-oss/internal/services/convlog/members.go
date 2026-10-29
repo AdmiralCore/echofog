@@ -137,18 +137,23 @@ type members struct {
 
 // memberState is who is in a group, and with which role, at one point of its log.
 type memberState struct {
-	roles  map[types.PeerID]Role
-	banned map[types.PeerID]bool
-	defs   map[string]Role // roles defined on the log: custom ones, and changed built-in ones
+	roles   map[types.PeerID]Role
+	banned  map[types.PeerID]bool
+	defs    map[string]Role // roles defined on the log: custom ones, and changed built-in ones
+	invites map[string]*Invite
 }
 
 func newMemberState() *memberState {
-	return &memberState{roles: map[types.PeerID]Role{}, banned: map[types.PeerID]bool{}, defs: map[string]Role{}}
+	return &memberState{roles: map[types.PeerID]Role{}, banned: map[types.PeerID]bool{}, defs: map[string]Role{},
+		invites: map[string]*Invite{}}
 }
 
 func (s *memberState) clone() *memberState {
 	out := &memberState{roles: make(map[types.PeerID]Role, len(s.roles)), banned: make(map[types.PeerID]bool, len(s.banned)),
-		defs: make(map[string]Role, len(s.defs))}
+		defs: make(map[string]Role, len(s.defs)), invites: make(map[string]*Invite, len(s.invites))}
+	for k, v := range s.invites {
+		out.invites[k] = v // copied on write (invite, useInvite)
+	}
 	for k, v := range s.roles {
 		out.roles[k] = v
 	}
@@ -199,6 +204,10 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 		if len(b.Member) != authorLen {
 			return nil, false
 		}
+	case MemberInvite:
+		if !validInvite(b.Invite) {
+			return nil, false
+		}
 	case MemberDefine:
 		d := b.Def
 		if d == nil || !validRoleID(d.Id) || len(d.Title) > maxRoleTitle || !validText(d.Title) || d.Color > 0xFFFFFF ||
@@ -212,9 +221,12 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 }
 
 // step applies one membership event (not a roster) to s and reports whether it was allowed.
-func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *MemberBody) bool {
-	if b.Action == MemberDefine {
+func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, at pos, b *MemberBody) bool {
+	switch b.Action {
+	case MemberDefine:
 		return s.define(rules, c, author, b.Def)
+	case MemberInvite:
+		return s.invite(rules, author, at, b.Invite)
 	}
 	target, ok := pubToID(b.Member)
 	if !ok {
@@ -247,6 +259,9 @@ func (s *memberState) step(rules GroupRules, c Conv, author types.PeerID, b *Mem
 			}
 		} else if !isMember || actor.Perms&PermManageRoles == 0 || (actor.Rank < ownerRank && r.Rank >= actor.Rank) {
 			return false
+		}
+		if b.Via != "" && !s.useInvite(b.Via) {
+			return false // the invitation was used up or revoked
 		}
 		s.roles[target] = r
 		return true
@@ -422,7 +437,7 @@ func (m *members) walk(rules GroupRules, c Conv, visit func(ev memberEv, before 
 		if visit != nil {
 			before = s.clone()
 		}
-		allowed := ev.body.Action != MemberRoster && s.step(rules, c, ev.author, ev.body)
+		allowed := ev.body.Action != MemberRoster && s.step(rules, c, ev.author, ev.at, ev.body)
 		if visit != nil && !visit(ev, before, allowed) {
 			break
 		}

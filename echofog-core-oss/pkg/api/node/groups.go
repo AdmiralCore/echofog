@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/services/filexfer"
@@ -50,9 +51,9 @@ type GroupMemberDTO struct {
 	Role      string `json:"role"`
 	RoleTitle string `json:"roleTitle,omitempty"` // a custom (or renamed) role's name
 	RoleColor uint32 `json:"roleColor,omitempty"` // 0xRRGGBB
-	JoinedAt int64  `json:"joinedAt"`
-	IsMe     bool   `json:"isMe"`
-	Online   bool   `json:"online"` // the node has a link to them now (oneself: always)
+	JoinedAt  int64  `json:"joinedAt"`
+	IsMe      bool   `json:"isMe"`
+	Online    bool   `json:"online"` // the node has a link to them now (oneself: always)
 	// what I may do to this member: remove, ban, give one of Roles (its present role included),
 	// hand the group over to them
 	CanKick     bool     `json:"canKick"`
@@ -179,7 +180,10 @@ type groupsFacade struct {
 	// the groups' role definitions on their logs, by group and role (group_roles.go)
 	rolesMu  sync.Mutex
 	roleDefs map[string]map[string]groups.Role
-	now    func() time.Time         // the clock of the key logic (tests move it)
+
+	// inviteState is an invitation as the group's log has it (its uses, a revocation)
+	inviteState func(groupID, n string) (convlog.Invite, bool)
+	now         func() time.Time // the clock of the key logic (tests move it)
 }
 
 func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.IdentityPublicKey, sign groups.SignFunc,
@@ -327,34 +331,71 @@ func (f *groupsFacade) List() ([]GroupDTO, error) {
 }
 
 func (f *groupsFacade) Invite(groupID string) (string, error) {
+	link, _, err := f.inviteFor(groupID, inviteTTL)
+	return link, err
+}
+
+// inviteFor makes an invitation that lets people in for ttl, and its token (nil: the group needs
+// none, an open room or a channel).
+func (f *groupsFacade) inviteFor(groupID string, ttl time.Duration) (string, *inviteToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.load(); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	g, err := f.mgr.GetGroup(groupID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var tok *inviteToken
 	if f.needsInvite(groupID) {
 		role, err := f.mgr.GetMemberRole(groupID, f.selfID)
 		if err != nil || !mayInvite(role) {
-			return "", errors.New("your role may not invite to this group")
+			return "", nil, errors.New("your role may not invite to this group")
 		}
-		if tok, err = f.newInviteToken(groupID); err != nil {
-			return "", err
+		if tok, err = f.newInviteTokenFor(groupID, ttl); err != nil {
+			return "", nil, err
 		}
 	}
-	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.wireMembers(groupID), Inv: tok})
+	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.inviteMembers(groupID), Inv: tok})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return inviteScheme2 + base64.RawURLEncoding.EncodeToString(raw), nil
+	return inviteScheme2 + base64.RawURLEncoding.EncodeToString(raw), tok, nil
+}
+
+// groupInviteText is a group invitation in its own form (fogroup2:…), from that form, from
+// echofog://group/… (what the invitation page opens) or from its https form.
+func groupInviteText(text string) string {
+	t := strings.TrimSpace(text)
+	// the invitation among other words (a messenger's message around it, a dot after it)
+	for _, w := range strings.Fields(t) {
+		lw := strings.ToLower(w)
+		if strings.HasPrefix(lw, "https://") || strings.HasPrefix(lw, "http://") || strings.HasPrefix(lw, "echofog://") ||
+			strings.HasPrefix(lw, inviteScheme2) || strings.HasPrefix(lw, inviteScheme) {
+			t = strings.TrimRight(w, ".,;:!?)]»\"'")
+			break
+		}
+	}
+	t = strings.TrimSpace(access.FromWebLink(t))
+	const app = "echofog://group/"
+	if len(t) > len(app) && strings.EqualFold(t[:len(app)], app) {
+		return inviteScheme2 + strings.TrimSuffix(t[len(app):], "/")
+	}
+	return t
+}
+
+// GroupWebLink is the https form of a group invitation: a page messengers make tappable, which
+// opens the app with it.
+func GroupWebLink(invite string) string {
+	if !strings.HasPrefix(invite, inviteScheme2) {
+		return ""
+	}
+	return access.WebLinkBase + "group/" + strings.TrimPrefix(invite, inviteScheme2)
 }
 
 func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
-	invite = strings.TrimSpace(invite)
+	invite = groupInviteText(invite)
 	var g *groups.GroupGenesisManifest
 	var members []wireMember
 	var tok *inviteToken

@@ -27,10 +27,13 @@ type ChannelDTO struct {
 	Category bool   `json:"category,omitempty"` // a category: a heading for the channels in it
 	SlowSecs uint32 `json:"slowSecs,omitempty"` // slow mode: seconds between a member's messages
 	Open     string `json:"open,omitempty"`     // the main channel: the channel the group opens on
-	Unread   int    `json:"unread"`
-	LastTS   int64  `json:"lastTs"` // ms
-	// CanSend: I may post in it
+	// Overrides are what roles may do in it otherwise than in the group (role "*": everyone)
+	Overrides []convlog.Override `json:"overrides,omitempty"`
+	Unread    int                `json:"unread"`
+	LastTS    int64              `json:"lastTs"` // ms
+	// CanSend: I may post in it; CanJoin: I may join its call (a voice room)
 	CanSend bool `json:"canSend"`
+	CanJoin bool `json:"canJoin"`
 	// Call: a voice room's call going on now, with who is in it
 	Call *GroupCall `json:"call,omitempty"`
 }
@@ -48,16 +51,19 @@ type ChannelSpec struct {
 	Category bool   `json:"category"`
 	SlowSecs uint32 `json:"slowSecs"`
 	Open     string `json:"open"`
+	// Overrides: per role, the channel's permissions granted (allow) or taken (deny) in it
+	Overrides []convlog.Override `json:"overrides"`
 }
 
 func channelDTO(ch convlog.Channel) ChannelDTO {
 	return ChannelDTO{ID: ch.ID, Name: ch.Name, Voice: ch.Voice, Topic: ch.Topic, ReadOnly: ch.ReadOnly, Position: ch.Position,
-		Parent: ch.Parent, Category: ch.Category, SlowSecs: ch.SlowSecs, Open: ch.Open}
+		Parent: ch.Parent, Category: ch.Category, SlowSecs: ch.SlowSecs, Open: ch.Open, Overrides: ch.Overrides}
 }
 
 func specOf(ch convlog.Channel) convlog.ChannelSpec {
 	return convlog.ChannelSpec{ID: ch.ID, Name: ch.Name, Topic: ch.Topic, Voice: ch.Voice, ReadOnly: ch.ReadOnly,
-		Position: ch.Position, Parent: ch.Parent, Category: ch.Category, SlowSecs: ch.SlowSecs, Open: ch.Open}
+		Position: ch.Position, Parent: ch.Parent, Category: ch.Category, SlowSecs: ch.SlowSecs, Open: ch.Open,
+		Overrides: ch.Overrides}
 }
 
 // kindOf: channels are ordered among their kind (text channels, voice rooms, categories).
@@ -91,7 +97,12 @@ func (n *NodeApi) ChatChannels(ref ChatRef) ([]ChannelDTO, error) {
 	out := []ChannelDTO{}
 	for _, ch := range f.log.Channels(c) {
 		d := channelDTO(ch)
-		d.CanSend = !ch.Category && r.Send && (!ch.ReadOnly || r.Manage)
+		in := r
+		if len(ch.Overrides) > 0 {
+			in = f.log.RightsIn(c, f.self, ch.ID)
+		}
+		d.CanSend = !ch.Category && in.Send && (!ch.ReadOnly || r.Manage)
+		d.CanJoin = ch.Voice && in.Voice
 		if st := meta.Chans[ch.ID]; st != nil {
 			d.Unread, d.LastTS = st.Unread, st.LastTS
 		}
@@ -136,14 +147,14 @@ func (n *NodeApi) ChatChannelSave(ref ChatRef, spec ChannelSpec) (ChannelDTO, er
 		}
 	}
 	s := convlog.ChannelSpec{ID: spec.ID, Name: spec.Name, Topic: spec.Topic, Voice: spec.Voice, ReadOnly: spec.ReadOnly,
-		Position: spec.Position, Parent: spec.Parent, Category: spec.Category, SlowSecs: spec.SlowSecs}
+		Position: spec.Position, Parent: spec.Parent, Category: spec.Category, SlowSecs: spec.SlowSecs, Overrides: spec.Overrides}
 	raw, eid, err := f.log.AppendChannel(c, s)
 	if err != nil {
 		return ChannelDTO{}, err
 	}
 	_, _ = f.sendEvent(c, raw, eid, convlog.KindChannel, "", "")
 	return channelDTO(convlog.Channel{ID: s.ID, Name: s.Name, Voice: s.Voice, Topic: s.Topic, ReadOnly: s.ReadOnly,
-		Position: s.Position, Parent: s.Parent, Category: s.Category, SlowSecs: s.SlowSecs}), nil
+		Position: s.Position, Parent: s.Parent, Category: s.Category, SlowSecs: s.SlowSecs, Overrides: s.Overrides}), nil
 }
 
 // ChatMainChannel is the settings of a group's main channel: its name ("" the app's own), topic,
@@ -158,6 +169,9 @@ func (n *NodeApi) ChatMainChannel(ref ChatRef) (ChannelDTO, error) {
 	}
 	r := f.myRights(c)
 	d := channelDTO(f.log.MainChannel(c))
+	if len(d.Overrides) > 0 {
+		r.Send = f.log.RightsIn(c, f.self, "").Send
+	}
 	if d.Open != "" {
 		if ch, ok := f.log.ChannelOf(c, d.Open); !ok || ch.Category || ch.Voice {
 			d.Open = "" // it went: the group opens on the main channel
@@ -181,8 +195,9 @@ func (n *NodeApi) ChatMainChannelSave(ref ChatRef, spec ChannelSpec) error {
 			return errors.New("a group opens on one of its text channels")
 		}
 	}
+	parent := f.log.MainChannel(c).Parent // the category it sits in stays (ChatChannelPlace moves it)
 	raw, eid, err := f.log.AppendChannel(c, convlog.ChannelSpec{Name: strings.TrimSpace(spec.Name), Topic: spec.Topic,
-		ReadOnly: spec.ReadOnly, SlowSecs: spec.SlowSecs, Open: spec.Open})
+		ReadOnly: spec.ReadOnly, SlowSecs: spec.SlowSecs, Open: spec.Open, Parent: parent, Overrides: spec.Overrides})
 	if err != nil {
 		return err
 	}
@@ -280,6 +295,9 @@ func (n *NodeApi) ChatChannelRemove(ref ChatRef, id string) error {
 	cur, _ := f.log.ChannelOf(c, id)
 	if cur.Category {
 		// its channels stay, out of any category
+		if f.log.MainChannel(c).Parent == id {
+			_ = f.placeChannel(c, "", "")
+		}
 		for _, ch := range f.log.Channels(c) {
 			if ch.Parent == id {
 				s := specOf(ch)
@@ -290,7 +308,8 @@ func (n *NodeApi) ChatChannelRemove(ref ChatRef, id string) error {
 			}
 		}
 	}
-	raw, eid, err := f.log.AppendChannel(c, convlog.ChannelSpec{ID: id, Name: cur.Name, Voice: cur.Voice, Category: cur.Category, Remove: true})
+	raw, eid, err := f.log.AppendChannel(c, convlog.ChannelSpec{ID: id, Name: cur.Name, Voice: cur.Voice, Category: cur.Category, Remove: true,
+		Overrides: cur.Overrides})
 	if err != nil {
 		return err
 	}
@@ -325,6 +344,11 @@ func (n *NodeApi) StartRoomCall(groupID, room string) (GroupCall, error) {
 	if room == "" {
 		return GroupCall{}, errors.New("no room")
 	}
+	if cf, err := n.convsFacade(); err == nil {
+		if c := convlog.Group(groupID); cf.log.HasRoster(c) && !cf.log.RightsIn(c, cf.self, room).Voice {
+			return GroupCall{}, errors.New("your role may not join this voice room")
+		}
+	}
 	if c, ok := f.ActiveCall(groupID, room); ok {
 		return c, nil
 	}
@@ -357,4 +381,90 @@ func (n *NodeApi) EndRoomCall(groupID, room, callID string) error {
 		return err
 	}
 	return f.EndCall(groupID, room, callID)
+}
+
+// ChatChannelPlace puts a channel, a voice room or the main channel (id "") in a category
+// (parent "": in none).
+func (n *NodeApi) ChatChannelPlace(ref ChatRef, id, parent string) error {
+	f, c, err := n.chat(ref)
+	if err != nil {
+		return err
+	}
+	if c.Kind != convlog.KindGroup {
+		return errNotGroup
+	}
+	return f.placeChannel(c, id, parent)
+}
+
+func (f *convsFacade) placeChannel(c convlog.Conv, id, parent string) error {
+	if parent != "" {
+		if p, ok := f.log.ChannelOf(c, parent); !ok || !p.Category {
+			return errors.New("no such category")
+		}
+	}
+	var s convlog.ChannelSpec
+	if id == "" {
+		s = specOf(f.log.MainChannel(c))
+		s.ID = ""
+	} else {
+		ch, ok := f.log.ChannelOf(c, id)
+		if !ok || ch.Category {
+			return errors.New("no such channel")
+		}
+		s = specOf(ch)
+	}
+	if s.Parent == parent {
+		return nil
+	}
+	s.Parent = parent
+	raw, eid, err := f.log.AppendChannel(c, s)
+	if err != nil {
+		return err
+	}
+	_, _ = f.sendEvent(c, raw, eid, convlog.KindChannel, "", "")
+	return nil
+}
+
+// ChatCategoriesSetup turns the two headings a space without categories shows (its text channels,
+// the main one among them, and its voice rooms) into categories of those names, so they can be
+// renamed, removed and hold channels of either kind. It returns their ids, text then voice; a
+// space that has categories already is left as it is.
+func (n *NodeApi) ChatCategoriesSetup(ref ChatRef, textName, voiceName string) ([]string, error) {
+	f, c, err := n.chat(ref)
+	if err != nil {
+		return nil, err
+	}
+	if c.Kind != convlog.KindGroup {
+		return nil, errNotGroup
+	}
+	chans := f.log.Channels(c)
+	for _, ch := range chans {
+		if ch.Category {
+			return nil, errors.New("the space has categories already")
+		}
+	}
+	ids := make([]string, 2)
+	for i, name := range []string{strings.TrimSpace(textName), strings.TrimSpace(voiceName)} {
+		b := make([]byte, 6)
+		_, _ = rand.Read(b)
+		ids[i] = hex.EncodeToString(b)
+		raw, eid, err := f.log.AppendChannel(c, convlog.ChannelSpec{ID: ids[i], Name: name, Category: true, Position: int32(i)})
+		if err != nil {
+			return nil, err
+		}
+		_, _ = f.sendEvent(c, raw, eid, convlog.KindChannel, "", "")
+	}
+	if err := f.placeChannel(c, "", ids[0]); err != nil {
+		return ids, err
+	}
+	for _, ch := range chans {
+		to := ids[0]
+		if ch.Voice {
+			to = ids[1]
+		}
+		if err := f.placeChannel(c, ch.ID, to); err != nil {
+			return ids, err
+		}
+	}
+	return ids, nil
 }
