@@ -348,6 +348,8 @@ export namespace dto {
 	    chatId: string;
 	    chatName: string;
 	    msgId: string;
+	    channel?: string;
+	    thread?: string;
 	    sender?: string;
 	    mine: boolean;
 	    text: string;
@@ -366,6 +368,8 @@ export namespace dto {
 	        this.chatId = source["chatId"];
 	        this.chatName = source["chatName"];
 	        this.msgId = source["msgId"];
+	        this.channel = source["channel"];
+	        this.thread = source["thread"];
 	        this.sender = source["sender"];
 	        this.mine = source["mine"];
 	        this.text = source["text"];
@@ -1166,6 +1170,7 @@ export namespace node {
 	    role: string;
 	    joinedAt: number;
 	    isMe: boolean;
+	    online: boolean;
 	    canKick: boolean;
 	    canBan: boolean;
 	    roles?: string[];
@@ -1181,6 +1186,7 @@ export namespace node {
 	        this.role = source["role"];
 	        this.joinedAt = source["joinedAt"];
 	        this.isMe = source["isMe"];
+	        this.online = source["online"];
 	        this.canKick = source["canKick"];
 	        this.canBan = source["canBan"];
 	        this.roles = source["roles"];
