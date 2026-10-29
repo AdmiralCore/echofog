@@ -280,6 +280,9 @@ function listen() {
     if (!ev) return;
     const id = 'g:' + ev.groupId;
     switch (ev.kind) {
+      case 'requests': // a request to join waits, or was decided
+        membersVersion.update((n) => n + 1);
+        break;
       case 'members':
       case 'added':
         await loadChats();

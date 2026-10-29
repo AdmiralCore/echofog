@@ -40,7 +40,7 @@
   async function create() {
     busy = true;
     try {
-      const inv = await App.GroupInviteCreate(conv.groupId, { label: making.label.trim(), hours: +making.hours, uses: +making.uses, role: making.role });
+      const inv = await App.GroupInviteCreate(conv.groupId, { label: making.label.trim(), hours: +making.hours, uses: +making.uses, role: making.role, approval: !!making.approval });
       making = null;
       await load(conv.groupId);
       doCopy(inv.n, inv.webLink || inv.link);
@@ -72,7 +72,7 @@
     <div class="row inv-head">
       <span class="eyebrow grow">{$t('chats.invite')}</span>
       {#if list && conv.can.invite && !making}
-        <button class="ghost small with-icon" on:click={() => (making = { label: '', hours: 24 * 7, uses: 0, role: '' })}><Icon name="plus" size={14} /> {$t('chats.inv.new')}</button>
+        <button class="ghost small with-icon" on:click={() => (making = { label: '', hours: 24 * 7, uses: 0, role: '', approval: false })}><Icon name="plus" size={14} /> {$t('chats.inv.new')}</button>
       {/if}
     </div>
     {#if quick && !making}
@@ -96,6 +96,7 @@
             <select bind:value={making.uses}>{#each USES as u}<option value={u}>{u ? u : $t('chats.inv.unlimited')}</option>{/each}</select>
           </label>
         </div>
+        <label class="check"><input type="checkbox" bind:checked={making.approval} /> <span>{$t('chats.inv.approval')}</span></label>
         {#if givable.length}
           <label class="small faint" for="inv-role">{$t('chats.inv.role')}</label>
           <select id="inv-role" bind:value={making.role}>
@@ -121,6 +122,7 @@
                 {$t('chats.inv.st.' + inv.state)} · {inv.uses ? $t('chats.inv.usedOf', { n: inv.used, of: inv.uses }) : $t('chats.inv.used', { n: inv.used })}
                 {#if inv.state === 'active'} · {$t('chats.inv.until', { when: when(inv.exp) })}{/if}
                 {#if inv.role} · {roleName(inv.role)}{/if}
+                {#if inv.approval} · {$t('chats.inv.withApproval')}{/if}
               </span>
             </div>
             {#if inv.state === 'active' && (inv.webLink || inv.link)}
@@ -142,6 +144,8 @@
   .link-btn { background: none; border: 0; padding: 2px 0; color: var(--accent); cursor: pointer; text-align: left; }
   .inv-make { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
   .inv-opts { gap: 8px; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 4px; }
+  .check input { width: auto; }
   .inv-opts label { display: flex; flex-direction: column; gap: 4px; }
   .inv-actions { margin-top: 6px; gap: 6px; align-items: center; }
   .inv-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }

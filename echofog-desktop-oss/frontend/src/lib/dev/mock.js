@@ -569,6 +569,16 @@ recent problems (the last 1 warnings and errors, cleaned):
     (groupInvites[gid] = groupInvites[gid] || []).unshift(inv);
     return { ...inv, state: 'active', canRevoke: true };
   },
+  GroupTimeout: (_g, id, min) => { const m = groupMembers.find((x) => x.peerId === id); if (m) m.timeout = min ? sec(Date.now()) + min * 60 : 0; modLog.unshift({ ts: Date.now(), actor: SELF, action: min ? 'timeout' : 'timeoutLifted', target: id, until: m?.timeout || 0 }); return null; },
+  GroupModerationLog: () => modLog,
+  GroupJoinRequests: () => joinRequests,
+  GroupJoinDecide: (_g, id, accept) => {
+    const i = joinRequests.findIndex((r) => r.peerId === id);
+    if (i < 0) throw new Error('no such request (somebody may have decided already)');
+    joinRequests.splice(i, 1);
+    if (accept) { groupMembers.push({ peerId: id, role: 'member' }); modLog.unshift({ ts: Date.now(), actor: SELF, action: 'admit', target: id }); }
+    return null;
+  },
   GroupInviteRevoke: (gid, n) => { const i = (groupInvites[gid] || []).find((x) => x.n === n); if (i) i.revoked = true; return null; },
   GetContacts: () => contacts,
   GetPrivacy: () => ({ ...privacyMock.privacy }),
@@ -661,7 +671,8 @@ recent problems (the last 1 warnings and errors, cleaned):
       const over = !isMe && rankOf(m.role) < 100 && me > rankOf(m.role);
       const roles = over && me >= RANKS.admin ? assignable.filter((r) => rankOf(r) < me || r === m.role) : undefined;
       return { ...m, roleTitle: defs[m.role]?.title || '', roleColor: defs[m.role]?.color || 0, isMe, online: isMe || m.peerId.charCodeAt(0) % 2 === 0,
-        canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
+        canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100,
+        canTimeout: over && me >= RANKS.moderator, timeout: m.timeout && m.timeout > sec(Date.now()) ? m.timeout : 0 };
     });
   },
   GroupRoles: (gid) => {
@@ -1091,6 +1102,13 @@ const spaceChans = {
   ],
 };
 // the main channel's settings, and the roles a group defined, by group
+const joinRequests = [{ peerId: hex(77), ts: sec(Date.now()) - 600, invite: 'stream viewers' }];
+const modLog = [
+  { ts: Date.now() - 3600e3, actor: ALICE, action: 'delete', target: BOB, message: 'g1', channel: '' },
+  { ts: Date.now() - 7200e3, actor: SELF, action: 'roleDefined', role: 'helper', detail: 'Helper' },
+  { ts: Date.now() - 86400e3, actor: ALICE, action: 'admit', target: CAROL },
+  { ts: Date.now() - 2 * 86400e3, actor: SELF, action: 'roster' },
+];
 const groupInvites = {
   [GROUP]: [{ n: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', label: 'stream viewers', exp: sec(Date.now()) + 3 * 86400, uses: 25, used: 7, role: '', issuer: ALICE, mine: false }],
 };

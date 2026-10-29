@@ -189,6 +189,7 @@
   $: hasRooms = $channels.some((c) => c.voice);
   // in a channel only managers post to, the others comment; a channel's overrides can also let a
   // role post there that may not elsewhere, or keep it from posting
+  $: mutedUntil = conv.can?.mutedUntil || 0;
   $: canPost = shownChan ? shownChan.canSend !== false : conv.kind === 'group' && $mainChannel.canSend !== undefined ? $mainChannel.canSend : conv.can.send;
   $: if ($thread) threadsOpen = false;
   // a draft per channel: switching channels keeps what was being written in each
@@ -283,6 +284,8 @@
 
     {#if conv.kind === 'direct' && conv.blocked}
       <!-- no composer: a blocked person gets nothing either way -->
+    {:else if mutedUntil * 1000 > Date.now()}
+      <p class="small muted bar ro"><Icon name="clock" size={14} /> {$t('chats.to.mine', { when: new Date(mutedUntil * 1000).toLocaleString(intlLocale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) })}</p>
     {:else if !canPost}
       <p class="small muted bar ro"><Icon name="lock" size={14} /> {conv.can.send ? $t('chats.readOnlyChannelNote') : $t('chats.readOnly')}</p>
     {:else}

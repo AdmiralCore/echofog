@@ -12,6 +12,8 @@
   import Icon from '../../components/ui/Icon.svelte';
   import GroupRoles from './GroupRoles.svelte';
   import GroupInvites from './GroupInvites.svelte';
+  import GroupRequests from './GroupRequests.svelte';
+  import ModLog from './ModLog.svelte';
   import { hexColor } from '../../perms.js';
   import { useChat } from './context.js';
 
@@ -68,6 +70,15 @@
     memberAction(m.peerId, async () => { await App.TransferGroupOwnership(conv.groupId, m.peerId); await loadChats(); });
   }
   const setRole = (m, role) => memberAction(m.peerId, () => App.SetGroupRole(conv.groupId, m.peerId, role));
+  // a timeout: minutes, 0 lifts it
+  const TIMEOUTS = [10, 60, 24 * 60, 7 * 24 * 60];
+  let timing = ''; // the member whose timeout menu is open
+  const timeoutLabel = (min) => (min < 60 ? $t('chats.to.min', { n: min }) : min < 24 * 60 ? $t('chats.to.hours', { n: min / 60 }) : $t('chats.to.days', { n: min / (24 * 60) }));
+  function timeout(m, min) {
+    timing = '';
+    memberAction(m.peerId, () => App.GroupTimeout(conv.groupId, m.peerId, min));
+  }
+  const untilText = (s) => new Date(s * 1000).toLocaleString(intlLocale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   async function kick(m, ban) {
     if (!(await ask({ message: $t(ban ? 'chats.confirm.ban' : 'chats.confirm.remove', { name: $nameOf(m.peerId) }), confirm: $t('common.remove'), danger: true }))) return;
     memberAction(m.peerId, () => App.RemoveGroupMember(conv.groupId, m.peerId, ban));
@@ -137,6 +148,7 @@
 
   {#if group}<GroupInvites {conv} {roles} />{/if}
 
+    {#if group}<GroupRequests {conv} />{/if}
     {#if group}<GroupRoles {conv} on:roles={(e) => (roles = e.detail)} />{/if}
 
     <div class="block">
@@ -150,6 +162,7 @@
                 <span class="presence" class:on={m.online}></span>
               </span>
               <span class="grow nm">{nameOfMember(m)}</span>
+              {#if m.timeout}<span class="to-chip" title={$t('chats.to.until', { when: untilText(m.timeout) })}><Icon name="clock" size={12} /></span>{/if}
               {#if m.roles && m.roles.length}
                 {#if roleColor(m.role)}<span class="role-dot" style:background={roleColor(m.role)}></span>{/if}
                 <select value={m.role} disabled={busy === m.peerId} on:change={(e) => setRole(m, e.target.value)}>
@@ -160,12 +173,21 @@
                 <span class="chip" style:color={roleColor(m.role) || null}>{roleLabel(m.role, m.roleTitle)}</span>
               {/if}
             </div>
-            {#if m.canTransfer || m.canKick || m.canBan}
+            {#if m.canTransfer || m.canKick || m.canBan || m.canTimeout}
               <div class="row m-acts">
+                {#if m.canTimeout}
+                  {#if m.timeout}<button class="ghost small" disabled={busy === m.peerId} on:click={() => timeout(m, 0)}>{$t('chats.to.lift')}</button>
+                  {:else}<button class="ghost small" disabled={busy === m.peerId} on:click={() => (timing = timing === m.peerId ? '' : m.peerId)}>{$t('chats.to.give')}</button>{/if}
+                {/if}
                 {#if m.canTransfer}<button class="ghost small" disabled={busy === m.peerId} on:click={() => makeOwner(m)}>{$t('chats.makeOwner')}</button>{/if}
                 {#if m.canKick}<button class="ghost small" disabled={busy === m.peerId} on:click={() => kick(m, false)}>{$t('common.remove')}</button>{/if}
                 {#if m.canBan}<button class="ghost small danger" disabled={busy === m.peerId} on:click={() => kick(m, true)}>{$t('chats.ban')}</button>{/if}
               </div>
+              {#if timing === m.peerId}
+                <div class="row m-acts to-opts">
+                  {#each TIMEOUTS as min}<button class="ghost small" on:click={() => timeout(m, min)}>{timeoutLabel(min)}</button>{/each}
+                </div>
+              {/if}
             {/if}
           </div>
         {/each}
@@ -181,6 +203,7 @@
         <p class="small faint">{$t('chats.addHint')}</p>
       </div>
     {/if}
+    {#if group && (conv.can.manage || conv.can.roles)}<ModLog {conv} {roles} />{/if}
     {#if conv.myRole !== 'owner'}
       <button class="danger with-icon wide" on:click={leave}><Icon name="logout" size={16} /> {$t('chats.leaveGroup')}</button>
     {:else}
@@ -192,4 +215,6 @@
 
 <style>
   .role-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .to-chip { display: inline-flex; color: var(--warn, #f5a524); }
+  .to-opts { flex-wrap: wrap; }
 </style>

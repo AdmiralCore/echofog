@@ -302,3 +302,39 @@ func (a *App) GroupInviteRevoke(groupID, nonce string) error {
 	}
 	return n.GroupInviteRevoke(groupID, nonce)
 }
+
+// GroupTimeout keeps a member from writing for minutes (0 lifts it); the member stays in.
+func (a *App) GroupTimeout(groupID, memberID string, minutes int) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupTimeout(groupID, memberID, minutes)
+}
+
+// GroupModerationLog is what a group's members did to each other, the newest first.
+func (a *App) GroupModerationLog(groupID string) ([]api.GroupModEntry, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupModerationLog(groupID)
+}
+
+// GroupJoinRequests lists the requests to join a group waiting for a decision.
+func (a *App) GroupJoinRequests(groupID string) ([]api.GroupJoinRequestDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupJoinRequests(groupID)
+}
+
+// GroupJoinDecide accepts a request to join (the newcomer is let in) or declines it.
+func (a *App) GroupJoinDecide(groupID, peerID string, accept bool) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupJoinDecide(groupID, peerID, accept)
+}
