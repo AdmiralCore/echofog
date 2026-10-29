@@ -1,7 +1,7 @@
 <script>
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { threads, loadThreads, openThread, preview, activeChannel } from '../../stores/chats.js';
+  import { threads, threadsShown, loadThreads, openThread, preview, activeChannel } from '../../stores/chats.js';
   import { when } from '../../format.js';
   import { t, lang } from '../../i18n/index.js';
   import Icon from '../../components/ui/Icon.svelte';
@@ -11,7 +11,8 @@
    *  comments each has. */
   const dispatch = createEventDispatcher();
   const { authorName } = useChat();
-  onMount(loadThreads);
+  onMount(() => { threadsShown.set(true); loadThreads(); });
+  onDestroy(() => threadsShown.set(false));
   $: $activeChannel, loadThreads();
 
   async function open(m) {

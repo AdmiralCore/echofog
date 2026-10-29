@@ -232,12 +232,15 @@ async function changed(ev) {
 
   const here = get(activeChannel);
   messages.update((list) => msgs.filter((m) => !m.thread && m.channel === here).reduce((l, m) => upsert(l, m, before, get(hasOlder)), list));
-  if (row.kind === 'group' && (msgs.some((m) => m.channel) || here)) loadChannels();
+  // a change with no messages is one of the group's own (a channel made, renamed or set up)
+  if (row.kind === 'group' && (!msgs.length || msgs.some((m) => m.channel) || here)) loadChannels();
   const th = get(thread);
   if (th) {
     const inThread = msgs.filter((m) => m.thread === th.root);
     if (inThread.length) thread.set({ ...th, messages: inThread.reduce((l, m) => upsert(l, m, beforeInThread, false), th.messages) });
   }
+  // a comment, a rename or a deleted root changes the threads list
+  if (get(threadsShown) && msgs.some((m) => m.thread || m.replies || m.threadTitle || get(threads).some((x) => x.id === m.id))) threadsSoon();
   const q = get(quotes);
   if (msgs.some((m) => m.id in q)) quotes.set({ ...q, ...Object.fromEntries(msgs.filter((m) => m.id in q).map((m) => [m.id, m])) });
   if (msgs.some((m) => m.pinned || get(pins).some((p) => p.id === m.id))) loadPins();
@@ -492,6 +495,13 @@ export async function moveChannel(id, index) {
 
 /** The open channel's threads (messages with comments), the most recently active first. */
 export const threads = writable([]);
+/** Whether the threads list is on screen: a change that touches a thread reads it again. */
+export const threadsShown = writable(false);
+let threadsTimer = null;
+function threadsSoon() {
+  if (threadsTimer) return;
+  threadsTimer = setTimeout(() => { threadsTimer = null; if (get(threadsShown)) loadThreads(); }, 250);
+}
 export async function loadThreads() {
   const conv = openConv();
   if (!conv) return;
