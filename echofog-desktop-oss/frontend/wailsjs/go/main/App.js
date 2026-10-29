@@ -446,6 +446,10 @@ export function PickAndSendGroupFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['PickAndSendGroupFile'](arg1, arg2, arg3);
 }
 
+export function PinGuard(arg1) {
+  return window['go']['main']['App']['PinGuard'](arg1);
+}
+
 export function ProbeExitNode(arg1) {
   return window['go']['main']['App']['ProbeExitNode'](arg1);
 }
@@ -676,6 +680,10 @@ export function TriggerPanicButton() {
 
 export function UnblockPeer(arg1) {
   return window['go']['main']['App']['UnblockPeer'](arg1);
+}
+
+export function UnpinGuard(arg1) {
+  return window['go']['main']['App']['UnpinGuard'](arg1);
 }
 
 export function UnsaveMessage(arg1) {

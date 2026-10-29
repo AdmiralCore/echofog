@@ -14,6 +14,11 @@ export default {
     'guard.through': { one: 'Connected through {n} guard', other: 'Connected through {n} guards' },
     'guard.connecting': 'Looking for guards…',
     'guard.offNote': 'The app connects to the network directly. Other nodes it meets see your address.',
+    'guard.pin.title': 'Route through your own relay',
+    'guard.pin.hint': 'Pin a relay you run (or trust) and the app always goes in through it, so all its traffic passes your relay. Your first connection reveals your address to that relay alone — no one else.',
+    'guard.pin.placeholder': 'echofog://relay/… or host:port/id?sni=…',
+    'guard.pin.add': 'Pin',
+    'guard.pin.remove': 'Remove',
     'guard.exitNote': 'This is about how the app joins the network. The VPN that carries your browsing is chosen on the Proxy page and has its own disguise.',
   },
   ru: {
@@ -30,6 +35,11 @@ export default {
     'guard.through': { one: 'Подключено через {n} охранный узел', few: 'Подключено через {n} охранных узла', many: 'Подключено через {n} охранных узлов', other: 'Подключено через {n} охранных узла' },
     'guard.connecting': 'Ищу охранные узлы…',
     'guard.offNote': 'Приложение подключается к сети напрямую. Узлы, с которыми оно связывается, видят ваш адрес.',
+    'guard.pin.title': 'Весь трафик через свой релей',
+    'guard.pin.hint': 'Закрепите релей, который держите сами (или которому доверяете), и приложение всегда заходит в сеть через него — весь трафик идёт через ваш релей. Первое подключение раскрывает ваш адрес только этому релею, больше никому.',
+    'guard.pin.placeholder': 'echofog://relay/… или host:port/id?sni=…',
+    'guard.pin.add': 'Закрепить',
+    'guard.pin.remove': 'Убрать',
     'guard.exitNote': 'Это про то, как приложение заходит в сеть. VPN-выход, через который идёт ваш интернет, выбирается на вкладке «Прокси» и маскируется отдельно.',
   },
 };

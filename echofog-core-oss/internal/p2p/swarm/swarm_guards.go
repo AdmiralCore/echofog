@@ -65,6 +65,7 @@ type guard struct {
 	fails   int
 	next    time.Time // not dialed before this
 	dialing bool
+	pinned  bool // the user pinned this relay (anti_dpi.pinned_guards): held and leaned on first
 }
 
 // GuardInfo is a guard as the status of the node shows it.
@@ -264,25 +265,58 @@ func (s *Swarm) guardCandidates() []guardCandidate {
 // every few seconds.
 func (s *Swarm) maintainGuards() {
 	now := time.Now()
-	for _, c := range s.planGuards(now, s.guardCandidates()) {
+	var pinned []guardCandidate
+	if s.GuardModeActive() {
+		pinned = s.pinnedGuards()
+	}
+	for _, c := range s.planGuards(now, s.guardCandidates(), pinned) {
 		s.dialGuard(c)
 	}
 }
 
+// pinnedGuards are the relays the user chose to route through (anti_dpi.pinned_guards): each is an
+// annotated address of a relay the node always holds as a guard. Facts carried in the address (the
+// camouflage SNI, the server role) are learned, so the dial is disguised and the peer is eligible.
+func (s *Swarm) pinnedGuards() []guardCandidate {
+	if s.cfg == nil {
+		return nil
+	}
+	var out []guardCandidate
+	for _, e := range s.cfg.AntiDPI.PinnedGuards {
+		info := network.ParseAddrInfo(e)
+		if !info.Named || info.Addr == "" || info.ID == s.selfID {
+			continue
+		}
+		s.learnBootstrapFacts(info)
+		out = append(out, guardCandidate{info.ID, info.Addr})
+	}
+	return out
+}
+
 // planGuards is the bookkeeping of a round, apart from the network: it changes the guard list and
 // returns the guards that are to be dialed now.
-func (s *Swarm) planGuards(now time.Time, cands []guardCandidate) []*guard {
+func (s *Swarm) planGuards(now time.Time, cands, pinned []guardCandidate) []*guard {
 	s.guards.mu.Lock()
 	defer s.guards.mu.Unlock()
 	s.loadGuardsLocked()
 	changed := false
+
+	pinnedSet := map[types.PeerID]bool{}
+	for _, c := range pinned {
+		pinnedSet[c.id] = true
+	}
 
 	up := func(g *guard) bool { return s.ThisIsActivePeer(g.id) }
 	othersUp := len(s.GetAllPeers()) // links of any kind: the proof that this node's own network works
 	kept := s.guards.list[:0]
 	dropped := map[types.PeerID]bool{} // not taken back in the same round
 	for _, g := range s.guards.list {
+		g.pinned = pinnedSet[g.id] // re-derived from config each round: unpinning lets it rotate again
 		switch {
+		case g.pinned:
+			if up(g) { // always kept: the user chose this relay as the way in
+				g.lastOK, g.fails = now, 0
+			}
 		case !now.Before(g.expires), s.CheckOnBan(g.id), !s.eligibleGuardOrKept(g):
 			changed, dropped[g.id] = true, true // its time is up (connected or not), or it is no use
 			continue
@@ -295,6 +329,26 @@ func (s *Swarm) planGuards(now time.Time, cands []guardCandidate) []*guard {
 		kept = append(kept, g)
 	}
 	s.guards.list = kept
+
+	// A pinned relay is always held: add any the node does not hold yet, before filling the rest.
+	for _, c := range pinned {
+		if dropped[c.id] || len(s.guards.list) >= guardsMax {
+			continue
+		}
+		have := false
+		for _, g := range s.guards.list {
+			if g.id == c.id {
+				have = true
+				break
+			}
+		}
+		if have {
+			continue
+		}
+		life := guardLifeMin + time.Duration(rand.Int64N(int64(guardLifeSpan)))
+		s.guards.list = append(s.guards.list, &guard{id: c.id, addr: c.addr, added: now, expires: now.Add(life), lastOK: now, pinned: true})
+		changed = true
+	}
 
 	healthy := func() int {
 		n := 0

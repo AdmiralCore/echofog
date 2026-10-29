@@ -11,10 +11,13 @@
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
 
-  let st = { mode: 'auto', active: false, connected: 0, wanted: 0, guards: [] };
+  let st = { mode: 'auto', active: false, connected: 0, wanted: 0, guards: [], pinned: [] };
   let error = '';
   let busy = false;
   let timer;
+  let pinEntry = '';
+  let pinBusy = false;
+  let pinError = '';
 
   async function load() {
     try { st = await App.GetGuardStatus(); error = ''; } catch (_) { /* node not started */ }
@@ -31,6 +34,36 @@
       error = errText(err);
     } finally {
       busy = false;
+    }
+  }
+
+  async function pin() {
+    const entry = pinEntry.trim();
+    if (pinBusy || !entry) return;
+    pinBusy = true;
+    pinError = '';
+    try {
+      await App.PinGuard(entry);
+      pinEntry = '';
+      await load();
+    } catch (err) {
+      pinError = errText(err);
+    } finally {
+      pinBusy = false;
+    }
+  }
+
+  async function unpin(p) {
+    if (pinBusy) return;
+    pinBusy = true;
+    pinError = '';
+    try {
+      await App.UnpinGuard(p.link || (p.addr + '/' + p.peerId));
+      await load();
+    } catch (err) {
+      pinError = errText(err);
+    } finally {
+      pinBusy = false;
     }
   }
 
@@ -88,6 +121,28 @@
     <p class="small muted">{$t('guard.offNote')}</p>
   {/if}
 
+  <div class="pin note">
+    <h3 class="small">{$t('guard.pin.title')}</h3>
+    <p class="small muted">{$t('guard.pin.hint')}</p>
+    {#if st.pinned.length}
+      <ul class="pinned">
+        {#each st.pinned as p}
+          <li>
+            <span class="dot" class:ok={st.guards.find((g) => g.peerId === p.peerId && g.connected)}></span>
+            <span class="mono grow">{p.addr}</span>
+            <button class="link" disabled={pinBusy} on:click={() => unpin(p)}>{$t('guard.pin.remove')}</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    <div class="pin-add">
+      <input type="text" bind:value={pinEntry} placeholder={$t('guard.pin.placeholder')}
+             disabled={pinBusy} on:keydown={(e) => e.key === 'Enter' && pin()} />
+      <button disabled={pinBusy || !pinEntry.trim()} on:click={pin}>{$t('guard.pin.add')}</button>
+    </div>
+    {#if pinError}<p class="small error">{pinError}</p>{/if}
+  </div>
+
   <p class="small muted note">{$t('guard.exitNote')}</p>
 </div>
 
@@ -107,4 +162,14 @@
   .dot.ok { background: #38c172; }
   .dot.wait { background: #e0a106; }
   .note { border-top: 1px solid var(--line); padding-top: 8px; }
+  .pin h3 { margin: 0 0 2px; font-weight: 600; }
+  .pinned { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .pinned li { display: flex; align-items: center; gap: 8px; }
+  .pin-add { display: flex; gap: 8px; margin-top: 8px; }
+  .pin-add input { flex: 1 1 auto; min-width: 0; }
+  button.link {
+    background: none; border: none; color: var(--accent); cursor: pointer; padding: 0;
+    font: inherit; flex: none;
+  }
+  button.link:disabled { opacity: 0.5; cursor: default; }
 </style>

@@ -409,22 +409,42 @@ const impl = {
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
   guardMock: undefined,
+  pinnedMock: [],
   GetGuardStatus() {
     this.guardMock ??= 'auto';
     // ?country=DE: the app is placed in a country that does not censor, so "auto" stands down
     const country = (new URLSearchParams(location.search).get('country') || 'RU').toUpperCase();
     const stoodDown = this.guardMock === 'auto' && !['RU', 'BY', 'IR', 'CN'].includes(country);
     const active = this.guardMock !== 'off' && !stoodDown;
+    const pinnedGuards = active
+      ? this.pinnedMock.map((p) => ({ peerId: p.peerId, addr: p.addr, connected: true, pinned: true }))
+      : [];
     return {
       mode: this.guardMock, active, country, stoodDown, wanted: active ? 3 : 0,
-      connected: active ? 2 : 0,
+      connected: active ? 2 + pinnedGuards.length : 0,
       guards: active ? [
+        ...pinnedGuards,
         { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', connected: true },
         { peerId: '98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0', connected: true },
       ] : [],
+      pinned: this.pinnedMock.map((p) => ({ ...p })),
     };
   },
   SetGuardMode(mode) { this.guardMock = mode; },
+  PinGuard(entry) {
+    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?(?:\?.*sni=([^&]+))?/i.exec(linkEntryMock(entry));
+    if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
+    if (!m[3]) throw new Error('a pinned relay needs a cover site (sni) so the node can reach it in disguise');
+    const peerId = m[2].toLowerCase();
+    if (this.pinnedMock.some((p) => p.peerId === peerId)) return;
+    this.pinnedMock = [...this.pinnedMock, { peerId, addr: m[1], link: 'echofog://relay/' + m[1] + '/' + peerId, connected: true }];
+  },
+  UnpinGuard(entry) {
+    const m = /([0-9a-f]{64})/i.exec(entry);
+    if (!m) return;
+    const peerId = m[1].toLowerCase();
+    this.pinnedMock = this.pinnedMock.filter((p) => p.peerId !== peerId);
+  },
 
   AddBootstrapNode: (entry) => {
     const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(linkEntryMock(entry));

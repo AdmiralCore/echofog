@@ -1221,6 +1221,7 @@ export namespace node {
 	    peerId: string;
 	    addr?: string;
 	    connected: boolean;
+	    pinned?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GuardServer(source);
@@ -1231,6 +1232,7 @@ export namespace node {
 	        this.peerId = source["peerId"];
 	        this.addr = source["addr"];
 	        this.connected = source["connected"];
+	        this.pinned = source["pinned"];
 	    }
 	}
 	export class GuardStatus {
@@ -1239,6 +1241,9 @@ export namespace node {
 	    connected: number;
 	    wanted: number;
 	    guards: GuardServer[];
+	    country?: string;
+	    stoodDown?: boolean;
+	    pinned: BootstrapNode[];
 	
 	    static createFrom(source: any = {}) {
 	        return new GuardStatus(source);
@@ -1251,6 +1256,9 @@ export namespace node {
 	        this.connected = source["connected"];
 	        this.wanted = source["wanted"];
 	        this.guards = this.convertValues(source["guards"], GuardServer);
+	        this.country = source["country"];
+	        this.stoodDown = source["stoodDown"];
+	        this.pinned = this.convertValues(source["pinned"], BootstrapNode);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

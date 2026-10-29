@@ -21,3 +21,21 @@ func (a *App) SetGuardMode(mode string) error {
 	}
 	return nodeAPI.SetGuardMode(mode)
 }
+
+// PinGuard saves a relay the node always routes through (a relay link or host:port/<peer id>?sni=…).
+func (a *App) PinGuard(entry string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.PinGuard(entry)
+}
+
+// UnpinGuard forgets one of the user's pinned relays.
+func (a *App) UnpinGuard(entry string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.UnpinGuard(entry)
+}

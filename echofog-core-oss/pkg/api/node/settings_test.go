@@ -81,3 +81,46 @@ func TestGuardMode_PersistAndApply(t *testing.T) {
 	assert.Error(t, err)
 	assert.Error(t, empty.SetGuardMode(config.GuardOn))
 }
+
+func TestPinnedGuards_PersistAndApply(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultConfig("t")
+	cfg.Storage.DatabasePath = filepath.Join(dir, "db")
+	api := &NodeApi{node: &node.Node{Cfg: cfg}}
+
+	const pid = "5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324e"
+	entry := "198.51.100.9:4001/" + pid + "?sni=www.cloudflare.com&srv=1"
+
+	// a relay without a cover site (sni) is refused: the node could not reach it in disguise
+	assert.Error(t, api.PinGuard("198.51.100.9:4001/"+pid))
+
+	require.NoError(t, api.PinGuard(entry))
+	require.Len(t, cfg.AntiDPI.PinnedGuards, 1, "applied to the live config")
+
+	st, err := api.GetGuardStatus()
+	require.NoError(t, err)
+	require.Len(t, st.Pinned, 1)
+	assert.Equal(t, pid, st.Pinned[0].PeerID)
+
+	// the same relay again does not double it
+	require.NoError(t, api.PinGuard(entry))
+	assert.Len(t, cfg.AntiDPI.PinnedGuards, 1)
+
+	// reloaded on the next start
+	fresh := config.DefaultConfig("t")
+	fresh.Storage.DatabasePath = cfg.Storage.DatabasePath
+	loadPersistedSettings(fresh)
+	require.Len(t, fresh.AntiDPI.PinnedGuards, 1, "reloaded on the next start")
+
+	// unpin, and it stays gone across a restart
+	require.NoError(t, api.UnpinGuard(entry))
+	assert.Empty(t, cfg.AntiDPI.PinnedGuards)
+	fresh2 := config.DefaultConfig("t")
+	fresh2.Storage.DatabasePath = cfg.Storage.DatabasePath
+	loadPersistedSettings(fresh2)
+	assert.Empty(t, fresh2.AntiDPI.PinnedGuards, "stays unpinned after restart")
+
+	empty := &NodeApi{}
+	assert.Error(t, empty.PinGuard(entry))
+	assert.Error(t, empty.UnpinGuard(entry))
+}

@@ -247,6 +247,10 @@ type AntiDPIConfig struct {
 	// region_aware_obfs allows it, are dialed directly either way; a country that cannot be placed
 	// counts as across the border.
 	GuardMode string `json:"guard_mode,omitempty"`
+	// PinnedGuards are annotated addresses ("host:port/<peer id>?sni=<cover site>&srv=1") of relays the
+	// user chose to route through: their own relay, or one they trust. Each is always held as a guard
+	// (never rotated out while pinned) and leaned on first, so the node's mesh traffic goes through it.
+	PinnedGuards []string `json:"pinned_guards,omitempty"`
 }
 
 // FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.

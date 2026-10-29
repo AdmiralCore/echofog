@@ -59,6 +59,9 @@ type persistedSettings struct {
 	// GuardMode is how this node enters the network: "auto" (the default), "on" or "off" (see
 	// config.AntiDPIConfig.GuardMode). Empty: what the configuration says.
 	GuardMode string `json:"guardMode,omitempty"`
+	// PinnedGuards are relays the user chose to always route through (annotated addresses). Once the
+	// user has pinned any from the app, this list owns anti_dpi.pinned_guards.
+	PinnedGuards []string `json:"pinnedGuards,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
@@ -84,6 +87,14 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 	}
 	if p.GuardMode == config.GuardAuto || p.GuardMode == config.GuardOn || p.GuardMode == config.GuardOff {
 		c.AntiDPI.GuardMode = p.GuardMode
+	}
+	if pins, err := normalizePinnedGuards(p.PinnedGuards); err == nil {
+		p.PinnedGuards = pins
+		if len(pins) > 0 {
+			c.AntiDPI.PinnedGuards = pins // the app owns the list once the user has pinned from it
+		}
+	} else {
+		p.PinnedGuards = nil
 	}
 	if boot, err := normalizeBootstrap(p.BootstrapNodes); err == nil {
 		p.BootstrapNodes = boot

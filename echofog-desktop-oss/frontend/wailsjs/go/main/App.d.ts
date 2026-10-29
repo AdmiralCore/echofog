@@ -229,6 +229,8 @@ export function PickAndSendFile(arg1:string):Promise<dto.FileTransferDTO>;
 
 export function PickAndSendGroupFile(arg1:string,arg2:string,arg3:string):Promise<node.GroupMessageDTO>;
 
+export function PinGuard(arg1:string):Promise<void>;
+
 export function ProbeExitNode(arg1:string):Promise<node.ProbeReport>;
 
 export function Recover(arg1:string,arg2:string,arg3:string):Promise<void>;
@@ -344,6 +346,8 @@ export function TransferGroupOwnership(arg1:string,arg2:string):Promise<void>;
 export function TriggerPanicButton():Promise<void>;
 
 export function UnblockPeer(arg1:string):Promise<void>;
+
+export function UnpinGuard(arg1:string):Promise<void>;
 
 export function UnsaveMessage(arg1:string):Promise<void>;
 
