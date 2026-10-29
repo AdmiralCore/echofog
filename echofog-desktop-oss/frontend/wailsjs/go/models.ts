@@ -625,6 +625,7 @@ export namespace node {
 	    mode: string;
 	    nextMode?: string;
 	    link: string;
+	    webLink: string;
 	    linkError?: string;
 	    secretFromConfig: boolean;
 	    joined: JoinedPeer[];
@@ -639,6 +640,7 @@ export namespace node {
 	        this.mode = source["mode"];
 	        this.nextMode = source["nextMode"];
 	        this.link = source["link"];
+	        this.webLink = source["webLink"];
 	        this.linkError = source["linkError"];
 	        this.secretFromConfig = source["secretFromConfig"];
 	        this.joined = this.convertValues(source["joined"], JoinedPeer);
@@ -910,6 +912,24 @@ export namespace node {
 	        this.kind = source["kind"];
 	        this.id = source["id"];
 	        this.channel = source["channel"];
+	    }
+	}
+	export class ConnectionReport {
+	    text: string;
+	    country: string;
+	    provider: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConnectionReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.country = source["country"];
+	        this.provider = source["provider"];
+	        this.version = source["version"];
 	    }
 	}
 	export class ConvCan {
@@ -1420,6 +1440,7 @@ export namespace node {
 	    settings: RelaySettingsDTO;
 	    chosen: boolean;
 	    link: string;
+	    webLink: string;
 	    addr: string;
 	    nat: string;
 	    mapped: boolean;
@@ -1441,6 +1462,7 @@ export namespace node {
 	        this.settings = this.convertValues(source["settings"], RelaySettingsDTO);
 	        this.chosen = source["chosen"];
 	        this.link = source["link"];
+	        this.webLink = source["webLink"];
 	        this.addr = source["addr"];
 	        this.nat = source["nat"];
 	        this.mapped = source["mapped"];

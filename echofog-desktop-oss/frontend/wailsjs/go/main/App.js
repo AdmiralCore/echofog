@@ -146,6 +146,10 @@ export function ConnectToLocalPeer(arg1) {
   return window['go']['main']['App']['ConnectToLocalPeer'](arg1);
 }
 
+export function ConnectionReport() {
+  return window['go']['main']['App']['ConnectionReport']();
+}
+
 export function CreateGroup(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateGroup'](arg1, arg2, arg3);
 }
@@ -504,6 +508,10 @@ export function RequestRelayChange(arg1) {
 
 export function RotateAccessSecret() {
   return window['go']['main']['App']['RotateAccessSecret']();
+}
+
+export function SaveConnectionReport(arg1) {
+  return window['go']['main']['App']['SaveConnectionReport'](arg1);
 }
 
 export function SaveMessage(arg1) {

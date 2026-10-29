@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>EchoFog invitation</title>
+<!--
+  An EchoFog link that can be tapped in a messenger. The link itself is everything after the "#":
+  https://admiralcore.github.io/echofog/join/#join?v=1&net=echofog&id=…  →  echofog://join?v=1&net=echofog&id=…
+  The part after "#" never leaves the browser: it is not sent to this site, and a messenger that
+  makes a preview of the page does not see it. Nothing here loads anything from anywhere else.
+-->
+<style>
+  :root {
+    --bg: #f6f7fb; --panel: #ffffff; --text: #151821; --muted: #5b6272; --line: #e3e6ee;
+    --accent: #5b6cff; --accent-text: #ffffff; --warn: #a16a00; --mono-bg: #f0f2f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0d12; --panel: #141821; --text: #e8eaf0; --muted: #9aa1b2; --line: #262c39;
+      --accent: #7b88ff; --accent-text: #0b0d12; --warn: #e0a106; --mono-bg: #0f131b; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main {
+    width: min(520px, 100%); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .mark { width: 40px; height: 40px; border-radius: 12px; background: var(--accent); display: grid; place-items: center; flex: none; }
+  .mark span { width: 14px; height: 14px; border-radius: 50%; border: 3px solid var(--accent-text); }
+  h1 { font-size: 21px; margin: 0; line-height: 1.25; }
+  p { margin: 0; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+    padding: 13px 16px; border-radius: 12px; border: 1px solid var(--line); background: transparent;
+    color: var(--text); font: inherit; font-weight: 600; text-decoration: none; cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .btns { display: flex; flex-direction: column; gap: 10px; }
+  ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; }
+  code {
+    display: block; padding: 10px 12px; border-radius: 10px; background: var(--mono-bg);
+    font: 12px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace; word-break: break-all; color: var(--muted);
+  }
+  .warn { color: var(--warn); font-size: 14px; }
+  .hidden { display: none; }
+  footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <span class="mark" aria-hidden="true"><span></span></span>
+    <div>
+      <h1 id="title"></h1>
+      <p class="muted" id="kind"></p>
+    </div>
+  </div>
+
+  <div id="ok" class="hidden">
+    <div class="btns">
+      <a class="btn primary" id="open" href="#"></a>
+      <a class="btn" id="download" href="https://github.com/AdmiralCore/echofog/releases/latest" rel="noreferrer"></a>
+    </div>
+  </div>
+
+  <ol id="steps" class="hidden"></ol>
+
+  <div id="manual" class="hidden">
+    <p class="muted" id="manual-text"></p>
+    <code id="link"></code>
+    <div class="btns" style="margin-top:10px"><button class="btn" id="copy" type="button"></button></div>
+  </div>
+
+  <p class="warn hidden" id="bad"></p>
+  <p class="warn hidden" id="secret"></p>
+
+  <footer>
+    <span id="privacy"></span>
+    <a href="https://github.com/AdmiralCore/echofog" rel="noreferrer">GitHub</a>
+  </footer>
+</main>
+
+<script>
+(function () {
+  // another link opened in the same tab changes only the fragment: read it afresh
+  window.addEventListener('hashchange', function () { location.reload(); });
+  var ru = /^(ru|uk|be|kk)\b/i.test(navigator.language || '');
+  var T = ru ? {
+    titleJoin: 'Вас пригласили в EchoFog',
+    titleNode: 'Адрес узла EchoFog',
+    titleBad: 'Ссылка не открылась',
+    kindHidden: 'Приглашение на скрытый узел: по нему вас пустят внутрь.',
+    kindPublic: 'Публичный узел: через него приложение войдёт в сеть.',
+    kindNode: 'Узел, через который можно войти в сеть, или выход для VPN.',
+    open: 'Открыть в EchoFog',
+    download: 'Скачать EchoFog',
+    steps: ['Установите EchoFog, если его ещё нет (Windows и Linux).', 'Вернитесь на эту страницу и нажмите «Открыть в EchoFog».', 'Если кнопка ничего не открыла: скопируйте ссылку ниже и вставьте её в приложении через «Открыть ссылку».'],
+    manual: 'Ссылка для приложения:',
+    copy: 'Скопировать ссылку',
+    copied: 'Скопировано',
+    bad: 'В адресе страницы нет ссылки EchoFog. Попросите прислать её ещё раз целиком: всё, что после «#», и есть приглашение.',
+    secret: 'В этой ссылке ключ доступа к скрытому узлу. Не пересылайте её в общие чаты.',
+    privacy: 'Ссылка не уходит с этой страницы никуда: всё, что после «#», остаётся в вашем браузере.'
+  } : {
+    titleJoin: 'You are invited to EchoFog',
+    titleNode: 'An EchoFog node address',
+    titleBad: 'The link did not open',
+    kindHidden: 'An invitation to a hidden node: it lets you in.',
+    kindPublic: 'A public node: the app joins the network through it.',
+    kindNode: 'A node to join the network through, or an exit for the VPN.',
+    open: 'Open in EchoFog',
+    download: 'Download EchoFog',
+    steps: ['Install EchoFog if you do not have it yet (Windows and Linux).', 'Come back to this page and tap “Open in EchoFog”.', 'If the button opened nothing: copy the link below and paste it in the app under “Open link”.'],
+    manual: 'The link for the app:',
+    copy: 'Copy the link',
+    copied: 'Copied',
+    bad: 'There is no EchoFog link in this page’s address. Ask for it again in full: everything after the “#” is the invitation.',
+    secret: 'This link carries the access key of a hidden node. Do not forward it to group chats.',
+    privacy: 'The link does not leave this page: everything after the “#” stays in your browser.'
+  };
+  document.documentElement.lang = ru ? 'ru' : 'en';
+  var $ = function (id) { return document.getElementById(id); };
+  var show = function (id) { $(id).classList.remove('hidden'); };
+  $('privacy').textContent = T.privacy + ' ';
+
+  var frag = (location.hash || '').replace(/^#/, '');
+  try { if (/%3A%2F%2F|^echofog%3A/i.test(frag)) frag = decodeURIComponent(frag); } catch (e) {}
+  frag = frag.replace(/^echofog:\/\//i, '').trim();
+  // only the two kinds of link the app opens; anything else is not followed
+  var isJoin = /^join\?[A-Za-z0-9._~%=&+\-:\/\[\]]+$/.test(frag);
+  var isNode = /^relay\/[A-Za-z0-9._~%:\/\[\]\-?=&+]+$/.test(frag);
+  if (!isJoin && !isNode) {
+    $('title').textContent = T.titleBad;
+    $('bad').textContent = T.bad;
+    show('bad');
+    var dl = $('download');
+    dl.textContent = T.download;
+    show('ok');
+    $('open').classList.add('hidden');
+    return;
+  }
+  var link = 'echofog://' + frag;
+  var hidden = isJoin && /(^|[?&])s=/.test(frag);
+  $('title').textContent = isJoin ? T.titleJoin : T.titleNode;
+  $('kind').textContent = isNode ? T.kindNode : hidden ? T.kindHidden : T.kindPublic;
+  $('open').textContent = T.open;
+  $('open').setAttribute('href', link);
+  $('download').textContent = T.download;
+  show('ok');
+  var ol = $('steps');
+  T.steps.forEach(function (s) { var li = document.createElement('li'); li.textContent = s; ol.appendChild(li); });
+  show('steps');
+  $('manual-text').textContent = T.manual;
+  $('link').textContent = link;
+  $('copy').textContent = T.copy;
+  $('copy').addEventListener('click', function () {
+    var done = function () { $('copy').textContent = T.copied; setTimeout(function () { $('copy').textContent = T.copy; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(done, function () {});
+    else { var r = document.createRange(); r.selectNodeContents($('link')); var s = getSelection(); s.removeAllRanges(); s.addRange(r); try { document.execCommand('copy'); done(); } catch (e) {} }
+  });
+  show('manual');
+  if (hidden) { $('secret').textContent = T.secret; show('secret'); }
+})();
+</script>
+</body>
+</html>

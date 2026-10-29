@@ -54,7 +54,7 @@ type Invite struct {
 
 // IsLink reports whether text looks like an invitation link (it may still be unreadable).
 func IsLink(text string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), linkPrefix)
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(FromWebLink(text))), linkPrefix)
 }
 
 // FormatLink writes inv as a link, in the current format.
@@ -100,7 +100,7 @@ func FormatLink(inv Invite) string {
 // ParseLink reads a link. network is this build's network: a link of another one gives
 // *OtherNetworkError, one of a newer format ErrLinkTooNew.
 func ParseLink(text, network string) (Invite, error) {
-	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(FromWebLink(text)) // the https form a messenger can open
 	if !IsLink(text) {
 		return Invite{}, ErrNotInvite
 	}

@@ -3,6 +3,7 @@
   import { derived, writable } from 'svelte/store';
   import { fly } from 'svelte/transition';
   import { App, errText, openURL } from '../api.js';
+  import { classifyLink, fromWebLink, openLinkDialog } from '../links.js';
   import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel } from '../stores/chats.js';
   import { isCallActive, startCall, peerInfo } from '../stores/call.store.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
@@ -53,8 +54,9 @@
     goTo: (id) => list?.goTo(id),
     openMenu, startReply, startEdit, showThread,
     fullTime: (ts) => new Date(ts || 0).toLocaleString(intlLocale(), { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    // a link opens in the system browser, never in this window
-    openLink: (e, href) => { e.preventDefault(); e.stopPropagation(); openURL(href); },
+    // a link opens in the system browser, never in this window; an EchoFog link (its https form
+    // too) opens here, in the open-link dialog
+    openLink: (e, href) => { e.preventDefault(); e.stopPropagation(); if (classifyLink(href)) openLinkDialog(fromWebLink(href)); else openURL(href); },
     dropDraftOf: (id) => { if (editing && editing.id === id) cancelCompose(); },
   });
 

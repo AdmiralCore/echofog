@@ -64,9 +64,15 @@
     setTimeout(() => (copied = false), 1500);
   }
 
+  let copiedWeb = false;
+  async function copyWeb() {
+    copiedWeb = await copy(st.webLink);
+    setTimeout(() => (copiedWeb = false), 1500);
+  }
+
   async function toggleQR() {
     showQR = !showQR;
-    if (showQR && st?.link) qr = await QRCode.toDataURL(st.link, { margin: 1, width: 200, color: { dark: '#000000', light: '#ffffff' } });
+    if (showQR && st?.link) qr = await QRCode.toDataURL(st.webLink || st.link, { margin: 1, width: 200, color: { dark: '#000000', light: '#ffffff' } });
   }
 
   onMount(() => {
@@ -109,6 +115,14 @@
           <button class="icon" title={$t('access.copy')} on:click={copyLink}><Icon name={copied ? 'check' : 'copy'} size={16} /></button>
           <button class="icon" class:on={showQR} title={$t('access.showQR')} on:click={toggleQR}><Icon name="qr" size={16} /></button>
         </div>
+        {#if st.webLink}
+          <div class="eyebrow">{$t('links.web')}</div>
+          <div class="copybox">
+            <span class="mono grow link">{st.webLink}</span>
+            <button class="icon" title={$t('links.copyWeb')} on:click={copyWeb}><Icon name={copiedWeb ? 'check' : 'copy'} size={16} /></button>
+          </div>
+          <p class="small faint">{$t('links.webNote')}</p>
+        {/if}
         {#if showQR && qr}<img class="qr" src={qr} alt={$t('access.qrAlt')} width="200" height="200" />{/if}
         <p class="small faint">{hidden ? $t('access.inviteNote') : $t('access.addressNote')}</p>
       {:else}

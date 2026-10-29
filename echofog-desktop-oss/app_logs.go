@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/logging"
 )
 
@@ -36,6 +37,29 @@ func (a *App) ExportLogs() (string, error) {
 	name := fmt.Sprintf("echofog-logs-%s.txt", time.Now().Format("2006-01-02-150405"))
 	path := filepath.Join(home, name)
 	if err := os.WriteFile(path, []byte(logging.Dump()), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ConnectionReport is the anonymous connection report: what the node knows about how it connects,
+// with no address, ID, link or contact in it. Nothing is sent; the user copies or saves it.
+func (a *App) ConnectionReport() (api.ConnectionReport, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.ConnectionReport{}, errNodeNotStarted
+	}
+	return nodeAPI.ConnectionReport(version)
+}
+
+// SaveConnectionReport writes the report text to a timestamped file in the home directory.
+func (a *App) SaveConnectionReport(text string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
+	path := filepath.Join(home, fmt.Sprintf("echofog-report-%s.txt", time.Now().Format("2006-01-02-150405")))
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

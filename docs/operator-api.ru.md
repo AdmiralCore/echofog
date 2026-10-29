@@ -94,7 +94,7 @@ Authorization: Bearer <токен>
 
 | Запрос | Тело | Ответ |
 |---|---|---|
-| `GET /api/v1/node` | | `{"mode", "link", "joined", "passes"}` |
+| `GET /api/v1/node` | | `{"mode", "link", "webLink", "joined", "passes"}` |
 | `GET /api/v1/passes` | | все пропуска, новые сначала |
 | `POST /api/v1/passes` | `{"label", "days", "devices", "gb"}` (всё необязательно) | новый пропуск, `201` |
 | `GET /api/v1/passes/{id}` | | один пропуск |
@@ -110,6 +110,7 @@ Authorization: Bearer <токен>
   "id": "3f9a1c07be12",
   "label": "tg:123456789",
   "link": "echofog://join?v=1&net=echofog&...",
+  "webLink": "https://admiralcore.github.io/echofog/join/#join?v=1&net=echofog&...",
   "state": "active",
   "created": 1793023500,
   "expires": 1795615500,
@@ -185,7 +186,7 @@ def paid(tg_id: int, days: int = 30) -> str:
     else:
         mine = requests.post(f"{API}/passes/{mine['id']}/extend", headers=HEAD,
                              json={"days": days}).json()
-    return mine["link"]  # это отправить пользователю
+    return mine.get("webLink") or mine["link"]  # это отправить пользователю: открывается нажатием
 ```
 
 ### Сайт с оплатой

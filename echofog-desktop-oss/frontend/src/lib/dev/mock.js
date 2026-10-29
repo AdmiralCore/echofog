@@ -405,6 +405,22 @@ const impl = {
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
   // logs: a new line every 0.9 s, levels mixed
   GetLogs: () => logsMock(),
+  ConnectionReport: () => ({
+    version: 'v0.1.0', country: 'UA', provider: 'Kyivstar',
+    text: `EchoFog connection report — no addresses, IDs, links or contacts
+app: v0.1.0  protocol: 102  os: windows/amd64
+country: UA  provider: Kyivstar
+nat: cone  port mapped: no  reachable from outside: no (nomap)
+transport: auto  QUIC (UDP) gets through here: yes
+links: 6 (quic-reality 2, quic 3, tcp 1)
+guard mode: auto, active, 2 of 3 guards up, 1 pinned relay(s)
+proxy: none  calls: auto  access: public  region-aware obfs: no
+vpn: connected, exit ok, tunnel ready  whole computer: no  kill switch: yes  blocked: no
+recent problems (the last 1 warnings and errors, cleaned):
+  12:01:03 WARN guard not reachable err=i/o timeout
+`,
+  }),
+  SaveConnectionReport: () => 'C:/Users/demo/echofog-report-mock.txt',
   GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
@@ -501,7 +517,7 @@ const impl = {
     return null;
   },
   // access: public or hidden, the invitation link, who joined with it
-  GetAccessStatus: () => ({ ...accessMock, link: accessLink(), joined: accessMock.joined.map((j) => ({ ...j })) }),
+  GetAccessStatus: () => ({ ...accessMock, link: accessLink(), webLink: 'https://admiralcore.github.io/echofog/join/#' + accessLink().replace(/^echofog:\/\//, ''), joined: accessMock.joined.map((j) => ({ ...j })) }),
   SetAccessMode: (mode) => {
     if (mode !== 'public' && mode !== 'hidden') throw new Error('access mode must be public or hidden');
     accessMock.nextMode = mode === accessMock.mode ? '' : mode;
@@ -785,6 +801,7 @@ const relayStatus = () => {
     settings: { ...s, allowedPeers: [...s.allowedPeers], relays: [...s.relays] },
     chosen: relayMock.chosen,
     link: addr ? 'echofog://relay/' + addr : '',
+    webLink: addr ? 'https://admiralcore.github.io/echofog/join/#relay/' + addr : '',
     addr,
     nat: natCode === 'symmetric' ? 'symmetric' : 'cone',
     mapped: !natCode,

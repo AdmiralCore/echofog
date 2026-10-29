@@ -1,6 +1,9 @@
 // The "open an EchoFog link" dialog.
 export default {
   en: {
+    'links.web': 'For messengers',
+    'links.webNote': 'An https link: it opens in a tap in Telegram, WhatsApp or a browser, then offers to open it in EchoFog or to download the app. The part after # never reaches the page’s server.',
+    'links.copyWeb': 'Copy the https link',
     'links.title': 'Open an EchoFog link',
     'links.open': 'Open a link',
     'links.placeholder': 'echofog://join?…, echofog://relay/…, a contact link or a group invitation',
@@ -29,6 +32,9 @@ export default {
     'links.hint': 'Ctrl+L opens this window; a link pasted anywhere outside a text field opens it too, and so does an echofog:// link clicked in a browser.',
   },
   ru: {
+    'links.web': 'Для мессенджеров',
+    'links.webNote': 'https-ссылка: открывается нажатием в Telegram, WhatsApp или браузере, а там предлагает открыть её в EchoFog или скачать приложение. Часть после # не доходит до сервера страницы.',
+    'links.copyWeb': 'Скопировать https-ссылку',
     'links.title': 'Открыть ссылку EchoFog',
     'links.open': 'Открыть ссылку',
     'links.placeholder': 'echofog://join?…, echofog://relay/…, ссылка-контакт или приглашение в группу',

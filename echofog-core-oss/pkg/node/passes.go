@@ -89,6 +89,7 @@ type PassView struct {
 	ID         string       `json:"id"`
 	Label      string       `json:"label,omitempty"`
 	Link       string       `json:"link"`
+	WebLink    string       `json:"webLink"` // the https form, which messengers make tappable
 	State      string       `json:"state"` // active, expired, used_up, revoked
 	Created    int64        `json:"created"`
 	Expires    int64        `json:"expires,omitempty"`
@@ -109,6 +110,7 @@ func (n *Node) passView(p access.Pass) PassView {
 	v := PassView{ID: p.ID, Label: p.Label, State: p.State(time.Now()), Created: p.Created, Expires: p.Expires,
 		MaxDevices: p.MaxDevices, QuotaBytes: p.QuotaBytes, UsedBytes: p.UsedBytes, Devices: []PassDevice{}}
 	v.Link, _ = n.inviteLinkWith(p.Secret)
+	v.WebLink = access.WebLink(v.Link)
 	for s, at := range p.Devices {
 		d := PassDevice{PeerID: s, JoinedAt: at}
 		if id, err := types.PeerIDFromString(s); err == nil && n.Swarm != nil {

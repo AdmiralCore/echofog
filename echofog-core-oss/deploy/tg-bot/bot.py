@@ -11,6 +11,7 @@ and in English to everybody else; TG_LANG=ru or en fixes one. The texts are in T
 See README.md next to this file.
 """
 import asyncio
+import html
 import os
 from datetime import datetime
 
@@ -34,7 +35,7 @@ TEXT = {
         "admin": "Админ: /pass ИМЯ [ДНЕЙ], /revoke ID, /list, /refund USER CHARGE",
         "active": "действует", "expired": "срок вышел", "used_up": "трафик кончился", "revoked": "отозван",
         "until": "до", "no_end": "бессрочно", "devices": "устройств {n} из {max}",
-        "how": "В EchoFog: Прокси → Конкретная нода → вставьте ссылку.",
+        "how": "Откройте ссылку: страница предложит открыть её в EchoFog или скачать приложение. Или в EchoFog: Прокси → Конкретная нода → вставьте ссылку из блока ниже.", "open": "Открыть пропуск",
         "pass_usage": "/pass ИМЯ [ДНЕЙ]", "none": "Пропусков пока нет.", "no_pass": "У вас пока нет пропуска.",
         "not_sold": "Здесь пропуска не продаются.", "invoice": "{days:g} дней, устройств: {devices}",
         "thanks": "Спасибо! ", "refund_usage": "/refund USER CHARGE (их присылает бот при каждой оплате)",
@@ -47,7 +48,7 @@ TEXT = {
         "admin": "Admin: /pass NAME [DAYS], /revoke ID, /list, /refund USER CHARGE",
         "active": "active", "expired": "expired", "used_up": "traffic used up", "revoked": "revoked",
         "until": "until", "no_end": "no end", "devices": "devices {n} of {max}",
-        "how": "In EchoFog: Proxy → Specific node → paste the link.",
+        "how": "Open the link: the page offers to open it in EchoFog or to download the app. Or in EchoFog: Proxy → Specific node → paste the link from the block below.", "open": "Open the pass",
         "pass_usage": "/pass NAME [DAYS]", "none": "No passes yet.", "no_pass": "You have no pass yet.",
         "not_sold": "Passes are not sold here.", "invoice": "{days:g} days, {devices} devices",
         "thanks": "Thank you! ", "refund_usage": "/refund USER CHARGE (the bot sends them with every payment)",
@@ -90,8 +91,10 @@ def card(user, p):
     end = p.get("expires")
     term = t(user, "until") + " " + datetime.fromtimestamp(end).strftime("%d.%m.%Y") if end else t(user, "no_end")
     devices = t(user, "devices", n=len(p["devices"]), max=p["maxDevices"])
+    web = p.get("webLink")  # an older node gives only the echofog:// link
+    opener = f"<a href=\"{html.escape(web)}\">{t(user, 'open')}</a>\n\n" if web else ""
     return (f"{p['label']}: {t(user, p['state'])}, {term}, {devices}\nID {p['id']}\n\n"
-            f"<code>{p['link']}</code>\n\n{t(user, 'how')}")
+            f"{opener}<code>{html.escape(p['link'])}</code>\n\n{t(user, 'how')}")
 
 
 def admin(m: Message):

@@ -92,7 +92,7 @@
 
   async function toggleQR() {
     showQR = !showQR;
-    if (showQR && st?.link) qr = await QRCode.toDataURL(st.link, { margin: 1, width: 180, color: { dark: '#000000', light: '#ffffff' } });
+    if (showQR && st?.link) qr = await QRCode.toDataURL(st.webLink || st.link, { margin: 1, width: 180, color: { dark: '#000000', light: '#ffffff' } });
   }
 
   const savePort = () => save({ listenPort: Math.round(Number(port) || 0) }, 'port');
@@ -146,6 +146,12 @@
             <button class="icon" title={$t('relay.copyLink')} on:click={() => copyText(st.link, 'link')}><Icon name={copied === 'link' ? 'check' : 'copy'} size={16} /></button>
             <button class="icon" class:on={showQR} title={$t('relay.showQR')} on:click={toggleQR}><Icon name="qr" size={16} /></button>
           </div>
+          {#if st.webLink}
+            <div class="copybox">
+              <span class="mono grow">{st.webLink}</span>
+              <button class="icon" title={$t('links.copyWeb')} on:click={() => copyText(st.webLink, 'web')}><Icon name={copied === 'web' ? 'check' : 'copy'} size={16} /></button>
+            </div>
+          {/if}
           {#if showQR && qr}<img class="qr" src={qr} alt={$t('relay.qrAlt')} width="180" height="180" />{/if}
           <p class="small faint">
             {st.mapped ? $t('relay.mapped') : $t('relay.public')}

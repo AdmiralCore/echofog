@@ -79,6 +79,8 @@ export function ConnectLastExit():Promise<void>;
 
 export function ConnectToLocalPeer(arg1:string):Promise<void>;
 
+export function ConnectionReport():Promise<node.ConnectionReport>;
+
 export function CreateGroup(arg1:string,arg2:string,arg3:string):Promise<node.GroupDTO>;
 
 export function DeclineFile(arg1:string):Promise<void>;
@@ -258,6 +260,8 @@ export function ReportCallMember(arg1:string,arg2:string):Promise<void>;
 export function RequestRelayChange(arg1:string):Promise<void>;
 
 export function RotateAccessSecret():Promise<string>;
+
+export function SaveConnectionReport(arg1:string):Promise<string>;
 
 export function SaveMessage(arg1:dto.SavedMessageDTO):Promise<dto.SavedMessageDTO>;
 

@@ -42,6 +42,7 @@ type geoService struct {
 type geoEntry struct {
 	CountryCode string `json:"cc,omitempty"`
 	City        string `json:"city,omitempty"`
+	Org         string `json:"org,omitempty"` // the provider (ISP) of the address, when the service names it
 	At          int64  `json:"at"`
 	Failed      bool   `json:"failed,omitempty"`
 }
@@ -51,6 +52,10 @@ func parseIPWhoIs(b []byte) (geoEntry, error) {
 		Success     bool   `json:"success"`
 		CountryCode string `json:"country_code"`
 		City        string `json:"city"`
+		Connection  struct {
+			ISP string `json:"isp"`
+			Org string `json:"org"`
+		} `json:"connection"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
 		return geoEntry{}, err
@@ -58,13 +63,18 @@ func parseIPWhoIs(b []byte) (geoEntry, error) {
 	if !r.Success || len(r.CountryCode) != 2 {
 		return geoEntry{}, errors.New("no location")
 	}
-	return geoEntry{CountryCode: strings.ToUpper(r.CountryCode), City: r.City}, nil
+	org := r.Connection.ISP
+	if org == "" {
+		org = r.Connection.Org
+	}
+	return geoEntry{CountryCode: strings.ToUpper(r.CountryCode), City: r.City, Org: org}, nil
 }
 
 func parseIPInfo(b []byte) (geoEntry, error) {
 	var r struct {
 		Country string `json:"country"`
 		City    string `json:"city"`
+		Org     string `json:"org"` // "AS12389 PJSC Rostelecom"
 		Bogon   bool   `json:"bogon"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
@@ -73,7 +83,11 @@ func parseIPInfo(b []byte) (geoEntry, error) {
 	if r.Bogon || len(r.Country) != 2 {
 		return geoEntry{}, errors.New("no location")
 	}
-	return geoEntry{CountryCode: strings.ToUpper(r.Country), City: r.City}, nil
+	org := r.Org
+	if as, name, ok := strings.Cut(org, " "); ok && strings.HasPrefix(as, "AS") {
+		org = name
+	}
+	return geoEntry{CountryCode: strings.ToUpper(r.Country), City: r.City, Org: org}, nil
 }
 
 // geoLocator looks addresses up once each and keeps the answers.

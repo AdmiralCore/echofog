@@ -94,7 +94,7 @@ Authorization: Bearer <token>
 
 | Request | Body | Answer |
 |---|---|---|
-| `GET /api/v1/node` | | `{"mode", "link", "joined", "passes"}` |
+| `GET /api/v1/node` | | `{"mode", "link", "webLink", "joined", "passes"}` |
 | `GET /api/v1/passes` | | every pass, newest first |
 | `POST /api/v1/passes` | `{"label", "days", "devices", "gb"}` (all optional) | the new pass, `201` |
 | `GET /api/v1/passes/{id}` | | one pass |
@@ -110,6 +110,7 @@ A pass looks like this:
   "id": "3f9a1c07be12",
   "label": "tg:123456789",
   "link": "echofog://join?v=1&net=echofog&...",
+  "webLink": "https://admiralcore.github.io/echofog/join/#join?v=1&net=echofog&...",
   "state": "active",
   "created": 1793023500,
   "expires": 1795615500,
@@ -181,7 +182,7 @@ def paid(tg_id: int, days: int = 30) -> str:
     else:
         mine = requests.post(f"{API}/passes/{mine['id']}/extend", headers=HEAD,
                              json={"days": days}).json()
-    return mine["link"]  # send this to the user
+    return mine.get("webLink") or mine["link"]  # send this to the user: it opens in a tap
 ```
 
 ### A website with a checkout

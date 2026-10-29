@@ -352,3 +352,6 @@ func (f *fanout) WithGroup(name string) slog.Handler {
 	}
 	return &fanout{level: f.level, handlers: hs}
 }
+
+// MaskIPs replaces the IP addresses in s with "[ip]", as the captured log does.
+func MaskIPs(s string) string { return maskIPs(s) }

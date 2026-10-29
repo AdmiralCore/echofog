@@ -46,12 +46,14 @@ type RelayStatus struct {
 	// every desktop a public relay.
 	Chosen bool `json:"chosen"`
 	// Link is the relay link to give to others, empty when they could not reach this node.
-	Link   string `json:"link"`
-	Addr   string `json:"addr"`
-	NAT    string `json:"nat"`
-	Mapped bool   `json:"mapped"`
-	Reason string `json:"reason"` // why there is no link (English; the UI uses Code)
-	Code   string `json:"code"`   // reason code the UI translates: connecting|nomap|cgnat|symmetric
+	Link string `json:"link"`
+	// WebLink is the relay link as an https page that messengers make tappable.
+	WebLink string `json:"webLink"`
+	Addr    string `json:"addr"`
+	NAT     string `json:"nat"`
+	Mapped  bool   `json:"mapped"`
+	Reason  string `json:"reason"` // why there is no link (English; the UI uses Code)
+	Code    string `json:"code"`   // reason code the UI translates: connecting|nomap|cgnat|symmetric
 	// RestartNeeded: the listen port was changed and is not in use yet.
 	RestartNeeded bool `json:"restartNeeded"`
 
@@ -82,7 +84,7 @@ func ParseRelayAddrSNI(s string) (addr string, id types.PeerID, sni string, err 
 // (bootstrap nodes, preferred relays) must keep both, or its entries are dialed over noise.
 func ParseRelayAddrInfo(s string) (network.AddrInfo, error) {
 	var zero network.AddrInfo
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(access.FromWebLink(s)) // the https form a messenger can open
 	if len(s) >= len(RelayLinkPrefix) && strings.EqualFold(s[:len(RelayLinkPrefix)], RelayLinkPrefix) {
 		s = s[len(RelayLinkPrefix):]
 	}
@@ -272,6 +274,7 @@ func (n *NodeApi) GetRelayStatus() (RelayStatus, error) {
 	st.Addr, st.NAT, st.Mapped, st.Reason, st.Code = reach.Addr, reach.NAT, reach.Mapped, reach.Reason, reach.Code
 	if st.Addr != "" {
 		st.Link = MakeRelayLink(st.Addr)
+		st.WebLink = access.WebLink(st.Link)
 	}
 	if rs := n.node.RelayServer; rs != nil {
 		s := rs.Stats()

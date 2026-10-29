@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { App, errText, copy } from '../api.js';
   import Icon from '../components/ui/Icon.svelte';
+  import ReportDialog from '../components/ReportDialog.svelte';
   import { t, lang, intlLocale } from '../i18n/index.js';
 
   let entries = [];
@@ -106,6 +107,7 @@
     timer = setInterval(() => { if (autoRefresh) load(); }, 2000);
   });
   onDestroy(() => clearInterval(timer));
+  let reporting = false;
 </script>
 
 <div class="logs">
@@ -131,6 +133,7 @@
       <button class="icon" title={$t('common.refresh')} aria-label={$t('common.refresh')} on:click={load}><Icon name="refresh" size={17} /></button>
       <button class="with-icon small" on:click={copyAll}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? $t('common.copied') : $t('logs.copyAll')}</button>
       <button class="with-icon small" on:click={saveFile}><Icon name="download" size={14} /> {$t('common.save')}</button>
+      <button class="with-icon small primary" on:click={() => (reporting = true)}><Icon name="flag" size={14} /> {$t('report.open')}</button>
     </div>
   </div>
 
@@ -166,6 +169,8 @@
     {/each}
   </div>
 </div>
+
+{#if reporting}<ReportDialog on:close={() => (reporting = false)} />{/if}
 
 <style>
   .logs { display: flex; flex-direction: column; height: 100%; gap: 12px; padding: clamp(18px, 4vw, 36px) clamp(16px, 4vw, 40px) 20px; animation: fade-up 0.35s var(--ease); }
