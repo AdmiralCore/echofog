@@ -50,8 +50,16 @@ export function ChatAttachments(arg1) {
   return window['go']['main']['App']['ChatAttachments'](arg1);
 }
 
+export function ChatCategoriesSetup(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatCategoriesSetup'](arg1, arg2, arg3);
+}
+
 export function ChatChannelMove(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatChannelMove'](arg1, arg2, arg3);
+}
+
+export function ChatChannelPlace(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatChannelPlace'](arg1, arg2, arg3);
 }
 
 export function ChatChannelRemove(arg1, arg2) {
@@ -356,6 +364,18 @@ export function GetVault() {
 
 export function GetVoucherEarnings() {
   return window['go']['main']['App']['GetVoucherEarnings']();
+}
+
+export function GroupInviteCreate(arg1, arg2) {
+  return window['go']['main']['App']['GroupInviteCreate'](arg1, arg2);
+}
+
+export function GroupInviteRevoke(arg1, arg2) {
+  return window['go']['main']['App']['GroupInviteRevoke'](arg1, arg2);
+}
+
+export function GroupInvites(arg1) {
+  return window['go']['main']['App']['GroupInvites'](arg1);
 }
 
 export function GroupRoleRemove(arg1, arg2) {

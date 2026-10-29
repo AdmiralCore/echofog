@@ -31,7 +31,11 @@ export function CancelFile(arg1:string):Promise<void>;
 
 export function ChatAttachments(arg1:node.ChatRef):Promise<node.ChatAttachments>;
 
+export function ChatCategoriesSetup(arg1:node.ChatRef,arg2:string,arg3:string):Promise<Array<string>>;
+
 export function ChatChannelMove(arg1:node.ChatRef,arg2:string,arg3:number):Promise<void>;
+
+export function ChatChannelPlace(arg1:node.ChatRef,arg2:string,arg3:string):Promise<void>;
 
 export function ChatChannelRemove(arg1:node.ChatRef,arg2:string):Promise<void>;
 
@@ -184,6 +188,12 @@ export function GetVPNStatus():Promise<node.VPNStatus>;
 export function GetVault():Promise<dto.VaultDTO>;
 
 export function GetVoucherEarnings():Promise<dto.VoucherEarningsDTO>;
+
+export function GroupInviteCreate(arg1:string,arg2:node.GroupInviteSpec):Promise<node.GroupInviteDTO>;
+
+export function GroupInviteRevoke(arg1:string,arg2:string):Promise<void>;
+
+export function GroupInvites(arg1:string):Promise<Array<node.GroupInviteDTO>>;
 
 export function GroupRoleRemove(arg1:string,arg2:string):Promise<void>;
 

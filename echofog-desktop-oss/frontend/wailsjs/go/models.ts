@@ -190,6 +190,22 @@ export namespace convlog {
 		}
 	}
 	
+	export class Override {
+	    role: string;
+	    allow?: number;
+	    deny?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Override(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.allow = source["allow"];
+	        this.deny = source["deny"];
+	    }
+	}
 
 }
 
@@ -756,9 +772,11 @@ export namespace node {
 	    category?: boolean;
 	    slowSecs?: number;
 	    open?: string;
+	    overrides?: convlog.Override[];
 	    unread: number;
 	    lastTs: number;
 	    canSend: boolean;
+	    canJoin: boolean;
 	    call?: GroupCall;
 	
 	    static createFrom(source: any = {}) {
@@ -777,9 +795,11 @@ export namespace node {
 	        this.category = source["category"];
 	        this.slowSecs = source["slowSecs"];
 	        this.open = source["open"];
+	        this.overrides = this.convertValues(source["overrides"], convlog.Override);
 	        this.unread = source["unread"];
 	        this.lastTs = source["lastTs"];
 	        this.canSend = source["canSend"];
+	        this.canJoin = source["canJoin"];
 	        this.call = this.convertValues(source["call"], GroupCall);
 	    }
 	
@@ -812,6 +832,7 @@ export namespace node {
 	    category: boolean;
 	    slowSecs: number;
 	    open: string;
+	    overrides: convlog.Override[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ChannelSpec(source);
@@ -829,7 +850,26 @@ export namespace node {
 	        this.category = source["category"];
 	        this.slowSecs = source["slowSecs"];
 	        this.open = source["open"];
+	        this.overrides = this.convertValues(source["overrides"], convlog.Override);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ChatLink {
 	    url: string;
@@ -1189,6 +1229,58 @@ export namespace node {
 	        this.th = source["th"];
 	        this.channel = source["channel"];
 	        this.thread = source["thread"];
+	    }
+	}
+	export class GroupInviteDTO {
+	    n: string;
+	    label?: string;
+	    exp: number;
+	    uses?: number;
+	    used: number;
+	    role?: string;
+	    issuer: string;
+	    mine: boolean;
+	    state: string;
+	    link?: string;
+	    webLink?: string;
+	    canRevoke: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupInviteDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.n = source["n"];
+	        this.label = source["label"];
+	        this.exp = source["exp"];
+	        this.uses = source["uses"];
+	        this.used = source["used"];
+	        this.role = source["role"];
+	        this.issuer = source["issuer"];
+	        this.mine = source["mine"];
+	        this.state = source["state"];
+	        this.link = source["link"];
+	        this.webLink = source["webLink"];
+	        this.canRevoke = source["canRevoke"];
+	    }
+	}
+	export class GroupInviteSpec {
+	    label: string;
+	    hours: number;
+	    uses: number;
+	    role: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupInviteSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.hours = source["hours"];
+	        this.uses = source["uses"];
+	        this.role = source["role"];
 	    }
 	}
 	export class GroupMemberDTO {
