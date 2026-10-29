@@ -96,6 +96,37 @@ func (m *CallManager) authorityLocked(room *ActiveRoomState, sender types.PeerID
 	return bytes.Compare(sender[:], room.Coordinator[:]) < 0
 }
 
+// knownInCallLocked reports whether the call knows id as one of its participants: the coordinator
+// (present or the one before), a connected member, or a member or standby the voice tree names,
+// and not banned from the call. Only such a peer may claim the call's lead: a signature proves who
+// sent a claim, not that they belong to the call, and anyone who learnt the call's ID could
+// otherwise announce a higher epoch and take the tree over.
+func (m *CallManager) knownInCallLocked(room *ActiveRoomState, id types.PeerID) bool {
+	if room.banned[id] {
+		return false
+	}
+	if id == room.Coordinator || (id == room.formerCoordinator && id != (types.PeerID{})) {
+		return true
+	}
+	if _, ok := room.ConnectedPeers[id]; ok {
+		return true
+	}
+	if mf := room.VoiceManifest; mf != nil {
+		if id == mf.Coordinator {
+			return true
+		}
+		for _, s := range mf.StandbyCoordinators {
+			if s == id {
+				return true
+			}
+		}
+		if _, ok := mf.ParentMap[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope, from types.PeerID) bool {
 	now := time.Now()
 	switch env.Action {
@@ -107,6 +138,9 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 		if manifest.Coordinator != env.Sender || manifest.CallID != room.CallID {
 			return m.rejectLocked(room, env, "manifest not signed by its coordinator", true)
 		}
+		if !m.knownInCallLocked(room, env.Sender) {
+			return m.rejectLocked(room, env, "manifest from outside the call", true)
+		}
 		if !m.authorityLocked(room, env.Sender, manifest.Epoch) {
 			return m.rejectLocked(room, env, "stale epoch", false)
 		}
@@ -115,6 +149,9 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 
 	case signaling.ActionCoordinatorHeartbeat:
 		if env.Sender != room.Coordinator {
+			if !m.knownInCallLocked(room, env.Sender) {
+				return m.rejectLocked(room, env, "heartbeat from outside the call", true)
+			}
 			switch {
 			case m.aloneLocked(room):
 				// we took over while cut off and nobody followed: the sender has the call
@@ -140,6 +177,9 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 		var leader types.PeerID
 		if decodePayload(env.Payload, &leader) != nil || leader != env.Sender {
 			return m.rejectLocked(room, env, "election not announced by its winner", true) // only the winner may announce its own election
+		}
+		if !m.knownInCallLocked(room, leader) {
+			return m.rejectLocked(room, env, "election won outside the call", true)
 		}
 		if !m.authorityLocked(room, leader, env.Epoch) {
 			return m.rejectLocked(room, env, "stale epoch", false)

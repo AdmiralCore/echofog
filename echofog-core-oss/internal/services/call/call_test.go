@@ -577,6 +577,21 @@ func TestRoom_RejectsForgedAndUnauthorizedSignals(t *testing.T) {
 	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
 	s, _ = victim.cm.Snapshot()
 	assert.Equal(t, coord.id, s.Coordinator)
+
+	// 5. Someone outside the call who knows its ID announces their own election, with a far
+	// higher epoch, and a heartbeat and a manifest as its coordinator: a valid signature, but not a
+	// participant, so the call does not follow.
+	stranger := newTestSigner()
+	raw, _ = signaling.EncodeSignedSignal(stranger, signaling.ActionCoordinatorElection, "room-1", stranger.id(), 5000, stranger.id())
+	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
+	raw, _ = signaling.EncodeSignedSignal(stranger, signaling.ActionCoordinatorHeartbeat, "room-1", stranger.id(), 5001, signaling.CoordinatorHeartbeatPayload{})
+	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
+	hijack := tree.BuildVoiceTopology("room-1", 5002, stranger.id(), nil)
+	raw, _ = signaling.EncodeSignedSignal(stranger, signaling.ActionTreeManifest, "room-1", stranger.id(), 5002, hijack)
+	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
+	s, _ = victim.cm.Snapshot()
+	assert.Equal(t, coord.id, s.Coordinator, "an outsider cannot take the call over")
+	assert.Less(t, s.Epoch, uint64(5000))
 	_ = key
 }
 
