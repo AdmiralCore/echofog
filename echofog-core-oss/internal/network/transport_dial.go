@@ -57,6 +57,9 @@ func (q *QuicTransport) DialEarly(ctx context.Context, addr string) error {
 	if addr == q.addrStr {
 		return errSelfDial
 	}
+	if DialRefused(ctx, addr) {
+		return ErrDialRefused
+	}
 
 	// a pool link is a connection of its own: it must not be merged into (or swallow) an ordinary
 	// dial to the same address, which would replace the connection the pool sits beside

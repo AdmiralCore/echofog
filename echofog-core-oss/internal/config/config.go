@@ -69,6 +69,10 @@ const (
 	CallDirect = "direct"
 	CallRelay  = "relay"
 
+	// network.anonymous values
+	AnonTor   = "tor"
+	AnonRelay = "relay"
+
 	// anti_dpi.guard_mode values
 	GuardAuto = "auto"
 	GuardOn   = "on"
@@ -183,6 +187,16 @@ type NetworkConfig struct {
 	// with the proxy or guards on: the other side sees this computer's address, and calls stay fast)
 	// or "relay" (never a direct link of its own: only a relay sees the address).
 	CallRoute string `json:"call_route,omitempty"`
+	// Anonymous hides this computer's address. "tor": everything goes through Proxy, which must be
+	// set, so nobody in the network sees the address. "relay": the node connects to nothing but the
+	// relays in anti_dpi.pinned_guards, which alone see it. Either way calls go through relays,
+	// nothing punches holes, maps ports or asks STUN, and the app's own lookups (updates, location,
+	// the TON wallet) go through the proxy or not at all. Set but not usable (no proxy, no pinned
+	// relay), the node connects nowhere rather than in the open. Empty: off.
+	Anonymous string `json:"anonymous,omitempty"`
+	// AnonWalletDirect lets the TON wallet reach its servers directly in anonymous mode (they then
+	// see this computer's address); off, the wallet stays offline there.
+	AnonWalletDirect bool `json:"anon_wallet_direct,omitempty"`
 
 	// STUNServers are asked which public address they see us at. Empty uses a built-in list of
 	// servers from unrelated operators; replace it for networks where those are blocked.

@@ -9,6 +9,7 @@ import (
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
@@ -81,7 +82,17 @@ type guardSet struct {
 	mu     sync.Mutex
 	list   []*guard
 	loaded bool
+	// onlyPinned: anonymous mode through the user's own relay. The pinned relays are the only
+	// guards, every other peer counts as across the border (met through them, never linked to),
+	// and no other guard is taken, since each one would see this computer's address.
+	onlyPinned atomic.Bool
 }
+
+// SetOnlyPinnedGuards turns anonymous mode through the user's own relay on or off.
+func (s *Swarm) SetOnlyPinnedGuards(on bool) { s.guards.onlyPinned.Store(on) }
+
+// OnlyPinnedGuards reports whether the node goes in through its pinned relays alone.
+func (s *Swarm) OnlyPinnedGuards() bool { return s != nil && s.guards.onlyPinned.Load() }
 
 // GuardModeActive reports whether this node holds guards: it is not in the server role and
 // anti_dpi.guard_mode is "on", or "auto" with obfuscation on (the default) and the node not placed in
@@ -89,6 +100,9 @@ type guardSet struct {
 func (s *Swarm) GuardModeActive() bool {
 	if s == nil || s.cfg == nil || s.cfg.IsServer() {
 		return false
+	}
+	if s.guards.onlyPinned.Load() {
+		return true
 	}
 	switch s.cfg.AntiDPI.GuardMode {
 	case config.GuardOff:
@@ -316,6 +330,9 @@ func (s *Swarm) planGuards(now time.Time, cands, pinned []guardCandidate) []*gua
 	for _, g := range s.guards.list {
 		g.pinned = pinnedSet[g.id] // re-derived from config each round: unpinning lets it rotate again
 		switch {
+		case !g.pinned && s.guards.onlyPinned.Load():
+			changed, dropped[g.id] = true, true // anonymous through the own relay: no other guard
+			continue
 		case g.pinned:
 			if up(g) { // always kept: the user chose this relay as the way in
 				g.lastOK, g.fails = now, 0
@@ -351,6 +368,10 @@ func (s *Swarm) planGuards(now time.Time, cands, pinned []guardCandidate) []*gua
 		life := guardLifeMin + time.Duration(rand.Int64N(int64(guardLifeSpan)))
 		s.guards.list = append(s.guards.list, &guard{id: c.id, addr: c.addr, added: now, expires: now.Add(life), lastOK: now, pinned: true})
 		changed = true
+	}
+
+	if s.guards.onlyPinned.Load() {
+		cands = nil // the pinned relays and nothing else
 	}
 
 	healthy := func() int {
@@ -534,6 +555,15 @@ var ErrUserLinkViaRelay = errors.New("swarm: a user's node across the border is 
 // With no address known the peer counts as across the border: unknown is across. The traffic to
 // such a peer goes through relays, in the first place the node's guards.
 func (s *Swarm) UserLinkViaRelay(id types.PeerID, addr string) bool {
+	if s.guards.onlyPinned.Load() {
+		// anonymous through the own relay: every peer but the relay is met at it, the ones the
+		// user listed too; only a peer on the local network is linked to directly
+		if s.IsGuard(id) {
+			return false
+		}
+		info := network.ParseAddrInfo(addr)
+		return info.Addr == "" || !onLocalNetwork(info.Addr)
+	}
 	proxied := network.OutboundProxy() != ""
 	if !(s.GuardModeActive() || proxied) || s.isExplicitPeer(id) || s.IsGuard(id) {
 		return false

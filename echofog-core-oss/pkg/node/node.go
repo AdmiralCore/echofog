@@ -427,6 +427,7 @@ func (n *Node) Start() (err error) {
 	if err := n.applyProxy(); err != nil {
 		return fmt.Errorf("network.proxy: %w", err)
 	}
+	n.applyAnonymity()
 
 	n.Dispatcher = dispatcher.NewDispatcher(n.Ctx)
 	n.Dispatcher.SetLogger(n.Logger)
@@ -520,6 +521,7 @@ func (n *Node) Start() (err error) {
 
 	n.Swarm = swarm.NewSwarm(n.Ctx, n.Net, n.ID, n.Dispatcher, n.identity, n.Net.ConnChan(), n.Storage, n.Cfg)
 	n.Swarm.SetLogger(n.Logger)
+	n.Swarm.SetOnlyPinnedGuards(n.AnonMode() == config.AnonRelay)
 	n.Swarm.SetPadsTunnels(n.announcedCaps().Has(handshake.CapTunnelPadding))
 	if n.Cfg.AntiDPI.TLSServerName != "" {
 		n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)

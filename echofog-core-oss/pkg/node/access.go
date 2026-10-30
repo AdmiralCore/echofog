@@ -398,7 +398,7 @@ func (n *Node) ForgetInvite(id types.PeerID) error {
 // admitPunch decides whether to answer a hole punch request: a hidden node answers (and so gives
 // out its addresses) only to the peers it lets in.
 func (n *Node) admitPunch(from types.PeerID, ticket []byte) bool {
-	if n.ProxyOn() {
+	if n.ProxyOn() || n.AnonMode() != "" {
 		return n.admitPunchBehindProxy(from)
 	}
 	if n.Access == nil || !n.Access.Enabled() {

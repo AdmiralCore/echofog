@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/wallet/tonwallet"
 
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
@@ -50,6 +51,8 @@ type NodeApi struct {
 	nextAccessMode   string   // access mode saved for the next start (guarded by settingsMu)
 	nextProxy        *string  // proxy saved for the next start, nil: not changed (guarded by settingsMu)
 	nextCallRoute    string   // call route saved for the next start (guarded by settingsMu)
+	nextAnon         *string  // anonymous mode saved for the next start, nil: not changed (guarded by settingsMu)
+	nextAnonWallet   *bool    // the wallet allowed out in anonymous mode, saved (guarded by settingsMu)
 
 	Logger *slog.Logger
 }
@@ -65,6 +68,7 @@ func NewNodeApi(node *node.Node) *NodeApi {
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}
 	api.tun.killSwitch.Store(saved.KillSwitch == nil || *saved.KillSwitch)
+	tonwallet.SetHTTPClient(api.OwnHTTPClient) // the wallet's lookups go where the app's own do
 	// the conversation logs take chat traffic from the very first message on
 	node.OnMessengerReady(func() { _, _ = api.convsFacade() })
 	return api

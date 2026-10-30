@@ -95,7 +95,7 @@ type geoLocator struct {
 	mu       sync.Mutex
 	inFlight map[string]bool
 	services []geoService
-	client   func() *http.Client // through the exit when connected, else direct
+	client   func() *http.Client // NodeApi.OwnHTTPClient: through Tor or the exit, or nil (none allowed)
 }
 
 func loadGeoCache(st storage.Storage) map[string]geoEntry {
@@ -175,7 +175,11 @@ func (g *geoLocator) lookup(ctx context.Context, ip string) (geoEntry, error) {
 			return geoEntry{}, err
 		}
 		req.Header.Set("Accept", "application/json")
-		resp, err := g.client().Do(req)
+		c := g.client()
+		if c == nil {
+			return geoEntry{}, errors.New("anonymous mode: no lookup without the proxy or the VPN")
+		}
+		resp, err := c.Do(req)
 		if err != nil {
 			last = err
 			continue
@@ -240,24 +244,9 @@ func (g *geoLocator) refresh(st storage.Storage, addrs []string, done func()) {
 	}()
 }
 
-// geoClient is the HTTP client for lookups: through the running proxy, so the request leaves
-// from the exit, or the normal one when not connected.
-func (n *NodeApi) geoClient() *http.Client {
-	n.vpn.mu.Lock()
-	srv := n.vpn.server
-	n.vpn.mu.Unlock()
-	if srv != nil {
-		if a := srv.Addr(); a != nil {
-			proxy := &url.URL{Scheme: "socks5", Host: a.String()}
-			return &http.Client{Timeout: geoTimeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
-		}
-	}
-	return &http.Client{Timeout: geoTimeout}
-}
-
 func (n *NodeApi) geo() *geoLocator {
 	n.geoOnce.Do(func() {
-		n.geoLoc = &geoLocator{inFlight: map[string]bool{}, services: geoServices, client: n.geoClient}
+		n.geoLoc = &geoLocator{inFlight: map[string]bool{}, services: geoServices, client: n.OwnHTTPClient}
 	})
 	return n.geoLoc
 }

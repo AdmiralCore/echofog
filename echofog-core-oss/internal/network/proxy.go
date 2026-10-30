@@ -114,6 +114,9 @@ func localNetAddr(addr string) bool {
 // dialTCPOut opens the TCP connection of an outbound dial: through the proxy when Proxied, else
 // pinned to the real network (DirectDialer).
 func dialTCPOut(ctx context.Context, addr string) (net.Conn, error) {
+	if DialRefused(ctx, addr) {
+		return nil, ErrDialRefused
+	}
 	if !Proxied(ctx, addr) {
 		return DirectDialer(0).DialContext(ctx, "tcp", addr)
 	}

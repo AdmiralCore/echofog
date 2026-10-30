@@ -188,6 +188,9 @@ func (s *Swarm) acrossBorder(addr string) bool {
 	if onLocalNetwork(addr) {
 		return false
 	}
+	if s.guards.onlyPinned.Load() {
+		return true // anonymous through the own relay: every peer is met at it
+	}
 	s.peerSNIMu.RLock()
 	fn := s.sameRegion
 	s.peerSNIMu.RUnlock()

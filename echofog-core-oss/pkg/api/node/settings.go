@@ -71,6 +71,11 @@ type persistedSettings struct {
 	ProxySet   bool   `json:"proxySet,omitempty"`
 	Proxy      string `json:"proxy,omitempty"`
 	CallRoute  string `json:"callRoute,omitempty"`
+	// Anonymous is the anonymous mode once the user set it from the app (AnonSet): "tor", "relay"
+	// or "" (off); AnonWalletDirect lets the TON wallet out while it is on (see config.NetworkConfig).
+	AnonSet          bool   `json:"anonSet,omitempty"`
+	Anonymous        string `json:"anonymous,omitempty"`
+	AnonWalletDirect bool   `json:"anonWalletDirect,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
@@ -100,6 +105,14 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 	if p.ProxySet {
 		if a, err := network.NormalizeProxyAddr(p.Proxy); err == nil {
 			c.Network.Proxy = a
+		}
+	}
+	if p.AnonSet {
+		switch p.Anonymous {
+		case "", config.AnonTor, config.AnonRelay:
+			c.Network.Anonymous, c.Network.AnonWalletDirect = p.Anonymous, p.AnonWalletDirect
+		default:
+			c.Network.Anonymous = config.AnonRelay // a hand edit gone wrong: hide rather than show
 		}
 	}
 	if r, err := normalizeCallRoute(p.CallRoute); err == nil && p.CallRoute != "" {

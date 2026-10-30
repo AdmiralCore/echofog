@@ -37,6 +37,9 @@ func (n *Node) CallRoute() string {
 	if n.Cfg == nil {
 		return config.CallAuto
 	}
+	if n.AnonMode() != "" {
+		return config.CallRelay // anonymous: a direct call would show the address
+	}
 	switch r := n.Cfg.Network.CallRoute; r {
 	case config.CallDirect, config.CallRelay:
 		return r
@@ -50,6 +53,9 @@ func (n *Node) CallRoute() string {
 // natShowsAddr reports whether the NAT services may run: STUN, port mapping and hole punching all
 // show this computer's address. Behind a proxy they run only for direct calls.
 func (n *Node) natShowsAddr() bool {
+	if n.AnonMode() != "" {
+		return false
+	}
 	return !n.ProxyOn() || n.CallRoute() == config.CallDirect
 }
 
@@ -81,5 +87,5 @@ func (n *Node) connectForCall(ctx context.Context, peer types.PeerID) error {
 // gives out this computer's addresses, so only a contact calling while calls are set to direct
 // gets one.
 func (n *Node) admitPunchBehindProxy(from types.PeerID) bool {
-	return n.CallRoute() == config.CallDirect && n.IsContact(from)
+	return n.AnonMode() == "" && n.CallRoute() == config.CallDirect && n.IsContact(from)
 }

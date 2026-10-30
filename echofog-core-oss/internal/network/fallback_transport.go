@@ -304,6 +304,9 @@ func (f *FallbackTransport) DialEarly(ctx context.Context, addr string) error {
 	if f.noDial.Load() {
 		return ErrNoDial
 	}
+	if DialRefused(ctx, addr) {
+		return ErrDialRefused
+	}
 	if Proxied(ctx, addr) {
 		// a proxy (Tor) carries TCP only, and a QUIC dial beside it would show our address
 		if f.TCP == nil {
