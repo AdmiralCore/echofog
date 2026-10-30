@@ -187,6 +187,40 @@ func (m *CallManager) MediaStats() media.DispatcherStats {
 	return media.DispatcherStats{}
 }
 
+// StreamDiag is what one stream does on this node now, for the stats a viewer or a broadcaster
+// opens on its tile. Counters are totals; the app turns them into rates.
+type StreamDiag struct {
+	media.StreamCounters
+	Own             bool   // this node broadcasts it
+	SendKbps        int    // own stream: the cap the rate control gives the encoder now
+	VideoSent       uint64 // video fragments the outbox sent, all streams together
+	VideoDropped    uint64 // ... it dropped because a peer's queue was full
+	VideoFailed     uint64 // ... whose send failed
+	KeyframesServed uint64 // keyframe requests served as a broadcaster
+}
+
+// StreamDiag returns the counters of a stream in the active call (false: no call).
+func (m *CallManager) StreamDiag(streamID string) (StreamDiag, bool) {
+	m.mu.RLock()
+	room := m.activeRoom
+	if room == nil || room.Dispatcher == nil {
+		m.mu.RUnlock()
+		return StreamDiag{}, false
+	}
+	d := room.Dispatcher
+	_, own := room.localStreams[streamID]
+	kbps := int(room.sendRate.kbps)
+	m.mu.RUnlock()
+	st := d.Stats()
+	out := StreamDiag{StreamCounters: d.StreamStats()[streamID], Own: own,
+		VideoSent: st.Outbox.Sent[media.ClassVideo], VideoDropped: st.Outbox.Dropped[media.ClassVideo],
+		VideoFailed: st.Outbox.Failed[media.ClassVideo], KeyframesServed: m.keyframesServed.Load()}
+	if own {
+		out.SendKbps = kbps
+	}
+	return out, true
+}
+
 // KeyframesServed counts keyframe requests that reached this node as a broadcaster.
 func (m *CallManager) KeyframesServed() uint64 { return m.keyframesServed.Load() }
 

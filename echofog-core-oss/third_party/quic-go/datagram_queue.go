@@ -3,16 +3,26 @@ package quic
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/apernet/quic-go/internal/utils"
 	"github.com/apernet/quic-go/internal/utils/ringbuffer"
 	"github.com/apernet/quic-go/internal/wire"
 )
 
+// EchoFog: a 1080p60 stream is over a thousand datagrams a second and a keyframe arrives as a
+// burst of hundreds, so the upstream depths (32 and 128) threw media away whenever the reader
+// paused for a moment. Every datagram the receive queue could not take is counted.
 const (
-	maxDatagramSendQueueLen = 32
-	maxDatagramRcvQueueLen  = 128
+	maxDatagramSendQueueLen = 64
+	maxDatagramRcvQueueLen  = 2048
 )
+
+var discardedDatagrams atomic.Uint64
+
+// DiscardedDatagrams counts received DATAGRAM frames dropped because the receive queue was full,
+// on every connection of this process.
+func DiscardedDatagrams() uint64 { return discardedDatagrams.Load() }
 
 type datagramQueue struct {
 	sendMx    sync.Mutex
@@ -104,6 +114,9 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 		}
 	}
 	h.rcvMx.Unlock()
+	if !queued {
+		discardedDatagrams.Add(1)
+	}
 	if !queued && h.logger.Debug() {
 		h.logger.Debugf("Discarding received DATAGRAM frame (%d bytes payload)", len(f.Data))
 	}

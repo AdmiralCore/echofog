@@ -439,6 +439,39 @@ func (n *NodeApi) WatchStream(streamID string) error {
 	return n.node.CallManager.WatchStream(streamID)
 }
 
+// StreamStatsDTO is what one stream of the active call does on this node: totals since the call
+// began, which the app turns into rates for the stats on a stream's tile.
+type StreamStatsDTO struct {
+	Own             bool   `json:"own"`             // this node broadcasts it
+	UnitsSent       uint64 `json:"unitsSent"`       // own stream: video packets broadcast
+	Delivered       uint64 `json:"delivered"`       // watched stream: video packets that arrived and were played
+	Lost            uint64 `json:"lost"`            // gaps no resend filled (each one asks for a keyframe)
+	Nacked          uint64 `json:"nacked"`          // packets asked to be sent again
+	Retransmitted   uint64 `json:"retransmitted"`   // packets this node sent again to the ones below it
+	SendKbps        int    `json:"sendKbps"`        // own stream: what the rate control lets the encoder send
+	VideoSent       uint64 `json:"videoSent"`       // video fragments sent to peers, all streams
+	VideoDropped    uint64 `json:"videoDropped"`    // ... dropped by a full queue toward a peer
+	VideoFailed     uint64 `json:"videoFailed"`     // ... whose send failed
+	KeyframesServed uint64 `json:"keyframesServed"` // keyframe requests served as a broadcaster
+	NetDroppedOut   uint64 `json:"netDroppedOut"`   // media the transport could not send (full queue)
+	NetDroppedIn    uint64 `json:"netDroppedIn"`    // media the transport received but had no room for
+}
+
+// CallStreamStats returns the counters of one stream of the active call.
+func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
+	if n.node == nil || n.node.CallManager == nil {
+		return StreamStatsDTO{}, errors.New("call manager not initialized")
+	}
+	d, ok := n.node.CallManager.StreamDiag(streamID)
+	if !ok {
+		return StreamStatsDTO{}, errors.New("not in a call")
+	}
+	out, in := network.DatagramDrops()
+	return StreamStatsDTO{Own: d.Own, UnitsSent: d.UnitsSent, Delivered: d.Delivered, Lost: d.Lost, Nacked: d.Nacked,
+		Retransmitted: d.Retransmitted, SendKbps: d.SendKbps, VideoSent: d.VideoSent, VideoDropped: d.VideoDropped,
+		VideoFailed: d.VideoFailed, KeyframesServed: d.KeyframesServed, NetDroppedOut: out, NetDroppedIn: in}, nil
+}
+
 // UnwatchStream cancels subscription to another peer's stream.
 func (n *NodeApi) UnwatchStream(streamID string) error {
 	if n.node == nil || n.node.CallManager == nil {
