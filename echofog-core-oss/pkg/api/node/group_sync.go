@@ -1295,17 +1295,27 @@ func (f *groupsFacade) admitLocked(groupID string, origin types.PeerID, pubHex s
 	f.paced[k] = f.clock()
 	// the newcomer's membership on the log, written by whoever may let members in
 	join := memberBody(convlog.MemberJoin, pub, "")
+	giveRole := ""
 	if via != "" && f.inviteState != nil {
 		if st, ok := f.inviteState(groupID, via); ok {
 			join.Via = st.N // one of the invitation's uses, counted on the log
-			if st.Role != "" {
-				// the role the invitation gives, from whoever lets the newcomer in
-				target, role := origin.String(), st.Role
-				after = append(after, func() { _ = f.SetRole(groupID, target, role) })
+			// the role the invitation gives, from whoever lets the newcomer in: here at once, so
+			// the member list sent below has it
+			if st.Role != "" && f.mgr.ApplyRole(groupID, f.selfID, origin, st.Role) == nil {
+				giveRole = st.Role
+				_ = f.persist(groupID)
 			}
 		}
 	}
 	after = append(after, func() { f.memberChange(groupID, join) })
+	if giveRole != "" {
+		// and on the log after the joining, so the log has them in when the role comes
+		target := origin.String()
+		after = append(after, func() {
+			f.broadcast(groupID, groupWire{Kind: "role", Group: groupID, Target: target, Role: giveRole})
+			f.memberChange(groupID, memberBody(convlog.MemberRole, pub, giveRole))
+		})
+	}
 	snap := groupWire{Kind: "snap", Group: groupID, Members: f.wireMembers(groupID)}
 	newcomer := groupWire{Kind: "snap", Group: groupID, Members: []wireMember{{ID: origin.String(), Pub: pubHex, Role: role0(f, groupID, origin)}}}
 	after = append(after, func() { _, _ = f.sendTo(origin, snap) })
