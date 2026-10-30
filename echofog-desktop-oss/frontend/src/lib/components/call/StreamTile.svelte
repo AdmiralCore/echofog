@@ -3,6 +3,7 @@
     import { peerName } from '../../stores/peers.store.js';
     import Icon from '../ui/Icon.svelte';
     import VideoView from './VideoView.svelte';
+    import StreamStats from './StreamStats.svelte';
     import { t } from '../../i18n/index.js';
 
     export let stream; // { streamId, broadcaster, mediaType, width, height, fps, qualityId }
@@ -10,6 +11,7 @@
     export let compact = false;
 
     let box;
+    let stats = false; // the live stats over the picture
 
     $: isOwn = stream.broadcaster === $callState.self;
     $: watching = isOwn || $callState.watching.includes(stream.streamId);
@@ -61,8 +63,13 @@
         {isOwn ? (stream.mediaType === 'camera' ? $t('call.yourCamera') : $t('call.yourScreen')) : name}
     </div>
 
+    {#if watching && stats}<StreamStats streamId={stream.streamId} {media} own={isOwn} />{/if}
+
     {#if watching}
         <div class="absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <button class="tile-btn" class:on={stats} title={$t('call.st.title')} aria-label={$t('call.st.title')} aria-pressed={stats} on:click={() => (stats = !stats)}>
+                <Icon name="signal" size={17} />
+            </button>
             {#if hasSound}
                 <button class="tile-btn" title={soundOn ? $t('call.streamSoundOff') : $t('call.streamSoundOn')} aria-label={soundOn ? $t('call.streamSoundOff') : $t('call.streamSoundOn')}
                     on:click={() => callService.setStreamVolume(stream.streamId, soundOn ? 0 : 1)}>
@@ -108,6 +115,7 @@
         border: none;
         background: rgba(0, 0, 0, 0.85);
     }
+    .tile-btn.on { background: rgba(88, 101, 242, 0.85); }
     .speaking {
         box-shadow: inset 0 0 0 3px var(--color-success);
     }

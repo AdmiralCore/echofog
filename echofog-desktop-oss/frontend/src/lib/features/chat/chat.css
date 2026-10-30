@@ -174,8 +174,8 @@
 .chat-screen .older { align-self: center; padding: 6px 0 2px; }
 /* answers, deleted and edited messages, reactions, comment counts */
 .chat-screen .quote {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; min-width: 120px; margin: 2px 0 5px; padding: 3px 8px;
-    border: none; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); text-align: left; font-weight: 400;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; min-width: min(120px, 100%); margin: 2px 0 5px; padding: 3px 8px;
+    border: none; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); text-align: left; font-weight: 400; max-width: 100%; box-sizing: border-box;
     font-size: 12.5px; line-height: 1.35; color: inherit;
   }
 .chat-screen .quote:hover:not(:disabled) { border: none; border-left: 3px solid var(--accent); filter: brightness(1.05); background: var(--accent-soft); }

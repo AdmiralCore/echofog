@@ -571,6 +571,15 @@ func (a *App) WatchStream(streamID string) error {
 	return nodeAPI.WatchStream(streamID)
 }
 
+// CallStreamStats returns what one stream of the active call does on this node (totals).
+func (a *App) CallStreamStats(streamID string) (api.StreamStatsDTO, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.StreamStatsDTO{}, errors.New("node API not initialized")
+	}
+	return nodeAPI.CallStreamStats(streamID)
+}
+
 // UnwatchStream cancels subscription to another participant's stream.
 func (a *App) UnwatchStream(streamID string) error {
 	nodeAPI := a.getAPI()

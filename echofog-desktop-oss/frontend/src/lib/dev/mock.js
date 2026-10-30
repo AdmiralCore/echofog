@@ -731,6 +731,7 @@ recent problems (the last 1 warnings and errors, cleaned):
   KeepGroupCallAlive: () => null,
   InviteToCall: () => ({ callId: 'call_demo', coordinator: SELF }),
   GetStreamQualities: () => qualities,
+  CallStreamStats: () => { const s = Date.now() / 1000; return { own: false, unitsSent: Math.floor(s * 1100), delivered: Math.floor(s * 1050), lost: Math.floor(s / 3), nacked: Math.floor(s * 2), retransmitted: 0, sendKbps: 11800, videoSent: Math.floor(s * 1100), videoDropped: Math.floor(s / 7), videoFailed: 0, keyframesServed: 4, netDroppedOut: 0, netDroppedIn: Math.floor(s / 5) }; },
   SetUploadCapacity: () => null,
   JoinRoom: () => joinRoom(),
   SubmitCallAnswer: (sdp) => submitAnswer(sdp),

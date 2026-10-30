@@ -59,7 +59,7 @@
   </div>
 
   {#if state === 'active'}
-    <div class="bar" role="progressbar" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100" aria-label={$t('files.progress')}>
+    <div class="prog" role="progressbar" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100" aria-label={$t('files.progress')}>
       <span style="width:{pct}%" class:stalled={xfer.stalled}></span>
     </div>
     {#if xfer.stalled}<span class="note">{$t('files.stalled')}</span>{/if}
@@ -88,10 +88,11 @@
 </div>
 
 <style>
-  .thumb { display: block; width: 100%; max-width: 300px; max-height: 260px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; background: var(--raised); }
+  .thumb { display: block; width: 100%; max-width: 100%; max-height: 260px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; background: var(--raised); }
   .thumb.open { cursor: zoom-in; }
-  .file.pic { min-width: 220px; }
-  .file { display: flex; flex-direction: column; gap: 8px; min-width: min(280px, 60vw); max-width: 360px; padding: 2px 0 2px; }
+  .file.pic { width: 300px; }
+  /* as wide as it likes up to the bubble, which a narrow chat makes small: nothing sticks out */
+  .file { display: flex; flex-direction: column; gap: 8px; width: 280px; max-width: 100%; min-width: 0; padding: 2px 0 2px; }
   .top { display: flex; gap: 10px; align-items: center; }
   .ic {
     position: relative; flex: none; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
@@ -105,16 +106,17 @@
   .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .delivered { display: inline-flex; align-items: center; gap: 4px; }
   .mine .sub { color: rgba(255, 255, 255, 0.78); }
-  .bar { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
-  .mine .bar { background: rgba(255, 255, 255, 0.25); }
-  .bar span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.25s linear; }
-  .mine .bar span { background: #fff; }
-  .bar span.stalled { opacity: 0.5; }
+  .prog { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .mine .prog { background: rgba(255, 255, 255, 0.25); }
+  .prog span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.25s linear; }
+  .mine .prog span { background: #fff; }
+  .prog span.stalled { opacity: 0.5; }
   .note { font-size: 11.5px; color: var(--muted); }
   .mine .note { color: rgba(255, 255, 255, 0.8); }
   .note.err { color: var(--danger); }
   .mine .note.err { color: #fff; font-weight: 600; }
-  .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+  .acts button { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acts:empty { display: none; }
   .mine .acts button { color: #fff; border-color: rgba(255, 255, 255, 0.4); background: rgba(255, 255, 255, 0.12); }
   .mine .acts button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.22); }

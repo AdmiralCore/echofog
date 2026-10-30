@@ -777,6 +777,44 @@ class CallService {
     return slot ? $videos[slot] || null : null;
   }
 
+  /** Raw totals of one stream for its stats overlay: the browser's side (capture, encoder or
+   *  decoder) and the node's (packets sent, delivered, lost, dropped). The overlay diffs two of
+   *  them for rates. own: our screen or camera; else the stream we watch, shown by media. */
+  async tileStats(streamId, media, own) {
+    const out = { at: performance.now(), own, browser: null, node: null };
+    try {
+      let report = null;
+      if (own) {
+        const tx = streamId === get(callState).cameraStreamId ? this.tx?.camera : this.tx?.screen;
+        report = tx ? await tx.sender.getStats() : null;
+      } else {
+        const track = media?.getVideoTracks?.()[0];
+        const rx = track && this.pc?.getReceivers().find((r) => r.track === track);
+        report = rx ? await rx.getStats() : null;
+      }
+      const b = {};
+      report?.forEach((r) => {
+        if (r.kind && r.kind !== 'video') return;
+        if (r.type === 'media-source') b.captureFps = r.framesPerSecond || 0;
+        if (r.type === 'outbound-rtp' || r.type === 'inbound-rtp') Object.assign(b, {
+          fps: r.framesPerSecond || 0, width: r.frameWidth || 0, height: r.frameHeight || 0,
+          bytes: r.bytesSent ?? r.bytesReceived ?? 0, frames: r.framesSent ?? r.framesReceived ?? 0,
+          encoded: r.framesEncoded || 0, decoded: r.framesDecoded || 0, dropped: r.framesDropped || 0,
+          packets: r.packetsSent ?? r.packetsReceived ?? 0, lost: r.packetsLost || 0,
+          freezes: r.freezeCount || 0, freezeSec: r.totalFreezesDuration || 0, pli: r.pliCount || 0, nack: r.nackCount || 0,
+          codecTime: r.totalEncodeTime ?? r.totalDecodeTime ?? 0,
+          jbDelay: r.jitterBufferDelay || 0, jbCount: r.jitterBufferEmittedCount || 0,
+          impl: r.encoderImplementation || r.decoderImplementation || '',
+          hw: r.powerEfficientEncoder ?? r.powerEfficientDecoder ?? null,
+          limit: r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '',
+        });
+      });
+      out.browser = b;
+    } catch (_) { /* the call is closing */ }
+    try { out.node = await app().CallStreamStats?.(streamId); } catch (_) { /* an older core, or no call */ }
+    return out;
+  }
+
   // --- per-person controls & moderation ----------------------------------------------------
 
   /** Volume of a watched stream's sound, 0..2 (1 = 100%); 0 mutes it. */
