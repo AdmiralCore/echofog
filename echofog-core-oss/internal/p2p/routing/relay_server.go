@@ -80,6 +80,7 @@ type RelayServer struct {
 	accessRefused  atomic.Uint64 // requests from peers not allowed on a private relay
 	limitRefused   atomic.Uint64 // circuits refused by a circuit cap
 	rateDropped    atomic.Uint64 // frames dropped by a speed limit
+	byDatagram     atomic.Uint64 // media frames passed on as datagrams
 	budgetClosed   atomic.Uint64 // circuits closed for using up a byte budget
 }
 
@@ -123,6 +124,7 @@ type RelayStats struct {
 	AccessRefused   uint64 `json:"accessRefused"` // requests from peers not on the allow list
 	LimitRefused    uint64 `json:"limitRefused"`  // circuits refused by a per-peer, per-IP or table cap
 	RateDropped     uint64 `json:"rateDropped"`   // frames dropped by a speed limit
+	ByDatagram      uint64 `json:"byDatagram"`    // media frames of circuits passed on as datagrams
 	BudgetClosed    uint64 `json:"budgetClosed"`  // circuits closed for using up a byte budget
 }
 
@@ -152,6 +154,7 @@ func (rs *RelayServer) Stats() RelayStats {
 		AccessRefused:   rs.accessRefused.Load(),
 		LimitRefused:    rs.limitRefused.Load(),
 		RateDropped:     rs.rateDropped.Load(),
+		ByDatagram:      rs.byDatagram.Load(),
 		BudgetClosed:    rs.budgetClosed.Load(),
 	}
 	if rs.mailbox != nil {
@@ -610,8 +613,18 @@ func (rs *RelayServer) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 		}
 	}
 
-	// Zero-copy passthrough of the circuit data frame!
-	_ = destPeer.SendRaw(net_types.TypeCircuitData, payload)
+	// Zero-copy passthrough of the circuit data frame! The media of a call goes on as a datagram
+	// to a peer that takes it that way (see circuit_lane.go), the rest as a stream.
+	sent := false
+	if inner, ok := innerType(payload); ok && mediaByDatagram(inner, destPeer.Caps()) {
+		if destPeer.SendRawUnreliable(net_types.TypeCircuitData, payload) == nil {
+			rs.byDatagram.Add(1)
+			sent = true
+		}
+	}
+	if !sent {
+		_ = destPeer.SendRaw(net_types.TypeCircuitData, payload)
+	}
 
 	circuit.LastActive.Store(now.UnixNano())
 	circuit.periodBytes.Add(n)

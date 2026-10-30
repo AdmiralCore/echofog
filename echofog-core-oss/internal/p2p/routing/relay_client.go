@@ -887,6 +887,12 @@ func (rc *RelayClient) sendFrame(circuit *ClientCircuit, circuitID uint32, msgTy
 	frame[4] = byte(msgType)
 	copy(frame[5:], payload)
 
+	if mediaByDatagram(msgType, relayPeer.Caps()) {
+		// a frame too big for a datagram, or a link that cannot carry one, goes by stream below
+		if err := relayPeer.SendRawUnreliable(net_types.TypeCircuitData, frame); err == nil {
+			return nil
+		}
+	}
 	return relayPeer.SendRaw(net_types.TypeCircuitData, frame)
 }
 

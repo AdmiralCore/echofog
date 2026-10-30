@@ -939,7 +939,7 @@ func (n *Node) announcedCaps() handshake.Capability {
 	if n.gated() {
 		return handshake.CapNone // a hidden node is nobody's relay or DHT server: it is not listed
 	}
-	caps := handshake.CapDHTServer
+	caps := handshake.CapDHTServer | handshake.CapCircuitMedia
 	if n.Cfg.IsServer() {
 		caps |= handshake.CapServer
 	}

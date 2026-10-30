@@ -83,3 +83,10 @@ const (
 func IsUnreliableType(t MessageType) bool {
 	return t == TypeCallMediaAudio || t == TypeCallMediaVideo || t == TypeExitUDPToExit || t == TypeExitUDPFromExit
 }
+
+// IsDatagramFrame reports whether a frame of this type is accepted from a datagram: the
+// unreliable types, and a relay circuit's data, whose media frames travel there between peers that
+// announced handshake.CapCircuitMedia (the frames of a circuit that are not media still go by stream).
+func IsDatagramFrame(t MessageType) bool {
+	return IsUnreliableType(t) || t == TypeCircuitData
+}

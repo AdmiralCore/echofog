@@ -190,7 +190,7 @@ func (p *PeerWrapper) AcceptDatagramLoop(ctx context.Context) {
 			continue
 		}
 		msgType := net_types.MessageType(msg[0])
-		if !net_types.IsUnreliableType(msgType) {
+		if !net_types.IsDatagramFrame(msgType) {
 			continue // control traffic must arrive over authenticated reliable streams
 		}
 		p.dispatchData(msgType, msg[1:])
