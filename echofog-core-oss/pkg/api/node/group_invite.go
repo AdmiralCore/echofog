@@ -194,7 +194,7 @@ func (n *NodeApi) GroupInviteCreate(groupID string, spec GroupInviteSpec) (Group
 		return GroupInviteDTO{}, errors.New("an invitation lasts from an hour to 31 days")
 	}
 	label := strings.TrimSpace(spec.Label)
-	link, tok, err := gf.inviteFor(groupID, ttl)
+	link, tok, err := gf.inviteFor(groupID, ttl, spec.Approval)
 	if err != nil {
 		return GroupInviteDTO{}, err
 	}

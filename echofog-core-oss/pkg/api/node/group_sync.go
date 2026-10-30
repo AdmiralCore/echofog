@@ -50,6 +50,7 @@ type groupWire struct {
 	History []wireHistory                `json:"h,omitempty"`
 	File    *wireFile                    `json:"f,omitempty"`   // msg: a file posted in the group
 	Inv     *inviteToken                 `json:"inv,omitempty"` // invite, join: what lets the newcomer into a private group
+	Ap      bool                         `json:"ap,omitempty"`  // invite: someone accepts each newcomer (shown to the newcomer only)
 
 	V      int                     `json:"v,omitempty"`    // version of the sender (2: sealed messages)
 	Env    *senderkeys.Envelope    `json:"env,omitempty"`  // smsg: a sealed message
@@ -496,6 +497,7 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		if !f.acceptEpoch(w.Group, w.Epoch) {
 			return nil
 		}
+		f.admitted(w.Group) // the group's keys came: we are in
 		// a newer epoch may have been made for somebody who is gone by now (two admins at once)
 		after := f.maybeRotate(w.Group, false)
 		return append(after, f.openPending(w.Group)...)
@@ -549,6 +551,7 @@ func (f *groupsFacade) applyOne(origin types.PeerID, w groupWire) (after []func(
 		}
 		f.noteVersions(w.Members)
 		_ = f.persist(w.Group)
+		f.admitted(w.Group) // a member who lets members in told us who is in: we are let in
 		title := f.titleOf(w.Group)
 		after := []func(){func() { f.nudgeAll(w.Group); f.emitEvent(GroupEvent{Kind: "members", GroupID: w.Group, Title: title}) }}
 		if f.keyring(w.Group).Current() == nil {

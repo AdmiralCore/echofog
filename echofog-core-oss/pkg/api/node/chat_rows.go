@@ -85,8 +85,14 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 				d.Members++
 			}
 		}
+		d.Pending = gf.PendingOf(c.Group, f.reachesMembers(gf, c.Group))
 		if rerr != nil {
 			return // not (or no longer) a member
+		}
+		if role.Permissions&groups.PermManageRoles != 0 {
+			gf.mu.Lock()
+			d.Requests = len(gf.requestsLocked(c.Group))
+			gf.mu.Unlock()
 		}
 		d.Role = role.Name
 		r := f.myRights(c)

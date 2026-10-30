@@ -195,7 +195,7 @@ func (n *NodeApi) quickInvite(groupID string) (string, error) {
 			}
 		}
 	}
-	link, tok, err := gf.inviteFor(groupID, inviteTTL)
+	link, tok, err := gf.inviteFor(groupID, inviteTTL, false)
 	if err != nil || tok == nil {
 		return link, err
 	}

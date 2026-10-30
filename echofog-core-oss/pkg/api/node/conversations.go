@@ -61,6 +61,10 @@ type ConversationDTO struct {
 	Members int    `json:"members,omitempty"`
 	// Can is what I may do in the chat.
 	Can ConvCan `json:"can"`
+	// a group I joined and wait to be let in: "approval", "admission" or "noroute" (group_pending.go)
+	Pending string `json:"pending,omitempty"`
+	// a group whose requests to join wait for me to decide (those who let members in)
+	Requests int `json:"requests,omitempty"`
 }
 
 // ChatPage is one page of a chat or a thread; Next is the cursor of the following page, "" at the

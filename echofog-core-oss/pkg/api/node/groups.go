@@ -338,13 +338,13 @@ func (f *groupsFacade) List() ([]GroupDTO, error) {
 }
 
 func (f *groupsFacade) Invite(groupID string) (string, error) {
-	link, _, err := f.inviteFor(groupID, inviteTTL)
+	link, _, err := f.inviteFor(groupID, inviteTTL, false)
 	return link, err
 }
 
 // inviteFor makes an invitation that lets people in for ttl, and its token (nil: the group needs
 // none, an open room or a channel).
-func (f *groupsFacade) inviteFor(groupID string, ttl time.Duration) (string, *inviteToken, error) {
+func (f *groupsFacade) inviteFor(groupID string, ttl time.Duration, approval bool) (string, *inviteToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.load(); err != nil {
@@ -364,7 +364,7 @@ func (f *groupsFacade) inviteFor(groupID string, ttl time.Duration) (string, *in
 			return "", nil, err
 		}
 	}
-	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.inviteMembers(groupID), Inv: tok})
+	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.inviteMembers(groupID), Inv: tok, Ap: approval})
 	if err != nil {
 		return "", nil, err
 	}
@@ -406,6 +406,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 	var g *groups.GroupGenesisManifest
 	var members []wireMember
 	var tok *inviteToken
+	approval := false
 	switch {
 	case strings.HasPrefix(invite, inviteScheme2):
 		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(invite, inviteScheme2))
@@ -413,7 +414,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 		if err != nil || json.Unmarshal(raw, &w) != nil || w.Genesis == nil {
 			return GroupDTO{}, errors.New("malformed invite")
 		}
-		g, members, tok = w.Genesis, w.Members, w.Inv
+		g, members, tok, approval = w.Genesis, w.Members, w.Inv, w.Ap
 	case strings.HasPrefix(invite, inviteScheme):
 		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(invite, inviteScheme))
 		var old groups.GroupGenesisManifest
@@ -455,7 +456,11 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 		_ = f.store.Set([]byte(joinViaPrefix+g.GroupID), []byte(tok.N))
 	}
 	// let the members know who joined (offline ones get it when they are back)
-	f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:]), Inv: tok})
+	delivered, _, _ := f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:]), Inv: tok})
+	if others := len(members) > 0 && !(len(members) == 1 && members[0].ID == f.selfID.String()); others {
+		// until somebody lets us in (the keys and the member list come), the group is waiting
+		f.notePending(g.GroupID, approval, delivered > 0)
+	}
 	return dto, nil
 }
 

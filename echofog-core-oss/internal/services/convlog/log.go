@@ -1205,3 +1205,56 @@ func (l *Log) Drop(c Conv) error {
 	}
 	return nil
 }
+
+// Export is what a group's log holds, for a snapshot a newcomer imports (a .fogzip): the
+// membership history first (it decides what the rest may do), then every author's events, up to
+// maxBytes in all. Each event is signed by its author, so whoever passes the snapshot on cannot
+// change one; an importer takes them as it takes events from a member.
+func (l *Log) Export(c Conv, maxBytes int) [][]byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	bc := l.bc(c.ID)
+	var out [][]byte
+	size := 0
+	seen := map[string]bool{}
+	add := func(raw []byte) bool {
+		if size+len(raw) > maxBytes {
+			return false
+		}
+		k := string(raw)
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, raw)
+			size += len(raw)
+		}
+		return true
+	}
+	if entries, err := l.st.FindValues(memberPrefix(bc), 0); err == nil {
+		for _, e := range entries {
+			if !add(e.Value) {
+				return out
+			}
+		}
+	}
+	if entries, err := l.st.FindValues(bs(pfxEvent+bc+"/"), 0); err == nil {
+		for _, e := range entries {
+			if !add(e.Value) {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// ImportHistory takes events that came from outside a sync (a snapshot file) as history: each is
+// verified and weighed as one a member sends, none counts as news. It returns how many were new.
+func (l *Log) ImportHistory(c Conv, raws [][]byte) int {
+	n := 0
+	for _, raw := range raws {
+		if _, fresh, err := l.ingest(c, raw, false); err == nil && fresh {
+			n++
+		}
+	}
+	l.RebuildIfNeeded(c)
+	return n
+}
