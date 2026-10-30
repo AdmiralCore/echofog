@@ -26,8 +26,31 @@ EchoFog tries, in this order:
 3. **A relay:** if neither works (for example both people are on mobile internet), the call or
    message goes through a relay node that both can reach.
 
-So being unreachable never blocks you from using EchoFog. It only means your computer cannot be
-someone else's relay or public exit.
+So being unreachable does not block you from using EchoFog **as long as a relay is in reach**. It
+means your computer cannot be someone else's relay or public exit.
+
+### When both sides are hard to reach
+
+Hole punching does not pass a **symmetric NAT** (most mobile networks, some home routers). Behind
+one, a computer is not even tried for a direct connection, so two such people reach each other
+**only through a relay**: chat messages, group join requests, the group's keys and history, and
+calls all go that way. The servers a fresh install joins through may be *signaling only* (they
+help with hole punching but carry nothing); if no relay is connected at all, nothing gets through,
+and the app says so:
+
+- *No way to the recipient right now* on a message (it waits and goes once a relay is there);
+- *No way to them right now* on a call;
+- *No member of the group can be reached yet* on a group you joined.
+
+What helps, best first:
+
+1. **A forwarded port.** With UPnP/NAT-PMP on (or a port forwarded by hand) the router's port is
+   one fixed public address, so a computer behind a symmetric NAT becomes reachable and hole
+   punching works toward it. The app uses a forwarded port by itself.
+2. **A relay in the network:** your own node on a VPS (see [Run a node](run-a-node.md)), a friend's,
+   or any public one. Add it under **Proxy → Relay → Relays you use** if it is private.
+3. **Meanwhile, for a group:** a [group file](groups.md#the-group-file-fogzip) shows its history
+   without any connection.
 
 ## Sharing with your own people without an open port
 

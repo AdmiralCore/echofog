@@ -36,6 +36,7 @@ no commission.
 | configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |
 | understand paying for traffic with a TON vault | [Vault payments](docs/vault-payments.md) |
 | send files to contacts and groups | [File transfer](docs/file-transfer.md) |
+| set up a space: channels, roles, invitations, moderation, the group file | [Groups and spaces](docs/groups.md) |
 | understand how group messages are encrypted and caught up on | [Group encryption](docs/group-encryption.md) |
 | know the security status, or report a vulnerability | [SECURITY.md](SECURITY.md) |
 

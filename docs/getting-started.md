@@ -104,7 +104,11 @@ Everything here is free and end-to-end encrypted.
   and point the camera at their code.
 - **Create a space.** *New* → *New space*, type a name, choose *Group* (everyone writes) or
   *Channel* (only admins write) and press *Create*. To invite people, press the gear next to the
-  space's name and use *Copy invite*. They join with *New* → *Join by invite*.
+  space's name and copy the invitation: an https link messengers make tappable. You can also make
+  invitations with a term, a limit, a role or approval, or save the whole group to a password-sealed
+  file (.fogzip) that shows its history at once. They join with *New* → *Join by invite*, or
+  **Open a link** (Ctrl+L). Roles, per-channel permissions, categories, timeouts and the moderation
+  log: [Groups and spaces](groups.md).
 - **Channels and voice rooms.** In a space, the column on the left lists its text channels and
   voice rooms. Admins add them with *+*, and change a channel with the gear that shows when you
   hover over it (or a right click): name, topic, "only admins post", order, remove. You can also
@@ -128,6 +132,18 @@ Everything here is free and end-to-end encrypted.
   longer reach you, and they are not told. Who may write to you and who may call you (by default
   only your contacts) is under **Settings** → *Privacy*, together with the list of blocked people.
 
+### Hide your address: Tor and the route of calls
+
+**Settings** → *Tor and proxy* sends the app's own traffic (messages, the network) through Tor or
+another SOCKS5 proxy, so the EchoFog network does not see your IP address: choose *Tor Browser*
+(keep it open), *Tor service* or *My SOCKS5*, press *Check*, then *Save* and restart the app. Through
+a proxy the app uses TCP only and is slower, and the whole-computer VPN mode is off.
+
+Tor carries no UDP and is too slow for video, so **calls** have a route of their own on the same
+card: *Automatic* (direct where possible, through a relay when Tor or guards are on), *Direct*
+(fast, but the person you call sees your address) or *Through a relay* (only the relay sees it;
+quality depends on the relay).
+
 ## 7. Theme and language
 
 Open **Settings** → *Appearance*. Choose the theme (*System*, *Light*, *Dark*) and the language
@@ -145,15 +161,28 @@ you are. The app joins the network through *bootstrap nodes* — the first nodes
 
 The chip next to *Bootstrap nodes* shows how many peers you are connected to.
 
+If a message says *No way to the recipient right now*, a call says *No way to them*, or a space you
+joined says *No member of the group can be reached yet*, you and the other side are both behind
+routers that cannot be punched through and no relay is connected. It goes once one is; turning on
+UPnP on your router usually fixes it at once. See [Reachability](reachability.md#when-both-sides-are-hard-to-reach).
+
 A different message, *This computer cannot be reached from the Internet*, is not a problem for
-you: chats, calls and the VPN still work. It only matters if you want to serve others as a relay or
+you as long as a relay is in reach: chats, calls and the VPN still work. It only matters if you want to serve others as a relay or
 a public exit (a hidden exit for your own people works without it). See
 [reachability.md](reachability.md).
 
 ## 9. Logs and feedback
 
 If something does not work, open **Logs**. *Copy all* copies the log; *Save* writes it to a file in
-your home folder.
+your home folder. If the app closes by itself (for example right after the password), the reason is
+in `crash.log` next to the log file (`%LOCALAPPDATA%\EchoFog` on Windows). A database damaged by a
+power cut or a crash while saving is repaired at the next start, with a copy kept beside it.
+
+**Connection report.** *Logs* → *Connection report* puts together what the app knows about how it
+connects — country, provider, NAT, which transports get through, guards, the VPN and the latest
+problems — without any IP address, ID, link or contact. Nothing is sent: *Open the report form on
+GitHub* opens an issue with it filled in, for you to read and post. Reports that it works help as
+much as reports that it does not.
 
 **Check before you share.** Passwords, keys and the recovery phrase are blanked out, and IP
 addresses are masked automatically, but node IDs, sites you checked and contact names can stay in
@@ -164,6 +193,7 @@ Send feedback and bug reports as an [issue on the project's GitHub page](https:/
 ## Next
 
 - [FAQ](faq.md) — short, honest answers about privacy, payments and risks.
+- [Groups and spaces](groups.md) — channels, roles, invitations, moderation, the group file.
 - [How it works](how-it-works.md)
 - [Run a node](run-a-node.md) — share your connection or help others get online.
 - [Hidden and isolated nodes](hidden-nodes.md) — share your connection only with the people you

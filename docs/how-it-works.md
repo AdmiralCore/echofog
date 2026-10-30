@@ -176,8 +176,9 @@ queue as a normal chat. On top of that, a message is signed by its author and se
 whole group with a key that admins replace whenever somebody leaves or is removed; so any member
 can hand a message on to one the author could not reach, and nobody can change who wrote it,
 history included. The person who created the group is its owner; members can be admins,
-moderators, ordinary members or restricted. The details are in
-[Group encryption](group-encryption.md).
+moderators, ordinary members or restricted, or hold roles the group defines itself. The details are
+in [Group encryption](group-encryption.md); channels, roles, invitations and moderation are in
+[Groups and spaces](groups.md).
 
 ## Calls and screen sharing
 

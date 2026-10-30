@@ -114,9 +114,33 @@ pay exits. You can switch it *Off* with one click, and the service does not chan
 
 Your router or provider does not let other computers connect to you directly — usually because of
 NAT, where your router shares one public address among your devices. **Chats, calls and the VPN
-still work.** It only matters if you want to serve others as a relay or a public exit. A hidden
+still work** as long as a relay is in reach (see the next question). It only matters if you want to serve others as a relay or a public exit. A hidden
 exit for your own people works without it, through relays. See
 [reachability.md](reachability.md).
+
+## I joined a group and see nothing / my call does not connect
+
+Most likely the two devices cannot reach each other: both are behind routers or mobile networks that
+hole punching cannot pass, and no relay is connected. Then nothing goes between them — not the join
+request, not the keys, not the call — and the app says *No way to the recipient right now* or *No
+member of the group can be reached yet*. Turning on UPnP on one of the routers usually fixes it; a
+relay in the network always does. Meanwhile a group file (.fogzip) shows the group's history. See
+[Groups](groups.md#when-nothing-arrives) and [Reachability](reachability.md#when-both-sides-are-hard-to-reach).
+
+## What is a .fogzip file?
+
+A group saved to a file by one of its members: the invitation and the group's history (members,
+roles, channels, threads, messages), sealed with a password. Opening it (Ctrl+L → *Open a group
+file*) shows the group at once, even with nobody online, and joins it as the link does. Each message
+in it is signed by its author, so the file cannot be altered on the way. See
+[Groups](groups.md#the-group-file-fogzip).
+
+## The app closes right after I type my password
+
+That used to happen when the database was damaged by a power cut or a crash while it was saving.
+The app now repairs such a database at the start (and keeps a copy of it beside it); what the damage
+reached may be missing. If it still closes, the reason is in `crash.log` next to the log
+(`%LOCALAPPDATA%\EchoFog` on Windows): please send it to us.
 
 ## Can I run my own private node for friends?
 

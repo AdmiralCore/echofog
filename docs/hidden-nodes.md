@@ -164,8 +164,10 @@ step 3: Docker is installed, the port is open (UDP and TCP 443), and you have `d
    docker compose -f deploy/docker-compose.yml exec node echofog-node invite
    ```
 
-   It prints one line starting with `echofog://join?`. That is the link to give out. The node also
-   prints it in the log at start (`Invite link:`).
+   It prints two lines: an `https://…/join/#join?…` link, which messengers make tappable (it opens a
+   page that starts the app or offers to download it), and the same link as `echofog://join?…`.
+   Give out either. `invite --app` prints only the `echofog://` one, for scripts. The node also prints
+   both in the log at start (`Invite link:`), and `pass` prints both for a pass.
 
    People whose network blocks UDP need the TCP fallback, which in Docker stays off until you set a
    real site for the node to imitate (`ECHOFOG_TLS_SERVER_NAME`, `ECHOFOG_CAMOUFLAGE_ADDR`): see

@@ -49,7 +49,8 @@ The settings that matter most:
 ```bash
 # server: relay, mailboxes for others, DHT, exit; no chat, calls or files of its own
 ECHOFOG_ROLE=server
-# signaling only (DHT + help with hole punching, no traffic) — cheap; or false for a full relay
+# signaling only (DHT + help with hole punching, no traffic). Leave it false: without a relay
+# people behind NATs cannot write to or call each other. Cap the relay with ECHOFOG_RELAY_MBPS instead.
 ECHOFOG_SIGNALING=false
 ECHOFOG_RELAY=true
 # share this server's connection as a paid exit (other people's traffic leaves from its IP)

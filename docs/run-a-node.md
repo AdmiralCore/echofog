@@ -208,7 +208,16 @@ lot of outbound traffic. A 4K60 screen share is tens of Mbit/s **per viewer** it
 cloud providers charge per GB of outbound traffic, and that adds up fast.
 
 - For a **relay** (or an exit), prefer a VPS plan with generous or unmetered traffic.
-- Keep **metered cloud VMs as signaling nodes** (`--signaling`).
+- **The network needs relays, not only signaling nodes.** Two people behind NATs that hole punching
+  cannot pass (a symmetric NAT, most mobile networks) reach each other only through a relay: their
+  messages, group join requests, the group's keys and calls all go that way. If every server in
+  reach is signaling-only, those people cannot write to or call each other at all, and their apps
+  say *No way to the recipient right now*. So rather than making a metered VM signaling-only, run it
+  as a relay with limits: messages and mailboxes are tiny, and the limits cap the calls. For
+  example `--relay-mbps 20 --relay-peer-mb-per-day 2048` (`ECHOFOG_RELAY_MBPS=20`,
+  `ECHOFOG_RELAY_PEER_MB_PER_DAY=2048`).
+- Signaling-only (`--signaling`) is for a node that must carry nothing, when other relays exist. A
+  node started that way says so in its log.
 - `--relay-max-circuits` (default 200) limits how many relayed connections run at once, and
   `--relay-mbps` their total speed (see [Relay and exit limits](#relay-and-exit-limits)).
 

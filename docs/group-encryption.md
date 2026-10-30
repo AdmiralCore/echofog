@@ -110,6 +110,12 @@ members fill the gap:
 A message that arrives before its epoch waits and is opened as soon as the epoch comes; the member
 asks for the epoch at once.
 
+The group's conversation log (messages, threads, channels, roles; see [Groups](groups.md)) catches
+up on its own as well: members compare their logs every two minutes and whenever they connect, a
+member asks the sender at once when a message shows a gap below it, and in groups of more than 50
+members whoever passes a message on also tells twelve more members how far it holds each author, so
+that a lost message is asked for within seconds.
+
 ## Changes that arrive out of order
 
 Changes to a group (owner, roles, removals) travel separately from each author, so a member who was
