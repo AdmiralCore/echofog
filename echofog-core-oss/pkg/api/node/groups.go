@@ -855,6 +855,11 @@ func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMes
 		if _, err := convlog.ParseEventID(thread); err != nil {
 			return GroupMessageDTO{}, err
 		}
+	} else if cf, cerr := n.convsFacade(); cerr == nil && f.LogMode(groupID) {
+		// a file is a message too: slow mode holds it back the same way
+		if err := cf.slowWait(convlog.Group(groupID), channel); err != nil {
+			return GroupMessageDTO{}, err
+		}
 	}
 	d, err := f.SendFile(groupID, channel, thread, path)
 	n.mirrorOwnGroupPost(groupID, d, err)

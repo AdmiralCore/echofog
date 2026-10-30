@@ -1,6 +1,7 @@
 package node
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"sort"
 
@@ -27,6 +28,8 @@ type ConvCan struct {
 	Invite   bool `json:"invite"`   // hand out the group's invitation
 	Call     bool `json:"call"`     // start or join a call
 	Stream   bool `json:"stream"`   // share a screen or a camera
+	// SlowFree: slow mode does not hold me back (who may moderate or manage channels)
+	SlowFree bool `json:"slowFree,omitempty"`
 	// MutedUntil: I am in a timeout until then (unix seconds; 0 none)
 	MutedUntil int64 `json:"mutedUntil,omitempty"`
 }
@@ -75,6 +78,9 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		list, _ := gf.mgr.ListMembers(c.Group)
 		if gerr == nil {
 			d.Name, d.Title = g.Title, g.Title
+			if p := f.log.GroupPhoto(c); len(p) > 0 {
+				d.Avatar = base64.StdEncoding.EncodeToString(p) // the group's picture, the same for all
+			}
 			if g.Type == groups.GroupTypePublicChannel {
 				d.Kind = "channel"
 			}
@@ -100,7 +106,7 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		d.Can = ConvCan{Send: r.Send, Files: r.Send && r.Media, Links: r.Links, Threads: r.Threads,
 			React: d.Upgraded && r.React, Pin: d.Upgraded && r.Pin, Manage: manage, Channels: r.Manage, Roles: r.Roles,
 			Invite: r.Invite || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),
-			Call:   r.Voice, Stream: r.Voice && r.Stream, MutedUntil: f.log.TimeoutOf(c, f.self)}
+			Call:   r.Voice, Stream: r.Voice && r.Stream, SlowFree: r.Moderate || r.Manage, MutedUntil: f.log.TimeoutOf(c, f.self)}
 	}
 }
 

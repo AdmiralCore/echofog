@@ -126,6 +126,12 @@ message ThreadBody {
   string title = 1;
 }
 
+// ProfileBody is a group's picture (kind PROFILE; last writer wins): a small JPEG, PNG or WebP,
+// empty to take it away.
+message ProfileBody {
+  bytes photo = 1;
+}
+
 message RosterEntry {
   bytes  member = 1;  // 32-byte identity public key
   string role   = 2;

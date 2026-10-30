@@ -395,7 +395,7 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 				return ErrForbidden // written during their timeout
 			}
 		}
-		if t.c.Kind == KindGroup && e.Kind != KindChannel && e.Kind != KindThread {
+		if t.c.Kind == KindGroup && e.Kind != KindChannel && e.Kind != KindThread && e.Kind != KindProfile {
 			// what the author may do in the channel the event acts in
 			if ch, ok := t.channel(t.eventChannel(e)); ok && len(ch.Overrides) > 0 {
 				if role, _, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at); ok {
@@ -445,6 +445,8 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			err = t.applyChannel(e, author, rights, actor, st)
 		case KindThread:
 			err = t.applyThread(e, author, rights)
+		case KindProfile:
+			err = t.applyProfile(e, author, rights)
 		}
 	}
 	if err != nil {

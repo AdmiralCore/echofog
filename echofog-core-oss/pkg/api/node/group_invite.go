@@ -232,3 +232,44 @@ func (n *NodeApi) GroupInviteRevoke(groupID, nonce string) error {
 	_, _ = f.sendEvent(c, raw, id, convlog.KindMember, "", "")
 	return nil
 }
+
+// GroupInviteContacts invites contacts to a group in their direct chats: each gets an invitation of
+// their own (in a private group: for one person, for a week, with role, "" the default) as a
+// message, which their app shows as a card with a button to join. It returns how many got one;
+// the first failure ends it.
+func (n *NodeApi) GroupInviteContacts(groupID string, peerIDs []string, role string) (int, error) {
+	if len(peerIDs) == 0 {
+		return 0, nil
+	}
+	if len(peerIDs) > 50 {
+		return 0, errors.New("at most 50 contacts at a time")
+	}
+	sent := 0
+	for _, peer := range peerIDs {
+		if _, ok := parsePeer(peer); !ok {
+			return sent, errors.New("bad contact id")
+		}
+		label, _, _, _ := n.contactOf(peer)
+		link := ""
+		inv, err := n.GroupInviteCreate(groupID, GroupInviteSpec{Label: label, Hours: 24 * 7, Uses: 1, Role: role})
+		switch {
+		case err == nil:
+			link = inv.WebLink
+		case role == "":
+			// an open group, or one not on the log yet: its own invitation lets anybody in
+			if link, err = n.quickInvite(groupID); err != nil {
+				return sent, err
+			}
+			if web := GroupWebLink(link); web != "" {
+				link = web
+			}
+		default:
+			return sent, err
+		}
+		if _, err := n.ChatSend(ChatRef{Kind: "dm", ID: peer}, SendRequest{Text: link}); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
+}

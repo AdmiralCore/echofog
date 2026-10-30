@@ -106,7 +106,7 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	var dels [][]byte
 	var legacyOrder []storage.Entry
 	for _, pfx := range [][]byte{bs(pfxView + bc + "/"), bs(pfxThread + bc + "/"), bs(pfxPin + bc + "/"), bs(pfxIndex + bc + "/"),
-		bs(pfxChanO + bc + "/"), channelPrefix(bc)} {
+		bs(pfxChanO + bc + "/"), channelPrefix(bc), profileKey(bc)} {
 		entries, err := l.st.FindValues(pfx, 0)
 		if err != nil {
 			return nil, err

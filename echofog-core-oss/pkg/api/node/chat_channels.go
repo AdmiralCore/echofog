@@ -2,6 +2,7 @@ package node
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -332,6 +333,34 @@ func (n *NodeApi) ChatThreadTitle(ref ChatRef, root, title string) error {
 	return n.chatOp(ref, root, convlog.KindThread, func(l *convlog.Log, c convlog.Conv, id convlog.EventID) ([]byte, convlog.EventID, error) {
 		return l.AppendThreadTitle(c, id, strings.TrimSpace(title))
 	})
+}
+
+// ChatGroupPhoto sets a group's picture for every member (photoBase64 "": takes it away): a small
+// JPEG, PNG or WebP (convlog.MaxPhotoBytes), from who manages the group's channels.
+func (n *NodeApi) ChatGroupPhoto(ref ChatRef, photoBase64 string) error {
+	f, c, err := n.chat(ref)
+	if err != nil {
+		return err
+	}
+	if c.Kind != convlog.KindGroup {
+		return errNotGroup
+	}
+	if gf, err := n.groupsFacade(); err != nil || !gf.LogMode(c.Group) {
+		return ErrNeedsUpgrade
+	}
+	photo, err := base64.StdEncoding.DecodeString(photoBase64)
+	if err != nil {
+		return errors.New("bad picture")
+	}
+	if len(photo) > convlog.MaxPhotoBytes {
+		return fmt.Errorf("the picture is too large (at most %d KB)", convlog.MaxPhotoBytes>>10)
+	}
+	raw, id, err := f.log.AppendGroupPhoto(c, photo)
+	if err != nil {
+		return err
+	}
+	_, err = f.sendEvent(c, raw, id, convlog.KindProfile, "", "")
+	return err
 }
 
 // StartRoomCall joins a group's voice room: the call going on in it, or a new one (which does not
