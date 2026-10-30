@@ -4,6 +4,8 @@ import (
 	"embed"
 	"mime"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
 
@@ -24,6 +26,7 @@ func main() {
 		os.Exit(api.RunTunHelper(os.Args[2:]))
 	}
 	mime.AddExtensionType(".webm", "video/webm")
+	keepCrashes()
 
 	// started by a clicked echofog:// link: an EchoFog window that already runs takes it
 	if link := linkFromArgs(os.Args[1:]); link != "" {
@@ -82,4 +85,22 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+// keepCrashes writes a crash (a panic nobody recovered, a fatal runtime error) to crash.log next
+// to the app's log: a windowed app has no console, so the trace was lost and a crash at login
+// left nothing to go on.
+func keepCrashes() {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "EchoFog")
+	_ = os.MkdirAll(dir, 0o700)
+	f, err := os.OpenFile(filepath.Join(dir, "crash.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
+	_ = f.Close() // SetCrashOutput keeps its own copy
 }
