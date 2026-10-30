@@ -20,7 +20,13 @@ That has two consequences worth knowing up front:
 ## Spaces: channels, categories, voice rooms
 
 A group (a *space*) has a main channel and any number of text channels and voice rooms. The column
-on the left lists them.
+on the left lists them. In a narrow window the column folds away and slides out over the chat from
+the button at the left of the chat's head; picking a channel folds it again. The gear next to the
+space's name opens its settings in a window of their own.
+
+- **The space's picture.** In the settings, click the picture: who sets up the channels can give
+  the space a photo, and every member sees the same one (it travels in the group's log, scaled down
+  to 256 px).
 
 - **Categories.** A new space shows two headings, *Text* and *Voice*. The first time you change
   one (rename, remove, add a channel to it), both become categories of their own: you can rename
@@ -32,8 +38,10 @@ on the left lists them.
 - **A channel's settings:** name, topic, *Only admins post* (an announcements channel: others can
   still comment in threads), slow mode, category, and *Permissions here* (below).
 - **Slow mode** keeps a member from writing in a channel more often than every N seconds (5 s to
-  1 h). Moderators and those who manage channels are not held back. It is kept by the sender's
-  app: the log has no clock everybody trusts, so a modified app could ignore it.
+  1 h), files included: above the message field a countdown shows when they can write again.
+  Moderators and those who manage channels are not held back, so the owner does not see it. It is
+  kept by the sender's app: the log has no clock everybody trusts, so a modified app could ignore
+  it.
 - **Threads.** Right-click a message → *Comment*. The thread's author or a moderator can name it.
   The speech-bubble button at the top lists the channel's threads.
 
@@ -83,6 +91,9 @@ In the space's panel, **Invitation**:
 - **New invitation** makes one with a note ("for the stream"), how long it lets people in (an hour
   to 30 days), how many people (1 to 100, or no limit), the role they get (if you manage roles),
   and **With approval**: then nobody gets in by the link alone — an admin accepts each newcomer.
+- **Invite contacts** picks people from your contacts: each gets an invitation of their own (for
+  one person, a week, with the role you choose) in your chat with them, shown there as a card with
+  a *Join* button.
 - The list shows each invitation, how many joined with it, until when it works and who made it.
   Its maker, or anybody who manages roles, can **revoke** it: nobody new comes in with it, those
   who joined stay.
@@ -93,6 +104,13 @@ the very same moment may go one or two over the limit.)
 
 In a private group nobody can put themselves on the member list without an invitation; knowing the
 group's ID is not enough.
+
+**Invitations in chats.** A group invitation posted in any chat shows as a card: the group's name,
+how many members it names, whether it asks for approval and until when it works. The name is read
+from the invitation itself and checked against its creator's signature; nothing is fetched and
+nothing happens until you press *Join*, which opens the usual *Open a link* window. A card cannot
+vouch for the group's intentions: a group can call itself anything, so join groups from people you
+trust.
 
 ### Requests to join
 
@@ -121,8 +139,9 @@ panel, *Save the group to a file (.fogzip)…*. The file holds the invitation an
 log holds — members, roles, channels, threads and messages (not the files people posted) — sealed
 with a password of at least 8 characters. Send the file one way and say the password another.
 
-The person opens it with **Open a link** (Ctrl+L) → *Open a group file (.fogzip)…*, types the
-password, and reads the group at once, even while no member is online. Opening it also joins the
+The person opens it with **Open a link** (Ctrl+L) → *Open a group file (.fogzip)…*, or, if the file
+came in a chat, with *Open the group* under it; types the password, and reads the group at once,
+even while no member is online. Opening it also joins the
 group, as the link does, so the request goes out (and waits for approval if the invitation asks
 for it).
 
@@ -139,6 +158,8 @@ messages, the approval, and calls still need a member.
   that time.)
 - **Remove** and **Ban** take a member out; a ban keeps them out and every message they write
   afterwards is refused, however they date it.
+- **Deleting the group** removes it and its messages for every member. Only the owner can, after
+  typing the group's name and their app password.
 - **Moderation log** (folded, at the bottom of the panel): who let whom in, removed, banned, gave a
   role or a timeout, set up or removed roles and invitations, and whose messages a moderator
   deleted. It is read from the group's log, so it is the same for everybody and cannot be tidied up
