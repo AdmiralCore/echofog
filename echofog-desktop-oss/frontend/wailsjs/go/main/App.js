@@ -82,6 +82,10 @@ export function ChatEdit(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatEdit'](arg1, arg2, arg3);
 }
 
+export function ChatGroupPhoto(arg1, arg2) {
+  return window['go']['main']['App']['ChatGroupPhoto'](arg1, arg2);
+}
+
 export function ChatHistory(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatHistory'](arg1, arg2, arg3);
 }
@@ -178,8 +182,8 @@ export function DeleteContact(arg1) {
   return window['go']['main']['App']['DeleteContact'](arg1);
 }
 
-export function DeleteGroup(arg1) {
-  return window['go']['main']['App']['DeleteGroup'](arg1);
+export function DeleteGroup(arg1, arg2) {
+  return window['go']['main']['App']['DeleteGroup'](arg1, arg2);
 }
 
 export function DeleteProfile(arg1, arg2) {
@@ -378,6 +382,10 @@ export function GroupFileSave(arg1, arg2, arg3) {
   return window['go']['main']['App']['GroupFileSave'](arg1, arg2, arg3);
 }
 
+export function GroupInviteContacts(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupInviteContacts'](arg1, arg2, arg3);
+}
+
 export function GroupInviteCreate(arg1, arg2) {
   return window['go']['main']['App']['GroupInviteCreate'](arg1, arg2);
 }
@@ -416,6 +424,10 @@ export function GroupRoles(arg1) {
 
 export function GroupTimeout(arg1, arg2, arg3) {
   return window['go']['main']['App']['GroupTimeout'](arg1, arg2, arg3);
+}
+
+export function InspectGroupInvite(arg1) {
+  return window['go']['main']['App']['InspectGroupInvite'](arg1);
 }
 
 export function InviteToCall(arg1) {

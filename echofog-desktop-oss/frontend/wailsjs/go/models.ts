@@ -1033,6 +1033,7 @@ export namespace node {
 	    invite: boolean;
 	    call: boolean;
 	    stream: boolean;
+	    slowFree?: boolean;
 	    mutedUntil?: number;
 	
 	    static createFrom(source: any = {}) {
@@ -1053,6 +1054,7 @@ export namespace node {
 	        this.invite = source["invite"];
 	        this.call = source["call"];
 	        this.stream = source["stream"];
+	        this.slowFree = source["slowFree"];
 	        this.mutedUntil = source["mutedUntil"];
 	    }
 	}
@@ -1299,6 +1301,32 @@ export namespace node {
 	        this.link = source["link"];
 	        this.webLink = source["webLink"];
 	        this.canRevoke = source["canRevoke"];
+	    }
+	}
+	export class GroupInvitePreview {
+	    groupId: string;
+	    title: string;
+	    kind: string;
+	    members: number;
+	    approval?: boolean;
+	    exp?: number;
+	    expired?: boolean;
+	    joined?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupInvitePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.groupId = source["groupId"];
+	        this.title = source["title"];
+	        this.kind = source["kind"];
+	        this.members = source["members"];
+	        this.approval = source["approval"];
+	        this.exp = source["exp"];
+	        this.expired = source["expired"];
+	        this.joined = source["joined"];
 	    }
 	}
 	export class GroupInviteSpec {

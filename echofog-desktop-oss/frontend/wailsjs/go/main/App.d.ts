@@ -47,6 +47,8 @@ export function ChatDelete(arg1:node.ChatRef,arg2:string):Promise<void>;
 
 export function ChatEdit(arg1:node.ChatRef,arg2:string,arg3:string):Promise<void>;
 
+export function ChatGroupPhoto(arg1:node.ChatRef,arg2:string):Promise<void>;
+
 export function ChatHistory(arg1:node.ChatRef,arg2:string,arg3:number):Promise<node.ChatPage>;
 
 export function ChatList():Promise<Array<node.ConversationDTO>>;
@@ -95,7 +97,7 @@ export function DeclineFile(arg1:string):Promise<void>;
 
 export function DeleteContact(arg1:string):Promise<void>;
 
-export function DeleteGroup(arg1:string):Promise<void>;
+export function DeleteGroup(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteProfile(arg1:string,arg2:string):Promise<void>;
 
@@ -195,6 +197,8 @@ export function GroupFilePick():Promise<string>;
 
 export function GroupFileSave(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function GroupInviteContacts(arg1:string,arg2:Array<string>,arg3:string):Promise<number>;
+
 export function GroupInviteCreate(arg1:string,arg2:node.GroupInviteSpec):Promise<node.GroupInviteDTO>;
 
 export function GroupInviteRevoke(arg1:string,arg2:string):Promise<void>;
@@ -214,6 +218,8 @@ export function GroupRoleSave(arg1:string,arg2:node.GroupRoleDTO):Promise<node.G
 export function GroupRoles(arg1:string):Promise<Array<node.GroupRoleDTO>>;
 
 export function GroupTimeout(arg1:string,arg2:string,arg3:number):Promise<void>;
+
+export function InspectGroupInvite(arg1:string):Promise<node.GroupInvitePreview>;
 
 export function InviteToCall(arg1:string):Promise<Record<string, string>>;
 
