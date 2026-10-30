@@ -49,6 +49,10 @@
     display: block; padding: 10px 12px; border-radius: 10px; background: var(--mono-bg);
     font: 12px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace; word-break: break-all; color: var(--muted);
   }
+  /* a group invitation is a long line of letters: show its start, the whole of it on request */
+  code.fold { max-height: 72px; overflow: hidden; position: relative; }
+  code.fold::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(transparent, var(--mono-bg)); }
+  .more { display: block; margin-top: 6px; padding: 2px 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 14px; cursor: pointer; }
   .warn { color: var(--warn); font-size: 14px; }
   .hidden { display: none; }
   footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
@@ -77,6 +81,7 @@
   <div id="manual" class="hidden">
     <p class="muted" id="manual-text"></p>
     <code id="link"></code>
+    <button class="more hidden" id="more" type="button"></button>
     <div class="btns" style="margin-top:10px"><button class="btn" id="copy" type="button"></button></div>
   </div>
 
@@ -111,6 +116,8 @@
     steps: ['Установите EchoFog, если его ещё нет (Windows и Linux).', 'Вернитесь на эту страницу и нажмите «Открыть в EchoFog».', 'Если кнопка ничего не открыла: скопируйте ссылку ниже и вставьте её в приложении через «Открыть ссылку».'],
     manual: 'Ссылка для приложения:',
     copy: 'Скопировать ссылку',
+    more: 'Показать ссылку целиком',
+    less: 'Свернуть',
     copied: 'Скопировано',
     bad: 'В адресе страницы нет ссылки EchoFog. Попросите прислать её ещё раз целиком: всё, что после «#», и есть приглашение.',
     secret: 'В этой ссылке ключ доступа к скрытому узлу. Не пересылайте её в общие чаты.',
@@ -132,6 +139,8 @@
     steps: ['Install EchoFog if you do not have it yet (Windows and Linux).', 'Come back to this page and tap “Open in EchoFog”.', 'If the button opened nothing: copy the link below and paste it in the app under “Open link”.'],
     manual: 'The link for the app:',
     copy: 'Copy the link',
+    more: 'Show the whole link',
+    less: 'Fold it',
     copied: 'Copied',
     bad: 'There is no EchoFog link in this page’s address. Ask for it again in full: everything after the “#” is the invitation.',
     secret: 'This link carries the access key of a hidden node. Do not forward it to group chats.',
@@ -182,6 +191,16 @@
     else { var r = document.createRange(); r.selectNodeContents($('link')); var s = getSelection(); s.removeAllRanges(); s.addRange(r); try { document.execCommand('copy'); done(); } catch (e) {} }
   });
   show('manual');
+  var code = $('link');
+  code.classList.add('fold');
+  if (code.scrollHeight > code.clientHeight + 2) {
+    $('more').textContent = T.more;
+    $('more').addEventListener('click', function () {
+      var folded = code.classList.toggle('fold');
+      $('more').textContent = folded ? T.more : T.less;
+    });
+    show('more');
+  } else code.classList.remove('fold');
   if (hidden) { $('secret').textContent = T.secret; show('secret'); }
   if (isGroup) { $('secret').textContent = T.secretGroup; show('secret'); }
 })();
