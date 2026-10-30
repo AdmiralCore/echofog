@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -461,6 +462,10 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 		fmt.Println("Relay:         off (a hidden node relays for nobody)")
 	} else if o.signaling {
 		fmt.Println("Relay:         signaling only: DHT and hole punching help, no traffic is relayed")
+		// what this costs the people using the network, said where the operator reads it
+		slog.Warn("Signaling only: this node relays no messages, calls or join requests and keeps no mail. " +
+			"Two people behind NATs that hole punching cannot pass (a symmetric NAT, most mobile networks) " +
+			"then cannot write to or call each other unless another relay is in the network; set ECHOFOG_SIGNALING=false to relay, within the ECHOFOG_RELAY_* limits")
 	} else if o.relay && o.relayPrivate {
 		fmt.Printf("Relay:         private, up to %d connections at once, serving %d allowed peer(s)\n", o.relayMaxCircuits, len(splitCSV(o.relayAllow)))
 		fmt.Println("               (not advertised; allowed peers reach it with --relays " + joinAddress(n, o.listenAddr) + ")")

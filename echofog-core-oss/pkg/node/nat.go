@@ -198,16 +198,20 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 			return dialErr
 		}
 	}
-	if n.HolePunch == nil || !n.NAT.CanBePunched() {
-		return orDialErr(dialErr)
-	}
-	if err := n.HolePunch.Connect(ctx, peer); err != nil {
-		if dialErr != nil {
-			return dialErr
+	if n.HolePunch != nil && n.NAT.CanBePunched() {
+		err := n.HolePunch.Connect(ctx, peer)
+		if err == nil {
+			return nil
 		}
-		return err
+		if dialErr == nil {
+			dialErr = err
+		}
 	}
-	return nil
+	// no direct way (a symmetric NAT on our side, or the punch failed): meet the peer at a relay
+	// we both reach, so calls and messages have a circuit; the caller still hears that no direct
+	// link was made (a message then goes through the relays or the peer's mailboxes)
+	n.meetViaRelay(ctx, peer)
+	return orDialErr(dialErr)
 }
 
 func orDialErr(err error) error {
@@ -228,7 +232,7 @@ func (n *Node) CallRelayOnly() bool {
 		return false
 	}
 	_, t := n.NAT.GetNATProfile()
-	return t == routing.NATSymmetric
+	return t == routing.NATSymmetric && !n.NAT.CanBeRouter() // a forwarded port is reached directly
 }
 
 func (n *Node) CallRelayCapacity() int {

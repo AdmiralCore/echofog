@@ -141,11 +141,14 @@ func (m *NATManager) CanBeRouter() bool {
 }
 
 // CanBePunched: a direct connection to us can be punched through the NAT, that is, our public
-// address is the same whoever we talk to. Unknown counts as maybe: it is worth trying.
+// address is the same whoever we talk to, or the router forwards our port. Unknown counts as maybe:
+// it is worth trying.
 func (m *NATManager) CanBePunched() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.natType != NATSymmetric
+	// a port the router forwards is one fixed public address, whatever the NAT does with others:
+	// the other side's packets get in there
+	return m.natType != NATSymmetric || m.mapped.IsValid()
 }
 
 // Candidates are the public addresses another peer can aim at to reach us, best first.

@@ -277,6 +277,9 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 	}
 	if !delivered {
 		state = StateOffline
+		if !s.HasRelay() {
+			state = StateNoRoute
+		}
 		s.wantConnection(targetID)
 		if opts.onQueued != nil {
 			opts.onQueued()
@@ -303,6 +306,17 @@ func (s *MessageBroker) deliverVia(targetID types.PeerID, msg *internal_pb.Messa
 		return true, true
 	}
 	return s.sendViaRelay(targetID, msg) == nil, false
+}
+
+// HasRelay reports whether one of the peers we are connected to carries messages for others (a
+// relay, or one we were given as ours): without one, a peer we cannot reach directly gets nothing.
+func (s *MessageBroker) HasRelay() bool {
+	for _, p := range s.sw.GetAllPeers() {
+		if p.Relays() || (s.useAsRelay != nil && s.useAsRelay(p.ID())) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.MessageData) error {

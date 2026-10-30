@@ -33,9 +33,13 @@ const (
 
 // What a message of ours is waiting for, as the chat shows it.
 const (
-	StateKeys      = "keys"      // the recipient's keys: it was never met and the DHT has not answered
-	StateOffline   = "offline"   // a way to the recipient: neither it nor a relay has taken the message
-	StateRelayed   = "relayed"   // a relay took it for the recipient (who is away); no receipt yet
+	StateKeys    = "keys"    // the recipient's keys: it was never met and the DHT has not answered
+	StateOffline = "offline" // a way to the recipient: neither it nor a relay has taken the message
+	StateRelayed = "relayed" // a relay took it for the recipient (who is away); no receipt yet
+	// StateNoRoute: not delivered, and no relay among the peers we are connected to: when neither
+	// side can be reached directly (both behind NATs) nothing carries it until a relay turns up.
+	// Kept in the outbox like an offline one.
+	StateNoRoute   = "noroute"
 	StateSent      = "sent"      // the recipient's device took it; no receipt yet
 	StateDelivered = "delivered" // the recipient confirmed it
 	StateExpired   = "expired"   // given up after outboxTTL without a receipt
