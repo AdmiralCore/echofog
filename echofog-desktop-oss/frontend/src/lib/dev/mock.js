@@ -579,6 +579,9 @@ recent problems (the last 1 warnings and errors, cleaned):
     if (accept) { groupMembers.push({ peerId: id, role: 'member' }); modLog.unshift({ ts: Date.now(), actor: SELF, action: 'admit', target: id }); }
     return null;
   },
+  GroupFileSave: (_g, title, pass) => { if ((pass || '').length < 8) throw new Error('the password needs at least 8 characters'); return 'C:/Users/demo/Documents/' + title + '.fogzip'; },
+  GroupFilePick: () => 'C:/Users/demo/Downloads/Old Friends.fogzip',
+  GroupFileOpen: (_p, pass) => { if (pass !== 'correct horse') throw new Error('not a group file, or the password is wrong'); return { group: groups[1] || groups[0], events: 42 }; },
   GroupInviteRevoke: (gid, n) => { const i = (groupInvites[gid] || []).find((x) => x.n === n); if (i) i.revoked = true; return null; },
   GetContacts: () => contacts,
   GetPrivacy: () => ({ ...privacyMock.privacy }),
@@ -1008,6 +1011,7 @@ function convOf(k, withLast = true) {
     const rank = RANKS[g.myRole] || 0;
     const send = !g.readOnly;
     Object.assign(d, { kind: g.kind === 'channel' ? 'channel' : 'group', name: g.title, title: g.title, role: g.myRole, members: g.members,
+      pending: g.pending || '', requests: rank >= RANKS.admin ? joinRequests.length : 0,
       can: { send, files: send, links: send, threads: true, react: c.upgraded && !!g.myRole, pin: c.upgraded && rank >= RANKS.moderator, manage: rank >= RANKS.admin,
         channels: rank >= RANKS.admin, roles: rank >= RANKS.admin, invite: true, call: true, stream: true } });
   }
@@ -1075,7 +1079,7 @@ const reactWith = (m, emoji, ...by) => m.reactions.push({ emoji, by });
   );
   gText('Works for me').replyTo = gText('Great. Let us do').id;
 
-  groups.push({ id: 'grp_old', title: 'Old Friends', kind: 'group', members: 3, myRole: 'member', readOnly: false, description: '' });
+  groups.push({ id: 'grp_old', title: 'Old Friends', kind: 'group', members: 3, myRole: 'member', readOnly: false, description: '', pending: 'approval' });
   clog['g:grp_old'] = {
     ref: { kind: 'group', id: 'grp_old' }, unread: 0, upgraded: false,
     msgs: [

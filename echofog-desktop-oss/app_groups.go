@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
@@ -337,4 +338,62 @@ func (a *App) GroupJoinDecide(groupID, peerID string, accept bool) error {
 		return errNodeNotStarted
 	}
 	return n.GroupJoinDecide(groupID, peerID, accept)
+}
+
+// GroupFileSave asks where to save a group's file (.fogzip) and writes it there, sealed with
+// password; it returns the path ("" when the dialog was cancelled).
+func (a *App) GroupFileSave(groupID, title, password string) (string, error) {
+	n := a.getAPI()
+	if n == nil {
+		return "", errNodeNotStarted
+	}
+	a.mu.RLock()
+	ctx := a.ctx
+	a.mu.RUnlock()
+	path, err := runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
+		Title:           "Save the group to a file",
+		DefaultFilename: safeFileName(title) + ".fogzip",
+		Filters:         []runtime.FileFilter{{DisplayName: "EchoFog group (*.fogzip)", Pattern: "*.fogzip"}},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if !strings.HasSuffix(strings.ToLower(path), ".fogzip") {
+		path += ".fogzip"
+	}
+	return path, n.GroupSnapshotExport(groupID, path, password)
+}
+
+// GroupFilePick asks for a group's file (.fogzip) to open; "" when the dialog was cancelled.
+func (a *App) GroupFilePick() (string, error) {
+	a.mu.RLock()
+	ctx := a.ctx
+	a.mu.RUnlock()
+	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title:   "Open a group file",
+		Filters: []runtime.FileFilter{{DisplayName: "EchoFog group (*.fogzip)", Pattern: "*.fogzip"}},
+	})
+}
+
+// GroupFileOpen joins the group a file carries and takes its history in.
+func (a *App) GroupFileOpen(path, password string) (api.GroupSnapshotInfo, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupSnapshotInfo{}, errNodeNotStarted
+	}
+	return n.GroupSnapshotImport(path, password)
+}
+
+// safeFileName keeps a title usable as a file name.
+func safeFileName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 32 {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(s))
+	if s == "" {
+		return "group"
+	}
+	return s
 }

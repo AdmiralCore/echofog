@@ -186,6 +186,7 @@ function rowOf(d) {
     can, readOnly: !can.send,
     last: d.last ? preview(norm(d.last)) : '', lastId: d.last ? d.last.id : '', ts: d.lastTs || 0, unread: d.unread || 0,
     upgraded: !!d.upgraded,
+    pending: d.pending || '', requests: d.requests || 0,
   };
 }
 
@@ -285,6 +286,12 @@ function listen() {
     switch (ev.kind) {
       case 'requests': // a request to join waits, or was decided
         membersVersion.update((n) => n + 1);
+        await loadChats();
+        if (ev.from) {
+          // a new request: whoever may let members in hears of it, not only when the panel is open
+          if (!get(muted).has(id)) play('receive', { quiet: inCall() });
+          chatNote.set(tr('chats.note.request', { name: nameOfPeer(ev.from), title: ev.title || '' }));
+        }
         break;
       case 'members':
       case 'added':

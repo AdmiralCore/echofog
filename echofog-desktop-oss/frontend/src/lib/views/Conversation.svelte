@@ -261,8 +261,13 @@
 
     <PinBar chatId={conv.id} canPin={conv.can.pin} />
 
-    {#if conv.kind === 'group' && !conv.upgraded}
+    {#if conv.kind === 'group' && conv.pending}
+      <div class="small upg pending"><Icon name="clock" size={14} /> <span>{$t('chats.pending.' + conv.pending)}</span></div>
+    {:else if conv.kind === 'group' && !conv.upgraded}
       <p class="small upg">{$t('chats.groupNotUpgraded')}</p>
+    {/if}
+    {#if conv.requests}
+      <button class="small upg reqs-bar" on:click={() => (info = true)}><Icon name="userPlus" size={14} /> {$t('chats.req.waiting', { n: conv.requests })}</button>
     {/if}
 
     <MessageList bind:this={list} {conv} {q} {matches} {currentMatch} />
@@ -284,6 +289,8 @@
 
     {#if conv.kind === 'direct' && conv.blocked}
       <!-- no composer: a blocked person gets nothing either way -->
+    {:else if conv.kind === 'group' && conv.pending}
+      <p class="small muted bar ro"><Icon name="clock" size={14} /> {$t('chats.pending.short')}</p>
     {:else if mutedUntil * 1000 > Date.now()}
       <p class="small muted bar ro"><Icon name="clock" size={14} /> {$t('chats.to.mine', { when: new Date(mutedUntil * 1000).toLocaleString(intlLocale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) })}</p>
     {:else if !canPost}

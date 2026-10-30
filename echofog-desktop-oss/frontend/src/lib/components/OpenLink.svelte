@@ -6,7 +6,7 @@
   import { fade, scale } from 'svelte/transition';
   import { App, errText } from '../api.js';
   import { openLink, classifyLink } from '../links.js';
-  import { addContact, joinGroup } from '../stores/chats.js';
+  import { addContact, joinGroup, loadChats, openChat } from '../stores/chats.js';
   import { view } from '../stores/nav.js';
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
@@ -71,6 +71,24 @@
   const addPerson = () => act('contact', () => addContact(link.key, name.trim()), () => { view.set('chats'); close(); });
   const joinTheGroup = () => act('group', () => joinGroup(text.trim()), () => { view.set('chats'); close(); });
 
+  // a group's file (.fogzip): its invitation and history, sealed with a password told apart
+  let file = '';
+  let filePass = '';
+  async function pickFile() {
+    error = '';
+    try {
+      const p = await App.GroupFilePick();
+      if (p) { file = p; filePass = ''; }
+    } catch (err) { error = errText(err); }
+  }
+  let fileGroup = '';
+  const openFile = () => act('file', async () => {
+    const info = await App.GroupFileOpen(file, filePass);
+    fileGroup = info.group.id;
+    await loadChats();
+  }, async () => { view.set('chats'); close(); file = ''; await openChat('g:' + fileGroup); });
+  const fileName = (p) => p.split(/[\\/]/).pop();
+
   function onKey(e) {
     if (!$openLink) return;
     if (e.key === 'Escape') { e.preventDefault(); close(); }
@@ -134,6 +152,16 @@
         </div>
       {/if}
 
+      <div class="file-row">
+        {#if file}
+          <span class="small grow mono clip" title={file}><Icon name="file" size={13} /> {fileName(file)}</span>
+          <input type="password" bind:value={filePass} placeholder={$t('links.filePass')} on:keydown={(e) => e.key === 'Enter' && filePass && openFile()} />
+          <button class="primary" disabled={!!busy || !filePass} on:click={openFile}>{#if busy === 'file'}<span class="spinner light"></span>{/if}{$t('links.fileOpen')}</button>
+        {:else}
+          <button class="ghost small with-icon" on:click={pickFile}><Icon name="folder" size={14} /> {$t('links.filePick')}</button>
+        {/if}
+      </div>
+
       {#if error}<p class="small error">{error}</p>{/if}
       {#if done}<p class="small ok"><Icon name="check" size={14} stroke={2.4} /> {done}</p>{/if}
       <p class="small faint hint">{$t('links.hint')}</p>
@@ -154,6 +182,9 @@
   textarea { resize: none; font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.45; word-break: break-all; }
   .what { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--raised); }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .file-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .file-row input { flex: 1; min-width: 140px; }
+  .file-row .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
   .actions button { display: inline-flex; align-items: center; gap: 7px; }
   .actions input { flex: 1; min-width: 160px; }
   .ok { color: var(--ok); display: flex; align-items: center; gap: 6px; margin: 0; }

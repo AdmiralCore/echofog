@@ -50,6 +50,22 @@
       busy = false;
     }
   }
+  // the group in a file (.fogzip): its invitation and history, for somebody no member can reach now
+  let saving = null; // { pass, again }
+  let savedTo = '';
+  async function saveFile() {
+    busy = true;
+    error = '';
+    try {
+      const path = await App.GroupFileSave(conv.groupId, conv.name, saving.pass);
+      if (path) { savedTo = path; saving = null; }
+    } catch (err) {
+      error = errText(err);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function revoke(inv) {
     if (!(await ask({ message: $t('chats.confirm.revokeInvite'), confirm: $t('chats.revoke'), danger: true }))) return;
     try {
@@ -110,6 +126,24 @@
           <button type="submit" class="primary small" disabled={busy}>{$t('chats.inv.create')}</button>
         </div>
       </form>
+    {/if}
+
+    {#if list && !making}
+      {#if saving}
+        <form class="inv-make" on:submit|preventDefault={saveFile}>
+          <span class="small faint">{$t('chats.file.hint')}</span>
+          <input type="password" bind:value={saving.pass} placeholder={$t('chats.file.pass')} autocomplete="new-password" />
+          <input type="password" bind:value={saving.again} placeholder={$t('chats.file.again')} autocomplete="new-password" />
+          <div class="row inv-actions">
+            <span class="grow"></span>
+            <button type="button" class="ghost small" on:click={() => (saving = null)}>{$t('common.cancel')}</button>
+            <button type="submit" class="primary small" disabled={busy || (saving.pass || '').length < 8 || saving.pass !== saving.again}>{$t('chats.file.save')}</button>
+          </div>
+        </form>
+      {:else}
+        <button class="link-btn small" on:click={() => { saving = { pass: '', again: '' }; savedTo = ''; }}>{$t('chats.file.start')}</button>
+        {#if savedTo}<p class="small faint">{$t('chats.file.saved', { path: savedTo })}</p>{/if}
+      {/if}
     {/if}
 
     {#if list && list.length}
