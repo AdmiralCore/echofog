@@ -616,7 +616,7 @@ func TestCallManager_EdgeCases(t *testing.T) {
 	assert.Error(t, cm.StartStream("voice", "screen", tree.CustomQuality(100)), "reserved id")
 	assert.ErrorIs(t, cm.PublishVideo("not-mine", []byte{1}), ErrNoLocalStream)
 	assert.ErrorIs(t, cm.UpdateStreamQuality("not-mine", q4k), ErrNoLocalStream)
-	assert.Equal(t, "1080p30", tree.BestQualityFor(6000).ID)
+	assert.Equal(t, "720p60", tree.BestQualityFor(6000).ID)
 
 	assert.Equal(t, "CallManager", cm.Name())
 	require.NoError(t, cm.Stop())
@@ -690,7 +690,7 @@ func TestRoom_UserCanSwitchRelay(t *testing.T) {
 	m := newMesh()
 	nodes, _ := newRoom(t, m, 7)
 	b := nodes[1]
-	b.cm.SetUploadCapacity(2500) // one direct viewer: everybody else is relayed
+	b.cm.SetUploadCapacity(3000) // one direct viewer: everybody else is relayed
 	q, _ := tree.QualityByID("720p30")
 	require.NoError(t, b.cm.StartStream("s", "screen", q))
 	for _, nd := range nodes {
