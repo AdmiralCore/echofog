@@ -153,6 +153,24 @@ card: *Automatic* (direct where possible, through a relay when Tor or guards are
 (fast, but the person you call sees your address) or *Through a relay* (only the relay sees it;
 quality depends on the relay).
 
+### Anonymous mode
+
+**Settings** → *Anonymous mode* makes sure nothing in the app shows your address:
+
+- *Through Tor*: nobody in the EchoFog network sees it (set Tor above first). Slower.
+- *Only my relay*: the app connects to the relay you pinned under *Joining the network* and to
+  nothing else, so only that relay sees your address. Fast enough for calls and streams; the VPN
+  then works only with that relay as its exit.
+
+Either way calls and files go through relays, nothing punches holes, maps ports or asks STUN, and
+the update check and the location lookup go through Tor or the VPN or are skipped. The TON wallet
+stays offline unless you allow it (its servers would see your address). If the mode cannot work
+(no Tor set, no relay pinned), the app connects nowhere rather than in the open. The sidebar shows
+*IP hidden* while it is on. It applies when the app next starts.
+
+What it does not cover: the hosting of your relay knows who pays for it, and how and when you write
+can give you away. For a public group, use a separate profile from your personal one.
+
 ## 7. Theme and language
 
 Open **Settings** → *Appearance*. Choose the theme (*System*, *Light*, *Dark*) and the language
