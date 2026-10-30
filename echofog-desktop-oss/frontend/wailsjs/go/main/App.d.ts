@@ -117,6 +117,8 @@ export function ForgetExit(arg1:string):Promise<void>;
 
 export function GetAccessStatus():Promise<node.AccessStatus>;
 
+export function GetAnonymity():Promise<node.AnonymityStatus>;
+
 export function GetBlockedPeers():Promise<Array<contacts.Blocked>>;
 
 export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
@@ -324,6 +326,8 @@ export function SendTon(arg1:string,arg2:string,arg3:string):Promise<string>;
 export function SendUsdt(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function SetAccessMode(arg1:string):Promise<void>;
+
+export function SetAnonymity(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
 

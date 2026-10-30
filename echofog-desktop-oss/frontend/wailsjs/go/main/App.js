@@ -222,6 +222,10 @@ export function GetAccessStatus() {
   return window['go']['main']['App']['GetAccessStatus']();
 }
 
+export function GetAnonymity() {
+  return window['go']['main']['App']['GetAnonymity']();
+}
+
 export function GetBlockedPeers() {
   return window['go']['main']['App']['GetBlockedPeers']();
 }
@@ -636,6 +640,10 @@ export function SendUsdt(arg1, arg2, arg3) {
 
 export function SetAccessMode(arg1) {
   return window['go']['main']['App']['SetAccessMode'](arg1);
+}
+
+export function SetAnonymity(arg1, arg2) {
+  return window['go']['main']['App']['SetAnonymity'](arg1, arg2);
 }
 
 export function SetAutoPay(arg1, arg2, arg3) {

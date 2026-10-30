@@ -713,6 +713,36 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class AnonymityStatus {
+	    mode: string;
+	    walletDirect: boolean;
+	    running: string;
+	    seenBy: string;
+	    broken?: string;
+	    proxy?: string;
+	    relays?: string[];
+	    restart?: boolean;
+	    hasProxy: boolean;
+	    hasRelay: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AnonymityStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.walletDirect = source["walletDirect"];
+	        this.running = source["running"];
+	        this.seenBy = source["seenBy"];
+	        this.broken = source["broken"];
+	        this.proxy = source["proxy"];
+	        this.relays = source["relays"];
+	        this.restart = source["restart"];
+	        this.hasProxy = source["hasProxy"];
+	        this.hasRelay = source["hasRelay"];
+	    }
+	}
 	export class BootstrapNode {
 	    addr: string;
 	    peerId: string;
