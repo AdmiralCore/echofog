@@ -42,6 +42,10 @@ export function BlockPeer(arg1) {
   return window['go']['main']['App']['BlockPeer'](arg1);
 }
 
+export function CallStreamStats(arg1) {
+  return window['go']['main']['App']['CallStreamStats'](arg1);
+}
+
 export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }

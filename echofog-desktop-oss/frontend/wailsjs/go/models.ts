@@ -1967,6 +1967,42 @@ export namespace node {
 	        this.chosen = source["chosen"];
 	    }
 	}
+	export class StreamStatsDTO {
+	    own: boolean;
+	    unitsSent: number;
+	    delivered: number;
+	    lost: number;
+	    nacked: number;
+	    retransmitted: number;
+	    sendKbps: number;
+	    videoSent: number;
+	    videoDropped: number;
+	    videoFailed: number;
+	    keyframesServed: number;
+	    netDroppedOut: number;
+	    netDroppedIn: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StreamStatsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.own = source["own"];
+	        this.unitsSent = source["unitsSent"];
+	        this.delivered = source["delivered"];
+	        this.lost = source["lost"];
+	        this.nacked = source["nacked"];
+	        this.retransmitted = source["retransmitted"];
+	        this.sendKbps = source["sendKbps"];
+	        this.videoSent = source["videoSent"];
+	        this.videoDropped = source["videoDropped"];
+	        this.videoFailed = source["videoFailed"];
+	        this.keyframesServed = source["keyframesServed"];
+	        this.netDroppedOut = source["netDroppedOut"];
+	        this.netDroppedIn = source["netDroppedIn"];
+	    }
+	}
 	export class VPNSession {
 	    id: string;
 	    peerId: string;

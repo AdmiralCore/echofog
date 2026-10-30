@@ -27,6 +27,8 @@ export function AppVersion():Promise<string>;
 
 export function BlockPeer(arg1:string):Promise<void>;
 
+export function CallStreamStats(arg1:string):Promise<node.StreamStatsDTO>;
+
 export function CancelFile(arg1:string):Promise<void>;
 
 export function ChatAttachments(arg1:node.ChatRef):Promise<node.ChatAttachments>;
