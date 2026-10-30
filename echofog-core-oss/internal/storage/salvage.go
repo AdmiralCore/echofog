@@ -110,15 +110,61 @@ func brokenTables(dir string) ([]uint64, error) {
 		if err != nil {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, name))
+		ok, err := tableIndexReadable(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
-		if !indexReadable(data) {
+		if !ok {
 			out = append(out, id)
 		}
 	}
 	return out, nil
+}
+
+// tableIndexReadable reads a table's end only (its index and footer), not its blocks: it runs at
+// every start, over every table.
+func tableIndexReadable(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	size := st.Size()
+	tail := int64(64 << 10) // the index and the bloom filter: a few KiB for an 8 MiB table
+	for {
+		if tail > size {
+			tail = size
+		}
+		buf := make([]byte, tail)
+		if _, err := f.ReadAt(buf, size-tail); err != nil {
+			return false, err
+		}
+		if indexReadable(buf) {
+			return true, nil
+		}
+		if tail == size || !indexFits(buf) {
+			return false, nil
+		}
+		tail *= 4 // a bigger index than the tail read: read more
+	}
+}
+
+// indexFits reports whether the footer of a table's tail says its index is longer than the tail.
+func indexFits(tail []byte) bool {
+	n := len(tail)
+	if n < 8 {
+		return false
+	}
+	cl := int(binary.BigEndian.Uint32(tail[n-4:]))
+	if cl <= 0 || cl > n-8 {
+		return false
+	}
+	il := int(binary.BigEndian.Uint32(tail[n-8-cl : n-4-cl]))
+	return il > 0 && n-8-cl-il < 0
 }
 
 // indexReadable checks a table's footer the way badger reads it: checksum length, checksum,
