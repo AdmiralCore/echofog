@@ -366,6 +366,18 @@ export function GetVoucherEarnings() {
   return window['go']['main']['App']['GetVoucherEarnings']();
 }
 
+export function GroupFileOpen(arg1, arg2) {
+  return window['go']['main']['App']['GroupFileOpen'](arg1, arg2);
+}
+
+export function GroupFilePick() {
+  return window['go']['main']['App']['GroupFilePick']();
+}
+
+export function GroupFileSave(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupFileSave'](arg1, arg2, arg3);
+}
+
 export function GroupInviteCreate(arg1, arg2) {
   return window['go']['main']['App']['GroupInviteCreate'](arg1, arg2);
 }

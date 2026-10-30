@@ -189,6 +189,12 @@ export function GetVault():Promise<dto.VaultDTO>;
 
 export function GetVoucherEarnings():Promise<dto.VoucherEarningsDTO>;
 
+export function GroupFileOpen(arg1:string,arg2:string):Promise<node.GroupSnapshotInfo>;
+
+export function GroupFilePick():Promise<string>;
+
+export function GroupFileSave(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function GroupInviteCreate(arg1:string,arg2:node.GroupInviteSpec):Promise<node.GroupInviteDTO>;
 
 export function GroupInviteRevoke(arg1:string,arg2:string):Promise<void>;
