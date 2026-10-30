@@ -12,6 +12,7 @@ require (
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/huin/goupnp v1.3.0
 	github.com/jackpal/go-nat-pmp v1.0.2
+	github.com/klauspost/compress v1.18.0
 	github.com/koron/go-ssdp v0.9.1
 	github.com/libp2p/go-netroute v0.4.0
 	github.com/pion/interceptor v0.1.29
@@ -54,7 +55,6 @@ require (
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/miekg/dns v1.1.55 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pion/datachannel v1.5.8 // indirect

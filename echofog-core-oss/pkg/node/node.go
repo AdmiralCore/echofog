@@ -208,6 +208,16 @@ func (n *Node) initDB() error {
 			"tables", ids, "copy_before_repair", backup)
 	}
 
+	// a table whose end (its index) never reached the disk: rebuilt from its blocks
+	if ids, backup, err := storage.RepairBrokenTables(n.Cfg.Storage.DatabasePath, storage.SalvageOptions{
+		BaseTableSize: opts.BaseTableSize, BlockSize: opts.BlockSize, Compression: opts.Compression,
+		BloomFalsePos: opts.BloomFalsePositive}); err != nil {
+		return fmt.Errorf("the database is damaged and could not be repaired (%w); a copy is in %s", err, backup)
+	} else if len(ids) > 0 {
+		n.Logger.Warn("Database: rebuilt tables whose end never reached the disk (the app or the computer went down while saving); the blocks the damage reached are missing",
+			"tables", ids, "copy_before_repair", backup)
+	}
+
 	db, err := badger.Open(opts)
 	if err != nil {
 		return fmt.Errorf("failed to open badger db: %w", err)
