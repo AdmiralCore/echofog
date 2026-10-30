@@ -25,12 +25,16 @@ type callRx struct {
 	video    map[string]int
 	lastAt   map[string]time.Time
 	damaged  int
+	sent     map[string]int       // video units handed to the call manager, by stream
+	first    map[string]time.Time // when the first unit of a stream arrived
+	secs     map[string][]int     // units that arrived, by second since the first one
 	talking  chan struct{} // closed to stop the speaker
 	streamer chan struct{} // closed to stop the stream
 }
 
 func (t *testNode) callRoutes(mux *http.ServeMux) {
-	t.rx = &callRx{audio: map[string]int{}, video: map[string]int{}, lastAt: map[string]time.Time{}}
+	t.rx = &callRx{audio: map[string]int{}, video: map[string]int{}, lastAt: map[string]time.Time{},
+		sent: map[string]int{}, first: map[string]time.Time{}, secs: map[string][]int{}}
 	if t.n.CallManager != nil {
 		t.n.CallManager.OnMedia = t.rx.tap
 	}
@@ -79,7 +83,16 @@ func (r *callRx) tap(p *media.MediaPacket) {
 	case media.FrameAudio:
 		r.audio[from]++
 	case media.FrameVideo:
-		r.video[from+"/"+p.StreamID]++
+		k := from + "/" + p.StreamID
+		r.video[k]++
+		if _, ok := r.first[k]; !ok {
+			r.first[k] = time.Now()
+		}
+		i := int(time.Since(r.first[k]).Seconds())
+		for len(r.secs[k]) <= i {
+			r.secs[k] = append(r.secs[k], 0)
+		}
+		r.secs[k][i]++
 	}
 	r.lastAt[from] = time.Now()
 }
@@ -188,6 +201,9 @@ func (t *testNode) callStream(w http.ResponseWriter, r *http.Request) {
 				owed += perSec * tick.Seconds()
 				for ; owed >= 1; owed-- {
 					_ = t.n.CallManager.PublishVideo(id, unit(seq, size))
+					t.rx.mu.Lock()
+					t.rx.sent[id]++
+					t.rx.mu.Unlock()
 					seq++
 				}
 			}
@@ -208,7 +224,8 @@ func (t *testNode) callRxReport(w http.ResponseWriter, _ *http.Request) {
 	for k, at := range t.rx.lastAt {
 		silent[k] = time.Since(at).Seconds()
 	}
-	reply(w, map[string]any{"audio": t.rx.audio, "video": t.rx.video, "silentFor": silent, "damaged": t.rx.damaged}, nil)
+	reply(w, map[string]any{"audio": t.rx.audio, "video": t.rx.video, "silentFor": silent, "damaged": t.rx.damaged,
+		"sent": t.rx.sent, "videoSecs": t.rx.secs}, nil)
 }
 
 func (t *testNode) callState(w http.ResponseWriter, _ *http.Request) {
