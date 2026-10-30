@@ -1181,3 +1181,27 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 	}
 	return err
 }
+
+// Drop forgets a conversation: every event and view of it this log keeps (we left a group, or it
+// was deleted). Nothing is sent; a peer that syncs with us no longer finds it shared.
+func (l *Log) Drop(c Conv) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	bc := l.bc(c.ID)
+	for _, p := range []string{pfxEvent, pfxFork, pfxIndex, pfxOrder, pfxView, pfxThread, pfxPin, pfxMember, pfxChan, pfxChanO} {
+		entries, err := l.st.FindValues(bs(p+bc+"/"), 0)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := l.st.Delete(e.Key); err != nil {
+				return err
+			}
+		}
+	}
+	delete(l.members, bc)
+	if l.st.Exists(metaKey(bc)) {
+		return l.st.Delete(metaKey(bc))
+	}
+	return nil
+}

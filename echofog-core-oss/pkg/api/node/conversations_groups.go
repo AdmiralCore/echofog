@@ -85,6 +85,11 @@ var _ = [1]struct{}{}[uint32(groups.PermSendMessages)^convlog.PermSend|
 // hand an event to one member in its own session, and who is connected.
 func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 	gf.mgr.SetRoleResolver(gf.resolveRole)
+	gf.onForget = func(groupID string) {
+		if f, err := n.convsFacade(); err == nil {
+			_ = f.log.Drop(convlog.Group(groupID))
+		}
+	}
 	gf.inviteState = func(groupID, nonce string) (convlog.Invite, bool) {
 		f, err := n.convsFacade()
 		if err != nil {

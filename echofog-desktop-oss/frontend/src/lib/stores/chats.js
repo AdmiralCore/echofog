@@ -180,7 +180,7 @@ function rowOf(d) {
   const group = d.ref.kind === 'group';
   return {
     id: chatIdOf(d.ref), kind: group ? 'group' : 'direct', groupKind: d.kind === 'channel' ? 'channel' : 'group', ref: d.ref,
-    name: d.name || (group ? d.title : d.ref.id.slice(0, 8)), peerId: group ? '' : d.ref.id, pubKey: d.pubKey || '', groupId: group ? d.ref.id : '',
+    name: d.name || (group ? d.title : '') || d.ref.id.slice(0, 8), peerId: group ? '' : d.ref.id, pubKey: d.pubKey || '', groupId: group ? d.ref.id : '',
     online: !!d.online, blocked: !!d.blocked, request: !!d.request, myRole: d.role || '', members: d.members || 0,
     avatar: avatarSrc(d.avatar),
     can, readOnly: !can.send,

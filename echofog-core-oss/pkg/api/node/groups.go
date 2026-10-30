@@ -185,6 +185,9 @@ type groupsFacade struct {
 	rolesMu  sync.Mutex
 	roleDefs map[string]map[string]groups.Role
 
+	// onForget: a group we left or that was deleted, for its conversation log to go
+	onForget func(groupID string)
+
 	// inviteState is an invitation as the group's log has it (its uses, a revocation)
 	inviteState func(groupID, n string) (convlog.Invite, bool)
 	now         func() time.Time // the clock of the key logic (tests move it)

@@ -804,6 +804,9 @@ func (f *groupsFacade) forget(groupID string) {
 		}
 	}
 	delete(f.calls, groupID)
+	if f.onForget != nil {
+		go f.onForget(groupID) // its conversation log goes too
+	}
 }
 
 func (f *groupsFacade) knows(id types.PeerID) bool {

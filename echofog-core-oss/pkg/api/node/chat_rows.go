@@ -157,10 +157,27 @@ func (n *NodeApi) ChatRows() ([]ConversationDTO, error) {
 		seen[c.ID] = true
 		out = append(out, f.conversation(c, m))
 	}
-	for _, m := range metas {
-		if c, ok := convOfMeta(m); ok {
-			add(c, m)
+	// the groups we are in: a group's log left behind by one we left or that was deleted (before
+	// logs went with their groups) is not a chat any more, and goes now
+	var mine map[string]bool
+	if gf, err := n.groupsFacade(); err == nil {
+		if list, err := gf.List(); err == nil {
+			mine = make(map[string]bool, len(list))
+			for _, g := range list {
+				mine[convlog.Group(g.ID).ID.String()] = true
+			}
 		}
+	}
+	for _, m := range metas {
+		c, ok := convOfMeta(m)
+		if !ok {
+			continue
+		}
+		if c.Kind == convlog.KindGroup && mine != nil && !mine[c.ID.String()] {
+			go func(c convlog.Conv) { _ = f.log.Drop(c) }(c)
+			continue
+		}
+		add(c, m)
 	}
 	// contacts and requests without a message yet, and groups without one
 	if n.node.Contact != nil {
