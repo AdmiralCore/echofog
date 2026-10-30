@@ -1,8 +1,10 @@
 <script>
+    import { onDestroy } from 'svelte';
     import { callService, callState } from '../../services/call.service.js';
     import { toggleMute, toggleDeafen, toggleVideo, toggleScreenShare, endCall, resumeAudioContext } from '../../stores/call.store.js';
     import Icon from '../ui/Icon.svelte';
     import Popover from '../ui/Popover.svelte';
+    import Pills from '../ui/Pills.svelte';
     import { t } from '../../i18n/index.js';
     import { App } from '../../api.js';
 
@@ -24,6 +26,28 @@
         if (menu === 'audio' || menu === 'camera') callService.refreshDevices();
         if (menu === 'quality' && !measuredKbps && !measuring) measure();
     }
+
+    // while the quality menu is open on a shared screen: how it is really encoded, every 2 s
+    let enc = null;
+    let encTimer = null;
+    $: watchEncoder(menu === 'quality' && s.isScreenSharing);
+    function watchEncoder(on) {
+        clearInterval(encTimer);
+        encTimer = null;
+        enc = null;
+        if (!on) return;
+        const read = async () => { try { enc = await callService.screenEncoderInfo(); } catch (_) { enc = null; } };
+        read();
+        encTimer = setInterval(read, 2000);
+    }
+    onDestroy(() => clearInterval(encTimer));
+
+    let mode = $callState.screenMode;
+    $: modeItems = [
+        { value: 'motion', label: $t('call.mode.motion'), hint: $t('call.mode.motionHint') },
+        { value: 'detail', label: $t('call.mode.detail'), hint: $t('call.mode.detailHint') },
+    ];
+    $: if (mode !== s.screenMode) callService.setScreenMode(mode);
 
     async function measure() {
         measuring = true;
@@ -173,6 +197,16 @@
     </Popover>
 {:else if menu === 'quality'}
     <Popover anchor={shareAnchor} width={320} label={$t('call.quality')} on:close={() => (menu = '')}>
+        <p class="pop-title">{$t('call.mode')}</p>
+        <div class="mode"><Pills items={modeItems} bind:value={mode} label={$t('call.mode')} /></div>
+        <p class="pop-hint">{mode === 'detail' ? $t('call.mode.detailHint') : $t('call.mode.motionHint')}</p>
+        {#if enc}
+            <p class="enc" class:warn={enc.hardware === false || enc.limit === 'cpu'}>
+                {enc.width}×{enc.height} · {enc.fps} {$t('call.fps')} · {mbps(enc.kbps)} {$t('unit.mbps')}
+                {#if enc.encoder}{' · '}{enc.hardware === false ? $t('call.enc.cpu') : enc.hardware ? $t('call.enc.gpu') : enc.encoder}{/if}
+                {#if enc.limit}{' · '}{$t('call.enc.limit.' + enc.limit)}{/if}
+            </p>
+        {/if}
         <p class="pop-title">{$t('call.quality')}</p>
         {#each s.qualities as q (q.id)}
             <button class="pop-row" class:sel={q.id === currentQ} role="option" aria-selected={q.id === currentQ} on:click={() => pickQuality(q)}>
@@ -304,4 +338,8 @@
     :global(.pop .upload button) { height: 32px; padding: 0 12px; }
     :global(.pop .upload .link) { height: auto; padding: 0; background: none; border: none; color: var(--accent); font-weight: 600; }
     :global(.pop .note-text) { line-height: 1.4; color: var(--faint); }
+    .mode { padding: 2px 10px 4px; }
+    .pop-hint { margin: 0 10px 6px; font-size: 11.5px; line-height: 1.35; color: var(--faint); }
+    .enc { margin: 2px 10px 8px; padding: 6px 9px; border-radius: 9px; font-size: 11.5px; font-variant-numeric: tabular-nums; background: var(--raised); color: var(--muted); }
+    .enc.warn { color: var(--warn, #f5a524); }
 </style>

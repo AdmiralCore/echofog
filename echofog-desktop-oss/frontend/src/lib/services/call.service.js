@@ -66,6 +66,9 @@ function freshState(prev = {}) {
     micDeviceId: prev.micDeviceId ?? loadPrefs().mic ?? '',
     camDeviceId: prev.camDeviceId ?? loadPrefs().cam ?? '',
     outDeviceId: prev.outDeviceId ?? loadPrefs().out ?? '',
+    // what a shared screen keeps when the encoder is short of time or bitrate: 'motion' its frame
+    // rate (games, films), 'detail' its sharpness (text, slides)
+    screenMode: prev.screenMode || loadPrefs().screenMode || 'motion',
     notice: null,
   };
 }
@@ -276,6 +279,7 @@ class CallService {
     // tracks end by themselves while in the call only when the bridge drops them; leaving ends all
     ev.track.onended = () => { if (this.pc) log.info('call', 'remote track ended', { slot, kind: ev.track.kind }); };
     const stream = ev.streams?.[0] || new MediaStream([ev.track]);
+    if (ev.track.kind === 'video') smoothPlayout(ev.receiver);
     if (ev.track.kind === 'audio') {
       this.attachAudio(slot, stream);
     } else {
@@ -550,7 +554,8 @@ class CallService {
       return;
     }
     const track = this.screen.getVideoTracks()[0];
-    track.contentHint = 'detail'; // screens carry text: keep it sharp, drop frames first
+    const mode = get(callState).screenMode;
+    track.contentHint = mode === 'detail' ? 'detail' : 'motion';
     track.onended = () => {
       log.info('screen', 'screen capture ended (stopped from the system bar or the window closed)', { streamId });
       this.stopScreenShare();
@@ -563,7 +568,7 @@ class CallService {
       callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
       return;
     }
-    await applySenderQuality(this.tx.screen.sender, q, true);
+    await applySenderQuality(this.tx.screen.sender, q, mode);
     const vs = track.getSettings?.() || {};
     const sound = this.screen.getAudioTracks()[0] || null;
     let soundGuard = 'none';
@@ -581,7 +586,7 @@ class CallService {
       this.notify(tr('call.notice.noScreenAudio'));
     }
     log.info('screen', 'sharing the screen', {
-      streamId, surface: vs.displaySurface, width: vs.width, height: vs.height, fps: vs.frameRate,
+      streamId, surface: vs.displaySurface, width: vs.width, height: vs.height, fps: vs.frameRate, mode,
       sound: !!sound, soundGuard, ...(sound ? audioSettings(sound) : {}),
     });
     videoStreams.update((v) => ({ ...v, 'local:screen': this.screen }));
@@ -616,14 +621,50 @@ class CallService {
       return;
     }
     const track = this.screen?.getVideoTracks()[0];
+    const mode = get(callState).screenMode;
     if (track) {
-      track.contentHint = 'detail';
+      track.contentHint = mode === 'detail' ? 'detail' : 'motion';
       await track.applyConstraints({ width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } })
         .catch((e) => log.warn('screen', 'the capture did not take the new size or frame rate', errAttrs(e, { quality: q.id })));
       log.info('screen', 'stream quality changed', { streamId: s.screenStreamId, quality: q.id });
     }
-    await applySenderQuality(this.tx.screen.sender, q, true);
+    await applySenderQuality(this.tx.screen.sender, q, mode);
     callState.update((c) => ({ ...c, streamQualityId: q.id, streamError: null }));
+  }
+
+  /** What a shared screen keeps under pressure: 'motion' (smooth) or 'detail' (sharp); applied at
+   *  once to a screen being shared, and remembered. */
+  async setScreenMode(mode) {
+    mode = mode === 'detail' ? 'detail' : 'motion';
+    callState.update((s) => ({ ...s, screenMode: mode }));
+    savePrefs({ screenMode: mode });
+    const s = get(callState);
+    const track = this.screen?.getVideoTracks()[0];
+    if (!s.isScreenSharing || !track) return;
+    track.contentHint = mode === 'detail' ? 'detail' : 'motion';
+    await applySenderQuality(this.tx.screen.sender, this.quality(s.streamQualityId), mode);
+    log.info('screen', 'screen mode changed', { streamId: s.screenStreamId, mode });
+  }
+
+  /** How our shared screen is encoded now: { encoder, hardware, width, height, fps, kbps, limit }
+   *  from the browser's own stats; null when nothing is sent. */
+  async screenEncoderInfo() {
+    const sender = this.tx?.screen?.sender;
+    if (!sender || !this.screen) return null;
+    const report = await sender.getStats();
+    let info = null;
+    report.forEach((r) => {
+      if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
+      const before = this.prevEncoderStats;
+      info = {
+        encoder: r.encoderImplementation || '',
+        hardware: r.powerEfficientEncoder === true ? true : r.powerEfficientEncoder === false ? false : null,
+        width: r.frameWidth || 0, height: r.frameHeight || 0, fps: Math.round(r.framesPerSecond || 0),
+        kbps: rateKbps(r, before), limit: r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '',
+      };
+      this.prevEncoderStats = r;
+    });
+    return info;
   }
 
   async toggleCamera() {
@@ -845,7 +886,8 @@ class CallService {
       if (r.type === 'outbound-rtp' && r.bytesSent > 0) {
         now[r.id] = r;
         const limit = r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '';
-        out.push(`${r.kind}${r.frameWidth ? ` ${r.frameWidth}x${r.frameHeight}@${Math.round(r.framesPerSecond || 0)}` : ''} ${rateKbps(r, prev[r.id])}kbps${limit ? ' limited:' + limit : ''}`);
+        const enc = r.kind === 'video' && r.encoderImplementation ? ` enc:${r.encoderImplementation}${r.powerEfficientEncoder ? '(hw)' : ''}` : '';
+        out.push(`${r.kind}${r.frameWidth ? ` ${r.frameWidth}x${r.frameHeight}@${Math.round(r.framesPerSecond || 0)}` : ''} ${rateKbps(r, prev[r.id])}kbps${enc}${limit ? ' limited:' + limit : ''}`);
         if (limit && prev[r.id]?.qualityLimitationReason !== r.qualityLimitationReason) {
           log.warn('call', 'our ' + r.kind + ' is held back', { by: limit, width: r.frameWidth, height: r.frameHeight, fps: r.framesPerSecond });
         }
@@ -909,6 +951,20 @@ function rateKbps(r, before) {
   return dt > 0 ? Math.round(((bytes - prevBytes) * 8) / dt / 1000) : 0;
 }
 
+// Frames that cross relays come unevenly; the browser shows them as they come, so the picture
+// stutters even when none is lost. A short buffer before showing them evens that out, at the cost
+// of as much delay (the sound waits with them).
+const PLAYOUT_MS = 100;
+function smoothPlayout(receiver) {
+  if (!receiver) return;
+  try {
+    if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = PLAYOUT_MS;
+    else if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = PLAYOUT_MS / 1000;
+  } catch (e) {
+    log.warn('call', 'could not set the playout buffer', errAttrs(e));
+  }
+}
+
 function rms(analyser, data) {
   analyser.getFloatTimeDomainData(data);
   let sum = 0;
@@ -916,9 +972,10 @@ function rms(analyser, data) {
   return Math.sqrt(sum / data.length);
 }
 
-// A screen under pressure gives up frame rate and keeps its resolution: blurred text is worse than
-// a lower frame rate. Cameras keep moving and lose detail instead.
-async function applySenderQuality(sender, quality, screen = false) {
+// What gives way when the encoder is short of time or bitrate. A screen in 'detail' mode gives up
+// frame rate and keeps its resolution (blurred text is worse than a lower frame rate); in 'motion'
+// mode, and a camera at 60 fps, it keeps moving and loses detail instead.
+async function applySenderQuality(sender, quality, screenMode = '') {
   if (!sender) return;
   try {
     const params = sender.getParameters();
@@ -926,7 +983,8 @@ async function applySenderQuality(sender, quality, screen = false) {
     params.encodings[0].maxBitrate = quality.bitrateKbps * 1000;
     params.encodings[0].maxFramerate = quality.fps;
     params.encodings[0].scaleResolutionDownBy = 1;
-    params.degradationPreference = screen ? 'maintain-resolution' : quality.fps >= 60 ? 'maintain-framerate' : 'balanced';
+    params.degradationPreference = screenMode === 'detail' ? 'maintain-resolution'
+      : screenMode === 'motion' || quality.fps >= 60 ? 'maintain-framerate' : 'balanced';
     await sender.setParameters(params);
   } catch (e) {
     log.warn('call', 'could not set the video bitrate and frame rate', errAttrs(e, { quality: quality.id }));

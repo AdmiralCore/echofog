@@ -197,10 +197,11 @@ function postGroupFile(groupId, path, channel = '', thread = '') {
 }
 
 const qualities = [
-  ['360p30', '360p 30 fps', 640, 360, 30, 800], ['720p30', '720p 30 fps', 1280, 720, 30, 2500], ['720p60', '720p 60 fps', 1280, 720, 60, 4000],
-  ['1080p30', '1080p 30 fps', 1920, 1080, 30, 5000], ['1080p60', '1080p 60 fps', 1920, 1080, 60, 8000], ['1440p60', '1440p 60 fps', 2560, 1440, 60, 14000],
-  ['2160p30', '4K 30 fps', 3840, 2160, 30, 16000], ['2160p60', '4K 60 fps', 3840, 2160, 60, 25000],
-].map(([id, label, width, height, fps, bitrateKbps]) => ({ id, label, width, height, fps, bitrateKbps, codec: 'h264', fits: bitrateKbps <= 10000 }));
+  ['360p30', '360p 30 fps', 640, 360, 30, 1000], ['720p30', '720p 30 fps', 1280, 720, 30, 3000], ['720p60', '720p 60 fps', 1280, 720, 60, 6000],
+  ['1080p30', '1080p 30 fps', 1920, 1080, 30, 7000], ['1080p60', '1080p 60 fps', 1920, 1080, 60, 12000], ['1080p120', '1080p 120 fps', 1920, 1080, 120, 20000],
+  ['1440p60', '1440p 60 fps', 2560, 1440, 60, 20000], ['1440p120', '1440p 120 fps', 2560, 1440, 120, 32000],
+  ['2160p30', '4K 30 fps', 3840, 2160, 30, 20000], ['2160p60', '4K 60 fps', 3840, 2160, 60, 35000],
+].map(([id, label, width, height, fps, bitrateKbps]) => ({ id, label, width, height, fps, bitrateKbps, codec: 'h264', fits: bitrateKbps <= 25000 }));
 
 // --- fake call core ---------------------------------------------------------------------------------
 const call = { pc: null, members: [], slots: {}, streams: [], painters: [], voices: [], audioCtx: null, timer: null };
