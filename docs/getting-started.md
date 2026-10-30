@@ -126,7 +126,11 @@ Everything here is free and end-to-end encrypted.
 - **Call.** In a chat, press the phone button for a voice call or the camera button for a video
   call. In a space with voice rooms you call by joining a room.
 - **Share your screen.** During a call, press *Share your screen*. The arrow next to it opens
-  *Stream quality*: you can pick up to 4K at 60 fps, but high quality needs a fast upload. To share
+  *Stream quality*: you can pick up to 4K at 60 fps, or 1080p and 1440p at 120 fps, but high
+  quality needs a fast upload. *What to keep* sets what gives way when the computer or the network
+  falls short: *Smoothness* (games, films: the picture gets softer, the frame rate holds) or
+  *Sharpness* (text, code, slides: frames are skipped, text stays sharp). While you share, the menu
+  shows what really goes out and whether the graphics card or the processor encodes it. To share
   the sound too, pick a whole screen and tick *Share system audio* in the window that opens (or a
   browser tab with *Share tab audio*). Only people watching your stream hear it, and each of them
   can mute it with the speaker button on the stream.

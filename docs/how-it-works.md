@@ -193,9 +193,13 @@ one does less. Only people who actually watch a stream receive it. Voice uses a 
 tree, so speech stays fast.
 
 That is why **4K at 60 fps** is possible without a company's servers: the 4K60 preset is about
-25 Mbit/s, and the sender only has to push it to the first few people in the tree, not to everyone.
-The available presets go from 360p30 up to 4K60; the app checks that your upload can feed at least
-one person at the quality you pick.
+35 Mbit/s, and the sender only has to push it to the first few people in the tree, not to everyone.
+The available presets go from 360p30 up to 4K60, with 1080p and 1440p also at 120 fps; their
+bitrates are what H.264 needs for a moving picture, and a still screen takes much less. The app
+checks that your upload can feed at least one person at the quality you pick, and watches the real
+path: when it backs up, the encoder is asked for a little less, and gets back up only once the path
+has stayed clear for a couple of seconds. Viewers hold frames for a tenth of a second before showing
+them, so frames that cross relays unevenly still play evenly.
 
 A participant nobody can reach directly (both sides behind strict NATs, say) is reached through a
 relay circuit, and the call stays one call. Its sound and video cross the relay as datagrams, as
