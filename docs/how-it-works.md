@@ -198,8 +198,9 @@ The available presets go from 360p30 up to 4K60; the app checks that your upload
 one person at the quality you pick.
 
 A participant nobody can reach directly (both sides behind strict NATs, say) is reached through a
-relay circuit, and the call stays one call. A public relay gives each peer up to 50 Mbit/s by
-default: enough for one 4K60 stream, tight for several. Calls do not go through the VPN exit, so
+relay circuit, and the call stays one call. Its sound and video cross the relay as datagrams, as
+they do on a direct link, so one lost packet does not hold up the ones behind it. A public relay
+gives each peer up to 50 Mbit/s by default: enough for one 4K60 stream, tight for several. Calls do not go through the VPN exit, so
 the exit's speed limit does not touch them.
 
 ## The VPN

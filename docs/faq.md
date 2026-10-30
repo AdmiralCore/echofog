@@ -167,7 +167,9 @@ Yes.
   `%LOCALAPPDATA%\EchoFog`). The file is capped at 8 MB, plus one previous file. Passwords, keys
   and the recovery phrase are blanked out and IP addresses are masked, but node IDs, sites you
   checked and contact names can stay. Check a log before you share it.
-- **Emergency lock** (in *Settings*) erases the decrypted keys from memory at once and stops the
-  node. Everything on disk stays encrypted.
+- **Emergency lock** (in *Settings*) erases the decrypted keys from memory at once, stops the node
+  and closes the app, so no key or open message stays in it. Everything on disk stays encrypted.
+- **The wallet asks before larger sends**, and small sends add up: see
+  [Getting started](getting-started.md#4-paying-for-traffic).
 - There is no analytics or crash reporting, and the app does not upload logs. Logs leave your
   computer only if you copy or save them and send them yourself.

@@ -330,7 +330,9 @@ peer. The defaults suit a VPS; none needs setting.
 
 Identities cost nothing, so a relay or an exit never assumes one peer is one person. Out of the box
 a node caps what peers can take; the defaults fit a small VPS, and each one has a flag (and an
-`ECHOFOG_*` variable). For the number flags `0` keeps the default and `-1` removes the limit.
+`ECHOFOG_*` variable: the flag in capitals with `_` for `-`, so `--relay-peer-mbps` is
+`ECHOFOG_RELAY_PEER_MBPS`, which is what `deploy/.env` uses). For the number flags `0` keeps the
+default and `-1` removes the limit.
 
 **Relay** (relayed connections, "circuits"):
 

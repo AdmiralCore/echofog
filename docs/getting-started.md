@@ -74,6 +74,11 @@ exits take only what you used, every few hours. How this works, and its current 
 
 The wallet is for traffic only. Its keys live on this computer, so do not keep savings in it.
 
+Sends you start yourself above 1 TON (or 1 USDT) ask for a yes in a window of the system. Smaller
+ones add up: once the sends of the last hour reach that amount, the next one asks too. A payment
+to an exit that a page asks for goes through the same check. Paying for the traffic you use runs
+on its own and asks nothing.
+
 ## 5. Share your connection (optional)
 
 You can also be an exit yourself: other people's traffic then goes out to the Internet through your
@@ -160,6 +165,13 @@ you are. The app joins the network through *bootstrap nodes* — the first nodes
    `host:port/peer-id`. The peer ID part is required.
 
 The chip next to *Bootstrap nodes* shows how many peers you are connected to.
+
+**Settings** → *Joining the network* shows how the app goes in. By default (*Automatic*) it goes
+through a few camouflaged guard servers where the internet is censored, so your address is not
+spread around, and directly elsewhere. *Always through guards* hides your address everywhere, a
+little slower; *Direct* is the old way. *Route through your own relay* pins a relay you run or
+trust, and the app always goes in through it. This is only about the network: the VPN exit is
+chosen on the Proxy page. How guards work: [Anti-DPI](anti-dpi.md#guards-a-users-node-keeps-few-links-across-the-border).
 
 If a message says *No way to the recipient right now*, a call says *No way to them*, or a space you
 joined says *No member of the group can be reached yet*, you and the other side are both behind

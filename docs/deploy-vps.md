@@ -201,6 +201,18 @@ Keep only the node's port open in the provider's firewall. What each protection 
 in `status` and the log, and what it does not cover (a flood that fills the uplink needs the
 provider's DDoS protection): [Protecting a node](node-security.md).
 
+Every limit of the relay and the exit (circuits, speeds, daily and monthly caps of a free exit) is a
+line in `deploy/.env.example`; what each one does is in
+[Run a node → Relay and exit limits](run-a-node.md#relay-and-exit-limits). A few other settings:
+
+| Variable | What it does |
+| --- | --- |
+| `ECHOFOG_PASSWORD_FILE` | the node's password from a file (a Docker secret); without it one is generated and kept in `/data/.node_password` |
+| `ECHOFOG_MNEMONIC_FILE` | restore an existing identity from its 12 or 24 words on the first start |
+| `ECHOFOG_TON_NETWORK` | `testnet` (the default while the vault contract is unaudited) or `mainnet` |
+| `ECHOFOG_STATS_EVERY` | how often the stats line goes to the log (`1m`): peers, relayed traffic, messages kept for offline peers, earnings |
+| `ECHOFOG_LOG_LEVEL` | `debug`, `info`, `warn` or `error` |
+
 ## Update
 
 ```bash
