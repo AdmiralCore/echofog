@@ -249,10 +249,10 @@
 
 <div class="chat-screen">
   {#if conv.kind === 'group'}
-    <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; }} />
+    <ChannelBar {conv} {indent} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; }} />
   {/if}
   <div class="main">
-    <ChatHeader {conv} {back} {indent} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} indent={indent && conv.kind !== 'group'} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}

@@ -16,6 +16,8 @@
    *  them real categories (ChatCategoriesSetup). Channels in no category sit on top. Who may manage
    *  channels (conv.can.channels) adds, sets up, reorders, files and removes them. */
   export let conv;
+  /** indent: leave room for the show-list button, which sits over this column's head */
+  export let indent = false;
 
   const dispatch = createEventDispatcher();
   const SLOW = [0, 5, 10, 30, 60, 300, 900, 3600];
@@ -194,8 +196,8 @@
 </script>
 
 <nav class="chanbar" aria-label={$t('chats.channels')}>
-  <div class="space-head">
-    <span class="space-name grow">{conv.name}</span>
+  <div class="space-head" class:indent>
+    <span class="space-name grow" title={conv.name}>{conv.name}</span>
     {#if manage}<button class="icon tiny" title={$t('chats.newCategory')} aria-label={$t('chats.newCategory')} on:click={() => startAdd('category')}><Icon name="folder" size={15} /></button>{/if}
     <button class="icon tiny" title={$t('chats.spaceSettings')} aria-label={$t('chats.spaceSettings')} on:click={() => dispatch('settings')}><Icon name="settings" size={16} /></button>
   </div>

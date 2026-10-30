@@ -247,6 +247,7 @@
   display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 0 4px 0 8px; margin: 0 -8px 8px;
   padding-left: 16px; border-bottom: 1px solid var(--line-soft);
 }
+.chat-screen .space-head.indent { padding-left: 58px; }
 .chat-screen .space-name { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-screen .chan-head { display: flex; align-items: center; padding: 8px 4px 2px 8px; min-height: 30px; font-size: 12px; font-weight: 600; color: var(--faint); }
 .chat-screen .chan-head.rooms { margin-top: 10px; }

@@ -41,14 +41,14 @@
       <span class="name" title={file.name}>{file.name}</span>
       <span class="sub">
         {#if state === 'active'}
-          {bytes(xfer.done)} / {bytes(size)}{#if xfer.rate} · {$t('files.rate', { v: bytes(xfer.rate) })}{/if}{#if left} · {$t('files.left', { time: duration(left) })}{/if}
+          {bytes(xfer.done)} / {bytes(size)}{#if xfer.rate}{' · '}{$t('files.rate', { v: bytes(xfer.rate) })}{/if}{#if left}{' · '}{$t('files.left', { time: duration(left) })}{/if}
         {:else}
           {bytes(size)} · {#if state === 'unknown'}{$t('files.st.unknown')}{:else if shared && state === 'offered'}{$t('files.st.shared')}{:else if state === 'offered'}{mine ? $t('files.st.waitingAccept') : $t('files.st.offered')}{:else}{$t('files.st.' + state)}{/if}
         {/if}
       </span>
       {#if shared && xfer.members}
         <span class="sub delivered">
-          <Icon name="check" size={12} /> {$t('files.delivered', { n: xfer.delivered || 0, of: xfer.members })}{#if xfer.fetching} · {$t('files.fetching', { n: xfer.fetching })}{/if}
+          <Icon name="check" size={12} /> {$t('files.delivered', { n: xfer.delivered || 0, of: xfer.members })}{#if xfer.fetching}{' · '}{$t('files.fetching', { n: xfer.fetching })}{/if}
         </span>
       {/if}
     </div>

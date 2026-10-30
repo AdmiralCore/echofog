@@ -116,7 +116,7 @@
   <div class="profile">
     <Avatar id={conv.peerId || conv.id} name={conv.name} size={76} />
     <h2>{conv.name}</h2>
-    <p class="small muted">{#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{$t('chats.members', { n: conv.members })}{#if conv.myRole} · {$t('chats.youAre', { role: roleLabel(conv.myRole) })}{/if}{/if}</p>
+    <p class="small muted">{#if conv.kind === 'direct'}{conv.online ? $t('common.online') : $t('common.offline')}{:else}{$t('chats.members', { n: conv.members })}{#if conv.myRole}{' · '}{$t('chats.youAre', { role: roleLabel(conv.myRole) })}{/if}{/if}</p>
   </div>
 
   <div class="facts">

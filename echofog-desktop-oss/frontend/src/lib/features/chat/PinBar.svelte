@@ -26,7 +26,7 @@
   <button class="pinbar" on:click={next} title={$t('chats.goToPin')} transition:slide={{ duration: 180 }}>
     <span class="pin-ic"><Icon name="pin" size={15} /></span>
     <span class="grow pin-body">
-      <span class="pin-head">{$t('chats.pinned')}{#if $pins.length > 1} · {idx + 1}/{$pins.length}{/if}</span>
+      <span class="pin-head">{$t('chats.pinned')}{#if $pins.length > 1}{' · '}{idx + 1}/{$pins.length}{/if}</span>
       <span class="pin-text">{preview(shown)}</span>
     </span>
     {#if canPin}

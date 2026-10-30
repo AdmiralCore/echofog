@@ -70,7 +70,7 @@
       <article class="item" in:fly={{ y: 8, duration: 220 }}>
         <div class="row head">
           <Avatar id={m.chatId.slice(2)} name={m.chatName} size={26} />
-          <span class="chat grow">{m.chatName}{#if !m.mine && m.sender && m.chatId.startsWith('g:')} · {m.sender}{:else if m.mine} · {$t('chats.You')}{/if}</span>
+          <span class="chat grow">{m.chatName}{#if !m.mine && m.sender && m.chatId.startsWith('g:')}{' · '}{m.sender}{:else if m.mine}{' · '}{$t('chats.You')}{/if}</span>
           <span class="when small faint" title={time(m.ts, $lang)}>{when(m.ts, $lang)}</span>
         </div>
         {#if m.fileName}

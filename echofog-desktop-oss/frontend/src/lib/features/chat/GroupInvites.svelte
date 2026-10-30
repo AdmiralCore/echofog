@@ -154,9 +154,9 @@
               <span class="nm">{inv.label || $t('chats.inv.noLabel')}</span>
               <span class="small faint">
                 {$t('chats.inv.st.' + inv.state)} · {inv.uses ? $t('chats.inv.usedOf', { n: inv.used, of: inv.uses }) : $t('chats.inv.used', { n: inv.used })}
-                {#if inv.state === 'active'} · {$t('chats.inv.until', { when: when(inv.exp) })}{/if}
-                {#if inv.role} · {roleName(inv.role)}{/if}
-                {#if inv.approval} · {$t('chats.inv.withApproval')}{/if}
+                {#if inv.state === 'active'}{' · '}{$t('chats.inv.until', { when: when(inv.exp) })}{/if}
+                {#if inv.role}{' · '}{roleName(inv.role)}{/if}
+                {#if inv.approval}{' · '}{$t('chats.inv.withApproval')}{/if}
               </span>
             </div>
             {#if inv.state === 'active' && (inv.webLink || inv.link)}

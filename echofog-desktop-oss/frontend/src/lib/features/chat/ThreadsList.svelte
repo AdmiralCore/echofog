@@ -30,7 +30,7 @@
     {#each $threads as m (m.id)}
       <button class="th-row" on:click={() => open(m)}>
         <span class="th-name">{m.threadTitle || preview(m)}</span>
-        <span class="small faint">{$authorName(m)} · {$t('chats.comments', { n: m.replies })}{#if m.lastReplyAt} · {when(m.lastReplyAt, $lang)}{/if}</span>
+        <span class="small faint">{$authorName(m)} · {$t('chats.comments', { n: m.replies })}{#if m.lastReplyAt}{' · '}{when(m.lastReplyAt, $lang)}{/if}</span>
       </button>
     {:else}
       <p class="small faint">{$t('chats.noThreads')}</p>

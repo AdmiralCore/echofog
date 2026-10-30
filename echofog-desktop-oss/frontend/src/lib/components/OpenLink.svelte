@@ -123,8 +123,8 @@
             <b>{invite?.server || link.kind === 'node' ? $t('links.kind.server') : $t('links.kind.node')}</b>
             <span class="small faint">
               <span class="mono">{short(peerId)}</span>
-              {#if invite?.sni} · {$t('links.cover', { sni: invite.sni })}{/if}
-              {#if invite?.relays} · {$t('links.viaRelay', { n: invite.relays })}{/if}
+              {#if invite?.sni}{' · '}{$t('links.cover', { sni: invite.sni })}{/if}
+              {#if invite?.relays}{' · '}{$t('links.viaRelay', { n: invite.relays })}{/if}
             </span>
           {:else if link.kind === 'contact'}
             <b>{$t('links.kind.contact')}</b>
