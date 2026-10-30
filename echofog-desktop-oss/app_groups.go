@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -147,11 +148,34 @@ func (a *App) TransferGroupOwnership(groupID, memberID string) error {
 	return n.TransferGroupOwnership(groupID, memberID)
 }
 
-// DeleteGroup removes the group for everybody. Only the owner can.
-func (a *App) DeleteGroup(groupID string) error {
+// GroupInviteContacts sends contacts invitations to a group in their direct chats.
+func (a *App) GroupInviteContacts(groupID string, peerIDs []string, role string) (int, error) {
+	n := a.getAPI()
+	if n == nil {
+		return 0, errNodeNotStarted
+	}
+	return n.GroupInviteContacts(groupID, peerIDs, role)
+}
+
+// InspectGroupInvite reads a group invitation for its card without joining.
+func (a *App) InspectGroupInvite(text string) (api.GroupInvitePreview, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupInvitePreview{}, errNodeNotStarted
+	}
+	return n.InspectGroupInvite(text)
+}
+
+// DeleteGroup removes the group for everybody. Only the owner can, and only with the app password:
+// it cannot be undone, for anyone.
+func (a *App) DeleteGroup(groupID, appPassword string) error {
 	n := a.getAPI()
 	if n == nil {
 		return errNodeNotStarted
+	}
+	if appPassword == "" || api.VerifyProfilePassword(a.getActiveProfile(), appPassword) != nil {
+		slog.Warn("Group deletion refused: wrong app password")
+		return errors.New("wrong app password")
 	}
 	return n.DeleteGroup(groupID)
 }

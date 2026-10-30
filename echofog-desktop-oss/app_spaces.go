@@ -52,6 +52,16 @@ func (a *App) ChatThreadTitle(ref api.ChatRef, root, title string) error {
 	return n.ChatThreadTitle(ref, root, title)
 }
 
+// ChatGroupPhoto sets a group's picture for every member ("" takes it away): base64 of a small
+// JPEG, PNG or WebP.
+func (a *App) ChatGroupPhoto(ref api.ChatRef, photoBase64 string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatGroupPhoto(ref, photoBase64)
+}
+
 // ChatAttachments are a chat's media, files and links, newest first.
 func (a *App) ChatAttachments(ref api.ChatRef) (api.ChatAttachments, error) {
 	n := a.getAPI()

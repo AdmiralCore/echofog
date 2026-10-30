@@ -76,4 +76,18 @@ export const looksLikeLink = (text) => {
 /** The open-link dialog: null when closed, else { text } (the text may be empty). */
 export const openLink = writable(null);
 
-export const openLinkDialog = (text = '') => openLink.set({ text });
+// file: a group file (.fogzip) to open, already chosen (one received in a chat)
+export const openLinkDialog = (text = '', file = '') => openLink.set({ text, file });
+
+/** The first group invitation in a message's text, in the app's own form (fogroup2:…); '' none. */
+export function findGroupLink(text) {
+  const s = String(text || '');
+  if (!/fogroup|group\/|group%2F/i.test(s)) return '';
+  for (const w of s.split(/\s+/)) {
+    const m = FIND.exec(w);
+    if (!m) continue;
+    const t = fromWebLink(m[1].replace(/[.,;:!?)\]»"']+$/, ''));
+    if (/^fogroup[12]:/i.test(t)) return t;
+  }
+  return '';
+}

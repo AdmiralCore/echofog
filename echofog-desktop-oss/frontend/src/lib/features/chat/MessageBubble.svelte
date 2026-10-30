@@ -7,6 +7,8 @@
   import { t, lang } from '../../i18n/index.js';
   import Icon from '../../components/ui/Icon.svelte';
   import FileCard from '../../components/FileCard.svelte';
+  import InviteCard from './InviteCard.svelte';
+  import { findGroupLink } from '../../links.js';
   import { useChat, stateOf } from './context.js';
 
   /** One message of the main history: its quote, text or file, marks, reactions and comments. */
@@ -23,6 +25,7 @@
   const { nameOf, quoteOf, authorName } = chat;
   $: isSaved = $savedIds.has(conv.id + '/' + m.id);
   $: quoted = m.replyTo && !m.deleted ? $quoteOf(m.replyTo) : null;
+  $: groupLink = !m.deleted && !m.file ? findGroupLink(m.text) : '';
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -49,6 +52,7 @@
     <FileCard file={m.file} mine={m.mine} />
   {:else}
     <span class="text">{#each mark(linkify(m.text), q) as p}{#if p.href}<a href={p.href} title={linkHost(p.href)} rel="noreferrer noopener" on:click={(e) => chat.openLink(e, p.href)}>{#if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}</a>{:else if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>
+    {#if groupLink}<InviteCard link={groupLink} mine={m.mine} />{/if}
   {/if}
   <span class="meta">
     {#if m.pinned}<span class="saved-mark" title={$t('chats.pinned')}><Icon name="pin" size={11} stroke={2.4} /></span>{/if}

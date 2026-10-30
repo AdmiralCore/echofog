@@ -19,9 +19,10 @@
   let done = '';
   let invite = null; // what the core read from an echofog://join link
 
-  $: if ($openLink) start($openLink.text);
-  async function start(initial) {
+  $: if ($openLink) start($openLink.text, $openLink.file);
+  async function start(initial, chosen) {
     text = initial || '';
+    if (chosen) { file = chosen; filePass = ''; }
     name = '';
     error = '';
     done = '';
@@ -46,6 +47,16 @@
     }
   }
   $: if (link?.kind === 'contact' && !name && link.name) name = link.name;
+  let group = null; // what the invitation says about its group
+  $: readGroup(link && link.kind === 'group' ? link.text : '');
+  async function readGroup(s) {
+    group = null;
+    if (!s) return;
+    try {
+      const p = await App.InspectGroupInvite(s);
+      if (link && s === link.text) group = p;
+    } catch (_) { /* an older core: the plain note */ }
+  }
   $: hidden = link?.kind === 'join' && invite?.private;
   // a public node: by address, or the link of one
   $: node = link?.kind === 'node' || (link?.kind === 'join' && invite && !invite.private);
@@ -130,8 +141,8 @@
             <b>{$t('links.kind.contact')}</b>
             <span class="small faint mono">{short(link.key)}</span>
           {:else if link.kind === 'group'}
-            <b>{$t('links.kind.group')}</b>
-            <span class="small faint">{$t('links.groupNote')}</span>
+            <b>{group ? group.title : $t('links.kind.group')}</b>
+            <span class="small faint">{#if group}{$t('chats.invCard.' + group.kind)}{#if group.members}{' · '}{$t('chats.members', { n: group.members })}{/if}{#if group.approval}{' · '}{$t('chats.inv.withApproval')}{/if}{#if group.expired}{' · '}{$t('chats.invCard.expired')}{/if}{:else}{$t('links.groupNote')}{/if}</span>
           {/if}
         </div>
 
@@ -147,7 +158,7 @@
             <input bind:value={name} maxlength="64" placeholder={$t('links.contactName')} on:keydown={(e) => e.key === 'Enter' && name.trim() && addPerson()} />
             <button class="primary" disabled={!!busy || !name.trim()} on:click={addPerson}>{#if busy === 'contact'}<span class="spinner light"></span>{/if}<Icon name="userPlus" size={16} /> {$t('links.addContact')}</button>
           {:else if link.kind === 'group'}
-            <button class="primary" disabled={!!busy} on:click={joinTheGroup}>{#if busy === 'group'}<span class="spinner light"></span>{/if}<Icon name="users" size={16} /> {$t('links.joinGroup')}</button>
+            <button class="primary" disabled={!!busy || group?.expired || group?.joined} on:click={joinTheGroup}>{#if busy === 'group'}<span class="spinner light"></span>{/if}<Icon name="users" size={16} /> {$t('links.joinGroup')}</button>
           {/if}
         </div>
       {/if}

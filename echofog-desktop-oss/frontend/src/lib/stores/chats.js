@@ -654,6 +654,8 @@ function opError(err, fallback) {
   if (/not every member/.test(s)) return tr('chats.err.needsUpgrade');
   if (/not allowed/.test(s)) return tr('chats.err.notAllowed');
   if (/bad event body/.test(s)) return tr('chats.err.badBody');
+  const slow = /slow mode: you can write again in (\d+) s/.exec(s);
+  if (slow) return tr('chats.slowWait', { t: slow[1] });
   return s;
 }
 

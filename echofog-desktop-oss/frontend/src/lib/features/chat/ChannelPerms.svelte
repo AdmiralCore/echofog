@@ -1,6 +1,7 @@
 <script>
   import { t } from '../../i18n/index.js';
-  import { PERM } from '../../perms.js';
+  import { PERM, hexColor } from '../../perms.js';
+  import Pills from '../../components/ui/Pills.svelte';
 
   /** What roles may do in one channel otherwise than in the group (a channel's settings): for
    *  everyone, or for one role, each of the channel's permissions taken, as in the group, or
@@ -26,14 +27,14 @@
   }
   const roleName = (r) => r.title || (r.builtin ? $t('chats.role.' + r.id) : r.id);
   const changed = (id) => overrides.some((o) => o.role === id);
+  // a role whose permissions here differ from the group's is marked
+  $: roleItems = [{ value: '*', label: $t('chats.everyone') + (changed('*') ? ' •' : '') },
+    ...roles.map((r) => ({ value: r.id, label: roleName(r) + (changed(r.id) ? ' •' : ''), color: hexColor(r.color) || 'var(--faint)' }))];
 </script>
 
 <div class="cperms">
-  <label class="small faint" for="cp-role">{$t('chats.channelPerms')}</label>
-  <select id="cp-role" bind:value={role}>
-    <option value="*">{$t('chats.everyone')}{changed('*') ? ' •' : ''}</option>
-    {#each roles as r (r.id)}<option value={r.id}>{roleName(r)}{changed(r.id) ? ' •' : ''}</option>{/each}
-  </select>
+  <span class="small faint">{$t('chats.channelPerms')}</span>
+  <Pills items={roleItems} bind:value={role} label={$t('chats.channelPerms')} />
   {#each perms as p (p)}
     <div class="cp-row">
       <span class="grow small">{$t('chats.perm.' + p)}</span>

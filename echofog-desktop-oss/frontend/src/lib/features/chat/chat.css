@@ -129,6 +129,7 @@
 @media (max-width: 1100px) {
   .chat-screen .info { position: absolute; right: 0; top: 0; bottom: 0; z-index: 10; box-shadow: var(--shadow-lg); max-width: 100%; }
 }
+.chat-screen .info.windowed { position: static; width: auto; max-width: none; border-left: none; box-shadow: none; overflow: visible; padding: 16px 22px 22px; background: none; }
 .chat-screen .info-head { display: flex; align-items: center; min-height: 40px; }
 .chat-screen .profile { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 4px 0 6px; }
 .chat-screen .profile h2 { margin-top: 6px; font-size: 18px; }
@@ -281,3 +282,10 @@
 @media (max-width: 900px) {
   .chat-screen .chanbar { width: 190px; }
 }
+/* a narrow chat area: the column slides out over the chat */
+.chat-screen.compact .chanbar {
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: min(280px, 86%);
+  box-shadow: var(--shadow-lg); animation: slide-in-left 0.22s var(--ease);
+}
+.chat-screen .chan-scrim { position: absolute; inset: 0; z-index: 29; background: rgba(8, 10, 18, 0.35); }
+@keyframes slide-in-left { from { transform: translateX(-24px); } to { transform: none; } }

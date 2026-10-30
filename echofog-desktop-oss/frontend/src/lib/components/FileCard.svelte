@@ -4,6 +4,7 @@
   import { bytes, duration } from '../format.js';
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
+  import { openLinkDialog } from '../links.js';
 
   export let file; // { fid, name, size, thumb, w, h } from the message
   export let mine = false;
@@ -17,7 +18,9 @@
   $: size = xfer ? xfer.size : file.size;
   $: pct = Math.round(progress(xfer) * 100);
   $: left = eta(xfer);
-  $: ext = (file.name.match(/\.([^.]{1,5})$/) || [])[1] || '';
+  $: ext = (file.name.match(/\.([^.]{1,6})$/) || [])[1] || '';
+  // a group's file (.fogzip): opened in the app, with its password, not by the system
+  $: groupFile = ext.toLowerCase() === 'fogzip';
   let busy = false;
 
   async function run(fn) {
@@ -39,6 +42,7 @@
     </span>
     <div class="what">
       <span class="name" title={file.name}>{file.name}</span>
+      {#if groupFile}<span class="sub">{$t('files.groupFile')}</span>{/if}
       <span class="sub">
         {#if state === 'active'}
           {bytes(xfer.done)} / {bytes(size)}{#if xfer.rate}{' · '}{$t('files.rate', { v: bytes(xfer.rate) })}{/if}{#if left}{' · '}{$t('files.left', { time: duration(left) })}{/if}
@@ -71,6 +75,9 @@
       {#if xfer.path}<button class="ghost small with-icon" on:click={() => showInFolder(file.fid)}><Icon name="folder" size={14} /> {$t('files.showInFolder')}</button>{/if}
     {:else if state === 'active' || (state === 'offered' && mine)}
       <button class="ghost small" disabled={busy} on:click={() => run(() => cancel(file.fid))}>{$t('common.cancel')}</button>
+    {:else if state === 'done' && !mine && groupFile && xfer?.path}
+      <button class="primary small with-icon" on:click={() => openLinkDialog('', xfer.path)}><Icon name="users" size={14} /> {$t('files.openGroup')}</button>
+      <button class="ghost small with-icon" on:click={() => showInFolder(file.fid)}><Icon name="folder" size={14} /> {$t('files.showInFolder')}</button>
     {:else if state === 'done' && !mine}
       <button class="small with-icon" on:click={() => openFile(xfer)}><Icon name="external" size={14} /> {$t('files.open')}</button>
       <button class="ghost small with-icon" on:click={() => showInFolder(file.fid)}><Icon name="folder" size={14} /> {$t('files.showInFolder')}</button>
