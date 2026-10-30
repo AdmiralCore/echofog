@@ -196,6 +196,8 @@ function postGroupFile(groupId, path, channel = '', thread = '') {
   return { ...m };
 }
 
+const anonMock = { mode: 'relay', wallet: false, running: 'relay' };
+
 const qualities = [
   ['360p30', '360p 30 fps', 640, 360, 30, 1000], ['720p30', '720p 30 fps', 1280, 720, 30, 3000], ['720p60', '720p 60 fps', 1280, 720, 60, 6000],
   ['1080p30', '1080p 30 fps', 1920, 1080, 30, 7000], ['1080p60', '1080p 60 fps', 1920, 1080, 60, 12000], ['1080p120', '1080p 120 fps', 1920, 1080, 120, 20000],
@@ -731,6 +733,8 @@ recent problems (the last 1 warnings and errors, cleaned):
   KeepGroupCallAlive: () => null,
   InviteToCall: () => ({ callId: 'call_demo', coordinator: SELF }),
   GetStreamQualities: () => qualities,
+  GetAnonymity: () => ({ mode: anonMock.mode, walletDirect: anonMock.wallet, running: anonMock.running, seenBy: anonMock.running === 'tor' ? 'nobody' : anonMock.running === 'relay' ? 'relay' : 'network', hasProxy: true, hasRelay: true, restart: anonMock.mode !== anonMock.running }),
+  SetAnonymity: (mode, wallet) => { anonMock.mode = mode; anonMock.wallet = wallet; return null; },
   CallStreamStats: () => { const s = Date.now() / 1000; return { own: false, unitsSent: Math.floor(s * 1100), delivered: Math.floor(s * 1050), lost: Math.floor(s / 3), nacked: Math.floor(s * 2), retransmitted: 0, sendKbps: 11800, videoSent: Math.floor(s * 1100), videoDropped: Math.floor(s / 7), videoFailed: 0, keyframesServed: 4, netDroppedOut: 0, netDroppedIn: Math.floor(s / 5) }; },
   SetUploadCapacity: () => null,
   JoinRoom: () => joinRoom(),

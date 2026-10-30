@@ -12,6 +12,7 @@
   import BootstrapCard from '../components/BootstrapCard.svelte';
   import GuardCard from '../components/GuardCard.svelte';
   import ProxyCard from '../components/ProxyCard.svelte';
+  import AnonymityCard from '../components/AnonymityCard.svelte';
   import { openLinkDialog } from '../links.js';
   import PrivacyCard from '../components/PrivacyCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
@@ -197,6 +198,7 @@
       </div>
     </div>
 
+    <AnonymityCard />
     <GuardCard />
     <ProxyCard />
 

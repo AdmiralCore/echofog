@@ -8,6 +8,7 @@
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
   import { loadPeerDirectory } from '../stores/peers.store.js';
   import { view, focus } from '../stores/nav.js';
+  import { anon, refreshAnon } from '../stores/anon.js';
   import { fly } from 'svelte/transition';
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import { displayName } from '../contact.js';
@@ -108,6 +109,7 @@
     offLink = on('link:open', (link) => openLinkDialog(link || ''));
     App.TakeStartLink().then((link) => { if (link) openLinkDialog(link); }).catch(() => {});
     checkUpdate();
+    refreshAnon();
     offSounds = bindSounds();
     initCallEvents();
     loadPeerDirectory();
@@ -167,6 +169,7 @@
           <span class="who">
             <span class="nm">{myName}</span>
             <span class="st" class:on={online}>{statusText}</span>
+            {#if $anon && $anon.running && !$anon.broken}<span class="anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
           </span>
         </button>
       </div>
@@ -334,4 +337,5 @@
   .fill[hidden] { display: none; }
   .enter { animation: view-in 0.38s var(--ease) both; }
   @keyframes view-in { from { opacity: 0; transform: translateY(8px) scale(0.995); } to { opacity: 1; transform: none; } }
+  .anon { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #38c172; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

@@ -24,6 +24,25 @@ func (a *App) SetProxySettings(proxy, callRoute string) error {
 	return nodeAPI.SetProxySettings(proxy, callRoute)
 }
 
+// GetAnonymity reports the anonymous mode, saved and in effect, and who sees the address now.
+func (a *App) GetAnonymity() (api.AnonymityStatus, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.AnonymityStatus{}, errNodeNotStarted
+	}
+	return nodeAPI.GetAnonymity()
+}
+
+// SetAnonymity saves the anonymous mode ("tor", "relay" or "") for the next start, and whether the
+// TON wallet may reach its servers directly while it is on.
+func (a *App) SetAnonymity(mode string, walletDirect bool) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SetAnonymity(mode, walletDirect)
+}
+
 // CheckProxy connects through the proxy at addr to a public site: the proxy is running.
 func (a *App) CheckProxy(addr string) error {
 	nodeAPI := a.getAPI()
