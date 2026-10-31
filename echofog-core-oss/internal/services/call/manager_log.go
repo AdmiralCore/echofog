@@ -76,6 +76,7 @@ func mediaArgs(s media.DispatcherStats, prev *media.DispatcherStats) []any {
 		"relayed", s.FragmentsRelayed - p.FragmentsRelayed,
 		"nacked", s.NackedUnits - p.NackedUnits,
 		"retransmitted", s.Retransmitted - p.Retransmitted,
+		"fec_recovered", s.Recovered - p.Recovered,
 		"incomplete", s.IncompleteUnits - p.IncompleteUnits,
 		"decrypt_failed", s.DecryptFailures - p.DecryptFailures,
 		"malformed", s.Malformed - p.Malformed,
@@ -108,6 +109,6 @@ func (m *CallManager) logSummaryLocked(room *ActiveRoomState) {
 	for id, c := range room.Dispatcher.StreamStats() {
 		m.logger.Info("Call stream summary", "call_id", calllog.Call(room.CallID), "stream", id,
 			"units_sent", c.UnitsSent, "delivered", c.Delivered, "lost", c.Lost, "nacked", c.Nacked, "retransmitted", c.Retransmitted,
-			"sound_sent", c.SoundSent, "sound_delivered", c.SoundDelivered)
+			"fec_recovered", c.Recovered, "sound_sent", c.SoundSent, "sound_delivered", c.SoundDelivered)
 	}
 }

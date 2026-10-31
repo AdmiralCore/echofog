@@ -140,6 +140,11 @@ func Decode(data []byte) (*MediaPacket, error) {
 
 // SealUnit encrypts a media unit with the room key and splits it into wire fragments.
 func SealUnit(unit *MediaPacket, key []byte) ([][]byte, error) {
+	return sealUnit(unit, key, 0)
+}
+
+// sealUnit is SealUnit with fragments that leave reserve bytes of the datagram free.
+func sealUnit(unit *MediaPacket, key []byte, reserve int) ([][]byte, error) {
 	if len(unit.StreamID) > MaxStreamIDLen {
 		return nil, ErrStreamIDTooLong
 	}
@@ -147,7 +152,7 @@ func SealUnit(unit *MediaPacket, key []byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	limit := fragmentPayload(len(unit.StreamID))
+	limit := fragmentPayload(len(unit.StreamID)) - reserve
 	count := (len(ct) + limit - 1) / limit
 	if count > MaxFragments {
 		return nil, ErrUnitTooLarge

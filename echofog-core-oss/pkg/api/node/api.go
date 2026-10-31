@@ -452,6 +452,7 @@ type StreamStatsDTO struct {
 	Lost            uint64 `json:"lost"`            // gaps no resend filled (each one asks for a keyframe)
 	Nacked          uint64 `json:"nacked"`          // packets asked to be sent again
 	Retransmitted   uint64 `json:"retransmitted"`   // packets this node sent again to the ones below it
+	Recovered       uint64 `json:"recovered"`       // lost packets rebuilt here from FEC parity
 	SendKbps        int    `json:"sendKbps"`        // own stream: what the rate control lets the encoder send
 	VideoSent       uint64 `json:"videoSent"`       // video fragments sent to peers, all streams
 	VideoDropped    uint64 `json:"videoDropped"`    // ... dropped by a full queue toward a peer
@@ -472,7 +473,7 @@ func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
 	}
 	out, in := network.DatagramDrops()
 	return StreamStatsDTO{Own: d.Own, UnitsSent: d.UnitsSent, Delivered: d.Delivered, Lost: d.Lost, Nacked: d.Nacked,
-		Retransmitted: d.Retransmitted, SendKbps: d.SendKbps, VideoSent: d.VideoSent, VideoDropped: d.VideoDropped,
+		Retransmitted: d.Retransmitted, Recovered: d.Recovered, SendKbps: d.SendKbps, VideoSent: d.VideoSent, VideoDropped: d.VideoDropped,
 		VideoFailed: d.VideoFailed, KeyframesServed: d.KeyframesServed, NetDroppedOut: out, NetDroppedIn: in}, nil
 }
 

@@ -16,13 +16,13 @@ import (
 // unit too. Relays still never decrypt: they resend the sealed fragments as they got them.
 
 const (
-	// retransmitWindow is how long sent fragments stay resendable; past reorderWindow nobody
+	// retransmitWindow is how long sent fragments stay resendable; past maxLossWait nobody
 	// waits for them any more.
-	retransmitWindow = 400 * time.Millisecond
+	retransmitWindow = time.Second
 	maxRingUnits     = 8192
-	// nackDelay lets ordinary reordering settle before asking; nackRetry asks once more in case
-	// the NACK or the resent fragments were lost as well. Both fire well before reorderWindow,
-	// after which a keyframe request is the fallback.
+	// nackDelay lets ordinary reordering settle before asking; nackRetry asks again in case the
+	// NACK or the resent fragments were lost as well. Both fire before reorderWindow, after which a
+	// keyframe request is the fallback; on a slow path both grow with its round trip.
 	nackDelay = 20 * time.Millisecond
 	nackRetry = 90 * time.Millisecond
 	// nackHoldoff keeps a node from asking upstream for the same unit twice in a row, e.g. when
@@ -36,6 +36,12 @@ const (
 type NackEntry struct {
 	Seq  uint32 `json:"seq"`
 	Have uint16 `json:"have,omitempty"` // bit i set = fragment i is not needed
+}
+
+// nackAsk is when this node first and last asked upstream for a unit; the first one dates the
+// answer, the last one holds off repeats.
+type nackAsk struct {
+	first, last time.Time
 }
 
 type ringKey struct {
@@ -231,10 +237,15 @@ func (d *MediaDispatcher) holdoff(streamID string, lost []NackEntry, now time.Ti
 	out := lost[:0]
 	for _, e := range lost {
 		k := ringKey{streamID, e.Seq}
-		if now.Sub(d.nackAsked[k]) < nackHoldoff {
+		a, asked := d.nackAsked[k]
+		if asked && now.Sub(a.last) < nackHoldoff {
 			continue
 		}
-		d.nackAsked[k] = now
+		if !asked {
+			a.first = now
+		}
+		a.last = now
+		d.nackAsked[k] = a
 		out = append(out, e)
 	}
 	return out

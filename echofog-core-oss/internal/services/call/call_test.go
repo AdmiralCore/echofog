@@ -438,13 +438,15 @@ func TestRoom_KeyframeRequestReachesBroadcaster(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return served.Load() > 0 }, 5*time.Second, 20*time.Millisecond)
 
-	// a gap in the stream triggers another request after the rate limit window
-	time.Sleep(keyframeServeInterval + 50*time.Millisecond)
+	// a gap in the stream triggers another request after the rate limit window, once the viewers
+	// stopped waiting for the keyframe they asked for on joining (these units are not H.264)
+	time.Sleep(max(keyframeServeInterval, media.KeyframePending) + 50*time.Millisecond)
 	before := served.Load()
 	m.mu.Lock()
 	m.drop = func(t net_types.MessageType, payload []byte) bool {
 		p, err := media.Decode(payload)
-		return t == net_types.TypeCallMediaVideo && err == nil && p.Seq == 2
+		// with its parity too, or FEC rebuilds it
+		return t == net_types.TypeCallMediaVideo && err == nil && (p.Seq == 2 || p.Kind == media.FrameVideoFEC)
 	}
 	m.mu.Unlock()
 	require.NoError(t, b.cm.PublishVideo("s", unit(0, 100))) // seq 1

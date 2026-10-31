@@ -41,6 +41,7 @@ type DispatcherStats struct {
 	IncompleteUnits  uint64
 	Retransmitted    uint64 // fragments resent to children from the retransmit ring
 	NackedUnits      uint64 // lost units this node asked its parent to resend
+	Recovered        uint64 // fragments rebuilt from FEC parity
 	Outbox           OutboxStats
 }
 
@@ -51,6 +52,7 @@ type StreamCounters struct {
 	Lost           uint64 // gaps that outlived the reorder window (each costs a keyframe request)
 	Nacked         uint64 // lost units this node asked its parent to resend
 	Retransmitted  uint64 // fragments resent to children from the ring
+	Recovered      uint64 // lost fragments rebuilt here from FEC parity, without asking anybody
 	SoundSent      uint64 // units of the stream's sound this node broadcast (a shared screen's audio)
 	SoundDelivered uint64 // units of the stream's sound decrypted and played here
 }
@@ -77,13 +79,17 @@ type MediaDispatcher struct {
 	lastForward      map[string]time.Time              // stream -> last time we sent anything to its children
 	lastFromFeeder   map[linkKey]time.Time             // (stream, feeder) -> last frame received from it
 	watchSince       map[linkKey]time.Time             // (stream, feeder) -> first time we waited on it
-	nackAsked        map[ringKey]time.Time             // (stream, seq) -> last time we asked upstream
+	nackAsked        map[ringKey]nackAsk               // (stream, seq) -> when we asked upstream
+	rtt              map[string]time.Duration          // stream -> smoothed time a NACK takes to be answered
+	keyWanted        map[string]time.Time              // stream -> when we asked for a keyframe that has not come yet
 	streamStats      map[string]*StreamCounters
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
 	reasm    *reassembler
 	ring     *fragRing
+	fecTx    *fecSender
+	fecRx    *fecReceiver
 
 	// OnVideoNack fires shortly after a watched stream has a gap; the call layer sends the NACK
 	// to the stream's parent, which resends from its ring.
@@ -94,7 +100,7 @@ type MediaDispatcher struct {
 
 	audioDelivered, videoDelivered, relayed, duplicates, decryptFailures, malformed, incomplete atomic.Uint64
 	outsiders                                                                                   atomic.Uint64 // media from a peer outside the call, dropped
-	retransmitted, nacked                                                                       atomic.Uint64
+	retransmitted, nacked, recovered                                                            atomic.Uint64
 
 	// Per-packet problems (garbage from a peer, failed decryption, lost units) are logged through
 	// lim, one line per peer or stream and reason every few seconds.
@@ -120,13 +126,17 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 		lastForward:     make(map[string]time.Time),
 		lastFromFeeder:  make(map[linkKey]time.Time),
 		watchSince:      make(map[linkKey]time.Time),
-		nackAsked:       make(map[ringKey]time.Time),
+		nackAsked:       make(map[ringKey]nackAsk),
+		rtt:             make(map[string]time.Duration),
+		keyWanted:       make(map[string]time.Time),
 		streamStats:     make(map[string]*StreamCounters),
 		log:             slog.Default().With("component", "call-media"),
 		lim:             calllog.New(calllog.Every),
 		dedup:           newDedupTable(),
 		reasm:           newReassembler(),
 		ring:            newFragRing(),
+		fecTx:           newFECSender(),
+		fecRx:           newFECReceiver(),
 		stop:            make(chan struct{}),
 	}
 	if sender != nil {
@@ -293,7 +303,7 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 // ProcessIncomingVideo handles a stream fragment: forward to downstream subscribers, deliver if watching.
 func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.PeerID) error {
 	p, err := Decode(rawBytes)
-	if err != nil || (p.Kind != FrameVideo && p.Kind != FramePulse && p.Kind != FrameStreamAudio) {
+	if err != nil || (p.Kind != FrameVideo && p.Kind != FramePulse && p.Kind != FrameStreamAudio && p.Kind != FrameVideoFEC) {
 		d.malformed.Add(1)
 		d.logMalformed("video", fromPeer, p, err)
 		return err
@@ -327,18 +337,48 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 				forwarded = true
 			}
 		}
-		if forwarded && p.Kind == FrameStreamAudio {
-			d.markForwarded(p.StreamID, now)
-		} else if forwarded {
-			d.ring.put(p.StreamID, p.Seq, p.FragIdx, p.FragCount, rawBytes, now)
+		if forwarded {
+			if p.Kind == FrameVideo {
+				d.ring.put(p.StreamID, p.Seq, p.FragIdx, p.FragCount, rawBytes, now)
+			}
 			d.markForwarded(p.StreamID, now)
 		}
 	}
 
+	if p.Kind == FrameVideoFEC {
+		rebuilt, err := d.fecRx.parity(p, now)
+		if err != nil {
+			d.malformed.Add(1)
+			d.logMalformed("fec", fromPeer, nil, err)
+			return nil
+		}
+		if rebuilt != nil {
+			d.recoverFragments(p.StreamID, [][]byte{rebuilt}, fromPeer)
+		}
+		return nil
+	}
 	if d.IsWatchingStream(p.StreamID) {
 		d.deliver(p, now)
 	}
+	if p.Kind == FrameVideo {
+		d.recoverFragments(p.StreamID, d.fecRx.fragment(p, now), fromPeer)
+	}
 	return nil
+}
+
+// recoverFragments takes in fragments rebuilt from FEC parity as if they had come from the peer
+// that sent what completed them: they are forwarded to children and delivered like any other.
+func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, from types.PeerID) {
+	if len(rebuilt) == 0 {
+		return
+	}
+	d.recovered.Add(uint64(len(rebuilt)))
+	d.mu.Lock()
+	d.streamLocked(streamID).Recovered += uint64(len(rebuilt))
+	d.mu.Unlock()
+	for _, f := range rebuilt {
+		_ = d.ProcessIncomingVideo(f, from)
+	}
 }
 
 func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
@@ -378,17 +418,66 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 		return
 	}
 	d.videoDelivered.Add(1)
+	if rtpKeyframeEnd(plain) {
+		d.mu.Lock()
+		delete(d.keyWanted, p.StreamID) // the keyframe we waited for, or one asked for by someone else
+		d.mu.Unlock()
+	}
 	d.trackVideoGap(&unit)
 	d.consumer.OnLocalVideo(&unit)
 }
 
-// A sequence gap only counts as loss if the skipped units are still missing reorderWindow later.
+// KeyframePending is how long a keyframe this node asked for may take before it asks again. The
+// answer is a frame many times the usual size, and the browser behind a frozen picture asks for
+// one with every frame it cannot decode; asking again while one is on its way only made the
+// broadcaster pour more of them into a link that was already losing packets.
+const KeyframePending = 1500 * time.Millisecond
+
+// WantKeyframe reports whether a keyframe request for a stream should go out now, and if so
+// records it: not while the last one has neither been answered nor timed out.
+func (d *MediaDispatcher) WantKeyframe(streamID string) bool {
+	now := time.Now()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if at, ok := d.keyWanted[streamID]; ok && now.Sub(at) < KeyframePending {
+		return false
+	}
+	d.keyWanted[streamID] = now
+	return true
+}
+
+// A sequence gap only counts as loss if the skipped units are still missing a while later.
 // Datagrams arrive out of order all the time, and every false alarm used to cost the broadcaster
-// a full IDR frame, whose size then starved the frames after it into mush.
+// a full IDR frame, whose size then starved the frames after it into mush. The while is
+// reorderWindow until a NACK has been answered, then grows with the time NACKs take: on a path
+// with a long round trip the resent units used to come just after the wait had given up on them.
 const (
 	reorderWindow = 200 * time.Millisecond
+	maxLossWait   = 900 * time.Millisecond // within retransmitWindow and reassemblyTimeout
+	maxNackRetry  = 400 * time.Millisecond
 	maxTrackedGap = 64
 )
+
+// lossTimingLocked is how long a stream's gaps wait before they count as lost, and how long
+// before a NACK is repeated; d.mu must be held.
+func (d *MediaDispatcher) lossTimingLocked(streamID string) (wait, retry time.Duration) {
+	rtt, ok := d.rtt[streamID]
+	if !ok {
+		return reorderWindow, nackRetry
+	}
+	wait = min(max(2*rtt+80*time.Millisecond, reorderWindow), maxLossWait)
+	retry = min(max(rtt*6/5+30*time.Millisecond, nackRetry), maxNackRetry)
+	return wait, retry
+}
+
+// sampleRTTLocked folds in the time one NACK took to be answered; d.mu must be held.
+func (d *MediaDispatcher) sampleRTTLocked(streamID string, sample time.Duration) {
+	sample = min(sample, 2*time.Second)
+	if old, ok := d.rtt[streamID]; ok {
+		sample = (7*old + sample) / 8
+	}
+	d.rtt[streamID] = sample
+}
 
 func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 	k := sourceKey{p.Kind, p.Broadcaster, p.StreamID}
@@ -421,7 +510,13 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 		if m := d.missing[k]; m != nil {
 			delete(m, p.Seq)
 		}
+		rk := ringKey{p.StreamID, p.Seq}
+		if a, ok := d.nackAsked[rk]; ok {
+			d.sampleRTTLocked(p.StreamID, time.Since(a.first))
+			delete(d.nackAsked, rk)
+		}
 	}
+	wait, retry := d.lossTimingLocked(p.StreamID)
 	d.mu.Unlock()
 
 	if lostNow {
@@ -433,8 +528,10 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 		return
 	}
 	time.AfterFunc(nackDelay, func() { d.nackGap(k, gap) })
-	time.AfterFunc(nackRetry, func() { d.nackGap(k, gap) })
-	time.AfterFunc(reorderWindow, func() {
+	for at := retry; at < wait; at += retry {
+		time.AfterFunc(at, func() { d.nackGap(k, gap) })
+	}
+	time.AfterFunc(wait, func() {
 		still := false
 		d.mu.Lock()
 		if m := d.missing[k]; m != nil {
@@ -525,6 +622,8 @@ func kindName(k FrameKind) string {
 		return "pulse"
 	case FrameStreamAudio:
 		return "streamaudio"
+	case FrameVideoFEC:
+		return "fec"
 	}
 	return "unknown"
 }
@@ -540,7 +639,7 @@ func (d *MediaDispatcher) VideoPressure() (dropped uint64, backlog int) {
 
 // BroadcastLocalAudio sends local microphone audio to every voice tree link.
 func (d *MediaDispatcher) BroadcastLocalAudio(opusBytes []byte) error {
-	frags, err := d.seal(FrameAudio, voiceStreamID, d.audioSeq.Add(1), opusBytes)
+	frags, err := d.seal(FrameAudio, voiceStreamID, d.audioSeq.Add(1), opusBytes, 0)
 	if err != nil {
 		return err
 	}
@@ -563,7 +662,7 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 	d.mu.Unlock()
 
 	seq := ctr.Add(1)
-	frags, err := d.seal(FrameVideo, streamID, seq, videoBytes)
+	frags, err := d.seal(FrameVideo, streamID, seq, videoBytes, fecReserve)
 	if err != nil {
 		return err
 	}
@@ -583,8 +682,39 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 			d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, f)
 		}
 	}
+	for _, par := range d.fecTx.add(streamID, seq, frags, videoBytes, now) {
+		d.sendParity(subs, par, now)
+	}
 	d.markForwarded(streamID, now)
 	return nil
+}
+
+// sendParity sends a parity of a local stream to the first hop of its tree.
+func (d *MediaDispatcher) sendParity(subs []types.PeerID, par fecParityOut, now time.Time) {
+	pkt := (&MediaPacket{
+		Kind:        FrameVideoFEC,
+		Seq:         par.first,
+		Timestamp:   uint32(now.UnixMilli()),
+		Broadcaster: d.selfID,
+		StreamID:    par.streamID,
+		FragCount:   1,
+		Payload:     par.payload,
+	}).Encode()
+	for _, sub := range subs {
+		d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, pkt)
+	}
+}
+
+// flushParities sends the parities of groups a quiet stream left open.
+func (d *MediaDispatcher) flushParities(now time.Time) {
+	if d.streamEngine == nil || d.outbox == nil {
+		return
+	}
+	for _, par := range d.fecTx.flush(now) {
+		if subs := d.streamEngine.GetDownstream(par.streamID, d.selfID); len(subs) > 0 {
+			d.sendParity(subs, par, now)
+		}
+	}
 }
 
 // BroadcastLocalStreamAudio sends a unit of a local stream's sound (a screen's audio) to the
@@ -599,7 +729,7 @@ func (d *MediaDispatcher) BroadcastLocalStreamAudio(streamID string, opusBytes [
 	}
 	d.mu.Unlock()
 
-	frags, err := d.seal(FrameStreamAudio, streamID, ctr.Add(1), opusBytes)
+	frags, err := d.seal(FrameStreamAudio, streamID, ctr.Add(1), opusBytes, 0)
 	if err != nil {
 		return err
 	}
@@ -665,21 +795,22 @@ func (d *MediaDispatcher) sendPulses(now time.Time) {
 	}
 }
 
-func (d *MediaDispatcher) seal(kind FrameKind, streamID string, seq uint32, payload []byte) ([][]byte, error) {
+// seal encrypts a unit into wire fragments that leave reserve bytes of the datagram free.
+func (d *MediaDispatcher) seal(kind FrameKind, streamID string, seq uint32, payload []byte, reserve int) ([][]byte, error) {
 	d.mu.RLock()
 	key := d.roomKey
 	d.mu.RUnlock()
 	if key == nil {
 		return nil, ErrBadKey // refuse to leak plaintext media
 	}
-	return SealUnit(&MediaPacket{
+	return sealUnit(&MediaPacket{
 		Kind:        kind,
 		Seq:         seq,
 		Timestamp:   uint32(time.Now().UnixMilli()),
 		Broadcaster: d.selfID,
 		StreamID:    streamID,
 		Payload:     payload,
-	}, key)
+	}, key, reserve)
 }
 
 // Stats returns a snapshot of media counters.
@@ -694,6 +825,7 @@ func (d *MediaDispatcher) Stats() DispatcherStats {
 		IncompleteUnits:  d.incomplete.Load(),
 		Retransmitted:    d.retransmitted.Load(),
 		NackedUnits:      d.nacked.Load(),
+		Recovered:        d.recovered.Load(),
 	}
 	if d.outbox != nil {
 		s.Outbox = d.outbox.Stats()
@@ -711,6 +843,7 @@ func (d *MediaDispatcher) housekeeping() {
 			return
 		case now := <-t.C:
 			d.sendPulses(now)
+			d.flushParities(now)
 			if now.Sub(lastGC) < time.Second {
 				continue
 			}
@@ -723,9 +856,10 @@ func (d *MediaDispatcher) housekeeping() {
 			}
 			d.dedup.gc(now, 30*time.Second)
 			d.ring.expire(now)
+			d.fecRx.gc(now)
 			d.mu.Lock()
-			for k, ts := range d.nackAsked {
-				if now.Sub(ts) > time.Second {
+			for k, a := range d.nackAsked {
+				if now.Sub(a.last) > time.Second {
 					delete(d.nackAsked, k)
 				}
 			}

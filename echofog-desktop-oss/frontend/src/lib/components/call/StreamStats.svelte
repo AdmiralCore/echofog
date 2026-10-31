@@ -51,7 +51,7 @@
             codecMs: bb.encoded || bb.decoded ? (((bb.codecTime || 0) - (ab.codecTime || 0)) * 1000) / Math.max(1, (bb.encoded || bb.decoded) - (ab.encoded || ab.decoded)) : 0,
             bufferMs: bb.jbCount > ab.jbCount ? (((bb.jbDelay || 0) - (ab.jbDelay || 0)) * 1000) / (bb.jbCount - ab.jbCount) : 0,
             units: per(own ? an.unitsSent : an.delivered, own ? bn.unitsSent : bn.delivered),
-            gaps: per(an.lost, bn.lost), nacked: per(an.nacked, bn.nacked),
+            gaps: per(an.lost, bn.lost), nacked: per(an.nacked, bn.nacked), fec: per(an.recovered, bn.recovered),
             qDropped: per(an.videoDropped, bn.videoDropped), qFailed: per(an.videoFailed, bn.videoFailed),
             netOut: per(an.netDroppedOut, bn.netDroppedOut), netIn: per(an.netDroppedIn, bn.netDroppedIn),
             sendKbps: bn.sendKbps || 0, keyframes: bn.keyframesServed || 0,
@@ -89,7 +89,7 @@
         {:else}
             <p>{$t('call.st.viewFrames', { recv: now.receivedFps, shown: now.shownFps, dropped: now.droppedFps })}</p>
             <p>{now.width}×{now.height} · {n1(now.mbps)} {$t('unit.mbps')} · {coder(now)} · {n1(now.codecMs)} {$t('call.st.ms')}</p>
-            <p class:warn={now.lostPkts + now.gaps + now.netIn > 0}>{$t('call.st.viewNet', { units: now.units, lost: now.lostPkts, gaps: now.gaps, nacked: now.nacked, dropped: now.netIn })}</p>
+            <p class:warn={now.lostPkts + now.gaps + now.netIn > 0}>{$t('call.st.viewNet', { units: now.units, lost: now.lostPkts, gaps: now.gaps, nacked: now.nacked, fec: now.fec, dropped: now.netIn })}</p>
             <p class:warn={now.freezes > 0}>{$t('call.st.freezes', { n: now.freezes, s: n1(now.freezeSec), pli: now.pli, buf: Math.round(now.bufferMs) })}</p>
         {/if}
     {:else}

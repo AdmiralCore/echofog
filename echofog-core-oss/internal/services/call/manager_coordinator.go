@@ -359,9 +359,12 @@ func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string,
 	m.debugOnce("nack-noup:"+streamID, "Lost video units but no parent to ask on this stream", "stream", streamID, "units", len(lost))
 }
 
+// requestKeyframe asks for a keyframe this node needs itself (a loss, or the browser's PLI): not
+// again while the last one is still on its way. Requests children pass up are not held back here;
+// the per-hop interval of requestKeyframeLocked merges those.
 func (m *CallManager) requestKeyframe(streamID string) {
 	m.mu.Lock()
-	if room := m.activeRoom; room != nil {
+	if room := m.activeRoom; room != nil && (room.Dispatcher == nil || room.Dispatcher.WantKeyframe(streamID)) {
 		m.requestKeyframeLocked(room, streamID, time.Now())
 	}
 	m.unlockAndFlush()
