@@ -285,8 +285,9 @@ type AntiDPIConfig struct {
 	// holds links to two or three camouflaged guard servers (REALITY over QUIC, or browser TLS over
 	// TCP), picked from the known servers and kept for weeks, and asks them for what the mesh would
 	// have been dialed for (peer exchange, DHT lookups; a guard walks the DHT on the user's behalf).
-	// "auto" (the default) and "on" engage it on every node that is not in the server role; "off"
-	// leaves the mesh dialing as it was. Peers on the local network, and in the home region where
+	// "on" engages it on every node that is not in the server role; "auto" (the default) too while
+	// obfs is "node", unless the node is placed in a country that does not censor (the desktop app
+	// checks; a pinned relay keeps it on anyway); "off" leaves the mesh dialing as it was. Peers on the local network, and in the home region where
 	// region_aware_obfs allows it, are dialed directly either way; a country that cannot be placed
 	// counts as across the border.
 	GuardMode string `json:"guard_mode,omitempty"`

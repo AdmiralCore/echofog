@@ -76,7 +76,7 @@ async def call(method, path, body=None):
 
 
 async def pass_of(label):
-    return next((p for p in await call("GET", "/passes") if p["label"] == label), None)
+    return next((p for p in await call("GET", "/passes") if p.get("label") == label), None)
 
 
 async def grant(label, days):
@@ -93,7 +93,7 @@ def card(user, p):
     devices = t(user, "devices", n=len(p["devices"]), max=p["maxDevices"])
     web = p.get("webLink")  # an older node gives only the echofog:// link
     opener = f"<a href=\"{html.escape(web)}\">{t(user, 'open')}</a>\n\n" if web else ""
-    return (f"{p['label']}: {t(user, p['state'])}, {term}, {devices}\nID {p['id']}\n\n"
+    return (f"{p.get('label', '')}: {t(user, p['state'])}, {term}, {devices}\nID {p['id']}\n\n"
             f"{opener}<code>{html.escape(p['link'])}</code>\n\n{t(user, 'how')}")
 
 
@@ -126,7 +126,7 @@ async def revoke(m: Message, command: CommandObject):
 
 @dp.message(Command("list"), admin)
 async def listing(m: Message):
-    lines = [f"{p['id']}  {t(m.from_user, p['state'])}  {p['label']}" for p in await call("GET", "/passes")]
+    lines = [f"{p['id']}  {t(m.from_user, p['state'])}  {p.get('label', '')}" for p in await call("GET", "/passes")]
     await m.answer("\n".join(lines) or t(m.from_user, "none"))
 
 
