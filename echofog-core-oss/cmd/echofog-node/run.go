@@ -101,7 +101,7 @@ func parseRunFlags(args []string) options {
 
 	f.StringVar(&o.transport, "transport", getEnv("ECHOFOG_TRANSPORT", ""), "auto (QUIC, then TCP), quic, or tcp")
 	f.StringVar(&o.tcpListen, "tcp-listen", getEnv("ECHOFOG_TCP_LISTEN", ""), "TCP fallback listen address, e.g. :443 (default: the --listen-addr port); 'off' disables it")
-	f.IntVar(&o.tcpRemotePort, "tcp-remote-port", int(envInt64("ECHOFOG_TCP_REMOTE_PORT", 0)), "port peers use for the TCP fallback when it differs from the QUIC port (e.g. 443)")
+	f.IntVar(&o.tcpRemotePort, "tcp-remote-port", int(envInt64("ECHOFOG_TCP_REMOTE_PORT", 0)), "port this node dials on other nodes for the TCP fallback, when their TCP fallback runs on a fixed port apart from QUIC (e.g. 443); 0 = the same port as their QUIC")
 	f.StringVar(&o.wsListen, "ws-listen", getEnv("ECHOFOG_WS_LISTEN", ""), "listen for peers over WebSocket on this address, to sit behind a CDN like Cloudflare (e.g. 127.0.0.1:8080 with the CDN in front); empty disables it")
 	f.StringVar(&o.wsPath, "ws-path", getEnv("ECHOFOG_WS_PATH", ""), "HTTP path the WebSocket endpoint answers on (default /echofog)")
 	f.IntVar(&o.advertisePort, "advertise-port", int(envInt64("ECHOFOG_ADVERTISE_PORT", 0)), "public port peers use to reach this node when it differs from the listen port (e.g. 443 when a port map publishes host 443 to this node); 0 = the listen port")
