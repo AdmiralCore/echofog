@@ -17,38 +17,49 @@ import (
 // forward the parity like any fragment and never decrypt: the rebuilt fragment is the sealed one,
 // and the viewer's decryption still checks it.
 //
-// Groups are small in a keyframe, where one loss stalls the picture longest, and larger elsewhere.
+// Fragments are dealt to fecLanes groups in turn, so neighbours land in different groups: paths
+// lose packets in bursts, and a burst of up to fecLanes fragments then costs each group one, which
+// it repairs. Groups are small in a keyframe, where one loss stalls the picture longest.
 
 // FrameVideoFEC is the parity of a group of a stream's video fragments. Its seq is the group's first
-// unit. Older nodes drop it as malformed, which only costs them the repair.
-const FrameVideoFEC FrameKind = 0x05
+// unit and its fragment index the lane it was filled in. Older nodes drop it as malformed, which
+// only costs them the repair. (0x05 was a first layout, of consecutive units only; nothing sends it.)
+const FrameVideoFEC FrameKind = 0x06
 
 const (
-	fecGroupFrags    = 10                    // fragments a parity covers in ordinary frames
-	fecKeyGroupFrags = 4                     // ... and in a keyframe
-	fecMinGroupFrags = 3                     // a frame's end closes a group of at least this many
-	fecMaxGroupUnits = 16                    // units one parity names
-	fecGroupAge      = 50 * time.Millisecond // an open group older than this is sent as it is
-	fecKeep          = time.Second           // fragments and parities kept for repairs
-	fecMaxUnits      = 4096                  // units kept per stream
-	fecMaxParities   = 256                   // parities kept per stream
+	fecLanes         = 4                      // groups filled in turn
+	fecGroupFrags    = 10                     // fragments a parity covers in ordinary frames
+	fecKeyGroupFrags = 4                      // ... and in a keyframe
+	fecGroupAge      = 100 * time.Millisecond // an open group older than this is sent as it is
+	fecKeep          = time.Second            // fragments and parities kept for repairs
+	fecMaxUnits      = 4096                   // units kept per stream
+	fecMaxParities   = 256                    // parities kept per stream
 
 	// fecFragHeader is what the XOR covers of a fragment besides its ciphertext: its unit's
 	// timestamp and the ciphertext length. The rest of its header follows from the parity's.
 	fecFragHeader = 4 + 2
+	// fecMember is how a parity names a fragment: its unit's seq after the first, and its index
+	// and its unit's fragment count, four bits each.
+	fecMember = 2
 	// fecReserve is what video fragments leave free so that a parity, its header and the largest
-	// fragment it covers, still fits one datagram: firstSeq, unit count, a count per unit.
-	fecReserve = 4 + 1 + fecMaxGroupUnits + fecFragHeader
+	// fragment it covers, still fits one datagram: firstSeq, member count, the members.
+	fecReserve = 4 + 1 + fecGroupFrags*fecMember + fecFragHeader
 )
 
 var errBadFEC = errors.New("malformed FEC payload")
 
-// fecParity is a parsed parity: the units it covers, how many fragments each has, and the XOR.
+// fecRef names one fragment: the unit's seq, the fragment's index, the unit's fragment count.
+type fecRef struct {
+	seq   uint32
+	idx   uint8
+	count uint8
+}
+
+// fecParity is a parsed parity: the fragments it covers and their XOR.
 type fecParity struct {
-	first  uint32
-	counts []uint8
-	blob   []byte
-	at     time.Time
+	members []fecRef
+	blob    []byte
+	at      time.Time
 }
 
 // fecFrag is one fragment of a unit as the XOR sees it.
@@ -57,18 +68,22 @@ type fecFrag struct {
 	chunk []byte
 }
 
-// encodeFECPayload lays a parity out: [firstSeq:4][units:1][count per unit][xor], the XOR being
-// over [ts:4][len:2][ciphertext] of every fragment, zero-padded to the longest.
-func encodeFECPayload(first uint32, counts []uint8, frags []fecFrag) []byte {
+// encodeFECPayload lays a parity out: [firstSeq:4][members:1][(seq-firstSeq):1, idx<<4|count-1]...
+// [xor], the XOR being over [ts:4][len:2][ciphertext] of every fragment, zero-padded to the longest.
+func encodeFECPayload(members []fecRef, frags []fecFrag) []byte {
 	size := 0
 	for _, f := range frags {
 		size = max(size, len(f.chunk))
 	}
-	head := 4 + 1 + len(counts)
+	first := members[0].seq
+	head := 4 + 1 + fecMember*len(members)
 	out := make([]byte, head+fecFragHeader+size)
 	binary.BigEndian.PutUint32(out[0:4], first)
-	out[4] = byte(len(counts))
-	copy(out[5:], counts)
+	out[4] = byte(len(members))
+	for i, m := range members {
+		out[5+2*i] = byte(m.seq - first)
+		out[6+2*i] = m.idx<<4 | (m.count - 1)
+	}
 	xorFrag(out[head:], frags...)
 	return out
 }
@@ -95,50 +110,58 @@ func decodeFECPayload(b []byte, now time.Time) (*fecParity, error) {
 		return nil, errBadFEC
 	}
 	n := int(b[4])
-	if n == 0 || n > fecMaxGroupUnits || len(b) < 5+n+fecFragHeader {
+	head := 5 + fecMember*n
+	if n == 0 || n > fecGroupFrags || len(b) < head+fecFragHeader {
 		return nil, errBadFEC
 	}
-	p := &fecParity{first: binary.BigEndian.Uint32(b[0:4]), at: now}
-	p.counts = append([]uint8(nil), b[5:5+n]...)
-	for _, c := range p.counts {
-		if c == 0 || c > MaxFragments {
+	first := binary.BigEndian.Uint32(b[0:4])
+	p := &fecParity{members: make([]fecRef, n), at: now}
+	for i := range p.members {
+		m := fecRef{seq: first + uint32(b[5+2*i]), idx: b[6+2*i] >> 4, count: b[6+2*i]&0x0f + 1}
+		if m.idx >= m.count {
 			return nil, errBadFEC
 		}
+		p.members[i] = m
 	}
-	p.blob = append([]byte(nil), b[5+n:]...)
+	p.blob = append([]byte(nil), b[head:]...)
 	return p, nil
 }
 
-// fecGroup is the group a broadcaster is filling for one stream.
+// fecGroup is a group a broadcaster is filling.
 type fecGroup struct {
-	first  uint32
-	counts []uint8
-	frags  []fecFrag
-	start  time.Time
+	members []fecRef
+	frags   []fecFrag
+	key     bool // holds part of a keyframe: closes at fecKeyGroupFrags
+	start   time.Time
 }
-
-func (g *fecGroup) parity(streamID string) fecParityOut {
-	return fecParityOut{streamID, g.first, encodeFECPayload(g.first, g.counts, g.frags)}
-}
-
-// fecSender builds the parities of local streams.
-type fecSender struct {
-	mu     sync.Mutex
-	groups map[string]*fecGroup
-}
-
-func newFECSender() *fecSender { return &fecSender{groups: map[string]*fecGroup{}} }
 
 // fecParityOut is a parity a broadcaster has to send.
 type fecParityOut struct {
 	streamID string
+	lane     uint8
 	first    uint32
 	payload  []byte
 }
 
+type fecLanesOf struct {
+	next  int
+	lanes [fecLanes]*fecGroup
+}
+
+// fecSender builds the parities of local streams.
+type fecSender struct {
+	mu      sync.Mutex
+	streams map[string]*fecLanesOf
+}
+
+func newFECSender() *fecSender { return &fecSender{streams: map[string]*fecLanesOf{}} }
+
+func (g *fecGroup) parity(streamID string, lane int) fecParityOut {
+	return fecParityOut{streamID, uint8(lane), g.members[0].seq, encodeFECPayload(g.members, g.frags)}
+}
+
 // add takes the wire fragments of a new unit of a stream, and its plaintext RTP packet, and returns
-// the parities to send now: one for a group that ran old before this unit, one for the group this
-// unit fills or ends.
+// the parities to send now: those of the groups this unit filled, and of groups that ran old.
 func (s *fecSender) add(streamID string, seq uint32, wire [][]byte, rtp []byte, now time.Time) []fecParityOut {
 	frags := make([]fecFrag, 0, len(wire))
 	for _, w := range wire {
@@ -148,43 +171,65 @@ func (s *fecSender) add(streamID string, seq uint32, wire [][]byte, rtp []byte, 
 		}
 		frags = append(frags, fecFrag{p.Timestamp, p.Payload})
 	}
-	key, marker := rtpKeyframe(rtp), rtpMarker(rtp)
+	key := rtpKeyframe(rtp)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	st := s.streams[streamID]
+	if st == nil {
+		st = &fecLanesOf{}
+		s.streams[streamID] = st
+	}
 	var out []fecParityOut
-	g := s.groups[streamID]
-	if g != nil && (now.Sub(g.start) > fecGroupAge || seq != g.first+uint32(len(g.counts))) {
-		out = append(out, g.parity(streamID))
-		g = nil
-	}
-	if g == nil {
-		g = &fecGroup{first: seq, start: now}
-		s.groups[streamID] = g
-	}
-	g.counts = append(g.counts, uint8(len(frags)))
-	g.frags = append(g.frags, frags...)
-	want := fecGroupFrags
-	if key {
-		want = fecKeyGroupFrags
-	}
-	if len(g.frags) >= want || len(g.counts) >= fecMaxGroupUnits || (marker && len(g.frags) >= fecMinGroupFrags) {
-		out = append(out, g.parity(streamID))
-		delete(s.groups, streamID)
+	for i, f := range frags {
+		lane := st.next % fecLanes
+		st.next++
+		g := st.lanes[lane]
+		// a member names its unit by one byte after the group's first
+		if g != nil && (now.Sub(g.start) > fecGroupAge || seq-g.members[0].seq > 255) {
+			out = append(out, g.parity(streamID, lane))
+			g = nil
+		}
+		if g == nil {
+			g = &fecGroup{start: now}
+			st.lanes[lane] = g
+		}
+		g.members = append(g.members, fecRef{seq, uint8(i), uint8(len(frags))})
+		g.frags = append(g.frags, f)
+		g.key = g.key || key
+		want := fecGroupFrags
+		if g.key {
+			want = fecKeyGroupFrags
+		}
+		if len(g.members) >= want {
+			out = append(out, g.parity(streamID, lane))
+			st.lanes[lane] = nil
+		}
 	}
 	return out
 }
 
-// flush closes the groups left open longer than fecGroupAge (a stream that went quiet after a
-// small frame) and returns their parities.
+// flush closes the groups left open longer than fecGroupAge (a stream that went quiet) and returns
+// their parities.
 func (s *fecSender) flush(now time.Time) []fecParityOut {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []fecParityOut
-	for id, g := range s.groups {
-		if now.Sub(g.start) > fecGroupAge {
-			out = append(out, g.parity(id))
-			delete(s.groups, id)
+	for id, st := range s.streams {
+		open := false
+		for lane, g := range st.lanes {
+			if g == nil {
+				continue
+			}
+			if now.Sub(g.start) > fecGroupAge {
+				out = append(out, g.parity(id, lane))
+				st.lanes[lane] = nil
+				continue
+			}
+			open = true
+		}
+		if !open {
+			delete(s.streams, id)
 		}
 	}
 	return out
@@ -242,7 +287,7 @@ func (r *fecReceiver) fragment(p *MediaPacket, now time.Time) [][]byte {
 	var out [][]byte
 	for i := 0; i < len(s.parities); i++ {
 		q := s.parities[i]
-		if d := int32(p.Seq - q.first); d < 0 || int(d) >= len(q.counts) {
+		if !q.covers(p.Seq, p.FragIdx) {
 			continue
 		}
 		rebuilt, done := s.repair(k, q)
@@ -255,6 +300,15 @@ func (r *fecReceiver) fragment(p *MediaPacket, now time.Time) [][]byte {
 		}
 	}
 	return out
+}
+
+func (q *fecParity) covers(seq uint32, idx uint8) bool {
+	for _, m := range q.members {
+		if m.seq == seq && m.idx == idx {
+			return true
+		}
+	}
+	return false
 }
 
 // parity records a parity and returns the wire fragment it rebuilds, if its group misses exactly
@@ -281,31 +335,25 @@ func (r *fecReceiver) parity(p *MediaPacket, now time.Time) ([]byte, error) {
 // repair rebuilds the one fragment q's group misses. done is false while more than one is missing,
 // so the parity is worth keeping.
 func (s *fecStream) repair(k sourceKey, q *fecParity) (rebuilt []byte, done bool) {
-	missSeq, missIdx, missing := uint32(0), uint8(0), 0
-	for i, c := range q.counts {
-		seq := q.first + uint32(i)
-		u := s.units[seq]
-		if u != nil && u.count != c {
+	var miss fecRef
+	missing := 0
+	for _, m := range q.members {
+		u := s.units[m.seq]
+		if u != nil && u.count != m.count {
 			return nil, true // the parity and the fragments disagree: nothing to rebuild
 		}
-		for f := uint8(0); f < c; f++ {
-			if u == nil || u.frags[f] == nil {
-				missing++
-				missSeq, missIdx = seq, f
-			}
+		if u == nil || u.frags[m.idx] == nil {
+			missing++
+			miss = m
 		}
 	}
 	if missing != 1 {
 		return nil, missing == 0
 	}
 	blob := append([]byte(nil), q.blob...)
-	for i, c := range q.counts {
-		if u := s.units[q.first+uint32(i)]; u != nil {
-			for f := uint8(0); f < c; f++ {
-				if u.frags[f] != nil {
-					xorFrag(blob, *u.frags[f])
-				}
-			}
+	for _, m := range q.members {
+		if u := s.units[m.seq]; u != nil && u.frags[m.idx] != nil {
+			xorFrag(blob, *u.frags[m.idx])
 		}
 	}
 	n := int(binary.BigEndian.Uint16(blob[4:6]))
@@ -314,12 +362,12 @@ func (s *fecStream) repair(k sourceKey, q *fecParity) (rebuilt []byte, done bool
 	}
 	return (&MediaPacket{
 		Kind:        FrameVideo,
-		Seq:         missSeq,
+		Seq:         miss.seq,
 		Timestamp:   binary.BigEndian.Uint32(blob[0:4]),
 		Broadcaster: k.broadcaster,
 		StreamID:    k.streamID,
-		FragIdx:     missIdx,
-		FragCount:   q.counts[missSeq-q.first],
+		FragIdx:     miss.idx,
+		FragCount:   miss.count,
 		Payload:     blob[fecFragHeader : fecFragHeader+n],
 	}).Encode(), true
 }

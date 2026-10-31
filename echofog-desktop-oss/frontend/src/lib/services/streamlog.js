@@ -10,7 +10,7 @@ import { writable, get } from 'svelte/store';
 import { App } from '../api.js';
 import { callService, callState, videoStreams } from './call.service.js';
 import { activeGroupCalls, activeId } from '../stores/chats.js';
-import { rates } from './streamrates.js';
+import { rates, stillSecond } from './streamrates.js';
 
 const MAX_SECONDS = 3 * 3600;
 const MAX_LOG_LINES = 4000;
@@ -131,12 +131,24 @@ export function summarize(samples, own) {
         secondsWithTrouble: samples.filter((r) => (own ? r[col('qDropped')] + r[col('qFailed')] + r[col('netOut')] : r[col('lostPkts')] + r[col('gaps')] + r[col('netIn')]) > 0).length,
         limits,
     };
+    // freezes the network caused: a still picture's waits for the next frame are counted apart
+    let freezes = 0, freezeSec = 0, still = 0;
+    const at = (r, name) => +r[col(name)] || 0;
+    for (let i = 1; i < samples.length; i++) {
+        const r = samples[i], p = samples[i - 1];
+        if (stillSecond({ lostPkts: at(r, 'lostPkts'), gaps: at(r, 'gaps'), netIn: at(r, 'netIn'), packets: at(r, 'packets') })) {
+            still++;
+            continue;
+        }
+        freezes += Math.max(0, at(r, 'freezes') - at(p, 'freezes'));
+        freezeSec += Math.max(0, at(r, 'freezeSec') - at(p, 'freezeSec'));
+    }
     if (own) {
         Object.assign(out, { dropped: sum('qDropped'), failed: sum('qFailed'), netOut: sum('netOut'), keyframesServed: delta('keyframes'), retransmitted: sum('retransmitted') });
     } else {
         Object.assign(out, {
             lostPackets: sum('lostPkts'), gaps: sum('gaps'), nacked: sum('nacked'), fecRecovered: sum('fec'), netIn: sum('netIn'),
-            framesDropped: sum('droppedFps'), freezes: delta('freezes'), freezeSeconds: Math.round(delta('freezeSec') * 10) / 10, keyframesAsked: delta('pli'),
+            framesDropped: sum('droppedFps'), freezes, freezeSeconds: Math.round(freezeSec * 10) / 10, stillSeconds: still, keyframesAsked: delta('pli'),
         });
     }
     return out;
@@ -210,7 +222,7 @@ export function summaryText(log) {
         `fps avg ${s.fps.avg} · median ${s.fps.median} · 5% ${s.fps.p5} · min ${s.fps.min} · max ${s.fps.max} · Mbit/s median ${s.mbps.median}`,
     ];
     if (log.own) out.push(`queue dropped ${s.dropped} · failed ${s.failed} · transport dropped ${s.netOut} · keyframes served ${s.keyframesServed} · resent ${s.retransmitted}`);
-    else out.push(`lost ${s.lostPackets} · gaps ${s.gaps} · resent ${s.nacked} · FEC ${s.fecRecovered} · no room ${s.netIn} · freezes ${s.freezes} (${s.freezeSeconds} s) · keyframes asked ${s.keyframesAsked}`);
+    else out.push(`lost ${s.lostPackets} · gaps ${s.gaps} · resent ${s.nacked} · FEC ${s.fecRecovered} · no room ${s.netIn} · freezes ${s.freezes} (${s.freezeSeconds} s) · still picture ${s.stillSeconds} s · keyframes asked ${s.keyframesAsked}`);
     out.push(`seconds with trouble ${s.secondsWithTrouble}${Object.keys(s.limits).length ? ' · limited by ' + Object.entries(s.limits).map(([k, v]) => `${k} ${v} s`).join(', ') : ''}`);
     return out.join('\n');
 }

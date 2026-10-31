@@ -351,9 +351,19 @@ func (m *CallManager) sendNack(streamID string, lost []media.NackEntry) {
 	m.unlockAndFlush()
 }
 
+// nackUpstreamLocked sends a NACK to the stream's parent twice: as a datagram, which does not wait
+// behind what the path lost, and by stream for a parent that does not take signals as datagrams.
+// The parent serves the first that arrives (each signal has its own MsgID).
 func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string, lost []media.NackEntry) {
 	if up, ok := room.StreamEngine.GetUpstream(streamID, m.selfID); ok {
-		m.sendLocked(room, up, signaling.ActionNack, signaling.NackPayload{StreamID: streamID, Lost: lost})
+		b, err := m.encodeLocked(room, signaling.ActionNack, signaling.NackPayload{StreamID: streamID, Lost: lost})
+		if err != nil {
+			m.warnOnce("encode:nack", "Failed to encode call signal", "action", signaling.ActionNack, "err", err)
+			return
+		}
+		ob := room.Dispatcher.Outbox()
+		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, b) // small and urgent: the audio lane
+		ob.Send(up, media.ClassControl, net_types.TypeCallSignaling, b)
 		return
 	}
 	m.debugOnce("nack-noup:"+streamID, "Lost video units but no parent to ask on this stream", "stream", streamID, "units", len(lost))

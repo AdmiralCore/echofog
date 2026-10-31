@@ -35,7 +35,7 @@ func (m *CallManager) inbound(kind string, h func([]byte, types.PeerID) error) f
 // forge nor read them.
 func (m *CallManager) HandleRelayedFrame(t net_types.MessageType, payload []byte, from types.PeerID) {
 	switch t {
-	case net_types.TypeCallSignaling:
+	case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy:
 		_ = m.inbound("signal", m.handleIncomingSignaling)(payload, from)
 	case net_types.TypeCallMediaAudio:
 		_ = m.inbound("audio", m.handleIncomingAudio)(payload, from)

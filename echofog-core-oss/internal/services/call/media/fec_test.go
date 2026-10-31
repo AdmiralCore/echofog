@@ -52,7 +52,7 @@ func TestRTPKeyframeDetection(t *testing.T) {
 }
 
 // A parity, its header and the largest fragment it covers fit one datagram even with the longest
-// stream ID and the most units a parity names.
+// stream ID and the most fragments a parity names.
 func TestFECParityFitsADatagram(t *testing.T) {
 	id := strings.Repeat("s", MaxStreamIDLen)
 	frags, err := sealUnit(&MediaPacket{Kind: FrameVideo, Seq: 1, StreamID: id, Payload: make([]byte, 5000)}, newKey(t), fecReserve)
@@ -60,47 +60,67 @@ func TestFECParityFitsADatagram(t *testing.T) {
 	p, err := Decode(frags[0])
 	require.NoError(t, err)
 
-	counts := make([]uint8, fecMaxGroupUnits)
-	ff := make([]fecFrag, fecMaxGroupUnits)
-	for i := range counts {
-		counts[i] = 1
+	members := make([]fecRef, fecGroupFrags)
+	ff := make([]fecFrag, fecGroupFrags)
+	for i := range members {
+		members[i] = fecRef{seq: uint32(1 + 25*i), idx: 15, count: 16}
 		ff[i] = fecFrag{uint32(i), make([]byte, len(p.Payload))}
 	}
-	pkt := (&MediaPacket{Kind: FrameVideoFEC, Seq: 1, StreamID: id, FragCount: 1, Payload: encodeFECPayload(1, counts, ff)}).Encode()
+	pkt := (&MediaPacket{Kind: FrameVideoFEC, Seq: 1, StreamID: id, FragIdx: fecLanes - 1, FragCount: fecLanes, Payload: encodeFECPayload(members, ff)}).Encode()
 	assert.LessOrEqual(t, len(pkt), DatagramBudget)
 	for _, f := range frags {
 		assert.LessOrEqual(t, len(f), DatagramBudget-fecReserve)
 	}
+
+	q, err := decodeFECPayload(encodeFECPayload(members, ff), time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, members, q.members, "the members survive the round trip")
 }
 
-func TestFECGroupsAreSmallerInKeyframes(t *testing.T) {
-	key := newKey(t)
-	unit := func(seq uint32, nal byte, marker bool) [][]byte {
-		frags, err := sealUnit(&MediaPacket{Kind: FrameVideo, Seq: seq, StreamID: "s", Payload: rtpH264(uint16(seq), marker, nal, 1800)}, key, fecReserve)
+// sealedUnits seals n two-fragment units of one stream, of NAL type nal, starting at seq first.
+func sealedUnits(t *testing.T, key []byte, bcast types.PeerID, first uint32, n int, nal byte) (wire [][]byte, rtp [][]byte) {
+	for seq := first; seq < first+uint32(n); seq++ {
+		r := rtpH264(uint16(seq), false, nal, 1800)
+		frags, err := sealUnit(&MediaPacket{Kind: FrameVideo, Seq: seq, Broadcaster: bcast, StreamID: "s1", Payload: r}, key, fecReserve)
 		require.NoError(t, err)
 		require.Len(t, frags, 2)
-		return frags
+		wire = append(wire, frags...)
+		rtp = append(rtp, r)
 	}
+	return wire, rtp
+}
+
+func TestFECGroupsAreDealtInLanes(t *testing.T) {
+	key := newKey(t)
 	s := newFECSender()
 	now := time.Now()
-	var parities []fecParityOut
-	for seq := uint32(1); seq <= 5; seq++ {
-		parities = append(parities, s.add("s", seq, unit(seq, 1, false), rtpH264(uint16(seq), false, 1, 1800), now)...)
+	add := func(first uint32, n int, nal byte) (out []fecParityOut) {
+		wire, rtp := sealedUnits(t, key, pid(1), first, n, nal)
+		for i := range rtp {
+			out = append(out, s.add("s1", first+uint32(i), wire[2*i:2*i+2], rtp[i], now)...)
+		}
+		return out
 	}
-	require.Len(t, parities, 1, "ten fragments of ordinary frames")
-	assert.Equal(t, uint32(1), parities[0].first)
-
-	parities = nil
-	for seq := uint32(6); seq <= 9; seq++ {
-		parities = append(parities, s.add("s", seq, unit(seq, 5, false), rtpH264(uint16(seq), false, 5, 1800), now)...)
+	parities := add(1, 20, 1)
+	require.Len(t, parities, fecLanes, "forty fragments of ordinary frames: ten in each lane")
+	for i, p := range parities {
+		q, err := decodeFECPayload(p.payload, now)
+		require.NoError(t, err)
+		require.Len(t, q.members, fecGroupFrags)
+		for j := 1; j < len(q.members); j++ {
+			a, b := q.members[j-1], q.members[j]
+			assert.Equal(t, uint32(fecLanes), 2*(b.seq-a.seq)+uint32(b.idx)-uint32(a.idx), "lane %d holds every fourth fragment", i)
+		}
 	}
-	assert.Len(t, parities, 2, "four fragments of a keyframe")
 
-	assert.Empty(t, s.add("s", 10, unit(10, 1, false), rtpH264(10, false, 1, 1800), now))
+	parities = add(21, 8, 5)
+	assert.Len(t, parities, fecLanes, "sixteen fragments of a keyframe: four in each lane")
+
+	assert.Empty(t, add(29, 1, 1))
 	assert.Empty(t, s.flush(now))
 	left := s.flush(now.Add(fecGroupAge + time.Millisecond))
-	require.Len(t, left, 1, "a group a quiet stream left open goes out by itself")
-	assert.Equal(t, uint32(10), left[0].first)
+	require.Len(t, left, 2, "groups a quiet stream left open go out by themselves")
+	assert.Equal(t, uint32(29), left[0].first)
 }
 
 // fecPair is a broadcaster and one viewer of its stream.
@@ -126,45 +146,44 @@ func fecPair(t *testing.T) (b, v *MediaDispatcher, bs *mockSender, consumer *moc
 	return b, v, bs, consumer, viewer
 }
 
-// One fragment lost in each of two groups is rebuilt from the parities at once: every unit plays,
-// nothing is asked for again and no keyframe is needed.
-func TestFECRebuildsALostFragmentPerGroup(t *testing.T) {
+// A burst of four fragments in a row, one in each lane, is rebuilt from the parities at once:
+// every unit plays, nothing is asked for again and no keyframe is needed.
+func TestFECRebuildsABurst(t *testing.T) {
 	b, v, bs, consumer, viewer := fecPair(t)
 	var nacks, losses atomic.Int32
 	v.OnVideoNack = func(string, []NackEntry) { nacks.Add(1) }
 	v.OnVideoLoss = func(string, types.PeerID) { losses.Add(1) }
 
-	for seq := uint16(1); seq <= 10; seq++ {
+	for seq := uint16(1); seq <= 20; seq++ {
 		require.NoError(t, b.BroadcastLocalVideo("s1", rtpH264(seq, seq%5 == 0, 1, 1800)))
 	}
-	require.Eventually(t, func() bool { return len(bs.to(viewer)) == 22 }, time.Second, 5*time.Millisecond, "20 fragments and 2 parities")
+	require.Eventually(t, func() bool { return len(bs.to(viewer)) == 44 }, time.Second, 5*time.Millisecond, "40 fragments and 4 parities")
 
-	parities := 0
+	parities, n := 0, 0
 	for _, f := range bs.to(viewer) {
 		p, err := Decode(f.data)
 		require.NoError(t, err)
 		if p.Kind == FrameVideoFEC {
 			parities++
-		}
-		if p.Kind == FrameVideo && ((p.Seq == 3 && p.FragIdx == 1) || (p.Seq == 8 && p.FragIdx == 0)) {
+		} else if n++; n >= 11 && n <= 14 { // fragments 11..14: units 6 and 7, both whole
 			continue
 		}
 		require.NoError(t, v.ProcessIncomingVideo(f.data, pid(1)))
 	}
-	assert.Equal(t, 2, parities)
-	_, n := consumer.counts()
-	require.Equal(t, 10, n)
-	assert.Equal(t, uint64(2), v.Stats().Recovered)
-	assert.Equal(t, uint64(2), v.StreamStats()["s1"].Recovered)
+	assert.Equal(t, fecLanes, parities)
+	_, got := consumer.counts()
+	require.Equal(t, 20, got)
+	assert.Equal(t, uint64(4), v.Stats().Recovered)
+	assert.Equal(t, uint64(4), v.StreamStats()["s1"].Recovered)
 	consumer.mu.Lock()
-	var got3 []byte
+	var got6 []byte
 	for _, p := range consumer.videoPackets {
-		if p.Seq == 3 {
-			got3 = p.Payload
+		if p.Seq == 6 {
+			got6 = p.Payload
 		}
 	}
 	consumer.mu.Unlock()
-	assert.Equal(t, rtpH264(3, false, 1, 1800), got3)
+	assert.Equal(t, rtpH264(6, false, 1, 1800), got6)
 
 	time.Sleep(reorderWindow + 50*time.Millisecond)
 	assert.Zero(t, losses.Load())
@@ -178,23 +197,26 @@ func TestFECParityWaitsForASecondFragment(t *testing.T) {
 	s := newFECSender()
 	r := newFECReceiver()
 	now := time.Now()
-	var wire [][]byte
+	wire, rtp := sealedUnits(t, key, bcast, 1, 20, 1)
 	var par []fecParityOut
-	for seq := uint32(1); seq <= 5; seq++ {
-		frags, err := sealUnit(&MediaPacket{Kind: FrameVideo, Seq: seq, Broadcaster: bcast, StreamID: "s1", Payload: rtpH264(uint16(seq), false, 1, 1800)}, key, fecReserve)
-		require.NoError(t, err)
-		wire = append(wire, frags...)
-		par = append(par, s.add("s1", seq, frags, rtpH264(uint16(seq), false, 1, 1800), now)...)
+	for i := range rtp {
+		par = append(par, s.add("s1", uint32(i+1), wire[2*i:2*i+2], rtp[i], now)...)
 	}
-	require.Len(t, par, 1)
+	require.Len(t, par, fecLanes)
 	for i, w := range wire {
-		if i == 2 || i == 7 {
+		if i == 2 || i == 6 { // both in lane 2
 			continue
 		}
 		p, _ := Decode(w)
 		assert.Empty(t, r.fragment(p, now))
 	}
-	pp := (&MediaPacket{Kind: FrameVideoFEC, Seq: par[0].first, Broadcaster: bcast, StreamID: "s1", FragCount: 1, Payload: par[0].payload}).Encode()
+	var lane2 fecParityOut
+	for _, p := range par {
+		if p.lane == 2 {
+			lane2 = p
+		}
+	}
+	pp := (&MediaPacket{Kind: FrameVideoFEC, Seq: lane2.first, Broadcaster: bcast, StreamID: "s1", FragIdx: 2, FragCount: fecLanes, Payload: lane2.payload}).Encode()
 	pkt, _ := Decode(pp)
 	rebuilt, err := r.parity(pkt, now)
 	require.NoError(t, err)
@@ -203,7 +225,7 @@ func TestFECParityWaitsForASecondFragment(t *testing.T) {
 	p, _ := Decode(wire[2]) // the resend
 	out := r.fragment(p, now)
 	require.Len(t, out, 1)
-	assert.Equal(t, wire[7], out[0], "the rebuilt fragment is the sealed one, byte for byte")
+	assert.Equal(t, wire[6], out[0], "the rebuilt fragment is the sealed one, byte for byte")
 	assert.Empty(t, r.fragment(p, now), "the parity is used up")
 
 	_, err = r.parity(&MediaPacket{Kind: FrameVideoFEC, Payload: []byte{1, 2}}, now)
@@ -283,4 +305,35 @@ func TestFECOnALossyPath(t *testing.T) {
 	t.Logf("dropped %d packets, %d of %d units played, %d fragments rebuilt", dropped, n, units, v.Stats().Recovered)
 	assert.Greater(t, dropped, 10)
 	assert.LessOrEqual(t, units-n, dropped/3, "without parity nearly every dropped packet costs a unit")
+}
+
+// Real paths lose packets in runs. With runs of one to four packets starting at 1% of packets, a
+// run of two or more used to cost a unit every time; dealt in lanes, the parities rebuild them,
+// except where two runs fall into the same groups.
+func TestFECOnABurstyPath(t *testing.T) {
+	b, v, bs, consumer, viewer := fecPair(t)
+	const units = 600
+	for seq := uint16(1); seq <= units; seq++ {
+		require.NoError(t, b.BroadcastLocalVideo("s1", rtpH264(seq, seq%8 == 0, 1, 1800)))
+	}
+	time.Sleep(3 * fecGroupAge)
+	require.Eventually(t, func() bool { return len(bs.to(viewer)) >= 2*units+2*units/fecGroupFrags }, 2*time.Second, 5*time.Millisecond)
+
+	rng := rand.New(rand.NewSource(11))
+	dropped, run := 0, 0
+	for _, f := range bs.to(viewer) {
+		if run == 0 && rng.Intn(100) == 0 {
+			run = 1 + rng.Intn(fecLanes)
+		}
+		if run > 0 {
+			run--
+			dropped++
+			continue
+		}
+		require.NoError(t, v.ProcessIncomingVideo(f.data, pid(1)))
+	}
+	_, n := consumer.counts()
+	t.Logf("dropped %d packets in runs, %d of %d units played, %d fragments rebuilt", dropped, n, units, v.Stats().Recovered)
+	assert.Greater(t, dropped, 15)
+	assert.GreaterOrEqual(t, n, units*98/100, "runs no longer than the lanes are rebuilt")
 }

@@ -1,6 +1,13 @@
 // The rates of a stream over the time between two callService.tileStats snapshots: what the stats
 // on a tile show and what a stream log records, worked out the same way for both.
 
+/** Fewer packets a second than this, with nothing lost, is a still picture: a shared screen sends
+ *  only what changes, and the browser counts the wait for the next frame as a freeze. */
+export const STILL_PACKETS = 100;
+
+/** stillSecond(r): a second of a watched stream whose source sent little and the path lost nothing. */
+export const stillSecond = (r) => r.lostPkts + r.gaps + r.netIn === 0 && r.packets < STILL_PACKETS;
+
 /** rates(a, b, own): per-second counts between snapshots a and b of one stream. */
 export function rates(a, b, own) {
     const dt = (b.at - a.at) / 1000;
@@ -29,6 +36,7 @@ export function rates(a, b, own) {
         sendKbps: bn.sendKbps || 0, keyframes: bn.keyframesServed || 0,
     };
     r.fps = own ? r.encodedFps : r.shownFps;
-    r.bad = own ? r.qDropped + r.qFailed + r.netOut > 0 : r.lostPkts + r.gaps + r.netIn > 0 || (bb.freezes || 0) > (ab.freezes || 0);
+    r.still = !own && stillSecond(r);
+    r.bad = own ? r.qDropped + r.qFailed + r.netOut > 0 : r.lostPkts + r.gaps + r.netIn > 0 || ((bb.freezes || 0) > (ab.freezes || 0) && !r.still);
     return r;
 }

@@ -204,6 +204,7 @@ func NewCallManager(s *swarm.Swarm, ses *swarm.SessionManager, crypt *crypto.Cry
 		// The swarm logs every handler error at Warn with no limit, which a bad peer turns into a
 		// flood; the call layer logs them itself, rate limited and with call context.
 		s.RegisterFastFrameHandler(net_types.TypeCallSignaling, cm.inbound("signal", cm.handleIncomingSignaling))
+		s.RegisterFastFrameHandler(net_types.TypeCallSignalingLossy, cm.inbound("signal", cm.handleIncomingSignaling))
 		s.RegisterFastFrameHandler(net_types.TypeCallMediaAudio, cm.inbound("audio", cm.handleIncomingAudio))
 		s.RegisterFastFrameHandler(net_types.TypeCallMediaVideo, cm.inbound("video", cm.handleIncomingVideo))
 	}

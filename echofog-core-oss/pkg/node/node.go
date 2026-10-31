@@ -685,7 +685,7 @@ func (n *Node) Start() (err error) {
 			cm := n.CallManager
 			n.RelayClient.AddDataListener(func(_ uint32, t net_types.MessageType, payload []byte, remote types.PeerID) {
 				switch t {
-				case net_types.TypeCallSignaling, net_types.TypeCallMediaAudio, net_types.TypeCallMediaVideo:
+				case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy, net_types.TypeCallMediaAudio, net_types.TypeCallMediaVideo:
 					cm.HandleRelayedFrame(t, payload, remote)
 				}
 			})
@@ -908,6 +908,7 @@ func (n *Node) shutdown(closeLog bool) {
 var serverDroppedTypes = []net_types.MessageType{
 	net_types.TypeChatMessage,
 	net_types.TypeCallSignaling,
+	net_types.TypeCallSignalingLossy,
 	net_types.TypeCallMediaAudio,
 	net_types.TypeCallMediaVideo,
 	net_types.TypeFileXfer,

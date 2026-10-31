@@ -697,7 +697,8 @@ func (d *MediaDispatcher) sendParity(subs []types.PeerID, par fecParityOut, now 
 		Timestamp:   uint32(now.UnixMilli()),
 		Broadcaster: d.selfID,
 		StreamID:    par.streamID,
-		FragCount:   1,
+		FragIdx:     par.lane, // lanes may start at the same unit: this keeps their parities apart
+		FragCount:   fecLanes,
 		Payload:     par.payload,
 	}).Encode()
 	for _, sub := range subs {

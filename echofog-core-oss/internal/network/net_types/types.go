@@ -77,11 +77,17 @@ const (
 	// TypeFileXfer carries one frame of a file transfer (see internal/services/filexfer): sealed
 	// end to end, so it travels the same way directly and over a relay circuit.
 	TypeFileXfer
+	// TypeCallSignalingLossy is a call signal sent as a datagram where late is as bad as lost: a
+	// NACK. On a stream it waits behind every packet the path lost before it, and a resend asked
+	// for a second late finds nothing left to resend. The same signal goes by stream too, for nodes
+	// that do not know this type; the receiver takes whichever comes first.
+	TypeCallSignalingLossy
 )
 
 // IsUnreliableType reports whether frames of this type may arrive as unreliable QUIC datagrams.
 func IsUnreliableType(t MessageType) bool {
-	return t == TypeCallMediaAudio || t == TypeCallMediaVideo || t == TypeExitUDPToExit || t == TypeExitUDPFromExit
+	return t == TypeCallMediaAudio || t == TypeCallMediaVideo || t == TypeExitUDPToExit || t == TypeExitUDPFromExit ||
+		t == TypeCallSignalingLossy
 }
 
 // IsDatagramFrame reports whether a frame of this type is accepted from a datagram: the

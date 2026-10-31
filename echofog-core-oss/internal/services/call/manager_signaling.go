@@ -426,6 +426,11 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 
 	case signaling.ActionNack:
 		var np signaling.NackPayload
+		key := floodKey{env.Sender, env.MsgID}
+		if _, dup := room.seen[key]; dup {
+			break // the copy that went the other way (datagram or stream) came first
+		}
+		room.seen[key] = now
 		if decodePayload(env.Payload, &np) != nil {
 			m.rejectLocked(room, env, "malformed", true)
 		} else if up := room.Dispatcher.ServeNack(sender, np.StreamID, np.Lost); len(up) > 0 {
