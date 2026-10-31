@@ -401,7 +401,7 @@ hit (`limits: ... opens refused, ... frames dropped`), and `status` lists exit r
 ## Other flags
 
 Flags and commands that the sections above do not cover. Each flag is also the environment
-variable shown.
+variable shown. Every command and flag, in one list: [Node command line](node-cli.md).
 
 | Flag | Environment | Default | What it does |
 |---|---|---|---|
