@@ -31,10 +31,13 @@ means your computer cannot be someone else's relay or public exit.
 
 ### When both sides are hard to reach
 
-Hole punching does not pass a **symmetric NAT** (most mobile networks, some home routers). Behind
-one, a computer is not even tried for a direct connection, so two such people reach each other
-**only through a relay**: chat messages, group join requests, the group's keys and history, and
-calls all go that way. The servers a fresh install joins through may be *signaling only* (they
+Hole punching does not pass a **symmetric NAT** (most mobile networks, some home routers), so two
+such people start out **through a relay**: chat messages, group join requests, the group's keys and
+history, and calls all go that way. While a relay carries a peer, the app keeps looking for a
+direct link in the background (at most every two minutes per peer): your LAN address when you both
+sit behind the same router, a dial from both ends, which gets through when the other side's NAT is
+easier, and IPv6 (below). When one works, calls and messages move to it by themselves. Two symmetric
+NATs in different networks without IPv6 stay on the relay. The servers a fresh install joins through may be *signaling only* (they
 help with hole punching but carry nothing); if no relay is connected at all, nothing gets through,
 and the app says so:
 
@@ -107,9 +110,12 @@ starts with `100.64`–`100.127`, `10.`, `172.16`–`172.31` or `192.168.`, you 
 
 ### 4. IPv6 (honest status)
 
-IPv6 usually has no NAT, so in principle it would solve this. Today EchoFog **accepts** IPv6
-connections but does **not yet advertise or prefer** IPv6 addresses, so having IPv6 does not make
-you reachable on its own. It is on the roadmap.
+IPv6 usually has no NAT, so it often gets through where IPv4 does not. EchoFog **accepts** IPv6
+connections and offers this computer's global IPv6 addresses to a peer when the two try a direct
+link (hole punching opens the router's IPv6 firewall the way it opens a cone NAT), so two people who
+both have IPv6 usually get a direct link even behind a carrier's NAT. It does **not yet advertise**
+IPv6 addresses in the DHT, so IPv6 alone does not make you reachable for someone who has never met
+you through a relay or a signaling node.
 
 ### 5. Run a node on a VPS
 
