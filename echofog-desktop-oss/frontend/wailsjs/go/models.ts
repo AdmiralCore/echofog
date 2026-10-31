@@ -630,6 +630,26 @@ export namespace logging {
 
 export namespace main {
 	
+	export class CrashReport {
+	    reason: string;
+	    where: string;
+	    text: string;
+	    version: string;
+	    os: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CrashReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reason = source["reason"];
+	        this.where = source["where"];
+	        this.text = source["text"];
+	        this.version = source["version"];
+	        this.os = source["os"];
+	    }
+	}
 	export class UpdateInfo {
 	    current: string;
 	    latest?: string;

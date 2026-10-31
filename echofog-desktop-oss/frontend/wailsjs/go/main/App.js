@@ -218,6 +218,10 @@ export function ForgetExit(arg1) {
   return window['go']['main']['App']['ForgetExit'](arg1);
 }
 
+export function ForgetLastCrash() {
+  return window['go']['main']['App']['ForgetLastCrash']();
+}
+
 export function GetAccessStatus() {
   return window['go']['main']['App']['GetAccessStatus']();
 }
@@ -474,6 +478,10 @@ export function KillSwitchHeld() {
   return window['go']['main']['App']['KillSwitchHeld']();
 }
 
+export function LastCrash() {
+  return window['go']['main']['App']['LastCrash']();
+}
+
 export function LeaveGroup(arg1) {
   return window['go']['main']['App']['LeaveGroup'](arg1);
 }
@@ -600,6 +608,10 @@ export function RotateAccessSecret() {
 
 export function SaveConnectionReport(arg1) {
   return window['go']['main']['App']['SaveConnectionReport'](arg1);
+}
+
+export function SaveCrashReport(arg1) {
+  return window['go']['main']['App']['SaveCrashReport'](arg1);
 }
 
 export function SaveMessage(arg1) {

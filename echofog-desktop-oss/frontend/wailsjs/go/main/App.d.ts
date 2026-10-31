@@ -115,6 +115,8 @@ export function ExportTonRecoveryPhrase(arg1:string):Promise<Array<string>>;
 
 export function ForgetExit(arg1:string):Promise<void>;
 
+export function ForgetLastCrash():Promise<void>;
+
 export function GetAccessStatus():Promise<node.AccessStatus>;
 
 export function GetAnonymity():Promise<node.AnonymityStatus>;
@@ -243,6 +245,8 @@ export function KeepRoomCallAlive(arg1:string,arg2:string,arg3:string,arg4:strin
 
 export function KillSwitchHeld():Promise<boolean>;
 
+export function LastCrash():Promise<main.CrashReport>;
+
 export function LeaveGroup(arg1:string):Promise<void>;
 
 export function LeaveRoom():Promise<void>;
@@ -306,6 +310,8 @@ export function RequestRelayChange(arg1:string):Promise<void>;
 export function RotateAccessSecret():Promise<string>;
 
 export function SaveConnectionReport(arg1:string):Promise<string>;
+
+export function SaveCrashReport(arg1:string):Promise<string>;
 
 export function SaveMessage(arg1:dto.SavedMessageDTO):Promise<dto.SavedMessageDTO>;
 
