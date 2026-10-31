@@ -78,6 +78,8 @@ type Node struct {
 	routingTable   *dht.RoutingTable
 	NAT            *routing.NATManager
 	HolePunch      *holepunch.Service // direct connections between peers behind NATs
+	directMu       sync.Mutex
+	directTried    map[types.PeerID]time.Time // peers reached through a relay: last try at a direct link
 	RelayServer    *routing.RelayServer
 	RelayClient    *routing.RelayClient
 	MailboxManager *messenger.MailboxManager

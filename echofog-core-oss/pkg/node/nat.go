@@ -154,7 +154,7 @@ func (n *Node) startHolePunch() {
 	svc := holepunch.New(holepunch.Config{
 		Transport:  n.Transport,
 		Signal:     relaySignaler{n.RelayClient},
-		OwnAddrs:   n.NAT.Candidates,
+		OwnAddrs:   n.punchAddrs,
 		LocalAddrs: n.localAddrs,
 		Connected:  func(p types.PeerID) bool { return n.Swarm.GetPeer(p) != nil },
 		Ticket:     func(p types.PeerID) []byte { return n.Invites.Ticket(p, n.ID) },
@@ -207,11 +207,55 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 			dialErr = err
 		}
 	}
-	// no direct way (a symmetric NAT on our side, or the punch failed): meet the peer at a relay
+	// no direct way yet (a symmetric NAT on our side, or the punch failed): meet the peer at a relay
 	// we both reach, so calls and messages have a circuit; the caller still hears that no direct
 	// link was made (a message then goes through the relays or the peer's mailboxes)
 	n.meetViaRelay(ctx, peer)
+	if !n.NAT.CanBePunched() {
+		n.tryDirectLater(peer)
+	}
 	return orDialErr(dialErr)
+}
+
+// directRetry is how long a peer reached only through a relay waits for the next try at a direct
+// link.
+const directRetry = 2 * time.Minute
+
+// tryDirectLater looks for a direct link to a peer this node reaches only through a relay, in the
+// background, while the relay carries everything. Behind a symmetric NAT no hole punch toward the
+// public address works, so none used to be tried, yet two cases do get through: a peer behind the
+// same router (it gets our LAN address and dials it; testers at home sat next to each other and
+// talked through a server abroad), and a peer behind an easier NAT, which the last round of the
+// punch dials from both ends. When a link comes up, calls and messages move to it by themselves:
+// both prefer a connected peer to a circuit. Not in anonymous mode or behind a proxy (the punch
+// service is not running there) and not where guard mode keeps users' links on a relay.
+func (n *Node) tryDirectLater(peer types.PeerID) {
+	if n.HolePunch == nil {
+		return
+	}
+	// the clock first: a call asks with every frame it sends through the relay
+	n.directMu.Lock()
+	if time.Since(n.directTried[peer]) < directRetry {
+		n.directMu.Unlock()
+		return
+	}
+	if n.directTried == nil || len(n.directTried) > 1024 {
+		n.directTried = map[types.PeerID]time.Time{}
+	}
+	n.directTried[peer] = time.Now()
+	n.directMu.Unlock()
+	if n.Swarm == nil || n.Swarm.GetPeer(peer) != nil || n.Swarm.UserLinkViaRelay(peer, "") {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(n.Ctx, 40*time.Second)
+		defer cancel()
+		if err := n.HolePunch.Connect(ctx, peer); err != nil {
+			n.Logger.Debug("No direct link to a peer reached through a relay", "peer", peer.String()[:8], "err", err)
+			return
+		}
+		n.Logger.Info("Direct link made to a peer that a relay carried", "peer", peer.String()[:8])
+	}()
 }
 
 func orDialErr(err error) error {
@@ -248,6 +292,40 @@ func (n *Node) CallRelayCapacity() int {
 	default:
 		return 0
 	}
+}
+
+// punchAddrs are the addresses a peer may aim a hole punch at: the public IPv4 ones the NAT manager
+// knows, then this computer's global IPv6 addresses. Behind a carrier's NAT the IPv4 side is often
+// symmetric and cannot be punched, while IPv6 has no NAT at all: two peers that both have it get a
+// direct link through their routers' firewalls, which a punch opens like a cone NAT.
+func (n *Node) punchAddrs() []string {
+	return append(n.NAT.Candidates(), n.globalV6Addrs()...)
+}
+
+// globalV6Addrs are this computer's global IPv6 addresses with the QUIC port (the socket takes both
+// families), a few at most.
+func (n *Node) globalV6Addrs() []string {
+	port := n.Transport.UDPPort()
+	ifaces, err := net.InterfaceAddrs()
+	if err != nil || port == 0 {
+		return nil
+	}
+	var out []string
+	for _, a := range ifaces {
+		ipn, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(ipn.IP)
+		if !ok || !ip.Is6() || ip.Is4In6() || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+			continue
+		}
+		out = append(out, netip.AddrPortFrom(ip, uint16(port)).String())
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
 }
 
 // localAddrs are the addresses of this computer on private networks ("192.168.1.5:4242"): what a
