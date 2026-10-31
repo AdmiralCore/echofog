@@ -5,6 +5,7 @@
      *  shown. Enough to tell a slow computer from a lossy path. */
     import { onDestroy } from 'svelte';
     import { callService } from '../../services/call.service.js';
+    import { rates } from '../../services/streamrates.js';
     import { t } from '../../i18n/index.js';
 
     export let streamId;
@@ -19,47 +20,16 @@
 
     async function tick() {
         const snap = await callService.tileStats(streamId, media, own);
-        if (prev && snap.at > prev.at) now = rates(prev, snap);
+        if (prev && snap.at > prev.at) now = rates(prev, snap, own);
         prev = snap;
         if (now) {
-            const fps = own ? now.encodedFps : now.shownFps;
-            hist = [...hist.slice(-(POINTS - 1)), { fps, bad: now.bad }];
+            hist = [...hist.slice(-(POINTS - 1)), { fps: now.fps, bad: now.bad }];
             peakFps = Math.max(30, ...hist.map((h) => h.fps));
         }
     }
     tick();
     const timer = setInterval(tick, 1000);
     onDestroy(() => clearInterval(timer));
-
-    function rates(a, b) {
-        const dt = (b.at - a.at) / 1000;
-        const per = (x, y) => Math.max(0, Math.round(((y || 0) - (x || 0)) / dt));
-        const ab = a.browser || {}, bb = b.browser || {};
-        const an = a.node || {}, bn = b.node || {};
-        const frames = (bb.frames || 0) - (ab.frames || 0);
-        const r = {
-            width: bb.width, height: bb.height, impl: bb.impl, hw: bb.hw, limit: bb.limit,
-            mbps: ((bb.bytes - ab.bytes) * 8) / dt / 1e6,
-            captureFps: Math.round(bb.captureFps || 0),
-            encodedFps: per(ab.encoded, bb.encoded),
-            sentFps: per(ab.frames, bb.frames),
-            receivedFps: per(ab.frames, bb.frames),
-            shownFps: per(ab.decoded, bb.decoded),
-            droppedFps: per(ab.dropped, bb.dropped),
-            lostPkts: per(ab.lost, bb.lost),
-            freezes: bb.freezes || 0, freezeSec: bb.freezeSec || 0, pli: bb.pli || 0,
-            codecMs: bb.encoded || bb.decoded ? (((bb.codecTime || 0) - (ab.codecTime || 0)) * 1000) / Math.max(1, (bb.encoded || bb.decoded) - (ab.encoded || ab.decoded)) : 0,
-            bufferMs: bb.jbCount > ab.jbCount ? (((bb.jbDelay || 0) - (ab.jbDelay || 0)) * 1000) / (bb.jbCount - ab.jbCount) : 0,
-            units: per(own ? an.unitsSent : an.delivered, own ? bn.unitsSent : bn.delivered),
-            gaps: per(an.lost, bn.lost), nacked: per(an.nacked, bn.nacked), fec: per(an.recovered, bn.recovered),
-            qDropped: per(an.videoDropped, bn.videoDropped), qFailed: per(an.videoFailed, bn.videoFailed),
-            netOut: per(an.netDroppedOut, bn.netDroppedOut), netIn: per(an.netDroppedIn, bn.netDroppedIn),
-            sendKbps: bn.sendKbps || 0, keyframes: bn.keyframesServed || 0,
-        };
-        r.bad = own ? r.qDropped + r.qFailed + r.netOut > 0 : r.lostPkts + r.gaps + r.netIn > 0 || (bb.freezes || 0) > (ab.freezes || 0);
-        void frames;
-        return r;
-    }
 
     const W = 220, H = 44;
     $: line = hist.map((h, i) => `${((i + POINTS - hist.length) / (POINTS - 1)) * W},${H - (h.fps / peakFps) * (H - 4) - 2}`).join(' ');

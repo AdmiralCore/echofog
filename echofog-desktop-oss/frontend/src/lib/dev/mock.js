@@ -424,6 +424,7 @@ recent problems (the last 1 warnings and errors, cleaned):
 `,
   }),
   SaveConnectionReport: () => 'C:/Users/demo/echofog-report-mock.txt',
+  SaveStreamLog: (name) => 'C:/Users/demo/' + name,
   GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),

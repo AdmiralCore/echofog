@@ -4,6 +4,8 @@
   import Auth from './lib/views/Auth.svelte';
   import Shell from './lib/views/Shell.svelte';
   import Dialog from './lib/components/ui/Dialog.svelte';
+  import StreamLogDialog from './lib/components/call/StreamLogDialog.svelte';
+  import { finishedLog } from './lib/services/streamlog.js';
   import { t } from './lib/i18n/index.js';
 
   onMount(boot);
@@ -11,6 +13,7 @@
 
 {#if $screen === 'app'}
   <Shell />
+  {#if $finishedLog}<StreamLogDialog log={$finishedLog} on:close={() => finishedLog.set(null)} />{/if}
 {:else if $screen === 'loading'}
   <div class="loading">
     <span class="ring" aria-hidden="true"></span>
