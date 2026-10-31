@@ -346,16 +346,6 @@ func (md meta) expired(now int64) bool { return md.expiresAt > 0 && md.expiresAt
 // quotaLocked checks the per-recipient, per-sender and node-wide quotas for one more item.
 // Caller holds m.mu.
 func (m *MailboxManager) quotaLocked(limits MailboxLimits, item MailboxItem, itemSize int64) error {
-	// 4. Per-recipient quotas (count and bytes).
-	if r := m.byRecipient[item.RecipientID]; r != nil {
-		if limits.MaxMessagesPerPeer > 0 && r.count >= limits.MaxMessagesPerPeer {
-			return ErrMailboxFull
-		}
-		if limits.MaxBytesPerPeer > 0 && r.bytes+itemSize > limits.MaxBytesPerPeer {
-			return ErrMailboxFull
-		}
-	}
-
 	// 5. Per-sender quotas (count and bytes), keyed by the authenticated sender.
 	if s := m.bySender[item.SenderID]; s != nil {
 		if limits.MaxMessagesPerSender > 0 && s.count >= limits.MaxMessagesPerSender {
@@ -373,7 +363,40 @@ func (m *MailboxManager) quotaLocked(limits MailboxLimits, item MailboxItem, ite
 	if limits.MaxTotalStorageBytes > 0 && m.totalBytes+itemSize > limits.MaxTotalStorageBytes {
 		return ErrMailboxFull
 	}
+
+	// 4. Per-recipient quotas (count and bytes), checked last: when only these stand in the way,
+	// Store makes room by the recipient's oldest messages.
+	if r := m.byRecipient[item.RecipientID]; r != nil {
+		if limits.MaxMessagesPerPeer > 0 && r.count >= limits.MaxMessagesPerPeer {
+			return errRecipientFull
+		}
+		if limits.MaxBytesPerPeer > 0 && r.bytes+itemSize > limits.MaxBytesPerPeer {
+			return errRecipientFull
+		}
+	}
 	return nil
+}
+
+// errRecipientFull: one recipient's box is at its quota (Store makes room by evicting its oldest).
+var errRecipientFull = errors.New("mailbox: this recipient's box is full")
+
+// maxEvictPerStore bounds how many old messages one new one may push out.
+const maxEvictPerStore = 16
+
+// evictOldestLocked removes the recipient's message closest to expiry (the oldest kept); false
+// when it holds none. Caller holds m.mu.
+func (m *MailboxManager) evictOldestLocked(recipient types.PeerID) bool {
+	oldest, at := "", int64(0)
+	for key, md := range m.index {
+		if md.recipient == recipient && (oldest == "" || md.expiresAt < at) {
+			oldest, at = key, md.expiresAt
+		}
+	}
+	if oldest == "" {
+		return false
+	}
+	m.removeLocked(oldest)
+	return true
 }
 
 // purgeExpiredLocked removes every item past its expiry, going by the in-memory index, and
@@ -429,6 +452,19 @@ func (m *MailboxManager) Store(item MailboxItem) error {
 	err := m.quotaLocked(limits, item, itemSize)
 	if err != nil && now != m.lastPurge && m.purgeExpiredLocked(now) > 0 {
 		err = m.quotaLocked(limits, item, itemSize)
+	}
+	// One recipient's box is full: the oldest of its messages make room. A recipient that has been
+	// away long has most likely moved on from those, and refusing the new one made senders give up
+	// on the relay altogether. Each sender's own quota still holds, so one sender cannot push out
+	// what the others left.
+	for i := 0; errors.Is(err, errRecipientFull) && i < maxEvictPerStore; i++ {
+		if !m.evictOldestLocked(item.RecipientID) {
+			break
+		}
+		err = m.quotaLocked(limits, item, itemSize)
+	}
+	if errors.Is(err, errRecipientFull) {
+		err = ErrMailboxFull
 	}
 	if err != nil {
 		return err

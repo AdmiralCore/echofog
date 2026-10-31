@@ -1,6 +1,7 @@
 package messenger
 
 import (
+	"time"
 	"errors"
 	"strings"
 	"sync"
@@ -191,5 +192,59 @@ func TestMailbox_ServerDerivedKey_NoOverwrite(t *testing.T) {
 	_ = m.Store(MailboxItem{ID: "whatever", RecipientID: recipient, SenderID: senderA, Payload: payload})
 	if m.Count(recipient) != 2 {
 		t.Fatalf("a resubmission by the same sender must not add an item, got %d", m.Count(recipient))
+	}
+}
+
+// A recipient whose box is full gets the new message and loses its oldest: refusing made senders
+// give up on the relay, and a recipient away that long has moved on from the old ones. Each
+// sender's own quota still refuses past it.
+func TestMailbox_FullRecipientDropsItsOldest(t *testing.T) {
+	m := NewMailboxManager(newMemStore())
+	m.SetLimits(MailboxLimits{
+		MaxItemSizeBytes:     1024,
+		MaxMessagesPerPeer:   3,
+		MaxBytesPerPeer:      1 << 20,
+		MaxMessagesPerSender: 3,
+		MaxBytesPerSender:    1 << 20,
+		MaxTotalMessages:     100,
+		MaxTotalStorageBytes: 1 << 20,
+	})
+	to := peerID(1)
+	store := func(sender byte, n int, exp int64) error {
+		return m.Store(MailboxItem{RecipientID: to, SenderID: peerID(sender), Payload: []byte{sender, byte(n)}, ExpiresAt: exp})
+	}
+	now := time.Now().Unix()
+	for i := 0; i < 3; i++ {
+		if err := store(10, i, now+int64(100+i)); err != nil {
+			t.Fatalf("store %d: %v", i, err)
+		}
+	}
+	if err := store(11, 0, now+500); err != nil {
+		t.Fatalf("a full box must make room, got %v", err)
+	}
+	if got := m.Count(to); got != 3 {
+		t.Fatalf("the box keeps its size: %d", got)
+	}
+	items, err := m.GetPending(to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.SenderID == peerID(10) && it.Payload[1] == 0 {
+			t.Fatal("the oldest message should be the one that went")
+		}
+	}
+	// a sender at its own quota is still refused, and nothing is pushed out for it
+	if err := store(11, 1, now+501); err != nil {
+		t.Fatal(err)
+	}
+	if err := store(11, 2, now+502); err != nil {
+		t.Fatal(err)
+	}
+	if err := store(11, 3, now+503); !errors.Is(err, ErrMailboxFull) {
+		t.Fatalf("a sender past its quota must be refused, got %v", err)
+	}
+	if got := m.Count(to); got != 3 {
+		t.Fatalf("a refused message pushes nothing out: %d", got)
 	}
 }

@@ -894,9 +894,8 @@ func (rs *RelayServer) mailboxRefuses(recipient types.PeerID, size int) error {
 		return messenger.ErrItemTooLarge
 	case l.MaxTotalMessages > 0 && rs.mailbox.Waiting() >= l.MaxTotalMessages:
 		return messenger.ErrMailboxFull
-	case l.MaxMessagesPerPeer > 0 && rs.mailbox.Count(recipient) >= l.MaxMessagesPerPeer:
-		return messenger.ErrMailboxFull
 	}
+	// a recipient whose own box is full is not a refusal: Store makes room by its oldest messages
 	return nil
 }
 

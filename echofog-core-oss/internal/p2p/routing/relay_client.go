@@ -396,8 +396,9 @@ func (rc *RelayClient) GetMarketStatus() []RelayMarketInfo {
 
 		score := rc.ScoreRelay(price, ping)
 
-		isViable := !isBlacklisted &&
-			(cfg.MaxAcceptablePricePerMB <= 0 || price <= cfg.MaxAcceptablePricePerMB) &&
+		// a relay whose mailbox is full still relays: the mark is about keeping messages for
+		// someone offline, not about circuits, so it does not take the relay off the market
+		isViable := (cfg.MaxAcceptablePricePerMB <= 0 || price <= cfg.MaxAcceptablePricePerMB) &&
 			(cfg.MaxAcceptablePingMs <= 0 || ping <= time.Duration(cfg.MaxAcceptablePingMs)*time.Millisecond)
 
 		if cfg.DailyBudgetLimit > 0 && rc.spentToday.Load() >= cfg.DailyBudgetLimit && price > 0 {
@@ -444,7 +445,7 @@ func (rc *RelayClient) rankedRelays(targetID types.PeerID, offers func(*swarm.Pe
 	var ranked []*swarm.Peer
 	seen := map[types.PeerID]bool{}
 	for _, m := range rc.GetMarketStatus() {
-		if m.PeerID == targetID || m.IsBlacklisted {
+		if m.PeerID == targetID {
 			continue
 		}
 		p := rc.swarm.GetPeer(m.PeerID)
@@ -1037,13 +1038,18 @@ func (rc *RelayClient) SendRoutedEnvelope(ctx context.Context, targetID types.Pe
 	allPeers := rc.swarm.GetAllPeers()
 	rc.mu.RLock()
 	now := time.Now()
-	var viablePeers []*swarm.Peer
+	// relays whose mailbox said full go last, not out: one that is connected to the recipient
+	// forwards the message straight on, and only keeping it for later is what it refused
+	var viablePeers, fullPeers []*swarm.Peer
 	for _, p := range allPeers {
 		bUntil, isBlocked := rc.blacklisted[p.ID()]
 		if !isBlocked || now.After(bUntil) {
 			viablePeers = append(viablePeers, p)
+		} else {
+			fullPeers = append(fullPeers, p)
 		}
 	}
+	viablePeers = append(viablePeers, fullPeers...)
 	rc.mu.RUnlock()
 
 	for _, p := range viablePeers {
@@ -1072,7 +1078,9 @@ func (rc *RelayClient) IsFull(relayID types.PeerID) bool {
 	return ok && time.Now().Before(until)
 }
 
-// MarkRelayFull temporarily blacklists a relay node when it sends TypeMailboxFull error.
+// MarkRelayFull notes for a while that a relay's mailbox refused a message (TypeMailboxFull): it
+// is tried last for messages and shown as full, but it still carries circuits and forwards to
+// recipients it is connected to.
 func (rc *RelayClient) MarkRelayFull(relayID types.PeerID) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
