@@ -2004,6 +2004,7 @@ export namespace node {
 	    lost: number;
 	    nacked: number;
 	    retransmitted: number;
+	    recovered: number;
 	    sendKbps: number;
 	    videoSent: number;
 	    videoDropped: number;
@@ -2024,6 +2025,7 @@ export namespace node {
 	        this.lost = source["lost"];
 	        this.nacked = source["nacked"];
 	        this.retransmitted = source["retransmitted"];
+	        this.recovered = source["recovered"];
 	        this.sendKbps = source["sendKbps"];
 	        this.videoSent = source["videoSent"];
 	        this.videoDropped = source["videoDropped"];
