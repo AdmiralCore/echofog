@@ -154,6 +154,9 @@ func parseCrash(text string) (reason, where string) {
 			stack = i + 1
 		}
 	}
+	if reason == "" && (strings.HasPrefix(strings.TrimSpace(text), "runtime stack:") || strings.Contains(text, "\nruntime.throw(")) {
+		reason = "fatal error" // its own line went to stderr only, before the crash output began
+	}
 	if reason == "" {
 		for _, l := range lines {
 			if l = strings.TrimSpace(l); l != "" {

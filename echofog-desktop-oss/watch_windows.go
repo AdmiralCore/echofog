@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -33,6 +34,8 @@ func watchLoop(exe string, args []string, ask func(CrashReport) bool) bool {
 		log := crashLogPath()
 		before := fileSize(log)
 		cmd := exec.Command(exe, append([]string{appChildFlag}, args...)...)
+		stderr := &tailBuffer{max: 64 << 10}
+		cmd.Stderr = stderr
 		if err := cmd.Start(); err != nil {
 			return !first
 		}
@@ -40,11 +43,55 @@ func watchLoop(exe string, args []string, ask func(CrashReport) bool) bool {
 			return true
 		}
 		text := readCrashFrom(log, before)
-		if text == "" || !ask(crashReport(text)) {
+		if text == "" {
+			return true
+		}
+		// a fatal error prints its reason before the runtime starts copying to crash.log
+		if line := fatalLine(stderr.String()); line != "" && !strings.Contains(text, line) {
+			if f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+				_, _ = f.WriteString(line + "\n")
+				_ = f.Close()
+			}
+			text = line + "\n\n" + text
+		}
+		if !ask(crashReport(text)) {
 			return true
 		}
 		args = nil
 	}
+}
+
+// tailBuffer keeps the last max bytes written to it (up to twice that between trims).
+type tailBuffer struct {
+	mu  sync.Mutex
+	b   []byte
+	max int
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if len(t.b) > 2*t.max {
+		t.b = append(t.b[:0], t.b[len(t.b)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.b)
+}
+
+// fatalLine is the last "fatal error: …" line of a process's error output.
+func fatalLine(stderr string) string {
+	i := strings.LastIndex(stderr, "fatal error: ")
+	if i < 0 || (i > 0 && stderr[i-1] != '\n') {
+		return ""
+	}
+	line, _, _ := strings.Cut(stderr[i:], "\n")
+	return strings.TrimSpace(line)
 }
 
 // askRestart shows the crash in a system dialog and asks whether to start EchoFog again.

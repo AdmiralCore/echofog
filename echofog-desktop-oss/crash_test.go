@@ -110,3 +110,12 @@ func TestCrashLogIsCutBack(t *testing.T) {
 		t.Fatalf("cut in the middle of a line")
 	}
 }
+
+func TestParseCrashOfAFatalErrorWithoutItsLine(t *testing.T) {
+	// what crash.log really gets from a fatal error: the "fatal error: …" line went to stderr only
+	text := fatalTrace[strings.Index(fatalTrace, "runtime stack:"):]
+	reason, where := parseCrash(trimTracePaths(text))
+	if reason != "fatal error" || !strings.HasPrefix(where, "main.crashTest.func1.1") {
+		t.Fatalf("%q %q", reason, where)
+	}
+}

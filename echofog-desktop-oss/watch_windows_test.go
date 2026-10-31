@@ -30,6 +30,9 @@ func watchTestWindow(args []string) int {
 	switch mode := os.Getenv("ECHOFOG_WATCH_TEST"); {
 	case mode == "panic-once" && n == 1, mode == "panic":
 		panic("watch test")
+	case mode == "fatal":
+		crashTest("fatal")
+		select {}
 	case mode == "exit":
 		return 1 // closed some other way: no crash
 	}
@@ -85,5 +88,33 @@ func TestWatcherIsQuietWithoutACrash(t *testing.T) {
 		if asked, _ := runWatched(t, mode, true); len(asked) != 0 {
 			t.Fatalf("%s: asked %+v", mode, asked)
 		}
+	}
+}
+
+func TestWatcherNamesAFatalError(t *testing.T) {
+	asked, dir := runWatched(t, "fatal", false)
+	if len(asked) != 1 || asked[0].Reason != "fatal error: stack overflow" {
+		t.Fatalf("asked %+v", asked)
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, "EchoFog", "crash.log"))
+	if !strings.HasSuffix(string(log), "fatal error: stack overflow\n") {
+		t.Fatal("the reason was not added to crash.log")
+	}
+}
+
+func TestFatalLineAndTailBuffer(t *testing.T) {
+	b := &tailBuffer{max: 8}
+	for i := 0; i < 10; i++ {
+		_, _ = b.Write([]byte("0123456789"))
+	}
+	if s := b.String(); len(s) > 16 || !strings.HasSuffix(s, "456789") {
+		t.Fatalf("tail %q", s)
+	}
+	out := "runtime: goroutine stack exceeds 1048576-byte limit\nfatal error: stack overflow\n\nruntime stack:\n"
+	if l := fatalLine(out); l != "fatal error: stack overflow" {
+		t.Fatalf("line %q", l)
+	}
+	if l := fatalLine("log: no fatal error: here\n"); l != "" {
+		t.Fatalf("line %q", l)
 	}
 }
