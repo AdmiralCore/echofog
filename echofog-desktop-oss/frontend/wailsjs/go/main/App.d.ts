@@ -309,6 +309,8 @@ export function SaveConnectionReport(arg1:string):Promise<string>;
 
 export function SaveMessage(arg1:dto.SavedMessageDTO):Promise<dto.SavedMessageDTO>;
 
+export function SaveStreamLog(arg1:string,arg2:string):Promise<string>;
+
 export function SaveTextFile(arg1:string,arg2:string):Promise<string>;
 
 export function SelectProfile(arg1:string):Promise<void>;

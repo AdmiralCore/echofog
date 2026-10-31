@@ -606,6 +606,10 @@ export function SaveMessage(arg1) {
   return window['go']['main']['App']['SaveMessage'](arg1);
 }
 
+export function SaveStreamLog(arg1, arg2) {
+  return window['go']['main']['App']['SaveStreamLog'](arg1, arg2);
+}
+
 export function SaveTextFile(arg1, arg2) {
   return window['go']['main']['App']['SaveTextFile'](arg1, arg2);
 }
