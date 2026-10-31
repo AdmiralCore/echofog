@@ -34,7 +34,8 @@ space's name opens its settings in a window of their own.
   folder button next to the space's name) adds more. Drag a channel onto a heading to file it
   there; a channel in no category sits on top. Folding a category is remembered on your computer.
 - **The main channel** has settings like any other (the gear on it, or a right click): its name,
-  topic, *Only admins post*, slow mode, and which channel the space opens on.
+  topic, *Only admins post*, slow mode, category, *Permissions here*, and which channel the space
+  opens on.
 - **A channel's settings:** name, topic, *Only admins post* (an announcements channel: others can
   still comment in threads), slow mode, category, and *Permissions here* (below).
 - **Slow mode** keeps a member from writing in a channel more often than every N seconds (5 s to
@@ -77,20 +78,22 @@ channel's settings. Pick *Everyone* or a role, and for each of the channel's per
 **✕** (not here), **/** (as in the group) or **✓** (here too). *Everyone* applies first, then the
 member's role; the owner is never held back. Examples: a `#news` channel where only moderators
 write, a voice room where only *Speakers* may talk, a channel where newcomers may not post links.
+A space made as a *Channel* (only admins write) has no *Permissions here*.
 
 Hiding a channel from a role is **not** possible yet: all members hold the group's keys, so a
 hidden channel would need keys of its own.
 
 ## Inviting people
 
-In the space's panel, **Invitation**:
+In the space's panel, **Invite**:
 
 - **The quick invitation** is an https link valid for a week. Messengers make it tappable; it opens
   a page that starts the app (or offers to download it). *Copy for the app* gives the same
   invitation as `fogroup2:…`, which you can also paste into the app.
 - **New invitation** makes one with a note ("for the stream"), how long it lets people in (an hour
   to 30 days), how many people (1 to 100, or no limit), the role they get (if you manage roles),
-  and **With approval**: then nobody gets in by the link alone — an admin accepts each newcomer.
+  and **Ask for approval**: then nobody gets in by the link alone — someone who lets members in
+  accepts each newcomer.
 - **Invite contacts** picks people from your contacts: each gets an invitation of their own (for
   one person, a week, with the role you choose) in your chat with them, shown there as a card with
   a *Join* button.
@@ -186,8 +189,8 @@ most likely cannot reach each other:
 
 - **Both behind NATs that cannot be punched through** (a *symmetric* NAT, most mobile networks).
   Then everything goes through a **relay**, and if no relay is connected nothing goes at all. The
-  app now says so: *No way to the recipient right now* on a message, *No way to them* on a call, and
-  *No member of the group can be reached yet* on a group.
+  app now says so: *No way to the recipient right now* on a message, *No way to them right now* on a
+  call, and *No member of the group can be reached yet* on a group.
 - **What helps:** UPnP or NAT-PMP on your router (a forwarded port makes a symmetric NAT reachable),
   a relay in the network (any node that relays — your own on a VPS, or a friend's), or a group file
   to read the history meanwhile. See [Reachability](reachability.md).

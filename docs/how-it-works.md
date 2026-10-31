@@ -28,7 +28,7 @@ soon as somebody hands the record over or once the closest nodes have all answer
 A node that does not answer at its address is dropped from the table and left alone for ten
 minutes, however often other nodes still name it: the network is small and clients come and go,
 so without that memory every lookup would wait on the same departed peers. What a lookup came to
-is kept for a short while (half a minute for a record found, a quarter for a key nobody held);
+is kept for a short while (30 seconds for a record found, 15 seconds for a key nobody held);
 **Refresh** on the exit list walks the network again regardless.
 
 A fresh install has to know at least one node to join. Those are **bootstrap nodes** (also called
@@ -65,14 +65,22 @@ connection behaves over time.
 - **WebSocket behind a CDN.** A node can also sit behind a CDN such as Cloudflare, so the censor
   sees a connection to the CDN and to the operator's own domain.
 
-A desktop app is a pure client: it opens no inbound port at all, so there is nothing on your
-computer for a prober to find. The details, the lab measurements, and how to run a node so the
-disguise holds are in [anti-dpi.md](anti-dpi.md).
+A desktop app is a client. It runs no TCP or WebSocket listener, so there is no site or certificate
+on your computer for a prober to find. It does have a UDP port for QUIC, and with obfuscation on
+(the default) that port answers nobody who does not know your peer ID: a stranger's handshake gets
+silence. By default the app also asks your router to forward that port (UPnP or NAT-PMP) and takes
+part in hole punching, so that peers can reach you. Anonymous mode, and the Tor proxy unless calls
+are set to *Direct*, turn port mapping, STUN and hole punching off. The details, the lab
+measurements, and how to run a node so the disguise holds are in [anti-dpi.md](anti-dpi.md).
 
 **The limits, honestly:**
 
-- Only the path from you to the exit is disguised. Traffic between nodes (the DHT, relays) is
-  scrambled so that it looks like random bytes, and GFW has a rule for exactly that kind of traffic.
+- A link is disguised when your node knows the other node's cover site: the path to a camouflage
+  exit, and in guard mode (on by default in censoring countries) every link that crosses the
+  border, since your node then goes there only to camouflaged servers. Other links are scrambled
+  so that they look like random bytes, and GFW has a rule for exactly that kind of traffic: links
+  to nodes with no cover site (other users' computers have none), and your node's links when
+  guard mode is off.
 - The token key is derived from the node's ID, and public nodes are listed in the DHT with their
   address and ID together. A censor who crawls the DHT can compute the token and confirm that an
   address is an EchoFog node.
@@ -105,10 +113,28 @@ the Internet; only serving others as a relay or public exit needs it. A **hidden
 people it invited even from behind a router, through the relays named in its link. If you want to be
 reachable, see [reachability.md](reachability.md).
 
+**Who sees your IP address.** EchoFog hides what you say, not where you connect from. With the
+default settings your address is seen by:
+
+- the person you chat or call with, whenever your apps connect directly;
+- the members of a group of up to 50 people: the app connects to each of them;
+- the nodes your node links to for the DHT and peer exchange (in guard mode, only its guards), and
+  the relays and exits you use;
+- the public STUN servers the app asks about your NAT (by default Google, Cloudflare, Twilio and
+  Nextcloud).
+
+In guard mode a call, file or message to a user across the border goes through a relay, so that
+user sees the relay's address instead of yours. If your address must stay hidden, use
+**Anonymous mode** in **Settings** (through Tor, or only through your own relay); see
+[getting-started.md](getting-started.md). Calls set to *Direct* show your address even with the
+Tor proxy on.
+
 ## Messages
 
-Messages are **end-to-end encrypted**: only you and the person you write to can read them. Nodes
-and relays in between see only scrambled bytes.
+Messages are **end-to-end encrypted**: only you and the person you write to can read them. Relays
+and other nodes on the way cannot read them, but they can see who writes to whom, when, and how
+much: a mailbox relay stores each message under the sender's and the recipient's peer IDs, and a
+relay circuit knows both of its ends.
 
 In plain words, the scheme (the same family as Signal's) is:
 
@@ -170,9 +196,12 @@ contact is not told. Their profile also lists the photos, files and links from y
 and sends it with the file offer. The other side sees the picture right away, before downloading
 the file or without downloading it at all.
 
-**Groups** have no server either. Every group message and every change (new member, role, ban) is
-sent to each member over that member's own encrypted session, with the same receipts and offline
-queue as a normal chat. On top of that, a message is signed by its author and sealed once for the
+**Groups** have no server either. In a group of up to 50 members, every group message and every
+change (new member, role, ban) is sent to each member over that member's own encrypted session,
+with the same receipts and offline queue as a normal chat. In a bigger group whose members all run
+a current version, the author sends it to 8 members, each of them passes it on to 3 more and tells
+12 others how far it holds each author, and the rest fetch it when they compare logs. On top of
+that, a message is signed by its author and sealed once for the
 whole group with a key that admins replace whenever somebody leaves or is removed; so any member
 can hand a message on to one the author could not reach, and nobody can change who wrote it,
 history included. The person who created the group is its owner; members can be admins,
@@ -184,6 +213,13 @@ in [Group encryption](group-encryption.md); channels, roles, invitations and mod
 
 Calls are free and end-to-end encrypted: audio and video are encrypted with a key for that call
 (AES-256-GCM), and media is never sent or accepted without it.
+
+The call key is derived from the call's invitation, a random secret that travels only inside
+end-to-end encrypted messages (for a group call, to every member of the group). Anyone who holds
+the invitation can join: the coordinator only checks that the newcomer proves it knows the key and
+is not on the call's ban list (members can vote a spammer out). The key stays the same for the
+whole call. It is not replaced when somebody leaves or is removed, so that person could still
+decrypt the call's media if it reached them.
 
 There is no central media server. Instead, the people in the call carry each other's streams in a
 **relay tree**. The person sharing their screen sends it to a few participants; each of them
@@ -201,11 +237,13 @@ path: when it backs up, the encoder is asked for a little less, and gets back up
 has stayed clear for a couple of seconds. Viewers hold frames for a tenth of a second before showing
 them, so frames that cross relays unevenly still play evenly.
 
-A participant nobody can reach directly (both sides behind strict NATs, say) is reached through a
-relay circuit, and the call stays one call. Its sound and video cross the relay as datagrams, as
-they do on a direct link, so one lost packet does not hold up the ones behind it. A public relay
-gives each peer up to 50 Mbit/s by default: enough for one 4K60 stream, tight for several. Calls do not go through the VPN exit, so
-the exit's speed limit does not touch them.
+A relay circuit carries the call to a participant nobody can reach directly (both sides behind
+strict NATs, say), to a user across the border when guard mode is on, and to everyone in anonymous
+mode or with calls set to *Through a relay*. The call stays one call. Its sound and video cross the
+relay as datagrams, as they do on a direct link, so one lost packet does not hold up the ones
+behind it. A public relay gives each peer up to 50 Mbit/s by default: enough for one 4K60 stream,
+tight for several. Calls do not go through the VPN exit, so the exit's speed limit does not touch
+them.
 
 ## The VPN
 
@@ -218,10 +256,18 @@ You go online through another person's computer: an **exit**. There are two ways
   traffic of every app. It asks for administrator rights. On Windows the driver it needs (Wintun) is
   built into the app and written out when needed, so there is nothing extra to install. It goes to
   `C:\Program Files\EchoFog`, where only administrators can change it, and nowhere next to the exe:
-  the app can be run from Downloads or the desktop. **There is no
-  kill switch yet:** if EchoFog or its helper stops unexpectedly, your apps fall back to your normal
-  connection and your real IP can be exposed for a moment. DNS is kept inside the tunnel on a
-  best-effort basis.
+  the app can be run from Downloads or the desktop. The **kill switch** is on by default: while
+  this mode is on, nothing goes out around the exit. If the exit drops, you switch exits, the
+  network changes or EchoFog crashes, your apps stay offline until an exit serves you again
+  instead of going out on your real address. **Not covered yet:** if the helper process itself is
+  killed, or Windows removes the EchoFog adapter, your apps fall back to your normal connection
+  and your real IP can be exposed. DNS is kept inside the tunnel on a best-effort basis.
+
+**What an exit sees.** An exit carries your traffic to the Internet, so it sees what any VPN server
+sees: your IP address (unless you reach it through Tor), every address and site name you connect
+to, the DNS names you look up, and how much you send and when. It also knows your peer ID, and
+when you pay from a vault, your vault and wallet addresses. HTTPS hides the content of pages from
+it, not the names of the sites. Choose an exit the way you would choose a VPN provider.
 
 **Exits are on an open market.** Anyone can share their connection, set a price per GB (or 0 for
 free) and some free test traffic, and publish the offer in the DHT. Running an exit means other

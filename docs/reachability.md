@@ -62,8 +62,9 @@ Step by step: [Hidden and isolated nodes](hidden-nodes.md).
 
 ## Which case are you in
 
-Open **Proxy** and look at the **Relay** card. Set the relay mode to **Public** or **Private** if it
-is off. Under **Your relay link**:
+Open **Proxy** and look at the **Relay** card. **Your relay link** and **Listen port** show only
+when the relay mode is **Public** or **Private**: if it is **Off** or **Signaling only**, switch it
+to one of those. Under **Your relay link**:
 
 - A link `echofog://relay/…` with *"This computer has a public address"* or *"Reachable through the
   port your router forwards"* — you are reachable. Nothing to do.
@@ -89,8 +90,9 @@ port by itself. It retries every 15 minutes, or restart the app to try at once.
 
 ### 2. Forward a port by hand
 
-1. On the **Relay** card, set **Listen port** to a fixed number (with `0` the app picks a new port
-   at every start, so a forward would stop matching). Click **Save port** and restart the app.
+1. On the **Relay** card (relay mode **Public** or **Private**), set **Listen port** to a fixed
+   number (with `0` the app picks a new port at every start, so a forward would stop matching).
+   Click **Save port** and restart the app.
 2. In the router, forward that port — **both UDP and TCP** — to this computer's local address.
 3. Restart the app and check the card again.
 

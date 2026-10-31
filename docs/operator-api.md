@@ -79,6 +79,9 @@ and in `deploy/docker-compose.yml` uncomment the line under `ports`:
       - "127.0.0.1:8090:8090"
 ```
 
+These are the `--api-addr` and `--api-token` flags of `echofog-node run`. With a token shorter
+than 16 characters the API stays off, and the node prints a line that says so.
+
 Then `docker compose up -d`. The API is now at `http://127.0.0.1:8090` on the server itself. Keep
 it there: a bot or a site on the same server reaches it, the Internet does not. If your bot runs
 elsewhere, put it behind HTTPS (a reverse proxy such as Caddy) and never send the token over plain
@@ -89,6 +92,17 @@ Every request carries the token:
 ```
 Authorization: Bearer <token>
 ```
+
+### The same paths without a token, on loopback
+
+The node also answers every `/api/v1/...` path below on its local status endpoint
+(`--status-addr`, default `127.0.0.1:7070`); `echofog-node pass` uses it. There is no token there.
+A `GET` is open, and a change needs only the header `X-Echofog: 1`. So any program that can reach
+that loopback address can read every pass with its link, and make, change or delete passes. On a
+plain install that is any program on the machine; in Docker, any program inside the node's
+container.
+Do not run programs you do not trust there. `--status-addr ''` turns the endpoint off, and with it
+`status`, `wallet`, `invite` and `pass`.
 
 ### Requests
 
@@ -124,16 +138,22 @@ A pass looks like this:
 ```
 
 - `state` is `active`, `expired`, `used_up` (traffic spent) or `revoked`.
-- `expires` is 0 for a pass with no end; times are Unix seconds.
-- `quotaBytes` is 0 when there is no traffic limit; `usedBytes` counts both directions through
-  your exit.
+- `expires` is missing for a pass with no end; times are Unix seconds.
+- `quotaBytes` is missing when there is no traffic limit; `usedBytes` counts both directions
+  through your exit.
 - `label` is yours: put a customer's Telegram ID or an order number there to find the pass later.
+  It is missing when the pass has none, so read it with `p.get("label")`, not `p["label"]`.
+- In `GET /api/v1/node`, `joined` and `passes` are counts: devices that came in with the shared
+  link, and passes.
 - When you make a pass, `days: 0` means no end, `devices: 0` means 2, `gb: 0` means no limit. When
   you extend, `days` and `gb` are added; `devices` and `label` change only when you send them.
   Extending also lifts a revocation.
+- Extending a pass with no end by `days` gives it an end: that many days from now. In the same
+  way, `gb` on a pass with no limit sets a limit of that many GB.
 
 Errors come as `{"error": "..."}`: `401` without the right token, `404` for an unknown pass, `409`
-when the node is not hidden or isolated, `400` for a bad request.
+when the node is not hidden or isolated, `429` when the node already holds 10 000 passes, `400` for
+a bad request.
 
 ### Try it with curl
 
@@ -175,7 +195,7 @@ HEAD = {"Authorization": "Bearer " + TOKEN}
 def paid(tg_id: int, days: int = 30) -> str:
     label = f"tg:{tg_id}"
     passes = requests.get(f"{API}/passes", headers=HEAD).json()
-    mine = next((p for p in passes if p["label"] == label), None)
+    mine = next((p for p in passes if p.get("label") == label), None)
     if mine is None:
         mine = requests.post(f"{API}/passes", headers=HEAD,
                              json={"label": label, "days": days, "devices": 2}).json()

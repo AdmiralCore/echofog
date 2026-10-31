@@ -23,8 +23,8 @@ commission: the project takes nothing from these payments.
 | **The node** | Someone who shares their Internet connection as a VPN exit and sets a price per GB. |
 | **The vault** | A small TON contract that belongs to you. Only you can withdraw from it. A node can only take what you signed for. |
 
-Every user has their own vault. Its address is calculated from the contract code and your wallet,
-so it is the same every time and anyone can check it. Nobody runs the vault, there is no "admin" key,
+Every user has their own vault. Its address is calculated from the contract code, your wallet's
+address and your wallet's public key, so it is the same every time and anyone can check it. Nobody runs the vault, there is no "admin" key,
 and the code can never be changed after it is published.
 
 ## The life of a payment
@@ -32,11 +32,16 @@ and the code can never be changed after it is published.
 1. **Deposit.** In the wallet you choose an amount and press *Deposit*. The first deposit also
    creates your vault; that costs about 0.008 TON once, which stays in the contract to pay its
    storage. Later deposits cost a tiny network fee.
-2. **Browsing.** Before you use the next 64 MB, your app signs a voucher that raises the total by
-   the price of 64 MB. At $0.05 per GB that is about a third of a cent. The node checks the
-   signature, and every minute or so it checks on the blockchain that your vault really has the
-   money. Then it lets the traffic through. So you never owe more than you have, and you never pay
-   more than 64 MB ahead.
+2. **Browsing.** Before what you paid for runs out, your app signs a voucher that raises the total
+   by the price of the next chunk: about a minute of traffic at your current speed, at least 64 MB
+   and at most 1 GB. It signs the next one when about 20 seconds of traffic (and at least 16 MB)
+   are left. At $0.05 per GB, 64 MB is about a third of a cent and 1 GB is 5 cents. The node checks
+   the signature and reads your vault on the blockchain again when its last look is more than a
+   minute old. A look up to 15 minutes old still lets the voucher through at once while the
+   re-read runs, also when the blockchain cannot be reached; an older one makes the voucher wait
+   for the blockchain. Then the node lets the traffic through. So you pay at most one chunk ahead.
+   A vault that has paid before may run up to 32 MB past what it paid while the next voucher is on
+   its way; that voucher pays it back first.
 3. **The node takes its money.** The node keeps only your latest voucher, because each one
    includes all the earlier ones. Every 6 hours, or sooner once enough has built up, it sends the
    vouchers to the vaults. Each vault pays the difference between the new total and what that node
@@ -63,18 +68,22 @@ before the node collects. The wait is the node's guarantee that what you signed 
 
 You can support the project voluntarily: the share is set in the wallet (0–20%, off with one
 click). It is counted on what you actually spend, not on what you deposit, and it is never a
-condition of service.
+condition of service. In a build that has a project address set (`payments.support_address`), the
+share starts at **5%** until you change it. This open-source code sets no address, so there the
+feature is off and nothing is set aside.
 
 ## Who risks what
 
 Every payment system has risks. These are ours:
 
-- **You risk at most one chunk (64 MB)**, paid ahead and possibly not served if the node goes away.
+- **You risk at most one chunk**, paid ahead and possibly not served if the node goes away: 64 MB at
+  a low speed, up to 1 GB (about a minute of traffic) while you download fast.
 - **A node risks what it has not collected yet.** A modified app could sign the same deposit to
   many nodes at once. The first to collect gets paid. Collection is first come, first served,
   and a voucher that could only be paid in part pays the rest after you top up. A node limits
   this by collecting from any user who owes it more than 0.05 TON right away, without waiting for
-  the 6-hour round.
+  the 6-hour round. It also risks the up to 32 MB it lets a vault run past its last voucher, and
+  what it accepts on a look at the vault up to 15 minutes old.
 - **A node that is offline for more than 24 hours** during a user's withdrawal can miss what that
   user owed it.
 - **The contract has not been audited yet.** It is small (about 200 lines) and fully tested, but
@@ -82,7 +91,11 @@ Every payment system has risks. These are ours:
   comes first.
 - **Privacy.** Like any payment on TON, a deposit and the node's collection are public: someone
   watching the blockchain can see that your wallet paid a node's wallet. They cannot see what you
-  did through it. If this matters to you, use a fresh wallet funded through an exchange.
+  did through it. If this matters to you, use a fresh wallet funded through an exchange. The node
+  itself learns more: a voucher carries your wallet's address and public key and names your vault,
+  so the node can link your wallet to your peer ID and to the IP address you connect from. In
+  anonymous mode the TON wallet stays offline unless you allow it in Settings, because its servers
+  would see your address.
 
 ## You don't always need a vault
 
@@ -125,8 +138,9 @@ A priced exit gets paid in two ways, and one of them needs TON on the node's own
 - **Direct payments** (a client sends USDT or TON to the node's wallet) arrive by themselves.
 - **Payments from a client's deposit** (the TON vault, the usual way in the app) do not move until
   the node collects them. Collecting is a transaction to the client's vault, and like every TON
-  transaction it costs a fee that **the node's wallet pays**: about 0.015 TON per voucher, with
-  0.015 TON kept back for the wallet's own fee.
+  transaction it costs a fee that **the node's wallet pays**: each voucher it collects needs
+  0.015 TON attached for gas, of which about 0.0012 TON is spent and the rest comes back, and
+  0.015 TON is kept back for the wallet's own fee.
 
 A new node's wallet is empty, so it cannot collect anything, even though clients have already paid
 (their vouchers are signed and waiting). Put about **0.1–0.2 TON** on it; that covers many
@@ -158,7 +172,8 @@ bring.
 
 - Turn on payments as before: set a price. If the TON price is known, your node also quotes the
   price in TON, re-checked every 10 minutes from your USD price. Clients check that quote against
-  their own rate and refuse it if it is more than 5% higher.
+  their own rate; if it is more than 5% higher, they do not pay by voucher and pay by direct
+  transfer instead.
 - Keep about **0.1 TON** in the node's wallet. Collecting attaches 0.015 TON per voucher for gas,
   and the vault sends back what is not used.
 - Collection happens by itself: every 6 hours, as soon as the total reaches 0.2 TON, or at once

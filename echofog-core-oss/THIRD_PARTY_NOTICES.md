@@ -46,7 +46,26 @@ Source: https://github.com/libp2p/go-libp2p (originally https://github.com/fd/go
 
 Used in `internal/network/portmap/gateway/` (UPnP and NAT-PMP discovery and port mapping). The
 full license text is in `internal/network/portmap/gateway/LICENSE`. Changes: logging goes through
-`log/slog` and the package is renamed.
+`log/slog` and the package is renamed. `pcp.go` in the same folder (PCP, RFC 6887) is EchoFog's own
+code.
+
+## hysteria (MIT License)
+
+Source: https://github.com/apernet/hysteria
+
+Used in `internal/network/congestion/bbr/`, `internal/network/congestion/brutal/` and
+`internal/network/congestion/common/`: the BBR and Brutal congestion controllers and the pacer.
+`internal/network/congestion/congestion.go` names the origin. The full license text is in
+`internal/network/congestion/LICENSE-hysteria.md` (Copyright 2023 Toby).
+
+## apernet/quic-go, a fork of quic-go (MIT License)
+
+Source: https://github.com/apernet/quic-go (forked from https://github.com/quic-go/quic-go)
+
+A modified copy is in `third_party/quic-go/`, and `go.mod` points at it with a `replace`
+directive. The changes (Chrome GREASE in the QUIC ClientHello, the TLS exporter of the uTLS
+handshake) are listed in `third_party/quic-go/ECHOFOG-PATCH.md`. The full license text is in
+`third_party/quic-go/LICENSE` (Copyright (c) 2016 the quic-go authors & Google, Inc.).
 
 ## Tailscale (BSD 3-Clause License)
 

@@ -2,9 +2,9 @@
 
 # Sending files
 
-A file of any size goes from one contact to another peer to peer: directly over QUIC when the two
-can connect, through a relay circuit when they cannot. Nobody else, the relay included, can read
-or alter it. The code is in `echofog-core-oss/internal/services/filexfer`.
+A file of up to 32 GiB (by default) goes from one contact to another peer to peer: directly over
+QUIC when the two can connect, through a relay circuit when they cannot. Nobody else, the relay
+included, can read or alter it. The code is in `echofog-core-oss/internal/services/filexfer`.
 
 ## What the receiver learns first
 
@@ -13,12 +13,15 @@ of RFC 6962: leaves are `SHA-256(0x00 ‖ chunk)`, inner nodes `SHA-256(0x01 ‖
 root names the content, as the piece root does in BitTorrent v2). It then sends an ordinary chat
 message, end-to-end encrypted like every message, that carries:
 
-- the file name and size,
+- the file name, size and MIME type,
 - the Merkle root,
-- a transfer ID and a fresh random 32-byte key.
+- a transfer ID and a fresh random 32-byte key,
+- for a JPEG, PNG or GIF picture, a thumbnail (a JPEG of at most 192 px on the longer side and
+  6 KB), so the chat shows the picture before the file is fetched.
 
-Nothing moves until the receiver accepts. A receiver checks the size against its limit (32 GiB by
-default) and the free space on its disk first.
+The sender refuses a file over its limit (32 GiB by default: it keeps the file's tree in memory
+while it serves it, 32 MiB at that size). Nothing moves until the receiver accepts. A receiver checks
+the size against the same limit and the free space on its disk first.
 
 ## How the bytes move
 
@@ -38,11 +41,12 @@ time. The sender sends a few frames at once and adapts that number to how fast t
 
 ## Interruptions
 
-- **Disconnect.** A transfer that hears nothing for a while shows as *waiting for the contact*, tries
-  to reconnect (DHT, hole punch, relay) and goes on by itself when the peer is back. It never gives
-  up on its own.
-- **App restart.** The receiver writes chunks into `<name>.<id>.part` and records which ones it has,
-  only after they were flushed to disk. After a restart it continues from there. The sender serves
+- **Disconnect.** A transfer that hears nothing for a while shows *Waiting for the contact to come
+  back online…*, tries to reconnect (DHT, hole punch, relay) and goes on by itself when the peer is
+  back. It never gives up on its own.
+- **App restart.** The receiver writes chunks into `<name>.<id8>.part` (`<id8>` is the first 8
+  characters of the transfer ID) and records which ones it has, only after they were flushed to
+  disk. After a restart it continues from there. The sender serves
   the file again once it checked that the file still has the offered root.
 - **Damage.** When the whole file is there it is hashed once more. If it does not match (the
   partial file was changed while the app was closed) it is fetched again.

@@ -73,6 +73,9 @@ run `up -d --build` again.
   its link, so if a link leaks, revoke it (`/revoke ID`), delete it on the server
   (`docker compose exec node echofog-node pass delete ID`), and then `/pass` or a new purchase makes
   a pass with a new link.
+- **A revocation alone does not last.** The next `/pass` for that name, or the next purchase by that
+  person, extends the same pass, and extending lifts the revocation. To keep somebody off, delete
+  the pass on the server as well.
 - **Stars** collect on the bot's balance. You can withdraw them to TON through Fragment, under
   Telegram's rules and with the delay Telegram sets.
 - **Refunds.** Telegram expects a paid bot to answer `/paysupport`, and can refund Stars. Answer

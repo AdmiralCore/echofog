@@ -78,9 +78,10 @@ docker compose -f deploy/docker-compose.yml logs -f
 
 On the first start the node prints a **recovery phrase** — write it down and keep it offline; it
 restores the node's identity and wallet. It also prints a **Join address**:
-`<this server's public IP or domain>:443/<peer id>`. Put the server's IP in front: that is what
-other nodes use in `ECHOFOG_BOOTSTRAP` and what app users paste into **Settings → Bootstrap
-nodes**.
+`<this server's public IP or domain>:443/<peer id>?srv=1`, with `&sni=<site>` once the node knows
+the site it imitates. That is what other nodes use in `ECHOFOG_BOOTSTRAP` and what app users paste
+into **Settings → Bootstrap nodes**. Take it from `echofog-node status` after a few minutes: it then
+has the real public IP and the site name.
 
 The startup summary in the log and
 `docker compose -f deploy/docker-compose.yml exec node echofog-node status` show `Role: server`.
@@ -181,8 +182,9 @@ does this by itself).
 
 The same two lines turn on the UDP disguise too: clients will reach the node the way Chrome would
 open that site over HTTP/3. If the site itself speaks HTTP/3, a probe on UDP gets its real answer.
-Invitation links of a hidden node carry the site name by themselves; give out a public address as
-`<IP>:443/<peer id>?sni=<site domain>&srv=1` so that the first connection is disguised as well.
+Invitation links of a hidden node carry the site name by themselves, and so does the address
+`echofog-node status` prints for a public node (`<IP>:443/<peer id>?sni=<site domain>&srv=1`): give
+out that one, so that the first connection is disguised as well.
 
 Details: [Anti-DPI](anti-dpi.md).
 

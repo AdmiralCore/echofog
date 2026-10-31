@@ -30,7 +30,7 @@ no commission.
 | put a node on a VPS with Docker, step by step | [VPS with Docker](docs/deploy-vps.md) |
 | protect a public node from floods, fake identities and abuse | [Protecting a node](docs/node-security.md) |
 | run an exit only for the people you invite | [Hidden and isolated nodes](docs/hidden-nodes.md) |
-| take payment your own way (a bot, a site) and give each person a link with a term | [Operator API](docs/operator-api.md) |
+| take payment your own way (a bot, a site) and give each person a link with a term | [Operator API](docs/operator-api.md), [pass bot](echofog-core-oss/deploy/tg-bot/README.md) |
 | fix "this computer cannot be reached from the Internet" | [Reachability](docs/reachability.md) |
 | understand how it works under the hood | [How it works](docs/how-it-works.md) |
 | configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |
@@ -54,13 +54,25 @@ Every document has a Russian version next to it (`*.ru.md`).
 - **The VPN.** A local SOCKS5 proxy for apps, or the whole computer through a tunnel (on Windows
   the Wintun driver is built in). Exits compete on an open market; the app can pick one
   automatically by ping, price, speed and which of your sites open through it. An exit can also
-  stay hidden and serve only the people it gives an invitation link to.
+  stay hidden and serve only the people it gives an invitation link to. A link also comes in an
+  https form that messengers make tappable: the page opens it in the app or offers the download.
+  In whole-computer mode a kill switch, on by default, keeps apps offline when the exit drops.
 - **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Replies, threads, edits,
   reactions and pins work in every chat, and a chat looks the same on both phones after a break.
   A group can be a space with text channels and voice rooms, like a community server without the
   server. Pictures arrive with a small preview, so you see them before downloading. Calls and screen
   sharing travel over relay trees sized by each participant's upload, which is how a stream reaches
-  many viewers without a central server.
+  many viewers without a central server. Screen sharing can keep *Smoothness* or *Sharpness*, goes
+  up to 120 fps at 1080p and 1440p, and shows its stream stats while it runs.
+- **Hiding your address.** By default (`auto`), a user's node in a censoring country joins the
+  network through two or three camouflaged guard servers, and you can pin your own relay as one.
+  The app's own traffic can go through Tor or another SOCKS5 proxy, and calls can be set to go
+  direct or only through a relay. Anonymous mode goes further: everything through Tor, or through
+  your pinned relay alone. See [Getting started](docs/getting-started.md) and
+  [Anti-DPI](docs/anti-dpi.md).
+- **When something breaks.** *Logs* → *Connection report* gathers what the app knows about its
+  connection, with no address or ID, for you to post. A crash is written to `crash.log` next to
+  the log, and a database damaged by a power cut is repaired at the next start.
 - **Payments.** You keep TON in your own small vault contract and sign vouchers as you use an
   exit; the exit collects them every few hours. Paying by a direct TON or USDT transfer also works.
 
@@ -73,17 +85,22 @@ The longer version is in [How it works](docs/how-it-works.md).
 | DPI recognising the protocol | Chrome-shaped QUIC and TLS with the name of a real neighbouring site; the first kilobytes of every tunnel padded so the browser's own handshake inside does not show; connections rotated so no single one runs for an hour carrying gigabytes ([Anti-DPI](docs/anti-dpi.md)) |
 | A censor probing the node | without the token, a probe reaches the real site and sees its certificate and pages; an ordinary node stays silent; a replayed, altered or copied handshake counts as a probe |
 | UDP blocked or throttled | QUIC and TCP are dialed together; a QUIC link that connects and then goes silent is moved to TCP; the winner is remembered per network, across restarts |
+| Russia's TSPU freezing a TCP link after about 16 KB | the TCP fallback is carried by short connections, each replaced before it has carried 12 KB; by default across the border from Russia and where a link froze (`anti_dpi.tcp_rotate`, `--tcp-rotate`, [Anti-DPI](docs/anti-dpi.md#russias-16-kb-freeze)) |
 | Connection floods and free fake identities | caps per address and per subnet, a QUIC Retry and a small proof of work for strangers, bans that survive a restart |
 | A small request that makes the node send a lot | node-wide budgets for speed probes and peer lists |
 | Filling its disk or memory | quotas and expiry for offline mail, DHT records and handed-out keys |
-| One user taking the whole relay or exit | per-peer and per-address limits; a free exit gives each client up to 50 Mbit/s by default |
+| One user taking the whole relay or exit | per-peer and per-address limits; a free exit gives each client up to 50 Mbit/s by default, and can cap the MB per client and per address a day and the GB of the whole exit a month (`--exit-free-mb-per-day`, `--exit-free-ip-mb-per-day`, `--exit-free-gb-per-month`; off by default) |
 | Fake payments keeping it busy | unknown vaults checked at most every 10 s per peer |
 | Being found at all | hidden and isolated nodes stay out of the DHT and answer only invitation links ([Hidden nodes](docs/hidden-nodes.md)) |
 
 What no node can stop by itself: a flood bigger than its uplink, an attacker with thousands of real
-addresses, and a censor who crawls the DHT for the addresses of public nodes. The traffic between
-nodes (as opposed to client to exit) still uses the older random-looking obfuscation, which a
-GFW-style rule can flag. Details: [Protecting a node](docs/node-security.md), [SECURITY.md](SECURITY.md).
+addresses, and a censor who crawls the DHT for the addresses of public nodes. Only a link to a
+camouflage node is disguised. In guard mode (default `auto`: on in a censoring country, or while
+the country is not known) a user's node crosses the border only to camouflaged guards. The older
+random-looking obfuscation, which a GFW-style rule can flag, is still used between servers, on the
+local network, inside one country with `region_aware_obfs`, and on a user's node whose guard mode
+is off (or `auto` in a country that does not censor). Details:
+[Protecting a node](docs/node-security.md), [SECURITY.md](SECURITY.md).
 
 ## Measured in the lab
 

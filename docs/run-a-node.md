@@ -56,8 +56,8 @@ on a server and in a country where you may do this, and read your hoster's terms
 
 - `--exit-price 0.05` sets the price in dollars per GB, paid in TON or USDT into the node's own
   wallet. `0` (the default) means free. How the payments work: [vault-payments.md](vault-payments.md).
-- `--exit-free-kb 512` is the free test traffic per client per day, in KB (0–1024, default 512). It
-  applies when the exit is priced.
+- `--exit-free-kb 512` is the free test traffic per client per day, in KB (up to 1024, default 512).
+  It applies when the exit is priced; a priced exit always gives some (0 counts as 512).
 - `--exit-upload-mbps` sets the upload speed to advertise. Without it the node measures it against
   connected peers first, which fails on a fresh server with no peers yet: set it there (e.g. 100).
 - `--exit-free-peers <id>,<id>` (`ECHOFOG_EXIT_FREE_PEERS`) lists peers served for free, with no
@@ -73,7 +73,8 @@ on a server and in a country where you may do this, and read your hoster's terms
 ## Get the binary
 
 - **Prebuilt:** CI builds `echofog-node` for Linux (amd64) and Windows (amd64) on every push to
-  `main`; a version tag also makes a release with a `SHA256SUMS` file. Download it from the [Releases page](https://github.com/AdmiralCore/echofog/releases).
+  `main` and `dev` and keeps them with that workflow run. A version tag (`v*`) also makes a draft
+  release with a `SHA256SUMS` file; once it is published, download it from the [Releases page](https://github.com/AdmiralCore/echofog/releases).
 - **From source** (Go 1.27.3+):
 
   ```bash
@@ -121,7 +122,8 @@ The node listens on `--listen-addr` (default `:4242`):
 
 - **UDP 4242** — QUIC, the main path: messages, calls, relayed and VPN traffic.
 - **TCP 4242** — the TCP fallback, for people whose network blocks UDP. It listens on the same port
-  as QUIC by default. `--tcp-listen :443` moves it to another port; `--tcp-listen off` turns it off.
+  as QUIC by default. `--tcp-listen :443` moves it to another port; `--tcp-listen off` turns it off
+  (and the node then makes no TCP connections of its own either).
 
 Open both in the server's firewall and in your hoster's firewall panel. For example with `ufw`:
 
@@ -131,8 +133,9 @@ sudo ufw allow 4242/tcp
 ```
 
 If the public port differs from the one the node listens on (for example a Docker port map
-publishes 443 to the node's 4242), tell the node with `--advertise-port 443` (and
-`--tcp-remote-port 443` for the TCP fallback).
+publishes 443 to the node's 4242), tell the node with `--advertise-port 443`: it then announces 443
+for QUIC and the TCP fallback alike. (`--tcp-remote-port` is something else: the port this node
+dials on *other* nodes for its own TCP fallback. Leave it unset.)
 
 ## Anti-DPI camouflage, in plain words
 
@@ -141,9 +144,10 @@ site over HTTP/3, on TCP as Chrome over HTTPS, and anyone without the secret tok
 the real site. To be believable, the site should live right next to your server, in the same
 network. Details: [anti-dpi.md](anti-dpi.md).
 
-- **Automatic (default).** A public node looks for a real HTTPS site among its neighbours in its own
-  `/24` (the 256 addresses around its IP). It scans gently, so the hoster does not take it for a port
-  scan, and remembers the site it found.
+- **Automatic (default).** A public node looks for a real HTTPS site among its neighbours: first the
+  20 addresses on either side of its IP, then, at most every 12 hours, a slower search over its `/24`
+  and the ones next to it. It scans gently, so the hoster does not take it for a port scan, and
+  remembers the site it found. `echofog-node camouflage` shows the sites it would pick, at once.
 - **If no suitable neighbour is found,** the node still runs, but **on UDP only**: people whose
   network blocks UDP cannot reach it. It logs a loud `ANTI-DPI` warning and tries again every 30
   minutes. When it finds a site, TCP comes on by itself, without a restart.
@@ -157,15 +161,17 @@ network. Details: [anti-dpi.md](anti-dpi.md).
   This also skips the scan. `--tls-cert` / `--tls-key` let you serve a real certificate for a domain
   you own; without them a self-signed one is used. A site that also speaks HTTP/3 is better: a
   probe on UDP then gets an answer from it too.
-- **Give out the address with the site name.** The `Join address` the node prints does not include
-  it yet. Add it yourself, `host:port/<peer id>?sni=<site>`, so that people's first connection is
-  already disguised.
+- **Give out the address with the site name.** The `Join address` the node prints carries it
+  (`host:port/<peer id>?sni=<site>`, and `&srv=1` on a server) once the site is known. If the node
+  found its site after starting, take the address from `echofog-node status`, so that people's
+  first connection is already disguised.
 
 **Cloud VMs with a private interface address.** On some providers the VM's own network interface
-has a private address and the public IP is NATed in front of it (Google Cloud works this way).
-There the node cannot see its public neighbours, so automatic discovery is skipped and the node
-stays on UDP only, without the HTTP/3 disguise. Set `--tls-server-name` and `--camouflage-addr` by
-hand to get TCP and the disguise.
+has a private address and the public IP is NATed in front of it (Google Cloud, AWS, Docker work this
+way). The node then scans around its public address instead: the one in `--public-addr`, or the one
+peers report back. Without `--public-addr` the first scan may find nothing and the next one, 30
+minutes later, succeed; set `--public-addr` (or `--tls-server-name` and `--camouflage-addr` by hand)
+to have TCP and the disguise from the start.
 
 ## Join the network
 
@@ -267,8 +273,7 @@ For an exit only for the people you invite, set `ECHOFOG_ACCESS=isolated` (or `h
 
 A node with a public address gets connections from anyone, and a peer ID costs nothing to make. So
 the node counts addresses as well as identities, and the defaults below suit most nodes. Each limit
-has a flag and an environment variable (in the config file: the same names under `network`, e.g.
-`max_inbound_peers`); `-1` turns a limit off.
+has a flag and an environment variable; `-1` turns a limit off.
 
 | Flag | Environment | Default | Limits |
 |---|---|---|---|
@@ -284,7 +289,7 @@ has a flag and an environment variable (in the config file: the same names under
   stranger is turned away inside the handshake, before the node signs anything for it. Long-lived
   peers are never pushed out.
 - **Per peer:** at most 1024 streams open at once (every connection proxied through an exit is
-  one), 64 of them still waiting for their first frame, 16 file-transfer sessions (512 for the
+  one), 512 of them still waiting for their first frame, 16 file-transfer sessions (512 for the
   whole node), and an eighth of the incoming message queue, so one peer cannot crowd out the others.
 - **Bans.** Bad signatures, broken frames, floods that keep hitting a limit and requests the node
   keeps refusing earn a peer points, which halve every 10 minutes. At 100 points the peer is
@@ -332,7 +337,8 @@ Identities cost nothing, so a relay or an exit never assumes one peer is one per
 a node caps what peers can take; the defaults fit a small VPS, and each one has a flag (and an
 `ECHOFOG_*` variable: the flag in capitals with `_` for `-`, so `--relay-peer-mbps` is
 `ECHOFOG_RELAY_PEER_MBPS`, which is what `deploy/.env` uses). For the number flags `0` keeps the
-default and `-1` removes the limit.
+default and `-1` removes the limit, except `--relay-max-circuits` and `--max-connections`, which
+take only a positive number (anything else keeps the default).
 
 **Relay** (relayed connections, "circuits"):
 
@@ -391,3 +397,38 @@ Loopback and LAN addresses are not limited per IP: a test cluster, or a node beh
 proxy, would otherwise count as one client. The stats line shows how often the relay limits were
 hit (`limits: ... opens refused, ... frames dropped`), and `status` lists exit refusals by reason
 (`too many streams`, `too many requests`).
+
+## Other flags
+
+Flags and commands that the sections above do not cover. Each flag is also the environment
+variable shown.
+
+| Flag | Environment | Default | What it does |
+|---|---|---|---|
+| `--tcp-rotate` | `ECHOFOG_TCP_ROTATE` | `auto` | carries the TCP fallback in short connections, against the TSPU freeze after about 16 KB: `auto` across the border from Russia and to an address where a link froze, `on` always, `off` never. A server takes rotating links either way ([Anti-DPI](anti-dpi.md#russias-16-kb-freeze)) |
+| `--guard-mode` | `ECHOFOG_GUARD_MODE` | `auto` | a node that is not a server goes across the border only through two or three camouflaged guards. `auto` holds guards in a censoring country and while the country is not known, `on` always, `off` never. No effect with `--role server`; with `--obfs off`, `auto` stays off ([Anti-DPI](anti-dpi.md#guards-a-users-node-keeps-few-links-across-the-border)) |
+| `--obfs` | `ECHOFOG_OBFS` | `node` | UDP obfuscation with a key from each node's peer ID; `off` turns it off. Keep it on |
+| `--stealth-password`, `--obfs-password` | `ECHOFOG_STEALTH_PASSWORD`, `ECHOFOG_OBFS_PASSWORD` | none | extra secrets of a private network, for the TCP camouflage and the UDP obfuscation. Every node of that network must use the same ones |
+| `--ws-listen`, `--ws-path` | `ECHOFOG_WS_LISTEN`, `ECHOFOG_WS_PATH` | off, `/echofog` | accepts peers over WebSocket, for a node behind a CDN (e.g. `127.0.0.1:8080` with the CDN in front); see `--ws-client-ip-header` above |
+| `--transport` | `ECHOFOG_TRANSPORT` | `auto` | `auto` (QUIC, then TCP), `quic` or `tcp` |
+| `--stun-servers` | `ECHOFOG_STUN_SERVERS` | a built-in list | comma-separated STUN servers |
+| `--no-port-mapping` | `ECHOFOG_NO_PORT_MAPPING` | `false` | does not ask the router to forward the port (UPnP, NAT-PMP, PCP) |
+| `--no-hole-punch` | `ECHOFOG_NO_HOLE_PUNCH` | `false` | does not try direct connections between peers behind NATs |
+| `--no-create` | `ECHOFOG_NO_CREATE` | `false` | refuses to start without an identity instead of creating one |
+| `--ton-network` | `ECHOFOG_TON_NETWORK` | `testnet` (a release build may set `mainnet`) | the TON network of the node's wallet: `testnet` or `mainnet` |
+| `--log-level` | `ECHOFOG_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| none | `ECHOFOG_LOG_FILE` | `EchoFog/echofog.log` in the user's cache folder (`~/.cache` on Linux) | the log file; `off` writes none |
+| `--use-exit`, `--socks5` | `ECHOFOG_USE_EXIT`, `ECHOFOG_SOCKS5` | off, `127.0.0.1:1080` | uses the node as a client: a local SOCKS5 proxy through an exit (`auto`, a peer ID, or an invitation link in quotes) |
+
+- `echofog-node camouflage` lists real sites next to this server that the node could imitate, with
+  the lines to put in `deploy/.env`. It needs no running node. `--ip` gives the server's public
+  IPv4 (default: `ECHOFOG_PUBLIC_ADDR`, the interface address, or what STUN sees); `--max` stops
+  after that many sites (default 5).
+- `echofog-node restore --passphrase` (`ECHOFOG_MNEMONIC_PASSPHRASE`) gives the extra passphrase,
+  if the recovery phrase was made with one.
+- `GET /healthz` on the status endpoint (`http://127.0.0.1:7070/healthz`) answers `ok` once the
+  node is up, and `503 starting` before that. The Docker image has a `HEALTHCHECK` that runs
+  `echofog-node status --quiet` every 30 seconds (start period 40 seconds, 3 retries), so
+  `docker ps` shows the container as healthy or not.
+- Anonymous mode (`network.anonymous`) is a setting of the desktop app. `echofog-node` has no flag
+  for it.

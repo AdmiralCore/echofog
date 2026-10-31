@@ -1,3 +1,5 @@
+Русская версия: [group-encryption.ru.md](group-encryption.ru.md)
+
 # Group encryption
 
 How group messages are protected, how they reach members who were offline, and what this does
@@ -20,8 +22,8 @@ not protect against. For the overview of the whole system see [How it works](how
 ## Keys: epochs and sender chains
 
 An **epoch** is a 32-byte random secret for one group. An admin makes it, signs it with their
-identity key together with the group, the epoch number and the list of members it is made for,
-and sends it to every member over their session. Members accept an epoch only from someone who is
+identity key together with the group, the epoch number, its tag, the creator, the time it was made
+and the list of members it is made for, and sends it to every member over their session. Members accept an epoch only from someone who is
 an admin of the group in their own view, and only with a valid signature.
 
 Each member who writes derives their own **chain** from the epoch:
@@ -51,6 +53,11 @@ nonce.
 Inside is the **content**: group, message ID, time, author, text and (for a posted file) the file
 offer, with the author's **Ed25519 signature** over all of it (the file offer as its SHA-256). Any
 member can seal under the epoch, so the seal alone does not prove authorship; the signature does.
+
+In a group on the conversation log (every member on version 3), the log's events travel in the
+same envelopes: messages, edits, deletions, reactions, pins, roles, member changes, the group's
+name and picture. While the epoch in use is tainted (see below), events are not sealed: they go to
+each member inside that member's own session.
 
 ## Who makes a new epoch, and when
 
@@ -84,20 +91,27 @@ mint key after key:
 - An admin answers the same newcomer (member list, history, telling the others) at most once a
   minute; the keys are handed over every time.
 
-The price: in that wait a departed member's old epoch still seals new messages. They are sent
-nothing (only members get messages, sent or handed on), so this matters only if sealed messages
-leak some other way.
+In that wait the epoch in use is **tainted**: somebody who is no longer a member may hold it.
+Nothing new is sealed with it. New messages and log events go to each member inside that member's
+own session, the way older versions send them, until the new epoch arrives. The departed member is
+sent none of them.
 
-A newcomer does not get a new epoch: they receive the current one. The group hands newcomers the
-last 100 messages anyway, so earlier messages of the current epoch are not a secret from them.
+A newcomer does not get a new epoch made for them. The admin who lets them in hands over every
+epoch it holds: the current one and the replaced ones it still keeps (up to 64, for 7 days), and
+any member answers a newcomer's request for keys the same way. So a newcomer can open the sealed
+messages of the last week that members keep. In a group on the conversation log the newcomer also
+syncs the whole log, and can read the group's history from its start. Older groups hand a newcomer
+the last 100 messages. Do not count on earlier messages being hidden from people you let in.
 
 Members keep an epoch for 7 days after it was replaced (at most 64), because a message written in
 it can still arrive that late from somebody who was offline.
 
 ## Delivery and catching up
 
-The author sends the sealed message to every member. A member who is offline gets it from the
-author's outbox when both are online again, as before. If the author is offline by then, the other
+In a group of up to 50 members the author sends the sealed message to every member. In a bigger
+group on the conversation log it sends it to 8 members (connected ones first), each of them passes
+it on to 3 more, and the rest get it when they compare logs (see below). A member the author sent
+it to who is offline gets it from the author's outbox when both are online again, as before. If the author is offline by then, the other
 members fill the gap:
 
 - every member keeps the sealed messages of the last week (up to 3000 per group);
@@ -146,8 +160,10 @@ the message is marked as not verified.
 - **Admins are trusted with membership.** An admin decides who is in the group, and the member
   lists and versions they send are taken as they are. A removed member cannot read new messages,
   but an admin who adds somebody gives them the current epoch.
-- **Metadata.** Members see who writes and when; the relays of the network see that members talk,
-  as with any chat.
+- **Metadata.** Members see who writes and when. In a group of up to 50 members the apps connect to
+  each other, so members can also see each other's IP addresses, unless a link goes through a
+  relay (guard mode across a border, anonymous mode). Relays see which peer IDs talk to which,
+  when and how much, as with any chat.
 
 ## Testing
 
