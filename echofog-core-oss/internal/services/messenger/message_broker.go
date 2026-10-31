@@ -45,7 +45,7 @@ type MessageBroker struct {
 	filter          func(origin types.PeerID) Verdict // who may write to us (nil: everybody, as contacts)
 	connect         func(types.PeerID)                // asked to open a connection to a peer that cannot be reached
 	useAsRelay      func(types.PeerID) bool           // a peer to route through even if it does not advertise (a configured private relay)
-	relayFull       func(types.PeerID) bool           // a relay that said it keeps no more messages, skipped for a while
+	relayFull       func(types.PeerID) bool           // a relay that said it keeps no more messages, tried last for a while
 	mailboxesOf     func(types.PeerID) []types.PeerID // the relays a recipient named for its mail, tried first
 	connMu          sync.Mutex
 	lastConnect     map[types.PeerID]time.Time
@@ -378,13 +378,23 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 		}
 	}
 
+	// A relay that answered some message with "mailbox full" goes last, but is still tried: the box
+	// that was full may be another recipient's, and a relay forwards to a recipient connected to it
+	// without keeping anything. Skipping it left messages to a peer online on that very relay
+	// waiting ten minutes because a box of someone offline had filled up.
+	var full []*swarm.Peer
+	try := make([]*swarm.Peer, 0, len(allPeers))
 	for _, p := range allPeers {
 		if !p.Relays() && !(s.useAsRelay != nil && s.useAsRelay(p.ID())) && !mailboxes[p.ID()] {
 			continue // not a relay (a signaling-only node, or a private relay we were not given)
 		}
 		if s.relayFull != nil && s.relayFull(p.ID()) {
-			continue // it answered the last message with "mailbox full"
+			full = append(full, p)
+			continue
 		}
+		try = append(try, p)
+	}
+	for _, p := range append(try, full...) {
 		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
 			s.log.Info("MessageBroker: message handed to a relay", "peer", targetID.String()[:8], "relay", p.ID().String()[:8])
 			return nil
@@ -697,7 +707,7 @@ func (s *MessageBroker) SetRelaySelector(f func(types.PeerID) bool) {
 	s.useAsRelay = f
 }
 
-// SetRelayFullCheck names relays that refused to keep our messages lately; they are not used then.
+// SetRelayFullCheck names relays that refused to keep our messages lately; they are tried last then.
 func (s *MessageBroker) SetRelayFullCheck(f func(types.PeerID) bool) {
 	s.relayFull = f
 }
