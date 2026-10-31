@@ -425,6 +425,22 @@ recent problems (the last 1 warnings and errors, cleaned):
   }),
   SaveConnectionReport: () => 'C:/Users/demo/echofog-report-mock.txt',
   SaveStreamLog: (name) => 'C:/Users/demo/' + name,
+  // ?crash: the last run crashed
+  LastCrash: () => (new URLSearchParams(location.search).has('crash') ? {
+    reason: 'panic: runtime error: invalid memory address or nil pointer dereference',
+    where: 'github.com/echofog/echofog-core/internal/services/call/media.(*Dispatcher).recoverFragments (media/dispatcher.go:412)',
+    text: `panic: runtime error: invalid memory address or nil pointer dereference
+[signal 0xc0000005 code=0x0 addr=0x18 pc=0x7ff6b1c2]
+
+goroutine 112 [running]:
+github.com/echofog/echofog-core/internal/services/call/media.(*Dispatcher).recoverFragments(0x0, {0xc0001, 0x4})
+	media/dispatcher.go:412 +0x52
+created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
+	node/node.go:700 +0x1a5`,
+    version: '0.2.0', os: 'windows/amd64',
+  } : null),
+  ForgetLastCrash: () => {},
+  SaveCrashReport: () => 'C:/Users/demo/echofog-crash-mock.txt',
   GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),

@@ -3,6 +3,7 @@
   import { App, openURL, on } from '../api.js';
   import { openLinkDialog, looksLikeLink } from '../links.js';
   import OpenLink from '../components/OpenLink.svelte';
+  import CrashDialog from '../components/CrashDialog.svelte';
   import { profile } from '../stores/session.js';
   import { chats } from '../stores/chats.js';
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
@@ -47,6 +48,18 @@
   function dismissUpdate() {
     try { localStorage.setItem(UPDATE_SEEN, update.latest); } catch (_) { /* private mode */ }
     update = null;
+  }
+
+  // the last run crashed: a banner until the user opens the report or closes it
+  let crash = null;
+  let crashOpen = false;
+  async function checkCrash() {
+    try { crash = await App.LastCrash(); } catch (_) { /* an older core: nothing to say */ }
+  }
+  function forgetCrash() {
+    crash = null;
+    crashOpen = false;
+    App.ForgetLastCrash().catch(() => {});
   }
 
   let net = { peerCount: 0, status: 'OFFLINE' };
@@ -109,6 +122,7 @@
     offLink = on('link:open', (link) => openLinkDialog(link || ''));
     App.TakeStartLink().then((link) => { if (link) openLinkDialog(link); }).catch(() => {});
     checkUpdate();
+    checkCrash();
     refreshAnon();
     offSounds = bindSounds();
     initCallEvents();
@@ -121,6 +135,7 @@
 
 <svelte:window bind:innerWidth={width} on:keydown={onKey} on:paste={onPaste} />
 <OpenLink />
+{#if crash && crashOpen}<CrashDialog {crash} on:close={forgetCrash} />{/if}
 
 <div class="shell" class:bottom>
   <nav class:rail class:bottom aria-label={$t('shell.sections')}>
@@ -178,6 +193,17 @@
 
   <main>
     <div class="banners">
+    {#if crash && !crashOpen}
+      <div class="banner crash" role="alert" transition:fly={{ y: -16, duration: 300 }}>
+        <span class="off-ic crash-ic"><Icon name="info" size={17} /></span>
+        <div class="grow off-text">
+          <b>{$t('crash.banner')}</b>
+          <span class="mono">{crash.reason}</span>
+        </div>
+        <button class="primary small" on:click={() => (crashOpen = true)}>{$t('crash.details')}</button>
+        <button class="icon off-x" title={$t('boot.dismiss')} aria-label={$t('boot.dismiss')} on:click={forgetCrash}><Icon name="close" size={15} /></button>
+      </div>
+    {/if}
     {#if update}
       <div class="banner update" role="status" transition:fly={{ y: -16, duration: 300 }}>
         <span class="off-ic up-ic"><Icon name="download" size={17} /></span>
@@ -325,6 +351,9 @@
     border-radius: 16px; background: var(--glass); backdrop-filter: blur(18px) saturate(1.4);
     border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); box-shadow: var(--shadow);
   }
+  .banner.crash { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+  .crash-ic { background: var(--danger-soft) !important; color: var(--danger) !important; }
+  .banner.crash .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .banner.update { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
   .up-ic { background: var(--accent-soft) !important; color: var(--accent) !important; }
   .tg { background: var(--raised); color: var(--text); border: 1px solid var(--line-soft); }
