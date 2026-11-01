@@ -59,7 +59,7 @@ Every document has a Russian version next to it (`*.ru.md`).
   https form that messengers make tappable: the page opens it in the app or offers the download.
   In whole-computer mode a kill switch, on by default, keeps apps offline when the exit drops.
 - **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Replies, threads, edits,
-  reactions and pins work in every chat, and a chat looks the same on both phones after a break.
+  reactions and pins work in every chat, and a chat looks the same on both sides after a break.
   A group can be a space with text channels and voice rooms, like a community server without the
   server. Pictures arrive with a small preview, so you see them before downloading. Calls and screen
   sharing travel over relay trees sized by each participant's upload, which is how a stream reaches
@@ -78,6 +78,9 @@ Every document has a Russian version next to it (`*.ru.md`).
   the log, and a database damaged by a power cut is repaired at the next start.
 - **Payments.** You keep TON in your own small vault contract and sign vouchers as you use an
   exit; the exit collects them every few hours. Paying by a direct TON or USDT transfer also works.
+  For now the wallet runs on the TON testnet: payments use test coins, and USDT is not there yet.
+  A node owner can also take payment their own way (a bot, a site) and give each person a pass
+  with a term: [Operator API](docs/operator-api.md), [pass bot](echofog-core-oss/deploy/tg-bot/README.md).
 
 The longer version is in [How it works](docs/how-it-works.md).
 

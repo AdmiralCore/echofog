@@ -38,8 +38,8 @@ gcloud compute firewall-rules create echofog --allow udp:443,tcp:443
 ## 3. Get the code and configure
 
 ```bash
-git clone https://github.com/AdmiralCore/EchoFog.git
-cd EchoFog/echofog-core-oss
+git clone https://github.com/AdmiralCore/echofog.git
+cd echofog/echofog-core-oss
 cp deploy/.env.example deploy/.env
 nano deploy/.env
 ```
@@ -218,7 +218,7 @@ line in `deploy/.env.example`; what each one does is in
 ## Update
 
 ```bash
-cd ~/EchoFog && git pull          # the folder you cloned in step 3; brings a changed compose file
+cd ~/echofog && git pull          # the folder you cloned in step 3; brings a changed compose file
 cd echofog-core-oss
 docker compose -f deploy/docker-compose.yml pull
 docker compose -f deploy/docker-compose.yml up -d
@@ -256,7 +256,7 @@ a new key, a lot of departed peers after a big test), drop what it learned from 
 learns it again within minutes:
 
 ```bash
-cd ~/EchoFog/echofog-core-oss
+cd ~/echofog/echofog-core-oss
 docker compose -f deploy/docker-compose.yml stop node
 docker compose -f deploy/docker-compose.yml run --rm node clean            # --dry-run to count first
 docker compose -f deploy/docker-compose.yml up -d
