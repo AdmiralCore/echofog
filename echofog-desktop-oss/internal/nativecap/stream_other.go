@@ -13,12 +13,16 @@ func Available() error { return errNotWindows }
 // Sources lists nothing outside Windows.
 func Sources() []Source { return nil }
 
+// DisplayRate does not know the screen's refresh rate outside Windows.
+func DisplayRate() int { return 0 }
+
 // Stream is a native screen stream; there are none outside Windows.
 type Stream struct{}
 
 func Start(Options) (*Stream, error)    { return nil, errNotWindows }
 func (s *Stream) SetBitrate(uint64)     {}
 func (s *Stream) RequestKeyframe()      {}
+func (s *Stream) SetViewerRates([]int)  {}
 func (s *Stream) Stats() Stats          { return Stats{} }
 func (s *Stream) Stop()                 {}
 func (s *Stream) Done() <-chan struct{} { return nil }

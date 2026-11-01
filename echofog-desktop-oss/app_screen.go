@@ -72,10 +72,12 @@ func (a *App) startNativeScreenLocked(streamID, sourceID, qualityID string, curs
 		return errors.New("node API not initialized")
 	}
 	var q *struct{ w, h, fps, kbps int }
+	var levels []nativecap.Level // the presets the stream can go down to
 	for _, p := range nodeAPI.ListStreamQualities() {
 		if p.ID == qualityID {
 			q = &struct{ w, h, fps, kbps int }{p.Width, p.Height, p.FPS, p.BitrateKbps}
 		}
+		levels = append(levels, nativecap.Level{Width: p.Width, Height: p.Height, FPS: p.FPS, Kbps: p.BitrateKbps})
 	}
 	if q == nil {
 		return errors.New("unknown stream quality " + qualityID)
@@ -88,6 +90,10 @@ func (a *App) startNativeScreenLocked(streamID, sourceID, qualityID string, curs
 		Source: sourceID, Width: q.w, Height: q.h, FPS: q.fps, BitrateKbps: q.kbps, Cursor: cursor,
 		MTU:     min(nodeAPI.CaptureRTPBudget(streamID), 1200),
 		Publish: func(p []byte) { nodeAPI.PublishCaptureRTP(screenRole, p) },
+		Levels:  levels,
+		OnLevel: func(l nativecap.Level, why string) {
+			screenLog.Info("Native screen capture changed its level", "stream", streamID, "width", l.Width, "height", l.Height, "fps", l.FPS, "why", why)
+		},
 		OnEnd: func(err error) {
 			screenLog.Warn("Native screen capture ended by itself", "stream", streamID, "err", err)
 			a.screen.mu.Lock()
@@ -238,7 +244,8 @@ func logNativeScreen(s *nativecap.Stream, streamID string) {
 			screenLog.Info("Native screen capture", "stream", streamID, "captured_fps", int(rate(prev.Captured, cur.Captured)),
 				"encoded_fps", int(rate(prev.Encoded, cur.Encoded)), "sent_fps", int(rate(prev.Sent, cur.Sent)),
 				"waits", cur.Skipped-prev.Skipped, "encode_ms", int(ms*10)/10.0, "mbps", int(rate(prev.Bytes, cur.Bytes)*8/1e5)/10.0,
-				"kbps_cap", cur.BitrateKbps, "pacer_ms", int(cur.PacerDelayMs*10)/10.0)
+				"kbps_cap", cur.BitrateKbps, "pacer_ms", int(cur.PacerDelayMs*10)/10.0,
+				"width", cur.Width, "height", cur.Height, "fps", cur.FPS, "lowered", cur.Lowered)
 			prev, at = cur, now
 		}
 	}

@@ -25,6 +25,7 @@ var (
 	procGetWindowLongPtrW    = modUser32.NewProc("GetWindowLongPtrW")
 	procGetWindow            = modUser32.NewProc("GetWindow")
 	procEnumDisplaySettingsW = modUser32.NewProc("EnumDisplaySettingsW")
+	procMonitorFromWindow    = modUser32.NewProc("MonitorFromWindow")
 )
 
 // captureTarget is what Windows.Graphics.Capture is pointed at: a window or a monitor.
@@ -106,8 +107,7 @@ func Sources() []Source {
 			Width: int(mi.Monitor.Right - mi.Monitor.Left), Height: int(mi.Monitor.Bottom - mi.Monitor.Top), Primary: mi.Flags&1 != 0,
 		}
 		// the mode is in real pixels whatever the scaling, and has the refresh rate
-		dm := devMode{Size: uint16(unsafe.Sizeof(devMode{}))}
-		if r, _, _ := procEnumDisplaySettingsW.Call(uintptr(unsafe.Pointer(&mi.Device[0])), uintptr(0xFFFFFFFF), uintptr(unsafe.Pointer(&dm))); r != 0 {
+		if dm, ok := displayMode(&mi); ok {
 			s.Width, s.Height, s.RefreshHz = int(dm.PelsWidth), int(dm.PelsHeight), int(dm.DisplayFrequency)
 		}
 		out = append(out, s)
@@ -120,6 +120,47 @@ func Sources() []Source {
 		}
 	}
 	return out
+}
+
+func displayMode(mi *monitorInfo) (devMode, bool) {
+	dm := devMode{Size: uint16(unsafe.Sizeof(devMode{}))}
+	r, _, _ := procEnumDisplaySettingsW.Call(uintptr(unsafe.Pointer(&mi.Device[0])), uintptr(0xFFFFFFFF), uintptr(unsafe.Pointer(&dm)))
+	return dm, r != 0
+}
+
+// refreshRate is the refresh rate of the monitor a target is on (a window: the one most of it is
+// on), 0 when it is not known.
+func refreshRate(tg captureTarget) int {
+	mon := tg.monitor
+	if tg.hwnd != 0 {
+		mon, _, _ = procMonitorFromWindow.Call(uintptr(tg.hwnd), 2 /* MONITOR_DEFAULTTONEAREST */)
+	}
+	mi := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
+	if r, _, _ := procGetMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi))); r == 0 {
+		return 0
+	}
+	dm, ok := displayMode(&mi)
+	if !ok || dm.DisplayFrequency <= 1 { // 0 and 1 stand for the hardware's default
+		return 0
+	}
+	return int(dm.DisplayFrequency)
+}
+
+// DisplayRate is the refresh rate of the screen this app's window is on, 0 when it is not known:
+// a viewer tells it to the streams it watches, which pick a frame rate it shows evenly.
+func DisplayRate() int {
+	self := uint32(os.Getpid())
+	for _, h := range topWindows() {
+		var pid uint32
+		_, _ = windows.GetWindowThreadProcessId(h, &pid)
+		if pid != self || !windows.IsWindowVisible(h) {
+			continue
+		}
+		if owner, _, _ := procGetWindow.Call(uintptr(h), 4 /* GW_OWNER */); owner == 0 {
+			return refreshRate(captureTarget{hwnd: h})
+		}
+	}
+	return 0
 }
 
 func windowSource(h windows.HWND, self uint32, shell windows.HWND) (Source, bool) {

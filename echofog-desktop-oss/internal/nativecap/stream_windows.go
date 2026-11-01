@@ -63,8 +63,10 @@ type Stream struct {
 
 	wantKey atomic.Bool
 	bitrate atomic.Uint64
+	viewers atomic.Pointer[[]int] // the refresh rates of the viewers' screens
 
-	enc     *mfEncoder
+	enc     atomic.Pointer[mfEncoder] // a change of level replaces it
+	encMu   sync.Mutex                // keeps a bitrate change off an encoder being closed
 	pacer   *pacer
 	pk      *packetizer
 	tsAt    uint32        // RTP timestamp of pts 0
@@ -108,9 +110,11 @@ func (s *Stream) SetBitrate(bps uint64) {
 		return
 	}
 	s.bitrate.Store(bps)
-	if s.enc != nil {
-		s.enc.setBitrate(uint32(min(bps, 1<<31)))
+	s.encMu.Lock()
+	if e := s.enc.Load(); e != nil {
+		e.setBitrate(uint32(min(bps, 1<<31)))
 	}
+	s.encMu.Unlock()
 	if s.pacer != nil {
 		s.pacer.bitrate.Store(bps)
 	}
@@ -118,6 +122,26 @@ func (s *Stream) SetBitrate(bps uint64) {
 
 // RequestKeyframe makes the next frame an IDR (a viewer joined or lost packets).
 func (s *Stream) RequestKeyframe() { s.wantKey.Store(true) }
+
+// SetViewerRates gives the refresh rates of the viewers' screens (0: not known), which the frame
+// rate follows (pickFPS).
+func (s *Stream) SetViewerRates(hz []int) {
+	hz = append([]int(nil), hz...)
+	s.viewers.Store(&hz)
+}
+
+func (s *Stream) viewerRates() []int {
+	if p := s.viewers.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+func (s *Stream) closeEncoder(e *mfEncoder) {
+	s.encMu.Lock()
+	e.close()
+	s.encMu.Unlock()
+}
 
 // Stats returns the totals so far.
 func (s *Stream) Stats() Stats {
@@ -128,7 +152,7 @@ func (s *Stream) Stats() Stats {
 		st.Sent, st.Packets, st.Bytes = p.frames.Load(), p.packets.Load(), p.sentBytes.Load()
 		st.PacerDelayMs = float64(p.lastDelay.Load()) / 1e6
 	}
-	if e := s.enc; e != nil {
+	if e := s.enc.Load(); e != nil {
 		st.BitrateKbps = int(e.bitrate.Load() / 1000)
 	}
 	return st
@@ -182,7 +206,13 @@ func (s *Stream) run(ready chan<- error) {
 		return
 	}
 	defer c.close()
-	outW, outH := outputSize(int(c.contentW), int(c.contentH), s.o.Width, s.o.Height)
+	top := Level{Width: s.o.Width, Height: s.o.Height, FPS: s.o.FPS, Kbps: s.o.BitrateKbps}
+	lad := newLadder(top, s.o.Levels)
+	sourceHz := refreshRate(tg)
+	lad.fps = pickFPS(top.FPS, sourceHz, s.viewerRates())
+	lv := lad.start(int(s.bitrate.Load()/1000), time.Now())
+	outW, outH := outputSize(int(c.contentW), int(c.contentH), lv.Width, lv.Height)
+	fps := lv.FPS
 	conv, err := newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH), false)
 	if err != nil {
 		endErr = fmt.Errorf("video processor: %w", err)
@@ -197,20 +227,21 @@ func (s *Stream) run(ready chan<- error) {
 
 	s.pk = newPacketizer(s.o.MTU)
 	s.pacer = newPacer(s.o.Publish, s.bitrate.Load())
-	enc, err := newMFEncoder(d, outW, outH, s.o.FPS, s.o.BitrateKbps, s.onFrame)
+	enc, err := newMFEncoder(d, outW, outH, fps, int(s.bitrate.Load()/1000), encoderQuality, s.onFrame)
 	if err != nil {
 		endErr = fmt.Errorf("encoder: %w", err)
 		return
 	}
-	s.enc = enc
+	s.enc.Store(enc)
 	defer func() {
-		enc.drain(time.Second)
-		enc.close()
+		e := s.enc.Load()
+		e.drain(time.Second)
+		s.closeEncoder(e)
 	}()
 	s.pacer.start()
 	defer s.pacer.close()
 	s.mu.Lock()
-	s.st.Width, s.st.Height = outW, outH
+	s.st.Width, s.st.Height, s.st.FPS, s.st.Lowered = outW, outH, fps, lad.lowered()
 	s.st.SourceWidth, s.st.SourceHeight = int(c.contentW), int(c.contentH)
 	s.st.Encoder, s.st.Adapter, s.st.Hardware = enc.name, d.adapterName, true
 	s.mu.Unlock()
@@ -219,13 +250,58 @@ func (s *Stream) run(ready chan<- error) {
 
 	start := time.Now()
 	s.base = qpcNow()
-	clock := newFrameClock(s.o.FPS, start)
+	clock := newFrameClock(fps, start)
 	beat := time.NewTimer(time.Until(clock.next))
 	defer beat.Stop()
 	check := time.NewTicker(time.Second)
 	defer check.Stop()
 	// a frame that finds the encoder busy waits for it to ask for the next one
 	waiting := false
+	// change moves the stream to another level: a new encoder (size and frame rate are fixed for
+	// its life) and, for a new size, new NV12 frames. The old encoder lets out what it holds first,
+	// so the frames keep their order; the new one starts with a keyframe.
+	change := func(l Level, why string) error {
+		w, h := outputSize(int(c.contentW), int(c.contentH), l.Width, l.Height)
+		if w == outW && h == outH && l.FPS == fps {
+			return nil // the picture is smaller than both levels
+		}
+		took := time.Now()
+		old := s.enc.Load()
+		old.drain(200 * time.Millisecond)
+		s.closeEncoder(old)
+		if w != outW || h != outH {
+			s.freeSlots()
+			conv.close()
+			var err error
+			if conv, err = newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(w), uint32(h), false); err != nil {
+				return fmt.Errorf("video processor: %w", err)
+			}
+			if err := s.makeSlots(d, conv, w, h); err != nil {
+				return err
+			}
+		} else {
+			s.mu.Lock()
+			for i := range s.slots {
+				s.slots[i].busy = false // what the old encoder held is let go
+			}
+			s.mu.Unlock()
+		}
+		e, err := newMFEncoder(d, w, h, l.FPS, int(s.bitrate.Load()/1000), encoderQuality, s.onFrame)
+		if err != nil {
+			return fmt.Errorf("encoder: %w", err)
+		}
+		s.enc.Store(e)
+		outW, outH, fps, waiting = w, h, l.FPS, false
+		clock = newFrameClock(fps, time.Now())
+		beat.Reset(time.Until(clock.next))
+		s.mu.Lock()
+		s.st.Width, s.st.Height, s.st.FPS = outW, outH, fps
+		s.mu.Unlock()
+		if s.o.OnLevel != nil {
+			s.o.OnLevel(Level{Width: w, Height: h, FPS: fps, Kbps: l.Kbps}, why+", "+time.Since(took).Round(time.Millisecond).String())
+		}
+		return nil
+	}
 	send := func(now time.Time) {
 		sent, err := s.send(d, conv, c)
 		if err != nil {
@@ -274,19 +350,34 @@ func (s *Stream) run(ready chan<- error) {
 				send(now)
 			}
 			beat.Reset(time.Until(clock.next))
-		case <-enc.asked:
+		case <-s.enc.Load().asked:
 			if waiting {
 				send(time.Now())
 			}
-		case <-check.C:
+		case now := <-check.C:
 			switch {
 			case c.gone():
 				endErr = errors.New("the shared window was closed")
 			case d.removed() != nil:
 				endErr = fmt.Errorf("the graphics driver reset: %w", d.removed())
-			case enc.failed() != nil:
-				endErr = fmt.Errorf("encoder: %w", enc.failed())
+			case s.enc.Load().failed() != nil:
+				endErr = fmt.Errorf("encoder: %w", s.enc.Load().failed())
 			}
+			if endErr != nil {
+				break
+			}
+			if hz := refreshRate(tg); hz > 0 {
+				sourceHz = hz // the monitor's mode changed, or the window moved to another one
+			}
+			lad.fps = pickFPS(top.FPS, sourceHz, s.viewerRates())
+			if l, why, ok := lad.next(int(s.bitrate.Load()/1000), now); ok {
+				if err := change(l, why); err != nil {
+					endErr = err
+				}
+			}
+			s.mu.Lock()
+			s.st.Lowered = lad.lowered()
+			s.mu.Unlock()
 		}
 	}
 }
@@ -351,7 +442,7 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture) (bool, error) {
 			break
 		}
 	}
-	if slot < 0 || !s.enc.ready() {
+	if slot < 0 || !s.enc.Load().ready() {
 		s.st.Skipped++
 		s.mu.Unlock()
 		return false, nil
@@ -365,7 +456,7 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture) (bool, error) {
 	}
 	d.flush()
 	key := s.wantKey.Swap(false)
-	if err := s.enc.encode(sl.tex, pts, key); err != nil {
+	if err := s.enc.Load().encode(sl.tex, pts, key); err != nil {
 		s.mu.Lock()
 		s.slots[slot].busy = false
 		s.mu.Unlock()

@@ -215,9 +215,19 @@ func hardwareEncoders() ([]unsafe.Pointer, func(), error) {
 	}, nil
 }
 
+// encoderQuality leans to speed (CODECAPI_AVEncCommonQualityVsSpeed): on an RTX 3070, 66 and 100
+// took 2 ms more a 1080p frame than 33 and scored the same VMAF, within 0.7, on game-like and
+// screen clips (TestEncoderQualityBench), and at 144 fps a frame has 7 ms.
+const encoderQuality = 33
+
+// bufferFrames is how many frames' worth of bits the encoder's rate buffer holds; more than six
+// bought at most 0.6 VMAF in the same measurement.
+var bufferFrames = 6
+
 // newMFEncoder opens the first hardware H.264 encoder of the device's adapter that takes NV12
-// textures at this size. out receives every frame, on the encoder's event goroutine.
-func newMFEncoder(d *device, width, height, fps, bitrateKbps int, out func(encodedFrame)) (*mfEncoder, error) {
+// textures at this size. quality trades speed for picture (CODECAPI_AVEncCommonQualityVsSpeed,
+// 0-100). out receives every frame, on the encoder's event goroutine.
+func newMFEncoder(d *device, width, height, fps, bitrateKbps, quality int, out func(encodedFrame)) (*mfEncoder, error) {
 	if err := mfStartup(); err != nil {
 		return nil, err
 	}
@@ -232,7 +242,7 @@ func newMFEncoder(d *device, width, height, fps, bitrateKbps int, out func(encod
 		if luid, ok := getU64(a, &mftEnumAdapterLUID); ok && d.adapterLUID != 0 && luid != d.adapterLUID {
 			continue // an encoder of another GPU (a laptop with two)
 		}
-		e, err := openMFEncoder(d, a, name, width, height, fps, bitrateKbps, out)
+		e, err := openMFEncoder(d, a, name, width, height, fps, bitrateKbps, quality, out)
 		if err == nil {
 			return e, nil
 		}
@@ -244,7 +254,7 @@ func newMFEncoder(d *device, width, height, fps, bitrateKbps int, out func(encod
 	return nil, errors.Join(errs...)
 }
 
-func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fps, bitrateKbps int, out func(encodedFrame)) (*mfEncoder, error) {
+func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fps, bitrateKbps, quality int, out func(encodedFrame)) (*mfEncoder, error) {
 	e := &mfEncoder{name: name, width: width, height: height, fps: fps, out: out, inFlight: make(map[int64]time.Time),
 		asked: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := comCall(act, activateObject, uintptr(unsafe.Pointer(&iidIMFTransform)), uintptr(unsafe.Pointer(&e.mft))).err("ActivateObject"); err != nil {
@@ -292,11 +302,11 @@ func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fp
 	e.setCodec(&codecLowLatencyMode, vtBool, 0xFFFF)
 	e.setCodec(&codecRateControlMode, vtUI4, rateControlCBR)
 	e.setCodec(&codecMeanBitRate, vtUI4, uint64(bps))
-	e.setCodec(&codecBufferSize, vtUI4, uint64(bps)/uint64(max(fps, 1))*6)
+	e.setCodec(&codecBufferSize, vtUI4, uint64(bps)/uint64(max(fps, 1))*uint64(bufferFrames))
 	e.setCodec(&codecGOPSize, vtUI4, uint64(fps*600))
 	e.setCodec(&codecBPictureCount, vtUI4, 0)
 	e.setCodec(&codecCABAC, vtBool, 0xFFFF)
-	e.setCodec(&codecQualityVsSpeed, vtUI4, 33)
+	e.setCodec(&codecQualityVsSpeed, vtUI4, uint64(quality))
 
 	if err := e.setTypes(); err != nil {
 		return fail(err)
@@ -318,6 +328,9 @@ func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fp
 }
 
 func (e *mfEncoder) setCodec(key *windows.GUID, vt uint16, val uint64) bool {
+	if e.codec == nil {
+		return false // closed
+	}
 	v := variant{vt: vt, val: val}
 	return comCall(e.codec, codecSetValue, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(&v))) >= 0
 }
@@ -586,6 +599,9 @@ func (e *mfEncoder) withParameterSets(au []byte) []byte {
 
 // drain stops the encoder: what it holds comes out, then its event loop ends.
 func (e *mfEncoder) drain(timeout time.Duration) {
+	if e.mft == nil {
+		return // closed
+	}
 	comCall(e.mft, mftProcessMessage, mftMessageEndOfStream, 0)
 	if comCall(e.mft, mftProcessMessage, mftMessageCommandDrain, 0) < 0 {
 		return

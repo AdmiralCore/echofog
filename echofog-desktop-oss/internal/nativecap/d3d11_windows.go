@@ -28,9 +28,10 @@ const (
 	d3d11BindRenderTarget   = 0x20
 	d3d11BindVideoEncoder   = 0x400
 
-	d3d11UsageDefault  = 0
-	d3d11UsageStaging  = 3
-	d3d11CPUAccessRead = 0x20000
+	d3d11UsageDefault   = 0
+	d3d11UsageStaging   = 3
+	d3d11CPUAccessRead  = 0x20000
+	d3d11CPUAccessWrite = 0x10000
 )
 
 // vtable slots

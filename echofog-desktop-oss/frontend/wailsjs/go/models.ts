@@ -716,6 +716,8 @@ export namespace main {
 	    encodeSeconds: number;
 	    width: number;
 	    height: number;
+	    fps: number;
+	    lowered?: string;
 	    sourceWidth: number;
 	    sourceHeight: number;
 	    bitrateKbps: number;
@@ -743,6 +745,8 @@ export namespace main {
 	        this.encodeSeconds = source["encodeSeconds"];
 	        this.width = source["width"];
 	        this.height = source["height"];
+	        this.fps = source["fps"];
+	        this.lowered = source["lowered"];
 	        this.sourceWidth = source["sourceWidth"];
 	        this.sourceHeight = source["sourceHeight"];
 	        this.bitrateKbps = source["bitrateKbps"];
