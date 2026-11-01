@@ -25,8 +25,9 @@ type StreamQuality struct {
 //
 // The bitrates are what H.264 needs for a moving picture (a game, a film) to stay sharp; text on a
 // still screen needs much less, and the encoder sends less when the picture does not change. The
-// 120 fps presets are for screens that refresh that fast; whether the capture keeps up depends on
-// the computer, and the stats line in the log says what it really sends.
+// 120 and 144 fps presets are for screens that refresh that fast; whether the capture keeps up
+// depends on the computer (the desktop's own capture on Windows does, the webview's rarely), and
+// the stats line in the log says what it really sends.
 var QualityPresets = []StreamQuality{
 	{ID: "360p30", Label: "360p 30 fps", Width: 640, Height: 360, FPS: 30, BitrateKbps: 1000, Codec: "h264"},
 	{ID: "720p30", Label: "720p 30 fps", Width: 1280, Height: 720, FPS: 30, BitrateKbps: 3000, Codec: "h264"},
@@ -34,8 +35,10 @@ var QualityPresets = []StreamQuality{
 	{ID: "1080p30", Label: "1080p 30 fps", Width: 1920, Height: 1080, FPS: 30, BitrateKbps: 7000, Codec: "h264"},
 	{ID: "1080p60", Label: "1080p 60 fps", Width: 1920, Height: 1080, FPS: 60, BitrateKbps: 12000, Codec: "h264"},
 	{ID: "1080p120", Label: "1080p 120 fps", Width: 1920, Height: 1080, FPS: 120, BitrateKbps: 20000, Codec: "h264"},
+	{ID: "1080p144", Label: "1080p 144 fps", Width: 1920, Height: 1080, FPS: 144, BitrateKbps: 24000, Codec: "h264"},
 	{ID: "1440p60", Label: "1440p 60 fps", Width: 2560, Height: 1440, FPS: 60, BitrateKbps: 20000, Codec: "h264"},
 	{ID: "1440p120", Label: "1440p 120 fps", Width: 2560, Height: 1440, FPS: 120, BitrateKbps: 32000, Codec: "h264"},
+	{ID: "1440p144", Label: "1440p 144 fps", Width: 2560, Height: 1440, FPS: 144, BitrateKbps: 38000, Codec: "h264"},
 	{ID: "2160p30", Label: "4K 30 fps", Width: 3840, Height: 2160, FPS: 30, BitrateKbps: 20000, Codec: "h264"},
 	{ID: "2160p60", Label: "4K 60 fps", Width: 3840, Height: 2160, FPS: 60, BitrateKbps: 35000, Codec: "h264"},
 }
