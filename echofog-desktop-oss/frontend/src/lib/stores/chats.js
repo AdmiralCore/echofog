@@ -57,6 +57,8 @@ export function toggleMuted(id) {
 /** The open group's channels and voice rooms (ChatChannels), and the channel shown ('' the main one). */
 export const channels = writable([]);
 export const activeChannel = writable('');
+/** The open group's main channel settings (ChatMainChannel): { name, topic, readOnly, slowSecs, open, canSend }. */
+export const mainChannel = writable({});
 /** Messages of the open conversation, oldest first (see norm). Comments in threads are not here. */
 export const messages = writable([]);
 /** Whether the open conversation has older messages than those loaded. */
@@ -178,12 +180,13 @@ function rowOf(d) {
   const group = d.ref.kind === 'group';
   return {
     id: chatIdOf(d.ref), kind: group ? 'group' : 'direct', groupKind: d.kind === 'channel' ? 'channel' : 'group', ref: d.ref,
-    name: d.name || (group ? d.title : d.ref.id.slice(0, 8)), peerId: group ? '' : d.ref.id, pubKey: d.pubKey || '', groupId: group ? d.ref.id : '',
+    name: d.name || (group ? d.title : '') || d.ref.id.slice(0, 8), peerId: group ? '' : d.ref.id, pubKey: d.pubKey || '', groupId: group ? d.ref.id : '',
     online: !!d.online, blocked: !!d.blocked, request: !!d.request, myRole: d.role || '', members: d.members || 0,
     avatar: avatarSrc(d.avatar),
     can, readOnly: !can.send,
     last: d.last ? preview(norm(d.last)) : '', lastId: d.last ? d.last.id : '', ts: d.lastTs || 0, unread: d.unread || 0,
     upgraded: !!d.upgraded,
+    pending: d.pending || '', requests: d.requests || 0,
   };
 }
 
@@ -218,6 +221,7 @@ async function changed(ev) {
   }
   const msgs = (ev.messages || []).map(norm);
   const open = get(activeId) === id;
+  const couldSend = row.can?.send;
   const arrived = d.last && !d.last.mine && (fresh || d.last.id !== row.lastId);
   if (arrived && !get(muted).has(id) && msgs.some((m) => m.id === d.last.id && !m.system)) play('receive', { quiet: inCall() });
   patch(id, (c) => ({ ...c, ...rowOf(d), unread: open && get(focused) ? 0 : d.unread || 0 }));
@@ -227,15 +231,20 @@ async function changed(ev) {
     await reloadOpen();
     return;
   }
+  // we may write now, or no longer (let in by the group's log): the channels' rights follow
+  if (row.kind === 'group' && rowOf(d).can?.send !== couldSend) loadChannels();
 
   const here = get(activeChannel);
   messages.update((list) => msgs.filter((m) => !m.thread && m.channel === here).reduce((l, m) => upsert(l, m, before, get(hasOlder)), list));
-  if (row.kind === 'group' && (msgs.some((m) => m.channel) || here)) loadChannels();
+  // a change with no messages is one of the group's own (a channel made, renamed or set up)
+  if (row.kind === 'group' && (!msgs.length || msgs.some((m) => m.channel) || here)) loadChannels();
   const th = get(thread);
   if (th) {
     const inThread = msgs.filter((m) => m.thread === th.root);
     if (inThread.length) thread.set({ ...th, messages: inThread.reduce((l, m) => upsert(l, m, beforeInThread, false), th.messages) });
   }
+  // a comment, a rename or a deleted root changes the threads list
+  if (get(threadsShown) && msgs.some((m) => m.thread || m.replies || m.threadTitle || get(threads).some((x) => x.id === m.id))) threadsSoon();
   const q = get(quotes);
   if (msgs.some((m) => m.id in q)) quotes.set({ ...q, ...Object.fromEntries(msgs.filter((m) => m.id in q).map((m) => [m.id, m])) });
   if (msgs.some((m) => m.pinned || get(pins).some((p) => p.id === m.id))) loadPins();
@@ -278,6 +287,15 @@ function listen() {
     if (!ev) return;
     const id = 'g:' + ev.groupId;
     switch (ev.kind) {
+      case 'requests': // a request to join waits, or was decided
+        membersVersion.update((n) => n + 1);
+        await loadChats();
+        if (ev.from) {
+          // a new request: whoever may let members in hears of it, not only when the panel is open
+          if (!get(muted).has(id)) play('receive', { quiet: inCall() });
+          chatNote.set(tr('chats.note.request', { name: nameOfPeer(ev.from), title: ev.title || '' }));
+        }
+        break;
       case 'members':
       case 'added':
         await loadChats();
@@ -350,11 +368,15 @@ export async function openChat(id) {
   closeOpen();
   activeChannel.set('');
   channels.set([]);
+  mainChannel.set({});
   activeId.set(id);
   chatNote.set('');
   await reload();
   loadPins();
-  loadChannels();
+  await loadChannels();
+  // a group set to open on one of its channels
+  const open = get(mainChannel).open;
+  if (open && get(activeId) === id && !get(activeChannel)) openChannel(open);
 }
 
 /** Shows another channel of the open group ('' the main one). */
@@ -375,16 +397,63 @@ export async function loadChannels() {
     const list = (await App.ChatChannels(conv.ref)) || [];
     if (get(activeId) !== conv.id) return;
     channels.set(list);
-    if (get(activeChannel) && !list.some((c) => c.id === get(activeChannel) && !c.voice)) openChannel(''); // removed
+    if (get(activeChannel) && !list.some((c) => c.id === get(activeChannel) && !c.voice && !c.category)) openChannel(''); // removed
   } catch (_) { /* an older core: no channels */ }
+  try {
+    const main = (await App.ChatMainChannel(conv.ref)) || {};
+    if (get(activeId) === conv.id) mainChannel.set(main);
+  } catch (_) { /* an older core: no settings of the main channel */ }
 }
 
-/** Creates a channel (or a voice room) in the open group. */
-export async function createChannel(name, voice) {
+/** Changes the open group's main channel: { name, topic, readOnly, slowSecs, open }. */
+export async function saveMainChannel(spec) {
+  const conv = openConv();
+  if (!conv) return false;
+  try {
+    await App.ChatMainChannelSave(conv.ref, { id: '', name: (spec.name || '').trim(), voice: false, topic: (spec.topic || '').trim(), readOnly: !!spec.readOnly,
+      position: 0, parent: '', category: false, slowSecs: spec.slowSecs || 0, open: spec.open || '', overrides: spec.overrides || [] });
+    await loadChannels();
+    return true;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return false;
+  }
+}
+
+/** Puts a channel, a room or the main channel ('') of the open group in a category ('' none). */
+export async function placeChannel(id, parent) {
+  const conv = openConv();
+  if (!conv) return false;
+  try {
+    await App.ChatChannelPlace(conv.ref, id, parent || '');
+    await loadChannels();
+    return true;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return false;
+  }
+}
+
+/** Turns the open group's default headings (text, voice) into categories: [textId, voiceId], or null. */
+export async function setupCategories() {
+  const conv = openConv();
+  if (!conv) return null;
+  try {
+    const ids = await App.ChatCategoriesSetup(conv.ref, tr('chats.text'), tr('chats.voice'));
+    await loadChannels();
+    return ids;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return null;
+  }
+}
+
+/** Creates a category of the open group: a heading its channels and rooms sit under. */
+export async function createCategory(name) {
   const conv = openConv();
   if (!conv || !name.trim()) return null;
   try {
-    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: !!voice, topic: '', readOnly: false, position: 0 });
+    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: false, topic: '', readOnly: false, position: 0, parent: '', category: true, slowSecs: 0, open: '' });
     await loadChannels();
     return ch;
   } catch (err) {
@@ -393,12 +462,27 @@ export async function createChannel(name, voice) {
   }
 }
 
-/** Changes a channel of the open group: { id, name, topic, readOnly, position }. */
+/** Creates a channel (or a voice room) in the open group, in a category (parent) or none. */
+export async function createChannel(name, voice, parent = '') {
+  const conv = openConv();
+  if (!conv || !name.trim()) return null;
+  try {
+    const ch = await App.ChatChannelSave(conv.ref, { id: '', name: name.trim(), voice: !!voice, topic: '', readOnly: false, position: 0, parent, category: false, slowSecs: 0, open: '' });
+    await loadChannels();
+    return ch;
+  } catch (err) {
+    chatError.set(errText(err, tr('chats.err.channel')));
+    return null;
+  }
+}
+
+/** Changes a channel or a category of the open group: { id, name, topic, readOnly, position, parent, slowSecs, overrides }. */
 export async function saveChannel(ch) {
   const conv = openConv();
   if (!conv) return false;
   try {
-    await App.ChatChannelSave(conv.ref, { id: ch.id, name: ch.name.trim(), voice: !!ch.voice, topic: (ch.topic || '').trim(), readOnly: !!ch.readOnly, position: ch.position || 0 });
+    await App.ChatChannelSave(conv.ref, { id: ch.id, name: ch.name.trim(), voice: !!ch.voice, topic: (ch.topic || '').trim(), readOnly: !!ch.readOnly,
+      position: ch.position || 0, parent: ch.parent || '', category: !!ch.category, slowSecs: ch.slowSecs || 0, open: '', overrides: ch.overrides || [] });
     await loadChannels();
     return true;
   } catch (err) {
@@ -421,6 +505,13 @@ export async function moveChannel(id, index) {
 
 /** The open channel's threads (messages with comments), the most recently active first. */
 export const threads = writable([]);
+/** Whether the threads list is on screen: a change that touches a thread reads it again. */
+export const threadsShown = writable(false);
+let threadsTimer = null;
+function threadsSoon() {
+  if (threadsTimer) return;
+  threadsTimer = setTimeout(() => { threadsTimer = null; if (get(threadsShown)) loadThreads(); }, 250);
+}
 export async function loadThreads() {
   const conv = openConv();
   if (!conv) return;
@@ -460,6 +551,7 @@ export async function removeChannel(id) {
 async function reloadOpen() {
   await reload();
   loadPins();
+  loadChannels(); // what each channel lets us do
   const th = get(thread);
   if (th) openThread(th.root);
 }
@@ -566,6 +658,8 @@ function opError(err, fallback) {
   if (/not every member/.test(s)) return tr('chats.err.needsUpgrade');
   if (/not allowed/.test(s)) return tr('chats.err.notAllowed');
   if (/bad event body/.test(s)) return tr('chats.err.badBody');
+  const slow = /slow mode: you can write again in (\d+) s/.exec(s);
+  if (slow) return tr('chats.slowWait', { t: slow[1] });
   return s;
 }
 

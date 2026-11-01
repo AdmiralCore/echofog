@@ -8,6 +8,7 @@ import (
 	"time"
 
 	netpkg "github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/gossip"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
@@ -319,8 +320,8 @@ func (n swarmNet) Shareable(exclude types.PeerID, max int) []*internal_pb.PeerIn
 		if len(out) >= max {
 			break
 		}
-		if p.ID() == exclude || !p.Alive() || !policy.Shareable(p.Addr()) {
-			continue
+		if p.ID() == exclude || !p.Alive() || !policy.Shareable(p.Addr()) || p.Caps().Has(handshake.CapUnlisted) {
+			continue // an unlisted peer's address stays with the peers it talks to
 		}
 		pub := p.PubKey()
 		addr := p.Addr()

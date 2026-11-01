@@ -20,6 +20,7 @@ const (
 	pfxMember = "cl/m/" // bc/lamport/id   -> event bytes: a group's membership history
 	pfxChan   = "cl/c/" // bc/channel      -> Channel
 	pfxChanO  = "cl/q/" // bc/channel/^lamport/id -> id: a channel's history, newest first
+	pfxProf   = "cl/g/" // bc              -> Profile: a group's picture
 )
 
 func (l *Log) bc(c ConvID) string { return storage.BlindID(l.st, "conv:"+c.String()) }
@@ -79,6 +80,8 @@ func memberPrefix(bc string) []byte { return bs(pfxMember + bc + "/") }
 func channelPrefix(bc string) []byte { return bs(pfxChan + bc + "/") }
 
 func channelKey(bc, id string) []byte { return bs(pfxChan + bc + "/" + id) }
+
+func profileKey(bc string) []byte { return bs(pfxProf + bc) }
 
 func chanOrderPrefix(bc, channel string) []byte { return bs(pfxChanO + bc + "/" + channel + "/") }
 

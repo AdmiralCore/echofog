@@ -73,6 +73,7 @@ func (l *callLink) viaCircuit(peer types.PeerID, t net_types.MessageType, payloa
 			if first {
 				l.n.Logger.Info("call: reaching a peer through a relay (no direct link)", "peer", peer.String()[:8])
 			}
+			l.n.tryDirectLater(peer) // at most every directRetry; the call moves over when it works
 			return nil
 		}
 	}

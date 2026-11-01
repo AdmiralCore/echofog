@@ -38,20 +38,44 @@ export function AppVersion() {
   return window['go']['main']['App']['AppVersion']();
 }
 
+export function AuthorizePayment(arg1) {
+  return window['go']['main']['App']['AuthorizePayment'](arg1);
+}
+
+export function AutoUnlock() {
+  return window['go']['main']['App']['AutoUnlock']();
+}
+
 export function BlockPeer(arg1) {
   return window['go']['main']['App']['BlockPeer'](arg1);
+}
+
+export function CallStreamStats(arg1) {
+  return window['go']['main']['App']['CallStreamStats'](arg1);
 }
 
 export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }
 
+export function ChangePassword(arg1, arg2) {
+  return window['go']['main']['App']['ChangePassword'](arg1, arg2);
+}
+
 export function ChatAttachments(arg1) {
   return window['go']['main']['App']['ChatAttachments'](arg1);
 }
 
+export function ChatCategoriesSetup(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatCategoriesSetup'](arg1, arg2, arg3);
+}
+
 export function ChatChannelMove(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatChannelMove'](arg1, arg2, arg3);
+}
+
+export function ChatChannelPlace(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChatChannelPlace'](arg1, arg2, arg3);
 }
 
 export function ChatChannelRemove(arg1, arg2) {
@@ -74,12 +98,24 @@ export function ChatEdit(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatEdit'](arg1, arg2, arg3);
 }
 
+export function ChatGroupPhoto(arg1, arg2) {
+  return window['go']['main']['App']['ChatGroupPhoto'](arg1, arg2);
+}
+
 export function ChatHistory(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatHistory'](arg1, arg2, arg3);
 }
 
 export function ChatList() {
   return window['go']['main']['App']['ChatList']();
+}
+
+export function ChatMainChannel(arg1) {
+  return window['go']['main']['App']['ChatMainChannel'](arg1);
+}
+
+export function ChatMainChannelSave(arg1, arg2) {
+  return window['go']['main']['App']['ChatMainChannelSave'](arg1, arg2);
 }
 
 export function ChatMarkRead(arg1, arg2) {
@@ -122,6 +158,10 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function CheckProxy(arg1) {
+  return window['go']['main']['App']['CheckProxy'](arg1);
+}
+
 export function CheckRecoveryPhrase(arg1) {
   return window['go']['main']['App']['CheckRecoveryPhrase'](arg1);
 }
@@ -142,6 +182,10 @@ export function ConnectToLocalPeer(arg1) {
   return window['go']['main']['App']['ConnectToLocalPeer'](arg1);
 }
 
+export function ConnectionReport() {
+  return window['go']['main']['App']['ConnectionReport']();
+}
+
 export function CreateGroup(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateGroup'](arg1, arg2, arg3);
 }
@@ -154,8 +198,8 @@ export function DeleteContact(arg1) {
   return window['go']['main']['App']['DeleteContact'](arg1);
 }
 
-export function DeleteGroup(arg1) {
-  return window['go']['main']['App']['DeleteGroup'](arg1);
+export function DeleteGroup(arg1, arg2) {
+  return window['go']['main']['App']['DeleteGroup'](arg1, arg2);
 }
 
 export function DeleteProfile(arg1, arg2) {
@@ -186,8 +230,24 @@ export function ForgetExit(arg1) {
   return window['go']['main']['App']['ForgetExit'](arg1);
 }
 
+export function ForgetLastCrash() {
+  return window['go']['main']['App']['ForgetLastCrash']();
+}
+
+export function ForgetUnlock() {
+  return window['go']['main']['App']['ForgetUnlock']();
+}
+
 export function GetAccessStatus() {
   return window['go']['main']['App']['GetAccessStatus']();
+}
+
+export function GetAnonymity() {
+  return window['go']['main']['App']['GetAnonymity']();
+}
+
+export function GetAutostart() {
+  return window['go']['main']['App']['GetAutostart']();
 }
 
 export function GetBlockedPeers() {
@@ -196,6 +256,14 @@ export function GetBlockedPeers() {
 
 export function GetBootstrapNodes() {
   return window['go']['main']['App']['GetBootstrapNodes']();
+}
+
+export function GetCallPath() {
+  return window['go']['main']['App']['GetCallPath']();
+}
+
+export function GetCallRelays() {
+  return window['go']['main']['App']['GetCallRelays']();
 }
 
 export function GetCallRoster() {
@@ -228,6 +296,10 @@ export function GetGroupInvite(arg1) {
 
 export function GetGroupMessages(arg1, arg2) {
   return window['go']['main']['App']['GetGroupMessages'](arg1, arg2);
+}
+
+export function GetGuardStatus() {
+  return window['go']['main']['App']['GetGuardStatus']();
 }
 
 export function GetLogFilePath() {
@@ -274,12 +346,24 @@ export function GetProfiles() {
   return window['go']['main']['App']['GetProfiles']();
 }
 
+export function GetProxySettings() {
+  return window['go']['main']['App']['GetProxySettings']();
+}
+
 export function GetRelayStatus() {
   return window['go']['main']['App']['GetRelayStatus']();
 }
 
+export function GetRememberedUnlock() {
+  return window['go']['main']['App']['GetRememberedUnlock']();
+}
+
 export function GetSavedExits() {
   return window['go']['main']['App']['GetSavedExits']();
+}
+
+export function GetScreenPreviews(arg1) {
+  return window['go']['main']['App']['GetScreenPreviews'](arg1);
 }
 
 export function GetSettings() {
@@ -334,6 +418,66 @@ export function GetVoucherEarnings() {
   return window['go']['main']['App']['GetVoucherEarnings']();
 }
 
+export function GroupFileOpen(arg1, arg2) {
+  return window['go']['main']['App']['GroupFileOpen'](arg1, arg2);
+}
+
+export function GroupFilePick() {
+  return window['go']['main']['App']['GroupFilePick']();
+}
+
+export function GroupFileSave(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupFileSave'](arg1, arg2, arg3);
+}
+
+export function GroupInviteContacts(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupInviteContacts'](arg1, arg2, arg3);
+}
+
+export function GroupInviteCreate(arg1, arg2) {
+  return window['go']['main']['App']['GroupInviteCreate'](arg1, arg2);
+}
+
+export function GroupInviteRevoke(arg1, arg2) {
+  return window['go']['main']['App']['GroupInviteRevoke'](arg1, arg2);
+}
+
+export function GroupInvites(arg1) {
+  return window['go']['main']['App']['GroupInvites'](arg1);
+}
+
+export function GroupJoinDecide(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupJoinDecide'](arg1, arg2, arg3);
+}
+
+export function GroupJoinRequests(arg1) {
+  return window['go']['main']['App']['GroupJoinRequests'](arg1);
+}
+
+export function GroupModerationLog(arg1) {
+  return window['go']['main']['App']['GroupModerationLog'](arg1);
+}
+
+export function GroupRoleRemove(arg1, arg2) {
+  return window['go']['main']['App']['GroupRoleRemove'](arg1, arg2);
+}
+
+export function GroupRoleSave(arg1, arg2) {
+  return window['go']['main']['App']['GroupRoleSave'](arg1, arg2);
+}
+
+export function GroupRoles(arg1) {
+  return window['go']['main']['App']['GroupRoles'](arg1);
+}
+
+export function GroupTimeout(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GroupTimeout'](arg1, arg2, arg3);
+}
+
+export function InspectGroupInvite(arg1) {
+  return window['go']['main']['App']['InspectGroupInvite'](arg1);
+}
+
 export function InviteToCall(arg1) {
   return window['go']['main']['App']['InviteToCall'](arg1);
 }
@@ -364,6 +508,14 @@ export function KeepGroupCallAlive(arg1, arg2, arg3) {
 
 export function KeepRoomCallAlive(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['KeepRoomCallAlive'](arg1, arg2, arg3, arg4);
+}
+
+export function KillSwitchHeld() {
+  return window['go']['main']['App']['KillSwitchHeld']();
+}
+
+export function LastCrash() {
+  return window['go']['main']['App']['LastCrash']();
 }
 
 export function LeaveGroup(arg1) {
@@ -398,6 +550,14 @@ export function ListSavedMessages() {
   return window['go']['main']['App']['ListSavedMessages']();
 }
 
+export function ListScreenSources() {
+  return window['go']['main']['App']['ListScreenSources']();
+}
+
+export function Lock() {
+  return window['go']['main']['App']['Lock']();
+}
+
 export function LogUI(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['LogUI'](arg1, arg2, arg3, arg4);
 }
@@ -412,6 +572,14 @@ export function Logout() {
 
 export function MeasureUploadCapacity() {
   return window['go']['main']['App']['MeasureUploadCapacity']();
+}
+
+export function NativeScreenAvailable() {
+  return window['go']['main']['App']['NativeScreenAvailable']();
+}
+
+export function NativeScreenStats() {
+  return window['go']['main']['App']['NativeScreenStats']();
 }
 
 export function OpenDownloadDir() {
@@ -442,6 +610,10 @@ export function PickAndSendGroupFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['PickAndSendGroupFile'](arg1, arg2, arg3);
 }
 
+export function PinGuard(arg1) {
+  return window['go']['main']['App']['PinGuard'](arg1);
+}
+
 export function ProbeExitNode(arg1) {
   return window['go']['main']['App']['ProbeExitNode'](arg1);
 }
@@ -456,6 +628,14 @@ export function RefreshExitNodes() {
 
 export function Register(arg1, arg2) {
   return window['go']['main']['App']['Register'](arg1, arg2);
+}
+
+export function ReleaseKillSwitch() {
+  return window['go']['main']['App']['ReleaseKillSwitch']();
+}
+
+export function RememberUnlock(arg1, arg2) {
+  return window['go']['main']['App']['RememberUnlock'](arg1, arg2);
 }
 
 export function RemoveBootstrapNode(arg1) {
@@ -482,8 +662,20 @@ export function RotateAccessSecret() {
   return window['go']['main']['App']['RotateAccessSecret']();
 }
 
+export function SaveConnectionReport(arg1) {
+  return window['go']['main']['App']['SaveConnectionReport'](arg1);
+}
+
+export function SaveCrashReport(arg1) {
+  return window['go']['main']['App']['SaveCrashReport'](arg1);
+}
+
 export function SaveMessage(arg1) {
   return window['go']['main']['App']['SaveMessage'](arg1);
+}
+
+export function SaveStreamLog(arg1, arg2) {
+  return window['go']['main']['App']['SaveStreamLog'](arg1, arg2);
 }
 
 export function SaveTextFile(arg1, arg2) {
@@ -522,8 +714,20 @@ export function SetAccessMode(arg1) {
   return window['go']['main']['App']['SetAccessMode'](arg1);
 }
 
+export function SetAnonymity(arg1, arg2) {
+  return window['go']['main']['App']['SetAnonymity'](arg1, arg2);
+}
+
 export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
+}
+
+export function SetAutostart(arg1) {
+  return window['go']['main']['App']['SetAutostart'](arg1);
+}
+
+export function SetCallBackdrop(arg1) {
+  return window['go']['main']['App']['SetCallBackdrop'](arg1);
 }
 
 export function SetContactProfile(arg1, arg2, arg3) {
@@ -550,6 +754,14 @@ export function SetGroupRole(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetGroupRole'](arg1, arg2, arg3);
 }
 
+export function SetGuardMode(arg1) {
+  return window['go']['main']['App']['SetGuardMode'](arg1);
+}
+
+export function SetKillSwitch(arg1) {
+  return window['go']['main']['App']['SetKillSwitch'](arg1);
+}
+
 export function SetPayAsset(arg1) {
   return window['go']['main']['App']['SetPayAsset'](arg1);
 }
@@ -564,6 +776,10 @@ export function SetProbeDomains(arg1) {
 
 export function SetProfileService(arg1) {
   return window['go']['main']['App']['SetProfileService'](arg1);
+}
+
+export function SetProxySettings(arg1, arg2) {
+  return window['go']['main']['App']['SetProxySettings'](arg1, arg2);
 }
 
 export function SetRelaySettings(arg1) {
@@ -606,6 +822,14 @@ export function StartLocalDiscovery(arg1) {
   return window['go']['main']['App']['StartLocalDiscovery'](arg1);
 }
 
+export function StartNativeScreen(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartNativeScreen'](arg1, arg2, arg3, arg4);
+}
+
+export function StartNativeScreenAudio() {
+  return window['go']['main']['App']['StartNativeScreenAudio']();
+}
+
 export function StartNode() {
   return window['go']['main']['App']['StartNode']();
 }
@@ -638,6 +862,14 @@ export function StopDiscovery() {
   return window['go']['main']['App']['StopDiscovery']();
 }
 
+export function StopNativeScreen() {
+  return window['go']['main']['App']['StopNativeScreen']();
+}
+
+export function StopNativeScreenAudio() {
+  return window['go']['main']['App']['StopNativeScreenAudio']();
+}
+
 export function StopScreenShare(arg1) {
   return window['go']['main']['App']['StopScreenShare'](arg1);
 }
@@ -650,8 +882,16 @@ export function StopVPN() {
   return window['go']['main']['App']['StopVPN']();
 }
 
+export function StopVPNForSwitch() {
+  return window['go']['main']['App']['StopVPNForSwitch']();
+}
+
 export function SubmitCallAnswer(arg1) {
   return window['go']['main']['App']['SubmitCallAnswer'](arg1);
+}
+
+export function SwitchCallRelay(arg1) {
+  return window['go']['main']['App']['SwitchCallRelay'](arg1);
 }
 
 export function TakeStartLink() {
@@ -670,12 +910,20 @@ export function UnblockPeer(arg1) {
   return window['go']['main']['App']['UnblockPeer'](arg1);
 }
 
+export function UnpinGuard(arg1) {
+  return window['go']['main']['App']['UnpinGuard'](arg1);
+}
+
 export function UnsaveMessage(arg1) {
   return window['go']['main']['App']['UnsaveMessage'](arg1);
 }
 
 export function UnwatchStream(arg1) {
   return window['go']['main']['App']['UnwatchStream'](arg1);
+}
+
+export function UpdateNativeScreen(arg1) {
+  return window['go']['main']['App']['UpdateNativeScreen'](arg1);
 }
 
 export function UpdateStreamQuality(arg1, arg2) {

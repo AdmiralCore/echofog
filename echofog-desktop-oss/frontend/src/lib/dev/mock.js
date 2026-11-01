@@ -196,17 +196,52 @@ function postGroupFile(groupId, path, channel = '', thread = '') {
   return { ...m };
 }
 
+const anonMock = { mode: 'relay', wallet: false, running: 'relay' };
+
 const qualities = [
-  ['360p30', '360p 30 fps', 640, 360, 30, 800], ['720p30', '720p 30 fps', 1280, 720, 30, 2500], ['720p60', '720p 60 fps', 1280, 720, 60, 4000],
-  ['1080p30', '1080p 30 fps', 1920, 1080, 30, 5000], ['1080p60', '1080p 60 fps', 1920, 1080, 60, 8000], ['1440p60', '1440p 60 fps', 2560, 1440, 60, 14000],
-  ['2160p30', '4K 30 fps', 3840, 2160, 30, 16000], ['2160p60', '4K 60 fps', 3840, 2160, 60, 25000],
-].map(([id, label, width, height, fps, bitrateKbps]) => ({ id, label, width, height, fps, bitrateKbps, codec: 'h264', fits: bitrateKbps <= 10000 }));
+  ['360p30', '360p 30 fps', 640, 360, 30, 1000], ['720p30', '720p 30 fps', 1280, 720, 30, 3000], ['720p60', '720p 60 fps', 1280, 720, 60, 6000],
+  ['1080p30', '1080p 30 fps', 1920, 1080, 30, 7000], ['1080p60', '1080p 60 fps', 1920, 1080, 60, 12000], ['1080p120', '1080p 120 fps', 1920, 1080, 120, 20000],
+  ['1080p144', '1080p 144 fps', 1920, 1080, 144, 24000], ['1440p60', '1440p 60 fps', 2560, 1440, 60, 20000], ['1440p120', '1440p 120 fps', 2560, 1440, 120, 32000],
+  ['1440p144', '1440p 144 fps', 2560, 1440, 144, 38000],
+  ['2160p30', '4K 30 fps', 3840, 2160, 30, 20000], ['2160p60', '4K 60 fps', 3840, 2160, 60, 35000],
+].map(([id, label, width, height, fps, bitrateKbps]) => ({ id, label, width, height, fps, bitrateKbps, codec: 'h264', fits: bitrateKbps <= 25000 }));
 
 // --- fake call core ---------------------------------------------------------------------------------
 const call = { pc: null, members: [], slots: {}, streams: [], painters: [], voices: [], audioCtx: null, timer: null };
+
+// the app's own screen capture: two screens and a few windows; the "Locked" window fails to start,
+// to see the fall back to the webview's capture
+const screenSources = [
+  { id: 'monitor:0', kind: 'monitor', title: 'DISPLAY1', width: 2560, height: 1440, refreshHz: 144, primary: true },
+  { id: 'monitor:1', kind: 'monitor', title: 'DISPLAY2', width: 1920, height: 1080, refreshHz: 60 },
+  { id: 'window:101', kind: 'window', title: 'Elden Ring', app: 'eldenring.exe', width: 2560, height: 1440 },
+  { id: 'window:102', kind: 'window', title: 'echofog – call.service.js', app: 'goland64.exe', width: 1920, height: 1026 },
+  { id: 'window:103', kind: 'window', title: 'Locked', app: 'secure.exe', width: 800, height: 600 },
+  { id: 'window:104', kind: 'window', title: 'YouTube Music', app: 'chrome.exe', width: 219, height: 30, minimized: true },
+];
+let nativeMock = null;
+function mockThumb(id, i) {
+  const c = document.createElement('canvas');
+  c.width = 320; c.height = 180;
+  const g = c.getContext('2d');
+  g.fillStyle = `hsl(${(i * 67) % 360},45%,32%)`; g.fillRect(0, 0, 320, 180);
+  g.fillStyle = 'rgba(255,255,255,.85)'; g.font = '20px sans-serif';
+  g.fillText(screenSources.find((s) => s.id === id)?.title || id, 14, 96);
+  g.fillText(new Date().toLocaleTimeString(), 14, 126);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+function nativeStats() {
+  if (!nativeMock) return { active: false };
+  const s = (Date.now() - nativeMock.at) / 1000;
+  return { active: true, streamId: nativeMock.id, at: Date.now(), captured: Math.floor(s * 138), encoded: Math.floor(s * 119.6), sent: Math.floor(s * 119.5),
+    skipped: Math.floor(s * 0.4), keyframes: 1 + Math.floor(s / 20), bytes: Math.floor(s * 4.1e6), packets: Math.floor(s * 3800), encodeSeconds: s * 119.6 * 0.0042,
+    width: 2560, height: 1440, sourceWidth: 2560, sourceHeight: 1440, bitrateKbps: 32000, encoder: 'NVIDIA H.264 Encoder MFT', adapter: 'NVIDIA GeForce RTX 3070', hardware: true, pacerDelayMs: 1.6 };
+}
 const scenes = {
   'alice-screen': { owner: ALICE, kind: 'screen', title: 'launch-checklist.md' },
   'bob-cam': { owner: BOB, kind: 'camera', title: 'Bob' },
+  // Alice shares her screen and her camera: her camera sits over her screen for the viewer
+  'alice-cam': { owner: ALICE, kind: 'camera', title: 'Alice' },
 };
 
 function painter(canvas) {
@@ -309,21 +344,27 @@ async function joinRoom() {
   return pc.localDescription.sdp;
 }
 
+// the tile backgrounds people chose (Bob's is under his camera)
+const backdrops = { [ALICE]: 'matrix', [BOB]: 'stars', [CAROL]: 'waves', [DAVE]: 'cubes' };
+
 function roster() {
-  return { callId: 'room_demo', self: SELF, coordinator: SELF, members: call.members, streams: call.streams.map((s) => s.streamId) };
+  const chosen = Object.fromEntries(call.members.filter((p) => backdrops[p]).map((p) => [p, backdrops[p]]));
+  return { callId: 'room_demo', self: SELF, coordinator: SELF, members: call.members, streams: call.streams.map((s) => s.streamId), backdrops: chosen };
 }
 
 async function submitAnswer(sdp) {
   await call.pc.setRemoteDescription({ type: 'answer', sdp });
-  call.members = [SELF, ALICE, BOB, CAROL];
+  const others = PAIR ? [ALICE] : [ALICE, BOB, CAROL];
+  call.members = [SELF, ...others];
   emit('call:roster', roster());
-  [ALICE, BOB, CAROL].forEach((peer, i) => {
+  others.forEach((peer, i) => {
     call.slots['a' + i] = { kind: 'audio', peer, streamId: 'voice' };
     emit('call:media_slot', { slot: 'a' + i, kind: 'audio', peer, streamId: 'voice', active: true });
   });
-  setTimeout(() => announce('bob-cam', 'camera', 1280, 720, 30, '720p30'), 600);
+  if (!PAIR) setTimeout(() => announce('bob-cam', 'camera', 1280, 720, 30, '720p30'), 600);
+  setTimeout(() => announce('alice-cam', 'camera', 1280, 720, 30, '720p30'), 1000);
   setTimeout(() => announce('alice-screen', 'screen', 2560, 1440, 60, '1440p60'), 1400);
-  setTimeout(() => {
+  if (!PAIR) setTimeout(() => {
     call.members = [...call.members, DAVE];
     emit('call:roster', roster());
   }, 2500);
@@ -380,6 +421,18 @@ const linkEntryMock = (text) => {
   if (!q.get('a')) throw new Error('the link names no address to reach the node at');
   return q.get('a') + '/' + (q.get('id') || '').toLowerCase();
 };
+// "remember on this computer": ?remembered opens 'demo' without the password (payments then ask the
+// password "demo"); ?remembered=foreign|stale|damaged|failed shows the password screen with that reason
+const rememberMock = (() => {
+  const v = new URLSearchParams(location.search).get('remembered');
+  return { arg: v, enabled: v === '', askPayments: true, gate: false, tried: false };
+})();
+// "start with Windows": ?autostart starts it on; ?autostart=other has Windows start another copy,
+// ?autostart=blocked has it switched off in the Windows startup apps
+const autostartMock = (() => {
+  const v = new URLSearchParams(location.search).get('autostart');
+  return { on: v === '' || v === 'other', other: v === 'other', blocked: v === 'blocked' };
+})();
 const impl = {
   GetProfiles: () => ['demo'],
   AppVersion: () => '0.1.0',
@@ -401,13 +454,118 @@ const impl = {
   GetMyID: () => SELF,
   GetMyPubKey: () => hex(11),
   Logout: () => null,
+  AutoUnlock: () => {
+    const m = rememberMock;
+    const none = { profile: '', unlocked: false, reason: '', error: '' };
+    if (m.tried || m.arg === null) { m.tried = true; return none; }
+    m.tried = true;
+    if (m.arg) return { ...none, profile: 'demo', reason: m.arg, error: m.arg === 'failed' ? 'the database is open in another copy of EchoFog' : '' };
+    m.gate = m.askPayments;
+    return { ...none, profile: 'demo', unlocked: true };
+  },
+  GetRememberedUnlock: () => ({ supported: true, enabled: rememberMock.enabled, askPayments: rememberMock.enabled && rememberMock.askPayments,
+    paymentGate: rememberMock.gate || (rememberMock.enabled && rememberMock.askPayments) }),
+  RememberUnlock: (pw, ask) => { if (pw !== 'demo') throw new Error('wrong app password'); Object.assign(rememberMock, { enabled: true, askPayments: ask, gate: ask }); return null; },
+  ForgetUnlock: () => { rememberMock.enabled = false; return null; },
+  Lock: () => { rememberMock.gate = false; return null; },
+  AuthorizePayment: (pw) => { if (pw !== 'demo') throw new Error('wrong app password'); return null; },
+  // the preview's password stays "demo": a change is only checked, not kept
+  ChangePassword: (old) => new Promise((r, j) => setTimeout(() => (old === 'demo' ? r(null) : j(new Error('wrong app password'))), 700)),
+  GetAutostart: () => ({ supported: true, enabled: autostartMock.on, blocked: autostartMock.blocked,
+    program: autostartMock.on && autostartMock.other ? 'C:\\Users\\demo\\Downloads\\EchoFog-old.exe' : '' }),
+  SetAutostart: (on) => { Object.assign(autostartMock, { on, other: false, blocked: false }); return null; },
   // ?offline: no peers, to see the offline banner and the bootstrap card
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
   // logs: a new line every 0.9 s, levels mixed
   GetLogs: () => logsMock(),
+  ConnectionReport: () => ({
+    version: 'v0.1.0', country: 'UA', provider: 'Kyivstar',
+    text: `EchoFog connection report — no addresses, IDs, links or contacts
+app: v0.1.0  protocol: 102  os: windows/amd64
+country: UA  provider: Kyivstar
+nat: cone  port mapped: no  reachable from outside: no (nomap)
+transport: auto  QUIC (UDP) gets through here: yes
+links: 6 (quic-reality 2, quic 3, tcp 1)
+guard mode: auto, active, 2 of 3 guards up, 1 pinned relay(s)
+proxy: none  calls: auto  access: public  region-aware obfs: no
+vpn: connected, exit ok, tunnel ready  whole computer: no  kill switch: yes  blocked: no
+recent problems (the last 1 warnings and errors, cleaned):
+  12:01:03 WARN guard not reachable err=i/o timeout
+`,
+  }),
+  SaveConnectionReport: () => 'C:/Users/demo/echofog-report-mock.txt',
+  SaveStreamLog: (name) => 'C:/Users/demo/' + name,
+  // ?crash: the last run crashed
+  LastCrash: () => (new URLSearchParams(location.search).has('crash') ? {
+    reason: 'panic: runtime error: invalid memory address or nil pointer dereference',
+    where: 'github.com/echofog/echofog-core/internal/services/call/media.(*Dispatcher).recoverFragments (media/dispatcher.go:412)',
+    text: `panic: runtime error: invalid memory address or nil pointer dereference
+[signal 0xc0000005 code=0x0 addr=0x18 pc=0x7ff6b1c2]
+
+goroutine 112 [running]:
+github.com/echofog/echofog-core/internal/services/call/media.(*Dispatcher).recoverFragments(0x0, {0xc0001, 0x4})
+	media/dispatcher.go:412 +0x52
+created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
+	node/node.go:700 +0x1a5`,
+    version: '0.2.0', os: 'windows/amd64',
+  } : null),
+  ForgetLastCrash: () => {},
+  SaveCrashReport: () => 'C:/Users/demo/echofog-crash-mock.txt',
   GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
+  guardMock: undefined,
+  pinnedMock: [],
+  GetGuardStatus() {
+    this.guardMock ??= 'auto';
+    // ?country=DE: the app is placed in a country that does not censor, so "auto" stands down
+    const country = (new URLSearchParams(location.search).get('country') || 'RU').toUpperCase();
+    const stoodDown = this.guardMock === 'auto' && !this.pinnedMock.length && !['RU', 'BY', 'IR', 'CN'].includes(country);
+    const active = this.guardMock !== 'off' && !stoodDown;
+    const pinnedGuards = active
+      ? this.pinnedMock.map((p) => ({ peerId: p.peerId, addr: p.addr, connected: true, pinned: true }))
+      : [];
+    return {
+      mode: this.guardMock, active, country, stoodDown, wanted: active ? 3 : 0,
+      connected: active ? 2 + pinnedGuards.length : 0,
+      guards: active ? [
+        ...pinnedGuards,
+        { peerId: '5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d', connected: true },
+        { peerId: '98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0', connected: true },
+      ] : [],
+      pinned: this.pinnedMock.map((p) => ({ ...p })),
+    };
+  },
+  SetGuardMode(mode) { this.guardMock = mode; },
+  proxyMock: { proxy: '', callRoute: 'auto', running: '', runningRoute: 'auto', runningCallRoute: 'auto' },
+  GetProxySettings() {
+    const m = this.proxyMock;
+    return { ...m, restart: m.proxy !== m.running || m.callRoute !== (m.runningRoute || 'auto') };
+  },
+  SetProxySettings(proxy, callRoute) {
+    const p = proxy.replace(/^socks5h?:\/\//i, '');
+    if (p && !/^[^:]+:\d+$/.test(p)) throw new Error(`"${p}" is not host:port (for Tor Browser: 127.0.0.1:9150)`);
+    this.proxyMock = { ...this.proxyMock, proxy: p, callRoute };
+  },
+  CheckProxy(addr) {
+    if (addr.endsWith(':9150')) return;
+    throw new Error(`through the proxy ${addr}: dial tcp ${addr}: connectex: No connection could be made because the target machine actively refused it.`);
+  },
+  PinGuard(entry) {
+    const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?(?:\?.*sni=([^&]+))?/i.exec(linkEntryMock(entry));
+    if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
+    if (!m[3]) throw new Error('a pinned relay needs a cover site (sni) so the node can reach it in disguise');
+    const peerId = m[2].toLowerCase();
+    if (this.pinnedMock.some((p) => p.peerId === peerId)) return;
+    this.pinnedMock = [...this.pinnedMock, { peerId, addr: m[1], link: 'echofog://relay/' + m[1] + '/' + peerId, connected: true }];
+  },
+  UnpinGuard(entry) {
+    const m = /([0-9a-f]{64})/i.exec(entry);
+    if (!m) return;
+    const peerId = m[1].toLowerCase();
+    this.pinnedMock = this.pinnedMock.filter((p) => p.peerId !== peerId);
+  },
+
   AddBootstrapNode: (entry) => {
     const m = /^(?:echofog:\/\/relay\/)?(.+:\d+)\/([0-9a-f]{64})\/?$/i.exec(linkEntryMock(entry));
     if (!m) throw new Error('a relay address needs the peer ID at the end: host:port/<64 hex characters>');
@@ -449,7 +607,7 @@ const impl = {
     return null;
   },
   // access: public or hidden, the invitation link, who joined with it
-  GetAccessStatus: () => ({ ...accessMock, link: accessLink(), joined: accessMock.joined.map((j) => ({ ...j })) }),
+  GetAccessStatus: () => ({ ...accessMock, link: accessLink(), webLink: 'https://admiralcore.github.io/echofog/join/#' + accessLink().replace(/^echofog:\/\//, ''), joined: accessMock.joined.map((j) => ({ ...j })) }),
   SetAccessMode: (mode) => {
     if (mode !== 'public' && mode !== 'hidden') throw new Error('access mode must be public or hidden');
     accessMock.nextMode = mode === accessMock.mode ? '' : mode;
@@ -491,7 +649,30 @@ const impl = {
       exit: exit === '' ? undefined : /spotify/.test(target) ? { ok: false, ms: 0, reason: 'the exit could not reach it' } : { ok: true, ms: ms + 60 },
     };
   })), 900)),
-  GetGroupInvite: () => 'fogroup1:demo-invite-0f3a9c1e',
+  GetGroupInvite: () => 'fogroup2:ZGVtby1pbnZpdGUtMGYzYTljMWU',
+  GroupInvites: (gid) => (groupInvites[gid] || []).map((i) => ({ ...i, state: i.revoked ? 'revoked' : i.uses && i.used >= i.uses ? 'used' : 'active', canRevoke: !i.revoked })),
+  GroupInviteCreate: (gid, spec) => {
+    const n = Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32);
+    const link = 'fogroup2:ZGVtby0' + n;
+    const inv = { n, label: spec.label, exp: sec(Date.now()) + spec.hours * 3600, uses: spec.uses, used: 0, role: spec.role, issuer: SELF, mine: true,
+      link, webLink: 'https://admiralcore.github.io/echofog/join/#group/' + link.slice(9) };
+    (groupInvites[gid] = groupInvites[gid] || []).unshift(inv);
+    return { ...inv, state: 'active', canRevoke: true };
+  },
+  GroupTimeout: (_g, id, min) => { const m = groupMembers.find((x) => x.peerId === id); if (m) m.timeout = min ? sec(Date.now()) + min * 60 : 0; modLog.unshift({ ts: Date.now(), actor: SELF, action: min ? 'timeout' : 'timeoutLifted', target: id, until: m?.timeout || 0 }); return null; },
+  GroupModerationLog: () => modLog,
+  GroupJoinRequests: () => joinRequests,
+  GroupJoinDecide: (_g, id, accept) => {
+    const i = joinRequests.findIndex((r) => r.peerId === id);
+    if (i < 0) throw new Error('no such request (somebody may have decided already)');
+    joinRequests.splice(i, 1);
+    if (accept) { groupMembers.push({ peerId: id, role: 'member' }); modLog.unshift({ ts: Date.now(), actor: SELF, action: 'admit', target: id }); }
+    return null;
+  },
+  GroupFileSave: (_g, title, pass) => { if ((pass || '').length < 8) throw new Error('the password needs at least 8 characters'); return 'C:/Users/demo/Documents/' + title + '.fogzip'; },
+  GroupFilePick: () => 'C:/Users/demo/Downloads/Old Friends.fogzip',
+  GroupFileOpen: (_p, pass) => { if (pass !== 'correct horse') throw new Error('not a group file, or the password is wrong'); return { group: groups[1] || groups[0], events: 42 }; },
+  GroupInviteRevoke: (gid, n) => { const i = (groupInvites[gid] || []).find((x) => x.n === n); if (i) i.revoked = true; return null; },
   GetContacts: () => contacts,
   GetPrivacy: () => ({ ...privacyMock.privacy }),
   SetPrivacy: (p) => {
@@ -573,28 +754,77 @@ const impl = {
     groupMsgs.push(m);
     return m;
   },
-  ListGroupMembers: () => {
-    const me = RANKS[groupMembers.find((m) => m.peerId === SELF)?.role] || 0;
+  ListGroupMembers: (gid) => {
+    const defs = groupRoles[gid] || {};
+    const rankOf = (r) => RANKS[r] || defs[r]?.rank || 0;
+    const me = rankOf(groupMembers.find((m) => m.peerId === SELF)?.role);
+    const assignable = ['admin', ...Object.keys(defs), 'moderator', 'member', 'restricted'].sort((a, b) => rankOf(b) - rankOf(a));
     return groupMembers.map((m) => {
       const isMe = m.peerId === SELF;
-      const over = !isMe && (RANKS[m.role] || 0) < 100 && me > (RANKS[m.role] || 0);
-      const roles = over && me >= RANKS.admin ? ['admin', 'moderator', 'member', 'restricted'].filter((r) => RANKS[r] < me || r === m.role) : undefined;
-      return { ...m, isMe, canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100 };
+      const over = !isMe && rankOf(m.role) < 100 && me > rankOf(m.role);
+      const roles = over && me >= RANKS.admin ? assignable.filter((r) => rankOf(r) < me || r === m.role) : undefined;
+      return { ...m, roleTitle: defs[m.role]?.title || '', roleColor: defs[m.role]?.color || 0, isMe, online: isMe || m.peerId.charCodeAt(0) % 2 === 0,
+        canKick: over && me >= RANKS.moderator, canBan: over && me >= RANKS.admin, roles, canTransfer: !isMe && me >= 100,
+        canTimeout: over && me >= RANKS.moderator, timeout: m.timeout && m.timeout > sec(Date.now()) ? m.timeout : 0 };
     });
+  },
+  GroupRoles: (gid) => {
+    const defs = groupRoles[gid] || {};
+    const me = RANKS[groups.find((x) => x.id === gid)?.myRole] || 0;
+    const count = (id) => groupMembers.filter((m) => m.role === id).length;
+    const list = [...BUILTIN_ROLES.map((r) => ({ ...r, title: '', color: 0, ...(defs[r.id] || {}), builtin: true })),
+      ...Object.values(defs).filter((r) => !RANKS[r.id]).map((r) => ({ ...r, builtin: false }))];
+    return list.sort((a, b) => b.rank - a.rank).map((r) => ({ ...r, members: count(r.id), canEdit: me >= RANKS.admin && r.rank < 100 && (me >= 100 || r.rank < me), canRemove: !r.builtin && me >= RANKS.admin }));
+  },
+  GroupRoleSave: (gid, r) => {
+    const defs = (groupRoles[gid] = groupRoles[gid] || {});
+    const id = r.id || 'r-' + Date.now().toString(16).slice(-8);
+    if (!r.builtin && (r.rank < 1 || r.rank >= 100)) throw new Error('you may change only roles below your own, granting only what you may do yourself');
+    defs[id] = { id, title: r.title, color: r.color, rank: RANKS[id] || r.rank, perms: r.perms };
+    return { ...r, id };
+  },
+  GroupRoleRemove: (gid, id) => {
+    delete (groupRoles[gid] || {})[id];
+    groupMembers.forEach((m) => { if (m.role === id) m.role = 'member'; });
+    return null;
+  },
+  ChatMainChannel: (ref) => ({ ...(mainChans[ref.id] || {}), canSend: true }),
+  ChatMainChannelSave: (ref, spec) => { mainChans[ref.id] = { ...(mainChans[ref.id] || {}), name: spec.name, topic: spec.topic, readOnly: spec.readOnly, slowSecs: spec.slowSecs, open: spec.open, overrides: spec.overrides || [] }; return null; },
+  ChatChannelPlace: (ref, id, parent) => {
+    if (id === '') { mainChans[ref.id] = { ...(mainChans[ref.id] || {}), parent }; return null; }
+    const ch = (spaceChans[ref.id] || []).find((x) => x.id === id);
+    if (ch) ch.parent = parent;
+    return null;
+  },
+  ChatCategoriesSetup: (ref, textName, voiceName) => {
+    const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
+    if (list.some((x) => x.category)) throw new Error('the space has categories already');
+    const ids = ['cat-text-' + Date.now().toString(36), 'cat-voice-' + Date.now().toString(36)];
+    list.forEach((x) => { x.parent = x.voice ? ids[1] : ids[0]; });
+    list.push({ id: ids[0], name: textName, category: true, position: 0 }, { id: ids[1], name: voiceName, category: true, position: 1 });
+    mainChans[ref.id] = { ...(mainChans[ref.id] || {}), parent: ids[0] };
+    return ids;
   },
   SetGroupRole: (_g, id, role) => { const m = groupMembers.find((x) => x.peerId === id); if (!m) throw new Error('this person is not in the group'); m.role = role; return null; },
   RemoveGroupMember: (_g, id) => { const i = groupMembers.findIndex((x) => x.peerId === id); if (i < 0) throw new Error('this person is not in the group'); groupMembers.splice(i, 1); return null; },
   AddGroupMember: (_g, key) => { if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error('member key must be 32 bytes of hex'); groupMembers.push({ peerId: hex(40 + groupMembers.length), role: 'member' }); return null; },
   LeaveGroup: () => null,
   TransferGroupOwnership: (_g, id) => { groupMembers.forEach((m) => { if (m.role === 'owner') m.role = 'admin'; }); const t = groupMembers.find((x) => x.peerId === id); t.role = 'owner'; groups[0].myRole = 'admin'; return null; },
-  DeleteGroup: () => { groups.length = 0; return null; },
+  DeleteGroup: (_id, pass) => { if (pass !== 'demo1234') throw new Error('wrong app password'); groups.length = 0; return null; },
+  ChatGroupPhoto: () => null,
+  GroupInviteContacts: (_g, ids) => ids.length,
+  InspectGroupInvite: () => ({ groupId: 'gx', title: 'Design crew', kind: 'group', members: 4, approval: true, exp: Math.floor(Date.now() / 1000) + 6 * 86400 }),
   EndGroupCall: () => null,
   StartGroupCall: () => ({ callId: 'call_group_demo', coordinator: SELF, from: SELF, startedAt: Math.floor(Date.now() / 1000) }),
   ActiveGroupCall: () => null,
   KeepGroupCallAlive: () => null,
   InviteToCall: () => ({ callId: 'call_demo', coordinator: SELF }),
   GetStreamQualities: () => qualities,
+  GetAnonymity: () => ({ mode: anonMock.mode, walletDirect: anonMock.wallet, running: anonMock.running, seenBy: anonMock.running === 'tor' ? 'nobody' : anonMock.running === 'relay' ? 'relay' : 'network', hasProxy: true, hasRelay: true, restart: anonMock.mode !== anonMock.running }),
+  SetAnonymity: (mode, wallet) => { anonMock.mode = mode; anonMock.wallet = wallet; return null; },
+  CallStreamStats: () => { const s = Date.now() / 1000; return { own: false, unitsSent: Math.floor(s * 1100), delivered: Math.floor(s * 1050), lost: Math.floor(s / 3), nacked: Math.floor(s * 2), retransmitted: 0, sendKbps: 11800, videoSent: Math.floor(s * 1100), videoDropped: Math.floor(s / 7), videoFailed: 0, keyframesServed: 4, netDroppedOut: 0, netDroppedIn: Math.floor(s / 5) }; },
   SetUploadCapacity: () => null,
+  SetCallBackdrop: (name) => { backdrops[SELF] = name; if (call.members.length) emit('call:roster', roster()); return null; },
   JoinRoom: () => joinRoom(),
   SubmitCallAnswer: (sdp) => submitAnswer(sdp),
   GetCallRoster: () => roster(),
@@ -609,6 +839,20 @@ const impl = {
     return null;
   },
   StopScreenShare: (id) => { emit('call:stream_closed', { streamId: id }); return null; },
+  NativeScreenAvailable: () => ({ available: !new URLSearchParams(location.search).has('nonative'), reason: 'no hardware H.264 encoder' }),
+  ListScreenSources: () => screenSources,
+  StartNativeScreen: (id, src) => {
+    if (src === 'window:103') throw new Error('capture: CreateForWindow: E_ACCESSDENIED');
+    nativeMock = { id, at: Date.now() };
+    return null;
+  },
+  UpdateNativeScreen: () => null,
+  StopNativeScreen: () => { nativeMock = null; return null; },
+  StartNativeScreenAudio: () => null,
+  StopNativeScreenAudio: () => null,
+  // a thumbnail per source: its name on a color of its own
+  GetScreenPreviews: (ids) => Object.fromEntries((ids || []).map((id, i) => [id, mockThumb(id, i)])),
+  NativeScreenStats: () => nativeStats(),
   UpdateStreamQuality: () => null,
   SetVADState: () => null,
   LeaveRoom: () => leave(),
@@ -620,6 +864,17 @@ const impl = {
     return null;
   },
   RequestRelayChange: () => null,
+  // ?path=cgnat|router|remote|trying|checking|anonymous|proxy|settings|guard|ping|capped|direct: why the
+  // call goes through a relay (the badge on the call stage); &pair: a call of two instead of a group
+  GetCallPath: () => callPath(),
+  GetCallRelays: () => new Promise((r) => setTimeout(() => r(callRelays()), 700)),
+  SwitchCallRelay: (via) => new Promise((resolve, reject) => setTimeout(() => {
+    const list = callRelays().filter((x) => x.connected);
+    const next = via ? list.find((x) => x.peerId === via) : list.find((x) => x.peerId !== pathMock.relay);
+    if (!next) return reject(new Error('no other relay could reach the peer: both sides must be connected to a relay for it to carry a call'));
+    pathMock.relay = next.peerId;
+    resolve(null);
+  }, 800)),
   // ?testnet: the wallet is on the TON testnet, to see the test-coins notice on the money screens
   GetTonWallet: () => ({ address: 'UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', rawAddress: '0:0000…', network: new URLSearchParams(location.search).has('testnet') ? 'testnet' : 'mainnet', topUpLink: 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', frozen: false }),
   GetTonBalance: () => ({ nano: '2483100000', ton: '2.4831', deployed: true, usdRate: 5.42, usdtAvailable: true, usdt: '25.5' }),
@@ -636,7 +891,7 @@ const impl = {
   GetExitPayment: () => ({ ...payMock }),
   SetAutoPay: (on, chunk, cap) => { if (!(Number(chunk) >= 0.01)) throw new Error('enter the top-up amount in USDT, for example 1'); Object.assign(payMock, { autoPay: on, chunkUsdt: String(chunk), dailyCapUsdt: String(cap) }); return null; },
   PayExit: (amt) => new Promise((r) => setTimeout(() => { Object.assign(payMock, { needsPayment: false, pending: true, remainingGb: 20, spentTodayUsdt: String(Number(payMock.spentTodayUsdt) + Number(amt)) }); r('beef...mock'); }, 800)),
-  GetVPNStatus: () => ({ ...vpnMock }),
+  GetVPNStatus: () => ({ ...vpnMock, blocked: vpnMock.wholeComputer && !(vpnMock.running && vpnMock.tunnelReady) }),
   GetVPNHistory: () => {
     const live = vpnMock.running ? [{ peerId: vpnMock.relayPeerId, addr: '203.0.113.7:443', startedAt: sec(Date.now()) - 600, updatedAt: sec(Date.now()), readyMs: 820, bytesRx: vpnMock.bytesRx || 48e6, bytesTx: vpnMock.bytesTx || 3e6, refused: 788, refusedBy: { 'dial failed': 786, 'timed out': 2 }, remaining: 20.7e9, remainingAt: sec(Date.now()), lastState: vpnMock.exitState, pricePerMb: 49, active: true }] : [];
     return [...live, ...historyMock];
@@ -674,6 +929,16 @@ const impl = {
   },
   SetVPNAutoSwitch: (on) => { vpnMock.autoSwitch = on; return null; },
   StopVPN: () => { Object.assign(vpnMock, { running: false, wholeComputer: false, tunnelReady: false }); emit('vpn:stopped', {}); return null; },
+  // ?held: the kill switch holds the traffic after a crash (shown before login too)
+  killHeld: new URLSearchParams(location.search).has('held'),
+  KillSwitchHeld() { return this.killHeld; },
+  ReleaseKillSwitch() { this.killHeld = false; },
+  SetKillSwitch: (on) => { vpnMock.killSwitch = on; },
+  StopVPNForSwitch: () => {
+    Object.assign(vpnMock, { running: false, tunnelReady: false, wholeComputer: vpnMock.killSwitch && vpnMock.wholeComputer });
+    emit('vpn:stopped', {});
+    return null;
+  },
   SetWholeComputer: (on) => new Promise((r) => setTimeout(() => { vpnMock.wholeComputer = on; r(null); }, on ? 1500 : 300)),
   ListExitNodes: () => (MARKET ? marketExits : [
     { peerId: hex(9), pricePerMb: 49, claimedKbps: 50000, measuredKbps: 41000, latencyMs: 38, domainsOk: 3, domainsTried: 3, freeTestKb: 512, probes: 4, successes: 4, score: 0.86, connected: true },
@@ -703,7 +968,7 @@ const impl = {
   GetTonTopUpLink: (a) => 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ' + (a ? `?amount=${Math.round(Number(a) * 1e9)}` : ''),
 };
 
-const groupMembers = [SELF, ALICE, BOB, CAROL, DAVE].map((p) => ({ peerId: p, role: p === SELF ? 'owner' : p === ALICE ? 'admin' : 'member' }));
+const groupMembers = [SELF, ALICE, BOB, CAROL, DAVE].map((p) => ({ peerId: p, role: p === SELF ? 'owner' : p === ALICE ? 'admin' : p === CAROL ? 'helper' : 'member' }));
 const groups = [{ id: 'grp_launch', title: 'EchoFog Launch', kind: 'group', members: 5, myRole: 'owner', readOnly: false, description: 'Release room' }];
 let probeDomains = ['www.google.com:443', 'www.wikipedia.org:443'];
 const settingsMock = { directSocket: false, socketBufferMb: 8 };
@@ -723,6 +988,7 @@ const relayStatus = () => {
     settings: { ...s, allowedPeers: [...s.allowedPeers], relays: [...s.relays] },
     chosen: relayMock.chosen,
     link: addr ? 'echofog://relay/' + addr : '',
+    webLink: addr ? 'https://admiralcore.github.io/echofog/join/#relay/' + addr : '',
     addr,
     nat: natCode === 'symmetric' ? 'symmetric' : 'cone',
     mapped: !natCode,
@@ -740,6 +1006,52 @@ const relayStatus = () => {
     }),
   };
 };
+// how the call reaches the others (GetCallPath): Alice and Carol through a relay, Bob directly,
+// Dave through the others; the relays carry the price their advert asks (micro-USDT per MB)
+const PAIR = new URLSearchParams(location.search).has('pair');
+const pathMock = { relay: hex(12), scenario: new URLSearchParams(location.search).get('path') || 'cgnat' };
+// in the console: __path('router') shows another case without reloading
+window.__path = (scenario) => (pathMock.scenario = scenario);
+const CALL_RELAYS = [
+  { peerId: hex(12), addr: 'relay.example.org:4001', pingMs: 41, mine: true, guard: false },
+  { peerId: hex(13), addr: '203.0.113.24:443', pingMs: 66, mine: false, guard: true },
+  { peerId: hex(14), addr: '198.51.100.9:4001', pingMs: 128, mine: false, guard: false },
+];
+function callRelays() {
+  const known = new Set(CALL_RELAYS.map((r) => r.peerId));
+  const added = relayMock.settings.relays.map((x) => ({ addr: x.slice(0, x.lastIndexOf('/')), peerId: x.slice(x.lastIndexOf('/') + 1) }))
+    .filter((x) => !known.has(x.peerId) && Date.now() > (relayMock.connectedAt[x.peerId] || 0))
+    .map((x) => ({ ...x, pingMs: 57, mine: true, guard: false }));
+  const carrying = pathMock.scenario === 'direct' ? 0 : PAIR ? 1 : 2;
+  return [...CALL_RELAYS, ...added].map((r) => ({ ...r, connected: true, pricePerMb: 0, carrying: r.peerId === pathMock.relay ? carrying : 0 }))
+    .concat([{ peerId: hex(15), addr: '', connected: false, pingMs: 0, pricePerMb: 290, mine: false, guard: false, carrying: 0 },
+      { peerId: hex(16), addr: '', connected: false, pingMs: 0, pricePerMb: 880, mine: false, guard: false, carrying: 0 }]);
+}
+function callPath() {
+  if (!call.members.length) return { inCall: false, members: [] };
+  const PATH = pathMock.scenario;
+  const relay = callRelays().find((r) => r.peerId === pathMock.relay) || CALL_RELAYS[0];
+  const slow = PATH === 'ping' ? 290 : 0;
+  const reason = { ping: 'cgnat', capped: 'cgnat', direct: '' }[PATH] ?? PATH;
+  const links = { [ALICE]: 'relay', [BOB]: 'direct', [CAROL]: 'relay', [DAVE]: 'none' };
+  const theirs = { [ALICE]: 'symmetric', [BOB]: 'open', [CAROL]: 'cone', [DAVE]: '' };
+  const members = call.members.filter((p) => p !== SELF).map((p, i) => {
+    const link = PATH === 'direct' && links[p] === 'relay' ? 'direct' : links[p];
+    const pingMs = link === 'relay' ? slow + relay.pingMs + 7 + i * 4 : 0;
+    return { peer: p, link, relay: link === 'relay' ? relay.peerId : '', relayAddr: link === 'relay' ? relay.addr : '', pingMs, reason: link === 'relay' ? reason : '', theirNat: theirs[p] };
+  });
+  const relayed = members.filter((m) => m.link === 'relay');
+  const pingMs = Math.max(0, ...relayed.map((m) => m.pingMs));
+  const nat = { remote: 'public', router: 'cone', checking: 'unknown' }[PATH] || 'symmetric';
+  const capped = PATH === 'capped' && relayed.length;
+  return {
+    inCall: true, members, relayed: relayed.length, reason: relayed.length ? reason : '', pingMs,
+    hurts: !relayed.length ? '' : pingMs >= 250 ? 'ping' : capped ? 'capped' : '',
+    route: ['anonymous', 'settings', 'proxy'].includes(PATH) ? 'relay' : 'auto',
+    nat, mapped: false, carrierNat: ['cgnat', 'ping', 'capped'].includes(PATH), listenPort: PATH === 'router' ? 41641 : 0,
+    sendKbps: capped ? 3100 : 0, presetKbps: capped ? 8000 : 0,
+  };
+}
 // ?hidden=1 starts the mock as a hidden node with somebody already joined
 const randomSecret = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const accessMock = {
@@ -787,7 +1099,7 @@ const marketExits = [
 ].map(([countryCode, city, pricePerMb, measuredKbps, latencyMs, domainsOk, domainsTried, score], i) => ({
   peerId: hex(60 + i), countryCode, city, pricePerMb, claimedKbps: measuredKbps, measuredKbps, latencyMs, domainsOk, domainsTried, freeTestKb: pricePerMb ? 512 : 0, probes: 6, successes: 6, score, connected: false,
 }));
-const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '' };
+const vpnMock = { running: false, listenAddr: '', relayPeerId: '', activeConns: 3, bytesRx: 48211000, bytesTx: 5120000, tunnelReady: false, tunnelNotice: '', exitState: '', refused: 0, lastRefusalReason: '', lastRefusalHost: '', lastRefusalAt: 0, autoSwitch: true, searching: false, switches: 0, lastSwitch: { from: '', to: '', reason: '', at: 0 }, wholeComputer: false, wholeComputerSupported: true, wholeComputerError: '', killSwitch: true };
 
 // --- conversation log (Chat* methods and conv:change) ---------------------------------------------
 // The preview's chats as the core's log serves them, with a few answers, comments, edits, deletes,
@@ -867,7 +1179,9 @@ function convOf(k, withLast = true) {
     const rank = RANKS[g.myRole] || 0;
     const send = !g.readOnly;
     Object.assign(d, { kind: g.kind === 'channel' ? 'channel' : 'group', name: g.title, title: g.title, role: g.myRole, members: g.members,
-      can: { send, files: send, react: c.upgraded && !!g.myRole, pin: c.upgraded && rank >= RANKS.moderator, manage: rank >= RANKS.admin, invite: true, call: true } });
+      pending: g.pending || '', requests: rank >= RANKS.admin ? joinRequests.length : 0,
+      can: { send, files: send, links: send, threads: true, react: c.upgraded && !!g.myRole, pin: c.upgraded && rank >= RANKS.moderator, manage: rank >= RANKS.admin,
+        channels: rank >= RANKS.admin, roles: rank >= RANKS.admin, invite: true, call: true, stream: true } });
   }
   if (withLast && last) d.last = shown(c, last);
   return d;
@@ -933,7 +1247,7 @@ const reactWith = (m, emoji, ...by) => m.reactions.push({ emoji, by });
   );
   gText('Works for me').replyTo = gText('Great. Let us do').id;
 
-  groups.push({ id: 'grp_old', title: 'Old Friends', kind: 'group', members: 3, myRole: 'member', readOnly: false, description: '' });
+  groups.push({ id: 'grp_old', title: 'Old Friends', kind: 'group', members: 3, myRole: 'member', readOnly: false, description: '', pending: 'approval' });
   clog['g:grp_old'] = {
     ref: { kind: 'group', id: 'grp_old' }, unread: 0, upgraded: false,
     msgs: [
@@ -953,12 +1267,29 @@ const NOT_UPGRADED = 'not every member of this group has updated the app yet';
 const spaceChans = {
   [GROUP]: [
     { id: 'dev', name: 'dev', voice: false, topic: 'builds, bugs, releases', position: 0 },
-    { id: 'design', name: 'design', voice: false, position: 1 },
+    { id: 'design', name: 'design', voice: false, position: 1, slowSecs: 30 },
     { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
     { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
     { id: 'stream', name: 'Stream', voice: true, position: 1 },
   ],
 };
+// the main channel's settings, and the roles a group defined, by group
+const joinRequests = [{ peerId: hex(77), ts: sec(Date.now()) - 600, invite: 'stream viewers' }];
+const modLog = [
+  { ts: Date.now() - 3600e3, actor: ALICE, action: 'delete', target: BOB, message: 'g1', channel: '' },
+  { ts: Date.now() - 7200e3, actor: SELF, action: 'roleDefined', role: 'helper', detail: 'Helper' },
+  { ts: Date.now() - 86400e3, actor: ALICE, action: 'admit', target: CAROL },
+  { ts: Date.now() - 2 * 86400e3, actor: SELF, action: 'roster' },
+];
+const groupInvites = {
+  [GROUP]: [{ n: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', label: 'stream viewers', exp: sec(Date.now()) + 3 * 86400, uses: 25, used: 7, role: '', issuer: ALICE, mine: false }],
+};
+const mainChans = { [GROUP]: { name: '', topic: 'everything else', readOnly: false, slowSecs: 0, open: '' } };
+const BUILTIN_ROLES = [
+  { id: 'owner', rank: 100, perms: 0x7fff }, { id: 'admin', rank: 50, perms: 0x7fff & ~(1 << 8) },
+  { id: 'moderator', rank: 25, perms: 0x3607 | (1 << 4) | (1 << 5) | (1 << 11) }, { id: 'member', rank: 10, perms: 0x3607 }, { id: 'restricted', rank: 1, perms: 1 << 12 },
+];
+const groupRoles = { [GROUP]: { helper: { id: 'helper', title: 'Helper', color: 0x46a758, rank: 30, perms: 0x3607 | (1 << 11) } } };
 (function seedChannels() {
   const k = 'g:' + GROUP;
   const t0 = Date.now() - 40 * 60 * 1000;
@@ -1075,21 +1406,22 @@ Object.assign(impl, {
     const g = groups.find((x) => x.id === ref.id);
     const manager = ['owner', 'admin'].includes(g?.myRole);
     return (spaceChans[ref.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
-      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.readOnly || manager, call: ch.voice ? ch.call : undefined }));
+      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.category && (!ch.readOnly || manager), canJoin: !!ch.voice, call: ch.voice ? ch.call : undefined }));
   },
   ChatChannelSave: (ref, spec) => {
     const g = groups.find((x) => x.id === ref.id);
     if (!['owner', 'admin'].includes(g?.myRole)) throw new Error('not allowed');
     const list = (spaceChans[ref.id] = spaceChans[ref.id] || []);
     const ch = list.find((x) => x.id === spec.id) || { id: spec.id || 'c' + Date.now().toString(36), voice: spec.voice, position: list.length };
-    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly });
+    Object.assign(ch, { name: spec.name, topic: spec.topic || '', readOnly: !!spec.readOnly, parent: spec.parent || '', slowSecs: spec.slowSecs || 0, category: ch.category ?? !!spec.category, overrides: spec.overrides || [] });
     if (!list.includes(ch)) list.push(ch);
     return { ...ch, unread: 0, lastTs: 0 };
   },
   ChatChannelMove: (ref, id, index) => {
     const list = spaceChans[ref.id] || [];
     const ch = list.find((x) => x.id === id);
-    const same = list.filter((x) => x.voice === ch.voice && x.id !== id).sort((a, b) => a.position - b.position);
+    const kind = (x) => (x.category ? 2 : x.voice ? 1 : 0);
+    const same = list.filter((x) => kind(x) === kind(ch) && x.id !== id).sort((a, b) => a.position - b.position);
     same.splice(index, 0, ch);
     same.forEach((x, i) => { x.position = i; });
     return null;
@@ -1125,7 +1457,12 @@ Object.assign(impl, {
     return null;
   },
   LeaveRoomCall: (gid, room) => { const ch = (spaceChans[gid] || []).find((x) => x.id === room); if (ch?.call) ch.call.members = (ch.call.members || []).filter((p) => p !== SELF); return null; },
-  ChatChannelRemove: (ref, id) => { spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id); return null; },
+  ChatChannelRemove: (ref, id) => {
+    spaceChans[ref.id] = (spaceChans[ref.id] || []).filter((x) => x.id !== id);
+    spaceChans[ref.id].forEach((x) => { if (x.parent === id) x.parent = ''; });
+    if (mainChans[ref.id]?.parent === id) mainChans[ref.id].parent = '';
+    return null;
+  },
   StartRoomCall: (gid, room) => {
     const ch = (spaceChans[gid] || []).find((x) => x.id === room);
     if (!ch.call) ch.call = { room, callId: 'call_room_' + room, coordinator: SELF, from: SELF, startedAt: sec(Date.now()), members: [] };
@@ -1164,7 +1501,7 @@ if (BRIDGE) {
     'ChatChannels', 'ChatChannelSave', 'ChatChannelRemove', 'StartRoomCall', 'KeepRoomCallAlive', 'EndRoomCall',
     // calls: the page's WebRTC loopback talks to the node's own media bridge
     'InviteToCall', 'JoinRoom', 'SubmitCallAnswer', 'LeaveRoom', 'GetCallRoster', 'GetCallSlots', 'GetStreamQualities', 'StartStream',
-    'UpdateStreamQuality', 'StopScreenShare', 'WatchStream', 'UnwatchStream', 'SetUploadCapacity', 'SetVADState'];
+    'UpdateStreamQuality', 'StopScreenShare', 'WatchStream', 'UnwatchStream', 'SetUploadCapacity', 'SetVADState', 'SetCallBackdrop'];
   for (const name of BRIDGED) {
     impl[name] = async (...args) => {
       const r = await fetch(`${base}/call/${name}`, { method: 'POST', body: JSON.stringify(args) });

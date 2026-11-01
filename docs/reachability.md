@@ -26,8 +26,34 @@ EchoFog tries, in this order:
 3. **A relay:** if neither works (for example both people are on mobile internet), the call or
    message goes through a relay node that both can reach.
 
-So being unreachable never blocks you from using EchoFog. It only means your computer cannot be
-someone else's relay or public exit.
+So being unreachable does not block you from using EchoFog **as long as a relay is in reach**. It
+means your computer cannot be someone else's relay or public exit.
+
+### When both sides are hard to reach
+
+Hole punching does not pass a **symmetric NAT** (most mobile networks, some home routers), so two
+such people start out **through a relay**: chat messages, group join requests, the group's keys and
+history, and calls all go that way. While a relay carries a peer, the app keeps looking for a
+direct link in the background (at most every two minutes per peer): your LAN address when you both
+sit behind the same router, a dial from both ends, which gets through when the other side's NAT is
+easier, and IPv6 (below). When one works, calls and messages move to it by themselves. Two symmetric
+NATs in different networks without IPv6 stay on the relay. The servers a fresh install joins through may be *signaling only* (they
+help with hole punching but carry nothing); if no relay is connected at all, nothing gets through,
+and the app says so:
+
+- *No way to the recipient right now* on a message (it waits and goes once a relay is there);
+- *No way to them right now* on a call;
+- *No member of the group can be reached yet* on a group you joined.
+
+What helps, best first:
+
+1. **A forwarded port.** With UPnP/NAT-PMP on (or a port forwarded by hand) the router's port is
+   one fixed public address, so a computer behind a symmetric NAT becomes reachable and hole
+   punching works toward it. The app uses a forwarded port by itself.
+2. **A relay in the network:** your own node on a VPS (see [Run a node](run-a-node.md)), a friend's,
+   or any public one. Add it under **Proxy → Relay → Relays you use** if it is private.
+3. **Meanwhile, for a group:** a [group file](groups.md#the-group-file-fogzip) shows its history
+   without any connection.
 
 ## Sharing with your own people without an open port
 
@@ -39,8 +65,9 @@ Step by step: [Hidden and isolated nodes](hidden-nodes.md).
 
 ## Which case are you in
 
-Open **Proxy** and look at the **Relay** card. Set the relay mode to **Public** or **Private** if it
-is off. Under **Your relay link**:
+Open **Proxy** and look at the **Relay** card. **Your relay link** and **Listen port** show only
+when the relay mode is **Public** or **Private**: if it is **Off** or **Signaling only**, switch it
+to one of those. Under **Your relay link**:
 
 - A link `echofog://relay/…` with *"This computer has a public address"* or *"Reachable through the
   port your router forwards"* — you are reachable. Nothing to do.
@@ -66,8 +93,9 @@ port by itself. It retries every 15 minutes, or restart the app to try at once.
 
 ### 2. Forward a port by hand
 
-1. On the **Relay** card, set **Listen port** to a fixed number (with `0` the app picks a new port
-   at every start, so a forward would stop matching). Click **Save port** and restart the app.
+1. On the **Relay** card (relay mode **Public** or **Private**), set **Listen port** to a fixed
+   number (with `0` the app picks a new port at every start, so a forward would stop matching).
+   Click **Save port** and restart the app.
 2. In the router, forward that port — **both UDP and TCP** — to this computer's local address.
 3. Restart the app and check the card again.
 
@@ -82,9 +110,12 @@ starts with `100.64`–`100.127`, `10.`, `172.16`–`172.31` or `192.168.`, you 
 
 ### 4. IPv6 (honest status)
 
-IPv6 usually has no NAT, so in principle it would solve this. Today EchoFog **accepts** IPv6
-connections but does **not yet advertise or prefer** IPv6 addresses, so having IPv6 does not make
-you reachable on its own. It is on the roadmap.
+IPv6 usually has no NAT, so it often gets through where IPv4 does not. EchoFog **accepts** IPv6
+connections and offers this computer's global IPv6 addresses to a peer when the two try a direct
+link (hole punching opens the router's IPv6 firewall the way it opens a cone NAT), so two people who
+both have IPv6 usually get a direct link even behind a carrier's NAT. It does **not yet advertise**
+IPv6 addresses in the DHT, so IPv6 alone does not make you reachable for someone who has never met
+you through a relay or a signaling node.
 
 ### 5. Run a node on a VPS
 

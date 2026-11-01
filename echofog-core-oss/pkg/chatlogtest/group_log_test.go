@@ -57,10 +57,13 @@ func TestGroupChatRunsOnTheLog(t *testing.T) {
 		}
 		return true
 	})
-	// a few plain messages: the members learn each other's version on the way
+	// a few plain messages: the members learn each other's version on the way. A member writes
+	// once it is in on the group's log, as the app does (its composer waits for that too).
 	for _, a := range everybody {
-		_, err := a.SendGroupMessage(g.ID, "hi")
-		require.NoError(t, err)
+		eventually(t, "a member may write", func() bool {
+			_, err := a.SendGroupMessage(g.ID, "hi")
+			return err == nil
+		})
 	}
 	eventually(t, "the group runs on the log for everybody", func() bool {
 		for _, a := range everybody {

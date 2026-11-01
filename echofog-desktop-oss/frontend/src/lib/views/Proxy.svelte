@@ -59,6 +59,7 @@
   async function refresh() {
     try {
       vpn = await App.GetVPNStatus();
+      checkHeld();
       sharing = await App.GetSharingStatus();
       try { accessMode = (await App.GetAccessStatus()).mode; } catch (_) { /* older core */ }
       try { vouchers = await App.GetVoucherEarnings(); } catch (_) { /* older core */ }
@@ -88,7 +89,7 @@
   });
 
   const connectTo = (s) => act('connect', async () => {
-    if (vpn.running) await App.StopVPN();
+    if (vpn.running) await App.StopVPNForSwitch(); // the kill switch keeps the computer blocked meanwhile
     await App.StartVPNVia(exitLink(s));
     await refresh();
   });
@@ -153,6 +154,21 @@
 
   const wholeComputer = () => act('whole', async () => {
     await App.SetWholeComputer(!vpn.wholeComputer);
+    await refresh();
+  });
+
+  const setKillSwitch = (on) => act('kill', async () => {
+    await App.SetKillSwitch(on);
+    await refresh();
+  });
+
+  // the kill switch blocks the computer's traffic: no exit serves us, or EchoFog went away earlier
+  let held = false;
+  const checkHeld = async () => { try { held = await App.KillSwitchHeld(); } catch (_) { held = false; } };
+  const unblock = () => act('unblock', async () => {
+    if (vpn.wholeComputer) await App.SetWholeComputer(false);
+    else await App.ReleaseKillSwitch();
+    await checkHeld();
     await refresh();
   });
 
@@ -326,6 +342,14 @@
     {#if error}<p class="error small">{error}</p>{/if}
     {#if notice}<p class="ok small">{notice}</p>{/if}
 
+    {#if vpn.blocked || (held && !vpn.wholeComputer)}
+      <div class="card row killed" role="alert">
+        <Icon name="lock" size={18} />
+        <span class="grow small">{$t(vpn.blocked ? 'proxy.killBlocked' : 'proxy.killHeld')}</span>
+        <button class="ghost" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
+      </div>
+    {/if}
+
     <div class="card stack conn" class:running={vpn.running} class:ready={vpn.running && vpn.tunnelReady} class:problem={!!exitProblem}>
       <div class="conn-top">
         <button class="power" class:on={vpn.running} on:click={connect}
@@ -376,8 +400,12 @@
             <span class="grow">{$t('proxy.whole')}<span class="small muted block">{$t('proxy.wholeAdmin')}</span></span>
             <input type="checkbox" class="switch" checked={vpn.wholeComputer} disabled={busy === 'whole'} on:change={wholeComputer} />
           </label>
+          <label class="row opt">
+            <span class="grow">{$t('proxy.killSwitch')}<span class="small muted block">{$t('proxy.killSwitchHint')}</span></span>
+            <input type="checkbox" class="switch" checked={vpn.killSwitch} disabled={busy === 'kill'} on:change={(e) => setKillSwitch(e.target.checked)} />
+          </label>
           {#if vpn.wholeComputer}
-            <p class="small leak-warn"><Icon name="shield" size={14} /> {$t('proxy.wholeLeakWarning')}</p>
+            <p class="small leak-warn"><Icon name="shield" size={14} /> {$t(vpn.killSwitch ? 'proxy.killSwitchLimits' : 'proxy.wholeLeakWarning')}</p>
           {/if}
           {#if vpn.wholeComputerError}<p class="small error">{vpn.wholeComputerError}</p>{/if}
         {/if}
@@ -779,4 +807,5 @@
   .live-chip { margin-left: 6px; vertical-align: middle; font-size: 11px; }
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .killed { gap: 10px; align-items: center; border-color: #c98a00; background: color-mix(in srgb, #c98a00 12%, var(--surface)); }
 </style>

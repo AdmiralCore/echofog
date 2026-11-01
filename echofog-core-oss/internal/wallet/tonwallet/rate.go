@@ -69,7 +69,11 @@ func fetchUSDRate(ctx context.Context) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := http.DefaultClient.Do(req)
+	c := client()
+	if c == nil {
+		return 0, errNoHTTP
+	}
+	res, err := c.Do(req)
 	if err != nil {
 		return 0, err
 	}

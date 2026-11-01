@@ -39,7 +39,29 @@ type ClientCircuit struct {
 	lastRecv   atomic.Int64 // unix nanos of the last frame that came in over the circuit
 	lastProbe  atomic.Int64 // unix nanos of the last probe we sent
 	probeSince atomic.Int64 // unix nanos of the first probe still unanswered; 0 when answered
+	pingAt     atomic.Int64 // unix nanos of the last ping we sent, until its pong; 0 when none is out
+	rtt        atomic.Int64 // smoothed round trip to the far end through the relay, nanos; 0 not measured
+	// retired: SwitchCircuit replaced it. It still delivers, but answers no ping, so the far end,
+	// which probes the circuit it sends over, finds it quiet and follows the new one.
+	retired atomic.Bool
 }
+
+// notePong folds in the round trip of the ping a pong answers. The pong carries nothing to match,
+// so it is taken as the answer to the latest ping: two pings in flight make it read a little low.
+func (c *ClientCircuit) notePong(now time.Time) {
+	at := c.pingAt.Swap(0)
+	if at == 0 {
+		return
+	}
+	sample := now.UnixNano() - at
+	if old := c.rtt.Load(); old != 0 {
+		sample = (old*3 + sample) / 4
+	}
+	c.rtt.Store(sample)
+}
+
+// RTT is the smoothed round trip to the far end through the relay, 0 until a ping was answered.
+func (c *ClientCircuit) RTT() time.Duration { return time.Duration(c.rtt.Load()) }
 
 // Liveness of a circuit. A circuit can die without a close reaching us: the far end lost its
 // line, or the relay dropped it while its close notice was lost. Nothing else would ever tell, and
@@ -396,8 +418,9 @@ func (rc *RelayClient) GetMarketStatus() []RelayMarketInfo {
 
 		score := rc.ScoreRelay(price, ping)
 
-		isViable := !isBlacklisted &&
-			(cfg.MaxAcceptablePricePerMB <= 0 || price <= cfg.MaxAcceptablePricePerMB) &&
+		// a relay whose mailbox is full still relays: the mark is about keeping messages for
+		// someone offline, not about circuits, so it does not take the relay off the market
+		isViable := (cfg.MaxAcceptablePricePerMB <= 0 || price <= cfg.MaxAcceptablePricePerMB) &&
 			(cfg.MaxAcceptablePingMs <= 0 || ping <= time.Duration(cfg.MaxAcceptablePingMs)*time.Millisecond)
 
 		if cfg.DailyBudgetLimit > 0 && rc.spentToday.Load() >= cfg.DailyBudgetLimit && price > 0 {
@@ -444,7 +467,7 @@ func (rc *RelayClient) rankedRelays(targetID types.PeerID, offers func(*swarm.Pe
 	var ranked []*swarm.Peer
 	seen := map[types.PeerID]bool{}
 	for _, m := range rc.GetMarketStatus() {
-		if m.PeerID == targetID || m.IsBlacklisted {
+		if m.PeerID == targetID {
 			continue
 		}
 		p := rc.swarm.GetPeer(m.PeerID)
@@ -733,9 +756,12 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	}
 	switch innerMsgType {
 	case net_types.TypePing:
-		_ = rc.sendFrame(circuit, cid, net_types.TypePong, nil)
+		if !circuit.retired.Load() {
+			_ = rc.sendFrame(circuit, cid, net_types.TypePong, nil)
+		}
 		return
 	case net_types.TypePong:
+		circuit.notePong(now)
 		return
 	}
 
@@ -777,6 +803,9 @@ func (rc *RelayClient) followLiveCircuit(cid uint32, c *ClientCircuit, now time.
 		rc.peerToCircuit[c.RemotePeerID] = cid
 	}
 	rc.mu.Unlock()
+	if switched {
+		c.retired.Store(false) // the route again: a circuit SwitchCircuit left, whose successor went quiet
+	}
 	if switched && ok {
 		rc.logger.Debug("RelayClient: following the circuit the peer now uses", "peer", c.RemotePeerID.String()[:8],
 			"circuitID", cid, "previous", cur)
@@ -816,7 +845,12 @@ func (rc *RelayClient) openCircuit(ctx context.Context, relayID types.PeerID, ta
 		return cid, nil
 	}
 	rc.mu.RUnlock()
+	return rc.requestCircuit(ctx, relayID, targetID, signal)
+}
 
+// requestCircuit asks relayID for a new circuit to targetID, whatever circuits exist; once it is
+// granted, it is the route to targetID.
+func (rc *RelayClient) requestCircuit(ctx context.Context, relayID types.PeerID, targetID types.PeerID, signal bool) (uint32, error) {
 	relayPeer := rc.swarm.GetPeer(relayID)
 	if relayPeer == nil {
 		return 0, fmt.Errorf("relay %s not connected", relayID.String()[:8])
@@ -887,6 +921,12 @@ func (rc *RelayClient) sendFrame(circuit *ClientCircuit, circuitID uint32, msgTy
 	frame[4] = byte(msgType)
 	copy(frame[5:], payload)
 
+	if mediaByDatagram(msgType, relayPeer.Caps()) {
+		// a frame too big for a datagram, or a link that cannot carry one, goes by stream below
+		if err := relayPeer.SendRawUnreliable(net_types.TypeCircuitData, frame); err == nil {
+			return nil
+		}
+	}
 	return relayPeer.SendRaw(net_types.TypeCircuitData, frame)
 }
 
@@ -904,7 +944,134 @@ func (rc *RelayClient) probe(c *ClientCircuit, cid uint32, now time.Time) {
 		return
 	}
 	c.probeSince.CompareAndSwap(0, now.UnixNano())
+	c.pingAt.Store(now.UnixNano())
 	_ = rc.sendFrame(c, cid, net_types.TypePing, nil)
+}
+
+// CircuitRoute is what carries the traffic to a peer reached through a relay.
+type CircuitRoute struct {
+	Relay   types.PeerID
+	RTT     time.Duration // round trip to the peer through the relay, 0 not measured yet
+	Created time.Time
+}
+
+// RouteTo is the live circuit that carries traffic to targetID, if there is one.
+func (rc *RelayClient) RouteTo(targetID types.PeerID) (CircuitRoute, bool) {
+	rc.mu.RLock()
+	_, c, ok := rc.routeLocked(targetID, time.Now())
+	rc.mu.RUnlock()
+	if !ok {
+		return CircuitRoute{}, false
+	}
+	return CircuitRoute{Relay: c.RelayPeerID, RTT: c.RTT(), Created: c.CreatedAt}, true
+}
+
+// PingCircuit asks the far end of the circuit to targetID to answer, which measures the round trip
+// through the relay (RouteTo reads it). The far end answers a ping on every version: the probe
+// uses the same pair. At most one ping every circuitProbeEvery.
+func (rc *RelayClient) PingCircuit(targetID types.PeerID) bool {
+	rc.mu.RLock()
+	cid, c, ok := rc.routeLocked(targetID, time.Now())
+	rc.mu.RUnlock()
+	if !ok || c.SignalOnly {
+		return false
+	}
+	now := time.Now()
+	last := c.lastProbe.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < circuitProbeEvery {
+		return false
+	}
+	if !c.lastProbe.CompareAndSwap(last, now.UnixNano()) {
+		return false
+	}
+	c.pingAt.Store(now.UnixNano())
+	return rc.sendFrame(c, cid, net_types.TypePing, nil) == nil
+}
+
+// circuitHandover is how long a circuit replaced by SwitchCircuit stays open: the far end moves
+// to the new one once the old has gone quiet for circuitStaleAfter (see followLiveCircuit).
+const circuitHandover = 6 * time.Second
+
+// ErrNoOtherRelay: no relay other than the current one could carry a circuit to the peer.
+var ErrNoOtherRelay = errors.New("no other relay could reach the peer: both sides must be connected to a relay for it to carry a call")
+
+// SwitchCircuit moves the traffic to targetID onto a circuit through another relay: via when it
+// is given, else the best one that is not carrying it now. The old circuit stays until the new
+// one is up, so a failed switch changes nothing; it is closed a little later. Returns the relay
+// that carries the traffic now.
+func (rc *RelayClient) SwitchCircuit(ctx context.Context, targetID, via types.PeerID) (types.PeerID, error) {
+	rc.mu.RLock()
+	oldID, old, _ := rc.routeLocked(targetID, time.Now())
+	rc.mu.RUnlock()
+	var tries []types.PeerID
+	if via != (types.PeerID{}) {
+		if old != nil && old.RelayPeerID == via {
+			return via, nil
+		}
+		tries = []types.PeerID{via}
+	} else {
+		for _, p := range rc.GetRankedViableRelays(targetID) {
+			if old == nil || p.ID() != old.RelayPeerID {
+				tries = append(tries, p.ID())
+			}
+		}
+	}
+	for _, relay := range tries {
+		openCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err := rc.requestCircuit(openCtx, relay, targetID, false)
+		cancel()
+		if err != nil {
+			rc.logger.Debug("RelayClient: switch: relay did not open a circuit", "target", targetID.String()[:8], "relay", relay.String()[:8], "err", err)
+			continue
+		}
+		rc.logger.Info("RelayClient: moved a peer to another relay", "target", targetID.String()[:8], "relay", relay.String()[:8])
+		if old != nil {
+			old.retired.Store(true)
+			time.AfterFunc(circuitHandover, func() { rc.closeReplaced(oldID, old) })
+		}
+		return relay, nil
+	}
+	return types.PeerID{}, ErrNoOtherRelay
+}
+
+// closeReplaced closes a circuit SwitchCircuit replaced, unless it became the route again.
+func (rc *RelayClient) closeReplaced(cid uint32, c *ClientCircuit) {
+	rc.mu.Lock()
+	cur, ok := rc.circuits[cid]
+	if !ok || cur != c || rc.peerToCircuit[c.RemotePeerID] == cid {
+		rc.mu.Unlock()
+		return
+	}
+	rc.forgetLocked(cid, c)
+	rc.mu.Unlock()
+	if rc.swarm != nil {
+		if relay := rc.swarm.GetPeer(c.RelayPeerID); relay != nil {
+			closePkt := make([]byte, 4)
+			binary.BigEndian.PutUint32(closePkt, cid)
+			_ = relay.SendRaw(net_types.TypeCircuitClose, closePkt)
+		}
+	}
+}
+
+// RelayPrice is what a relay asks per MB in its advert (micro-USDT, 0 free), if it advertised one.
+func (rc *RelayClient) RelayPrice(id types.PeerID) (int64, bool) {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	p, ok := rc.relayPrices[id]
+	return p, ok
+}
+
+// PricedRelays are the relays whose adverts ask a price, connected or not.
+func (rc *RelayClient) PricedRelays() map[types.PeerID]int64 {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	out := map[types.PeerID]int64{}
+	for id, p := range rc.relayPrices {
+		if p > 0 {
+			out[id] = p
+		}
+	}
+	return out
 }
 
 // CircuitTo is the open circuit to targetID, if there is one. A circuit found dead is dropped
@@ -1031,13 +1198,18 @@ func (rc *RelayClient) SendRoutedEnvelope(ctx context.Context, targetID types.Pe
 	allPeers := rc.swarm.GetAllPeers()
 	rc.mu.RLock()
 	now := time.Now()
-	var viablePeers []*swarm.Peer
+	// relays whose mailbox said full go last, not out: one that is connected to the recipient
+	// forwards the message straight on, and only keeping it for later is what it refused
+	var viablePeers, fullPeers []*swarm.Peer
 	for _, p := range allPeers {
 		bUntil, isBlocked := rc.blacklisted[p.ID()]
 		if !isBlocked || now.After(bUntil) {
 			viablePeers = append(viablePeers, p)
+		} else {
+			fullPeers = append(fullPeers, p)
 		}
 	}
+	viablePeers = append(viablePeers, fullPeers...)
 	rc.mu.RUnlock()
 
 	for _, p := range viablePeers {
@@ -1066,7 +1238,9 @@ func (rc *RelayClient) IsFull(relayID types.PeerID) bool {
 	return ok && time.Now().Before(until)
 }
 
-// MarkRelayFull temporarily blacklists a relay node when it sends TypeMailboxFull error.
+// MarkRelayFull notes for a while that a relay's mailbox refused a message (TypeMailboxFull): it
+// is tried last for messages and shown as full, but it still carries circuits and forwards to
+// recipients it is connected to.
 func (rc *RelayClient) MarkRelayFull(relayID types.PeerID) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()

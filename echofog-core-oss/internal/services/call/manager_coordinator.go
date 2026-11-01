@@ -50,10 +50,86 @@ func (m *CallManager) Snapshot() (RoomSnapshot, bool) {
 		Joined:        room.joined,
 		Streams:       room.StreamEngine.ActiveStreams(),
 	}
-	for p := range room.ConnectedPeers {
+	for p, prof := range room.ConnectedPeers {
 		s.Members = append(s.Members, p)
+		if b := tree.CleanBackdrop(prof.Backdrop); b != "" {
+			if s.Backdrops == nil {
+				s.Backdrops = make(map[types.PeerID]string)
+			}
+			s.Backdrops[p] = b
+		}
 	}
 	return s, true
+}
+
+// MemberProfiles are the other members' profiles as this node holds them. On the coordinator they
+// are what each member sent when it joined (declared); on a member they come from the voice tree,
+// where the coordinator marks the members it reaches only through a relay RelayOnly and raises its
+// own fan-out to DefaultCoordinatorFanout when it declared less than 2.
+func (m *CallManager) MemberProfiles() (profiles map[types.PeerID]tree.PeerNodeProfile, coordinator types.PeerID, declared bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room := m.activeRoom
+	if room == nil {
+		return nil, types.PeerID{}, false
+	}
+	profiles = make(map[types.PeerID]tree.PeerNodeProfile, len(room.ConnectedPeers))
+	for id, p := range room.ConnectedPeers {
+		if id != m.selfID {
+			profiles[id] = p
+		}
+	}
+	return profiles, room.Coordinator, room.IsCoordinator
+}
+
+// SetBackdrop picks the animated background the others see on this node's call tile ("" for the
+// plain one). In a call it goes out with the next member heartbeat, or with the manifest when this
+// node coordinates.
+func (m *CallManager) SetBackdrop(backdrop string) {
+	backdrop = tree.CleanBackdrop(backdrop)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	room := m.activeRoom
+	if room == nil {
+		return
+	}
+	room.MyProfile.Backdrop = backdrop
+	if room.IsCoordinator {
+		m.noteBackdropLocked(room, m.selfID, backdrop)
+	}
+}
+
+// noteBackdropLocked (coordinator) keeps the tile backdrop a member's heartbeat carries. The tree
+// stays as it is: the next tick sends the manifest again with the new profiles.
+func (m *CallManager) noteBackdropLocked(room *ActiveRoomState, peer types.PeerID, backdrop string) {
+	backdrop = tree.CleanBackdrop(backdrop)
+	p, ok := room.ConnectedPeers[peer]
+	if !ok || p.Backdrop == backdrop {
+		return
+	}
+	p.Backdrop = backdrop
+	room.ConnectedPeers[peer] = p
+	room.backdropsChanged = true
+}
+
+// refloodBackdropsLocked (coordinator) sends the voice manifest again at the same epoch with the
+// members' current backdrops: nobody moves in the tree, members only learn the new looks.
+func (m *CallManager) refloodBackdropsLocked(room *ActiveRoomState, now time.Time) {
+	old := room.VoiceManifest
+	if old == nil {
+		return
+	}
+	mf := *old
+	mf.Profiles = make(map[types.PeerID]tree.PeerNodeProfile, len(old.Profiles))
+	for id, p := range old.Profiles {
+		if cur, ok := room.ConnectedPeers[id]; ok {
+			p.Backdrop = cur.Backdrop
+		}
+		mf.Profiles[id] = p
+	}
+	mf.Timestamp = now.UnixNano()
+	m.applyVoiceManifestLocked(room, &mf, now)
+	m.floodLocked(room, signaling.ActionTreeManifest, &mf)
 }
 
 func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
@@ -67,6 +143,7 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 		profiles = append(profiles, p)
 	}
 	room.Epoch++
+	room.backdropsChanged = false // the new manifest carries them
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
 	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
 		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
@@ -351,17 +428,30 @@ func (m *CallManager) sendNack(streamID string, lost []media.NackEntry) {
 	m.unlockAndFlush()
 }
 
+// nackUpstreamLocked sends a NACK to the stream's parent twice: as a datagram, which does not wait
+// behind what the path lost, and by stream for a parent that does not take signals as datagrams.
+// The parent serves the first that arrives (each signal has its own MsgID).
 func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string, lost []media.NackEntry) {
 	if up, ok := room.StreamEngine.GetUpstream(streamID, m.selfID); ok {
-		m.sendLocked(room, up, signaling.ActionNack, signaling.NackPayload{StreamID: streamID, Lost: lost})
+		b, err := m.encodeLocked(room, signaling.ActionNack, signaling.NackPayload{StreamID: streamID, Lost: lost})
+		if err != nil {
+			m.warnOnce("encode:nack", "Failed to encode call signal", "action", signaling.ActionNack, "err", err)
+			return
+		}
+		ob := room.Dispatcher.Outbox()
+		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, b) // small and urgent: the audio lane
+		ob.Send(up, media.ClassControl, net_types.TypeCallSignaling, b)
 		return
 	}
 	m.debugOnce("nack-noup:"+streamID, "Lost video units but no parent to ask on this stream", "stream", streamID, "units", len(lost))
 }
 
+// requestKeyframe asks for a keyframe this node needs itself (a loss, or the browser's PLI): not
+// again while the last one is still on its way. Requests children pass up are not held back here;
+// the per-hop interval of requestKeyframeLocked merges those.
 func (m *CallManager) requestKeyframe(streamID string) {
 	m.mu.Lock()
-	if room := m.activeRoom; room != nil {
+	if room := m.activeRoom; room != nil && (room.Dispatcher == nil || room.Dispatcher.WantKeyframe(streamID)) {
 		m.requestKeyframeLocked(room, streamID, time.Now())
 	}
 	m.unlockAndFlush()
@@ -396,9 +486,12 @@ func (m *CallManager) handleKeyframeRequestLocked(room *ActiveRoomState, streamI
 	room.keyframeServed[streamID] = now
 	m.keyframesServed.Add(1)
 	m.debugOnce("kf-serve:"+streamID, "Serving keyframe request for our stream", "stream", streamID, "role", role)
-	br, cb := room.Bridge, m.OnKeyframeRequest
+	br, cb, enc := room.Bridge, m.OnKeyframeRequest, m.encoders[role]
 	m.later(func() {
-		if br != nil {
+		switch {
+		case enc != nil:
+			enc.RequestKeyframe()
+		case br != nil:
 			_ = br.RequestKeyframe(role) // the bridge logs a failure
 		}
 		if cb != nil {
@@ -480,6 +573,11 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	if now.Sub(room.lastReconcile) >= reconcileInterval {
 		room.lastReconcile = now
 		m.reconcileLocked(room)
+	}
+	if room.backdropsChanged && now.Sub(room.lastBackdropFlood) >= backdropFloodInterval {
+		room.backdropsChanged = false
+		room.lastBackdropFlood = now
+		m.refloodBackdropsLocked(room, now)
 	}
 	m.feederWatchdogLocked(room, now)
 }

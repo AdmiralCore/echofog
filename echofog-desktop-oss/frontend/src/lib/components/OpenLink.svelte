@@ -6,7 +6,7 @@
   import { fade, scale } from 'svelte/transition';
   import { App, errText } from '../api.js';
   import { openLink, classifyLink } from '../links.js';
-  import { addContact, joinGroup } from '../stores/chats.js';
+  import { addContact, joinGroup, loadChats, openChat } from '../stores/chats.js';
   import { view } from '../stores/nav.js';
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
@@ -19,9 +19,10 @@
   let done = '';
   let invite = null; // what the core read from an echofog://join link
 
-  $: if ($openLink) start($openLink.text);
-  async function start(initial) {
+  $: if ($openLink) start($openLink.text, $openLink.file);
+  async function start(initial, chosen) {
     text = initial || '';
+    if (chosen) { file = chosen; filePass = ''; }
     name = '';
     error = '';
     done = '';
@@ -46,6 +47,16 @@
     }
   }
   $: if (link?.kind === 'contact' && !name && link.name) name = link.name;
+  let group = null; // what the invitation says about its group
+  $: readGroup(link && link.kind === 'group' ? link.text : '');
+  async function readGroup(s) {
+    group = null;
+    if (!s) return;
+    try {
+      const p = await App.InspectGroupInvite(s);
+      if (link && s === link.text) group = p;
+    } catch (_) { /* an older core: the plain note */ }
+  }
   $: hidden = link?.kind === 'join' && invite?.private;
   // a public node: by address, or the link of one
   $: node = link?.kind === 'node' || (link?.kind === 'join' && invite && !invite.private);
@@ -70,6 +81,24 @@
   const addBootstrap = () => act('boot', () => App.AddBootstrapNode(text.trim()), () => (done = $t('links.bootAdded')));
   const addPerson = () => act('contact', () => addContact(link.key, name.trim()), () => { view.set('chats'); close(); });
   const joinTheGroup = () => act('group', () => joinGroup(text.trim()), () => { view.set('chats'); close(); });
+
+  // a group's file (.fogzip): its invitation and history, sealed with a password told apart
+  let file = '';
+  let filePass = '';
+  async function pickFile() {
+    error = '';
+    try {
+      const p = await App.GroupFilePick();
+      if (p) { file = p; filePass = ''; }
+    } catch (err) { error = errText(err); }
+  }
+  let fileGroup = '';
+  const openFile = () => act('file', async () => {
+    const info = await App.GroupFileOpen(file, filePass);
+    fileGroup = info.group.id;
+    await loadChats();
+  }, async () => { view.set('chats'); close(); file = ''; await openChat('g:' + fileGroup); });
+  const fileName = (p) => p.split(/[\\/]/).pop();
 
   function onKey(e) {
     if (!$openLink) return;
@@ -105,15 +134,15 @@
             <b>{invite?.server || link.kind === 'node' ? $t('links.kind.server') : $t('links.kind.node')}</b>
             <span class="small faint">
               <span class="mono">{short(peerId)}</span>
-              {#if invite?.sni} · {$t('links.cover', { sni: invite.sni })}{/if}
-              {#if invite?.relays} · {$t('links.viaRelay', { n: invite.relays })}{/if}
+              {#if invite?.sni}{' · '}{$t('links.cover', { sni: invite.sni })}{/if}
+              {#if invite?.relays}{' · '}{$t('links.viaRelay', { n: invite.relays })}{/if}
             </span>
           {:else if link.kind === 'contact'}
             <b>{$t('links.kind.contact')}</b>
             <span class="small faint mono">{short(link.key)}</span>
           {:else if link.kind === 'group'}
-            <b>{$t('links.kind.group')}</b>
-            <span class="small faint">{$t('links.groupNote')}</span>
+            <b>{group ? group.title : $t('links.kind.group')}</b>
+            <span class="small faint">{#if group}{$t('chats.invCard.' + group.kind)}{#if group.members}{' · '}{$t('chats.members', { n: group.members })}{/if}{#if group.approval}{' · '}{$t('chats.inv.withApproval')}{/if}{#if group.expired}{' · '}{$t('chats.invCard.expired')}{/if}{:else}{$t('links.groupNote')}{/if}</span>
           {/if}
         </div>
 
@@ -129,10 +158,20 @@
             <input bind:value={name} maxlength="64" placeholder={$t('links.contactName')} on:keydown={(e) => e.key === 'Enter' && name.trim() && addPerson()} />
             <button class="primary" disabled={!!busy || !name.trim()} on:click={addPerson}>{#if busy === 'contact'}<span class="spinner light"></span>{/if}<Icon name="userPlus" size={16} /> {$t('links.addContact')}</button>
           {:else if link.kind === 'group'}
-            <button class="primary" disabled={!!busy} on:click={joinTheGroup}>{#if busy === 'group'}<span class="spinner light"></span>{/if}<Icon name="users" size={16} /> {$t('links.joinGroup')}</button>
+            <button class="primary" disabled={!!busy || group?.expired || group?.joined} on:click={joinTheGroup}>{#if busy === 'group'}<span class="spinner light"></span>{/if}<Icon name="users" size={16} /> {$t('links.joinGroup')}</button>
           {/if}
         </div>
       {/if}
+
+      <div class="file-row">
+        {#if file}
+          <span class="small grow mono clip" title={file}><Icon name="file" size={13} /> {fileName(file)}</span>
+          <input type="password" bind:value={filePass} placeholder={$t('links.filePass')} on:keydown={(e) => e.key === 'Enter' && filePass && openFile()} />
+          <button class="primary" disabled={!!busy || !filePass} on:click={openFile}>{#if busy === 'file'}<span class="spinner light"></span>{/if}{$t('links.fileOpen')}</button>
+        {:else}
+          <button class="ghost small with-icon" on:click={pickFile}><Icon name="folder" size={14} /> {$t('links.filePick')}</button>
+        {/if}
+      </div>
 
       {#if error}<p class="small error">{error}</p>{/if}
       {#if done}<p class="small ok"><Icon name="check" size={14} stroke={2.4} /> {done}</p>{/if}
@@ -154,6 +193,9 @@
   textarea { resize: none; font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.45; word-break: break-all; }
   .what { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--raised); }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .file-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .file-row input { flex: 1; min-width: 140px; }
+  .file-row .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
   .actions button { display: inline-flex; align-items: center; gap: 7px; }
   .actions input { flex: 1; min-width: 160px; }
   .ok { color: var(--ok); display: flex; align-items: center; gap: 6px; margin: 0; }

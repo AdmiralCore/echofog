@@ -73,11 +73,28 @@ Between 20 and 27 October more work landed, part of it after problems found in o
 
 The lab numbers are in [docs/anti-dpi.md](docs/anti-dpi.md#measurements).
 
+Between 28 and 31 October:
+
+- **No kill switch.** Whole-computer mode now has one, on by default: while the tunnel runs, nothing
+  leaves the computer around the exit. It cannot hold if its helper process is killed or Windows
+  removes the adapter; then the normal connection comes back.
+- **TSPU's freeze of TCP after about 16 KB.** Where it applies, a stream now runs over a chain of
+  short TCP connections that each stay under the limit (`anti_dpi.tcp_rotate`, `--tcp-rotate`).
+- **A user's node meshing across the border over noise.** In guard mode (the default) such a node
+  dials across the border only a few camouflaged guards, and two users across the border meet at a
+  camouflaged relay instead of linking directly. The `Join address` now carries the site name and
+  the server role, so a first connection made from it is disguised too.
+- **Showing your address.** The app's own traffic can go through Tor or another SOCKS5 proxy, calls
+  can be kept on relays, and **anonymous mode** makes sure nothing in the app shows the address:
+  through Tor nobody in the network sees it, through your own relay only that relay does. Update
+  checks and location lookups follow the same way or are skipped, and the TON wallet stays offline
+  unless you allow it.
+- **Calls and groups.** Only a participant can claim the lead of a call; media from outside the call,
+  or forged to mute a speaker, is dropped. Joining a private group takes a valid, signed invitation,
+  and a banned member cannot slip messages in dated before the ban.
+
 ## Known limitations (still open)
 
-- **No kill switch in whole-computer mode.** If EchoFog or its helper stops unexpectedly, apps fall
-  back to your normal connection and your real IP can be exposed for a moment. The app shows this
-  warning next to the switch.
 - **The DHT lists public nodes.** Their address and ID are published together, so a censor who
   crawls the DHT can find them and confirm they are EchoFog nodes. The per-node disguise key only
   stops blind scanning. Hidden and isolated nodes are not listed and never tell other nodes their
@@ -88,15 +105,12 @@ The lab numbers are in [docs/anti-dpi.md](docs/anti-dpi.md#measurements).
   (`--obfs off`) a scanner can still learn the node's ID from its TLS certificate, and the relays
   named in a hidden node's link change over time. Links are handed out by people; there is no
   automatic distribution.
-- **Traffic between nodes is not disguised.** Only the path from a client to a camouflage exit
-  looks like HTTP/3 or HTTPS. Links between nodes (DHT, peer exchange, relays) still use the
-  random-looking obfuscation, which GFW-style rules can flag, so a node inside a censoring country
-  can be picked out by them.
-- **Some anti-DPI pieces are not finished.** The defence against TSPU's freeze of TCP connections
-  after about 16 KB has a config switch (`anti_dpi.micro_chunk_tcp`) that does nothing in this
-  build. The `Join address` printed by `echofog-node` does not carry the site name yet, so a first
-  connection made from it goes out undisguised. `echofog-node` cannot change the anti-DPI settings
-  that have no flag. See [docs/anti-dpi.md](docs/anti-dpi.md).
+- **Some traffic between nodes is not disguised.** A client's path to a camouflage node looks like
+  HTTP/3 or HTTPS, and in guard mode a user's node crosses the border only that way. Links between
+  servers, links inside one country, and every link of a node with guard mode off still use the
+  random-looking obfuscation, which GFW-style rules can flag.
+- **Some anti-DPI settings have no flag.** `echofog-node` cannot change them. See
+  [docs/anti-dpi.md](docs/anti-dpi.md).
 - **Payments are new.** The vault contract is on testnet only and unaudited; relays are not paid yet
   (only exits).
 
@@ -117,7 +131,8 @@ What it does **not** protect:
   learn the addresses of public nodes and see that you connect to them. Hidden and isolated nodes
   are not in the DHT, but anyone who gets their invitation link can find and use them.
 - **Your destinations, from the exit.** Like any VPN, the exit you use sees which sites you visit
-  and can see unencrypted traffic. Use HTTPS. The exit may also see your IP address.
+  and can see unencrypted traffic. Use HTTPS. The exit also sees your IP address, unless you go
+  through Tor or use anonymous mode.
 - **Payment metadata on TON.** The blockchain is public. Your vault, your deposits and the vouchers
   an exit collects are visible on-chain and can link your vault to the exits you paid.
 - **A compromised computer.** If someone controls your device, they can read what you read.
@@ -210,11 +225,31 @@ EchoFog — **экспериментальный** проект.
 
 Лабораторные цифры — в [docs/anti-dpi.ru.md](docs/anti-dpi.ru.md#замеры).
 
+С 28 по 31 октября:
+
+- **Не было аварийного отключения (kill switch).** Теперь оно есть в режиме «весь компьютер» и
+  включено по умолчанию: пока работает туннель, мимо выхода с компьютера ничего не уходит. Оно не
+  удержит, если процесс-помощник убьют или Windows удалит адаптер: тогда вернётся обычное соединение.
+- **«Заморозка» TCP ТСПУ примерно после 16 КБ.** Там, где она действует, поток теперь идёт по цепочке
+  коротких TCP-соединений, каждое из которых не доходит до лимита (`anti_dpi.tcp_rotate`,
+  `--tcp-rotate`).
+- **Узел пользователя строил связи через границу со «шумом».** В режиме охраны (по умолчанию) такой
+  узел ходит через границу только к нескольким замаскированным охранным узлам, а два пользователя по
+  разные стороны границы встречаются на замаскированном релее, а не связываются напрямую. `Join
+  address` теперь содержит имя сайта и роль сервера, так что и первое подключение по нему
+  замаскировано.
+- **Раскрытие вашего адреса.** Собственный трафик приложения можно пустить через Tor или другой
+  SOCKS5-прокси, звонки — держать на релеях, а **анонимный режим** следит, чтобы ничто в приложении
+  не показывало адрес: через Tor его не видит никто в сети, через свой релей — только этот релей.
+  Проверка обновлений и определение страны идут тем же путём или пропускаются, а кошелёк TON
+  остаётся офлайн, пока вы не разрешите.
+- **Звонки и группы.** Объявить себя ведущим звонка может только участник; медиа извне звонка или
+  подделанное, чтобы заглушить говорящего, отбрасывается. Вступить в приватную группу можно только с
+  действительным подписанным приглашением, а забаненный участник не может протащить сообщения,
+  датированные до бана.
+
 ### Известные ограничения (пока не решены)
 
-- **Нет аварийного отключения (kill switch) в режиме «весь компьютер».** Если EchoFog или его
-  помощник внезапно остановятся, программы вернутся к обычному соединению, и ваш настоящий IP может
-  на мгновение раскрыться. Приложение предупреждает об этом рядом с переключателем.
 - **DHT публикует публичные ноды.** Их адрес и ID лежат там вместе, так что цензор, который обходит
   DHT, может их найти и убедиться, что это ноды EchoFog. Ключ маскировки, привязанный к ноде,
   защищает только от слепого сканирования. Скрытые и изолированные ноды в DHT не публикуются и
@@ -225,15 +260,12 @@ EchoFog — **экспериментальный** проект.
   `invite --rotate`). С выключенной обфускацией (`--obfs off`) сканер всё ещё может узнать ID ноды
   по её TLS-сертификату, а релеи, указанные в ссылке скрытой ноды, со временем меняются. Ссылки
   раздают люди, автоматической раздачи нет.
-- **Трафик между нодами не замаскирован.** Как HTTP/3 или HTTPS выглядит только путь от клиента до
-  выхода с маскировкой. Связи между нодами (DHT, обмен пирами, релеи) всё ещё идут со старой
-  обфускацией, похожей на случайные байты, а её могут отметить правила в духе GFW, так что ноду
-  внутри страны с цензурой можно вычислить по ним.
-- **Часть защиты от DPI не доделана.** Для защиты от «заморозки» TCP-соединений ТСПУ примерно после
-  16 КБ есть переключатель в конфиге (`anti_dpi.micro_chunk_tcp`), но в этой сборке он ничего не
-  делает. `Join address`, который печатает `echofog-node`, пока не содержит имени сайта, поэтому
-  первое подключение по нему уходит без маскировки. Настройки маскировки, у которых нет флага,
-  `echofog-node` поменять не может. См. [docs/anti-dpi.ru.md](docs/anti-dpi.ru.md).
+- **Часть трафика между нодами не замаскирована.** Путь клиента до ноды с маскировкой выглядит как
+  HTTP/3 или HTTPS, и в режиме охраны узел пользователя пересекает границу только так. Связи между
+  серверами, связи внутри одной страны и все связи узла с выключенным режимом охраны всё ещё идут со
+  старой обфускацией, похожей на случайные байты, а её могут отметить правила в духе GFW.
+- **У части настроек маскировки нет флага.** `echofog-node` поменять их не может. См.
+  [docs/anti-dpi.ru.md](docs/anti-dpi.ru.md).
 - **Платежи совсем новые.** Контракт-хранилище работает только в тестовой сети и не проходил аудит;
   релеям пока не платят (только выходным узлам).
 
@@ -255,8 +287,8 @@ EchoFog — **экспериментальный** проект.
   может узнать адреса публичных нод и увидеть, что вы к ним подключаетесь. Скрытых и изолированных
   нод в DHT нет, но любой, к кому попала их ссылка-приглашение, может их найти и ими пользоваться.
 - **Куда вы ходите — от выходного узла.** Как и любой VPN, выходной узел видит, какие сайты вы
-  открываете, и может видеть незашифрованный трафик. Пользуйтесь HTTPS. Выходной узел может видеть и
-  ваш IP-адрес.
+  открываете, и может видеть незашифрованный трафик. Пользуйтесь HTTPS. Выходной узел видит и ваш
+  IP-адрес, если вы не идёте через Tor и не включили анонимный режим.
 - **Метаданные платежей в TON.** Блокчейн публичный. Ваше хранилище, депозиты и чеки, которые
   собирает выходной узел, видны в сети и могут связать ваше хранилище с узлами, которым вы платили.
 - **Взломанный компьютер.** Если кто-то управляет вашим устройством, он прочитает всё, что читаете

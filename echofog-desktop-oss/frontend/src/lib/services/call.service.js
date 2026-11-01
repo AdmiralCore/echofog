@@ -18,11 +18,13 @@ function savePrefs(p) {
 //   then 16 audio  one playback track per remote speaker        (slots a0..a15)
 //   then 4 video   one playback track per watched stream        (slots v0..v3)
 //   then 4 audio   the sound of each watched stream             (slots s0..s3)
+//   then 1 video   our own screen as viewers get it, when the app captures it itself (slot p0)
 const LOCAL = { mic: 0, camera: 1, screen: 2, screenAudio: 3 };
 const LOCAL_LINES = 4;
 const AUDIO_SLOTS = 16;
 const VIDEO_SLOTS = 4;
 const STREAM_AUDIO_SLOTS = 4;
+const PREVIEW_SLOTS = 1;
 // Screen sound is music and films, not speech: stereo and a bitrate Opus sounds clean at.
 const SCREEN_AUDIO_KBPS = 160;
 const SPEAKING_LEVEL = 0.035;
@@ -66,6 +68,21 @@ function freshState(prev = {}) {
     micDeviceId: prev.micDeviceId ?? loadPrefs().mic ?? '',
     camDeviceId: prev.camDeviceId ?? loadPrefs().cam ?? '',
     outDeviceId: prev.outDeviceId ?? loadPrefs().out ?? '',
+    // what a shared screen keeps when the encoder is short of time or bitrate: 'motion' its frame
+    // rate (games, films), 'detail' its sharpness (text, slides)
+    screenMode: prev.screenMode || loadPrefs().screenMode || 'motion',
+    // how a screen is captured: 'native' by the app itself on the GPU (Windows; up to the screen's
+    // refresh rate), 'webview' by the webview and its picker (slower). Remembered under a new key:
+    // the first builds chose the webview for its sound, which the app's own capture now has too.
+    screenCapture: prev.screenCapture || loadPrefs().screenCaptureMode || 'native',
+    nativeScreen: prev.nativeScreen || { available: false, reason: '' },
+    screenNative: false,   // our shared screen goes through the app's own capture
+    screenSound: prev.screenSound ?? loadPrefs().screenSound ?? true, // the app's own capture shares the computer's sound
+    screenSource: null,    // { kind, title, app } of it
+    sourcePicker: null,    // { sources } while the user picks what to share
+    // where a broadcaster's camera sits over their screen, for us: shape, place as fractions of the
+    // free room, width as a fraction of the tile, or hidden
+    pip: prev.pip || { shape: 'circle', x: 1, y: 1, w: 0.2, hidden: false, ...loadPrefs().pip },
     notice: null,
   };
 }
@@ -140,6 +157,7 @@ class CallService {
       callState.update((s) => ({ ...s, inCall: true, connecting: false }));
       this.refreshDevices();
       this.loadQualities();
+      this.checkNativeScreen();
       this.syncFromCore();
       return true;
     } catch (err) {
@@ -156,6 +174,7 @@ class CallService {
     this.levelTimer = null;
     clearInterval(this.statsTimer);
     this.statsTimer = null;
+    this.stopScreenPcm();
     if (this.pc) {
       await this.logStats('at leaving').catch(() => {});
       log.info('call', 'leaving the call', { callId: get(callState).callId });
@@ -193,6 +212,11 @@ class CallService {
       // network VAD is a fallback for peers whose audio we do not play (e.g. deafened)
       if (!get(callState).isDeafened) return;
       callState.update((s) => ({ ...s, speaking: { ...s.speaking, [speaker]: speaking || undefined } }));
+    });
+    EventsOn('screen:native_ended', ({ streamId, reason } = {}) => {
+      if (!streamId || get(callState).screenStreamId !== streamId) return;
+      log.warn('screen', "the app's own screen capture ended by itself", { streamId, reason });
+      this.stopScreenShare().then(() => this.notify(/closed/.test(reason || '') ? tr('call.notice.sharedWindowClosed') : tr('call.notice.nativeEnded')));
     });
     EventsOn('call:kicked', () => {
       log.warn('call', 'removed from the call by the room');
@@ -264,6 +288,8 @@ class CallService {
     if (idx >= LOCAL_LINES && idx < v0) return 'a' + (idx - LOCAL_LINES);
     if (idx >= v0 && idx < s0) return 'v' + (idx - v0);
     if (idx >= s0 && idx < s0 + STREAM_AUDIO_SLOTS) return 's' + (idx - s0);
+    const p0 = s0 + STREAM_AUDIO_SLOTS;
+    if (idx >= p0 && idx < p0 + PREVIEW_SLOTS) return 'p' + (idx - p0);
     return '';
   }
 
@@ -276,6 +302,7 @@ class CallService {
     // tracks end by themselves while in the call only when the bridge drops them; leaving ends all
     ev.track.onended = () => { if (this.pc) log.info('call', 'remote track ended', { slot, kind: ev.track.kind }); };
     const stream = ev.streams?.[0] || new MediaStream([ev.track]);
+    if (ev.track.kind === 'video' && !slot.startsWith('p')) smoothPlayout(ev.receiver); // our own preview goes at once
     if (ev.track.kind === 'audio') {
       this.attachAudio(slot, stream);
     } else {
@@ -509,12 +536,83 @@ class CallService {
     return this.startScreenShare(qualityId);
   }
 
+  /** Whether the app's own capture can be used here, and why not (for the quality menu). */
+  async checkNativeScreen() {
+    try {
+      const info = await app().NativeScreenAvailable?.();
+      if (!info) return;
+      callState.update((s) => ({ ...s, nativeScreen: { available: !!info.available, reason: info.reason || '' } }));
+      if (!info.available) log.info('screen', "the app's own screen capture is not available, the webview shares screens", { reason: info.reason });
+    } catch (e) { log.warn('screen', "could not ask whether the app's own capture works", errAttrs(e)); }
+  }
+
+  /** 'native' or 'webview': how the next screen is captured; remembered. */
+  setScreenCapture(mode) {
+    mode = mode === 'webview' ? 'webview' : 'native';
+    callState.update((s) => ({ ...s, screenCapture: mode }));
+    savePrefs({ screenCaptureMode: mode });
+  }
+
+  /** Whether the app's own capture shares the computer's sound with the screen; remembered. */
+  setScreenSound(on) {
+    callState.update((s) => ({ ...s, screenSound: !!on }));
+    savePrefs({ screenSound: !!on });
+  }
+
+  /** Moves, resizes, reshapes or hides the camera over a screen; save remembers it. */
+  setPip(patch, save = true) {
+    callState.update((s) => ({ ...s, pip: { ...s.pip, ...patch } }));
+    if (save) savePrefs({ pip: get(callState).pip });
+  }
+
+  /** Live thumbnails of the sources the picker shows (JPEG data URLs by ID); [] ends them. */
+  async screenPreviews(ids) {
+    try { return (await app().GetScreenPreviews?.(ids)) || {}; } catch (_) { return {}; }
+  }
+
+  /** Opens the list of monitors and windows; resolves to the chosen one, or null. */
+  async pickSource() {
+    let sources = [];
+    try { sources = (await app().ListScreenSources?.()) || []; } catch (e) { log.warn('screen', 'could not list screens and windows', errAttrs(e)); }
+    this.resolvePick?.(null);
+    return new Promise((resolve) => {
+      this.resolvePick = resolve;
+      callState.update((s) => ({ ...s, sourcePicker: { sources } }));
+    });
+  }
+
+  async refreshSources() {
+    if (!get(callState).sourcePicker) return;
+    try {
+      const sources = (await app().ListScreenSources?.()) || [];
+      callState.update((s) => (s.sourcePicker ? { ...s, sourcePicker: { sources } } : s));
+    } catch (_) { /* keep the list shown */ }
+  }
+
+  /** The picker's answer: a source, or null when it was closed. */
+  pickedSource(source) {
+    const resolve = this.resolvePick;
+    this.resolvePick = null;
+    callState.update((s) => ({ ...s, sourcePicker: null }));
+    resolve?.(source || null);
+  }
+
   async startScreenShare(qualityId = null) {
     if (!this.pc) return;
     const q = this.quality(qualityId || get(callState).selectedQualityId);
     const streamId = 'screen_' + Date.now();
+    const st = get(callState);
+    let source = null;
+    if (st.nativeScreen.available && st.screenCapture === 'native') {
+      source = await this.pickSource();
+      if (!source) {
+        log.info('screen', 'screen picker closed without choosing', { streamId });
+        return;
+      }
+      if (source.webview) source = null; // the webview's own picker, for a screen with its sound
+    }
     callState.update((s) => ({ ...s, streamError: null }));
-    log.info('screen', 'starting to share the screen', { streamId, quality: q.id });
+    log.info('screen', 'starting to share the screen', { streamId, quality: q.id, capture: source ? 'native' : 'webview' });
     try {
       await app().StartStream(streamId, 'screen', q.id); // the core checks upload capacity first
     } catch (err) {
@@ -522,6 +620,76 @@ class CallService {
       callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
       return;
     }
+    if (source) {
+      try {
+        await app().StartNativeScreen(streamId, source.id, q.id, true);
+        const sound = get(callState).screenSound ? await this.startNativeSound(streamId) : false;
+        log.info('screen', "sharing the screen with the app's own capture", { streamId, kind: source.kind, width: source.width, height: source.height, fps: q.fps, sound });
+        callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id, screenAudio: sound,
+          screenNative: true, screenSource: { kind: source.kind, title: source.title, app: source.app || '' } }));
+        return;
+      } catch (err) {
+        // the webview's capture is slower but works wherever the webview does
+        log.warn('screen', "the app's own capture did not start, the webview shares the screen instead", errAttrs(err, { streamId }));
+        this.notify(tr('call.notice.nativeFailed'));
+      }
+    }
+    await this.shareViaWebview(streamId, q);
+  }
+
+  /** The computer's sound for a screen the app captures: Go sends it as PCM, a worklet plays it
+   *  into the screen-sound track, and the webview encodes that as it does a captured tab's. */
+  async startNativeSound(streamId) {
+    try {
+      const ctx = this.ensureAudioContext();
+      if (!this.pcmModule) {
+        const url = URL.createObjectURL(new Blob([PCM_PLAYER], { type: 'text/javascript' }));
+        this.pcmModule = ctx.audioWorklet.addModule(url);
+      }
+      await this.pcmModule;
+      this.stopScreenPcm();
+      const node = new AudioWorkletNode(ctx, 'echofog-pcm', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      const dest = ctx.createMediaStreamDestination();
+      dest.channelCount = 2;
+      node.connect(dest);
+      this.pcm = { node, dest, off: EventsOn('screen:pcm', (b64) => this.onPcm(b64)) };
+      await app().StartNativeScreenAudio();
+      const track = dest.stream.getAudioTracks()[0];
+      track.contentHint = 'music';
+      await this.tx.screenAudio?.sender.replaceTrack(track);
+      await applyAudioBitrate(this.tx.screenAudio?.sender, SCREEN_AUDIO_KBPS);
+      return true;
+    } catch (err) {
+      log.warn('screen', "the screen's sound could not be captured, the screen goes without it", errAttrs(err, { streamId }));
+      this.stopScreenPcm();
+      this.notify(tr('call.notice.nativeNoSound'));
+      return false;
+    }
+  }
+
+  onPcm(b64) {
+    const p = this.pcm;
+    if (!p || typeof b64 !== 'string') return;
+    const bin = atob(b64);
+    const n = bin.length >> 1;
+    const f = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+      f[i] = (v >= 0x8000 ? v - 0x10000 : v) / 32768;
+    }
+    p.node.port.postMessage(f, [f.buffer]);
+  }
+
+  stopScreenPcm() {
+    const p = this.pcm;
+    this.pcm = null;
+    if (!p) return;
+    p.off?.();
+    try { p.node.disconnect(); } catch (_) { /* gone */ }
+    p.dest.stream.getTracks().forEach((t) => t.stop());
+  }
+
+  async shareViaWebview(streamId, q) {
     // System audio carries the call itself: the voices this app plays would go back to the
     // viewers, who would hear everyone twice. restrictOwnAudio leaves out what this app plays;
     // where the webview cannot do that, echo cancelling takes the call out of the screen's sound
@@ -550,7 +718,8 @@ class CallService {
       return;
     }
     const track = this.screen.getVideoTracks()[0];
-    track.contentHint = 'detail'; // screens carry text: keep it sharp, drop frames first
+    const mode = get(callState).screenMode;
+    track.contentHint = mode === 'detail' ? 'detail' : 'motion';
     track.onended = () => {
       log.info('screen', 'screen capture ended (stopped from the system bar or the window closed)', { streamId });
       this.stopScreenShare();
@@ -563,7 +732,7 @@ class CallService {
       callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
       return;
     }
-    await applySenderQuality(this.tx.screen.sender, q, true);
+    await applySenderQuality(this.tx.screen.sender, q, mode);
     const vs = track.getSettings?.() || {};
     const sound = this.screen.getAudioTracks()[0] || null;
     let soundGuard = 'none';
@@ -581,7 +750,7 @@ class CallService {
       this.notify(tr('call.notice.noScreenAudio'));
     }
     log.info('screen', 'sharing the screen', {
-      streamId, surface: vs.displaySurface, width: vs.width, height: vs.height, fps: vs.frameRate,
+      streamId, surface: vs.displaySurface, width: vs.width, height: vs.height, fps: vs.frameRate, mode,
       sound: !!sound, soundGuard, ...(sound ? audioSettings(sound) : {}),
     });
     videoStreams.update((v) => ({ ...v, 'local:screen': this.screen }));
@@ -590,6 +759,10 @@ class CallService {
 
   async stopScreenShare() {
     const id = get(callState).screenStreamId;
+    if (get(callState).screenNative) {
+      this.stopScreenPcm();
+      await safeCall('StopNativeScreen');
+    }
     this.screen?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     this.screen = null;
     try { await this.tx?.screen.sender.replaceTrack(null); } catch (_) { /* closed */ }
@@ -600,7 +773,7 @@ class CallService {
     }
     videoStreams.update((v) => { const n = { ...v }; delete n['local:screen']; return n; });
     callState.update((s) => ({ ...s, isScreenSharing: false, screenAudio: false, screenStreamId: null, streamQualityId: null, streamError: null,
-      focusedStreamId: s.focusedStreamId === id ? null : s.focusedStreamId }));
+      screenNative: false, screenSource: null, focusedStreamId: s.focusedStreamId === id ? null : s.focusedStreamId }));
   }
 
   async setStreamQuality(qualityId) {
@@ -615,15 +788,74 @@ class CallService {
       callState.update((c) => ({ ...c, streamError: String(err?.message || err) }));
       return;
     }
+    if (s.screenNative) {
+      // a new size or frame rate needs a new encoder: the capture restarts with it
+      try {
+        await app().UpdateNativeScreen(q.id);
+        log.info('screen', 'stream quality changed', { streamId: s.screenStreamId, quality: q.id, capture: 'native' });
+        callState.update((c) => ({ ...c, streamQualityId: q.id, streamError: null }));
+      } catch (err) {
+        log.warn('screen', "the app's own capture did not restart at the new quality", errAttrs(err, { quality: q.id }));
+        await this.stopScreenShare();
+        callState.update((c) => ({ ...c, streamError: String(err?.message || err) }));
+      }
+      return;
+    }
     const track = this.screen?.getVideoTracks()[0];
+    const mode = get(callState).screenMode;
     if (track) {
-      track.contentHint = 'detail';
+      track.contentHint = mode === 'detail' ? 'detail' : 'motion';
       await track.applyConstraints({ width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } })
         .catch((e) => log.warn('screen', 'the capture did not take the new size or frame rate', errAttrs(e, { quality: q.id })));
       log.info('screen', 'stream quality changed', { streamId: s.screenStreamId, quality: q.id });
     }
-    await applySenderQuality(this.tx.screen.sender, q, true);
+    await applySenderQuality(this.tx.screen.sender, q, mode);
     callState.update((c) => ({ ...c, streamQualityId: q.id, streamError: null }));
+  }
+
+  /** What a shared screen keeps under pressure: 'motion' (smooth) or 'detail' (sharp); applied at
+   *  once to a screen being shared, and remembered. */
+  async setScreenMode(mode) {
+    mode = mode === 'detail' ? 'detail' : 'motion';
+    callState.update((s) => ({ ...s, screenMode: mode }));
+    savePrefs({ screenMode: mode });
+    const s = get(callState);
+    const track = this.screen?.getVideoTracks()[0];
+    if (!s.isScreenSharing || !track) return;
+    track.contentHint = mode === 'detail' ? 'detail' : 'motion';
+    await applySenderQuality(this.tx.screen.sender, this.quality(s.streamQualityId), mode);
+    log.info('screen', 'screen mode changed', { streamId: s.screenStreamId, mode });
+  }
+
+  /** How our shared screen is encoded now: { encoder, hardware, width, height, fps, kbps, limit }
+   *  from the browser's own stats; null when nothing is sent. */
+  async screenEncoderInfo() {
+    if (get(callState).screenNative) {
+      const st = await app().NativeScreenStats?.();
+      if (!st?.active) return null;
+      const before = this.prevNativeStats;
+      this.prevNativeStats = st;
+      const dt = before ? (st.at - before.at) / 1000 : 0;
+      const per = (k) => (dt > 0 ? Math.max(0, Math.round((st[k] - before[k]) / dt)) : 0);
+      return { encoder: st.encoder, hardware: st.hardware, width: st.width, height: st.height, fps: per('sent'),
+        kbps: dt > 0 ? Math.round(((st.bytes - before.bytes) * 8) / dt / 1000) : 0, limit: '' };
+    }
+    const sender = this.tx?.screen?.sender;
+    if (!sender || !this.screen) return null;
+    const report = await sender.getStats();
+    let info = null;
+    report.forEach((r) => {
+      if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
+      const before = this.prevEncoderStats;
+      info = {
+        encoder: r.encoderImplementation || '',
+        hardware: r.powerEfficientEncoder === true ? true : r.powerEfficientEncoder === false ? false : null,
+        width: r.frameWidth || 0, height: r.frameHeight || 0, fps: Math.round(r.framesPerSecond || 0),
+        kbps: rateKbps(r, before), limit: r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '',
+      };
+      this.prevEncoderStats = r;
+    });
+    return info;
   }
 
   async toggleCamera() {
@@ -730,10 +962,61 @@ class CallService {
 
   /** Remote video MediaStream of a stream, or the local preview of our own. */
   streamFor(streamId, $state, $videos) {
+    if (streamId && streamId === $state.screenStreamId && $state.screenNative) {
+      // the app's own capture: our screen as viewers get it, on the preview track
+      const p = Object.keys($state.slots).find((k) => $state.slots[k].kind === 'preview' && $state.slots[k].streamId === streamId);
+      return p ? $videos[p] || null : null;
+    }
     if (streamId && streamId === $state.screenStreamId) return $videos['local:screen'] || null;
     if (streamId && streamId === $state.cameraStreamId) return $videos['local:camera'] || null;
     const slot = Object.keys($state.slots).find((k) => $state.slots[k].kind === 'video' && $state.slots[k].streamId === streamId);
     return slot ? $videos[slot] || null : null;
+  }
+
+  /** Raw totals of one stream for its stats overlay: the browser's side (capture, encoder or
+   *  decoder) and the node's (packets sent, delivered, lost, dropped). The overlay diffs two of
+   *  them for rates. own: our screen or camera; else the stream we watch, shown by media. */
+  async tileStats(streamId, media, own) {
+    const out = { at: performance.now(), own, browser: null, node: null };
+    try {
+      let report = null;
+      const st = get(callState);
+      if (own && streamId === st.screenStreamId && st.screenNative) {
+        // the app's own capture: its totals in the shape of the browser's
+        const n = await app().NativeScreenStats?.();
+        if (n?.active) {
+          out.browser = { captured: n.captured, encoded: n.encoded, frames: n.sent, dropped: n.skipped, bytes: n.bytes, packets: n.packets,
+            width: n.width, height: n.height, codecTime: n.encodeSeconds, impl: n.encoder, hw: n.hardware, limit: '' };
+        }
+      } else if (own) {
+        const tx = streamId === get(callState).cameraStreamId ? this.tx?.camera : this.tx?.screen;
+        report = tx ? await tx.sender.getStats() : null;
+      } else {
+        const track = media?.getVideoTracks?.()[0];
+        const rx = track && this.pc?.getReceivers().find((r) => r.track === track);
+        report = rx ? await rx.getStats() : null;
+      }
+      const b = out.browser || {};
+      report?.forEach((r) => {
+        if (r.kind && r.kind !== 'video') return;
+        if (r.type === 'media-source') b.captureFps = r.framesPerSecond || 0;
+        if (r.type === 'outbound-rtp' || r.type === 'inbound-rtp') Object.assign(b, {
+          fps: r.framesPerSecond || 0, width: r.frameWidth || 0, height: r.frameHeight || 0,
+          bytes: r.bytesSent ?? r.bytesReceived ?? 0, frames: r.framesSent ?? r.framesReceived ?? 0,
+          encoded: r.framesEncoded || 0, decoded: r.framesDecoded || 0, dropped: r.framesDropped || 0,
+          packets: r.packetsSent ?? r.packetsReceived ?? 0, lost: r.packetsLost || 0,
+          freezes: r.freezeCount || 0, freezeSec: r.totalFreezesDuration || 0, pli: r.pliCount || 0, nack: r.nackCount || 0,
+          codecTime: r.totalEncodeTime ?? r.totalDecodeTime ?? 0,
+          jbDelay: r.jitterBufferDelay || 0, jbCount: r.jitterBufferEmittedCount || 0,
+          impl: r.encoderImplementation || r.decoderImplementation || '',
+          hw: r.powerEfficientEncoder ?? r.powerEfficientDecoder ?? null,
+          limit: r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '',
+        });
+      });
+      out.browser = b;
+    } catch (_) { /* the call is closing */ }
+    try { out.node = await app().CallStreamStats?.(streamId); } catch (_) { /* an older core, or no call */ }
+    return out;
   }
 
   // --- per-person controls & moderation ----------------------------------------------------
@@ -845,7 +1128,8 @@ class CallService {
       if (r.type === 'outbound-rtp' && r.bytesSent > 0) {
         now[r.id] = r;
         const limit = r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : '';
-        out.push(`${r.kind}${r.frameWidth ? ` ${r.frameWidth}x${r.frameHeight}@${Math.round(r.framesPerSecond || 0)}` : ''} ${rateKbps(r, prev[r.id])}kbps${limit ? ' limited:' + limit : ''}`);
+        const enc = r.kind === 'video' && r.encoderImplementation ? ` enc:${r.encoderImplementation}${r.powerEfficientEncoder ? '(hw)' : ''}` : '';
+        out.push(`${r.kind}${r.frameWidth ? ` ${r.frameWidth}x${r.frameHeight}@${Math.round(r.framesPerSecond || 0)}` : ''} ${rateKbps(r, prev[r.id])}kbps${enc}${limit ? ' limited:' + limit : ''}`);
         if (limit && prev[r.id]?.qualityLimitationReason !== r.qualityLimitationReason) {
           log.warn('call', 'our ' + r.kind + ' is held back', { by: limit, width: r.frameWidth, height: r.frameHeight, fps: r.framesPerSecond });
         }
@@ -909,6 +1193,20 @@ function rateKbps(r, before) {
   return dt > 0 ? Math.round(((bytes - prevBytes) * 8) / dt / 1000) : 0;
 }
 
+// Frames that cross relays come unevenly; the browser shows them as they come, so the picture
+// stutters even when none is lost. A short buffer before showing them evens that out, at the cost
+// of as much delay (the sound waits with them).
+const PLAYOUT_MS = 100;
+function smoothPlayout(receiver) {
+  if (!receiver) return;
+  try {
+    if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = PLAYOUT_MS;
+    else if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = PLAYOUT_MS / 1000;
+  } catch (e) {
+    log.warn('call', 'could not set the playout buffer', errAttrs(e));
+  }
+}
+
 function rms(analyser, data) {
   analyser.getFloatTimeDomainData(data);
   let sum = 0;
@@ -916,9 +1214,10 @@ function rms(analyser, data) {
   return Math.sqrt(sum / data.length);
 }
 
-// A screen under pressure gives up frame rate and keeps its resolution: blurred text is worse than
-// a lower frame rate. Cameras keep moving and lose detail instead.
-async function applySenderQuality(sender, quality, screen = false) {
+// What gives way when the encoder is short of time or bitrate. A screen in 'detail' mode gives up
+// frame rate and keeps its resolution (blurred text is worse than a lower frame rate); in 'motion'
+// mode, and a camera at 60 fps, it keeps moving and loses detail instead.
+async function applySenderQuality(sender, quality, screenMode = '') {
   if (!sender) return;
   try {
     const params = sender.getParameters();
@@ -926,7 +1225,8 @@ async function applySenderQuality(sender, quality, screen = false) {
     params.encodings[0].maxBitrate = quality.bitrateKbps * 1000;
     params.encodings[0].maxFramerate = quality.fps;
     params.encodings[0].scaleResolutionDownBy = 1;
-    params.degradationPreference = screen ? 'maintain-resolution' : quality.fps >= 60 ? 'maintain-framerate' : 'balanced';
+    params.degradationPreference = screenMode === 'detail' ? 'maintain-resolution'
+      : screenMode === 'motion' || quality.fps >= 60 ? 'maintain-framerate' : 'balanced';
     await sender.setParameters(params);
   } catch (e) {
     log.warn('call', 'could not set the video bitrate and frame rate', errAttrs(e, { quality: quality.id }));
@@ -965,6 +1265,41 @@ export function opusStereo(sdp, lines) {
   }
   return parts.join('\r\n');
 }
+
+// Plays the PCM of a screen's sound (Float32 stereo, interleaved) as it comes: it starts with
+// 40 ms in hand, drops the oldest when more than 200 ms wait (the capture's clock runs ahead of
+// ours), and plays silence while nothing comes (nothing plays on the computer).
+const PCM_PLAYER = `
+class EchofogPcm extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.q = []; this.at = 0; this.queued = 0; this.playing = false;
+    this.port.onmessage = (e) => {
+      this.q.push(e.data);
+      this.queued += e.data.length;
+      while (this.queued > 2 * sampleRate * 0.2 && this.q.length > 1) {
+        const d = this.q.shift();
+        this.queued -= d.length - this.at;
+        this.at = 0;
+      }
+    };
+  }
+  process(_, outputs) {
+    const l = outputs[0][0], r = outputs[0][1] || l;
+    if (!this.playing && this.queued < 2 * sampleRate * 0.04) return true;
+    this.playing = true;
+    for (let i = 0; i < l.length; i++) {
+      const d = this.q[0];
+      if (!d) { l[i] = r[i] = 0; this.playing = false; continue; }
+      l[i] = d[this.at]; r[i] = d[this.at + 1];
+      this.at += 2; this.queued -= 2;
+      if (this.at >= d.length) { this.q.shift(); this.at = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('echofog-pcm', EchofogPcm);
+`;
 
 // The Go bridge receives one SDP and has no trickle channel, so send the answer with candidates.
 function waitIceGathering(pc, timeoutMs) {

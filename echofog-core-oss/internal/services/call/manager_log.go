@@ -35,7 +35,7 @@ func (m *CallManager) inbound(kind string, h func([]byte, types.PeerID) error) f
 // forge nor read them.
 func (m *CallManager) HandleRelayedFrame(t net_types.MessageType, payload []byte, from types.PeerID) {
 	switch t {
-	case net_types.TypeCallSignaling:
+	case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy:
 		_ = m.inbound("signal", m.handleIncomingSignaling)(payload, from)
 	case net_types.TypeCallMediaAudio:
 		_ = m.inbound("audio", m.handleIncomingAudio)(payload, from)
@@ -76,6 +76,7 @@ func mediaArgs(s media.DispatcherStats, prev *media.DispatcherStats) []any {
 		"relayed", s.FragmentsRelayed - p.FragmentsRelayed,
 		"nacked", s.NackedUnits - p.NackedUnits,
 		"retransmitted", s.Retransmitted - p.Retransmitted,
+		"fec_recovered", s.Recovered - p.Recovered,
 		"incomplete", s.IncompleteUnits - p.IncompleteUnits,
 		"decrypt_failed", s.DecryptFailures - p.DecryptFailures,
 		"malformed", s.Malformed - p.Malformed,
@@ -108,6 +109,6 @@ func (m *CallManager) logSummaryLocked(room *ActiveRoomState) {
 	for id, c := range room.Dispatcher.StreamStats() {
 		m.logger.Info("Call stream summary", "call_id", calllog.Call(room.CallID), "stream", id,
 			"units_sent", c.UnitsSent, "delivered", c.Delivered, "lost", c.Lost, "nacked", c.Nacked, "retransmitted", c.Retransmitted,
-			"sound_sent", c.SoundSent, "sound_delivered", c.SoundDelivered)
+			"fec_recovered", c.Recovered, "sound_sent", c.SoundSent, "sound_delivered", c.SoundDelivered)
 	}
 }

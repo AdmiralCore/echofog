@@ -7,8 +7,12 @@ import (
 )
 
 // routingTableKey is where the routing table is kept between runs, so a restarted node knows
-// the network beyond its bootstrap list at once.
-var routingTableKey = []byte("dht:rt:v1")
+// the network beyond its bootstrap list at once. v1 tables may hold the addresses of hidden and
+// anonymous nodes, kept before they were left out: they are dropped, not loaded.
+var (
+	routingTableKey    = []byte("dht:rt:v2")
+	oldRoutingTableKey = []byte("dht:rt:v1")
+)
 
 // Save writes the table to storage.
 func (r *RoutingTable) Save() error {
@@ -33,6 +37,7 @@ func (r *RoutingTable) Load() int {
 	if r.storage == nil {
 		return 0
 	}
+	_ = r.storage.Delete(oldRoutingTableKey)
 	raw, err := r.storage.Get(routingTableKey)
 	if err != nil || len(raw) == 0 {
 		return 0

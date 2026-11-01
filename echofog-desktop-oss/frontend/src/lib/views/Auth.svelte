@@ -1,6 +1,6 @@
 <script>
   import {
-    screen, profiles, profile, recoveryPhrase,
+    screen, profiles, profile, recoveryPhrase, unlockNote,
     choose, login, create, restore, phraseSaved, chooseAccess, removeProfile, errText,
   } from '../stores/session.js';
   import { App } from '../api.js';
@@ -21,6 +21,25 @@
   let phraseOk = false;
   let checkTimer;
   let accessMode = 'public';
+  let rememberMe = false;
+  let rememberOffer = false; // this system can remember the unlock, and this profile's is not
+
+  $: if ($screen === 'login') offerRemember();
+  async function offerRemember() {
+    try {
+      const st = await App.GetRememberedUnlock();
+      rememberOffer = st.supported && !st.enabled;
+    } catch (_) {
+      rememberOffer = false;
+    }
+  }
+
+  // the kill switch held the computer's traffic after EchoFog went away: say so before login
+  let held = false;
+  App.KillSwitchHeld().then((h) => (held = h)).catch(() => {});
+  async function unblock() {
+    try { await App.ReleaseKillSwitch(); held = false; } catch (err) { error = errText(err); }
+  }
 
   // the words are checked while they are typed, against the same list the core uses
   $: if ($screen === 'restore') checkPhrase(phrase);
@@ -45,7 +64,9 @@
     phraseCheck = '';
     phraseOk = false;
     saved = false;
+    rememberMe = false;
     error = '';
+    unlockNote.set(null);
   }
 
   async function run(fn) {
@@ -120,6 +141,13 @@
       </div>
     </div>
 
+    {#if held}
+      <div class="killed" role="alert">
+        <span class="small">{$t('proxy.killHeld')}</span>
+        <button class="ghost" on:click={unblock}>{$t('proxy.killUnblock')}</button>
+      </div>
+    {/if}
+
     {#key $screen}
     <div class="step stack">
     {#if $screen === 'profiles'}
@@ -157,8 +185,13 @@
         <Avatar id={$profile} name={$profile} size={56} />
         <h2>{$t('auth.welcomeBack', { name: $profile })}</h2>
       </div>
-      <form class="stack" on:submit|preventDefault={() => run(() => login(password))}>
+      {#if $unlockNote}<p class="small warn" role="status">{$t('remember.reason.' + $unlockNote.reason, { error: $unlockNote.error })}</p>{/if}
+      <form class="stack" on:submit|preventDefault={() => run(() => login(password, rememberMe))}>
         <label>{$t('auth.password')}<input type="password" bind:value={password} autofocus /></label>
+        {#if rememberOffer}
+          <label class="row remember"><input type="checkbox" bind:checked={rememberMe} /> {$t('remember.loginCheckbox')}</label>
+          {#if rememberMe}<p class="small faint">{$t('remember.loginHint')}</p>{/if}
+        {/if}
         <button class="primary big" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner light"></span> {$t('auth.unlocking')}{:else}<Icon name="lockOpen" size={16} /> {$t('auth.unlock')}{/if}</button>
       </form>
       <div class="row links">
@@ -303,6 +336,7 @@
   .big { height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 14.5px; }
   .spinner.light { border-color: rgba(255, 255, 255, 0.35); border-top-color: #fff; }
   .links { margin-top: -4px; }
+  .remember { gap: 8px; font-size: 13px; }
   .seg { align-self: stretch; }
   .pp { margin-top: 8px; }
   .meter { height: 4px; border-radius: 4px; background: var(--raised); overflow: hidden; margin-top: -6px; }
@@ -322,5 +356,6 @@
   .words .mono { color: var(--text); font-size: 13px; word-break: normal; }
   .err { animation: shake 0.4s var(--ease); }
   @keyframes shake { 0%, 100% { transform: none; } 25% { transform: translateX(-5px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+  .killed { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid #c98a00; border-radius: 10px; background: color-mix(in srgb, #c98a00 12%, transparent); }
 </style>
 

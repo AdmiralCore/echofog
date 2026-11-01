@@ -32,15 +32,24 @@ func (a *App) AppVersion() string { return version }
 
 // CheckForUpdate asks GitHub for the newest release once and compares it with this build. It
 // sends nothing about the user: an anonymous GET of a public page, like opening it in a browser.
-// Branch builds ("0.0.0-…") do not ask.
+// It goes the way the app's own lookups go (through Tor or the VPN when set), so it waits for the
+// profile to be open, and anonymous mode with neither skips it. Branch builds ("0.0.0-…") do not ask.
 func (a *App) CheckForUpdate() (UpdateInfo, error) {
 	info := UpdateInfo{Current: version}
 	if strings.HasPrefix(version, "0.0.0") {
 		return info, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return info, nil // the profile, and with it how lookups may go, is not open yet
+	}
+	c := nodeAPI.OwnHTTPClient()
+	if c == nil {
+		return info, nil // anonymous: the site would see the address
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tag, url, err := fetchLatestRelease(ctx, http.DefaultClient, latestReleaseURL)
+	tag, url, err := fetchLatestRelease(ctx, c, latestReleaseURL)
 	if err != nil {
 		return info, err
 	}

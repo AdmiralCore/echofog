@@ -41,6 +41,9 @@ const (
 	// StreamAudioSlots carry the sound of watched streams, one per stream, apart from the voices
 	// so the UI gives a stream its own volume and does not take it for somebody speaking.
 	StreamAudioSlots = VideoSlots
+	// PreviewSlots carry our own screen as viewers get it, when the app encodes it itself: the
+	// webview has no capture of its own to preview then.
+	PreviewSlots = 1
 	// slotReuseIdle: a slot whose source has been silent this long may be handed to a new source.
 	slotReuseIdle = 5 * time.Second
 
@@ -52,8 +55,8 @@ var ErrNoSlot = errors.New("all media slots are busy")
 
 // SlotEvent tells the UI which remote source a playback track carries.
 type SlotEvent struct {
-	Slot     string `json:"slot"`     // "a0".."a15" / "v0".."v3" / "s0".."s3", also the MediaStream id suffix
-	Kind     string `json:"kind"`     // "audio" | "video" | "streamaudio"
+	Slot     string `json:"slot"`     // "a0".."a15" / "v0".."v3" / "s0".."s3" / "p0", also the MediaStream id suffix
+	Kind     string `json:"kind"`     // "audio" | "video" | "streamaudio" | "preview"
 	Peer     string `json:"peer"`     // broadcaster peer ID (hex)
 	StreamID string `json:"streamId"` // stream ID for video and stream audio, "voice" for voices
 	Active   bool   `json:"active"`
@@ -92,13 +95,15 @@ type LocalMediaBridge struct {
 	localSSRC      map[string]uint32 // role -> SSRC of the UI capture track
 	audio, video   []*slot
 	streamAudio    []*slot
+	preview        []*slot
 
-	onLocalRTP RTPPacketHandlerCompat
-	onSlot     func(SlotEvent)
-	onKeyframe func(streamID string)
-	ctx        context.Context
-	cancel     context.CancelFunc
-	now        func() time.Time
+	onLocalRTP        RTPPacketHandlerCompat
+	onSlot            func(SlotEvent)
+	onKeyframe        func(streamID string)
+	onPreviewKeyframe func(streamID string)
+	ctx               context.Context
+	cancel            context.CancelFunc
+	now               func() time.Time
 
 	// The bridge runs per RTP packet; write and parse failures go through lim.
 	log *slog.Logger
@@ -115,6 +120,8 @@ type Options struct {
 	OnSlot func(SlotEvent)
 	// OnKeyframeNeeded fires when the UI decoder of a watched stream sends PLI/FIR.
 	OnKeyframeNeeded func(streamID string)
+	// OnPreviewKeyframeNeeded fires when the UI decoder of our own preview does.
+	OnPreviewKeyframeNeeded func(streamID string)
 }
 
 // NewLocalMediaBridge creates and configures the local WebRTC bridge instance.
@@ -155,16 +162,17 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 	}
 
 	b := &LocalMediaBridge{
-		peerConnection: pc,
-		localSSRC:      make(map[string]uint32),
-		onLocalRTP:     opts.OnLocalRTP,
-		onSlot:         opts.OnSlot,
-		onKeyframe:     opts.OnKeyframeNeeded,
-		ctx:            ctx,
-		cancel:         cancel,
-		now:            time.Now,
-		log:            slog.Default().With("component", "call-bridge"),
-		lim:            calllog.New(calllog.Every),
+		peerConnection:    pc,
+		localSSRC:         make(map[string]uint32),
+		onLocalRTP:        opts.OnLocalRTP,
+		onSlot:            opts.OnSlot,
+		onKeyframe:        opts.OnKeyframeNeeded,
+		onPreviewKeyframe: opts.OnPreviewKeyframeNeeded,
+		ctx:               ctx,
+		cancel:            cancel,
+		now:               time.Now,
+		log:               slog.Default().With("component", "call-bridge"),
+		lim:               calllog.New(calllog.Every),
 	}
 	fail := func(err error) (*LocalMediaBridge, error) {
 		cancel()
@@ -213,6 +221,13 @@ func NewLocalMediaBridge(opts Options) (*LocalMediaBridge, error) {
 			return fail(err)
 		}
 		b.streamAudio = append(b.streamAudio, s)
+	}
+	for i := 0; i < PreviewSlots; i++ {
+		s, err := b.addSlot(fmt.Sprintf("p%d", i), "preview", webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: videoClock}, videoClock)
+		if err != nil {
+			return fail(err)
+		}
+		b.preview = append(b.preview, s)
 	}
 
 	// The loopback to the UI never crosses a network, so a failed or disconnected state means the
@@ -341,7 +356,11 @@ func (b *LocalMediaBridge) readSlotRTCP(s *slot, sender *webrtc.RTPSender) {
 			}
 			return
 		}
-		if s.kind != "video" || b.onKeyframe == nil {
+		ask := b.onKeyframe
+		if s.kind == "preview" {
+			ask = b.onPreviewKeyframe
+		}
+		if (s.kind != "video" && s.kind != "preview") || ask == nil {
 			continue
 		}
 		for _, p := range pkts {
@@ -352,7 +371,7 @@ func (b *LocalMediaBridge) readSlotRTCP(s *slot, sender *webrtc.RTPSender) {
 				b.mu.Unlock()
 				if owner != "" {
 					b.lim.Log(b.log, slog.LevelDebug, "pli:"+s.id, "UI decoder asked for a keyframe", "slot", s.id, "stream", owner)
-					b.onKeyframe(owner)
+					ask(owner)
 				}
 			}
 		}
@@ -369,6 +388,15 @@ func (b *LocalMediaBridge) PushRemoteAudio(pkt *media.MediaPacket) error {
 func (b *LocalMediaBridge) PushRemoteStreamAudio(pkt *media.MediaPacket) error {
 	return b.push(b.streamAudio, pkt.StreamID, pkt.Broadcaster.String(), pkt.StreamID, pkt.Payload)
 }
+
+// PushLocalPreview plays an RTP packet of our own stream on the preview track, so the UI shows
+// what viewers get.
+func (b *LocalMediaBridge) PushLocalPreview(streamID string, packet []byte) error {
+	return b.push(b.preview, streamID, "", streamID, packet)
+}
+
+// ReleasePreview frees the preview track of a stream we stopped.
+func (b *LocalMediaBridge) ReleasePreview(streamID string) { b.release(b.preview, streamID, streamID) }
 
 // PushRemoteVideo plays a remote stream unit (a full RTP packet) on that stream's own track.
 func (b *LocalMediaBridge) PushRemoteVideo(pkt *media.MediaPacket) error {
@@ -510,7 +538,7 @@ func (b *LocalMediaBridge) Slots() []SlotEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out []SlotEvent
-	for _, pool := range [][]*slot{b.audio, b.video, b.streamAudio} {
+	for _, pool := range [][]*slot{b.audio, b.video, b.streamAudio, b.preview} {
 		for _, s := range pool {
 			if s.owner == "" {
 				continue

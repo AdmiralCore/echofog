@@ -21,6 +21,7 @@ func fakeHelper(t *testing.T, status string, token string, hold chan net.Conn) f
 		tok := fs.String("token", "", "")
 		fs.String("socks", "", "")
 		fs.Int("bypass-udp-port", 0, "")
+		fs.String("hold", "", "")
 		require.NoError(t, fs.Parse(args[1:]))
 		if token != "" {
 			*tok = token
@@ -45,20 +46,21 @@ func fakeHelper(t *testing.T, status string, token string, hold chan net.Conn) f
 func TestControllerStartStop(t *testing.T) {
 	hold := make(chan net.Conn, 1)
 	c := &Controller{launch: fakeHelper(t, lineUp, "", hold)}
-	require.NoError(t, c.Start(context.Background(), "127.0.0.1:1080", 4242))
+	require.NoError(t, c.Start(context.Background(), "127.0.0.1:1080", 4242, ""))
 	assert.True(t, c.Running())
 	helperSide := <-hold
 
 	c.Stop()
 	assert.False(t, c.Running())
 	helperSide.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, err := helperSide.Read(make([]byte, 1))
-	assert.ErrorIs(t, err, io.EOF, "the helper must see the control connection close")
+	got, err := io.ReadAll(helperSide)
+	require.NoError(t, err, "the helper must see the control connection close")
+	assert.Equal(t, "STOP"+string(rune(10)), string(got), "a stop says so, so a kill switch does not hold")
 }
 
 func TestControllerReportsHelperError(t *testing.T) {
 	c := &Controller{launch: fakeHelper(t, "ERR wintun.dll is missing next to EchoFog.exe", "", nil)}
-	err := c.Start(context.Background(), "127.0.0.1:1080", 0)
+	err := c.Start(context.Background(), "127.0.0.1:1080", 0, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "wintun.dll")
 	assert.False(t, c.Running())
@@ -68,7 +70,7 @@ func TestControllerIgnoresWrongToken(t *testing.T) {
 	c := &Controller{launch: fakeHelper(t, lineUp, "not-the-token", nil)}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	assert.Error(t, c.Start(ctx, "127.0.0.1:1080", 0))
+	assert.Error(t, c.Start(ctx, "127.0.0.1:1080", 0, ""))
 	assert.False(t, c.Running())
 }
 
@@ -76,7 +78,7 @@ func TestControllerNoticesHelperExit(t *testing.T) {
 	hold := make(chan net.Conn, 1)
 	exited := make(chan error, 1)
 	c := &Controller{launch: fakeHelper(t, lineUp, "", hold), OnExit: func(err error) { exited <- err }}
-	require.NoError(t, c.Start(context.Background(), "127.0.0.1:1080", 0))
+	require.NoError(t, c.Start(context.Background(), "127.0.0.1:1080", 0, ""))
 	(<-hold).Close() // helper crashed or was killed
 
 	select {

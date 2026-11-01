@@ -14,14 +14,20 @@ import (
 type testRules struct {
 	founder types.PeerID
 	channel bool
+	private bool // joining takes an invitation (InviteRules)
 }
 
+func (r testRules) NeedsInvite(Conv) bool { return r.private }
+
+// the group service's built-in roles
+const testWriter = PermSend | PermMedia | PermVoice | PermLinks | PermThreads | PermReact | PermInvite
+
 var testRoles = map[string]Role{
-	"owner":      {Name: "owner", Rank: 100, Perms: PermSend | PermDelete | PermKick | PermBan | PermManageRoles | PermManageGroup},
-	"admin":      {Name: "admin", Rank: 50, Perms: PermSend | PermDelete | PermKick | PermBan | PermManageRoles},
-	"moderator":  {Name: "moderator", Rank: 25, Perms: PermSend | PermDelete | PermKick},
-	"member":     {Name: "member", Rank: 10, Perms: PermSend},
-	"subscriber": {Name: "subscriber", Rank: 10},
+	"owner":      {Name: "owner", Rank: 100, Perms: PermAll},
+	"admin":      {Name: "admin", Rank: 50, Perms: PermAll &^ PermManageGroup},
+	"moderator":  {Name: "moderator", Rank: 25, Perms: testWriter | PermDelete | PermKick | PermPin},
+	"member":     {Name: "member", Rank: 10, Perms: testWriter},
+	"subscriber": {Name: "subscriber", Rank: 10, Perms: PermReact},
 }
 
 func (r testRules) Current(Conv, types.PeerID) Rights { return Rights{} }
@@ -367,5 +373,56 @@ func TestNewcomersFirstMessageCountsOnceLetIn(t *testing.T) {
 	other.RebuildIfNeeded(c)
 	if !texts(t, other, c)["first words"] {
 		t.Fatal("the newcomer's first message was lost")
+	}
+}
+
+// A banned member cannot write "before" the ban: they pick the Lamport of their events, but the
+// ban records the last of their sequence numbers that counts, and a later one is refused wherever
+// it is placed, until they are let in again (and then only after that point).
+func TestBannedMemberCannotBackdate(t *testing.T) {
+	f, x, y := newAccount(t), newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("g1")
+	lf, lx := groupReplica(t, f, rules), groupReplica(t, x, rules)
+
+	var all [][]byte
+	r := member(t, lf, c, roster(f, "owner", x, "member", y, "member"))
+	ingest(t, lx, c, r)
+	all = append(all, r)
+	hi, _ := say(t, lx, c, "before the ban")
+	ingest(t, lf, c, hi)
+	all = append(all, hi)
+	ban := member(t, lf, c, &MemberBody{Action: MemberBan, Member: x.pub, UptoSeq: lf.AuthorSeq(c, x.id)})
+	all = append(all, ban)
+	if got := lf.AuthorSeq(c, x.id); got != 1 {
+		t.Fatalf("x's last seq seen by the admin = %d, want 1", got)
+	}
+	// x, banned, signs its next event with a Lamport from before the ban (2: right after its first)
+	backdated := forgeNext(t, x, c, 2, 2, "backdated")
+	all = append(all, backdated)
+
+	for round := 0; round < 20; round++ {
+		order := append([][]byte(nil), all...)
+		rand.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+		ly := groupReplica(t, y, rules)
+		ingestAll(ly, c, order)
+		ly.RebuildIfNeeded(c)
+		got := texts(t, ly, c)
+		if !got["before the ban"] || got["backdated"] {
+			t.Fatalf("round %d: %v", round, got)
+		}
+	}
+
+	// let in again: what x writes after that point counts, what it places before still does not
+	unban := member(t, lf, c, &MemberBody{Action: MemberUnban, Member: x.pub})
+	join := member(t, lf, c, &MemberBody{Action: MemberJoin, Member: x.pub})
+	after := forgeNext(t, x, c, 3, 100, "back in")
+	early := forgeNext(t, x, c, 4, 3, "placed before the rejoin")
+	ly := groupReplica(t, y, rules)
+	ingestAll(ly, c, append(all, unban, join, after, early))
+	ly.RebuildIfNeeded(c)
+	got := texts(t, ly, c)
+	if !got["back in"] || got["placed before the rejoin"] || got["backdated"] {
+		t.Fatalf("after the rejoin: %v", got)
 	}
 }

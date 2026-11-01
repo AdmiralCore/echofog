@@ -2,6 +2,7 @@ package call
 
 import (
 	"errors"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
@@ -85,6 +86,56 @@ func (m *CallManager) PublishVideo(streamID string, payload []byte) error {
 		return ErrNoLocalStream
 	}
 	return room.Dispatcher.BroadcastLocalVideo(streamID, payload)
+}
+
+// LocalEncoder is a capture the app encodes itself instead of the webview (the desktop's own
+// screen capture): the rate control and the keyframe requests of its role go to it.
+type LocalEncoder interface {
+	SetBitrate(bps uint64)
+	RequestKeyframe()
+}
+
+// SetLocalEncoder hands the rate and keyframe requests of a capture role to enc; nil gives them
+// back to the webview's encoder.
+func (m *CallManager) SetLocalEncoder(role string, enc LocalEncoder) {
+	m.mu.Lock()
+	if enc == nil {
+		delete(m.encoders, role)
+	} else {
+		m.encoders[role] = enc
+	}
+	m.mu.Unlock()
+}
+
+// PublishLocalRTP sends one RTP packet of a capture encoded outside the webview, the way the
+// bridge sends the webview's. A screen also plays on the preview track: the webview has no capture
+// of its own to show the broadcaster then.
+func (m *CallManager) PublishLocalRTP(role string, packet []byte) {
+	m.onBridgeRTP(role, packet)
+	if role != bridge.RoleScreen {
+		return
+	}
+	m.mu.RLock()
+	var br *bridge.LocalMediaBridge
+	var streamID string
+	if room := m.activeRoom; room != nil {
+		br, streamID = room.Bridge, room.localByRole[role]
+	}
+	m.mu.RUnlock()
+	if br != nil && streamID != "" {
+		_ = br.PushLocalPreview(streamID, packet) // the bridge logs failures, rate limited
+	}
+}
+
+// previewKeyframe serves the preview's decoder, which asks for a keyframe when it starts.
+func (m *CallManager) previewKeyframe(streamID string) {
+	m.mu.Lock()
+	if room := m.activeRoom; room != nil {
+		if _, local := room.localStreams[streamID]; local {
+			m.handleKeyframeRequestLocked(room, streamID, time.Now())
+		}
+	}
+	m.unlockAndFlush()
 }
 
 // captureRole maps a stream media type onto the bridge transceiver that captures it.
@@ -185,6 +236,59 @@ func (m *CallManager) MediaStats() media.DispatcherStats {
 		return d.Stats()
 	}
 	return media.DispatcherStats{}
+}
+
+// StreamDiag is what one stream does on this node now, for the stats a viewer or a broadcaster
+// opens on its tile. Counters are totals; the app turns them into rates.
+type StreamDiag struct {
+	media.StreamCounters
+	Own             bool   // this node broadcasts it
+	SendKbps        int    // own stream: the cap the rate control gives the encoder now
+	VideoSent       uint64 // video fragments the outbox sent, all streams together
+	VideoDropped    uint64 // ... it dropped because a peer's queue was full
+	VideoFailed     uint64 // ... whose send failed
+	KeyframesServed uint64 // keyframe requests served as a broadcaster
+}
+
+// StreamDiag returns the counters of a stream in the active call (false: no call).
+func (m *CallManager) StreamDiag(streamID string) (StreamDiag, bool) {
+	m.mu.RLock()
+	room := m.activeRoom
+	if room == nil || room.Dispatcher == nil {
+		m.mu.RUnlock()
+		return StreamDiag{}, false
+	}
+	d := room.Dispatcher
+	_, own := room.localStreams[streamID]
+	kbps := int(room.sendRate.kbps)
+	m.mu.RUnlock()
+	st := d.Stats()
+	out := StreamDiag{StreamCounters: d.StreamStats()[streamID], Own: own,
+		VideoSent: st.Outbox.Sent[media.ClassVideo], VideoDropped: st.Outbox.Dropped[media.ClassVideo],
+		VideoFailed: st.Outbox.Failed[media.ClassVideo], KeyframesServed: m.keyframesServed.Load()}
+	if own {
+		out.SendKbps = kbps
+	}
+	return out, true
+}
+
+// SendRate is the bitrate the rate control gives this node's streams now, against the bitrate
+// their presets ask for; both 0 when it broadcasts nothing.
+func (m *CallManager) SendRate() (kbps, presetKbps int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room := m.activeRoom
+	if room == nil || len(room.localStreams) == 0 {
+		return 0, 0
+	}
+	for _, ann := range room.localStreams {
+		presetKbps += ann.BitrateKbps
+	}
+	kbps = int(room.sendRate.kbps)
+	if kbps == 0 {
+		kbps = presetKbps // no rate yet: the preset
+	}
+	return kbps, presetKbps
 }
 
 // KeyframesServed counts keyframe requests that reached this node as a broadcaster.

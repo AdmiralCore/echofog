@@ -1,4 +1,5 @@
 <script>
+  import { squarePicture } from '../../picture.js';
   import { createEventDispatcher, onMount, tick } from 'svelte';
   import { fly } from 'svelte/transition';
   import { App, errText, copy, openURL } from '../../api.js';
@@ -56,14 +57,7 @@
     e.target.value = '';
     if (!file) return;
     try {
-      const img = await createImageBitmap(file);
-      const size = 256;
-      const c = document.createElement('canvas');
-      c.width = c.height = size;
-      const s = Math.min(img.width, img.height);
-      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
-      const data = c.toDataURL('image/jpeg', 0.85);
-      await saveProfile(conv.name, data.slice(data.indexOf(',') + 1));
+      await saveProfile(conv.name, await squarePicture(file));
     } catch (_) {
       error = $t('chats.err.picture');
     }

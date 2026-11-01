@@ -58,7 +58,7 @@ func newFakeUI(t *testing.T, offer string) (*fakeUI, string) {
 	})
 
 	require.NoError(t, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offer}))
-	require.Len(t, pc.GetTransceivers(), len(localRoles)+AudioSlots+VideoSlots+StreamAudioSlots)
+	require.Len(t, pc.GetTransceivers(), len(localRoles)+AudioSlots+VideoSlots+StreamAudioSlots+PreviewSlots)
 
 	mk := func(mime, id string) *webrtc.TrackLocalStaticRTP {
 		tr, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: mime}, id, "ui-"+id)
@@ -142,7 +142,7 @@ func TestBridge_PerSourceTracksRolesAndKeyframes(t *testing.T) {
 	offer, err := b.CreateOffer()
 	require.NoError(t, err)
 	assert.Contains(t, offer, "a=candidate", "offer must carry ICE candidates: the UI has no trickle channel")
-	assert.Equal(t, 2+VideoSlots, strings.Count(offer, "m=video"), "camera + screen + playback slots")
+	assert.Equal(t, 2+VideoSlots+PreviewSlots, strings.Count(offer, "m=video"), "camera + screen + playback slots + our preview")
 	assert.Equal(t, 2+AudioSlots+StreamAudioSlots, strings.Count(offer, "m=audio"), "mic + screen audio + voice and stream sound slots")
 	ui, answer := newFakeUI(t, offer)
 	defer ui.pc.Close()

@@ -71,7 +71,7 @@ func TestGuardSelectionAndPersistence(t *testing.T) {
 	cands = append(cands, guardServer(s, 20, cands[0].netByte()), guardServer(s, 21, cands[0].netByte()))
 
 	now := time.Now()
-	s.planGuards(now, cands)
+	s.planGuards(now, cands, nil)
 	gs := s.Guards()
 	require.Len(t, gs, guardsWanted)
 	nets := map[string]bool{}
@@ -83,7 +83,7 @@ func TestGuardSelectionAndPersistence(t *testing.T) {
 
 	// a second round with all of them present changes nothing
 	before := s.Guards()
-	s.planGuards(now.Add(time.Minute), cands)
+	s.planGuards(now.Add(time.Minute), cands, nil)
 	assert.Equal(t, before, s.Guards())
 
 	// a restart: the same guards come back from storage
@@ -138,7 +138,7 @@ func TestGuardRotation(t *testing.T) {
 	s, _ := newTestSwarm(t)
 	cands := []guardCandidate{guardServer(s, 1, 10), guardServer(s, 2, 11), guardServer(s, 3, 12), guardServer(s, 4, 13)}
 	now := time.Now()
-	s.planGuards(now, cands)
+	s.planGuards(now, cands, nil)
 	first := s.Guards()
 	require.Len(t, first, guardsWanted)
 
@@ -148,7 +148,7 @@ func TestGuardRotation(t *testing.T) {
 	s.guards.list[0].expires = now.Add(-time.Hour)
 	s.guards.mu.Unlock()
 
-	s.planGuards(now.Add(time.Minute), cands)
+	s.planGuards(now.Add(time.Minute), cands, nil)
 	after := s.Guards()
 	require.Len(t, after, guardsWanted)
 	assert.False(t, s.IsGuard(old), "the expired guard is gone")
@@ -163,7 +163,7 @@ func TestGuardFailover(t *testing.T) {
 	s, _ := newTestSwarm(t)
 	cands := []guardCandidate{guardServer(s, 1, 10), guardServer(s, 2, 11), guardServer(s, 3, 12), guardServer(s, 4, 13), guardServer(s, 5, 14)}
 	now := time.Now()
-	s.planGuards(now, cands) // nobody is connected, the three are picked
+	s.planGuards(now, cands, nil) // nobody is connected, the three are picked
 	require.Len(t, s.Guards(), guardsWanted)
 
 	// one link is up (a guard connected)
@@ -177,17 +177,17 @@ func TestGuardFailover(t *testing.T) {
 	gone := s.Guards()[1].ID
 
 	// within the grace the list is as it was
-	s.planGuards(now.Add(guardDownAfter/2), cands)
+	s.planGuards(now.Add(guardDownAfter/2), cands, nil)
 	assert.Len(t, s.Guards(), guardsWanted)
 
 	// down for longer than the grace: stand-in added next to it, it stays
-	s.planGuards(now.Add(2*guardDownAfter), cands)
+	s.planGuards(now.Add(2*guardDownAfter), cands, nil)
 	require.True(t, s.IsGuard(gone))
 	assert.Greater(t, len(s.Guards()), guardsWanted-1)
 	assert.LessOrEqual(t, len(s.Guards()), guardsMax)
 
 	// gone for good while another link is up: dropped
-	s.planGuards(now.Add(guardDropAfter+time.Minute), cands)
+	s.planGuards(now.Add(guardDropAfter+time.Minute), cands, nil)
 	assert.False(t, s.IsGuard(gone), "dropped when it stays gone")
 	assert.True(t, s.IsGuard(p.ID()), "the connected guard stays")
 }
@@ -196,9 +196,9 @@ func TestGuardsKeptWhileOwnNetworkIsDown(t *testing.T) {
 	s, _ := newTestSwarm(t)
 	cands := []guardCandidate{guardServer(s, 1, 10), guardServer(s, 2, 11), guardServer(s, 3, 12)}
 	now := time.Now()
-	s.planGuards(now, cands)
+	s.planGuards(now, cands, nil)
 	before := ids(s.Guards())
-	s.planGuards(now.Add(3*guardDropAfter), cands) // no link of any kind for hours
+	s.planGuards(now.Add(3*guardDropAfter), cands, nil) // no link of any kind for hours
 	assert.Equal(t, before, ids(s.Guards())[:len(before)], "nobody is dropped when no link works at all")
 }
 
@@ -207,13 +207,13 @@ func TestGuardThatIsAUserIsDropped(t *testing.T) {
 	s, _ := newTestSwarm(t)
 	cands := []guardCandidate{guardServer(s, 1, 10), guardServer(s, 2, 11), guardServer(s, 3, 12)}
 	now := time.Now()
-	s.planGuards(now, cands)
+	s.planGuards(now, cands, nil)
 	s.peerSNIMu.Lock()
 	f := s.peerFacts[cands[0].id]
 	f.server, f.client = false, true
 	s.peerFacts[cands[0].id] = f
 	s.peerSNIMu.Unlock()
-	s.planGuards(now.Add(time.Second), cands[:0])
+	s.planGuards(now.Add(time.Second), cands[:0], nil)
 	assert.False(t, s.IsGuard(cands[0].id))
 }
 
@@ -228,7 +228,7 @@ func TestGuardDialRefused(t *testing.T) {
 		refuse bool
 	}{
 		{"a stranger across the border: refused", func(s *Swarm) {}, public, true},
-		{"a guard: dialed", func(s *Swarm) { s.planGuards(time.Now(), []guardCandidate{{guardID, public}}) }, public, false},
+		{"a guard: dialed", func(s *Swarm) { s.planGuards(time.Now(), []guardCandidate{{guardID, public}}, nil) }, public, false},
 		{"on the local network: dialed", func(s *Swarm) {}, "192.168.1.5:4242", false},
 		{"in the home region: dialed", func(s *Swarm) { s.SetSameRegionFunc(func(string) bool { return true }) }, public, false},
 		{"another region: refused", func(s *Swarm) { s.SetSameRegionFunc(func(string) bool { return false }) }, public, true},
@@ -270,7 +270,7 @@ func TestGuardDialRefusedForCamouflagedWhenGuardsAreUp(t *testing.T) {
 	p, _ := addPrimaryPeer(context.Background(), s, 4)
 	s.SetPeerServer(p.ID(), true)
 	s.SetPeerSNI(p.ID(), "cover.example")
-	s.planGuards(time.Now(), []guardCandidate{{p.ID(), "203.0.113.7:443"}})
+	s.planGuards(time.Now(), []guardCandidate{{p.ID(), "203.0.113.7:443"}}, nil)
 	require.True(t, s.IsGuard(p.ID()))
 	require.Equal(t, 1, s.guardsUp())
 
@@ -305,7 +305,7 @@ func TestNeedsPeersInGuardMode(t *testing.T) {
 	s.SetPeerServer(p.ID(), true)
 	s.SetPeerSNI(p.ID(), "cover.example")
 	assert.True(t, s.NeedsPeers(), "a link that is not a guard is not enough")
-	s.planGuards(time.Now(), []guardCandidate{{p.ID(), "203.0.113.7:443"}})
+	s.planGuards(time.Now(), []guardCandidate{{p.ID(), "203.0.113.7:443"}}, nil)
 	assert.False(t, s.NeedsPeers(), "a connected guard that relays is")
 }
 
@@ -339,4 +339,96 @@ func TestUserLinkViaRelay(t *testing.T) {
 			assert.Equal(t, c.via, s.UserLinkViaRelay(c.id, c.addr))
 		})
 	}
+}
+
+// A pinned relay is always held: it is not rotated out while pinned, and once unpinned it leaves
+// like any other guard when its time is up.
+func TestPinnedGuardAlwaysHeld(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	withGuardMode(s, config.GuardOn)
+	pin := guardServer(s, 9, 90)
+	now := time.Now()
+
+	s.planGuards(now, nil, []guardCandidate{pin})
+	require.True(t, s.IsGuard(pin.id), "pinned guard is held")
+
+	// its lifetime is up, but while pinned it is kept anyway
+	s.guards.mu.Lock()
+	for _, g := range s.guards.list {
+		if g.id == pin.id {
+			assert.True(t, g.pinned, "marked pinned")
+			g.expires = now.Add(-time.Hour)
+		}
+	}
+	s.guards.mu.Unlock()
+	s.planGuards(now, nil, []guardCandidate{pin})
+	assert.True(t, s.IsGuard(pin.id), "pinned guard kept past its expiry")
+
+	// unpinned: the same expired guard is dropped on the next round
+	s.planGuards(now, nil, nil)
+	assert.False(t, s.IsGuard(pin.id), "unpinned, expired guard is dropped")
+}
+
+// A pinned relay is held on top of the wanted fill, so the node leans on it first.
+func TestPinnedGuardHeldBesideFill(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	withGuardMode(s, config.GuardOn)
+	cands := []guardCandidate{guardServer(s, 1, 10), guardServer(s, 2, 11), guardServer(s, 3, 12)}
+	pin := guardServer(s, 9, 90)
+
+	s.planGuards(time.Now(), cands, []guardCandidate{pin})
+	assert.True(t, s.IsGuard(pin.id), "pinned guard is among the guards")
+	assert.GreaterOrEqual(t, len(s.Guards()), guardsWanted, "the rest still fill up to wanted")
+}
+
+// A pinned relay keeps guard mode on where "auto" would stand down (a country that does not
+// censor); "off" still means direct.
+func TestPinnedGuardKeepsAutoOn(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	withGuardMode(s, config.GuardAuto)
+	s.SetGuardsFree(true)
+	assert.False(t, s.GuardModeActive(), "auto in a free country, nothing pinned: off")
+
+	s.cfg.AntiDPI.PinnedGuards = []string{network.JoinPeerAddrInfo("198.51.100.9:443", idOf(9), "cover.example", true)}
+	assert.True(t, s.GuardModeActive(), "a pinned relay: on")
+
+	withGuardMode(s, config.GuardOff)
+	assert.False(t, s.GuardModeActive(), "off: direct even with a pinned relay")
+}
+
+// Behind a proxy a user's node is met at a relay (a hole punch would show our address), without
+// guard mode too; servers, listed peers and the local network are not.
+func TestUserLinkViaRelayBehindProxy(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	withGuardMode(s, config.GuardOff)
+	user := idOf(60)
+	assert.False(t, s.UserLinkViaRelay(user, "203.0.113.60:4242"), "no proxy, no guards: direct")
+
+	require.NoError(t, network.SetOutboundProxy("127.0.0.1:9150"))
+	t.Cleanup(func() { _ = network.SetOutboundProxy("") })
+	assert.True(t, s.UserLinkViaRelay(user, "203.0.113.60:4242"))
+	assert.True(t, s.UserLinkViaRelay(user, ""), "no address known")
+	assert.False(t, s.UserLinkViaRelay(user, "192.168.1.60:4242"), "the local network")
+
+	server := guardServer(s, 1, 10)
+	assert.False(t, s.UserLinkViaRelay(server.id, server.addr), "a camouflaged server is dialed through the proxy")
+}
+
+// Where the node layer names the own country's servers (behind the TSPU freeze), the guards are
+// picked there first; without it nothing is preferred.
+func TestGuardsPreferTheOwnCountry(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	var cands []guardCandidate
+	for i := 0; i < 6; i++ {
+		cands = append(cands, guardServer(s, byte(i), byte(10+i)))
+	}
+	home := map[string]bool{cands[4].addr: true, cands[5].addr: true}
+	s.SetDomesticFunc(func(addr string) bool { return home[addr] })
+	s.planGuards(time.Now(), cands, nil)
+	got := map[string]bool{}
+	for _, g := range s.Guards() {
+		got[g.Addr] = true
+	}
+	require.Len(t, got, guardsWanted)
+	assert.True(t, got[cands[4].addr] && got[cands[5].addr], "both servers of the own country are guards: %v", got)
 }

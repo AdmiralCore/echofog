@@ -1,9 +1,10 @@
 <script>
   import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
   import { derived, writable } from 'svelte/store';
-  import { fly } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
   import { App, errText, openURL } from '../api.js';
-  import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel } from '../stores/chats.js';
+  import { classifyLink, fromWebLink, openLinkDialog } from '../links.js';
+  import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel, mainChannel } from '../stores/chats.js';
   import { isCallActive, startCall, peerInfo } from '../stores/call.store.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
   import { savedError } from '../stores/saved.js';
@@ -53,8 +54,9 @@
     goTo: (id) => list?.goTo(id),
     openMenu, startReply, startEdit, showThread,
     fullTime: (ts) => new Date(ts || 0).toLocaleString(intlLocale(), { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    // a link opens in the system browser, never in this window
-    openLink: (e, href) => { e.preventDefault(); e.stopPropagation(); openURL(href); },
+    // a link opens in the system browser, never in this window; an EchoFog link (its https form
+    // too) opens here, in the open-link dialog
+    openLink: (e, href) => { e.preventDefault(); e.stopPropagation(); if (classifyLink(href)) openLinkDialog(fromWebLink(href)); else openURL(href); },
     dropDraftOf: (id) => { if (editing && editing.id === id) cancelCompose(); },
   });
 
@@ -88,7 +90,7 @@
 
   // ---- composing ---------------------------------------------------------------------------------
   async function submit() {
-    if (!text.trim() || sending) return;
+    if (!text.trim() || sending || (!editing && slowLeft > 0)) return;
     sending = true;
     let ok;
     if (editing) {
@@ -185,8 +187,33 @@
   $: shownChan = $activeChannel ? $channels.find((c) => c.id === $activeChannel) || null : null;
   $: channelName = shownChan ? shownChan.name : '';
   $: hasRooms = $channels.some((c) => c.voice);
-  // in a channel only managers post to, the others comment
-  $: canPost = conv.can.send && (!shownChan || shownChan.canSend !== false);
+  // in a channel only managers post to, the others comment; a channel's overrides can also let a
+  // role post there that may not elsewhere, or keep it from posting
+  $: mutedUntil = conv.can?.mutedUntil || 0;
+  // a narrow chat area: a space's column of channels slides out over the chat when asked for, and
+  // goes once a channel is picked
+  let screenW = 1200;
+  let chansOpen = false;
+  $: compact = conv.kind === 'group' && screenW > 0 && screenW < 680;
+  $: if (!compact) chansOpen = false;
+  $: $activeChannel, conv.id, (chansOpen = false);
+  // slow mode: how long until my next message here may go (who moderates is not held back); the
+  // core holds it back too, this only shows it
+  let now = Date.now();
+  let slowTick = null;
+  $: slowSecs = conv.kind === 'group' && !conv.can?.slowFree ? (shownChan ? shownChan.slowSecs : $mainChannel.slowSecs) || 0 : 0;
+  $: lastMine = slowSecs ? Math.max(0, ...$messages.filter((m) => m.mine && !m.system).map((m) => m.ts || 0)) : 0;
+  $: if ($messages) now = Date.now();
+  $: slowLeft = slowSecs && lastMine ? Math.min(slowSecs, Math.max(0, Math.ceil(slowSecs - (now - lastMine) / 1000))) : 0;
+  const tickNow = () => (now = Date.now());
+  function slowTimer(left) {
+    if (left > 0 && !slowTick) slowTick = setInterval(tickNow, 1000);
+    else if (left <= 0 && slowTick) { clearInterval(slowTick); slowTick = null; }
+  }
+  $: slowTimer(slowLeft);
+  onDestroy(() => slowTick && clearInterval(slowTick));
+  const clock = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s}`);
+  $: canPost = shownChan ? shownChan.canSend !== false : conv.kind === 'group' && $mainChannel.canSend !== undefined ? $mainChannel.canSend : conv.can.send;
   $: if ($thread) threadsOpen = false;
   // a draft per channel: switching channels keeps what was being written in each
   $: if ($activeChannel !== shownChannel) {
@@ -243,12 +270,16 @@
 
 <svelte:window on:keydown={windowKey} />
 
-<div class="chat-screen">
-  {#if conv.kind === 'group'}
-    <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; }} />
+<div class="chat-screen" class:compact bind:clientWidth={screenW}>
+  {#if conv.kind === 'group' && (!compact || chansOpen)}
+    <ChannelBar {conv} indent={indent && !compact} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+  {/if}
+  {#if compact && chansOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+    <div class="chan-scrim" transition:fade={{ duration: 150 }} on:click={() => (chansOpen = false)}></div>
   {/if}
   <div class="main">
-    <ChatHeader {conv} {back} {indent} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}
@@ -257,8 +288,13 @@
 
     <PinBar chatId={conv.id} canPin={conv.can.pin} />
 
-    {#if conv.kind === 'group' && !conv.upgraded}
+    {#if conv.kind === 'group' && conv.pending}
+      <div class="small upg pending"><Icon name="clock" size={14} /> <span>{$t('chats.pending.' + conv.pending)}</span></div>
+    {:else if conv.kind === 'group' && !conv.upgraded}
       <p class="small upg">{$t('chats.groupNotUpgraded')}</p>
+    {/if}
+    {#if conv.requests}
+      <button class="small upg reqs-bar" on:click={() => (info = true)}><Icon name="userPlus" size={14} /> {$t('chats.req.waiting', { n: conv.requests })}</button>
     {/if}
 
     <MessageList bind:this={list} {conv} {q} {matches} {currentMatch} />
@@ -280,13 +316,20 @@
 
     {#if conv.kind === 'direct' && conv.blocked}
       <!-- no composer: a blocked person gets nothing either way -->
+    {:else if conv.kind === 'group' && conv.pending}
+      <p class="small muted bar ro"><Icon name="clock" size={14} /> {$t('chats.pending.short')}</p>
+    {:else if mutedUntil * 1000 > Date.now()}
+      <p class="small muted bar ro"><Icon name="clock" size={14} /> {$t('chats.to.mine', { when: new Date(mutedUntil * 1000).toLocaleString(intlLocale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) })}</p>
     {:else if !canPost}
       <p class="small muted bar ro"><Icon name="lock" size={14} /> {conv.can.send ? $t('chats.readOnlyChannelNote') : $t('chats.readOnly')}</p>
     {:else}
+      {#if slowLeft > 0 && !editing}
+        <p class="small muted bar slow" transition:fly={{ y: 6, duration: 200 }}><Icon name="clock" size={14} /> {$t(slowLeft >= 60 ? 'chats.slowWaitMin' : 'chats.slowWait', { t: clock(slowLeft) })}</p>
+      {/if}
       <Composer bind:this={composer} bind:text {replyTo} {editing} replyName={replyTo ? $authorName(replyTo) : ''}
-        files={conv.can.files} busy={sending}
+        files={conv.can.files} busy={sending || (!editing && slowLeft > 0)}
         placeholder={conv.kind === 'group' ? $t('chats.writeIn', { name: channelName || $t('chats.mainChannel') }) : $t('chats.writeMessage')}
-        on:submit={submit} on:cancel={cancelCompose} on:editlast={editLast} on:attach={() => pickAndSend(conv, $activeChannel)} on:goto={(e) => list?.goTo(e.detail)} />
+        on:submit={submit} on:cancel={cancelCompose} on:editlast={editLast} on:attach={() => slowLeft > 0 || pickAndSend(conv, $activeChannel)} on:goto={(e) => list?.goTo(e.detail)} />
     {/if}
   </div>
 
@@ -294,7 +337,7 @@
     {#if conv.kind === 'direct'}
       <ContactProfile {conv} on:close={toggleInfo} on:call={(e) => call(e.detail)} />
     {:else}
-      <ChatInfo {conv} on:close={toggleInfo} />
+      <ChatInfo {conv} windowed on:close={toggleInfo} />
     {/if}
   {/if}
 

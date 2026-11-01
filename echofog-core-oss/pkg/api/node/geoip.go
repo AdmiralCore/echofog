@@ -42,6 +42,7 @@ type geoService struct {
 type geoEntry struct {
 	CountryCode string `json:"cc,omitempty"`
 	City        string `json:"city,omitempty"`
+	Org         string `json:"org,omitempty"` // the provider (ISP) of the address, when the service names it
 	At          int64  `json:"at"`
 	Failed      bool   `json:"failed,omitempty"`
 }
@@ -51,6 +52,10 @@ func parseIPWhoIs(b []byte) (geoEntry, error) {
 		Success     bool   `json:"success"`
 		CountryCode string `json:"country_code"`
 		City        string `json:"city"`
+		Connection  struct {
+			ISP string `json:"isp"`
+			Org string `json:"org"`
+		} `json:"connection"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
 		return geoEntry{}, err
@@ -58,13 +63,18 @@ func parseIPWhoIs(b []byte) (geoEntry, error) {
 	if !r.Success || len(r.CountryCode) != 2 {
 		return geoEntry{}, errors.New("no location")
 	}
-	return geoEntry{CountryCode: strings.ToUpper(r.CountryCode), City: r.City}, nil
+	org := r.Connection.ISP
+	if org == "" {
+		org = r.Connection.Org
+	}
+	return geoEntry{CountryCode: strings.ToUpper(r.CountryCode), City: r.City, Org: org}, nil
 }
 
 func parseIPInfo(b []byte) (geoEntry, error) {
 	var r struct {
 		Country string `json:"country"`
 		City    string `json:"city"`
+		Org     string `json:"org"` // "AS12389 PJSC Rostelecom"
 		Bogon   bool   `json:"bogon"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
@@ -73,7 +83,11 @@ func parseIPInfo(b []byte) (geoEntry, error) {
 	if r.Bogon || len(r.Country) != 2 {
 		return geoEntry{}, errors.New("no location")
 	}
-	return geoEntry{CountryCode: strings.ToUpper(r.Country), City: r.City}, nil
+	org := r.Org
+	if as, name, ok := strings.Cut(org, " "); ok && strings.HasPrefix(as, "AS") {
+		org = name
+	}
+	return geoEntry{CountryCode: strings.ToUpper(r.Country), City: r.City, Org: org}, nil
 }
 
 // geoLocator looks addresses up once each and keeps the answers.
@@ -81,7 +95,7 @@ type geoLocator struct {
 	mu       sync.Mutex
 	inFlight map[string]bool
 	services []geoService
-	client   func() *http.Client // through the exit when connected, else direct
+	client   func() *http.Client // NodeApi.OwnHTTPClient: through Tor or the exit, or nil (none allowed)
 }
 
 func loadGeoCache(st storage.Storage) map[string]geoEntry {
@@ -161,7 +175,11 @@ func (g *geoLocator) lookup(ctx context.Context, ip string) (geoEntry, error) {
 			return geoEntry{}, err
 		}
 		req.Header.Set("Accept", "application/json")
-		resp, err := g.client().Do(req)
+		c := g.client()
+		if c == nil {
+			return geoEntry{}, errors.New("anonymous mode: no lookup without the proxy or the VPN")
+		}
+		resp, err := c.Do(req)
 		if err != nil {
 			last = err
 			continue
@@ -226,24 +244,9 @@ func (g *geoLocator) refresh(st storage.Storage, addrs []string, done func()) {
 	}()
 }
 
-// geoClient is the HTTP client for lookups: through the running proxy, so the request leaves
-// from the exit, or the normal one when not connected.
-func (n *NodeApi) geoClient() *http.Client {
-	n.vpn.mu.Lock()
-	srv := n.vpn.server
-	n.vpn.mu.Unlock()
-	if srv != nil {
-		if a := srv.Addr(); a != nil {
-			proxy := &url.URL{Scheme: "socks5", Host: a.String()}
-			return &http.Client{Timeout: geoTimeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
-		}
-	}
-	return &http.Client{Timeout: geoTimeout}
-}
-
 func (n *NodeApi) geo() *geoLocator {
 	n.geoOnce.Do(func() {
-		n.geoLoc = &geoLocator{inFlight: map[string]bool{}, services: geoServices, client: n.geoClient}
+		n.geoLoc = &geoLocator{inFlight: map[string]bool{}, services: geoServices, client: n.OwnHTTPClient}
 	})
 	return n.geoLoc
 }

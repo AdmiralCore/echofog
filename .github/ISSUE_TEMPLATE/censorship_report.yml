@@ -7,7 +7,11 @@ body:
       value: |
         Reports that **it works** are as useful as reports that it does not. Post nothing that identifies you: no real name, no full IP address, no exact location. A country and a provider are enough.
 
+        The quickest way: in the app, **Logs → Connection report → Open the report form on GitHub**. It fills this form in with a report that has no addresses, IDs or contacts in it.
+
         Отчёты о том, что **всё работает**, так же полезны, как о том, что не работает. Не публикуйте ничего, что вас выдаёт: ни имени, ни полного IP-адреса, ни точного места. Достаточно страны и провайдера.
+
+        Быстрее всего так: в приложении **Логи → Отчёт о подключении → Открыть форму отчёта на GitHub**. Форма заполнится отчётом без адресов, ID и контактов.
   - type: dropdown
     id: result
     attributes:
@@ -72,6 +76,6 @@ body:
   - type: textarea
     id: log
     attributes:
-      label: Log (optional) / Лог (необязательно)
-      description: Check it for anything that identifies you before posting. / Проверьте, нет ли в нём того, что вас выдаёт.
+      label: Connection report or log / Отчёт о подключении или лог
+      description: The app's connection report (Logs → Connection report) fills this in. Check it for anything that identifies you before posting. / Сюда попадает отчёт из приложения (Логи → Отчёт о подключении). Проверьте, нет ли в нём того, что вас выдаёт.
       render: text

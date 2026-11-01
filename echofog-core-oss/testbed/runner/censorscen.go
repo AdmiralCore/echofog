@@ -53,6 +53,14 @@ func startCensorCapture() {
 			time.Sleep(time.Second)
 		}
 		_, _ = run("docker", "exec", "-d", container(gw), "tcpdump", "-i", wanIf(gw), "-s", "0", "-U", "-w", "/tmp/wan.pcap", "ip")
+		if *keep {
+			// a second recording that outlives the scenario (the phases of the launchpad stop every
+			// tcpdump by name; this copy has another): it shows the connections of the whole run
+			// from their first packet, so a phase that follows can tell a new flow from the middle
+			// of an old one
+			_, _ = run("docker", "exec", container(gw), "sh", "-c", "cp $(command -v tcpdump) /tmp/lpall")
+			_, _ = run("docker", "exec", "-d", container(gw), "/tmp/lpall", "-i", wanIf(gw), "-s", "0", "-U", "-w", "/tmp/all.pcap", "ip")
+		}
 	}
 	time.Sleep(2 * time.Second)
 	captureStarted = true

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/network"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 )
 
@@ -56,6 +57,25 @@ type persistedSettings struct {
 	// AccessMode is who may reach this node from its next start: "public" or "hidden" (see
 	// config.AccessConfig). Empty: what the configuration says.
 	AccessMode string `json:"accessMode,omitempty"`
+	// GuardMode is how this node enters the network: "auto" (the default), "on" or "off" (see
+	// config.AntiDPIConfig.GuardMode). Empty: what the configuration says.
+	GuardMode string `json:"guardMode,omitempty"`
+	// PinnedGuards are relays the user chose to always route through (annotated addresses). Once the
+	// user has pinned any from the app, this list owns anti_dpi.pinned_guards.
+	PinnedGuards []string `json:"pinnedGuards,omitempty"`
+	// Proxy is the SOCKS5 proxy (Tor) the node goes out through, once the user set one from the app
+	// (ProxySet; "" then means none even when the configuration names one). CallRoute is how calls
+	// go: "auto", "direct" or "relay" (see config.NetworkConfig).
+	// KillSwitch: whole-computer mode lets nothing out around the exit; nil: on (the default).
+	KillSwitch *bool  `json:"killSwitch,omitempty"`
+	ProxySet   bool   `json:"proxySet,omitempty"`
+	Proxy      string `json:"proxy,omitempty"`
+	CallRoute  string `json:"callRoute,omitempty"`
+	// Anonymous is the anonymous mode once the user set it from the app (AnonSet): "tor", "relay"
+	// or "" (off); AnonWalletDirect lets the TON wallet out while it is on (see config.NetworkConfig).
+	AnonSet          bool   `json:"anonSet,omitempty"`
+	Anonymous        string `json:"anonymous,omitempty"`
+	AnonWalletDirect bool   `json:"anonWalletDirect,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
 }
@@ -78,6 +98,33 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 	applySettings(c, p.SettingsDTO)
 	if p.AccessMode == config.AccessPublic || p.AccessMode == config.AccessHidden {
 		c.Access.Mode = p.AccessMode
+	}
+	if p.GuardMode == config.GuardAuto || p.GuardMode == config.GuardOn || p.GuardMode == config.GuardOff {
+		c.AntiDPI.GuardMode = p.GuardMode
+	}
+	if p.ProxySet {
+		if a, err := network.NormalizeProxyAddr(p.Proxy); err == nil {
+			c.Network.Proxy = a
+		}
+	}
+	if p.AnonSet {
+		switch p.Anonymous {
+		case "", config.AnonTor, config.AnonRelay:
+			c.Network.Anonymous, c.Network.AnonWalletDirect = p.Anonymous, p.AnonWalletDirect
+		default:
+			c.Network.Anonymous = config.AnonRelay // a hand edit gone wrong: hide rather than show
+		}
+	}
+	if r, err := normalizeCallRoute(p.CallRoute); err == nil && p.CallRoute != "" {
+		c.Network.CallRoute = r
+	}
+	if pins, err := normalizePinnedGuards(p.PinnedGuards); err == nil {
+		p.PinnedGuards = pins
+		if len(pins) > 0 {
+			c.AntiDPI.PinnedGuards = pins // the app owns the list once the user has pinned from it
+		}
+	} else {
+		p.PinnedGuards = nil
 	}
 	if boot, err := normalizeBootstrap(p.BootstrapNodes); err == nil {
 		p.BootstrapNodes = boot

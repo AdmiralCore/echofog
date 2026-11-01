@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -97,5 +98,58 @@ func TestConfirmNative_HeadlessAllows(t *testing.T) {
 	app := NewApp() // ctx is nil
 	if err := app.confirmNative("t", "m"); err != nil {
 		t.Errorf("headless confirm should allow: %v", err)
+	}
+}
+
+// Small sends add up: once those left unconfirmed within the hour reach the threshold, the next
+// one asks, so a page cannot drain the wallet in many sends just under it. After a yes the count
+// starts again; each asset counts on its own.
+func TestSmallSendsAddUpToAConfirmation(t *testing.T) {
+	orig := dialogFunc
+	defer func() { dialogFunc = orig }()
+	quietSends.reset("TON")
+	quietSends.reset("USDT")
+	app := withEventsCtx()
+
+	prompts, answer := 0, "No"
+	dialogFunc = func(ctx context.Context, o runtime.MessageDialogOptions) (string, error) {
+		prompts++
+		return answer, nil
+	}
+	for i := 0; i < 3; i++ {
+		if err := app.confirmSendAboveThreshold("TON", "0.3", "addr"); err != nil {
+			t.Fatalf("send %d of 0.3 TON should pass unprompted: %v", i+1, err)
+		}
+	}
+	if prompts != 0 {
+		t.Fatalf("0.9 TON in small sends prompted %d times", prompts)
+	}
+	if err := app.confirmSendAboveThreshold("TON", "0.3", "addr"); err == nil {
+		t.Fatal("the send that takes the unconfirmed total to 1.2 TON must ask, and a no refuses it")
+	}
+	if prompts != 1 {
+		t.Fatalf("want one prompt, got %d", prompts)
+	}
+	if err := app.confirmSendAboveThreshold("USDT", "0.5", "addr"); err != nil {
+		t.Errorf("USDT counts apart from TON: %v", err)
+	}
+
+	answer = "Yes"
+	if err := app.confirmSendAboveThreshold("TON", "0.3", "addr"); err != nil {
+		t.Fatalf("a yes lets it through: %v", err)
+	}
+	if err := app.confirmSendAboveThreshold("TON", "0.3", "addr"); err != nil {
+		t.Errorf("after a yes the count starts again: %v", err)
+	}
+	if prompts != 2 {
+		t.Errorf("want two prompts in all, got %d", prompts)
+	}
+
+	// the window: sends older than an hour no longer count
+	l := &quietLedger{sends: map[string][]quietSend{}}
+	start := time.Now()
+	l.add("TON", 0.9, start)
+	if got := l.add("TON", 0.3, start.Add(quietWindow+time.Minute)); got != 0.3 {
+		t.Errorf("an hour later the old send should not count: total %v", got)
 	}
 }

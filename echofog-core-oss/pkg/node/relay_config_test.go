@@ -39,7 +39,8 @@ func TestRelayReachability(t *testing.T) {
 }
 
 // The address a node offers for pasting carries its cover site and its role; announced caps say
-// "server" only for the server role, and a hidden node says nothing at all.
+// "server" only for the server role. A hidden node offers nothing and, like one in anonymous mode,
+// asks to stay unlisted.
 func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
 	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}}
 	n.NAT = routing.NewNATManager(nil, slog.Default())
@@ -52,6 +53,12 @@ func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
 	assert.Equal(t, "203.0.113.5:40001/"+n.ID.String()+"?sni=cover.example&srv=1", n.RelayReachability().Addr)
 	assert.True(t, n.announcedCaps().Has(handshake.CapServer))
 
+	assert.False(t, n.announcedCaps().Has(handshake.CapUnlisted), "a public node is listed")
+
+	n.Cfg.Network.Anonymous = config.AnonRelay
+	assert.True(t, n.announcedCaps().Has(handshake.CapUnlisted))
+	assert.True(t, n.announcedCaps().Has(handshake.CapDHTServer))
+
 	n.Cfg.Access.Mode = config.AccessHidden
-	assert.Equal(t, handshake.CapNone, n.announcedCaps(), "a hidden node announces nothing")
+	assert.Equal(t, handshake.CapUnlisted, n.announcedCaps(), "a hidden node offers nothing")
 }

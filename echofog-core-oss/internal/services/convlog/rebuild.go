@@ -57,6 +57,8 @@ func (l *Log) writeChunked(sets []storage.Entry, dels [][]byte) error {
 // rebuildLocked recomputes every view of c. Call with l.mu held. The meta keeps Rebuild set until
 // the last write, so a crash in between rebuilds again on the next membership event or sync.
 func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
+	l.views.Lock()
+	defer l.views.Unlock()
 	old := l.loadMeta(bc, c)
 	old.Rebuild = true
 	if raw, err := json.Marshal(old); err == nil {
@@ -97,7 +99,7 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 		for _, en := range entries {
 			var v View
 			if json.Unmarshal(en.Value, &v) == nil && v.Legacy && v.Present {
-				v.Edits, v.EditRefs, v.Deletes, v.Reacts, v.Pin = nil, nil, nil, nil, nil
+				v.Edits, v.EditRefs, v.Deletes, v.Reacts, v.Pin, v.ThreadTitle = nil, nil, nil, nil, nil, nil
 				v.Replies, v.LastReplyTS = 0, 0
 				legacy[v.ID] = &v
 			}
@@ -106,7 +108,7 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	var dels [][]byte
 	var legacyOrder []storage.Entry
 	for _, pfx := range [][]byte{bs(pfxView + bc + "/"), bs(pfxThread + bc + "/"), bs(pfxPin + bc + "/"), bs(pfxIndex + bc + "/"),
-		bs(pfxChanO + bc + "/"), channelPrefix(bc)} {
+		bs(pfxChanO + bc + "/"), channelPrefix(bc), profileKey(bc)} {
 		entries, err := l.st.FindValues(pfx, 0)
 		if err != nil {
 			return nil, err

@@ -68,6 +68,10 @@ type Swarm struct {
 	sameRegion func(addr string) bool    // region policy of the noise guard, nil: nothing is in the home region
 	explicit   map[types.PeerID]struct{} // peers the operator listed (bootstrap): dialed whatever they announce
 	guards     guardSet                  // the camouflaged servers a user's node keeps its cross-border links to (swarm_guards.go)
+	guardsFree atomic.Bool               // guard_mode "auto" stands down: the node is placed in a country that does not censor (swarm_guard_auto.go)
+	invited    inboundInvited            // peers let in with an invitation: guard mode takes them from abroad (swarm_guard_inbound.go)
+
+	domestic atomic.Pointer[func(addr string) bool] // servers of the own country (swarm_guard_domestic.go)
 
 	// exitPools marks peers that run a parallel session pool (the exit a VPN tunnels through):
 	// addPeer keeps several concurrent connections to such a peer instead of one, and tunnel
@@ -206,11 +210,10 @@ func (s *Swarm) registrationLoop(ch <-chan network.NewConnEvent) {
 				continue
 			}
 
-			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release, event.Reality)
+			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release, event.Reality, event.Caps)
 			if p == nil {
 				continue // duplicate connection, already closed
 			}
-			p.SetCaps(event.Caps)
 			go p.transport.StartLoops()
 		}
 	}

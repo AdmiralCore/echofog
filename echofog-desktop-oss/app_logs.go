@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
+	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/logging"
 )
 
@@ -36,6 +39,49 @@ func (a *App) ExportLogs() (string, error) {
 	name := fmt.Sprintf("echofog-logs-%s.txt", time.Now().Format("2006-01-02-150405"))
 	path := filepath.Join(home, name)
 	if err := os.WriteFile(path, []byte(logging.Dump()), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ConnectionReport is the anonymous connection report: what the node knows about how it connects,
+// with no address, ID, link or contact in it. Nothing is sent; the user copies or saves it.
+func (a *App) ConnectionReport() (api.ConnectionReport, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.ConnectionReport{}, errNodeNotStarted
+	}
+	return nodeAPI.ConnectionReport(version)
+}
+
+// SaveConnectionReport writes the report text to a timestamped file in the home directory.
+func (a *App) SaveConnectionReport(text string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
+	path := filepath.Join(home, fmt.Sprintf("echofog-report-%s.txt", time.Now().Format("2006-01-02-150405")))
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// streamLogName is what a stream log may be called: the app names it after the time it began.
+var streamLogName = regexp.MustCompile(`^echofog-stream-[0-9-]{17}\.json$`)
+
+// SaveStreamLog writes a stream log (the app puts it together while a stream plays) to the home
+// directory under the given name and returns its path, for the user to keep or send into a chat.
+func (a *App) SaveStreamLog(name, text string) (string, error) {
+	if !streamLogName.MatchString(name) {
+		return "", errors.New("bad stream log name")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
+	path := filepath.Join(home, name)
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

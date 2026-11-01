@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -37,6 +38,7 @@ type options struct {
 	advertisePort        int
 	obfs                 string
 	guardMode            string
+	tcpRotate            string
 	stealthPassword      string
 	obfsPassword         string
 	tlsServerName        string
@@ -99,12 +101,13 @@ func parseRunFlags(args []string) options {
 
 	f.StringVar(&o.transport, "transport", getEnv("ECHOFOG_TRANSPORT", ""), "auto (QUIC, then TCP), quic, or tcp")
 	f.StringVar(&o.tcpListen, "tcp-listen", getEnv("ECHOFOG_TCP_LISTEN", ""), "TCP fallback listen address, e.g. :443 (default: the --listen-addr port); 'off' disables it")
-	f.IntVar(&o.tcpRemotePort, "tcp-remote-port", int(envInt64("ECHOFOG_TCP_REMOTE_PORT", 0)), "port peers use for the TCP fallback when it differs from the QUIC port (e.g. 443)")
+	f.IntVar(&o.tcpRemotePort, "tcp-remote-port", int(envInt64("ECHOFOG_TCP_REMOTE_PORT", 0)), "port this node dials on other nodes for the TCP fallback, when their TCP fallback runs on a fixed port apart from QUIC (e.g. 443); 0 = the same port as their QUIC")
 	f.StringVar(&o.wsListen, "ws-listen", getEnv("ECHOFOG_WS_LISTEN", ""), "listen for peers over WebSocket on this address, to sit behind a CDN like Cloudflare (e.g. 127.0.0.1:8080 with the CDN in front); empty disables it")
 	f.StringVar(&o.wsPath, "ws-path", getEnv("ECHOFOG_WS_PATH", ""), "HTTP path the WebSocket endpoint answers on (default /echofog)")
 	f.IntVar(&o.advertisePort, "advertise-port", int(envInt64("ECHOFOG_ADVERTISE_PORT", 0)), "public port peers use to reach this node when it differs from the listen port (e.g. 443 when a port map publishes host 443 to this node); 0 = the listen port")
 	f.StringVar(&o.obfs, "obfs", getEnv("ECHOFOG_OBFS", ""), "UDP obfuscation: node (default; keys derive from each node's peer ID) or off")
-	f.StringVar(&o.guardMode, "guard-mode", getEnv("ECHOFOG_GUARD_MODE", ""), "guard mode of a user's node: auto (default; on for every node that is not a server), on or off. On: two or three camouflaged guard servers carry its links across a border, instead of a mesh of its own (docs/anti-dpi.md)")
+	f.StringVar(&o.tcpRotate, "tcp-rotate", getEnv("ECHOFOG_TCP_ROTATE", ""), "rotate the TCP fallback links against the TSPU freeze (a link that goes silent after ~16 KB): auto (default; across the border from Russia, and where a link froze), on or off")
+	f.StringVar(&o.guardMode, "guard-mode", getEnv("ECHOFOG_GUARD_MODE", ""), "guard mode of a user's node: auto (default; on for a node that is not a server while --obfs is node; the desktop app also stands it down in a country that does not censor), on or off. On: two or three camouflaged guard servers carry its links across a border, instead of a mesh of its own (docs/anti-dpi.md)")
 	f.StringVar(&o.stealthPassword, "stealth-password", getEnv("ECHOFOG_STEALTH_PASSWORD", ""), "optional extra secret for a private network (TCP camouflage); every node of that network must use the same")
 	f.StringVar(&o.obfsPassword, "obfs-password", getEnv("ECHOFOG_OBFS_PASSWORD", ""), "optional extra secret for a private network (UDP obfuscation); every node of that network must use the same")
 	f.StringVar(&o.tonNetwork, "ton-network", getEnv("ECHOFOG_TON_NETWORK", ""), "TON network of the node's wallet: testnet or mainnet (default: "+config.DefaultTonNetwork+")")
@@ -232,6 +235,9 @@ func (o options) config() *config.AppConfig {
 	if o.guardMode != "" {
 		cfg.AntiDPI.GuardMode = o.guardMode
 	}
+	if o.tcpRotate != "" {
+		cfg.AntiDPI.TCPRotate = o.tcpRotate
+	}
 	cfg.AntiDPI.ObfsPassword = o.obfsPassword
 	cfg.AntiDPI.StealthPassword = o.stealthPassword
 	switch o.tonNetwork {
@@ -318,6 +324,9 @@ func runCmd(args []string) int {
 	}
 	if o.obfs != "" && o.obfs != config.ObfsNode && o.obfs != config.ObfsOff {
 		fatal("--obfs: %q is not node or off", o.obfs)
+	}
+	if g := o.tcpRotate; g != "" && g != config.TCPRotateAuto && g != config.TCPRotateOn && g != config.TCPRotateOff {
+		fatal("--tcp-rotate: %q is not auto, on or off", g)
 	}
 	if g := o.guardMode; g != "" && g != config.GuardAuto && g != config.GuardOn && g != config.GuardOff {
 		fatal("--guard-mode: %q is not auto, on or off", g)
@@ -442,6 +451,9 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 	if gated {
 		if link, err := n.InviteLink(); err == nil {
 			fmt.Printf("Invite link:   %s\n", link)
+			if web := access.WebLink(link); web != "" {
+				fmt.Printf("               %s\n", web)
+			}
 		} else {
 			fmt.Println("Invite link:   echofog-node invite   (once the node knows its public address)")
 		}
@@ -450,6 +462,10 @@ func printSummary(o options, n *node.Node, h *api.NodeApi) {
 		fmt.Println("Relay:         off (a hidden node relays for nobody)")
 	} else if o.signaling {
 		fmt.Println("Relay:         signaling only: DHT and hole punching help, no traffic is relayed")
+		// what this costs the people using the network, said where the operator reads it
+		slog.Warn("Signaling only: this node relays no messages, calls or join requests and keeps no mail. " +
+			"Two people behind NATs that hole punching cannot pass (a symmetric NAT, most mobile networks) " +
+			"then cannot write to or call each other unless another relay is in the network; set ECHOFOG_SIGNALING=false to relay, within the ECHOFOG_RELAY_* limits")
 	} else if o.relay && o.relayPrivate {
 		fmt.Printf("Relay:         private, up to %d connections at once, serving %d allowed peer(s)\n", o.relayMaxCircuits, len(splitCSV(o.relayAllow)))
 		fmt.Println("               (not advertised; allowed peers reach it with --relays " + joinAddress(n, o.listenAddr) + ")")

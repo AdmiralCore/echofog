@@ -16,6 +16,7 @@
   export let threadsOpen = false;
   export let channel = null; // the channel shown in a space: { name, topic } (null: the main one)
   export let hasRooms = false; // the space has voice rooms
+  export let channelsButton = false; // a narrow space: its channels open from here
 
   const dispatch = createEventDispatcher();
   $: space = conv.kind === 'group';
@@ -25,6 +26,9 @@
 <header class:indent>
   {#if back}
     <button class="icon" title={$t('chats.backToChats')} aria-label={$t('chats.backToChats')} on:click={() => dispatch('back')}><Icon name="arrowLeft" size={19} /></button>
+  {/if}
+  {#if space && channelsButton}
+    <button class="icon" title={$t('chats.channels')} aria-label={$t('chats.channels')} on:click={() => dispatch('channels')}><Icon name="panel" size={18} /></button>
   {/if}
   {#if space}
     <div class="who chan-who">

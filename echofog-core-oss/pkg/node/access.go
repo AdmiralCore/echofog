@@ -134,6 +134,7 @@ func (n *Node) applyAccess() {
 		n.ExitService.SetAccess(n.Access.Allowed)
 		n.ExitService.SetMeter(n.Passes.Charge) // a pass's traffic allowance
 	}
+	n.Swarm.SetInboundInvited(n.Access.Invited) // guard mode still takes them from across the border
 	if n.isolated() {
 		n.Net.SetNoDial(true)
 		n.Swarm.SetNoDial(true) // also for WebSocket peers
@@ -397,6 +398,9 @@ func (n *Node) ForgetInvite(id types.PeerID) error {
 // admitPunch decides whether to answer a hole punch request: a hidden node answers (and so gives
 // out its addresses) only to the peers it lets in.
 func (n *Node) admitPunch(from types.PeerID, ticket []byte) bool {
+	if n.ProxyOn() || n.AnonMode() != "" {
+		return n.admitPunchBehindProxy(from)
+	}
 	if n.Access == nil || !n.Access.Enabled() {
 		// guard mode: no hole punch with a user across the border; the traffic goes through relays
 		return !n.Swarm.UserLinkViaRelay(from, "")

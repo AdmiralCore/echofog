@@ -52,6 +52,16 @@ func (a *App) ChatThreadTitle(ref api.ChatRef, root, title string) error {
 	return n.ChatThreadTitle(ref, root, title)
 }
 
+// ChatGroupPhoto sets a group's picture for every member ("" takes it away): base64 of a small
+// JPEG, PNG or WebP.
+func (a *App) ChatGroupPhoto(ref api.ChatRef, photoBase64 string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatGroupPhoto(ref, photoBase64)
+}
+
 // ChatAttachments are a chat's media, files and links, newest first.
 func (a *App) ChatAttachments(ref api.ChatRef) (api.ChatAttachments, error) {
 	n := a.getAPI()
@@ -113,4 +123,42 @@ func (a *App) EndRoomCall(groupID, room, callID string) error {
 		return errNodeNotStarted
 	}
 	return n.EndRoomCall(groupID, room, callID)
+}
+
+// ChatMainChannel is the settings of a group's main channel.
+func (a *App) ChatMainChannel(ref api.ChatRef) (api.ChannelDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.ChannelDTO{}, errNodeNotStarted
+	}
+	return n.ChatMainChannel(ref)
+}
+
+// ChatMainChannelSave changes the settings of a group's main channel: name, topic, read-only, slow
+// mode, the channel the group opens on.
+func (a *App) ChatMainChannelSave(ref api.ChatRef, spec api.ChannelSpec) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatMainChannelSave(ref, spec)
+}
+
+// ChatChannelPlace puts a channel, a voice room or the main channel (id "") in a category.
+func (a *App) ChatChannelPlace(ref api.ChatRef, id, parent string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.ChatChannelPlace(ref, id, parent)
+}
+
+// ChatCategoriesSetup turns a space's two default headings into categories it can rename, remove
+// and fill with channels of either kind; it returns their ids, text then voice.
+func (a *App) ChatCategoriesSetup(ref api.ChatRef, textName, voiceName string) ([]string, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.ChatCategoriesSetup(ref, textName, voiceName)
 }

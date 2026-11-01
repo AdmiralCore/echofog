@@ -140,6 +140,11 @@ func Decode(data []byte) (*MediaPacket, error) {
 
 // SealUnit encrypts a media unit with the room key and splits it into wire fragments.
 func SealUnit(unit *MediaPacket, key []byte) ([][]byte, error) {
+	return sealUnit(unit, key, 0)
+}
+
+// sealUnit is SealUnit with fragments that leave reserve bytes of the datagram free.
+func sealUnit(unit *MediaPacket, key []byte, reserve int) ([][]byte, error) {
 	if len(unit.StreamID) > MaxStreamIDLen {
 		return nil, ErrStreamIDTooLong
 	}
@@ -147,7 +152,7 @@ func SealUnit(unit *MediaPacket, key []byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	limit := fragmentPayload(len(unit.StreamID))
+	limit := fragmentPayload(len(unit.StreamID)) - reserve
 	count := (len(ct) + limit - 1) / limit
 	if count > MaxFragments {
 		return nil, ErrUnitTooLarge
@@ -174,6 +179,12 @@ func fragmentPayload(streamIDLen int) int {
 // of at most DatagramBudget - SealOverhead(len(streamID)) bytes travels as one fragment.
 func SealOverhead(streamIDLen int) int {
 	return fixedHeaderLen + fragFieldsLen + streamIDLen + gcmNonceLen + gcmTagLen
+}
+
+// VideoUnitBudget is the largest video unit (one RTP packet) of a stream with this ID length that
+// travels as a single fragment, with the room FEC keeps beside it.
+func VideoUnitBudget(streamIDLen int) int {
+	return fragmentPayload(streamIDLen) - fecReserve - gcmNonceLen - gcmTagLen
 }
 
 // OpenUnit authenticates and decrypts a reassembled unit; hdr supplies the shared header fields.

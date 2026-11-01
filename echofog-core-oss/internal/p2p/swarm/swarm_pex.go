@@ -55,12 +55,13 @@ func (s *Swarm) handlePeerExchange(msg *internal_pb.MessageData, from types.Peer
 }
 
 // shareablePeers picks up to n connected peers to tell another node about: only peers with an
-// address that passes the address policy, never the asker itself.
+// address that passes the address policy and that did not ask to stay unlisted, never the asker
+// itself.
 func (s *Swarm) shareablePeers(exclude types.PeerID, n int) *internal_pb.PeerList {
 	policy := s.AddrPolicy()
 	var pref, rest []*Peer
 	for _, p := range s.GetAllPeers() {
-		if p.ID() == exclude || !p.Alive() || !policy.Shareable(p.Addr()) {
+		if p.ID() == exclude || !p.Alive() || !policy.Shareable(p.Addr()) || p.Caps().Has(handshake.CapUnlisted) {
 			continue
 		}
 		if offersRelay(p.Caps()) {

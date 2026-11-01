@@ -2,6 +2,7 @@ package node
 
 import (
 	"crypto/ed25519"
+	"encoding/hex"
 	"sync"
 	"testing"
 	"time"
@@ -163,4 +164,97 @@ func TestAnOlderMemberKeepsTheGroupOffTheLog(t *testing.T) {
 	a.say(t, g.ID, "hello")
 	old.say(t, g.ID, "hi")
 	assert.False(t, a.f.LogMode(g.ID))
+}
+
+// A ban that reaches a member only by the group's log, not by the remover's "rm" message (the
+// member was away and that message was lost), still takes the banned peer off its list: it no
+// longer hands them the group's keys or lets them back in. A removal that came both ways counts
+// once.
+func TestBanByTheLogReachesAMemberWhoMissedTheMessage(t *testing.T) {
+	m := newMesh()
+	g, ns := newGroupOf(t, m, 3)
+	a, b, c := ns[0], ns[1], ns[2]
+
+	m.setOnline(b, false)
+	require.NoError(t, a.f.Remove(g, c.id.String(), true))
+	// the "rm" for b is lost on the way
+	m.mu.Lock()
+	keep := m.held[:0]
+	for _, d := range m.held {
+		if d.to != b.id {
+			keep = append(keep, d)
+		}
+	}
+	m.held = keep
+	m.mu.Unlock()
+	m.setOnline(b, true)
+	m.settle()
+
+	b.f.mu.Lock()
+	_, still := b.f.member(g, c.id)
+	b.f.mu.Unlock()
+	require.True(t, still, "the test needs b to have missed the removal")
+
+	b.f.removedOnLog(g, a.id, c.pub, true) // the ban event of the log arrives
+	m.settle()
+	b.f.mu.Lock()
+	_, still = b.f.member(g, c.id)
+	b.f.mu.Unlock()
+	assert.False(t, still, "the log's ban takes c off b's list")
+
+	b.f.removedOnLog(g, a.id, c.pub, true) // again, as when the "rm" also comes: nothing changes
+	m.settle()
+
+	// a member cannot use the log path to remove somebody it may not
+	b.f.removedOnLog(g, c.id, a.pub, true)
+	b.f.mu.Lock()
+	_, ownerIn := b.f.member(g, a.id)
+	b.f.mu.Unlock()
+	assert.True(t, ownerIn, "a removal by somebody without the right is refused by the group service")
+}
+
+// A role the group's log defines is one the group service gives and follows: a member given it
+// gets its permissions on every node, they change when the definition does, and the members of a
+// role that went get the default one.
+func TestCustomRolesReachTheGroupService(t *testing.T) {
+	m := newMesh()
+	g, ns := newGroupOf(t, m, 3)
+	a, b, c := ns[0], ns[1], ns[2]
+	helper := convlog.Role{Name: "helper", Title: "Helper", Color: 0x2266ff, Rank: 30,
+		Perms: uint32(groups.RoleMember.Permissions | groups.PermPin)}
+	for _, n := range ns {
+		n.f.mgr.SetRoleResolver(n.f.resolveRole)
+		n.f.takeRoles(g, []convlog.Role{helper})
+	}
+	require.NoError(t, a.f.SetRole(g, c.id.String(), "helper"))
+	m.settle()
+	roleOn := func(n *meshNode) groups.Role {
+		r, ok := n.f.role(g, c.id)
+		require.True(t, ok)
+		return r
+	}
+	for _, n := range []*meshNode{a, b, c} {
+		r := roleOn(n)
+		assert.Equal(t, "helper", r.Name)
+		assert.Equal(t, "Helper", r.Title)
+		assert.True(t, groups.HasPermission(r, groups.PermPin), "a helper pins")
+	}
+
+	helper.Perms = uint32(groups.RoleMember.Permissions)
+	b.f.takeRoles(g, []convlog.Role{helper}) // the narrowed definition reaches b's log
+	assert.False(t, groups.HasPermission(roleOn(b), groups.PermPin), "the narrowed role does not pin")
+
+	b.f.takeRoles(g, nil) // the role went
+	r := roleOn(b)
+	assert.Equal(t, groups.RoleMember.Name, r.Name)
+	assert.Equal(t, groups.RoleMember.Permissions, r.Permissions)
+
+	// a member list naming a role b does not know yet keeps the name, with a member's rights
+	b.f.mu.Lock()
+	err := b.f.mgr.MergeMembers(g, memberProfiles([]wireMember{{ID: c.id.String(), Pub: hex.EncodeToString(c.pub[:]), Role: "helper"}}), true)
+	b.f.mu.Unlock()
+	require.NoError(t, err)
+	r = roleOn(b)
+	assert.Equal(t, "helper", r.Name)
+	assert.Equal(t, groups.RoleMember.Permissions, r.Permissions)
 }

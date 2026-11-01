@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -23,10 +24,11 @@ type DefaultPeerAuthenticator struct {
 	signer          handshake.SignerGetterKey
 	protocolVersion uint32
 	timeout         time.Duration
-	ddos            *handshake.AntiDDoS // how many peers try to connect: sets the puzzle difficulty
-	caps            atomic.Uint32       // what this node offers peers, announced in the handshake
-	listenPort      atomic.Uint32       // where this node accepts connections, announced when it dials
-	hideListen      atomic.Bool         // a hidden node announces no port: nobody spreads its address
+	ddos            *handshake.AntiDDoS                 // how many peers try to connect: sets the puzzle difficulty
+	caps            atomic.Uint32                       // what this node offers peers, announced in the handshake
+	listenPort      atomic.Uint32                       // where this node accepts connections, announced when it dials
+	hideListen      atomic.Bool                         // a hidden node announces no port: nobody spreads its address
+	hideWhen        atomic.Pointer[func(net.Addr) bool] // announces no port to a peer it reports true for (listen_hide.go)
 	gate            atomic.Pointer[access.Gate]
 	keys            atomic.Pointer[access.Keyring]
 	screen          atomic.Pointer[handshake.ScreenFunc]
@@ -113,7 +115,7 @@ func NewDefaultPeerAuthenticator(signer handshake.SignerGetterKey, protocolVersi
 	return a
 }
 
-func (a *DefaultPeerAuthenticator) negotiator(ctx context.Context, stream MuxStream, inbound bool) *handshake.Negotiator {
+func (a *DefaultPeerAuthenticator) negotiator(ctx context.Context, stream MuxStream, inbound bool, remote net.Addr) *handshake.Negotiator {
 	cfg := &handshake.NegotiatorConfig{
 		MyNetworkID: [32]byte{},
 		MyVersion:   a.protocolVersion,
@@ -122,7 +124,7 @@ func (a *DefaultPeerAuthenticator) negotiator(ctx context.Context, stream MuxStr
 		AntiDDoS:    a.ddos,
 		ListenPort:  uint16(a.listenPort.Load()),
 	}
-	if a.hideListen.Load() {
+	if a.ListenHidden(remote) {
 		cfg.ListenPort = 0
 	}
 	if !inbound && poolLinkRequested(ctx) {
@@ -160,7 +162,7 @@ func (a *DefaultPeerAuthenticator) AuthenticateOutbound(ctx context.Context, con
 	defer stream.Close()
 	stream.SetDeadline(time.Now().Add(a.timeout))
 
-	peerRes, err := a.negotiator(ctx, stream, false).Negotiate(binding, true)
+	peerRes, err := a.negotiator(ctx, stream, false, conn.RemoteAddr()).Negotiate(binding, true)
 	if err != nil {
 		return nil, fmt.Errorf("outbound handshake negotiation failed: %w", err)
 	}
@@ -185,7 +187,7 @@ func (a *DefaultPeerAuthenticator) AuthenticateInbound(ctx context.Context, conn
 	defer stream.Close()
 	stream.SetDeadline(time.Now().Add(a.timeout))
 
-	peerRes, err := a.negotiator(ctx, stream, true).Negotiate(binding, false)
+	peerRes, err := a.negotiator(ctx, stream, true, conn.RemoteAddr()).Negotiate(binding, false)
 	if err != nil {
 		return nil, fmt.Errorf("inbound handshake negotiation failed: %w", err)
 	}

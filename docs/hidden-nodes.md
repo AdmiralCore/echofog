@@ -164,11 +164,14 @@ step 3: Docker is installed, the port is open (UDP and TCP 443), and you have `d
    docker compose -f deploy/docker-compose.yml exec node echofog-node invite
    ```
 
-   It prints one line starting with `echofog://join?`. That is the link to give out. The node also
-   prints it in the log at start (`Invite link:`).
+   It prints two lines: an `https://…/join/#join?…` link, which messengers make tappable (it opens a
+   page that starts the app or offers to download it), and the same link as `echofog://join?…`.
+   Give out either. `invite --app` prints only the `echofog://` one, for scripts. The node also prints
+   both in the log at start (`Invite link:`), and `pass` prints both for a pass.
 
-   People whose network blocks UDP need the TCP fallback, which in Docker stays off until you set a
-   real site for the node to imitate (`ECHOFOG_TLS_SERVER_NAME`, `ECHOFOG_CAMOUFLAGE_ADDR`): see
+   People whose network blocks UDP need the TCP fallback. It comes on by itself once the node has
+   found a real site next to it to imitate; until then the node runs on UDP only. To have it at once,
+   set the site yourself (`ECHOFOG_TLS_SERVER_NAME`, `ECHOFOG_CAMOUFLAGE_ADDR`): see
    [TCP fallback](deploy-vps.md#tcp-fallback). UDP alone is enough for most people.
 
 5. Check it from your own computer: paste the link into **Proxy → Specific node** and connect.
@@ -325,7 +328,7 @@ in the settings and restart the nodes.
 ### The link
 
 ```
-echofog://join?v=1&net=echofog&p=101&id=<peer id>&s=<secret>&a=<host:port>&r=<host:port/relay id>
+echofog://join?v=1&net=echofog&p=102&id=<peer id>&s=<secret>&sni=<site>&srv=1&a=<host:port>&r=<host:port/relay id>
 ```
 
 | Part | Meaning |
@@ -335,6 +338,8 @@ echofog://join?v=1&net=echofog&p=101&id=<peer id>&s=<secret>&a=<host:port>&r=<ho
 | `p` | Protocol version the node speaks. |
 | `id` | The node's peer ID. |
 | `s` | The access secret, 16 bytes in base64url. Only in the link of a hidden or isolated node; a public node's link has none and only says where the node is. |
+| `sni` | The site the node imitates, so that the first connection is already disguised. |
+| `srv` | `1` when the node runs in the server role. |
 | `a` | An address to dial, `host:port` or a `ws://` URL. May repeat. |
 | `r` | A relay the node is connected to, `host:port/<relay peer id>`, for a hole punch when no address answers. Hidden nodes only. May repeat. |
 

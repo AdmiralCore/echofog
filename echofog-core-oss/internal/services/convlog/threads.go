@@ -43,6 +43,8 @@ func (l *Log) AppendThreadTitle(c Conv, root EventID, title string) ([]byte, Eve
 // Threads lists the messages of a channel ("" the main one) that have comments, the most recently
 // active first; it looks through the newest scan messages of the channel.
 func (l *Log) Threads(c Conv, channel string, scan int) []Message {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	prefix := orderPrefix(bc)
 	if channel != "" {

@@ -250,6 +250,8 @@
             </div>
             <div class="row">
               <span class="grow last">{c.last || (c.kind === 'group' ? $t('chats.members', { n: c.members }) : $t('chats.noMessages'))}</span>
+              {#if c.pending}<span class="tag wait" title={$t('chats.pending.' + c.pending)}><Icon name="clock" size={11} /></span>{/if}
+              {#if c.requests}<span class="tag reqs" title={$t('chats.req.title', { n: c.requests })}><Icon name="userPlus" size={11} /> {c.requests}</span>{/if}
               {#if c.unread}<span class="badge">{c.unread}</span>{/if}
             </div>
           </div>
@@ -384,5 +386,7 @@
   .tag { flex: none; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 6px; display: inline-flex; align-items: center; }
   .tag.req { background: var(--accent-soft, rgba(88,101,242,.18)); color: var(--accent, #5865f2); }
   .tag.blk { background: var(--danger-soft, rgba(242,63,67,.15)); color: var(--danger, #f23f43); }
+  .tag.wait { background: var(--warn-soft, rgba(245,165,36,.15)); color: var(--warn, #f5a524); display: inline-flex; align-items: center; }
+  .tag.reqs { background: var(--accent-soft, rgba(88,101,242,.18)); color: var(--accent, #5865f2); display: inline-flex; align-items: center; gap: 3px; }
 </style>
 

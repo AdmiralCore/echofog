@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/access"
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/services/filexfer"
@@ -46,20 +47,24 @@ type GroupDTO struct {
 }
 
 type GroupMemberDTO struct {
-	PeerID   string `json:"peerId"`
-	Role     string `json:"role"`
-	JoinedAt int64  `json:"joinedAt"`
-	IsMe     bool   `json:"isMe"`
+	PeerID    string `json:"peerId"`
+	Role      string `json:"role"`
+	RoleTitle string `json:"roleTitle,omitempty"` // a custom (or renamed) role's name
+	RoleColor uint32 `json:"roleColor,omitempty"` // 0xRRGGBB
+	JoinedAt  int64  `json:"joinedAt"`
+	IsMe      bool   `json:"isMe"`
+	Online    bool   `json:"online"` // the node has a link to them now (oneself: always)
 	// what I may do to this member: remove, ban, give one of Roles (its present role included),
 	// hand the group over to them
 	CanKick     bool     `json:"canKick"`
 	CanBan      bool     `json:"canBan"`
 	Roles       []string `json:"roles,omitempty"`
 	CanTransfer bool     `json:"canTransfer"`
+	// Timeout: until when they may not write (unix seconds, 0 none); CanTimeout: I may give or
+	// lift one (a member below my rank, and I may remove members)
+	Timeout    int64 `json:"timeout,omitempty"`
+	CanTimeout bool  `json:"canTimeout"`
 }
-
-// assignableRoles are the roles a manager may give, highest first.
-var assignableRoles = []groups.Role{groups.RoleAdmin, groups.RoleModerator, groups.RoleMember, groups.RoleRestricted}
 
 type GroupMessageDTO struct {
 	ID        string        `json:"id"`
@@ -143,7 +148,8 @@ type groupsFacade struct {
 
 	async   bool // handle() sends its follow-ups from a goroutine (set for the real node)
 	nudgeMu sync.Mutex
-	connect func(types.PeerID) // asks the node to connect to a member (keys are needed to write to them)
+	connect func(types.PeerID)      // asks the node to connect to a member (keys are needed to write to them)
+	online  func(types.PeerID) bool // whether the node has a link to a member now
 
 	// files: an offer that came in a group message, and the offer for a file we post
 	onFile      func(origin types.PeerID, groupID string, wf wireFile)
@@ -160,21 +166,34 @@ type groupsFacade struct {
 
 	// the conversation log (conversations.go): a group's events, and its old-style messages so
 	// the chat shows everything in one place
-	onEvent   func(groupID string, origin types.PeerID, raw []byte)
-	onMember  func(groupID string, b *convlog.MemberBody) // a membership change of ours, for the log
-	onLegacy  func(groupID string, m GroupMessageDTO)
-	sendEvent func(target types.PeerID, text string, raw []byte, track bool) error
-	connected func(types.PeerID) bool
-	onJoined  func(groupID string, peer types.PeerID) // a newcomer and the admin who let it in: sync the log now
-	paced     map[string]time.Time                    // when a key request, sync request or sync answer last went
-	envWrites int
-	heard     map[types.PeerID]time.Time // when a group message last came from a peer
+	onEvent  func(groupID string, origin types.PeerID, raw []byte)
+	onMember func(groupID string, b *convlog.MemberBody) // a membership change of ours, for the log
+	onLegacy func(groupID string, m GroupMessageDTO)
+	// channelLets: whether the group's log lets sender post in a channel ("" the main one), a comment in
+	// thread or a file; old-style messages of a group on the log are held to it. It must not take f.mu.
+	channelLets func(groupID string, sender types.PeerID, channel, thread string, file bool) bool
+	sendEvent   func(target types.PeerID, text string, raw []byte, track bool) error
+	connected   func(types.PeerID) bool
+	onJoined    func(groupID string, peer types.PeerID) // a newcomer and the admin who let it in: sync the log now
+	paced       map[string]time.Time                    // when a key request, sync request or sync answer last went
+	envWrites   int
+	heard       map[types.PeerID]time.Time // when a group message last came from a peer
 
 	deferred map[string][]deferredOp // changes that came before what they build on
 	retrying bool
 
 	rekeys map[string]*pendingRekey // epoch replacements waiting for the gap since the last one
-	now    func() time.Time         // the clock of the key logic (tests move it)
+
+	// the groups' role definitions on their logs, by group and role (group_roles.go)
+	rolesMu  sync.Mutex
+	roleDefs map[string]map[string]groups.Role
+
+	// onForget: a group we left or that was deleted, for its conversation log to go
+	onForget func(groupID string)
+
+	// inviteState is an invitation as the group's log has it (its uses, a revocation)
+	inviteState func(groupID, n string) (convlog.Invite, bool)
+	now         func() time.Time // the clock of the key logic (tests move it)
 }
 
 func newGroupsFacade(store storage.Storage, selfID types.PeerID, selfPub types.IdentityPublicKey, sign groups.SignFunc,
@@ -322,26 +341,75 @@ func (f *groupsFacade) List() ([]GroupDTO, error) {
 }
 
 func (f *groupsFacade) Invite(groupID string) (string, error) {
+	link, _, err := f.inviteFor(groupID, inviteTTL, false)
+	return link, err
+}
+
+// inviteFor makes an invitation that lets people in for ttl, and its token (nil: the group needs
+// none, an open room or a channel).
+func (f *groupsFacade) inviteFor(groupID string, ttl time.Duration, approval bool) (string, *inviteToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.load(); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	g, err := f.mgr.GetGroup(groupID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.wireMembers(groupID)})
+	var tok *inviteToken
+	if f.needsInvite(groupID) {
+		role, err := f.mgr.GetMemberRole(groupID, f.selfID)
+		if err != nil || !mayInvite(role) {
+			return "", nil, errors.New("your role may not invite to this group")
+		}
+		if tok, err = f.newInviteTokenFor(groupID, ttl); err != nil {
+			return "", nil, err
+		}
+	}
+	raw, err := json.Marshal(groupWire{Kind: "invite", Group: groupID, Genesis: g, Members: f.inviteMembers(groupID), Inv: tok, Ap: approval})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return inviteScheme2 + base64.RawURLEncoding.EncodeToString(raw), nil
+	return inviteScheme2 + base64.RawURLEncoding.EncodeToString(raw), tok, nil
+}
+
+// groupInviteText is a group invitation in its own form (fogroup2:…), from that form, from
+// echofog://group/… (what the invitation page opens) or from its https form.
+func groupInviteText(text string) string {
+	t := strings.TrimSpace(text)
+	// the invitation among other words (a messenger's message around it, a dot after it)
+	for _, w := range strings.Fields(t) {
+		lw := strings.ToLower(w)
+		if strings.HasPrefix(lw, "https://") || strings.HasPrefix(lw, "http://") || strings.HasPrefix(lw, "echofog://") ||
+			strings.HasPrefix(lw, inviteScheme2) || strings.HasPrefix(lw, inviteScheme) {
+			t = strings.TrimRight(w, ".,;:!?)]»\"'")
+			break
+		}
+	}
+	t = strings.TrimSpace(access.FromWebLink(t))
+	const app = "echofog://group/"
+	if len(t) > len(app) && strings.EqualFold(t[:len(app)], app) {
+		return inviteScheme2 + strings.TrimSuffix(t[len(app):], "/")
+	}
+	return t
+}
+
+// GroupWebLink is the https form of a group invitation: a page messengers make tappable, which
+// opens the app with it.
+func GroupWebLink(invite string) string {
+	if !strings.HasPrefix(invite, inviteScheme2) {
+		return ""
+	}
+	return access.WebLinkBase + "group/" + strings.TrimPrefix(invite, inviteScheme2)
 }
 
 func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
-	invite = strings.TrimSpace(invite)
+	invite = groupInviteText(invite)
 	var g *groups.GroupGenesisManifest
 	var members []wireMember
+	var tok *inviteToken
+	approval := false
 	switch {
 	case strings.HasPrefix(invite, inviteScheme2):
 		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(invite, inviteScheme2))
@@ -349,7 +417,7 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 		if err != nil || json.Unmarshal(raw, &w) != nil || w.Genesis == nil {
 			return GroupDTO{}, errors.New("malformed invite")
 		}
-		g, members = w.Genesis, w.Members
+		g, members, tok, approval = w.Genesis, w.Members, w.Inv, w.Ap
 	case strings.HasPrefix(invite, inviteScheme):
 		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(invite, inviteScheme))
 		var old groups.GroupGenesisManifest
@@ -386,8 +454,16 @@ func (f *groupsFacade) Join(invite string) (GroupDTO, error) {
 	dto := f.toDTO(known, len(list))
 	f.mu.Unlock()
 
+	if tok != nil {
+		// the invitation we came with: our own join on the group's log names it
+		_ = f.store.Set([]byte(joinViaPrefix+g.GroupID), []byte(tok.N))
+	}
 	// let the members know who joined (offline ones get it when they are back)
-	f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:])})
+	delivered, _, _ := f.broadcast(g.GroupID, groupWire{Kind: "join", Group: g.GroupID, Pub: hex.EncodeToString(f.selfPub[:]), Inv: tok})
+	if others := len(members) > 0 && !(len(members) == 1 && members[0].ID == f.selfID.String()); others {
+		// until somebody lets us in (the keys and the member list come), the group is waiting
+		f.notePending(g.GroupID, approval, delivered > 0)
+	}
 	return dto, nil
 }
 
@@ -437,15 +513,23 @@ func (f *groupsFacade) Members(groupID string) ([]GroupMemberDTO, error) {
 		return nil, err
 	}
 	me, meErr := f.mgr.GetMemberRole(groupID, f.selfID)
+	var assignable []groups.Role // the roles a manager may give, highest first: not the owner's
+	for _, r := range f.roles(groupID) {
+		if r.Rank < groups.RoleOwner.Rank {
+			assignable = append(assignable, r)
+		}
+	}
 	out := make([]GroupMemberDTO, 0, len(members))
 	for _, m := range members {
-		d := GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID}
+		d := GroupMemberDTO{PeerID: m.PeerID.String(), Role: m.Role.Name, RoleTitle: m.Role.Title, RoleColor: m.Role.Color,
+			JoinedAt: m.JoinedAt, IsMe: m.PeerID == f.selfID}
+		d.Online = d.IsMe || (f.online != nil && f.online(m.PeerID))
 		if meErr == nil && !d.IsMe {
 			over := groups.CanAdminister(me, m.Role) // the same rules the group service applies
 			d.CanKick = over && groups.HasPermission(me, groups.PermKickMembers)
 			d.CanBan = over && groups.HasPermission(me, groups.PermBanMembers)
 			if over && groups.HasPermission(me, groups.PermManageRoles) {
-				for _, r := range assignableRoles {
+				for _, r := range assignable {
 					if groups.CanAssignRole(me, r) || r.Name == m.Role.Name {
 						d.Roles = append(d.Roles, r.Name)
 					}
@@ -517,6 +601,10 @@ func (f *groupsFacade) SendFile(groupID, channel, thread, path string) (GroupMes
 		return GroupMessageDTO{}, err
 	}
 	f.mu.Lock()
+	if r, ok := f.role(groupID, f.selfID); !ok || r.Permissions&groups.PermSendMedia == 0 {
+		f.mu.Unlock()
+		return GroupMessageDTO{}, errors.New("your role may not send files here")
+	}
 	list, err := f.mgr.ListMembers(groupID)
 	f.mu.Unlock()
 	if err != nil {
@@ -648,6 +736,7 @@ func (n *NodeApi) openGroups() (*groupsFacade, bool, error) {
 		n.node.Messenger.SendSilent, contact, n.publishGroupEvent, em)
 	f.async = true
 	f.blocked = n.node.IsBlocked
+	f.online = func(id types.PeerID) bool { return n.node.Swarm != nil && n.node.Swarm.GetPeer(id) != nil }
 	f.connect = func(id types.PeerID) {
 		ctx, cancel := context.WithTimeout(n.node.Ctx, 20*time.Second)
 		defer cancel()
@@ -688,11 +777,7 @@ func (n *NodeApi) ListGroups() ([]GroupDTO, error) {
 }
 
 func (n *NodeApi) GetGroupInvite(groupID string) (string, error) {
-	f, err := n.groupsFacade()
-	if err != nil {
-		return "", err
-	}
-	return f.Invite(groupID)
+	return n.quickInvite(groupID)
 }
 
 func (n *NodeApi) JoinGroup(invite string) (GroupDTO, error) {
@@ -716,7 +801,20 @@ func (n *NodeApi) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
 	if err != nil {
 		return nil, err
 	}
-	return f.Members(groupID)
+	list, err := f.Members(groupID)
+	if err != nil {
+		return list, err
+	}
+	if cf, err := n.convsFacade(); err == nil && cf.log.HasRoster(convlog.Group(groupID)) {
+		c := convlog.Group(groupID)
+		for i := range list {
+			if id, ok := parsePeer(list[i].PeerID); ok {
+				list[i].Timeout = cf.log.TimeoutOf(c, id)
+			}
+			list[i].CanTimeout = list[i].CanKick // the log's rule: who may remove, a lower rank
+		}
+	}
+	return list, nil
 }
 
 func (n *NodeApi) SendGroupMessage(groupID, text string) (GroupMessageDTO, error) {
@@ -759,6 +857,17 @@ func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMes
 	if thread != "" {
 		if _, err := convlog.ParseEventID(thread); err != nil {
 			return GroupMessageDTO{}, err
+		}
+	}
+	if cf, cerr := n.convsFacade(); cerr == nil && f.LogMode(groupID) {
+		// a file is a message too: the channel's rights and slow mode hold it back the same way
+		if !cf.log.MayPost(convlog.Group(groupID), cf.self, channel, thread != "", true) {
+			return GroupMessageDTO{}, convlog.ErrForbidden
+		}
+		if thread == "" {
+			if err := cf.slowWait(convlog.Group(groupID), channel); err != nil {
+				return GroupMessageDTO{}, err
+			}
 		}
 	}
 	d, err := f.SendFile(groupID, channel, thread, path)

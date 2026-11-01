@@ -105,7 +105,7 @@
       <div class="comment" class:mine={c.mine} data-cid={c.id} on:contextmenu={(e) => chat.openMenu(e, c)}>
         <Avatar id={c.mine ? $me.id : c.sender} name={$authorName(c)} size={28} />
         <div class="grow c-body">
-          <div class="c-head small"><b>{$authorName(c)}</b><span class="faint">{time(c.ts, $lang)}{#if c.edited && !c.deleted} · {$t('chats.edited')}{/if}</span>
+          <div class="c-head small"><b>{$authorName(c)}</b><span class="faint">{time(c.ts, $lang)}{#if c.edited && !c.deleted}{' · '}{$t('chats.edited')}{/if}</span>
             <button class="more" title={$t('chats.msgActions')} aria-label={$t('chats.msgActions')} on:click={(e) => chat.openMenu(e, c)}><Icon name="chevronDown" size={14} /></button>
           </div>
           {#if c.deleted}

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"sort"
 
@@ -15,25 +16,48 @@ import (
 
 // ConvCan is what I may do in a chat.
 type ConvCan struct {
-	Send   bool `json:"send"`   // write messages
-	Files  bool `json:"files"`  // send files
-	React  bool `json:"react"`  // react to messages
-	Pin    bool `json:"pin"`    // pin for everyone
-	Manage bool `json:"manage"` // change the group: members' roles, its settings
-	Invite bool `json:"invite"` // hand out the group's invitation
-	Call   bool `json:"call"`   // start or join a call
+	Send     bool `json:"send"`     // write messages
+	Files    bool `json:"files"`    // send files
+	Links    bool `json:"links"`    // post links
+	Threads  bool `json:"threads"`  // write in threads
+	React    bool `json:"react"`    // react to messages
+	Pin      bool `json:"pin"`      // pin for everyone
+	Manage   bool `json:"manage"`   // change the group: members' roles, its settings
+	Channels bool `json:"channels"` // create, change and order channels and categories
+	Roles    bool `json:"roles"`    // give roles and define them
+	Invite   bool `json:"invite"`   // hand out the group's invitation
+	Call     bool `json:"call"`     // start or join a call
+	Stream   bool `json:"stream"`   // share a screen or a camera
+	// SlowFree: slow mode does not hold me back (who may moderate or manage channels)
+	SlowFree bool `json:"slowFree,omitempty"`
+	// MutedUntil: I am in a timeout until then (unix seconds; 0 none)
+	MutedUntil int64 `json:"mutedUntil,omitempty"`
 }
 
 // myRights is what I may do in c now: in a group whose log has no roster yet, by the group's
 // present state.
 func (f *convsFacade) myRights(c convlog.Conv) convlog.Rights {
 	if c.Kind == convlog.KindDM {
-		return convlog.Rights{Member: true, Send: true, Pin: true}
+		return convlog.DMRights
 	}
 	if !f.log.HasRoster(c) {
+		if f.logNotHere(c) {
+			return convlog.Rights{} // nothing until the group's log reaches us
+		}
 		return (groupRules{n: f.n}).Current(c, f.self)
 	}
 	return f.log.RightsOf(c, f.self)
+}
+
+// logNotHere: c is a group that runs on its log, but the log's roster has not reached this device
+// yet (a newcomer's sync is still under way). The old member list may already name us, but the
+// roster decides once it comes, and our invitation may come after it: the composer waits.
+func (f *convsFacade) logNotHere(c convlog.Conv) bool {
+	if c.Kind != convlog.KindGroup || f.log.HasRoster(c) {
+		return false
+	}
+	gf, err := f.n.groupsFacade()
+	return err == nil && gf.LogMode(c.Group)
 }
 
 // describe fills the parts of a chat-list entry that come from outside the log.
@@ -55,8 +79,8 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		if d.Name == "" {
 			d.Name = peer[:8]
 		}
-		d.Can = ConvCan{Send: !d.Blocked, Files: !d.Blocked && d.PubKey != "", React: d.Upgraded && !d.Blocked,
-			Pin: d.Upgraded, Call: !d.Blocked && d.PubKey != ""}
+		d.Can = ConvCan{Send: !d.Blocked, Files: !d.Blocked && d.PubKey != "", Links: !d.Blocked, Threads: !d.Blocked,
+			React: d.Upgraded && !d.Blocked, Pin: d.Upgraded, Call: !d.Blocked && d.PubKey != "", Stream: !d.Blocked}
 	case convlog.KindGroup:
 		d.Kind = "group"
 		gf, err := f.n.groupsFacade()
@@ -68,6 +92,9 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		list, _ := gf.mgr.ListMembers(c.Group)
 		if gerr == nil {
 			d.Name, d.Title = g.Title, g.Title
+			if p := f.log.GroupPhoto(c); len(p) > 0 {
+				d.Avatar = base64.StdEncoding.EncodeToString(p) // the group's picture, the same for all
+			}
 			if g.Type == groups.GroupTypePublicChannel {
 				d.Kind = "channel"
 			}
@@ -78,16 +105,27 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 				d.Members++
 			}
 		}
+		d.Pending = gf.PendingOf(c.Group, f.reachesMembers(gf, c.Group))
 		if rerr != nil {
 			return // not (or no longer) a member
 		}
+		if role.Permissions&groups.PermManageRoles != 0 {
+			gf.mu.Lock()
+			d.Requests = len(gf.requestsLocked(c.Group))
+			gf.mu.Unlock()
+		}
 		d.Role = role.Name
 		r := f.myRights(c)
-		manage := role.Permissions&(groups.PermManageRoles|groups.PermManageGroup) != 0
-		d.Can = ConvCan{Send: r.Send, Files: r.Send && role.Permissions&groups.PermSendMedia != 0,
-			React: d.Upgraded && r.Member, Pin: d.Upgraded && r.Pin, Manage: manage,
-			Invite: manage || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),
-			Call:   role.Permissions&groups.PermJoinVoice != 0}
+		if d.Pending == "" && d.Upgraded && !r.Member {
+			// in by the member list, not yet by the group's log: its roster or our invitation is
+			// still on the way, and the composer waits for it
+			d.Pending = PendingAdmission
+		}
+		manage := role.Permissions&(groups.PermManageRoles|groups.PermManageGroup|groups.PermManageChannels) != 0
+		d.Can = ConvCan{Send: r.Send, Files: r.Send && r.Media, Links: r.Links, Threads: r.Threads,
+			React: d.Upgraded && r.React, Pin: d.Upgraded && r.Pin, Manage: manage, Channels: r.Manage, Roles: r.Roles,
+			Invite: r.Invite || (gerr == nil && g.Type != groups.GroupTypePrivateGroup),
+			Call:   r.Voice, Stream: r.Voice && r.Stream, SlowFree: r.Moderate || r.Manage, MutedUntil: f.log.TimeoutOf(c, f.self)}
 	}
 }
 
@@ -150,10 +188,27 @@ func (n *NodeApi) ChatRows() ([]ConversationDTO, error) {
 		seen[c.ID] = true
 		out = append(out, f.conversation(c, m))
 	}
-	for _, m := range metas {
-		if c, ok := convOfMeta(m); ok {
-			add(c, m)
+	// the groups we are in: a group's log left behind by one we left or that was deleted (before
+	// logs went with their groups) is not a chat any more, and goes now
+	var mine map[string]bool
+	if gf, err := n.groupsFacade(); err == nil {
+		if list, err := gf.List(); err == nil {
+			mine = make(map[string]bool, len(list))
+			for _, g := range list {
+				mine[convlog.Group(g.ID).ID.String()] = true
+			}
 		}
+	}
+	for _, m := range metas {
+		c, ok := convOfMeta(m)
+		if !ok {
+			continue
+		}
+		if c.Kind == convlog.KindGroup && mine != nil && !mine[c.ID.String()] {
+			go func(c convlog.Conv) { _ = f.log.Drop(c) }(c)
+			continue
+		}
+		add(c, m)
 	}
 	// contacts and requests without a message yet, and groups without one
 	if n.node.Contact != nil {

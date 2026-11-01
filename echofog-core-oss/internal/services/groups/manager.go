@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -37,6 +38,52 @@ type GroupManager struct {
 	keyEngine *KeyRotationEngine
 	emitter   events.Emitter
 	log       *slog.Logger
+	roles     atomic.Pointer[RoleResolver]
+}
+
+// RoleResolver resolves a role's name in a group: as the group defines it (its log), or built in.
+type RoleResolver func(groupID, name string) (Role, bool)
+
+// SetRoleResolver lets the groups' own role definitions count (see RefreshRoles).
+func (m *GroupManager) SetRoleResolver(r RoleResolver) { m.roles.Store(&r) }
+
+// resolveRole resolves a role's name in a group: by the resolver, else the built-in roles.
+func (m *GroupManager) resolveRole(groupID, name string) (Role, error) {
+	if r := m.roles.Load(); r != nil {
+		if role, ok := (*r)(groupID, name); ok {
+			return role, nil
+		}
+	}
+	return ResolveRole(name)
+}
+
+// RefreshRoles takes the group's present role definitions into its members' roles: a role whose
+// permissions changed changes for everyone who holds it, and the members of a role that went get
+// the group's default one.
+func (m *GroupManager) RefreshRoles(groupID string) {
+	st, err := m.state(groupID)
+	if err != nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	def := RoleMember
+	if st.Genesis != nil && st.Genesis.Type == GroupTypePublicChannel {
+		def = RoleChannelSubscriber
+	}
+	if r, err := m.resolveRole(groupID, def.Name); err == nil {
+		def = r
+	}
+	for id, prof := range st.Members {
+		r, err := m.resolveRole(groupID, prof.Role.Name)
+		if err != nil {
+			r = def
+		}
+		if r != prof.Role {
+			prof.Role = r
+			st.Members[id] = prof
+		}
+	}
 }
 
 // NewGroupManager initializes the decentralized group manager.
@@ -167,7 +214,7 @@ func (m *GroupManager) modifyRole(groupID string, actor types.PeerID, target typ
 		return ErrGroupNotFound
 	}
 
-	targetNewRole, err := ResolveRole(newRoleName)
+	targetNewRole, err := m.resolveRole(groupID, newRoleName)
 	if err != nil {
 		return err
 	}

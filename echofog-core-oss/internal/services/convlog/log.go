@@ -38,6 +38,16 @@ type Change struct {
 	Rev uint64
 	// Rebuilt: the whole conversation was computed again (a membership change); reload it.
 	Rebuilt bool
+	// Members are the membership events this change applied that were allowed: what the group
+	// service has to follow (a removal or a ban takes the member's keys away).
+	Members []MemberChange
+}
+
+// MemberChange is one allowed membership event of a group's log.
+type MemberChange struct {
+	Author types.PeerID
+	Member []byte // 32-byte identity public key (empty for a roster)
+	Action uint32
 }
 
 // nextRev numbers a change. Call with l.mu held, so the numbers follow the order of the writes.
@@ -52,7 +62,12 @@ type Log struct {
 	sign    func([]byte) ([]byte, error)
 	now     func() time.Time
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// views is held for writing while a rebuild writes a conversation's views again. Readers
+	// that go to storage without mu hold it for reading, so they never see the gap between the
+	// old views going and the new ones coming (a message just sent would be missing). Taken
+	// after mu, never the other way round.
+	views     sync.RWMutex
 	rules     atomic.Value // rulesBox
 	listeners []func(Change)
 	members   map[string]*members // by blinded conversation id; loaded on first use
@@ -103,7 +118,7 @@ func (l *Log) membersOf(bc string) *members {
 				continue
 			}
 			if b, ok := decodeMember(e); ok {
-				m.add(memberEv{at: pos{e.Lamport, id.String()}, author: AuthorID(e), body: b})
+				m.add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, ts: e.TsMs, author: AuthorID(e), body: b})
 			}
 		}
 	}
@@ -116,7 +131,7 @@ func (l *Log) rightsAt(c Conv, bc string, author types.PeerID, pub []byte, p pos
 	switch c.Kind {
 	case KindDM:
 		if author == l.self || author == c.Peer {
-			return Rights{Member: true, Send: true, Pin: true}
+			return DMRights
 		}
 	case KindGroup:
 		rules := l.groupRules()
@@ -147,7 +162,12 @@ var atEnd = pos{L: ^uint64(0)}
 func (l *Log) RightsOf(c Conv, peer types.PeerID) Rights {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.rightsAt(c, l.bc(c.ID), peer, nil, atEnd)
+	bc := l.bc(c.ID)
+	r := l.rightsAt(c, bc, peer, nil, atEnd)
+	if c.Kind == KindGroup && r.Member && l.timeoutLocked(c, bc, peer) > 0 {
+		r = muted(r)
+	}
+	return r
 }
 
 // Participant reports whether peer takes part in c now.
@@ -235,6 +255,7 @@ type txn struct {
 	order   []string
 	changed map[string]bool
 	synced  bool // the event came by sync: history, not news
+	members []MemberChange
 }
 
 func (l *Log) newTxn(c Conv, bc string, meta *Meta) *txn {
@@ -284,7 +305,7 @@ func (t *txn) commit(marker []byte, id string) error {
 }
 
 func (t *txn) change() *Change {
-	ch := &Change{Conv: t.c, Meta: *t.meta, Rev: t.l.nextRev()}
+	ch := &Change{Conv: t.c, Meta: *t.meta, Rev: t.l.nextRev(), Members: t.members}
 	ids := make([]string, 0, len(t.changed))
 	for id := range t.changed {
 		ids = append(ids, id)
@@ -369,22 +390,51 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 		if !rights.Member {
 			return ErrNotParticipant
 		}
+		if t.c.Kind == KindGroup && !own {
+			if rules := l.groupRules(); rules != nil && l.membersOf(t.bc).cutOff(rules, t.c, authorID, e.Author, e.Seq, at) {
+				return ErrNotParticipant // written after their removal, placed before it
+			}
+		}
+		if t.c.Kind == KindGroup && timedOutKind(e.Kind) {
+			if rules := l.groupRules(); rules != nil && l.membersOf(t.bc).timedOut(rules, t.c, authorID, e.Seq, e.TsMs) {
+				return ErrForbidden // written during their timeout
+			}
+		}
+		if t.c.Kind == KindGroup && e.Kind != KindChannel && e.Kind != KindThread && e.Kind != KindProfile {
+			// what the author may do in the channel the event acts in
+			if ch, ok := t.channel(t.eventChannel(e)); ok && len(ch.Overrides) > 0 {
+				if role, _, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at); ok {
+					in := PermRights(ch.PermsIn(role))
+					in.Manage, in.Invite, in.Roles = rights.Manage, rights.Invite, rights.Roles
+					rights = in
+				}
+			}
+		}
 		switch e.Kind {
 		case KindMsg:
-			if !rights.Send {
-				return ErrForbidden
+			if len(e.Thread) == 0 && !rights.Send || len(e.Thread) > 0 && !rights.Threads {
+				return ErrForbidden // a comment in a thread takes the right to comment, not to post
 			}
-			if ch := channelOf(e); ch != "" && len(e.Thread) == 0 {
-				if st, ok := t.channel(ch); ok && st.ReadOnly && !rights.Manage {
+			if t.c.Kind == KindGroup {
+				if st, ok := t.channel(channelOf(e)); ok && (st.Category || len(e.Thread) == 0 && st.ReadOnly && !rights.Manage) {
 					return ErrForbidden // an announcements channel: only managers post (others comment)
 				}
 			}
+			if !msgAllowed(e, rights) {
+				return ErrForbidden
+			}
 			err = t.applyMsg(e, idHex, author, &store)
 		case KindEdit:
+			if !editAllowed(e, rights) {
+				return ErrForbidden
+			}
 			err = t.applyEdit(e, author, &store)
 		case KindDelete:
 			err = t.applyDelete(e, author, rights)
 		case KindReact:
+			if !rights.React {
+				return ErrForbidden
+			}
 			err = t.applyReact(e, author)
 		case KindPin:
 			if !rights.Pin {
@@ -392,9 +442,16 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			}
 			err = t.applyPin(e, author)
 		case KindChannel:
-			err = t.applyChannel(e, author, rights)
+			var actor *Role
+			role, st, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at)
+			if ok {
+				actor = &role
+			}
+			err = t.applyChannel(e, author, rights, actor, st)
 		case KindThread:
 			err = t.applyThread(e, author, rights)
+		case KindProfile:
+			err = t.applyProfile(e, author, rights)
 		}
 	}
 	if err != nil {
@@ -462,15 +519,31 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 	m := l.membersOf(t.bc)
 	if mode == modeNew {
 		t.put(memberKey(t.bc, e.Lamport, at.ID), raw)
-		m.add(memberEv{at: at, author: AuthorID(e), body: b})
+		m.add(memberEv{at: at, seq: e.Seq, ts: e.TsMs, author: AuthorID(e), body: b})
 	}
 	rules := l.groupRules()
 	if rules == nil || !m.allowed(rules, t.c, at) {
 		return ErrForbidden
 	}
+	if mode == modeNew {
+		t.members = append(t.members, MemberChange{Author: AuthorID(e), Member: append([]byte(nil), b.Member...), Action: b.Action})
+	}
 	if mode == modeNew && (e.Lamport <= t.meta.MaxLamport || e.Lamport <= t.meta.HeldLamport) {
 		// it changes who could do what at points already applied or held
 		t.meta.Rebuild = true
+	}
+	if mode == modeNew && (b.Action == MemberRemove || b.Action == MemberBan || b.Action == MemberTimeout) && len(b.Member) == authorLen {
+		// a removal cuts off the member's later events wherever they sit: if some are applied
+		// already, placed before it, weigh them again
+		if target, ok := pubToID(b.Member); ok {
+			upto := b.UptoSeq
+			if target == AuthorID(e) {
+				upto = e.Seq
+			}
+			if upto > 0 && t.meta.Max[peerHex(target)] > upto {
+				t.meta.Rebuild = true
+			}
+		}
 	}
 	return nil
 }
@@ -490,7 +563,7 @@ func (l *Log) keepRejected(t *txn, e *Event, id EventID, raw []byte) {
 	if e.Kind == KindMember && t.c.Kind == KindGroup {
 		if b, ok := decodeMember(e); ok {
 			t.put(memberKey(t.bc, e.Lamport, id.String()), raw)
-			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, author: AuthorID(e), body: b})
+			l.membersOf(t.bc).add(memberEv{at: pos{e.Lamport, id.String()}, seq: e.Seq, ts: e.TsMs, author: AuthorID(e), body: b})
 		}
 	}
 	l.keep(t, e, id.String(), raw, raw, modeNew)
@@ -789,6 +862,66 @@ func (l *Log) HasRoster(c Conv) bool {
 	return ok
 }
 
+// AuthorSeq is the highest sequence number of author's events this log has: what a removal of
+// them records as the last that counts (MemberBody.upto_seq).
+func (l *Log) AuthorSeq(c Conv, author types.PeerID) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loadMeta(l.bc(c.ID), c).Max[peerHex(author)]
+}
+
+// Roles are the roles a group's log defines now: its custom ones and the built-in ones it changed.
+func (l *Log) Roles(c Conv) []Role {
+	rules := l.groupRules()
+	if c.Kind != KindGroup || rules == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st, _, ok := l.membersOf(l.bc(c.ID)).walk(rules, c, nil)
+	if !ok {
+		return nil
+	}
+	out := make([]Role, 0, len(st.defs))
+	for _, r := range st.defs {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rank != out[j].Rank {
+			return out[i].Rank > out[j].Rank
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// AppendRole defines a role of a group (d.Removed: a custom one goes).
+func (l *Log) AppendRole(c Conv, d *RoleDef) ([]byte, EventID, error) {
+	if c.Kind != KindGroup {
+		return nil, EventID{}, ErrForbidden
+	}
+	body, err := proto.Marshal(&MemberBody{Action: MemberDefine, Def: d})
+	if err != nil {
+		return nil, EventID{}, err
+	}
+	if _, ok := decodeMember(&Event{Kind: KindMember, Body: body}); !ok {
+		return nil, EventID{}, ErrBadBody
+	}
+	// weighed first: a refused membership event would stay in the history kept in memory
+	rules := l.groupRules()
+	if rules == nil {
+		return nil, EventID{}, ErrForbidden
+	}
+	l.mu.Lock()
+	st, _, ok := l.membersOf(l.bc(c.ID)).walk(rules, c, nil)
+	allowed := ok && st.clone().define(rules, c, l.self, d)
+	l.mu.Unlock()
+	if !allowed {
+		return nil, EventID{}, ErrForbidden
+	}
+	return l.Append(c, Draft{Kind: KindMember, Body: body})
+}
+
 func (l *Log) append(c Conv, d Draft, keepRefused bool) ([]byte, EventID, error) {
 	l.mu.Lock()
 	bc := l.bc(c.ID)
@@ -945,18 +1078,24 @@ func (l *Log) page(bc, conv string, prefix []byte, cursor string, limit int) ([]
 // History returns a page of a conversation, newest message first; pass the returned cursor to
 // get the page before it ("" when there is none). Thread messages are not in it (see Thread).
 func (l *Log) History(c Conv, cursor string, limit int) ([]Message, string, error) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.page(bc, c.ID.String(), orderPrefix(bc), cursor, limit)
 }
 
 // Thread returns a page of the thread under root, oldest first.
 func (l *Log) Thread(c Conv, root EventID, cursor string, limit int) ([]Message, string, error) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.page(bc, c.ID.String(), threadPrefix(bc, root.String()), cursor, limit)
 }
 
 // Pins returns the pinned messages, most recently pinned first.
 func (l *Log) Pins(c Conv) ([]Message, error) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	entries, err := l.st.FindValues(pinPrefix(bc), 0)
 	if err != nil {
@@ -974,6 +1113,8 @@ func (l *Log) Pins(c Conv) ([]Message, error) {
 
 // Message returns one message.
 func (l *Log) Message(c Conv, id EventID) (Message, bool) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.render(bc, c.ID.String(), id.String())
 }
@@ -1054,4 +1195,81 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 		l.notify(ch)
 	}
 	return err
+}
+
+// Drop forgets a conversation: every event and view of it this log keeps (we left a group, or it
+// was deleted). Nothing is sent; a peer that syncs with us no longer finds it shared.
+func (l *Log) Drop(c Conv) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	bc := l.bc(c.ID)
+	for _, p := range []string{pfxEvent, pfxFork, pfxIndex, pfxOrder, pfxView, pfxThread, pfxPin, pfxMember, pfxChan, pfxChanO} {
+		entries, err := l.st.FindValues(bs(p+bc+"/"), 0)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := l.st.Delete(e.Key); err != nil {
+				return err
+			}
+		}
+	}
+	delete(l.members, bc)
+	if l.st.Exists(metaKey(bc)) {
+		return l.st.Delete(metaKey(bc))
+	}
+	return nil
+}
+
+// Export is what a group's log holds, for a snapshot a newcomer imports (a .fogzip): the
+// membership history first (it decides what the rest may do), then every author's events, up to
+// maxBytes in all. Each event is signed by its author, so whoever passes the snapshot on cannot
+// change one; an importer takes them as it takes events from a member.
+func (l *Log) Export(c Conv, maxBytes int) [][]byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	bc := l.bc(c.ID)
+	var out [][]byte
+	size := 0
+	seen := map[string]bool{}
+	add := func(raw []byte) bool {
+		if size+len(raw) > maxBytes {
+			return false
+		}
+		k := string(raw)
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, raw)
+			size += len(raw)
+		}
+		return true
+	}
+	if entries, err := l.st.FindValues(memberPrefix(bc), 0); err == nil {
+		for _, e := range entries {
+			if !add(e.Value) {
+				return out
+			}
+		}
+	}
+	if entries, err := l.st.FindValues(bs(pfxEvent+bc+"/"), 0); err == nil {
+		for _, e := range entries {
+			if !add(e.Value) {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// ImportHistory takes events that came from outside a sync (a snapshot file) as history: each is
+// verified and weighed as one a member sends, none counts as news. It returns how many were new.
+func (l *Log) ImportHistory(c Conv, raws [][]byte) int {
+	n := 0
+	for _, raw := range raws {
+		if _, fresh, err := l.ingest(c, raw, false); err == nil && fresh {
+			n++
+		}
+	}
+	l.RebuildIfNeeded(c)
+	return n
 }

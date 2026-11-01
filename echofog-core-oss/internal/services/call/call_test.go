@@ -438,13 +438,23 @@ func TestRoom_KeyframeRequestReachesBroadcaster(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return served.Load() > 0 }, 5*time.Second, 20*time.Millisecond)
 
-	// a gap in the stream triggers another request after the rate limit window
-	time.Sleep(keyframeServeInterval + 50*time.Millisecond)
-	before := served.Load()
+	// a gap in the stream triggers another request after the rate limit window, once the viewers
+	// stopped waiting for the keyframe they asked for on joining (these units are not H.264). Under
+	// load some viewers attach and ask later than others: wait until the last of them is past both
+	// windows, which is when no new request was served for one of them.
+	var before int32
+	for i := 0; i < 5; i++ {
+		before = served.Load()
+		time.Sleep(max(keyframeServeInterval, media.KeyframePending) + 50*time.Millisecond)
+		if served.Load() == before {
+			break
+		}
+	}
 	m.mu.Lock()
 	m.drop = func(t net_types.MessageType, payload []byte) bool {
 		p, err := media.Decode(payload)
-		return t == net_types.TypeCallMediaVideo && err == nil && p.Seq == 2
+		// with its parity too, or FEC rebuilds it
+		return t == net_types.TypeCallMediaVideo && err == nil && (p.Seq == 2 || p.Kind == media.FrameVideoFEC)
 	}
 	m.mu.Unlock()
 	require.NoError(t, b.cm.PublishVideo("s", unit(0, 100))) // seq 1
@@ -577,6 +587,21 @@ func TestRoom_RejectsForgedAndUnauthorizedSignals(t *testing.T) {
 	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
 	s, _ = victim.cm.Snapshot()
 	assert.Equal(t, coord.id, s.Coordinator)
+
+	// 5. Someone outside the call who knows its ID announces their own election, with a far
+	// higher epoch, and a heartbeat and a manifest as its coordinator: a valid signature, but not a
+	// participant, so the call does not follow.
+	stranger := newTestSigner()
+	raw, _ = signaling.EncodeSignedSignal(stranger, signaling.ActionCoordinatorElection, "room-1", stranger.id(), 5000, stranger.id())
+	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
+	raw, _ = signaling.EncodeSignedSignal(stranger, signaling.ActionCoordinatorHeartbeat, "room-1", stranger.id(), 5001, signaling.CoordinatorHeartbeatPayload{})
+	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
+	hijack := tree.BuildVoiceTopology("room-1", 5002, stranger.id(), nil)
+	raw, _ = signaling.EncodeSignedSignal(stranger, signaling.ActionTreeManifest, "room-1", stranger.id(), 5002, hijack)
+	require.NoError(t, victim.cm.handleIncomingSignaling(raw, attacker.id))
+	s, _ = victim.cm.Snapshot()
+	assert.Equal(t, coord.id, s.Coordinator, "an outsider cannot take the call over")
+	assert.Less(t, s.Epoch, uint64(5000))
 	_ = key
 }
 
@@ -601,7 +626,7 @@ func TestCallManager_EdgeCases(t *testing.T) {
 	assert.Error(t, cm.StartStream("voice", "screen", tree.CustomQuality(100)), "reserved id")
 	assert.ErrorIs(t, cm.PublishVideo("not-mine", []byte{1}), ErrNoLocalStream)
 	assert.ErrorIs(t, cm.UpdateStreamQuality("not-mine", q4k), ErrNoLocalStream)
-	assert.Equal(t, "1080p30", tree.BestQualityFor(6000).ID)
+	assert.Equal(t, "720p60", tree.BestQualityFor(6000).ID)
 
 	assert.Equal(t, "CallManager", cm.Name())
 	require.NoError(t, cm.Stop())
@@ -675,7 +700,7 @@ func TestRoom_UserCanSwitchRelay(t *testing.T) {
 	m := newMesh()
 	nodes, _ := newRoom(t, m, 7)
 	b := nodes[1]
-	b.cm.SetUploadCapacity(2500) // one direct viewer: everybody else is relayed
+	b.cm.SetUploadCapacity(3000) // one direct viewer: everybody else is relayed
 	q, _ := tree.QualityByID("720p30")
 	require.NoError(t, b.cm.StartStream("s", "screen", q))
 	for _, nd := range nodes {
@@ -931,4 +956,47 @@ func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
 	m.mu.Unlock()
 	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 6*time.Second, 50*time.Millisecond,
 		"one room again: %v", dumpRoom(nodes, nil))
+}
+
+// Each member's tile backdrop reaches everybody without anyone moving in the voice tree, a member
+// joining later learns the ones chosen before it came, and a malformed name is the plain look.
+func TestRoom_BackdropsReachEveryMember(t *testing.T) {
+	m := newMesh()
+	nodes, key := newRoom(t, m, 5)
+	before, _ := nodes[1].cm.Snapshot()
+
+	for _, b := range []string{"a", "b", "c", "matrix"} {
+		nodes[2].cm.SetBackdrop(b) // changed faster than the manifest goes out: the last one wins
+	}
+	nodes[0].cm.SetBackdrop("waves") // the coordinator's own
+	nodes[3].cm.SetBackdrop("Not A Name!")
+	backdropsAre := func(list []*testNode, want map[types.PeerID]string) func() bool {
+		return func() bool {
+			for _, nd := range list {
+				if s, _ := nd.cm.Snapshot(); !assert.ObjectsAreEqual(want, s.Backdrops) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	want := map[types.PeerID]string{nodes[0].id: "waves", nodes[2].id: "matrix"}
+	require.Eventually(t, backdropsAre(nodes, want), 5*time.Second, 20*time.Millisecond)
+	after, _ := nodes[1].cm.Snapshot()
+	assert.Equal(t, before.Epoch, after.Epoch, "a new look does not rebuild the tree")
+
+	s := newTestSigner()
+	late := &testNode{cm: newCallManager(meshPort{m, s.id()}, s, s.id()), id: s.id()}
+	m.mu.Lock()
+	m.nodes[late.id] = late.cm
+	m.mu.Unlock()
+	t.Cleanup(func() { _ = late.cm.LeaveRoom() })
+	require.NoError(t, late.cm.JoinRoom("room-1", nodes[0].id, key, tree.PeerNodeProfile{UploadKbps: 40000, MaxRelayChildren: 2, Backdrop: "cubes"}))
+	all := append(nodes, late)
+	want[late.id] = "cubes"
+	require.Eventually(t, backdropsAre(all, want), 5*time.Second, 20*time.Millisecond)
+
+	nodes[2].cm.SetBackdrop("")
+	delete(want, nodes[2].id)
+	require.Eventually(t, backdropsAre(all, want), 5*time.Second, 20*time.Millisecond)
 }

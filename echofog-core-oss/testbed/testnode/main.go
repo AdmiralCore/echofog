@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -84,6 +85,12 @@ func main() {
 	}
 	if g := os.Getenv("GUARD_MODE"); g != "" {
 		cfg.AntiDPI.GuardMode = g
+	}
+	if os.Getenv("EXIT_UNLIMITED") != "" { // the lab measures the roads, not the free exit's speed limit
+		cfg.Exit.FreePeerMbps, cfg.Exit.FreeIPMbps = -1, -1
+	}
+	if g := os.Getenv("TCP_ROTATE"); g != "" {
+		cfg.AntiDPI.TCPRotate = g
 	}
 	if *access != "" {
 		cfg.Access.Mode = *access
@@ -168,6 +175,16 @@ func (t *testNode) routes() http.Handler {
 	mux.HandleFunc("/access", t.accessStatus)
 	mux.HandleFunc("/access/kick", t.accessKick)
 	mux.HandleFunc("/exits", t.exits)
+	mux.HandleFunc("/relay", func(w http.ResponseWriter, _ *http.Request) {
+		if t.n.RelayServer == nil {
+			reply(w, map[string]bool{"relay": false}, nil)
+			return
+		}
+		reply(w, t.n.RelayServer.Stats(), nil)
+	})
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/heap", pprof.Index)
+	mux.HandleFunc("/debug/pprof/goroutine", pprof.Index)
 	return mux
 }
 

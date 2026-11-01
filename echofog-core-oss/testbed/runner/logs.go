@@ -13,12 +13,17 @@ import (
 	"time"
 )
 
-var outDir = flag.String("out", "", "where logs and reports go (default testbed/out/<time>-<scenario>)")
+var (
+	outDir    = flag.String("out", "", "where logs and reports go (default testbed/out/<time>-<scenario>)")
+	keepPcaps = flag.Int("keep-pcaps", 3, "runs under testbed/out whose packet captures are kept; older runs keep only their logs and reports (0: keep all)")
+)
 
 func prepareOut() string {
 	dir := *outDir
 	if dir == "" {
-		dir = filepath.Join("testbed", "out", time.Now().Format("20060102-150405")+"-"+*scenario)
+		base := filepath.Join("testbed", "out")
+		prunePcaps(base, *keepPcaps)
+		dir = filepath.Join(base, time.Now().Format("20060102-150405")+"-"+*scenario)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fatalf("out dir: %v", err)
@@ -126,5 +131,45 @@ func collectLogs(dir string) {
 	logf("the most frequent warnings:")
 	for _, x := range firstN(kinds, 8) {
 		logf("  %6d  %.150s", x.n, x.k)
+	}
+}
+
+// prunePcaps deletes the packet captures of all but the newest keep runs under base, before a new
+// run starts. A censor run records every packet of every gateway, a gigabyte or more, and a day of
+// runs filled the disk; the reports and logs, a few hundred KB a run, stay. keep 0: nothing goes.
+func prunePcaps(base string, keep int) {
+	if keep <= 0 {
+		return
+	}
+	runs, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	var dirs []string
+	for _, r := range runs {
+		if r.IsDir() {
+			dirs = append(dirs, r.Name())
+		}
+	}
+	sort.Strings(dirs) // the names start with the time of the run
+	if len(dirs) < keep {
+		return
+	}
+	var freed int64
+	for _, d := range dirs[:len(dirs)-(keep-1)] { // the new run makes keep
+		_ = filepath.WalkDir(filepath.Join(base, d), func(p string, e os.DirEntry, err error) error {
+			if err != nil || e.IsDir() {
+				return nil
+			}
+			if ext := strings.ToLower(filepath.Ext(p)); ext == ".pcap" || ext == ".pcapng" {
+				if fi, err := e.Info(); err == nil && os.Remove(p) == nil {
+					freed += fi.Size()
+				}
+			}
+			return nil
+		})
+	}
+	if freed > 0 {
+		logf("removed the packet captures of older runs: %d MB freed (-keep-pcaps %d)", freed>>20, keep)
 	}
 }

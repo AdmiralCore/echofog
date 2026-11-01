@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/wallet/tonwallet"
 
 	"github.com/echofog/echofog-core/internal/services/call"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
@@ -25,7 +26,8 @@ import (
 type NodeApi struct {
 	node *node.Node
 
-	uploadKbps int // declared upstream bandwidth used to size call streams
+	uploadKbps int    // declared upstream bandwidth used to size call streams
+	backdrop   string // the animated background the others see on our call tile
 
 	vpn   vpnState
 	tun   tunState
@@ -39,6 +41,8 @@ type NodeApi struct {
 	geoOnce sync.Once
 	geoLoc  *geoLocator // where exits are, looked up online
 
+	callPath callPathSeen // when members of the current call were first seen through a relay
+
 	relayChosen bool // the user picked the relay settings; false: the defaults are in effect
 	startPort   int  // the listen port the node was configured with when it started
 
@@ -48,6 +52,10 @@ type NodeApi struct {
 	bootstrapBuiltIn []string // bootstrap nodes of this release (guarded by settingsMu)
 	bootstrapCustom  []string // bootstrap nodes the user added (persisted; guarded by settingsMu)
 	nextAccessMode   string   // access mode saved for the next start (guarded by settingsMu)
+	nextProxy        *string  // proxy saved for the next start, nil: not changed (guarded by settingsMu)
+	nextCallRoute    string   // call route saved for the next start (guarded by settingsMu)
+	nextAnon         *string  // anonymous mode saved for the next start, nil: not changed (guarded by settingsMu)
+	nextAnonWallet   *bool    // the wallet allowed out in anonymous mode, saved (guarded by settingsMu)
 
 	Logger *slog.Logger
 }
@@ -62,6 +70,8 @@ func NewNodeApi(node *node.Node) *NodeApi {
 	api := &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}
+	api.tun.killSwitch.Store(saved.KillSwitch == nil || *saved.KillSwitch)
+	tonwallet.SetHTTPClient(api.OwnHTTPClient) // the wallet's lookups go where the app's own do
 	// the conversation logs take chat traffic from the very first message on
 	node.OnMessengerReady(func() { _, _ = api.convsFacade() })
 	return api
@@ -95,11 +105,20 @@ func (n *NodeApi) Recover(mnemonic string, mnemonicPassphrase string, newAppPass
 }
 
 func (n *NodeApi) StartNode() error {
+	// a kill switch from an earlier run holds the traffic: the node's own goes around it
+	pinned := n.pinHeldNode()
 	if err := n.node.Start(); err != nil {
 		return err
 	}
+	if pinned != 0 && n.node.Transport != nil {
+		_ = n.node.Transport.BindToInterface(pinned)
+	}
 	// domestic connections use the cheaper noise obfs; cross-border keeps REALITY
 	n.applyRegionObfs()
+	// tcp_rotate "auto": rotate the TCP links across the border from a country with the TSPU freeze
+	n.applyTCPRotateAuto()
+	// guard_mode "auto" stands down in a country that does not censor
+	go n.runGuardAuto()
 	// create the conversation logs and the group service now: they listen for chat traffic from
 	// the first moment on
 	_, _ = n.convsFacade()
@@ -108,6 +127,11 @@ func (n *NodeApi) StartNode() error {
 }
 
 func (n *NodeApi) StopNode() {
+	// leaving on purpose: take whole-computer mode down, or the kill switch would hold the
+	// computer's traffic as it does after a crash
+	if n.tun.ctl.Running() {
+		_ = n.StopVPN()
+	}
 	if n.node != nil {
 		n.node.Stop()
 	}
@@ -370,6 +394,7 @@ func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
 		UploadKbps:       n.callUploadKbps(),
 		MaxRelayChildren: n.node.CallRelayCapacity(),
 		RelayOnly:        n.node.CallRelayOnly(),
+		Backdrop:         n.backdrop,
 		RTT:              10 * time.Millisecond,
 		LastHeartbeat:    time.Now(),
 	}
@@ -420,6 +445,40 @@ func (n *NodeApi) WatchStream(streamID string) error {
 		return errors.New("call manager not initialized")
 	}
 	return n.node.CallManager.WatchStream(streamID)
+}
+
+// StreamStatsDTO is what one stream of the active call does on this node: totals since the call
+// began, which the app turns into rates for the stats on a stream's tile.
+type StreamStatsDTO struct {
+	Own             bool   `json:"own"`             // this node broadcasts it
+	UnitsSent       uint64 `json:"unitsSent"`       // own stream: video packets broadcast
+	Delivered       uint64 `json:"delivered"`       // watched stream: video packets that arrived and were played
+	Lost            uint64 `json:"lost"`            // gaps no resend filled (each one asks for a keyframe)
+	Nacked          uint64 `json:"nacked"`          // packets asked to be sent again
+	Retransmitted   uint64 `json:"retransmitted"`   // packets this node sent again to the ones below it
+	Recovered       uint64 `json:"recovered"`       // lost packets rebuilt here from FEC parity
+	SendKbps        int    `json:"sendKbps"`        // own stream: what the rate control lets the encoder send
+	VideoSent       uint64 `json:"videoSent"`       // video fragments sent to peers, all streams
+	VideoDropped    uint64 `json:"videoDropped"`    // ... dropped by a full queue toward a peer
+	VideoFailed     uint64 `json:"videoFailed"`     // ... whose send failed
+	KeyframesServed uint64 `json:"keyframesServed"` // keyframe requests served as a broadcaster
+	NetDroppedOut   uint64 `json:"netDroppedOut"`   // media the transport could not send (full queue)
+	NetDroppedIn    uint64 `json:"netDroppedIn"`    // media the transport received but had no room for
+}
+
+// CallStreamStats returns the counters of one stream of the active call.
+func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
+	if n.node == nil || n.node.CallManager == nil {
+		return StreamStatsDTO{}, errors.New("call manager not initialized")
+	}
+	d, ok := n.node.CallManager.StreamDiag(streamID)
+	if !ok {
+		return StreamStatsDTO{}, errors.New("not in a call")
+	}
+	out, in := network.DatagramDrops()
+	return StreamStatsDTO{Own: d.Own, UnitsSent: d.UnitsSent, Delivered: d.Delivered, Lost: d.Lost, Nacked: d.Nacked,
+		Retransmitted: d.Retransmitted, Recovered: d.Recovered, SendKbps: d.SendKbps, VideoSent: d.VideoSent, VideoDropped: d.VideoDropped,
+		VideoFailed: d.VideoFailed, KeyframesServed: d.KeyframesServed, NetDroppedOut: out, NetDroppedIn: in}, nil
 }
 
 // UnwatchStream cancels subscription to another peer's stream.

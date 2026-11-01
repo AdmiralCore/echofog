@@ -45,8 +45,14 @@ func TestSpaceChannelsTravel(t *testing.T) {
 
 	inDev := ref
 	inDev.Channel = dev.ID
-	m, err := bob.ChatSend(inDev, node.SendRequest{Text: "in dev"})
-	require.NoError(t, err)
+	eventually(t, "bob may write", func() bool { return mayWrite(bob, g.ID) })
+	// a newcomer's first message can be refused for a moment while the invitation that let them in
+	// is still on its way behind the roster; a refused message is not kept, so trying again is safe
+	var m node.ChatMessage
+	eventually(t, "bob writes in dev", func() bool {
+		m, err = bob.ChatSend(inDev, node.SendRequest{Text: "in dev"})
+		return err == nil
+	})
 	eventually(t, "alice has it in dev", func() bool {
 		page, err := alice.ChatHistory(inDev, "", 20)
 		return err == nil && len(page.Messages) == 1 && page.Messages[0].ID == m.ID
@@ -56,4 +62,49 @@ func TestSpaceChannelsTravel(t *testing.T) {
 	for _, x := range main.Messages {
 		require.NotEqual(t, m.ID, x.ID, "a channel's message is not in the main chat")
 	}
+}
+
+// A deleted group leaves no chat behind: its row goes from the owner's and the member's chat
+// lists, and its log with it (it used to stay as a nameless row nobody could remove).
+func TestDeletedGroupLeavesNoChat(t *testing.T) {
+	aliceN, alice := startNode(t, "alice")
+	_, bob := startNode(t, "bob")
+	for _, a := range []*node.NodeApi{alice, bob} {
+		_, err := a.Conversations()
+		require.NoError(t, err)
+	}
+	require.NoError(t, bob.ConnectToPeer(joinOf(aliceN)))
+	eventually(t, "connected", func() bool { return len(alice.GetPeers()) == 1 })
+
+	g, err := alice.CreateGroup("Gone soon", "", "group")
+	require.NoError(t, err)
+	invite, err := alice.GetGroupInvite(g.ID)
+	require.NoError(t, err)
+	_, err = bob.JoinGroup(invite)
+	require.NoError(t, err)
+	ref := groupRef(g.ID)
+	eventually(t, "the group runs on the log", func() bool { return upgraded(t, alice, g.ID) && upgraded(t, bob, g.ID) })
+	_, err = alice.ChatSend(ref, node.SendRequest{Text: "hello"})
+	require.NoError(t, err)
+	eventually(t, "bob has the message", func() bool {
+		page, err := bob.ChatHistory(ref, "", 20)
+		return err == nil && len(page.Messages) > 0
+	})
+
+	require.NoError(t, alice.DeleteGroup(g.ID))
+	hasRow := func(a *node.NodeApi) bool {
+		rows, err := a.ChatRows()
+		require.NoError(t, err)
+		for _, r := range rows {
+			if r.Ref.Kind == "group" && r.Ref.ID == g.ID {
+				return true
+			}
+		}
+		return false
+	}
+	eventually(t, "the group's row is gone for both", func() bool { return !hasRow(alice) && !hasRow(bob) })
+	eventually(t, "and its log", func() bool {
+		page, err := bob.ChatHistory(ref, "", 20)
+		return err != nil || len(page.Messages) == 0
+	})
 }

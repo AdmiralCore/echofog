@@ -6,6 +6,7 @@
     import StreamTile from './StreamTile.svelte';
     import ParticipantMenu from './ParticipantMenu.svelte';
     import CallControls from './CallControls.svelte';
+    import CallPathBadge from './CallPathBadge.svelte';
     import Icon from '../ui/Icon.svelte';
     import { t } from '../../i18n/index.js';
 
@@ -75,6 +76,7 @@
             <span class="hidden sm:flex items-center gap-1 text-xs text-[#949ba4] ml-2" title={$t('call.e2eTitle')}>
                 <Icon name="lock" size={13} /> {$t('call.e2e')}
             </span>
+            <CallPathBadge />
         </div>
         <div class="flex items-center gap-1">
             <button class="hdr-btn" title={maximized ? $t('call.showChat') : $t('call.focusCall')} aria-label={maximized ? $t('call.showChat') : $t('call.focusCall')} on:click={() => (maximized = !maximized)}>
@@ -90,7 +92,7 @@
         {#if focused}
             <div class="flex gap-3 w-full h-full min-h-0">
                 <div class="flex-1 min-w-0 min-h-0">
-                    <StreamTile stream={focused} focused />
+                    <StreamTile stream={focused} focused camera={cameraOf[focused.broadcaster]} />
                 </div>
                 <div class="w-56 shrink-0 flex flex-col gap-3 overflow-y-auto pr-1">
                     {#each screens.filter((st) => st.streamId !== focused.streamId) as st (st.streamId)}
@@ -105,7 +107,7 @@
             <div class="relative w-full h-full min-h-0 overflow-hidden" bind:clientWidth={gridW} bind:clientHeight={gridH}>
                 <div class="absolute inset-0 flex flex-wrap content-center justify-center" style="gap:{GAP}px">
                     {#each screens as st (st.streamId)}
-                        <div class="shrink-0" style="width:{tile.w}px;height:{tile.h}px"><StreamTile stream={st} /></div>
+                        <div class="shrink-0" style="width:{tile.w}px;height:{tile.h}px"><StreamTile stream={st} camera={cameraOf[st.broadcaster]} /></div>
                     {/each}
                     {#each members as peer (peer)}
                         <div class="shrink-0" style="width:{tile.w}px;height:{tile.h}px"><ParticipantTile {peer} camera={cameraOf[peer]} on:menu={openMenu} /></div>

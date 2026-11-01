@@ -172,5 +172,24 @@ func launchElevated(exe string, args []string) error {
 
 func DefaultInterfaceIndex() (int, error) { return 0, nil }
 
+// PhysicalInterfaceIndex: on Linux the node is kept off the TUN by its UDP port (policy routing),
+// not by an interface pin.
+func PhysicalInterfaceIndex() (int, error) { return 0, nil }
+
+// rebypass moves the rule that keeps the node's own UDP off the TUN to a new port: a node that
+// adopts a held helper (the kill switch, after a restart) may listen on another one.
+func rebypass(port int) error {
+	var err error
+	for _, fam := range []string{"-4", "-6"} {
+		for i := 0; i < 8 && ipCmd(fam, "rule", "del", "pref", prefBypass) == nil; i++ {
+		}
+		e := ipCmd(fam, "rule", "add", "ipproto", "udp", "sport", strconv.Itoa(port), "lookup", "main", "pref", prefBypass)
+		if fam == "-4" {
+			err = e // IPv6 may be off
+		}
+	}
+	return err
+}
+
 // hardenHelper has nothing to do on Linux: the helper finds no libraries beside the binary.
 func hardenHelper() {}

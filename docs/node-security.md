@@ -1,3 +1,5 @@
+Русская версия: [node-security.ru.md](node-security.ru.md)
+
 # Protecting a node
 
 What a public node (a relay, a signaling node or an exit on a VPS) is protected against, how to set

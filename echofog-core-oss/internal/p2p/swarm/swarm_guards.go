@@ -9,6 +9,7 @@ import (
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
@@ -65,6 +66,7 @@ type guard struct {
 	fails   int
 	next    time.Time // not dialed before this
 	dialing bool
+	pinned  bool // the user pinned this relay (anti_dpi.pinned_guards): held and leaned on first
 }
 
 // GuardInfo is a guard as the status of the node shows it.
@@ -80,13 +82,27 @@ type guardSet struct {
 	mu     sync.Mutex
 	list   []*guard
 	loaded bool
+	// onlyPinned: anonymous mode through the user's own relay. The pinned relays are the only
+	// guards, every other peer counts as across the border (met through them, never linked to),
+	// and no other guard is taken, since each one would see this computer's address.
+	onlyPinned atomic.Bool
 }
 
+// SetOnlyPinnedGuards turns anonymous mode through the user's own relay on or off.
+func (s *Swarm) SetOnlyPinnedGuards(on bool) { s.guards.onlyPinned.Store(on) }
+
+// OnlyPinnedGuards reports whether the node goes in through its pinned relays alone.
+func (s *Swarm) OnlyPinnedGuards() bool { return s != nil && s.guards.onlyPinned.Load() }
+
 // GuardModeActive reports whether this node holds guards: it is not in the server role and
-// anti_dpi.guard_mode is "on", or "auto" with obfuscation on (the default).
+// anti_dpi.guard_mode is "on", or "auto" with obfuscation on (the default) and the node not placed in
+// a country that does not censor (SetGuardsFree), or "auto" with a relay the user pinned.
 func (s *Swarm) GuardModeActive() bool {
 	if s == nil || s.cfg == nil || s.cfg.IsServer() {
 		return false
+	}
+	if s.guards.onlyPinned.Load() {
+		return true
 	}
 	switch s.cfg.AntiDPI.GuardMode {
 	case config.GuardOff:
@@ -94,7 +110,10 @@ func (s *Swarm) GuardModeActive() bool {
 	case config.GuardOn:
 		return true
 	}
-	return s.cfg.AntiDPI.Obfs == config.ObfsNode
+	if len(s.cfg.AntiDPI.PinnedGuards) > 0 {
+		return true // the user pinned a relay to go in through: that holds even where auto stands down
+	}
+	return s.cfg.AntiDPI.Obfs == config.ObfsNode && !s.guardsFree.Load()
 }
 
 // Guards lists the guards, connected or not.
@@ -107,6 +126,18 @@ func (s *Swarm) Guards() []GuardInfo {
 		out = append(out, GuardInfo{ID: g.id, Addr: g.addr, Connected: s.ThisIsActivePeer(g.id), Added: g.added, Expires: g.expires})
 	}
 	return out
+}
+
+// GuardsWanted is how many guards the node aims to hold at once.
+func (s *Swarm) GuardsWanted() int { return guardsWanted }
+
+// RefreshGuards runs a guard round now: after the mode changed, it starts holding guards (or lets
+// the kept ones go on the next rounds). Safe when guard mode is off.
+func (s *Swarm) RefreshGuards() {
+	if s == nil {
+		return
+	}
+	s.maintainGuards()
 }
 
 // IsGuard reports whether id is one of this node's guards.
@@ -251,25 +282,61 @@ func (s *Swarm) guardCandidates() []guardCandidate {
 // every few seconds.
 func (s *Swarm) maintainGuards() {
 	now := time.Now()
-	for _, c := range s.planGuards(now, s.guardCandidates()) {
+	var pinned []guardCandidate
+	if s.GuardModeActive() {
+		pinned = s.pinnedGuards()
+	}
+	for _, c := range s.planGuards(now, s.guardCandidates(), pinned) {
 		s.dialGuard(c)
 	}
 }
 
+// pinnedGuards are the relays the user chose to route through (anti_dpi.pinned_guards): each is an
+// annotated address of a relay the node always holds as a guard. Facts carried in the address (the
+// camouflage SNI, the server role) are learned, so the dial is disguised and the peer is eligible.
+func (s *Swarm) pinnedGuards() []guardCandidate {
+	if s.cfg == nil {
+		return nil
+	}
+	var out []guardCandidate
+	for _, e := range s.cfg.AntiDPI.PinnedGuards {
+		info := network.ParseAddrInfo(e)
+		if !info.Named || info.Addr == "" || info.ID == s.selfID {
+			continue
+		}
+		s.learnBootstrapFacts(info)
+		out = append(out, guardCandidate{info.ID, info.Addr})
+	}
+	return out
+}
+
 // planGuards is the bookkeeping of a round, apart from the network: it changes the guard list and
 // returns the guards that are to be dialed now.
-func (s *Swarm) planGuards(now time.Time, cands []guardCandidate) []*guard {
+func (s *Swarm) planGuards(now time.Time, cands, pinned []guardCandidate) []*guard {
 	s.guards.mu.Lock()
 	defer s.guards.mu.Unlock()
 	s.loadGuardsLocked()
 	changed := false
+
+	pinnedSet := map[types.PeerID]bool{}
+	for _, c := range pinned {
+		pinnedSet[c.id] = true
+	}
 
 	up := func(g *guard) bool { return s.ThisIsActivePeer(g.id) }
 	othersUp := len(s.GetAllPeers()) // links of any kind: the proof that this node's own network works
 	kept := s.guards.list[:0]
 	dropped := map[types.PeerID]bool{} // not taken back in the same round
 	for _, g := range s.guards.list {
+		g.pinned = pinnedSet[g.id] // re-derived from config each round: unpinning lets it rotate again
 		switch {
+		case !g.pinned && s.guards.onlyPinned.Load():
+			changed, dropped[g.id] = true, true // anonymous through the own relay: no other guard
+			continue
+		case g.pinned:
+			if up(g) { // always kept: the user chose this relay as the way in
+				g.lastOK, g.fails = now, 0
+			}
 		case !now.Before(g.expires), s.CheckOnBan(g.id), !s.eligibleGuardOrKept(g):
 			changed, dropped[g.id] = true, true // its time is up (connected or not), or it is no use
 			continue
@@ -282,6 +349,30 @@ func (s *Swarm) planGuards(now time.Time, cands []guardCandidate) []*guard {
 		kept = append(kept, g)
 	}
 	s.guards.list = kept
+
+	// A pinned relay is always held: add any the node does not hold yet, before filling the rest.
+	for _, c := range pinned {
+		if dropped[c.id] || len(s.guards.list) >= guardsMax {
+			continue
+		}
+		have := false
+		for _, g := range s.guards.list {
+			if g.id == c.id {
+				have = true
+				break
+			}
+		}
+		if have {
+			continue
+		}
+		life := guardLifeMin + time.Duration(rand.Int64N(int64(guardLifeSpan)))
+		s.guards.list = append(s.guards.list, &guard{id: c.id, addr: c.addr, added: now, expires: now.Add(life), lastOK: now, pinned: true})
+		changed = true
+	}
+
+	if s.guards.onlyPinned.Load() {
+		cands = nil // the pinned relays and nothing else
+	}
 
 	healthy := func() int {
 		n := 0
@@ -304,9 +395,14 @@ func (s *Swarm) planGuards(now time.Time, cands []guardCandidate) []*guard {
 			}
 		}
 		rand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
-		// connected servers first (a link that already works), then spread over networks: a
-		// second guard in the /16 of a first one adds little
+		// servers of the own country first where the node layer says that matters (the TSPU
+		// freeze), then connected servers (a link that already works), then spread over
+		// networks: a second guard in the /16 of a first one adds little
 		sort.SliceStable(pool, func(i, j int) bool {
+			di, dj := s.isDomestic(pool[i].addr), s.isDomestic(pool[j].addr)
+			if di != dj {
+				return di
+			}
 			ci, cj := s.ThisIsActivePeer(pool[i].id), s.ThisIsActivePeer(pool[j].id)
 			return ci && !cj
 		})
@@ -372,7 +468,7 @@ func (s *Swarm) dialGuard(g *guard) {
 	go func() {
 		defer s.wg.Done()
 		addr := resolveHostPort(s.ctx, g.addr)
-		ctx, cancel := context.WithTimeout(s.ctx, guardDialWait)
+		ctx, cancel := context.WithTimeout(s.ctx, network.DialBudget(guardDialWait))
 		defer cancel()
 		err := s.expectPeer(addr, g.id)
 		if err == nil {
@@ -454,12 +550,22 @@ func (s *Swarm) IsUserPeer(id types.PeerID) bool { return s.isClientPeer(id) }
 var ErrUserLinkViaRelay = errors.New("swarm: a user's node across the border is reached through a relay, not directly")
 
 // UserLinkViaRelay reports whether the node must not link directly (a dial, a hole punch) to the
-// peer at addr ("" if no address is known): in guard mode, a peer that is not a camouflaged server
+// peer at addr ("" if no address is known): behind a proxy, or in guard mode, a peer that is not a camouflaged server
 // and not one the user listed (an invitation, a bootstrap node), at an address across the border.
 // With no address known the peer counts as across the border: unknown is across. The traffic to
 // such a peer goes through relays, in the first place the node's guards.
 func (s *Swarm) UserLinkViaRelay(id types.PeerID, addr string) bool {
-	if !s.GuardModeActive() || s.isExplicitPeer(id) || s.IsGuard(id) {
+	if s.guards.onlyPinned.Load() {
+		// anonymous through the own relay: every peer but the relay is met at it, the ones the
+		// user listed too; only a peer on the local network is linked to directly
+		if s.IsGuard(id) {
+			return false
+		}
+		info := network.ParseAddrInfo(addr)
+		return info.Addr == "" || !onLocalNetwork(info.Addr)
+	}
+	proxied := network.OutboundProxy() != ""
+	if !(s.GuardModeActive() || proxied) || s.isExplicitPeer(id) || s.IsGuard(id) {
 		return false
 	}
 	if s.GetPeerSNI(id) != "" || s.IsServerPeer(id) {
@@ -468,6 +574,12 @@ func (s *Swarm) UserLinkViaRelay(id types.PeerID, addr string) bool {
 	info := network.ParseAddrInfo(addr)
 	if info.SNI != "" {
 		return false
+	}
+	if proxied {
+		// behind a proxy (Tor) a user's node is met at a relay: a hole punch would show our
+		// address, and a dial of its own through the proxy rarely finds a listener; only one on
+		// the local network is reached directly
+		return network.Proxied(context.Background(), info.Addr)
 	}
 	if info.Addr == "" {
 		return true

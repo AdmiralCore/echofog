@@ -26,3 +26,17 @@ func startNode(t *testing.T, name string) (*coreNode.Node, *node.NodeApi) {
 	t.Cleanup(n.Stop)
 	return n, node.NewNodeApi(n)
 }
+
+// mayWrite: api is in on the group's log and may post in it, as its composer shows.
+func mayWrite(api *node.NodeApi, group string) bool {
+	rows, err := api.ChatRows()
+	if err != nil {
+		return false
+	}
+	for _, r := range rows {
+		if r.Ref.ID == group {
+			return r.Can.Send && r.Pending == ""
+		}
+	}
+	return false
+}

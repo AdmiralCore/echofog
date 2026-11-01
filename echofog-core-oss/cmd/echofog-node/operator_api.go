@@ -45,7 +45,7 @@ func operatorRoutes(mux *http.ServeMux, h *api.NodeApi, guard func(http.HandlerF
 			return
 		}
 		passes, _ := h.ListPasses()
-		writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "link": st.Link, "joined": len(st.Joined), "passes": len(passes)})
+		writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "link": st.Link, "webLink": access.WebLink(st.Link), "joined": len(st.Joined), "passes": len(passes)})
 	}))
 	mux.HandleFunc("GET /api/v1/passes", guard(func(w http.ResponseWriter, r *http.Request) {
 		list, err := h.ListPasses()

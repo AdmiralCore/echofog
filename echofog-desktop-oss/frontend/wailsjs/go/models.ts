@@ -189,7 +189,51 @@ export namespace convlog {
 		    return a;
 		}
 	}
+	export class ModEntry {
+	    ts: number;
+	    actor: string;
+	    action: string;
+	    target?: string;
+	    role?: string;
+	    detail?: string;
+	    until?: number;
+	    message?: string;
+	    channel?: string;
 	
+	    static createFrom(source: any = {}) {
+	        return new ModEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ts = source["ts"];
+	        this.actor = source["actor"];
+	        this.action = source["action"];
+	        this.target = source["target"];
+	        this.role = source["role"];
+	        this.detail = source["detail"];
+	        this.until = source["until"];
+	        this.message = source["message"];
+	        this.channel = source["channel"];
+	    }
+	}
+	
+	export class Override {
+	    role: string;
+	    allow?: number;
+	    deny?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Override(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.allow = source["allow"];
+	        this.deny = source["deny"];
+	    }
+	}
 
 }
 
@@ -221,6 +265,7 @@ export namespace dto {
 	    coordinator: string;
 	    members: string[];
 	    streams: string[];
+	    backdrops?: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new CallRosterDTO(source);
@@ -233,6 +278,7 @@ export namespace dto {
 	        this.coordinator = source["coordinator"];
 	        this.members = source["members"];
 	        this.streams = source["streams"];
+	        this.backdrops = source["backdrops"];
 	    }
 	}
 	export class ContactDTO {
@@ -348,6 +394,8 @@ export namespace dto {
 	    chatId: string;
 	    chatName: string;
 	    msgId: string;
+	    channel?: string;
+	    thread?: string;
 	    sender?: string;
 	    mine: boolean;
 	    text: string;
@@ -366,6 +414,8 @@ export namespace dto {
 	        this.chatId = source["chatId"];
 	        this.chatName = source["chatName"];
 	        this.msgId = source["msgId"];
+	        this.channel = source["channel"];
+	        this.thread = source["thread"];
 	        this.sender = source["sender"];
 	        this.mine = source["mine"];
 	        this.text = source["text"];
@@ -582,6 +632,144 @@ export namespace logging {
 
 export namespace main {
 	
+	export class AutoUnlockDTO {
+	    profile: string;
+	    unlocked: boolean;
+	    reason: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoUnlockDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profile = source["profile"];
+	        this.unlocked = source["unlocked"];
+	        this.reason = source["reason"];
+	        this.error = source["error"];
+	    }
+	}
+	export class AutostartDTO {
+	    supported: boolean;
+	    enabled: boolean;
+	    program: string;
+	    blocked: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutostartDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.enabled = source["enabled"];
+	        this.program = source["program"];
+	        this.blocked = source["blocked"];
+	    }
+	}
+	export class CrashReport {
+	    reason: string;
+	    where: string;
+	    text: string;
+	    version: string;
+	    os: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CrashReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reason = source["reason"];
+	        this.where = source["where"];
+	        this.text = source["text"];
+	        this.version = source["version"];
+	        this.os = source["os"];
+	    }
+	}
+	export class NativeScreenInfo {
+	    available: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeScreenInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class NativeScreenStatsDTO {
+	    active: boolean;
+	    streamId: string;
+	    at: number;
+	    captured: number;
+	    encoded: number;
+	    sent: number;
+	    skipped: number;
+	    keyframes: number;
+	    bytes: number;
+	    packets: number;
+	    encodeSeconds: number;
+	    width: number;
+	    height: number;
+	    sourceWidth: number;
+	    sourceHeight: number;
+	    bitrateKbps: number;
+	    encoder: string;
+	    adapter: string;
+	    hardware: boolean;
+	    pacerDelayMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeScreenStatsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.streamId = source["streamId"];
+	        this.at = source["at"];
+	        this.captured = source["captured"];
+	        this.encoded = source["encoded"];
+	        this.sent = source["sent"];
+	        this.skipped = source["skipped"];
+	        this.keyframes = source["keyframes"];
+	        this.bytes = source["bytes"];
+	        this.packets = source["packets"];
+	        this.encodeSeconds = source["encodeSeconds"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.sourceWidth = source["sourceWidth"];
+	        this.sourceHeight = source["sourceHeight"];
+	        this.bitrateKbps = source["bitrateKbps"];
+	        this.encoder = source["encoder"];
+	        this.adapter = source["adapter"];
+	        this.hardware = source["hardware"];
+	        this.pacerDelayMs = source["pacerDelayMs"];
+	    }
+	}
+	export class RememberedUnlockDTO {
+	    supported: boolean;
+	    enabled: boolean;
+	    askPayments: boolean;
+	    paymentGate: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RememberedUnlockDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.enabled = source["enabled"];
+	        this.askPayments = source["askPayments"];
+	        this.paymentGate = source["paymentGate"];
+	    }
+	}
 	export class UpdateInfo {
 	    current: string;
 	    latest?: string;
@@ -598,6 +786,39 @@ export namespace main {
 	        this.latest = source["latest"];
 	        this.url = source["url"];
 	        this.newer = source["newer"];
+	    }
+	}
+
+}
+
+export namespace nativecap {
+	
+	export class Source {
+	    id: string;
+	    kind: string;
+	    title: string;
+	    app?: string;
+	    width: number;
+	    height: number;
+	    refreshHz?: number;
+	    primary?: boolean;
+	    minimized?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Source(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.app = source["app"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.refreshHz = source["refreshHz"];
+	        this.primary = source["primary"];
+	        this.minimized = source["minimized"];
 	    }
 	}
 
@@ -625,6 +846,7 @@ export namespace node {
 	    mode: string;
 	    nextMode?: string;
 	    link: string;
+	    webLink: string;
 	    linkError?: string;
 	    secretFromConfig: boolean;
 	    joined: JoinedPeer[];
@@ -639,6 +861,7 @@ export namespace node {
 	        this.mode = source["mode"];
 	        this.nextMode = source["nextMode"];
 	        this.link = source["link"];
+	        this.webLink = source["webLink"];
 	        this.linkError = source["linkError"];
 	        this.secretFromConfig = source["secretFromConfig"];
 	        this.joined = this.convertValues(source["joined"], JoinedPeer);
@@ -662,6 +885,36 @@ export namespace node {
 		    }
 		    return a;
 		}
+	}
+	export class AnonymityStatus {
+	    mode: string;
+	    walletDirect: boolean;
+	    running: string;
+	    seenBy: string;
+	    broken?: string;
+	    proxy?: string;
+	    relays?: string[];
+	    restart?: boolean;
+	    hasProxy: boolean;
+	    hasRelay: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AnonymityStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.walletDirect = source["walletDirect"];
+	        this.running = source["running"];
+	        this.seenBy = source["seenBy"];
+	        this.broken = source["broken"];
+	        this.proxy = source["proxy"];
+	        this.relays = source["relays"];
+	        this.restart = source["restart"];
+	        this.hasProxy = source["hasProxy"];
+	        this.hasRelay = source["hasRelay"];
+	    }
 	}
 	export class BootstrapNode {
 	    addr: string;
@@ -715,6 +968,111 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class CallPathMember {
+	    peer: string;
+	    link: string;
+	    relay: string;
+	    relayAddr: string;
+	    pingMs: number;
+	    reason: string;
+	    theirNat: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallPathMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peer = source["peer"];
+	        this.link = source["link"];
+	        this.relay = source["relay"];
+	        this.relayAddr = source["relayAddr"];
+	        this.pingMs = source["pingMs"];
+	        this.reason = source["reason"];
+	        this.theirNat = source["theirNat"];
+	    }
+	}
+	export class CallPath {
+	    inCall: boolean;
+	    members: CallPathMember[];
+	    relayed: number;
+	    reason: string;
+	    hurts: string;
+	    pingMs: number;
+	    route: string;
+	    nat: string;
+	    mapped: boolean;
+	    carrierNat: boolean;
+	    listenPort: number;
+	    sendKbps: number;
+	    presetKbps: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallPath(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inCall = source["inCall"];
+	        this.members = this.convertValues(source["members"], CallPathMember);
+	        this.relayed = source["relayed"];
+	        this.reason = source["reason"];
+	        this.hurts = source["hurts"];
+	        this.pingMs = source["pingMs"];
+	        this.route = source["route"];
+	        this.nat = source["nat"];
+	        this.mapped = source["mapped"];
+	        this.carrierNat = source["carrierNat"];
+	        this.listenPort = source["listenPort"];
+	        this.sendKbps = source["sendKbps"];
+	        this.presetKbps = source["presetKbps"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class CallRelay {
+	    peerId: string;
+	    addr: string;
+	    connected: boolean;
+	    pingMs: number;
+	    pricePerMb: number;
+	    mine: boolean;
+	    guard: boolean;
+	    carrying: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallRelay(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.addr = source["addr"];
+	        this.connected = source["connected"];
+	        this.pingMs = source["pingMs"];
+	        this.pricePerMb = source["pricePerMb"];
+	        this.mine = source["mine"];
+	        this.guard = source["guard"];
+	        this.carrying = source["carrying"];
+	    }
+	}
 	export class GroupCall {
 	    room?: string;
 	    members?: string[];
@@ -746,9 +1104,15 @@ export namespace node {
 	    topic?: string;
 	    readOnly: boolean;
 	    position: number;
+	    parent?: string;
+	    category?: boolean;
+	    slowSecs?: number;
+	    open?: string;
+	    overrides?: convlog.Override[];
 	    unread: number;
 	    lastTs: number;
 	    canSend: boolean;
+	    canJoin: boolean;
 	    call?: GroupCall;
 	
 	    static createFrom(source: any = {}) {
@@ -763,9 +1127,15 @@ export namespace node {
 	        this.topic = source["topic"];
 	        this.readOnly = source["readOnly"];
 	        this.position = source["position"];
+	        this.parent = source["parent"];
+	        this.category = source["category"];
+	        this.slowSecs = source["slowSecs"];
+	        this.open = source["open"];
+	        this.overrides = this.convertValues(source["overrides"], convlog.Override);
 	        this.unread = source["unread"];
 	        this.lastTs = source["lastTs"];
 	        this.canSend = source["canSend"];
+	        this.canJoin = source["canJoin"];
 	        this.call = this.convertValues(source["call"], GroupCall);
 	    }
 	
@@ -794,6 +1164,11 @@ export namespace node {
 	    topic: string;
 	    readOnly: boolean;
 	    position: number;
+	    parent: string;
+	    category: boolean;
+	    slowSecs: number;
+	    open: string;
+	    overrides: convlog.Override[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ChannelSpec(source);
@@ -807,7 +1182,30 @@ export namespace node {
 	        this.topic = source["topic"];
 	        this.readOnly = source["readOnly"];
 	        this.position = source["position"];
+	        this.parent = source["parent"];
+	        this.category = source["category"];
+	        this.slowSecs = source["slowSecs"];
+	        this.open = source["open"];
+	        this.overrides = this.convertValues(source["overrides"], convlog.Override);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ChatLink {
 	    url: string;
@@ -912,14 +1310,39 @@ export namespace node {
 	        this.channel = source["channel"];
 	    }
 	}
+	export class ConnectionReport {
+	    text: string;
+	    country: string;
+	    provider: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConnectionReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.country = source["country"];
+	        this.provider = source["provider"];
+	        this.version = source["version"];
+	    }
+	}
 	export class ConvCan {
 	    send: boolean;
 	    files: boolean;
+	    links: boolean;
+	    threads: boolean;
 	    react: boolean;
 	    pin: boolean;
 	    manage: boolean;
+	    channels: boolean;
+	    roles: boolean;
 	    invite: boolean;
 	    call: boolean;
+	    stream: boolean;
+	    slowFree?: boolean;
+	    mutedUntil?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConvCan(source);
@@ -929,11 +1352,18 @@ export namespace node {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.send = source["send"];
 	        this.files = source["files"];
+	        this.links = source["links"];
+	        this.threads = source["threads"];
 	        this.react = source["react"];
 	        this.pin = source["pin"];
 	        this.manage = source["manage"];
+	        this.channels = source["channels"];
+	        this.roles = source["roles"];
 	        this.invite = source["invite"];
 	        this.call = source["call"];
+	        this.stream = source["stream"];
+	        this.slowFree = source["slowFree"];
+	        this.mutedUntil = source["mutedUntil"];
 	    }
 	}
 	export class ConversationDTO {
@@ -955,6 +1385,8 @@ export namespace node {
 	    role?: string;
 	    members?: number;
 	    can: ConvCan;
+	    pending?: string;
+	    requests?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConversationDTO(source);
@@ -980,6 +1412,8 @@ export namespace node {
 	        this.role = source["role"];
 	        this.members = source["members"];
 	        this.can = this.convertValues(source["can"], ConvCan);
+	        this.pending = source["pending"];
+	        this.requests = source["requests"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1141,15 +1575,118 @@ export namespace node {
 	        this.thread = source["thread"];
 	    }
 	}
+	export class GroupInviteDTO {
+	    n: string;
+	    label?: string;
+	    exp: number;
+	    uses?: number;
+	    used: number;
+	    role?: string;
+	    approval?: boolean;
+	    issuer: string;
+	    mine: boolean;
+	    state: string;
+	    link?: string;
+	    webLink?: string;
+	    canRevoke: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupInviteDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.n = source["n"];
+	        this.label = source["label"];
+	        this.exp = source["exp"];
+	        this.uses = source["uses"];
+	        this.used = source["used"];
+	        this.role = source["role"];
+	        this.approval = source["approval"];
+	        this.issuer = source["issuer"];
+	        this.mine = source["mine"];
+	        this.state = source["state"];
+	        this.link = source["link"];
+	        this.webLink = source["webLink"];
+	        this.canRevoke = source["canRevoke"];
+	    }
+	}
+	export class GroupInvitePreview {
+	    groupId: string;
+	    title: string;
+	    kind: string;
+	    members: number;
+	    approval?: boolean;
+	    exp?: number;
+	    expired?: boolean;
+	    joined?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupInvitePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.groupId = source["groupId"];
+	        this.title = source["title"];
+	        this.kind = source["kind"];
+	        this.members = source["members"];
+	        this.approval = source["approval"];
+	        this.exp = source["exp"];
+	        this.expired = source["expired"];
+	        this.joined = source["joined"];
+	    }
+	}
+	export class GroupInviteSpec {
+	    label: string;
+	    hours: number;
+	    uses: number;
+	    role: string;
+	    approval: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupInviteSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.hours = source["hours"];
+	        this.uses = source["uses"];
+	        this.role = source["role"];
+	        this.approval = source["approval"];
+	    }
+	}
+	export class GroupJoinRequestDTO {
+	    peerId: string;
+	    ts: number;
+	    invite?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupJoinRequestDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.ts = source["ts"];
+	        this.invite = source["invite"];
+	    }
+	}
 	export class GroupMemberDTO {
 	    peerId: string;
 	    role: string;
+	    roleTitle?: string;
+	    roleColor?: number;
 	    joinedAt: number;
 	    isMe: boolean;
+	    online: boolean;
 	    canKick: boolean;
 	    canBan: boolean;
 	    roles?: string[];
 	    canTransfer: boolean;
+	    timeout?: number;
+	    canTimeout: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupMemberDTO(source);
@@ -1159,12 +1696,17 @@ export namespace node {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.peerId = source["peerId"];
 	        this.role = source["role"];
+	        this.roleTitle = source["roleTitle"];
+	        this.roleColor = source["roleColor"];
 	        this.joinedAt = source["joinedAt"];
 	        this.isMe = source["isMe"];
+	        this.online = source["online"];
 	        this.canKick = source["canKick"];
 	        this.canBan = source["canBan"];
 	        this.roles = source["roles"];
 	        this.canTransfer = source["canTransfer"];
+	        this.timeout = source["timeout"];
+	        this.canTimeout = source["canTimeout"];
 	    }
 	}
 	export class GroupMessageDTO {
@@ -1197,6 +1739,128 @@ export namespace node {
 	        this.failed = source["failed"];
 	        this.file = this.convertValues(source["file"], GroupFileDTO);
 	        this.verified = source["verified"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GroupRoleDTO {
+	    id: string;
+	    title: string;
+	    color: number;
+	    rank: number;
+	    perms: number;
+	    builtin: boolean;
+	    members: number;
+	    canEdit: boolean;
+	    canRemove: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupRoleDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.color = source["color"];
+	        this.rank = source["rank"];
+	        this.perms = source["perms"];
+	        this.builtin = source["builtin"];
+	        this.members = source["members"];
+	        this.canEdit = source["canEdit"];
+	        this.canRemove = source["canRemove"];
+	    }
+	}
+	export class GroupSnapshotInfo {
+	    group: GroupDTO;
+	    events: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new GroupSnapshotInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.group = this.convertValues(source["group"], GroupDTO);
+	        this.events = source["events"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GuardServer {
+	    peerId: string;
+	    addr?: string;
+	    connected: boolean;
+	    pinned?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GuardServer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.addr = source["addr"];
+	        this.connected = source["connected"];
+	        this.pinned = source["pinned"];
+	    }
+	}
+	export class GuardStatus {
+	    mode: string;
+	    active: boolean;
+	    connected: number;
+	    wanted: number;
+	    guards: GuardServer[];
+	    country?: string;
+	    stoodDown?: boolean;
+	    pinned: BootstrapNode[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GuardStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.active = source["active"];
+	        this.connected = source["connected"];
+	        this.wanted = source["wanted"];
+	        this.guards = this.convertValues(source["guards"], GuardServer);
+	        this.country = source["country"];
+	        this.stoodDown = source["stoodDown"];
+	        this.pinned = this.convertValues(source["pinned"], BootstrapNode);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1278,6 +1942,26 @@ export namespace node {
 	        this.paymentRequired = source["paymentRequired"];
 	    }
 	}
+	export class ProxyStatus {
+	    proxy: string;
+	    callRoute: string;
+	    running: string;
+	    runningCallRoute: string;
+	    restart: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proxy = source["proxy"];
+	        this.callRoute = source["callRoute"];
+	        this.running = source["running"];
+	        this.runningCallRoute = source["runningCallRoute"];
+	        this.restart = source["restart"];
+	    }
+	}
 	export class Reach {
 	    ok: boolean;
 	    ms: number;
@@ -1338,6 +2022,7 @@ export namespace node {
 	    settings: RelaySettingsDTO;
 	    chosen: boolean;
 	    link: string;
+	    webLink: string;
 	    addr: string;
 	    nat: string;
 	    mapped: boolean;
@@ -1359,6 +2044,7 @@ export namespace node {
 	        this.settings = this.convertValues(source["settings"], RelaySettingsDTO);
 	        this.chosen = source["chosen"];
 	        this.link = source["link"];
+	        this.webLink = source["webLink"];
 	        this.addr = source["addr"];
 	        this.nat = source["nat"];
 	        this.mapped = source["mapped"];
@@ -1589,6 +2275,44 @@ export namespace node {
 	        this.chosen = source["chosen"];
 	    }
 	}
+	export class StreamStatsDTO {
+	    own: boolean;
+	    unitsSent: number;
+	    delivered: number;
+	    lost: number;
+	    nacked: number;
+	    retransmitted: number;
+	    recovered: number;
+	    sendKbps: number;
+	    videoSent: number;
+	    videoDropped: number;
+	    videoFailed: number;
+	    keyframesServed: number;
+	    netDroppedOut: number;
+	    netDroppedIn: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StreamStatsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.own = source["own"];
+	        this.unitsSent = source["unitsSent"];
+	        this.delivered = source["delivered"];
+	        this.lost = source["lost"];
+	        this.nacked = source["nacked"];
+	        this.retransmitted = source["retransmitted"];
+	        this.recovered = source["recovered"];
+	        this.sendKbps = source["sendKbps"];
+	        this.videoSent = source["videoSent"];
+	        this.videoDropped = source["videoDropped"];
+	        this.videoFailed = source["videoFailed"];
+	        this.keyframesServed = source["keyframesServed"];
+	        this.netDroppedOut = source["netDroppedOut"];
+	        this.netDroppedIn = source["netDroppedIn"];
+	    }
+	}
 	export class VPNSession {
 	    id: string;
 	    peerId: string;
@@ -1674,6 +2398,8 @@ export namespace node {
 	    wholeComputer: boolean;
 	    wholeComputerSupported: boolean;
 	    wholeComputerError: string;
+	    killSwitch: boolean;
+	    blocked: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new VPNStatus(source);
@@ -1701,6 +2427,8 @@ export namespace node {
 	        this.wholeComputer = source["wholeComputer"];
 	        this.wholeComputerSupported = source["wholeComputerSupported"];
 	        this.wholeComputerError = source["wholeComputerError"];
+	        this.killSwitch = source["killSwitch"];
+	        this.blocked = source["blocked"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

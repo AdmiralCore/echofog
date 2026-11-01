@@ -31,6 +31,9 @@ const (
 	quicAttemptTimeout = 4 * time.Second
 	// tcpPreferenceTTL: once QUIC failed for an address, use TCP first for a while.
 	tcpPreferenceTTL = 10 * time.Minute
+	// tcpRotatingPreferenceTTL: where the TCP link has to rotate (the TSPU freeze) it costs a
+	// connection every few KB, so QUIC is tried again sooner
+	tcpRotatingPreferenceTTL = 2 * time.Minute
 	// transportRaceStagger: the preferred transport gets this head start before the other is
 	// launched alongside it, so a working network pays nothing for the race.
 	transportRaceStagger = 300 * time.Millisecond
@@ -248,7 +251,9 @@ func (f *FallbackTransport) listenTCP(addr string) error {
 
 // ExpectPeer tells both transports whose address addr is; see PeerExpecter.
 func (f *FallbackTransport) ExpectPeer(addr string, id types.PeerID) {
-	f.QUIC.ExpectPeer(addr, id)
+	if !proxyResolvesName(addr) { // the QUIC side looks the name up here, which the proxy is there to avoid
+		f.QUIC.ExpectPeer(addr, id)
+	}
 	if f.TCP != nil {
 		f.TCP.ExpectPeer(f.tcpDialAddr(addr), id)
 	}
@@ -262,9 +267,26 @@ func (f *FallbackTransport) SetRegionNoise(fn func(addr string) bool) {
 	f.QUIC.SetRegionNoise(fn)
 }
 
+// SetTCPRotate says for which addresses the TCP fallback is dialed with link rotation (see
+// rotconn.go), the answer to the TSPU freeze; the addresses a link froze at are rotated anyway.
+func (f *FallbackTransport) SetTCPRotate(fn func(addr string) bool) {
+	if f.TCP != nil {
+		f.TCP.SetRotatePolicy(fn)
+	}
+}
+
+// SetTCPRotateOff stops rotation altogether (anti_dpi.tcp_rotate "off").
+func (f *FallbackTransport) SetTCPRotateOff(off bool) {
+	if f.TCP != nil {
+		f.TCP.SetRotateOff(off)
+	}
+}
+
 // ExpectPeerSNI tells both transports whose address addr is and its camouflage SNI; see PeerExpecter.
 func (f *FallbackTransport) ExpectPeerSNI(addr string, id types.PeerID, sni string) {
-	f.QUIC.ExpectPeerSNI(addr, id, sni)
+	if !proxyResolvesName(addr) { // the QUIC side looks the name up here, which the proxy is there to avoid
+		f.QUIC.ExpectPeerSNI(addr, id, sni)
+	}
 	if f.TCP != nil {
 		f.TCP.ExpectPeerSNI(f.tcpDialAddr(addr), id, sni)
 	}
@@ -281,6 +303,16 @@ func (f *FallbackTransport) SetNoDial(on bool) { f.noDial.Store(on) }
 func (f *FallbackTransport) DialEarly(ctx context.Context, addr string) error {
 	if f.noDial.Load() {
 		return ErrNoDial
+	}
+	if DialRefused(ctx, addr) {
+		return ErrDialRefused
+	}
+	if Proxied(ctx, addr) {
+		// a proxy (Tor) carries TCP only, and a QUIC dial beside it would show our address
+		if f.TCP == nil {
+			return ErrProxyNeedsTCP
+		}
+		return f.TCP.Dial(ctx, f.tcpDialAddr(addr))
 	}
 	if f.TCP == nil || f.mode == ModeQUIC {
 		return f.QUIC.DialEarly(ctx, addr)
@@ -410,11 +442,15 @@ func (f *FallbackTransport) PreferTCP(addr string) {
 }
 
 func (f *FallbackTransport) preferTCP(addr string) {
+	ttl := tcpPreferenceTTL
+	if f.TCP != nil && f.TCP.shouldRotate(f.tcpDialAddr(addr)) {
+		ttl = tcpRotatingPreferenceTTL
+	}
 	f.mu.Lock()
 	if len(f.preferT) > 4096 {
 		f.preferT = make(map[string]time.Time)
 	}
-	f.preferT[addr] = time.Now().Add(tcpPreferenceTTL)
+	f.preferT[addr] = time.Now().Add(ttl)
 	f.mu.Unlock()
 }
 

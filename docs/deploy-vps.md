@@ -49,7 +49,8 @@ The settings that matter most:
 ```bash
 # server: relay, mailboxes for others, DHT, exit; no chat, calls or files of its own
 ECHOFOG_ROLE=server
-# signaling only (DHT + help with hole punching, no traffic) — cheap; or false for a full relay
+# signaling only (DHT + help with hole punching, no traffic). Leave it false: without a relay
+# people behind NATs cannot write to or call each other. Cap the relay with ECHOFOG_RELAY_MBPS instead.
 ECHOFOG_SIGNALING=false
 ECHOFOG_RELAY=true
 # share this server's connection as a paid exit (other people's traffic leaves from its IP)
@@ -77,9 +78,10 @@ docker compose -f deploy/docker-compose.yml logs -f
 
 On the first start the node prints a **recovery phrase** — write it down and keep it offline; it
 restores the node's identity and wallet. It also prints a **Join address**:
-`<this server's public IP or domain>:443/<peer id>`. Put the server's IP in front: that is what
-other nodes use in `ECHOFOG_BOOTSTRAP` and what app users paste into **Settings → Bootstrap
-nodes**.
+`<this server's public IP or domain>:443/<peer id>?srv=1`, with `&sni=<site>` once the node knows
+the site it imitates. That is what other nodes use in `ECHOFOG_BOOTSTRAP` and what app users paste
+into **Settings → Bootstrap nodes**. Take it from `echofog-node status` after a few minutes: it then
+has the real public IP and the site name.
 
 The startup summary in the log and
 `docker compose -f deploy/docker-compose.yml exec node echofog-node status` show `Role: server`.
@@ -180,8 +182,9 @@ does this by itself).
 
 The same two lines turn on the UDP disguise too: clients will reach the node the way Chrome would
 open that site over HTTP/3. If the site itself speaks HTTP/3, a probe on UDP gets its real answer.
-Invitation links of a hidden node carry the site name by themselves; give out a public address as
-`<IP>:443/<peer id>?sni=<site domain>&srv=1` so that the first connection is disguised as well.
+Invitation links of a hidden node carry the site name by themselves, and so does the address
+`echofog-node status` prints for a public node (`<IP>:443/<peer id>?sni=<site domain>&srv=1`): give
+out that one, so that the first connection is disguised as well.
 
 Details: [Anti-DPI](anti-dpi.md).
 
@@ -199,6 +202,18 @@ are on by default. Two things are worth setting yourself in `deploy/.env`:
 Keep only the node's port open in the provider's firewall. What each protection does, how to see it
 in `status` and the log, and what it does not cover (a flood that fills the uplink needs the
 provider's DDoS protection): [Protecting a node](node-security.md).
+
+Every limit of the relay and the exit (circuits, speeds, daily and monthly caps of a free exit) is a
+line in `deploy/.env.example`; what each one does is in
+[Run a node → Relay and exit limits](run-a-node.md#relay-and-exit-limits). A few other settings:
+
+| Variable | What it does |
+| --- | --- |
+| `ECHOFOG_PASSWORD_FILE` | the node's password from a file (a Docker secret); without it one is generated and kept in `/data/.node_password` |
+| `ECHOFOG_MNEMONIC_FILE` | restore an existing identity from its 12 or 24 words on the first start |
+| `ECHOFOG_TON_NETWORK` | `testnet` (the default while the vault contract is unaudited) or `mainnet` |
+| `ECHOFOG_STATS_EVERY` | how often the stats line goes to the log (`1m`): peers, relayed traffic, messages kept for offline peers, earnings |
+| `ECHOFOG_LOG_LEVEL` | `debug`, `info`, `warn` or `error` |
 
 ## Update
 

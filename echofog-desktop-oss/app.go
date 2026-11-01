@@ -23,6 +23,8 @@ type App struct {
 	api            *api.NodeApi
 	activeProfile  string
 	profileService ProfileService
+	unlock         unlockState  // "remember on this computer" (app_unlock.go)
+	screen         nativeScreen // the app's own screen capture, while it runs
 }
 
 // NewApp creates a new App facade instance.
@@ -130,12 +132,16 @@ func (a *App) Login(appPassword string) error {
 		a.api = nil // the failed node released the database; the next attempt builds a fresh one
 		return err
 	}
+	// payments ask the password when the profile is remembered with that setting
+	remembered, askPayments := a.api.RememberedUnlock()
+	a.unlock.opened(false, remembered && askPayments)
 
 	slog.Info("Successfully logged into node profile", "profile", profile)
 	return nil
 }
 
 func (a *App) Logout() {
+	a.StopNativeScreen() // before the lock: it asks for the node API
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -144,6 +150,7 @@ func (a *App) Logout() {
 		a.api = nil
 	}
 	a.activeProfile = ""
+	a.unlock.closed()
 	slog.Info("Successfully logged out and stopped node")
 }
 
@@ -537,6 +544,7 @@ func (a *App) SubmitCallAnswer(sdpAnswer string) error {
 
 // LeaveRoom exits the call room and releases media loopback resources.
 func (a *App) LeaveRoom() error {
+	a.StopNativeScreen()
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return nil
@@ -569,6 +577,15 @@ func (a *App) WatchStream(streamID string) error {
 		return errors.New("node API not initialized")
 	}
 	return nodeAPI.WatchStream(streamID)
+}
+
+// CallStreamStats returns what one stream of the active call does on this node (totals).
+func (a *App) CallStreamStats(streamID string) (api.StreamStatsDTO, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.StreamStatsDTO{}, errors.New("node API not initialized")
+	}
+	return nodeAPI.CallStreamStats(streamID)
 }
 
 // UnwatchStream cancels subscription to another participant's stream.
@@ -623,4 +640,13 @@ func (a *App) SetUploadCapacity(kbps int) error {
 		return errors.New("node API not initialized")
 	}
 	return nodeAPI.SetUploadCapacity(kbps)
+}
+
+// SetCallBackdrop picks the animated background the others see on our call tile ("" for the plain one).
+func (a *App) SetCallBackdrop(name string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node API not initialized")
+	}
+	return nodeAPI.SetCallBackdrop(name)
 }

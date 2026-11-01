@@ -144,6 +144,9 @@ func (w *Wallet) connect(ctx context.Context) (ton.APIClientWrapped, *wallet.Wal
 	if w.api != nil {
 		return w.api, w.w, nil
 	}
+	if err := gateErr(); err != nil {
+		return nil, nil, err
+	}
 
 	cfg, err := w.loadConfig(ctx)
 	if err != nil {
@@ -206,7 +209,11 @@ func fetchConfig(ctx context.Context, u string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := http.DefaultClient.Do(req)
+	c := client()
+	if c == nil {
+		return nil, errNoHTTP
+	}
+	res, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -28,6 +28,15 @@ const (
 	// reaches such a node over REALITY, never over noise; a peer that sees this bit on a node whose
 	// camouflage SNI it does not know holds back instead of dialing it with noise.
 	CapServer Capability = 1 << 8
+	// CapCircuitMedia: the node takes the audio and video frames of a relay circuit as datagrams
+	// (net_types.TypeCircuitData sent unreliably), as media on a direct link already travels. A
+	// sender or relay uses that lane to a peer only if it sees this bit; to any other peer the
+	// frames go as before, one stream each.
+	CapCircuitMedia Capability = 1 << 9
+	// CapUnlisted: the node keeps its address to the peers it talks to (a hidden node, or one in
+	// anonymous mode). A peer that knows the address does not pass it on: not in peer exchange,
+	// discovery answers or its DHT routing table, which answers lookups. A public node is listed.
+	CapUnlisted Capability = 1 << 10
 )
 
 // DefaultCaps is what a node announces unless told otherwise: it relays and serves the DHT.

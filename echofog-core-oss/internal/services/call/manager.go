@@ -57,6 +57,9 @@ const (
 	// parentLostRetry: how often a member with a silent voice parent repeats ParentLost.
 	parentLostRetry = time.Second
 	reportWindow    = 10 * time.Minute
+	// backdropFloodInterval: the coordinator sends the manifest again for changed tile backdrops
+	// at most this often, however often members change them.
+	backdropFloodInterval = time.Second
 )
 
 // The watchdogs above are tuned for direct links. A peer reached only through a relay circuit (a
@@ -130,6 +133,10 @@ type ActiveRoomState struct {
 	lastRejoinProbe   time.Time
 	lastStatsLog      time.Time
 	lastStats         media.DispatcherStats
+
+	// coordinator: a member's tile backdrop changed since the manifest last went out
+	backdropsChanged  bool
+	lastBackdropFlood time.Time
 }
 
 // RoomSnapshot is a read-only view of the room, for UI and tests.
@@ -141,6 +148,8 @@ type RoomSnapshot struct {
 	Joined        bool
 	Members       []types.PeerID
 	Streams       []string
+	// Backdrops: the tile backdrop of each member that chose one
+	Backdrops map[types.PeerID]string
 }
 
 // CallManager orchestrates Voice Backbone Trees and On-Demand Multi-Stream Video Trees.
@@ -166,6 +175,9 @@ type CallManager struct {
 	connecting map[types.PeerID]time.Time
 
 	pending []func()
+
+	// encoders are captures encoded outside the webview, by capture role (see SetLocalEncoder)
+	encoders map[string]LocalEncoder
 
 	keyframesServed atomic.Uint64
 
@@ -204,6 +216,7 @@ func NewCallManager(s *swarm.Swarm, ses *swarm.SessionManager, crypt *crypto.Cry
 		// The swarm logs every handler error at Warn with no limit, which a bad peer turns into a
 		// flood; the call layer logs them itself, rate limited and with call context.
 		s.RegisterFastFrameHandler(net_types.TypeCallSignaling, cm.inbound("signal", cm.handleIncomingSignaling))
+		s.RegisterFastFrameHandler(net_types.TypeCallSignalingLossy, cm.inbound("signal", cm.handleIncomingSignaling))
 		s.RegisterFastFrameHandler(net_types.TypeCallMediaAudio, cm.inbound("audio", cm.handleIncomingAudio))
 		s.RegisterFastFrameHandler(net_types.TypeCallMediaVideo, cm.inbound("video", cm.handleIncomingVideo))
 	}
@@ -241,6 +254,7 @@ func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID ty
 		sender:     sender,
 		signer:     signer,
 		connecting: make(map[types.PeerID]time.Time),
+		encoders:   make(map[string]LocalEncoder),
 	}
 }
 

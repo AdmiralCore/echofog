@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apernet/quic-go"
 	"github.com/xtaci/smux"
 )
 
@@ -34,6 +35,13 @@ var smuxDroppedOut, smuxDroppedIn atomic.Uint64
 
 // SmuxDatagramDrops reports datagrams dropped on send and on receive across TCP connections.
 func SmuxDatagramDrops() (out, in uint64) { return smuxDroppedOut.Load(), smuxDroppedIn.Load() }
+
+// DatagramDrops counts unreliable frames (media) the transports of this process threw away: sent
+// ones a full queue refused, and received ones a full receive queue could not take.
+func DatagramDrops() (out, in uint64) {
+	out, in = SmuxDatagramDrops()
+	return out, in + quic.DiscardedDatagrams()
+}
 
 func smuxConfig() *smux.Config {
 	c := smux.DefaultConfig()

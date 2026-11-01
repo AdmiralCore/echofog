@@ -61,6 +61,10 @@ type ConversationDTO struct {
 	Members int    `json:"members,omitempty"`
 	// Can is what I may do in the chat.
 	Can ConvCan `json:"can"`
+	// a group I joined and wait to be let in: "approval", "admission" or "noroute" (group_pending.go)
+	Pending string `json:"pending,omitempty"`
+	// a group whose requests to join wait for me to decide (those who let members in)
+	Requests int `json:"requests,omitempty"`
 }
 
 // ChatPage is one page of a chat or a thread; Next is the cursor of the following page, "" at the
@@ -117,6 +121,8 @@ type convsFacade struct {
 	lastHello     map[types.PeerID]time.Time
 	syncIn        map[types.PeerID]*syncWindow // sync messages taken from each peer lately
 	joinAsked     map[string]time.Time         // groups where we asked the log to let us in
+	wantAsked     map[string]time.Time         // peer/conv: when we last asked that peer for what we lack (pullGap)
+	lazy          map[string]*lazyBatch        // big groups: events of the moment, announced together (group_lazy.go)
 	lastRev       map[convlog.ConvID]uint64    // the newest change handed to the app, per chat
 	historyTimers map[string]*time.Timer       // groups whose earlier messages are coming in
 
@@ -254,7 +260,14 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 		go func() {
 			// events synced into a group: its listeners reload, as after the old history handover
 			group, before := f.syncTarget(m)
-			for _, r := range f.log.HandleSync(origin, m, f.groupConv) {
+			replies := f.log.HandleSync(origin, m, f.groupConv)
+			if ih, ok := m.M.(*convlog.Sync_Ihave); ok && len(replies) > 0 {
+				// an announcement showed a lack: ask one announcer, not every one of them
+				if id, err := convlog.ParseConvID(hex.EncodeToString(ih.Ihave.GetConv())); err != nil || !f.askAnnouncer(convlog.Conv{ID: id}) {
+					replies = nil
+				}
+			}
+			for _, r := range replies {
 				f.sendSync(origin, r)
 			}
 			if group != "" {
@@ -281,6 +294,7 @@ func (f *convsFacade) sink(origin types.PeerID, msg *messenger.PersonalMessagePr
 	if c.Kind == convlog.KindGroup {
 		if fresh {
 			f.spread(c.Group, origin, msg.ConvEvent)
+			f.pullGap(origin, c, msg.ConvEvent)
 		}
 		// a group event in a member's own session (the group's epoch was not clean): the group's
 		// listeners hear of a message, the direct chat's do not
@@ -385,6 +399,7 @@ func (f *convsFacade) sendEvent(c convlog.Conv, raw []byte, id convlog.EventID, 
 		}
 		track := kind == convlog.KindMsg || kind == convlog.KindEdit || kind == convlog.KindDelete
 		gf.postEvent(c.Group, raw, track, text)
+		f.announce(c.Group, f.self) // lazy push: the members it was not pushed to hear of it
 		return "", nil
 	}
 	peer := c.Peer
@@ -461,6 +476,10 @@ func (f *convsFacade) conversation(c convlog.Conv, meta convlog.Meta) Conversati
 }
 
 func (f *convsFacade) onChange(ch convlog.Change) {
+	if len(ch.Members) > 0 && ch.Conv.Kind == convlog.KindGroup {
+		// before the staleness check: a removal must reach the group service whatever raced it
+		go f.followMembers(ch.Conv.Group, ch.Members)
+	}
 	f.mu.Lock()
 	stale := ch.Rev != 0 && ch.Rev < f.lastRev[ch.Conv.ID] && !ch.Rebuilt
 	if ch.Rev > f.lastRev[ch.Conv.ID] {
@@ -478,8 +497,9 @@ func (f *convsFacade) onChange(ch convlog.Change) {
 		}
 	}
 	conv := f.conversation(ch.Conv, ch.Meta)
+	// a membership change (someone let in, a role given) changes who may do what everywhere in it
 	out := ConvChange{Ref: refOf(ch.Conv), Conversation: conv,
-		Messages: f.withCan(ch.Conv, f.withStates(ch.Conv, ch.Messages), &conv), Reload: ch.Rebuilt, Rev: ch.Rev}
+		Messages: f.withCan(ch.Conv, f.withStates(ch.Conv, ch.Messages), &conv), Reload: ch.Rebuilt || len(ch.Members) > 0, Rev: ch.Rev}
 	f.n.convsH.mu.Lock()
 	subs := append(([]func(ConvChange))(nil), f.n.convsH.subs...)
 	f.n.convsH.mu.Unlock()
@@ -675,6 +695,11 @@ func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
 			f.mirrorGroup(c.Group, d)
 			m, _ := f.log.Message(c, convlog.LegacyID(d.ID))
 			return f.dress(c, []convlog.Message{m})[0], nil
+		}
+	}
+	if thread.IsZero() {
+		if err := f.slowWait(c, ref.Channel); err != nil {
+			return convlog.Message{}, err
 		}
 	}
 	raw, id, err := f.log.AppendMessageIn(c, ref.Channel, req.Text, 0, "", reply, thread)

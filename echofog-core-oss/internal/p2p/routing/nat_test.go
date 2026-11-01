@@ -49,6 +49,16 @@ func TestSymmetricNATCannotBePunched(t *testing.T) {
 	assert.False(t, m.CanBeRouter())
 }
 
+// A symmetric NAT whose router forwards our port: that port is one public address for everybody,
+// so peers reach us there (it was taken for unreachable, and nothing was even tried).
+func TestForwardedPortBeatsASymmetricNAT(t *testing.T) {
+	m := discover(t, seen("a", "203.0.113.7:50000", "b", "203.0.113.7:50777"))
+	m.SetPortMapping(netip.MustParseAddrPort("203.0.113.7:49829"))
+	assert.True(t, m.CanBePunched())
+	assert.True(t, m.CanBeRouter())
+	assert.Equal(t, "203.0.113.7:49829", m.Candidates()[0])
+}
+
 func TestOneObserverIsWorthATry(t *testing.T) {
 	m := discover(t, seen("a", "203.0.113.7:50000"))
 	_, typ := m.GetNATProfile()

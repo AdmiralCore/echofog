@@ -21,6 +21,9 @@ type AccessStatus struct {
 	NextMode string `json:"nextMode,omitempty"`
 	// Link is the invitation link ("" while the node knows no address of its own yet).
 	Link string `json:"link"`
+	// WebLink is the same link as an https page that messengers make tappable (the EchoFog link
+	// rides after "#", which never reaches the page's server).
+	WebLink string `json:"webLink"`
 	// LinkError says why there is no link yet.
 	LinkError string `json:"linkError,omitempty"`
 	// SecretFromConfig: the secret is set in the node's configuration and cannot be rotated here.
@@ -54,7 +57,7 @@ func (n *NodeApi) GetAccessStatus() (AccessStatus, error) {
 		st.NextMode = next
 	}
 	if link, err := n.node.InviteLink(); err == nil {
-		st.Link = link
+		st.Link, st.WebLink = link, access.WebLink(link)
 	} else {
 		st.LinkError = err.Error()
 	}

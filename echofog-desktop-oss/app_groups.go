@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"time"
 
 	api "github.com/echofog/echofog-core/pkg/api/node"
@@ -52,7 +54,35 @@ func (a *App) AddGroupMember(groupID string, pubKeyHex string) error {
 	return n.AddGroupMember(groupID, pubKeyHex)
 }
 
-// SetGroupRole gives a member the role admin, moderator, member or restricted.
+// GroupRoles lists a group's roles, highest first: the built-in ones and its own.
+func (a *App) GroupRoles(groupID string) ([]api.GroupRoleDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupRoles(groupID)
+}
+
+// GroupRoleSave defines a role of a group (r.ID "": a new one) or changes one.
+func (a *App) GroupRoleSave(groupID string, r api.GroupRoleDTO) (api.GroupRoleDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupRoleDTO{}, errNodeNotStarted
+	}
+	return n.GroupRoleSave(groupID, r)
+}
+
+// GroupRoleRemove removes a role the group defined; its members get the default role.
+func (a *App) GroupRoleRemove(groupID, roleID string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupRoleRemove(groupID, roleID)
+}
+
+// SetGroupRole gives a member a role: a built-in one (admin, moderator, member, restricted) or one
+// the group defined.
 func (a *App) SetGroupRole(groupID, memberID, role string) error {
 	n := a.getAPI()
 	if n == nil {
@@ -118,11 +148,34 @@ func (a *App) TransferGroupOwnership(groupID, memberID string) error {
 	return n.TransferGroupOwnership(groupID, memberID)
 }
 
-// DeleteGroup removes the group for everybody. Only the owner can.
-func (a *App) DeleteGroup(groupID string) error {
+// GroupInviteContacts sends contacts invitations to a group in their direct chats.
+func (a *App) GroupInviteContacts(groupID string, peerIDs []string, role string) (int, error) {
+	n := a.getAPI()
+	if n == nil {
+		return 0, errNodeNotStarted
+	}
+	return n.GroupInviteContacts(groupID, peerIDs, role)
+}
+
+// InspectGroupInvite reads a group invitation for its card without joining.
+func (a *App) InspectGroupInvite(text string) (api.GroupInvitePreview, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupInvitePreview{}, errNodeNotStarted
+	}
+	return n.InspectGroupInvite(text)
+}
+
+// DeleteGroup removes the group for everybody. Only the owner can, and only with the app password:
+// it cannot be undone, for anyone.
+func (a *App) DeleteGroup(groupID, appPassword string) error {
 	n := a.getAPI()
 	if n == nil {
 		return errNodeNotStarted
+	}
+	if appPassword == "" || api.VerifyProfilePassword(a.getActiveProfile(), appPassword) != nil {
+		slog.Warn("Group deletion refused: wrong app password")
+		return errors.New("wrong app password")
 	}
 	return n.DeleteGroup(groupID)
 }
@@ -246,4 +299,125 @@ func (a *App) SendGroupFile(groupID, channel, thread, path string) (api.GroupMes
 		return api.GroupMessageDTO{}, errNodeNotStarted
 	}
 	return n.SendGroupFile(groupID, channel, thread, path)
+}
+
+// GroupInvites lists a private group's invitations, the newest first.
+func (a *App) GroupInvites(groupID string) ([]api.GroupInviteDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupInvites(groupID)
+}
+
+// GroupInviteCreate makes an invitation: how long it lets people in, how many, with which role.
+func (a *App) GroupInviteCreate(groupID string, spec api.GroupInviteSpec) (api.GroupInviteDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupInviteDTO{}, errNodeNotStarted
+	}
+	return n.GroupInviteCreate(groupID, spec)
+}
+
+// GroupInviteRevoke ends an invitation: nobody new comes in with it.
+func (a *App) GroupInviteRevoke(groupID, nonce string) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupInviteRevoke(groupID, nonce)
+}
+
+// GroupTimeout keeps a member from writing for minutes (0 lifts it); the member stays in.
+func (a *App) GroupTimeout(groupID, memberID string, minutes int) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupTimeout(groupID, memberID, minutes)
+}
+
+// GroupModerationLog is what a group's members did to each other, the newest first.
+func (a *App) GroupModerationLog(groupID string) ([]api.GroupModEntry, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupModerationLog(groupID)
+}
+
+// GroupJoinRequests lists the requests to join a group waiting for a decision.
+func (a *App) GroupJoinRequests(groupID string) ([]api.GroupJoinRequestDTO, error) {
+	n := a.getAPI()
+	if n == nil {
+		return nil, errNodeNotStarted
+	}
+	return n.GroupJoinRequests(groupID)
+}
+
+// GroupJoinDecide accepts a request to join (the newcomer is let in) or declines it.
+func (a *App) GroupJoinDecide(groupID, peerID string, accept bool) error {
+	n := a.getAPI()
+	if n == nil {
+		return errNodeNotStarted
+	}
+	return n.GroupJoinDecide(groupID, peerID, accept)
+}
+
+// GroupFileSave asks where to save a group's file (.fogzip) and writes it there, sealed with
+// password; it returns the path ("" when the dialog was cancelled).
+func (a *App) GroupFileSave(groupID, title, password string) (string, error) {
+	n := a.getAPI()
+	if n == nil {
+		return "", errNodeNotStarted
+	}
+	a.mu.RLock()
+	ctx := a.ctx
+	a.mu.RUnlock()
+	path, err := runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
+		Title:           "Save the group to a file",
+		DefaultFilename: safeFileName(title) + ".fogzip",
+		Filters:         []runtime.FileFilter{{DisplayName: "EchoFog group (*.fogzip)", Pattern: "*.fogzip"}},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if !strings.HasSuffix(strings.ToLower(path), ".fogzip") {
+		path += ".fogzip"
+	}
+	return path, n.GroupSnapshotExport(groupID, path, password)
+}
+
+// GroupFilePick asks for a group's file (.fogzip) to open; "" when the dialog was cancelled.
+func (a *App) GroupFilePick() (string, error) {
+	a.mu.RLock()
+	ctx := a.ctx
+	a.mu.RUnlock()
+	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title:   "Open a group file",
+		Filters: []runtime.FileFilter{{DisplayName: "EchoFog group (*.fogzip)", Pattern: "*.fogzip"}},
+	})
+}
+
+// GroupFileOpen joins the group a file carries and takes its history in.
+func (a *App) GroupFileOpen(path, password string) (api.GroupSnapshotInfo, error) {
+	n := a.getAPI()
+	if n == nil {
+		return api.GroupSnapshotInfo{}, errNodeNotStarted
+	}
+	return n.GroupSnapshotImport(path, password)
+}
+
+// safeFileName keeps a title usable as a file name.
+func safeFileName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 32 {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(s))
+	if s == "" {
+		return "group"
+	}
+	return s
 }

@@ -64,10 +64,24 @@ const (
 	ObfsNode = "node"
 	ObfsOff  = "off"
 
+	// network.call_route values
+	CallAuto   = "auto"
+	CallDirect = "direct"
+	CallRelay  = "relay"
+
+	// network.anonymous values
+	AnonTor   = "tor"
+	AnonRelay = "relay"
+
 	// anti_dpi.guard_mode values
 	GuardAuto = "auto"
 	GuardOn   = "on"
 	GuardOff  = "off"
+
+	// anti_dpi.tcp_rotate values
+	TCPRotateAuto = "auto"
+	TCPRotateOn   = "on"
+	TCPRotateOff  = "off"
 )
 
 // DefaultBootstrapNodes are the public nodes a fresh install joins the network through
@@ -162,6 +176,28 @@ type NetworkConfig struct {
 	// WSPath is the HTTP path the WebSocket endpoint answers on (default "/echofog").
 	WSPath string `json:"ws_path"`
 
+	// Proxy is a SOCKS5 proxy the node's own connections go out through ("127.0.0.1:9050" for tor,
+	// "127.0.0.1:9150" for Tor Browser; a socks5:// or socks5h:// prefix is accepted). Set, the node
+	// dials over TCP only (Tor carries no UDP), host names are resolved by the proxy, and the things
+	// that would show its own address are off: no hole punching, port mapping or STUN, unless
+	// CallRoute is "direct". Peers on the local network are still dialed directly. Empty: no proxy.
+	Proxy string `json:"proxy,omitempty"`
+	// CallRoute is how calls reach the other side: "auto" (a direct link where one can be made, a
+	// relay where guard mode or the proxy keeps the address hidden), "direct" (a direct link even
+	// with the proxy or guards on: the other side sees this computer's address, and calls stay fast)
+	// or "relay" (never a direct link of its own: only a relay sees the address).
+	CallRoute string `json:"call_route,omitempty"`
+	// Anonymous hides this computer's address. "tor": everything goes through Proxy, which must be
+	// set, so nobody in the network sees the address. "relay": the node connects to nothing but the
+	// relays in anti_dpi.pinned_guards, which alone see it. Either way calls go through relays,
+	// nothing punches holes, maps ports or asks STUN, and the app's own lookups (updates, location,
+	// the TON wallet) go through the proxy or not at all. Set but not usable (no proxy, no pinned
+	// relay), the node connects nowhere rather than in the open. Empty: off.
+	Anonymous string `json:"anonymous,omitempty"`
+	// AnonWalletDirect lets the TON wallet reach its servers directly in anonymous mode (they then
+	// see this computer's address); off, the wallet stays offline there.
+	AnonWalletDirect bool `json:"anon_wallet_direct,omitempty"`
+
 	// STUNServers are asked which public address they see us at. Empty uses a built-in list of
 	// servers from unrelated operators; replace it for networks where those are blocked.
 	STUNServers []string `json:"stun_servers"`
@@ -220,6 +256,13 @@ type AntiDPIConfig struct {
 	// for Russian egress (or let the region signal engage it where HomeCountry/GeoIP places the path
 	// in RU). The normal path and the single-region testbed are untouched when it is off.
 	MicroChunkTCP bool `json:"micro_chunk_tcp"`
+	// TCPRotate answers the same freeze at the link: the TCP fallback is carried by short TCP
+	// connections, each moved on from before it has carried 12 KB in either direction, and the
+	// streams above do not notice (internal/network/rotconn.go). "on" rotates every TCP link this
+	// node dials; "off" never does; "auto" (the default) rotates the links to addresses across the
+	// border from a country that runs the freeze, and to an address where a plain link froze. A
+	// server takes rotating links whatever this says. micro_chunk_tcp true means "on".
+	TCPRotate string `json:"tcp_rotate,omitempty"`
 
 	// RegionAwareObfs uses the cheaper noise obfuscation for connections that stay inside this
 	// node's own country or on the local network, and keeps QUIC-REALITY for cross-border ones.
@@ -242,11 +285,16 @@ type AntiDPIConfig struct {
 	// holds links to two or three camouflaged guard servers (REALITY over QUIC, or browser TLS over
 	// TCP), picked from the known servers and kept for weeks, and asks them for what the mesh would
 	// have been dialed for (peer exchange, DHT lookups; a guard walks the DHT on the user's behalf).
-	// "auto" (the default) and "on" engage it on every node that is not in the server role; "off"
-	// leaves the mesh dialing as it was. Peers on the local network, and in the home region where
+	// "on" engages it on every node that is not in the server role; "auto" (the default) too while
+	// obfs is "node", unless the node is placed in a country that does not censor (the desktop app
+	// checks; a pinned relay keeps it on anyway); "off" leaves the mesh dialing as it was. Peers on the local network, and in the home region where
 	// region_aware_obfs allows it, are dialed directly either way; a country that cannot be placed
 	// counts as across the border.
 	GuardMode string `json:"guard_mode,omitempty"`
+	// PinnedGuards are annotated addresses ("host:port/<peer id>?sni=<cover site>&srv=1") of relays the
+	// user chose to route through: their own relay, or one they trust. Each is always held as a guard
+	// (never rotated out while pinned) and leaned on first, so the node's mesh traffic goes through it.
+	PinnedGuards []string `json:"pinned_guards,omitempty"`
 }
 
 // FlowShapingConfig bounds and shapes exit gateway peer sessions to prevent DPI fingerprinting.
@@ -476,6 +524,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.AntiDPI.TunnelPadding = true
 	cfg.AntiDPI.RegionAwareObfs = false // opt-in: safe only where domestic traffic is not censored
 	cfg.AntiDPI.GuardMode = GuardAuto
+	cfg.AntiDPI.TCPRotate = TCPRotateAuto
 	cfg.AntiDPI.MicroChunkTCP = false // opt-in: only helps where the TSPU ~16 KB TCP freeze runs
 	// No default SNI is baked in: a shared network-wide default (e.g. www.microsoft.com) on a
 	// residential or VPS IP is itself an SNI/IP-mismatch fingerprint. A node that exposes a public

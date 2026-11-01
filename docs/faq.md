@@ -34,12 +34,21 @@ Pick exits you have reason to trust, and use HTTPS.
 
 ## Is it anonymous?
 
-No. EchoFog makes it hard to see *what* you do and *that* you use a special protocol. It does not
-make you anonymous.
+Not by default. EchoFog makes it hard to see *what* you do and *that* you use a special protocol.
+Out of the box it does not hide your IP address from the nodes you connect to.
 
 - The sites you visit see the IP of the exit, not yours. But the exit sees yours.
 - When you talk to a contact directly, peer to peer, your computers can see each other's IP
-  addresses.
+  addresses. For calls, the route is yours to pick (*Settings* → *Tor and proxy* → *Calls*):
+  *Direct* shows your address to the person you call, *Through a relay* shows it only to the relay,
+  and *Automatic* goes through a relay when Tor or guards are on.
+- *Tor and proxy* sends the app's own traffic through Tor or another SOCKS5 proxy, so the EchoFog
+  network does not see your IP.
+- *Anonymous mode* makes sure nothing in the app shows your address: *Through Tor* (nobody in the
+  network sees it) or *Only my relay* (only your own relay does). Calls and files then go through
+  relays. See [Anonymous mode](getting-started.md#anonymous-mode).
+- Even then, the hosting of your relay knows who pays for it, and how and when you write can give
+  you away.
 - Public nodes (relays and exits) are listed in the network's shared directory (the DHT), so a
   censor who crawls it can find them.
 - Payments go through the TON blockchain, which is public.
@@ -48,8 +57,10 @@ make you anonymous.
 
 Honestly, we do not know yet. EchoFog is experimental. It has not had an independent security
 audit by a specialist organization, and it has not been tested against a real national DPI. The
-whole-computer mode has no kill switch yet: if the app stops unexpectedly, your real IP can show for
-a moment. If being caught is dangerous for you, do not rely on it yet. See
+whole-computer mode has a kill switch, on by default, but it does not cover everything yet: if its
+helper process is killed or Windows removes the EchoFog adapter, the normal connection comes back,
+and DNS is kept inside the tunnel only on a best-effort basis. If being caught is dangerous for you,
+do not rely on it yet. See
 [anti-dpi.md](anti-dpi.md) and [SECURITY.md](../SECURITY.md).
 
 What we can say: in our lab, with a program that reads traffic the way GFW and TSPU are known to,
@@ -107,16 +118,40 @@ phrase.
 No. The project takes nothing from payments: the exit gets its full price.
 
 There is an optional, voluntary tip. When a build has a project address set, the Wallet screen
-shows *Support the project*: a share (0-20%, 5% unless you change it) added **on top of** what you
-pay exits. You can switch it *Off* with one click, and the service does not change.
+shows *Support the project*: a share (*Off*, 5% or 10%; 5% unless you change it) added **on top
+of** what you pay exits. You can switch it *Off* with one click, and the service does not change.
 
 ## Why does it say my computer cannot be reached from the Internet?
 
 Your router or provider does not let other computers connect to you directly — usually because of
 NAT, where your router shares one public address among your devices. **Chats, calls and the VPN
-still work.** It only matters if you want to serve others as a relay or a public exit. A hidden
+still work** as long as a relay is in reach (see the next question). It only matters if you want to serve others as a relay or a public exit. A hidden
 exit for your own people works without it, through relays. See
 [reachability.md](reachability.md).
+
+## I joined a group and see nothing / my call does not connect
+
+Most likely the two devices cannot reach each other: both are behind routers or mobile networks that
+hole punching cannot pass, and no relay is connected. Then nothing goes between them — not the join
+request, not the keys, not the call — and the app says *No way to the recipient right now* or *No
+member of the group can be reached yet*. Turning on UPnP on one of the routers usually fixes it; a
+relay in the network always does. Meanwhile a group file (.fogzip) shows the group's history. See
+[Groups](groups.md#when-nothing-arrives) and [Reachability](reachability.md#when-both-sides-are-hard-to-reach).
+
+## What is a .fogzip file?
+
+A group saved to a file by one of its members: the invitation and the group's history (members,
+roles, channels, threads, messages), sealed with a password. Opening it (Ctrl+L → *Open a group
+file*) shows the group at once, even with nobody online, and joins it as the link does. Each message
+in it is signed by its author, so the file cannot be altered on the way. See
+[Groups](groups.md#the-group-file-fogzip).
+
+## The app closes right after I type my password
+
+That used to happen when the database was damaged by a power cut or a crash while it was saving.
+The app now repairs such a database at the start (and keeps a copy of it beside it); what the damage
+reached may be missing. If it still closes, the reason is in `crash.log` next to the log
+(`%LOCALAPPDATA%\EchoFog` on Windows): please send it to us.
 
 ## Can I run my own private node for friends?
 
@@ -143,7 +178,10 @@ Yes.
   `%LOCALAPPDATA%\EchoFog`). The file is capped at 8 MB, plus one previous file. Passwords, keys
   and the recovery phrase are blanked out and IP addresses are masked, but node IDs, sites you
   checked and contact names can stay. Check a log before you share it.
-- **Emergency lock** (in *Settings*) erases the decrypted keys from memory at once and stops the
-  node. Everything on disk stays encrypted.
+- **Emergency lock** (in *Settings*: type `LOCK`, then press *Lock now*) erases the decrypted keys
+  from memory at once, stops the node and the VPN and closes the app, so no key or open message
+  stays in it. Everything on disk stays encrypted.
+- **The wallet asks before larger sends**, and small sends add up: see
+  [Getting started](getting-started.md#4-paying-for-traffic).
 - There is no analytics or crash reporting, and the app does not upload logs. Logs leave your
   computer only if you copy or save them and send them yourself.

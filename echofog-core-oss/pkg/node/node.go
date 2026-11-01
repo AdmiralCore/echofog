@@ -78,6 +78,8 @@ type Node struct {
 	routingTable   *dht.RoutingTable
 	NAT            *routing.NATManager
 	HolePunch      *holepunch.Service // direct connections between peers behind NATs
+	directMu       sync.Mutex
+	directTried    map[types.PeerID]time.Time // peers reached through a relay: last try at a direct link
 	RelayServer    *routing.RelayServer
 	RelayClient    *routing.RelayClient
 	MailboxManager *messenger.MailboxManager
@@ -205,6 +207,16 @@ func (n *Node) initDB() error {
 		return fmt.Errorf("the database is damaged and could not be repaired (%w); a copy is in %s", err, backup)
 	} else if len(ids) > 0 {
 		n.Logger.Warn("Database: removed tables that were never written (the app was closed while saving); the last moments may be missing",
+			"tables", ids, "copy_before_repair", backup)
+	}
+
+	// a table whose end (its index) never reached the disk: rebuilt from its blocks
+	if ids, backup, err := storage.RepairBrokenTables(n.Cfg.Storage.DatabasePath, storage.SalvageOptions{
+		BaseTableSize: opts.BaseTableSize, BlockSize: opts.BlockSize, Compression: opts.Compression,
+		BloomFalsePos: opts.BloomFalsePositive}); err != nil {
+		return fmt.Errorf("the database is damaged and could not be repaired (%w); a copy is in %s", err, backup)
+	} else if len(ids) > 0 {
+		n.Logger.Warn("Database: rebuilt tables whose end never reached the disk (the app or the computer went down while saving); the blocks the damage reached are missing",
 			"tables", ids, "copy_before_repair", backup)
 	}
 
@@ -414,6 +426,11 @@ func (n *Node) Start() (err error) {
 		return fmt.Errorf("tls config failed: %w", err)
 	}
 
+	if err := n.applyProxy(); err != nil {
+		return fmt.Errorf("network.proxy: %w", err)
+	}
+	n.applyAnonymity()
+
 	n.Dispatcher = dispatcher.NewDispatcher(n.Ctx)
 	n.Dispatcher.SetLogger(n.Logger)
 	socketBufBytes := n.Cfg.Network.SocketBufferMB * 1024 * 1024
@@ -498,6 +515,7 @@ func (n *Node) Start() (err error) {
 		n.Net.SetEnvMemoryPath(filepath.Join(n.Cfg.Storage.DatabasePath, "transport-memory.json"))
 	}
 	n.Net.SetTCPRemotePort(n.Cfg.Network.TCPRemotePort)
+	n.applyTCPRotate()
 	if n.Cfg.Network.AdvertisePort > 0 {
 		n.Net.SetAdvertisedPort(n.Cfg.Network.AdvertisePort)
 	}
@@ -505,6 +523,7 @@ func (n *Node) Start() (err error) {
 
 	n.Swarm = swarm.NewSwarm(n.Ctx, n.Net, n.ID, n.Dispatcher, n.identity, n.Net.ConnChan(), n.Storage, n.Cfg)
 	n.Swarm.SetLogger(n.Logger)
+	n.Swarm.SetOnlyPinnedGuards(n.AnonMode() == config.AnonRelay)
 	n.Swarm.SetPadsTunnels(n.announcedCaps().Has(handshake.CapTunnelPadding))
 	if n.Cfg.AntiDPI.TLSServerName != "" {
 		n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
@@ -659,22 +678,14 @@ func (n *Node) Start() (err error) {
 
 	if !server {
 		n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
-		n.CallManager.SetPeerConnector(func(ctx context.Context, peer types.PeerID) error {
-			err := n.EnsureConnected(ctx, peer)
-			if err != nil && n.RelayClient != nil {
-				// no direct link (a symmetric NAT): a relay circuit, open before the first frame
-				// needs it, so the call's watchdogs do not take the wait for a dead peer
-				_, err = n.RelayClient.OpenCircuitTo(ctx, peer)
-			}
-			return err
-		})
+		n.CallManager.SetPeerConnector(n.connectForCall)
 		if n.RelayClient != nil {
 			// peers no hole punch reaches (a symmetric NAT) take part through relay circuits
 			n.CallManager.SetFrameSender(newCallLink(n))
 			cm := n.CallManager
 			n.RelayClient.AddDataListener(func(_ uint32, t net_types.MessageType, payload []byte, remote types.PeerID) {
 				switch t {
-				case net_types.TypeCallSignaling, net_types.TypeCallMediaAudio, net_types.TypeCallMediaVideo:
+				case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy, net_types.TypeCallMediaAudio, net_types.TypeCallMediaVideo:
 					cm.HandleRelayedFrame(t, payload, remote)
 				}
 			})
@@ -897,6 +908,7 @@ func (n *Node) shutdown(closeLog bool) {
 var serverDroppedTypes = []net_types.MessageType{
 	net_types.TypeChatMessage,
 	net_types.TypeCallSignaling,
+	net_types.TypeCallSignalingLossy,
 	net_types.TypeCallMediaAudio,
 	net_types.TypeCallMediaVideo,
 	net_types.TypeFileXfer,
@@ -930,15 +942,19 @@ func (n *Node) GetMessenger() *messenger.MessageBroker {
 // with hole punching (signaling), or neither.
 func (n *Node) announcedCaps() handshake.Capability {
 	if n.gated() {
-		return handshake.CapNone // a hidden node is nobody's relay or DHT server: it is not listed
+		// a hidden node is nobody's relay or DHT server, and peers keep its address to themselves
+		return handshake.CapUnlisted
 	}
-	caps := handshake.CapDHTServer
+	caps := handshake.CapDHTServer | handshake.CapCircuitMedia
+	if n.AnonMode() != "" {
+		caps |= handshake.CapUnlisted // the relay it goes in through does not pass its address on
+	}
 	if n.Cfg.IsServer() {
 		caps |= handshake.CapServer
 	}
 	if n.Cfg.AntiDPI.TunnelPadding {
 		// announce the TLS-in-TLS padding so peers may pad their exit tunnels to us (and we strip
-		// it). A hidden node returns CapNone above and stays unpadded — consistent on both ends.
+		// it). A hidden node returns early above and stays unpadded — consistent on both ends.
 		caps |= handshake.CapTunnelPadding
 	}
 	switch rs := n.Cfg.Relay.Server; {

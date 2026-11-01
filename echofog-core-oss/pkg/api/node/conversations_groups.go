@@ -26,8 +26,7 @@ func (p groupRules) facade() (*groupsFacade, bool) {
 	return gf, err == nil
 }
 
-// Current: members take part and write if their role lets them; admins and moderators pin; who
-// may delete others' messages (moderators) may delete anyone's.
+// Current: what a member's role lets them do, by the group service's present state.
 func (p groupRules) Current(c convlog.Conv, a types.PeerID) convlog.Rights {
 	gf, ok := p.facade()
 	if !ok {
@@ -37,10 +36,7 @@ func (p groupRules) Current(c convlog.Conv, a types.PeerID) convlog.Rights {
 	if !ok {
 		return convlog.Rights{}
 	}
-	return convlog.Rights{Member: true, Send: r.Permissions&groups.PermSendMessages != 0,
-		Pin:      r.Permissions&(groups.PermManageGroup|groups.PermDeleteMessages) != 0,
-		Moderate: r.Permissions&groups.PermDeleteMessages != 0,
-		Manage:   r.Permissions&(groups.PermManageGroup|groups.PermManageRoles) != 0}
+	return convlog.PermRights(uint32(r.Permissions))
 }
 
 func (p groupRules) Founder(c convlog.Conv) (types.PeerID, bool) {
@@ -63,6 +59,12 @@ func (groupRules) Role(name string) (convlog.Role, bool) {
 	return convlog.Role{Name: r.Name, Rank: r.Rank, Perms: uint32(r.Permissions)}, true
 }
 
+// NeedsInvite: a private group counts a member's own join only with an invitation.
+func (p groupRules) NeedsInvite(c convlog.Conv) bool {
+	gf, ok := p.facade()
+	return ok && gf.needsInvite(c.Group)
+}
+
 func (p groupRules) DefaultRole(c convlog.Conv) string {
 	if gf, ok := p.facade(); ok {
 		if g, err := gf.mgr.GetGroup(c.Group); err == nil && g.Type == groups.GroupTypePublicChannel {
@@ -82,12 +84,33 @@ var _ = [1]struct{}{}[uint32(groups.PermSendMessages)^convlog.PermSend|
 // in group envelopes, the old-style messages (mirrored, so the chat shows everything), the way to
 // hand an event to one member in its own session, and who is connected.
 func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
+	gf.mgr.SetRoleResolver(gf.resolveRole)
+	gf.onForget = func(groupID string) {
+		if f, err := n.convsFacade(); err == nil {
+			_ = f.log.Drop(convlog.Group(groupID))
+		}
+	}
+	gf.inviteState = func(groupID, nonce string) (convlog.Invite, bool) {
+		f, err := n.convsFacade()
+		if err != nil {
+			return convlog.Invite{}, false
+		}
+		return f.log.InviteOf(convlog.Group(groupID), nonce)
+	}
+	go n.followAllRoles(gf)
 	gf.onEvent = func(groupID string, origin types.PeerID, raw []byte) {
 		f, err := n.convsFacade()
 		if err != nil {
 			return
 		}
-		id, fresh, err := f.log.Ingest(convlog.Group(groupID), raw)
+		c := convlog.Group(groupID)
+		id, fresh, err := f.log.Ingest(c, raw)
+		if err == nil && fresh {
+			f.pullGap(origin, c, raw)
+		} else if err == convlog.ErrNotParticipant || err == convlog.ErrForbidden {
+			// not taken as it came (what allows it has not reached us yet): ask the sender
+			f.wantSoon(origin, c)
+		}
 		if err != nil || !fresh {
 			return
 		}
@@ -105,6 +128,10 @@ func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 		if f, err := n.convsFacade(); err == nil {
 			f.mirrorGroup(groupID, m)
 		}
+	}
+	gf.channelLets = func(groupID string, sender types.PeerID, channel, thread string, file bool) bool {
+		f, err := n.convsFacade()
+		return err != nil || f.log.MayPost(convlog.Group(groupID), sender, channel, thread != "", file)
 	}
 	gf.sendEvent = func(target types.PeerID, text string, raw []byte, track bool) error {
 		if n.node == nil || n.node.Messenger == nil {
@@ -168,7 +195,7 @@ func (f *convsFacade) sharedConvs(peer types.PeerID) []convlog.Conv {
 
 const (
 	antiEntropyFirst  = 30 * time.Second
-	antiEntropyEvery  = 10 * time.Minute
+	antiEntropyEvery  = 2 * time.Minute
 	antiEntropyFanout = 3
 )
 
@@ -361,11 +388,20 @@ func groupDTOOf(groupID string, m convlog.Message) GroupMessageDTO {
 // the log does not allow yet (our roster or our own admission has not arrived) is kept and sent
 // all the same: it takes effect once what allows it is in the log.
 func (f *convsFacade) postMember(groupID string, b *convlog.MemberBody) {
+	c := convlog.Group(groupID)
+	if (b.Action == convlog.MemberRemove || b.Action == convlog.MemberBan || b.Action == convlog.MemberTimeout) && len(b.Member) == 32 && b.UptoSeq == 0 {
+		// the last of their events that counts: nothing they write after this is let in, wherever
+		// they place it in the log's order
+		var pub types.PeerPublicKey
+		copy(pub[:], b.Member)
+		if id := types.PeerPubKeyToID(pub); id != f.n.node.ID {
+			b.UptoSeq = f.log.AuthorSeq(c, id)
+		}
+	}
 	body, err := proto.Marshal(b)
 	if err != nil {
 		return
 	}
-	c := convlog.Group(groupID)
 	raw, id, err := f.log.AppendKept(c, convlog.Draft{Kind: convlog.KindMember, Body: body})
 	if err != nil || raw == nil {
 		return
@@ -415,7 +451,17 @@ func (f *convsFacade) openGroupMembership(gf *groupsFacade, groupID string) {
 		}
 		f.mu.Unlock()
 		if !asked {
-			f.postMember(groupID, memberBody(convlog.MemberJoin, gf.selfPub, ""))
+			join := memberBody(convlog.MemberJoin, gf.selfPub, "")
+			if via, err := gf.store.Get([]byte(joinViaPrefix + groupID)); err == nil {
+				join.Via = string(via)
+			}
+			if join.Via == "" && gf.needsInvite(groupID) {
+				// a private group counts our own join only with an invitation: ask those who let
+				// members in, who have us on their list, to write it
+				gf.broadcast(groupID, groupWire{Kind: "join", Group: groupID, Pub: hex.EncodeToString(gf.selfPub[:])})
+			} else {
+				f.postMember(groupID, join)
+			}
 		}
 	}
 }
@@ -437,6 +483,7 @@ func (f *convsFacade) spread(groupID string, from types.PeerID, raw []byte) {
 		return
 	}
 	author := convlog.AuthorID(e)
+	f.announce(groupID, author) // and, a moment later, announced to more of them
 	members, err := gf.mgr.GetAuthorizedRecipients(groupID)
 	if err != nil || len(members) <= meshLimit {
 		return
@@ -474,4 +521,65 @@ func (f *convsFacade) historySoon(groupID string) {
 		f.groupHistoryArrived(groupID)
 	})
 	f.mu.Unlock()
+}
+
+// followMembers hands the removals and bans of a group's log to the group service. They used to
+// reach it only through the "rm" message the remover sends once to the members it reaches; a
+// member away at that moment kept the removed one on its list, handed it the group's keys when
+// asked and let it back in. A removal the service already has (the "rm" came too) changes nothing.
+func (f *convsFacade) followMembers(groupID string, changes []convlog.MemberChange) {
+	gf, err := f.n.groupsFacade()
+	if err != nil {
+		return
+	}
+	roles := false
+	for _, m := range changes {
+		roles = roles || m.Action == convlog.MemberDefine
+		if (m.Action == convlog.MemberRemove || m.Action == convlog.MemberBan) && m.Author != f.n.node.ID && len(m.Member) == 32 {
+			gf.removedOnLog(groupID, m.Author, m.Member, m.Action == convlog.MemberBan)
+		}
+	}
+	if roles {
+		f.n.followRoles(groupID)
+	}
+}
+
+// wantPause is the least time between two asks of one peer for what we lack in one group.
+const wantPause = 20 * time.Second
+
+// pullGap asks the sender of a pushed event for what we lack when the event shows a hole below
+// it in its author's sequence (an earlier push did not reach us): without this the hole waited
+// for the next anti-entropy round, minutes later, with a few members picked at random.
+func (f *convsFacade) pullGap(from types.PeerID, c convlog.Conv, raw []byte) {
+	e, _, err := convlog.Decode(raw)
+	if err != nil {
+		return
+	}
+	meta, ok := f.log.Meta(c)
+	if !ok {
+		return
+	}
+	author := convlog.AuthorID(e)
+	if meta.VV[hex.EncodeToString(author[:])] < e.Seq {
+		f.wantSoon(from, c)
+	}
+}
+
+// wantSoon sends from a Want for c, at most once per wantPause.
+func (f *convsFacade) wantSoon(from types.PeerID, c convlog.Conv) {
+	if from == f.self {
+		return
+	}
+	k := from.String() + "/" + c.ID.String()
+	f.mu.Lock()
+	if f.wantAsked == nil {
+		f.wantAsked = map[string]time.Time{}
+	}
+	if time.Since(f.wantAsked[k]) < wantPause {
+		f.mu.Unlock()
+		return
+	}
+	f.wantAsked[k] = time.Now()
+	f.mu.Unlock()
+	go f.sendSync(from, f.log.Want(c))
 }

@@ -16,6 +16,7 @@
 .chat-screen .av { position: relative; flex: none; }
 .chat-screen .presence { position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; background: var(--faint); border: 2.5px solid var(--panel); }
 .chat-screen .presence.on { background: var(--ok); }
+.chat-screen .member .av { position: relative; display: inline-flex; flex: none; }
 .chat-screen .title { min-width: 0; }
 .chat-screen .title h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-screen .title p { color: var(--faint); }
@@ -128,6 +129,7 @@
 @media (max-width: 1100px) {
   .chat-screen .info { position: absolute; right: 0; top: 0; bottom: 0; z-index: 10; box-shadow: var(--shadow-lg); max-width: 100%; }
 }
+.chat-screen .info.windowed { position: static; width: auto; max-width: none; border-left: none; box-shadow: none; overflow: visible; padding: 16px 22px 22px; background: none; }
 .chat-screen .info-head { display: flex; align-items: center; min-height: 40px; }
 .chat-screen .profile { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 4px 0 6px; }
 .chat-screen .profile h2 { margin-top: 6px; font-size: 18px; }
@@ -167,11 +169,13 @@
 .chat-screen .unpin { width: 26px; height: 26px; display: grid; place-items: center; color: var(--faint); border-radius: 8px; }
 .chat-screen .unpin:hover { background: var(--raised); color: var(--text); }
 .chat-screen .upg { margin: 0; padding: 7px 18px; background: var(--warn-soft, var(--raised)); color: var(--muted); border-bottom: 1px solid var(--line-soft); }
+.chat-screen .upg.pending { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.chat-screen .upg.reqs-bar { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-bottom: 1px solid var(--line-soft); background: var(--accent-soft); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
 .chat-screen .older { align-self: center; padding: 6px 0 2px; }
 /* answers, deleted and edited messages, reactions, comment counts */
 .chat-screen .quote {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; min-width: 120px; margin: 2px 0 5px; padding: 3px 8px;
-    border: none; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); text-align: left; font-weight: 400;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; min-width: min(120px, 100%); margin: 2px 0 5px; padding: 3px 8px;
+    border: none; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); text-align: left; font-weight: 400; max-width: 100%; box-sizing: border-box;
     font-size: 12.5px; line-height: 1.35; color: inherit;
   }
 .chat-screen .quote:hover:not(:disabled) { border: none; border-left: 3px solid var(--accent); filter: brightness(1.05); background: var(--accent-soft); }
@@ -244,6 +248,7 @@
   display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 0 4px 0 8px; margin: 0 -8px 8px;
   padding-left: 16px; border-bottom: 1px solid var(--line-soft);
 }
+.chat-screen .space-head.indent { padding-left: 58px; }
 .chat-screen .space-name { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-screen .chan-head { display: flex; align-items: center; padding: 8px 4px 2px 8px; min-height: 30px; font-size: 12px; font-weight: 600; color: var(--faint); }
 .chat-screen .chan-head.rooms { margin-top: 10px; }
@@ -277,3 +282,10 @@
 @media (max-width: 900px) {
   .chat-screen .chanbar { width: 190px; }
 }
+/* a narrow chat area: the column slides out over the chat */
+.chat-screen.compact .chanbar {
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: min(280px, 86%);
+  box-shadow: var(--shadow-lg); animation: slide-in-left 0.22s var(--ease);
+}
+.chat-screen .chan-scrim { position: absolute; inset: 0; z-index: 29; background: rgba(8, 10, 18, 0.35); }
+@keyframes slide-in-left { from { transform: translateX(-24px); } to { transform: none; } }

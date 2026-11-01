@@ -89,8 +89,10 @@ func NewEchoFogDHT(rt *RoutingTable, swarm *swarm.Swarm) *EchoFogDHT {
 	rt.SetAddrPolicy(swarm.AddrPolicy())
 	swarm.AddObserver(dht)
 	swarm.AddCandidateSource(dht.dialCandidates)
-	swarm.OnPeerLearned(func(pub types.PeerPublicKey, addr string, _ handshake.Capability) {
-		rt.AddOrUpdatePeer(pub, addr)
+	swarm.OnPeerLearned(func(pub types.PeerPublicKey, addr string, caps handshake.Capability) {
+		if !caps.Has(handshake.CapUnlisted) {
+			rt.AddOrUpdatePeer(pub, addr)
+		}
 	})
 	return dht
 }
@@ -139,6 +141,21 @@ const (
 	recentValueFor = 30 * time.Second
 	missFor        = 15 * time.Second
 )
+
+// KnownAddr is where a peer accepts connections as far as this node knows without asking the
+// network (the cache, a connection, the routing table, a remembered address), "" when it does not.
+func (d *EchoFogDHT) KnownAddr(targetID types.PeerID) string {
+	if addr, ok := d.hotCache.Get(targetID); ok {
+		return addr
+	}
+	if p := d.swarm.GetPeer(targetID); p != nil && p.Addr() != "" {
+		return p.Addr()
+	}
+	if c := d.routingTable.GetClosestPeers(targetID, 1); len(c) > 0 && c[0].ID == targetID {
+		return c[0].Addr
+	}
+	return d.unreachableAddr(targetID)
+}
 
 // FindPeer returns where a peer accepts connections: from the cache, the routing table or a
 // connection we have, or else by an iterative lookup through the network.
@@ -331,8 +348,11 @@ func (d *EchoFogDHT) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPubli
 	if addr == "" {
 		return // connected, but not reachable at a known address (inbound TCP)
 	}
-	d.routingTable.AddOrUpdatePeer(pubKey, addr)
 	d.hotCache.Set(peerID, addr)
+	if p := d.swarm.GetPeer(peerID); p != nil && p.Caps().Has(handshake.CapUnlisted) {
+		return // kept for our own dials, but out of the table that answers other nodes' lookups
+	}
+	d.routingTable.AddOrUpdatePeer(pubKey, addr)
 }
 
 func (d *EchoFogDHT) OnPeerDisconnected(peerID types.PeerID) {

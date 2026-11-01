@@ -194,6 +194,22 @@ func (g *Gate) Allowed(id types.PeerID) bool {
 	return joined || (allow != nil && allow(id))
 }
 
+// Invited reports whether the peer came in with this node's link or a pass of it, whether or not
+// the gate is on: the owner asked for it to be let in.
+func (g *Gate) Invited(id types.PeerID) bool {
+	if g == nil {
+		return false
+	}
+	g.mu.RLock()
+	_, joined := g.joined[id]
+	passes := g.passes
+	g.mu.RUnlock()
+	if passes != nil && passes.Bound(id) {
+		return passes.Allows(id)
+	}
+	return joined
+}
+
 func (g *Gate) passbook() *Passbook {
 	g.mu.RLock()
 	defer g.mu.RUnlock()

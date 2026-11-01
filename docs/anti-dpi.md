@@ -17,8 +17,14 @@ national DPI. The numbers are in [Measurements](#measurements) below.
 ### Client (the common case)
 
 A desktop user behind NAT or CGNAT. It sets no `network.tcp_listen_addr` and no
-`network.ws_listen_addr`, opens no inbound port, and so never shows a certificate or a site name to
-a prober. It only dials out. A client needs no domain, no certificate and no `anti_dpi` settings.
+`network.ws_listen_addr`, so it runs no TCP or WebSocket listener and never shows a certificate or a
+site name to a prober. It does have a UDP socket for QUIC (`network.listen_addr`, a random port by
+default), and with `anti_dpi.obfs=node` that socket answers nobody who does not know its peer ID: a
+stranger's handshake gets silence. By default the client asks the router to forward that port
+(`network.port_mapping`, UPnP or NAT-PMP) and takes part in hole punching (`network.hole_punch`),
+so peers can reach it. `network.anonymous`, and `network.proxy` unless calls are set to direct,
+turn both off, and STUN with them. A client needs no domain, no certificate and no `anti_dpi`
+settings.
 
 ### Public node (relay, exit, bridge)
 
@@ -41,7 +47,8 @@ dials.
 
 A public node opens its TCP listener only once it has a site to imitate. Until then it runs on UDP
 only, logs an `ANTI-DPI` warning, and looks for a neighbour every 30 minutes; TCP comes on by
-itself, without a restart, once one is found. There is no built-in default site: a shared name like
+itself, without a restart, once one is found. A public WebSocket listener (`network.ws_listen_addr`
+not on loopback) also stays off while there is no site, and comes on only at the next start. There is no built-in default site: a shared name like
 `www.microsoft.com` coming from a Hetzner or home address is itself a mismatch a censor can flag.
 
 ## What a censor sees on the wire
@@ -64,15 +71,18 @@ forwarded at once; past that, the one that has been quiet longest is dropped.
 
 ### UDP to an ordinary node: noise
 
-Nodes without a site to imitate, and the links between nodes (DHT, peer exchange, relays), use the
-older per-node obfuscation: every packet is scrambled under a key derived from the receiving node's
-ID, so it looks like random bytes, and a stranger's handshake gets silence. There is no key shared
-by the network and none in the program.
+A node dials another node over the disguised QUIC above whenever it knows that node's site name,
+whatever the link carries (DHT, peer exchange, relays). A link to a node whose site name it does
+not know uses the older per-node obfuscation: every packet is scrambled under a key derived from
+the receiving node's ID, so it looks like random bytes, and a stranger's handshake gets silence.
+There is no key shared by the network and none in the program.
 
-Random-looking UDP is exactly what GFW's "fully encrypted traffic" rule blocks. So today the client
-to exit path is disguised, while the mesh between nodes is not. In the lab that mesh traffic is
-small (0.1 MB out of 2.2 GB in the last run), but a node inside a censoring country can still be
-picked out by it. Moving the mesh onto the disguised transport is the next piece of work.
+Random-looking UDP is exactly what GFW's "fully encrypted traffic" rule blocks. Guard mode (below)
+keeps a user's node from crossing a censoring border with it: there the node dials only
+camouflaged servers. Noise is still left on links to nodes with no site name (users' own computers
+have none), and on a user's links when guard mode is off or has stood down. In the lab that traffic
+is small (0.1 MB out of 2.2 GB in the last run), but a node inside a censoring country can still
+be picked out by it when it runs without guards.
 
 ### TCP: a browser visiting the site
 
@@ -133,7 +143,8 @@ that it does; with an old exit the client stays on one connection.
 
 If the exit stops answering, the VPN moves to another exit, but a client that was on a camouflage
 exit only ever moves to another camouflage exit, never to an ordinary node whose traffic is noise.
-With no camouflage exit left, the VPN reports the failure instead.
+With no other camouflage exit, the VPN keeps its proxy up and redials the exit in use every 15
+seconds until it, or another camouflage exit, answers; connections through it fail meanwhile.
 
 In the lab, over three minutes of heavy downloading, no EchoFog connection both lived past 2
 minutes and carried 20 MB. The settings are under `anti_dpi.flow_shaping` (`max_connections`,
@@ -148,14 +159,35 @@ disguise. A peer whose country cannot be placed keeps the disguise. It is **off 
 because inside a country that also censors domestic traffic, noise is exactly what gets flagged.
 `anti_dpi.home_country` (e.g. `"DE"`) fixes the node's own country when the GeoIP lookup is blocked.
 
-## Not working yet: Russia's 16 KB freeze
+## Russia's 16 KB freeze
 
-TSPU in Russia has been seen to freeze a TCP connection to a foreign datacenter after roughly
-16 KB. The config has a switch for a defence, `anti_dpi.micro_chunk_tcp`: carry the tunnel in
-chunks under that size over several connections and put them back together at the exit. **In this
-build the switch does nothing:** the chunk format is written and tested, but neither the client nor
-the exit uses it yet. A new connection every 15 KB would also cost too much speed for video, so the
-plan is to use it only as a slow last resort, after QUIC and an entry node inside the country.
+TSPU in Russia has been seen to freeze a TCP connection to a foreign datacenter once the server has
+sent about 16 KB on it: the connection stays open and goes silent. QUIC (UDP) is not hit by it. The
+test bed reproduces it (`testbed/censor/freeze.go`, a router rule), and without a defence a client
+whose network lets only TCP through gets nothing: no page, no download.
+
+Three things answer it, in this order:
+
+1. **QUIC first.** The node dials QUIC and falls back to TCP only when QUIC does not get through.
+   Where a TCP link has to rotate (below), the preference for TCP lasts two minutes, not ten, so
+   QUIC is tried again soon.
+2. **A guard inside the country.** Behind the freeze (the node's own country is Russia), guard mode
+   picks guards in the node's own country first. That link never crosses the border; the guard
+   relays what has to. It needs the GeoIP of the guard's address (or `anti_dpi.home_country` for
+   the node itself).
+3. **Link rotation, the last resort** (`anti_dpi.tcp_rotate`, flag `--tcp-rotate`). One TCP link is
+   carried by many short TCP connections. Each side counts what it put on a connection, the TLS
+   handshake included, and moves to a spare connection before 12 KB; the streams above do not
+   notice. A server takes rotating links from any client. `on` rotates every TCP link the node
+   dials, `off` never, `auto` (the default) rotates links that cross the border from Russia, and the
+   links to an address where a plain link went silent after a few KB (learned for six hours, which
+   costs the first link 30 to 75 seconds in the test bed). `micro_chunk_tcp` true now means `on`.
+
+Rotation costs a connection every 8-10 KB, so it is slow. The number of spare connections follows
+the speed (two while the link is quiet, up to twelve while data waits for one). In the test bed it
+gives 5-12 MB/s at a 1 ms round trip and about 1 MB/s at 50 ms, against 80 MB/s for a plain TCP
+connection with no freeze. On a real network the round trip is what counts. It is for messages,
+pages and slow video, not for 4K.
 
 ## Setting up a public node
 
@@ -250,11 +282,40 @@ one that stays gone for 20 minutes while the node still has other links is dropp
 the node may dial any camouflaged server (never over noise) until it has guards again, so a failing
 guard never leaves it without a network. The choice survives restarts.
 
-`anti_dpi.guard_mode` (`--guard-mode`, `ECHOFOG_GUARD_MODE`): `auto` (default) and `on` engage it on
-every node that is not in the server role; `off` leaves the mesh dialing as it was. Local-network
-addresses, and with `region_aware_obfs` the node's own country, are dialed directly either way; a
-country that cannot be placed counts as across the border. A guard adds one hop to a lookup and does
-not sit in the data path of a VPN tunnel, which runs straight to the exit.
+`anti_dpi.guard_mode` (`--guard-mode`, `ECHOFOG_GUARD_MODE`): `on` engages it on every node that is
+not in the server role; `off` leaves the mesh dialing as it was. `auto` (the default) goes by the
+country of the node's own public address (or `anti_dpi.home_country`): it engages in a country on
+the built-in list of censoring ones (Russia, Belarus, Iran, China and others, in
+`pkg/api/node/guard_auto.go`) and while the country is not known yet, and stands down elsewhere.
+Once a censoring country has been seen, it stays on until the node restarts. `auto` needs
+`anti_dpi.obfs=node`; with obfuscation off it never engages. The country check runs in the desktop
+app only; on `echofog-node`, `auto` on a node that is not a server acts like `on`. Pinned guards
+(`anti_dpi.pinned_guards`: relays the user chose, held as guards for as long as they are pinned)
+turn it on under `auto` even in a country that does not censor, and `network.anonymous` set to
+`relay` makes the node connect to nothing but them. Local-network addresses, and with
+`region_aware_obfs` the node's own country, are dialed directly either way; a country that cannot
+be placed counts as across the border. A guard adds one hop to a lookup and does not sit in the
+data path of a VPN tunnel, which runs straight to the exit.
+
+**What a guard sees.** A guard is a server someone else runs, and it is placed to watch you. It
+sees your IP address (unless you come through Tor), the keys you look up in the DHT through it, and
+so which contacts and exits you resolve, and the peer IDs, timing and volume of what it carries for
+you. It cannot read messages, which are end-to-end encrypted, but it can hold back answers or hand
+you only the peers it chooses. Spreading guards over networks and keeping them for weeks limits
+how many servers get this view; pinning a relay you run yourself keeps the view with you.
+
+### Users across the border meet at a relay
+
+In guard mode two users' nodes do not link directly across a border: a direct link is noise or a
+hole punch, a flow of its own between two strangers. A call, a stream, a file or a message to a
+user whose address is across the border goes through a **circuit on a camouflaged relay** instead:
+one of the node's guards if the peer is connected to it too, else one of the peer's own relays (the
+mailbox relays named in its record, with their site names), which the node then connects to as a
+server. The node does not answer a hole-punch request from such a peer either. A node the user
+listed (an invitation, a bootstrap entry) is linked to directly, and so are peers on the local
+network and, with `region_aware_obfs`, in the node's own country. Relaying is free within the
+relay's limits; a relay may carry a price in its advert (`relay_price_per_mb`, 0 = free), which
+clients note and nothing bills yet.
 
 ### What the node checks for you
 
@@ -301,9 +362,9 @@ For such nodes:
 ## Settings that `echofog-node` cannot change yet
 
 `echofog-node` builds its settings from flags and has no config file. So `tunnel_padding` (on),
-`flow_shaping` (the defaults above), `region_aware_obfs` (off), `home_country`,
-`allow_noise_to_servers` (off) and `micro_chunk_tcp` (off) stay at their defaults on a server. The desktop app reads them from its
-config.
+`flow_shaping` (the defaults above), `region_aware_obfs` (off), `home_country` and
+`allow_noise_to_servers` (off) stay at their defaults on a server. `micro_chunk_tcp` cannot be set
+either, but `--tcp-rotate on` does the same. The desktop app reads them from its config.
 
 ## Measurements
 

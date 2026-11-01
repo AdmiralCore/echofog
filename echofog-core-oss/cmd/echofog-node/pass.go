@@ -171,5 +171,8 @@ func printPass(p api.PassView) {
 	}
 	if p.Link != "" {
 		fmt.Printf("Link (give it to that person only):\n%s\n", p.Link)
+		if p.WebLink != "" {
+			fmt.Printf("The same as a page messengers open:\n%s\n", p.WebLink)
+		}
 	}
 }

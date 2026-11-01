@@ -333,7 +333,20 @@ func TestFallbackTransportPreferTCPAfterAStall(t *testing.T) {
 		require.NoError(t, err)
 		return q
 	}
-	sq := newQUIC(ss)
+	// The server later takes TCP on its QUIC port number: pick a UDP port whose number is free on
+	// TCP too, or another test binary holding it on TCP (CI runs packages side by side) leaves the
+	// TCP listener down and the second dial refused.
+	var sq *QuicTransport
+	for i := 0; ; i++ {
+		sq = newQUIC(ss)
+		probe, err := net.Listen("tcp", sq.Addr().String())
+		if err == nil {
+			_ = probe.Close()
+			break
+		}
+		_ = sq.Close()
+		require.Less(t, i, 20, "no port free on both UDP and TCP")
+	}
 	addr := sq.Addr().String()
 	// The server accepts QUIC only at first (no inbound TCP listener yet), so the first dial can
 	// only come up over QUIC — no race to lose under a loaded CPU.
