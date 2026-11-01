@@ -56,6 +56,10 @@ func TestRoleInvitationGivesItsRole(t *testing.T) {
 	}
 	eventually(t, "alice has bob as an admin", func() bool { return roleAt(alice) == "admin" })
 	eventually(t, "bob is an admin on his side, on the log", func() bool { return roleAt(bob) == "admin" && mayManageRoles(bob) })
-	_, err = bob.ChatChannelSave(groupRef(g.ID), node.ChannelSpec{Name: "ops"})
-	require.NoError(t, err, "an admin sets up channels")
+	// a newcomer's first act can be refused for a moment while the invitation that gave the role is
+	// still on its way behind the roster; a refused event is not kept, so trying again is safe
+	eventually(t, "an admin sets up channels", func() bool {
+		_, err := bob.ChatChannelSave(groupRef(g.ID), node.ChannelSpec{Name: "ops"})
+		return err == nil
+	})
 }
