@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -206,5 +207,25 @@ func TestTakeInfosKeepsTheCamouflageAndStoresAPlainAddress(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("an answer must carry the SNI and the role: %+v", infos)
+	}
+}
+
+// A hidden or anonymous node's address stays with the peers it talks to: it does not go into the
+// routing table, which answers other nodes' lookups.
+func TestUnlistedPeerStaysOutOfTheTable(t *testing.T) {
+	a, b, c := newTestNode(t), newTestNode(t), newTestNode(t)
+	b.tr.SetCaps(handshake.CapUnlisted)
+	inTable := func(id types.PeerID) bool {
+		got := a.dht.routingTable.GetClosestPeers(id, 1)
+		return len(got) == 1 && got[0].ID == id
+	}
+	b.dial(t, a)
+	c.dial(t, a)
+	waitUntil(t, "a lists c", func() bool { return inTable(c.id) })
+	if inTable(b.id) {
+		t.Fatal("an unlisted peer went into the routing table")
+	}
+	if addr, err := a.dht.FindPeer(context.Background(), b.id); err != nil || addr == "" {
+		t.Fatalf("a still reaches b itself: %q %v", addr, err)
 	}
 }

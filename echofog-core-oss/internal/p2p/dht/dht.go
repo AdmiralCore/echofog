@@ -89,8 +89,10 @@ func NewEchoFogDHT(rt *RoutingTable, swarm *swarm.Swarm) *EchoFogDHT {
 	rt.SetAddrPolicy(swarm.AddrPolicy())
 	swarm.AddObserver(dht)
 	swarm.AddCandidateSource(dht.dialCandidates)
-	swarm.OnPeerLearned(func(pub types.PeerPublicKey, addr string, _ handshake.Capability) {
-		rt.AddOrUpdatePeer(pub, addr)
+	swarm.OnPeerLearned(func(pub types.PeerPublicKey, addr string, caps handshake.Capability) {
+		if !caps.Has(handshake.CapUnlisted) {
+			rt.AddOrUpdatePeer(pub, addr)
+		}
 	})
 	return dht
 }
@@ -331,8 +333,11 @@ func (d *EchoFogDHT) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPubli
 	if addr == "" {
 		return // connected, but not reachable at a known address (inbound TCP)
 	}
-	d.routingTable.AddOrUpdatePeer(pubKey, addr)
 	d.hotCache.Set(peerID, addr)
+	if p := d.swarm.GetPeer(peerID); p != nil && p.Caps().Has(handshake.CapUnlisted) {
+		return // kept for our own dials, but out of the table that answers other nodes' lookups
+	}
+	d.routingTable.AddOrUpdatePeer(pubKey, addr)
 }
 
 func (d *EchoFogDHT) OnPeerDisconnected(peerID types.PeerID) {

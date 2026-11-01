@@ -159,6 +159,21 @@ func TestPeerExchangeSharesOnlyDialablePeers(t *testing.T) {
 	}
 }
 
+// A hidden or anonymous node asked to stay unlisted: its address is not passed on.
+func TestPeerExchangeKeepsUnlistedPeers(t *testing.T) {
+	a, _ := newTestSwarm(t)
+	b, trB := newTestSwarm(t)
+	connect(t, a, b, trB)
+	b.SetAddrPolicy(network.AddrPolicy{AllowLoopback: true})
+	if got := b.shareablePeers(types.PeerID{}, 16).Peers; len(got) != 1 {
+		t.Fatalf("a listed peer is shared, got %d", len(got))
+	}
+	b.GetPeer(a.selfID).SetCaps(handshake.CapUnlisted)
+	if got := b.shareablePeers(types.PeerID{}, 16).Peers; len(got) != 0 {
+		t.Fatalf("shared %d unlisted peers", len(got))
+	}
+}
+
 func TestLearnPeersFiltersAddresses(t *testing.T) {
 	s, _ := newTestSwarm(t)
 	s.SetAddrPolicy(network.AddrPolicy{})

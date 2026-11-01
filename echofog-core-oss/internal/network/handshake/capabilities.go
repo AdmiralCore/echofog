@@ -33,6 +33,10 @@ const (
 	// sender or relay uses that lane to a peer only if it sees this bit; to any other peer the
 	// frames go as before, one stream each.
 	CapCircuitMedia Capability = 1 << 9
+	// CapUnlisted: the node keeps its address to the peers it talks to (a hidden node, or one in
+	// anonymous mode). A peer that knows the address does not pass it on: not in peer exchange,
+	// discovery answers or its DHT routing table, which answers lookups. A public node is listed.
+	CapUnlisted Capability = 1 << 10
 )
 
 // DefaultCaps is what a node announces unless told otherwise: it relays and serves the DHT.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/abuse"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/network/router"
 	"github.com/echofog/echofog-core/internal/p2p/peerstore"
@@ -38,12 +39,13 @@ func (s *Swarm) keepDialedBy(isOut bool, remote types.PeerID) bool {
 // AddPeer records an authenticated connection as an active peer, wiring up its read loops and
 // notifying observers. An existing connection to the same peer is replaced.
 func (s *Swarm) AddPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool) *Peer {
-	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil, false)
+	return s.addPeer(peerPubKey, peerID, conn, addr, isOut, dialable, netip.Addr{}, nil, false, handshake.CapNone)
 }
 
 // addPeer is AddPeer for a connection that came from ip and holds a place in the per-address
-// limits, which release gives back once the peer is gone (both may be zero).
-func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func(), reality bool) *Peer {
+// limits, which release gives back once the peer is gone (both may be zero). caps is what the
+// peer announced: set before observers hear of it, as they act on it (the DHT on CapUnlisted).
+func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, conn network.MuxConn, addr string, isOut bool, dialable bool, ip netip.Addr, release func(), reality bool, caps handshake.Capability) *Peer {
 
 	s.mu.Lock()
 	if old, exists := s.activePeers[peerID]; exists {
@@ -84,6 +86,7 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	p.ip = ip
 	p.release = release
 	p.primaryReality = reality
+	p.SetCaps(caps)
 	pw := network.NewPeerWrapper(p.ctx, conn, peerID)
 
 	if s.peerStore != nil && dialable {

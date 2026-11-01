@@ -10,6 +10,7 @@ import (
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/dispatcher"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
@@ -53,6 +54,9 @@ func newTestNodeRole(t *testing.T, role string) *testNode {
 	cfg := config.DefaultConfig("")
 	cfg.Network.NoAutoDial = true
 	cfg.Role = role
+	if cfg.IsServer() {
+		tr.SetCaps(handshake.DefaultCaps | handshake.CapServer) // as the node announces its role
+	}
 	sw := swarm.NewSwarm(ctx, tr, id, disp, im, tr.ConnChan(), st.St, cfg)
 	d := NewEchoFogDHT(NewRoutingTable(sw.GetMyPubKey(), st.St, sw), sw)
 	for _, typ := range d.GetSubscribedTypes() {

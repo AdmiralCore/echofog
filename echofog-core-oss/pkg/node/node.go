@@ -942,15 +942,19 @@ func (n *Node) GetMessenger() *messenger.MessageBroker {
 // with hole punching (signaling), or neither.
 func (n *Node) announcedCaps() handshake.Capability {
 	if n.gated() {
-		return handshake.CapNone // a hidden node is nobody's relay or DHT server: it is not listed
+		// a hidden node is nobody's relay or DHT server, and peers keep its address to themselves
+		return handshake.CapUnlisted
 	}
 	caps := handshake.CapDHTServer | handshake.CapCircuitMedia
+	if n.AnonMode() != "" {
+		caps |= handshake.CapUnlisted // the relay it goes in through does not pass its address on
+	}
 	if n.Cfg.IsServer() {
 		caps |= handshake.CapServer
 	}
 	if n.Cfg.AntiDPI.TunnelPadding {
 		// announce the TLS-in-TLS padding so peers may pad their exit tunnels to us (and we strip
-		// it). A hidden node returns CapNone above and stays unpadded — consistent on both ends.
+		// it). A hidden node returns early above and stays unpadded — consistent on both ends.
 		caps |= handshake.CapTunnelPadding
 	}
 	switch rs := n.Cfg.Relay.Server; {
