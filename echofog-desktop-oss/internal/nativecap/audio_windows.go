@@ -28,12 +28,6 @@ var (
 	iidActivateHandler     = guid("41d949ab-9862-444a-80f6-c261334da5eb")
 )
 
-// AudioRate, two channels of 16 bits: the format StartAudio delivers.
-const (
-	AudioRate          = 48000
-	audioBytesPerFrame = 4
-)
-
 // vtable slots
 const (
 	asyncOpGetActivateResult = 3

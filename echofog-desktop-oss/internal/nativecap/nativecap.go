@@ -78,6 +78,13 @@ func (s Stats) After(earlier Stats) Stats {
 // viewers from counting the wait as a freeze, at the cost of a few hundred bytes.
 const minFrameGap = 100 * time.Millisecond
 
+// AudioRate, two channels of 16 bits: the format StartAudio delivers (the app sizes its chunks by
+// it on every system, though only Windows captures).
+const (
+	AudioRate          = 48000
+	audioBytesPerFrame = 4
+)
+
 // frameClock decides when a picture goes to the encoder: on a steady beat at the target rate,
 // with the newest picture. The capture runs at the screen's refresh rate, which is not a multiple
 // of the beat, so a beat that finds nothing new does not lose its frame: the next picture goes out
