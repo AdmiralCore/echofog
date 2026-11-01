@@ -4,12 +4,15 @@
     import Icon from '../ui/Icon.svelte';
     import VideoView from './VideoView.svelte';
     import StreamStats from './StreamStats.svelte';
+    import CameraPip from './CameraPip.svelte';
     import { recordings, startRecording, stopRecording } from '../../services/streamlog.js';
     import { t } from '../../i18n/index.js';
 
     export let stream; // { streamId, broadcaster, mediaType, width, height, fps, qualityId }
     export let focused = false;
     export let compact = false;
+    /** the broadcaster's camera, shown over their screen where the viewer puts it */
+    export let camera = null;
 
     let box;
     let stats = false; // the live stats over the picture
@@ -25,6 +28,7 @@
     $: ownSound = isOwn && stream.streamId === $callState.screenStreamId && $callState.screenAudio;
     // our screen through the app's own capture has no preview in the webview
     $: ownNative = isOwn && stream.streamId === $callState.screenStreamId && $callState.screenNative;
+    $: pipOn = !!camera && !compact && stream.mediaType !== 'camera' && watching;
     $: rec = $recordings[stream.streamId];
     $: recTime = rec ? `${Math.floor(rec.seconds / 60)}:${String(rec.seconds % 60).padStart(2, '0')}` : '';
 
@@ -80,6 +84,8 @@
         {isOwn ? (stream.mediaType === 'camera' ? $t('call.yourCamera') : $t('call.yourScreen')) : name}
     </div>
 
+    {#if pipOn}<CameraPip media={camera} mirror={isOwn} />{/if}
+
     {#if watching && stats}<StreamStats streamId={stream.streamId} {media} own={isOwn} />{/if}
 
     {#if watching}
@@ -87,6 +93,11 @@
             <button class="tile-btn" class:recording={rec} title={rec ? $t('call.log.stop') : $t('call.log.start')} aria-label={rec ? $t('call.log.stop') : $t('call.log.start')} aria-pressed={!!rec} on:click={toggleRecording}>
                 <Icon name="record" size={17} />
             </button>
+            {#if pipOn && $callState.pip.hidden}
+                <button class="tile-btn" title={$t('call.pip.show')} aria-label={$t('call.pip.show')} on:click={() => callService.setPip({ hidden: false })}>
+                    <Icon name="video" size={17} />
+                </button>
+            {/if}
             <button class="tile-btn" class:on={stats} title={$t('call.st.title')} aria-label={$t('call.st.title')} aria-pressed={stats} on:click={() => (stats = !stats)}>
                 <Icon name="signal" size={17} />
             </button>

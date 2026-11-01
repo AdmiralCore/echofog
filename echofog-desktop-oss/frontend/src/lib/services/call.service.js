@@ -80,6 +80,9 @@ function freshState(prev = {}) {
     screenSound: prev.screenSound ?? loadPrefs().screenSound ?? true, // the app's own capture shares the computer's sound
     screenSource: null,    // { kind, title, app } of it
     sourcePicker: null,    // { sources } while the user picks what to share
+    // where a broadcaster's camera sits over their screen, for us: shape, place as fractions of the
+    // free room, width as a fraction of the tile, or hidden
+    pip: prev.pip || { shape: 'circle', x: 1, y: 1, w: 0.2, hidden: false, ...loadPrefs().pip },
     notice: null,
   };
 }
@@ -554,6 +557,12 @@ class CallService {
   setScreenSound(on) {
     callState.update((s) => ({ ...s, screenSound: !!on }));
     savePrefs({ screenSound: !!on });
+  }
+
+  /** Moves, resizes, reshapes or hides the camera over a screen; save remembers it. */
+  setPip(patch, save = true) {
+    callState.update((s) => ({ ...s, pip: { ...s.pip, ...patch } }));
+    if (save) savePrefs({ pip: get(callState).pip });
   }
 
   /** Live thumbnails of the sources the picker shows (JPEG data URLs by ID); [] ends them. */

@@ -240,6 +240,8 @@ function nativeStats() {
 const scenes = {
   'alice-screen': { owner: ALICE, kind: 'screen', title: 'launch-checklist.md' },
   'bob-cam': { owner: BOB, kind: 'camera', title: 'Bob' },
+  // Alice shares her screen and her camera: her camera sits over her screen for the viewer
+  'alice-cam': { owner: ALICE, kind: 'camera', title: 'Alice' },
 };
 
 function painter(canvas) {
@@ -355,6 +357,7 @@ async function submitAnswer(sdp) {
     emit('call:media_slot', { slot: 'a' + i, kind: 'audio', peer, streamId: 'voice', active: true });
   });
   setTimeout(() => announce('bob-cam', 'camera', 1280, 720, 30, '720p30'), 600);
+  setTimeout(() => announce('alice-cam', 'camera', 1280, 720, 30, '720p30'), 1000);
   setTimeout(() => announce('alice-screen', 'screen', 2560, 1440, 60, '1440p60'), 1400);
   setTimeout(() => {
     call.members = [...call.members, DAVE];
