@@ -330,6 +330,10 @@ export function GetSavedExits() {
   return window['go']['main']['App']['GetSavedExits']();
 }
 
+export function GetScreenPreviews(arg1) {
+  return window['go']['main']['App']['GetScreenPreviews'](arg1);
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
@@ -774,6 +778,10 @@ export function StartNativeScreen(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['StartNativeScreen'](arg1, arg2, arg3, arg4);
 }
 
+export function StartNativeScreenAudio() {
+  return window['go']['main']['App']['StartNativeScreenAudio']();
+}
+
 export function StartNode() {
   return window['go']['main']['App']['StartNode']();
 }
@@ -808,6 +816,10 @@ export function StopDiscovery() {
 
 export function StopNativeScreen() {
   return window['go']['main']['App']['StopNativeScreen']();
+}
+
+export function StopNativeScreenAudio() {
+  return window['go']['main']['App']['StopNativeScreenAudio']();
 }
 
 export function StopScreenShare(arg1) {

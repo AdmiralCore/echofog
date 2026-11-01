@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"sync"
@@ -24,6 +25,7 @@ var screenLog = slog.Default().With("component", "call-screen")
 type nativeScreen struct {
 	mu       sync.Mutex
 	stream   *nativecap.Stream
+	audio    *nativecap.AudioCapture // the screen's sound, when shared
 	streamID string
 	sourceID string
 	cursor   bool
@@ -45,6 +47,10 @@ func (a *App) NativeScreenAvailable() NativeScreenInfo {
 
 // ListScreenSources lists the monitors and windows that can be shared.
 func (a *App) ListScreenSources() []nativecap.Source { return nativecap.Sources() }
+
+// GetScreenPreviews returns live thumbnails of the given sources (JPEG data URLs by ID) for the
+// picker, which asks a few times a second while it is open; an empty list ends them.
+func (a *App) GetScreenPreviews(ids []string) map[string]string { return nativecap.Previews(ids) }
 
 // StartNativeScreen captures a source into the screen stream streamID, which StartStream already
 // announced. On an error nothing runs and the interface can share through the webview instead.
@@ -103,6 +109,7 @@ func (a *App) startNativeScreenLocked(streamID, sourceID, qualityID string, curs
 		return err
 	}
 	a.screen.stream, a.screen.streamID, a.screen.sourceID, a.screen.cursor = s, streamID, sourceID, cursor
+	go logNativeScreen(s, streamID)
 	st := s.Stats()
 	screenLog.Info("Native screen capture started", "stream", streamID, "source", sourceKind(sourceID), "quality", qualityID,
 		"width", st.Width, "height", st.Height, "source_width", st.SourceWidth, "source_height", st.SourceHeight,
@@ -118,9 +125,15 @@ func (a *App) UpdateNativeScreen(qualityID string) error {
 	if a.screen.stream == nil {
 		return errors.New("no native screen capture is running")
 	}
-	streamID, sourceID, cursor := a.screen.streamID, a.screen.sourceID, a.screen.cursor
+	streamID, sourceID, cursor, sound := a.screen.streamID, a.screen.sourceID, a.screen.cursor, a.screen.audio != nil
 	a.stopNativeScreenLocked("quality changed")
-	return a.startNativeScreenLocked(streamID, sourceID, qualityID, cursor)
+	if err := a.startNativeScreenLocked(streamID, sourceID, qualityID, cursor); err != nil {
+		return err
+	}
+	if sound {
+		_ = a.startNativeAudioLocked() // it logs a failure; the picture goes on without sound
+	}
+	return nil
 }
 
 // StopNativeScreen ends the app's own capture, if it runs.
@@ -130,7 +143,61 @@ func (a *App) StopNativeScreen() {
 	a.screen.mu.Unlock()
 }
 
+// screenPCMChunk is how much sound goes to the interface at once: 20 ms.
+const screenPCMChunk = nativecap.AudioRate / 50 * 4
+
+// StartNativeScreenAudio shares the computer's sound with the screen the app captures: all it
+// plays except EchoFog, so viewers do not hear the call twice. It reaches the interface as
+// "screen:pcm" events (20 ms of 48 kHz stereo 16-bit PCM, base64), which plays it into the
+// screen-sound track for the webview to encode.
+func (a *App) StartNativeScreenAudio() error {
+	a.screen.mu.Lock()
+	defer a.screen.mu.Unlock()
+	return a.startNativeAudioLocked()
+}
+
+func (a *App) startNativeAudioLocked() error {
+	if a.screen.stream == nil {
+		return errors.New("no native screen capture is running")
+	}
+	a.stopNativeAudioLocked()
+	a.mu.RLock()
+	ctx := a.ctx
+	a.mu.RUnlock()
+	var pending []byte
+	audio, err := nativecap.StartAudio(func(pcm []byte) {
+		pending = append(pending, pcm...)
+		n := 0
+		for ; len(pending)-n >= screenPCMChunk; n += screenPCMChunk {
+			safeEventsEmit(ctx, "screen:pcm", base64.StdEncoding.EncodeToString(pending[n:n+screenPCMChunk]))
+		}
+		pending = append(pending[:0], pending[n:]...)
+	})
+	if err != nil {
+		screenLog.Warn("Screen sound capture did not start, the screen is shared without sound", "stream", a.screen.streamID, "err", err)
+		return err
+	}
+	a.screen.audio = audio
+	screenLog.Info("Screen sound capture started", "stream", a.screen.streamID)
+	return nil
+}
+
+// StopNativeScreenAudio stops sharing the computer's sound.
+func (a *App) StopNativeScreenAudio() {
+	a.screen.mu.Lock()
+	a.stopNativeAudioLocked()
+	a.screen.mu.Unlock()
+}
+
+func (a *App) stopNativeAudioLocked() {
+	if a.screen.audio != nil {
+		a.screen.audio.Stop()
+		a.screen.audio = nil
+	}
+}
+
 func (a *App) stopNativeScreenLocked(why string) {
+	a.stopNativeAudioLocked()
 	s := a.screen.stream
 	if s == nil {
 		return
@@ -143,6 +210,32 @@ func (a *App) stopNativeScreenLocked(why string) {
 	st := s.Stats()
 	screenLog.Info("Native screen capture stopped", "stream", a.screen.streamID, "why", why, "captured", st.Captured,
 		"encoded", st.Encoded, "sent", st.Sent, "skipped", st.Skipped, "keyframes", st.Keyframes, "mbytes", st.Bytes/1_000_000)
+}
+
+// logNativeScreen puts what the capture does into the log every 10 s, so a stream log (which
+// takes the call's lines) shows where frames go missing: capture, encoder or sending.
+func logNativeScreen(s *nativecap.Stream, streamID string) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	prev, at := s.Stats(), time.Now()
+	for {
+		select {
+		case <-s.Done():
+			return
+		case now := <-t.C:
+			cur, dt := s.Stats(), now.Sub(at).Seconds()
+			rate := func(a, b uint64) float64 { return float64(b-a) / dt }
+			ms := 0.0
+			if n := cur.Encoded - prev.Encoded; n > 0 {
+				ms = (cur.EncodeSeconds - prev.EncodeSeconds) * 1000 / float64(n)
+			}
+			screenLog.Info("Native screen capture", "stream", streamID, "captured_fps", int(rate(prev.Captured, cur.Captured)),
+				"encoded_fps", int(rate(prev.Encoded, cur.Encoded)), "sent_fps", int(rate(prev.Sent, cur.Sent)),
+				"waits", cur.Skipped-prev.Skipped, "encode_ms", int(ms*10)/10.0, "mbps", int(rate(prev.Bytes, cur.Bytes)*8/1e5)/10.0,
+				"kbps_cap", cur.BitrateKbps, "pacer_ms", int(cur.PacerDelayMs*10)/10.0)
+			prev, at = cur, now
+		}
+	}
 }
 
 // NativeScreenStatsDTO is what the app's own capture did so far, for the stream stats and log.

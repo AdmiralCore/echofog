@@ -220,6 +220,16 @@ const screenSources = [
   { id: 'window:104', kind: 'window', title: 'YouTube Music', app: 'chrome.exe', width: 219, height: 30, minimized: true },
 ];
 let nativeMock = null;
+function mockThumb(id, i) {
+  const c = document.createElement('canvas');
+  c.width = 320; c.height = 180;
+  const g = c.getContext('2d');
+  g.fillStyle = `hsl(${(i * 67) % 360},45%,32%)`; g.fillRect(0, 0, 320, 180);
+  g.fillStyle = 'rgba(255,255,255,.85)'; g.font = '20px sans-serif';
+  g.fillText(screenSources.find((s) => s.id === id)?.title || id, 14, 96);
+  g.fillText(new Date().toLocaleTimeString(), 14, 126);
+  return c.toDataURL('image/jpeg', 0.7);
+}
 function nativeStats() {
   if (!nativeMock) return { active: false };
   const s = (Date.now() - nativeMock.at) / 1000;
@@ -797,6 +807,10 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
   },
   UpdateNativeScreen: () => null,
   StopNativeScreen: () => { nativeMock = null; return null; },
+  StartNativeScreenAudio: () => null,
+  StopNativeScreenAudio: () => null,
+  // a thumbnail per source: its name on a color of its own
+  GetScreenPreviews: (ids) => Object.fromEntries((ids || []).map((id, i) => [id, mockThumb(id, i)])),
   NativeScreenStats: () => nativeStats(),
   UpdateStreamQuality: () => null,
   SetVADState: () => null,

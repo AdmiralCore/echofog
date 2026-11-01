@@ -18,11 +18,13 @@ function savePrefs(p) {
 //   then 16 audio  one playback track per remote speaker        (slots a0..a15)
 //   then 4 video   one playback track per watched stream        (slots v0..v3)
 //   then 4 audio   the sound of each watched stream             (slots s0..s3)
+//   then 1 video   our own screen as viewers get it, when the app captures it itself (slot p0)
 const LOCAL = { mic: 0, camera: 1, screen: 2, screenAudio: 3 };
 const LOCAL_LINES = 4;
 const AUDIO_SLOTS = 16;
 const VIDEO_SLOTS = 4;
 const STREAM_AUDIO_SLOTS = 4;
+const PREVIEW_SLOTS = 1;
 // Screen sound is music and films, not speech: stereo and a bitrate Opus sounds clean at.
 const SCREEN_AUDIO_KBPS = 160;
 const SPEAKING_LEVEL = 0.035;
@@ -74,6 +76,7 @@ function freshState(prev = {}) {
     screenCapture: prev.screenCapture || loadPrefs().screenCapture || 'native',
     nativeScreen: prev.nativeScreen || { available: false, reason: '' },
     screenNative: false,   // our shared screen goes through the app's own capture
+    screenSound: prev.screenSound ?? loadPrefs().screenSound ?? true, // the app's own capture shares the computer's sound
     screenSource: null,    // { kind, title, app } of it
     sourcePicker: null,    // { sources } while the user picks what to share
     notice: null,
@@ -167,6 +170,7 @@ class CallService {
     this.levelTimer = null;
     clearInterval(this.statsTimer);
     this.statsTimer = null;
+    this.stopScreenPcm();
     if (this.pc) {
       await this.logStats('at leaving').catch(() => {});
       log.info('call', 'leaving the call', { callId: get(callState).callId });
@@ -280,6 +284,8 @@ class CallService {
     if (idx >= LOCAL_LINES && idx < v0) return 'a' + (idx - LOCAL_LINES);
     if (idx >= v0 && idx < s0) return 'v' + (idx - v0);
     if (idx >= s0 && idx < s0 + STREAM_AUDIO_SLOTS) return 's' + (idx - s0);
+    const p0 = s0 + STREAM_AUDIO_SLOTS;
+    if (idx >= p0 && idx < p0 + PREVIEW_SLOTS) return 'p' + (idx - p0);
     return '';
   }
 
@@ -292,7 +298,7 @@ class CallService {
     // tracks end by themselves while in the call only when the bridge drops them; leaving ends all
     ev.track.onended = () => { if (this.pc) log.info('call', 'remote track ended', { slot, kind: ev.track.kind }); };
     const stream = ev.streams?.[0] || new MediaStream([ev.track]);
-    if (ev.track.kind === 'video') smoothPlayout(ev.receiver);
+    if (ev.track.kind === 'video' && !slot.startsWith('p')) smoothPlayout(ev.receiver); // our own preview goes at once
     if (ev.track.kind === 'audio') {
       this.attachAudio(slot, stream);
     } else {
@@ -543,6 +549,17 @@ class CallService {
     savePrefs({ screenCapture: mode });
   }
 
+  /** Whether the app's own capture shares the computer's sound with the screen; remembered. */
+  setScreenSound(on) {
+    callState.update((s) => ({ ...s, screenSound: !!on }));
+    savePrefs({ screenSound: !!on });
+  }
+
+  /** Live thumbnails of the sources the picker shows (JPEG data URLs by ID); [] ends them. */
+  async screenPreviews(ids) {
+    try { return (await app().GetScreenPreviews?.(ids)) || {}; } catch (_) { return {}; }
+  }
+
   /** Opens the list of monitors and windows; resolves to the chosen one, or null. */
   async pickSource() {
     let sources = [];
@@ -596,8 +613,9 @@ class CallService {
     if (source) {
       try {
         await app().StartNativeScreen(streamId, source.id, q.id, true);
-        log.info('screen', "sharing the screen with the app's own capture", { streamId, kind: source.kind, width: source.width, height: source.height, fps: q.fps });
-        callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id, screenAudio: false,
+        const sound = get(callState).screenSound ? await this.startNativeSound(streamId) : false;
+        log.info('screen', "sharing the screen with the app's own capture", { streamId, kind: source.kind, width: source.width, height: source.height, fps: q.fps, sound });
+        callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id, screenAudio: sound,
           screenNative: true, screenSource: { kind: source.kind, title: source.title, app: source.app || '' } }));
         return;
       } catch (err) {
@@ -607,6 +625,58 @@ class CallService {
       }
     }
     await this.shareViaWebview(streamId, q);
+  }
+
+  /** The computer's sound for a screen the app captures: Go sends it as PCM, a worklet plays it
+   *  into the screen-sound track, and the webview encodes that as it does a captured tab's. */
+  async startNativeSound(streamId) {
+    try {
+      const ctx = this.ensureAudioContext();
+      if (!this.pcmModule) {
+        const url = URL.createObjectURL(new Blob([PCM_PLAYER], { type: 'text/javascript' }));
+        this.pcmModule = ctx.audioWorklet.addModule(url);
+      }
+      await this.pcmModule;
+      this.stopScreenPcm();
+      const node = new AudioWorkletNode(ctx, 'echofog-pcm', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      const dest = ctx.createMediaStreamDestination();
+      dest.channelCount = 2;
+      node.connect(dest);
+      this.pcm = { node, dest, off: EventsOn('screen:pcm', (b64) => this.onPcm(b64)) };
+      await app().StartNativeScreenAudio();
+      const track = dest.stream.getAudioTracks()[0];
+      track.contentHint = 'music';
+      await this.tx.screenAudio?.sender.replaceTrack(track);
+      await applyAudioBitrate(this.tx.screenAudio?.sender, SCREEN_AUDIO_KBPS);
+      return true;
+    } catch (err) {
+      log.warn('screen', "the screen's sound could not be captured, the screen goes without it", errAttrs(err, { streamId }));
+      this.stopScreenPcm();
+      this.notify(tr('call.notice.nativeNoSound'));
+      return false;
+    }
+  }
+
+  onPcm(b64) {
+    const p = this.pcm;
+    if (!p || typeof b64 !== 'string') return;
+    const bin = atob(b64);
+    const n = bin.length >> 1;
+    const f = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+      f[i] = (v >= 0x8000 ? v - 0x10000 : v) / 32768;
+    }
+    p.node.port.postMessage(f, [f.buffer]);
+  }
+
+  stopScreenPcm() {
+    const p = this.pcm;
+    this.pcm = null;
+    if (!p) return;
+    p.off?.();
+    try { p.node.disconnect(); } catch (_) { /* gone */ }
+    p.dest.stream.getTracks().forEach((t) => t.stop());
   }
 
   async shareViaWebview(streamId, q) {
@@ -679,7 +749,10 @@ class CallService {
 
   async stopScreenShare() {
     const id = get(callState).screenStreamId;
-    if (get(callState).screenNative) await safeCall('StopNativeScreen');
+    if (get(callState).screenNative) {
+      this.stopScreenPcm();
+      await safeCall('StopNativeScreen');
+    }
     this.screen?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     this.screen = null;
     try { await this.tx?.screen.sender.replaceTrack(null); } catch (_) { /* closed */ }
@@ -879,6 +952,11 @@ class CallService {
 
   /** Remote video MediaStream of a stream, or the local preview of our own. */
   streamFor(streamId, $state, $videos) {
+    if (streamId && streamId === $state.screenStreamId && $state.screenNative) {
+      // the app's own capture: our screen as viewers get it, on the preview track
+      const p = Object.keys($state.slots).find((k) => $state.slots[k].kind === 'preview' && $state.slots[k].streamId === streamId);
+      return p ? $videos[p] || null : null;
+    }
     if (streamId && streamId === $state.screenStreamId) return $videos['local:screen'] || null;
     if (streamId && streamId === $state.cameraStreamId) return $videos['local:camera'] || null;
     const slot = Object.keys($state.slots).find((k) => $state.slots[k].kind === 'video' && $state.slots[k].streamId === streamId);
@@ -1177,6 +1255,41 @@ export function opusStereo(sdp, lines) {
   }
   return parts.join('\r\n');
 }
+
+// Plays the PCM of a screen's sound (Float32 stereo, interleaved) as it comes: it starts with
+// 40 ms in hand, drops the oldest when more than 200 ms wait (the capture's clock runs ahead of
+// ours), and plays silence while nothing comes (nothing plays on the computer).
+const PCM_PLAYER = `
+class EchofogPcm extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.q = []; this.at = 0; this.queued = 0; this.playing = false;
+    this.port.onmessage = (e) => {
+      this.q.push(e.data);
+      this.queued += e.data.length;
+      while (this.queued > 2 * sampleRate * 0.2 && this.q.length > 1) {
+        const d = this.q.shift();
+        this.queued -= d.length - this.at;
+        this.at = 0;
+      }
+    };
+  }
+  process(_, outputs) {
+    const l = outputs[0][0], r = outputs[0][1] || l;
+    if (!this.playing && this.queued < 2 * sampleRate * 0.04) return true;
+    this.playing = true;
+    for (let i = 0; i < l.length; i++) {
+      const d = this.q[0];
+      if (!d) { l[i] = r[i] = 0; this.playing = false; continue; }
+      l[i] = d[this.at]; r[i] = d[this.at + 1];
+      this.at += 2; this.queued -= 2;
+      if (this.at >= d.length) { this.q.shift(); this.at = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('echofog-pcm', EchofogPcm);
+`;
 
 // The Go bridge receives one SDP and has no trickle channel, so send the answer with candidates.
 function waitIceGathering(pc, timeoutMs) {

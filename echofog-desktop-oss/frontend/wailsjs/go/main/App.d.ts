@@ -172,6 +172,8 @@ export function GetRelayStatus():Promise<node.RelayStatus>;
 
 export function GetSavedExits():Promise<Array<node.SavedExit>>;
 
+export function GetScreenPreviews(arg1:Array<string>):Promise<Record<string, string>>;
+
 export function GetSettings():Promise<node.SettingsDTO>;
 
 export function GetSharingStatus():Promise<node.SharingStatus>;
@@ -394,6 +396,8 @@ export function StartLocalDiscovery(arg1:string):Promise<boolean>;
 
 export function StartNativeScreen(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
 
+export function StartNativeScreenAudio():Promise<void>;
+
 export function StartNode():Promise<void>;
 
 export function StartRoomCall(arg1:string,arg2:string):Promise<node.GroupCall>;
@@ -411,6 +415,8 @@ export function StartVPNVia(arg1:string):Promise<void>;
 export function StopDiscovery():Promise<void>;
 
 export function StopNativeScreen():Promise<void>;
+
+export function StopNativeScreenAudio():Promise<void>;
 
 export function StopScreenShare(arg1:string):Promise<void>;
 
