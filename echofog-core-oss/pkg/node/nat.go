@@ -279,16 +279,23 @@ func (n *Node) CallRelayOnly() bool {
 	return t == routing.NATSymmetric && !n.NAT.CanBeRouter() // a forwarded port is reached directly
 }
 
+// The capacities CallRelayCapacity declares. They travel in the member's call profile, where the
+// others read this node's NAT from them too (a relayed call says which side is in the way).
+const (
+	CallFanoutReachable = 4 // a public address or a forwarded port
+	CallFanoutCone      = 2 // behind a cone NAT
+)
+
 func (n *Node) CallRelayCapacity() int {
 	if n.NAT == nil || n.loopbackOnly() {
-		return 4
+		return CallFanoutReachable
 	}
 	_, t := n.NAT.GetNATProfile()
 	switch {
 	case n.NAT.CanBeRouter():
-		return 4
+		return CallFanoutReachable
 	case t == routing.NATFullCone:
-		return 2
+		return CallFanoutCone
 	default:
 		return 0
 	}

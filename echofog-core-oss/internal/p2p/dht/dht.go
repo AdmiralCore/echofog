@@ -142,6 +142,21 @@ const (
 	missFor        = 15 * time.Second
 )
 
+// KnownAddr is where a peer accepts connections as far as this node knows without asking the
+// network (the cache, a connection, the routing table, a remembered address), "" when it does not.
+func (d *EchoFogDHT) KnownAddr(targetID types.PeerID) string {
+	if addr, ok := d.hotCache.Get(targetID); ok {
+		return addr
+	}
+	if p := d.swarm.GetPeer(targetID); p != nil && p.Addr() != "" {
+		return p.Addr()
+	}
+	if c := d.routingTable.GetClosestPeers(targetID, 1); len(c) > 0 && c[0].ID == targetID {
+		return c[0].Addr
+	}
+	return d.unreachableAddr(targetID)
+}
+
 // FindPeer returns where a peer accepts connections: from the cache, the routing table or a
 // connection we have, or else by an iterative lookup through the network.
 func (d *EchoFogDHT) FindPeer(ctx context.Context, targetID types.PeerID) (string, error) {

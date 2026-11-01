@@ -56,6 +56,26 @@ func (m *CallManager) Snapshot() (RoomSnapshot, bool) {
 	return s, true
 }
 
+// MemberProfiles are the other members' profiles as this node holds them. On the coordinator they
+// are what each member sent when it joined (declared); on a member they come from the voice tree,
+// where the coordinator marks the members it reaches only through a relay RelayOnly and raises its
+// own fan-out to DefaultCoordinatorFanout when it declared less than 2.
+func (m *CallManager) MemberProfiles() (profiles map[types.PeerID]tree.PeerNodeProfile, coordinator types.PeerID, declared bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room := m.activeRoom
+	if room == nil {
+		return nil, types.PeerID{}, false
+	}
+	profiles = make(map[types.PeerID]tree.PeerNodeProfile, len(room.ConnectedPeers))
+	for id, p := range room.ConnectedPeers {
+		if id != m.selfID {
+			profiles[id] = p
+		}
+	}
+	return profiles, room.Coordinator, room.IsCoordinator
+}
+
 func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 	profiles := make([]tree.PeerNodeProfile, 0, len(room.ConnectedPeers))
 	for id, p := range room.ConnectedPeers {

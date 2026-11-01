@@ -221,6 +221,25 @@ func (m *CallManager) StreamDiag(streamID string) (StreamDiag, bool) {
 	return out, true
 }
 
+// SendRate is the bitrate the rate control gives this node's streams now, against the bitrate
+// their presets ask for; both 0 when it broadcasts nothing.
+func (m *CallManager) SendRate() (kbps, presetKbps int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room := m.activeRoom
+	if room == nil || len(room.localStreams) == 0 {
+		return 0, 0
+	}
+	for _, ann := range room.localStreams {
+		presetKbps += ann.BitrateKbps
+	}
+	kbps = int(room.sendRate.kbps)
+	if kbps == 0 {
+		kbps = presetKbps // no rate yet: the preset
+	}
+	return kbps, presetKbps
+}
+
 // KeyframesServed counts keyframe requests that reached this node as a broadcaster.
 func (m *CallManager) KeyframesServed() uint64 { return m.keyframesServed.Load() }
 
