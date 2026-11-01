@@ -1,11 +1,495 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EchoFog</title>
-<meta http-equiv="refresh" content="0; url=https://github.com/AdmiralCore/echofog">
-<style>body { margin: 0; padding: 16px; font: 16px/1.5 system-ui, sans-serif; background: #fff; color: #151821; } @media (prefers-color-scheme: dark) { body { background: #0b0d12; color: #e8eaf0; } } a { color: inherit; }</style>
+<meta name="referrer" content="no-referrer">
+<title>EchoFog — a private network with no company in the middle</title>
+<meta name="description" content="A peer-to-peer VPN, an end-to-end encrypted messenger and group calls in one open-source app. Exits are other people's computers, relays are the participants themselves.">
+<meta property="og:title" content="EchoFog — a private network with no company in the middle">
+<meta property="og:description" content="Peer-to-peer VPN, end-to-end encrypted chats and group calls in one open-source app.">
+<meta property="og:image" content="https://admiralcore.github.io/echofog/media/og.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="media/icon-64.png" sizes="64x64">
+<link rel="apple-touch-icon" href="media/icon-192.png">
+<!--
+  The landing page. Nothing here loads anything from anywhere else: no fonts, scripts or counters
+  from other sites. Screenshots and the clip are the real desktop app (its interface, with demo
+  data) in English and Russian, under media/<lang>/.
+-->
+<style>
+  :root {
+    --bg: #0b0c10; --panel: #121319; --raised: #1a1c23; --line: #23262f;
+    --text: #eceef3; --muted: #9aa0ae; --faint: #6b7080;
+    --accent: #5b8cff; --accent-2: #7a62ff; --accent-text: #ffffff; --ok: #2fd08a; --warn: #f4b84f;
+    --radius: 18px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; overflow-x: hidden;
+  }
+  html[data-lang="en"] .ru, html[data-lang="ru"] .en { display: none !important; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 16px; }
+
+  /* header */
+  header.top {
+    position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent); border-bottom: 1px solid var(--line);
+  }
+  header.top .wrap { display: flex; align-items: center; gap: 20px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 18px; }
+  .brand:hover { text-decoration: none; }
+  .brand img { width: 30px; height: 30px; border-radius: 9px; }
+  nav.links { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
+  nav.links a { color: var(--muted); }
+  nav.links a:hover { color: var(--text); text-decoration: none; }
+  .lang { display: flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; }
+  .lang button {
+    border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600;
+    padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .lang button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+
+  /* hero */
+  .hero { padding: 72px 0 40px; text-align: center; position: relative; }
+  .hero::before {
+    content: ''; position: absolute; inset: -120px 0 auto; height: 520px; z-index: -1; pointer-events: none;
+    background: radial-gradient(600px 300px at 50% 30%, rgba(91, 140, 255, 0.22), transparent 70%),
+                radial-gradient(500px 260px at 70% 10%, rgba(122, 98, 255, 0.18), transparent 70%);
+  }
+  .tag {
+    display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted); font-size: 13px;
+  }
+  .tag b { color: var(--ok); font-weight: 600; }
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.08; letter-spacing: -0.02em; margin: 22px auto 18px; max-width: 900px; }
+  h1 .grad { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { color: var(--muted); font-size: clamp(17px, 2.2vw, 20px); max-width: 760px; margin: 0 auto; }
+  .ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 30px 0 14px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 12px;
+    font-weight: 600; font-size: 16px; border: 1px solid var(--line); color: var(--text); background: var(--panel);
+  }
+  .btn:hover { text-decoration: none; border-color: #353946; }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; color: var(--accent-text); box-shadow: 0 8px 30px rgba(91, 140, 255, 0.3); }
+  .btn svg { width: 18px; height: 18px; }
+  .meta { color: var(--faint); font-size: 14px; }
+  .shot {
+    margin: 44px auto 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.02); background: var(--panel);
+  }
+  .shot video, .shot img { display: block; width: 100%; height: auto; }
+
+  /* sections */
+  section { padding: 64px 0; }
+  .eyebrow { color: var(--accent); font-weight: 600; font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 10px; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.15; letter-spacing: -0.015em; margin: 0 0 16px; }
+  h3 { font-size: 19px; margin: 0 0 8px; }
+  p { margin: 0 0 14px; }
+  .muted { color: var(--muted); }
+  .row { display: grid; grid-template-columns: 5fr 7fr; gap: 48px; align-items: center; }
+  .row > * { min-width: 0; } /* a long command line scrolls in its block instead of widening the page */
+  .row.flip { grid-template-columns: 7fr 5fr; }
+  .row.flip .text { order: 2; }
+  .row .shot { margin: 0; }
+  .row .shot a { display: block; }
+  .points { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 10px; }
+  .points li { padding-left: 26px; position: relative; color: var(--muted); }
+  .points li::before { content: ''; position: absolute; left: 4px; top: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .points b { color: var(--text); font-weight: 600; }
+  hr.sep { border: 0; border-top: 1px solid var(--line); margin: 0; }
+
+  .camo { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px; }
+  .wire { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 12px; align-items: center; margin: 22px 0 8px; text-align: center; }
+  .wire .node { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 14px 10px; font-size: 14px; }
+  .wire .node small { display: block; color: var(--faint); font-size: 12px; }
+  .wire .arrow { color: var(--faint); font-size: 20px; }
+  .wire .seen { border-color: rgba(47, 208, 138, 0.35); }
+
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 28px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
+  .card p { color: var(--muted); font-size: 15px; margin: 0; }
+  .card .ic { width: 38px; height: 38px; border-radius: 11px; background: rgba(91, 140, 255, 0.14); color: var(--accent); display: grid; place-items: center; margin-bottom: 14px; }
+  .card .ic svg { width: 20px; height: 20px; }
+
+  pre {
+    background: #0f1015; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; overflow-x: auto;
+    font: 14px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; color: #c9cdd8; margin: 16px 0;
+  }
+  .note { border-left: 3px solid var(--warn); background: rgba(244, 184, 79, 0.07); padding: 18px 20px; border-radius: 0 12px 12px 0; }
+  .note h3 { color: var(--warn); }
+  .note p { color: var(--muted); margin: 0 0 8px; }
+  .note p:last-child { margin: 0; }
+
+  .dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 28px; }
+  .dl .card { display: flex; flex-direction: column; gap: 10px; }
+  .dl .card .btn { margin-top: auto; justify-content: center; }
+  .dl code { font: 13px ui-monospace, "Cascadia Mono", Menlo, monospace; color: var(--faint); word-break: break-all; }
+
+  footer.bottom { border-top: 1px solid var(--line); padding: 32px 0 48px; color: var(--faint); font-size: 14px; }
+  footer.bottom .wrap { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; }
+  footer.bottom a { color: var(--muted); }
+  footer.bottom .spacer { flex: 1; }
+  footer.bottom .credits { flex-basis: 100%; font-size: 12px; }
+
+  @media (max-width: 900px) {
+    nav.links { display: none; }
+    .lang { margin-left: auto; }
+    .row, .row.flip { grid-template-columns: 1fr; gap: 24px; }
+    .row.flip .text { order: 0; }
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .dl { grid-template-columns: 1fr; }
+    section { padding: 48px 0; }
+  }
+  @media (max-width: 560px) {
+    body { font-size: 16px; }
+    .hero { padding-top: 48px; }
+    .grid { grid-template-columns: 1fr; }
+    .wire { grid-template-columns: 1fr; }
+    .wire .arrow { transform: rotate(90deg); }
+    .camo { padding: 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
 </head>
-<body><p><a href="https://github.com/AdmiralCore/echofog">EchoFog on GitHub</a></p></body>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="media/icon-64.png" alt="" width="30" height="30">EchoFog</a>
+    <nav class="links">
+      <a href="#features"><span class="en">Features</span><span class="ru">Возможности</span></a>
+      <a href="#how"><span class="en">How it works</span><span class="ru">Как устроено</span></a>
+      <a href="#node"><span class="en">Run a node</span><span class="ru">Своя нода</span></a>
+      <a href="#download"><span class="en">Download</span><span class="ru">Скачать</span></a>
+      <a href="https://github.com/AdmiralCore/echofog">GitHub</a>
+    </nav>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+      <button type="button" data-set-lang="ru" aria-pressed="false">RU</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <span class="tag"><b>v0.2.0</b> <span class="en">Own screen capture up to 144 fps, anonymous mode, spaces</span><span class="ru">Свой захват экрана до 144 кадров, анонимный режим, пространства</span></span>
+      <h1>
+        <span class="en">A private network with <span class="grad">no company</span> in the middle</span>
+        <span class="ru">Своя сеть, в которой <span class="grad">нет компании</span> посередине</span>
+      </h1>
+      <p class="lead en">EchoFog is a peer-to-peer VPN, an end-to-end encrypted messenger and group calls in one open-source app. Exits are other people's computers and VPSes, relays are the participants themselves, and there is no central server in between.</p>
+      <p class="lead ru">EchoFog — это P2P-VPN, мессенджер со сквозным шифрованием и групповые звонки в одной открытой программе. Выходы — компьютеры и VPS обычных людей, ретрансляторы — сами участники, а центрального сервера посередине нет.</p>
+      <div class="ctas">
+        <a class="btn primary" href="#download">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
+          <span class="en">Download for Windows and Linux</span><span class="ru">Скачать для Windows и Linux</span>
+        </a>
+        <a class="btn" href="https://github.com/AdmiralCore/echofog">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.08 0 4.41-2.7 5.38-5.26 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+          <span class="en">Source on GitHub</span><span class="ru">Код на GitHub</span>
+        </a>
+      </div>
+      <p class="meta"><span class="en">Open source, MPL-2.0 · Windows and Linux · experimental, no independent audit yet</span><span class="ru">Открытый код, MPL-2.0 · Windows и Linux · экспериментальная версия, независимого аудита пока не было</span></p>
+      <div class="shot">
+        <video id="hero-video" autoplay muted loop playsinline preload="auto" poster="media/en/call-poster.webp" width="1280" height="800" aria-label="A call in EchoFog: people join and one of them shares their screen">
+          <source src="media/en/call.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="row">
+        <div class="text">
+          <p class="eyebrow"><span class="en">VPN</span><span class="ru">VPN</span></p>
+          <h2><span class="en">Go online through people, not a company</span><span class="ru">Выход в интернет через людей, а не через компанию</span></h2>
+          <p class="muted en">Pick an exit by ping, price, speed and which of your sites open through it, or let automatic mode keep testing candidates in the background and move you when one slows down. The rating is computed on your computer; there is no shared rating server.</p>
+          <p class="muted ru">Выбирайте выход по пингу, цене, скорости и тому, какие из ваших сайтов через него открываются, или оставьте автоматический режим: он фоном проверяет кандидатов и переключает, когда выход замедлился. Рейтинг считается у вас, общего сервера рейтингов нет.</p>
+          <ul class="points">
+            <li class="en"><b>One app or the whole computer:</b> a local SOCKS5 proxy, or all traffic through the exit with a kill switch.</li>
+            <li class="ru"><b>Одна программа или весь компьютер:</b> локальный SOCKS5-прокси или весь трафик через выход, с kill switch.</li>
+            <li class="en"><b>Free or paid exits:</b> paid ones are paid per gigabyte in TON, in small chunks, straight to their owner (testnet for now).</li>
+            <li class="ru"><b>Бесплатные и платные выходы:</b> платные оплачиваются за гигабайт в TON, маленькими порциями, прямо владельцу (пока в тестовой сети).</li>
+            <li class="en"><b>Share your own connection</b> with everyone, or only with people who have your link.</li>
+            <li class="ru"><b>Раздавайте своё подключение</b> всем или только тем, у кого есть ваша ссылка.</li>
+          </ul>
+        </div>
+        <div class="shot"><a data-shot-link="proxy" href="media/en/proxy.webp"><img data-shot="proxy" src="media/en/proxy-1x.webp" srcset="media/en/proxy-1x.webp 1x, media/en/proxy.webp 2x" width="1280" height="800" loading="lazy" alt="Choosing an exit by ping, price, speed and sites"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="wrap">
+      <div class="camo">
+        <p class="eyebrow"><span class="en">Camouflage</span><span class="ru">Маскировка</span></p>
+        <h2><span class="en">On the wire it looks like a visit to a website</span><span class="ru">Со стороны это похоже на заход на обычный сайт</span></h2>
+        <p class="muted en">A connection to a node in another country looks like HTTP/3 to the website the node stands next to: a Chrome-like handshake, with the node's secret check hidden inside it (QUIC-REALITY). Someone who probes the node without the secret gets the real site. If QUIC is cut, the app falls back to TCP that also looks like HTTPS, and it splits long TCP flows over short connections.</p>
+        <p class="muted ru">Соединение с нодой в другой стране выглядит как HTTP/3 к сайту, рядом с которым эта нода стоит: рукопожатие как у Chrome, а проверка секрета ноды спрятана внутри него (QUIC-REALITY). Кто постучится к ноде без секрета, получит настоящий сайт. Если QUIC не проходит, приложение переходит на TCP, который тоже выглядит как HTTPS, и делит длинные TCP-потоки на короткие соединения.</p>
+        <div class="wire" aria-hidden="true">
+          <div class="node"><span class="en">Your app</span><span class="ru">Ваше приложение</span><small>EchoFog</small></div>
+          <div class="arrow">→</div>
+          <div class="node seen"><span class="en">What an observer sees</span><span class="ru">Что видит наблюдатель</span><small><span class="en">HTTP/3 to a real site</span><span class="ru">HTTP/3 к настоящему сайту</span></small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="en">A node</span><span class="ru">Нода</span><small><span class="en">exit, relay or guard</span><span class="ru">выход, релей или охранник</span></small></div>
+        </div>
+        <p class="meta en">Measured on our own testbed with a censor we wrote, not yet against a real national firewall at scale.</p>
+        <p class="meta ru">Измерено на нашем стенде с цензором, которого мы написали сами; против настоящего национального файрвола в больших масштабах пока не проверяли.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="row flip">
+        <div class="text">
+          <p class="eyebrow"><span class="en">Chats and spaces</span><span class="ru">Чаты и пространства</span></p>
+          <h2><span class="en">A community server, without the server</span><span class="ru">Сервер сообщества, только без сервера</span></h2>
+          <p class="muted en">Direct chats and groups run on a log of signed events that every member keeps. Replies, threads, reactions, pins and edits sync between devices with nobody in the middle, and messages wait for people who are offline on the relays they choose.</p>
+          <p class="muted ru">Личные чаты и группы работают на журнале подписанных событий, который хранит каждый участник. Ответы, ветки, реакции, закрепы и правки синхронизируются между устройствами без посредника, а сообщения ждут тех, кто не в сети, на выбранных ими релеях.</p>
+          <ul class="points">
+            <li class="en"><b>Spaces</b> with text channels, categories and voice rooms that never ring.</li>
+            <li class="ru"><b>Пространства</b> с текстовыми каналами, категориями и голосовыми комнатами, которые никому не звонят.</li>
+            <li class="en"><b>Roles and rights per channel,</b> announcement channels, slow mode, invitations, join requests, a moderation log.</li>
+            <li class="ru"><b>Роли и права по каналам,</b> каналы объявлений, медленный режим, приглашения, заявки, журнал модерации.</li>
+            <li class="en"><b>Files</b> go straight from the sender, pictures arrive with a preview.</li>
+            <li class="ru"><b>Файлы</b> идут прямо от отправителя, картинки приходят с превью.</li>
+          </ul>
+        </div>
+        <div class="shot"><a data-shot-link="space" href="media/en/space.webp"><img data-shot="space" src="media/en/space-1x.webp" srcset="media/en/space-1x.webp 1x, media/en/space.webp 2x" width="1280" height="800" loading="lazy" alt="A space with text channels and a voice room"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="row">
+        <div class="text">
+          <p class="eyebrow"><span class="en">Calls and streams</span><span class="ru">Звонки и трансляции</span></p>
+          <h2><span class="en">Stream to many from your own upload</span><span class="ru">Трансляция на многих со своего канала</span></h2>
+          <p class="muted en">Group calls and screen sharing travel over relay trees built from the participants' measured upload, so one person can stream to many without a media server. Media is end-to-end encrypted: relays forward what they cannot read.</p>
+          <p class="muted ru">Групповые звонки и показ экрана идут по деревьям ретрансляции, собранным из исходящих каналов участников, поэтому один человек может транслировать многим без медиасервера. Медиа зашифровано сквозным ключом: ретрансляторы пересылают то, что не могут прочитать.</p>
+          <ul class="points">
+            <li class="en"><b>Up to 4K at 60 fps,</b> and 1080p or 1440p at 120 and 144 fps.</li>
+            <li class="ru"><b>До 4K на 60 кадрах,</b> а 1080p и 1440p — на 120 и 144 кадрах.</li>
+            <li class="en"><b>On Windows the app captures the screen itself,</b> on the graphics card, with the computer's sound but not the call's.</li>
+            <li class="ru"><b>На Windows приложение само захватывает экран</b> на видеокарте, со звуком компьютера, но без звука звонка.</li>
+            <li class="en"><b>Lost packets are rebuilt</b> from parity or resent by the neighbour in the tree, not by the person streaming.</li>
+            <li class="ru"><b>Потерянные пакеты восстанавливаются</b> по избыточности или переотправляются соседом по дереву, а не тем, кто транслирует.</li>
+          </ul>
+        </div>
+        <div class="shot"><a data-shot-link="call" href="media/en/call.webp"><img data-shot="call" src="media/en/call-1x.webp" srcset="media/en/call-1x.webp 1x, media/en/call.webp 2x" width="1280" height="800" loading="lazy" alt="Watching a shared screen during a call"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="row flip">
+        <div class="text">
+          <p class="eyebrow"><span class="en">When a direct link fails</span><span class="ru">Когда напрямую не выходит</span></p>
+          <h2><span class="en">It tells you why, and what helps</span><span class="ru">Приложение скажет почему и что поможет</span></h2>
+          <p class="muted en">Most people sit behind their provider's own NAT, and two of them often cannot reach each other directly. Then the call goes through a relay, and the app says so: why, what would help (a public IP from the provider, a forwarded port), and which relays the call could use, your own one by link included.</p>
+          <p class="muted ru">Большинство людей сидят за NAT своего провайдера, и двое таких часто не могут соединиться напрямую. Тогда звонок идёт через релей, и приложение это показывает: почему так вышло, что поможет (белый IP у провайдера, проброшенный порт) и через какие релеи можно пустить звонок, в том числе через свой по ссылке.</p>
+        </div>
+        <div class="shot"><a data-shot-link="path" href="media/en/path.webp"><img data-shot="path" src="media/en/path-1x.webp" srcset="media/en/path-1x.webp 1x, media/en/path.webp 2x" width="1280" height="800" loading="lazy" alt="Why a call goes through a relay, and the relays to choose from"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="row">
+        <div class="text">
+          <p class="eyebrow"><span class="en">Your address</span><span class="ru">Ваш адрес</span></p>
+          <h2><span class="en">You decide who sees your IP</span><span class="ru">Вы решаете, кто видит ваш IP</span></h2>
+          <p class="muted en">Where the internet is censored, the app joins the network through a few camouflaged guard servers instead of connecting to everyone. Anonymous mode goes further: through Tor nobody in the network sees your address, through your own relay only that relay does.</p>
+          <p class="muted ru">Там, где интернет цензурируют, приложение входит в сеть через нескольких замаскированных охранников, а не подключается ко всем подряд. Анонимный режим идёт дальше: через Tor ваш адрес не видит никто в сети, через свой релей — только он.</p>
+          <ul class="points">
+            <li class="en"><b>Hidden nodes</b> answer only the people with their link, and other nodes do not pass their address on.</li>
+            <li class="ru"><b>Скрытые ноды</b> отвечают только тем, у кого есть их ссылка, и другие ноды не передают их адрес дальше.</li>
+            <li class="en"><b>Tor or SOCKS5</b> for the app's own traffic, and calls set to go only through relays.</li>
+            <li class="ru"><b>Tor или SOCKS5</b> для собственного трафика приложения, а звонки можно пустить только через релеи.</li>
+          </ul>
+        </div>
+        <div class="shot"><a data-shot-link="privacy" href="media/en/privacy.webp"><img data-shot="privacy" src="media/en/privacy-1x.webp" srcset="media/en/privacy-1x.webp 1x, media/en/privacy.webp 2x" width="1280" height="800" loading="lazy" alt="Anonymous mode and joining the network through guards"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section id="how">
+    <div class="wrap">
+      <p class="eyebrow"><span class="en">How it works</span><span class="ru">Как устроено</span></p>
+      <h2><span class="en">The users are the network</span><span class="ru">Сеть — это сами пользователи</span></h2>
+      <div class="grid">
+        <div class="card">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 11l10-5M7 13l10 5"/></svg></div>
+          <h3><span class="en">No central server</span><span class="ru">Нет центрального сервера</span></h3>
+          <p class="en">Nodes find each other through a Kademlia DHT. A few bootstrap nodes help with the very first connection; after that the network does not need them.</p>
+          <p class="ru">Ноды находят друг друга через DHT Kademlia. Несколько стартовых нод помогают только с самым первым подключением, дальше сеть без них обходится.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="9"/></svg></div>
+          <h3><span class="en">Everyone can carry traffic</span><span class="ru">Трафик несут все</span></h3>
+          <p class="en">Exits, relays and stream trees are other users' computers and VPSes. Each node decides what it shares and with whom.</p>
+          <p class="ru">Выходы, релеи и деревья трансляций — компьютеры и VPS других пользователей. Каждая нода сама решает, что и кому раздаёт.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 15h2"/></svg></div>
+          <h3><span class="en">Payments without accounts</span><span class="ru">Оплата без аккаунтов</span></h3>
+          <p class="en">Paid exits are paid in TON from the built-in wallet, in small chunks as you use them. No accounts and no cards. Testnet for now.</p>
+          <p class="ru">Платные выходы оплачиваются в TON из встроенного кошелька маленькими порциями по мере расхода. Без аккаунтов и карт. Пока в тестовой сети.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg></div>
+          <h3><span class="en">Open and in Go</span><span class="ru">Открыто и на Go</span></h3>
+          <p class="en">The core and the node are Go, the desktop app is Wails and Svelte, all in one repository under MPL-2.0.</p>
+          <p class="ru">Ядро и нода написаны на Go, десктоп — на Wails и Svelte, всё в одном репозитории под MPL-2.0.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="node">
+    <div class="wrap">
+      <div class="row">
+        <div class="text">
+          <p class="eyebrow"><span class="en">Run a node</span><span class="ru">Своя нода</span></p>
+          <h2><span class="en">Your own exit on a $5 VPS</span><span class="ru">Свой выход на VPS за $5</span></h2>
+          <p class="muted en">The node is a ready image for amd64 and arm64. Run it public, free or with your own price per gigabyte, or hidden, so that only friends with your invitation link can use it and nobody else can tell it is there.</p>
+          <p class="muted ru">Нода — это готовый образ для amd64 и arm64. Запустите её публичной, бесплатно или со своей ценой за гигабайт, или скрытой: тогда ею пользуются только друзья со ссылкой-приглашением, а остальным не видно, что она вообще есть.</p>
+          <p class="muted"><a href="https://github.com/AdmiralCore/echofog/tree/main/docs"><span class="en">Documentation →</span><span class="ru">Документация →</span></a></p>
+        </div>
+        <div>
+<pre><span class="en"># in deploy/ of the repository</span><span class="ru"># в папке deploy/ репозитория</span>
+cp .env.example .env
+docker compose pull
+docker compose up -d
+docker compose logs -f   <span class="en"># the invitation link</span><span class="ru"># ссылка-приглашение</span></pre>
+          <p class="meta">ghcr.io/admiralcore/echofog-node</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="note">
+        <h3><span class="en">Honest status</span><span class="ru">Честно о статусе</span></h3>
+        <p class="en">EchoFog is experimental. There has been no independent security audit, and the camouflage has been tested on our own testbed, not against a real national firewall at scale. Please don't rely on it where your safety depends on it.</p>
+        <p class="ru">EchoFog — экспериментальная программа. Независимого аудита безопасности не было, а маскировку проверяли на собственном стенде, не против настоящего национального файрвола в больших масштабах. Не полагайтесь на неё там, где от этого зависит ваша безопасность.</p>
+        <p class="en">Reports from real networks help most, whether it works there or not: <a href="https://github.com/AdmiralCore/echofog/issues/new/choose">open an issue</a>.</p>
+        <p class="ru">Больше всего помогают отчёты из настоящих сетей — работает там или нет: <a href="https://github.com/AdmiralCore/echofog/issues/new/choose">напишите в issues</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="wrap">
+      <p class="eyebrow"><span class="en">Download</span><span class="ru">Скачать</span></p>
+      <h2><span class="en">Get EchoFog</span><span class="ru">Установить EchoFog</span></h2>
+      <p class="muted en">All files of every release are on GitHub, with a SHA256SUMS file to check them.</p>
+      <p class="muted ru">Все файлы каждого релиза лежат на GitHub вместе с файлом SHA256SUMS для проверки.</p>
+      <div class="dl">
+        <div class="card">
+          <h3>Windows</h3>
+          <p class="en">The desktop app: VPN, chats and calls, with the app's own screen capture.</p>
+          <p class="ru">Приложение: VPN, чаты и звонки, со своим захватом экрана.</p>
+          <code>EchoFog-…-windows-amd64.exe</code>
+          <a class="btn primary" href="https://github.com/AdmiralCore/echofog/releases/latest"><span class="en">Latest release</span><span class="ru">Последний релиз</span></a>
+        </div>
+        <div class="card">
+          <h3>Linux</h3>
+          <p class="en">The same desktop app for Linux (WebKitGTK 4.1).</p>
+          <p class="ru">То же приложение для Linux (WebKitGTK 4.1).</p>
+          <code>EchoFog-…-linux-amd64</code>
+          <a class="btn" href="https://github.com/AdmiralCore/echofog/releases/latest"><span class="en">Latest release</span><span class="ru">Последний релиз</span></a>
+        </div>
+        <div class="card">
+          <h3><span class="en">Node</span><span class="ru">Нода</span></h3>
+          <p class="en">The headless node for a VPS or a home server: a binary for Linux and Windows, or the Docker image.</p>
+          <p class="ru">Нода без окна для VPS или домашнего сервера: файл для Linux и Windows или образ Docker.</p>
+          <code>echofog-node-…-linux-amd64</code>
+          <a class="btn" href="https://github.com/AdmiralCore/echofog/releases/latest"><span class="en">Latest release</span><span class="ru">Последний релиз</span></a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="bottom">
+  <div class="wrap">
+    <span>EchoFog · MPL-2.0</span>
+    <a href="https://github.com/AdmiralCore/echofog">GitHub</a>
+    <a href="https://github.com/AdmiralCore/echofog/tree/main/docs"><span class="en">Docs</span><span class="ru">Документация</span></a>
+    <a href="https://github.com/AdmiralCore/echofog/discussions"><span class="en">Discussions</span><span class="ru">Обсуждения</span></a>
+    <a href="https://github.com/AdmiralCore/echofog/blob/main/SECURITY.md"><span class="en">Security</span><span class="ru">Безопасность</span></a>
+    <a href="https://t.me/+3N3EKWXi-ow3MzBi"><span class="en">Telegram (mostly Russian)</span><span class="ru">Telegram</span></a>
+    <span class="spacer"></span>
+    <span class="en">Screenshots: the real app with demo data.</span><span class="ru">Скриншоты: настоящее приложение с демо-данными.</span>
+    <span class="credits">
+      <span class="en">In the call:</span><span class="ru">В звонке:</span>
+      <a href="https://commons.wikimedia.org/wiki/File:SuperTuxKart_2.x_GP_with_24%25_handicap_and_road_tracks_(open_source_Mario_Kart-like_Linux_game).webm">SuperTuxKart</a>
+      <span class="en">gameplay by kimden STK,</span><span class="ru">— запись kimden STK,</span>
+      <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>;
+      <span class="en">camera clips from</span><span class="ru">камеры —</span> <a href="https://mixkit.co/">Mixkit</a>.
+    </span>
+  </div>
+</footer>
+
+<script>
+  // The language: the one picked here before, else the browser's (Russian for ru, be, uk, kk).
+  (function () {
+    var TITLES = { en: 'EchoFog — a private network with no company in the middle', ru: 'EchoFog — своя сеть без компании посередине' };
+    var root = document.documentElement;
+    function pick() {
+      try { var saved = localStorage.getItem('echofog.site.lang'); if (saved === 'en' || saved === 'ru') return saved; } catch (e) {}
+      var langs = navigator.languages || [navigator.language || 'en'];
+      return /^(ru|be|uk|kk)\b/i.test(langs[0] || '') ? 'ru' : 'en';
+    }
+    function apply(lang) {
+      root.setAttribute('data-lang', lang);
+      root.setAttribute('lang', lang);
+      document.title = TITLES[lang];
+      document.querySelectorAll('[data-set-lang]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-set-lang') === lang)); });
+      document.querySelectorAll('img[data-shot]').forEach(function (img) {
+        var n = img.getAttribute('data-shot');
+        img.src = 'media/' + lang + '/' + n + '-1x.webp';
+        img.srcset = 'media/' + lang + '/' + n + '-1x.webp 1x, media/' + lang + '/' + n + '.webp 2x';
+      });
+      document.querySelectorAll('a[data-shot-link]').forEach(function (a) { a.href = 'media/' + lang + '/' + a.getAttribute('data-shot-link') + '.webp'; });
+      var v = document.getElementById('hero-video');
+      var src = 'media/' + lang + '/call.mp4';
+      if (v && v.querySelector('source').getAttribute('src') !== src) {
+        v.poster = 'media/' + lang + '/call-poster.webp';
+        v.querySelector('source').setAttribute('src', src);
+        v.load();
+        var p = v.play(); if (p && p.catch) p.catch(function () {});
+      }
+    }
+    apply(pick());
+    document.querySelectorAll('[data-set-lang]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var lang = b.getAttribute('data-set-lang');
+        try { localStorage.setItem('echofog.site.lang', lang); } catch (e) {}
+        apply(lang);
+      });
+    });
+  })();
+</script>
+</body>
 </html>
