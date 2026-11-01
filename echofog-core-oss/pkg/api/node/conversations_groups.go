@@ -129,6 +129,10 @@ func (n *NodeApi) hookGroupsToLog(gf *groupsFacade) {
 			f.mirrorGroup(groupID, m)
 		}
 	}
+	gf.channelLets = func(groupID string, sender types.PeerID, channel, thread string, file bool) bool {
+		f, err := n.convsFacade()
+		return err != nil || f.log.MayPost(convlog.Group(groupID), sender, channel, thread != "", file)
+	}
 	gf.sendEvent = func(target types.PeerID, text string, raw []byte, track bool) error {
 		if n.node == nil || n.node.Messenger == nil {
 			return errNoChat

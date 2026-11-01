@@ -166,15 +166,18 @@ type groupsFacade struct {
 
 	// the conversation log (conversations.go): a group's events, and its old-style messages so
 	// the chat shows everything in one place
-	onEvent   func(groupID string, origin types.PeerID, raw []byte)
-	onMember  func(groupID string, b *convlog.MemberBody) // a membership change of ours, for the log
-	onLegacy  func(groupID string, m GroupMessageDTO)
-	sendEvent func(target types.PeerID, text string, raw []byte, track bool) error
-	connected func(types.PeerID) bool
-	onJoined  func(groupID string, peer types.PeerID) // a newcomer and the admin who let it in: sync the log now
-	paced     map[string]time.Time                    // when a key request, sync request or sync answer last went
-	envWrites int
-	heard     map[types.PeerID]time.Time // when a group message last came from a peer
+	onEvent  func(groupID string, origin types.PeerID, raw []byte)
+	onMember func(groupID string, b *convlog.MemberBody) // a membership change of ours, for the log
+	onLegacy func(groupID string, m GroupMessageDTO)
+	// channelLets: whether the group's log lets sender post in a channel ("" the main one), a comment in
+	// thread or a file; old-style messages of a group on the log are held to it. It must not take f.mu.
+	channelLets func(groupID string, sender types.PeerID, channel, thread string, file bool) bool
+	sendEvent   func(target types.PeerID, text string, raw []byte, track bool) error
+	connected   func(types.PeerID) bool
+	onJoined    func(groupID string, peer types.PeerID) // a newcomer and the admin who let it in: sync the log now
+	paced       map[string]time.Time                    // when a key request, sync request or sync answer last went
+	envWrites   int
+	heard       map[types.PeerID]time.Time // when a group message last came from a peer
 
 	deferred map[string][]deferredOp // changes that came before what they build on
 	retrying bool
@@ -855,10 +858,16 @@ func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMes
 		if _, err := convlog.ParseEventID(thread); err != nil {
 			return GroupMessageDTO{}, err
 		}
-	} else if cf, cerr := n.convsFacade(); cerr == nil && f.LogMode(groupID) {
-		// a file is a message too: slow mode holds it back the same way
-		if err := cf.slowWait(convlog.Group(groupID), channel); err != nil {
-			return GroupMessageDTO{}, err
+	}
+	if cf, cerr := n.convsFacade(); cerr == nil && f.LogMode(groupID) {
+		// a file is a message too: the channel's rights and slow mode hold it back the same way
+		if !cf.log.MayPost(convlog.Group(groupID), cf.self, channel, thread != "", true) {
+			return GroupMessageDTO{}, convlog.ErrForbidden
+		}
+		if thread == "" {
+			if err := cf.slowWait(convlog.Group(groupID), channel); err != nil {
+				return GroupMessageDTO{}, err
+			}
 		}
 	}
 	d, err := f.SendFile(groupID, channel, thread, path)

@@ -761,6 +761,15 @@ func (f *groupsFacade) receiveMessage(sender types.PeerID, groupID, id string, t
 	if f.store.Exists([]byte(groupSeenPrefix + id)) {
 		return nil
 	}
+	if f.channelLets != nil && f.logModeLocked(groupID) {
+		var channel, thread string
+		if file != nil {
+			channel, thread = file.Channel, file.Thread
+		}
+		if !f.channelLets(groupID, sender, channel, thread, file != nil) {
+			return nil // not allowed in that channel: the log would refuse it as a message too
+		}
+	}
 	_ = f.store.Set([]byte(groupSeenPrefix+id), []byte{1})
 	now := time.Now().UnixMilli()
 	if ts <= 0 || ts > now+24*3600*1000 {

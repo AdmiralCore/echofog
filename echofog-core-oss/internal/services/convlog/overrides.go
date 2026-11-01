@@ -175,3 +175,25 @@ func (l *Log) RightsIn(c Conv, peer types.PeerID, channel string) Rights {
 	}
 	return r
 }
+
+// MayPost reports whether peer may post in a channel of c now ("" the main one): a comment in a
+// thread (thread), a file (file). It is what apply holds a message in the channel to, for what
+// reaches the group outside the log (a file sent the old way).
+func (l *Log) MayPost(c Conv, peer types.PeerID, channel string, thread, file bool) bool {
+	r := l.RightsIn(c, peer, channel)
+	if !r.Member || file && !r.Media {
+		return false
+	}
+	if thread {
+		return r.Threads
+	}
+	if c.Kind == KindGroup {
+		l.views.RLock()
+		ch, ok := l.storedChannel(l.bc(c.ID), channel)
+		l.views.RUnlock()
+		if ok && (ch.Category || ch.ReadOnly && !r.Manage) {
+			return false // an announcements channel: only managers post (others comment)
+		}
+	}
+	return r.Send
+}
