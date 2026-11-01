@@ -31,6 +31,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := tree.NewStreamTreeEngine()
 	profile.PeerID = m.selfID
+	profile.Backdrop = tree.CleanBackdrop(profile.Backdrop)
 	now := time.Now()
 
 	room := &ActiveRoomState{
@@ -159,7 +160,11 @@ func (m *CallManager) LeaveRoom() error {
 
 func (m *CallManager) admitLocked(room *ActiveRoomState, peer types.PeerID, profile tree.PeerNodeProfile, now time.Time) {
 	profile.PeerID = peer
-	_, known := room.ConnectedPeers[peer]
+	profile.Backdrop = tree.CleanBackdrop(profile.Backdrop)
+	prev, known := room.ConnectedPeers[peer]
+	if known && prev.Backdrop != profile.Backdrop {
+		room.backdropsChanged = true
+	}
 	room.ConnectedPeers[peer] = profile
 	room.memberSeen[peer] = now
 	delete(room.suspects, peer)

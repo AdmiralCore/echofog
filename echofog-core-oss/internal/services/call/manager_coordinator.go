@@ -50,8 +50,14 @@ func (m *CallManager) Snapshot() (RoomSnapshot, bool) {
 		Joined:        room.joined,
 		Streams:       room.StreamEngine.ActiveStreams(),
 	}
-	for p := range room.ConnectedPeers {
+	for p, prof := range room.ConnectedPeers {
 		s.Members = append(s.Members, p)
+		if b := tree.CleanBackdrop(prof.Backdrop); b != "" {
+			if s.Backdrops == nil {
+				s.Backdrops = make(map[types.PeerID]string)
+			}
+			s.Backdrops[p] = b
+		}
 	}
 	return s, true
 }
@@ -76,6 +82,56 @@ func (m *CallManager) MemberProfiles() (profiles map[types.PeerID]tree.PeerNodeP
 	return profiles, room.Coordinator, room.IsCoordinator
 }
 
+// SetBackdrop picks the animated background the others see on this node's call tile ("" for the
+// plain one). In a call it goes out with the next member heartbeat, or with the manifest when this
+// node coordinates.
+func (m *CallManager) SetBackdrop(backdrop string) {
+	backdrop = tree.CleanBackdrop(backdrop)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	room := m.activeRoom
+	if room == nil {
+		return
+	}
+	room.MyProfile.Backdrop = backdrop
+	if room.IsCoordinator {
+		m.noteBackdropLocked(room, m.selfID, backdrop)
+	}
+}
+
+// noteBackdropLocked (coordinator) keeps the tile backdrop a member's heartbeat carries. The tree
+// stays as it is: the next tick sends the manifest again with the new profiles.
+func (m *CallManager) noteBackdropLocked(room *ActiveRoomState, peer types.PeerID, backdrop string) {
+	backdrop = tree.CleanBackdrop(backdrop)
+	p, ok := room.ConnectedPeers[peer]
+	if !ok || p.Backdrop == backdrop {
+		return
+	}
+	p.Backdrop = backdrop
+	room.ConnectedPeers[peer] = p
+	room.backdropsChanged = true
+}
+
+// refloodBackdropsLocked (coordinator) sends the voice manifest again at the same epoch with the
+// members' current backdrops: nobody moves in the tree, members only learn the new looks.
+func (m *CallManager) refloodBackdropsLocked(room *ActiveRoomState, now time.Time) {
+	old := room.VoiceManifest
+	if old == nil {
+		return
+	}
+	mf := *old
+	mf.Profiles = make(map[types.PeerID]tree.PeerNodeProfile, len(old.Profiles))
+	for id, p := range old.Profiles {
+		if cur, ok := room.ConnectedPeers[id]; ok {
+			p.Backdrop = cur.Backdrop
+		}
+		mf.Profiles[id] = p
+	}
+	mf.Timestamp = now.UnixNano()
+	m.applyVoiceManifestLocked(room, &mf, now)
+	m.floodLocked(room, signaling.ActionTreeManifest, &mf)
+}
+
 func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 	profiles := make([]tree.PeerNodeProfile, 0, len(room.ConnectedPeers))
 	for id, p := range room.ConnectedPeers {
@@ -87,6 +143,7 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 		profiles = append(profiles, p)
 	}
 	room.Epoch++
+	room.backdropsChanged = false // the new manifest carries them
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
 	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
 		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
@@ -513,6 +570,11 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	if now.Sub(room.lastReconcile) >= reconcileInterval {
 		room.lastReconcile = now
 		m.reconcileLocked(room)
+	}
+	if room.backdropsChanged && now.Sub(room.lastBackdropFlood) >= backdropFloodInterval {
+		room.backdropsChanged = false
+		room.lastBackdropFlood = now
+		m.refloodBackdropsLocked(room, now)
 	}
 	m.feederWatchdogLocked(room, now)
 }

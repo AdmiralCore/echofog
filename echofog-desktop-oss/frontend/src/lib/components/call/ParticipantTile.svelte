@@ -1,10 +1,12 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { callState } from '../../services/call.service.js';
-    import { peerName, peerAvatar } from '../../stores/peers.store.js';
+    import { peerName, peerAvatar, colorFor } from '../../stores/peers.store.js';
+    import { backdropOf } from '../../stores/backdrops.js';
     import Avatar from '../ui/Avatar.svelte';
     import Icon from '../ui/Icon.svelte';
     import VideoView from './VideoView.svelte';
+    import TileBackdrop from './TileBackdrop.svelte';
     import { t } from '../../i18n/index.js';
 
     export let peer;
@@ -33,7 +35,7 @@
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
-    class="group relative w-full h-full min-h-0 rounded-xl overflow-hidden bg-[#1e1f22] transition-shadow duration-150"
+    class="tile group relative w-full h-full min-h-0 rounded-xl overflow-hidden bg-[#1e1f22]"
     class:speaking
     bind:clientHeight={boxH}
     on:contextmenu|preventDefault={openMenu}
@@ -41,7 +43,8 @@
     {#if camera}
         <VideoView stream={camera} fit="cover" mirror={isSelf} />
     {:else}
-        <div class="absolute inset-0 flex items-center justify-center" style="background:radial-gradient(circle at 50% 40%, rgba(255,255,255,.05), transparent 70%)">
+        <TileBackdrop effect={$backdropOf(peer)} color={colorFor(peer)} {speaking} />
+        <div class="absolute inset-0 flex items-center justify-center">
             <Avatar id={peer} {name} src={$peerAvatar(peer)} size={avatarSize} {speaking} />
         </div>
     {/if}
@@ -75,7 +78,17 @@
         background: rgba(0, 0, 0, 0.78);
         border: none;
     }
-    .speaking {
+    /* the voice ring is drawn over the video or the backdrop, not under them */
+    .tile::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 3px transparent;
+        transition: box-shadow 150ms;
+        pointer-events: none;
+    }
+    .speaking::after {
         box-shadow: inset 0 0 0 3px var(--color-success);
     }
 </style>

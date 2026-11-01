@@ -4,6 +4,7 @@
     import { peerName } from '../../stores/peers.store.js';
     import Icon from '../ui/Icon.svelte';
     import Avatar from '../ui/Avatar.svelte';
+    import BackdropPicker from './BackdropPicker.svelte';
     import { t } from '../../i18n/index.js';
 
     export let peer;
@@ -55,7 +56,7 @@
 <div class="fixed inset-0 z-[200]" on:click={close} on:contextmenu|preventDefault={close}></div>
 <div
     bind:this={menu}
-    class="pmenu fixed z-[201] w-64 rounded-2xl p-1.5 text-[14px]"
+    class="pmenu fixed z-[201] {isSelf ? 'w-72' : 'w-64'} rounded-2xl p-1.5 text-[14px]"
     style="left:{x}px;top:{y}px"
     role="menu"
 >
@@ -101,6 +102,13 @@
                 {$t('call.reportNote')}
             </p>
         {/if}
+        <div class="sep"></div>
+    {:else}
+        <div class="px-2 pt-1 pb-2">
+            <p class="text-[12px] font-semibold uppercase tracking-wide mb-1.5" style="color:var(--muted)">{$t('call.bg.title')}</p>
+            <BackdropPicker {peer} compact />
+            <p class="mt-1.5 text-[11px] leading-snug" style="color:var(--faint)">{$t('call.bg.hint')}</p>
+        </div>
         <div class="sep"></div>
     {/if}
     <button class="menu-row" role="menuitem" on:click={copyId}>

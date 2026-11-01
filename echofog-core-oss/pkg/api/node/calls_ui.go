@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
+	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/dto"
 )
@@ -55,7 +56,26 @@ func (n *NodeApi) GetCallRoster() dto.CallRosterDTO {
 		r.Members = append(r.Members, m.String())
 	}
 	sort.Strings(r.Members)
+	for p, b := range s.Backdrops {
+		if r.Backdrops == nil {
+			r.Backdrops = make(map[string]string, len(s.Backdrops))
+		}
+		r.Backdrops[p.String()] = b
+	}
 	return r
+}
+
+// SetCallBackdrop picks the animated background the others see on this node's call tile ("" for
+// the plain one). It is kept for the calls joined later too.
+func (n *NodeApi) SetCallBackdrop(name string) error {
+	if tree.CleanBackdrop(name) != name {
+		return errors.New("a backdrop name is lowercase letters, digits and dashes")
+	}
+	n.backdrop = name
+	if n.node != nil && n.node.CallManager != nil {
+		n.node.CallManager.SetBackdrop(name)
+	}
+	return nil
 }
 
 // ReportCallMember flags a member for spam; enough reports remove and ban it from the room.

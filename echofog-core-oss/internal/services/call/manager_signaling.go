@@ -255,6 +255,7 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 		}
 		if _, member := room.ConnectedPeers[sender]; member && env.Action == signaling.ActionMemberHeartbeat {
 			room.memberSeen[sender] = now
+			m.noteBackdropLocked(room, sender, jp.Profile.Backdrop)
 			return
 		}
 		if room.banned[sender] {

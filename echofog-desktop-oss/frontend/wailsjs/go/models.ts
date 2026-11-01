@@ -265,6 +265,7 @@ export namespace dto {
 	    coordinator: string;
 	    members: string[];
 	    streams: string[];
+	    backdrops?: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new CallRosterDTO(source);
@@ -277,6 +278,7 @@ export namespace dto {
 	        this.coordinator = source["coordinator"];
 	        this.members = source["members"];
 	        this.streams = source["streams"];
+	        this.backdrops = source["backdrops"];
 	    }
 	}
 	export class ContactDTO {

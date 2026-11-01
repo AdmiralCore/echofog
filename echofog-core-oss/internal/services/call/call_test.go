@@ -957,3 +957,46 @@ func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
 	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 6*time.Second, 50*time.Millisecond,
 		"one room again: %v", dumpRoom(nodes, nil))
 }
+
+// Each member's tile backdrop reaches everybody without anyone moving in the voice tree, a member
+// joining later learns the ones chosen before it came, and a malformed name is the plain look.
+func TestRoom_BackdropsReachEveryMember(t *testing.T) {
+	m := newMesh()
+	nodes, key := newRoom(t, m, 5)
+	before, _ := nodes[1].cm.Snapshot()
+
+	for _, b := range []string{"a", "b", "c", "matrix"} {
+		nodes[2].cm.SetBackdrop(b) // changed faster than the manifest goes out: the last one wins
+	}
+	nodes[0].cm.SetBackdrop("waves") // the coordinator's own
+	nodes[3].cm.SetBackdrop("Not A Name!")
+	backdropsAre := func(list []*testNode, want map[types.PeerID]string) func() bool {
+		return func() bool {
+			for _, nd := range list {
+				if s, _ := nd.cm.Snapshot(); !assert.ObjectsAreEqual(want, s.Backdrops) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	want := map[types.PeerID]string{nodes[0].id: "waves", nodes[2].id: "matrix"}
+	require.Eventually(t, backdropsAre(nodes, want), 5*time.Second, 20*time.Millisecond)
+	after, _ := nodes[1].cm.Snapshot()
+	assert.Equal(t, before.Epoch, after.Epoch, "a new look does not rebuild the tree")
+
+	s := newTestSigner()
+	late := &testNode{cm: newCallManager(meshPort{m, s.id()}, s, s.id()), id: s.id()}
+	m.mu.Lock()
+	m.nodes[late.id] = late.cm
+	m.mu.Unlock()
+	t.Cleanup(func() { _ = late.cm.LeaveRoom() })
+	require.NoError(t, late.cm.JoinRoom("room-1", nodes[0].id, key, tree.PeerNodeProfile{UploadKbps: 40000, MaxRelayChildren: 2, Backdrop: "cubes"}))
+	all := append(nodes, late)
+	want[late.id] = "cubes"
+	require.Eventually(t, backdropsAre(all, want), 5*time.Second, 20*time.Millisecond)
+
+	nodes[2].cm.SetBackdrop("")
+	delete(want, nodes[2].id)
+	require.Eventually(t, backdropsAre(all, want), 5*time.Second, 20*time.Millisecond)
+}

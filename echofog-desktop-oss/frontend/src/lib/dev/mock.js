@@ -312,8 +312,12 @@ async function joinRoom() {
   return pc.localDescription.sdp;
 }
 
+// the tile backgrounds people chose (Bob's is under his camera)
+const backdrops = { [ALICE]: 'matrix', [BOB]: 'stars', [CAROL]: 'waves', [DAVE]: 'cubes' };
+
 function roster() {
-  return { callId: 'room_demo', self: SELF, coordinator: SELF, members: call.members, streams: call.streams.map((s) => s.streamId) };
+  const chosen = Object.fromEntries(call.members.filter((p) => backdrops[p]).map((p) => [p, backdrops[p]]));
+  return { callId: 'room_demo', self: SELF, coordinator: SELF, members: call.members, streams: call.streams.map((s) => s.streamId), backdrops: chosen };
 }
 
 async function submitAnswer(sdp) {
@@ -787,6 +791,7 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
   SetAnonymity: (mode, wallet) => { anonMock.mode = mode; anonMock.wallet = wallet; return null; },
   CallStreamStats: () => { const s = Date.now() / 1000; return { own: false, unitsSent: Math.floor(s * 1100), delivered: Math.floor(s * 1050), lost: Math.floor(s / 3), nacked: Math.floor(s * 2), retransmitted: 0, sendKbps: 11800, videoSent: Math.floor(s * 1100), videoDropped: Math.floor(s / 7), videoFailed: 0, keyframesServed: 4, netDroppedOut: 0, netDroppedIn: Math.floor(s / 5) }; },
   SetUploadCapacity: () => null,
+  SetCallBackdrop: (name) => { backdrops[SELF] = name; if (call.members.length) emit('call:roster', roster()); return null; },
   JoinRoom: () => joinRoom(),
   SubmitCallAnswer: (sdp) => submitAnswer(sdp),
   GetCallRoster: () => roster(),
@@ -1449,7 +1454,7 @@ if (BRIDGE) {
     'ChatChannels', 'ChatChannelSave', 'ChatChannelRemove', 'StartRoomCall', 'KeepRoomCallAlive', 'EndRoomCall',
     // calls: the page's WebRTC loopback talks to the node's own media bridge
     'InviteToCall', 'JoinRoom', 'SubmitCallAnswer', 'LeaveRoom', 'GetCallRoster', 'GetCallSlots', 'GetStreamQualities', 'StartStream',
-    'UpdateStreamQuality', 'StopScreenShare', 'WatchStream', 'UnwatchStream', 'SetUploadCapacity', 'SetVADState'];
+    'UpdateStreamQuality', 'StopScreenShare', 'WatchStream', 'UnwatchStream', 'SetUploadCapacity', 'SetVADState', 'SetCallBackdrop'];
   for (const name of BRIDGED) {
     impl[name] = async (...args) => {
       const r = await fetch(`${base}/call/${name}`, { method: 'POST', body: JSON.stringify(args) });

@@ -710,6 +710,10 @@ export function SetAutostart(arg1) {
   return window['go']['main']['App']['SetAutostart'](arg1);
 }
 
+export function SetCallBackdrop(arg1) {
+  return window['go']['main']['App']['SetCallBackdrop'](arg1);
+}
+
 export function SetContactProfile(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetContactProfile'](arg1, arg2, arg3);
 }

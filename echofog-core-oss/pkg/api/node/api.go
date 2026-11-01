@@ -26,7 +26,8 @@ import (
 type NodeApi struct {
 	node *node.Node
 
-	uploadKbps int // declared upstream bandwidth used to size call streams
+	uploadKbps int    // declared upstream bandwidth used to size call streams
+	backdrop   string // the animated background the others see on our call tile
 
 	vpn   vpnState
 	tun   tunState
@@ -393,6 +394,7 @@ func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
 		UploadKbps:       n.callUploadKbps(),
 		MaxRelayChildren: n.node.CallRelayCapacity(),
 		RelayOnly:        n.node.CallRelayOnly(),
+		Backdrop:         n.backdrop,
 		RTT:              10 * time.Millisecond,
 		LastHeartbeat:    time.Now(),
 	}
