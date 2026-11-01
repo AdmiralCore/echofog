@@ -244,14 +244,35 @@ const scenes = {
   'alice-cam': { owner: ALICE, kind: 'camera', title: 'Alice' },
 };
 
+// window.__mockMedia ({ 'alice-screen': url | { src, crop: [x, y, w, h] in 0..1 } }), set before the
+// app loads, plays a real clip on a scene instead of the drawn one: for screenshots of the site.
+const mediaOf = (key) => {
+  const m = window.__mockMedia?.[key];
+  if (!m) return null;
+  const { src, crop = [0, 0, 1, 1] } = typeof m === 'string' ? { src: m } : m;
+  const v = Object.assign(document.createElement('video'), { src, muted: true, loop: true, playsInline: true, autoplay: true });
+  v.play().catch(() => {});
+  return { v, crop };
+};
+
 function painter(canvas) {
   const g = canvas.getContext('2d');
   let scene = null;
+  let media = null;
   let t = 0;
   const draw = () => {
     t += 1;
     const { width: w, height: h } = canvas;
-    if (!scene) {
+    if (media && media.v.readyState >= 2) {
+      // the crop of the clip, scaled to cover the canvas
+      const { v, crop: [cx, cy, cw, ch] } = media;
+      const sw = v.videoWidth * cw;
+      const sh = v.videoHeight * ch;
+      const k = Math.max(w / sw, h / sh);
+      const dw = w / k;
+      const dh = h / k;
+      g.drawImage(v, v.videoWidth * cx + (sw - dw) / 2, v.videoHeight * cy + (sh - dh) / 2, dw, dh, 0, 0, w, h);
+    } else if (!scene) {
       g.fillStyle = '#000';
       g.fillRect(0, 0, w, h);
     } else if (scene.kind === 'screen') {
@@ -292,7 +313,13 @@ function painter(canvas) {
   };
   // setInterval, not requestAnimationFrame: rAF stops in hidden windows and freezes the stream
   setInterval(draw, 33);
-  return { set(s) { scene = s; } };
+  return {
+    set(s, key) {
+      scene = s;
+      media?.v.pause();
+      media = s ? mediaOf(key) : null;
+    },
+  };
 }
 
 function voice(ctx, i) {
@@ -386,7 +413,7 @@ function watch(streamId) {
   const used = Object.keys(call.slots).filter((k) => k.startsWith('v'));
   const slot = 'v' + [0, 1, 2, 3].find((i) => !used.includes('v' + i));
   call.slots[slot] = { kind: 'video', peer: scenes[streamId]?.owner, streamId };
-  call.painters[Number(slot.slice(1))].set(scenes[streamId] || null);
+  call.painters[Number(slot.slice(1))].set(scenes[streamId] || null, streamId);
   setTimeout(() => emit('call:media_slot', { slot, kind: 'video', peer: scenes[streamId]?.owner, streamId, active: true }), 300);
   // screens come with their sound, on the stream sound slot of the same number
   if (scenes[streamId]?.kind === 'screen') {
