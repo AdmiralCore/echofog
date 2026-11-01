@@ -2,7 +2,7 @@
   // "Remember on this computer": the profile opens without its password for this Windows user.
   // Switching it on, or changing whether payments ask the password, takes the password; switching
   // it off does not. Not shown where the system cannot keep it (only Windows can yet).
-  import { onMount } from 'svelte';
+  import { onMount, createEventDispatcher } from 'svelte';
   import { App, errText } from '../api.js';
   import { lock } from '../stores/session.js';
   import { closeChats } from '../stores/chats.js';
@@ -17,12 +17,14 @@
   let busy = false;
   let error = '';
   let notice = '';
+  const dispatch = createEventDispatcher(); // 'state': each new RememberedUnlockDTO (the start-with-Windows card)
 
   async function load() {
     try {
       st = await App.GetRememberedUnlock();
       want = st.enabled;
       ask = st.enabled ? st.askPayments : true;
+      dispatch('state', st);
     } catch (err) {
       error = errText(err);
     }

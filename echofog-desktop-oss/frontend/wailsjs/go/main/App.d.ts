@@ -129,6 +129,8 @@ export function GetAccessStatus():Promise<node.AccessStatus>;
 
 export function GetAnonymity():Promise<node.AnonymityStatus>;
 
+export function GetAutostart():Promise<main.AutostartDTO>;
+
 export function GetBlockedPeers():Promise<Array<contacts.Blocked>>;
 
 export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
@@ -352,6 +354,8 @@ export function SetAccessMode(arg1:string):Promise<void>;
 export function SetAnonymity(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
+
+export function SetAutostart(arg1:boolean):Promise<void>;
 
 export function SetContactProfile(arg1:string,arg2:string,arg3:string):Promise<void>;
 
