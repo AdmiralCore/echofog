@@ -51,12 +51,12 @@
         class="path-badge shrink-0"
         class:warn={badge.warn}
         class:open
-        title={$t('callpath.badgeTitle')}
+        title={$t(badge.direct ? 'callpath.badgeDirectTitle' : 'callpath.badgeTitle')}
         aria-haspopup="dialog"
         aria-expanded={open}
         on:click={() => (open = !open)}
     >
-        <Icon name="relay" size={13} />
+        <Icon name={badge.direct ? 'check' : 'relay'} size={13} />
         <span>{$t(badge.key, badge.params)}</span>
     </button>
 {/if}

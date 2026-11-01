@@ -16,7 +16,11 @@ export const chosen = (reason) => CHOSEN.includes(reason);
 
 /** The badge: hidden (null) unless somebody is reached through a relay. */
 export function badgeOf(path) {
-  if (!path?.inCall || !path.relayed) return null;
+  if (!path?.inCall) return null;
+  if (!path.relayed) {
+    // shown too, calm: people see the call is direct, and the relays are one click away
+    return path.members.some((m) => m.link === 'direct') ? { key: 'callpath.badgeDirect', params: {}, warn: false, direct: true } : null;
+  }
   const total = path.members.length;
   const warn = !!path.hurts;
   if (total > 1) return { key: 'callpath.badgeGroup', params: { n: path.relayed, total }, warn };
@@ -28,6 +32,7 @@ export function badgeOf(path) {
 
 /** The panel's first line. */
 export function leadOf(path) {
+  if (!path.relayed) return { key: 'callpath.lead.direct', params: {} };
   if (path.members.length > 1) return { key: 'callpath.lead.group', params: { n: path.relayed, total: path.members.length } };
   if (chosen(path.reason)) return { key: 'callpath.lead.chosen', params: {} };
   if (path.reason === 'trying') return { key: 'callpath.lead.trying', params: {} };

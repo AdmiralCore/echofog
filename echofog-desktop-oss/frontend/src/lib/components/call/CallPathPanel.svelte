@@ -88,9 +88,9 @@
 
 <div class="path">
     <div class="head">
-        <span class="ic" class:warn={!!path.hurts}><Icon name="relay" size={16} /></span>
+        <span class="ic" class:warn={!!path.hurts}><Icon name={path.relayed ? 'relay' : 'check'} size={16} /></span>
         <div class="grow">
-            <b>{$t('callpath.title')}</b>
+            <b>{$t(path.relayed ? 'callpath.title' : 'callpath.titleDirect')}</b>
             <p>{$t(lead.key, lead.params)}</p>
         </div>
     </div>
@@ -109,8 +109,10 @@
         <p class="hurt">{$t('callpath.hurts.capped', { now: mbps(path.sendKbps), preset: mbps(path.presetKbps) })}</p>
     {/if}
 
-    <p class="pop-title">{$t('callpath.why')}</p>
-    <p class="text">{$t('callpath.reason.' + path.reason)}</p>
+    {#if path.relayed}
+        <p class="pop-title">{$t('callpath.why')}</p>
+        <p class="text">{$t('callpath.reason.' + path.reason)}</p>
+    {/if}
     {#if sides}
         <div class="sides">
             <span>{$t('callpath.side.mine')}: <b>{$t('callpath.nat.' + mySide(path))}</b></span>
@@ -145,9 +147,11 @@
     {#if path.reason !== 'anonymous'}
         <div class="sect">
             <p class="pop-title">{$t('callpath.relays')}</p>
-            <button class="switch" disabled={!!busy || free.length < 2} on:click={() => switchTo('')}>
-                <Icon name="refresh" size={13} /> {busy === 'switch' ? $t('callpath.switching') : $t('callpath.switch')}
-            </button>
+            {#if path.relayed}
+                <button class="switch" disabled={!!busy || free.length < 2} on:click={() => switchTo('')}>
+                    <Icon name="refresh" size={13} /> {busy === 'switch' ? $t('callpath.switching') : $t('callpath.switch')}
+                </button>
+            {/if}
         </div>
         <p class="hint">{$t('callpath.relaysHint')}</p>
         {#if relays === null}
@@ -164,7 +168,7 @@
                 {#if r.pricePerMb}<span class="rate">{price(r.pricePerMb)}</span>{/if}
                 {#if r.carrying > 0}
                     <span class="chip on">{$t('callpath.carrying')}</span>
-                {:else}
+                {:else if path.relayed}
                     <button class="use" disabled={!!busy} on:click={() => switchTo(r.peerId)}>{busy === r.peerId ? $t('callpath.switching') : $t('callpath.use')}</button>
                 {/if}
             </div>
