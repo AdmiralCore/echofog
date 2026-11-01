@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -297,4 +298,29 @@ func TestStreamTree_RelayOnlySubscriberIsFedByBroadcaster(t *testing.T) {
 
 	assert.Equal(t, bc, sm.ParentMap[b2], "the broadcaster feeds it, even beyond its fanout")
 	assert.Equal(t, 0, RelayCapacity(PeerNodeProfile{MaxRelayChildren: 4, UploadKbps: 20000, RelayOnly: true}, 2500, false))
+}
+
+func TestCleanBackdrop(t *testing.T) {
+	for _, ok := range []string{"", "matrix", "soft-gradient", "v2", "abcdefghijklmnopqrstuvwx"} {
+		assert.Equal(t, ok, CleanBackdrop(ok))
+	}
+	for _, bad := range []string{"Matrix", "a b", "<script>", "../x", "abcdefghijklmnopqrstuvwxy", "матрица"} {
+		assert.Empty(t, CleanBackdrop(bad), bad)
+	}
+}
+
+// Builds that know nothing of backdrops read profiles that carry one, and the plain look leaves
+// the profile bytes as they were.
+func TestProfileBackdropIsOptional(t *testing.T) {
+	plain, err := json.Marshal(PeerNodeProfile{UploadKbps: 1000})
+	require.NoError(t, err)
+	assert.NotContains(t, string(plain), "backdrop")
+
+	withOne, err := json.Marshal(PeerNodeProfile{UploadKbps: 1000, Backdrop: "matrix"})
+	require.NoError(t, err)
+	var old struct {
+		UploadKbps int `json:"upload_kbps"`
+	}
+	require.NoError(t, json.Unmarshal(withOne, &old))
+	assert.Equal(t, 1000, old.UploadKbps)
 }

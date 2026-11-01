@@ -19,6 +19,29 @@ type PeerNodeProfile struct {
 	// would have to find a relay to it first.
 	RelayOnly     bool      `json:"relay_only,omitempty"`
 	LastHeartbeat time.Time `json:"last_heartbeat"`
+	// Backdrop names the animated background the member chose for its call tile ("matrix",
+	// "waves", ...; empty for the plain one). Cosmetic: the UI draws the ones it knows and the plain
+	// look for the rest, and builds without the field drop it.
+	Backdrop string `json:"backdrop,omitempty"`
+}
+
+// MaxBackdropLen bounds a backdrop name; it rides in every voice manifest.
+const MaxBackdropLen = 24
+
+// CleanBackdrop returns name if it is a well-formed backdrop name (lowercase letters, digits and
+// dashes, at most MaxBackdropLen), and "" (the plain look) otherwise. Members' profiles come from
+// the network, so the name is checked before it is kept or passed on.
+func CleanBackdrop(name string) string {
+	if len(name) > MaxBackdropLen {
+		return ""
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return ""
+		}
+	}
+	return name
 }
 
 // ParentAssignment defines upstream connections for a peer.

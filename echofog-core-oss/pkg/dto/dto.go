@@ -225,6 +225,8 @@ type CallRosterDTO struct {
 	Coordinator string   `json:"coordinator"`
 	Members     []string `json:"members"`
 	Streams     []string `json:"streams"`
+	// Backdrops: member -> the animated tile background it chose (absent: the plain one)
+	Backdrops map[string]string `json:"backdrops,omitempty"`
 }
 
 // TonWalletDTO describes the built-in TON wallet.

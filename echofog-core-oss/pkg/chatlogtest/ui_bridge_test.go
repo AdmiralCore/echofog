@@ -109,6 +109,7 @@ var bridged = map[string]string{
 	"GetCallRoster": "GetCallRoster", "GetCallSlots": "GetCallSlots", "GetStreamQualities": "ListStreamQualities",
 	"StartStream": "StartStream", "UpdateStreamQuality": "UpdateStreamQuality", "StopScreenShare": "StopScreenShare",
 	"WatchStream": "WatchStream", "UnwatchStream": "UnwatchStream", "SetUploadCapacity": "SetUploadCapacity", "SetVADState": "SetVADState",
+	"SetCallBackdrop": "SetCallBackdrop",
 }
 
 type bridge struct {
