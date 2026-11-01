@@ -207,6 +207,25 @@ const qualities = [
 
 // --- fake call core ---------------------------------------------------------------------------------
 const call = { pc: null, members: [], slots: {}, streams: [], painters: [], voices: [], audioCtx: null, timer: null };
+
+// the app's own screen capture: two screens and a few windows; the "Locked" window fails to start,
+// to see the fall back to the webview's capture
+const screenSources = [
+  { id: 'monitor:0', kind: 'monitor', title: 'DISPLAY1', width: 2560, height: 1440, refreshHz: 144, primary: true },
+  { id: 'monitor:1', kind: 'monitor', title: 'DISPLAY2', width: 1920, height: 1080, refreshHz: 60 },
+  { id: 'window:101', kind: 'window', title: 'Elden Ring', app: 'eldenring.exe', width: 2560, height: 1440 },
+  { id: 'window:102', kind: 'window', title: 'echofog – call.service.js', app: 'goland64.exe', width: 1920, height: 1026 },
+  { id: 'window:103', kind: 'window', title: 'Locked', app: 'secure.exe', width: 800, height: 600 },
+  { id: 'window:104', kind: 'window', title: 'YouTube Music', app: 'chrome.exe', width: 219, height: 30, minimized: true },
+];
+let nativeMock = null;
+function nativeStats() {
+  if (!nativeMock) return { active: false };
+  const s = (Date.now() - nativeMock.at) / 1000;
+  return { active: true, streamId: nativeMock.id, at: Date.now(), captured: Math.floor(s * 138), encoded: Math.floor(s * 119.6), sent: Math.floor(s * 119.5),
+    skipped: Math.floor(s * 0.4), keyframes: 1 + Math.floor(s / 20), bytes: Math.floor(s * 4.1e6), packets: Math.floor(s * 3800), encodeSeconds: s * 119.6 * 0.0042,
+    width: 2560, height: 1440, sourceWidth: 2560, sourceHeight: 1440, bitrateKbps: 32000, encoder: 'NVIDIA H.264 Encoder MFT', adapter: 'NVIDIA GeForce RTX 3070', hardware: true, pacerDelayMs: 1.6 };
+}
 const scenes = {
   'alice-screen': { owner: ALICE, kind: 'screen', title: 'launch-checklist.md' },
   'bob-cam': { owner: BOB, kind: 'camera', title: 'Bob' },
@@ -768,6 +787,16 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
     return null;
   },
   StopScreenShare: (id) => { emit('call:stream_closed', { streamId: id }); return null; },
+  NativeScreenAvailable: () => ({ available: !new URLSearchParams(location.search).has('nonative'), reason: 'no hardware H.264 encoder' }),
+  ListScreenSources: () => screenSources,
+  StartNativeScreen: (id, src) => {
+    if (src === 'window:103') throw new Error('capture: CreateForWindow: E_ACCESSDENIED');
+    nativeMock = { id, at: Date.now() };
+    return null;
+  },
+  UpdateNativeScreen: () => null,
+  StopNativeScreen: () => { nativeMock = null; return null; },
+  NativeScreenStats: () => nativeStats(),
   UpdateStreamQuality: () => null,
   SetVADState: () => null,
   LeaveRoom: () => leave(),

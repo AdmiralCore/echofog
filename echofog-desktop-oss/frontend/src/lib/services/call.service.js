@@ -69,6 +69,13 @@ function freshState(prev = {}) {
     // what a shared screen keeps when the encoder is short of time or bitrate: 'motion' its frame
     // rate (games, films), 'detail' its sharpness (text, slides)
     screenMode: prev.screenMode || loadPrefs().screenMode || 'motion',
+    // how a screen is captured: 'native' by the app itself on the GPU (Windows; up to the screen's
+    // refresh rate, no sound yet), 'webview' by the webview (slower, with sound)
+    screenCapture: prev.screenCapture || loadPrefs().screenCapture || 'native',
+    nativeScreen: prev.nativeScreen || { available: false, reason: '' },
+    screenNative: false,   // our shared screen goes through the app's own capture
+    screenSource: null,    // { kind, title, app } of it
+    sourcePicker: null,    // { sources } while the user picks what to share
     notice: null,
   };
 }
@@ -143,6 +150,7 @@ class CallService {
       callState.update((s) => ({ ...s, inCall: true, connecting: false }));
       this.refreshDevices();
       this.loadQualities();
+      this.checkNativeScreen();
       this.syncFromCore();
       return true;
     } catch (err) {
@@ -196,6 +204,11 @@ class CallService {
       // network VAD is a fallback for peers whose audio we do not play (e.g. deafened)
       if (!get(callState).isDeafened) return;
       callState.update((s) => ({ ...s, speaking: { ...s.speaking, [speaker]: speaking || undefined } }));
+    });
+    EventsOn('screen:native_ended', ({ streamId, reason } = {}) => {
+      if (!streamId || get(callState).screenStreamId !== streamId) return;
+      log.warn('screen', "the app's own screen capture ended by itself", { streamId, reason });
+      this.stopScreenShare().then(() => this.notify(/closed/.test(reason || '') ? tr('call.notice.sharedWindowClosed') : tr('call.notice.nativeEnded')));
     });
     EventsOn('call:kicked', () => {
       log.warn('call', 'removed from the call by the room');
@@ -513,12 +526,66 @@ class CallService {
     return this.startScreenShare(qualityId);
   }
 
+  /** Whether the app's own capture can be used here, and why not (for the quality menu). */
+  async checkNativeScreen() {
+    try {
+      const info = await app().NativeScreenAvailable?.();
+      if (!info) return;
+      callState.update((s) => ({ ...s, nativeScreen: { available: !!info.available, reason: info.reason || '' } }));
+      if (!info.available) log.info('screen', "the app's own screen capture is not available, the webview shares screens", { reason: info.reason });
+    } catch (e) { log.warn('screen', "could not ask whether the app's own capture works", errAttrs(e)); }
+  }
+
+  /** 'native' or 'webview': how the next screen is captured; remembered. */
+  setScreenCapture(mode) {
+    mode = mode === 'webview' ? 'webview' : 'native';
+    callState.update((s) => ({ ...s, screenCapture: mode }));
+    savePrefs({ screenCapture: mode });
+  }
+
+  /** Opens the list of monitors and windows; resolves to the chosen one, or null. */
+  async pickSource() {
+    let sources = [];
+    try { sources = (await app().ListScreenSources?.()) || []; } catch (e) { log.warn('screen', 'could not list screens and windows', errAttrs(e)); }
+    this.resolvePick?.(null);
+    return new Promise((resolve) => {
+      this.resolvePick = resolve;
+      callState.update((s) => ({ ...s, sourcePicker: { sources } }));
+    });
+  }
+
+  async refreshSources() {
+    if (!get(callState).sourcePicker) return;
+    try {
+      const sources = (await app().ListScreenSources?.()) || [];
+      callState.update((s) => (s.sourcePicker ? { ...s, sourcePicker: { sources } } : s));
+    } catch (_) { /* keep the list shown */ }
+  }
+
+  /** The picker's answer: a source, or null when it was closed. */
+  pickedSource(source) {
+    const resolve = this.resolvePick;
+    this.resolvePick = null;
+    callState.update((s) => ({ ...s, sourcePicker: null }));
+    resolve?.(source || null);
+  }
+
   async startScreenShare(qualityId = null) {
     if (!this.pc) return;
     const q = this.quality(qualityId || get(callState).selectedQualityId);
     const streamId = 'screen_' + Date.now();
+    const st = get(callState);
+    let source = null;
+    if (st.nativeScreen.available && st.screenCapture === 'native') {
+      source = await this.pickSource();
+      if (!source) {
+        log.info('screen', 'screen picker closed without choosing', { streamId });
+        return;
+      }
+      if (source.webview) source = null; // the webview's own picker, for a screen with its sound
+    }
     callState.update((s) => ({ ...s, streamError: null }));
-    log.info('screen', 'starting to share the screen', { streamId, quality: q.id });
+    log.info('screen', 'starting to share the screen', { streamId, quality: q.id, capture: source ? 'native' : 'webview' });
     try {
       await app().StartStream(streamId, 'screen', q.id); // the core checks upload capacity first
     } catch (err) {
@@ -526,6 +593,23 @@ class CallService {
       callState.update((s) => ({ ...s, streamError: String(err?.message || err) }));
       return;
     }
+    if (source) {
+      try {
+        await app().StartNativeScreen(streamId, source.id, q.id, true);
+        log.info('screen', "sharing the screen with the app's own capture", { streamId, kind: source.kind, width: source.width, height: source.height, fps: q.fps });
+        callState.update((s) => ({ ...s, isScreenSharing: true, screenStreamId: streamId, streamQualityId: q.id, screenAudio: false,
+          screenNative: true, screenSource: { kind: source.kind, title: source.title, app: source.app || '' } }));
+        return;
+      } catch (err) {
+        // the webview's capture is slower but works wherever the webview does
+        log.warn('screen', "the app's own capture did not start, the webview shares the screen instead", errAttrs(err, { streamId }));
+        this.notify(tr('call.notice.nativeFailed'));
+      }
+    }
+    await this.shareViaWebview(streamId, q);
+  }
+
+  async shareViaWebview(streamId, q) {
     // System audio carries the call itself: the voices this app plays would go back to the
     // viewers, who would hear everyone twice. restrictOwnAudio leaves out what this app plays;
     // where the webview cannot do that, echo cancelling takes the call out of the screen's sound
@@ -595,6 +679,7 @@ class CallService {
 
   async stopScreenShare() {
     const id = get(callState).screenStreamId;
+    if (get(callState).screenNative) await safeCall('StopNativeScreen');
     this.screen?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     this.screen = null;
     try { await this.tx?.screen.sender.replaceTrack(null); } catch (_) { /* closed */ }
@@ -605,7 +690,7 @@ class CallService {
     }
     videoStreams.update((v) => { const n = { ...v }; delete n['local:screen']; return n; });
     callState.update((s) => ({ ...s, isScreenSharing: false, screenAudio: false, screenStreamId: null, streamQualityId: null, streamError: null,
-      focusedStreamId: s.focusedStreamId === id ? null : s.focusedStreamId }));
+      screenNative: false, screenSource: null, focusedStreamId: s.focusedStreamId === id ? null : s.focusedStreamId }));
   }
 
   async setStreamQuality(qualityId) {
@@ -618,6 +703,19 @@ class CallService {
     } catch (err) {
       log.warn('screen', 'the core refused the new quality', errAttrs(err, { streamId: s.screenStreamId, quality: q.id }));
       callState.update((c) => ({ ...c, streamError: String(err?.message || err) }));
+      return;
+    }
+    if (s.screenNative) {
+      // a new size or frame rate needs a new encoder: the capture restarts with it
+      try {
+        await app().UpdateNativeScreen(q.id);
+        log.info('screen', 'stream quality changed', { streamId: s.screenStreamId, quality: q.id, capture: 'native' });
+        callState.update((c) => ({ ...c, streamQualityId: q.id, streamError: null }));
+      } catch (err) {
+        log.warn('screen', "the app's own capture did not restart at the new quality", errAttrs(err, { quality: q.id }));
+        await this.stopScreenShare();
+        callState.update((c) => ({ ...c, streamError: String(err?.message || err) }));
+      }
       return;
     }
     const track = this.screen?.getVideoTracks()[0];
@@ -649,6 +747,16 @@ class CallService {
   /** How our shared screen is encoded now: { encoder, hardware, width, height, fps, kbps, limit }
    *  from the browser's own stats; null when nothing is sent. */
   async screenEncoderInfo() {
+    if (get(callState).screenNative) {
+      const st = await app().NativeScreenStats?.();
+      if (!st?.active) return null;
+      const before = this.prevNativeStats;
+      this.prevNativeStats = st;
+      const dt = before ? (st.at - before.at) / 1000 : 0;
+      const per = (k) => (dt > 0 ? Math.max(0, Math.round((st[k] - before[k]) / dt)) : 0);
+      return { encoder: st.encoder, hardware: st.hardware, width: st.width, height: st.height, fps: per('sent'),
+        kbps: dt > 0 ? Math.round(((st.bytes - before.bytes) * 8) / dt / 1000) : 0, limit: '' };
+    }
     const sender = this.tx?.screen?.sender;
     if (!sender || !this.screen) return null;
     const report = await sender.getStats();
@@ -784,7 +892,15 @@ class CallService {
     const out = { at: performance.now(), own, browser: null, node: null };
     try {
       let report = null;
-      if (own) {
+      const st = get(callState);
+      if (own && streamId === st.screenStreamId && st.screenNative) {
+        // the app's own capture: its totals in the shape of the browser's
+        const n = await app().NativeScreenStats?.();
+        if (n?.active) {
+          out.browser = { captured: n.captured, encoded: n.encoded, frames: n.sent, dropped: n.skipped, bytes: n.bytes, packets: n.packets,
+            width: n.width, height: n.height, codecTime: n.encodeSeconds, impl: n.encoder, hw: n.hardware, limit: '' };
+        }
+      } else if (own) {
         const tx = streamId === get(callState).cameraStreamId ? this.tx?.camera : this.tx?.screen;
         report = tx ? await tx.sender.getStats() : null;
       } else {
@@ -792,7 +908,7 @@ class CallService {
         const rx = track && this.pc?.getReceivers().find((r) => r.track === track);
         report = rx ? await rx.getStats() : null;
       }
-      const b = {};
+      const b = out.browser || {};
       report?.forEach((r) => {
         if (r.kind && r.kind !== 'video') return;
         if (r.type === 'media-source') b.captureFps = r.framesPerSecond || 0;

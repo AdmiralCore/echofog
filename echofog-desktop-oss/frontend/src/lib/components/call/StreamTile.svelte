@@ -23,6 +23,8 @@
     $: hasSound = !isOwn && !!callService.soundSlotOf(stream.streamId, $callState);
     $: soundOn = ($callState.streamVolume[stream.streamId] ?? 1) > 0;
     $: ownSound = isOwn && stream.streamId === $callState.screenStreamId && $callState.screenAudio;
+    // our screen through the app's own capture has no preview in the webview
+    $: ownNative = isOwn && stream.streamId === $callState.screenStreamId && $callState.screenNative;
     $: rec = $recordings[stream.streamId];
     $: recTime = rec ? `${Math.floor(rec.seconds / 60)}:${String(rec.seconds % 60).padStart(2, '0')}` : '';
 
@@ -49,6 +51,12 @@
 <div bind:this={box} class="group relative w-full h-full min-h-0 rounded-xl overflow-hidden bg-black" class:speaking>
     {#if watching && media}
         <VideoView stream={media} />
+    {:else if ownNative}
+        <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-white/80 text-sm" title={$t('call.nativeHint')} style="background:radial-gradient(circle at 50% 40%, rgba(88,101,242,.18), transparent 70%), #1e1f22">
+            <Icon name="monitor" size={focused ? 30 : 22} />
+            <span class="font-semibold text-white truncate max-w-full">{$callState.screenSource?.kind === 'monitor' ? $t('call.yourWholeScreen') : $t('call.yourScreenNative', { title: $callState.screenSource?.title || '' })}</span>
+            {#if focused}<span class="text-white/55 text-xs max-w-[34ch]">{$t('call.nativeHint')}</span>{/if}
+        </div>
     {:else if watching}
         <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/70 text-sm">
             <span class="w-6 h-6 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>

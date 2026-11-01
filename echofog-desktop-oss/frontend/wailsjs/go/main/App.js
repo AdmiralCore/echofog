@@ -514,6 +514,10 @@ export function ListSavedMessages() {
   return window['go']['main']['App']['ListSavedMessages']();
 }
 
+export function ListScreenSources() {
+  return window['go']['main']['App']['ListScreenSources']();
+}
+
 export function LogUI(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['LogUI'](arg1, arg2, arg3, arg4);
 }
@@ -528,6 +532,14 @@ export function Logout() {
 
 export function MeasureUploadCapacity() {
   return window['go']['main']['App']['MeasureUploadCapacity']();
+}
+
+export function NativeScreenAvailable() {
+  return window['go']['main']['App']['NativeScreenAvailable']();
+}
+
+export function NativeScreenStats() {
+  return window['go']['main']['App']['NativeScreenStats']();
 }
 
 export function OpenDownloadDir() {
@@ -758,6 +770,10 @@ export function StartLocalDiscovery(arg1) {
   return window['go']['main']['App']['StartLocalDiscovery'](arg1);
 }
 
+export function StartNativeScreen(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartNativeScreen'](arg1, arg2, arg3, arg4);
+}
+
 export function StartNode() {
   return window['go']['main']['App']['StartNode']();
 }
@@ -788,6 +804,10 @@ export function StartVPNVia(arg1) {
 
 export function StopDiscovery() {
   return window['go']['main']['App']['StopDiscovery']();
+}
+
+export function StopNativeScreen() {
+  return window['go']['main']['App']['StopNativeScreen']();
 }
 
 export function StopScreenShare(arg1) {
@@ -836,6 +856,10 @@ export function UnsaveMessage(arg1) {
 
 export function UnwatchStream(arg1) {
   return window['go']['main']['App']['UnwatchStream'](arg1);
+}
+
+export function UpdateNativeScreen(arg1) {
+  return window['go']['main']['App']['UpdateNativeScreen'](arg1);
 }
 
 export function UpdateStreamQuality(arg1, arg2) {
