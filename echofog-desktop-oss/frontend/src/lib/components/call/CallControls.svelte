@@ -211,9 +211,11 @@
         {:else if s.nativeScreen.reason}
             <p class="pop-hint">{$t('call.capture.unavailable', { reason: s.nativeScreen.reason })}</p>
         {/if}
-        <p class="pop-title">{$t('call.mode')}</p>
-        <div class="mode"><Pills items={modeItems} bind:value={mode} label={$t('call.mode')} /></div>
-        <p class="pop-hint">{mode === 'detail' ? $t('call.mode.detailHint') : $t('call.mode.motionHint')}</p>
+        {#if !s.nativeScreen.available || capture === 'webview'}
+            <p class="pop-title">{$t('call.mode')}</p>
+            <div class="mode"><Pills items={modeItems} bind:value={mode} label={$t('call.mode')} /></div>
+            <p class="pop-hint">{mode === 'detail' ? $t('call.mode.detailHint') : $t('call.mode.motionHint')}</p>
+        {/if}
         {#if enc}
             <p class="enc" class:warn={enc.hardware === false || enc.limit === 'cpu'}>
                 {enc.width}×{enc.height} · {enc.fps} {$t('call.fps')} · {mbps(enc.kbps)} {$t('unit.mbps')}
