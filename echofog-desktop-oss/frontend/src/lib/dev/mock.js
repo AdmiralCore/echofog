@@ -425,6 +425,8 @@ const impl = {
   ForgetUnlock: () => { rememberMock.enabled = false; return null; },
   Lock: () => { rememberMock.gate = false; return null; },
   AuthorizePayment: (pw) => { if (pw !== 'demo') throw new Error('wrong app password'); return null; },
+  // the preview's password stays "demo": a change is only checked, not kept
+  ChangePassword: (old) => new Promise((r, j) => setTimeout(() => (old === 'demo' ? r(null) : j(new Error('wrong app password'))), 700)),
   // ?offline: no peers, to see the offline banner and the bootstrap card
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
   // logs: a new line every 0.9 s, levels mixed

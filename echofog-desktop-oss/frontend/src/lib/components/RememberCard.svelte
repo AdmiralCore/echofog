@@ -52,7 +52,7 @@
       notice = $t('settings.savedNow');
       await load();
     } catch (err) {
-      error = errText(err);
+      error = /wrong app password/i.test(errText(err)) ? $t('remember.wrongPassword') : errText(err);
     } finally {
       busy = false;
     }

@@ -35,6 +35,8 @@ export function CallStreamStats(arg1:string):Promise<node.StreamStatsDTO>;
 
 export function CancelFile(arg1:string):Promise<void>;
 
+export function ChangePassword(arg1:string,arg2:string):Promise<void>;
+
 export function ChatAttachments(arg1:node.ChatRef):Promise<node.ChatAttachments>;
 
 export function ChatCategoriesSetup(arg1:node.ChatRef,arg2:string,arg3:string):Promise<Array<string>>;

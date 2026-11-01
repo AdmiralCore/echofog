@@ -58,6 +58,10 @@ export function CancelFile(arg1) {
   return window['go']['main']['App']['CancelFile'](arg1);
 }
 
+export function ChangePassword(arg1, arg2) {
+  return window['go']['main']['App']['ChangePassword'](arg1, arg2);
+}
+
 export function ChatAttachments(arg1) {
   return window['go']['main']['App']['ChatAttachments'](arg1);
 }
