@@ -318,15 +318,16 @@ function roster() {
 
 async function submitAnswer(sdp) {
   await call.pc.setRemoteDescription({ type: 'answer', sdp });
-  call.members = [SELF, ALICE, BOB, CAROL];
+  const others = PAIR ? [ALICE] : [ALICE, BOB, CAROL];
+  call.members = [SELF, ...others];
   emit('call:roster', roster());
-  [ALICE, BOB, CAROL].forEach((peer, i) => {
+  others.forEach((peer, i) => {
     call.slots['a' + i] = { kind: 'audio', peer, streamId: 'voice' };
     emit('call:media_slot', { slot: 'a' + i, kind: 'audio', peer, streamId: 'voice', active: true });
   });
-  setTimeout(() => announce('bob-cam', 'camera', 1280, 720, 30, '720p30'), 600);
+  if (!PAIR) setTimeout(() => announce('bob-cam', 'camera', 1280, 720, 30, '720p30'), 600);
   setTimeout(() => announce('alice-screen', 'screen', 2560, 1440, 60, '1440p60'), 1400);
-  setTimeout(() => {
+  if (!PAIR) setTimeout(() => {
     call.members = [...call.members, DAVE];
     emit('call:roster', roster());
   }, 2500);
@@ -779,6 +780,17 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
     return null;
   },
   RequestRelayChange: () => null,
+  // ?path=cgnat|router|remote|trying|checking|anonymous|proxy|settings|guard|ping|capped|direct: why the
+  // call goes through a relay (the badge on the call stage); &pair: a call of two instead of a group
+  GetCallPath: () => callPath(),
+  GetCallRelays: () => new Promise((r) => setTimeout(() => r(callRelays()), 700)),
+  SwitchCallRelay: (via) => new Promise((resolve, reject) => setTimeout(() => {
+    const list = callRelays().filter((x) => x.connected);
+    const next = via ? list.find((x) => x.peerId === via) : list.find((x) => x.peerId !== pathMock.relay);
+    if (!next) return reject(new Error('no other relay could reach the peer: both sides must be connected to a relay for it to carry a call'));
+    pathMock.relay = next.peerId;
+    resolve(null);
+  }, 800)),
   // ?testnet: the wallet is on the TON testnet, to see the test-coins notice on the money screens
   GetTonWallet: () => ({ address: 'UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', rawAddress: '0:0000…', network: new URLSearchParams(location.search).has('testnet') ? 'testnet' : 'mainnet', topUpLink: 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ', frozen: false }),
   GetTonBalance: () => ({ nano: '2483100000', ton: '2.4831', deployed: true, usdRate: 5.42, usdtAvailable: true, usdt: '25.5' }),
@@ -910,6 +922,52 @@ const relayStatus = () => {
     }),
   };
 };
+// how the call reaches the others (GetCallPath): Alice and Carol through a relay, Bob directly,
+// Dave through the others; the relays carry the price their advert asks (micro-USDT per MB)
+const PAIR = new URLSearchParams(location.search).has('pair');
+const pathMock = { relay: hex(12), scenario: new URLSearchParams(location.search).get('path') || 'cgnat' };
+// in the console: __path('router') shows another case without reloading
+window.__path = (scenario) => (pathMock.scenario = scenario);
+const CALL_RELAYS = [
+  { peerId: hex(12), addr: 'relay.example.org:4001', pingMs: 41, mine: true, guard: false },
+  { peerId: hex(13), addr: '203.0.113.24:443', pingMs: 66, mine: false, guard: true },
+  { peerId: hex(14), addr: '198.51.100.9:4001', pingMs: 128, mine: false, guard: false },
+];
+function callRelays() {
+  const known = new Set(CALL_RELAYS.map((r) => r.peerId));
+  const added = relayMock.settings.relays.map((x) => ({ addr: x.slice(0, x.lastIndexOf('/')), peerId: x.slice(x.lastIndexOf('/') + 1) }))
+    .filter((x) => !known.has(x.peerId) && Date.now() > (relayMock.connectedAt[x.peerId] || 0))
+    .map((x) => ({ ...x, pingMs: 57, mine: true, guard: false }));
+  const carrying = pathMock.scenario === 'direct' ? 0 : PAIR ? 1 : 2;
+  return [...CALL_RELAYS, ...added].map((r) => ({ ...r, connected: true, pricePerMb: 0, carrying: r.peerId === pathMock.relay ? carrying : 0 }))
+    .concat([{ peerId: hex(15), addr: '', connected: false, pingMs: 0, pricePerMb: 290, mine: false, guard: false, carrying: 0 },
+      { peerId: hex(16), addr: '', connected: false, pingMs: 0, pricePerMb: 880, mine: false, guard: false, carrying: 0 }]);
+}
+function callPath() {
+  if (!call.members.length) return { inCall: false, members: [] };
+  const PATH = pathMock.scenario;
+  const relay = callRelays().find((r) => r.peerId === pathMock.relay) || CALL_RELAYS[0];
+  const slow = PATH === 'ping' ? 290 : 0;
+  const reason = { ping: 'cgnat', capped: 'cgnat', direct: '' }[PATH] ?? PATH;
+  const links = { [ALICE]: 'relay', [BOB]: 'direct', [CAROL]: 'relay', [DAVE]: 'none' };
+  const theirs = { [ALICE]: 'symmetric', [BOB]: 'open', [CAROL]: 'cone', [DAVE]: '' };
+  const members = call.members.filter((p) => p !== SELF).map((p, i) => {
+    const link = PATH === 'direct' && links[p] === 'relay' ? 'direct' : links[p];
+    const pingMs = link === 'relay' ? slow + relay.pingMs + 7 + i * 4 : 0;
+    return { peer: p, link, relay: link === 'relay' ? relay.peerId : '', relayAddr: link === 'relay' ? relay.addr : '', pingMs, reason: link === 'relay' ? reason : '', theirNat: theirs[p] };
+  });
+  const relayed = members.filter((m) => m.link === 'relay');
+  const pingMs = Math.max(0, ...relayed.map((m) => m.pingMs));
+  const nat = { remote: 'public', router: 'cone', checking: 'unknown' }[PATH] || 'symmetric';
+  const capped = PATH === 'capped' && relayed.length;
+  return {
+    inCall: true, members, relayed: relayed.length, reason: relayed.length ? reason : '', pingMs,
+    hurts: !relayed.length ? '' : pingMs >= 250 ? 'ping' : capped ? 'capped' : '',
+    route: ['anonymous', 'settings', 'proxy'].includes(PATH) ? 'relay' : 'auto',
+    nat, mapped: false, carrierNat: ['cgnat', 'ping', 'capped'].includes(PATH), listenPort: PATH === 'router' ? 41641 : 0,
+    sendKbps: capped ? 3100 : 0, presetKbps: capped ? 8000 : 0,
+  };
+}
 // ?hidden=1 starts the mock as a hidden node with somebody already joined
 const randomSecret = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const accessMock = {
