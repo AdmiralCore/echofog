@@ -211,8 +211,12 @@ Everything here is free and end-to-end encrypted.
   The arrow next to the button opens *Stream quality*: up to 4K at 60 fps, or 1080p and 1440p at
   120 and 144 fps, but high quality needs a fast upload. The picture is most even when the frame
   rate divides your monitor's refresh rate: on a 144 Hz monitor stream 144, and for 60 or 120 fps
-  set the monitor to 120 Hz. While you share, the menu shows what really goes out and whether the
-  graphics card or the processor encodes it.
+  set the monitor to 120 Hz. The quality you pick is the most the stream goes out at: when your
+  connection carries less, it steps down to a lighter quality (fewer frames first, then fewer
+  pixels) rather than smearing the one you picked, and steps back up once the connection has held
+  for a while; when the people watching have 60 Hz screens, it sends 60 frames rather than 144
+  they could not show evenly. While you share, the menu shows what really goes out, why it is
+  lower than you picked, and whether the graphics card or the processor encodes it.
 - **The browser's capture.** Where the app's own capture cannot run (another system, an old
   Windows, no hardware encoder), or when you choose *Browser (Edge)* in that menu or in *Settings →
   Screen sharing*, the built-in browser captures the screen with its own picker, often at 30-50 fps.

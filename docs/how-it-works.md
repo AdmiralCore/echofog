@@ -248,6 +248,18 @@ the same H.264 as from the browser, so older versions watch too. The sound that 
 screen is everything the computer plays except EchoFog itself, which keeps the call out of it.
 Where this cannot run, the browser captures the screen as before.
 
+The rate control only lowers the bitrate, and a picture kept at 1440p144 on the 12 Mbit/s a link
+carries gets fewer bits per pixel than a 720p30 stream does, and looks worse. So when the bitrate
+falls well short of what the chosen preset needs, the app's own capture steps down the presets
+under it to the heaviest one the bitrate covers (1080p144 goes to 1080p60 on such a link), with a
+new encoder and a keyframe, and steps back up once the bitrate has covered a heavier preset for ten
+seconds; a step up that runs straight back into trouble doubles the wait for the next one. The
+frame rate follows the screens too: each viewer's subscription carries the refresh rate of the
+screen it watches on, and the broadcaster picks the rate most of them, and its own monitor, show
+evenly (144 fps on a 60 Hz screen moves in steps of two and three frames), not above the fastest
+of them. A hardware encoder's speed-for-quality setting and a larger rate buffer bought nothing
+measurable, so the encoder stays on the fast side, which leaves room for 144 fps.
+
 A relay circuit carries the call to a participant nobody can reach directly (both sides behind
 strict NATs, say), to a user across the border when guard mode is on, and to everyone in anonymous
 mode or with calls set to *Through a relay*. The call stays one call. Its sound and video cross the
