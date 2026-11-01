@@ -324,3 +324,29 @@ func TestProfileBackdropIsOptional(t *testing.T) {
 	require.NoError(t, json.Unmarshal(withOne, &old))
 	assert.Equal(t, 1000, old.UploadKbps)
 }
+
+// A viewer's screen rides in the stream manifest; a new one is a new epoch, so members that hold
+// the manifest take it, and the same one changes nothing.
+func TestStreamTree_ViewerScreenRateIsInTheManifest(t *testing.T) {
+	e := NewStreamTreeEngine()
+	bc, v := makePeerID(1), makePeerID(2)
+	_, err := e.RegisterStream("s", bc, "screen", 24000, PeerNodeProfile{PeerID: bc, UploadKbps: 50000})
+	require.NoError(t, err)
+	sm, err := e.Subscribe("s", v, PeerNodeProfile{PeerID: v, DisplayHz: 60})
+	require.NoError(t, err)
+	assert.Equal(t, 60, sm.Profiles[v].DisplayHz)
+
+	again, err := e.Subscribe("s", v, PeerNodeProfile{PeerID: v, DisplayHz: 60})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Epoch, again.Epoch, "the same screen is no news")
+
+	moved, err := e.Subscribe("s", v, PeerNodeProfile{PeerID: v, DisplayHz: 144})
+	require.NoError(t, err)
+	assert.Greater(t, moved.Epoch, sm.Epoch)
+	assert.Equal(t, 144, moved.Profiles[v].DisplayHz)
+	assert.Equal(t, []types.PeerID{v}, moved.Subscribers, "still one subscriber")
+
+	plain, err := json.Marshal(PeerNodeProfile{UploadKbps: 1000})
+	require.NoError(t, err)
+	assert.NotContains(t, string(plain), "display_hz", "a screen not known leaves the profile bytes as they were")
+}

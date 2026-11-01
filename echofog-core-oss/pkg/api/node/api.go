@@ -439,6 +439,15 @@ func (n *NodeApi) StopScreenShare(streamID string) error {
 	return n.node.CallManager.StopScreenShare(streamID)
 }
 
+// SetDisplayRate notes the refresh rate of the screen streams are watched on (0: not known), for
+// the broadcasters of the streams watched to pick a frame rate it shows evenly.
+func (n *NodeApi) SetDisplayRate(hz int) {
+	if n.node == nil || n.node.CallManager == nil {
+		return
+	}
+	n.node.CallManager.SetDisplayRate(hz)
+}
+
 // WatchStream subscribes to another peer's stream.
 func (n *NodeApi) WatchStream(streamID string) error {
 	if n.node == nil || n.node.CallManager == nil {

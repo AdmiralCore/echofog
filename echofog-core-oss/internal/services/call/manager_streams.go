@@ -169,6 +169,29 @@ func (m *CallManager) WatchStream(streamID string) error {
 	return nil
 }
 
+// SetDisplayRate notes the refresh rate of the screen streams are watched on (0: not known). It
+// goes with every subscription, and again to the streams already watched when it changes, so
+// their broadcasters can pick a frame rate this screen shows evenly.
+func (m *CallManager) SetDisplayRate(hz int) {
+	if hz < 0 || hz > tree.MaxDisplayHz {
+		hz = 0
+	}
+	m.mu.Lock()
+	room := m.activeRoom
+	if room == nil || room.MyProfile.DisplayHz == hz {
+		m.mu.Unlock()
+		return
+	}
+	m.logger.Info("Screen refresh rate for watched streams", "hz", hz, "watching", len(room.watching))
+	room.MyProfile.DisplayHz = hz
+	for id := range room.watching {
+		m.toCoordinatorLocked(room, signaling.ActionStreamSubscribe, signaling.StreamSubscribePayload{
+			StreamID: id, Subscriber: m.selfID, Profile: room.MyProfile,
+		})
+	}
+	m.unlockAndFlush()
+}
+
 // UnwatchStream cancels watching a stream.
 func (m *CallManager) UnwatchStream(streamID string) error {
 	m.mu.Lock()

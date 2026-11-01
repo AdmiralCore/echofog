@@ -23,7 +23,14 @@ type PeerNodeProfile struct {
 	// "waves", ...; empty for the plain one). Cosmetic: the UI draws the ones it knows and the plain
 	// look for the rest, and builds without the field drop it.
 	Backdrop string `json:"backdrop,omitempty"`
+	// DisplayHz is the refresh rate of the screen the member watches streams on (0: not known). It
+	// goes with its subscriptions, and a broadcaster picks a frame rate its viewers' screens show
+	// evenly; builds without the field drop it, and their viewers count as not known.
+	DisplayHz int `json:"display_hz,omitempty"`
 }
+
+// MaxDisplayHz bounds a screen's refresh rate taken from the network.
+const MaxDisplayHz = 1000
 
 // MaxBackdropLen bounds a backdrop name; it rides in every voice manifest.
 const MaxBackdropLen = 24

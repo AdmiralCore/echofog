@@ -1,6 +1,7 @@
 package call
 
 import (
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ type fakeEncoder struct {
 	mu        sync.Mutex
 	bitrates  []uint64
 	keyframes int
+	screens   []int // the viewers' refresh rates it was last given
 }
 
 func (f *fakeEncoder) SetBitrate(bps uint64) {
@@ -29,6 +31,20 @@ func (f *fakeEncoder) RequestKeyframe() {
 	f.mu.Lock()
 	f.keyframes++
 	f.mu.Unlock()
+}
+
+func (f *fakeEncoder) SetViewerRates(hz []int) {
+	f.mu.Lock()
+	f.screens = append([]int(nil), hz...)
+	f.mu.Unlock()
+}
+
+func (f *fakeEncoder) viewerRates() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]int(nil), f.screens...)
+	slices.Sort(out)
+	return out
 }
 
 func (f *fakeEncoder) counts() (int, int) {
@@ -97,4 +113,32 @@ func TestRoom_LocalEncoderGetsRateAndKeyframes(t *testing.T) {
 
 	require.NoError(t, b.cm.StopScreenShare("s"))
 	assert.False(t, preview(), "a stopped stream frees the preview track")
+}
+
+// The broadcaster's encoder learns the refresh rates of its viewers' screens: with the subscription,
+// and again when a viewer's screen changes while it watches. A viewer that does not say counts as 0.
+func TestRoom_LocalEncoderLearnsTheViewersScreens(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 4)
+	b := nodes[1]
+	enc := &fakeEncoder{}
+	b.cm.SetLocalEncoder(bridge.RoleScreen, enc)
+	q, _ := tree.QualityByID("1080p144")
+	require.NoError(t, b.cm.StartStream("s", "screen", q))
+
+	rates := map[int]int{0: 60, 2: 144} // node 3 is an older build
+	for i, nd := range nodes {
+		if nd == b {
+			continue
+		}
+		nd.cm.SetDisplayRate(rates[i])
+		require.NoError(t, nd.cm.WatchStream("s"))
+	}
+	require.Eventually(t, func() bool { return slices.Equal(enc.viewerRates(), []int{0, 60, 144}) },
+		5*time.Second, 20*time.Millisecond, "got %v", enc.viewerRates())
+
+	// the first viewer moves its window to a 120 Hz screen
+	nodes[0].cm.SetDisplayRate(120)
+	require.Eventually(t, func() bool { return slices.Equal(enc.viewerRates(), []int{0, 120, 144}) },
+		5*time.Second, 20*time.Millisecond, "got %v", enc.viewerRates())
 }

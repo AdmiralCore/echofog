@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/tree"
 )
 
 // The browser encoder only learns about the loopback to the bridge, which never congests. This
@@ -94,17 +95,29 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 		role string
 		bps  uint64
 		enc  LocalEncoder
+		hz   []int // the viewers' screens, for an encoder that follows them
 	}
 	var limits []limit
-	for _, ann := range room.localStreams {
+	for id, ann := range room.localStreams {
 		share := r.kbps * float64(ann.BitrateKbps) / float64(capKbps)
 		role := captureRole(ann.MediaType)
-		limits = append(limits, limit{role, uint64(share * 1000), m.encoders[role]})
+		l := limit{role, uint64(share * 1000), m.encoders[role], nil}
+		if _, ok := l.enc.(ViewerScreens); ok {
+			if sm, ok := room.StreamEngine.GetStreamManifest(id); ok {
+				for _, sub := range sm.Subscribers {
+					l.hz = append(l.hz, min(max(sm.Profiles[sub].DisplayHz, 0), tree.MaxDisplayHz))
+				}
+			}
+		}
+		limits = append(limits, l)
 	}
 	m.later(func() {
 		for _, l := range limits {
 			if l.enc != nil {
 				l.enc.SetBitrate(l.bps)
+				if v, ok := l.enc.(ViewerScreens); ok {
+					v.SetViewerRates(l.hz)
+				}
 				continue
 			}
 			_ = br.SetSendBitrate(l.role, l.bps) // the bridge logs failures, rate limited
