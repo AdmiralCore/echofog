@@ -60,6 +60,20 @@ type Stats struct {
 	PacerDelayMs  float64 `json:"pacerDelayMs"` // how long the last frame waited in the pacer
 }
 
+// After adds the totals of an earlier capture of the same stream (a quality change restarts the
+// encoder), so counters only grow and rates over the restart stay right.
+func (s Stats) After(earlier Stats) Stats {
+	s.Captured += earlier.Captured
+	s.Encoded += earlier.Encoded
+	s.Sent += earlier.Sent
+	s.Skipped += earlier.Skipped
+	s.Keyframes += earlier.Keyframes
+	s.Bytes += earlier.Bytes
+	s.Packets += earlier.Packets
+	s.EncodeSeconds += earlier.EncodeSeconds
+	return s
+}
+
 // minFrameGap is how long a still picture goes without a frame: a repeat of the last one keeps
 // viewers from counting the wait as a freeze, at the cost of a few hundred bytes.
 const minFrameGap = 100 * time.Millisecond

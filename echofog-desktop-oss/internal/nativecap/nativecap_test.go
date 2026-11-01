@@ -71,3 +71,13 @@ func TestFrameClockRepeatsAStillPicture(t *testing.T) {
 		t.Fatalf("sent %d frames of a still picture in 2 s, want about %d", sent, want)
 	}
 }
+
+// A quality change restarts the encoder; its totals carry on from the last ones.
+func TestStatsAfterKeepsTotalsGrowing(t *testing.T) {
+	first := Stats{Captured: 100, Encoded: 90, Sent: 90, Bytes: 1e6, EncodeSeconds: 0.4, Width: 1920}
+	second := Stats{Captured: 5, Encoded: 4, Sent: 3, Bytes: 2e4, EncodeSeconds: 0.02, Width: 2560}
+	got := second.After(first)
+	if got.Captured != 105 || got.Sent != 93 || got.Bytes != 1_020_000 || got.Width != 2560 {
+		t.Fatalf("got %+v", got)
+	}
+}

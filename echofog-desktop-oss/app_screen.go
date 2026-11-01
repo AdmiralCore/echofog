@@ -26,6 +26,7 @@ type nativeScreen struct {
 	mu       sync.Mutex
 	stream   *nativecap.Stream
 	audio    *nativecap.AudioCapture // the screen's sound, when shared
+	earlier  nativecap.Stats         // totals of the stream's captures before a quality change
 	streamID string
 	sourceID string
 	cursor   bool
@@ -208,6 +209,11 @@ func (a *App) stopNativeScreenLocked(why string) {
 	}
 	s.Stop()
 	st := s.Stats()
+	if why == "quality changed" {
+		a.screen.earlier = st.After(a.screen.earlier)
+	} else {
+		a.screen.earlier = nativecap.Stats{}
+	}
 	screenLog.Info("Native screen capture stopped", "stream", a.screen.streamID, "why", why, "captured", st.Captured,
 		"encoded", st.Encoded, "sent", st.Sent, "skipped", st.Skipped, "keyframes", st.Keyframes, "mbytes", st.Bytes/1_000_000)
 }
@@ -249,12 +255,12 @@ type NativeScreenStatsDTO struct {
 // NativeScreenStats returns the totals of the running capture (Active false: none runs).
 func (a *App) NativeScreenStats() NativeScreenStatsDTO {
 	a.screen.mu.Lock()
-	s, id := a.screen.stream, a.screen.streamID
+	s, id, earlier := a.screen.stream, a.screen.streamID, a.screen.earlier
 	a.screen.mu.Unlock()
 	if s == nil {
 		return NativeScreenStatsDTO{}
 	}
-	return NativeScreenStatsDTO{Active: true, StreamID: id, At: float64(time.Now().UnixMicro()) / 1000, Stats: s.Stats()}
+	return NativeScreenStatsDTO{Active: true, StreamID: id, At: float64(time.Now().UnixMicro()) / 1000, Stats: s.Stats().After(earlier)}
 }
 
 // sourceKind is what the log says of a source: its kind, not which window (titles are private).
