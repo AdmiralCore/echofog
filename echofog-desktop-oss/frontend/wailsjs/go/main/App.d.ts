@@ -6,6 +6,7 @@ import {main} from '../models';
 import {convlog} from '../models';
 import {contacts} from '../models';
 import {logging} from '../models';
+import {nativecap} from '../models';
 
 export function AcceptFile(arg1:string):Promise<dto.FileTransferDTO>;
 
@@ -187,6 +188,8 @@ export function GetRememberedUnlock():Promise<main.RememberedUnlockDTO>;
 
 export function GetSavedExits():Promise<Array<node.SavedExit>>;
 
+export function GetScreenPreviews(arg1:Array<string>):Promise<Record<string, string>>;
+
 export function GetSettings():Promise<node.SettingsDTO>;
 
 export function GetSharingStatus():Promise<node.SharingStatus>;
@@ -279,6 +282,8 @@ export function ListGroups():Promise<Array<node.GroupDTO>>;
 
 export function ListSavedMessages():Promise<Array<dto.SavedMessageDTO>>;
 
+export function ListScreenSources():Promise<Array<nativecap.Source>>;
+
 export function Lock():Promise<void>;
 
 export function LogUI(arg1:string,arg2:string,arg3:string,arg4:Record<string, any>):Promise<void>;
@@ -288,6 +293,10 @@ export function Login(arg1:string):Promise<void>;
 export function Logout():Promise<void>;
 
 export function MeasureUploadCapacity():Promise<number>;
+
+export function NativeScreenAvailable():Promise<main.NativeScreenInfo>;
+
+export function NativeScreenStats():Promise<main.NativeScreenStatsDTO>;
 
 export function OpenDownloadDir():Promise<void>;
 
@@ -409,6 +418,10 @@ export function StartGroupCall(arg1:string):Promise<node.GroupCall>;
 
 export function StartLocalDiscovery(arg1:string):Promise<boolean>;
 
+export function StartNativeScreen(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
+
+export function StartNativeScreenAudio():Promise<void>;
+
 export function StartNode():Promise<void>;
 
 export function StartRoomCall(arg1:string,arg2:string):Promise<node.GroupCall>;
@@ -424,6 +437,10 @@ export function StartVPN(arg1:string):Promise<void>;
 export function StartVPNVia(arg1:string):Promise<void>;
 
 export function StopDiscovery():Promise<void>;
+
+export function StopNativeScreen():Promise<void>;
+
+export function StopNativeScreenAudio():Promise<void>;
 
 export function StopScreenShare(arg1:string):Promise<void>;
 
@@ -450,6 +467,8 @@ export function UnpinGuard(arg1:string):Promise<void>;
 export function UnsaveMessage(arg1:string):Promise<void>;
 
 export function UnwatchStream(arg1:string):Promise<void>;
+
+export function UpdateNativeScreen(arg1:string):Promise<void>;
 
 export function UpdateStreamQuality(arg1:string,arg2:string):Promise<void>;
 

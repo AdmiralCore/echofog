@@ -201,15 +201,47 @@ const anonMock = { mode: 'relay', wallet: false, running: 'relay' };
 const qualities = [
   ['360p30', '360p 30 fps', 640, 360, 30, 1000], ['720p30', '720p 30 fps', 1280, 720, 30, 3000], ['720p60', '720p 60 fps', 1280, 720, 60, 6000],
   ['1080p30', '1080p 30 fps', 1920, 1080, 30, 7000], ['1080p60', '1080p 60 fps', 1920, 1080, 60, 12000], ['1080p120', '1080p 120 fps', 1920, 1080, 120, 20000],
-  ['1440p60', '1440p 60 fps', 2560, 1440, 60, 20000], ['1440p120', '1440p 120 fps', 2560, 1440, 120, 32000],
+  ['1080p144', '1080p 144 fps', 1920, 1080, 144, 24000], ['1440p60', '1440p 60 fps', 2560, 1440, 60, 20000], ['1440p120', '1440p 120 fps', 2560, 1440, 120, 32000],
+  ['1440p144', '1440p 144 fps', 2560, 1440, 144, 38000],
   ['2160p30', '4K 30 fps', 3840, 2160, 30, 20000], ['2160p60', '4K 60 fps', 3840, 2160, 60, 35000],
 ].map(([id, label, width, height, fps, bitrateKbps]) => ({ id, label, width, height, fps, bitrateKbps, codec: 'h264', fits: bitrateKbps <= 25000 }));
 
 // --- fake call core ---------------------------------------------------------------------------------
 const call = { pc: null, members: [], slots: {}, streams: [], painters: [], voices: [], audioCtx: null, timer: null };
+
+// the app's own screen capture: two screens and a few windows; the "Locked" window fails to start,
+// to see the fall back to the webview's capture
+const screenSources = [
+  { id: 'monitor:0', kind: 'monitor', title: 'DISPLAY1', width: 2560, height: 1440, refreshHz: 144, primary: true },
+  { id: 'monitor:1', kind: 'monitor', title: 'DISPLAY2', width: 1920, height: 1080, refreshHz: 60 },
+  { id: 'window:101', kind: 'window', title: 'Elden Ring', app: 'eldenring.exe', width: 2560, height: 1440 },
+  { id: 'window:102', kind: 'window', title: 'echofog – call.service.js', app: 'goland64.exe', width: 1920, height: 1026 },
+  { id: 'window:103', kind: 'window', title: 'Locked', app: 'secure.exe', width: 800, height: 600 },
+  { id: 'window:104', kind: 'window', title: 'YouTube Music', app: 'chrome.exe', width: 219, height: 30, minimized: true },
+];
+let nativeMock = null;
+function mockThumb(id, i) {
+  const c = document.createElement('canvas');
+  c.width = 320; c.height = 180;
+  const g = c.getContext('2d');
+  g.fillStyle = `hsl(${(i * 67) % 360},45%,32%)`; g.fillRect(0, 0, 320, 180);
+  g.fillStyle = 'rgba(255,255,255,.85)'; g.font = '20px sans-serif';
+  g.fillText(screenSources.find((s) => s.id === id)?.title || id, 14, 96);
+  g.fillText(new Date().toLocaleTimeString(), 14, 126);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+function nativeStats() {
+  if (!nativeMock) return { active: false };
+  const s = (Date.now() - nativeMock.at) / 1000;
+  return { active: true, streamId: nativeMock.id, at: Date.now(), captured: Math.floor(s * 138), encoded: Math.floor(s * 119.6), sent: Math.floor(s * 119.5),
+    skipped: Math.floor(s * 0.4), keyframes: 1 + Math.floor(s / 20), bytes: Math.floor(s * 4.1e6), packets: Math.floor(s * 3800), encodeSeconds: s * 119.6 * 0.0042,
+    width: 2560, height: 1440, sourceWidth: 2560, sourceHeight: 1440, bitrateKbps: 32000, encoder: 'NVIDIA H.264 Encoder MFT', adapter: 'NVIDIA GeForce RTX 3070', hardware: true, pacerDelayMs: 1.6 };
+}
 const scenes = {
   'alice-screen': { owner: ALICE, kind: 'screen', title: 'launch-checklist.md' },
   'bob-cam': { owner: BOB, kind: 'camera', title: 'Bob' },
+  // Alice shares her screen and her camera: her camera sits over her screen for the viewer
+  'alice-cam': { owner: ALICE, kind: 'camera', title: 'Alice' },
 };
 
 function painter(canvas) {
@@ -330,6 +362,7 @@ async function submitAnswer(sdp) {
     emit('call:media_slot', { slot: 'a' + i, kind: 'audio', peer, streamId: 'voice', active: true });
   });
   if (!PAIR) setTimeout(() => announce('bob-cam', 'camera', 1280, 720, 30, '720p30'), 600);
+  setTimeout(() => announce('alice-cam', 'camera', 1280, 720, 30, '720p30'), 1000);
   setTimeout(() => announce('alice-screen', 'screen', 2560, 1440, 60, '1440p60'), 1400);
   if (!PAIR) setTimeout(() => {
     call.members = [...call.members, DAVE];
@@ -806,6 +839,20 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
     return null;
   },
   StopScreenShare: (id) => { emit('call:stream_closed', { streamId: id }); return null; },
+  NativeScreenAvailable: () => ({ available: !new URLSearchParams(location.search).has('nonative'), reason: 'no hardware H.264 encoder' }),
+  ListScreenSources: () => screenSources,
+  StartNativeScreen: (id, src) => {
+    if (src === 'window:103') throw new Error('capture: CreateForWindow: E_ACCESSDENIED');
+    nativeMock = { id, at: Date.now() };
+    return null;
+  },
+  UpdateNativeScreen: () => null,
+  StopNativeScreen: () => { nativeMock = null; return null; },
+  StartNativeScreenAudio: () => null,
+  StopNativeScreenAudio: () => null,
+  // a thumbnail per source: its name on a color of its own
+  GetScreenPreviews: (ids) => Object.fromEntries((ids || []).map((id, i) => [id, mockThumb(id, i)])),
+  NativeScreenStats: () => nativeStats(),
   UpdateStreamQuality: () => null,
   SetVADState: () => null,
   LeaveRoom: () => leave(),

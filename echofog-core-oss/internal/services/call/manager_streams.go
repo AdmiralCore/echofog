@@ -136,6 +136,9 @@ func (m *CallManager) StopScreenShare(streamID string) error {
 		m.logger.Debug("Stream stop for a stream we do not broadcast", "stream", streamID)
 	}
 	delete(room.localStreams, streamID)
+	if br := room.Bridge; br != nil {
+		m.later(func() { br.ReleasePreview(streamID) })
+	}
 	for role, id := range room.localByRole {
 		if id == streamID {
 			delete(room.localByRole, role)

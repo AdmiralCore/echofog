@@ -2,6 +2,7 @@ package call
 
 import (
 	"errors"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
@@ -85,6 +86,56 @@ func (m *CallManager) PublishVideo(streamID string, payload []byte) error {
 		return ErrNoLocalStream
 	}
 	return room.Dispatcher.BroadcastLocalVideo(streamID, payload)
+}
+
+// LocalEncoder is a capture the app encodes itself instead of the webview (the desktop's own
+// screen capture): the rate control and the keyframe requests of its role go to it.
+type LocalEncoder interface {
+	SetBitrate(bps uint64)
+	RequestKeyframe()
+}
+
+// SetLocalEncoder hands the rate and keyframe requests of a capture role to enc; nil gives them
+// back to the webview's encoder.
+func (m *CallManager) SetLocalEncoder(role string, enc LocalEncoder) {
+	m.mu.Lock()
+	if enc == nil {
+		delete(m.encoders, role)
+	} else {
+		m.encoders[role] = enc
+	}
+	m.mu.Unlock()
+}
+
+// PublishLocalRTP sends one RTP packet of a capture encoded outside the webview, the way the
+// bridge sends the webview's. A screen also plays on the preview track: the webview has no capture
+// of its own to show the broadcaster then.
+func (m *CallManager) PublishLocalRTP(role string, packet []byte) {
+	m.onBridgeRTP(role, packet)
+	if role != bridge.RoleScreen {
+		return
+	}
+	m.mu.RLock()
+	var br *bridge.LocalMediaBridge
+	var streamID string
+	if room := m.activeRoom; room != nil {
+		br, streamID = room.Bridge, room.localByRole[role]
+	}
+	m.mu.RUnlock()
+	if br != nil && streamID != "" {
+		_ = br.PushLocalPreview(streamID, packet) // the bridge logs failures, rate limited
+	}
+}
+
+// previewKeyframe serves the preview's decoder, which asks for a keyframe when it starts.
+func (m *CallManager) previewKeyframe(streamID string) {
+	m.mu.Lock()
+	if room := m.activeRoom; room != nil {
+		if _, local := room.localStreams[streamID]; local {
+			m.handleKeyframeRequestLocked(room, streamID, time.Now())
+		}
+	}
+	m.unlockAndFlush()
 }
 
 // captureRole maps a stream media type onto the bridge transceiver that captures it.

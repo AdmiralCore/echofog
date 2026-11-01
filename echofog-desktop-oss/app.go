@@ -23,7 +23,8 @@ type App struct {
 	api            *api.NodeApi
 	activeProfile  string
 	profileService ProfileService
-	unlock         unlockState // "remember on this computer" (app_unlock.go)
+	unlock         unlockState  // "remember on this computer" (app_unlock.go)
+	screen         nativeScreen // the app's own screen capture, while it runs
 }
 
 // NewApp creates a new App facade instance.
@@ -140,6 +141,7 @@ func (a *App) Login(appPassword string) error {
 }
 
 func (a *App) Logout() {
+	a.StopNativeScreen() // before the lock: it asks for the node API
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -542,6 +544,7 @@ func (a *App) SubmitCallAnswer(sdpAnswer string) error {
 
 // LeaveRoom exits the call room and releases media loopback resources.
 func (a *App) LeaveRoom() error {
+	a.StopNativeScreen()
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return nil

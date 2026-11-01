@@ -176,6 +176,9 @@ type CallManager struct {
 
 	pending []func()
 
+	// encoders are captures encoded outside the webview, by capture role (see SetLocalEncoder)
+	encoders map[string]LocalEncoder
+
 	keyframesServed atomic.Uint64
 
 	// UI / Application Callbacks
@@ -251,6 +254,7 @@ func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID ty
 		sender:     sender,
 		signer:     signer,
 		connecting: make(map[types.PeerID]time.Time),
+		encoders:   make(map[string]LocalEncoder),
 	}
 }
 

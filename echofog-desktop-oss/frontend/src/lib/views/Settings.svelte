@@ -5,6 +5,7 @@
   import { closeChats } from '../stores/chats.js';
   import { panicClear, endCall } from '../stores/call.store.js';
   import { soundSettings, play } from '../sounds.js';
+  import { callService, callState } from '../services/call.service.js';
   import { displayName } from '../contact.js';
   import { theme } from '../stores/theme.js';
   import { backdropSettings } from '../stores/backdrops.js';
@@ -38,6 +39,7 @@
   let remembered = null; // this profile opens without its password: the start-with-Windows card says what that changes
 
   onMount(async () => {
+    callService.checkNativeScreen();
     try { settings = await App.GetSettings(); } catch (err) { error = errText(err); }
   });
 
@@ -182,6 +184,33 @@
       </div>
     </div>
 
+    <div class="card stack">
+      <div class="card-head">
+        <span class="ico"><Icon name="screenUp" size={19} /></span>
+        <div class="grow">
+          <h2>{$t('settings.screen')}</h2>
+          <p class="small muted">{$callState.nativeScreen.available ? $t('settings.screenHint') : $t('call.capture.unavailable', { reason: $callState.nativeScreen.reason || '…' })}</p>
+        </div>
+      </div>
+      <div class="seg" role="radiogroup" aria-label={$t('call.capture')}>
+        {#each ['native', 'webview'] as mode}
+          <button role="radio" class:active={($callState.nativeScreen.available ? $callState.screenCapture : 'webview') === mode}
+            aria-checked={($callState.nativeScreen.available ? $callState.screenCapture : 'webview') === mode}
+            disabled={mode === 'native' && !$callState.nativeScreen.available}
+            on:click={() => callService.setScreenCapture(mode)}>{$t('call.capture.' + mode)}</button>
+        {/each}
+      </div>
+      <p class="small muted">{$callState.screenCapture === 'webview' || !$callState.nativeScreen.available ? $t('call.capture.webviewHint') : $t('call.capture.nativeHint')}</p>
+      <label class="row opt" class:off={!$callState.nativeScreen.available || $callState.screenCapture !== 'native'}>
+        <span class="grow">
+          {$t('call.pick.sound')}
+          <span class="small muted block">{$t('call.pick.soundHint')}</span>
+        </span>
+        <input type="checkbox" class="switch" checked={$callState.screenSound} disabled={!$callState.nativeScreen.available || $callState.screenCapture !== 'native'}
+          on:change={(e) => callService.setScreenSound(e.target.checked)} />
+      </label>
+    </div>
+
     <PrivacyCard />
     <PasswordCard />
     <RememberCard on:state={(e) => (remembered = e.detail.enabled)} />
@@ -256,7 +285,7 @@
   .callbg { padding-top: 14px; border-top: 1px solid var(--line-soft); }
   .saved { animation: fade-up 0.3s var(--ease); }
   .vol { color: var(--faint); transition: opacity 0.2s; }
-  .vol.off { opacity: 0.5; }
+  .vol.off, .opt.off { opacity: 0.5; }
   .pct { width: 40px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .danger-card { border-color: color-mix(in srgb, var(--danger) 22%, transparent); }
 

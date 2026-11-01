@@ -7,6 +7,8 @@
   import StreamLogDialog from './lib/components/call/StreamLogDialog.svelte';
   import PaymentPassword from './lib/components/PaymentPassword.svelte';
   import { finishedLog } from './lib/services/streamlog.js';
+  import ScreenPicker from './lib/components/call/ScreenPicker.svelte';
+  import { callState } from './lib/services/call.service.js';
   import { t } from './lib/i18n/index.js';
 
   onMount(boot);
@@ -15,6 +17,7 @@
 {#if $screen === 'app'}
   <Shell />
   {#if $finishedLog}<StreamLogDialog log={$finishedLog} on:close={() => finishedLog.set(null)} />{/if}
+  {#if $callState.sourcePicker}<ScreenPicker sources={$callState.sourcePicker.sources} />{/if}
 {:else if $screen === 'loading'}
   <div class="loading">
     <span class="ring" aria-hidden="true"></span>

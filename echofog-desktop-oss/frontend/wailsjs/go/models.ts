@@ -688,6 +688,70 @@ export namespace main {
 	        this.os = source["os"];
 	    }
 	}
+	export class NativeScreenInfo {
+	    available: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeScreenInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class NativeScreenStatsDTO {
+	    active: boolean;
+	    streamId: string;
+	    at: number;
+	    captured: number;
+	    encoded: number;
+	    sent: number;
+	    skipped: number;
+	    keyframes: number;
+	    bytes: number;
+	    packets: number;
+	    encodeSeconds: number;
+	    width: number;
+	    height: number;
+	    sourceWidth: number;
+	    sourceHeight: number;
+	    bitrateKbps: number;
+	    encoder: string;
+	    adapter: string;
+	    hardware: boolean;
+	    pacerDelayMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeScreenStatsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.streamId = source["streamId"];
+	        this.at = source["at"];
+	        this.captured = source["captured"];
+	        this.encoded = source["encoded"];
+	        this.sent = source["sent"];
+	        this.skipped = source["skipped"];
+	        this.keyframes = source["keyframes"];
+	        this.bytes = source["bytes"];
+	        this.packets = source["packets"];
+	        this.encodeSeconds = source["encodeSeconds"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.sourceWidth = source["sourceWidth"];
+	        this.sourceHeight = source["sourceHeight"];
+	        this.bitrateKbps = source["bitrateKbps"];
+	        this.encoder = source["encoder"];
+	        this.adapter = source["adapter"];
+	        this.hardware = source["hardware"];
+	        this.pacerDelayMs = source["pacerDelayMs"];
+	    }
+	}
 	export class RememberedUnlockDTO {
 	    supported: boolean;
 	    enabled: boolean;
@@ -722,6 +786,39 @@ export namespace main {
 	        this.latest = source["latest"];
 	        this.url = source["url"];
 	        this.newer = source["newer"];
+	    }
+	}
+
+}
+
+export namespace nativecap {
+	
+	export class Source {
+	    id: string;
+	    kind: string;
+	    title: string;
+	    app?: string;
+	    width: number;
+	    height: number;
+	    refreshHz?: number;
+	    primary?: boolean;
+	    minimized?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Source(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.app = source["app"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.refreshHz = source["refreshHz"];
+	        this.primary = source["primary"];
+	        this.minimized = source["minimized"];
 	    }
 	}
 

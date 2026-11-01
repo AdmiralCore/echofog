@@ -49,6 +49,13 @@
     ];
     $: if (mode !== s.screenMode) callService.setScreenMode(mode);
 
+    let capture = $callState.screenCapture;
+    $: captureItems = [
+        { value: 'native', label: $t('call.capture.native'), hint: $t('call.capture.nativeHint') },
+        { value: 'webview', label: $t('call.capture.webview'), hint: $t('call.capture.webviewHint') },
+    ];
+    $: if (capture !== s.screenCapture) callService.setScreenCapture(capture);
+
     async function measure() {
         measuring = true;
         measureError = '';
@@ -197,6 +204,13 @@
     </Popover>
 {:else if menu === 'quality'}
     <Popover anchor={shareAnchor} width={320} label={$t('call.quality')} on:close={() => (menu = '')}>
+        {#if s.nativeScreen.available}
+            <p class="pop-title">{$t('call.capture')}</p>
+            <div class="mode"><Pills items={captureItems} bind:value={capture} label={$t('call.capture')} /></div>
+            <p class="pop-hint">{capture === 'native' ? $t('call.capture.nativeHint') : $t('call.capture.webviewHint')}</p>
+        {:else if s.nativeScreen.reason}
+            <p class="pop-hint">{$t('call.capture.unavailable', { reason: s.nativeScreen.reason })}</p>
+        {/if}
         <p class="pop-title">{$t('call.mode')}</p>
         <div class="mode"><Pills items={modeItems} bind:value={mode} label={$t('call.mode')} /></div>
         <p class="pop-hint">{mode === 'detail' ? $t('call.mode.detailHint') : $t('call.mode.motionHint')}</p>

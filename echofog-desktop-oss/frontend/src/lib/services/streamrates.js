@@ -16,8 +16,9 @@ export function rates(a, b, own) {
     const an = a.node || {}, bn = b.node || {};
     const r = {
         width: bb.width, height: bb.height, impl: bb.impl, hw: bb.hw, limit: bb.limit,
-        mbps: ((bb.bytes - ab.bytes) * 8) / dt / 1e6,
-        captureFps: Math.round(bb.captureFps || 0),
+        mbps: Math.max(0, ((bb.bytes - ab.bytes) * 8) / dt / 1e6), // a restarted sender counts from 0
+        // the app's own capture counts frames; the browser reports a rate
+        captureFps: bb.captured != null ? per(ab.captured, bb.captured) : Math.round(bb.captureFps || 0),
         encodedFps: per(ab.encoded, bb.encoded),
         sentFps: per(ab.frames, bb.frames),
         receivedFps: per(ab.frames, bb.frames),
