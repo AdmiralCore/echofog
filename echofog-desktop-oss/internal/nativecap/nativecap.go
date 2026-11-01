@@ -33,7 +33,8 @@ type Options struct {
 	Publish func(packet []byte)
 	// MTU is the largest RTP packet to make.
 	MTU int
-	// OnEnd is called once when the stream stops by itself (the window closed, the GPU was reset).
+	// OnEnd is called once, on a goroutine of its own, when the stream stops by itself (the window
+	// closed, the GPU was reset).
 	OnEnd func(err error)
 }
 
