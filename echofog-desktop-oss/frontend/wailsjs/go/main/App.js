@@ -38,6 +38,14 @@ export function AppVersion() {
   return window['go']['main']['App']['AppVersion']();
 }
 
+export function AuthorizePayment(arg1) {
+  return window['go']['main']['App']['AuthorizePayment'](arg1);
+}
+
+export function AutoUnlock() {
+  return window['go']['main']['App']['AutoUnlock']();
+}
+
 export function BlockPeer(arg1) {
   return window['go']['main']['App']['BlockPeer'](arg1);
 }
@@ -222,6 +230,10 @@ export function ForgetLastCrash() {
   return window['go']['main']['App']['ForgetLastCrash']();
 }
 
+export function ForgetUnlock() {
+  return window['go']['main']['App']['ForgetUnlock']();
+}
+
 export function GetAccessStatus() {
   return window['go']['main']['App']['GetAccessStatus']();
 }
@@ -324,6 +336,10 @@ export function GetProxySettings() {
 
 export function GetRelayStatus() {
   return window['go']['main']['App']['GetRelayStatus']();
+}
+
+export function GetRememberedUnlock() {
+  return window['go']['main']['App']['GetRememberedUnlock']();
 }
 
 export function GetSavedExits() {
@@ -514,6 +530,10 @@ export function ListSavedMessages() {
   return window['go']['main']['App']['ListSavedMessages']();
 }
 
+export function Lock() {
+  return window['go']['main']['App']['Lock']();
+}
+
 export function LogUI(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['LogUI'](arg1, arg2, arg3, arg4);
 }
@@ -580,6 +600,10 @@ export function Register(arg1, arg2) {
 
 export function ReleaseKillSwitch() {
   return window['go']['main']['App']['ReleaseKillSwitch']();
+}
+
+export function RememberUnlock(arg1, arg2) {
+  return window['go']['main']['App']['RememberUnlock'](arg1, arg2);
 }
 
 export function RemoveBootstrapNode(arg1) {

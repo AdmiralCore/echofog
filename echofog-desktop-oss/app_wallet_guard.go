@@ -70,8 +70,12 @@ func (a *App) confirmNative(title, message string) error {
 }
 
 // confirmSendAboveThreshold prompts for confirmation when amount of asset meets the asset's
-// threshold. Below it, it is a no-op.
+// threshold. Below it, it is a no-op. Every payment goes through here, so it is also where a
+// session that asks the password before payments asks it (app_unlock.go).
 func (a *App) confirmSendAboveThreshold(asset, amount, to string) error {
+	if err := a.checkPaymentPassword(); err != nil {
+		return err
+	}
 	key := strings.ToUpper(strings.TrimSpace(asset))
 	if !aboveThreshold(amount, thresholdFor(asset)) {
 		// a small send goes through unprompted, but small sends add up: many of them would drain
