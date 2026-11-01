@@ -50,6 +50,20 @@ Already have a phrase from another computer or a server node? Choose *Recovery p
 To delete a profile, press the bin next to it in the profile list. It asks for that profile's
 password, so a web page cannot wipe your data on its own.
 
+**Open without the password (Windows only).** Tick *Remember on this computer* when you unlock, or
+turn it on later in **Settings** → *Remember on this computer* (it asks the password once). EchoFog
+then opens this profile at start without asking, so a computer that shares an exit or a relay is
+back online by itself after a restart. The key is sealed for your Windows account: **everyone who
+can use that account, and any program running in it, can open EchoFog and read your messages.**
+*Ask the password before payments* (on by default) still asks the password before every payment
+from the wallet and every deposit into the vault. *Lock with the password* stops EchoFog and asks
+the password; the next start of the app opens without it again. Only one profile opens by itself.
+
+**Change the password.** **Settings** → *App password*: type the *Current password*, the new one
+twice and press *Change password*. Your identity, recovery phrase, wallet and messages stay as they
+were, and a remembered sign-in follows the new password. Other computers where you restored this
+identity keep their own passwords.
+
 ## 3. Turn on the VPN
 
 Open **Proxy** in the left menu. Pick how to choose an exit — an exit is another person's computer
@@ -167,12 +181,22 @@ Everything here is free and end-to-end encrypted.
   list.
 - **Files.** Send a file with the paper clip, or drop it on the chat. The other side presses
   *Download* or *Decline*; a picture shows a small preview at once. A file you posted in a group
-  stays on offer until you press *Stop sharing*. How it works: [Sending files](file-transfer.md).
+  stays on offer until you press *Stop sharing*. A space's settings (the gear next to its name) show
+  its five newest files; *Show all* lists the rest, with a search by name. How it works:
+  [Sending files](file-transfer.md).
 - **A contact's profile.** Click the name at the top of a chat. Click the name to rename them and
   the picture to set one (only you see both). Below are *Media*, *Files* and *Links* from your chat.
 - **Call.** In a chat, press the phone button for a voice call or the camera button for a video
   call. In a space with voice rooms you call by joining a room. *Deafen* turns off all sound for
-  you. Hover over a person's tile and press *More* to set their *User volume* or *Mute for me*.
+  you. Hover over a person's tile and press *More* to set their *User volume* or *Mute for me*. On
+  your own tile, *More* → *Tile background* picks an animated background that everyone sees while
+  your camera is off (also in **Settings** → *Tile background in calls*, where you can hide the
+  backgrounds other people chose).
+- **Direct or through a relay.** The top bar of a call says *direct* or *via relay*. Click it. For
+  a call through a relay it says why a direct link did not work out (most often the provider keeps
+  you behind its own NAT), what would help (a public IP from the provider, a forwarded port) and
+  which relays the call can use: switch to another one, or add your own by its link. Paid relays
+  are listed but cannot be bought yet.
 - **Watch a stream.** A stream someone shares starts for you only when you press *Watch stream*
   on it. Hover over its tile for *Stream stats*, *Switch relay* (when the stream lags or shows
   garbage), *Stop watching* and *Full screen*. When the person also has their camera on, it sits
@@ -243,6 +267,10 @@ can give you away. For a public group, use a separate profile from your personal
   Windows settings.
 - **Sounds.** The *Sounds* switch turns the app's sounds on or off; set their volume and listen to
   each one.
+- **Start with Windows.** *Start with Windows* starts EchoFog minimized when you sign in to Windows.
+  With *Remember on this computer* (see [First start](#2-first-start-profile-password-recovery-phrase))
+  it also opens your profile by itself, so an exit or a relay you share from home is back after a
+  reboot.
 - **Screen sharing.** *Fast (EchoFog)* captures your screen with the app itself, *Browser (Edge)*
   with the built-in browser (see [Share your screen](#6-chats-groups-and-calls)); the switch below
   says whether the fast capture shares the computer's sound.

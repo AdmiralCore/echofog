@@ -67,7 +67,7 @@ Between 20 and 27 October more work landed, part of it after problems found in o
   hidden by padding, and connections to an exit are rotated so none of them runs for an hour
   carrying gigabytes. Rotation never cuts a download in progress.
 - **Slow recovery when UDP is blocked.** QUIC and TCP are now tried together; with UDP dropped the
-  VPN worked after 0.8 s in the lab instead of 37 s.
+  VPN worked after 0.7 s in the lab instead of 37 s.
 - **Weaker password hashing than intended.** Identity keys are now protected with Argon2id at the
   RFC 9106 setting (t=3, 64 MiB, 4 lanes).
 
@@ -124,6 +124,9 @@ What EchoFog tries to protect:
   what looks like a browser opening an ordinary site over HTTP/3 or HTTPS. A probe that connects to a
   camouflage node without the right token sees the real site that node imitates.
 - **Data on your disk.** It is encrypted and opens only with your password or recovery phrase.
+  The exception is *Remember on this computer* (Windows): then the key is sealed for your Windows
+  account, and anyone who can use that account, or any program running in it, can open the
+  profile and read your messages. Payments still ask the password unless you switch that off.
 
 What it does **not** protect:
 
@@ -219,7 +222,7 @@ EchoFog — **экспериментальный** проект.
   добивкой, а соединения с выходом меняются, чтобы ни одно не жило час и не везло гигабайты.
   Начатую закачку ротация не обрывает.
 - **Долгое восстановление, когда закрыт UDP.** Теперь QUIC и TCP пробуются одновременно; при
-  закрытом UDP в лаборатории VPN заработал через 0,8 с вместо 37 с.
+  закрытом UDP в лаборатории VPN заработал через 0,7 с вместо 37 с.
 - **Хеширование пароля слабее задуманного.** Ключи личности теперь защищены Argon2id с параметрами
   из RFC 9106 (t=3, 64 МиБ, 4 потока).
 
@@ -280,6 +283,10 @@ EchoFog — **экспериментальный** проект.
   который подключается к ноде с маскировкой без правильного токена, видит настоящий сайт, под
   который она маскируется.
 - **Данные на диске.** Они зашифрованы и открываются только паролем или фразой восстановления.
+  Исключение — *Запомнить на этом компьютере* (Windows): тогда ключ защищён вашей учётной записью
+  Windows, и профиль откроет и сообщения прочитает любой, у кого есть доступ к этой учётной записи,
+  или любая программа, запущенная в ней. Платежи по-прежнему спрашивают пароль, если вы это не
+  выключили.
 
 Что он **не** защищает:
 

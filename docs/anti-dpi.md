@@ -108,7 +108,7 @@ by the set of the computer's interfaces and addresses, so moving from home Wi-Fi
 hotspot starts fresh. The memory is kept in `transport-memory.json` in the node's database folder
 and survives a restart.
 
-In the lab, with UDP dropped at the border, the first page through the VPN came after 0.8 s. Before
+In the lab, with UDP dropped at the border, the first page through the VPN came after 0.7 s. Before
 the race was added it took 37 s.
 
 ## Inside the tunnel: hiding the inner handshake

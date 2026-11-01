@@ -38,8 +38,8 @@ gcloud compute firewall-rules create echofog --allow udp:443,tcp:443
 ## 3. Скачайте код и настройте
 
 ```bash
-git clone https://github.com/AdmiralCore/EchoFog.git
-cd EchoFog/echofog-core-oss
+git clone https://github.com/AdmiralCore/echofog.git
+cd echofog/echofog-core-oss
 cp deploy/.env.example deploy/.env
 nano deploy/.env
 ```
@@ -221,7 +221,7 @@ ECHOFOG_CAMOUFLAGE_ADDR=<IP сайта>:443
 ## Обновление
 
 ```bash
-cd ~/EchoFog && git pull          # папка, куда вы клонировали на шаге 3; подтянет изменённый compose-файл
+cd ~/echofog && git pull          # папка, куда вы клонировали на шаге 3; подтянет изменённый compose-файл
 cd echofog-core-oss
 docker compose -f deploy/docker-compose.yml pull
 docker compose -f deploy/docker-compose.yml up -d
@@ -259,7 +259,7 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.build.yml u
 сети, — через несколько минут она узнает это заново:
 
 ```bash
-cd ~/EchoFog/echofog-core-oss
+cd ~/echofog/echofog-core-oss
 docker compose -f deploy/docker-compose.yml stop node
 docker compose -f deploy/docker-compose.yml run --rm node clean            # --dry-run, чтобы сначала посчитать
 docker compose -f deploy/docker-compose.yml up -d
