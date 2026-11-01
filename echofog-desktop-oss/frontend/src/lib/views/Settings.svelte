@@ -7,6 +7,10 @@
   import { soundSettings, play } from '../sounds.js';
   import { displayName } from '../contact.js';
   import { theme } from '../stores/theme.js';
+  import { backdropSettings } from '../stores/backdrops.js';
+  import { selfId } from '../stores/peers.store.js';
+  import { reducedMotion } from '../components/call/backdrops/loop.js';
+  import BackdropPicker from '../components/call/BackdropPicker.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import BootstrapCard from '../components/BootstrapCard.svelte';
@@ -119,6 +123,18 @@
           </button>
         {/each}
       </div>
+      <div class="stack tight callbg">
+        <div>
+          <h3>{$t('settings.callBg')}</h3>
+          <p class="small muted">{$t('settings.callBgHint')}</p>
+        </div>
+        <BackdropPicker peer={$selfId} />
+        {#if $reducedMotion}<p class="small muted">{$t('settings.callBgStill')}</p>{/if}
+        <label class="row opt">
+          <span class="grow">{$t('settings.callBgOthers')}</span>
+          <input type="checkbox" class="switch" bind:checked={$backdropSettings.others} />
+        </label>
+      </div>
     </div>
 
     <div class="card stack">
@@ -230,6 +246,7 @@
   .confirm { width: 130px; font-family: var(--mono); letter-spacing: 0.1em; }
   .block { display: block; margin-top: 2px; }
   .opt { align-items: center; }
+  .callbg { padding-top: 14px; border-top: 1px solid var(--line-soft); }
   .saved { animation: fade-up 0.3s var(--ease); }
   .vol { color: var(--faint); transition: opacity 0.2s; }
   .vol.off { opacity: 0.5; }

@@ -666,6 +666,10 @@ export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
 }
 
+export function SetCallBackdrop(arg1) {
+  return window['go']['main']['App']['SetCallBackdrop'](arg1);
+}
+
 export function SetContactProfile(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetContactProfile'](arg1, arg2, arg3);
 }

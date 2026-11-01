@@ -633,3 +633,12 @@ func (a *App) SetUploadCapacity(kbps int) error {
 	}
 	return nodeAPI.SetUploadCapacity(kbps)
 }
+
+// SetCallBackdrop picks the animated background the others see on our call tile ("" for the plain one).
+func (a *App) SetCallBackdrop(name string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errors.New("node API not initialized")
+	}
+	return nodeAPI.SetCallBackdrop(name)
+}
