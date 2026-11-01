@@ -87,6 +87,29 @@ func (m *CallManager) PublishVideo(streamID string, payload []byte) error {
 	return room.Dispatcher.BroadcastLocalVideo(streamID, payload)
 }
 
+// LocalEncoder is a capture the app encodes itself instead of the webview (the desktop's own
+// screen capture): the rate control and the keyframe requests of its role go to it.
+type LocalEncoder interface {
+	SetBitrate(bps uint64)
+	RequestKeyframe()
+}
+
+// SetLocalEncoder hands the rate and keyframe requests of a capture role to enc; nil gives them
+// back to the webview's encoder.
+func (m *CallManager) SetLocalEncoder(role string, enc LocalEncoder) {
+	m.mu.Lock()
+	if enc == nil {
+		delete(m.encoders, role)
+	} else {
+		m.encoders[role] = enc
+	}
+	m.mu.Unlock()
+}
+
+// PublishLocalRTP sends one RTP packet of a capture encoded outside the webview, the way the
+// bridge sends the webview's.
+func (m *CallManager) PublishLocalRTP(role string, packet []byte) { m.onBridgeRTP(role, packet) }
+
 // captureRole maps a stream media type onto the bridge transceiver that captures it.
 func captureRole(mediaType string) string {
 	if mediaType == "camera" {

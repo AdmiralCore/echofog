@@ -409,9 +409,12 @@ func (m *CallManager) handleKeyframeRequestLocked(room *ActiveRoomState, streamI
 	room.keyframeServed[streamID] = now
 	m.keyframesServed.Add(1)
 	m.debugOnce("kf-serve:"+streamID, "Serving keyframe request for our stream", "stream", streamID, "role", role)
-	br, cb := room.Bridge, m.OnKeyframeRequest
+	br, cb, enc := room.Bridge, m.OnKeyframeRequest, m.encoders[role]
 	m.later(func() {
-		if br != nil {
+		switch {
+		case enc != nil:
+			enc.RequestKeyframe()
+		case br != nil:
 			_ = br.RequestKeyframe(role) // the bridge logs a failure
 		}
 		if cb != nil {

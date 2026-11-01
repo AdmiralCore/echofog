@@ -181,6 +181,12 @@ func SealOverhead(streamIDLen int) int {
 	return fixedHeaderLen + fragFieldsLen + streamIDLen + gcmNonceLen + gcmTagLen
 }
 
+// VideoUnitBudget is the largest video unit (one RTP packet) of a stream with this ID length that
+// travels as a single fragment, with the room FEC keeps beside it.
+func VideoUnitBudget(streamIDLen int) int {
+	return fragmentPayload(streamIDLen) - fecReserve - gcmNonceLen - gcmTagLen
+}
+
 // OpenUnit authenticates and decrypts a reassembled unit; hdr supplies the shared header fields.
 func OpenUnit(hdr *MediaPacket, ciphertext []byte, key []byte) ([]byte, error) {
 	return DecryptPayload(ciphertext, key, hdr.unitHeader())

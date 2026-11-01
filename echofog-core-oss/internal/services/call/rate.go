@@ -7,7 +7,8 @@ import (
 )
 
 // The browser encoder only learns about the loopback to the bridge, which never congests. This
-// loop watches the real path (outbox drops and queue depth) and caps the encoder with REMB: a
+// loop watches the real path (outbox drops and queue depth) and caps the encoder with REMB (an
+// encoder outside the webview, through SetLocalEncoder): a
 // little when the path starts to back up, more when it is full, then it waits for the cut to show
 // before cutting again, and climbs back only after the path has stayed clean for a while, never
 // above the preset. A jumpy rate makes a jumpy picture: each cut costs the encoder frames or
@@ -78,14 +79,20 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 	type limit struct {
 		role string
 		bps  uint64
+		enc  LocalEncoder
 	}
 	var limits []limit
 	for _, ann := range room.localStreams {
 		share := r.kbps * float64(ann.BitrateKbps) / float64(capKbps)
-		limits = append(limits, limit{captureRole(ann.MediaType), uint64(share * 1000)})
+		role := captureRole(ann.MediaType)
+		limits = append(limits, limit{role, uint64(share * 1000), m.encoders[role]})
 	}
 	m.later(func() {
 		for _, l := range limits {
+			if l.enc != nil {
+				l.enc.SetBitrate(l.bps)
+				continue
+			}
 			_ = br.SetSendBitrate(l.role, l.bps) // the bridge logs failures, rate limited
 		}
 	})
