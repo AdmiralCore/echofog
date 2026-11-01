@@ -44,7 +44,7 @@ type Stats struct {
 	Captured      uint64  `json:"captured"`      // frames the capture delivered
 	Encoded       uint64  `json:"encoded"`       // frames the encoder produced
 	Sent          uint64  `json:"sent"`          // frames whose packets all went out
-	Skipped       uint64  `json:"skipped"`       // frames dropped because the encoder was still busy
+	Skipped       uint64  `json:"skipped"`       // times a frame found the encoder busy and waited for it
 	Keyframes     uint64  `json:"keyframes"`     // IDR frames made
 	Bytes         uint64  `json:"bytes"`         // RTP bytes sent
 	Packets       uint64  `json:"packets"`       // RTP packets sent

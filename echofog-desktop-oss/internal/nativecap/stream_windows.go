@@ -221,11 +221,17 @@ func (s *Stream) run(ready chan<- error) {
 	defer beat.Stop()
 	check := time.NewTicker(time.Second)
 	defer check.Stop()
+	// a frame that finds the encoder busy waits for it to ask for the next one
+	waiting := false
 	send := func(now time.Time) {
-		if err := s.send(d, conv, c, now.Sub(start)); err != nil {
+		sent, err := s.send(d, conv, c, now.Sub(start))
+		if err != nil {
 			endErr = err
 		}
-		clock.sent(now)
+		waiting = !sent
+		if sent {
+			clock.sent(now)
+		}
 	}
 	for endErr == nil {
 		select {
@@ -265,6 +271,10 @@ func (s *Stream) run(ready chan<- error) {
 				send(now)
 			}
 			beat.Reset(time.Until(clock.next))
+		case <-enc.asked:
+			if waiting {
+				send(time.Now())
+			}
 		case <-check.C:
 			switch {
 			case c.gone():
@@ -313,9 +323,9 @@ func (s *Stream) freeSlots() {
 	}
 }
 
-// send converts the newest picture into a free NV12 frame and hands it to the encoder; when the
-// encoder is still busy the frame is skipped, and the picture goes with the next beat.
-func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Duration) error {
+// send converts the newest picture into a free NV12 frame and hands it to the encoder. It reports
+// false when the encoder is still busy: the picture goes as soon as the encoder asks for one.
+func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Duration) (bool, error) {
 	s.mu.Lock()
 	slot := -1
 	for i := range s.slots {
@@ -327,13 +337,13 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Durati
 	if slot < 0 || !s.enc.ready() {
 		s.st.Skipped++
 		s.mu.Unlock()
-		return nil
+		return false, nil
 	}
 	s.slots[slot].busy, s.slots[slot].pts = true, pts
 	sl := s.slots[slot]
 	s.mu.Unlock()
 	if err := conv.convert(c.latest, c.contentW, c.contentH, sl.view); err != nil {
-		return fmt.Errorf("video processor: %w", err)
+		return false, fmt.Errorf("video processor: %w", err)
 	}
 	d.flush()
 	key := s.wantKey.Swap(false)
@@ -341,9 +351,9 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Durati
 		s.mu.Lock()
 		s.slots[slot].busy = false
 		s.mu.Unlock()
-		return fmt.Errorf("encoder: %w", err)
+		return false, fmt.Errorf("encoder: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // onFrame runs on the encoder's goroutine for every frame that comes out.

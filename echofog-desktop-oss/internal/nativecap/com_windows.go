@@ -205,9 +205,12 @@ func activationFactory(class string, iid *windows.GUID) (unsafe.Pointer, error) 
 // multithreaded apartment, where every object of this package lives. The returned func undoes it.
 func mtaThread() (func(), error) {
 	runtime.LockOSThread()
-	hr := procCall(procRoInitialize, 1) // RO_INIT_MULTITHREADED
-	// S_FALSE: already initialized; RPC_E_CHANGED_MODE: an STA thread, which a locked new
-	// goroutine thread never is
+	hr := procCall(procRoInitialize, 1) // RO_INIT_MULTITHREADED; S_FALSE: it already was
+	if hr == hresult(-2147417850) {     // RPC_E_CHANGED_MODE
+		// Some library made this thread single-threaded. It stays locked, so it ends with the
+		// goroutine instead of going back to the scheduler.
+		return nil, hr.err("RoInitialize (the thread is single-threaded)")
+	}
 	if hr < 0 {
 		runtime.UnlockOSThread()
 		return nil, hr.err("RoInitialize")

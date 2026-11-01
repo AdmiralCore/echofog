@@ -179,7 +179,8 @@ type mfEncoder struct {
 	width, height int
 	fps           int
 
-	credits  atomic.Int32 // inputs the encoder asked for and did not get yet
+	credits  atomic.Int32  // inputs the encoder asked for and did not get yet
+	asked    chan struct{} // wakes whoever waits for the encoder to want a frame
 	bitrate  atomic.Uint32
 	mu       sync.Mutex
 	inFlight map[int64]time.Time // pts (100 ns) -> when it went in
@@ -244,7 +245,8 @@ func newMFEncoder(d *device, width, height, fps, bitrateKbps int, out func(encod
 }
 
 func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fps, bitrateKbps int, out func(encodedFrame)) (*mfEncoder, error) {
-	e := &mfEncoder{name: name, width: width, height: height, fps: fps, out: out, inFlight: make(map[int64]time.Time), done: make(chan struct{})}
+	e := &mfEncoder{name: name, width: width, height: height, fps: fps, out: out, inFlight: make(map[int64]time.Time),
+		asked: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := comCall(act, activateObject, uintptr(unsafe.Pointer(&iidIMFTransform)), uintptr(unsafe.Pointer(&e.mft))).err("ActivateObject"); err != nil {
 		return nil, err
 	}
@@ -459,6 +461,10 @@ func (e *mfEncoder) eventLoop() {
 		switch typ {
 		case meTransformNeedInput:
 			e.credits.Add(1)
+			select {
+			case e.asked <- struct{}{}:
+			default:
+			}
 		case meTransformHaveOutput:
 			if err := e.output(); err != nil {
 				e.fail(err)
