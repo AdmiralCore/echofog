@@ -152,6 +152,12 @@
   $: chatFiles = Object.values($transfers)
     .filter((x) => (group ? x.group === conv.groupId : x.peer === conv.peerId && !x.group))
     .sort((a, b) => b.created - a.created);
+  // the newest few; all of them (and a search by name) on request, not a list to scroll through
+  const FILES_SHOWN = 5;
+  let allFiles = false;
+  let fileQuery = '';
+  $: fq = fileQuery.trim().toLowerCase();
+  $: shownFiles = !allFiles ? chatFiles.slice(0, FILES_SHOWN) : fq ? chatFiles.filter((f) => (f.name || '').toLowerCase().includes(fq)) : chatFiles;
 </script>
 
 <Modal on={windowed} wide width={560} label={$t('chats.spaceSettings')} on:close={() => dispatch('close')}>
@@ -183,8 +189,11 @@
   <div class="block">
     <div class="eyebrow">{$t('files.title', { n: chatFiles.length })}</div>
     {#if chatFiles.length}
+      {#if allFiles && chatFiles.length > FILES_SHOWN}
+        <input class="file-find" type="search" bind:value={fileQuery} placeholder={$t('files.find')} aria-label={$t('files.find')} />
+      {/if}
       <div class="files">
-        {#each chatFiles as f (f.id)}
+        {#each shownFiles as f (f.id)}
           <div class="frow">
             <Icon name={f.dir === 'out' ? 'upload' : 'download'} size={15} />
             <div class="grow fmeta">
@@ -195,7 +204,13 @@
             {#if f.path && f.state !== 'failed' && (f.dir === 'out' || f.state === 'done')}<button class="icon tiny" title={$t('files.showInFolder')} aria-label={$t('files.showInFolder')} on:click={() => showInFolder(f.id)}><Icon name="folder" size={14} /></button>{/if}
           </div>
         {/each}
+        {#if allFiles && fq && !shownFiles.length}<p class="small faint">{$t('files.notFound')}</p>{/if}
       </div>
+      {#if chatFiles.length > FILES_SHOWN}
+        <button class="ghost small more-files" on:click={() => { allFiles = !allFiles; fileQuery = ''; }}>
+          {allFiles ? $t('files.showLess') : $t('files.showAll', { n: chatFiles.length })}
+        </button>
+      {/if}
     {:else}
       <p class="small faint">{$t('files.none')}</p>
     {/if}
@@ -294,6 +309,8 @@
 {/if}
 
 <style>
+  .file-find { width: 100%; margin: 0 0 8px; }
+  .more-files { margin-top: 6px; }
   .role-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .role-select {
     appearance: none; -webkit-appearance: none; width: auto; height: 28px; padding: 0 26px 0 12px; border-radius: 99px;
