@@ -497,8 +497,9 @@ func (f *convsFacade) onChange(ch convlog.Change) {
 		}
 	}
 	conv := f.conversation(ch.Conv, ch.Meta)
+	// a membership change (someone let in, a role given) changes who may do what everywhere in it
 	out := ConvChange{Ref: refOf(ch.Conv), Conversation: conv,
-		Messages: f.withCan(ch.Conv, f.withStates(ch.Conv, ch.Messages), &conv), Reload: ch.Rebuilt, Rev: ch.Rev}
+		Messages: f.withCan(ch.Conv, f.withStates(ch.Conv, ch.Messages), &conv), Reload: ch.Rebuilt || len(ch.Members) > 0, Rev: ch.Rev}
 	f.n.convsH.mu.Lock()
 	subs := append(([]func(ConvChange))(nil), f.n.convsH.subs...)
 	f.n.convsH.mu.Unlock()

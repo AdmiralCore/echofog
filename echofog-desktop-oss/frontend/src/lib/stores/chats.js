@@ -221,6 +221,7 @@ async function changed(ev) {
   }
   const msgs = (ev.messages || []).map(norm);
   const open = get(activeId) === id;
+  const couldSend = row.can?.send;
   const arrived = d.last && !d.last.mine && (fresh || d.last.id !== row.lastId);
   if (arrived && !get(muted).has(id) && msgs.some((m) => m.id === d.last.id && !m.system)) play('receive', { quiet: inCall() });
   patch(id, (c) => ({ ...c, ...rowOf(d), unread: open && get(focused) ? 0 : d.unread || 0 }));
@@ -230,6 +231,8 @@ async function changed(ev) {
     await reloadOpen();
     return;
   }
+  // we may write now, or no longer (let in by the group's log): the channels' rights follow
+  if (row.kind === 'group' && rowOf(d).can?.send !== couldSend) loadChannels();
 
   const here = get(activeChannel);
   messages.update((list) => msgs.filter((m) => !m.thread && m.channel === here).reduce((l, m) => upsert(l, m, before, get(hasOlder)), list));
@@ -548,6 +551,7 @@ export async function removeChannel(id) {
 async function reloadOpen() {
   await reload();
   loadPins();
+  loadChannels(); // what each channel lets us do
   const th = get(thread);
   if (th) openThread(th.root);
 }
