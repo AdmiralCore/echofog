@@ -64,10 +64,12 @@ type Stream struct {
 	wantKey atomic.Bool
 	bitrate atomic.Uint64
 
-	enc   *mfEncoder
-	pacer *pacer
-	pk    *packetizer
-	tsAt  uint32 // RTP timestamp of pts 0
+	enc     *mfEncoder
+	pacer   *pacer
+	pk      *packetizer
+	tsAt    uint32        // RTP timestamp of pts 0
+	base    time.Duration // qpcNow at the start: pts 0
+	lastPts time.Duration
 
 	mu    sync.Mutex
 	slots [nv12Slots]nv12Slot
@@ -216,6 +218,7 @@ func (s *Stream) run(ready chan<- error) {
 	ready <- nil
 
 	start := time.Now()
+	s.base = qpcNow()
 	clock := newFrameClock(s.o.FPS, start)
 	beat := time.NewTimer(time.Until(clock.next))
 	defer beat.Stop()
@@ -224,7 +227,7 @@ func (s *Stream) run(ready chan<- error) {
 	// a frame that finds the encoder busy waits for it to ask for the next one
 	waiting := false
 	send := func(now time.Time) {
-		sent, err := s.send(d, conv, c, now.Sub(start))
+		sent, err := s.send(d, conv, c)
 		if err != nil {
 			endErr = err
 		}
@@ -323,9 +326,23 @@ func (s *Stream) freeSlots() {
 	}
 }
 
+// ptsOf is the time of the frame that goes out now: when its picture was drawn, on the capture's
+// clock, so a viewer plays frames at the pace the screen showed them. The time a frame went to the
+// encoder strays from that by a few milliseconds (the beat, waits for the encoder), which at 144
+// fps is most of a frame: the viewer's player took such frames for late, threw ~15 of them away
+// every few seconds and asked for a keyframe. A repeat of a still picture takes the time it goes
+// out. Always after the last one.
+func (s *Stream) ptsOf(c *wgcCapture) time.Duration {
+	at := qpcNow()
+	if c.latestNew {
+		at = c.latestAt
+	}
+	return max(at-s.base, s.lastPts+100*time.Microsecond)
+}
+
 // send converts the newest picture into a free NV12 frame and hands it to the encoder. It reports
 // false when the encoder is still busy: the picture goes as soon as the encoder asks for one.
-func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Duration) (bool, error) {
+func (s *Stream) send(d *device, conv *converter, c *wgcCapture) (bool, error) {
 	s.mu.Lock()
 	slot := -1
 	for i := range s.slots {
@@ -339,6 +356,7 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Durati
 		s.mu.Unlock()
 		return false, nil
 	}
+	pts := s.ptsOf(c)
 	s.slots[slot].busy, s.slots[slot].pts = true, pts
 	sl := s.slots[slot]
 	s.mu.Unlock()
@@ -353,6 +371,7 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture, pts time.Durati
 		s.mu.Unlock()
 		return false, fmt.Errorf("encoder: %w", err)
 	}
+	s.lastPts, c.latestNew = pts, false
 	return true, nil
 }
 

@@ -45,6 +45,7 @@ const (
 	poolRemoveFrameArrived  = 9
 	poolCreateSession       = 10
 	frameGetSurface         = 6
+	frameGetSystemTime      = 7
 	frameGetContentSize     = 8
 	sessionStart            = 6
 	sessionStaticsSupported = 6
@@ -155,6 +156,8 @@ type wgcCapture struct {
 	// latest holds a copy of the newest frame, of the picture's size
 	latest             unsafe.Pointer
 	contentW, contentH uint32
+	latestAt           time.Duration // when the picture in latest was drawn (qpcNow's clock)
+	latestNew          bool          // latest holds a picture not sent yet
 }
 
 func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.Duration, buffers int) (*wgcCapture, error) {
@@ -307,6 +310,13 @@ func (c *wgcCapture) take(frame unsafe.Pointer) (copied, resized bool, err error
 		return false, false, nil // a frame of the old pool, after a resize
 	}
 	c.d.copyResource(c.latest, tex)
+	var at int64 // TimeSpan: 100 ns on the performance counter's clock
+	if comCall(frame, frameGetSystemTime, uintptr(unsafe.Pointer(&at))) >= 0 && at > 0 {
+		c.latestAt = time.Duration(at) * 100
+	} else {
+		c.latestAt = qpcNow()
+	}
+	c.latestNew = true
 	release(tex)
 	return true, false, nil
 }

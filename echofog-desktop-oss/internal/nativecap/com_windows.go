@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -20,6 +21,7 @@ var (
 	modMFPlat  = windows.NewLazySystemDLL("mfplat.dll")
 	modCombase = windows.NewLazySystemDLL("combase.dll")
 	modOle32   = windows.NewLazySystemDLL("ole32.dll")
+	modKernel  = windows.NewLazySystemDLL("kernel32.dll")
 
 	procD3D11CreateDevice                    = modD3D11.NewProc("D3D11CreateDevice")
 	procCreateDirect3D11DeviceFromDXGIDevice = modD3D11.NewProc("CreateDirect3D11DeviceFromDXGIDevice")
@@ -28,6 +30,8 @@ var (
 	procWindowsCreateString                  = modCombase.NewProc("WindowsCreateString")
 	procWindowsDeleteString                  = modCombase.NewProc("WindowsDeleteString")
 	procCoTaskMemFree                        = modOle32.NewProc("CoTaskMemFree")
+	procQueryPerformanceCounter              = modKernel.NewProc("QueryPerformanceCounter")
+	procQueryPerformanceFrequency            = modKernel.NewProc("QueryPerformanceFrequency")
 	procMFStartup                            = modMFPlat.NewProc("MFStartup")
 	procMFTEnumEx                            = modMFPlat.NewProc("MFTEnumEx")
 	procMFCreateMediaType                    = modMFPlat.NewProc("MFCreateMediaType")
@@ -199,6 +203,19 @@ func activationFactory(class string, iid *windows.GUID) (unsafe.Pointer, error) 
 		return nil, err
 	}
 	return f, nil
+}
+
+var qpcFreq = func() int64 {
+	var f int64
+	procQueryPerformanceFrequency.Call(uintptr(unsafe.Pointer(&f)))
+	return max(f, 1)
+}()
+
+// qpcNow is the system's performance counter as a duration: the clock capture times are on.
+func qpcNow() time.Duration {
+	var c int64
+	procQueryPerformanceCounter.Call(uintptr(unsafe.Pointer(&c)))
+	return time.Duration(c/qpcFreq)*time.Second + time.Duration(c%qpcFreq)*time.Second/time.Duration(qpcFreq)
 }
 
 // mtaThread pins the calling goroutine to its OS thread and joins that thread to the

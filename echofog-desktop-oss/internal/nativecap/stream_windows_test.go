@@ -5,6 +5,7 @@ package nativecap
 import (
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +52,21 @@ func TestStreamBench(t *testing.T) {
 	var lastSeq uint16
 	var lost, maxPacket int
 	first := true
+	// per frame (RTP timestamp): whether it carried parameter sets, an IDR, or both; parameter
+	// sets in a frame that is not an IDR make some hardware decoders give up until the next one
+	var frameTS uint32
+	var frameSets, frameIDR bool
+	var setsOutsideIDR, idrFrames int
+	deltas := map[int]int{} // RTP timestamp steps between frames, in tenths of a millisecond
+	endFrame := func() {
+		if frameSets && !frameIDR {
+			setsOutsideIDR++
+		}
+		if frameIDR {
+			idrFrames++
+		}
+		frameSets, frameIDR = false, false
+	}
 	publish := func(b []byte) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -63,9 +79,21 @@ func TestStreamBench(t *testing.T) {
 		if !first && p.SequenceNumber != lastSeq+1 {
 			lost++
 		}
-		first, lastSeq = false, p.SequenceNumber
-		if out != nil {
-			if nal, err := depack.Unmarshal(p.Payload); err == nil && len(nal) > 0 {
+		if !first && p.Timestamp != frameTS {
+			endFrame()
+			deltas[int(int64(p.Timestamp-frameTS)*10000/90000)]++
+		}
+		first, lastSeq, frameTS = false, p.SequenceNumber, p.Timestamp
+		if nal, err := depack.Unmarshal(p.Payload); err == nil && len(nal) > 0 {
+			for _, n := range annexBNALs(nal) {
+				switch n[0] & 0x1f {
+				case 7, 8:
+					frameSets = true
+				case 5:
+					frameIDR = true
+				}
+			}
+			if out != nil {
 				_, _ = out.Write(nal)
 			}
 		}
@@ -80,6 +108,23 @@ func TestStreamBench(t *testing.T) {
 	t.Logf("%s on %s: %dx%d from %dx%d, %d fps, %d kbps", st.Encoder, st.Adapter, st.Width, st.Height, st.SourceWidth, st.SourceHeight, fps, kbps)
 	prev := st
 	var keyAt uint64
+	if os.Getenv("ECHOFOG_STREAM_BENCH_FLAP") != "" {
+		// the rate control moves the bitrate every half second on a busy link
+		go func() {
+			for i := 0; ; i++ {
+				select {
+				case <-ended:
+					return
+				case <-time.After(500 * time.Millisecond):
+				}
+				f := uint64(1000)
+				if i%2 == 0 {
+					f = 800
+				}
+				s.SetBitrate(uint64(kbps) * f)
+			}
+		}()
+	}
 	for sec := 1; sec <= seconds; sec++ {
 		select {
 		case err := <-ended:
@@ -107,7 +152,24 @@ func TestStreamBench(t *testing.T) {
 	final := s.Stats()
 	mu.Lock()
 	defer mu.Unlock()
-	t.Logf("largest packet %d bytes, %d sequence gaps, %d keyframes", maxPacket, lost, final.Keyframes)
+	endFrame()
+	steps := make([]int, 0, len(deltas))
+	for d := range deltas {
+		steps = append(steps, d)
+	}
+	sort.Ints(steps)
+	line := ""
+	for _, d := range steps {
+		if deltas[d] >= 5 {
+			line += fmt.Sprintf(" %.1fms×%d", float64(d)/10, deltas[d])
+		}
+	}
+	t.Logf("frame time steps (5 or more):%s", line)
+	t.Logf("largest packet %d bytes, %d sequence gaps, %d keyframes (%d IDR frames on the wire), %d frames with SPS/PPS but no IDR",
+		maxPacket, lost, final.Keyframes, idrFrames, setsOutsideIDR)
+	if setsOutsideIDR > 0 {
+		t.Errorf("parameter sets outside a keyframe")
+	}
 	if maxPacket > 1100 || lost > 0 {
 		t.Fatalf("packets over the MTU or out of sequence")
 	}
