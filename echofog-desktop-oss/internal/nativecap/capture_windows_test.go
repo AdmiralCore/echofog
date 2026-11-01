@@ -4,13 +4,19 @@ package nativecap
 
 import (
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,14 +97,14 @@ func TestCaptureBench(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := newWGCCapture(d, tg, true, minIv)
+	c, err := newWGCCapture(d, tg, true, minIv, poolBuffers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.close()
 	outW, outH := outputSize(int(c.contentW), int(c.contentH), maxW, maxH)
-	t.Logf("source %dx%d, output %dx%d, target %d fps, MinUpdateInterval %v", c.contentW, c.contentH, outW, outH, fps, minIv)
-	conv, err := newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH))
+	t.Logf("source %dx%d, output %dx%d, target %d fps, MinUpdateInterval %v, no frame %v", c.contentW, c.contentH, outW, outH, fps, minIv, c.borderless)
+	conv, err := newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +155,7 @@ func TestCaptureBench(t *testing.T) {
 			}
 			if resized {
 				conv.close()
-				if conv, err = newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH)); err != nil {
+				if conv, err = newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH), false); err != nil {
 					t.Fatal(err)
 				}
 				if view2, err := conv.outputView(nv12); err == nil {
@@ -219,4 +225,110 @@ func envInt(name string, def int) int {
 		return v
 	}
 	return def
+}
+
+// TestPreviewsBench asks for thumbnails of every source that is not minimized for a few seconds
+// and reports how many came and how large they are.
+//
+//	ECHOFOG_PREVIEW_BENCH=1 go test -run TestPreviewsBench -v ./internal/nativecap/
+//
+// _DIR saves them there as JPEG files.
+func TestPreviewsBench(t *testing.T) {
+	if os.Getenv("ECHOFOG_PREVIEW_BENCH") == "" {
+		t.Skip("set ECHOFOG_PREVIEW_BENCH=1")
+	}
+	var ids []string
+	for _, s := range Sources() {
+		if !s.Minimized {
+			ids = append(ids, s.ID)
+		}
+	}
+	var imgs map[string]string
+	start := time.Now()
+	for time.Since(start) < 3*time.Second {
+		t0 := time.Now()
+		imgs = Previews(ids)
+		if d := time.Since(t0); d > 20*time.Millisecond {
+			t.Errorf("a poll took %v", d)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	Previews(nil)
+	total := 0
+	for id, img := range imgs {
+		total += len(img)
+		t.Logf("%-16s %6d bytes", id, len(img))
+		if dir := os.Getenv("ECHOFOG_PREVIEW_BENCH_DIR"); dir != "" {
+			raw, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(img, "data:image/jpeg;base64,"))
+			_ = os.WriteFile(filepath.Join(dir, strings.ReplaceAll(id, ":", "_")+".jpg"), raw, 0o600)
+		}
+	}
+	t.Logf("%d of %d sources have a thumbnail, %d KB in one poll", len(imgs), min(len(ids), maxPreviews), total/1024)
+	if len(imgs) == 0 {
+		t.Fatal("no thumbnails")
+	}
+}
+
+// TestAudioBench captures the computer's sound for five seconds. For its first two a child of this
+// process plays a quiet tone, which must not be heard: the capture leaves out this process tree,
+// as the app leaves out the call its webview plays. Whatever another program plays shows in the
+// RMS of each half second; with _EXTERNAL=1 something has to (start a tone two seconds in).
+//
+//	ECHOFOG_AUDIO_BENCH=path	ofplay.exe go test -run TestAudioBench -v ./internal/nativecap/
+func TestAudioBench(t *testing.T) {
+	ffplay := os.Getenv("ECHOFOG_AUDIO_BENCH")
+	if ffplay == "" {
+		t.Skip("set ECHOFOG_AUDIO_BENCH to ffplay.exe")
+	}
+	const window = AudioRate / 2 * audioBytesPerFrame // half a second
+	var mu sync.Mutex
+	var total int
+	var sums []float64
+	a, err := StartAudio(func(pcm []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := 0; i+1 < len(pcm); i += 2 {
+			w := (total + i) / window
+			for len(sums) <= w {
+				sums = append(sums, 0)
+			}
+			v := float64(int16(binary.LittleEndian.Uint16(pcm[i:])))
+			sums[w] += v * v
+		}
+		total += len(pcm)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := exec.Command(ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-af", "volume=0.003")
+	if err := own.Start(); err != nil {
+		a.Stop()
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Second)
+	_ = own.Wait()
+	a.Stop()
+	mu.Lock()
+	defer mu.Unlock()
+	var line string
+	var ownMax, laterMax float64
+	for w, sum := range sums {
+		rms := math.Sqrt(sum / (window / 2))
+		line += fmt.Sprintf(" %.0f", rms)
+		if w < 4 {
+			ownMax = max(ownMax, rms)
+		} else {
+			laterMax = max(laterMax, rms)
+		}
+	}
+	t.Logf("captured %.1f s; RMS each half second:%s", float64(total)/AudioRate/audioBytesPerFrame, line)
+	if total < AudioRate*audioBytesPerFrame*4 {
+		t.Fatal("less sound than time went by")
+	}
+	if ownMax > 5 {
+		t.Fatalf("our own child's tone was captured (RMS %.0f)", ownMax)
+	}
+	if os.Getenv("ECHOFOG_AUDIO_BENCH_EXTERNAL") != "" && laterMax < 5 {
+		t.Fatal("the other program's tone was not captured")
+	}
 }

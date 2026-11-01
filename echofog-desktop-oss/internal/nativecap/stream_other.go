@@ -22,3 +22,12 @@ func (s *Stream) RequestKeyframe()      {}
 func (s *Stream) Stats() Stats          { return Stats{} }
 func (s *Stream) Stop()                 {}
 func (s *Stream) Done() <-chan struct{} { return nil }
+
+// Previews has no thumbnails outside Windows.
+func Previews([]string) map[string]string { return nil }
+
+// AudioCapture is the capture of the computer's sound; there is none outside Windows.
+type AudioCapture struct{}
+
+func StartAudio(func([]byte)) (*AudioCapture, error) { return nil, errNotWindows }
+func (a *AudioCapture) Stop()                        {}

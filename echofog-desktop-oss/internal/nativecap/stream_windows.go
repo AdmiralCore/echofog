@@ -174,14 +174,14 @@ func (s *Stream) run(ready chan<- error) {
 		endErr = err
 		return
 	}
-	c, err := newWGCCapture(d, tg, s.o.Cursor, time.Millisecond)
+	c, err := newWGCCapture(d, tg, s.o.Cursor, time.Millisecond, poolBuffers)
 	if err != nil {
 		endErr = fmt.Errorf("capture: %w", err)
 		return
 	}
 	defer c.close()
 	outW, outH := outputSize(int(c.contentW), int(c.contentH), s.o.Width, s.o.Height)
-	conv, err := newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH))
+	conv, err := newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH), false)
 	if err != nil {
 		endErr = fmt.Errorf("video processor: %w", err)
 		return
@@ -246,7 +246,7 @@ func (s *Stream) run(ready chan<- error) {
 			if resized {
 				// the window changed size: the picture keeps the stream's size, scaled to fit
 				conv.close()
-				if conv, err = newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH)); err != nil {
+				if conv, err = newConverter(d, uint32(c.poolW), uint32(c.poolH), uint32(outW), uint32(outH), false); err != nil {
 					endErr = fmt.Errorf("video processor: %w", err)
 					break
 				}

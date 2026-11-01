@@ -151,6 +151,9 @@ func windowSource(h windows.HWND, self uint32, shell windows.HWND) (Source, bool
 	var r rect // in real pixels, without the invisible resize borders
 	_ = windows.DwmGetWindowAttribute(h, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, unsafe.Pointer(&r), uint32(unsafe.Sizeof(r)))
 	minimized, _, _ := procIsIconic.Call(uintptr(h))
+	if minimized == 0 && (r.Right <= r.Left || r.Bottom <= r.Top) {
+		return Source{}, false // a window with no area: a hidden host of something else
+	}
 	return Source{
 		ID: "window:" + strconv.FormatUint(uint64(h), 10), Kind: "window", Title: windows.UTF16ToString(buf),
 		App: processName(pid), Width: int(r.Right - r.Left), Height: int(r.Bottom - r.Top), Minimized: minimized != 0,

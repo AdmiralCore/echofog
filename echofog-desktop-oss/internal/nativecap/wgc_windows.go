@@ -24,6 +24,9 @@ var (
 	iidFramePoolStatics2          = guid("589b103f-6bbc-5df5-a991-02e28b3b66d5")
 	iidSessionStatics             = guid("2224a540-5974-49aa-b232-0882536f4cb5")
 	iidSession2                   = guid("2c39ae40-7d2e-5044-804e-8b6799d4cf9e")
+	iidSession3                   = guid("f2cdd966-22ae-5ea1-9596-3a289344c3be")
+	iidCaptureAccessStatics       = guid("743ed370-06ec-5040-a58a-901f0f757095")
+	iidIAsyncInfo                 = guid("00000036-0000-0000-c000-000000000046")
 	iidSession5                   = guid("67c0ea62-1f85-5061-925a-239be0ac09cb")
 	iidSession6                   = guid("d7419236-be20-5e9f-bcd6-c4e98fd6afdc")
 	// TypedEventHandler<Direct3D11CaptureFramePool, Object>, a parameterized IID (see pinterfaceIID)
@@ -45,10 +48,50 @@ const (
 	frameGetContentSize     = 8
 	sessionStart            = 6
 	sessionStaticsSupported = 6
-	putBoolOrInterval       = 7 // put_IsCursorCaptureEnabled, put_MinUpdateInterval, put_IncludeSecondaryWindows
+	putBoolOrInterval       = 7 // put_IsCursorCaptureEnabled, put_IsBorderRequired, put_MinUpdateInterval, put_IncludeSecondaryWindows
 	closableClose           = 6
+	accessRequestAsync      = 6
+	asyncInfoGetStatus      = 7
 )
 
+var (
+	borderlessOnce sync.Once
+	borderless     bool
+)
+
+// allowBorderless asks once whether captures may go without the yellow frame Windows draws around
+// what is captured (Windows 11; an unpackaged app is granted it without asking the user). The frame
+// shows on the user's own screen for as long as the stream runs, which they found in the way.
+func allowBorderless() bool {
+	borderlessOnce.Do(func() {
+		statics, err := activationFactory("Windows.Graphics.Capture.GraphicsCaptureAccess", &iidCaptureAccessStatics)
+		if err != nil {
+			return // older Windows: the frame cannot be turned off
+		}
+		defer release(statics)
+		var op unsafe.Pointer
+		if comCall(statics, accessRequestAsync, 0 /* GraphicsCaptureAccessKind.Borderless */, uintptr(unsafe.Pointer(&op))) < 0 {
+			return
+		}
+		defer release(op)
+		info, err := queryInterface(op, &iidIAsyncInfo, "IAsyncInfo")
+		if err != nil {
+			return
+		}
+		defer release(info)
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			var status int32
+			comCall(info, asyncInfoGetStatus, uintptr(unsafe.Pointer(&status)))
+			if status != 0 { // Started
+				borderless = status == 1 // Completed; the session says itself whether it is allowed
+				return
+			}
+		}
+	})
+	return borderless
+}
+
+// poolBuffers is how many frames a stream's capture may hold; a thumbnail needs one.
 const poolBuffers = 3
 
 // captureSupported reports whether this Windows has Windows.Graphics.Capture.
@@ -106,14 +149,16 @@ type wgcCapture struct {
 	handler             *frameHandler
 	poolW, poolH        int32
 	hwnd                windows.HWND // window captures: closing the window ends the capture
+	borderless          bool         // Windows draws no frame around the captured source
+	buffers             uintptr      // frames the pool holds
 
 	// latest holds a copy of the newest frame, of the picture's size
 	latest             unsafe.Pointer
 	contentW, contentH uint32
 }
 
-func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.Duration) (*wgcCapture, error) {
-	c := &wgcCapture{d: d, handler: &frameHandler{vtbl: &frameHandlerVtbl, arrived: make(chan struct{}, 1)}, hwnd: src.hwnd}
+func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.Duration, buffers int) (*wgcCapture, error) {
+	c := &wgcCapture{d: d, handler: &frameHandler{vtbl: &frameHandlerVtbl, arrived: make(chan struct{}, 1)}, hwnd: src.hwnd, buffers: uintptr(buffers)}
 	fail := func(err error) (*wgcCapture, error) { c.close(); return nil, err }
 
 	interop, err := activationFactory("Windows.Graphics.Capture.GraphicsCaptureItem", &iidGraphicsCaptureItemInterop)
@@ -143,7 +188,7 @@ func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.D
 	if err != nil {
 		return fail(err)
 	}
-	err = comCall(statics, poolStaticsCreateFree, uintptr(d.winrt), dxgiFormatB8G8R8A8, poolBuffers, packSize(size[0], size[1]), uintptr(unsafe.Pointer(&c.pool))).err("CreateFreeThreaded")
+	err = comCall(statics, poolStaticsCreateFree, uintptr(d.winrt), dxgiFormatB8G8R8A8, c.buffers, packSize(size[0], size[1]), uintptr(unsafe.Pointer(&c.pool))).err("CreateFreeThreaded")
 	release(statics)
 	if err != nil {
 		return fail(err)
@@ -166,6 +211,12 @@ func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.D
 	if s5, err := queryInterface(c.session, &iidSession5, "IGraphicsCaptureSession5"); err == nil {
 		comCall(s5, putBoolOrInterval, uintptr(minInterval/100)) // TimeSpan counts 100 ns
 		release(s5)
+	}
+	if allowBorderless() {
+		if s3, err := queryInterface(c.session, &iidSession3, "IGraphicsCaptureSession3"); err == nil {
+			c.borderless = comCall(s3, putBoolOrInterval, 0) >= 0
+			release(s3)
+		}
 	}
 	if src.hwnd != 0 {
 		// menus and dialogs of the shared window belong in the picture
@@ -228,7 +279,7 @@ func (c *wgcCapture) take(frame unsafe.Pointer) (copied, resized bool, err error
 		return false, false, nil
 	}
 	if size[0] != c.poolW || size[1] != c.poolH {
-		if err := comCall(c.pool, poolRecreate, uintptr(c.d.winrt), dxgiFormatB8G8R8A8, poolBuffers, packSize(size[0], size[1])).err("Recreate"); err != nil {
+		if err := comCall(c.pool, poolRecreate, uintptr(c.d.winrt), dxgiFormatB8G8R8A8, c.buffers, packSize(size[0], size[1])).err("Recreate"); err != nil {
 			return false, false, err
 		}
 		c.poolW, c.poolH = size[0], size[1]

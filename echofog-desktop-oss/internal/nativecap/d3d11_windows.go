@@ -215,7 +215,8 @@ func (d *device) readPixels(tex unsafe.Pointer) ([]byte, int, int, error) {
 }
 
 // converter turns captured BGRA frames into NV12 frames of a fixed size on the GPU's video
-// engine: scaled down to fit, the rest black, BT.709 limited range as H.264 expects.
+// engine: scaled down to fit, the rest black, BT.709 limited range as H.264 expects. With rgb it
+// makes BGRA frames instead (thumbnails).
 type converter struct {
 	d          *device
 	enum, proc unsafe.Pointer // ID3D11VideoProcessorEnumerator, ID3D11VideoProcessor
@@ -231,7 +232,7 @@ const (
 	colorSpaceBT709Studio = 1<<2 | 1<<4 // BT.709 matrix, 16-235
 )
 
-func newConverter(d *device, inW, inH, outW, outH uint32) (*converter, error) {
+func newConverter(d *device, inW, inH, outW, outH uint32, rgb bool) (*converter, error) {
 	c := &converter{d: d, inW: inW, inH: inH, outW: outW, outH: outH, inputs: make(map[unsafe.Pointer]unsafe.Pointer)}
 	desc := struct {
 		InputFrameFormat          uint32
@@ -249,6 +250,9 @@ func newConverter(d *device, inW, inH, outW, outH uint32) (*converter, error) {
 		return nil, err
 	}
 	in, out := uint32(colorSpaceRGBFull), uint32(colorSpaceBT709Studio)
+	if rgb {
+		out = colorSpaceRGBFull
+	}
 	comCall(d.vctx, vctxSetStreamColorSpace, uintptr(c.proc), 0, uintptr(unsafe.Pointer(&in)))
 	comCall(d.vctx, vctxSetOutputColorSpace, uintptr(c.proc), uintptr(unsafe.Pointer(&out)))
 	comCall(d.vctx, vctxSetStreamFrameFormat, uintptr(c.proc), 0, 0) // progressive
