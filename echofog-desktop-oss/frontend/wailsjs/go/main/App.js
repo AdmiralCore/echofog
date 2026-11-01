@@ -258,6 +258,14 @@ export function GetBootstrapNodes() {
   return window['go']['main']['App']['GetBootstrapNodes']();
 }
 
+export function GetCallPath() {
+  return window['go']['main']['App']['GetCallPath']();
+}
+
+export function GetCallRelays() {
+  return window['go']['main']['App']['GetCallRelays']();
+}
+
 export function GetCallRoster() {
   return window['go']['main']['App']['GetCallRoster']();
 }
@@ -844,6 +852,10 @@ export function StopVPNForSwitch() {
 
 export function SubmitCallAnswer(arg1) {
   return window['go']['main']['App']['SubmitCallAnswer'](arg1);
+}
+
+export function SwitchCallRelay(arg1) {
+  return window['go']['main']['App']['SwitchCallRelay'](arg1);
 }
 
 export function TakeStartLink() {

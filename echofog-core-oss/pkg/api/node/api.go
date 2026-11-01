@@ -40,6 +40,8 @@ type NodeApi struct {
 	geoOnce sync.Once
 	geoLoc  *geoLocator // where exits are, looked up online
 
+	callPath callPathSeen // when members of the current call were first seen through a relay
+
 	relayChosen bool // the user picked the relay settings; false: the defaults are in effect
 	startPort   int  // the listen port the node was configured with when it started
 

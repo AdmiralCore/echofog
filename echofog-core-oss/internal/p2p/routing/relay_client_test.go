@@ -296,3 +296,27 @@ func TestRelayClient_CircuitData_BeforeTheOpenIsDelivered(t *testing.T) {
 		t.Fatalf("only the other relay's frame should wait (until it expires): %+v", rc.early)
 	}
 }
+
+// A pong counts only as the answer to a ping we sent, and the round trip it gives is smoothed.
+func TestClientCircuit_RoundTripFromPongs(t *testing.T) {
+	c := &ClientCircuit{ID: 1, CreatedAt: time.Now()}
+	now := time.Now()
+	c.notePong(now)
+	if c.RTT() != 0 {
+		t.Fatalf("a pong with no ping out must not count, got %v", c.RTT())
+	}
+	c.pingAt.Store(now.Add(-80 * time.Millisecond).UnixNano())
+	c.notePong(now)
+	if c.RTT() != 80*time.Millisecond {
+		t.Fatalf("the first answer is the round trip, got %v", c.RTT())
+	}
+	c.notePong(now.Add(time.Second))
+	if c.RTT() != 80*time.Millisecond {
+		t.Fatalf("a second pong for the same ping must not count, got %v", c.RTT())
+	}
+	c.pingAt.Store(now.UnixNano())
+	c.notePong(now.Add(40 * time.Millisecond))
+	if c.RTT() != 70*time.Millisecond {
+		t.Fatalf("later answers are smoothed (80*3+40)/4, got %v", c.RTT())
+	}
+}

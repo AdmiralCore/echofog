@@ -6,6 +6,7 @@
     import StreamTile from './StreamTile.svelte';
     import ParticipantMenu from './ParticipantMenu.svelte';
     import CallControls from './CallControls.svelte';
+    import CallPathBadge from './CallPathBadge.svelte';
     import Icon from '../ui/Icon.svelte';
     import { t } from '../../i18n/index.js';
 
@@ -75,6 +76,7 @@
             <span class="hidden sm:flex items-center gap-1 text-xs text-[#949ba4] ml-2" title={$t('call.e2eTitle')}>
                 <Icon name="lock" size={13} /> {$t('call.e2e')}
             </span>
+            <CallPathBadge />
         </div>
         <div class="flex items-center gap-1">
             <button class="hdr-btn" title={maximized ? $t('call.showChat') : $t('call.focusCall')} aria-label={maximized ? $t('call.showChat') : $t('call.focusCall')} on:click={() => (maximized = !maximized)}>
