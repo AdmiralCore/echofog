@@ -72,8 +72,9 @@ function freshState(prev = {}) {
     // rate (games, films), 'detail' its sharpness (text, slides)
     screenMode: prev.screenMode || loadPrefs().screenMode || 'motion',
     // how a screen is captured: 'native' by the app itself on the GPU (Windows; up to the screen's
-    // refresh rate, no sound yet), 'webview' by the webview (slower, with sound)
-    screenCapture: prev.screenCapture || loadPrefs().screenCapture || 'native',
+    // refresh rate), 'webview' by the webview and its picker (slower). Remembered under a new key:
+    // the first builds chose the webview for its sound, which the app's own capture now has too.
+    screenCapture: prev.screenCapture || loadPrefs().screenCaptureMode || 'native',
     nativeScreen: prev.nativeScreen || { available: false, reason: '' },
     screenNative: false,   // our shared screen goes through the app's own capture
     screenSound: prev.screenSound ?? loadPrefs().screenSound ?? true, // the app's own capture shares the computer's sound
@@ -546,7 +547,7 @@ class CallService {
   setScreenCapture(mode) {
     mode = mode === 'webview' ? 'webview' : 'native';
     callState.update((s) => ({ ...s, screenCapture: mode }));
-    savePrefs({ screenCapture: mode });
+    savePrefs({ screenCaptureMode: mode });
   }
 
   /** Whether the app's own capture shares the computer's sound with the screen; remembered. */
