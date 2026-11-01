@@ -242,6 +242,10 @@ export function GetAnonymity() {
   return window['go']['main']['App']['GetAnonymity']();
 }
 
+export function GetAutostart() {
+  return window['go']['main']['App']['GetAutostart']();
+}
+
 export function GetBlockedPeers() {
   return window['go']['main']['App']['GetBlockedPeers']();
 }
@@ -688,6 +692,10 @@ export function SetAnonymity(arg1, arg2) {
 
 export function SetAutoPay(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAutoPay'](arg1, arg2, arg3);
+}
+
+export function SetAutostart(arg1) {
+  return window['go']['main']['App']['SetAutostart'](arg1);
 }
 
 export function SetContactProfile(arg1, arg2, arg3) {

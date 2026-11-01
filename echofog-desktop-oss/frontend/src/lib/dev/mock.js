@@ -389,6 +389,12 @@ const rememberMock = (() => {
   const v = new URLSearchParams(location.search).get('remembered');
   return { arg: v, enabled: v === '', askPayments: true, gate: false, tried: false };
 })();
+// "start with Windows": ?autostart starts it on; ?autostart=other has Windows start another copy,
+// ?autostart=blocked has it switched off in the Windows startup apps
+const autostartMock = (() => {
+  const v = new URLSearchParams(location.search).get('autostart');
+  return { on: v === '' || v === 'other', other: v === 'other', blocked: v === 'blocked' };
+})();
 const impl = {
   GetProfiles: () => ['demo'],
   AppVersion: () => '0.1.0',
@@ -425,6 +431,9 @@ const impl = {
   ForgetUnlock: () => { rememberMock.enabled = false; return null; },
   Lock: () => { rememberMock.gate = false; return null; },
   AuthorizePayment: (pw) => { if (pw !== 'demo') throw new Error('wrong app password'); return null; },
+  GetAutostart: () => ({ supported: true, enabled: autostartMock.on, blocked: autostartMock.blocked,
+    program: autostartMock.on && autostartMock.other ? 'C:\\Users\\demo\\Downloads\\EchoFog-old.exe' : '' }),
+  SetAutostart: (on) => { Object.assign(autostartMock, { on, other: false, blocked: false }); return null; },
   // ?offline: no peers, to see the offline banner and the bootstrap card
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
   // logs: a new line every 0.9 s, levels mixed

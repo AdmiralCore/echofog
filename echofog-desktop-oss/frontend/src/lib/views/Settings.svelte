@@ -16,6 +16,7 @@
   import { openLinkDialog } from '../links.js';
   import PrivacyCard from '../components/PrivacyCard.svelte';
   import RememberCard from '../components/RememberCard.svelte';
+  import AutostartCard from '../components/AutostartCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
@@ -29,6 +30,7 @@
   let error = '';
   let copied = false;
   let wipeText = '';
+  let remembered = null; // this profile opens without its password: the start-with-Windows card says what that changes
 
   onMount(async () => {
     try { settings = await App.GetSettings(); } catch (err) { error = errText(err); }
@@ -164,7 +166,8 @@
     </div>
 
     <PrivacyCard />
-    <RememberCard />
+    <RememberCard on:state={(e) => (remembered = e.detail.enabled)} />
+    <AutostartCard {remembered} />
 
     {#if settings}
       <div class="card stack">

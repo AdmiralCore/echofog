@@ -648,6 +648,24 @@ export namespace main {
 	        this.error = source["error"];
 	    }
 	}
+	export class AutostartDTO {
+	    supported: boolean;
+	    enabled: boolean;
+	    program: string;
+	    blocked: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutostartDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.enabled = source["enabled"];
+	        this.program = source["program"];
+	        this.blocked = source["blocked"];
+	    }
+	}
 	export class CrashReport {
 	    reason: string;
 	    where: string;

@@ -41,6 +41,12 @@ func main() {
 	if !window && watch() {
 		return // the window ran in a watched copy of this program, and it is closed
 	}
+	// started by the system at sign-in (app_autostart.go): the window opens minimised
+	startState := options.Normal
+	if args, ok := takeAutostartFlag(os.Args); ok {
+		os.Args = args
+		startState = options.Minimised
+	}
 	keepCrashes()
 	crashTest(os.Getenv("ECHOFOG_CRASH_TEST"))
 	registerLinkScheme()
@@ -53,6 +59,8 @@ func main() {
 		Height:    720,
 		MinWidth:  420,
 		MinHeight: 520,
+		// a minimised window still loads the page, so a remembered profile opens and the node starts
+		WindowStartState: startState,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
