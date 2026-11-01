@@ -75,6 +75,17 @@ func TestRoom_LocalEncoderGetsRateAndKeyframes(t *testing.T) {
 		return true
 	}, 5*time.Second, 20*time.Millisecond)
 
+	// the broadcaster sees its own screen on the preview track
+	preview := func() bool {
+		for _, s := range b.cm.MediaSlots() {
+			if s.Kind == "preview" && s.StreamID == "s" {
+				return true
+			}
+		}
+		return false
+	}
+	assert.True(t, preview(), "our screen plays on the preview track")
+
 	// handed back to the webview: the encoder hears nothing more
 	b.cm.SetLocalEncoder(bridge.RoleScreen, nil)
 	time.Sleep(rateInterval + 2*tickInterval)
@@ -83,4 +94,7 @@ func TestRoom_LocalEncoderGetsRateAndKeyframes(t *testing.T) {
 	r2, k2 := enc.counts()
 	assert.Equal(t, r, r2)
 	assert.Equal(t, k, k2)
+
+	require.NoError(t, b.cm.StopScreenShare("s"))
+	assert.False(t, preview(), "a stopped stream frees the preview track")
 }

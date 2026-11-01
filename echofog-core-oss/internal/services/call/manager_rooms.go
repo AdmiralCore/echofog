@@ -77,6 +77,8 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		OnLocalRTP:       m.onBridgeRTP,
 		OnSlot:           m.onBridgeSlot,
 		OnKeyframeNeeded: m.requestKeyframe,
+		// our own preview's decoder: served like a viewer's request, by our encoder
+		OnPreviewKeyframeNeeded: m.previewKeyframe,
 	}); err == nil {
 		room.Bridge = b
 	} else {
