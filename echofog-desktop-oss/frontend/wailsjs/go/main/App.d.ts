@@ -125,6 +125,10 @@ export function GetBlockedPeers():Promise<Array<contacts.Blocked>>;
 
 export function GetBootstrapNodes():Promise<node.BootstrapStatus>;
 
+export function GetCallPath():Promise<node.CallPath>;
+
+export function GetCallRelays():Promise<Array<node.CallRelay>>;
+
 export function GetCallRoster():Promise<dto.CallRosterDTO>;
 
 export function GetCallSlots():Promise<Array<dto.CallMediaSlotDTO>>;
@@ -410,6 +414,8 @@ export function StopVPN():Promise<void>;
 export function StopVPNForSwitch():Promise<void>;
 
 export function SubmitCallAnswer(arg1:string):Promise<void>;
+
+export function SwitchCallRelay(arg1:string):Promise<void>;
 
 export function TakeStartLink():Promise<string>;
 

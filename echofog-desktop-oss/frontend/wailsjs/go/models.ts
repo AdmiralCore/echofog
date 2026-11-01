@@ -815,6 +815,111 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class CallPathMember {
+	    peer: string;
+	    link: string;
+	    relay: string;
+	    relayAddr: string;
+	    pingMs: number;
+	    reason: string;
+	    theirNat: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallPathMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peer = source["peer"];
+	        this.link = source["link"];
+	        this.relay = source["relay"];
+	        this.relayAddr = source["relayAddr"];
+	        this.pingMs = source["pingMs"];
+	        this.reason = source["reason"];
+	        this.theirNat = source["theirNat"];
+	    }
+	}
+	export class CallPath {
+	    inCall: boolean;
+	    members: CallPathMember[];
+	    relayed: number;
+	    reason: string;
+	    hurts: string;
+	    pingMs: number;
+	    route: string;
+	    nat: string;
+	    mapped: boolean;
+	    carrierNat: boolean;
+	    listenPort: number;
+	    sendKbps: number;
+	    presetKbps: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallPath(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inCall = source["inCall"];
+	        this.members = this.convertValues(source["members"], CallPathMember);
+	        this.relayed = source["relayed"];
+	        this.reason = source["reason"];
+	        this.hurts = source["hurts"];
+	        this.pingMs = source["pingMs"];
+	        this.route = source["route"];
+	        this.nat = source["nat"];
+	        this.mapped = source["mapped"];
+	        this.carrierNat = source["carrierNat"];
+	        this.listenPort = source["listenPort"];
+	        this.sendKbps = source["sendKbps"];
+	        this.presetKbps = source["presetKbps"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class CallRelay {
+	    peerId: string;
+	    addr: string;
+	    connected: boolean;
+	    pingMs: number;
+	    pricePerMb: number;
+	    mine: boolean;
+	    guard: boolean;
+	    carrying: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CallRelay(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.addr = source["addr"];
+	        this.connected = source["connected"];
+	        this.pingMs = source["pingMs"];
+	        this.pricePerMb = source["pricePerMb"];
+	        this.mine = source["mine"];
+	        this.guard = source["guard"];
+	        this.carrying = source["carrying"];
+	    }
+	}
 	export class GroupCall {
 	    room?: string;
 	    members?: string[];
