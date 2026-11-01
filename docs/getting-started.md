@@ -175,16 +175,27 @@ Everything here is free and end-to-end encrypted.
   you. Hover over a person's tile and press *More* to set their *User volume* or *Mute for me*.
 - **Watch a stream.** A stream someone shares starts for you only when you press *Watch stream*
   on it. Hover over its tile for *Stream stats*, *Switch relay* (when the stream lags or shows
-  garbage), *Stop watching* and *Full screen*.
-- **Share your screen.** During a call, press *Share your screen*. The arrow next to it opens
-  *Stream quality*: you can pick up to 4K at 60 fps, or 1080p and 1440p at 120 fps, but high
-  quality needs a fast upload. *What to keep* sets what gives way when the computer or the network
-  falls short: *Smoothness* (games, films: the picture gets softer, the frame rate holds) or
-  *Sharpness* (text, code, slides: frames are skipped, text stays sharp). While you share, the menu
-  shows what really goes out and whether the graphics card or the processor encodes it. To share
-  the sound too, pick a whole screen and tick *Share system audio* in the window that opens (or a
-  browser tab with *Share tab audio*). Only people watching your stream hear it, and each of them
-  can mute it with the speaker button on the stream.
+  garbage), *Stop watching* and *Full screen*. When the person also has their camera on, it sits
+  over their screen: drag it where you like, resize it from its corner, pick its shape (circle,
+  rounded, square, hexagon, wide) from the bar it shows on hover, or hide it; the camera button on
+  the tile brings it back.
+- **Share your screen.** During a call, press *Share your screen* and pick a screen or a window;
+  each shows a live picture. On Windows EchoFog captures and encodes the screen itself on the
+  graphics card, so the stream keeps up with your monitor. *Share the sound* (on by default) sends
+  what the computer plays, except the call itself, to the people watching; each of them can mute
+  it with the speaker button on the stream. Your own tile shows the stream as viewers get it.
+  The arrow next to the button opens *Stream quality*: up to 4K at 60 fps, or 1080p and 1440p at
+  120 and 144 fps, but high quality needs a fast upload. The picture is most even when the frame
+  rate divides your monitor's refresh rate: on a 144 Hz monitor stream 144, and for 60 or 120 fps
+  set the monitor to 120 Hz. While you share, the menu shows what really goes out and whether the
+  graphics card or the processor encodes it.
+- **The browser's capture.** Where the app's own capture cannot run (another system, an old
+  Windows, no hardware encoder), or when you choose *Browser (Edge)* in that menu or in *Settings →
+  Screen sharing*, the built-in browser captures the screen with its own picker, often at 30-50 fps.
+  Its *What to keep* sets what gives way when the computer or the network falls short:
+  *Smoothness* (games, films: the picture gets softer, the frame rate holds) or *Sharpness* (text,
+  code, slides: frames are skipped, text stays sharp). To share the sound there, pick a whole
+  screen and tick *Share system audio* (or a browser tab with *Share tab audio*).
 - **Strangers and blocking.** When somebody who is not in your contacts writes to you, the chat
   shows up with a *request* label. They cannot call you or send files until you press *Accept*
   (answering them accepts them too). To stop hearing from somebody, open their chat, press the
@@ -232,6 +243,9 @@ can give you away. For a public group, use a separate profile from your personal
   Windows settings.
 - **Sounds.** The *Sounds* switch turns the app's sounds on or off; set their volume and listen to
   each one.
+- **Screen sharing.** *Fast (EchoFog)* captures your screen with the app itself, *Browser (Edge)*
+  with the built-in browser (see [Share your screen](#6-chats-groups-and-calls)); the switch below
+  says whether the fast capture shares the computer's sound.
 - **Network.** *Direct socket* skips NAT discovery for top speed, only for a computer with a
   public IP. *UDP socket buffer, MB* sets the socket buffer. Both apply after a restart.
 - **Links.** *Open an EchoFog link* → *Open a link* (or Ctrl+L) takes a contact link, a group

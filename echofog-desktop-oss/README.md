@@ -11,8 +11,11 @@ Built with [Wails](https://wails.io) (Go + WebView) and Svelte.
 - **Chats**: contacts (added by their public key), groups and spaces with text channels and voice
   rooms, invitation cards in the chat, join requests, the group file (`.fogzip`), calls. See
   [Groups and spaces](../docs/groups.md).
-- **Calls**: screen sharing keeps *Smoothness* or *Sharpness*, goes up to 120 fps at 1080p and
-  1440p, and has a *Stream stats* panel on both sides.
+- **Calls**: on Windows the app captures the screen itself (Windows.Graphics.Capture) and encodes it
+  on the graphics card (Media Foundation H.264), up to the monitor's refresh rate (144 fps at 1080p
+  and 1440p), with the computer's sound except the call's; a picker shows screens and windows with
+  live thumbnails. Elsewhere, or when it cannot start, the webview captures the screen. A viewer can
+  place the sharer's camera over the screen; both sides have a *Stream stats* panel.
 - **Proxy**: pick an exit and get a local SOCKS5 proxy or route the whole computer; pay the exit
   automatically in small chunks. In whole-computer mode the **Kill switch** (on by default) keeps
   apps offline when the exit drops. **Specific node** also takes an invitation link
@@ -20,7 +23,8 @@ Built with [Wails](https://wails.io) (Go + WebView) and Svelte.
   connection and get paid; the **Access to this computer** card makes it Public or Hidden and gives
   the invitation link (see [Hidden and isolated nodes](../docs/hidden-nodes.md)).
 - **Wallet**: built-in TON wallet for traffic payments only.
-- **Settings**: identity, network options, emergency lock, and the cards *Privacy* (who may write
+- **Settings**: identity, network options, emergency lock, *Screen sharing* (the app's own capture
+  or the webview's), and the cards *Privacy* (who may write
   to you first and call you), *Anonymous mode*, *Joining the network* (guard mode and a pinned
   relay), *Tor and proxy* (with the route of calls) and *Bootstrap nodes*. See
   [Getting started](../docs/getting-started.md).

@@ -63,8 +63,10 @@ Every document has a Russian version next to it (`*.ru.md`).
   A group can be a space with text channels and voice rooms, like a community server without the
   server. Pictures arrive with a small preview, so you see them before downloading. Calls and screen
   sharing travel over relay trees sized by each participant's upload, which is how a stream reaches
-  many viewers without a central server. Screen sharing can keep *Smoothness* or *Sharpness*, goes
-  up to 120 fps at 1080p and 1440p, and shows its stream stats while it runs.
+  many viewers without a central server. On Windows the app captures and encodes the screen itself
+  on the graphics card, so a shared screen keeps up with the monitor: up to 144 fps at 1080p and
+  1440p, with the computer's sound but not the call's. A viewer can put the sharer's camera over the
+  screen, and both sides see the stream's stats while it runs.
 - **Hiding your address.** By default (`auto`), a user's node in a censoring country joins the
   network through two or three camouflaged guard servers, and you can pin your own relay as one.
   The app's own traffic can go through Tor or another SOCKS5 proxy, and calls can be set to go

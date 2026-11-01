@@ -230,12 +230,23 @@ tree, so speech stays fast.
 
 That is why **4K at 60 fps** is possible without a company's servers: the 4K60 preset is about
 35 Mbit/s, and the sender only has to push it to the first few people in the tree, not to everyone.
-The available presets go from 360p30 up to 4K60, with 1080p and 1440p also at 120 fps; their
-bitrates are what H.264 needs for a moving picture, and a still screen takes much less. The app
-checks that your upload can feed at least one person at the quality you pick, and watches the real
-path: when it backs up, the encoder is asked for a little less, and gets back up only once the path
-has stayed clear for a couple of seconds. Viewers hold frames for a tenth of a second before showing
+The available presets go from 360p30 up to 4K60, with 1080p and 1440p also at 120 and 144 fps;
+their bitrates are what H.264 needs for a moving picture, and a still screen takes much less. The
+app checks that your upload can feed at least one person at the quality you pick, and watches the
+real path: when it backs up, the encoder is asked for a little less (for half, when a queue
+overflows), and gets back up only once the path has stayed clear for a couple of seconds, slowly
+near the rate the trouble began at. Viewers hold frames for a tenth of a second before showing
 them, so frames that cross relays unevenly still play evenly.
+
+On Windows the app captures the screen itself rather than through the built-in browser, which
+copies every frame through system memory and holds itself to half a processor core: screens shared
+that way stayed at 30-50 fps. EchoFog takes the frames from Windows.Graphics.Capture, scales and
+converts them on the graphics card and compresses them with the card's own H.264 encoder (Media
+Foundation), so a frame leaves the graphics card only once it is compressed. Each frame carries the
+time its picture was drawn, so viewers play frames at the pace the monitor showed them. Viewers get
+the same H.264 as from the browser, so older versions watch too. The sound that goes with the
+screen is everything the computer plays except EchoFog itself, which keeps the call out of it.
+Where this cannot run, the browser captures the screen as before.
 
 A relay circuit carries the call to a participant nobody can reach directly (both sides behind
 strict NATs, say), to a user across the border when guard mode is on, and to everyone in anonymous
