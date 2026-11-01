@@ -222,8 +222,20 @@ function stars(ctx, w, h, color) {
                 x = px(s, s.z);
                 y = py(s, s.z);
             }
+            // the trail is as long as the flight is fast, but never longer on screen than speech
+            // allows: at rest a star close by was a thick dash, and the field looked like confetti
             const tail = s.z + v * 0.12 + 0.004;
-            buckets[Math.min(3, ((1 - s.z) * 4) | 0)].push(px(s, tail), py(s, tail), x, y);
+            let tx = px(s, tail);
+            let ty = py(s, tail);
+            const dx = x - tx;
+            const dy = y - ty;
+            const len = Math.hypot(dx, dy);
+            const most = width * (0.5 + 40 * e);
+            if (len > most) {
+                tx = x - (dx * most) / len;
+                ty = y - (dy * most) / len;
+            }
+            buckets[Math.min(3, ((1 - s.z) * 4) | 0)].push(tx, ty, x, y);
         }
         ctx.lineCap = 'round';
         buckets.forEach((b, i) => {
@@ -234,7 +246,7 @@ function stars(ctx, w, h, color) {
                 ctx.lineTo(b[k + 2], b[k + 3]);
             }
             ctx.strokeStyle = shades[i];
-            ctx.lineWidth = width * (0.8 + i * 0.45);
+            ctx.lineWidth = width * (0.6 + i * 0.35);
             ctx.stroke();
         });
     };
