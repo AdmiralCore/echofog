@@ -439,9 +439,17 @@ func TestRoom_KeyframeRequestReachesBroadcaster(t *testing.T) {
 	require.Eventually(t, func() bool { return served.Load() > 0 }, 5*time.Second, 20*time.Millisecond)
 
 	// a gap in the stream triggers another request after the rate limit window, once the viewers
-	// stopped waiting for the keyframe they asked for on joining (these units are not H.264)
-	time.Sleep(max(keyframeServeInterval, media.KeyframePending) + 50*time.Millisecond)
-	before := served.Load()
+	// stopped waiting for the keyframe they asked for on joining (these units are not H.264). Under
+	// load some viewers attach and ask later than others: wait until the last of them is past both
+	// windows, which is when no new request was served for one of them.
+	var before int32
+	for i := 0; i < 5; i++ {
+		before = served.Load()
+		time.Sleep(max(keyframeServeInterval, media.KeyframePending) + 50*time.Millisecond)
+		if served.Load() == before {
+			break
+		}
+	}
 	m.mu.Lock()
 	m.drop = func(t net_types.MessageType, payload []byte) bool {
 		p, err := media.Decode(payload)
