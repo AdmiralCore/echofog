@@ -630,6 +630,24 @@ export namespace logging {
 
 export namespace main {
 	
+	export class AutoUnlockDTO {
+	    profile: string;
+	    unlocked: boolean;
+	    reason: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoUnlockDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profile = source["profile"];
+	        this.unlocked = source["unlocked"];
+	        this.reason = source["reason"];
+	        this.error = source["error"];
+	    }
+	}
 	export class CrashReport {
 	    reason: string;
 	    where: string;
@@ -648,6 +666,24 @@ export namespace main {
 	        this.text = source["text"];
 	        this.version = source["version"];
 	        this.os = source["os"];
+	    }
+	}
+	export class RememberedUnlockDTO {
+	    supported: boolean;
+	    enabled: boolean;
+	    askPayments: boolean;
+	    paymentGate: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RememberedUnlockDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.enabled = source["enabled"];
+	        this.askPayments = source["askPayments"];
+	        this.paymentGate = source["paymentGate"];
 	    }
 	}
 	export class UpdateInfo {

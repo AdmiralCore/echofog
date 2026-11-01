@@ -383,6 +383,12 @@ const linkEntryMock = (text) => {
   if (!q.get('a')) throw new Error('the link names no address to reach the node at');
   return q.get('a') + '/' + (q.get('id') || '').toLowerCase();
 };
+// "remember on this computer": ?remembered opens 'demo' without the password (payments then ask the
+// password "demo"); ?remembered=foreign|stale|damaged|failed shows the password screen with that reason
+const rememberMock = (() => {
+  const v = new URLSearchParams(location.search).get('remembered');
+  return { arg: v, enabled: v === '', askPayments: true, gate: false, tried: false };
+})();
 const impl = {
   GetProfiles: () => ['demo'],
   AppVersion: () => '0.1.0',
@@ -404,6 +410,23 @@ const impl = {
   GetMyID: () => SELF,
   GetMyPubKey: () => hex(11),
   Logout: () => null,
+  AutoUnlock: () => {
+    const m = rememberMock;
+    const none = { profile: '', unlocked: false, reason: '', error: '' };
+    if (m.tried || m.arg === null) { m.tried = true; return none; }
+    m.tried = true;
+    if (m.arg) return { ...none, profile: 'demo', reason: m.arg, error: m.arg === 'failed' ? 'the database is open in another copy of EchoFog' : '' };
+    m.gate = m.askPayments;
+    return { ...none, profile: 'demo', unlocked: true };
+  },
+  GetRememberedUnlock: () => ({ supported: true, enabled: rememberMock.enabled, askPayments: rememberMock.enabled && rememberMock.askPayments,
+    paymentGate: rememberMock.gate || (rememberMock.enabled && rememberMock.askPayments) }),
+  RememberUnlock: (pw, ask) => { if (pw !== 'demo') throw new Error('wrong app password'); Object.assign(rememberMock, { enabled: true, askPayments: ask, gate: ask }); return null; },
+  ForgetUnlock: () => { rememberMock.enabled = false; return null; },
+  Lock: () => { rememberMock.gate = false; return null; },
+  AuthorizePayment: (pw) => { if (pw !== 'demo') throw new Error('wrong app password'); return null; },
+  // the preview's password stays "demo": a change is only checked, not kept
+  ChangePassword: (old) => new Promise((r, j) => setTimeout(() => (old === 'demo' ? r(null) : j(new Error('wrong app password'))), 700)),
   // ?offline: no peers, to see the offline banner and the bootstrap card
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
   // logs: a new line every 0.9 s, levels mixed

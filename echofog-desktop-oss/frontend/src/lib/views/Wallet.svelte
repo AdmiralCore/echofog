@@ -6,6 +6,7 @@
   import Icon from '../components/ui/Icon.svelte';
   import VaultCard from '../components/VaultCard.svelte';
   import TestnetNotice from '../components/TestnetNotice.svelte';
+  import { pay } from '../stores/paygate.js';
   import { t, lang } from '../i18n/index.js';
 
   let wallet = null;
@@ -74,7 +75,7 @@
     sendError = '';
     try {
       const fn = send.asset === 'USDT' ? App.SendUsdt : App.SendTon;
-      sentHash = await fn(send.to.trim(), String(send.amount).replace(',', '.'), send.comment.trim());
+      sentHash = await pay(() => fn(send.to.trim(), String(send.amount).replace(',', '.'), send.comment.trim()));
       step = 'done';
       send = { ...send, to: '', amount: '', comment: '' };
       setTimeout(refresh, 6000);

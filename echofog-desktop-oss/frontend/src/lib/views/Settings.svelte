@@ -15,6 +15,8 @@
   import AnonymityCard from '../components/AnonymityCard.svelte';
   import { openLinkDialog } from '../links.js';
   import PrivacyCard from '../components/PrivacyCard.svelte';
+  import RememberCard from '../components/RememberCard.svelte';
+  import PasswordCard from '../components/PasswordCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
@@ -163,6 +165,8 @@
     </div>
 
     <PrivacyCard />
+    <PasswordCard />
+    <RememberCard />
 
     {#if settings}
       <div class="card stack">

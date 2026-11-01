@@ -224,21 +224,84 @@ func (m *identityManager) LoadFromStorage(passphrase []byte, isDuress bool) erro
 		return nil
 	}
 
-	savedProto, err := m.storage.Get([]byte("system:identity:root"))
+	protoKeys, err := m.readRoot()
 	if err != nil {
-		return err
-	}
-	defer memguard.WipeBytes(savedProto)
-
-	var protoKeys IdentityKeysInStorage
-	if err = proto.Unmarshal(savedProto, &protoKeys); err != nil {
 		return err
 	}
 
 	encryptedKey := passwordKey(passphrase, protoKeys.Salt, protoKeys.Algorithm)
 	defer memguard.WipeBytes(encryptedKey)
 
-	aead, err := chacha20poly1305.NewX(encryptedKey)
+	if err := m.openRoot(protoKeys, encryptedKey); err != nil {
+		return err
+	}
+
+	if protoKeys.Algorithm != kdfCurrent {
+		// SaveToStorage wipes what it is given; the caller's passphrase is wiped by our defer
+		if err := m.SaveToStorage(append([]byte(nil), passphrase...)); err != nil {
+			slog.Warn("could not re-seal the identity at the stronger password setting; it stays at the old one", "err", err)
+		} else {
+			slog.Info("identity re-sealed at the stronger password setting", "from", protoKeys.Algorithm, "to", kdfCurrent)
+		}
+	}
+	return nil
+}
+
+// UnlockKey returns the key the password becomes for the stored identity root. It opens the root
+// without the password (LoadWithKey) until the root is sealed again: a new password, a restore, or
+// the stronger password setting each pick a new salt. A wrong password gives ErrInvalidPass. The
+// unlocked identity is not touched.
+func (m *identityManager) UnlockKey(passphrase []byte) ([]byte, error) {
+	defer memguard.WipeBytes(passphrase)
+
+	protoKeys, err := m.readRoot()
+	if err != nil {
+		return nil, err
+	}
+	key := passwordKey(passphrase, protoKeys.Salt, protoKeys.Algorithm)
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		memguard.WipeBytes(key)
+		return nil, err
+	}
+	root, err := aead.Open(nil, protoKeys.Nonce, protoKeys.EncryptedData, nil)
+	if err != nil {
+		memguard.WipeBytes(key)
+		return nil, ErrInvalidPass
+	}
+	memguard.WipeBytes(root)
+	return key, nil
+}
+
+// LoadWithKey unlocks the identity with a key from UnlockKey instead of the password. A key that
+// no longer opens the root gives ErrInvalidPass. The caller's key is left as it is.
+func (m *identityManager) LoadWithKey(key []byte) error {
+	protoKeys, err := m.readRoot()
+	if err != nil {
+		return err
+	}
+	return m.openRoot(protoKeys, key)
+}
+
+// readRoot reads the sealed identity root from storage.
+func (m *identityManager) readRoot() (*IdentityKeysInStorage, error) {
+	savedProto, err := m.storage.Get([]byte("system:identity:root"))
+	if err != nil {
+		return nil, err
+	}
+	defer memguard.WipeBytes(savedProto)
+
+	var protoKeys IdentityKeysInStorage
+	if err = proto.Unmarshal(savedProto, &protoKeys); err != nil {
+		return nil, err
+	}
+	return &protoKeys, nil
+}
+
+// openRoot unseals the identity root with key, what the password becomes, and unlocks the
+// identity with it.
+func (m *identityManager) openRoot(protoKeys *IdentityKeysInStorage, key []byte) error {
+	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
 		return err
 	}
@@ -258,15 +321,6 @@ func (m *identityManager) LoadFromStorage(passphrase []byte, isDuress bool) erro
 	m.isUnlocked = true
 	_ = m.refreshCachedKeys()
 	m.mu.Unlock()
-
-	if protoKeys.Algorithm != kdfCurrent {
-		// SaveToStorage wipes what it is given; the caller's passphrase is wiped by our defer
-		if err := m.SaveToStorage(append([]byte(nil), passphrase...)); err != nil {
-			slog.Warn("could not re-seal the identity at the stronger password setting; it stays at the old one", "err", err)
-		} else {
-			slog.Info("identity re-sealed at the stronger password setting", "from", protoKeys.Algorithm, "to", kdfCurrent)
-		}
-	}
 	return nil
 }
 

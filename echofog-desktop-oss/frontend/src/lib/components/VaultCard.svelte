@@ -4,6 +4,7 @@
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { App, errText, openURL } from '../api.js';
   import { amount } from '../format.js';
+  import { pay } from '../stores/paygate.js';
   import Icon from './ui/Icon.svelte';
   import { t, lang } from '../i18n/index.js';
 
@@ -74,7 +75,7 @@
     if (first && n < Number(vault.minFirstTon)) return (error = $t('vault.errFirstMin', { min: vault.minFirstTon }));
     if (balanceTon != null && n + 0.02 > Number(balanceTon)) return (error = $t('vault.errOverBalance'));
     act('deposit', async () => {
-      await App.VaultDeposit(s);
+      await pay(() => App.VaultDeposit(s));
       amt = '';
     }, $t('vault.sentDeposit'));
   }

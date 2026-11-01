@@ -23,6 +23,7 @@ type App struct {
 	api            *api.NodeApi
 	activeProfile  string
 	profileService ProfileService
+	unlock         unlockState // "remember on this computer" (app_unlock.go)
 }
 
 // NewApp creates a new App facade instance.
@@ -130,6 +131,9 @@ func (a *App) Login(appPassword string) error {
 		a.api = nil // the failed node released the database; the next attempt builds a fresh one
 		return err
 	}
+	// payments ask the password when the profile is remembered with that setting
+	remembered, askPayments := a.api.RememberedUnlock()
+	a.unlock.opened(false, remembered && askPayments)
 
 	slog.Info("Successfully logged into node profile", "profile", profile)
 	return nil
@@ -144,6 +148,7 @@ func (a *App) Logout() {
 		a.api = nil
 	}
 	a.activeProfile = ""
+	a.unlock.closed()
 	slog.Info("Successfully logged out and stopped node")
 }
 

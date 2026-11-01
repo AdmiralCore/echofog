@@ -25,11 +25,17 @@ export function AddRelay(arg1:string):Promise<void>;
 
 export function AppVersion():Promise<string>;
 
+export function AuthorizePayment(arg1:string):Promise<void>;
+
+export function AutoUnlock():Promise<main.AutoUnlockDTO>;
+
 export function BlockPeer(arg1:string):Promise<void>;
 
 export function CallStreamStats(arg1:string):Promise<node.StreamStatsDTO>;
 
 export function CancelFile(arg1:string):Promise<void>;
+
+export function ChangePassword(arg1:string,arg2:string):Promise<void>;
 
 export function ChatAttachments(arg1:node.ChatRef):Promise<node.ChatAttachments>;
 
@@ -117,6 +123,8 @@ export function ForgetExit(arg1:string):Promise<void>;
 
 export function ForgetLastCrash():Promise<void>;
 
+export function ForgetUnlock():Promise<void>;
+
 export function GetAccessStatus():Promise<node.AccessStatus>;
 
 export function GetAnonymity():Promise<node.AnonymityStatus>;
@@ -168,6 +176,8 @@ export function GetProfiles():Promise<Array<string>>;
 export function GetProxySettings():Promise<node.ProxyStatus>;
 
 export function GetRelayStatus():Promise<node.RelayStatus>;
+
+export function GetRememberedUnlock():Promise<main.RememberedUnlockDTO>;
 
 export function GetSavedExits():Promise<Array<node.SavedExit>>;
 
@@ -263,6 +273,8 @@ export function ListGroups():Promise<Array<node.GroupDTO>>;
 
 export function ListSavedMessages():Promise<Array<dto.SavedMessageDTO>>;
 
+export function Lock():Promise<void>;
+
 export function LogUI(arg1:string,arg2:string,arg3:string,arg4:Record<string, any>):Promise<void>;
 
 export function Login(arg1:string):Promise<void>;
@@ -296,6 +308,8 @@ export function RefreshExitNodes():Promise<number>;
 export function Register(arg1:string,arg2:string):Promise<string>;
 
 export function ReleaseKillSwitch():Promise<void>;
+
+export function RememberUnlock(arg1:string,arg2:boolean):Promise<void>;
 
 export function RemoveBootstrapNode(arg1:string):Promise<void>;
 
