@@ -26,18 +26,7 @@ func TestSlowModeHoldsAMemberBack(t *testing.T) {
 	_, err = bob.JoinGroup(invite)
 	require.NoError(t, err)
 	ref := groupRef(g.ID)
-	eventually(t, "bob may write", func() bool {
-		rows, err := bob.ChatRows()
-		if err != nil {
-			return false
-		}
-		for _, r := range rows {
-			if r.Ref.ID == g.ID {
-				return r.Can.Send && r.Pending == ""
-			}
-		}
-		return false
-	})
+	eventually(t, "bob may write", func() bool { return mayWrite(bob, g.ID) })
 
 	require.NoError(t, alice.ChatMainChannelSave(ref, node.ChannelSpec{SlowSecs: 60}))
 	dev, err := alice.ChatChannelSave(ref, node.ChannelSpec{Name: "dev", SlowSecs: 60})
@@ -52,8 +41,11 @@ func TestSlowModeHoldsAMemberBack(t *testing.T) {
 	})
 
 	for _, at := range []node.ChatRef{ref, {Kind: ref.Kind, ID: ref.ID, Channel: dev.ID}} {
-		first, err := bob.ChatSend(at, node.SendRequest{Text: "one"})
-		require.NoError(t, err)
+		var first node.ChatMessage
+		eventually(t, "bob writes", func() bool { // retried as in TestSpaceChannelsTravel
+			first, err = bob.ChatSend(at, node.SendRequest{Text: "one"})
+			return err == nil
+		})
 		_, err = bob.ChatSend(at, node.SendRequest{Text: "two"})
 		require.Error(t, err, "held back in %q", at.Channel)
 		_, err = bob.ChatSend(at, node.SendRequest{Text: "a comment", Thread: first.ID})

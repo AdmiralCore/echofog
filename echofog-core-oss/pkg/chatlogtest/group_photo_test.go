@@ -48,15 +48,7 @@ func TestGroupPhotoReachesEveryMember(t *testing.T) {
 	require.NoError(t, alice.ChatGroupPhoto(ref, pic))
 	require.Equal(t, pic, photoAt(alice))
 	eventually(t, "bob shows alice's picture", func() bool { return photoAt(bob) == pic })
-	eventually(t, "bob is in on the log", func() bool {
-		rows, _ := bob.ChatRows()
-		for _, r := range rows {
-			if r.Ref.ID == g.ID {
-				return r.Pending == "" && r.Can.Send
-			}
-		}
-		return false
-	})
+	eventually(t, "bob is in on the log", func() bool { return mayWrite(bob, g.ID) })
 	require.Error(t, bob.ChatGroupPhoto(ref, ""), "a plain member does not change it")
 
 	require.NoError(t, alice.ChatGroupPhoto(ref, ""))

@@ -185,6 +185,8 @@ func PeekConv(raw []byte) (ConvID, bool) {
 // HasMessage reports whether the conversation holds a message with this id (an event or a legacy
 // message).
 func (l *Log) HasMessage(c Conv, id EventID) bool {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	k := viewKey(bc, id.String())
 	if !l.st.Exists(k) {

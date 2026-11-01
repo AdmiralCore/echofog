@@ -62,7 +62,12 @@ type Log struct {
 	sign    func([]byte) ([]byte, error)
 	now     func() time.Time
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// views is held for writing while a rebuild writes a conversation's views again. Readers
+	// that go to storage without mu hold it for reading, so they never see the gap between the
+	// old views going and the new ones coming (a message just sent would be missing). Taken
+	// after mu, never the other way round.
+	views     sync.RWMutex
 	rules     atomic.Value // rulesBox
 	listeners []func(Change)
 	members   map[string]*members // by blinded conversation id; loaded on first use
@@ -1073,18 +1078,24 @@ func (l *Log) page(bc, conv string, prefix []byte, cursor string, limit int) ([]
 // History returns a page of a conversation, newest message first; pass the returned cursor to
 // get the page before it ("" when there is none). Thread messages are not in it (see Thread).
 func (l *Log) History(c Conv, cursor string, limit int) ([]Message, string, error) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.page(bc, c.ID.String(), orderPrefix(bc), cursor, limit)
 }
 
 // Thread returns a page of the thread under root, oldest first.
 func (l *Log) Thread(c Conv, root EventID, cursor string, limit int) ([]Message, string, error) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.page(bc, c.ID.String(), threadPrefix(bc, root.String()), cursor, limit)
 }
 
 // Pins returns the pinned messages, most recently pinned first.
 func (l *Log) Pins(c Conv) ([]Message, error) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	entries, err := l.st.FindValues(pinPrefix(bc), 0)
 	if err != nil {
@@ -1102,6 +1113,8 @@ func (l *Log) Pins(c Conv) ([]Message, error) {
 
 // Message returns one message.
 func (l *Log) Message(c Conv, id EventID) (Message, bool) {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.render(bc, c.ID.String(), id.String())
 }

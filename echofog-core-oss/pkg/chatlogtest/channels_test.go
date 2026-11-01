@@ -45,8 +45,14 @@ func TestSpaceChannelsTravel(t *testing.T) {
 
 	inDev := ref
 	inDev.Channel = dev.ID
-	m, err := bob.ChatSend(inDev, node.SendRequest{Text: "in dev"})
-	require.NoError(t, err)
+	eventually(t, "bob may write", func() bool { return mayWrite(bob, g.ID) })
+	// a newcomer's first message can be refused for a moment while the invitation that let them in
+	// is still on its way behind the roster; a refused message is not kept, so trying again is safe
+	var m node.ChatMessage
+	eventually(t, "bob writes in dev", func() bool {
+		m, err = bob.ChatSend(inDev, node.SendRequest{Text: "in dev"})
+		return err == nil
+	})
 	eventually(t, "alice has it in dev", func() bool {
 		page, err := alice.ChatHistory(inDev, "", 20)
 		return err == nil && len(page.Messages) == 1 && page.Messages[0].ID == m.ID

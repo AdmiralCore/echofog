@@ -41,9 +41,23 @@ func (f *convsFacade) myRights(c convlog.Conv) convlog.Rights {
 		return convlog.DMRights
 	}
 	if !f.log.HasRoster(c) {
+		if f.logNotHere(c) {
+			return convlog.Rights{} // nothing until the group's log reaches us
+		}
 		return (groupRules{n: f.n}).Current(c, f.self)
 	}
 	return f.log.RightsOf(c, f.self)
+}
+
+// logNotHere: c is a group that runs on its log, but the log's roster has not reached this device
+// yet (a newcomer's sync is still under way). The old member list may already name us, but the
+// roster decides once it comes, and our invitation may come after it: the composer waits.
+func (f *convsFacade) logNotHere(c convlog.Conv) bool {
+	if c.Kind != convlog.KindGroup || f.log.HasRoster(c) {
+		return false
+	}
+	gf, err := f.n.groupsFacade()
+	return err == nil && gf.LogMode(c.Group)
 }
 
 // describe fills the parts of a chat-list entry that come from outside the log.
@@ -102,6 +116,11 @@ func (f *convsFacade) describe(d *ConversationDTO, c convlog.Conv) {
 		}
 		d.Role = role.Name
 		r := f.myRights(c)
+		if d.Pending == "" && d.Upgraded && !r.Member {
+			// in by the member list, not yet by the group's log: its roster or our invitation is
+			// still on the way, and the composer waits for it
+			d.Pending = PendingAdmission
+		}
 		manage := role.Permissions&(groups.PermManageRoles|groups.PermManageGroup|groups.PermManageChannels) != 0
 		d.Can = ConvCan{Send: r.Send, Files: r.Send && r.Media, Links: r.Links, Threads: r.Threads,
 			React: d.Upgraded && r.React, Pin: d.Upgraded && r.Pin, Manage: manage, Channels: r.Manage, Roles: r.Roles,

@@ -160,8 +160,11 @@ func TestGroupLifecycleOverTheNetwork(t *testing.T) {
 
 	_, err = alice.SendGroupMessage(g.ID, "before dave")
 	require.NoError(t, err)
-	_, err = bob.SendGroupMessage(g.ID, "also before dave")
-	require.NoError(t, err)
+	// bob writes once in on the group's log, as the app does (its composer waits for that too)
+	require.Eventually(t, func() bool {
+		_, err := bob.SendGroupMessage(g.ID, "also before dave")
+		return err == nil
+	}, 10*time.Second, 100*time.Millisecond)
 	require.Eventually(t, func() bool { return len(groupTexts(alice, g.ID)) == 2 && len(groupTexts(bob, g.ID)) == 2 }, 15*time.Second, 100*time.Millisecond)
 	time.Sleep(20 * time.Millisecond)
 

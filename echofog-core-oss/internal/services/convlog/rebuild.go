@@ -57,6 +57,8 @@ func (l *Log) writeChunked(sets []storage.Entry, dels [][]byte) error {
 // rebuildLocked recomputes every view of c. Call with l.mu held. The meta keeps Rebuild set until
 // the last write, so a crash in between rebuilds again on the next membership event or sync.
 func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
+	l.views.Lock()
+	defer l.views.Unlock()
 	old := l.loadMeta(bc, c)
 	old.Rebuild = true
 	if raw, err := json.Marshal(old); err == nil {

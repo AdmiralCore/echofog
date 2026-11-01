@@ -78,6 +78,8 @@ func (t *txn) profile() (Profile, bool) {
 
 // GroupPhoto is a group's picture (nil: none).
 func (l *Log) GroupPhoto(c Conv) []byte {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	raw, err := l.st.Get(profileKey(l.bc(c.ID)))
 	var p Profile
 	if err != nil || json.Unmarshal(raw, &p) != nil {

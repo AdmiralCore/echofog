@@ -208,6 +208,8 @@ func (t *txn) channel(id string) (Channel, bool) {
 
 // Channels lists a group's channels, oldest first, without the removed ones.
 func (l *Log) Channels(c Conv) []Channel {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	entries, err := l.st.FindValues(channelPrefix(bc), 0)
 	if err != nil {
@@ -245,6 +247,8 @@ func (l *Log) AppendChannel(c Conv, s ChannelSpec) ([]byte, EventID, error) {
 
 // MainChannel is the settings of a group's main channel (zero when nobody set them).
 func (l *Log) MainChannel(c Conv) Channel {
+	l.views.RLock()
+	defer l.views.RUnlock()
 	ch, _ := l.storedChannel(l.bc(c.ID), "")
 	return ch
 }
@@ -286,6 +290,8 @@ func (l *Log) HistoryIn(c Conv, channel, cursor string, limit int) ([]Message, s
 	if channel == "" {
 		return l.History(c, cursor, limit)
 	}
+	l.views.RLock()
+	defer l.views.RUnlock()
 	bc := l.bc(c.ID)
 	return l.page(bc, c.ID.String(), chanOrderPrefix(bc, channel), cursor, limit)
 }
