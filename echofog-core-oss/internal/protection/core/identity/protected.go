@@ -49,6 +49,21 @@ func (p *ProtectedIdentity) Load(passphrase []byte, isDuress bool) error {
 	return p.manager.LoadFromStorage(passphrase, isDuress)
 }
 
+// UnlockKey checks the password and returns the key it becomes for the stored root, which
+// LoadWithKey takes in its place (see identityManager.UnlockKey).
+func (p *ProtectedIdentity) UnlockKey(passphrase []byte) ([]byte, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.manager.UnlockKey(passphrase)
+}
+
+// LoadWithKey unlocks the identity with a key from UnlockKey instead of the password.
+func (p *ProtectedIdentity) LoadWithKey(key []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.manager.LoadWithKey(key)
+}
+
 func (p *ProtectedIdentity) Save(passphrase []byte) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
