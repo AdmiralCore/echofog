@@ -148,9 +148,12 @@ network. Details: [anti-dpi.md](anti-dpi.md).
   20 addresses on either side of its IP, then, at most every 12 hours, a slower search over its `/24`
   and the ones next to it. It scans gently, so the hoster does not take it for a port scan, and
   remembers the site it found. `echofog-node camouflage` shows the sites it would pick, at once.
-- **If no suitable neighbour is found,** the node still runs, but **on UDP only**: people whose
-  network blocks UDP cannot reach it. It logs a loud `ANTI-DPI` warning and tries again every 30
-  minutes. When it finds a site, TCP comes on by itself, without a restart.
+- **If no suitable neighbour is found,** the node still runs, but **on UDP only**, and a server
+  then gets almost no one: the app does not dial a server in another country without a cover site
+  (it would be bare noise), and an exit in its list says it has no disguise yet. It logs a loud
+  `ANTI-DPI` warning and tries again every 30 minutes. When it finds a site, TCP comes on by itself,
+  without a restart. Do not wait for that: check the address carries `sni=` (below, and
+  [deploy-vps](deploy-vps.md#5-check-that-people-can-reach-it)) and set the site by hand if not.
 - **By hand.** Pick a real site hosted in the same datacenter, ideally in the same `/24`, and set:
 
   ```bash
@@ -236,6 +239,10 @@ echofog-node status --json   # raw JSON
 echofog-node invite          # the invitation link of a hidden or isolated node
 echofog-node invite --list   # who joined with it (--rotate: a new link, --remove <peer id>: cut off)
 ```
+
+The `Join address` in `status` must carry `sni=`: without it apps abroad do not connect to a
+server (see [Anti-DPI camouflage](#anti-dpi-camouflage-in-plain-words)). To check the node from
+outside, see [Check that people can reach it](deploy-vps.md#5-check-that-people-can-reach-it).
 
 These ask the node's status endpoint, which listens on `127.0.0.1:7070` (`--status-addr`;
 `''` disables it). Keep it on loopback: it shows the wallet address and earnings, and it only
