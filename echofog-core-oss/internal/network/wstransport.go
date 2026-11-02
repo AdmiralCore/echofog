@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"log/slog"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/gorilla/websocket"
+	utls "github.com/refraction-networking/utls"
 )
 
 // WSTransport carries peer connections inside WebSocket frames, so a node can sit behind a CDN
@@ -269,6 +271,43 @@ func (t *WSTransport) handleInbound(conn net.Conn, ip netip.Addr, releaseSlot fu
 	t.logger.Debug("Peer authenticated over WebSocket", "peer_id", res.PeerID, "direction", "inbound")
 }
 
+// cdnRoots are the CAs a CDN's certificate is checked against; nil is the system's (tests set it).
+var cdnRoots *x509.CertPool
+
+// cdnTLS opens the outer HTTPS of a wss:// link the way Chrome opens a WebSocket: Chrome's
+// ClientHello (uTLS), offering only http/1.1 as Chrome does for a WebSocket, which the upgrade
+// needs anyway. Go's own TLS has a fingerprint of its own that a censor in front of the CDN can
+// single out; the certificate is checked as before.
+func cdnTLS(ctx context.Context, _, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+	if err != nil {
+		return nil, err
+	}
+	for _, ext := range spec.Extensions {
+		if alpn, ok := ext.(*utls.ALPNExtension); ok {
+			alpn.AlpnProtocols = []string{"http/1.1"}
+		}
+	}
+	raw, err := dialTCPOut(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	uc := utls.UClient(raw, &utls.Config{ServerName: host, RootCAs: cdnRoots}, utls.HelloCustom)
+	if err := uc.ApplyPreset(&spec); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	if err := uc.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return uc, nil
+}
+
 // Dial connects to a peer at a ws:// or wss:// URL (the peer ID is kept via ExpectPeer, as for
 // TCP). The CDN handles the outer HTTPS; the inner TLS + token run over the WebSocket.
 func (t *WSTransport) Dial(ctx context.Context, url string) error {
@@ -279,7 +318,7 @@ func (t *WSTransport) Dial(ctx context.Context, url string) error {
 	if t.perNode && !haveExpected {
 		return ErrPeerUnknown
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: tcpHandshakeTimeout, NetDialContext: func(dctx context.Context, _, a string) (net.Conn, error) { return dialTCPOut(dctx, a) }}
+	dialer := websocket.Dialer{HandshakeTimeout: tcpHandshakeTimeout, NetDialContext: func(dctx context.Context, _, a string) (net.Conn, error) { return dialTCPOut(dctx, a) }, NetDialTLSContext: cdnTLS}
 	ws, _, err := dialer.DialContext(ctx, url, http.Header{})
 	if err != nil {
 		return err
