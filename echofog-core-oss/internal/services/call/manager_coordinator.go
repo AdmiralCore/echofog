@@ -408,6 +408,7 @@ func (m *CallManager) reportLocked(room *ActiveRoomState, reporter types.PeerID,
 	delete(room.reports, target)
 	if kicked, err := m.encodeLocked(room, signaling.ActionKicked, "reported for spam"); err == nil && m.sender != nil {
 		sender, log := m.sender, m.logger
+		kicked = m.sealSignalLocked(room, target, kicked)
 		go func() {
 			if err := sender.SendRawFrame(target, net_types.TypeCallSignaling, kicked); err != nil {
 				log.Debug("Could not tell a kicked member", "peer", calllog.Peer(target), "err", err)
@@ -442,6 +443,7 @@ func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string,
 			return
 		}
 		ob := room.Dispatcher.Outbox()
+		b = m.sealSignalLocked(room, up, b)
 		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, b) // small and urgent: the audio lane
 		ob.Send(up, media.ClassControl, net_types.TypeCallSignaling, b)
 		return

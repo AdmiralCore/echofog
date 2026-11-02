@@ -298,6 +298,6 @@ func (m *CallManager) feedbackTickLocked(room *ActiveRoomState, now time.Time) {
 			continue
 		}
 		// a datagram on the audio lane: a late report is worth nothing, the next one comes soon
-		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, b)
+		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, m.sealSignalLocked(room, up, b))
 	}
 }

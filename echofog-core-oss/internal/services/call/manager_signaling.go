@@ -18,6 +18,15 @@ import (
 // Inbound frames
 
 func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID) error {
+	if isSealedSignal(payload) {
+		m.mu.Lock()
+		inner, err := m.openSignalLocked(m.activeRoom, from, payload)
+		m.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		payload = inner // the envelope its originator signed, as if it had come plain
+	}
 	env, err := signaling.DecodeSignal(payload)
 	if err != nil {
 		return err
@@ -58,7 +67,7 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 		if m.applyFloodLocked(room, env, from) {
 			for _, n := range room.Dispatcher.VoiceNeighbors() {
 				if n != from && n != env.Sender {
-					room.Dispatcher.Outbox().Send(n, media.ClassControl, net_types.TypeCallSignaling, payload)
+					room.Dispatcher.Outbox().Send(n, media.ClassControl, net_types.TypeCallSignaling, m.sealSignalLocked(room, n, payload))
 				}
 			}
 		}
@@ -529,7 +538,7 @@ func (m *CallManager) sendLocked(room *ActiveRoomState, to types.PeerID, action 
 		m.warnOnce("encode:"+string(action), "Failed to encode call signal", "action", action, "err", err)
 		return
 	}
-	room.Dispatcher.Outbox().Send(to, media.ClassControl, net_types.TypeCallSignaling, b) // the outbox logs drops
+	room.Dispatcher.Outbox().Send(to, media.ClassControl, net_types.TypeCallSignaling, m.sealSignalLocked(room, to, b)) // the outbox logs drops
 }
 
 func (m *CallManager) floodLocked(room *ActiveRoomState, action signaling.SignalAction, data any) {
@@ -539,7 +548,7 @@ func (m *CallManager) floodLocked(room *ActiveRoomState, action signaling.Signal
 		return
 	}
 	for _, n := range room.Dispatcher.VoiceNeighbors() {
-		room.Dispatcher.Outbox().Send(n, media.ClassControl, net_types.TypeCallSignaling, b)
+		room.Dispatcher.Outbox().Send(n, media.ClassControl, net_types.TypeCallSignaling, m.sealSignalLocked(room, n, b))
 	}
 }
 

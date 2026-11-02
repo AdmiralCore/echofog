@@ -27,6 +27,10 @@ type PeerNodeProfile struct {
 	// goes with its subscriptions, and a broadcaster picks a frame rate its viewers' screens show
 	// evenly; builds without the field drop it, and their viewers count as not known.
 	DisplayHz int `json:"display_hz,omitempty"`
+	// SignalKX is the member's X25519 key for the call's sealed signals (call/signalseal.go): a
+	// member that sends one takes signals sealed to it. Builds without the field drop it, and get
+	// and send plain signals.
+	SignalKX []byte `json:"signal_kx,omitempty"`
 }
 
 // MaxDisplayHz bounds a screen's refresh rate taken from the network.

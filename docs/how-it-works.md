@@ -240,6 +240,13 @@ everyone further down the tree. A participant resends lost video only to its own
 stream's tree, at most 96 KB for one request and about 1 MB a second for one child, so a small
 request cannot turn it into a firehose aimed at someone else.
 
+The call's own messages (who is in it, the shape of the trees, who is speaking, the streams and
+their rates) are signed by their sender. Between two participants on this version they are also
+sealed end to end, under a key from X25519 between the two participants' keys for the call, so a
+relay they cross on the way reads none of it. A participant on 0.2.0 or earlier gets them plain, as
+before, and the very first join request goes plain too, as the newcomer does not know the
+coordinator's key yet.
+
 There is no central media server. Instead, the people in the call carry each other's streams in a
 **relay tree**. The person sharing their screen sends it to a few participants; each of them
 forwards it to a few more, and so on. How many others a person feeds depends on **their own measured
