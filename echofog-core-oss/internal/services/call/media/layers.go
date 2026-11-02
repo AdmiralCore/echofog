@@ -238,13 +238,15 @@ func (c *capTrack) at(seq uint32) uint8 {
 	return c.cur.cap
 }
 
-// note takes the cap a unit came with.
+// note takes the cap a unit came with. Only a unit after the current regime's first opens a new
+// one: a late unit with another cap is from before the change (or from a feeder before the last
+// two: one that left the tree with units still on the way), and its cap stays its own.
 func (c *capTrack) note(seq uint32, cp uint8) {
 	switch {
 	case !c.cur.set:
 		c.cur = regime{cap: cp, from: seq, set: true}
 	case cp == c.cur.cap:
-	case c.prev.set && cp == c.prev.cap && int32(seq-c.cur.from) < 0:
+	case int32(seq-c.cur.from) <= 0:
 		// a late unit from before the change
 	default:
 		c.prev, c.cur = c.cur, regime{cap: cp, from: seq, set: true}
@@ -283,10 +285,12 @@ func (d *MediaDispatcher) arrivedCapLocked(p *MediaPacket, u unitLayer, rebuilt 
 // renumber writes into a delivered unit's RTP packet the sequence number the viewer's webview
 // gets: the count of the layers it gets up to it, plus an offset that keeps the numbers going on
 // one after another when the cap changes. A unit of the whole stream keeps its number until the
-// first change. d.mu must be held.
-func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, plain []byte) {
+// first change. It reports false for a late unit whose cap is neither of the last two regimes' (a
+// feeder before the last two still had it on the way): it has no place in what the webview saw,
+// and is not to be played. d.mu must be held.
+func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, plain []byte) bool {
 	if !u.marked || len(plain) < 12 {
-		return
+		return true
 	}
 	if d.renum == nil {
 		d.renum = make(map[sourceKey]*capTrack)
@@ -305,7 +309,11 @@ func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, p
 		off = st.cur.off
 	case c == st.cur.cap:
 		off = st.cur.off
-	case st.prev.set && c == st.prev.cap && int32(seq-st.cur.from) < 0:
+	case int32(seq-st.cur.from) <= 0:
+		// a late unit: numbered as before the change, when that is what it came with
+		if !st.prev.set || c != st.prev.cap {
+			return false
+		}
 		off = st.prev.off
 	default:
 		// the new count takes over where the old one would have put this unit, one further when
@@ -320,6 +328,7 @@ func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, p
 	if out := pos(u.cap) + off; out != rtpSeq {
 		binary.BigEndian.PutUint16(plain[2:4], out)
 	}
+	return true
 }
 
 // layerGap is the units between the last unit delivered (last, lastSeq) and the next one (u, seq)

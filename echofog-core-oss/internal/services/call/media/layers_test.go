@@ -483,3 +483,86 @@ func TestLayers_CappedViewerRepairsFromItsParities(t *testing.T) {
 	assert.Zero(t, nacks.Load())
 	assert.Zero(t, losses.Load())
 }
+
+// The viewer's parent changes from A to B while its cap drops: A sent every layer, B sends the base
+// and the middle layer and then only the base. Units A had on the way arrive after B's first base
+// frames, with a cap of their own (every layer) that is neither of the last two. They must not
+// open a numbering of their own: B's packets reach the webview numbered one after another across
+// them, with no hole and no step back.
+func TestLayers_RenumberingSurvivesLateUnitsOfTheOldFeeder(t *testing.T) {
+	viewer, a, bRelay := pid(3), pid(2), pid(4)
+	b, _, bs, _, _, key := layerTree(t)
+	pkts := layeredFrames(t, 28)
+	for _, p := range pkts {
+		require.NoError(t, b.BroadcastLocalVideo("s1", p))
+	}
+	time.Sleep(50 * time.Millisecond)
+	type unit struct {
+		frame int
+		tid   uint8
+		raw   []byte
+	}
+	var units []unit
+	for _, f := range bs.to(a) {
+		p, err := Decode(f.data)
+		require.NoError(t, err)
+		if p.Kind != FrameVideo {
+			continue
+		}
+		plain, err := OpenUnit(p, p.Payload, key)
+		require.NoError(t, err)
+		fr, m, _ := frameOf(t, plain)
+		units = append(units, unit{fr, m.TID, f.data})
+	}
+
+	manifest := func(epoch uint64, parent types.PeerID) *tree.StreamManifest {
+		return &tree.StreamManifest{StreamID: "s1", Broadcaster: pid(1), Epoch: epoch, Subscribers: []types.PeerID{a, bRelay, viewer},
+			ParentMap:        map[types.PeerID]types.PeerID{a: pid(1), bRelay: pid(1), viewer: parent},
+			DistributionTree: map[types.PeerID][]types.PeerID{pid(1): {a, bRelay}, parent: {viewer}}}
+	}
+	ve := tree.NewStreamTreeEngine()
+	ve.ApplyManifest(manifest(2, a))
+	vc := &mockConsumer{}
+	v := NewMediaDispatcher(viewer, &mockSender{}, vc, ve)
+	defer v.Close()
+	require.NoError(t, v.SetRoomKey(key))
+	v.SetStreamWatching("s1", true)
+
+	send := func(from types.PeerID, c uint8, keep func(u unit) bool) {
+		t.Helper()
+		for _, u := range units {
+			if keep(u) {
+				require.NoError(t, v.processVideo(withHopCap(u.raw, c), from, false))
+			}
+		}
+	}
+	// A: frames 0-5, every layer
+	send(a, capAll, func(u unit) bool { return u.frame < 6 })
+	// the tree moves the viewer to B, which cuts it to the middle layer, then to the base
+	ve.ApplyManifest(manifest(3, bRelay))
+	send(bRelay, capMid, func(u unit) bool { return u.frame >= 8 && u.frame < 16 && u.tid <= 1 })
+	send(bRelay, capBase, func(u unit) bool { return u.frame >= 16 && u.frame < 20 && u.tid == 0 })
+	vc.mu.Lock()
+	before := len(vc.videoPackets)
+	vc.mu.Unlock()
+	// what A still had on the way: frames 6 and 7
+	send(a, capAll, func(u unit) bool { return u.frame == 6 || u.frame == 7 })
+	send(bRelay, capBase, func(u unit) bool { return u.frame >= 20 && u.tid == 0 })
+
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	var fromB []uint16
+	for i, p := range vc.videoPackets {
+		f, _, s := frameOf(t, p.Payload)
+		if i >= before && f < 8 {
+			continue // a late unit of A's, if it plays at all
+		}
+		if f >= 8 {
+			fromB = append(fromB, s)
+		}
+	}
+	require.Len(t, fromB, 2*3+2*2+3*3, "B's base and middle frames, then its base frames")
+	for i := 1; i < len(fromB); i++ {
+		assert.Equal(t, uint16(1), fromB[i]-fromB[i-1], "B's packet %d: the webview sees a hole or a step back", i)
+	}
+}

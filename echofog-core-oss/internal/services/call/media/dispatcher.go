@@ -689,8 +689,11 @@ func (d *MediaDispatcher) consume(p *MediaPacket, plain []byte, lay unitLayer) {
 	d.trackVideoGap(&unit, lay)
 	if lay.marked {
 		d.mu.Lock()
-		d.renumberLocked(sourceKey{p.Kind, p.Broadcaster, p.StreamID}, p.Seq, lay, plain)
+		ok := d.renumberLocked(sourceKey{p.Kind, p.Broadcaster, p.StreamID}, p.Seq, lay, plain)
 		d.mu.Unlock()
+		if !ok {
+			return
+		}
 	}
 	d.consumer.OnLocalVideo(&unit)
 }
