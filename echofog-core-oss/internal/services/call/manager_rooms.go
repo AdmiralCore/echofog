@@ -2,6 +2,8 @@ package call
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
@@ -64,6 +66,13 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		startedAt:      now,
 		waitingSince:   now,
 		lastStatsLog:   now,
+		memberKX:       make(map[types.PeerID][]byte),
+	}
+	if coordinator == m.selfID {
+		room.coordSince = now
+	}
+	if kx, err := ecdh.X25519().GenerateKey(rand.Reader); err == nil {
+		room.kxPriv = kx // without one this node keeps the room key, as an older one does
 	}
 
 	room.Dispatcher = media.NewMediaDispatcher(m.selfID, m.sender, m, engine)
@@ -195,6 +204,7 @@ func (m *CallManager) sendRoomSyncLocked(room *ActiveRoomState, peer types.PeerI
 func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerID, reason string) {
 	delete(room.ConnectedPeers, peer)
 	delete(room.memberSeen, peer)
+	delete(room.memberKX, peer)
 	if reason == "left" {
 		m.logger.Info("Call member left", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer), "members", len(room.ConnectedPeers))
 	} else {

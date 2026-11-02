@@ -145,6 +145,7 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 	}
 	room.Epoch++
 	room.backdropsChanged = false // the new manifest carries them
+	m.scheduleRekeyLocked(room, time.Now()) // the members changed: a key whoever left does not have
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
 	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
 		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
@@ -185,6 +186,7 @@ func (m *CallManager) becomeCoordinatorLocked(room *ActiveRoomState, now time.Ti
 	room.Coordinator, room.IsCoordinator = m.selfID, true
 	room.candidate = types.PeerID{}
 	room.Epoch++
+	room.coordSince = now
 	if old != m.selfID {
 		room.formerCoordinator = old
 	}
@@ -568,6 +570,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 			m.removeMemberLocked(room, p, "timeout")
 		}
 	}
+	m.rekeyTickLocked(room, now)
 	// A child reported its parent silent: drop the parent as soon as its heartbeats confirm it,
 	// instead of waiting for the full member timeout. A heartbeat after the report means only
 	// the link broke, so the parent stays.

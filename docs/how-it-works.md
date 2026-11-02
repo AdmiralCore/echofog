@@ -217,9 +217,13 @@ Calls are free and end-to-end encrypted: audio and video are encrypted with a ke
 The call key is derived from the call's invitation, a random secret that travels only inside
 end-to-end encrypted messages (for a group call, to every member of the group). Anyone who holds
 the invitation can join: the coordinator only checks that the newcomer proves it knows the key and
-is not on the call's ban list (members can vote a spammer out). The key stays the same for the
-whole call. It is not replaced when somebody leaves or is removed, so that person could still
-decrypt the call's media if it reached them.
+is not on the call's ban list (members can vote a spammer out). The invitation's key is only where
+a call starts: whenever somebody joins, leaves or is removed, the coordinator makes a new random
+media key and hands it to each member still in the call, sealed to a key that member sent with its
+join (X25519, then AES-GCM). Two seconds later everybody speaks under it. Whoever left never gets
+it, so what is said from then on is closed to them although they still hold the invitation. A
+member on a version from before this (0.2.0 and earlier) cannot take a new key; while one is in
+the call everybody stays on the invitation's key, as before.
 
 There is no central media server. Instead, the people in the call carry each other's streams in a
 **relay tree**. The person sharing their screen sends it to a few participants; each of them

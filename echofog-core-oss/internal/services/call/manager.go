@@ -2,6 +2,7 @@ package call
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -140,9 +141,19 @@ type ActiveRoomState struct {
 	// knocking there: a member cut off for a few seconds elects itself, and without the knock it
 	// stayed alone in a call of its own while the others went on without it.
 	formerCoordinator types.PeerID
-	lastRejoinProbe   time.Time
-	lastStatsLog      time.Time
-	lastStats         media.DispatcherStats
+
+	// Media key rotation (mediakey.go): this node's key exchange key for the call, the members'
+	// (coordinator), the newest key epoch taken or handed out and from whom, when the coordinator
+	// hands out the next key, and since when this node leads.
+	kxPriv          *ecdh.PrivateKey
+	memberKX        map[types.PeerID][]byte
+	keyEpoch        uint64
+	keyFrom         types.PeerID
+	rekeyAt         time.Time
+	coordSince      time.Time
+	lastRejoinProbe time.Time
+	lastStatsLog    time.Time
+	lastStats       media.DispatcherStats
 
 	// coordinator: a member's tile backdrop changed since the manifest last went out
 	backdropsChanged  bool
@@ -179,7 +190,9 @@ type CallManager struct {
 	crypto     *crypto.CryptoEngine
 
 	activeRoom *ActiveRoomState
-	emitter    events.Emitter
+	// olderNode makes this node act as a version before media key rotation (tests only).
+	olderNode bool
+	emitter   events.Emitter
 
 	connector  PeerConnector
 	connecting map[types.PeerID]time.Time

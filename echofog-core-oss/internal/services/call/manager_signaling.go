@@ -256,6 +256,7 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 		if _, member := room.ConnectedPeers[sender]; member && env.Action == signaling.ActionMemberHeartbeat {
 			room.memberSeen[sender] = now
 			m.noteBackdropLocked(room, sender, jp.Profile.Backdrop)
+			m.noteKXLocked(room, sender, jp.KX, now)
 			return
 		}
 		if room.banned[sender] {
@@ -266,6 +267,7 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			m.warnOnce("badproof:"+sender.String(), "Rejected call join without valid room key proof", "peer", calllog.Peer(sender))
 			return
 		}
+		m.noteKXLocked(room, sender, jp.KX, now)
 		m.admitLocked(room, sender, jp.Profile, now)
 
 	case signaling.ActionLeave:
@@ -464,6 +466,14 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			m.handleKeyframeRequestLocked(room, sender, streamID, now)
 		}
 
+	case signaling.ActionMediaKey:
+		var mk signaling.MediaKeyPayload
+		if decodePayload(env.Payload, &mk) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+			return
+		}
+		m.takeMediaKeyLocked(room, sender, mk, now)
+
 	default:
 		// a newer peer may speak actions this build does not know
 		m.rejectLocked(room, env, "unknown action", false)
@@ -476,7 +486,7 @@ func (m *CallManager) sendJoinLocked(room *ActiveRoomState, now time.Time) {
 }
 
 func (m *CallManager) joinPayloadLocked(room *ActiveRoomState) signaling.JoinPayload {
-	return signaling.JoinPayload{Profile: room.MyProfile, Proof: signaling.JoinProof(room.RoomKey, room.CallID, m.selfID)}
+	return signaling.JoinPayload{Profile: room.MyProfile, Proof: signaling.JoinProof(room.RoomKey, room.CallID, m.selfID), KX: m.kxPublicLocked(room)}
 }
 
 // toCoordinatorLocked routes a request to the coordinator, or handles it in place if we are it.
