@@ -52,6 +52,15 @@ func NewCryptoEngine(
 
 var ErrInitReplay = errors.New("this init packet was accepted before")
 
+// ErrPQDowngrade: the peer's bundle has no KEM prekey although we saw one of the same age or newer
+// with it. The bundle is dropped from the cache; the message waits for a fresh bundle.
+var ErrPQDowngrade = errors.New("the peer's bundle lost its KEM prekey")
+
+// bundleForgetter is a BundleSource that caches bundles and can drop one (the swarm does).
+type bundleForgetter interface {
+	ForgetBundle(peerID types.PeerID)
+}
+
 func (e *CryptoEngine) EncryptMessage(toPeer types.PeerID, plaintext []byte) (types.EncryptedMessage, *types.X3DHInit, error) {
 	// a missing bundle is looked up in the network: not under the lock, that can take seconds
 	var bundle *keymanager.PublicBundle
@@ -71,6 +80,17 @@ func (e *CryptoEngine) EncryptMessage(toPeer types.PeerID, plaintext []byte) (ty
 	if err != nil {
 		if bundle == nil { // the session went away meanwhile
 			return types.EncryptedMessage{}, nil, errors.New("session was reset, try again")
+		}
+
+		// once a peer offered a KEM prekey, a bundle of it without one that is not newer is a
+		// stripped or replayed copy: drop it and wait for a fresh one rather than go classic
+		if bundle.HasKEM() {
+			e.sessionStore.NotePQBundle(toPeer, bundle.CreatedAt)
+		} else if seen := e.sessionStore.PQBundleSeen(toPeer); seen != 0 && bundle.CreatedAt <= seen {
+			if f, ok := e.bundleSource.(bundleForgetter); ok {
+				f.ForgetBundle(toPeer)
+			}
+			return types.EncryptedMessage{}, nil, ErrPQDowngrade
 		}
 
 		// a bundle from cache may offer one-time prekeys we used already; the peer deleted them
@@ -165,6 +185,9 @@ func (e *CryptoEngine) HandleInitPacket(fromPeer types.PeerID, initPacket types.
 		return nil, fmt.Errorf("X3DH receive failed: %w", err)
 	}
 	e.sessionStore.MarkInitSeen(initPacket.EphemeralKey)
+	if bundle.HasKEM() { // the sender's signed card: it is on PQXDH, for our own next session
+		e.sessionStore.NotePQBundle(fromPeer, bundle.CreatedAt)
+	}
 
 	if keepExisting && loadErr == nil {
 		return plaintext, nil
