@@ -284,7 +284,7 @@ func TestAudioBench(t *testing.T) {
 	var mu sync.Mutex
 	var total int
 	var sums []float64
-	a, err := StartAudio(func(pcm []byte) {
+	a, err := StartAudio("monitor:0", func(pcm []byte) {
 		mu.Lock()
 		defer mu.Unlock()
 		for i := 0; i+1 < len(pcm); i += 2 {
@@ -330,5 +330,83 @@ func TestAudioBench(t *testing.T) {
 	}
 	if os.Getenv("ECHOFOG_AUDIO_BENCH_EXTERNAL") != "" && laterMax < 5 {
 		t.Fatal("the other program's tone was not captured")
+	}
+}
+
+// TestAudioWindowBench shares one window's sound while another program plays too: two ffplays,
+// one showing a window and playing 440 Hz, one without a window playing 1000 Hz (quietly, both).
+// The window's sound must have the first tone and not the second. Both players are this test's
+// children, so the monitor's sound, everything but this process tree, must have neither.
+//
+//	ECHOFOG_AUDIO_BENCH=path\to\ffplay.exe go test -run TestAudioWindowBench -v ./internal/nativecap/
+func TestAudioWindowBench(t *testing.T) {
+	ffplay := os.Getenv("ECHOFOG_AUDIO_BENCH")
+	if ffplay == "" {
+		t.Skip("set ECHOFOG_AUDIO_BENCH to ffplay.exe")
+	}
+	play := func(hz int, window bool) *exec.Cmd {
+		args := []string{"-autoexit", "-loglevel", "quiet", "-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=%d:duration=8", hz), "-af", "volume=0.003"}
+		if window {
+			args = append(args, "-showmode", "1", "-x", "320", "-y", "180")
+		} else {
+			args = append(args, "-nodisp")
+		}
+		c := exec.Command(ffplay, args...)
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+		return c
+	}
+	shown := play(440, true)
+	play(1000, false)
+	var hwnd windows.HWND
+	for i := 0; i < 50 && hwnd == 0; i++ {
+		time.Sleep(100 * time.Millisecond)
+		for _, h := range topWindows() {
+			var pid uint32
+			_, _ = windows.GetWindowThreadProcessId(h, &pid)
+			if int(pid) == shown.Process.Pid && windows.IsWindowVisible(h) {
+				hwnd = h
+			}
+		}
+	}
+	if hwnd == 0 {
+		t.Fatal("ffplay showed no window")
+	}
+	// the strength of a tone in the captured sound (Goertzel, left channel)
+	listen := func(source string) (a440, a1000 float64) {
+		var mu sync.Mutex
+		var samples []float64
+		a, err := StartAudio(source, func(pcm []byte) {
+			mu.Lock()
+			for i := 0; i+3 < len(pcm); i += 4 {
+				samples = append(samples, float64(int16(binary.LittleEndian.Uint16(pcm[i:]))))
+			}
+			mu.Unlock()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Second)
+		a.Stop()
+		tone := func(hz float64) float64 {
+			k := 2 * math.Cos(2*math.Pi*hz/AudioRate)
+			var s1, s2 float64
+			for _, x := range samples {
+				s1, s2 = x+k*s1-s2, s1
+			}
+			return math.Sqrt(s1*s1+s2*s2-k*s1*s2) / float64(max(len(samples), 1))
+		}
+		return tone(440), tone(1000)
+	}
+	w440, w1000 := listen("window:" + strconv.FormatUint(uint64(hwnd), 10))
+	m440, m1000 := listen("monitor:0")
+	t.Logf("window: 440 Hz %.2f, 1000 Hz %.2f; monitor: 440 Hz %.2f, 1000 Hz %.2f", w440, w1000, m440, m1000)
+	if w440 < 10*w1000 {
+		t.Errorf("the window's sound has the other program's tone")
+	}
+	if m440 > w440/10 || m1000 > w440/10 {
+		t.Errorf("the monitor's sound has this app's own")
 	}
 }

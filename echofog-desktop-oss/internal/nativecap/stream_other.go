@@ -33,5 +33,5 @@ func Previews([]string) map[string]string { return nil }
 // AudioCapture is the capture of the computer's sound; there is none outside Windows.
 type AudioCapture struct{}
 
-func StartAudio(func([]byte)) (*AudioCapture, error) { return nil, errNotWindows }
-func (a *AudioCapture) Stop()                        {}
+func StartAudio(string, func([]byte)) (*AudioCapture, error) { return nil, errNotWindows }
+func (a *AudioCapture) Stop()                                {}

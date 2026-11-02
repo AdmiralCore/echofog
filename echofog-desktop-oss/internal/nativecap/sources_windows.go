@@ -26,6 +26,7 @@ var (
 	procGetWindow            = modUser32.NewProc("GetWindow")
 	procEnumDisplaySettingsW = modUser32.NewProc("EnumDisplaySettingsW")
 	procMonitorFromWindow    = modUser32.NewProc("MonitorFromWindow")
+	procFindWindowExW        = modUser32.NewProc("FindWindowExW")
 )
 
 // captureTarget is what Windows.Graphics.Capture is pointed at: a window or a monitor.

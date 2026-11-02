@@ -14,10 +14,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// The sound of a shared screen: everything the computer plays except this app's process tree, so
-// viewers hear the game or the film but not the call, which the webview (a child of this process)
-// plays. WASAPI process loopback (Windows 10 2004 and newer) delivers it as PCM; the interface
-// plays it into the screen-sound track, which the webview encodes as Opus like a captured tab's.
+// The sound of a shared screen. For a window it is what that window's program plays, with the
+// processes it started (a browser plays from a child process), so a notification or music from
+// another window stays out, as other apps share a window's sound. For a monitor it is everything
+// the computer plays except this app's process tree, so viewers hear the game or the film but not
+// the call, which the webview (a child of this process) plays. WASAPI process loopback (Windows 10
+// 2004 and newer) delivers it as PCM; the interface plays it into the screen-sound track, which
+// the webview encodes as Opus like a captured tab's.
 
 var (
 	modMmdevapi                     = windows.NewLazySystemDLL("mmdevapi.dll")
@@ -77,13 +80,14 @@ type AudioCapture struct {
 	once sync.Once
 }
 
-// StartAudio captures what the computer plays, without this process tree. onPCM receives
-// interleaved 48 kHz stereo 16-bit frames every 10 ms or so, on a goroutine of its own, and must
-// not keep the slice; while nothing plays it receives nothing.
-func StartAudio(onPCM func([]byte)) (*AudioCapture, error) {
+// StartAudio captures the sound of a source (a Source ID): a window's program, or for a monitor
+// what the computer plays without this process tree. onPCM receives interleaved 48 kHz stereo
+// 16-bit frames every 10 ms or so, on a goroutine of its own, and must not keep the slice; while
+// nothing plays it receives nothing.
+func StartAudio(source string, onPCM func([]byte)) (*AudioCapture, error) {
 	a := &AudioCapture{stop: make(chan struct{}), done: make(chan struct{})}
 	ready := make(chan error, 1)
-	go a.run(onPCM, ready)
+	go a.run(soundPID(source), onPCM, ready)
 	if err := <-ready; err != nil {
 		<-a.done
 		return nil, err
@@ -97,7 +101,7 @@ func (a *AudioCapture) Stop() {
 	<-a.done
 }
 
-func (a *AudioCapture) run(onPCM func([]byte), ready chan<- error) {
+func (a *AudioCapture) run(pid uint32, onPCM func([]byte), ready chan<- error) {
 	defer close(a.done)
 	started := false
 	fail := func(err error) {
@@ -111,7 +115,7 @@ func (a *AudioCapture) run(onPCM func([]byte), ready chan<- error) {
 		return
 	}
 	defer undo()
-	client, err := activateLoopback()
+	client, err := activateLoopback(pid)
 	if err != nil {
 		fail(err)
 		return
@@ -191,15 +195,41 @@ func (a *AudioCapture) run(onPCM func([]byte), ready chan<- error) {
 	}
 }
 
-// activateLoopback opens an IAudioClient on the process loopback of everything but our process
-// tree.
-func activateLoopback() (unsafe.Pointer, error) {
+// soundPID is the process whose tree a source's sound comes from: a window's program (for a Store
+// app, the one inside the frame window, not the frame's host); 0 for a monitor, or a window of
+// this app.
+func soundPID(source string) uint32 {
+	tg, err := target(source)
+	if err != nil || tg.hwnd == 0 {
+		return 0
+	}
+	var pid uint32
+	_, _ = windows.GetWindowThreadProcessId(tg.hwnd, &pid)
+	class, _ := windows.UTF16PtrFromString("Windows.UI.Core.CoreWindow")
+	if core, _, _ := procFindWindowExW.Call(uintptr(tg.hwnd), 0, uintptr(unsafe.Pointer(class)), 0); core != 0 {
+		var inner uint32
+		if _, _ = windows.GetWindowThreadProcessId(windows.HWND(core), &inner); inner != 0 {
+			pid = inner
+		}
+	}
+	if pid == uint32(os.Getpid()) {
+		return 0
+	}
+	return pid
+}
+
+// activateLoopback opens an IAudioClient on the process loopback of pid's process tree, or with
+// pid 0 of everything but ours.
+func activateLoopback(pid uint32) (unsafe.Pointer, error) {
 	if err := procActivateAudioInterfaceAsync.Find(); err != nil {
 		return nil, err
 	}
 	params := struct {
 		Type, TargetPID, Mode uint32
 	}{1 /* PROCESS_LOOPBACK */, uint32(os.Getpid()), 1 /* EXCLUDE_TARGET_PROCESS_TREE */}
+	if pid != 0 {
+		params.TargetPID, params.Mode = pid, 0 // INCLUDE_TARGET_PROCESS_TREE
+	}
 	blob := struct {
 		vt   uint16
 		_    [3]uint16

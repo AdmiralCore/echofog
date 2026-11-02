@@ -206,7 +206,8 @@ Everything here is free and end-to-end encrypted.
 - **Share your screen.** During a call, press *Share your screen* and pick a screen or a window;
   each shows a live picture. On Windows EchoFog captures and encodes the screen itself on the
   graphics card, so the stream keeps up with your monitor. *Share the sound* (on by default) sends
-  what the computer plays, except the call itself, to the people watching; each of them can mute
+  the people watching what the window's program plays, or for a whole screen everything the
+  computer plays except the call itself; each of them can mute
   it with the speaker button on the stream. Your own tile shows the stream as viewers get it.
   The arrow next to the button opens *Stream quality*: up to 4K at 60 fps, or 1080p and 1440p at
   120 and 144 fps, but high quality needs a fast upload. The picture is most even when the frame
