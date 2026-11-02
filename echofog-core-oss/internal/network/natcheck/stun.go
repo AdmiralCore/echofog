@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/stun"
+	"github.com/pion/stun/v4"
 )
 
 // DefaultSTUNServers are public STUN servers from unrelated operators. Several are queried
