@@ -12,7 +12,8 @@ import (
 const muxReadBatch = 16
 
 // readLoop reads the shared socket in batches (recvmmsg) with control messages, so quic-go
-// behind the multiplexer still gets the ECN bits and the arrival address of every datagram.
+// behind the multiplexer still gets the ECN bits and the arrival address of every datagram. It
+// ends only when the socket is closed (see readFailed).
 func (m *MuxedConn) readLoop() {
 	pc := ipv4.NewPacketConn(m.conn)
 	msgs := make([]ipv4.Message, muxReadBatch)
@@ -38,8 +39,12 @@ func (m *MuxedConn) readLoop() {
 		}
 		n, err := pc.ReadBatch(msgs, 0)
 		if err != nil {
-			return
+			if m.readFailed(err) {
+				return
+			}
+			continue
 		}
+		m.readOK()
 		for i := 0; i < n; i++ {
 			ua, ok := msgs[i].Addr.(*net.UDPAddr)
 			if !ok {

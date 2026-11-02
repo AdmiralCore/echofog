@@ -3,6 +3,7 @@ package dpi
 import (
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -41,7 +42,39 @@ type MuxedConn struct {
 	conn     *net.UDPConn
 	stunConn *filteredConn
 	quicConn *filteredConn
+	closed   atomic.Bool
+
+	// read errors seen by the read loop (its own: no lock), for a rate-limited log line
+	readErrs, readErrsRun int
+	readErrLogged         time.Time
 }
+
+// readErrLogEvery is how often at most a dropped datagram's read error is logged.
+const readErrLogEvery = time.Minute
+
+// readFailed tells the read loop what a read error means. Only a closed socket ends the loop.
+// Anything else is one bad datagram, which is dropped: on Windows a datagram longer than the buffer
+// fails the read with WSAEMSGSIZE, and an ICMP "port unreachable" for an earlier send can surface
+// as WSAECONNRESET. Ending the loop there stopped all UDP reception, QUIC and STUN alike, until the
+// node restarted, and anybody who can reach the port can send a 5 KB datagram.
+func (m *MuxedConn) readFailed(err error) (stop bool) {
+	if m.closed.Load() || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	m.readErrs++
+	m.readErrsRun++
+	if now := time.Now(); now.Sub(m.readErrLogged) >= readErrLogEvery {
+		slog.Warn("UDP read failed, datagram dropped", "err", err, "errors", m.readErrs)
+		m.readErrLogged, m.readErrs = now, 0
+	}
+	if m.readErrsRun%64 == 0 {
+		time.Sleep(10 * time.Millisecond) // an error that does not go away must not spin a core
+	}
+	return false
+}
+
+// readOK tells readFailed the socket reads again.
+func (m *MuxedConn) readOK() { m.readErrsRun = 0 }
 
 // NewMuxedConn starts demultiplexing conn. Closing the MuxedConn closes conn.
 func NewMuxedConn(conn *net.UDPConn) (*MuxedConn, error) {
@@ -72,6 +105,7 @@ func (m *MuxedConn) dispatch(bufPtr *[]byte, n, oobn int, addr netip.AddrPort) {
 }
 
 func (m *MuxedConn) Close() error {
+	m.closed.Store(true)
 	_ = m.stunConn.Close()
 	_ = m.quicConn.Close()
 	return m.conn.Close()
