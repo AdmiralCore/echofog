@@ -60,5 +60,17 @@ func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
 	assert.True(t, n.announcedCaps().Has(handshake.CapDHTServer))
 
 	n.Cfg.Access.Mode = config.AccessHidden
+	n.Cfg.AntiDPI.TunnelPadding = false
 	assert.Equal(t, handshake.CapUnlisted, n.announcedCaps(), "a hidden node offers nothing")
+}
+
+// A hidden node (the recommended exit setup) pads its tunnels like a public one: it announces
+// the padding to the peers it admits, and nothing else.
+func TestHiddenNodeAnnouncesTunnelPadding(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}}
+	n.Cfg.Access.Mode = config.AccessHidden
+	n.Cfg.AntiDPI.TunnelPadding = true
+	assert.Equal(t, handshake.CapUnlisted|handshake.CapTunnelPadding, n.announcedCaps())
+	n.Cfg.Access.Mode = config.AccessIsolated
+	assert.Equal(t, handshake.CapUnlisted|handshake.CapTunnelPadding, n.announcedCaps())
 }

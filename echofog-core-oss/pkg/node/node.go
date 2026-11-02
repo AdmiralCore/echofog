@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -526,6 +527,7 @@ func (n *Node) Start() (err error) {
 	n.Swarm.SetLogger(n.Logger)
 	n.Swarm.SetOnlyPinnedGuards(n.AnonMode() == config.AnonRelay)
 	n.Swarm.SetPadsTunnels(n.announcedCaps().Has(handshake.CapTunnelPadding))
+	n.seedTunnelPadding()
 	if n.Cfg.AntiDPI.TLSServerName != "" {
 		n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
 	}
@@ -942,12 +944,29 @@ func (n *Node) GetMessenger() *messenger.MessageBroker {
 	return n.Messenger
 }
 
+// seedTunnelPadding gives this node padding ranges of its own (exit_gateway.SetPadSeed). The seed
+// is a signature over a fixed label: Ed25519 signs deterministically, so it is the same after
+// every restart, and nobody without the identity key can compute it.
+func (n *Node) seedTunnelPadding() {
+	sig, err := n.identity.SignData([]byte("echofog/tunnel-pad-seed/v1"))
+	if err != nil {
+		return // the shared default ranges stay
+	}
+	seed := sha256.Sum256(sig)
+	exit_gateway.SetPadSeed(seed[:])
+}
+
 // announcedCaps is what the node tells peers it offers: always the DHT; a relay, or only help
 // with hole punching (signaling), or neither.
 func (n *Node) announcedCaps() handshake.Capability {
 	if n.gated() {
-		// a hidden node is nobody's relay or DHT server, and peers keep its address to themselves
-		return handshake.CapUnlisted
+		// a hidden node is nobody's relay or DHT server, and peers keep its address to themselves;
+		// its tunnels are padded all the same (a hidden exit is the recommended setup)
+		caps := handshake.CapUnlisted
+		if n.Cfg.AntiDPI.TunnelPadding {
+			caps |= handshake.CapTunnelPadding
+		}
+		return caps
 	}
 	caps := handshake.CapDHTServer | handshake.CapCircuitMedia
 	if n.AnonMode() != "" {
@@ -958,7 +977,7 @@ func (n *Node) announcedCaps() handshake.Capability {
 	}
 	if n.Cfg.AntiDPI.TunnelPadding {
 		// announce the TLS-in-TLS padding so peers may pad their exit tunnels to us (and we strip
-		// it). A hidden node returns early above and stays unpadded — consistent on both ends.
+		// it)
 		caps |= handshake.CapTunnelPadding
 	}
 	switch rs := n.Cfg.Relay.Server; {

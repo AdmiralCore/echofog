@@ -24,17 +24,25 @@ package exit_gateway
 // Padding is negotiated at the peer level (handshake.CapTunnelPadding), not per stream, so a peer
 // pair either pads every TypeExitConnect data phase between them or none: see dialLazy and
 // HandleTunnelFrom.
+//
+// The sizes are the writer's own business: the reader takes every length from the chunk header
+// and switches to raw on the final marker, whatever the budget. So each node pads with its own
+// ranges (padProfile, derived from a secret of its own by SetPadSeed) and a budget drawn per
+// stream: identical numbers on every node would themselves be a fingerprint.
 
 import (
+	"crypto/hmac"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"io"
+	"sync/atomic"
 )
 
 const (
 	padHdrLen   = 5    // [cmd:1][dataLen:2][padLen:2]
 	padMaxChunk = 4096 // max real data bytes per framed chunk (fits the uint16 dataLen field)
-	padBudget   = 4096 // real bytes carried framed per direction before switching to raw
+	padBudget   = 4096 // real bytes carried framed per direction before raw, before SetPadSeed
 
 	// A chunk with at most padDangerHi data bytes would sit on the wire near the detector window
 	// [hello+16, hello+320] ~= [533,837]; it is inflated to a randomized total in
@@ -51,7 +59,61 @@ const (
 
 	padCmdData  byte = 0
 	padCmdFinal byte = 1
+
+	// the bounds every node's own profile is drawn within
+	padTargetMin   = 880 // clears the detector window (~837) with a margin
+	padBudgetMin   = 3 << 10
+	padBudgetMax   = 16 << 10
+	padJitterFloor = 8
 )
+
+// padProfile is one node's padding ranges: small chunks are inflated to [targetLo, targetHi],
+// larger ones get [jitterLo, jitterHi] of pad, and each stream pads its first [budgetLo, budgetHi]
+// real bytes (one value drawn per stream).
+type padProfile struct {
+	targetLo, targetHi int
+	jitterLo, jitterHi int
+	budgetLo, budgetHi int
+}
+
+// defaultPadProfile is what every v0.2.0 node uses, and this one until SetPadSeed.
+var defaultPadProfile = padProfile{
+	targetLo: padTargetLo, targetHi: padTargetHi,
+	jitterLo: padJitterLo, jitterHi: padJitterHi,
+	budgetLo: padBudget, budgetHi: padBudget,
+}
+
+var padProf atomic.Pointer[padProfile]
+
+func currentPadProfile() padProfile {
+	if p := padProf.Load(); p != nil {
+		return *p
+	}
+	return defaultPadProfile
+}
+
+// SetPadSeed gives this node its own padding ranges, derived from secret: stable across restarts
+// (so a node does not drift between profiles), different from every other node's, and not
+// computable by anyone without the secret. The process holds one node, so the profile is global.
+func SetPadSeed(secret []byte) {
+	p := padProfileFrom(secret)
+	padProf.Store(&p)
+}
+
+func padProfileFrom(secret []byte) padProfile {
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte("echofog/tunnel-pad/v1"))
+	b := m.Sum(nil)
+	u := func(i int) int { return int(binary.BigEndian.Uint16(b[i:])) }
+	var p padProfile
+	p.targetLo = padTargetMin + u(0)%121                 // 880..1000
+	p.targetHi = min(p.targetLo+60+u(2)%181, padCeiling) // up to 240 B wide, never past one datagram
+	p.jitterLo = padJitterFloor + u(4)%25                // 8..32
+	p.jitterHi = p.jitterLo + 16 + u(6)%81               // up to 96 B wide
+	p.budgetLo = padBudgetMin + u(8)%(5<<10+1)           // 3..8 KiB
+	p.budgetHi = min(p.budgetLo+1<<10+u(10)%(8<<10+1), padBudgetMax)
+	return p
+}
 
 // padPool is a fixed buffer of random bytes the pad body is copied from, so padding costs no
 // crypto/rand call per chunk. On the wire everything is under the outer QUIC AEAD anyway, so the
@@ -66,8 +128,10 @@ func init() { _, _ = crand.Read(padPool[:]) }
 // already exchanged them by the time the data phase and padding begin).
 type tunnelPadConn struct {
 	FramedStream
+	prof padProfile
 
-	// writer side (one goroutine): framed until wSent reaches padBudget, then raw
+	// writer side (one goroutine): framed until wSent reaches budget, then raw
+	budget    int
 	wSent     int
 	wRaw      bool
 	wbuf      []byte
@@ -83,7 +147,12 @@ type tunnelPadConn struct {
 }
 
 func newTunnelPad(st FramedStream) *tunnelPadConn {
-	return &tunnelPadConn{FramedStream: st}
+	prof := currentPadProfile()
+	return &tunnelPadConn{
+		FramedStream: st,
+		prof:         prof,
+		budget:       int(cryptoRandInt64(int64(prof.budgetLo), int64(prof.budgetHi))),
+	}
 }
 
 // CloseWrite forwards the half-close; it never emits a synthetic final marker (that would race
@@ -109,7 +178,7 @@ func (c *tunnelPadConn) Write(p []byte) (int, error) {
 			chunk = chunk[:padMaxChunk]
 		}
 		c.wSent += len(chunk)
-		final := c.wSent >= padBudget
+		final := c.wSent >= c.budget
 		if err := c.writeChunk(chunk, final); err != nil {
 			return total, err
 		}
@@ -150,18 +219,19 @@ func (c *tunnelPadConn) writeChunk(data []byte, final bool) error {
 // ClientHello, ServerHello, Finished) are inflated to a randomized total in the target band so
 // they leave the detector window; larger chunks get only light jitter.
 func (c *tunnelPadConn) choosePad(dataLen int) int {
+	p := &c.prof
 	if dataLen <= padDangerHi {
-		target := int(cryptoRandInt64(padTargetLo, padTargetHi))
+		target := int(cryptoRandInt64(int64(p.targetLo), int64(p.targetHi)))
 		if target > padCeiling {
 			target = padCeiling
 		}
 		pad := target - padHdrLen - dataLen
-		if pad < padJitterLo {
-			pad = int(cryptoRandInt64(padJitterLo, padJitterHi))
+		if pad < p.jitterLo {
+			pad = int(cryptoRandInt64(int64(p.jitterLo), int64(p.jitterHi)))
 		}
 		return pad
 	}
-	return int(cryptoRandInt64(padJitterLo, padJitterHi))
+	return int(cryptoRandInt64(int64(p.jitterLo), int64(p.jitterHi)))
 }
 
 func (c *tunnelPadConn) fillPad(dst []byte) {
