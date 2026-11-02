@@ -178,7 +178,8 @@ func (l *Log) Participant(c Conv, peer types.PeerID) bool {
 }
 
 // known reports whether author's events in c are kept even when not allowed: a participant of a
-// direct chat, or anyone in a group's membership history. Call with l.mu held.
+// direct chat, or anyone a member vouched for in a group's membership history (see vouchedFor).
+// Call with l.mu held.
 func (l *Log) known(c Conv, bc string, e *Event) bool {
 	author := AuthorID(e)
 	switch c.Kind {
@@ -190,12 +191,43 @@ func (l *Log) known(c Conv, bc string, e *Event) bool {
 		}
 		// a member the group service knows whose admission has not reached the log yet: keep its
 		// event, the admission brings it in (a rebuild)
-		if rules := l.groupRules(); rules != nil && rules.Current(c, author).Member {
-			return true
+		if rules := l.groupRules(); rules != nil {
+			if rules.Current(c, author).Member {
+				return true
+			}
+			if f, ok := rules.Founder(c); ok && f == author {
+				return true // the founder's events: the roster that starts the group may come later
+			}
 		}
-		return l.membersOf(bc).mentions(author, e.Author)
+		return l.vouchedFor(c, bc, author, e.Author)
 	}
 	return false
+}
+
+// vouchedFor reports whether the group's membership history names author through somebody who
+// may (a member now, one the group service knows, or the founder): an event of such a member that
+// adds, admits or removes author, or author's own join with an invitation such a member made. A
+// stranger's own membership event vouches for nobody: kept, it made every later event of that key
+// "known", stored and synced to the whole group. Call with l.mu held.
+func (l *Log) vouchedFor(c Conv, bc string, author types.PeerID, pub []byte) bool {
+	rules := l.groupRules()
+	memo := map[types.PeerID]bool{}
+	may := func(by types.PeerID) bool {
+		if by == author {
+			return false
+		}
+		if v, ok := memo[by]; ok {
+			return v
+		}
+		v := l.rightsAt(c, bc, by, nil, atEnd).Member
+		if !v && rules != nil {
+			f, ok := rules.Founder(c)
+			v = rules.Current(c, by).Member || ok && f == by
+		}
+		memo[by] = v
+		return v
+	}
+	return l.membersOf(bc).mentions(author, pub, may)
 }
 
 func (l *Log) notify(ch *Change) {
@@ -765,6 +797,10 @@ func (l *Log) ingest(c Conv, raw []byte, live bool) (EventID, bool, error) {
 	t.synced = !live
 	if aerr := l.apply(t, e, id, raw, false, modeNew); aerr != nil {
 		if !rejectable(aerr) || !l.known(c, bc, e) {
+			if e.Kind == KindMember {
+				// not kept: nor in the membership history held in memory (apply put it there)
+				l.membersOf(bc).remove(pos{e.Lamport, id.String()})
+			}
 			l.mu.Unlock()
 			return id, false, aerr
 		}
