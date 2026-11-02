@@ -61,6 +61,15 @@ type X3DHInit struct {
 	OneTimeKeyID *[32]byte
 
 	SecureMessage EncryptedMessage
+
+	// PQXDH: the ML-KEM-768 ciphertext for the responder's KEM prekey named by KEMKeyID (the SHA-256
+	// of its encapsulation key). Both empty: classic X3DH.
+	KEMCiphertext []byte
+	KEMKeyID      *[32]byte
+	// BundleCreatedAt is when the responder signed the bundle the initiator used. Senders of v0.2.0
+	// leave it 0. A classic init that names a bundle the responder signed with a KEM prekey means
+	// the prekey was stripped on the way.
+	BundleCreatedAt int64
 }
 
 type PrivKeyGeneric interface {

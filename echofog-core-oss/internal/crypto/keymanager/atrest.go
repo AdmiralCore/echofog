@@ -308,6 +308,7 @@ func (am *AccountManager) purgeOld() {
 			}
 		}
 	}
+	am.purgeOldKEM()
 	am.opkMu.Lock()
 	am.jitCounted = false // count the handed-out prekeys again
 	am.opkMu.Unlock()

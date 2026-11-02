@@ -139,10 +139,24 @@ relay circuit knows both of its ends.
 In plain words, the scheme (the same family as Signal's) is:
 
 - **X3DH** — the first time you write to someone, your app and theirs agree on a shared secret
-  using each other's public keys, even if the other person is offline at that moment.
+  using each other's public keys, even if the other person is offline at that moment. This first
+  step is **post-quantum hybrid** (PQXDH, the scheme Signal uses): next to its classic X25519 keys,
+  each app publishes an ML-KEM-768 key signed with its identity key, and the shared secret is made
+  from both. A relay or mailbox can keep a message for up to 7 days, so anyone could record it and
+  wait for a quantum computer. To read it they would have to break X25519 *and* ML-KEM. With an app
+  of version 0.2.0, which has no ML-KEM key, the first step stays classic X3DH, so the two can
+  still talk.
 - **Double Ratchet** — after that, every message is locked with a fresh key, and old keys are thrown
   away. If one key ever leaks, it does not unlock past messages, and the conversation heals itself
-  for future ones.
+  for future ones. The ratchet steps still use X25519 only. They build on the post-quantum first
+  secret, so recorded traffic stays protected. But if a device's keys leak, the conversation heals
+  only against an ordinary attacker, not a quantum one. A post-quantum ratchet (like Signal's
+  SPQR) is the next step.
+
+Removing the ML-KEM key from someone's key bundle on the way does not force a classic session. DHT
+records and messages are signed as a whole. An app refuses a classic first message that names one
+of its own post-quantum bundles. And once your app has seen a contact's ML-KEM key, it refuses that
+contact's older or stripped bundles and waits for a fresh one.
 
 **Offline delivery.** Your app keeps each message until the recipient's app sends back an encrypted
 receipt, and resends it with growing pauses (for up to 7 days). If the recipient is offline, a relay

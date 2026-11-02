@@ -150,6 +150,11 @@ message PreKeyBundle {
   bytes signature = 3;
   bytes one_time_pre_key = 4;
   int64 created_at = 5;
+  // version 2 (PQXDH): a signed ML-KEM-768 prekey. kem_signature covers the whole bundle with it;
+  // `signature` still covers fields 1-5 alone, so v0.2.0 checks it and skips 6-8.
+  uint32 version = 6;
+  bytes kem_pre_key = 7;
+  bytes kem_signature = 8;
 }
 
 message X3DHInit {
@@ -161,6 +166,13 @@ message X3DHInit {
   // the sender's signed key bundle (a swarm bundle record, without one-time prekeys): the receiver
   // takes the sender's identity key from it and needs no lookup in the network
   bytes sender_bundle = 5;
+
+  // PQXDH (the receiver's bundle had a KEM prekey): the ML-KEM-768 ciphertext and the SHA-256 of
+  // the KEM prekey it is for. v0.2.0 skips them and never sees them: it publishes no KEM prekey.
+  bytes kem_ciphertext = 6;
+  bytes kem_key_id = 7;
+  // when the receiver signed the bundle the sender used; set by every sender newer than v0.2.0
+  int64 bundle_created_at = 8;
 }
 
 enum SessionType {

@@ -56,6 +56,24 @@ func splitOPKs(raw []byte) ([][32]byte, error) {
 	return out, nil
 }
 
+// EncodeBundle is a bundle in its wire form. A classic bundle (no KEM prekey) comes out exactly as
+// v0.2.0 writes it.
+func EncodeBundle(b *keymanager.PublicBundle) ([]byte, error) {
+	pb := &internal_pb.PreKeyBundle{
+		IdentityKey:   b.IdentityKey[:],
+		SignedPreKey:  b.SignedPreKey[:],
+		Signature:     b.Signature[:],
+		OneTimePreKey: joinOPKs(b.OneTimeKeys),
+		CreatedAt:     b.CreatedAt,
+	}
+	if b.HasKEM() {
+		pb.Version = b.Version
+		pb.KemPreKey = b.KEMPreKey
+		pb.KemSignature = b.KEMSignature[:]
+	}
+	return proto.Marshal(pb)
+}
+
 // ForgetBundle drops the cached bundle of a peer, so the next session starts from a fresh one.
 func (s *Swarm) ForgetBundle(id types.PeerID) {
 	_ = s.storage.Delete(s.bundleCacheKey(id))
@@ -170,6 +188,13 @@ func (s *Swarm) parseAndVerifyProtoBundle(pubKey types.PeerPublicKey, protoBundl
 	if err != nil {
 		return nil, err
 	}
+	var kemSig [64]byte
+	if raw := protoBundle.GetKemSignature(); len(raw) > 0 {
+		if len(raw) != len(kemSig) {
+			return nil, errors.New("received invalid or forged bundle: bad KEM prekey signature")
+		}
+		copy(kemSig[:], raw)
+	}
 
 	var peerKey [32]byte
 	copy(peerKey[:], pubKey[:])
@@ -181,6 +206,9 @@ func (s *Swarm) parseAndVerifyProtoBundle(pubKey types.PeerPublicKey, protoBundl
 		Signature:    sig,
 		OneTimeKeys:  opks,
 		CreatedAt:    protoBundle.CreatedAt,
+		Version:      protoBundle.GetVersion(),
+		KEMPreKey:    protoBundle.GetKemPreKey(),
+		KEMSignature: kemSig,
 	}
 
 	if err := keymanager.VerifyBundle(bundle); err != nil {
@@ -206,12 +234,8 @@ func (s *Swarm) IdentityCard() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := proto.Marshal(&internal_pb.PreKeyBundle{
-		IdentityKey:  bundle.IdentityKey[:],
-		SignedPreKey: bundle.SignedPreKey[:],
-		Signature:    bundle.Signature[:],
-		CreatedAt:    bundle.CreatedAt,
-	})
+	// with the KEM prekey: a card that came with a knock is kept as our bundle
+	raw, err := EncodeBundle(bundle)
 	if err != nil {
 		return nil, err
 	}
@@ -246,15 +270,7 @@ func (s *Swarm) CreateMyPreKeyBundle() ([]byte, error) {
 		return nil, err
 	}
 
-	protoBundle := &internal_pb.PreKeyBundle{
-		IdentityKey:   bundle.IdentityKey[:],
-		SignedPreKey:  bundle.SignedPreKey[:],
-		Signature:     bundle.Signature[:],
-		OneTimePreKey: joinOPKs(bundle.OneTimeKeys),
-		CreatedAt:     bundle.CreatedAt,
-	}
-
-	rawProto, err := proto.Marshal(protoBundle)
+	rawProto, err := EncodeBundle(bundle)
 	if err != nil {
 		return nil, err
 	}

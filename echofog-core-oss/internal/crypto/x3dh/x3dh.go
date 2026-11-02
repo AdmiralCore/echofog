@@ -2,6 +2,7 @@ package x3dh
 
 import (
 	"bytes"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
@@ -22,6 +23,19 @@ const (
 	DOMAIN_SEPARATION = "FOG_X3DH_V2"
 	infoInitChains    = "FOG_RATCHET_INIT_V2"
 	infoRoot          = "FOG_RATCHET_ROOT_V2"
+	// infoPQXDH is the KDF info of a hybrid session (Signal's PQXDH with X25519, SHA-256 and
+	// ML-KEM-768). The KEM key id and the hash of the ciphertext follow it, so the secret is bound
+	// to the exact KEM key and ciphertext.
+	infoPQXDH = "FOG_PQXDH_X25519_SHA-256_ML-KEM-768_V1"
+)
+
+var (
+	ErrKEMKeyNotFound = errors.New("the KEM prekey the init packet names is not ours or is gone")
+	ErrBadKEMInit     = errors.New("malformed KEM part of the init packet")
+	ErrBadKEMKey      = errors.New("the bundle's KEM prekey cannot be used")
+	// ErrPQDowngrade: a classic init that names a bundle we signed with a KEM prekey. The sender
+	// would have used the KEM prekey, so somebody on the way removed it.
+	ErrPQDowngrade = errors.New("classic init for a bundle that had a KEM prekey")
 )
 
 var (
@@ -61,6 +75,23 @@ type X3DHParameters struct {
 	RemoteIdentityPub  [32]byte
 	RemoteSignedPrePub [32]byte
 	RemoteOneTimePub   *[32]byte
+
+	// KEM is the post-quantum part (PQXDH); nil for classic X3DH.
+	KEM *KEMInput
+}
+
+// KEMInput is the ML-KEM-768 part of a PQXDH secret: the shared secret, and the key id and
+// ciphertext it came from (both bound into the KDF).
+type KEMInput struct {
+	SharedSecret []byte
+	KeyID        [32]byte
+	Ciphertext   []byte
+}
+
+func (k *KEMInput) wipe() {
+	if k != nil {
+		memguard.WipeBytes(k.SharedSecret)
+	}
 }
 
 // associatedData binds a session to both identities, initiator first (X3DH: AD = IK_A || IK_B).
@@ -69,8 +100,21 @@ func associatedData(initiatorIK, responderIK [32]byte) []byte {
 }
 
 // X3DHInit starts a session with the owner of peerBundle, which the caller has verified. When the
-// bundle offers one-time prekeys, one of them is picked at random.
+// bundle offers one-time prekeys, one of them is picked at random. When it offers a KEM prekey the
+// session is PQXDH: an ML-KEM-768 secret is mixed into the X3DH one; otherwise it is classic X3DH,
+// as with a node of v0.2.0.
 func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession, types.X3DHInit, error) {
+	var kem *KEMInput
+	if peerBundle.HasKEM() {
+		ek, err := mlkem.NewEncapsulationKey768(peerBundle.KEMPreKey)
+		if err != nil {
+			return nil, types.X3DHInit{}, ErrBadKEMKey
+		}
+		ss, ct := ek.Encapsulate()
+		kem = &KEMInput{SharedSecret: ss, KeyID: keymanager.KEMKeyID(peerBundle.KEMPreKey), Ciphertext: ct}
+		defer kem.wipe()
+	}
+
 	idPrivEnc, _, err := x.accntManager.GetEncryptionKey()
 	if err != nil {
 		return nil, types.X3DHInit{}, err
@@ -97,6 +141,7 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 		RemoteIdentityPub:  peerBundle.IdentityKey,
 		RemoteSignedPrePub: peerBundle.SignedPreKey,
 		RemoteOneTimePub:   remoteOPK,
+		KEM:                kem,
 	}
 
 	rootKeyEnc, err := CalculateX3DH(params)
@@ -105,9 +150,14 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 	}
 
 	initPacket := types.X3DHInit{
-		EphemeralKey: empPub,
-		IdentityKey:  x.bundle.IdentityKey,
-		OneTimeKeyID: remoteOPK,
+		EphemeralKey:    empPub,
+		IdentityKey:     x.bundle.IdentityKey,
+		OneTimeKeyID:    remoteOPK,
+		BundleCreatedAt: peerBundle.CreatedAt,
+	}
+	if kem != nil {
+		id := kem.KeyID
+		initPacket.KEMCiphertext, initPacket.KEMKeyID = kem.Ciphertext, &id
 	}
 
 	x3dhSession, err := NewX3DHSession(
@@ -122,7 +172,45 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 	}
 	x3dhSession.AD = associatedData(x.bundle.IdentityKey, peerBundle.IdentityKey)
 	x3dhSession.InitEK = empPub
+	x3dhSession.PQ = kem != nil
 	return x3dhSession, initPacket, nil
+}
+
+// responderKEM reads the KEM part of an init packet: the shared secret for a PQXDH init, nil for a
+// classic one. A classic init that names a bundle we signed with a KEM prekey is refused.
+func (x *X3DHEngine) responderKEM(init types.X3DHInit) (*KEMInput, error) {
+	if len(init.KEMCiphertext) == 0 && init.KEMKeyID == nil {
+		// v0.2.0 sends no bundle time; it never saw a KEM prekey of ours, as it cannot read one
+		if init.BundleCreatedAt != 0 {
+			if since := x.accntManager.KEMSince(); since != 0 && init.BundleCreatedAt >= since {
+				return nil, ErrPQDowngrade
+			}
+		}
+		return nil, nil
+	}
+	if len(init.KEMCiphertext) != mlkem.CiphertextSize768 || init.KEMKeyID == nil {
+		return nil, ErrBadKEMInit
+	}
+	seedEnc, err := x.accntManager.OpenKEMPreKey(*init.KEMKeyID)
+	if err != nil {
+		return nil, ErrKEMKeyNotFound
+	}
+	seed, err := seedEnc.Open()
+	if err != nil {
+		return nil, ErrEnclaveOpenFailed
+	}
+	defer seed.Destroy()
+	dk, err := mlkem.NewDecapsulationKey768(seed.Bytes())
+	if err != nil {
+		return nil, ErrKEMKeyNotFound
+	}
+	// a ciphertext made for another key gives another secret (implicit rejection): the message of
+	// the init then fails to open
+	ss, err := dk.Decapsulate(init.KEMCiphertext)
+	if err != nil {
+		return nil, ErrBadKEMInit
+	}
+	return &KEMInput{SharedSecret: ss, KeyID: *init.KEMKeyID, Ciphertext: init.KEMCiphertext}, nil
 }
 
 // X3DHReceive answers init with the current signed prekey, without checking the message it carries
@@ -138,12 +226,18 @@ func (x *X3DHEngine) X3DHReceive(init types.X3DHInit, peerBundle keymanager.Publ
 			return nil, ErrOPKNotFound
 		}
 	}
-	return x.receive(init, peerBundle, spk, opk)
+	kem, err := x.responderKEM(init)
+	if err != nil {
+		return nil, err
+	}
+	defer kem.wipe()
+	return x.receive(init, peerBundle, spk, opk, kem)
 }
 
 // Accept answers an init packet from the owner of peerBundle (verified by the caller) and opens the
 // message it carries. It tries the current signed prekey and the replaced ones still in use, and
-// uses up the one-time prekey only when the message opened.
+// uses up the one-time prekey only when the message opened. A PQXDH init is opened with the KEM
+// prekey it names; a classic one (from v0.2.0) as before.
 func (x *X3DHEngine) Accept(init types.X3DHInit, peerBundle keymanager.PublicBundle) (*X3DHSession, []byte, error) {
 	if len(init.SecureMessage.Ciphertext) == 0 {
 		return nil, nil, ErrInitWithoutMessage
@@ -155,12 +249,17 @@ func (x *X3DHEngine) Accept(init types.X3DHInit, peerBundle keymanager.PublicBun
 			return nil, nil, ErrOPKNotFound
 		}
 	}
+	kem, err := x.responderKEM(init)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer kem.wipe()
 	spks, err := x.accntManager.SignedPreKeys()
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, spk := range spks {
-		session, err := x.receive(init, peerBundle, spk, opk)
+		session, err := x.receive(init, peerBundle, spk, opk, kem)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -176,7 +275,7 @@ func (x *X3DHEngine) Accept(init types.X3DHInit, peerBundle keymanager.PublicBun
 	return nil, nil, ErrInitRejected
 }
 
-func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBundle, spk, opk *memguard.Enclave) (*X3DHSession, error) {
+func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBundle, spk, opk *memguard.Enclave, kem *KEMInput) (*X3DHSession, error) {
 	// the identity is the one the sender signed in its bundle, never the one the packet claims
 	if !bytes.Equal(init.IdentityKey[:], peerBundle.IdentityKey[:]) {
 		return nil, ErrIdentityMismatch
@@ -186,7 +285,7 @@ func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBu
 		return nil, err
 	}
 
-	rootKeyEnc, err := CalculateX3DH_Receiver(idPrivEnc, spk, opk, peerBundle.IdentityKey, init.EphemeralKey)
+	rootKeyEnc, err := calculateReceiver(idPrivEnc, spk, opk, peerBundle.IdentityKey, init.EphemeralKey, kem)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +301,7 @@ func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBu
 	}
 	session.AD = associatedData(peerBundle.IdentityKey, x.bundle.IdentityKey)
 	session.InitEK = init.EphemeralKey
+	session.PQ = kem != nil
 	if session.InitMsgKey, _, err = kdfChain(session.RecvChain.Key); err != nil {
 		return nil, err
 	}
@@ -240,15 +340,28 @@ func CalculateX3DH(params X3DHParameters) (*memguard.Enclave, error) {
 		}
 	}
 
-	return dhHKDF(dh1, dh2, dh3, dh4)
+	return dhHKDF(dh1, dh2, dh3, dh4, params.KEM)
 }
 
+// CalculateX3DH_Receiver is the responder's side of classic X3DH.
 func CalculateX3DH_Receiver(
 	myIdentityPrivEnc *memguard.Enclave,
 	mySignedPrePrivEnc *memguard.Enclave,
 	myOneTimePrivEnc *memguard.Enclave,
 	remoteIdentityPub [32]byte,
 	remoteEphemeralPub [32]byte,
+) (*memguard.Enclave, error) {
+	return calculateReceiver(myIdentityPrivEnc, mySignedPrePrivEnc, myOneTimePrivEnc, remoteIdentityPub, remoteEphemeralPub, nil)
+}
+
+// calculateReceiver is the responder's side; kem is the KEM part of a PQXDH init, nil for classic.
+func calculateReceiver(
+	myIdentityPrivEnc *memguard.Enclave,
+	mySignedPrePrivEnc *memguard.Enclave,
+	myOneTimePrivEnc *memguard.Enclave,
+	remoteIdentityPub [32]byte,
+	remoteEphemeralPub [32]byte,
+	kem *KEMInput,
 ) (*memguard.Enclave, error) {
 
 	dh1, err := dhSecure(mySignedPrePrivEnc, remoteIdentityPub)
@@ -280,7 +393,7 @@ func CalculateX3DH_Receiver(
 		}
 	}
 
-	return dhHKDF(dh1, dh2, dh3, dh4)
+	return dhHKDF(dh1, dh2, dh3, dh4, kem)
 }
 
 func dhSecure(privEnc *memguard.Enclave, pub [32]byte) ([]byte, error) {
@@ -298,8 +411,10 @@ func dhSecure(privEnc *memguard.Enclave, pub [32]byte) ([]byte, error) {
 }
 
 // dhHKDF: SK = HKDF(F || DH1 || DH2 || DH3 [|| DH4]) with F = 32 bytes of 0xFF, a zero salt and
-// the protocol name as info, as the X3DH specification gives for X25519.
-func dhHKDF(dh1, dh2, dh3, dh4 []byte) (*memguard.Enclave, error) {
+// the protocol name as info, as the X3DH specification gives for X25519. With kem (PQXDH, as in
+// Signal's PQXDH) the KEM shared secret follows the DH outputs, and the info is infoPQXDH || KEM
+// key id || SHA-256(KEM ciphertext). The classic form is unchanged from v0.2.0.
+func dhHKDF(dh1, dh2, dh3, dh4 []byte, kem *KEMInput) (*memguard.Enclave, error) {
 	defer memguard.WipeBytes(dh1)
 	defer memguard.WipeBytes(dh2)
 	defer memguard.WipeBytes(dh3)
@@ -307,7 +422,7 @@ func dhHKDF(dh1, dh2, dh3, dh4 []byte) (*memguard.Enclave, error) {
 		defer memguard.WipeBytes(dh4)
 	}
 
-	secretInputBuf := memguard.NewBuffer(32 * 5)
+	secretInputBuf := memguard.NewBuffer(32 * 6)
 	defer secretInputBuf.Destroy()
 
 	buf := secretInputBuf.Bytes()
@@ -322,8 +437,18 @@ func dhHKDF(dh1, dh2, dh3, dh4 []byte) (*memguard.Enclave, error) {
 		}
 	}
 
+	info := []byte(DOMAIN_SEPARATION)
+	if kem != nil {
+		if len(kem.SharedSecret) != mlkem.SharedKeySize {
+			return nil, ErrBadKEMInit
+		}
+		idx += copy(buf[idx:], kem.SharedSecret)
+		ctHash := sha256.Sum256(kem.Ciphertext)
+		info = append(append([]byte(infoPQXDH), kem.KeyID[:]...), ctHash[:]...)
+	}
+
 	salt := make([]byte, 32)
-	kdf := hkdf.New(sha256.New, buf[:idx], salt, []byte(DOMAIN_SEPARATION))
+	kdf := hkdf.New(sha256.New, buf[:idx], salt, info)
 
 	rootKeyBuf := memguard.NewBuffer(32)
 	defer rootKeyBuf.Destroy()

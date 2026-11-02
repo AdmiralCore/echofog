@@ -1,6 +1,7 @@
 package x3dh
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -80,6 +81,29 @@ func (sm *X3DHSessionManager) UnusedOPKs(peer types.PeerID, opks [][32]byte) [][
 		}
 	}
 	return out
+}
+
+func (sm *X3DHSessionManager) pqSeenKey(peer types.PeerID) []byte {
+	return []byte("pqseen:" + storage.BlindID(sm.db, hex.EncodeToString(peer[:])))
+}
+
+// NotePQBundle remembers the creation time of the newest bundle of peer with a KEM prekey we saw.
+func (sm *X3DHSessionManager) NotePQBundle(peer types.PeerID, createdAt int64) {
+	if createdAt <= sm.PQBundleSeen(peer) {
+		return
+	}
+	_ = sm.db.Set(sm.pqSeenKey(peer), binary.BigEndian.AppendUint64(nil, uint64(createdAt)))
+}
+
+// PQBundleSeen is the creation time of the newest bundle of peer with a KEM prekey we saw, 0 if we
+// never saw one. A bundle of the peer without a KEM prekey, not newer than that, is a stripped copy
+// or an old one replayed: the peer had moved on to PQXDH by then.
+func (sm *X3DHSessionManager) PQBundleSeen(peer types.PeerID) int64 {
+	b, err := sm.db.Get(sm.pqSeenKey(peer))
+	if err != nil || len(b) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(b))
 }
 
 func initKey(ek [32]byte) []byte { return append([]byte("x3dh-init:"), ek[:]...) }

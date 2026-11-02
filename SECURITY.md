@@ -93,7 +93,20 @@ Between 28 and 31 October:
   or forged to mute a speaker, is dropped. Joining a private group takes a valid, signed invitation,
   and a banned member cannot slip messages in dated before the ban.
 
+On 2 November:
+
+- **Messages recorded now, read later with a quantum computer.** Relays and mailboxes may hold a
+  message for up to 7 days, and anyone can record traffic. The first key agreement of a one-to-one
+  chat is now post-quantum hybrid (PQXDH with ML-KEM-768, as in Signal), so reading a recorded chat
+  takes breaking both X25519 and ML-KEM. Chats with apps of version 0.2.0 stay classic. Stripping
+  the new key from a key bundle on the way is detected and does not force a classic session.
+
 ## Known limitations (still open)
+
+- **Post-quantum protection covers only the start of a chat.** The ratchet that follows, the keys
+  of group chats and calls, and all signatures still use X25519 and Ed25519 only. A recorded
+  one-to-one chat is covered, but if a device's keys leak, a quantum attacker could go on reading
+  later messages of that chat. A post-quantum ratchet is the next step.
 
 - **The DHT lists public nodes.** Their address and ID are published together, so a censor who
   crawls the DHT can find them and confirm they are EchoFog nodes. The per-node disguise key only
@@ -251,7 +264,21 @@ EchoFog — **экспериментальный** проект.
   действительным подписанным приглашением, а забаненный участник не может протащить сообщения,
   датированные до бана.
 
+2 ноября:
+
+- **Сообщения, записанные сейчас и прочитанные потом на квантовом компьютере.** Релеи и почтовые
+  ящики могут держать сообщение до 7 дней, а записать трафик может кто угодно. Первое согласование
+  ключей в личном чате теперь постквантовый гибрид (PQXDH с ML-KEM-768, как у Signal), так что для
+  чтения записанной переписки придётся взломать и X25519, и ML-KEM. Чаты с приложениями версии 0.2.0
+  остаются классическими. Если по дороге убрать новый ключ из набора ключей, это заметят, и
+  классическую сессию это не навяжет.
+
 ### Известные ограничения (пока не решены)
+
+- **Постквантовая защита покрывает только начало чата.** Храповик, который идёт дальше, ключи
+  групповых чатов и звонков и все подписи пока только на X25519 и Ed25519. Записанная личная
+  переписка защищена, но если ключи с устройства утекут, квантовая атака сможет читать и следующие
+  сообщения этого чата. Постквантовый храповик — следующий шаг.
 
 - **DHT публикует публичные ноды.** Их адрес и ID лежат там вместе, так что цензор, который обходит
   DHT, может их найти и убедиться, что это ноды EchoFog. Ключ маскировки, привязанный к ноде,
