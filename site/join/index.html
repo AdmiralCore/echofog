@@ -44,6 +44,7 @@
   }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
   .btns { display: flex; flex-direction: column; gap: 10px; }
+  #opened { margin: 12px 0 0; }
   ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; }
   code {
     display: block; padding: 10px 12px; border-radius: 10px; background: var(--mono-bg);
@@ -74,6 +75,7 @@
       <a class="btn primary" id="open" href="#"></a>
       <a class="btn" id="download" href="https://github.com/AdmiralCore/echofog/releases/latest" rel="noreferrer"></a>
     </div>
+    <p class="muted hidden" id="opened"></p>
   </div>
 
   <ol id="steps" class="hidden"></ol>
@@ -119,6 +121,7 @@
     more: 'Показать ссылку целиком',
     less: 'Свернуть',
     copied: 'Скопировано',
+    opened: 'Ссылка заодно скопирована. Если приложение открылось, но написало «Это не ссылка EchoFog», нажмите в нём Ctrl+V.',
     bad: 'В адресе страницы нет ссылки EchoFog. Попросите прислать её ещё раз целиком: всё, что после «#», и есть приглашение.',
     secret: 'В этой ссылке ключ доступа к скрытому узлу. Не пересылайте её в общие чаты.',
     privacy: 'Ссылка не уходит с этой страницы никуда: всё, что после «#», остаётся в вашем браузере.'
@@ -142,6 +145,7 @@
     more: 'Show the whole link',
     less: 'Fold it',
     copied: 'Copied',
+    opened: 'The link is copied too. If the app opened but says “This is not an EchoFog link”, press Ctrl+V in it.',
     bad: 'There is no EchoFog link in this page’s address. Ask for it again in full: everything after the “#” is the invitation.',
     secret: 'This link carries the access key of a hidden node. Do not forward it to group chats.',
     privacy: 'The link does not leave this page: everything after the “#” stays in your browser.'
@@ -177,6 +181,12 @@
   $('kind').textContent = isGroup ? T.kindGroup : isContact ? T.kindContact : isNode ? T.kindNode : hidden ? T.kindHidden : T.kindPublic;
   $('open').textContent = T.open;
   $('open').setAttribute('href', link);
+  // Windows can hand the app echofog://join/?… (with a "/"), which 0.2.0 does not read: the link
+  // goes to the clipboard as well, and pasted into the app it opens
+  $('open').addEventListener('click', function () {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return;
+    navigator.clipboard.writeText(link).then(function () { $('opened').textContent = T.opened; show('opened'); }, function () {});
+  });
   $('download').textContent = T.download;
   show('ok');
   var ol = $('steps');
