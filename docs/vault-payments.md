@@ -81,8 +81,10 @@ Every payment system has risks. These are ours:
 - **A node risks what it has not collected yet.** A modified app could sign the same deposit to
   many nodes at once. The first to collect gets paid. Collection is first come, first served,
   and a voucher that could only be paid in part pays the rest after you top up. A node limits
-  this by collecting from any user who owes it more than 0.05 TON right away, without waiting for
-  the 6-hour round. It also risks the up to 32 MB it lets a vault run past its last voucher, and
+  this: a vault may owe it at most 0.2 TON (or 4 GB of traffic at its price, if that is more),
+  whatever the deposit, and it collects from any user who owes it 0.05 TON right away, without
+  waiting for the 6-hour round. A voucher past that limit is refused until the node has
+  collected. It also risks the up to 32 MB it lets a vault run past its last voucher, and
   what it accepts on a look at the vault up to 15 minutes old.
 - **A node that is offline for more than 24 hours** during a user's withdrawal can miss what that
   user owed it.
@@ -163,7 +165,8 @@ collections.
 vouchers)`, the log says once an hour how much is waiting and the address to top up, and the app's
 sharing card shows the same with a button to copy the address.
 
-**When the node collects:** it checks every 5 minutes. A client who owes 0.05 TON or more, a total
+**When the node collects:** it checks every 5 minutes, and at once when a voucher brings a client
+to 0.05 TON. A client who owes 0.05 TON or more, a total
 of 0.2 TON or more, or a client withdrawing their deposit is collected at once; otherwise every
 6 hours. Debts under 0.02 TON wait for the next round, because the fee would cost more than they
 bring.

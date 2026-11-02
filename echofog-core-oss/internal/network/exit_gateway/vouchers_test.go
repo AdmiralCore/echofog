@@ -560,3 +560,42 @@ func TestClaimProblemIsReportedAndCleared(t *testing.T) {
 	b.reportClaim(nil)
 	assert.Empty(t, b.ClaimProblem(), "cashing worked: nothing to report")
 }
+
+// A modified client can sign its whole deposit to several exits at once: a voucher names only the
+// exit's payout address, and no exit sees what the vault promised the others. Each exit therefore
+// lets a vault owe it at most maxOutstandingNano before cashing it, and cashes it at once (not at
+// the next tick) when it owes UrgentDelta.
+func TestDepositPromisedToManyExitsRisksOnlyTheCapEach(t *testing.T) {
+	chain := newFakeChain()
+	u := newTestUser(t, 7, chain, 10_000_000_000) // 10 TON
+	urgent := DefaultClaimPolicy().UrgentDelta
+	var books []*VoucherBook
+	for i, payout := range []byte{0xEE, 0xED, 0xEC} {
+		b := NewVoucherBook("", tonwallet.MainnetGlobalID, rawAddr(payout), chain)
+		b.SetQuote(testNanoPerMB)
+		b.urgent = urgent
+		books = append(books, b)
+
+		whole := b.Accept(context.Background(), "tag", u.offer(t, tonwallet.MainnetGlobalID, rawAddr(payout), 10_000_000_000))
+		assert.False(t, whole.OK, "exit %d: the whole deposit at once is more than one exit risks", i)
+		assert.Contains(t, whole.Error, "cashing")
+		assert.Len(t, b.kick, 1, "exit %d: and it cashes what it holds", i)
+		<-b.kick
+	}
+	for i, b := range books {
+		payout := []byte{0xEE, 0xED, 0xEC}[i]
+		small := b.Accept(context.Background(), "tag", u.offer(t, tonwallet.MainnetGlobalID, rawAddr(payout), urgent.Int64()-1))
+		require.True(t, small.OK, small.Error)
+		assert.Empty(t, b.kick, "below UrgentDelta: the next round is soon enough")
+		r := b.Accept(context.Background(), "tag", u.offer(t, tonwallet.MainnetGlobalID, rawAddr(payout), maxOutstandingNano))
+		require.True(t, r.OK, "up to the cap a vault pays as before: %s", r.Error)
+		assert.Len(t, b.kick, 1, "at UrgentDelta the claim loop is woken")
+		over := b.Accept(context.Background(), "tag", u.offer(t, tonwallet.MainnetGlobalID, rawAddr(payout), maxOutstandingNano+1))
+		assert.False(t, over.OK, "past the cap nothing more until the exit has cashed")
+	}
+	assert.Equal(t, big.NewInt(maxOutstandingNano), books[0].Owed())
+
+	// an expensive exit risks a few GB of traffic rather than refusing a fast client's 1 GB vouchers
+	assert.Equal(t, big.NewInt(maxOutstandingBytes/bytesPerMB*1_000_000), outstandingCap(1_000_000))
+	assert.Equal(t, big.NewInt(maxOutstandingNano), outstandingCap(testNanoPerMB))
+}
