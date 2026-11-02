@@ -136,7 +136,7 @@ func TestRealSwarmDownloadProbeAndTestDial(t *testing.T) {
 	svc.allowPrivate.Store(true)
 	svc.SetEnabled(true)
 	AttachToSwarm(exitSwarm, svc)
-	bwprobe.NewForSwarm(exitSwarm)
+	bwprobe.NewForSwarm(exitSwarm).SetGate(svc.ProbeClient)
 	clientProbe := bwprobe.NewForSwarm(clientSwarm)
 
 	require.NoError(t, clientTr.DialEarly(context.Background(), exitTr.Addr().String()))
@@ -147,11 +147,16 @@ func TestRealSwarmDownloadProbeAndTestDial(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	// the exit bursts only for a client that opened a tunnel through it lately, as a speed check
+	// does: it test-dials the exit first
+	_, err := clientProbe.MeasureDownload(ctx, exitID)
+	require.Error(t, err, "no tunnel yet: no burst")
+
+	conn, err := NewP2PDialer(SwarmOpener(clientSwarm, exitID)).DialExitStreamConfirmed(ctx, echoServer(t))
+	require.NoError(t, err)
+	conn.Close()
+
 	kbps, err := clientProbe.MeasureDownload(ctx, exitID)
 	require.NoError(t, err)
 	assert.Greater(t, kbps, 1000, "loopback should deliver far more than 1 Mbit/s")
-
-	conn, err := NewP2PDialer(SwarmOpener(clientSwarm, exitID)).DialExitStream(ctx, echoServer(t))
-	require.NoError(t, err)
-	conn.Close()
 }

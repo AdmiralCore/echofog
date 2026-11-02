@@ -344,6 +344,7 @@ type ExitService struct {
 	budget  freeBudget                     // daily and monthly caps of a free exit
 	queries *ratelimit.Keyed[types.PeerID] // account requests per peer
 	offers  *ratelimit.Keyed[types.PeerID] // voucher offers per peer
+	clients recentClients                  // who opened a tunnel lately (ProbeClient)
 }
 
 // SetPayments lets clients pay for traffic: ledger holds their credit, self is this exit's peer ID
@@ -408,6 +409,7 @@ func (e *ExitService) HandleTunnelFrom(ctx context.Context, st FramedStream, tar
 		_ = st.WriteFrame(net_types.TypeExitConnectResult, []byte{resultDenied})
 		return
 	}
+	e.clients.note(peer, time.Now())
 
 	if e.allowance(peer) == 0 {
 		e.refuse(peer, e.paymentRefusal())

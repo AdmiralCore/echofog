@@ -85,7 +85,8 @@ func TestMeasureBestAppliesHeadroomAndHandlesNoPeers(t *testing.T) {
 }
 
 func TestMeasureDownloadSeenByRequester(t *testing.T) {
-	pa, _, _, b := pair(0)
+	pa, pb, _, b := pair(0)
+	pb.SetGate(serveAll)
 	kbps, err := pa.MeasureDownload(context.Background(), b)
 	require.NoError(t, err)
 	assert.Greater(t, kbps, 1_000)
@@ -102,9 +103,12 @@ func TestMeasureDownloadUsesWhatArrivedWhenTheEndMarkerIsLate(t *testing.T) {
 	lb := &link{handlers: map[types.PeerID]func([]byte, types.PeerID) error{}, self: b, delay: 2 * time.Millisecond,
 		drop: func(f []byte) bool { return len(f) == headerSize && f[0] == kindEnd }}
 	la.peer, lb.peer = lb, la
-	pa, _ := New(la), New(lb)
+	pa, pb := New(la), New(lb)
+	pb.SetGate(serveAll)
 
 	kbps, err := pa.MeasureDownload(context.Background(), b)
 	require.NoError(t, err)
 	assert.Greater(t, kbps, 5_000)
 }
+
+func serveAll(types.PeerID) (string, bool) { return "", true }

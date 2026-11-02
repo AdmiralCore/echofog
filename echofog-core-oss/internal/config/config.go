@@ -207,8 +207,9 @@ type NetworkConfig struct {
 	// HolePunch lets two peers behind NATs open a direct connection, coordinated through a relay.
 	HolePunch bool `json:"hole_punch"`
 
-	// NoBWProbeServe stops the node answering other peers' download speed probes, a 12 MB burst
-	// each. BWProbeMBPerMin caps what answering them sends a minute, all peers together (0 = 48).
+	// NoBWProbeServe stops the node answering other peers' download speed probes, a 4 MB burst
+	// each, only to clients of this exit. BWProbeMBPerMin caps what answering them sends a minute,
+	// all peers together (0 = 16).
 	NoBWProbeServe  bool `json:"no_bwprobe_serve,omitempty"`
 	BWProbeMBPerMin int  `json:"bwprobe_mb_per_min,omitempty"`
 }

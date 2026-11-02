@@ -188,8 +188,8 @@ exit's ledger, the access secret and the list of who joined a hidden node are ne
 
 | Flag | Environment variable | What it does |
 |---|---|---|
-| `--bwprobe-mb-per-min` int | `ECHOFOG_BWPROBE_MB_PER_MIN` | most MB a minute this node sends answering speed probes, all peers together (0 = 48) |
-| `--no-bwprobe-serve` | `ECHOFOG_NO_BWPROBE_SERVE` | do not answer other peers' download speed probes (12 MB bursts) |
+| `--bwprobe-mb-per-min` int | `ECHOFOG_BWPROBE_MB_PER_MIN` | most MB a minute this node sends answering speed probes, all peers together (0 = 16) |
+| `--no-bwprobe-serve` | `ECHOFOG_NO_BWPROBE_SERVE` | do not answer other peers' download speed probes (4 MB bursts, only to recent clients of this exit) |
 | `--relay` | `ECHOFOG_RELAY` | relay calls and messages for peers that cannot reach each other directly, and keep messages for offline peers (default true) |
 | `--relay-allow` string | `ECHOFOG_RELAY_ALLOW` | comma-separated peer IDs allowed to use this relay when it is private |
 | `--relay-circuit-mb` int | `ECHOFOG_RELAY_CIRCUIT_MB` | most MB one relayed connection may carry (0 = default 4096, -1 = no limit) |

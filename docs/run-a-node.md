@@ -331,7 +331,7 @@ peer. The defaults suit a VPS; none needs setting.
 
 | What | Limit |
 | --- | --- |
-| Speed probes other peers ask for (12 MB each) | one per peer every 5 s, two at once, 48 MB a minute in all. `--bwprobe-mb-per-min` changes the budget (below 12 turns answering off); `--no-bwprobe-serve` turns it off. Measuring exits yourself is not affected. |
+| Speed probes other peers ask for (4 MB each) | only clients of your exit that opened a tunnel in the last 2 minutes; one per peer every 30 s and per address every 10 s, two at once, 16 MB a minute in all. `--bwprobe-mb-per-min` changes the budget (below 4 turns answering off); `--no-bwprobe-serve` turns it off. Measuring exits yourself is not affected. |
 | Peer lists | answered only to the connected peer asking, at most 16 peers, once per peer every 10 s, 120 answers a minute; lists are taken in only when this node asked, and only public addresses |
 | Known-peer store | peers only heard of are no longer saved past 2000 entries |
 | Offline messages | expired ones are purged every 10 minutes and stop counting against quotas; at most 100 000 recipients remembered |
