@@ -1302,6 +1302,7 @@ func (d *MediaDispatcher) fromFeeder(streamID string, from types.PeerID, now tim
 	if f.cur != up {
 		if f.cur != (types.PeerID{}) {
 			f.prev, f.prevUntil = f.cur, now.Add(feederGrace)
+			d.restartFiltersLocked(streamID)
 		}
 		f.cur = up
 		d.feeders[streamID] = f

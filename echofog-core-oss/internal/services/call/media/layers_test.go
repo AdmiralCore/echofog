@@ -566,3 +566,51 @@ func TestLayers_RenumberingSurvivesLateUnitsOfTheOldFeeder(t *testing.T) {
 		assert.Equal(t, uint16(1), fromB[i]-fromB[i-1], "B's packet %d: the webview sees a hole or a step back", i)
 	}
 }
+
+// One unit with a frame far ahead (a relay that does not watch the stream does not check
+// signatures, so any member could seal one) must not freeze a child's cap: the real frames that
+// follow start the filter over, and a cap set later is still taken at the next base frame.
+func TestLayers_AFarJumpDoesNotFreezeTheFilter(t *testing.T) {
+	unit := func(tid uint8, frame uint32) unitLayer {
+		return unitLayer{marked: true, mark: videolayer.Mark{TID: tid, Count: 1}, frame: frame, cap: capAll}
+	}
+	f := &childFilter{aware: true, want: capBase, cap: capAll}
+	send, c := f.decide(unit(0, 100))
+	require.True(t, send)
+	require.Equal(t, capBase, c)
+	f.decide(unit(0, 100+1<<30)) // the forged one
+	f.want = capAll
+	send, c = f.decide(unit(0, 110))
+	assert.True(t, send)
+	assert.Equal(t, capAll, c, "the new cap is taken at the next real base frame")
+	send, _ = f.decide(unit(2, 112))
+	assert.True(t, send, "frames above the base go again")
+
+	// a unit a little behind is a late one, and keeps the cap of its frame
+	f.decide(unit(0, 120))
+	send, c = f.decide(unit(2, 112))
+	assert.True(t, send)
+	assert.Equal(t, capAll, c)
+}
+
+// When the stream comes from another feeder, the filters of its children start over.
+func TestLayers_FiltersStartOverWithANewFeeder(t *testing.T) {
+	viewer := pid(3)
+	b, r, bs, _, _, _ := layerTree(t, viewer)
+	r.SetChildLayers("s1", viewer, true, capBase)
+	broadcast(t, b, r, bs, layeredFrames(t, 4))
+	r.mu.RLock()
+	started := r.filters[linkKey{"s1", viewer}].started
+	r.mu.RUnlock()
+	require.True(t, started)
+
+	r.streamEngine.ApplyManifest(&tree.StreamManifest{StreamID: "s1", Broadcaster: pid(1), Epoch: 3, Subscribers: []types.PeerID{pid(5), pid(2), viewer},
+		ParentMap:        map[types.PeerID]types.PeerID{pid(5): pid(1), pid(2): pid(5), viewer: pid(2)},
+		DistributionTree: map[types.PeerID][]types.PeerID{pid(1): {pid(5)}, pid(5): {pid(2)}, pid(2): {viewer}}})
+	require.True(t, r.fromFeeder("s1", pid(5), time.Now()))
+	r.mu.RLock()
+	f := r.filters[linkKey{"s1", viewer}]
+	r.mu.RUnlock()
+	assert.False(t, f.started, "a new feeder: the filter starts over")
+	assert.Equal(t, capBase, f.want, "the cap the call layer set stays")
+}

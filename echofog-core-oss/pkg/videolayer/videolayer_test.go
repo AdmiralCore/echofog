@@ -72,3 +72,23 @@ func TestFindIgnoresUnmarked(t *testing.T) {
 		}
 	}
 }
+
+// A mark whose index lies outside its frame, or whose frame is larger than any can be, is not taken:
+// the packet goes as an unmarked one.
+func TestFindRefusesAnInsaneMark(t *testing.T) {
+	for _, m := range []Mark{
+		{TID: 0, Index: 0, Count: 0},
+		{TID: 0, Index: 3, Count: 3},
+		{TID: 1, Index: 60000, Count: 2},
+		{TID: 2, Index: 0, Count: MaxFrameUnits + 1},
+	} {
+		if _, _, ok := Find(marked(t, m, nil)); ok {
+			t.Errorf("an insane mark was taken: %+v", m)
+		}
+	}
+	for _, m := range []Mark{{Index: 0, Count: 1}, {Index: MaxFrameUnits - 1, Count: MaxFrameUnits}} {
+		if _, _, ok := Find(marked(t, m, nil)); !ok {
+			t.Errorf("a sane mark was refused: %+v", m)
+		}
+	}
+}

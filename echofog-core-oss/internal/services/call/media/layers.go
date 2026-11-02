@@ -97,8 +97,24 @@ type frameCap struct {
 // not in the middle of frames that refer to layers it was not sent).
 func (f *childFilter) active() bool { return f != nil && (f.aware || f.cap != capAll) }
 
+// maxFrameJump is the furthest one unit may move a child filter's newest frame, in unit seqs (some
+// seconds of a 4K stream, far past its window of recent frames). A unit further off either way
+// starts the filter over from its frame. A relay that does not watch a stream does not check its
+// units' signatures, so one unit sealed by any member with a seq far ahead would otherwise leave
+// every real frame "older" than the newest for good: none would be found among the recent ones,
+// and the child's cap would never change again (the filter outlives a change of parent).
+const maxFrameJump = 1 << 16
+
+// restart forgets the frames a filter decided on: the next unit starts it over.
+func (f *childFilter) restart() {
+	f.started, f.frames, f.next = false, [32]frameCap{}, 0
+}
+
 // decide says whether a unit goes to the child, and the cap it goes with.
 func (f *childFilter) decide(u unitLayer) (bool, uint8) {
+	if jump := int32(u.frame - f.newest); f.started && (jump > maxFrameJump || jump < -maxFrameJump) {
+		f.restart()
+	}
 	c := f.cap
 	switch {
 	case !f.started || int32(u.frame-f.newest) > 0:
@@ -124,6 +140,16 @@ func (f *childFilter) capOf(start uint32) (uint8, bool) {
 		}
 	}
 	return 0, false
+}
+
+// restartFiltersLocked starts the filters of a stream's children over: the stream comes from
+// another feeder now, whose units say nothing of the frames the last one sent. d.mu must be held.
+func (d *MediaDispatcher) restartFiltersLocked(streamID string) {
+	for k, f := range d.filters {
+		if k.streamID == streamID {
+			f.restart()
+		}
+	}
 }
 
 // ringLayer is what the ring keeps of a unit's layer, to resend it only to whom it went.
