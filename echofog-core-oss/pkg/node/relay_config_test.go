@@ -7,7 +7,9 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network/handshake"
+	"github.com/echofog/echofog-core/internal/p2p/holepunch"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
+	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -89,4 +91,15 @@ func TestCoverNameAloneIsNotAnnounced(t *testing.T) {
 	n.Cfg.AntiDPI.CamouflageAddr = "198.51.100.7:443"
 	assert.Equal(t, "cover.example", n.announcedSNI())
 	assert.Contains(t, n.RelayReachability().Addr, "sni=cover.example")
+}
+
+// A hole punch is answered (with our public, IPv6 and LAN addresses) only for a peer this node
+// has reason to reach: a stranger who merely asks gets nothing; a peer we set out to reach does.
+func TestPunchAnsweredOnlyForWantedPeers(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}, Swarm: &swarm.Swarm{}}
+	n.HolePunch = holepunch.New(holepunch.Config{Connected: func(types.PeerID) bool { return false }})
+	stranger, wanted := types.PeerID{2}, types.PeerID{3}
+	n.HolePunch.Want(wanted)
+	assert.False(t, n.admitPunch(stranger, nil), "a stranger's CONNECT is answered")
+	assert.True(t, n.admitPunch(wanted, nil), "a peer we set out to reach is refused")
 }

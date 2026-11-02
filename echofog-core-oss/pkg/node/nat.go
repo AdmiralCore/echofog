@@ -178,6 +178,9 @@ func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string
 	if n.Swarm.GetPeer(peer) != nil {
 		return nil
 	}
+	if n.HolePunch != nil {
+		n.HolePunch.Want(peer) // its hole punch toward us, if it tries one, is now answered
+	}
 	if !network.DirectRequested(ctx) && n.Swarm.UserLinkViaRelay(peer, addr) {
 		// guard mode: a user's node across the border is not dialed or punched to, which is noise
 		// or a flow of its own to a stranger. Both of us meet at a camouflaged relay; the callers

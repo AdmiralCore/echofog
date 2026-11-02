@@ -68,6 +68,10 @@ func (s *Swarm) MarkExplicitPeer(id types.PeerID) {
 	s.peerSNIMu.Unlock()
 }
 
+// IsExplicitPeer reports whether the peer was listed explicitly (bootstrap, relays, a pasted
+// address): one the node was told to reach.
+func (s *Swarm) IsExplicitPeer(id types.PeerID) bool { return s.isExplicitPeer(id) }
+
 func (s *Swarm) isExplicitPeer(id types.PeerID) bool {
 	s.peerSNIMu.RLock()
 	defer s.peerSNIMu.RUnlock()
