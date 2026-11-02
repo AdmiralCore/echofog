@@ -1,7 +1,10 @@
 package routing
 
 import (
+	"encoding/hex"
+
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -14,6 +17,9 @@ const (
 	RelayAckStored    byte = 1 // in the recipient's mailbox here
 	RelayAckForwarded byte = 2 // handed to the recipient, or to the next relay
 	RelayAckRefused   byte = 3 // not taken: see the reason
+	// RelayAckReceived goes the other way: a recipient tells the relay that handed it a message
+	// that it arrived (messenger.MailboxReceipt).
+	RelayAckReceived = messenger.MailboxReceipt
 )
 
 // Why a relay refused a message.
@@ -38,6 +44,42 @@ func DecodeRelayAck(b []byte) (reqID []byte, status, reason byte, ok bool) {
 		return nil, 0, 0, false
 	}
 	return b[2:], b[0], b[1], true
+}
+
+// decodeReceipt reads a recipient's receipt: a TypeRelayAck of status RelayAckReceived.
+func decodeReceipt(b []byte) (msgID []byte, ok bool) {
+	if len(b) < 3 || len(b) > 2+maxRelayAckID || b[0] != RelayAckReceived {
+		return nil, false
+	}
+	return b[2:], true
+}
+
+// maxReceipting bounds the table of recipients known to send receipts.
+const maxReceipting = 100000
+
+// handleReceipt drops the mail a recipient says it got, and notes that it sends receipts: its
+// other mail is then kept until it does (see finishStored).
+func (rs *RelayServer) handleReceipt(payload []byte, from types.PeerID) {
+	id, ok := decodeReceipt(payload)
+	if !ok || rs.mailbox == nil {
+		return
+	}
+	rs.peersMu.Lock()
+	if rs.receipting == nil || len(rs.receipting) >= maxReceipting {
+		rs.receipting = map[types.PeerID]bool{}
+	}
+	rs.receipting[from] = true
+	rs.peersMu.Unlock()
+	rs.receipts.Add(1)
+	rs.mailbox.Receipt(from, hex.EncodeToString(id))
+}
+
+// sendsReceipts: the peer has told us of mail it got, so mail it was handed and did not confirm
+// is kept for it.
+func (rs *RelayServer) sendsReceipts(peer types.PeerID) bool {
+	rs.peersMu.Lock()
+	defer rs.peersMu.Unlock()
+	return rs.receipting[peer]
 }
 
 // ack tells the peer that sent a relay request what became of it.

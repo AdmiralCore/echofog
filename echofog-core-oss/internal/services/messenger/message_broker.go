@@ -433,6 +433,13 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		return
 	}
 
+	switch msg.Payload.(type) {
+	case *internal_pb.MessageData_SecureMessage, *internal_pb.MessageData_X3DhInit:
+		// a relay or mailbox handed it over: it got here, so the mailbox may drop its copy
+		// (read, a repeat, or one that cannot be read: keeping it helps nobody)
+		defer s.sendReceipt(peerID, originID, msg.MessageId)
+	}
+
 	switch payload := msg.Payload.(type) {
 	case *internal_pb.MessageData_SecureMessage:
 		authenticated = true

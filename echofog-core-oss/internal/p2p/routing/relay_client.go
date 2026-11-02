@@ -648,6 +648,9 @@ func (rc *RelayClient) HandleRawFrame(msgType net_types.MessageType, payload []b
 		return true
 
 	case net_types.TypeRelayAck:
+		if len(payload) > 0 && payload[0] == RelayAckReceived {
+			return false // a recipient's receipt, for the relay server
+		}
 		reqID, status, reason, ok := DecodeRelayAck(payload)
 		if !ok {
 			return true

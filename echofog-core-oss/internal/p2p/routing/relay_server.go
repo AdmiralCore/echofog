@@ -61,6 +61,7 @@ type RelayServer struct {
 	connectedAt map[types.PeerID]time.Time               // when each connected peer connected
 	delivering  map[types.PeerID]bool                    // stored mail being handed to a reconnected peer
 	probing     map[types.PeerID][]messenger.MailboxItem // forwarded to a silent peer, kept if it does not answer
+	receipting  map[types.PeerID]bool                    // recipients that confirm the mail they get (see handleReceipt)
 	addrOf      func(types.PeerID) string                // a connected peer's remote address
 	answers     func(types.PeerID) bool                  // whether a connected peer answers a ping
 
@@ -86,6 +87,7 @@ type RelayServer struct {
 	rateDropped    atomic.Uint64 // frames dropped by a speed limit
 	byDatagram     atomic.Uint64 // media frames passed on as datagrams
 	budgetClosed   atomic.Uint64 // circuits closed for using up a byte budget
+	receipts       atomic.Uint64 // receipts recipients sent for messages handed to them (see handleReceipt)
 }
 
 // Limits of a signaling circuit: the hole punching exchange is a few small messages, so anything
@@ -130,6 +132,7 @@ type RelayStats struct {
 	RateDropped     uint64 `json:"rateDropped"`   // frames dropped by a speed limit
 	ByDatagram      uint64 `json:"byDatagram"`    // media frames of circuits passed on as datagrams
 	BudgetClosed    uint64 `json:"budgetClosed"`  // circuits closed for using up a byte budget
+	Receipts        uint64 `json:"receipts"`      // receipts for messages handed to their recipients
 }
 
 // Stats returns the relay totals.
@@ -160,6 +163,7 @@ func (rs *RelayServer) Stats() RelayStats {
 		RateDropped:     rs.rateDropped.Load(),
 		ByDatagram:      rs.byDatagram.Load(),
 		BudgetClosed:    rs.budgetClosed.Load(),
+		Receipts:        rs.receipts.Load(),
 	}
 	if rs.mailbox != nil {
 		st.MailboxWaiting = rs.mailbox.Waiting()
@@ -414,6 +418,13 @@ func (rs *RelayServer) HandleRawFrame(msgType net_types.MessageType, payload []b
 			}
 		}
 		return false
+
+	case net_types.TypeRelayAck:
+		if len(payload) > 0 && payload[0] == RelayAckReceived {
+			rs.handleReceipt(payload, fromPeer)
+			return true
+		}
+		return false // an answer to our own request: for RelayClient
 
 	default:
 		return false
@@ -884,7 +895,15 @@ func mailboxItemOf(msg *internal_pb.MessageData, recipient, sender types.PeerID,
 	if msgID == "" {
 		msgID = fmt.Sprintf("relay-%d", time.Now().UnixNano())
 	}
+	// the recipient's receipt names the message inside, not the request
+	var inner string
+	var env internal_pb.Envelope
+	var md internal_pb.MessageData
+	if proto.Unmarshal(envelope, &env) == nil && proto.Unmarshal(env.Data, &md) == nil {
+		inner = hex.EncodeToString(md.MessageId)
+	}
 	return messenger.MailboxItem{
+		MsgID:       inner,
 		ID:          msgID,
 		RecipientID: recipient,
 		SenderID:    sender, // the authenticated signer, used for the per-sender quota
@@ -1023,9 +1042,12 @@ func (rs *RelayServer) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPub
 }
 
 // A reconnected recipient gets its stored mail twice — when it connects and once more a little
-// later — and only then is the mail dropped, if the recipient is still connected. A write on a
-// fresh connection that never reaches the recipient's handlers no longer loses the mail; the
-// recipient drops the repeat (messages are deduplicated by id). Tests shorten the pause.
+// later. A write on a fresh connection that never reaches the recipient's handlers no longer
+// loses the mail; the recipient drops the repeat (messages are deduplicated by id). A recipient
+// that sends receipts (RelayAckReceived) has each message dropped on its receipt, and what it
+// did not confirm stays until its next visit or the expiry. For an older recipient, which sends
+// none, the mail is dropped after the second pass if it is still connected. Tests shorten the
+// pause.
 var storedSecondPass = 10 * time.Second
 
 func (rs *RelayServer) doneDelivering(peerID types.PeerID) {
@@ -1042,6 +1064,11 @@ func (rs *RelayServer) finishStored(peerID types.PeerID, sent map[string]bool) {
 	}
 	for id := range rs.sendStored(peerID) {
 		sent[id] = true
+	}
+	if rs.sendsReceipts(peerID) {
+		rs.logger.Info("RelayServer: handed stored mail to a reconnected peer, kept until its receipts",
+			"peer", peerID.String()[:8], "count", len(sent))
+		return
 	}
 	ids := make([]string, 0, len(sent))
 	for id := range sent {
