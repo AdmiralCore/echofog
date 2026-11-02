@@ -150,6 +150,11 @@ message PreKeyBundle {
   bytes signature = 3;
   bytes one_time_pre_key = 4;
   int64 created_at = 5;
+  // version 2 (PQXDH): a signed ML-KEM-768 prekey. kem_signature covers the whole bundle with it;
+  // `signature` still covers fields 1-5 alone, so v0.2.0 checks it and skips 6-8.
+  uint32 version = 6;
+  bytes kem_pre_key = 7;
+  bytes kem_signature = 8;
 }
 
 message X3DHInit {

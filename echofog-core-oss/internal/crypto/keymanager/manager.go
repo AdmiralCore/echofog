@@ -61,6 +61,8 @@ type AccountManager struct {
 	opkMu      sync.Mutex // the count of one-time prekeys handed out on request
 	jitCount   int
 	jitCounted bool
+
+	kemMu sync.Mutex // replacing the KEM prekey
 }
 
 func NewKeyManagerWithMnemonic(mnemonic []byte, passphrase []byte, storage storage.Storage) (*KeyManager, error) {

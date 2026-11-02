@@ -312,15 +312,7 @@ func (s *Swarm) attachStreamHandlers(pw *network.PeerWrapper, p *Peer, peerID ty
 					return
 				}
 
-				protoBundle := &internal_pb.PreKeyBundle{
-					IdentityKey:   bundle.IdentityKey[:],
-					SignedPreKey:  bundle.SignedPreKey[:],
-					Signature:     bundle.Signature[:],
-					OneTimePreKey: joinOPKs(bundle.OneTimeKeys),
-					CreatedAt:     bundle.CreatedAt,
-				}
-
-				bundleBytes, err := proto.Marshal(protoBundle)
+				bundleBytes, err := EncodeBundle(bundle)
 				if err != nil {
 					stream.Close()
 					return

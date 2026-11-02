@@ -3,6 +3,7 @@ package keymanager
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/mlkem"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -16,8 +17,16 @@ import (
 
 const (
 	SignatureContext = "ECHOFOG_PREKEY_BINDING_V1"
-	OPKBatchSize     = 20
-	MaxBundleOPKs    = 32
+	// SignatureContextV2 is the label of the second signature of a version 2 bundle, over all of it
+	// including the KEM prekey.
+	SignatureContextV2 = "ECHOFOG_PREKEY_BINDING_V2"
+	OPKBatchSize       = 20
+	MaxBundleOPKs      = 32
+
+	// BundleVersionPQ: the bundle carries a signed ML-KEM-768 prekey.
+	BundleVersionPQ = 2
+	// KEMAlgMLKEM768 names the KEM in the signed bytes, so a later one cannot be mistaken for it.
+	KEMAlgMLKEM768 = 1
 )
 
 var (
@@ -26,11 +35,14 @@ var (
 	ErrGetIdentityFailed   = errors.New("failed to get identity key")
 	ErrGetEncryptFailed    = errors.New("failed to get encryption key")
 	ErrGetSPKFailed        = errors.New("failed to get signed prekey")
+	ErrGetKEMFailed        = errors.New("failed to get KEM prekey")
 	ErrEnclaveOpenFailed   = errors.New("failed to open key enclave")
 	ErrOPKNotFound         = errors.New("one-time prekey not found or already used")
 	ErrBundleExpired       = errors.New("bundle expired")
 	ErrBundleFromFuture    = errors.New("bundle from far future")
 	ErrInvalidSignature    = errors.New("invalid bundle signature")
+	ErrInvalidKEMPreKey    = errors.New("invalid KEM prekey or KEM prekey signature")
+	ErrKEMPreKeyMissing    = errors.New("a version 2 bundle without its KEM prekey")
 )
 
 type PublicBundle struct {
@@ -39,8 +51,19 @@ type PublicBundle struct {
 	SignedPreKey [32]byte
 	OneTimeKeys  [][32]byte
 	CreatedAt    int64
-	Signature    [64]byte
+	// Signature covers the fields above, exactly as v0.2.0 checks it.
+	Signature [64]byte
+
+	// Version is 0 for a classic bundle (v0.2.0) and BundleVersionPQ for one with a KEM prekey.
+	Version uint32
+	// KEMPreKey is an ML-KEM-768 encapsulation key for PQXDH; KEMSignature covers the whole bundle
+	// with it (see serializeBundleV2). Nodes of v0.2.0 do not know these fields and skip them.
+	KEMPreKey    []byte
+	KEMSignature [64]byte
 }
+
+// HasKEM says whether the bundle offers a KEM prekey (checked by VerifyBundle).
+func (b *PublicBundle) HasKEM() bool { return len(b.KEMPreKey) > 0 }
 
 type OPKStorage struct {
 	Keys map[[32]byte]*memguard.Enclave
@@ -100,11 +123,18 @@ func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, err
 	var spkPub [32]byte
 	copy(spkPub[:], spkPubSlice)
 
+	kemPub, err := am.KEMPreKey()
+	if err != nil {
+		return nil, ErrGetKEMFailed
+	}
+
 	var peerID [32]byte
 	copy(peerID[:], idPub)
 
+	// after KEMPreKey: the bundle is never older than the first KEM prekey (see KEMSince)
 	timestamp := time.Now().Unix()
 	bindingData := serializeBundleForSigning(timestamp, mTermPub, spkPub, opkPubs)
+	bindingV2 := serializeBundleV2(BundleVersionPQ, timestamp, mTermPub, spkPub, opkPubs, kemPub)
 
 	lockedIdPriv, err := idPrivEnc.Open()
 	if err != nil {
@@ -114,12 +144,14 @@ func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, err
 	tmpPriv := make([]byte, ed25519.PrivateKeySize)
 	copy(tmpPriv, lockedIdPriv.Bytes())
 	signature := ed25519.Sign(tmpPriv, bindingData)
+	signatureV2 := ed25519.Sign(tmpPriv, bindingV2)
 	memguard.WipeBytes(tmpPriv)
 
 	lockedIdPriv.Destroy()
 
-	var sig [64]byte
+	var sig, sigV2 [64]byte
 	copy(sig[:], signature)
+	copy(sigV2[:], signatureV2)
 
 	return &PublicBundle{
 		PeerID:       peerID,
@@ -128,6 +160,9 @@ func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, err
 		OneTimeKeys:  opkPubs,
 		CreatedAt:    timestamp,
 		Signature:    sig,
+		Version:      BundleVersionPQ,
+		KEMPreKey:    kemPub,
+		KEMSignature: sigV2,
 	}, nil
 }
 
@@ -219,7 +254,46 @@ func VerifyBundle(bundle *PublicBundle) error {
 		return ErrInvalidSignature
 	}
 
+	// A bundle that has a KEM prekey, or says it should, must prove it with the second signature.
+	// A bad one is not dropped to classic X3DH: that would let anyone on the way force classic
+	// sessions by spoiling a byte.
+	if !bundle.HasKEM() {
+		if bundle.Version >= BundleVersionPQ || bundle.KEMSignature != ([64]byte{}) {
+			return ErrKEMPreKeyMissing
+		}
+		return nil
+	}
+	if bundle.Version < BundleVersionPQ || len(bundle.KEMPreKey) != mlkem.EncapsulationKeySize768 {
+		return ErrInvalidKEMPreKey
+	}
+	if _, err := mlkem.NewEncapsulationKey768(bundle.KEMPreKey); err != nil {
+		return ErrInvalidKEMPreKey
+	}
+	bindingV2 := serializeBundleV2(bundle.Version, bundle.CreatedAt, bundle.IdentityKey, bundle.SignedPreKey, bundle.OneTimeKeys, bundle.KEMPreKey)
+	if !ed25519.Verify(bundle.PeerID[:], bindingV2, bundle.KEMSignature[:]) {
+		return ErrInvalidKEMPreKey
+	}
 	return nil
+}
+
+// serializeBundleV2 is what the second signature of a version 2 bundle covers: everything the
+// first one does, the version, and the KEM prekey with its algorithm. Every part has a fixed size
+// or a count before it.
+func serializeBundleV2(version uint32, timestamp int64, mtk, spk [32]byte, opks [][32]byte, kemPub []byte) []byte {
+	var buf bytes.Buffer
+	buf.WriteString(SignatureContextV2)
+	buf.Write(binary.BigEndian.AppendUint32(nil, version))
+	buf.Write(binary.BigEndian.AppendUint64(nil, uint64(timestamp)))
+	buf.Write(mtk[:])
+	buf.Write(spk[:])
+	buf.Write(binary.BigEndian.AppendUint16(nil, uint16(len(opks))))
+	for _, key := range opks {
+		buf.Write(key[:])
+	}
+	buf.WriteByte(KEMAlgMLKEM768)
+	buf.Write(binary.BigEndian.AppendUint16(nil, uint16(len(kemPub))))
+	buf.Write(kemPub)
+	return buf.Bytes()
 }
 
 func serializeBundleForSigning(timestamp int64, mtk, spk [32]byte, opks [][32]byte) []byte {

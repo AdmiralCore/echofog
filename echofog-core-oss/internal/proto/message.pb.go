@@ -1501,6 +1501,11 @@ type PreKeyBundle struct {
 	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
 	OneTimePreKey []byte                 `protobuf:"bytes,4,opt,name=one_time_pre_key,json=oneTimePreKey,proto3" json:"one_time_pre_key,omitempty"`
 	CreatedAt     int64                  `protobuf:"varint,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// version 2 (PQXDH): a signed ML-KEM-768 prekey. kem_signature covers the whole bundle with it;
+	// `signature` still covers fields 1-5 alone, so v0.2.0 checks it and skips 6-8.
+	Version       uint32 `protobuf:"varint,6,opt,name=version,proto3" json:"version,omitempty"`
+	KemPreKey     []byte `protobuf:"bytes,7,opt,name=kem_pre_key,json=kemPreKey,proto3" json:"kem_pre_key,omitempty"`
+	KemSignature  []byte `protobuf:"bytes,8,opt,name=kem_signature,json=kemSignature,proto3" json:"kem_signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1568,6 +1573,27 @@ func (x *PreKeyBundle) GetCreatedAt() int64 {
 		return x.CreatedAt
 	}
 	return 0
+}
+
+func (x *PreKeyBundle) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *PreKeyBundle) GetKemPreKey() []byte {
+	if x != nil {
+		return x.KemPreKey
+	}
+	return nil
+}
+
+func (x *PreKeyBundle) GetKemSignature() []byte {
+	if x != nil {
+		return x.KemSignature
+	}
+	return nil
 }
 
 type X3DHInit struct {
@@ -2519,14 +2545,17 @@ const file_internal_proto_message_proto_rawDesc = "" +
 	"\vratchet_key\x18\x01 \x01(\fR\n" +
 	"ratchetKey\x12\x0e\n" +
 	"\x02pn\x18\x02 \x01(\rR\x02pn\x12\f\n" +
-	"\x01n\x18\x03 \x01(\rR\x01n\"\xbd\x01\n" +
+	"\x01n\x18\x03 \x01(\rR\x01n\"\x9c\x02\n" +
 	"\fPreKeyBundle\x12!\n" +
 	"\fidentity_key\x18\x01 \x01(\fR\videntityKey\x12$\n" +
 	"\x0esigned_pre_key\x18\x02 \x01(\fR\fsignedPreKey\x12\x1c\n" +
 	"\tsignature\x18\x03 \x01(\fR\tsignature\x12'\n" +
 	"\x10one_time_pre_key\x18\x04 \x01(\fR\roneTimePreKey\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\x03R\tcreatedAt\"\xe1\x01\n" +
+	"created_at\x18\x05 \x01(\x03R\tcreatedAt\x12\x18\n" +
+	"\aversion\x18\x06 \x01(\rR\aversion\x12\x1e\n" +
+	"\vkem_pre_key\x18\a \x01(\fR\tkemPreKey\x12#\n" +
+	"\rkem_signature\x18\b \x01(\fR\fkemSignature\"\xe1\x01\n" +
 	"\bX3DHInit\x12#\n" +
 	"\rephemeral_key\x18\x01 \x01(\fR\fephemeralKey\x12!\n" +
 	"\fidentity_key\x18\x02 \x01(\fR\videntityKey\x12%\n" +
