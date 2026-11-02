@@ -59,8 +59,8 @@ ECHOFOG_RELAY=true
 # share this server's connection as a paid exit (other people's traffic leaves from its IP)
 ECHOFOG_EXIT=false
 ECHOFOG_ADVERTISE_PORT=443
-# empty: join through the built-in node; or join addresses of nodes you know (they replace it)
-ECHOFOG_BOOTSTRAP=
+# the project's entry nodes; add nodes you know after a comma (empty: the build's built-in ones)
+ECHOFOG_BOOTSTRAP=echofog-node.duckdns.org:443/5f0909b6648e4adbc08c4d89d9d31ed21d2349ba01ba3cddbea34ef9af2a324d?sni=d-hp-integrationdb-stag.hp-infra.net&srv=1,34.32.224.253:443/98466572ebb322301eec59937bebc6677023c909471344ff493d036dbb9f8ad0?sni=aifraud.ru&srv=1
 ```
 
 `ECHOFOG_ROLE=server` is what a VPS needs: the node runs the network services and none of the
