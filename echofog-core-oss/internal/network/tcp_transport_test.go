@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -326,32 +327,36 @@ func TestTCPTransportAnnouncesConfiguredPort(t *testing.T) {
 // next dial to that address goes over TCP although QUIC would still connect.
 func TestFallbackTransportPreferTCPAfterAStall(t *testing.T) {
 	ss, cs := newTestSigner(t), newTestSigner(t)
-	newQUIC := func(s testSigner) *QuicTransport {
+	newQUIC := func(s testSigner, addr string) (*QuicTransport, error) {
 		cert := testCert(t)
 		cfg := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"echo-fog-protocole"}, InsecureSkipVerify: true, ClientAuth: tls.RequestClientCert}
-		q, err := NewQUICTransport("127.0.0.1:0", cfg, GetQuicConfig(), s, 101)
-		require.NoError(t, err)
-		return q
+		return NewQUICTransport(addr, cfg, GetQuicConfig(), s, 101)
 	}
-	// The server later takes TCP on its QUIC port number: pick a UDP port whose number is free on
-	// TCP too, or another test binary holding it on TCP (CI runs packages side by side) leaves the
-	// TCP listener down and the second dial refused.
+	// The server later takes TCP on its QUIC port number: pick a port number free on both, or
+	// another test binary holding it on TCP (CI runs packages side by side) leaves the TCP listener
+	// down and the second dial refused. The number is drawn at random below the ephemeral range:
+	// Windows reserves blocks of 100 TCP and UDP ports (Hyper-V, WSL) inside that range, and its
+	// ephemeral ports come one after another, so 20 tries there could all land in one block.
 	var sq *QuicTransport
 	for i := 0; ; i++ {
-		sq = newQUIC(ss)
-		probe, err := net.Listen("tcp", sq.Addr().String())
-		if err == nil {
-			_ = probe.Close()
+		require.Less(t, i, 50, "no port free on both UDP and TCP")
+		addr := fmt.Sprintf("127.0.0.1:%d", 20000+mrand.IntN(20000))
+		probe, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
+		}
+		_ = probe.Close()
+		if sq, err = newQUIC(ss, addr); err == nil {
 			break
 		}
-		_ = sq.Close()
-		require.Less(t, i, 20, "no port free on both UDP and TCP")
 	}
 	addr := sq.Addr().String()
 	// The server accepts QUIC only at first (no inbound TCP listener yet), so the first dial can
 	// only come up over QUIC — no race to lose under a loaded CPU.
 	server := NewFallbackTransport(sq, newTCP(t, ss, ""), ModeAuto, "")
-	client := NewFallbackTransport(newQUIC(cs), newTCP(t, cs, ""), ModeAuto, "off-test")
+	cq, err := newQUIC(cs, "127.0.0.1:0")
+	require.NoError(t, err)
+	client := NewFallbackTransport(cq, newTCP(t, cs, ""), ModeAuto, "off-test")
 	t.Cleanup(func() { server.Close(); client.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
