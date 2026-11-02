@@ -2,6 +2,7 @@ package media
 
 import (
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -215,9 +216,12 @@ func TestLayers_CappedViewerTellsLeftOutFromLost(t *testing.T) {
 	defer v.Close()
 	require.NoError(t, v.SetRoomKey(key))
 	v.SetStreamWatching("s1", true)
+	var nackMu sync.Mutex
 	var nacked []uint32
 	var losses atomic.Int32
 	v.OnVideoNack = func(_ string, lost []NackEntry) {
+		nackMu.Lock()
+		defer nackMu.Unlock()
 		for _, e := range lost {
 			nacked = append(nacked, e.Seq)
 		}
@@ -239,7 +243,9 @@ func TestLayers_CappedViewerTellsLeftOutFromLost(t *testing.T) {
 		require.NoError(t, v.processVideo(f.data, pid(2), false))
 	}
 	time.Sleep(nackDelay + 40*time.Millisecond)
+	nackMu.Lock()
 	assert.Equal(t, []uint32{dropped}, dedupe(nacked), "only the lost base packet is asked for")
+	nackMu.Unlock()
 
 	vc.mu.Lock()
 	var seqs []uint16
