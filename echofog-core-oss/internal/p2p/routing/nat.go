@@ -63,20 +63,37 @@ type NATManager struct {
 	mu         sync.RWMutex
 	report     natcheck.Report
 	natType    NATType
-	publicAddr string
+	publicAddr string         // ip:port, empty while no observer of our QUIC socket's port agrees
+	publicIP   string         // the IP alone, also from observers on other sockets (country placement)
 	mapped     netip.AddrPort // external address of a router port mapping, if any
 	// carrierNAT: a router was found but its own WAN address is private or in 100.64/10, so the
 	// node sits behind a second NAT (carrier-grade or double NAT) and no port forward can reach it.
 	carrierNAT bool
 	// peersSeen: the last check heard from connected peers, whose QUIC keep-alives hold the NAT
-	// mapping open; no STUN keep-alive is needed then.
+	// mapping open; no STUN keep-alive is needed then. Only used without keepers.
 	peersSeen bool
-	stunUsed  int // checks that asked STUN servers (tests)
+	// keepers, when set, counts the peers connected now whose keep-alives hold the mapping open
+	// (see SetMappingKeepers).
+	keepers  func() int
+	stunUsed int // checks that asked STUN servers (tests)
 }
 
-// minPeerObservers is how many connected peers must report our address for STUN to be left out:
-// two independent views tell both the public address and whether it varies per destination.
-const minPeerObservers = 2
+// How many observers must agree before their answer is taken. Peers can lie about the address
+// they see us at (nothing proves it), so a few of them must not decide it alone.
+const (
+	// minPeerObservers: below this many connected peers with a public IPv4 address, STUN is asked
+	// too (where allowed): two views are the least that tell whether the mapping varies. IPv6
+	// observers do not count: they tell nothing about the IPv4 NAT, and STUN is what does.
+	minPeerObservers = 2
+	// safeObservers: STUN is left out only when at least this many independent peers agree on our
+	// IP, are the majority, and see one mapping. Fewer, or any doubt, and STUN is asked as well
+	// (outside guard mode), which outvotes a liar or two.
+	safeObservers = 3
+	// guardObservers: where STUN may not be asked (guard mode), the address and with it the home
+	// country are taken only from at least this many agreeing peers, the majority of those that
+	// answered; otherwise the previous picture stays. One peer must not place the node.
+	guardObservers = 2
+)
 
 // NewNATManager's conn must be the socket whose NAT mapping matters (the QUIC port), or nil if
 // STUN would run from another socket and thus see another mapping; peer observations still work.
@@ -106,6 +123,16 @@ func (m *NATManager) SetObserver(o Observer) {
 func (m *NATManager) SetSTUNAllowed(fn func() bool) {
 	m.mu.Lock()
 	m.stunAllowed = fn
+	m.mu.Unlock()
+}
+
+// SetMappingKeepers installs the count of connected peers whose QUIC keep-alives hold our NAT
+// mapping open (peers at public IPv4 addresses on our QUIC socket). The STUN keep-alive asks it on
+// every tick, so it resumes as soon as they are gone, not at the next full check a minute later: a
+// carrier NAT that drops idle UDP mappings after 30 s would otherwise move us meanwhile.
+func (m *NATManager) SetMappingKeepers(fn func() int) {
+	m.mu.Lock()
+	m.keepers = fn
 	m.mu.Unlock()
 }
 
@@ -186,13 +213,16 @@ func (m *NATManager) Candidates() []string {
 }
 
 // Discover re-checks the NAT. Connected peers are asked first which address they see us at (our
-// own nodes, so nothing goes to a third party); public STUN servers are asked only when fewer than
-// two peers with public addresses answered, and only when STUN runs on the QUIC socket and the
-// node allows it. The answers are classified together.
+// own nodes, so nothing goes to a third party); public STUN servers are asked as well unless
+// enough peers agree (see safeObservers), and only when STUN runs on the QUIC socket and the node
+// allows it. The answers are classified together. An answer no majority backs (a tie), or in guard
+// mode one that too few peers back, leaves the previous picture in place.
 func (m *NATManager) Discover() (string, error) {
 	m.mu.RLock()
 	conn, servers, observe, allowed := m.stunConn, m.servers, m.observe, m.stunAllowed
 	m.mu.RUnlock()
+	stunOK := allowed == nil || allowed()
+	local := natcheck.LocalAddrs()
 
 	var obs []natcheck.Observation
 	if observe != nil {
@@ -201,7 +231,8 @@ func (m *NATManager) Discover() (string, error) {
 		cancel()
 	}
 	fromPeers := publicObservers(obs)
-	if fromPeers < minPeerObservers && conn != nil && (allowed == nil || allowed()) {
+	r := natcheck.Classify(obs, local)
+	if peersNotEnough(fromPeers, r) && conn != nil && stunOK {
 		m.mu.Lock()
 		m.stunUsed++
 		m.mu.Unlock()
@@ -209,6 +240,7 @@ func (m *NATManager) Discover() (string, error) {
 		defer cancel()
 		if got, err := natcheck.QuerySTUN(ctx, conn, servers, stunTimeout); err == nil {
 			obs = append(obs, got...)
+			r = natcheck.Classify(obs, local)
 		} else {
 			m.logger.Debug("STUN discovery failed", "err", err)
 		}
@@ -220,7 +252,6 @@ func (m *NATManager) Discover() (string, error) {
 		return "", errors.New("no peer and no STUN server reported our address (is UDP blocked, or are we offline?)")
 	}
 
-	r := natcheck.Classify(obs, natcheck.LocalAddrs())
 	t := NATUnknown
 	switch {
 	case r.NoNAT:
@@ -231,10 +262,22 @@ func (m *NATManager) Discover() (string, error) {
 		t = NATSymmetric
 	}
 
-	pub := r.Public.String()
+	pub := ""
+	if r.Public.Port() != 0 {
+		pub = r.Public.String()
+	} // else only peers on other sockets (REALITY) saw this IP: no port for invitations or punching
 	m.mu.Lock()
 	prevAddr, prevType := m.publicAddr, m.natType
-	m.report, m.natType, m.publicAddr = r, t, pub
+	if keep := !r.Public.IsValid() || (!stunOK && !r.Agreed(guardObservers)); keep {
+		// no majority, or in guard mode too few peers behind it: one or two lying peers must not
+		// set our address (it goes into invitations and punch targets, and places the node in a
+		// country, which can stand guard mode down)
+		m.mu.Unlock()
+		m.logger.Debug("NAT check not conclusive, keeping the previous picture", "public", prevAddr,
+			"agree", r.Agree, "observers", r.Observers)
+		return prevAddr, nil
+	}
+	m.report, m.natType, m.publicAddr, m.publicIP = r, t, pub, r.Public.Addr().String()
 	m.mu.Unlock()
 
 	if prevType != t || prevAddr != pub {
@@ -282,8 +325,11 @@ func (m *NATManager) StartKeepAlive(ctx context.Context) {
 // connected over the QUIC socket their keep-alives hold the mapping open, and no STUN goes out.
 func (m *NATManager) ping(ctx context.Context) {
 	m.mu.RLock()
-	conn, servers, peers, allowed := m.stunConn, m.servers, m.peersSeen, m.stunAllowed
+	conn, servers, peers, keepers, allowed := m.stunConn, m.servers, m.peersSeen, m.keepers, m.stunAllowed
 	m.mu.RUnlock()
+	if keepers != nil {
+		peers = keepers() > 0
+	}
 	if conn == nil || len(servers) == 0 || peers || (allowed != nil && !allowed()) {
 		return
 	}
@@ -294,11 +340,19 @@ func (m *NATManager) ping(ctx context.Context) {
 	}
 }
 
-// publicObservers counts the observations with a public address, one per observer.
+// peersNotEnough: what the peers said (fromPeers of them with a public address) is too little or
+// too doubtful to go without STUN.
+func peersNotEnough(fromPeers int, r natcheck.Report) bool {
+	return fromPeers < minPeerObservers || !r.Agreed(safeObservers) || r.Mapping != natcheck.MappingStable
+}
+
+// publicObservers counts the observations of our QUIC socket with a public IPv4 address, one per
+// observer: the ones that tell the IPv4 mapping.
 func publicObservers(obs []natcheck.Observation) int {
 	seen := map[string]bool{}
 	for _, o := range obs {
-		if o.Addr.IsValid() && o.Addr.Port() != 0 && natcheck.PublicAddr(o.Addr.Addr()) {
+		a := o.Addr.Addr().Unmap()
+		if o.Addr.IsValid() && o.Addr.Port() != 0 && !o.IPOnly && a.Is4() && natcheck.PublicAddr(a) {
 			seen[o.From] = true
 		}
 	}
@@ -325,6 +379,15 @@ func (m *NATManager) GetPublicAddr() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.publicAddr
+}
+
+// PublicIP is our public IP as the observers agree on it, also when only peers connected through
+// other sockets (REALITY dials) saw it and GetPublicAddr has no port to go with it. It is what
+// places the node in a country. Empty while not known.
+func (m *NATManager) PublicIP() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.publicIP
 }
 
 func (m *NATManager) String() string {

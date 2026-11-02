@@ -14,10 +14,17 @@ const obfsReadBatch = 8
 var _ OOBPacketConn = (*ObfsPacketConnOOB)(nil)
 
 // ObfsPacketConnOOB is the obfuscation over a connection with control messages and batch reads
-// (see OOBPacketConn), so quic-go keeps GSO, ECN and batch reads under it. Every datagram on the
+// (see OOBPacketConn), so quic-go keeps GSO and batch reads under it. Every datagram on the
 // wire is sealed exactly as WriteTo seals it: a GSO train from quic-go is cut into its segments,
 // each sealed on its own with its own salt, and handed to the kernel as one train again with the
 // segment size grown by Overhead. A receiver that reads one datagram at a time sees no difference.
+//
+// Sealed (noise) datagrams leave without ECN marks (Not-ECT), as REALITY ones do and as every
+// datagram did before quic-go could mark them through this connection. High-entropy UDP marked
+// ECT(0) is rare on the wire, so the mark was a feature a censor could match; against a v0.2.0
+// peer, which echoes no ECN counts, the flow even showed quic-go's validation pattern (the first
+// ten packets marked, the rest not). Unmarked, the path also cannot be throttled by CE marks
+// instead of drops. quic-go sees no marks echoed and turns ECN off for the path.
 type ObfsPacketConnOOB struct {
 	*ObfsPacketConnUDP
 	oc OOBPacketConn
@@ -27,6 +34,7 @@ type ObfsPacketConnOOB struct {
 	gsoBuf []byte // sealed train, under writeMu
 	salts  []byte
 	oobBuf []byte
+	ecnBuf []byte // control messages without the ECN ones, under writeMu
 }
 
 // ReadBatch reads up to len(ms) datagrams and returns those meant for us, unmasked, with their
@@ -73,6 +81,10 @@ func (c *ObfsPacketConnOOB) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, 
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
+	if HasECNMark(oob) {
+		c.ecnBuf = StripECN(c.ecnBuf[:0], oob) // noise leaves Not-ECT (see the type)
+		oob = c.ecnBuf
+	}
 	seg, at := gsoSegment(oob)
 	if seg <= 0 || seg >= len(b) {
 		seg = len(b) // one datagram
@@ -103,9 +115,15 @@ func (c *ObfsPacketConnOOB) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, 
 		off += m
 	}
 	if at >= 0 {
-		// the kernel cuts the train at the segment size: make it the sealed segment's size
-		c.oobBuf = append(c.oobBuf[:0], oob...)
-		setGSOSegment(c.oobBuf, at, seg+Overhead)
+		if nseg == 1 {
+			// one datagram: no segment size at all, as quic-go itself never asks GSO for one
+			// (some drivers misbehave with it)
+			c.oobBuf = dropGSO(c.oobBuf[:0], oob)
+		} else {
+			// the kernel cuts the train at the segment size: make it the sealed segment's size
+			c.oobBuf = append(c.oobBuf[:0], oob...)
+			setGSOSegment(c.oobBuf, at, seg+Overhead)
+		}
 		oob = c.oobBuf
 	}
 	_, oobn, err := c.oc.WriteMsgUDP(buf[:off], oob, addr)

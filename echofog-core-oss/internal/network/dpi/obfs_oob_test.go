@@ -70,7 +70,10 @@ func TestObfsGSOInteropWithOldStyle(t *testing.T) {
 		srv := WrapPacketConn(mux.GetQUICConn(), so)
 		spy := &spyConn{OOBPacketConn: srv.(OOBPacketConn)}
 		quicDownload(t, spy, WrapPacketConn(cs, co), 8<<20)
-		checkFastPath(t, spy, true)
+		checkFastPath(t, spy, false)
+		if fastPathOS && spy.ecnReads.Load() != 0 {
+			t.Fatal("noise must arrive Not-ECT: the client may not mark it")
+		}
 	})
 }
 

@@ -165,6 +165,9 @@ func (p *Peer) MigrateTransport(targetLink router.PeerTransportLink, reason stri
 	return r.InitiateMigration(targetLink, reason)
 }
 
+// Outbound reports whether this node dialed the peer (rather than the peer dialing in).
+func (p *Peer) Outbound() bool { return p.isOut }
+
 func (p *Peer) ID() types.PeerID {
 	return p.id
 }

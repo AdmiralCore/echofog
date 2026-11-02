@@ -63,4 +63,7 @@ func TestRealityPacketsLeaveWithoutECN(t *testing.T) {
 	require.True(t, dpi.HasECNMark(write(server)), "a camouflage node keeps ECN to noise peers")
 	noiseNode.tr.obfs.SetRaw(to.AddrPort(), true)
 	require.False(t, dpi.HasECNMark(write(server)), "a camouflage node answers REALITY clients without ECN")
+	// a client whose REALITY dial fell back to the shared socket: the target is marked raw there
+	require.False(t, dpi.HasECNMark(write(NewQuicRealityConn(u, noiseNode.tr))),
+		"a REALITY dial over the shared socket must not mark ECN either")
 }

@@ -20,6 +20,16 @@ func gsoSegment(oob []byte) (size, at int) {
 	return size, at
 }
 
+// dropGSO appends to dst the control messages of oob without UDP_SEGMENT.
+func dropGSO(dst, oob []byte) []byte {
+	eachCmsg(oob, func(_ int, msg []byte, hdr unix.Cmsghdr, _ []byte) {
+		if hdr.Level != unix.IPPROTO_UDP || hdr.Type != unix.UDP_SEGMENT {
+			dst = append(dst, msg...)
+		}
+	})
+	return dst
+}
+
 // setGSOSegment rewrites the segment size found by gsoSegment at offset at.
 func setGSOSegment(oob []byte, at, size int) {
 	binary.NativeEndian.PutUint16(oob[at:], uint16(size))

@@ -174,3 +174,46 @@ func TestMuxedConnTruncatesOversizedDatagram(t *testing.T) {
 		t.Fatalf("want the first %d bytes, got %d", len(buf), n)
 	}
 }
+
+// A datagram longer than the multiplexer's buffer is dropped and reading goes on. On Windows the
+// read fails with WSAEMSGSIZE, which used to end the read loop: from then on the node received no
+// UDP at all, QUIC or STUN, until it restarted.
+func TestMuxedConnKeepsReadingAfterAnOversizedDatagram(t *testing.T) {
+	serverConn, clientConn := udpPair(t)
+	mux, err := NewMuxedConn(serverConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mux.Close()
+	huge := make([]byte, 3*maxDatagram) // IP-fragmented on the wire, one datagram to the socket
+	_, _ = rand.Read(huge)
+	huge[0] = 0xC0
+	for i := 0; i < 3; i++ {
+		if _, err := clientConn.WriteTo(huge, serverConn.LocalAddr()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := mux.GetQUICConn()
+	buf := make([]byte, 2048)
+	small := make([]byte, 100)
+	_, _ = rand.Read(small)
+	small[0] = 0xC0
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := clientConn.WriteTo(small, serverConn.LocalAddr()); err != nil {
+			t.Fatal(err)
+		}
+		q.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		for {
+			n, _, err := q.ReadFrom(buf)
+			if err != nil {
+				break
+			}
+			if bytes.Equal(buf[:n], small) {
+				return // still receiving
+			}
+			// a truncated copy of the oversized datagram (platforms that truncate) is fine
+		}
+	}
+	t.Fatal("no datagram arrived after an oversized one: the read loop stopped")
+}

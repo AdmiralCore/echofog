@@ -141,7 +141,7 @@ func (n *NodeApi) ownCountryAndProvider() (country, provider string) {
 	if n.node.NAT == nil {
 		return "", ""
 	}
-	ip := geoIP(n.node.NAT.GetPublicAddr())
+	ip := geoIP(n.node.NAT.PublicIP())
 	if ip == "" {
 		return n.homeCountry(), ""
 	}

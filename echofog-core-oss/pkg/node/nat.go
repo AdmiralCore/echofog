@@ -48,6 +48,7 @@ func (n *Node) startNAT() {
 		return n.Swarm.ObserveFromPeersOn(ctx, 4, n.Transport.UDPPort())
 	})
 	n.NAT.SetSTUNAllowed(func() bool { return !n.Swarm.GuardModeActive() })
+	n.NAT.SetMappingKeepers(func() int { return n.Swarm.NATKeepers(n.Transport.UDPPort()) })
 
 	if n.loopbackOnly() {
 		return // simulations and tests: there is no NAT to look at
@@ -110,7 +111,7 @@ func (n *Node) maintainMapping(pm *portmap.NAT) {
 		ext, ok := pm.GetMapping("udp", udpPort)
 		// a router sitting behind another NAT (carrier-grade, double NAT) reports a private
 		// address: the forward then leads nowhere from the Internet, so it must not count
-		carrier := ok && !publicIP(ext.Addr())
+		carrier := ok && !natcheck.PublicAddr(ext.Addr())
 		if carrier {
 			// the router answered, but its own WAN address is private or 100.64: double/carrier NAT
 			ok = false
@@ -136,20 +137,6 @@ func (n *Node) maintainMapping(pm *portmap.NAT) {
 		case <-t.C:
 		}
 	}
-}
-
-func publicIP(a netip.Addr) bool {
-	a = a.Unmap()
-	if !a.IsValid() || a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsUnspecified() || a.IsMulticast() {
-		return false
-	}
-	if a.Is4() {
-		b := a.As4()
-		if b[0] == 100 && b[1]&0xC0 == 64 { // 100.64.0.0/10: carrier-grade NAT
-			return false
-		}
-	}
-	return true
 }
 
 // startHolePunch wires the direct-connection service: it listens for coordination messages (from

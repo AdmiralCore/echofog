@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/natcheck"
+	"github.com/pion/stun/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,16 +38,16 @@ func discover(t *testing.T, o Observer) *NATManager {
 }
 
 func TestConeNATCanBePunchedButNotBeARouter(t *testing.T) {
-	m := discover(t, seen("a", "203.0.113.7:50000", "b", "203.0.113.7:50000"))
+	m := discover(t, seen("a", "8.8.8.7:50000", "b", "8.8.8.7:50000"))
 	addr, typ := m.GetNATProfile()
-	assert.Equal(t, "203.0.113.7:50000", addr)
+	assert.Equal(t, "8.8.8.7:50000", addr)
 	assert.Equal(t, NATFullCone, typ)
 	assert.True(t, m.CanBePunched())
 	assert.False(t, m.CanBeRouter(), "a cone NAT lets answers in, not strangers")
 }
 
 func TestSymmetricNATCannotBePunched(t *testing.T) {
-	m := discover(t, seen("a", "203.0.113.7:50000", "b", "203.0.113.7:50777"))
+	m := discover(t, seen("a", "8.8.8.7:50000", "b", "8.8.8.7:50777", "c", "8.8.8.7:50555"))
 	_, typ := m.GetNATProfile()
 	assert.Equal(t, NATSymmetric, typ)
 	assert.False(t, m.CanBePunched())
@@ -56,15 +57,15 @@ func TestSymmetricNATCannotBePunched(t *testing.T) {
 // A symmetric NAT whose router forwards our port: that port is one public address for everybody,
 // so peers reach us there (it was taken for unreachable, and nothing was even tried).
 func TestForwardedPortBeatsASymmetricNAT(t *testing.T) {
-	m := discover(t, seen("a", "203.0.113.7:50000", "b", "203.0.113.7:50777"))
-	m.SetPortMapping(netip.MustParseAddrPort("203.0.113.7:49829"))
+	m := discover(t, seen("a", "8.8.8.7:50000", "b", "8.8.8.7:50777", "c", "8.8.8.7:50555"))
+	m.SetPortMapping(netip.MustParseAddrPort("8.8.8.7:49829"))
 	assert.True(t, m.CanBePunched())
 	assert.True(t, m.CanBeRouter())
-	assert.Equal(t, "203.0.113.7:49829", m.Candidates()[0])
+	assert.Equal(t, "8.8.8.7:49829", m.Candidates()[0])
 }
 
 func TestOneObserverIsWorthATry(t *testing.T) {
-	m := discover(t, seen("a", "203.0.113.7:50000"))
+	m := discover(t, seen("a", "8.8.8.7:50000"))
 	_, typ := m.GetNATProfile()
 	assert.Equal(t, NATUnknown, typ)
 	assert.True(t, m.CanBePunched(), "unknown is not a reason to give up")
@@ -72,21 +73,21 @@ func TestOneObserverIsWorthATry(t *testing.T) {
 }
 
 func TestAForwardedPortMakesUsReachableEvenBehindNAT(t *testing.T) {
-	m := discover(t, seen("a", "203.0.113.7:50000", "b", "203.0.113.7:50000"))
+	m := discover(t, seen("a", "8.8.8.7:50000", "b", "8.8.8.7:50000"))
 	require.False(t, m.CanBeRouter())
 
-	m.SetPortMapping(netip.MustParseAddrPort("203.0.113.7:4242"))
+	m.SetPortMapping(netip.MustParseAddrPort("8.8.8.7:4242"))
 	assert.True(t, m.CanBeRouter())
-	assert.Equal(t, []string{"203.0.113.7:4242", "203.0.113.7:50000"}, m.Candidates(), "the forwarded address first")
+	assert.Equal(t, []string{"8.8.8.7:4242", "8.8.8.7:50000"}, m.Candidates(), "the forwarded address first")
 
 	m.SetPortMapping(netip.AddrPort{})
 	assert.False(t, m.CanBeRouter(), "the router dropped the forward")
 }
 
 func TestCandidatesDoNotRepeatTheSameAddress(t *testing.T) {
-	m := discover(t, seen("a", "203.0.113.7:4242", "b", "203.0.113.7:4242"))
-	m.SetPortMapping(netip.MustParseAddrPort("203.0.113.7:4242"))
-	assert.Equal(t, []string{"203.0.113.7:4242"}, m.Candidates())
+	m := discover(t, seen("a", "8.8.8.7:4242", "b", "8.8.8.7:4242"))
+	m.SetPortMapping(netip.MustParseAddrPort("8.8.8.7:4242"))
+	assert.Equal(t, []string{"8.8.8.7:4242"}, m.Candidates())
 }
 
 func TestNoNATWhenTheObservedAddressIsOurOwn(t *testing.T) {
@@ -120,17 +121,18 @@ func TestDiscoverFailsClearlyWhenNobodyAnswers(t *testing.T) {
 }
 
 func TestTheTypeFollowsTheNetworkWhenItChanges(t *testing.T) {
-	obs := seen("a", "203.0.113.7:50000", "b", "203.0.113.7:50000")
+	obs := seen("a", "8.8.8.7:50000", "b", "8.8.8.7:50000")
 	m := NewNATManager(nil, quiet())
 	m.SetObserver(func(ctx context.Context) []natcheck.Observation { return obs(ctx) })
 	_, _ = m.Discover()
 	_, typ := m.GetNATProfile()
 	require.Equal(t, NATFullCone, typ)
 
-	obs = seen("a", "203.0.113.7:50000", "b", "198.51.100.1:51000") // moved to a carrier NAT
+	obs = seen("a", "9.9.9.1:51000", "b", "9.9.9.1:51003", "c", "9.9.9.1:51009") // moved to a carrier NAT
 	_, _ = m.Discover()
-	_, typ = m.GetNATProfile()
+	addr, typ := m.GetNATProfile()
 	assert.Equal(t, NATSymmetric, typ)
+	assert.Equal(t, "9.9.9.1", netip.MustParseAddrPort(addr).Addr().String())
 }
 
 func TestSTUNServersCanBeOverriddenAndEmptyKeepsDefaults(t *testing.T) {
@@ -190,38 +192,48 @@ func (c *stunCounter) sent() int {
 	return c.writes
 }
 
-// Two connected peers with public addresses tell the public address and the NAT kind: no request
-// goes to a public STUN server, and no STUN keep-alive either (the peers' QUIC keep-alives hold
-// the mapping open).
-func TestPeersReplaceSTUNWhenTwoOfThemAnswer(t *testing.T) {
+// Three connected peers that agree tell the public address and the NAT kind: no request goes to a
+// public STUN server, and no STUN keep-alive either (the peers' QUIC keep-alives hold the mapping
+// open).
+func TestPeersReplaceSTUNWhenThreeOfThemAgree(t *testing.T) {
 	conn := newSTUNCounter()
 	m := NewNATManager(conn, quiet())
 	m.SetSTUNServers([]string{"127.0.0.1:3478"})
-	m.SetObserver(seen("server1", "203.0.113.7:50000", "server2", "203.0.113.7:50777"))
+	m.SetObserver(seen("server1", "8.8.8.7:50000", "server2", "8.8.8.7:50000", "server3", "8.8.8.7:50000"))
 	_, err := m.Discover()
 	require.NoError(t, err)
 	_, typ := m.GetNATProfile()
-	assert.Equal(t, NATSymmetric, typ, "learned from the peers alone")
-	assert.Equal(t, 0, conn.sent(), "no STUN request when peers answered")
+	assert.Equal(t, NATFullCone, typ, "learned from the peers alone")
+	assert.Equal(t, 0, conn.sent(), "no STUN request when enough peers agreed")
 	assert.Equal(t, 0, m.STUNChecks())
-
-	lo, hi, n := m.PortRange()
-	assert.Equal(t, uint16(50000), lo)
-	assert.Equal(t, uint16(50777), hi)
-	assert.Equal(t, 2, n)
 
 	m.ping(context.Background())
 	assert.Equal(t, 0, conn.sent(), "connected peers keep the mapping open: no STUN keep-alive")
 }
 
-// With fewer than two peers (just started, or one peer) STUN is the fallback; peers on our LAN do
-// not count, their view is from inside the NAT.
-func TestSTUNIsTheFallbackWhenTooFewPeersAnswer(t *testing.T) {
+func TestPortRangeFromPeers(t *testing.T) {
+	m := discover(t, seen("server1", "8.8.8.7:50000", "server2", "8.8.8.7:50777", "server3", "8.8.8.7:50400"))
+	_, typ := m.GetNATProfile()
+	assert.Equal(t, NATSymmetric, typ)
+	lo, hi, n := m.PortRange()
+	assert.Equal(t, uint16(50000), lo)
+	assert.Equal(t, uint16(50777), hi)
+	assert.Equal(t, 3, n)
+}
+
+// With too few peers (just started, one or two) or peers that do not agree, STUN is asked as
+// well; peers on our LAN do not count, their view is from inside the NAT. Two peers are not enough:
+// both slots are cheap to take (a peer only has to be connected), and two liars agreeing used to
+// keep STUN out entirely.
+func TestSTUNIsAskedWhenTooFewPeersAgree(t *testing.T) {
 	for name, o := range map[string]Observer{
-		"no peer":      seen(),
-		"one peer":     seen("server1", "203.0.113.7:50000"),
-		"only on LAN":  seen("lan1", "192.168.1.5:4242", "lan2", "192.168.1.5:4242"),
-		"one observer": seen("server1", "203.0.113.7:50000", "server1", "203.0.113.7:50000"),
+		"no peer":         seen(),
+		"one peer":        seen("server1", "8.8.8.7:50000"),
+		"only on LAN":     seen("lan1", "192.168.1.5:4242", "lan2", "192.168.1.5:4242"),
+		"one observer":    seen("server1", "8.8.8.7:50000", "server1", "8.8.8.7:50000"),
+		"two agree":       seen("server1", "8.8.8.7:50000", "server2", "8.8.8.7:50000"),
+		"one of two lies": seen("server1", "8.8.8.7:50000", "liar", "2.16.0.1:1"),
+		"three, a doubt":  seen("a", "8.8.8.7:50000", "b", "8.8.8.7:50000", "liar", "2.16.0.1:1"),
 	} {
 		conn := newSTUNCounter()
 		m := NewNATManager(conn, quiet())
@@ -233,18 +245,157 @@ func TestSTUNIsTheFallbackWhenTooFewPeersAnswer(t *testing.T) {
 	}
 }
 
-// Guard mode keeps public STUN servers out entirely: only peers are asked.
+// fakeSTUNServer answers every binding request with mapped: a STUN server that sees us there.
+func fakeSTUNServer(t *testing.T, mapped netip.AddrPort) string {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var req stun.Message
+			req.Raw = append([]byte(nil), buf[:n]...)
+			if req.Decode() != nil || req.Type != stun.BindingRequest {
+				continue
+			}
+			resp, err := stun.Build(stun.NewTransactionIDSetter(req.TransactionID), stun.BindingSuccess,
+				&stun.XORMappedAddress{IP: mapped.Addr().AsSlice(), Port: int(mapped.Port())}, stun.Fingerprint)
+			if err == nil {
+				_, _ = pc.WriteTo(resp.Raw, from)
+			}
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+// One lying peer out of two used to choose our address (a tie went to the lower address as a
+// string, and "2.16.0.1" sorts before most addresses) and make the NAT look symmetric. Now the tie
+// sends the node to STUN, whose answer outvotes the liar.
+func TestALyingPeerOutOfTwoDoesNotChooseOurAddress(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer conn.Close()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{fakeSTUNServer(t, netip.MustParseAddrPort("9.9.9.9:41000"))})
+	m.SetObserver(seen("honest", "9.9.9.9:41000", "liar", "2.16.0.1:1"))
+	_, err = m.Discover()
+	require.NoError(t, err)
+	addr, typ := m.GetNATProfile()
+	assert.Equal(t, "9.9.9.9:41000", addr)
+	assert.Equal(t, NATFullCone, typ, "one disagreeing peer does not make a symmetric NAT")
+	assert.Equal(t, 1, m.STUNChecks())
+
+	// without STUN to break the tie, the tie decides nothing
+	alone := discover(t, seen("honest", "9.9.9.9:41000", "liar", "2.16.0.1:1"))
+	addr, typ = alone.GetNATProfile()
+	assert.Empty(t, addr)
+	assert.NotEqual(t, NATSymmetric, typ)
+}
+
+// Guard mode keeps public STUN servers out entirely: only peers are asked, and one peer alone
+// cannot set the address (it would place the node in a country, and a free country stands guard
+// mode down). Two agreeing peers can; a later lone peer saying otherwise changes nothing.
 func TestSTUNCanBeForbidden(t *testing.T) {
 	conn := newSTUNCounter()
 	m := NewNATManager(conn, quiet())
 	m.SetSTUNServers([]string{"127.0.0.1:3478"})
 	m.SetSTUNAllowed(func() bool { return false })
-	m.SetObserver(seen("server1", "203.0.113.7:50000"))
+	m.SetObserver(seen("liar", "2.16.0.1:1"))
 	_, err := m.Discover()
-	require.NoError(t, err, "one peer still gives an address")
-	assert.Equal(t, "203.0.113.7:50000", m.GetPublicAddr())
+	require.NoError(t, err)
+	assert.Empty(t, m.GetPublicAddr(), "one peer alone does not place the node")
+
+	m.SetObserver(seen("guard1", "8.8.8.7:50000", "guard2", "8.8.8.7:50000"))
+	_, _ = m.Discover()
+	assert.Equal(t, "8.8.8.7:50000", m.GetPublicAddr(), "two agreeing peers do")
+
+	m.SetObserver(seen("liar", "2.16.0.1:1"))
+	_, _ = m.Discover()
+	assert.Equal(t, "8.8.8.7:50000", m.GetPublicAddr(), "a lone peer does not move it")
+	m.SetObserver(seen("guard1", "8.8.8.7:50000", "liar", "2.16.0.1:1"))
+	_, _ = m.Discover()
+	assert.Equal(t, "8.8.8.7:50000", m.GetPublicAddr(), "nor does a tie")
+
 	m.SetObserver(seen())
 	_, _ = m.Discover()
 	m.ping(context.Background())
 	assert.Equal(t, 0, conn.sent())
+}
+
+// In guard mode the guards are reached over REALITY, each dial on a socket of its own, and they
+// may be the only peers. Their answers place the node (the IP, for its country) without telling
+// the port or the mapping: guard_mode "auto" used to wait forever for a country.
+func TestPeersOnRealitySocketsTellTheIPForTheCountry(t *testing.T) {
+	conn := newSTUNCounter()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNAllowed(func() bool { return false }) // guard mode
+	m.SetObserver(func(context.Context) []natcheck.Observation {
+		return []natcheck.Observation{
+			{From: "guard1", Addr: netip.MustParseAddrPort("8.8.8.7:61001"), IPOnly: true},
+			{From: "guard2", Addr: netip.MustParseAddrPort("8.8.8.7:61877"), IPOnly: true},
+		}
+	})
+	_, err := m.Discover()
+	require.NoError(t, err)
+	assert.Equal(t, "8.8.8.7", m.PublicIP(), "the IP places the node")
+	assert.Empty(t, m.GetPublicAddr(), "no port: those sockets have mappings of their own")
+	assert.Empty(t, m.Candidates())
+	_, typ := m.GetNATProfile()
+	assert.Equal(t, NATUnknown, typ, "different ports on different sockets are not a symmetric NAT")
+	assert.Equal(t, 0, conn.sent())
+
+	// one guard alone is not enough
+	lone := NewNATManager(conn, quiet())
+	lone.SetSTUNAllowed(func() bool { return false })
+	lone.SetObserver(func(context.Context) []natcheck.Observation {
+		return []natcheck.Observation{{From: "guard1", Addr: netip.MustParseAddrPort("8.8.8.7:61001"), IPOnly: true}}
+	})
+	_, _ = lone.Discover()
+	assert.Empty(t, lone.PublicIP())
+}
+
+// Peers that answer over IPv6 do not count toward the IPv4 observers: three of them used to keep
+// STUN out, and the IPv4 NAT was never classified (nor the IPv4 address known for invitations).
+func TestIPv6PeersDoNotReplaceSTUNForIPv4(t *testing.T) {
+	conn := newSTUNCounter()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{"127.0.0.1:3478"})
+	m.SetObserver(seen("a", "[2001:4860:4860::8888]:4242", "b", "[2001:4860:4860::8888]:4242",
+		"c", "[2001:4860:4860::8888]:4242"))
+	_, _ = m.Discover()
+	assert.Equal(t, 1, conn.sent(), "STUN tells the IPv4 side")
+
+	// one IPv4 peer next to them is still too few
+	conn = newSTUNCounter()
+	m = NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{"127.0.0.1:3478"})
+	m.SetObserver(seen("a", "[2001:4860:4860::8888]:4242", "b", "[2001:4860:4860::8888]:4242",
+		"c", "8.8.8.7:50000"))
+	_, _ = m.Discover()
+	assert.Equal(t, 1, conn.sent())
+}
+
+// The STUN keep-alive follows the peers connected now: when the ones that answered the last check
+// are gone, it resumes on the next tick instead of after the next full check.
+func TestKeepAliveResumesWhenThePeersAreGone(t *testing.T) {
+	conn := newSTUNCounter()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{"127.0.0.1:3478"})
+	m.SetObserver(seen("server1", "8.8.8.7:50000", "server2", "8.8.8.7:50000", "server3", "8.8.8.7:50000"))
+	keepers := 3
+	m.SetMappingKeepers(func() int { return keepers })
+	_, err := m.Discover()
+	require.NoError(t, err)
+	require.Equal(t, 0, conn.sent())
+
+	m.ping(context.Background())
+	assert.Equal(t, 0, conn.sent(), "the peers hold the mapping open")
+
+	keepers = 0 // they dropped right after the check
+	m.ping(context.Background())
+	assert.Equal(t, 1, conn.sent(), "the keep-alive must not wait for the next check")
 }
