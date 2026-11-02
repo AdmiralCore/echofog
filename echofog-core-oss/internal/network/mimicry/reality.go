@@ -104,10 +104,10 @@ func verifyStealthToken(aead cipher.AEAD, token, binding []byte, replay *replayC
 // authorization token in the session id, so the fingerprint on the wire is Chrome's and the token
 // is invisible. It returns the connection and the channel binding of its TLS session.
 func ClientHandshake(rawConn net.Conn, cfg *MimicryConfig) (net.Conn, []byte, error) {
+	// No known cover site means no server_name at all, the way a browser asks an IP address: a
+	// made-up big site on a residential or VPS address is the SNI/IP mismatch DPI looks for. The
+	// token, not the name, is what the peer checks.
 	serverName := cfg.ServerName
-	if serverName == "" {
-		serverName = "www.microsoft.com"
-	}
 	// InsecureSkipVerify: the real peer authentication happens afterwards and is bound to this
 	// TLS session, so a forged certificate cannot help a man in the middle. Verifying here would
 	// also break operators who run a self-signed certificate.

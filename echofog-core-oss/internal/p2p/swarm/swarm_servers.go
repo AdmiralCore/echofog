@@ -68,6 +68,10 @@ func (s *Swarm) MarkExplicitPeer(id types.PeerID) {
 	s.peerSNIMu.Unlock()
 }
 
+// IsExplicitPeer reports whether the peer was listed explicitly (bootstrap, relays, a pasted
+// address): one the node was told to reach.
+func (s *Swarm) IsExplicitPeer(id types.PeerID) bool { return s.isExplicitPeer(id) }
+
 func (s *Swarm) isExplicitPeer(id types.PeerID) bool {
 	s.peerSNIMu.RLock()
 	defer s.peerSNIMu.RUnlock()
@@ -213,6 +217,12 @@ func onLocalNetwork(addr string) bool {
 	}
 	v4 := ip.To4()
 	return v4 != nil && v4[0] == 100 && v4[1]&0xC0 == 64 // carrier-grade NAT
+}
+
+// NoiseDialRefused is noiseDialRefused for dials the swarm does not make itself (hole punching):
+// a dial or punch toward addr that the rule holds back.
+func (s *Swarm) NoiseDialRefused(id types.PeerID, addr string) bool {
+	return s.noiseDialRefused(id, addr)
 }
 
 // noiseDialRefused reports whether a dial to the peer at addr must not be made. For a client: the

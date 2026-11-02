@@ -61,7 +61,7 @@ func StealthKeyFromPassword(password string) []byte {
 // DefaultMimicryConfig returns the default browser-mimicry settings.
 func DefaultMimicryConfig() *MimicryConfig {
 	return &MimicryConfig{
-		ServerName:   "www.microsoft.com",
+		ServerName:   "", // no shared default site: a peer's own cover, or none
 		Profile:      ProfileChrome,
 		AuthKey:      DefaultStealthKey(),
 		FallbackAddr: "",

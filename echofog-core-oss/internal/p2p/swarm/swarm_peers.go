@@ -87,6 +87,11 @@ func (s *Swarm) addPeer(peerPubKey types.PeerPublicKey, peerID types.PeerID, con
 	p.release = release
 	p.primaryReality = reality
 	p.SetCaps(caps)
+	if caps.Has(handshake.CapServer) {
+		// remembered, so the next dial to it after a restart (from a DHT table entry, a bare
+		// address) knows it is a server and keeps to the noise-dial rule
+		s.SetPeerServer(peerID, true)
+	}
 	pw := network.NewPeerWrapper(p.ctx, conn, peerID)
 
 	if s.peerStore != nil && dialable {

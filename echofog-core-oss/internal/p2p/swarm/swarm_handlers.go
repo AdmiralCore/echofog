@@ -164,6 +164,16 @@ func (s *Swarm) executeRPC(msgType net_types.MessageType, payload []byte, stream
 
 	stream.SetDeadline(time.Now().Add(30 * time.Second))
 
+	// a type with no handler is looked up before anything is parsed: its payload may be in a
+	// format this node does not know either, and none of it is the peer's fault
+	s.rpcMu.RLock()
+	handler, exists := s.rpcHandlers[msgType]
+	s.rpcMu.RUnlock()
+	if !exists {
+		s.unknownType(msgType, peerID)
+		return
+	}
+
 	// a request comes over the peer's own connection and must be signed by it, so whatever is
 	// wrong with it is the peer's doing; logs stay at debug level, a peer must not fill them
 	var env internal_pb.Envelope
@@ -186,16 +196,6 @@ func (s *Swarm) executeRPC(msgType net_types.MessageType, payload []byte, stream
 	if types.PeerPubKeyToID(types.PeerPublicKey(env.PubKey)) != peerID {
 		s.log().Debug("RPC: request not signed by the peer that sent it", "peer", peerID.String())
 		s.ReportPeer(peerID, abuse.BadSignature)
-		return
-	}
-
-	s.rpcMu.RLock()
-	handler, exists := s.rpcHandlers[msgType]
-	s.rpcMu.RUnlock()
-
-	if !exists {
-		s.log().Debug("RPC: no handler", "type", msgType, "peer", peerID.String())
-		s.ReportPeer(peerID, abuse.Refused)
 		return
 	}
 

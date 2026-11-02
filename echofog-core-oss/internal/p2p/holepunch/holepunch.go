@@ -47,6 +47,8 @@ const (
 	maxHalfRTT    = 2 * time.Second  // a slower path cannot be synchronised: give up
 	acceptWindow  = 10 * time.Second // per peer, we answer at most maxAttempts CONNECTs in this window
 	maxResponders = 8                // simultaneous incoming attempts
+	wantWindow    = 10 * time.Minute // how long a peer we tried to reach counts as wanted
+	maxWanted     = 1024
 )
 
 // Transport is the network side: punch with random packets, or dial.
@@ -76,10 +78,16 @@ type Config struct {
 	// ConnectWait overrides how long the initiator waits for the answer to CONNECT (default 8 s).
 	ConnectWait time.Duration
 	// Admit, when set, decides whether to answer a CONNECT from a peer, given the access ticket it
-	// sent: a hidden node answers (and so gives out its addresses) only to the peers it invited.
+	// sent. The answer gives out this node's public, IPv6 and LAN addresses, so it goes only to
+	// peers the node has reason to reach (contacts, peers it dialed itself, see Wanted); a hidden
+	// node answers only the peers it invited. Nil answers everyone (tests).
 	Admit func(from types.PeerID, ticket []byte) bool
 	// Ticket, when set, gives the access ticket to send with a CONNECT to peer (nil: none).
 	Ticket func(peer types.PeerID) []byte
+	// Refuse, when set, reports whether a punch or dial toward addr must not be made: the node's
+	// noise-dial rule (a server across a border with no known cover is not reached by noise).
+	// Punching bypasses the swarm's dial path, so it applies the rule itself.
+	Refuse func(peer types.PeerID, addr string) bool
 }
 
 type message struct {
@@ -111,8 +119,37 @@ type Service struct {
 	expecting  map[sessKey]*incoming
 	active     map[types.PeerID]struct{}
 	lastAccept map[types.PeerID][]time.Time
+	wanted     map[types.PeerID]time.Time // peers this node set out to reach, and when
 	responders int
 	closed     bool
+}
+
+// Want notes that this node is trying to reach peer: for wantWindow, a CONNECT from that peer is
+// one this node has reason to answer (see Wanted). Connect notes it by itself.
+func (s *Service) Want(peer types.PeerID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if len(s.wanted) >= maxWanted {
+		for id, at := range s.wanted {
+			if now.Sub(at) > wantWindow {
+				delete(s.wanted, id)
+			}
+		}
+		if len(s.wanted) >= maxWanted {
+			s.wanted = make(map[types.PeerID]time.Time)
+		}
+	}
+	s.wanted[peer] = now
+}
+
+// Wanted reports whether this node tried to reach peer in the last wantWindow: two peers that both
+// want a direct link (a call, a chat both sides opened) answer each other's CONNECT.
+func (s *Service) Wanted(peer types.PeerID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at, ok := s.wanted[peer]
+	return ok && time.Since(at) <= wantWindow
 }
 
 func New(cfg Config) *Service {
@@ -125,6 +162,7 @@ func New(cfg Config) *Service {
 		expecting:  make(map[sessKey]*incoming),
 		active:     make(map[types.PeerID]struct{}),
 		lastAccept: make(map[types.PeerID][]time.Time),
+		wanted:     make(map[types.PeerID]time.Time),
 	}
 }
 
@@ -192,15 +230,38 @@ func (s *Service) ownLocal() []string {
 	return addrStrings(lan(s.cfg.LocalAddrs()))
 }
 
-// withLAN puts the peer's LAN addresses in front of its public ones when both of us are behind the
-// same NAT, that is, when its public address has the same IP as one of ours.
-func withLAN(own, remote []netip.AddrPort, remoteLocal []string) []netip.AddrPort {
+// allowed drops the addresses the node's noise-dial rule refuses for peer.
+func (s *Service) allowed(peer types.PeerID, in []netip.AddrPort) []netip.AddrPort {
+	if s.cfg.Refuse == nil {
+		return in
+	}
+	out := in[:0:0]
+	for _, a := range in {
+		if !s.cfg.Refuse(peer, a.String()) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// sameNAT reports whether the peer's public addresses share an IP with ours: we are behind the same
+// router, the only case in which our LAN addresses are of any use to it.
+func sameNAT(own, remote []netip.AddrPort) bool {
 	for _, o := range own {
 		for _, r := range remote {
 			if o.Addr() == r.Addr() {
-				return append(lan(remoteLocal), remote...)
+				return true
 			}
 		}
+	}
+	return false
+}
+
+// withLAN puts the peer's LAN addresses in front of its public ones when both of us are behind the
+// same NAT, that is, when its public address has the same IP as one of ours.
+func withLAN(own, remote []netip.AddrPort, remoteLocal []string) []netip.AddrPort {
+	if sameNAT(own, remote) {
+		return append(lan(remoteLocal), remote...)
 	}
 	return remote
 }
@@ -222,6 +283,7 @@ func (s *Service) Connect(ctx context.Context, peer types.PeerID) error {
 	if s.cfg.Connected(peer) {
 		return nil
 	}
+	s.Want(peer)
 	s.mu.Lock()
 	if _, busy := s.active[peer]; busy || s.closed {
 		s.mu.Unlock()
@@ -304,7 +366,10 @@ func (s *Service) attempt(ctx context.Context, peer types.PeerID, both bool) err
 	if len(remote) == 0 {
 		return ErrNoRemoteAddr
 	}
-	remote = withLAN(own, remote, answer.Local)
+	remote = s.allowed(peer, withLAN(own, remote, answer.Local))
+	if len(remote) == 0 {
+		return ErrNoRemoteAddr // every address is one the noise-dial rule holds back
+	}
 	half := rtt / 2
 	if half > maxHalfRTT {
 		return fmt.Errorf("the path through the relay is too slow to synchronise (rtt %v)", rtt)
@@ -390,7 +455,18 @@ func (s *Service) onConnect(from types.PeerID, m message) {
 		s.mu.Unlock()
 		return
 	}
-	remote = withLAN(own, remote, m.Local)
+	// our LAN addresses only to a peer behind the same router: to anyone else they are a map of
+	// our home network and of no use
+	var ownLocal []string
+	if sameNAT(own, remote) {
+		ownLocal = s.ownLocal()
+	}
+	remote = s.allowed(from, withLAN(own, remote, m.Local))
+	if len(remote) == 0 {
+		// nothing we may dial or punch toward: no answer, and so no address of ours either
+		s.mu.Unlock()
+		return
+	}
 	key := sessKey{from, m.N}
 	in := &incoming{addrs: remote}
 	s.responders++
@@ -407,7 +483,7 @@ func (s *Service) onConnect(from types.PeerID, m message) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.send(ctx, from, message{T: "answer", N: m.N, Addr: addrStrings(own), Local: s.ownLocal()}); err != nil {
+	if err := s.send(ctx, from, message{T: "answer", N: m.N, Addr: addrStrings(own), Local: ownLocal}); err != nil {
 		slog.Debug("hole punch: could not answer CONNECT", "err", err)
 	}
 }

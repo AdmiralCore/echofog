@@ -124,7 +124,7 @@ func TestTunnelPad_InflatesOutOfWindow(t *testing.T) {
 func TestTunnelPad_RawAfterBudget(t *testing.T) {
 	// one write past the budget: the chunk that crosses it is final, the remainder is raw, and
 	// later writes are raw (recorded size == data size, no header/pad).
-	_, sizes := padWrite(t, [][]byte{make([]byte, padBudget+1000), make([]byte, 2000)})
+	_, sizes := padWrite(t, [][]byte{make([]byte, padBudgetMax+1000), make([]byte, 2000)})
 	// sizes[0] = framed chunk of padMaxChunk data (+header+jitter); then raw remainders.
 	if sizes[0] <= padMaxChunk { // must carry header + pad on top of 4096 data
 		t.Errorf("first chunk %d B is not a framed 4K chunk", sizes[0])
@@ -242,4 +242,83 @@ func FuzzTunnelPadReader(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Every node pads with its own ranges, drawn from its own secret within the safe bounds: the same
+// secret gives the same profile after a restart, another secret another profile.
+func TestTunnelPad_ProfilePerNode(t *testing.T) {
+	seen := map[padProfile]bool{}
+	for i := 0; i < 200; i++ {
+		secret := make([]byte, 32)
+		_, _ = crand.Read(secret)
+		p := padProfileFrom(secret)
+		if p != padProfileFrom(secret) {
+			t.Fatal("the same secret gave two profiles")
+		}
+		if p.targetLo < padTargetMin || p.targetLo > p.targetHi || p.targetHi > padCeiling {
+			t.Fatalf("target range %d..%d outside %d..%d", p.targetLo, p.targetHi, padTargetMin, padCeiling)
+		}
+		if p.jitterLo < padJitterFloor || p.jitterLo >= p.jitterHi {
+			t.Fatalf("jitter range %d..%d", p.jitterLo, p.jitterHi)
+		}
+		if p.budgetLo < padBudgetMin || p.budgetLo >= p.budgetHi || p.budgetHi > padBudgetMax {
+			t.Fatalf("budget range %d..%d outside %d..%d", p.budgetLo, p.budgetHi, padBudgetMin, padBudgetMax)
+		}
+		seen[p] = true
+	}
+	if len(seen) < 190 {
+		t.Fatalf("only %d distinct profiles from 200 secrets", len(seen))
+	}
+	if p := padProfileFrom([]byte("a")); p == defaultPadProfile {
+		t.Fatal("a seeded profile is the shared default")
+	}
+}
+
+// Whatever a writer's profile and budget, a reader strips the padding: a v0.2.0 peer reads a
+// seeded node's chunks, and the other way round.
+func TestTunnelPad_AnyProfileReadsBack(t *testing.T) {
+	t.Cleanup(func() { padProf.Store(nil) })
+	payload := make([]byte, 40000)
+	_, _ = crand.Read(payload)
+	for i := 0; i < 20; i++ {
+		secret := make([]byte, 32)
+		_, _ = crand.Read(secret)
+		SetPadSeed(secret)
+		var writes [][]byte
+		for off := 0; off < len(payload); {
+			n := min(1+off%1700, len(payload)-off)
+			writes = append(writes, payload[off:off+n])
+			off += n
+		}
+		wire, sizes := padWrite(t, writes)
+		padProf.Store(nil) // the reader runs the shared v0.2.0 default
+		got, err := padRead(t, wire, 333)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("profile %d: data does not survive the round trip", i)
+		}
+		if sizes[0] <= detectHi || sizes[0] > padCeiling {
+			t.Fatalf("first chunk %d B, want above %d and at most %d", sizes[0], detectHi, padCeiling)
+		}
+	}
+}
+
+// Each stream draws its own budget within the node's range.
+func TestTunnelPad_BudgetPerStream(t *testing.T) {
+	t.Cleanup(func() { padProf.Store(nil) })
+	SetPadSeed([]byte("budget test"))
+	p := currentPadProfile()
+	seen := map[int]bool{}
+	for i := 0; i < 50; i++ {
+		c := newTunnelPad(&capStream{})
+		if c.budget < p.budgetLo || c.budget > p.budgetHi {
+			t.Fatalf("budget %d outside %d..%d", c.budget, p.budgetLo, p.budgetHi)
+		}
+		seen[c.budget] = true
+	}
+	if len(seen) < 10 {
+		t.Fatalf("only %d distinct budgets in 50 streams", len(seen))
+	}
 }

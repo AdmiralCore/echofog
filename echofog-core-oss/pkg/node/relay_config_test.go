@@ -7,7 +7,9 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network/handshake"
+	"github.com/echofog/echofog-core/internal/p2p/holepunch"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
+	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -50,6 +52,7 @@ func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
 
 	n.Cfg.Role = config.RoleServer
 	n.Cfg.AntiDPI.TLSServerName = "cover.example"
+	n.Cfg.AntiDPI.CamouflageAddr = "198.51.100.7:443"
 	assert.Equal(t, "203.0.113.5:40001/"+n.ID.String()+"?sni=cover.example&srv=1", n.RelayReachability().Addr)
 	assert.True(t, n.announcedCaps().Has(handshake.CapServer))
 
@@ -60,5 +63,43 @@ func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
 	assert.True(t, n.announcedCaps().Has(handshake.CapDHTServer))
 
 	n.Cfg.Access.Mode = config.AccessHidden
+	n.Cfg.AntiDPI.TunnelPadding = false
 	assert.Equal(t, handshake.CapUnlisted, n.announcedCaps(), "a hidden node offers nothing")
+}
+
+// A hidden node (the recommended exit setup) pads its tunnels like a public one: it announces
+// the padding to the peers it admits, and nothing else.
+func TestHiddenNodeAnnouncesTunnelPadding(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}}
+	n.Cfg.Access.Mode = config.AccessHidden
+	n.Cfg.AntiDPI.TunnelPadding = true
+	assert.Equal(t, handshake.CapUnlisted|handshake.CapTunnelPadding, n.announcedCaps())
+	n.Cfg.Access.Mode = config.AccessIsolated
+	assert.Equal(t, handshake.CapUnlisted|handshake.CapTunnelPadding, n.announcedCaps())
+}
+
+// A site name without the address probes go to turns on no QUIC REALITY, so the node must not
+// announce it: peers would dial REALITY and every Initial would be dropped.
+func TestCoverNameAloneIsNotAnnounced(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}}
+	n.NAT = routing.NewNATManager(nil, slog.Default())
+	n.NAT.SetPortMapping(netip.MustParseAddrPort("203.0.113.5:40001"))
+	n.Cfg.AntiDPI.TLSServerName = "cover.example"
+	assert.Equal(t, "", n.announcedSNI())
+	assert.NotContains(t, n.RelayReachability().Addr, "sni=")
+
+	n.Cfg.AntiDPI.CamouflageAddr = "198.51.100.7:443"
+	assert.Equal(t, "cover.example", n.announcedSNI())
+	assert.Contains(t, n.RelayReachability().Addr, "sni=cover.example")
+}
+
+// A hole punch is answered (with our public, IPv6 and LAN addresses) only for a peer this node
+// has reason to reach: a stranger who merely asks gets nothing; a peer we set out to reach does.
+func TestPunchAnsweredOnlyForWantedPeers(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}, Swarm: &swarm.Swarm{}}
+	n.HolePunch = holepunch.New(holepunch.Config{Connected: func(types.PeerID) bool { return false }})
+	stranger, wanted := types.PeerID{2}, types.PeerID{3}
+	n.HolePunch.Want(wanted)
+	assert.False(t, n.admitPunch(stranger, nil), "a stranger's CONNECT is answered")
+	assert.True(t, n.admitPunch(wanted, nil), "a peer we set out to reach is refused")
 }

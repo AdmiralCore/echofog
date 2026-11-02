@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -306,4 +307,27 @@ func TestServerLearnsAUsersNodeFromTheAddress(t *testing.T) {
 	// this node's own address is a user's when it is not a server
 	assert.Equal(t, "198.51.100.42:4242?srv=0", teller.AnnotatedAddr(teller.selfID, "198.51.100.42:4242"))
 	assert.Empty(t, teller.AnnotatedAddr(teller.selfID, ""), "no entry about itself to put in a peer list")
+}
+
+// A server role learned only from a handshake outlives the connection and a restart: the next dial
+// to it (a bare DHT table entry after a reboot) keeps to the noise-dial rule instead of going out
+// as noise to a peer of "unknown" role.
+func TestServerRoleFromHandshakeIsRemembered(t *testing.T) {
+	s, _ := newTestSwarm(t)
+	ctx := context.Background()
+	var pub types.PeerPublicKey
+	pub[0] = 42
+	id := types.PeerPubKeyToID(pub)
+	p := s.addPeer(pub, id, newFakeMuxConn(ctx, 0), "198.51.100.7:4242", true, true, netip.Addr{}, nil, false,
+		handshake.CapRelay|handshake.CapServer)
+	require.NotNil(t, p)
+	s.RemovePeer(id)
+	require.Nil(t, s.GetPeer(id))
+
+	assert.True(t, s.IsServerPeer(id), "the role is forgotten with the connection")
+	assert.True(t, s.noiseDialRefused(id, "198.51.100.7:4242"))
+
+	restarted := &Swarm{storage: s.storage}
+	restarted.loadPeerFacts()
+	assert.True(t, restarted.IsServerPeer(id), "the role is forgotten across a restart")
 }

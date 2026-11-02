@@ -17,6 +17,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/congestion"
 	"github.com/echofog/echofog-core/internal/network/dpi"
 	"github.com/echofog/echofog-core/internal/network/handshake"
+	"github.com/echofog/echofog-core/internal/network/jitter"
 	"github.com/echofog/echofog-core/internal/network/mimicry"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -40,6 +41,9 @@ func GetQuicConfig() *quic.Config {
 	return &quic.Config{
 		Allow0RTT:       true,
 		KeepAlivePeriod: 10 * time.Second,
+		// each keep-alive moves within 7.5..12.5 s (see jitter.Default), not on a clock; the
+		// latest stays well under the 30 s idle timeout of v0.2.0 peers
+		KeepAliveJitter: jitter.Default,
 		MaxIdleTimeout:  30 * time.Second,
 		// What a peer may keep open at once. Every proxied connection through an exit is a bidi
 		// stream, so a browser behind it needs a few hundred; uni streams carry one gossip frame

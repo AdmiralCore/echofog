@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net"
 	"reflect"
 	"slices"
@@ -218,6 +219,7 @@ type Conn struct {
 	// It is reset as soon as we receive a packet from the peer.
 	keepAlivePingSent bool
 	keepAliveInterval time.Duration
+	keepAliveJitter   time.Duration // offset of the next keep-alive, drawn anew after each one
 
 	datagramQueue *datagramQueue
 
@@ -704,6 +706,7 @@ runLoop:
 			c.logger.Debugf("Sending a keep-alive PING to keep the connection alive.")
 			c.framer.QueueControlFrame(&wire.PingFrame{})
 			c.keepAlivePingSent = true
+			c.drawKeepAliveJitter()
 		} else if !c.handshakeComplete && now.Sub(c.creationTime) >= c.config.handshakeTimeout() {
 			c.destroyImpl(qerr.ErrHandshakeTimeout)
 			break runLoop
@@ -891,8 +894,19 @@ func (c *Conn) nextKeepAliveTime() monotime.Time {
 	if c.config.KeepAlivePeriod == 0 || c.keepAlivePingSent {
 		return 0
 	}
-	keepAliveInterval := max(c.keepAliveInterval, c.rttStats.PTO(true)*3/2)
+	keepAliveInterval := max(c.keepAliveInterval+c.keepAliveJitter, c.rttStats.PTO(true)*3/2)
 	return c.lastPacketReceivedTime.Add(keepAliveInterval)
+}
+
+// drawKeepAliveJitter picks the offset of the next keep-alive within ±KeepAliveJitter of the interval.
+func (c *Conn) drawKeepAliveJitter() {
+	f := min(max(c.config.KeepAliveJitter, 0), 0.5)
+	span := time.Duration(f * float64(c.keepAliveInterval))
+	if span <= 0 {
+		c.keepAliveJitter = 0
+		return
+	}
+	c.keepAliveJitter = time.Duration(mrand.Int64N(int64(2*span)+1)) - span
 }
 
 func (c *Conn) maybeResetTimer() {
@@ -2469,6 +2483,7 @@ func (c *Conn) applyTransportParameters() {
 		c.idleTimeout = min(c.idleTimeout, params.MaxIdleTimeout)
 	}
 	c.keepAliveInterval = min(c.config.KeepAlivePeriod, c.idleTimeout/2)
+	c.drawKeepAliveJitter()
 	c.streamsMap.HandleTransportParameters(params)
 	c.frameParser.SetAckDelayExponent(params.AckDelayExponent)
 	c.connFlowController.UpdateSendWindow(params.InitialMaxData)

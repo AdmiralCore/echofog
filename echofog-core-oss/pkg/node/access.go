@@ -232,7 +232,7 @@ func (n *Node) inviteLinkWith(secret []byte) (string, error) {
 		Protocol: n.Cfg.Network.ProtocolVersion,
 		Peer:     n.ID,
 		Addrs:    n.linkAddrs(),
-		SNI:      n.Cfg.AntiDPI.TLSServerName,
+		SNI:      n.announcedSNI(),
 		Server:   n.Cfg.IsServer(),
 	}
 	if n.gated() {
@@ -403,7 +403,19 @@ func (n *Node) admitPunch(from types.PeerID, ticket []byte) bool {
 	}
 	if n.Access == nil || !n.Access.Enabled() {
 		// guard mode: no hole punch with a user across the border; the traffic goes through relays
-		return !n.Swarm.UserLinkViaRelay(from, "")
+		if n.Swarm.UserLinkViaRelay(from, "") {
+			return false
+		}
+		return n.punchWelcome(from)
 	}
 	return n.Access.AdmitTicket(from, ticket)
+}
+
+// punchWelcome reports whether this node has a reason to reach the peer directly, and so to answer
+// its hole punch with our public, IPv6 and LAN addresses: a contact, a peer configured explicitly
+// (bootstrap, relays), or one this node itself set out to reach lately (a chat or call it opened,
+// a peer it met at a relay). Anyone else, whose ID costs nothing to make, learns nothing; it
+// reaches us through a relay, as it does when a punch fails.
+func (n *Node) punchWelcome(from types.PeerID) bool {
+	return n.IsContact(from) || n.Swarm.IsExplicitPeer(from) || (n.HolePunch != nil && n.HolePunch.Wanted(from))
 }

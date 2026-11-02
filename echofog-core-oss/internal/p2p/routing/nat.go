@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/jitter"
 	"github.com/echofog/echofog-core/internal/network/natcheck"
 )
 
@@ -219,8 +220,10 @@ func (m *NATManager) Discover() (string, error) {
 // StartKeepAlive refreshes the picture until ctx ends. Every tick also sends a STUN request on the
 // QUIC socket, which keeps its NAT mapping open even when no peer is connected.
 func (m *NATManager) StartKeepAlive(ctx context.Context) {
-	ticker := time.NewTicker(KeepAliveInterval)
-	defer ticker.Stop()
+	// every wait is drawn anew around KeepAliveInterval: a STUN request from the same port every
+	// exact 20 s is a clock anyone on the path can read
+	timer := time.NewTimer(jitter.Around(KeepAliveInterval, jitter.Default))
+	defer timer.Stop()
 	m.logger.Info("NAT Keep-Alive started", "interval", KeepAliveInterval)
 
 	// the first answer is wanted quickly, not after a full interval
@@ -233,7 +236,8 @@ func (m *NATManager) StartKeepAlive(ctx context.Context) {
 		case <-ctx.Done():
 			m.logger.Info("NAT Keep-Alive stopped")
 			return
-		case <-ticker.C:
+		case <-timer.C:
+			timer.Reset(jitter.Around(KeepAliveInterval, jitter.Default))
 			if tick%classifyEvery == 0 {
 				if _, err := m.Discover(); err != nil {
 					m.logger.Warn("NAT check failed", "err", err)

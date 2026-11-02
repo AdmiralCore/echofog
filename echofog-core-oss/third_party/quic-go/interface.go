@@ -163,6 +163,10 @@ type Config struct {
 	// If set to 0, then no keep alive is sent. Otherwise, the keep alive is sent on that period (or at most
 	// every half of MaxIdleTimeout, whichever is smaller).
 	KeepAlivePeriod time.Duration
+	// KeepAliveJitter moves each keep-alive by a random part of the period, up to this fraction
+	// either way (0.25: 7.5 to 12.5 s for 10 s), so an idle connection does not tick like a clock.
+	// 0 sends them exactly on the period. Values outside [0, 0.5] are clamped.
+	KeepAliveJitter float64
 	// InitialPacketSize is the initial size (and the lower limit) for packets sent.
 	// Under most circumstances, it is not necessary to manually set this value,
 	// since path MTU discovery quickly finds the path's MTU.

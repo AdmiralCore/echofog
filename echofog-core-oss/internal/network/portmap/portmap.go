@@ -1,6 +1,6 @@
 // Adapted from go-libp2p, p2p/net/nat/nat.go
 // (https://github.com/libp2p/go-libp2p, MIT License, Copyright (c) 2014 Juan Batiz-Benet).
-// Changes: logging goes through log/slog, the mapping description says "echofog", package renamed.
+// Changes: logging goes through log/slog, the mapping description names only the protocol and port, package renamed.
 // See THIRD_PARTY_NOTICES.md.
 
 package portmap
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -289,7 +290,9 @@ func (nat *NAT) background() {
 
 func (nat *NAT) establishMapping(ctx context.Context, protocol string, internalPort int) (externalPort int) {
 	log.Debug("Attempting port map", "protocol", protocol, "internal_port", internalPort)
-	const comment = "echofog"
+	// the router shows this, and may report it to the provider (TR-069): it names the protocol
+	// and port, as many programs do, not this one
+	comment := strings.ToUpper(protocol) + " " + strconv.Itoa(internalPort)
 
 	// Try to establish the mapping with both NAT calls under the same lock
 	nat.natmu.Lock()

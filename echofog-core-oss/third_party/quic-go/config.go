@@ -130,6 +130,7 @@ func populateConfig(config *Config) *Config {
 		HandshakeIdleTimeout:             handshakeIdleTimeout,
 		MaxIdleTimeout:                   idleTimeout,
 		KeepAlivePeriod:                  config.KeepAlivePeriod,
+		KeepAliveJitter:                  config.KeepAliveJitter,
 		InitialStreamReceiveWindow:       initialStreamReceiveWindow,
 		MaxStreamReceiveWindow:           maxStreamReceiveWindow,
 		InitialConnectionReceiveWindow:   initialConnectionReceiveWindow,

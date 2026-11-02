@@ -16,6 +16,10 @@ type dropState struct {
 	types   atomic.Pointer[map[net_types.MessageType]struct{}] // replaced whole, read without a lock
 	count   atomic.Uint64
 	lastLog atomic.Int64 // unix nanoseconds of the last log line
+
+	// requests of a type this node has no handler for: a newer peer's, most likely
+	unknown        atomic.Uint64
+	lastUnknownLog atomic.Int64
 }
 
 // DropFrameTypes makes the swarm discard inbound frames and streams of these types as they arrive,
@@ -64,4 +68,17 @@ func (s *Swarm) dropped(t net_types.MessageType, from types.PeerID) {
 		return
 	}
 	s.log().Debug("Swarm: dropped a frame of a type this node does not serve", "type", t, "peer", from.String(), "dropped_total", n)
+}
+
+// unknownType counts a request of a type this node does not know and logs it at most once per
+// dropLogEvery. It costs the peer nothing: a newer version speaks types an older one has never
+// heard of, and punishing them would ban every peer that upgrades first.
+func (s *Swarm) unknownType(t net_types.MessageType, from types.PeerID) {
+	n := s.drop.unknown.Add(1)
+	now := time.Now().UnixNano()
+	last := s.drop.lastUnknownLog.Load()
+	if now-last < int64(dropLogEvery) || !s.drop.lastUnknownLog.CompareAndSwap(last, now) {
+		return
+	}
+	s.log().Info("Swarm: ignored a request of an unknown type", "type", t, "peer", from.String(), "unknown_total", n)
 }

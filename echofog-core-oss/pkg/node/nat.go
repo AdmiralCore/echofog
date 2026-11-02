@@ -159,6 +159,7 @@ func (n *Node) startHolePunch() {
 		Connected:  func(p types.PeerID) bool { return n.Swarm.GetPeer(p) != nil },
 		Ticket:     func(p types.PeerID) []byte { return n.Invites.Ticket(p, n.ID) },
 		Admit:      n.admitPunch,
+		Refuse:     n.Swarm.NoiseDialRefused,
 	})
 	n.HolePunch = svc
 	n.Swarm.RegisterFastFrameHandler(net_types.TypeHolePunch, func(payload []byte, from types.PeerID) error {
@@ -177,6 +178,9 @@ func (n *Node) startHolePunch() {
 func (n *Node) connectToPeer(ctx context.Context, peer types.PeerID, addr string) error {
 	if n.Swarm.GetPeer(peer) != nil {
 		return nil
+	}
+	if n.HolePunch != nil {
+		n.HolePunch.Want(peer) // its hole punch toward us, if it tries one, is now answered
 	}
 	if !network.DirectRequested(ctx) && n.Swarm.UserLinkViaRelay(peer, addr) {
 		// guard mode: a user's node across the border is not dialed or punched to, which is noise
