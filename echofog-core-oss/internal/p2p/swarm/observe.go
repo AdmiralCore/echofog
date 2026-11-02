@@ -70,14 +70,16 @@ func (s *Swarm) ObserveFromPeers(ctx context.Context, max int) []natcheck.Observ
 // ObserveFromPeersOn is ObserveFromPeers for the peers connected through our socket on port (0:
 // any). A connection from another socket (a REALITY dial opens its own, so does a birthday punch)
 // goes through the NAT with a mapping of its own, and its port says nothing about the one peers
-// reach the node at; behind a cone NAT it would even make the NAT look symmetric. Relays and
-// signaling nodes are asked first: they sit at public addresses and see us as the Internet does.
+// reach the node at; behind a cone NAT it would even make the NAT look symmetric.
+//
+// Nothing proves a peer's answer, so who is asked matters (see pickObservers): the servers the
+// node was told about (bootstrap, invitations) and its guards first, then peers it dialed itself,
+// and peers that dialed in last; and peers in different networks before a second one from the same
+// network. What a peer announces about itself (relay, signaling) does not move it up: anybody can
+// announce that.
 func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natcheck.Observation {
-	var ids []types.PeerID
-	seenHost := map[string]bool{}
-	peers := s.GetAllPeers()
-	sort.SliceStable(peers, func(i, j int) bool { return peers[i].Signals() && !peers[j].Signals() })
-	for _, p := range peers {
+	var cands []observerCand
+	for _, p := range s.GetAllPeers() {
 		if p.ActiveProtocol() == router.ProtoTCPTLS {
 			continue
 		}
@@ -87,24 +89,25 @@ func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natchec
 				continue
 			}
 		}
-		host := p.RemoteAddr()
-		if ap, err := netip.ParseAddrPort(host); err == nil {
-			host = ap.Addr().String()
-		}
-		if seenHost[host] {
+		ra, err := netip.ParseAddrPort(p.RemoteAddr())
+		if err != nil {
 			continue
 		}
-		seenHost[host] = true
-		ids = append(ids, p.ID())
-		if len(ids) == max {
-			break
+		tier := tierInbound
+		switch {
+		case s.isExplicitPeer(p.ID()) || s.IsGuard(p.ID()):
+			tier = tierTold
+		case p.Outbound():
+			tier = tierDialed
 		}
+		cands = append(cands, observerCand{id: p.ID(), host: ra.Addr().Unmap(), tier: tier})
 	}
+	ids := pickObservers(cands, max)
 
 	var mu sync.Mutex
-	var out []natcheck.Observation
+	got := make([]*natcheck.Observation, len(ids))
 	var wg sync.WaitGroup
-	for _, id := range ids {
+	for i, id := range ids {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -112,11 +115,70 @@ func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natchec
 			defer cancel()
 			if ap, err := s.ObservedAddr(cctx, id); err == nil {
 				mu.Lock()
-				out = append(out, natcheck.Observation{From: id.String(), Addr: ap})
+				got[i] = &natcheck.Observation{From: id.String(), Addr: ap}
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
+	// in the order they were picked, the most trusted first: Classify gives them the edge when
+	// two ports are equally backed
+	var out []natcheck.Observation
+	for _, o := range got {
+		if o != nil {
+			out = append(out, *o)
+		}
+	}
 	return out
+}
+
+// How far a peer's answer about our address is trusted, best first.
+const (
+	tierTold    = iota // a bootstrap server, a peer from an invitation, a guard
+	tierDialed         // a peer this node dialed itself, at an address it chose
+	tierInbound        // a peer that dialed in: anybody can
+)
+
+type observerCand struct {
+	id   types.PeerID
+	host netip.Addr
+	tier int
+}
+
+// pickObservers chooses up to max observers: by tier, and within the picks one host per address
+// and one per network (an IPv4 /16, an IPv6 /32) before a second from the same network, so a
+// handful of hosts one party rents side by side do not answer for the whole Internet.
+func pickObservers(cands []observerCand, max int) []types.PeerID {
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].tier < cands[j].tier })
+	var ids []types.PeerID
+	seenHost := map[netip.Addr]bool{}
+	seenNet := map[netip.Prefix]bool{}
+	taken := make([]bool, len(cands))
+	for pass := 0; pass < 2 && len(ids) < max; pass++ {
+		for i, c := range cands {
+			if len(ids) == max {
+				break
+			}
+			if taken[i] || seenHost[c.host] {
+				continue
+			}
+			nw := observerNet(c.host)
+			if pass == 0 && seenNet[nw] {
+				continue // a second one from this network only if nothing else is left
+			}
+			taken[i], seenHost[c.host], seenNet[nw] = true, true, true
+			ids = append(ids, c.id)
+		}
+	}
+	return ids
+}
+
+// observerNet is the network a host counts toward: an IPv4 /16, an IPv6 /32 (about one provider).
+func observerNet(a netip.Addr) netip.Prefix {
+	bits := 16
+	if a.Is6() {
+		bits = 32
+	}
+	p, _ := a.Prefix(bits)
+	return p
 }

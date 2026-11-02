@@ -2,10 +2,12 @@ package swarm
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/natcheck"
+	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,4 +77,24 @@ func TestObserveFromPeersOnKeepsToOneSocket(t *testing.T) {
 
 	assert.Len(t, swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()), 1, "the main socket's peer is asked")
 	assert.Empty(t, swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()+1), "a peer on another socket is not")
+}
+
+// The servers the node was told about and its guards are asked first, then peers it dialed, then
+// peers that dialed in; and one peer per network before a second from the same one. What a peer
+// announces about itself does not count: it used to be enough to announce relaying to be asked
+// first, so two cheap hosts answered for the whole Internet.
+func TestObserversAreTheTrustedAndTheDiverseFirst(t *testing.T) {
+	id := func(b byte) types.PeerID { return types.PeerID{b} }
+	host := netip.MustParseAddr
+	cands := []observerCand{
+		{id: id(1), host: host("1.0.0.1"), tier: tierInbound},
+		{id: id(2), host: host("9.9.1.1"), tier: tierDialed},
+		{id: id(3), host: host("9.9.2.2"), tier: tierDialed}, // same /16 as 2
+		{id: id(4), host: host("8.8.8.8"), tier: tierTold},
+		{id: id(5), host: host("7.7.7.7"), tier: tierInbound},
+		{id: id(6), host: host("7.7.7.7"), tier: tierInbound}, // same host as 5
+	}
+	assert.Equal(t, []types.PeerID{id(4), id(2), id(1)}, pickObservers(append([]observerCand(nil), cands...), 3))
+	assert.Equal(t, []types.PeerID{id(4), id(2), id(1), id(5), id(3)}, pickObservers(append([]observerCand(nil), cands...), 8),
+		"the second one from a network only when nothing else is left, a host only once")
 }

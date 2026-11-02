@@ -74,9 +74,21 @@ type NATManager struct {
 	stunUsed  int // checks that asked STUN servers (tests)
 }
 
-// minPeerObservers is how many connected peers must report our address for STUN to be left out:
-// two independent views tell both the public address and whether it varies per destination.
-const minPeerObservers = 2
+// How many observers must agree before their answer is taken. Peers can lie about the address
+// they see us at (nothing proves it), so a few of them must not decide it alone.
+const (
+	// minPeerObservers: below this many connected peers with a public address, STUN is asked too
+	// (where allowed): two views are the least that tell whether the mapping varies.
+	minPeerObservers = 2
+	// safeObservers: STUN is left out only when at least this many independent peers agree on our
+	// IP, are the majority, and see one mapping. Fewer, or any doubt, and STUN is asked as well
+	// (outside guard mode), which outvotes a liar or two.
+	safeObservers = 3
+	// guardObservers: where STUN may not be asked (guard mode), the address and with it the home
+	// country are taken only from at least this many agreeing peers, the majority of those that
+	// answered; otherwise the previous picture stays. One peer must not place the node.
+	guardObservers = 2
+)
 
 // NewNATManager's conn must be the socket whose NAT mapping matters (the QUIC port), or nil if
 // STUN would run from another socket and thus see another mapping; peer observations still work.
@@ -186,13 +198,16 @@ func (m *NATManager) Candidates() []string {
 }
 
 // Discover re-checks the NAT. Connected peers are asked first which address they see us at (our
-// own nodes, so nothing goes to a third party); public STUN servers are asked only when fewer than
-// two peers with public addresses answered, and only when STUN runs on the QUIC socket and the
-// node allows it. The answers are classified together.
+// own nodes, so nothing goes to a third party); public STUN servers are asked as well unless
+// enough peers agree (see safeObservers), and only when STUN runs on the QUIC socket and the node
+// allows it. The answers are classified together. An answer no majority backs (a tie), or in guard
+// mode one that too few peers back, leaves the previous picture in place.
 func (m *NATManager) Discover() (string, error) {
 	m.mu.RLock()
 	conn, servers, observe, allowed := m.stunConn, m.servers, m.observe, m.stunAllowed
 	m.mu.RUnlock()
+	stunOK := allowed == nil || allowed()
+	local := natcheck.LocalAddrs()
 
 	var obs []natcheck.Observation
 	if observe != nil {
@@ -201,7 +216,8 @@ func (m *NATManager) Discover() (string, error) {
 		cancel()
 	}
 	fromPeers := publicObservers(obs)
-	if fromPeers < minPeerObservers && conn != nil && (allowed == nil || allowed()) {
+	r := natcheck.Classify(obs, local)
+	if peersNotEnough(fromPeers, r) && conn != nil && stunOK {
 		m.mu.Lock()
 		m.stunUsed++
 		m.mu.Unlock()
@@ -209,6 +225,7 @@ func (m *NATManager) Discover() (string, error) {
 		defer cancel()
 		if got, err := natcheck.QuerySTUN(ctx, conn, servers, stunTimeout); err == nil {
 			obs = append(obs, got...)
+			r = natcheck.Classify(obs, local)
 		} else {
 			m.logger.Debug("STUN discovery failed", "err", err)
 		}
@@ -220,7 +237,6 @@ func (m *NATManager) Discover() (string, error) {
 		return "", errors.New("no peer and no STUN server reported our address (is UDP blocked, or are we offline?)")
 	}
 
-	r := natcheck.Classify(obs, natcheck.LocalAddrs())
 	t := NATUnknown
 	switch {
 	case r.NoNAT:
@@ -234,6 +250,15 @@ func (m *NATManager) Discover() (string, error) {
 	pub := r.Public.String()
 	m.mu.Lock()
 	prevAddr, prevType := m.publicAddr, m.natType
+	if keep := !r.Public.IsValid() || (!stunOK && !r.Agreed(guardObservers)); keep {
+		// no majority, or in guard mode too few peers behind it: one or two lying peers must not
+		// set our address (it goes into invitations and punch targets, and places the node in a
+		// country, which can stand guard mode down)
+		m.mu.Unlock()
+		m.logger.Debug("NAT check not conclusive, keeping the previous picture", "public", prevAddr,
+			"agree", r.Agree, "observers", r.Observers)
+		return prevAddr, nil
+	}
 	m.report, m.natType, m.publicAddr = r, t, pub
 	m.mu.Unlock()
 
@@ -292,6 +317,12 @@ func (m *NATManager) ping(ctx context.Context) {
 	if _, err := natcheck.QuerySTUN(pctx, conn, servers[:1], stunTimeout); err != nil {
 		m.logger.Debug("NAT keep-alive ping failed", "err", err)
 	}
+}
+
+// peersNotEnough: what the peers said (fromPeers of them with a public address) is too little or
+// too doubtful to go without STUN.
+func peersNotEnough(fromPeers int, r natcheck.Report) bool {
+	return fromPeers < minPeerObservers || !r.Agreed(safeObservers) || r.Mapping != natcheck.MappingStable
 }
 
 // publicObservers counts the observations with a public address, one per observer.

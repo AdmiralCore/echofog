@@ -31,13 +31,13 @@ func nodeWithNAT(t *testing.T, listen string, obs ...string) *Node {
 // A node that others cannot reach must not be handed viewers to relay for: the links to them
 // could never be built and the call would break.
 func TestCallRelayCapacityFollowsReachability(t *testing.T) {
-	cone := nodeWithNAT(t, "0.0.0.0:4242", "a", "203.0.113.7:5000", "b", "203.0.113.7:5000")
+	cone := nodeWithNAT(t, "0.0.0.0:4242", "a", "8.8.8.7:5000", "b", "8.8.8.7:5000")
 	assert.Equal(t, 2, cone.CallRelayCapacity(), "behind a cone NAT: only peers it can punch through to")
 
-	cone.NAT.SetPortMapping(netip.MustParseAddrPort("203.0.113.7:4242"))
+	cone.NAT.SetPortMapping(netip.MustParseAddrPort("8.8.8.7:4242"))
 	assert.Equal(t, 4, cone.CallRelayCapacity(), "a forwarded port makes it a normal relay")
 
-	sym := nodeWithNAT(t, "0.0.0.0:4242", "a", "203.0.113.7:5000", "b", "203.0.113.7:5999")
+	sym := nodeWithNAT(t, "0.0.0.0:4242", "a", "8.8.8.7:5000", "b", "8.8.8.7:5999", "c", "8.8.8.7:5555")
 	assert.Equal(t, 0, sym.CallRelayCapacity(), "behind a symmetric NAT: leaf only")
 
 	unknown := nodeWithNAT(t, "0.0.0.0:4242")
@@ -51,8 +51,11 @@ func TestLocalNodesAndUnmeasuredNodesKeepTheDefault(t *testing.T) {
 
 func TestOnlyGloballyRoutableAddressesCountAsReachable(t *testing.T) {
 	for addr, want := range map[string]bool{
-		"203.0.113.7":    true,
-		"2001:db8::1":    true,
+		"8.8.8.7":        true,
+		"2001:4860::1":   true,
+		"2001:db8::1":    false, // documentation
+		"192.0.0.2":      false, // DS-Lite: the router sits behind the carrier's AFTR
+		"198.18.0.1":     false, // benchmarking range, used inside some carriers
 		"192.168.1.1":    false, // the router itself sits behind another NAT
 		"10.0.0.1":       false,
 		"100.64.1.1":     false, // carrier-grade NAT
@@ -62,7 +65,7 @@ func TestOnlyGloballyRoutableAddressesCountAsReachable(t *testing.T) {
 		"224.0.0.1":      false,
 		"::ffff:8.8.8.8": true,
 	} {
-		assert.Equal(t, want, publicIP(netip.MustParseAddr(addr)), addr)
+		assert.Equal(t, want, natcheck.PublicAddr(netip.MustParseAddr(addr)), addr)
 	}
-	assert.False(t, publicIP(netip.Addr{}))
+	assert.False(t, natcheck.PublicAddr(netip.Addr{}))
 }
