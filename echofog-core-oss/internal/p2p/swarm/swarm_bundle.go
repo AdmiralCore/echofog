@@ -79,6 +79,14 @@ func (s *Swarm) ForgetBundle(id types.PeerID) {
 	_ = s.storage.Delete(s.bundleCacheKey(id))
 }
 
+// Connected reports whether a peer is connected now: its bundle then comes from the peer itself.
+func (s *Swarm) Connected(id types.PeerID) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.activePeers[id]
+	return ok
+}
+
 // bundleCacheKey is where we keep the bundle of a peer we wrote to; the peer is blinded in it.
 func (s *Swarm) bundleCacheKey(id types.PeerID) []byte {
 	return []byte("bcache:" + storage.BlindID(s.storage, id.String()))
