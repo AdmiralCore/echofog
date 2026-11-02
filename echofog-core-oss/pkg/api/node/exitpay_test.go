@@ -391,3 +391,21 @@ func TestGuardRefusesAPriceAboveTheAdvert(t *testing.T) {
 	_, ex = run(info)
 	assert.Len(t, ex.paid, 1, "no advert to compare with (a hidden exit): paid as before")
 }
+
+// The guard's rounds are not a fixed heartbeat: each wait is moved at random, within 30 %.
+func TestGuardRoundsAreJittered(t *testing.T) {
+	for _, d := range []time.Duration{voucherGuardEvery, payGuardPending, payGuardEvery} {
+		seen := map[time.Duration]bool{}
+		lo, hi := d, d
+		for i := 0; i < 500; i++ {
+			w := jittered(d)
+			seen[w] = true
+			lo, hi = min(lo, w), max(hi, w)
+		}
+		assert.GreaterOrEqual(t, lo, time.Duration(float64(d)*0.7), d)
+		assert.LessOrEqual(t, hi, time.Duration(float64(d)*1.3), d)
+		assert.Greater(t, len(seen), 100, "%v: the waits differ", d)
+		assert.Less(t, lo, time.Duration(float64(d)*0.85), "%v: spread both ways", d)
+		assert.Greater(t, hi, time.Duration(float64(d)*1.15), "%v: spread both ways", d)
+	}
+}

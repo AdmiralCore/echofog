@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -716,7 +717,7 @@ func (n *NodeApi) startPayGuard() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(wait):
+			case <-time.After(jittered(wait)):
 			}
 		}
 	}()
@@ -754,6 +755,16 @@ func (n *NodeApi) advertPriceOf(relay string) func(ctx context.Context, asked in
 		}
 		return e.Advert.PricePerMB, true
 	}
+}
+
+// guardJitter spreads the guard's rounds: each account query is a new stream with a small request
+// and answer, and one every 2, 3 or 10 s on the dot inside a tunnel is a heartbeat an observer can
+// pick out.
+const guardJitter = 0.3
+
+// jittered is d moved at random by up to guardJitter either way.
+func jittered(d time.Duration) time.Duration {
+	return time.Duration(float64(d) * (1 - guardJitter + 2*guardJitter*rand.Float64()))
 }
 
 func (n *NodeApi) stopPayGuard() {
