@@ -179,6 +179,19 @@ func (p *Peer) RemoteAddr() string {
 	return p.transport.RemoteAddr().String()
 }
 
+// LocalAddr is our end of the current connection: which of our sockets talks to the peer.
+func (p *Peer) LocalAddr() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.transport == nil {
+		return ""
+	}
+	if c := p.transport.GetConn(); c != nil && c.LocalAddr() != nil {
+		return c.LocalAddr().String()
+	}
+	return ""
+}
+
 func (p *Peer) PubKey() types.PeerPublicKey {
 	return p.pubKey
 }

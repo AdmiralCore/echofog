@@ -82,6 +82,44 @@ func TestIgnoresGarbageObservations(t *testing.T) {
 	assert.False(t, r.Public.IsValid())
 }
 
+// A peer on our own LAN (or inside the same carrier NAT) sees our private address. Next to the
+// public observations it must not count as a second mapping: the NAT is a cone, not symmetric.
+func TestPrivateObservationsDoNotMakeAConeLookSymmetric(t *testing.T) {
+	r := Classify(obs("server1", "203.0.113.7:50000", "server2", "203.0.113.7:50000",
+		"lan-peer", "192.168.1.5:4242", "same-carrier", "100.72.1.9:61000"), nil)
+	assert.Equal(t, MappingStable, r.Mapping)
+	assert.Equal(t, ap("203.0.113.7:50000"), r.Public)
+
+	// a closed network (only private addresses) still gets classified
+	closed := Classify(obs("a", "172.18.0.4:4242", "b", "172.18.0.4:4242"), nil)
+	assert.Equal(t, MappingStable, closed.Mapping)
+	assert.Equal(t, ap("172.18.0.4:4242"), closed.Public)
+}
+
+// Behind a symmetric NAT the observed ports show where the NAT allocates from.
+func TestSymmetricReportCarriesThePortRange(t *testing.T) {
+	r := Classify(obs("a", "203.0.113.7:40100", "b", "203.0.113.7:40017", "c", "203.0.113.7:40230",
+		"d", "203.0.113.7:40100", "e", "198.51.100.9:9999"), nil)
+	assert.Equal(t, MappingVaries, r.Mapping)
+	assert.Equal(t, uint16(40017), r.PortLo)
+	assert.Equal(t, uint16(40230), r.PortHi)
+	assert.Equal(t, 3, r.Ports, "only the ports on the public IP count")
+
+	cone := Classify(obs("a", "203.0.113.7:50000", "b", "203.0.113.7:50000"), nil)
+	assert.Equal(t, 1, cone.Ports)
+	assert.Equal(t, cone.PortLo, cone.PortHi)
+}
+
+func TestPublicAddr(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"203.0.113.7": true, "2001:db8::1": true, "::ffff:8.8.8.8": true,
+		"192.168.1.1": false, "10.0.0.1": false, "100.64.1.1": false, "100.127.255.1": false,
+		"169.254.1.1": false, "127.0.0.1": false, "0.0.0.0": false, "fd00::1": false, "fe80::1": false,
+	} {
+		assert.Equal(t, want, PublicAddr(netip.MustParseAddr(addr)), addr)
+	}
+}
+
 // --- STUN over a real socket against fake servers that act like NATs ---
 
 // fakeSTUN answers every binding request with mapped (or with the sender's own address if mapped

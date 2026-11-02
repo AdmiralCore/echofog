@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sort"
 	"sync"
 	"time"
 
@@ -63,11 +64,28 @@ func (s *Swarm) ObservedAddr(ctx context.Context, peer types.PeerID) (netip.Addr
 // ObserveFromPeers asks up to max connected QUIC peers, preferring different hosts so their
 // answers are independent, and returns what they saw.
 func (s *Swarm) ObserveFromPeers(ctx context.Context, max int) []natcheck.Observation {
+	return s.ObserveFromPeersOn(ctx, max, 0)
+}
+
+// ObserveFromPeersOn is ObserveFromPeers for the peers connected through our socket on port (0:
+// any). A connection from another socket (a REALITY dial opens its own, so does a birthday punch)
+// goes through the NAT with a mapping of its own, and its port says nothing about the one peers
+// reach the node at; behind a cone NAT it would even make the NAT look symmetric. Relays and
+// signaling nodes are asked first: they sit at public addresses and see us as the Internet does.
+func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natcheck.Observation {
 	var ids []types.PeerID
 	seenHost := map[string]bool{}
-	for _, p := range s.GetAllPeers() {
+	peers := s.GetAllPeers()
+	sort.SliceStable(peers, func(i, j int) bool { return peers[i].Signals() && !peers[j].Signals() })
+	for _, p := range peers {
 		if p.ActiveProtocol() == router.ProtoTCPTLS {
 			continue
+		}
+		if port != 0 {
+			la, err := netip.ParseAddrPort(p.LocalAddr())
+			if err != nil || int(la.Port()) != port {
+				continue
+			}
 		}
 		host := p.RemoteAddr()
 		if ap, err := netip.ParseAddrPort(host); err == nil {

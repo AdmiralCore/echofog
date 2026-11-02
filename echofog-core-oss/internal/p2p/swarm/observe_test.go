@@ -55,3 +55,24 @@ func TestObservedAddrFailsForAnUnknownPeer(t *testing.T) {
 	assert.Error(t, err)
 	assert.Empty(t, swA.ObserveFromPeers(ctx, 4))
 }
+
+// Only peers connected through the given socket are asked: another socket has a NAT mapping of
+// its own.
+func TestObserveFromPeersOnKeepsToOneSocket(t *testing.T) {
+	ctxA, swA, trA, storeA := testSwarmInit(t, "127.0.0.1:0")
+	defer swA.Close()
+	defer trA.Close()
+	defer storeA.CloseAndClear()
+	_, swB, trB, storeB := testSwarmInit(t, "127.0.0.1:0")
+	defer swB.Close()
+	defer trB.Close()
+	defer storeB.CloseAndClear()
+
+	require.NoError(t, trB.DialEarly(ctxA, trA.Addr().String()))
+	require.Eventually(t, func() bool { return len(swB.GetAllPeers()) > 0 }, 5*time.Second, 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	assert.Len(t, swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()), 1, "the main socket's peer is asked")
+	assert.Empty(t, swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()+1), "a peer on another socket is not")
+}
