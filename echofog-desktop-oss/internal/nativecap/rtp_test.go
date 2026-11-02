@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/pkg/videolayer"
 	"github.com/pion/rtp"
 )
 
@@ -30,7 +31,7 @@ func TestPacketizerKeyframe(t *testing.T) {
 		t.Fatalf("annexBNALs split it into %d units", len(got))
 	}
 	p := newPacketizer(1100)
-	pkts := p.packets(au, 9000)
+	pkts := p.packets(au, 9000, frameLayer{}, true)
 	if len(pkts) < 5 {
 		t.Fatalf("%d packets for a 5 KB IDR", len(pkts))
 	}
@@ -169,5 +170,74 @@ func TestPacerSmallFrameAndBacklog(t *testing.T) {
 	sent = runPacer(t, 1_000_000, packets(400, 1100)) // 440 KB at a 1 Mbit/s target
 	if span := sent[len(sent)-1].at.Sub(sent[0].at); span > maxPacerDelay+5*time.Millisecond {
 		t.Fatalf("a 440 KB backlog took %v to drain", span)
+	}
+}
+
+// A layered packetizer marks every packet of a frame with its layer and place, and keeps the
+// packets within the MTU with the mark on.
+func TestPacketizerMarksLayers(t *testing.T) {
+	au := annexB(append([]byte{0x01}, bytes.Repeat([]byte{0xab}, 3000)...)) // a non-reference slice
+	p := newPacketizer(1100)
+	p.layered = true
+	pkts := p.packets(au, 9000, frameLayer{tid: 2, discardable: true}, false)
+	if len(pkts) < 3 {
+		t.Fatalf("%d packets for 3 KB", len(pkts))
+	}
+	for i, b := range pkts {
+		if len(b) > 1100 {
+			t.Fatalf("packet %d is %d bytes, over the MTU", i, len(b))
+		}
+		m, _, ok := videolayer.Find(b)
+		if !ok {
+			t.Fatalf("packet %d has no mark", i)
+		}
+		want := videolayer.Mark{TID: 2, Discardable: true, Start: i == 0, End: i == len(pkts)-1, Index: uint16(i), Count: uint16(len(pkts))}
+		if m != want {
+			t.Fatalf("packet %d: mark %+v, want %+v", i, m, want)
+		}
+		var pk rtp.Packet
+		if err := pk.Unmarshal(b); err != nil || pk.Payload[0]&0x1f != 28 {
+			t.Fatalf("packet %d: %v, NAL type %d", i, err, pk.Payload[0]&0x1f)
+		}
+	}
+	p.layered = false
+	if _, _, ok := videolayer.Find(p.packets(au, 9000, frameLayer{}, false)[0]); ok {
+		t.Fatal("an unlayered packetizer marked a packet")
+	}
+}
+
+func TestSplitLayer(t *testing.T) {
+	aud := []byte{0x09, 0xf0}
+	prefix := func(ref, tid byte) []byte { return []byte{ref<<5 | 14, 0x80, 0x00, tid << 5} }
+	slice := func(ref byte) []byte { return []byte{ref<<5 | 1, 0x9a, 0x01} }
+	idr := []byte{0x65, 0x88, 0x01}
+	cases := []struct {
+		name string
+		au   []byte
+		want frameLayer
+	}{
+		{"prefix top", annexB(aud, prefix(0, 2), slice(0)), frameLayer{tid: 2, discardable: true}},
+		{"prefix middle", annexB(aud, prefix(3, 1), slice(3)), frameLayer{tid: 1}},
+		{"prefix base", annexB(aud, prefix(3, 0), slice(3)), frameLayer{tid: 0}},
+		{"idr", annexB([]byte{0x67, 1}, []byte{0x68, 1}, prefix(3, 0), idr), frameLayer{tid: 0}},
+		{"no prefix, reference", annexB(aud, slice(2)), frameLayer{tid: 0}},
+		{"no prefix, not a reference", annexB(aud, slice(0)), frameLayer{tid: 1, discardable: true}},
+	}
+	for _, c := range cases {
+		out, got := splitLayer(c.au)
+		if got != c.want {
+			t.Fatalf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+		for _, n := range annexBNALs(out) {
+			if n[0]&0x1f == 14 {
+				t.Fatalf("%s: a prefix NAL unit stayed in", c.name)
+			}
+		}
+		if len(annexBNALs(out)) != len(annexBNALs(c.au))-bytes.Count(c.au, []byte{0, 0, 1, 0x6e})-bytes.Count(c.au, []byte{0, 0, 1, 0x0e}) {
+			t.Fatalf("%s: lost a NAL unit", c.name)
+		}
+	}
+	if temporalLayersFor(60) != 3 || temporalLayersFor(30) != 2 || temporalLayersFor(15) != 1 {
+		t.Fatal("temporalLayersFor")
 	}
 }

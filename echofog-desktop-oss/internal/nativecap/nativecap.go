@@ -42,6 +42,9 @@ type Options struct {
 	Levels []Level
 	// OnLevel is told each change of level and why ("bitrate", "screens"), on the stream's goroutine.
 	OnLevel func(l Level, why string)
+	// TemporalLayers is how many temporal layers to ask the encoder for (1: none); 0 picks by the
+	// frame rate. An encoder that cannot make them sends one layer, as before.
+	TemporalLayers int
 }
 
 // Stats are totals since the stream started, plus what it does now; the app turns totals into
@@ -65,7 +68,9 @@ type Stats struct {
 	Encoder       string  `json:"encoder"`     // e.g. "NVIDIA H.264 Encoder MFT"
 	Adapter       string  `json:"adapter"`
 	Hardware      bool    `json:"hardware"`
-	PacerDelayMs  float64 `json:"pacerDelayMs"` // how long the last frame waited in the pacer
+	// TemporalLayers is how many temporal layers the encoder makes, 1 when it makes none.
+	TemporalLayers int     `json:"temporalLayers,omitempty"`
+	PacerDelayMs   float64 `json:"pacerDelayMs"` // how long the last frame waited in the pacer
 }
 
 // After adds the totals of an earlier capture of the same stream (a quality change restarts the

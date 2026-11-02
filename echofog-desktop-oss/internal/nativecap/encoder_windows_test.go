@@ -107,7 +107,7 @@ func encodeClip(src string, w, h, fps, kbps, quality int, out io.Writer) (took [
 		defer release(ring[i])
 	}
 	var mu sync.Mutex
-	enc, err := newMFEncoder(d, w, h, fps, kbps, quality, func(f encodedFrame) {
+	enc, err := newMFEncoder(d, w, h, fps, kbps, quality, 1, func(f encodedFrame) {
 		mu.Lock()
 		took = append(took, f.took)
 		bytes += len(f.data)

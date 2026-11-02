@@ -227,7 +227,7 @@ func (s *Stream) run(ready chan<- error) {
 
 	s.pk = newPacketizer(s.o.MTU)
 	s.pacer = newPacer(s.o.Publish, s.bitrate.Load())
-	enc, err := newMFEncoder(d, outW, outH, fps, int(s.bitrate.Load()/1000), encoderQuality, s.onFrame)
+	enc, err := newMFEncoder(d, outW, outH, fps, int(s.bitrate.Load()/1000), encoderQuality, s.temporalLayers(fps), s.onFrame)
 	if err != nil {
 		endErr = fmt.Errorf("encoder: %w", err)
 		return
@@ -243,7 +243,7 @@ func (s *Stream) run(ready chan<- error) {
 	s.mu.Lock()
 	s.st.Width, s.st.Height, s.st.FPS, s.st.Lowered = outW, outH, fps, lad.lowered()
 	s.st.SourceWidth, s.st.SourceHeight = int(c.contentW), int(c.contentH)
-	s.st.Encoder, s.st.Adapter, s.st.Hardware = enc.name, d.adapterName, true
+	s.st.Encoder, s.st.Adapter, s.st.Hardware, s.st.TemporalLayers = enc.name, d.adapterName, true, enc.layers
 	s.mu.Unlock()
 	started = true
 	ready <- nil
@@ -286,7 +286,7 @@ func (s *Stream) run(ready chan<- error) {
 			}
 			s.mu.Unlock()
 		}
-		e, err := newMFEncoder(d, w, h, l.FPS, int(s.bitrate.Load()/1000), encoderQuality, s.onFrame)
+		e, err := newMFEncoder(d, w, h, l.FPS, int(s.bitrate.Load()/1000), encoderQuality, s.temporalLayers(l.FPS), s.onFrame)
 		if err != nil {
 			return fmt.Errorf("encoder: %w", err)
 		}
@@ -295,7 +295,7 @@ func (s *Stream) run(ready chan<- error) {
 		clock = newFrameClock(fps, time.Now())
 		beat.Reset(time.Until(clock.next))
 		s.mu.Lock()
-		s.st.Width, s.st.Height, s.st.FPS = outW, outH, fps
+		s.st.Width, s.st.Height, s.st.FPS, s.st.TemporalLayers = outW, outH, fps, e.layers
 		s.mu.Unlock()
 		if s.o.OnLevel != nil {
 			s.o.OnLevel(Level{Width: w, Height: h, FPS: fps, Kbps: l.Kbps}, why+", "+time.Since(took).Round(time.Millisecond).String())
@@ -466,6 +466,15 @@ func (s *Stream) send(d *device, conv *converter, c *wgcCapture) (bool, error) {
 	return true, nil
 }
 
+// temporalLayers is how many temporal layers an encoder at fps is asked for: Options.TemporalLayers,
+// or by the frame rate (temporalLayersFor).
+func (s *Stream) temporalLayers(fps int) int {
+	if s.o.TemporalLayers > 0 {
+		return s.o.TemporalLayers
+	}
+	return temporalLayersFor(fps)
+}
+
 // onFrame runs on the encoder's goroutine for every frame that comes out.
 func (s *Stream) onFrame(f encodedFrame) {
 	s.mu.Lock()
@@ -481,5 +490,6 @@ func (s *Stream) onFrame(f encodedFrame) {
 	}
 	s.mu.Unlock()
 	ts := s.tsAt + uint32(f.pts*90000/time.Second)
-	s.pacer.push(s.pk.packets(f.data, ts))
+	s.pk.layered = f.layered
+	s.pacer.push(s.pk.packets(f.data, ts, f.layer, f.keyframe))
 }

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/pkg/videolayer"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 )
@@ -50,27 +51,43 @@ func hasIDR(au []byte) bool {
 }
 
 // packetizer turns access units into RTP packets of at most mtu bytes, in the H.264 packetization
-// mode 1 the bridge negotiates (SPS and PPS go out as one STAP-A, large NAL units as FU-A).
+// mode 1 the bridge negotiates (SPS and PPS go out as one STAP-A, large NAL units as FU-A). With
+// layered set, every packet carries the frame's temporal-layer mark (videolayer).
 type packetizer struct {
-	mtu  int
-	ssrc uint32
-	seq  uint16
-	pl   codecs.H264Payloader
+	mtu     int
+	ssrc    uint32
+	seq     uint16
+	pl      codecs.H264Payloader
+	layered bool
 }
 
 func newPacketizer(mtu int) *packetizer {
 	return &packetizer{mtu: mtu, ssrc: rand.Uint32(), seq: uint16(rand.Uint32())}
 }
 
-// packets returns the marshaled packets of one access unit with the RTP timestamp ts (90 kHz).
-func (p *packetizer) packets(au []byte, ts uint32) [][]byte {
-	payloads := p.pl.Payload(uint16(p.mtu-12), au)
+// packets returns the marshaled packets of one access unit with the RTP timestamp ts (90 kHz),
+// marked with its layer l when the packetizer is layered. The core counts the packets of each
+// layer (the mark's L0 and L1) as it numbers the units.
+func (p *packetizer) packets(au []byte, ts uint32, l frameLayer, key bool) [][]byte {
+	room := p.mtu - 12
+	if p.layered {
+		room -= videolayer.ExtensionLen
+	}
+	payloads := p.pl.Payload(uint16(room), au)
 	out := make([][]byte, 0, len(payloads))
 	for i, pl := range payloads {
 		pkt := rtp.Packet{Header: rtp.Header{
 			Version: 2, PayloadType: h264PayloadType, SequenceNumber: p.seq, Timestamp: ts, SSRC: p.ssrc,
 			Marker: i == len(payloads)-1,
 		}, Payload: pl}
+		if p.layered {
+			m := videolayer.Mark{TID: l.tid, Start: i == 0, End: i == len(payloads)-1, Key: key, Discardable: l.discardable,
+				Index: uint16(i), Count: uint16(len(payloads))}
+			pkt.Header.Extension, pkt.Header.ExtensionProfile = true, 0xBEDE
+			if err := pkt.Header.SetExtension(videolayer.ExtensionID, m.Data()); err != nil {
+				continue
+			}
+		}
 		b, err := pkt.Marshal()
 		if err != nil {
 			continue
