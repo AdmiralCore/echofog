@@ -48,6 +48,7 @@ func (n *Node) startNAT() {
 		return n.Swarm.ObserveFromPeersOn(ctx, 4, n.Transport.UDPPort())
 	})
 	n.NAT.SetSTUNAllowed(func() bool { return !n.Swarm.GuardModeActive() })
+	n.NAT.SetMappingKeepers(func() int { return n.Swarm.NATKeepers(n.Transport.UDPPort()) })
 
 	if n.loopbackOnly() {
 		return // simulations and tests: there is no NAT to look at

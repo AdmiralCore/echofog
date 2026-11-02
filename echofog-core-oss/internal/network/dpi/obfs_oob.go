@@ -115,9 +115,15 @@ func (c *ObfsPacketConnOOB) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, 
 		off += m
 	}
 	if at >= 0 {
-		// the kernel cuts the train at the segment size: make it the sealed segment's size
-		c.oobBuf = append(c.oobBuf[:0], oob...)
-		setGSOSegment(c.oobBuf, at, seg+Overhead)
+		if nseg == 1 {
+			// one datagram: no segment size at all, as quic-go itself never asks GSO for one
+			// (some drivers misbehave with it)
+			c.oobBuf = dropGSO(c.oobBuf[:0], oob)
+		} else {
+			// the kernel cuts the train at the segment size: make it the sealed segment's size
+			c.oobBuf = append(c.oobBuf[:0], oob...)
+			setGSOSegment(c.oobBuf, at, seg+Overhead)
+		}
 		oob = c.oobBuf
 	}
 	_, oobn, err := c.oc.WriteMsgUDP(buf[:off], oob, addr)

@@ -134,6 +134,30 @@ func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natchec
 	return out
 }
 
+// NATKeepers counts the peers connected now over QUIC through our socket on port at a public
+// IPv4 address: their keep-alives hold our NAT mapping open (a peer on the LAN does not cross the
+// NAT, and one over IPv6 holds another mapping).
+func (s *Swarm) NATKeepers(port int) int {
+	n := 0
+	for _, p := range s.GetAllPeers() {
+		if p.ActiveProtocol() == router.ProtoTCPTLS || !p.Alive() {
+			continue
+		}
+		la, err := netip.ParseAddrPort(p.LocalAddr())
+		if err != nil || int(la.Port()) != port {
+			continue
+		}
+		ra, err := netip.ParseAddrPort(p.RemoteAddr())
+		if err != nil {
+			continue
+		}
+		if a := ra.Addr().Unmap(); a.Is4() && natcheck.PublicAddr(a) {
+			n++
+		}
+	}
+	return n
+}
+
 // How far a peer's answer about our address is trusted, best first.
 const (
 	tierTold    = iota // a bootstrap server, a peer from an invitation, a guard

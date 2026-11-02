@@ -378,3 +378,24 @@ func TestIPv6PeersDoNotReplaceSTUNForIPv4(t *testing.T) {
 	_, _ = m.Discover()
 	assert.Equal(t, 1, conn.sent())
 }
+
+// The STUN keep-alive follows the peers connected now: when the ones that answered the last check
+// are gone, it resumes on the next tick instead of after the next full check.
+func TestKeepAliveResumesWhenThePeersAreGone(t *testing.T) {
+	conn := newSTUNCounter()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{"127.0.0.1:3478"})
+	m.SetObserver(seen("server1", "8.8.8.7:50000", "server2", "8.8.8.7:50000", "server3", "8.8.8.7:50000"))
+	keepers := 3
+	m.SetMappingKeepers(func() int { return keepers })
+	_, err := m.Discover()
+	require.NoError(t, err)
+	require.Equal(t, 0, conn.sent())
+
+	m.ping(context.Background())
+	assert.Equal(t, 0, conn.sent(), "the peers hold the mapping open")
+
+	keepers = 0 // they dropped right after the check
+	m.ping(context.Background())
+	assert.Equal(t, 1, conn.sent(), "the keep-alive must not wait for the next check")
+}

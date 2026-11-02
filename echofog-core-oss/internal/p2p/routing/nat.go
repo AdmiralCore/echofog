@@ -70,9 +70,12 @@ type NATManager struct {
 	// node sits behind a second NAT (carrier-grade or double NAT) and no port forward can reach it.
 	carrierNAT bool
 	// peersSeen: the last check heard from connected peers, whose QUIC keep-alives hold the NAT
-	// mapping open; no STUN keep-alive is needed then.
+	// mapping open; no STUN keep-alive is needed then. Only used without keepers.
 	peersSeen bool
-	stunUsed  int // checks that asked STUN servers (tests)
+	// keepers, when set, counts the peers connected now whose keep-alives hold the mapping open
+	// (see SetMappingKeepers).
+	keepers  func() int
+	stunUsed int // checks that asked STUN servers (tests)
 }
 
 // How many observers must agree before their answer is taken. Peers can lie about the address
@@ -120,6 +123,16 @@ func (m *NATManager) SetObserver(o Observer) {
 func (m *NATManager) SetSTUNAllowed(fn func() bool) {
 	m.mu.Lock()
 	m.stunAllowed = fn
+	m.mu.Unlock()
+}
+
+// SetMappingKeepers installs the count of connected peers whose QUIC keep-alives hold our NAT
+// mapping open (peers at public IPv4 addresses on our QUIC socket). The STUN keep-alive asks it on
+// every tick, so it resumes as soon as they are gone, not at the next full check a minute later: a
+// carrier NAT that drops idle UDP mappings after 30 s would otherwise move us meanwhile.
+func (m *NATManager) SetMappingKeepers(fn func() int) {
+	m.mu.Lock()
+	m.keepers = fn
 	m.mu.Unlock()
 }
 
@@ -312,8 +325,11 @@ func (m *NATManager) StartKeepAlive(ctx context.Context) {
 // connected over the QUIC socket their keep-alives hold the mapping open, and no STUN goes out.
 func (m *NATManager) ping(ctx context.Context) {
 	m.mu.RLock()
-	conn, servers, peers, allowed := m.stunConn, m.servers, m.peersSeen, m.stunAllowed
+	conn, servers, peers, keepers, allowed := m.stunConn, m.servers, m.peersSeen, m.keepers, m.stunAllowed
 	m.mu.RUnlock()
+	if keepers != nil {
+		peers = keepers() > 0
+	}
 	if conn == nil || len(servers) == 0 || peers || (allowed != nil && !allowed()) {
 		return
 	}

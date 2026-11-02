@@ -75,6 +75,30 @@ func TestObfsWriteMsgUDPSealsEachGSOSegment(t *testing.T) {
 	}
 }
 
+// A datagram that fits in one segment goes out without UDP_SEGMENT: quic-go never asks GSO for a
+// single datagram (some drivers misbehave), and the obfuscation must not either.
+func TestObfsSingleDatagramHasNoSegmentSize(t *testing.T) {
+	o, _ := newObfs(t, 1)
+	ss, _ := udpPair(t)
+	oc, _ := AsOOB(ss)
+	rec := &recorder{OOBPacketConn: oc}
+	w := WrapPacketConn(rec, o).(*ObfsPacketConnOOB)
+	to := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}
+	for _, size := range []int{1000, 1200} { // shorter than the segment, and exactly one
+		pkt := make([]byte, size)
+		_, _ = rand.Read(pkt)
+		if _, _, err := w.WriteMsgUDP(pkt, udpSegmentCmsg(1200), to); err != nil {
+			t.Fatal(err)
+		}
+		if _, at := gsoSegment(rec.oob); at >= 0 {
+			t.Fatalf("%d bytes: a single datagram must not carry UDP_SEGMENT", size)
+		}
+		if len(rec.b) != size+Overhead {
+			t.Fatalf("wrote %d bytes", len(rec.b))
+		}
+	}
+}
+
 // Noise datagrams leave Not-ECT: high-entropy UDP with ECT(0) is a rare feature on the wire,
 // which a censor could match (and a v0.2.0 peer, which echoes no ECN counts, made the flow show
 // quic-go's validation pattern). A raw (REALITY) peer's datagrams are left to the REALITY layer.
