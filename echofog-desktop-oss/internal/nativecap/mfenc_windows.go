@@ -220,9 +220,14 @@ func hardwareEncoders() ([]unsafe.Pointer, func(), error) {
 // screen clips (TestEncoderQualityBench), and at 144 fps a frame has 7 ms.
 const encoderQuality = 33
 
-// bufferFrames is how many frames' worth of bits the encoder's rate buffer holds; more than six
-// bought at most 0.6 VMAF in the same measurement.
-var bufferFrames = 6
+// rateBuffer is how much of the bitrate the encoder's rate buffer holds, which bounds how large a
+// frame after a scene change gets: the same time at any frame rate (held in frames, six, it was
+// 200 ms at 30 fps and 42 ms at 144). The NVIDIA encoder's keyframes ignore it (TestEncoderQualityBench:
+// 90-215 ms of the bitrate whatever it is); the pacer spreads those. A larger buffer bought at
+// most 0.6 VMAF in the same measurement.
+var rateBuffer = 100 * time.Millisecond
+
+func bufferBits(bps uint64) uint64 { return bps * uint64(rateBuffer/time.Millisecond) / 1000 }
 
 // newMFEncoder opens the first hardware H.264 encoder of the device's adapter that takes NV12
 // textures at this size. quality trades speed for picture (CODECAPI_AVEncCommonQualityVsSpeed,
@@ -302,7 +307,7 @@ func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fp
 	e.setCodec(&codecLowLatencyMode, vtBool, 0xFFFF)
 	e.setCodec(&codecRateControlMode, vtUI4, rateControlCBR)
 	e.setCodec(&codecMeanBitRate, vtUI4, uint64(bps))
-	e.setCodec(&codecBufferSize, vtUI4, uint64(bps)/uint64(max(fps, 1))*uint64(bufferFrames))
+	e.setCodec(&codecBufferSize, vtUI4, bufferBits(uint64(bps)))
 	e.setCodec(&codecGOPSize, vtUI4, uint64(fps*600))
 	e.setCodec(&codecBPictureCount, vtUI4, 0)
 	e.setCodec(&codecCABAC, vtBool, 0xFFFF)
@@ -445,6 +450,7 @@ func (e *mfEncoder) setBitrate(bps uint32) {
 	}
 	if e.setCodec(&codecMeanBitRate, vtUI4, uint64(bps)) {
 		e.bitrate.Store(bps)
+		e.setCodec(&codecBufferSize, vtUI4, bufferBits(uint64(bps))) // the bound follows the rate
 	}
 }
 
