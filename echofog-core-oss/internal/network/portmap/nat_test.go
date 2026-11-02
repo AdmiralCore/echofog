@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -442,4 +443,26 @@ func TestNATRediscoveryConcurrency(t *testing.T) {
 
 	// Should only have triggered one rediscovery despite multiple concurrent failures
 	require.Equal(t, int32(2), discoveryCalls.Load(), "should only trigger one rediscovery")
+}
+
+// The mapping description is what the router shows (and reports upstream, TR-069): it names the
+// protocol and port, never the program.
+func TestMappingDescriptionDoesNotNameTheApp(t *testing.T) {
+	mockNAT, reset := setupMockNAT(t)
+	defer reset()
+
+	mockNAT.EXPECT().GetExternalAddress().Return(net.IPv4(1, 2, 3, 4), nil)
+	nat, err := DiscoverNAT(context.Background())
+	require.NoError(t, err)
+
+	var desc string
+	mockNAT.EXPECT().AddPortMapping(gomock.Any(), "udp", 10000, gomock.Any(), MappingDuration).
+		DoAndReturn(func(_ context.Context, _ string, _ int, d string, _ time.Duration) (int, error) {
+			desc = d
+			return 1234, nil
+		}).Times(1)
+	require.NoError(t, nat.AddMapping(context.Background(), "udp", 10000))
+	require.NotContains(t, strings.ToLower(desc), "echo")
+	require.NotContains(t, strings.ToLower(desc), "fog")
+	require.NotEmpty(t, desc, "some routers refuse an empty description")
 }
