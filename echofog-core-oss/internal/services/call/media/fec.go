@@ -14,8 +14,8 @@ import (
 // The broadcaster follows every group of fragments with one parity packet: the XOR of the group's
 // sealed fragments. Whoever misses exactly one fragment of a group, a viewer or a relay in the
 // tree, rebuilds it from the others and the parity, at once and without asking anybody. Relays
-// forward the parity like any fragment and never decrypt: the rebuilt fragment is the sealed one,
-// and the viewer's decryption still checks it.
+// forward the parity as it came (it cannot be checked by itself): the rebuilt fragment is the
+// sealed one, and it is authenticated like any other before it is relayed or played.
 //
 // Fragments are dealt to fecLanes groups in turn, so neighbours land in different groups: paths
 // lose packets in bursts, and a burst of up to fecLanes fragments then costs each group one, which

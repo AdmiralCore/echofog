@@ -225,6 +225,11 @@ it, so what is said from then on is closed to them although they still hold the 
 member on a version from before this (0.2.0 and earlier) cannot take a new key; while one is in
 the call everybody stays on the invitation's key, as before.
 
+Each participant that passes a packet on first checks that it opens under one of the call's keys,
+and only then counts its number as seen. A packet that does not open is dropped right there and
+shadows nothing: sending another participant's next packet numbers first no longer mutes them for
+everyone further down the tree.
+
 There is no central media server. Instead, the people in the call carry each other's streams in a
 **relay tree**. The person sharing their screen sends it to a few participants; each of them
 forwards it to a few more, and so on. How many others a person feeds depends on **their own measured

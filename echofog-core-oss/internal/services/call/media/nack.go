@@ -13,7 +13,7 @@ import (
 // Hop-by-hop loss recovery. Every node that sends a stream to children keeps the ciphertext
 // fragments it sent for a short while. A child that finds a unit missing NACKs its parent over
 // call signaling, and the parent resends from this ring, or asks its own parent if it lost the
-// unit too. Relays still never decrypt: they resend the sealed fragments as they got them.
+// unit too. The ring holds only units that authenticated, as the sealed fragments they came in.
 
 const (
 	// retransmitWindow is how long sent fragments stay resendable; past maxLossWait nobody

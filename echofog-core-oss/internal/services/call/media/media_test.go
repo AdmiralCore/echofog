@@ -226,45 +226,45 @@ func TestMediaPacket_DecodeRejectsMalformed(t *testing.T) {
 func TestReplayWindow(t *testing.T) {
 	var w replayWindow
 	now := time.Now()
-	assert.True(t, w.check(100, 0, now))
-	w.commit(100) // the unit decrypted
-	assert.False(t, w.check(100, 0, now), "duplicate")
-	assert.True(t, w.check(100, 1, now), "other fragment of same unit")
-	assert.True(t, w.check(99, 0, now), "late but inside window")
-	assert.True(t, w.check(2000, 0, now))
-	w.commit(2000)
-	assert.False(t, w.check(2000-replayWindowSize, 0, now), "too old")
-	assert.True(t, w.check(2000-replayWindowSize+1, 0, now))
+	assert.False(t, w.seen(100))
+	assert.True(t, w.mark(100, now)) // the unit authenticated
+	assert.True(t, w.seen(100), "duplicate")
+	assert.False(t, w.mark(100, now), "a copy that came second")
+	assert.False(t, w.seen(99), "late but inside window")
+	assert.True(t, w.mark(99, now))
+	assert.True(t, w.mark(2000, now))
+	assert.True(t, w.seen(2000-replayWindowSize), "too old")
+	assert.False(t, w.mark(2000-replayWindowSize, now))
+	assert.True(t, w.mark(2000-replayWindowSize+1, now))
 
 	// uint32 wrap-around
 	var wrap replayWindow
 	for _, s := range []uint32{^uint32(0) - 1, ^uint32(0), 0, 1} {
-		assert.True(t, wrap.check(s, 0, now))
-		wrap.commit(s)
+		assert.True(t, wrap.mark(s, now))
 	}
-	assert.False(t, wrap.check(^uint32(0), 0, now))
+	assert.True(t, wrap.seen(^uint32(0)))
+
+	// parity, which cannot be authenticated alone, is told apart by its lane
+	var fec replayWindow
+	assert.True(t, fec.checkFragment(7, 0, now))
+	assert.False(t, fec.checkFragment(7, 0, now))
+	assert.True(t, fec.checkFragment(7, 1, now))
 }
 
-// A forged fragment with a far-ahead sequence number (never authenticated, so never committed)
-// does not move the window: the real stream right behind it still gets through. It used to jump
-// the window past the source and mute it for everyone downstream.
-func TestReplayWindowIgnoresUnauthenticatedJumps(t *testing.T) {
+// Nothing that did not authenticate is remembered: neither a far-ahead number (which used to jump
+// the window past the source) nor the very next one (which used to shadow the real unit).
+func TestReplayWindowIgnoresUnauthenticatedUnits(t *testing.T) {
 	now := time.Now()
-	var first replayWindow
-	assert.True(t, first.check(1<<31, 0, now), "the forged first fragment")
-	assert.True(t, first.check(5, 0, now), "a forged first packet does not set the window")
-
 	var w replayWindow
 	for s := uint32(10); s < 20; s++ {
-		require.True(t, w.check(s, 0, now))
-		w.commit(s)
+		require.True(t, w.mark(s, now))
 	}
-	assert.True(t, w.check(20+1<<31-1, 0, now), "the forged fragment far ahead")
+	assert.False(t, w.seen(20+1<<31-1), "a forgery far ahead is merely looked at")
+	assert.False(t, w.seen(20), "and so is one right ahead")
 	for s := uint32(20); s < 30; s++ {
-		assert.True(t, w.check(s, 0, now), "the real stream after the forgery: %d", s)
-		w.commit(s)
+		assert.True(t, w.mark(s, now), "the real stream after the forgery: %d", s)
 	}
-	assert.False(t, w.check(15, 0, now), "still a duplicate")
+	assert.True(t, w.seen(15), "still a duplicate")
 }
 
 func TestReassembler_OutOfOrderAndExpiry(t *testing.T) {
@@ -278,18 +278,19 @@ func TestReassembler_OutOfOrderAndExpiry(t *testing.T) {
 	now := time.Now()
 	for _, i := range []int{2, 0} {
 		p, _ := Decode(frags[i])
-		_, done := r.add(p, now)
+		_, _, done := r.add(p, frags[i], now)
 		assert.False(t, done)
 	}
 	p, _ := Decode(frags[1])
-	ct, done := r.add(p, now)
+	ct, raws, done := r.add(p, frags[1], now)
 	require.True(t, done)
+	assert.Equal(t, frags, raws, "the wire fragments, in order, to relay")
 	plain, err := OpenUnit(p, ct, key)
 	require.NoError(t, err)
 	assert.Equal(t, payload, plain)
 
 	p, _ = Decode(frags[0])
-	_, done = r.add(p, now)
+	_, _, done = r.add(p, frags[0], now)
 	assert.False(t, done)
 	assert.Equal(t, 0, r.expire(now.Add(reassemblyTimeout/2)))
 	assert.Equal(t, 1, r.expire(now.Add(reassemblyTimeout)))

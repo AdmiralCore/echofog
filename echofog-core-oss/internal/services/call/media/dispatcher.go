@@ -60,7 +60,8 @@ type StreamCounters struct {
 }
 
 // MediaDispatcher forwards media fragments along the call trees and delivers decrypted units
-// to the local consumer. Relays never decrypt: they forward fragments as received.
+// to the local consumer. Every hop opens a unit before it relays it (see authenticate), so
+// nothing forged travels further than the first member it reaches.
 type MediaDispatcher struct {
 	selfID       types.PeerID
 	outbox       *Outbox
@@ -353,8 +354,12 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 		return nil
 	}
 	now := time.Now()
-	if !d.dedup.accept(p, now) {
+	if d.dedup.seen(p) {
 		d.duplicates.Add(1)
+		return nil
+	}
+	plain, raws, ok := d.authenticate(p, rawBytes, now)
+	if !ok {
 		return nil
 	}
 
@@ -365,11 +370,11 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 	for _, n := range neighbors {
 		if n != fromPeer && n != p.Broadcaster {
 			d.relayed.Add(1)
-			d.sendAudio(n, src, net_types.TypeCallMediaAudio, [][]byte{rawBytes}, now)
+			d.sendAudio(n, src, net_types.TypeCallMediaAudio, raws, now)
 		}
 	}
 
-	d.deliver(p, now)
+	d.consume(p, plain)
 	return nil
 }
 
@@ -392,8 +397,15 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		d.outsiders.Add(1)
 		return nil
 	}
-	if !d.dedup.accept(p, now) {
+	if p.Kind == FrameVideoFEC {
+		return d.processParity(p, rawBytes, fromPeer, now)
+	}
+	if d.dedup.seen(p) {
 		d.duplicates.Add(1)
+		return nil
+	}
+	plain, raws, ok := d.authenticate(p, rawBytes, now)
+	if !ok {
 		return nil
 	}
 
@@ -405,43 +417,73 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		}
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
 			if child != fromPeer && child != p.Broadcaster {
-				d.relayed.Add(1)
+				d.relayed.Add(uint64(len(raws)))
 				if p.Kind == FrameStreamAudio {
-					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, [][]byte{rawBytes}, now)
+					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, raws, now)
 				} else {
-					d.outbox.Send(child, class, net_types.TypeCallMediaVideo, rawBytes)
+					for _, raw := range raws {
+						d.outbox.Send(child, class, net_types.TypeCallMediaVideo, raw)
+					}
 				}
 				forwarded = true
 			}
 		}
 		if forwarded {
 			if p.Kind == FrameVideo {
-				d.ring.put(p.StreamID, p.Seq, p.FragIdx, p.FragCount, rawBytes, now)
+				for i, raw := range raws {
+					d.ring.put(p.StreamID, p.Seq, uint8(i), p.FragCount, raw, now)
+				}
 			}
 			d.markForwarded(p.StreamID, now)
 		}
 	}
 
-	if p.Kind == FrameVideoFEC {
-		rebuilt, err := d.fecRx.parity(p, now)
-		if err != nil {
-			d.malformed.Add(1)
-			d.logMalformed("fec", fromPeer, nil, err)
-			return nil
-		}
-		if rebuilt != nil {
-			d.recoverFragments(p.StreamID, [][]byte{rebuilt}, fromPeer)
-		}
-		return nil
-	}
 	if d.IsWatchingStream(p.StreamID) {
 		if p.Kind == FrameVideo {
-			d.rx.add(p, len(rawBytes), now)
+			for _, raw := range raws {
+				d.rx.add(p, len(raw), now)
+			}
 		}
-		d.deliver(p, now)
+		d.consume(p, plain)
 	}
 	if p.Kind == FrameVideo {
-		d.recoverFragments(p.StreamID, d.fecRx.fragment(p, now), fromPeer)
+		for _, raw := range raws {
+			if f, err := Decode(raw); err == nil {
+				d.recoverFragments(p.StreamID, d.fecRx.fragment(f, now), fromPeer)
+			}
+		}
+	}
+	return nil
+}
+
+// processParity takes a FEC parity: it is relayed as it came, since it cannot be authenticated by
+// itself; what it rebuilds is checked like any other fragment.
+func (d *MediaDispatcher) processParity(p *MediaPacket, rawBytes []byte, fromPeer types.PeerID, now time.Time) error {
+	if !d.dedup.acceptFragment(p, now) {
+		d.duplicates.Add(1)
+		return nil
+	}
+	if d.streamEngine != nil {
+		forwarded := false
+		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
+			if child != fromPeer && child != p.Broadcaster {
+				d.relayed.Add(1)
+				d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, rawBytes)
+				forwarded = true
+			}
+		}
+		if forwarded {
+			d.markForwarded(p.StreamID, now)
+		}
+	}
+	rebuilt, err := d.fecRx.parity(p, now)
+	if err != nil {
+		d.malformed.Add(1)
+		d.logMalformed("fec", fromPeer, nil, err)
+		return nil
+	}
+	if rebuilt != nil {
+		d.recoverFragments(p.StreamID, [][]byte{rebuilt}, fromPeer)
 	}
 	return nil
 }
@@ -461,10 +503,14 @@ func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, fr
 	}
 }
 
-func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
-	ct, complete := d.reasm.add(p, now)
-	if !complete || d.consumer == nil {
-		return
+// authenticate gathers the fragments of a unit and opens it with the keys it may be sealed with.
+// Only a unit that opens is taken: it is marked in the replay window, relayed and played; anything
+// else (forged, tampered, under a key we do not hold) is dropped right here, without a mark that
+// would shadow the real unit. It returns the plaintext and the unit's wire fragments.
+func (d *MediaDispatcher) authenticate(p *MediaPacket, raw []byte, now time.Time) ([]byte, [][]byte, bool) {
+	ct, raws, complete := d.reasm.add(p, raw, now)
+	if !complete {
+		return nil, nil, false
 	}
 	d.mu.RLock()
 	keys := d.openKeysLocked()
@@ -478,13 +524,24 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 		}
 	}
 	if err != nil {
-		d.decryptFailures.Add(1) // tampered, wrong key, or forged header: never play it
+		d.decryptFailures.Add(1) // tampered, wrong key, or forged header: never relay or play it
 		d.lim.Log(d.log, slog.LevelWarn, "decrypt:"+p.StreamID+":"+p.Broadcaster.String(),
 			"Dropped media unit that failed to decrypt", "stream", p.StreamID, "kind", kindName(p.Kind),
 			"broadcaster", calllog.Peer(p.Broadcaster), "failures_total", d.decryptFailures.Load(), "err", err)
+		return nil, nil, false
+	}
+	if !d.dedup.mark(p, now) {
+		d.duplicates.Add(1) // a copy that went the other way was faster
+		return nil, nil, false
+	}
+	return plain, raws, true
+}
+
+// consume hands an authenticated unit to the local consumer.
+func (d *MediaDispatcher) consume(p *MediaPacket, plain []byte) {
+	if d.consumer == nil {
 		return
 	}
-	d.dedup.commit(p) // authentic: now it may move the replay window
 	unit := *p
 	unit.FragIdx, unit.FragCount, unit.Payload = 0, 1, plain
 
