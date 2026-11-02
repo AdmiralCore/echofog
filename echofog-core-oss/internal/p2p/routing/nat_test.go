@@ -357,3 +357,24 @@ func TestPeersOnRealitySocketsTellTheIPForTheCountry(t *testing.T) {
 	_, _ = lone.Discover()
 	assert.Empty(t, lone.PublicIP())
 }
+
+// Peers that answer over IPv6 do not count toward the IPv4 observers: three of them used to keep
+// STUN out, and the IPv4 NAT was never classified (nor the IPv4 address known for invitations).
+func TestIPv6PeersDoNotReplaceSTUNForIPv4(t *testing.T) {
+	conn := newSTUNCounter()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{"127.0.0.1:3478"})
+	m.SetObserver(seen("a", "[2001:4860:4860::8888]:4242", "b", "[2001:4860:4860::8888]:4242",
+		"c", "[2001:4860:4860::8888]:4242"))
+	_, _ = m.Discover()
+	assert.Equal(t, 1, conn.sent(), "STUN tells the IPv4 side")
+
+	// one IPv4 peer next to them is still too few
+	conn = newSTUNCounter()
+	m = NewNATManager(conn, quiet())
+	m.SetSTUNServers([]string{"127.0.0.1:3478"})
+	m.SetObserver(seen("a", "[2001:4860:4860::8888]:4242", "b", "[2001:4860:4860::8888]:4242",
+		"c", "8.8.8.7:50000"))
+	_, _ = m.Discover()
+	assert.Equal(t, 1, conn.sent())
+}

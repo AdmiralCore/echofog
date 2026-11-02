@@ -78,8 +78,9 @@ type NATManager struct {
 // How many observers must agree before their answer is taken. Peers can lie about the address
 // they see us at (nothing proves it), so a few of them must not decide it alone.
 const (
-	// minPeerObservers: below this many connected peers with a public address, STUN is asked too
-	// (where allowed): two views are the least that tell whether the mapping varies.
+	// minPeerObservers: below this many connected peers with a public IPv4 address, STUN is asked
+	// too (where allowed): two views are the least that tell whether the mapping varies. IPv6
+	// observers do not count: they tell nothing about the IPv4 NAT, and STUN is what does.
 	minPeerObservers = 2
 	// safeObservers: STUN is left out only when at least this many independent peers agree on our
 	// IP, are the majority, and see one mapping. Fewer, or any doubt, and STUN is asked as well
@@ -329,11 +330,13 @@ func peersNotEnough(fromPeers int, r natcheck.Report) bool {
 	return fromPeers < minPeerObservers || !r.Agreed(safeObservers) || r.Mapping != natcheck.MappingStable
 }
 
-// publicObservers counts the observations with a public address, one per observer.
+// publicObservers counts the observations of our QUIC socket with a public IPv4 address, one per
+// observer: the ones that tell the IPv4 mapping.
 func publicObservers(obs []natcheck.Observation) int {
 	seen := map[string]bool{}
 	for _, o := range obs {
-		if o.Addr.IsValid() && o.Addr.Port() != 0 && natcheck.PublicAddr(o.Addr.Addr()) {
+		a := o.Addr.Addr().Unmap()
+		if o.Addr.IsValid() && o.Addr.Port() != 0 && !o.IPOnly && a.Is4() && natcheck.PublicAddr(a) {
 			seen[o.From] = true
 		}
 	}

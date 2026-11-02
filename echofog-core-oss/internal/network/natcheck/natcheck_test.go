@@ -109,6 +109,24 @@ func TestIPv6AnswersDoNotCountAsDisagreement(t *testing.T) {
 	assert.Equal(t, MappingStable, only6.Mapping)
 }
 
+// A dual-stack home: IPv4 behind a NAT, a global IPv6 address on the interface. Peers that answer
+// over IPv6 only say nothing about the IPv4 NAT: it used to come out as "no NAT", and the node was
+// handed call children that IPv4-only participants cannot reach.
+func TestIPv6AnswersAloneLeaveTheIPv4NATUnknown(t *testing.T) {
+	v6 := netip.MustParseAddr("2001:4860:4860::8888")
+	dual := []netip.Addr{netip.MustParseAddr("192.168.1.5"), v6}
+	r := Classify(obs("a", "[2001:4860:4860::8888]:4242", "b", "[2001:4860:4860::8888]:4242"), dual)
+	assert.False(t, r.NoNAT, "the IPv4 side was never observed")
+	assert.Equal(t, MappingUnknown, r.Mapping)
+	assert.Equal(t, v6, r.Public.Addr(), "the IPv6 address is still ours")
+
+	// a host with no IPv4 at all is judged by IPv6
+	only6 := Classify(obs("a", "[2001:4860:4860::8888]:4242", "b", "[2001:4860:4860::8888]:4242"),
+		[]netip.Addr{netip.MustParseAddr("169.254.3.4"), v6})
+	assert.True(t, only6.NoNAT)
+	assert.Equal(t, MappingStable, only6.Mapping)
+}
+
 func TestMajorityDecidesThePublicAddress(t *testing.T) {
 	r := Classify(obs("a", "8.8.8.7:1111", "b", "8.8.8.7:2222", "c", "8.8.8.7:2222"), nil)
 	assert.Equal(t, ap("8.8.8.7:2222"), r.Public)

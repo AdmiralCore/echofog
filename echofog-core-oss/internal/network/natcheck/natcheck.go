@@ -121,7 +121,9 @@ const portWindow = 2048
 //
 // Every observer has one vote (the first answer of each counts). Only IPv4 observations decide
 // the mapping; IPv6 is normally not translated and a global IPv6 address on one of our interfaces
-// is handled by NoNAT. When some observers saw a public address, the ones that saw a private one (a
+// is handled by NoNAT. IPv6 answers alone say nothing about an IPv4 NAT: when we also have an IPv4
+// address (local), the mapping stays unknown and NoNAT is not set, since IPv4-only peers cannot
+// reach us over IPv6. When some observers saw a public address, the ones that saw a private one (a
 // peer on our LAN, or inside the same carrier NAT) are left out: they look at another side of the
 // NAT, and counting them would make a cone NAT look symmetric. With no public observation at all (a
 // closed network) every one counts.
@@ -186,6 +188,10 @@ func Classify(obs []Observation, local []netip.Addr) Report {
 	}
 	r.Observers = len(fam)
 	r.Mapping = mappingOf(ported)
+	v6Only := !has4 && hasIPv4(local)
+	if v6Only {
+		r.Mapping = MappingUnknown // the IPv4 side was not observed: its NAT is not known
+	}
 
 	ip, agree, tied := majorityIP(fam)
 	if tied {
@@ -198,12 +204,23 @@ func Classify(obs []Observation, local []netip.Addr) Report {
 	}
 
 	for _, l := range local {
-		if l.Unmap() == ip {
+		if l.Unmap() == ip && !v6Only {
 			r.NoNAT = true
 			break
 		}
 	}
 	return r
+}
+
+// hasIPv4 reports whether local holds an IPv4 address other than loopback and link-local: one the
+// node reaches IPv4 peers from.
+func hasIPv4(local []netip.Addr) bool {
+	for _, l := range local {
+		if l = l.Unmap(); l.Is4() && !l.IsLoopback() && !l.IsLinkLocalUnicast() && !l.IsUnspecified() {
+			return true
+		}
+	}
+	return false
 }
 
 // mappingOf judges the mapping from one family's observations, one per observer.
