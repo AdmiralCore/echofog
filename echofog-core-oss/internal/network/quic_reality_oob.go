@@ -108,19 +108,19 @@ func (c *quicRealityOOB) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, int
 	return c.oc.WriteMsgUDP(b, oob, addr)
 }
 
-// passesForBrowser: packets to addr are REALITY's raw QUIC, which must look like a browser's.
+// passesForBrowser: packets to addr are REALITY's raw QUIC, which must look like a browser's: on a
+// REALITY dial's own socket, to a peer marked raw (a camouflage node's REALITY client, or on a
+// client the server its REALITY dial reached over the shared socket when the dial's own socket
+// failed), and on a camouflage node without obfuscation.
 func (c *QuicRealityConn) passesForBrowser(addr net.Addr) bool {
 	if c.browserClient {
 		return true
 	}
+	if c.qt != nil && c.qt.obfs != nil {
+		return c.qt.obfs.IsRaw(addr)
+	}
 	c.mu.Lock()
 	server := c.serverMode
 	c.mu.Unlock()
-	if !server {
-		return false
-	}
-	if c.qt == nil || c.qt.obfs == nil {
-		return true
-	}
-	return c.qt.obfs.IsRaw(addr)
+	return server
 }

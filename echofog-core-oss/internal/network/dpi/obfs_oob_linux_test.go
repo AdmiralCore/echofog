@@ -33,8 +33,8 @@ func tosCmsg(tos byte) []byte {
 }
 
 // A GSO train is cut into its segments, each sealed on its own (own salt) exactly as WriteTo
-// would seal it, and goes out as one train with the segment size grown by Overhead; the other
-// control messages (ECN) stay.
+// would seal it, and goes out as one train with the segment size grown by Overhead; the ECN mark
+// is left out.
 func TestObfsWriteMsgUDPSealsEachGSOSegment(t *testing.T) {
 	o, key := newObfs(t, 1)
 	ss, _ := udpPair(t)
@@ -51,8 +51,8 @@ func TestObfsWriteMsgUDPSealsEachGSOSegment(t *testing.T) {
 	if got, _ := gsoSegment(rec.oob); got != seg+Overhead {
 		t.Fatalf("segment size %d, want %d", got, seg+Overhead)
 	}
-	if !HasECNMark(rec.oob) {
-		t.Fatal("the ECN control message must stay")
+	if HasECNMark(rec.oob) {
+		t.Fatal("a noise train must leave without ECN marks")
 	}
 	if len(rec.b) != len(train)+4*Overhead {
 		t.Fatalf("train of %d bytes, want %d", len(rec.b), len(train)+4*Overhead)
@@ -72,6 +72,29 @@ func TestObfsWriteMsgUDPSealsEachGSOSegment(t *testing.T) {
 	}
 	if len(salts) != 4 {
 		t.Fatal("every segment needs its own salt")
+	}
+}
+
+// Noise datagrams leave Not-ECT: high-entropy UDP with ECT(0) is a rare feature on the wire,
+// which a censor could match (and a v0.2.0 peer, which echoes no ECN counts, made the flow show
+// quic-go's validation pattern). A raw (REALITY) peer's datagrams are left to the REALITY layer.
+func TestObfsNoiseLeavesWithoutECN(t *testing.T) {
+	o, _ := newObfs(t, 1)
+	ss, _ := udpPair(t)
+	oc, _ := AsOOB(ss)
+	rec := &recorder{OOBPacketConn: oc}
+	w := WrapPacketConn(rec, o).(*ObfsPacketConnOOB)
+	to := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}
+	pkt := make([]byte, 1200)
+	_, _ = rand.Read(pkt)
+	if _, _, err := w.WriteMsgUDP(pkt, tosCmsg(2), to); err != nil {
+		t.Fatal(err)
+	}
+	if HasECNMark(rec.oob) {
+		t.Fatal("a noise datagram must leave without ECN marks")
+	}
+	if len(rec.b) != len(pkt)+Overhead {
+		t.Fatalf("wrote %d bytes", len(rec.b))
 	}
 }
 
