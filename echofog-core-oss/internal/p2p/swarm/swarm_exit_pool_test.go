@@ -711,3 +711,21 @@ func TestExitPool_StaleLinkGetsAFreshLinkBeforeANewStream(t *testing.T) {
 	st.Close()
 	require.Equal(t, int32(1), tr.dials.Load())
 }
+
+// The age past which a fresh pool link is dialed is drawn anew around freshLinkAge, so new links
+// to an exit do not come every exact minute.
+func TestFreshLinkAgeIsJittered(t *testing.T) {
+	st := &exitPoolState{}
+	seen := map[time.Duration]bool{}
+	for range 100 {
+		st.drawFreshAge()
+		d := st.staleAfter()
+		if d < 45*time.Second || d > 75*time.Second {
+			t.Fatalf("fresh link age %v outside 45..75 s", d)
+		}
+		seen[d.Round(time.Second)] = true
+	}
+	if len(seen) < 10 {
+		t.Fatalf("only %d distinct fresh link ages in 100 draws", len(seen))
+	}
+}

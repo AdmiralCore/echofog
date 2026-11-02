@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/apernet/quic-go"
+	"github.com/echofog/echofog-core/internal/network/jitter"
 	"github.com/xtaci/smux"
 )
 
@@ -46,7 +47,9 @@ func DatagramDrops() (out, in uint64) {
 func smuxConfig() *smux.Config {
 	c := smux.DefaultConfig()
 	c.Version = 2 // per-stream flow control: one slow stream cannot stall the others
-	c.KeepAliveInterval = 10 * time.Second
+	// drawn per session (smux keeps a fixed ticker): no two links share one keep-alive clock,
+	// and the longest stays well under the peer's 30 s timeout
+	c.KeepAliveInterval = jitter.Around(10*time.Second, jitter.Default)
 	c.KeepAliveTimeout = 30 * time.Second
 	// one TCP connection carries every proxied stream: 1 MB per stream held a download near
 	// 50 Mbit/s at 150 ms

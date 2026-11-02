@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/jitter"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -18,6 +20,20 @@ type exitPoolState struct {
 	maxConns int
 	addr     string        // where the exit was last reached, to redial it once its peer is gone; exitMu
 	stop     chan struct{} // ends the retire loop when the exit is unmarked
+	// freshAge is the link age past which the next stream dials a fresh link: freshLinkAge,
+	// drawn anew after each fresh link so new connections do not come every exact minute
+	freshAge atomic.Int64
+}
+
+func (st *exitPoolState) drawFreshAge() {
+	st.freshAge.Store(int64(jitter.Around(freshLinkAge, jitter.Default)))
+}
+
+func (st *exitPoolState) staleAfter() time.Duration {
+	if d := time.Duration(st.freshAge.Load()); d > 0 {
+		return d
+	}
+	return freshLinkAge
 }
 
 // retireEvery is how often a marked exit's old, idle links are looked for and closed.
@@ -63,6 +79,7 @@ func (s *Swarm) MarkExitPeer(exit types.PeerID, maxConns int) {
 		return
 	}
 	st := &exitPoolState{maxConns: maxConns, stop: make(chan struct{})}
+	st.drawFreshAge()
 	s.exitPools[exit] = st
 	s.wg.Add(1)
 	go s.retireLoop(exit, st.stop)
@@ -255,7 +272,7 @@ func (s *Swarm) freshenExitLink(ctx context.Context, exit types.PeerID, st *exit
 			return false
 		}
 		age, ok := p.newestLinkAge(camouflage)
-		return ok && age > freshLinkAge
+		return ok && age > st.staleAfter()
 	}
 	if !stale() {
 		return
@@ -279,6 +296,7 @@ func (s *Swarm) freshenExitLink(ctx context.Context, exit types.PeerID, st *exit
 	dctx, cancel := context.WithTimeout(ctx, freshLinkWait)
 	defer cancel()
 	s.dialPoolLink(dctx, exit, addr, camouflage)
+	st.drawFreshAge()
 	tick := time.NewTicker(camouflageLinkPoll)
 	defer tick.Stop()
 	for stale() {

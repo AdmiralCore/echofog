@@ -18,6 +18,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/network/bwprobe"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
+	"github.com/echofog/echofog-core/internal/network/jitter"
 	"github.com/echofog/echofog-core/internal/p2p/vpnmarket"
 
 	"github.com/awnumar/memguard"
@@ -819,7 +820,7 @@ func (n *Node) BootstrapNodes() []string {
 func (n *Node) publishBundleLoop(engine *dht.EchoFogDHT) {
 	delays := []time.Duration{2 * time.Second, 10 * time.Second, 40 * time.Second}
 	for i := 0; ; i++ {
-		pause := 10 * time.Minute
+		pause := jitter.Around(10*time.Minute, jitter.Default) // no fixed DHT store clock
 		if i < len(delays) {
 			pause = delays[i]
 		}
