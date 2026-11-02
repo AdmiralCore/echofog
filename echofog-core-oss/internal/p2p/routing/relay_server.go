@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -63,7 +64,7 @@ type RelayServer struct {
 	addrOf      func(types.PeerID) string                // a connected peer's remote address
 	answers     func(types.PeerID) bool                  // whether a connected peer answers a ping
 
-	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
+	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per sender (see requestSender)
 	fullReply *ratelimit.Keyed[types.PeerID] // "mailbox full" answers per peer
 	ackReply  *ratelimit.Keyed[types.PeerID] // relay acknowledgements per peer
 	passed    *cache.Cache[string, struct{}] // ids of relay requests handled lately (see relaySeenTTL)
@@ -747,11 +748,23 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		return
 	}
 
-	// Work for others is limited per origin: every message may cost a signature, a send to the
-	// next hop and a mailbox write, so one identity cannot keep the node busy with them.
-	if !rs.reqLimit.Allow(originID, 1) {
+	// The sender is who signed the message inside, not the origin of the request: a relay passing
+	// a request on signs it as its own, and counting by it let one busy relay use up the rate and
+	// mailbox quota of everybody behind it. A request whose message nobody signed is of no use to
+	// its recipient either.
+	sender, innerEnv, ok := requestSender(req.ForwardedEnvelope)
+	if !ok {
 		rs.refusedMsgs.Add(1)
-		rs.warnLimited("relay requests from one origin too fast", "origin", originID.String()[:8])
+		rs.warnLimited("relay request carrying an unsigned message", "from", fromPeer.String()[:8])
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedNoOrigin)
+		return
+	}
+
+	// Work for others is limited per sender: every message may cost a signature, a send to the
+	// next hop and a mailbox write, so one identity cannot keep the node busy with them.
+	if !rs.reqLimit.Allow(sender, 1) {
+		rs.refusedMsgs.Add(1)
+		rs.warnLimited("relay requests from one sender too fast", "sender", sender.String()[:8])
 		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedRate)
 		return
 	}
@@ -773,19 +786,15 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	// 2. If target is directly connected to this node in Swarm: deliver immediately!
 	direct := rs.swarm.ThisIsActivePeer(targetID)
 	if direct {
-		var innerEnv internal_pb.Envelope
-		if err = proto.Unmarshal(req.ForwardedEnvelope, &innerEnv); err == nil {
-			peer := rs.swarm.GetPeer(targetID)
-			if peer != nil {
-				_ = peer.Send(net_types.TypeChatMessage, &innerEnv)
-				rs.forwarded.Add(1)
-				rs.logger.Debug("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
-				if !peer.HeardWithin(relayHeardFresh) && rs.mailbox != nil {
-					rs.keepUnlessAnswered(mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope))
-				}
-				rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
-				return
+		if peer := rs.swarm.GetPeer(targetID); peer != nil {
+			_ = peer.Send(net_types.TypeChatMessage, innerEnv)
+			rs.forwarded.Add(1)
+			rs.logger.Debug("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
+			if !peer.HeardWithin(relayHeardFresh) && rs.mailbox != nil {
+				rs.keepUnlessAnswered(mailboxItemOf(msg, targetID, sender, req.ForwardedEnvelope))
 			}
+			rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
+			return
 		}
 	}
 
@@ -838,7 +847,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 
 	// 4. If target is offline (or unreachable): store in friendly Mailbox!
 	if !forwarded && rs.mailbox != nil {
-		item := mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope)
+		item := mailboxItemOf(msg, targetID, sender, req.ForwardedEnvelope)
 		if err = rs.mailbox.Store(item); err == nil {
 			rs.stored.Add(1)
 			rs.ack(fromPeer, msg.MessageId, RelayAckStored, 0)
@@ -855,8 +864,19 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	}
 }
 
-// mailboxItemOf is a relayed message as the mailbox keeps it for recipient.
-func mailboxItemOf(msg *internal_pb.MessageData, recipient, origin types.PeerID, envelope []byte) messenger.MailboxItem {
+// requestSender reads the message a relay request carries and who signed it.
+func requestSender(fwd []byte) (types.PeerID, *internal_pb.Envelope, bool) {
+	var env internal_pb.Envelope
+	if err := proto.Unmarshal(fwd, &env); err != nil || len(env.PubKey) != ed25519.PublicKeySize ||
+		len(env.Signature) != ed25519.SignatureSize || !ed25519.Verify(env.PubKey, env.Data, env.Signature) {
+		return types.PeerID{}, nil, false
+	}
+	return types.PeerPubKeyToID(types.PeerPublicKey(env.PubKey)), &env, true
+}
+
+// mailboxItemOf is a relayed message as the mailbox keeps it for recipient; sender is the signer
+// of the message (requestSender), whose quota it counts against.
+func mailboxItemOf(msg *internal_pb.MessageData, recipient, sender types.PeerID, envelope []byte) messenger.MailboxItem {
 	msgID := hex.EncodeToString(msg.MessageId)
 	if msgID == "" {
 		msgID = fmt.Sprintf("relay-%d", time.Now().UnixNano())
@@ -864,7 +884,7 @@ func mailboxItemOf(msg *internal_pb.MessageData, recipient, origin types.PeerID,
 	return messenger.MailboxItem{
 		ID:          msgID,
 		RecipientID: recipient,
-		SenderID:    origin, // the authenticated signer, used for the per-sender quota
+		SenderID:    sender, // the authenticated signer, used for the per-sender quota
 		Payload:     envelope,
 		CreatedAt:   time.Now().Unix(),
 		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour).Unix(),
