@@ -539,6 +539,10 @@ func (n *Node) Start() (err error) {
 	n.ExitService = exit_gateway.NewExitService()
 	n.ExitService.SetSelfIPs(n.publicIPs)
 	n.ExitService.SetLimits(exit_gateway.LimitsFromConfig(n.Cfg.Exit))
+	if err := n.ExitService.SetDNS(n.Cfg.Exit.DNS, !n.Cfg.Exit.DNSNoFallback); err != nil {
+		n.Logger.Warn("exit DNS: using the default servers", "err", err)
+		_ = n.ExitService.SetDNS(nil, !n.Cfg.Exit.DNSNoFallback)
+	}
 	if n.Cfg.Storage.DatabasePath != "" {
 		n.ExitService.SetFreeBudgetFile(filepath.Join(filepath.Dir(n.Cfg.Storage.DatabasePath), "exit-free-budget.json"))
 	}

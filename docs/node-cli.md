@@ -213,6 +213,8 @@ exit's ledger, the access secret and the list of who joined a hidden node are ne
 | `--exit` | `ECHOFOG_EXIT` | share this connection as an exit node (a public node also publishes it to the DHT; a hidden or isolated one serves only the people with its link) |
 | `--exit-free-gb-per-month` int | `ECHOFOG_EXIT_FREE_GB_PER_MONTH` | on a free exit, the GB the whole exit gives away a calendar month (UTC); then it refuses new connections until the month ends (0 = no cap) |
 | `--exit-free-ip-mb-per-day` int | `ECHOFOG_EXIT_FREE_IP_MB_PER_DAY` | on a free exit, the MB all the clients of one IP address may take a day (UTC) (0 = no cap) |
+| `--exit-dns` string | `ECHOFOG_EXIT_DNS` | comma-separated DNS-over-HTTPS URLs the exit resolves clients' names with, tried in order (empty = Cloudflare 1.1.1.1, then Quad9 9.9.9.9); `system` uses this machine's resolver in the clear |
+| `--exit-dns-no-fallback` | `ECHOFOG_EXIT_DNS_NO_FALLBACK` | when no DNS-over-HTTPS server answers, fail the lookup instead of asking this machine's resolver in the clear |
 | `--exit-free-ip-mbps` int | `ECHOFOG_EXIT_FREE_IP_MBPS` | on a free exit, the speed of all the clients of one IP address in Mbit/s (0 = default 100, -1 = no limit) |
 | `--exit-free-kb` int | `ECHOFOG_EXIT_FREE_KB` | free test traffic per client per day in KB (up to 1024, used when the exit is priced; 0 counts as 512 there) (default 512) |
 | `--exit-free-mb-per-day` int | `ECHOFOG_EXIT_FREE_MB_PER_DAY` | on a free exit, the MB one client may take a day (UTC) (0 = no cap) |

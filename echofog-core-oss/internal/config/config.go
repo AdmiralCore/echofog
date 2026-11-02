@@ -462,6 +462,12 @@ type ExitConfig struct {
 	FreePeerMBPerDay int64 `json:"free_peer_mb_per_day,omitempty"`
 	FreeIPMBPerDay   int64 `json:"free_ip_mb_per_day,omitempty"`
 	FreeGBPerMonth   int64 `json:"free_gb_per_month,omitempty"`
+	// DNS: the DNS-over-HTTPS servers (https:// URLs) the exit resolves its clients' names with,
+	// tried in order [Cloudflare 1.1.1.1, then Quad9 9.9.9.9, both by address]; ["system"] keeps
+	// the machine's resolver, which sees every name in the clear. DNSNoFallback: when none of the
+	// servers answers, fail the lookup instead of asking the machine's resolver.
+	DNS           []string `json:"dns,omitempty"`
+	DNSNoFallback bool     `json:"dns_no_fallback,omitempty"`
 }
 
 type StorageConfig struct {
