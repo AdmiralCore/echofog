@@ -39,7 +39,7 @@
     if (!s) return;
     try {
       const info = await App.ParseInvite(s);
-      if (s === text.trim()) invite = info;
+      if (link && s === link.text) invite = info; // the link as read (the https form, a "/" taken off)
     } catch (err) {
       const msg = errText(err);
       const net = /network "([^"]*)"/.exec(msg);
@@ -75,10 +75,11 @@
       busy = '';
     }
   }
-  const useAsExit = () => act('exit', () => App.StartVPNVia(text.trim()), () => { view.set('proxy'); close(); });
-  const joinHidden = () => act('join', () => App.JoinInvite(text.trim()), () => (done = $t('links.joined')));
-  const addRelay = () => act('relay', () => App.AddRelay(text.trim()), () => (done = $t('links.relayAdded')));
-  const addBootstrap = () => act('boot', () => App.AddBootstrapNode(text.trim()), () => (done = $t('links.bootAdded')));
+  // the link as read, not the text around it: the core takes the bare link
+  const useAsExit = () => act('exit', () => App.StartVPNVia(link.text), () => { view.set('proxy'); close(); });
+  const joinHidden = () => act('join', () => App.JoinInvite(link.text), () => (done = $t('links.joined')));
+  const addRelay = () => act('relay', () => App.AddRelay(link.text), () => (done = $t('links.relayAdded')));
+  const addBootstrap = () => act('boot', () => App.AddBootstrapNode(link.text), () => (done = $t('links.bootAdded')));
   const addPerson = () => act('contact', () => addContact(link.key, name.trim()), () => { view.set('chats'); close(); });
   const joinTheGroup = () => act('group', () => joinGroup(text.trim()), () => { view.set('chats'); close(); });
 
