@@ -58,6 +58,7 @@ type MessageBroker struct {
 	recent          *recentMessages // which message a ratchet header carried, to confirm repeats
 	// deliverFn replaces deliverVia for the outbox (tests: no swarm needed)
 	deliverFn func(types.PeerID, *internal_pb.MessageData) (ok, direct bool)
+	outboxMu  sync.Mutex // a receipt's delete and a retry's write-back of the same message
 
 	myIDHexed string
 }

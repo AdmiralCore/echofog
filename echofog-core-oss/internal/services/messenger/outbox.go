@@ -172,9 +172,7 @@ func (s *MessageBroker) forgetCiphertexts(target types.PeerID) {
 		}
 		it.Data = nil
 		it.Next = time.Now().UnixNano()
-		if raw, err := json.Marshal(it); err == nil {
-			_ = s.kv.Set(e.Key, raw)
-		}
+		s.rewrite(e.Key, it)
 	}
 }
 
@@ -183,11 +181,27 @@ func (s *MessageBroker) confirm(target types.PeerID, id string) {
 	for _, e := range s.outboxEntries(outboxFolder(s.kv, target)) {
 		var it outboxItem
 		if json.Unmarshal(e.Value, &it) == nil && it.ID == id {
+			s.outboxMu.Lock()
 			_ = s.kv.Delete(e.Key)
+			s.outboxMu.Unlock()
 			s.log.Info("MessageBroker: message delivered", "peer", target.String()[:8])
 			s.noteState(target, id, StateDelivered)
 			return
 		}
+	}
+}
+
+// rewrite stores what a retry changed in a waiting message, unless the message left the outbox
+// meanwhile: a receipt that came while it was being sent again must not be undone.
+func (s *MessageBroker) rewrite(key []byte, it outboxItem) {
+	raw, err := json.Marshal(it)
+	if err != nil {
+		return
+	}
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	if s.kv.Exists(key) {
+		_ = s.kv.Set(key, raw)
 	}
 }
 
@@ -224,9 +238,7 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 				s.wantConnection(it.Target)
 				it.Next = now.Add(backoff(it.Attempts)).UnixNano()
 				it.Attempts++
-				if raw, merr := json.Marshal(it); merr == nil {
-					_ = s.kv.Set(e.Key, raw)
-				}
+				s.rewrite(e.Key, it)
 				continue
 			}
 			data, merr := gproto.Marshal(enc)
@@ -266,9 +278,7 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 		}
 		it.Attempts++
 		it.Next = now.Add(backoff(it.Attempts - 1)).UnixNano()
-		if raw, err := json.Marshal(it); err == nil {
-			_ = s.kv.Set(e.Key, raw)
-		}
+		s.rewrite(e.Key, it)
 	}
 	if sent > 0 {
 		s.log.Info("MessageBroker: sent queued messages", "count", sent)
