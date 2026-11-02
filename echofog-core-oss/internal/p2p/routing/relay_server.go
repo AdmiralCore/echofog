@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -60,10 +61,11 @@ type RelayServer struct {
 	connectedAt map[types.PeerID]time.Time               // when each connected peer connected
 	delivering  map[types.PeerID]bool                    // stored mail being handed to a reconnected peer
 	probing     map[types.PeerID][]messenger.MailboxItem // forwarded to a silent peer, kept if it does not answer
+	receipting  map[types.PeerID]bool                    // recipients that confirm the mail they get (see handleReceipt)
 	addrOf      func(types.PeerID) string                // a connected peer's remote address
 	answers     func(types.PeerID) bool                  // whether a connected peer answers a ping
 
-	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
+	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per sender (see requestSender)
 	fullReply *ratelimit.Keyed[types.PeerID] // "mailbox full" answers per peer
 	ackReply  *ratelimit.Keyed[types.PeerID] // relay acknowledgements per peer
 	passed    *cache.Cache[string, struct{}] // ids of relay requests handled lately (see relaySeenTTL)
@@ -85,6 +87,7 @@ type RelayServer struct {
 	rateDropped    atomic.Uint64 // frames dropped by a speed limit
 	byDatagram     atomic.Uint64 // media frames passed on as datagrams
 	budgetClosed   atomic.Uint64 // circuits closed for using up a byte budget
+	receipts       atomic.Uint64 // receipts recipients sent for messages handed to them (see handleReceipt)
 }
 
 // Limits of a signaling circuit: the hole punching exchange is a few small messages, so anything
@@ -129,6 +132,7 @@ type RelayStats struct {
 	RateDropped     uint64 `json:"rateDropped"`   // frames dropped by a speed limit
 	ByDatagram      uint64 `json:"byDatagram"`    // media frames of circuits passed on as datagrams
 	BudgetClosed    uint64 `json:"budgetClosed"`  // circuits closed for using up a byte budget
+	Receipts        uint64 `json:"receipts"`      // receipts for messages handed to their recipients
 }
 
 // Stats returns the relay totals.
@@ -159,6 +163,7 @@ func (rs *RelayServer) Stats() RelayStats {
 		RateDropped:     rs.rateDropped.Load(),
 		ByDatagram:      rs.byDatagram.Load(),
 		BudgetClosed:    rs.budgetClosed.Load(),
+		Receipts:        rs.receipts.Load(),
 	}
 	if rs.mailbox != nil {
 		st.MailboxWaiting = rs.mailbox.Waiting()
@@ -413,6 +418,13 @@ func (rs *RelayServer) HandleRawFrame(msgType net_types.MessageType, payload []b
 			}
 		}
 		return false
+
+	case net_types.TypeRelayAck:
+		if len(payload) > 0 && payload[0] == RelayAckReceived {
+			rs.handleReceipt(payload, fromPeer)
+			return true
+		}
+		return false // an answer to our own request: for RelayClient
 
 	default:
 		return false
@@ -747,11 +759,23 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		return
 	}
 
-	// Work for others is limited per origin: every message may cost a signature, a send to the
-	// next hop and a mailbox write, so one identity cannot keep the node busy with them.
-	if !rs.reqLimit.Allow(originID, 1) {
+	// The sender is who signed the message inside, not the origin of the request: a relay passing
+	// a request on signs it as its own, and counting by it let one busy relay use up the rate and
+	// mailbox quota of everybody behind it. A request whose message nobody signed is of no use to
+	// its recipient either.
+	sender, innerEnv, ok := requestSender(req.ForwardedEnvelope)
+	if !ok {
 		rs.refusedMsgs.Add(1)
-		rs.warnLimited("relay requests from one origin too fast", "origin", originID.String()[:8])
+		rs.warnLimited("relay request carrying an unsigned message", "from", fromPeer.String()[:8])
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedNoOrigin)
+		return
+	}
+
+	// Work for others is limited per sender: every message may cost a signature, a send to the
+	// next hop and a mailbox write, so one identity cannot keep the node busy with them.
+	if !rs.reqLimit.Allow(sender, 1) {
+		rs.refusedMsgs.Add(1)
+		rs.warnLimited("relay requests from one sender too fast", "sender", sender.String()[:8])
 		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedRate)
 		return
 	}
@@ -773,19 +797,15 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	// 2. If target is directly connected to this node in Swarm: deliver immediately!
 	direct := rs.swarm.ThisIsActivePeer(targetID)
 	if direct {
-		var innerEnv internal_pb.Envelope
-		if err = proto.Unmarshal(req.ForwardedEnvelope, &innerEnv); err == nil {
-			peer := rs.swarm.GetPeer(targetID)
-			if peer != nil {
-				_ = peer.Send(net_types.TypeChatMessage, &innerEnv)
-				rs.forwarded.Add(1)
-				rs.logger.Debug("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
-				if !peer.HeardWithin(relayHeardFresh) && rs.mailbox != nil {
-					rs.keepUnlessAnswered(mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope))
-				}
-				rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
-				return
+		if peer := rs.swarm.GetPeer(targetID); peer != nil {
+			_ = peer.Send(net_types.TypeChatMessage, innerEnv)
+			rs.forwarded.Add(1)
+			rs.logger.Debug("RelayServer: forwarded relay message directly to target peer", "target", targetID.String()[:8])
+			if !peer.HeardWithin(relayHeardFresh) && rs.mailbox != nil {
+				rs.keepUnlessAnswered(mailboxItemOf(msg, targetID, sender, req.ForwardedEnvelope))
 			}
+			rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
+			return
 		}
 	}
 
@@ -801,11 +821,14 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		}
 	}
 
-	// 3. Multi-hop: Forward to next peer in the chain (not the one who just sent it to us).
+	// 3. Multi-hop: pass it on toward the recipient's mailbox, never at random. A recipient that
+	// uses this relay has its mailbox here; otherwise the request goes to a relay the recipient
+	// named for its mail, when we are connected to one. Before, it went to the first relaying
+	// peer at hand and wandered for up to HOPLIMIT hops, costing every relay on the way.
 	// The request is ours now, signed by us (once, whatever the number of candidates tried); the
 	// envelope inside stays the sender's.
 	forwarded := false
-	if hops > 1 {
+	if hops > 1 && !(rs.mailbox != nil && rs.mailbox.KeepsFor(targetID)) {
 		hop := &internal_pb.MessageData{
 			MessageId: msg.MessageId,
 			OriginId:  selfID.ToBytes(),
@@ -815,9 +838,9 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 			Payload:   msg.Payload,
 		}
 		var relayEnv *internal_pb.Envelope
-		for _, nextPeer := range rs.swarm.GetAllPeers() {
-			nextPeerID := nextPeer.ID()
-			if nextPeerID == fromPeer || !nextPeer.Relays() {
+		for _, nextPeerID := range rs.swarm.MailboxPeers(targetID) {
+			nextPeer := rs.swarm.GetPeer(nextPeerID)
+			if nextPeer == nil || nextPeerID == fromPeer || nextPeerID == selfID {
 				continue
 			}
 			if relayEnv == nil {
@@ -838,7 +861,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 
 	// 4. If target is offline (or unreachable): store in friendly Mailbox!
 	if !forwarded && rs.mailbox != nil {
-		item := mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope)
+		item := mailboxItemOf(msg, targetID, sender, req.ForwardedEnvelope)
 		if err = rs.mailbox.Store(item); err == nil {
 			rs.stored.Add(1)
 			rs.ack(fromPeer, msg.MessageId, RelayAckStored, 0)
@@ -855,16 +878,35 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	}
 }
 
-// mailboxItemOf is a relayed message as the mailbox keeps it for recipient.
-func mailboxItemOf(msg *internal_pb.MessageData, recipient, origin types.PeerID, envelope []byte) messenger.MailboxItem {
+// requestSender reads the message a relay request carries and who signed it.
+func requestSender(fwd []byte) (types.PeerID, *internal_pb.Envelope, bool) {
+	var env internal_pb.Envelope
+	if err := proto.Unmarshal(fwd, &env); err != nil || len(env.PubKey) != ed25519.PublicKeySize ||
+		len(env.Signature) != ed25519.SignatureSize || !ed25519.Verify(env.PubKey, env.Data, env.Signature) {
+		return types.PeerID{}, nil, false
+	}
+	return types.PeerPubKeyToID(types.PeerPublicKey(env.PubKey)), &env, true
+}
+
+// mailboxItemOf is a relayed message as the mailbox keeps it for recipient; sender is the signer
+// of the message (requestSender), whose quota it counts against.
+func mailboxItemOf(msg *internal_pb.MessageData, recipient, sender types.PeerID, envelope []byte) messenger.MailboxItem {
 	msgID := hex.EncodeToString(msg.MessageId)
 	if msgID == "" {
 		msgID = fmt.Sprintf("relay-%d", time.Now().UnixNano())
 	}
+	// the recipient's receipt names the message inside, not the request
+	var inner string
+	var env internal_pb.Envelope
+	var md internal_pb.MessageData
+	if proto.Unmarshal(envelope, &env) == nil && proto.Unmarshal(env.Data, &md) == nil {
+		inner = hex.EncodeToString(md.MessageId)
+	}
 	return messenger.MailboxItem{
+		MsgID:       inner,
 		ID:          msgID,
 		RecipientID: recipient,
-		SenderID:    origin, // the authenticated signer, used for the per-sender quota
+		SenderID:    sender, // the authenticated signer, used for the per-sender quota
 		Payload:     envelope,
 		CreatedAt:   time.Now().Unix(),
 		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour).Unix(),
@@ -1000,9 +1042,12 @@ func (rs *RelayServer) OnPeerConnected(peerID types.PeerID, pubKey types.PeerPub
 }
 
 // A reconnected recipient gets its stored mail twice — when it connects and once more a little
-// later — and only then is the mail dropped, if the recipient is still connected. A write on a
-// fresh connection that never reaches the recipient's handlers no longer loses the mail; the
-// recipient drops the repeat (messages are deduplicated by id). Tests shorten the pause.
+// later. A write on a fresh connection that never reaches the recipient's handlers no longer
+// loses the mail; the recipient drops the repeat (messages are deduplicated by id). A recipient
+// that sends receipts (RelayAckReceived) has each message dropped on its receipt, and what it
+// did not confirm stays until its next visit or the expiry. For an older recipient, which sends
+// none, the mail is dropped after the second pass if it is still connected. Tests shorten the
+// pause.
 var storedSecondPass = 10 * time.Second
 
 func (rs *RelayServer) doneDelivering(peerID types.PeerID) {
@@ -1019,6 +1064,11 @@ func (rs *RelayServer) finishStored(peerID types.PeerID, sent map[string]bool) {
 	}
 	for id := range rs.sendStored(peerID) {
 		sent[id] = true
+	}
+	if rs.sendsReceipts(peerID) {
+		rs.logger.Info("RelayServer: handed stored mail to a reconnected peer, kept until its receipts",
+			"peer", peerID.String()[:8], "count", len(sent))
+		return
 	}
 	ids := make([]string, 0, len(sent))
 	for id := range sent {

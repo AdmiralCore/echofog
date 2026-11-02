@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -44,6 +45,53 @@ type ClientCircuit struct {
 	// retired: SwitchCircuit replaced it. It still delivers, but answers no ping, so the far end,
 	// which probes the circuit it sends over, finds it quiet and follows the new one.
 	retired atomic.Bool
+	// proven: an inbound circuit carried a fresh envelope signed by RemotePeerID. The origin in
+	// an open notice is only the relay's word; until the far end proves it, the circuit may not
+	// take over a route through another relay (see mayTakeRoute).
+	proven atomic.Bool
+}
+
+// proofMaxAge is how far the timestamp of an envelope that proves a circuit's origin may be from
+// now. It keeps a relay from proving a fake circuit with an envelope it captured long ago.
+const proofMaxAge = time.Minute
+
+// mayTakeRoute: circuit c may replace old as the route to their peer. A circuit through the
+// relay that already carries the route gives that relay nothing new; a circuit through another
+// relay must first prove its origin. Otherwise any connected peer could announce a circuit "from"
+// somebody whose route went quiet for a moment and take their traffic, files and call frames.
+// A route that cannot be taken over still gives way: it dies after circuitDeadAfter of probes,
+// and the next send opens a circuit of our own.
+func mayTakeRoute(c, old *ClientCircuit) bool {
+	return old == nil || c.RelayPeerID == old.RelayPeerID || c.proven.Load()
+}
+
+// noteProof marks c proven when env, which came over it, is signed by c's origin and is fresh.
+func noteProof(c *ClientCircuit, env *internal_pb.Envelope, now time.Time) {
+	if c.proven.Load() || len(env.PubKey) != ed25519.PublicKeySize || len(env.Signature) != ed25519.SignatureSize {
+		return
+	}
+	if types.PeerPubKeyToID(types.PeerPublicKey(env.PubKey)) != c.RemotePeerID {
+		return
+	}
+	if !ed25519.Verify(env.PubKey, env.Data, env.Signature) {
+		return
+	}
+	var md internal_pb.MessageData
+	if err := proto.Unmarshal(env.Data, &md); err != nil {
+		return
+	}
+	// senders stamp seconds or nanoseconds
+	ts := int64(md.Timestamp)
+	var at time.Time
+	if ts > 1e12 {
+		at = time.Unix(0, ts)
+	} else {
+		at = time.Unix(ts, 0)
+	}
+	if d := now.Sub(at); d > proofMaxAge || d < -proofMaxAge {
+		return
+	}
+	c.proven.Store(true)
 }
 
 // notePong folds in the round trip of the ping a pong answers. The pong carries nothing to match,
@@ -146,7 +194,10 @@ type RelayClient struct {
 	cfg         config.RelayClientConfig
 	preferred   map[types.PeerID]bool // relays named in cfg.Relays: used even if they do not advertise
 	invited     map[types.PeerID]bool // relays named in invitation links (AddPreferred)
-	spentToday  atomic.Int64
+	spentMu     sync.Mutex
+	spentToday  int64
+	spentDay    int64            // UTC day number spentToday counts for: a new day starts the budget again
+	now         func() time.Time // clock for the daily budget; tests replace it
 	relayPrices map[types.PeerID]int64
 	relayPings  map[types.PeerID]time.Duration
 
@@ -348,16 +399,39 @@ func (rc *RelayClient) GetPolicy() config.RelayClientConfig {
 	return rc.cfg
 }
 
+// rollDay starts the budget again when the UTC day changed since the last expense. Without it
+// the counter only ever grew, and after ~50,000 circuit opens every paid relay counted as
+// unusable until a restart. Call with rc.spentMu held.
+func (rc *RelayClient) rollDay() {
+	now := time.Now
+	if rc.now != nil {
+		now = rc.now
+	}
+	day := now().UTC().Unix() / 86400
+	if day != rc.spentDay {
+		rc.spentDay = day
+		rc.spentToday = 0
+	}
+}
+
 func (rc *RelayClient) RecordRelayExpense(amount int64) {
-	rc.spentToday.Add(amount)
+	rc.spentMu.Lock()
+	defer rc.spentMu.Unlock()
+	rc.rollDay()
+	rc.spentToday += amount
 }
 
 func (rc *RelayClient) GetDailySpent() int64 {
-	return rc.spentToday.Load()
+	rc.spentMu.Lock()
+	defer rc.spentMu.Unlock()
+	rc.rollDay()
+	return rc.spentToday
 }
 
 func (rc *RelayClient) ResetDailySpent() {
-	rc.spentToday.Store(0)
+	rc.spentMu.Lock()
+	defer rc.spentMu.Unlock()
+	rc.spentToday = 0
 }
 
 func (rc *RelayClient) SetRelayPrice(peerID types.PeerID, pricePerMB int64) {
@@ -398,6 +472,7 @@ func (rc *RelayClient) GetMarketStatus() []RelayMarketInfo {
 	rc.cfgMu.RLock()
 	cfg := rc.cfg
 	rc.cfgMu.RUnlock()
+	spent := rc.GetDailySpent()
 
 	rc.mu.RLock()
 	now := time.Now()
@@ -424,7 +499,7 @@ func (rc *RelayClient) GetMarketStatus() []RelayMarketInfo {
 		isViable := (cfg.MaxAcceptablePricePerMB <= 0 || price <= cfg.MaxAcceptablePricePerMB) &&
 			(cfg.MaxAcceptablePingMs <= 0 || ping <= time.Duration(cfg.MaxAcceptablePingMs)*time.Millisecond)
 
-		if cfg.DailyBudgetLimit > 0 && rc.spentToday.Load() >= cfg.DailyBudgetLimit && price > 0 {
+		if cfg.DailyBudgetLimit > 0 && spent >= cfg.DailyBudgetLimit && price > 0 {
 			isViable = false
 		}
 
@@ -573,6 +648,9 @@ func (rc *RelayClient) HandleRawFrame(msgType net_types.MessageType, payload []b
 		return true
 
 	case net_types.TypeRelayAck:
+		if len(payload) > 0 && payload[0] == RelayAckReceived {
+			return false // a recipient's receipt, for the relay server
+		}
 		reqID, status, reason, ok := DecodeRelayAck(payload)
 		if !ok {
 			return true
@@ -631,14 +709,15 @@ func (rc *RelayClient) handleInboundCircuitOpen(payload []byte, relayPeer types.
 	// one: an inbound open must never overwrite an existing route (that would let anyone who can
 	// reach us hijack where our traffic or hole-punch signals to that peer go).
 	// A route that has gone quiet is the exception: the peer opening a new circuit to us is the
-	// sign the old one died on its side, and keeping it would send our traffic nowhere.
+	// sign the old one died on its side, and keeping it would send our traffic nowhere. That holds
+	// only through the same relay; through another one the circuit must prove its origin first.
 	if cc.SignalOnly {
 		if _, exists := rc.signalCircuit[originID]; !exists {
 			rc.signalCircuit[originID] = cid // not for traffic
 		}
 	} else {
 		old, exists := rc.peerToCircuit[originID]
-		if oc := rc.circuits[old]; !exists || oc == nil || oc.stale(cc.CreatedAt) {
+		if oc := rc.circuits[old]; !exists || oc == nil || (oc.stale(cc.CreatedAt) && mayTakeRoute(cc, oc)) {
 			rc.peerToCircuit[originID] = cid
 		}
 	}
@@ -768,6 +847,15 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	now := time.Now()
 	circuit.lastRecv.Store(now.UnixNano())
 	circuit.probeSince.Store(0)
+	var innerEnv *internal_pb.Envelope
+	if innerMsgType == net_types.TypeChatMessage {
+		innerEnv = &internal_pb.Envelope{}
+		if err := proto.Unmarshal(innerData, innerEnv); err != nil {
+			innerEnv = nil
+		} else {
+			noteProof(circuit, innerEnv, now)
+		}
+	}
 	if !circuit.SignalOnly {
 		rc.followLiveCircuit(cid, circuit, now)
 	}
@@ -794,11 +882,8 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	// to the transport peer (the relay), never to the circuit's claimed origin: the Dispatcher
 	// verifies the envelope signature and that its OriginId is the signer, so the sender's identity
 	// comes from the signed envelope, not from anything the circuit asserts.
-	if innerMsgType == net_types.TypeChatMessage && !rc.swarm.Drops(net_types.TypeChatMessage) {
-		var innerEnv internal_pb.Envelope
-		if err := proto.Unmarshal(innerData, &innerEnv); err == nil {
-			rc.swarm.GetDispatcher().PushMessage(&innerEnv, fromPeer)
-		}
+	if innerEnv != nil && rc.swarm != nil && !rc.swarm.Drops(net_types.TypeChatMessage) {
+		rc.swarm.GetDispatcher().PushMessage(innerEnv, fromPeer)
 	}
 }
 
@@ -810,7 +895,7 @@ func (rc *RelayClient) followLiveCircuit(cid uint32, c *ClientCircuit, now time.
 	cur, ok := rc.peerToCircuit[c.RemotePeerID]
 	oc := rc.circuits[cur]
 	rc.mu.RUnlock()
-	if ok && (cur == cid || (oc != nil && !oc.stale(now))) {
+	if ok && (cur == cid || (oc != nil && (!oc.stale(now) || !mayTakeRoute(c, oc)))) {
 		return
 	}
 	rc.mu.Lock()
@@ -1165,78 +1250,6 @@ func (rc *RelayClient) SendUniversal(ctx context.Context, targetID types.PeerID,
 	}
 
 	// 4. Query DHT
-	if rc.dht != nil {
-		addr, dErr := rc.dht.FindPeer(ctx, targetID)
-		if dErr == nil && addr != "" && !rc.swarm.UserLinkViaRelay(targetID, addr) {
-			rc.swarm.Bootstrap([]string{network.JoinPeerAddr(addr, targetID)})
-		}
-	}
-
-	return ErrNoRelaysAvailable
-}
-
-// SendRoutedEnvelope routes an encrypted envelope to targetID through available relays.
-// If a relay fails or responds full, it automatically discovers alternative relays via DHT.
-func (rc *RelayClient) SendRoutedEnvelope(ctx context.Context, targetID types.PeerID, env *internal_pb.Envelope) error {
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		return fmt.Errorf("failed to marshal inner envelope: %w", err)
-	}
-
-	// Fast Path: If a circuit is open, send with Zero-Copy directly!
-	rc.mu.RLock()
-	cid, hasCircuit := rc.peerToCircuit[targetID]
-	rc.mu.RUnlock()
-	if hasCircuit {
-		if err := rc.SendCircuitData(cid, net_types.TypeChatMessage, envBytes); err == nil {
-			return nil
-		}
-	}
-
-	// Multi-hop / Store-and-forward fallback
-	relayMsg := &internal_pb.MessageData{
-		MessageId: types.NewMessageID(),
-		OriginId:  rc.swarm.GetSelfID().ToBytes(),
-		TargetId:  targetID[:],
-		Timestamp: uint64(time.Now().UnixNano()),
-		Payload: &internal_pb.MessageData_RelayReq{
-			RelayReq: &internal_pb.RelayRequest{
-				TargetPeerId:      targetID[:],
-				ForwardedEnvelope: envBytes,
-			},
-		},
-	}
-
-	relayEnv, err := rc.swarm.SignMessageData(relayMsg)
-	if err != nil {
-		return fmt.Errorf("failed to sign relay envelope: %w", err)
-	}
-
-	allPeers := rc.swarm.GetAllPeers()
-	rc.mu.RLock()
-	now := time.Now()
-	// relays whose mailbox said full go last, not out: one that is connected to the recipient
-	// forwards the message straight on, and only keeping it for later is what it refused
-	var viablePeers, fullPeers []*swarm.Peer
-	for _, p := range allPeers {
-		bUntil, isBlocked := rc.blacklisted[p.ID()]
-		if !isBlocked || now.After(bUntil) {
-			viablePeers = append(viablePeers, p)
-		} else {
-			fullPeers = append(fullPeers, p)
-		}
-	}
-	viablePeers = append(viablePeers, fullPeers...)
-	rc.mu.RUnlock()
-
-	for _, p := range viablePeers {
-		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
-			rc.logger.Info("RelayClient: successfully dispatched relay request",
-				"relay", p.ID().String()[:8], "target", targetID.String()[:8])
-			return nil
-		}
-	}
-
 	if rc.dht != nil {
 		addr, dErr := rc.dht.FindPeer(ctx, targetID)
 		if dErr == nil && addr != "" && !rc.swarm.UserLinkViaRelay(targetID, addr) {

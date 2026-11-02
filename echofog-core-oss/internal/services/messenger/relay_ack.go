@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -20,6 +21,26 @@ const (
 	relayWaitMax   = 4096            // relay answers awaited at once
 	relayWaitTTL   = 2 * time.Minute // an answer later than this is not waited for
 )
+
+// MailboxReceipt is the TypeRelayAck status a recipient sends to the relay that handed it a
+// message: [MailboxReceipt][0][message id]. A relay that hears receipts from a recipient keeps
+// its mail until the receipt (or the expiry) instead of dropping it after handing it over twice.
+// A relay of an older version does not know the type and drops the frame, as older senders drop
+// relay acknowledgements.
+const MailboxReceipt byte = 4
+
+// maxReceiptID bounds the message id a receipt carries (ours are 16 bytes).
+const maxReceiptID = 64
+
+// sendReceipt tells via, which handed us a message that origin signed, that it arrived.
+func (s *MessageBroker) sendReceipt(via, origin types.PeerID, msgID []byte) {
+	if s.sw == nil || via == origin || len(msgID) == 0 || len(msgID) > maxReceiptID {
+		return
+	}
+	if p := s.sw.GetPeer(via); p != nil {
+		_ = p.SendRaw(net_types.TypeRelayAck, append([]byte{MailboxReceipt, 0}, msgID...))
+	}
+}
 
 type relayWait struct {
 	target types.PeerID

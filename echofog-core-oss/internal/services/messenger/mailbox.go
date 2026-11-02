@@ -75,6 +75,9 @@ type MailboxItem struct {
 	Payload     []byte       `json:"payload"` // E2EE envelope / message data
 	CreatedAt   int64        `json:"created_at"`
 	ExpiresAt   int64        `json:"expires_at"`
+	// MsgID is the id of the message inside (hex), which the recipient names in its receipt
+	// (see Receipt). Items stored before it have none and go by the old rule.
+	MsgID string `json:"msg_id,omitempty"`
 }
 
 // usage is a running (count, bytes) tally kept per recipient and per sender so quotas are checked
@@ -91,6 +94,7 @@ type meta struct {
 	sender    types.PeerID
 	size      int64
 	expiresAt int64
+	msgID     string
 }
 
 type MailboxManager struct {
@@ -101,6 +105,7 @@ type MailboxManager struct {
 	// running state, rebuilt from storage once on first use (see ensureLoadedLocked)
 	loaded      bool
 	index       map[string]meta         // storage key -> item metadata
+	byMsg       map[string]string       // recipient + message id -> storage key (see Receipt)
 	byRecipient map[types.PeerID]*usage // live tally per recipient
 	bySender    map[types.PeerID]*usage // live tally per sender
 	totalBytes  int64
@@ -118,6 +123,7 @@ func NewMailboxManager(store storage.Storage) *MailboxManager {
 		store:       store,
 		limits:      DefaultMailboxLimits(),
 		index:       make(map[string]meta),
+		byMsg:       make(map[string]string),
 		byRecipient: make(map[types.PeerID]*usage),
 		bySender:    make(map[types.PeerID]*usage),
 		seen:        make(map[types.PeerID]int64),
@@ -246,6 +252,15 @@ func (m *MailboxManager) recipientSeen(id types.PeerID, ttl time.Duration) bool 
 	return time.Now().Unix()-last <= int64(ttl.Seconds())
 }
 
+// KeepsFor says whether Store would keep mail for recipient as far as who it is goes: it used this
+// relay lately, or the relay keeps mail for anyone.
+func (m *MailboxManager) KeepsFor(recipient types.PeerID) bool {
+	m.mu.RLock()
+	limits := m.limits
+	m.mu.RUnlock()
+	return !limits.RequireRecipientSeen || m.recipientSeen(recipient, limits.RecipientSeenTTL)
+}
+
 func (m *MailboxManager) makeKey(recipient types.PeerID, id string) []byte {
 	return []byte(fmt.Sprintf("%s%s:%s", MailboxPrefix, recipient.String(), id))
 }
@@ -288,6 +303,7 @@ func (m *MailboxManager) ensureLoadedLocked() {
 			sender:    item.SenderID,
 			size:      int64(len(item.Payload)),
 			expiresAt: item.ExpiresAt,
+			msgID:     item.MsgID,
 		})
 	}
 }
@@ -295,6 +311,12 @@ func (m *MailboxManager) ensureLoadedLocked() {
 // addLocked registers an item in the running tallies. Caller holds m.mu.
 func (m *MailboxManager) addLocked(key string, md meta) {
 	m.index[key] = md
+	if md.msgID != "" {
+		if m.byMsg == nil {
+			m.byMsg = make(map[string]string)
+		}
+		m.byMsg[msgKey(md.recipient, md.msgID)] = key
+	}
 	m.totalBytes += md.size
 	m.totalCount++
 	r := m.byRecipient[md.recipient]
@@ -321,6 +343,9 @@ func (m *MailboxManager) removeLocked(key string) {
 		return
 	}
 	delete(m.index, key)
+	if md.msgID != "" && m.byMsg[msgKey(md.recipient, md.msgID)] == key {
+		delete(m.byMsg, msgKey(md.recipient, md.msgID))
+	}
 	_ = m.store.Delete([]byte(key))
 
 	m.totalBytes -= md.size
@@ -490,6 +515,7 @@ func (m *MailboxManager) Store(item MailboxItem) error {
 		sender:    item.SenderID,
 		size:      itemSize,
 		expiresAt: item.ExpiresAt,
+		msgID:     item.MsgID,
 	})
 	return nil
 }
@@ -538,6 +564,21 @@ func (m *MailboxManager) Acknowledge(recipient types.PeerID, itemIDs []string) e
 		m.removeLocked(key)
 	}
 	return nil
+}
+
+func msgKey(recipient types.PeerID, msgID string) string { return string(recipient[:]) + msgID }
+
+// Receipt drops what is kept for recipient under the message id msgID (hex): the recipient got
+// it. It reports whether there was such an item.
+func (m *MailboxManager) Receipt(recipient types.PeerID, msgID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLoadedLocked()
+	key, ok := m.byMsg[msgKey(recipient, msgID)]
+	if ok {
+		m.removeLocked(key)
+	}
+	return ok
 }
 
 // CleanupExpired purges all expired messages across all recipients, and forgets recipients that

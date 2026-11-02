@@ -108,7 +108,10 @@ func (n *fakeNet) set(id types.PeerID, s *Service) {
 	n.mu.Unlock()
 }
 
-type fakeLink struct{ net *fakeNet }
+type fakeLink struct {
+	net  *fakeNet
+	self types.PeerID // frames arrive as from this peer
+}
 
 func (l fakeLink) Send(_ context.Context, peer types.PeerID, frame []byte) error {
 	n := l.net
@@ -139,7 +142,7 @@ func (l fakeLink) Send(_ context.Context, peer types.PeerID, frame []byte) error
 			n.down.Store(true)
 		}
 	}
-	go dst.HandleFrame(f)
+	go dst.HandleFrameFrom(f, l.self)
 	return nil
 }
 
@@ -173,7 +176,7 @@ func newSide(t *testing.T, net *fakeNet, id types.PeerID, tune func(*Options)) *
 
 func (s *side) start(t *testing.T, net *fakeNet, tune func(*Options)) {
 	opt := Options{
-		Store: s.store, Transport: fakeLink{net}, Self: s.id, DownloadDir: func() string { return s.dir },
+		Store: s.store, Transport: fakeLink{net, s.id}, Self: s.id, DownloadDir: func() string { return s.dir },
 		InitialWindow: 8, MaxWindow: 64, MinRTO: 300 * time.Millisecond, StallAfter: 500 * time.Millisecond,
 		Emit: func(i Info) { s.mu.Lock(); s.seen = append(s.seen, i); s.mu.Unlock() },
 	}

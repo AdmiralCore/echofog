@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/ratelimit"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"google.golang.org/protobuf/proto"
@@ -72,6 +73,7 @@ type Log struct {
 	listeners []func(Change)
 	members   map[string]*members // by blinded conversation id; loaded on first use
 	rev       uint64
+	wants     *ratelimit.Keyed[types.PeerID] // Wants answered per peer (see wantRate)
 }
 
 type rulesBox struct{ r GroupRules }
@@ -82,7 +84,8 @@ func New(st storage.Storage, selfPub []byte, sign func([]byte) ([]byte, error)) 
 	copy(pub[:], selfPub)
 	self := types.PeerPubKeyToID(pub)
 	return &Log{st: st, self: self, selfHex: peerHex(self), selfPub: append([]byte(nil), selfPub...),
-		sign: sign, now: time.Now, members: map[string]*members{}}
+		sign: sign, now: time.Now, members: map[string]*members{},
+		wants: ratelimit.NewKeyed[types.PeerID](wantRate, wantBurst, 4096)}
 }
 
 // Self is this account's peer id.

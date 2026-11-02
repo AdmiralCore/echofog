@@ -33,6 +33,9 @@ var (
 	ErrNoAssociatedData  = errors.New("session has no associated data")
 )
 
+// MaxPastRemoteDH is how many previous ratchet keys of the peer a session remembers.
+const MaxPastRemoteDH = 64
+
 type X3DHSession struct {
 	RemotePeerID types.PeerID
 	RootKey      *memguard.Enclave
@@ -46,6 +49,10 @@ type X3DHSession struct {
 	RemoteRatchetPub [32]byte
 	SkippedKeys      map[[32]byte]map[uint32]*memguard.Enclave
 	SkippedOrder     [][32]byte // ratchet keys of SkippedKeys, oldest first
+	// PastRemoteDH are the peer's previous ratchet keys, newest last. A message under one of them
+	// that no skipped key opens is a repeat (a relay replaying captured traffic): it is refused
+	// as old instead of taking a ratchet step that cannot decrypt and looks like a broken session.
+	PastRemoteDH [][32]byte
 
 	IsInitiator bool
 
@@ -224,6 +231,7 @@ func (x *X3DHSession) snapshot() X3DHSession {
 		c.SkippedKeys[dh] = m
 	}
 	c.SkippedOrder = append([][32]byte(nil), x.SkippedOrder...)
+	c.PastRemoteDH = append([][32]byte(nil), x.PastRemoteDH...)
 	c.AD = append([]byte(nil), x.AD...)
 	return c
 }
@@ -245,6 +253,9 @@ func (x *X3DHSession) ratchetDecrypt(msg types.EncryptedMessage) ([]byte, error)
 	}
 
 	if msg.Header.DH != x.RemoteRatchetPub {
+		if x.pastRemote(msg.Header.DH) {
+			return nil, ErrOldMessage
+		}
 		if err := x.skipMessageKeys(msg.Header.PN); err != nil {
 			return nil, err
 		}
@@ -262,6 +273,12 @@ func (x *X3DHSession) ratchetDecrypt(msg types.EncryptedMessage) ([]byte, error)
 		x.RootKey = newRootEnc
 		x.InitMsgKey = nil
 		x.RecvChain = ChainState{Key: newRecvChainEnc, Index: 0}
+		if x.RemoteRatchetPub != ([32]byte{}) {
+			x.PastRemoteDH = append(x.PastRemoteDH, x.RemoteRatchetPub)
+			if len(x.PastRemoteDH) > MaxPastRemoteDH {
+				x.PastRemoteDH = x.PastRemoteDH[len(x.PastRemoteDH)-MaxPastRemoteDH:]
+			}
+		}
 		x.RemoteRatchetPub = msg.Header.DH
 
 		privBuf := memguard.NewBuffer(32)
@@ -310,6 +327,15 @@ func (x *X3DHSession) ratchetDecrypt(msg types.EncryptedMessage) ([]byte, error)
 	x.RecvChain.Index++
 
 	return decryptSecure(messageKeyEnc, msg.Ciphertext, ad)
+}
+
+func (x *X3DHSession) pastRemote(dh [32]byte) bool {
+	for _, k := range x.PastRemoteDH {
+		if k == dh {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadInitAgain opens a repeat of the message that came with the init packet.

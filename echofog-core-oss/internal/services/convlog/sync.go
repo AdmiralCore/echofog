@@ -12,8 +12,13 @@ const (
 	// syncPageBytes bounds one Events message (it travels as one chat message, possibly through
 	// a relay mailbox, whose items are capped at 1 MB).
 	syncPageBytes = 200 << 10
-	// syncAnswerBytes bounds the answer to one Want; the asker asks again for the rest.
-	syncAnswerBytes = 2 << 20
+	// syncAnswerBytes bounds the answer to one Want; the asker asks again for the rest (More).
+	// A Want is ~50 bytes: at 2 MiB, 40 of them in 10 s made a member pull 80 MiB out of another.
+	syncAnswerBytes = 256 << 10
+	// Wants answered per peer: a burst that covers an honest catch-up of a few MiB, then one a
+	// second. A Want over the limit gets no answer; the asker's next round (Hello) goes on.
+	wantBurst = 16
+	wantRate  = 1.0
 )
 
 // Resolver maps a conversation id a peer names to the local conversation, for groups (direct
@@ -95,6 +100,9 @@ func (l *Log) HandleSync(from types.PeerID, m *Sync, groups Resolver) []*Sync {
 	case *Sync_Want:
 		c, ok := l.resolve(from, x.Want.GetConv(), groups)
 		if !ok || !l.Participant(c, from) {
+			return nil
+		}
+		if !l.wants.AllowAt(from, 1, l.now()) {
 			return nil
 		}
 		return l.answer(c, x.Want.GetHave())
