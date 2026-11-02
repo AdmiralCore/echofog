@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
@@ -145,4 +146,49 @@ func TestRoom_RelayPassesUpItsChildrensReports(t *testing.T) {
 		rep, ok := b.cm.worstFeedbackLocked(room, "s", time.Now())
 		return ok && rep.viewer == far && rep.fb.Level == media.PathHeavy && rep.fb.Kbps == 3000
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+// Sound goes twice on every hop: with every tenth datagram of sound lost on every link, nearly all
+// of a speaker's words and a stream's sound arrive, through relays too, where a tenth of them was
+// lost on each hop before.
+func TestRoom_SoundSurvivesScatteredLoss(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 5)
+	b := nodes[1]
+	q, _ := tree.QualityByID("720p30")
+	require.NoError(t, b.cm.StartStream("s", "screen", q))
+	for _, nd := range nodes {
+		if nd != b {
+			require.NoError(t, nd.cm.WatchStream("s"))
+		}
+	}
+	require.Eventually(t, func() bool {
+		sm, ok := b.cm.StreamTree("s")
+		return ok && len(sm.ParentMap) == 4
+	}, 5*time.Second, 20*time.Millisecond)
+
+	var n atomic.Uint64
+	m.mu.Lock()
+	m.drop = func(tp net_types.MessageType, payload []byte) bool {
+		p, err := media.Decode(payload)
+		return err == nil && (p.Kind == media.FrameAudio || p.Kind == media.FrameStreamAudio) && n.Add(1)%10 == 0
+	}
+	m.mu.Unlock()
+	const units = 200
+	for i := uint32(0); i < units; i++ {
+		require.NoError(t, b.cm.PublishAudio(unit(i, 160)))
+		require.NoError(t, b.cm.PublishStreamAudio("s", unit(i, 300)))
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	for _, nd := range nodes {
+		if nd == b {
+			continue
+		}
+		voice, sound := nd.log.count(media.FrameAudio, b.id, "voice"), nd.log.count(media.FrameStreamAudio, b.id, "s")
+		t.Logf("of %d units: %d of the voice, %d of the stream's sound", units, voice, sound)
+		assert.GreaterOrEqual(t, voice, units*97/100, "voice")
+		assert.GreaterOrEqual(t, sound, units*97/100, "stream sound")
+	}
+	assert.NotZero(t, n.Load())
 }

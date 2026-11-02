@@ -91,6 +91,7 @@ type MediaDispatcher struct {
 	fecTx    *fecSender
 	fecRx    *fecReceiver
 	rx       rxMeters // what the path of each watched stream does, for the broadcaster's rate
+	repeat   audioRepeat
 
 	// OnVideoNack fires shortly after a watched stream has a gap; the call layer sends the NACK
 	// to the stream's parent, which resends from its ring.
@@ -291,10 +292,11 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 	d.mu.RLock()
 	neighbors := d.voiceNeighborsLocked()
 	d.mu.RUnlock()
+	src := sourceKey{p.Kind, p.Broadcaster, p.StreamID}
 	for _, n := range neighbors {
 		if n != fromPeer && n != p.Broadcaster {
 			d.relayed.Add(1)
-			d.outbox.Send(n, ClassAudio, net_types.TypeCallMediaAudio, rawBytes)
+			d.sendAudio(n, src, net_types.TypeCallMediaAudio, [][]byte{rawBytes}, now)
 		}
 	}
 
@@ -335,7 +337,11 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
 			if child != fromPeer && child != p.Broadcaster {
 				d.relayed.Add(1)
-				d.outbox.Send(child, class, net_types.TypeCallMediaVideo, rawBytes)
+				if p.Kind == FrameStreamAudio {
+					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, [][]byte{rawBytes}, now)
+				} else {
+					d.outbox.Send(child, class, net_types.TypeCallMediaVideo, rawBytes)
+				}
 				forwarded = true
 			}
 		}
@@ -648,10 +654,9 @@ func (d *MediaDispatcher) BroadcastLocalAudio(opusBytes []byte) error {
 	if err != nil {
 		return err
 	}
+	src, now := sourceKey{FrameAudio, d.selfID, voiceStreamID}, time.Now()
 	for _, n := range d.VoiceNeighbors() {
-		for _, f := range frags {
-			d.outbox.Send(n, ClassAudio, net_types.TypeCallMediaAudio, f)
-		}
+		d.sendAudio(n, src, net_types.TypeCallMediaAudio, frags, now)
 	}
 	return nil
 }
@@ -743,13 +748,12 @@ func (d *MediaDispatcher) BroadcastLocalStreamAudio(streamID string, opusBytes [
 		return nil
 	}
 	subs := d.streamEngine.GetDownstream(streamID, d.selfID)
+	src, now := sourceKey{FrameStreamAudio, d.selfID, streamID}, time.Now()
 	for _, sub := range subs {
-		for _, f := range frags {
-			d.outbox.Send(sub, ClassAudio, net_types.TypeCallMediaVideo, f)
-		}
+		d.sendAudio(sub, src, net_types.TypeCallMediaVideo, frags, now)
 	}
 	if len(subs) > 0 {
-		d.markForwarded(streamID, time.Now())
+		d.markForwarded(streamID, now)
 	}
 	return nil
 }
@@ -861,6 +865,7 @@ func (d *MediaDispatcher) housekeeping() {
 					"units", n, "incomplete_total", d.incomplete.Load())
 			}
 			d.dedup.gc(now, 30*time.Second)
+			d.repeat.gc(now)
 			d.ring.expire(now)
 			d.fecRx.gc(now)
 			d.mu.Lock()

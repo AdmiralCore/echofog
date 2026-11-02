@@ -1272,34 +1272,53 @@ export function opusStereo(sdp, lines) {
   return parts.join('\r\n');
 }
 
-// Plays the PCM of a screen's sound (Float32 stereo, interleaved) as it comes: it starts with
-// 40 ms in hand, drops the oldest when more than 200 ms wait (the capture's clock runs ahead of
-// ours), and plays silence while nothing comes (nothing plays on the computer).
+// Plays the PCM Go sends (20 ms at a time, through the UI's event queue, which stalls now and then)
+// into the screen-sound track. It keeps about 80 ms queued: the sound card that captures and the
+// one this context runs on keep slightly different time, so a frame in 500 is skipped or held to
+// stay near that, which nobody hears. Running dry fades the last sample out over 64 samples and
+// starting again fades in, where a hard stop and start were clicks; a queue far too long (a stall
+// that ended) drops to the target at once.
 const PCM_PLAYER = `
+const ms = (v) => 2 * sampleRate * v / 1000; // interleaved stereo samples
 class EchofogPcm extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.q = []; this.at = 0; this.queued = 0; this.playing = false;
+    this.q = []; this.at = 0; this.queued = 0;
+    this.playing = false; this.gain = 0; this.n = 0; this.l = 0; this.r = 0;
     this.port.onmessage = (e) => {
       this.q.push(e.data);
       this.queued += e.data.length;
-      while (this.queued > 2 * sampleRate * 0.2 && this.q.length > 1) {
+      while (this.queued > ms(400) && this.q.length > 1) {
         const d = this.q.shift();
         this.queued -= d.length - this.at;
         this.at = 0;
       }
     };
   }
+  take() {
+    const d = this.q[0];
+    if (!d) return false;
+    this.l = d[this.at]; this.r = d[this.at + 1];
+    this.at += 2; this.queued -= 2;
+    if (this.at >= d.length) { this.q.shift(); this.at = 0; }
+    return true;
+  }
   process(_, outputs) {
     const l = outputs[0][0], r = outputs[0][1] || l;
-    if (!this.playing && this.queued < 2 * sampleRate * 0.04) return true;
+    if (!this.playing && this.queued < ms(80)) return true;
     this.playing = true;
     for (let i = 0; i < l.length; i++) {
-      const d = this.q[0];
-      if (!d) { l[i] = r[i] = 0; this.playing = false; continue; }
-      l[i] = d[this.at]; r[i] = d[this.at + 1];
-      this.at += 2; this.queued -= 2;
-      if (this.at >= d.length) { this.q.shift(); this.at = 0; }
+      if (++this.n % 500 === 0) {
+        if (this.queued > ms(120)) this.take();
+        else if (this.queued < ms(40) && this.gain === 1) { l[i] = this.l; r[i] = this.r; continue; }
+      }
+      if (this.take()) {
+        this.gain = Math.min(1, this.gain + 1 / 128);
+      } else {
+        this.gain = Math.max(0, this.gain - 1 / 64);
+        if (this.gain === 0) this.playing = false;
+      }
+      l[i] = this.l * this.gain; r[i] = this.r * this.gain;
     }
     return true;
   }
