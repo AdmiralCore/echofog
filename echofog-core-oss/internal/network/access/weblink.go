@@ -19,10 +19,18 @@ const appScheme = "echofog://"
 // WebLink is the https form of an echofog:// link; "" for anything else.
 func WebLink(link string) string {
 	link = strings.TrimSpace(link)
-	if len(link) <= len(appScheme) || !strings.EqualFold(link[:len(appScheme)], appScheme) {
+	if len(link) <= len(appScheme) || !strings.EqualFold(link[:len(appScheme)], appScheme) || !webKind(link[len(appScheme):]) {
 		return ""
 	}
 	return WebLinkBase + link[len(appScheme):]
+}
+
+// webKind reports whether the part of a link after "echofog://" is a kind the join page hands back
+// to the app (FromWebLink reads no other): a web link of anything else would lead nowhere.
+func webKind(rest string) bool {
+	l := strings.ToLower(rest)
+	return strings.HasPrefix(l, "join?") || strings.HasPrefix(l, "join/?") || strings.HasPrefix(l, "relay/") ||
+		strings.HasPrefix(l, "group/") || strings.HasPrefix(l, "contact/")
 }
 
 // FromWebLink turns the https form of a link back into the echofog:// link it carries, from any
@@ -46,7 +54,7 @@ func FromWebLink(text string) string {
 	switch {
 	case strings.HasPrefix(lf, appScheme):
 		return dropJoinSlash(frag)
-	case strings.HasPrefix(lf, "join?"), strings.HasPrefix(lf, "join/?"), strings.HasPrefix(lf, "relay/"), strings.HasPrefix(lf, "group/"), strings.HasPrefix(lf, "contact/"):
+	case webKind(frag):
 		return dropJoinSlash(appScheme + frag)
 	}
 	return text
