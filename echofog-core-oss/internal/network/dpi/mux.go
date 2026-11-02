@@ -10,11 +10,18 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/ipv4"
 )
+
+// maxDatagram is the longest datagram the multiplexer keeps whole. A pooled buffer holds the
+// datagram in its first maxDatagram bytes and the datagram's control messages (ECN, packet info)
+// after them.
+const maxDatagram = 4096
 
 var packetPool = sync.Pool{
 	New: func() interface{} {
-		return new(make([]byte, 4096))
+		return new(make([]byte, maxDatagram+OOBBufferSize))
 	},
 }
 
@@ -55,22 +62,12 @@ func NewMuxedConn(conn *net.UDPConn) (*MuxedConn, error) {
 	return m, nil
 }
 
-func (m *MuxedConn) readLoop() {
-	for {
-		bufPtr := packetPool.Get().(*[]byte)
-		buf := *bufPtr
-
-		n, addrPort, err := m.conn.ReadFromUDPAddrPort(buf)
-		if err != nil {
-			packetPool.Put(bufPtr)
-			return
-		}
-
-		if isSTUN(buf[:n]) {
-			m.stunConn.push(bufPtr, n, addrPort)
-		} else {
-			m.quicConn.push(bufPtr, n, addrPort)
-		}
+// dispatch hands a datagram read into bufPtr to its consumer, which then owns the buffer.
+func (m *MuxedConn) dispatch(bufPtr *[]byte, n, oobn int, addr netip.AddrPort) {
+	if isSTUN((*bufPtr)[:n]) {
+		m.stunConn.push(bufPtr, n, oobn, addr)
+	} else {
+		m.quicConn.push(bufPtr, n, oobn, addr)
 	}
 }
 
@@ -111,13 +108,13 @@ func newFilteredConn(parent *net.UDPConn, rbSize uint64) (*filteredConn, error) 
 	}, nil
 }
 
-func (f *filteredConn) push(bufPtr *[]byte, n int, addr netip.AddrPort) {
+func (f *filteredConn) push(bufPtr *[]byte, n, oobn int, addr netip.AddrPort) {
 	if f.closed.Load() {
 		packetPool.Put(bufPtr)
 		return
 	}
 
-	if !f.rb.Push(packet{bufPtr: bufPtr, n: n, addr: addr}) {
+	if !f.rb.Push(packet{bufPtr: bufPtr, n: n, oobn: oobn, addr: addr}) {
 		packetPool.Put(bufPtr)
 		return
 	}
@@ -129,26 +126,71 @@ func (f *filteredConn) push(bufPtr *[]byte, n int, addr netip.AddrPort) {
 }
 
 func (f *filteredConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	pkt, err := f.next()
+	if err != nil {
+		return 0, nil, err
+	}
+	// A datagram longer than p is cut short, as the kernel does with a short buffer. An error
+	// here would end quic-go's read loop: one oversized datagram from anybody would close the
+	// node's QUIC transport.
+	n = copy(p, (*pkt.bufPtr)[:pkt.n])
+	packetPool.Put(pkt.bufPtr)
+	return n, net.UDPAddrFromAddrPort(pkt.addr), nil
+}
+
+// ReadBatch hands over up to len(ms) queued datagrams with their control messages, waiting for
+// the first one like ReadFrom. Each is copied into the caller's buffers (truncated if longer).
+func (f *filteredConn) ReadBatch(ms []ipv4.Message, _ int) (int, error) {
+	if len(ms) == 0 {
+		return 0, nil
+	}
+	pkt, err := f.next()
+	if err != nil {
+		return 0, err
+	}
+	k := 0
+	for {
+		buf := *pkt.bufPtr
+		m := &ms[k]
+		m.N = copy(m.Buffers[0], buf[:pkt.n])
+		m.NN = copy(m.OOB, buf[maxDatagram:maxDatagram+pkt.oobn])
+		m.Flags = 0
+		m.Addr = net.UDPAddrFromAddrPort(pkt.addr)
+		packetPool.Put(pkt.bufPtr)
+		if k++; k == len(ms) {
+			return k, nil
+		}
+		var ok bool
+		if pkt, ok = f.rb.Pop(); !ok {
+			return k, nil
+		}
+	}
+}
+
+// ReadMsgUDP reads one queued datagram with its control messages.
+func (f *filteredConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net.UDPAddr, err error) {
+	return readMsgViaBatch(f, b, oob)
+}
+
+// WriteMsgUDP writes to the shared socket with control messages (GSO, ECN, source address).
+func (f *filteredConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
+	return f.parent.WriteMsgUDP(b, oob, addr)
+}
+
+// next waits for the next queued datagram, the read deadline or Close.
+func (f *filteredConn) next() (packet, error) {
 	for {
 		if f.closed.Load() {
-			return 0, nil, ErrClosed
+			return packet{}, ErrClosed
 		}
 
 		dl := f.readDeadline.Load()
 		if dl > 0 && time.Now().UnixNano() > dl {
-			return 0, nil, os.ErrDeadlineExceeded
+			return packet{}, os.ErrDeadlineExceeded
 		}
 
-		pkt, ok := f.rb.Pop()
-		if ok {
-			// A datagram longer than p is cut short, as the kernel does with a short buffer. An
-			// error here would end quic-go's read loop: one oversized datagram from anybody
-			// would close the node's QUIC transport.
-			n = copy(p, (*pkt.bufPtr)[:pkt.n])
-
-			packetPool.Put(pkt.bufPtr)
-
-			return n, net.UDPAddrFromAddrPort(pkt.addr), nil
+		if pkt, ok := f.rb.Pop(); ok {
+			return pkt, nil
 		}
 
 		timeout := time.Second
@@ -160,7 +202,7 @@ func (f *filteredConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 					timeout = until
 				}
 			} else {
-				return 0, nil, os.ErrDeadlineExceeded
+				return packet{}, os.ErrDeadlineExceeded
 			}
 		}
 
