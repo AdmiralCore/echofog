@@ -20,6 +20,7 @@ var (
 	iidIMFTransform           = guid("bf94c121-5b05-4e6f-8000-ba598961414d")
 	iidIMFMediaEventGenerator = guid("2cd0bd52-bcd5-4b89-b62c-eadc0c031e7d")
 	iidICodecAPI              = guid("901db4c7-31ce-41a2-85dc-8fa0bf41b8da")
+	iidIMFShutdown            = guid("97ec2ea4-0e42-4937-97ac-9d6d328824e1")
 	iidIMF2DBuffer            = guid("7dc9d5f9-9ed9-44ec-9bbf-0600bb589fbb")
 	mftCategoryVideoEncoder   = guid("f79eac7d-e545-4387-bdee-d647d7bde42a")
 	mfMediaTypeVideo          = guid("73646976-0000-0010-8000-00aa00389b71")
@@ -64,6 +65,7 @@ const (
 	attrSetGUID          = 24
 	activateObject       = 33
 	activateShutdown     = 34
+	shutdownShutdown     = 3
 	mediaTypeGetMajor    = 33
 	eventGetType         = 33
 	eventGetStatus       = 35
@@ -186,6 +188,7 @@ type mfEncoder struct {
 	inFlight map[int64]time.Time // pts (100 ns) -> when it went in
 	out      func(encodedFrame)
 	done     chan struct{}
+	looping  bool // the event loop runs; done closes when it ends
 	err      atomic.Pointer[error]
 	sps, pps []byte // the last parameter sets, put before an IDR that comes without them
 }
@@ -328,6 +331,7 @@ func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fp
 	if err := comCall(e.mft, mftProcessMessage, mftMessageStartOfStream, 0).err("START_OF_STREAM"); err != nil {
 		return fail(err)
 	}
+	e.looping = true
 	go e.eventLoop()
 	return e, nil
 }
@@ -623,6 +627,22 @@ func (e *mfEncoder) close() {
 		comCall(e.mft, mftProcessMessage, mftMessageCommandFlush, 0)
 		comCall(e.mft, mftProcessMessage, mftMessageEndStreaming, 0)
 		comCall(e.mft, mftProcessMessage, mftMessageSetD3DManager, 0)
+		// An async encoder works on threads of its own. Shut down, its event queue ends our event
+		// loop; only then may it be let go, or one of its threads still busy with a frame finds it
+		// freed and takes the process down without a word (seen once, a level change on a loaded
+		// computer, with a drain that did not finish).
+		if sd, err := queryInterface(e.mft, &iidIMFShutdown, "IMFShutdown"); err == nil {
+			comCall(sd, shutdownShutdown)
+			release(sd)
+		}
+		if e.looping {
+			select {
+			case <-e.done:
+			case <-time.After(2 * time.Second):
+				e.codec, e.events, e.mft, e.activate, e.manager = nil, nil, nil, nil, nil // leaked, not freed under it
+				return
+			}
+		}
 	}
 	release(e.codec)
 	release(e.events)
