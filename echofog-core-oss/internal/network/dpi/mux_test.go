@@ -146,3 +146,31 @@ func TestMuxedConnReadHonoursDeadlineAndClose(t *testing.T) {
 		t.Fatalf("a closed connection must report ErrClosed, got %v", err)
 	}
 }
+
+// A datagram longer than the reader's buffer is truncated, as the kernel does. It used to be an
+// error, and quic-go closes its transport on a read error: one oversized datagram from anybody
+// ended the node's QUIC listener (plain mode, where quic-go reads the multiplexer directly).
+func TestMuxedConnTruncatesOversizedDatagram(t *testing.T) {
+	serverConn, clientConn := udpPair(t)
+	mux, err := NewMuxedConn(serverConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mux.Close()
+	big := make([]byte, 1600)
+	_, _ = rand.Read(big)
+	big[0] = 0xC0
+	if _, err := clientConn.WriteTo(big, serverConn.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	q := mux.GetQUICConn()
+	q.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1452) // quic-go's receive buffer
+	n, _, err := q.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("an oversized datagram must not be a read error: %v", err)
+	}
+	if n != len(buf) || !bytes.Equal(buf, big[:len(buf)]) {
+		t.Fatalf("want the first %d bytes, got %d", len(buf), n)
+	}
+}

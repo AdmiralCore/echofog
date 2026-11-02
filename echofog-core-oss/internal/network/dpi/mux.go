@@ -19,7 +19,8 @@ var packetPool = sync.Pool{
 }
 
 var (
-	ErrClosed      = errors.New("connection closed")
+	ErrClosed = errors.New("connection closed")
+	// ErrSmallBuffer is no longer returned: a datagram longer than the read buffer is truncated.
 	ErrSmallBuffer = errors.New("read buffer too small for packet")
 )
 
@@ -140,12 +141,10 @@ func (f *filteredConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 
 		pkt, ok := f.rb.Pop()
 		if ok {
-			data := (*pkt.bufPtr)[:pkt.n]
-			if len(p) < len(data) {
-				packetPool.Put(pkt.bufPtr)
-				return 0, nil, ErrSmallBuffer
-			}
-			n = copy(p, data)
+			// A datagram longer than p is cut short, as the kernel does with a short buffer. An
+			// error here would end quic-go's read loop: one oversized datagram from anybody
+			// would close the node's QUIC transport.
+			n = copy(p, (*pkt.bufPtr)[:pkt.n])
 
 			packetPool.Put(pkt.bufPtr)
 
