@@ -220,6 +220,11 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 		if len(b.Member) != authorLen || b.Until < 0 {
 			return nil, false
 		}
+		// the longest timeout counts from the event's own time: a client that does not keep to
+		// it (the app's form does) cannot keep a member silent for good under a timeout
+		if limit := e.TsMs/1000 + maxTimeout; b.Until > limit {
+			b.Until = limit
+		}
 	case MemberDefine:
 		d := b.Def
 		if d == nil || !validRoleID(d.Id) || len(d.Title) > maxRoleTitle || !validText(d.Title) || d.Color > 0xFFFFFF ||
