@@ -146,7 +146,10 @@ type RelayClient struct {
 	cfg         config.RelayClientConfig
 	preferred   map[types.PeerID]bool // relays named in cfg.Relays: used even if they do not advertise
 	invited     map[types.PeerID]bool // relays named in invitation links (AddPreferred)
-	spentToday  atomic.Int64
+	spentMu     sync.Mutex
+	spentToday  int64
+	spentDay    int64            // UTC day number spentToday counts for: a new day starts the budget again
+	now         func() time.Time // clock for the daily budget; tests replace it
 	relayPrices map[types.PeerID]int64
 	relayPings  map[types.PeerID]time.Duration
 
@@ -348,16 +351,39 @@ func (rc *RelayClient) GetPolicy() config.RelayClientConfig {
 	return rc.cfg
 }
 
+// rollDay starts the budget again when the UTC day changed since the last expense. Without it
+// the counter only ever grew, and after ~50,000 circuit opens every paid relay counted as
+// unusable until a restart. Call with rc.spentMu held.
+func (rc *RelayClient) rollDay() {
+	now := time.Now
+	if rc.now != nil {
+		now = rc.now
+	}
+	day := now().UTC().Unix() / 86400
+	if day != rc.spentDay {
+		rc.spentDay = day
+		rc.spentToday = 0
+	}
+}
+
 func (rc *RelayClient) RecordRelayExpense(amount int64) {
-	rc.spentToday.Add(amount)
+	rc.spentMu.Lock()
+	defer rc.spentMu.Unlock()
+	rc.rollDay()
+	rc.spentToday += amount
 }
 
 func (rc *RelayClient) GetDailySpent() int64 {
-	return rc.spentToday.Load()
+	rc.spentMu.Lock()
+	defer rc.spentMu.Unlock()
+	rc.rollDay()
+	return rc.spentToday
 }
 
 func (rc *RelayClient) ResetDailySpent() {
-	rc.spentToday.Store(0)
+	rc.spentMu.Lock()
+	defer rc.spentMu.Unlock()
+	rc.spentToday = 0
 }
 
 func (rc *RelayClient) SetRelayPrice(peerID types.PeerID, pricePerMB int64) {
@@ -398,6 +424,7 @@ func (rc *RelayClient) GetMarketStatus() []RelayMarketInfo {
 	rc.cfgMu.RLock()
 	cfg := rc.cfg
 	rc.cfgMu.RUnlock()
+	spent := rc.GetDailySpent()
 
 	rc.mu.RLock()
 	now := time.Now()
@@ -424,7 +451,7 @@ func (rc *RelayClient) GetMarketStatus() []RelayMarketInfo {
 		isViable := (cfg.MaxAcceptablePricePerMB <= 0 || price <= cfg.MaxAcceptablePricePerMB) &&
 			(cfg.MaxAcceptablePingMs <= 0 || ping <= time.Duration(cfg.MaxAcceptablePingMs)*time.Millisecond)
 
-		if cfg.DailyBudgetLimit > 0 && rc.spentToday.Load() >= cfg.DailyBudgetLimit && price > 0 {
+		if cfg.DailyBudgetLimit > 0 && spent >= cfg.DailyBudgetLimit && price > 0 {
 			isViable = false
 		}
 
