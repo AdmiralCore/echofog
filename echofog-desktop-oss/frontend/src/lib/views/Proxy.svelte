@@ -44,6 +44,9 @@
   const offs = [];
   let timers = [];
 
+  // the core's words for a server across the border with no cover site (by the list or by a link)
+  const NO_COVER = /no cover site|across the border over noise/;
+
   async function act(name, fn) {
     busy = name;
     error = notice = '';
@@ -51,7 +54,7 @@
       await fn();
     } catch (err) {
       const msg = errText(err);
-      error = /no cover site/.test(msg) ? $t('proxy.noCover') : msg;
+      error = NO_COVER.test(msg) ? $t('proxy.noCover') : msg;
     } finally {
       busy = '';
     }

@@ -70,7 +70,8 @@
       await fn();
       if (then) then();
     } catch (err) {
-      error = errText(err);
+      const msg = errText(err);
+      error = /no cover site|across the border over noise/.test(msg) ? $t('proxy.noCover') : msg;
     } finally {
       busy = '';
     }
