@@ -8,6 +8,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network/exit_gateway"
+	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/internal/p2p/vpnmarket"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
@@ -321,6 +322,10 @@ func (n *NodeApi) bestExit() (string, error) {
 	return "", errors.New("no exit nodes discovered yet")
 }
 
+// ErrExitNoCover: the exit is a server across the border with no cover site yet, so the only way
+// to it is noise, which a censor flags; the app does not dial it (the operator sets one up).
+var ErrExitNoCover = errors.New("this exit has no cover site yet: a connection to it would stand out to DPI, so none is made")
+
 // ensureConnected dials a peer found through the DHT if there is no live connection yet
 func (n *NodeApi) ensureConnected(id types.PeerID) error {
 	if n.node.Swarm.GetPeer(id) != nil {
@@ -333,6 +338,9 @@ func (n *NodeApi) ensureConnected(id types.PeerID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := n.node.EnsureConnected(ctx, id); err != nil {
+		if errors.Is(err, swarm.ErrNoiseDialRefused) {
+			return ErrExitNoCover
+		}
 		return errors.New("exit relay is not connected")
 	}
 	return nil

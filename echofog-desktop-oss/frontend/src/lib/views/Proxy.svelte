@@ -50,7 +50,8 @@
     try {
       await fn();
     } catch (err) {
-      error = errText(err);
+      const msg = errText(err);
+      error = /no cover site/.test(msg) ? $t('proxy.noCover') : msg;
     } finally {
       busy = '';
     }

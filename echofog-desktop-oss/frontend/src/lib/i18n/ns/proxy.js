@@ -142,6 +142,7 @@ export default {
 
     'proxy.check.connected': 'the exit you are connected to',
     'proxy.check.auto': 'the exit the automatic choice would pick',
+    'proxy.noCover': 'This exit has not set up its disguise yet (a cover site), so a connection to it would stand out to DPI, and the app does not make one. Pick another exit or try this one later.',
     'proxy.check.exit': 'exit {id}',
 
     'proxy.pay.title': 'Paying this exit',
@@ -375,6 +376,7 @@ export default {
 
     'proxy.check.connected': 'выходной узел, к которому вы подключены',
     'proxy.check.auto': 'выходной узел, который выбрал бы автомат',
+    'proxy.noCover': 'У этого выхода ещё нет маскировки (сайта-прикрытия): подключение к нему было бы заметно для DPI, поэтому приложение его не делает. Выберите другой выход или попробуйте этот позже.',
     'proxy.check.exit': 'выходной узел {id}',
 
     'proxy.pay.title': 'Оплата выходного узла',
