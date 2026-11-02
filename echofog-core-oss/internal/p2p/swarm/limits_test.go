@@ -10,6 +10,7 @@ import (
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/handshake"
+	"github.com/echofog/echofog-core/internal/network/net_types"
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/google/uuid"
@@ -218,6 +219,28 @@ func TestStreamsWithoutFirstFrameAreBounded(t *testing.T) {
 	if n := p.pendingStreams.Load(); n > maxPendingStreamsPerPeer {
 		t.Fatalf("%d streams wait for their first frame, the limit is %d", n, maxPendingStreamsPerPeer)
 	}
+}
+
+// A request of a type the node has never heard of (a newer peer's) is ignored, whatever its
+// payload: it costs the peer nothing, however often it comes.
+func TestUnknownRequestTypeIsNotPunished(t *testing.T) {
+	srv, srvTr := newTestSwarm(t)
+	cli, _ := newTestSwarm(t)
+	connect(t, cli, srv, srvTr)
+
+	const unknown = net_types.MessageType(250)
+	for i := 0; i < 30; i++ {
+		_, _, _ = cli.SendDataWithRequest(srv.selfID, unknown, []byte("not an envelope at all"))
+		_, _, _ = cli.SendMessageWithRequest(srv.selfID, unknown, &internal_pb.MessageData{})
+	}
+	// each request waits for its stream to close, so the server is done with all of them
+	if sc := srv.lim.scorer.PeerScore(cli.selfID); sc != 0 {
+		t.Fatalf("unknown request types scored the peer %.1f points", sc)
+	}
+	if srv.GetPeer(cli.selfID) == nil {
+		t.Fatal("the peer was dropped for speaking a newer protocol")
+	}
+	waitFor(t, "unknown requests counted", func() bool { return srv.drop.unknown.Load() >= 60 })
 }
 
 func dagRequest(sid uuid.UUID) *internal_pb.MessageData {
