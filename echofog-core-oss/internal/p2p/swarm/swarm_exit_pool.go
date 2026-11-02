@@ -154,8 +154,13 @@ func (s *Swarm) exitPoolFor(exit types.PeerID) *exitPoolState {
 // returns true only when it took ownership of event.Conn (attached it, or deliberately rejected it
 // because the pool is full and every link is busy). It returns false — leaving the connection for
 // addPeer — for an ordinary connection and when there is no live connection to the peer yet (the
-// pool link then simply becomes the primary).
-func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
+// pool link then simply becomes the primary). With ownership it also takes release, the
+// connection's admission slot (nil for none), and gives it back once the connection is refused or
+// gone: before, every pool link of an inbound client kept its slot until the node restarted.
+func (s *Swarm) tryAttachExitLink(event network.NewConnEvent, release func()) bool {
+	if release == nil {
+		release = func() {}
+	}
 	if !event.PoolLink {
 		return false
 	}
@@ -183,6 +188,7 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 	if s.IsCamouflagePeer(event.PeerID) {
 		if quicNoise(event.Conn.Protocol(), event.Reality) {
 			_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "QUIC noise link to camouflage exit")
+			release()
 			return true
 		}
 		if !p.primaryIsCamouflaged() {
@@ -199,6 +205,7 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 		// links). Refuse the new link rather than close one a stream may be on; the pool dials again
 		// at its next rotation.
 		_ = event.Conn.CloseWithError(network.ErrCodeNormalClose, "exit pool full")
+		release()
 		return true
 	}
 
@@ -214,6 +221,7 @@ func (s *Swarm) tryAttachExitLink(event network.NewConnEvent) bool {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer release()
 		select {
 		case <-conn.Context().Done():
 		case <-p.ctx.Done():

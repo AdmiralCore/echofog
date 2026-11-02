@@ -306,7 +306,10 @@ You go online through another person's computer: an **exit**. There are two ways
 sees: your IP address (unless you reach it through Tor), every address and site name you connect
 to, the DNS names you look up, and how much you send and when. It also knows your peer ID, and
 when you pay from a vault, your vault and wallet addresses. HTTPS hides the content of pages from
-it, not the names of the sites. Choose an exit the way you would choose a VPN provider.
+it, not the names of the sites. Choose an exit the way you would choose a VPN provider. The exit
+looks up the names you connect to over DNS-over-HTTPS (Cloudflare, then Quad9, unless its operator
+chose others), so its hosting provider does not see them in the clear; if those servers do not
+answer, it asks its own system resolver, unless the operator turned that off.
 
 **Exits are on an open market.** Anyone can share their connection, set a price per GB (or 0 for
 free) and some free test traffic, and publish the offer in the DHT. Running an exit means other

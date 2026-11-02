@@ -542,10 +542,16 @@ func (n *Node) Start() (err error) {
 	n.ExitService = exit_gateway.NewExitService()
 	n.ExitService.SetSelfIPs(n.publicIPs)
 	n.ExitService.SetLimits(exit_gateway.LimitsFromConfig(n.Cfg.Exit))
+	if err := n.ExitService.SetDNS(n.Cfg.Exit.DNS, !n.Cfg.Exit.DNSNoFallback); err != nil {
+		n.Logger.Warn("exit DNS: using the default servers", "err", err)
+		_ = n.ExitService.SetDNS(nil, !n.Cfg.Exit.DNSNoFallback)
+	}
 	if n.Cfg.Storage.DatabasePath != "" {
 		n.ExitService.SetFreeBudgetFile(filepath.Join(filepath.Dir(n.Cfg.Storage.DatabasePath), "exit-free-budget.json"))
 	}
 	exit_gateway.AttachToSwarm(n.Swarm, n.ExitService)
+	// a download speed burst only for a client this exit serves and that tunnelled through it lately
+	n.BWProbe.SetGate(n.ExitService.ProbeClient)
 
 	// WebSocket transport: lets this node sit behind a CDN (when ws_listen_addr is set) and lets
 	// it dial ws:// / wss:// peers either way

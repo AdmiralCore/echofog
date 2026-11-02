@@ -1,6 +1,7 @@
 package exit_gateway
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -33,16 +34,27 @@ const (
 	ledgerFlushEvery = 5 * time.Second
 )
 
-// PayTag is the memo a client puts on its transfer so the exit knows whom to credit. It is
-// derived from both peer IDs: the exit can recompute it for any connected peer without storing a
-// registry, and an observer of the blockchain cannot tie it to a peer ID without already
-// knowing which two peers talk.
+// PayTag is the old (v0.2.0) memo a client puts on its transfer so the exit knows whom to credit,
+// derived from both peer IDs alone. Exit IDs are public and client IDs show up in the DHT and in
+// PEX, so anyone could compute it for every pair and read off the chain which peer paid which
+// exit. Exits now hand out KeyedPayTag; this one is still credited (see ExitService.payTag).
 func PayTag(client, exit types.PeerID) string {
 	h := sha256.New()
 	h.Write([]byte("echofog/pay/v1"))
 	h.Write(client[:])
 	h.Write(exit[:])
 	return "ef1:" + hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+// KeyedPayTag is the memo an exit holding key hands out to client: an HMAC under a secret only the
+// exit knows, so it cannot be computed from peer IDs. It has the old tag's shape ("ef1:" and 16 hex
+// digits), and clients never compute a tag, they copy the one in AccountInfo, so clients of any
+// version pay under it unchanged.
+func KeyedPayTag(key []byte, client types.PeerID) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("echofog/pay/v2"))
+	m.Write(client[:])
+	return payTagPrefix + hex.EncodeToString(m.Sum(nil)[:8])
 }
 
 type ledgerAccount struct {
@@ -191,6 +203,28 @@ func (l *Ledger) Earned() int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.data.Earned
+}
+
+// Merge moves what tag from holds onto tag to: a client's balance under its old pay tag joins the
+// one under its new tag. Nothing happens when from has no account.
+func (l *Ledger) Merge(from, to string) {
+	if from == to {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	a := l.data.Accounts[from]
+	if a == nil {
+		return
+	}
+	b := l.account(to)
+	b.CreditBytes += a.CreditBytes
+	b.EverPaid = b.EverPaid || a.EverPaid
+	b.PaidMicro += a.PaidMicro
+	b.Updated = max(b.Updated, a.Updated)
+	delete(l.data.Accounts, from)
+	l.dirty = true
+	_ = l.flushLocked() // money moved: as for a credit, do not wait for the timer
 }
 
 // Consume spends n bytes of paid credit and reports whether the tag may keep going. A tag that has

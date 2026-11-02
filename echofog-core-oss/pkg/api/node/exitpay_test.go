@@ -350,3 +350,62 @@ func TestChoosePayAsset(t *testing.T) {
 	_, err = choosePayAsset(PayAuto, both, dollar, usdt(0), ton("0.1"), 5)
 	assert.ErrorContains(t, err, "TON needed")
 }
+
+// The account answer is not signed: an exit chosen at its advertised price could ask more once
+// connected. Automatic payments stop then (the user is asked instead), and go on at the advertised
+// price or below, or for an exit with no advert.
+func TestGuardRefusesAPriceAboveTheAdvert(t *testing.T) {
+	now := t0
+	ctx := context.Background()
+	advertised, known := int64(price), true
+	var asked []int64
+	run := func(info exit_gateway.AccountInfo) (*payState, *fakeExit) {
+		ex := &fakeExit{info: info}
+		env := ex.env()
+		env.advertPrice = func(_ context.Context, a int64) (int64, bool) {
+			asked = append(asked, a)
+			return advertised, known
+		}
+		p := newGuard(true, &now)
+		p.step(ctx, env)
+		return p, ex
+	}
+
+	info := accountWith(0)
+	info.PricePerMB = price * 10
+	p, ex := run(info)
+	assert.Empty(t, ex.paid, "ten times the advertised price: nothing paid automatically")
+	assert.True(t, p.status.NeedsPayment, "the user is asked instead")
+	assert.Contains(t, p.status.Note, "advertises")
+	assert.Equal(t, []int64{price * 10}, asked)
+
+	_, ex = run(accountWith(0))
+	assert.Equal(t, []int64{microPerUSDT}, ex.paid, "the advertised price is paid")
+
+	info.PricePerMB = price - 1
+	_, ex = run(info)
+	assert.Len(t, ex.paid, 1, "a lower price is paid")
+
+	known = false
+	info.PricePerMB = price * 10
+	_, ex = run(info)
+	assert.Len(t, ex.paid, 1, "no advert to compare with (a hidden exit): paid as before")
+}
+
+// The guard's rounds are not a fixed heartbeat: each wait is moved at random, within 30 %.
+func TestGuardRoundsAreJittered(t *testing.T) {
+	for _, d := range []time.Duration{voucherGuardEvery, payGuardPending, payGuardEvery} {
+		seen := map[time.Duration]bool{}
+		lo, hi := d, d
+		for i := 0; i < 500; i++ {
+			w := jittered(d)
+			seen[w] = true
+			lo, hi = min(lo, w), max(hi, w)
+		}
+		assert.GreaterOrEqual(t, lo, time.Duration(float64(d)*0.7), d)
+		assert.LessOrEqual(t, hi, time.Duration(float64(d)*1.3), d)
+		assert.Greater(t, len(seen), 100, "%v: the waits differ", d)
+		assert.Less(t, lo, time.Duration(float64(d)*0.85), "%v: spread both ways", d)
+		assert.Greater(t, hi, time.Duration(float64(d)*1.15), "%v: spread both ways", d)
+	}
+}

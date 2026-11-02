@@ -70,6 +70,7 @@ type options struct {
 	exitLimits config.ExitConfig
 	exitIdle   time.Duration
 	exitLife   time.Duration
+	exitDNS    string
 
 	accessMode   string
 	accessSecret string
@@ -118,8 +119,8 @@ func parseRunFlags(args []string) options {
 	f.StringVar(&o.stunServers, "stun-servers", getEnv("ECHOFOG_STUN_SERVERS", ""), "comma-separated STUN servers (default: a built-in list)")
 	f.BoolVar(&o.noPortMapping, "no-port-mapping", envBool("ECHOFOG_NO_PORT_MAPPING", false), "do not ask the router to forward our port (UPnP / NAT-PMP)")
 	f.BoolVar(&o.noHolePunch, "no-hole-punch", envBool("ECHOFOG_NO_HOLE_PUNCH", false), "do not try direct connections between peers behind NATs")
-	f.BoolVar(&o.noBWProbe, "no-bwprobe-serve", envBool("ECHOFOG_NO_BWPROBE_SERVE", false), "do not answer other peers' download speed probes (12 MB bursts)")
-	f.IntVar(&o.bwProbeMBPerMin, "bwprobe-mb-per-min", int(envInt64("ECHOFOG_BWPROBE_MB_PER_MIN", 0)), "most MB a minute this node sends answering speed probes, all peers together (0 = 48)")
+	f.BoolVar(&o.noBWProbe, "no-bwprobe-serve", envBool("ECHOFOG_NO_BWPROBE_SERVE", false), "do not answer other peers' download speed probes (4 MB bursts, only to recent clients of this exit)")
+	f.IntVar(&o.bwProbeMBPerMin, "bwprobe-mb-per-min", int(envInt64("ECHOFOG_BWPROBE_MB_PER_MIN", 0)), "most MB a minute this node sends answering speed probes, all peers together (0 = 16)")
 
 	f.BoolVar(&o.relay, "relay", envBool("ECHOFOG_RELAY", true), "relay calls and messages for peers that cannot reach each other directly, and keep messages for offline peers")
 	f.BoolVar(&o.relayPrivate, "relay-private", envBool("ECHOFOG_RELAY_PRIVATE", false), "make the relay private: it is not advertised and serves only the peers listed in --relay-allow")
@@ -159,6 +160,8 @@ func parseRunFlags(args []string) options {
 	f.Int64Var(&el.FreePeerMBPerDay, "exit-free-mb-per-day", envInt64("ECHOFOG_EXIT_FREE_MB_PER_DAY", 0), "on a free exit, the MB one client may take a day (UTC) (0 = no cap)")
 	f.Int64Var(&el.FreeIPMBPerDay, "exit-free-ip-mb-per-day", envInt64("ECHOFOG_EXIT_FREE_IP_MB_PER_DAY", 0), "on a free exit, the MB all the clients of one IP address may take a day (UTC) (0 = no cap)")
 	f.Int64Var(&el.FreeGBPerMonth, "exit-free-gb-per-month", envInt64("ECHOFOG_EXIT_FREE_GB_PER_MONTH", 0), "on a free exit, the GB the whole exit gives away a calendar month (UTC); then it refuses new connections until the month ends (0 = no cap)")
+	f.StringVar(&o.exitDNS, "exit-dns", getEnv("ECHOFOG_EXIT_DNS", ""), "comma-separated DNS-over-HTTPS URLs the exit resolves clients' names with, tried in order (empty = Cloudflare 1.1.1.1, then Quad9 9.9.9.9); 'system' uses this machine's resolver in the clear")
+	f.BoolVar(&el.DNSNoFallback, "exit-dns-no-fallback", envBool("ECHOFOG_EXIT_DNS_NO_FALLBACK", false), "when no DNS-over-HTTPS server answers, fail the lookup instead of asking this machine's resolver in the clear")
 	f.StringVar(&o.exitFree, "exit-free-peers", getEnv("ECHOFOG_EXIT_FREE_PEERS", ""), "comma-separated peer IDs this exit serves for free, without quota or payment (e.g. your own devices); replaces the list saved in the data directory")
 
 	f.StringVar(&o.accessMode, "access", getEnv("ECHOFOG_ACCESS", "public"), "who may reach this node: public (listed, its exit advertised), hidden (uses the network as a client, unlisted, answers only people with its link) or isolated (joins no network at all, people with its link connect to it directly; for a server)")
@@ -265,6 +268,7 @@ func (o options) config() *config.AppConfig {
 	cfg.Exit = o.exitLimits
 	cfg.Exit.IdleSeconds = durationSeconds(o.exitIdle)
 	cfg.Exit.MaxLifetimeSeconds = max(0, durationSeconds(o.exitLife))
+	cfg.Exit.DNS = splitCSV(o.exitDNS)
 	switch o.accessMode {
 	case "", config.AccessPublic:
 	case config.AccessHidden, config.AccessIsolated:

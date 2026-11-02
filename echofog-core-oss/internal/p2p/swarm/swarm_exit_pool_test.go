@@ -3,12 +3,14 @@ package swarm
 import (
 	"context"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/dispatcher"
 	"github.com/echofog/echofog-core/internal/network"
+	"github.com/echofog/echofog-core/internal/network/handshake"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/require"
@@ -156,7 +158,7 @@ func TestExitPool_FreshLinkTakesStreamsOldLinksRetireWhenIdle(t *testing.T) {
 	require.Equal(t, int32(1), primary.opened.Load())
 
 	fresh := newFakeMuxConn(ctx, 1)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true}, nil))
 	require.Equal(t, 2, p.LinkCount(), "the busy primary stays beside the fresh link")
 	require.NoError(t, primary.Context().Err())
 
@@ -189,13 +191,13 @@ func TestExitPool_FullPoolOfBusyLinksRefusesNewLink(t *testing.T) {
 	}
 	open() // on the primary
 	for i := 1; i <= 2; i++ {
-		require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: newFakeMuxConn(ctx, i), IsOut: true, PoolLink: true}))
+		require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: newFakeMuxConn(ctx, i), IsOut: true, PoolLink: true}, nil))
 		open() // on the link just added
 	}
 	require.Equal(t, 3, p.LinkCount())
 
 	rejected := newFakeMuxConn(ctx, 9)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: rejected, IsOut: true, PoolLink: true}),
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: rejected, IsOut: true, PoolLink: true}, nil),
 		"a full, all-busy pool still owns (and closes) the incoming connection")
 	require.Equal(t, 3, p.LinkCount(), "a rejected dial must not add a link")
 	require.Error(t, rejected.Context().Err(), "the rejected connection should be closed")
@@ -227,7 +229,7 @@ func TestExitPool_LinkWithStreamBeingOpenedIsNotRetired(t *testing.T) {
 	<-primary.entered // the stream is being opened on the primary
 
 	fresh := newFakeMuxConn(ctx, 1)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true}, nil))
 	p.retireOldLinks(false)
 	require.NoError(t, primary.Context().Err(), "the link a stream is being opened on must stay")
 
@@ -246,11 +248,11 @@ func TestExitPool_DeadLinkIsPrunedWhileOthersCarryOn(t *testing.T) {
 	keep, err := s.OpenExitStream(ctx, exit) // keeps the primary busy
 	require.NoError(t, err)
 	conn1 := newFakeMuxConn(ctx, 1)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: conn1, IsOut: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: conn1, IsOut: true, PoolLink: true}, nil))
 	keep1, err := s.OpenExitStream(ctx, exit) // keeps conn1 busy
 	require.NoError(t, err)
 	conn2 := newFakeMuxConn(ctx, 2)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: conn2, IsOut: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: conn2, IsOut: true, PoolLink: true}, nil))
 	require.Equal(t, 3, p.LinkCount())
 
 	// Kill the newest link, as a censor throttling a flow to death would: it is pruned and the
@@ -278,7 +280,7 @@ func TestExitPool_OnlyPoolLinksAccumulate(t *testing.T) {
 	// one connection, as the mesh rule says.
 	for _, out := range []bool{true, false} {
 		conn := newFakeMuxConn(ctx, 1)
-		require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: peerID, Conn: conn, IsOut: out}),
+		require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: peerID, Conn: conn, IsOut: out}, nil),
 			"an ordinary connection (out=%v) must not accumulate", out)
 	}
 	require.Equal(t, 1, p.LinkCount())
@@ -288,11 +290,11 @@ func TestExitPool_OnlyPoolLinksAccumulate(t *testing.T) {
 	var pub types.PeerPublicKey
 	pub[0] = 99
 	stranger := types.PeerPubKeyToID(pub)
-	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: stranger, Conn: newFakeMuxConn(ctx, 2), IsOut: false, PoolLink: true}))
+	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: stranger, Conn: newFakeMuxConn(ctx, 2), IsOut: false, PoolLink: true}, nil))
 
 	// Our own pool dial to an exit that is no longer marked (the VPN stopped) is not attached.
 	s.UnmarkExitPeer(peerID)
-	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: peerID, Conn: newFakeMuxConn(ctx, 3), IsOut: true, PoolLink: true}))
+	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: peerID, Conn: newFakeMuxConn(ctx, 3), IsOut: true, PoolLink: true}, nil))
 }
 
 // The exit side: a client announces its rotation dials as pool links, and the exit keeps them beside
@@ -306,7 +308,7 @@ func TestExitPool_ExitKeepsClientPoolLinks(t *testing.T) {
 	defer func() {
 		// At its cap the exit refuses a further link rather than close one the client may be using.
 		extra := newFakeMuxConn(ctx, 99)
-		require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: client, Conn: extra, IsOut: false, PoolLink: true}))
+		require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: client, Conn: extra, IsOut: false, PoolLink: true}, nil))
 		require.Error(t, extra.Context().Err(), "the link over the cap is refused")
 		require.Equal(t, maxInboundPoolLinks, p.LinkCount())
 		require.NoError(t, primary.Context().Err())
@@ -315,7 +317,7 @@ func TestExitPool_ExitKeepsClientPoolLinks(t *testing.T) {
 	links := make([]*fakeMuxConn, 0, maxInboundPoolLinks-1)
 	for i := 1; i < maxInboundPoolLinks; i++ {
 		conn := newFakeMuxConn(ctx, i)
-		require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: client, Conn: conn, IsOut: false, PoolLink: true}),
+		require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: client, Conn: conn, IsOut: false, PoolLink: true}, nil),
 			"inbound pool link %d should attach beside the primary", i)
 		links = append(links, conn)
 	}
@@ -345,13 +347,13 @@ func TestExitPool_CamouflageExitKeepsOnlyRealityLinks(t *testing.T) {
 
 	// A REALITY rotation dial attaches as a pool link.
 	realityConn := newFakeMuxConn(ctx, 1)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: realityConn, IsOut: true, Reality: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: realityConn, IsOut: true, Reality: true, PoolLink: true}, nil))
 	require.Equal(t, 2, p.LinkCount())
 
 	// A noise connection to the same camouflage exit is refused outright and closed — it must never
 	// carry tunnel bytes a censor could flag.
 	noiseConn := newFakeMuxConn(ctx, 2)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: noiseConn, IsOut: true, Reality: false, PoolLink: true}),
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: noiseConn, IsOut: true, Reality: false, PoolLink: true}, nil),
 		"a noise link to a camouflage exit is owned (and closed), never attached")
 	require.Equal(t, 2, p.LinkCount(), "the noise connection must not become a pool link")
 	require.Error(t, noiseConn.Context().Err(), "the noise connection should be closed")
@@ -444,7 +446,7 @@ func TestExitPool_RealityConnReplacesNoisePrimaryForCamouflageExit(t *testing.T)
 	// While the primary is still noise, a REALITY connection is NOT accumulated beside it: it is
 	// handed back to addPeer to replace (upgrade) the primary. tryAttachExitLink returns false.
 	realityConn := newFakeMuxConn(ctx, 1)
-	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: realityConn, IsOut: true, Reality: true, PoolLink: true}),
+	require.False(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: realityConn, IsOut: true, Reality: true, PoolLink: true}, nil),
 		"a REALITY link must replace a noise primary, not sit beside it")
 	require.Equal(t, 1, p.LinkCount(), "no extra link added; the replacement happens in addPeer")
 }
@@ -577,7 +579,7 @@ func TestExitPool_PoolLinkTakesOverWhenPrimaryDies(t *testing.T) {
 	s.MarkExitPeer(exit, 3)
 	go s.watchPeerLinks(p, exit, primary) // what addPeer starts for every peer
 	link := newFakeMuxConn(ctx, 1)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: link, IsOut: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: link, IsOut: true, PoolLink: true}, nil))
 
 	_ = primary.CloseWithError(network.ErrCodeNormalClose, "killed")
 	require.Eventually(t, func() bool {
@@ -607,7 +609,7 @@ func TestExitPool_UnmarkClosesPoolLinks(t *testing.T) {
 	require.NoError(t, err)
 	defer transfer.Close()
 	link := newFakeMuxConn(ctx, 1)
-	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: link, IsOut: true, PoolLink: true}))
+	require.True(t, s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: link, IsOut: true, PoolLink: true}, nil))
 	require.Equal(t, 2, p.LinkCount())
 
 	s.UnmarkExitPeer(exit)
@@ -694,7 +696,7 @@ func TestExitPool_StaleLinkGetsAFreshLinkBeforeANewStream(t *testing.T) {
 	fresh := newFakeMuxConn(ctx, 1)
 	tr := &lateRegisterTransport{}
 	tr.onDial = func(int) {
-		s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true})
+		s.tryAttachExitLink(network.NewConnEvent{PeerID: exit, Conn: fresh, IsOut: true, PoolLink: true}, nil)
 	}
 	s.netTransport = tr
 
@@ -728,4 +730,38 @@ func TestFreshLinkAgeIsJittered(t *testing.T) {
 	if len(seen) < 10 {
 		t.Fatalf("only %d distinct fresh link ages in 100 draws", len(seen))
 	}
+}
+
+// Every inbound pool link takes an admission slot of the client's address. The slot comes back when
+// the link closes, or when it is refused: otherwise each link a client ever opened kept its slot
+// until the exit restarted, and the client's address filled up.
+func TestExitPool_InboundPoolLinkReleasesAdmissionSlot(t *testing.T) {
+	s, ctx := newExitPoolSwarm(t)
+	g := handshake.NewGuard(handshake.GuardConfig{})
+	s.lim.guard.Store(g)
+	p, _ := addPrimaryPeer(ctx, s, 0) // the client's primary, admitted elsewhere
+	client := p.ID()
+	ip := netip.MustParseAddr("203.0.113.7")
+
+	link := newFakeMuxConn(ctx, 1)
+	s.registerConn(network.NewConnEvent{PeerID: client, Conn: link, RemoteIP: ip, PoolLink: true})
+	require.Equal(t, 2, p.LinkCount(), "the pool link is attached")
+	require.Equal(t, 1, g.PeersFrom(ip), "the link holds a slot while it is up")
+
+	link.cancel()
+	require.Eventually(t, func() bool { return g.PeersFrom(ip) == 0 }, 2*time.Second, 10*time.Millisecond,
+		"the slot comes back once the link is gone")
+
+	// a link refused because the pool is full gives its slot back at once
+	for i := 0; i < maxInboundPoolLinks-1; i++ {
+		s.registerConn(network.NewConnEvent{PeerID: client, Conn: newFakeMuxConn(ctx, 10+i), RemoteIP: ip, PoolLink: true})
+	}
+	require.Equal(t, maxInboundPoolLinks, p.LinkCount())
+	before := g.PeersFrom(ip)
+	refused := newFakeMuxConn(ctx, 20)
+	s.registerConn(network.NewConnEvent{PeerID: client, Conn: refused, RemoteIP: ip, PoolLink: true})
+	require.Error(t, refused.Context().Err(), "a full pool refuses the link")
+	p.Close()
+	require.Eventually(t, func() bool { return g.PeersFrom(ip) == 0 }, 2*time.Second, 10*time.Millisecond,
+		"refused and closed links hold no slot (before: %d)", before)
 }

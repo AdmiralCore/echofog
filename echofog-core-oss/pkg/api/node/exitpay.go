@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -267,6 +268,22 @@ type payEnv struct {
 	payVoucher func(ctx context.Context, micro int64, info *exit_gateway.AccountInfo) error
 	// traffic is the proxy's total bytes so far (nil: unknown); it sizes vouchers to the speed
 	traffic func() uint64
+	// advertPrice is the price per MB the exit's signed market advert names (ok false: no advert is
+	// known, as for a hidden exit; nil: never checked). asked is what its account asks now: when
+	// that is more, the advert may be looked up afresh, the exit may have changed its price.
+	advertPrice func(ctx context.Context, asked int64) (price int64, ok bool)
+}
+
+// priceAboveAdvert is why automatic payments stop when the exit's account asks more per MB than
+// its signed advert, or "" when it does not. The account answer is not signed, so an exit (or
+// whoever answers in its name) could raise the price after the user chose it by the advert, and
+// automatic top-ups would drain the daily limit at the new price.
+func priceAboveAdvert(asked, advertised int64, known bool) string {
+	if !known || asked <= advertised {
+		return ""
+	}
+	return fmt.Sprintf("the exit asks %s USDT per GB but advertises %s; automatic payments are paused, pay by hand if you agree",
+		tonwallet.FormatUnits(big.NewInt(asked*1024), 6), tonwallet.FormatUnits(big.NewInt(advertised*1024), 6))
 }
 
 // voucherSizing is how much to buy per voucher and how early, for traffic running at rate
@@ -332,6 +349,11 @@ func decideVoucherAt(info exit_gateway.AccountInfo, set autoPaySettings, spentTo
 func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 	info, err := env.query(ctx)
 	useVault := err == nil && env.vault != nil && env.payVoucher != nil && env.vault(ctx, info)
+	var overpriced string
+	if err == nil && env.advertPrice != nil && info.PricePerMB > 0 {
+		advertised, known := env.advertPrice(ctx, info.PricePerMB)
+		overpriced = priceAboveAdvert(info.PricePerMB, advertised, known)
+	}
 	p.mu.Lock()
 	p.loadLocked()
 	now := p.clock()
@@ -362,6 +384,13 @@ func (p *payState) step(ctx context.Context, env payEnv) time.Duration {
 	dec := decidePayment(*info, p.set, spent, now, p.pendingUntil, p.blockedUntil)
 	if useVault {
 		dec = decideVoucherAt(*info, p.set, spent, now, p.blockedUntil, p.rate)
+	}
+	if overpriced != "" {
+		// never automatically; the user sees why and may pay by hand at the price shown
+		if dec.Action == payNow {
+			dec.Action = payAsk
+		}
+		dec.Reason = overpriced
 	}
 	p.publishLocked(*info, dec, spent, now)
 	p.status.PaysByVault = useVault
@@ -671,6 +700,7 @@ func (n *NodeApi) startPayGuard() {
 			defer c()
 			return n.payByVoucher(pctx, dialer, info, micro)
 		},
+		advertPrice: n.advertPriceOf(relay),
 		traffic: func() uint64 {
 			n.vpn.mu.Lock()
 			defer n.vpn.mu.Unlock()
@@ -687,10 +717,54 @@ func (n *NodeApi) startPayGuard() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(wait):
+			case <-time.After(jittered(wait)):
 			}
 		}
 	}()
+}
+
+// advertRefetchEvery bounds how often a price above the advert sends the client to the DHT for the
+// exit's newest advert.
+const advertRefetchEvery = time.Minute
+
+// advertPriceOf looks up the price the exit relay advertises in the market (payEnv.advertPrice).
+func (n *NodeApi) advertPriceOf(relay string) func(ctx context.Context, asked int64) (int64, bool) {
+	var last time.Time
+	return func(ctx context.Context, asked int64) (int64, bool) {
+		if n.node == nil || n.node.VPNMarket == nil || n.node.VPNMarket.Directory == nil {
+			return 0, false
+		}
+		id, err := n.relayPeerID(relay)
+		if err != nil {
+			return 0, false
+		}
+		dir := n.node.VPNMarket.Directory
+		e, ok := dir.Get(id)
+		if ok && e.Advert.PricePerMB >= asked {
+			return e.Advert.PricePerMB, true
+		}
+		if time.Since(last) >= advertRefetchEvery {
+			last = time.Now()
+			fctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			dir.Fetch(fctx, id)
+			cancel()
+			e, ok = dir.Get(id)
+		}
+		if !ok {
+			return 0, false
+		}
+		return e.Advert.PricePerMB, true
+	}
+}
+
+// guardJitter spreads the guard's rounds: each account query is a new stream with a small request
+// and answer, and one every 2, 3 or 10 s on the dot inside a tunnel is a heartbeat an observer can
+// pick out.
+const guardJitter = 0.3
+
+// jittered is d moved at random by up to guardJitter either way.
+func jittered(d time.Duration) time.Duration {
+	return time.Duration(float64(d) * (1 - guardJitter + 2*guardJitter*rand.Float64()))
 }
 
 func (n *NodeApi) stopPayGuard() {

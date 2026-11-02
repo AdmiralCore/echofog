@@ -9,8 +9,11 @@ package exit_gateway
 // piled up, the exit cashes the latest voucher of each client in one batch.
 //
 // What either side risks: the client, one chunk paid ahead and not served. The exit, what it has
-// not cashed yet from a client who also signed away the same deposit to other exits; it keeps
-// that small by cashing a client early once it owes more than ClaimPolicy.UrgentDelta.
+// not cashed yet from a client who also signed away the same deposit to other exits: a voucher
+// names only the exit's payout address, and the contract shows only what each exit has cashed, so
+// no exit can see what a vault promised to the others. It keeps that small: a vault may owe it at
+// most maxOutstanding (whatever its deposit), and is cashed at once, not at the next round, when
+// it owes ClaimPolicy.UrgentDelta.
 
 import (
 	"context"
@@ -62,6 +65,14 @@ const (
 	vaultLookupBurstAll  = 10
 	vaultEmptyTTL        = 30 * time.Second
 	vaultEmptyRemembered = 4096
+
+	// A vault may owe this exit at most maxOutstandingNano, or maxOutstandingBytes of traffic at the
+	// current price if that is more, before what it signed is cashed: what a client that promised
+	// one deposit to many exits can take from each. A client is cashed early at UrgentDelta, well
+	// below this, so one that pays its way is not refused; the larger traffic figure leaves room
+	// for the 1 GB vouchers a fast client buys from an expensive exit.
+	maxOutstandingNano  = 200_000_000 // 0.2 TON
+	maxOutstandingBytes = 4 << 30
 )
 
 var (
@@ -174,6 +185,11 @@ type VoucherBook struct {
 	lookups   *ratelimit.Keyed[string] // chain lookups of unknown vaults, per pay tag
 	lookupAll *ratelimit.Bucket        // ... for the whole exit
 
+	// urgent is ClaimPolicy.UrgentDelta of the running claim loop (nil: none runs); a voucher
+	// that brings a vault's debt to it wakes the loop through kick instead of waiting for the tick
+	urgent *big.Int
+	kick   chan struct{}
+
 	// claimProblem says why the last claim round could not cash what is owed ("" when fine);
 	// the operator sees it in the stats, the app on its sharing card
 	claimProblem string
@@ -212,6 +228,7 @@ func (b *VoucherBook) noteClaimResult(problem string) (warn bool) {
 // address, the one vouchers must name.
 func NewVoucherBook(path string, globalID int32, node *address.Address, chain VaultChain) *VoucherBook {
 	b := &VoucherBook{globalID: globalID, node: node, chain: chain, path: path, now: time.Now, checking: map[string]bool{},
+		kick:      make(chan struct{}, 1),
 		empty:     map[string]time.Time{},
 		lookups:   ratelimit.NewKeyed[string](vaultLookupRate, vaultLookupBurst, vaultEmptyRemembered),
 		lookupAll: ratelimit.NewBucket(vaultLookupRateAll, vaultLookupBurstAll)}
@@ -279,6 +296,25 @@ func (a *voucherAccount) overdraft() int64 {
 		return 0
 	}
 	return VoucherOverdraftBytes
+}
+
+// moveTag binds the vault bound to pay tag from to tag to instead: a client's vault follows it to
+// its new pay tag. A vault already bound to to stays.
+func (b *VoucherBook) moveTag(from, to string) {
+	if from == to {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	vault, ok := b.data.Peers[from]
+	if !ok {
+		return
+	}
+	delete(b.data.Peers, from)
+	if _, bound := b.data.Peers[to]; !bound {
+		b.data.Peers[to] = vault
+	}
+	b.dirty = true
 }
 
 // Available is the voucher-paid bytes tag can still use, its overdraft included.
@@ -498,6 +534,11 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	if owed.Cmp(deposit) > 0 {
 		return VoucherReply{Error: fmt.Sprintf("%v: the deposit is too small for this voucher, top it up", ErrVaultUnusable), Credit: a.Credit, Cumulative: a.Cumulative}
 	}
+	// ... and not more than we risk on one vault before cashing it (see maxOutstandingNano)
+	if owed.Cmp(outstandingCap(price)) > 0 {
+		b.kickLocked()
+		return VoucherReply{Error: fmt.Sprintf("%v: the exit is cashing your earlier vouchers, try again in a few minutes", ErrVaultUnusable), Credit: a.Credit, Cumulative: a.Cumulative}
+	}
 
 	delta := new(big.Int).Sub(sv.Cumulative, prev)
 	bought := new(big.Int).Mul(delta, big.NewInt(bytesPerMB))
@@ -513,7 +554,28 @@ func (b *VoucherBook) Accept(ctx context.Context, tag string, o VoucherOffer) Vo
 	b.data.Peers[tag] = key
 	b.dirty = true
 	_ = b.flushLocked() // a signed voucher is money: never leave it to the timer
+	if b.urgent != nil && owed.Cmp(b.urgent) >= 0 {
+		b.kickLocked()
+	}
 	return reply()
+}
+
+// outstandingCap is the most a vault may owe this exit at nanoPerMB (see maxOutstandingNano).
+func outstandingCap(nanoPerMB int64) *big.Int {
+	c := big.NewInt(maxOutstandingBytes / bytesPerMB)
+	c.Mul(c, big.NewInt(nanoPerMB))
+	if c.Cmp(big.NewInt(maxOutstandingNano)) < 0 {
+		c.SetInt64(maxOutstandingNano)
+	}
+	return c
+}
+
+// kickLocked wakes the claim loop for an early round. Called with b.mu held.
+func (b *VoucherBook) kickLocked() {
+	select {
+	case b.kick <- struct{}{}:
+	default:
+	}
 }
 
 // knownEmpty: an unknown vault was found empty a moment ago. A failed read is not remembered:
@@ -564,7 +626,7 @@ func (e *ExitService) HandleVoucherFrom(ctx context.Context, st FramedStream, pa
 		reply.Error = "malformed offer"
 	default:
 		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		reply = book.Accept(cctx, PayTag(peer, self), o)
+		reply = book.Accept(cctx, e.payTag(peer, self, nil, book), o)
 		cancel()
 	}
 	raw, err := json.Marshal(reply)
@@ -753,6 +815,9 @@ func (b *VoucherBook) ClaimOnce(ctx context.Context, p ClaimPolicy) (int, error)
 
 // RunClaims cashes vouchers in the background until ctx ends.
 func (b *VoucherBook) RunClaims(ctx context.Context, p ClaimPolicy) {
+	b.mu.Lock()
+	b.urgent = p.UrgentDelta
+	b.mu.Unlock()
 	t := time.NewTicker(p.Tick)
 	defer t.Stop()
 	for {
@@ -760,11 +825,19 @@ func (b *VoucherBook) RunClaims(ctx context.Context, p ClaimPolicy) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-b.kick: // a vault owes UrgentDelta: cash it now, not up to a tick later
 		}
 		n, err := b.ClaimOnce(ctx, p)
 		b.reportClaim(err)
 		if n > 0 {
 			slog.Debug("voucher claims sent", "count", n)
+			// read the result as soon as it has settled, not a tick later: until then the claimed
+			// vaults look as indebted as before and their next vouchers may hit maxOutstanding
+			time.AfterFunc(claimSettle+time.Second, func() {
+				b.mu.Lock()
+				b.kickLocked()
+				b.mu.Unlock()
+			})
 		}
 	}
 }

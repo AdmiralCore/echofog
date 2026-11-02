@@ -21,9 +21,12 @@ const (
 
 	frameSize     = 16 * 1024
 	maxBurstBytes = 12 * 1024 * 1024
-	maxBurstTime  = 2 * time.Second
-	ackTimeout    = 4 * time.Second
-	headerSize    = 1 + 8
+	// serveBurstBytes caps a burst sent on another peer's request: its 9-byte request must not buy
+	// more than this. Our own upload bursts (Measure) may use maxBurstBytes; we pay for those.
+	serveBurstBytes = 4 * 1024 * 1024
+	maxBurstTime    = 2 * time.Second
+	ackTimeout      = 4 * time.Second
+	headerSize      = 1 + 8
 
 	// After the end marker, wait for data frames still in flight: until none has arrived for
 	// endSettle, and never longer than endSettleMax.
@@ -37,18 +40,25 @@ const (
 )
 
 // Limits bound what answering other peers' download probes costs this node. A peer ID is free, so
-// the per-peer interval alone bounds nothing: the node-wide budget is what holds.
+// the per-peer interval alone bounds little: the gate (SetGate), the per-address interval and the
+// node-wide budget are what hold.
 type Limits struct {
 	Serve          bool          // answer download probe requests at all
 	PerPeerEvery   time.Duration // at most one burst per peer this often
+	PerIPEvery     time.Duration // at most one burst per peer address this often
 	MaxConcurrent  int           // bursts in flight at once, node-wide
 	BytesPerMinute int64         // burst bytes per minute, node-wide
 }
 
-// DefaultLimits answers probes: one burst per peer every 5 s, two at a time, 48 MB a minute.
+// DefaultLimits answers probes: one 4 MB burst per peer every 30 s and per address every 10 s, two
+// at a time, 16 MB a minute. A probe is a check a person asks for, so this costs a client nothing.
 func DefaultLimits() Limits {
-	return Limits{Serve: true, PerPeerEvery: 5 * time.Second, MaxConcurrent: 2, BytesPerMinute: 4 * maxBurstBytes}
+	return Limits{Serve: true, PerPeerEvery: 30 * time.Second, PerIPEvery: 10 * time.Second, MaxConcurrent: 2, BytesPerMinute: 4 * serveBurstBytes}
 }
+
+// Gate says whether a peer may have a download burst at all, and the address its interval is
+// counted under. An exit lets in only the clients it serves that opened a tunnel lately.
+type Gate func(peer types.PeerID) (addr string, ok bool)
 
 var (
 	ErrNoPeers     = errors.New("no connected peers to measure against")
@@ -72,7 +82,9 @@ type Prober struct {
 
 	mu        sync.Mutex
 	limits    Limits
+	gate      Gate // nil: no peer gets a burst
 	lastReq   map[types.PeerID]time.Time
+	lastIP    map[string]time.Time
 	serving   int       // bursts in flight for other peers
 	tokens    float64   // burst bytes the node-wide budget has left
 	refilled  time.Time // when tokens were last topped up
@@ -89,7 +101,7 @@ type ackResult struct {
 }
 
 func New(tr Transport) *Prober {
-	p := &Prober{lastReq: make(map[types.PeerID]time.Time), tr: tr, rx: make(map[[8]byte]*rxState), waiting: make(map[[8]byte]chan ackResult)}
+	p := &Prober{lastReq: make(map[types.PeerID]time.Time), lastIP: make(map[string]time.Time), tr: tr, rx: make(map[[8]byte]*rxState), waiting: make(map[[8]byte]chan ackResult)}
 	p.limits = DefaultLimits()
 	p.tokens = float64(p.limits.BytesPerMinute)
 	p.refilled = time.Now()
@@ -109,6 +121,14 @@ func (p *Prober) SetLimits(l Limits) {
 	}
 }
 
+// SetGate sets who may ask this node for a download burst (see Gate). Until it is set, nobody may:
+// a 9-byte request for a burst of megabytes is not for any peer that happens to be connected.
+func (p *Prober) SetGate(g Gate) {
+	p.mu.Lock()
+	p.gate = g
+	p.mu.Unlock()
+}
+
 // Limits returns the limits on answering other peers' probes.
 func (p *Prober) Limits() Limits {
 	p.mu.Lock()
@@ -118,12 +138,16 @@ func (p *Prober) Limits() Limits {
 
 // admitLocked decides whether a download probe request gets a burst and reserves a whole burst of
 // the node-wide budget for it; served gives back what was not sent. Caller holds p.mu.
-func (p *Prober) admitLocked(from types.PeerID, now time.Time) bool {
+// The caller has asked the gate already: addr is where from is.
+func (p *Prober) admitLocked(from types.PeerID, addr string, now time.Time) bool {
 	l := p.limits
-	if !l.Serve || l.MaxConcurrent <= 0 || l.BytesPerMinute < maxBurstBytes {
+	if !l.Serve || l.MaxConcurrent <= 0 || l.BytesPerMinute < serveBurstBytes {
 		return false
 	}
 	if last, ok := p.lastReq[from]; ok && now.Sub(last) < l.PerPeerEvery {
+		return false
+	}
+	if last, ok := p.lastIP[addr]; ok && addr != "" && now.Sub(last) < l.PerIPEvery {
 		return false
 	}
 	if p.serving >= l.MaxConcurrent {
@@ -131,30 +155,40 @@ func (p *Prober) admitLocked(from types.PeerID, now time.Time) bool {
 	}
 	p.tokens = min(p.tokens+now.Sub(p.refilled).Seconds()*float64(l.BytesPerMinute)/60, float64(l.BytesPerMinute))
 	p.refilled = now
-	if p.tokens < maxBurstBytes {
+	if p.tokens < serveBurstBytes {
 		return false
 	}
-	if _, ok := p.lastReq[from]; !ok && len(p.lastReq) >= maxTrackedPeers {
-		for id, t := range p.lastReq {
-			if now.Sub(t) >= l.PerPeerEvery {
-				delete(p.lastReq, id)
-			}
-		}
-		if len(p.lastReq) >= maxTrackedPeers {
-			return false
-		}
+	if !makeRoom(p.lastReq, from, now, l.PerPeerEvery) || (addr != "" && !makeRoom(p.lastIP, addr, now, l.PerIPEvery)) {
+		return false
 	}
 	p.lastReq[from] = now
-	p.tokens -= maxBurstBytes
+	if addr != "" {
+		p.lastIP[addr] = now
+	}
+	p.tokens -= serveBurstBytes
 	p.serving++
 	return true
+}
+
+// makeRoom keeps an interval table bounded: a new key gets in only while the table is under
+// maxTrackedPeers, after the entries past their interval are dropped.
+func makeRoom[K comparable](m map[K]time.Time, key K, now time.Time, every time.Duration) bool {
+	if _, ok := m[key]; ok || len(m) < maxTrackedPeers {
+		return true
+	}
+	for k, t := range m {
+		if now.Sub(t) >= every {
+			delete(m, k)
+		}
+	}
+	return len(m) < maxTrackedPeers
 }
 
 // served ends a burst admitted by admitLocked, returning the bytes it did not send to the budget.
 func (p *Prober) served(sent int) {
 	p.mu.Lock()
 	p.serving--
-	if unsent := maxBurstBytes - sent; unsent > 0 {
+	if unsent := serveBurstBytes - sent; unsent > 0 {
 		p.tokens = min(p.tokens+float64(unsent), float64(p.limits.BytesPerMinute))
 	}
 	p.mu.Unlock()
@@ -185,11 +219,21 @@ func (p *Prober) handle(payload []byte, from types.PeerID) error {
 
 	case kindReq:
 		p.mu.Lock()
-		allowed := p.admitLocked(from, time.Now())
+		gate := p.gate
+		p.mu.Unlock()
+		if gate == nil {
+			return nil
+		}
+		addr, ok := gate(from)
+		if !ok {
+			return nil
+		}
+		p.mu.Lock()
+		allowed := p.admitLocked(from, addr, time.Now())
 		p.mu.Unlock()
 		if allowed {
 			go func() {
-				sent, err := p.burstN(context.Background(), from, id)
+				sent, err := p.burstN(context.Background(), from, id, serveBurstBytes)
 				p.served(sent)
 				if err != nil {
 					slog.Debug("bandwidth probe: could not send the burst", "err", err)
@@ -303,12 +347,12 @@ func (p *Prober) MeasureBest(ctx context.Context, peers []types.PeerID, maxPeers
 
 // burst sends the data frames and the end marker for one probe id
 func (p *Prober) burst(ctx context.Context, peer types.PeerID, id [8]byte) error {
-	_, err := p.burstN(ctx, peer, id)
+	_, err := p.burstN(ctx, peer, id, maxBurstBytes)
 	return err
 }
 
-// burstN is burst that also returns how many data bytes went out.
-func (p *Prober) burstN(ctx context.Context, peer types.PeerID, id [8]byte) (int, error) {
+// burstN is burst of at most limit bytes that also returns how many data bytes went out.
+func (p *Prober) burstN(ctx context.Context, peer types.PeerID, id [8]byte, limit int) (int, error) {
 	frame := make([]byte, frameSize)
 	frame[0] = kindData
 	copy(frame[1:headerSize], id[:])
@@ -316,7 +360,7 @@ func (p *Prober) burstN(ctx context.Context, peer types.PeerID, id [8]byte) (int
 
 	start := time.Now()
 	sent := 0
-	for ; sent < maxBurstBytes && time.Since(start) < maxBurstTime; sent += len(frame) {
+	for ; sent < limit && time.Since(start) < maxBurstTime; sent += len(frame) {
 		if err := ctx.Err(); err != nil {
 			return sent, err
 		}
