@@ -987,7 +987,9 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 
 // countLayers stamps a marked packet of a local stream with the counts of its layers (videolayer
 // Mark.L0, L1), as this node numbers the units: the packetizer cannot know which of its packets
-// become units. It returns the packet to seal, a copy when stamped, and its layer.
+// become units. It returns the packet to seal, a copy when stamped, and its layer. The counts go
+// up with the unit seq only while one goroutine sends a stream's units (the capture's pacer):
+// BroadcastLocalVideo must not be called for one stream from two at once.
 func (d *MediaDispatcher) countLayers(streamID string, seq uint32, pkt []byte) ([]byte, unitLayer) {
 	m, off, ok := videolayer.Find(pkt)
 	if !ok {

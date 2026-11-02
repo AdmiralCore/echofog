@@ -614,3 +614,32 @@ func TestLayers_FiltersStartOverWithANewFeeder(t *testing.T) {
 	assert.False(t, f.started, "a new feeder: the filter starts over")
 	assert.Equal(t, capBase, f.want, "the cap the call layer set stays")
 }
+
+// A gap whose frames say more packets are missing than can be tracked is not built candidate by
+// candidate (a broadcaster's marks could ask for 2 x 65535 of them per unit): it is all lost at once.
+func TestLayers_AHugeGapIsNotBuiltOneByOne(t *testing.T) {
+	mk := func(idx, count, l0 uint16, frame uint32) unitLayer {
+		return unitLayer{marked: true, mark: videolayer.Mark{TID: 0, Index: idx, Count: count, L0: l0, L1: l0}, frame: frame, cap: capBase}
+	}
+	// the last frame says 3999 packets of it are still to come, the next one that 3000 came before
+	last := mk(0, 4000, 1, 1000)
+	c, e := layerGap(1000, last, 11000, mk(3000, 4000, 7001, 8000))
+	assert.LessOrEqual(t, len(c), maxTrackedGap+1, "at most what can be tracked")
+	assert.Greater(t, len(c), maxTrackedGap, "and then it counts as lost")
+	assert.Equal(t, 6999, e)
+}
+
+// The layer counts of a local stream go when the stream has sent nothing marked for a while.
+func TestLayers_LayerCountsOfAnEndedStreamGo(t *testing.T) {
+	b, _, _, _, _, _ := layerTree(t)
+	for _, p := range layeredFrames(t, 2) {
+		require.NoError(t, b.BroadcastLocalVideo("s1", p))
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	require.NotNil(t, b.layerCount["s1"])
+	b.gcLayersLocked(time.Now())
+	require.NotNil(t, b.layerCount["s1"], "a live stream keeps its counts")
+	b.gcLayersLocked(time.Now().Add(31 * time.Second))
+	assert.Nil(t, b.layerCount["s1"], "an ended stream's counts are gone")
+}

@@ -113,16 +113,41 @@ func (m Mark) sane() bool { return m.Count > 0 && m.Count <= MaxFrameUnits && m.
 // packet carries none (an encoder without layers, the webview's camera, an older sender) or one
 // that is not sane: such a packet goes as an unmarked one.
 func Find(pkt []byte) (m Mark, off int, ok bool) {
-	if len(pkt) < 12 || pkt[0]>>6 != 2 || pkt[0]&0x10 == 0 {
+	off, ok = element(pkt)
+	if !ok {
 		return Mark{}, 0, false
+	}
+	if m = parse(pkt[off : off+DataLen]); !m.sane() {
+		return Mark{}, 0, false
+	}
+	return m, off, true
+}
+
+// Strip returns pkt without an element that looks like the mark (ID ExtensionID, DataLen long),
+// for a packet whose mark is not to be trusted: the webview's capture, which nothing of ours marks.
+// The element becomes padding in a copy; a packet without one comes back as it is.
+func Strip(pkt []byte) []byte {
+	off, ok := element(pkt)
+	if !ok {
+		return pkt
+	}
+	out := append([]byte(nil), pkt...)
+	clear(out[off-1 : off+DataLen])
+	return out
+}
+
+// element finds the data of the mark's element in an RTP packet's one-byte header extension.
+func element(pkt []byte) (off int, ok bool) {
+	if len(pkt) < 12 || pkt[0]>>6 != 2 || pkt[0]&0x10 == 0 {
+		return 0, false
 	}
 	p := 12 + 4*int(pkt[0]&0x0f)
 	if len(pkt) < p+4 || binary.BigEndian.Uint16(pkt[p:p+2]) != profileOneByte {
-		return Mark{}, 0, false
+		return 0, false
 	}
 	end := p + 4 + 4*int(binary.BigEndian.Uint16(pkt[p+2:p+4]))
 	if end > len(pkt) {
-		return Mark{}, 0, false
+		return 0, false
 	}
 	for i := p + 4; i < end; {
 		id, n := pkt[i]>>4, int(pkt[i]&0x0f)+1
@@ -131,20 +156,17 @@ func Find(pkt []byte) (m Mark, off int, ok bool) {
 			i++
 			continue
 		case id == 15:
-			return Mark{}, 0, false
+			return 0, false
 		}
 		if i+1+n > end {
-			return Mark{}, 0, false
+			return 0, false
 		}
 		if id == ExtensionID && n == DataLen {
-			if m := parse(pkt[i+1 : i+1+n]); m.sane() {
-				return m, i + 1, true
-			}
-			return Mark{}, 0, false
+			return i + 1, true
 		}
 		i += 1 + n
 	}
-	return Mark{}, 0, false
+	return 0, false
 }
 
 // SetCounts writes L0 and L1 into the mark at off (from Find), in place.

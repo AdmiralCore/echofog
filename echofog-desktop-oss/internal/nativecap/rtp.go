@@ -54,6 +54,7 @@ func hasIDR(au []byte) bool {
 // mode 1 the bridge negotiates (SPS and PPS go out as one STAP-A, large NAL units as FU-A). With
 // layered set, every packet carries the frame's temporal-layer mark (videolayer).
 type packetizer struct {
+	mu      sync.Mutex // frame: the encoder being replaced may still let out frames as the new one starts
 	mtu     int
 	ssrc    uint32
 	seq     uint16
@@ -63,6 +64,17 @@ type packetizer struct {
 
 func newPacketizer(mtu int) *packetizer {
 	return &packetizer{mtu: mtu, ssrc: rand.Uint32(), seq: uint16(rand.Uint32())}
+}
+
+// frame packs one access unit, marked with its layer l when layered, and hands its packets to out,
+// all under the packetizer's lock: the encoder's goroutine calls it, and while a change of level
+// replaces the encoder, the old one's last frames and the new one's first may come at once. Their
+// packets then still get sequence numbers of their own, in the order they reach out.
+func (p *packetizer) frame(layered bool, au []byte, ts uint32, l frameLayer, key bool, out func([][]byte)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.layered = layered
+	out(p.packets(au, ts, l, key))
 }
 
 // packets returns the marshaled packets of one access unit with the RTP timestamp ts (90 kHz),

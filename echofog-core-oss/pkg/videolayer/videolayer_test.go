@@ -92,3 +92,36 @@ func TestFindRefusesAnInsaneMark(t *testing.T) {
 		}
 	}
 }
+
+// Strip blanks an element that looks like the mark, whatever it says, and keeps the rest of the
+// packet and its other elements.
+func TestStripRemovesTheMark(t *testing.T) {
+	mid := []byte{'0'}
+	for _, m := range []Mark{{TID: 2, Index: 0, Count: 3}, {TID: 0, Index: 9, Count: 2}} {
+		b := marked(t, m, map[uint8][]byte{1: mid})
+		out := Strip(b)
+		if _, _, ok := Find(out); ok {
+			t.Fatal("the mark survived")
+		}
+		if _, ok := element(out); ok {
+			t.Fatal("an element with the mark's ID survived")
+		}
+		var p rtp.Packet
+		if err := p.Unmarshal(out); err != nil {
+			t.Fatalf("a stripped packet must still parse: %v", err)
+		}
+		if got := p.Header.GetExtension(1); string(got) != string(mid) {
+			t.Fatalf("another element was lost: %q", got)
+		}
+		if string(p.Payload) != string([]byte{0x65, 1, 2, 3}) {
+			t.Fatal("the payload changed")
+		}
+		if _, _, ok := Find(b); ok != (m.Index < m.Count) {
+			t.Fatal("Strip must not change its input")
+		}
+	}
+	plain := []byte{0x80, 112, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0x65}
+	if out := Strip(plain); &out[0] != &plain[0] {
+		t.Fatal("a packet without a mark is not copied")
+	}
+}

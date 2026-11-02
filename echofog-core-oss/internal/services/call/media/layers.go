@@ -391,7 +391,8 @@ func layerGap(lastSeq uint32, last unitLayer, seq uint32, u unitLayer) (cands []
 	if int(last.mark.Count) > int(last.mark.Index) {
 		tail = int(last.mark.Count) - int(last.mark.Index) - 1
 	}
-	if tail+head > n || m != tail+head {
+	// more than can be tracked (the caller then takes it all as lost): not built one by one
+	if tail+head > n || m != tail+head || tail+head > maxTrackedGap {
 		out, _ := all()
 		return out, m
 	}
@@ -444,6 +445,12 @@ func (d *MediaDispatcher) gcLayersLocked(now time.Time) {
 	for k := range d.lastLayer {
 		if !live(k.streamID) {
 			delete(d.lastLayer, k)
+		}
+	}
+	// the layer counts of a local stream that ended: it sends no marked unit any more
+	for id := range d.layerCount {
+		if !live(id) {
+			delete(d.layerCount, id)
 		}
 	}
 	for id, t := range d.layerTop {
