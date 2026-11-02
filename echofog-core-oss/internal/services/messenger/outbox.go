@@ -29,6 +29,10 @@ const (
 	// halfOpenAfter: retries of a message the peer took directly but never confirmed, after which a
 	// copy also goes to its mailbox (audit F7)
 	halfOpenAfter = 2
+	// relayPerFlush: messages handed to relays in one flush. A relay takes 60 at once from one
+	// sender (then 20 a second) and drops the rest without a word, while the sender counts them as
+	// taken; what is over goes at the next tick, 3 s later.
+	relayPerFlush = 40
 )
 
 // What a message of ours is waiting for, as the chat shows it.
@@ -225,9 +229,12 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 		prefix = outboxFolder(s.kv, target)
 		force = true
 	}
-	sent := 0
+	sent, relayed := 0, 0
 	now := time.Now()
 	for _, e := range s.outboxEntries(prefix) {
+		if relayed >= relayPerFlush {
+			break
+		}
 		var it outboxItem
 		if json.Unmarshal(e.Value, &it) != nil {
 			_ = s.kv.Delete(e.Key)
@@ -271,6 +278,9 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 		}
 		if ok, direct := deliver(it.Target, &msg); ok {
 			sent++
+			if !direct {
+				relayed++
+			}
 			if direct && it.Sent && !it.Relayed && it.Attempts >= halfOpenAfter {
 				// it went to the peer directly before and no receipt came back: the link may be
 				// half-open (the peer is gone and the transport has not noticed yet), so a copy also
