@@ -12,11 +12,13 @@ ssh root@<server IP>
 ```
 
 ```bash
-curl -fsSL https://get.docker.com | sh
+curl -fsSL https://get.docker.com | sudo sh
 ```
 
-If you log in as a regular user instead of root, add yourself to the `docker` group and log in
-again: `sudo usermod -aG docker "$USER"`.
+The commands that need root carry `sudo`, so they work for root and for a regular user alike (Google
+Cloud and many other providers log you in as one). A regular user then adds themselves to the
+`docker` group and logs in again, so the `docker compose` commands below run without `sudo`:
+`sudo usermod -aG docker "$USER"`.
 
 ## 2. Open the port
 
@@ -24,12 +26,13 @@ The node uses one port for UDP (QUIC) and TCP (the fallback for networks that bl
 compose file publishes it as **443**. If the server runs `ufw`:
 
 ```bash
-ufw allow 443/udp && ufw allow 443/tcp
+sudo ufw allow 443/udp && sudo ufw allow 443/tcp
 ```
 
 If your provider has its own firewall in the control panel, open UDP and TCP 443 there too. **UDP
 443 is the one that matters**: QUIC, which carries almost all traffic, runs over it, and cloud
-firewalls usually only have TCP open. On Google Cloud:
+firewalls usually only have TCP open. On Google Cloud, where `ufw` is usually off and the cloud
+firewall decides (run it in Cloud Shell or wherever `gcloud` is set up):
 
 ```bash
 gcloud compute firewall-rules create echofog --allow udp:443,tcp:443
