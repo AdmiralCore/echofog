@@ -238,6 +238,15 @@ overflows), and gets back up only once the path has stayed clear for a couple of
 near the rate the trouble began at. Viewers hold frames for a tenth of a second before showing
 them, so frames that cross relays unevenly still play evenly.
 
+The broadcaster's queue only shows its own link. So every quarter second each viewer also tells its
+parent in the stream's tree how much of the stream it had to ask for again, how far the packets
+queue up on the way (each one carries the time it left, and the lowest delay of the last seconds
+stands for the empty path), and how much arrives; a relay passes up the worst of its subtree. The
+broadcaster's rate control takes the worst of the viewers as it takes its own queue: a little loss
+or queueing stops the climb, more of it cuts the rate, down to what actually reaches that viewer.
+Sound has no time for a resend, so every piece of it goes twice on each hop, the second time with
+the next piece, 20 ms later.
+
 On Windows the app captures the screen itself rather than through the built-in browser, which
 copies every frame through system memory and holds itself to half a processor core: screens shared
 that way stayed at 30-50 fps. EchoFog takes the frames from Windows.Graphics.Capture, scales and
