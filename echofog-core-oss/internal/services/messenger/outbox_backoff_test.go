@@ -15,7 +15,7 @@ import (
 // cost a relay request a minute for a week.
 func TestRelayedMessageWithoutReceiptBacksOff(t *testing.T) {
 	sends := 0
-	s := outboxBroker(t, func(types.PeerID, *internal_pb.MessageData) (bool, bool) {
+	s := outboxBroker(t, func(types.PeerID, string, *internal_pb.MessageData) (bool, bool) {
 		sends++
 		return true, false // a relay took it
 	})

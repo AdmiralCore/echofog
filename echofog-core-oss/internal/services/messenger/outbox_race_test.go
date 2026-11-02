@@ -2,6 +2,7 @@ package messenger
 
 import (
 	"testing"
+	"time"
 
 	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -13,14 +14,17 @@ func TestReceiptDuringFlushIsNotUndone(t *testing.T) {
 	var s *MessageBroker
 	var peer types.PeerID
 	peer[0] = 7
-	s = outboxBroker(t, func(types.PeerID, *internal_pb.MessageData) (bool, bool) {
-		s.confirm(peer, "m1") // the receipt arrives meanwhile
+	confirmed := make(chan struct{})
+	s = outboxBroker(t, func(types.PeerID, string, *internal_pb.MessageData) (bool, bool) {
+		go func() { s.confirm(peer, "m1"); close(confirmed) }() // the receipt arrives meanwhile
+		time.Sleep(20 * time.Millisecond)
 		return true, true
 	})
 	if err := s.trackVia(peer, "m1", &internal_pb.MessageData{MessageId: []byte{1}}, []byte("inner"), false, false); err != nil {
 		t.Fatal(err)
 	}
 	s.FlushOutbox(peer)
+	<-confirmed
 	if st := s.PendingStates(peer); len(st) != 0 {
 		t.Fatalf("a confirmed message is back in the outbox: %v", st)
 	}

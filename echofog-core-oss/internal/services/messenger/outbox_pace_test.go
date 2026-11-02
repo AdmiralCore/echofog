@@ -12,7 +12,7 @@ import (
 // one sender hands it over its burst (60) without telling, so a flush must stay under it.
 func TestFlushStaysUnderTheRelayBurst(t *testing.T) {
 	sends := 0
-	s := outboxBroker(t, func(types.PeerID, *internal_pb.MessageData) (bool, bool) {
+	s := outboxBroker(t, func(types.PeerID, string, *internal_pb.MessageData) (bool, bool) {
 		sends++
 		return true, false
 	})

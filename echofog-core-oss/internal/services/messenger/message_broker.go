@@ -57,8 +57,10 @@ type MessageBroker struct {
 	stateRunning    bool            // a goroutine is telling them
 	recent          *recentMessages // which message a ratchet header carried, to confirm repeats
 	// deliverFn replaces deliverVia for the outbox (tests: no swarm needed)
-	deliverFn func(types.PeerID, *internal_pb.MessageData) (ok, direct bool)
-	outboxMu  sync.Mutex // a receipt's delete and a retry's write-back of the same message
+	deliverFn func(target types.PeerID, outboxID string, msg *internal_pb.MessageData) (ok, direct bool)
+	relayMu   sync.Mutex
+	relayWait map[string]relayWait // relay request id (hex) -> the outbox message it carries
+	outboxMu  sync.Mutex           // a receipt's delete and a retry's write-back of the same message
 
 	myIDHexed string
 }
@@ -262,17 +264,27 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 	}
 
 	var delivered, direct bool
+	if !opts.noTrack {
+		// until the message is in the outbox: a relay's answer to the send waits for it
+		s.outboxMu.Lock()
+	}
 	if opts.DirectOnly {
 		delivered = s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg) == nil
 		direct = delivered
 	} else {
-		delivered, direct = s.deliverVia(targetID, msg)
+		trackID := innerMsg.Id
+		if opts.noTrack {
+			trackID = ""
+		}
+		delivered, direct = s.deliverVia(targetID, trackID, msg)
 	}
 	if !opts.noTrack {
 		// keep it until the recipient confirms (a retry follows if it never does)
 		if err := s.trackVia(targetID, innerMsg.Id, msg, innerBytes, delivered, delivered && !direct); err != nil && !delivered {
+			s.outboxMu.Unlock()
 			return "", "", fmt.Errorf("could not send or queue the message: %w", err)
 		}
+		s.outboxMu.Unlock()
 	}
 	state := StateSent
 	if delivered && !direct {
@@ -302,13 +314,14 @@ func (s *MessageBroker) sendWithTier(targetID types.PeerID, text string, tier En
 }
 
 // deliverVia hands msg to the peer directly or through a relay and reports whether somebody took it
-// and whether that was the peer itself (direct) or a relay.
-func (s *MessageBroker) deliverVia(targetID types.PeerID, msg *internal_pb.MessageData) (ok, direct bool) {
+// and whether that was the peer itself (direct) or a relay. outboxID names the outbox message it
+// is (empty: not kept), so that the relay's answer reaches it.
+func (s *MessageBroker) deliverVia(targetID types.PeerID, outboxID string, msg *internal_pb.MessageData) (ok, direct bool) {
 	if err := s.sw.SendDataForPeer(targetID, net_types.TypeChatMessage, msg); err == nil {
 		s.log.Info("MessageBroker: message sent to the peer directly", "peer", targetID.String()[:8])
 		return true, true
 	}
-	return s.sendViaRelay(targetID, msg) == nil, false
+	return s.sendViaRelay(targetID, msg, outboxID) == nil, false
 }
 
 // HasRelay reports whether one of the peers we are connected to carries messages for others (a
@@ -322,7 +335,7 @@ func (s *MessageBroker) HasRelay() bool {
 	return false
 }
 
-func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.MessageData) error {
+func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.MessageData, outboxID string) error {
 	env, err := s.sw.SignMessageData(msg)
 	if err != nil {
 		return err
@@ -400,6 +413,9 @@ func (s *MessageBroker) sendViaRelay(targetID types.PeerID, msg *internal_pb.Mes
 	for _, p := range append(try, full...) {
 		if err := p.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
 			s.log.Info("MessageBroker: message handed to a relay", "peer", targetID.String()[:8], "relay", p.ID().String()[:8])
+			if outboxID != "" {
+				s.awaitRelay(relayMsg.MessageId, targetID, outboxID)
+			}
 			return nil
 		}
 	}

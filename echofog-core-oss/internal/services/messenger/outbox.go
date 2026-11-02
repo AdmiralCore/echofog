@@ -50,15 +50,18 @@ const (
 )
 
 type outboxItem struct {
-	ID       string       `json:"id"` // the inner message id, shown as "pending" in the chat
-	Target   types.PeerID `json:"target"`
-	Data     []byte       `json:"data,omitempty"`    // marshalled MessageData
-	Intent   []byte       `json:"intent,omitempty"`  // not encrypted yet: the inner message, waiting for keys
-	Sent     bool         `json:"sent,omitempty"`    // the recipient or a relay took it at least once
-	Relayed  bool         `json:"relayed,omitempty"` // a relay took it, the recipient's device not yet
-	Created  int64        `json:"created"`
-	Attempts int          `json:"attempts"`
-	Next     int64        `json:"next"` // unix nano: do not retry before
+	ID      string       `json:"id"` // the inner message id, shown as "pending" in the chat
+	Target  types.PeerID `json:"target"`
+	Data    []byte       `json:"data,omitempty"`    // marshalled MessageData
+	Intent  []byte       `json:"intent,omitempty"`  // not encrypted yet: the inner message, waiting for keys
+	Sent    bool         `json:"sent,omitempty"`    // the recipient or a relay took it at least once
+	Relayed bool         `json:"relayed,omitempty"` // a relay took it, the recipient's device not yet
+	// RelayKept: the relay answered that it keeps the message for the recipient, or passed it on.
+	// It is then not sent again through relays every hour, only as a rare fallback.
+	RelayKept bool  `json:"relay_kept,omitempty"`
+	Created   int64 `json:"created"`
+	Attempts  int   `json:"attempts"`
+	Next      int64 `json:"next"` // unix nano: do not retry before
 }
 
 // outboxKey sorts by time, so that what was written first is sent first (group changes depend on
@@ -187,6 +190,7 @@ func (s *MessageBroker) forgetCiphertexts(target types.PeerID) {
 			continue
 		}
 		it.Data = nil
+		it.RelayKept = false
 		it.Next = time.Now().UnixNano()
 		s.rewrite(e.Key, it)
 	}
@@ -217,6 +221,13 @@ func (s *MessageBroker) rewrite(key []byte, it outboxItem) {
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 	if s.kv.Exists(key) {
+		_ = s.kv.Set(key, raw)
+	}
+}
+
+// writeLocked stores a waiting message; the caller holds outboxMu and saw it still waiting.
+func (s *MessageBroker) writeLocked(key []byte, it outboxItem) {
+	if raw, err := json.Marshal(it); err == nil {
 		_ = s.kv.Set(key, raw)
 	}
 }
@@ -276,7 +287,15 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 		if s.deliverFn != nil {
 			deliver = s.deliverFn
 		}
-		if ok, direct := deliver(it.Target, &msg); ok {
+		// held from the send until the write: a receipt or a relay's answer that comes back
+		// meanwhile waits for it, and then finds the message as this attempt left it
+		s.outboxMu.Lock()
+		if !s.kv.Exists(e.Key) {
+			s.outboxMu.Unlock()
+			continue // confirmed meanwhile
+		}
+		it.RelayKept = false // this attempt waits for its own answer
+		if ok, direct := deliver(it.Target, it.ID, &msg); ok {
 			sent++
 			if !direct {
 				relayed++
@@ -285,7 +304,7 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 				// it went to the peer directly before and no receipt came back: the link may be
 				// half-open (the peer is gone and the transport has not noticed yet), so a copy also
 				// goes to the peer's mailbox; the peer drops whichever arrives second
-				_ = s.sendViaRelay(it.Target, &msg)
+				_ = s.sendViaRelay(it.Target, &msg, it.ID)
 			}
 			switch {
 			case !it.Sent:
@@ -304,7 +323,8 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 			pause = relayedBackoff(it.Attempts - 1)
 		}
 		it.Next = now.Add(pause).UnixNano()
-		s.rewrite(e.Key, it)
+		s.writeLocked(e.Key, it)
+		s.outboxMu.Unlock()
 	}
 	if sent > 0 {
 		s.log.Info("MessageBroker: sent queued messages", "count", sent)

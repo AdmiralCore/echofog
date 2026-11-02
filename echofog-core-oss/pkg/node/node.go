@@ -641,6 +641,9 @@ func (n *Node) Start() (err error) {
 		// route messages through a configured private relay even though it does not advertise itself
 		n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
 		n.Messenger.SetRelayFullCheck(n.RelayClient.IsFull)
+		n.RelayClient.OnRelayAck(func(relay types.PeerID, reqID []byte, status, _ byte) {
+			n.Messenger.HandleRelayAck(relay, reqID, status == routing.RelayAckStored || status == routing.RelayAckForwarded)
+		})
 	}
 	if !n.isolated() {
 		n.dialConfiguredRelays()

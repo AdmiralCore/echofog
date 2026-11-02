@@ -64,6 +64,7 @@ type RelayServer struct {
 
 	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
 	fullReply *ratelimit.Keyed[types.PeerID] // "mailbox full" answers per peer
+	ackReply  *ratelimit.Keyed[types.PeerID] // relay acknowledgements per peer
 
 	logMu      sync.Mutex
 	logLast    map[string]time.Time
@@ -181,6 +182,7 @@ func NewRelayServer(s *swarm.Swarm, mailbox *messenger.MailboxManager, logger *s
 		connectedAt: make(map[types.PeerID]time.Time),
 		reqLimit:    ratelimit.NewKeyed[types.PeerID](relayReqRate, relayReqBurst, limiterPeers),
 		fullReply:   ratelimit.NewKeyed[types.PeerID](fullReplyRate, fullReplyBurst, limiterPeers),
+		ackReply:    ratelimit.NewKeyed[types.PeerID](ackReplyRate, ackReplyBurst, limiterPeers),
 		logLast:     make(map[string]time.Time),
 		logSkipped:  make(map[string]int),
 	}
@@ -270,6 +272,7 @@ func (rs *RelayServer) reapLoop(ctx context.Context) {
 			rs.reapIdleCircuits(lim.idle, lim.idleBytes)
 			rs.reqLimit.Prune()
 			rs.fullReply.Prune()
+			rs.ackReply.Prune()
 		}
 	}
 }
@@ -700,6 +703,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	if targetID != selfID && (oErr != nil || originID == (types.PeerID{})) {
 		rs.refusedMsgs.Add(1)
 		rs.warnLimited("relay request with no authenticated origin", "from", fromPeer.String()[:8])
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedNoOrigin)
 		return
 	}
 
@@ -710,11 +714,13 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		// not a relay: nothing is passed on or kept for others. Clients that know pick relays
 		// by what peers announce; this is for older ones.
 		rs.refusedMsgs.Add(1)
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedNotRelay)
 		return
 	}
 	if targetID != selfID && !rs.servesPeer(originID) {
 		// a private relay does not pass on or keep messages for peers it was not told to serve
 		rs.accessRefused.Add(1)
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedPrivate)
 		return
 	}
 	rs.logger.Debug("RelayServer: received relay message",
@@ -743,6 +749,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	if !rs.reqLimit.Allow(originID, 1) {
 		rs.refusedMsgs.Add(1)
 		rs.warnLimited("relay requests from one origin too fast", "origin", originID.String()[:8])
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedRate)
 		return
 	}
 
@@ -759,6 +766,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 				if !peer.HeardWithin(relayHeardFresh) && rs.mailbox != nil {
 					rs.keepUnlessAnswered(mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope))
 				}
+				rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
 				return
 			}
 		}
@@ -770,6 +778,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		if reason := rs.mailboxRefuses(targetID, len(req.ForwardedEnvelope)); reason != nil {
 			rs.refusedMsgs.Add(1)
 			rs.replyMailboxFull(fromPeer, selfID)
+			rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedMailbox)
 			rs.logger.Debug("RelayServer: mailbox would refuse, dropped early", "err", reason, "target", targetID.String()[:8])
 			return
 		}
@@ -804,6 +813,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 					"next", nextPeerID.String()[:8], "target", targetID.String()[:8])
 				forwarded = true
 				rs.forwarded.Add(1)
+				rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
 				break
 			}
 		}
@@ -814,13 +824,17 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		item := mailboxItemOf(msg, targetID, originID, req.ForwardedEnvelope)
 		if err = rs.mailbox.Store(item); err == nil {
 			rs.stored.Add(1)
+			rs.ack(fromPeer, msg.MessageId, RelayAckStored, 0)
 			rs.logger.Debug("RelayServer: saved message to offline Mailbox",
 				"target", targetID.String()[:8], "msgID", item.ID)
 		} else {
 			rs.logger.Debug("RelayServer: failed to store in mailbox", "err", err, "target", targetID.String()[:8])
 			// Send network error back to sender peer so it searches for another relay via DHT!
 			rs.replyMailboxFull(fromPeer, selfID)
+			rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedMailbox)
 		}
+	} else if !forwarded {
+		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedMailbox) // no mailbox here
 	}
 }
 

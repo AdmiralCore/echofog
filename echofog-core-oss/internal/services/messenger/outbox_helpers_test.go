@@ -12,7 +12,7 @@ import (
 )
 
 // outboxBroker is a broker with nothing but its outbox: deliver stands in for the swarm.
-func outboxBroker(t *testing.T, deliver func(types.PeerID, *internal_pb.MessageData) (bool, bool)) *MessageBroker {
+func outboxBroker(t *testing.T, deliver func(types.PeerID, string, *internal_pb.MessageData) (bool, bool)) *MessageBroker {
 	t.Helper()
 	db := testutil.NewTestingBadgerStorage(t)
 	t.Cleanup(db.CloseAndClear)
