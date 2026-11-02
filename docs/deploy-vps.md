@@ -111,6 +111,48 @@ Check that it is healthy:
 docker compose -f deploy/docker-compose.yml ps
 ```
 
+## 5. Check that people can reach it
+
+A running container does not mean anyone can connect. A few minutes after the start, check two
+things, then try the node from an app.
+
+**The node has its disguise.** The app does not connect to a server in another country that has no
+cover site: the only way to it would be bare noise, which a censor flags. Such a node is useless to
+almost everyone; an exit still shows in the app's list, but connecting to it says it has no disguise
+yet. Look at the join address:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec node echofog-node status
+```
+
+It must carry `sni=`: `<IP>:443/<peer id>?sni=<site>&srv=1`. So must the link from `invite`. If it
+does not, or the log has an `ANTI-DPI` warning
+(`docker compose -f deploy/docker-compose.yml logs node | grep ANTI-DPI`), set the site up now, as
+[TCP fallback](#tcp-fallback) explains: `camouflage`, the two lines into `.env`, `up -d`. Do not
+wait for the node to find one: on cloud VMs (Google Cloud, AWS) the first search often finds
+nothing.
+
+**The port is open from outside.** Check from your own computer, not from the server:
+
+```bash
+nc -vz <server IP> 443
+```
+
+On Windows, in PowerShell: `Test-NetConnection <server IP> -Port 443`.
+
+- It connects: TCP 443 is open and the node listens on it.
+- `Connection refused` ("actively refused"): the firewall lets it through, but the node does not
+  listen on TCP yet, because it has no cover site (see above).
+- It hangs and times out: a firewall drops it, usually the provider's (step 2).
+
+UDP 443, which carries almost all traffic, cannot be checked like this; the app checks it.
+
+**From the app.** On a computer in another network than the server: **Settings → Bootstrap nodes**,
+paste the join address, **Add and connect**. Within a minute it shows `connected`. For an exit, also
+try **Proxy → Specific node** with the address or link, then **Connect**. If it stays
+`not connected` although the address has `sni=` and TCP answers, UDP 443 is closed in the
+provider's firewall.
+
 ## Sharing the connection as an exit
 
 To let people (or just your own devices) browse through this server, set in `deploy/.env`:
@@ -178,8 +220,9 @@ need a domain for this. The node finds such a site by itself: first among the 20
 side of its own, at start-up; if none fits, it searches the whole `/24` and the `/24`s next to it in
 the background (at most every 12 hours, slowly, since hosters dislike port scans). It only takes a
 site with a publicly trusted certificate for a real domain that answers TLS 1.3 exactly like the
-node does. Until it has one it runs on UDP only and logs an `ANTI-DPI` warning; it turns TCP on by
-itself once it finds one.
+node does. Until it has one it runs on UDP only and logs an `ANTI-DPI` warning, and, more
+important, apps in other countries do not connect to it at all (step 5). It turns TCP on by itself
+once it finds one.
 
 To see the sites at once, or to choose one yourself, run in `deploy/`:
 

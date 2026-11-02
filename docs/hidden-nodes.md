@@ -169,10 +169,12 @@ step 3: Docker is installed, the port is open (UDP and TCP 443), and you have `d
    Give out either. `invite --app` prints only the `echofog://` one, for scripts. The node also prints
    both in the log at start (`Invite link:`), and `pass` prints both for a pass.
 
-   People whose network blocks UDP need the TCP fallback. It comes on by itself once the node has
-   found a real site next to it to imitate; until then the node runs on UDP only. To have it at once,
-   set the site yourself (`ECHOFOG_TLS_SERVER_NAME`, `ECHOFOG_CAMOUFLAGE_ADDR`): see
-   [TCP fallback](deploy-vps.md#tcp-fallback). UDP alone is enough for most people.
+   The link must carry `sni=`, the site the node imitates. Without it the app does not connect to a
+   server in another country at all (it would be bare noise), and people whose network blocks UDP
+   would need TCP, which also comes on only with the site. The node finds a site by itself, but on
+   cloud VMs often not at once: set it yourself (`ECHOFOG_TLS_SERVER_NAME`,
+   `ECHOFOG_CAMOUFLAGE_ADDR`, see [TCP fallback](deploy-vps.md#tcp-fallback)) and take the link
+   again.
 
 5. Check it from your own computer: paste the link into **Proxy → Specific node** and connect.
    Then, on the server, see who came in:

@@ -265,6 +265,11 @@ user's node over noise: users dial servers. `anti_dpi.allow_noise_to_servers` sw
 for people who run their own servers without a cover site, from a network that does not censor.
 Addresses typed in by hand (`ConnectToPeer`) are the user's own choice and are dialed as given.
 
+For whoever runs a server this means: until the node has a cover site, apps in other countries do
+not connect to it, invitation links included, and an exit in the app's list says it has no
+disguise yet. Check that the node's address carries `sni=` and that it is reachable from outside:
+[Check that people can reach it](deploy-vps.md#5-check-that-people-can-reach-it).
+
 ### Guards: a user's node keeps few links across the border
 
 A user's node does not build a mesh of its own across a censoring border: every link it dials there
