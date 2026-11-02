@@ -244,8 +244,11 @@ queue up on the way (each one carries the time it left, and the lowest delay of 
 stands for the empty path), and how much arrives; a relay passes up the worst of its subtree. The
 broadcaster's rate control takes the worst of the viewers as it takes its own queue: a little loss
 or queueing stops the climb, more of it cuts the rate, down to what actually reaches that viewer.
-Sound has no time for a resend, so every piece of it goes twice on each hop, the second time with
-the next piece, 20 ms later.
+A viewer whose path is in trouble again and again while
+another viewer's is clean is weak: its trouble is its own. The coordinator hangs it at the bottom
+of the tree, where it feeds nobody, the rate follows the other viewers, and its keyframe requests
+go on once in five seconds; it gets what its link lets through. Sound has no time for a resend,
+so every piece of it goes twice on each hop, the second time with the next piece, 20 ms later.
 
 On Windows the app captures the screen itself rather than through the built-in browser, which
 copies every frame through system memory and holds itself to half a processor core: screens shared
