@@ -187,36 +187,43 @@ func (s *Swarm) registrationLoop(ch <-chan network.NewConnEvent) {
 				return
 			}
 
-			if s.CheckOnBan(event.PeerID) {
-				_ = event.Conn.CloseWithError(0x01, "banned")
-				continue
-			}
-
-			var release func()
-			if !event.IsOut {
-				r, err := s.admitInbound(event)
-				if err != nil {
-					s.log().Debug("Swarm: inbound peer refused", "peer", event.PeerID.String(), "addr", event.RemoteIP.String(), "reason", err)
-					_ = event.Conn.CloseWithError(network.ErrCodeSpamDetected, "limited")
-					continue
-				}
-				release = r
-			}
-
-			// An exit peer running a parallel session pool keeps several concurrent connections:
-			// attach this one as an extra link alongside the existing primary instead of
-			// replacing it. Returns true only when it took ownership of the connection.
-			if s.tryAttachExitLink(event) {
-				continue
-			}
-
-			p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release, event.Reality, event.Caps)
-			if p == nil {
-				continue // duplicate connection, already closed
-			}
-			go p.transport.StartLoops()
+			s.registerConn(event)
 		}
 	}
+}
+
+// registerConn admits one authenticated connection: an inbound one takes an admission slot of its
+// address, then it either joins an exit pool as an extra link or becomes (or replaces) the peer's
+// connection. The slot is released when that connection is gone, whichever way it went.
+func (s *Swarm) registerConn(event network.NewConnEvent) {
+	if s.CheckOnBan(event.PeerID) {
+		_ = event.Conn.CloseWithError(0x01, "banned")
+		return
+	}
+
+	release := func() {}
+	if !event.IsOut {
+		r, err := s.admitInbound(event)
+		if err != nil {
+			s.log().Debug("Swarm: inbound peer refused", "peer", event.PeerID.String(), "addr", event.RemoteIP.String(), "reason", err)
+			_ = event.Conn.CloseWithError(network.ErrCodeSpamDetected, "limited")
+			return
+		}
+		release = r
+	}
+
+	// An exit peer running a parallel session pool keeps several concurrent connections:
+	// attach this one as an extra link alongside the existing primary instead of
+	// replacing it. Returns true only when it took ownership of the connection (and of release).
+	if s.tryAttachExitLink(event, release) {
+		return
+	}
+
+	p := s.addPeer(event.PeerPubKey, event.PeerID, event.Conn, event.Addr, event.IsOut, event.Dialable, event.RemoteIP, release, event.Reality, event.Caps)
+	if p == nil {
+		return // duplicate connection, already closed
+	}
+	go p.transport.StartLoops()
 }
 
 // Close shuts the swarm down: it cancels the context and closes every peer connection.
