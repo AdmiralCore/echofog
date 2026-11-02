@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -44,6 +45,53 @@ type ClientCircuit struct {
 	// retired: SwitchCircuit replaced it. It still delivers, but answers no ping, so the far end,
 	// which probes the circuit it sends over, finds it quiet and follows the new one.
 	retired atomic.Bool
+	// proven: an inbound circuit carried a fresh envelope signed by RemotePeerID. The origin in
+	// an open notice is only the relay's word; until the far end proves it, the circuit may not
+	// take over a route through another relay (see mayTakeRoute).
+	proven atomic.Bool
+}
+
+// proofMaxAge is how far the timestamp of an envelope that proves a circuit's origin may be from
+// now. It keeps a relay from proving a fake circuit with an envelope it captured long ago.
+const proofMaxAge = time.Minute
+
+// mayTakeRoute: circuit c may replace old as the route to their peer. A circuit through the
+// relay that already carries the route gives that relay nothing new; a circuit through another
+// relay must first prove its origin. Otherwise any connected peer could announce a circuit "from"
+// somebody whose route went quiet for a moment and take their traffic, files and call frames.
+// A route that cannot be taken over still gives way: it dies after circuitDeadAfter of probes,
+// and the next send opens a circuit of our own.
+func mayTakeRoute(c, old *ClientCircuit) bool {
+	return old == nil || c.RelayPeerID == old.RelayPeerID || c.proven.Load()
+}
+
+// noteProof marks c proven when env, which came over it, is signed by c's origin and is fresh.
+func noteProof(c *ClientCircuit, env *internal_pb.Envelope, now time.Time) {
+	if c.proven.Load() || len(env.PubKey) != ed25519.PublicKeySize || len(env.Signature) != ed25519.SignatureSize {
+		return
+	}
+	if types.PeerPubKeyToID(types.PeerPublicKey(env.PubKey)) != c.RemotePeerID {
+		return
+	}
+	if !ed25519.Verify(env.PubKey, env.Data, env.Signature) {
+		return
+	}
+	var md internal_pb.MessageData
+	if err := proto.Unmarshal(env.Data, &md); err != nil {
+		return
+	}
+	// senders stamp seconds or nanoseconds
+	ts := int64(md.Timestamp)
+	var at time.Time
+	if ts > 1e12 {
+		at = time.Unix(0, ts)
+	} else {
+		at = time.Unix(ts, 0)
+	}
+	if d := now.Sub(at); d > proofMaxAge || d < -proofMaxAge {
+		return
+	}
+	c.proven.Store(true)
 }
 
 // notePong folds in the round trip of the ping a pong answers. The pong carries nothing to match,
@@ -658,14 +706,15 @@ func (rc *RelayClient) handleInboundCircuitOpen(payload []byte, relayPeer types.
 	// one: an inbound open must never overwrite an existing route (that would let anyone who can
 	// reach us hijack where our traffic or hole-punch signals to that peer go).
 	// A route that has gone quiet is the exception: the peer opening a new circuit to us is the
-	// sign the old one died on its side, and keeping it would send our traffic nowhere.
+	// sign the old one died on its side, and keeping it would send our traffic nowhere. That holds
+	// only through the same relay; through another one the circuit must prove its origin first.
 	if cc.SignalOnly {
 		if _, exists := rc.signalCircuit[originID]; !exists {
 			rc.signalCircuit[originID] = cid // not for traffic
 		}
 	} else {
 		old, exists := rc.peerToCircuit[originID]
-		if oc := rc.circuits[old]; !exists || oc == nil || oc.stale(cc.CreatedAt) {
+		if oc := rc.circuits[old]; !exists || oc == nil || (oc.stale(cc.CreatedAt) && mayTakeRoute(cc, oc)) {
 			rc.peerToCircuit[originID] = cid
 		}
 	}
@@ -795,6 +844,15 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	now := time.Now()
 	circuit.lastRecv.Store(now.UnixNano())
 	circuit.probeSince.Store(0)
+	var innerEnv *internal_pb.Envelope
+	if innerMsgType == net_types.TypeChatMessage {
+		innerEnv = &internal_pb.Envelope{}
+		if err := proto.Unmarshal(innerData, innerEnv); err != nil {
+			innerEnv = nil
+		} else {
+			noteProof(circuit, innerEnv, now)
+		}
+	}
 	if !circuit.SignalOnly {
 		rc.followLiveCircuit(cid, circuit, now)
 	}
@@ -821,11 +879,8 @@ func (rc *RelayClient) handleCircuitData(payload []byte, fromPeer types.PeerID) 
 	// to the transport peer (the relay), never to the circuit's claimed origin: the Dispatcher
 	// verifies the envelope signature and that its OriginId is the signer, so the sender's identity
 	// comes from the signed envelope, not from anything the circuit asserts.
-	if innerMsgType == net_types.TypeChatMessage && !rc.swarm.Drops(net_types.TypeChatMessage) {
-		var innerEnv internal_pb.Envelope
-		if err := proto.Unmarshal(innerData, &innerEnv); err == nil {
-			rc.swarm.GetDispatcher().PushMessage(&innerEnv, fromPeer)
-		}
+	if innerEnv != nil && rc.swarm != nil && !rc.swarm.Drops(net_types.TypeChatMessage) {
+		rc.swarm.GetDispatcher().PushMessage(innerEnv, fromPeer)
 	}
 }
 
@@ -837,7 +892,7 @@ func (rc *RelayClient) followLiveCircuit(cid uint32, c *ClientCircuit, now time.
 	cur, ok := rc.peerToCircuit[c.RemotePeerID]
 	oc := rc.circuits[cur]
 	rc.mu.RUnlock()
-	if ok && (cur == cid || (oc != nil && !oc.stale(now))) {
+	if ok && (cur == cid || (oc != nil && (!oc.stale(now) || !mayTakeRoute(c, oc)))) {
 		return
 	}
 	rc.mu.Lock()

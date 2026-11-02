@@ -1,12 +1,15 @@
 package routing
 
 import (
+	"crypto/ed25519"
 	"encoding/binary"
 	"testing"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
+	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/pkg/api/types"
+	"google.golang.org/protobuf/proto"
 )
 
 // inboundOpen builds the [cid][origin:32] notification a relay sends to announce an inbound circuit.
@@ -318,5 +321,55 @@ func TestClientCircuit_RoundTripFromPongs(t *testing.T) {
 	c.notePong(now.Add(40 * time.Millisecond))
 	if c.RTT() != 70*time.Millisecond {
 		t.Fatalf("later answers are smoothed (80*3+40)/4, got %v", c.RTT())
+	}
+}
+
+// Another connected peer announcing a circuit "from" Bob cannot take Bob's route when it goes
+// quiet, neither by the open nor by sending frames over it, until a fresh envelope signed by
+// Bob comes over that circuit. Through the relay that carries the route it may (tested above).
+func TestRelayClient_QuietRouteIsNotHijackedThroughAnotherRelay(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	realRelay, attacker := mkID(0x20), mkID(0x66)
+	bobPub, bobPriv, _ := ed25519.GenerateKey(nil)
+	bob := types.PeerPubKeyToID(types.PeerPublicKey(bobPub))
+
+	const oldCID = 1001
+	rc.mu.Lock()
+	rc.circuits[oldCID] = &ClientCircuit{ID: oldCID, RelayPeerID: realRelay, RemotePeerID: bob,
+		CreatedAt: time.Now().Add(-time.Minute)}
+	rc.circuits[oldCID].lastRecv.Store(time.Now().Add(-circuitStaleAfter - time.Second).UnixNano())
+	rc.peerToCircuit[bob] = oldCID
+	rc.mu.Unlock()
+
+	rc.handleInboundCircuitOpen(inboundOpen(2002, bob), attacker)
+	if cid, _ := rc.CircuitTo(bob); cid != oldCID {
+		t.Fatalf("an open through another relay took Bob's quiet route: %d", cid)
+	}
+	frame := func(mt net_types.MessageType, data []byte) []byte {
+		b := make([]byte, 5, 5+len(data))
+		binary.BigEndian.PutUint32(b[:4], 2002)
+		b[4] = byte(mt)
+		return append(b, data...)
+	}
+	rc.handleCircuitData(frame(net_types.TypeHolePunch, nil), attacker)
+	if cid, _ := rc.CircuitTo(bob); cid != oldCID {
+		t.Fatalf("frames over the attacker's circuit took Bob's quiet route: %d", cid)
+	}
+
+	envelope := func(priv ed25519.PrivateKey, ts time.Time) []byte {
+		data, _ := proto.Marshal(&internal_pb.MessageData{OriginId: bob[:], Timestamp: uint64(ts.Unix())})
+		env, _ := proto.Marshal(&internal_pb.Envelope{PubKey: priv.Public().(ed25519.PublicKey), Data: data,
+			Signature: ed25519.Sign(priv, data)})
+		return env
+	}
+	// an old envelope of Bob's, replayed, proves nothing
+	rc.handleCircuitData(frame(net_types.TypeChatMessage, envelope(bobPriv, time.Now().Add(-time.Hour))), attacker)
+	if cid, _ := rc.CircuitTo(bob); cid != oldCID {
+		t.Fatalf("a stale envelope proved the circuit: %d", cid)
+	}
+	// a fresh one, signed by Bob, does: Bob really moved to this relay
+	rc.handleCircuitData(frame(net_types.TypeChatMessage, envelope(bobPriv, time.Now())), attacker)
+	if cid, _ := rc.CircuitTo(bob); cid != 2002 {
+		t.Fatalf("a circuit proven by Bob should take the quiet route, got %d", cid)
 	}
 }
