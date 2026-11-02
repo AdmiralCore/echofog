@@ -77,6 +77,18 @@ func backoff(n int) time.Duration {
 	return time.Minute
 }
 
+// relayedBackoff is the pause for a message a relay took and the recipient has not confirmed:
+// the relay hands it over when the recipient comes (and the recipient connecting to us sends it at
+// once), so after the first few tries it goes again only every hour instead of every minute — a
+// recipient gone for good cost a relay request a minute per message for a week.
+func relayedBackoff(n int) time.Duration {
+	steps := []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second, 45 * time.Second, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute}
+	if n < len(steps) {
+		return steps[n]
+	}
+	return time.Hour
+}
+
 // track keeps msg until target confirms it. delivered says the first attempt already went out.
 func (s *MessageBroker) track(target types.PeerID, id string, msg *internal_pb.MessageData, inner []byte, delivered bool) error {
 	return s.trackVia(target, id, msg, inner, delivered, false)
@@ -277,7 +289,11 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 			s.wantConnection(it.Target)
 		}
 		it.Attempts++
-		it.Next = now.Add(backoff(it.Attempts - 1)).UnixNano()
+		pause := backoff(it.Attempts - 1)
+		if it.Relayed {
+			pause = relayedBackoff(it.Attempts - 1)
+		}
+		it.Next = now.Add(pause).UnixNano()
 		s.rewrite(e.Key, it)
 	}
 	if sent > 0 {
