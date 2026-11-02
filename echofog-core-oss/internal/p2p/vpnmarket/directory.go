@@ -291,6 +291,14 @@ func (d *Directory) TopNeighbors() []string {
 	return out
 }
 
+// Fetch looks up the newest advert of one exit in the DHT and takes it in if it is newer than the
+// one held (a withdrawal drops the exit). It gives up when ctx ends.
+func (d *Directory) Fetch(ctx context.Context, peer types.PeerID) {
+	for _, a := range d.lookupAll(ctx, []types.PeerID{peer}) {
+		d.accept(a)
+	}
+}
+
 // Get returns one live exit
 func (d *Directory) Get(peer types.PeerID) (Entry, bool) {
 	for _, e := range d.List() {
