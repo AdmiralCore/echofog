@@ -26,7 +26,7 @@ const (
 	kemCurrentKey = "kem:current"
 	kemOldPrefix  = "kem:old:"
 	// kemSinceKey holds when this account first offered a KEM prekey (unix seconds, not secret):
-	// every bundle it signed since then carries one.
+	// every bundle it signed since then carries one. It never lies in the future (see noteSinceLocked).
 	kemSinceKey = "kem:since"
 
 	kemSealedLen = 8 + mlkem.SeedSize
@@ -60,6 +60,9 @@ func (am *AccountManager) KEMPreKey() ([]byte, error) {
 	am.purgeOld()
 	am.kemMu.Lock()
 	defer am.kemMu.Unlock()
+	if err := am.noteSinceLocked(time.Now()); err != nil {
+		return nil, err
+	}
 
 	name := []byte(kemCurrentKey)
 	if data, err := am.storage.Get(name); err == nil {
@@ -95,18 +98,21 @@ func (am *AccountManager) KEMPreKey() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// the date first: a bundle carrying the new key must never be older than it
-	if !am.storage.Exists([]byte(kemSinceKey)) {
-		since := make([]byte, 8)
-		binary.BigEndian.PutUint64(since, uint64(time.Now().Unix()))
-		if err := am.storage.Set([]byte(kemSinceKey), since); err != nil {
-			return nil, err
-		}
-	}
 	if err := am.storage.Set(name, sealed); err != nil {
 		return nil, err
 	}
 	return dk.EncapsulationKey().Bytes(), nil
+}
+
+// noteSinceLocked sets kem:since to now when it is not set yet (a KEM prekey is about to be offered:
+// the date goes first, so a bundle with the key is never older than it) or lies after now. A clock
+// that ran ahead when the first KEM prekey was made (say, in 2030) would otherwise leave every later
+// bundle "older" than our first KEM prekey for good; corrected, it only moves back. am.kemMu is held.
+func (am *AccountManager) noteSinceLocked(now time.Time) error {
+	if since := am.KEMSince(); since != 0 && since <= now.Unix() {
+		return nil
+	}
+	return am.storage.Set([]byte(kemSinceKey), binary.BigEndian.AppendUint64(nil, uint64(now.Unix())))
 }
 
 // KEMSince is when this account first offered a KEM prekey (unix seconds), 0 if it never did. A

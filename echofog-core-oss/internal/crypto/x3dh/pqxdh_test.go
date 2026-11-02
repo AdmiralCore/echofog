@@ -2,6 +2,7 @@ package x3dh
 
 import (
 	"crypto/mlkem"
+	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
@@ -184,10 +185,40 @@ func TestStrippedKEMPreKeyIsDetected(t *testing.T) {
 		t.Fatalf("want ErrPQDowngrade, got %v", err)
 	}
 
-	// a bundle Bob signed before he had a KEM prekey (an upgrade since): classic is right
-	_, init = initTo(t, alice, stripped)
-	init.BundleCreatedAt = bob.acc.KEMSince() - 1
-	opens(t, bob, init, alice.bundle)
+}
+
+// Bob upgraded after he signed a classic bundle, and that bundle is still valid (30 days): an
+// attacker who kept it (or Alice's cache) hands it to Alice, who never saw a PQ bundle of Bob's.
+// Her init is honestly classic and names the old bundle's time, but she is on PQXDH and so is Bob:
+// he refuses, and the reset that follows makes her fetch his fresh bundle. A node of v0.2.0, whose
+// init names no bundle time and whose card has no KEM prekey, still gets its classic session.
+func TestReplayedPreUpgradeBundleIsRefused(t *testing.T) {
+	defer memguard.Purge()
+	alice, bob := newParty(t, 1), newParty(t, 1)
+	old := classicView(bob.bundle)
+	// Bob's first KEM prekey came after this bundle was signed
+	bob.st.data["kem:since"] = binary.BigEndian.AppendUint64(nil, uint64(old.CreatedAt+1))
+	if err := keymanager.VerifyBundle(old); err != nil {
+		t.Fatal(err)
+	}
+	_, init := initTo(t, alice, old)
+	if init.KEMCiphertext != nil || init.BundleCreatedAt >= bob.acc.KEMSince() {
+		t.Fatal("a classic init naming a bundle older than Bob's KEM prekey")
+	}
+	if _, _, err := bob.engine.Accept(init, *alice.bundle); !errors.Is(err, ErrPQDowngrade) {
+		t.Fatalf("a replayed pre-upgrade bundle between two PQ nodes: want ErrPQDowngrade, got %v", err)
+	}
+	// the card alone tells too, whatever the init says of the bundle time
+	_, init = initTo(t, alice, old)
+	init.BundleCreatedAt = 0
+	if _, _, err := bob.engine.Accept(init, *alice.bundle); !errors.Is(err, ErrPQDowngrade) {
+		t.Fatalf("a classic init with a PQ card: want ErrPQDowngrade, got %v", err)
+	}
+
+	v020 := oldParty(t)
+	_, init = initTo(t, v020, old)
+	init.BundleCreatedAt = 0
+	opens(t, bob, init, v020.bundle)
 }
 
 func TestTamperedKEMInitIsRejected(t *testing.T) {
@@ -205,10 +236,10 @@ func TestTamperedKEMInitIsRejected(t *testing.T) {
 		"KEM part gone": {func(i *types.X3DHInit) {
 			i.KEMCiphertext, i.KEMKeyID = nil, nil
 		}, ErrPQDowngrade},
-		// made to look like an init of v0.2.0: the classic key is not the PQXDH one
+		// made to look like an init of v0.2.0: the sender's card still has a KEM prekey
 		"KEM part and bundle time gone": {func(i *types.X3DHInit) {
 			i.KEMCiphertext, i.KEMKeyID, i.BundleCreatedAt = nil, nil, 0
-		}, ErrInitRejected},
+		}, ErrPQDowngrade},
 		"ciphertext of another session": {func(i *types.X3DHInit) {
 			_, other := initTo(t, newParty(t, 0), bob.bundle)
 			i.KEMCiphertext = other.KEMCiphertext

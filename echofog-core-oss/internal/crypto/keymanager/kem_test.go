@@ -186,3 +186,29 @@ func TestKEMSinceIsReadFromStorage(t *testing.T) {
 		t.Fatal("a known KEMSince is not overwritten")
 	}
 }
+
+// A clock that ran ahead when the first KEM prekey was made must not leave kem:since in the future:
+// it comes back to the present with the next bundle, and only ever moves back.
+func TestKEMSinceFromAClockAheadIsCorrected(t *testing.T) {
+	defer memguard.Purge()
+	acc, st := testAccount(t)
+	if _, err := acc.KEMPreKey(); err != nil {
+		t.Fatal(err)
+	}
+	ahead := time.Now().AddDate(4, 0, 0).Unix()
+	st.data[kemSinceKey] = binary.BigEndian.AppendUint64(nil, uint64(ahead))
+	b, err := acc.CreateMyBundle(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	since := acc.KEMSince()
+	if since == 0 || since > b.CreatedAt {
+		t.Fatalf("kem:since %d after the bundle (%d) that carries a KEM prekey", since, b.CreatedAt)
+	}
+	if _, err := acc.KEMPreKey(); err != nil {
+		t.Fatal(err)
+	}
+	if acc.KEMSince() != since {
+		t.Fatal("a corrected kem:since must stay put")
+	}
+}

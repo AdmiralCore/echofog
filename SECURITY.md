@@ -98,8 +98,10 @@ On 2 November:
 - **Messages recorded now, read later with a quantum computer.** Relays and mailboxes may hold a
   message for up to 7 days, and anyone can record traffic. The first key agreement of a one-to-one
   chat is now post-quantum hybrid (PQXDH with ML-KEM-768, as in Signal), so reading a recorded chat
-  takes breaking both X25519 and ML-KEM. Chats with apps of version 0.2.0 stay classic. Stripping
-  the new key from a key bundle on the way is detected and does not force a classic session.
+  takes breaking both X25519 and ML-KEM. Chats with apps of version 0.2.0 stay classic. Between two
+  apps that both have it, a classic session is refused whatever key bundle it was started from: one
+  stripped of the new key on the way, or an old bundle signed before the update (replayed by
+  someone who kept it, or still in a cache). The sender then fetches a fresh bundle.
 
 ## Known limitations (still open)
 
@@ -270,8 +272,10 @@ EchoFog — **экспериментальный** проект.
   ящики могут держать сообщение до 7 дней, а записать трафик может кто угодно. Первое согласование
   ключей в личном чате теперь постквантовый гибрид (PQXDH с ML-KEM-768, как у Signal), так что для
   чтения записанной переписки придётся взломать и X25519, и ML-KEM. Чаты с приложениями версии 0.2.0
-  остаются классическими. Если по дороге убрать новый ключ из набора ключей, это заметят, и
-  классическую сессию это не навяжет.
+  остаются классическими. Между двумя приложениями, где это уже есть, классическая сессия
+  отвергается, с какого бы набора ключей её ни начали: с набора, из которого по дороге убрали новый
+  ключ, или со старого набора, подписанного до обновления (его повторил тот, кто его сохранил, или
+  он остался в кэше). Отправитель тогда берёт свежий набор.
 
 ### Известные ограничения (пока не решены)
 
