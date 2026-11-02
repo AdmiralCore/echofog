@@ -49,6 +49,8 @@ UDP 443**: по нему идёт QUIC, а через него почти вес
 выполните в Cloud Shell или там, где настроен `gcloud`):
 
 ```bash
+gcloud projects list                          # ID проекта, в котором VM
+gcloud config set project <ID проекта>
 gcloud compute firewall-rules create echofog --allow udp:443,tcp:443
 ```
 
