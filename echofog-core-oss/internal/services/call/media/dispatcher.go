@@ -1,6 +1,8 @@
 package media
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -65,8 +67,12 @@ type MediaDispatcher struct {
 	consumer     LocalMediaConsumer
 	streamEngine *tree.StreamTreeEngine
 
-	mu               sync.RWMutex
-	roomKey          []byte
+	mu      sync.RWMutex
+	roomKey []byte // the invite's key: what everybody starts with, always accepted
+	// The key the coordinator handed out last (curKey), sent with from curFrom on, and the one before
+	// (prevKey), still sent until then and accepted while late units arrive. See SetMediaKey.
+	curKey, prevKey  []byte
+	curFrom          time.Time
 	voiceManifest    *tree.TreeManifest
 	inCall           map[types.PeerID]bool // every peer the voice tree names, built with it
 	upstreamOverride types.PeerID
@@ -170,6 +176,69 @@ func (d *MediaDispatcher) SetRoomKey(key []byte) error {
 	defer d.mu.Unlock()
 	d.roomKey = append([]byte(nil), key...)
 	return nil
+}
+
+// MediaKeySwitch is how long after a new media key arrives this node starts sending with it: the
+// others get theirs at about the same time, and until then they could not open it.
+const MediaKeySwitch = 2 * time.Second
+
+// SetMediaKey takes the call's new media key, handed out by the coordinator when the members
+// changed: it is accepted at once and sent with after MediaKeySwitch. Whoever left never gets it,
+// so what is said from then on is closed to them although they hold the invite.
+func (d *MediaDispatcher) SetMediaKey(key []byte, now time.Time) error {
+	if len(key) != keyLen {
+		return ErrBadKey
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.prevKey = d.sendKeyLocked(now)
+	d.curKey = append([]byte(nil), key...)
+	d.curFrom = now.Add(MediaKeySwitch)
+	return nil
+}
+
+// SendKeyID names the key units go out with now by the first bytes of its hash, for the logs and
+// tests (it says nothing of the key).
+func (d *MediaDispatcher) SendKeyID() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	k := d.sendKeyLocked(time.Now())
+	if k == nil {
+		return ""
+	}
+	h := sha256.Sum256(k)
+	return hex.EncodeToString(h[:4])
+}
+
+// sendKeyLocked is the key units go out with now.
+func (d *MediaDispatcher) sendKeyLocked(now time.Time) []byte {
+	if d.curKey != nil && !now.Before(d.curFrom) {
+		return d.curKey
+	}
+	if d.prevKey != nil {
+		return d.prevKey
+	}
+	return d.roomKey
+}
+
+// openKeysLocked are the keys a unit may be sealed with, the likeliest first.
+func (d *MediaDispatcher) openKeysLocked() [][]byte {
+	out := make([][]byte, 0, 3)
+	for _, k := range [][]byte{d.curKey, d.prevKey, d.roomKey} {
+		if k == nil {
+			continue
+		}
+		dup := false
+		for _, o := range out {
+			if string(o) == string(k) {
+				dup = true
+			}
+		}
+		if !dup {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // SetVoiceManifest updates the Voice Backbone Tree topology and resets temporary failover links.
@@ -398,10 +467,16 @@ func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
 		return
 	}
 	d.mu.RLock()
-	key := d.roomKey
+	keys := d.openKeysLocked()
 	d.mu.RUnlock()
 
-	plain, err := OpenUnit(p, ct, key)
+	var plain []byte
+	err := ErrBadKey
+	for _, key := range keys {
+		if plain, err = OpenUnit(p, ct, key); err == nil {
+			break
+		}
+	}
 	if err != nil {
 		d.decryptFailures.Add(1) // tampered, wrong key, or forged header: never play it
 		d.lim.Log(d.log, slog.LevelWarn, "decrypt:"+p.StreamID+":"+p.Broadcaster.String(),
@@ -808,7 +883,7 @@ func (d *MediaDispatcher) sendPulses(now time.Time) {
 // seal encrypts a unit into wire fragments that leave reserve bytes of the datagram free.
 func (d *MediaDispatcher) seal(kind FrameKind, streamID string, seq uint32, payload []byte, reserve int) ([][]byte, error) {
 	d.mu.RLock()
-	key := d.roomKey
+	key := d.sendKeyLocked(time.Now())
 	d.mu.RUnlock()
 	if key == nil {
 		return nil, ErrBadKey // refuse to leak plaintext media

@@ -51,6 +51,11 @@ const (
 	// ActionStreamFeedback is a viewer's report on its path for a stream, to its parent on the
 	// stream's tree; a relay sends the worst of its subtree on. Older nodes reject it as unknown.
 	ActionStreamFeedback SignalAction = "stream_feedback"
+	// ActionMediaKey is the coordinator handing one member the call's new media key after the
+	// members changed, sealed to the key exchange key that member's join carried (MediaKeyPayload).
+	// Older nodes reject it as unknown; they keep the room key, which the coordinator then returns
+	// everybody to.
+	ActionMediaKey SignalAction = "media_key"
 )
 
 // Kept for source compatibility with older callers.
@@ -116,6 +121,18 @@ type StreamSubscribePayload struct {
 type JoinPayload struct {
 	Profile tree.PeerNodeProfile `json:"profile"`
 	Proof   []byte               `json:"proof"`
+	// KX is the member's X25519 key for this call, fresh per call: the coordinator seals each new
+	// media key to it. A node without it (older) keeps the room key for the whole call.
+	KX []byte `json:"kx,omitempty"`
+}
+
+// MediaKeyPayload carries a new media key for one member: Eph is the coordinator's ephemeral
+// X25519 key and Sealed the key under AES-GCM keyed from both (see call.sealMediaKey). KeyEpoch
+// only grows; a member ignores one it has seen or passed.
+type MediaKeyPayload struct {
+	KeyEpoch uint64 `json:"key_epoch"`
+	Eph      []byte `json:"eph"`
+	Sealed   []byte `json:"sealed"`
 }
 
 // RoomSyncPayload brings a joiner or a lagging member up to date in one message.
