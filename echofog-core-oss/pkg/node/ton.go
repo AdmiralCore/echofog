@@ -1,6 +1,7 @@
 package node
 
 import (
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
@@ -134,9 +135,30 @@ func (n *Node) EnableExitPayments() error {
 		n.exitLedger = exit_gateway.NewLedger(path)
 		n.exitLedger.Start()
 	}
+	if key, err := payTagKey(n.identity); err == nil {
+		n.ExitService.SetPayTagKey(key)
+	} else {
+		n.Logger.Warn("exit pay tags stay unkeyed", "err", err)
+	}
 	n.ExitService.SetPayments(n.exitLedger, n.ID, n.TonWallet.Address())
 	n.ExitService.SetVouchers(n.openExitVouchersLocked())
 	return nil
+}
+
+// payTagKey is the secret the exit keys its clients' pay tags with: a hash of a signature by the
+// wallet key over a fixed domain. ed25519 signs deterministically, so it is the same after every
+// restart and on a restored device, and only the holder of the key can make it.
+func payTagKey(s tonwallet.Signer) ([]byte, error) {
+	if s == nil {
+		return nil, errors.New("no identity")
+	}
+	sig, err := s.SignWalletTransaction([]byte("echofog/exit-pay-tag-key/v1"))
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(sig)
+	clear(sig)
+	return sum[:], nil
 }
 
 // ExitLedger returns the ledger once payments are enabled.

@@ -100,13 +100,13 @@ func (e *ExitService) AccountOf(peer types.PeerID) AccountInfo {
 	info := AccountInfo{Version: accountInfoVersion, Enabled: e.serves(peer), PricePerMB: pol.PricePerMB, FreeLeft: freeLeft}
 	if l != nil && addr != "" && pol.PricePerMB > 0 {
 		info.PayAddress = addr
-		info.Tag = PayTag(peer, self)
+		info.Tag = e.payTag(peer, self, l, v)
 		info.Credit, _ = l.Balance(info.Tag)
 		info.MinPayMicro = MinPayMicro
 		info.Assets = PayAssets
 	}
 	if v != nil && pol.PricePerMB > 0 {
-		info.Vault = v.Terms(PayTag(peer, self))
+		info.Vault = v.Terms(e.payTag(peer, self, l, v))
 	}
 	return info
 }

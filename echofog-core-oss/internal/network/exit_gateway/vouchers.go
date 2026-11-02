@@ -281,6 +281,25 @@ func (a *voucherAccount) overdraft() int64 {
 	return VoucherOverdraftBytes
 }
 
+// moveTag binds the vault bound to pay tag from to tag to instead: a client's vault follows it to
+// its new pay tag. A vault already bound to to stays.
+func (b *VoucherBook) moveTag(from, to string) {
+	if from == to {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	vault, ok := b.data.Peers[from]
+	if !ok {
+		return
+	}
+	delete(b.data.Peers, from)
+	if _, bound := b.data.Peers[to]; !bound {
+		b.data.Peers[to] = vault
+	}
+	b.dirty = true
+}
+
 // Available is the voucher-paid bytes tag can still use, its overdraft included.
 func (b *VoucherBook) Available(tag string) int64 {
 	b.mu.Lock()
@@ -564,7 +583,7 @@ func (e *ExitService) HandleVoucherFrom(ctx context.Context, st FramedStream, pa
 		reply.Error = "malformed offer"
 	default:
 		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		reply = book.Accept(cctx, PayTag(peer, self), o)
+		reply = book.Accept(cctx, e.payTag(peer, self, nil, book), o)
 		cancel()
 	}
 	raw, err := json.Marshal(reply)

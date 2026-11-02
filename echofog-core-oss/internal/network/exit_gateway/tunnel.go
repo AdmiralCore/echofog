@@ -345,6 +345,35 @@ type ExitService struct {
 	queries *ratelimit.Keyed[types.PeerID] // account requests per peer
 	offers  *ratelimit.Keyed[types.PeerID] // voucher offers per peer
 	clients recentClients                  // who opened a tunnel lately (ProbeClient)
+	tagKey  atomic.Pointer[[]byte]         // secret behind the pay tags handed out (SetPayTagKey)
+}
+
+// SetPayTagKey sets the secret the pay tags this exit hands out are keyed with (KeyedPayTag), so
+// nobody else can tell from a transfer's memo which peer paid. It must stay the same across
+// restarts, or clients' balances are lost: the node derives it from its identity key. Without
+// it the exit hands out the old PayTag.
+func (e *ExitService) SetPayTagKey(key []byte) {
+	k := append([]byte(nil), key...)
+	e.tagKey.Store(&k)
+}
+
+// payTag is the pay tag of peer at this exit (self). With a tag key it is the keyed one, and
+// whatever the ledger l and the voucher book v still hold under the old tag (paid before the
+// exit had a key, or sent by a client that read its tag before) moves onto it. Either may be nil.
+func (e *ExitService) payTag(peer, self types.PeerID, l *Ledger, v *VoucherBook) string {
+	legacy := PayTag(peer, self)
+	k := e.tagKey.Load()
+	if k == nil {
+		return legacy
+	}
+	tag := KeyedPayTag(*k, peer)
+	if l != nil {
+		l.Merge(legacy, tag)
+	}
+	if v != nil {
+		v.moveTag(legacy, tag)
+	}
+	return tag
 }
 
 // SetPayments lets clients pay for traffic: ledger holds their credit, self is this exit's peer ID
@@ -669,11 +698,14 @@ func (e *ExitService) allowance(peer types.PeerID) int64 {
 	}
 	l, v, self := e.ledger, e.vouchers, e.self
 	e.policyMu.Unlock()
-	if l != nil {
-		total += l.Available(PayTag(peer, self))
-	}
-	if v != nil {
-		total += v.Available(PayTag(peer, self))
+	if l != nil || v != nil {
+		tag := e.payTag(peer, self, l, v)
+		if l != nil {
+			total += l.Available(tag)
+		}
+		if v != nil {
+			total += v.Available(tag)
+		}
 	}
 	return total
 }
@@ -704,7 +736,7 @@ func (e *ExitService) consume(peer types.PeerID, n int64) bool {
 	if rest <= 0 {
 		return true
 	}
-	tag := PayTag(peer, self)
+	tag := e.payTag(peer, self, l, v)
 	if v != nil {
 		if rest -= v.Spend(tag, rest); rest <= 0 {
 			return true
@@ -862,7 +894,7 @@ func (e *ExitService) reserve(m *meter, want int64) {
 		return
 	}
 	if m.tag == "" {
-		m.tag = PayTag(m.peer, self)
+		m.tag = m.svc.payTag(m.peer, self, l, v)
 	}
 	if v != nil {
 		got := v.Spend(m.tag, want)
