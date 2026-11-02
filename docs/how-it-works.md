@@ -236,7 +236,9 @@ participant on 0.2.0 or earlier is in the call) packets go unsigned, as before.
 Each participant that passes a packet on first checks that it opens under one of the call's keys,
 and only then counts its number as seen. A packet that does not open is dropped right there and
 shadows nothing: sending another participant's next packet numbers first no longer mutes them for
-everyone further down the tree.
+everyone further down the tree. A participant resends lost video only to its own children in the
+stream's tree, at most 96 KB for one request and about 1 MB a second for one child, so a small
+request cannot turn it into a firehose aimed at someone else.
 
 There is no central media server. Instead, the people in the call carry each other's streams in a
 **relay tree**. The person sharing their screen sends it to a few participants; each of them

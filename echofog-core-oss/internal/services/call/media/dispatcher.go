@@ -93,7 +93,8 @@ type MediaDispatcher struct {
 	rtt              map[string]time.Duration          // stream -> smoothed time a NACK takes to be answered
 	keyWanted        map[string]time.Time              // stream -> when we asked for a keyframe that has not come yet
 	streamStats      map[string]*StreamCounters
-	feeders          map[string]feederState // stream -> the peer the tree feeds us from, see fromFeeder
+	feeders          map[string]feederState         // stream -> the peer the tree feeds us from, see fromFeeder
+	resend           map[types.PeerID]*resendBudget // child -> what it may still pull from the ring
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
@@ -1088,6 +1089,11 @@ func (d *MediaDispatcher) housekeeping() {
 			for k, ts := range d.watchSince {
 				if now.Sub(ts) > 30*time.Second {
 					delete(d.watchSince, k)
+				}
+			}
+			for k, b := range d.resend {
+				if now.Sub(b.at) > 10*time.Second {
+					delete(d.resend, k) // refilled to the brim by now anyway
 				}
 			}
 			d.mu.Unlock()

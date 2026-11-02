@@ -30,7 +30,41 @@ const (
 	nackHoldoff = 50 * time.Millisecond
 	// MaxNackEntries bounds one NACK; a larger gap goes straight to a keyframe request.
 	MaxNackEntries = maxTrackedGap
+
+	// A NACK of a kilobyte could name 64 units of 16 fragments each, over a megabyte, and the same
+	// again a moment later: a child could make its parent pour resends at whoever it liked. What one
+	// NACK resends is bounded, a unit named twice is resent once, and each child has a budget that
+	// refills at nackRate up to nackBurst. Honest loss stays far below: 10% of a 4K stream is ~450
+	// KB a second, and one NACK of real losses rarely asks for more than a fragment per unit.
+	nackMaxBytes = 96 << 10
+	nackRate     = 1 << 20
+	nackBurst    = 256 << 10
 )
+
+// resendBudget is what a child may still pull from this node's ring, in bytes.
+type resendBudget struct {
+	tokens float64
+	at     time.Time
+}
+
+// takeResendLocked spends size bytes of a child's budget if it has them; d.mu must be held.
+func (d *MediaDispatcher) takeResendLocked(child types.PeerID, size int, now time.Time) bool {
+	if d.resend == nil {
+		d.resend = make(map[types.PeerID]*resendBudget)
+	}
+	b := d.resend[child]
+	if b == nil {
+		b = &resendBudget{tokens: nackBurst, at: now}
+		d.resend[child] = b
+	}
+	b.tokens = min(nackBurst, b.tokens+now.Sub(b.at).Seconds()*nackRate)
+	b.at = now
+	if float64(size) > b.tokens {
+		return false
+	}
+	b.tokens -= float64(size)
+	return true
+}
 
 // NackEntry names one lost unit of a stream and the fragments the requester already holds.
 type NackEntry struct {
@@ -164,9 +198,28 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 	}
 	now := time.Now()
 	var upstream []NackEntry
-	sent := 0
+	sent, volume, capped := 0, 0, false
+	named := make(map[uint32]bool, len(lost))
 	for _, e := range lost {
+		if named[e.Seq] {
+			continue // a unit named twice is resent once
+		}
+		named[e.Seq] = true
 		frags, held, complete := d.ring.lookup(streamID, e.Seq, e.Have, now)
+		size := 0
+		for _, f := range frags {
+			size += len(f)
+		}
+		if size > 0 {
+			d.mu.Lock()
+			ok := volume+size <= nackMaxBytes && d.takeResendLocked(child, size, now)
+			d.mu.Unlock()
+			if !ok {
+				capped = true
+				break // the rest waits for the child's next NACK, or becomes a keyframe request
+			}
+			volume += size
+		}
 		for _, f := range frags {
 			d.retransmitted.Add(1)
 			sent++
@@ -176,6 +229,10 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 			// whatever arrives from upstream is forwarded to every child, so ask for all we lack
 			upstream = append(upstream, NackEntry{Seq: e.Seq, Have: held})
 		}
+	}
+	if capped {
+		d.lim.Log(d.log, slog.LevelDebug, "nack-capped:"+streamID+":"+child.String(), "A child asked for more resends than its budget",
+			"stream", streamID, "child", calllog.Peer(child), "resent_bytes", volume)
 	}
 	upstream = d.holdoff(streamID, upstream, now)
 	d.nacked.Add(uint64(len(upstream)))
