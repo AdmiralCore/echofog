@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
 	"time"
 
@@ -67,6 +68,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		waitingSince:   now,
 		lastStatsLog:   now,
 		memberKX:       make(map[types.PeerID][]byte),
+		memberSK:       make(map[types.PeerID][]byte),
 	}
 	if coordinator == m.selfID {
 		room.coordSince = now
@@ -74,8 +76,12 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 	if kx, err := ecdh.X25519().GenerateKey(rand.Reader); err == nil {
 		room.kxPriv = kx // without one this node keeps the room key, as an older one does
 	}
+	if _, sk, err := ed25519.GenerateKey(rand.Reader); err == nil && !m.olderNode {
+		room.signPriv = sk // without one the call's units go unsigned, as with an older node
+	}
 
 	room.Dispatcher = media.NewMediaDispatcher(m.selfID, m.sender, m, engine)
+	room.Dispatcher.SetSigningKey(room.signPriv)
 	if err := room.Dispatcher.SetRoomKey(roomKey); err != nil {
 		cancel()
 		room.Dispatcher.Close()
@@ -205,6 +211,7 @@ func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerI
 	delete(room.ConnectedPeers, peer)
 	delete(room.memberSeen, peer)
 	delete(room.memberKX, peer)
+	delete(room.memberSK, peer)
 	if reason == "left" {
 		m.logger.Info("Call member left", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer), "members", len(room.ConnectedPeers))
 	} else {

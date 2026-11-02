@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -147,6 +148,8 @@ type ActiveRoomState struct {
 	// hands out the next key, and since when this node leads.
 	kxPriv          *ecdh.PrivateKey
 	memberKX        map[types.PeerID][]byte
+	signPriv        ed25519.PrivateKey      // this node's unit signing key for the call
+	memberSK        map[types.PeerID][]byte // coordinator: the members' signing keys
 	keyEpoch        uint64
 	keyFrom         types.PeerID
 	rekeyAt         time.Time
@@ -192,6 +195,8 @@ type CallManager struct {
 	activeRoom *ActiveRoomState
 	// olderNode makes this node act as a version before media key rotation (tests only).
 	olderNode bool
+	// unsignedNode makes it act as a version with rotation but before unit signatures (tests only).
+	unsignedNode bool
 	emitter   events.Emitter
 
 	connector  PeerConnector

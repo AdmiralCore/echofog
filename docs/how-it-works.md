@@ -225,6 +225,14 @@ it, so what is said from then on is closed to them although they still hold the 
 member on a version from before this (0.2.0 and earlier) cannot take a new key; while one is in
 the call everybody stays on the invitation's key, as before.
 
+A shared key alone would let any participant make up sound or a picture in another's name. So
+each participant also makes a signing key (Ed25519) for the call and sends it with its join; the
+coordinator hands the participants' signing keys out with every new media key, and each packet
+under that key ends with its sender's signature. Sound is checked on every hop, video by those
+who watch it, and video is taken only from the participant the stream's tree feeds you from, so
+nobody else can slip a packet in ahead of the real one. Under the invitation's key (while a
+participant on 0.2.0 or earlier is in the call) packets go unsigned, as before.
+
 Each participant that passes a packet on first checks that it opens under one of the call's keys,
 and only then counts its number as seen. A packet that does not open is dropped right there and
 shadows nothing: sending another participant's next packet numbers first no longer mutes them for

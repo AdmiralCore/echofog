@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
@@ -25,6 +26,12 @@ import (
 // A node of an older version sends no key exchange key and cannot take a new key. While one is in
 // the call the coordinator hands out the room key itself as the new key, so everybody is back on
 // what the older node speaks: the call works, without the protection, as before rotation.
+//
+// Each member also sends a fresh Ed25519 key for the call with its join. When every member the new
+// key goes to has one, the coordinator names them all with the key, and every unit sealed under it
+// ends with its sender's signature: a member can seal under the shared key as well as anybody, but
+// cannot pass a unit off as another's. Units under the room key, or under a key some member could
+// not sign for, carry no signature, as before.
 
 const (
 	// rekeyDelay gathers the joins and leaves that come together into one new key.
@@ -107,17 +114,34 @@ func (m *CallManager) kxPublicLocked(room *ActiveRoomState) []byte {
 	return room.kxPriv.PublicKey().Bytes()
 }
 
-// noteKXLocked keeps a member's key exchange key from its join or heartbeat; a member that changes
-// it gets a new media key, as it may have restarted and lost the one it had.
-func (m *CallManager) noteKXLocked(room *ActiveRoomState, peer types.PeerID, kx []byte, now time.Time) {
+// signPublicLocked is this node's unit signing key for the call, for its joins and heartbeats.
+func (m *CallManager) signPublicLocked(room *ActiveRoomState) []byte {
+	if room.signPriv == nil || m.olderNode || m.unsignedNode {
+		return nil
+	}
+	return room.signPriv.Public().(ed25519.PublicKey)
+}
+
+// noteKXLocked keeps a member's key exchange and signing keys from its join or heartbeat; a member
+// that changes one gets a new media key, as it may have restarted and lost the ones it had.
+func (m *CallManager) noteKXLocked(room *ActiveRoomState, peer types.PeerID, kx, sk []byte, now time.Time) {
 	if len(kx) != 32 || peer == m.selfID {
 		return
 	}
-	if old, ok := room.memberKX[peer]; ok && string(old) == string(kx) {
-		return
+	changed := false
+	if old, ok := room.memberKX[peer]; !ok || string(old) != string(kx) {
+		room.memberKX[peer] = append([]byte(nil), kx...)
+		changed = true
 	}
-	room.memberKX[peer] = append([]byte(nil), kx...)
-	m.scheduleRekeyLocked(room, now)
+	if len(sk) == ed25519.PublicKeySize {
+		if old, ok := room.memberSK[peer]; !ok || string(old) != string(sk) {
+			room.memberSK[peer] = append([]byte(nil), sk...)
+			changed = true
+		}
+	}
+	if changed {
+		m.scheduleRekeyLocked(room, now)
+	}
 }
 
 // scheduleRekeyLocked asks for a new media key soon (coordinator only).
@@ -154,11 +178,13 @@ func (m *CallManager) rekeyTickLocked(room *ActiveRoomState, now time.Time) {
 		return // alone: nobody to keep anything from yet; the next member brings a new key
 	}
 	key := room.RoomKey // an older node is in the call: everybody back to what it speaks
+	var signers map[types.PeerID][]byte
 	if missing == 0 {
 		key = make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
 			return
 		}
+		signers = m.signersLocked(room)
 	}
 	room.keyEpoch++
 	for p := range room.ConnectedPeers {
@@ -170,11 +196,45 @@ func (m *CallManager) rekeyTickLocked(room *ActiveRoomState, now time.Time) {
 		if err != nil {
 			continue
 		}
+		mk.Signers = signers
 		m.sendLocked(room, p, signaling.ActionMediaKey, mk)
 	}
-	_ = room.Dispatcher.SetMediaKey(key, now)
+	_ = room.Dispatcher.SetMediaKey(key, signerKeys(signers), now)
 	m.logger.Info("New call media key", "call_id", calllog.Call(room.CallID), "key_epoch", room.keyEpoch,
-		"members", others+1, "older_nodes", missing)
+		"members", others+1, "older_nodes", missing, "signed", signers != nil)
+}
+
+// signersLocked names the signing key of every member, this node included, or nil if one of them
+// sent none (a build from before unit signatures): then units under the key go unsigned.
+func (m *CallManager) signersLocked(room *ActiveRoomState) map[types.PeerID][]byte {
+	own := m.signPublicLocked(room)
+	if own == nil {
+		return nil
+	}
+	out := map[types.PeerID][]byte{m.selfID: own}
+	for p := range room.ConnectedPeers {
+		if p == m.selfID {
+			continue
+		}
+		sk, ok := room.memberSK[p]
+		if !ok {
+			return nil
+		}
+		out[p] = sk
+	}
+	return out
+}
+
+// signerKeys turns the signers of a media key payload into the dispatcher's form; nil stays nil.
+func signerKeys(in map[types.PeerID][]byte) map[types.PeerID]ed25519.PublicKey {
+	if in == nil {
+		return nil
+	}
+	out := make(map[types.PeerID]ed25519.PublicKey, len(in))
+	for id, k := range in {
+		out[id] = k
+	}
+	return out
 }
 
 // takeMediaKeyLocked applies a media key the coordinator sent this node.
@@ -191,5 +251,5 @@ func (m *CallManager) takeMediaKeyLocked(room *ActiveRoomState, from types.PeerI
 		return
 	}
 	room.keyEpoch, room.keyFrom = p.KeyEpoch, from
-	_ = room.Dispatcher.SetMediaKey(key, now)
+	_ = room.Dispatcher.SetMediaKey(key, signerKeys(p.Signers), now)
 }

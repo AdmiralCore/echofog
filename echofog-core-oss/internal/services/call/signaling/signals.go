@@ -127,15 +127,21 @@ type JoinPayload struct {
 	// KX is the member's X25519 key for this call, fresh per call: the coordinator seals each new
 	// media key to it. A node without it (older) keeps the room key for the whole call.
 	KX []byte `json:"kx,omitempty"`
+	// SK is the member's Ed25519 key for this call, fresh per call: it signs every media unit the
+	// member sends under a key handed out to members that all have one. Older nodes send none.
+	SK []byte `json:"sk,omitempty"`
 }
 
 // MediaKeyPayload carries a new media key for one member: Eph is the coordinator's ephemeral
 // X25519 key and Sealed the key under AES-GCM keyed from both (see call.sealMediaKey). KeyEpoch
-// only grows; a member ignores one it has seen or passed.
+// only grows; a member ignores one it has seen or passed. Signers, when the key went to members that
+// all sign, names every one's signing key (JoinPayload.SK): units under the key must carry their
+// sender's signature. Without it (an older coordinator, or a member without a key) they carry none.
 type MediaKeyPayload struct {
-	KeyEpoch uint64 `json:"key_epoch"`
-	Eph      []byte `json:"eph"`
-	Sealed   []byte `json:"sealed"`
+	KeyEpoch uint64                  `json:"key_epoch"`
+	Eph      []byte                  `json:"eph"`
+	Sealed   []byte                  `json:"sealed"`
+	Signers  map[types.PeerID][]byte `json:"signers,omitempty"`
 }
 
 // RoomSyncPayload brings a joiner or a lagging member up to date in one message.

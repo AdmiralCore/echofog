@@ -181,11 +181,11 @@ func TestMediaPacket_UnitThatFitsTravelsAsOneDatagram(t *testing.T) {
 }
 
 // A capture that sizes its RTP packets by VideoUnitBudget sends each as one datagram, room for
-// FEC included.
+// FEC and the sender's signature included.
 func TestMediaPacket_VideoUnitBudget(t *testing.T) {
 	key := newKey(t)
 	for _, id := range []string{"s", "screen_1730000000000", string(bytes.Repeat([]byte{'x'}, MaxStreamIDLen))} {
-		fits := VideoUnitBudget(len(id))
+		fits := VideoUnitBudget(len(id)) + UnitSigLen // the sender's signature rides in the unit
 		one, err := sealUnit(&MediaPacket{Kind: FrameVideo, StreamID: id, Payload: make([]byte, fits)}, key, fecReserve)
 		require.NoError(t, err)
 		assert.Len(t, one, 1, id)
@@ -193,7 +193,7 @@ func TestMediaPacket_VideoUnitBudget(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, two, 2, id)
 	}
-	assert.GreaterOrEqual(t, VideoUnitBudget(len("screen_1730000000000")), 1100)
+	assert.GreaterOrEqual(t, VideoUnitBudget(len("screen_1730000000000")), 1050)
 }
 
 func TestMediaPacket_DecodeRejectsMalformed(t *testing.T) {
