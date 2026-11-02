@@ -36,9 +36,11 @@ export function fromWebLink(text) {
       try { frag = decodeURIComponent(frag); } catch (_) { /* as it is */ }
     }
     if (/^(echofog:\/\/|fogroup[12]:|fogcontact1:)/i.test(frag)) t = frag;
-    else if (/^(join\?|relay\/|group\/|contact\/)/i.test(frag)) t = 'echofog://' + frag;
+    else if (/^(join\/?\?|relay\/|group\/|contact\/)/i.test(frag)) t = 'echofog://' + frag;
     else return text;
   }
+  // a browser or the OS may hand the app echofog://join/?… (a "/" before the "?"): the same link
+  t = t.replace(/^(echofog:\/\/join)\/\?/i, '$1?');
   const app = /^echofog:\/\/(group|contact)\/([A-Za-z0-9_-]+)\/?$/i.exec(t);
   if (app) return (app[1].toLowerCase() === 'group' ? 'fogroup2:' : 'fogcontact1:') + app[2];
   return t;

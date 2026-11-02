@@ -32,6 +32,9 @@ func FromWebLink(text string) string {
 	t := strings.TrimSpace(text)
 	lower := strings.ToLower(t)
 	if !strings.HasPrefix(lower, "https://") && !strings.HasPrefix(lower, "http://") {
+		if d := dropJoinSlash(t); d != t {
+			return d
+		}
 		return text
 	}
 	i := strings.IndexByte(t, '#')
@@ -42,9 +45,19 @@ func FromWebLink(text string) string {
 	lf := strings.ToLower(frag)
 	switch {
 	case strings.HasPrefix(lf, appScheme):
-		return frag
-	case strings.HasPrefix(lf, "join?"), strings.HasPrefix(lf, "relay/"), strings.HasPrefix(lf, "group/"), strings.HasPrefix(lf, "contact/"):
-		return appScheme + frag
+		return dropJoinSlash(frag)
+	case strings.HasPrefix(lf, "join?"), strings.HasPrefix(lf, "join/?"), strings.HasPrefix(lf, "relay/"), strings.HasPrefix(lf, "group/"), strings.HasPrefix(lf, "contact/"):
+		return dropJoinSlash(appScheme + frag)
 	}
 	return text
+}
+
+// dropJoinSlash takes off the "/" a browser or the OS may put before the "?" of an
+// echofog://join?… link on its way to the app (echofog://join/?…): the link is the same.
+func dropJoinSlash(link string) string {
+	const slashed = appScheme + "join/?"
+	if len(link) < len(slashed) || !strings.EqualFold(link[:len(slashed)], slashed) {
+		return link
+	}
+	return link[:len(slashed)-2] + link[len(slashed)-1:]
 }

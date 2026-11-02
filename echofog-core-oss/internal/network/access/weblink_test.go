@@ -45,3 +45,20 @@ func TestFromWebLink(t *testing.T) {
 	assert.Equal(t, "", WebLink("fogcontact1:abc"), "only echofog:// links have a web form")
 	assert.Equal(t, WebLinkBase+"relay/a:1/b", WebLink("ECHOFOG://relay/a:1/b"))
 }
+
+// A browser or the OS may hand the app echofog://join/?… (a "/" before the "?"), as the button on
+// the join page did on Windows: it is the same link and opens like one.
+func TestJoinLinkWithSlash(t *testing.T) {
+	inv := Invite{Network: "echofog", Protocol: 102, Peer: peer(7), Addrs: []string{"203.0.113.5:443"}, Server: true}
+	link := FormatLink(inv)
+	slashed := "echofog://join/?" + link[len(linkPrefix):]
+	for _, in := range []string{slashed, " ECHOFOG://JOIN/?" + link[len(linkPrefix):], WebLinkBase + "join/?" + link[len(linkPrefix):]} {
+		assert.True(t, IsLink(in), in)
+		got, err := ParseLink(in, "echofog")
+		require.NoError(t, err, in)
+		assert.Equal(t, inv.Peer, got.Peer)
+		assert.Equal(t, inv.Addrs, got.Addrs)
+		assert.True(t, got.Server)
+	}
+	assert.Equal(t, "echofog://relay/a:1/b", FromWebLink("echofog://relay/a:1/b"), "other links keep their path")
+}
