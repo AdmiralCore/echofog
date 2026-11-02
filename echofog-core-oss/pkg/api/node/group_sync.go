@@ -964,9 +964,83 @@ func (f *groupsFacade) KeepCallAlive(groupID, room, callID, coordinator string) 
 	f.calls[key] = c
 	f.noteInCall(key, f.selfID, true)
 	f.aliveSent[key] = now
+	targets := f.aliveTargetsLocked(groupID, key, coordinator)
 	f.mu.Unlock()
-	f.broadcast(groupID, groupWire{Kind: callKind(room, "callalive"), Group: groupID, Room: room, CallID: callID, Coord: coordinator, TS: now})
+	w := groupWire{Kind: callKind(room, "callalive"), Group: groupID, Room: room, CallID: callID, Coord: coordinator, TS: now}
+	for _, id := range targets {
+		if _, err := f.sendTo(id, w); err != nil {
+			f.nudge(id)
+		}
+	}
 	return nil
+}
+
+// Who hears a keep-alive. It went to every member from every member in the call, offline ones
+// included (into mailboxes, where it goes stale in two minutes): 20 people talking in a group of
+// 1,000 sent ~20,000 messages every 45 s. Now each member in the call tells
+//   - the others in the call (they show who is in it);
+//   - the members it has a link to, at most maxAliveLinked;
+// and one member of the call, the speaker (the coordinator while it is in, else the lowest id),
+// also tells the members it has no link to, at most maxAliveRelayed a round, going round the list.
+var (
+	maxAliveLinked  = 200
+	maxAliveRelayed = 200
+)
+
+// aliveTargetsLocked lists who our keep-alive for the call key of groupID goes to. Call with f.mu held.
+func (f *groupsFacade) aliveTargetsLocked(groupID, key, coordinator string) []types.PeerID {
+	members, err := f.mgr.GetAuthorizedRecipients(groupID)
+	if err != nil {
+		return nil
+	}
+	now := time.Now()
+	in := map[types.PeerID]bool{}
+	for id, seen := range f.inCall[key] {
+		if now.Sub(time.Unix(seen, 0)) <= callAliveFor {
+			in[id] = true
+		}
+	}
+	speaker := f.selfID
+	if c, ok := parsePeer(coordinator); ok && in[c] {
+		speaker = c
+	} else {
+		for id := range in {
+			if string(id[:]) < string(speaker[:]) {
+				speaker = id
+			}
+		}
+	}
+	var out, unlinked []types.PeerID
+	linked := 0
+	for _, m := range members {
+		switch {
+		case m.PeerID == f.selfID:
+		case in[m.PeerID]:
+			out = append(out, m.PeerID)
+		case f.online == nil || f.online(m.PeerID):
+			if linked < maxAliveLinked {
+				out = append(out, m.PeerID)
+				linked++
+			}
+		default:
+			unlinked = append(unlinked, m.PeerID)
+		}
+	}
+	if speaker == f.selfID && len(unlinked) > 0 {
+		if len(unlinked) <= maxAliveRelayed {
+			return append(out, unlinked...)
+		}
+		sort.Slice(unlinked, func(i, j int) bool { return string(unlinked[i][:]) < string(unlinked[j][:]) })
+		if f.aliveRound == nil {
+			f.aliveRound = map[string]int{}
+		}
+		start := f.aliveRound[key] % len(unlinked)
+		f.aliveRound[key] = start + maxAliveRelayed
+		for i := 0; i < maxAliveRelayed; i++ {
+			out = append(out, unlinked[(start+i)%len(unlinked)])
+		}
+	}
+	return out
 }
 
 // callKind is the wire kind that announces a call. A voice room's call has kinds of its own: a

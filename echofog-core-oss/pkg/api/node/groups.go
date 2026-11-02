@@ -145,6 +145,7 @@ type groupsFacade struct {
 	histSent   map[string]time.Time              // when history was last handed to whom
 	aliveSent  map[string]int64                  // group -> when we last announced our call there (unix s)
 	inCall     map[string]map[types.PeerID]int64 // call key -> who announced being in it, when (unix s)
+	aliveRound map[string]int                    // call key -> where our next keep-alive to unlinked members starts
 
 	async   bool // handle() sends its follow-ups from a goroutine (set for the real node)
 	nudgeMu sync.Mutex
