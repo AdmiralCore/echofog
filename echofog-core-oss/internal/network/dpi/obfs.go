@@ -344,6 +344,13 @@ func WrapPacketConn(conn net.PacketConn, obfs *NodeObfs) net.PacketConn {
 		writeBuf: make([]byte, maxPacketBufferSize),
 		cands:    make([][KeyLen]byte, 0, 10),
 	}
+	if oc, ok := AsOOB(conn); ok {
+		return &ObfsPacketConnOOB{
+			ObfsPacketConnUDP: &ObfsPacketConnUDP{ObfsPacketConn: base, UDPConn: oc},
+			oc:                oc,
+			rms:               newBatch(obfsReadBatch, maxPacketBufferSize),
+		}
+	}
 	if udp, ok := conn.(UDPLikePacketConn); ok {
 		return &ObfsPacketConnUDP{ObfsPacketConn: base, UDPConn: udp}
 	}
@@ -368,23 +375,30 @@ func (c *ObfsPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		if err != nil {
 			return 0, addr, err
 		}
-		if c.obfs.IsRaw(addr) {
-			n := copy(p, c.readBuf[:raw])
-			return n, addr, nil
-		}
-		c.cands = c.obfs.candidates(addr, c.cands)
-		for i := range c.cands {
-			if n, ok := open(&c.cands[i], c.readBuf[:raw], p); ok {
-				c.obfs.noteHeard(addr, &c.cands[i])
-				return n, addr, nil
-			}
-		}
-		if c.obfs.AllowsRawFallthrough() {
-			n := copy(p, c.readBuf[:raw])
+		if n, ok := c.unmask(c.readBuf[:raw], addr, p); ok {
 			return n, addr, nil
 		}
 		// not for us: a scanner, a stray packet, or a peer with another key
 	}
+}
+
+// unmask restores into p the payload of the datagram raw from addr, false when it is not for us.
+// c.readMu must be held (c.cands).
+func (c *ObfsPacketConn) unmask(raw []byte, addr net.Addr, p []byte) (int, bool) {
+	if c.obfs.IsRaw(addr) {
+		return copy(p, raw), true
+	}
+	c.cands = c.obfs.candidates(addr, c.cands)
+	for i := range c.cands {
+		if n, ok := open(&c.cands[i], raw, p); ok {
+			c.obfs.noteHeard(addr, &c.cands[i])
+			return n, true
+		}
+	}
+	if c.obfs.AllowsRawFallthrough() {
+		return copy(p, raw), true
+	}
+	return 0, false
 }
 
 func (c *ObfsPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {

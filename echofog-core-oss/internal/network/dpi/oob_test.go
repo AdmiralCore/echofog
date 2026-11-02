@@ -142,13 +142,13 @@ func TestMuxQUICConnKeepsGSOAndECN(t *testing.T) {
 	spy := &spyConn{OOBPacketConn: oc}
 	quicDownload(t, spy, clientConn, 8<<20)
 	t.Logf("server: %d writes, %d GSO trains; %d datagrams read, %d ECN-marked", spy.writes.Load(), spy.gsoWrites.Load(), spy.reads.Load(), spy.ecnReads.Load())
-	checkFastPath(t, spy)
+	checkFastPath(t, spy, true)
 }
 
 // checkFastPath: on Linux quic-go must have read through ReadBatch, written GSO trains and seen
-// ECN marks; on Windows it must not have touched the OOB methods at all (it reads and writes one
+// ECN marks (when its peer sends them); on Windows it must not have touched the OOB methods at all (it reads and writes one
 // packet at a time there, as it always did).
-func checkFastPath(t *testing.T, spy *spyConn) {
+func checkFastPath(t *testing.T, spy *spyConn, peerMarksECN bool) {
 	t.Helper()
 	if runtime.GOOS == "windows" && spy.writes.Load()+spy.reads.Load() != 0 {
 		t.Fatal("on Windows quic-go must keep using ReadFrom/WriteTo")
@@ -160,7 +160,7 @@ func checkFastPath(t *testing.T, spy *spyConn) {
 		if spy.gsoWrites.Load() == 0 {
 			t.Fatal("quic-go must write GSO trains through the multiplexer")
 		}
-		if spy.ecnReads.Load() == 0 {
+		if peerMarksECN && spy.ecnReads.Load() == 0 {
 			t.Fatal("the ECN marks of the client's packets must reach quic-go")
 		}
 	}
