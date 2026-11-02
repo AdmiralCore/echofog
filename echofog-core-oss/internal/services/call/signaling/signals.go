@@ -49,8 +49,11 @@ const (
 	ActionKicked          SignalAction = "kicked"
 	ActionNack            SignalAction = "nack"
 	// ActionStreamFeedback is a viewer's report on its path for a stream, to its parent on the
-	// stream's tree; a relay sends the worst of its subtree on. Older nodes reject it as unknown.
+	// stream's tree; a relay sends its subtree's on with its own. Older nodes reject it as unknown.
 	ActionStreamFeedback SignalAction = "stream_feedback"
+	// ActionStreamWeak names, from a stream's broadcaster to the coordinator, the viewers whose
+	// path cannot carry the stream, to place at the bottom of its tree.
+	ActionStreamWeak SignalAction = "stream_weak"
 )
 
 // Kept for source compatibility with older callers.
@@ -139,16 +142,29 @@ type NackPayload struct {
 	Lost     []media.NackEntry `json:"lost"`
 }
 
-// StreamFeedbackPayload is the worst path of a subtree of a stream's viewers over the last
-// media.FeedbackInterval: how congested it is (media.Congestion), what arrived the first time,
-// the share lost before resends and the queue on the way.
+// StreamFeedbackPayload carries the paths of a subtree of a stream's viewers.
 type StreamFeedbackPayload struct {
-	StreamID string       `json:"stream_id"`
-	Level    uint8        `json:"level"`
-	Kbps     int          `json:"kbps,omitempty"`
-	Loss     float32      `json:"loss,omitempty"`
-	DelayMs  int          `json:"delay_ms,omitempty"`
-	Viewer   types.PeerID `json:"viewer"` // who measured it, for the logs
+	StreamID string           `json:"stream_id"`
+	Reports  []ViewerFeedback `json:"reports"`
+}
+
+// MaxFeedbackReports bounds the viewers one report names.
+const MaxFeedbackReports = 64
+
+// ViewerFeedback is one viewer's path over the last media.FeedbackInterval: how congested it is
+// (media.Congestion), what arrived the first time, the share lost before resends and the queue.
+type ViewerFeedback struct {
+	Viewer  types.PeerID `json:"viewer"`
+	Level   uint8        `json:"level"`
+	Kbps    int          `json:"kbps,omitempty"`
+	Loss    float32      `json:"loss,omitempty"`
+	DelayMs int          `json:"delay_ms,omitempty"`
+}
+
+// StreamWeakPayload names the viewers of a stream whose path cannot carry it.
+type StreamWeakPayload struct {
+	StreamID string         `json:"stream_id"`
+	Weak     []types.PeerID `json:"weak"`
 }
 
 type ReportPayload struct {

@@ -101,4 +101,8 @@ type StreamManifest struct {
 	Profiles         map[types.PeerID]PeerNodeProfile `json:"profiles,omitempty"` // Broadcaster and subscriber telemetry
 	Overflow         []types.PeerID                   `json:"overflow,omitempty"` // Subscribers attached beyond any relay's capacity
 	Avoid            map[types.PeerID][]types.PeerID  `json:"avoid,omitempty"`    // Subscriber -> relays it asked not to be fed by
+	// Weak lists the subscribers whose path cannot carry the stream, as the broadcaster found from
+	// their reports: they relay for nobody and hang at the bottom of the tree, where their losses
+	// reach no one else. Builds without the field drop it.
+	Weak []types.PeerID `json:"weak,omitempty"`
 }
