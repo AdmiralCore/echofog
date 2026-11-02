@@ -49,6 +49,8 @@ firewalls usually only have TCP open. On Google Cloud, where `ufw` is usually of
 firewall decides (run it in Cloud Shell or wherever `gcloud` is set up):
 
 ```bash
+gcloud projects list                          # the ID of the project the VM is in
+gcloud config set project <project ID>
 gcloud compute firewall-rules create echofog --allow udp:443,tcp:443
 ```
 
