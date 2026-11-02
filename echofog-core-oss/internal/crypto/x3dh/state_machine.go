@@ -64,6 +64,8 @@ type X3DHSession struct {
 	// InitMsgKey (responder only) opens the message of the init packet again, so a repeat of the
 	// packet (its receipt got lost) can be confirmed. Dropped at the first ratchet step.
 	InitMsgKey *memguard.Enclave
+	// PQ: the session started with PQXDH (a KEM secret is in its root key), not classic X3DH.
+	PQ bool
 }
 
 type ChainState struct {

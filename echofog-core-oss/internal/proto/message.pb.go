@@ -1604,9 +1604,15 @@ type X3DHInit struct {
 	InitialCiphertext *SecureMessage         `protobuf:"bytes,4,opt,name=initial_ciphertext,json=initialCiphertext,proto3" json:"initial_ciphertext,omitempty"`
 	// the sender's signed key bundle (a swarm bundle record, without one-time prekeys): the receiver
 	// takes the sender's identity key from it and needs no lookup in the network
-	SenderBundle  []byte `protobuf:"bytes,5,opt,name=sender_bundle,json=senderBundle,proto3" json:"sender_bundle,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SenderBundle []byte `protobuf:"bytes,5,opt,name=sender_bundle,json=senderBundle,proto3" json:"sender_bundle,omitempty"`
+	// PQXDH (the receiver's bundle had a KEM prekey): the ML-KEM-768 ciphertext and the SHA-256 of
+	// the KEM prekey it is for. v0.2.0 skips them and never sees them: it publishes no KEM prekey.
+	KemCiphertext []byte `protobuf:"bytes,6,opt,name=kem_ciphertext,json=kemCiphertext,proto3" json:"kem_ciphertext,omitempty"`
+	KemKeyId      []byte `protobuf:"bytes,7,opt,name=kem_key_id,json=kemKeyId,proto3" json:"kem_key_id,omitempty"`
+	// when the receiver signed the bundle the sender used; set by every sender newer than v0.2.0
+	BundleCreatedAt int64 `protobuf:"varint,8,opt,name=bundle_created_at,json=bundleCreatedAt,proto3" json:"bundle_created_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *X3DHInit) Reset() {
@@ -1672,6 +1678,27 @@ func (x *X3DHInit) GetSenderBundle() []byte {
 		return x.SenderBundle
 	}
 	return nil
+}
+
+func (x *X3DHInit) GetKemCiphertext() []byte {
+	if x != nil {
+		return x.KemCiphertext
+	}
+	return nil
+}
+
+func (x *X3DHInit) GetKemKeyId() []byte {
+	if x != nil {
+		return x.KemKeyId
+	}
+	return nil
+}
+
+func (x *X3DHInit) GetBundleCreatedAt() int64 {
+	if x != nil {
+		return x.BundleCreatedAt
+	}
+	return 0
 }
 
 type SessionInitRequest struct {
@@ -2555,13 +2582,17 @@ const file_internal_proto_message_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\x03R\tcreatedAt\x12\x18\n" +
 	"\aversion\x18\x06 \x01(\rR\aversion\x12\x1e\n" +
 	"\vkem_pre_key\x18\a \x01(\fR\tkemPreKey\x12#\n" +
-	"\rkem_signature\x18\b \x01(\fR\fkemSignature\"\xe1\x01\n" +
+	"\rkem_signature\x18\b \x01(\fR\fkemSignature\"\xd2\x02\n" +
 	"\bX3DHInit\x12#\n" +
 	"\rephemeral_key\x18\x01 \x01(\fR\fephemeralKey\x12!\n" +
 	"\fidentity_key\x18\x02 \x01(\fR\videntityKey\x12%\n" +
 	"\x0fone_time_key_id\x18\x03 \x01(\fR\foneTimeKeyId\x12A\n" +
 	"\x12initial_ciphertext\x18\x04 \x01(\v2\x12.p2p.SecureMessageR\x11initialCiphertext\x12#\n" +
-	"\rsender_bundle\x18\x05 \x01(\fR\fsenderBundle\"\xe6\x01\n" +
+	"\rsender_bundle\x18\x05 \x01(\fR\fsenderBundle\x12%\n" +
+	"\x0ekem_ciphertext\x18\x06 \x01(\fR\rkemCiphertext\x12\x1c\n" +
+	"\n" +
+	"kem_key_id\x18\a \x01(\fR\bkemKeyId\x12*\n" +
+	"\x11bundle_created_at\x18\b \x01(\x03R\x0fbundleCreatedAt\"\xe6\x01\n" +
 	"\x12SessionInitRequest\x12$\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x10.p2p.SessionTypeR\x04type\x12\x1d\n" +
 	"\n" +

@@ -32,6 +32,7 @@ type x3dhSessionDTO struct {
 	InitEK           [32]byte
 	InitMsgKey       []byte
 	PastRemoteDH     [][32]byte // absent in sessions stored before it: decodes as none
+	PQ               bool       // absent in sessions stored before PQXDH: classic
 }
 
 type chainStateDTO struct {
@@ -51,6 +52,7 @@ func (x *X3DHSession) ToBytes() ([]byte, error) {
 		LocalRatchetPub:  x.LocalRatchetPub,
 		RemoteRatchetPub: x.RemoteRatchetPub,
 		IsInitiator:      x.IsInitiator,
+		PQ:               x.PQ,
 		SkippedKeys:      make(map[[32]byte]map[uint32][]byte),
 	}
 
@@ -140,6 +142,7 @@ func FromBytes(data []byte) (*X3DHSession, error) {
 		PrevSendCount:    dto.PrevSendCount,
 		AD:               dto.AD,
 		InitEK:           dto.InitEK,
+		PQ:               dto.PQ,
 	}
 
 	session.RootKey = sealEnc(dto.RootKey)

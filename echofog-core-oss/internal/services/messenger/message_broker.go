@@ -452,10 +452,7 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		authenticated = true
 		hasSession, _ := s.crypto.HasSession(originID)
 
-		initPacket := types.ToX3DHInitPacket(payload.X3DhInit.EphemeralKey, payload.X3DhInit.IdentityKey, payload.X3DhInit.OneTimeKeyId, types.EncryptedMessage{
-			Header:     types.ToRatchetHeader(payload.X3DhInit.InitialCiphertext.Header.RatchetKey, payload.X3DhInit.InitialCiphertext.Header.Pn, payload.X3DhInit.InitialCiphertext.Header.N),
-			Ciphertext: payload.X3DhInit.InitialCiphertext.Ciphertext,
-		})
+		initPacket := initFromProto(payload.X3DhInit)
 
 		// both sides started a session at once: the one of the larger ID stays
 		myID, _ := s.identity.GetPeerID()
@@ -679,22 +676,7 @@ func (s *MessageBroker) toMessageData(targetID types.PeerID, encryptedData types
 			TargetId:  targetID[:],
 			Timestamp: uint64(time.Now().Unix()),
 			HopLimit:  types.HOPLIMIT,
-			Payload: &internal_pb.MessageData_X3DhInit{
-				X3DhInit: &internal_pb.X3DHInit{
-					EphemeralKey: initPacket.EphemeralKey[:],
-					IdentityKey:  initPacket.IdentityKey[:],
-					OneTimeKeyId: opkBytes(initPacket.OneTimeKeyID),
-					SenderBundle: card,
-					InitialCiphertext: &internal_pb.SecureMessage{
-						Header: &internal_pb.RatchetHeader{
-							RatchetKey: encryptedData.Header.DH[:],
-							Pn:         encryptedData.Header.PN,
-							N:          encryptedData.Header.N,
-						},
-						Ciphertext: encryptedData.Ciphertext,
-					},
-				},
-			},
+			Payload:   &internal_pb.MessageData_X3DhInit{X3DhInit: initToProto(initPacket, encryptedData, card)},
 		}
 		return msg, nil
 	}
@@ -983,6 +965,49 @@ func (s *MessageBroker) StartCallbackHandlers(msgDto *dto.MessageDTO) {
 
 func (s *MessageBroker) GetKeeper() *MessageKeeper {
 	return s.keeper
+}
+
+// initToProto is an init packet on the wire, with the first message and the sender's card. The
+// KEM fields stay empty for a classic init, so it is what v0.2.0 sends but for the bundle time.
+func initToProto(p *types.X3DHInit, first types.EncryptedMessage, card []byte) *internal_pb.X3DHInit {
+	return &internal_pb.X3DHInit{
+		EphemeralKey:    p.EphemeralKey[:],
+		IdentityKey:     p.IdentityKey[:],
+		OneTimeKeyId:    opkBytes(p.OneTimeKeyID),
+		SenderBundle:    card,
+		KemCiphertext:   p.KEMCiphertext,
+		KemKeyId:        opkBytes(p.KEMKeyID),
+		BundleCreatedAt: p.BundleCreatedAt,
+		InitialCiphertext: &internal_pb.SecureMessage{
+			Header: &internal_pb.RatchetHeader{
+				RatchetKey: first.Header.DH[:],
+				Pn:         first.Header.PN,
+				N:          first.Header.N,
+			},
+			Ciphertext: first.Ciphertext,
+		},
+	}
+}
+
+// initFromProto reads an init packet; one of v0.2.0 has no KEM fields and no bundle time. A
+// malformed KEM part is kept as it came, so the X3DH layer refuses it instead of reading it classic.
+func initFromProto(p *internal_pb.X3DHInit) types.X3DHInit {
+	first := p.GetInitialCiphertext()
+	h := first.GetHeader()
+	init := types.ToX3DHInitPacket(p.GetEphemeralKey(), p.GetIdentityKey(), p.GetOneTimeKeyId(), types.EncryptedMessage{
+		Header:     types.ToRatchetHeader(h.GetRatchetKey(), h.GetPn(), h.GetN()),
+		Ciphertext: first.GetCiphertext(),
+	})
+	init.KEMCiphertext = p.GetKemCiphertext()
+	if id := p.GetKemKeyId(); len(id) > 0 {
+		var k [32]byte // an id of the wrong length stays zero: it names no key, and is refused
+		if len(id) == len(k) {
+			copy(k[:], id)
+		}
+		init.KEMKeyID = &k
+	}
+	init.BundleCreatedAt = p.GetBundleCreatedAt()
+	return init
 }
 
 func opkBytes(k *[32]byte) []byte {
