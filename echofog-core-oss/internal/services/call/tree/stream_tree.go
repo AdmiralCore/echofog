@@ -3,6 +3,7 @@ package tree
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 
@@ -265,6 +266,7 @@ func (e *StreamTreeEngine) removeSubscriberLocked(s *StreamManifest, sub types.P
 		return false
 	}
 	s.Subscribers = append(s.Subscribers[:idx], s.Subscribers[idx+1:]...)
+	s.Weak = removePeer(s.Weak, sub)
 	delete(s.Profiles, sub)
 	delete(s.Avoid, sub)
 
@@ -435,7 +437,41 @@ func (e *StreamTreeEngine) profileLocked(s *StreamManifest, id types.PeerID) Pee
 }
 
 func (e *StreamTreeEngine) capacityLocked(s *StreamManifest, id types.PeerID) int {
+	if id != s.Broadcaster && containsPeer(s.Weak, id) {
+		return 0
+	}
 	return RelayCapacity(e.profileLocked(s, id), s.BitrateKbps, id == s.Broadcaster)
+}
+
+// SetWeak records the subscribers of a stream whose path cannot carry it (the broadcaster's
+// finding). A weak subscriber that feeds others is no place for them: the tree is built again,
+// strong relays first. changed is false when the list is the one the stream had.
+func (e *StreamTreeEngine) SetWeak(streamID string, weak []types.PeerID) (sm *StreamManifest, changed bool, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, ok := e.streams[streamID]
+	if !ok {
+		return nil, false, ErrStreamNotFound
+	}
+	var list []types.PeerID
+	for _, p := range weak {
+		if containsPeer(s.Subscribers, p) && !containsPeer(list, p) {
+			list = append(list, p)
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return bytes.Compare(list[i][:], list[j][:]) < 0 })
+	if slices.Equal(list, s.Weak) {
+		return cloneManifest(s), false, nil
+	}
+	s.Weak = list
+	s.Epoch++
+	for _, p := range list {
+		if len(s.DistributionTree[p]) > 0 {
+			e.rebuildLocked(s)
+			break
+		}
+	}
+	return cloneManifest(s), true, nil
 }
 
 func (e *StreamTreeEngine) depthLocked(s *StreamManifest, id types.PeerID) int {
@@ -571,6 +607,7 @@ func cloneManifest(m *StreamManifest) *StreamManifest {
 	c := *m
 	c.Subscribers = append([]types.PeerID(nil), m.Subscribers...)
 	c.Overflow = append([]types.PeerID(nil), m.Overflow...)
+	c.Weak = append([]types.PeerID(nil), m.Weak...)
 	c.DistributionTree = make(map[types.PeerID][]types.PeerID, len(m.DistributionTree))
 	for k, v := range m.DistributionTree {
 		c.DistributionTree[k] = append([]types.PeerID(nil), v...)

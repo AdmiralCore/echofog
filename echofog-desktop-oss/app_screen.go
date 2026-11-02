@@ -172,7 +172,7 @@ func (a *App) startNativeAudioLocked() error {
 	ctx := a.ctx
 	a.mu.RUnlock()
 	var pending []byte
-	audio, err := nativecap.StartAudio(func(pcm []byte) {
+	audio, err := nativecap.StartAudio(a.screen.sourceID, func(pcm []byte) {
 		pending = append(pending, pcm...)
 		n := 0
 		for ; len(pending)-n >= screenPCMChunk; n += screenPCMChunk {

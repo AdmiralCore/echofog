@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/network/net_types"
@@ -474,8 +475,17 @@ func (m *CallManager) requestKeyframeLocked(room *ActiveRoomState, streamID stri
 }
 
 // handleKeyframeRequestLocked serves the request if we broadcast the stream, otherwise passes
-// it one hop up; per-hop rate limiting collapses a burst from many viewers into one PLI.
-func (m *CallManager) handleKeyframeRequestLocked(room *ActiveRoomState, streamID string, now time.Time) {
+// it one hop up; per-hop rate limiting collapses a burst from many viewers into one PLI. A weak
+// viewer's requests go on once in weakKeyframeInterval.
+func (m *CallManager) handleKeyframeRequestLocked(room *ActiveRoomState, from types.PeerID, streamID string, now time.Time) {
+	if from != m.selfID {
+		if sm, ok := room.StreamEngine.GetStreamManifest(streamID); ok && slices.Contains(sm.Weak, from) {
+			if now.Sub(room.weakKeyframe[streamID]) < weakKeyframeInterval {
+				return
+			}
+			room.weakKeyframe[streamID] = now
+		}
+	}
 	ann, local := room.localStreams[streamID]
 	if !local {
 		m.requestKeyframeLocked(room, streamID, now)

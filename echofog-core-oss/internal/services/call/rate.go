@@ -7,6 +7,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
+	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
 // The browser encoder only learns about the loopback to the bridge, which never congests. This
@@ -18,7 +19,8 @@ import (
 // detail, so a single late frame is not worth one.
 //
 // The path beyond the queue is the viewers' to see: their reports (feedback.go) count like the
-// queue's own state, the worst of them and the queue's together. A viewer that loses a tenth of
+// queue's own state, the worst of them and the queue's together; a viewer found weak counts only
+// when no other viewer reports. A viewer that loses a tenth of
 // the stream or waits on a long queue also caps the rate at nine tenths of what reaches it, the
 // rate its path carries: cutting by quarters from 12 Mbit/s took seconds to find a 4 Mbit/s
 // link, each of them costing the viewer frames. A little loss or queueing holds the rate where
@@ -99,11 +101,9 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 		level = pathMild
 	}
 	queue := level
-	var viewer viewerReport
-	for id := range room.localStreams {
-		if rep, ok := m.worstFeedbackLocked(room, id, now); ok && rep.worse(viewer) {
-			viewer = rep
-		}
+	viewer, weak := m.viewersLocked(room, now)
+	if viewer.viewer == (types.PeerID{}) {
+		viewer = weak // only weak viewers report: the stream is theirs to follow
 	}
 	level = max(level, viewer.fb.Level)
 	floor := float64(rateFloorKbps * len(room.localStreams))

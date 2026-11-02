@@ -61,6 +61,8 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		keyframeSent:   make(map[string]time.Time),
 		keyframeServed: make(map[string]time.Time),
 		feedback:       make(map[string]map[types.PeerID]viewerReport),
+		paths:          make(map[string]map[types.PeerID]*viewerPath),
+		weakKeyframe:   make(map[string]time.Time),
 		startedAt:      now,
 		waitingSince:   now,
 		lastStatsLog:   now,

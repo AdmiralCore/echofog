@@ -49,9 +49,12 @@ const (
 	// keyframeServeInterval: how often the broadcaster's encoder makes an IDR on request; each one
 	// is huge at 4K, and the frames right after it get starved into blur.
 	keyframeServeInterval = time.Second
-	seenFloodTTL          = 10 * time.Second
-	syncRequestInterval   = time.Second
-	connectRetryInterval  = 2 * time.Second
+	// weakKeyframeInterval: how often a weak viewer's keyframe requests go on. It loses much of
+	// the stream and would ask all the time, and every keyframe it got would be every viewer's.
+	weakKeyframeInterval = 5 * time.Second
+	seenFloodTTL         = 10 * time.Second
+	syncRequestInterval  = time.Second
+	connectRetryInterval = 2 * time.Second
 	// streamFeederTimeout: feeders pulse every 250 ms, so 700 ms of silence means the link is dead.
 	streamFeederTimeout = 700 * time.Millisecond
 	reparentRetry       = time.Second
@@ -124,6 +127,10 @@ type ActiveRoomState struct {
 	// feedback holds the latest path report of each child on each stream (feedback.go)
 	feedback     map[string]map[types.PeerID]viewerReport
 	lastFeedback time.Time
+	// paths holds, for our own streams, each viewer's recent grades and whether it is weak
+	paths map[string]map[types.PeerID]*viewerPath
+	// weakKeyframe is when a keyframe a weak viewer asked for was last passed on, by stream
+	weakKeyframe map[string]time.Time
 
 	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq, lastParentLost time.Time
 

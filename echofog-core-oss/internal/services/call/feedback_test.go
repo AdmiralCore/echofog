@@ -9,6 +9,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
@@ -108,44 +109,44 @@ func TestRoom_ViewerReportsBringTheRateDownToTheirLink(t *testing.T) {
 	t.Logf("the link widened: the rate doubled in %v", time.Since(wide).Round(100*time.Millisecond))
 }
 
-// A relay passes up the worst report of its subtree: the broadcaster slows down for a viewer it
-// does not feed itself.
-func TestRoom_RelayPassesUpItsChildrensReports(t *testing.T) {
+// A viewer behind a narrow link hangs below a relay. Its reports reach the broadcaster through
+// the relay; as the relay's own path is clean meanwhile, the broadcaster finds it weak, the
+// coordinator keeps it at the bottom of the tree, and the stream stays at what the relay gets
+// instead of following the weak viewer down to its link.
+func TestRoom_AWeakViewerDoesNotHoldTheOthersBack(t *testing.T) {
 	m := newMesh()
-	nodes, _ := newRoom(t, m, 2)
-	b, relay := nodes[1], nodes[0]
-	now := time.Now()
-	b.cm.mu.Lock()
-	room := b.cm.activeRoom
-	b.cm.mu.Unlock()
-	require.NotNil(t, room)
-	q, _ := tree.QualityByID("1080p60")
+	nodes, _ := newRoom(t, m, 3)
+	relay, b, weak := nodes[0], nodes[1], nodes[2]
+	b.cm.SetUploadCapacity(8000) // the broadcaster feeds one viewer, the other hangs below it
+	enc := &pump{}
+	b.cm.SetLocalEncoder(bridge.RoleScreen, enc)
+	q, _ := tree.QualityByID("720p60") // 6 Mbit/s
 	require.NoError(t, b.cm.StartStream("s", "screen", q))
 	require.NoError(t, relay.cm.WatchStream("s"))
+	require.NoError(t, weak.cm.WatchStream("s"))
 	require.Eventually(t, func() bool {
-		sm, ok := relay.cm.StreamTree("s")
-		return ok && len(sm.ParentMap) == 1
-	}, 5*time.Second, 20*time.Millisecond)
+		sm, ok := b.cm.StreamTree("s")
+		return ok && sm.ParentMap[weak.id] == relay.id && sm.ParentMap[relay.id] == b.id
+	}, 5*time.Second, 20*time.Millisecond, "the weak viewer hangs below the relay")
+	require.Eventually(t, func() bool { return enc.bps.Load() > 0 }, 5*time.Second, 20*time.Millisecond)
 
-	// a viewer under the relay reports a heavy path
-	var far types.PeerID
-	far[0] = 9
-	relay.cm.mu.Lock()
-	rr := relay.cm.activeRoom
-	rr.feedback["s"] = map[types.PeerID]viewerReport{far: {fb: media.Feedback{Level: media.PathHeavy, Kbps: 3000, Loss: 0.12}, viewer: far, at: now}}
-	relay.cm.mu.Unlock()
-	refresh := func() {
-		relay.cm.mu.Lock()
-		rr.feedback["s"][far] = viewerReport{fb: media.Feedback{Level: media.PathHeavy, Kbps: 3000, Loss: 0.12}, viewer: far, at: time.Now()}
-		relay.cm.mu.Unlock()
-	}
+	enc.run(b.cm)
+	defer enc.halt()
+	time.Sleep(3 * time.Second) // both watch for a while, then the weak one's link narrows
+	m.shape(relay.id, weak.id, 1500, 200*time.Millisecond)
+
 	require.Eventually(t, func() bool {
-		refresh()
-		b.cm.mu.Lock()
-		defer b.cm.mu.Unlock()
-		rep, ok := b.cm.worstFeedbackLocked(room, "s", time.Now())
-		return ok && rep.viewer == far && rep.fb.Level == media.PathHeavy && rep.fb.Kbps == 3000
-	}, 5*time.Second, 50*time.Millisecond)
+		sm, ok := b.cm.StreamTree("s")
+		return ok && len(sm.Weak) == 1 && sm.Weak[0] == weak.id
+	}, 15*time.Second, 100*time.Millisecond, "the broadcaster finds the weak viewer")
+	b.cm.mu.Lock()
+	reports := len(b.cm.activeRoom.feedback["s"])
+	b.cm.mu.Unlock()
+	assert.Equal(t, 2, reports, "both viewers' reports reach the broadcaster, one through the relay")
+
+	time.Sleep(5 * time.Second)
+	t.Logf("with the weak viewer's link at 1.5 Mbit/s the stream goes at %d kbps", enc.bps.Load()/1000)
+	assert.Greater(t, enc.bps.Load(), uint64(4000_000), "the relay's clean path sets the rate")
 }
 
 // Sound goes twice on every hop: with every tenth datagram of sound lost on every link, nearly all
@@ -191,4 +192,48 @@ func TestRoom_SoundSurvivesScatteredLoss(t *testing.T) {
 		assert.GreaterOrEqual(t, sound, units*97/100, "stream sound")
 	}
 	assert.NotZero(t, n.Load())
+}
+
+// A weak viewer's keyframe requests go on once in weakKeyframeInterval: every keyframe it got
+// would be every viewer's.
+func TestRoom_AWeakViewersKeyframeRequestsAreHeldBack(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	b := nodes[1]
+	var served atomic.Int32
+	b.cm.OnKeyframeRequest = func(string) { served.Add(1) }
+	q, _ := tree.QualityByID("720p30")
+	require.NoError(t, b.cm.StartStream("s", "screen", q))
+	require.NoError(t, nodes[0].cm.WatchStream("s"))
+	require.NoError(t, nodes[2].cm.WatchStream("s"))
+	require.Eventually(t, func() bool {
+		sm, ok := b.cm.StreamTree("s")
+		return ok && len(sm.ParentMap) == 2
+	}, 5*time.Second, 20*time.Millisecond)
+	coord := nodes[0] // as the broadcaster's stream_weak reaches it
+	coord.cm.mu.Lock()
+	coord.cm.weakLocked(coord.cm.activeRoom, b.id, signaling.StreamWeakPayload{StreamID: "s", Weak: []types.PeerID{nodes[2].id}})
+	coord.cm.mu.Unlock()
+	require.Eventually(t, func() bool {
+		sm, ok := b.cm.StreamTree("s")
+		return ok && len(sm.Weak) == 1
+	}, 5*time.Second, 20*time.Millisecond)
+
+	time.Sleep(keyframeServeInterval + 100*time.Millisecond)
+	before := served.Load()
+	ask := func(nd *testNode) {
+		b.cm.mu.Lock()
+		b.cm.handleKeyframeRequestLocked(b.cm.activeRoom, nd.id, "s", time.Now())
+		b.cm.mu.Unlock()
+	}
+	for i := 0; i < 3; i++ {
+		ask(nodes[2])
+		time.Sleep(keyframeServeInterval + 100*time.Millisecond)
+	}
+	require.Eventually(t, func() bool { return served.Load() == before+1 }, time.Second, 20*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, before+1, served.Load(), "one of three in %v", 3*keyframeServeInterval)
+
+	ask(nodes[0]) // a strong viewer's goes on
+	require.Eventually(t, func() bool { return served.Load() == before+2 }, time.Second, 20*time.Millisecond)
 }

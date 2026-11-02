@@ -350,3 +350,43 @@ func TestStreamTree_ViewerScreenRateIsInTheManifest(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(plain), "display_hz", "a screen not known leaves the profile bytes as they were")
 }
+
+// A subscriber the broadcaster found weak relays for nobody: the tree is built again around it,
+// and it hangs at the bottom.
+func TestStreamTree_WeakSubscriberHangsAtTheBottom(t *testing.T) {
+	e := NewStreamTreeEngine()
+	bc := makePeerID(1)
+	_, err := e.RegisterStream("s", bc, "screen", 4000, PeerNodeProfile{PeerID: bc, UploadKbps: 8000})
+	require.NoError(t, err)
+	var subs []types.PeerID
+	for i := 2; i <= 7; i++ {
+		p := makePeerID(byte(i))
+		subs = append(subs, p)
+		_, err := e.Subscribe("s", p, PeerNodeProfile{PeerID: p, MaxRelayChildren: 3, UploadKbps: 20000})
+		require.NoError(t, err)
+	}
+	sm, _ := e.GetStreamManifest("s")
+	var relay types.PeerID
+	for p, children := range sm.DistributionTree {
+		if p != bc && len(children) > 0 {
+			relay = p
+		}
+	}
+	require.NotEqual(t, types.PeerID{}, relay, "someone relays")
+
+	moved, changed, err := e.SetWeak("s", []types.PeerID{relay, makePeerID(99)})
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, []types.PeerID{relay}, moved.Weak, "only subscribers")
+	assert.Greater(t, moved.Epoch, sm.Epoch)
+	assert.Empty(t, moved.DistributionTree[relay], "it feeds nobody")
+	assert.Len(t, moved.ParentMap, len(subs), "everyone still watches")
+	assertValidStreamTree(t, moved)
+
+	_, changed, err = e.SetWeak("s", []types.PeerID{relay})
+	require.NoError(t, err)
+	assert.False(t, changed)
+	after, err := e.Unsubscribe("s", relay)
+	require.NoError(t, err)
+	assert.Empty(t, after.Weak)
+}

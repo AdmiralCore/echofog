@@ -138,7 +138,7 @@ func (m *CallManager) previewKeyframe(streamID string) {
 	m.mu.Lock()
 	if room := m.activeRoom; room != nil {
 		if _, local := room.localStreams[streamID]; local {
-			m.handleKeyframeRequestLocked(room, streamID, time.Now())
+			m.handleKeyframeRequestLocked(room, m.selfID, streamID, time.Now())
 		}
 	}
 	m.unlockAndFlush()

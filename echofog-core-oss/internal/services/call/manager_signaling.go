@@ -347,6 +347,16 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			m.reparentLocked(room, sender, rp, now)
 		}
 
+	case signaling.ActionStreamWeak:
+		var wp signaling.StreamWeakPayload
+		if !room.IsCoordinator {
+			m.rejectLocked(room, env, "not the coordinator", false)
+		} else if decodePayload(env.Payload, &wp) != nil || len(wp.Weak) > signaling.MaxFeedbackReports {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
+			m.weakLocked(room, sender, wp)
+		}
+
 	case signaling.ActionReport:
 		var rp signaling.ReportPayload
 		if !room.IsCoordinator {
@@ -453,7 +463,7 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 		if decodePayload(env.Payload, &streamID) != nil {
 			m.rejectLocked(room, env, "malformed", true)
 		} else {
-			m.handleKeyframeRequestLocked(room, streamID, now)
+			m.handleKeyframeRequestLocked(room, sender, streamID, now)
 		}
 
 	case signaling.ActionMediaKey:
@@ -498,6 +508,8 @@ func (m *CallManager) toCoordinatorLocked(room *ActiveRoomState, action signalin
 		m.reparentLocked(room, m.selfID, data.(signaling.ReparentPayload), time.Now())
 	case signaling.ActionReport:
 		m.reportLocked(room, m.selfID, data.(signaling.ReportPayload), time.Now())
+	case signaling.ActionStreamWeak:
+		m.weakLocked(room, m.selfID, data.(signaling.StreamWeakPayload))
 	}
 }
 
