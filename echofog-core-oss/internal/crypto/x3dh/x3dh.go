@@ -200,23 +200,15 @@ func (x *X3DHEngine) responderKEM(init types.X3DHInit, sender *keymanager.Public
 	if len(init.KEMCiphertext) != mlkem.CiphertextSize768 || init.KEMKeyID == nil {
 		return nil, ErrBadKEMInit
 	}
-	seedEnc, err := x.accntManager.OpenKEMPreKey(*init.KEMKeyID)
-	if err != nil {
-		return nil, ErrKEMKeyNotFound
-	}
-	seed, err := seedEnc.Open()
-	if err != nil {
-		return nil, ErrEnclaveOpenFailed
-	}
-	defer seed.Destroy()
-	dk, err := mlkem.NewDecapsulationKey768(seed.Bytes())
-	if err != nil {
-		return nil, ErrKEMKeyNotFound
-	}
 	// a ciphertext made for another key gives another secret (implicit rejection): the message of
 	// the init then fails to open
-	ss, err := dk.Decapsulate(init.KEMCiphertext)
-	if err != nil {
+	ss, err := x.accntManager.Decapsulate(*init.KEMKeyID, init.KEMCiphertext)
+	switch {
+	case errors.Is(err, keymanager.ErrKEMKeyNotFound):
+		return nil, ErrKEMKeyNotFound
+	case errors.Is(err, keymanager.ErrEnclaveOpenFailed):
+		return nil, ErrEnclaveOpenFailed
+	case err != nil:
 		return nil, ErrBadKEMInit
 	}
 	return &KEMInput{SharedSecret: ss, KeyID: *init.KEMKeyID, Ciphertext: init.KEMCiphertext}, nil

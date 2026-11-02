@@ -5,6 +5,7 @@ import (
 	"crypto/mlkem"
 	"encoding/binary"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -135,6 +136,8 @@ func TestKEMPreKeyRotationKeepsTheOldOne(t *testing.T) {
 		st.data[string(name)] = sealed
 	}
 	age([]byte(kemCurrentKey), KEMPreKeyTTL+time.Hour)
+	pubRec := st.data[kemPubKey]
+	binary.BigEndian.PutUint64(pubRec[:8], uint64(time.Now().Add(-KEMPreKeyTTL-time.Hour).Unix()))
 
 	newPub, err := acc.KEMPreKey()
 	if err != nil {
@@ -210,5 +213,108 @@ func TestKEMSinceFromAClockAheadIsCorrected(t *testing.T) {
 	}
 	if acc.KEMSince() != since {
 		t.Fatal("a corrected kem:since must stay put")
+	}
+}
+
+// bytesPerCall is what f allocates on the heap per call, on average.
+func bytesPerCall(f func()) uint64 {
+	const n = 50
+	runtime.GC()
+	var a, b runtime.MemStats
+	runtime.ReadMemStats(&a)
+	for i := 0; i < n; i++ {
+		f()
+	}
+	runtime.ReadMemStats(&b)
+	return (b.TotalAlloc - a.TotalAlloc) / n
+}
+
+// Handing out the public half of the KEM prekey, or finding the prekey an init names, must not
+// expand the private key: an expanded ML-KEM-768 key (the seed and the secret vector, about 7.8 KB)
+// cannot be wiped through Go's API, and one was left on the heap for every bundle handed out.
+func TestKEMPublicHalfDoesNotExpandThePrivateKey(t *testing.T) {
+	defer memguard.Purge()
+	acc, _ := testAccount(t)
+	pub, err := acc.KEMPreKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := KEMKeyID(pub)
+	const expanded = 7 * 1024
+	n := bytesPerCall(func() { _, _ = acc.KEMPreKey() })
+	t.Logf("KEMPreKey: %d bytes a call", n)
+	if n >= expanded {
+		t.Fatalf("KEMPreKey allocates %d bytes a call: it expands the private key", n)
+	}
+	if n := bytesPerCall(func() { _, _ = acc.OpenKEMPreKey(id) }); n >= expanded {
+		t.Fatalf("OpenKEMPreKey allocates %d bytes a call: it expands the private key", n)
+	}
+	again, err := acc.KEMPreKey()
+	if err != nil || !bytes.Equal(again, pub) {
+		t.Fatal("the same KEM prekey until it is replaced")
+	}
+}
+
+// Decapsulate opens what was encapsulated to our KEM prekey, and leaves no expanded key behind.
+func TestDecapsulateAndWipe(t *testing.T) {
+	defer memguard.Purge()
+	acc, _ := testAccount(t)
+	pub, err := acc.KEMPreKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ek, err := mlkem.NewEncapsulationKey768(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss, ct := ek.Encapsulate()
+	got, err := acc.Decapsulate(KEMKeyID(pub), ct)
+	if err != nil || !bytes.Equal(got, ss) {
+		t.Fatalf("decapsulate: %v", err)
+	}
+	if _, err := acc.Decapsulate([32]byte{1}, ct); !errors.Is(err, ErrKEMKeyNotFound) {
+		t.Fatalf("an unknown id: %v", err)
+	}
+
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipeDecapsulationKey(dk)
+	if !bytes.Equal(dk.Bytes(), make([]byte, mlkem.SeedSize)) {
+		t.Fatal("the expanded key still holds its seed")
+	}
+}
+
+// A current KEM prekey stored by an older build (the seed without its id, no public half kept) is
+// still the one offered and opened, and is stored the new way from then on.
+func TestKEMPreKeyOfAnOlderBuild(t *testing.T) {
+	defer memguard.Purge()
+	acc, st := testAccount(t)
+	pub, err := acc.KEMPreKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := openBytes(t, mustOpenKEM(t, acc, pub))
+	sealed, err := acc.seal([]byte(kemCurrentKey), timedSeed(time.Now(), seed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.data[kemCurrentKey] = sealed
+	delete(st.data, kemPubKey)
+
+	if !bytes.Equal(openBytes(t, mustOpenKEM(t, acc, pub)), seed) {
+		t.Fatal("the old record must still open")
+	}
+	again, err := acc.KEMPreKey()
+	if err != nil || !bytes.Equal(again, pub) {
+		t.Fatalf("the old record's key must still be offered: %v", err)
+	}
+	if len(st.data[kemPubKey]) != kemPubLen {
+		t.Fatal("the public half is kept from now on")
+	}
+	plain, err := acc.open([]byte(kemCurrentKey), st.data[kemCurrentKey], -1)
+	if err != nil || len(plain) != kemSealedLen {
+		t.Fatal("the record is stored again with its id")
 	}
 }

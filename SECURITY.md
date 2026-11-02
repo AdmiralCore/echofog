@@ -109,6 +109,10 @@ On 2 November:
   of group chats and calls, and all signatures still use X25519 and Ed25519 only. A recorded
   one-to-one chat is covered, but if a device's keys leak, a quantum attacker could go on reading
   later messages of that chat. A post-quantum ratchet is the next step.
+- **The ML-KEM private key passes through ordinary memory.** Go's ML-KEM cannot be given locked
+  memory or wiped through its API. The key is kept sealed and expanded only to open a new chat's
+  first message, then wiped in place, but short-lived copies the library makes on the way are not,
+  and may end up in swap or a crash dump.
 
 - **The DHT lists public nodes.** Their address and ID are published together, so a censor who
   crawls the DHT can find them and confirm they are EchoFog nodes. The per-node disguise key only
@@ -283,6 +287,11 @@ EchoFog — **экспериментальный** проект.
   групповых чатов и звонков и все подписи пока только на X25519 и Ed25519. Записанная личная
   переписка защищена, но если ключи с устройства утекут, квантовая атака сможет читать и следующие
   сообщения этого чата. Постквантовый храповик — следующий шаг.
+- **Закрытый ключ ML-KEM проходит через обычную память.** Реализации ML-KEM в Go нельзя дать
+  защищённую память, и её API не умеет затирать ключ. Ключ хранится запечатанным и разворачивается
+  только чтобы открыть первое сообщение нового чата, а потом затирается на месте. Но кратковременные
+  копии, которые библиотека делает по ходу, не затираются и могут попасть в файл подкачки или в
+  дамп при падении.
 
 - **DHT публикует публичные ноды.** Их адрес и ID лежат там вместе, так что цензор, который обходит
   DHT, может их найти и убедиться, что это ноды EchoFog. Ключ маскировки, привязанный к ноде,
