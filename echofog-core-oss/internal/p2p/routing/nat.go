@@ -63,7 +63,8 @@ type NATManager struct {
 	mu         sync.RWMutex
 	report     natcheck.Report
 	natType    NATType
-	publicAddr string
+	publicAddr string         // ip:port, empty while no observer of our QUIC socket's port agrees
+	publicIP   string         // the IP alone, also from observers on other sockets (country placement)
 	mapped     netip.AddrPort // external address of a router port mapping, if any
 	// carrierNAT: a router was found but its own WAN address is private or in 100.64/10, so the
 	// node sits behind a second NAT (carrier-grade or double NAT) and no port forward can reach it.
@@ -247,7 +248,10 @@ func (m *NATManager) Discover() (string, error) {
 		t = NATSymmetric
 	}
 
-	pub := r.Public.String()
+	pub := ""
+	if r.Public.Port() != 0 {
+		pub = r.Public.String()
+	} // else only peers on other sockets (REALITY) saw this IP: no port for invitations or punching
 	m.mu.Lock()
 	prevAddr, prevType := m.publicAddr, m.natType
 	if keep := !r.Public.IsValid() || (!stunOK && !r.Agreed(guardObservers)); keep {
@@ -259,7 +263,7 @@ func (m *NATManager) Discover() (string, error) {
 			"agree", r.Agree, "observers", r.Observers)
 		return prevAddr, nil
 	}
-	m.report, m.natType, m.publicAddr = r, t, pub
+	m.report, m.natType, m.publicAddr, m.publicIP = r, t, pub, r.Public.Addr().String()
 	m.mu.Unlock()
 
 	if prevType != t || prevAddr != pub {
@@ -356,6 +360,15 @@ func (m *NATManager) GetPublicAddr() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.publicAddr
+}
+
+// PublicIP is our public IP as the observers agree on it, also when only peers connected through
+// other sockets (REALITY dials) saw it and GetPublicAddr has no port to go with it. It is what
+// places the node in a country. Empty while not known.
+func (m *NATManager) PublicIP() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.publicIP
 }
 
 func (m *NATManager) String() string {

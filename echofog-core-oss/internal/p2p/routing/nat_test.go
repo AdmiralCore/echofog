@@ -325,3 +325,35 @@ func TestSTUNCanBeForbidden(t *testing.T) {
 	m.ping(context.Background())
 	assert.Equal(t, 0, conn.sent())
 }
+
+// In guard mode the guards are reached over REALITY, each dial on a socket of its own, and they
+// may be the only peers. Their answers place the node (the IP, for its country) without telling
+// the port or the mapping: guard_mode "auto" used to wait forever for a country.
+func TestPeersOnRealitySocketsTellTheIPForTheCountry(t *testing.T) {
+	conn := newSTUNCounter()
+	m := NewNATManager(conn, quiet())
+	m.SetSTUNAllowed(func() bool { return false }) // guard mode
+	m.SetObserver(func(context.Context) []natcheck.Observation {
+		return []natcheck.Observation{
+			{From: "guard1", Addr: netip.MustParseAddrPort("8.8.8.7:61001"), IPOnly: true},
+			{From: "guard2", Addr: netip.MustParseAddrPort("8.8.8.7:61877"), IPOnly: true},
+		}
+	})
+	_, err := m.Discover()
+	require.NoError(t, err)
+	assert.Equal(t, "8.8.8.7", m.PublicIP(), "the IP places the node")
+	assert.Empty(t, m.GetPublicAddr(), "no port: those sockets have mappings of their own")
+	assert.Empty(t, m.Candidates())
+	_, typ := m.GetNATProfile()
+	assert.Equal(t, NATUnknown, typ, "different ports on different sockets are not a symmetric NAT")
+	assert.Equal(t, 0, conn.sent())
+
+	// one guard alone is not enough
+	lone := NewNATManager(conn, quiet())
+	lone.SetSTUNAllowed(func() bool { return false })
+	lone.SetObserver(func(context.Context) []natcheck.Observation {
+		return []natcheck.Observation{{From: "guard1", Addr: netip.MustParseAddrPort("8.8.8.7:61001"), IPOnly: true}}
+	})
+	_, _ = lone.Discover()
+	assert.Empty(t, lone.PublicIP())
+}

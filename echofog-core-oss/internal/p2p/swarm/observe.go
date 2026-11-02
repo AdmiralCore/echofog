@@ -70,7 +70,10 @@ func (s *Swarm) ObserveFromPeers(ctx context.Context, max int) []natcheck.Observ
 // ObserveFromPeersOn is ObserveFromPeers for the peers connected through our socket on port (0:
 // any). A connection from another socket (a REALITY dial opens its own, so does a birthday punch)
 // goes through the NAT with a mapping of its own, and its port says nothing about the one peers
-// reach the node at; behind a cone NAT it would even make the NAT look symmetric.
+// reach the node at; behind a cone NAT it would even make the NAT look symmetric. The IP it sees is
+// ours all the same, and in guard mode the guards, all reached over REALITY, may be the only
+// peers there are: so when fewer than max peers share the socket, peers on other sockets fill up,
+// marked IPOnly (they place the node in a country, they do not tell its port or mapping).
 //
 // Nothing proves a peer's answer, so who is asked matters (see pickObservers): the servers the
 // node was told about (bootstrap, invitations) and its guards first, then peers it dialed itself,
@@ -83,11 +86,10 @@ func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natchec
 		if p.ActiveProtocol() == router.ProtoTCPTLS {
 			continue
 		}
+		ipOnly := false
 		if port != 0 {
 			la, err := netip.ParseAddrPort(p.LocalAddr())
-			if err != nil || int(la.Port()) != port {
-				continue
-			}
+			ipOnly = err != nil || int(la.Port()) != port
 		}
 		ra, err := netip.ParseAddrPort(p.RemoteAddr())
 		if err != nil {
@@ -100,22 +102,22 @@ func (s *Swarm) ObserveFromPeersOn(ctx context.Context, max, port int) []natchec
 		case p.Outbound():
 			tier = tierDialed
 		}
-		cands = append(cands, observerCand{id: p.ID(), host: ra.Addr().Unmap(), tier: tier})
+		cands = append(cands, observerCand{id: p.ID(), host: ra.Addr().Unmap(), tier: tier, ipOnly: ipOnly})
 	}
-	ids := pickObservers(cands, max)
+	picked := pickObservers(cands, max)
 
 	var mu sync.Mutex
-	got := make([]*natcheck.Observation, len(ids))
+	got := make([]*natcheck.Observation, len(picked))
 	var wg sync.WaitGroup
-	for i, id := range ids {
+	for i, c := range picked {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			cctx, cancel := context.WithTimeout(ctx, observeTimeout)
 			defer cancel()
-			if ap, err := s.ObservedAddr(cctx, id); err == nil {
+			if ap, err := s.ObservedAddr(cctx, c.id); err == nil {
 				mu.Lock()
-				got[i] = &natcheck.Observation{From: id.String(), Addr: ap}
+				got[i] = &natcheck.Observation{From: c.id.String(), Addr: ap, IPOnly: c.ipOnly}
 				mu.Unlock()
 			}
 		}()
@@ -140,17 +142,24 @@ const (
 )
 
 type observerCand struct {
-	id   types.PeerID
-	host netip.Addr
-	tier int
+	id     types.PeerID
+	host   netip.Addr
+	tier   int
+	ipOnly bool // connected through another socket of ours
 }
 
-// pickObservers chooses up to max observers: by tier, and within the picks one host per address
-// and one per network (an IPv4 /16, an IPv6 /32) before a second from the same network, so a
-// handful of hosts one party rents side by side do not answer for the whole Internet.
-func pickObservers(cands []observerCand, max int) []types.PeerID {
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].tier < cands[j].tier })
-	var ids []types.PeerID
+// pickObservers chooses up to max observers: the ones on the asked socket before the ones on
+// others, each by tier, and within the picks one host per address and one per network (an IPv4
+// /16, an IPv6 /32) before a second from the same network, so a handful of hosts one party rents
+// side by side do not answer for the whole Internet.
+func pickObservers(cands []observerCand, max int) []observerCand {
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].ipOnly != cands[j].ipOnly {
+			return !cands[i].ipOnly
+		}
+		return cands[i].tier < cands[j].tier
+	})
+	var ids []observerCand
 	seenHost := map[netip.Addr]bool{}
 	seenNet := map[netip.Prefix]bool{}
 	taken := make([]bool, len(cands))
@@ -167,7 +176,7 @@ func pickObservers(cands []observerCand, max int) []types.PeerID {
 				continue // a second one from this network only if nothing else is left
 			}
 			taken[i], seenHost[c.host], seenNet[nw] = true, true, true
-			ids = append(ids, c.id)
+			ids = append(ids, c)
 		}
 	}
 	return ids

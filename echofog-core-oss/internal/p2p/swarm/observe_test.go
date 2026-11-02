@@ -75,8 +75,36 @@ func TestObserveFromPeersOnKeepsToOneSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	assert.Len(t, swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()), 1, "the main socket's peer is asked")
-	assert.Empty(t, swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()+1), "a peer on another socket is not")
+	main := swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort())
+	require.Len(t, main, 1, "the main socket's peer is asked")
+	assert.False(t, main[0].IPOnly)
+}
+
+// A peer connected through another socket (a REALITY dial's own) tells our IP, not our port: in
+// guard mode the guards may be the only peers there are, and without them the node's country was
+// never known, so guard_mode "auto" never stood down even in a free country.
+func TestPeersOnAnotherSocketTellTheIPOnly(t *testing.T) {
+	ctxA, swA, trA, storeA := testSwarmInit(t, "127.0.0.1:0")
+	defer swA.Close()
+	defer trA.Close()
+	defer storeA.CloseAndClear()
+	_, swB, trB, storeB := testSwarmInit(t, "127.0.0.1:0")
+	defer swB.Close()
+	defer trB.Close()
+	defer storeB.CloseAndClear()
+
+	require.NoError(t, trB.DialEarly(ctxA, trA.Addr().String()))
+	require.Eventually(t, func() bool { return len(swB.GetAllPeers()) > 0 }, 5*time.Second, 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// seen as if the node listened on another port, A is a peer on another socket, like a guard
+	obs := swB.ObserveFromPeersOn(ctx, 4, trB.UDPPort()+1)
+	require.Len(t, obs, 1, "a peer on another socket still tells our IP")
+	r := natcheck.Classify(obs, nil)
+	assert.Equal(t, "127.0.0.1", r.Public.Addr().String(), "the IP is taken")
+	assert.Zero(t, r.Public.Port(), "the port is not: that socket has a NAT mapping of its own")
+	assert.Equal(t, natcheck.MappingUnknown, r.Mapping)
 }
 
 // The servers the node was told about and its guards are asked first, then peers it dialed, then
@@ -94,7 +122,19 @@ func TestObserversAreTheTrustedAndTheDiverseFirst(t *testing.T) {
 		{id: id(5), host: host("7.7.7.7"), tier: tierInbound},
 		{id: id(6), host: host("7.7.7.7"), tier: tierInbound}, // same host as 5
 	}
-	assert.Equal(t, []types.PeerID{id(4), id(2), id(1)}, pickObservers(append([]observerCand(nil), cands...), 3))
-	assert.Equal(t, []types.PeerID{id(4), id(2), id(1), id(5), id(3)}, pickObservers(append([]observerCand(nil), cands...), 8),
+	ids := func(cs []observerCand) (out []types.PeerID) {
+		for _, c := range cs {
+			out = append(out, c.id)
+		}
+		return out
+	}
+	assert.Equal(t, []types.PeerID{id(4), id(2), id(1)}, ids(pickObservers(append([]observerCand(nil), cands...), 3)))
+	assert.Equal(t, []types.PeerID{id(4), id(2), id(1), id(5), id(3)}, ids(pickObservers(append([]observerCand(nil), cands...), 8)),
 		"the second one from a network only when nothing else is left, a host only once")
+
+	// peers on other sockets fill up after the ones on ours, trusted or not (a second one from
+	// a network waits even for them)
+	guard := observerCand{id: id(7), host: host("5.5.5.5"), tier: tierTold, ipOnly: true}
+	assert.Equal(t, []types.PeerID{id(4), id(2), id(1), id(5)}, ids(pickObservers(append([]observerCand{guard}, cands...), 4)))
+	assert.Equal(t, []types.PeerID{id(4), id(2), id(1), id(5), id(7)}, ids(pickObservers(append([]observerCand{guard}, cands...), 5)))
 }

@@ -68,7 +68,9 @@ func (n *NodeApi) homeCountry() string {
 	if n.node.NAT == nil {
 		return ""
 	}
-	ip := geoIP(n.node.NAT.GetPublicAddr())
+	// the IP alone: guards and servers are reached over REALITY, on sockets of their own, and in
+	// guard mode they may be the only peers there are to tell it
+	ip := geoIP(n.node.NAT.PublicIP())
 	if ip == "" {
 		return ""
 	}

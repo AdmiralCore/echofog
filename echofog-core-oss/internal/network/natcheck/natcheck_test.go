@@ -313,3 +313,28 @@ func TestLiveDefaultServers(t *testing.T) {
 		}
 	}
 }
+
+// An observer on another socket of ours tells the IP, not the port: its connection has a NAT
+// mapping of its own.
+func TestIPOnlyObservationsCountForTheIPAlone(t *testing.T) {
+	r := Classify([]Observation{
+		{From: "guard1", Addr: ap("8.8.8.7:61001"), IPOnly: true},
+		{From: "guard2", Addr: ap("8.8.8.7:61877"), IPOnly: true},
+	}, nil)
+	assert.Equal(t, "8.8.8.7", r.Public.Addr().String())
+	assert.Zero(t, r.Public.Port())
+	assert.Equal(t, MappingUnknown, r.Mapping)
+	assert.Zero(t, r.Ports)
+	assert.True(t, r.Agreed(2))
+
+	// next to a peer on the main socket they back its IP; the port and mapping are the main one's
+	mixed := Classify([]Observation{
+		{From: "peer", Addr: ap("8.8.8.7:4242")},
+		{From: "guard1", Addr: ap("8.8.8.7:61001"), IPOnly: true},
+		{From: "guard2", Addr: ap("8.8.8.7:61877"), IPOnly: true},
+	}, nil)
+	assert.Equal(t, ap("8.8.8.7:4242"), mixed.Public)
+	assert.Equal(t, 3, mixed.Agree)
+	assert.Equal(t, MappingUnknown, mixed.Mapping, "one port-bearing observer cannot judge the mapping")
+	assert.Equal(t, 1, mixed.Ports)
+}

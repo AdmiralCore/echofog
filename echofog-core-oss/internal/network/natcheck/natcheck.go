@@ -18,6 +18,11 @@ import (
 type Observation struct {
 	From string         // who observed: STUN server host:port or peer ID
 	Addr netip.AddrPort // what they saw
+	// IPOnly: the observer is connected through another socket of ours (a REALITY dial opens its
+	// own), which the NAT gave a mapping of its own. Its IP is ours all the same, its port says
+	// nothing about the socket peers reach us at: it counts toward the public IP (and the country
+	// placed from it) but not toward the port, the mapping or the port range.
+	IPOnly bool
 }
 
 // Mapping says whether the NAT gives us one public address or one per destination.
@@ -49,7 +54,8 @@ type Report struct {
 	// a string, so one lying peer out of two chose our address).
 	Public netip.AddrPort
 	// Agree is how many independent observers saw Public's IP, out of Observers that answered in
-	// its address family.
+	// its address family (IPOnly ones included). Public's port is zero when only IPOnly observers
+	// saw that IP.
 	Agree, Observers int
 	// NoNAT: the observed address belongs to one of our own interfaces, so we are directly
 	// reachable and need neither port mapping nor punching.
@@ -130,11 +136,11 @@ func Classify(obs []Observation, local []netip.Addr) Report {
 	voted := map[string]bool{}
 	valid := make([]Observation, 0, len(obs))
 	for _, o := range obs {
-		if !o.Addr.IsValid() || o.Addr.Port() == 0 || voted[o.From] {
+		if !o.Addr.IsValid() || (o.Addr.Port() == 0 && !o.IPOnly) || voted[o.From] {
 			continue
 		}
 		voted[o.From] = true
-		valid = append(valid, Observation{From: o.From, Addr: netip.AddrPortFrom(o.Addr.Addr().Unmap(), o.Addr.Port())})
+		valid = append(valid, Observation{From: o.From, Addr: netip.AddrPortFrom(o.Addr.Addr().Unmap(), o.Addr.Port()), IPOnly: o.IPOnly})
 	}
 
 	anyPublic := false
@@ -172,17 +178,23 @@ func Classify(obs []Observation, local []netip.Addr) Report {
 	if len(fam) == 0 {
 		return r
 	}
+	ported := make([]Observation, 0, len(fam)) // the ones whose port counts as well
+	for _, o := range fam {
+		if !o.IPOnly {
+			ported = append(ported, o)
+		}
+	}
 	r.Observers = len(fam)
-	r.Mapping = mappingOf(fam)
+	r.Mapping = mappingOf(ported)
 
 	ip, agree, tied := majorityIP(fam)
 	if tied {
 		return r // no address wins: the caller asks more observers or keeps what it had
 	}
 	r.Agree = agree
-	r.Public = netip.AddrPortFrom(ip, commonPort(fam, ip))
-	if ip.Is4() {
-		r.PortLo, r.PortHi, r.Ports = portRange(fam, ip, r.Public.Port())
+	r.Public = netip.AddrPortFrom(ip, commonPort(ported, ip))
+	if ip.Is4() && r.Public.Port() != 0 {
+		r.PortLo, r.PortHi, r.Ports = portRange(ported, ip, r.Public.Port())
 	}
 
 	for _, l := range local {
