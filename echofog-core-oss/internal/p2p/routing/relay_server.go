@@ -810,11 +810,14 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		}
 	}
 
-	// 3. Multi-hop: Forward to next peer in the chain (not the one who just sent it to us).
+	// 3. Multi-hop: pass it on toward the recipient's mailbox, never at random. A recipient that
+	// uses this relay has its mailbox here; otherwise the request goes to a relay the recipient
+	// named for its mail, when we are connected to one. Before, it went to the first relaying
+	// peer at hand and wandered for up to HOPLIMIT hops, costing every relay on the way.
 	// The request is ours now, signed by us (once, whatever the number of candidates tried); the
 	// envelope inside stays the sender's.
 	forwarded := false
-	if hops > 1 {
+	if hops > 1 && !(rs.mailbox != nil && rs.mailbox.KeepsFor(targetID)) {
 		hop := &internal_pb.MessageData{
 			MessageId: msg.MessageId,
 			OriginId:  selfID.ToBytes(),
@@ -824,9 +827,9 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 			Payload:   msg.Payload,
 		}
 		var relayEnv *internal_pb.Envelope
-		for _, nextPeer := range rs.swarm.GetAllPeers() {
-			nextPeerID := nextPeer.ID()
-			if nextPeerID == fromPeer || !nextPeer.Relays() {
+		for _, nextPeerID := range rs.swarm.MailboxPeers(targetID) {
+			nextPeer := rs.swarm.GetPeer(nextPeerID)
+			if nextPeer == nil || nextPeerID == fromPeer || nextPeerID == selfID {
 				continue
 			}
 			if relayEnv == nil {

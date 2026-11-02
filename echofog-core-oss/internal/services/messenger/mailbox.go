@@ -246,6 +246,15 @@ func (m *MailboxManager) recipientSeen(id types.PeerID, ttl time.Duration) bool 
 	return time.Now().Unix()-last <= int64(ttl.Seconds())
 }
 
+// KeepsFor says whether Store would keep mail for recipient as far as who it is goes: it used this
+// relay lately, or the relay keeps mail for anyone.
+func (m *MailboxManager) KeepsFor(recipient types.PeerID) bool {
+	m.mu.RLock()
+	limits := m.limits
+	m.mu.RUnlock()
+	return !limits.RequireRecipientSeen || m.recipientSeen(recipient, limits.RecipientSeenTTL)
+}
+
 func (m *MailboxManager) makeKey(recipient types.PeerID, id string) []byte {
 	return []byte(fmt.Sprintf("%s%s:%s", MailboxPrefix, recipient.String(), id))
 }
