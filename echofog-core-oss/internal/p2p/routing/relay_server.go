@@ -823,38 +823,57 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 
 	// 3. Multi-hop: pass it on toward the recipient's mailbox, never at random. A recipient that
 	// uses this relay has its mailbox here; otherwise the request goes to a relay the recipient
-	// named for its mail, when we are connected to one. Before, it went to the first relaying
-	// peer at hand and wandered for up to HOPLIMIT hops, costing every relay on the way.
-	// The request is ours now, signed by us (once, whatever the number of candidates tried); the
-	// envelope inside stays the sender's.
+	// named for its mail, when we are connected to one. Only when we know none does it go to some
+	// other relay, and then no further than walkHops relays in all (it went up to HOPLIMIT,
+	// costing every relay on the way): in a small mesh the recipient's relay is often a hop or
+	// two away and nobody on the way has its record.
+	// The request is ours now, signed by us; the envelope inside stays the sender's.
 	forwarded := false
 	if hops > 1 && !(rs.mailbox != nil && rs.mailbox.KeepsFor(targetID)) {
-		hop := &internal_pb.MessageData{
-			MessageId: msg.MessageId,
-			OriginId:  selfID.ToBytes(),
-			TargetId:  msg.TargetId,
-			Timestamp: msg.Timestamp,
-			HopLimit:  hops - 1,
-			Payload:   msg.Payload,
+		signed := map[uint32]*internal_pb.Envelope{}
+		send := func(nextPeer *swarm.Peer, limit uint32) bool {
+			relayEnv := signed[limit]
+			if relayEnv == nil {
+				hop := &internal_pb.MessageData{
+					MessageId: msg.MessageId,
+					OriginId:  selfID.ToBytes(),
+					TargetId:  msg.TargetId,
+					Timestamp: msg.Timestamp,
+					HopLimit:  limit,
+					Payload:   msg.Payload,
+				}
+				if relayEnv, err = rs.swarm.SignMessageData(hop); err != nil {
+					return false
+				}
+				signed[limit] = relayEnv
+			}
+			if nextPeer.Send(net_types.TypeRelayMessageRequest, relayEnv) != nil {
+				return false
+			}
+			rs.logger.Debug("RelayServer: forwarded relay message to next hop",
+				"next", nextPeer.ID().String()[:8], "target", targetID.String()[:8])
+			forwarded = true
+			rs.forwarded.Add(1)
+			rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
+			return true
 		}
-		var relayEnv *internal_pb.Envelope
 		for _, nextPeerID := range rs.swarm.MailboxPeers(targetID) {
 			nextPeer := rs.swarm.GetPeer(nextPeerID)
 			if nextPeer == nil || nextPeerID == fromPeer || nextPeerID == selfID {
 				continue
 			}
-			if relayEnv == nil {
-				if relayEnv, err = rs.swarm.SignMessageData(hop); err != nil {
+			if send(nextPeer, hops-1) {
+				break
+			}
+		}
+		if walk := min(hops, walkHops) - 1; !forwarded && walk > 0 {
+			for _, nextPeer := range rs.swarm.GetAllPeers() {
+				if nextPeer.ID() == fromPeer || !nextPeer.Relays() {
+					continue
+				}
+				if send(nextPeer, walk) {
 					break
 				}
-			}
-			if err := nextPeer.Send(net_types.TypeRelayMessageRequest, relayEnv); err == nil {
-				rs.logger.Debug("RelayServer: forwarded relay message to next hop",
-					"next", nextPeerID.String()[:8], "target", targetID.String()[:8])
-				forwarded = true
-				rs.forwarded.Add(1)
-				rs.ack(fromPeer, msg.MessageId, RelayAckForwarded, 0)
-				break
 			}
 		}
 	}
@@ -877,6 +896,10 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		rs.ack(fromPeer, msg.MessageId, RelayAckRefused, RefusedMailbox) // no mailbox here
 	}
 }
+
+// walkHops is how many relays in all a message request may visit while none of them knows where
+// the recipient keeps its mail.
+const walkHops = 3
 
 // requestSender reads the message a relay request carries and who signed it.
 func requestSender(fwd []byte) (types.PeerID, *internal_pb.Envelope, bool) {

@@ -373,3 +373,22 @@ func TestRelayClient_QuietRouteIsNotHijackedThroughAnotherRelay(t *testing.T) {
 		t.Fatalf("a circuit proven by Bob should take the quiet route, got %d", cid)
 	}
 }
+
+// A peer we use as a relay may carry the far end's new circuit onto a quiet route: that is how a
+// call follows SwitchCircuit to another relay.
+func TestRelayClient_QuietRouteFollowsTheFarEndToAnotherRelay(t *testing.T) {
+	rc := NewRelayClient(nil, nil, nil)
+	r1, r2, bob := mkID(0x20), mkID(0x21), mkID(0x0b)
+	rc.AddPreferred(r2)
+
+	rc.mu.Lock()
+	rc.circuits[1] = &ClientCircuit{ID: 1, RelayPeerID: r1, RemotePeerID: bob, CreatedAt: time.Now().Add(-time.Minute)}
+	rc.circuits[1].lastRecv.Store(time.Now().Add(-circuitStaleAfter - time.Second).UnixNano())
+	rc.peerToCircuit[bob] = 1
+	rc.mu.Unlock()
+
+	rc.handleInboundCircuitOpen(inboundOpen(2, bob), r2)
+	if cid, _ := rc.CircuitTo(bob); cid != 2 {
+		t.Fatalf("the quiet route did not follow bob to the other relay: %d", cid)
+	}
+}

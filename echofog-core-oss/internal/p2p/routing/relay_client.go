@@ -49,6 +49,8 @@ type ClientCircuit struct {
 	// an open notice is only the relay's word; until the far end proves it, the circuit may not
 	// take over a route through another relay (see mayTakeRoute).
 	proven atomic.Bool
+	// viaRelay: an inbound circuit through a peer we would use as a relay (see mayTakeRoute).
+	viaRelay bool
 }
 
 // proofMaxAge is how far the timestamp of an envelope that proves a circuit's origin may be from
@@ -56,13 +58,28 @@ type ClientCircuit struct {
 const proofMaxAge = time.Minute
 
 // mayTakeRoute: circuit c may replace old as the route to their peer. A circuit through the
-// relay that already carries the route gives that relay nothing new; a circuit through another
-// relay must first prove its origin. Otherwise any connected peer could announce a circuit "from"
-// somebody whose route went quiet for a moment and take their traffic, files and call frames.
-// A route that cannot be taken over still gives way: it dies after circuitDeadAfter of probes,
-// and the next send opens a circuit of our own.
+// relay that already carries the route gives that relay nothing new. A circuit through another
+// relay may when that one is a relay we would use ourselves (it announces relaying, or it is one
+// of ours): the far end moved its call there (SwitchCircuit), and we trust relays with the
+// circuits we open just the same. Otherwise it must first prove its origin: any connected peer
+// could announce a circuit "from" somebody whose route went quiet for a moment and take their
+// traffic, files and call frames. A route that cannot be taken over still gives way: it dies
+// after circuitDeadAfter of probes, and the next send opens a circuit of our own.
 func mayTakeRoute(c, old *ClientCircuit) bool {
-	return old == nil || c.RelayPeerID == old.RelayPeerID || c.proven.Load()
+	return old == nil || c.RelayPeerID == old.RelayPeerID || c.proven.Load() || c.viaRelay
+}
+
+// isRelay: id is a relay we would open circuits through. It takes the swarm's lock: never call it
+// with rc.mu held.
+func (rc *RelayClient) isRelay(id types.PeerID) bool {
+	if rc.IsPreferred(id) {
+		return true
+	}
+	if rc.swarm == nil {
+		return false
+	}
+	p := rc.swarm.GetPeer(id)
+	return p != nil && p.Relays()
 }
 
 // noteProof marks c proven when env, which came over it, is signed by c's origin and is fresh.
@@ -694,6 +711,7 @@ func (rc *RelayClient) handleInboundCircuitOpen(payload []byte, relayPeer types.
 		RemotePeerID: originID,
 		CreatedAt:    time.Now(),
 		SignalOnly:   signalOnly,
+		viaRelay:     rc.isRelay(relayPeer), // before rc.mu: it takes the swarm's lock
 	}
 
 	rc.mu.Lock()
