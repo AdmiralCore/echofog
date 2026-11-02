@@ -114,6 +114,7 @@ func (e *StreamTreeEngine) Subscribe(streamID string, subscriber types.PeerID, p
 		return nil, ErrStreamNotFound
 	}
 	profile.PeerID = subscriber
+	old := s.Profiles[subscriber]
 	e.profiles[subscriber] = profile
 	s.Profiles[subscriber] = profile
 
@@ -121,6 +122,9 @@ func (e *StreamTreeEngine) Subscribe(streamID string, subscriber types.PeerID, p
 		return cloneManifest(s), nil
 	}
 	if _, dup := s.ParentMap[subscriber]; dup {
+		if old.DisplayHz != profile.DisplayHz {
+			s.Epoch++ // the viewer moved to another screen: the broadcaster learns it with the manifest
+		}
 		return cloneManifest(s), nil
 	}
 

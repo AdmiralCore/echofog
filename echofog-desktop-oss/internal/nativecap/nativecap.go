@@ -36,6 +36,12 @@ type Options struct {
 	// OnEnd is called once, on a goroutine of its own, when the stream stops by itself (the window
 	// closed, the GPU was reset).
 	OnEnd func(err error)
+	// Levels are the call's presets under the chosen one, which the stream goes down to when the
+	// bitrate does not cover the chosen one or the viewers' screens show another frame rate better
+	// (see ladder); none keeps it at the chosen one.
+	Levels []Level
+	// OnLevel is told each change of level and why ("bitrate", "screens"), on the stream's goroutine.
+	OnLevel func(l Level, why string)
 }
 
 // Stats are totals since the stream started, plus what it does now; the app turns totals into
@@ -51,7 +57,9 @@ type Stats struct {
 	EncodeSeconds float64 `json:"encodeSeconds"` // summed time from a frame going in to its bits coming out
 	Width         int     `json:"width"`         // encoded size
 	Height        int     `json:"height"`
-	SourceWidth   int     `json:"sourceWidth"` // captured size
+	FPS           int     `json:"fps"`               // the frame rate it goes out at now
+	Lowered       string  `json:"lowered,omitempty"` // why that is under the chosen quality: "bitrate", "screens"
+	SourceWidth   int     `json:"sourceWidth"`       // captured size
 	SourceHeight  int     `json:"sourceHeight"`
 	BitrateKbps   int     `json:"bitrateKbps"` // what the encoder is set to now
 	Encoder       string  `json:"encoder"`     // e.g. "NVIDIA H.264 Encoder MFT"

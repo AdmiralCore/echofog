@@ -838,7 +838,7 @@ class CallService {
       const dt = before ? (st.at - before.at) / 1000 : 0;
       const per = (k) => (dt > 0 ? Math.max(0, Math.round((st[k] - before[k]) / dt)) : 0);
       return { encoder: st.encoder, hardware: st.hardware, width: st.width, height: st.height, fps: per('sent'),
-        kbps: dt > 0 ? Math.round(((st.bytes - before.bytes) * 8) / dt / 1000) : 0, limit: '' };
+        kbps: dt > 0 ? Math.round(((st.bytes - before.bytes) * 8) / dt / 1000) : 0, limit: nativeLimit(st.lowered) };
     }
     const sender = this.tx?.screen?.sender;
     if (!sender || !this.screen) return null;
@@ -986,7 +986,7 @@ class CallService {
         const n = await app().NativeScreenStats?.();
         if (n?.active) {
           out.browser = { captured: n.captured, encoded: n.encoded, frames: n.sent, dropped: n.skipped, bytes: n.bytes, packets: n.packets,
-            width: n.width, height: n.height, codecTime: n.encodeSeconds, impl: n.encoder, hw: n.hardware, limit: '' };
+            width: n.width, height: n.height, codecTime: n.encodeSeconds, impl: n.encoder, hw: n.hardware, limit: nativeLimit(n.lowered) };
         }
       } else if (own) {
         const tx = streamId === get(callState).cameraStreamId ? this.tx?.camera : this.tx?.screen;
@@ -1217,6 +1217,12 @@ function rms(analyser, data) {
 // What gives way when the encoder is short of time or bitrate. A screen in 'detail' mode gives up
 // frame rate and keeps its resolution (blurred text is worse than a lower frame rate); in 'motion'
 // mode, and a camera at 60 fps, it keeps moving and loses detail instead.
+/** Why the app's own capture goes out under the chosen quality, as the browser's limitation
+ *  reasons say it: the bitrate the path carries ('bandwidth') or the viewers' screens. */
+function nativeLimit(lowered) {
+  return lowered === 'bitrate' ? 'bandwidth' : lowered === 'screens' ? 'screens' : '';
+}
+
 async function applySenderQuality(sender, quality, screenMode = '') {
   if (!sender) return;
   try {

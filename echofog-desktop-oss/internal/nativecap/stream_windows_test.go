@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +23,9 @@ import (
 //	ECHOFOG_STREAM_BENCH=monitor:0 go test -run TestStreamBench -v ./internal/nativecap/
 //
 // _FPS (120), _KBPS (32000), _SECONDS (10), _SIZE (2560x1440), _OUT (an .h264 file to write the
-// stream to, depacketized again, for TestViewerBench of the core).
+// stream to, depacketized again, for TestViewerBench of the core), _LEVELS (any: the call's presets
+// as the ladder, so the halved bitrate moves the stream down), _VIEWERS (the viewers' screens, e.g.
+// "60,144").
 func TestStreamBench(t *testing.T) {
 	id := os.Getenv("ECHOFOG_STREAM_BENCH")
 	if id == "" {
@@ -99,10 +103,23 @@ func TestStreamBench(t *testing.T) {
 		}
 	}
 	ended := make(chan error, 1)
-	s, err := Start(Options{Source: id, Width: w, Height: h, FPS: fps, BitrateKbps: kbps, Cursor: true, Publish: publish, MTU: 1100,
-		OnEnd: func(err error) { ended <- err }})
+	o := Options{Source: id, Width: w, Height: h, FPS: fps, BitrateKbps: kbps, Cursor: true, Publish: publish, MTU: 1100,
+		OnEnd: func(err error) { ended <- err }}
+	if os.Getenv("ECHOFOG_STREAM_BENCH_LEVELS") != "" {
+		o.Levels = testPresets
+		o.OnLevel = func(l Level, why string) { t.Logf("level %dx%d %d fps (%s)", l.Width, l.Height, l.FPS, why) }
+	}
+	s, err := Start(o)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if v := os.Getenv("ECHOFOG_STREAM_BENCH_VIEWERS"); v != "" {
+		var hz []int
+		for _, f := range strings.Split(v, ",") {
+			n, _ := strconv.Atoi(f)
+			hz = append(hz, n)
+		}
+		s.SetViewerRates(hz)
 	}
 	st := s.Stats()
 	t.Logf("%s on %s: %dx%d from %dx%d, %d fps, %d kbps", st.Encoder, st.Adapter, st.Width, st.Height, st.SourceWidth, st.SourceHeight, fps, kbps)
@@ -137,9 +154,9 @@ func TestStreamBench(t *testing.T) {
 		if enc > 0 {
 			ms = (cur.EncodeSeconds - prev.EncodeSeconds) * 1000 / float64(enc)
 		}
-		t.Logf("captured %3d encoded %3d sent %3d skipped %2d | %5.1f Mbit/s | encode %4.1f ms | keyframes %d | pacer %4.1f ms | rate %d kbps",
+		t.Logf("captured %3d encoded %3d sent %3d skipped %2d | %5.1f Mbit/s | encode %4.1f ms | keyframes %d | pacer %4.1f ms | rate %d kbps | %dx%d %d fps %s",
 			cur.Captured-prev.Captured, enc, cur.Sent-prev.Sent, cur.Skipped-prev.Skipped, float64(cur.Bytes-prev.Bytes)*8/1e6, ms,
-			cur.Keyframes, cur.PacerDelayMs, cur.BitrateKbps)
+			cur.Keyframes, cur.PacerDelayMs, cur.BitrateKbps, cur.Width, cur.Height, cur.FPS, cur.Lowered)
 		prev = cur
 		if sec == seconds/2 {
 			keyAt = cur.Keyframes

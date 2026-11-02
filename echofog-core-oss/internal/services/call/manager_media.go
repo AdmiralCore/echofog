@@ -95,6 +95,12 @@ type LocalEncoder interface {
 	RequestKeyframe()
 }
 
+// ViewerScreens is a LocalEncoder that picks its frame rate for its viewers' screens: with every
+// bitrate it is given their refresh rates (0: not known).
+type ViewerScreens interface {
+	SetViewerRates(hz []int)
+}
+
 // SetLocalEncoder hands the rate and keyframe requests of a capture role to enc; nil gives them
 // back to the webview's encoder.
 func (m *CallManager) SetLocalEncoder(role string, enc LocalEncoder) {

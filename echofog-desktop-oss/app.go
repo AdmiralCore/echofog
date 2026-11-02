@@ -11,6 +11,7 @@ import (
 	"github.com/echofog/echofog-core/pkg/dto"
 	"github.com/echofog/echofog-core/pkg/logging"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
+	"github.com/echofog/echofog-desktop/internal/nativecap"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -576,6 +577,8 @@ func (a *App) WatchStream(streamID string) error {
 	if nodeAPI == nil {
 		return errors.New("node API not initialized")
 	}
+	// the broadcaster picks a frame rate this screen shows evenly
+	nodeAPI.SetDisplayRate(nativecap.DisplayRate())
 	return nodeAPI.WatchStream(streamID)
 }
 
