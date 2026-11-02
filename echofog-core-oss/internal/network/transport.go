@@ -179,8 +179,7 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 
 	if opts.DirectSocket {
 		// High-Throughput Direct Mode (Public IP / Exit Nodes / Satellite):
-		// Connect raw or obfuscated *net.UDPConn directly to quic.Transport!
-		// Enables hardware GSO & batch syscalls, achieving 1 Gbps+ throughput.
+		// The raw or obfuscated *net.UDPConn without the STUN multiplexer in front.
 		var pConn net.PacketConn = udpConn
 		if obfsActive {
 			pConn = dpi.WrapPacketConn(udpConn, obfs)
@@ -235,7 +234,8 @@ func NewQUICTransportWithOptions(addr string, tlsCfg *tls.Config, quicCgf *quic.
 	}
 	realityConn := NewQuicRealityConn(tr.Conn, qt)
 	qt.realityConn = realityConn
-	tr.Conn = realityConn
+	// over an OOB-capable socket stack quic-go keeps GSO, ECN and batch reads (Linux)
+	tr.Conn = realityConn.PacketConn()
 
 	tr.VerifySourceAddress = qt.verifySourceAddress
 	tr.ConnContext = qt.connContext

@@ -182,21 +182,31 @@ type QuicRealityConn struct {
 	reassMu    sync.Mutex
 	pending    map[string]*pendingHello
 	drain      []drainPkt
+	drainN     atomic.Int32 // len(drain), read without the lock on the batch read path
 	reaperStop chan struct{}
 	reaperOnce sync.Once
+
+	// browserClient: this is the socket of a REALITY dial, whose packets pass for Chrome's.
+	browserClient bool
 }
 
 type pendingHello struct {
 	addr  net.Addr
 	frags map[int][]byte
-	raws  [][]byte
+	raws  []heldPkt
 	dcid  []byte
 	bytes int
 	start time.Time
 }
 
+// heldPkt is a buffered Initial with its control messages (ECN, arrival address).
+type heldPkt struct {
+	b, oob []byte
+}
+
 type drainPkt struct {
 	b    []byte
+	oob  []byte
 	addr net.Addr
 }
 
@@ -415,68 +425,76 @@ func (c *QuicRealityConn) UnmarkConnection(addr net.Addr) {
 func (c *QuicRealityConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
 		// Hand back any buffered datagrams of an already-verified flight before reading the socket.
-		if qb, qaddr, ok := c.popDrain(); ok {
-			return copy(p, qb), qaddr, nil
+		if d, ok := c.popDrain(); ok {
+			return copy(p, d.b), d.addr, nil
 		}
 
 		n, addr, err := c.base.ReadFrom(p)
 		if err != nil {
 			return n, addr, err
 		}
-
-		c.mu.Lock()
-		serverMode := c.serverMode
-		authKey := c.serverAuthKey
-		proxy := c.probeProxy
-		c.mu.Unlock()
-
-		if serverMode && authKey != nil {
-			isNoise := false
-			if c.qt != nil && c.qt.obfs != nil {
-				isNoise = c.qt.obfs.IsNoiseHeard(addr)
-			}
-			if isNoise {
-				c.markAuthed(addr, nil)
-				return n, addr, nil
-			}
-
-			if mimicry.IsQUICInitial(p[:n]) {
-				dcid, _ := mimicry.ExtractInitialDCID(p[:n])
-				if c.isAuthed(addr, dcid) {
-					// An already-authenticated source: a retransmitted Initial, or one spoofed from a
-					// connected client's address. The stealth token rides in the ClientHello random, a
-					// genuine part of the handshake, so the Initial goes to quic-go unchanged.
-					c.markAuthed(addr, dcid)
-					c.setAddrRaw(addr)
-					return n, addr, nil
-				}
-				// A source already being proxied to the cover site: keep its later Initials going there
-				// rather than re-buffering them.
-				if proxy != nil && proxy.HasSession(addr) {
-					proxy.Forward(addr, p[:n])
-					continue
-				}
-				// Unknown source: buffer until the ClientHello reassembles, then authenticate the whole
-				// flight at once. The token is bound to the key_share, which spans both Initials, so
-				// nothing unverified reaches quic-go and nothing is decided from a single Initial. A
-				// verified flight is queued to drain (returned above); a stranger or forged hello is
-				// forwarded to the cover site inside accumulateInitial.
-				c.accumulateInitial(addr, append([]byte(nil), p[:n]...), authKey, proxy)
-				continue
-			}
-
-			// Non-Initial packet
-			if !c.isAddrAuthed(addr) {
-				if proxy != nil && proxy.HasSession(addr) {
-					proxy.Forward(addr, p[:n])
-					continue
-				}
-				c.noteCandidate(addr)
-			}
+		if c.admit(p[:n], nil, addr) {
+			return n, addr, nil
 		}
-
-		return n, addr, nil
 	}
+}
+
+// admit decides about a datagram read from the socket: true hands it to quic-go now; false means
+// it was taken (buffered as part of a ClientHello flight, or sent to the cover site). oob is its
+// control messages, kept with it if it is buffered.
+func (c *QuicRealityConn) admit(p, oob []byte, addr net.Addr) bool {
+	c.mu.Lock()
+	serverMode := c.serverMode
+	authKey := c.serverAuthKey
+	proxy := c.probeProxy
+	c.mu.Unlock()
+
+	if !serverMode || authKey == nil {
+		return true
+	}
+	isNoise := false
+	if c.qt != nil && c.qt.obfs != nil {
+		isNoise = c.qt.obfs.IsNoiseHeard(addr)
+	}
+	if isNoise {
+		c.markAuthed(addr, nil)
+		return true
+	}
+
+	if mimicry.IsQUICInitial(p) {
+		dcid, _ := mimicry.ExtractInitialDCID(p)
+		if c.isAuthed(addr, dcid) {
+			// An already-authenticated source: a retransmitted Initial, or one spoofed from a
+			// connected client's address. The stealth token rides in the ClientHello random, a
+			// genuine part of the handshake, so the Initial goes to quic-go unchanged.
+			c.markAuthed(addr, dcid)
+			c.setAddrRaw(addr)
+			return true
+		}
+		// A source already being proxied to the cover site: keep its later Initials going there
+		// rather than re-buffering them.
+		if proxy != nil && proxy.HasSession(addr) {
+			proxy.Forward(addr, p)
+			return false
+		}
+		// Unknown source: buffer until the ClientHello reassembles, then authenticate the whole
+		// flight at once. The token is bound to the key_share, which spans both Initials, so
+		// nothing unverified reaches quic-go and nothing is decided from a single Initial. A
+		// verified flight is queued to drain (handed to quic-go before the next socket read); a
+		// stranger or forged hello is forwarded to the cover site inside accumulateInitial.
+		c.accumulateInitial(addr, heldPkt{b: append([]byte(nil), p...), oob: append([]byte(nil), oob...)}, authKey, proxy)
+		return false
+	}
+
+	// Non-Initial packet
+	if !c.isAddrAuthed(addr) {
+		if proxy != nil && proxy.HasSession(addr) {
+			proxy.Forward(addr, p)
+			return false
+		}
+		c.noteCandidate(addr)
+	}
+	return true
 }
 
 func (c *QuicRealityConn) WriteTo(p []byte, addr net.Addr) (int, error) {
@@ -507,15 +525,27 @@ func (c *QuicRealityConn) Close() error {
 // popDrain returns the next buffered datagram of a verified flight, to hand to quic-go in place of a
 // live read. Verified Initials are replayed this way (one per ReadFrom) because they were consumed
 // from the socket while being buffered for reassembly.
-func (c *QuicRealityConn) popDrain() ([]byte, net.Addr, bool) {
+func (c *QuicRealityConn) popDrain() (drainPkt, bool) {
+	if c.drainN.Load() == 0 {
+		return drainPkt{}, false
+	}
 	c.reassMu.Lock()
 	defer c.reassMu.Unlock()
 	if len(c.drain) == 0 {
-		return nil, nil, false
+		return drainPkt{}, false
 	}
 	d := c.drain[0]
 	c.drain = c.drain[1:]
-	return d.b, d.addr, true
+	c.drainN.Store(int32(len(c.drain)))
+	return d, true
+}
+
+// pushDrain queues a datagram behind a verified flight, so quic-go gets them in arrival order.
+func (c *QuicRealityConn) pushDrain(d drainPkt) {
+	c.reassMu.Lock()
+	c.drain = append(c.drain, d)
+	c.drainN.Store(int32(len(c.drain)))
+	c.reassMu.Unlock()
 }
 
 // setAddrRaw marks addr as a raw-QUIC (REALITY) peer so the obfuscation layer stops expecting noise
@@ -537,8 +567,8 @@ func (c *QuicRealityConn) setAddrRaw(addr net.Addr) {
 // site. The token is bound to the key_share, which spans both Initials, so the decision cannot be made
 // from a single Initial — which is why the flight is held rather than forwarded eagerly. Caller must
 // not hold c.reassMu.
-func (c *QuicRealityConn) accumulateInitial(addr net.Addr, raw []byte, authKey []byte, proxy *activeProbeProxy) {
-	dcid, frags, okDec := mimicry.QUICInitialCrypto(raw)
+func (c *QuicRealityConn) accumulateInitial(addr net.Addr, raw heldPkt, authKey []byte, proxy *activeProbeProxy) {
+	dcid, frags, okDec := mimicry.QUICInitialCrypto(raw.b)
 	key := addr.String()
 
 	type coverPkt struct {
@@ -555,7 +585,7 @@ func (c *QuicRealityConn) accumulateInitial(addr net.Addr, raw []byte, authKey [
 		if len(c.pending) >= maxPendingHellos {
 			if ok, oldKey, old := c.oldestPendingLocked(); ok {
 				for _, r := range old.raws {
-					toCover = append(toCover, coverPkt{old.addr, r})
+					toCover = append(toCover, coverPkt{old.addr, r.b})
 				}
 				delete(c.pending, oldKey)
 			}
@@ -564,7 +594,7 @@ func (c *QuicRealityConn) accumulateInitial(addr net.Addr, raw []byte, authKey [
 		c.pending[key] = ph
 	}
 	ph.raws = append(ph.raws, raw)
-	ph.bytes += len(raw)
+	ph.bytes += len(raw.b)
 	if okDec {
 		if ph.dcid == nil && len(dcid) > 0 {
 			ph.dcid = dcid
@@ -577,18 +607,19 @@ func (c *QuicRealityConn) accumulateInitial(addr net.Addr, raw []byte, authKey [
 	case mimicry.QUICClientHelloComplete(hello):
 		if mimicry.VerifyQUICClientHelloToken(hello, authKey) {
 			for _, r := range ph.raws {
-				c.drain = append(c.drain, drainPkt{b: r, addr: addr})
+				c.drain = append(c.drain, drainPkt{b: r.b, oob: r.oob, addr: addr})
 			}
+			c.drainN.Store(int32(len(c.drain)))
 			verified, verifiedDCID = addr, ph.dcid
 		} else {
 			for _, r := range ph.raws {
-				toCover = append(toCover, coverPkt{addr, r})
+				toCover = append(toCover, coverPkt{addr, r.b})
 			}
 		}
 		delete(c.pending, key)
 	case ph.bytes > maxPendingBytesPerSrc:
 		for _, r := range ph.raws {
-			toCover = append(toCover, coverPkt{addr, r})
+			toCover = append(toCover, coverPkt{addr, r.b})
 		}
 		delete(c.pending, key)
 	default:
@@ -636,7 +667,7 @@ func (c *QuicRealityConn) reapStalePending() {
 	for k, ph := range c.pending {
 		if now.Sub(ph.start) > pendingReassembleTTL {
 			for _, r := range ph.raws {
-				toCover = append(toCover, coverPkt{ph.addr, r})
+				toCover = append(toCover, coverPkt{ph.addr, r.b})
 			}
 			delete(c.pending, k)
 		}
