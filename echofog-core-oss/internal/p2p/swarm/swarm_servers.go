@@ -219,6 +219,12 @@ func onLocalNetwork(addr string) bool {
 	return v4 != nil && v4[0] == 100 && v4[1]&0xC0 == 64 // carrier-grade NAT
 }
 
+// NoiseDialRefused is noiseDialRefused for dials the swarm does not make itself (hole punching):
+// a dial or punch toward addr that the rule holds back.
+func (s *Swarm) NoiseDialRefused(id types.PeerID, addr string) bool {
+	return s.noiseDialRefused(id, addr)
+}
+
 // noiseDialRefused reports whether a dial to the peer at addr must not be made. For a client: the
 // peer is a server (its address said so, or its handshake did) with no known camouflage SNI, so the
 // only way to reach it is noise, and addr is across a border. For a server: the peer is not known

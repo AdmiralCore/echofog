@@ -84,6 +84,10 @@ type Config struct {
 	Admit func(from types.PeerID, ticket []byte) bool
 	// Ticket, when set, gives the access ticket to send with a CONNECT to peer (nil: none).
 	Ticket func(peer types.PeerID) []byte
+	// Refuse, when set, reports whether a punch or dial toward addr must not be made: the node's
+	// noise-dial rule (a server across a border with no known cover is not reached by noise).
+	// Punching bypasses the swarm's dial path, so it applies the rule itself.
+	Refuse func(peer types.PeerID, addr string) bool
 }
 
 type message struct {
@@ -226,6 +230,20 @@ func (s *Service) ownLocal() []string {
 	return addrStrings(lan(s.cfg.LocalAddrs()))
 }
 
+// allowed drops the addresses the node's noise-dial rule refuses for peer.
+func (s *Service) allowed(peer types.PeerID, in []netip.AddrPort) []netip.AddrPort {
+	if s.cfg.Refuse == nil {
+		return in
+	}
+	out := in[:0:0]
+	for _, a := range in {
+		if !s.cfg.Refuse(peer, a.String()) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // sameNAT reports whether the peer's public addresses share an IP with ours: we are behind the same
 // router, the only case in which our LAN addresses are of any use to it.
 func sameNAT(own, remote []netip.AddrPort) bool {
@@ -348,7 +366,10 @@ func (s *Service) attempt(ctx context.Context, peer types.PeerID, both bool) err
 	if len(remote) == 0 {
 		return ErrNoRemoteAddr
 	}
-	remote = withLAN(own, remote, answer.Local)
+	remote = s.allowed(peer, withLAN(own, remote, answer.Local))
+	if len(remote) == 0 {
+		return ErrNoRemoteAddr // every address is one the noise-dial rule holds back
+	}
 	half := rtt / 2
 	if half > maxHalfRTT {
 		return fmt.Errorf("the path through the relay is too slow to synchronise (rtt %v)", rtt)
@@ -440,7 +461,12 @@ func (s *Service) onConnect(from types.PeerID, m message) {
 	if sameNAT(own, remote) {
 		ownLocal = s.ownLocal()
 	}
-	remote = withLAN(own, remote, m.Local)
+	remote = s.allowed(from, withLAN(own, remote, m.Local))
+	if len(remote) == 0 {
+		// nothing we may dial or punch toward: no answer, and so no address of ours either
+		s.mu.Unlock()
+		return
+	}
 	key := sessKey{from, m.N}
 	in := &incoming{addrs: remote}
 	s.responders++

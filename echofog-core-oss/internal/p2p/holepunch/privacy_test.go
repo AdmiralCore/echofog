@@ -3,8 +3,10 @@ package holepunch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -108,4 +110,51 @@ func TestUnadmittedConnectGetsNothing(t *testing.T) {
 	if len(sig.answers()) != 0 {
 		t.Fatal("an unadmitted peer got an answer")
 	}
+}
+
+// Punching is noise toward the peer's address, past the swarm's dial path: an address the node's
+// noise-dial rule refuses (a server across a border, no known cover) is neither punched nor
+// dialed, on either side. Once nothing is left the initiator gives up instead of retrying.
+func TestNoiseDialRuleHoldsForPunching(t *testing.T) {
+	refuseAll := func(types.PeerID, string) bool { return true }
+
+	t.Run("initiator", func(t *testing.T) {
+		p := newPair(t, func(a, _ *Config) { a.Refuse = refuseAll })
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := p.a.Connect(ctx, idB)
+		if !errors.Is(err, ErrNoRemoteAddr) {
+			t.Fatalf("Connect = %v, want ErrNoRemoteAddr", err)
+		}
+		p.net.mu.Lock()
+		defer p.net.mu.Unlock()
+		if p.net.punchHits != 0 || len(p.net.dials) != 0 {
+			t.Fatalf("%d punches and dials %v toward refused addresses", p.net.punchHits, p.net.dials)
+		}
+	})
+
+	t.Run("responder", func(t *testing.T) {
+		p := newPair(t, func(_, b *Config) { b.Refuse = refuseAll })
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := p.a.Connect(ctx, idB); err == nil {
+			t.Fatal("a punch went through though the responder may not dial back")
+		}
+		p.net.mu.Lock()
+		defer p.net.mu.Unlock()
+		if len(p.net.dials) != 0 || p.net.punchHits != 0 {
+			t.Fatalf("punches %d, dials %v: the refusing responder answered", p.net.punchHits, p.net.dials)
+		}
+	})
+
+	t.Run("only refused addresses are dropped", func(t *testing.T) {
+		p := newPair(t, func(_, b *Config) {
+			b.Refuse = func(_ types.PeerID, a string) bool { return a != "203.0.113.1:4001" }
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := p.a.Connect(ctx, idB); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+	})
 }

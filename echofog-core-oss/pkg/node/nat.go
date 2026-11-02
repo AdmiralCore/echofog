@@ -159,6 +159,7 @@ func (n *Node) startHolePunch() {
 		Connected:  func(p types.PeerID) bool { return n.Swarm.GetPeer(p) != nil },
 		Ticket:     func(p types.PeerID) []byte { return n.Invites.Ticket(p, n.ID) },
 		Admit:      n.admitPunch,
+		Refuse:     n.Swarm.NoiseDialRefused,
 	})
 	n.HolePunch = svc
 	n.Swarm.RegisterFastFrameHandler(net_types.TypeHolePunch, func(payload []byte, from types.PeerID) error {
