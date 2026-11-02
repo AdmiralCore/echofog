@@ -60,6 +60,7 @@ type MessageBroker struct {
 	deliverFn func(target types.PeerID, outboxID string, msg *internal_pb.MessageData) (ok, direct bool)
 	relayMu   sync.Mutex
 	relayWait map[string]relayWait // relay request id (hex) -> the outbox message it carries
+	resetFn   func(types.PeerID)   // replaces sessionReset (tests: no crypto engine needed)
 	outboxMu  sync.Mutex           // a receipt's delete and a retry's write-back of the same message
 
 	myIDHexed string
@@ -520,12 +521,20 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 	// the peer sends its keys (and may ask for ours): the first message between two nodes that
 	// never met, when the DHT does not hand out their bundles
 	if strings.HasPrefix(innerMsg.Text, knockPrefix) {
-		s.handleKnock(originID, innerMsg.Text)
+		if s.controlAccepted(originID, msg, innerMsg) {
+			s.handleKnock(originID, innerMsg.Text)
+		}
 		return
 	}
 	// the peer cannot read us: its session with us is gone or never matched ours
 	if strings.HasPrefix(innerMsg.Text, resetPrefix) {
-		s.sessionReset(originID)
+		if s.controlAccepted(originID, msg, innerMsg) {
+			if s.resetFn != nil {
+				s.resetFn(originID)
+			} else {
+				s.sessionReset(originID)
+			}
+		}
 		return
 	}
 	// a receipt for something we sent
