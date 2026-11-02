@@ -11,14 +11,28 @@ English version: [deploy-vps.md](deploy-vps.md)
 ssh root@<IP сервера>
 ```
 
+На свежем сервере Docker обычно нет, поэтому сначала поставьте его — всё дальше работает в нём:
+
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
 ```
 
 Команды, которым нужны права root, идут с `sudo`, поэтому работают и под root, и под обычным
 пользователем (так заходят в Google Cloud и у многих других провайдеров). Обычный пользователь
-затем добавляет себя в группу `docker` и перезаходит, чтобы команды `docker compose` ниже работали
-без `sudo`: `sudo usermod -aG docker "$USER"`.
+затем добавляет себя в группу `docker`, чтобы команды `docker compose` ниже работали без `sudo`:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+Выйдите (`exit`) и подключитесь заново: группа действует только с нового входа. Затем проверьте:
+
+```bash
+docker compose version
+```
+
+Должна напечататься версия. `Command 'docker' not found` значит, что установка выше не
+выполнялась; `permission denied ... docker.sock` — что вы ещё не перезашли.
 
 ## 2. Откройте порт
 
