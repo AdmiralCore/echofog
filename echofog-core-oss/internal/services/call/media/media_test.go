@@ -500,9 +500,9 @@ func TestMediaDispatcher_NackRecoversLostFragment(t *testing.T) {
 func TestFragRing_EvictsOldFragments(t *testing.T) {
 	r := newFragRing()
 	now := time.Now()
-	r.put("s", 1, 0, 2, []byte("a"), now)
-	r.put("s", 1, 1, 2, []byte("b"), now)
-	r.put("s", 2, 0, 1, []byte("c"), now.Add(retransmitWindow/2))
+	r.put("s", 1, 0, 2, []byte("a"), ringLayer{}, now)
+	r.put("s", 1, 1, 2, []byte("b"), ringLayer{}, now)
+	r.put("s", 2, 0, 1, []byte("c"), ringLayer{}, now.Add(retransmitWindow/2))
 
 	send, held, complete := r.lookup("s", 1, 0b01, now)
 	assert.Equal(t, [][]byte{[]byte("b")}, send)

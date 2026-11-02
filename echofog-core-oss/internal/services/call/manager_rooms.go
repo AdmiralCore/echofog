@@ -64,6 +64,8 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		feedback:       make(map[string]map[types.PeerID]viewerReport),
 		paths:          make(map[string]map[types.PeerID]*viewerPath),
 		weakKeyframe:   make(map[string]time.Time),
+		layers:         make(map[string]map[types.PeerID]*childLayers),
+		ownLevel:       make(map[string]media.Congestion),
 		startedAt:      now,
 		waitingSince:   now,
 		lastStatsLog:   now,

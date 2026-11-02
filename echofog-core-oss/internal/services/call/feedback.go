@@ -109,6 +109,7 @@ func (m *CallManager) noteFeedbackLocked(room *ActiveRoomState, from types.PeerI
 		reps = make(map[types.PeerID]viewerReport)
 		room.feedback[fp.StreamID] = reps
 	}
+	m.noteLayersLocked(room, from, fp, now)
 	for _, r := range fp.Reports {
 		if !inSubtree(sm, from, r.Viewer) {
 			continue
@@ -262,6 +263,14 @@ func (m *CallManager) feedbackTickLocked(room *ActiveRoomState, now time.Time) {
 			delete(room.feedback, id)
 		}
 	}
+	for id := range room.ownLevel {
+		if _, ok := own[id]; !ok && !room.watching[id] {
+			delete(room.ownLevel, id)
+		}
+	}
+	for id, fb := range own {
+		room.ownLevel[id] = fb.Level
+	}
 	ob := room.Dispatcher.Outbox()
 	for id := range room.watching {
 		if _, local := room.localStreams[id]; local {
@@ -292,7 +301,8 @@ func (m *CallManager) feedbackTickLocked(room *ActiveRoomState, now time.Time) {
 		if len(reports) == 0 {
 			continue
 		}
-		b, err := m.encodeLocked(room, signaling.ActionStreamFeedback, signaling.StreamFeedbackPayload{StreamID: id, Reports: reports})
+		b, err := m.encodeLocked(room, signaling.ActionStreamFeedback, signaling.StreamFeedbackPayload{StreamID: id, Reports: reports,
+			Layered: m.layeredBelowLocked(room, id, now)})
 		if err != nil {
 			m.warnOnce("encode:feedback", "Failed to encode call signal", "action", signaling.ActionStreamFeedback, "err", err)
 			continue

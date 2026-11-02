@@ -52,6 +52,8 @@ var (
 	codecBPictureCount        = guid("8d390aac-dc5c-4200-b57f-814d04babab2")
 	codecCABAC                = guid("ee6cad62-d305-4248-a50e-e1b255f7caf8")
 	codecQualityVsSpeed       = guid("98332df8-03cd-476b-89fa-3f9e442dec9f")
+	codecTemporalLayerCount   = guid("19caebff-b74d-4cfd-8c27-c2f9d97d5f52")
+	codecMaxTemporalLayers    = guid("9c668cfe-08e1-424a-934e-b764b064802a")
 )
 
 // vtable slots
@@ -80,6 +82,8 @@ const (
 	buffer2DContigLength = 7
 	dxgiManagerReset     = 7
 	genGetEvent          = 3
+	codecIsSupported     = 3
+	codecGetValue        = 8
 	codecSetValue        = 9
 
 	mftGetOutputStreamInfo   = 7
@@ -167,6 +171,8 @@ type encodedFrame struct {
 	keyframe bool
 	pts      time.Duration // the time the frame went in with
 	took     time.Duration // from going in to coming out
+	layered  bool          // the encoder makes temporal layers: layer says this frame's
+	layer    frameLayer
 }
 
 // mfEncoder is one hardware H.264 encoder running on the shared device.
@@ -180,6 +186,7 @@ type mfEncoder struct {
 	outSize       uint32 // otherwise, how large ours must be
 	width, height int
 	fps           int
+	layers        int // temporal layers the encoder makes, 1: none (see enableTemporalLayers)
 
 	credits  atomic.Int32  // inputs the encoder asked for and did not get yet
 	asked    chan struct{} // wakes whoever waits for the encoder to want a frame
@@ -235,7 +242,7 @@ func bufferBits(bps uint64) uint64 { return bps * uint64(rateBuffer/time.Millise
 // newMFEncoder opens the first hardware H.264 encoder of the device's adapter that takes NV12
 // textures at this size. quality trades speed for picture (CODECAPI_AVEncCommonQualityVsSpeed,
 // 0-100). out receives every frame, on the encoder's event goroutine.
-func newMFEncoder(d *device, width, height, fps, bitrateKbps, quality int, out func(encodedFrame)) (*mfEncoder, error) {
+func newMFEncoder(d *device, width, height, fps, bitrateKbps, quality, layers int, out func(encodedFrame)) (*mfEncoder, error) {
 	if err := mfStartup(); err != nil {
 		return nil, err
 	}
@@ -250,7 +257,7 @@ func newMFEncoder(d *device, width, height, fps, bitrateKbps, quality int, out f
 		if luid, ok := getU64(a, &mftEnumAdapterLUID); ok && d.adapterLUID != 0 && luid != d.adapterLUID {
 			continue // an encoder of another GPU (a laptop with two)
 		}
-		e, err := openMFEncoder(d, a, name, width, height, fps, bitrateKbps, quality, out)
+		e, err := openMFEncoder(d, a, name, width, height, fps, bitrateKbps, quality, layers, out)
 		if err == nil {
 			return e, nil
 		}
@@ -262,7 +269,7 @@ func newMFEncoder(d *device, width, height, fps, bitrateKbps, quality int, out f
 	return nil, errors.Join(errs...)
 }
 
-func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fps, bitrateKbps, quality int, out func(encodedFrame)) (*mfEncoder, error) {
+func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fps, bitrateKbps, quality, layers int, out func(encodedFrame)) (*mfEncoder, error) {
 	e := &mfEncoder{name: name, width: width, height: height, fps: fps, out: out, inFlight: make(map[int64]time.Time),
 		asked: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := comCall(act, activateObject, uintptr(unsafe.Pointer(&iidIMFTransform)), uintptr(unsafe.Pointer(&e.mft))).err("ActivateObject"); err != nil {
@@ -315,9 +322,16 @@ func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fp
 	e.setCodec(&codecBPictureCount, vtUI4, 0)
 	e.setCodec(&codecCABAC, vtBool, 0xFFFF)
 	e.setCodec(&codecQualityVsSpeed, vtUI4, uint64(quality))
+	e.layers = e.enableTemporalLayers(layers)
 
 	if err := e.setTypes(); err != nil {
 		return fail(err)
+	}
+	if e.layers > 1 {
+		// a static property: some encoders take it before the types and forget it after
+		if n, ok := e.getCodec(&codecTemporalLayerCount); ok && int(n) != e.layers {
+			e.layers = max(int(n), 1)
+		}
 	}
 	var info struct{ Flags, Size, Alignment uint32 }
 	if err := comCall(e.mft, mftGetOutputStreamInfo, 0, uintptr(unsafe.Pointer(&info))).err("GetOutputStreamInfo"); err != nil {
@@ -334,6 +348,37 @@ func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fp
 	e.looping = true
 	go e.eventLoop()
 	return e, nil
+}
+
+// getCodec reads a ULONG property of the encoder; ok is false where it has none.
+func (e *mfEncoder) getCodec(key *windows.GUID) (uint64, bool) {
+	if e.codec == nil {
+		return 0, false
+	}
+	var v variant
+	if comCall(e.codec, codecGetValue, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(&v))) < 0 {
+		return 0, false
+	}
+	return v.val & 0xffffffff, true
+}
+
+// enableTemporalLayers asks the encoder for want temporal layers (CODECAPI_AVEncVideoTemporalLayerCount)
+// and returns how many it took: 1 where it has no such property, refuses the count or offers fewer.
+// Hardware encoders may leave the property out; the stream then goes out as one layer.
+func (e *mfEncoder) enableTemporalLayers(want int) int {
+	if want <= 1 || e.codec == nil {
+		return 1
+	}
+	if comCall(e.codec, codecIsSupported, uintptr(unsafe.Pointer(&codecTemporalLayerCount))) != 0 {
+		return 1
+	}
+	if most, ok := e.getCodec(&codecMaxTemporalLayers); ok && most >= 1 {
+		want = min(want, int(most))
+	}
+	if want <= 1 || !e.setCodec(&codecTemporalLayerCount, vtUI4, uint64(want)) {
+		return 1
+	}
+	return want
 }
 
 func (e *mfEncoder) setCodec(key *windows.GUID, vt uint16, val uint64) bool {
@@ -578,6 +623,10 @@ func (e *mfEncoder) output() error {
 		f.took = time.Since(in)
 	}
 	f.keyframe = f.keyframe || hasIDR(f.data)
+	if e.layers > 1 {
+		f.layered = true
+		f.data, f.layer = splitLayer(f.data)
+	}
 	e.out(f)
 	return nil
 }

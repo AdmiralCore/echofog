@@ -120,7 +120,7 @@ func (a *App) startNativeScreenLocked(streamID, sourceID, qualityID string, curs
 	st := s.Stats()
 	screenLog.Info("Native screen capture started", "stream", streamID, "source", sourceKind(sourceID), "quality", qualityID,
 		"width", st.Width, "height", st.Height, "source_width", st.SourceWidth, "source_height", st.SourceHeight,
-		"fps", q.fps, "kbps", q.kbps, "encoder", st.Encoder, "adapter", st.Adapter)
+		"fps", q.fps, "kbps", q.kbps, "encoder", st.Encoder, "adapter", st.Adapter, "temporal_layers", st.TemporalLayers)
 	return nil
 }
 

@@ -724,6 +724,7 @@ export namespace main {
 	    encoder: string;
 	    adapter: string;
 	    hardware: boolean;
+	    temporalLayers?: number;
 	    pacerDelayMs: number;
 	
 	    static createFrom(source: any = {}) {
@@ -753,6 +754,7 @@ export namespace main {
 	        this.encoder = source["encoder"];
 	        this.adapter = source["adapter"];
 	        this.hardware = source["hardware"];
+	        this.temporalLayers = source["temporalLayers"];
 	        this.pacerDelayMs = source["pacerDelayMs"];
 	    }
 	}

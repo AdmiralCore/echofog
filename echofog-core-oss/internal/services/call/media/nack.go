@@ -87,6 +87,7 @@ type ringUnit struct {
 	frags [MaxFragments][]byte
 	count uint8
 	at    time.Time
+	layer ringLayer
 }
 
 type ringRef struct {
@@ -107,7 +108,7 @@ func newFragRing() *fragRing {
 }
 
 // put stores one wire fragment; raw must not be modified afterwards (the outbox holds it too).
-func (r *fragRing) put(streamID string, seq uint32, idx, count uint8, raw []byte, now time.Time) {
+func (r *fragRing) put(streamID string, seq uint32, idx, count uint8, raw []byte, layer ringLayer, now time.Time) {
 	k := ringKey{streamID, seq}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -118,7 +119,18 @@ func (r *fragRing) put(streamID string, seq uint32, idx, count uint8, raw []byte
 		r.units[k] = u
 		r.order = append(r.order, ringRef{k, now})
 	}
-	u.frags[idx] = raw
+	u.frags[idx], u.layer = raw, layer
+}
+
+// layerOf is the layer of a unit the ring holds.
+func (r *fragRing) layerOf(streamID string, seq uint32) (ringLayer, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u := r.units[ringKey{streamID, seq}]
+	if u == nil {
+		return ringLayer{}, false
+	}
+	return u.layer, true
 }
 
 // lookup returns the fragments of a unit that a holder of have still lacks, which fragments the
@@ -205,7 +217,16 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 			continue // a unit named twice is resent once
 		}
 		named[e.Seq] = true
+		hop, send := d.resendCap(child, streamID, e.Seq)
+		if !send {
+			continue // a frame left out for this child: it was never sent, and it is not owed
+		}
 		frags, held, complete := d.ring.lookup(streamID, e.Seq, e.Have, now)
+		if hop != 0 {
+			for i, f := range frags {
+				frags[i] = withHopCap(f, hop-1)
+			}
+		}
 		size := 0
 		for _, f := range frags {
 			size += len(f)
@@ -246,6 +267,29 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 			"stream", streamID, "child", calllog.Peer(child), "units", len(upstream))
 	}
 	return upstream
+}
+
+// resendCap says whether a unit the ring may hold goes to a child that asks for it again, and the
+// cap it goes with (plus one; 0: none said): only a unit of a frame its layers took.
+func (d *MediaDispatcher) resendCap(child types.PeerID, streamID string, seq uint32) (uint8, bool) {
+	l, ok := d.ring.layerOf(streamID, seq)
+	if !ok || !l.marked {
+		return 0, true
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	f := d.filters[linkKey{streamID, child}]
+	if !f.active() {
+		return 0, true
+	}
+	c, known := f.capOf(l.frame)
+	if !known {
+		c = f.cap
+	}
+	if l.class > c {
+		return 0, false
+	}
+	return min(c, l.cap) + 1, true
 }
 
 // nackGap asks upstream for the units of a gap that are still missing.

@@ -88,9 +88,10 @@ type rxMeter struct {
 	baselines [feedbackBaseline]int64 // the lowest delay of each recent window
 	nBase     int
 	prevQ     int
+	space     uint8 // what seq counts: unit seqs (capAll), or the packets of the layers up to it
 }
 
-func newRxMeter() *rxMeter { return &rxMeter{} }
+func newRxMeter() *rxMeter { return &rxMeter{space: capAll} }
 
 // add takes a fragment that arrived at now (ms on this node's clock).
 func (r *rxMeter) add(seq uint32, ts uint32, size int, now int64) {
@@ -159,7 +160,10 @@ type rxMeters struct {
 	meters map[string]*rxMeter
 }
 
-func (m *rxMeters) add(p *MediaPacket, size int, now time.Time) {
+// add takes a fragment of a watched stream. A stream whose layers are cut on the way here is
+// counted in the numbering of the layers it gets (space, pos: see unitLayer.space), so the frames
+// left out for us do not pass for units that came.
+func (m *rxMeters) add(p *MediaPacket, size int, now time.Time, space uint8, pos uint16) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.meters == nil {
@@ -170,7 +174,22 @@ func (m *rxMeters) add(p *MediaPacket, size int, now time.Time) {
 		r = newRxMeter()
 		m.meters[p.StreamID] = r
 	}
-	r.add(p.Seq, p.Timestamp, size, now.UnixMilli())
+	seq := p.Seq
+	if space != r.space {
+		if r.started {
+			// another numbering from here on: start it where we are, keep the windows
+			at := seq
+			if space != capAll {
+				at = uint32(pos)
+			}
+			r.highest = at - 1
+		}
+		r.space = space
+	}
+	if space != capAll {
+		seq = r.highest + uint32(int32(int16(pos-uint16(r.highest))))
+	}
+	r.add(seq, p.Timestamp, size, now.UnixMilli())
 }
 
 // lost counts units of a stream this node asks its parent for the first time.

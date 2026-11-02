@@ -137,6 +137,10 @@ type ActiveRoomState struct {
 	paths map[string]map[types.PeerID]*viewerPath
 	// weakKeyframe is when a keyframe a weak viewer asked for was last passed on, by stream
 	weakKeyframe map[string]time.Time
+	// layers holds the temporal layers of each child on each stream we send on (layers.go), and
+	// ownLevel our own path on each stream we watch, from our last report
+	layers   map[string]map[types.PeerID]*childLayers
+	ownLevel map[string]media.Congestion
 
 	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq, lastParentLost time.Time
 
@@ -184,8 +188,10 @@ type RoomSnapshot struct {
 
 // CallManager orchestrates Voice Backbone Trees and On-Demand Multi-Stream Video Trees.
 type CallManager struct {
-	mu     sync.RWMutex
-	logger *slog.Logger
+	mu sync.RWMutex
+	// beforeLayers makes this node report the way nodes from before temporal layers do (tests)
+	beforeLayers bool
+	logger       *slog.Logger
 	// treeLog carries voice and stream tree changes, so the topology timeline reads on its own.
 	treeLog *slog.Logger
 	// lim folds repeating lines (rejected signals, failed publishes, retries) into one per key.

@@ -542,6 +542,7 @@ func (m *CallManager) runLoop(ctx context.Context, room *ActiveRoomState) {
 				m.memberTickLocked(room, now)
 			}
 			m.feedbackTickLocked(room, now)
+			m.layersTickLocked(room, now)
 			m.rateTickLocked(room, now)
 			m.statsTickLocked(room, now)
 			if now.Sub(room.lastSeenGC) > time.Second {
