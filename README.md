@@ -58,8 +58,9 @@ Every document has a Russian version next to it (`*.ru.md`).
   stay hidden and serve only the people it gives an invitation link to. A link also comes in an
   https form that messengers make tappable: the page opens it in the app or offers the download.
   In whole-computer mode a kill switch, on by default, keeps apps offline when the exit drops.
-- **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet). Replies, threads, edits,
-  reactions and pins work in every chat, and a chat looks the same on both sides after a break.
+- **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet; a chat starts with
+  post-quantum hybrid PQXDH, ML-KEM-768). Replies, threads, edits, reactions and pins work in
+  every chat, and a chat looks the same on both sides after a break.
   A group can be a space with text channels and voice rooms, like a community server without the
   server. Pictures arrive with a small preview, so you see them before downloading. Calls and screen
   sharing travel over relay trees sized by each participant's upload, which is how a stream reaches
