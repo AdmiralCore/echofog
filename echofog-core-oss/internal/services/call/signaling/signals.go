@@ -169,6 +169,10 @@ type NackPayload struct {
 type StreamFeedbackPayload struct {
 	StreamID string           `json:"stream_id"`
 	Reports  []ViewerFeedback `json:"reports"`
+	// Layered says the sender reads the temporal-layer cap of the fragments it is sent, and so does
+	// every child of its on the stream: its parent may leave layers out for it. Older nodes leave
+	// it out and get the whole stream.
+	Layered bool `json:"layered,omitempty"`
 }
 
 // MaxFeedbackReports bounds the viewers one report names.
