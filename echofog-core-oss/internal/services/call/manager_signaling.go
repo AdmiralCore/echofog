@@ -67,7 +67,7 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 		if m.applyFloodLocked(room, env, from) {
 			for _, n := range room.Dispatcher.VoiceNeighbors() {
 				if n != from && n != env.Sender {
-					room.Dispatcher.Outbox().Send(n, media.ClassControl, net_types.TypeCallSignaling, m.sealSignalLocked(room, n, payload))
+					m.sendRawLocked(room, n, env.Action, payload)
 				}
 			}
 		}
@@ -161,7 +161,14 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 			if !m.knownInCallLocked(room, env.Sender) {
 				return m.rejectLocked(room, env, "heartbeat from outside the call", true)
 			}
+			var other signaling.CoordinatorHeartbeatPayload
+			_ = decodePayload(env.Payload, &other)
 			switch {
+			case m.aloneLocked(room) && other.Members == 1 && !m.authorityLocked(room, env.Sender, env.Epoch):
+				// two coordinators, each alone (a blackout split the call): the one with the
+				// higher epoch, or the lower ID on a tie, keeps it; that one is us, and the other
+				// joins us when it hears our heartbeat
+				return m.rejectLocked(room, env, "another lone coordinator yields to us", false)
 			case m.aloneLocked(room):
 				// we took over while cut off and nobody followed: the sender has the call
 				m.yieldLocked(room, env.Sender, env.Epoch, now)
@@ -538,7 +545,7 @@ func (m *CallManager) sendLocked(room *ActiveRoomState, to types.PeerID, action 
 		m.warnOnce("encode:"+string(action), "Failed to encode call signal", "action", action, "err", err)
 		return
 	}
-	room.Dispatcher.Outbox().Send(to, media.ClassControl, net_types.TypeCallSignaling, m.sealSignalLocked(room, to, b)) // the outbox logs drops
+	m.sendRawLocked(room, to, action, b)
 }
 
 func (m *CallManager) floodLocked(room *ActiveRoomState, action signaling.SignalAction, data any) {
@@ -548,8 +555,35 @@ func (m *CallManager) floodLocked(room *ActiveRoomState, action signaling.Signal
 		return
 	}
 	for _, n := range room.Dispatcher.VoiceNeighbors() {
-		room.Dispatcher.Outbox().Send(n, media.ClassControl, net_types.TypeCallSignaling, m.sealSignalLocked(room, n, b))
+		m.sendRawLocked(room, n, action, b)
 	}
+}
+
+// byDatagramToo reports whether a signal goes by datagram as well as by stream: the ones that say
+// their sender is alive, and the media key. A mobile link's stream can stall for many seconds
+// behind a burst of loss while datagrams still pass (the sound kept flowing): a member that heard
+// no heartbeat for two seconds took the call over from a coordinator that was alive, splitting the
+// call in two, and a new media key stuck behind the stall silenced whoever waited for it. All of
+// them are small, and taking one twice changes nothing.
+func byDatagramToo(a signaling.SignalAction) bool {
+	switch a {
+	case signaling.ActionCoordinatorHeartbeat, signaling.ActionMemberHeartbeat, signaling.ActionPing, signaling.ActionPong,
+		signaling.ActionMediaKey:
+		return true
+	}
+	return false
+}
+
+// sendRawLocked sends an encoded signal to a peer: sealed if it can be, by datagram too if
+// byDatagramToo says so. The receiver takes the first copy (flooded signals by MsgID; the rest are
+// idempotent).
+func (m *CallManager) sendRawLocked(room *ActiveRoomState, to types.PeerID, action signaling.SignalAction, b []byte) {
+	b = m.sealSignalLocked(room, to, b)
+	ob := room.Dispatcher.Outbox()
+	if byDatagramToo(action) {
+		ob.Send(to, media.ClassAudio, net_types.TypeCallSignalingLossy, b)
+	}
+	ob.Send(to, media.ClassControl, net_types.TypeCallSignaling, b) // the outbox logs drops
 }
 
 func (m *CallManager) notifyAnnounceLocked(a signaling.StreamAnnouncePayload) {

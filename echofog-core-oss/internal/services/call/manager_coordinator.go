@@ -173,11 +173,7 @@ func (m *CallManager) yieldLocked(room *ActiveRoomState, leader types.PeerID, ep
 	m.logger.Info("Back to the coordinator that kept the call going", "call_id", calllog.Call(room.CallID),
 		"coordinator", calllog.Peer(leader), "epoch", epoch, "our_epoch", room.Epoch)
 	room.Epoch = epoch
-	room.formerCoordinator = types.PeerID{}
-	room.joined = false
-	room.waitingSince = now
-	m.setCoordinatorLocked(room, leader, epoch, now)
-	m.sendJoinLocked(room, now)
+	m.setCoordinatorLocked(room, leader, epoch, now) // joins it
 }
 
 // becomeCoordinatorLocked takes over the room after an election this node won.
@@ -244,6 +240,7 @@ func (m *CallManager) becomeCoordinatorLocked(room *ActiveRoomState, now time.Ti
 
 func (m *CallManager) setCoordinatorLocked(room *ActiveRoomState, leader types.PeerID, epoch uint64, now time.Time) {
 	changed := leader != room.Coordinator
+	wasCoordinator := room.IsCoordinator
 	room.Coordinator = leader
 	room.IsCoordinator = leader == m.selfID
 	if epoch > room.Epoch {
@@ -258,6 +255,15 @@ func (m *CallManager) setCoordinatorLocked(room *ActiveRoomState, leader types.P
 	m.logger.Info("Call coordinator changed", "call_id", calllog.Call(room.CallID), "coordinator", calllog.Peer(leader), "epoch", epoch)
 	m.ensureConnectedLocked(leader)
 	room.lastMemberHB = time.Time{} // introduce ourselves to the new coordinator on the next tick
+	if wasCoordinator && !room.IsCoordinator {
+		// We led the call and another took it over (or kept it while we were cut off): the new
+		// coordinator dropped us when it took over, so ask to be admitted now, and keep asking
+		// until we are, instead of sending heartbeats it does not take from a stranger.
+		room.formerCoordinator = types.PeerID{}
+		room.joined = false
+		room.waitingSince = now
+		m.sendJoinLocked(room, now)
+	}
 	m.emit("call:failover_occurred", map[string]any{"call_id": room.CallID, "new_coordinator": leader.String(), "epoch": epoch})
 	if cb := m.OnCoordinatorChanged; cb != nil {
 		m.later(func() { cb(leader, epoch) })
@@ -561,11 +567,20 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	}
 	if now.Sub(room.lastCoordHB) >= coordHeartbeatInterval {
 		room.lastCoordHB = now
-		hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64)}
+		hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64),
+			Members: len(room.ConnectedPeers)}
 		for _, sm := range room.StreamEngine.Snapshot() {
 			hb.Streams[sm.StreamID] = sm.Epoch
 		}
 		m.floodLocked(room, signaling.ActionCoordinatorHeartbeat, hb)
+		if f := room.formerCoordinator; f != (types.PeerID{}) && now.Sub(room.coordSince) < formerHeartbeatWindow {
+			if _, member := room.ConnectedPeers[f]; !member {
+				// the coordinator we took over from may be alive and have heard of it: it is no
+				// member yet, so no flood reaches it, and without a pulse it would take the call
+				// back alone two seconds later
+				m.sendLocked(room, f, signaling.ActionCoordinatorHeartbeat, hb)
+			}
+		}
 	}
 	for p, seen := range room.memberSeen {
 		if p != m.selfID && now.Sub(seen) > m.waitLocked(p, memberTimeout, relayMemberTimeout) {
@@ -641,6 +656,11 @@ func (m *CallManager) memberTickLocked(room *ActiveRoomState, now time.Time) {
 	// Coordinator watchdog: probe directly before declaring it dead.
 	silent := now.Sub(room.LastCoordPulse)
 	coordWait := m.waitLocked(room.Coordinator, coordinatorTimeout, relayCoordinatorTimeout)
+	if !room.joined {
+		// asking a coordinator to take us back in, after it took over from us or we yielded to
+		// it: give it time to hear the join before leading the call alone again
+		coordWait *= rejoinGrace
+	}
 	if silent > coordWait/2 && now.Sub(room.lastPing) >= pingInterval {
 		room.lastPing = now
 		m.debugOnce("ping", "Coordinator quiet, probing it", "coordinator", calllog.Peer(room.Coordinator), "silent", silent.Round(time.Millisecond).String())

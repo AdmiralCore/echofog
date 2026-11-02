@@ -152,4 +152,3 @@ func TestSealedSignalOpensOnlyAtItsEnd(t *testing.T) {
 	b.cm.mu.Unlock()
 	assert.Error(t, err, "tampered")
 }
-

@@ -42,11 +42,16 @@ const (
 	memberTimeout           = 2500 * time.Millisecond
 	parentTimeout           = 800 * time.Millisecond
 	coordinatorTimeout      = 2000 * time.Millisecond
-	electionWait            = 1500 * time.Millisecond
-	joinRetryInterval       = time.Second
-	reconcileInterval       = time.Second
-	pingInterval            = 300 * time.Millisecond
-	keyframeMinInterval     = 300 * time.Millisecond
+	// rejoinGrace stretches coordinatorTimeout for a member that asked to be admitted again
+	rejoinGrace = 3
+	// formerHeartbeatWindow is how long a coordinator that took over heartbeats its predecessor
+	// directly, until that one is admitted again
+	formerHeartbeatWindow = 30 * time.Second
+	electionWait          = 1500 * time.Millisecond
+	joinRetryInterval     = time.Second
+	reconcileInterval     = time.Second
+	pingInterval          = 300 * time.Millisecond
+	keyframeMinInterval   = 300 * time.Millisecond
 	// keyframeServeInterval: how often the broadcaster's encoder makes an IDR on request; each one
 	// is huge at 4K, and the frames right after it get starved into blur.
 	keyframeServeInterval = time.Second

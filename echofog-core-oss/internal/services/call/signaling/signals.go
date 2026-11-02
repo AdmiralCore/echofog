@@ -209,6 +209,9 @@ type CoordinatorHeartbeatPayload struct {
 	Coordinator types.PeerID      `json:"coordinator"`
 	Epoch       uint64            `json:"epoch"`
 	Streams     map[string]uint64 `json:"streams,omitempty"` // stream ID -> tree epoch
+	// Members is how many members the coordinator leads, itself included (0 from older builds):
+	// two coordinators that each lead alone settle which one the other joins by epoch and ID.
+	Members int `json:"members,omitempty"`
 }
 
 // JoinProof binds a member identity to the room key without revealing the key.

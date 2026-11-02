@@ -49,6 +49,7 @@ type mesh struct {
 	drop  func(t net_types.MessageType, payload []byte) bool                   // simulated packet loss
 	links map[[2]types.PeerID]*shaper                                          // bottlenecks, by (from, to)
 	tap   func(from, to types.PeerID, t net_types.MessageType, payload []byte) // sees every frame sent
+	block func(from, to types.PeerID, t net_types.MessageType) bool            // a link that swallows frames
 }
 
 func newMesh() *mesh {
@@ -116,6 +117,9 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	drop := m.drop
 	link := m.links[[2]types.PeerID{from, to}]
 	tap := m.tap
+	if m.block != nil && m.block(from, to, t) {
+		cut = true
+	}
 	m.mu.Unlock()
 	if tap != nil {
 		tap(from, to, t, payload)
