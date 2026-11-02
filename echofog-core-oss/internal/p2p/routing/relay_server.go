@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/cache"
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
@@ -65,6 +66,7 @@ type RelayServer struct {
 	reqLimit  *ratelimit.Keyed[types.PeerID] // relay requests per origin
 	fullReply *ratelimit.Keyed[types.PeerID] // "mailbox full" answers per peer
 	ackReply  *ratelimit.Keyed[types.PeerID] // relay acknowledgements per peer
+	passed    *cache.Cache[string, struct{}] // ids of relay requests handled lately (see relaySeenTTL)
 
 	logMu      sync.Mutex
 	logLast    map[string]time.Time
@@ -183,6 +185,7 @@ func NewRelayServer(s *swarm.Swarm, mailbox *messenger.MailboxManager, logger *s
 		reqLimit:    ratelimit.NewKeyed[types.PeerID](relayReqRate, relayReqBurst, limiterPeers),
 		fullReply:   ratelimit.NewKeyed[types.PeerID](fullReplyRate, fullReplyBurst, limiterPeers),
 		ackReply:    ratelimit.NewKeyed[types.PeerID](ackReplyRate, ackReplyBurst, limiterPeers),
+		passed:      cache.New[string, struct{}](relaySeenMax, relaySeenTTL),
 		logLast:     make(map[string]time.Time),
 		logSkipped:  make(map[string]int),
 	}
@@ -753,6 +756,20 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 		return
 	}
 
+	// A request goes through a relay once: relays that know each other passed one with a large hop
+	// limit round and round, at the cost of every relay request budget on the way. The id stays
+	// the same from hop to hop (only the signature changes); a sender's retry carries a new one.
+	if len(msg.MessageId) > 0 {
+		id := string(msg.MessageId)
+		if rs.passed.Exists(id) {
+			rs.refusedMsgs.Add(1)
+			return
+		}
+		rs.passed.Set(id, struct{}{})
+	}
+	// and no further than types.HOPLIMIT hops, whatever its sender wrote
+	hops := min(msg.HopLimit, uint32(types.HOPLIMIT))
+
 	// 2. If target is directly connected to this node in Swarm: deliver immediately!
 	direct := rs.swarm.ThisIsActivePeer(targetID)
 	if direct {
@@ -774,7 +791,7 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 
 	// A message that has travelled far enough can only go to the mailbox: when the mailbox would
 	// refuse it anyway, say so now, before any work is done for it.
-	if !direct && msg.HopLimit <= 1 {
+	if !direct && hops <= 1 {
 		if reason := rs.mailboxRefuses(targetID, len(req.ForwardedEnvelope)); reason != nil {
 			rs.refusedMsgs.Add(1)
 			rs.replyMailboxFull(fromPeer, selfID)
@@ -788,13 +805,13 @@ func (rs *RelayServer) Handle(msg *internal_pb.MessageData, fromPeer types.PeerI
 	// The request is ours now, signed by us (once, whatever the number of candidates tried); the
 	// envelope inside stays the sender's.
 	forwarded := false
-	if msg.HopLimit > 1 {
+	if hops > 1 {
 		hop := &internal_pb.MessageData{
 			MessageId: msg.MessageId,
 			OriginId:  selfID.ToBytes(),
 			TargetId:  msg.TargetId,
 			Timestamp: msg.Timestamp,
-			HopLimit:  msg.HopLimit - 1,
+			HopLimit:  hops - 1,
 			Payload:   msg.Payload,
 		}
 		var relayEnv *internal_pb.Envelope
