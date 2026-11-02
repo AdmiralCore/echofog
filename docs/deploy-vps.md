@@ -11,14 +11,28 @@ roles and settings mean is in [Run a node](run-a-node.md).
 ssh root@<server IP>
 ```
 
+Fresh servers usually have no Docker, so install it first; everything below runs in it:
+
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
 ```
 
 The commands that need root carry `sudo`, so they work for root and for a regular user alike (Google
 Cloud and many other providers log you in as one). A regular user then adds themselves to the
-`docker` group and logs in again, so the `docker compose` commands below run without `sudo`:
-`sudo usermod -aG docker "$USER"`.
+`docker` group, so the `docker compose` commands below run without `sudo`:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+Log out (`exit`) and connect again, since the group only applies to a new login. Then check:
+
+```bash
+docker compose version
+```
+
+It prints a version. `Command 'docker' not found` means the install above did not run; `permission
+denied ... docker.sock` means you have not logged in again yet.
 
 ## 2. Open the port
 
