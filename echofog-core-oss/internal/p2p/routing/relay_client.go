@@ -138,7 +138,8 @@ type RelayClient struct {
 	pendingSignal map[pendingKey]bool     // circuits being opened: signaling ones
 	pendingOpens  map[pendingKey]chan circuitOpenResult
 	blacklisted   map[types.PeerID]time.Time
-	early         []earlyFrame // frames that came before their circuit's open (see handleCircuitData)
+	onAck         func(relay types.PeerID, reqID []byte, status, reason byte) // told of every relay acknowledgement
+	early         []earlyFrame                                                // frames that came before their circuit's open (see handleCircuitData)
 
 	// Market-aware economics & configuration
 	cfgMu       sync.RWMutex
@@ -569,6 +570,22 @@ func (rc *RelayClient) HandleRawFrame(msgType net_types.MessageType, payload []b
 	case net_types.TypeMailboxFull:
 		// the relay keeps no more messages (or none at all, a server without a mailbox)
 		rc.MarkRelayFull(fromPeer)
+		return true
+
+	case net_types.TypeRelayAck:
+		reqID, status, reason, ok := DecodeRelayAck(payload)
+		if !ok {
+			return true
+		}
+		if status == RelayAckRefused {
+			rc.MarkRelayFull(fromPeer) // tried last for a while, whatever the reason
+		}
+		rc.mu.RLock()
+		f := rc.onAck
+		rc.mu.RUnlock()
+		if f != nil {
+			f(fromPeer, reqID, status, reason)
+		}
 		return true
 
 	default:
@@ -1228,6 +1245,14 @@ func (rc *RelayClient) SendRoutedEnvelope(ctx context.Context, targetID types.Pe
 	}
 
 	return ErrNoRelaysAvailable
+}
+
+// OnRelayAck sets who is told of the relays' answers to our message requests (the messenger's
+// outbox).
+func (rc *RelayClient) OnRelayAck(f func(relay types.PeerID, reqID []byte, status, reason byte)) {
+	rc.mu.Lock()
+	rc.onAck = f
+	rc.mu.Unlock()
 }
 
 // IsFull tells whether relayID answered with TypeMailboxFull in the last minutes.

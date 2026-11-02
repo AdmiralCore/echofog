@@ -207,3 +207,20 @@ func TestAnnouncementsMendALostPush(t *testing.T) {
 		t.Fatalf("an announcement of what is held brought %v", again)
 	}
 }
+
+// A timeout ends at most maxTimeout after it was given, whatever end the event names: only the
+// app's form kept to the 28 days, and a modified client could mute a member for good.
+func TestTimeoutIsCapped(t *testing.T) {
+	f, m, x := newAccount(t), newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("to-cap")
+	lf, lm := groupReplica(t, f, rules), groupReplica(t, m, rules)
+	ingest(t, lm, c, member(t, lf, c, roster(f, "owner", m, "moderator", x, "member")))
+	year := time.Now().Add(365 * 24 * time.Hour).Unix()
+	raw := member(t, lm, c, &MemberBody{Action: MemberTimeout, Member: x.pub, Until: year})
+	ingest(t, lf, c, raw)
+	got := lf.TimeoutOf(c, x.id)
+	if got == 0 || got > time.Now().Unix()+maxTimeout+60 {
+		t.Fatalf("a timeout of a year ends at %d, want at most %d", got, time.Now().Unix()+maxTimeout)
+	}
+}

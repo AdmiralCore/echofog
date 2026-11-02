@@ -31,6 +31,14 @@ const (
 	// a "mailbox full" answer costs a signature: at most one every few seconds per peer
 	fullReplyRate  = 0.2
 	fullReplyBurst = 2
+	// relay acknowledgements per peer: one per relay request, which are themselves limited per
+	// origin; this bounds the answers to a peer that floods requests in many origins' names
+	// relay request ids remembered, so that none goes through this relay twice
+	relaySeenMax = 1 << 16
+	relaySeenTTL = 10 * time.Minute
+
+	ackReplyRate  = 100
+	ackReplyBurst = 200
 	// how many peers the per-peer limiters remember before forgetting idle ones
 	limiterPeers = 8192
 

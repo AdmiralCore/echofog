@@ -24,6 +24,9 @@ import (
 // while it serves it (64 bytes per 64 KiB chunk, 32 MiB for this size).
 const DefaultMaxSize int64 = 32 << 30
 
+// maxOfferSize bounds the size an offer may name at all (its chunk bitmap is then at most 8 MB).
+const maxOfferSize int64 = 4 << 40
+
 // spaceMargin stays free on the disk besides the file being received.
 const spaceMargin = 64 << 20
 
@@ -146,6 +149,9 @@ func (s *Service) Start() error {
 	}
 	for _, r := range recs {
 		id, peer, k, root, err := parseRecord(r)
+		if err == nil && r.Dir == Incoming && (r.Size < 0 || r.Size > maxOfferSize) {
+			err = errors.New("bad size")
+		}
 		if err != nil {
 			s.log.Warn("FileXfer: dropping unreadable transfer", "id", r.ID, "err", err)
 			deleteRecord(s.opt.Store, r.ID)
@@ -758,7 +764,10 @@ func (s *Service) OnOffer(from types.PeerID, o Offer) (Info, error) {
 	if !ok {
 		return Info{}, errors.New("bad transfer id")
 	}
-	if o.Size < 0 {
+	if o.Size < 0 || o.Size > maxOfferSize {
+		// checked before anything is kept: the chunk bitmap is sized from it (a huge or overflowing
+		// size made the offer itself run out of memory or panic, and again on every start). One
+		// over this node's own limit is still shown, and refused when accepted.
 		return Info{}, errors.New("bad size")
 	}
 	s.mu.Lock()

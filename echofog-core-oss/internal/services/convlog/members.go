@@ -220,6 +220,11 @@ func decodeMember(e *Event) (*MemberBody, bool) {
 		if len(b.Member) != authorLen || b.Until < 0 {
 			return nil, false
 		}
+		// the longest timeout counts from the event's own time: a client that does not keep to
+		// it (the app's form does) cannot keep a member silent for good under a timeout
+		if limit := e.TsMs/1000 + maxTimeout; b.Until > limit {
+			b.Until = limit
+		}
 	case MemberDefine:
 		d := b.Def
 		if d == nil || !validRoleID(d.Id) || len(d.Title) > maxRoleTitle || !validText(d.Title) || d.Color > 0xFFFFFF ||
@@ -496,21 +501,45 @@ func (m *members) allowed(rules GroupRules, c Conv, p pos) bool {
 	return res
 }
 
-// mentions reports whether id took part in the group's membership history at all (an author or a
-// member of a membership event): their events are kept even when not allowed, so a later
-// membership event that allows them takes effect, and their sequence has no holes.
-func (m *members) mentions(id types.PeerID, pub []byte) bool {
+// mentions reports whether id is named in the group's membership history by an author may accepts
+// (a member of a membership event, or in a roster), or joined on its own with an invitation such an
+// author made: their events are kept even when not allowed, so a later membership event that
+// allows them takes effect, and their sequence has no holes.
+func (m *members) mentions(id types.PeerID, pub []byte, may func(types.PeerID) bool) bool {
 	for _, ev := range m.evs {
-		if ev.author == id || bytes.Equal(ev.body.Member, pub) {
-			return true
-		}
-		for _, r := range ev.body.Roster {
-			if bytes.Equal(r.Member, pub) {
+		if ev.author == id {
+			if ev.body.Action == MemberJoin && ev.body.Via != "" && m.hasInvite(ev.body.Via, may) {
 				return true
 			}
+			continue
+		}
+		named := bytes.Equal(ev.body.Member, pub)
+		for _, r := range ev.body.Roster {
+			named = named || bytes.Equal(r.Member, pub)
+		}
+		if named && may(ev.author) {
+			return true
 		}
 	}
 	return false
+}
+
+// hasInvite reports whether the history holds invitation n, made by an author may accepts.
+func (m *members) hasInvite(n string, may func(types.PeerID) bool) bool {
+	for _, ev := range m.evs {
+		if ev.body.Action == MemberInvite && ev.body.Invite != nil && ev.body.Invite.N == n && may(ev.author) {
+			return true
+		}
+	}
+	return false
+}
+
+// remove takes the event at p out of the history (one that was not kept after all).
+func (m *members) remove(p pos) {
+	i := sort.Search(len(m.evs), func(i int) bool { return !m.evs[i].at.less(p) })
+	if i < len(m.evs) && m.evs[i].at == p {
+		m.evs = append(m.evs[:i], m.evs[i+1:]...)
+	}
 }
 
 func (m *members) add(ev memberEv) {

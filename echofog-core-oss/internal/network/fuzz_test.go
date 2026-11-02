@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -48,8 +49,9 @@ func FuzzPeerAddr(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string) {
 		addr, got, named := SplitPeerAddr(s)
 		if !named {
-			if addr != s {
-				t.Fatalf("an address without id must come back unchanged: %q -> %q", s, addr)
+			// the query (sni, srv) is stripped, the rest comes back unchanged
+			if want, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(s), RelayLinkPrefix), "?"); strings.Contains(s, "?") && addr != want || !strings.Contains(s, "?") && addr != s {
+				t.Fatalf("an address without id must come back without its query only: %q -> %q", s, addr)
 			}
 			return
 		}

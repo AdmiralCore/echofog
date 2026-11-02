@@ -82,6 +82,11 @@ const (
 	// for a second late finds nothing left to resend. The same signal goes by stream too, for nodes
 	// that do not know this type; the receiver takes whichever comes first.
 	TypeCallSignalingLossy
+	// TypeRelayAck is a relay's answer to a TypeRelayMessageRequest: [status][reason][request id].
+	// It says whether the relay kept the message, passed it on, or refused it. A node that does not
+	// know the type takes it for an envelope, finds none and drops it, so older senders ignore it,
+	// and a sender hears nothing from an older relay.
+	TypeRelayAck
 )
 
 // IsUnreliableType reports whether frames of this type may arrive as unreliable QUIC datagrams.
