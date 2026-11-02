@@ -90,6 +90,7 @@ type MediaDispatcher struct {
 	ring     *fragRing
 	fecTx    *fecSender
 	fecRx    *fecReceiver
+	rx       rxMeters // what the path of each watched stream does, for the broadcaster's rate
 
 	// OnVideoNack fires shortly after a watched stream has a gap; the call layer sends the NACK
 	// to the stream's parent, which resends from its ring.
@@ -225,6 +226,7 @@ func (d *MediaDispatcher) SetStreamWatching(streamID string, watching bool) {
 		d.watchingStreams[streamID] = true
 	} else {
 		delete(d.watchingStreams, streamID)
+		d.rx.drop(streamID)
 	}
 }
 
@@ -358,6 +360,9 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		return nil
 	}
 	if d.IsWatchingStream(p.StreamID) {
+		if p.Kind == FrameVideo {
+			d.rx.add(p, len(rawBytes), now)
+		}
 		d.deliver(p, now)
 	}
 	if p.Kind == FrameVideo {

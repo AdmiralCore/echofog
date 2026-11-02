@@ -47,10 +47,52 @@ type mesh struct {
 	dead  map[types.PeerID]bool
 	sent  atomic.Uint64
 	drop  func(t net_types.MessageType, payload []byte) bool // simulated packet loss
+	links map[[2]types.PeerID]*shaper                        // bottlenecks, by (from, to)
 }
 
 func newMesh() *mesh {
-	return &mesh{nodes: make(map[types.PeerID]*CallManager), dead: make(map[types.PeerID]bool)}
+	return &mesh{nodes: make(map[types.PeerID]*CallManager), dead: make(map[types.PeerID]bool), links: make(map[[2]types.PeerID]*shaper)}
+}
+
+// shaper is a bottleneck link, as a home router or a Wi-Fi hop is one: it sends kbps, and what
+// has to wait queues up to queue long, past which it is dropped.
+type shaper struct {
+	mu      sync.Mutex
+	kbps    float64
+	queue   time.Duration
+	free    time.Time // when the link has sent all it holds
+	dropped atomic.Uint64
+	passed  atomic.Uint64
+}
+
+// admit returns how long a packet takes to come out of the link, or false if it is dropped.
+func (s *shaper) admit(size int, now time.Time) (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	start := now
+	if s.free.After(now) {
+		start = s.free
+	}
+	if start.Sub(now) > s.queue {
+		s.dropped.Add(1)
+		return 0, false
+	}
+	s.free = start.Add(time.Duration(float64(size*8) / s.kbps * float64(time.Millisecond)))
+	s.passed.Add(1)
+	return s.free.Sub(now), true
+}
+
+// shape puts a bottleneck on the link from one peer to another (nil kbps 0 removes it).
+func (m *mesh) shape(from, to types.PeerID, kbps float64, queue time.Duration) *shaper {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if kbps <= 0 {
+		delete(m.links, [2]types.PeerID{from, to})
+		return nil
+	}
+	s := &shaper{kbps: kbps, queue: queue}
+	m.links[[2]types.PeerID{from, to}] = s
+	return s
 }
 
 type meshPort struct {
@@ -71,6 +113,7 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	target := m.nodes[to]
 	cut := m.dead[from] || m.dead[to]
 	drop := m.drop
+	link := m.links[[2]types.PeerID{from, to}]
 	m.mu.Unlock()
 	if target == nil {
 		return fmt.Errorf("peer %s not connected", to)
@@ -80,16 +123,23 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	}
 	m.sent.Add(1)
 	data := append([]byte(nil), payload...)
-	go func() {
+	wait := time.Duration(0)
+	if link != nil {
+		var ok bool
+		if wait, ok = link.admit(len(payload), time.Now()); !ok {
+			return nil
+		}
+	}
+	time.AfterFunc(wait, func() {
 		switch t {
-		case net_types.TypeCallSignaling:
+		case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy:
 			_ = target.handleIncomingSignaling(data, from)
 		case net_types.TypeCallMediaAudio:
 			_ = target.handleIncomingAudio(data, from)
 		case net_types.TypeCallMediaVideo:
 			_ = target.handleIncomingVideo(data, from)
 		}
-	}()
+	})
 	return nil
 }
 
