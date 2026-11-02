@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/cache"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -109,7 +110,15 @@ type Service struct {
 
 	// Dropped counts frames thrown away because they did not open or did not verify (tests watch it).
 	dropped sync.Map
+	// seen holds the transfer id and nonce of the control frames taken lately: a frame comes once.
+	// A relay that caught a want (or a cancel) and sent it again made the sender serve again.
+	seen *cache.Cache[[idLen + nonceLen]byte, struct{}]
 }
+
+const (
+	seenFrames   = 1 << 16
+	seenFrameTTL = time.Hour
+)
 
 // New makes a service; Start brings back the transfers of an earlier run.
 func New(opt Options) *Service {
@@ -138,6 +147,7 @@ func New(opt Options) *Service {
 	return &Service{
 		opt: opt, log: opt.Logger.With("component", "filexfer"), ctx: ctx, cancel: cancel,
 		out: map[[idLen]byte]*outgoing{}, in: map[[idLen]byte]*incoming{},
+		seen: cache.New[[idLen + nonceLen]byte, struct{}](seenFrames, seenFrameTTL),
 	}
 }
 
@@ -472,15 +482,21 @@ func (s *Service) setOutState(o *outgoing, st State, msg string) {
 
 // receiverOf tells who sent a frame to us as the sender. In a group every member holds the same
 // key, so each says who it is inside the sealed body; a direct transfer has only the one receiver.
-func (s *Service) receiverOf(o *outgoing, body []byte) (types.PeerID, []byte, bool) {
+// from is the peer the frame came from (the link, or the far end of a relay circuit), zero when
+// not known: a member who names somebody else is refused, or it could cancel another member's
+// download or have the file sent at them.
+func (s *Service) receiverOf(o *outgoing, body []byte, from types.PeerID) (types.PeerID, []byte, bool) {
 	if !o.group() {
-		return o.peer, body, true
+		return o.peer, body, from == (types.PeerID{}) || from == o.peer
 	}
 	var p types.PeerID
 	if len(body) < len(p) {
 		return p, nil, false
 	}
 	copy(p[:], body)
+	if from != (types.PeerID{}) && from != p {
+		return p, nil, false
+	}
 	o.mu.Lock()
 	ok := o.members[p]
 	o.mu.Unlock()
@@ -490,13 +506,13 @@ func (s *Service) receiverOf(o *outgoing, body []byte) (types.PeerID, []byte, bo
 	return p, body[len(p):], ok && p != s.opt.Self
 }
 
-func (s *Service) handleWant(o *outgoing, frame []byte) {
+func (s *Service) handleWant(o *outgoing, frame []byte, from types.PeerID) {
 	body, err := open(o.k.toSender, frame)
 	if err != nil {
 		s.drop("open")
 		return
 	}
-	peer, body, ok := s.receiverOf(o, body)
+	peer, body, ok := s.receiverOf(o, body, from)
 	if !ok {
 		s.drop("member")
 		return
@@ -504,6 +520,9 @@ func (s *Service) handleWant(o *outgoing, frame []byte) {
 	idx, err := decodeWant(body)
 	if err != nil {
 		s.drop("want")
+		return
+	}
+	if !s.fresh(frame) {
 		return
 	}
 	o.mu.Lock()
@@ -709,15 +728,18 @@ func (s *Service) serve(o *outgoing, sv *serving, quit chan struct{}) (idle bool
 	return false
 }
 
-func (s *Service) handleFromReceiver(o *outgoing, kind frameKind, frame []byte) {
+func (s *Service) handleFromReceiver(o *outgoing, kind frameKind, frame []byte, from types.PeerID) {
 	body, err := open(o.k.toSender, frame)
 	if err != nil {
 		s.drop("open")
 		return
 	}
-	peer, body, ok := s.receiverOf(o, body)
+	peer, body, ok := s.receiverOf(o, body, from)
 	if !ok {
 		s.drop("member")
+		return
+	}
+	if !s.fresh(frame) {
 		return
 	}
 	declined := len(body) == 1 && body[0] == reasonDeclined
@@ -1109,10 +1131,17 @@ func (s *Service) handleChunk(in *incoming, frame []byte) {
 	}
 }
 
-func (s *Service) handleFromSender(in *incoming, frame []byte) {
+func (s *Service) handleFromSender(in *incoming, frame []byte, from types.PeerID) {
 	body, err := open(in.k.toReceiver, frame)
 	if err != nil {
 		s.drop("open")
+		return
+	}
+	if from != (types.PeerID{}) && from != in.peer {
+		s.drop("member") // in a group, another member holds the same key
+		return
+	}
+	if !s.fresh(frame) {
 		return
 	}
 	in.mu.Lock()
@@ -1431,9 +1460,14 @@ func (s *Service) fetch(in *incoming, quit chan struct{}) {
 
 // ---- frames and the rest -----------------------------------------------------------------------
 
-// HandleFrame takes a transfer frame that arrived directly or over a relay circuit. Who sent it is
-// not trusted: a frame counts only if it opens with the key of the transfer it names.
-func (s *Service) HandleFrame(frame []byte) {
+// HandleFrame takes a transfer frame whose sender is not known. A frame counts only if it opens
+// with the key of the transfer it names.
+func (s *Service) HandleFrame(frame []byte) { s.HandleFrameFrom(frame, types.PeerID{}) }
+
+// HandleFrameFrom takes a transfer frame that arrived directly from peer from, or over a relay
+// circuit from it. Besides opening with the transfer's key, a control frame must come from the
+// side it speaks for: in a group every member holds the key.
+func (s *Service) HandleFrameFrom(frame []byte, from types.PeerID) {
 	kind, id, ok := parseHeader(frame)
 	if !ok {
 		s.drop("header")
@@ -1449,22 +1483,22 @@ func (s *Service) HandleFrame(frame []byte) {
 		}
 	case kindWant:
 		if o != nil {
-			s.handleWant(o, frame)
+			s.handleWant(o, frame, from)
 		}
 	case kindDone:
 		if o != nil {
-			s.handleFromReceiver(o, kind, frame)
+			s.handleFromReceiver(o, kind, frame, from)
 		}
 	case kindCancel:
 		// a cancel opens with only one of the two keys, which tells its direction
 		if in != nil {
 			if _, err := open(in.k.toReceiver, frame); err == nil {
-				s.handleFromSender(in, frame)
+				s.handleFromSender(in, frame, from)
 				return
 			}
 		}
 		if o != nil {
-			s.handleFromReceiver(o, kind, frame)
+			s.handleFromReceiver(o, kind, frame, from)
 		}
 	default:
 		s.drop("kind")
@@ -1488,6 +1522,19 @@ func (s *Service) sendUp(in *incoming, kind frameKind, body []byte) bool {
 
 func (s *Service) sendCancel(peer types.PeerID, aead cipher.AEAD, id [idLen]byte, reason byte) {
 	s.sendFrame(peer, seal(aead, kindCancel, id, []byte{reason}))
+}
+
+// fresh reports whether a control frame that opened is new, and remembers it. Each frame is
+// sealed with a fresh random nonce, so the same bytes again are a replay.
+func (s *Service) fresh(frame []byte) bool {
+	var k [idLen + nonceLen]byte
+	copy(k[:], frame[2:headerLen+nonceLen])
+	if s.seen.Exists(k) {
+		s.drop("replay")
+		return false
+	}
+	s.seen.Set(k, struct{}{})
+	return true
 }
 
 func (s *Service) drop(why string) {

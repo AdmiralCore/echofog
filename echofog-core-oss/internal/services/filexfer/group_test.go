@@ -2,6 +2,7 @@ package filexfer
 
 import (
 	"bytes"
+	"encoding/hex"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -148,4 +149,37 @@ func TestGroupFileOnlyForMembers(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(data, got))
 	require.Eventually(t, func() bool { i, _ := alice.svc.Get(o.ID); return i.Delivered == 1 }, 5*time.Second, 10*time.Millisecond)
+}
+
+// Every member holds a group file's key, so a frame must come from the member it names: one
+// member cannot cancel another's download. And a control frame counts once: a relay sending a
+// caught want or cancel again is ignored.
+func TestGroupMemberCannotSpeakForAnotherAndFramesCountOnce(t *testing.T) {
+	net, alice, m := groupOf(t, 2, nil)
+	src, data := randomFile(t, alice.dir, "big.bin", 400*ChunkSize)
+	o := offerToGroup(t, alice, "g1", m, src)
+	key, _ := hex.DecodeString(o.Key)
+	k, _ := deriveKeys(key)
+	id, _ := idKey(o.ID)
+	victim, mallory := m[0], m[1]
+
+	_, err := victim.svc.Accept(o.ID)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { i, _ := victim.svc.Get(o.ID); return i.Done > 0 }, 10*time.Second, time.Millisecond)
+
+	// mallory names the victim in a cancel it sends itself
+	forged := seal(k.toSender, kindCancel, id, append(append([]byte(nil), victim.id[:]...), reasonCancelled))
+	alice.svc.HandleFrameFrom(forged, mallory.id)
+	assert.Positive(t, alice.svc.Dropped("member"), "a cancel naming another member was taken")
+	done := waitState(t, victim.svc, o.ID, StateDone, 30*time.Second)
+	got, err := os.ReadFile(done.Path)
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(data, got))
+
+	// the same want twice: the second is a replay
+	want := seal(k.toSender, kindWant, id, append(append([]byte(nil), mallory.id[:]...), encodeWant([]int{1})...))
+	alice.svc.HandleFrameFrom(want, mallory.id)
+	alice.svc.HandleFrameFrom(want, mallory.id)
+	assert.Equal(t, int64(1), alice.svc.Dropped("replay"))
+	_ = net
 }

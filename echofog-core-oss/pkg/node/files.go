@@ -59,14 +59,16 @@ func (n *Node) startFiles() error {
 			}
 		},
 	})
-	n.Swarm.RegisterFastFrameHandler(net_types.TypeFileXfer, func(payload []byte, _ types.PeerID) error {
-		n.Files.HandleFrame(payload)
+	// frames carry the peer they came from: in a group every member holds the transfer's key, and
+	// a member must not speak for another. Over a circuit that is the far end the relay names.
+	n.Swarm.RegisterFastFrameHandler(net_types.TypeFileXfer, func(payload []byte, from types.PeerID) error {
+		n.Files.HandleFrameFrom(payload, from)
 		return nil
 	})
 	if n.RelayClient != nil {
-		n.RelayClient.AddDataListener(func(_ uint32, mt net_types.MessageType, payload []byte, _ types.PeerID) {
+		n.RelayClient.AddDataListener(func(_ uint32, mt net_types.MessageType, payload []byte, remote types.PeerID) {
 			if mt == net_types.TypeFileXfer {
-				n.Files.HandleFrame(payload)
+				n.Files.HandleFrameFrom(payload, remote)
 			}
 		})
 	}
