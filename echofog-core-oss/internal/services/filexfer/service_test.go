@@ -363,8 +363,12 @@ func TestDeclineAndCancel(t *testing.T) {
 	net.hold.Store(true)
 	require.NoError(t, alice.svc.Cancel(o3.ID))
 	waitState(t, bob.svc, o3.ID, StateCancelled, 5*time.Second)
-	matches, _ = filepath.Glob(filepath.Join(bob.dir, "*"))
-	assert.Empty(t, matches)
+	// the state turns before the partial file is deleted (the cancel comes from the network, not
+	// from this call): wait for the file, not just the state
+	assert.Eventually(t, func() bool {
+		matches, _ = filepath.Glob(filepath.Join(bob.dir, "*"))
+		return len(matches) == 0
+	}, 5*time.Second, 10*time.Millisecond, "the sender's cancel leaves nothing behind: %v", matches)
 
 	// a receiver that missed the cancel learns of it from the answer to its next request
 	net.hold.Store(false)

@@ -101,10 +101,14 @@ func TestCluster_DHTMultiNodeMesh(t *testing.T) {
 				return
 			}
 
+			// Set replicates in the background; under load a first ask can land before the record
+			// does, and the DHT then remembers the miss for a while (missFor). Each try asks the
+			// network afresh, for as long as a publish may take (replicateTimeout).
 			var got []byte
 			var err error
-			for attempt := 0; attempt < 8; attempt++ {
+			for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 				time.Sleep(200 * time.Millisecond)
+				dstNode.DhtEngine.ForgetLookups()
 				got, err = dstNode.DhtEngine.Get(key)
 				if err == nil && bytes.Equal(got, val) {
 					break
