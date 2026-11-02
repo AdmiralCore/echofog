@@ -41,9 +41,13 @@ func (n *Node) startNAT() {
 	} // else: STUN from another socket would report another port's mapping
 	n.NAT = routing.NewNATManager(conn, n.Logger)
 	n.NAT.SetSTUNServers(n.Cfg.Network.STUNServers)
+	// our own peers tell us our address first; public STUN servers are only the fallback, and in
+	// guard mode not even that (a STUN exchange with Google from the port the node talks on is a
+	// marker for the censor next to us)
 	n.NAT.SetObserver(func(ctx context.Context) []natcheck.Observation {
-		return n.Swarm.ObserveFromPeers(ctx, 4)
+		return n.Swarm.ObserveFromPeersOn(ctx, 4, n.Transport.UDPPort())
 	})
+	n.NAT.SetSTUNAllowed(func() bool { return !n.Swarm.GuardModeActive() })
 
 	if n.loopbackOnly() {
 		return // simulations and tests: there is no NAT to look at

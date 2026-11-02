@@ -49,14 +49,58 @@ type Report struct {
 	// reachable and need neither port mapping nor punching.
 	NoNAT        bool
 	Observations []Observation
+	// PortLo and PortHi bound the ports observed on Public's IP (IPv4 only), and Ports counts the
+	// different ones. Behind a symmetric NAT they show where the NAT takes its ports from: a carrier
+	// NAT that hands each subscriber a block of ports keeps them close together, which tells a
+	// peer aiming a birthday punch at us where to aim.
+	PortLo, PortHi uint16
+	Ports          int
+}
+
+// PublicAddr reports whether a is an address the Internet routes to: not private, loopback,
+// link-local, carrier-grade NAT (100.64/10), unspecified or multicast. An observation of such an
+// address comes from a peer on the same network, or inside the same carrier's NAT, and says
+// nothing about how the Internet sees us.
+func PublicAddr(a netip.Addr) bool {
+	a = a.Unmap()
+	if !a.IsValid() || a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsUnspecified() || a.IsMulticast() {
+		return false
+	}
+	if a.Is4() {
+		b := a.As4()
+		if b[0] == 100 && b[1]&0xC0 == 64 {
+			return false
+		}
+	}
+	return true
 }
 
 // Classify turns observations into a Report. local lists our interface addresses.
 //
 // Only IPv4 observations decide the mapping; IPv6 is normally not translated and a global IPv6
-// address on one of our interfaces is handled by NoNAT.
+// address on one of our interfaces is handled by NoNAT. When some observers saw a public address,
+// the ones that saw a private one (a peer on our LAN, or inside the same carrier NAT) are left
+// out: they look at another side of the NAT, and counting them would make a cone NAT look
+// symmetric. With no public observation at all (a closed network) every one counts.
 func Classify(obs []Observation, local []netip.Addr) Report {
 	r := Report{Observations: obs}
+
+	anyPublic := false
+	for _, o := range obs {
+		if o.Addr.IsValid() && o.Addr.Port() != 0 && PublicAddr(o.Addr.Addr()) {
+			anyPublic = true
+			break
+		}
+	}
+	if anyPublic {
+		kept := make([]Observation, 0, len(obs))
+		for _, o := range obs {
+			if PublicAddr(o.Addr.Addr()) {
+				kept = append(kept, o)
+			}
+		}
+		obs = kept
+	}
 
 	// An IPv4 and an IPv6 answer are two views of two different networks, not a disagreement.
 	// IPv4 decides; IPv6 only when there is no IPv4 observation at all.
@@ -107,6 +151,21 @@ func Classify(obs []Observation, local []netip.Addr) Report {
 		r.Mapping = MappingStable
 	default:
 		r.Mapping = MappingVaries
+	}
+
+	if r.Public.Addr().Is4() {
+		for a := range counts {
+			if a.Addr() != r.Public.Addr() {
+				continue
+			}
+			if r.Ports == 0 || a.Port() < r.PortLo {
+				r.PortLo = a.Port()
+			}
+			if a.Port() > r.PortHi {
+				r.PortHi = a.Port()
+			}
+			r.Ports++
+		}
 	}
 
 	for _, ip := range local {

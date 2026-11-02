@@ -55,7 +55,10 @@ type NATManager struct {
 	stunConn net.PacketConn // the QUIC socket's STUN side; nil when it is not our QUIC port
 	servers  []string
 	observe  Observer
-	logger   *slog.Logger
+	// stunAllowed, when set, says whether public STUN servers may be asked at all (guard mode keeps
+	// them out: a STUN exchange with Google from the port the node talks on is a marker).
+	stunAllowed func() bool
+	logger      *slog.Logger
 
 	mu         sync.RWMutex
 	report     natcheck.Report
@@ -65,7 +68,15 @@ type NATManager struct {
 	// carrierNAT: a router was found but its own WAN address is private or in 100.64/10, so the
 	// node sits behind a second NAT (carrier-grade or double NAT) and no port forward can reach it.
 	carrierNAT bool
+	// peersSeen: the last check heard from connected peers, whose QUIC keep-alives hold the NAT
+	// mapping open; no STUN keep-alive is needed then.
+	peersSeen bool
+	stunUsed  int // checks that asked STUN servers (tests)
 }
+
+// minPeerObservers is how many connected peers must report our address for STUN to be left out:
+// two independent views tell both the public address and whether it varies per destination.
+const minPeerObservers = 2
 
 // NewNATManager's conn must be the socket whose NAT mapping matters (the QUIC port), or nil if
 // STUN would run from another socket and thus see another mapping; peer observations still work.
@@ -87,6 +98,14 @@ func (m *NATManager) SetSTUNServers(servers []string) {
 func (m *NATManager) SetObserver(o Observer) {
 	m.mu.Lock()
 	m.observe = o
+	m.mu.Unlock()
+}
+
+// SetSTUNAllowed installs the rule that says whether public STUN servers may be asked (nil: always).
+// Connected peers are asked either way.
+func (m *NATManager) SetSTUNAllowed(fn func() bool) {
+	m.mu.Lock()
+	m.stunAllowed = fn
 	m.mu.Unlock()
 }
 
@@ -166,29 +185,39 @@ func (m *NATManager) Candidates() []string {
 	return out
 }
 
-// Discover re-checks the NAT: STUN servers (when STUN runs on the QUIC socket) and connected
-// peers each report the address they see, and the answers are classified together.
+// Discover re-checks the NAT. Connected peers are asked first which address they see us at (our
+// own nodes, so nothing goes to a third party); public STUN servers are asked only when fewer than
+// two peers with public addresses answered, and only when STUN runs on the QUIC socket and the
+// node allows it. The answers are classified together.
 func (m *NATManager) Discover() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*stunTimeout)
-	defer cancel()
-
 	m.mu.RLock()
-	conn, servers, observe := m.stunConn, m.servers, m.observe
+	conn, servers, observe, allowed := m.stunConn, m.servers, m.observe, m.stunAllowed
 	m.mu.RUnlock()
 
 	var obs []natcheck.Observation
-	if conn != nil {
+	if observe != nil {
+		octx, cancel := context.WithTimeout(context.Background(), 2*stunTimeout)
+		obs = append(obs, observe(octx)...)
+		cancel()
+	}
+	fromPeers := publicObservers(obs)
+	if fromPeers < minPeerObservers && conn != nil && (allowed == nil || allowed()) {
+		m.mu.Lock()
+		m.stunUsed++
+		m.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*stunTimeout)
+		defer cancel()
 		if got, err := natcheck.QuerySTUN(ctx, conn, servers, stunTimeout); err == nil {
 			obs = append(obs, got...)
 		} else {
 			m.logger.Debug("STUN discovery failed", "err", err)
 		}
 	}
-	if observe != nil {
-		obs = append(obs, observe(ctx)...)
-	}
+	m.mu.Lock()
+	m.peersSeen = fromPeers > 0
+	m.mu.Unlock()
 	if len(obs) == 0 {
-		return "", errors.New("no STUN server and no peer reported our address (is UDP blocked, or are we offline?)")
+		return "", errors.New("no peer and no STUN server reported our address (is UDP blocked, or are we offline?)")
 	}
 
 	r := natcheck.Classify(obs, natcheck.LocalAddrs())
@@ -217,8 +246,8 @@ func (m *NATManager) Discover() (string, error) {
 	return pub, nil
 }
 
-// StartKeepAlive refreshes the picture until ctx ends. Every tick also sends a STUN request on the
-// QUIC socket, which keeps its NAT mapping open even when no peer is connected.
+// StartKeepAlive refreshes the picture until ctx ends. While no peer is connected, the ticks in
+// between also send a STUN request on the QUIC socket, which keeps its NAT mapping open.
 func (m *NATManager) StartKeepAlive(ctx context.Context) {
 	// every wait is drawn anew around KeepAliveInterval: a STUN request from the same port every
 	// exact 20 s is a clock anyone on the path can read
@@ -249,12 +278,13 @@ func (m *NATManager) StartKeepAlive(ctx context.Context) {
 	}
 }
 
-// ping keeps the mapping alive with one cheap STUN request.
+// ping keeps the mapping alive with one cheap STUN request, when nothing else does: with peers
+// connected over the QUIC socket their keep-alives hold the mapping open, and no STUN goes out.
 func (m *NATManager) ping(ctx context.Context) {
 	m.mu.RLock()
-	conn, servers := m.stunConn, m.servers
+	conn, servers, peers, allowed := m.stunConn, m.servers, m.peersSeen, m.stunAllowed
 	m.mu.RUnlock()
-	if conn == nil || len(servers) == 0 {
+	if conn == nil || len(servers) == 0 || peers || (allowed != nil && !allowed()) {
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, stunTimeout)
@@ -262,6 +292,33 @@ func (m *NATManager) ping(ctx context.Context) {
 	if _, err := natcheck.QuerySTUN(pctx, conn, servers[:1], stunTimeout); err != nil {
 		m.logger.Debug("NAT keep-alive ping failed", "err", err)
 	}
+}
+
+// publicObservers counts the observations with a public address, one per observer.
+func publicObservers(obs []natcheck.Observation) int {
+	seen := map[string]bool{}
+	for _, o := range obs {
+		if o.Addr.IsValid() && o.Addr.Port() != 0 && natcheck.PublicAddr(o.Addr.Addr()) {
+			seen[o.From] = true
+		}
+	}
+	return len(seen)
+}
+
+// STUNChecks is how many checks asked public STUN servers so far.
+func (m *NATManager) STUNChecks() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.stunUsed
+}
+
+// PortRange is where our NAT was seen to take its public ports from (the lowest and highest port
+// observed on our public IPv4 address) and how many different ports were seen. Behind a symmetric
+// NAT a peer aims its birthday punch there.
+func (m *NATManager) PortRange() (lo, hi uint16, n int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.report.PortLo, m.report.PortHi, m.report.Ports
 }
 
 func (m *NATManager) GetPublicAddr() string {
