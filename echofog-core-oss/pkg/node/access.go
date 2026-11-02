@@ -232,7 +232,7 @@ func (n *Node) inviteLinkWith(secret []byte) (string, error) {
 		Protocol: n.Cfg.Network.ProtocolVersion,
 		Peer:     n.ID,
 		Addrs:    n.linkAddrs(),
-		SNI:      n.Cfg.AntiDPI.TLSServerName,
+		SNI:      n.announcedSNI(),
 		Server:   n.Cfg.IsServer(),
 	}
 	if n.gated() {

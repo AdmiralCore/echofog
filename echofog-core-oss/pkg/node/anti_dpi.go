@@ -69,6 +69,17 @@ func publicListenerConfigError(cfg *config.AppConfig) error {
 	return fmt.Errorf("refusing to start a public %s listener: could not find a camouflage neighbour automatically, so set anti_dpi.tls_server_name and anti_dpi.camouflage_addr to a real site hosted in this node's own datacenter (same subnet/ASN), so the mimicked SNI matches the IP; without them the node serves a mismatched SNI that DPI flags. A pure client (no tcp_listen_addr/ws_listen_addr) needs neither. See docs/anti-dpi.md", kind)
 }
 
+// announcedSNI is the cover site this node tells peers to present when they dial it, or "". It
+// serves REALITY over QUIC only with both a site name and the address probes go to (see
+// SetCamouflage in Start), so a name alone is not announced: peers would dial REALITY, and the
+// node would drop every such Initial as noise it cannot read.
+func (n *Node) announcedSNI() string {
+	if n.Cfg.AntiDPI.TLSServerName == "" || n.Cfg.AntiDPI.CamouflageAddr == "" {
+		return ""
+	}
+	return n.Cfg.AntiDPI.TLSServerName
+}
+
 // neighborCacheName is the file (in the profile directory) where an adopted camouflage neighbour is
 // remembered, so later restarts do not scan again while the neighbour still holds.
 const neighborCacheName = "anti_dpi_neighbour.json"
@@ -271,7 +282,7 @@ func (n *Node) retryMimicryTarget(addr string, every time.Duration) {
 			n.Net.QUIC.SetCamouflage(*cert, n.Cfg.AntiDPI.TLSServerName, n.Cfg.AntiDPI.CamouflageAddr)
 		}
 		if n.Swarm != nil {
-			n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
+			n.Swarm.SetAnnouncedSNI(n.announcedSNI())
 		}
 		if n.Net.TCP == nil {
 			return

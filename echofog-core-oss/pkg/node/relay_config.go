@@ -72,7 +72,7 @@ func (n *Node) RelayReachability() RelayReachability {
 			}
 			// the link people paste into --bootstrap or a relay list: with the cover site's name and
 			// the server role, so the first dial of whoever uses it is not noise
-			r.Addr = network.JoinPeerAddrInfo(net.JoinHostPort(host, port), n.ID, n.Cfg.AntiDPI.TLSServerName, n.Cfg.IsServer())
+			r.Addr = network.JoinPeerAddrInfo(net.JoinHostPort(host, port), n.ID, n.announcedSNI(), n.Cfg.IsServer())
 			return r
 		}
 	}

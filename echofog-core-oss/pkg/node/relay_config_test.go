@@ -50,6 +50,7 @@ func TestOwnAddressAndCapsCarryTheServerFacts(t *testing.T) {
 
 	n.Cfg.Role = config.RoleServer
 	n.Cfg.AntiDPI.TLSServerName = "cover.example"
+	n.Cfg.AntiDPI.CamouflageAddr = "198.51.100.7:443"
 	assert.Equal(t, "203.0.113.5:40001/"+n.ID.String()+"?sni=cover.example&srv=1", n.RelayReachability().Addr)
 	assert.True(t, n.announcedCaps().Has(handshake.CapServer))
 
@@ -73,4 +74,19 @@ func TestHiddenNodeAnnouncesTunnelPadding(t *testing.T) {
 	assert.Equal(t, handshake.CapUnlisted|handshake.CapTunnelPadding, n.announcedCaps())
 	n.Cfg.Access.Mode = config.AccessIsolated
 	assert.Equal(t, handshake.CapUnlisted|handshake.CapTunnelPadding, n.announcedCaps())
+}
+
+// A site name without the address probes go to turns on no QUIC REALITY, so the node must not
+// announce it: peers would dial REALITY and every Initial would be dropped.
+func TestCoverNameAloneIsNotAnnounced(t *testing.T) {
+	n := &Node{Cfg: config.DefaultConfig("t"), ID: types.PeerID{1}}
+	n.NAT = routing.NewNATManager(nil, slog.Default())
+	n.NAT.SetPortMapping(netip.MustParseAddrPort("203.0.113.5:40001"))
+	n.Cfg.AntiDPI.TLSServerName = "cover.example"
+	assert.Equal(t, "", n.announcedSNI())
+	assert.NotContains(t, n.RelayReachability().Addr, "sni=")
+
+	n.Cfg.AntiDPI.CamouflageAddr = "198.51.100.7:443"
+	assert.Equal(t, "cover.example", n.announcedSNI())
+	assert.Contains(t, n.RelayReachability().Addr, "sni=cover.example")
 }

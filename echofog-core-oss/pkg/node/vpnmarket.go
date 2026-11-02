@@ -70,8 +70,8 @@ func (n *Node) initVPNMarket() {
 		dir.SetRelayPriceHook(n.RelayClient.SetRelayPrice) // noted for the choice of relay; nothing is billed
 	}
 	pub := vpnmarket.NewPublisher(n.DhtEngine, n.Swarm, n.ID, n.Swarm.GetMyPubKey(), dir.TopNeighbors)
-	if n.Cfg.AntiDPI.TLSServerName != "" {
-		pub.SetSNI(n.Cfg.AntiDPI.TLSServerName)
+	if sni := n.announcedSNI(); sni != "" {
+		pub.SetSNI(sni)
 	}
 	if n.RelayServer != nil {
 		pub.SetRelayPrice(func() int64 { return n.RelayServer.GetPolicy().PricePerMB })

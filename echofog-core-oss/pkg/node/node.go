@@ -528,8 +528,8 @@ func (n *Node) Start() (err error) {
 	n.Swarm.SetOnlyPinnedGuards(n.AnonMode() == config.AnonRelay)
 	n.Swarm.SetPadsTunnels(n.announcedCaps().Has(handshake.CapTunnelPadding))
 	n.seedTunnelPadding()
-	if n.Cfg.AntiDPI.TLSServerName != "" {
-		n.Swarm.SetAnnouncedSNI(n.Cfg.AntiDPI.TLSServerName)
+	if sni := n.announcedSNI(); sni != "" {
+		n.Swarm.SetAnnouncedSNI(sni)
 	}
 	n.BWProbe = bwprobe.NewForSwarm(n.Swarm)
 	if l := bwprobe.DefaultLimits(); n.Cfg.Network.NoBWProbeServe || n.Cfg.Network.BWProbeMBPerMin > 0 {
