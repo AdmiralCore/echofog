@@ -61,6 +61,7 @@ type MessageBroker struct {
 	relayMu   sync.Mutex
 	relayWait map[string]relayWait // relay request id (hex) -> the outbox message it carries
 	resetFn   func(types.PeerID)   // replaces sessionReset (tests: no crypto engine needed)
+	brokenFn  func(types.PeerID)   // replaces sessionBroken (tests)
 	outboxMu  sync.Mutex           // a receipt's delete and a retry's write-back of the same message
 
 	myIDHexed string
@@ -491,16 +492,7 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 
 	if plaintext == nil || err != nil {
 		if sm, isSecure := msg.Payload.(*internal_pb.MessageData_SecureMessage); isSecure {
-			// a repeat of a message we read (its receipt got lost): confirm it again, the
-			// session is fine
-			if errors.Is(err, x3dh.ErrOldMessage) {
-				if id, ok := s.recentMessages().get(originID, sm.SecureMessage.GetHeader()); ok {
-					go s.sendAck(originID, id)
-					return
-				}
-			}
-			s.log.Debug("Decryption failed or plaintext is nil", "peer", peerID, "err", err)
-			s.sessionBroken(originID)
+			s.undecryptable(originID, sm.SecureMessage.GetHeader(), err)
 			return
 		}
 		s.log.Debug("Decryption failed or plaintext is nil", "peer", peerID, "err", err)
@@ -761,6 +753,27 @@ func (s *MessageBroker) wantConnection(target types.PeerID) {
 	s.lastConnect[target] = time.Now()
 	s.connMu.Unlock()
 	go connect(target)
+}
+
+// undecryptable handles a ratchet message from origin that did not open. A repeat of a message we
+// read (its receipt got lost, or a relay or mailbox replays captured traffic) leaves the session
+// alone: resetting on it let anyone who carried one message break the session. Anything else
+// means the two sessions no longer match.
+func (s *MessageBroker) undecryptable(origin types.PeerID, h *internal_pb.RatchetHeader, err error) {
+	if errors.Is(err, x3dh.ErrOldMessage) {
+		if id, ok := s.recentMessages().get(origin, h); ok {
+			go s.sendAck(origin, id)
+		} else {
+			s.log.Debug("MessageBroker: an old message came again, dropped", "peer", origin.String()[:8])
+		}
+		return
+	}
+	s.log.Debug("MessageBroker: a message could not be decrypted", "peer", origin.String()[:8], "err", err)
+	if s.brokenFn != nil {
+		s.brokenFn(origin)
+		return
+	}
+	s.sessionBroken(origin)
 }
 
 const (

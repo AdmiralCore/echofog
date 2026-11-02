@@ -345,3 +345,36 @@ func TestStoredSessionOfOldFormatIsDropped(t *testing.T) {
 		t.Fatalf("want ErrSessionFormat, got %v", err)
 	}
 }
+
+// A message replayed after the sender's ratchet moved on is refused as old, and the session is
+// unchanged: a relay replaying captured traffic must not look like a broken session.
+func TestReplayFromAnOldChainIsOld(t *testing.T) {
+	defer memguard.Purge()
+	alice, bob := newParty(t, 1), newParty(t, 1)
+	sa, sb := start(t, alice, bob)
+
+	a1 := send(t, sa, "a1")
+	expect(t, sb, a1, "a1")
+	expect(t, sa, send(t, sb, "b1"), "b1")
+	expect(t, sb, send(t, sa, "a2"), "a2") // alice's new chain
+	expect(t, sa, send(t, sb, "b2"), "b2")
+	expect(t, sb, send(t, sa, "a3"), "a3")
+
+	if _, err := sb.RatchetDecrypt(a1); !errors.Is(err, ErrOldMessage) {
+		t.Fatalf("replay of a1: %v, want ErrOldMessage", err)
+	}
+	// still in sync, also after a save and load
+	raw, err := sb.ToBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb2, err := FromBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb2.RatchetDecrypt(a1); !errors.Is(err, ErrOldMessage) {
+		t.Fatalf("replay after reload: %v, want ErrOldMessage", err)
+	}
+	expect(t, sb2, send(t, sa, "a4"), "a4")
+	expect(t, sa, send(t, sb2, "b3"), "b3")
+}

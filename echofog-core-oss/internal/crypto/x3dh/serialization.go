@@ -31,6 +31,7 @@ type x3dhSessionDTO struct {
 	AD               []byte
 	InitEK           [32]byte
 	InitMsgKey       []byte
+	PastRemoteDH     [][32]byte // absent in sessions stored before it: decodes as none
 }
 
 type chainStateDTO struct {
@@ -43,6 +44,7 @@ func (x *X3DHSession) ToBytes() ([]byte, error) {
 		Format:           sessionFormat,
 		RemotePeerID:     x.RemotePeerID,
 		SkippedOrder:     x.SkippedOrder,
+		PastRemoteDH:     x.PastRemoteDH,
 		PrevSendCount:    x.PrevSendCount,
 		AD:               x.AD,
 		InitEK:           x.InitEK,
@@ -134,6 +136,7 @@ func FromBytes(data []byte) (*X3DHSession, error) {
 		IsInitiator:      dto.IsInitiator,
 		SkippedKeys:      make(map[[32]byte]map[uint32]*memguard.Enclave),
 		SkippedOrder:     dto.SkippedOrder,
+		PastRemoteDH:     dto.PastRemoteDH,
 		PrevSendCount:    dto.PrevSendCount,
 		AD:               dto.AD,
 		InitEK:           dto.InitEK,
