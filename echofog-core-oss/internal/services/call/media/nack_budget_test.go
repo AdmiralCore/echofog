@@ -29,7 +29,7 @@ func TestServeNack_ResendIsBounded(t *testing.T) {
 	now := time.Now()
 	for seq := uint32(1); seq <= MaxNackEntries; seq++ {
 		for i := uint8(0); i < MaxFragments; i++ {
-			d.ring.put("s1", seq, i, MaxFragments, make([]byte, fragSize), now)
+			d.ring.put("s1", seq, i, MaxFragments, make([]byte, fragSize), ringLayer{}, now)
 		}
 	}
 

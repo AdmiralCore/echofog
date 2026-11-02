@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/echofog/echofog-core/pkg/videolayer"
 )
 
 // Forward error correction for stream video. A lost fragment used to cost a NACK round trip at
@@ -28,6 +30,7 @@ const FrameVideoFEC FrameKind = 0x06
 
 const (
 	fecLanes         = 4                      // groups filled in turn
+	fecClasses       = 3                      // layer classes of a layered stream, each its own groups
 	fecGroupFrags    = 10                     // fragments a parity covers in ordinary frames
 	fecKeyGroupFrags = 4                      // ... and in a keyframe
 	fecGroupAge      = 100 * time.Millisecond // an open group older than this is sent as it is
@@ -141,6 +144,15 @@ type fecParityOut struct {
 	lane     uint8
 	first    uint32
 	payload  []byte
+	class    uint8 // the layer class it covers (0, 1, 2) ...
+	layered  bool  // ... of a stream whose packets carry layers
+}
+
+// fecKey is a stream's groups of one layer class: a layered stream keeps the classes apart, so a
+// relay that leaves the upper layers out for a child sends it the parities of the rest whole.
+type fecKey struct {
+	streamID string
+	class    uint8
 }
 
 type fecLanesOf struct {
@@ -151,13 +163,30 @@ type fecLanesOf struct {
 // fecSender builds the parities of local streams.
 type fecSender struct {
 	mu      sync.Mutex
-	streams map[string]*fecLanesOf
+	streams map[fecKey]*fecLanesOf
+	layered map[string]bool
 }
 
-func newFECSender() *fecSender { return &fecSender{streams: map[string]*fecLanesOf{}} }
+func newFECSender() *fecSender {
+	return &fecSender{streams: map[fecKey]*fecLanesOf{}, layered: map[string]bool{}}
+}
 
-func (g *fecGroup) parity(streamID string, lane int) fecParityOut {
-	return fecParityOut{streamID, uint8(lane), g.members[0].seq, encodeFECPayload(g.members, g.frags)}
+func (g *fecGroup) parity(k fecKey, lane int, layered bool) fecParityOut {
+	return fecParityOut{k.streamID, uint8(lane), g.members[0].seq, encodeFECPayload(g.members, g.frags), k.class, layered}
+}
+
+// fecClassOf is the class of a unit's groups: its layer, the top ones together.
+func fecClassOf(rtp []byte) (uint8, bool) {
+	m, _, ok := videolayer.Find(rtp)
+	switch {
+	case !ok:
+		return 0, false
+	case m.Key || m.TID == 0:
+		return 0, true
+	case m.TID == 1:
+		return 1, true
+	}
+	return 2, true
 }
 
 // add takes the wire fragments of a new unit of a stream, and its plaintext RTP packet, and returns
@@ -172,13 +201,19 @@ func (s *fecSender) add(streamID string, seq uint32, wire [][]byte, rtp []byte, 
 		frags = append(frags, fecFrag{p.Timestamp, p.Payload})
 	}
 	key := rtpKeyframe(rtp)
+	class, layered := fecClassOf(rtp)
+	k := fecKey{streamID, class}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := s.streams[streamID]
+	if layered {
+		s.layered[streamID] = true
+	}
+	layered = s.layered[streamID]
+	st := s.streams[k]
 	if st == nil {
 		st = &fecLanesOf{}
-		s.streams[streamID] = st
+		s.streams[k] = st
 	}
 	var out []fecParityOut
 	for i, f := range frags {
@@ -187,7 +222,7 @@ func (s *fecSender) add(streamID string, seq uint32, wire [][]byte, rtp []byte, 
 		g := st.lanes[lane]
 		// a member names its unit by one byte after the group's first
 		if g != nil && (now.Sub(g.start) > fecGroupAge || seq-g.members[0].seq > 255) {
-			out = append(out, g.parity(streamID, lane))
+			out = append(out, g.parity(k, lane, layered))
 			g = nil
 		}
 		if g == nil {
@@ -202,7 +237,7 @@ func (s *fecSender) add(streamID string, seq uint32, wire [][]byte, rtp []byte, 
 			want = fecKeyGroupFrags
 		}
 		if len(g.members) >= want {
-			out = append(out, g.parity(streamID, lane))
+			out = append(out, g.parity(k, lane, layered))
 			st.lanes[lane] = nil
 		}
 	}
@@ -215,21 +250,26 @@ func (s *fecSender) flush(now time.Time) []fecParityOut {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []fecParityOut
-	for id, st := range s.streams {
+	for k, st := range s.streams {
 		open := false
 		for lane, g := range st.lanes {
 			if g == nil {
 				continue
 			}
 			if now.Sub(g.start) > fecGroupAge {
-				out = append(out, g.parity(id, lane))
+				out = append(out, g.parity(k, lane, s.layered[k.streamID]))
 				st.lanes[lane] = nil
 				continue
 			}
 			open = true
 		}
 		if !open {
-			delete(s.streams, id)
+			delete(s.streams, k)
+		}
+	}
+	for id := range s.layered {
+		if s.streams[fecKey{id, 0}] == nil && s.streams[fecKey{id, 1}] == nil && s.streams[fecKey{id, 2}] == nil {
+			delete(s.layered, id)
 		}
 	}
 	return out

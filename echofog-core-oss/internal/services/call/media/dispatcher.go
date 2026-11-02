@@ -13,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
+	"github.com/echofog/echofog-core/pkg/videolayer"
 )
 
 // LocalMediaConsumer receives decrypted media for playback in UI / WebRTC.
@@ -85,16 +86,24 @@ type MediaDispatcher struct {
 	videoSeq         map[string]*atomic.Uint32
 	streamAudioSeq   map[string]*atomic.Uint32
 	lastDelivered    map[sourceKey]uint32
-	missing          map[sourceKey]map[uint32]struct{} // seqs skipped over, waiting out the reorder window
-	lastForward      map[string]time.Time              // stream -> last time we sent anything to its children
-	lastFromFeeder   map[linkKey]time.Time             // (stream, feeder) -> last frame received from it
-	watchSince       map[linkKey]time.Time             // (stream, feeder) -> first time we waited on it
-	nackAsked        map[ringKey]nackAsk               // (stream, seq) -> when we asked upstream
-	rtt              map[string]time.Duration          // stream -> smoothed time a NACK takes to be answered
-	keyWanted        map[string]time.Time              // stream -> when we asked for a keyframe that has not come yet
+	missing          map[sourceKey]map[uint32]*gapGroup // seqs skipped over, waiting out the reorder window
+	lastForward      map[string]time.Time               // stream -> last time we sent anything to its children
+	lastFromFeeder   map[linkKey]time.Time              // (stream, feeder) -> last frame received from it
+	watchSince       map[linkKey]time.Time              // (stream, feeder) -> first time we waited on it
+	nackAsked        map[ringKey]nackAsk                // (stream, seq) -> when we asked upstream
+	rtt              map[string]time.Duration           // stream -> smoothed time a NACK takes to be answered
+	keyWanted        map[string]time.Time               // stream -> when we asked for a keyframe that has not come yet
 	streamStats      map[string]*StreamCounters
 	feeders          map[string]feederState         // stream -> the peer the tree feeds us from, see fromFeeder
 	resend           map[types.PeerID]*resendBudget // child -> what it may still pull from the ring
+
+	// temporal layers, see layers.go
+	filters    map[linkKey]*childFilter // (stream, child) -> the layers it gets
+	layerTop   map[string]layerTop      // stream -> the highest layer step seen lately
+	caps       map[sourceKey]*capTrack  // the caps a stream came here with
+	renum      map[sourceKey]*capTrack  // ... and how its delivered units are renumbered
+	lastLayer  map[sourceKey]unitLayer  // the layer of the newest unit delivered
+	layerCount map[string]*[2]uint16    // local stream -> packets of layer 0, and of layers 0-1, sent
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
@@ -137,7 +146,7 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 		videoSeq:        make(map[string]*atomic.Uint32),
 		streamAudioSeq:  make(map[string]*atomic.Uint32),
 		lastDelivered:   make(map[sourceKey]uint32),
-		missing:         make(map[sourceKey]map[uint32]struct{}),
+		missing:         make(map[sourceKey]map[uint32]*gapGroup),
 		lastForward:     make(map[string]time.Time),
 		lastFromFeeder:  make(map[linkKey]time.Time),
 		watchSince:      make(map[linkKey]time.Time),
@@ -414,12 +423,18 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 		}
 	}
 
-	d.consume(p, plain)
+	d.consume(p, plain, unitLayer{cap: capAll})
 	return nil
 }
 
 // ProcessIncomingVideo handles a stream fragment: forward to downstream subscribers, deliver if watching.
 func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.PeerID) error {
+	return d.processVideo(rawBytes, fromPeer, false)
+}
+
+// processVideo is ProcessIncomingVideo for a fragment that came from fromPeer, or that was rebuilt
+// here from FEC parity and fragments that came from it.
+func (d *MediaDispatcher) processVideo(rawBytes []byte, fromPeer types.PeerID, rebuilt bool) error {
 	p, err := Decode(rawBytes)
 	if err != nil || (p.Kind != FrameVideo && p.Kind != FramePulse && p.Kind != FrameStreamAudio && p.Kind != FrameVideoFEC) {
 		d.malformed.Add(1)
@@ -444,6 +459,7 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		d.duplicates.Add(1)
 		return nil
 	}
+	rawBytes = withoutHopCap(rawBytes) // the cap is the hop's word to us: we relay what was sealed
 	if !d.fromFeeder(p.StreamID, fromPeer, now) {
 		d.outsiders.Add(1)
 		return nil
@@ -453,22 +469,25 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 	if !ok {
 		return nil
 	}
+	lay := unitLayer{cap: capAll}
+	if p.Kind == FrameVideo {
+		lay = layerOf(p.Seq, plain)
+		d.mu.Lock()
+		lay.cap = d.arrivedCapLocked(p, lay, rebuilt)
+		d.noteLayerLocked(p.StreamID, p.Broadcaster, lay, now)
+		d.mu.Unlock()
+	}
 
 	if d.streamEngine != nil {
 		forwarded := false
-		class := ClassVideo
-		if p.Kind == FrameStreamAudio {
-			class = ClassAudio // a gap in sound is heard, a late video frame is not
-		}
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
 			if child != fromPeer && child != p.Broadcaster {
-				d.relayed.Add(uint64(len(raws)))
 				if p.Kind == FrameStreamAudio {
+					// sound rides the audio lane: a gap in it is heard, a late video frame is not
+					d.relayed.Add(uint64(len(raws)))
 					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, raws, now)
 				} else {
-					for _, raw := range raws {
-						d.outbox.Send(child, class, net_types.TypeCallMediaVideo, raw)
-					}
+					d.sendVideo(child, p.StreamID, lay, raws)
 				}
 				forwarded = true
 			}
@@ -476,7 +495,7 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		if forwarded {
 			if p.Kind == FrameVideo {
 				for i, raw := range raws {
-					d.ring.put(p.StreamID, p.Seq, uint8(i), p.FragCount, raw, now)
+					d.ring.put(p.StreamID, p.Seq, uint8(i), p.FragCount, raw, lay.ring(), now)
 				}
 			}
 			d.markForwarded(p.StreamID, now)
@@ -485,11 +504,16 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 
 	if watching {
 		if p.Kind == FrameVideo {
+			space, pos := lay.space(p.Seq, plain)
 			for _, raw := range raws {
-				d.rx.add(p, len(raw), now)
+				d.rx.add(p, len(raw), now, space, pos)
 			}
 		}
-		d.consume(p, plain)
+		// a unit of a layer this node does not get (rebuilt from a parity that covered it as
+		// the cap changed) would have no place in the numbering its webview sees
+		if lay.class() <= lay.cap {
+			d.consume(p, plain, lay)
+		}
 	}
 	if p.Kind == FrameVideo {
 		for _, raw := range raws {
@@ -501,6 +525,32 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 	return nil
 }
 
+// sendVideo sends a video unit's fragments to a child: those of a frame the child's cap leaves
+// out not at all, and to a child that reads it, with the cap they go with.
+func (d *MediaDispatcher) sendVideo(child types.PeerID, streamID string, lay unitLayer, raws [][]byte) {
+	hop := uint8(0)
+	if lay.marked {
+		d.mu.Lock()
+		f := d.filters[linkKey{streamID, child}]
+		if f.active() {
+			send, c := f.decide(lay)
+			if !send {
+				d.mu.Unlock()
+				return
+			}
+			hop = c + 1
+		}
+		d.mu.Unlock()
+	}
+	d.relayed.Add(uint64(len(raws)))
+	for _, raw := range raws {
+		if hop != 0 {
+			raw = withHopCap(raw, hop-1)
+		}
+		d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, raw)
+	}
+}
+
 // processParity takes a FEC parity: it is relayed as it came, since it cannot be authenticated by
 // itself; what it rebuilds is checked like any other fragment.
 func (d *MediaDispatcher) processParity(p *MediaPacket, rawBytes []byte, fromPeer types.PeerID, now time.Time) error {
@@ -510,8 +560,9 @@ func (d *MediaDispatcher) processParity(p *MediaPacket, rawBytes []byte, fromPee
 	}
 	if d.streamEngine != nil {
 		forwarded := false
+		class := parityClass(p)
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
-			if child != fromPeer && child != p.Broadcaster {
+			if child != fromPeer && child != p.Broadcaster && d.parityFor(child, p.StreamID, class) {
 				d.relayed.Add(1)
 				d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, rawBytes)
 				forwarded = true
@@ -544,7 +595,7 @@ func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, fr
 	d.streamLocked(streamID).Recovered += uint64(len(rebuilt))
 	d.mu.Unlock()
 	for _, f := range rebuilt {
-		_ = d.ProcessIncomingVideo(f, from)
+		_ = d.processVideo(f, from, true)
 	}
 }
 
@@ -607,7 +658,7 @@ func (d *MediaDispatcher) authenticate(p *MediaPacket, raw []byte, verify bool, 
 }
 
 // consume hands an authenticated unit to the local consumer.
-func (d *MediaDispatcher) consume(p *MediaPacket, plain []byte) {
+func (d *MediaDispatcher) consume(p *MediaPacket, plain []byte, lay unitLayer) {
 	if d.consumer == nil {
 		return
 	}
@@ -635,7 +686,12 @@ func (d *MediaDispatcher) consume(p *MediaPacket, plain []byte) {
 		delete(d.keyWanted, p.StreamID) // the keyframe we waited for, or one asked for by someone else
 		d.mu.Unlock()
 	}
-	d.trackVideoGap(&unit)
+	d.trackVideoGap(&unit, lay)
+	if lay.marked {
+		d.mu.Lock()
+		d.renumberLocked(sourceKey{p.Kind, p.Broadcaster, p.StreamID}, p.Seq, lay, plain)
+		d.mu.Unlock()
+	}
 	d.consumer.OnLocalVideo(&unit)
 }
 
@@ -691,7 +747,7 @@ func (d *MediaDispatcher) sampleRTTLocked(streamID string, sample time.Duration)
 	d.rtt[streamID] = sample
 }
 
-func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
+func (d *MediaDispatcher) trackVideoGap(p *MediaPacket, lay unitLayer) {
 	k := sourceKey{p.Kind, p.Broadcaster, p.StreamID}
 	var gap []uint32
 	lostNow := false
@@ -702,25 +758,37 @@ func (d *MediaDispatcher) trackVideoGap(p *MediaPacket) {
 	switch {
 	case !seen:
 		d.lastDelivered[k] = p.Seq
+		d.noteDeliveredLocked(k, lay)
 	case diff > 0:
 		d.lastDelivered[k] = p.Seq
-		if diff > maxTrackedGap {
+		// in a stream whose layers are cut, only some of the units skipped over were sent to us
+		cands, expect := layerGap(last, d.lastLayer[k], p.Seq, lay)
+		d.noteDeliveredLocked(k, lay)
+		if len(cands) > maxTrackedGap {
 			lostNow = true // too much at once to be reordering
-		} else if diff > 1 {
+		} else if expect > 0 {
 			m := d.missing[k]
 			if m == nil {
-				m = make(map[uint32]struct{})
+				m = make(map[uint32]*gapGroup)
 				d.missing[k] = m
 			}
-			for s := last + 1; s != p.Seq; s++ {
-				m[s] = struct{}{}
+			g := &gapGroup{seqs: cands, expect: expect}
+			for _, s := range cands {
+				m[s] = g
 				gap = append(gap, s)
 			}
 		}
 	default:
-		// a late unit filling a gap
+		// a late unit filling a gap; a gap whose candidates came as many as it waited for is whole
 		if m := d.missing[k]; m != nil {
-			delete(m, p.Seq)
+			if g := m[p.Seq]; g != nil {
+				delete(m, p.Seq)
+				if g.got++; g.got >= g.expect {
+					for _, s := range g.seqs {
+						delete(m, s)
+					}
+				}
+			}
 		}
 		rk := ringKey{p.StreamID, p.Seq}
 		if a, ok := d.nackAsked[rk]; ok {
@@ -778,6 +846,18 @@ func (d *MediaDispatcher) reportVideoLoss(streamID string, broadcaster types.Pee
 	if d.OnVideoLoss != nil {
 		d.OnVideoLoss(streamID, broadcaster)
 	}
+}
+
+// noteDeliveredLocked keeps the layer of the newest unit delivered of a source; d.mu must be held.
+func (d *MediaDispatcher) noteDeliveredLocked(k sourceKey, lay unitLayer) {
+	if !lay.marked {
+		delete(d.lastLayer, k)
+		return
+	}
+	if d.lastLayer == nil {
+		d.lastLayer = make(map[sourceKey]unitLayer)
+	}
+	d.lastLayer[k] = lay
 }
 
 // streamLocked returns the counters of a stream, creating them; d.mu must be held.
@@ -873,6 +953,7 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 	d.mu.Unlock()
 
 	seq := ctr.Add(1)
+	videoBytes, lay := d.countLayers(streamID, seq, videoBytes)
 	frags, err := d.seal(FrameVideo, streamID, seq, videoBytes, fecReserve)
 	if err != nil {
 		return err
@@ -880,18 +961,19 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 	if d.streamEngine == nil {
 		return nil
 	}
+	now := time.Now()
+	d.mu.Lock()
+	d.noteLayerLocked(streamID, d.selfID, lay, now)
+	d.mu.Unlock()
 	subs := d.streamEngine.GetDownstream(streamID, d.selfID)
 	if len(subs) == 0 {
 		return nil
 	}
-	now := time.Now()
 	for i, f := range frags {
-		d.ring.put(streamID, seq, uint8(i), uint8(len(frags)), f, now)
+		d.ring.put(streamID, seq, uint8(i), uint8(len(frags)), f, lay.ring(), now)
 	}
 	for _, sub := range subs {
-		for _, f := range frags {
-			d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, f)
-		}
+		d.sendVideo(sub, streamID, lay, frags)
 	}
 	for _, par := range d.fecTx.add(streamID, seq, frags, videoBytes, now) {
 		d.sendParity(subs, par, now)
@@ -900,9 +982,43 @@ func (d *MediaDispatcher) BroadcastLocalVideo(streamID string, videoBytes []byte
 	return nil
 }
 
+// countLayers stamps a marked packet of a local stream with the counts of its layers (videolayer
+// Mark.L0, L1), as this node numbers the units: the packetizer cannot know which of its packets
+// become units. It returns the packet to seal, a copy when stamped, and its layer.
+func (d *MediaDispatcher) countLayers(streamID string, seq uint32, pkt []byte) ([]byte, unitLayer) {
+	m, off, ok := videolayer.Find(pkt)
+	if !ok {
+		return pkt, unitLayer{cap: capAll}
+	}
+	d.mu.Lock()
+	if d.layerCount == nil {
+		d.layerCount = make(map[string]*[2]uint16)
+	}
+	c := d.layerCount[streamID]
+	if c == nil {
+		c = &[2]uint16{}
+		d.layerCount[streamID] = c
+	}
+	class := m.Class()
+	if m.Key {
+		class = capBase
+	}
+	if class == capBase {
+		c[0]++
+	}
+	if class <= capMid {
+		c[1]++
+	}
+	m.L0, m.L1 = c[0], c[1]
+	d.mu.Unlock()
+	out := append([]byte(nil), pkt...)
+	videolayer.SetCounts(out, off, m.L0, m.L1)
+	return out, unitLayer{marked: true, mark: m, frame: seq - uint32(m.Index), cap: capAll}
+}
+
 // sendParity sends a parity of a local stream to the first hop of its tree.
 func (d *MediaDispatcher) sendParity(subs []types.PeerID, par fecParityOut, now time.Time) {
-	pkt := (&MediaPacket{
+	pkt := &MediaPacket{
 		Kind:        FrameVideoFEC,
 		Seq:         par.first,
 		Timestamp:   uint32(now.UnixMilli()),
@@ -911,10 +1027,45 @@ func (d *MediaDispatcher) sendParity(subs []types.PeerID, par fecParityOut, now 
 		FragIdx:     par.lane, // lanes may start at the same unit: this keeps their parities apart
 		FragCount:   fecLanes,
 		Payload:     par.payload,
-	}).Encode()
-	for _, sub := range subs {
-		d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, pkt)
 	}
+	if par.layered {
+		// a layered stream's parity says its layer class too: class*fecLanes + lane, out of
+		// fecLanes*fecClasses (an older node takes the index as it is)
+		pkt.FragIdx, pkt.FragCount = par.class*fecLanes+par.lane, fecLanes*fecClasses
+	}
+	raw := pkt.Encode()
+	class := parityClass(pkt)
+	for _, sub := range subs {
+		if d.parityFor(sub, par.streamID, class) {
+			d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, raw)
+		}
+	}
+}
+
+// parityClass is the layer step a parity's group is left out at.
+func parityClass(p *MediaPacket) uint8 {
+	if p.FragCount != fecLanes*fecClasses {
+		return capBase
+	}
+	switch p.FragIdx / fecLanes {
+	case 0:
+		return capBase
+	case 1:
+		return capMid
+	}
+	return capAll
+}
+
+// parityFor reports whether a parity of this class goes to a child: not when its cap leaves the
+// class out, as the group would miss what it covers there.
+func (d *MediaDispatcher) parityFor(child types.PeerID, streamID string, class uint8) bool {
+	if class == capBase {
+		return true
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	f := d.filters[linkKey{streamID, child}]
+	return !f.active() || class <= f.cap
 }
 
 // flushParities sends the parities of groups a quiet stream left open.
@@ -1076,6 +1227,7 @@ func (d *MediaDispatcher) housekeeping() {
 			d.ring.expire(now)
 			d.fecRx.gc(now)
 			d.mu.Lock()
+			d.gcLayersLocked(now)
 			for k, a := range d.nackAsked {
 				if now.Sub(a.last) > time.Second {
 					delete(d.nackAsked, k)

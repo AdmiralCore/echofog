@@ -80,7 +80,15 @@ type MediaPacket struct {
 	FragIdx     uint8
 	FragCount   uint8
 	Payload     []byte
+	// HopCap is what the hop that sent a fragment says of the temporal layers it lets through on
+	// the way to us: 0 for nothing said (every layer), otherwise the cap plus one (see layers.go).
+	// It rides in the upper bits of the fragment index, outside what the unit is sealed with, and
+	// only to children that said they read it: an older node takes such a fragment as malformed.
+	HopCap uint8
 }
+
+// hopCapBit marks a fragment index byte that carries a hop's layer cap in bits 4-6.
+const hopCapBit = 0x80
 
 // unitHeader serialises the fields shared by all fragments of a unit. It is also the AES-GCM
 // additional data, so a relay cannot re-label who sent a unit, for which stream or with which seq.
@@ -106,8 +114,47 @@ func (p *MediaPacket) Encode() []byte {
 	if fragCount == 0 {
 		fragCount = 1
 	}
-	buf = append(buf, p.FragIdx, fragCount)
+	idx := p.FragIdx
+	if p.HopCap != 0 {
+		idx = idx&0x0f | hopCapBit | (p.HopCap-1)&0x07<<4
+	}
+	buf = append(buf, idx, fragCount)
 	return append(buf, p.Payload...)
+}
+
+// fragIdxOffset is where the fragment index byte of a wire fragment is, or -1.
+func fragIdxOffset(data []byte) int {
+	if len(data) < fixedHeaderLen+fragFieldsLen {
+		return -1
+	}
+	off := fixedHeaderLen + int(data[42])
+	if off+fragFieldsLen > len(data) {
+		return -1
+	}
+	return off
+}
+
+// withHopCap returns a copy of a wire fragment that says the hop's cap c (videolayer: 0, 1 or All).
+func withHopCap(raw []byte, c uint8) []byte {
+	off := fragIdxOffset(raw)
+	if off < 0 {
+		return raw
+	}
+	out := append([]byte(nil), raw...)
+	out[off] = out[off]&0x0f | hopCapBit | (c&0x07)<<4
+	return out
+}
+
+// withoutHopCap returns a wire fragment as its sender sealed it: raw itself when it carries no
+// hop cap, otherwise a copy without it.
+func withoutHopCap(raw []byte) []byte {
+	off := fragIdxOffset(raw)
+	if off < 0 || raw[off]&hopCapBit == 0 {
+		return raw
+	}
+	out := append([]byte(nil), raw...)
+	out[off] &= 0x0f
+	return out
 }
 
 // Decode parses one fragment. The payload aliases data.
@@ -135,6 +182,10 @@ func Decode(data []byte) (*MediaPacket, error) {
 	p.StreamID = string(data[off : off+idLen])
 	off += idLen
 	p.FragIdx, p.FragCount = data[off], data[off+1]
+	if p.FragIdx&hopCapBit != 0 {
+		p.HopCap = (p.FragIdx>>4)&0x07 + 1
+		p.FragIdx &= 0x0f
+	}
 	off += fragFieldsLen
 	if p.FragCount == 0 || p.FragCount > MaxFragments || p.FragIdx >= p.FragCount {
 		return nil, ErrBadFragment
