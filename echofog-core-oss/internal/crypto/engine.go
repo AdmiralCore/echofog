@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/crypto/keymanager"
 	"github.com/echofog/echofog-core/internal/crypto/x3dh"
@@ -29,8 +30,27 @@ type CryptoEngine struct {
 
 	mu sync.RWMutex
 
+	// peers whose bundle lost its KEM prekey: no new lookup for them until the wait ends
+	waitMu  sync.Mutex
+	keyWait map[types.PeerID]keyWait
+	now     func() time.Time
+
 	log *slog.Logger
 }
+
+// keyWait is how long a peer's bundle is not looked up again after one without its KEM prekey came.
+type keyWait struct {
+	until time.Time
+	pause time.Duration
+}
+
+// After a bundle that lost its KEM prekey, the peer's bundle is looked up again only after
+// keyWaitFirst, doubling up to keyWaitMax while the same keeps coming. An away peer's old
+// classic record in the DHT would otherwise cost a lookup for every retry of every message to it.
+const (
+	keyWaitFirst = 30 * time.Second
+	keyWaitMax   = 15 * time.Minute
+)
 
 func NewCryptoEngine(
 	me types.PeerID,
@@ -46,6 +66,7 @@ func NewCryptoEngine(
 		x3dhEngine:   x3dhEngine,
 		sessionStore: sessionStore,
 		bundleSource: bundleSource,
+		now:          time.Now,
 		log:          log,
 	}
 }
@@ -53,18 +74,81 @@ func NewCryptoEngine(
 var ErrInitReplay = errors.New("this init packet was accepted before")
 
 // ErrPQDowngrade: the peer's bundle has no KEM prekey although we saw one of the same age or newer
-// with it. The bundle is dropped from the cache; the message waits for a fresh bundle.
-var ErrPQDowngrade = errors.New("the peer's bundle lost its KEM prekey")
+// with it. The bundle is dropped from the cache; the message waits for a fresh bundle, which is
+// looked up again only after a pause (see keyWaitFirst).
+var ErrPQDowngrade = errors.New("the peer's bundle lost its KEM prekey: waiting for a fresh one")
 
 // bundleForgetter is a BundleSource that caches bundles and can drop one (the swarm does).
 type bundleForgetter interface {
 	ForgetBundle(peerID types.PeerID)
 }
 
+// liveSource is a BundleSource that can tell a peer connected now: its bundle then comes from the
+// peer itself, fresh and without a lookup in the network, so a wait for it does not hold.
+type liveSource interface {
+	Connected(peerID types.PeerID) bool
+}
+
+// waitingForKey reports whether a peer's bundle is not to be looked up now: one without its KEM
+// prekey came a moment ago, and the peer is not connected to hand us a fresh one.
+func (e *CryptoEngine) waitingForKey(peer types.PeerID) bool {
+	e.waitMu.Lock()
+	w, ok := e.keyWait[peer]
+	e.waitMu.Unlock()
+	if !ok || !e.now().Before(w.until) {
+		return false
+	}
+	if l, ok := e.bundleSource.(liveSource); ok && l.Connected(peer) {
+		return false
+	}
+	return true
+}
+
+// waitForKey starts or doubles the wait for a peer's fresh bundle. The first one is logged; the
+// lookups it saves are not.
+func (e *CryptoEngine) waitForKey(peer types.PeerID) {
+	e.waitMu.Lock()
+	if e.keyWait == nil {
+		e.keyWait = make(map[types.PeerID]keyWait)
+	}
+	w, again := e.keyWait[peer]
+	w.pause = min(max(2*w.pause, keyWaitFirst), keyWaitMax)
+	w.until = e.now().Add(w.pause)
+	if len(e.keyWait) >= 4096 && !again {
+		clear(e.keyWait) // a pause saved, never one needed
+	}
+	e.keyWait[peer] = w
+	e.waitMu.Unlock()
+	if !again && e.log != nil {
+		e.log.Warn("the peer's key bundle lost its post-quantum key: waiting for a fresh one before writing to it",
+			"peer", peer.String()[:8], "next_lookup_in", w.pause)
+	}
+}
+
+// BundleCame takes a peer's bundle that reached us outside a lookup (a card it sent us, checked by
+// the caller): one with a KEM prekey tells the peer is on PQXDH, and either ends a wait for its
+// fresh bundle.
+func (e *CryptoEngine) BundleCame(peer types.PeerID, b *keymanager.PublicBundle) {
+	if b.HasKEM() {
+		e.sessionStore.NotePQBundle(peer, b.CreatedAt)
+	}
+	e.keyCame(peer)
+}
+
+// keyCame ends the wait for a peer's fresh bundle.
+func (e *CryptoEngine) keyCame(peer types.PeerID) {
+	e.waitMu.Lock()
+	delete(e.keyWait, peer)
+	e.waitMu.Unlock()
+}
+
 func (e *CryptoEngine) EncryptMessage(toPeer types.PeerID, plaintext []byte) (types.EncryptedMessage, *types.X3DHInit, error) {
 	// a missing bundle is looked up in the network: not under the lock, that can take seconds
 	var bundle *keymanager.PublicBundle
 	if has, _ := e.HasSession(toPeer); !has {
+		if e.waitingForKey(toPeer) {
+			return types.EncryptedMessage{}, nil, ErrPQDowngrade
+		}
 		var err error
 		if bundle, err = e.bundleSource.GetBundle(toPeer); err != nil {
 			return types.EncryptedMessage{}, nil, fmt.Errorf("peer bundle not found: %w", err)
@@ -83,13 +167,18 @@ func (e *CryptoEngine) EncryptMessage(toPeer types.PeerID, plaintext []byte) (ty
 		}
 
 		// once a peer offered a KEM prekey, a bundle of it without one that is not newer is a
-		// stripped or replayed copy: drop it and wait for a fresh one rather than go classic
+		// stripped or replayed copy: drop it and wait for a fresh one rather than go classic. The
+		// peer would refuse the classic init anyway, but its first message would have gone out
+		// under a classic key. While the same copy is all the network has (an away peer's old
+		// record), it is not looked up again for every retry: see waitForKey.
 		if bundle.HasKEM() {
 			e.sessionStore.NotePQBundle(toPeer, bundle.CreatedAt)
+			e.keyCame(toPeer)
 		} else if seen := e.sessionStore.PQBundleSeen(toPeer); seen != 0 && bundle.CreatedAt <= seen {
 			if f, ok := e.bundleSource.(bundleForgetter); ok {
 				f.ForgetBundle(toPeer)
 			}
+			e.waitForKey(toPeer)
 			return types.EncryptedMessage{}, nil, ErrPQDowngrade
 		}
 
@@ -187,6 +276,7 @@ func (e *CryptoEngine) HandleInitPacket(fromPeer types.PeerID, initPacket types.
 	e.sessionStore.MarkInitSeen(initPacket.EphemeralKey)
 	if bundle.HasKEM() { // the sender's signed card: it is on PQXDH, for our own next session
 		e.sessionStore.NotePQBundle(fromPeer, bundle.CreatedAt)
+		e.keyCame(fromPeer)
 	}
 
 	if keepExisting && loadErr == nil {

@@ -308,7 +308,7 @@ func TestClientCircuit_RoundTripFromPongs(t *testing.T) {
 	if c.RTT() != 0 {
 		t.Fatalf("a pong with no ping out must not count, got %v", c.RTT())
 	}
-	c.pingAt.Store(now.Add(-80 * time.Millisecond).UnixNano())
+	c.pingAt.Store(monoNanos(now.Add(-80 * time.Millisecond)))
 	c.notePong(now)
 	if c.RTT() != 80*time.Millisecond {
 		t.Fatalf("the first answer is the round trip, got %v", c.RTT())
@@ -317,10 +317,33 @@ func TestClientCircuit_RoundTripFromPongs(t *testing.T) {
 	if c.RTT() != 80*time.Millisecond {
 		t.Fatalf("a second pong for the same ping must not count, got %v", c.RTT())
 	}
-	c.pingAt.Store(now.UnixNano())
+	c.pingAt.Store(monoNanos(now))
 	c.notePong(now.Add(40 * time.Millisecond))
 	if c.RTT() != 70*time.Millisecond {
 		t.Fatalf("later answers are smoothed (80*3+40)/4, got %v", c.RTT())
+	}
+}
+
+// A ping answered within one tick of the wall clock (on Windows half a millisecond or more: a relay
+// on the same machine, a fast LAN) is still a round trip measured, not 0, which reads as "not
+// measured yet". pkg/circuitswitch waited for it and failed about every other run on Windows.
+func TestClientCircuit_AFastPongIsMeasured(t *testing.T) {
+	c := &ClientCircuit{ID: 1, CreatedAt: time.Now()}
+	now := time.Now()
+	c.pingAt.Store(monoNanos(now))
+	c.notePong(now)
+	if c.RTT() <= 0 {
+		t.Fatalf("an answer at once must count, got %v", c.RTT())
+	}
+	// the monotonic clock: a real ping and pong a moment apart, however coarse the wall clock
+	c2 := &ClientCircuit{ID: 2, CreatedAt: time.Now()}
+	sent := time.Now()
+	c2.pingAt.Store(monoNanos(sent))
+	for time.Since(sent) < 50*time.Microsecond {
+	}
+	c2.notePong(time.Now())
+	if c2.RTT() < 50*time.Microsecond {
+		t.Fatalf("a 50 us round trip read %v", c2.RTT())
 	}
 }
 

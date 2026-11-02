@@ -8,6 +8,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/pkg/api/types"
+	"github.com/echofog/echofog-core/pkg/videolayer"
 )
 
 // activeBridge returns the media bridge of the current room. The bridge locks itself, and an
@@ -150,6 +151,17 @@ func captureRole(mediaType string) string {
 		return bridge.RoleCamera
 	}
 	return bridge.RoleScreen
+}
+
+// onWebviewRTP takes an RTP packet of the webview's capture. Its header extensions are the
+// browser's: an element that looks like our layer mark is not one (nothing marks the webview's
+// capture), and is blanked before the packet goes out, so neither this node nor any relay or
+// viewer takes it for layers. Only the app's own capture (PublishLocalRTP) marks its packets.
+func (m *CallManager) onWebviewRTP(role string, payload []byte) {
+	if role != bridge.RoleMic && role != bridge.RoleScreenAudio {
+		payload = videolayer.Strip(payload)
+	}
+	m.onBridgeRTP(role, payload)
 }
 
 func (m *CallManager) onBridgeRTP(role string, payload []byte) {

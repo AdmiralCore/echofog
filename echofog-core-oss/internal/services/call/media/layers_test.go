@@ -483,3 +483,163 @@ func TestLayers_CappedViewerRepairsFromItsParities(t *testing.T) {
 	assert.Zero(t, nacks.Load())
 	assert.Zero(t, losses.Load())
 }
+
+// The viewer's parent changes from A to B while its cap drops: A sent every layer, B sends the base
+// and the middle layer and then only the base. Units A had on the way arrive after B's first base
+// frames, with a cap of their own (every layer) that is neither of the last two. They must not
+// open a numbering of their own: B's packets reach the webview numbered one after another across
+// them, with no hole and no step back.
+func TestLayers_RenumberingSurvivesLateUnitsOfTheOldFeeder(t *testing.T) {
+	viewer, a, bRelay := pid(3), pid(2), pid(4)
+	b, _, bs, _, _, key := layerTree(t)
+	pkts := layeredFrames(t, 28)
+	for _, p := range pkts {
+		require.NoError(t, b.BroadcastLocalVideo("s1", p))
+	}
+	time.Sleep(50 * time.Millisecond)
+	type unit struct {
+		frame int
+		tid   uint8
+		raw   []byte
+	}
+	var units []unit
+	for _, f := range bs.to(a) {
+		p, err := Decode(f.data)
+		require.NoError(t, err)
+		if p.Kind != FrameVideo {
+			continue
+		}
+		plain, err := OpenUnit(p, p.Payload, key)
+		require.NoError(t, err)
+		fr, m, _ := frameOf(t, plain)
+		units = append(units, unit{fr, m.TID, f.data})
+	}
+
+	manifest := func(epoch uint64, parent types.PeerID) *tree.StreamManifest {
+		return &tree.StreamManifest{StreamID: "s1", Broadcaster: pid(1), Epoch: epoch, Subscribers: []types.PeerID{a, bRelay, viewer},
+			ParentMap:        map[types.PeerID]types.PeerID{a: pid(1), bRelay: pid(1), viewer: parent},
+			DistributionTree: map[types.PeerID][]types.PeerID{pid(1): {a, bRelay}, parent: {viewer}}}
+	}
+	ve := tree.NewStreamTreeEngine()
+	ve.ApplyManifest(manifest(2, a))
+	vc := &mockConsumer{}
+	v := NewMediaDispatcher(viewer, &mockSender{}, vc, ve)
+	defer v.Close()
+	require.NoError(t, v.SetRoomKey(key))
+	v.SetStreamWatching("s1", true)
+
+	send := func(from types.PeerID, c uint8, keep func(u unit) bool) {
+		t.Helper()
+		for _, u := range units {
+			if keep(u) {
+				require.NoError(t, v.processVideo(withHopCap(u.raw, c), from, false))
+			}
+		}
+	}
+	// A: frames 0-5, every layer
+	send(a, capAll, func(u unit) bool { return u.frame < 6 })
+	// the tree moves the viewer to B, which cuts it to the middle layer, then to the base
+	ve.ApplyManifest(manifest(3, bRelay))
+	send(bRelay, capMid, func(u unit) bool { return u.frame >= 8 && u.frame < 16 && u.tid <= 1 })
+	send(bRelay, capBase, func(u unit) bool { return u.frame >= 16 && u.frame < 20 && u.tid == 0 })
+	vc.mu.Lock()
+	before := len(vc.videoPackets)
+	vc.mu.Unlock()
+	// what A still had on the way: frames 6 and 7
+	send(a, capAll, func(u unit) bool { return u.frame == 6 || u.frame == 7 })
+	send(bRelay, capBase, func(u unit) bool { return u.frame >= 20 && u.tid == 0 })
+
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	var fromB []uint16
+	for i, p := range vc.videoPackets {
+		f, _, s := frameOf(t, p.Payload)
+		if i >= before && f < 8 {
+			continue // a late unit of A's, if it plays at all
+		}
+		if f >= 8 {
+			fromB = append(fromB, s)
+		}
+	}
+	require.Len(t, fromB, 2*3+2*2+3*3, "B's base and middle frames, then its base frames")
+	for i := 1; i < len(fromB); i++ {
+		assert.Equal(t, uint16(1), fromB[i]-fromB[i-1], "B's packet %d: the webview sees a hole or a step back", i)
+	}
+}
+
+// One unit with a frame far ahead (a relay that does not watch the stream does not check
+// signatures, so any member could seal one) must not freeze a child's cap: the real frames that
+// follow start the filter over, and a cap set later is still taken at the next base frame.
+func TestLayers_AFarJumpDoesNotFreezeTheFilter(t *testing.T) {
+	unit := func(tid uint8, frame uint32) unitLayer {
+		return unitLayer{marked: true, mark: videolayer.Mark{TID: tid, Count: 1}, frame: frame, cap: capAll}
+	}
+	f := &childFilter{aware: true, want: capBase, cap: capAll}
+	send, c := f.decide(unit(0, 100))
+	require.True(t, send)
+	require.Equal(t, capBase, c)
+	f.decide(unit(0, 100+1<<30)) // the forged one
+	f.want = capAll
+	send, c = f.decide(unit(0, 110))
+	assert.True(t, send)
+	assert.Equal(t, capAll, c, "the new cap is taken at the next real base frame")
+	send, _ = f.decide(unit(2, 112))
+	assert.True(t, send, "frames above the base go again")
+
+	// a unit a little behind is a late one, and keeps the cap of its frame
+	f.decide(unit(0, 120))
+	send, c = f.decide(unit(2, 112))
+	assert.True(t, send)
+	assert.Equal(t, capAll, c)
+}
+
+// When the stream comes from another feeder, the filters of its children start over.
+func TestLayers_FiltersStartOverWithANewFeeder(t *testing.T) {
+	viewer := pid(3)
+	b, r, bs, _, _, _ := layerTree(t, viewer)
+	r.SetChildLayers("s1", viewer, true, capBase)
+	broadcast(t, b, r, bs, layeredFrames(t, 4))
+	r.mu.RLock()
+	started := r.filters[linkKey{"s1", viewer}].started
+	r.mu.RUnlock()
+	require.True(t, started)
+
+	r.streamEngine.ApplyManifest(&tree.StreamManifest{StreamID: "s1", Broadcaster: pid(1), Epoch: 3, Subscribers: []types.PeerID{pid(5), pid(2), viewer},
+		ParentMap:        map[types.PeerID]types.PeerID{pid(5): pid(1), pid(2): pid(5), viewer: pid(2)},
+		DistributionTree: map[types.PeerID][]types.PeerID{pid(1): {pid(5)}, pid(5): {pid(2)}, pid(2): {viewer}}})
+	require.True(t, r.fromFeeder("s1", pid(5), time.Now()))
+	r.mu.RLock()
+	f := r.filters[linkKey{"s1", viewer}]
+	r.mu.RUnlock()
+	assert.False(t, f.started, "a new feeder: the filter starts over")
+	assert.Equal(t, capBase, f.want, "the cap the call layer set stays")
+}
+
+// A gap whose frames say more packets are missing than can be tracked is not built candidate by
+// candidate (a broadcaster's marks could ask for 2 x 65535 of them per unit): it is all lost at once.
+func TestLayers_AHugeGapIsNotBuiltOneByOne(t *testing.T) {
+	mk := func(idx, count, l0 uint16, frame uint32) unitLayer {
+		return unitLayer{marked: true, mark: videolayer.Mark{TID: 0, Index: idx, Count: count, L0: l0, L1: l0}, frame: frame, cap: capBase}
+	}
+	// the last frame says 3999 packets of it are still to come, the next one that 3000 came before
+	last := mk(0, 4000, 1, 1000)
+	c, e := layerGap(1000, last, 11000, mk(3000, 4000, 7001, 8000))
+	assert.LessOrEqual(t, len(c), maxTrackedGap+1, "at most what can be tracked")
+	assert.Greater(t, len(c), maxTrackedGap, "and then it counts as lost")
+	assert.Equal(t, 6999, e)
+}
+
+// The layer counts of a local stream go when the stream has sent nothing marked for a while.
+func TestLayers_LayerCountsOfAnEndedStreamGo(t *testing.T) {
+	b, _, _, _, _, _ := layerTree(t)
+	for _, p := range layeredFrames(t, 2) {
+		require.NoError(t, b.BroadcastLocalVideo("s1", p))
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	require.NotNil(t, b.layerCount["s1"])
+	b.gcLayersLocked(time.Now())
+	require.NotNil(t, b.layerCount["s1"], "a live stream keeps its counts")
+	b.gcLayersLocked(time.Now().Add(31 * time.Second))
+	assert.Nil(t, b.layerCount["s1"], "an ended stream's counts are gone")
+}

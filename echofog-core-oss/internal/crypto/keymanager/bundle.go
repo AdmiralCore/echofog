@@ -103,40 +103,66 @@ func GenerateOPKBatch(hardwareStorage storage.Storage) ([][32]byte, *OPKStorage,
 	return pubList, inMemStorage, nil
 }
 
-func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, error) {
+// bundleKeys is what every bundle of ours is made of besides its one-time prekeys and its time:
+// the identity's signing key and the public keys. It is kept for bundleKeysTTL, so a bundle that any
+// peer may ask for (CreateJITBundle) costs its one-time prekey and two signatures, not a key
+// derivation, storage reads and the prekeys' unsealing each time. A prekey replaced meanwhile is
+// still kept for the bundles that name it (SignedPreKeyRetention, KEMPreKeyRetention).
+type bundleKeys struct {
+	idPriv   *memguard.Enclave
+	peerID   [32]byte
+	identity [32]byte
+	spk      [32]byte
+	kem      []byte
+	at       time.Time
+}
+
+const bundleKeysTTL = time.Minute
+
+// currentBundleKeys returns the keys of our bundles, gathering them again once bundleKeysTTL old.
+func (am *AccountManager) currentBundleKeys() (*bundleKeys, error) {
+	am.bundleMu.Lock()
+	defer am.bundleMu.Unlock()
+	now := time.Now()
+	if k := am.bundleKeys; k != nil && now.Sub(k.at) < bundleKeysTTL && !now.Before(k.at) {
+		return k, nil
+	}
 	idPrivEnc, idPub, err := am.GetIdentityKey()
 	if err != nil {
 		return nil, ErrGetIdentityFailed
 	}
-
 	_, mTermPubSlice, err := am.GetEncryptionKey()
 	if err != nil {
 		return nil, ErrGetEncryptFailed
 	}
-	var mTermPub [32]byte
-	copy(mTermPub[:], mTermPubSlice)
-
 	_, spkPubSlice, err := am.GetSignedPreKey()
 	if err != nil {
 		return nil, ErrGetSPKFailed
 	}
-	var spkPub [32]byte
-	copy(spkPub[:], spkPubSlice)
-
 	kemPub, err := am.KEMPreKey()
 	if err != nil {
 		return nil, ErrGetKEMFailed
 	}
+	k := &bundleKeys{idPriv: idPrivEnc, kem: kemPub, at: now}
+	copy(k.peerID[:], idPub)
+	copy(k.identity[:], mTermPubSlice)
+	copy(k.spk[:], spkPubSlice)
+	am.bundleKeys = k
+	return k, nil
+}
 
-	var peerID [32]byte
-	copy(peerID[:], idPub)
+func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, error) {
+	keys, err := am.currentBundleKeys()
+	if err != nil {
+		return nil, err
+	}
 
 	// after KEMPreKey: the bundle is never older than the first KEM prekey (see KEMSince)
 	timestamp := time.Now().Unix()
-	bindingData := serializeBundleForSigning(timestamp, mTermPub, spkPub, opkPubs)
-	bindingV2 := serializeBundleV2(BundleVersionPQ, timestamp, mTermPub, spkPub, opkPubs, kemPub)
+	bindingData := serializeBundleForSigning(timestamp, keys.identity, keys.spk, opkPubs)
+	bindingV2 := serializeBundleV2(BundleVersionPQ, timestamp, keys.identity, keys.spk, opkPubs, keys.kem)
 
-	lockedIdPriv, err := idPrivEnc.Open()
+	lockedIdPriv, err := keys.idPriv.Open()
 	if err != nil {
 		return nil, ErrEnclaveOpenFailed
 	}
@@ -154,14 +180,14 @@ func (am *AccountManager) CreateMyBundle(opkPubs [][32]byte) (*PublicBundle, err
 	copy(sigV2[:], signatureV2)
 
 	return &PublicBundle{
-		PeerID:       peerID,
-		IdentityKey:  mTermPub,
-		SignedPreKey: spkPub,
+		PeerID:       keys.peerID,
+		IdentityKey:  keys.identity,
+		SignedPreKey: keys.spk,
 		OneTimeKeys:  opkPubs,
 		CreatedAt:    timestamp,
 		Signature:    sig,
 		Version:      BundleVersionPQ,
-		KEMPreKey:    kemPub,
+		KEMPreKey:    append([]byte(nil), keys.kem...),
 		KEMSignature: sigV2,
 	}, nil
 }

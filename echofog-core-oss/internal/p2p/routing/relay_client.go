@@ -40,7 +40,7 @@ type ClientCircuit struct {
 	lastRecv   atomic.Int64 // unix nanos of the last frame that came in over the circuit
 	lastProbe  atomic.Int64 // unix nanos of the last probe we sent
 	probeSince atomic.Int64 // unix nanos of the first probe still unanswered; 0 when answered
-	pingAt     atomic.Int64 // unix nanos of the last ping we sent, until its pong; 0 when none is out
+	pingAt     atomic.Int64 // monoNanos of the last ping we sent, until its pong; 0 when none is out
 	rtt        atomic.Int64 // smoothed round trip to the far end through the relay, nanos; 0 not measured
 	// retired: SwitchCircuit replaced it. It still delivers, but answers no ping, so the far end,
 	// which probes the circuit it sends over, finds it quiet and follows the new one.
@@ -111,14 +111,26 @@ func noteProof(c *ClientCircuit, env *internal_pb.Envelope, now time.Time) {
 	c.proven.Store(true)
 }
 
+// clockBase is what round trips are measured from: they are read on the monotonic clock. The
+// wall clock moves in steps of a timer tick on Windows (half a millisecond or more), so a ping
+// answered within one (a relay on the same machine or a fast LAN) read 0, which says "not
+// measured" and never changed. It lies an hour before the process started, so a time read a
+// little earlier is still after it.
+var clockBase = time.Now().Add(-time.Hour)
+
+// monoNanos is t on the monotonic clock, in nanoseconds since clockBase; never 0, which pingAt
+// keeps for "no ping out".
+func monoNanos(t time.Time) int64 { return max(int64(t.Sub(clockBase)), 1) }
+
 // notePong folds in the round trip of the ping a pong answers. The pong carries nothing to match,
 // so it is taken as the answer to the latest ping: two pings in flight make it read a little low.
+// A measured round trip is never 0.
 func (c *ClientCircuit) notePong(now time.Time) {
 	at := c.pingAt.Swap(0)
 	if at == 0 {
 		return
 	}
-	sample := now.UnixNano() - at
+	sample := max(monoNanos(now)-at, 1)
 	if old := c.rtt.Load(); old != 0 {
 		sample = (old*3 + sample) / 4
 	}
@@ -1064,7 +1076,7 @@ func (rc *RelayClient) probe(c *ClientCircuit, cid uint32, now time.Time) {
 		return
 	}
 	c.probeSince.CompareAndSwap(0, now.UnixNano())
-	c.pingAt.Store(now.UnixNano())
+	c.pingAt.Store(monoNanos(now))
 	_ = rc.sendFrame(c, cid, net_types.TypePing, nil)
 }
 
@@ -1104,7 +1116,7 @@ func (rc *RelayClient) PingCircuit(targetID types.PeerID) bool {
 	if !c.lastProbe.CompareAndSwap(last, now.UnixNano()) {
 		return false
 	}
-	c.pingAt.Store(now.UnixNano())
+	c.pingAt.Store(monoNanos(now))
 	return rc.sendFrame(c, cid, net_types.TypePing, nil) == nil
 }
 

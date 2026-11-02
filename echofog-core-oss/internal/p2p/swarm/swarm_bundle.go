@@ -79,6 +79,14 @@ func (s *Swarm) ForgetBundle(id types.PeerID) {
 	_ = s.storage.Delete(s.bundleCacheKey(id))
 }
 
+// Connected reports whether a peer is connected now: its bundle then comes from the peer itself.
+func (s *Swarm) Connected(id types.PeerID) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.activePeers[id]
+	return ok
+}
+
 // bundleCacheKey is where we keep the bundle of a peer we wrote to; the peer is blinded in it.
 func (s *Swarm) bundleCacheKey(id types.PeerID) []byte {
 	return []byte("bcache:" + storage.BlindID(s.storage, id.String()))
@@ -119,7 +127,19 @@ func (s *Swarm) bundleFromRecord(peerID types.PeerID, data []byte) (*keymanager.
 	return s.parseAndVerifyProtoBundle(record.PubKey, &protoBundle)
 }
 
-// GetBundle returns a peer's X3DH prekey bundle, from the cache or by fetching and verifying it.
+// cachedBundleFresh is how long a cached bundle with a KEM prekey is used without asking the network
+// for a newer one.
+const cachedBundleFresh = 24 * time.Hour
+
+// staleBundle reports whether a cached bundle is worth replacing from the network first: one a day
+// old, or one without a KEM prekey. The peer may have moved to PQXDH since that was signed (bundles
+// are valid for 30 days), and a classic session with it would then be refused anyway.
+func staleBundle(b *keymanager.PublicBundle, now time.Time) bool {
+	return !b.HasKEM() || now.Unix()-b.CreatedAt > int64(cachedBundleFresh/time.Second)
+}
+
+// GetBundle returns a peer's X3DH prekey bundle, from the cache or by fetching and verifying it. A
+// cached bundle that is stale (see staleBundle) is used only when the network has none newer.
 func (s *Swarm) GetBundle(peerID types.PeerID) (*keymanager.PublicBundle, error) {
 	s.mu.RLock()
 	peer, ok := s.activePeers[peerID]
@@ -127,9 +147,13 @@ func (s *Swarm) GetBundle(peerID types.PeerID) (*keymanager.PublicBundle, error)
 
 	if !ok {
 		// Fallback: check local storage cache if peer is not currently connected
+		var cached *keymanager.PublicBundle
 		if data, err := s.storage.Get(s.bundleCacheKey(peerID)); err == nil && len(data) > 0 {
 			if bundle, err := s.bundleFromRecord(peerID, data); err == nil {
-				return bundle, nil
+				if !staleBundle(bundle, time.Now()) {
+					return bundle, nil
+				}
+				cached = bundle // kept, unless the network has a newer one
 			}
 			// expired or damaged: ask the network for a fresh one
 		}
@@ -139,11 +163,15 @@ func (s *Swarm) GetBundle(peerID types.PeerID) (*keymanager.PublicBundle, error)
 		s.mu.RUnlock()
 		if fetch != nil {
 			if data, err := fetch(BundleKey(peerID)); err == nil && len(data) > 0 {
-				if bundle, err := s.bundleFromRecord(peerID, data); err == nil {
+				if bundle, err := s.bundleFromRecord(peerID, data); err == nil &&
+					(cached == nil || bundle.CreatedAt >= cached.CreatedAt) {
 					_ = s.storage.Set(s.bundleCacheKey(peerID), data)
 					return bundle, nil
 				}
 			}
+		}
+		if cached != nil {
+			return cached, nil
 		}
 		return nil, errors.New("peer not connected and bundle not found in storage or in the network")
 	}

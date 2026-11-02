@@ -97,8 +97,24 @@ type frameCap struct {
 // not in the middle of frames that refer to layers it was not sent).
 func (f *childFilter) active() bool { return f != nil && (f.aware || f.cap != capAll) }
 
+// maxFrameJump is the furthest one unit may move a child filter's newest frame, in unit seqs (some
+// seconds of a 4K stream, far past its window of recent frames). A unit further off either way
+// starts the filter over from its frame. A relay that does not watch a stream does not check its
+// units' signatures, so one unit sealed by any member with a seq far ahead would otherwise leave
+// every real frame "older" than the newest for good: none would be found among the recent ones,
+// and the child's cap would never change again (the filter outlives a change of parent).
+const maxFrameJump = 1 << 16
+
+// restart forgets the frames a filter decided on: the next unit starts it over.
+func (f *childFilter) restart() {
+	f.started, f.frames, f.next = false, [32]frameCap{}, 0
+}
+
 // decide says whether a unit goes to the child, and the cap it goes with.
 func (f *childFilter) decide(u unitLayer) (bool, uint8) {
+	if jump := int32(u.frame - f.newest); f.started && (jump > maxFrameJump || jump < -maxFrameJump) {
+		f.restart()
+	}
 	c := f.cap
 	switch {
 	case !f.started || int32(u.frame-f.newest) > 0:
@@ -124,6 +140,16 @@ func (f *childFilter) capOf(start uint32) (uint8, bool) {
 		}
 	}
 	return 0, false
+}
+
+// restartFiltersLocked starts the filters of a stream's children over: the stream comes from
+// another feeder now, whose units say nothing of the frames the last one sent. d.mu must be held.
+func (d *MediaDispatcher) restartFiltersLocked(streamID string) {
+	for k, f := range d.filters {
+		if k.streamID == streamID {
+			f.restart()
+		}
+	}
 }
 
 // ringLayer is what the ring keeps of a unit's layer, to resend it only to whom it went.
@@ -238,13 +264,15 @@ func (c *capTrack) at(seq uint32) uint8 {
 	return c.cur.cap
 }
 
-// note takes the cap a unit came with.
+// note takes the cap a unit came with. Only a unit after the current regime's first opens a new
+// one: a late unit with another cap is from before the change (or from a feeder before the last
+// two: one that left the tree with units still on the way), and its cap stays its own.
 func (c *capTrack) note(seq uint32, cp uint8) {
 	switch {
 	case !c.cur.set:
 		c.cur = regime{cap: cp, from: seq, set: true}
 	case cp == c.cur.cap:
-	case c.prev.set && cp == c.prev.cap && int32(seq-c.cur.from) < 0:
+	case int32(seq-c.cur.from) <= 0:
 		// a late unit from before the change
 	default:
 		c.prev, c.cur = c.cur, regime{cap: cp, from: seq, set: true}
@@ -283,10 +311,12 @@ func (d *MediaDispatcher) arrivedCapLocked(p *MediaPacket, u unitLayer, rebuilt 
 // renumber writes into a delivered unit's RTP packet the sequence number the viewer's webview
 // gets: the count of the layers it gets up to it, plus an offset that keeps the numbers going on
 // one after another when the cap changes. A unit of the whole stream keeps its number until the
-// first change. d.mu must be held.
-func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, plain []byte) {
+// first change. It reports false for a late unit whose cap is neither of the last two regimes' (a
+// feeder before the last two still had it on the way): it has no place in what the webview saw,
+// and is not to be played. d.mu must be held.
+func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, plain []byte) bool {
 	if !u.marked || len(plain) < 12 {
-		return
+		return true
 	}
 	if d.renum == nil {
 		d.renum = make(map[sourceKey]*capTrack)
@@ -305,7 +335,11 @@ func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, p
 		off = st.cur.off
 	case c == st.cur.cap:
 		off = st.cur.off
-	case st.prev.set && c == st.prev.cap && int32(seq-st.cur.from) < 0:
+	case int32(seq-st.cur.from) <= 0:
+		// a late unit: numbered as before the change, when that is what it came with
+		if !st.prev.set || c != st.prev.cap {
+			return false
+		}
 		off = st.prev.off
 	default:
 		// the new count takes over where the old one would have put this unit, one further when
@@ -320,6 +354,7 @@ func (d *MediaDispatcher) renumberLocked(k sourceKey, seq uint32, u unitLayer, p
 	if out := pos(u.cap) + off; out != rtpSeq {
 		binary.BigEndian.PutUint16(plain[2:4], out)
 	}
+	return true
 }
 
 // layerGap is the units between the last unit delivered (last, lastSeq) and the next one (u, seq)
@@ -356,7 +391,8 @@ func layerGap(lastSeq uint32, last unitLayer, seq uint32, u unitLayer) (cands []
 	if int(last.mark.Count) > int(last.mark.Index) {
 		tail = int(last.mark.Count) - int(last.mark.Index) - 1
 	}
-	if tail+head > n || m != tail+head {
+	// more than can be tracked (the caller then takes it all as lost): not built one by one
+	if tail+head > n || m != tail+head || tail+head > maxTrackedGap {
 		out, _ := all()
 		return out, m
 	}
@@ -409,6 +445,12 @@ func (d *MediaDispatcher) gcLayersLocked(now time.Time) {
 	for k := range d.lastLayer {
 		if !live(k.streamID) {
 			delete(d.lastLayer, k)
+		}
+	}
+	// the layer counts of a local stream that ended: it sends no marked unit any more
+	for id := range d.layerCount {
+		if !live(id) {
+			delete(d.layerCount, id)
 		}
 	}
 	for id, t := range d.layerTop {

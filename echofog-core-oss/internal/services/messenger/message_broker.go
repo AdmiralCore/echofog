@@ -467,8 +467,14 @@ func (s *MessageBroker) Handle(msg *internal_pb.MessageData, peerID types.PeerID
 		plaintext, err = s.crypto.HandleInitPacket(originID, initPacket, keepOurs, card)
 		if err != nil && !hasSession && !errors.Is(err, crypto.ErrInitReplay) {
 			// the session the sender started cannot be opened here (a prekey it used is gone):
-			// it has to start again from a fresh bundle
-			s.sessionBroken(originID)
+			// it has to start again from a fresh bundle. One started classic from an old bundle
+			// of ours, which the network may still hand out, gets our card as well: the sender
+			// then knows we have a KEM prekey.
+			if errors.Is(err, x3dh.ErrPQDowngrade) {
+				s.breakSession(originID, true)
+			} else {
+				s.sessionBroken(originID)
+			}
 		}
 	case *internal_pb.MessageData_ChatMessage:
 		cm := payload.ChatMessage
@@ -774,7 +780,10 @@ const (
 // match theirs (both started one at the same moment, one side lost its state, ...). We drop ours
 // and tell origin to drop theirs; the next message of either side starts a new one, and what was
 // waiting for confirmation is encrypted again.
-func (s *MessageBroker) sessionBroken(origin types.PeerID) {
+func (s *MessageBroker) sessionBroken(origin types.PeerID) { s.breakSession(origin, false) }
+
+// breakSession is sessionBroken; withCard sends our card after the reset.
+func (s *MessageBroker) breakSession(origin types.PeerID, withCard bool) {
 	s.connMu.Lock()
 	if s.lastReset == nil || len(s.lastReset) > 4096 {
 		s.lastReset = make(map[types.PeerID]time.Time)
@@ -792,6 +801,9 @@ func (s *MessageBroker) sessionBroken(origin types.PeerID) {
 	s.forgetCiphertexts(origin)
 	go func() {
 		_ = s.SendChatMessageWithTier(origin, resetPrefix, TierPlain, SendOptions{Silent: true, noTrack: true})
+		if withCard {
+			s.sendKnock(origin, true)
+		}
 	}()
 }
 

@@ -241,3 +241,46 @@ func TestSplitLayer(t *testing.T) {
 		t.Fatal("temporalLayersFor")
 	}
 }
+
+// Two encoders may let out frames at once while one replaces the other: every packet still gets a
+// sequence number of its own, and each frame's packets follow one another.
+func TestPacketizerFramesFromTwoEncodersAtOnce(t *testing.T) {
+	p := newPacketizer(1100)
+	au := annexB(append([]byte{0x41}, bytes.Repeat([]byte{7}, 3000)...))
+	var mu sync.Mutex
+	var got [][]byte
+	out := func(pkts [][]byte) {
+		mu.Lock()
+		got = append(got, pkts...)
+		mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 2; g++ {
+		wg.Add(1)
+		go func(layered bool) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				p.frame(layered, au, uint32(i)*1500, frameLayer{tid: 1}, false, out)
+			}
+		}(g == 0)
+	}
+	wg.Wait()
+	seen := map[uint16]bool{}
+	for i, b := range got {
+		var pk rtp.Packet
+		if err := pk.Unmarshal(b); err != nil {
+			t.Fatal(err)
+		}
+		if seen[pk.SequenceNumber] {
+			t.Fatalf("sequence number %d went out twice", pk.SequenceNumber)
+		}
+		seen[pk.SequenceNumber] = true
+		if i > 0 {
+			var prev rtp.Packet
+			_ = prev.Unmarshal(got[i-1])
+			if pk.SequenceNumber != prev.SequenceNumber+1 {
+				t.Fatalf("packet %d: %d after %d", i, pk.SequenceNumber, prev.SequenceNumber)
+			}
+		}
+	}
+}

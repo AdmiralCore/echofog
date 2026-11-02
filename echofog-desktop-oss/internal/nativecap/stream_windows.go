@@ -490,6 +490,5 @@ func (s *Stream) onFrame(f encodedFrame) {
 	}
 	s.mu.Unlock()
 	ts := s.tsAt + uint32(f.pts*90000/time.Second)
-	s.pk.layered = f.layered
-	s.pacer.push(s.pk.packets(f.data, ts, f.layer, f.keyframe))
+	s.pk.frame(f.layered, f.data, ts, f.layer, f.keyframe, s.pacer.push)
 }

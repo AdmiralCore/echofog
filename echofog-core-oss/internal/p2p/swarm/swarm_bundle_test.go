@@ -3,6 +3,8 @@ package swarm
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/awnumar/memguard"
@@ -113,5 +115,61 @@ func TestBundleWireCompatibility(t *testing.T) {
 	pb.KemPreKey[7] ^= 1
 	if _, err := s.parseAndVerifyProtoBundle(pub, &pb); err == nil {
 		t.Fatal("a bundle with a tampered KEM prekey was accepted")
+	}
+}
+
+// A peer that is away: a cached bundle without a KEM prekey (signed before the peer moved to
+// PQXDH) is not used while the network has a newer one, and is kept when the network has nothing
+// newer. A cached PQ bundle of the day is used without asking.
+func TestStaleCachedBundleAsksTheNetworkFirst(t *testing.T) {
+	defer memguard.Purge()
+	acc, pub := bundleAccount(t)
+	id := types.PeerPubKeyToID(pub)
+	st := testutil.NewTestingBadgerStorage(t)
+	t.Cleanup(st.CloseAndClear)
+	s := &Swarm{storage: st.St}
+	record := func(b *keymanager.PublicBundle) []byte {
+		raw, err := EncodeBundle(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, err := json.Marshal(StoredBundleRecord{PeerID: id, PubKey: pub, BundleRaw: raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	pq, err := acc.CreateMyBundle(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classic := *pq
+	classic.Version, classic.KEMPreKey, classic.KEMSignature = 0, nil, [64]byte{}
+	if err := s.CacheBundle(id, record(&classic)); err != nil {
+		t.Fatal(err)
+	}
+
+	fetched := 0
+	var dht []byte
+	s.SetBundleFetcher(func([]byte) ([]byte, error) {
+		fetched++
+		if dht == nil {
+			return nil, errors.New("not found")
+		}
+		return dht, nil
+	})
+	// the network has nothing: the cached classic bundle is still better than none
+	if b, err := s.GetBundle(id); err != nil || b.HasKEM() {
+		t.Fatalf("the cached bundle when the network has none: %v", err)
+	}
+	dht = record(pq)
+	b, err := s.GetBundle(id)
+	if err != nil || !b.HasKEM() {
+		t.Fatalf("a cached classic bundle won over the peer's PQ bundle in the network: %v", err)
+	}
+	// now the PQ bundle is cached, and taken without asking
+	before := fetched
+	if b, err := s.GetBundle(id); err != nil || !b.HasKEM() || fetched != before {
+		t.Fatalf("a fresh cached PQ bundle: %v, %d lookups", err, fetched-before)
 	}
 }

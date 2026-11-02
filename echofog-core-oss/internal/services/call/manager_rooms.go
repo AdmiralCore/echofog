@@ -96,7 +96,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 	room.Dispatcher.OnVideoLoss = func(streamID string, _ types.PeerID) { m.requestKeyframe(streamID) }
 
 	if b, err := bridge.NewLocalMediaBridge(bridge.Options{
-		OnLocalRTP:       m.onBridgeRTP,
+		OnLocalRTP:       m.onWebviewRTP,
 		OnSlot:           m.onBridgeSlot,
 		OnKeyframeNeeded: m.requestKeyframe,
 		// our own preview's decoder: served like a viewer's request, by our encoder

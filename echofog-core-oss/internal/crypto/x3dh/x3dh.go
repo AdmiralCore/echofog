@@ -33,9 +33,10 @@ var (
 	ErrKEMKeyNotFound = errors.New("the KEM prekey the init packet names is not ours or is gone")
 	ErrBadKEMInit     = errors.New("malformed KEM part of the init packet")
 	ErrBadKEMKey      = errors.New("the bundle's KEM prekey cannot be used")
-	// ErrPQDowngrade: a classic init that names a bundle we signed with a KEM prekey. The sender
-	// would have used the KEM prekey, so somebody on the way removed it.
-	ErrPQDowngrade = errors.New("classic init for a bundle that had a KEM prekey")
+	// ErrPQDowngrade: a classic init from a node that has PQXDH, while we offer a KEM prekey. It
+	// used a bundle of ours without one: stripped on the way, or one signed before we had a KEM
+	// prekey (an old copy replayed, or cached). It has to start again from a fresh bundle.
+	ErrPQDowngrade = errors.New("classic init from a PQXDH node to a node with a KEM prekey")
 )
 
 var (
@@ -176,38 +177,38 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 	return x3dhSession, initPacket, nil
 }
 
-// responderKEM reads the KEM part of an init packet: the shared secret for a PQXDH init, nil for a
-// classic one. A classic init that names a bundle we signed with a KEM prekey is refused.
-func (x *X3DHEngine) responderKEM(init types.X3DHInit) (*KEMInput, error) {
+// responderKEM reads the KEM part of an init packet from the owner of sender (its signed card): the
+// shared secret for a PQXDH init, nil for a classic one.
+//
+// Once we offer a KEM prekey, a classic init is taken only from a node without PQXDH (v0.2.0). A
+// node with it uses the KEM prekey of every bundle that has one, so a classic init from it means it
+// used a bundle of ours without one: stripped on the way, or one we signed before our first KEM
+// prekey, replayed by whoever kept it or still in its cache (bundles are valid for 30 days). Which
+// node sent it, the init and the card say, and both travel in the envelope the sender signed, so
+// nobody on the way can make it look like v0.2.0: the init names the time of the bundle it used (a
+// field v0.2.0 does not know), the card carries a KEM prekey.
+func (x *X3DHEngine) responderKEM(init types.X3DHInit, sender *keymanager.PublicBundle) (*KEMInput, error) {
 	if len(init.KEMCiphertext) == 0 && init.KEMKeyID == nil {
-		// v0.2.0 sends no bundle time; it never saw a KEM prekey of ours, as it cannot read one
-		if init.BundleCreatedAt != 0 {
-			if since := x.accntManager.KEMSince(); since != 0 && init.BundleCreatedAt >= since {
-				return nil, ErrPQDowngrade
-			}
+		if x.accntManager.KEMSince() == 0 {
+			return nil, nil // we never offered a KEM prekey
 		}
-		return nil, nil
+		if init.BundleCreatedAt != 0 || (sender != nil && sender.HasKEM()) {
+			return nil, ErrPQDowngrade
+		}
+		return nil, nil // v0.2.0: it cannot read a KEM prekey
 	}
 	if len(init.KEMCiphertext) != mlkem.CiphertextSize768 || init.KEMKeyID == nil {
 		return nil, ErrBadKEMInit
 	}
-	seedEnc, err := x.accntManager.OpenKEMPreKey(*init.KEMKeyID)
-	if err != nil {
-		return nil, ErrKEMKeyNotFound
-	}
-	seed, err := seedEnc.Open()
-	if err != nil {
-		return nil, ErrEnclaveOpenFailed
-	}
-	defer seed.Destroy()
-	dk, err := mlkem.NewDecapsulationKey768(seed.Bytes())
-	if err != nil {
-		return nil, ErrKEMKeyNotFound
-	}
 	// a ciphertext made for another key gives another secret (implicit rejection): the message of
 	// the init then fails to open
-	ss, err := dk.Decapsulate(init.KEMCiphertext)
-	if err != nil {
+	ss, err := x.accntManager.Decapsulate(*init.KEMKeyID, init.KEMCiphertext)
+	switch {
+	case errors.Is(err, keymanager.ErrKEMKeyNotFound):
+		return nil, ErrKEMKeyNotFound
+	case errors.Is(err, keymanager.ErrEnclaveOpenFailed):
+		return nil, ErrEnclaveOpenFailed
+	case err != nil:
 		return nil, ErrBadKEMInit
 	}
 	return &KEMInput{SharedSecret: ss, KeyID: *init.KEMKeyID, Ciphertext: init.KEMCiphertext}, nil
@@ -226,7 +227,7 @@ func (x *X3DHEngine) X3DHReceive(init types.X3DHInit, peerBundle keymanager.Publ
 			return nil, ErrOPKNotFound
 		}
 	}
-	kem, err := x.responderKEM(init)
+	kem, err := x.responderKEM(init, &peerBundle)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +238,7 @@ func (x *X3DHEngine) X3DHReceive(init types.X3DHInit, peerBundle keymanager.Publ
 // Accept answers an init packet from the owner of peerBundle (verified by the caller) and opens the
 // message it carries. It tries the current signed prekey and the replaced ones still in use, and
 // uses up the one-time prekey only when the message opened. A PQXDH init is opened with the KEM
-// prekey it names; a classic one (from v0.2.0) as before.
+// prekey it names; a classic one only from v0.2.0 (see responderKEM).
 func (x *X3DHEngine) Accept(init types.X3DHInit, peerBundle keymanager.PublicBundle) (*X3DHSession, []byte, error) {
 	if len(init.SecureMessage.Ciphertext) == 0 {
 		return nil, nil, ErrInitWithoutMessage
@@ -249,7 +250,7 @@ func (x *X3DHEngine) Accept(init types.X3DHInit, peerBundle keymanager.PublicBun
 			return nil, nil, ErrOPKNotFound
 		}
 	}
-	kem, err := x.responderKEM(init)
+	kem, err := x.responderKEM(init, &peerBundle)
 	if err != nil {
 		return nil, nil, err
 	}

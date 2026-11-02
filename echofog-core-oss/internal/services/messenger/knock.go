@@ -97,6 +97,11 @@ func (s *MessageBroker) handleKnock(origin types.PeerID, text string) {
 		return
 	}
 	s.log.Info("MessageBroker: got the keys of a peer", "peer", origin.String()[:8])
+	if s.crypto != nil {
+		if b, err := s.sw.BundleFromRecord(origin, card); err == nil {
+			s.crypto.BundleCame(origin, b) // a wait for its fresh bundle is over
+		}
+	}
 	s.mu.RLock()
 	filter := s.filter
 	s.mu.RUnlock()

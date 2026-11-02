@@ -9,6 +9,8 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
+	"github.com/echofog/echofog-core/pkg/videolayer"
+	"github.com/pion/rtp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -141,4 +143,57 @@ func TestRoom_LocalEncoderLearnsTheViewersScreens(t *testing.T) {
 	nodes[0].cm.SetDisplayRate(120)
 	require.Eventually(t, func() bool { return slices.Equal(enc.viewerRates(), []int{0, 120, 144}) },
 		5*time.Second, 20*time.Millisecond, "got %v", enc.viewerRates())
+}
+
+// A layer mark rides only on the app's own capture. The webview's RTP keeps its other header
+// extensions, but an element that looks like the mark (ID 10, 9 bytes) is blanked before it goes:
+// no relay or viewer takes the browser's packets for layers.
+func TestRoom_LayerMarksOnlyFromTheAppsCapture(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 2)
+	b, v := nodes[0], nodes[1]
+	q, _ := tree.QualityByID("720p60")
+	require.NoError(t, b.cm.StartStream("s", "screen", q))
+	require.NoError(t, v.cm.WatchStream("s"))
+	require.Eventually(t, func() bool {
+		sm, ok := b.cm.StreamTree("s")
+		return ok && sm.ParentMap[v.id] == b.id
+	}, 5*time.Second, 20*time.Millisecond)
+
+	var mu sync.Mutex
+	marks := map[byte]bool{} // first payload byte -> the delivered packet had a mark
+	v.cm.OnMedia = func(p *media.MediaPacket) {
+		if p.Kind != media.FrameVideo {
+			return
+		}
+		var pk rtp.Packet
+		if pk.Unmarshal(p.Payload) != nil || len(pk.Payload) == 0 {
+			return
+		}
+		_, _, ok := videolayer.Find(p.Payload)
+		mu.Lock()
+		marks[pk.Payload[0]] = ok
+		mu.Unlock()
+	}
+	packet := func(tag byte, seq uint16) []byte {
+		pk := rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 112, SequenceNumber: seq, Timestamp: uint32(seq) * 1500, SSRC: 5, Marker: true},
+			Payload: []byte{tag, 0x41, 1, 2, 3}}
+		pk.Header.Extension, pk.Header.ExtensionProfile = true, 0xBEDE
+		mk := videolayer.Mark{TID: 2, Start: true, End: true, Index: 0, Count: 1}
+		require.NoError(t, pk.Header.SetExtension(videolayer.ExtensionID, mk.Data()))
+		raw, err := pk.Marshal()
+		require.NoError(t, err)
+		return raw
+	}
+	b.cm.onWebviewRTP(bridge.RoleScreen, packet(1, 1))
+	b.cm.PublishLocalRTP(bridge.RoleScreen, packet(2, 2))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(marks) == 2
+	}, 5*time.Second, 20*time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.False(t, marks[1], "the webview's packet reached the viewer with a layer mark")
+	assert.True(t, marks[2], "the app's own capture keeps its mark")
 }
