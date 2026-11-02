@@ -12,11 +12,13 @@ ssh root@<IP сервера>
 ```
 
 ```bash
-curl -fsSL https://get.docker.com | sh
+curl -fsSL https://get.docker.com | sudo sh
 ```
 
-Если заходите не под root, а обычным пользователем, добавьте себя в группу `docker` и перезайдите:
-`sudo usermod -aG docker "$USER"`.
+Команды, которым нужны права root, идут с `sudo`, поэтому работают и под root, и под обычным
+пользователем (так заходят в Google Cloud и у многих других провайдеров). Обычный пользователь
+затем добавляет себя в группу `docker` и перезаходит, чтобы команды `docker compose` ниже работали
+без `sudo`: `sudo usermod -aG docker "$USER"`.
 
 ## 2. Откройте порт
 
@@ -24,12 +26,13 @@ curl -fsSL https://get.docker.com | sh
 Compose-файл публикует его как **443**. Если на сервере `ufw`:
 
 ```bash
-ufw allow 443/udp && ufw allow 443/tcp
+sudo ufw allow 443/udp && sudo ufw allow 443/tcp
 ```
 
 Если у провайдера есть свой файрвол в панели управления, откройте UDP и TCP 443 и там. **Главное —
 UDP 443**: по нему идёт QUIC, а через него почти весь трафик, тогда как в облачных файрволах обычно
-открыт только TCP. В Google Cloud:
+открыт только TCP. В Google Cloud `ufw` обычно выключен, а решает облачный файрвол (команду
+выполните в Cloud Shell или там, где настроен `gcloud`):
 
 ```bash
 gcloud compute firewall-rules create echofog --allow udp:443,tcp:443
