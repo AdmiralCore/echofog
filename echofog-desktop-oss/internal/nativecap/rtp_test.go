@@ -140,6 +140,25 @@ func TestPacerSpreadsAKeyframe(t *testing.T) {
 	}
 }
 
+// A keyframe of 200 ms of a 10 Mbit/s stream (250 KB) leaves at 2.5 times the bitrate, over
+// about 80 ms, not in the 50 Mbit/s burst that draining it within 40 ms took.
+func TestPacerSendsALargeKeyframeAtTheRateNotABurst(t *testing.T) {
+	sent := runPacer(t, 10_000_000, packets(227, 1100))
+	span := sent[len(sent)-1].at.Sub(sent[0].at)
+	if span < 70*time.Millisecond || span > maxPacerDelay+5*time.Millisecond {
+		t.Fatalf("a 250 KB keyframe went out over %v, want about 80 ms", span)
+	}
+	perMs := map[int64]int{}
+	for _, s := range sent {
+		perMs[s.at.UnixMilli()/10] += s.size
+	}
+	for ms, b := range perMs {
+		if b > 40_000 { // 25 Mbit/s is 31 KB in 10 ms
+			t.Fatalf("%d bytes in the 10 ms from %d", b, ms*10)
+		}
+	}
+}
+
 // An ordinary frame does not wait for the next tick, and a queue far over the bitrate still
 // drains within maxPacerDelay.
 func TestPacerSmallFrameAndBacklog(t *testing.T) {

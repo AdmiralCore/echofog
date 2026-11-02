@@ -438,6 +438,14 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			m.nackUpstreamLocked(room, np.StreamID, up)
 		}
 
+	case signaling.ActionStreamFeedback:
+		var fp signaling.StreamFeedbackPayload
+		if decodePayload(env.Payload, &fp) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+		} else {
+			m.noteFeedbackLocked(room, sender, fp, now)
+		}
+
 	case signaling.ActionKeyframeRequest:
 		var streamID string
 		if decodePayload(env.Payload, &streamID) != nil {

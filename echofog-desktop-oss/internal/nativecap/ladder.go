@@ -2,6 +2,7 @@ package nativecap
 
 import (
 	"math"
+	"slices"
 	"time"
 )
 
@@ -155,8 +156,16 @@ func (l *ladder) lowered() string {
 // screen (it shows no more), the one the most screens show evenly, ties going to the faster one.
 // A screen shows a rate evenly when it shows each frame for the same number of refreshes, or
 // every n-th frame of n per refresh. A rate of 0 is not known: such a viewer counts for nothing and
-// does not cap the rate (it may be an older version, with any screen).
+// does not cap the rate (it may be an older version, with any screen). A rate under 50 Hz is a
+// laptop saving power on battery (40 or 48 Hz while the picture stands still), which goes back
+// to 60 when it moves: it counts as 60, where it held a stream at 30 fps.
 func pickFPS(top, sourceHz int, viewers []int) int {
+	viewers = slices.Clone(viewers)
+	for i, v := range viewers {
+		if v > 0 && v < 50 {
+			viewers[i] = 60
+		}
+	}
 	limit := top
 	if sourceHz > 0 {
 		limit = min(limit, sourceHz+1) // 59 Hz is 59.94: it shows 60 fps

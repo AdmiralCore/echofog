@@ -120,6 +120,9 @@ type ActiveRoomState struct {
 	keyframeSent   map[string]time.Time
 	keyframeServed map[string]time.Time
 	sendRate       sendRateState
+	// feedback holds the latest path report of each child on each stream (feedback.go)
+	feedback     map[string]map[types.PeerID]viewerReport
+	lastFeedback time.Time
 
 	lastJoin, lastMemberHB, lastCoordHB, lastPing, lastReconcile, lastSeenGC, lastSyncReq, lastParentLost time.Time
 

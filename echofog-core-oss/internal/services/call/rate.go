@@ -1,8 +1,10 @@
 package call
 
 import (
+	"log/slog"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 )
@@ -15,6 +17,13 @@ import (
 // above the preset. A jumpy rate makes a jumpy picture: each cut costs the encoder frames or
 // detail, so a single late frame is not worth one.
 //
+// The path beyond the queue is the viewers' to see: their reports (feedback.go) count like the
+// queue's own state, the worst of them and the queue's together. A viewer that loses a tenth of
+// the stream or waits on a long queue also caps the rate at nine tenths of what reaches it, the
+// rate its path carries: cutting by quarters from 12 Mbit/s took seconds to find a 4 Mbit/s
+// link, each of them costing the viewer frames. A little loss or queueing holds the rate where
+// it is.
+//
 // It remembers the rate a trouble began at and climbs back to it slowly: climbing at full speed
 // took a 120 fps stream from 7 back to 20 Mbit/s in ten seconds, straight into the next overflow
 // of a link that carried 15, and every overflow cost the viewer hundreds of packets and a
@@ -25,12 +34,14 @@ const (
 	rateCutHeavy   = 0.75 // many drops, or a queue half full
 	rateCutFlood   = 0.5  // the queue overflowed: the link carries much less than we send
 	rateClimb      = 1.06
-	rateProbe      = 1.01 // the climb near the rate the last trouble began at
+	rateProbe      = 1.02 // the climb near the rate the last trouble began at
 	rateNearCeil   = 0.85 // from this share of that rate on, the climb is rateProbe
+	ratePastCeil   = 1.1  // ... up to this share, past which the rate is forgotten: the link carries more now
 	rateCeilingTTL = 60   // clean ticks after which that rate is forgotten
 	rateCooldown   = 2    // ticks after a cut before the next one
 	rateCleanRun   = 4    // clean ticks before climbing back
 	rateFloorKbps  = 600
+	rateObserved   = 0.9 // of what reaches a viewer whose path is heavy
 	heavyDrops     = 8   // new drops in one tick that make it heavy
 	floodDrops     = 100 // ... and that mean the queue overflowed
 )
@@ -44,14 +55,16 @@ type sendRateState struct {
 	ceiling     float64 // the rate the last trouble began at; 0: none known
 }
 
-// congestion is how backed up the path is in one tick.
-type congestion int
+// congestion is how backed up the path is in one tick: the viewers' grades and the queue's are
+// the same scale.
+type congestion = media.Congestion
 
 const (
-	pathClean congestion = iota
-	pathMild
-	pathHeavy
-	pathFlood
+	pathClean = media.PathClean
+	pathHold  = media.PathHold
+	pathMild  = media.PathMild
+	pathHeavy = media.PathHeavy
+	pathFlood = media.PathFlood
 )
 
 func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
@@ -85,10 +98,27 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 	case newDrops > 0 || backlog > media.VideoQueueLen/4:
 		level = pathMild
 	}
-	r.kbps = r.next(float64(capKbps), float64(rateFloorKbps*len(room.localStreams)), level)
-	if level != pathClean {
+	queue := level
+	var viewer viewerReport
+	for id := range room.localStreams {
+		if rep, ok := m.worstFeedbackLocked(room, id, now); ok && rep.worse(viewer) {
+			viewer = rep
+		}
+	}
+	level = max(level, viewer.fb.Level)
+	floor := float64(rateFloorKbps * len(room.localStreams))
+	r.kbps = r.next(float64(capKbps), floor, level)
+	if viewer.fb.Level >= pathHeavy && viewer.fb.Kbps > 0 {
+		r.kbps = max(min(r.kbps, rateObserved*float64(viewer.fb.Kbps)), floor)
+	}
+	if queue >= pathMild {
 		m.debugOnce("congested", "Upload path congested, lowering the send bitrate",
 			"kbps", int(r.kbps), "cap_kbps", capKbps, "new_drops", newDrops, "backlog", backlog)
+	}
+	if viewer.fb.Level >= pathMild {
+		m.lim.Log(m.logger, slog.LevelInfo, "viewer-congested", "A viewer's path is congested, lowering the send bitrate",
+			"kbps", int(r.kbps), "viewer", calllog.Peer(viewer.viewer), "level", int(viewer.fb.Level),
+			"loss", int(viewer.fb.Loss*1000)/10.0, "delay_ms", viewer.fb.DelayMs, "viewer_kbps", viewer.fb.Kbps)
 	}
 
 	type limit struct {
@@ -130,7 +160,7 @@ func (r *sendRateState) next(capKbps, floor float64, level congestion) float64 {
 	kbps := r.kbps
 	calm := r.clean // clean ticks before this one
 	r.sinceCut++
-	if level == pathClean {
+	if level == pathClean { // a hold keeps the rate: no climb, no cut
 		r.clean++
 	} else {
 		r.clean = 0
@@ -141,7 +171,7 @@ func (r *sendRateState) next(capKbps, floor float64, level congestion) float64 {
 	switch {
 	case kbps == 0:
 		kbps = capKbps
-	case level != pathClean && (r.sinceCut > rateCooldown || level == pathFlood):
+	case level >= pathMild && (r.sinceCut > rateCooldown || level == pathFlood):
 		// the first cut of a trouble marks the rate the link could not carry; the cuts that follow
 		// it within the same trouble do not lower that mark to wherever the trouble ended
 		if r.ceiling == 0 || calm >= rateCleanRun {
@@ -157,6 +187,9 @@ func (r *sendRateState) next(capKbps, floor float64, level congestion) float64 {
 		kbps *= cut
 		r.sinceCut = 0
 	case level == pathClean && r.clean >= rateCleanRun:
+		if r.ceiling > 0 && kbps > r.ceiling*ratePastCeil {
+			r.ceiling = 0
+		}
 		if r.ceiling > 0 && kbps >= r.ceiling*rateNearCeil {
 			kbps *= rateProbe
 		} else {

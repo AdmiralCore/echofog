@@ -60,7 +60,8 @@ func TestStreamBench(t *testing.T) {
 	// sets in a frame that is not an IDR make some hardware decoders give up until the next one
 	var frameTS uint32
 	var frameSets, frameIDR bool
-	var setsOutsideIDR, idrFrames int
+	var setsOutsideIDR, idrFrames, frameBytes int
+	var keySizes []int      // bytes of each IDR frame
 	deltas := map[int]int{} // RTP timestamp steps between frames, in tenths of a millisecond
 	endFrame := func() {
 		if frameSets && !frameIDR {
@@ -68,8 +69,9 @@ func TestStreamBench(t *testing.T) {
 		}
 		if frameIDR {
 			idrFrames++
+			keySizes = append(keySizes, frameBytes)
 		}
-		frameSets, frameIDR = false, false
+		frameSets, frameIDR, frameBytes = false, false, 0
 	}
 	publish := func(b []byte) {
 		mu.Lock()
@@ -88,6 +90,7 @@ func TestStreamBench(t *testing.T) {
 			deltas[int(int64(p.Timestamp-frameTS)*10000/90000)]++
 		}
 		first, lastSeq, frameTS = false, p.SequenceNumber, p.Timestamp
+		frameBytes += len(b)
 		if nal, err := depack.Unmarshal(p.Payload); err == nil && len(nal) > 0 {
 			for _, n := range annexBNALs(nal) {
 				switch n[0] & 0x1f {
@@ -182,6 +185,12 @@ func TestStreamBench(t *testing.T) {
 		}
 	}
 	t.Logf("frame time steps (5 or more):%s", line)
+	t.Logf("keyframes (KB): %v", func() (kb []int) {
+		for _, n := range keySizes {
+			kb = append(kb, n/1024)
+		}
+		return
+	}())
 	t.Logf("largest packet %d bytes, %d sequence gaps, %d keyframes (%d IDR frames on the wire), %d frames with SPS/PPS but no IDR",
 		maxPacket, lost, final.Keyframes, idrFrames, setsOutsideIDR)
 	if setsOutsideIDR > 0 {

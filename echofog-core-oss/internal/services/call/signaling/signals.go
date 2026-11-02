@@ -48,6 +48,9 @@ const (
 	ActionKeyframeRequest SignalAction = "keyframe_request"
 	ActionKicked          SignalAction = "kicked"
 	ActionNack            SignalAction = "nack"
+	// ActionStreamFeedback is a viewer's report on its path for a stream, to its parent on the
+	// stream's tree; a relay sends the worst of its subtree on. Older nodes reject it as unknown.
+	ActionStreamFeedback SignalAction = "stream_feedback"
 )
 
 // Kept for source compatibility with older callers.
@@ -134,6 +137,18 @@ type ReparentPayload struct {
 type NackPayload struct {
 	StreamID string            `json:"stream_id"`
 	Lost     []media.NackEntry `json:"lost"`
+}
+
+// StreamFeedbackPayload is the worst path of a subtree of a stream's viewers over the last
+// media.FeedbackInterval: how congested it is (media.Congestion), what arrived the first time,
+// the share lost before resends and the queue on the way.
+type StreamFeedbackPayload struct {
+	StreamID string       `json:"stream_id"`
+	Level    uint8        `json:"level"`
+	Kbps     int          `json:"kbps,omitempty"`
+	Loss     float32      `json:"loss,omitempty"`
+	DelayMs  int          `json:"delay_ms,omitempty"`
+	Viewer   types.PeerID `json:"viewer"` // who measured it, for the logs
 }
 
 type ReportPayload struct {

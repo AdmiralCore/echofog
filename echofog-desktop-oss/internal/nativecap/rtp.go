@@ -84,10 +84,12 @@ func (p *packetizer) packets(au []byte, ts uint32) [][]byte {
 // The webview's WebRTC paced what it sent; without it, a frame's packets would leave in one burst
 // that a queue on the path drops the end of, a keyframe's hundreds of them most of all. The pacer
 // sends at a multiple of the bitrate, like WebRTC's, and faster when its queue would otherwise
-// hold more than maxPacerDelay.
+// hold more than maxPacerDelay. That is as long as the viewers' playout buffer: the hardware
+// encoder makes a keyframe 90-215 ms of the bitrate whatever its rate buffer says, and draining
+// it within 40 ms sent 250 KB at 50 Mbit/s into a 15 Mbit/s link, whose router dropped its end.
 const (
 	pacingFactor  = 2.5
-	maxPacerDelay = 40 * time.Millisecond
+	maxPacerDelay = 100 * time.Millisecond
 	pacerTick     = time.Millisecond
 	pacerBurst    = 2 * time.Millisecond // what the bucket may hold when the queue was idle
 )

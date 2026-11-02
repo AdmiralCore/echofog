@@ -40,11 +40,11 @@ func TestSendRate_ClimbsSlowlyBackToWhereTroubleBegan(t *testing.T) {
 	assert.Equal(t, 20000.0, r.ceiling, "the rate the trouble began at")
 
 	stepCap(r, rateCleanRun+5, 20000, pathClean)
-	assert.Less(t, r.kbps, 18500.0, "fast only up to near that rate")
+	assert.Less(t, r.kbps, 19400.0, "fast only up to near that rate")
 	assert.GreaterOrEqual(t, r.kbps, 20000*rateNearCeil)
 	at := r.kbps
 	stepCap(r, 10, 20000, pathClean)
-	assert.Less(t, r.kbps, at*1.12, "then a percent a tick")
+	assert.Less(t, r.kbps, at*1.25, "then two percent a tick")
 
 	stepCap(r, rateCeilingTTL, 20000, pathClean)
 	assert.Zero(t, r.ceiling, "forgotten after a while clean")
@@ -71,4 +71,27 @@ func stepCap(r *sendRateState, n int, capKbps float64, level congestion) float64
 		r.kbps = r.next(capKbps, 600, level)
 	}
 	return r.kbps
+}
+
+// Once the rate is well past where the last trouble began, the link carries more now: the mark is
+// forgotten and the climb is fast again, not two percent a tick for half a minute.
+func TestSendRate_ForgetsAMarkItPassed(t *testing.T) {
+	r := &sendRateState{kbps: 9000, ceiling: 10000, clean: rateCleanRun, sinceCut: rateCooldown + 1}
+	for i := 0; r.ceiling != 0 && i < 100; i++ {
+		r.kbps = r.next(30000, rateFloorKbps, pathClean)
+	}
+	assert.Zero(t, r.ceiling)
+	assert.Greater(t, r.kbps, 10000*ratePastCeil)
+	at := r.kbps
+	r.kbps = r.next(30000, rateFloorKbps, pathClean)
+	assert.InDelta(t, at*rateClimb, r.kbps, 1)
+}
+
+// A hold (a viewer's path loses a little or queues) neither cuts nor climbs.
+func TestSendRate_HoldKeepsTheRate(t *testing.T) {
+	r := &sendRateState{kbps: 8000, clean: rateCleanRun, sinceCut: rateCooldown + 1}
+	for i := 0; i < 10; i++ {
+		r.kbps = r.next(30000, rateFloorKbps, pathHold)
+	}
+	assert.Equal(t, 8000.0, r.kbps)
 }

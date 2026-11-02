@@ -134,6 +134,8 @@ func TestPickFPS(t *testing.T) {
 		{120, 144, []int{144, 144}, 120}, // never above the preset
 		{144, 75, []int{75}, 60},         // capped by the source
 		{30, 144, []int{60}, 30},
+		{60, 144, []int{40}, 60}, // a laptop on battery
+		{144, 144, []int{48, 144}, 144},
 	}
 	for _, c := range cases {
 		if got := pickFPS(c.top, c.source, c.viewers); got != c.want {

@@ -199,15 +199,22 @@ func (d *MediaDispatcher) nackGap(k sourceKey, gap []uint32) {
 	default:
 	}
 	var lost []NackEntry
+	first := 0 // units asked for the first time: what the path lost
 	d.mu.Lock()
 	m := d.missing[k]
 	for _, s := range gap {
 		if _, ok := m[s]; ok {
 			lost = append(lost, NackEntry{Seq: s})
+			if _, asked := d.nackAsked[ringKey{k.streamID, s}]; !asked {
+				first++
+			}
 		}
 	}
 	cb := d.OnVideoNack
 	d.mu.Unlock()
+	if first > 0 {
+		d.rx.lost(k.streamID, first)
+	}
 	if len(lost) == 0 || cb == nil {
 		return
 	}
