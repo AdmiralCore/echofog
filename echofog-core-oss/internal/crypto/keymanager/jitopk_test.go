@@ -102,3 +102,58 @@ func TestHandedOutPrekeysAreCapped(t *testing.T) {
 		}
 	}
 }
+
+// countingStorage counts the reads of prekeys.
+type countingStorage struct {
+	*mockStorage
+	prekeyReads int
+}
+
+func (c *countingStorage) Get(key []byte) ([]byte, error) {
+	if k := string(key); strings.HasPrefix(k, "spk:") || strings.HasPrefix(k, "kem:") {
+		c.prekeyReads++
+	}
+	return c.mockStorage.Get(key)
+}
+
+// Anybody connected may ask for our bundle. Each answer has its own one-time prekey and is signed
+// anew, but the keys the bundle is made of are not read, unsealed and derived again every time.
+func TestBundleRequestsReuseTheKeys(t *testing.T) {
+	st := &countingStorage{mockStorage: &mockStorage{data: map[string][]byte{}}}
+	root := make([]byte, 64)
+	_, _ = rand.Read(root)
+	acc, err := NewKeyManager(root, st).GetAccount(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := acc.CreateJITBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.prekeyReads = 0
+	for i := 0; i < 20; i++ {
+		b, err := acc.CreateJITBundle()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := VerifyBundle(b); err != nil {
+			t.Fatal(err)
+		}
+		if b.SignedPreKey != first.SignedPreKey || string(b.KEMPreKey) != string(first.KEMPreKey) ||
+			b.OneTimeKeys[0] == first.OneTimeKeys[0] {
+			t.Fatal("the same prekeys, a new one-time prekey each time")
+		}
+	}
+	if st.prekeyReads != 0 {
+		t.Fatalf("20 bundle requests read the prekeys %d times", st.prekeyReads)
+	}
+
+	// after a while they are gathered again (a prekey may have been replaced)
+	acc.bundleKeys.at = time.Now().Add(-bundleKeysTTL)
+	if _, err := acc.CreateJITBundle(); err != nil {
+		t.Fatal(err)
+	}
+	if st.prekeyReads == 0 {
+		t.Fatal("the bundle keys are gathered again once old")
+	}
+}

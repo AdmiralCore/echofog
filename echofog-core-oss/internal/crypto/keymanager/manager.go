@@ -63,6 +63,9 @@ type AccountManager struct {
 	jitCounted bool
 
 	kemMu sync.Mutex // replacing the KEM prekey
+
+	bundleMu   sync.Mutex // the keys our bundles are made of, see currentBundleKeys
+	bundleKeys *bundleKeys
 }
 
 func NewKeyManagerWithMnemonic(mnemonic []byte, passphrase []byte, storage storage.Storage) (*KeyManager, error) {
