@@ -276,6 +276,24 @@ of the tree, where it feeds nobody, the rate follows the other viewers, and its 
 go on once in five seconds; it gets what its link lets through. Sound has no time for a resend,
 so every piece of it goes twice on each hop, the second time with the next piece, 20 ms later.
 
+A screen from the app's own capture (below) goes out in temporal layers when the graphics card's
+encoder can make them; the NVIDIA one can, and elsewhere the stream stays one layer, as before. At
+48 fps and more a quarter of the frames form the base, another quarter a middle layer coded from the
+base only, and every other frame sits on top, where no other frame refers to it. Each packet says
+which layer its frame is in. So the tree no longer sends everyone the same stream: every
+participant that passes a stream on keeps, for each child in the tree, the layers the path to it
+carries, from that child's own reports. When they are heavy again and again while the sender's own
+path is not, the child loses the top layer, then the middle one, down to the base at a quarter of
+the frame rate; after four seconds clean it gets a layer back, and a layer lost again soon after it
+came back makes the next try wait twice as long, up to half a minute. Frames are left out whole,
+base frames and keyframes always go, and a change waits for the next base frame, so what arrives
+always decodes. The child tells a frame left out from a lost one by counts each packet carries,
+asks again only for what was really lost, and its webview gets the packets numbered without holes.
+Forward error correction is kept per layer, so the repair packets a child gets cover only what it
+gets. Only a participant on this version whose own children in the tree are on it too is ever cut:
+one on 0.2.0 or earlier gets the whole stream as before, and a stream from 0.2.0 or from the
+browser has no layers and goes whole.
+
 On Windows the app captures the screen itself rather than through the built-in browser, which
 copies every frame through system memory and holds itself to half a processor core: screens shared
 that way stayed at 30-50 fps. EchoFog takes the frames from Windows.Graphics.Capture, scales and
