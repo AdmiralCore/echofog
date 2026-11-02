@@ -453,6 +453,13 @@ func (d *MediaDispatcher) processVideo(rawBytes []byte, fromPeer types.PeerID, r
 		return nil
 	}
 	if p.Kind == FrameVideoFEC {
+		// a parity cannot be authenticated by itself: it is taken only from the stream's feeder,
+		// as no other member's must shadow the real one (the first copy of a parity is the one
+		// kept) or rebuild a fragment in its name
+		if !d.fromFeeder(p.StreamID, fromPeer, now) || !d.currentFeeder(p.StreamID, fromPeer) {
+			d.outsiders.Add(1)
+			return nil
+		}
 		return d.processParity(p, rawBytes, fromPeer, now)
 	}
 	if d.dedup.seen(p) {
@@ -465,7 +472,7 @@ func (d *MediaDispatcher) processVideo(rawBytes []byte, fromPeer types.PeerID, r
 		return nil
 	}
 	watching := d.IsWatchingStream(p.StreamID)
-	plain, raws, ok := d.authenticate(p, rawBytes, watching || p.Kind == FrameStreamAudio, now)
+	plain, raws, ok := d.authenticateUnit(p, rawBytes, watching || p.Kind == FrameStreamAudio, rebuilt, now)
 	if !ok {
 		return nil
 	}
@@ -518,7 +525,7 @@ func (d *MediaDispatcher) processVideo(rawBytes []byte, fromPeer types.PeerID, r
 	if p.Kind == FrameVideo {
 		for _, raw := range raws {
 			if f, err := Decode(raw); err == nil {
-				d.recoverFragments(p.StreamID, d.fecRx.fragment(f, now), fromPeer)
+				d.recoverFragments(p.StreamID, d.fecRx.fragment(f, now))
 			}
 		}
 	}
@@ -572,21 +579,23 @@ func (d *MediaDispatcher) processParity(p *MediaPacket, rawBytes []byte, fromPee
 			d.markForwarded(p.StreamID, now)
 		}
 	}
-	rebuilt, err := d.fecRx.parity(p, now)
+	rebuilt, err := d.fecRx.parity(p, fromPeer, now)
 	if err != nil {
 		d.malformed.Add(1)
 		d.logMalformed("fec", fromPeer, nil, err)
 		return nil
 	}
 	if rebuilt != nil {
-		d.recoverFragments(p.StreamID, [][]byte{rebuilt}, fromPeer)
+		d.recoverFragments(p.StreamID, []fecRebuilt{{rebuilt, fromPeer}})
 	}
 	return nil
 }
 
 // recoverFragments takes in fragments rebuilt from FEC parity as if they had come from the peer
-// that sent what completed them: they are forwarded to children and delivered like any other.
-func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, from types.PeerID) {
+// that sent the parity: they are checked against the feeder again, and forwarded to children and
+// delivered like any other once their unit authenticated. A rebuilt fragment never takes the
+// place of one that came, and a unit it does not authenticate with waits for the real one.
+func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt []fecRebuilt) {
 	if len(rebuilt) == 0 {
 		return
 	}
@@ -595,8 +604,19 @@ func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, fr
 	d.streamLocked(streamID).Recovered += uint64(len(rebuilt))
 	d.mu.Unlock()
 	for _, f := range rebuilt {
-		_ = d.processVideo(f, from, true)
+		_ = d.processVideo(f.raw, f.from, true)
 	}
+}
+
+// currentFeeder reports whether from is the peer the stream's tree feeds this node from now (not
+// the one before it, which fromFeeder still takes units from for a moment). With no tree for the
+// stream known here, any member of the call is.
+func (d *MediaDispatcher) currentFeeder(streamID string, from types.PeerID) bool {
+	if d.streamEngine == nil {
+		return true
+	}
+	up, ok := d.streamEngine.GetUpstream(streamID, d.selfID)
+	return !ok || up == from
 }
 
 // authenticate gathers the fragments of a unit and opens it with the keys it may be sealed with;
@@ -610,15 +630,22 @@ func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, fr
 // A relay that only passes video on takes it from its feeder on the stream alone (fromFeeder), so
 // no other member can slip a unit in ahead of the real one there.
 func (d *MediaDispatcher) authenticate(p *MediaPacket, raw []byte, verify bool, now time.Time) ([]byte, [][]byte, bool) {
-	ct, raws, complete := d.reasm.add(p, raw, now)
+	return d.authenticateUnit(p, raw, verify, false, now)
+}
+
+// authenticateUnit is authenticate for a fragment that came (rebuilt false) or was rebuilt here
+// from FEC parity. A unit completed with a rebuilt fragment that does not open is kept pending
+// without it (reassembler.settle).
+func (d *MediaDispatcher) authenticateUnit(p *MediaPacket, raw []byte, verify, rebuilt bool, now time.Time) (plain []byte, raws [][]byte, ok bool) {
+	ct, raws, complete := d.reasm.add(p, raw, now, rebuilt)
 	if !complete {
 		return nil, nil, false
 	}
+	defer func() { d.reasm.settle(p, ok) }()
 	d.mu.RLock()
 	keys := d.openKeysLocked()
 	d.mu.RUnlock()
 
-	var plain []byte
 	var used mediaKey
 	err := ErrBadKey
 	for _, key := range keys {
@@ -652,6 +679,7 @@ func (d *MediaDispatcher) authenticate(p *MediaPacket, raw []byte, verify bool, 
 	}
 	if !d.dedup.mark(p, now) {
 		d.duplicates.Add(1) // a copy that went the other way was faster
+		d.reasm.settle(p, true)
 		return nil, nil, false
 	}
 	return plain, raws, true

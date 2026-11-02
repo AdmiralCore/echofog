@@ -210,6 +210,7 @@ func TestFECParityWaitsForASecondFragment(t *testing.T) {
 		p, _ := Decode(w)
 		assert.Empty(t, r.fragment(p, now))
 	}
+	feeder := pid(7)
 	var lane2 fecParityOut
 	for _, p := range par {
 		if p.lane == 2 {
@@ -218,17 +219,18 @@ func TestFECParityWaitsForASecondFragment(t *testing.T) {
 	}
 	pp := (&MediaPacket{Kind: FrameVideoFEC, Seq: lane2.first, Broadcaster: bcast, StreamID: "s1", FragIdx: 2, FragCount: fecLanes, Payload: lane2.payload}).Encode()
 	pkt, _ := Decode(pp)
-	rebuilt, err := r.parity(pkt, now)
+	rebuilt, err := r.parity(pkt, feeder, now)
 	require.NoError(t, err)
 	assert.Nil(t, rebuilt, "two missing: nothing to rebuild yet")
 
 	p, _ := Decode(wire[2]) // the resend
 	out := r.fragment(p, now)
 	require.Len(t, out, 1)
-	assert.Equal(t, wire[6], out[0], "the rebuilt fragment is the sealed one, byte for byte")
+	assert.Equal(t, wire[6], out[0].raw, "the rebuilt fragment is the sealed one, byte for byte")
+	assert.Equal(t, feeder, out[0].from, "it is the parity's sender's, not the resend's")
 	assert.Empty(t, r.fragment(p, now), "the parity is used up")
 
-	_, err = r.parity(&MediaPacket{Kind: FrameVideoFEC, Payload: []byte{1, 2}}, now)
+	_, err = r.parity(&MediaPacket{Kind: FrameVideoFEC, Payload: []byte{1, 2}}, feeder, now)
 	assert.ErrorIs(t, err, errBadFEC)
 }
 
@@ -336,4 +338,81 @@ func TestFECOnABurstyPath(t *testing.T) {
 	t.Logf("dropped %d packets in runs, %d of %d units played, %d fragments rebuilt", dropped, n, units, v.Stats().Recovered)
 	assert.Greater(t, dropped, 15)
 	assert.GreaterOrEqual(t, n, units*98/100, "runs no longer than the lanes are rebuilt")
+}
+
+// A parity cannot be authenticated, so only the stream's feeder's is taken. One that another
+// member sent first is neither relayed nor kept, and does not shadow the real one.
+func TestFECParityOnlyFromTheFeeder(t *testing.T) {
+	kid := pid(3)
+	b, r, bs, rs, _, _ := layerTree(t, kid)
+	for seq := uint16(1); seq <= 20; seq++ {
+		require.NoError(t, b.BroadcastLocalVideo("s1", rtpH264(seq, seq%5 == 0, 1, 1800)))
+	}
+	var real []byte
+	require.Eventually(t, func() bool {
+		for _, f := range bs.to(pid(2)) {
+			if p, _ := Decode(f.data); p.Kind == FrameVideoFEC {
+				real = f.data
+				return true
+			}
+		}
+		return false
+	}, time.Second, 5*time.Millisecond, "the broadcaster sends parities")
+	p, err := Decode(real)
+	require.NoError(t, err)
+	forged := *p
+	forged.Payload = append([]byte(nil), p.Payload...)
+	forged.Payload[len(forged.Payload)-1] ^= 0xff
+	require.NoError(t, r.ProcessIncomingVideo(forged.Encode(), pid(9)))
+	require.NoError(t, r.ProcessIncomingVideo(real, pid(1)))
+	var relayed [][]byte
+	parities := func() [][]byte {
+		var out [][]byte
+		for _, f := range rs.to(kid) {
+			if q, _ := Decode(f.data); q.Kind == FrameVideoFEC {
+				out = append(out, f.data)
+			}
+		}
+		return out
+	}
+	require.Eventually(t, func() bool { return len(parities()) > 0 }, time.Second, 5*time.Millisecond)
+	time.Sleep(30 * time.Millisecond) // a second one would be on its way by now
+	relayed = parities()
+	require.Len(t, relayed, 1, "one parity went on")
+	assert.Equal(t, real, relayed[0], "and it is the feeder's")
+}
+
+// A wrong parity from the feeder rebuilds garbage: the unit it completes does not open. The unit
+// is not lost for it: it keeps the fragment that came, and the real one completes it.
+func TestFECWrongParityDoesNotCostTheUnit(t *testing.T) {
+	_, v, _, consumer, _ := fecPair(t)
+	key := newKey(t)
+	require.NoError(t, v.SetRoomKey(key))
+	wire, rtp := sealedUnits(t, key, pid(1), 5, 2, 1) // units 5 and 6, two fragments each
+	w0, err := Decode(wire[0])
+	require.NoError(t, err)
+	u1, err := Decode(wire[3])
+	require.NoError(t, err)
+	fake := make([]byte, len(u1.Payload))
+	for i := range fake {
+		fake[i] = byte(i*7 + 1)
+	}
+	// a parity over the first fragment of unit 5 and the second of unit 6, whose XOR is wrong
+	members := []fecRef{{5, 0, 2}, {6, 1, 2}}
+	blob := encodeFECPayload(members, []fecFrag{{w0.Timestamp, w0.Payload}, {u1.Timestamp, fake}})
+	parity := (&MediaPacket{Kind: FrameVideoFEC, Seq: 5, Broadcaster: pid(1), StreamID: "s1", FragIdx: 0, FragCount: fecLanes, Payload: blob}).Encode()
+
+	require.NoError(t, v.ProcessIncomingVideo(parity, pid(1)))
+	require.NoError(t, v.ProcessIncomingVideo(wire[2], pid(1))) // unit 6 waits for its second fragment
+	require.NoError(t, v.ProcessIncomingVideo(wire[0], pid(1)))
+	require.NoError(t, v.ProcessIncomingVideo(wire[1], pid(1))) // unit 5 plays; the parity rebuilds a fake one for 6
+	assert.Equal(t, uint64(1), v.Stats().Recovered)
+	_, got := consumer.counts()
+	require.Equal(t, 1, got, "the fake fragment does not open unit 6")
+	require.NoError(t, v.ProcessIncomingVideo(wire[3], pid(1)))
+	_, got = consumer.counts()
+	require.Equal(t, 2, got, "the real fragment completes unit 6")
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	assert.Equal(t, rtp[1], consumer.videoPackets[1].Payload)
 }

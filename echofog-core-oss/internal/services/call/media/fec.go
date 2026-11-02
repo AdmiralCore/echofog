@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/videolayer"
 )
 
@@ -58,11 +59,19 @@ type fecRef struct {
 	count uint8
 }
 
-// fecParity is a parsed parity: the fragments it covers and their XOR.
+// fecParity is a parsed parity: the fragments it covers and their XOR, and the peer it came from.
 type fecParity struct {
 	members []fecRef
 	blob    []byte
 	at      time.Time
+	from    types.PeerID
+}
+
+// fecRebuilt is a wire fragment rebuilt from a parity, and the peer that parity came from: the
+// fragment is taken as that peer's, not as the one's whose fragment completed the group.
+type fecRebuilt struct {
+	raw  []byte
+	from types.PeerID
 }
 
 // fecFrag is one fragment of a unit as the XOR sees it.
@@ -307,7 +316,7 @@ func (r *fecReceiver) streamLocked(k sourceKey) *fecStream {
 
 // fragment records a video fragment and returns the wire fragments that waiting parities can now
 // rebuild.
-func (r *fecReceiver) fragment(p *MediaPacket, now time.Time) [][]byte {
+func (r *fecReceiver) fragment(p *MediaPacket, now time.Time) []fecRebuilt {
 	k := sourceKey{FrameVideo, p.Broadcaster, p.StreamID}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -324,7 +333,7 @@ func (r *fecReceiver) fragment(p *MediaPacket, now time.Time) [][]byte {
 		return nil
 	}
 	u.frags[p.FragIdx] = &fecFrag{p.Timestamp, append([]byte(nil), p.Payload...)}
-	var out [][]byte
+	var out []fecRebuilt
 	for i := 0; i < len(s.parities); i++ {
 		q := s.parities[i]
 		if !q.covers(p.Seq, p.FragIdx) {
@@ -332,7 +341,7 @@ func (r *fecReceiver) fragment(p *MediaPacket, now time.Time) [][]byte {
 		}
 		rebuilt, done := s.repair(k, q)
 		if rebuilt != nil {
-			out = append(out, rebuilt)
+			out = append(out, fecRebuilt{rebuilt, q.from})
 		}
 		if done {
 			s.parities = append(s.parities[:i], s.parities[i+1:]...)
@@ -351,13 +360,14 @@ func (q *fecParity) covers(seq uint32, idx uint8) bool {
 	return false
 }
 
-// parity records a parity and returns the wire fragment it rebuilds, if its group misses exactly
-// one; a parity whose group misses more waits for fragments to come.
-func (r *fecReceiver) parity(p *MediaPacket, now time.Time) ([]byte, error) {
+// parity records a parity that came from from and returns the wire fragment it rebuilds, if its
+// group misses exactly one; a parity whose group misses more waits for fragments to come.
+func (r *fecReceiver) parity(p *MediaPacket, from types.PeerID, now time.Time) ([]byte, error) {
 	q, err := decodeFECPayload(p.Payload, now)
 	if err != nil {
 		return nil, err
 	}
+	q.from = from
 	k := sourceKey{FrameVideo, p.Broadcaster, p.StreamID}
 	r.mu.Lock()
 	defer r.mu.Unlock()

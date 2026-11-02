@@ -278,11 +278,11 @@ func TestReassembler_OutOfOrderAndExpiry(t *testing.T) {
 	now := time.Now()
 	for _, i := range []int{2, 0} {
 		p, _ := Decode(frags[i])
-		_, _, done := r.add(p, frags[i], now)
+		_, _, done := r.add(p, frags[i], now, false)
 		assert.False(t, done)
 	}
 	p, _ := Decode(frags[1])
-	ct, raws, done := r.add(p, frags[1], now)
+	ct, raws, done := r.add(p, frags[1], now, false)
 	require.True(t, done)
 	assert.Equal(t, frags, raws, "the wire fragments, in order, to relay")
 	plain, err := OpenUnit(p, ct, key)
@@ -290,7 +290,7 @@ func TestReassembler_OutOfOrderAndExpiry(t *testing.T) {
 	assert.Equal(t, payload, plain)
 
 	p, _ = Decode(frags[0])
-	_, _, done = r.add(p, frags[0], now)
+	_, _, done = r.add(p, frags[0], now, false)
 	assert.False(t, done)
 	assert.Equal(t, 0, r.expire(now.Add(reassemblyTimeout/2)))
 	assert.Equal(t, 1, r.expire(now.Add(reassemblyTimeout)))
