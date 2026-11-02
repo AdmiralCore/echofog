@@ -283,7 +283,9 @@ func (q *QuicTransport) dial(ctx context.Context, addr string) error {
 			var pconn net.PacketConn = uconn
 			if reality {
 				if q.realityConn != nil {
-					pconn = NewQuicRealityConn(uconn, q)
+					rc := NewQuicRealityConn(uconn, q)
+					rc.browserClient = true
+					pconn = rc.PacketConn()
 				}
 			} else if q.obfs != nil {
 				// Mask the ephemeral socket with the node's shared obfuscator so the rotated noise

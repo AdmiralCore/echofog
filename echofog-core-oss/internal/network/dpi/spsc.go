@@ -11,6 +11,7 @@ var ErrNotPowerTwo = errors.New("size must be a power of 2")
 type packet struct {
 	bufPtr *[]byte
 	n      int
+	oobn   int // control messages, after the datagram at maxDatagram
 	addr   netip.AddrPort
 }
 
