@@ -12,6 +12,11 @@ import (
 // Voice is ~64 kbps per speaker, so a coordinator can feed far more children than a video relay.
 const DefaultCoordinatorFanout = 8
 
+// MaxVoiceFanout bounds how many members one member feeds voice to, whatever relay capacity it
+// claims: its profile is its own word, and a member that claimed a thousand children became the
+// parent of most of the tree, able to mute whom it liked by dropping their sound.
+const MaxVoiceFanout = 8
+
 func relayScore(p PeerNodeProfile) float64 {
 	return float64(p.UploadKbps) - float64(p.RTT.Milliseconds()*10) - float64(p.PacketLossPercent*100)
 }
@@ -97,7 +102,7 @@ func BuildVoiceTopology(callID string, epoch uint64, coordinator types.PeerID, p
 		manifest.ChildrenMap[primary] = append(manifest.ChildrenMap[primary], child)
 
 		if node.MaxRelayChildren > 0 && !node.IsMobile {
-			capacity[child] = node.MaxRelayChildren
+			capacity[child] = min(node.MaxRelayChildren, MaxVoiceFanout)
 			attached = append(attached, child)
 		}
 	}

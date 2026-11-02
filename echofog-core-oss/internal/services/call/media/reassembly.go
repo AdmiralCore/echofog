@@ -22,12 +22,13 @@ type unitKey struct {
 type pendingUnit struct {
 	hdr     MediaPacket
 	frags   [MaxFragments][]byte
+	raws    [MaxFragments][]byte // the wire fragments, relayed once the unit authenticated
 	have    uint16
 	created time.Time
 }
 
-// reassembler joins fragments of a unit; only receivers that consume the media need it,
-// relays forward fragments untouched.
+// reassembler joins fragments of a unit. Every node needs it: a unit is relayed only once it
+// authenticated, so a relay holds the fragments of a unit until the last one came.
 type reassembler struct {
 	mu      sync.Mutex
 	pending map[unitKey]*pendingUnit
@@ -37,10 +38,11 @@ func newReassembler() *reassembler {
 	return &reassembler{pending: make(map[unitKey]*pendingUnit)}
 }
 
-// add returns the full ciphertext once every fragment of the unit has arrived.
-func (r *reassembler) add(p *MediaPacket, now time.Time) ([]byte, bool) {
+// add returns the full ciphertext and the wire fragments (raw is this one) once every fragment
+// of the unit has arrived.
+func (r *reassembler) add(p *MediaPacket, raw []byte, now time.Time) ([]byte, [][]byte, bool) {
 	if p.FragCount == 1 {
-		return p.Payload, true
+		return p.Payload, [][]byte{raw}, true
 	}
 	k := unitKey{p.Kind, p.Broadcaster, p.StreamID, p.Seq}
 
@@ -56,12 +58,13 @@ func (r *reassembler) add(p *MediaPacket, now time.Time) ([]byte, bool) {
 		r.pending[k] = u
 	}
 	if p.FragCount != u.hdr.FragCount {
-		return nil, false
+		return nil, nil, false
 	}
-	u.frags[p.FragIdx] = append([]byte(nil), p.Payload...)
+	u.raws[p.FragIdx] = append([]byte(nil), raw...)
+	u.frags[p.FragIdx] = u.raws[p.FragIdx][len(raw)-len(p.Payload):]
 	u.have |= 1 << p.FragIdx
 	if u.have != (uint16(1)<<p.FragCount)-1 {
-		return nil, false
+		return nil, nil, false
 	}
 	delete(r.pending, k)
 	size := 0
@@ -72,7 +75,7 @@ func (r *reassembler) add(p *MediaPacket, now time.Time) ([]byte, bool) {
 	for i := 0; i < int(p.FragCount); i++ {
 		out = append(out, u.frags[i]...)
 	}
-	return out, true
+	return out, u.raws[:p.FragCount], true
 }
 
 // have reports which fragments of a pending unit have arrived.

@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
 	"time"
 
@@ -67,6 +68,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		waitingSince:   now,
 		lastStatsLog:   now,
 		memberKX:       make(map[types.PeerID][]byte),
+		memberSK:       make(map[types.PeerID][]byte),
 	}
 	if coordinator == m.selfID {
 		room.coordSince = now
@@ -74,8 +76,13 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 	if kx, err := ecdh.X25519().GenerateKey(rand.Reader); err == nil {
 		room.kxPriv = kx // without one this node keeps the room key, as an older one does
 	}
+	room.MyProfile.SignalKX = m.signalKXLocked(room)
+	if _, sk, err := ed25519.GenerateKey(rand.Reader); err == nil && !m.olderNode {
+		room.signPriv = sk // without one the call's units go unsigned, as with an older node
+	}
 
 	room.Dispatcher = media.NewMediaDispatcher(m.selfID, m.sender, m, engine)
+	room.Dispatcher.SetSigningKey(room.signPriv)
 	if err := room.Dispatcher.SetRoomKey(roomKey); err != nil {
 		cancel()
 		room.Dispatcher.Close()
@@ -101,7 +108,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 
 	m.activeRoom = room
 	if room.IsCoordinator {
-		room.ConnectedPeers[m.selfID] = profile
+		room.ConnectedPeers[m.selfID] = room.MyProfile
 		room.memberSeen[m.selfID] = now
 		room.joined, room.everJoined = true, true
 		m.rebuildVoiceLocked(room)
@@ -142,8 +149,9 @@ func (m *CallManager) LeaveRoom() error {
 		if leave, err := m.encodeLocked(room, signaling.ActionLeave, nil); err == nil {
 			sender, log := m.sender, m.logger
 			for _, t := range targets {
+				b := m.sealSignalLocked(room, t, leave)
 				go func(t types.PeerID) {
-					if err := sender.SendRawFrame(t, net_types.TypeCallSignaling, leave); err != nil {
+					if err := sender.SendRawFrame(t, net_types.TypeCallSignaling, b); err != nil {
 						// the peer finds out from the missing heartbeats, only later
 						log.Debug("Could not tell a call peer that we left", "peer", calllog.Peer(t), "err", err)
 					}
@@ -179,6 +187,10 @@ func (m *CallManager) admitLocked(room *ActiveRoomState, peer types.PeerID, prof
 	if known && prev.Backdrop != profile.Backdrop {
 		room.backdropsChanged = true
 	}
+	if len(profile.SignalKX) != 32 {
+		profile.SignalKX = nil
+	}
+	newKX := known && string(prev.SignalKX) != string(profile.SignalKX)
 	room.ConnectedPeers[peer] = profile
 	room.memberSeen[peer] = now
 	delete(room.suspects, peer)
@@ -188,6 +200,8 @@ func (m *CallManager) admitLocked(room *ActiveRoomState, peer types.PeerID, prof
 		m.logger.Info("Call member joined", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer),
 			"members", len(room.ConnectedPeers), "upload_kbps", profile.UploadKbps, "relay_children", profile.MaxRelayChildren)
 		m.rebuildVoiceLocked(room)
+	} else if newKX {
+		m.rebuildVoiceLocked(room) // it restarted: the others must seal its signals to the new key
 	}
 	m.sendRoomSyncLocked(room, peer)
 }
@@ -205,6 +219,7 @@ func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerI
 	delete(room.ConnectedPeers, peer)
 	delete(room.memberSeen, peer)
 	delete(room.memberKX, peer)
+	delete(room.memberSK, peer)
 	if reason == "left" {
 		m.logger.Info("Call member left", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer), "members", len(room.ConnectedPeers))
 	} else {

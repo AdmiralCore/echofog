@@ -95,6 +95,58 @@ func TestRoom_MediaKeyRotatesWhenAMemberLeaves(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return nodes[2].log.count(media.FrameAudio, nodes[1].id, "voice") > before
 	}, 5*time.Second, 20*time.Millisecond, "voice did not get through on the new key")
+	for _, nd := range nodes[:3] {
+		d := nd.cm.dispatcher()
+		assert.True(t, d.SignsUnits(), "every member signs: units under the new key carry their sender's signature")
+		assert.Zero(t, d.Stats().Forged, "and every one of them checks out")
+	}
+}
+
+// A member of a build with key rotation but without unit signatures sends no signing key: the
+// members still move to a new key, but its units go unsigned, and so do everybody's.
+func TestRoom_MemberWithoutSigningKeyGetsAnUnsignedKey(t *testing.T) {
+	m := newMesh()
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	d := media.NewMediaDispatcher(types.PeerID{}, nil, nil, nil)
+	require.NoError(t, d.SetRoomKey(key))
+	roomID := d.SendKeyID()
+
+	nodes := make([]*testNode, 3)
+	for i := range nodes {
+		s := newTestSigner()
+		cm := newCallManager(meshPort{m, s.id()}, s, s.id())
+		log := &mediaLog{units: make(map[string]map[uint32]bool)}
+		cm.OnMedia = log.tap
+		nodes[i] = &testNode{cm: cm, id: s.id(), log: log}
+		m.mu.Lock()
+		m.nodes[s.id()] = cm
+		m.mu.Unlock()
+	}
+	nodes[2].cm.unsignedNode = true
+	for _, nd := range nodes {
+		require.NoError(t, nd.cm.JoinRoom("room-1", nodes[0].id, key, tree.PeerNodeProfile{UploadKbps: 40000, MaxRelayChildren: 2}))
+	}
+	t.Cleanup(func() {
+		for _, nd := range nodes {
+			_ = nd.cm.LeaveRoom()
+		}
+	})
+	require.Eventually(t, func() bool {
+		ids := sendKeyIDs(nodes, nil)
+		for id, n := range ids {
+			return n == 3 && id != roomID
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the members never moved to a shared new key")
+	for _, nd := range nodes {
+		assert.False(t, nd.cm.dispatcher().SignsUnits(), "a member without a signing key could not check signatures")
+	}
+	before := nodes[2].log.count(media.FrameAudio, nodes[1].id, "voice")
+	require.NoError(t, nodes[1].cm.dispatcher().BroadcastLocalAudio([]byte("hello, unsigned")))
+	require.Eventually(t, func() bool {
+		return nodes[2].log.count(media.FrameAudio, nodes[1].id, "voice") > before
+	}, 5*time.Second, 20*time.Millisecond, "the member without a signing key hears nothing")
 }
 
 // With a node of an older version in the call, which cannot take a new key, everybody stays on
@@ -130,6 +182,9 @@ func TestRoom_OlderNodeKeepsEverybodyOnTheRoomKey(t *testing.T) {
 	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 5*time.Second, 20*time.Millisecond)
 	time.Sleep(rekeyDelay + media.MediaKeySwitch + 500*time.Millisecond)
 	assert.Equal(t, map[string]int{roomID: 3}, sendKeyIDs(nodes, nil))
+	for _, nd := range nodes {
+		assert.False(t, nd.cm.dispatcher().SignsUnits(), "the room key is never signed under")
+	}
 
 	before := nodes[2].log.count(media.FrameAudio, nodes[1].id, "voice")
 	require.NoError(t, nodes[1].cm.dispatcher().BroadcastLocalAudio([]byte("hello, older node")))

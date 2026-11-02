@@ -225,6 +225,28 @@ it, so what is said from then on is closed to them although they still hold the 
 member on a version from before this (0.2.0 and earlier) cannot take a new key; while one is in
 the call everybody stays on the invitation's key, as before.
 
+A shared key alone would let any participant make up sound or a picture in another's name. So
+each participant also makes a signing key (Ed25519) for the call and sends it with its join; the
+coordinator hands the participants' signing keys out with every new media key, and each packet
+under that key ends with its sender's signature. Sound is checked on every hop, video by those
+who watch it, and video is taken only from the participant the stream's tree feeds you from, so
+nobody else can slip a packet in ahead of the real one. Under the invitation's key (while a
+participant on 0.2.0 or earlier is in the call) packets go unsigned, as before.
+
+Each participant that passes a packet on first checks that it opens under one of the call's keys,
+and only then counts its number as seen. A packet that does not open is dropped right there and
+shadows nothing: sending another participant's next packet numbers first no longer mutes them for
+everyone further down the tree. A participant resends lost video only to its own children in the
+stream's tree, at most 96 KB for one request and about 1 MB a second for one child, so a small
+request cannot turn it into a firehose aimed at someone else.
+
+The call's own messages (who is in it, the shape of the trees, who is speaking, the streams and
+their rates) are signed by their sender. Between two participants on this version they are also
+sealed end to end, under a key from X25519 between the two participants' keys for the call, so a
+relay they cross on the way reads none of it. A participant on 0.2.0 or earlier gets them plain, as
+before, and the very first join request goes plain too, as the newcomer does not know the
+coordinator's key yet.
+
 There is no central media server. Instead, the people in the call carry each other's streams in a
 **relay tree**. The person sharing their screen sends it to a few participants; each of them
 forwards it to a few more, and so on. How many others a person feeds depends on **their own measured

@@ -1,6 +1,7 @@
 package media
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
@@ -39,6 +40,7 @@ type DispatcherStats struct {
 	FragmentsRelayed uint64
 	Duplicates       uint64
 	DecryptFailures  uint64
+	Forged           uint64 // units that opened but were not signed by the member they name
 	Malformed        uint64
 	IncompleteUnits  uint64
 	Retransmitted    uint64 // fragments resent to children from the retransmit ring
@@ -60,7 +62,8 @@ type StreamCounters struct {
 }
 
 // MediaDispatcher forwards media fragments along the call trees and delivers decrypted units
-// to the local consumer. Relays never decrypt: they forward fragments as received.
+// to the local consumer. Every hop opens a unit before it relays it (see authenticate), so
+// nothing forged travels further than the first member it reaches.
 type MediaDispatcher struct {
 	selfID       types.PeerID
 	outbox       *Outbox
@@ -69,10 +72,11 @@ type MediaDispatcher struct {
 
 	mu      sync.RWMutex
 	roomKey []byte // the invite's key: what everybody starts with, always accepted
-	// The key the coordinator handed out last (curKey), sent with from curFrom on, and the one before
-	// (prevKey), still sent until then and accepted while late units arrive. See SetMediaKey.
-	curKey, prevKey  []byte
+	// The key the coordinator handed out last (cur), sent with from curFrom on, and the one before
+	// (prev), still sent until then and accepted while late units arrive. See SetMediaKey.
+	cur, prev        mediaKey
 	curFrom          time.Time
+	signKey          ed25519.PrivateKey // this node's signing key for the call, see SetSigningKey
 	voiceManifest    *tree.TreeManifest
 	inCall           map[types.PeerID]bool // every peer the voice tree names, built with it
 	upstreamOverride types.PeerID
@@ -89,6 +93,8 @@ type MediaDispatcher struct {
 	rtt              map[string]time.Duration          // stream -> smoothed time a NACK takes to be answered
 	keyWanted        map[string]time.Time              // stream -> when we asked for a keyframe that has not come yet
 	streamStats      map[string]*StreamCounters
+	feeders          map[string]feederState         // stream -> the peer the tree feeds us from, see fromFeeder
+	resend           map[types.PeerID]*resendBudget // child -> what it may still pull from the ring
 
 	audioSeq atomic.Uint32
 	dedup    *dedupTable
@@ -107,6 +113,7 @@ type MediaDispatcher struct {
 	OnVideoLoss func(streamID string, broadcaster types.PeerID)
 
 	audioDelivered, videoDelivered, relayed, duplicates, decryptFailures, malformed, incomplete atomic.Uint64
+	forged                                                                                      atomic.Uint64 // opened, but not signed by the member it names
 	outsiders                                                                                   atomic.Uint64 // media from a peer outside the call, dropped
 	retransmitted, nacked, recovered                                                            atomic.Uint64
 
@@ -182,17 +189,44 @@ func (d *MediaDispatcher) SetRoomKey(key []byte) error {
 // others get theirs at about the same time, and until then they could not open it.
 const MediaKeySwitch = 2 * time.Second
 
+// mediaKey is a key units may be sealed with. A key handed out to members that all sign names
+// each one's signing key for the call: every unit under it ends with its sender's signature, so a
+// member, who can seal under the key as well as anybody, still cannot pass a unit off as another's.
+type mediaKey struct {
+	key     []byte
+	signers map[types.PeerID]ed25519.PublicKey // nil: units under this key are not signed
+}
+
+// SetSigningKey sets this node's Ed25519 key for the call; it signs every unit sent under a key
+// whose members all sign.
+func (d *MediaDispatcher) SetSigningKey(priv ed25519.PrivateKey) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.signKey = priv
+}
+
 // SetMediaKey takes the call's new media key, handed out by the coordinator when the members
 // changed: it is accepted at once and sent with after MediaKeySwitch. Whoever left never gets it,
-// so what is said from then on is closed to them although they hold the invite.
-func (d *MediaDispatcher) SetMediaKey(key []byte, now time.Time) error {
+// so what is said from then on is closed to them although they hold the invite. signers, when not
+// nil, are the signing keys of every member the key went to: units under it must carry their
+// sender's signature.
+func (d *MediaDispatcher) SetMediaKey(key []byte, signers map[types.PeerID]ed25519.PublicKey, now time.Time) error {
 	if len(key) != keyLen {
 		return ErrBadKey
 	}
+	var sk map[types.PeerID]ed25519.PublicKey
+	if signers != nil {
+		sk = make(map[types.PeerID]ed25519.PublicKey, len(signers))
+		for id, pub := range signers {
+			if len(pub) == ed25519.PublicKeySize {
+				sk[id] = append(ed25519.PublicKey(nil), pub...)
+			}
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.prevKey = d.sendKeyLocked(now)
-	d.curKey = append([]byte(nil), key...)
+	d.prev = d.sendKeyLocked(now)
+	d.cur = mediaKey{key: append([]byte(nil), key...), signers: sk}
 	d.curFrom = now.Add(MediaKeySwitch)
 	return nil
 }
@@ -203,34 +237,41 @@ func (d *MediaDispatcher) SendKeyID() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	k := d.sendKeyLocked(time.Now())
-	if k == nil {
+	if k.key == nil {
 		return ""
 	}
-	h := sha256.Sum256(k)
+	h := sha256.Sum256(k.key)
 	return hex.EncodeToString(h[:4])
 }
 
+// SignsUnits reports whether units go out signed now, for the logs and tests.
+func (d *MediaDispatcher) SignsUnits() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.sendKeyLocked(time.Now()).signers != nil && d.signKey != nil
+}
+
 // sendKeyLocked is the key units go out with now.
-func (d *MediaDispatcher) sendKeyLocked(now time.Time) []byte {
-	if d.curKey != nil && !now.Before(d.curFrom) {
-		return d.curKey
+func (d *MediaDispatcher) sendKeyLocked(now time.Time) mediaKey {
+	if d.cur.key != nil && !now.Before(d.curFrom) {
+		return d.cur
 	}
-	if d.prevKey != nil {
-		return d.prevKey
+	if d.prev.key != nil {
+		return d.prev
 	}
-	return d.roomKey
+	return mediaKey{key: d.roomKey}
 }
 
 // openKeysLocked are the keys a unit may be sealed with, the likeliest first.
-func (d *MediaDispatcher) openKeysLocked() [][]byte {
-	out := make([][]byte, 0, 3)
-	for _, k := range [][]byte{d.curKey, d.prevKey, d.roomKey} {
-		if k == nil {
+func (d *MediaDispatcher) openKeysLocked() []mediaKey {
+	out := make([]mediaKey, 0, 3)
+	for _, k := range []mediaKey{d.cur, d.prev, {key: d.roomKey}} {
+		if k.key == nil {
 			continue
 		}
 		dup := false
 		for _, o := range out {
-			if string(o) == string(k) {
+			if string(o.key) == string(k.key) {
 				dup = true
 			}
 		}
@@ -353,8 +394,12 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 		return nil
 	}
 	now := time.Now()
-	if !d.dedup.accept(p, now) {
+	if d.dedup.seen(p) {
 		d.duplicates.Add(1)
+		return nil
+	}
+	plain, raws, ok := d.authenticate(p, rawBytes, true, now)
+	if !ok {
 		return nil
 	}
 
@@ -365,11 +410,11 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 	for _, n := range neighbors {
 		if n != fromPeer && n != p.Broadcaster {
 			d.relayed.Add(1)
-			d.sendAudio(n, src, net_types.TypeCallMediaAudio, [][]byte{rawBytes}, now)
+			d.sendAudio(n, src, net_types.TypeCallMediaAudio, raws, now)
 		}
 	}
 
-	d.deliver(p, now)
+	d.consume(p, plain)
 	return nil
 }
 
@@ -392,8 +437,20 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		d.outsiders.Add(1)
 		return nil
 	}
-	if !d.dedup.accept(p, now) {
+	if p.Kind == FrameVideoFEC {
+		return d.processParity(p, rawBytes, fromPeer, now)
+	}
+	if d.dedup.seen(p) {
 		d.duplicates.Add(1)
+		return nil
+	}
+	if !d.fromFeeder(p.StreamID, fromPeer, now) {
+		d.outsiders.Add(1)
+		return nil
+	}
+	watching := d.IsWatchingStream(p.StreamID)
+	plain, raws, ok := d.authenticate(p, rawBytes, watching || p.Kind == FrameStreamAudio, now)
+	if !ok {
 		return nil
 	}
 
@@ -405,43 +462,73 @@ func (d *MediaDispatcher) ProcessIncomingVideo(rawBytes []byte, fromPeer types.P
 		}
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
 			if child != fromPeer && child != p.Broadcaster {
-				d.relayed.Add(1)
+				d.relayed.Add(uint64(len(raws)))
 				if p.Kind == FrameStreamAudio {
-					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, [][]byte{rawBytes}, now)
+					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, raws, now)
 				} else {
-					d.outbox.Send(child, class, net_types.TypeCallMediaVideo, rawBytes)
+					for _, raw := range raws {
+						d.outbox.Send(child, class, net_types.TypeCallMediaVideo, raw)
+					}
 				}
 				forwarded = true
 			}
 		}
 		if forwarded {
 			if p.Kind == FrameVideo {
-				d.ring.put(p.StreamID, p.Seq, p.FragIdx, p.FragCount, rawBytes, now)
+				for i, raw := range raws {
+					d.ring.put(p.StreamID, p.Seq, uint8(i), p.FragCount, raw, now)
+				}
 			}
 			d.markForwarded(p.StreamID, now)
 		}
 	}
 
-	if p.Kind == FrameVideoFEC {
-		rebuilt, err := d.fecRx.parity(p, now)
-		if err != nil {
-			d.malformed.Add(1)
-			d.logMalformed("fec", fromPeer, nil, err)
-			return nil
-		}
-		if rebuilt != nil {
-			d.recoverFragments(p.StreamID, [][]byte{rebuilt}, fromPeer)
-		}
-		return nil
-	}
-	if d.IsWatchingStream(p.StreamID) {
+	if watching {
 		if p.Kind == FrameVideo {
-			d.rx.add(p, len(rawBytes), now)
+			for _, raw := range raws {
+				d.rx.add(p, len(raw), now)
+			}
 		}
-		d.deliver(p, now)
+		d.consume(p, plain)
 	}
 	if p.Kind == FrameVideo {
-		d.recoverFragments(p.StreamID, d.fecRx.fragment(p, now), fromPeer)
+		for _, raw := range raws {
+			if f, err := Decode(raw); err == nil {
+				d.recoverFragments(p.StreamID, d.fecRx.fragment(f, now), fromPeer)
+			}
+		}
+	}
+	return nil
+}
+
+// processParity takes a FEC parity: it is relayed as it came, since it cannot be authenticated by
+// itself; what it rebuilds is checked like any other fragment.
+func (d *MediaDispatcher) processParity(p *MediaPacket, rawBytes []byte, fromPeer types.PeerID, now time.Time) error {
+	if !d.dedup.acceptFragment(p, now) {
+		d.duplicates.Add(1)
+		return nil
+	}
+	if d.streamEngine != nil {
+		forwarded := false
+		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
+			if child != fromPeer && child != p.Broadcaster {
+				d.relayed.Add(1)
+				d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, rawBytes)
+				forwarded = true
+			}
+		}
+		if forwarded {
+			d.markForwarded(p.StreamID, now)
+		}
+	}
+	rebuilt, err := d.fecRx.parity(p, now)
+	if err != nil {
+		d.malformed.Add(1)
+		d.logMalformed("fec", fromPeer, nil, err)
+		return nil
+	}
+	if rebuilt != nil {
+		d.recoverFragments(p.StreamID, [][]byte{rebuilt}, fromPeer)
 	}
 	return nil
 }
@@ -461,30 +548,69 @@ func (d *MediaDispatcher) recoverFragments(streamID string, rebuilt [][]byte, fr
 	}
 }
 
-func (d *MediaDispatcher) deliver(p *MediaPacket, now time.Time) {
-	ct, complete := d.reasm.add(p, now)
-	if !complete || d.consumer == nil {
-		return
+// authenticate gathers the fragments of a unit and opens it with the keys it may be sealed with;
+// under a key whose members sign, with verify it also checks the sender's signature. Only a unit
+// that passes is taken: it is marked in the replay window, relayed and played; anything else
+// (forged, tampered, under a key we do not hold) is dropped right here, without a mark that would
+// shadow the real unit. It returns the plaintext and the unit's wire fragments.
+//
+// Sound is verified on every hop (50 units a second per speaker cost nothing); video only where it
+// is watched, as a signature check costs ~60 us and a 4K stream carries thousands of units a second.
+// A relay that only passes video on takes it from its feeder on the stream alone (fromFeeder), so
+// no other member can slip a unit in ahead of the real one there.
+func (d *MediaDispatcher) authenticate(p *MediaPacket, raw []byte, verify bool, now time.Time) ([]byte, [][]byte, bool) {
+	ct, raws, complete := d.reasm.add(p, raw, now)
+	if !complete {
+		return nil, nil, false
 	}
 	d.mu.RLock()
 	keys := d.openKeysLocked()
 	d.mu.RUnlock()
 
 	var plain []byte
+	var used mediaKey
 	err := ErrBadKey
 	for _, key := range keys {
-		if plain, err = OpenUnit(p, ct, key); err == nil {
+		if plain, err = OpenUnit(p, ct, key.key); err == nil {
+			used = key
 			break
 		}
 	}
+	if err == nil && used.signers != nil {
+		if verify {
+			plain, err = VerifyUnitPayload(p, plain, used.signers[p.Broadcaster])
+		} else if len(plain) >= UnitSigLen {
+			plain = plain[:len(plain)-UnitSigLen]
+		} else {
+			err = ErrBadUnitSignature
+		}
+		if err != nil {
+			d.forged.Add(1) // a member sealed it, but not the one it names
+			d.lim.Log(d.log, slog.LevelWarn, "forged:"+p.StreamID+":"+p.Broadcaster.String(),
+				"Dropped media unit not signed by the member it names", "stream", p.StreamID, "kind", kindName(p.Kind),
+				"broadcaster", calllog.Peer(p.Broadcaster), "forged_total", d.forged.Load())
+			return nil, nil, false
+		}
+	}
 	if err != nil {
-		d.decryptFailures.Add(1) // tampered, wrong key, or forged header: never play it
+		d.decryptFailures.Add(1) // tampered, wrong key, or forged header: never relay or play it
 		d.lim.Log(d.log, slog.LevelWarn, "decrypt:"+p.StreamID+":"+p.Broadcaster.String(),
 			"Dropped media unit that failed to decrypt", "stream", p.StreamID, "kind", kindName(p.Kind),
 			"broadcaster", calllog.Peer(p.Broadcaster), "failures_total", d.decryptFailures.Load(), "err", err)
+		return nil, nil, false
+	}
+	if !d.dedup.mark(p, now) {
+		d.duplicates.Add(1) // a copy that went the other way was faster
+		return nil, nil, false
+	}
+	return plain, raws, true
+}
+
+// consume hands an authenticated unit to the local consumer.
+func (d *MediaDispatcher) consume(p *MediaPacket, plain []byte) {
+	if d.consumer == nil {
 		return
 	}
-	d.dedup.commit(p) // authentic: now it may move the replay window
 	unit := *p
 	unit.FragIdx, unit.FragCount, unit.Payload = 0, 1, plain
 
@@ -884,18 +1010,23 @@ func (d *MediaDispatcher) sendPulses(now time.Time) {
 func (d *MediaDispatcher) seal(kind FrameKind, streamID string, seq uint32, payload []byte, reserve int) ([][]byte, error) {
 	d.mu.RLock()
 	key := d.sendKeyLocked(time.Now())
+	signKey := d.signKey
 	d.mu.RUnlock()
-	if key == nil {
+	if key.key == nil {
 		return nil, ErrBadKey // refuse to leak plaintext media
 	}
-	return sealUnit(&MediaPacket{
+	unit := &MediaPacket{
 		Kind:        kind,
 		Seq:         seq,
 		Timestamp:   uint32(time.Now().UnixMilli()),
 		Broadcaster: d.selfID,
 		StreamID:    streamID,
 		Payload:     payload,
-	}, key, reserve)
+	}
+	if key.signers != nil && signKey != nil {
+		unit.Payload = SignUnitPayload(unit, payload, signKey)
+	}
+	return sealUnit(unit, key.key, reserve)
 }
 
 // Stats returns a snapshot of media counters.
@@ -906,6 +1037,7 @@ func (d *MediaDispatcher) Stats() DispatcherStats {
 		FragmentsRelayed: d.relayed.Load(),
 		Duplicates:       d.duplicates.Load(),
 		DecryptFailures:  d.decryptFailures.Load(),
+		Forged:           d.forged.Load(),
 		Malformed:        d.malformed.Load(),
 		IncompleteUnits:  d.incomplete.Load(),
 		Retransmitted:    d.retransmitted.Load(),
@@ -959,6 +1091,11 @@ func (d *MediaDispatcher) housekeeping() {
 					delete(d.watchSince, k)
 				}
 			}
+			for k, b := range d.resend {
+				if now.Sub(b.at) > 10*time.Second {
+					delete(d.resend, k) // refilled to the brim by now anyway
+				}
+			}
 			d.mu.Unlock()
 		}
 	}
@@ -976,4 +1113,43 @@ func (d *MediaDispatcher) fromCall(from, broadcaster types.PeerID) bool {
 	}
 	in := func(id types.PeerID) bool { return d.inCall[id] || id == d.upstreamOverride || d.adopted[id] }
 	return in(from) && in(broadcaster)
+}
+
+// feederGrace is how long units of a stream are still taken from the feeder before the last tree
+// change: the coordinator's update reaches the feeders and their children at slightly different
+// times.
+const feederGrace = 3 * time.Second
+
+type feederState struct {
+	cur, prev types.PeerID
+	prevUntil time.Time
+}
+
+// fromFeeder reports whether a stream's units may be taken from this peer: the one the stream's
+// tree feeds this node from (or fed it from a moment ago). Any other member could otherwise send a
+// unit, sealed under the call's key, ahead of the real one, and on a relay that does not watch the
+// stream, and so does not check signatures, it would take the real unit's place for the subtree.
+// With no tree for the stream known here, everything from the call is taken.
+func (d *MediaDispatcher) fromFeeder(streamID string, from types.PeerID, now time.Time) bool {
+	if d.streamEngine == nil {
+		return true
+	}
+	up, ok := d.streamEngine.GetUpstream(streamID, d.selfID)
+	if !ok {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.feeders == nil {
+		d.feeders = make(map[string]feederState)
+	}
+	f := d.feeders[streamID]
+	if f.cur != up {
+		if f.cur != (types.PeerID{}) {
+			f.prev, f.prevUntil = f.cur, now.Add(feederGrace)
+		}
+		f.cur = up
+		d.feeders[streamID] = f
+	}
+	return from == up || (from == f.prev && now.Before(f.prevUntil))
 }

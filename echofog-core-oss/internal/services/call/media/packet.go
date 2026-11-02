@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -51,6 +52,9 @@ const (
 	keyLen        = 32
 	gcmNonceLen   = 12
 	gcmTagLen     = 16
+	// UnitSigLen is the sender's Ed25519 signature at the end of a unit's plaintext under a key
+	// whose members all sign (see SetMediaKey).
+	UnitSigLen = ed25519.SignatureSize
 )
 
 var (
@@ -62,6 +66,7 @@ var (
 	ErrDecryptionFailed = errors.New("media decryption failed")
 	ErrEncryptionFailed = errors.New("media encryption failed")
 	ErrBadKey           = errors.New("room key must be 32 bytes for AES-256-GCM")
+	ErrBadUnitSignature = errors.New("media unit is not signed by its broadcaster")
 )
 
 // MediaPacket is one fragment on the wire, or a fully reassembled and decrypted unit when
@@ -182,9 +187,38 @@ func SealOverhead(streamIDLen int) int {
 }
 
 // VideoUnitBudget is the largest video unit (one RTP packet) of a stream with this ID length that
-// travels as a single fragment, with the room FEC keeps beside it.
+// travels as a single fragment, with the room FEC keeps beside it and the sender's signature.
 func VideoUnitBudget(streamIDLen int) int {
-	return fragmentPayload(streamIDLen) - fecReserve - gcmNonceLen - gcmTagLen
+	return fragmentPayload(streamIDLen) - fecReserve - gcmNonceLen - gcmTagLen - UnitSigLen
+}
+
+const unitSigContext = "echofog-call-unit\x00"
+
+// unitSigningBytes is what a sender signs of a unit: the header (kind, seq, timestamp, sender,
+// stream) and the plaintext, so a signature cannot be moved to another unit or another sender.
+func unitSigningBytes(hdr *MediaPacket, payload []byte) []byte {
+	h := hdr.unitHeader()
+	out := make([]byte, 0, len(unitSigContext)+len(h)+len(payload))
+	return append(append(append(out, unitSigContext...), h...), payload...)
+}
+
+// SignUnitPayload returns the payload with the sender's signature over the unit appended.
+func SignUnitPayload(hdr *MediaPacket, payload []byte, priv ed25519.PrivateKey) []byte {
+	sig := ed25519.Sign(priv, unitSigningBytes(hdr, payload))
+	return append(append(make([]byte, 0, len(payload)+UnitSigLen), payload...), sig...)
+}
+
+// VerifyUnitPayload checks the signature at the end of a signed unit's plaintext against the
+// sender's key and returns the payload without it.
+func VerifyUnitPayload(hdr *MediaPacket, plain []byte, pub ed25519.PublicKey) ([]byte, error) {
+	if len(plain) < UnitSigLen || len(pub) != ed25519.PublicKeySize {
+		return nil, ErrBadUnitSignature
+	}
+	body, sig := plain[:len(plain)-UnitSigLen], plain[len(plain)-UnitSigLen:]
+	if !ed25519.Verify(pub, unitSigningBytes(hdr, body), sig) {
+		return nil, ErrBadUnitSignature
+	}
+	return body, nil
 }
 
 // OpenUnit authenticates and decrypts a reassembled unit; hdr supplies the shared header fields.

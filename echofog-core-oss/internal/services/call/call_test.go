@@ -46,8 +46,10 @@ type mesh struct {
 	nodes map[types.PeerID]*CallManager
 	dead  map[types.PeerID]bool
 	sent  atomic.Uint64
-	drop  func(t net_types.MessageType, payload []byte) bool // simulated packet loss
-	links map[[2]types.PeerID]*shaper                        // bottlenecks, by (from, to)
+	drop  func(t net_types.MessageType, payload []byte) bool                   // simulated packet loss
+	links map[[2]types.PeerID]*shaper                                          // bottlenecks, by (from, to)
+	tap   func(from, to types.PeerID, t net_types.MessageType, payload []byte) // sees every frame sent
+	block func(from, to types.PeerID, t net_types.MessageType) bool            // a link that swallows frames
 }
 
 func newMesh() *mesh {
@@ -114,11 +116,18 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	cut := m.dead[from] || m.dead[to]
 	drop := m.drop
 	link := m.links[[2]types.PeerID{from, to}]
+	tap := m.tap
+	if m.block != nil && m.block(from, to, t) {
+		cut = true
+	}
 	m.mu.Unlock()
+	if tap != nil {
+		tap(from, to, t, payload)
+	}
 	if target == nil {
 		return fmt.Errorf("peer %s not connected", to)
 	}
-	if cut || (drop != nil && drop(t, payload)) {
+	if cut || (drop != nil && drop(t, target.peekSignal(from, payload))) {
 		return nil // a crashed peer or a lossy link silently swallows traffic
 	}
 	m.sent.Add(1)
@@ -141,6 +150,20 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 		}
 	})
 	return nil
+}
+
+// peekSignal is a sealed signal as its receiver opens it, for tests that look at signals on the
+// wire; anything else comes back as it is.
+func (cm *CallManager) peekSignal(from types.PeerID, payload []byte) []byte {
+	if !isSealedSignal(payload) {
+		return payload
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if inner, err := cm.openSignalLocked(cm.activeRoom, from, payload); err == nil {
+		return inner
+	}
+	return payload
 }
 
 func (m *mesh) kill(id types.PeerID) {
