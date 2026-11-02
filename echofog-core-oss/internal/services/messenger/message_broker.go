@@ -56,6 +56,8 @@ type MessageBroker struct {
 	stateQ          []MessageState  // states not yet told to the callbacks, in the order they happened
 	stateRunning    bool            // a goroutine is telling them
 	recent          *recentMessages // which message a ratchet header carried, to confirm repeats
+	// deliverFn replaces deliverVia for the outbox (tests: no swarm needed)
+	deliverFn func(types.PeerID, *internal_pb.MessageData) (ok, direct bool)
 
 	myIDHexed string
 }

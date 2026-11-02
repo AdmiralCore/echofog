@@ -241,7 +241,11 @@ func (s *MessageBroker) FlushOutbox(target types.PeerID) int {
 			_ = s.kv.Delete(e.Key)
 			continue
 		}
-		if ok, direct := s.deliverVia(it.Target, &msg); ok {
+		deliver := s.deliverVia
+		if s.deliverFn != nil {
+			deliver = s.deliverFn
+		}
+		if ok, direct := deliver(it.Target, &msg); ok {
 			sent++
 			if direct && it.Sent && !it.Relayed && it.Attempts >= halfOpenAfter {
 				// it went to the peer directly before and no receipt came back: the link may be
