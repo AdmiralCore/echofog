@@ -110,8 +110,8 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) Â
     log as before. **Call traffic shape** (P9) is unchanged: voice and video rates and timers are
     recognisable inside camouflaged carriers.
 15. **The handshake is cross-checked, not formally verified.** Two independent step-2 implementations
-    and the reference generator agree byte for byte on the normative transcripts
-    (`handshake-transcript.json`); there is no machine-checked proof of the XKhfs/XXhfs composition with
+    and the reference generator agreed byte for byte on the first transcripts; the current normative
+    file (`handshake-transcript.json`, application-valid inputs) still has to be reproduced by both; there is no machine-checked proof of the XKhfs/XXhfs composition with
     the prologue binding.
 16. **Exit result timing** still separates "open" from "closed" for a client that measures it.
 17. **Batched call authentication** lets an insider's forged media be played for up to about one batch
