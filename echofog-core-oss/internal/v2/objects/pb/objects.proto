@@ -1,0 +1,179 @@
+// Bodies of the protocol v2 signed objects (docs/protocol/v2/objects.md).
+//
+// Every body is canonical protobuf (objects.md §2.3). The generated Go types are used to read and
+// to build bodies; received objects are never re-encoded: they are verified and forwarded as the
+// exact bytes received. Field numbers are never reused (versioning.md §3.5).
+syntax = "proto3";
+
+package echofog.v2.objects;
+
+option go_package = "github.com/echofog/echofog-core/internal/v2/objects/pb;objectspb";
+
+// ---------------------------------------------------------------------------------------------
+// echofog/card/2 (objects.md §3)
+
+message NodeCard {
+  uint32 proto_ver = 1;                 // 200
+  bytes  hs_key = 2;                    // akey (x25519): the Noise static key
+  repeated uint32 l1_suites = 3;        // L1 suites accepted, preference order
+  repeated Addr addrs = 4;              // <= 16 processed
+  repeated MaskKey mask_keys = 5;       // <= 8 processed
+  uint32 role = 6;                      // registries.md §11
+  uint32 flags = 7;                     // registries.md §11
+  repeated ServiceOffer services = 8;   // <= 16 processed
+  repeated uint32 features = 9;         // <= 64 processed
+  ExitOffer exit = 10;                  // §4; present only with flag exit
+  repeated string shop = 11;            // <= 3 processed, each <= 200 bytes (§3.5)
+  string release = 12;                  // build version, <= 32 bytes
+  bytes  account = 13;                  // akey of the account key; REQUIRED
+  bytes  prekeys_hash = 14;             // SHA-256 of the current prekeys/2 envelope; optional
+  HsKey  prev_hs = 15;                  // previous handshake key during a rotation
+  uint32 scope = 16;                    // 0 public, 1 peer, 2 invite
+  bytes  invite_id = 17;                // scope invite: the invitation's pass_id (8 bytes)
+  bytes  devices = 18;                  // the account's current devices/2 envelope; REQUIRED
+}
+
+message HsKey {
+  bytes  key = 1;                       // akey (x25519)
+  uint64 not_after = 2;
+}
+
+message Addr {
+  uint32 suite = 1;                     // L0 suite, registries.md §6.1
+  string host = 2;                      // IP literal or DNS name (<= 253); empty when url is used
+  uint32 port = 3;
+  string url = 4;                       // ws2: wss:// URL (<= 512)
+  uint32 mask = 5;                      // 1-based index into mask_keys; REQUIRED for every v2 suite
+  bytes  params = 6;                    // SuiteParams, canonical protobuf
+  uint32 flags = 7;                     // bit 0: bootstrap
+}
+
+message MaskKey {
+  bytes  key = 1;                       // akey (x25519, 33 bytes)
+  uint64 not_after = 2;                 // <= card not_after + 7 days
+}
+
+message SuiteParams {
+  string sni = 1;                       // reality2-*, ws2: cover / inner SNI (<= 253)
+  ShapeProfile shape = 2;               // wire.md §9
+}
+
+// Same message as in HsInit (handshake.md §7).
+message ServiceOffer {
+  uint32 id = 1;
+  repeated uint32 versions = 2;         // ascending
+}
+
+// wire.md §9
+message ShapeProfile {
+  uint32   id            = 1;
+  Range    init_len      = 2;
+  Range    pad           = 3;
+  repeated uint32 buckets = 4;
+  Range    pad_budget    = 5;
+  Junk     junk          = 6;
+  repeated Decoy decoys  = 7;
+  Range    keepalive_s   = 8;
+  Range    idle_pad_ms   = 9;
+}
+message Range { uint32 min = 1; uint32 max = 2; }
+message Junk  { Range count = 1; Range len = 2; Range gap_ms = 3; }
+message Decoy {
+  uint32 kind     = 1;
+  bytes  template = 2;
+  string qname    = 3;
+}
+
+// objects.md §4
+message ExitOffer {
+  uint64 price = 1;                     // micro-USDT per MiB of tunnel traffic
+  uint32 free_kib = 2;                  // free test traffic per client per day
+  uint32 upload_kbps = 3;               // operator's claimed capacity
+  string region = 4;                    // ISO 3166-1 alpha-2, upper case
+  uint32 policy = 5;                    // bit0 TCP, bit1 UDP, bit2 port 25 blocked, bit3 DNS via DoH/DoT
+  uint64 relay_price = 6;               // micro-USDT per MiB for relay/2; 0 = free
+  repeated uint32 assets = 7;           // 1 USDT on TON, 2 TON
+}
+
+// ---------------------------------------------------------------------------------------------
+// echofog/prekeys/2 (objects.md §5)
+
+message Prekeys {
+  bytes  ik = 1;                        // akey (x25519)
+  bytes  spk = 2;                       // X25519, 32 bytes
+  uint64 spk_created = 3;
+  bytes  kem = 4;                       // ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
+  uint64 kem_created = 5;
+  repeated bytes opks = 6;              // 32 bytes each, <= 32 processed
+}
+
+// ---------------------------------------------------------------------------------------------
+// echofog/devices/2 (objects.md §6)
+
+message DeviceList {
+  repeated Device devices = 1;          // <= 16 processed
+}
+message Device {
+  bytes  key = 1;                       // akey of the device identity
+  uint64 added = 2;
+  uint32 flags = 3;                     // bit 0: primary
+  string label = 4;                     // <= 32 bytes
+}
+
+// ---------------------------------------------------------------------------------------------
+// echofog/mailbox-hint/2 (objects.md §7)
+
+message MailboxHint {
+  repeated Hint hints = 1;              // <= 4 processed
+}
+message Hint {
+  bytes  relay = 1;                     // device ID of the mailbox relay
+  bytes  queue = 2;                     // 16-byte public queue ID
+  uint64 not_after = 3;
+  bytes  relay_card = 4;                // optional: the relay's card
+}
+
+// ---------------------------------------------------------------------------------------------
+// echofog/name/2 (objects.md §8)
+
+message NameBinding {
+  string name = 1;
+  uint32 system = 2;                    // 1 TON DNS, 2 Telegram usernames
+  bytes  owner = 3;                     // <= 64 bytes
+  uint64 issued = 4;
+}
+
+// ---------------------------------------------------------------------------------------------
+// echofog/release/2 (objects.md §9)
+
+message ReleaseObject {
+  bytes manifest = 1;                   // canonical Release message
+  repeated CoSig cosigs = 2;
+}
+message CoSig {
+  bytes key = 1;                        // akey of a release key
+  bytes sig = 2;                        // Sign(key, "echofog/release-cosign/2" || SHA-256(manifest))
+}
+
+message Release {
+  string version = 1;
+  uint64 released_at = 2;
+  repeated Policy policies = 3;
+  repeated Artifact artifacts = 4;
+  repeated bytes next_keys = 5;         // <= 3 processed
+  string notes_url = 6;                 // https only
+  repeated bytes revoked_keys = 7;
+}
+message Policy {
+  string component = 1;
+  uint32 min_supported = 2;
+  uint32 recommended = 3;
+  uint64 deprecated_after = 4;
+}
+message Artifact {
+  string platform = 1;
+  string name = 2;
+  bytes  sha256 = 3;
+  uint64 size = 4;
+  string url = 5;                       // https only
+}
