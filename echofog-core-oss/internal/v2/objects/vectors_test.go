@@ -350,14 +350,25 @@ func TestVectorCards(t *testing.T) {
 // The handshake initiator's cards: a user with its own account and device, and a throwaway identity.
 func TestVectorInitiatorCards(t *testing.T) {
 	v := loadVector(t, "node-card.json")
-	hsSeed := sha([]byte("echofog v2 test vector seed: hs/xk/initiator_s"))
-	hsPub, err := ecdh.X25519().NewPrivateKey(hsSeed)
-	if err != nil {
-		t.Fatal(err)
+	hsAkeyOf := func(sk []byte) keys.AKey {
+		k, err := ecdh.X25519().NewPrivateKey(sk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return keys.New(keys.X25519, k.PublicKey().Bytes())
 	}
-	hsAkey := keys.New(keys.X25519, hsPub.PublicKey().Bytes())
 	seeds := get(t, v, "initiator", "seeds").(map[string]any)
+	// The initiator uses the transcript's static key; the throwaway identity has its own (B4).
+	hsKeys := map[string]keys.AKey{
+		"initiator":           hsAkeyOf(sha([]byte("echofog v2 test vector seed: hs/xk/initiator_s"))),
+		"initiator_throwaway": hsAkeyOf(hx(t, v, "initiator_throwaway", "hs_sk")),
+	}
+	eqHex(t, "throwaway hs seed", hx(t, v, "initiator_throwaway", "hs_sk"), unhex(t, seeds["initiator/throwaway_hs_sk"].(string)))
+	if hsKeys["initiator"].Equal(hsKeys["initiator_throwaway"]) {
+		t.Fatal("throwaway identity reuses the initiator's hs key")
+	}
 	for name, pre := range map[string]string{"initiator": "initiator/", "initiator_throwaway": "initiator/throwaway_"} {
+		hsAkey := hsKeys[name]
 		t.Run(name, func(t *testing.T) {
 			acct := signer(t, seeds[pre+"account_seed"].(string))
 			dev := signer(t, seeds[pre+"device_seed"].(string))
@@ -516,7 +527,7 @@ func TestVectorDHTKeys(t *testing.T) {
 	copy(id[:], hx(t, v, "dht2", "card_key", "signer_device_id"))
 	k := DHTKey(LabelCard, id, day)
 	eqHex(t, "card key", k[:], hx(t, v, "dht2", "card_key", "key"))
-	copy(id[:], hx(t, v, "dht2", "devices_key", "signer_node_id (account)"))
+	copy(id[:], hx(t, v, "dht2", "devices_key", "signer_node_id"))
 	k = DHTKey(LabelDevices, id, day)
 	eqHex(t, "devices key", k[:], hx(t, v, "dht2", "devices_key", "key"))
 	k = ReleaseDHTKey(day)
