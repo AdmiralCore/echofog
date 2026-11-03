@@ -62,6 +62,7 @@ type Initiator struct {
 	timeOverride   uint64
 	protoOverride  uint32
 	forceAccess    *Access
+	forceKnownSeq  uint64
 	lastInit       *HsInit
 	lastResp       *HsResp
 }
@@ -187,6 +188,9 @@ func (i *Initiator) flight() ([]byte, []byte, error) {
 		}
 		if i.forceAccess != nil {
 			p1.Access = i.forceAccess
+		}
+		if i.forceKnownSeq != 0 {
+			p1.KnownCardSeq = i.forceKnownSeq
 		}
 		return p1.Marshal(), nil
 	})

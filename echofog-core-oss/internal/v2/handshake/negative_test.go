@@ -664,3 +664,53 @@ func TestOutOfOrderCalls(t *testing.T) {
 		t.Fatal("message 3 before message 1")
 	}
 }
+
+func TestPuzzlePreviousSecretOneMinute(t *testing.T) {
+	w := newWorld(t)
+	old := bytes.Repeat([]byte{1}, 32)
+	w.rc.Puzzle = &PuzzleConfig{Secret: old, Difficulty: func() uint8 { return 4 }}
+	ini, _ := NewInitiator(w.ic, testCB)
+	hello, m1, _ := ini.Start()
+	rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now)
+	hello2, m1b, err := ini.HandleRetry(rep.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// R rotates right after the cookie was issued.
+	w.rc.Puzzle = &PuzzleConfig{Secret: bytes.Repeat([]byte{2}, 32), PrevSecret: old, RotatedAt: w.now,
+		Difficulty: func() uint8 { return 4 }}
+	if r := NewResponder(w.rc).HandleFirst(testCB, hello2, m1b, w.now.Add(30*time.Second)); r.FrameType != FrameMsg {
+		t.Fatalf("previous R within a minute: %v", r.FrameType)
+	}
+	w.rc.Puzzle.RotatedAt = w.now.Add(-61 * time.Second)
+	if r := NewResponder(w.rc).HandleFirst(testCB, hello2, m1b, w.now.Add(30*time.Second)); r.FrameType != FrameRetry {
+		t.Fatalf("previous R after a minute: %v", r.FrameType)
+	}
+}
+
+func TestXXKnownCardSeqIsMalformed(t *testing.T) {
+	w := newWorld(t)
+	w.ic.Remote = nil
+	ini, _ := NewInitiator(w.ic, testCB)
+	ini.forceKnownSeq = 7
+	hello, m1, _ := ini.Start()
+	if rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now); rep.Action != ActClose {
+		t.Fatalf("XX with known_card_seq: %v", rep.Action)
+	}
+}
+
+func TestRetryLimit(t *testing.T) {
+	w := newWorld(t)
+	w.rc.Puzzle = &PuzzleConfig{Secret: bytes.Repeat([]byte{7}, 32), Difficulty: func() uint8 { return 2 }}
+	ini, _ := NewInitiator(w.ic, testCB)
+	hello, m1, _ := ini.Start()
+	rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now)
+	for i := 0; i < 2; i++ {
+		if _, _, err := ini.HandleRetry(rep.Payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := ini.HandleRetry(rep.Payload); !errors.Is(err, ErrRetries) {
+		t.Fatalf("third HS_RETRY: %v", err)
+	}
+}
