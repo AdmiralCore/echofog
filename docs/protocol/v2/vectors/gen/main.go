@@ -965,6 +965,7 @@ func genSignedObject() any {
 type cardOut struct {
 	public, peer, invite []byte
 	signer               signer
+	account              signer
 	hsPub                []byte
 	invMaskPub           []byte
 	passID               []byte
@@ -973,7 +974,8 @@ type cardOut struct {
 
 func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	var sl seedLog
-	s := newSigner(sl.get("card/identity_seed"))
+	acct := newSigner(sl.get("card/account_seed"))
+	s := newSigner(sl.get("card/device_seed"))
 	hsSK := sl.get("card/hs_sk")
 	hsPub := x25519Pub(hsSK)
 	hsAkey := cat([]byte{0x02}, hsPub)
@@ -992,6 +994,11 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	svc := func(id uint64) []byte { return (&pb{}).u(1, id).packed(2, 2).b }
 	exit := (&pb{}).u(1, 500).u(2, 10240).u(3, 100000).s(4, "NL").u(5, 0b1011).packed(7, 1, 2).b
 
+	// The account's device list: one device (this one), primary.
+	devBody := (&pb{}).by(1, (&pb{}).by(1, s.akey()).u(2, fixedTime).u(3, 1).b).b
+	devEnv, _, _ := envelope("echofog/devices/2", acct, fixedTime, fixedTime+30*86400, devBody)
+	verifyEnvelope(devEnv)
+
 	build := func(addrs [][]byte, masks [][]byte, scope uint64, inviteID []byte, flags uint64, withPrev bool) []byte {
 		p := &pb{}
 		p.u(1, 200).by(2, hsAkey).packed(3, 1, 2)
@@ -1006,10 +1013,11 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 			p.by(8, svc(id))
 		}
 		p.packed(9, 1, 3, 4, 5, 6).by(10, exit).s(11, "https://shop.example.org/echofog").s(12, "0.3.0")
+		p.by(13, acct.akey())
 		if withPrev {
 			p.by(15, (&pb{}).by(1, prevHS).u(2, notAfter).b)
 		}
-		p.u(16, scope).by(17, inviteID)
+		p.u(16, scope).by(17, inviteID).by(18, devEnv)
 		checkCanonicalTop(p.b, map[int]bool{4: true, 5: true, 8: true, 11: true})
 		return p.b
 	}
@@ -1040,16 +1048,20 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 		{"description", "One server's cards in three scopes. Public (DHT, PEX): reality2-quic and reality2-tcp only. Peer (inside sessions): adds noise3 and ws2, a second masking key and a previous hs key. Invite: one noise3 address with the invitation's own masking key, invite_id = pass_id, flags unlisted|invite-scoped. Services are ids 1, 2, 5, 6 = dht, pex, relay, exit."},
 		{"spec", "objects.md §3–§4, §10.3"},
 		{"seeds", sl.o},
-		{"identity_seed", hx(s.seed)},
-		{"identity_pub", hx(s.pub)},
-		{"identity_text", "ed25519:" + b64(s.pub)},
-		{"node_id", hx(s.nodeID())},
+		{"account_seed", hx(acct.seed)},
+		{"account_pub", hx(acct.pub)},
+		{"account_text", "ed25519:" + b64(acct.pub)},
+		{"node_id (SHA-256 of the account akey)", hx(acct.nodeID())},
+		{"device_seed", hx(s.seed)},
+		{"device_pub", hx(s.pub)},
+		{"device_id (SHA-256 of the device akey; the card signer)", hx(s.nodeID())},
+		{"device_list", O{{"fields", "DeviceList{devices: [{key = device akey, added = ts, flags = 1 primary}]}, signed by the account key"}, {"body", hx(devBody)}, {"envelope", hx(devEnv)}}},
 		{"hs_sk", hx(hsSK)},
 		{"hs_akey", hx(hsAkey)},
 		{"prev_hs_akey", hx(prevHS)},
 		{"mask_keys", O{{"reality (reality2.json)", hx(maskPubR)}, {"noise3 (noise3.json)", hx(maskPub3)}, {"invitation", hx(invMaskPub)}}},
 		{"public", O{
-			{"fields", "proto_ver 200; l1_suites [1,2]; addrs: reality2-quic 192.0.2.10:443 mask 1 sni www.example.org shape 1 bootstrap, reality2-tcp 198.51.100.7:443 mask 1 shape 2; role server; flags 0x26 (relay, dht-server, exit); services dht/2 pex/2 relay/2 exit/2; features [1,3,4,5,6]; exit offer 500 micro-USDT/MiB, 10240 KiB free, 100000 kbit/s, NL, policy 0x0b, assets [1,2]; shop https://shop.example.org/echofog; release 0.3.0; scope 0"},
+			{"fields", "proto_ver 200; l1_suites [1,2]; addrs: reality2-quic 192.0.2.10:443 mask 1 sni www.example.org shape 1 bootstrap, reality2-tcp 198.51.100.7:443 mask 1 shape 2; role server; flags 0x26 (relay, dht-server, exit); services dht/2 pex/2 relay/2 exit/2; features [1,3,4,5,6]; exit offer 500 micro-USDT/MiB, 10240 KiB free, 100000 kbit/s, NL, policy 0x0b, assets [1,2]; shop https://shop.example.org/echofog; release 0.3.0; account = account akey; scope 0; devices = the device list envelope"},
 			{"seq", fixedTime}, {"not_after", notAfter},
 			{"body", hx(pubBody)}, {"signed_bytes_sha256", hx(sha(pubSigned))}, {"sig", hx(pubSig)},
 			{"envelope", hx(pubEnv)}, {"envelope_len", len(pubEnv)}, {"object_id", hx(sha(pubEnv))},
@@ -1063,7 +1075,7 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 			{"invite_id", hx(passID)}, {"seq", fixedTime + 2}, {"not_after", fixedTime + 30*86400},
 			{"envelope", hx(invEnv)}, {"envelope_len", len(invEnv)},
 		}},
-	}, cardOut{pubEnv, peerEnv, invEnv, s, hsPub, invMaskPub, passID, secret}
+	}, cardOut{pubEnv, peerEnv, invEnv, s, acct, hsPub, invMaskPub, passID, secret}
 }
 
 func linkFor(env []byte) (string, []byte, []byte) {
@@ -1195,7 +1207,7 @@ func genHandshake(c cardOut) any {
 		{"initialize_symmetric", init},
 		{"prologue_xk", O{
 			{"cb", hx(cb)},
-			{"rid (node-card.json node_id)", hx(rid)},
+			{"rid (node-card.json device_id)", hx(rid)},
 			{"hs_hello", hx(hello)},
 			{"hs_hello_note", "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound)"},
 			{"prologue", hx(prologue)},
@@ -1327,14 +1339,32 @@ func genKDF(c cardOut) any {
 	joinSalt := sl.get("call/join_salt")[:16]
 	kSender := hkdfSHA(epoch0, nil, cat([]byte("echofog/call2/sender-key"), card.nodeID(), joinSalt), 32)
 	media := newSigner(sl.get("call/media_key"))
-	header := cat([]byte{1, 0, 3, 0, 1}, u32(7), u32(160))
-	nonce := cat([]byte{0, 1, 0, 0}, u32(7), []byte{0, 0, 0, 0})
 	blk, err := aes.NewCipher(kSender)
 	must(err)
 	gcm, err := cipher.NewGCM(blk)
 	must(err)
-	unitCT := gcm.Seal(nil, nonce, pattern(40, 0xc0), header)
-	unitSig := ed25519.Sign(media.priv, cat([]byte("echofog/call2/unit"), header, unitCT))
+	var units []any
+	var hashes []byte
+	for i := uint32(0); i < 2; i++ {
+		seq := 7 + i
+		header := cat([]byte{1, 0, 3, 0, 1}, u32(seq), u32(160+20*i))
+		nonce := cat([]byte{0, 1, 0, 0}, u32(seq), []byte{0, 0, 0, 0})
+		ctu := gcm.Seal(nil, nonce, pattern(40, byte(0xc0+i)), header)
+		hu := sha([]byte("echofog/call2/unit"), header, ctu)[:16]
+		hashes = append(hashes, hu...)
+		units = append(units, O{{"header (audio, epoch 0, sender 3, stream 0, gen 1)", hx(header)}, {"seq", seq},
+			{"nonce", hx(nonce)}, {"ciphertext_and_tag", hx(ctu)}, {"h", hx(hu)}})
+	}
+	authPrefix := cat([]byte{1, 0, 3, 0, 1}, u32(7), []byte{0, 2}, hashes)
+	authSig := ed25519.Sign(media.priv, cat([]byte("echofog/call2/batch"), authPrefix))
+	callAuth := cat(qv(0x13), authPrefix, authSig)
+
+	// chat/2 PQXDH session key with fixed DH outputs and KEM values.
+	dh := func(n string) []byte { return sl.get("chat/pqxdh/" + n) }
+	dh1, dh2, dh3, dh4, ssKEM := dh("dh1"), dh("dh2"), dh("dh3"), dh("dh4"), dh("ss")
+	kemID, ctHash := dh("kem_key_id"), dh("kem_ct_hash")
+	pqxdhIKM := cat(bytes.Repeat([]byte{0xff}, 32), dh1, dh2, dh3, dh4, ssKEM)
+	pqxdhSK := hkdfSHA(pqxdhIKM, make([]byte, 32), cat([]byte("echofog/chat2/pqxdh"), kemID, ctHash), 32)
 
 	// DHT keys.
 	label := "echofog/card/2"
@@ -1379,13 +1409,18 @@ func genKDF(c cardOut) any {
 		{"mailbox2", O{{"forward_eph_sk", hx(fe)}, {"forward_eph_pub", hx(fePub)}, {"hs_M", hx(hsPub)}, {"k", hx(kFwd)},
 			{"deposit (req 9, queue 90..9f, blob = chat2_seal.SealedEnvelope)", hx(deposit)}, {"sealed", hx(sealedFwd)},
 			{"pow_bits", 12}, {"pow", pow}, {"pow_hash", hx(powHash)}}},
-		{"call2", O{{"room_secret", hx(room)}, {"epoch0_secret", hx(epoch0)}, {"sender_node_id", hx(card.nodeID())}, {"join_salt", hx(joinSalt)},
-			{"k_sender", hx(kSender)}, {"unit_header (audio, epoch 0, sender 3, stream 0, gen 1, seq 7, ts 160)", hx(header)},
-			{"nonce", hx(nonce)}, {"plaintext", hx(pattern(40, 0xc0))}, {"ciphertext_and_tag", hx(unitCT)},
-			{"media_key_pub", hx(media.pub)}, {"unit_sig", hx(unitSig)}}},
+		{"call2", O{{"room_secret", hx(room)}, {"epoch0_secret", hx(epoch0)}, {"sender_device_id", hx(card.nodeID())}, {"join_salt", hx(joinSalt)},
+			{"k_sender", hx(kSender)}, {"units (plaintext 40 bytes of c0.. / c1..)", units},
+			{"media_key_pub", hx(media.pub)},
+			{"CALL_AUTH (first_seq 7, prev_count 0, count 2)", O{{"signed_prefix", hx(authPrefix)}, {"sig", hx(authSig)}, {"datagram", hx(callAuth)}}}}},
+		{"chat2_pqxdh", O{{"dh1", hx(dh1)}, {"dh2", hx(dh2)}, {"dh3", hx(dh3)}, {"dh4", hx(dh4)}, {"kem_ss", hx(ssKEM)},
+			{"kem_key_id", hx(kemID)}, {"kem_ct_hash", hx(ctHash)}, {"note", "synthetic DH outputs; ikm = 0xff×32 ‖ DH1 ‖ DH2 ‖ DH3 ‖ DH4 ‖ SS, salt = 32 zero bytes"},
+			{"SK", hx(pqxdhSK)}}},
 		{"dht2", O{
 			{"day", day},
-			{"card_key", O{{"label", label}, {"signer_node_id", hx(card.nodeID())}, {"key", hx(dhtCard)}}},
+			{"card_key", O{{"label", label}, {"signer_device_id", hx(card.nodeID())}, {"key", hx(dhtCard)}}},
+			{"devices_key", O{{"label", "echofog/devices/2"}, {"signer_node_id (account)", hx(c.account.nodeID())},
+				{"key", hx(sha([]byte("echofog/dht2/key"), u32(day), []byte{byte(len("echofog/devices/2"))}, []byte("echofog/devices/2"), c.account.nodeID()))}}},
 			{"release_key", hx(dhtRelease)},
 		}},
 	}
