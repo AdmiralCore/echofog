@@ -25,6 +25,7 @@ capitals.
 | [dht.md](dht.md) | DHT v2: keyspace, records, storage, lookup, routing-table rules |
 | [services.md](services.md) | L3: dht, pex, chat, mailbox, relay, exit, files, call |
 | [security.md](security.md) | claimed properties, the attack each defeats, mapping to v1 weaknesses, residual risks |
+| [platforms.md](platforms.md) | gomobile builds (Android, iOS), non-portable pieces and their fallbacks, capability profile and flags, mobile testing |
 | [CHANGES-from-v1.md](CHANGES-from-v1.md) | what changed and why, tied to weakness IDs |
 | [vectors/](vectors/) | JSON test vectors and their reference generator (`vectors/gen`) |
 
