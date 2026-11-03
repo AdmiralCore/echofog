@@ -102,8 +102,8 @@
   },
   "ecdh_check": {
     "peer_sk": "4c03a9b44ebab8a818795c4a586e34c94e253e804437f9cb8b4de1e640ac6507",
-    "x25519(peer_sk, sample0.dirty_pub)": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
-    "x25519(peer_sk, sample0.clean_pub)": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
-    "x25519(sample0.sk, peer_pub)": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604"
+    "x25519_peer_sk_sample0_dirty_pub": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
+    "x25519_peer_sk_sample0_clean_pub": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
+    "x25519_sample0_sk_peer_pub": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604"
   }
 }

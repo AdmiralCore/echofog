@@ -451,7 +451,7 @@ valid: `MUX_STREAM`, `MUX_RESET`, `MUX_WINDOW`, `MUX_MAX_DATA`, `MUX_DATAGRAM`, 
 
 ```
 MUX_STREAM    payload = stream_id(varint) ‖ flags(u8) ‖ data           data ≤ 16384 bytes
-              flags: 0x01 FIN; other bits reserved, MUST be 0
+              flags: 0x01 FIN; other bits reserved: sent as 0, ignored on receipt
 MUX_RESET     payload = stream_id(varint) ‖ code(varint)                 registries.md §10.2
 MUX_WINDOW    payload = stream_id(varint) ‖ increment(varint)
 MUX_MAX_DATA  payload = increment(varint)                                connection-level window
@@ -460,7 +460,18 @@ MUX_DATAGRAM  payload = one datagram (§6.5); best effort, dropped when the queu
 
 - Stream IDs: bit 0 is the opener (0 = carrier client, 1 = carrier server); IDs of each opener
   increase by 2 (0, 2, 4, … and 1, 3, 5, …). Stream 0 is the control stream. A stream is opened by its
-  first `MUX_STREAM`. At most 256 streams open per side.
+  first `MUX_STREAM`. A sender MUST open its streams in increasing ID order and announces each new
+  stream at once (an empty `MUX_STREAM` is allowed for this). A receiver treats an ID of that opener
+  below the highest it has seen, and not currently open, as a finished stream: its data is discarded.
+- At most 256 streams open per side, counted per mux connection and per session. An excess stream is
+  refused with `MUX_RESET{refused}` (mux) or `CLOSE{refused}` (QUIC); this is not abuse.
+- The mux has no unidirectional streams (its IDs carry no direction bit). The 64 unidirectional
+  streams of §10 exist only on QUIC carriers; on the mux, one-way traffic uses a bidirectional stream
+  that the receiver never writes to.
+- `MUX_RESET` ends a stream at once; data received before the reset stays readable (so a `CLOSE`
+  frame sent just before it is delivered).
+- Unknown frame types at connection level: an IGNORABLE frame (GREASE `0x3e` included) is skipped; a
+  frame without IGNORABLE closes the carrier, since there is no stream to close. Neither is abuse.
 - Flow control: initial window 262144 bytes per stream and 4194304 per connection. A receiver sends a
   window update when half of a window is consumed. Data beyond the window is a protocol violation.
 - The bytes of each stream are themselves a sequence of stream frames (§6.2), exactly as on a QUIC
@@ -481,6 +492,16 @@ frame = type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload(length bytes)
 
 - `type` values: [registries.md](registries.md) §1, §4. The type space is global for `0x00–0x3f`
   (session level) and per service for `0x40–0x3fff`.
+- **Receiving unknown types.** `0x00`, `0x3f`, GREASE `0x3e` and every unassigned value are never
+  known types: skipped with IGNORABLE, otherwise `CLOSE{unknown-frame}` on a stream (connection level:
+  §5.2; stream 0: §6.2). Unknown types are never abuse.
+- **Known types in the wrong place** — a session-level frame on a stream where registries.md §1 does
+  not allow it (PING on a service stream, OPEN on stream 0, HS_* after the handshake) — are a protocol
+  violation of a known type: `CLOSE{protocol-violation}` (on stream 0: `GOAWAY{protocol-violation}`),
+  and they MAY count as abuse.
+- **Frames that a feature introduces** (OBSERVED_ADDR, CARD_UPDATE, PUNCH_OFFER, PUNCH_SYNC,
+  PATH_BIND and the PATH_* frames) received when the feature was not negotiated are treated as
+  unknown types. A PATH_BIND for a session without `path-migration` gets the silent close of §8.2.
 - `length` MUST NOT exceed the type's maximum (registries) and never 1048576 (1 MiB). A longer frame
   is `CLOSE{frame-too-large}`. An empty payload is allowed where the type allows it.
 - A receiver reads frames with a bounded buffer; it never allocates more than the type's maximum
@@ -506,15 +527,20 @@ frame = type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload(length bytes)
 
 ```
 OPEN         payload = service(varint) ‖ version(varint) ‖ flags(u8)
-             flags: 0x01 EARLY (the stream was opened in 0-RTT data); others reserved, 0
+             flags: 0x01 EARLY (the stream was opened in 0-RTT data); others reserved: sent as 0,
+             ignored on receipt
 UNSUPPORTED  payload = service(varint) ‖ min(varint) ‖ max(varint)      versions the receiver serves; 0,0 = none
 CLOSE        payload = code(varint) ‖ reason(UTF-8, ≤ 200 bytes)
 ```
 
 - OPEN with a `(service, version)` that was not selected in the handshake is answered with UNSUPPORTED
-  and the stream ends. This is not abuse and MUST NOT be scored.
+  and the stream ends with a normal FIN (not a reset, which could discard the UNSUPPORTED frame). This
+  is not abuse and MUST NOT be scored.
+- A selected `(service, version)` is usable in both directions: either side may open streams of it. A
+  side that has no handler for a stream the peer opens answers `UNSUPPORTED{service, 0, 0}`.
 - CLOSE ends the stream in both directions after the frame. On QUIC the stream is then reset with
-  application error code `code`; on the mux, `MUX_RESET` follows.
+  application error code `code`; on the mux, `MUX_RESET` follows. A CLOSE on stream 0 ends that
+  **path**, not the session (GOAWAY ends the session).
 
 ### 6.4 PADDING
 
@@ -542,8 +568,8 @@ has encoded frames of every session-level type with a fixed payload.
 ### 7.1 PING, PONG, keepalive
 
 - `PING` carries 8 opaque bytes; the peer answers `PONG` with the same bytes within 1 s of receipt.
-- Keepalive: when a path has been idle, a node sends PING after `uniform(12, 24)` s of silence. A path
-  with no authenticated traffic for 60 s is dead.
+- Keepalive: when a path — active or standby (§8.3) — has been idle, a node sends PING on that path's
+  stream 0 after `uniform(12, 24)` s of silence. A path with no authenticated traffic for 60 s is dead.
 - **Periodic timers** (keepalives, republishing, refreshes, rotations, cache flushes, polling) MUST have
   at least ±20 % uniform jitter (V2). Deadlines and timeouts (the 1 s PONG deadline, the 15 s GOAWAY
   drain, handshake timeouts) are not periodic and are not jittered.
@@ -563,7 +589,8 @@ has encoded frames of every session-level type with a fixed payload.
 ### 7.3 GOAWAY
 
 `GoAway { uint32 code = 1; string reason = 2; uint32 retry_after = 3; }`. After sending GOAWAY a node
-opens no new streams and closes the session when its streams end or after 15 s.
+opens no new streams and closes the session when the streams of **both** sides have ended, or after
+15 s.
 
 ## 8. Paths
 
@@ -576,12 +603,15 @@ the session's frames:
 
 Streams belong to a path: a QUIC stream exists on one QUIC connection, a mux stream on one byte-stream
 carrier. When a path dies, its streams are reset with `path-failed` and services reopen them on
-another path; the session, its keys and its peer authentication survive without a new handshake.
+another path; the session, its keys and its peer authentication survive without a new handshake. A
+session whose last path has died waits 60 s (the path-dead time) for a PATH_BIND and then ends.
 
 ### 8.1 Path IDs
 
 `path_id` is a varint chosen by the side that creates the path: `2k` for paths created by the session
-initiator, `2k + 1` for paths created by the responder. The path of the handshake is 0.
+initiator, `2k + 1` for paths created by the responder. The path of the handshake is 0. Either session
+role may create paths; the creator is the client of the new carrier connection and sends PATH_BIND on
+its stream 0.
 
 ### 8.2 PATH_BIND (feature `path-migration`)
 
@@ -604,13 +634,23 @@ PATH_BIND_OK  payload = path_id(varint)
   does not hold the session secret).
 - Because the MAC covers the new channel binding, a captured PATH_BIND cannot be replayed on another
   TLS session.
+- On a path in sealed mode (§8.5), PATH_BIND and PATH_BIND_OK are plain frames; records start right
+  after PATH_BIND_OK.
 
 ### 8.3 Choosing and abandoning paths
 
 - Each side sends on one **active path** at a time (multipath scheduling is the reserved feature
   `multipath`). It prefers direct paths over relay paths and lower RTT among them.
 - `PATH_ABANDON{path_id, code}` tells the peer a path will no longer be used.
-- A path with no authenticated traffic for 10 s while another path is alive is abandoned.
+- **Standby paths.** Every other live path is a standby path. A node keeps at most 2 standby paths per
+  session (with `low_power`, none: platforms.md §2); it abandons the oldest beyond that.
+- **Liveness.** Every path, active or standby, sends PING when it has been idle for
+  `uniform(12, 24)` s (§7.1), so a standby path keeps its NAT bindings and proves it is alive. A path
+  with no authenticated traffic for 60 s is dead and is abandoned.
+- **Switching.** The active path is **failing** when a PING on it gets no PONG within
+  `max(1 s, 3 × RTT)`, or when it carries no authenticated packet for 10 s while the node has data or
+  PINGs outstanding on it. A failing active path is replaced by the best standby path at once; it
+  stays a standby path until it is dead (60 s) or recovers. Idleness alone never abandons a path.
 - Resuming a stream across paths (the successor of v1 TCP rotation against flow-freezing) is a later
   feature, `stream-resume` (reserved, [registries.md](registries.md) §5).
 
@@ -622,20 +662,35 @@ Noise transport keys: `Split()` of the handshake gives `k_i2r` (initiator → re
 ([handshake.md](handshake.md) §9).
 
 ```
-sealed  = n(u64) ‖ ChaCha20-Poly1305(k_dir, nonce = 0^4 ‖ u64le(n), aad = sid(16) ‖ n(8), plaintext)
+sealed  = n(u64) ‖ ChaCha20-Poly1305(k_dir, nonce = 0^4 ‖ u64le(n), aad, plaintext)
+aad     = sid(16) ‖ u64(n) ‖ u8(class) ‖ varint(path_id) ‖ varint(pipe)
+          class 1: an ordered record; pipe = the QUIC stream ID (sealed mode on QUIC), or 0 (a stream
+                   circuit, or a mux carrier in sealed mode: the whole carrier is one pipe)
+          class 2: a SEALED datagram; pipe = 0
 record  = u16(1 + len(body)) ‖ kind(u8) ‖ body
           kind 0: body = plaintext frames      (only before the handshake completes, only HS_* frames)
           kind 1: body = sealed
           other kinds: reserved; a record with an unknown kind ends the path
 ```
 
-- **One counter `n` per direction per session**, shared by all paths of the session and by records
-  and datagrams alike. A sender never reuses a value (with two relay paths and per-path counters the
-  same key would reuse nonces) and stops at `2^60` (the session must then be re-established).
-- Receivers keep one replay window of 4096 values per direction per session.
+- **One counter `n` per direction per session**, shared by all paths, all pipes, records and
+  datagrams alike. A sender never reuses a value (with two relay paths and per-path counters the same
+  key would reuse nonces) and stops at `2^60` (the session must then be re-established).
+- **Replay protection for ordered records.** Records of one pipe arrive in order, and since the sender
+  draws every `n` from one growing counter, the `n` of successive records of a pipe is strictly
+  increasing. The receiver keeps, per pipe, the last accepted `n` and rejects a record whose `n` is not
+  larger. There is no window: a pipe the application reads slowly can never lose records. The AAD binds
+  each record to its path and pipe, so a record cannot be moved into another pipe.
+- **Replay protection for datagrams.** `SEALED` datagrams (on relay datagram circuits and in sealed
+  mode) use a sliding window of 4096 values per direction per session, over the datagram `n` values
+  only.
 - **Stream circuits** carry records; the plaintext of a sealed record is a sequence of connection-level
-  mux frames (§5.2). Records are at most 16384 + 64 bytes. The switch from kind 0 to kind 1 is explicit:
-  the first record after the handshake has kind 1, and a kind-0 record after that ends the path.
+  mux frames (§5.2). The `u16` length value (`1 + len(body)`, the kind byte and the body, without the
+  2-byte prefix itself) is at most 16384 + 64. The switch from kind 0 to kind 1 is explicit: the first
+  record after the handshake has kind 1, and a kind-0 record after that ends the path.
+- A `SEALED` datagram whose plaintext is again a `SEALED` datagram, a `SEALED` datagram on a path that
+  is not in sealed mode and not a relay path, and a plaintext datagram on a sealed path are dropped and
+  counted.
 - **Datagram circuits** carry one `SEALED` datagram (type 0x02) per relay datagram; its payload is
   `sealed` and its plaintext is one inner datagram (§6.5).
 - A relayed session's handshake runs inside the first stream circuit (kind-0 records), with the
@@ -646,7 +701,9 @@ record  = u16(1 + len(body)) ‖ kind(u8) ‖ body
 A direct path whose carrier TLS negotiated a classical group (a REALITY path whose cover does not use
 `X25519MLKEM768`, §3.4) runs in **sealed mode**. After the handshake on stream 0, the bytes of every
 stream on that path, stream 0 included, are records of §8.4 (kind 1), and every datagram is a `SEALED`
-datagram. On the byte-stream mux the records travel inside MUX_STREAM data. Both sides know the
+datagram. On QUIC each QUIC stream is a pipe of its own; on a byte-stream carrier the records wrap the
+whole connection-level frame sequence (MUX_* frames included), so the carrier is one pipe, as a stream
+circuit is. Both sides know the
 negotiated group, so no signalling is needed. Paths with `X25519MLKEM768` are never in sealed mode.
 
 ## 9. Padding and shape profiles
@@ -711,7 +768,9 @@ match what the address's network is expected to look like.
 | frame payload | per type; never > 1 MiB |
 | mux stream data per frame | ≤ 16384 |
 | mux windows | 256 KiB per stream, 4 MiB per connection |
-| streams per session per side | 256 bidirectional, 64 unidirectional |
+| streams per session per side | 256 bidirectional, 64 unidirectional (QUIC only) |
 | idle keepalive / path dead | `uniform(12, 24)` s / 60 s |
-| sealed replay window | 4096 per direction per session |
+| sealed replay protection | ordered records: strictly growing `n` per pipe; datagrams: window of 4096 per direction per session |
+| standby paths | ≤ 2 per session; keepalive like the active path; dead after 60 s |
+| session without a path | ends after 60 s |
 | periodic timer jitter | ≥ ±20 % |

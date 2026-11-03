@@ -99,9 +99,10 @@ so the initiator chooses.
   listed in `l1_suites` of the initiator's copy of the responder's card, in the initiator's preference
   order, plus optionally one GREASE value (§3.4); `chosen` is the first non-GREASE entry. Without a
   card, `offered` is `[0x0002]` (plus optionally GREASE) and `chosen = 0x0002`.
-- A `HS_HELLO` with a repeated value in `offered`, a `chosen` not in `offered` or GREASE as `chosen`,
-  a count outside 1..8, or trailing bytes after the payload is malformed (silent close; for public
-  nodes, no REJECT).
+- A `HS_HELLO` with a repeated value in `offered`, more than one GREASE value, an `offered` made only
+  of GREASE, a `chosen` not in `offered`, GREASE as `chosen`, a `chosen` that is not the first
+  non-GREASE entry of `offered`, a count outside 1..8, or trailing bytes after the payload is malformed
+  (silent close; for public nodes, no REJECT). The responder checks all of these, then the suite rule.
 - Cards of a hidden node (scopes `peer` and `invite`) list only the suites it accepts; because of D22
   they never list `0x0002`.
 - The responder accepts only if `chosen` is its **own most preferred** suite in `offered ∩ supported`.
@@ -191,7 +192,10 @@ Initialisation, both sides: `InitializeSymmetric(protocol_name)`; `MixHash(prolo
 uses its own). During an `hs` rotation the responder holds a current and a previous key (§7.1). It
 processes message 1 with the current key first; if `P1` does not decrypt, it repeats the
 initialisation and message 1 with the previous key (the pre-message changes `h`, so this is a full
-second pass, not just one X25519). If neither decrypts, that is a single failure of step 3 of §5.
+second pass, not just one X25519). If neither decrypts, that is a single failure of step 3 of §5. On
+a hidden node both passes come before the access check of step 4, which needs the decrypted `P1`.
+Vector: transcript `XKhfs-rotation-prev-hs` and `rotation` in
+[vectors/handshake-transcript.json](vectors/handshake-transcript.json).
 
 | Step | Initiator writes | Responder reads |
 |---|---|---|
@@ -231,8 +235,9 @@ Sizes without payload: message 1 = 32 + 1184 = 1216 bytes (no key is set, so `P1
 plaintext without a tag); message 2 = 32 + 1104 + 48 + 16 = 1200 bytes; message 3 = 64 bytes.
 
 In XX, `P1` travels without Noise encryption (inside the carrier TLS only) and is not authenticated
-until message 2. Therefore `P1` in XX MUST contain only `proto_ver`, `features`, `services` and
-`time`; a `P1` in XX that carries `access`, `known_card_seq` or `early` is malformed (silent close).
+until message 2. Therefore `P1` in XX MUST contain only `proto_ver`, `features`, `services`, `time`
+and optionally `pad`; a `P1` in XX that carries `access`, `known_card_seq` or `early` is malformed
+(silent close).
 `P2` in XX MUST carry the responder's **public** card (never its peer or invitation card).
 
 **Decision D22 (XX and hidden nodes).** XX reveals the responder's static key and card to anyone who
@@ -245,8 +250,11 @@ require a puzzle for it under load.
 - Bootstrap lists MUST give a device ID (better the whole card) for every entry. With an expected
   device ID, the initiator sets `rid` (§3.3), checks `SHA-256(card signer akey) = rid` in `P2` before
   message 3, and only then sends its card.
-- With a bare address and no expected ID, the initiator MUST use a **throwaway identity** (a fresh
-  Ed25519 key and a minimal card, never reused), and treats every card and address learned in that
+- With a bare address and no expected ID, the initiator MUST use a **throwaway identity**: a fresh
+  account key, a fresh device key, a fresh handshake static key `hs` (the Noise `s` of this session)
+  and a minimal card, all never reused. Reusing the real `hs` key would link the session to the real
+  identity, and a responder that knows the real card would reject the throwaway card under the
+  `hs_key` ↔ device ID binding of §7. The initiator treats every card and address learned in that
   session as an unverified candidate; it MUST NOT use such a session for anything but finding
   candidates to verify through other, authenticated sessions.
 
@@ -403,6 +411,10 @@ Rules:
   `seq` counter covers all scopes of a node, so the value names a card). The responder includes its
   current card of that card's scope in `P2` exactly when that card has a higher `seq`; for an
   invitation card it includes nothing (after redemption the contact receives its peer card, §5).
+  A responder remembers the `seq` and scope of every card it issued within the last 30 days (the
+  longest card lifetime). If `known_card_seq` is 0, absent, or names no card it remembers, it sends
+  its current **public** card, or, on a hidden node (which has none), its current peer card when the
+  access proof used a personal pass and nothing when it used an invitation pass.
 - **Early data status.** Early data that is present but not processed — feature not negotiated,
   outside the 60 s window, replayed, or not 0-RTT safe — is reported as `early_status = 2`.
 - **Card checks** (both directions): the card is a valid `echofog/card/2` object
@@ -507,9 +519,15 @@ application-valid transcripts, every payload and card check of §7 passing:
 | `XKhfs` | `prologue_xk` (public card, `offered = [0x0001, 0x0002]`) | `HsInit_xk`: no access, `known_card_seq` = the public card's `seq` | `HsResp`: no card | `HsFinish`: the initiator's own card |
 | `XKhfs-access-proof` | `prologue_xk_hidden` (invitation card, `offered = [0x0001, 0x0a0a]`) | `HsInit_xk_hidden`: access proof over this transcript's real `h1` | `HsResp` | `HsFinish` |
 | `XXhfs` | `prologue_xx_bare_address` (`rid` zero) | `HsInit_xx`: no access, no `known_card_seq` | `HsResp_xx`: the responder's public card | `HsFinish_xx`: a throwaway identity's card |
+| `XKhfs-rotation-prev-hs` | `prologue_xk_hidden` | as `XKhfs-access-proof` | `HsResp` | `HsFinish` |
 
-All three use the same keys (`transcript_inputs`: the XK seeds). Payloads have no `pad`. Integers are
-big-endian except the AEAD nonce counter.
+The transcripts use the keys of `transcript_inputs` (the XK seeds), with two exceptions: in `XXhfs`
+the initiator static is the throwaway identity's own `hs` key (`node-card.json`
+`initiator_throwaway.hs_sk`), and in `XKhfs-rotation-prev-hs` the responder static is its previous key
+`prev_hs` (the file's `rotation` block shows the responder's failed first pass with its current key).
+Payloads have no `pad`. Integers are big-endian except the AEAD nonce counter. Each transcript's
+`final.sealed_record_example` is a [wire.md](wire.md) §8.4 record sealed with `k_i2r` (AAD with
+`sid`, `n`, class, path and pipe).
 
 **Decision D15 (handshake transcript vectors, satisfied).** What implementations must reproduce is
 the **Noise message bytes** of each message (`messages[].bytes`), every step's `h`, `ck`, `k`, `n`, and
@@ -518,5 +536,6 @@ around the messages follow from [vectors/frames.json](vectors/frames.json) and a
 comparison. Two independent step-2 implementations (the main one and a clean-room one written only
 from this document) agreed byte for byte on the first transcripts, and the reference generator
 reproduced them; the transcripts were then regenerated with application-valid inputs, and both
-implementations MUST reproduce the current file before L1 is final (the generator's `-crosscheck`
-option recomputes any implementation's transcript file).
+implementations MUST reproduce the current file before L1 is final. The generator's `-crosscheck`
+option recomputes any implementation's transcript file from its inputs and compares every
+initialisation step, every message's bytes and steps, and the final values listed above.
