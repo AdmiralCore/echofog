@@ -58,8 +58,8 @@ const (
 // TypeInfo describes a known session-level frame type.
 type TypeInfo struct {
 	Name  string
-	Max   int    // maximum payload length
-	Where Where  // where the type is valid
+	Max   int   // maximum payload length
+	Where Where // where the type is valid
 	// Feature, when non-zero, is the feature that introduces the frame: it is valid only after
 	// that feature was negotiated (wire.md §6.2, versioning.md §3.3).
 	Feature uint16

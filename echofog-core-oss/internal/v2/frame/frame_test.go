@@ -251,9 +251,9 @@ func TestPayloadCodecsRejectMalformed(t *testing.T) {
 func TestProtobufUnknownFieldsSkipped(t *testing.T) {
 	g := GoAway{Code: CodeGoingAway, Reason: "restart", RetryAfter: 30}
 	b := g.Append(nil)
-	b = append(b, 0x20, 0x07)                  // field 4 varint 7
-	b = append(b, 0x2a, 0x03, 'n', 'e', 'w')   // field 5 bytes
-	b = append(b, 0x35, 1, 2, 3, 4)            // field 6 fixed32
+	b = append(b, 0x20, 0x07)                   // field 4 varint 7
+	b = append(b, 0x2a, 0x03, 'n', 'e', 'w')    // field 5 bytes
+	b = append(b, 0x35, 1, 2, 3, 4)             // field 6 fixed32
 	b = append(b, 0x39, 1, 2, 3, 4, 5, 6, 7, 8) // field 7 fixed64
 	got, err := ParseGoAway(b)
 	if err != nil || got != g {

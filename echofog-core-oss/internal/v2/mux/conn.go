@@ -22,17 +22,17 @@ const (
 )
 
 var (
-	ErrConnClosed        = errors.New("mux: connection closed")
-	ErrTooManyStreams    = errors.New("mux: too many open streams")
-	ErrDatagramTooLarge  = errors.New("mux: datagram too large")
-	ErrWriteClosed       = errors.New("mux: write on closed stream")
-	ErrDeadline          = deadlineError{}
-	errFlowControl       = errors.New("mux: data beyond flow-control window")
-	errUnknownLocalStrm  = errors.New("mux: frame for a local stream that was never opened")
-	errDataAfterFin      = errors.New("mux: data after FIN")
-	errWrongLevel        = errors.New("mux: frame type not valid at connection level")
-	errUnknownConnFrame  = errors.New("mux: unknown connection-level frame without IGNORABLE")
-	errMalformedConnFrm  = errors.New("mux: malformed connection-level frame")
+	ErrConnClosed       = errors.New("mux: connection closed")
+	ErrTooManyStreams   = errors.New("mux: too many open streams")
+	ErrDatagramTooLarge = errors.New("mux: datagram too large")
+	ErrWriteClosed      = errors.New("mux: write on closed stream")
+	ErrDeadline         = deadlineError{}
+	errFlowControl      = errors.New("mux: data beyond flow-control window")
+	errUnknownLocalStrm = errors.New("mux: frame for a local stream that was never opened")
+	errDataAfterFin     = errors.New("mux: data after FIN")
+	errWrongLevel       = errors.New("mux: frame type not valid at connection level")
+	errUnknownConnFrame = errors.New("mux: unknown connection-level frame without IGNORABLE")
+	errMalformedConnFrm = errors.New("mux: malformed connection-level frame")
 )
 
 type deadlineError struct{}
