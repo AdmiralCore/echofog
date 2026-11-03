@@ -28,7 +28,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 | # | Property | Adversary / attack defeated | Mechanism | Addresses |
 |---|---|---|---|---|
 | S14 | Mutual authentication of node identities | A4 impersonates a node | Noise XK/XX; static keys bound to identities by signed cards; the remote static must equal the card's `hs_key` | — |
-| S15 | No unknown key-share | A4 publishes a card with another node's `hs_key` to borrow its answers | the expected responder node ID is in the prologue; `hs_key` ↔ node ID bindings remembered, conflicting cards rejected | K4 |
+| S15 | No unknown key-share | A4 publishes a card with another node's `hs_key` to borrow its answers | the expected responder device ID is in the prologue; `hs_key` ↔ node ID bindings remembered, conflicting cards rejected | K4 |
 | S16 | Binding to the carrier TLS when the responder is known | A4/A1 terminates TLS on both sides and relays the handshake | `cb` = TLS exporter in the prologue (XK, or XX with an expected ID); PATH_BIND MAC covers the new path's `cb`. Not for XX to a bare address, which uses a throwaway identity (§4.10) | — |
 | S17 | Hybrid post-quantum key agreement, and post-quantum bulk data on every path | A5 records handshakes and traffic | `ekem1` with ML-KEM-768 before the initiator's identity; bulk data in `X25519MLKEM768` TLS or sealed with the hybrid Noise keys | K10 (partly, §5) |
 | S18 | Hidden responders reveal nothing before the right to connect is proven | A2/A3/former contacts probe for a hidden node | per-invitation and contacts masking keys never published; XK only; transcript-bound access proof; uniform silent close at a random 0.5–3 s for every failure; rendezvous IDs instead of node IDs at relays | K5 |
@@ -53,7 +53,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 | S32 | Two-hop mailbox delivery with receipts and spam limits | A4 mailbox learns both ends; floods a public queue; resets quotas with new sessions | forwarding relay ≠ mailbox relay; queue IDs instead of peer IDs; FETCH/ACK; one hop; per-day quotas per node ID and network; proof of work for public queues; duplicate suppression | K7, K9 |
 | S33 | Relay circuits are end-to-end protected, cannot be hijacked, and are no presence oracle | A4 relay reads inner types; a neighbour claims to be the source; a prober asks relays whether a node is there | end-to-end XK inside circuits, sealed records with one counter per session; uniform delayed refusals; unlisted nodes reachable only by rendezvous IDs | K5, K7, K8 |
 | S34 | Chat sessions are not broken by replays; no classic-only sessions | A4 replays an old message to force a reset; A3 replays a pre-upgrade bundle | silent drop; no resets on failure; KEM prekey mandatory, classic init refused | K8, K10, audit 7-8 P1 |
-| S35 | Call media is authenticated per sender; no nonce reuse | A4 call member forges another's media or "mutes" a sender; a restarted sender reuses nonces | per-unit Ed25519 signature with the sender's per-call key; marking after verification; per-join keys; rekey on membership change; NACK budgets | P1 |
+| S35 | Call media is authenticated per sender; no nonce reuse | A4 call member forges another's media or "mutes" a sender; a restarted sender reuses nonces | batched Ed25519 authenticators (one signature per ≤ 100 ms batch, every unit hashed, each batch covered twice) with the sender's per-call key; candidates held until verified; marking after verification; per-join keys; rekey on membership change; NACK budgets. **Limit:** forged media can be played for up to ~100–200 ms before detection (§4.17) | P1 |
 | S36 | Call signals hidden from relays and signed over exact bytes | A4 relay reads the tree, VAD and NAT types | signalling only over end-to-end sessions; originator signature over bytes | P8 |
 | S37 | File transfers bound to the authenticated peer | A4 group member cancels or redirects another's download | session-bound transfers; sender serves only named recipients | P7 |
 | S38 | The exit does not learn the client's messenger identity | A4 exit links a VPN user to his chat identity | per-exit client identity; payment data only to served clients; random pay tags. **Limit:** the vault links a client's payments across exits (§4.8) | K6 (partly) |
@@ -102,8 +102,9 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 11. **0-RTT data** is not forward-secret against theft of the responder's handshake key and is
     replayable once per responder within 60 s; only public queries are allowed in it.
 12. **Clock dependence.** L0 windows are ±300 s; a node learns its offset from authenticated peers and
-    from HTTPS `Date` headers, but a node with a clock off by more than 5 minutes and no prior peer
-    cannot dial any camouflaged or masked address until it corrects the clock.
+    from the majority of several CDN `Date` headers (registries.md §12). Where a censor blocks or
+    falsifies most of those endpoints, a node with a clock off by more than 5 minutes and no prior peer
+    cannot dial any camouflaged or masked address until the user corrects the clock.
 13. **Hidden-node invitations are bearer secrets**; whoever holds a link can enter until it is revoked.
 14. **Group semantics** (P2–P6, P10) are application-level and unchanged by v2; chat/2 carries the group
     log as before. **Call traffic shape** (P9) is unchanged: voice and video rates and timers are
@@ -111,6 +112,11 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 15. **The handshake is not cross-checked yet.** Until two independent implementations agree on the
     transcripts (handshake.md §12), L1 interoperability is unverified.
 16. **Exit result timing** still separates "open" from "closed" for a client that measures it.
+17. **Batched call authentication** lets an insider's forged media be played for up to about one batch
+    plus one-way delay (~100–200 ms) before receivers detect it and stop playing unverified units from
+    that sender; strict mode removes the window at up to 100 ms of added latency.
+18. **The account key is a long-term secret on the device** in v2 (one device). Its theft (A6) lets the
+    thief sign new device lists for the account; recovery is a new mnemonic, so a new node ID.
 
 ## 5. Coverage of the v1 weaknesses
 
