@@ -1,0 +1,81 @@
+{
+  "description": "QUIC variable-length integers (RFC 9000 §16) as used by frame v2 and the signed-object envelope. Encoders MUST use the shortest form; decoders MUST reject longer forms.",
+  "spec": "wire.md §6, README.md §6",
+  "valid": [
+    {
+      "value": 0,
+      "encoded": "00"
+    },
+    {
+      "value": 37,
+      "encoded": "25"
+    },
+    {
+      "value": 63,
+      "encoded": "3f"
+    },
+    {
+      "value": 64,
+      "encoded": "4040"
+    },
+    {
+      "value": 15293,
+      "encoded": "7bbd"
+    },
+    {
+      "value": 16383,
+      "encoded": "7fff"
+    },
+    {
+      "value": 16384,
+      "encoded": "80004000"
+    },
+    {
+      "value": 494878333,
+      "encoded": "9d7f3e7d"
+    },
+    {
+      "value": 1073741823,
+      "encoded": "bfffffff"
+    },
+    {
+      "value": 1073741824,
+      "encoded": "c000000040000000"
+    },
+    {
+      "value": 151288809941952652,
+      "encoded": "c2197c5eff14e88c"
+    },
+    {
+      "value": 4611686018427387903,
+      "encoded": "ffffffffffffffff"
+    }
+  ],
+  "invalid": [
+    {
+      "encoded": "4025",
+      "would_decode_to": 37,
+      "reason": "non-minimal encoding: MUST be rejected"
+    },
+    {
+      "encoded": "8000000025",
+      "would_decode_to": 0,
+      "reason": "non-minimal encoding: MUST be rejected"
+    },
+    {
+      "encoded": "c000000000000025",
+      "would_decode_to": 37,
+      "reason": "non-minimal encoding: MUST be rejected"
+    },
+    {
+      "encoded": "4001",
+      "would_decode_to": 1,
+      "reason": "non-minimal encoding: MUST be rejected"
+    },
+    {
+      "encoded": "800000ff",
+      "would_decode_to": 255,
+      "reason": "non-minimal encoding: MUST be rejected"
+    }
+  ]
+}
