@@ -62,6 +62,7 @@ Datagram layout: `varint type ‖ payload` ([wire.md](wire.md) §6.5).
 | 0x10 | CALL_AUDIO | call media packet | services.md §9 |
 | 0x11 | CALL_VIDEO | call media packet | services.md §9 |
 | 0x12 | CALL_SIGNAL | lossy call signal (duplicated on the call stream) | services.md §9 |
+| 0x13 | CALL_AUTH | batch authenticator of call media units | services.md §9.3 |
 | 0x20 | EXIT_UDP | `varint session ‖ exit UDP fragment` | services.md §7 |
 | 0x30 | RELAY_DGRAM | `varint circuit_id ‖ payload` | services.md §6 |
 
@@ -231,7 +232,12 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/release-cosign/2` | co-signature input prefix of a release manifest | objects.md §9 |
 | `echofog/relay2/rendezvous` | rendezvous ID of an unlisted node at a relay | services.md §6.3 |
 | `echofog/mailbox2/pow` | proof of work of a public-queue deposit | services.md §5.2 |
-| `echofog/call2/unit` | signature input prefix of a media unit | services.md §9.2 |
+| `echofog/call2/unit` | hash prefix of a media unit in a batch authenticator | services.md §9.3 |
+| `echofog/call2/batch` | signature input prefix of a batch authenticator | services.md §9.3 |
+| `echofog/chat2/pqxdh` | HKDF info prefix of a PQXDH session key | services.md §4.0 |
+| `echofog/chat2/ratchet-init` | HKDF info of the initial ratchet chains | services.md §4.0 |
+| `echofog/chat2/ratchet-root` | HKDF info of the ratchet root KDF | services.md §4.0 |
+| `echofog/storage2/key` | L6: local storage key from the seed | services.md §4.0 |
 | `echofog/mailbox2/forward` | sealing of a forwarded deposit to the mailbox relay | services.md §5 |
 | `echofog/mailbox2/fetch-auth` | signature input prefix of FETCH and ACK | services.md §5 |
 | `echofog/chat2/seal` | sealed-sender envelope key | services.md §4 |
@@ -239,23 +245,18 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/call2/signal` | signature input prefix of forwarded call signals | services.md §9 |
 | `echofog/call2/epoch` | call epoch secret chain | services.md §9 |
 
-### 7.6 Retained v1 labels
+### 7.6 Retired v1 labels
 
-**Decision D13 (chat cryptography labels).** The end-to-end chat cryptography (PQXDH key agreement,
-Double Ratchet, local storage key) keeps its v1 constructions and labels unchanged; v2 changes its
-framing, not its key schedule. They are listed so that every label in use is in one place.
-
-| Label | Use |
-|---|---|
-| `FOG_PQXDH_X25519_SHA-256_ML-KEM-768_V1` | HKDF info prefix of a PQXDH session |
-| `FOG_RATCHET_INIT_V2` | initial chains |
-| `FOG_RATCHET_ROOT_V2` | root KDF |
-| `FOG_STORAGE_KEY_V1` | L6: local storage key from the seed |
+**Decision D13 (chat cryptography labels, revised).** The end-to-end chat cryptography keeps its v1
+constructions, but its labels move into the v2 scheme (§7.5): `FOG_PQXDH_X25519_SHA-256_ML-KEM-768_V1`
+→ `echofog/chat2/pqxdh`, `FOG_RATCHET_INIT_V2` → `echofog/chat2/ratchet-init`, `FOG_RATCHET_ROOT_V2` →
+`echofog/chat2/ratchet-root`, `FOG_STORAGE_KEY_V1` → `echofog/storage2/key`.
 
 The v1 labels `ECHOFOG_PREKEY_BINDING_V1`, `ECHOFOG_PREKEY_BINDING_V2`, `echofog/handshake/v2/*`,
 `echofog/access/v1/*`, `echofog/udp-obfs/v2`, `echofog/tcp-stealth/*`,
 `echofog-reality-stealth-aead-v2`, `echofog-quic-mlkem-binding-v1`, `echofog-hello-binding-v1`,
-`echofog/vpn-exit/v1/`, `echofog-mbox-v1`, `EXPORTER-echofog-peer-handshake` and `FOG_X3DH_V2`
+`echofog/vpn-exit/v1/`, `echofog-mbox-v1`, `EXPORTER-echofog-peer-handshake`, the four `FOG_*` labels
+above and `FOG_X3DH_V2`
 (classic X3DH: v2 refuses classic inits) are **retired**: v2 MUST NOT use them. Labels that appeared in
 drafts of this specification and were withdrawn — `echofog/noise3/selector` (the public-key selector,
 K1), `echofog/dht2/name-key`, `echofog/exit2/pay-tag` — are reserved and never reused.
@@ -372,3 +373,20 @@ A hidden node never sends REJECT before a valid access proof ([handshake.md](han
 | 5 | `exit` | the card's `exit` offer is live |
 | 6 | `domestic-only` | a server that is never dialed across a border (no camouflaged address needed) |
 | 7–31 | — | reserved: sent as zero, **ignored** on receipt (a later version may assign them) |
+
+## 12. Clock endpoints
+
+Default HTTPS endpoints for the clock check of [handshake.md](handshake.md) §7 (Decision D36). Each is
+a very large CDN or platform front page, visited with `HEAD /`; the node uses the `Date` header only.
+The list is configuration, not protocol: users and distributions may replace it, and a node needs at
+least 3 answers and a strict majority agreeing within 2 s.
+
+| Endpoint |
+|---|
+| `https://www.cloudflare.com/` |
+| `https://www.akamai.com/` |
+| `https://www.fastly.com/` |
+| `https://aws.amazon.com/` |
+| `https://www.microsoft.com/` |
+| `https://www.apple.com/` |
+| `https://www.google.com/` |
