@@ -1,0 +1,89 @@
+{
+  "description": "Deterministic pieces of the L1 handshake. Full XKhfs/XXhfs message transcripts are deferred (Decision D15).",
+  "spec": "handshake.md",
+  "seeds": {
+    "hs/cb": "96ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c",
+    "link/access_secret": "7f4f583be3ff43c7ae906618e20410b2a4fff7fb825afd5d55afcf93009840e8",
+    "hs/h1": "e850271767e974f5661ce8650781f8e4e27cbfe687abda0bef31ddcd462b03b9",
+    "hs/cookie_secret": "f282d7bfc9377a2978adbea7249954c21bd974383d6aa13834894c89251c3e8b",
+    "hs/xk/initiator_e": "2456944a039ccd89415bc5dccfdc38326ebbe256dbdb32878899412e34f51db3",
+    "hs/xk/initiator_s": "3d2519d63175276df6f43f11b7396bd32379ef876fe2c644937e249d50e813d9",
+    "hs/xk/responder_e": "2b15da44e9a57314064550e62b9a90628fe6c2c36c9b48afbfa055d50aedb5f3",
+    "hs/xk/initiator_e1_d": "3529785b1715a0a747814bdc815cc76acd93c4f16fcb4eb545a3234f0132cea4",
+    "hs/xk/initiator_e1_z": "64ead855a89dd3ebc92d23ca791e24f7f3dd4ea97423735b64d4c6fd5b4b5c3e",
+    "hs/xk/encaps_m": "cacc81686693ffe4706227a56be1439a951fde16a289e664223032c11009cede"
+  },
+  "initialize_symmetric": [
+    {
+      "suite_id": 1,
+      "protocol_name": "EchoFog/2/Noise_XKhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s",
+      "name_len": 55,
+      "h0": "ea320c0b60da63d81f6f35be055d8d0bef832523d723984ed7ac4244bc65542a",
+      "ck0": "ea320c0b60da63d81f6f35be055d8d0bef832523d723984ed7ac4244bc65542a"
+    },
+    {
+      "suite_id": 2,
+      "protocol_name": "EchoFog/2/Noise_XXhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s",
+      "name_len": 55,
+      "h0": "1bd06191e66973d581214dfbb0527f3883b1b38d5957cefefcfc206edb216563",
+      "ck0": "1bd06191e66973d581214dfbb0527f3883b1b38d5957cefefcfc206edb216563"
+    }
+  ],
+  "prologue_example": {
+    "cb": "96ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c",
+    "hs_hello": "0200010002000100",
+    "prologue": "6563686f666f672f6873322f70726f6c6f67756596ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c080200010002000100",
+    "h_after_prologue_xk": "3eee6fb742b73fe6e3d03d88bf28d6283314a6eeaabefbde004c54463f1c0636",
+    "responder_static_rs": "3da04cb50fc0a24661735c3ba5b9dcb84b01abafe58ca535521a78da059fcf2b",
+    "h_after_premessage_rs_xk": "a37210b7a0eb186c937ff29acd292330b88bf85346bb6836c2e55da6dbf70153"
+  },
+  "access": {
+    "secret": "7f4f583be3ff43c7ae906618e20410b2",
+    "h1": "e850271767e974f5661ce8650781f8e4e27cbfe687abda0bef31ddcd462b03b9",
+    "pass_id": "ed3cdd202d3d0e61",
+    "proof": "839ab2f5aa6f90216fa6310a8fc5bcb87ffefebed8adfaca843464bce76ac30c"
+  },
+  "payloads": {
+    "HsInit": {
+      "fields": "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2, access{pass_id, proof}, known_card_seq ts-86400, time ts",
+      "encoded": "08c801120601030405aa541a0508011201021a0508021201021a0508031201021a0508041201021a0508051201021a0508061201021a0508071201021a050808120102222c0a08ed3cdd202d3d0e611220839ab2f5aa6f90216fa6310a8fc5bcb87ffefebed8adfaca843464bce76ac30c2880a59fd7063080c8a4d706"
+    },
+    "HsResp": {
+      "fields": "proto_ver 200, features [1,3,4,5], services [(1,2),(2,2),(3,2)], observed 192.0.2.33:51234, time ts",
+      "encoded": "08c8011204010304051a04080110021a04080210021a0408031002420704c0000221c8224880c8a4d706"
+    },
+    "HsFinish": {
+      "fields": "card = node-card.json envelope (format illustration)",
+      "encoded_sha256": "33d903c1d43730232075db79c364368b0e21b9b2129f09417ebc76d58fcd060c",
+      "encoded_len": 545
+    }
+  },
+  "puzzle": {
+    "cookie_secret_R": "f282d7bfc9377a2978adbea7249954c21bd974383d6aa13834894c89251c3e8b",
+    "minute": 29894400,
+    "cookie": "9dc93509d0bb2bb8c9ed254591c07fab",
+    "difficulty": 12,
+    "nonce": 2274,
+    "hash": "0005d7de644ffb811f4e8fedf254a06dc6c651171b599b60b3eab333b382ba93"
+  },
+  "deferred_transcripts": {
+    "status": "to be produced with the implementation in step 2",
+    "inputs_xk": {
+      "prologue": "prologue_example.prologue",
+      "responder_static": "node-card.json hs_sk",
+      "initiator_e_sk": "2456944a039ccd89415bc5dccfdc38326ebbe256dbdb32878899412e34f51db3",
+      "initiator_e_pub": "f88bfc15a6d66ff942b730d7f3c9816a8ae9ed5e9ce378989b8e014fc44c4f49",
+      "initiator_s_sk": "3d2519d63175276df6f43f11b7396bd32379ef876fe2c644937e249d50e813d9",
+      "initiator_s_pub": "62d2d11f1fc9a4ee042be1a7e30ea0c54884913702d5c4107d5788868c183a2b",
+      "responder_e_sk": "2b15da44e9a57314064550e62b9a90628fe6c2c36c9b48afbfa055d50aedb5f3",
+      "responder_e_pub": "63a3356cc1c73ec4580a9a9ae6bcfb2d57b5f0b247bf28576f45e7fdc1e7220e",
+      "initiator_e1_seed_dz": "3529785b1715a0a747814bdc815cc76acd93c4f16fcb4eb545a3234f0132cea464ead855a89dd3ebc92d23ca791e24f7f3dd4ea97423735b64d4c6fd5b4b5c3e",
+      "initiator_e1_ek_sha256": "d5261479c83e2889b53ce4c261ba67471f72b0218b65790f7ccf61a178935c73",
+      "encaps_randomness_m": "cacc81686693ffe4706227a56be1439a951fde16a289e664223032c11009cede",
+      "ekem1_ct_sha256": "0946383b27a32bdce394a333f20a3a92e55b67aa1aa3b7c43f447387ef7cf832",
+      "ekem1_ss": "218ea1ad2ba9ace442619182df4932a0d90ca7f903ddc81056e70a9d247abb63",
+      "payloads": "P1 = payloads.HsInit, P2 = payloads.HsResp, P3 = payloads.HsFinish"
+    },
+    "note": "ML-KEM values are from Go crypto/mlkem (NewDecapsulationKey768) and crypto/mlkem/mlkemtest (Encapsulate768)."
+  }
+}
