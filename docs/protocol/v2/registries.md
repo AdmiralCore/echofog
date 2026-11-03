@@ -266,8 +266,8 @@ K1), `echofog/dht2/name-key`, `echofog/exit2/pay-tag` — are reserved and never
 
 `akey = u8 alg ‖ key bytes`; the length is fixed by `alg`. Every key in a v2 message or object is an
 akey (including masking keys), except fields whose format fixes the algorithm and size and says so:
-`Prekeys.spk` (raw X25519, 32 bytes), `Prekeys.kem` (raw ML-KEM-768, 1184 bytes), the Noise keys inside
-handshake messages, and `MaskKey`-derived wire values. Text form: `<name>:<base64url-nopad(key bytes)>`, for example
+`Prekeys.spk` (raw X25519, 32 bytes), `Prekeys.kem` (raw ML-KEM-768, 1184 bytes), and the raw keys inside
+Noise handshake messages. Text form: `<name>:<base64url-nopad(key bytes)>`, for example
 `ed25519:11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo` (the RFC 8032 TEST 1 public key).
 
 | Tag | Name | Kind | Public key | Signature / ciphertext | Status |
