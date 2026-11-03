@@ -58,6 +58,11 @@ flow (K1). It wraps the datagrams of an inner QUIC v1 connection (§5).
   scope `peer` or `invite` ([objects.md](objects.md) §3.2), which are delivered inside sessions and
   invitations and never stored in the DHT or passed in PEX. Public cards list only camouflaged
   addresses (§3, §4). So a censor who crawls the DHT learns no noise3 address or key at all.
+- **Decision D37 (stranger-reachable servers need a cover).** A consequence: strangers can reach a node
+  only through a camouflaged suite. Every server that accepts strangers (any node with a public card)
+  MUST run `reality2-quic` or `reality2-tcp` with a cover site, or `ws2` behind a CDN. The installer
+  finds a cover automatically (§3.5); a node without one publishes no public card and serves only peers
+  and invitees.
 - A hidden node uses a **separate masking key per unredeemed invitation**, and one shared
   **contacts key** (rotated at least every 30 days) for contacts that have completed a session
   ([objects.md](objects.md) §10). Because the selector is keyed on the ECDH secret (§2.3), sharing a key
@@ -347,6 +352,23 @@ records are visible by size. It MUST look like the cover's:
   within the timestamp window is admitted (the node sees the hello for the first time) and can
   compare the node's answer with the cover's. Mirroring makes the two answers alike up to the end of
   the handshake; it does not make them identical afterwards ([security.md](security.md) §4).
+
+### 3.5 Finding a cover automatically
+
+The installer and every node at start-up select the cover without operator work, as v1 nodes already
+search their neighbourhood:
+
+1. Candidates: the operator's configured site, if any; otherwise hosts in the node's own /24 (IPv6 /48)
+   and nearby /24s found by probing port 443, as in v1's neighbour search, never more than 1 probe per
+   second.
+2. A candidate qualifies if it serves HTTPS on TCP 443 and HTTP/3 on UDP 443 with a certificate valid
+   for an SNI that resolves to it, and its cover profile (§3.4) can be reproduced. For `reality2-tcp`
+   alone, HTTPS on TCP is enough.
+3. Prefer covers that select `X25519MLKEM768` (no sealed mode needed) and that are popular in the
+   node's country.
+4. The chosen cover is re-checked with the profile measurement every `uniform(5, 7)` hours; if it stops
+   qualifying, the node picks another and publishes a new card. If no cover qualifies, the node keeps
+   serving peers and invitees and tells the operator that it is not reachable by strangers.
 
 ## 4. reality2-tcp and ws2
 
