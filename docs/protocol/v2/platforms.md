@@ -101,7 +101,9 @@ A phone is a full v2 peer:
 ## 4. Testing
 
 - **CI build.** Every change to the core is built for android/arm64 and android/amd64 with
-  `CGO_ENABLED=0` (a `go build`/`go vet` with that setting proves there is no cgo) and with
+  `CGO_ENABLED=0` (`go build` with that setting proves there is no cgo; `go vet` runs with the default
+  toolchain settings, because on Go 1.27.3 `go vet` for android/amd64 fails with `CGO_ENABLED=0` while
+  the build succeeds) and with
   `gomobile bind` for Android, and for ios/arm64 through `gomobile bind`, which links with the external
   linker the Go toolchain requires for iOS. A build failure fails CI. A check verifies that no EchoFog
   package imports `"C"`, lists every file with a build tag, and verifies that each tagged file has a
