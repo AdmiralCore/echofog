@@ -199,13 +199,14 @@ func (c *Conn) fail(err error) {
 		return
 	}
 	c.err = err
-	close(c.done)
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	// The violation hook runs before Done is closed, so observers of Done see its effects.
 	var v *ViolationError
 	if errors.As(err, &v) && c.cfg.OnViolation != nil {
 		c.cfg.OnViolation(v)
 	}
+	close(c.done)
 	c.rw.Close()
 }
 
