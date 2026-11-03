@@ -44,6 +44,8 @@ encapsulation, and signature verification and canonical field order of every sig
 ## Transcripts
 
 `handshake-transcript.json` is produced by the generator's own Noise implementation (`gen/noise.go`)
-and matches byte for byte the transcripts of the two independent step-2 implementations. To check
+It reproduced byte for byte the first transcripts of the two independent step-2 implementations
+(which used the earlier, partly invalid payloads); the current transcripts use application-valid
+inputs and must now be reproduced by both implementations again. To check
 another implementation's output: `GOWORK=off go run . -crosscheck <its handshake-transcript.json>`
 recomputes every transcript from that file's inputs and compares the message bytes and final hash.
