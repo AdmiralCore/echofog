@@ -1,9 +1,3 @@
-// Package objects implements the protocol v2 signed objects (docs/protocol/v2/objects.md): the
-// envelope, canonical protobuf bodies, node cards, device lists, prekeys, mailbox hints, name
-// bindings, release manifests and links.
-//
-// Received objects are verified over and forwarded as the exact bytes received; nothing here
-// re-encodes a received object.
 package objects
 
 import (

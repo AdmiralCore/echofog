@@ -98,11 +98,12 @@ func ParseLink(s string) (*Link, error) {
 	case strings.HasPrefix(s, linkPrefix):
 		q = s[len(linkPrefix):]
 	case strings.HasPrefix(s, "https://"):
-		i := strings.Index(s, webMarker)
-		if i < 0 || strings.ContainsAny(s[len("https://"):i], "/?#") {
+		rest := s[len("https://"):]
+		i := strings.Index(rest, webMarker)
+		if i <= 0 || strings.ContainsAny(rest[:i], "/?#@\\") {
 			return nil, badLink("not a join page")
 		}
-		q = s[i+len(webMarker):]
+		q = rest[i+len(webMarker):]
 	default:
 		return nil, badLink("not an echofog://join link")
 	}
