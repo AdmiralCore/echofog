@@ -17,7 +17,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 | S6 | The node's REALITY server answers like the cover up to the end of the handshake | A1 compares the ServerHello (group, cipher, SCID length, certificate size) with the cover's | cover profile measured periodically and reproduced exactly; suite disabled when it cannot be; post-quantum confidentiality kept by sealed mode when the cover is classical | V1 |
 | S7 | Variable first-packet length and shape, no fixed sizes | A1 classifies by "1292-byte first datagram", 76-byte punch bursts | shape profiles as data: Init length distribution, padding, junk, decoys; random punch packets | K2, V2 (partly, §4.4) |
 | S8 | No plaintext STUN from carrier sockets | A1 links "STUN to Google every 20 s" with "random UDP" on the same port | OBSERVED_ADDR from authenticated peers with agreement rules | K2, audit 5-6 #1 |
-| S9 | Servers are never dialed across a border over noise3 | A1 sees random UDP to data-centre IPs | role and suites only from signed cards; unknown country counts as border | K2, S12 |
+| S9 | Servers are never dialed across a border over noise3 | A1 sees random UDP to data-centre IPs | role and suites only from signed cards; unknown country counts as border | K2, C12 |
 | S10 | Neutral identifiers | A1/A2 read `O=EchoFog`, ALPN `echo-fog-protocole` | neutral certificates, ALPN `h3`/`h2` | K1 |
 | S11 | One padding mechanism per carrier, randomised budgets | A1 learns "exactly 4096 padded bytes" or the double-padded TCP shape | PADDING frames governed by profiles | V2, V6 |
 | S12 | No loss-induced flow death; no cheap redirection | v1/draft: 65 lost packets killed a flow; an on-path racer could redirect replies | 32-bit packet-number reconstruction (±2^31); reply address moves only after 2 fresh packets; dead-flow restart | — |
@@ -134,7 +134,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 | V6 | **fixed** | one frame format, one padding mechanism, one card, one time unit |
 | V7 | **fixed** | dead mechanisms not specified |
 | N1 | **fixed** | 128-bit selectors and AEAD; signed observations |
-| S12 | **fixed** | roles from signed cards, saved with the routing table |
+| C12 | **fixed** | roles from signed cards, saved with the routing table |
 | P1 | **fixed** | per-sender signatures, per-join keys, rekey on membership change, verification before marking |
 | P2–P6, P10 | **not fixed (out of scope)** | group membership and log sync are application-level; separate groups work |
 | P7 | **fixed** | session-bound transfers |
