@@ -57,14 +57,18 @@ A receiver MUST check, in this order, and reject the object on the first failure
 2. `alg` is a known signature algorithm. Unknown: the object is *unusable* (skipped), not malformed.
 3. Signature: Ed25519 per RFC 8032 §5.1.7 with the canonical-`S` check (`S < L`); signer keys of small
    order MUST be rejected. Implementations MUST NOT verify over a re-encoding.
-4. `not_after > now − 60` (60 s skew) and `not_after − now ≤ max lifetime + 60`.
+4. `not_after > now − 60` (60 s skew) and, for a known label, `not_after − now ≤ max lifetime + 60`.
+   For an **unknown** label the object is not rejected for a long lifetime: a store treats it as
+   expiring at `min(not_after, receipt + 24 h)` (it is clipped, so objects of labels introduced later
+   are still stored and forwarded by older nodes).
 5. `body` is canonical (§2.3) and parses as the label's message.
 6. Label-specific rules (sections below).
 
 Objects are stored and forwarded as the exact received bytes. `object_id = SHA-256(envelope)`
 identifies a specific object; two objects with the same `(signer, label, seq)` and different bytes are
-**equivocation**: a receiver keeps the one already held, and DHT nodes keep the one with the smaller
-`object_id` (a deterministic rule all nodes agree on).
+**equivocation**. Every receiver, DHT nodes included, keeps the one with the smaller `object_id`
+(one deterministic rule, so all honest nodes converge on the same object), and treats the signer as
+misbehaving.
 
 ### 2.3 Canonical protobuf
 
@@ -73,14 +77,23 @@ A body is canonical when:
 1. fields appear in strictly ascending field-number order; the elements of one repeated field are
    consecutive;
 2. a non-repeated field appears at most once;
-3. scalar fields with the default value, and empty strings, bytes and messages, are omitted;
+3. scalar fields with the default value and empty strings and bytes are omitted. An embedded message
+   field is present exactly when the message is present, even if it is empty (`ExitOffer exit` with all
+   fields zero is a free exit, not an absent one); elements of repeated fields are never omitted;
 4. repeated numeric scalar fields are packed;
 5. all varints (tags, lengths, values) use the shortest encoding;
 6. groups (wire types 3 and 4) do not occur;
 7. nested messages of known types are canonical by the same rules.
 
-Unknown fields are allowed and are covered by the signature; rules 1, 2, 5 and 6 are checked for them
-too. A receiver MUST reject a non-canonical body (P4: one object, one encoding).
+Unknown fields are allowed, kept byte-for-byte and covered by the signature. For unknown fields a
+receiver checks only rules 1 (ascending field numbers; equal numbers only consecutively, since the
+field may be repeated), 5 and 6. A receiver MUST reject a body that breaks a rule it can check (P4: one
+object, one encoding).
+
+**Extension rules for all object bodies.** Readers MUST ignore unknown bits of flag fields and treat an
+unknown enum value (for example a `role` value) as the documented default ("unknown": for `role`, an
+ordinary user). Count limits on repeated fields are **processing** limits: a reader uses the first N
+elements and ignores the rest; only the byte-size limit of the envelope is a validity limit.
 
 ## 3. Node card (`echofog/card/2`)
 
@@ -102,6 +115,14 @@ message NodeCard {
   string release = 12;                  // build version, ≤ 32 bytes, e.g. "0.3.0"
   bytes  account = 13;                  // multi-device: account node ID (32); empty = this node is the account
   bytes  prekeys_hash = 14;             // SHA-256 of the current prekeys/2 envelope; optional
+  HsKey  prev_hs = 15;                  // previous handshake key during a rotation (handshake.md §7.1)
+  uint32 scope = 16;                    // 0 public, 1 peer, 2 invite (§3.2)
+  bytes  invite_id = 17;                // scope invite: the invitation's pass_id (8 bytes)
+}
+
+message HsKey {
+  bytes  key = 1;                       // akey (x25519)
+  uint64 not_after = 2;
 }
 
 message Addr {
@@ -115,8 +136,8 @@ message Addr {
 }
 
 message MaskKey {
-  bytes  pub = 1;                       // X25519 public key, 32 bytes
-  uint64 not_after = 2;                 // accepted until this time, even after rotation
+  bytes  key = 1;                       // akey (x25519, 33 bytes): tagged like every other key (L7)
+  uint64 not_after = 2;                 // upper bound of acceptance; ≤ card not_after + 7 days
 }
 
 message SuiteParams {
@@ -130,13 +151,22 @@ message SuiteParams {
 - The envelope signer is the node's identity key; `node_id = SHA-256(akey)`.
 - Lifetime (`not_after − now`) at most **7 days** (Decision D12: at most 30 days for invite-scoped
   cards, §10). A node republishes when less than 2 days remain or anything changes.
-- `seq` SHOULD be `max(previous seq + 1, issue time in unix seconds)`.
-- A receiver keeps, per node ID, only the valid card with the highest `seq`, and never merges fields
-  of different cards. SNI, role, addresses and masking keys come **only** from that card (K4).
+- `seq` SHOULD be `max(previous seq + 1, issue time in unix seconds)`; one counter per node covers all
+  scopes.
+- **Scopes.** A node issues cards of three scopes:
+  - `public` (0): the card stored in the DHT and passed in PEX. It MUST NOT contain `noise3` addresses
+    or the masking keys they use, and SHOULD NOT contain `ws2` addresses (wire.md §2.1, §4.4).
+  - `peer` (1): sent only inside sessions (`HsResp.card`, `HsFinish.card`, `CARD_UPDATE`) to peers the
+    node chooses; may contain everything. Receivers MUST NOT forward or publish it.
+  - `invite` (2): delivered in an invitation link (§10.3); carries `invite_id`; never forwarded.
+- A receiver keeps, per (node ID, scope, `invite_id`), only the valid card with the highest `seq`, and
+  never merges fields of different cards. To dial, it uses the most recent of its cards for that node.
+  SNI, role, addresses and masking keys come **only** from cards (K4).
 - `role = server` cards MUST list at least one camouflaged address (`reality2-*` or `ws2`), unless
-  the server is domestic-only (then it is never dialed across a border; [wire.md](wire.md) §1).
+  the card has flag `domestic-only` (then it is never dialed across a border; [wire.md](wire.md) §1).
 - `flags.unlisted`: receivers MUST NOT pass the card to third parties (PEX, DHT `NODES` replies) and
-  MUST NOT publish it. Hidden and anonymous nodes set it.
+  MUST NOT publish it. Hidden and anonymous nodes set it; they issue no public card.
+- `hs_key` and `prev_hs` MUST NOT be bound to another node ID (handshake.md §7).
 - Every address with a v2 suite has a valid `mask` index; every masking key is referenced by at least
   one address.
 - Size: the encoded envelope is at most 4096 bytes.
@@ -160,6 +190,11 @@ v2 is single-device, but the formats leave room for several devices per person:
 
 In v2 the account key is the device key, `account` is empty, and no device list is needed.
 
+**Open question OQ1 (account and device keys).** Deriving a separate account key and device key from
+the mnemonic already in v2, and publishing a one-device list from day one, would avoid a second
+change of node IDs when multi-device ships. It changes what a contact's "identity" is and needs a
+product decision.
+
 ### 3.5 Shop links
 
 `shop` lets an exit operator point to a page where people can buy access or contact them.
@@ -167,9 +202,13 @@ In v2 the account key is the device key, `account` is empty, and no device list 
 **Decision D17 (shop links).** Only `https://` URLs (including `https://t.me/…`) and
 `echofog://contact?…` links are valid; anything else invalidates the card. A client:
 
-- shows a shop link only with an "external resource, run by the node's operator" label;
-- shows it only for nodes whose valid cards it has seen for at least 14 days and whose local rating is
-  at or above the client's threshold;
+- shows a shop link only with an "external resource, run by the node's operator" label, and shows the
+  registrable domain in punycode (no look-alike Unicode);
+- hides links whose domain resembles the project's own domains;
+- warns that payments made outside the TON vault are not protected by EchoFog;
+- shows it only for nodes whose valid cards it has seen for at least 14 days and whose local rating —
+  which counts vault-paid traffic that was actually delivered, not only age — is at or above the
+  client's threshold;
 - never opens, fetches or previews the link automatically.
 
 ### 3.6 CARD_UPDATE
@@ -257,8 +296,9 @@ Lifetime ≤ 6 hours.
 
 ## 8. Name binding (`echofog/name/2`)
 
-A person's claim to a blockchain name (`alice.ton`), stored in the DHT under the name's key. The format
-is defined here; resolution against the chain is specified with the `names` service later.
+A person's claim to a blockchain name (`alice.ton`). The format is defined here; resolution against the
+chain is specified with the `names` service later. **v2 nodes do not store or serve this kind in the
+DHT** ([dht.md](dht.md) §2): without an on-chain check, any signer could squat a name.
 
 ```
 message NameBinding {
@@ -271,14 +311,26 @@ message NameBinding {
 
 ## 9. Release manifest (`echofog/release/2`)
 
+The object body carries the manifest and co-signatures:
+
 ```
+message ReleaseObject {                 // body of echofog/release/2
+  bytes manifest = 1;                   // canonical Release message
+  repeated CoSig cosigs = 2;
+}
+message CoSig {
+  bytes key = 1;                        // akey of a release key
+  bytes sig = 2;                        // Sign(key, "echofog/release-cosign/2" ‖ SHA-256(manifest))
+}
+
 message Release {
   string version = 1;                   // "0.3.0"
   uint64 released_at = 2;
   repeated Policy policies = 3;
   repeated Artifact artifacts = 4;
-  repeated bytes next_keys = 5;         // akeys allowed to sign later manifests (rotation), ≤ 3
+  repeated bytes next_keys = 5;         // akeys to add to the release key set, ≤ 3
   string notes_url = 6;                 // https only
+  repeated bytes revoked_keys = 7;      // akeys removed from the release key set
 }
 message Policy {
   string component = 1;                 // "proto", "l1:1", "svc:3", "obj:echofog/card/2", "l0:2"
@@ -295,9 +347,24 @@ message Artifact {
 }
 ```
 
-**Decision D16 (release keys).** Builds carry up to 3 release public keys. A manifest is valid if it is
-signed by one of them or by a key listed in `next_keys` of the last applied manifest. Release keys are
-never node keys. Rules for applying policies: [versioning.md](versioning.md) §5.
+**Decision D16 (release keys, revised).** Builds carry 3 release public keys (the initial key set).
+
+- **Threshold.** A manifest is valid only with signatures by **2 distinct keys** of the current key set:
+  the envelope signer plus at least one `CoSig` over the same manifest. Release keys are never node
+  keys.
+- **Key set.** The current set is the compiled set, plus `next_keys`, minus `revoked_keys`, of every
+  applied manifest in order. A manifest that changes the set must be valid under the set before the
+  change, and its 2 signers must not be among the keys it revokes. The set never has more than 5 keys
+  and never fewer than 2.
+- **seq.** The envelope `seq` MUST equal `released_at`; a reader rejects a manifest with
+  `released_at > now + 86400` or `released_at` ≤ that of the last applied manifest. A manifest cannot
+  block later ones with a huge `seq`.
+- **Discovery.** Manifests are stored in the DHT under the fixed key
+  `SHA-256("echofog/dht2/release")`, whatever key signed them ([dht.md](dht.md) §2), so rotated keys
+  are found by old builds; servers also return the latest manifest in pex/2.
+- **Never lock out.** Rules in [versioning.md](versioning.md) §5. Artifacts are information for the
+  user and for package managers: a node MUST NOT install an artifact automatically on the strength of
+  a manifest alone.
 
 ## 10. Links v2
 
@@ -330,16 +397,30 @@ The node's current public card, without `s`.
 
 For each invitation the hidden node mints:
 
-1. a new masking key pair, used only by this invitation (or its group, [wire.md](wire.md) §2.1);
+1. a new masking key pair, used only by this invitation (or by a small group of unredeemed invitations
+   when a listener's key limit is reached, [wire.md](wire.md) §2.1);
 2. a new 16-byte access secret `S` and its pass (`pass_id`, expiry, use count) in local state;
-3. an **invitation card**: the node's identity, flags `unlisted | invite-scoped`, the addresses through
-   which it is reachable, each pointing to the new masking key; lifetime ≤ 30 days (Decision D12).
+3. an **invitation card**: the node's identity, `scope = invite`, `invite_id = pass_id`, flags
+   `unlisted | invite-scoped`, the addresses through which it is reachable, each pointing to the new
+   masking key; lifetime ≤ 30 days (Decision D12).
 
-Invitation cards are never published or forwarded, and receivers keep them per (node, invitation).
-After the first session, the hidden node sends the invitee a normal unlisted card with `CARD_UPDATE`.
-Revoking an invitation deletes its pass and its masking key: from then on its holders cannot reach
-the masking layer at all.
+Lifecycle:
 
-Because every invitation has its own masking key, an observer who obtained one invitation can
-recognise only the flows of that invitation, not those of other invitees, and loses even that when the
-invitation is revoked.
+- **Redemption.** In the first complete session, the hidden node gives the contact a personal pass
+  ([handshake.md](handshake.md) §5) and a peer-scope card whose addresses use the node's **contacts
+  masking key**. The invitation pass is then used up (if its use count allows only one entry).
+- **Contacts key.** One key (per listener) shared by all contacts, rotated at least every 30 days: the
+  node sends the new peer card to every contact in a session before it stops accepting the old key, and
+  keeps the old one until every contact seen in the last 30 days has the new card. Sharing is safe:
+  the noise3 selector is keyed on the ECDH secret, so a contact who knows the key cannot recognise
+  other contacts' flows passively; at most it can probe actively, which a contact can do anyway.
+- **Revoking an unredeemed invitation** deletes its pass and, when no other unredeemed invitation uses
+  it, its masking key at once (regardless of `not_after`). If the key is shared with other unredeemed
+  invitations, the node reissues those invitations (their holders have no session yet, so they need a
+  new link).
+- **Revoking a contact** deletes its personal pass; its handshakes then fail with the uniform silent
+  close. Its knowledge of the contacts key lets it confirm the node actively, so after revoking a
+  contact the node SHOULD rotate the contacts key early.
+
+Because unredeemed invitations have their own masking keys, a leaked link stops working at L0 as soon
+as it is revoked.
