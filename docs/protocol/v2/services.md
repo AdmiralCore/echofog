@@ -66,8 +66,22 @@ Peer exchange of **signed public cards only**.
 
 ## 4. chat/2 (service 3)
 
-Personal end-to-end messages. The key agreement and ratchet are the v1 PQXDH and Double Ratchet,
-unchanged (Decision D13); v2 changes how they are carried.
+Personal end-to-end messages. The key agreement and ratchet keep the constructions of v1's PQXDH and
+Double Ratchet; v2 renames their labels into the `echofog/chat2/*` scheme (Decision D13, revised) and
+changes how messages are carried.
+
+### 4.0 Key schedule labels
+
+| Step | v2 label (replaces) | Construction |
+|---|---|---|
+| PQXDH session key | `echofog/chat2/pqxdh` (`FOG_PQXDH_X25519_SHA-256_ML-KEM-768_V1`) | `SK = HKDF-SHA256(ikm = 0xFF×32 ‖ DH1 ‖ DH2 ‖ DH3 [‖ DH4] ‖ SS, salt = 32 zero bytes, info = "echofog/chat2/pqxdh" ‖ KEM key ID(32) ‖ SHA-256(KEM ciphertext)(32), L = 32)` |
+| initial chains | `echofog/chat2/ratchet-init` (`FOG_RATCHET_INIT_V2`) | as v1, HKDF-SHA256 from `SK` with this info |
+| root KDF | `echofog/chat2/ratchet-root` (`FOG_RATCHET_ROOT_V2`) | as v1, HKDF-SHA256 of the DH output with salt = root key and this info |
+| chain KDF | (unchanged) | `MK = HMAC-SHA256(CK, 0x01)`, `CK' = HMAC-SHA256(CK, 0x02)` |
+| message AEAD | (unchanged) | XChaCha20-Poly1305 with `MK`, random 24-byte nonce, AD = session AD ‖ header |
+
+The local storage key (L6) is renamed the same way: `echofog/storage2/key` replaces
+`FOG_STORAGE_KEY_V1`. A vector for the PQXDH session key is in [vectors/kdf.json](vectors/kdf.json).
 
 ### 4.1 Frames
 
@@ -92,7 +106,8 @@ k = HKDF-SHA256(ikm = X25519(eph_sk, IK_recipient), salt = empty,
                 info = "echofog/chat2/seal" ‖ eph(32) ‖ IK_recipient(32), L = 32)
 
 message Inner {
-  bytes  sender = 1;      // akey of the sender's identity key
+  bytes  sender = 1;      // akey of the sender's account key (its node ID is SHA-256 of it)
+  bytes  device = 6;      // akey of the sending device key; the sender's device list must list it
   bytes  id = 2;          // 16-byte message ID
   uint64 time = 3;
   oneof body {
@@ -164,6 +179,8 @@ Timeouts: QUEUE_CREATE 10 s, DEPOSIT 10 s, FORWARD 20 s, FETCH `wait` + 5 s, ACK
 - **Public queues** accept a deposit only with proof of work:
   `SHA-256("echofog/mailbox2/pow" ‖ queue(16) ‖ SHA-256(blob) ‖ u64(pow))` with at least `pow_bits`
   leading zero bits (default 20, at most 26; the hint shows it). The sender computes it; M checks it.
+  **Decision D34:** proof of work is the only first-contact gate at launch; payment and rendezvous
+  tokens are added later.
   A public queue holds at most 100 items and 2 MiB, separate from private queues, so a flood of first
   contacts never blocks contacts' mail.
 
@@ -306,8 +323,9 @@ The VPN exit. Streams are opened by the client to an exit whose card has the `ex
 Timeouts: TCP_CONNECT 10 s to RESULT, UDP_OPEN 5 s, ACCOUNT_GET 5 s, VOUCHER 20 s.
 
 - **Client identity.** A client MUST connect to an exit under a **per-exit client identity**: a
-  separate Ed25519 key per exit (random, stored locally), with a minimal unlisted peer card. The exit
-  never learns the client's messenger identity; access comes from payment, not identity.
+  separate random account key and device key per exit (stored locally, never derived from the
+  mnemonic), with a one-device list and a minimal unlisted peer card. The exit never learns the
+  client's messenger identity; access comes from payment, not identity.
 - TCP: the client sends TCP_CONNECT and MAY send DATA frames immediately (fast open). The exit
   answers RESULT, then DATA in both directions; stream FIN is TCP FIN. `host` ≤ 253 bytes.
 - UDP over datagrams: `EXIT_UDP` payload is
@@ -330,8 +348,10 @@ Timeouts: TCP_CONNECT 10 s to RESULT, UDP_OPEN 5 s, ACCOUNT_GET 5 s, VOUCHER 20 
   ```
 - Vouchers use the existing TON vault contract and voucher cell (`EFV1`). `code_hash` names the vault
   code; exits accept only codes on their allow-list. An exit caps unpaid credit per vault at
-  `min(deposit, 0.05 TON)` (V5). The vault owner and key are the same for every exit the client pays,
-  so colluding exits (and the chain) can link a client across exits; see Open question OQ5.
+  `min(deposit, 0.05 TON)` (V5). **Decision D40:** v2 ships with the current vault. Its owner and key
+  are the same for every exit the client pays, so colluding exits (and the chain) can link a client's
+  payments across exits; this is a stated residual risk ([security.md](security.md) §4.8), and a vault
+  contract v2 with per-exit payment keys is on the payments roadmap.
 - The exit resolves names with DoH or DoT and a cache, never with the host's plaintext resolver (K6).
   It checks the **resolved** address (after DNS, against rebinding) and refuses private, loopback,
   link-local and reserved destinations.
@@ -343,8 +363,27 @@ Timeouts: TCP_CONNECT 10 s to RESULT, UDP_OPEN 5 s, ACCOUNT_GET 5 s, VOUCHER 20 
 - Padding: exit streams use PADDING frames according to the exit address's shape profile, including on
   hidden exits (V2: v1 hidden exits did not pad at all).
 - Codes: 0x100 `payment-required`, 0x101 `policy`.
-- Later: vault contract v2 with code version and per-exit payment keys (K6, V5), MASQUE, resumable
-  tunnels across paths.
+
+### 7.1 Exit speed rating
+
+**Decision D38.** v1's bandwidth probe (an exit sending bursts on request) is not in v2: it was an
+amplification vector (V4). Clients rate exits from traffic they pay for anyway:
+
+- **Passive measurement.** For every tunnel stream that carries at least 1 MiB in one direction over at
+  least 2 s, the client records the goodput (bytes over the active transfer time, excluding idle gaps
+  longer than 500 ms) per exit and direction. The rating is the median of the last 20 samples, shown
+  with their count. Samples taken while the client's own link was saturated by other traffic are
+  discarded.
+- **Manual test.** Only when the user starts it: the client downloads (and, for upload, posts) through
+  the exit a test object from a speed-test URL in its configurable list (default: none; the user or
+  the distribution sets it), for at most 25 MiB or 10 s, as ordinary tunnel traffic counted against the
+  client's credit, at most once per exit per 10 minutes.
+- There is no exit-side frame or endpoint that makes an exit send data that its client did not request
+  through its own tunnel: no bursts on request, no amplification. Ratings stay local; they are not
+  published (a published rating could be gamed).
+
+Later: vault contract v2 with code version and per-exit payment keys (K6, V5), MASQUE, resumable
+tunnels across paths.
 
 ## 8. files/2 (service 7)
 
@@ -405,31 +444,68 @@ kind(u8) ‖ epoch(u8) ‖ sender(u8) ‖ stream(u8) ‖ gen(u8) ‖ seq(u32) �
 - **Confidentiality** against everyone outside the call: AES-256-GCM under a per-sender, per-join key
   ```
   k_sender = HKDF-SHA256(ikm = epoch_secret, salt = empty,
-                         info = "echofog/call2/sender-key" ‖ sender_node_id(32) ‖ join_salt(16), L = 32)
+                         info = "echofog/call2/sender-key" ‖ sender_device_id(32) ‖ join_salt(16), L = 32)
   nonce    = stream(u8) ‖ kind(u8) ‖ 0x0000 ‖ seq(u32) ‖ 0x00000000
   aad      = the unit header (the fields before frag_idx)
   ```
   Because every join has a new `join_salt`, a sender that restarts or rejoins and starts `seq` at 0
   again uses a new key: no nonce is reused (audit: rejoin in the same epoch). A sender MUST NOT send
   media until it has received the current epoch secret after its (re)join.
-- **Source authentication** (P1): every member knows `epoch_secret` and could compute anyone's
-  `k_sender`, so the key does not authenticate the sender. Each unit therefore carries a signature by
-  the sender's per-call media key:
-  ```
-  unit = ciphertext ‖ tag ‖ sig(64)              (the nonce comes from the header and is not sent)
-  sig  = Ed25519(media_key, "echofog/call2/unit" ‖ header ‖ ciphertext ‖ tag)
-  ```
-  The unit is split into at most 16 fragments. A receiver or relay accepts a unit only after the
-  signature verifies with the media key announced in the sender's signed join.
-- Replay windows mark a fragment only after its unit has been verified (P1: v1 marked before
-  authentication, which let anyone "mute" a sender by pre-empting sequence numbers; with signatures, an
-  insider can no longer forge units either). Relays MAY forward fragments before the unit is complete,
-  but MUST NOT mark them as seen until it verifies.
+- A unit is `ciphertext ‖ tag` (the nonce comes from the header and is not sent), split into at most 16
+  fragments.
+
+### 9.3 Batched source authentication
+
+Every member knows `epoch_secret` and could compute anyone's `k_sender`, so the key does not
+authenticate the sender (P1). **Decision D39:** senders sign **batches** of units with their per-call
+media key (announced in their signed join), one signature per batch.
+
+**Batches.** A batch is a run of consecutive `seq` values of one `(sender, stream, kind)`. It closes
+when it holds 5 units (audio and screen audio: 100 ms at 20 ms frames), 8 units (video, FEC,
+heartbeat), or when 100 ms have passed since its first unit, whichever comes first.
+
+**CALL_AUTH datagram** (type `0x13`), sent right after the last unit of a batch:
+
+```
+kind(u8) ‖ epoch(u8) ‖ sender(u8) ‖ stream(u8) ‖ gen(u8) ‖ first_seq(u32) ‖ prev_count(u8, 0..16) ‖ count(u8, 1..16)
+  ‖ h_(first_seq − prev_count) … h_(first_seq + count − 1) (16 bytes each) ‖ sig(64)
+h_i = SHA-256("echofog/call2/unit" ‖ header_i ‖ ciphertext_i ‖ tag_i)[0:16]
+sig = Ed25519(media_key, "echofog/call2/batch" ‖ all bytes of CALL_AUTH before sig)
+```
+
+`prev_count` hashes of the **previous** batch come first, then the `count` hashes of this one.
+
+- **Redundancy.** Each CALL_AUTH also covers the previous batch, so every unit is authenticated by two
+  consecutive authenticators: losing one CALL_AUTH loses nothing. Receivers and relays may NACK a
+  missing CALL_AUTH by `(sender, stream, kind, first_seq)` like a fragment, for the rare loss of two in
+  a row.
+- **Loss inside a batch.** Because the authenticator lists every unit's hash, a receiver verifies each
+  unit it has on its own: lost units do not prevent verification of the others, and a unit recovered
+  later (NACK, FEC) is verified against the same list for 1 s after the CALL_AUTH arrived. If both
+  authenticators covering a batch are lost and a NACK does not recover one within 500 ms, the batch's
+  units stay unverified.
+- **Candidates.** Until verification, a receiver keeps up to 4 candidate units per `(sender, stream,
+  kind, seq)` with different hashes; a relay forwards the first candidate at once and holds the others
+  until the batch verifies, then forwards the verified one if it was not the first. Only verified units
+  are marked in the replay window (P1). An insider who injects units with a victim's numbers can delay
+  the victim's units by at most the authentication lag; it can neither suppress nor forge them.
+- **Playout and latency.** Units MAY be decoded and played as they arrive, so batching adds **no
+  playout latency**. Authentication lags by up to one batch (≤ 100 ms) plus the CALL_AUTH's one-way
+  delay; an insider's forged media can therefore be heard or seen for at most about 100–200 ms before it
+  is detected. A unit whose hash does not match a verified authenticator, or a CALL_AUTH whose signature
+  fails, makes the receiver stop playing that sender's unverified units for 2 s and report the sender
+  to the coordinator. A client MAY offer a strict mode that plays only verified units, at the cost of
+  up to 100 ms (audio) of added latency.
+- **Cost.** An audio CALL_AUTH with 5 + 5 hashes is 1 (type) + 11 + 160 + 64 = 236 bytes per 100 ms,
+  about 19 kbit/s per audio sender, against about 26 kbit/s for a 64-byte signature on each of 50
+  units per second; for video, whose units are large, the overhead is negligible. CPU drops five-fold:
+  10 signatures per second per audio stream instead of 50, and as many verifications per receiver.
+  Latency cost: none for playout; authentication lag up to 100 ms plus one-way delay.
 - `epoch_secret` of epoch 0 is `HKDF-SHA256(ikm = room secret, info = "echofog/call2/epoch" ‖ u32(0))`.
   On every join, leave or kick the coordinator draws a new random epoch secret, sends it to each
   participant over its end-to-end session, and switches `uniform(1.5, 2.5)` s later; a kicked member
   never receives it.
 - NACK retransmissions have a budget per child (at most 2× the child's recent receive rate); claimed
   relay capacity is capped by measured upload (P1).
-- Later: MLS epochs (`mls`), SFrame-style headers, signature batching over several units, a
-  constant-rate shaping profile for calls (P9), a WebRTC-shaped carrier for cross-border calls.
+- Later: MLS epochs (`mls`), SFrame-style headers, a constant-rate shaping profile for calls (P9), a
+  WebRTC-shaped carrier for cross-border calls.
