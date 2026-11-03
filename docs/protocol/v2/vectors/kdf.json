@@ -1,0 +1,64 @@
+{
+  "description": "Key derivations of L2 and the services from fixed inputs. HKDF is HKDF-SHA256 unless marked noise (HMAC-BLAKE2s, handshake.md §2).",
+  "spec": "handshake.md §9, wire.md §8, services.md, dht.md §2",
+  "seeds": {
+    "session/ck": "64b5b09183a22aa47287e410339ebe9cdfb8933dfd57540037ea1255a9125dff",
+    "session/h": "2476455e4ba0d96375fc423caf6dd96757c74cea30ae39ca8a037edafd372982",
+    "session/cb_new": "0d0df2ea272984def1adad310cd24e5b51abff4b9a21c4ed6597166cbb472330",
+    "chat/eph": "701e5b90c7fe2071b7880b298fff7519e39414351311f9c7f1056c233a5ea111",
+    "chat/recipient_ik": "55f6ae4b85588620c395a1110a8b2cdc8781c89ed0ebfbbf9fde70bc856f7534",
+    "mailbox/forward_eph": "276b79a9839c4ab149e5100da49c20e3eb5f1f022f0e52b20ac6522c96042f46",
+    "call/room_secret": "d21a7a7100ff742c9781e32b1125ce11c0e38386af4ea7bd66e64c73d036b959"
+  },
+  "session": {
+    "ck": "64b5b09183a22aa47287e410339ebe9cdfb8933dfd57540037ea1255a9125dff",
+    "h": "2476455e4ba0d96375fc423caf6dd96757c74cea30ae39ca8a037edafd372982",
+    "split_k_i2r (noise HKDF(ck, empty).o1)": "0b1f7b03ece04bd24b49f3f3f2a33d6b09f002265aefe728c33818f41c1d4971",
+    "split_k_r2i (noise HKDF(ck, empty).o2)": "99427580dafe20659c9ccc5e714f340eb63fe18e6f7f6ef0f7e8f3eb3f351b84",
+    "session_secret (noise HKDF(ck, label).o1)": "8dc07afb2a37cc52ce20407942c9d1aa258c8544db335a35381e3e322c3bb244",
+    "sid": "658a85cbd41ff8757d893d32cb232fe1",
+    "k_path": "171d570f8f480e128a10bb2f42caf337401b8872da79227a947a17ea5dba6099",
+    "cb_new": "0d0df2ea272984def1adad310cd24e5b51abff4b9a21c4ed6597166cbb472330",
+    "path_id": 2,
+    "role": 0,
+    "path_mac": "528f05fcff09ea788bb6e88e83da44d4fb652d5013e97a8c7e3ffbe1f9cd4b68",
+    "PATH_BIND_frame": "100031658a85cbd41ff8757d893d32cb232fe102528f05fcff09ea788bb6e88e83da44d4fb652d5013e97a8c7e3ffbe1f9cd4b68"
+  },
+  "sealed_record": {
+    "key": "k_i2r",
+    "n": 0,
+    "plaintext": "180014040068656c6c6f206f76657220612072656c6179",
+    "sealed": "0000000000000000abc6000534364cb80aafca27fcf8c18ca999c7b8fad65274a2fb772e355fc707c7d99bba73b7e6",
+    "record": "002f0000000000000000abc6000534364cb80aafca27fcf8c18ca999c7b8fad65274a2fb772e355fc707c7d99bba73b7e6"
+  },
+  "chat2_seal": {
+    "eph_sk": "701e5b90c7fe2071b7880b298fff7519e39414351311f9c7f1056c233a5ea111",
+    "eph_pub": "ff524d412e63970310cc73849ea47e59c9391e89c405c0644818e543061b894c",
+    "recipient_ik_sk": "55f6ae4b85588620c395a1110a8b2cdc8781c89ed0ebfbbf9fde70bc856f7534",
+    "recipient_ik": "1c8c38c81c6432a78cd1724acdcdac0990d3215d7b005d2aaea0da75e369f600",
+    "k": "8a77dcf9ed3dc9915257bc609c4f04a572f33e5e05acdd95682637c23300976c"
+  },
+  "mailbox2_forward": {
+    "eph_sk": "276b79a9839c4ab149e5100da49c20e3eb5f1f022f0e52b20ac6522c96042f46",
+    "eph_pub": "722ba5ebc25d85fc30a5bc4815b363cb534cc634dfed7f4ec7f200ab7502c27d",
+    "hs_M": "3da04cb50fc0a24661735c3ba5b9dcb84b01abafe58ca535521a78da059fcf2b",
+    "k": "69352cdf4b231d49bd00017f050e863e593caf202620551cc609a244572bd6a8"
+  },
+  "call2": {
+    "room_secret": "d21a7a7100ff742c9781e32b1125ce11c0e38386af4ea7bd66e64c73d036b959",
+    "epoch0_secret": "ac04573942aedca8548d2ccb456d8e83fa032dfc2e1c4b1739a1dd6706fa8a25",
+    "sender_node_id": "81799a1fea77a47945ecd1cbd0124c81c48bdcd89a44755114a72b68e458cbd3",
+    "k_sender": "f52e3486fb214d03a182d5bfc708d059bad01b603085c8d159721e9bc536ef45"
+  },
+  "dht2": {
+    "card_key": {
+      "label": "echofog/card/2",
+      "signer_node_id": "81799a1fea77a47945ecd1cbd0124c81c48bdcd89a44755114a72b68e458cbd3",
+      "key": "3711327c83a825e568949be1b18e2babda974d6957bdeec1baab20773e836f02"
+    },
+    "name_key": {
+      "name": "alice.ton",
+      "key": "638363d504be406dbcbda854e1d99b80572ec4bce4fba5625bd2250801e6a987"
+    }
+  }
+}
