@@ -14,7 +14,7 @@ fully, partly or not at all.
 | 4 | Probe handling | non-v1 packets reached quic-go (Version Negotiation); limits dropped or reset | everything unauthenticated or over a limit goes to the cover; no VN/Retry/reset before the token | V1 |
 | 5 | Server answer | Go TLS defaults, certificate inflated to a random size | the cover's group, cipher, extension order, SCID length and exact certificate length are mirrored; sealed mode keeps PQ when the cover is classical | V1 |
 | 6 | Identifying strings | `O=EchoFog`, ALPN `echo-fog-protocole`, default SNI `www.microsoft.com` | neutral certificates, `h3`/`h2`, no default SNI | K1, V1 |
-| 7 | Carrier choice | "is an SNI known" | rules from signed card role, scope and country; servers never over noise3 across borders | K2, S12 |
+| 7 | Carrier choice | "is an SNI known" | rules from signed card role, scope and country; servers never over noise3 across borders | K2, C12 |
 | 8 | STUN | plaintext STUN from the QUIC port every 20 s | no plaintext STUN on carrier sockets; OBSERVED_ADDR with agreement rules | K2, audit 5-6 #1 |
 | 9 | Handshake | custom Ed25519 exchange, `version` never read, M1 ≤ 4 KiB | Noise XKhfs/XXhfs with ML-KEM-768, suite name and responder ID in the transcript, 16 KiB messages | K3, K5, K10 |
 | 10 | Hidden nodes | responder sent M2 to anyone claiming a known key; 10 000-HMAC pass scan | XK only, transcript-bound proof, `pass_id` lookup, uniform silent failure, personal passes, rendezvous IDs at relays | K5, V4 |
