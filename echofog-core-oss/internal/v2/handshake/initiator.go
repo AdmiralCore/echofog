@@ -34,6 +34,10 @@ type InitiatorConfig struct {
 	Cards            CardVerifier
 	Bindings         KeyBinder
 	Rand             io.Reader
+
+	// testEphemeral and testKEMSeed fix the initiator's randomness (vectors only).
+	testEphemeral *ecdh.PrivateKey
+	testKEMSeed   []byte
 }
 
 // Initiator runs the initiator side on one stream 0.
@@ -113,9 +117,6 @@ func NewInitiator(cfg InitiatorConfig, cb []byte) (*Initiator, error) {
 		}
 		g := func(x byte) uint16 { n := uint16(x%15)<<4 | 0x0a; return n<<8 | n }
 		i.greaseSuite, i.greaseFeature, i.greaseService = g(b[0]), g(b[1]), g(b[2])
-		if len(i.offered) < 8 {
-			i.offered = insertSorted(i.offered, i.greaseSuite)
-		}
 	}
 	return i, nil
 }
@@ -150,7 +151,11 @@ func (i *Initiator) flight() ([]byte, []byte, error) {
 	if i.chosenOverride != 0 {
 		chosen = i.chosenOverride
 	}
-	h := &Hello{Offered: i.offered, Chosen: chosen}
+	offered := i.offered
+	if i.cfg.Grease && i.greaseSuite != 0 && len(offered) < 8 {
+		offered = insertSorted(offered, i.greaseSuite) // never chosen (§3.4)
+	}
+	h := &Hello{Offered: offered, Chosen: chosen}
 	if i.rid != nil {
 		h.Flags |= FlagResponderID
 	}
@@ -164,7 +169,7 @@ func (i *Initiator) flight() ([]byte, []byte, error) {
 	}
 	suite, _ := SuiteByID(chosen)
 	nc := noise.Config{Pattern: suite.Pattern, Initiator: true, Prologue: Prologue(i.cb, i.rid, hello),
-		Static: i.cfg.Static, Rand: i.cfg.Rand}
+		Static: i.cfg.Static, Rand: i.cfg.Rand, Ephemeral: i.cfg.testEphemeral, KEMSeed: i.cfg.testKEMSeed}
 	if suite.Pattern.PreResponderStatic {
 		if i.cfg.Remote == nil {
 			return nil, nil, ErrConfig
@@ -203,9 +208,13 @@ func (i *Initiator) buildP1(suite uint16) *HsInit {
 	p.Features = sortedNoGrease(i.cfg.Features)
 	services := slices.Clone(i.cfg.Services)
 	if i.cfg.Grease {
-		p.Features = append(p.Features, uint32(i.greaseFeature))
-		slices.Sort(p.Features)
-		services = append(services, ServiceOffer{ID: uint32(i.greaseService), Versions: []uint32{1}})
+		if i.greaseFeature != 0 {
+			p.Features = append(p.Features, uint32(i.greaseFeature))
+			slices.Sort(p.Features)
+		}
+		if i.greaseService != 0 {
+			services = append(services, ServiceOffer{ID: uint32(i.greaseService), Versions: []uint32{1}})
+		}
 	}
 	slices.SortFunc(services, func(a, b ServiceOffer) int { return int(a.ID) - int(b.ID) })
 	p.Services = services

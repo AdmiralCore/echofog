@@ -24,11 +24,28 @@ func TestVerifyVectorCards(t *testing.T) {
 		if info.Seq != num(t, obj(t, c, scope), "seq") {
 			t.Fatalf("%s: seq", scope)
 		}
-		if len(info.L1Suites) != 2 || info.L1Suites[0] != SuiteXK || info.L1Suites[1] != SuiteXX {
+		wantSuites := []uint16{SuiteXK, SuiteXX}
+		if scope == "invite" {
+			wantSuites = []uint16{SuiteXK} // hidden-node cards never list XX
+		}
+		if !equal16(info.L1Suites, wantSuites) {
 			t.Fatalf("%s: l1_suites %v", scope, info.L1Suites)
 		}
 		if !bytes.Equal(info.Raw, env) {
 			t.Fatalf("%s: raw bytes", scope)
+		}
+	}
+	// The initiator cards of the transcripts: hs_key = x25519(initiator_s).
+	in := obj(t, loadVector(t, "handshake.json"), "transcript_inputs")
+	for _, name := range []string{"initiator", "initiator_throwaway"} {
+		m := obj(t, c, name)
+		info, err := DefaultCardVerifier{}.VerifyCard(hexField(t, m, "envelope"), fixedNow)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !bytes.Equal(info.DeviceID[:], hexField(t, m, "device_id")) || !bytes.Equal(info.NodeID[:], hexField(t, m, "node_id")) ||
+			!bytes.Equal(info.HsKey, hexField(t, in, "initiator_s_pub")) {
+			t.Fatalf("%s: ids or hs key", name)
 		}
 	}
 	peer, _ := DefaultCardVerifier{}.VerifyCard(hexField(t, obj(t, c, "peer"), "envelope"), fixedNow)

@@ -242,7 +242,7 @@ func TestResponderCardMismatch(t *testing.T) {
 	// XX: the card in P2 is valid but names another hs_key: the initiator aborts before message 3.
 	w := newWorld(t)
 	w.ic.Remote = nil
-	w.rc.Card = newTestIdentity(t, 7).card(t, CardOptions{Scope: 1})
+	w.rc.OwnCards.Current[0] = OwnCard{fixedTime, newTestIdentity(t, 7).card(t, CardOptions{})}
 	ini, _ := NewInitiator(w.ic, testCB)
 	hello, m1, _ := ini.Start()
 	rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now)

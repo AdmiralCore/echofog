@@ -38,7 +38,7 @@ func (h *Hello) check() error {
 			}
 		}
 	}
-	if !found {
+	if !found || IsGrease(h.Chosen) {
 		return ErrHello
 	}
 	if h.Flags&FlagPuzzle != 0 && len(h.Cookie) != 16 {

@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,8 +15,6 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/noise"
 )
-
-var update = flag.Bool("update", false, "rewrite vectors/handshake-transcript.json")
 
 const transcriptFile = "handshake-transcript.json"
 
@@ -299,12 +296,12 @@ func xKey(t testing.TB, b []byte) *ecdh.PrivateKey {
 	return k
 }
 
-func buildTranscriptFile(t testing.TB) []byte {
+func buildTranscriptFile(t testing.TB) tFile {
 	t.Helper()
 	hsv := loadVector(t, "handshake.json")
 	card := loadVector(t, "node-card.json")
 	link := loadVector(t, "link.json")
-	in := obj(t, hsv, "deferred_transcripts", "inputs_xk")
+	in := obj(t, hsv, "transcript_inputs")
 	pay := obj(t, hsv, "payloads")
 	secret := hexField(t, obj(t, link, "invitation"), "access_secret")
 
@@ -329,100 +326,106 @@ func buildTranscriptFile(t testing.TB) []byte {
 			t.Fatal("handshake.json public keys disagree")
 		}
 	}
-	hsInit := hexField(t, obj(t, pay, "HsInit"), "encoded")
-	hsResp := hexField(t, obj(t, pay, "HsResp"), "encoded")
-	peer := hexField(t, obj(t, card, "peer"), "envelope")
-	public := hexField(t, obj(t, card, "public"), "envelope")
-	hsFinish := (&HsFinish{Card: peer}).Marshal()
-	sum := sha256.Sum256(hsFinish)
-	if !bytes.Equal(sum[:], hexField(t, obj(t, pay, "HsFinish"), "encoded_sha256")) {
-		t.Fatal("HsFinish does not match handshake.json")
-	}
-	p1, err := ParseHsInit(hsInit)
+	enc := func(name string) []byte { return hexField(t, obj(t, pay, name), "encoded") }
+	p1, err := ParseHsInit(enc("HsInit_xk"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	inviteSeq := num(t, obj(t, card, "invite"), "seq")
 
-	// 1. XKhfs exactly as handshake.json deferred_transcripts.inputs_xk says.
 	xk := base
 	xk.pattern, xk.suite, xk.name = noise.XKhfs, SuiteXK, "XKhfs"
 	xk.prologue = hexField(t, obj(t, hsv, "prologue_xk"), "prologue")
 	xk.prologueSource = "handshake.json prologue_xk.prologue"
-	xk.p1, xk.p1Src = hsInit, "handshake.json payloads.HsInit.encoded (its access proof is over the fixed seed hs/h1, not over this transcript's h1)"
-	xk.p2, xk.p2Src = hsResp, "handshake.json payloads.HsResp.encoded"
-	xk.p3, xk.p3Src = hsFinish, "HsFinish{card = node-card.json peer.envelope}; SHA-256 = handshake.json payloads.HsFinish.encoded_sha256"
-	xk.checks = []string{"pure Noise transcript: payloads are opaque, card and access checks are not applied"}
+	xk.p1, xk.p1Src = enc("HsInit_xk"), "handshake.json payloads.HsInit_xk.encoded"
+	xk.p2, xk.p2Src = enc("HsResp"), "handshake.json payloads.HsResp.encoded"
+	xk.p3, xk.p3Src = enc("HsFinish"), "handshake.json payloads.HsFinish.encoded"
 
-	// 2. XKhfs with P1's access proof recomputed over this transcript's real h1.
 	xkA := xk
 	xkA.name = "XKhfs-access-proof"
+	xkA.prologue = hexField(t, obj(t, hsv, "prologue_xk_hidden"), "prologue")
+	xkA.prologueSource = "handshake.json prologue_xk_hidden.prologue"
 	xkA.p1 = nil
 	xkA.p1Func = func(h1 []byte) []byte {
 		m := *p1
+		m.KnownCardSeq = inviteSeq
 		m.Access = &Access{PassID: PassID(secret), Proof: AccessProof(secret, h1)}
 		return m.Marshal()
 	}
-	xkA.p1Src = "payloads.HsInit with access.proof = HMAC-SHA256(link.json invitation.access_secret, \"echofog/hs2/access-proof\" ‖ messages[0].h_before_payload); all other fields unchanged"
-	xkA.checks = []string{"a responder holding link.json's access secret accepts P1.access of this transcript"}
+	xkA.p1Src = "payloads.HsInit_xk_hidden: access proof over messages[0].h_before_payload"
 
-	// 3. XXhfs to a bare address (handshake.json prologue_xx_bare_address).
 	xx := base
 	xx.pattern, xx.suite, xx.name = noise.XXhfs, SuiteXX, "XXhfs"
 	xx.prologue = hexField(t, obj(t, hsv, "prologue_xx_bare_address"), "prologue")
 	xx.prologueSource = "handshake.json prologue_xx_bare_address.prologue"
-	xxInit := *p1
-	xxInit.Access, xxInit.KnownCardSeq = nil, 0
-	xx.p1 = xxInit.Marshal()
-	xx.p1Src = "payloads.HsInit without access (field 4) and known_card_seq (field 5): P1 in XX must not carry access (handshake.md §4.2)"
-	r, err := ParseHsResp(hsResp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Card = public
-	xx.p2 = r.Marshal()
-	xx.p2Src = "payloads.HsResp with card (field 4) = node-card.json public.envelope: the card is required in XX (handshake.md §7)"
-	xx.p3, xx.p3Src = hsFinish, xk.p3Src
-	xx.checks = []string{"same keys and KEM inputs as inputs_xk (handshake.json gives no separate XX inputs)"}
+	xx.p1, xx.p1Src = enc("HsInit_xx"), "handshake.json payloads.HsInit_xx.encoded"
+	xx.p2, xx.p2Src = enc("HsResp_xx"), "handshake.json payloads.HsResp_xx.encoded"
+	xx.p3, xx.p3Src = enc("HsFinish_xx"), "handshake.json payloads.HsFinish_xx.encoded"
 
 	f := tFile{
-		Description: "Full XKhfs and XXhfs handshake transcripts (handshake.md Decision D15): every message's bytes, h/ck/k after every token, and the final transport keys. Produced by internal/v2/handshake (go test -run TestTranscriptVectors -update); to be confirmed byte for byte by an independent implementation before L1 is final.",
-		Spec:        "handshake.md §2, §4, §5, §9",
-		Conventions: []string{
-			"hex is lowercase; every input is copied from handshake.json, node-card.json and link.json (sources named per field)",
-			"steps: the state after each token; 'k' is the cipher key ('' when none) and 'n' the next nonce",
-			"ML-KEM-768: KEM_GENERATE = crypto/mlkem NewDecapsulationKey768(d ‖ z); KEM_ENCAP with fixed m = FIPS 203 ML-KEM.Encaps_internal(ek, m) (Go crypto/mlkem/mlkemtest.Encapsulate768)",
-			"h_before_payload is h right before EncryptAndHash(payload); for message 1 of XK it is h1 of the access proof (handshake.md §5)",
-			"final.session_secret = Noise HKDF(ck, \"echofog/hs2/session-secret\").o1; final.sid = HKDF-SHA256(session_secret, salt = h, info = \"echofog/session2/id\", 16)",
-		},
+		Description: "XKhfs and XXhfs transcripts recomputed by internal/v2/handshake from handshake.json, node-card.json and link.json (for comparison with the normative handshake-transcript.json).",
+		Spec:        "handshake.md §12",
 	}
 	for _, in := range []transcriptInputs{xk, xkA, xx} {
 		f.Transcripts = append(f.Transcripts, buildTranscript(t, in))
 	}
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(f); err != nil {
-		t.Fatal(err)
+	// The hidden transcript's P1 must be exactly handshake.json HsInit_xk_hidden.
+	if f.Transcripts[1].Inputs.P1 != hx(enc("HsInit_xk_hidden")) {
+		t.Fatal("recomputed HsInit_xk_hidden differs from handshake.json")
 	}
-	return b.Bytes()
+	return f
 }
 
+// TestTranscriptVectors recomputes the three transcripts and compares every value with the
+// normative vectors/handshake-transcript.json (descriptions and source notes excepted). With
+// HS_TRANSCRIPT_OUT set, it also writes the recomputed file there (for gen -crosscheck).
 func TestTranscriptVectors(t *testing.T) {
 	got := buildTranscriptFile(t)
-	path := filepath.Join(vectorDir, transcriptFile)
-	if *update {
-		if err := os.WriteFile(path, got, 0o644); err != nil {
+	if out := os.Getenv("HS_TRANSCRIPT_OUT"); out != "" {
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(got); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("wrote %s", path)
-		return
+		if err := os.WriteFile(out, b.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	want, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Join(vectorDir, transcriptFile))
 	if err != nil {
-		t.Fatalf("%v (run with -update to create it)", err)
+		t.Fatal(err)
 	}
-	if !bytes.Equal(bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n")), got) {
-		t.Fatal("handshake-transcript.json differs from the implementation (run with -update after review)")
+	var want tFile
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	if len(want.Transcripts) != len(got.Transcripts) {
+		t.Fatalf("%d transcripts, want %d", len(got.Transcripts), len(want.Transcripts))
+	}
+	for n := range want.Transcripts {
+		w, g := want.Transcripts[n], got.Transcripts[n]
+		for _, x := range []*tTranscript{&w, &g} {
+			x.Checks = nil
+			x.Inputs.PrologueSource, x.Inputs.P1Source, x.Inputs.P2Source, x.Inputs.P3Source = "", "", "", ""
+		}
+		if w.Name != g.Name || w.SuiteID != g.SuiteID || w.ProtocolName != g.ProtocolName || !reflect.DeepEqual(w.Pattern, g.Pattern) {
+			t.Fatalf("%s: header differs", w.Name)
+		}
+		if !reflect.DeepEqual(w.Inputs, g.Inputs) {
+			t.Errorf("%s: inputs differ:\n got %+v\nwant %+v", w.Name, g.Inputs, w.Inputs)
+		}
+		if !reflect.DeepEqual(w.Initialize, g.Initialize) {
+			t.Errorf("%s: initialisation differs", w.Name)
+		}
+		for i := range w.Messages {
+			if !reflect.DeepEqual(w.Messages[i], g.Messages[i]) {
+				t.Errorf("%s: message %d differs", w.Name, i+1)
+			}
+		}
+		if !reflect.DeepEqual(w.Final, g.Final) {
+			t.Errorf("%s: final values differ:\n got %+v\nwant %+v", w.Name, g.Final, w.Final)
+		}
 	}
 }

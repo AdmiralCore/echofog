@@ -48,8 +48,10 @@ func newWorld(t testing.TB) *world {
 	w.rc = ResponderConfig{
 		Static:   w.rID.hs,
 		DeviceID: w.rID.deviceID(),
-		Card:     w.rCard,
-		CardSeq:  fixedTime,
+		OwnCards: OwnCards{
+			Current: map[uint32]OwnCard{0: {fixedTime - 1, w.rID.card(t, CardOptions{Seq: fixedTime - 1})}, 1: {fixedTime, w.rCard}},
+			Issued:  map[uint64]uint32{fixedTime - 1: 0, fixedTime: 1, fixedTime - 2: 2},
+		},
 		Features: []uint32{1, 3, 4, 5, 6},
 		Services: []ServiceOffer{{ID: 1, Versions: []uint32{2}}, {ID: 2, Versions: []uint32{2}}, {ID: 3, Versions: []uint32{2}}},
 		Now:      clock,
@@ -213,10 +215,20 @@ func TestResponderCardOnlyWhenNewer(t *testing.T) {
 	if si.ResponderCardSent {
 		t.Fatal("card sent although the initiator has it")
 	}
-	w.rc.CardSeq = fixedTime + 5
+	newer := w.rID.card(t, CardOptions{Scope: 1, Seq: fixedTime + 5})
+	w.rc.OwnCards.Current[1] = OwnCard{fixedTime + 5, newer}
 	si, _ = w.handshake(t)
-	if !si.ResponderCardSent {
+	if !si.ResponderCardSent || si.Peer.Seq != fixedTime+5 {
 		t.Fatal("newer card not sent")
+	}
+	// An initiator holding an invitation card never gets a card in P2.
+	inv := w.rID.card(t, CardOptions{Scope: 2, Seq: fixedTime - 2, Suites: []uint16{SuiteXK}})
+	if w.ic.Remote, _ = (DefaultCardVerifier{}).VerifyCard(inv, w.now); w.ic.Remote == nil {
+		t.Fatal("invite card")
+	}
+	si, _ = w.handshake(t)
+	if si.ResponderCardSent {
+		t.Fatal("card sent to the holder of an invitation card")
 	}
 }
 

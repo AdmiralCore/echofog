@@ -25,8 +25,9 @@ type EarlyHandler func(early []byte) (response []byte, ok bool)
 
 // PuzzleConfig enables HS_RETRY on a public responder (handshake.md §6).
 type PuzzleConfig struct {
-	Secret     []byte // R, 32 bytes, rotated daily
-	PrevSecret []byte // yesterday's R, accepted until its cookies expire
+	Secret     []byte    // R, 32 bytes, rotated daily
+	PrevSecret []byte    // the previous R, accepted during the minute after rotation
+	RotatedAt  time.Time // when Secret replaced PrevSecret
 	// Difficulty returns the current required difficulty for this source; 0 = no puzzle.
 	Difficulty func() uint8
 }
@@ -36,9 +37,8 @@ type ResponderConfig struct {
 	Static     *ecdh.PrivateKey // current hs key
 	PrevStatic *ecdh.PrivateKey // previous hs key during a rotation (§7.1), or nil
 	DeviceID   [32]byte         // own device ID (rid)
-	Card       []byte           // own card for P2
-	CardSeq    uint64
-	Suites     []uint16 // supported, preference order; default XK, XX (hidden: XK only)
+	OwnCards   OwnCards         // own cards, for P2
+	Suites     []uint16         // supported, preference order; default XK, XX (hidden: XK only)
 	Hidden     bool
 	Passes     PassStore
 	Features   []uint32
@@ -56,6 +56,21 @@ type ResponderConfig struct {
 	// testEphemeral and testEncap fix the responder's randomness (vectors only).
 	testEphemeral *ecdh.PrivateKey
 	testEncap     func(*mlkem.EncapsulationKey768) ([]byte, []byte, error)
+}
+
+// OwnCard is one card the node issued.
+type OwnCard struct {
+	Seq      uint64
+	Envelope []byte
+}
+
+// OwnCards are the responder's cards for P2 (handshake.md §7, "Card in P2").
+type OwnCards struct {
+	// Current holds the current card per scope (0 public, 1 peer). XX sends the public card.
+	Current map[uint32]OwnCard
+	// Issued maps the seq of every unexpired card the node issued to its scope (0, 1, 2), so
+	// known_card_seq names the card the initiator holds.
+	Issued map[uint64]uint32
 }
 
 // Action tells the carrier what to do with a Reply.
@@ -223,8 +238,8 @@ func (r *Responder) HandleFirst(cb, hello, msg1 []byte, arrival time.Time) Reply
 	if err != nil {
 		return fail(err)
 	}
-	if best == SuiteXX && (p1.Access != nil || p1.Early != nil) {
-		return fail(fmt.Errorf("%w: access or early data in XX", ErrPayload))
+	if best == SuiteXX && (p1.Access != nil || p1.Early != nil || p1.KnownCardSeq != 0) {
+		return fail(fmt.Errorf("%w: access, known_card_seq or early data in XX", ErrPayload))
 	}
 
 	// 4. Hidden node: the access proof.
@@ -240,6 +255,9 @@ func (r *Responder) HandleFirst(cb, hello, msg1 []byte, arrival time.Time) Reply
 
 	// 5. Early data, P2, message 2.
 	p2 := r.buildP2(p1, best, hs)
+	if best == SuiteXX && p2.Reject == nil && p2.Card == nil {
+		return fail(fmt.Errorf("%w: XX needs a public card", ErrConfig))
+	}
 	if r.selectOverride != nil {
 		r.selectOverride(p2)
 	}
@@ -274,10 +292,11 @@ func (r *Responder) puzzleSolved(h *Hello, cb []byte, d uint8, arrival time.Time
 	}
 	minute := uint64(arrival.Unix()) / 60
 	ok := false
-	for _, sec := range [][]byte{r.cfg.Puzzle.Secret, r.cfg.Puzzle.PrevSecret} {
-		if sec == nil {
-			continue
-		}
+	secrets := [][]byte{r.cfg.Puzzle.Secret}
+	if r.cfg.Puzzle.PrevSecret != nil && arrival.Sub(r.cfg.Puzzle.RotatedAt) < time.Minute {
+		secrets = append(secrets, r.cfg.Puzzle.PrevSecret)
+	}
+	for _, sec := range secrets {
 		for _, m := range []uint64{minute, minute - 1} {
 			if ctEqual(Cookie(sec, cb, m), h.Cookie) {
 				ok = true
@@ -341,8 +360,13 @@ func (r *Responder) buildP2(p1 *HsInit, suite uint16, hs *noise.HandshakeState) 
 			}
 		}
 	}
-	if suite == SuiteXX || r.cfg.CardSeq > p1.KnownCardSeq {
-		p2.Card = r.cfg.Card
+	if suite == SuiteXX {
+		p2.Card = r.cfg.OwnCards.Current[0].Envelope
+	} else if scope, ok := r.cfg.OwnCards.Issued[p1.KnownCardSeq]; ok && scope != scopeInvite {
+		// Exactly when the current card of that scope is newer; never for an invitation card.
+		if c, ok := r.cfg.OwnCards.Current[scope]; ok && c.Seq > p1.KnownCardSeq {
+			p2.Card = c.Envelope
+		}
 	}
 	if has(FeatureObservedAddr) && len(r.cfg.Observed) > 0 {
 		p2.Observed = r.cfg.Observed

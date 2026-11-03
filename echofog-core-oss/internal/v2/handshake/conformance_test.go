@@ -2,7 +2,6 @@ package handshake
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"reflect"
 	"testing"
 )
@@ -16,6 +15,7 @@ func TestHelloVectors(t *testing.T) {
 	}{
 		{"xk", str(t, obj(t, v, "prologue_xk"), "hs_hello"), Hello{Offered: []uint16{1, 2}, Chosen: 1, Flags: FlagResponderID}},
 		{"xx", str(t, obj(t, v, "prologue_xx_bare_address"), "hs_hello"), Hello{Offered: []uint16{2}, Chosen: 2}},
+		{"xk hidden", str(t, obj(t, v, "prologue_xk_hidden"), "hs_hello"), Hello{Offered: []uint16{1, 0x0a0a}, Chosen: 1, Flags: FlagResponderID}},
 		{"puzzle", str(t, obj(t, v, "puzzle"), "HS_HELLO_with_solution_payload"), Hello{Offered: []uint16{1, 2}, Chosen: 1,
 			Flags: FlagPuzzle | FlagResponderID, Cookie: mustHex(t, "9dc93509d0bb2bb8c9ed254591c07fab"), Nonce: 2274}},
 	}
@@ -60,6 +60,7 @@ func TestHelloInvalid(t *testing.T) {
 		{"puzzle flag without solution", "0200010002000101"},
 		{"trailing byte", "020001000200010200"},
 		{"duplicate offered", "020001000100010000"},
+		{"GREASE chosen", "0200010a0a0a0a00"},
 	}
 	for _, c := range bad {
 		if _, err := ParseHello(mustHex(t, c.b)); err == nil {
@@ -80,6 +81,11 @@ func TestPrologueVectors(t *testing.T) {
 	if want := hexField(t, xk, "prologue"); !bytes.Equal(got, want) {
 		t.Errorf("XK prologue = %x, want %x", got, want)
 	}
+	hid := obj(t, v, "prologue_xk_hidden")
+	got = Prologue(hexField(t, xk, "cb"), hexField(t, xk, "rid (node-card.json device_id)"), hexField(t, hid, "hs_hello"))
+	if want := hexField(t, hid, "prologue"); !bytes.Equal(got, want) {
+		t.Errorf("XK hidden prologue = %x, want %x", got, want)
+	}
 	xx := obj(t, v, "prologue_xx_bare_address")
 	got = Prologue(hexField(t, xk, "cb"), nil, hexField(t, xx, "hs_hello"))
 	if want := hexField(t, xx, "prologue"); !bytes.Equal(got, want) {
@@ -90,33 +96,16 @@ func TestPrologueVectors(t *testing.T) {
 func TestPayloadVectors(t *testing.T) {
 	v := loadVector(t, "handshake.json")
 	p := obj(t, v, "payloads")
-	acc := obj(t, v, "access")
+	card := loadVector(t, "node-card.json")
 
 	services := []ServiceOffer{}
 	for id := uint32(1); id <= 8; id++ {
 		services = append(services, ServiceOffer{ID: id, Versions: []uint32{2}})
 	}
 	services = append(services, ServiceOffer{ID: 0x3a3a, Versions: []uint32{1}})
-	init := HsInit{
-		ProtoVer:     200,
-		Features:     []uint32{1, 3, 4, 5, 0x2a2a},
-		Services:     services,
-		Access:       &Access{PassID: hexField(t, acc, "pass_id"), Proof: hexField(t, acc, "proof")},
-		KnownCardSeq: fixedTime - 86400,
-		Time:         fixedTime,
-	}
-	enc := hexField(t, obj(t, p, "HsInit"), "encoded")
-	if got := init.Marshal(); !bytes.Equal(got, enc) {
-		t.Errorf("HsInit = %x, want %x", got, enc)
-	}
-	dec, err := ParseHsInit(enc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(*dec, init) {
-		t.Errorf("HsInit parse = %+v", *dec)
-	}
-
+	base := HsInit{ProtoVer: 200, Features: []uint32{1, 3, 4, 5, 0x2a2a}, Services: services, Time: fixedTime}
+	xk := base
+	xk.KnownCardSeq = num(t, obj(t, card, "public"), "seq")
 	resp := HsResp{
 		ProtoVer: 200,
 		Features: []uint32{1, 3, 4, 5},
@@ -124,29 +113,49 @@ func TestPayloadVectors(t *testing.T) {
 		Observed: []byte{4, 192, 0, 2, 33, 0xc8, 0x22},
 		Time:     fixedTime,
 	}
-	enc = hexField(t, obj(t, p, "HsResp"), "encoded")
-	if got := resp.Marshal(); !bytes.Equal(got, enc) {
-		t.Errorf("HsResp = %x, want %x", got, enc)
+	respXX := resp
+	respXX.Card = hexField(t, obj(t, card, "public"), "envelope")
+
+	check := func(name string, marshal func() []byte, parse func([]byte) (any, error), want any) {
+		t.Helper()
+		enc := hexField(t, obj(t, p, name), "encoded")
+		if got := marshal(); !bytes.Equal(got, enc) {
+			t.Errorf("%s = %x, want %x", name, got, enc)
+		}
+		dec, err := parse(enc)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !reflect.DeepEqual(dec, want) {
+			t.Errorf("%s parse = %+v", name, dec)
+		}
 	}
-	dr, err := ParseHsResp(enc)
+	pInit := func(b []byte) (any, error) { m, err := ParseHsInit(b); return m, err }
+	pResp := func(b []byte) (any, error) { m, err := ParseHsResp(b); return m, err }
+	pFin := func(b []byte) (any, error) { m, err := ParseHsFinish(b); return m, err }
+	check("HsInit_xk", xk.Marshal, pInit, &xk)
+	check("HsInit_xx", base.Marshal, pInit, &base)
+	check("HsResp", resp.Marshal, pResp, &resp)
+	check("HsResp_xx", respXX.Marshal, pResp, &respXX)
+	fin := HsFinish{Card: hexField(t, obj(t, card, "initiator"), "envelope")}
+	check("HsFinish", fin.Marshal, pFin, &fin)
+	finXX := HsFinish{Card: hexField(t, obj(t, card, "initiator_throwaway"), "envelope")}
+	check("HsFinish_xx", finXX.Marshal, pFin, &finXX)
+
+	// HsInit_xk_hidden: as HsInit_xk with the invitation card's seq and an access proof over the
+	// transcript's h1 (checked against the transcript in TestApplicationTranscripts).
+	hid, err := ParseHsInit(hexField(t, obj(t, p, "HsInit_xk_hidden"), "encoded"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(*dr, resp) {
-		t.Errorf("HsResp parse = %+v", *dr)
+	link := loadVector(t, "link.json")
+	if hid.Access == nil || !bytes.Equal(hid.Access.PassID, hexField(t, obj(t, link, "invitation"), "pass_id")) ||
+		hid.KnownCardSeq != num(t, obj(t, card, "invite"), "seq") {
+		t.Fatal("HsInit_xk_hidden fields")
 	}
-
-	card := loadVector(t, "node-card.json")
-	fin := HsFinish{Card: hexField(t, obj(t, card, "peer"), "envelope")}
-	fb := fin.Marshal()
-	sum := sha256.Sum256(fb)
-	hf := obj(t, p, "HsFinish")
-	if !bytes.Equal(sum[:], hexField(t, hf, "encoded_sha256")) || uint64(len(fb)) != num(t, hf, "encoded_len") {
-		t.Errorf("HsFinish sha/len mismatch: %x %d", sum, len(fb))
-	}
-	df, err := ParseHsFinish(fb)
-	if err != nil || !bytes.Equal(df.Card, fin.Card) {
-		t.Fatalf("HsFinish parse: %v", err)
+	hid.Access, hid.KnownCardSeq = nil, xk.KnownCardSeq
+	if !reflect.DeepEqual(*hid, xk) {
+		t.Fatal("HsInit_xk_hidden differs from HsInit_xk beyond access and known_card_seq")
 	}
 }
 
@@ -173,7 +182,7 @@ func TestRejectVector(t *testing.T) {
 
 func TestAccessVectors(t *testing.T) {
 	v := loadVector(t, "handshake.json")
-	a := obj(t, v, "access")
+	a := obj(t, v, "access_example")
 	s := hexField(t, a, "secret (link.json)")
 	if got := PassID(s); !bytes.Equal(got, hexField(t, a, "pass_id")) {
 		t.Errorf("pass_id = %x", got)

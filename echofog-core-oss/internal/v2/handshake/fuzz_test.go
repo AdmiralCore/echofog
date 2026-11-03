@@ -63,7 +63,7 @@ func roundTrip[T any](t *testing.T, b []byte, parse func([]byte) (*T, error), ma
 }
 
 func FuzzParseHsInit(f *testing.F) {
-	addVectorSeeds(f, []string{"payloads", "HsInit", "encoded"})
+	addVectorSeeds(f, []string{"payloads", "HsInit_xk_hidden", "encoded"}, []string{"payloads", "HsInit_xx", "encoded"})
 	f.Add(mustHex(f, "300108c801"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		roundTrip(t, b, ParseHsInit, (*HsInit).Marshal)
@@ -71,7 +71,7 @@ func FuzzParseHsInit(f *testing.F) {
 }
 
 func FuzzParseHsResp(f *testing.F) {
-	addVectorSeeds(f, []string{"payloads", "HsResp", "encoded"})
+	addVectorSeeds(f, []string{"payloads", "HsResp", "encoded"}, []string{"payloads", "HsResp_xx", "encoded"})
 	f.Add((&HsResp{ProtoVer: 200, Reject: &Reject{Reason: 8, Min: 1}}).Marshal())
 	f.Fuzz(func(t *testing.T, b []byte) {
 		roundTrip(t, b, ParseHsResp, (*HsResp).Marshal)

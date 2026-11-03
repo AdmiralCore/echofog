@@ -260,7 +260,7 @@ func TestInvalidKEMKeyRejected(t *testing.T) {
 
 func TestDeterministicInputsMatchVectors(t *testing.T) {
 	v := loadVector(t, "handshake.json")
-	in := obj(t, v, "deferred_transcripts", "inputs_xk")
+	in := obj(t, v, "transcript_inputs")
 	ie := x25519Key(t, hexField(t, in, "initiator_e_sk"))
 	if !bytes.Equal(ie.PublicKey().Bytes(), hexField(t, in, "initiator_e_pub")) {
 		t.Fatal("initiator e pub")
