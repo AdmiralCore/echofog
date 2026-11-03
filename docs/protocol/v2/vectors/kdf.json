@@ -23,9 +23,10 @@
   "session": {
     "ck": "64b5b09183a22aa47287e410339ebe9cdfb8933dfd57540037ea1255a9125dff",
     "h": "2476455e4ba0d96375fc423caf6dd96757c74cea30ae39ca8a037edafd372982",
-    "split_k_i2r (noise HKDF(ck, empty).o1)": "0b1f7b03ece04bd24b49f3f3f2a33d6b09f002265aefe728c33818f41c1d4971",
-    "split_k_r2i (noise HKDF(ck, empty).o2)": "99427580dafe20659c9ccc5e714f340eb63fe18e6f7f6ef0f7e8f3eb3f351b84",
-    "session_secret (noise HKDF(ck, label).o1)": "8dc07afb2a37cc52ce20407942c9d1aa258c8544db335a35381e3e322c3bb244",
+    "split_k_i2r": "0b1f7b03ece04bd24b49f3f3f2a33d6b09f002265aefe728c33818f41c1d4971",
+    "split_k_r2i": "99427580dafe20659c9ccc5e714f340eb63fe18e6f7f6ef0f7e8f3eb3f351b84",
+    "session_secret": "8dc07afb2a37cc52ce20407942c9d1aa258c8544db335a35381e3e322c3bb244",
+    "note": "split_k_i2r/split_k_r2i = noise HKDF(ck, empty) o1/o2; session_secret = noise HKDF(ck, \"echofog/hs2/session-secret\").o1",
     "sid": "658a85cbd41ff8757d893d32cb232fe1",
     "k_path": "171d570f8f480e128a10bb2f42caf337401b8872da79227a947a17ea5dba6099",
     "cb_new": "0d0df2ea272984def1adad310cd24e5b51abff4b9a21c4ed6597166cbb472330",
@@ -38,8 +39,10 @@
     "key": "k_i2r",
     "n": 0,
     "plaintext": "180014040068656c6c6f206f76657220612072656c6179",
-    "sealed": "0000000000000000abc6000534364cb80aafca27fcf8c18ca999c7b8fad65274a2fb772e355fc707c7d99bba73b7e6",
-    "record (u16 len ‖ kind 1 ‖ sealed)": "0030010000000000000000abc6000534364cb80aafca27fcf8c18ca999c7b8fad65274a2fb772e355fc707c7d99bba73b7e6"
+    "sealed": "0000000000000000abc6000534364cb80aafca27fcf8c18ca999c7b8fad652d16405664947b5fdb0ed76dd0f6b4ea2",
+    "aad": "658a85cbd41ff8757d893d32cb232fe10000000000000000010000",
+    "record": "0030010000000000000000abc6000534364cb80aafca27fcf8c18ca999c7b8fad652d16405664947b5fdb0ed76dd0f6b4ea2",
+    "note": "aad = sid ‖ u64(n) ‖ kind 1 (ordered stream record) ‖ varint path_id 0 ‖ varint pipe 0; record = u16(len) ‖ kind 1 ‖ sealed"
   },
   "relay2": {
     "relay_node_id": "978a5f5e59055303215de256920951dd3df9eb24a85cd2d71f7ea9bc203de08e",
@@ -65,7 +68,8 @@
     "forward_eph_pub": "722ba5ebc25d85fc30a5bc4815b363cb534cc634dfed7f4ec7f200ab7502c27d",
     "hs_M": "3da04cb50fc0a24661735c3ba5b9dcb84b01abafe58ca535521a78da059fcf2b",
     "k": "69352cdf4b231d49bd00017f050e863e593caf202620551cc609a244572bd6a8",
-    "deposit (req 9, queue 90..9f, blob = chat2_seal.SealedEnvelope)": "08091210909192939495969798999a9b9c9d9e9f1aa0010a2081570eca8d8d0ab1e502dc152a19bcdd9725584c5ccca4964b10c1ef9371d3281220ff524d412e63970310cc73849ea47e59c9391e89c405c0644818e543061b894c1a5a98b5f4ae8cfe6d802739791f1d2fe379b14fa59af8d40898dacb5e7359fafdc4304f048babc5bc9def4ab7061981b028411c567f0031f96d1034335d00f898293b9192ff514fd9a589961c30887dc7acea9afc11975d6768104b",
+    "deposit": "08091210909192939495969798999a9b9c9d9e9f1aa0010a2081570eca8d8d0ab1e502dc152a19bcdd9725584c5ccca4964b10c1ef9371d3281220ff524d412e63970310cc73849ea47e59c9391e89c405c0644818e543061b894c1a5a98b5f4ae8cfe6d802739791f1d2fe379b14fa59af8d40898dacb5e7359fafdc4304f048babc5bc9def4ab7061981b028411c567f0031f96d1034335d00f898293b9192ff514fd9a589961c30887dc7acea9afc11975d6768104b",
+    "deposit_note": "req 9, queue 90..9f, blob = chat2_seal.SealedEnvelope",
     "sealed": "722ba5ebc25d85fc30a5bc4815b363cb534cc634dfed7f4ec7f200ab7502c27db65723c147824b38b92d0976ca8250a4977194b342eb68c32b8d01f7f63b8e83d643be4a1f2b595cc3dd0c8706985e2fff252e4e3164327fb9e53d76b77ab6b6f90e263ded10b4b02756a76e5ec8b1015e5646b2e069bdad2787f6fbaa68aaf8b4430109eb36c3c701c9d3835275bf146f92849902c3a80583dca2a6bde62e37f2362ab5b8d8caa4cd5b60cbf487dbd1c674f14e1b0e72247b03351687f5119ac8db5a23fb0b8cdb769ca21b29e3cce896080fe3eae477e6ebea6233569c0f55bf6862511a3542",
     "pow_bits": 12,
     "pow": 1403,
@@ -77,24 +81,28 @@
     "sender_device_id": "aed4f96646d6dcfa44881f9dc7a7ba17cc7aec96bdb5aaa3ba1691bba206fd91",
     "join_salt": "43c206abdfb789eb89b03df05359820f",
     "k_sender": "3ef4a55ce4ce3c479f24a11ea2555874bbc5308cdf40cdf8673efcda8362ee41",
-    "units (plaintext 40 bytes of c0.. / c1..)": [
+    "units": [
       {
-        "header (audio, epoch 0, sender 3, stream 0, gen 1)": "010003000100000007000000a0",
+        "header": "010003000100000007000000a0",
+        "note": "audio, epoch 0, sender 3, stream 0, gen 1",
         "seq": 7,
         "nonce": "000100000000000700000000",
         "ciphertext_and_tag": "947824d2876d3835b273255ee3f6759faa08ac3b6578a40301dffcb0138e1c8ca56afc6fca4015d7135ebcf2d11707a23173eb14ee89d07e",
         "h": "d8165b6eb8073e24d82b3811cdb1b63d"
       },
       {
-        "header (audio, epoch 0, sender 3, stream 0, gen 1)": "010003000100000008000000b4",
+        "header": "010003000100000008000000b4",
+        "note": "audio, epoch 0, sender 3, stream 0, gen 1",
         "seq": 8,
         "nonce": "000100000000000800000000",
         "ciphertext_and_tag": "ae9acc2b79b8bd6fe8290ba46c2259cff6439f3f3e49dbd57d286e0a6c8823b2f7658aa166caef6b0c195b5ded9e6b8e4868236eb6215c33",
         "h": "e32be474992f8e4267cf5476e1480099"
       }
     ],
+    "units_note": "plaintexts are 40 bytes of c0.. and c1..",
     "media_key_pub": "4458db4fbb7feb87ab72e53970890b22c689d09a4c7622153163d58695367dda",
-    "CALL_AUTH (first_seq 7, prev_count 0, count 2)": {
+    "call_auth": {
+      "note": "first_seq 7, prev_count 0, count 2",
       "signed_prefix": "0100030001000000070002d8165b6eb8073e24d82b3811cdb1b63de32be474992f8e4267cf5476e1480099",
       "sig": "bb3da7c5834fb0f7d218604c951c512080fa6bbee7c81b4fb802eb9e12309364f097dbf2140f7729033a3461c37aef2e4d738da355d6d158c418ace88f40ad0d",
       "datagram": "130100030001000000070002d8165b6eb8073e24d82b3811cdb1b63de32be474992f8e4267cf5476e1480099bb3da7c5834fb0f7d218604c951c512080fa6bbee7c81b4fb802eb9e12309364f097dbf2140f7729033a3461c37aef2e4d738da355d6d158c418ace88f40ad0d"
@@ -120,7 +128,8 @@
     },
     "devices_key": {
       "label": "echofog/devices/2",
-      "signer_node_id (account)": "a018c71ac21cdb2d5a4affb041a02353340b9468aed8bbe7ff24778634b5b74f",
+      "signer_node_id": "a018c71ac21cdb2d5a4affb041a02353340b9468aed8bbe7ff24778634b5b74f",
+      "note": "the account key signs the device list",
       "key": "d760875de3ac55fa59a4c630395a9d3dc217e54d6338ba7f0ea3ec92275430db"
     },
     "release_key": "0486323efb53cec64972c8eaebdbd374e99816e0ed61a648f035ff2d8e4042dc"
