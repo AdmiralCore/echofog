@@ -45,26 +45,27 @@ func useSeed(sc *scenario, name string) []byte {
 }
 
 var (
-	helloXK = join([]byte{2}, u16be(1), u16be(2), u16be(1), []byte{0x02}) // handshake.json prologue_xk
-	helloXX = join([]byte{1}, u16be(2), u16be(2), []byte{0x00})           // prologue_xx_bare_address
+	helloXK       = hsHello([]uint16{1, 2}, 0x02)                    // prologue_xk
+	helloXKHidden = hsHello(insertGrease([]uint16{1}, 0x0a0a), 0x02) // prologue_xk_hidden
+	helloXX       = hsHello([]uint16{2}, 0x00)                       // prologue_xx_bare_address
 )
 
-// keyPrefix names the seeds: "hs/xk/" (the names handshake.json defines) or "hs/xx/" (our choice).
-func baseScenario(id string, xx bool, keyPrefix string) scenario {
+// baseScenario uses the transcript_inputs of handshake.json (the hs/xk/* seeds) for all patterns.
+func baseScenario(id string, xx bool, hello []byte) scenario {
 	sc := scenario{ID: id, XX: xx}
 	sc.CB = useSeed(&sc, "hs/cb")
 	respS := useSeed(&sc, "card/hs_sk")
 	devSeed := useSeed(&sc, "card/device_seed")
-	initE := useSeed(&sc, keyPrefix+"initiator_e")
-	initS := useSeed(&sc, keyPrefix+"initiator_s")
-	respE := useSeed(&sc, keyPrefix+"responder_e")
-	d := useSeed(&sc, keyPrefix+"initiator_e1_d")
-	z := useSeed(&sc, keyPrefix+"initiator_e1_z")
-	m := useSeed(&sc, keyPrefix+"encaps_m")
+	initE := useSeed(&sc, "hs/xk/initiator_e")
+	initS := useSeed(&sc, "hs/xk/initiator_s")
+	respE := useSeed(&sc, "hs/xk/responder_e")
+	d := useSeed(&sc, "hs/xk/initiator_e1_d")
+	z := useSeed(&sc, "hs/xk/initiator_e1_z")
+	m := useSeed(&sc, "hs/xk/encaps_m")
 
-	name, hello, rid := nameXK, helloXK, deviceID(devSeed)
+	name, rid := nameXK, deviceID(devSeed)
 	if xx {
-		name, hello, rid = nameXX, helloXX, make([]byte, 32)
+		name, rid = nameXX, make([]byte, 32)
 	}
 	sc.Rid = rid
 	sc.In = Inputs{
@@ -75,8 +76,9 @@ func baseScenario(id string, xx bool, keyPrefix string) scenario {
 	return sc
 }
 
-// checkCardInP checks that the card in a payload (field cardField) has hs_key = 0x02 ‖ rs.
-func checkCardInP(cardField int) func(p, rs []byte) error {
+// checkCard checks a card in a payload (field cardField): hs_key = 0x02 ‖ rs and, when
+// expectSigner is set, the signer's device ID.
+func checkCard(cardField int, expectDevice []byte) func(p, rs []byte) error {
 	return func(p, rs []byte) error {
 		ld, _, err := pbFields(p)
 		if err != nil {
@@ -93,6 +95,9 @@ func checkCardInP(cardField int) func(p, rs []byte) error {
 		if !bytes.Equal(hk, join([]byte{0x02}, rs)) {
 			return fmt.Errorf("card hs_key %x != 02‖rs %x", hk, rs)
 		}
+		if expectDevice != nil && !bytes.Equal(sha(cardSigner(card)), expectDevice) {
+			return errors.New("card signer is not the expected device")
+		}
 		return nil
 	}
 }
@@ -100,30 +105,27 @@ func checkCardInP(cardField int) func(p, rs []byte) error {
 func scenarios() []scenario {
 	S := accessSecret()
 	pid := passID(S)
-	fixedH1 := seed("hs/h1")
-	peer := peerCardEnvelope()
-	public := publicCardEnvelope()
-	knownSeq := uint64(fixedTime - 86400)
+	pubSeq := cardSeq(cardEnvelope("public"))
+	invSeq := cardSeq(cardEnvelope("invite"))
+	initiatorCard := cardEnvelope("initiator")
+	throwawayCard := cardEnvelope("initiator_throwaway")
+	initDev := fromHex(jget(loadJSON("node-card.json"), "initiator", "device_id"))
+	throwDev := fromHex(jget(loadJSON("node-card.json"), "initiator_throwaway", "device_id"))
 
-	// 1. XK, payloads literally as handshake.json deferred_transcripts.payloads says.
-	xk := baseScenario("xk", false, "hs/xk/")
-	xk.Seeds = append(xk.Seeds, seedRef{"hs/h1", hexs(fixedH1)}, seedRef{"link/access_secret (first 16 bytes)", hexs(S)})
-	literalP1 := hsInit(accessMsg(pid, accessProof(S, fixedH1)), knownSeq)
-	xk.In.P1 = func([]byte) []byte { return literalP1 }
-	xk.In.P2 = hsResp(nil)
-	xk.In.P3 = hsFinish(peer)
-	xk.In.CheckP3 = checkCardInP(1)
-	xk.Notes = []string{
-		"P1, P2, P3 are byte-for-byte payloads.HsInit, payloads.HsResp, payloads.HsFinish of handshake.json (deferred_transcripts.payloads).",
-		"P1.access.proof is therefore computed over the fixed seed hs/h1, NOT over the real h1 of this run; a real hidden responder would reject it (see xk_live_access).",
-		"P2 carries no card although known_card_seq (ts-86400) is older than the responder's peer card seq; P3's card is the responder's own peer card (format illustration), so its hs_key does not match the initiator's s (card_checks).",
-	}
+	// 1. XKhfs to the public card.
+	xk := baseScenario("XKhfs", false, helloXK)
+	p1xk := hsInit(nil, pubSeq)
+	xk.In.P1 = func([]byte) []byte { return p1xk }
+	xk.In.P2 = hsResp(p2Card(false, pubSeq))
+	xk.In.P3 = hsFinish(initiatorCard)
+	xk.In.CheckP3 = checkCard(1, initDev)
+	xk.Notes = []string{"prologue_xk; P1 = HsInit_xk (known_card_seq = public card seq); P2 = HsResp (no card: same seq); P3 = HsFinish (initiator card)."}
 
-	// 2. XK with the access proof computed over the run's real h1 (§5), checked by the responder.
-	live := baseScenario("xk_live_access", false, "hs/xk/")
-	live.Seeds = append(live.Seeds, seedRef{"link/access_secret (first 16 bytes)", hexs(S)})
-	live.In.P1 = func(h1 []byte) []byte { return hsInit(accessMsg(pid, accessProof(S, h1)), knownSeq) }
-	live.In.CheckP1 = func(h1, p1 []byte) error {
+	// 2. XKhfs to a hidden node's invitation card, access proof over this run's h1.
+	hid := baseScenario("XKhfs-access-proof", false, helloXKHidden)
+	hid.Seeds = append(hid.Seeds, seedRef{"link/access_secret (first 16 bytes)", hexs(S)})
+	hid.In.P1 = func(h1 []byte) []byte { return hsInit(accessMsg(pid, accessProof(S, h1)), invSeq) }
+	hid.In.CheckP1 = func(h1, p1 []byte) error {
 		ld, _, err := pbFields(p1)
 		if err != nil {
 			return err
@@ -137,37 +139,22 @@ func scenarios() []scenario {
 		}
 		return nil
 	}
-	live.In.P2 = hsResp(nil)
-	live.In.P3 = hsFinish(peer)
-	live.In.CheckP3 = checkCardInP(1)
-	live.Notes = []string{
-		"Same inputs as xk; only P1.access.proof differs: HMAC-SHA256(S, \"echofog/hs2/access-proof\" ‖ h1) with h1 = h after step 1.3 of this run. The responder verifies it.",
-	}
+	hid.In.P2 = hsResp(p2Card(false, invSeq))
+	hid.In.P3 = hsFinish(initiatorCard)
+	hid.In.CheckP3 = checkCard(1, initDev)
+	hid.Notes = []string{"prologue_xk_hidden (offered [0x0001, 0x0a0a]); P1 = HsInit_xk_hidden (access proof over the real h1, known_card_seq = invite card seq); P2 = HsResp (no card for an invitation card); P3 = HsFinish."}
 
-	// 3. XX with seeds named hs/xx/* (handshake.json gives no XX inputs).
-	xxP1 := hsInit(nil, 0) // §4.2: no access, no early; known_card_seq is XK-only, so absent
-	xx := baseScenario("xx", true, "hs/xx/")
-	xx.In.P1 = func([]byte) []byte { return xxP1 }
-	xx.In.P2 = hsResp(public)
-	xx.In.P3 = hsFinish(peer)
-	xx.In.CheckP2 = checkCardInP(4)
-	xx.In.CheckP3 = checkCardInP(1)
-	xx.Notes = []string{
-		"handshake.json defines no XX transcript inputs. Seeds are named like the XK ones with the prefix hs/xx/ instead of hs/xk/ (our choice). Responder static = node-card.json hs_sk as in XK.",
-		"Prologue = handshake.json prologue_xx_bare_address (offered [0x0002], chosen 0x0002, flags 0, rid = 32 zero bytes).",
-		"P1 = payloads.HsInit without access (field 4) and without known_card_seq (field 5): §4.2 forbids access in XX and known_card_seq is described as (XK).",
-		"P2 = payloads.HsResp plus card (field 4) = node-card.json public card envelope (card is REQUIRED in XX; we chose the public scope for a bootstrap responder).",
-		"P3 = payloads.HsFinish (responder's peer card, format illustration; a real XX initiator to a bare address would send a throwaway card).",
-	}
+	// 3. XXhfs to a bare address, same keys.
+	xx := baseScenario("XXhfs", true, helloXX)
+	p1xx := hsInit(nil, 0)
+	xx.In.P1 = func([]byte) []byte { return p1xx }
+	xx.In.P2 = hsResp(p2Card(true, 0))
+	xx.In.P3 = hsFinish(throwawayCard)
+	xx.In.CheckP2 = checkCard(4, nil) // rid is zero: no expected device ID
+	xx.In.CheckP3 = checkCard(1, throwDev)
+	xx.Notes = []string{"prologue_xx_bare_address; P1 = HsInit_xx; P2 = HsResp_xx (public card); P3 = HsFinish_xx (throwaway card). Keys = transcript_inputs (the XK seeds)."}
 
-	// 4. XX again, but reusing the hs/xk/* seeds, in case the other implementation did that.
-	xxk := baseScenario("xx_with_xk_seeds", true, "hs/xk/")
-	xxk.In.P1 = xx.In.P1
-	xxk.In.P2, xxk.In.P3 = xx.In.P2, xx.In.P3
-	xxk.In.CheckP2, xxk.In.CheckP3 = xx.In.CheckP2, xx.In.CheckP3
-	xxk.Notes = []string{"As xx, but every ephemeral, static, ML-KEM seed and encapsulation randomness reuses the hs/xk/* seeds of handshake.json deferred_transcripts.inputs_xk."}
-
-	return []scenario{xk, live, xx, xxk}
+	return []scenario{xk, hid, xx}
 }
 
 // ---- session derivations (§9) ----------------------------------------------------------------
@@ -249,7 +236,6 @@ func runScenario(sc scenario) (scenarioOut, error) {
 		msgs = append(msgs, msgOut{i + 1, dirs[i], len(m), hexs(m), hexs(streamFrame(0x03, m))})
 	}
 	pl := func(b []byte) payloadOut { return payloadOut{len(b), hexs(sha(b)), hexs(b)} }
-	ss := sessionSecret(ini.CK)
 	return scenarioOut{
 		ID: sc.ID, ProtocolName: in.Name, Notes: sc.Notes, Seeds: sc.Seeds, Keys: keys,
 		HSHello: hexs(in.Hello), HSHelloFrame: hexs(streamFrame(0x02, in.Hello)),
@@ -269,8 +255,8 @@ func runScenario(sc scenario) (scenarioOut, error) {
 			"ck":             hexs(ini.CK),
 			"k_i2r":          hexs(ini.KI2R),
 			"k_r2i":          hexs(ini.KR2I),
-			"session_secret": hexs(ss),
-			"sid":            hexs(sessionID(ss, ini.H)),
+			"session_secret": hexs(ini.SessionSecret),
+			"sid":            hexs(ini.SID),
 		},
 	}, nil
 }

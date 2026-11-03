@@ -54,22 +54,47 @@ func TestPrologues(t *testing.T) {
 func TestAccess(t *testing.T) {
 	hs := loadJSON("handshake.json")
 	S := accessSecret()
-	eqHex(t, "S", S, jget(hs, "access", "secret (link.json)"))
-	eqHex(t, "h1", seed("hs/h1"), jget(hs, "access", "h1"))
-	eqHex(t, "pass_id", passID(S), jget(hs, "access", "pass_id"))
-	eqHex(t, "proof", accessProof(S, seed("hs/h1")), jget(hs, "access", "proof"))
+	eqHex(t, "S", S, jget(hs, "access_example", "secret (link.json)"))
+	eqHex(t, "h1", seed("hs/h1"), jget(hs, "access_example", "h1"))
+	eqHex(t, "pass_id", passID(S), jget(hs, "access_example", "pass_id"))
+	eqHex(t, "proof", accessProof(S, seed("hs/h1")), jget(hs, "access_example", "proof"))
 }
 
 func TestPayloadEncodings(t *testing.T) {
 	hs := loadJSON("handshake.json")
-	S := accessSecret()
-	p1 := hsInit(accessMsg(passID(S), accessProof(S, seed("hs/h1"))), fixedTime-86400)
-	eqHex(t, "HsInit", p1, jget(hs, "payloads", "HsInit", "encoded"))
-	eqHex(t, "HsResp", hsResp(nil), jget(hs, "payloads", "HsResp", "encoded"))
-	p3 := hsFinish(peerCardEnvelope())
-	eqHex(t, "HsFinish sha256", sha(p3), jget(hs, "payloads", "HsFinish", "encoded_sha256"))
-	if want := hs["payloads"].(map[string]any)["HsFinish"].(map[string]any)["encoded_len"].(float64); len(p3) != int(want) {
-		t.Errorf("HsFinish len %d, want %v", len(p3), want)
+	enc := func(k string) string { return jget(hs, "payloads", k, "encoded") }
+	pubSeq := cardSeq(cardEnvelope("public"))
+	if pubSeq != fixedTime || cardSeq(cardEnvelope("invite")) != fixedTime+2 {
+		t.Fatalf("card seqs %d %d", pubSeq, cardSeq(cardEnvelope("invite")))
+	}
+	eqHex(t, "HsInit_xk", hsInit(nil, pubSeq), enc("HsInit_xk"))
+	eqHex(t, "HsInit_xx", hsInit(nil, 0), enc("HsInit_xx"))
+	eqHex(t, "HsResp", hsResp(p2Card(false, pubSeq)), enc("HsResp"))
+	eqHex(t, "HsResp (invite)", hsResp(p2Card(false, fixedTime+2)), enc("HsResp"))
+	eqHex(t, "HsResp_xx", hsResp(p2Card(true, 0)), enc("HsResp_xx"))
+	eqHex(t, "HsFinish", hsFinish(cardEnvelope("initiator")), enc("HsFinish"))
+	eqHex(t, "HsFinish_xx", hsFinish(cardEnvelope("initiator_throwaway")), enc("HsFinish_xx"))
+}
+
+func TestHelloAndGrease(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	eqHex(t, "hello xk hidden", helloXKHidden, jget(hs, "prologue_xk_hidden", "hs_hello"))
+	cb := seed("hs/cb")
+	rid := deviceID(seed("card/device_seed"))
+	p := prologue(cb, rid, helloXKHidden)
+	eqHex(t, "prologue xk hidden", p, jget(hs, "prologue_xk_hidden", "prologue"))
+	eqHex(t, "h after prologue xk hidden", mixHash(initialH(nameXK), p), jget(hs, "prologue_xk_hidden", "h_after_prologue"))
+	// §3.4 examples
+	if g := insertGrease([]uint16{2, 1}, 0x0a0a); len(g) != 3 || g[0] != 2 || g[1] != 1 || g[2] != 0x0a0a {
+		t.Errorf("grease example 1: %x", g)
+	}
+	if g := insertGrease([]uint16{1}, 0x0a0a); len(g) != 2 || g[1] != 0x0a0a {
+		t.Errorf("grease example 2: %x", g)
+	}
+	for v, want := range map[uint16]bool{0x0a0a: true, 0xeaea: true, 0xfafa: false, 0x0a1a: false, 0x0001: false} {
+		if isGrease(v) != want {
+			t.Errorf("isGrease(%04x)", v)
+		}
 	}
 }
 
@@ -112,7 +137,7 @@ func TestPuzzle(t *testing.T) {
 
 func TestDeferredInputs(t *testing.T) {
 	hs := loadJSON("handshake.json")
-	get := func(k string) string { return jget(hs, "deferred_transcripts", "inputs_xk", k) }
+	get := func(k string) string { return jget(hs, "transcript_inputs", k) }
 	eqHex(t, "initiator_e_sk", seed("hs/xk/initiator_e"), get("initiator_e_sk"))
 	eqHex(t, "initiator_e_pub", x25519Public(seed("hs/xk/initiator_e")), get("initiator_e_pub"))
 	eqHex(t, "initiator_s_pub", x25519Public(seed("hs/xk/initiator_s")), get("initiator_s_pub"))
@@ -178,14 +203,24 @@ func TestRoundTrips(t *testing.T) {
 				t.Errorf("%s: message %d overhead %d, want %d", sc.ID, i+1, len(m)-len(pls[i]), want[i])
 			}
 		}
-		// the XK pre-message h and XX prologue h equal handshake.json
-		if !sc.XX && ini.Steps[2].H != "b3581ff5d9eb76792fa78daea88e87ec515cca5e7958c264a7c366c87fb936ab" {
+		if !sc.XX && sc.ID == "XKhfs" && ini.Steps[2].H != "b3581ff5d9eb76792fa78daea88e87ec515cca5e7958c264a7c366c87fb936ab" {
 			t.Errorf("%s: pre-message h", sc.ID)
 		}
-		if sc.ID == "xk" || sc.ID == "xx_with_xk_seeds" {
-			if hexs(ini.Extra["ekem1_ss"]) != "218ea1ad2ba9ace442619182df4932a0d90ca7f903ddc81056e70a9d247abb63" {
-				t.Errorf("%s: ekem1 ss", sc.ID)
+		if hexs(ini.Extra["ekem1_ss"]) != "218ea1ad2ba9ace442619182df4932a0d90ca7f903ddc81056e70a9d247abb63" {
+			t.Errorf("%s: ekem1 ss", sc.ID)
+		}
+		for k, ok := range resp.CardOK {
+			if !ok {
+				t.Errorf("%s: card check %s failed", sc.ID, k)
 			}
+		}
+		for k, ok := range ini.CardOK {
+			if !ok {
+				t.Errorf("%s: card check %s failed", sc.ID, k)
+			}
+		}
+		if sc.ID == "XKhfs-access-proof" {
+			eqHex(t, "HsInit_xk_hidden", ini.P1, jget(loadJSON("handshake.json"), "payloads", "HsInit_xk_hidden", "encoded"))
 		}
 	}
 }
@@ -233,9 +268,6 @@ func runMITM(xx bool, in Inputs, mutate func(n int, m []byte) []byte) (error, er
 
 func TestTamperFails(t *testing.T) {
 	for _, sc := range scenarios() {
-		if sc.ID == "xx_with_xk_seeds" {
-			continue
-		}
 		for msg := 1; msg <= 3; msg++ {
 			for _, pos := range []int{0, 40, 1300, -1} {
 				ierr, rerr := runMITM(sc.XX, sc.In, func(n int, m []byte) []byte {

@@ -56,15 +56,29 @@ type Step struct {
 }
 
 type Result struct {
-	Steps      []Step
-	Msgs       [][]byte // Noise messages 1..3 as sent or received
-	H          []byte
-	CK         []byte
-	KI2R       []byte
-	KR2I       []byte
-	Extra      map[string][]byte
-	P1, P2, P3 []byte
-	CardOK     map[string]bool
+	Steps              []Step
+	Msgs               [][]byte // Noise messages 1..3 as sent or received
+	H                  []byte
+	CK                 []byte
+	KI2R               []byte
+	KR2I               []byte
+	SessionSecret, SID []byte
+	Extra              map[string][]byte
+	P1, P2, P3         []byte
+	CardOK             map[string]bool
+}
+
+// finish is §9: Split, session_secret and sid from the final ck and h, and only then ck is
+// erased. res.CK keeps a copy solely because the transcript publishes the final ck.
+func finish(res *Result, h, ck []byte) {
+	res.H = h
+	res.KI2R, res.KR2I = noiseHKDF2(ck, nil)
+	res.SessionSecret = sessionSecret(ck)
+	res.SID = sessionID(res.SessionSecret, h)
+	res.CK = append([]byte(nil), ck...)
+	for i := range ck {
+		ck[i] = 0
+	}
 }
 
 type logger struct {
@@ -219,8 +233,7 @@ func xkInitiator(in Inputs, rsPub []byte, p pipe) (res Result, err error) {
 	res.Msgs = append(res.Msgs, m3)
 	p.toResp <- m3
 
-	res.H, res.CK = h, ck
-	res.KI2R, res.KR2I = noiseHKDF2(ck, nil)
+	finish(&res, h, ck)
 	return res, nil
 }
 
@@ -353,8 +366,7 @@ func xkResponder(in Inputs, p pipe) (res Result, err error) {
 		res.CardOK["p3_card_hs_key_matches_rs"] = in.CheckP3(res.P3, rs) == nil
 	}
 
-	res.H, res.CK = h, ck
-	res.KI2R, res.KR2I = noiseHKDF2(ck, nil)
+	finish(&res, h, ck)
 	return res, nil
 }
 
@@ -486,8 +498,7 @@ func xxInitiator(in Inputs, p pipe) (res Result, err error) {
 	res.Msgs = append(res.Msgs, m3)
 	p.toResp <- m3
 
-	res.H, res.CK = h, ck
-	res.KI2R, res.KR2I = noiseHKDF2(ck, nil)
+	finish(&res, h, ck)
 	return res, nil
 }
 
@@ -622,8 +633,7 @@ func xxResponder(in Inputs, p pipe) (res Result, err error) {
 		res.CardOK["p3_card_hs_key_matches_rs"] = in.CheckP3(res.P3, rs) == nil
 	}
 
-	res.H, res.CK = h, ck
-	res.KI2R, res.KR2I = noiseHKDF2(ck, nil)
+	finish(&res, h, ck)
 	return res, nil
 }
 

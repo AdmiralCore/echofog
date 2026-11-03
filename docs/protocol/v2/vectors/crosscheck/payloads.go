@@ -188,3 +188,72 @@ func peerCardEnvelope() []byte { return fromHex(jget(loadJSON("node-card.json"),
 func publicCardEnvelope() []byte {
 	return fromHex(jget(loadJSON("node-card.json"), "public", "envelope"))
 }
+
+func cardEnvelope(name string) []byte {
+	return fromHex(jget(loadJSON("node-card.json"), name, "envelope"))
+}
+
+// cardSeq and cardSigner read the envelope header (objects.md §1).
+func cardSeq(env []byte) uint64 {
+	off := 2 + int(env[1]) + 1 + 32
+	return binary.BigEndian.Uint64(env[off : off+8])
+}
+
+func cardSigner(env []byte) []byte {
+	off := 2 + int(env[1])
+	return env[off : off+33] // akey: 0x01 ‖ Ed25519 key
+}
+
+// ---- HS_HELLO (§3.1) with GREASE placement of §3.4 -------------------------------------------
+
+// insertGrease puts g immediately before the first entry with a larger value (at the end if
+// none); the other entries keep their preference order.
+func insertGrease(pref []uint16, g uint16) []uint16 {
+	out := make([]uint16, 0, len(pref)+1)
+	done := false
+	for _, v := range pref {
+		if !done && v > g {
+			out = append(out, g)
+			done = true
+		}
+		out = append(out, v)
+	}
+	if !done {
+		out = append(out, g)
+	}
+	return out
+}
+
+// hsHello encodes n ‖ offered ‖ chosen ‖ flags; chosen is the first non-GREASE entry.
+func hsHello(offered []uint16, flags byte) []byte {
+	b := []byte{byte(len(offered))}
+	var chosen uint16
+	for _, v := range offered {
+		b = append(b, u16be(v)...)
+		if chosen == 0 && !isGrease(v) {
+			chosen = v
+		}
+	}
+	return join(b, u16be(chosen), []byte{flags})
+}
+
+func isGrease(v uint16) bool { return v&0x0f0f == 0x0a0a && v>>12 == (v>>4)&0x0f && v>>12 <= 0xe }
+
+// ---- responder's P2 card rule (§7 "Card in P2 (XK)") ------------------------------------------
+
+// p2Card returns the card the responder puts into P2: in XK, its current card of the scope of
+// the card named by known_card_seq when that one has a higher seq; nothing for an invitation card.
+func p2Card(xx bool, knownSeq uint64) []byte {
+	pub := cardEnvelope("public")
+	if xx {
+		return pub // §4.2: always the public card
+	}
+	for _, scope := range []string{"public", "peer", "invite"} {
+		if cardSeq(cardEnvelope(scope)) == knownSeq {
+			// The initiator holds the current card of this scope (node-card.json has one card
+			// per scope), so nothing is newer; for an invitation card nothing is sent anyway.
+			return nil
+		}
+	}
+	return pub // unknown seq: an older card of some scope; send the current public card
+}
