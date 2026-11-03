@@ -61,9 +61,11 @@ side channels on the user's device; bugs in the operating system and the cryptog
 
 ## 3. Goals
 
-1. **Unobservable carriers.** Without the node's masking key, a carrier flow is indistinguishable
-   from uniformly random UDP (noise3) or from a browser talking to the cover website (REALITY v2,
-   ws2). Knowing a node's public identity MUST NOT help to recognise its flows (K1).
+1. **Unobservable carriers.** A passive observer cannot tell a noise3 flow from uniformly random UDP,
+   even if it knows the node's identity and its cards (the selector needs the ECDH secret, and noise3
+   keys are never published). A REALITY v2 or ws2 flow looks like a browser talking to the cover
+   website, whose server answers it mirror (K1, V1). An active prober who knows a masking key can
+   still confirm a node; this is why noise3 keys stay private and hidden nodes use per-invitation keys.
 2. **No probing oracle.** A node never answers an unauthenticated packet as itself. Unauthenticated
    REALITY traffic goes to the cover site; unauthenticated noise3 traffic gets no answer (V1).
 3. **Hidden nodes stay hidden.** A hidden node reveals nothing about itself, not even that it is an
@@ -136,7 +138,7 @@ A connection is built bottom-up:
 |---|---|---|---|
 | identity key | Ed25519 (alg `ed25519`) | signs the node card and other objects; node ID = SHA-256 of its algorithm-tagged form | card envelope |
 | handshake static key `hs` | X25519 | Noise static key `s` | card (`hs_key`) |
-| masking keys | X25519, random, one per listener or per invitation | L0: noise3 and REALITY v2 | card (`mask_keys`) |
+| masking keys | X25519, random; a contacts key, one per unredeemed invitation, one per REALITY listener | L0: noise3 and REALITY v2 | card (`mask_keys`); noise3 keys only in peer and invitation cards |
 | prekeys | X25519 SPK/OPK + ML-KEM-768 | chat/2 PQXDH | `prekeys/2` object |
 | wallet key | TON | exit payments | never on the wire except in vouchers |
 
@@ -182,4 +184,8 @@ when the change is free.
 
 Where the design draft left a choice open, this specification takes the safer option and records it
 as a numbered **Decision**. The full list is in [CHANGES-from-v1.md](CHANGES-from-v1.md) §3; each
-decision is stated in the section it affects.
+decision is stated in the section it affects. Choices that need a product decision are listed as
+**Open questions** in [CHANGES-from-v1.md](CHANGES-from-v1.md) §4.
+
+An independent audit of the first draft (November 2026) found 1 critical, 6 high, 22 medium and 17
+low issues; how each was handled is recorded in [CHANGES-from-v1.md](CHANGES-from-v1.md) §5.
