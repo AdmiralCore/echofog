@@ -5,14 +5,15 @@ variant hardened against the v1 weaknesses K4 (unsigned, overwritable node infor
 wins; replies not tied to the asked node) and V4 (amplification). The wire messages are those of the
 `dht/2` service ([services.md](services.md) §2).
 
-What it does and does not achieve is stated in [security.md](security.md) S21–S23: node IDs are cheap
+What it does and does not achieve is stated in [security.md](security.md) S27–S28: device IDs are cheap
 to grind, so the DHT relies on network diversity, many answers and disjoint paths, and readers' memory
 of what they have already seen. A censor with addresses in many networks can still hide records.
 
 ## 1. Keyspace
 
 - 256-bit keys; distance is XOR.
-- A node's position is its `node_id = SHA-256(akey)` ([objects.md](objects.md) §1). Positions are not
+- A node's position is its **device ID** `device_id = SHA-256(device akey)` ([objects.md](objects.md)
+  §1); the account's node ID is not a DHT position. Positions are not
   chosen freely but are cheap to grind: about N/k key generations put a node among the k closest to a
   given key in a network of N nodes.
 - `k = 20` (bucket size and result size), `α = 3` parallel requests per lookup step.
@@ -26,10 +27,14 @@ only the signer can publish under it and pre-ground positions go stale every day
 
 ```
 day            = floor(unix_time / 86400)
-signer-keyed:  key = SHA-256("echofog/dht2/key" ‖ u32(day) ‖ u8(len(label)) ‖ label ‖ signer_node_id(32))
+signer-keyed:  key = SHA-256("echofog/dht2/key" ‖ u32(day) ‖ u8(len(label)) ‖ label ‖ signer_id(32))
 release:       key = SHA-256("echofog/dht2/release" ‖ u32(day))
 ```
 
+- `signer_id` is `SHA-256` of the envelope signer's akey: the device ID for objects a device signs
+  (cards, prekeys, mailbox hints), the node ID for the device list, which the account key signs. A
+  contact who knows only a node ID first looks up the account's `devices/2` record, then the devices'
+  cards and prekeys.
 - Publishers store each record under the key of the current day and, during the last 2 hours of a day,
   also under the next day's key. Readers look up the current day's key and, during the first 2 hours of
   a day, also the previous day's.
@@ -62,7 +67,7 @@ Record kinds, sizes, lifetimes and replica counts: [registries.md](registries.md
      publish for their clients); at most 300 `STORE` per hour and 2 per second;
    - per diversity unit of the publisher: 3 times the per-session values;
    - in total: 20 000 records. When full, the node evicts the stored record whose key is farthest from
-     its own node ID, and refuses new records farther than that (`STORED{quota}`), so honest records
+     its own device ID, and refuses new records farther than that (`STORED{quota}`), so honest records
      near the node are never displaced by far-away spam.
 
 A node stores only keys for which it is among the 20 closest nodes it knows, plus a cache of popular
@@ -113,7 +118,7 @@ victim's address and make the network dial it (reflection, V4).
 
 ## 5. Routing table
 
-- 256 buckets of `k = 20`; entries are (node ID, the node's current card).
+- 256 buckets of `k = 20`; entries are (device ID, the device's current public card).
 - An entry is added or updated **only** from: an authenticated session with that node (the card from
   the handshake), or a valid card with a higher `seq` than the one held. A third party can never
   change the address of an entry: addresses come from the node's own card.
