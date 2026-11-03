@@ -9,26 +9,22 @@
 // REJECT 0x05 on stream 0), applies the timeouts of §11 and performs the closes a Reply asks for
 // (ActSilentClose: close at Reply.CloseAt, without a message). It is not wired into the v1 node.
 //
-// # Readings of the specification
+// # Spec decisions followed
 //
-// Where handshake.md is silent or ambiguous, this implementation chose the following readings;
-// each matches the vectors in docs/protocol/v2/vectors.
+// handshake.md (step-2 clarifications, CHANGES-from-v1.md §6) settles the points this package
+// first had to read for itself: P1/P2/P3/Reject are canonical protobuf (objects.md §2.3); a
+// GREASE suite goes before the first larger entry of offered and is never chosen; the P2 card is
+// the current card of the scope named by known_card_seq, sent exactly when its seq is higher, never
+// for an invitation card, and XX always carries the public card; the responder tries the current
+// hs key, then a full second pass with the previous one; rid is a device ID; hidden nodes accept
+// XK only; ck is erased after Split, session_secret and sid; a P1 in XX with access,
+// known_card_seq or early is malformed; an initiator answers at most 2 HS_RETRY; the previous R
+// is accepted during the minute after rotation; a skewed P2.time makes the initiator abort
+// without message 3; unprocessed early data is early_status 2.
 //
-//  1. Payload encoding. P1, P2, P3 and Reject are decoded with the canonical rules of objects.md
-//     §2.3 (field order, no duplicates, no default scalars, packed repeated fields, minimal
-//     varints). The specification states these rules for signed bodies only.
-//  2. GREASE in HS_HELLO.offered. §3.1 orders offered by preference, §3.4 says lists stay sorted
-//     with GREASE "in its numeric place". The GREASE suite is inserted before the first larger
-//     entry; the other entries keep their preference order.
-//  3. Initiator clock check. A P2.time more than 600 s off makes the initiator abort without
-//     message 3 (it has no way to send Reject{clock-skew} inside the handshake).
-//  4. Early data present but not processed (feature not negotiated, outside the 60 s window,
-//     replayed, not 0-RTT safe) is reported as early_status = 2.
-//  5. A P1 in XX that carries access or early is treated as malformed (silent close).
-//  6. Puzzle cookies: the minute is taken from the local clock at arrival; cookies made with the
-//     previous daily secret R are accepted like those of the previous minute. An initiator answers
-//     at most two HS_RETRY per connection attempt.
-//  7. HS_HELLO with a duplicated suite in offered, or with trailing bytes, is malformed.
+// The normative vectors/handshake-transcript.json is reproduced byte for byte both by the
+// Noise layer and by the Initiator/Responder state machines with all checks of §7
+// (TestTranscriptVectors, TestApplicationTranscripts).
 //
 // Card checks use CardVerifier. DefaultCardVerifier covers what the handshake needs (envelope,
 // RFC 8032 signature with canonical S and no small-order signer, lifetimes, the top-level body,
