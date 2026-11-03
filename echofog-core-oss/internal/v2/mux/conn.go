@@ -130,6 +130,7 @@ type Conn struct {
 	ctrlQ      [][]byte
 	dataQ      [][]byte
 	dgramQ     [][]byte
+	writing    bool
 	err        error
 	stats      ConnStats
 
@@ -238,6 +239,11 @@ func (c *Conn) OpenStream(ctx context.Context) (RawStream, error) {
 	s := c.newStream(c.nextLocal)
 	c.nextLocal += 2
 	c.localOpen++
+	// Announce the stream at once with an empty MUX_STREAM, so streams reach the peer in ID
+	// order: a receiver treats a peer ID below the highest one it has seen as finished.
+	s.announced = true
+	c.queueData(frame.AppendFrame(nil, frame.Frame{Type: frame.TypeMuxStream,
+		Payload: frame.MuxStream{StreamID: s.id}.Append(nil)}))
 	return s, nil
 }
 
@@ -350,12 +356,31 @@ func (c *Conn) writeLoop() {
 			n++
 		}
 		c.dataQ = c.dataQ[n:]
+		c.writing = true
 		c.mu.Unlock()
-		if _, err := c.rw.Write(buf); err != nil {
+		_, err := c.rw.Write(buf)
+		c.mu.Lock()
+		c.writing = false
+		c.cond.Broadcast()
+		c.mu.Unlock()
+		if err != nil {
 			c.fail(fmt.Errorf("mux: carrier write: %w", err))
 			return
 		}
 	}
+}
+
+// CloseAfterFlush closes the connection once every queued frame was written to the carrier,
+// or after timeout. It lets a last GOAWAY or CLOSE reach the peer.
+func (c *Conn) CloseAfterFlush(timeout time.Duration) {
+	t := time.AfterFunc(timeout, func() { c.Close() })
+	defer t.Stop()
+	c.mu.Lock()
+	for c.err == nil && (c.writing || len(c.ctrlQ)+len(c.dataQ)+len(c.dgramQ) > 0) {
+		c.cond.Wait()
+	}
+	c.mu.Unlock()
+	c.Close()
 }
 
 func (c *Conn) queueCtrl(b []byte) {
