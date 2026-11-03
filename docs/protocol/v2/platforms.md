@@ -14,8 +14,11 @@ protocol of the other documents.
 
 - `gomobile bind -target=android/arm64,android/amd64` and `-target=ios/arm64` MUST succeed for the
   protocol core (everything below the app: L0–L7, services, storage). android/amd64 covers emulators.
-- **No cgo in the protocol core.** Cryptography, QUIC, the mux, the DHT and storage are pure Go.
-  (Today the core has no cgo; it must stay that way.)
+- **No cgo in EchoFog's own code.** Cryptography, QUIC, the mux, the DHT and storage are pure Go, and
+  no EchoFog package may `import "C"` (today none does; it must stay that way). iOS builds link through
+  gomobile with the external linker the Go toolchain requires: Go uses external (cgo) linking for
+  every `ios` target even when no package uses cgo, so `CGO_ENABLED=0` is not possible there. Android
+  builds work with `CGO_ENABLED=0`.
 - **Build tags with portable fallbacks.** Every platform-specific file sits behind a build tag, and
   every such file has a fallback that compiles everywhere else and keeps the protocol working, possibly
   slower. Note that `GOOS=android` also satisfies the `linux` tag and `GOOS=ios` satisfies `darwin`, so
@@ -97,10 +100,12 @@ A phone is a full v2 peer:
 
 ## 4. Testing
 
-- **CI build.** Every change to the core is built with `gomobile bind` for android/arm64,
-  android/amd64 and ios/arm64. A build failure fails CI. A check lists every file with a build tag and
-  verifies that each tagged file has a fallback for android and ios (the build itself proves it
-  compiles).
+- **CI build.** Every change to the core is built for android/arm64 and android/amd64 with
+  `CGO_ENABLED=0` (a `go build`/`go vet` with that setting proves there is no cgo) and with
+  `gomobile bind` for Android, and for ios/arm64 through `gomobile bind`, which links with the external
+  linker the Go toolchain requires for iOS. A build failure fails CI. A check verifies that no EchoFog
+  package imports `"C"`, lists every file with a build tag, and verifies that each tagged file has a
+  fallback for android and ios (the builds themselves prove it compiles).
 - **Conformance under the mobile profile.** The conformance test suite (the vectors in
   [vectors/](vectors/) and the interoperability tests between two nodes) runs twice: with the
   `desktop` profile and with `platform=android` and the mobile defaults of §2 (`low_power`, `metered`,

@@ -1,5 +1,5 @@
 {
-  "description": "Deterministic pieces of the L1 handshake. Full XKhfs/XXhfs message transcripts are deferred (Decision D15).",
+  "description": "Deterministic pieces of the L1 handshake: initial states, prologues, payloads, access proof, puzzle. The full transcripts are in handshake-transcript.json.",
   "spec": "handshake.md",
   "seeds": {
     "hs/cb": "96ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c",
@@ -32,37 +32,59 @@
     "cb": "96ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c",
     "rid (node-card.json device_id)": "aed4f96646d6dcfa44881f9dc7a7ba17cc7aec96bdb5aaa3ba1691bba206fd91",
     "hs_hello": "0200010002000102",
-    "hs_hello_note": "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound)",
+    "hs_hello_note": "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder device ID bound); to the public card",
     "prologue": "6563686f666f672f6873322f70726f6c6f67756596ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206caed4f96646d6dcfa44881f9dc7a7ba17cc7aec96bdb5aaa3ba1691bba206fd91080200010002000102",
     "h_after_prologue": "a161a7369429f1e7ad8bbc4284ad4f90e9c2614b74a6f2ef8fb32db24ec162b4",
     "responder_static_rs": "3da04cb50fc0a24661735c3ba5b9dcb84b01abafe58ca535521a78da059fcf2b",
     "h_after_premessage_rs": "b3581ff5d9eb76792fa78daea88e87ec515cca5e7958c264a7c366c87fb936ab"
   },
+  "prologue_xk_hidden": {
+    "hs_hello": "0200010a0a000102",
+    "hs_hello_note": "offered [0x0001, 0x0a0a GREASE], chosen 0x0001, flags 0x02; to the invitation card (l1_suites [1])",
+    "prologue": "6563686f666f672f6873322f70726f6c6f67756596ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206caed4f96646d6dcfa44881f9dc7a7ba17cc7aec96bdb5aaa3ba1691bba206fd91080200010a0a000102",
+    "h_after_prologue": "43243e3674d77afe24e66aab552d9b8e4b07a64ad003e3f1e4ea3ec5613aa34f"
+  },
   "prologue_xx_bare_address": {
     "hs_hello": "010002000200",
     "prologue": "6563686f666f672f6873322f70726f6c6f67756596ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c000000000000000000000000000000000000000000000000000000000000000006010002000200",
     "h_after_prologue": "e2f03f423e66853bb0b35cf8e29e1d3ab43c93592d2aee3ab2aba703ffed89f9",
-    "note": "no expected node ID: rid is 32 zero bytes, and the initiator must use a throwaway identity"
+    "note": "no expected device ID: rid is 32 zero bytes, and the initiator must use a throwaway identity"
   },
-  "access": {
+  "access_example": {
+    "note": "the HMAC with a fixed h1 seed; in a handshake h1 is the transcript's h before EncryptAndHash(P1) (handshake-transcript.json XKhfs-access-proof)",
     "secret (link.json)": "7f4f583be3ff43c7ae906618e20410b2",
     "h1": "e850271767e974f5661ce8650781f8e4e27cbfe687abda0bef31ddcd462b03b9",
     "pass_id": "ed3cdd202d3d0e61",
     "proof": "839ab2f5aa6f90216fa6310a8fc5bcb87ffefebed8adfaca843464bce76ac30c"
   },
   "payloads": {
-    "HsInit": {
-      "fields": "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2 and GREASE service 0x3a3a version 1, access{pass_id, proof}, known_card_seq ts-86400, time ts",
-      "encoded": "08c801120601030405aa541a0508011201021a0508021201021a0508031201021a0508041201021a0508051201021a0508061201021a0508071201021a0508081201021a0608ba74120101222c0a08ed3cdd202d3d0e611220839ab2f5aa6f90216fa6310a8fc5bcb87ffefebed8adfaca843464bce76ac30c2880a59fd7063080c8a4d706"
+    "HsInit_xk": {
+      "fields": "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2 and GREASE service 0x3a3a version 1, known_card_seq ts (the public card), time ts",
+      "encoded": "08c801120601030405aa541a0508011201021a0508021201021a0508031201021a0508041201021a0508051201021a0508061201021a0508071201021a0508081201021a0608ba741201012880c8a4d7063080c8a4d706"
+    },
+    "HsInit_xk_hidden": {
+      "fields": "as HsInit_xk plus access{pass_id, proof over the transcript's h1}, known_card_seq ts+2 (the invitation card); the encoding is in handshake-transcript.json",
+      "encoded": "08c801120601030405aa541a0508011201021a0508021201021a0508031201021a0508041201021a0508051201021a0508061201021a0508071201021a0508081201021a0608ba74120101222c0a08ed3cdd202d3d0e611220cda999a4683abfe6b17e475acad4a141adbec0b3a46805967bf1258a4ccb05652882c8a4d7063080c8a4d706"
+    },
+    "HsInit_xx": {
+      "fields": "as HsInit_xk without access and known_card_seq",
+      "encoded": "08c801120601030405aa541a0508011201021a0508021201021a0508031201021a0508041201021a0508051201021a0508061201021a0508071201021a0508081201021a0608ba741201013080c8a4d706"
     },
     "HsResp": {
-      "fields": "proto_ver 200, features [1,3,4,5], services [(1,2),(2,2),(3,2)], observed 192.0.2.33:51234, time ts",
+      "fields": "proto_ver 200, features [1,3,4,5], services [(1,2),(2,2),(3,2)], observed 192.0.2.33:51234, time ts; no card",
       "encoded": "08c8011204010304051a04080110021a04080210021a0408031002420704c0000221c8224880c8a4d706"
     },
+    "HsResp_xx": {
+      "fields": "as HsResp plus card = node-card.json public.envelope",
+      "encoded": "08c8011204010304051a04080110021a04080210021a040803100222f304020e6563686f666f672f636172642f32015f37f43847224d0b68b3af87b9c70b1c1997ffe4e5401cbd6e5ab5bfbbba212c000000006ae92400000000006af10d0041f008c8011221023da04cb50fc0a24661735c3ba5b9dcb84b01abafe58ca535521a78da059fcf2b1a020102222c0802120a3139322e302e322e313018bb03280132150a0f7777772e6578616d706c652e6f7267120208013801222c0803120c3139382e35312e3130302e3718bb03280132150a0f7777772e6578616d706c652e6f7267120208022a290a210210a544ca931aa0c453715b77033cf9a9505292e5010eb1b92b080055cfc432331080bdc9d70630013826420508011201024205080212010242050805120102420508061201024a050103040506521408f40310805018a08d0622024e4c280b3a0201025a2068747470733a2f2f73686f702e6578616d706c652e6f72672f6563686f666f676205302e332e306a2101d3503038b2abe075080a8e588ef7d843b5c52722253f43417d04912a0cfe410c9201b20102116563686f666f672f646576696365732f3201d3503038b2abe075080a8e588ef7d843b5c52722253f43417d04912a0cfe410c000000006ae92400000000006b10b1002d0a2b0a21015f37f43847224d0b68b3af87b9c70b1c1997ffe4e5401cbd6e5ab5bfbbba212c1080c8a4d7061801e64c8be506be5f388bd6674a53991f8562a2b66f6af0a7337d80b8e15ddfbfdafd2bc0cb44c6c54e2f176929110733c28562b2841c905b6be1d357045a52c20c647d7cdc065346fa3a340ce7d96ab7a9079353e11b0bc81679f0f4c783941c214e61db5dc8ad9f56345c2abd345b3b0b52fcb88a37d05d4c44f2028d10f5860d420704c0000221c8224880c8a4d706"
+    },
     "HsFinish": {
-      "fields": "card = node-card.json peer card (format illustration)",
-      "encoded_sha256": "ee7ad2b570f399856a90447810fd470f5c0ce7d0d05e0fe7515fe4380a9399cf",
-      "encoded_len": 810
+      "fields": "card = node-card.json initiator.envelope",
+      "encoded": "0aa503020e6563686f666f672f636172642f32017e529e642bca69e86764b17e81d9c680f1d0bca034d0ec71fbe3c133f573e6b3000000006ae92400000000006af10d00412208c80112210262d2d11f1fc9a4ee042be1a7e30ea0c54884913702d5c4107d5788868c183a2b1a02010242050803120102420508071201024a0501030405066205302e332e306a210109c1ee5c9b3783d1ba46a27c53f5affa1f78349875f6fece31201b83b85ffe5e8001019201b20102116563686f666f672f646576696365732f320109c1ee5c9b3783d1ba46a27c53f5affa1f78349875f6fece31201b83b85ffe5e000000006ae92400000000006b10b1002d0a2b0a21017e529e642bca69e86764b17e81d9c680f1d0bca034d0ec71fbe3c133f573e6b31080c8a4d706180198f4ca75072aa4db95c7d62704a96cca4fd74f5b1ba83f17e296623d924d7db9f00d8cfa4f6805bae071eb99622c3c6c0fb323df3303029dabf062b3b944a90f7cd47004596a64e1ec475480cbf07ed816eef0fc8596abcf0eda12d88a83ea26d5d2340ba7882861ec992d01aef84f436751c6274885d946d510c5a628f8650c"
+    },
+    "HsFinish_xx": {
+      "fields": "card = node-card.json initiator_throwaway.envelope",
+      "encoded": "0aa503020e6563686f666f672f636172642f3201fef05881f221683e44a67c4b94b790fa7bd5bfadbb6c963dfb5dabd634e9db4f000000006ae92400000000006af10d00412208c80112210262d2d11f1fc9a4ee042be1a7e30ea0c54884913702d5c4107d5788868c183a2b1a02010242050803120102420508071201024a0501030405066205302e332e306a2101ce920e26baf43bf88f8ed6ee2e988f48a3313f1a7eb0468bd200fc3485ba311a8001019201b20102116563686f666f672f646576696365732f3201ce920e26baf43bf88f8ed6ee2e988f48a3313f1a7eb0468bd200fc3485ba311a000000006ae92400000000006b10b1002d0a2b0a2101fef05881f221683e44a67c4b94b790fa7bd5bfadbb6c963dfb5dabd634e9db4f1080c8a4d70618018f95a88afb28e68ae842086e561e6b54e52e1d441af5ddbe17ebd3a156c41335d79f0071691616885e7bef56aabbfce05cdb141c54c05a178929c533463ea10036c6169e7fc9af1f38fa8a9d0b51b159ecfff942f8cfc56f19161daaab32bb4ac6469a782b8a3d92815c217095cd493bcd0613d208c8a88d2a7592c9ccb6b409"
     }
   },
   "puzzle": {
@@ -76,24 +98,19 @@
     "HS_RETRY_frame": "0400119dc93509d0bb2bb8c9ed254591c07fab0c",
     "HS_HELLO_with_solution_payload": "02000100020001039dc93509d0bb2bb8c9ed254591c07fab00000000000008e2"
   },
-  "deferred_transcripts": {
-    "status": "to be produced with the implementation in step 2, by two independent implementations (handshake.md §12)",
-    "inputs_xk": {
-      "prologue": "prologue_xk.prologue",
-      "responder_static": "node-card.json hs_sk",
-      "initiator_e_sk": "2456944a039ccd89415bc5dccfdc38326ebbe256dbdb32878899412e34f51db3",
-      "initiator_e_pub": "f88bfc15a6d66ff942b730d7f3c9816a8ae9ed5e9ce378989b8e014fc44c4f49",
-      "initiator_s_sk": "3d2519d63175276df6f43f11b7396bd32379ef876fe2c644937e249d50e813d9",
-      "initiator_s_pub": "62d2d11f1fc9a4ee042be1a7e30ea0c54884913702d5c4107d5788868c183a2b",
-      "responder_e_sk": "2b15da44e9a57314064550e62b9a90628fe6c2c36c9b48afbfa055d50aedb5f3",
-      "responder_e_pub": "63a3356cc1c73ec4580a9a9ae6bcfb2d57b5f0b247bf28576f45e7fdc1e7220e",
-      "initiator_e1_seed_dz": "3529785b1715a0a747814bdc815cc76acd93c4f16fcb4eb545a3234f0132cea464ead855a89dd3ebc92d23ca791e24f7f3dd4ea97423735b64d4c6fd5b4b5c3e",
-      "initiator_e1_ek_sha256": "d5261479c83e2889b53ce4c261ba67471f72b0218b65790f7ccf61a178935c73",
-      "encaps_randomness_m": "cacc81686693ffe4706227a56be1439a951fde16a289e664223032c11009cede",
-      "ekem1_ct_sha256": "0946383b27a32bdce394a333f20a3a92e55b67aa1aa3b7c43f447387ef7cf832",
-      "ekem1_ss": "218ea1ad2ba9ace442619182df4932a0d90ca7f903ddc81056e70a9d247abb63",
-      "payloads": "P1 = payloads.HsInit, P2 = payloads.HsResp, P3 = payloads.HsFinish"
-    },
-    "note": "ML-KEM values are from Go crypto/mlkem (NewDecapsulationKey768) and crypto/mlkem/mlkemtest (Encapsulate768)."
+  "transcript_inputs": {
+    "note": "the keys of all three transcripts in handshake-transcript.json",
+    "responder_static": "node-card.json hs_sk",
+    "initiator_e_sk": "2456944a039ccd89415bc5dccfdc38326ebbe256dbdb32878899412e34f51db3",
+    "initiator_e_pub": "f88bfc15a6d66ff942b730d7f3c9816a8ae9ed5e9ce378989b8e014fc44c4f49",
+    "initiator_s_sk": "3d2519d63175276df6f43f11b7396bd32379ef876fe2c644937e249d50e813d9",
+    "initiator_s_pub": "62d2d11f1fc9a4ee042be1a7e30ea0c54884913702d5c4107d5788868c183a2b",
+    "responder_e_sk": "2b15da44e9a57314064550e62b9a90628fe6c2c36c9b48afbfa055d50aedb5f3",
+    "responder_e_pub": "63a3356cc1c73ec4580a9a9ae6bcfb2d57b5f0b247bf28576f45e7fdc1e7220e",
+    "initiator_e1_seed_dz": "3529785b1715a0a747814bdc815cc76acd93c4f16fcb4eb545a3234f0132cea464ead855a89dd3ebc92d23ca791e24f7f3dd4ea97423735b64d4c6fd5b4b5c3e",
+    "initiator_e1_ek_sha256": "d5261479c83e2889b53ce4c261ba67471f72b0218b65790f7ccf61a178935c73",
+    "encaps_randomness_m": "cacc81686693ffe4706227a56be1439a951fde16a289e664223032c11009cede",
+    "ekem1_ct_sha256": "0946383b27a32bdce394a333f20a3a92e55b67aa1aa3b7c43f447387ef7cf832",
+    "ekem1_ss": "218ea1ad2ba9ace442619182df4932a0d90ca7f903ddc81056e70a9d247abb63"
   }
 }
