@@ -1,0 +1,39 @@
+{
+  "description": "Inputs that MUST be rejected.",
+  "spec": "objects.md §2.2–§2.3",
+  "non_canonical_bodies": [
+    {
+      "body": "300108c801",
+      "reason": "fields out of order (6 before 1)"
+    },
+    {
+      "body": "8800c801",
+      "reason": "tag of field 1 encoded with a non-minimal varint"
+    },
+    {
+      "body": "08c80148014803",
+      "reason": "NodeCard.features (field 9, known packed field) sent unpacked"
+    },
+    {
+      "body": "08c80108c901",
+      "reason": "known non-repeated field 1 appears twice"
+    }
+  ],
+  "signature_s_not_canonical": {
+    "envelope": "020e6563686f666f672f636172642f32016d550adfb8ca4b92188bbdb26dd91eead8257395d22de149c263de97b370e0aa0000000000000001000000006aea75800308c8017ead3cdb97507b550e30d914feaa40f339a9f621c36a9cfef7bb6a58003672fe3b0d943e81452d0886ef89a54f14c0c94e051ba51ee40226b811ef21ad031c11",
+    "reason": "S + L in place of S: RFC 8032 requires S < L"
+  },
+  "small_order_signer": {
+    "envelope": "020e6563686f666f672f636172642f320101000000000000000000000000000000000000000000000000000000000000000000000000000001000000006aea75800308c80100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "reason": "signer key is the identity point (small order)"
+  },
+  "noise3_init_out_of_window": {
+    "input": "noise3.json init with ts = init.ts - 301 at a responder whose clock is init.ts",
+    "reason": "|ts − now| > 300 s: silently dropped"
+  },
+  "reality2_token_wrong_address": {
+    "input": "reality2.json client_hello_with_token received on 198.51.100.7:443",
+    "reason": "k_tok differs (reality2.json k_tok_at_198.51.100.7:443): forwarded to the cover"
+  },
+  "varint": "see varint.json invalid"
+}
