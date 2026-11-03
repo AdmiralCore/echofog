@@ -11,6 +11,7 @@
     "elligator2/tweak2": "ba37dc4fecbaf584582aa3cc6dae5ed70d50d7d1a8880998ced91035b88d74ca",
     "elligator2/sample3": "479c23bf38ce275606a5b908b89dc7ef57f05d706719f1a0f8f036c46694bea2",
     "elligator2/tweak3": "17485678f8bdbd6d08015b585749bd074c97ef63d9bd573be372ec3b6e765df8",
+    "elligator2/no_representative": "3b44326edb0ec5ce344041cce3e320889ba3c428216e0a671d56ef6d750e683a",
     "elligator2/peer_sk": "4c03a9b44ebab8a818795c4a586e34c94e253e804437f9cb8b4de1e640ac6507",
     "elligator2/sample0": "273b74207d85d2d4b6a75424dff01fe5637428d70a457fa290135689eb8d382f",
     "elligator2/tweak0": "81dad3d0d46721495407d3be32a764e72f0208768d25a845cb8020bb22b09e41"
@@ -79,6 +80,13 @@
       "u": "80e5132b658f7f451b2b658f7f451b2b658f7f451b2b658f7f451b2b658f7f45"
     }
   ],
+  "no_representative": {
+    "seed_base": "3b44326edb0ec5ce344041cce3e320889ba3c428216e0a671d56ef6d750e683a",
+    "attempt": 0,
+    "sk": "68e260dac8768c7f669521dec08445510a1cd1300c9786e96e8a8349cb35bd8e",
+    "dirty_pub": "22e1ebfc230d98d42067a98af57736603e47958c36361b4f26f100cc5d3fc964",
+    "reason": "-2u(u+A) is not a square: the encoder must pick a new key"
+  },
   "rfc9380_crosscheck": {
     "note": "the generator checks its forward map on full field elements against RFC 9380 Appendix J.4.2 (u[0] → Q.x); values big-endian as in the RFC",
     "cases": [
