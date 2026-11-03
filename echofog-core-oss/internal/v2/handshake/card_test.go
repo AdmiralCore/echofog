@@ -39,12 +39,16 @@ func TestVerifyVectorCards(t *testing.T) {
 	in := obj(t, loadVector(t, "handshake.json"), "transcript_inputs")
 	for _, name := range []string{"initiator", "initiator_throwaway"} {
 		m := obj(t, c, name)
+		wantHs := hexField(t, in, "initiator_s_pub")
+		if name == "initiator_throwaway" { // B4: the throwaway identity has its own hs key
+			wantHs = xKey(t, hexField(t, m, "hs_sk")).PublicKey().Bytes()
+		}
 		info, err := DefaultCardVerifier{}.VerifyCard(hexField(t, m, "envelope"), fixedNow)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if !bytes.Equal(info.DeviceID[:], hexField(t, m, "device_id")) || !bytes.Equal(info.NodeID[:], hexField(t, m, "node_id")) ||
-			!bytes.Equal(info.HsKey, hexField(t, in, "initiator_s_pub")) {
+			!bytes.Equal(info.HsKey, wantHs) {
 			t.Fatalf("%s: ids or hs key", name)
 		}
 	}

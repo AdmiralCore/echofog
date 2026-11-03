@@ -22,9 +22,23 @@
 // is accepted during the minute after rotation; a skewed P2.time makes the initiator abort
 // without message 3; unprocessed early data is early_status 2.
 //
-// The normative vectors/handshake-transcript.json is reproduced byte for byte both by the
-// Noise layer and by the Initiator/Responder state machines with all checks of §7
-// (TestTranscriptVectors, TestApplicationTranscripts).
+// Clean-room items B1–B4: for a known_card_seq that is 0, absent or not remembered (issued cards
+// are remembered 30 days), a public responder sends its public card and a hidden one its peer card
+// for a personal pass and nothing for an invitation pass; an XX P1 may carry pad; HS_HELLO with two
+// GREASE values, only GREASE, or a chosen that is not the first non-GREASE entry is malformed; XX to
+// a bare address requires InitiatorConfig.Throwaway (fresh account, device and hs key), and the
+// card must name the throwaway hs key.
+//
+// Open spec issue: §3.1 says a REJECT{suite} retry sends "its full original offered list again",
+// choosing the best suite of the intersection, but B3 makes a chosen that is not the first
+// non-GREASE entry malformed. This package keeps the same set and moves the chosen suite to the
+// front, which satisfies both rules and keeps the downgrade protection (the responder still
+// requires its own best suite of the set).
+//
+// The normative vectors/handshake-transcript.json (four transcripts, the rotation block and the
+// §8.4 sealed-record examples) is reproduced byte for byte both by the Noise layer and by the
+// Initiator/Responder state machines with all checks of §7 (TestTranscriptVectors,
+// TestApplicationTranscripts).
 //
 // Card checks use CardVerifier. DefaultCardVerifier covers what the handshake needs (envelope,
 // RFC 8032 signature with canonical S and no small-order signer, lifetimes, the top-level body,

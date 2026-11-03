@@ -129,8 +129,8 @@ func TestDowngradeStrippedOffer(t *testing.T) {
 	}
 	// 3. The responder enforces its own best suite: XX chosen while XK is offered is refused.
 	w2 := newWorld(t)
+	w2.ic.Suites = []uint16{SuiteXX, SuiteXK} // an initiator that prefers XX: offered [2, 1]
 	ini2, _ := NewInitiator(w2.ic, testCB)
-	ini2.chosenOverride = SuiteXX
 	hello3, m13, err := ini2.Start()
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,8 @@ func TestForgedSuiteRejectCannotNarrow(t *testing.T) {
 	}
 	h1, _ := ParseHello(hello)
 	h2, _ := ParseHello(hello2)
-	if !equal16(h1.Offered, h2.Offered) || h2.Chosen != SuiteXX {
+	// Same set (never narrowed); the chosen suite moves to the front (B3).
+	if len(h1.Offered) != len(h2.Offered) || !equal16(h2.Offered, []uint16{SuiteXX, SuiteXK}) || h2.Chosen != SuiteXX {
 		t.Fatalf("retry offered %v chosen %d", h2.Offered, h2.Chosen)
 	}
 	// The real responder prefers XK, so the narrowed choice fails again ...
@@ -396,8 +397,8 @@ func TestHiddenNodeNoPuzzleNoSuiteReject(t *testing.T) {
 		t.Fatalf("hidden node demanded a puzzle: %v", rep.FrameType)
 	}
 	// A suite mismatch is a silent close, never REJECT{suite}.
+	w.ic.Suites, w.ic.AccessSecret = []uint16{SuiteXX, SuiteXK}, nil
 	ini2, _ := NewInitiator(w.ic, testCB)
-	ini2.chosenOverride = SuiteXX
 	hello, m1, _ = ini2.Start()
 	if rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now); rep.Action != ActSilentClose {
 		t.Fatalf("hidden suite mismatch: %v", rep.Action)
@@ -712,5 +713,109 @@ func TestRetryLimit(t *testing.T) {
 	}
 	if _, _, err := ini.HandleRetry(rep.Payload); !errors.Is(err, ErrRetries) {
 		t.Fatalf("third HS_RETRY: %v", err)
+	}
+}
+
+// --- B1–B4 -----------------------------------------------------------------------------------
+
+func TestP2CardForUnknownSeq(t *testing.T) {
+	pub := func(w *world) []byte { return w.rc.OwnCards.Current[0].Envelope }
+	// Public responder: known_card_seq unknown → the public card.
+	w := newWorld(t)
+	w.ic.Remote.Seq = 12345
+	si, _ := w.handshake(t)
+	if !si.ResponderCardSent || !bytes.Equal(si.Peer.Raw, pub(w)) {
+		t.Fatal("unknown seq: public card expected")
+	}
+	// Forgotten after 30 days.
+	w = newWorld(t)
+	w.rc.OwnCards.Issued[fixedTime] = IssuedCard{Scope: 1, At: fixedNow.Add(-IssuedMemory - time.Hour)}
+	si, _ = w.handshake(t)
+	if !bytes.Equal(si.Peer.Raw, pub(w)) {
+		t.Fatal("seq older than 30 days: public card expected")
+	}
+	// Hidden node, unknown seq: personal pass → peer card; invitation pass → nothing.
+	w, secret := hiddenWorld(t)
+	w.ic.Remote.Seq = 12345
+	w.rc.Passes = personalPasses{string(PassID(secret)): secret}
+	si, _ = w.handshake(t)
+	if !si.ResponderCardSent || !bytes.Equal(si.Peer.Raw, w.rc.OwnCards.Current[1].Envelope) {
+		t.Fatal("hidden, personal pass: peer card expected")
+	}
+	w, _ = hiddenWorld(t)
+	w.ic.Remote.Seq = 12345
+	si, _ = w.handshake(t)
+	if si.ResponderCardSent {
+		t.Fatal("hidden, invitation pass: no card expected")
+	}
+}
+
+func TestXXPadAllowed(t *testing.T) {
+	w := newWorld(t)
+	w.ic.Remote = nil
+	ini, _ := NewInitiator(w.ic, testCB)
+	ini.forcePad = make([]byte, 13)
+	hello, m1, _ := ini.Start()
+	if rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now); rep.Action != ActSend {
+		t.Fatalf("XX P1 with pad: %v %v", rep.Action, rep.Err)
+	}
+}
+
+func TestHelloGreaseRules(t *testing.T) {
+	for _, c := range []struct{ name, hex string }{
+		{"two GREASE", "0300010a0a1a1a000100"},
+		{"only GREASE", "010a0a0a0a00"},
+		{"chosen not first non-GREASE", "0200010002000200"},
+		{"chosen after GREASE not first", "030a0a00010002000200"},
+	} {
+		if _, err := ParseHello(mustHex(t, c.hex)); err == nil {
+			t.Errorf("%s: accepted", c.name)
+		}
+	}
+	// GREASE before the first real suite is fine as long as chosen is the first non-GREASE entry.
+	if _, err := ParseHello(mustHex(t, "020a0a0001000100")); err != nil {
+		t.Errorf("leading GREASE: %v", err)
+	}
+	// A public responder closes on a malformed hello without REJECT.
+	w := newWorld(t)
+	ini, _ := NewInitiator(w.ic, testCB)
+	_, m1, _ := ini.Start()
+	if rep := NewResponder(w.rc).HandleFirst(testCB, mustHex(t, "0300010a0a1a1a000100"), m1, w.now); rep.Action != ActClose {
+		t.Fatalf("two GREASE: %v", rep.Action)
+	}
+}
+
+func TestThrowawayIdentity(t *testing.T) {
+	w := newWorld(t)
+	w.ic.Remote, w.ic.Throwaway = nil, false
+	if _, err := NewInitiator(w.ic, testCB); err == nil {
+		t.Fatal("bare-address XX without a throwaway identity")
+	}
+	// A throwaway card that names another hs key (for example the real one) is refused.
+	w.ic.Throwaway = true
+	w.ic.Card = newTestIdentity(t, 3).card(t, CardOptions{})
+	if _, err := NewInitiator(w.ic, testCB); err == nil {
+		t.Fatal("throwaway card with a foreign hs key")
+	}
+	// Reusing the real hs key under a throwaway device trips the responder's binding.
+	w = newWorld(t)
+	w.rc.Bindings = NewKeyBindings()
+	w.handshake(t) // binds iID.hs to iID's device
+	throw := newTestIdentity(t, 11)
+	w.ic.Remote, w.ic.Throwaway = nil, true
+	w.ic.Card = throw.card(t, CardOptions{HsKey: w.iID.hs.PublicKey().Bytes()})
+	ini, err := NewInitiator(w.ic, testCB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := NewResponder(w.rc)
+	hello, m1, _ := ini.Start()
+	rep := res.HandleFirst(testCB, hello, m1, w.now)
+	m3, _, err := ini.HandleMsg2(rep.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := res.HandleFinish(m3); !errors.Is(err, ErrKeyBinding) {
+		t.Fatalf("real hs key under a throwaway card: %v", err)
 	}
 }

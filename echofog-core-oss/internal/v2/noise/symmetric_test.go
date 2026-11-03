@@ -60,14 +60,14 @@ func TestHKDFSplitVectors(t *testing.T) {
 	s := obj(t, v, "session")
 	ck := hexField(t, s, "ck")
 	o1, o2 := HKDF2(ck, nil)
-	if want := hexField(t, s, "split_k_i2r (noise HKDF(ck, empty).o1)"); !bytes.Equal(o1, want) {
+	if want := hexField(t, s, "split_k_i2r"); !bytes.Equal(o1, want) {
 		t.Errorf("split o1 = %x, want %x", o1, want)
 	}
-	if want := hexField(t, s, "split_k_r2i (noise HKDF(ck, empty).o2)"); !bytes.Equal(o2, want) {
+	if want := hexField(t, s, "split_k_r2i"); !bytes.Equal(o2, want) {
 		t.Errorf("split o2 = %x, want %x", o2, want)
 	}
 	sec, _ := HKDF2(ck, []byte("echofog/hs2/session-secret"))
-	if want := hexField(t, s, "session_secret (noise HKDF(ck, label).o1)"); !bytes.Equal(sec, want) {
+	if want := hexField(t, s, "session_secret"); !bytes.Equal(sec, want) {
 		t.Errorf("session secret = %x, want %x", sec, want)
 	}
 }

@@ -15,8 +15,14 @@ import (
 
 // PassStore finds invitation and personal passes by pass_id (handshake.md §5).
 type PassStore interface {
-	// LookupPass returns the 16-byte secret of a pass that exists, is not revoked and not expired.
-	LookupPass(passID []byte, now time.Time) (secret []byte, ok bool)
+	// LookupPass returns a pass that exists, is not revoked and not expired.
+	LookupPass(passID []byte, now time.Time) (Pass, bool)
+}
+
+// Pass is an invitation pass or a personal pass (handshake.md §5).
+type Pass struct {
+	Secret   []byte // 16 bytes
+	Personal bool   // a personal pass of a contact (false: an invitation pass)
 }
 
 // EarlyHandler processes the frames of the 0-RTT stream. It returns ok = false when the request
@@ -68,10 +74,20 @@ type OwnCard struct {
 type OwnCards struct {
 	// Current holds the current card per scope (0 public, 1 peer). XX sends the public card.
 	Current map[uint32]OwnCard
-	// Issued maps the seq of every unexpired card the node issued to its scope (0, 1, 2), so
-	// known_card_seq names the card the initiator holds.
-	Issued map[uint64]uint32
+	// Issued maps the seq of every card the node issued to its scope and issue time, so
+	// known_card_seq names the card the initiator holds. Entries older than 30 days (the longest
+	// card lifetime) are ignored; the node may prune them.
+	Issued map[uint64]IssuedCard
 }
+
+// IssuedCard records one issued card. A zero At never ages out.
+type IssuedCard struct {
+	Scope uint32
+	At    time.Time
+}
+
+// IssuedMemory is how long a responder remembers the seq and scope of an issued card (B1).
+const IssuedMemory = 30 * 24 * time.Hour
 
 // Action tells the carrier what to do with a Reply.
 type Action int
@@ -243,18 +259,20 @@ func (r *Responder) HandleFirst(cb, hello, msg1 []byte, arrival time.Time) Reply
 	}
 
 	// 4. Hidden node: the access proof.
+	personal := false
 	if r.hidden {
 		if p1.Access == nil || r.cfg.Passes == nil {
 			return fail(errors.New("handshake: no access proof"))
 		}
-		secret, ok := r.cfg.Passes.LookupPass(p1.Access.PassID, r.now())
-		if !ok || !ctEqual(AccessProof(secret, hs.HashBeforePayload()), p1.Access.Proof) {
+		pass, ok := r.cfg.Passes.LookupPass(p1.Access.PassID, r.now())
+		if !ok || !ctEqual(AccessProof(pass.Secret, hs.HashBeforePayload()), p1.Access.Proof) {
 			return fail(errors.New("handshake: access proof"))
 		}
+		personal = pass.Personal
 	}
 
 	// 5. Early data, P2, message 2.
-	p2 := r.buildP2(p1, best, hs)
+	p2 := r.buildP2(p1, best, hs, personal)
 	if best == SuiteXX && p2.Reject == nil && p2.Card == nil {
 		return fail(fmt.Errorf("%w: XX needs a public card", ErrConfig))
 	}
@@ -306,7 +324,7 @@ func (r *Responder) puzzleSolved(h *Hello, cb []byte, d uint8, arrival time.Time
 	return ok && PuzzleOK(h.Cookie, cb, h.Nonce, d)
 }
 
-func (r *Responder) buildP2(p1 *HsInit, suite uint16, hs *noise.HandshakeState) *HsResp {
+func (r *Responder) buildP2(p1 *HsInit, suite uint16, hs *noise.HandshakeState, personal bool) *HsResp {
 	now := r.now()
 	t := uint64(now.Unix())
 	if r.timeOverride != 0 {
@@ -360,14 +378,7 @@ func (r *Responder) buildP2(p1 *HsInit, suite uint16, hs *noise.HandshakeState) 
 			}
 		}
 	}
-	if suite == SuiteXX {
-		p2.Card = r.cfg.OwnCards.Current[0].Envelope
-	} else if scope, ok := r.cfg.OwnCards.Issued[p1.KnownCardSeq]; ok && scope != scopeInvite {
-		// Exactly when the current card of that scope is newer; never for an invitation card.
-		if c, ok := r.cfg.OwnCards.Current[scope]; ok && c.Seq > p1.KnownCardSeq {
-			p2.Card = c.Envelope
-		}
-	}
+	p2.Card = r.cardForP2(p1, suite, personal, now)
 	if has(FeatureObservedAddr) && len(r.cfg.Observed) > 0 {
 		p2.Observed = r.cfg.Observed
 	}
@@ -383,6 +394,34 @@ func (r *Responder) buildP2(p1 *HsInit, suite uint16, hs *noise.HandshakeState) 
 		}
 	}
 	return p2
+}
+
+// cardForP2 applies the card rule of handshake.md §7 (B1).
+func (r *Responder) cardForP2(p1 *HsInit, suite uint16, personal bool, now time.Time) []byte {
+	cur := r.cfg.OwnCards.Current
+	if suite == SuiteXX {
+		return cur[0].Envelope // always the public card
+	}
+	issued, known := r.cfg.OwnCards.Issued[p1.KnownCardSeq]
+	if known && !issued.At.IsZero() && now.Sub(issued.At) > IssuedMemory {
+		known = false
+	}
+	if p1.KnownCardSeq == 0 || !known {
+		if !r.hidden {
+			return cur[0].Envelope
+		}
+		if personal { // a hidden node has no public card
+			return cur[1].Envelope
+		}
+		return nil // invitation pass: the contact gets its peer card after redemption
+	}
+	if issued.Scope == scopeInvite {
+		return nil
+	}
+	if c, ok := cur[issued.Scope]; ok && c.Seq > p1.KnownCardSeq {
+		return c.Envelope // exactly when the card of that scope is newer
+	}
+	return nil
 }
 
 // HandleFinish processes message 3 and checks the initiator's card. Admission (bans, limits)

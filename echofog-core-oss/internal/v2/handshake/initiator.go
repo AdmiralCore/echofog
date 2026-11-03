@@ -31,9 +31,12 @@ type InitiatorConfig struct {
 	Now              func() time.Time
 	Offset           time.Duration
 	Grease           bool // add one GREASE value to offered, features and services (§3.4)
-	Cards            CardVerifier
-	Bindings         KeyBinder
-	Rand             io.Reader
+	// Throwaway confirms, for XX to a bare address (no Remote, no ExpectedDeviceID), that Static
+	// and Card are a throwaway identity: fresh account, device and hs keys, never reused (B4).
+	Throwaway bool
+	Cards     CardVerifier
+	Bindings  KeyBinder
+	Rand      io.Reader
 
 	// testEphemeral and testKEMSeed fix the initiator's randomness (vectors only).
 	testEphemeral *ecdh.PrivateKey
@@ -63,6 +66,7 @@ type Initiator struct {
 	protoOverride  uint32
 	forceAccess    *Access
 	forceKnownSeq  uint64
+	forcePad       []byte
 	lastInit       *HsInit
 	lastResp       *HsResp
 }
@@ -99,6 +103,14 @@ func NewInitiator(cfg InitiatorConfig, cb []byte) (*Initiator, error) {
 		i.offered = []uint16{SuiteXX}
 		if cfg.ExpectedDeviceID != nil {
 			i.rid = cfg.ExpectedDeviceID[:]
+		} else {
+			if !cfg.Throwaway {
+				return nil, fmt.Errorf("%w: XX to a bare address needs a throwaway identity", ErrConfig)
+			}
+			info, err := cfg.Cards.VerifyCard(cfg.Card, cfg.Now().Add(cfg.Offset))
+			if err != nil || !bytes.Equal(info.HsKey, cfg.Static.PublicKey().Bytes()) {
+				return nil, fmt.Errorf("%w: the throwaway card must name the throwaway hs key", ErrConfig)
+			}
 		}
 	}
 	i.chosen = i.offered[0]
@@ -191,6 +203,9 @@ func (i *Initiator) flight() ([]byte, []byte, error) {
 		}
 		if i.forceKnownSeq != 0 {
 			p1.KnownCardSeq = i.forceKnownSeq
+		}
+		if i.forcePad != nil {
+			p1.Pad = i.forcePad
 		}
 		return p1.Marshal(), nil
 	})
@@ -285,6 +300,15 @@ func (i *Initiator) HandleReject(payload []byte) (hello, msg1 []byte, err error)
 	for _, s := range i.offered { // our preference order; the offered list is never narrowed
 		if !IsGrease(s) && theirs[s] {
 			i.chosen, i.chosenOverride = s, 0
+			// Same offered set, chosen moved to the front: B3 requires chosen to be the first
+			// non-GREASE entry (spec issue: §3.1 also says "full original offered list").
+			reordered := []uint16{s}
+			for _, x := range i.offered {
+				if x != s {
+					reordered = append(reordered, x)
+				}
+			}
+			i.offered = reordered
 			if s != SuiteXK && (i.cfg.AccessSecret != nil || i.cfg.Early != nil) {
 				return nil, nil, fmt.Errorf("%w: hidden responder offers no XK", ErrConfig)
 			}

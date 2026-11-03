@@ -12,9 +12,17 @@ var testCB = bytes.Repeat([]byte{0xcb}, 32)
 
 type passMap map[string][]byte
 
-func (p passMap) LookupPass(id []byte, _ time.Time) ([]byte, bool) {
+func (p passMap) LookupPass(id []byte, _ time.Time) (Pass, bool) {
 	s, ok := p[string(id)]
-	return s, ok
+	return Pass{Secret: s}, ok
+}
+
+// personalPasses marks every pass as a personal pass.
+type personalPasses map[string][]byte
+
+func (p personalPasses) LookupPass(id []byte, _ time.Time) (Pass, bool) {
+	s, ok := p[string(id)]
+	return Pass{Secret: s, Personal: true}, ok
 }
 
 type world struct {
@@ -50,7 +58,7 @@ func newWorld(t testing.TB) *world {
 		DeviceID: w.rID.deviceID(),
 		OwnCards: OwnCards{
 			Current: map[uint32]OwnCard{0: {fixedTime - 1, w.rID.card(t, CardOptions{Seq: fixedTime - 1})}, 1: {fixedTime, w.rCard}},
-			Issued:  map[uint64]uint32{fixedTime - 1: 0, fixedTime: 1, fixedTime - 2: 2},
+			Issued:  map[uint64]IssuedCard{fixedTime - 1: {Scope: 0}, fixedTime: {Scope: 1}, fixedTime - 2: {Scope: 2}},
 		},
 		Features: []uint32{1, 3, 4, 5, 6},
 		Services: []ServiceOffer{{ID: 1, Versions: []uint32{2}}, {ID: 2, Versions: []uint32{2}}, {ID: 3, Versions: []uint32{2}}},
@@ -65,6 +73,8 @@ func newWorld(t testing.TB) *world {
 		Features: []uint32{1, 3, 4, 5},
 		Services: allServices(),
 		Now:      clock,
+		// Only checked for XX to a bare address: iCard is a separate test identity with its own hs key.
+		Throwaway: true,
 	}
 	return w
 }

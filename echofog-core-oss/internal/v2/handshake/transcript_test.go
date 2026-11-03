@@ -48,13 +48,31 @@ type tFinal struct {
 	KR2I          string `json:"k_r2i"`
 	SessionSecret string `json:"session_secret"`
 	SID           string `json:"sid"`
-	SealedExample struct {
-		Plaintext  string `json:"plaintext"`
-		Nonce      uint64 `json:"n"`
-		AD         string `json:"ad"`
-		Ciphertext string `json:"ciphertext"`
-		Note       string `json:"note"`
-	} `json:"transport_example"`
+	Sealed        struct {
+		Plaintext string `json:"plaintext"`
+		N         uint64 `json:"n"`
+		AAD       string `json:"aad"`
+		Sealed    string `json:"sealed"`
+		Record    string `json:"record"`
+		Note      string `json:"note"`
+	} `json:"sealed_record_example"`
+}
+
+type tRotation struct {
+	Note      string `json:"note"`
+	FirstPass struct {
+		RS               string `json:"rs"`
+		HAfterPremessage string `json:"h_after_premessage"`
+		H1               string `json:"h1"`
+		CKAfterES        string `json:"ck_after_es"`
+		KAfterES         string `json:"k_after_es"`
+		P1Open           string `json:"p1_open"`
+	} `json:"first_pass"`
+	SecondPass struct {
+		RS     string `json:"rs"`
+		H1     string `json:"h1"`
+		P1Open string `json:"p1_open"`
+	} `json:"second_pass"`
 }
 
 type tInputs struct {
@@ -98,6 +116,7 @@ type tFile struct {
 	Spec        string        `json:"spec"`
 	Conventions []string      `json:"conventions"`
 	Transcripts []tTranscript `json:"transcripts"`
+	Rotation    *tRotation    `json:"rotation,omitempty"`
 }
 
 type transcriptInputs struct {
@@ -253,19 +272,23 @@ func buildTranscript(t testing.TB, in transcriptInputs) tTranscript {
 	sid := SessionID(sec, ini.H())
 	tr.Final = tFinal{H: hx(ini.H()), CK: hx(ini.CK()), KI2R: hx(i2r.Key()), KR2I: hx(r2i.Key()),
 		SessionSecret: hx(sec), SID: hx(sid)}
-	pt := []byte("hello over a sealed path")
-	ad := sid
-	ct, err := i2r.EncryptWithAd(nil, ad, pt)
+	// wire.md §8.4: one sealed record (class 1, path 0, pipe 0) carrying a MUX_STREAM frame on
+	// stream 4. The record format belongs to the frame layer; it is built here only as a check of
+	// the transport keys.
+	data := []byte("hello over a sealed path")
+	pt := append([]byte{0x18, 0x00, byte(2 + len(data)), 0x04, 0x00}, data...)
+	aad := append(append(append([]byte(nil), sid...), be64(0)...), 1, 0, 0)
+	ct, err := i2r.EncryptWithAd(nil, aad, pt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back, err := ri2r.DecryptWithAd(nil, ad, ct); err != nil || !bytes.Equal(back, pt) {
-		t.Fatal("transport example")
+	if back, err := ri2r.DecryptWithAd(nil, aad, ct); err != nil || !bytes.Equal(back, pt) {
+		t.Fatal("sealed record example")
 	}
-	tr.Final.SealedExample.Plaintext = hx(pt)
-	tr.Final.SealedExample.AD = hx(ad)
-	tr.Final.SealedExample.Ciphertext = hx(ct)
-	tr.Final.SealedExample.Note = "ENCRYPT(k_i2r, n = 0, ad = sid, plaintext): a check of the transport keys and nonce format only, not a wire.md §8.4 record"
+	sealed := append(be64(0), ct...)
+	record := append([]byte{byte((1 + len(sealed)) >> 8), byte(1 + len(sealed)), 1}, sealed...)
+	tr.Final.Sealed.Plaintext, tr.Final.Sealed.AAD = hx(pt), hx(aad)
+	tr.Final.Sealed.Sealed, tr.Final.Sealed.Record = hx(sealed), hx(record)
 
 	ekHash := sha256.Sum256(func() []byte {
 		dk, _ := mlkem.NewDecapsulationKey768(in.seed)
@@ -355,6 +378,7 @@ func buildTranscriptFile(t testing.TB) tFile {
 	xkA.p1Src = "payloads.HsInit_xk_hidden: access proof over messages[0].h_before_payload"
 
 	xx := base
+	xx.is = xKey(t, hexField(t, obj(t, card, "initiator_throwaway"), "hs_sk")) // B4: its own hs key
 	xx.pattern, xx.suite, xx.name = noise.XXhfs, SuiteXX, "XXhfs"
 	xx.prologue = hexField(t, obj(t, hsv, "prologue_xx_bare_address"), "prologue")
 	xx.prologueSource = "handshake.json prologue_xx_bare_address.prologue"
@@ -366,9 +390,17 @@ func buildTranscriptFile(t testing.TB) tFile {
 		Description: "XKhfs and XXhfs transcripts recomputed by internal/v2/handshake from handshake.json, node-card.json and link.json (for comparison with the normative handshake-transcript.json).",
 		Spec:        "handshake.md §12",
 	}
-	for _, in := range []transcriptInputs{xk, xkA, xx} {
+	// XKhfs-rotation-prev-hs: the initiator's card copy names the previous hs key.
+	prev := xKey(t, hexField(t, obj(t, card, "seeds"), "card/prev_hs_sk"))
+	if !bytes.Equal(append([]byte{AlgX25519}, prev.PublicKey().Bytes()...), hexField(t, card, "prev_hs_akey")) {
+		t.Fatal("prev_hs key")
+	}
+	rot := xkA
+	rot.name, rot.rs = "XKhfs-rotation-prev-hs", prev
+	for _, in := range []transcriptInputs{xk, xkA, xx, rot} {
 		f.Transcripts = append(f.Transcripts, buildTranscript(t, in))
 	}
+	f.Rotation = buildRotation(t, f.Transcripts[3], base.rs, prev)
 	// The hidden transcript's P1 must be exactly handshake.json HsInit_xk_hidden.
 	if f.Transcripts[1].Inputs.P1 != hx(enc("HsInit_xk_hidden")) {
 		t.Fatal("recomputed HsInit_xk_hidden differs from handshake.json")
@@ -407,7 +439,7 @@ func TestTranscriptVectors(t *testing.T) {
 	for n := range want.Transcripts {
 		w, g := want.Transcripts[n], got.Transcripts[n]
 		for _, x := range []*tTranscript{&w, &g} {
-			x.Checks = nil
+			x.Checks, x.Final.Sealed.Note = nil, ""
 			x.Inputs.PrologueSource, x.Inputs.P1Source, x.Inputs.P2Source, x.Inputs.P3Source = "", "", "", ""
 		}
 		if w.Name != g.Name || w.SuiteID != g.SuiteID || w.ProtocolName != g.ProtocolName || !reflect.DeepEqual(w.Pattern, g.Pattern) {
@@ -428,4 +460,48 @@ func TestTranscriptVectors(t *testing.T) {
 			t.Errorf("%s: final values differ:\n got %+v\nwant %+v", w.Name, g.Final, w.Final)
 		}
 	}
+	if want.Rotation == nil || got.Rotation == nil {
+		t.Fatal("rotation block missing")
+	}
+	w, g := *want.Rotation, *got.Rotation
+	w.Note, w.FirstPass.P1Open, w.SecondPass.P1Open = "", "", ""
+	if w != g {
+		t.Errorf("rotation differs: got %+v want %+v", g, w)
+	}
+}
+
+// buildRotation replays message 1 of the rotation transcript at a responder whose current key is
+// cur: the first pass must fail, the second with prev must succeed (handshake.md §4.1).
+func buildRotation(t testing.TB, tr tTranscript, cur, prev *ecdh.PrivateKey) *tRotation {
+	t.Helper()
+	m1 := mustHex(t, tr.Messages[0].Bytes)
+	pro := mustHex(t, tr.Inputs.Prologue)
+	r := &tRotation{}
+	var steps []noise.TraceEvent
+	hs, err := noise.NewHandshake(noise.Config{Pattern: noise.XKhfs, Prologue: pro, Static: cur,
+		Trace: func(e noise.TraceEvent) { steps = append(steps, e) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hs.ReadMessage(m1); err == nil {
+		t.Fatal("rotation: the current key opened P1")
+	}
+	for _, e := range steps {
+		switch e.Token {
+		case "pre:s":
+			r.FirstPass.HAfterPremessage = hx(e.H)
+		case "es":
+			r.FirstPass.CKAfterES, r.FirstPass.KAfterES, r.FirstPass.H1 = hx(e.CK), hx(e.K), hx(e.H)
+		}
+	}
+	r.FirstPass.RS = hx(cur.PublicKey().Bytes())
+	hs2, err := noise.NewHandshake(noise.Config{Pattern: noise.XKhfs, Prologue: pro, Static: prev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hs2.ReadMessage(m1); err != nil {
+		t.Fatalf("rotation: previous key: %v", err)
+	}
+	r.SecondPass.RS, r.SecondPass.H1 = hx(prev.PublicKey().Bytes()), hx(hs2.HashBeforePayload())
+	return r
 }

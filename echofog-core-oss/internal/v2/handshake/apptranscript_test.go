@@ -56,11 +56,14 @@ func TestApplicationTranscripts(t *testing.T) {
 		own         string // initiator card for P3
 		hidden      bool
 		greaseSuite uint16
+		rotated     bool // the initiator's card copy names prev_hs; the responder has rotated
 	}{
-		{"XKhfs", "public", "initiator", false, 0},
-		{"XKhfs-access-proof", "invite", "initiator", true, 0x0a0a},
-		{"XXhfs", "", "initiator_throwaway", false, 0},
+		{"XKhfs", "public", "initiator", false, 0, false},
+		{"XKhfs-access-proof", "invite", "initiator", true, 0x0a0a, false},
+		{"XXhfs", "", "initiator_throwaway", false, 0, false},
+		{"XKhfs-rotation-prev-hs", "invite", "initiator", true, 0x0a0a, true},
 	}
+	prev := xKey(t, hexField(t, obj(t, card, "seeds"), "card/prev_hs_sk"))
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			tr := byName[c.name]
@@ -72,6 +75,12 @@ func TestApplicationTranscripts(t *testing.T) {
 			}
 			if c.remote != "" {
 				ic.Remote = verify(c.remote)
+			} else {
+				ic.Static = xKey(t, hexField(t, obj(t, card, c.own), "hs_sk")) // B4
+				ic.Throwaway = true
+			}
+			if c.rotated {
+				ic.Remote.HsKey = prev.PublicKey().Bytes() // an older invitation card
 			}
 			if c.hidden {
 				ic.AccessSecret = secret
@@ -80,7 +89,7 @@ func TestApplicationTranscripts(t *testing.T) {
 				Static: xKey(t, hexField(t, card, "hs_sk")), DeviceID: devID,
 				OwnCards: OwnCards{
 					Current: map[uint32]OwnCard{0: {seq("public"), env("public")}, 1: {seq("peer"), env("peer")}},
-					Issued:  map[uint64]uint32{seq("public"): 0, seq("peer"): 1, seq("invite"): 2},
+					Issued:  map[uint64]IssuedCard{seq("public"): {Scope: 0}, seq("peer"): {Scope: 1}, seq("invite"): {Scope: 2}},
 				},
 				Hidden: c.hidden, Passes: passMap{string(PassID(secret)): secret},
 				Features: []uint32{1, 3, 4, 5, 6},
@@ -105,6 +114,9 @@ func TestApplicationTranscripts(t *testing.T) {
 			}
 			if hx(m1) != tr.Messages[0].Bytes {
 				t.Fatal("message 1 differs")
+			}
+			if c.rotated {
+				rc.PrevStatic = prev
 			}
 			res := NewResponder(rc)
 			rep := res.HandleFirst(ini.cb, hello, m1, fixedNow)

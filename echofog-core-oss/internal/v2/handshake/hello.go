@@ -27,6 +27,16 @@ func (h *Hello) check() error {
 	if len(h.Offered) < 1 || len(h.Offered) > 8 {
 		return ErrHello
 	}
+	// B3: at most one GREASE value, not only GREASE, and chosen is the first non-GREASE entry.
+	grease := 0
+	for _, s := range h.Offered {
+		if IsGrease(s) {
+			grease++
+		}
+	}
+	if grease > 1 || grease == len(h.Offered) || h.Chosen != firstNonGrease(h.Offered) {
+		return ErrHello
+	}
 	found := false
 	for i, s := range h.Offered {
 		if s == h.Chosen {
@@ -45,6 +55,15 @@ func (h *Hello) check() error {
 		return ErrHello
 	}
 	return nil
+}
+
+func firstNonGrease(list []uint16) uint16 {
+	for _, s := range list {
+		if !IsGrease(s) {
+			return s
+		}
+	}
+	return 0
 }
 
 // Marshal encodes the payload.

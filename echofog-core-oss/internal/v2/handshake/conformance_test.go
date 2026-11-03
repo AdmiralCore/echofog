@@ -246,7 +246,7 @@ func TestSessionDerivationVectors(t *testing.T) {
 	v := loadVector(t, "kdf.json")
 	s := obj(t, v, "session")
 	sec := SessionSecret(hexField(t, s, "ck"))
-	if !bytes.Equal(sec, hexField(t, s, "session_secret (noise HKDF(ck, label).o1)")) {
+	if !bytes.Equal(sec, hexField(t, s, "session_secret")) {
 		t.Fatalf("session secret = %x", sec)
 	}
 	if sid := SessionID(sec, hexField(t, s, "h")); !bytes.Equal(sid, hexField(t, s, "sid")) {
