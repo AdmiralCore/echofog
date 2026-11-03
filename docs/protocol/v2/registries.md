@@ -186,11 +186,11 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 
 | Label | Object | Max body | Max lifetime | Section |
 |---|---|---|---|---|
-| `echofog/card/2` | node card | 3800 bytes (envelope ≤ 4096) | 7 days (invite-scoped: 30 days) | objects.md §3 |
+| `echofog/card/2` | node card | 3800 bytes (envelope ≤ 4096) | 7 days for scopes public and peer, 30 days for scope invite (by the `scope` field) | objects.md §3 |
 | `echofog/prekeys/2` | chat prekey bundle (PQXDH) | 6144 | 30 days | objects.md §5 |
 | `echofog/devices/2` | device list (multi-device, later use) | 4096 | 30 days | objects.md §6 |
-| `echofog/mailbox-hint/2` | mailbox rendezvous hint | 1024 | 6 hours | objects.md §7 |
-| `echofog/name/2` | crypto-username binding (format only; not stored in the v2 DHT) | 512 | 30 days | objects.md §8 |
+| `echofog/mailbox-hint/2` | mailbox rendezvous hint | 6144 (envelope ≤ 6400) | 6 hours | objects.md §7 |
+| `echofog/name/2` | crypto-username binding (format only; not stored in the v2 DHT) | 512 (envelope ≤ 768) | 30 days | objects.md §8 |
 | `echofog/release/2` | release manifest with co-signatures | 20000 | 400 days | objects.md §9 |
 
 ### 7.2 L0 labels
@@ -265,7 +265,9 @@ K1), `echofog/dht2/name-key`, `echofog/exit2/pay-tag` — are reserved and never
 ## 8. Algorithm tags (L7)
 
 `akey = u8 alg ‖ key bytes`; the length is fixed by `alg`. Every key in a v2 message or object is an
-akey (including masking keys). Text form: `<name>:<base64url-nopad(key bytes)>`, for example
+akey (including masking keys), except fields whose format fixes the algorithm and size and says so:
+`Prekeys.spk` (raw X25519, 32 bytes), `Prekeys.kem` (raw ML-KEM-768, 1184 bytes), the Noise keys inside
+handshake messages, and `MaskKey`-derived wire values. Text form: `<name>:<base64url-nopad(key bytes)>`, for example
 `ed25519:11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo` (the RFC 8032 TEST 1 public key).
 
 | Tag | Name | Kind | Public key | Signature / ciphertext | Status |
@@ -292,10 +294,11 @@ and "release" means `SHA-256("echofog/dht2/release" ‖ u32(day))`, with `day = 
 | `echofog/card/2` (public scope only) | signer | 4096 | 7 days | 1 | 8 |
 | `echofog/prekeys/2` | signer | 8192 | 30 days | 1 | 8 |
 | `echofog/devices/2` | signer | 6144 | 30 days | 1 | 8 |
-| `echofog/mailbox-hint/2` | signer | 1536 | 6 hours | 1 | 5 |
+| `echofog/mailbox-hint/2` | signer | 6400 | 6 hours | 1 | 5 |
 | `echofog/name/2` | — not stored in v2 (squatting without an on-chain check) | — | — | — | — |
 | `echofog/release/2` | release (threshold-signed) | 20480 | 400 days | 1 in total (highest `released_at`) | 20 |
 | any other label starting `echofog/` | signer | 2048 | clipped to 24 hours on storage | 4 per signer | 5 |
+| any label not starting `echofog/` | — not stored (the 2048-byte generic limit still applies wherever such an object is carried) | 2048 | — | — | — |
 
 Peer- and invite-scope cards are never stored (objects.md §3.2).
 
