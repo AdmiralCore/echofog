@@ -52,7 +52,8 @@ name (`EchoFog/3/…`).
    versions of an L1 suite or an L3 service at once (§4). v2 implements one: there is no v1 to keep.
 6. **No version on the L0 wire.** A new masking scheme is a new suite ID; a node advertises the suites
    it accepts in its card; an old suite is switched off by removing it from the card and letting the
-   last card that listed it expire (at most 7 days).
+   last card that listed it expire (at most 7 days for public and peer cards, 30 days for invitation
+   cards; masking keys at most 7 days beyond their card).
 7. **Crypto agility through tags.** Each key and signature carries its algorithm tag
    ([registries.md](registries.md) §8). Moving to post-quantum signatures means adding `mldsa65` or
    the hybrid tag and accepting it, not changing any format.
@@ -159,9 +160,10 @@ When v3 appears, a node MAY support `{EchoFog/2, EchoFog/3}` suites at once:
 ## 5. The release manifest
 
 The release manifest ([objects.md](objects.md) §9) is a signed object with label
-`echofog/release/2`, signed by a **release key** whose public part is compiled into every build
-(a list of up to 3 keys; any one valid signature suffices). It is distributed through the DHT
-(kind `echofog/release/2`), PEX responses from servers, and the project's download page.
+`echofog/release/2`, valid only with signatures by **2 distinct release keys** of the current release
+key set (3 keys compiled into every build; rotation and revocation by threshold-signed manifests). It
+is distributed through the DHT under a fixed key, in pex/2 responses from servers, and on the
+project's download page.
 
 For each component it gives:
 
@@ -174,9 +176,16 @@ For each component it gives:
 
 Rules:
 
-- A node applies a manifest only if its signature verifies with a compiled-in release key, its `seq`
-  is higher than the last applied one, and its `not_after` has not passed.
-- A manifest MUST NOT raise `min_supported` above the version of the build that is reading it (a
-  node never locks itself out); such an entry is shown to the user as "update required" and ignored
-  for refusals.
+- A node applies a manifest only if it is valid under the current key set (threshold, objects.md §9),
+  its `released_at` is later than that of the last applied manifest and not more than one day in the
+  future, and its `not_after` has not passed.
+- **Never lock out.** A manifest never makes a node refuse the versions it runs itself:
+  - `min_supported` and `deprecated_after` refusals apply only to peer versions strictly **below the
+    reading node's own** version of that component; an entry that would cover the node's own version is
+    shown to the user as "update required" and ignored for refusals;
+  - a `deprecated_after` less than 90 days after the manifest's `released_at` is ignored (no instant
+    switch-off);
+  - a single manifest may raise `min_supported` of a component by at most one major version.
+- A manifest is never a reason to refuse a peer's *own* handshake beyond `REJECT{version}`; it does not
+  affect routing, DHT storage or relaying for older peers.
 - For v2.0: `proto` `min_supported = 200`, `recommended = 200`.
