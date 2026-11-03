@@ -20,9 +20,9 @@ stream circuit. Test vectors: [vectors/handshake.json](vectors/handshake.json).
   identity (sent after `ekem1`) nor the session data protected by the Noise keys.
 - Channel binding: the carrier's TLS session is part of the prologue, so a man in the middle who
   terminates TLS on both sides makes the handshake fail (§3.2) — whenever the initiator knows whom it
-  is calling (XK, or XX with an expected node ID). An XX handshake to a bare address authenticates
+  is calling (XK, or XX with an expected device ID). An XX handshake to a bare address authenticates
   nothing about the responder (§4.2).
-- Key binding: the expected responder node ID is in the prologue, so a card that copies another
+- Key binding: the expected responder device ID is in the prologue, so a card that copies another
   node's `hs` key cannot make an initiator believe it talks to the copier (§3.3).
 - Downgrade resistance: the protocol name, the offered suite list, the features and the services are
   all in the transcript.
@@ -79,7 +79,7 @@ HS_HELLO payload:
   offered    u16 × n       suite IDs, in the initiator's preference order
   chosen     u16           the suite of the following HS_MSG; MUST be in `offered`
   flags      u8            0x01: a puzzle solution follows
-                           0x02: the prologue binds an expected responder node ID (§3.3)
+                           0x02: the prologue binds an expected responder device ID (§3.3)
                            other bits: reserved, sent as 0, ignored on receipt
   [cookie    16 bytes      from HS_RETRY (§6)
    nonce     u64]          puzzle solution
@@ -140,11 +140,12 @@ prologue = "echofog/hs2/prologue" ‖ cb(32) ‖ rid(32) ‖ u8(len(hello)) ‖ 
 ```
 
 - `hello` is the exact `HS_HELLO` payload that precedes this message 1 on the stream.
-- `rid` is the expected responder node ID when `hello.flags & 0x02` is set, else 32 zero bytes. The
+- `rid` is the expected responder **device ID** (the signer of its card, [README.md](README.md) §5.2)
+  when `hello.flags & 0x02` is set, else 32 zero bytes. The
   initiator MUST set the flag and `rid` in XK (it knows the card) and in XX whenever it expects a
-  node ID. The responder fills `rid` with **its own** node ID when the flag is set. A card that copies
+  device ID. The responder fills `rid` with **its own** device ID when the flag is set. A card that copies
   another node's `hs_key` (unknown key-share attack) therefore fails: the real owner of `hs` answers
-  with its own node ID in the prologue and the transcript no longer matches.
+  with its own device ID in the prologue and the transcript no longer matches.
 
 ## 4. Messages
 
@@ -216,9 +217,9 @@ require a puzzle for it under load.
 
 **XX bootstrap rules.** XX authenticates the responder only if the initiator knows whom to expect:
 
-- Bootstrap lists MUST give a node ID (better the whole card) for every entry. With an expected node ID,
-  the initiator sets `rid` (§3.3), checks `SHA-256(card signer akey) = rid` in `P2` before message 3,
-  and only then sends its card.
+- Bootstrap lists MUST give a device ID (better the whole card) for every entry. With an expected
+  device ID, the initiator sets `rid` (§3.3), checks `SHA-256(card signer akey) = rid` in `P2` before
+  message 3, and only then sends its card.
 - With a bare address and no expected ID, the initiator MUST use a **throwaway identity** (a fresh
   Ed25519 key and a minimal card, never reused), and treats every card and address learned in that
   session as an unverified candidate; it MUST NOT use such a session for anything but finding
@@ -348,22 +349,30 @@ Rules:
   optional behaviour, a new major version has its own suite).
 - `|time − now| > 600 s` → `Reject{clock-skew}`. Both `HsInit.time` and `HsResp.time` are always sent;
   each side keeps the median offset to its last 5 authenticated peers and applies it to the timestamps
-  it puts into L0 first packets (wire.md §2.4, §3.2), whose window is ±300 s. A node with no recent
-  peer SHOULD check its clock against the `Date` header of an HTTPS response before dialing, and
-  shows the user a clock warning when its offset exceeds 60 s.
+  it puts into L0 first packets (wire.md §2.4, §3.2), whose window is ±300 s.
+- **Clock check (Decision D36).** A node with no authenticated peer in the last hour, or whose L0 dials
+  all fail, checks its clock against the `Date` headers of HTTPS responses from the clock endpoints of
+  [registries.md](registries.md) §12 (configurable by the user). It sends a `HEAD /` request to each of
+  them in parallel (browser-shaped TLS, through the node's proxy settings, at most once per 10 minutes),
+  needs at least 3 answers, and takes the offset on which a strict majority of the answers agree within
+  2 s; without such a majority it keeps its current offset. It shows the user a clock warning when the
+  offset exceeds 60 s. The requests are ordinary visits to very common sites and reveal no EchoFog
+  identifier.
 - `HsInit.features` and `HsInit.services` are sorted ascending, GREASE values in their numeric place.
 - The initiator MUST abort if `HsResp.features` contains a feature it did not offer, or a service
   choice is not among its offered versions.
 - **Card checks** (both directions): the card is a valid `echofog/card/2` object
   ([objects.md](objects.md) §3), not expired, `card.hs_key` equals the Noise remote static key
-  (`rs`), and, if the initiator expects a node ID, `SHA-256(signer akey)` equals it. The responder
+  (`rs`), its embedded device list is valid and lists the signer, and, if the initiator expects a
+  device ID or node ID, `SHA-256(signer akey)` or `SHA-256(account)` equals it. The responder
   checks the initiator card after message 3; the initiator checks a card in `P2` before sending
   message 3.
-- **hs_key ↔ node ID binding.** Each node remembers which node ID each `hs` key it has seen in a
+- **hs_key ↔ device ID binding.** Each node remembers which device ID each `hs` key it has seen in a
   valid card belongs to. A card whose `hs_key` (or `prev_hs`) is already bound to a different signer is
   rejected and counted as abuse against the node that supplied it.
-- After message 3 the responder applies admission (bans, per-node and per-address limits, guard
-  policy) to the now-authenticated node ID. A refusal is `REJECT` on the control stream, then close.
+- After message 3 the responder applies admission (bans, per-device, per-account and per-address
+  limits, guard policy) to the now-authenticated device and node IDs. A refusal is `REJECT` on the
+  control stream, then close.
 
 ### 7.1 Rotating the handshake key
 
@@ -423,7 +432,7 @@ DHT lookup to a known node completes in the handshake round trip.
 | whole handshake | 10 s |
 | pre-authentication handshakes | 64 per source IP, 256 per /24 (IPv6 /48), 1024 per node |
 | above a per-source limit | public nodes: puzzle difficulty +2 bits per exceeded limit; hidden nodes: queued, then the uniform silent close |
-| pre-authentication bans | none: a source IP may be a CGNAT shared by thousands of users; bans apply only to authenticated node IDs |
+| pre-authentication bans | none: a source IP may be a CGNAT shared by thousands of users; bans apply only to authenticated device and node IDs |
 | HS_HELLO payload | ≤ 64 bytes |
 | Noise message | ≤ 16384 bytes |
 | card in P2/P3 | ≤ 4096 bytes |
