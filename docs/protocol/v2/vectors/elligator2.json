@@ -79,6 +79,19 @@
       "u": "80e5132b658f7f451b2b658f7f451b2b658f7f451b2b658f7f451b2b658f7f45"
     }
   ],
+  "rfc9380_crosscheck": {
+    "note": "the generator checks its forward map on full field elements against RFC 9380 Appendix J.4.2 (u[0] → Q.x); values big-endian as in the RFC",
+    "cases": [
+      {
+        "u0_be": "608d892b641f0328523802a6603427c26e55e6f27e71a91a478148d45b5093cd",
+        "Q.x_be": "51125222da5e763d97f3c10fcc92ea6860b9ccbbd2eb1285728f566721c1e65b"
+      },
+      {
+        "u0_be": "46f5b22494bfeaa7f232cc8d054be68561af50230234d7d1d63d1d9abeca8da5",
+        "Q.x_be": "7d56d1e08cb0ccb92baf069c18c49bb5a0dcd927eff8dcf75ca921ef7f3e6eeb"
+      }
+    ]
+  },
   "ecdh_check": {
     "peer_sk": "4c03a9b44ebab8a818795c4a586e34c94e253e804437f9cb8b4de1e640ac6507",
     "x25519(peer_sk, sample0.dirty_pub)": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
