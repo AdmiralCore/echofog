@@ -36,13 +36,14 @@ is given by the service of the stream they appear on (§4).
 | 0x10 | PATH_BIND | H (instead of HS_HELLO) | `sid(16) ‖ varint path_id ‖ mac(32)` | 56 | wire.md §8.2 |
 | 0x11 | PATH_BIND_OK | H | `varint path_id` | 8 | wire.md §8.2 |
 | 0x12 | PATH_ABANDON | S | `varint path_id ‖ varint code` | 16 | wire.md §8.3 |
-| 0x13 | PUNCH_OFFER | S | `PunchOffer { repeated bytes addrs = 1; uint64 nonce = 2; }`, each addr `family(1) ‖ ip ‖ port(2)`, ≤ 8 | 256 | services.md §6 |
-| 0x14 | PUNCH_SYNC | S | `u64 nonce` echoed; both sides start punching RTT/2 after it | 8 | services.md §6 |
+| 0x13 | PUNCH_OFFER | S | `PunchOffer { repeated bytes addrs = 1; uint64 nonce = 2; }`, each addr `family(1) ‖ ip ‖ port(2)`, ≤ 4 used | 256 | services.md §6.4 |
+| 0x14 | PUNCH_SYNC | S | `u64 nonce` echoed; the sender starts RTT/2 later, the receiver at once | 8 | services.md §6.4 |
 | 0x18 | MUX_STREAM | B | `varint stream_id ‖ u8 flags ‖ data` | 16400 | wire.md §5.2 |
 | 0x19 | MUX_RESET | B | `varint stream_id ‖ varint code` | 16 | wire.md §5.2 |
 | 0x1a | MUX_WINDOW | B | `varint stream_id ‖ varint increment` | 16 | wire.md §5.2 |
 | 0x1b | MUX_MAX_DATA | B | `varint increment` | 8 | wire.md §5.2 |
 | 0x1c | MUX_DATAGRAM | B | one datagram (§2 layout) | 1452 | wire.md §5.2 |
+| 0x3e | GREASE | A, I | random bytes; never assigned, always skipped | 256 | registries.md §5 |
 | 0x3f | — | — | reserved for a future extension-header frame | — | — |
 
 Every other value in `0x00`–`0x3f` is unassigned. A receiver that gets an unknown session-level type
@@ -88,8 +89,9 @@ always the numeric pair (`OPEN{service = 3, version = 2}`).
 
 ## 4. Service-local frame types
 
-Service-local types start at `0x40`. Each service's table is in [services.md](services.md); they are
-collected here for uniqueness.
+Service-local types start at `0x40`. Each service's table in [services.md](services.md) gives every
+type's body and **maximum payload size** (the "Max" column, normative); they are collected here for
+uniqueness. A type without a stated maximum does not exist.
 
 | Service | Types |
 |---|---|
@@ -97,7 +99,7 @@ collected here for uniqueness.
 | pex/2 | 0x40 GET, 0x41 CARDS |
 | chat/2 | 0x40 DELIVER, 0x41 DELIVERED, 0x42 BUNDLE_GET, 0x43 BUNDLE |
 | mailbox/2 | 0x40 QUEUE_CREATE, 0x41 QUEUE_OK, 0x42 DEPOSIT, 0x43 DEPOSITED, 0x44 FETCH, 0x45 ITEMS, 0x46 ACK, 0x47 FORWARD, 0x48 ERROR |
-| relay/2 | 0x40 CONNECT, 0x41 INCOMING, 0x42 ACCEPT, 0x43 REFUSE, 0x44 CONNECTED, 0x45 REFUSED |
+| relay/2 | 0x40 CONNECT, 0x41 INCOMING, 0x42 ACCEPT, 0x43 REFUSE, 0x44 CONNECTED, 0x45 REFUSED, 0x46 REGISTER, 0x47 REGISTERED, 0x48 PEER_ADDR |
 | exit/2 | 0x40 TCP_CONNECT, 0x41 RESULT, 0x42 DATA, 0x43 UDP_OPEN, 0x44 UDP_OK, 0x45 UDP_PKT, 0x46 ACCOUNT_GET, 0x47 ACCOUNT, 0x48 VOUCHER, 0x49 VOUCHER_RESULT |
 | files/2 | 0x40 WANT, 0x41 CHUNK, 0x42 CANCEL, 0x43 DONE |
 | call/2 | 0x40 SIGNAL |
@@ -117,15 +119,20 @@ negotiated set is the intersection ([handshake.md](handshake.md) §7).
 | 0x0005 | `early-data` | the responder processes 0-RTT data in HsInit.early |
 | 0x0006 | `card-push` | either side may push a newer card with CARD_UPDATE |
 | 0x0007 | `stream-resume` | reserved: streams that survive a path change by offset (successor of v1 TCP rotation) |
+| 0x0008 | `birthday-punch` | reserved: hole punching through symmetric NATs with many ports (later) |
 | 0x0010 | `spqr` | reserved: post-quantum ratchet in chat/2 (later) |
 | 0x0011 | `sealed-header` | reserved: encrypted ratchet headers in chat/2 (later) |
 | 0x0012 | `mls` | reserved: MLS groups (later) |
-| 0x0a0a, 0x1a1a, 0x2a2a, …, 0xfafa | GREASE | never meaningful; see below |
-| 0xf000–0xfeff | — | experimental |
+| 0x0a0a, 0x1a1a, 0x2a2a, …, 0xeaea | GREASE | never meaningful; see below |
+| 0xf000–0xfeff | — | experimental (0xfafa is not GREASE) |
 
-**Decision D18 (feature GREASE).** An initiator SHOULD include one randomly chosen GREASE value
-(`0xXAXA` for X in 0..f) in its feature list; a responder MUST ignore GREASE values and MUST NOT
-select them. This keeps the "unknown feature is ignored" rule exercised from day one, as TLS does.
+**Decision D18 (GREASE).** An initiator SHOULD include one randomly chosen GREASE value (`0xXAXA` for
+X in 0..e) in its feature list, in `HS_HELLO.offered` (never as `chosen`) and as a service ID (with
+version 1) in `HsInit.services` ([handshake.md](handshake.md) §3.4); responders MUST ignore GREASE
+values and MUST NOT select them. Senders SHOULD also send, at random intervals, an IGNORABLE frame of a
+GREASE frame type (`0x3e` on any stream) with random payload, which receivers skip. This keeps the
+"unknown is ignored" rules exercised from day one, as TLS does. The same GREASE values are reserved in
+the service registry (§3) and the L1 suite registry (§6.2).
 
 ## 6. Suites
 
@@ -154,7 +161,7 @@ L0 suite IDs appear only inside signed node cards (`Addr.suite`), never on the w
 | 0x0002 | `EchoFog/2/Noise_XXhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s` | handshake.md §4.2 |
 | 0xff00–0xffff | — experimental | — |
 
-Responder preference order in v2: `0x0001` before `0x0002`.
+Responder preference order in v2: `0x0001` before `0x0002`. Values `0xXAXA` (X in 0..e) are GREASE.
 
 ### 6.3 Shape profiles
 
@@ -181,15 +188,14 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/prekeys/2` | chat prekey bundle (PQXDH) | 6144 | 30 days | objects.md §5 |
 | `echofog/devices/2` | device list (multi-device, later use) | 4096 | 30 days | objects.md §6 |
 | `echofog/mailbox-hint/2` | mailbox rendezvous hint | 1024 | 6 hours | objects.md §7 |
-| `echofog/name/2` | crypto-username binding | 512 | 30 days | objects.md §8 |
-| `echofog/release/2` | release manifest | 16384 | 400 days | objects.md §9 |
+| `echofog/name/2` | crypto-username binding (format only; not stored in the v2 DHT) | 512 | 30 days | objects.md §8 |
+| `echofog/release/2` | release manifest with co-signatures | 20000 | 400 days | objects.md §9 |
 
 ### 7.2 L0 labels
 
 | Label | Use | Section |
 |---|---|---|
-| `echofog/noise3/selector` | key-selector MAC key derivation | wire.md §2.3 |
-| `echofog/noise3/keys` | HKDF info prefix of the noise3 key schedule | wire.md §2.3 |
+| `echofog/noise3/keys` | HKDF info prefix of the noise3 key schedule (selector, Init, data and packet-number keys) | wire.md §2.3 |
 | `echofog/reality2/token-key` | HKDF info prefix of the REALITY v2 token key | wire.md §3.2 |
 | `echofog/reality2/hello` | hash prefix of the ClientHello binding | wire.md §3.2 |
 
@@ -220,15 +226,18 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 
 | Label | Use | Section |
 |---|---|---|
-| `echofog/dht2/key` | DHT key of a signer-keyed record | dht.md §2 |
-| `echofog/dht2/name-key` | DHT key of a name record | dht.md §2 |
+| `echofog/dht2/key` | DHT key of a signer-keyed record (with the day) | dht.md §2 |
+| `echofog/dht2/release` | DHT key of the release manifest (with the day) | dht.md §2 |
+| `echofog/release-cosign/2` | co-signature input prefix of a release manifest | objects.md §9 |
+| `echofog/relay2/rendezvous` | rendezvous ID of an unlisted node at a relay | services.md §6.3 |
+| `echofog/mailbox2/pow` | proof of work of a public-queue deposit | services.md §5.2 |
+| `echofog/call2/unit` | signature input prefix of a media unit | services.md §9.2 |
 | `echofog/mailbox2/forward` | sealing of a forwarded deposit to the mailbox relay | services.md §5 |
 | `echofog/mailbox2/fetch-auth` | signature input prefix of FETCH and ACK | services.md §5 |
 | `echofog/chat2/seal` | sealed-sender envelope key | services.md §4 |
 | `echofog/call2/sender-key` | per-sender media key | services.md §9 |
 | `echofog/call2/signal` | signature input prefix of forwarded call signals | services.md §9 |
 | `echofog/call2/epoch` | call epoch secret chain | services.md §9 |
-| `echofog/exit2/pay-tag` | per-session payment tag | services.md §7 |
 
 ### 7.6 Retained v1 labels
 
@@ -238,7 +247,6 @@ framing, not its key schedule. They are listed so that every label in use is in 
 
 | Label | Use |
 |---|---|
-| `FOG_X3DH_V2` | HKDF info of a classic X3DH session (accepted only from bundles without a KEM prekey; v2 nodes always publish one) |
 | `FOG_PQXDH_X25519_SHA-256_ML-KEM-768_V1` | HKDF info prefix of a PQXDH session |
 | `FOG_RATCHET_INIT_V2` | initial chains |
 | `FOG_RATCHET_ROOT_V2` | root KDF |
@@ -247,13 +255,16 @@ framing, not its key schedule. They are listed so that every label in use is in 
 The v1 labels `ECHOFOG_PREKEY_BINDING_V1`, `ECHOFOG_PREKEY_BINDING_V2`, `echofog/handshake/v2/*`,
 `echofog/access/v1/*`, `echofog/udp-obfs/v2`, `echofog/tcp-stealth/*`,
 `echofog-reality-stealth-aead-v2`, `echofog-quic-mlkem-binding-v1`, `echofog-hello-binding-v1`,
-`echofog/vpn-exit/v1/`, `echofog-mbox-v1` and `EXPORTER-echofog-peer-handshake` are **retired**: v2
-MUST NOT use them.
+`echofog/vpn-exit/v1/`, `echofog-mbox-v1`, `EXPORTER-echofog-peer-handshake` and `FOG_X3DH_V2`
+(classic X3DH: v2 refuses classic inits) are **retired**: v2 MUST NOT use them. Labels that appeared in
+drafts of this specification and were withdrawn — `echofog/noise3/selector` (the public-key selector,
+K1), `echofog/dht2/name-key`, `echofog/exit2/pay-tag` — are reserved and never reused.
 
 ## 8. Algorithm tags (L7)
 
-`akey = u8 alg ‖ key bytes`; the length is fixed by `alg`. Text form: `<name>:<base64url-nopad(key
-bytes)>`, for example `ed25519:11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo`.
+`akey = u8 alg ‖ key bytes`; the length is fixed by `alg`. Every key in a v2 message or object is an
+akey (including masking keys). Text form: `<name>:<base64url-nopad(key bytes)>`, for example
+`ed25519:11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo` (the RFC 8032 TEST 1 public key).
 
 | Tag | Name | Kind | Public key | Signature / ciphertext | Status |
 |---|---|---|---|---|---|
@@ -271,17 +282,20 @@ unusable (the object is skipped, not an error for the whole message).
 ## 9. DHT record kinds
 
 See [dht.md](dht.md). A record's kind is its object label. The key rule says how the DHT key is
-derived; "signer" means `SHA-256("echofog/dht2/key" ‖ u8 len(label) ‖ label ‖ signer_node_id)`.
+derived; "signer" means `SHA-256("echofog/dht2/key" ‖ u32(day) ‖ u8 len(label) ‖ label ‖ signer_node_id)`
+and "release" means `SHA-256("echofog/dht2/release" ‖ u32(day))`, with `day = floor(unix / 86400)`.
 
 | Label | Key rule | Max record (envelope) | Max lifetime | Per signer | Replicas |
 |---|---|---|---|---|---|
-| `echofog/card/2` | signer | 4096 | 7 days | 1 | 8 |
+| `echofog/card/2` (public scope only) | signer | 4096 | 7 days | 1 | 8 |
 | `echofog/prekeys/2` | signer | 8192 | 30 days | 1 | 8 |
 | `echofog/devices/2` | signer | 6144 | 30 days | 1 | 8 |
 | `echofog/mailbox-hint/2` | signer | 1536 | 6 hours | 1 | 5 |
-| `echofog/name/2` | name: `SHA-256("echofog/dht2/name-key" ‖ u8 len(n) ‖ n)` with `n` the normalised name | 1024 | 30 days | 1 per name | 8 |
-| `echofog/release/2` | signer (the release key) | 20480 | 400 days | 1 | 20 |
-| any other label starting `echofog/` | signer | 2048 | 24 hours | 16 records of unknown labels in total | 5 |
+| `echofog/name/2` | — not stored in v2 (squatting without an on-chain check) | — | — | — | — |
+| `echofog/release/2` | release (threshold-signed) | 20480 | 400 days | 1 in total (highest `released_at`) | 20 |
+| any other label starting `echofog/` | signer | 2048 | clipped to 24 hours on storage | 4 per signer | 5 |
+
+Peer- and invite-scope cards are never stored (objects.md §3.2).
 
 ## 10. Error and reason codes
 
@@ -320,7 +334,14 @@ A hidden node never sends REJECT before a valid access proof ([handshake.md](han
 | 10 | `internal` |
 | 0x100–0xffff | service-defined (each service section lists its codes) |
 
-### 10.3 exit/2 RESULT codes
+### 10.3 relay/2 REFUSED reasons
+
+| Code | Name |
+|---|---|
+| 1 | `unavailable` — unknown, unreachable, refused by the target or by policy: one answer for all, after a random delay (services.md §6.3) |
+| 2 | `limit` — the requester exceeded its own circuit limits |
+
+### 10.4 exit/2 RESULT codes
 
 | Code | Name |
 |---|---|
@@ -339,6 +360,7 @@ A hidden node never sends REJECT before a valid access proof ([handshake.md](han
 |---|---|
 | 0 | `user` |
 | 1 | `server` (always dialed through a camouflaged suite across borders) |
+| other | treated as `user` (unknown values are ignored, not errors) |
 
 | `NodeCard.flags` bit | Name | Meaning |
 |---|---|---|
@@ -348,4 +370,5 @@ A hidden node never sends REJECT before a valid access proof ([handshake.md](han
 | 3 | `mailbox` | holds mailbox/2 queues for others |
 | 4 | `invite-scoped` | an invitation card: never published or forwarded |
 | 5 | `exit` | the card's `exit` offer is live |
-| 6–31 | — | reserved, MUST be zero |
+| 6 | `domestic-only` | a server that is never dialed across a border (no camouflaged address needed) |
+| 7–31 | — | reserved: sent as zero, **ignored** on receipt (a later version may assign them) |

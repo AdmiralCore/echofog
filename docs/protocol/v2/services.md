@@ -293,7 +293,7 @@ The VPN exit. Streams are opened by the client to an exit whose card has the `ex
 | Type | Frame | Body | Max |
 |---|---|---|---|
 | 0x40 | TCP_CONNECT | `{ string host = 1; uint32 port = 2; uint32 flags = 3; }` | 288 |
-| 0x41 | RESULT | `{ uint32 code = 1; }` codes in [registries.md](registries.md) §10.3 | 8 |
+| 0x41 | RESULT | `{ uint32 code = 1; }` codes in [registries.md](registries.md) §10.4 | 8 |
 | 0x42 | DATA | raw bytes (payload is the data, not protobuf) | 16384 |
 | 0x43 | UDP_OPEN | `{ uint64 req = 1; uint32 flags = 2; }` | 16 |
 | 0x44 | UDP_OK | `{ uint64 req = 1; uint32 session = 2; uint32 code = 3; }` | 32 |
