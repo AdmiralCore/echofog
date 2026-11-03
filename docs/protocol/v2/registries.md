@@ -46,9 +46,12 @@ is given by the service of the stream they appear on (§4).
 | 0x3e | GREASE | A, I | random bytes; never assigned, always skipped | 256 | registries.md §5 |
 | 0x3f | — | — | reserved for a future extension-header frame | — | — |
 
-Every other value in `0x00`–`0x3f` is unassigned. A receiver that gets an unknown session-level type
-without IGNORABLE MUST close the **stream** with `CLOSE{code = 2 unknown-frame}`; on stream 0 that
-ends the session with `GOAWAY{code = 2}`.
+Every other value in `0x00`–`0x3f` is unassigned. On receipt, `0x00`, `0x3f`, GREASE `0x3e` and every
+unassigned value are unknown types: skipped with IGNORABLE; otherwise the receiver closes the
+**stream** with `CLOSE{code = 2 unknown-frame}`, on stream 0 ends the session with `GOAWAY{code = 2}`,
+and at mux connection level closes the carrier. Unknown types are never abuse. Frames that a feature
+introduces count as unknown when the feature was not negotiated; known types outside their "Where"
+column are protocol violations ([wire.md](wire.md) §6.1).
 
 ## 2. Datagram types
 
