@@ -1,0 +1,196 @@
+{
+  "description": "frame v2: type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload; datagrams: type(varint) ‖ payload",
+  "spec": "wire.md §6, registries.md §1–§2",
+  "frames": [
+    {
+      "name": "PADDING",
+      "type": 1,
+      "flags": 1,
+      "payload": "00000000",
+      "encoded": "01010400000000",
+      "note": "IGNORABLE set"
+    },
+    {
+      "name": "HS_HELLO",
+      "type": 2,
+      "flags": 0,
+      "payload": "0200010002000100",
+      "encoded": "0200080200010002000100",
+      "note": "offered [0x0001, 0x0002], chosen 0x0001, no puzzle"
+    },
+    {
+      "name": "HS_HELLO (puzzle)",
+      "type": 2,
+      "flags": 0,
+      "payload": "0200010002000101a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000001092",
+      "encoded": "0200200200010002000101a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000001092",
+      "note": "flags 0x01, cookie a0..af, nonce 4242"
+    },
+    {
+      "name": "HS_RETRY",
+      "type": 4,
+      "flags": 0,
+      "payload": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf10",
+      "encoded": "040011a0a1a2a3a4a5a6a7a8a9aaabacadaeaf10",
+      "note": "difficulty 16"
+    },
+    {
+      "name": "REJECT",
+      "type": 5,
+      "flags": 0,
+      "payload": "080110c80118c801",
+      "encoded": "050008080110c80118c801",
+      "note": "Reject{reason=1 version, min=200, max=200}"
+    },
+    {
+      "name": "PING",
+      "type": 6,
+      "flags": 0,
+      "payload": "0102030405060708",
+      "encoded": "0600080102030405060708"
+    },
+    {
+      "name": "PONG",
+      "type": 7,
+      "flags": 0,
+      "payload": "0102030405060708",
+      "encoded": "0700080102030405060708"
+    },
+    {
+      "name": "GOAWAY",
+      "type": 8,
+      "flags": 0,
+      "payload": "0808120772657374617274181e",
+      "encoded": "08000d0808120772657374617274181e",
+      "note": "GoAway{code=8 going-away, reason=\"restart\", retry_after=30}"
+    },
+    {
+      "name": "CLOSE",
+      "type": 9,
+      "flags": 0,
+      "payload": "04736572766963652d756e737570706f72746564",
+      "encoded": "09001404736572766963652d756e737570706f72746564",
+      "note": "code 4"
+    },
+    {
+      "name": "OPEN chat/2",
+      "type": 10,
+      "flags": 0,
+      "payload": "030200",
+      "encoded": "0a0003030200"
+    },
+    {
+      "name": "OPEN dht/2 EARLY",
+      "type": 10,
+      "flags": 0,
+      "payload": "010201",
+      "encoded": "0a0003010201",
+      "note": "0-RTT stream"
+    },
+    {
+      "name": "UNSUPPORTED",
+      "type": 11,
+      "flags": 0,
+      "payload": "090000",
+      "encoded": "0b0003090000",
+      "note": "service 9 not served"
+    },
+    {
+      "name": "OBSERVED_ADDR v4",
+      "type": 12,
+      "flags": 0,
+      "payload": "04c0000221c822",
+      "encoded": "0c000704c0000221c822",
+      "note": "192.0.2.33:51234"
+    },
+    {
+      "name": "OBSERVED_ADDR v6",
+      "type": 12,
+      "flags": 0,
+      "payload": "0620010db800000000000000000000000101bb",
+      "encoded": "0c00130620010db800000000000000000000000101bb",
+      "note": "[2001:db8::1]:443"
+    },
+    {
+      "name": "PATH_BIND_OK",
+      "type": 17,
+      "flags": 0,
+      "payload": "02",
+      "encoded": "11000102"
+    },
+    {
+      "name": "PATH_ABANDON",
+      "type": 18,
+      "flags": 0,
+      "payload": "0209",
+      "encoded": "1200020209",
+      "note": "code 9 path-failed"
+    },
+    {
+      "name": "MUX_STREAM",
+      "type": 24,
+      "flags": 0,
+      "payload": "04016869",
+      "encoded": "18000404016869",
+      "note": "stream 4, FIN"
+    },
+    {
+      "name": "MUX_RESET",
+      "type": 25,
+      "flags": 0,
+      "payload": "0405",
+      "encoded": "1900020405",
+      "note": "code 5 refused"
+    },
+    {
+      "name": "MUX_WINDOW",
+      "type": 26,
+      "flags": 0,
+      "payload": "0480020000",
+      "encoded": "1a00050480020000"
+    },
+    {
+      "name": "MUX_MAX_DATA",
+      "type": 27,
+      "flags": 0,
+      "payload": "80200000",
+      "encoded": "1b000480200000"
+    },
+    {
+      "name": "dht/2 FIND_NODE",
+      "type": 64,
+      "flags": 0,
+      "payload": "08071220000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "encoded": "4040002408071220000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "note": "service-local type, req=7, target 00..1f"
+    },
+    {
+      "name": "unknown ignorable",
+      "type": 62,
+      "flags": 1,
+      "payload": "ff",
+      "encoded": "3e0101ff",
+      "note": "a receiver that does not know 0x3e skips it"
+    }
+  ],
+  "datagrams": [
+    {
+      "name": "PADDING",
+      "type": 1,
+      "payload": "0000000000000000",
+      "encoded": "010000000000000000"
+    },
+    {
+      "name": "RELAY_DGRAM",
+      "type": 48,
+      "payload": "404d7365616c6564e280a6",
+      "encoded": "30404d7365616c6564e280a6"
+    },
+    {
+      "name": "EXIT_UDP fragment 0",
+      "type": 32,
+      "payload": "05000100010e3139322e302e322e35333a3533abcd",
+      "encoded": "2005000100010e3139322e302e322e35333a3533abcd"
+    }
+  ]
+}
