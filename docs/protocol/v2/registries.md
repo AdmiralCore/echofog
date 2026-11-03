@@ -121,6 +121,7 @@ negotiated set is the intersection ([handshake.md](handshake.md) §7).
 | 0x0006 | `card-push` | either side may push a newer card with CARD_UPDATE |
 | 0x0007 | `stream-resume` | reserved: streams that survive a path change by offset (successor of v1 TCP rotation) |
 | 0x0008 | `birthday-punch` | reserved: hole punching through symmetric NATs with many ports (later) |
+| 0x0009 | `wake-push` | reserved: a mailbox relay wakes a suspended mobile node through a push path (later, platforms.md §2) |
 | 0x0010 | `spqr` | reserved: post-quantum ratchet in chat/2 (later) |
 | 0x0011 | `sealed-header` | reserved: encrypted ratchet headers in chat/2 (later) |
 | 0x0012 | `mls` | reserved: MLS groups (later) |
