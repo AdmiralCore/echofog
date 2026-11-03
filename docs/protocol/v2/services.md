@@ -12,6 +12,9 @@ opening a stream with `OPEN{service, version}` ([wire.md](wire.md) §6.3); its f
 - Requests that expect an answer carry `uint64 req = 1`; the answer echoes it. Many requests may share
   one stream; answers may come out of order.
 - Each service lists its timeouts. A request that times out is abandoned; the stream stays usable.
+- A `(service, version)` selected in the handshake may be opened by either side. A side without a
+  handler for it answers `UNSUPPORTED{service, 0, 0}`; UNSUPPORTED ends the stream with a FIN, never a
+  reset ([wire.md](wire.md) §6.3).
 - A frame longer than its type's maximum ends the stream with `CLOSE{frame-too-large}`.
 - Errors end a stream with `CLOSE{code}`; service-specific codes are `0x100 + n` and listed per
   service. Malformed frames of a known type MAY raise the peer's abuse score; unknown types, unknown

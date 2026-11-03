@@ -9,7 +9,8 @@ the `hfs` modifier (Noise HFS: hybrid forward secrecy with a KEM) using X25519 a
 | 0x0002 | `EchoFog/2/Noise_XXhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s` | bootstrap: only an address is known |
 
 The handshake runs on stream 0 of a carrier connection ([wire.md](wire.md) §5–§6), or inside a relay
-stream circuit. Test vectors: [vectors/handshake.json](vectors/handshake.json).
+stream circuit. Test vectors: [vectors/handshake.json](vectors/handshake.json) (pieces) and the
+normative transcripts [vectors/handshake-transcript.json](vectors/handshake-transcript.json) (§12).
 
 ## 1. Properties (summary)
 
@@ -42,8 +43,8 @@ parts and need a small change).
 |---|---|
 | `DH(kp, pub)` | X25519 (RFC 7748); an all-zero output MUST abort the handshake |
 | `GENERATE_KEYPAIR()` | X25519 key pair from 32 random bytes |
-| `KEM_GENERATE()` | ML-KEM-768 key pair (FIPS 203) from a random 64-byte seed `d ‖ z` |
-| `KEM_ENCAP(pk)` | ML-KEM-768 encapsulation → `(ct: 1088 bytes, ss: 32 bytes)` |
+| `KEM_GENERATE()` | ML-KEM-768 key pair (FIPS 203) from a random 64-byte seed `d ‖ z`: `ML-KEM.KeyGen_internal(d, z)` (Go: `mlkem.NewDecapsulationKey768(d ‖ z)`) |
+| `KEM_ENCAP(pk)` | ML-KEM-768 encapsulation → `(ct: 1088 bytes, ss: 32 bytes)`; with 32 random bytes `m` it is FIPS 203 `ML-KEM.Encaps_internal(ek, m)` (vectors fix `m`; Go: `mlkemtest.Encapsulate768`) |
 | `KEM_DECAP(sk, ct)` | ML-KEM-768 decapsulation → `ss` |
 | `ENCRYPT(k, n, ad, p)` | ChaCha20-Poly1305 (RFC 8439), nonce = 32 zero bits ‖ `u64le(n)` |
 | `HASH` | BLAKE2s-256; `HASHLEN = 32`, `BLOCKLEN = 64` |
@@ -51,8 +52,14 @@ parts and need a small change).
 | `HKDF(ck, ikm, n)` | Noise §4.3: `t = HMAC-HASH(ck, ikm)`; `o1 = HMAC-HASH(t, 0x01)`; `o2 = HMAC-HASH(t, o1 ‖ 0x02)`; `o3 = HMAC-HASH(t, o2 ‖ 0x03)` |
 
 `SymmetricState`, `CipherState`, `MixKey`, `MixHash`, `EncryptAndHash`, `DecryptAndHash` and `Split`
-are exactly those of Noise revision 34 §5. ML-KEM-768 encapsulation keys MUST pass the FIPS 203
-encapsulation-key check before use.
+are exactly those of Noise revision 34 §5. In particular, while no key is set, `EncryptAndHash(p)` is
+`MixHash(p)` and returns `p` unchanged, and the nonce `n` does not move; `MixKey` resets `n` to 0; the
+AEAD associated data is `h`. ML-KEM-768 encapsulation keys MUST pass the FIPS 203 encapsulation-key
+check before use.
+
+**Key bytes.** `s`, `rs`, `e`, `re` in the tokens and in `MixHash(rs)` are the raw 32-byte X25519
+public keys. A card's `hs_key` is the akey `0x02 ‖ key`; the card check of §7 compares the 32 bytes
+after the tag with the Noise key.
 
 ### 2.1 The hfs tokens
 
@@ -90,7 +97,14 @@ so the initiator chooses.
 
 - With a card, `offered` MUST contain exactly the suites that are both supported by the initiator and
   listed in `l1_suites` of the initiator's copy of the responder's card, in the initiator's preference
-  order; `chosen` is the first. Without a card, `offered = chosen = XX` (plus GREASE, §3.4).
+  order, plus optionally one GREASE value (§3.4); `chosen` is the first non-GREASE entry. Without a
+  card, `offered` is `[0x0002]` (plus optionally GREASE) and `chosen = 0x0002`.
+- A `HS_HELLO` with a repeated value in `offered`, more than one GREASE value, an `offered` made only
+  of GREASE, a `chosen` not in `offered`, GREASE as `chosen`, a `chosen` that is not the first
+  non-GREASE entry of `offered`, a count outside 1..8, or trailing bytes after the payload is malformed
+  (silent close; for public nodes, no REJECT). The responder checks all of these, then the suite rule.
+- Cards of a hidden node (scopes `peer` and `invite`) list only the suites it accepts; because of D22
+  they never list `0x0002`.
 - The responder accepts only if `chosen` is its **own most preferred** suite in `offered ∩ supported`.
   Because `offered` is limited to the card the initiator holds, and a node keeps supporting every suite
   listed in any of its unexpired cards, a stale card leads to an older suite that still works: hidden
@@ -104,13 +118,6 @@ so the initiator chooses.
 Because `HS_HELLO` is in the prologue, an attacker who removes suites from `offered` causes a
 transcript mismatch and the handshake fails; because `offered` is fixed by a signed card, the
 initiator's own choice cannot be pushed down either.
-
-### 3.4 GREASE in the handshake
-
-To keep the "unknown is ignored" rules exercised, an initiator SHOULD add one GREASE value of the form
-`0xXAXA` (X in 0..e) to `offered` (never as `chosen`), to `HsInit.features`, and as a service ID with
-version 1 to `HsInit.services`. Responders MUST ignore GREASE values. Lists stay sorted with the
-GREASE value in its numeric place.
 
 ### 3.2 Channel binding
 
@@ -145,7 +152,20 @@ prologue = "echofog/hs2/prologue" ‖ cb(32) ‖ rid(32) ‖ u8(len(hello)) ‖ 
   initiator MUST set the flag and `rid` in XK (it knows the card) and in XX whenever it expects a
   device ID. The responder fills `rid` with **its own** device ID when the flag is set. A card that copies
   another node's `hs_key` (unknown key-share attack) therefore fails: the real owner of `hs` answers
-  with its own device ID in the prologue and the transcript no longer matches.
+  with its own device ID in the prologue and the transcript no longer matches. `rid` is always a
+  **device ID**, never a node ID.
+
+### 3.4 GREASE in the handshake
+
+To keep the "unknown is ignored" rules exercised, an initiator SHOULD add one GREASE value of the form
+`0xXAXA` (X in 0..e) to `offered`, to `HsInit.features`, and as a service ID with version 1 to
+`HsInit.services`. Responders MUST ignore GREASE values.
+
+- In `offered`, the GREASE value is inserted immediately **before the first entry with a larger
+  value** (at the end if there is none); the other entries keep their preference order. It is never
+  `chosen`. Example: preference `[0x0002, 0x0001]` with GREASE `0x0a0a` gives
+  `[0x0002, 0x0001, 0x0a0a]`; preference `[0x0001]` gives `[0x0001, 0x0a0a]`.
+- `HsInit.features` and `HsInit.services` are sorted ascending, the GREASE value in its numeric place.
 
 ## 4. Messages
 
@@ -169,8 +189,13 @@ XKhfs:
 
 Initialisation, both sides: `InitializeSymmetric(protocol_name)`; `MixHash(prologue)`;
 `MixHash(rs)` (the responder's `hs` public key, from the initiator's copy of the card; the responder
-uses its own). During an `hs` rotation the responder holds a current and a previous key (§7.1) and
-tries both: one extra X25519 per message 1, only while the previous key is live.
+uses its own). During an `hs` rotation the responder holds a current and a previous key (§7.1). It
+processes message 1 with the current key first; if `P1` does not decrypt, it repeats the
+initialisation and message 1 with the previous key (the pre-message changes `h`, so this is a full
+second pass, not just one X25519). If neither decrypts, that is a single failure of step 3 of §5. On
+a hidden node both passes come before the access check of step 4, which needs the decrypted `P1`.
+Vector: transcript `XKhfs-rotation-prev-hs` and `rotation` in
+[vectors/handshake-transcript.json](vectors/handshake-transcript.json).
 
 | Step | Initiator writes | Responder reads |
 |---|---|---|
@@ -206,9 +231,14 @@ Initialisation: `InitializeSymmetric(protocol_name)`; `MixHash(prologue)`; no pr
 | 2 | read `re`; `ee`; `ekem1`; `rs = DecryptAndHash(48)`; `MixKey(DH(e, rs))`; `P2` | `e`; `ee`; `ekem1`; append `EncryptAndHash(s.pub)`; `MixKey(DH(s, re))`; `EncryptAndHash(P2)` |
 | 3 | as XK message 3 | as XK message 3 |
 
+Sizes without payload: message 1 = 32 + 1184 = 1216 bytes (no key is set, so `P1` follows in
+plaintext without a tag); message 2 = 32 + 1104 + 48 + 16 = 1200 bytes; message 3 = 64 bytes.
+
 In XX, `P1` travels without Noise encryption (inside the carrier TLS only) and is not authenticated
-until message 2. Therefore `P1` in XX MUST NOT contain `access` or `early`, and SHOULD contain only
-`proto_ver`, `features`, `services` and `time`.
+until message 2. Therefore `P1` in XX MUST contain only `proto_ver`, `features`, `services`, `time`
+and optionally `pad`; a `P1` in XX that carries `access`, `known_card_seq` or `early` is malformed
+(silent close).
+`P2` in XX MUST carry the responder's **public** card (never its peer or invitation card).
 
 **Decision D22 (XX and hidden nodes).** XX reveals the responder's static key and card to anyone who
 sends message 1. A hidden node MUST NOT accept XX: it closes the stream silently, with the uniform
@@ -220,8 +250,11 @@ require a puzzle for it under load.
 - Bootstrap lists MUST give a device ID (better the whole card) for every entry. With an expected
   device ID, the initiator sets `rid` (§3.3), checks `SHA-256(card signer akey) = rid` in `P2` before
   message 3, and only then sends its card.
-- With a bare address and no expected ID, the initiator MUST use a **throwaway identity** (a fresh
-  Ed25519 key and a minimal card, never reused), and treats every card and address learned in that
+- With a bare address and no expected ID, the initiator MUST use a **throwaway identity**: a fresh
+  account key, a fresh device key, a fresh handshake static key `hs` (the Noise `s` of this session)
+  and a minimal card, all never reused. Reusing the real `hs` key would link the session to the real
+  identity, and a responder that knows the real card would reject the throwaway card under the
+  `hs_key` ↔ device ID binding of §7. The initiator treats every card and address learned in that
   session as an unverified candidate; it MUST NOT use such a session for anything but finding
   candidates to verify through other, authenticated sessions.
 
@@ -235,8 +268,9 @@ pass_id = HMAC-SHA256(S, "echofog/hs2/pass-id")[0:8]
 proof   = HMAC-SHA256(S, "echofog/hs2/access-proof" ‖ h1)
 ```
 
-`h1` is the handshake hash immediately before `EncryptAndHash(P1)` (after step 1.3). It depends on the
-fresh ephemeral `e`, so a proof cannot be replayed into another handshake. `pass_id` lets the responder
+`h1` is the handshake hash of this handshake immediately before `EncryptAndHash(P1)` (after step 1.3);
+the initiator computes the proof during message 1, after the tokens and before encrypting `P1`. It
+depends on the fresh ephemeral `e`, so a proof cannot be replayed into another handshake. `pass_id` lets the responder
 find the secret with one index lookup instead of trying every pass (v1 tried up to 10 000 HMACs under
 a write lock).
 
@@ -251,10 +285,12 @@ step 5 succeeds:
    `proof` equal in constant time.
 5. Only now: early-data processing (§10), `P2`, message 2.
 
-**Uniform failure.** A hidden node treats every failure of steps 1, 3 and 4 the same way: it keeps the
-carrier open, waits until `uniform(0.5, 3)` s have passed since message 1 arrived, and closes the
-carrier without a message. The time to close does not reveal which check failed, so a holder of an old
-card and a live masking key cannot confirm the node's identity at that address.
+**Uniform failure.** A hidden node treats every failure of steps 1, 3 and 4 the same way — malformed
+`HS_HELLO`, wrong suite, XX, an all-zero DH output, an invalid ML-KEM key, a `P1` that does not decrypt
+or is not canonical, a missing or wrong access proof: it keeps the carrier open, waits until
+`uniform(0.5, 3)` s have passed since message 1 arrived, and closes the carrier without a message.
+This rule overrides the immediate close of §11. The time to close does not reveal which check failed,
+so a holder of an old card and a live masking key cannot confirm the node's identity at that address.
 
 **Passes after the first session.** An invitation pass is for the first entry. After the first
 complete session the hidden node gives the contact, over that session, a **personal pass** (a new
@@ -280,19 +316,21 @@ A public responder under load, or for XX from strangers, answers `HS_HELLO` + me
 
 ```
 HS_RETRY payload = cookie(16) ‖ difficulty(u8)
-cookie           = HMAC-SHA256(R, "echofog/hs2/cookie" ‖ cb(32) ‖ u64(minute))[0:16]
+cookie           = HMAC-SHA256(R, "echofog/hs2/cookie" ‖ cb(32) ‖ u64be(minute))[0:16]
 ```
 
-`R` is a 32-byte responder secret rotated daily; `minute = floor(unix / 60)`. The initiator finds
-`nonce` such that
+`R` is a 32-byte responder secret rotated daily; `minute = floor(unix / 60)` of the responder's clock
+when the hello arrives. The initiator finds `nonce` such that
 
 ```
-SHA-256("echofog/hs2/puzzle" ‖ cookie(16) ‖ cb(32) ‖ u64(nonce))
+SHA-256("echofog/hs2/puzzle" ‖ cookie(16) ‖ cb(32) ‖ u64be(nonce))
 ```
 
 has at least `difficulty` leading zero bits, then sends, on the same stream 0 of the same carrier
 connection, a new `HS_HELLO` with the solution and a new message 1 (fresh ephemerals). The responder
-accepts cookies of the current and the previous minute; it is stateless until then. The puzzle bounds
+accepts cookies of the current and the previous minute, and cookies made with the previous daily `R`
+during the minute after rotation; it is stateless until then. An initiator answers at most **2**
+`HS_RETRY` per connection attempt and then gives up on that connection. The puzzle bounds
 Noise work; the carrier's TLS handshake before it is bounded by the per-source limits of §11 and, on
 QUIC, by address validation (Retry) after the L0 check. Difficulty is 0–24; an initiator MUST refuse more than 24. The default
 policy is that of v1 (0 below 25 handshakes/s, 16 below 100, 20 below 400, else 22), raised by 2 bits
@@ -309,7 +347,7 @@ message HsInit {                        // P1
   uint64 known_card_seq = 5;            // seq of the responder card the initiator holds (XK)
   uint64 time = 6;                      // initiator clock, unix seconds
   bytes early = 7;                      // 0-RTT stream (§10); XK only
-  bytes pad = 15;                       // random length, zero bytes
+  bytes pad = 15;                       // optional: zero bytes of random length; absent in vectors
 }
 message ServiceOffer { uint32 id = 1; repeated uint32 versions = 2; }   // versions ascending
 message Access { bytes pass_id = 1; bytes proof = 2; }                 // 8 and 32 bytes
@@ -344,10 +382,17 @@ message Reject {
 
 Rules:
 
+- **Encoding.** `HsInit`, `HsResp`, `HsFinish`, `Reject` and the nested messages are canonical
+  protobuf by the rules of [objects.md](objects.md) §2.3 (field order, no duplicates, no default
+  scalars, packed repeated scalars, minimal varints). A payload that breaks a rule the reader can check
+  is malformed and ends the handshake (uniform close on hidden nodes). `pad`, when present, is the
+  last field; deterministic vectors omit it (absent, not empty).
 - `proto_ver < 200` → `Reject{version, min = 200, max = 200}`. A `proto_ver` higher than the
   receiver's own is accepted; both sides then use the receiver's own behaviour (minor versions add only
   optional behaviour, a new major version has its own suite).
-- `|time − now| > 600 s` → `Reject{clock-skew}`. Both `HsInit.time` and `HsResp.time` are always sent;
+- `|time − now| > 600 s`: the responder answers `Reject{clock-skew}` in `P2`; an initiator that finds
+  `P2.time` more than 600 s off aborts **without sending message 3** (there is no message in which it
+  could send a Reject). Both `HsInit.time` and `HsResp.time` are always sent;
   each side keeps the median offset to its last 5 authenticated peers and applies it to the timestamps
   it puts into L0 first packets (wire.md §2.4, §3.2), whose window is ±300 s.
 - **Clock check (Decision D36).** A node with no authenticated peer in the last hour, or whose L0 dials
@@ -358,9 +403,20 @@ Rules:
   2 s; without such a majority it keeps its current offset. It shows the user a clock warning when the
   offset exceeds 60 s. The requests are ordinary visits to very common sites and reveal no EchoFog
   identifier.
-- `HsInit.features` and `HsInit.services` are sorted ascending, GREASE values in their numeric place.
+- `HsInit.features` and `HsInit.services` are sorted ascending, GREASE values in their numeric place
+  (§3.4).
 - The initiator MUST abort if `HsResp.features` contains a feature it did not offer, or a service
   choice is not among its offered versions.
+- **Card in P2 (XK).** `known_card_seq` is the `seq` of the responder card the initiator holds (one
+  `seq` counter covers all scopes of a node, so the value names a card). The responder includes its
+  current card of that card's scope in `P2` exactly when that card has a higher `seq`; for an
+  invitation card it includes nothing (after redemption the contact receives its peer card, §5).
+  A responder remembers the `seq` and scope of every card it issued within the last 30 days (the
+  longest card lifetime). If `known_card_seq` is 0, absent, or names no card it remembers, it sends
+  its current **public** card, or, on a hidden node (which has none), its current peer card when the
+  access proof used a personal pass and nothing when it used an invitation pass.
+- **Early data status.** Early data that is present but not processed — feature not negotiated,
+  outside the 60 s window, replayed, or not 0-RTT safe — is reported as `early_status = 2`.
 - **Card checks** (both directions): the card is a valid `echofog/card/2` object
   ([objects.md](objects.md) §3), not expired, `card.hs_key` equals the Noise remote static key
   (`rs`), its embedded device list is valid and lists the signer, and, if the initiator expects a
@@ -402,7 +458,10 @@ sid             = HKDF-SHA256(ikm = session_secret, salt = h, info = "echofog/se
 - `session_secret` keys path binding ([wire.md](wire.md) §8.2). The derivation from `ck` uses a
   non-empty input distinct from `Split`, so it is independent of the transport keys.
 - `sid` identifies the session to services that bind requests to it (mailbox FETCH and ACK).
-- Stream 0 becomes the control stream. All ephemeral secrets, `ck` and the KEM key pair are erased.
+- Order: after message 3 is processed, both sides compute `Split()` and `session_secret` from the
+  final `ck` and `sid` from the final `h`, and only then erase `ck`, all ephemeral secrets and the KEM
+  key pair. `h` is not secret and may be kept as the session's channel-binding value.
+- Stream 0 becomes the control stream.
 
 ## 10. 0-RTT data
 
@@ -437,26 +496,46 @@ DHT lookup to a known node completes in the handshake round trip.
 | Noise message | ≤ 16384 bytes |
 | card in P2/P3 | ≤ 4096 bytes |
 | retries after REJECT{suite} | 1 |
+| HS_RETRY answered per connection attempt | at most 2 |
 
-Any decryption failure, malformed token, all-zero DH output, or invalid ML-KEM key ends the handshake
-by closing the carrier connection without a message. The responder never tells the initiator which
-check failed before message 2.
+Any decryption failure, malformed token or payload, all-zero DH output, or invalid ML-KEM key ends the
+handshake by closing the carrier connection without a message — immediately on public nodes, and with
+the uniform delay of §5 on hidden nodes (that rule wins). The responder never tells the initiator
+which check failed before message 2.
 
 ## 12. Vectors
 
-[vectors/handshake.json](vectors/handshake.json) contains, computed by the reference generator:
+[vectors/handshake.json](vectors/handshake.json) contains the pieces: the initial `h` and `ck` for both
+protocol names; three prologues (XK to a public card, XK to a hidden node's invitation card with GREASE
+in `offered`, XX to a bare address) with `h` after `MixHash(prologue)` and the XK pre-message; the
+payload encodings; an access-proof example; the puzzle with a real cookie; and `transcript_inputs`,
+the keys of all transcripts.
 
-- the initial `h` and `ck` for both protocol names, and `h` after `MixHash(prologue)` and the XK
-  pre-message for a fixed prologue and static key;
-- the encoding of `HS_HELLO` (with and without a puzzle solution), of the prologue, and of `HsInit`,
-  `HsResp`, `HsFinish` payloads;
-- `pass_id` and `proof` for a fixed secret and `h1`; a puzzle hash and a solution for difficulty 12;
-- the post-handshake derivations (`session_secret`, `sid`) from fixed `ck` and `h`.
+[vectors/handshake-transcript.json](vectors/handshake-transcript.json) is **normative**. It has three
+application-valid transcripts, every payload and card check of §7 passing:
 
-**Decision D15 (handshake transcript vectors).** Full message-by-message transcripts of XKhfs and
-XXhfs (fixed ephemerals, ML-KEM seeds and encapsulation randomness) are **to be produced with the
-implementation in step 2**. No existing Noise library implements the `hfs` tokens; values computed only
-by a new, unreviewed implementation would not be reliable reference values. The vector file states the
-inputs to use. **Exit criterion of step 2:** two independently written implementations (for example Go
-and Rust or Python, by different authors) produce byte-identical transcripts from these inputs; until
-then this specification is not final for L1.
+| Transcript | Prologue | P1 | P2 | P3 |
+|---|---|---|---|---|
+| `XKhfs` | `prologue_xk` (public card, `offered = [0x0001, 0x0002]`) | `HsInit_xk`: no access, `known_card_seq` = the public card's `seq` | `HsResp`: no card | `HsFinish`: the initiator's own card |
+| `XKhfs-access-proof` | `prologue_xk_hidden` (invitation card, `offered = [0x0001, 0x0a0a]`) | `HsInit_xk_hidden`: access proof over this transcript's real `h1` | `HsResp` | `HsFinish` |
+| `XXhfs` | `prologue_xx_bare_address` (`rid` zero) | `HsInit_xx`: no access, no `known_card_seq` | `HsResp_xx`: the responder's public card | `HsFinish_xx`: a throwaway identity's card |
+| `XKhfs-rotation-prev-hs` | `prologue_xk_hidden` | as `XKhfs-access-proof` | `HsResp` | `HsFinish` |
+
+The transcripts use the keys of `transcript_inputs` (the XK seeds), with two exceptions: in `XXhfs`
+the initiator static is the throwaway identity's own `hs` key (`node-card.json`
+`initiator_throwaway.hs_sk`), and in `XKhfs-rotation-prev-hs` the responder static is its previous key
+`prev_hs` (the file's `rotation` block shows the responder's failed first pass with its current key).
+Payloads have no `pad`. Integers are big-endian except the AEAD nonce counter. Each transcript's
+`final.sealed_record_example` is a [wire.md](wire.md) §8.4 record sealed with `k_i2r` (AAD with
+`sid`, `n`, class, path and pipe).
+
+**Decision D15 (handshake transcript vectors, satisfied).** What implementations must reproduce is
+the **Noise message bytes** of each message (`messages[].bytes`), every step's `h`, `ck`, `k`, `n`, and
+the final `h`, `ck`, `k_i2r`, `k_r2i`, `session_secret` and `sid`. The `HS_HELLO` and `HS_MSG` frames
+around the messages follow from [vectors/frames.json](vectors/frames.json) and are not part of the
+comparison. Two independent step-2 implementations (the main one and a clean-room one written only
+from this document) agreed byte for byte on the first transcripts, and the reference generator
+reproduced them; the transcripts were then regenerated with application-valid inputs, and both
+implementations MUST reproduce the current file before L1 is final. The generator's `-crosscheck`
+option recomputes any implementation's transcript file from its inputs and compares every
+initialisation step, every message's bytes and steps, and the final values listed above.
