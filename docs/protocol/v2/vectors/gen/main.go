@@ -356,6 +356,14 @@ func verifyEnvelope(env []byte) (label string, body []byte) {
 	return label, body
 }
 
+func rev(b []byte) []byte {
+	r := make([]byte, len(b))
+	for i := range b {
+		r[len(b)-1-i] = b[i]
+	}
+	return r
+}
+
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 // ---------------------------------------------------------------------------------------------
@@ -399,6 +407,12 @@ func leBig(b []byte) *big.Int {
 func ellForward(repr []byte) []byte {
 	rb := append([]byte(nil), repr...)
 	rb[31] &= 0x3f
+	return ellMap(rb)
+}
+
+// ellMap is map_to_curve_elligator2 of RFC 9380 §6.7.1 for curve25519 on a field element r
+// (32 bytes little-endian), returning the u-coordinate.
+func ellMap(rb []byte) []byte {
 	r := feBytes(rb)
 	r2 := new(field.Element).Square(r)
 	den := new(field.Element).Add(feOne, new(field.Element).Add(r2, r2))
@@ -674,6 +688,17 @@ func genElligator() any {
 	for _, r := range [][]byte{make([]byte, 32), pattern(32, 1), bytes.Repeat([]byte{0xff}, 32)} {
 		fwd = append(fwd, O{{"repr", hx(r)}, {"u", hx(ellForward(r))}})
 	}
+	// Cross-check of the forward map against RFC 9380 Appendix J.4.2
+	// (curve25519_XMD:SHA-512_ELL2_NU_): u[0] → Q.x, both given big-endian in the RFC.
+	var rfc []any
+	for _, v := range [][2]string{
+		{"608d892b641f0328523802a6603427c26e55e6f27e71a91a478148d45b5093cd", "51125222da5e763d97f3c10fcc92ea6860b9ccbbd2eb1285728f566721c1e65b"},
+		{"46f5b22494bfeaa7f232cc8d054be68561af50230234d7d1d63d1d9abeca8da5", "7d56d1e08cb0ccb92baf069c18c49bb5a0dcd927eff8dcf75ca921ef7f3e6eeb"},
+	} {
+		got := ellMap(rev(unhex(v[0])))
+		check(hx(rev(got)) == v[1], "RFC 9380 J.4.2 map_to_curve")
+		rfc = append(rfc, O{{"u0_be", v[0]}, {"Q.x_be", v[1]}})
+	}
 	// Torsion does not change the shared secret.
 	peer := sl.get("elligator2/peer_sk")
 	k0 := ellKeygen(sl.get("elligator2/sample0"), sl.get("elligator2/tweak0")[0])
@@ -688,6 +713,7 @@ func genElligator() any {
 		{"seeds", sl.o},
 		{"samples", samples},
 		{"forward_only", fwd},
+		{"rfc9380_crosscheck", O{{"note", "the generator checks its forward map on full field elements against RFC 9380 Appendix J.4.2 (u[0] → Q.x); values big-endian as in the RFC"}, {"cases", rfc}}},
 		{"ecdh_check", O{
 			{"peer_sk", hx(peer)},
 			{"x25519(peer_sk, sample0.dirty_pub)", hx(zDirty)},
