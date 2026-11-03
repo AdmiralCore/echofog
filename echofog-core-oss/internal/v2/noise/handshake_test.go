@@ -278,7 +278,7 @@ func TestDeterministicInputsMatchVectors(t *testing.T) {
 	var gotCT, gotSS []byte
 	encap := func(ek *mlkem.EncapsulationKey768) ([]byte, []byte, error) {
 		ss, ct, err := mlkemtest.Encapsulate768(ek, m)
-		gotCT, gotSS = ct, ss
+		gotCT, gotSS = ct, append([]byte(nil), ss...) // the handshake wipes ss
 		return ss, ct, err
 	}
 	card := loadVector(t, "node-card.json")
