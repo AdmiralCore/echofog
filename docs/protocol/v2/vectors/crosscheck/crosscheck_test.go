@@ -346,9 +346,10 @@ func TestTranscriptFileCurrent(t *testing.T) {
 	}
 }
 
-// TestNormativeTranscript compares every run with handshake-transcript.json (added only after
-// this implementation had produced its own output, commit 5b67d50): payloads, every step's
-// h/ck/k/n, h before each payload, message bytes and the finals, plus the transport example.
+// TestNormativeTranscript compares every run with handshake-transcript.json (written only after
+// this implementation had produced and committed its own output: 5b67d50, then e1d9a03):
+// payloads, every step's h/ck/k/n, h before each payload, message bytes, the finals, the §8.4
+// sealed-record example and the rotation block (the responder's failed first pass).
 func TestNormativeTranscript(t *testing.T) {
 	norm := loadJSON("handshake-transcript.json")
 	byName := map[string]scenario{}
@@ -409,9 +410,26 @@ func TestNormativeTranscript(t *testing.T) {
 		for k, v := range map[string][]byte{"h": ini.H, "ck": ini.CK, "k_i2r": ini.KI2R, "k_r2i": ini.KR2I, "session_secret": ini.SessionSecret, "sid": ini.SID} {
 			eqHex(t, name+" final "+k, v, fin[k].(string))
 		}
-		te := fin["transport_example"].(map[string]any)
-		ct := aeadSeal(ini.KI2R, uint64(te["n"].(float64)), fromHex(te["ad"].(string)), fromHex(te["plaintext"].(string)))
-		eqHex(t, name+" transport example", ct, te["ciphertext"].(string))
+		// §8.4 record with the normative example's plaintext (our own example used another one).
+		se := fin["sealed_record_example"].(map[string]any)
+		aad, sealed, record := sealRecord(ini.KI2R, ini.SID, uint64(se["n"].(float64)), 1, 0, 0, fromHex(se["plaintext"].(string)))
+		eqHex(t, name+" sealed aad", aad, se["aad"].(string))
+		eqHex(t, name+" sealed", sealed, se["sealed"].(string))
+		eqHex(t, name+" record", record, se["record"].(string))
+
+		if sc.In.RespPrevS != nil {
+			_, resp, _ := run(false, sc.In)
+			fp := resp.FailedPasses[0]
+			rot := norm["rotation"].(map[string]any)
+			first := rot["first_pass"].(map[string]any)
+			eqHex(t, "rotation rs", x25519Public(sc.In.RespS), first["rs"].(string))
+			if fp[2].H != first["h_after_premessage"] || fp[5].H != first["h1"] || fp[5].CK != first["ck_after_es"] || fp[5].K != first["k_after_es"] {
+				t.Errorf("rotation first pass differs")
+			}
+			second := rot["second_pass"].(map[string]any)
+			eqHex(t, "rotation second rs", x25519Public(sc.In.RespPrevS), second["rs"].(string))
+			eqHex(t, "rotation second h1", ini.Extra["h1"], second["h1"].(string))
+		}
 	}
 }
 

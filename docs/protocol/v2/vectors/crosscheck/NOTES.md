@@ -24,7 +24,7 @@ GOWORK=off go test .           # vectors, normative transcripts, round trips, ta
 - Payload protobufs are produced by a separate minimal writer (`payloads.go`) from the field
   descriptions, and checked against the `encoded` values of `handshake.json`.
 
-## Status after the spec update (merge of `spec-v2`)
+## First update (merge of `spec-v2`)
 
 The runs now use the normative inputs: `handshake.json` `transcript_inputs` (the `hs/xk/*` seeds for
 all three patterns), `prologue_xk`, `prologue_xk_hidden`, `prologue_xx_bare_address`, the payloads
@@ -51,7 +51,7 @@ comparison instead.
 
 ## Tests
 
-All 15 pass:
+All 18 pass (the list below was written for the first update; the second update adds `TestHelloChecks`, `TestXXP1Check`, `TestRotation`, and the rotation and sealed-record checks in `TestNormativeTranscript`):
 
 - `handshake.json`: `initialize_symmetric`; the three prologues and `h_after_prologue`;
   `h_after_premessage_rs`; `rid` = the device ID; `access_example`; every `payloads.*.encoded`
@@ -93,67 +93,96 @@ The quoted originals are in the history of this file (commit ee165c3).
 | A18 erase order | §9 "Order" | followed |
 | A19 hidden-node close | §5 / §11: the uniform close wins | not modelled (no timing) |
 
-## Still open or new after the update
+## B1–B7 (first update), as raised
 
-### B1. A `known_card_seq` that names no current card
+The quoted originals of B1–B7 are in the history of this file (commit 3451a16); the resolutions are
+in the table below.
 
-§7: "The responder includes its current card of that card's scope in `P2` exactly when that card has
-a higher `seq`". This assumes the responder can map any `known_card_seq` to a scope. If the value is
-the `seq` of an old card the responder no longer remembers, or `0`/absent (an XK initiator that got
-the `hs` key some other way), the scope is unknown and the rule gives no answer. **Chosen here** (the
-vectors do not exercise it): send the current public card. The spec should say what to send, and
-whether a responder must keep a `seq` → scope map for every card it has issued.
+## Second update: B1–B7 settled (merge of `spec-v2`, e1d9a03)
 
-### B2. `pad` in XX P1
+New inputs and checks:
 
-§4.2: "`P1` in XX MUST contain only `proto_ver`, `features`, `services` and `time`". §7: "`pad`, when
-present, is the last field". Read literally, the first sentence forbids `pad` in XX P1 and the second
-allows it everywhere. A responder that enforces "only" closes on a padded XX P1. The vectors have no
-`pad`. Suggest "only ... `time`, and optionally `pad`".
+- **`XXhfs`**: the initiator static is the throwaway identity's own `hs` key, seed
+  `initiator/throwaway_hs_sk` (= `node-card.json` `initiator_throwaway.hs_sk`). `HsFinish_xx`
+  carries the new throwaway card, and the card check (`hs_key` = `0x02 ‖ s`) passes.
+- **`XKhfs-rotation-prev-hs`**: the initiator's `rs` is the previous key (`card/prev_hs_sk`); other
+  inputs are as in `XKhfs-access-proof`. The responder (`xkResponder` with `xkMessage1Pass`) first
+  runs a whole pass over message 1 with its current key. When P1 does not decrypt, it runs a second
+  whole pass with `prev_hs`, and only then the access check. The failed pass is written to
+  `rotation.failed_pass`. If no previous key is held, the handshake fails (`TestRotation`).
+- **B3 responder checks** (`hello.go`, `checkHello`, run by both responders before message 1).
+  These are rejected as malformed:
+  - a repeated value in `offered`;
+  - more than one GREASE value, or an `offered` made only of GREASE;
+  - a `chosen` not in `offered`, a GREASE `chosen`, or a `chosen` that is not the first
+    non-GREASE entry;
+  - a count outside 1..8;
+  - trailing or missing bytes (the puzzle solution is accounted for).
 
-### B3. GREASE in `offered`: how many, and what the responder checks
+  After these come the suite rule (`chosen` = own most preferred suite of the intersection;
+  a hidden node supports only `0x0001`). `TestHelloChecks` covers each case.
+- **XX P1 check** (`checkXXP1`): only fields 1, 2, 3, 6 and 15 (`pad` allowed, per B2's resolution).
+- **§8.4 sealed record:** `sealRecord`, with `aad = sid ‖ u64(n) ‖ u8(class) ‖ varint(path_id) ‖
+  varint(pipe)`; it reproduces the new `kdf.json` `sealed_record` (aad, sealed, record).
 
-§3.4 says "one GREASE value". §3.1 lists the malformed hellos: repeats, `chosen` not in `offered`,
-GREASE as `chosen`, a bad count, trailing bytes. It does not say whether two different GREASE values,
-or an `offered` made only of GREASE, is malformed. It also does not say whether the responder checks
-that `chosen` is the *first non-GREASE* entry, or only that it is its own most-preferred suite in the
-intersection. **Chosen here:** the builder emits at most one GREASE value. This cross-check has no
-responder-side `HS_HELLO` parser.
+The regenerated `transcript-cleanroom.json` was committed (e1d9a03) before the comparison.
 
-### B4. The throwaway identity reuses the initiator's `hs` key
+### Comparison with `handshake-transcript.json`
 
-§4.2 defines a throwaway identity as "a fresh Ed25519 key and a minimal card, never reused"; it does
-not say that the X25519 `hs` key must be fresh too. In the vectors, `initiator_throwaway` has the
-same `hs_key` as `initiator` (`x25519(hs/xk/initiator_s)`), and the XX transcript sends that key as
-`s`. This causes two problems:
+| transcript | prologue, P1–P3 | steps h/ck/k/n | h before payloads | message bytes | finals | sealed record example |
+|---|---|---|---|---|---|---|
+| `XKhfs` | equal | 14/14 | equal | 3/3 | equal | equal (see below) |
+| `XKhfs-access-proof` | equal | 14/14 | equal | 3/3 | equal | equal |
+| `XXhfs` | equal | 14/14 | equal | 3/3 | equal | equal |
+| `XKhfs-rotation-prev-hs` | equal | 14/14 | equal | 3/3 | equal | equal |
 
-- (a) the `hs` key links the throwaway session to the real identity, which defeats its purpose;
-- (b) §7 "hs_key ↔ device ID binding" says "A card whose `hs_key` ... is already bound to a
-  different signer is rejected and counted as abuse". A responder that has seen the real `initiator`
-  card rejects the throwaway card and counts it as abuse.
+The `rotation` block also matches. In the first pass, `rs`, `h_after_premessage`, `h1`,
+`ck_after_es` and `k_after_es` equal our failed pass after `es`. In the second pass, `rs` and `h1`
+equal ours.
 
-The transcript bytes are fine, because shared keys are a deliberate vector choice. But the spec should
-require a fresh `hs` key for a throwaway identity, and the vector note should say that the shared key
-is a test shortcut a real node would refuse.
+**No value differs.** One input differs by choice only: before seeing the normative file I sealed
+the `kdf.json` plaintext (`…hello over a relay`), while the normative `sealed_record_example` seals
+`…hello over a sealed path` (MUX_STREAM on stream 4). Same `n` = 0, class 1, path 0, pipe 0.
+Recomputed with the normative plaintext, the AAD, sealed bytes and record match for all four
+transcripts (`TestNormativeTranscript`). Our JSON keeps our own example, labelled as a choice.
 
-### B5. The AD of `transport_example` is not the wire.md §8.4 record AD
+### B1–B7: how they were settled
 
-`final.transport_example` uses `ad = sid`, while wire.md §8.4 seals records with
-`aad = sid(16) ‖ n(8)` (reproduced from `kdf.json` `sealed_record`). The vector's note says it checks
-only the keys and the nonce format, so this is not a contradiction. Still, a reader who copies it as
-a record format gets it wrong; a pointer to §8.4 would help.
+| | Resolution | Here |
+|---|---|---|
+| B1 unknown `known_card_seq` | §7: remember 30 days of cards; else public card, or on a hidden node peer card (personal pass) / nothing (invitation pass) | public-node fallback implemented; the hidden-node fallback is not (no vector uses it) |
+| B2 `pad` in XX P1 | §4.2 "and optionally `pad`" | `checkXXP1` allows field 15 |
+| B3 HS_HELLO checks | §3.1 full list, then the suite rule | implemented, tested |
+| B4 throwaway `hs` | §4.2 fresh `hs` key; new vector key | followed |
+| B5 record AAD | wire.md §8.4 new AAD; `sealed_record_example` | followed |
+| B6 `-crosscheck` scope | now every step | our own test compares every step as well |
+| B7 rotation vector | `XKhfs-rotation-prev-hs` + `rotation` | reproduced |
 
-### B6. What D15 compares vs. what `-crosscheck` compares
+## Still open
 
-§12 D15: implementations must reproduce "every step's `h`, `ck`, `k`, `n`". vectors/README.md says
-that `-crosscheck` "compares the message bytes and final hash". So a file can pass `-crosscheck` and
-still differ in an intermediate `ck` or `k`. This is a gap in the tooling, not in the spec;
-`TestNormativeTranscript` compares every step.
+### C1. The rotation transcript's `known_card_seq` names a card that has the current key
 
-### B7. Key rotation (A11) has no vector
+`XKhfs-rotation-prev-hs` reuses `HsInit_xk_hidden`, so `known_card_seq` = `ts + 2`, the invitation
+card. That card's `hs_key` is the **current** key and it has no `prev_hs`. Yet the initiator uses
+`prev_hs` as `rs`. §7.1 says "Initiators always use `hs_key`". An initiator that really holds the
+`ts + 2` card would therefore use the current key. A real rotation would mean the initiator holds an
+older invitation card (a lower `seq`, whose `hs_key` was the old key). This changes no bytes,
+because the vector fixes P1 explicitly. But this transcript is not as application-consistent as the
+others: `known_card_seq` should name the old card. It also leaves open what the §7 P2 card rule then
+sends, because that old invitation card is a seq the responder must remember for 30 days.
 
-The resolved text is clear: "processes message 1 with the current key first; if `P1` does not
-decrypt, it repeats the initialisation and message 1 with the previous key". But no transcript runs
-under `prev_hs`. On a hidden node, the second pass happens before the access check, because the check
-needs the decrypted P1. A vector of message 1 under `prev_hs_sk`, with the responder's expected `h1`,
-would pin both.
+### C2. `flags & 0x02` is not in the list of malformed hellos
+
+§3.3: "The initiator MUST set the flag and `rid` in XK". The §3.1 malformation list does not include
+"XK `chosen` without flag `0x02`", so the spec does not say whether a responder must reject such a
+hello or just build its prologue with `rid` = zero (the handshake would then fail anyway, by
+transcript mismatch, if the initiator in fact bound a `rid`). `checkHello` here does not enforce it.
+Suggest: add it to the list, or state that the responder follows the flag as received.
+
+### C3. Rotation and the uniform delay
+
+§4.1: the second pass is "a full second pass", and on a hidden node both passes come before the
+access check. The extra pass costs measurable time only while a previous key is live; §5's uniform
+close (0.5–3 s from message 1) hides it on failure, but on **success** the time to message 2 shows
+whether the current key or the previous key was used. That tells an observer which card generation
+the initiator holds. It is probably harmless, but it is not mentioned.
