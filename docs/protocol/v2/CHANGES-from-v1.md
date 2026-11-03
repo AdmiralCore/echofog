@@ -100,8 +100,8 @@ required a choice. Each is stated where it applies.
 | D37 | (OQ4) Every stranger-reachable server runs REALITY (or ws2) with a cover; the installer finds the cover automatically | wire §2.1, §3.5 |
 | D38 | (OQ8) Exit speed rating from real tunnel throughput plus a user-started test; no bursts on request | services §7.1 |
 | D39 | (OQ10) Call media authenticated by batch signatures (≤ 100 ms batches, per-unit hashes, overlap with the previous batch) | services §9.3, registries §2 |
-| D41 | The core builds with `gomobile bind` (android/arm64, android/amd64, ios/arm64), without cgo, with build-tagged platform code and portable fallbacks; platform differences are a runtime profile and capability flags that never change the wire | platforms.md |
 | D40 | (OQ5) Ship with the current vault; cross-exit payment linkage is a residual risk; vault contract v2 on the payments roadmap | services §7, security §4.8 |
+| D41 | The core builds with `gomobile bind` (android/arm64, android/amd64, ios/arm64), without cgo, with build-tagged platform code and portable fallbacks; platform differences are a runtime profile and capability flags that never change the wire | platforms.md |
 
 ## 4. Open questions
 
