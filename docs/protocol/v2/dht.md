@@ -125,7 +125,7 @@ victim's address and make the network dial it (reflection, V4).
 - Nodes with `flags.unlisted` are never added, whatever the source; the responder of a `FIND_NODE`
   is added only from the card of its authenticated session.
 - The table is saved every 5 minutes with jitter as the list of cards, so after a restart addresses and
-  roles are known from signed data (S12).
+  roles are known from signed data (C12).
 - Refresh: each bucket not touched for `uniform(10, 15)` minutes is refreshed with a lookup of a random
   ID in it; a self-lookup runs at start-up.
 
