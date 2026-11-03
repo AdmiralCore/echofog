@@ -61,17 +61,27 @@ fields, so the DHT and caches can order, replace and expire objects of labels th
 
 A receiver MUST check, in this order, and reject the object on the first failure:
 
-1. `fmt = 0x02`; lengths consistent; total length within the label's limit
-   ([registries.md](registries.md) §7.1, §9); for an unknown label, the generic DHT limit.
+1. `fmt = 0x02`; `label_len` in 1..64.
 2. `alg` is a known signature algorithm. Unknown: the object is *unusable* (skipped), not malformed.
-3. Signature: Ed25519 per RFC 8032 §5.1.7 with the canonical-`S` check (`S < L`); signer keys of small
-   order MUST be rejected. Implementations MUST NOT verify over a re-encoding.
-4. `not_after > now − 60` (60 s skew) and, for a known label, `not_after − now ≤ max lifetime + 60`.
+   (This comes before the length checks because the key and signature lengths depend on `alg`.)
+3. Lengths consistent; total length within the label's envelope limit ([registries.md](registries.md)
+   §7.1, §9); for **any** unknown label (whatever its prefix), the generic limit of 2048 bytes.
+4. Signature: Ed25519 per RFC 8032 §5.1.7 with the canonical-`S` check (`S < L`). The signer key MUST
+   be a canonical point encoding (y < p) and MUST NOT be of small order. Implementations MUST NOT verify
+   over a re-encoding.
+5. `not_after > now − 60` (60 s skew) and, for a known label, `not_after − now ≤ max lifetime + 60`,
+   where the maximum is the label's largest (for `echofog/card/2` 30 days; the scope limit is applied
+   in step 7).
    For an **unknown** label the object is not rejected for a long lifetime: a store treats it as
    expiring at `min(not_after, receipt + 24 h)` (it is clipped, so objects of labels introduced later
    are still stored and forwarded by older nodes).
-5. `body` is canonical (§2.3) and parses as the label's message.
-6. Label-specific rules (sections below).
+6. `body` is canonical (§2.3) and parses as the label's message.
+7. Label-specific rules (sections below).
+
+**Schemas.** The message definitions in this specification are normative. Implementations keep a
+machine-readable copy; the reference one is `echofog-core-oss/internal/v2/objects/pb/objects.proto`,
+which also declares `ServiceOffer` ([handshake.md](handshake.md) §7) and `ShapeProfile`
+([wire.md](wire.md) §9). Where the two differ, this text wins.
 
 Objects are stored and forwarded as the exact received bytes. `object_id = SHA-256(envelope)`
 identifies a specific object; two objects with the same `(signer, label, seq)` and different bytes are
@@ -119,7 +129,7 @@ message NodeCard {
   uint32 flags = 7;                     // registries.md §11
   repeated ServiceOffer services = 8;   // ≤ 16; same message as in HsInit
   repeated uint32 features = 9;         // ≤ 64
-  ExitOffer exit = 10;                  // §4; present only with flag `exit`
+  ExitOffer exit = 10;                  // §4; live only with flag `exit`
   repeated string shop = 11;            // ≤ 3, each ≤ 200 bytes (§3.5)
   string release = 12;                  // build version, ≤ 32 bytes, e.g. "0.3.0"
   bytes  account = 13;                  // akey of the account key; REQUIRED
@@ -162,8 +172,10 @@ message SuiteParams {
   if `devices` is a valid `echofog/devices/2` object signed by the key in `account` and lists the
   signer. Then `node_id = SHA-256(account)`. A receiver keeps the newest valid device list per account
   (highest `seq`) and treats a device missing from it as no longer belonging to the account.
-- Lifetime (`not_after − now`) at most **7 days** (Decision D12: at most 30 days for invite-scoped
-  cards, §10). A node republishes when less than 2 days remain or anything changes.
+- `proto_ver` MUST be ≥ 200; a card with a lower value is invalid.
+- Lifetime (`not_after − now`) at most **7 days** for scopes `public` and `peer`, at most **30 days**
+  for scope `invite` (Decision D12); the limit depends on the `scope` field, not on a flag. A node
+  republishes when less than 2 days remain or anything changes.
 - `seq` SHOULD be `max(previous seq + 1, issue time in unix seconds)`; one counter per node covers all
   scopes.
 - **Scopes.** A node issues cards of three scopes:
@@ -172,16 +184,27 @@ message SuiteParams {
   - `peer` (1): sent only inside sessions (`HsResp.card`, `HsFinish.card`, `CARD_UPDATE`) to peers the
     node chooses; may contain everything. Receivers MUST NOT forward or publish it.
   - `invite` (2): delivered in an invitation link (§10.3); carries `invite_id`; never forwarded.
+- **Scope and flag consistency** (validity rules):
+  - a `public` card has neither `unlisted` nor `invite-scoped` and no `invite_id`;
+  - an `invite` card has an 8-byte `invite_id` and both `unlisted` and `invite-scoped`;
+  - `invite_id` and `invite-scoped` appear only in `invite` cards;
+  - an unknown `scope` value is valid, gets none of the public-scope permissions, and is never
+    published or forwarded.
+- **Exit offer and flag.** `exit` present without flag `exit`: valid, the offer is not live (ignored).
+  Flag `exit` without `exit`: invalid.
 - A receiver keeps, per (device ID, scope, `invite_id`), only the valid card with the highest `seq`, and
   never merges fields of different cards. To dial, it uses the most recent of its cards for that node.
   SNI, role, addresses and masking keys come **only** from cards (K4).
-- `role = server` cards MUST list at least one camouflaged address (`reality2-*` or `ws2`), unless
-  the card has flag `domestic-only` (then it is never dialed across a border; [wire.md](wire.md) §1).
+- A `public` card with `role = server` MUST list at least one camouflaged address (`reality2-*` or
+  `ws2`), unless it has flag `domestic-only` (then it is never dialed across a border;
+  [wire.md](wire.md) §1). `peer` and `invite` cards are exempt: they reach peers and invitees who may
+  use noise3 (wire.md §2.1).
 - `flags.unlisted`: receivers MUST NOT pass the card to third parties (PEX, DHT `NODES` replies) and
   MUST NOT publish it. Hidden and anonymous nodes set it; they issue no public card.
 - `hs_key` and `prev_hs` MUST NOT be bound to another device ID (handshake.md §7).
 - Every address with a v2 suite has a valid `mask` index; every masking key is referenced by at least
-  one address.
+  one address (counting all addresses). In the processed view (the first 8 masking keys, §2.3
+  extension rules), addresses whose key lies beyond the first 8 are dropped.
 - Size: the encoded envelope is at most 4096 bytes.
 
 ### 3.3 How a card travels
@@ -209,7 +232,9 @@ v2 ships one device per account, with the full two-level structure in place (Dec
 `shop` lets an exit operator point to a page where people can buy access or contact them.
 
 **Decision D17 (shop links).** Only `https://` URLs (including `https://t.me/…`) and
-`echofog://contact?…` links are valid; anything else invalidates the card. A client:
+`echofog://contact?…` links are valid; anything else invalidates the card. Also invalid: user
+information (`user@`), an empty host, whitespace, control characters or backslashes anywhere in the
+link. Unicode host names are allowed (clients show them in punycode). A client:
 
 - shows a shop link only with an "external resource, run by the node's operator" label, and shows the
   registrable domain in punycode (no look-alike Unicode);
@@ -254,9 +279,9 @@ envelope, so the v1 bundle signatures (`ECHOFOG_PREKEY_BINDING_V1/V2`) are retir
 ```
 message Prekeys {
   bytes  ik = 1;                        // akey (x25519): X3DH identity DH key
-  bytes  spk = 2;                       // signed prekey, X25519, 32 bytes
+  bytes  spk = 2;                       // signed prekey, raw X25519, 32 bytes (fixed by the label)
   uint64 spk_created = 3;
-  bytes  kem = 4;                       // ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
+  bytes  kem = 4;                       // raw ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
   uint64 kem_created = 5;
   repeated bytes opks = 6;              // one-time prekeys, 32 bytes each, ≤ 32; absent in DHT copies
 }
@@ -284,7 +309,9 @@ message Device {
 }
 ```
 
-Signed by the account key; lifetime ≤ 30 days; republished when less than 10 days remain. Required
+Signed by the account key; lifetime ≤ 30 days; republished when less than 10 days remain. An empty
+list is a valid object, but no card can be valid with it; entries with unknown key tags are skipped.
+Required
 from v2.0: every card embeds the current list, and the list is also stored in the DHT under the
 account's node ID. In v2.0 it lists exactly one device, flagged primary.
 
@@ -301,16 +328,18 @@ message Hint {
   bytes  relay = 1;                     // device ID of the mailbox relay
   bytes  queue = 2;                     // 16-byte public queue ID
   uint64 not_after = 3;
-  bytes  relay_card = 4;                // optional: the relay's card (unlisted relays)
+  bytes  relay_card = 4;                // optional: the relay's card (unlisted relays); at most one per object
 }
 ```
 
-Lifetime ≤ 6 hours.
+Lifetime ≤ 6 hours. The body is at most 6144 bytes, so it fits up to 4 hints and at most one relay
+card (cards are at most 4096 bytes).
 
 ## 8. Name binding (`echofog/name/2`)
 
 A person's claim to a blockchain name (`alice.ton`). The format is defined here; resolution against the
-chain is specified with the `names` service later. **v2 nodes do not store or serve this kind in the
+chain is specified with the `names` service later. Limits: body ≤ 512 bytes, envelope ≤ 768 bytes.
+**v2 nodes do not store or serve this kind in the
 DHT** ([dht.md](dht.md) §2): without an on-chain check, any signer could squat a name.
 
 ```
@@ -373,9 +402,17 @@ project maintainer holds the three private keys, each on separate offline media.
 - **seq.** The envelope `seq` MUST equal `released_at`; a reader rejects a manifest with
   `released_at > now + 86400` or `released_at` ≤ that of the last applied manifest. A manifest cannot
   block later ones with a huge `seq`.
-- **Discovery.** Manifests are stored in the DHT under the fixed key
-  `SHA-256("echofog/dht2/release")`, whatever key signed them ([dht.md](dht.md) §2), so rotated keys
-  are found by old builds; servers also return the latest manifest in pex/2.
+- **Discovery.** Manifests are stored in the DHT under the key
+  `SHA-256("echofog/dht2/release" ‖ u32(day))`, independent of the signing key ([dht.md](dht.md) §2),
+  so rotated keys are found by old builds; servers also return the latest manifest in pex/2.
+- **Counts.** `next_keys` ≤ 3 is a processing limit (the first 3 are used). Revoked keys and
+  co-signatures with unknown algorithm tags or bad signatures are skipped, not errors.
+- **`deprecated_after`.** After `deprecated_after`, versions of the component below `recommended`
+  count as below `min_supported` (still subject to the never-lock-out rules).
+- **One major version.** A manifest may raise `min_supported` of a component by at most one major
+  version relative to the last applied manifest's effective value (for `proto`, 200 when none was
+  applied). One major version is 100 for `proto` (200 → 300) and 1 for every other component. A larger
+  raise is clipped to that step, not rejected.
 - **Never lock out.** Rules in [versioning.md](versioning.md) §5.
 - **Notify only.** Artifacts are information for the user and for package managers. A client shows
   that an update is available (and "required" below `min_supported`) with the version, the notes URL
@@ -396,6 +433,9 @@ secret64 = base64url-nopad( S ), S = 16-byte access secret
 
 - Parameters appear in the order `v`, `card`, `s`; unknown parameters are ignored; a link with
   `v` other than 2 is refused with "made by another version".
+- **Link and card must match.** A link with `s` MUST carry a card of scope `invite` whose `invite_id`
+  equals `pass_id(S)` ([handshake.md](handshake.md) §5); a link without `s` MUST carry a card of scope
+  `public`. Any other combination is refused.
 - An encoder SHOULD use the shorter of the two methods (0x00 on a tie). Decoders MUST accept both and
   MUST stop inflating after 4097 output bytes (a card is at most 4096).
 - The link is complete: the first carrier can be masked and the card verified offline. No DHT lookup
