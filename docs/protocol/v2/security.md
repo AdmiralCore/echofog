@@ -109,8 +109,10 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 14. **Group semantics** (P2–P6, P10) are application-level and unchanged by v2; chat/2 carries the group
     log as before. **Call traffic shape** (P9) is unchanged: voice and video rates and timers are
     recognisable inside camouflaged carriers.
-15. **The handshake is not cross-checked yet.** Until two independent implementations agree on the
-    transcripts (handshake.md §12), L1 interoperability is unverified.
+15. **The handshake is cross-checked, not formally verified.** Two independent step-2 implementations
+    and the reference generator agreed byte for byte on the first transcripts; the current normative
+    file (`handshake-transcript.json`, application-valid inputs) still has to be reproduced by both; there is no machine-checked proof of the XKhfs/XXhfs composition with
+    the prologue binding.
 16. **Exit result timing** still separates "open" from "closed" for a client that measures it.
 17. **Batched call authentication** lets an insider's forged media be played for up to about one batch
     plus one-way delay (~100–200 ms) before receivers detect it and stop playing unverified units from
@@ -124,7 +126,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 |---|---|---|
 | K1 | **fixed** | masking keys random and not in the ID; noise3 keys unpublished and selector keyed on ECDH; residual: active confirmation by key holders (§4.1) |
 | K2 | **partly** | carrier rules, no plaintext STUN, unobservable noise3 keys; residual: fully random first datagram class (§4.4); WebRTC-shaped carrier later |
-| K3 | **fixed** | per-layer versions, GREASE, extension-safe objects; L1 final only after independent cross-check (§4.15) |
+| K3 | **fixed** | per-layer versions, GREASE, extension-safe objects; L1 cross-checked by two independent implementations (§4.15) |
 | K4 | **partly** | signed cards, UKS binding, reflection rules fixed; DHT hiding by a many-network adversary remains (§4.9) |
 | K5 | **fixed** | XK-only hidden nodes, transcript-bound proofs, uniform failure, rendezvous IDs, personal passes; residual §4.1, §4.2 |
 | K6 | **partly** | per-exit client identity, no neighbours or public pay data, DoH; vault linkability and destination visibility remain (§4.8) |

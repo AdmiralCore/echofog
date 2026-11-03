@@ -172,7 +172,7 @@ For each component it gives:
 | `component` | `proto`, `l1:<suite id>`, `svc:<service id>`, `obj:<label>`, `l0:<suite id>` |
 | `min_supported` | below this, peers are refused (`REJECT version`) |
 | `recommended` | below this, the user is told to update |
-| `deprecated_after` | unix time after which the component is treated as below `min_supported` |
+| `deprecated_after` | unix time after which versions of the component below `recommended` count as below `min_supported` |
 
 Rules:
 

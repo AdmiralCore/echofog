@@ -562,7 +562,12 @@ func noiseInit(name string) []byte {
 
 func main() {
 	out := flag.String("out", "..", "directory to write the JSON files to")
+	cross := flag.String("crosscheck", "", "recompute the transcripts of another implementation's handshake-transcript.json and exit")
 	flag.Parse()
+	if *cross != "" {
+		crossCheck(*cross)
+		return
+	}
 	must(os.MkdirAll(*out, 0o755))
 
 	writeFile(*out, "varint.json", genVarint())
@@ -578,7 +583,9 @@ func main() {
 	card, co := genCard(maskPub3, maskPubR)
 	writeFile(*out, "node-card.json", card)
 	writeFile(*out, "link.json", genLink(co))
-	writeFile(*out, "handshake.json", genHandshake(co))
+	hsv, tr := genHandshake(co)
+	writeFile(*out, "handshake.json", hsv)
+	writeFile(*out, "handshake-transcript.json", tr)
 	writeFile(*out, "kdf.json", genKDF(co))
 	writeFile(*out, "negative.json", genNegative(co))
 }
@@ -970,6 +977,7 @@ type cardOut struct {
 	invMaskPub           []byte
 	passID               []byte
 	secret               []byte
+	initCard, throwCard  []byte
 }
 
 func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
@@ -999,9 +1007,9 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	devEnv, _, _ := envelope("echofog/devices/2", acct, fixedTime, fixedTime+30*86400, devBody)
 	verifyEnvelope(devEnv)
 
-	build := func(addrs [][]byte, masks [][]byte, scope uint64, inviteID []byte, flags uint64, withPrev bool) []byte {
+	build := func(addrs [][]byte, masks [][]byte, scope uint64, inviteID []byte, flags uint64, withPrev bool, l1 []uint64, withExit bool) []byte {
 		p := &pb{}
-		p.u(1, 200).by(2, hsAkey).packed(3, 1, 2)
+		p.u(1, 200).by(2, hsAkey).packed(3, l1...)
 		for _, a := range addrs {
 			p.by(4, a)
 		}
@@ -1012,7 +1020,11 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 		for _, id := range []uint64{1, 2, 5, 6} {
 			p.by(8, svc(id))
 		}
-		p.packed(9, 1, 3, 4, 5, 6).by(10, exit).s(11, "https://shop.example.org/echofog").s(12, "0.3.0")
+		p.packed(9, 1, 3, 4, 5, 6)
+		if withExit {
+			p.by(10, exit)
+		}
+		p.s(11, "https://shop.example.org/echofog").s(12, "0.3.0")
 		p.by(13, acct.akey())
 		if withPrev {
 			p.by(15, (&pb{}).by(1, prevHS).u(2, notAfter).b)
@@ -1025,7 +1037,7 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	pubBody := build([][]byte{
 		addr(2, "192.0.2.10", 443, "", 1, params("www.example.org", 1), 1),
 		addr(3, "198.51.100.7", 443, "", 1, params("www.example.org", 2), 0),
-	}, [][]byte{maskPubR}, 0, nil, 0b100110, false)
+	}, [][]byte{maskPubR}, 0, nil, 0b100110, false, []uint64{1, 2}, true)
 	pubEnv, pubSigned, pubSig := envelope("echofog/card/2", s, fixedTime, notAfter, pubBody)
 	verifyEnvelope(pubEnv)
 	// Peer card: adds noise3 and ws2, a second masking key and the previous hs key.
@@ -1034,15 +1046,35 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 		addr(2, "192.0.2.10", 443, "", 1, params("www.example.org", 1), 1),
 		addr(3, "198.51.100.7", 443, "", 1, params("www.example.org", 2), 0),
 		addr(4, "", 0, "wss://cdn.example.org/ef/3c9a7d", 1, params("inner.example.org", 2), 0),
-	}, [][]byte{maskPubR, maskPub3}, 1, nil, 0b100110, true)
+	}, [][]byte{maskPubR, maskPub3}, 1, nil, 0b100110, true, []uint64{1, 2}, true)
 	peerEnv, _, _ := envelope("echofog/card/2", s, fixedTime+1, notAfter, peerBody)
 	verifyEnvelope(peerEnv)
 	// Invitation card: one noise3 address with the invitation's own masking key.
 	invBody := build([][]byte{addr(1, "192.0.2.10", 443, "", 1, params("", 1), 0)},
-		[][]byte{invMaskPub}, 2, passID, 0b010001, false)
+		[][]byte{invMaskPub}, 2, passID, 0b010001, false, []uint64{1}, false)
 	invEnv, _, _ := envelope("echofog/card/2", s, fixedTime+2, fixedTime+30*86400, invBody)
 	verifyEnvelope(invEnv)
 	check(len(pubEnv) <= 4096 && len(peerEnv) <= 4096 && len(invEnv) <= 4096, "card size")
+
+	// The initiator of the handshake transcripts: a user with its own account and device, and a
+	// throwaway identity for XX to a bare address. Both use the transcript's initiator static key.
+	var isl seedLog
+	initHS := cat([]byte{0x02}, x25519Pub(sha([]byte(seedPrefix+"hs/xk/initiator_s"))))
+	userCard := func(a, d signer, seq uint64) []byte {
+		dl := (&pb{}).by(1, (&pb{}).by(1, d.akey()).u(2, fixedTime).u(3, 1).b).b
+		dlEnv, _, _ := envelope("echofog/devices/2", a, fixedTime, fixedTime+30*86400, dl)
+		body := (&pb{}).u(1, 200).by(2, initHS).packed(3, 1, 2).
+			by(8, (&pb{}).u(1, 3).packed(2, 2).b).by(8, (&pb{}).u(1, 7).packed(2, 2).b).
+			packed(9, 1, 3, 4, 5, 6).s(12, "0.3.0").by(13, a.akey()).u(16, 1).by(18, dlEnv).b
+		checkCanonicalTop(body, map[int]bool{8: true})
+		env, _, _ := envelope("echofog/card/2", d, seq, fixedTime+6*86400, body)
+		verifyEnvelope(env)
+		return env
+	}
+	iAcct, iDev := newSigner(isl.get("initiator/account_seed")), newSigner(isl.get("initiator/device_seed"))
+	tAcct, tDev := newSigner(isl.get("initiator/throwaway_account_seed")), newSigner(isl.get("initiator/throwaway_device_seed"))
+	initCard := userCard(iAcct, iDev, fixedTime)
+	throwCard := userCard(tAcct, tDev, fixedTime)
 
 	return O{
 		{"description", "One server's cards in three scopes. Public (DHT, PEX): reality2-quic and reality2-tcp only. Peer (inside sessions): adds noise3 and ws2, a second masking key and a previous hs key. Invite: one noise3 address with the invitation's own masking key, invite_id = pass_id, flags unlisted|invite-scoped. Services are ids 1, 2, 5, 6 = dht, pex, relay, exit."},
@@ -1071,11 +1103,22 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 			{"seq", fixedTime + 1}, {"envelope", hx(peerEnv)}, {"envelope_len", len(peerEnv)},
 		}},
 		{"invite", O{
-			{"fields", "noise3 192.0.2.10:443 with the invitation masking key; flags 0x11 (unlisted, invite-scoped); scope 2; invite_id = pass_id"},
+			{"fields", "noise3 192.0.2.10:443 with the invitation masking key; l1_suites [1] (a hidden node never lists XX); no exit offer; flags 0x11 (unlisted, invite-scoped); scope 2; invite_id = pass_id"},
 			{"invite_id", hx(passID)}, {"seq", fixedTime + 2}, {"not_after", fixedTime + 30*86400},
 			{"envelope", hx(invEnv)}, {"envelope_len", len(invEnv)},
 		}},
-	}, cardOut{pubEnv, peerEnv, invEnv, s, acct, hsPub, invMaskPub, passID, secret}
+		{"initiator", O{
+			{"fields", "user (role 0), flags 0, scope peer, no addresses, hs_key = x25519(hs/xk/initiator_s), l1_suites [1,2], services chat/2 files/2, own account and device list"},
+			{"seeds", isl.o},
+			{"node_id", hx(iAcct.nodeID())}, {"device_id", hx(iDev.nodeID())},
+			{"envelope", hx(initCard)}, {"envelope_len", len(initCard)},
+		}},
+		{"initiator_throwaway", O{
+			{"fields", "as initiator, under a fresh throwaway account and device (XX to a bare address, handshake.md §4.2)"},
+			{"node_id", hx(tAcct.nodeID())}, {"device_id", hx(tDev.nodeID())},
+			{"envelope", hx(throwCard)}, {"envelope_len", len(throwCard)},
+		}},
+	}, cardOut{pubEnv, peerEnv, invEnv, s, acct, hsPub, invMaskPub, passID, secret, initCard, throwCard}
 }
 
 func linkFor(env []byte) (string, []byte, []byte) {
@@ -1123,7 +1166,7 @@ func genLink(c cardOut) any {
 	}
 }
 
-func genHandshake(c cardOut) any {
+func genHandshake(c cardOut) (any, any) {
 	var sl seedLog
 	names := []string{
 		"EchoFog/2/Noise_XKhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s",
@@ -1135,40 +1178,64 @@ func genHandshake(c cardOut) any {
 		init = append(init, O{{"suite_id", i + 1}, {"protocol_name", n}, {"name_len", len(n)}, {"h0", hx(h)}, {"ck0", hx(h)}})
 	}
 	cb := sl.get("hs/cb")
-	rid := c.signer.nodeID()
+	rid := c.signer.nodeID() // the responder's device ID
+	prol := func(hello []byte, bound bool) []byte {
+		r := make([]byte, 32)
+		if bound {
+			r = rid
+		}
+		return cat([]byte("echofog/hs2/prologue"), cb, r, []byte{byte(len(hello))}, hello)
+	}
+	// XK to a public node: offered [0x0001, 0x0002] (its public card lists both).
 	hello := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0x02})
-	prologue := cat([]byte("echofog/hs2/prologue"), cb, rid, []byte{byte(len(hello))}, hello)
+	prologue := prol(hello, true)
 	h := noiseInit(names[0])
 	hP := b2s(h, prologue)
 	hRS := b2s(hP, c.hsPub)
+	// XK to a hidden node: its invitation card lists only 0x0001; GREASE 0x0a0a is inserted before the
+	// first larger entry, so it goes last.
+	helloHidden := cat([]byte{2}, u16(1), u16(0x0a0a), u16(1), []byte{0x02})
+	prologueHidden := prol(helloHidden, true)
+	// XX to a bare address: no expected device ID.
 	helloXX := cat([]byte{1}, u16(2), u16(2), []byte{0x00})
-	prologueXX := cat([]byte("echofog/hs2/prologue"), cb, make([]byte, 32), []byte{byte(len(helloXX))}, helloXX)
+	prologueXX := prol(helloXX, false)
 
-	// Payloads.
+	// Payloads (canonical protobuf, no pad).
 	h1 := sl.get("hs/h1")
-	proof := hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), h1)
-	access := (&pb{}).by(1, c.passID).by(2, proof).b
+	proofExample := hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), h1)
 	svcOffer := func(id, v uint64) []byte { return (&pb{}).u(1, id).packed(2, v).b }
-	pi := &pb{}
-	pi.u(1, 200).packed(2, 1, 3, 4, 5, 0x2a2a)
-	for _, id := range []uint64{1, 2, 3, 4, 5, 6, 7, 8} {
-		pi.by(3, svcOffer(id, 2))
+	hsInit := func(access []byte, knownSeq uint64) []byte {
+		pi := &pb{}
+		pi.u(1, 200).packed(2, 1, 3, 4, 5, 0x2a2a)
+		for _, id := range []uint64{1, 2, 3, 4, 5, 6, 7, 8} {
+			pi.by(3, svcOffer(id, 2))
+		}
+		pi.by(3, svcOffer(0x3a3a, 1)) // GREASE service
+		pi.by(4, access).u(5, knownSeq).u(6, fixedTime)
+		checkCanonicalTop(pi.b, map[int]bool{3: true})
+		return pi.b
 	}
-	pi.by(3, svcOffer(0x3a3a, 1)) // GREASE service
-	pi.by(4, access).u(5, fixedTime-86400).u(6, fixedTime)
-	hsInit := pi.b
-	checkCanonicalTop(hsInit, map[int]bool{3: true})
-
+	p1Public := hsInit(nil, fixedTime) // knows the public card (seq = ts)
+	p1Hidden := func(h1 []byte) []byte {
+		proof := hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), h1)
+		return hsInit((&pb{}).by(1, c.passID).by(2, proof).b, fixedTime+2) // knows the invitation card
+	}
+	p1XX := hsInit(nil, 0)
 	choice := func(id uint64) []byte { return (&pb{}).u(1, id).u(2, 2).b }
-	pr := &pb{}
-	pr.u(1, 200).packed(2, 1, 3, 4, 5)
-	for _, id := range []uint64{1, 2, 3} {
-		pr.by(3, choice(id))
+	hsResp := func(card []byte) []byte {
+		pr := &pb{}
+		pr.u(1, 200).packed(2, 1, 3, 4, 5)
+		for _, id := range []uint64{1, 2, 3} {
+			pr.by(3, choice(id))
+		}
+		pr.by(4, card).by(8, cat([]byte{4}, []byte{192, 0, 2, 33}, u16(51234))).u(9, fixedTime)
+		checkCanonicalTop(pr.b, map[int]bool{3: true})
+		return pr.b
 	}
-	pr.by(8, cat([]byte{4}, []byte{192, 0, 2, 33}, u16(51234))).u(9, fixedTime)
-	hsResp := pr.b
-	checkCanonicalTop(hsResp, map[int]bool{3: true})
-	hsFinish := (&pb{}).by(1, c.peer).b
+	p2 := hsResp(nil)
+	p2XX := hsResp(c.public)
+	p3 := (&pb{}).by(1, c.initCard).b
+	p3XX := (&pb{}).by(1, c.throwCard).b
 
 	// Puzzle (uses cb above).
 	rSecret := sl.get("hs/cookie_secret")
@@ -1185,7 +1252,7 @@ func genHandshake(c cardOut) any {
 	retry := frame(0x04, 0, cat(cookie, []byte{12}))
 	helloSol := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0x03}, cookie, u64(nonce))
 
-	// Inputs for the deferred transcripts (step 2). Only stdlib values derived from them are given.
+	// Transcript keys: one set for all three transcripts.
 	ie := sl.get("hs/xk/initiator_e")
 	is := sl.get("hs/xk/initiator_s")
 	re := sl.get("hs/xk/responder_e")
@@ -1199,9 +1266,56 @@ func genHandshake(c cardOut) any {
 	ss2, err := dk.Decapsulate(ct)
 	must(err)
 	check(bytes.Equal(ss, ss2), "ML-KEM round trip")
+	rsSK := sha([]byte(seedPrefix + "card/hs_sk"))
+	check(bytes.Equal(x25519Pub(rsSK), c.hsPub), "responder static")
 
-	return O{
-		{"description", "Deterministic pieces of the L1 handshake. Full XKhfs/XXhfs message transcripts are deferred (Decision D15)."},
+	base := func(name string, xk bool, prologue []byte, prologueSrc string) hsInputs {
+		pn := names[1]
+		if xk {
+			pn = names[0]
+		}
+		return hsInputs{name: name, protocolName: pn, xk: xk, prologue: prologue,
+			is: is, rs: rsSK, ie: ie, re: re, seed: kemSeed, m: m,
+			sources: map[string]string{"prologue": prologueSrc}}
+	}
+	t1 := base("XKhfs", true, prologue, "handshake.json prologue_xk.prologue")
+	t1.p1, t1.p2, t1.p3 = p1Public, p2, p3
+	t1.sources["p1"] = "handshake.json payloads.HsInit_xk.encoded (no access: a public responder; known_card_seq = the public card's seq)"
+	t1.sources["p2"] = "handshake.json payloads.HsResp.encoded (no card: the initiator's copy is current)"
+	t1.sources["p3"] = "handshake.json payloads.HsFinish.encoded (card = node-card.json initiator.envelope)"
+	t1.checks = []string{"application-valid: every payload and card check of handshake.md §7 passes"}
+	t2 := base("XKhfs-access-proof", true, prologueHidden, "handshake.json prologue_xk_hidden.prologue")
+	t2.p1Func, t2.p2, t2.p3 = p1Hidden, p2, p3
+	t2.sources["p1"] = "payloads.HsInit_xk_hidden: access{pass_id, proof = HMAC-SHA256(link.json invitation.access_secret, \"echofog/hs2/access-proof\" ‖ messages[0].h_before_payload)}, known_card_seq = the invitation card's seq"
+	t2.sources["p2"] = "handshake.json payloads.HsResp.encoded"
+	t2.sources["p3"] = "handshake.json payloads.HsFinish.encoded"
+	t2.checks = []string{"application-valid: a hidden responder holding link.json's access secret accepts P1.access; the invitation card lists only suite 0x0001"}
+	t3 := base("XXhfs", false, prologueXX, "handshake.json prologue_xx_bare_address.prologue")
+	t3.p1, t3.p2, t3.p3 = p1XX, p2XX, p3XX
+	t3.sources["p1"] = "handshake.json payloads.HsInit_xx.encoded (no access, no known_card_seq)"
+	t3.sources["p2"] = "handshake.json payloads.HsResp_xx.encoded (card = node-card.json public.envelope)"
+	t3.sources["p3"] = "handshake.json payloads.HsFinish_xx.encoded (card = node-card.json initiator_throwaway.envelope)"
+	t3.checks = []string{"same keys as the XK transcripts; bare-address prologue; the initiator uses a throwaway identity"}
+	r1, r2, r3 := runHandshake(t1), runHandshake(t2), runHandshake(t3)
+	// The live access proof verifies against the transcript's own h1.
+	check(bytes.Contains(r2.p1, hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), r2.h1)), "live access proof")
+
+	transcripts := O{
+		{"description", "Normative XKhfs and XXhfs handshake transcripts (handshake.md §12, Decision D15): every message's bytes, h/ck/k/n after every token, and the final keys. The generator's Noise code reproduced byte for byte the earlier transcripts on which the two independent step-2 implementations agreed; these application-valid transcripts must be reproduced by both again. What is compared is the Noise message bytes (messages[].bytes) and the final values; the HS_HELLO/HS_MSG frames around them follow from frames.json."},
+		{"spec", "handshake.md §2, §4, §5, §9, §12"},
+		{"conventions", []string{
+			"hex is lowercase; inputs come from handshake.json, node-card.json and link.json (sources named per field)",
+			"steps: the state after each token; 'k' is the cipher key ('' when none) and 'n' the next nonce",
+			"ML-KEM-768: KEM_GENERATE = crypto/mlkem NewDecapsulationKey768(d ‖ z); KEM_ENCAP with fixed m = FIPS 203 ML-KEM.Encaps_internal(ek, m) (Go crypto/mlkem/mlkemtest.Encapsulate768)",
+			"h_before_payload is h right before EncryptAndHash(payload); for message 1 of XK it is h1 of the access proof (handshake.md §5)",
+			"payloads carry no pad field",
+			"final.session_secret = Noise HKDF(ck, \"echofog/hs2/session-secret\").o1; final.sid = HKDF-SHA256(session_secret, salt = h, info = \"echofog/session2/id\", 16)",
+		}},
+		{"transcripts", []any{r1.o, r2.o, r3.o}},
+	}
+
+	hs := O{
+		{"description", "Deterministic pieces of the L1 handshake: initial states, prologues, payloads, access proof, puzzle. The full transcripts are in handshake-transcript.json."},
 		{"spec", "handshake.md"},
 		{"seeds", sl.o},
 		{"initialize_symmetric", init},
@@ -1209,28 +1323,39 @@ func genHandshake(c cardOut) any {
 			{"cb", hx(cb)},
 			{"rid (node-card.json device_id)", hx(rid)},
 			{"hs_hello", hx(hello)},
-			{"hs_hello_note", "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound)"},
+			{"hs_hello_note", "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder device ID bound); to the public card"},
 			{"prologue", hx(prologue)},
 			{"h_after_prologue", hx(hP)},
 			{"responder_static_rs", hx(c.hsPub)},
 			{"h_after_premessage_rs", hx(hRS)},
 		}},
+		{"prologue_xk_hidden", O{
+			{"hs_hello", hx(helloHidden)},
+			{"hs_hello_note", "offered [0x0001, 0x0a0a GREASE], chosen 0x0001, flags 0x02; to the invitation card (l1_suites [1])"},
+			{"prologue", hx(prologueHidden)},
+			{"h_after_prologue", hx(b2s(h, prologueHidden))},
+		}},
 		{"prologue_xx_bare_address", O{
 			{"hs_hello", hx(helloXX)},
 			{"prologue", hx(prologueXX)},
 			{"h_after_prologue", hx(b2s(noiseInit(names[1]), prologueXX))},
-			{"note", "no expected node ID: rid is 32 zero bytes, and the initiator must use a throwaway identity"},
+			{"note", "no expected device ID: rid is 32 zero bytes, and the initiator must use a throwaway identity"},
 		}},
-		{"access", O{
+		{"access_example", O{
+			{"note", "the HMAC with a fixed h1 seed; in a handshake h1 is the transcript's h before EncryptAndHash(P1) (handshake-transcript.json XKhfs-access-proof)"},
 			{"secret (link.json)", hx(c.secret)},
 			{"h1", hx(h1)},
 			{"pass_id", hx(c.passID)},
-			{"proof", hx(proof)},
+			{"proof", hx(proofExample)},
 		}},
 		{"payloads", O{
-			{"HsInit", O{{"fields", "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2 and GREASE service 0x3a3a version 1, access{pass_id, proof}, known_card_seq ts-86400, time ts"}, {"encoded", hx(hsInit)}}},
-			{"HsResp", O{{"fields", "proto_ver 200, features [1,3,4,5], services [(1,2),(2,2),(3,2)], observed 192.0.2.33:51234, time ts"}, {"encoded", hx(hsResp)}}},
-			{"HsFinish", O{{"fields", "card = node-card.json peer card (format illustration)"}, {"encoded_sha256", hx(sha(hsFinish))}, {"encoded_len", len(hsFinish)}}},
+			{"HsInit_xk", O{{"fields", "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2 and GREASE service 0x3a3a version 1, known_card_seq ts (the public card), time ts"}, {"encoded", hx(p1Public)}}},
+			{"HsInit_xk_hidden", O{{"fields", "as HsInit_xk plus access{pass_id, proof over the transcript's h1}, known_card_seq ts+2 (the invitation card); the encoding is in handshake-transcript.json"}, {"encoded", hx(r2.p1)}}},
+			{"HsInit_xx", O{{"fields", "as HsInit_xk without access and known_card_seq"}, {"encoded", hx(p1XX)}}},
+			{"HsResp", O{{"fields", "proto_ver 200, features [1,3,4,5], services [(1,2),(2,2),(3,2)], observed 192.0.2.33:51234, time ts; no card"}, {"encoded", hx(p2)}}},
+			{"HsResp_xx", O{{"fields", "as HsResp plus card = node-card.json public.envelope"}, {"encoded", hx(p2XX)}}},
+			{"HsFinish", O{{"fields", "card = node-card.json initiator.envelope"}, {"encoded", hx(p3)}}},
+			{"HsFinish_xx", O{{"fields", "card = node-card.json initiator_throwaway.envelope"}, {"encoded", hx(p3XX)}}},
 		}},
 		{"puzzle", O{
 			{"cb", "prologue_xk.cb"},
@@ -1243,27 +1368,23 @@ func genHandshake(c cardOut) any {
 			{"HS_RETRY_frame", hx(retry)},
 			{"HS_HELLO_with_solution_payload", hx(helloSol)},
 		}},
-		{"deferred_transcripts", O{
-			{"status", "to be produced with the implementation in step 2, by two independent implementations (handshake.md §12)"},
-			{"inputs_xk", O{
-				{"prologue", "prologue_xk.prologue"},
-				{"responder_static", "node-card.json hs_sk"},
-				{"initiator_e_sk", hx(ie)},
-				{"initiator_e_pub", hx(x25519Pub(ie))},
-				{"initiator_s_sk", hx(is)},
-				{"initiator_s_pub", hx(x25519Pub(is))},
-				{"responder_e_sk", hx(re)},
-				{"responder_e_pub", hx(x25519Pub(re))},
-				{"initiator_e1_seed_dz", hx(kemSeed)},
-				{"initiator_e1_ek_sha256", hx(sha(ek.Bytes()))},
-				{"encaps_randomness_m", hx(m)},
-				{"ekem1_ct_sha256", hx(sha(ct))},
-				{"ekem1_ss", hx(ss)},
-				{"payloads", "P1 = payloads.HsInit, P2 = payloads.HsResp, P3 = payloads.HsFinish"},
-			}},
-			{"note", "ML-KEM values are from Go crypto/mlkem (NewDecapsulationKey768) and crypto/mlkem/mlkemtest (Encapsulate768)."},
+		{"transcript_inputs", O{
+			{"note", "the keys of all three transcripts in handshake-transcript.json"},
+			{"responder_static", "node-card.json hs_sk"},
+			{"initiator_e_sk", hx(ie)},
+			{"initiator_e_pub", hx(x25519Pub(ie))},
+			{"initiator_s_sk", hx(is)},
+			{"initiator_s_pub", hx(x25519Pub(is))},
+			{"responder_e_sk", hx(re)},
+			{"responder_e_pub", hx(x25519Pub(re))},
+			{"initiator_e1_seed_dz", hx(kemSeed)},
+			{"initiator_e1_ek_sha256", hx(sha(ek.Bytes()))},
+			{"encaps_randomness_m", hx(m)},
+			{"ekem1_ct_sha256", hx(sha(ct))},
+			{"ekem1_ss", hx(ss)},
 		}},
 	}
+	return hs, transcripts
 }
 
 func leadingZeros(b []byte) int {
@@ -1430,7 +1551,7 @@ func genNegative(c cardOut) any {
 	s := c.signer
 	// Non-canonical bodies.
 	outOfOrder := cat((&pb{}).u(6, 1).b, (&pb{}).u(1, 200).b)
-	longTag := cat([]byte{0x88, 0x00}, []byte{0xc8, 0x01}) // field 1 tag as a 2-byte varint
+	longTag := cat([]byte{0x88, 0x00}, []byte{0xc8, 0x01})               // field 1 tag as a 2-byte varint
 	unpacked := cat((&pb{}).u(1, 200).b, []byte{0x48, 0x01, 0x48, 0x03}) // features as unpacked varints
 	dupScalar := cat((&pb{}).u(1, 200).b, (&pb{}).u(1, 201).b)
 	// Signature with S + L (not canonical).
