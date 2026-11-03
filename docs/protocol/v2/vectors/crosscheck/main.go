@@ -72,6 +72,7 @@ func baseScenario(id string, xx bool, hello []byte) scenario {
 		Name: name, Hello: hello, Prologue: prologue(sc.CB, rid, hello),
 		RespS: respS, InitS: initS, InitE: initE, RespE: respE,
 		KemSeed: join(d, z), EncapsM: m,
+		RespSuites: []uint16{1, 2}, // a public node, XK preferred
 	}
 	return sc
 }
@@ -139,6 +140,7 @@ func scenarios() []scenario {
 		}
 		return nil
 	}
+	hid.In.RespSuites = []uint16{1} // hidden node: XK only (D22)
 	hid.In.P2 = hsResp(p2Card(false, invSeq))
 	hid.In.P3 = hsFinish(initiatorCard)
 	hid.In.CheckP3 = checkCard(1, initDev)
@@ -146,15 +148,31 @@ func scenarios() []scenario {
 
 	// 3. XXhfs to a bare address, same keys.
 	xx := baseScenario("XXhfs", true, helloXX)
+	xx.In.InitS = useSeed(&xx, "initiator/throwaway_hs_sk") // §4.2: fresh hs for a throwaway identity
+	xx.In.CheckP1 = checkXXP1
 	p1xx := hsInit(nil, 0)
 	xx.In.P1 = func([]byte) []byte { return p1xx }
 	xx.In.P2 = hsResp(p2Card(true, 0))
 	xx.In.P3 = hsFinish(throwawayCard)
 	xx.In.CheckP2 = checkCard(4, nil) // rid is zero: no expected device ID
 	xx.In.CheckP3 = checkCard(1, throwDev)
-	xx.Notes = []string{"prologue_xx_bare_address; P1 = HsInit_xx; P2 = HsResp_xx (public card); P3 = HsFinish_xx (throwaway card). Keys = transcript_inputs (the XK seeds)."}
+	xx.Notes = []string{"prologue_xx_bare_address; P1 = HsInit_xx; P2 = HsResp_xx (public card); P3 = HsFinish_xx (throwaway card). Keys = transcript_inputs (the XK seeds) except the initiator static: the throwaway identity's own hs key (seed initiator/throwaway_hs_sk)."}
 
-	return []scenario{xk, hid, xx}
+	// 4. XKhfs to the hidden node after an hs rotation: the initiator's card has the previous key.
+	rot := baseScenario("XKhfs-rotation-prev-hs", false, helloXKHidden)
+	prev := useSeed(&rot, "card/prev_hs_sk")
+	rot.Seeds = append(rot.Seeds, seedRef{"link/access_secret (first 16 bytes)", hexs(S)})
+	rot.In.RespPrevS = prev
+	rot.In.InitRS = x25519Public(prev)
+	rot.In.RespSuites = []uint16{1}
+	rot.In.P1 = hid.In.P1
+	rot.In.CheckP1 = hid.In.CheckP1
+	rot.In.P2 = hsResp(p2Card(false, invSeq))
+	rot.In.P3 = hsFinish(initiatorCard)
+	rot.In.CheckP3 = checkCard(1, initDev)
+	rot.Notes = []string{"As XKhfs-access-proof, but the initiator's rs is the previous hs key (seed card/prev_hs_sk, node-card.json prev_hs_akey). The responder first runs message 1 with its current key (recorded in rotation.failed_pass: P1 does not decrypt), then a full second pass with the previous key; the access proof is checked after that."}
+
+	return []scenario{xk, hid, xx, rot}
 }
 
 // ---- session derivations (§9) ----------------------------------------------------------------
@@ -206,12 +224,64 @@ type scenarioOut struct {
 	Derived      map[string]string     `json:"derived"`
 	CardChecks   map[string]bool       `json:"card_checks"`
 	Final        map[string]string     `json:"final"`
+	SealedRecord sealedOut             `json:"sealed_record_example"`
+	Rotation     *rotationOut          `json:"rotation,omitempty"`
 }
+
+type rotationOut struct {
+	Note         string `json:"note"`
+	FailedPass   []Step `json:"failed_pass"`
+	CurrentHSPub string `json:"responder_current_hs_pub"`
+	PrevHSPub    string `json:"responder_prev_hs_pub"`
+}
+
+type sealedOut struct {
+	Choice    string `json:"choice"`
+	Key       string `json:"key"`
+	N         uint64 `json:"n"`
+	Class     byte   `json:"class"`
+	PathID    uint64 `json:"path_id"`
+	Pipe      uint64 `json:"pipe"`
+	Plaintext string `json:"plaintext"`
+	AAD       string `json:"aad"`
+	Sealed    string `json:"sealed"`
+	Record    string `json:"record"`
+}
+
+// sealRecord is wire.md §8.4: sealed = n(u64) ‖ AEAD(k, nonce(n), aad, pt) with
+// aad = sid ‖ u64(n) ‖ u8(class) ‖ varint(path_id) ‖ varint(pipe); record = u16(1+len) ‖ kind 1 ‖ sealed.
+func sealRecord(k, sid []byte, n uint64, class byte, pathID, pipe uint64, pt []byte) (aad, sealed, record []byte) {
+	aad = join(sid, u64be(n), []byte{class}, quicVarint(pathID), quicVarint(pipe))
+	sealed = join(u64be(n), aeadSeal(k, n, aad, pt))
+	record = join(u16be(uint16(1+len(sealed))), []byte{1}, sealed)
+	return
+}
+
+// recordPlaintext is the plaintext of kdf.json sealed_record (a MUX_STREAM frame on stream 4).
+var recordPlaintext = fromHex("180014040068656c6c6f206f76657220612072656c6179")
 
 func runScenario(sc scenario) (scenarioOut, error) {
 	ini, resp, err := run(sc.XX, sc.In)
 	if err != nil {
 		return scenarioOut{}, fmt.Errorf("%s: %w", sc.ID, err)
+	}
+	aad, sealed, record := sealRecord(ini.KI2R, ini.SID, 0, 1, 0, 0, recordPlaintext)
+	so := sealedOut{
+		Choice: "our choice of parameters: kdf.json sealed_record plaintext, n 0, class 1 (ordered record), path 0, pipe 0, key k_i2r",
+		Key:    "k_i2r", N: 0, Class: 1, PathID: 0, Pipe: 0,
+		Plaintext: hexs(recordPlaintext), AAD: hexs(aad), Sealed: hexs(sealed), Record: hexs(record),
+	}
+	var rot *rotationOut
+	if sc.In.RespPrevS != nil {
+		if len(resp.FailedPasses) != 1 {
+			return scenarioOut{}, fmt.Errorf("%s: %d failed passes", sc.ID, len(resp.FailedPasses))
+		}
+		rot = &rotationOut{
+			Note:         "responder's first pass over message 1 with its current hs key: P1 does not decrypt, so no payload step; the transcript steps are the second pass with prev_hs",
+			FailedPass:   resp.FailedPasses[0],
+			CurrentHSPub: hexs(x25519Public(sc.In.RespS)),
+			PrevHSPub:    hexs(x25519Public(sc.In.RespPrevS)),
+		}
 	}
 	cardChecks := map[string]bool{}
 	for k, v := range ini.CardOK {
@@ -258,6 +328,8 @@ func runScenario(sc scenario) (scenarioOut, error) {
 			"session_secret": hexs(ini.SessionSecret),
 			"sid":            hexs(ini.SID),
 		},
+		SealedRecord: so,
+		Rotation:     rot,
 	}, nil
 }
 

@@ -27,22 +27,25 @@ func prologue(cb, rid, hello []byte) []byte {
 
 // Inputs fixes every random choice of one handshake run.
 type Inputs struct {
-	Name      string
-	Hello     []byte
-	Prologue  []byte
-	RespS     []byte // responder hs secret
-	InitS     []byte // initiator hs secret
-	InitE     []byte
-	RespE     []byte
-	KemSeed   []byte // d ‖ z
-	EncapsM   []byte
-	P1        func(h1 []byte) []byte // h1 = h before EncryptAndHash(P1)
-	CheckP1   func(h1, p1 []byte) error
-	P2, P3    []byte
-	CheckP2   func(p2, rs []byte) error // initiator, before message 3
-	CheckP3   func(p3, rs []byte) error // responder, after message 3
-	Responder string                    // description only
-	Initiator string
+	Name       string
+	Hello      []byte
+	Prologue   []byte
+	RespS      []byte // responder hs secret
+	InitS      []byte // initiator hs secret
+	InitE      []byte
+	RespE      []byte
+	KemSeed    []byte // d ‖ z
+	EncapsM    []byte
+	P1         func(h1 []byte) []byte // h1 = h before EncryptAndHash(P1)
+	CheckP1    func(h1, p1 []byte) error
+	P2, P3     []byte
+	CheckP2    func(p2, rs []byte) error // initiator, before message 3
+	CheckP3    func(p3, rs []byte) error // responder, after message 3
+	RespPrevS  []byte                    // responder's previous hs secret during a rotation
+	RespSuites []uint16                  // responder's supported suites, most preferred first
+	InitRS     []byte                    // the hs key in the initiator's copy of the card (XK)
+	Responder  string                    // description only
+	Initiator  string
 }
 
 type Step struct {
@@ -63,6 +66,7 @@ type Result struct {
 	KI2R               []byte
 	KR2I               []byte
 	SessionSecret, SID []byte
+	FailedPasses       [][]Step // responder passes over message 1 that did not decrypt P1
 	Extra              map[string][]byte
 	P1, P2, P3         []byte
 	CardOK             map[string]bool
@@ -237,13 +241,22 @@ func xkInitiator(in Inputs, rsPub []byte, p pipe) (res Result, err error) {
 	return res, nil
 }
 
-// XKhfs responder.
-func xkResponder(in Inputs, p pipe) (res Result, err error) {
-	defer close(p.toInit)
-	res.Extra = map[string][]byte{}
-	res.CardOK = map[string]bool{}
-	L := logger{&res}
-	sPub := x25519Public(in.RespS)
+// xkMessage1Pass is the responder's reading of XK message 1 with one static key: initialisation,
+// pre-message and the tokens of message 1, ending with the P1 decryption. It is a whole pass,
+// because the pre-message MixHash(rs) changes h from the start (§4.1 rotation).
+type pass1 struct {
+	h, ck, k  []byte
+	n         uint64
+	re, re1   []byte
+	h1, p1    []byte
+	steps     []Step
+	p1Failure bool
+}
+
+func xkMessage1Pass(in Inputs, sk, m1 []byte) (ps pass1, err error) {
+	var r Result
+	L := logger{&r}
+	defer func() { ps.steps = r.Steps }()
 
 	h := initialH(in.Name)
 	ck := append([]byte(nil), h...)
@@ -252,8 +265,48 @@ func xkResponder(in Inputs, p pipe) (res Result, err error) {
 	L.log(0, "InitializeSymmetric", h, ck, k, n, "")
 	h = mixHash(h, in.Prologue)
 	L.log(0, "MixHash(prologue)", h, ck, k, n, "")
-	h = mixHash(h, sPub) // its own hs key
+	h = mixHash(h, x25519Public(sk)) // its own hs key
 	L.log(0, "MixHash(rs) pre-message", h, ck, k, n, "")
+
+	re := m1[:lenPub]
+	h = mixHash(h, re)
+	L.log(1, "e", h, ck, k, n, "")
+
+	var re1 []byte
+	re1, h, n, err = decHash(h, k, n, m1[lenPub:lenPub+lenEK]) // no key yet: plaintext
+	if err != nil {
+		return ps, err
+	}
+	L.log(1, "e1", h, ck, k, n, "")
+
+	z, err := dh(sk, re)
+	if err != nil {
+		return ps, err
+	}
+	ck, k = mixKey(ck, z)
+	n = 0
+	L.log(1, "es", h, ck, k, n, "")
+
+	h1 := append([]byte(nil), h...)
+	p1, h, n, err := decHash(h, k, n, m1[lenPub+lenEK:])
+	if err != nil {
+		ps.p1Failure = true
+		return ps, fmt.Errorf("P1: %w", err)
+	}
+	L.log(1, "payload", h, ck, k, n, "")
+	return pass1{h: h, ck: ck, k: k, n: n, re: re, re1: re1, h1: h1, p1: p1}, nil
+}
+
+// XKhfs responder.
+func xkResponder(in Inputs, p pipe) (res Result, err error) {
+	defer close(p.toInit)
+	res.Extra = map[string][]byte{}
+	res.CardOK = map[string]bool{}
+	L := logger{&res}
+
+	if err := checkHello(in.Hello, in.RespSuites); err != nil {
+		return res, err
+	}
 
 	// ---- message 1
 	m1, err := recvMsg(p.toResp)
@@ -264,32 +317,27 @@ func xkResponder(in Inputs, p pipe) (res Result, err error) {
 	if len(m1) < lenPub+lenEK+tagLen {
 		return res, errors.New("message 1 too short")
 	}
-	re := m1[:lenPub]
-	h = mixHash(h, re)
-	L.log(1, "e", h, ck, k, n, "")
-
-	var re1 []byte
-	re1, h, n, err = decHash(h, k, n, m1[lenPub:lenPub+lenEK]) // no key yet: plaintext
-	if err != nil {
-		return res, err
+	keys := [][]byte{in.RespS}
+	if in.RespPrevS != nil {
+		keys = append(keys, in.RespPrevS) // current key first, then the previous one
 	}
-	L.log(1, "e1", h, ck, k, n, "")
-
-	z, err := dh(in.RespS, re)
-	if err != nil {
-		return res, err
+	var ps pass1
+	for i, sk := range keys {
+		ps, err = xkMessage1Pass(in, sk, m1)
+		if err == nil {
+			break
+		}
+		if !ps.p1Failure || i == len(keys)-1 {
+			return res, err // one failure of §5 step 3
+		}
+		res.FailedPasses = append(res.FailedPasses, ps.steps)
 	}
-	ck, k = mixKey(ck, z)
-	n = 0
-	L.log(1, "es", h, ck, k, n, "")
-
-	h1 := append([]byte(nil), h...)
+	res.Steps = ps.steps
+	h, ck, k, n, re, re1 := ps.h, ps.ck, ps.k, ps.n, ps.re, ps.re1
+	h1 := ps.h1
 	res.Extra["h1"] = h1
-	res.P1, h, n, err = decHash(h, k, n, m1[lenPub+lenEK:])
-	if err != nil {
-		return res, fmt.Errorf("P1: %w", err)
-	}
-	L.log(1, "payload", h, ck, k, n, "")
+	res.P1 = ps.p1
+	// §5 step 4 comes only after both passes.
 	if in.CheckP1 != nil {
 		if err := in.CheckP1(h1, res.P1); err != nil {
 			return res, err
@@ -303,7 +351,7 @@ func xkResponder(in Inputs, p pipe) (res Result, err error) {
 	h = mixHash(h, ePub)
 	L.log(2, "e", h, ck, k, n, "")
 
-	z, err = dh(in.RespE, re)
+	z, err := dh(in.RespE, re)
 	if err != nil {
 		return res, err
 	}
@@ -508,6 +556,9 @@ func xxResponder(in Inputs, p pipe) (res Result, err error) {
 	res.Extra = map[string][]byte{}
 	res.CardOK = map[string]bool{}
 	L := logger{&res}
+	if err := checkHello(in.Hello, in.RespSuites); err != nil {
+		return res, err
+	}
 
 	h := initialH(in.Name)
 	ck := append([]byte(nil), h...)
@@ -661,7 +712,11 @@ func run(xx bool, in Inputs) (ini, resp Result, err error) {
 	if xx {
 		ini, ierr = xxInitiator(in, p)
 	} else {
-		ini, ierr = xkInitiator(in, x25519Public(in.RespS), p)
+		rs := in.InitRS
+		if rs == nil {
+			rs = x25519Public(in.RespS)
+		}
+		ini, ierr = xkInitiator(in, rs, p)
 	}
 	ro := <-rc
 	resp = ro.r

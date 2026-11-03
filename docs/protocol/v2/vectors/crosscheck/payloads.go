@@ -257,3 +257,37 @@ func p2Card(xx bool, knownSeq uint64) []byte {
 	}
 	return pub // unknown seq: an older card of some scope; send the current public card
 }
+
+// checkXXP1 is §4.2: P1 in XX holds only proto_ver(1), features(2), services(3), time(6) and
+// optionally pad(15).
+func checkXXP1(_, p1 []byte) error {
+	for len(p1) > 0 {
+		tag, n := binary.Uvarint(p1)
+		if n <= 0 {
+			return errors.New("XX P1: bad tag")
+		}
+		switch tag >> 3 {
+		case 1, 2, 3, 6, 15:
+		default:
+			return errors.New("XX P1: field not allowed")
+		}
+		p1 = p1[n:]
+		switch tag & 7 {
+		case 0:
+			_, m := binary.Uvarint(p1)
+			if m <= 0 {
+				return errors.New("XX P1: bad varint")
+			}
+			p1 = p1[m:]
+		case 2:
+			l, m := binary.Uvarint(p1)
+			if m <= 0 || uint64(len(p1)-m) < l {
+				return errors.New("XX P1: bad length")
+			}
+			p1 = p1[m+int(l):]
+		default:
+			return errors.New("XX P1: wire type")
+		}
+	}
+	return nil
+}

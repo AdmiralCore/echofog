@@ -169,16 +169,17 @@ func TestSessionKDF(t *testing.T) {
 	eqHex(t, "ck", ck, jget(kd, "session", "ck"))
 	eqHex(t, "h", h, jget(kd, "session", "h"))
 	k1, k2 := noiseHKDF2(ck, nil)
-	eqHex(t, "split k_i2r", k1, jget(kd, "session", "split_k_i2r (noise HKDF(ck, empty).o1)"))
-	eqHex(t, "split k_r2i", k2, jget(kd, "session", "split_k_r2i (noise HKDF(ck, empty).o2)"))
+	eqHex(t, "split k_i2r", k1, jget(kd, "session", "split_k_i2r"))
+	eqHex(t, "split k_r2i", k2, jget(kd, "session", "split_k_r2i"))
 	ss := sessionSecret(ck)
-	eqHex(t, "session_secret", ss, jget(kd, "session", "session_secret (noise HKDF(ck, label).o1)"))
+	eqHex(t, "session_secret", ss, jget(kd, "session", "session_secret"))
 	eqHex(t, "sid", sessionID(ss, h), jget(kd, "session", "sid"))
-	// sealed record: the transport key and nonce layout used with k_i2r (wire.md §8.4).
+	// sealed record with the §8.4 AAD (class 1, path 0, pipe 0).
 	pt := fromHex(jget(kd, "sealed_record", "plaintext"))
-	sid := sessionID(ss, h)
-	sealed := join(u64be(0), aeadSeal(k1, 0, join(sid, u64be(0)), pt))
+	aad, sealed, record := sealRecord(k1, sessionID(ss, h), 0, 1, 0, 0, pt)
+	eqHex(t, "sealed record aad", aad, jget(kd, "sealed_record", "aad"))
 	eqHex(t, "sealed record", sealed, jget(kd, "sealed_record", "sealed"))
+	eqHex(t, "record", record, jget(kd, "sealed_record", "record"))
 }
 
 // ---- round trips ----------------------------------------------------------------------------
@@ -411,5 +412,86 @@ func TestNormativeTranscript(t *testing.T) {
 		te := fin["transport_example"].(map[string]any)
 		ct := aeadSeal(ini.KI2R, uint64(te["n"].(float64)), fromHex(te["ad"].(string)), fromHex(te["plaintext"].(string)))
 		eqHex(t, name+" transport example", ct, te["ciphertext"].(string))
+	}
+}
+
+func TestHelloChecks(t *testing.T) {
+	ok := func(b []byte, sup []uint16) {
+		t.Helper()
+		if err := checkHello(b, sup); err != nil {
+			t.Errorf("%x rejected: %v", b, err)
+		}
+	}
+	bad := func(b []byte, sup []uint16, why string) {
+		t.Helper()
+		if checkHello(b, sup) == nil {
+			t.Errorf("%x accepted (%s)", b, why)
+		}
+	}
+	pub := []uint16{1, 2}
+	ok(helloXK, pub)
+	ok(helloXKHidden, []uint16{1})
+	ok(helloXX, pub)
+	ok(fromHex("02000100020001039dc93509d0bb2bb8c9ed254591c07fab00000000000008e2"), pub) // with puzzle solution
+	h := func(offered []uint16, chosen uint16, flags byte) []byte {
+		b := []byte{byte(len(offered))}
+		for _, v := range offered {
+			b = append(b, u16be(v)...)
+		}
+		return join(b, u16be(chosen), []byte{flags})
+	}
+	bad(h([]uint16{1, 1}, 1, 2), pub, "repeat")
+	bad(h([]uint16{1, 0x0a0a, 0x1a1a}, 1, 2), pub, "two GREASE")
+	bad(h([]uint16{0x0a0a}, 0x0a0a, 0), pub, "only GREASE")
+	bad(h([]uint16{1, 2}, 3, 2), pub, "chosen not offered")
+	bad(h([]uint16{1, 0x0a0a}, 0x0a0a, 2), pub, "GREASE chosen")
+	bad(h([]uint16{1, 2}, 2, 2), pub, "chosen not first non-GREASE")
+	bad(h(nil, 1, 0), pub, "count 0")
+	bad(h([]uint16{1, 2, 3, 4, 5, 6, 7, 8, 9}, 1, 0), pub, "count 9")
+	bad(append(append([]byte(nil), helloXK...), 0), pub, "trailing byte")
+	bad(helloXK[:len(helloXK)-1], pub, "short")
+	bad(h([]uint16{2, 1}, 2, 0), pub, "suite: responder prefers 1")
+	bad(helloXX, []uint16{1}, "hidden node: no XX")
+}
+
+func TestXXP1Check(t *testing.T) {
+	if err := checkXXP1(nil, hsInit(nil, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkXXP1(nil, append(hsInit(nil, 0), pbw(nil).bytesField(15, []byte{0, 0})...)); err != nil {
+		t.Fatal("pad refused:", err)
+	}
+	if checkXXP1(nil, hsInit(nil, 5)) == nil {
+		t.Fatal("known_card_seq accepted")
+	}
+	if checkXXP1(nil, hsInit(accessMsg(make([]byte, 8), make([]byte, 32)), 0)) == nil {
+		t.Fatal("access accepted")
+	}
+}
+
+func TestRotation(t *testing.T) {
+	var rot scenario
+	for _, sc := range scenarios() {
+		if sc.ID == "XKhfs-rotation-prev-hs" {
+			rot = sc
+		}
+	}
+	eqHex(t, "prev hs", join([]byte{2}, x25519Public(rot.In.RespPrevS)), jget(loadJSON("node-card.json"), "prev_hs_akey"))
+	ini, resp, err := run(false, rot.In)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.FailedPasses) != 1 || len(resp.FailedPasses[0]) != 6 {
+		t.Fatalf("failed passes %v", len(resp.FailedPasses))
+	}
+	// the initiator's h1 differs from the access-proof transcript (other rs), so the proof differs
+	if bytes.Equal(ini.P1, scenarios()[1].In.P1(ini.Extra["h1"])) == false {
+		t.Fatal("P1 builder mismatch")
+	}
+	// without the previous key the responder fails at P1
+	noPrev := rot.In
+	noPrev.RespPrevS = nil
+	if _, _, err := run(false, noPrev); err == nil {
+		t.Fatal("rotation accepted without prev key")
 	}
 }
