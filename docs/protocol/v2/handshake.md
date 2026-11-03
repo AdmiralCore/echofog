@@ -19,7 +19,11 @@ stream circuit. Test vectors: [vectors/handshake.json](vectors/handshake.json).
   (`ekem1`). An adversary who later breaks X25519 (A5) but not ML-KEM learns neither the initiator's
   identity (sent after `ekem1`) nor the session data protected by the Noise keys.
 - Channel binding: the carrier's TLS session is part of the prologue, so a man in the middle who
-  terminates TLS on both sides makes the handshake fail (§3.2).
+  terminates TLS on both sides makes the handshake fail (§3.2) — whenever the initiator knows whom it
+  is calling (XK, or XX with an expected node ID). An XX handshake to a bare address authenticates
+  nothing about the responder (§4.2).
+- Key binding: the expected responder node ID is in the prologue, so a card that copies another
+  node's `hs` key cannot make an initiator believe it talks to the copier (§3.3).
 - Downgrade resistance: the protocol name, the offered suite list, the features and the services are
   all in the transcript.
 - Identity hiding: XK — the responder reveals nothing that the initiator did not already have (its
@@ -74,25 +78,39 @@ HS_HELLO payload:
   n          u8            number of offered suites, 1..8
   offered    u16 × n       suite IDs, in the initiator's preference order
   chosen     u16           the suite of the following HS_MSG; MUST be in `offered`
-  flags      u8            0x01: a puzzle solution follows; other bits 0
+  flags      u8            0x01: a puzzle solution follows
+                           0x02: the prologue binds an expected responder node ID (§3.3)
+                           other bits: reserved, sent as 0, ignored on receipt
   [cookie    16 bytes      from HS_RETRY (§6)
    nonce     u64]          puzzle solution
 ```
 
 **Decision D4 (suite selection without a round trip).** Noise needs the protocol name before message 1,
-so the initiator chooses: from the intersection of its own suites and the `l1_suites` of the
-responder's card, its most preferred one; XX only if it has no card. The responder accepts the choice
-only if it is the responder's **own most preferred** suite in the intersection of `offered` and its
-supported suites, where XK counts only if the responder is the owner of the static key the initiator
-used (it always is, if message 1 decrypts). Otherwise:
+so the initiator chooses.
 
-- a public node replies `REJECT{reason = suite, detail = its suite IDs as decimal list}` and closes the
-  stream; the initiator may retry once with the best suite of that list;
-- a hidden node closes silently.
+- With a card, `offered` MUST contain exactly the suites that are both supported by the initiator and
+  listed in `l1_suites` of the initiator's copy of the responder's card, in the initiator's preference
+  order; `chosen` is the first. Without a card, `offered = chosen = XX` (plus GREASE, §3.4).
+- The responder accepts only if `chosen` is its **own most preferred** suite in `offered ∩ supported`.
+  Because `offered` is limited to the card the initiator holds, and a node keeps supporting every suite
+  listed in any of its unexpired cards, a stale card leads to an older suite that still works: hidden
+  nodes can add a suite without breaking invitations already issued.
+- Otherwise a public node replies `REJECT{reason = suite, detail}` where `detail` lists its suite IDs
+  as 4-digit lowercase hex values separated by single commas (`0001,0002`), and closes the stream;
+  the initiator may retry once. On retry it MUST send its full original `offered` list again (a forged
+  REJECT before Noise cannot narrow it), choosing the best suite of the intersection.
+- A hidden node closes silently, with the uniform delay of §5.
 
 Because `HS_HELLO` is in the prologue, an attacker who removes suites from `offered` causes a
-transcript mismatch and the handshake fails; the responder's rule stops a downgrade even if the
-initiator's choice was influenced.
+transcript mismatch and the handshake fails; because `offered` is fixed by a signed card, the
+initiator's own choice cannot be pushed down either.
+
+### 3.4 GREASE in the handshake
+
+To keep the "unknown is ignored" rules exercised, an initiator SHOULD add one GREASE value of the form
+`0xXAXA` (X in 0..e) to `offered` (never as `chosen`), to `HsInit.features`, and as a service ID with
+version 1 to `HsInit.services`. Responders MUST ignore GREASE values. Lists stay sorted with the
+GREASE value in its numeric place.
 
 ### 3.2 Channel binding
 
@@ -101,26 +119,32 @@ initiator's choice was influenced.
 | Transport | `cb` |
 |---|---|
 | any carrier (inner TLS 1.3, [wire.md](wire.md) §5.1) | TLS exporter (RFC 8446 §7.5), label `EXPORTER-echofog/hs2/channel`, empty context, length 32 |
-| relay stream circuit | `SHA-256("echofog/hs2/circuit" ‖ relay_node_id(32) ‖ u64(circuit_id))` |
+| relay stream circuit | `SHA-256("echofog/hs2/circuit" ‖ relay_node_id(32) ‖ u64(cid))`, where `cid` is the single circuit ID that the relay assigns and reports to both ends (services.md §6) |
 
-**Decision D5 (where confidentiality lives on direct paths).** On a direct path the session's frames
-are protected by the carrier's inner TLS, and Noise authenticates that TLS session through `cb`. Frames
-are not encrypted a second time (the CPU cost of a third encryption layer is what v1 already suffers
-from). Therefore:
+**Decision D5 (where confidentiality lives, revised).** On a direct path whose inner TLS negotiated
+`X25519MLKEM768`, the session's frames are protected by that TLS, and Noise authenticates the TLS
+session through `cb`; frames are not encrypted a second time (a third encryption layer costs CPU, which
+v1 already suffers from). Otherwise frames are sealed with the hybrid Noise transport keys
+([wire.md](wire.md) §8.4–§8.5):
 
-- the inner TLS MUST negotiate `X25519MLKEM768`; each side checks the negotiated group and aborts the
-  handshake otherwise, so bulk data keeps post-quantum confidentiality;
-- TLS/QUIC early data MUST NOT be used (its exporter is not the one bound here);
-- on relay paths, where there is no TLS between the ends, frames are sealed with the Noise transport
-  keys ([wire.md](wire.md) §8.4).
+- noise3 paths: the inner TLS MUST use `X25519MLKEM768` (nothing observable depends on it);
+- REALITY paths: the group mirrors the cover so the ServerHello matches it; with a classical cover
+  group the path runs in sealed mode, so bulk data keeps post-quantum confidentiality either way;
+- relay paths: always sealed;
+- TLS/QUIC early data MUST NOT be used (its exporter is not the one bound here).
 
 ### 3.3 Prologue
 
 ```
-prologue = "echofog/hs2/prologue" ‖ cb(32) ‖ u8(len(hello)) ‖ hello
+prologue = "echofog/hs2/prologue" ‖ cb(32) ‖ rid(32) ‖ u8(len(hello)) ‖ hello
 ```
 
-where `hello` is the exact `HS_HELLO` payload that precedes this message 1 on the stream.
+- `hello` is the exact `HS_HELLO` payload that precedes this message 1 on the stream.
+- `rid` is the expected responder node ID when `hello.flags & 0x02` is set, else 32 zero bytes. The
+  initiator MUST set the flag and `rid` in XK (it knows the card) and in XX whenever it expects a
+  node ID. The responder fills `rid` with **its own** node ID when the flag is set. A card that copies
+  another node's `hs_key` (unknown key-share attack) therefore fails: the real owner of `hs` answers
+  with its own node ID in the prologue and the transcript no longer matches.
 
 ## 4. Messages
 
@@ -144,7 +168,8 @@ XKhfs:
 
 Initialisation, both sides: `InitializeSymmetric(protocol_name)`; `MixHash(prologue)`;
 `MixHash(rs)` (the responder's `hs` public key, from the initiator's copy of the card; the responder
-uses its own).
+uses its own). During an `hs` rotation the responder holds a current and a previous key (§7.1) and
+tries both: one extra X25519 per message 1, only while the previous key is live.
 
 | Step | Initiator writes | Responder reads |
 |---|---|---|
@@ -185,8 +210,19 @@ until message 2. Therefore `P1` in XX MUST NOT contain `access` or `early`, and 
 `proto_ver`, `features`, `services` and `time`.
 
 **Decision D22 (XX and hidden nodes).** XX reveals the responder's static key and card to anyone who
-sends message 1. A hidden node MUST NOT accept XX: it closes the stream silently. Servers and public
-nodes accept XX only on addresses they list for bootstrap and SHOULD require a puzzle for it under load.
+sends message 1. A hidden node MUST NOT accept XX: it closes the stream silently, with the uniform
+delay of §5. Servers and public nodes accept XX only on addresses they list for bootstrap and SHOULD
+require a puzzle for it under load.
+
+**XX bootstrap rules.** XX authenticates the responder only if the initiator knows whom to expect:
+
+- Bootstrap lists MUST give a node ID (better the whole card) for every entry. With an expected node ID,
+  the initiator sets `rid` (§3.3), checks `SHA-256(card signer akey) = rid` in `P2` before message 3,
+  and only then sends its card.
+- With a bare address and no expected ID, the initiator MUST use a **throwaway identity** (a fresh
+  Ed25519 key and a minimal card, never reused), and treats every card and address learned in that
+  session as an unverified candidate; it MUST NOT use such a session for anything but finding
+  candidates to verify through other, authenticated sessions.
 
 ## 5. Hidden nodes and invitations (K5)
 
@@ -207,12 +243,25 @@ The responder MUST process message 1 in this order and MUST NOT send any byte on
 step 5 succeeds:
 
 1. `HS_HELLO` well-formed; suite rule of §3.1 (hidden: XK only).
-2. Message 1 tokens and `P1` decryption. Failure: silent close.
-3. If the node is hidden: `P1.access` present, `pass_id` found, the pass not revoked or expired, and
-   `proof` equal in constant time. Otherwise: wait `uniform(0.5, 3)` s, close silently.
-4. Puzzle check if one is demanded (§6) — public nodes only; a hidden node does not demand puzzles from
-   holders of valid passes.
+2. Puzzle (§6), public nodes only: if one is demanded, the cookie and the solution are checked here,
+   before any public-key operation; without a valid solution the answer is `HS_RETRY`.
+3. Message 1 tokens and `P1` decryption.
+4. If the node is hidden: `P1.access` present, `pass_id` found, the pass not revoked or expired, and
+   `proof` equal in constant time.
 5. Only now: early-data processing (§10), `P2`, message 2.
+
+**Uniform failure.** A hidden node treats every failure of steps 1, 3 and 4 the same way: it keeps the
+carrier open, waits until `uniform(0.5, 3)` s have passed since message 1 arrived, and closes the
+carrier without a message. The time to close does not reveal which check failed, so a holder of an old
+card and a live masking key cannot confirm the node's identity at that address.
+
+**Passes after the first session.** An invitation pass is for the first entry. After the first
+complete session the hidden node gives the contact, over that session, a **personal pass** (a new
+16-byte secret, no use limit, expiry ≤ 1 year, renewed in later sessions) and a peer-scope card with
+the node's contacts masking key ([objects.md](objects.md) §10.3). Later connections present the personal
+pass in `P1.access`. Revoking a contact deletes its personal pass; revoking an unredeemed invitation
+deletes the invitation pass and, if no other unredeemed invitation uses it, the invitation's masking
+key.
 
 The masking layer already gates hidden nodes: their noise3/REALITY keys are per invitation, so a
 stranger never reaches the handshake at all. The access proof is the second gate, which also covers
@@ -226,7 +275,7 @@ is calling.
 ## 6. Puzzle (HS_RETRY)
 
 A public responder under load, or for XX from strangers, answers `HS_HELLO` + message 1 with
-`HS_RETRY` instead of message 2, without processing message 1:
+`HS_RETRY` instead of message 2, without processing message 1 (step 2 of §5):
 
 ```
 HS_RETRY payload = cookie(16) ‖ difficulty(u8)
@@ -240,10 +289,13 @@ cookie           = HMAC-SHA256(R, "echofog/hs2/cookie" ‖ cb(32) ‖ u64(minute
 SHA-256("echofog/hs2/puzzle" ‖ cookie(16) ‖ cb(32) ‖ u64(nonce))
 ```
 
-has at least `difficulty` leading zero bits, then sends a new `HS_HELLO` with the solution and a new
-message 1 (fresh ephemerals). The responder accepts cookies of the current and the previous minute;
-it is stateless until then. Difficulty is 0–24; an initiator MUST refuse more than 24. The default
-policy is that of v1: 0 below 25 handshakes/s, 16 below 100, 20 below 400, else 22.
+has at least `difficulty` leading zero bits, then sends, on the same stream 0 of the same carrier
+connection, a new `HS_HELLO` with the solution and a new message 1 (fresh ephemerals). The responder
+accepts cookies of the current and the previous minute; it is stateless until then. The puzzle bounds
+Noise work; the carrier's TLS handshake before it is bounded by the per-source limits of §11 and, on
+QUIC, by address validation (Retry) after the L0 check. Difficulty is 0–24; an initiator MUST refuse more than 24. The default
+policy is that of v1 (0 below 25 handshakes/s, 16 below 100, 20 below 400, else 22), raised by 2 bits
+for each per-source limit of §11 that the source exceeds.
 
 ## 7. Payloads and negotiation
 
@@ -291,8 +343,15 @@ message Reject {
 
 Rules:
 
-- `proto_ver < 200` → `Reject{version, min = 200, max = 200}`.
-- `|time − now| > 300 s` → `Reject{clock-skew}` (the clock matters for cards, tokens and 0-RTT).
+- `proto_ver < 200` → `Reject{version, min = 200, max = 200}`. A `proto_ver` higher than the
+  receiver's own is accepted; both sides then use the receiver's own behaviour (minor versions add only
+  optional behaviour, a new major version has its own suite).
+- `|time − now| > 600 s` → `Reject{clock-skew}`. Both `HsInit.time` and `HsResp.time` are always sent;
+  each side keeps the median offset to its last 5 authenticated peers and applies it to the timestamps
+  it puts into L0 first packets (wire.md §2.4, §3.2), whose window is ±300 s. A node with no recent
+  peer SHOULD check its clock against the `Date` header of an HTTPS response before dialing, and
+  shows the user a clock warning when its offset exceeds 60 s.
+- `HsInit.features` and `HsInit.services` are sorted ascending, GREASE values in their numeric place.
 - The initiator MUST abort if `HsResp.features` contains a feature it did not offer, or a service
   choice is not among its offered versions.
 - **Card checks** (both directions): the card is a valid `echofog/card/2` object
@@ -300,8 +359,18 @@ Rules:
   (`rs`), and, if the initiator expects a node ID, `SHA-256(signer akey)` equals it. The responder
   checks the initiator card after message 3; the initiator checks a card in `P2` before sending
   message 3.
+- **hs_key ↔ node ID binding.** Each node remembers which node ID each `hs` key it has seen in a
+  valid card belongs to. A card whose `hs_key` (or `prev_hs`) is already bound to a different signer is
+  rejected and counted as abuse against the node that supplied it.
 - After message 3 the responder applies admission (bans, per-node and per-address limits, guard
   policy) to the now-authenticated node ID. A refusal is `REJECT` on the control stream, then close.
+
+### 7.1 Rotating the handshake key
+
+A card carries the current `hs_key` and optionally `prev_hs {key, not_after}`. When a node rotates
+`hs`, it publishes a card with the new key and the old one in `prev_hs`, with `not_after` equal to the
+latest `not_after` of any card (any scope) that listed the old key as current. Until then it accepts
+message 1 for either key. Initiators always use `hs_key`.
 
 ## 8. Rejections
 
@@ -323,8 +392,7 @@ sid             = HKDF-SHA256(ikm = session_secret, salt = h, info = "echofog/se
   ([wire.md](wire.md) §8.4).
 - `session_secret` keys path binding ([wire.md](wire.md) §8.2). The derivation from `ck` uses a
   non-empty input distinct from `Split`, so it is independent of the transport keys.
-- `h` is the session's channel-binding value for services that need one (mailbox FETCH, exit payment
-  tags).
+- `sid` identifies the session to services that bind requests to it (mailbox FETCH and ACK).
 - Stream 0 becomes the control stream. All ephemeral secrets, `ck` and the KEM key pair are erased.
 
 ## 10. 0-RTT data
@@ -337,9 +405,9 @@ DHT lookup to a known node completes in the handshake round trip.
 - `P1.early` holds the frames of **one** stream: `OPEN` with flag `EARLY`, followed by service frames.
   At most 1200 bytes. Only service operations marked 0-RTT safe ([registries.md](registries.md) §3) are
   allowed; anything else makes the responder ignore the early data (`early_status = 2`).
-- The responder processes early data only if `|P1.time − now| ≤ 60 s` and `e.pub` is not in its
-  0-RTT replay cache (kept 180 s, keyed by the initiator's ephemeral key). A hidden node processes it
-  only after the access proof.
+- The responder processes early data only if `|P1.time − now| ≤ 60 s` (after applying its learned
+  offset) and `e.pub` is not in its 0-RTT replay cache (kept 180 s, keyed by the initiator's ephemeral
+  key). A hidden node processes it only after the access proof.
 - The response goes into `P2.early` (≤ 8192 bytes), encrypted after `ee` and `ekem1` and so
   forward-secret. `early_status = 2` tells the initiator to resend the request on a normal stream.
 - Properties the application must accept: early data is not forward-secret against a later theft of
@@ -353,8 +421,9 @@ DHT lookup to a known node completes in the handshake round trip.
 |---|---|
 | wait for each handshake message | 5 s |
 | whole handshake | 10 s |
-| pre-authentication handshakes | 8 per source IP, 32 per /24 (IPv6 /56), 256 per node |
-| failures before a temporary ban of the source IP | 8 in 10 min → 15 min |
+| pre-authentication handshakes | 64 per source IP, 256 per /24 (IPv6 /48), 1024 per node |
+| above a per-source limit | public nodes: puzzle difficulty +2 bits per exceeded limit; hidden nodes: queued, then the uniform silent close |
+| pre-authentication bans | none: a source IP may be a CGNAT shared by thousands of users; bans apply only to authenticated node IDs |
 | HS_HELLO payload | ≤ 64 bytes |
 | Noise message | ≤ 16384 bytes |
 | card in P2/P3 | ≤ 4096 bytes |
@@ -379,5 +448,6 @@ check failed before message 2.
 XXhfs (fixed ephemerals, ML-KEM seeds and encapsulation randomness) are **to be produced with the
 implementation in step 2**. No existing Noise library implements the `hfs` tokens; values computed only
 by a new, unreviewed implementation would not be reliable reference values. The vector file states the
-inputs to use so that the step-2 implementation and an independent one can produce and cross-check
-them.
+inputs to use. **Exit criterion of step 2:** two independently written implementations (for example Go
+and Rust or Python, by different authors) produce byte-identical transcripts from these inputs; until
+then this specification is not final for L1.
