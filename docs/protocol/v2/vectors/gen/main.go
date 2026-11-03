@@ -607,7 +607,7 @@ func genVarint() any {
 		valid = append(valid, O{{"value", v}, {"encoded", hx(enc)}})
 	}
 	var invalid []any
-	for _, e := range []string{"4025", "8000000025", "c000000000000025", "4001", "800000ff"} {
+	for _, e := range []string{"4025", "80000025", "c000000000000025", "4001", "800000ff"} {
 		v, _, minimal := qvDecode(unhex(e))
 		check(!minimal, "non-minimal")
 		invalid = append(invalid, O{{"encoded", e}, {"would_decode_to", v}, {"reason", "non-minimal encoding: MUST be rejected"}})
@@ -738,9 +738,9 @@ func genElligator() any {
 		{"rfc9380_crosscheck", O{{"note", "the generator checks its forward map on full field elements against RFC 9380 Appendix J.4.2 (u[0] → Q.x); values big-endian as in the RFC"}, {"cases", rfc}}},
 		{"ecdh_check", O{
 			{"peer_sk", hx(peer)},
-			{"x25519(peer_sk, sample0.dirty_pub)", hx(zDirty)},
-			{"x25519(peer_sk, sample0.clean_pub)", hx(zClean)},
-			{"x25519(sample0.sk, peer_pub)", hx(zInit)},
+			{"x25519_peer_sk_sample0_dirty_pub", hx(zDirty)},
+			{"x25519_peer_sk_sample0_clean_pub", hx(zClean)},
+			{"x25519_sample0_sk_peer_pub", hx(zInit)},
 		}},
 	}
 }
@@ -978,6 +978,7 @@ type cardOut struct {
 	passID               []byte
 	secret               []byte
 	initCard, throwCard  []byte
+	throwHS              []byte
 }
 
 func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
@@ -1057,10 +1058,10 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	check(len(pubEnv) <= 4096 && len(peerEnv) <= 4096 && len(invEnv) <= 4096, "card size")
 
 	// The initiator of the handshake transcripts: a user with its own account and device, and a
-	// throwaway identity for XX to a bare address. Both use the transcript's initiator static key.
+	// throwaway identity for XX to a bare address, with its own hs key.
 	var isl seedLog
 	initHS := cat([]byte{0x02}, x25519Pub(sha([]byte(seedPrefix+"hs/xk/initiator_s"))))
-	userCard := func(a, d signer, seq uint64) []byte {
+	userCard := func(a, d signer, seq uint64, initHS []byte) []byte {
 		dl := (&pb{}).by(1, (&pb{}).by(1, d.akey()).u(2, fixedTime).u(3, 1).b).b
 		dlEnv, _, _ := envelope("echofog/devices/2", a, fixedTime, fixedTime+30*86400, dl)
 		body := (&pb{}).u(1, 200).by(2, initHS).packed(3, 1, 2).
@@ -1073,8 +1074,10 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	}
 	iAcct, iDev := newSigner(isl.get("initiator/account_seed")), newSigner(isl.get("initiator/device_seed"))
 	tAcct, tDev := newSigner(isl.get("initiator/throwaway_account_seed")), newSigner(isl.get("initiator/throwaway_device_seed"))
-	initCard := userCard(iAcct, iDev, fixedTime)
-	throwCard := userCard(tAcct, tDev, fixedTime)
+	initCard := userCard(iAcct, iDev, fixedTime, initHS)
+	// A throwaway identity has its own hs key too: reusing the real one would link the sessions.
+	throwHS := isl.get("initiator/throwaway_hs_sk")
+	throwCard := userCard(tAcct, tDev, fixedTime, cat([]byte{0x02}, x25519Pub(throwHS)))
 
 	return O{
 		{"description", "One server's cards in three scopes. Public (DHT, PEX): reality2-quic and reality2-tcp only. Peer (inside sessions): adds noise3 and ws2, a second masking key and a previous hs key. Invite: one noise3 address with the invitation's own masking key, invite_id = pass_id, flags unlisted|invite-scoped. Services are ids 1, 2, 5, 6 = dht, pex, relay, exit."},
@@ -1114,11 +1117,12 @@ func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 			{"envelope", hx(initCard)}, {"envelope_len", len(initCard)},
 		}},
 		{"initiator_throwaway", O{
-			{"fields", "as initiator, under a fresh throwaway account and device (XX to a bare address, handshake.md §4.2)"},
+			{"fields", "as initiator, under a fresh throwaway account, device and hs key (XX to a bare address, handshake.md §4.2)"},
+			{"hs_sk", hx(throwHS)},
 			{"node_id", hx(tAcct.nodeID())}, {"device_id", hx(tDev.nodeID())},
 			{"envelope", hx(throwCard)}, {"envelope_len", len(throwCard)},
 		}},
-	}, cardOut{pubEnv, peerEnv, invEnv, s, acct, hsPub, invMaskPub, passID, secret, initCard, throwCard}
+	}, cardOut{pubEnv, peerEnv, invEnv, s, acct, hsPub, invMaskPub, passID, secret, initCard, throwCard, throwHS}
 }
 
 func linkFor(env []byte) (string, []byte, []byte) {
@@ -1292,11 +1296,40 @@ func genHandshake(c cardOut) (any, any) {
 	t2.checks = []string{"application-valid: a hidden responder holding link.json's access secret accepts P1.access; the invitation card lists only suite 0x0001"}
 	t3 := base("XXhfs", false, prologueXX, "handshake.json prologue_xx_bare_address.prologue")
 	t3.p1, t3.p2, t3.p3 = p1XX, p2XX, p3XX
+	t3.is = c.throwHS
 	t3.sources["p1"] = "handshake.json payloads.HsInit_xx.encoded (no access, no known_card_seq)"
 	t3.sources["p2"] = "handshake.json payloads.HsResp_xx.encoded (card = node-card.json public.envelope)"
 	t3.sources["p3"] = "handshake.json payloads.HsFinish_xx.encoded (card = node-card.json initiator_throwaway.envelope)"
-	t3.checks = []string{"same keys as the XK transcripts; bare-address prologue; the initiator uses a throwaway identity"}
-	r1, r2, r3 := runHandshake(t1), runHandshake(t2), runHandshake(t3)
+	t3.checks = []string{"same keys as the XK transcripts except the initiator static, which is the throwaway identity's own hs key (node-card.json initiator_throwaway.hs_sk); bare-address prologue"}
+	// hs rotation on the hidden node: the initiator holds an older invitation card whose hs_key is
+	// now the node's prev_hs; the node tries its current key first, fails to open P1, and succeeds
+	// on the second pass with prev_hs, before its access check.
+	prevSK := sha([]byte(seedPrefix + "card/prev_hs_sk"))
+	t4 := base("XKhfs-rotation-prev-hs", true, prologueHidden, "handshake.json prologue_xk_hidden.prologue")
+	t4.rs = prevSK
+	t4.p1Func, t4.p2, t4.p3 = p1Hidden, p2, p3
+	t4.sources["p1"] = t2.sources["p1"]
+	t4.sources["p2"] = t2.sources["p2"]
+	t4.sources["p3"] = t2.sources["p3"]
+	t4.checks = []string{"responder_s is node-card.json prev_hs (card/prev_hs_sk); handshake-transcript.json rotation.first_pass shows the failed pass with the current hs key"}
+	r1, r2, r3, r4 := runHandshake(t1), runHandshake(t2), runHandshake(t3), runHandshake(t4)
+	// First pass of the responder with its current key (node-card.json hs_sk).
+	fp := noiseInit(names[0])
+	fpCK0 := fp
+	fp = b2s(fp, prologueHidden)
+	fpPre := b2s(fp, c.hsPub)
+	fp = b2s(fpPre, x25519Pub(ie))
+	fp = b2s(fp, ek.Bytes())
+	fpCK, fpK := noiseHKDF(fpCK0, x25519(rsSK, x25519Pub(ie)))
+	aead, err := chacha20poly1305.New(fpK)
+	must(err)
+	_, openErr := aead.Open(nil, counterNonce(0), r4.msg1[32+1184:], fp)
+	check(openErr != nil, "first pass with the current key must fail")
+	rotation := O{
+		{"note", "XKhfs-rotation-prev-hs, message 1 as received by a responder whose current hs key is node-card.json hs_sk and whose previous key is prev_hs"},
+		{"first_pass", O{{"rs", hx(c.hsPub)}, {"h_after_premessage", hx(fpPre)}, {"h1", hx(fp)}, {"ck_after_es", hx(fpCK)}, {"k_after_es", hx(fpK)}, {"p1_open", "fails: the responder starts again with prev_hs"}}},
+		{"second_pass", O{{"rs", hx(x25519Pub(prevSK))}, {"h1", hx(r4.h1)}, {"p1_open", "succeeds; only then does the access check run on P1"}}},
+	}
 	// The live access proof verifies against the transcript's own h1.
 	check(bytes.Contains(r2.p1, hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), r2.h1)), "live access proof")
 
@@ -1311,7 +1344,8 @@ func genHandshake(c cardOut) (any, any) {
 			"payloads carry no pad field",
 			"final.session_secret = Noise HKDF(ck, \"echofog/hs2/session-secret\").o1; final.sid = HKDF-SHA256(session_secret, salt = h, info = \"echofog/session2/id\", 16)",
 		}},
-		{"transcripts", []any{r1.o, r2.o, r3.o}},
+		{"transcripts", []any{r1.o, r2.o, r3.o, r4.o}},
+		{"rotation", rotation},
 	}
 
 	hs := O{
@@ -1415,7 +1449,8 @@ func genKDF(c cardOut) any {
 	pathBind := frame(0x10, 0, cat(sid, qv(2), mac))
 
 	recPT := frame(0x18, 0, cat(qv(4), []byte{0}, []byte("hello over a relay")))
-	sealed := cat(u64(0), chachaSeal(kI2R, counterNonce(0), recPT, cat(sid, u64(0))))
+	sealedAAD := cat(sid, u64(0), []byte{1}, qv(0), qv(0)) // stream record, path 0, pipe 0
+	sealed := cat(u64(0), chachaSeal(kI2R, counterNonce(0), recPT, sealedAAD))
 	record := cat(u16(uint16(1+len(sealed))), []byte{1}, sealed)
 
 	// Relay circuit channel binding and rendezvous ID.
@@ -1473,7 +1508,7 @@ func genKDF(c cardOut) any {
 		ctu := gcm.Seal(nil, nonce, pattern(40, byte(0xc0+i)), header)
 		hu := sha([]byte("echofog/call2/unit"), header, ctu)[:16]
 		hashes = append(hashes, hu...)
-		units = append(units, O{{"header (audio, epoch 0, sender 3, stream 0, gen 1)", hx(header)}, {"seq", seq},
+		units = append(units, O{{"header", hx(header)}, {"note", "audio, epoch 0, sender 3, stream 0, gen 1"}, {"seq", seq},
 			{"nonce", hx(nonce)}, {"ciphertext_and_tag", hx(ctu)}, {"h", hx(hu)}})
 	}
 	authPrefix := cat([]byte{1, 0, 3, 0, 1}, u32(7), []byte{0, 2}, hashes)
@@ -1499,9 +1534,10 @@ func genKDF(c cardOut) any {
 		{"session", O{
 			{"ck", hx(ck)},
 			{"h", hx(h)},
-			{"split_k_i2r (noise HKDF(ck, empty).o1)", hx(kI2R)},
-			{"split_k_r2i (noise HKDF(ck, empty).o2)", hx(kR2I)},
-			{"session_secret (noise HKDF(ck, label).o1)", hx(sess)},
+			{"split_k_i2r", hx(kI2R)},
+			{"split_k_r2i", hx(kR2I)},
+			{"session_secret", hx(sess)},
+			{"note", "split_k_i2r/split_k_r2i = noise HKDF(ck, empty) o1/o2; session_secret = noise HKDF(ck, \"echofog/hs2/session-secret\").o1"},
 			{"sid", hx(sid)},
 			{"k_path", hx(kPath)},
 			{"cb_new", hx(cbNew)},
@@ -1515,7 +1551,9 @@ func genKDF(c cardOut) any {
 			{"n", 0},
 			{"plaintext", hx(recPT)},
 			{"sealed", hx(sealed)},
-			{"record (u16 len ‖ kind 1 ‖ sealed)", hx(record)},
+			{"aad", hx(sealedAAD)},
+			{"record", hx(record)},
+			{"note", "aad = sid ‖ u64(n) ‖ kind 1 (ordered stream record) ‖ varint path_id 0 ‖ varint pipe 0; record = u16(len) ‖ kind 1 ‖ sealed"},
 		}},
 		{"relay2", O{
 			{"relay_node_id", hx(relayID)},
@@ -1528,19 +1566,19 @@ func genKDF(c cardOut) any {
 		{"chat2_seal", O{{"eph_sk", hx(eph)}, {"eph_pub", hx(ephPub)}, {"recipient_ik_sk", hx(ikSK)}, {"recipient_ik", hx(ik)}, {"k", hx(kSeal)},
 			{"to", hx(to)}, {"inner", hx(inner)}, {"box", hx(sealBox)}, {"SealedEnvelope", hx(envelopeChat)}}},
 		{"mailbox2", O{{"forward_eph_sk", hx(fe)}, {"forward_eph_pub", hx(fePub)}, {"hs_M", hx(hsPub)}, {"k", hx(kFwd)},
-			{"deposit (req 9, queue 90..9f, blob = chat2_seal.SealedEnvelope)", hx(deposit)}, {"sealed", hx(sealedFwd)},
+			{"deposit", hx(deposit)}, {"deposit_note", "req 9, queue 90..9f, blob = chat2_seal.SealedEnvelope"}, {"sealed", hx(sealedFwd)},
 			{"pow_bits", 12}, {"pow", pow}, {"pow_hash", hx(powHash)}}},
 		{"call2", O{{"room_secret", hx(room)}, {"epoch0_secret", hx(epoch0)}, {"sender_device_id", hx(card.nodeID())}, {"join_salt", hx(joinSalt)},
-			{"k_sender", hx(kSender)}, {"units (plaintext 40 bytes of c0.. / c1..)", units},
+			{"k_sender", hx(kSender)}, {"units", units}, {"units_note", "plaintexts are 40 bytes of c0.. and c1.."},
 			{"media_key_pub", hx(media.pub)},
-			{"CALL_AUTH (first_seq 7, prev_count 0, count 2)", O{{"signed_prefix", hx(authPrefix)}, {"sig", hx(authSig)}, {"datagram", hx(callAuth)}}}}},
+			{"call_auth", O{{"note", "first_seq 7, prev_count 0, count 2"}, {"signed_prefix", hx(authPrefix)}, {"sig", hx(authSig)}, {"datagram", hx(callAuth)}}}}},
 		{"chat2_pqxdh", O{{"dh1", hx(dh1)}, {"dh2", hx(dh2)}, {"dh3", hx(dh3)}, {"dh4", hx(dh4)}, {"kem_ss", hx(ssKEM)},
 			{"kem_key_id", hx(kemID)}, {"kem_ct_hash", hx(ctHash)}, {"note", "synthetic DH outputs; ikm = 0xff×32 ‖ DH1 ‖ DH2 ‖ DH3 ‖ DH4 ‖ SS, salt = 32 zero bytes"},
 			{"SK", hx(pqxdhSK)}}},
 		{"dht2", O{
 			{"day", day},
 			{"card_key", O{{"label", label}, {"signer_device_id", hx(card.nodeID())}, {"key", hx(dhtCard)}}},
-			{"devices_key", O{{"label", "echofog/devices/2"}, {"signer_node_id (account)", hx(c.account.nodeID())},
+			{"devices_key", O{{"label", "echofog/devices/2"}, {"signer_node_id", hx(c.account.nodeID())}, {"note", "the account key signs the device list"},
 				{"key", hx(sha([]byte("echofog/dht2/key"), u32(day), []byte{byte(len("echofog/devices/2"))}, []byte("echofog/devices/2"), c.account.nodeID()))}}},
 			{"release_key", hx(dhtRelease)},
 		}},
