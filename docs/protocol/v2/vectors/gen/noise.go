@@ -70,7 +70,7 @@ type hsInputs struct {
 type hsResult struct {
 	o         O
 	h1, h, ck []byte
-	p1        []byte
+	p1, msg1  []byte
 }
 
 func eqState(a, b *symState, what string) {
@@ -137,6 +137,7 @@ func runHandshake(in hsInputs) hsResult {
 		if num == 1 {
 			res.h1 = hBefore
 			res.p1 = pl
+			res.msg1 = msg
 		}
 	}
 	take := func(b []byte, n int) ([]byte, []byte) { return b[:n], b[n:] }
@@ -196,8 +197,11 @@ func runHandshake(in hsInputs) hsResult {
 	kI2R, kR2I := noiseHKDF(I.ck, nil)
 	sess, _ := noiseHKDF(I.ck, []byte("echofog/hs2/session-secret"))
 	sid := hkdfSHA(sess, I.h, []byte("echofog/session2/id"), 16)
-	pt := []byte("hello over a sealed path")
-	ctx := chachaSeal(kI2R, counterNonce(0), pt, sid)
+	// A wire.md §8.4 sealed record: n = 0, class 1 (ordered record), path 0, pipe 0.
+	pt := frame(0x18, 0, cat(qv(4), []byte{0}, []byte("hello over a sealed path")))
+	aad := cat(sid, u64(0), []byte{1}, qv(0), qv(0))
+	sealed := cat(u64(0), chachaSeal(kI2R, counterNonce(0), pt, aad))
+	record := cat(u16(uint16(1+len(sealed))), []byte{1}, sealed)
 	res.h, res.ck = I.h, I.ck
 
 	pattern := []string{"-> e, e1", "<- e, ee, ekem1, s, es", "-> s, se"}
@@ -226,8 +230,8 @@ func runHandshake(in hsInputs) hsResult {
 		{"final", O{
 			{"h", hx(I.h)}, {"ck", hx(I.ck)}, {"k_i2r", hx(kI2R)}, {"k_r2i", hx(kR2I)},
 			{"session_secret", hx(sess)}, {"sid", hx(sid)},
-			{"transport_example", O{{"plaintext", hx(pt)}, {"n", 0}, {"ad", hx(sid)}, {"ciphertext", hx(ctx)},
-				{"note", "ENCRYPT(k_i2r, n = 0, ad = sid, plaintext): a check of the transport keys and nonce format only, not a wire.md §8.4 record"}}},
+			{"sealed_record_example", O{{"plaintext", hx(pt)}, {"n", 0}, {"aad", hx(aad)}, {"sealed", hx(sealed)}, {"record", hx(record)},
+				{"note", "wire.md §8.4: plaintext = a MUX_STREAM frame (stream 4); aad = sid ‖ u64(n) ‖ class 1 ‖ varint path 0 ‖ varint pipe 0; sealed = u64(n) ‖ ChaCha20-Poly1305(k_i2r, nonce(n), aad, plaintext); record = u16(len) ‖ kind 1 ‖ sealed"}}},
 		}},
 		{"checks", in.checks},
 	}
@@ -235,44 +239,47 @@ func runHandshake(in hsInputs) hsResult {
 }
 
 // crossCheck recomputes every transcript of a handshake-transcript.json written by another
-// implementation from its own inputs and compares messages and final values.
+// implementation from its own inputs and compares, as Decision D15 requires, every initialisation
+// step, every message's bytes and every step's h/ck/k/n, and the final h, ck, k_i2r, k_r2i,
+// session_secret and sid.
 func crossCheck(path string) {
 	raw, err := os.ReadFile(path)
 	must(err)
 	var f struct {
-		Transcripts []struct {
-			Name         string
-			ProtocolName string `json:"protocol_name"`
-			Inputs       map[string]string
-			Messages     []struct{ Bytes string }
-			Final        map[string]any
-		}
+		Transcripts []map[string]any
 	}
 	must(json.Unmarshal(raw, &f))
+	str := func(m map[string]any, k string) string { v, _ := m[k].(string); return v }
 	for _, t := range f.Transcripts {
-		in := t.Inputs
+		name, pn := str(t, "name"), str(t, "protocol_name")
+		in := t["inputs"].(map[string]any)
 		r := runHandshake(hsInputs{
-			name: t.Name, protocolName: t.ProtocolName, xk: bytes.Contains([]byte(t.ProtocolName), []byte("XK")),
-			prologue: unhex(in["prologue"]), is: unhex(in["initiator_s_sk"]), rs: unhex(in["responder_s_sk"]),
-			ie: unhex(in["initiator_e_sk"]), re: unhex(in["responder_e_sk"]), seed: unhex(in["initiator_e1_seed_dz"]),
-			m: unhex(in["encaps_randomness_m"]), p1: unhex(in["p1"]), p2: unhex(in["p2"]), p3: unhex(in["p3"]),
+			name: name, protocolName: pn, xk: bytes.Contains([]byte(pn), []byte("XK")),
+			prologue: unhex(str(in, "prologue")), is: unhex(str(in, "initiator_s_sk")), rs: unhex(str(in, "responder_s_sk")),
+			ie: unhex(str(in, "initiator_e_sk")), re: unhex(str(in, "responder_e_sk")), seed: unhex(str(in, "initiator_e1_seed_dz")),
+			m: unhex(str(in, "encaps_randomness_m")), p1: unhex(str(in, "p1")), p2: unhex(str(in, "p2")), p3: unhex(str(in, "p3")),
 		})
-		var msgs []any
-		for _, kv := range r.o {
-			if kv.k == "messages" {
-				msgs = kv.v.([]any)
-			}
+		mineRaw, err := marshal(r.o)
+		must(err)
+		var mine map[string]any
+		must(json.Unmarshal(mineRaw, &mine))
+		same := func(a, b any) bool {
+			x, _ := json.Marshal(a)
+			y, _ := json.Marshal(b)
+			return bytes.Equal(x, y)
 		}
-		for i, m := range t.Messages {
-			var got string
-			for _, kv := range msgs[i].(O) {
-				if kv.k == "bytes" {
-					got = kv.v.(string)
-				}
-			}
-			check(got == m.Bytes, fmt.Sprintf("crosscheck %s message %d", t.Name, i+1))
+		check(same(t["initialize"], mine["initialize"]), "crosscheck "+name+" initialisation steps")
+		theirs, ours := t["messages"].([]any), mine["messages"].([]any)
+		check(len(theirs) == len(ours), "crosscheck "+name+" message count")
+		for i := range theirs {
+			a, b := theirs[i].(map[string]any), ours[i].(map[string]any)
+			check(a["bytes"] == b["bytes"], fmt.Sprintf("crosscheck %s message %d bytes", name, i+1))
+			check(same(a["steps"], b["steps"]), fmt.Sprintf("crosscheck %s message %d steps", name, i+1))
 		}
-		check(t.Final["h"] == hx(r.h), "crosscheck "+t.Name+" final h")
-		fmt.Println("crosscheck ok:", t.Name)
+		tf, mf := t["final"].(map[string]any), mine["final"].(map[string]any)
+		for _, k := range []string{"h", "ck", "k_i2r", "k_r2i", "session_secret", "sid"} {
+			check(tf[k] == mf[k], "crosscheck "+name+" final "+k)
+		}
+		fmt.Println("crosscheck ok:", name)
 	}
 }
