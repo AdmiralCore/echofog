@@ -13,7 +13,16 @@ akey = alg(u8) ‖ key bytes             (length fixed by alg, registries.md §8
 - Ed25519: `akey = 0x01 ‖ pub(32)`, 33 bytes. X25519: `0x02 ‖ pub(32)`. ML-KEM-768: `0x03 ‖ ek(1184)`.
 - Text form: `<alg name>:<base64url-nopad(key bytes)>`, e.g. `ed25519:…`. Text forms are for humans and
   logs; the wire always uses `akey`.
-- `node_id = SHA-256(akey)` of the identity key (Decision D1).
+- **Two identity keys (Decision D35).** Every person has an **account key** (Ed25519, derived from the
+  mnemonic at `m/44'/999'/account'/0'`, as v1's identity) and every installation has a **device key**
+  (Ed25519, random, generated on the device and never derived from the mnemonic). The account key signs
+  the list of its devices (§6); the device key signs everything else the device publishes (cards,
+  prekeys).
+- `node_id = SHA-256(akey)` of the **account** key (Decision D1). It is the identity contacts, links
+  and chats use, and it never changes when devices are added, replaced or removed.
+- `device_id = SHA-256(akey)` of a device key. It names one installation in the network: DHT position,
+  routing-table entry, session admission, the responder ID bound in the handshake.
+- In v2 an account has exactly one device; formats and rules already work for several.
 
 ## 2. Signed object envelope
 
@@ -113,11 +122,12 @@ message NodeCard {
   ExitOffer exit = 10;                  // §4; present only with flag `exit`
   repeated string shop = 11;            // ≤ 3, each ≤ 200 bytes (§3.5)
   string release = 12;                  // build version, ≤ 32 bytes, e.g. "0.3.0"
-  bytes  account = 13;                  // multi-device: account node ID (32); empty = this node is the account
+  bytes  account = 13;                  // akey of the account key; REQUIRED
   bytes  prekeys_hash = 14;             // SHA-256 of the current prekeys/2 envelope; optional
   HsKey  prev_hs = 15;                  // previous handshake key during a rotation (handshake.md §7.1)
   uint32 scope = 16;                    // 0 public, 1 peer, 2 invite (§3.2)
   bytes  invite_id = 17;                // scope invite: the invitation's pass_id (8 bytes)
+  bytes  devices = 18;                  // the account's current devices/2 envelope; REQUIRED
 }
 
 message HsKey {
@@ -148,7 +158,10 @@ message SuiteParams {
 
 ### 3.2 Rules
 
-- The envelope signer is the node's identity key; `node_id = SHA-256(akey)`.
+- The envelope signer is the **device** key; `device_id = SHA-256(signer akey)`. The card is valid only
+  if `devices` is a valid `echofog/devices/2` object signed by the key in `account` and lists the
+  signer. Then `node_id = SHA-256(account)`. A receiver keeps the newest valid device list per account
+  (highest `seq`) and treats a device missing from it as no longer belonging to the account.
 - Lifetime (`not_after − now`) at most **7 days** (Decision D12: at most 30 days for invite-scoped
   cards, §10). A node republishes when less than 2 days remain or anything changes.
 - `seq` SHOULD be `max(previous seq + 1, issue time in unix seconds)`; one counter per node covers all
@@ -159,14 +172,14 @@ message SuiteParams {
   - `peer` (1): sent only inside sessions (`HsResp.card`, `HsFinish.card`, `CARD_UPDATE`) to peers the
     node chooses; may contain everything. Receivers MUST NOT forward or publish it.
   - `invite` (2): delivered in an invitation link (§10.3); carries `invite_id`; never forwarded.
-- A receiver keeps, per (node ID, scope, `invite_id`), only the valid card with the highest `seq`, and
+- A receiver keeps, per (device ID, scope, `invite_id`), only the valid card with the highest `seq`, and
   never merges fields of different cards. To dial, it uses the most recent of its cards for that node.
   SNI, role, addresses and masking keys come **only** from cards (K4).
 - `role = server` cards MUST list at least one camouflaged address (`reality2-*` or `ws2`), unless
   the card has flag `domestic-only` (then it is never dialed across a border; [wire.md](wire.md) §1).
 - `flags.unlisted`: receivers MUST NOT pass the card to third parties (PEX, DHT `NODES` replies) and
   MUST NOT publish it. Hidden and anonymous nodes set it; they issue no public card.
-- `hs_key` and `prev_hs` MUST NOT be bound to another node ID (handshake.md §7).
+- `hs_key` and `prev_hs` MUST NOT be bound to another device ID (handshake.md §7).
 - Every address with a v2 suite has a valid `mask` index; every masking key is referenced by at least
   one address.
 - Size: the encoded envelope is at most 4096 bytes.
@@ -179,21 +192,17 @@ received in any of these is verified before use; an unverifiable card is dropped
 
 ### 3.4 Multi-device
 
-v2 is single-device, but the formats leave room for several devices per person:
+v2 ships one device per account, with the full two-level structure in place (Decision D35):
 
-- each device is a node with its own identity key, card, handshake key, masking keys and prekeys
-  object (bundles per device, not per person);
-- the person's **account** key signs a device list (`echofog/devices/2`, §6);
-- a device's card names the account in `account`; a verifier accepts the device as the account's only
-  if the account's current device list contains the device key;
-- chat/2 then encrypts to each device of the account (fan-out is specified later).
-
-In v2 the account key is the device key, `account` is empty, and no device list is needed.
-
-**Open question OQ1 (account and device keys).** Deriving a separate account key and device key from
-the mnemonic already in v2, and publishing a one-device list from day one, would avoid a second
-change of node IDs when multi-device ships. It changes what a contact's "identity" is and needs a
-product decision.
+- each device has its own device key, card, handshake key, masking keys and prekeys object (bundles
+  per device, not per person);
+- the account key signs the device list (`echofog/devices/2`, §6), which every card embeds;
+- a verifier accepts a device as the account's only if the account's current device list contains the
+  device key;
+- restoring the mnemonic on a new installation creates a **new device** (new random device key) that
+  the account signs into the list; the old device can be removed from it. The node ID stays the same;
+- chat/2 encrypts to the device named by the prekeys it uses; fan-out to several devices of an account
+  is specified when multi-device ships, without any change of node IDs.
 
 ### 3.5 Shop links
 
@@ -253,7 +262,9 @@ message Prekeys {
 }
 ```
 
-- `ik` is the X25519 key derived at index 1' of the account, as in v1.
+- `ik` is the device's X3DH identity DH key, X25519, random per device (v1 derived it at index 1' of
+  the account; v2 keeps that path unused so that every device has its own).
+- The envelope signer is the device key, which the account's device list vouches for.
 - KEM key ID = `SHA-256(kem)`, as in v1. SPK rotates every 7 days and old ones are kept 35 days; the
   KEM prekey likewise.
 - Lifetime ≤ 30 days. Every v2 bundle carries `kem`; a bundle without it is invalid, which removes the
@@ -273,7 +284,9 @@ message Device {
 }
 ```
 
-Signed by the account key; lifetime ≤ 30 days. Defined now; used when multi-device ships.
+Signed by the account key; lifetime ≤ 30 days; republished when less than 10 days remain. Required
+from v2.0: every card embeds the current list, and the list is also stored in the DHT under the
+account's node ID. In v2.0 it lists exactly one device, flagged primary.
 
 ## 7. Mailbox hint (`echofog/mailbox-hint/2`)
 
@@ -285,7 +298,7 @@ message MailboxHint {
   repeated Hint hints = 1;              // ≤ 4
 }
 message Hint {
-  bytes  relay = 1;                     // node ID of the mailbox relay
+  bytes  relay = 1;                     // device ID of the mailbox relay
   bytes  queue = 2;                     // 16-byte public queue ID
   uint64 not_after = 3;
   bytes  relay_card = 4;                // optional: the relay's card (unlisted relays)
@@ -347,7 +360,8 @@ message Artifact {
 }
 ```
 
-**Decision D16 (release keys, revised).** Builds carry 3 release public keys (the initial key set).
+**Decision D16 (release keys, revised).** Builds carry 3 release public keys (the initial key set). The
+project maintainer holds the three private keys, each on separate offline media.
 
 - **Threshold.** A manifest is valid only with signatures by **2 distinct keys** of the current key set:
   the envelope signer plus at least one `CoSig` over the same manifest. Release keys are never node
@@ -362,9 +376,10 @@ message Artifact {
 - **Discovery.** Manifests are stored in the DHT under the fixed key
   `SHA-256("echofog/dht2/release")`, whatever key signed them ([dht.md](dht.md) §2), so rotated keys
   are found by old builds; servers also return the latest manifest in pex/2.
-- **Never lock out.** Rules in [versioning.md](versioning.md) §5. Artifacts are information for the
-  user and for package managers: a node MUST NOT install an artifact automatically on the strength of
-  a manifest alone.
+- **Never lock out.** Rules in [versioning.md](versioning.md) §5.
+- **Notify only.** Artifacts are information for the user and for package managers. A client shows
+  that an update is available (and "required" below `min_supported`) with the version, the notes URL
+  and the artifact hashes; it never downloads or installs an artifact by itself.
 
 ## 10. Links v2
 
