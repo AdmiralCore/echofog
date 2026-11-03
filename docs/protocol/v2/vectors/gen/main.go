@@ -1301,7 +1301,7 @@ func genHandshake(c cardOut) (any, any) {
 	check(bytes.Contains(r2.p1, hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), r2.h1)), "live access proof")
 
 	transcripts := O{
-		{"description", "Normative XKhfs and XXhfs handshake transcripts (handshake.md §12, Decision D15): every message's bytes, h/ck/k/n after every token, and the final keys. All three were reproduced byte for byte by two independent step-2 implementations and by this reference generator. What is compared is the Noise message bytes (messages[].bytes) and the final values; the HS_HELLO/HS_MSG frames around them follow from frames.json."},
+		{"description", "Normative XKhfs and XXhfs handshake transcripts (handshake.md §12, Decision D15): every message's bytes, h/ck/k/n after every token, and the final keys. The generator's Noise code reproduced byte for byte the earlier transcripts on which the two independent step-2 implementations agreed; these application-valid transcripts must be reproduced by both again. What is compared is the Noise message bytes (messages[].bytes) and the final values; the HS_HELLO/HS_MSG frames around them follow from frames.json."},
 		{"spec", "handshake.md §2, §4, §5, §9, §12"},
 		{"conventions", []string{
 			"hex is lowercase; inputs come from handshake.json, node-card.json and link.json (sources named per field)",
