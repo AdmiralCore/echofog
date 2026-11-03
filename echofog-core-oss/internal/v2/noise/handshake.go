@@ -234,6 +234,18 @@ func (hs *HandshakeState) LocalStatic() []byte { return hs.s.PublicKey().Bytes()
 // HasKey reports whether the symmetric state has a key (payloads are encrypted).
 func (hs *HandshakeState) HasKey() bool { return hs.ss.Cipher().HasKey() }
 
+// generateX25519 is GENERATE_KEYPAIR(): 32 bytes from r. (crypto/ecdh's GenerateKey ignores its
+// reader since Go 1.26; reading here keeps Config.Rand meaningful for tests.)
+func generateX25519(r io.Reader) (*ecdh.PrivateKey, error) {
+	var b [32]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return nil, err
+	}
+	k, err := ecdh.X25519().NewPrivateKey(b[:])
+	wipe(b[:])
+	return k, err
+}
+
 func dh(k *ecdh.PrivateKey, pub []byte) ([]byte, error) {
 	p, err := ecdh.X25519().NewPublicKey(pub)
 	if err != nil {
@@ -279,7 +291,7 @@ func (hs *HandshakeState) WriteMessageFunc(out []byte, payload func(h []byte) ([
 			if hs.e == nil {
 				if hs.cfg.Ephemeral != nil {
 					hs.e = hs.cfg.Ephemeral
-				} else if hs.e, err = ecdh.X25519().GenerateKey(hs.rand()); err != nil {
+				} else if hs.e, err = generateX25519(hs.rand()); err != nil {
 					return nil, err
 				}
 			}
