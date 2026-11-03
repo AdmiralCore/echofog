@@ -75,7 +75,7 @@ required a choice. Each is stated where it applies.
 | D12 | Card lifetime ≤ 7 days; invitation cards ≤ 30 days; masking keys ≤ 7 days beyond their card | objects §3.2, §10.3 |
 | D13 | (revised, OQ7) Chat PQXDH/ratchet constructions kept; labels renamed to `echofog/chat2/*` and `echofog/storage2/key`; all `FOG_*` labels retired | services §4.0, registries §7.5–§7.6 |
 | D14 | Native byte-stream mux replaces smux, the stream-kind byte and vision | wire §5.2 |
-| D15 | Full XKhfs/XXhfs transcript vectors are deferred; two independent implementations must agree before L1 is final | handshake §12 |
+| D15 | (satisfied) Normative XKhfs/XXhfs transcripts in `handshake-transcript.json`; implementations compare Noise message bytes, every step's state and the final values; two independent implementations agreed on the first transcripts and must reproduce the application-valid ones | handshake §12 |
 | D16 | (revised, OQ3) The maintainer holds 3 release keys on separate offline media; a manifest needs 2 of 3 signatures; threshold rotation and revocation; `seq = released_at`; never-lock-out rules; fixed DHT key; clients only notify, never install | objects §9, versioning §5 |
 | D17 | Shop links: `https://` or `echofog://contact` only; punycode domain, no look-alikes, off-vault warning, shown after 14 days and a delivery-based rating | objects §3.5 |
 | D18 | GREASE in features, L1 suites, services and frame types; values `0xXAXA`, X in 0..e | registries §5 |
@@ -173,3 +173,51 @@ Section numbers refer to the audit report (`audit-spec-v2.md`, November 2026).
 | 7 #3–#5, #16, #17 | low | `FOG_X3DH_V2`, domestic-only flag, unknown frame on stream 0, timer wording, higher `proto_ver` | fixed | registries §7.6, §11; wire §6.2, §7.1; handshake §7 |
 | 8.1 | medium | no handshake vectors | deferred to step 2 with an exit criterion of two independent implementations | handshake §12 |
 | 8.2 | low | vector gaps | partly: negative vectors, real cookie, full sealed envelope and mailbox seal, hybrid-share example, card scopes added; a real Chrome ClientHello split over two Initials and a multi-stream MUX example remain to do | vectors/ |
+
+## 6. Clarifications from the step-2 implementations
+
+Readings that the independent implementations needed, now written into the specification.
+
+| Item | Resolution | Where |
+|---|---|---|
+| XX transcript inputs and payloads | same keys as XK, bare-address prologue; P1 without access and `known_card_seq`; P2 with the responder's public card; P3 a throwaway identity's card | handshake §4.2, §12 |
+| P3 carried the responder's card; access proof over a fixed seed | vectors made application-valid: the initiator has its own card; the proof uses the transcript's real `h1` | handshake §5, §12; vectors |
+| `known_card_seq` vs card in P2 | the responder sends a card exactly when its card of that scope is newer; vectors set `known_card_seq` to the held card | handshake §7 |
+| raw 32-byte keys vs `hs_key` akey | tokens and `MixHash(rs)` use raw keys; the card check compares the bytes after the tag | handshake §2 |
+| GREASE position in `offered` | before the first larger entry, preference order kept, never `chosen` | handshake §3.4 |
+| duplicates or trailing bytes in HS_HELLO | malformed | handshake §3.1 |
+| canonical protobuf for P1/P2/P3/Reject | required; violations are malformed | handshake §7 |
+| `rid` | always the device ID | handshake §3.3 |
+| hidden-node cards and XX | never list `0x0002` | handshake §3.1 |
+| what D15 compares | Noise message bytes, every step's state, final values | handshake §12 |
+| `pad` | optional; absent in vectors | handshake §7 |
+| byte order of puzzle integers | big-endian | handshake §6 |
+| `session_secret` vs erasing `ck` | derive, then erase | handshake §9 |
+| hidden-node close timing | the uniform delay overrides the immediate close | handshake §5, §11 |
+| initiator-side clock skew | abort without message 3 | handshake §7 |
+| HS_RETRY | at most 2 per connection attempt; previous daily `R` accepted during the minute after rotation | handshake §6 |
+| XX message sizes | 1216 / 1200 / 64 bytes without payload | handshake §4.2 |
+| fixed-`m` ML-KEM | FIPS 203 `ML-KEM.Encaps_internal`; key generation `KeyGen_internal(d, z)` | handshake §2 |
+| `hs` rotation retry | current key first, full second pass with the previous key | handshake §4.1 |
+| early data present but not processed | `early_status = 2` | handshake §7 |
+| section order | GREASE moved after the prologue | handshake §3 |
+| release DHT key | with `u32(day)` | objects §9 |
+| invite and peer cards and the camouflage rule | the rule applies to public cards only | objects §3.2 |
+| exit offer vs flag | offer without flag: valid, not live; flag without offer: invalid | objects §3.2 |
+| raw prekey sizes vs akey | `spk` and `kem` are raw by definition; listed as exceptions | objects §5, registries §8 |
+| mailbox-hint size | body ≤ 6144, at most one relay card | objects §7, registries §7.1, §9 |
+| name envelope | body ≤ 512, envelope ≤ 768 | objects §8, registries §7.1 |
+| card lifetime | by the `scope` field: 7 days public/peer, 30 days invite | objects §3.2, §2.2 |
+| scope/flag consistency | validity rules | objects §3.2 |
+| `deprecated_after` | after it, versions below `recommended` count as below `min_supported` | objects §9, versioning §5 |
+| "one major version" | 100 for `proto`, 1 otherwise, relative to the last applied value; larger raises clipped | objects §9 |
+| `next_keys`, revoked keys, cosigs | processing limits; unknown or bad entries skipped | objects §9 |
+| empty device list | valid object, no valid card with it | objects §6 |
+| verification order | `alg` before length checks | objects §2.2 |
+| link/card match | with `s`: invite card with `invite_id = pass_id(S)`; without: public card | objects §10.1 |
+| Ed25519 signer encoding | canonical point required, small order rejected | objects §2.2 |
+| generic 2048-byte limit | every unknown label; DHT stores only `echofog/…` labels | objects §2.2, registries §9 |
+| masking keys beyond the first 8 | referenced count uses all addresses; the processed view drops the rest | objects §3.2 |
+| `proto_ver < 200` cards | invalid | objects §3.2 |
+| extra shop-link checks | no user info, empty host, whitespace, control characters, backslashes; Unicode hosts allowed | objects §3.5 |
+| `.proto` location | text normative; reference copy at `echofog-core-oss/internal/v2/objects/pb/objects.proto` | objects §2.2 |

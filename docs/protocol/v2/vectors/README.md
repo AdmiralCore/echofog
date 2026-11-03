@@ -36,15 +36,16 @@ encapsulation, and signature verification and canonical field order of every sig
 | `signed-object.json` | envelope with the RFC 8032 key: a co-signed (2 of n) release manifest and an empty-body object | objects.md §1–§2, §9 |
 | `node-card.json` | account key, device key and the account-signed device list; one server's public, peer and invitation cards signed by the device key (noise3 only outside the public card) | objects.md §3–§4, §10.3 |
 | `link.json` | contact link (public card) and invitation link (invite card and secret), web form | objects.md §10 |
+| `handshake-transcript.json` | **normative** XKhfs, XKhfs with a live access proof (hidden node), and XXhfs transcripts: every message, every step's `h`/`ck`/`k`/`n`, final keys; application-valid payloads and cards | handshake.md §12 |
 | `handshake.json` | Noise initial `h`/`ck` for both suites, prologues with and without a bound responder ID, pre-message hash, payload encodings with GREASE, access proof, puzzle with HS_RETRY; inputs for the deferred transcripts | handshake.md |
 | `kdf.json` | session secret, `sid`, path binding, a sealed record, relay circuit binding and rendezvous ID, a full chat/2 sealed envelope, a sealed mailbox/2 forward and public-queue proof of work, call/2 keys, two media units and their CALL_AUTH batch authenticator, the chat/2 PQXDH session key under `echofog/chat2/pqxdh`, day-keyed DHT keys for a card and a device list | handshake.md §9, wire.md §8, services.md, dht.md |
 | `negative.json` | inputs that MUST be rejected: non-canonical bodies, `S ≥ L`, a small-order signer, out-of-window and wrong-address first packets | objects.md §2, wire.md §2–§3 |
 
-## Deferred
+## Transcripts
 
-Full XKhfs and XXhfs transcripts (every message, every intermediate `h`, `ck` and key) are **to be
-produced with the implementation in step 2** (handshake.md Decision D15), by two independent
-implementations that must agree byte for byte before L1 is final. `handshake.json` fixes the
-inputs to use (`deferred_transcripts`) and already contains the stdlib-derived values of those inputs
-(public keys, the ML-KEM encapsulation key hash, ciphertext hash and shared secret), so two independent
-implementations can produce and compare the transcripts.
+`handshake-transcript.json` is produced by the generator's own Noise implementation (`gen/noise.go`)
+It reproduced byte for byte the first transcripts of the two independent step-2 implementations
+(which used the earlier, partly invalid payloads); the current transcripts use application-valid
+inputs and must now be reproduced by both implementations again. To check
+another implementation's output: `GOWORK=off go run . -crosscheck <its handshake-transcript.json>`
+recomputes every transcript from that file's inputs and compares the message bytes and final hash.
