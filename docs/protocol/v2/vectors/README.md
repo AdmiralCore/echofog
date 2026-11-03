@@ -30,19 +30,21 @@ encapsulation, and signature verification and canonical field order of every sig
 |---|---|---|
 | `varint.json` | QUIC varints, valid and non-minimal (to be rejected) | wire.md §6 |
 | `frames.json` | every session-level frame type, mux frames, a service frame, datagrams | wire.md §5–§6 |
-| `elligator2.json` | dirty ephemeral keys, representatives, forward map, RFC 9380 cross-check, ECDH check | wire.md §2.2 |
-| `noise3.json` | masking key, ephemeral, selector, key schedule, a 1300-byte Init datagram, three data packets | wire.md §2.3–§2.6 |
-| `reality2.json` | REALITY v2 token for a synthetic ClientHello | wire.md §3.2 |
-| `signed-object.json` | envelope with the RFC 8032 key: a release manifest and an empty-body object | objects.md §1–§2, §9 |
-| `node-card.json` | a server card with four suites, two masking keys and an exit offer | objects.md §3–§4 |
-| `link.json` | contact and invitation links, web form | objects.md §10 |
-| `handshake.json` | Noise initial `h`/`ck` for both suites, prologue, pre-message hash, payload encodings, access proof, puzzle; inputs for the deferred transcripts | handshake.md |
-| `kdf.json` | session secret, `sid`, path binding, a sealed relay record, chat/2 seal key, mailbox/2 forward key, call/2 keys, DHT keys | handshake.md §9, wire.md §8, services.md, dht.md |
+| `elligator2.json` | dirty ephemeral keys, representatives, forward map, a key without a representative, RFC 9380 cross-check, ECDH check | wire.md §2.2 |
+| `noise3.json` | masking key, ephemeral, ECDH-keyed selector, key schedule, a 1300-byte Init datagram, data packets with packet-number protection (including recovery after 4998 lost packets) | wire.md §2.3–§2.6 |
+| `reality2.json` | REALITY v2 token for a synthetic ClientHello, bound to the dialed address; C from a hybrid share | wire.md §3.2 |
+| `signed-object.json` | envelope with the RFC 8032 key: a co-signed (2 of n) release manifest and an empty-body object | objects.md §1–§2, §9 |
+| `node-card.json` | one server's public, peer and invitation cards (noise3 only outside the public card) | objects.md §3–§4, §10.3 |
+| `link.json` | contact link (public card) and invitation link (invite card and secret), web form | objects.md §10 |
+| `handshake.json` | Noise initial `h`/`ck` for both suites, prologues with and without a bound responder ID, pre-message hash, payload encodings with GREASE, access proof, puzzle with HS_RETRY; inputs for the deferred transcripts | handshake.md |
+| `kdf.json` | session secret, `sid`, path binding, a sealed record, relay circuit binding and rendezvous ID, a full chat/2 sealed envelope, a sealed mailbox/2 forward and public-queue proof of work, call/2 keys and a signed media unit, day-keyed DHT keys | handshake.md §9, wire.md §8, services.md, dht.md |
+| `negative.json` | inputs that MUST be rejected: non-canonical bodies, `S ≥ L`, a small-order signer, out-of-window and wrong-address first packets | objects.md §2, wire.md §2–§3 |
 
 ## Deferred
 
 Full XKhfs and XXhfs transcripts (every message, every intermediate `h`, `ck` and key) are **to be
-produced with the implementation in step 2** (handshake.md Decision D15). `handshake.json` fixes the
+produced with the implementation in step 2** (handshake.md Decision D15), by two independent
+implementations that must agree byte for byte before L1 is final. `handshake.json` fixes the
 inputs to use (`deferred_transcripts`) and already contains the stdlib-derived values of those inputs
 (public keys, the ML-KEM encapsulation key hash, ciphertext hash and shared secret), so two independent
 implementations can produce and compare the transcripts.
