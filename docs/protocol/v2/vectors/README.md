@@ -34,10 +34,10 @@ encapsulation, and signature verification and canonical field order of every sig
 | `noise3.json` | masking key, ephemeral, ECDH-keyed selector, key schedule, a 1300-byte Init datagram, data packets with packet-number protection (including recovery after 4998 lost packets) | wire.md §2.3–§2.6 |
 | `reality2.json` | REALITY v2 token for a synthetic ClientHello, bound to the dialed address; C from a hybrid share | wire.md §3.2 |
 | `signed-object.json` | envelope with the RFC 8032 key: a co-signed (2 of n) release manifest and an empty-body object | objects.md §1–§2, §9 |
-| `node-card.json` | one server's public, peer and invitation cards (noise3 only outside the public card) | objects.md §3–§4, §10.3 |
+| `node-card.json` | account key, device key and the account-signed device list; one server's public, peer and invitation cards signed by the device key (noise3 only outside the public card) | objects.md §3–§4, §10.3 |
 | `link.json` | contact link (public card) and invitation link (invite card and secret), web form | objects.md §10 |
 | `handshake.json` | Noise initial `h`/`ck` for both suites, prologues with and without a bound responder ID, pre-message hash, payload encodings with GREASE, access proof, puzzle with HS_RETRY; inputs for the deferred transcripts | handshake.md |
-| `kdf.json` | session secret, `sid`, path binding, a sealed record, relay circuit binding and rendezvous ID, a full chat/2 sealed envelope, a sealed mailbox/2 forward and public-queue proof of work, call/2 keys and a signed media unit, day-keyed DHT keys | handshake.md §9, wire.md §8, services.md, dht.md |
+| `kdf.json` | session secret, `sid`, path binding, a sealed record, relay circuit binding and rendezvous ID, a full chat/2 sealed envelope, a sealed mailbox/2 forward and public-queue proof of work, call/2 keys, two media units and their CALL_AUTH batch authenticator, the chat/2 PQXDH session key under `echofog/chat2/pqxdh`, day-keyed DHT keys for a card and a device list | handshake.md §9, wire.md §8, services.md, dht.md |
 | `negative.json` | inputs that MUST be rejected: non-canonical bodies, `S ≥ L`, a small-order signer, out-of-window and wrong-address first packets | objects.md §2, wire.md §2–§3 |
 
 ## Deferred
