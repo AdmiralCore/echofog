@@ -23,7 +23,7 @@ func seedEnvelopes(f *testing.F) {
 	}
 	nc := loadVector(f, "node-card.json")
 	f.Add(hx(f, nc, "device_list", "envelope"))
-	for _, s := range []string{"public", "peer", "invite"} {
+	for _, s := range []string{"public", "peer", "invite", "initiator", "initiator_throwaway"} {
 		f.Add(hx(f, nc, s, "envelope"))
 	}
 	neg := loadVector(f, "negative.json")

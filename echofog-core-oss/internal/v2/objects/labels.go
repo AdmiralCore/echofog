@@ -22,8 +22,8 @@ const (
 
 	// ClockSkew is the tolerance of the expiry checks (objects.md §2.2 step 4).
 	ClockSkew = 60
-	// UnknownLabelMaxEnvelope is the generic DHT limit used for labels this build does not know
-	// (registries.md §9, "any other label").
+	// UnknownLabelMaxEnvelope is the generic limit of every label this build does not know, whatever
+	// its prefix (objects.md §2.2 step 3, registries.md §9).
 	UnknownLabelMaxEnvelope = 2048
 	// UnknownLabelStoreLifetime clips the stored lifetime of objects with unknown labels.
 	UnknownLabelStoreLifetime = 24 * hour
@@ -37,11 +37,10 @@ const (
 type LabelInfo struct {
 	// MaxBody is the body limit of registries.md §7.1.
 	MaxBody int
-	// MaxEnvelope is the envelope limit of registries.md §9 ("Max record"); 0 means no limit beyond
-	// MaxBody (echofog/name/2 has no DHT record limit).
+	// MaxEnvelope is the envelope limit of registries.md §7.1 and §9.
 	MaxEnvelope int
-	// MaxLifetime is the longest allowed not_after − now, in seconds. For cards it is the
-	// invite-scoped maximum; VerifyCard applies the 7-day limit to other scopes.
+	// MaxLifetime is the longest allowed not_after − now, in seconds: the label's largest. For cards
+	// it is the invite-scope maximum; VerifyCard applies the limit of the card's scope.
 	MaxLifetime uint64
 }
 
@@ -49,8 +48,8 @@ var labels = map[string]LabelInfo{
 	LabelCard:        {3800, 4096, InviteCardMaxLifetime},
 	LabelPrekeys:     {6144, 8192, 30 * day},
 	LabelDevices:     {4096, 6144, 30 * day},
-	LabelMailboxHint: {1024, 1536, 6 * hour},
-	LabelName:        {512, 0, 30 * day},
+	LabelMailboxHint: {6144, 6400, 6 * hour},
+	LabelName:        {512, 768, 30 * day},
 	LabelRelease:     {20000, 20480, 400 * day},
 }
 

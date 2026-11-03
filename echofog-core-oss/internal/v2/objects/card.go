@@ -121,7 +121,7 @@ func verifyCardAt(b []byte, now *time.Time) (*Card, error) {
 		return nil, invalid("card signer: %s key", e.Signer.Alg())
 	}
 
-	// Lifetime: 7 days, 30 days for invite-scoped cards (D12).
+	// Lifetime by the scope field: 7 days for public, peer (and unknown) scopes, 30 for invite (D12).
 	if now != nil {
 		max := uint64(CardMaxLifetime)
 		if c.Scope == ScopeInvite {
@@ -177,9 +177,9 @@ func verifyCardAt(b []byte, now *time.Time) (*Card, error) {
 
 	// Roles and offers.
 	flags := body.GetFlags()
-	// A server is dialed through a camouflaged suite across borders. Invitation cards are exempt:
-	// node-card.json's invitation card is a server's noise3-only card (spec issue, see doc.go).
-	if body.GetRole() == RoleServer && flags&FlagDomesticOnly == 0 && c.Scope != ScopeInvite {
+	// A public server card lists a camouflaged address unless domestic-only; peer and invite cards
+	// are exempt (objects.md §3.2).
+	if c.Scope == ScopePublic && body.GetRole() == RoleServer && flags&FlagDomesticOnly == 0 {
 		ok := false
 		for _, a := range body.GetAddrs() {
 			if isCamouflaged(a.GetSuite()) {
@@ -191,8 +191,7 @@ func verifyCardAt(b []byte, now *time.Time) (*Card, error) {
 			return nil, invalid("server card without a camouflaged address")
 		}
 	}
-	// Flag exit says the offer is live, so it needs an offer. An offer without the flag is kept but
-	// not live: node-card.json's invitation card carries one without the flag (spec issue, doc.go).
+	// Flag exit without an offer is invalid; an offer without the flag is valid and not live.
 	if flags&FlagExit != 0 && body.GetExit() == nil {
 		return nil, invalid("flag exit without an exit offer")
 	}

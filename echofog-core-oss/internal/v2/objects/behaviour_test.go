@@ -232,6 +232,10 @@ func TestCardAddressRules(t *testing.T) {
 
 	// Allowed variations.
 	ok := map[string]func(c *pb.NodeCard){
+		"peer server without camouflage": func(c *pb.NodeCard) {
+			c.Addrs = []*pb.Addr{{Suite: SuiteNoise3, Host: "192.0.2.1", Port: 1, Mask: 1}}
+			c.Scope = uint32(ScopePeer)
+		},
 		"domestic-only server without camouflage": func(c *pb.NodeCard) {
 			c.Addrs = []*pb.Addr{{Suite: 99, Host: "192.0.2.1", Port: 1}}
 			c.MaskKeys = nil
@@ -462,8 +466,20 @@ func TestEnvelopeStructure(t *testing.T) {
 	if _, err := Verify(sealRaw("echofog/test/9", s, 1, fixedTime+day, big), vectorNow); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("unknown label over 2048: %v", err)
 	}
-	if _, err := Verify(sealRaw(LabelMailboxHint, s, 1, fixedTime+hour, appendField(nil, 1, protowire.BytesType, make([]byte, 1100))), vectorNow); !errors.Is(err, ErrTooLarge) {
-		t.Errorf("oversized mailbox hint: %v", err)
+	// echofog/name/2: body ≤ 512, envelope ≤ 768.
+	if _, err := Verify(sealRaw(LabelName, s, 1, fixedTime+hour, appendField(nil, 1, protowire.BytesType, make([]byte, 600))), vectorNow); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("oversized name binding: %v", err)
+	}
+	// The algorithm is checked before the size: an oversized object with an unknown algorithm is
+	// unusable, not too large.
+	over := sealRaw("echofog/test/9", s, 1, fixedTime+day, big)
+	over[2+14] = 0x7a
+	if _, err := Verify(over, vectorNow); !errors.Is(err, ErrUnusable) {
+		t.Errorf("unknown alg, oversized: %v", err)
+	}
+	// The generic limit applies to unknown labels of any prefix.
+	if _, err := Verify(sealRaw("other/label/1", s, 1, fixedTime+day, big), vectorNow); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("non-echofog label over 2048: %v", err)
 	}
 	// Body of an unknown label still follows the schema-free rules.
 	if _, err := Verify(sealRaw("echofog/test/9", s, 1, fixedTime+day, []byte{0x10, 0x01, 0x08, 0x01}), vectorNow); !errors.Is(err, ErrNonCanonical) {
@@ -921,12 +937,26 @@ func TestMailboxHintAndName(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.Hints[0].RelayCard = cardEnv
-	if b := mustMarshal(t, h); len(b) <= 1024 {
-		env, _ = Seal(LabelMailboxHint, f.device, 1, fixedTime+6*hour, b)
-		mh, err := VerifyMailboxHint(env, vectorNow)
-		if err != nil || mh.RelayCards[0] == nil {
-			t.Fatalf("hint with relay card: %v", err)
-		}
+	env, err = Seal(LabelMailboxHint, f.device, 1, fixedTime+6*hour, mustMarshal(t, h))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mh, err := VerifyMailboxHint(env, vectorNow)
+	if err != nil || mh.RelayCards[0] == nil {
+		t.Fatalf("hint with relay card: %v", err)
+	}
+	// At most one relay card per object.
+	two := proto.Clone(h).(*pb.MailboxHint)
+	two.Hints = append(two.Hints, proto.Clone(h.Hints[0]).(*pb.Hint))
+	env, err = Seal(LabelMailboxHint, f.device, 1, fixedTime+6*hour, mustMarshal(t, two))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = VerifyMailboxHint(env, vectorNow)
+	mustInvalid(t, err, "two relay cards")
+	// The body limit is 6144 bytes.
+	if _, err := Verify(sealRaw(LabelMailboxHint, f.device, 1, fixedTime+hour, appendField(nil, 1, protowire.BytesType, make([]byte, 6200))), vectorNow); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("oversized mailbox hint: %v", err)
 	}
 	h.Hints[0].Relay = make([]byte, 32)
 	h.Hints[0].RelayCard = nil

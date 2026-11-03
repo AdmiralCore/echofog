@@ -76,8 +76,9 @@ func (p *Prekeys) VouchedBy(dl *DeviceList) bool { return dl.Contains(p.DeviceKe
 // echofog/mailbox-hint/2 (objects.md §7)
 
 const (
-	maxHints   = 4
-	queueIDLen = 16
+	maxHints      = 4
+	queueIDLen    = 16
+	maxRelayCards = 1 // per object (objects.md §7)
 )
 
 // MailboxHint is a verified mailbox hint.
@@ -88,8 +89,8 @@ type MailboxHint struct {
 	RelayCards []*Card
 }
 
-// VerifyMailboxHint verifies a mailbox hint. An embedded relay card must verify and belong to the
-// hint's relay device.
+// VerifyMailboxHint verifies a mailbox hint. At most one hint carries a relay card, which must verify
+// and belong to the hint's relay device.
 func VerifyMailboxHint(b []byte, now time.Time) (*MailboxHint, error) {
 	e, err := Verify(b, now)
 	if err != nil {
@@ -103,6 +104,7 @@ func VerifyMailboxHint(b []byte, now time.Time) (*MailboxHint, error) {
 		return nil, err
 	}
 	h := &MailboxHint{Env: e, Body: body}
+	cards := 0
 	for i, x := range body.GetHints() {
 		if len(x.GetRelay()) != 32 {
 			return nil, invalid("hint %d: relay of %d bytes", i, len(x.GetRelay()))
@@ -112,6 +114,9 @@ func VerifyMailboxHint(b []byte, now time.Time) (*MailboxHint, error) {
 		}
 		var card *Card
 		if rc := x.GetRelayCard(); len(rc) != 0 {
+			if cards++; cards > maxRelayCards {
+				return nil, invalid("more than one relay card")
+			}
 			card, err = VerifyCard(rc, now)
 			if err != nil {
 				return nil, invalid("hint %d: relay card: %v", i, err)

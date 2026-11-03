@@ -80,7 +80,7 @@ func malformed(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrMalformed, fmt.Sprintf(format, args...))
 }
 
-// Parse parses an envelope and checks its structure and size limit (objects.md §2.2 steps 1–2). It
+// Parse parses an envelope and checks its structure and size limit (objects.md §2.2 steps 1–3). It
 // does not verify the signature. An unknown signature algorithm gives ErrUnusable.
 func Parse(b []byte) (*Envelope, error) {
 	if len(b) < 2 {
@@ -94,18 +94,20 @@ func Parse(b []byte) (*Envelope, error) {
 		return nil, malformed("label")
 	}
 	e := &Envelope{Label: string(b[2 : 2+ll]), Raw: b}
+	p := 2 + ll
+	// Step 2: the algorithm, before the lengths, which depend on it.
+	e.Alg = keys.Alg(b[p])
+	if !e.Alg.IsSignature() {
+		return nil, fmt.Errorf("%w: %s", ErrUnusable, e.Alg)
+	}
+	// Step 3: lengths and the label's envelope limit (2048 for every unknown label).
 	limit := UnknownLabelMaxEnvelope
 	info, known := labels[e.Label]
 	if known {
 		limit = info.MaxEnvelope
 	}
-	if limit > 0 && len(b) > limit {
+	if len(b) > limit {
 		return nil, fmt.Errorf("%w: %d-byte envelope, limit %d", ErrTooLarge, len(b), limit)
-	}
-	p := 2 + ll
-	e.Alg = keys.Alg(b[p])
-	if !e.Alg.IsSignature() {
-		return nil, fmt.Errorf("%w: %s", ErrUnusable, e.Alg)
 	}
 	kl := e.Alg.KeyLen()
 	if len(b) < p+1+kl+16 {
@@ -136,8 +138,8 @@ func Parse(b []byte) (*Envelope, error) {
 	return e, nil
 }
 
-// Verify runs the generic checks of objects.md §2.2 in order: structure and size, algorithm,
-// signature over the exact prefix, expiry (60 s skew) and lifetime, and, for a known label, that the
+// Verify runs the generic checks of objects.md §2.2 in order: format and label, algorithm, lengths
+// and size, signature over the exact prefix, expiry (60 s skew) and lifetime, and, for a known label, that the
 // body is canonical and parses as the label's message. Label-specific rules are applied by the
 // Verify* function of each label.
 //

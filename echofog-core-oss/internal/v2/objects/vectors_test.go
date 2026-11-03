@@ -2,6 +2,7 @@ package objects
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"errors"
 	"strings"
 	"testing"
@@ -238,9 +239,13 @@ func (cv cardVector) peerCard(t testing.TB) *pb.NodeCard {
 	}, [][]byte{cv.maskR, cv.mask3}, 1, nil, 0b100110, true)
 }
 
+// inviteCard lists only suite 1 (a hidden node never lists XX) and has no exit offer.
 func (cv cardVector) inviteCard(t testing.TB) *pb.NodeCard {
-	return cv.card(t, []*pb.Addr{{Suite: 1, Host: "192.0.2.10", Port: 443, Mask: 1, Params: params(t, "", 1)}},
+	c := cv.card(t, []*pb.Addr{{Suite: 1, Host: "192.0.2.10", Port: 443, Mask: 1, Params: params(t, "", 1)}},
 		[][]byte{cv.maskInv}, 2, hx(t, cv.v, "invite", "invite_id"), 0b010001, false)
+	c.L1Suites = []uint32{1}
+	c.Exit = nil
+	return c
 }
 
 func TestVectorDeviceList(t *testing.T) {
@@ -337,6 +342,53 @@ func TestVectorCards(t *testing.T) {
 				if card.Body.GetFlags()&(FlagUnlisted|FlagInviteScoped) != FlagUnlisted|FlagInviteScoped {
 					t.Fatal("invite flags")
 				}
+			}
+		})
+	}
+}
+
+// The handshake initiator's cards: a user with its own account and device, and a throwaway identity.
+func TestVectorInitiatorCards(t *testing.T) {
+	v := loadVector(t, "node-card.json")
+	hsSeed := sha([]byte("echofog v2 test vector seed: hs/xk/initiator_s"))
+	hsPub, err := ecdh.X25519().NewPrivateKey(hsSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hsAkey := keys.New(keys.X25519, hsPub.PublicKey().Bytes())
+	seeds := get(t, v, "initiator", "seeds").(map[string]any)
+	for name, pre := range map[string]string{"initiator": "initiator/", "initiator_throwaway": "initiator/throwaway_"} {
+		t.Run(name, func(t *testing.T) {
+			acct := signer(t, seeds[pre+"account_seed"].(string))
+			dev := signer(t, seeds[pre+"device_seed"].(string))
+			dl, err := SealDeviceList(acct, fixedTime, fixedTime+30*day,
+				&pb.DeviceList{Devices: []*pb.Device{{Key: dev.Public(), Added: fixedTime, Flags: DevicePrimary}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := &pb.NodeCard{
+				ProtoVer: 200, HsKey: hsAkey, L1Suites: []uint32{1, 2},
+				Services: []*pb.ServiceOffer{{Id: 3, Versions: []uint32{2}}, {Id: 7, Versions: []uint32{2}}},
+				Features: []uint32{1, 3, 4, 5, 6}, Release: "0.3.0", Account: acct.Public(),
+				Scope: uint32(ScopePeer), Devices: dl,
+			}
+			env, err := SealCard(dev, fixedTime, fixedTime+6*day, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := get(t, v, name).(map[string]any)
+			eqHex(t, "envelope", env, hx(t, o, "envelope"))
+			if uint64(len(env)) != num(t, o, "envelope_len") {
+				t.Fatalf("envelope_len %d", len(env))
+			}
+			c, err := VerifyCard(env, vectorNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			eqHex(t, "node_id", c.NodeID[:], hx(t, o, "node_id"))
+			eqHex(t, "device_id", c.DeviceID[:], hx(t, o, "device_id"))
+			if c.Role() != RoleUser || c.Publishable() || len(c.Addrs()) != 0 {
+				t.Fatal("initiator card properties")
 			}
 		})
 	}

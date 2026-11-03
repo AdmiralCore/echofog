@@ -1,4 +1,6 @@
-// Bodies of the protocol v2 signed objects (docs/protocol/v2/objects.md).
+// Bodies of the protocol v2 signed objects (docs/protocol/v2/objects.md). This is the reference
+// machine-readable copy of the schemas (objects.md §2.2); where it differs from the text, the text
+// wins.
 //
 // Every body is canonical protobuf (objects.md §2.3). The generated Go types are used to read and
 // to build bodies; received objects are never re-encoded: they are verified and forwarded as the
@@ -38,7 +40,7 @@ type NodeCard struct {
 	Flags         uint32                 `protobuf:"varint,7,opt,name=flags,proto3" json:"flags,omitempty"`                                // registries.md §11
 	Services      []*ServiceOffer        `protobuf:"bytes,8,rep,name=services,proto3" json:"services,omitempty"`                           // <= 16 processed
 	Features      []uint32               `protobuf:"varint,9,rep,packed,name=features,proto3" json:"features,omitempty"`                   // <= 64 processed
-	Exit          *ExitOffer             `protobuf:"bytes,10,opt,name=exit,proto3" json:"exit,omitempty"`                                  // §4; present only with flag exit
+	Exit          *ExitOffer             `protobuf:"bytes,10,opt,name=exit,proto3" json:"exit,omitempty"`                                  // §4; live only with flag exit
 	Shop          []string               `protobuf:"bytes,11,rep,name=shop,proto3" json:"shop,omitempty"`                                  // <= 3 processed, each <= 200 bytes (§3.5)
 	Release       string                 `protobuf:"bytes,12,opt,name=release,proto3" json:"release,omitempty"`                            // build version, <= 32 bytes
 	Account       []byte                 `protobuf:"bytes,13,opt,name=account,proto3" json:"account,omitempty"`                            // akey of the account key; REQUIRED
@@ -885,9 +887,9 @@ func (x *ExitOffer) GetAssets() []uint32 {
 type Prekeys struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ik            []byte                 `protobuf:"bytes,1,opt,name=ik,proto3" json:"ik,omitempty"`   // akey (x25519)
-	Spk           []byte                 `protobuf:"bytes,2,opt,name=spk,proto3" json:"spk,omitempty"` // X25519, 32 bytes
+	Spk           []byte                 `protobuf:"bytes,2,opt,name=spk,proto3" json:"spk,omitempty"` // raw X25519, 32 bytes
 	SpkCreated    uint64                 `protobuf:"varint,3,opt,name=spk_created,json=spkCreated,proto3" json:"spk_created,omitempty"`
-	Kem           []byte                 `protobuf:"bytes,4,opt,name=kem,proto3" json:"kem,omitempty"` // ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
+	Kem           []byte                 `protobuf:"bytes,4,opt,name=kem,proto3" json:"kem,omitempty"` // raw ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
 	KemCreated    uint64                 `protobuf:"varint,5,opt,name=kem_created,json=kemCreated,proto3" json:"kem_created,omitempty"`
 	Opks          [][]byte               `protobuf:"bytes,6,rep,name=opks,proto3" json:"opks,omitempty"` // 32 bytes each, <= 32 processed
 	unknownFields protoimpl.UnknownFields
@@ -1127,7 +1129,7 @@ type Hint struct {
 	Relay         []byte                 `protobuf:"bytes,1,opt,name=relay,proto3" json:"relay,omitempty"` // device ID of the mailbox relay
 	Queue         []byte                 `protobuf:"bytes,2,opt,name=queue,proto3" json:"queue,omitempty"` // 16-byte public queue ID
 	NotAfter      uint64                 `protobuf:"varint,3,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`
-	RelayCard     []byte                 `protobuf:"bytes,4,opt,name=relay_card,json=relayCard,proto3" json:"relay_card,omitempty"` // optional: the relay's card
+	RelayCard     []byte                 `protobuf:"bytes,4,opt,name=relay_card,json=relayCard,proto3" json:"relay_card,omitempty"` // optional: the relay's card; at most one per object
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

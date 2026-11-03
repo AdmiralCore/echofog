@@ -1,4 +1,6 @@
-// Bodies of the protocol v2 signed objects (docs/protocol/v2/objects.md).
+// Bodies of the protocol v2 signed objects (docs/protocol/v2/objects.md). This is the reference
+// machine-readable copy of the schemas (objects.md §2.2); where it differs from the text, the text
+// wins.
 //
 // Every body is canonical protobuf (objects.md §2.3). The generated Go types are used to read and
 // to build bodies; received objects are never re-encoded: they are verified and forwarded as the
@@ -22,7 +24,7 @@ message NodeCard {
   uint32 flags = 7;                     // registries.md §11
   repeated ServiceOffer services = 8;   // <= 16 processed
   repeated uint32 features = 9;         // <= 64 processed
-  ExitOffer exit = 10;                  // §4; present only with flag exit
+  ExitOffer exit = 10;                  // §4; live only with flag exit
   repeated string shop = 11;            // <= 3 processed, each <= 200 bytes (§3.5)
   string release = 12;                  // build version, <= 32 bytes
   bytes  account = 13;                  // akey of the account key; REQUIRED
@@ -100,9 +102,9 @@ message ExitOffer {
 
 message Prekeys {
   bytes  ik = 1;                        // akey (x25519)
-  bytes  spk = 2;                       // X25519, 32 bytes
+  bytes  spk = 2;                       // raw X25519, 32 bytes
   uint64 spk_created = 3;
-  bytes  kem = 4;                       // ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
+  bytes  kem = 4;                       // raw ML-KEM-768 encapsulation key, 1184 bytes; REQUIRED
   uint64 kem_created = 5;
   repeated bytes opks = 6;              // 32 bytes each, <= 32 processed
 }
@@ -130,7 +132,7 @@ message Hint {
   bytes  relay = 1;                     // device ID of the mailbox relay
   bytes  queue = 2;                     // 16-byte public queue ID
   uint64 not_after = 3;
-  bytes  relay_card = 4;                // optional: the relay's card
+  bytes  relay_card = 4;                // optional: the relay's card; at most one per object
 }
 
 // ---------------------------------------------------------------------------------------------
