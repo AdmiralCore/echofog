@@ -40,6 +40,9 @@ fully, partly or not at all.
 | 30 | Timers | fixed values (10 s, 20 s, 5 s, 300 ms…) | ≥ ±20 % jitter on every periodic timer | V2 |
 | 31 | Time units | seconds and nanoseconds in the same field | seconds everywhere; clock offsets learned from peers | V6 |
 | 32 | Node ID | `SHA-256(pub)` | `SHA-256(akey)` (algorithm-tagged) | L7 agility |
+| 35 | Identity | one Ed25519 key per user, also the network identity | account key (node ID) and per-device keys (device ID) with an account-signed device list | multi-device readiness |
+| 36 | Exit speed | bandwidth probe: 12 MiB bursts on request | rating from real tunnel throughput and user-started tests | V4 |
+| 37 | Call authentication | none per sender | batched sender signatures | P1 |
 | 33 | Bans | IP bans after 8 failed handshakes | no pre-authentication bans; puzzles scale with source pressure | (CGNAT collateral damage) |
 | 34 | Dead code | gossip, discovery service, mDNS, migration, 13 dead message types | not specified; v1 numbers are not reused because v2 has its own registries | V7 |
 
@@ -58,7 +61,7 @@ required a choice. Each is stated where it applies.
 
 | ID | Decision | Where |
 |---|---|---|
-| D1 | Node ID = `SHA-256(akey)` (algorithm-tagged key), not `SHA-256(pub)` | README §5.2 |
+| D1 | Node ID = `SHA-256(akey)` of the account key (algorithm-tagged), not `SHA-256(pub)`; everyone gets a new ID once (accepted, OQ2) | README §5.2 |
 | D2 | SHA-256 family for L0, L2, objects, links and services; BLAKE2s only inside Noise | wire §2.3 |
 | D3 | The full suite string including `EchoFog/2/` is the Noise `protocol_name` | handshake §1 |
 | D4 | `offered` = the initiator's suites ∩ the card's suites; responder enforces its best common suite; one retry after `REJECT{suite}` with the full list | handshake §3.1 |
@@ -70,10 +73,10 @@ required a choice. Each is stated where it applies.
 | D10 | (revised) ≤ 8 live masking keys per listener for both noise3 and REALITY; more listeners for more keys; stranger budgets | wire §2.1 |
 | D11 | noise3 has no forward secrecy at L0; a node that may have lost `mask_sk` rotates masking and `hs` keys | wire §2.3 |
 | D12 | Card lifetime ≤ 7 days; invitation cards ≤ 30 days; masking keys ≤ 7 days beyond their card | objects §3.2, §10.3 |
-| D13 | Chat PQXDH/ratchet constructions and their v1 labels are kept unchanged (`FOG_X3DH_V2` retired) | registries §7.6 |
+| D13 | (revised, OQ7) Chat PQXDH/ratchet constructions kept; labels renamed to `echofog/chat2/*` and `echofog/storage2/key`; all `FOG_*` labels retired | services §4.0, registries §7.5–§7.6 |
 | D14 | Native byte-stream mux replaces smux, the stream-kind byte and vision | wire §5.2 |
 | D15 | Full XKhfs/XXhfs transcript vectors are deferred; two independent implementations must agree before L1 is final | handshake §12 |
-| D16 | (revised) Release manifests need 2 distinct release-key signatures; threshold rotation and revocation; `seq = released_at`; never-lock-out rules; fixed DHT key | objects §9, versioning §5 |
+| D16 | (revised, OQ3) The maintainer holds 3 release keys on separate offline media; a manifest needs 2 of 3 signatures; threshold rotation and revocation; `seq = released_at`; never-lock-out rules; fixed DHT key; clients only notify, never install | objects §9, versioning §5 |
 | D17 | Shop links: `https://` or `echofog://contact` only; punycode domain, no look-alikes, off-vault warning, shown after 14 days and a delivery-based rating | objects §3.5 |
 | D18 | GREASE in features, L1 suites, services and frame types; values `0xXAXA`, X in 0..e | registries §5 |
 | D19 | exit/2 does not distinguish refused, reset and timed-out destinations (it still reveals open ports) | registries §10.4 |
@@ -91,22 +94,33 @@ required a choice. Each is stated where it applies.
 | D31 | L0 timestamp windows ±300 s; clock offsets learned from authenticated peers; handshake skew limit 600 s | wire §2.5, §3.3, handshake §7 |
 | D32 | No pre-authentication IP bans; per-source pressure raises puzzle difficulty | handshake §11 |
 | D33 | Hidden nodes share one rotated contacts masking key among redeemed contacts | objects §10.3 |
-| D34 | Public mailbox queues require proof of work (default 20 bits) | services §5.2 |
+| D34 | (OQ6) Proof of work (default 20 bits) is the first-contact gate at launch; payment and tokens later | services §5.2 |
+| D35 | (OQ1) Separate account key (from the mnemonic; node ID) and device keys (random; device ID); the account signs the device list, which every card embeds | README §5, objects §1, §3, §6, handshake §3.3, dht §1–§2 |
+| D36 | (OQ9) Clock check: majority of `Date` headers from several large CDN endpoints, defaults in registries §12, configurable | handshake §7, registries §12 |
+| D37 | (OQ4) Every stranger-reachable server runs REALITY (or ws2) with a cover; the installer finds the cover automatically | wire §2.1, §3.5 |
+| D38 | (OQ8) Exit speed rating from real tunnel throughput plus a user-started test; no bursts on request | services §7.1 |
+| D39 | (OQ10) Call media authenticated by batch signatures (≤ 100 ms batches, per-unit hashes, overlap with the previous batch) | services §9.3, registries §2 |
+| D40 | (OQ5) Ship with the current vault; cross-exit payment linkage is a residual risk; vault contract v2 on the payments roadmap | services §7, security §4.8 |
 
-## 4. Open questions for the user
+## 4. Open questions
 
-| ID | Question | Where |
+All open questions of the audited draft were answered by the user (November 2026) and are now
+Decisions:
+
+| ID | Answer | Decision |
 |---|---|---|
-| OQ1 | Separate account and device keys from the mnemonic already in v2 (and publish a one-device list), so that multi-device later does not change node IDs again? | objects §3.4 |
-| OQ2 | D1 changes every node ID compared to v1. Acceptable, or keep `SHA-256(pub)` for Ed25519 so that the author's existing contacts and links survive? | README §5.2 |
-| OQ3 | Who holds the 3 release keys, and is 2-of-3 the right threshold? Is there any automatic update path (v2 forbids installs on the strength of a manifest alone)? | objects §9 |
-| OQ4 | With D23, a node is reachable by strangers only through REALITY or ws2, so every stranger-facing server needs a cover site. Acceptable for operators? | wire §2.1 |
-| OQ5 | The TON vault links a client's payments across exits until a vault contract with per-exit keys exists. Ship v2 with that, or schedule contract v2 now? | services §7 |
-| OQ6 | Public mailbox queues: is proof of work (20 bits by default) acceptable for the first contact, or should first-contact deposits require payment or tokens from day one? | services §5.2 |
-| OQ7 | Keep the v1 chat KDF labels (`FOG_PQXDH…`, `FOG_RATCHET…`) or rename them into the `echofog/chat2/*` scheme now? | registries §7.6 |
-| OQ8 | v1's bandwidth probe is dropped as an amplification vector. Is a replacement needed for exit speed ratings? | CHANGES §2 |
-| OQ9 | Which HTTPS sites may a node use to check its clock (the `Date` header) without revealing anything unusual? | handshake §7 |
-| OQ10 | Per-unit Ed25519 signatures cost 64 bytes per media unit (about 26 kbit/s per audio sender). Accept, or batch signatures over several units (weaker loss tolerance)? | services §9.2 |
+| OQ1 | separate account and device keys already in v2 | D35 |
+| OQ2 | accept new node IDs for everyone, consistent with D35 | D1 |
+| OQ3 | maintainer holds 3 keys on separate media; 2 of 3; notify only | D16 |
+| OQ4 | every stranger-reachable server needs a REALITY cover; automatic discovery | D37 |
+| OQ5 | ship with the current vault linkage as a residual risk; vault v2 on the roadmap | D40 |
+| OQ6 | proof of work (20 bits) at launch; payment and tokens later | D34 |
+| OQ7 | rename the chat KDF labels now | D13 |
+| OQ8 | exit speed rating from real traffic and a manual test | D38 |
+| OQ9 | majority of several CDN `Date` headers, configurable | D36 |
+| OQ10 | batch the call signatures | D39 |
+
+No open questions remain in this specification.
 
 ## 5. Audit of the first draft: how each finding was handled
 
@@ -134,7 +148,7 @@ Section numbers refer to the audit report (`audit-spec-v2.md`, November 2026).
 | 3.7 | medium | `hs_key` rotation | fixed: `prev_hs` | handshake §7.1; objects §3.1 |
 | 3.8 | medium | IP bans under CGNAT | fixed: no pre-auth bans | handshake §11 |
 | 3.9 | low | REJECT detail format, retry list, higher `proto_ver`, early streams, GREASE order | fixed; `pass_id` on relays under a quantum adversary listed as residual | handshake §3.1, §3.4, §7; wire §6.2; security §4.7 |
-| 4.1 | high | release manifest as a kill switch | fixed: threshold, revocation, bounded `seq`, never-lock-out, fixed DHT key; auto-update is OQ3 | objects §9; versioning §5; dht §2 |
+| 4.1 | high | release manifest as a kill switch | fixed: 2-of-3 threshold, revocation, bounded `seq`, never-lock-out, fixed DHT key, notify-only (D16) | objects §9; versioning §5; dht §2 |
 | 4.2 | medium | objects closed to extension | fixed | objects §2.2, §2.3, §3.1; registries §11 |
 | 4.3 | low | GREASE only for features; overlap with experimental range | fixed | registries §5; handshake §3.4 |
 | 4.4 | low | equivocation rules; invitation cards | fixed: one rule; scopes and `invite_id` | objects §2.2, §3.2 |
@@ -144,11 +158,11 @@ Section numbers refer to the audit report (`audit-spec-v2.md`, November 2026).
 | 5.3 | medium | reflection through cards, FORWARD, PUNCH_OFFER | fixed | dht §4.3; services §5.3, §6.4 |
 | 5.4 | low | quotas, IPv6, guards, NODES size, stop rule | fixed | dht §1, §3, §4 |
 | 5.5 | low | shop links | fixed | objects §3.5 |
-| 5.6 | low | multi-device readiness | open question OQ1 | objects §3.4 |
+| 5.6 | low | multi-device readiness | fixed: separate account and device keys (D35) | objects §1, §3.4, §6 |
 | 6.1 | high | call sender keys derivable by any member | fixed: per-unit signatures; S35 rewritten | services §9.2 |
 | 6.2 | high | relay presence oracle | fixed: uniform refusals, rendezvous IDs | services §6.3 |
-| 6.3 | medium | mailbox quota exhaustion | fixed: per-day node-ID quotas, PoW, dedupe (OQ6 for payment) | services §5 |
-| 6.4 | medium | exit sees the client identity; vault links exits | partly: per-exit identity; vault linkability is OQ5 | services §7 |
+| 6.3 | medium | mailbox quota exhaustion | fixed: per-day node-ID quotas, PoW (D34), dedupe | services §5 |
+| 6.4 | medium | exit sees the client identity; vault links exits | partly: per-exit identity; vault linkability accepted as residual (D40) | services §7 |
 | 6.5 | medium | `circuit_id` ambiguity; sealed counters with several paths | fixed | services §6.2; handshake §3.2; wire §8.4 |
 | 6.6 | medium | service frame maxima; chat envelope vs mailbox item | fixed | services (Max columns); registries §4; services §4.3 |
 | 6.7 | medium | hole punching unspecified | fixed (symmetric NAT reserved) | services §6.4 |
