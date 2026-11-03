@@ -344,3 +344,72 @@ func TestTranscriptFileCurrent(t *testing.T) {
 		t.Fatal("transcript-cleanroom.json is stale: run GOWORK=off go run . -out .")
 	}
 }
+
+// TestNormativeTranscript compares every run with handshake-transcript.json (added only after
+// this implementation had produced its own output, commit 5b67d50): payloads, every step's
+// h/ck/k/n, h before each payload, message bytes and the finals, plus the transport example.
+func TestNormativeTranscript(t *testing.T) {
+	norm := loadJSON("handshake-transcript.json")
+	byName := map[string]scenario{}
+	for _, sc := range scenarios() {
+		byName[sc.ID] = sc
+	}
+	list := norm["transcripts"].([]any)
+	if len(list) != len(byName) {
+		t.Fatalf("%d normative transcripts, %d here", len(list), len(byName))
+	}
+	for _, e := range list {
+		tr := e.(map[string]any)
+		name := tr["name"].(string)
+		sc, ok := byName[name]
+		if !ok {
+			t.Fatalf("no run for %s", name)
+		}
+		ini, _, err := run(sc.XX, sc.In)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr["protocol_name"].(string) != sc.In.Name {
+			t.Errorf("%s: protocol name", name)
+		}
+		eqHex(t, name+" prologue", sc.In.Prologue, jget(tr, "inputs", "prologue"))
+		var steps []any
+		steps = append(steps, tr["initialize"].([]any)...)
+		msgs := tr["messages"].([]any)
+		pls := [][]byte{ini.P1, ini.P2, ini.P3}
+		// index of the step right before each payload token, in our log
+		var before []int
+		for i, s := range ini.Steps {
+			if s.Token == "payload" {
+				before = append(before, i-1)
+			}
+		}
+		for i, me := range msgs {
+			m := me.(map[string]any)
+			steps = append(steps, m["steps"].([]any)...)
+			eqHex(t, name+" message bytes", ini.Msgs[i], m["bytes"].(string))
+			eqHex(t, name+" message sha256", sha(ini.Msgs[i]), m["sha256"].(string))
+			eqHex(t, name+" payload", pls[i], m["payload"].(string))
+			if ini.Steps[before[i]].H != m["h_before_payload"].(string) {
+				t.Errorf("%s: h before payload %d", name, i+1)
+			}
+		}
+		if len(steps) != len(ini.Steps) {
+			t.Fatalf("%s: %d steps, %d here", name, len(steps), len(ini.Steps))
+		}
+		for i, se := range steps {
+			s := se.(map[string]any)
+			mine := ini.Steps[i]
+			if s["h"] != mine.H || s["ck"] != mine.CK || s["k"] != mine.K || uint64(s["n"].(float64)) != mine.N {
+				t.Errorf("%s step %d (%v / %s) differs", name, i, s["token"], mine.Token)
+			}
+		}
+		fin := tr["final"].(map[string]any)
+		for k, v := range map[string][]byte{"h": ini.H, "ck": ini.CK, "k_i2r": ini.KI2R, "k_r2i": ini.KR2I, "session_secret": ini.SessionSecret, "sid": ini.SID} {
+			eqHex(t, name+" final "+k, v, fin[k].(string))
+		}
+		te := fin["transport_example"].(map[string]any)
+		ct := aeadSeal(ini.KI2R, uint64(te["n"].(float64)), fromHex(te["ad"].(string)), fromHex(te["plaintext"].(string)))
+		eqHex(t, name+" transport example", ct, te["ciphertext"].(string))
+	}
+}

@@ -3,12 +3,13 @@
 A second, independent implementation of the L1 handshake (handshake.md, Noise XKhfs and XXhfs),
 written only from `handshake.md`, `registries.md`, `versioning.md`, `README.md` §5–§6, `objects.md`
 (the `akey` format) and the existing vectors. The code under `internal/v2/handshake` and
-`internal/v2/noise` was not read. Its only purpose is Decision D15: two implementations must
-produce byte-identical transcripts before L1 is final.
+`internal/v2/noise` was not read, nor the generator's own Noise code (`vectors/gen/noise.go`).
+Its only purpose is Decision D15: two implementations must produce byte-identical transcripts
+before L1 is final.
 
 ```
 GOWORK=off go run . -out .     # writes transcript-cleanroom.json
-GOWORK=off go test .           # vectors of handshake.json / kdf.json, round trips, tampering
+GOWORK=off go test .           # vectors, normative transcripts, round trips, tampering
 ```
 
 ## Structure (deliberately unlike a state machine)
@@ -18,199 +19,141 @@ GOWORK=off go test .           # vectors of handshake.json / kdf.json, round tri
   `handshake.go`) that keeps `h`, `ck`, `k`, `n` as local variables and calls pure helpers
   (`mixHash`, `mixKey`, `encHash`, `decHash`). The token order is written out line by line from the
   tables of §4.1 and §4.2; there is no pattern interpreter.
-- The two roles run in two goroutines over channels; both log `h` and `ck` after every token, and
-  `run` requires the two logs, the messages, the payloads and the final keys to be identical.
-- Payload protobufs are produced by a separate minimal writer (`payloads.go`), and checked against
-  `handshake.json` encodings.
+- The two roles run in two goroutines over channels; both log `h`, `ck`, `k`, `n` after every token,
+  and `run` requires the two logs, the messages, the payloads and the final keys to be identical.
+- Payload protobufs are produced by a separate minimal writer (`payloads.go`) from the field
+  descriptions, and checked against the `encoded` values of `handshake.json`.
 
-## What reproduces the existing vectors (tests)
+## Status after the spec update (merge of `spec-v2`)
 
-All of these pass:
+The runs now use the normative inputs: `handshake.json` `transcript_inputs` (the `hs/xk/*` seeds for
+all three patterns), `prologue_xk`, `prologue_xk_hidden`, `prologue_xx_bare_address`, the payloads
+`HsInit_xk`, `HsInit_xk_hidden`, `HsInit_xx`, `HsResp`, `HsResp_xx`, `HsFinish`, `HsFinish_xx`, and
+the `initiator` / `initiator_throwaway` cards of `node-card.json`. The hidden `HS_HELLO` is built with
+the §3.4 GREASE rule, the P2 card is chosen by the §7 "Card in P2 (XK)" rule, and `ck` is erased only
+after `Split`, `session_secret` and `sid` (§9, `finish` in `handshake.go`).
 
-- `handshake.json`: `initialize_symmetric` (h0 = ck0 for both names), both prologues and
-  `h_after_prologue`, `h_after_premessage_rs`, `rid` = `node-card.json` device ID, `access`
-  (`pass_id`, `proof` over the seed `hs/h1`), `payloads.HsInit` / `HsResp` encodings, `HsFinish`
-  SHA-256 and length, the whole `puzzle` block (cookie, nonce 2274, hash, `HS_RETRY` frame, hello
-  with solution), and every value of `deferred_transcripts.inputs_xk` (public keys, ML-KEM `ek`
-  hash, ciphertext hash, shared secret).
-- `kdf.json` `session`: Split keys, `session_secret`, `sid`, and the `sealed_record` with `k_i2r`.
-- In the transcripts: the message overheads are exactly §4.1's 1232 / 1152 / 64 bytes for XK, and
-  the h after the XK pre-message and the XX prologue equal `handshake.json`.
+`transcript-cleanroom.json` was regenerated and committed (5b67d50) **before**
+`handshake-transcript.json` was opened. Comparison afterwards (`TestNormativeTranscript`):
 
-There is no existing full transcript to compare against (D15), so the transcript bytes themselves
-are checked only by the internal round trip and must be compared with the main implementation.
+| transcript | prologue | P1/P2/P3 | steps h, ck, k, n | h before each payload | message bytes | final h, ck, k_i2r, k_r2i, session_secret, sid | transport_example |
+|---|---|---|---|---|---|---|---|
+| `XKhfs` | equal | equal | 14/14 equal | equal | 3/3 equal | equal | equal |
+| `XKhfs-access-proof` | equal | equal | 14/14 equal | equal | 3/3 equal | equal | equal |
+| `XXhfs` | equal | equal | 14/14 equal | equal | 3/3 equal | equal | equal |
 
-## Transcripts written
+**No value differs.** Only names differ: the step labels (`init`, `prologue`, `pre:s` there;
+`InitializeSymmetric`, `MixHash(prologue)`, `MixHash(rs) pre-message` here), the JSON field names
+(`bytes` there, `noise_message` here; for "no key", `k` is `""` there and omitted here), and the
+transcript ids, which were renamed to the normative names. The clean-room file keeps its own layout,
+so the generator's `-crosscheck` option cannot read it as is; `TestNormativeTranscript` does the
+comparison instead.
 
-`transcript-cleanroom.json` has four runs. For each: seeds used, public keys, `HS_HELLO` payload and
-frame, `cb`, `rid`, prologue, P1/P2/P3 (hex, length, SHA-256), every step's `h`/`ck`/`k`/`n`, each
-Noise message and its `HS_MSG` frame, the first flight (`HS_HELLO` frame ‖ `HS_MSG` frame 1),
-`h1`, the ML-KEM hashes, card checks, and final `h`, `ck`, `k_i2r`, `k_r2i`, `session_secret`, `sid`.
+## Tests
 
-| id | what | why |
+All 15 pass:
+
+- `handshake.json`: `initialize_symmetric`; the three prologues and `h_after_prologue`;
+  `h_after_premessage_rs`; `rid` = the device ID; `access_example`; every `payloads.*.encoded`
+  (`HsInit_xk_hidden` after a run, because its proof is over the real `h1`); `puzzle`; every
+  `transcript_inputs` value; the §3.4 GREASE examples.
+- `kdf.json` `session`: Split keys, `session_secret`, `sid`, `sealed_record`.
+- `handshake-transcript.json`: everything in the table above.
+- Round trips of all three runs, with these checks:
+  - message overheads are 1232/1152/64 bytes for XK and 1216/1200/64 bytes for XX;
+  - the §7 card checks pass: `hs_key` = `0x02 ‖ rs`, the signer's device ID equals the
+    `device_id` of `node-card.json` `initiator` / `initiator_throwaway`, and the `hs_key` of the
+    XX P2 public card matches `rs`. Signatures and device lists are not verified.
+- Failure cases: tampering with any message, a wrong prologue, zero and small-order DH, a
+  non-reduced ML-KEM key.
+
+## Earlier ambiguities A1–A19: how the spec resolved them
+
+The quoted originals are in the history of this file (commit ee165c3).
+
+| | Resolution in the merged spec | Here |
 |---|---|---|
-| `xk` | XK with `deferred_transcripts.inputs_xk` and P1/P2/P3 **literally** `payloads.*` | the byte-for-byte target named by `handshake.json` |
-| `xk_live_access` | same, but `P1.access.proof` over the run's real `h1`; responder verifies it | the literal P1 is not a valid hidden-node message (A7) |
-| `xx` | XX with seeds `hs/xx/*`, bare-address prologue, XX-legal payloads | no XX inputs exist (A9) |
-| `xx_with_xk_seeds` | XX reusing the `hs/xk/*` seeds | in case the other implementation reused them |
+| A1 XX inputs | `transcript_inputs` = XK seeds for all three transcripts | followed; `hs/xx/*` dropped |
+| A2 XX payloads | §4.2 "MUST contain only ..."; `HsInit_xx`, `HsResp_xx`, `HsFinish_xx` | followed |
+| A3 XX card scope | §4.2: the public card | followed |
+| A4 P2 card in XK | §7 "Card in P2 (XK)"; `known_card_seq` = the public card's `seq` | followed (`p2Card`) |
+| A5 initiator card | `node-card.json` `initiator`, `initiator_throwaway` | followed; card checks pass |
+| A6 32 vs 33 bytes | §2 "Key bytes" | as already read |
+| A7 h1 of the proof | §5 "of this handshake"; `XKhfs-access-proof` | followed |
+| A8 GREASE in `offered` | §3.4: before the first larger entry | followed (`insertGrease`) |
+| A9 `known_card_seq` in XX | §4.2: malformed | absent |
+| A10 `n` without a key | §2, explicit | as already read |
+| A11 `hs` rotation | §4.1: current key first, then a full second pass | not implemented (one key) |
+| A12 `rid` | §3.3 "always a device ID" | as already read |
+| A13 hidden cards list XX | §3.1: never 0x0002; the invite card now has `l1_suites [1]` | consistent |
+| A14 what is compared | §12 D15: Noise message bytes, steps, finals | compared exactly that |
+| A15 `pad` | absent in vectors | absent |
+| A16 section order | §3.4 now after §3.3 | resolved |
+| A17 byte order | §6 `u64be` | as already read |
+| A18 erase order | §9 "Order" | followed |
+| A19 hidden-node close | §5 / §11: the uniform close wins | not modelled (no timing) |
 
-## Ambiguities, gaps and contradictions
+## Still open or new after the update
 
-Each item quotes the text and says which reading this implementation took. Items marked
-**[transcript]** change bytes of the transcript if read the other way.
+### B1. A `known_card_seq` that names no current card
 
-### A1. No XX transcript inputs [transcript]
+§7: "The responder includes its current card of that card's scope in `P2` exactly when that card has
+a higher `seq`". This assumes the responder can map any `known_card_seq` to a scope. If the value is
+the `seq` of an old card the responder no longer remembers, or `0`/absent (an XK initiator that got
+the `hs` key some other way), the scope is unknown and the rule gives no answer. **Chosen here** (the
+vectors do not exercise it): send the current public card. The spec should say what to send, and
+whether a responder must keep a `seq` → scope map for every card it has issued.
 
-`handshake.json` `deferred_transcripts` has only `inputs_xk`; handshake.md §12 D15 says "Full
-message-by-message transcripts of XKhfs and XXhfs (fixed ephemerals, ML-KEM seeds and encapsulation
-randomness) are to be produced", and README.md "`handshake.json` fixes the inputs to use". For XX it
-does not. **Chosen:** seeds `hs/xx/initiator_e`, `hs/xx/initiator_s`, `hs/xx/responder_e`,
-`hs/xx/initiator_e1_d`, `hs/xx/initiator_e1_z`, `hs/xx/encaps_m` (same suffixes as XK), responder
-static = `node-card.json` `hs_sk`, prologue = `prologue_xx_bare_address`. A second run reuses the
-`hs/xk/*` seeds. The spec should name the XX inputs, including which prologue (bare address, or
-`flags = 0x02` with an expected device ID, which has no vector).
+### B2. `pad` in XX P1
 
-### A2. Which payloads in XX [transcript]
+§4.2: "`P1` in XX MUST contain only `proto_ver`, `features`, `services` and `time`". §7: "`pad`, when
+present, is the last field". Read literally, the first sentence forbids `pad` in XX P1 and the second
+allows it everywhere. A responder that enforces "only" closes on a padded XX P1. The vectors have no
+`pad`. Suggest "only ... `time`, and optionally `pad`".
 
-`deferred_transcripts` says "P1 = payloads.HsInit, P2 = payloads.HsResp, P3 = payloads.HsFinish"
-only for XK. These cannot be used in XX: §4.2 "P1 in XX MUST NOT contain `access` or `early`, and
-SHOULD contain only `proto_ver`, `features`, `services` and `time`", while `payloads.HsInit` carries
-`access` and `known_card_seq`; §7 "`card` ... REQUIRED in XX", while `payloads.HsResp` has no card.
-**Chosen:** XX P1 = `payloads.HsInit` without fields 4 and 5; XX P2 = `payloads.HsResp` plus
-field 4 = the `node-card.json` **public** card envelope (inserted in field order, before
-`observed`); XX P3 = `payloads.HsFinish` unchanged.
+### B3. GREASE in `offered`: how many, and what the responder checks
 
-### A3. Which card scope the responder sends in XX P2 [transcript]
+§3.4 says "one GREASE value". §3.1 lists the malformed hellos: repeats, `chosen` not in `offered`,
+GREASE as `chosen`, a bad count, trailing bytes. It does not say whether two different GREASE values,
+or an `offered` made only of GREASE, is malformed. It also does not say whether the responder checks
+that `chosen` is the *first non-GREASE* entry, or only that it is its own most-preferred suite in the
+intersection. **Chosen here:** the builder emits at most one GREASE value. This cross-check has no
+responder-side `HS_HELLO` parser.
 
-§7 says only "responder card: REQUIRED in XX". The responder has public, peer and invitation cards
-(objects.md §10.3); the peer card carries noise3/ws2 addresses and `prev_hs`, which a bootstrap
-stranger should not learn. **Chosen:** the public card. The spec should say which scope.
+### B4. The throwaway identity reuses the initiator's `hs` key
 
-### A4. `payloads.HsResp` has no card although the rule requires one [transcript]
+§4.2 defines a throwaway identity as "a fresh Ed25519 key and a minimal card, never reused"; it does
+not say that the X25519 `hs` key must be fresh too. In the vectors, `initiator_throwaway` has the
+same `hs_key` as `initiator` (`x25519(hs/xk/initiator_s)`), and the XX transcript sends that key as
+`s`. This causes two problems:
 
-§7: "`card` ... in XK if newer than `known_card_seq`". `payloads.HsInit` sets
-`known_card_seq = ts − 86400 = 1793577600`, and every card of `node-card.json` has a larger `seq`
-(1793664000..2). So a conforming responder would include its card in P2. **Chosen:** literal
-`payloads.HsResp` (no card) for the `xk` runs, as the vector file says. Either fix
-`known_card_seq` to the card's `seq` or add the card.
+- (a) the `hs` key links the throwaway session to the real identity, which defeats its purpose;
+- (b) §7 "hs_key ↔ device ID binding" says "A card whose `hs_key` ... is already bound to a
+  different signer is rejected and counted as abuse". A responder that has seen the real `initiator`
+  card rejects the throwaway card and counts it as abuse.
 
-### A5. `payloads.HsFinish` carries the responder's card [transcript-validity]
+The transcript bytes are fine, because shared keys are a deliberate vector choice. But the spec should
+require a fresh `hs` key for a throwaway identity, and the vector note should say that the shared key
+is a test shortcut a real node would refuse.
 
-`HsFinish.fields` = "card = node-card.json peer card (format illustration)". In a transcript this
-card is the *initiator's* card, so §7 "Card checks ... `card.hs_key` equals the Noise remote static
-key (`rs`)" fails: its `hs_key` is the responder's, not `hs/xk/initiator_s`. A conforming responder
-rejects after message 3 (the transcript bytes are unaffected; `card_checks.p3_card_hs_key_matches_rs`
-is `false` in every run). There is no initiator card in the vectors. **Chosen:** use it literally,
-record the failed check. The vectors need an initiator card whose `hs_key` is `x25519(initiator_s)`.
+### B5. The AD of `transport_example` is not the wire.md §8.4 record AD
 
-### A6. `rs` is 32 bytes, `card.hs_key` is 33 [interpretation]
+`final.transport_example` uses `ad = sid`, while wire.md §8.4 seals records with
+`aad = sid(16) ‖ n(8)` (reproduced from `kdf.json` `sealed_record`). The vector's note says it checks
+only the keys and the nonce format, so this is not a contradiction. Still, a reader who copies it as
+a record format gets it wrong; a pointer to §8.4 would help.
 
-§4.1 `MixHash(rs)` "(the responder's `hs` public key, from the initiator's copy of the card)";
-objects.md: `hs_key` is an `akey` = `0x02 ‖ pub(32)`. Which bytes are hashed is not said.
-**Chosen:** the raw 32 bytes (this is what `h_after_premessage_rs` requires, so the vector settles
-it), and the card check compares `hs_key` with `0x02 ‖ rs`. The text should say "the 32-byte X25519
-key inside `hs_key`" for the pre-message, `s` token and the card check.
+### B6. What D15 compares vs. what `-crosscheck` compares
 
-### A7. Access proof in the literal P1 is over the fixed seed `hs/h1` [transcript]
+§12 D15: implementations must reproduce "every step's `h`, `ck`, `k`, `n`". vectors/README.md says
+that `-crosscheck` "compares the message bytes and final hash". So a file can pass `-crosscheck` and
+still differ in an intermediate `ck` or `k`. This is a gap in the tooling, not in the spec;
+`TestNormativeTranscript` compares every step.
 
-§5 "`h1` is the handshake hash immediately before `EncryptAndHash(P1)` (after step 1.3)", but
-`payloads.HsInit.access.proof` is computed from the seed `hs/h1`, and `deferred_transcripts` reuses
-that P1 verbatim. The resulting message 1 would be rejected by a real hidden responder. **Chosen:**
-both: `xk` uses the literal P1; `xk_live_access` recomputes the proof over the real `h1` (which is
-`derived."h1 ..."`). The spec should say which one D15 compares.
+### B7. Key rotation (A11) has no vector
 
-### A8. Preference order vs. sorted with GREASE in `offered`
-
-§3.1: "`offered` u16 × n — suite IDs, in the initiator's preference order". §3.4: "an initiator
-SHOULD add one GREASE value ... to `offered` ... Lists stay sorted with the GREASE value in its
-numeric place". A preference-ordered list is not sorted in general (e.g. preferring 0x0002 over
-0x0001), so "sorted" either applies only to `features`/`services` or forces numeric order on
-`offered`. **Chosen:** no GREASE in `offered` (the vector hellos have none; it is only a SHOULD),
-so it does not matter for these bytes. The reading here is that "sorted" is meant for
-`HsInit.features`/`services` (§7), which leaves the position of GREASE in `offered` unspecified.
-Two implementations that do add GREASE may disagree on its position, and the prologue hashes it.
-
-### A9. `known_card_seq` in XX
-
-§7 marks it "(XK)" but does not forbid it in XX the way `access`/`early` are; §4.2 "SHOULD contain
-only ..." excludes it softly. **Chosen:** absent in XX.
-
-### A10. `EncryptAndHash` without a key
-
-§2.1: "appends `EncryptAndHash(e1.public)` (1184 bytes, plus 16 if a key is set)". In both patterns
-`e1` (and XX's P1) come before any `MixKey`, so they are plaintext. Noise §5.2 is followed literally:
-with an empty key, EncryptAndHash is `MixHash(plaintext)` and `n` does not move. Not ambiguous, and
-an implementation that wrongly advanced `n` would still agree, because the next `MixKey` resets `n`;
-`steps[].n` records it anyway.
-
-### A11. Key rotation: what the responder retries [behaviour]
-
-§4.1: "During an `hs` rotation the responder holds a current and a previous key (§7.1) and tries
-both: one extra X25519 per message 1". Because `MixHash(rs)` is the pre-message, a different key
-changes `h` from the start: the retry is MixHash(prologue), MixHash(rs'), MixHash(re), MixHash of
-the 1184-byte `e1`, one X25519 and one AEAD open, not just one X25519. Not said: the order of tries
-(current first?), and that only the P1 AEAD distinguishes the keys (with a P1 decryption failure
-for both being the uniform failure). Not implemented here (one responder key only).
-
-### A12. `rid` naming: device ID vs node ID
-
-§3.3 says `rid` is the "expected responder device ID (the signer of its card)", §4.2 says "checks
-`SHA-256(card signer akey) = rid`", but `prologue_xx_bare_address.note` says "no expected node
-ID", and §7 card checks speak of "device ID or node ID". The vector's `rid` is the device ID
-(SHA-256 of `0x01 ‖ device pub`), reproduced here. **Chosen:** device ID; the note should say
-device ID.
-
-### A13. A hidden node's cards list the XX suite
-
-D22: "A hidden node MUST NOT accept XX". D4: "`offered` MUST contain exactly the suites that are both
-supported by the initiator and listed in `l1_suites` of the ... responder's card". The invitation
-card in `node-card.json` has `l1_suites = [1, 2]`, and the XK hello offers `[0x0001, 0x0002]` to a
-responder that the P1 `access` field shows to be hidden. Harmless for the bytes, but then a hidden
-node's card advertises a suite it refuses; either cards of hidden nodes should omit 0x0002 or the
-offered rule should allow it.
-
-### A14. What "the exact bytes of each message" are
-
-§4: "Each Noise message is sent as one `HS_MSG` frame whose payload is the message bytes", and the
-first flight is `HS_HELLO` "immediately followed by" `HS_MSG`. The transcripts give the Noise
-message, its `HS_MSG` frame (type 0x03, flags 0, QUIC varint length) and the first flight; the spec
-should say which of them D15 compares (I recommend the Noise message bytes plus the frames).
-
-### A15. `pad` and determinism
-
-§7 "`bytes pad = 15; // random length, zero bytes`" makes payloads non-deterministic; the vectors use
-no `pad`. **Chosen:** no `pad` (field absent, not an empty field). Should be stated as an input of
-D15 ("pad absent").
-
-### A16. Order of the sections
-
-§3.4 (GREASE) appears between §3.1 and §3.2, and §3.3 (prologue) after §3.2, so the reader meets
-`flags & 0x02` and `rid` before they are defined. Editorial only.
-
-### A17. Byte order of `u64` in cookie and puzzle
-
-§6 writes `u64(minute)` and `u64(nonce)` without byte order; README.md §6 "unsigned big-endian
-unless a field says `le`" settles it, and the vector confirms big-endian. The AEAD nonce is the only
-little-endian value (§2, explicit). Not ambiguous once README.md is read, but §6 could say "u64be".
-
-### A18. `session_secret` vs erasing `ck`
-
-§9 derives `session_secret` from `ck` and then says "All ephemeral secrets, `ck` and the KEM key pair
-are erased". Implied order: Split and `session_secret` first, then erase. Fine; noted because `sid`
-also needs the final `h`, which is not on the erase list (it is public to both sides).
-
-### A19. All-zero DH and the ML-KEM check: where they abort
-
-§2 "an all-zero output MUST abort", §11 "Any decryption failure, malformed token, all-zero DH
-output, or invalid ML-KEM key ends the handshake by closing the carrier connection without a
-message". For a hidden node §5 requires the uniform delayed close instead, and step 3 ("Message 1
-tokens") covers the `es` DH; §11 reads as an immediate close. **Chosen:** both abort (the test
-checks small-order and zero points and a non-reduced `ek`); timing is out of scope here. The text
-should say that for hidden nodes §5's uniform close overrides §11.
-
-### Things that were *not* ambiguous
-
-Protocol name as the Noise `protocol_name` (D3, long name hashed), prologue layout, token order of
-both patterns, HKDF/Split/session-secret/sid, `e1`/`ekem1` processing, ML-KEM seed `d ‖ z` and
-encapsulation randomness `m`, the AEAD nonce and AD (= `h`), message sizes of §4.1. The existing
-vectors pin all of these.
+The resolved text is clear: "processes message 1 with the current key first; if `P1` does not
+decrypt, it repeats the initialisation and message 1 with the previous key". But no transcript runs
+under `prev_hs`. On a hidden node, the second pass happens before the access check, because the check
+needs the decrypted P1. A vector of message 1 under `prev_hs_sk`, with the responder's expected `h1`,
+would pin both.
