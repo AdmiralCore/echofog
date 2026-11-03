@@ -1,6 +1,8 @@
 package objects
 
 import (
+	"bytes"
+	"compress/flate"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -132,4 +134,16 @@ func sealRaw(label string, s *keys.Signer, seq, notAfter uint64, body []byte) []
 	out = appendVarint(out, uint64(len(body)))
 	out = append(out, body...)
 	return append(out, s.Sign(out)...)
+}
+
+func deflate(t testing.TB, b []byte) []byte {
+	t.Helper()
+	var z bytes.Buffer
+	w, err := flate.NewWriter(&z, flate.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write(b)
+	w.Close()
+	return z.Bytes()
 }
