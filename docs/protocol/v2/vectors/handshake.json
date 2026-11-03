@@ -30,13 +30,13 @@
   ],
   "prologue_xk": {
     "cb": "96ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c",
-    "rid (node-card.json node_id)": "81799a1fea77a47945ecd1cbd0124c81c48bdcd89a44755114a72b68e458cbd3",
+    "rid (node-card.json device_id)": "aed4f96646d6dcfa44881f9dc7a7ba17cc7aec96bdb5aaa3ba1691bba206fd91",
     "hs_hello": "0200010002000102",
     "hs_hello_note": "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound)",
-    "prologue": "6563686f666f672f6873322f70726f6c6f67756596ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206c81799a1fea77a47945ecd1cbd0124c81c48bdcd89a44755114a72b68e458cbd3080200010002000102",
-    "h_after_prologue": "b231cb07beff8f9f2a56f8aed51a6830011b0b49ba11603a137e9a217fdcbd71",
+    "prologue": "6563686f666f672f6873322f70726f6c6f67756596ecb4685d8c9d121591cea825802ffb5dedc31f0e2248de735830123291206caed4f96646d6dcfa44881f9dc7a7ba17cc7aec96bdb5aaa3ba1691bba206fd91080200010002000102",
+    "h_after_prologue": "a161a7369429f1e7ad8bbc4284ad4f90e9c2614b74a6f2ef8fb32db24ec162b4",
     "responder_static_rs": "3da04cb50fc0a24661735c3ba5b9dcb84b01abafe58ca535521a78da059fcf2b",
-    "h_after_premessage_rs": "99dadf26cf5801ad787ad433a7bc5bb1ede57a19fdac1231e9e8bfcec6c14241"
+    "h_after_premessage_rs": "b3581ff5d9eb76792fa78daea88e87ec515cca5e7958c264a7c366c87fb936ab"
   },
   "prologue_xx_bare_address": {
     "hs_hello": "010002000200",
@@ -61,8 +61,8 @@
     },
     "HsFinish": {
       "fields": "card = node-card.json peer card (format illustration)",
-      "encoded_sha256": "d7e5ab3a5453dd0976220d16b475968d7468457ffa9a0065e6df6523e19d53df",
-      "encoded_len": 593
+      "encoded_sha256": "ee7ad2b570f399856a90447810fd470f5c0ce7d0d05e0fe7515fe4380a9399cf",
+      "encoded_len": 810
     }
   },
   "puzzle": {
