@@ -40,11 +40,11 @@ fully, partly or not at all.
 | 30 | Timers | fixed values (10 s, 20 s, 5 s, 300 ms…) | ≥ ±20 % jitter on every periodic timer | V2 |
 | 31 | Time units | seconds and nanoseconds in the same field | seconds everywhere; clock offsets learned from peers | V6 |
 | 32 | Node ID | `SHA-256(pub)` | `SHA-256(akey)` (algorithm-tagged) | L7 agility |
+| 33 | Bans | IP bans after 8 failed handshakes | no pre-authentication bans; puzzles scale with source pressure | (CGNAT collateral damage) |
+| 34 | Dead code | gossip, discovery service, mDNS, migration, 13 dead message types | not specified; v1 numbers are not reused because v2 has its own registries | V7 |
 | 35 | Identity | one Ed25519 key per user, also the network identity | account key (node ID) and per-device keys (device ID) with an account-signed device list | multi-device readiness |
 | 36 | Exit speed | bandwidth probe: 12 MiB bursts on request | rating from real tunnel throughput and user-started tests | V4 |
 | 37 | Call authentication | none per sender | batched sender signatures | P1 |
-| 33 | Bans | IP bans after 8 failed handshakes | no pre-authentication bans; puzzles scale with source pressure | (CGNAT collateral damage) |
-| 34 | Dead code | gossip, discovery service, mDNS, migration, 13 dead message types | not specified; v1 numbers are not reused because v2 has its own registries | V7 |
 
 ## 2. Removed without replacement
 
