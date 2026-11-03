@@ -28,7 +28,7 @@ capitals.
 | [CHANGES-from-v1.md](CHANGES-from-v1.md) | what changed and why, tied to weakness IDs |
 | [vectors/](vectors/) | JSON test vectors and their reference generator (`vectors/gen`) |
 
-Weakness IDs (K1–K10, V1–V7, P1–P11, N1, S12) refer to the v1 weakness review that motivated this
+Weakness IDs (K1–K10, V1–V7, P1–P11, N1, C12) refer to the v1 weakness review that motivated this
 specification. They are used only as cross-references; each one is restated briefly where it
 matters.
 
