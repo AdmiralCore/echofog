@@ -136,26 +136,31 @@ A connection is built bottom-up:
 
 | Key | Algorithm | Purpose | Published in |
 |---|---|---|---|
-| identity key | Ed25519 (alg `ed25519`) | signs the node card and other objects; node ID = SHA-256 of its algorithm-tagged form | card envelope |
-| handshake static key `hs` | X25519 | Noise static key `s` | card (`hs_key`) |
+| account key | Ed25519 (alg `ed25519`), from the mnemonic | the person's identity: node ID = SHA-256 of its algorithm-tagged form; signs the device list | device list envelope, `account` in cards |
+| device key | Ed25519, random per installation | signs the device's card and prekeys; device ID = SHA-256 of its algorithm-tagged form | card envelope |
+| handshake static key `hs` | X25519, random per device | Noise static key `s` | card (`hs_key`) |
 | masking keys | X25519, random; a contacts key, one per unredeemed invitation, one per REALITY listener | L0: noise3 and REALITY v2 | card (`mask_keys`); noise3 keys only in peer and invitation cards |
-| prekeys | X25519 SPK/OPK + ML-KEM-768 | chat/2 PQXDH | `prekeys/2` object |
+| prekeys | X25519 IK/SPK/OPK + ML-KEM-768, per device | chat/2 PQXDH | `prekeys/2` object |
 | wallet key | TON | exit payments | never on the wire except in vouchers |
 
-The identity key is derived from the user's BIP-39 mnemonic exactly as in v1 (SLIP-0010 Ed25519,
-path `m/44'/999'/account'/0'`). The handshake static key and the masking keys are **random**, are
-stored encrypted on disk, and MUST NOT be derived from the identity key or the node ID (K1).
+The account key is derived from the user's BIP-39 mnemonic exactly as v1's identity key (SLIP-0010
+Ed25519, path `m/44'/999'/account'/0'`). The device key, the handshake static key and the masking keys
+are **random**, are stored encrypted on disk, and MUST NOT be derived from the account key or the
+node ID (K1). Restoring the mnemonic on a new installation keeps the node ID and creates a new device.
 
-### 5.2 Node ID
+### 5.2 Node ID and device ID
 
-`node_id = SHA-256(akey)` where `akey` is the algorithm-tagged public identity key
+`node_id = SHA-256(akey)` where `akey` is the algorithm-tagged public **account** key
 ([objects.md](objects.md) §1; [registries.md](registries.md) §8). For Ed25519, `akey = 0x01 ‖ pub`
-(33 bytes). The text form of a node ID is 64 lowercase hex characters.
+(33 bytes). `device_id` is the same hash of a device key. The text form of either is 64 lowercase hex
+characters. Contacts, links and chats address node IDs; the network (DHT positions, sessions, relays,
+the handshake's responder binding) addresses device IDs. In v2.0 every account has one device.
 
 **Decision D1 (node ID derivation).** v1 used `SHA-256(pub)`. v2 hashes the algorithm-tagged key so
 that IDs of keys of different algorithms (for example a later ML-DSA identity) can never collide or be
-confused. This changes every node ID; with no v1 users this costs nothing, and it is the only moment
-when the change is free.
+confused. This gives everyone a new node ID; with no v1 users this costs nothing, and it is the only
+moment when the change is free. Together with Decision D35 (separate account and device keys) the node
+ID never has to change again when multi-device ships.
 
 ## 6. Conventions
 
