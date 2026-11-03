@@ -516,5 +516,7 @@ the **Noise message bytes** of each message (`messages[].bytes`), every step's `
 the final `h`, `ck`, `k_i2r`, `k_r2i`, `session_secret` and `sid`. The `HS_HELLO` and `HS_MSG` frames
 around the messages follow from [vectors/frames.json](vectors/frames.json) and are not part of the
 comparison. Two independent step-2 implementations (the main one and a clean-room one written only
-from this document) and the reference generator produce these values byte for byte (the generator's
-`-crosscheck` option recomputes any implementation's transcript file).
+from this document) agreed byte for byte on the first transcripts, and the reference generator
+reproduced them; the transcripts were then regenerated with application-valid inputs, and both
+implementations MUST reproduce the current file before L1 is final (the generator's `-crosscheck`
+option recomputes any implementation's transcript file).
