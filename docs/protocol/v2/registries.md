@@ -36,6 +36,8 @@ is given by the service of the stream they appear on (§4).
 | 0x10 | PATH_BIND | H (instead of HS_HELLO) | `sid(16) ‖ varint path_id ‖ mac(32)` | 56 | wire.md §8.2 |
 | 0x11 | PATH_BIND_OK | H | `varint path_id` | 8 | wire.md §8.2 |
 | 0x12 | PATH_ABANDON | S | `varint path_id ‖ varint code` | 16 | wire.md §8.3 |
+| 0x13 | PUNCH_OFFER | S | `PunchOffer { repeated bytes addrs = 1; uint64 nonce = 2; }`, each addr `family(1) ‖ ip ‖ port(2)`, ≤ 8 | 256 | services.md §6 |
+| 0x14 | PUNCH_SYNC | S | `u64 nonce` echoed; both sides start punching RTT/2 after it | 8 | services.md §6 |
 | 0x18 | MUX_STREAM | B | `varint stream_id ‖ u8 flags ‖ data` | 16400 | wire.md §5.2 |
 | 0x19 | MUX_RESET | B | `varint stream_id ‖ varint code` | 16 | wire.md §5.2 |
 | 0x1a | MUX_WINDOW | B | `varint stream_id ‖ varint increment` | 16 | wire.md §5.2 |
@@ -114,6 +116,7 @@ negotiated set is the intersection ([handshake.md](handshake.md) §7).
 | 0x0004 | `observed-addr` | the responder reports the initiator's observed address (OBSERVED_ADDR, HsResp.observed) |
 | 0x0005 | `early-data` | the responder processes 0-RTT data in HsInit.early |
 | 0x0006 | `card-push` | either side may push a newer card with CARD_UPDATE |
+| 0x0007 | `stream-resume` | reserved: streams that survive a path change by offset (successor of v1 TCP rotation) |
 | 0x0010 | `spqr` | reserved: post-quantum ratchet in chat/2 (later) |
 | 0x0011 | `sealed-header` | reserved: encrypted ratchet headers in chat/2 (later) |
 | 0x0012 | `mls` | reserved: MLS groups (later) |
@@ -174,7 +177,7 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 
 | Label | Object | Max body | Max lifetime | Section |
 |---|---|---|---|---|
-| `echofog/card/2` | node card | 3800 bytes (envelope ≤ 4096) | 7 days | objects.md §3 |
+| `echofog/card/2` | node card | 3800 bytes (envelope ≤ 4096) | 7 days (invite-scoped: 30 days) | objects.md §3 |
 | `echofog/prekeys/2` | chat prekey bundle (PQXDH) | 6144 | 30 days | objects.md §5 |
 | `echofog/devices/2` | device list (multi-device, later use) | 4096 | 30 days | objects.md §6 |
 | `echofog/mailbox-hint/2` | mailbox rendezvous hint | 1024 | 6 hours | objects.md §7 |
@@ -223,6 +226,7 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/mailbox2/fetch-auth` | signature input prefix of FETCH and ACK | services.md §5 |
 | `echofog/chat2/seal` | sealed-sender envelope key | services.md §4 |
 | `echofog/call2/sender-key` | per-sender media key | services.md §9 |
+| `echofog/call2/signal` | signature input prefix of forwarded call signals | services.md §9 |
 | `echofog/call2/epoch` | call epoch secret chain | services.md §9 |
 | `echofog/exit2/pay-tag` | per-session payment tag | services.md §7 |
 
