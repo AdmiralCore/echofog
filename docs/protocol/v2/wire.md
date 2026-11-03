@@ -1,0 +1,582 @@
+# Wire format: L0 masking suites, frame v2, paths, shape profiles
+
+This document specifies everything below the handshake and the frames that carry the session:
+
+- §1 carrier selection;
+- §2 `noise3`, the masked UDP suite for links inside one country;
+- §3 `reality2-quic` and §4 `reality2-tcp` / `ws2`, the camouflaged suites for links across a border
+  and for every link to a server;
+- §5 the inner TLS and the byte-stream mux;
+- §6 frame v2; §7 session control; §8 paths; §9 padding and shape profiles; §10 limits and timeouts.
+
+Byte layouts use the conventions of [README.md](README.md) §6. Test vectors:
+[vectors/noise3.json](vectors/noise3.json), [vectors/elligator2.json](vectors/elligator2.json),
+[vectors/reality2.json](vectors/reality2.json), [vectors/frames.json](vectors/frames.json),
+[vectors/varint.json](vectors/varint.json), [vectors/kdf.json](vectors/kdf.json).
+
+## 1. Carrier selection
+
+An L0 carrier is chosen from the responder's **signed card** only. Addresses, suites, masking keys and
+suite parameters (SNI, WebSocket URL, shape profile) learned from anywhere else — unsigned address
+annotations, third-party PEX entries, DHT routing replies — MUST NOT be used to choose a suite or its
+parameters (K4). A bare `host:port` without a card can be dialed only with the XX bootstrap handshake
+over a suite listed for bootstrap ([handshake.md](handshake.md) §4.2) and is never trusted for SNI.
+
+**Decision D21 (mesh carrier).** The initiator selects the suite as follows.
+
+1. If the responder's card has `role = server`, the initiator MUST use a camouflaged suite
+   (`reality2-quic`, `reality2-tcp` or `ws2`), except when both nodes are positively known to be in the
+   same country (see 3). A server card without a camouflaged address is not dialed directly across a
+   border; it is reached through a relay.
+2. If the initiator is in the same country as the responder, it MAY use `noise3`.
+3. "Same country" requires positive knowledge: both public addresses map to the same country in the
+   node's built-in offline GeoIP database. An unknown country counts as a border. A node MUST NOT query
+   an online GeoIP service with peer addresses (K7).
+4. Across a border, or when unknown, the initiator MUST use a camouflaged suite; if the responder has
+   none (an ordinary user), the link goes through a relay that has one (guard mode, as in v1).
+5. Happy eyeballs: the preferred suite is tried first; the second starts after
+   `300 ms + uniform(0, 200) ms` or immediately when the first fails. Per-address and per-network
+   memory of the working suite is kept as in v1.
+6. A TCP suite is dialed only on the port its card lists. No suite is dialed with a guessed port, and
+   no REALITY suite is dialed with an SNI that is not in the card (no built-in default SNI; V1).
+
+## 2. noise3
+
+noise3 makes every datagram of a flow indistinguishable from uniformly random bytes to anyone who
+does not hold the responder's masking public key. It wraps the datagrams of an inner QUIC v1
+connection (§5).
+
+### 2.1 Keys
+
+- The responder has one or more **masking keys**: X25519 key pairs `(mask_sk, mask_pub)`, generated
+  at random, never derived from the identity. Each appears in the responder's card as a `MaskKey`
+  ([objects.md](objects.md) §3) with `not_after`.
+- A hidden node uses a **separate masking key for every invitation** ([objects.md](objects.md) §10).
+- **Decision D10 (masking-key limits).** A noise3 listener MUST NOT hold more than 256 live masking
+  keys; a REALITY v2 listener MUST NOT hold more than 8. noise3 finds the key with a cheap selector MAC
+  (§2.3), so 256 keys cost 256 HMACs per stranger datagram and no X25519; REALITY v2 must try an X25519
+  per key. A hidden node with more invitations than the limit groups the oldest invitations onto
+  shared keys, and revocation of one invitation then rotates the key of its group.
+
+### 2.2 Ephemeral key and Elligator2 representative
+
+The initiator encodes its ephemeral public key with Elligator2 so that it looks uniformly random.
+
+Constants: `p = 2^255 − 19`, `A = 486662`, `Z = 2` (a non-square mod p). Field elements are encoded as
+32-byte little-endian integers.
+
+**Dirty ephemeral key.** A plain X25519 public key is always in the prime-order subgroup, and that is
+detectable after Elligator2 decoding. The initiator therefore makes the public point uniform on the
+whole curve:
+
+```
+sk  = 32 random bytes
+s   = clamp(sk)                              RFC 7748: s[0] &= 248; s[31] &= 127; s[31] |= 64
+t   = sk[0] & 7                              (the three bits clamping discards)
+P   = [s]B + [t]T                            on edwards25519; B = base point, T = a point of order 8
+u_e = Montgomery u-coordinate of P           u = (1 + y) / (1 − y)
+```
+
+`T` is the order-8 point with encoding
+`c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a` (any order-8 point gives the same
+security; this one is fixed for the vectors). Because every clamped X25519 scalar is a multiple of 8,
+`X25519(x, u_e) = X25519(x, u_clean)` for every peer scalar `x`: the torsion component changes the
+encoding, not the shared secret.
+
+**Inverse map (encoding).** Given `u = u_e` and a random byte `tweak`:
+
+1. If `u = 0`, or `u = −A`, or `−2·u·(u + A)` is not a square: no representative exists. Pick a new
+   `sk` and start again (about half of all keys fail).
+2. If `tweak & 1 = 0`: `r = sqrt(−u / (2·(u + A)))`, else `r = sqrt(−(u + A) / (2·u))`.
+3. Of the two roots `r` and `p − r`, take the one that is `≤ (p − 1)/2`.
+4. `repr = LE32(r)`; then `repr[31] |= tweak & 0xc0` (the two top bits are random).
+
+**Forward map (decoding)**, as in RFC 9380 §6.7.1 for curve25519:
+
+1. `r = LE(repr)` with bits 254 and 255 cleared.
+2. `x1 = −A / (1 + 2·r²)`.
+3. `g(x) = x³ + A·x² + x`. If `g(x1)` is a square, `u = x1`; otherwise `u = −x1 − A`.
+
+Implementations MUST check, for every generated key, that the forward map returns `u_e`.
+
+### 2.3 Key schedule
+
+```
+k_sel  = HMAC-SHA256(key = mask_pub, msg = "echofog/noise3/selector")          32 bytes, per masking key
+sel    = HMAC-SHA256(k_sel, repr)[0:16]
+z      = X25519(sk, mask_pub)               initiator            (all-zero z: abort)
+       = X25519(mask_sk, u)                 responder, u = forward_map(repr)
+okm    = HKDF-SHA256(ikm = z, salt = empty,
+                     info = "echofog/noise3/keys" ‖ mask_pub(32) ‖ u_e(32), L = 160)
+k_init = okm[0:32]      key of the Init datagram
+k_i2r  = okm[32:64]     data packets initiator → responder
+k_r2i  = okm[64:96]     data packets responder → initiator
+t_i2r  = okm[96:128]    tag key initiator → responder
+t_r2i  = okm[128:160]   tag key responder → initiator
+```
+
+**Decision D2 (hash families).** L0, L2, signed objects, links and services use SHA-256, HMAC-SHA256
+and HKDF-SHA256 (hardware support, standard libraries everywhere). BLAKE2s is used only inside the
+Noise handshake, because the agreed suite name fixes it there.
+
+**Decision D11 (no forward secrecy at L0).** The noise3 keys depend on the responder's static masking
+key. Whoever later steals `mask_sk` can remove the L0 layer of recorded flows and see the inner QUIC
+packets, which remain protected by TLS 1.3 and the Noise session. L0 is for unobservability, not
+confidentiality; an extra round trip for an L0 ephemeral exchange is not worth it.
+
+### 2.4 The Init datagram
+
+The first datagram of a flow, initiator → responder:
+
+| Offset | Size | Field | Content |
+|---|---|---|---|
+| 0 | 32 | `repr` | Elligator2 representative of the ephemeral key (§2.2) |
+| 32 | 16 | `sel` | key-selector MAC (§2.3) |
+| 48 | n + 16 | `box` | `ChaCha20-Poly1305(k_init, nonce = 0^12, aad = repr ‖ sel, InitPlain)` |
+
+```
+InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner ‖ zero padding
+```
+
+- `inner` is one inner QUIC datagram (a QUIC Initial of at least 1200 bytes).
+- The padding makes the whole datagram the length drawn from the shape profile (§9); the default
+  profile draws uniformly from [1280, 1420].
+- `flags` bits are reserved; senders MUST send 0; receivers MUST drop an Init with any bit set.
+- Overhead: 71 bytes plus padding.
+
+Until it has received an authenticated responder packet, the initiator sends every outgoing inner
+datagram as a **fresh** Init (new ephemeral key, new `repr`). It keeps the keys of up to 4 outstanding
+Inits; the first Init for which an authenticated `r2i` data packet arrives becomes the flow, the others
+are discarded. Retransmissions never repeat bytes on the wire.
+
+### 2.5 Responder processing of an Init
+
+For a datagram that does not match the tag of an established flow (§2.6):
+
+1. If its length is below 71 + 1200, drop.
+2. For each live masking key, compare `HMAC-SHA256(k_sel, repr)[0:16]` with `sel` in constant time. No
+   match: drop.
+3. Decode `u`, compute `z`; all-zero: drop. Derive keys; open `box`; failure: drop.
+4. `|ts − now| > 120 s`: drop.
+5. Replay cache keyed by `sel`, kept for 300 s: a hit is dropped. The cache SHOULD be persisted across
+   restarts (a Bloom filter flushed at least every 10 s), so a restart does not reopen a replay window.
+6. Create a **pending flow** for the source address (at most 4 pending flows per source address, 4096
+   in total; the oldest pending flow is evicted). Pass `inner` to the inner QUIC stack as a datagram
+   from that address.
+7. A pending flow becomes **established** when its first authenticated `i2r` data packet arrives; the
+   other pending flows of that source address are then deleted.
+
+Every failure is a silent drop. A noise3 port never sends anything in reply to an unauthenticated
+datagram (V1).
+
+### 2.6 Data packets
+
+All later datagrams of the flow, in both directions:
+
+| Offset | Size | Field | Content |
+|---|---|---|---|
+| 0 | 8 | `tag` | `HMAC-SHA256(t_dir, u64(n))[0:8]` |
+| 8 | m + 16 | `box` | `ChaCha20-Poly1305(k_dir, nonce = 0^4 ‖ u64le(n), aad = tag, DataPlain)` |
+
+```
+DataPlain = inner_len(u16) ‖ inner ‖ zero padding          (inner_len = 0: a padding-only packet)
+```
+
+- `dir` is `i2r` or `r2i`; `n` is the packet number of that direction, starting at 0 and increasing by
+  one per packet (the Init does not count). A sender MUST NOT send with `n ≥ 2^32`; a flow that reaches
+  it is abandoned and a new one started.
+- The receiver keeps, per direction, the tags of all not-yet-received `n` in
+  `[highest − 255, highest + 64]` in a hash table, so a lookup is O(1) and survives reordering, loss
+  and NAT rebinding (the tag, not the address, identifies the flow). An authenticated packet marks `n`
+  in a replay bitmap; a duplicate or an `n` below the window is dropped.
+- Replies go to the source address of the authenticated packet with the highest `n` (rebinding
+  follows automatically).
+- Overhead: 26 bytes plus padding. Flows idle for 120 s are deleted.
+
+### 2.7 Junk and decoys
+
+Before the first Init, the initiator MAY send junk datagrams and decoys as its shape profile says
+(§9): random-byte datagrams, or datagrams shaped like a DNS query or a QUIC Initial of another
+connection. The responder drops them at step 2 of §2.5. They exist only to change the first-packet
+shape seen by classifiers; they carry nothing.
+
+## 3. reality2-quic
+
+The responder runs on UDP (port 443 RECOMMENDED) next to a real HTTP/3 website (the **cover**). A
+client that knows the responder's masking key produces a QUIC Initial whose ClientHello carries an
+authentication token; every other packet is forwarded to the cover, which answers it.
+
+### 3.1 Client hello
+
+- QUIC v1, ClientHello shaped like the current stable Chrome: GREASE, `X25519MLKEM768` and `X25519`
+  key shares, the Chrome extension set and order rules, ALPN `h3`, Chrome transport parameters. The
+  SNI is `Addr.params.sni` from the card. There is no fallback SNI.
+- The client's X25519 key share (the `X25519` entry; if absent, the last 32 bytes of the
+  `X25519MLKEM768` entry) has private key `c` and public key `C`. `c` MUST be fresh for every
+  ClientHello.
+- The token is placed in `ClientHello.random` (32 bytes). QUIC forbids a non-empty
+  `legacy_session_id`.
+
+### 3.2 Token
+
+```
+z     = X25519(c, mask_pub)                                          all-zero: abort
+k_tok = HKDF-SHA256(ikm = z, salt = empty,
+                    info = "echofog/reality2/token-key" ‖ mask_pub(32) ‖ C(32), L = 32)
+aad   = SHA-256("echofog/reality2/hello" ‖ CH0)
+pt    = 0x01 ‖ ts(u32, unix seconds) ‖ 0x00 × 11                      16 bytes
+token = AES-256-GCM(k_tok, nonce = 0^12, pt, aad)                     16 + 16 = 32 bytes
+```
+
+`CH0` is the ClientHello handshake message (handshake type, 3-byte length, body: the bytes that enter
+the TLS transcript) with the 32-byte token field set to zero. The fixed nonce is safe because `k_tok`
+is used once: `c` is fresh per ClientHello. Binding `aad` to the whole ClientHello stops an attacker
+from moving a captured token into a ClientHello with other key shares (the v1 binding covered only the
+ML-KEM share).
+
+### 3.3 Server gate
+
+For every UDP packet:
+
+1. A short-header packet whose Destination Connection ID belongs to a live admitted connection, or any
+   packet from an admitted 4-tuple: to the node's QUIC stack.
+2. A QUIC v1 Initial from an unadmitted source: buffer the flight (at most 48 pending hellos, 8 KiB per
+   source, 500 ms) until the ClientHello is complete. For each live masking key (≤ 8): compute `z`,
+   `k_tok`, open the token. Valid, `pt[0] = 0x01`, zero padding, `|ts − now| ≤ 90 s`, and not in the
+   replay cache → admit the source and pass the flight to the QUIC stack. Otherwise → forward the whole
+   flight to the cover.
+3. **Everything else** — other versions, long headers that are not v1 Initials, garbage — goes to the
+   cover. The node MUST NOT send Version Negotiation or a stateless reset to an unadmitted source, and
+   MUST NOT send Retry before step 2 succeeds (V1).
+4. Replay cache: the 32-byte tokens, kept 600 s, persisted across restarts (Bloom filter). The token
+   is also bound to the server: `CH0` contains the SNI and the key shares, and `k_tok` depends on
+   `mask_pub`.
+
+Cover forwarding uses one outbound UDP socket per stranger source (at most 48, least-recently-used
+eviction) and relays the cover's answers back unchanged.
+
+### 3.4 After the gate
+
+- The node completes TLS 1.3 with its own key. The certificate is self-signed for the SNI, with no
+  organisation or other identifying field (no `O=EchoFog`); its size SHOULD match the cover's
+  certificate chain within ±10 %, measured at start-up.
+- The negotiated group MUST be `X25519MLKEM768` (Decision D5, [handshake.md](handshake.md) §3.2).
+- ALPN is `h3` on the wire; the content of the connection is frame v2, not HTTP/3.
+- The cover MUST be a site that really serves HTTP/3 on the same port: at start-up the node sends a
+  real QUIC Initial to the cover and refuses to enable the suite if no HTTP/3 handshake completes.
+
+## 4. reality2-tcp and ws2
+
+### 4.1 reality2-tcp client
+
+TLS 1.3 over TCP with a ClientHello shaped like the current stable Chrome (uTLS), SNI from the card,
+ALPN `h2, http/1.1`. The token (§3.2, same formula) goes into the 32-byte `legacy_session_id`;
+`ClientHello.random` stays random. `C` is the client's X25519 share as in §3.1.
+
+### 4.2 reality2-tcp server
+
+- Reads the first TLS record (≤ 16 KiB, within 10 s). Valid token → completes TLS 1.3 itself (rules of
+  §3.4; ALPN `h2` selected; certificate as §3.4). Anything else → transparent TCP proxy to the cover,
+  including the bytes already read.
+- At most 64 pre-token handshakes at once; the slot is released as soon as the token is checked, so
+  slow strangers cannot exhaust the node (V4). Excess connections are proxied to the cover, not reset.
+- Per-address limits apply only after a valid token.
+
+### 4.3 TLS records and padding
+
+reality2-tcp carries the byte-stream mux (§5.2) inside TLS application data. Record sizes follow the
+shape profile: PADDING frames (§6.4) fill records during the padding budget. This is the only padding
+mechanism on TCP carriers; there is no separate vision layer (V6).
+
+### 4.4 ws2
+
+For networks that only allow HTTPS through a CDN or a reverse proxy.
+
+- `Addr.url` is a `wss://` URL. The outer TLS (to the CDN) MUST use a browser ClientHello (uTLS); the
+  Go standard TLS stack MUST NOT be used for it.
+- The path SHOULD contain an unguessable component taken from the card; other paths of the host serve a
+  normal site.
+- Inside the WebSocket (binary messages; one message per write, ≤ 16 KiB) runs the inner TLS of
+  reality2-tcp, including the token, with SNI `Addr.params.sni`.
+- An inner ClientHello without a valid token: the server sends nothing, keeps the WebSocket open idle,
+  and closes it after `uniform(30, 90)` s with close code 1000.
+
+## 5. Inner TLS and the byte-stream mux
+
+### 5.1 Inner TLS
+
+Every carrier has exactly one TLS 1.3 session between the two nodes:
+
+| Suite | TLS session |
+|---|---|
+| `noise3` | QUIC v1 TLS inside the noise3 flow |
+| `reality2-quic` | the QUIC v1 TLS admitted by the token |
+| `reality2-tcp` | the TLS admitted by the token |
+| `ws2` | the inner TLS inside the WebSocket |
+
+Rules for every inner TLS:
+
+- certificates are not verified (authentication is the Noise handshake, bound to this TLS session by
+  the exporter, [handshake.md](handshake.md) §3.2);
+- the noise3 inner certificate is a self-signed Ed25519 certificate with an empty subject and a random
+  serial; ALPN `h3`;
+- the key exchange group MUST be `X25519MLKEM768`;
+- TLS and QUIC early data (0-RTT) MUST NOT be used. 0-RTT exists at L1 instead
+  ([handshake.md](handshake.md) §10);
+- QUIC transport parameters (noise3): idle timeout 60 s, `max_udp_payload_size` reduced by the L0
+  overhead plus the profile's maximum padding, datagrams enabled, at most 256 bidirectional and 64
+  unidirectional streams. QUIC's own keepalive is off; L2 PING is used instead (§7.1).
+
+On QUIC carriers, v2 streams are QUIC streams (stream 0 is the first client bidirectional stream) and
+v2 datagrams are QUIC DATAGRAM frames.
+
+### 5.2 Byte-stream mux (TCP carriers and relay stream circuits)
+
+**Decision D14 (native mux).** v1 used smux plus a stream-kind byte plus vision padding. v2 replaces
+all three with connection-level frames of frame v2, so every carrier uses one frame format (V6).
+
+The TLS application data is a sequence of frames (§6.1). At connection level only these types are
+valid: `MUX_STREAM`, `MUX_RESET`, `MUX_WINDOW`, `MUX_MAX_DATA`, `MUX_DATAGRAM`, `PADDING`.
+
+```
+MUX_STREAM    payload = stream_id(varint) ‖ flags(u8) ‖ data           data ≤ 16384 bytes
+              flags: 0x01 FIN; other bits reserved, MUST be 0
+MUX_RESET     payload = stream_id(varint) ‖ code(varint)                 registries.md §10.2
+MUX_WINDOW    payload = stream_id(varint) ‖ increment(varint)
+MUX_MAX_DATA  payload = increment(varint)                                connection-level window
+MUX_DATAGRAM  payload = one datagram (§6.5); best effort, dropped when the queue is full
+```
+
+- Stream IDs: bit 0 is the opener (0 = carrier client, 1 = carrier server); IDs of each opener
+  increase by 2 (0, 2, 4, … and 1, 3, 5, …). Stream 0 is the control stream. A stream is opened by its
+  first `MUX_STREAM`. At most 256 streams open per side.
+- Flow control: initial window 262144 bytes per stream and 4194304 per connection. A receiver sends a
+  window update when half of a window is consumed. Data beyond the window is a protocol violation.
+- The bytes of each stream are themselves a sequence of stream frames (§6.2), exactly as on a QUIC
+  stream.
+
+## 6. Frame v2
+
+### 6.1 Stream frame
+
+```
+frame = type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload(length bytes)
+```
+
+| Flag bit | Name | Meaning |
+|---|---|---|
+| 0 (0x01) | IGNORABLE | a receiver that does not know `type` skips the frame |
+| 1–7 | — | reserved: MUST be 0 when sent; a frame with a reserved bit set is treated as an unknown type |
+
+- `type` values: [registries.md](registries.md) §1, §4. The type space is global for `0x00–0x3f`
+  (session level) and per service for `0x40–0x3fff`.
+- `length` MUST NOT exceed the type's maximum (registries) and never 1048576 (1 MiB). A longer frame
+  is `CLOSE{frame-too-large}`. An empty payload is allowed where the type allows it.
+- A receiver reads frames with a bounded buffer; it never allocates more than the type's maximum
+  before the payload arrives.
+
+### 6.2 Streams
+
+- Stream 0 starts with `HS_HELLO` (a new session) or `PATH_BIND` (a new path of an existing session).
+  After the handshake it is the session's **control stream**.
+- Every other stream starts with `OPEN`. A stream whose first frame is not OPEN is closed with
+  `CLOSE{protocol-violation}`.
+- One stream carries one use of one service. A service MAY keep a stream open for many requests
+  (dht/2 does).
+- Unidirectional streams carry one-way traffic of the same frames (for example chat/2 DELIVER without
+  a response).
+
+### 6.3 OPEN, UNSUPPORTED, CLOSE
+
+```
+OPEN         payload = service(varint) ‖ version(varint) ‖ flags(u8)
+             flags: 0x01 EARLY (the stream was opened in 0-RTT data); others reserved, 0
+UNSUPPORTED  payload = service(varint) ‖ min(varint) ‖ max(varint)      versions the receiver serves; 0,0 = none
+CLOSE        payload = code(varint) ‖ reason(UTF-8, ≤ 200 bytes)
+```
+
+- OPEN with a `(service, version)` that was not selected in the handshake is answered with UNSUPPORTED
+  and the stream ends. This is not abuse and MUST NOT be scored.
+- CLOSE ends the stream in both directions after the frame. On QUIC the stream is then reset with
+  application error code `code`; on the mux, `MUX_RESET` follows.
+
+### 6.4 PADDING
+
+`PADDING` (type 0x01) may appear anywhere a frame may appear, including at connection level of the
+mux. Its payload is ignored; senders SHOULD fill it with zero bytes (TLS encrypts it). Padding is a
+sender policy governed by the shape profile (§9).
+
+### 6.5 Datagrams
+
+```
+datagram = type(varint) ‖ payload            (the length is the datagram length)
+```
+
+Types: [registries.md](registries.md) §2. A datagram is never answered with an error. Unknown types are
+dropped and counted.
+
+### 6.6 Vectors
+
+[vectors/varint.json](vectors/varint.json) has QUIC varint encodings (all length classes, both
+boundaries, and non-minimal encodings that MUST be rejected); [vectors/frames.json](vectors/frames.json)
+has encoded frames of every session-level type with a fixed payload.
+
+## 7. Session control
+
+### 7.1 PING, PONG, keepalive
+
+- `PING` carries 8 opaque bytes; the peer answers `PONG` with the same bytes within 1 s of receipt.
+- Keepalive: when a path has been idle, a node sends PING after `uniform(12, 24)` s of silence. A path
+  with no authenticated traffic for 60 s is dead. Fixed timer values are not allowed anywhere in v2
+  (V2): every periodic timer has at least ±20 % uniform jitter unless a section says otherwise.
+
+### 7.2 OBSERVED_ADDR and address discovery
+
+- With feature `observed-addr`, the responder includes the initiator's source address in
+  `HsResp.observed` and MAY send `OBSERVED_ADDR` when it changes.
+  `payload = family(u8: 4 or 6) ‖ address(4 or 16) ‖ port(u16)`.
+- **Decision D20 (no plaintext STUN).** A node MUST NOT send plaintext STUN from a socket that carries
+  `noise3` or `reality2-quic` traffic (K2). Address discovery uses OBSERVED_ADDR from authenticated
+  peers. A node treats an address as its public address only when at least 2 peers in different /16
+  (IPv6: /32) networks agree on the IP, and never breaks a tie by any ordering; NAT classification
+  needs 3 observations. A divergent IP from one peer is a suspicious observation, not evidence of a
+  symmetric NAT. A node MAY use STUN from a separate socket with randomised timing outside guard mode.
+
+### 7.3 GOAWAY
+
+`GoAway { uint32 code = 1; string reason = 2; uint32 retry_after = 3; }`. After sending GOAWAY a node
+opens no new streams and closes the session when its streams end or after 15 s.
+
+## 8. Paths
+
+A **session** ([handshake.md](handshake.md) §9) is identified by its 16-byte session ID `sid` and
+holds the session secret and the negotiated features and services. A **path** is one way of carrying
+the session's frames:
+
+- a **direct path**: a carrier connection (any L0 suite) whose TLS session is bound to the session;
+- a **relay path**: a relay circuit ([services.md](services.md) §6) carrying sealed records.
+
+Streams belong to a path: a QUIC stream exists on one QUIC connection, a mux stream on one byte-stream
+carrier. When a path dies, its streams are reset with `path-failed` and services reopen them on
+another path; the session, its keys and its peer authentication survive without a new handshake.
+
+### 8.1 Path IDs
+
+`path_id` is a varint chosen by the side that creates the path: `2k` for paths created by the session
+initiator, `2k + 1` for paths created by the responder. The path of the handshake is 0.
+
+### 8.2 PATH_BIND (feature `path-migration`)
+
+A new carrier connection to the same peer is bound to an existing session instead of running a new
+handshake. Stream 0 of the new carrier starts with:
+
+```
+PATH_BIND     payload = sid(16) ‖ path_id(varint) ‖ mac(32)
+k_path        = HKDF-SHA256(ikm = session_secret, salt = h, info = "echofog/session2/path-bind", L = 32)
+mac           = HMAC-SHA256(k_path, "echofog/session2/path-mac" ‖ cb(32) ‖ sid(16) ‖ u64(path_id) ‖ u8(role))
+PATH_BIND_OK  payload = path_id(varint)
+```
+
+- `cb` is the channel binding of the **new** carrier's TLS session ([handshake.md](handshake.md)
+  §3.2); `role` is 0 if the sender is the session initiator, 1 otherwise; `session_secret` and `h` are
+  from [handshake.md](handshake.md) §9.
+- The receiver checks: `sid` known, MAC valid (constant time), `path_id` unused and of the sender's
+  parity. On success it answers `PATH_BIND_OK` and the new stream 0 becomes a control stream of the
+  session. On any failure it closes the carrier silently (a hidden node reveals nothing to someone who
+  does not hold the session secret).
+- Because the MAC covers the new channel binding, a captured PATH_BIND cannot be replayed on another
+  TLS session.
+
+### 8.3 Choosing and abandoning paths
+
+- Each side sends on one **active path** at a time (multipath scheduling is the reserved feature
+  `multipath`). It prefers direct paths over relay paths and lower RTT among them.
+- `PATH_ABANDON{path_id, code}` tells the peer a path will no longer be used.
+- A path with no authenticated traffic for 10 s while another path is alive is abandoned.
+- Resuming a stream across paths (the successor of v1 TCP rotation against flow-freezing) is a later
+  feature, `stream-resume` (reserved, [registries.md](registries.md) §5).
+
+### 8.4 Sealed records on relay paths
+
+A relay path has no TLS between the two ends; the relay sees only what the circuit carries. The end
+nodes protect it with the Noise transport keys: `Split()` of the handshake gives `k_i2r` (initiator →
+responder) and `k_r2i` ([handshake.md](handshake.md) §9).
+
+```
+sealed  = n(u64) ‖ ChaCha20-Poly1305(k_dir, nonce = 0^4 ‖ u64le(n), aad = sid(16) ‖ n(8), plaintext)
+```
+
+- One counter `n` per direction is shared by records and datagrams; a sender never reuses a value and
+  stops at `2^60` (the session must then be re-established).
+- Receivers keep a replay window of 4096 values.
+- **Stream circuits** carry `u16(len(sealed)) ‖ sealed` records; the plaintext of a record is a
+  sequence of connection-level mux frames (§5.2). Records are at most 16384 + 64 bytes.
+- **Datagram circuits** carry one `SEALED` datagram (type 0x02) per relay datagram; its plaintext is
+  one inner datagram (§6.5).
+- A relayed session's handshake runs inside the first stream circuit, with the circuit channel binding
+  of [handshake.md](handshake.md) §3.2.
+
+## 9. Padding and shape profiles
+
+A **shape profile** is data, not code: it tells a sender how to size and time what it sends, and
+tells peers what the responder's network expects. Profiles never change a cryptographic format;
+receivers MUST accept any length and timing within the limits of §10. A card address carries a profile
+by built-in ID or in full (`Addr.params`).
+
+```
+message ShapeProfile {
+  uint32   id            = 1;   // built-in id (registries.md §6.3), 0 = custom
+  Range    init_len      = 2;   // noise3: total Init datagram length
+  Range    pad           = 3;   // extra padding per data packet / per TLS record, uniform
+  repeated uint32 buckets = 4;  // if set: pad each packet or record up to the next bucket size
+  Range    pad_budget    = 5;   // TLS carriers: bytes per stream direction during which padding applies
+  Junk     junk          = 6;   // noise3: junk datagrams before the first Init
+  repeated Decoy decoys  = 7;   // noise3: decoy datagrams before the first Init
+  Range    keepalive_s   = 8;   // PING interval when idle
+  Range    idle_pad_ms   = 9;   // with feature idle-padding: gap between padding-only packets
+}
+message Range { uint32 min = 1; uint32 max = 2; }          // uniform over [min, max]
+message Junk  { Range count = 1; Range len = 2; Range gap_ms = 3; }
+message Decoy {
+  uint32 kind     = 1;          // 1 raw template, 2 DNS query, 3 QUIC-Initial-shaped random
+  bytes  template = 2;          // kind 1: bytes; 0xff…ff runs are replaced by random bytes
+  string qname    = 3;          // kind 2: the query name
+}
+```
+
+Built-in profiles:
+
+| Field | `default-udp` (1) | `default-tls` (2) |
+|---|---|---|
+| `init_len` | [1280, 1420] | — |
+| `pad` | [0, 48] per packet, never beyond the path MTU | [0, 256] per record within the budget |
+| `buckets` | — | 512, 1024, 1460, 2920, 4096 |
+| `pad_budget` | — | [4096, 16384], drawn per stream direction |
+| `junk` | count [0, 2], len [32, 256], gap [5, 30] ms | — |
+| `decoys` | none | — |
+| `keepalive_s` | [12, 24] | [12, 24] |
+| `idle_pad_ms` | [500, 4000] | [500, 4000] |
+
+The initiator SHOULD use the responder's profile for what it sends to that address, so both directions
+match what the address's network is expected to look like.
+
+## 10. Limits and timeouts
+
+| Item | Value |
+|---|---|
+| noise3 live masking keys per listener | ≤ 256 |
+| REALITY v2 live masking keys per listener | ≤ 8 |
+| noise3 Init timestamp window / replay cache | ±120 s / 300 s |
+| REALITY token timestamp window / replay cache | ±90 s / 600 s |
+| noise3 pending flows | 4 per source address, 4096 total |
+| noise3 receive window | 255 behind, 64 ahead |
+| reality2 pending hellos | 48, 8 KiB per source, 500 ms |
+| reality2-tcp pre-token handshakes | 64, first record ≤ 16 KiB within 10 s |
+| carrier dial timeout | QUIC 4 s, TCP 6 s, ws2 8 s |
+| frame payload | per type; never > 1 MiB |
+| mux stream data per frame | ≤ 16384 |
+| mux windows | 256 KiB per stream, 4 MiB per connection |
+| streams per session per side | 256 bidirectional, 64 unidirectional |
+| idle keepalive / path dead | `uniform(12, 24)` s / 60 s |
+| relay path replay window | 4096 |
+| timer jitter | ≥ ±20 % on every periodic timer |
