@@ -14,17 +14,17 @@
       "name": "HS_HELLO",
       "type": 2,
       "flags": 0,
-      "payload": "0200010002000100",
-      "encoded": "0200080200010002000100",
-      "note": "offered [0x0001, 0x0002], chosen 0x0001, no puzzle"
+      "payload": "0200010002000102",
+      "encoded": "0200080200010002000102",
+      "note": "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound), no puzzle"
     },
     {
       "name": "HS_HELLO (puzzle)",
       "type": 2,
       "flags": 0,
-      "payload": "0200010002000101a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000001092",
-      "encoded": "0200200200010002000101a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000001092",
-      "note": "flags 0x01, cookie a0..af, nonce 4242"
+      "payload": "0200010002000103a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000001092",
+      "encoded": "0200200200010002000103a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000001092",
+      "note": "flags 0x03, cookie a0..af (pattern, see handshake.json puzzle for a real cookie), nonce 4242"
     },
     {
       "name": "HS_RETRY",
@@ -32,7 +32,7 @@
       "flags": 0,
       "payload": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf10",
       "encoded": "040011a0a1a2a3a4a5a6a7a8a9aaabacadaeaf10",
-      "note": "difficulty 16"
+      "note": "difficulty 16 (pattern cookie)"
     },
     {
       "name": "REJECT",
