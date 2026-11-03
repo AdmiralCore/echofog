@@ -42,6 +42,7 @@ import (
 	"filippo.io/edwards25519"
 	"filippo.io/edwards25519/field"
 	"golang.org/x/crypto/blake2s"
+	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
 )
@@ -574,11 +575,12 @@ func main() {
 	writeFile(*out, "reality2.json", rl)
 	so := genSignedObject()
 	writeFile(*out, "signed-object.json", so)
-	card, cardEnv, cardSigner, hsPub := genCard(maskPub3, maskPubR)
+	card, co := genCard(maskPub3, maskPubR)
 	writeFile(*out, "node-card.json", card)
-	writeFile(*out, "link.json", genLink(cardEnv))
-	writeFile(*out, "handshake.json", genHandshake(cardEnv, hsPub))
-	writeFile(*out, "kdf.json", genKDF(cardSigner, hsPub))
+	writeFile(*out, "link.json", genLink(co))
+	writeFile(*out, "handshake.json", genHandshake(co))
+	writeFile(*out, "kdf.json", genKDF(co))
+	writeFile(*out, "negative.json", genNegative(co))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -621,12 +623,12 @@ func genFrames() any {
 		fr = append(fr, e)
 	}
 	add("PADDING", 0x01, 0x01, make([]byte, 4), "IGNORABLE set")
-	hello := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0})
-	add("HS_HELLO", 0x02, 0, hello, "offered [0x0001, 0x0002], chosen 0x0001, no puzzle")
+	hello := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0x02})
+	add("HS_HELLO", 0x02, 0, hello, "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound), no puzzle")
 	cookie := pattern(16, 0xa0)
-	helloP := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{1}, cookie, u64(4242))
-	add("HS_HELLO (puzzle)", 0x02, 0, helloP, "flags 0x01, cookie a0..af, nonce 4242")
-	add("HS_RETRY", 0x04, 0, cat(cookie, []byte{16}), "difficulty 16")
+	helloP := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0x03}, cookie, u64(4242))
+	add("HS_HELLO (puzzle)", 0x02, 0, helloP, "flags 0x03, cookie a0..af (pattern, see handshake.json puzzle for a real cookie), nonce 4242")
+	add("HS_RETRY", 0x04, 0, cat(cookie, []byte{16}), "difficulty 16 (pattern cookie)")
 	rej := (&pb{}).u(1, 1).u(2, 200).u(3, 200).b
 	add("REJECT", 0x05, 0, rej, "Reject{reason=1 version, min=200, max=200}")
 	add("PING", 0x06, 0, unhex("0102030405060708"), "")
@@ -699,6 +701,18 @@ func genElligator() any {
 		check(hx(rev(got)) == v[1], "RFC 9380 J.4.2 map_to_curve")
 		rfc = append(rfc, O{{"u0_be", v[0]}, {"Q.x_be", v[1]}})
 	}
+	// A key without a representative.
+	var noRepr O
+	nrBase := sl.get("elligator2/no_representative")
+	for i := 0; ; i++ {
+		sk := sha(nrBase, u32(uint32(i)))
+		dirty, _ := dirtyPub(sk)
+		if ellReverse(dirty, 0) == nil {
+			noRepr = O{{"seed_base", hx(nrBase)}, {"attempt", i}, {"sk", hx(sk)}, {"dirty_pub", hx(dirty)},
+				{"reason", "-2u(u+A) is not a square: the encoder must pick a new key"}}
+			break
+		}
+	}
 	// Torsion does not change the shared secret.
 	peer := sl.get("elligator2/peer_sk")
 	k0 := ellKeygen(sl.get("elligator2/sample0"), sl.get("elligator2/tweak0")[0])
@@ -713,6 +727,7 @@ func genElligator() any {
 		{"seeds", sl.o},
 		{"samples", samples},
 		{"forward_only", fwd},
+		{"no_representative", noRepr},
 		{"rfc9380_crosscheck", O{{"note", "the generator checks its forward map on full field elements against RFC 9380 Appendix J.4.2 (u[0] → Q.x); values big-endian as in the RFC"}, {"cases", rfc}}},
 		{"ecdh_check", O{
 			{"peer_sk", hx(peer)},
@@ -731,13 +746,13 @@ func genNoise3() (any, []byte) {
 	tweak := sl.get("noise3/tweak")[0]
 	k := ellKeygen(base, tweak)
 
-	kSel := hmacSHA(maskPub, []byte("echofog/noise3/selector"))
-	sel := hmacSHA(kSel, k.repr)[:16]
 	z := x25519(k.sk, maskPub)
 	uResp := ellForward(k.repr)
 	check(bytes.Equal(x25519(maskSK, uResp), z), "responder derives the same z")
-	okm := hkdfSHA(z, nil, cat([]byte("echofog/noise3/keys"), maskPub, k.dirty), 160)
-	kInit, kI2R, kR2I, tI2R, tR2I := okm[0:32], okm[32:64], okm[64:96], okm[96:128], okm[128:160]
+	info := cat([]byte("echofog/noise3/keys"), maskPub, k.dirty)
+	okm := hkdfSHA(z, nil, info, 192)
+	kSel, kInit, kI2R, kR2I, hpI2R, hpR2I := okm[0:32], okm[32:64], okm[64:96], okm[96:128], okm[128:160], okm[160:192]
+	sel := hmacSHA(kSel, k.repr)[:16]
 
 	inner := pattern(1200, 0) // synthetic stand-in for a QUIC Initial
 	total := 1300
@@ -748,26 +763,41 @@ func genNoise3() (any, []byte) {
 	check(len(initDgram) == total, "Init length")
 	check(bytes.Equal(chachaOpen(kInit, make([]byte, 12), box, cat(k.repr, sel)), initPlain), "Init opens")
 
-	data := func(dir string, tkey, key []byte, n uint64, inner []byte, pad int) O {
-		tag := hmacSHA(tkey, u64(n))[:8]
+	data := func(dir string, hp, key []byte, n uint64, inner []byte, pad int) O {
+		pn := u32(uint32(n))
 		pt := cat(u16(uint16(len(inner))), inner, make([]byte, pad))
-		ct := chachaSeal(key, counterNonce(n), pt, tag)
-		return O{{"dir", dir}, {"n", n}, {"inner", hx(inner)}, {"pad_len", pad}, {"tag", hx(tag)},
-			{"nonce", hx(counterNonce(n))}, {"plaintext", hx(pt)}, {"datagram", hx(cat(tag, ct))}}
+		ct := chachaSeal(key, counterNonce(n), pt, pn)
+		mask := hpMask(hp, ct[:16])
+		masked := make([]byte, 4)
+		for i := range masked {
+			masked[i] = pn[i] ^ mask[i]
+		}
+		dg := cat(masked, ct)
+		// Receiver side: unmask and decode against an expected value.
+		m2 := hpMask(hp, dg[4:20])
+		var trunc uint32
+		for i := 0; i < 4; i++ {
+			trunc = trunc<<8 | uint32(dg[i]^m2[i])
+		}
+		check(decodePN(n, trunc) == n, "packet number decodes")
+		return O{{"dir", dir}, {"n", n}, {"inner", hx(inner)}, {"pad_len", pad}, {"pn_plain", hx(pn)},
+			{"nonce", hx(counterNonce(n))}, {"plaintext", hx(pt)}, {"sample", hx(ct[:16])}, {"mask", hx(mask[:4])},
+			{"datagram", hx(dg)}}
 	}
+	// Recovery after a long loss run: the receiver expects 1 but gets n = 5000.
+	check(decodePN(1, 5000) == 5000, "decode after 4999 lost packets")
 	return O{
-		{"description", "noise3 Init datagram and data packets for fixed keys. The inner datagram is a synthetic byte pattern standing in for a QUIC Initial."},
+		{"description", "noise3 Init datagram and data packets for fixed keys. The selector is keyed on the ECDH secret. Data packets use QUIC-style packet-number protection (ChaCha20 mask from a 16-byte ciphertext sample). The inner datagram is a synthetic byte pattern standing in for a QUIC Initial."},
 		{"spec", "wire.md §2.3–§2.6"},
 		{"seeds", sl.o},
 		{"mask_sk", hx(maskSK)},
 		{"mask_pub", hx(maskPub)},
 		{"ephemeral", O{{"seed_base", hx(base)}, {"attempt", k.attempt}, {"sk", hx(k.sk)}, {"tweak", fmt.Sprintf("%02x", tweak)},
 			{"dirty_pub", hx(k.dirty)}, {"repr", hx(k.repr)}}},
-		{"k_sel", hx(kSel)},
-		{"sel", hx(sel)},
 		{"z", hx(z)},
-		{"hkdf_info", hx(cat([]byte("echofog/noise3/keys"), maskPub, k.dirty))},
-		{"okm", O{{"k_init", hx(kInit)}, {"k_i2r", hx(kI2R)}, {"k_r2i", hx(kR2I)}, {"t_i2r", hx(tI2R)}, {"t_r2i", hx(tR2I)}}},
+		{"hkdf_info", hx(info)},
+		{"okm", O{{"k_sel", hx(kSel)}, {"k_init", hx(kInit)}, {"k_i2r", hx(kI2R)}, {"k_r2i", hx(kR2I)}, {"hp_i2r", hx(hpI2R)}, {"hp_r2i", hx(hpR2I)}}},
+		{"sel", hx(sel)},
 		{"init", O{
 			{"ts", fixedTime},
 			{"inner", "00 01 02 … (1200 bytes, byte i = i mod 256)"},
@@ -778,11 +808,40 @@ func genNoise3() (any, []byte) {
 			{"datagram", hx(initDgram)},
 		}},
 		{"data", []any{
-			data("i2r", tI2R, kI2R, 0, pattern(16, 0x10), 5),
-			data("r2i", tR2I, kR2I, 0, pattern(24, 0x30), 0),
-			data("i2r", tI2R, kI2R, 1, nil, 12),
+			data("i2r", hpI2R, kI2R, 0, pattern(16, 0x10), 5),
+			data("r2i", hpR2I, kR2I, 0, pattern(24, 0x30), 0),
+			data("i2r", hpI2R, kI2R, 1, nil, 12),
+			data("i2r", hpI2R, kI2R, 5000, pattern(8, 0x50), 0),
 		}},
+		{"pn_decoding", "RFC 9000 Appendix A.3 with 32-bit truncation: the last entry decodes correctly at a receiver whose highest received number is 1 (4998 packets lost)"},
 	}, maskPub
+}
+
+// hpMask is RFC 9001 §5.4.4: ChaCha20 with counter = LE32(sample[0:4]), nonce = sample[4:16], over 5 zero bytes.
+func hpMask(key, sample []byte) []byte {
+	c, err := chacha20.NewUnauthenticatedCipher(key, sample[4:16])
+	must(err)
+	c.SetCounter(binary.LittleEndian.Uint32(sample[0:4]))
+	out := make([]byte, 5)
+	c.XORKeyStream(out, out)
+	return out
+}
+
+// decodePN is RFC 9000 Appendix A.3 for a 32-bit truncated packet number; expectedMinus1 is the
+// highest number received so far.
+func decodePN(largest uint64, truncated uint32) uint64 {
+	expected := largest + 1
+	const win = uint64(1) << 32
+	const hwin = win / 2
+	const mask = win - 1
+	candidate := (expected &^ mask) | uint64(truncated)
+	if candidate+hwin <= expected && candidate < (1<<62)-win {
+		return candidate + win
+	}
+	if candidate > expected+hwin && candidate >= win {
+		return candidate - win
+	}
+	return candidate
 }
 
 func genReality() (any, []byte) {
@@ -793,7 +852,9 @@ func genReality() (any, []byte) {
 	C := x25519Pub(c)
 	z := x25519(c, maskPub)
 	check(bytes.Equal(z, x25519(maskSK, C)), "server derives z")
-	kTok := hkdfSHA(z, nil, cat([]byte("echofog/reality2/token-key"), maskPub, C), 32)
+	addr := "192.0.2.10:443"
+	info := cat([]byte("echofog/reality2/token-key"), maskPub, C, []byte{byte(len(addr))}, []byte(addr))
+	kTok := hkdfSHA(z, nil, info, 32)
 
 	// Synthetic ClientHello handshake message: type 1, 3-byte length, legacy_version 0x0303,
 	// random (32 bytes, zeroed: the token field), then a fixed pattern standing in for the rest.
@@ -810,17 +871,24 @@ func genReality() (any, []byte) {
 	check(len(token) == 32, "token is 32 bytes")
 	ch := append([]byte(nil), ch0...)
 	copy(ch[6:38], token)
+	// The same hello at another address of the node gives another key, so the token fails there.
+	other := hkdfSHA(z, nil, cat([]byte("echofog/reality2/token-key"), maskPub, C, []byte{byte(len("198.51.100.7:443"))}, []byte("198.51.100.7:443")), 32)
+	check(!bytes.Equal(other, kTok), "address binding")
+	// C taken from an X25519MLKEM768 share (ML-KEM part ‖ X25519 part) when there is no X25519 entry.
+	hybrid := cat(pattern(1184, 0x11), C)
 	return O{
-		{"description", "REALITY v2 token for a fixed masking key and client X25519 key share. CH0 is a synthetic ClientHello (type, length, version, zeroed random, then a byte pattern); real ClientHellos are Chrome-shaped."},
+		{"description", "REALITY v2 token for a fixed masking key, client X25519 key share and dialed address. CH0 is a synthetic ClientHello (type, length, version, zeroed random, then a byte pattern); real ClientHellos are Chrome-shaped."},
 		{"spec", "wire.md §3.2"},
 		{"seeds", sl.o},
 		{"mask_sk", hx(maskSK)},
 		{"mask_pub", hx(maskPub)},
 		{"client_sk_c", hx(c)},
 		{"client_share_C", hx(C)},
+		{"dialed_address", addr},
 		{"z", hx(z)},
-		{"hkdf_info", hx(cat([]byte("echofog/reality2/token-key"), maskPub, C))},
+		{"hkdf_info", hx(info)},
 		{"k_tok", hx(kTok)},
+		{"k_tok_at_198.51.100.7:443", hx(other)},
 		{"ch0", hx(ch0)},
 		{"aad", hx(aad)},
 		{"ts", fixedTime},
@@ -828,6 +896,7 @@ func genReality() (any, []byte) {
 		{"token", hx(token)},
 		{"client_hello_with_token", hx(ch)},
 		{"placement", "QUIC: ClientHello.random (bytes 6..37 of the handshake message, as here); TCP and ws2: legacy_session_id"},
+		{"hybrid_share_example", O{{"note", "X25519MLKEM768 key_exchange = ML-KEM-768 encapsulation key (1184) ‖ X25519 (32); C is the last 32 bytes"}, {"share_sha256", hx(sha(hybrid))}, {"C", hx(hybrid[1184:])}}},
 	}, maskPub
 }
 
@@ -837,22 +906,30 @@ func genSignedObject() any {
 	s := newSigner(rfcSeed)
 	check(hx(s.pub) == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "RFC 8032 TEST 1 public key")
 	check(hx(ed25519.Sign(s.priv, nil)) == "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b", "RFC 8032 TEST 1 signature")
+	var sl seedLog
+	s2 := newSigner(sl.get("release/second_key"))
 
 	policy := (&pb{}).s(1, "proto").u(2, 200).u(3, 200).b
 	art := (&pb{}).s(1, "windows-amd64").s(2, "EchoFog-0.3.0-windows-amd64.zip").by(3, sha([]byte("artifact bytes"))).u(4, 52428800).s(5, "https://example.org/releases/0.3.0/EchoFog-0.3.0-windows-amd64.zip").b
-	body := (&pb{}).s(1, "0.3.0").u(2, fixedTime).by(3, policy).by(4, art).s(6, "https://example.org/releases/0.3.0").b
-	checkCanonicalTop(body, map[int]bool{3: true, 4: true, 5: true})
-	env, signed, sig := envelope("echofog/release/2", s, 30, fixedTime+30*86400, body)
+	manifest := (&pb{}).s(1, "0.3.0").u(2, fixedTime).by(3, policy).by(4, art).s(6, "https://example.org/releases/0.3.0").b
+	checkCanonicalTop(manifest, map[int]bool{3: true, 4: true, 5: true, 7: true})
+	cosigInput := cat([]byte("echofog/release-cosign/2"), sha(manifest))
+	cosig := ed25519.Sign(s2.priv, cosigInput)
+	cs := (&pb{}).by(1, s2.akey()).by(2, cosig).b
+	body := (&pb{}).by(1, manifest).by(2, cs).b
+	env, signed, sig := envelope("echofog/release/2", s, fixedTime, fixedTime+30*86400, body)
 	label, gotBody := verifyEnvelope(env)
 	check(label == "echofog/release/2" && bytes.Equal(gotBody, body), "envelope parses")
+	check(ed25519.Verify(s2.pub, cosigInput, cosig), "cosignature")
 
 	// A minimal object with an empty body, to show the smallest envelope.
 	envEmpty, _, _ := envelope("echofog/devices/2", s, 1, fixedTime+86400, nil)
 	verifyEnvelope(envEmpty)
 
 	return O{
-		{"description", "Signed object envelope (fmt 0x02) with the RFC 8032 TEST 1 Ed25519 key. The signature covers every byte before it."},
+		{"description", "Signed object envelope (fmt 0x02) with the RFC 8032 TEST 1 Ed25519 key. The signature covers every byte before it. The release manifest is co-signed by a second key (threshold 2)."},
 		{"spec", "objects.md §1–§2, §9"},
+		{"seeds", sl.o},
 		{"signer_seed", hx(rfcSeed)},
 		{"signer_pub", hx(s.pub)},
 		{"signer_akey", hx(s.akey())},
@@ -861,9 +938,13 @@ func genSignedObject() any {
 		{"objects", []any{
 			O{
 				{"label", "echofog/release/2"},
-				{"seq", 30},
+				{"seq", fixedTime},
 				{"not_after", fixedTime + 30*86400},
-				{"body_fields", "Release{version=\"0.3.0\", released_at=ts, policies=[{component=\"proto\", min_supported=200, recommended=200}], artifacts=[{windows-amd64 …}], notes_url}"},
+				{"manifest_fields", "Release{version=\"0.3.0\", released_at=ts, policies=[{component=\"proto\", min_supported=200, recommended=200}], artifacts=[{windows-amd64 …}], notes_url}"},
+				{"manifest", hx(manifest)},
+				{"cosigner_akey", hx(s2.akey())},
+				{"cosig_input", hx(cosigInput)},
+				{"cosig", hx(cosig)},
 				{"body", hx(body)},
 				{"signed_bytes", hx(signed)},
 				{"sig", hx(sig)},
@@ -881,49 +962,83 @@ func genSignedObject() any {
 	}
 }
 
-func genCard(maskPub3, maskPubR []byte) (any, []byte, signer, []byte) {
+type cardOut struct {
+	public, peer, invite []byte
+	signer               signer
+	hsPub                []byte
+	invMaskPub           []byte
+	passID               []byte
+	secret               []byte
+}
+
+func genCard(maskPub3, maskPubR []byte) (any, cardOut) {
 	var sl seedLog
 	s := newSigner(sl.get("card/identity_seed"))
 	hsSK := sl.get("card/hs_sk")
 	hsPub := x25519Pub(hsSK)
 	hsAkey := cat([]byte{0x02}, hsPub)
+	prevHS := cat([]byte{0x02}, x25519Pub(sl.get("card/prev_hs_sk")))
+	invMaskPub := x25519Pub(sl.get("card/invite_mask_sk"))
+	secret := sl.get("link/access_secret")[:16]
+	passID := hmacSHA(secret, []byte("echofog/hs2/pass-id"))[:8]
 
 	shape := func(id uint64) []byte { return (&pb{}).u(1, id).b }
 	params := func(sni string, shapeID uint64) []byte { return (&pb{}).s(1, sni).by(2, shape(shapeID)).b }
 	addr := func(suite uint64, host string, port uint64, url string, mask uint64, prm []byte, flags uint64) []byte {
 		return (&pb{}).u(1, suite).s(2, host).u(3, port).s(4, url).u(5, mask).by(6, prm).u(7, flags).b
 	}
-	addrs := [][]byte{
-		addr(1, "192.0.2.10", 443, "", 1, params("", 1), 0),
-		addr(2, "192.0.2.10", 443, "", 2, params("www.example.org", 1), 1),
-		addr(3, "198.51.100.7", 443, "", 2, params("www.example.org", 2), 0),
-		addr(4, "", 0, "wss://cdn.example.org/ef/3c9a7d", 2, params("inner.example.org", 2), 0),
-	}
 	notAfter := fixedTime + 6*86400
-	mask := func(pub []byte) []byte { return (&pb{}).by(1, pub).u(2, notAfter+86400).b }
+	mask := func(pub []byte) []byte { return (&pb{}).by(1, cat([]byte{0x02}, pub)).u(2, notAfter+86400).b }
 	svc := func(id uint64) []byte { return (&pb{}).u(1, id).packed(2, 2).b }
 	exit := (&pb{}).u(1, 500).u(2, 10240).u(3, 100000).s(4, "NL").u(5, 0b1011).packed(7, 1, 2).b
 
-	p := &pb{}
-	p.u(1, 200).by(2, hsAkey).packed(3, 1, 2)
-	for _, a := range addrs {
-		p.by(4, a)
+	build := func(addrs [][]byte, masks [][]byte, scope uint64, inviteID []byte, flags uint64, withPrev bool) []byte {
+		p := &pb{}
+		p.u(1, 200).by(2, hsAkey).packed(3, 1, 2)
+		for _, a := range addrs {
+			p.by(4, a)
+		}
+		for _, m := range masks {
+			p.by(5, mask(m))
+		}
+		p.u(6, 1).u(7, flags)
+		for _, id := range []uint64{1, 2, 5, 6} {
+			p.by(8, svc(id))
+		}
+		p.packed(9, 1, 3, 4, 5, 6).by(10, exit).s(11, "https://shop.example.org/echofog").s(12, "0.3.0")
+		if withPrev {
+			p.by(15, (&pb{}).by(1, prevHS).u(2, notAfter).b)
+		}
+		p.u(16, scope).by(17, inviteID)
+		checkCanonicalTop(p.b, map[int]bool{4: true, 5: true, 8: true, 11: true})
+		return p.b
 	}
-	p.by(5, mask(maskPub3)).by(5, mask(maskPubR))
-	p.u(6, 1).u(7, 0b100110) // server; relay | dht-server | exit
-	for _, id := range []uint64{1, 2, 5, 6} {
-		p.by(8, svc(id))
-	}
-	p.packed(9, 1, 3, 4, 5, 6).by(10, exit).s(11, "https://shop.example.org/echofog").s(12, "0.3.0")
-	body := p.b
-	checkCanonicalTop(body, map[int]bool{4: true, 5: true, 8: true, 11: true})
-	env, signed, sig := envelope("echofog/card/2", s, fixedTime, notAfter, body)
-	verifyEnvelope(env)
-	check(len(env) <= 4096, "card size")
+	// Public card: camouflaged addresses only (no noise3, no ws2); one masking key.
+	pubBody := build([][]byte{
+		addr(2, "192.0.2.10", 443, "", 1, params("www.example.org", 1), 1),
+		addr(3, "198.51.100.7", 443, "", 1, params("www.example.org", 2), 0),
+	}, [][]byte{maskPubR}, 0, nil, 0b100110, false)
+	pubEnv, pubSigned, pubSig := envelope("echofog/card/2", s, fixedTime, notAfter, pubBody)
+	verifyEnvelope(pubEnv)
+	// Peer card: adds noise3 and ws2, a second masking key and the previous hs key.
+	peerBody := build([][]byte{
+		addr(1, "192.0.2.10", 443, "", 2, params("", 1), 0),
+		addr(2, "192.0.2.10", 443, "", 1, params("www.example.org", 1), 1),
+		addr(3, "198.51.100.7", 443, "", 1, params("www.example.org", 2), 0),
+		addr(4, "", 0, "wss://cdn.example.org/ef/3c9a7d", 1, params("inner.example.org", 2), 0),
+	}, [][]byte{maskPubR, maskPub3}, 1, nil, 0b100110, true)
+	peerEnv, _, _ := envelope("echofog/card/2", s, fixedTime+1, notAfter, peerBody)
+	verifyEnvelope(peerEnv)
+	// Invitation card: one noise3 address with the invitation's own masking key.
+	invBody := build([][]byte{addr(1, "192.0.2.10", 443, "", 1, params("", 1), 0)},
+		[][]byte{invMaskPub}, 2, passID, 0b010001, false)
+	invEnv, _, _ := envelope("echofog/card/2", s, fixedTime+2, fixedTime+30*86400, invBody)
+	verifyEnvelope(invEnv)
+	check(len(pubEnv) <= 4096 && len(peerEnv) <= 4096 && len(invEnv) <= 4096, "card size")
 
 	return O{
-		{"description", "A server node card: noise3, reality2-quic, reality2-tcp and ws2 addresses, two masking keys (the noise3 and reality2 vector keys), services dht/pex/relay/exit, an exit offer and one shop link."},
-		{"spec", "objects.md §3–§4"},
+		{"description", "One server's cards in three scopes. Public (DHT, PEX): reality2-quic and reality2-tcp only. Peer (inside sessions): adds noise3 and ws2, a second masking key and a previous hs key. Invite: one noise3 address with the invitation's own masking key, invite_id = pass_id, flags unlisted|invite-scoped. Services are ids 1, 2, 5, 6 = dht, pex, relay, exit."},
+		{"spec", "objects.md §3–§4, §10.3"},
 		{"seeds", sl.o},
 		{"identity_seed", hx(s.seed)},
 		{"identity_pub", hx(s.pub)},
@@ -931,75 +1046,72 @@ func genCard(maskPub3, maskPubR []byte) (any, []byte, signer, []byte) {
 		{"node_id", hx(s.nodeID())},
 		{"hs_sk", hx(hsSK)},
 		{"hs_akey", hx(hsAkey)},
-		{"fields", O{
-			{"proto_ver", 200},
-			{"l1_suites", []int{1, 2}},
-			{"addrs", []string{
-				"noise3 192.0.2.10:443 mask 1 shape 1",
-				"reality2-quic 192.0.2.10:443 mask 2 sni www.example.org shape 1, bootstrap",
-				"reality2-tcp 198.51.100.7:443 mask 2 sni www.example.org shape 2",
-				"ws2 wss://cdn.example.org/ef/3c9a7d mask 2 sni inner.example.org shape 2",
-			}},
-			{"mask_keys", []string{hx(maskPub3), hx(maskPubR)}},
-			{"mask_not_after", notAfter + 86400},
-			{"role", 1},
-			{"flags", "0x26 (relay, dht-server, exit)"},
-			{"services", "dht/2, pex/2, mailbox/2, exit/2 (ids 1, 2, 5, 6 — see note)"},
-			{"features", []int{1, 3, 4, 5, 6}},
-			{"exit", "price 500 micro-USDT/MiB, free 10240 KiB, 100000 kbit/s, NL, policy 0x0b, assets [1,2]"},
-			{"shop", []string{"https://shop.example.org/echofog"}},
-			{"release", "0.3.0"},
+		{"prev_hs_akey", hx(prevHS)},
+		{"mask_keys", O{{"reality (reality2.json)", hx(maskPubR)}, {"noise3 (noise3.json)", hx(maskPub3)}, {"invitation", hx(invMaskPub)}}},
+		{"public", O{
+			{"fields", "proto_ver 200; l1_suites [1,2]; addrs: reality2-quic 192.0.2.10:443 mask 1 sni www.example.org shape 1 bootstrap, reality2-tcp 198.51.100.7:443 mask 1 shape 2; role server; flags 0x26 (relay, dht-server, exit); services dht/2 pex/2 relay/2 exit/2; features [1,3,4,5,6]; exit offer 500 micro-USDT/MiB, 10240 KiB free, 100000 kbit/s, NL, policy 0x0b, assets [1,2]; shop https://shop.example.org/echofog; release 0.3.0; scope 0"},
+			{"seq", fixedTime}, {"not_after", notAfter},
+			{"body", hx(pubBody)}, {"signed_bytes_sha256", hx(sha(pubSigned))}, {"sig", hx(pubSig)},
+			{"envelope", hx(pubEnv)}, {"envelope_len", len(pubEnv)}, {"object_id", hx(sha(pubEnv))},
 		}},
-		{"note", "service ids 1, 2, 5, 6 are dht, pex, relay, exit (registries.md §3)"},
-		{"seq", fixedTime},
-		{"not_after", notAfter},
-		{"body", hx(body)},
-		{"signed_bytes_sha256", hx(sha(signed))},
-		{"sig", hx(sig)},
-		{"envelope", hx(env)},
-		{"envelope_len", len(env)},
-		{"object_id", hx(sha(env))},
-	}, env, s, hsPub
+		{"peer", O{
+			{"fields", "as public plus noise3 192.0.2.10:443 mask 2 and ws2 wss://cdn.example.org/ef/3c9a7d sni inner.example.org; prev_hs; scope 1"},
+			{"seq", fixedTime + 1}, {"envelope", hx(peerEnv)}, {"envelope_len", len(peerEnv)},
+		}},
+		{"invite", O{
+			{"fields", "noise3 192.0.2.10:443 with the invitation masking key; flags 0x11 (unlisted, invite-scoped); scope 2; invite_id = pass_id"},
+			{"invite_id", hx(passID)}, {"seq", fixedTime + 2}, {"not_after", fixedTime + 30*86400},
+			{"envelope", hx(invEnv)}, {"envelope_len", len(invEnv)},
+		}},
+	}, cardOut{pubEnv, peerEnv, invEnv, s, hsPub, invMaskPub, passID, secret}
 }
 
-func genLink(cardEnv []byte) any {
-	var sl seedLog
-	secret := sl.get("link/access_secret")[:16]
-	raw := cat([]byte{0x00}, cardEnv)
+func linkFor(env []byte) (string, []byte, []byte) {
+	raw := cat([]byte{0x00}, env)
 	var z bytes.Buffer
 	w, err := flate.NewWriter(&z, flate.BestCompression)
 	must(err)
-	_, err = w.Write(cardEnv)
+	_, err = w.Write(env)
 	must(err)
 	must(w.Close())
 	comp := cat([]byte{0x01}, z.Bytes())
 	inflated, err := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(comp[1:])), 4097))
 	must(err)
-	check(bytes.Equal(inflated, cardEnv), "inflate round trip")
+	check(bytes.Equal(inflated, env), "inflate round trip")
 	best := raw
 	if len(comp) < len(raw) {
 		best = comp
 	}
-	contact := "echofog://join?v=2&card=" + b64(best)
-	invite := contact + "&s=" + b64(secret)
+	return "echofog://join?v=2&card=" + b64(best), raw, comp
+}
+
+func genLink(c cardOut) any {
+	contact, raw, comp := linkFor(c.public)
+	inv, _, invComp := linkFor(c.invite)
+	invite := inv + "&s=" + b64(c.secret)
 	return O{
-		{"description", "Links v2. The DEFLATE bytes are informative (encoders may differ); decoding is normative. The card is the node-card.json envelope; the secret is shown with an invitation only for format (a real invitation card is invite-scoped)."},
+		{"description", "Links v2. The DEFLATE bytes are informative (encoders may differ); decoding is normative. The contact link carries the public card of node-card.json, the invitation link its invite-scope card and the access secret."},
 		{"spec", "objects.md §10"},
-		{"seeds", sl.o},
-		{"card_envelope_sha256", hx(sha(cardEnv))},
-		{"method0_len", len(raw)},
-		{"method1_len", len(comp)},
-		{"method1_data", hx(comp)},
-		{"chosen_method", int(best[0])},
-		{"contact_link", contact},
-		{"access_secret", hx(secret)},
-		{"secret64", b64(secret)},
-		{"invitation_link", invite},
-		{"web_form", "https://example.org/join/#" + strings.TrimPrefix(invite, "echofog://")},
+		{"contact", O{
+			{"card_envelope_sha256", hx(sha(c.public))},
+			{"method0_len", len(raw)},
+			{"method1_len", len(comp)},
+			{"method1_data", hx(comp)},
+			{"link", contact},
+		}},
+		{"invitation", O{
+			{"card_envelope_sha256", hx(sha(c.invite))},
+			{"method1_len", len(invComp)},
+			{"access_secret", hx(c.secret)},
+			{"secret64", b64(c.secret)},
+			{"pass_id", hx(c.passID)},
+			{"link", invite},
+			{"web_form", "https://example.org/join/#" + strings.TrimPrefix(invite, "echofog://")},
+		}},
 	}
 }
 
-func genHandshake(cardEnv, hsPub []byte) any {
+func genHandshake(c cardOut) any {
 	var sl seedLog
 	names := []string{
 		"EchoFog/2/Noise_XKhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s",
@@ -1011,24 +1123,26 @@ func genHandshake(cardEnv, hsPub []byte) any {
 		init = append(init, O{{"suite_id", i + 1}, {"protocol_name", n}, {"name_len", len(n)}, {"h0", hx(h)}, {"ck0", hx(h)}})
 	}
 	cb := sl.get("hs/cb")
-	hello := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0})
-	prologue := cat([]byte("echofog/hs2/prologue"), cb, []byte{byte(len(hello))}, hello)
+	rid := c.signer.nodeID()
+	hello := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0x02})
+	prologue := cat([]byte("echofog/hs2/prologue"), cb, rid, []byte{byte(len(hello))}, hello)
 	h := noiseInit(names[0])
 	hP := b2s(h, prologue)
-	hRS := b2s(hP, hsPub)
+	hRS := b2s(hP, c.hsPub)
+	helloXX := cat([]byte{1}, u16(2), u16(2), []byte{0x00})
+	prologueXX := cat([]byte("echofog/hs2/prologue"), cb, make([]byte, 32), []byte{byte(len(helloXX))}, helloXX)
 
 	// Payloads.
-	secret := sl.get("link/access_secret")[:16]
 	h1 := sl.get("hs/h1")
-	passID := hmacSHA(secret, []byte("echofog/hs2/pass-id"))[:8]
-	proof := hmacSHA(secret, []byte("echofog/hs2/access-proof"), h1)
-	access := (&pb{}).by(1, passID).by(2, proof).b
-	svcOffer := func(id uint64) []byte { return (&pb{}).u(1, id).packed(2, 2).b }
+	proof := hmacSHA(c.secret, []byte("echofog/hs2/access-proof"), h1)
+	access := (&pb{}).by(1, c.passID).by(2, proof).b
+	svcOffer := func(id, v uint64) []byte { return (&pb{}).u(1, id).packed(2, v).b }
 	pi := &pb{}
 	pi.u(1, 200).packed(2, 1, 3, 4, 5, 0x2a2a)
 	for _, id := range []uint64{1, 2, 3, 4, 5, 6, 7, 8} {
-		pi.by(3, svcOffer(id))
+		pi.by(3, svcOffer(id, 2))
 	}
+	pi.by(3, svcOffer(0x3a3a, 1)) // GREASE service
 	pi.by(4, access).u(5, fixedTime-86400).u(6, fixedTime)
 	hsInit := pi.b
 	checkCanonicalTop(hsInit, map[int]bool{3: true})
@@ -1042,9 +1156,9 @@ func genHandshake(cardEnv, hsPub []byte) any {
 	pr.by(8, cat([]byte{4}, []byte{192, 0, 2, 33}, u16(51234))).u(9, fixedTime)
 	hsResp := pr.b
 	checkCanonicalTop(hsResp, map[int]bool{3: true})
-	hsFinish := (&pb{}).by(1, cardEnv).b
+	hsFinish := (&pb{}).by(1, c.peer).b
 
-	// Puzzle.
+	// Puzzle (uses cb above).
 	rSecret := sl.get("hs/cookie_secret")
 	minute := fixedTime / 60
 	cookie := hmacSHA(rSecret, []byte("echofog/hs2/cookie"), cb, u64(minute))[:16]
@@ -1056,6 +1170,8 @@ func genHandshake(cardEnv, hsPub []byte) any {
 			break
 		}
 	}
+	retry := frame(0x04, 0, cat(cookie, []byte{12}))
+	helloSol := cat([]byte{2}, u16(1), u16(2), u16(1), []byte{0x03}, cookie, u64(nonce))
 
 	// Inputs for the deferred transcripts (step 2). Only stdlib values derived from them are given.
 	ie := sl.get("hs/xk/initiator_e")
@@ -1077,37 +1193,48 @@ func genHandshake(cardEnv, hsPub []byte) any {
 		{"spec", "handshake.md"},
 		{"seeds", sl.o},
 		{"initialize_symmetric", init},
-		{"prologue_example", O{
+		{"prologue_xk", O{
 			{"cb", hx(cb)},
+			{"rid (node-card.json node_id)", hx(rid)},
 			{"hs_hello", hx(hello)},
+			{"hs_hello_note", "offered [0x0001, 0x0002], chosen 0x0001, flags 0x02 (responder ID bound)"},
 			{"prologue", hx(prologue)},
-			{"h_after_prologue_xk", hx(hP)},
-			{"responder_static_rs", hx(hsPub)},
-			{"h_after_premessage_rs_xk", hx(hRS)},
+			{"h_after_prologue", hx(hP)},
+			{"responder_static_rs", hx(c.hsPub)},
+			{"h_after_premessage_rs", hx(hRS)},
+		}},
+		{"prologue_xx_bare_address", O{
+			{"hs_hello", hx(helloXX)},
+			{"prologue", hx(prologueXX)},
+			{"h_after_prologue", hx(b2s(noiseInit(names[1]), prologueXX))},
+			{"note", "no expected node ID: rid is 32 zero bytes, and the initiator must use a throwaway identity"},
 		}},
 		{"access", O{
-			{"secret", hx(secret)},
+			{"secret (link.json)", hx(c.secret)},
 			{"h1", hx(h1)},
-			{"pass_id", hx(passID)},
+			{"pass_id", hx(c.passID)},
 			{"proof", hx(proof)},
 		}},
 		{"payloads", O{
-			{"HsInit", O{{"fields", "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2, access{pass_id, proof}, known_card_seq ts-86400, time ts"}, {"encoded", hx(hsInit)}}},
+			{"HsInit", O{{"fields", "proto_ver 200, features [1,3,4,5,0x2a2a GREASE], services 1..8 version 2 and GREASE service 0x3a3a version 1, access{pass_id, proof}, known_card_seq ts-86400, time ts"}, {"encoded", hx(hsInit)}}},
 			{"HsResp", O{{"fields", "proto_ver 200, features [1,3,4,5], services [(1,2),(2,2),(3,2)], observed 192.0.2.33:51234, time ts"}, {"encoded", hx(hsResp)}}},
-			{"HsFinish", O{{"fields", "card = node-card.json envelope (format illustration)"}, {"encoded_sha256", hx(sha(hsFinish))}, {"encoded_len", len(hsFinish)}}},
+			{"HsFinish", O{{"fields", "card = node-card.json peer card (format illustration)"}, {"encoded_sha256", hx(sha(hsFinish))}, {"encoded_len", len(hsFinish)}}},
 		}},
 		{"puzzle", O{
+			{"cb", "prologue_xk.cb"},
 			{"cookie_secret_R", hx(rSecret)},
 			{"minute", minute},
 			{"cookie", hx(cookie)},
 			{"difficulty", 12},
 			{"nonce", nonce},
 			{"hash", hx(ph)},
+			{"HS_RETRY_frame", hx(retry)},
+			{"HS_HELLO_with_solution_payload", hx(helloSol)},
 		}},
 		{"deferred_transcripts", O{
-			{"status", "to be produced with the implementation in step 2"},
+			{"status", "to be produced with the implementation in step 2, by two independent implementations (handshake.md §12)"},
 			{"inputs_xk", O{
-				{"prologue", "prologue_example.prologue"},
+				{"prologue", "prologue_xk.prologue"},
 				{"responder_static", "node-card.json hs_sk"},
 				{"initiator_e_sk", hx(ie)},
 				{"initiator_e_pub", hx(x25519Pub(ie))},
@@ -1139,8 +1266,10 @@ func leadingZeros(b []byte) int {
 	return n
 }
 
-func genKDF(card signer, hsPub []byte) any {
+func genKDF(c cardOut) any {
 	var sl seedLog
+	card := c.signer
+	hsPub := c.hsPub
 	// Session (handshake.md §9, wire.md §8).
 	ck := sl.get("session/ck")
 	h := sl.get("session/h")
@@ -1154,29 +1283,63 @@ func genKDF(card signer, hsPub []byte) any {
 
 	recPT := frame(0x18, 0, cat(qv(4), []byte{0}, []byte("hello over a relay")))
 	sealed := cat(u64(0), chachaSeal(kI2R, counterNonce(0), recPT, cat(sid, u64(0))))
+	record := cat(u16(uint16(1+len(sealed))), []byte{1}, sealed)
 
-	// chat/2 sealed sender key.
+	// Relay circuit channel binding and rendezvous ID.
+	relayID := sha([]byte("relay node id for the vector"))
+	cid := uint64(0x0123456789abcdef)
+	cbCircuit := sha([]byte("echofog/hs2/circuit"), relayID, u64(cid))
+	day := uint32(fixedTime / 86400)
+	personal := sl.get("relay/personal_pass_secret")[:16]
+	rendezvous := hmacSHA(personal, []byte("echofog/relay2/rendezvous"), u32(day))
+
+	// chat/2 sealed sender.
 	eph := sl.get("chat/eph")
 	ikSK := sl.get("chat/recipient_ik")
 	ik := x25519Pub(ikSK)
 	ephPub := x25519Pub(eph)
 	kSeal := hkdfSHA(x25519(eph, ik), nil, cat([]byte("echofog/chat2/seal"), ephPub, ik), 32)
+	to := sha([]byte("recipient node id for the vector"))
+	inner := (&pb{}).by(1, card.akey()).by(2, pattern(16, 0x70)).u(3, fixedTime).by(5, []byte("ratchet bytes")).b
+	sealBox := chachaSeal(kSeal, make([]byte, 12), inner, cat(to, ephPub))
+	envelopeChat := (&pb{}).by(1, to).by(2, ephPub).by(3, sealBox).b
 
-	// mailbox/2 forward sealing to M's handshake key (the node-card.json hs key).
+	// mailbox/2 forward sealing to M's handshake key and a public-queue proof of work.
 	fe := sl.get("mailbox/forward_eph")
 	fePub := x25519Pub(fe)
 	kFwd := hkdfSHA(x25519(fe, hsPub), nil, cat([]byte("echofog/mailbox2/forward"), fePub, hsPub), 32)
+	queue := pattern(16, 0x90)
+	blob := envelopeChat
+	deposit := (&pb{}).u(1, 9).by(2, queue).by(3, blob).b
+	sealedFwd := cat(fePub, chachaSeal(kFwd, make([]byte, 12), deposit, fePub))
+	var pow uint64
+	var powHash []byte
+	for pow = 0; ; pow++ {
+		powHash = sha([]byte("echofog/mailbox2/pow"), queue, sha(blob), u64(pow))
+		if leadingZeros(powHash) >= 12 {
+			break
+		}
+	}
 
-	// call/2 keys.
+	// call/2 keys and a signed unit.
 	room := sl.get("call/room_secret")
 	epoch0 := hkdfSHA(room, nil, cat([]byte("echofog/call2/epoch"), u32(0)), 32)
-	kSender := hkdfSHA(epoch0, nil, cat([]byte("echofog/call2/sender-key"), card.nodeID()), 32)
+	joinSalt := sl.get("call/join_salt")[:16]
+	kSender := hkdfSHA(epoch0, nil, cat([]byte("echofog/call2/sender-key"), card.nodeID(), joinSalt), 32)
+	media := newSigner(sl.get("call/media_key"))
+	header := cat([]byte{1, 0, 3, 0, 1}, u32(7), u32(160))
+	nonce := cat([]byte{0, 1, 0, 0}, u32(7), []byte{0, 0, 0, 0})
+	blk, err := aes.NewCipher(kSender)
+	must(err)
+	gcm, err := cipher.NewGCM(blk)
+	must(err)
+	unitCT := gcm.Seal(nil, nonce, pattern(40, 0xc0), header)
+	unitSig := ed25519.Sign(media.priv, cat([]byte("echofog/call2/unit"), header, unitCT))
 
 	// DHT keys.
 	label := "echofog/card/2"
-	dhtCard := sha([]byte("echofog/dht2/key"), []byte{byte(len(label))}, []byte(label), card.nodeID())
-	name := "alice.ton"
-	dhtName := sha([]byte("echofog/dht2/name-key"), []byte{byte(len(name))}, []byte(name))
+	dhtCard := sha([]byte("echofog/dht2/key"), u32(day), []byte{byte(len(label))}, []byte(label), card.nodeID())
+	dhtRelease := sha([]byte("echofog/dht2/release"), u32(day))
 
 	return O{
 		{"description", "Key derivations of L2 and the services from fixed inputs. HKDF is HKDF-SHA256 unless marked noise (HMAC-BLAKE2s, handshake.md §2)."},
@@ -1201,14 +1364,69 @@ func genKDF(card signer, hsPub []byte) any {
 			{"n", 0},
 			{"plaintext", hx(recPT)},
 			{"sealed", hx(sealed)},
-			{"record", hx(cat(u16(uint16(len(sealed))), sealed))},
+			{"record (u16 len ‖ kind 1 ‖ sealed)", hx(record)},
 		}},
-		{"chat2_seal", O{{"eph_sk", hx(eph)}, {"eph_pub", hx(ephPub)}, {"recipient_ik_sk", hx(ikSK)}, {"recipient_ik", hx(ik)}, {"k", hx(kSeal)}}},
-		{"mailbox2_forward", O{{"eph_sk", hx(fe)}, {"eph_pub", hx(fePub)}, {"hs_M", hx(hsPub)}, {"k", hx(kFwd)}}},
-		{"call2", O{{"room_secret", hx(room)}, {"epoch0_secret", hx(epoch0)}, {"sender_node_id", hx(card.nodeID())}, {"k_sender", hx(kSender)}}},
+		{"relay2", O{
+			{"relay_node_id", hx(relayID)},
+			{"cid", fmt.Sprintf("%016x", cid)},
+			{"cb_circuit", hx(cbCircuit)},
+			{"day", day},
+			{"personal_pass_secret", hx(personal)},
+			{"rendezvous_id", hx(rendezvous)},
+		}},
+		{"chat2_seal", O{{"eph_sk", hx(eph)}, {"eph_pub", hx(ephPub)}, {"recipient_ik_sk", hx(ikSK)}, {"recipient_ik", hx(ik)}, {"k", hx(kSeal)},
+			{"to", hx(to)}, {"inner", hx(inner)}, {"box", hx(sealBox)}, {"SealedEnvelope", hx(envelopeChat)}}},
+		{"mailbox2", O{{"forward_eph_sk", hx(fe)}, {"forward_eph_pub", hx(fePub)}, {"hs_M", hx(hsPub)}, {"k", hx(kFwd)},
+			{"deposit (req 9, queue 90..9f, blob = chat2_seal.SealedEnvelope)", hx(deposit)}, {"sealed", hx(sealedFwd)},
+			{"pow_bits", 12}, {"pow", pow}, {"pow_hash", hx(powHash)}}},
+		{"call2", O{{"room_secret", hx(room)}, {"epoch0_secret", hx(epoch0)}, {"sender_node_id", hx(card.nodeID())}, {"join_salt", hx(joinSalt)},
+			{"k_sender", hx(kSender)}, {"unit_header (audio, epoch 0, sender 3, stream 0, gen 1, seq 7, ts 160)", hx(header)},
+			{"nonce", hx(nonce)}, {"plaintext", hx(pattern(40, 0xc0))}, {"ciphertext_and_tag", hx(unitCT)},
+			{"media_key_pub", hx(media.pub)}, {"unit_sig", hx(unitSig)}}},
 		{"dht2", O{
+			{"day", day},
 			{"card_key", O{{"label", label}, {"signer_node_id", hx(card.nodeID())}, {"key", hx(dhtCard)}}},
-			{"name_key", O{{"name", name}, {"key", hx(dhtName)}}},
+			{"release_key", hx(dhtRelease)},
 		}},
+	}
+}
+
+func genNegative(c cardOut) any {
+	s := c.signer
+	// Non-canonical bodies.
+	outOfOrder := cat((&pb{}).u(6, 1).b, (&pb{}).u(1, 200).b)
+	longTag := cat([]byte{0x88, 0x00}, []byte{0xc8, 0x01}) // field 1 tag as a 2-byte varint
+	unpacked := cat((&pb{}).u(1, 200).b, []byte{0x48, 0x01, 0x48, 0x03}) // features as unpacked varints
+	dupScalar := cat((&pb{}).u(1, 200).b, (&pb{}).u(1, 201).b)
+	// Signature with S + L (not canonical).
+	body := (&pb{}).u(1, 200).b
+	env, _, sig := envelope("echofog/card/2", s, 1, fixedTime+86400, body)
+	S := leBig(sig[32:])
+	L, _ := new(big.Int).SetString("7237005577332262213973186563042994240857116359379907606001950938285454250989", 10)
+	S.Add(S, L)
+	sb := S.Bytes()
+	sNew := make([]byte, 32)
+	for i := range sb {
+		sNew[i] = sb[len(sb)-1-i]
+	}
+	badSig := cat(env[:len(env)-64], sig[:32], sNew)
+	check(!ed25519.Verify(s.pub, env[:len(env)-64], cat(sig[:32], sNew)), "Go rejects S ≥ L")
+	// An envelope whose signer is the identity point (small order).
+	smallOrder := cat([]byte{0x02, byte(len("echofog/card/2"))}, []byte("echofog/card/2"), []byte{0x01},
+		unhex("0100000000000000000000000000000000000000000000000000000000000000"), u64(1), u64(fixedTime+86400), qv(uint64(len(body))), body, make([]byte, 64))
+	return O{
+		{"description", "Inputs that MUST be rejected."},
+		{"spec", "objects.md §2.2–§2.3"},
+		{"non_canonical_bodies", []any{
+			O{{"body", hx(outOfOrder)}, {"reason", "fields out of order (6 before 1)"}},
+			O{{"body", hx(longTag)}, {"reason", "tag of field 1 encoded with a non-minimal varint"}},
+			O{{"body", hx(unpacked)}, {"reason", "NodeCard.features (field 9, known packed field) sent unpacked"}},
+			O{{"body", hx(dupScalar)}, {"reason", "known non-repeated field 1 appears twice"}},
+		}},
+		{"signature_s_not_canonical", O{{"envelope", hx(badSig)}, {"reason", "S + L in place of S: RFC 8032 requires S < L"}}},
+		{"small_order_signer", O{{"envelope", hx(smallOrder)}, {"reason", "signer key is the identity point (small order)"}}},
+		{"noise3_init_out_of_window", O{{"input", "noise3.json init with ts = init.ts - 301 at a responder whose clock is init.ts"}, {"reason", "|ts − now| > 300 s: silently dropped"}}},
+		{"reality2_token_wrong_address", O{{"input", "reality2.json client_hello_with_token received on 198.51.100.7:443"}, {"reason", "k_tok differs (reality2.json k_tok_at_198.51.100.7:443): forwarded to the cover"}}},
+		{"varint", "see varint.json invalid"},
 	}
 }
