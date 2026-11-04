@@ -167,6 +167,11 @@ func Parse(p *objectspb.ShapeProfile) (*Profile, error) {
 	}
 	if p.GetKeepaliveS() != nil {
 		out.Keepalive = rangeOf(p.GetKeepaliveS())
+		// A present field is valid only in [1, 59]; the zero value must not pass as "absent"
+		// (decisions.md, T2.5, п. 3).
+		if err := checkRange("keepalive_s", out.Keepalive, minKeepaliveS, maxKeepaliveS); err != nil {
+			return nil, err
+		}
 	}
 	if err := out.Validate(); err != nil {
 		return nil, err

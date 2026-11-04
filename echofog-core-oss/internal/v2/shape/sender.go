@@ -49,8 +49,9 @@ func (s *Sender) NextInitLen() int {
 
 // PadFor returns the number of padding bytes to add to a packet or TLS record that is n bytes long.
 // With buckets the record is rounded up to the next bucket, otherwise pad is drawn uniformly. On
-// carriers with a pad_budget the result also spends the budget of this direction; once the window
-// ends PadFor returns 0.
+// carriers with a pad_budget the result also spends the budget of this direction. The window counts
+// the direction's total bytes including the record itself: padding never crosses its end, and a
+// record that does not fit in the remaining window is not padded.
 func (s *Sender) PadFor(n int) int {
 	if n < 0 || s.p == nil {
 		return 0
@@ -68,16 +69,15 @@ func (s *Sender) PadFor(n int) int {
 		pad = s.uniform(*s.p.Pad)
 	}
 	if s.budget >= 0 {
-		if s.budget == 0 {
+		remaining := s.budget - int64(n)
+		if remaining <= 0 {
+			s.budget = 0
 			return 0
 		}
-		if int64(pad) > s.budget {
-			pad = int(s.budget)
+		if int64(pad) > remaining {
+			pad = int(remaining)
 		}
-		s.budget -= int64(n) + int64(pad)
-		if s.budget < 0 {
-			s.budget = 0
-		}
+		s.budget = remaining - int64(pad)
 	}
 	return pad
 }
