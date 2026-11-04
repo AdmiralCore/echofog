@@ -68,8 +68,14 @@ message ClusterMembership {
 }
 ```
 
-`not_after` ≤ 14 days. A member renews it through HEARTBEAT (§4.3) well before it expires. A card
+`not_after` ≤ 3 days. A member renews it through HEARTBEAT (§4.3) once less than 1 day is left. A card
 that carries an expired membership is treated as a card without a cluster reference.
+
+**Revocation is expiry.** A client cannot reach the master, so it checks membership offline: the
+signature, the delegation, `not_after`, and that `seq` is not lower than the highest it has seen for
+this member. A dismissed node stops being renewed and leaves the cluster in at most 3 days; REVOKE
+(§4) ends its access to the cluster's own services at once. There is no revocation list for
+memberships.
 
 ## 2. Card field and flag
 
@@ -124,31 +130,33 @@ Flow:
    the master still lists it.
 
 Cluster members learn about each other from the master: `JOINED` and `ASSIGN` carry the signed
-memberships of the other members the worker may use as standby paths. Workers never need to find the
+descriptor (§6.1). Workers never need to find the
 master by DHT lookup: the master card in the link is enough, and later the master's card is
 refreshed through `ASSIGN`.
 
 ## 4. The `cluster/2` service (service 11)
 
 Opened by a worker towards a master. A master that is not the active master (§5) answers with
-`NOT_ACTIVE{active}` (below). `cluster/2` is accepted only from members and for
-`JOIN` from holders of a valid token; an unknown peer gets `UNSUPPORTED` as for any service the node
+`NOT_ACTIVE{active}` (below). `cluster/2` is accepted only from members, for
+`JOIN` from holders of a valid token, and for `DESCRIPTOR_GET` from holders of a valid pass; an unknown peer gets `UNSUPPORTED` as for any service the node
 does not offer (no information about the cluster leaks). A session that carries `cluster/2` is not
 sent through the diversity limits of a public service.
 
 | Type | Frame | Body | Max |
 |---|---|---|---|
 | 0x40 | JOIN | `{ uint64 req = 1; bytes token = 2; uint32 caps = 3; string region = 4; uint32 upload_kbps = 5; }` | 96 |
-| 0x41 | JOINED | `{ uint64 req = 1; bytes membership = 2; bytes delegation = 3; repeated bytes peers = 4; }` | 4096 |
+| 0x41 | JOINED | `{ uint64 req = 1; bytes membership = 2; bytes delegation = 3; bytes descriptor = 4; }` | 20000 |
 | 0x42 | HEARTBEAT | `Heartbeat` (§4.3) | 512 |
 | 0x43 | HEARTBEAT_ACK | `{ uint64 epoch = 1; bytes membership = 2; bytes delegation = 3; }` | 2048 |
-| 0x44 | ASSIGN | `Assign` (§4.4) | 4096 |
+| 0x44 | ASSIGN | `Assign` (§4.4) | 20000 |
 | 0x45 | ASSIGNED | `{ uint64 req = 1; uint64 epoch = 2; uint32 code = 3; }` | 24 |
 | 0x46 | REVOKE | `{ bytes member = 1; uint64 epoch = 2; }` | 64 |
 | 0x47 | REPORT | `Report` (§8) | 2048 |
 | 0x48 | SYNC | `Sync` (§5.2); master to standby master | 16384 |
 | 0x49 | NOT_ACTIVE | `{ bytes active = 1; }` the active master's account key | 40 |
 | 0x4a | ERROR | `{ uint64 req = 1; uint32 code = 2; }` codes in §4.5 | 16 |
+| 0x4b | DESCRIPTOR_GET | `{ uint64 req = 1; bytes pass = 2; }` from a pass holder (§6.1) | 1040 |
+| 0x4c | DESCRIPTOR | `{ uint64 req = 1; bytes descriptor = 2; }` | 16500 |
 
 Timeouts: JOIN 20 s to JOINED; ASSIGN 10 s to ASSIGNED.
 
@@ -168,7 +176,7 @@ message Heartbeat {
 ```
 
 Sent every `uniform(25, 35)` s on a long-lived stream. The master answers HEARTBEAT_ACK; when the
-worker's membership expires in less than 3 days, the ACK carries a renewed membership, and when the
+worker's membership expires in less than 1 day, the ACK carries a renewed membership, and when the
 delegation changed, the new delegation. A worker that gets no ACK for 5 minutes keeps serving on its
 last policy (§4.4) and tries the next master by priority.
 
@@ -184,7 +192,7 @@ message Assign {
   repeated bytes pass_keys = 4;   // akeys that may sign cluster passes (§7); empty = masters only
   uint32 max_clients = 5;
   uint64 quota_slice_mib = 6;     // budget for pass holders until the next ASSIGN (§7)
-  repeated bytes peers = 7;       // memberships of other members, for standby paths
+  bytes  descriptor = 7;          // echofog/cluster-desc/2 envelope (§6.1)
   bytes  master_card = 8;         // the active master's current card
   repeated bytes revoked_passes = 9;  // pass_ids revoked since the previous ASSIGN (≤ 256)
 }
@@ -202,6 +210,7 @@ worker publishes are the operator's own and are not secret.
 | 0x102 | `stale-epoch` |
 | 0x103 | `delegation-invalid` |
 | 0x104 | `too-many-members` (limit 256 per cluster) |
+| 0x105 | `pass-invalid` (DESCRIPTOR_GET) |
 
 ## 5. More than one master
 
@@ -231,7 +240,8 @@ pulls the SYNC state, and either waits as standby or takes over again by bumping
 often than once per 10 minutes, so a flapping master cannot keep the cluster busy).
 
 Without a standby, a master outage changes nothing for clients: workers continue to serve under their
-last policy until their memberships expire (14 days at most; HEARTBEAT renews them earlier), and
+last policy until their memberships expire (3 days at most; then their cards lose the cluster reference and
+they continue as ordinary nodes), and
 passes keep working until their own expiry (§7).
 
 ## 6. Balancing
@@ -245,8 +255,36 @@ nothing for a censor to block together.
 - Cards carry only what they carry today: `ExitOffer.upload_kbps` is the operator's claim. Live load
   is **not** published in cards; a worker that is full refuses the connection (`RESULT` with the
   busy code of [registries.md](registries.md) §10.4) and the client tries the next member. This avoids handing a censor a cheap target list ranked by load.
+- **No thundering herd.** When a member refuses or fails, a client waits a random 0.5–3 s
+  (exponential, capped at 60 s) before trying the next member and remembers a refusing member for
+  5 minutes; many clients switching at once would otherwise overload the next node. The master
+  bounds a pass holder's parallel sessions per cluster through `Assign.max_clients` and the pass quota
+  (§7), so one client cannot take the whole cluster.
 - Recommendations to grow a cluster ("add a node in region X") are computed by the master from
   HEARTBEATs and REPORTs and shown in the panel; they are not wire data.
+
+### 6.1 Descriptor (`echofog/cluster-desc/2`)
+
+```
+message ClusterDescriptor {
+  bytes  cluster_id = 1;
+  repeated DescMember members = 2;      // ≤ 256
+}
+message DescMember {
+  bytes  member = 1;                    // akey: the member's account key
+  uint32 weight = 2;
+  string region = 3;
+  uint32 caps = 4;
+}
+```
+
+Signed by a delegated master, `not_after` ≤ 3 days. It lists account keys, not addresses: a client
+fetches each member's card in the usual way (DHT, PEX or a direct session). **The full member list is
+never public.** It is handed out only by `ASSIGN`/`JOINED` to members and by `DESCRIPTOR` to a holder
+of a valid pass (the request carries the pass; the answer is the cached descriptor). Any member can
+answer from its copy, so clients never contact a master. Clients cache the last descriptor and keep
+using it when members or masters are unreachable; unlisted members are reachable through the
+descriptor plus a pass, not through the DHT.
 
 ## 7. Cluster pass (`echofog/cluster-pass/2`)
 
@@ -262,6 +300,7 @@ message ClusterPass {
   repeated bytes nodes = 5;       // scope 1: member account keys, ≤ 16
   uint64 quota_mib = 6;           // 0 = unlimited within the term
   uint32 caps = 7;                // bit0 exit, bit1 relay, bit2 mailbox: what the pass covers
+  uint32 split = 8;               // quota mode, below
 }
 ```
 
@@ -284,7 +323,20 @@ It answers `PASS_RESULT` and then serves the holder like a paid account.
 `error` uses the exit/2 RESULT codes plus 0x110 `pass-invalid`, 0x111 `pass-expired`, 0x112
 `pass-wrong-node`, 0x113 `pass-revoked`, 0x114 `pass-exhausted`.
 
-**Quota.** Each worker holds a budget slice for pass holders (`quota_slice_mib`) and reports
+**Quota modes.** The pass is a bearer token for the operator's own nodes, which trust each other, so
+its accounting is the operator's problem; the protocol gives two modes:
+
+- `split = 0` (shared, default): the master hands each worker a budget slice (below) and adds up
+  usage from HEARTBEATs. Cheap and flexible, with a bounded overrun.
+- `split = n > 0` (hard): every worker enforces `quota_mib / n` on its own, with no master traffic;
+  the total can never exceed `quota_mib`, at the price of unused budget on nodes the client does not
+  use. `n` is the number of members at issue time.
+
+A pass of either mode is bound to `holder` and to one cluster; a worker never accepts it for another
+cluster. **Passes across operators are not defined** and MUST NOT be built on this object: they would
+link a client's sessions across operators and break the per-exit identity rule of exit/2.
+
+**Quota (shared mode).** Each worker holds a budget slice for pass holders (`quota_slice_mib`) and reports
 `bytes_served` in HEARTBEAT; the master adds up usage per `pass_id` and, when a pass is exhausted,
 revokes it. A holder can overrun its quota by at most the sum of the slices of the workers it uses,
 which the operator bounds by choosing small slices. Exact per-byte accounting across nodes is not
@@ -328,6 +380,16 @@ sender. Recipients ignore unknown fields.
   can list the cluster's other published cards. Hidden workers (`unlisted`, scope peer or invite)
   carry the reference in their peer-scope cards only; operators who need cover SHOULD keep workers
   unlisted and give out only the cluster pass plus one hidden contact per client.
+- **Master as single point of trust.** `C` should live offline or be backed up separately from the
+  master (and for large operators be split across several holders; a threshold root key reusing the
+  release co-signature scheme of [objects.md](objects.md) §9 is reserved for a later revision). The
+  master SHOULD be unlisted and kept behind DDoS protection: clients and workers never need to reach
+  it except through workers' copies (§6.1), so hiding it costs nothing.
+- **Diversity.** A cluster whose members share one hosting provider or ASN is a single block target.
+  The protocol cannot enforce this; panels SHOULD warn when members share an ASN or a /16.
+- **Linkability inside one operator.** A cluster pass lets the operator link one client's sessions
+  across its nodes. That is inherent in a pass that works on every node, and the reason `holder` is a
+  per-cluster identity rather than the client's account.
 - **Operator identity.** `root` is a pseudonymous key; the protocol never ties it to a person.
 - **Reports** are the only client-to-operator telemetry in the protocol and are opt-in.
 

@@ -108,7 +108,7 @@ uniqueness. A type without a stated maximum does not exist.
 | exit/2 | 0x40 TCP_CONNECT, 0x41 RESULT, 0x42 DATA, 0x43 UDP_OPEN, 0x44 UDP_OK, 0x45 UDP_PKT, 0x46 ACCOUNT_GET, 0x47 ACCOUNT, 0x48 VOUCHER, 0x49 VOUCHER_RESULT, 0x4a PASS, 0x4b PASS_RESULT |
 | files/2 | 0x40 WANT, 0x41 CHUNK, 0x42 CANCEL, 0x43 DONE |
 | call/2 | 0x40 SIGNAL |
-| cluster/2 | 0x40 JOIN, 0x41 JOINED, 0x42 HEARTBEAT, 0x43 HEARTBEAT_ACK, 0x44 ASSIGN, 0x45 ASSIGNED, 0x46 REVOKE, 0x47 REPORT, 0x48 SYNC, 0x49 NOT_ACTIVE, 0x4a ERROR |
+| cluster/2 | 0x40 JOIN, 0x41 JOINED, 0x42 HEARTBEAT, 0x43 HEARTBEAT_ACK, 0x44 ASSIGN, 0x45 ASSIGNED, 0x46 REVOKE, 0x47 REPORT, 0x48 SYNC, 0x49 NOT_ACTIVE, 0x4a ERROR, 0x4b DESCRIPTOR_GET, 0x4c DESCRIPTOR |
 
 ## 5. Features (L2)
 
@@ -130,6 +130,7 @@ negotiated set is the intersection ([handshake.md](handshake.md) §7).
 | 0x0010 | `spqr` | reserved: post-quantum ratchet in chat/2 (later) |
 | 0x0011 | `sealed-header` | reserved: encrypted ratchet headers in chat/2 (later) |
 | 0x0012 | `mls` | reserved: MLS groups (later) |
+| 0x0013 | `cluster` | reserved: the peer is a member of an operator cluster and speaks `cluster/2` extensions (cluster.md) |
 | 0x0a0a, 0x1a1a, 0x2a2a, …, 0xeaea | GREASE | never meaningful; see below |
 | 0xf000–0xfeff | — | experimental (0xfafa is not GREASE) |
 
@@ -198,8 +199,9 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/name/2` | crypto-username binding (format only; not stored in the v2 DHT) | 512 (envelope ≤ 768) | 30 days | objects.md §8 |
 | `echofog/release/2` | release manifest with co-signatures | 20000 | 400 days | objects.md §9 |
 | `echofog/cluster-master/2` | cluster master delegation (signed by the cluster root key) | 512 | 90 days | cluster.md §1.1 |
-| `echofog/cluster/2` | cluster membership of one node | 512 | 14 days | cluster.md §1.2 |
+| `echofog/cluster/2` | cluster membership of one node | 512 | 3 days | cluster.md §1.2 |
 | `echofog/cluster-pass/2` | cluster pass | 1024 | by term | cluster.md §7 |
+| `echofog/cluster-desc/2` | cluster descriptor (member list; never public) | 16384 | 3 days | cluster.md §6.1 |
 
 ### 7.2 L0 labels
 
