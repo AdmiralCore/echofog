@@ -2,7 +2,6 @@ package call
 
 import (
 	"errors"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
@@ -139,7 +138,7 @@ func (m *CallManager) previewKeyframe(streamID string) {
 	m.mu.Lock()
 	if room := m.activeRoom; room != nil {
 		if _, local := room.localStreams[streamID]; local {
-			m.handleKeyframeRequestLocked(room, m.selfID, streamID, time.Now())
+			m.handleKeyframeRequestLocked(room, m.selfID, streamID, m.now())
 		}
 	}
 	m.unlockAndFlush()

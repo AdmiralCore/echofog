@@ -172,6 +172,10 @@ func (n *NodeApi) convsFacade() (*convsFacade, error) {
 
 // SubscribeConversations calls cb whenever a chat changes.
 func (n *NodeApi) SubscribeConversations(cb func(ConvChange)) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	n.convsH.mu.Lock()
 	n.convsH.subs = append(n.convsH.subs, cb)
 	n.convsH.mu.Unlock()
@@ -573,7 +577,12 @@ func (f *convsFacade) migrate() {
 // --- API -------------------------------------------------------------------------------------
 
 // Conversations lists the chats, most recently active first (see ChatRows).
-func (n *NodeApi) Conversations() ([]ConversationDTO, error) { return n.ChatRows() }
+func (n *NodeApi) Conversations() ([]ConversationDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+	return n.ChatRows()
+}
 
 func convOfMeta(m convlog.Meta) (convlog.Conv, bool) {
 	id, err := convlog.ParseConvID(m.Conv)
@@ -609,6 +618,10 @@ func (n *NodeApi) chat(ref ChatRef) (*convsFacade, convlog.Conv, error) {
 // ChatHistory returns a page of a chat, newest message first. Pass "" for the newest page and the
 // returned Next for the one before it. Comments in threads are not in it (see ChatThread).
 func (n *NodeApi) ChatHistory(ref ChatRef, cursor string, limit int) (ChatPage, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChatPage{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return ChatPage{}, err
@@ -622,6 +635,10 @@ func (n *NodeApi) ChatHistory(ref ChatRef, cursor string, limit int) (ChatPage, 
 
 // ChatThread returns a page of the thread under root, oldest first.
 func (n *NodeApi) ChatThread(ref ChatRef, root, cursor string, limit int) (ChatPage, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChatPage{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return ChatPage{}, err
@@ -639,6 +656,10 @@ func (n *NodeApi) ChatThread(ref ChatRef, root, cursor string, limit int) (ChatP
 
 // ChatPins returns the pinned messages of a chat, most recently pinned first.
 func (n *NodeApi) ChatPins(ref ChatRef) ([]ChatMessage, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return nil, err
@@ -649,6 +670,10 @@ func (n *NodeApi) ChatPins(ref ChatRef) ([]ChatMessage, error) {
 
 // ChatMessage returns one message.
 func (n *NodeApi) ChatMessage(ref ChatRef, id string) (ChatMessage, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChatMessage{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return convlog.Message{}, err
@@ -666,6 +691,10 @@ func (n *NodeApi) ChatMessage(ref ChatRef, id string) (ChatMessage, error) {
 
 // ChatSend sends a message: plain, an answer to another (ReplyTo) or a comment in a thread (Thread).
 func (n *NodeApi) ChatSend(ref ChatRef, req SendRequest) (ChatMessage, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChatMessage{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return convlog.Message{}, err
@@ -745,6 +774,10 @@ func (n *NodeApi) chatOp(ref ChatRef, target string, kind uint32, do func(*convl
 
 // ChatEdit replaces the text of one of my messages.
 func (n *NodeApi) ChatEdit(ref ChatRef, id, text string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.chatOp(ref, id, convlog.KindEdit, func(l *convlog.Log, c convlog.Conv, t convlog.EventID) ([]byte, convlog.EventID, error) {
 		return l.AppendEdit(c, t, text)
 	})
@@ -752,6 +785,10 @@ func (n *NodeApi) ChatEdit(ref ChatRef, id, text string) error {
 
 // ChatDelete deletes a message for everyone: mine, or anyone's for a group moderator.
 func (n *NodeApi) ChatDelete(ref ChatRef, id string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.chatOp(ref, id, convlog.KindDelete, func(l *convlog.Log, c convlog.Conv, t convlog.EventID) ([]byte, convlog.EventID, error) {
 		return l.AppendDelete(c, t)
 	})
@@ -759,6 +796,10 @@ func (n *NodeApi) ChatDelete(ref ChatRef, id string) error {
 
 // ChatReact sets (on) or clears my reaction with emoji on a message.
 func (n *NodeApi) ChatReact(ref ChatRef, id, emoji string, on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.chatOp(ref, id, convlog.KindReact, func(l *convlog.Log, c convlog.Conv, t convlog.EventID) ([]byte, convlog.EventID, error) {
 		return l.AppendReact(c, t, emoji, on)
 	})
@@ -766,6 +807,10 @@ func (n *NodeApi) ChatReact(ref ChatRef, id, emoji string, on bool) error {
 
 // ChatPin pins (on) or unpins a message for the whole chat.
 func (n *NodeApi) ChatPin(ref ChatRef, id string, on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.chatOp(ref, id, convlog.KindPin, func(l *convlog.Log, c convlog.Conv, t convlog.EventID) ([]byte, convlog.EventID, error) {
 		return l.AppendPin(c, t, on)
 	})
@@ -773,6 +818,10 @@ func (n *NodeApi) ChatPin(ref ChatRef, id string, on bool) error {
 
 // ChatMarkRead records that the user has read the chat up to message id.
 func (n *NodeApi) ChatMarkRead(ref ChatRef, id string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err

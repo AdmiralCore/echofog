@@ -66,6 +66,10 @@ type X3DHSession struct {
 	InitMsgKey *memguard.Enclave
 	// PQ: the session started with PQXDH (a KEM secret is in its root key), not classic X3DH.
 	PQ bool
+
+	// labels are the KDF info strings this session was made with (v1 unless a Config said
+	// otherwise). The root KDF needs them at every ratchet step, so they travel with the session.
+	labels Labels
 }
 
 type ChainState struct {
@@ -73,6 +77,7 @@ type ChainState struct {
 	Index uint32
 }
 
+// NewX3DHSession is the v1 session: the initial chains are derived with the v1 label.
 func NewX3DHSession(
 	sharedSecretEnc *memguard.Enclave,
 	ephemeralKeyPrivEnc *memguard.Enclave,
@@ -80,12 +85,36 @@ func NewX3DHSession(
 	remoteRatchetKey [32]byte,
 	isInitiator bool,
 ) (*X3DHSession, error) {
+	return newX3DHSession(sharedSecretEnc, ephemeralKeyPrivEnc, remotePeerID, remoteRatchetKey, isInitiator, V1Labels)
+}
+
+// NewX3DHSessionWithLabels is NewX3DHSession with the KDF labels of the protocol version.
+func NewX3DHSessionWithLabels(
+	sharedSecretEnc *memguard.Enclave,
+	ephemeralKeyPrivEnc *memguard.Enclave,
+	remotePeerID types.PeerID,
+	remoteRatchetKey [32]byte,
+	isInitiator bool,
+	labels Labels,
+) (*X3DHSession, error) {
+	return newX3DHSession(sharedSecretEnc, ephemeralKeyPrivEnc, remotePeerID, remoteRatchetKey, isInitiator, labels)
+}
+
+func newX3DHSession(
+	sharedSecretEnc *memguard.Enclave,
+	ephemeralKeyPrivEnc *memguard.Enclave,
+	remotePeerID types.PeerID,
+	remoteRatchetKey [32]byte,
+	isInitiator bool,
+	labels Labels,
+) (*X3DHSession, error) {
+	labels = labels.resolved()
 	lockedShared, err := sharedSecretEnc.Open()
 	if err != nil {
 		return nil, ErrEnclaveOpenFailed
 	}
 
-	kdf := hkdf.New(sha256.New, lockedShared.Bytes(), nil, []byte(infoInitChains))
+	kdf := hkdf.New(sha256.New, lockedShared.Bytes(), nil, []byte(labels.InitChains))
 
 	k1Buf := memguard.NewBuffer(32)
 	k2Buf := memguard.NewBuffer(32)
@@ -133,7 +162,7 @@ func NewX3DHSession(
 			return nil, err
 		}
 
-		rootKeyEnc, sendChainKeyEnc, err = rootKDF(rootKeyEnc, dhSecretEnc)
+		rootKeyEnc, sendChainKeyEnc, err = rootKDF(rootKeyEnc, dhSecretEnc, labels)
 		if err != nil {
 			return nil, err
 		}
@@ -155,6 +184,7 @@ func NewX3DHSession(
 		RemoteRatchetPub: remoteRatchetKey,
 		SkippedKeys:      make(map[[32]byte]map[uint32]*memguard.Enclave),
 		IsInitiator:      isInitiator,
+		labels:           labels,
 	}, nil
 }
 
@@ -267,7 +297,7 @@ func (x *X3DHSession) ratchetDecrypt(msg types.EncryptedMessage) ([]byte, error)
 			return nil, err
 		}
 
-		newRootEnc, newRecvChainEnc, err := rootKDF(x.RootKey, dhSecretEnc)
+		newRootEnc, newRecvChainEnc, err := rootKDF(x.RootKey, dhSecretEnc, x.labels)
 		if err != nil {
 			return nil, err
 		}
@@ -303,7 +333,7 @@ func (x *X3DHSession) ratchetDecrypt(msg types.EncryptedMessage) ([]byte, error)
 			return nil, err
 		}
 
-		newRoot2Enc, newSendChainEnc, err := rootKDF(x.RootKey, dhSecretSendEnc)
+		newRoot2Enc, newSendChainEnc, err := rootKDF(x.RootKey, dhSecretSendEnc, x.labels)
 		if err != nil {
 			return nil, err
 		}
@@ -480,8 +510,8 @@ func calculateEDCHSecret(myPrivEnc *memguard.Enclave, remotePub [32]byte) (*memg
 }
 
 // rootKDF is KDF_RK of the Double Ratchet: HKDF with the root key as salt and the DH output as
-// input key material.
-func rootKDF(rootKeyEnc, edchSecretEnc *memguard.Enclave) (*memguard.Enclave, *memguard.Enclave, error) {
+// input key material, and the version's label as info.
+func rootKDF(rootKeyEnc, edchSecretEnc *memguard.Enclave, labels Labels) (*memguard.Enclave, *memguard.Enclave, error) {
 	lockedRoot, err := rootKeyEnc.Open()
 	if err != nil {
 		return nil, nil, ErrEnclaveOpenFailed
@@ -494,7 +524,7 @@ func rootKDF(rootKeyEnc, edchSecretEnc *memguard.Enclave) (*memguard.Enclave, *m
 	}
 	defer lockedDH.Destroy()
 
-	kdf := hkdf.New(sha256.New, lockedDH.Bytes(), lockedRoot.Bytes(), []byte(infoRoot))
+	kdf := hkdf.New(sha256.New, lockedDH.Bytes(), lockedRoot.Bytes(), []byte(labels.Root))
 
 	newRootBuf := memguard.NewBuffer(32)
 	newChainBuf := memguard.NewBuffer(32)

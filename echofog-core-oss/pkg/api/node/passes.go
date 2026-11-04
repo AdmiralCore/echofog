@@ -39,6 +39,10 @@ func (n *NodeApi) passNode() (*coreNode.Node, error) {
 
 // ListPasses returns every pass, newest first.
 func (n *NodeApi) ListPasses() ([]PassView, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return nil, err
@@ -48,6 +52,10 @@ func (n *NodeApi) ListPasses() ([]PassView, error) {
 
 // GetPass returns one pass.
 func (n *NodeApi) GetPass(id string) (PassView, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return PassView{}, ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return PassView{}, err
@@ -57,6 +65,10 @@ func (n *NodeApi) GetPass(id string) (PassView, error) {
 
 // CreatePass makes a pass and returns it with its link.
 func (n *NodeApi) CreatePass(r PassRequest) (PassView, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return PassView{}, ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return PassView{}, err
@@ -66,6 +78,10 @@ func (n *NodeApi) CreatePass(r PassRequest) (PassView, error) {
 
 // ExtendPass renews a pass: after a payment, add days or traffic; it also lifts a revocation.
 func (n *NodeApi) ExtendPass(id string, r PassRequest) (PassView, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return PassView{}, ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return PassView{}, err
@@ -75,6 +91,10 @@ func (n *NodeApi) ExtendPass(id string, r PassRequest) (PassView, error) {
 
 // RevokePass stops a pass and drops its devices; ExtendPass lets them in again.
 func (n *NodeApi) RevokePass(id string) (PassView, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return PassView{}, ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return PassView{}, err
@@ -84,6 +104,10 @@ func (n *NodeApi) RevokePass(id string) (PassView, error) {
 
 // DeletePass forgets a pass and drops its devices.
 func (n *NodeApi) DeletePass(id string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return err
@@ -93,6 +117,10 @@ func (n *NodeApi) DeletePass(id string) error {
 
 // RemovePassDevice takes one device off a pass, freeing its place.
 func (n *NodeApi) RemovePassDevice(id, peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	nd, err := n.passNode()
 	if err != nil {
 		return err

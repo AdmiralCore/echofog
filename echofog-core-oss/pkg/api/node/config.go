@@ -9,6 +9,15 @@ func GetDefaultConfig(profileName string) *config.AppConfig {
 	return config.DefaultConfig(profileName)
 }
 
+// GetConfiguredConfig is what the desktop passes to pkg/node.NewNode: the defaults plus the
+// settings saved for the profile, including protocol. Reading them here means the node is built
+// already knowing whether it may start the v1 network; NewNodeApi applies the same file again.
+func GetConfiguredConfig(profileName string) *config.AppConfig {
+	cfg := config.DefaultConfig(profileName)
+	loadPersistedSettings(cfg)
+	return cfg
+}
+
 func GetAvailableProfiles() ([]string, error) {
 	return config.GetAvailableProfiles()
 }

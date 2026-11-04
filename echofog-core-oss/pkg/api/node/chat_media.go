@@ -48,6 +48,10 @@ func isMedia(mime, name string) bool {
 
 // ChatAttachments lists a chat's media, files and links (every channel of a group), newest first.
 func (n *NodeApi) ChatAttachments(ref ChatRef) (ChatAttachments, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChatAttachments{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return ChatAttachments{}, err
@@ -100,6 +104,10 @@ const maxAvatarBytes = 512 << 10
 // SetContactProfile renames a contact and sets the picture I see for it ("" removes it). Both are
 // mine alone: the contact is not told.
 func (n *NodeApi) SetContactProfile(peerID, alias, avatarBase64 string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	cs, err := n.contactsReady()
 	if err != nil {
 		return err

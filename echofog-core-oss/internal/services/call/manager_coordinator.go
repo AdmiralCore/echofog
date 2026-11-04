@@ -144,12 +144,12 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 		profiles = append(profiles, p)
 	}
 	room.Epoch++
-	room.backdropsChanged = false // the new manifest carries them
-	m.scheduleRekeyLocked(room, time.Now()) // the members changed: a key whoever left does not have
+	room.backdropsChanged = false        // the new manifest carries them
+	m.scheduleRekeyLocked(room, m.now()) // the members changed: a key whoever left does not have
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
 	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
 		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
-	m.applyVoiceManifestLocked(room, manifest, time.Now())
+	m.applyVoiceManifestLocked(room, manifest, m.now())
 	m.floodLocked(room, signaling.ActionTreeManifest, manifest)
 }
 
@@ -463,7 +463,7 @@ func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string,
 func (m *CallManager) requestKeyframe(streamID string) {
 	m.mu.Lock()
 	if room := m.activeRoom; room != nil && (room.Dispatcher == nil || room.Dispatcher.WantKeyframe(streamID)) {
-		m.requestKeyframeLocked(room, streamID, time.Now())
+		m.requestKeyframeLocked(room, streamID, m.now())
 	}
 	m.unlockAndFlush()
 }

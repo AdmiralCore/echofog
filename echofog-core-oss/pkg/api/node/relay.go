@@ -210,6 +210,10 @@ func applyRelaySettings(c *config.AppConfig, r RelaySettingsDTO) {
 
 // GetRelaySettings returns the relay settings in effect.
 func (n *NodeApi) GetRelaySettings() (RelaySettingsDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return RelaySettingsDTO{}, ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return RelaySettingsDTO{}, errors.New("node not started")
 	}
@@ -221,6 +225,10 @@ func (n *NodeApi) GetRelaySettings() (RelaySettingsDTO, error) {
 // SetRelaySettings saves the relay settings and applies them at once, except the listen port,
 // which is used from the next start.
 func (n *NodeApi) SetRelaySettings(r RelaySettingsDTO) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}
@@ -241,6 +249,10 @@ func (n *NodeApi) SetRelaySettings(r RelaySettingsDTO) error {
 
 // AddRelay adds a relay link or address to the preferred relays and connects to it.
 func (n *NodeApi) AddRelay(link string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	cur, err := n.GetRelaySettings()
 	if err != nil {
 		return err
@@ -261,6 +273,10 @@ func (n *NodeApi) AddRelay(link string) error {
 
 // GetRelayStatus returns the relay settings, the link to share and what the relay is doing.
 func (n *NodeApi) GetRelayStatus() (RelayStatus, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return RelayStatus{}, ErrV2NotBuilt
+	}
+
 	cur, err := n.GetRelaySettings()
 	if err != nil {
 		return RelayStatus{}, err
@@ -295,6 +311,10 @@ func (n *NodeApi) GetRelayStatus() (RelayStatus, error) {
 // "host:port/<peer id>" or a bare peer ID (then looked up in the network). Use it for a friend's
 // exit that lets you in for free, a hidden exit, or an exit that is not in the market list.
 func (n *NodeApi) StartVPNVia(target string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Swarm == nil {
 		return errors.New("node is not running")
 	}

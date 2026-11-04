@@ -78,6 +78,10 @@ type persistedSettings struct {
 	AnonWalletDirect bool   `json:"anonWalletDirect,omitempty"`
 	// Privacy is who may write and call; nil: the defaults.
 	Privacy *coreNode.Privacy `json:"privacy,omitempty"`
+	// Protocol is the node implementation for the next start: config.ProtocolV1 (default when
+	// empty) or config.ProtocolV2. It is kept out of SettingsDTO so a frontend that does not know
+	// the field cannot wipe it by saving the ordinary settings.
+	Protocol int `json:"protocol,omitempty"`
 }
 
 // loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the
@@ -96,6 +100,9 @@ func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChose
 		return persistedSettings{SettingsDTO: settingsFromConfig(c)}, false
 	}
 	applySettings(c, p.SettingsDTO)
+	if p.Protocol == config.ProtocolV1 || p.Protocol == config.ProtocolV2 {
+		c.Protocol = p.Protocol
+	}
 	if p.AccessMode == config.AccessPublic || p.AccessMode == config.AccessHidden {
 		c.Access.Mode = p.AccessMode
 	}
@@ -198,4 +205,28 @@ func (n *NodeApi) SetSettings(s SettingsDTO) error {
 	}
 	applySettings(n.node.Cfg, s)
 	return nil
+}
+
+// GetProtocol is the implementation this node started with: config.ProtocolV1 or
+// config.ProtocolV2. SetProtocol only saves the choice for the next start, so this value does not
+// change while the node runs.
+func (n *NodeApi) GetProtocol() int {
+	if n.node == nil || n.node.Cfg == nil {
+		return config.ProtocolV1
+	}
+	return n.node.Cfg.ProtocolOrDefault()
+}
+
+// SetProtocol saves the implementation for the next start. It does not restart the node and does
+// not touch the running configuration: a v1 session keeps running until the app is restarted.
+func (n *NodeApi) SetProtocol(protocol int) error {
+	if n.node == nil || n.node.Cfg == nil {
+		return errors.New("node not started")
+	}
+	if protocol != config.ProtocolV1 && protocol != config.ProtocolV2 {
+		return errors.New("protocol must be 1 or 2")
+	}
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	return saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.Protocol = protocol })
 }

@@ -63,7 +63,7 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 			m.mu.Unlock()
 			return nil
 		}
-		room.seen[key] = time.Now()
+		room.seen[key] = m.now()
 		if m.applyFloodLocked(room, env, from) {
 			for _, n := range room.Dispatcher.VoiceNeighbors() {
 				if n != from && n != env.Sender {
@@ -137,7 +137,7 @@ func (m *CallManager) knownInCallLocked(room *ActiveRoomState, id types.PeerID) 
 }
 
 func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope, from types.PeerID) bool {
-	now := time.Now()
+	now := m.now()
 	switch env.Action {
 	case signaling.ActionTreeManifest:
 		var manifest tree.TreeManifest
@@ -255,7 +255,7 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 }
 
 func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope) {
-	now := time.Now()
+	now := m.now()
 	sender := env.Sender
 	switch env.Action {
 	case signaling.ActionJoin, signaling.ActionMemberHeartbeat:
@@ -351,7 +351,12 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 		}
 
 	case signaling.ActionPing:
-		m.sendLocked(room, sender, signaling.ActionPong, nil)
+		// Only a coordinator answers a liveness probe. A node that led the call and then joined
+		// another half kept answering its old members' pings, so they never saw the coordinator
+		// go quiet and stayed behind at the old epoch.
+		if room.IsCoordinator {
+			m.sendLocked(room, sender, signaling.ActionPong, nil)
+		}
 
 	case signaling.ActionStreamReparent:
 		var rp signaling.ReparentPayload
@@ -417,8 +422,13 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			return
 		}
 		if !m.authorityLocked(room, sender, rs.Voice.Epoch) {
-			m.rejectLocked(room, env, "stale epoch", false)
-			return
+			// A coordinator cut off with nobody left counted its members down on its own, so it
+			// comes back at a higher epoch. The half that kept the others is the call: the lone
+			// half takes its sync even at the older epoch, as it yields to a live heartbeat.
+			if !m.aloneLocked(room) || !m.knownInCallLocked(room, sender) || len(rs.Voice.Profiles) <= len(room.ConnectedPeers) {
+				m.rejectLocked(room, env, "stale epoch", false)
+				return
+			}
 		}
 		m.logger.Debug("Applying room sync", "coordinator", calllog.Peer(sender), "epoch", rs.Voice.Epoch, "streams", len(rs.Streams))
 		// a member not admitted yet takes it even at our epoch: one that yielded a room it led
@@ -521,9 +531,9 @@ func (m *CallManager) toCoordinatorLocked(room *ActiveRoomState, action signalin
 	case signaling.ActionStreamUnsub:
 		m.unsubscribeLocked(room, data.(string), m.selfID)
 	case signaling.ActionStreamReparent:
-		m.reparentLocked(room, m.selfID, data.(signaling.ReparentPayload), time.Now())
+		m.reparentLocked(room, m.selfID, data.(signaling.ReparentPayload), m.now())
 	case signaling.ActionReport:
-		m.reportLocked(room, m.selfID, data.(signaling.ReportPayload), time.Now())
+		m.reportLocked(room, m.selfID, data.(signaling.ReportPayload), m.now())
 	case signaling.ActionStreamWeak:
 		m.weakLocked(room, m.selfID, data.(signaling.StreamWeakPayload))
 	}

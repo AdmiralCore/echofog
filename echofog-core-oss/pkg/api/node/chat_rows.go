@@ -169,6 +169,10 @@ func (f *convsFacade) pubKeyOf(peer types.PeerID) string {
 // ChatRows lists every chat, the most recently active first: the contacts and message requests
 // (with or without messages yet) and the groups.
 func (n *NodeApi) ChatRows() ([]ConversationDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, err := n.convsFacade()
 	if err != nil {
 		return nil, err

@@ -57,6 +57,10 @@ type NodeApi struct {
 	nextAnon         *string  // anonymous mode saved for the next start, nil: not changed (guarded by settingsMu)
 	nextAnonWallet   *bool    // the wallet allowed out in anonymous mode, saved (guarded by settingsMu)
 
+	// backends are the domain implementations chosen at start-up: the facade itself at protocol 1,
+	// the not-built v2 backends at protocol 2 (T11.1b-e replace the bodies with delegation).
+	backends backends
+
 	Logger *slog.Logger
 }
 
@@ -71,6 +75,7 @@ func NewNodeApi(node *node.Node) *NodeApi {
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}
 	api.tun.killSwitch.Store(saved.KillSwitch == nil || *saved.KillSwitch)
+	api.backends = chooseBackends(node.Cfg.ProtocolOrDefault(), api)
 	tonwallet.SetHTTPClient(api.OwnHTTPClient) // the wallet's lookups go where the app's own do
 	// the conversation logs take chat traffic from the very first message on
 	node.OnMessengerReady(func() { _, _ = api.convsFacade() })
@@ -110,6 +115,10 @@ func (n *NodeApi) StartNode() error {
 	if err := n.node.Start(); err != nil {
 		return err
 	}
+	if n.node.NetworkOff() {
+		// protocol 2: storage, wallet, profile and settings are up; there is no v1 network to tune
+		return nil
+	}
 	if pinned != 0 && n.node.Transport != nil {
 		_ = n.node.Transport.BindToInterface(pinned)
 	}
@@ -138,6 +147,10 @@ func (n *NodeApi) StopNode() {
 }
 
 func (n *NodeApi) GetPeers() []dto.PeerDTO {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	internalPeers := n.node.Swarm.GetAllPeers()
 
 	result := make([]dto.PeerDTO, 0, len(internalPeers))
@@ -178,6 +191,10 @@ func (n *NodeApi) GetMyPubKey() string {
 // are obfuscated with a key derived from it; without it only a node running without obfuscation
 // can be reached.
 func (n *NodeApi) ConnectToPeer(addr string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	ctx, cancel := context.WithTimeout(n.node.Ctx, 15*time.Second)
 	defer cancel()
 	info := network.ParseAddrInfo(addr)
@@ -199,6 +216,10 @@ func (n *NodeApi) ConnectToPeer(addr string) error {
 }
 
 func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
 		return err
@@ -230,6 +251,10 @@ type MessageStateDTO struct {
 
 // OnMessageState calls cb whenever the state of a message of ours changes.
 func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	if n.node == nil || n.node.Messenger == nil {
 		return
 	}
@@ -239,6 +264,10 @@ func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
 }
 
 func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	readCh := make(chan *dto.MessageDTO, 100)
 	if n.node.Messenger == nil {
 		return readCh // nothing ever arrives
@@ -255,6 +284,10 @@ func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 }
 
 func (n *NodeApi) GetContacts() ([]dto.ContactDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	if n.node.Contact == nil {
 		return nil, errNoChat
 	}
@@ -286,6 +319,10 @@ type PeerStateDTO struct {
 // OnPeerState calls cb whenever a connection to a peer comes up or goes away, so a contact's
 // online mark follows it without reloading the contacts.
 func (n *NodeApi) OnPeerState(cb func(PeerStateDTO)) func() {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	if n.node == nil || n.node.EventBus == nil {
 		return func() {}
 	}
@@ -305,6 +342,10 @@ func (n *NodeApi) OnPeerState(cb func(PeerStateDTO)) func() {
 }
 
 func (n *NodeApi) NewContact(contact dto.ContactDTO) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node.Contact == nil {
 		return errNoChat
 	}
@@ -312,6 +353,10 @@ func (n *NodeApi) NewContact(contact dto.ContactDTO) error {
 }
 
 func (n *NodeApi) DeleteContact(peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node.Contact == nil {
 		return errNoChat
 	}
@@ -320,10 +365,18 @@ func (n *NodeApi) DeleteContact(peerID string) error {
 
 // BanContact blocks a peer (see BlockPeer); it stays in the contacts, so unblocking restores it.
 func (n *NodeApi) BanContact(peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.BlockPeer(peerID)
 }
 
 func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint64) ([]dto.MessageDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	if n.node.Messenger == nil {
 		return nil, errNoChat
 	}
@@ -364,6 +417,10 @@ func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint6
 }
 
 func (n *NodeApi) GetCallManager() *call.CallManager {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	if n.node == nil {
 		return nil
 	}
@@ -372,6 +429,10 @@ func (n *NodeApi) GetCallManager() *call.CallManager {
 
 // JoinCall connects to a call room, sets up local loopback bridge, and returns the SDP Offer.
 func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return "", ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return "", errors.New("call manager not initialized")
 	}
@@ -409,6 +470,10 @@ func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
 
 // SubmitCallAnswer delivers the frontend WebRTC SDP Answer to the Go loopback bridge.
 func (n *NodeApi) SubmitCallAnswer(sdpAnswer string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -417,6 +482,10 @@ func (n *NodeApi) SubmitCallAnswer(sdpAnswer string) error {
 
 // LeaveCall cleanly exits the call room and releases media resources.
 func (n *NodeApi) LeaveCall() error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return nil
 	}
@@ -425,6 +494,10 @@ func (n *NodeApi) LeaveCall() error {
 
 // StartScreenShare registers and announces a screen share stream in the P2P network.
 func (n *NodeApi) StartScreenShare(streamID string, bitrate int) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -433,6 +506,10 @@ func (n *NodeApi) StartScreenShare(streamID string, bitrate int) error {
 
 // StopScreenShare closes the screen broadcast.
 func (n *NodeApi) StopScreenShare(streamID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -442,6 +519,10 @@ func (n *NodeApi) StopScreenShare(streamID string) error {
 // SetDisplayRate notes the refresh rate of the screen streams are watched on (0: not known), for
 // the broadcasters of the streams watched to pick a frame rate it shows evenly.
 func (n *NodeApi) SetDisplayRate(hz int) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -450,6 +531,10 @@ func (n *NodeApi) SetDisplayRate(hz int) {
 
 // WatchStream subscribes to another peer's stream.
 func (n *NodeApi) WatchStream(streamID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -477,6 +562,10 @@ type StreamStatsDTO struct {
 
 // CallStreamStats returns the counters of one stream of the active call.
 func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return StreamStatsDTO{}, ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return StreamStatsDTO{}, errors.New("call manager not initialized")
 	}
@@ -492,6 +581,10 @@ func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
 
 // UnwatchStream cancels subscription to another peer's stream.
 func (n *NodeApi) UnwatchStream(streamID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -500,6 +593,10 @@ func (n *NodeApi) UnwatchStream(streamID string) error {
 
 // SetVADState broadcasts voice activity detection status to the call room.
 func (n *NodeApi) SetVADState(speaking bool, audioDb float64) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -513,6 +610,10 @@ func (n *NodeApi) SetupCallCallbacks(
 	onStreamClosed func(streamID string),
 	onTopologyUpdated func(epoch uint64, coordinator string),
 ) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -555,6 +656,10 @@ func (n *NodeApi) callUploadKbps() int {
 
 // SetUploadCapacity declares the local upstream bandwidth (kbps) used to validate stream quality.
 func (n *NodeApi) SetUploadCapacity(kbps int) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if kbps <= 0 {
 		return errors.New("upload capacity must be positive")
 	}
@@ -567,6 +672,10 @@ func (n *NodeApi) SetUploadCapacity(kbps int) error {
 
 // ListStreamQualities returns every broadcast preset and whether the current upload capacity sustains it.
 func (n *NodeApi) ListStreamQualities() []dto.StreamQualityDTO {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	upload := n.callUploadKbps()
 	out := make([]dto.StreamQualityDTO, 0, len(tree.QualityPresets))
 	for _, q := range tree.QualityPresets {
@@ -580,6 +689,10 @@ func (n *NodeApi) ListStreamQualities() []dto.StreamQualityDTO {
 
 // StartStream announces a broadcast at a named quality preset (e.g. "2160p60").
 func (n *NodeApi) StartStream(streamID, mediaType, qualityID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -606,6 +719,10 @@ func (n *NodeApi) allowQuality(q tree.StreamQuality) {
 
 // UpdateStreamQuality switches a running broadcast to another preset.
 func (n *NodeApi) UpdateStreamQuality(streamID, qualityID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -619,6 +736,10 @@ func (n *NodeApi) UpdateStreamQuality(streamID, qualityID string) error {
 
 // SetupStreamInfoCallback delivers announced streams together with their quality metadata.
 func (n *NodeApi) SetupStreamInfoCallback(fn func(info dto.StreamInfoDTO)) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	if fn == nil || n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -641,6 +762,10 @@ func (n *NodeApi) TriggerPanicButton() error {
 // ResetEncryptionSession forgets the end-to-end session with a contact. Use it when messages with
 // them stop arriving although both are online; the next message starts a fresh session.
 func (n *NodeApi) ResetEncryptionSession(peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	raw, err := hex.DecodeString(peerID)
 	if err != nil || len(raw) != len(types.PeerID{}) {
 		return errors.New("bad peer id")

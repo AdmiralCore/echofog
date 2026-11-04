@@ -132,7 +132,7 @@ func (s *defaultProfileService) IsRegistered(ctx context.Context, profileName st
 	if profileName == "" {
 		profileName = "default"
 	}
-	cfg := api.GetDefaultConfig(profileName)
+	cfg := api.GetConfiguredConfig(profileName)
 	tempNode := coreNode.NewNode(ctx, cfg, "CheckReg-"+profileName)
 	return tempNode.IsRegistered()
 }

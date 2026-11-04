@@ -82,6 +82,10 @@ var errNotGroup = errors.New("only a group has channels")
 
 // ChatChannels lists a group's channels and voice rooms in their order.
 func (n *NodeApi) ChatChannels(ref ChatRef) ([]ChannelDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return nil, err
@@ -117,6 +121,10 @@ func (n *NodeApi) ChatChannels(ref ChatRef) ([]ChannelDTO, error) {
 
 // ChatChannelSave creates a channel (spec.ID "") or changes one: name, topic, read-only, order.
 func (n *NodeApi) ChatChannelSave(ref ChatRef, spec ChannelSpec) (ChannelDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChannelDTO{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return ChannelDTO{}, err
@@ -161,6 +169,10 @@ func (n *NodeApi) ChatChannelSave(ref ChatRef, spec ChannelSpec) (ChannelDTO, er
 // ChatMainChannel is the settings of a group's main channel: its name ("" the app's own), topic,
 // read-only, slow mode, and the channel the group opens on ("" the main one).
 func (n *NodeApi) ChatMainChannel(ref ChatRef) (ChannelDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ChannelDTO{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return ChannelDTO{}, err
@@ -184,6 +196,10 @@ func (n *NodeApi) ChatMainChannel(ref ChatRef) (ChannelDTO, error) {
 
 // ChatMainChannelSave changes the settings of a group's main channel.
 func (n *NodeApi) ChatMainChannelSave(ref ChatRef, spec ChannelSpec) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err
@@ -242,6 +258,10 @@ func (f *convsFacade) slowWait(c convlog.Conv, channel string) error {
 
 // ChatChannelMove puts a channel at index among the channels of its kind (text or voice).
 func (n *NodeApi) ChatChannelMove(ref ChatRef, id string, index int) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err
@@ -286,6 +306,10 @@ func (n *NodeApi) ChatChannelMove(ref ChatRef, id string, index int) error {
 
 // ChatChannelRemove removes a channel (its messages stay in the log, out of sight).
 func (n *NodeApi) ChatChannelRemove(ref ChatRef, id string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err
@@ -321,6 +345,10 @@ func (n *NodeApi) ChatChannelRemove(ref ChatRef, id string) error {
 // ChatThreads are the messages of a chat's channel (ref.Channel) that have comments, the most
 // recently active first.
 func (n *NodeApi) ChatThreads(ref ChatRef) ([]ChatMessage, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return nil, err
@@ -330,6 +358,10 @@ func (n *NodeApi) ChatThreads(ref ChatRef) ([]ChatMessage, error) {
 
 // ChatThreadTitle names the thread under a message ("" clears it): its author or a moderator.
 func (n *NodeApi) ChatThreadTitle(ref ChatRef, root, title string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.chatOp(ref, root, convlog.KindThread, func(l *convlog.Log, c convlog.Conv, id convlog.EventID) ([]byte, convlog.EventID, error) {
 		return l.AppendThreadTitle(c, id, strings.TrimSpace(title))
 	})
@@ -338,6 +370,10 @@ func (n *NodeApi) ChatThreadTitle(ref ChatRef, root, title string) error {
 // ChatGroupPhoto sets a group's picture for every member (photoBase64 "": takes it away): a small
 // JPEG, PNG or WebP (convlog.MaxPhotoBytes), from who manages the group's channels.
 func (n *NodeApi) ChatGroupPhoto(ref ChatRef, photoBase64 string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err
@@ -366,6 +402,10 @@ func (n *NodeApi) ChatGroupPhoto(ref ChatRef, photoBase64 string) error {
 // StartRoomCall joins a group's voice room: the call going on in it, or a new one (which does not
 // ring anybody).
 func (n *NodeApi) StartRoomCall(groupID, room string) (GroupCall, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupCall{}, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupCall{}, err
@@ -386,6 +426,10 @@ func (n *NodeApi) StartRoomCall(groupID, room string) (GroupCall, error) {
 
 // KeepRoomCallAlive tells the members that the call in a voice room is still going.
 func (n *NodeApi) KeepRoomCallAlive(groupID, room, callID, coordinator string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -395,6 +439,10 @@ func (n *NodeApi) KeepRoomCallAlive(groupID, room, callID, coordinator string) e
 
 // LeaveRoomCall says we left a voice room whose call others stay in.
 func (n *NodeApi) LeaveRoomCall(groupID, room, callID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -405,6 +453,10 @@ func (n *NodeApi) LeaveRoomCall(groupID, room, callID string) error {
 
 // EndRoomCall ends the call in a voice room (the last one out does).
 func (n *NodeApi) EndRoomCall(groupID, room, callID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -415,6 +467,10 @@ func (n *NodeApi) EndRoomCall(groupID, room, callID string) error {
 // ChatChannelPlace puts a channel, a voice room or the main channel (id "") in a category
 // (parent "": in none).
 func (n *NodeApi) ChatChannelPlace(ref ChatRef, id, parent string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return err
@@ -459,6 +515,10 @@ func (f *convsFacade) placeChannel(c convlog.Conv, id, parent string) error {
 // renamed, removed and hold channels of either kind. It returns their ids, text then voice; a
 // space that has categories already is left as it is.
 func (n *NodeApi) ChatCategoriesSetup(ref ChatRef, textName, voiceName string) ([]string, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return nil, err

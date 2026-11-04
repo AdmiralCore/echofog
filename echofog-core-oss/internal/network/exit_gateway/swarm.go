@@ -29,7 +29,7 @@ func swarmPadsPeer(sw *swarm.Swarm, id types.PeerID) bool {
 // tunnel to a padding-capable exit is padded consistently.
 func NewSwarmP2PDialer(sw *swarm.Swarm, exit types.PeerID) *P2PDialer {
 	d := NewP2PDialer(SwarmOpener(sw, exit))
-	d.pad = func() bool { return swarmPadsPeer(sw, exit) }
+	d.SetPad(func() bool { return swarmPadsPeer(sw, exit) })
 	return d
 }
 
@@ -63,7 +63,7 @@ func AttachToSwarm(sw *swarm.Swarm, svc *ExitService) {
 		svc.HandleVoucherFrom(context.Background(), swarmStream{st, sw}, offer, peer)
 	})
 	sw.RegisterStreamHandler(net_types.TypeExitUDP, func(st *network.Stream, hello []byte, peer types.PeerID) {
-		svc.handleUDP(context.Background(), swarmStream{st, sw}, peer, hello)
+		svc.HandleUDP(context.Background(), swarmStream{st, sw}, peer, hello)
 	})
 }
 

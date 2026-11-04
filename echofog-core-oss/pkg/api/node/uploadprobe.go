@@ -10,6 +10,10 @@ import (
 
 // MeasureUploadCapacity probes connected peers for real throughput, applies it as the node's upload capacity and returns kbps
 func (n *NodeApi) MeasureUploadCapacity() (int, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return 0, ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Swarm == nil || n.node.BWProbe == nil {
 		return 0, errors.New("node is not running")
 	}

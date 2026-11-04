@@ -393,7 +393,70 @@ func (n *Node) Start() (err error) {
 	if !n.IsReady {
 		return errors.New("node is not ready: you must call Login or Register first")
 	}
+	if n.NetworkOff() {
+		return n.startOffline()
+	}
+	return startNetworkFn(n)
+}
 
+// startNetworkFn is the only entry into the v1 network stack (transport, swarm, services). It is a
+// variable so a test can intercept dialling and listening as one point and prove that protocol 2
+// never reaches it.
+var startNetworkFn = func(n *Node) error { return n.startNetwork() }
+
+// NetworkOff reports whether this node runs without the v1 network: protocol 2, where the v2 stack
+// is not built yet. Storage, wallet, profile and settings still work.
+func (n *Node) NetworkOff() bool { return n.Cfg != nil && n.Cfg.IsV2() }
+
+// V2DataDir is <data>/v2 (AD7): the directory of the v2 store, next to the v1 profile database.
+// It is only the path and its creation; the v2 store itself is a later task.
+func (n *Node) V2DataDir() (string, error) {
+	if n.Cfg == nil || n.Cfg.Storage.DatabasePath == "" {
+		return "", errors.New("profile directory unavailable")
+	}
+	dir := filepath.Join(filepath.Dir(n.Cfg.Storage.DatabasePath), "v2")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// startOffline brings up what v2 may use before its own stack exists: the sealed storage, the
+// identity and the wallet. It creates no transport, dispatcher, swarm or v1 service, so it opens
+// no socket and starts no goroutine that talks to the network.
+func (n *Node) startOffline() error {
+	n.Logger.Info("EchoFog Core is starting in v2 mode without the v1 network...", "version", config.CurrentProtocolVersion)
+	if n.identity == nil {
+		return errors.New("the identity is not loaded")
+	}
+	n.identity.SwitchAccount(0)
+	activeAccount, err := n.identity.GetActiveAccount()
+	if err != nil {
+		return fmt.Errorf("failed to get active account: %w", err)
+	}
+	// messages, contacts and groups are stored encrypted from here on
+	if err := n.sealStorage(activeAccount); err != nil {
+		return fmt.Errorf("failed to open encrypted storage: %w", err)
+	}
+	n.ID, _ = n.identity.GetPeerID()
+	privBytes, pubBytes, _ := activeAccount.GetIdentityKey()
+	lockedPriv, err := privBytes.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open private key enclave: %w", err)
+	}
+	copy(n.PubKey[:], pubBytes)
+	lockedPriv.Destroy()
+
+	// deriving the wallet address is offline; its servers are contacted on the first request
+	n.initTonWallet()
+	if _, err := n.V2DataDir(); err != nil {
+		return fmt.Errorf("v2 data directory: %w", err)
+	}
+	n.Logger.Info("Node started in v2 mode: the v1 network is off")
+	return nil
+}
+
+func (n *Node) startNetwork() error {
 	n.Logger.Info("EchoFog Core is starting P2P network...", "version", config.CurrentProtocolVersion)
 
 	n.identity.SwitchAccount(0)

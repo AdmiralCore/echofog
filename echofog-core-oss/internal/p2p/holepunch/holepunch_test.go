@@ -59,10 +59,114 @@ type fakeNet struct {
 	failFirstPunches int // PunchHole fails this many times before it can succeed
 	dialWorks        bool
 	punchWorks       bool
+
+	// birthday punching: the two roles rendezvous whenever both are present, whichever arrives first
+	bdDialN, bdSprayN    int
+	bdSockets            int    // n passed to the last BirthdayDial
+	bdSpray              int    // m passed to the last BirthdaySpray
+	bdLo, bdHi           uint16 // range passed to the last BirthdaySpray
+	bdDialing, bdSprayed bool
+	bdDone               chan struct{}
+
+	// both-symmetric (mutual) birthday
+	bdMutualN                      int
+	bdMutualDialer, bdMutualListen bool
+	bdMutualSockets                int
 }
 
 func newFakeNet() *fakeNet {
 	return &fakeNet{connected: map[types.PeerID]bool{}, punching: map[string]chan struct{}{}, dialWorks: true, punchWorks: true}
+}
+
+// BirthdayDial models the symmetric side, BirthdaySpray the cone side. On a real network the two
+// run at once for the whole window, so the rendezvous succeeds no matter which starts first; the
+// fake models that with a shared "both roles present" state rather than a one-shot wake.
+func (e *endpoint) BirthdayDial(ctx context.Context, _ string, _ types.PeerID, n int) error {
+	return e.birthday(ctx, true, n, 0, 0, 0)
+}
+
+func (e *endpoint) BirthdaySpray(ctx context.Context, _ string, lo, hi uint16, m int, _ types.PeerID) error {
+	return e.birthday(ctx, false, 0, m, lo, hi)
+}
+
+// BirthdayMutual models the both-symmetric case: a dialer and a listener rendezvous when both are
+// present, like dial+spray.
+func (e *endpoint) BirthdayMutual(ctx context.Context, _ string, _, _ uint16, n int, _ types.PeerID, asDialer bool) error {
+	e.n.mu.Lock()
+	e.n.bdMutualN++
+	e.n.bdMutualSockets = n
+	if asDialer {
+		e.n.bdMutualDialer = true
+	} else {
+		e.n.bdMutualListen = true
+	}
+	works := e.n.punchWorks
+	if e.n.bdDone == nil {
+		e.n.bdDone = make(chan struct{})
+	}
+	done := e.n.bdDone
+	if works && e.n.bdMutualDialer && e.n.bdMutualListen {
+		e.n.connected[e.self] = true
+		e.n.connected[e.peer.self] = true
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+	e.n.mu.Unlock()
+	if !works {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+		return errors.New("mutual birthday timed out")
+	}
+}
+
+func (e *endpoint) birthday(ctx context.Context, isDial bool, n, m int, lo, hi uint16) error {
+	e.n.mu.Lock()
+	if isDial {
+		e.n.bdDialN++
+		e.n.bdSockets = n
+		e.n.bdDialing = true
+	} else {
+		e.n.bdSprayN++
+		e.n.bdSpray, e.n.bdLo, e.n.bdHi = m, lo, hi
+		e.n.bdSprayed = true
+	}
+	works := e.n.punchWorks
+	if e.n.bdDone == nil {
+		e.n.bdDone = make(chan struct{})
+	}
+	done := e.n.bdDone
+	if works && e.n.bdDialing && e.n.bdSprayed {
+		e.n.connected[e.self] = true
+		e.n.connected[e.peer.self] = true
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+	e.n.mu.Unlock()
+	if !works {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+		return errors.New("birthday timed out")
+	}
 }
 
 type endpoint struct {
