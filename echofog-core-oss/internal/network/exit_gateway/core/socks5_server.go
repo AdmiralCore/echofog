@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"bytes"
@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/fakedns"
 	"github.com/echofog/echofog-core/pkg/events"
 )
 
@@ -22,6 +21,18 @@ var (
 	ErrSocksCommandNotSupp = errors.New("socks5 command not supported (CONNECT and UDP ASSOCIATE are supported)")
 	ErrSocksAddressNotSupp = errors.New("socks5 address type not supported")
 )
+
+// FakeDNS answers DNS queries locally in whole-computer (TUN) mode and maps the fake addresses
+// back to the names the applications asked for. *fakedns.Mapper implements it; core depends only
+// on this interface so it does not import the TUN-side package.
+type FakeDNS interface {
+	Answer(query []byte) (resp []byte, handled bool)
+	TranslateHostPort(addr string) (string, bool)
+}
+
+// DefaultFakeDNSAddr is the resolver address a TUN advertises inside the fake pool (198.18.0.2).
+// It matches fakedns.DNSAddr; a caller can change it with SetFakeDNSAddr.
+var DefaultFakeDNSAddr = net.IPv4(198, 18, 0, 2)
 
 // StreamDialer abstracts tunneling a stream through P2P circuits to an Exit node.
 type StreamDialer interface {
@@ -40,7 +51,8 @@ type SOCKS5Server struct {
 	bytesRx     atomic.Uint64
 	bytesTx     atomic.Uint64
 	emitter     atomic.Pointer[events.Emitter]
-	fake        *fakedns.Mapper // set in whole-computer mode, guarded by mu
+	fake        FakeDNS // set in whole-computer mode, guarded by mu
+	fakeDNSAddr net.IP  // resolver address the TUN advertises (guarded by mu)
 
 	refused      atomic.Uint64
 	refusedBy    refusalTally // by ExitRefusal reason
@@ -67,11 +79,12 @@ const (
 // NewSOCKS5Server creates a new local SOCKS5 proxy server.
 func NewSOCKS5Server(listenAddr string, dialer StreamDialer) *SOCKS5Server {
 	return &SOCKS5Server{
-		listenAddr: listenAddr,
-		dialer:     dialer,
-		logger:     slog.Default().With("component", "socks5_server"),
-		connSlots:  make(chan struct{}, maxSocksConns),
-		udpSlots:   make(chan struct{}, maxSocksUDPAssocs),
+		listenAddr:  listenAddr,
+		dialer:      dialer,
+		logger:      slog.Default().With("component", "socks5_server"),
+		fakeDNSAddr: append(net.IP(nil), DefaultFakeDNSAddr...),
+		connSlots:   make(chan struct{}, maxSocksConns),
+		udpSlots:    make(chan struct{}, maxSocksUDPAssocs),
 	}
 }
 
@@ -247,7 +260,7 @@ func (s *SOCKS5Server) handleClient(clientConn net.Conn) {
 	}
 
 	if fake := s.fakeDNS(); fake != nil {
-		if isFakeResolver(targetAddr) {
+		if s.isFakeResolver(targetAddr) {
 			s.serveTCPDNS(clientConn, fake) // DNS over TCP to the TUN's resolver: answered here too
 			return
 		}

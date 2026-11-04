@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 // Paying an exit with vouchers from the client's EchoFogVault (see contracts/vault).
 //
@@ -663,7 +663,7 @@ func (d *P2PDialer) SendVoucher(ctx context.Context, o VoucherOffer) (*VoucherRe
 // roundTrip sends one frame on a new stream and waits (at most 20 s) for one reply of the same type.
 func (d *P2PDialer) roundTrip(ctx context.Context, t net_types.MessageType, payload []byte) ([]byte, error) {
 	if d == nil || d.open == nil {
-		return nil, errNoStreamOpener
+		return nil, ErrNoStreamOpener
 	}
 	st, err := d.open(ctx)
 	if err != nil {

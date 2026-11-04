@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 // micro_chunk: a sub-16KB chunking layer for the exit-tunnel TCP fallback data phase, to defeat
 // the Russian TSPU "TCP freeze after ~16KB" behaviour (a single TCP socket to a foreign datacentre

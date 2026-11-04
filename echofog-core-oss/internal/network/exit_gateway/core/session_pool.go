@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"context"
@@ -106,9 +106,9 @@ func (s *countingStream) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-func (s *countingStream) udpLink(toExit bool) udpLink {
-	if ds, ok := s.FramedStream.(datagramStream); ok {
-		return ds.udpLink(toExit)
+func (s *countingStream) UDPLink(toExit bool) UDPLink {
+	if ds, ok := s.FramedStream.(DatagramStream); ok {
+		return ds.UDPLink(toExit)
 	}
 	return nil
 }

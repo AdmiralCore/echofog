@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 // tunnel_pad: a Vision-style padding wrapper for the exit-tunnel data phase. It breaks the
 // "TLS-in-TLS" size/timing fingerprint (step 3 of the anti-DPI plan): when a client opens an HTTPS

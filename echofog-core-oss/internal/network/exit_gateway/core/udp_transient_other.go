@@ -1,5 +1,5 @@
 //go:build !windows
 
-package exit_gateway
+package core
 
 func udpReadTransient(error) bool { return false }

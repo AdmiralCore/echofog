@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"sync"

@@ -29,7 +29,7 @@ func proxyPair(t testing.TB) (proxy string, svc *ExitService) {
 	exitSwarm, exitTr := newSwarm(tt)
 	clientSwarm, clientTr := newSwarm(tt)
 	svc = NewExitService()
-	svc.allowPrivate.Store(true)
+	svc.AllowPrivateTargets(true)
 	svc.SetEnabled(true)
 	AttachToSwarm(exitSwarm, svc)
 

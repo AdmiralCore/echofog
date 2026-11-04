@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"context"
@@ -96,19 +96,19 @@ const udpInQueue = 512
 // DialExitUDP opens a UDP relay on the exit peer.
 func (d *P2PDialer) DialExitUDP(ctx context.Context) (*UDPSession, error) {
 	if d == nil || d.open == nil {
-		return nil, errNoStreamOpener
+		return nil, ErrNoStreamOpener
 	}
 	st, err := d.open(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open stream to exit peer: %w", err)
 	}
-	var link udpLink
-	if ds, ok := st.(datagramStream); ok {
-		link = ds.udpLink(true)
+	var link UDPLink
+	if ds, ok := st.(DatagramStream); ok {
+		link = ds.UDPLink(true)
 	}
 	var hello []byte
 	if link != nil {
-		hello = []byte{udpHelloDatagrams}
+		hello = []byte{UDPHelloDatagrams}
 	}
 	if err := st.WriteFrame(net_types.TypeExitUDP, hello); err != nil {
 		st.Close()
@@ -160,11 +160,11 @@ func (d *P2PDialer) DialExitUDP(ctx context.Context) (*UDPSession, error) {
 	}
 }
 
-func (u *UDPSession) useDatagrams(link udpLink, id uint32) error {
+func (u *UDPSession) useDatagrams(link UDPLink, id uint32) error {
 	u.in = make(chan udpPacket, udpInQueue)
 	u.ended = make(chan struct{})
 	u.done = make(chan struct{})
-	u.unsub = link.subscribe(id, u.onDatagram)
+	u.unsub = link.Subscribe(id, u.onDatagram)
 	if u.unsub == nil {
 		return ErrExitProtocol // the exit handed out a session ID it already gave us
 	}
@@ -227,7 +227,7 @@ func (u *UDPSession) WriteTo(payload []byte, addr string) error {
 	if closed {
 		return net.ErrClosed
 	}
-	if u.dg != nil && u.dg.send(addr, payload) {
+	if u.dg != nil && u.dg.Send(addr, payload) {
 		return nil
 	}
 	frame, err := encodeDatagram(addr, payload)
@@ -291,12 +291,12 @@ func (u *UDPSession) Close() error {
 // HandleUDPFrom serves one UDP relay stream for a peer: datagrams from the stream go out of
 // one exit UDP socket, replies go back labelled with the address the client asked for.
 func (e *ExitService) HandleUDPFrom(ctx context.Context, st FramedStream, peer types.PeerID) {
-	e.handleUDP(ctx, st, peer, nil)
+	e.HandleUDP(ctx, st, peer, nil)
 }
 
-// handleUDP is HandleUDPFrom with the client's request: a client that can take datagrams gets
+// HandleUDP is HandleUDPFrom with the client's request: a client that can take datagrams gets
 // a session ID, and its datagrams travel outside the stream when the link is QUIC.
-func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types.PeerID, hello []byte) {
+func (e *ExitService) HandleUDP(ctx context.Context, st FramedStream, peer types.PeerID, hello []byte) {
 	defer st.Close()
 	if !e.serves(peer) {
 		e.refuse(peer, RefuseDisabled)
@@ -339,15 +339,15 @@ func (e *ExitService) handleUDP(ctx context.Context, st FramedStream, peer types
 	defer e.udp.remove(relay)
 
 	reply := []byte{resultOK}
-	if len(hello) > 0 && hello[0]&udpHelloDatagrams != 0 {
-		if ds, ok := st.(datagramStream); ok {
-			if link := ds.udpLink(false); link != nil {
+	if len(hello) > 0 && hello[0]&UDPHelloDatagrams != 0 {
+		if ds, ok := st.(DatagramStream); ok {
+			if link := ds.UDPLink(false); link != nil {
 				relay.dgIn = make(chan udpPacket, udpInQueue)
 				for tries := 0; tries < 8 && relay.dg == nil; tries++ {
 					var b [4]byte
 					_, _ = rand.Read(b[:])
 					id := binary.BigEndian.Uint32(b[:])
-					if unsub := link.subscribe(id, relay.onDatagram); unsub != nil {
+					if unsub := link.Subscribe(id, relay.onDatagram); unsub != nil {
 						defer unsub()
 						relay.dg = &dgramSender{link: link, id: id}
 					}
@@ -644,7 +644,7 @@ func (r *udpRelay) downstream() {
 		if !r.account(n) {
 			return
 		}
-		if r.dg != nil && r.dg.send(label, buf[:n]) {
+		if r.dg != nil && r.dg.Send(label, buf[:n]) {
 			continue
 		}
 		frame, err := encodeDatagram(label, buf[:n])

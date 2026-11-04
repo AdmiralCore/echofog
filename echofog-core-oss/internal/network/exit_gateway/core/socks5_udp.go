@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/echofog/echofog-core/internal/network/fakedns"
 )
 
 // UDPDialer is implemented by dialers that can relay UDP through the exit (P2PDialer does).
@@ -23,13 +21,20 @@ const fallbackDNS = "1.1.1.1:53"
 
 // SetFakeDNS turns on DNS interception for whole-computer (TUN) mode: queries on port 53 are
 // answered from m and connections to its fake IPs are sent to the exit by domain name.
-func (s *SOCKS5Server) SetFakeDNS(m *fakedns.Mapper) {
+func (s *SOCKS5Server) SetFakeDNS(m FakeDNS) {
 	s.mu.Lock()
 	s.fake = m
 	s.mu.Unlock()
 }
 
-func (s *SOCKS5Server) fakeDNS() *fakedns.Mapper {
+// SetFakeDNSAddr changes the resolver address the TUN advertises (DefaultFakeDNSAddr by default).
+func (s *SOCKS5Server) SetFakeDNSAddr(addr net.IP) {
+	s.mu.Lock()
+	s.fakeDNSAddr = append(net.IP(nil), addr...)
+	s.mu.Unlock()
+}
+
+func (s *SOCKS5Server) fakeDNS() FakeDNS {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.fake
@@ -152,7 +157,7 @@ type udpAssoc struct {
 	ctrl   net.Conn
 	pc     *net.UDPConn
 	dialer UDPDialer
-	fake   *fakedns.Mapper
+	fake   FakeDNS
 
 	mu      sync.Mutex
 	client  *net.UDPAddr
@@ -284,7 +289,7 @@ func (a *udpAssoc) fromClient() {
 					continue
 				}
 			}
-			if host, _, _ := net.SplitHostPort(target); net.ParseIP(host) != nil && net.ParseIP(host).Equal(fakedns.DNSAddr) {
+			if host, _, _ := net.SplitHostPort(target); net.ParseIP(host) != nil && a.srv.isFakeResolver(net.JoinHostPort(host, "53")) {
 				target = fallbackDNS
 			} else if t, ok := a.fake.TranslateHostPort(target); ok {
 				target = t

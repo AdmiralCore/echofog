@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"context"
@@ -128,7 +128,7 @@ func (e *ExitService) HandleAccountFrom(_ context.Context, st FramedStream, peer
 // QueryAccount asks the exit for this client's account.
 func (d *P2PDialer) QueryAccount(ctx context.Context) (*AccountInfo, error) {
 	if d == nil || d.open == nil {
-		return nil, errNoStreamOpener
+		return nil, ErrNoStreamOpener
 	}
 	st, err := d.open(ctx)
 	if err != nil {

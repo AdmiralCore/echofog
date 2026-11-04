@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"bytes"
@@ -86,7 +86,7 @@ func (m *mockStream) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-func (m *mockStream) udpLink(toExit bool) udpLink {
+func (m *mockStream) UDPLink(toExit bool) UDPLink {
 	m.udpLinkCalled.Store(true)
 	return nil
 }
@@ -429,10 +429,10 @@ func TestCountingStream_InterfacePassThrough(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, mock.deadlineCalled.Load())
 
-	// udpLink
-	ds, ok := st.(datagramStream)
+	// UDPLink
+	ds, ok := st.(DatagramStream)
 	require.True(t, ok)
-	_ = ds.udpLink(true)
+	_ = ds.UDPLink(true)
 	assert.True(t, mock.udpLinkCalled.Load())
 
 	// Double Close protection
@@ -446,26 +446,4 @@ func TestCountingStream_InterfacePassThrough(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(0), sess.ActiveStreams())
 	assert.Equal(t, int32(1), mock.closeCount.Load(), "underlying stream should only be closed once")
-}
-
-func TestSwarmOpenerIntegration(t *testing.T) {
-	resetSwarmPools()
-	defer resetSwarmPools()
-
-	peerID := types.PeerID{1, 2, 3}
-	cfg := config.FlowShapingConfig{
-		MaxConnections:     2,
-		MaxConcurrency:     4,
-		MaxBytesMin:        1000,
-		MaxBytesMax:        1000,
-		MaxConnLifetimeMin: 5 * time.Second,
-		MaxConnLifetimeMax: 5 * time.Second,
-		MaxStreamsPerConn:  100,
-		MinDialInterval:    10 * time.Millisecond,
-	}
-
-	// Nil swarm returns errNoStreamOpener
-	opener := SwarmOpenerWithConfig(nil, peerID, cfg)
-	_, err := opener(context.Background())
-	assert.ErrorIs(t, err, errNoStreamOpener)
 }

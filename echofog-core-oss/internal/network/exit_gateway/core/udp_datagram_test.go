@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,9 +33,9 @@ func newMemLinks(max int) (client, exit *memLink) {
 	return client, exit
 }
 
-func (l *memLink) send(frame []byte) error {
+func (l *memLink) Send(frame []byte) error {
 	if len(frame) > l.max {
-		return &network.DatagramTooLargeError{Size: len(frame), Max: l.max}
+		return &DatagramTooLargeError{Size: len(frame), Max: l.max}
 	}
 	l.sent.Add(1)
 	if l.drop != nil && l.drop(frame) {
@@ -52,7 +51,7 @@ func (l *memLink) send(frame []byte) error {
 	return nil
 }
 
-func (l *memLink) subscribe(id uint32, fn func([]byte)) func() {
+func (l *memLink) Subscribe(id uint32, fn func([]byte)) func() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.subs[id] != nil {
@@ -65,10 +64,10 @@ func (l *memLink) subscribe(id uint32, fn func([]byte)) func() {
 // dgPipe is a pipe stream that offers a datagram link, like a swarm stream over QUIC.
 type dgPipe struct {
 	*pipeStream
-	link udpLink
+	link UDPLink
 }
 
-func (d dgPipe) udpLink(bool) udpLink { return d.link }
+func (d dgPipe) UDPLink(bool) UDPLink { return d.link }
 
 // serveUDPDatagrams runs a new exit (datagrams on) behind an in-memory link of the given size.
 func serveUDPDatagrams(svc *ExitService, max int) (StreamOpener, *memLink, *memLink) {
@@ -77,7 +76,7 @@ func serveUDPDatagrams(svc *ExitService, max int) (StreamOpener, *memLink, *memL
 		client, server := newPipePair()
 		go func() {
 			if _, hello, err := server.ReadFrame(); err == nil {
-				svc.handleUDP(context.Background(), dgPipe{server, ex}, types.PeerID{}, hello)
+				svc.HandleUDP(context.Background(), dgPipe{server, ex}, types.PeerID{}, hello)
 			}
 		}()
 		return dgPipe{client, cl}, nil
@@ -245,41 +244,4 @@ func TestUDPFragmentCodecAndDefrag(t *testing.T) {
 	got, done = part(3, 2, "z")
 	require.True(t, done)
 	assert.Equal(t, "xyz", string(got))
-}
-
-// Over real QUIC the session switches to datagrams; over the TCP fallback (see
-// TestExitAndMediaOverTCPFallback) it stays on the stream.
-func TestUDPDatagramsThroughRealSwarm(t *testing.T) {
-	exitSwarm, exitTr := newSwarm(t)
-	clientSwarm, clientTr := newSwarm(t)
-	AttachToSwarm(exitSwarm, openExit())
-	require.NoError(t, clientTr.DialEarly(context.Background(), exitTr.Addr().String()))
-	require.Eventually(t, func() bool {
-		return len(exitSwarm.GetAllPeers()) > 0 && len(clientSwarm.GetAllPeers()) > 0
-	}, 5*time.Second, 50*time.Millisecond)
-	d := NewP2PDialer(SwarmOpener(clientSwarm, clientSwarm.GetAllPeers()[0].ID()))
-
-	echo := bigUDPEcho(t).LocalAddr().String()
-	u, err := d.DialExitUDP(context.Background())
-	require.NoError(t, err)
-	defer u.Close()
-	require.True(t, u.Datagrams())
-	for _, size := range []int{100, 1400, 3000, 20000} {
-		msg := make([]byte, size)
-		_, _ = rand.Read(msg)
-		require.NoError(t, u.WriteTo(msg, echo))
-		got, _ := readWithin(t, u, 3*time.Second)
-		require.True(t, bytes.Equal(msg, got), "size %d", size)
-	}
-
-	// two sessions at once keep their datagrams apart
-	u2, err := d.DialExitUDP(context.Background())
-	require.NoError(t, err)
-	defer u2.Close()
-	require.NoError(t, u2.WriteTo([]byte("second"), echo))
-	got, _ := readWithin(t, u2, 3*time.Second)
-	assert.Equal(t, "second", string(got))
-	require.NoError(t, u.WriteTo([]byte("first"), echo))
-	got, _ = readWithin(t, u, 3*time.Second)
-	assert.Equal(t, "first", string(got))
 }

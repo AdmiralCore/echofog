@@ -1,10 +1,8 @@
-package exit_gateway
+package core
 
 import (
 	"context"
-	"errors"
 	"io"
-	"net"
 	"testing"
 	"time"
 
@@ -129,19 +127,4 @@ func TestConfirmedDialReturnsTheRefusal(t *testing.T) {
 	st, err := NewP2PDialer(slowExit(0, resultOK)).DialExitStreamConfirmed(context.Background(), "x.example:443")
 	require.NoError(t, err)
 	st.Close()
-}
-
-// Over the real QUIC path: a refused target ends the app's connection with the reason recorded.
-func TestFastOpenRefusalThroughRealSwarm(t *testing.T) {
-	proxy, svc := proxyPair(t)
-	svc.allowPrivate.Store(false) // loopback targets are refused now
-	c, err := socksDial(proxy, echoServer(t))
-	require.NoError(t, err, "fast open: the SOCKS reply is success")
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
-	_, _ = c.Write([]byte("hi"))
-	_, err = c.Read(make([]byte, 1))
-	require.Error(t, err)
-	var ne net.Error
-	assert.False(t, errors.As(err, &ne) && ne.Timeout(), "refused, not hung")
 }

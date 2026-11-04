@@ -27,7 +27,7 @@ func TestRotation_DoesNotForceCloseActiveStream(t *testing.T) {
 	clientSwarm, clientTr := newSwarm(t)
 
 	svc := NewExitService()
-	svc.allowPrivate.Store(true)
+	svc.AllowPrivateTargets(true)
 	svc.SetEnabled(true)
 	AttachToSwarm(exitSwarm, svc)
 

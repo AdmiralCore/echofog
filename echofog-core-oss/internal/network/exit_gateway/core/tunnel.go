@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"context"
@@ -38,7 +38,7 @@ var (
 	ErrExitProtocol    = errors.New("exit node sent an invalid reply")
 	ErrBlockedAddress  = errors.New("target address is private, loopback or otherwise not allowed")
 	ErrInvalidTarget   = errors.New("invalid target address")
-	errNoStreamOpener  = errors.New("no stream opener configured")
+	ErrNoStreamOpener  = errors.New("no stream opener configured")
 )
 
 // FramedStream is a bidirectional peer stream that carries one framed request/response before turning into a raw byte pipe
@@ -68,6 +68,10 @@ type P2PDialer struct {
 }
 
 func NewP2PDialer(open StreamOpener) *P2PDialer { return &P2PDialer{open: open} }
+
+// SetPad sets whether the data phase is wrapped in the TLS-in-TLS padding at dial time. The
+// decision is per exit peer (its capabilities), so it is the same for every tunnel to it.
+func (d *P2PDialer) SetPad(f func() bool) { d.pad = f }
 
 // wrapData applies the gated data-phase layer: micro-chunking when engaged, else the TLS-in-TLS
 // padding when the exit supports it, else the stream as it is. Both gates are off by default, so a
@@ -119,7 +123,7 @@ func (d *P2PDialer) DialExitStreamConfirmed(ctx context.Context, targetAddr stri
 
 func (d *P2PDialer) dialLazy(ctx context.Context, targetAddr string) (*lazyExitStream, error) {
 	if d == nil || d.open == nil {
-		return nil, errNoStreamOpener
+		return nil, ErrNoStreamOpener
 	}
 	if len(targetAddr) == 0 || len(targetAddr) > maxTargetLen {
 		return nil, ErrInvalidTarget
@@ -399,6 +403,14 @@ type peerQuota struct {
 // AllowPrivateTargets lets the exit reach loopback and LAN addresses. Only for tests and
 // closed deployments: on a public exit it would expose the operator's own network.
 func (e *ExitService) AllowPrivateTargets(on bool) { e.allowPrivate.Store(on) }
+
+// SetResolver sets how the exit resolves the names clients tunnel to (nil keeps the current one).
+// Set it before the exit serves anyone.
+func (e *ExitService) SetResolver(f func(ctx context.Context, host string) ([]net.IP, error)) {
+	if f != nil {
+		e.resolver = f
+	}
+}
 
 func NewExitService() *ExitService {
 	e := &ExitService{

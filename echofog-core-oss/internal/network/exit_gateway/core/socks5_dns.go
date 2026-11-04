@@ -1,4 +1,4 @@
-package exit_gateway
+package core
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"io"
 	"net"
 	"time"
-
-	"github.com/echofog/echofog-core/internal/network/fakedns"
 )
 
 // replyFor turns a failed exit dial into the SOCKS5 reply code that says what happened, so
@@ -27,13 +25,16 @@ func replyFor(err error) byte {
 }
 
 // isFakeResolver: the target is the TUN's own DNS address, which exists only on this machine.
-func isFakeResolver(target string) bool {
+func (s *SOCKS5Server) isFakeResolver(target string) bool {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil || port != "53" {
 		return false
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.Equal(fakedns.DNSAddr)
+	s.mu.Lock()
+	addr := s.fakeDNSAddr
+	s.mu.Unlock()
+	return ip != nil && ip.Equal(addr)
 }
 
 // maxDNSMessage bounds one DNS-over-TCP message (RFC 1035: a 16-bit length).
@@ -42,7 +43,7 @@ const maxDNSMessage = 65535
 // serveTCPDNS answers DNS over TCP sent to the TUN's resolver, the way the UDP path does: A and
 // AAAA from the fake mapper, the rest forwarded to fallbackDNS through the exit. Resolvers fall
 // back to TCP for truncated answers, so refusing it breaks large replies.
-func (s *SOCKS5Server) serveTCPDNS(c net.Conn, fake *fakedns.Mapper) {
+func (s *SOCKS5Server) serveTCPDNS(c net.Conn, fake FakeDNS) {
 	if err := s.sendReply(c, 0x00); err != nil {
 		return
 	}
