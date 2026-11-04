@@ -126,6 +126,13 @@ func TestPlan(t *testing.T) {
 			relay: true,
 		},
 		{
+			name: "server_across_border_uses_no_camouflage_relay",
+			card: planCard(objects.RoleServer, 0, objects.ScopePeer,
+				tc(t, objects.SuiteNoise3, ipBorder)),
+			info:  ruInfo(),
+			relay: true,
+		},
+		{
 			name: "user_across_border_camouflage",
 			card: planCard(objects.RoleUser, 0, objects.ScopePublic,
 				tc(t, objects.SuiteReality2QUIC, ipBorder),
@@ -144,7 +151,7 @@ func TestPlan(t *testing.T) {
 		{
 			name: "reality_without_sni_skipped_ws2_allowed",
 			card: planCard(objects.RoleUser, 0, objects.ScopePublic,
-				tc(t, objects.SuiteReality2QUIC, ipBorder),
+				planAddr(t, objects.SuiteReality2QUIC, ipBorder, 443, ""),
 				planWS(t, "wss://cover.example/ws")),
 			info: ruInfo(),
 			want: []uint32{objects.SuiteWS2},
@@ -200,6 +207,16 @@ func TestPlan(t *testing.T) {
 			card: planCard(objects.RoleUser, 0, objects.ScopePeer,
 				tc(t, objects.SuiteNoise3, ipSame)),
 			info: LocalInfo{Addrs: []netip.Addr{ipBorder, ipLocal}, CountryOf: globalGeo()},
+			want: []uint32{objects.SuiteNoise3},
+		},
+		{
+			name: "invalid_and_unknown_local_addresses_are_skipped",
+			card: planCard(objects.RoleUser, 0, objects.ScopePeer,
+				tc(t, objects.SuiteNoise3, ipSame)),
+			info: LocalInfo{
+				Addrs:     []netip.Addr{{}, ipThird, netip.MustParseAddr("192.0.2.99"), ipLocal},
+				CountryOf: globalGeo(),
+			},
 			want: []uint32{objects.SuiteNoise3},
 		},
 		{
@@ -314,6 +331,23 @@ func TestPlan(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestIsCamouflaged(t *testing.T) {
+	for _, tc := range []struct {
+		suite uint32
+		want  bool
+	}{
+		{objects.SuiteNoise3, false},
+		{objects.SuiteReality2QUIC, true},
+		{objects.SuiteReality2TCP, true},
+		{objects.SuiteWS2, true},
+		{0x9999, false},
+	} {
+		if got := IsCamouflaged(tc.suite); got != tc.want {
+			t.Errorf("IsCamouflaged(%d) = %v, want %v", tc.suite, got, tc.want)
+		}
 	}
 }
 

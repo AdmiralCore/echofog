@@ -66,12 +66,17 @@ func TestRegistryPanicsOnBadRegistration(t *testing.T) {
 
 func TestDefaultRegistry(t *testing.T) {
 	d := dialFunc(func(context.Context, DialRequest) (mux.Carrier, error) { return nil, nil })
-	RegisterDialer(0xff01, d)
+	// The default registry is process-wide and -count=N runs this test repeatedly.
+	if _, ok := DialerFor(0xff01); !ok {
+		RegisterDialer(0xff01, d)
+	}
 	if got, ok := DialerFor(0xff01); !ok || got == nil {
 		t.Fatal("package-level RegisterDialer/DialerFor do not use the default registry")
 	}
 	l := testListener{}
-	RegisterListener(0xff02, l)
+	if _, ok := ListenerFor(0xff02); !ok {
+		RegisterListener(0xff02, l)
+	}
 	if got, ok := ListenerFor(0xff02); !ok || got == nil {
 		t.Fatal("package-level RegisterListener/ListenerFor do not use the default registry")
 	}

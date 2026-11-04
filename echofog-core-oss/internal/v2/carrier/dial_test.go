@@ -18,6 +18,7 @@ import (
 // ---- test doubles
 
 type testCarrier struct {
+	name     string
 	closed   atomic.Bool
 	closedCh chan struct{}
 }
@@ -342,7 +343,9 @@ func TestDialClosesLosers(t *testing.T) {
 	started := make(chan uint32, 2)
 	winnerGo := make(chan struct{})
 	winner := newTestCarrier()
+	winner.name = "winner"
 	loser := newTestCarrier()
+	loser.name = "loser"
 	release := make(chan struct{})
 
 	r.RegisterDialer(objects.SuiteNoise3, dialFunc(func(context.Context, DialRequest) (mux.Carrier, error) {
@@ -373,8 +376,8 @@ func TestDialClosesLosers(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the losing carrier was not closed")
 	}
-	if !winner.closed.Load() {
-		t.Fatal("wedge: winner must not be closed by Dial")
+	if winner.closed.Load() {
+		t.Fatal("winner was closed by Dial")
 	}
 }
 
