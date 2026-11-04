@@ -1,50 +1,45 @@
 package mux
 
-// Spec readings. Where docs/protocol/v2 is silent or ambiguous, the frame, mux and service
-// packages implement the reading below; each is a spec issue to settle in the text.
+// Where the rules of this package come from. The step-2 readings S1–S22 are settled in the
+// specification (CHANGES-from-v1.md §6); each rule below is implemented as written there.
 //
-//	S1  varint.json "8000000025" is five bytes: a non-minimal 4-byte varint plus one byte. The
-//	    varint is rejected; the extra byte plays no part.
-//	S2  Types 0x00 and 0x3f ("reserved, invalid") have no receive rule: they are unknown types
-//	    (skipped with IGNORABLE, otherwise CLOSE{unknown-frame}), never abuse.
-//	S3  GREASE 0x3e is never a known type on receipt. At mux connection level, where §5.2 lists
-//	    only MUX_* and PADDING, unknown IGNORABLE frames (GREASE included) are skipped; an unknown
-//	    frame without IGNORABLE closes the carrier (there is no stream to CLOSE), not abuse.
-//	S4  A path silent for 10 s is abandoned while another lives (§8.3), but keepalives come every
-//	    12–24 s, so an idle standby path never survives. Only non-active paths are abandoned.
-//	S5  Reserved flag bits of OPEN and MUX_STREAM ("MUST be 0") have no receive rule: ignored.
-//	S6  "Records are at most 16384 + 64 bytes": taken as the bound on the u16 length value
-//	    (kind + body), the 2-byte prefix excluded.
-//	S7  The shared 4096 replay window (§8.4) meets records inside mux streams that are opened
-//	    when the application reads (sealed mode, §8.5): a slow reader would see its records fall
-//	    out of the window. Records of one ordered stream must have growing counters and use the
-//	    window while inside it; datagrams and relay circuit records use the window strictly.
-//	S8  UNSUPPORTED "and the stream ends": the stream ends with FIN, not CLOSE + reset (a reset
-//	    may discard the UNSUPPORTED on QUIC).
-//	S9  The handshake selects services the responder serves; streams the responder opens to the
-//	    initiator are not covered. A selected pair is usable both ways; a side without a handler
-//	    answers UNSUPPORTED{service, 0, 0}.
-//	S10 Mux stream IDs "increase by 2" but a stream opens with its first MUX_STREAM: a sender
-//	    could use them out of order. Senders announce each stream at once (empty MUX_STREAM);
-//	    receivers treat a peer ID below the highest seen as finished.
-//	S11 The mux has no unidirectional streams (no direction bit in its IDs), so the limit of 64
-//	    unidirectional streams (§10) applies to QUIC carriers only.
-//	S12 "At most 256 streams open per side" is enforced per mux connection (MUX_RESET refused)
-//	    and per session (CLOSE{refused}), both never abuse.
-//	S13 After MUX_RESET, data that arrived before it stays readable, so a CLOSE frame sent just
-//	    before the reset (§6.3) is delivered.
-//	S14 CLOSE on stream 0 (CLOSE is valid on any stream) ends that path, not the session.
-//	S15 Frames introduced by a feature (OBSERVED_ADDR, CARD_UPDATE, PUNCH_*, PATH_BIND) that
-//	    arrive without the feature are unknown frames (skipped if IGNORABLE, else GOAWAY{2}).
-//	S16 A known session-level type on the wrong stream (PING on a service stream, OPEN on stream
-//	    0) is a protocol violation and counts as abuse (misuse of a known type).
-//	S17 A session whose last path died waits NoPathGrace (60 s, the path-dead time) for a
-//	    PATH_BIND, then ends.
-//	S18 The PATH_BIND sender is the carrier client (it opens stream 0); either session role may
-//	    create paths, with the parity of its role. On a sealed-mode path, records start after
-//	    PATH_BIND / PATH_BIND_OK.
-//	S19 GOAWAY "closes the session when its streams end": the streams of both sides.
-//	S20 kdf.json uses keys with commas ("split_k_i2r (noise HKDF(ck, empty).o1)"), which
-//	    encoding/json struct tags cannot express; plain keys would help implementers.
-//	S21 A SEALED datagram whose plaintext is again SEALED, or that arrives on a path not in
-//	    sealed mode, is dropped and counted; a plaintext datagram on a sealed path likewise.
+//	Receive rules for types   0x00, 0x3f, GREASE 0x3e and unassigned types are unknown: skipped
+//	                          with IGNORABLE, else CLOSE{unknown-frame} (stream), GOAWAY{2}
+//	                          (stream 0) or carrier close (mux connection level); never abuse.
+//	                          Known types out of place are protocol violations and may count as
+//	                          abuse; feature frames without their feature are unknown.
+//	                          wire.md §5.2, §6.1, §6.2; registries.md §1.
+//	Reserved flag bits        OPEN, MUX_STREAM: sent as 0, ignored on receipt. wire.md §5.2, §6.3.
+//	Mux streams               opened in ID order and announced at once; a lower finished ID is
+//	                          discarded; 256 per side per connection and per session (refused,
+//	                          not abuse); no unidirectional streams; data before MUX_RESET stays
+//	                          readable. wire.md §5.2.
+//	UNSUPPORTED               ends with FIN; selected pairs usable both ways. wire.md §6.3,
+//	                          services.md §1.
+//	CLOSE on stream 0         ends that path. wire.md §6.3.
+//	GOAWAY                    closes when the streams of both sides end, or after 15 s. wire.md §7.3.
+//	Paths                     PATH_BIND sent by the carrier client, either role creates paths;
+//	                          60 s without any path ends the session. wire.md §8, §8.1, §8.2.
+//	Liveness and switching    every path, standby included, PINGs after uniform(12, 24) s idle
+//	                          (low_power: uniform(40, 55) s) and is dead after 60 s silent; the
+//	                          active path is failing on a PING without PONG within
+//	                          max(1 s, 3 × RTT), or 10 s without receipt while data or PINGs are
+//	                          outstanding, and is then replaced by the best standby; at most 2
+//	                          standby paths, none with low_power. wire.md §7.1, §8.3, §10;
+//	                          platforms.md §2. Because the mux has no acknowledgements, data sent
+//	                          without any answer for half of the 10 s triggers a probe PING, whose
+//	                          PONG deadline then decides.
+//	Sealed records            AAD sid ‖ u64(n) ‖ u8(class) ‖ varint(path_id) ‖ varint(pipe);
+//	                          ordered records: strictly growing n per pipe, no window; SEALED
+//	                          datagrams: window of 4096 over datagram counters; u16 length value
+//	                          ≤ 16384 + 64 without the prefix; nested or misplaced SEALED
+//	                          datagrams dropped and counted. wire.md §8.4.
+//	Sealed mode               a byte-stream carrier is one pipe (pipe 0): records wrap the whole
+//	                          connection-level frame sequence after the handshake, or after
+//	                          PATH_BIND_OK on a bound path; on carriers with native streams each
+//	                          stream is its own pipe (pipe = stream ID). wire.md §8.2, §8.5.
+//
+// Sealed mode on a byte-stream carrier switches from plain frames to records mid-connection. To
+// find the switch point without signalling, a sealed-mode Conn reads one frame at a time and only
+// while stream 0 is waiting for bytes (or, on the carrier server, before stream 0 exists); the
+// session calls StartSealing when the handshake or PATH_BIND exchange is complete.

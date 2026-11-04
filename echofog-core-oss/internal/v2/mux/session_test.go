@@ -85,7 +85,7 @@ type pair struct {
 
 func fastTimers() Timers {
 	return Timers{Tick: 10 * time.Millisecond, KeepaliveMin: 50 * time.Millisecond, KeepaliveMax: 80 * time.Millisecond,
-		PathIdle: 400 * time.Millisecond, PathDead: 700 * time.Millisecond, GoAwayDrain: 2 * time.Second,
+		PongMin: 100 * time.Millisecond, FailSilence: 400 * time.Millisecond, PathDead: 700 * time.Millisecond, GoAwayDrain: 2 * time.Second,
 		BindTimeout: 2 * time.Second, NoPathGrace: 2 * time.Second}
 }
 
@@ -572,31 +572,6 @@ func TestSealedModeHidesFramesAndUsesRecords(t *testing.T) {
 		if got := bytes.Contains(wire, openFrame); got == sealed {
 			t.Fatalf("sealed=%v: OPEN visible = %v", sealed, got)
 		}
-	}
-}
-
-func TestSealedModeRejectsTamperedRecord(t *testing.T) {
-	pr := sessionPair(t, true, nil)
-	ctx := ctxT(t)
-	// A stream of the carrier whose bytes are not sealed records is refused by the receiver.
-	raw, _ := pr.path0.ca.OpenStream(ctx)
-	raw.Write(frame.AppendFrame(nil, frame.Frame{Type: frame.TypeOpen, Payload: []byte{3, 2, 0}}))
-	waitFor(t, func() bool {
-		pr.b.mu.Lock()
-		defer pr.b.mu.Unlock()
-		return pr.b.peerStreams == 0
-	})
-	select {
-	case st := <-pr.b.accept:
-		t.Fatalf("unsealed stream accepted: %+v", st.Open())
-	default:
-	}
-	// A sealed record from the session is fine.
-	st, _ := pr.a.OpenStream(ctx, 3, 2)
-	st.WriteFrame(0x40, 0, deliver(1, "ok"))
-	rs, _ := pr.b.AcceptStream(ctx)
-	if _, err := rs.ReadFrame(); err != nil {
-		t.Fatal(err)
 	}
 }
 

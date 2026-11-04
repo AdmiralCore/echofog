@@ -59,7 +59,7 @@ func FuzzRecordConn(f *testing.F) {
 	snd, _ := NewSealer(ik)
 	var w bytes.Buffer
 	rc := NewRecordConn(nopCloser{&w})
-	rc.StartSealing(snd)
+	rc.StartSealing(snd, 0, 0)
 	rc.Write([]byte("a sealed record"))
 	f.Add(w.Bytes())
 	f.Add([]byte{0, 1, 0})
@@ -67,7 +67,7 @@ func FuzzRecordConn(f *testing.F) {
 	f.Fuzz(func(t *testing.T, in []byte) {
 		rcv, _ := NewSealer(rk)
 		r := NewRecordConn(nopCloser{bytes.NewBuffer(in)})
-		r.StartSealing(rcv)
+		r.StartSealing(rcv, 0, 0)
 		buf := make([]byte, 1024)
 		for i := 0; i < 1000; i++ {
 			if _, err := r.Read(buf); err != nil {
@@ -81,11 +81,11 @@ func FuzzRecordConn(f *testing.F) {
 func FuzzSealerOpen(f *testing.F) {
 	ik, rk := randomKeys(f)
 	snd, _ := NewSealer(ik)
-	s, _ := snd.Seal(nil, []byte("x"))
+	s, _ := snd.Seal(nil, []byte("x"), ClassDatagram, 0, 0)
 	f.Add(s)
 	f.Fuzz(func(t *testing.T, in []byte) {
 		rcv, _ := NewSealer(rk)
-		if pt, err := rcv.Open(nil, in); err == nil && !bytes.Equal(in, s) {
+		if pt, err := rcv.OpenDatagram(nil, in, 0); err == nil && !bytes.Equal(in, s) {
 			t.Fatalf("forged packet opened: %x", pt)
 		}
 	})

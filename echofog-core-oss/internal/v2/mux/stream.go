@@ -68,8 +68,8 @@ type Stream struct {
 
 func (s *Session) newStream(p *path, raw RawStream, local, control bool) *Stream {
 	st := &Stream{sess: s, path: p, raw: raw, local: local, control: control}
-	if p.sealed {
-		rc := newOrderedRecordConn(raw, s.sealer)
+	if p.pipeSeal {
+		rc := newPipeRecordConn(raw, s.sealer, p.id, raw.ID())
 		st.rd = frame.NewReader(rc, nil)
 		st.w = rc
 	} else {

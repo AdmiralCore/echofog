@@ -15,49 +15,45 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/frame"
 )
 
+// kdf.json uses plain keys (wire.md vectors, spec S20), so struct tags work.
 type kdfSession struct {
-	H, KI2R, KR2I, SessionSecret, SID, KPath, CBNew, PathMAC, PathBindFrame string
-	PathID                                                                  uint64
-	Role                                                                    byte
+	H             string `json:"h"`
+	KI2R          string `json:"split_k_i2r"`
+	KR2I          string `json:"split_k_r2i"`
+	SessionSecret string `json:"session_secret"`
+	SID           string `json:"sid"`
+	KPath         string `json:"k_path"`
+	CBNew         string `json:"cb_new"`
+	PathID        uint64 `json:"path_id"`
+	Role          byte   `json:"role"`
+	PathMAC       string `json:"path_mac"`
+	PathBindFrame string `json:"PATH_BIND_frame"`
 }
 
 type kdfFile struct {
-	Session kdfSession
-	Sealed  struct{ Plaintext, Sealed, Record string }
+	Session kdfSession `json:"session"`
+	Sealed  struct {
+		N         uint64 `json:"n"`
+		Plaintext string `json:"plaintext"`
+		Sealed    string `json:"sealed"`
+		AAD       string `json:"aad"`
+		Record    string `json:"record"`
+	} `json:"sealed_record"`
 }
 
-// loadKDF reads kdf.json. Its keys contain commas, which encoding/json struct tags cannot
-// express, so the sections are decoded as maps.
 func loadKDF(t testing.TB) kdfFile {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "testdata", "kdf.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw struct {
-		Session map[string]any `json:"session"`
-		Sealed  map[string]any `json:"sealed_record"`
-	}
-	if err := json.Unmarshal(b, &raw); err != nil {
+	var v kdfFile
+	if err := json.Unmarshal(b, &v); err != nil {
 		t.Fatal(err)
 	}
-	str := func(m map[string]any, k string) string {
-		v, ok := m[k].(string)
-		if !ok {
-			t.Fatalf("kdf.json: missing %q", k)
-		}
-		return v
+	if v.Session.SID == "" || v.Session.KI2R == "" || v.Session.SessionSecret == "" || v.Sealed.Record == "" || v.Sealed.AAD == "" {
+		t.Fatal("kdf.json fields missing")
 	}
-	ss := raw.Session
-	v := kdfFile{Session: kdfSession{
-		H: str(ss, "h"), KI2R: str(ss, "split_k_i2r (noise HKDF(ck, empty).o1)"),
-		KR2I: str(ss, "split_k_r2i (noise HKDF(ck, empty).o2)"), SessionSecret: str(ss, "session_secret (noise HKDF(ck, label).o1)"),
-		SID: str(ss, "sid"), KPath: str(ss, "k_path"), CBNew: str(ss, "cb_new"), PathMAC: str(ss, "path_mac"),
-		PathBindFrame: str(ss, "PATH_BIND_frame"), PathID: uint64(ss["path_id"].(float64)), Role: byte(ss["role"].(float64)),
-	}}
-	v.Sealed.Plaintext = str(raw.Sealed, "plaintext")
-	v.Sealed.Sealed = str(raw.Sealed, "sealed")
-	v.Sealed.Record = str(raw.Sealed, "record (u16 len ‖ kind 1 ‖ sealed)")
 	return v
 }
 
@@ -136,7 +132,11 @@ func TestSealedRecordVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := snd.Seal(nil, hx(t, v.Sealed.Plaintext))
+	// aad = sid ‖ u64(n) ‖ u8(class 1) ‖ varint(path 0) ‖ varint(pipe 0)
+	if aad := snd.AAD(v.Sealed.N, ClassRecord, 0, 0); !bytes.Equal(aad, hx(t, v.Sealed.AAD)) {
+		t.Fatalf("aad %x", aad)
+	}
+	sealed, err := snd.Seal(nil, hx(t, v.Sealed.Plaintext), ClassRecord, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,63 +150,125 @@ func TestSealedRecordVector(t *testing.T) {
 	if !bytes.Equal(out.Bytes(), hx(t, v.Sealed.Record)) {
 		t.Fatalf("record %x", out.Bytes())
 	}
-	// The responder opens it.
+	// The RecordConn produces the same bytes.
+	var rcOut bytes.Buffer
+	snd2, _ := NewSealer(ik)
+	w := NewRecordConn(nopCloser{&rcOut})
+	w.StartSealing(snd2, 0, 0)
+	w.Write(hx(t, v.Sealed.Plaintext))
+	if !bytes.Equal(rcOut.Bytes(), hx(t, v.Sealed.Record)) {
+		t.Fatalf("RecordConn record %x", rcOut.Bytes())
+	}
+	// The responder opens it, and only as a record of path 0, pipe 0.
 	rcv, _ := NewSealer(rk)
 	kind, body, err := readRecord(bytes.NewReader(out.Bytes()), nil)
 	if err != nil || kind != RecordSealed {
 		t.Fatal(kind, err)
 	}
-	pt, err := rcv.Open(nil, body)
+	var st PipeState
+	if _, err := rcv.OpenRecord(nil, body, 1, 0, &st); err == nil {
+		t.Fatal("record opened on another path")
+	}
+	if _, err := rcv.OpenRecord(nil, body, 0, 4, &st); err == nil {
+		t.Fatal("record opened on another pipe")
+	}
+	if _, err := rcv.OpenDatagram(nil, body, 0); err == nil {
+		t.Fatal("record opened as a datagram")
+	}
+	pt, err := rcv.OpenRecord(nil, body, 0, 0, &st)
 	if err != nil || !bytes.Equal(pt, hx(t, v.Sealed.Plaintext)) {
 		t.Fatalf("open %x %v", pt, err)
 	}
-	// The plaintext is connection-level mux frames: MUX_STREAM on stream 4.
 	f, _, err := frame.ParseFrame(pt, nil)
 	if err != nil || f.Type != frame.TypeMuxStream {
 		t.Fatal(err)
 	}
 }
 
-func TestSealerReplayWindow(t *testing.T) {
+func TestOrderedPipeReplayRule(t *testing.T) {
 	ik, rk := randomKeys(t)
 	snd, _ := NewSealer(ik)
 	rcv, _ := NewSealer(rk)
-	var recs [][]byte
+	// Two pipes share the counter: pipe 0 gets n = 0 and 10000, pipe 4 gets n = 1..9999.
+	a0, _ := snd.Seal(nil, []byte("a0"), ClassRecord, 2, 0)
+	var bs [][]byte
+	for i := 0; i < 9999; i++ {
+		b, _ := snd.Seal(nil, []byte("b"), ClassRecord, 2, 4)
+		bs = append(bs, b)
+	}
+	a1, _ := snd.Seal(nil, []byte("a1"), ClassRecord, 2, 0)
+	var pa, pb PipeState
+	for _, b := range bs {
+		if _, err := rcv.OpenRecord(nil, b, 2, 4, &pb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Pipe 0 was read slowly: its records are far behind pipe 4, and still accepted (no window).
+	if _, err := rcv.OpenRecord(nil, a0, 2, 0, &pa); err != nil {
+		t.Fatalf("slow pipe lost a record: %v", err)
+	}
+	if _, err := rcv.OpenRecord(nil, a1, 2, 0, &pa); err != nil {
+		t.Fatal(err)
+	}
+	// A repeat, or an older record, on the same pipe is refused.
+	if _, err := rcv.OpenRecord(nil, a1, 2, 0, &pa); !errors.Is(err, ErrReplay) {
+		t.Fatalf("repeat: %v", err)
+	}
+	if _, err := rcv.OpenRecord(nil, a0, 2, 0, &pa); !errors.Is(err, ErrReplay) {
+		t.Fatalf("older: %v", err)
+	}
+	// A record moved to another pipe or path does not authenticate.
+	var px PipeState
+	if _, err := rcv.OpenRecord(nil, a1, 2, 4, &px); !errors.Is(err, ErrOpen) {
+		t.Fatalf("moved pipe: %v", err)
+	}
+	if _, err := rcv.OpenRecord(nil, a1, 3, 0, &px); !errors.Is(err, ErrOpen) {
+		t.Fatalf("moved path: %v", err)
+	}
+}
+
+func TestDatagramReplayWindow(t *testing.T) {
+	ik, rk := randomKeys(t)
+	snd, _ := NewSealer(ik)
+	rcv, _ := NewSealer(rk)
+	var ds [][]byte
 	for i := 0; i < 5000; i++ {
-		s, _ := snd.Seal(nil, []byte{byte(i)})
-		recs = append(recs, s)
+		d, _ := snd.Seal(nil, []byte{byte(i)}, ClassDatagram, 1, 0)
+		ds = append(ds, d)
 	}
-	// Out of order within the window is fine; duplicates are not.
-	if _, err := rcv.Open(nil, recs[10]); err != nil {
+	if _, err := rcv.OpenDatagram(nil, ds[10], 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rcv.Open(nil, recs[3]); err != nil {
+	if _, err := rcv.OpenDatagram(nil, ds[3], 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rcv.Open(nil, recs[10]); !errors.Is(err, ErrReplay) {
+	if _, err := rcv.OpenDatagram(nil, ds[10], 1); !errors.Is(err, ErrReplay) {
 		t.Fatalf("duplicate: %v", err)
 	}
-	if _, err := rcv.Open(nil, recs[4999]); err != nil {
+	if _, err := rcv.OpenDatagram(nil, ds[4999], 1); err != nil {
 		t.Fatal(err)
 	}
-	// 4999 − 4096 = 903: number 903 is just outside the window, 904 just inside.
-	if _, err := rcv.Open(nil, recs[903]); !errors.Is(err, ErrReplay) {
+	// 4999 − 4096 = 903: just outside the window; 904 just inside.
+	if _, err := rcv.OpenDatagram(nil, ds[903], 1); !errors.Is(err, ErrReplay) {
 		t.Fatalf("outside the window: %v", err)
 	}
-	if _, err := rcv.Open(nil, recs[904]); err != nil {
+	if _, err := rcv.OpenDatagram(nil, ds[904], 1); err != nil {
 		t.Fatalf("inside the window: %v", err)
 	}
-	// A forged record is refused and does not advance the window.
-	bad := append([]byte{}, recs[4998]...)
+	bad := append([]byte{}, ds[4998]...)
 	bad[len(bad)-1] ^= 1
-	if _, err := rcv.Open(nil, bad); err == nil {
-		t.Fatal("forged record opened")
+	if _, err := rcv.OpenDatagram(nil, bad, 1); err == nil {
+		t.Fatal("forged datagram opened")
 	}
-	if _, err := rcv.Open(nil, recs[4998]); err != nil {
-		t.Fatalf("genuine record after a forgery: %v", err)
+	if _, err := rcv.OpenDatagram(nil, ds[4998], 1); err != nil {
+		t.Fatalf("genuine datagram after a forgery: %v", err)
 	}
-	// The other direction's key does not open it (keys are per direction).
-	if _, err := snd.Open(nil, recs[1]); err == nil {
+	// A datagram is bound to its path.
+	other, _ := snd.Seal(nil, []byte("x"), ClassDatagram, 1, 0)
+	if _, err := rcv.OpenDatagram(nil, other, 3); !errors.Is(err, ErrOpen) {
+		t.Fatalf("datagram moved to another path: %v", err)
+	}
+	if _, err := snd.OpenDatagram(nil, ds[1], 1); err == nil {
 		t.Fatal("opened with the sender's own receive key")
 	}
 }
@@ -215,10 +277,10 @@ func TestSealerCounterLimit(t *testing.T) {
 	ik, _ := randomKeys(t)
 	snd, _ := NewSealer(ik)
 	snd.next.Store(MaxSealCounter - 1)
-	if _, err := snd.Seal(nil, []byte("last")); err != nil {
+	if _, err := snd.Seal(nil, []byte("last"), ClassRecord, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := snd.Seal(nil, []byte("one too many")); !errors.Is(err, ErrCounterExhausted) {
+	if _, err := snd.Seal(nil, []byte("one too many"), ClassDatagram, 0, 0); !errors.Is(err, ErrCounterExhausted) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -253,7 +315,7 @@ func TestRecordConnHandshakeThenSealed(t *testing.T) {
 	go func() {
 		ra.WritePlain(frame.AppendFrame(nil, frame.Frame{Type: frame.TypeHsHello, Payload: []byte{1, 0, 1, 0, 1, 0}}))
 		sa, _ := NewSealer(ik)
-		ra.StartSealing(sa)
+		ra.StartSealing(sa, 0, 0)
 		ra.Write([]byte("sealed bytes"))
 		// A kind-0 record after the switch ends the path at the receiver.
 		writeRecord(a, RecordPlain, []byte("late"))
@@ -263,7 +325,7 @@ func TestRecordConnHandshakeThenSealed(t *testing.T) {
 		t.Fatal(err)
 	}
 	sb, _ := NewSealer(rk)
-	rb.StartSealing(sb)
+	rb.StartSealing(sb, 0, 0)
 	got := make([]byte, 12)
 	if _, err := io.ReadFull(rb, got); err != nil || string(got) != "sealed bytes" {
 		t.Fatalf("%q %v", got, err)
@@ -278,13 +340,13 @@ func TestRecordConnRefusesReplayedRecord(t *testing.T) {
 	sa, _ := NewSealer(ik)
 	var wire bytes.Buffer
 	w := NewRecordConn(nopCloser{&wire})
-	w.StartSealing(sa)
+	w.StartSealing(sa, 0, 0)
 	w.Write([]byte("once"))
 	rec := append([]byte{}, wire.Bytes()...)
 	wire.Write(rec) // a relay repeats the record
 	r := NewRecordConn(nopCloser{&wire})
 	sb, _ := NewSealer(rk)
-	r.StartSealing(sb)
+	r.StartSealing(sb, 0, 0)
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(r, buf); err != nil || string(buf) != "once" {
 		t.Fatal(err)

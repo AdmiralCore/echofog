@@ -131,8 +131,12 @@ type Conn struct {
 	dataQ      [][]byte
 	dgramQ     [][]byte
 	writing    bool
-	err        error
-	stats      ConnStats
+	// Sealed mode (wire.md §8.5): after StartSealing, the carrier is one pipe of records.
+	// plainBacklog holds what was queued before the switch; it leaves in plaintext first.
+	rec          *RecordConn
+	plainBacklog []byte
+	err          error
+	stats        ConnStats
 
 	acceptQ  []*connStream
 	acceptCh chan struct{}
@@ -327,7 +331,7 @@ func (c *Conn) writeLoop() {
 	var buf []byte
 	for {
 		c.mu.Lock()
-		for len(c.ctrlQ) == 0 && len(c.dataQ) == 0 && len(c.dgramQ) == 0 && c.err == nil {
+		for len(c.ctrlQ) == 0 && len(c.dataQ) == 0 && len(c.dgramQ) == 0 && len(c.plainBacklog) == 0 && c.err == nil {
 			c.mu.Unlock()
 			select {
 			case <-c.wake:
@@ -339,6 +343,22 @@ func (c *Conn) writeLoop() {
 			c.mu.Unlock()
 			return
 		}
+		if len(c.plainBacklog) > 0 {
+			b := c.plainBacklog
+			c.plainBacklog = nil
+			c.writing = true
+			c.mu.Unlock()
+			_, err := c.rw.Write(b)
+			c.mu.Lock()
+			c.writing = false
+			c.cond.Broadcast()
+			if err != nil {
+				c.mu.Unlock()
+				c.fail(fmt.Errorf("mux: carrier write: %w", err))
+				return
+			}
+		}
+		rec := c.rec
 		buf = buf[:0]
 		// Window updates first: they unblock the peer. Then datagrams (latency), then data in
 		// FIFO order (data, FIN and MUX_RESET of a stream stay in order).
@@ -359,7 +379,14 @@ func (c *Conn) writeLoop() {
 		c.dataQ = c.dataQ[n:]
 		c.writing = true
 		c.mu.Unlock()
-		_, err := c.rw.Write(buf)
+		var err error
+		if len(buf) > 0 {
+			if rec != nil {
+				_, err = rec.Write(buf)
+			} else {
+				_, err = c.rw.Write(buf)
+			}
+		}
 		c.mu.Lock()
 		c.writing = false
 		c.cond.Broadcast()
@@ -371,13 +398,64 @@ func (c *Conn) writeLoop() {
 	}
 }
 
+// StartSealing switches the carrier to sealed records (wire.md §8.4–§8.5): on a byte-stream
+// carrier in sealed mode the records wrap the whole connection-level frame sequence, so the
+// carrier is one pipe (pipe 0) of path pathID. Everything queued before the call still leaves in
+// plaintext; everything after is sealed. Received bytes are records from the next frame on.
+//
+// Until then a sealed-mode Conn reads one frame at a time and only while stream 0 is waiting
+// for bytes (or does not exist yet), so it never reads records of the peer as plain frames.
+func (c *Conn) StartSealing(s *Sealer, pathID uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rec != nil {
+		return
+	}
+	for _, q := range [][][]byte{c.ctrlQ, c.dgramQ, c.dataQ} {
+		for _, b := range q {
+			c.plainBacklog = append(c.plainBacklog, b...)
+		}
+	}
+	c.ctrlQ, c.dgramQ, c.dataQ = c.ctrlQ[:0], c.dgramQ[:0], nil
+	c.rec = &RecordConn{rw: c.rw, sealOut: s, sealIn: s, pathID: pathID}
+	c.cond.Broadcast()
+	c.signal()
+}
+
+// gateOpenLocked: before the switch, a sealed-mode reader may read the next frame only when
+// stream 0 is blocked waiting for bytes, or, on the carrier server, before stream 0 exists (the
+// client speaks first). The reader therefore never takes the peer's first records for frames.
+func (c *Conn) gateOpenLocked() bool {
+	if c.rec != nil || c.err != nil {
+		return true
+	}
+	s0 := c.streams[0]
+	if s0 == nil {
+		return !c.cfg.Client && c.peerNext == 0
+	}
+	return s0.waiting > 0 && len(s0.buf) == 0
+}
+
+// switchReader reads plain carrier bytes before StartSealing and record plaintext after it.
+type switchReader struct{ c *Conn }
+
+func (r switchReader) Read(p []byte) (int, error) {
+	r.c.mu.Lock()
+	rec := r.c.rec
+	r.c.mu.Unlock()
+	if rec != nil {
+		return rec.Read(p)
+	}
+	return r.c.rw.Read(p)
+}
+
 // CloseAfterFlush closes the connection once every queued frame was written to the carrier,
 // or after timeout. It lets a last GOAWAY or CLOSE reach the peer.
 func (c *Conn) CloseAfterFlush(timeout time.Duration) {
 	t := time.AfterFunc(timeout, func() { c.Close() })
 	defer t.Stop()
 	c.mu.Lock()
-	for c.err == nil && (c.writing || len(c.ctrlQ)+len(c.dataQ)+len(c.dgramQ) > 0) {
+	for c.err == nil && (c.writing || len(c.ctrlQ)+len(c.dataQ)+len(c.dgramQ)+len(c.plainBacklog) > 0) {
 		c.cond.Wait()
 	}
 	c.mu.Unlock()
@@ -397,8 +475,15 @@ func (c *Conn) queueData(b []byte) {
 // ---- reader
 
 func (c *Conn) readLoop() {
-	rd := frame.NewReader(c.rw, nil)
+	rd := frame.NewReader(switchReader{c}, nil)
 	for {
+		if c.cfg.Sealed {
+			c.mu.Lock()
+			for !c.gateOpenLocked() {
+				c.cond.Wait()
+			}
+			c.mu.Unlock()
+		}
 		f, err := rd.ReadFrame()
 		if sk := rd.Skipped(); sk > 0 {
 			c.mu.Lock()
@@ -667,6 +752,7 @@ type connStream struct {
 	readAbandoned bool
 	reset         *ResetError
 	removed       bool
+	waiting       int // readers blocked on an empty buffer (opens the sealed-mode gate)
 	rdl, wdl      time.Time
 	rTimer        *time.Timer
 	wTimer        *time.Timer
@@ -690,7 +776,12 @@ func (s *connStream) Read(p []byte) (int, error) {
 		if expired(s.rdl) {
 			return 0, ErrDeadline
 		}
+		s.waiting++
+		if s.waiting == 1 && c.cfg.Sealed && c.rec == nil {
+			c.cond.Broadcast() // the sealed-mode reader gate may open
+		}
 		c.cond.Wait()
+		s.waiting--
 	}
 	if len(s.buf) > 0 {
 		n := copy(p, s.buf)

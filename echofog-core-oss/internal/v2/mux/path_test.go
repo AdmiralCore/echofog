@@ -227,20 +227,3 @@ func TestPathAbandon(t *testing.T) {
 	}
 	_ = e
 }
-
-func TestIdleStandbyPathAbandoned(t *testing.T) {
-	pr := sessionPair(t, false, func(a, b *Config) {
-		a.Timers = fastTimers()
-		b.Timers = fastTimers()
-		// Keepalive slower than the idle limit: the standby path is silent for PathIdle.
-		a.Timers.KeepaliveMin, a.Timers.KeepaliveMax = time.Second, time.Second
-		b.Timers.KeepaliveMin, b.Timers.KeepaliveMax = time.Second, time.Second
-		a.Timers.PathDead, b.Timers.PathDead = 5*time.Second, 5*time.Second
-	})
-	id, _ := bindNewPath(t, pr, false)
-	waitFor(t, func() bool { ids, _, _ := pr.a.Paths(); return len(ids) == 1 })
-	ids, act, _ := pr.a.Paths()
-	if act != 0 || ids[0] != 0 {
-		t.Fatalf("paths %v active %d; the idle standby path %d should be gone", ids, act, id)
-	}
-}

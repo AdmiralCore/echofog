@@ -8,18 +8,29 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
+
+	"github.com/echofog/echofog-core/internal/v2/frame"
 )
 
 // Sealing (wire.md §8.4):
 //
-//	sealed = n(u64) ‖ ChaCha20-Poly1305(k_dir, nonce = 0^4 ‖ u64le(n), aad = sid(16) ‖ n(8), plaintext)
+//	sealed = n(u64) ‖ ChaCha20-Poly1305(k_dir, nonce = 0^4 ‖ u64le(n), aad, plaintext)
+//	aad    = sid(16) ‖ u64(n) ‖ u8(class) ‖ varint(path_id) ‖ varint(pipe)
 //
-// One counter per direction per session, shared by every path, record and datagram.
+// One counter per direction per session, shared by every path, pipe, record and datagram.
+// Ordered records (class 1) are protected against replay by a strictly growing n per pipe;
+// SEALED datagrams (class 2, pipe 0) by a window of 4096 over the datagram counters.
+
+// AAD classes (wire.md §8.4).
+const (
+	ClassRecord   byte = 1
+	ClassDatagram byte = 2
+)
 
 // MaxSealCounter: a sender stops at 2^60; the session must then be re-established.
 const MaxSealCounter = 1 << 60
 
-// ReplayWindow is the number of counter values behind the highest one that a receiver tracks.
+// ReplayWindow is the datagram replay window: values behind the highest datagram counter.
 const ReplayWindow = 4096
 
 const sealOverhead = 8 + chacha20poly1305.Overhead
@@ -40,7 +51,7 @@ type Sealer struct {
 	next atomic.Uint64
 
 	mu  sync.Mutex
-	win replayWindow
+	win replayWindow // datagrams only
 }
 
 // NewSealer builds the sealer of this side of a session: it seals with k_i2r if this side is the
@@ -62,26 +73,34 @@ func NewSealer(k Keys) (*Sealer, error) {
 	return &Sealer{sid: k.SID(), send: send, recv: recv}, nil
 }
 
-func (s *Sealer) nonceAAD(n uint64) (nonce [12]byte, aad [24]byte) {
+// AAD returns sid ‖ u64(n) ‖ u8(class) ‖ varint(path_id) ‖ varint(pipe).
+func (s *Sealer) AAD(n uint64, class byte, pathID, pipe uint64) []byte {
+	b := make([]byte, 0, 16+8+1+16)
+	b = append(b, s.sid[:]...)
+	b = binary.BigEndian.AppendUint64(b, n)
+	b = append(b, class)
+	b = frame.AppendVarint(b, pathID)
+	return frame.AppendVarint(b, pipe)
+}
+
+func nonceOf(n uint64) (nonce [12]byte) {
 	binary.LittleEndian.PutUint64(nonce[4:], n)
-	copy(aad[:16], s.sid[:])
-	binary.BigEndian.PutUint64(aad[16:], n)
 	return
 }
 
 // Seal appends n ‖ ciphertext to dst, drawing n from the session's send counter.
-func (s *Sealer) Seal(dst, plaintext []byte) ([]byte, error) {
+func (s *Sealer) Seal(dst, plaintext []byte, class byte, pathID, pipe uint64) ([]byte, error) {
 	n := s.next.Add(1) - 1
 	if n >= MaxSealCounter {
 		s.next.Store(MaxSealCounter)
 		return nil, ErrCounterExhausted
 	}
-	nonce, aad := s.nonceAAD(n)
+	nonce := nonceOf(n)
 	dst = binary.BigEndian.AppendUint64(dst, n)
-	return s.send.Seal(dst, nonce[:], plaintext, aad[:]), nil
+	return s.send.Seal(dst, nonce[:], plaintext, s.AAD(n, class, pathID, pipe)), nil
 }
 
-func (s *Sealer) open(dst, sealed []byte) (uint64, []byte, error) {
+func (s *Sealer) open(dst, sealed []byte, class byte, pathID, pipe uint64) (uint64, []byte, error) {
 	if len(sealed) < sealOverhead {
 		return 0, nil, ErrSealedShort
 	}
@@ -89,27 +108,26 @@ func (s *Sealer) open(dst, sealed []byte) (uint64, []byte, error) {
 	if n >= MaxSealCounter {
 		return 0, nil, ErrOpen
 	}
-	nonce, aad := s.nonceAAD(n)
-	pt, err := s.recv.Open(dst, nonce[:], sealed[8:], aad[:])
+	nonce := nonceOf(n)
+	pt, err := s.recv.Open(dst, nonce[:], sealed[8:], s.AAD(n, class, pathID, pipe))
 	if err != nil {
 		return 0, nil, ErrOpen
 	}
 	return n, pt, nil
 }
 
-// Open authenticates a sealed packet and checks the session's replay window (4096 values per
-// direction). It is used for datagrams and for relay circuit records.
-func (s *Sealer) Open(dst, sealed []byte) ([]byte, error) {
+// OpenDatagram opens a SEALED datagram payload received on path pathID, checking the 4096
+// datagram replay window.
+func (s *Sealer) OpenDatagram(dst, sealed []byte, pathID uint64) ([]byte, error) {
 	if len(sealed) >= 8 {
-		n := binary.BigEndian.Uint64(sealed[:8])
 		s.mu.Lock()
-		ok := s.win.check(n)
+		ok := s.win.check(binary.BigEndian.Uint64(sealed[:8]))
 		s.mu.Unlock()
 		if !ok {
 			return nil, ErrReplay
 		}
 	}
-	n, pt, err := s.open(dst, sealed)
+	n, pt, err := s.open(dst, sealed, ClassDatagram, pathID, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -122,32 +140,21 @@ func (s *Sealer) Open(dst, sealed []byte) ([]byte, error) {
 	return pt, nil
 }
 
-// orderedState is the per-stream state of openOrdered.
-type orderedState struct {
+// PipeState is the receive state of one ordered pipe: the last accepted counter.
+type PipeState struct {
 	last    uint64
 	hasLast bool
 }
 
-// openOrdered opens a record of an ordered record stream (a stream of a direct path in sealed
-// mode). The counter must grow along the stream; inside the session window the shared replay
-// window applies too. A record whose counter fell below the window while it waited unread in a
-// stream buffer is still accepted if it is above the stream's previous record (spec issue S7:
-// the session-wide window would otherwise reject records of a slow reader).
-func (s *Sealer) openOrdered(dst, sealed []byte, st *orderedState) ([]byte, error) {
-	n, pt, err := s.open(dst, sealed)
+// OpenRecord opens an ordered record of pipe (pathID, pipe). Its counter must be larger than
+// that of the pipe's previous record; there is no window (wire.md §8.4).
+func (s *Sealer) OpenRecord(dst, sealed []byte, pathID, pipe uint64, st *PipeState) ([]byte, error) {
+	n, pt, err := s.open(dst, sealed, ClassRecord, pathID, pipe)
 	if err != nil {
 		return nil, err
 	}
 	if st.hasLast && n <= st.last {
 		return nil, ErrReplay
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.win.inWindow(n) {
-		if !s.win.check(n) {
-			return nil, ErrReplay
-		}
-		s.win.mark(n)
 	}
 	st.last, st.hasLast = n, true
 	return pt, nil
@@ -158,11 +165,6 @@ type replayWindow struct {
 	any     bool
 	highest uint64
 	bits    [ReplayWindow / 64]uint64
-}
-
-// inWindow reports whether n is above the highest value or within the window below it.
-func (w *replayWindow) inWindow(n uint64) bool {
-	return !w.any || n > w.highest || w.highest-n < ReplayWindow
 }
 
 func (w *replayWindow) check(n uint64) bool {

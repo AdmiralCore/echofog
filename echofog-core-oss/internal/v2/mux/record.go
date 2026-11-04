@@ -15,8 +15,8 @@ import (
 const (
 	RecordPlain  byte = 0
 	RecordSealed byte = 1
-	// MaxRecord bounds the u16 length field, kind included: 16384 + 64. Spec issue S6: the text
-	// does not say whether the 2-byte length prefix counts; this implementation excludes it.
+	// MaxRecord bounds the u16 length value (kind byte and body, without the 2-byte prefix):
+	// 16384 + 64 (wire.md §8.4).
 	MaxRecord = 16384 + 64
 	// maxRecordPlaintext is the plaintext a sender puts into one sealed record.
 	maxRecordPlaintext = 16384
@@ -79,24 +79,25 @@ func eofInside(err error) error {
 	return err
 }
 
-// RecordConn presents a record stream as a byte stream: a relay stream circuit (whose sealed
-// plaintext is connection-level mux frames, so a Conn runs on top of it) or, with ordered
-// opening, one stream of a direct path in sealed mode.
+// RecordConn presents a record stream (one pipe, wire.md §8.4) as a byte stream: a relay stream
+// circuit or a byte-stream carrier in sealed mode (whose sealed plaintext is connection-level mux
+// frames, so a Conn runs on top of it), or one QUIC stream of a path in sealed mode.
 //
 // Before StartSealing, WritePlain and ReadPlain carry kind-0 records for a relayed handshake.
 // After it, Write and Read carry kind-1 records; a kind-0 record then ends the stream (the
-// switch is explicit, wire.md §8.4).
+// switch is explicit). Records of the pipe must carry strictly growing counters.
 type RecordConn struct {
 	rw io.ReadWriteCloser
 
 	wmu     sync.Mutex
 	sealOut *Sealer
+	pathID  uint64
+	pipe    uint64
 	wbuf    []byte
 
 	rmu     sync.Mutex
 	sealIn  *Sealer
-	ordered bool
-	ost     orderedState
+	pst     PipeState
 	pending []byte
 	rbuf    []byte
 	rerr    error
@@ -105,16 +106,16 @@ type RecordConn struct {
 // NewRecordConn wraps a record stream.
 func NewRecordConn(rw io.ReadWriteCloser) *RecordConn { return &RecordConn{rw: rw} }
 
-// newOrderedRecordConn starts sealed at once with the per-stream ordered replay rule (sealed
-// mode on a direct path: the handshake already ran on stream 0 in plaintext frames).
-func newOrderedRecordConn(rw io.ReadWriteCloser, s *Sealer) *RecordConn {
-	return &RecordConn{rw: rw, sealOut: s, sealIn: s, ordered: true}
+// newPipeRecordConn starts sealed at once (a QUIC stream of a path in sealed mode: the handshake
+// already ran on stream 0 in plaintext frames).
+func newPipeRecordConn(rw io.ReadWriteCloser, s *Sealer, pathID, pipe uint64) *RecordConn {
+	return &RecordConn{rw: rw, sealOut: s, sealIn: s, pathID: pathID, pipe: pipe}
 }
 
-// StartSealing switches both directions to kind-1 records.
-func (c *RecordConn) StartSealing(s *Sealer) {
+// StartSealing switches both directions to kind-1 records of pipe (pathID, pipe).
+func (c *RecordConn) StartSealing(s *Sealer, pathID, pipe uint64) {
 	c.wmu.Lock()
-	c.sealOut = s
+	c.sealOut, c.pathID, c.pipe = s, pathID, pipe
 	c.wmu.Unlock()
 	c.rmu.Lock()
 	c.sealIn = s
@@ -149,7 +150,7 @@ func (c *RecordConn) ReadPlain() ([]byte, error) {
 }
 
 // Write seals p into records of at most 16384 plaintext bytes. Sealing and writing a record
-// happen under one lock, so counters grow along the stream.
+// happen under one lock, so counters grow along the pipe.
 func (c *RecordConn) Write(p []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
@@ -160,7 +161,7 @@ func (c *RecordConn) Write(p []byte) (int, error) {
 	for len(p) > 0 {
 		n := min(len(p), maxRecordPlaintext)
 		var err error
-		c.wbuf, err = c.sealOut.Seal(c.wbuf[:0], p[:n])
+		c.wbuf, err = c.sealOut.Seal(c.wbuf[:0], p[:n], ClassRecord, c.pathID, c.pipe)
 		if err != nil {
 			return written, err
 		}
@@ -195,12 +196,7 @@ func (c *RecordConn) Read(p []byte) (int, error) {
 			c.rerr = errSealingOff
 			continue
 		}
-		var pt []byte
-		if c.ordered {
-			pt, err = c.sealIn.openOrdered(nil, body, &c.ost)
-		} else {
-			pt, err = c.sealIn.Open(nil, body)
-		}
+		pt, err := c.sealIn.OpenRecord(nil, body, c.pathID, c.pipe, &c.pst)
 		if err != nil {
 			c.rerr = err
 			continue

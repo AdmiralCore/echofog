@@ -73,8 +73,8 @@ func (o Open) Append(b []byte) []byte {
 	return append(b, o.Flags)
 }
 
-// ParseOpen decodes an OPEN payload. Reserved flag bits are kept, not rejected; receivers ignore
-// them (spec issue: wire.md §6.3 says "others reserved, 0" without a receive rule).
+// ParseOpen decodes an OPEN payload. Reserved flag bits are kept, not rejected: they are sent as
+// 0 and ignored on receipt (wire.md §6.3).
 func ParseOpen(p []byte) (Open, error) {
 	c := cursor{b: p}
 	o := Open{Service: c.varint("open service"), Version: c.varint("open version"), Flags: c.u8("open flags")}
@@ -243,7 +243,7 @@ func (m MuxStream) Append(b []byte) []byte {
 }
 
 // ParseMuxStream decodes MUX_STREAM. Data longer than 16384 bytes is malformed. Reserved flag
-// bits are ignored on receipt (spec issue: wire.md §5.2 gives no receive rule).
+// bits are ignored on receipt (wire.md §5.2).
 func ParseMuxStream(p []byte) (MuxStream, error) {
 	c := cursor{b: p}
 	m := MuxStream{StreamID: c.varint("mux_stream id"), Flags: c.u8("mux_stream flags")}

@@ -8,7 +8,7 @@ import (
 )
 
 func FuzzVarint(f *testing.F) {
-	for _, s := range []string{"00", "3f", "4040", "7fff", "80004000", "c000000040000000", "4025", "8000000025"} {
+	for _, s := range []string{"00", "3f", "4040", "7fff", "80004000", "c000000040000000", "4025", "80000025"} {
 		f.Add(unhex(f, s))
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {

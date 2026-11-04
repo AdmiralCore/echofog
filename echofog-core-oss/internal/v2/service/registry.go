@@ -170,9 +170,8 @@ func VerifyChoices(offered []Offer, choices []Choice) error {
 // Policy is the service view of one session: the selected (service, version) pairs. It
 // implements mux.StreamPolicy.
 //
-// Spec issue S9: the handshake selects services the responder serves; the spec does not say
-// whether the initiator may refuse a selected pair opened by the responder. Here a selected pair
-// is usable in both directions, and a side without a handler answers UNSUPPORTED.
+// A selected pair is usable in both directions; a side without a handler answers
+// UNSUPPORTED{service, 0, 0} (wire.md §6.3, services.md §1).
 type Policy struct {
 	reg    *Registry
 	chosen map[uint64]uint64
@@ -275,8 +274,8 @@ func Serve(ctx context.Context, s *mux.Session, p *Policy) error {
 	}
 }
 
-// unsupported answers UNSUPPORTED and ends the stream with FIN. Spec issue S8: wire.md §6.3 says
-// "the stream ends" without saying CLOSE; FIN keeps UNSUPPORTED from being discarded by a reset.
+// unsupported answers UNSUPPORTED and ends the stream with a normal FIN, never a reset, which
+// could discard the UNSUPPORTED frame (wire.md §6.3).
 func unsupported(st *mux.Stream, p *Policy) {
 	o := st.Open()
 	min, max := p.served(o.Service)

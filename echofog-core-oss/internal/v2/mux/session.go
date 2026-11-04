@@ -42,12 +42,16 @@ type Abuse struct {
 type Timers struct {
 	KeepaliveMin time.Duration // 12 s
 	KeepaliveMax time.Duration // 24 s
-	PathIdle     time.Duration // 10 s: a silent path is abandoned while another is alive
-	PathDead     time.Duration // 60 s: no authenticated traffic
-	GoAwayDrain  time.Duration // 15 s
-	BindTimeout  time.Duration // 5 s: wait for PATH_BIND_OK (the handshake per-message wait)
-	NoPathGrace  time.Duration // 60 s: a session without any path is closed after this
-	Tick         time.Duration // timer resolution, 500 ms
+	// PongMin: an active path whose PING has no PONG within max(PongMin, 3 × RTT) is failing.
+	PongMin time.Duration // 1 s
+	// FailSilence: an active path with data or PINGs outstanding and nothing received for this
+	// long is failing (wire.md §8.3).
+	FailSilence time.Duration // 10 s
+	PathDead    time.Duration // 60 s: no authenticated traffic
+	GoAwayDrain time.Duration // 15 s
+	BindTimeout time.Duration // 5 s: wait for PATH_BIND_OK (the handshake per-message wait)
+	NoPathGrace time.Duration // 60 s: a session without any path is closed after this
+	Tick        time.Duration // timer resolution, 500 ms
 }
 
 func (t *Timers) fill() {
@@ -58,7 +62,8 @@ func (t *Timers) fill() {
 	}
 	def(&t.KeepaliveMin, 12*time.Second)
 	def(&t.KeepaliveMax, 24*time.Second)
-	def(&t.PathIdle, 10*time.Second)
+	def(&t.PongMin, time.Second)
+	def(&t.FailSilence, 10*time.Second)
 	def(&t.PathDead, 60*time.Second)
 	def(&t.GoAwayDrain, 15*time.Second)
 	def(&t.BindTimeout, 5*time.Second)
@@ -75,8 +80,13 @@ type Config struct {
 	// MaxStreams is the number of streams each side may have open (256, wire.md §10).
 	MaxStreams    int
 	DatagramQueue int
-	Timers        Timers
-	OnAbuse       func(Abuse)
+	// MaxStandby is the number of standby paths kept besides the active one (default 2,
+	// wire.md §8.3). With LowPower there are none and the keepalive is uniform(40, 55) s
+	// (platforms.md §2).
+	MaxStandby int
+	LowPower   bool
+	Timers     Timers
+	OnAbuse    func(Abuse)
 	// OnControl receives control-stream frames for other layers: OBSERVED_ADDR, CARD_UPDATE,
 	// PUNCH_OFFER, PUNCH_SYNC (each only when its feature was negotiated).
 	OnControl func(pathID uint64, f frame.Frame)
@@ -113,14 +123,21 @@ func (e *GoAwayError) Error() string {
 	return fmt.Sprintf("mux: goaway code %d %q (remote %v)", e.Code, e.Reason, e.Remote)
 }
 
+type pingWait struct {
+	ch   chan struct{}
+	sent time.Time
+}
+
 type path struct {
 	id      uint64
 	kind    PathKind
 	carrier Carrier
 	guard   *Guard
-	sealed  bool
-	ctrl    *Stream
-	created time.Time
+	sealed  bool // sealed mode (wire.md §8.5)
+	// pipeSeal: each stream is its own record pipe (carriers with native streams).
+	pipeSeal bool
+	ctrl     *Stream
+	created  time.Time
 
 	lastSend atomic.Int64
 	lastRecv atomic.Int64
@@ -130,12 +147,20 @@ type path struct {
 	streams   map[*Stream]struct{}
 	rtt       time.Duration
 	keepalive time.Duration
-	pings     map[[8]byte]chan time.Duration
+	pings     map[[8]byte]*pingWait
+	// failing: the path was the active path and missed a PONG or went silent with traffic
+	// outstanding; it stays a standby path until it recovers or dies (wire.md §8.3).
+	failing      bool
+	failingSince time.Time
 }
 
 func (p *path) isDead() bool { return p.dead.Load() }
-func (p *path) touchSend()   { p.lastSend.Store(time.Now().UnixNano()) }
-func (p *path) touchRecv()   { p.lastRecv.Store(time.Now().UnixNano()) }
+
+// sealedDatagrams: datagrams of the path travel as SEALED datagrams (sealed mode and relay paths,
+// wire.md §8.4).
+func (p *path) sealedDatagrams() bool { return p.sealed || p.kind == PathRelay }
+func (p *path) touchSend()            { p.lastSend.Store(time.Now().UnixNano()) }
+func (p *path) touchRecv()            { p.lastRecv.Store(time.Now().UnixNano()) }
 
 func (p *path) lastReceive() time.Time {
 	t := time.Unix(0, p.lastRecv.Load())
@@ -181,13 +206,21 @@ func NewSession(cfg Config, g *Guard, control RawStream, kind PathKind) (*Sessio
 	if cfg.Keys == nil {
 		return nil, errors.New("mux: no session keys")
 	}
-	cfg.Timers.fill()
 	if cfg.MaxStreams == 0 {
 		cfg.MaxStreams = DefaultMaxStreams
 	}
 	if cfg.DatagramQueue == 0 {
 		cfg.DatagramQueue = DefaultDatagramQueue
 	}
+	if cfg.LowPower {
+		cfg.MaxStandby = 0
+		if cfg.Timers.KeepaliveMin == 0 && cfg.Timers.KeepaliveMax == 0 {
+			cfg.Timers.KeepaliveMin, cfg.Timers.KeepaliveMax = 40*time.Second, 55*time.Second
+		}
+	} else if cfg.MaxStandby == 0 {
+		cfg.MaxStandby = 2
+	}
+	cfg.Timers.fill()
 	sealer, err := NewSealer(cfg.Keys)
 	if err != nil {
 		return nil, err
@@ -259,15 +292,19 @@ func (s *Session) Paths() (ids []uint64, active uint64, ok bool) {
 func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStream, pre []byte) (*path, error) {
 	p := &path{
 		id: id, kind: kind, carrier: g.c, guard: g, sealed: g.c.Sealed(), created: time.Now(),
-		streams: map[*Stream]struct{}{}, pings: map[[8]byte]chan time.Duration{},
+		streams: map[*Stream]struct{}{}, pings: map[[8]byte]*pingWait{},
 	}
+	// Sealed mode: a byte-stream carrier seals the whole connection as one pipe; a carrier with
+	// native streams (QUIC) seals each stream as its own pipe (wire.md §8.5).
+	rc, carrierSeals := g.c.(interface{ StartSealing(*Sealer, uint64) })
+	p.pipeSeal = p.sealed && !carrierSeals
 	p.keepalive = s.drawKeepalive()
 	p.touchRecv()
 	p.ctrl = s.newStream(p, control, true, true)
 	p.ctrl.wmu.Lock()
 	s.mu.Lock()
 	s.paths[id] = p
-	if s.active == nil {
+	if s.active == nil || better(p, s.active) {
 		s.active = p
 	}
 	s.noPathSince = time.Time{}
@@ -280,7 +317,11 @@ func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStre
 			return nil, err
 		}
 	}
+	if p.sealed && carrierSeals {
+		rc.StartSealing(s.sealer, id) // after PATH_BIND_OK, which leaves in plaintext
+	}
 	p.ctrl.wmu.Unlock()
+	defer s.trimStandby()
 	go s.controlLoop(p)
 	go s.datagramLoop(p)
 	go func() {
@@ -291,6 +332,31 @@ func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStre
 		}
 	}()
 	return p, nil
+}
+
+// trimStandby abandons the oldest standby paths beyond MaxStandby (wire.md §8.3).
+func (s *Session) trimStandby() {
+	for {
+		s.mu.Lock()
+		var oldest *path
+		n := 0
+		for _, q := range s.paths {
+			if q == s.active || q.isDead() {
+				continue
+			}
+			n++
+			if oldest == nil || q.created.Before(oldest.created) {
+				oldest = q
+			}
+		}
+		s.mu.Unlock()
+		if n <= s.cfg.MaxStandby || oldest == nil {
+			return
+		}
+		if s.AbandonPath(oldest.id, frame.CodeNoError) != nil {
+			return
+		}
+	}
 }
 
 func (s *Session) drawKeepalive() time.Duration {
@@ -489,11 +555,11 @@ func (s *Session) handleControl(p *path, f frame.Frame) bool {
 			return bad(err)
 		}
 		s.mu.Lock()
-		ch := p.pings[v]
+		w := p.pings[v]
 		delete(p.pings, v)
 		s.mu.Unlock()
-		if ch != nil {
-			ch <- 0
+		if w != nil {
+			close(w.ch)
 		}
 	case frame.TypeGoAway:
 		g, err := frame.ParseGoAway(f.Payload)
@@ -609,11 +675,11 @@ func (s *Session) Ping(ctx context.Context) (time.Duration, error) {
 func (s *Session) ping(ctx context.Context, p *path) (time.Duration, error) {
 	var v [8]byte
 	rand.Read(v[:])
-	ch := make(chan time.Duration, 1)
-	s.mu.Lock()
-	p.pings[v] = ch
-	s.mu.Unlock()
 	start := time.Now()
+	w := &pingWait{ch: make(chan struct{}), sent: start}
+	s.mu.Lock()
+	p.pings[v] = w
+	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		delete(p.pings, v)
@@ -623,7 +689,7 @@ func (s *Session) ping(ctx context.Context, p *path) (time.Duration, error) {
 		return 0, err
 	}
 	select {
-	case <-ch:
+	case <-w.ch:
 		rtt := time.Since(start)
 		s.mu.Lock()
 		p.rtt = rtt
@@ -795,7 +861,7 @@ func (s *Session) pickActiveLocked() *path {
 		if p.isDead() {
 			continue
 		}
-		if best == nil || better(p, best) {
+		if best == nil || (best.failing && !p.failing) || (best.failing == p.failing && better(p, best)) {
 			best = p
 		}
 	}
@@ -852,8 +918,8 @@ func (s *Session) SendDatagram(typ uint64, payload []byte) error {
 		return ErrNoPath
 	}
 	d := frame.AppendDatagram(nil, typ, payload)
-	if p.sealed {
-		sealed, err := s.sealer.Seal(nil, d)
+	if p.sealedDatagrams() {
+		sealed, err := s.sealer.Seal(nil, d, ClassDatagram, p.id, 0)
 		if err != nil {
 			return err
 		}
@@ -905,12 +971,12 @@ func (s *Session) datagramLoop(p *path) {
 			s.count(func(st *SessionStats) { st.DatagramsBad++ })
 			continue
 		}
-		if p.sealed {
+		if p.sealedDatagrams() {
 			if typ != frame.DgramSealed {
 				s.count(func(st *SessionStats) { st.DatagramsBad++ })
 				continue
 			}
-			inner, err := s.sealer.Open(nil, payload)
+			inner, err := s.sealer.OpenDatagram(nil, payload, p.id)
 			if err != nil {
 				s.count(func(st *SessionStats) { st.DatagramsBad++ })
 				continue
@@ -919,6 +985,10 @@ func (s *Session) datagramLoop(p *path) {
 				s.count(func(st *SessionStats) { st.DatagramsBad++ })
 				continue
 			}
+		}
+		if typ == frame.DgramSealed && !p.sealedDatagrams() {
+			s.count(func(st *SessionStats) { st.DatagramsBad++ })
+			continue
 		}
 		p.touchRecv()
 		if typ == frame.DgramPadding {
@@ -965,39 +1035,58 @@ func (s *Session) tick(now time.Time) {
 		s.close(ErrNoPath)
 		return
 	}
-	alive := len(paths)
 	for _, p := range paths {
-		silent := now.Sub(p.lastReceive())
-		switch {
-		case silent >= tm.PathDead:
-			s.failPath(p, fmt.Errorf("%w: no authenticated traffic for %v", ErrPathFailed, tm.PathDead))
-			alive--
-		case alive > 1 && p != active && silent >= tm.PathIdle:
-			// Spec issue S4: with keepalives of 12–24 s, an idle standby path is always
-			// abandoned after 10 s; only non-active paths are abandoned here.
-			if s.AbandonPath(p.id, frame.CodeTimeout) == nil {
-				alive--
+		last := p.lastReceive()
+		silent := now.Sub(last)
+		if silent >= tm.PathDead {
+			// Dead: abandoned (PATH_ABANDON on another path when there is one).
+			if s.AbandonPath(p.id, frame.CodeTimeout) != nil {
+				s.failPath(p, fmt.Errorf("%w: no authenticated traffic for %v", ErrPathFailed, tm.PathDead))
 			}
-		default:
-			last := p.lastReceive()
-			if ls := time.Unix(0, p.lastSend.Load()); ls.After(last) {
-				last = ls
-			}
-			s.mu.Lock()
-			due := now.Sub(last) >= p.keepalive
-			if due {
-				p.keepalive = s.drawKeepalive()
-			}
-			s.mu.Unlock()
-			if due {
-				go func(p *path) {
-					ctx, cancel := context.WithTimeout(context.Background(), tm.PathDead)
-					defer cancel()
-					s.ping(ctx, p)
-				}(p)
+			continue
+		}
+		lastSend := time.Unix(0, p.lastSend.Load())
+		s.mu.Lock()
+		pongDeadline := max(tm.PongMin, 3*p.rtt)
+		overdue, pinging := false, len(p.pings) > 0
+		for _, w := range p.pings {
+			if now.Sub(w.sent) > pongDeadline {
+				overdue = true
 			}
 		}
+		outstanding := pinging || lastSend.After(last)
+		probe := false
+		switch {
+		case p == active && !p.failing && (overdue || (outstanding && silent >= tm.FailSilence)):
+			p.failing, p.failingSince = true, now
+			if next := s.pickActiveLocked(); next != nil {
+				s.active = next
+			}
+		case p.failing && last.After(p.failingSince):
+			p.failing = false // recovered; it stays a standby path
+		case p == active && lastSend.After(last) && !pinging && silent >= tm.FailSilence/2:
+			// The mux has no acknowledgements: data outstanding is checked with a PING, whose
+			// PONG deadline then decides.
+			probe = true
+		}
+		idle := now.Sub(last)
+		if ls := now.Sub(lastSend); ls < idle {
+			idle = ls
+		}
+		if idle >= p.keepalive {
+			p.keepalive = s.drawKeepalive()
+			probe = true
+		}
+		s.mu.Unlock()
+		if probe {
+			go func(p *path) {
+				ctx, cancel := context.WithTimeout(context.Background(), tm.PathDead)
+				defer cancel()
+				s.ping(ctx, p)
+			}(p)
+		}
 	}
+	_ = active
 	s.maybeDrained()
 }
 

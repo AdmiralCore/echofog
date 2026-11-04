@@ -58,8 +58,8 @@
       "reason": "non-minimal encoding: MUST be rejected"
     },
     {
-      "encoded": "8000000025",
-      "would_decode_to": 0,
+      "encoded": "80000025",
+      "would_decode_to": 37,
       "reason": "non-minimal encoding: MUST be rejected"
     },
     {
