@@ -1,0 +1,39 @@
+{
+  "description": "Inputs that MUST be rejected.",
+  "spec": "objects.md §2.2–§2.3",
+  "non_canonical_bodies": [
+    {
+      "body": "300108c801",
+      "reason": "fields out of order (6 before 1)"
+    },
+    {
+      "body": "8800c801",
+      "reason": "tag of field 1 encoded with a non-minimal varint"
+    },
+    {
+      "body": "08c80148014803",
+      "reason": "NodeCard.features (field 9, known packed field) sent unpacked"
+    },
+    {
+      "body": "08c80108c901",
+      "reason": "known non-repeated field 1 appears twice"
+    }
+  ],
+  "signature_s_not_canonical": {
+    "envelope": "020e6563686f666f672f636172642f32015f37f43847224d0b68b3af87b9c70b1c1997ffe4e5401cbd6e5ab5bfbbba212c0000000000000001000000006aea75800308c8014dd9b65feb2585d9d56ee7f2a8dfdd8468dfe82fbf14da4c918b6b9563df63e2d5edafea815349895ab239bb74b36a34c44a38e89c38bf6ed803df6c3954541e",
+    "reason": "S + L in place of S: RFC 8032 requires S < L"
+  },
+  "small_order_signer": {
+    "envelope": "020e6563686f666f672f636172642f320101000000000000000000000000000000000000000000000000000000000000000000000000000001000000006aea75800308c80100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "reason": "signer key is the identity point (small order)"
+  },
+  "noise3_init_out_of_window": {
+    "input": "noise3.json init with ts = init.ts - 301 at a responder whose clock is init.ts",
+    "reason": "|ts − now| > 300 s: silently dropped"
+  },
+  "reality2_token_wrong_address": {
+    "input": "reality2.json client_hello_with_token received on 198.51.100.7:443",
+    "reason": "k_tok differs (reality2.json k_tok_at_198.51.100.7:443): forwarded to the cover"
+  },
+  "varint": "see varint.json invalid"
+}
