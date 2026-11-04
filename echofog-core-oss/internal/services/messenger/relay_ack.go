@@ -29,6 +29,16 @@ const (
 // relay acknowledgements.
 const MailboxReceipt byte = 4
 
+// RelayAnswer is what a relay said about a message request we handed it (routing.RelayAck*): it
+// keeps the message for its recipient, it passed it on, or it refused to take it.
+type RelayAnswer int
+
+const (
+	RelayRefused RelayAnswer = iota
+	RelayStored
+	RelayForwarded
+)
+
 // maxReceiptID bounds the message id a receipt carries (ours are 16 bytes).
 const maxReceiptID = 64
 
@@ -69,9 +79,9 @@ func (s *MessageBroker) awaitRelay(reqID []byte, target types.PeerID, id string)
 	s.relayWait[hex.EncodeToString(reqID)] = relayWait{target: target, id: id, at: now}
 }
 
-// HandleRelayAck takes a relay's answer to one of our message requests: taken (kept or passed on)
-// or refused. An answer to a request we did not make, or no longer wait for, changes nothing.
-func (s *MessageBroker) HandleRelayAck(relay types.PeerID, reqID []byte, taken bool) {
+// HandleRelayAck takes a relay's answer to one of our message requests: kept, passed on or
+// refused. An answer to a request we did not make, or no longer want, changes nothing.
+func (s *MessageBroker) HandleRelayAck(relay types.PeerID, reqID []byte, answer RelayAnswer) {
 	key := hex.EncodeToString(reqID)
 	s.relayMu.Lock()
 	w, ok := s.relayWait[key]
@@ -88,14 +98,15 @@ func (s *MessageBroker) HandleRelayAck(relay types.PeerID, reqID []byte, taken b
 		if json.Unmarshal(e.Value, &it) != nil || it.ID != w.id {
 			continue
 		}
-		if taken {
+		switch answer {
+		case RelayStored, RelayForwarded:
 			if !it.Relayed {
 				return // the recipient took it directly meanwhile
 			}
 			it.RelayKept = true
 			it.Next = now.Add(relayKeptRetry).UnixNano()
 			s.log.Info("MessageBroker: a relay keeps the message for the peer", "peer", w.target.String()[:8], "relay", relay.String()[:8])
-		} else {
+		default:
 			it.RelayKept = false
 			if it.Relayed {
 				it.Sent, it.Relayed = false, false

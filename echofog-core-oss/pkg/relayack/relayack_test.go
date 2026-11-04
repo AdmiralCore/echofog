@@ -76,7 +76,14 @@ func TestRelayAnswersEveryMessageRequest(t *testing.T) {
 		mu.Lock()
 		answers = append(answers, answer{relay, status, reason})
 		mu.Unlock()
-		aN.Messenger.HandleRelayAck(relay, reqID, status == routing.RelayAckStored || status == routing.RelayAckForwarded)
+		answer := messenger.RelayRefused
+		switch status {
+		case routing.RelayAckStored:
+			answer = messenger.RelayStored
+		case routing.RelayAckForwarded:
+			answer = messenger.RelayForwarded
+		}
+		aN.Messenger.HandleRelayAck(relay, reqID, answer)
 	})
 	last := func() (answer, int) {
 		mu.Lock()

@@ -9,19 +9,24 @@ import (
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
-// relayAnswering is an outbox whose every send goes to a relay that answers taken or refused, as
-// the relay's acknowledgement would arrive over the network.
-func relayAnswering(t *testing.T, taken bool) (*MessageBroker, *int) {
+// relayAnswering is an outbox whose every send goes to a relay that answers with answer, as the
+// relay's acknowledgement would arrive over the network. The channel says when the answer has been
+// taken in.
+func relayAnswering(t *testing.T, answer RelayAnswer) (*MessageBroker, *int, <-chan struct{}) {
 	sends := 0
+	answered := make(chan struct{}, 16)
 	var s *MessageBroker
 	s = outboxBroker(t, func(target types.PeerID, id string, _ *internal_pb.MessageData) (bool, bool) {
 		sends++
 		req := []byte{byte(sends), 0xac}
 		s.awaitRelay(req, target, id)
-		go s.HandleRelayAck(types.PeerID{0x52}, req, taken)
+		go func() {
+			s.HandleRelayAck(types.PeerID{0x52}, req, answer)
+			answered <- struct{}{}
+		}()
 		return true, false
 	})
-	return s, &sends
+	return s, &sends, answered
 }
 
 func waitItem(t *testing.T, s *MessageBroker, peer types.PeerID, cond func(outboxItem) bool) outboxItem {
@@ -42,7 +47,7 @@ func waitItem(t *testing.T, s *MessageBroker, peer types.PeerID, cond func(outbo
 // A relay that answers it keeps the message is trusted with it: over a week the message goes
 // through relays again only as a rare fallback, not hourly.
 func TestRelayThatKeepsTheMessageIsTrusted(t *testing.T) {
-	s, sends := relayAnswering(t, true)
+	s, sends, _ := relayAnswering(t, RelayStored)
 	var peer types.PeerID
 	peer[0] = 3
 	if err := s.trackVia(peer, "m1", &internal_pb.MessageData{MessageId: []byte{1}}, []byte("inner"), false, false); err != nil {
@@ -77,7 +82,7 @@ func TestRelayThatKeepsTheMessageIsTrusted(t *testing.T) {
 
 // A refusal puts the message back to waiting for a way, and it is tried again within seconds.
 func TestRelayRefusalIsTriedAgainSoon(t *testing.T) {
-	s, _ := relayAnswering(t, false)
+	s, _, _ := relayAnswering(t, RelayRefused)
 	var peer types.PeerID
 	peer[0] = 4
 	if err := s.trackVia(peer, "m1", &internal_pb.MessageData{MessageId: []byte{1}}, []byte("inner"), false, false); err != nil {
@@ -96,6 +101,30 @@ func TestRelayRefusalIsTriedAgainSoon(t *testing.T) {
 	}
 }
 
+// A relay that passed the message on has not confirmed that the recipient got it: a forward into
+// a link that died unnoticed is lost with it. The sender must keep trying, not wait hours, until
+// the recipient's own receipt comes.
+func TestRelayThatPassedTheMessageOnIsNotTrustedWithIt(t *testing.T) {
+	s, _, answered := relayAnswering(t, RelayForwarded)
+	var peer types.PeerID
+	peer[0] = 6
+	if err := s.trackVia(peer, "m1", &internal_pb.MessageData{MessageId: []byte{1}}, []byte("inner"), false, false); err != nil {
+		t.Fatal(err)
+	}
+	s.FlushOutbox(types.PeerID{})
+	<-answered
+	it := waitItem(t, s, peer, func(it outboxItem) bool { return it.Sent })
+	if it.RelayKept {
+		t.Fatalf("a forwarded message counts as kept: %+v", it)
+	}
+	if wait := time.Until(time.Unix(0, it.Next)); wait > time.Minute {
+		t.Fatalf("a forwarded message waits %v before the next try", wait)
+	}
+	if st := s.PendingStates(peer)["m1"]; st != StateRelayed {
+		t.Fatalf("state %q, want %q", st, StateRelayed)
+	}
+}
+
 // An answer nobody waits for (another request, or a forged one) changes nothing.
 func TestUnknownRelayAnswerIsIgnored(t *testing.T) {
 	s := outboxBroker(t, func(types.PeerID, string, *internal_pb.MessageData) (bool, bool) { return true, false })
@@ -104,7 +133,7 @@ func TestUnknownRelayAnswerIsIgnored(t *testing.T) {
 	if err := s.trackVia(peer, "m1", &internal_pb.MessageData{MessageId: []byte{1}}, []byte("inner"), true, true); err != nil {
 		t.Fatal(err)
 	}
-	s.HandleRelayAck(types.PeerID{1}, []byte{9, 9}, false)
+	s.HandleRelayAck(types.PeerID{1}, []byte{9, 9}, RelayRefused)
 	if _, it := outboxItemOf(t, s, peer); !it.Relayed || !it.Sent {
 		t.Fatalf("an unknown answer changed the message: %+v", it)
 	}
