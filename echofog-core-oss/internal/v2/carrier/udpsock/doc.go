@@ -34,7 +34,10 @@
 //	                                  and the socket then falls back at run time. No Linux call
 //	                                  here breaks the Android build, so no file needs
 //	                                  `linux && !android`.
-//	linux || darwin || freebsd        ECN control messages (x/sys/unix).
+//	(linux || darwin || freebsd) && !ios
+//	                                  ECN control messages (x/sys/unix). iOS satisfies the
+//	                                  darwin tag but takes the fallback: decisions.md T2.2
+//	                                  leaves it without control messages.
 //	everything else                   one ReadFrom/WriteTo per datagram, no control messages
 //	                                  (the oob_other.go fallback of platforms.md §1.2). This
 //	                                  includes Windows and iOS.

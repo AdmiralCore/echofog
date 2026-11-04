@@ -341,7 +341,8 @@ func (c *Conn) WriteBatch(addr *net.UDPAddr, bufs [][]byte) (int, error) {
 }
 
 // segmentable reports the segment size when bufs fit one GSO train: all but the last have that
-// size and the last is not longer (the kernel may shorten the last segment).
+// size and the last is neither longer (the kernel may shorten the last segment) nor empty (the
+// kernel would not send a zero-byte segment, so the datagram would disappear).
 func segmentable(bufs [][]byte) int {
 	if len(bufs) < 2 {
 		return 0
@@ -355,7 +356,7 @@ func segmentable(bufs [][]byte) int {
 			return 0
 		}
 	}
-	if len(bufs[len(bufs)-1]) > seg {
+	if last := len(bufs[len(bufs)-1]); last == 0 || last > seg {
 		return 0
 	}
 	return seg
