@@ -83,23 +83,23 @@ func Probe() Status {
 		if err := probeFunc(); err != nil {
 			st = Status{Level: LevelOrdinary, Err: err}
 		}
-
 		probeMu.Lock()
 		probeRes, decided = st, true
-		obs := observers
-		observers = nil
 		probeMu.Unlock()
-
-		if st.Level != LevelLocked {
-			for _, fn := range obs {
-				fn(st)
-			}
-		}
 	})
 
 	probeMu.Lock()
-	defer probeMu.Unlock()
-	return probeRes
+	st := probeRes
+	var obs []func(Status)
+	if decided && st.Level != LevelLocked && len(observers) > 0 {
+		obs, observers = observers, nil
+	}
+	probeMu.Unlock()
+
+	for _, fn := range obs {
+		fn(st)
+	}
+	return st
 }
 
 // Observe registers fn to be called when memory protection is reduced. It is meant for startup:
