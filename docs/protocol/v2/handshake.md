@@ -154,6 +154,9 @@ prologue = "echofog/hs2/prologue" ‖ cb(32) ‖ rid(32) ‖ u8(len(hello)) ‖ 
   another node's `hs_key` (unknown key-share attack) therefore fails: the real owner of `hs` answers
   with its own device ID in the prologue and the transcript no longer matches. `rid` is always a
   **device ID**, never a node ID.
+- A responder follows the flag as it receives it. An XK `HS_HELLO` without `0x02` is not in the
+  malformed list of §3.1: the prologue binds 32 zero bytes, and the handshake fails later if the
+  initiator in fact bound a `rid`. The initiator's MUST above is the only requirement.
 
 ### 3.4 GREASE in the handshake
 
@@ -528,6 +531,12 @@ the initiator static is the throwaway identity's own `hs` key (`node-card.json`
 Payloads have no `pad`. Integers are big-endian except the AEAD nonce counter. Each transcript's
 `final.sealed_record_example` is a [wire.md](wire.md) §8.4 record sealed with `k_i2r` (AAD with
 `sid`, `n`, class, path and pipe).
+
+`XKhfs-rotation-prev-hs` reuses the P1 payload of `XKhfs-access-proof`, so its `known_card_seq` names
+the current invitation card while the initiator uses `prev_hs` as `rs`. In a real rotation the
+initiator would hold an older card whose `hs_key` is now `prev_hs`. This changes no Noise bytes — P1
+is an input of the transcript — and the transcript stays normative for the Noise layer; it does not
+model the card sequence that produced P1.
 
 **Decision D15 (handshake transcript vectors, satisfied).** What implementations must reproduce is
 the **Noise message bytes** of each message (`messages[].bytes`), every step's `h`, `ck`, `k`, `n`, and

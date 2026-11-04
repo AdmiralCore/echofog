@@ -119,6 +119,11 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) Â
     that sender; strict mode removes the window at up to 100 ms of added latency.
 18. **The account key is a long-term secret on the device** in v2 (one device). Its theft (A6) lets the
     thief sign new device lists for the account; recovery is a new mnemonic, so a new node ID.
+19. **Handshake-key rotation timing on success.** The responder tries its current `hs` key, then a full
+    second pass with `prev_hs`; the extra pass is measurable. The uniform close hides it on failure,
+    but a successful handshake shows whether the initiator used the current or the previous key. This
+    reveals only which valid card generation an initiator holds; accepted. An operator that cares can
+    shorten the overlap, at the cost of rejecting cards issued just before a rotation.
 
 ## 5. Coverage of the v1 weaknesses
 

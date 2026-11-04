@@ -1301,9 +1301,10 @@ func genHandshake(c cardOut) (any, any) {
 	t3.sources["p2"] = "handshake.json payloads.HsResp_xx.encoded (card = node-card.json public.envelope)"
 	t3.sources["p3"] = "handshake.json payloads.HsFinish_xx.encoded (card = node-card.json initiator_throwaway.envelope)"
 	t3.checks = []string{"same keys as the XK transcripts except the initiator static, which is the throwaway identity's own hs key (node-card.json initiator_throwaway.hs_sk); bare-address prologue"}
-	// hs rotation on the hidden node: the initiator holds an older invitation card whose hs_key is
-	// now the node's prev_hs; the node tries its current key first, fails to open P1, and succeeds
-	// on the second pass with prev_hs, before its access check.
+	// hs rotation on the hidden node. The transcript reuses the access-proof P1 (handshake.md §12):
+	// it names the current invitation card, while a real rotation would have the initiator hold an
+	// older card whose hs_key is now prev_hs. The responder tries its current key first, fails to
+	// open P1, and succeeds on the second pass with prev_hs, before its access check.
 	prevSK := sha([]byte(seedPrefix + "card/prev_hs_sk"))
 	t4 := base("XKhfs-rotation-prev-hs", true, prologueHidden, "handshake.json prologue_xk_hidden.prologue")
 	t4.rs = prevSK
