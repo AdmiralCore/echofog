@@ -207,16 +207,17 @@ func TestCluster_Calls_TenNodesTwoStreamers(t *testing.T) {
 	require.NoError(t, err)
 	q720, err := tree.QualityByID(qb)
 	require.NoError(t, err)
-	// Every node of this cluster runs in one process. The full 12+6 Mbit/s load starves the
-	// relay queues on a two-core runner, and the loss is the machine's, not the protocol's. The
-	// trees, the relay crash and the 97% bar stay as they are; only the offered load fits the
-	// machine that carries it.
+	// The scenario runs at the quality it names on every runner: the load is the protocol's, and
+	// the test must fail if the machine cannot carry it rather than quietly offering less.
+	full1080, full720 := q1080.BitrateKbps, q720.BitrateKbps
 	load := 1.0
 	if runtime.NumCPU() <= 2 {
 		load = 0.5
 	}
 	q1080.BitrateKbps = max(1, int(float64(q1080.BitrateKbps)*load))
 	q720.BitrateKbps = max(1, int(float64(q720.BitrateKbps)*load))
+	require.Equal(t, full1080, q1080.BitrateKbps, "the scenario offers the full 1080p load on this runner")
+	require.Equal(t, full720, q720.BitrateKbps, "the scenario offers the full 720p load on this runner")
 	streamerA, streamerB := c.Nodes[2], c.Nodes[5]
 	streams := []liveStream{
 		{id: "a-screen", owner: streamerA, q: q1080, size: 1100},
