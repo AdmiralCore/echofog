@@ -146,6 +146,10 @@ func (n *NodeApi) noteExitState(relay string, info *exit_gateway.AccountInfo, er
 }
 
 func (n *NodeApi) GetNetworkStats() NetworkStats {
+	if n.v2Unavailable() != nil {
+		return NetworkStats{}
+	}
+
 	if n == nil || n.node == nil || n.node.Swarm == nil {
 		return NetworkStats{}
 	}
@@ -159,6 +163,10 @@ func (n *NodeApi) GetNetworkStats() NetworkStats {
 }
 
 func (n *NodeApi) GetRelayMarket() []RelayInfo {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	result := []RelayInfo{}
 	if n == nil || n.node == nil || n.node.RelayClient == nil {
 		return result
@@ -211,6 +219,10 @@ func (n *NodeApi) relayConnected(hexID string) bool {
 }
 
 func (n *NodeApi) GetVPNStatus() (st VPNStatus) {
+	if n.v2Unavailable() != nil {
+		return VPNStatus{}
+	}
+
 	whole, wholeErr := n.wholeComputerStatus()
 	n.vpn.mu.Lock()
 	defer n.vpn.mu.Unlock()
@@ -248,6 +260,10 @@ func (n *NodeApi) GetVPNStatus() (st VPNStatus) {
 }
 
 func (n *NodeApi) StartVPN(relayPeerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.startVPN(relayPeerID, "127.0.0.1:1080")
 }
 
@@ -328,6 +344,10 @@ type ExitGatewayStatus struct {
 
 // SetExitGatewayEnabled opts this node in or out of serving other peers' Internet traffic; it is off after every restart
 func (n *NodeApi) SetExitGatewayEnabled(on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n == nil || n.node == nil || n.node.ExitService == nil {
 		return errors.New("node is not running")
 	}
@@ -336,6 +356,10 @@ func (n *NodeApi) SetExitGatewayEnabled(on bool) error {
 }
 
 func (n *NodeApi) GetExitGatewayStatus() ExitGatewayStatus {
+	if n.v2Unavailable() != nil {
+		return ExitGatewayStatus{}
+	}
+
 	if n == nil || n.node == nil || n.node.ExitService == nil {
 		return ExitGatewayStatus{}
 	}
@@ -344,6 +368,10 @@ func (n *NodeApi) GetExitGatewayStatus() ExitGatewayStatus {
 }
 
 func (n *NodeApi) StopVPN() error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	n.stopPayGuard()
 	// the TUN must go first: with the proxy gone it would cut every application off
 	_ = n.SetWholeComputer(false)
@@ -355,6 +383,10 @@ func (n *NodeApi) StopVPN() error {
 // instead of every application going out on the real address for the gap (and after it, if the
 // user did not turn whole-computer mode on again).
 func (n *NodeApi) StopVPNForSwitch() error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if !n.tun.killSwitch.Load() || !n.tun.ctl.Running() {
 		return n.StopVPN()
 	}

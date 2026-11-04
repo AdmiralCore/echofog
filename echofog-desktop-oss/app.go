@@ -86,7 +86,7 @@ func (a *App) IsRegistered() bool {
 		return svc.IsRegistered(ctx, profile)
 	}
 
-	cfg := api.GetDefaultConfig(profile)
+	cfg := api.GetConfiguredConfig(profile)
 	tempNode := coreNode.NewNode(ctx, cfg, "Pre-Init-"+profile)
 	return tempNode.IsRegistered()
 }
@@ -100,7 +100,7 @@ func (a *App) Register(appPassword string, passphrase string) (string, error) {
 	}
 	profile := a.activeProfile
 
-	cfg := api.GetDefaultConfig(profile)
+	cfg := api.GetConfiguredConfig(profile)
 	node := coreNode.NewNode(a.ctx, cfg, profile)
 	a.api = api.NewNodeApi(node)
 
@@ -123,7 +123,7 @@ func (a *App) Login(appPassword string) error {
 	}
 	profile := a.activeProfile
 
-	cfg := api.GetDefaultConfig(profile)
+	cfg := api.GetConfiguredConfig(profile)
 	node := coreNode.NewNode(a.ctx, cfg, profile)
 	a.api = api.NewNodeApi(node)
 
@@ -164,7 +164,7 @@ func (a *App) Recover(mnemonic string, passphrase string, appPassword string) er
 	}
 	profile := a.activeProfile
 
-	cfg := api.GetDefaultConfig(profile)
+	cfg := api.GetConfiguredConfig(profile)
 	node := coreNode.NewNode(a.ctx, cfg, "EchoFog-Node")
 	a.api = api.NewNodeApi(node)
 

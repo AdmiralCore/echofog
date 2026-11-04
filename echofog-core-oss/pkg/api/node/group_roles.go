@@ -122,6 +122,10 @@ func mayEditRole(me, r groups.Role) bool {
 
 // GroupRoles lists a group's roles, highest first, with what I may do with each.
 func (n *NodeApi) GroupRoles(groupID string) ([]GroupRoleDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	gf, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -166,6 +170,10 @@ func (n *NodeApi) roleLog(groupID string) (*convsFacade, convlog.Conv, error) {
 // GroupRoleSave defines a role (r.ID "": a new one) or changes one: its title, colour, rank and
 // permissions. A built-in role keeps its rank.
 func (n *NodeApi) GroupRoleSave(groupID string, r GroupRoleDTO) (GroupRoleDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupRoleDTO{}, ErrV2NotBuilt
+	}
+
 	f, c, err := n.roleLog(groupID)
 	if err != nil {
 		return GroupRoleDTO{}, err
@@ -194,6 +202,10 @@ func (n *NodeApi) GroupRoleSave(groupID string, r GroupRoleDTO) (GroupRoleDTO, e
 
 // GroupRoleRemove removes a custom role: its members get the group's default role.
 func (n *NodeApi) GroupRoleRemove(groupID, roleID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, c, err := n.roleLog(groupID)
 	if err != nil {
 		return err

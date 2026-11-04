@@ -80,6 +80,10 @@ func (n *NodeApi) market() (*vpnmarket.Service, error) {
 // StartSharing turns this node into an exit: it applies the offer and accepts tunnels. A public
 // node also keeps an advert in the DHT; a hidden or isolated one serves only the people it invited.
 func (n *NodeApi) StartSharing(cfg SharingConfig) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return err
@@ -129,6 +133,10 @@ func (n *NodeApi) StartSharing(cfg SharingConfig) error {
 // SetExitFreePeers saves the peers the exit serves for free and applies the list at once, also
 // while sharing.
 func (n *NodeApi) SetExitFreePeers(ids []string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node is not running")
 	}
@@ -151,6 +159,10 @@ func (n *NodeApi) SetExitFreePeers(ids []string) error {
 
 // GetExitFreePeers returns the peers the exit serves for free.
 func (n *NodeApi) GetExitFreePeers() []string {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	return append([]string{}, n.exitFreePeers...)
@@ -171,6 +183,10 @@ func (n *NodeApi) applyExitFreePeers() {
 
 // StopSharing withdraws the advert and stops serving other peers
 func (n *NodeApi) StopSharing() error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return err
@@ -181,6 +197,10 @@ func (n *NodeApi) StopSharing() error {
 }
 
 func (n *NodeApi) GetSharingStatus() SharingStatus {
+	if n.v2Unavailable() != nil {
+		return SharingStatus{}
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return SharingStatus{}
@@ -203,6 +223,10 @@ func (n *NodeApi) GetSharingStatus() SharingStatus {
 
 // ListExitNodes returns the verified exits found in the DHT, best rated first
 func (n *NodeApi) ListExitNodes() []ExitNode {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return []ExitNode{}
@@ -224,6 +248,10 @@ func (n *NodeApi) ListExitNodes() []ExitNode {
 
 // RefreshExitNodes rescans the DHT and returns how many live exits were found
 func (n *NodeApi) RefreshExitNodes() (int, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return 0, ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return 0, err
@@ -238,6 +266,10 @@ func (n *NodeApi) RefreshExitNodes() (int, error) {
 
 // ProbeExitNode checks one exit now: domain availability through the tunnel and real download speed
 func (n *NodeApi) ProbeExitNode(peerID string) (ProbeReport, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return ProbeReport{}, ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return ProbeReport{}, err
@@ -260,6 +292,10 @@ func (n *NodeApi) ProbeExitNode(peerID string) (ProbeReport, error) {
 }
 
 func (n *NodeApi) GetProbeDomains() []string {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return vpnmarket.DefaultProbeDomains
@@ -277,6 +313,10 @@ type SiteLists struct {
 
 // GetSiteLists returns the Check sites lists, kept by the node so they survive restarts.
 func (n *NodeApi) GetSiteLists() (SiteLists, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return SiteLists{}, ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return SiteLists{}, err
@@ -293,6 +333,10 @@ func (n *NodeApi) GetSiteLists() (SiteLists, error) {
 
 // SetCustomSites saves the sites the user added to the Check sites dialog.
 func (n *NodeApi) SetCustomSites(sites []string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return err
@@ -301,6 +345,10 @@ func (n *NodeApi) SetCustomSites(sites []string) error {
 }
 
 func (n *NodeApi) SetProbeDomains(domains []string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	m, err := n.market()
 	if err != nil {
 		return err
@@ -348,6 +396,10 @@ func (n *NodeApi) ensureConnected(id types.PeerID) error {
 
 // StartVPNAt is StartVPN with an explicit loopback listen address
 func (n *NodeApi) StartVPNAt(relayPeerID, listen string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.startVPN(relayPeerID, listen)
 }
 
@@ -355,6 +407,10 @@ func (n *NodeApi) StartVPNAt(relayPeerID, listen string) error {
 // handshake per site. exitPeerID is a peer, "auto" (the exit in use, else the best ranked one) or
 // "" (only the direct check).
 func (n *NodeApi) CheckSites(exitPeerID string, sites []string) ([]coreNode.SiteCheck, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	if n == nil || n.node == nil || n.node.Swarm == nil {
 		return nil, errors.New("node is not running")
 	}

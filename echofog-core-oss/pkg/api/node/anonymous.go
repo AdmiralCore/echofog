@@ -38,6 +38,10 @@ type AnonymityStatus struct {
 
 // GetAnonymity reports the anonymous mode, saved and in effect.
 func (n *NodeApi) GetAnonymity() (AnonymityStatus, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return AnonymityStatus{}, ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return AnonymityStatus{}, errors.New("node not started")
 	}
@@ -76,6 +80,10 @@ func (n *NodeApi) GetAnonymity() (AnonymityStatus, error) {
 // Tor and proxy), "relay" a relay pinned to go in through (Settings, Joining the network).
 // walletDirect lets the TON wallet reach its servers directly while it is on.
 func (n *NodeApi) SetAnonymity(mode string, walletDirect bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}

@@ -219,6 +219,10 @@ func (n *NodeApi) noteSessionStateLocked(state string, info *exit_gateway.Accoun
 // GetVPNHistory lists the exits used, newest first, the one in use with live counters. A session
 // the app was closed in the middle of ends where it was last saved.
 func (n *NodeApi) GetVPNHistory() []VPNSession {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	n.vpn.mu.Lock()
 	var current *VPNSession
 	if t := n.vpn.session; t != nil {
@@ -243,6 +247,10 @@ func (n *NodeApi) GetVPNHistory() []VPNSession {
 
 // ClearVPNHistory forgets the exits used; the session in use, if any, starts the new list.
 func (n *NodeApi) ClearVPNHistory() error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	st := n.historyStorage()
 	if st == nil {
 		return errors.New("node is not running")
@@ -260,6 +268,10 @@ func (n *NodeApi) ClearVPNHistory() error {
 // ConnectLastExit connects through the exit used most recently: at the address it was reached at
 // last time, else found again through the network.
 func (n *NodeApi) ConnectLastExit() error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	list := loadVPNHistory(n.historyStorage())
 	if len(list) == 0 {
 		return errors.New("no exit used yet")
@@ -375,6 +387,10 @@ func (n *NodeApi) updateExitLabel(peer string, change func(*exitLabel)) error {
 
 // SetExitName gives an exit a name of the user's choice ("" removes it).
 func (n *NodeApi) SetExitName(peer, name string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	name = strings.TrimSpace(name)
 	if r := []rune(name); len(r) > maxExitNameLen {
 		name = string(r[:maxExitNameLen])
@@ -384,11 +400,19 @@ func (n *NodeApi) SetExitName(peer, name string) error {
 
 // SetExitFavorite stars an exit or takes the star away.
 func (n *NodeApi) SetExitFavorite(peer string, on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	return n.updateExitLabel(peer, func(l *exitLabel) { l.Favorite = on })
 }
 
 // ForgetExit removes an exit from the history, with its name and star.
 func (n *NodeApi) ForgetExit(peer string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	id, err := types.PeerIDFromString(strings.ToLower(strings.TrimSpace(peer)))
 	if err != nil {
 		return errors.New("invalid exit ID")
@@ -412,6 +436,10 @@ func (n *NodeApi) ForgetExit(peer string) error {
 
 // GetSavedExits lists every exit used or starred: favourites first, then the most recently used.
 func (n *NodeApi) GetSavedExits() []SavedExit {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	sessions := n.GetVPNHistory() // newest first, the one in use included
 	labels := loadExitLabels(n.historyStorage())
 	byID := map[string]*SavedExit{}
