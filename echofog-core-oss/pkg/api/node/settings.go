@@ -207,7 +207,9 @@ func (n *NodeApi) SetSettings(s SettingsDTO) error {
 	return nil
 }
 
-// GetProtocol is the implementation this node runs: config.ProtocolV1 or config.ProtocolV2.
+// GetProtocol is the implementation this node started with: config.ProtocolV1 or
+// config.ProtocolV2. SetProtocol only saves the choice for the next start, so this value does not
+// change while the node runs.
 func (n *NodeApi) GetProtocol() int {
 	if n.node == nil || n.node.Cfg == nil {
 		return config.ProtocolV1
@@ -215,8 +217,8 @@ func (n *NodeApi) GetProtocol() int {
 	return n.node.Cfg.ProtocolOrDefault()
 }
 
-// SetProtocol saves the implementation for the next start. It does not restart the node: a v1
-// session keeps running until the app is restarted.
+// SetProtocol saves the implementation for the next start. It does not restart the node and does
+// not touch the running configuration: a v1 session keeps running until the app is restarted.
 func (n *NodeApi) SetProtocol(protocol int) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
@@ -226,9 +228,5 @@ func (n *NodeApi) SetProtocol(protocol int) error {
 	}
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
-	if err := saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.Protocol = protocol }); err != nil {
-		return err
-	}
-	n.node.Cfg.Protocol = protocol
-	return nil
+	return saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.Protocol = protocol })
 }

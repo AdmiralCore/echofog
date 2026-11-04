@@ -25,7 +25,8 @@ var ErrV2NotBuilt = errors.New("v2 ещё не собран")
 
 // v2Unavailable reports ErrV2NotBuilt while the node runs protocol 2. The network methods of the
 // facade ask it until T11.1b-e replace their bodies with delegation to the selected backends; at
-// protocol 1 it always returns nil, so the v1 behaviour is untouched.
+// protocol 1 it always returns nil, so the v1 behaviour is untouched. It reads the mode the node
+// started with, not the one saved for the next start (see SetProtocol).
 func (n *NodeApi) v2Unavailable() error {
 	if n == nil || n.node == nil {
 		return nil
