@@ -1,0 +1,515 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"testing"
+)
+
+func eqHex(t *testing.T, what string, got []byte, want string) {
+	t.Helper()
+	if hexs(got) != want {
+		t.Errorf("%s:\n got  %s\n want %s", what, hexs(got), want)
+	}
+}
+
+// ---- handshake.json -------------------------------------------------------------------------
+
+func TestInitializeSymmetric(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	for i, e := range hs["initialize_symmetric"].([]any) {
+		m := e.(map[string]any)
+		name := m["protocol_name"].(string)
+		if name != []string{nameXK, nameXX}[i] {
+			t.Fatalf("protocol name %d: %s", i, name)
+		}
+		h := initialH(name)
+		eqHex(t, name+" h0", h, m["h0"].(string))
+		eqHex(t, name+" ck0", h, m["ck0"].(string))
+	}
+}
+
+func TestPrologues(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	cb := seed("hs/cb")
+	rid := deviceID(seed("card/device_seed"))
+	eqHex(t, "cb", cb, jget(hs, "prologue_xk", "cb"))
+	eqHex(t, "rid", rid, jget(hs, "prologue_xk", "rid (node-card.json device_id)"))
+	eqHex(t, "rid vs node-card", rid, jget(loadJSON("node-card.json"), "device_id (SHA-256 of the device akey; the card signer)"))
+	eqHex(t, "hello xk", helloXK, jget(hs, "prologue_xk", "hs_hello"))
+	pXK := prologue(cb, rid, helloXK)
+	eqHex(t, "prologue xk", pXK, jget(hs, "prologue_xk", "prologue"))
+	h := mixHash(initialH(nameXK), pXK)
+	eqHex(t, "h after prologue xk", h, jget(hs, "prologue_xk", "h_after_prologue"))
+	rs := x25519Public(seed("card/hs_sk"))
+	eqHex(t, "rs", rs, jget(hs, "prologue_xk", "responder_static_rs"))
+	eqHex(t, "h after rs", mixHash(h, rs), jget(hs, "prologue_xk", "h_after_premessage_rs"))
+
+	eqHex(t, "hello xx", helloXX, jget(hs, "prologue_xx_bare_address", "hs_hello"))
+	pXX := prologue(cb, make([]byte, 32), helloXX)
+	eqHex(t, "prologue xx", pXX, jget(hs, "prologue_xx_bare_address", "prologue"))
+	eqHex(t, "h after prologue xx", mixHash(initialH(nameXX), pXX), jget(hs, "prologue_xx_bare_address", "h_after_prologue"))
+}
+
+func TestAccess(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	S := accessSecret()
+	eqHex(t, "S", S, jget(hs, "access_example", "secret (link.json)"))
+	eqHex(t, "h1", seed("hs/h1"), jget(hs, "access_example", "h1"))
+	eqHex(t, "pass_id", passID(S), jget(hs, "access_example", "pass_id"))
+	eqHex(t, "proof", accessProof(S, seed("hs/h1")), jget(hs, "access_example", "proof"))
+}
+
+func TestPayloadEncodings(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	enc := func(k string) string { return jget(hs, "payloads", k, "encoded") }
+	pubSeq := cardSeq(cardEnvelope("public"))
+	if pubSeq != fixedTime || cardSeq(cardEnvelope("invite")) != fixedTime+2 {
+		t.Fatalf("card seqs %d %d", pubSeq, cardSeq(cardEnvelope("invite")))
+	}
+	eqHex(t, "HsInit_xk", hsInit(nil, pubSeq), enc("HsInit_xk"))
+	eqHex(t, "HsInit_xx", hsInit(nil, 0), enc("HsInit_xx"))
+	eqHex(t, "HsResp", hsResp(p2Card(false, pubSeq)), enc("HsResp"))
+	eqHex(t, "HsResp (invite)", hsResp(p2Card(false, fixedTime+2)), enc("HsResp"))
+	eqHex(t, "HsResp_xx", hsResp(p2Card(true, 0)), enc("HsResp_xx"))
+	eqHex(t, "HsFinish", hsFinish(cardEnvelope("initiator")), enc("HsFinish"))
+	eqHex(t, "HsFinish_xx", hsFinish(cardEnvelope("initiator_throwaway")), enc("HsFinish_xx"))
+}
+
+func TestHelloAndGrease(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	eqHex(t, "hello xk hidden", helloXKHidden, jget(hs, "prologue_xk_hidden", "hs_hello"))
+	cb := seed("hs/cb")
+	rid := deviceID(seed("card/device_seed"))
+	p := prologue(cb, rid, helloXKHidden)
+	eqHex(t, "prologue xk hidden", p, jget(hs, "prologue_xk_hidden", "prologue"))
+	eqHex(t, "h after prologue xk hidden", mixHash(initialH(nameXK), p), jget(hs, "prologue_xk_hidden", "h_after_prologue"))
+	// §3.4 examples
+	if g := insertGrease([]uint16{2, 1}, 0x0a0a); len(g) != 3 || g[0] != 2 || g[1] != 1 || g[2] != 0x0a0a {
+		t.Errorf("grease example 1: %x", g)
+	}
+	if g := insertGrease([]uint16{1}, 0x0a0a); len(g) != 2 || g[1] != 0x0a0a {
+		t.Errorf("grease example 2: %x", g)
+	}
+	for v, want := range map[uint16]bool{0x0a0a: true, 0xeaea: true, 0xfafa: false, 0x0a1a: false, 0x0001: false} {
+		if isGrease(v) != want {
+			t.Errorf("isGrease(%04x)", v)
+		}
+	}
+}
+
+func leadingZeroBits(b []byte) int {
+	n := 0
+	for _, x := range b {
+		for i := 7; i >= 0; i-- {
+			if x>>uint(i)&1 != 0 {
+				return n
+			}
+			n++
+		}
+	}
+	return n
+}
+
+func TestPuzzle(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	cb := seed("hs/cb")
+	R := seed("hs/cookie_secret")
+	minute := uint64(fixedTime / 60)
+	cookie := hmacSHA(R, []byte("echofog/hs2/cookie"), cb, u64be(minute))[:16]
+	eqHex(t, "cookie", cookie, jget(hs, "puzzle", "cookie"))
+	var nonce uint64
+	var ph []byte
+	for ; ; nonce++ {
+		ph = sha([]byte("echofog/hs2/puzzle"), cookie, cb, u64be(nonce))
+		if leadingZeroBits(ph) >= 12 {
+			break
+		}
+	}
+	if want := hs["puzzle"].(map[string]any)["nonce"].(float64); nonce != uint64(want) {
+		t.Errorf("nonce %d want %v", nonce, want)
+	}
+	eqHex(t, "puzzle hash", ph, jget(hs, "puzzle", "hash"))
+	eqHex(t, "HS_RETRY frame", streamFrame(0x04, join(cookie, []byte{12})), jget(hs, "puzzle", "HS_RETRY_frame"))
+	hello := join([]byte{2}, u16be(1), u16be(2), u16be(1), []byte{0x03}, cookie, u64be(nonce))
+	eqHex(t, "HS_HELLO with solution", hello, jget(hs, "puzzle", "HS_HELLO_with_solution_payload"))
+}
+
+func TestDeferredInputs(t *testing.T) {
+	hs := loadJSON("handshake.json")
+	get := func(k string) string { return jget(hs, "transcript_inputs", k) }
+	eqHex(t, "initiator_e_sk", seed("hs/xk/initiator_e"), get("initiator_e_sk"))
+	eqHex(t, "initiator_e_pub", x25519Public(seed("hs/xk/initiator_e")), get("initiator_e_pub"))
+	eqHex(t, "initiator_s_pub", x25519Public(seed("hs/xk/initiator_s")), get("initiator_s_pub"))
+	eqHex(t, "responder_e_pub", x25519Public(seed("hs/xk/responder_e")), get("responder_e_pub"))
+	dz := join(seed("hs/xk/initiator_e1_d"), seed("hs/xk/initiator_e1_z"))
+	eqHex(t, "e1 seed", dz, get("initiator_e1_seed_dz"))
+	dk, ek := kemGenerate(dz)
+	eqHex(t, "ek sha256", sha(ek), get("initiator_e1_ek_sha256"))
+	eqHex(t, "m", seed("hs/xk/encaps_m"), get("encaps_randomness_m"))
+	ct, ss, err := kemEncap(ek, seed("hs/xk/encaps_m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eqHex(t, "ct sha256", sha(ct), get("ekem1_ct_sha256"))
+	eqHex(t, "ss", ss, get("ekem1_ss"))
+	ss2, err := dk.Decapsulate(ct)
+	if err != nil || !bytes.Equal(ss, ss2) {
+		t.Fatal("decap mismatch")
+	}
+	eqHex(t, "responder hs_sk", seed("card/hs_sk"), jget(loadJSON("node-card.json"), "hs_sk"))
+}
+
+// ---- kdf.json -------------------------------------------------------------------------------
+
+func TestSessionKDF(t *testing.T) {
+	kd := loadJSON("kdf.json")
+	ck := seed("session/ck")
+	h := seed("session/h")
+	eqHex(t, "ck", ck, jget(kd, "session", "ck"))
+	eqHex(t, "h", h, jget(kd, "session", "h"))
+	k1, k2 := noiseHKDF2(ck, nil)
+	eqHex(t, "split k_i2r", k1, jget(kd, "session", "split_k_i2r"))
+	eqHex(t, "split k_r2i", k2, jget(kd, "session", "split_k_r2i"))
+	ss := sessionSecret(ck)
+	eqHex(t, "session_secret", ss, jget(kd, "session", "session_secret"))
+	eqHex(t, "sid", sessionID(ss, h), jget(kd, "session", "sid"))
+	// sealed record with the §8.4 AAD (class 1, path 0, pipe 0).
+	pt := fromHex(jget(kd, "sealed_record", "plaintext"))
+	aad, sealed, record := sealRecord(k1, sessionID(ss, h), 0, 1, 0, 0, pt)
+	eqHex(t, "sealed record aad", aad, jget(kd, "sealed_record", "aad"))
+	eqHex(t, "sealed record", sealed, jget(kd, "sealed_record", "sealed"))
+	eqHex(t, "record", record, jget(kd, "sealed_record", "record"))
+}
+
+// ---- round trips ----------------------------------------------------------------------------
+
+func TestRoundTrips(t *testing.T) {
+	for _, sc := range scenarios() {
+		ini, resp, err := run(sc.XX, sc.In)
+		if err != nil {
+			t.Fatalf("%s: %v", sc.ID, err)
+		}
+		if !bytes.Equal(ini.KI2R, resp.KI2R) || bytes.Equal(ini.KI2R, ini.KR2I) {
+			t.Fatalf("%s: keys", sc.ID)
+		}
+		// handshake.md §4.1 sizes without payload; XX sizes follow from §4.2.
+		want := []int{1232, 1152, 64}
+		if sc.XX {
+			want = []int{32 + 1184, 32 + 1104 + 48 + 16, 64}
+		}
+		pls := [][]byte{ini.P1, ini.P2, ini.P3}
+		for i, m := range ini.Msgs {
+			if len(m)-len(pls[i]) != want[i] {
+				t.Errorf("%s: message %d overhead %d, want %d", sc.ID, i+1, len(m)-len(pls[i]), want[i])
+			}
+		}
+		if !sc.XX && sc.ID == "XKhfs" && ini.Steps[2].H != "b3581ff5d9eb76792fa78daea88e87ec515cca5e7958c264a7c366c87fb936ab" {
+			t.Errorf("%s: pre-message h", sc.ID)
+		}
+		if hexs(ini.Extra["ekem1_ss"]) != "218ea1ad2ba9ace442619182df4932a0d90ca7f903ddc81056e70a9d247abb63" {
+			t.Errorf("%s: ekem1 ss", sc.ID)
+		}
+		for k, ok := range resp.CardOK {
+			if !ok {
+				t.Errorf("%s: card check %s failed", sc.ID, k)
+			}
+		}
+		for k, ok := range ini.CardOK {
+			if !ok {
+				t.Errorf("%s: card check %s failed", sc.ID, k)
+			}
+		}
+		if sc.ID == "XKhfs-access-proof" {
+			eqHex(t, "HsInit_xk_hidden", ini.P1, jget(loadJSON("handshake.json"), "payloads", "HsInit_xk_hidden", "encoded"))
+		}
+	}
+}
+
+// runMITM runs a handshake with a forwarder that may change messages.
+func runMITM(xx bool, in Inputs, mutate func(n int, m []byte) []byte) (error, error) {
+	a, b := newPipe(), newPipe()
+	go func() {
+		defer close(b.toResp)
+		defer close(a.toInit)
+		m1, ok := <-a.toResp
+		if !ok {
+			return
+		}
+		b.toResp <- mutate(1, append([]byte(nil), m1...))
+		m2, ok := <-b.toInit
+		if !ok {
+			return
+		}
+		a.toInit <- mutate(2, append([]byte(nil), m2...))
+		m3, ok := <-a.toResp
+		if !ok {
+			return
+		}
+		b.toResp <- mutate(3, append([]byte(nil), m3...))
+	}()
+	errc := make(chan error, 1)
+	go func() {
+		var err error
+		if xx {
+			_, err = xxResponder(in, b)
+		} else {
+			_, err = xkResponder(in, b)
+		}
+		errc <- err
+	}()
+	var ierr error
+	if xx {
+		_, ierr = xxInitiator(in, a)
+	} else {
+		_, ierr = xkInitiator(in, x25519Public(in.RespS), a)
+	}
+	return ierr, <-errc
+}
+
+func TestTamperFails(t *testing.T) {
+	for _, sc := range scenarios() {
+		for msg := 1; msg <= 3; msg++ {
+			for _, pos := range []int{0, 40, 1300, -1} {
+				ierr, rerr := runMITM(sc.XX, sc.In, func(n int, m []byte) []byte {
+					if n == msg {
+						p := pos
+						if p < 0 || p >= len(m) {
+							p = len(m) - 1
+						}
+						m[p] ^= 0x01
+					}
+					return m
+				})
+				if ierr == nil && rerr == nil {
+					// XX message 1 is unencrypted: a flipped bit still yields a handshake whose
+					// transcripts differ, so it must fail later at the latest.
+					t.Errorf("%s: flip in message %d at %d accepted by both", sc.ID, msg, pos)
+				}
+			}
+		}
+	}
+}
+
+func TestPrologueMismatchFails(t *testing.T) {
+	sc := scenarios()[0]
+	bad := sc.In
+	ierr, rerr := func() (error, error) {
+		a := newPipe()
+		errc := make(chan error, 1)
+		r := bad
+		r.Prologue = append(append([]byte(nil), bad.Prologue...), 0) // responder sees another prologue
+		go func() { _, err := xkResponder(r, a); errc <- err }()
+		_, err := xkInitiator(bad, x25519Public(bad.RespS), a)
+		return err, <-errc
+	}()
+	if rerr == nil {
+		t.Fatalf("prologue mismatch accepted (initiator err %v)", ierr)
+	}
+}
+
+func TestZeroDHRejected(t *testing.T) {
+	if _, err := dh(seed("hs/xk/initiator_e"), make([]byte, 32)); err == nil {
+		t.Fatal("all-zero DH accepted")
+	}
+	// a small-order point (order 8) also gives the all-zero output
+	low := fromHex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
+	if _, err := dh(seed("hs/xk/initiator_e"), low); err == nil {
+		t.Fatal("small-order DH accepted")
+	}
+}
+
+func TestBadEncapsulationKeyRejected(t *testing.T) {
+	_, ek := kemGenerate(join(seed("hs/xk/initiator_e1_d"), seed("hs/xk/initiator_e1_z")))
+	bad := append([]byte(nil), ek...)
+	bad[0], bad[1] = 0xff, 0x0f // first 12-bit coefficient = 0xfff ≥ q = 3329
+	if _, _, err := kemEncap(bad, seed("hs/xk/encaps_m")); err == nil {
+		t.Fatal("non-reduced ML-KEM encapsulation key accepted")
+	}
+}
+
+// The committed transcript file must equal what this code produces.
+func TestTranscriptFileCurrent(t *testing.T) {
+	dir := t.TempDir()
+	os.Args = []string{"crosscheck", "-out", dir}
+	main()
+	got, err := os.ReadFile(dir + "/transcript-cleanroom.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("transcript-cleanroom.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n")), got) {
+		t.Fatal("transcript-cleanroom.json is stale: run GOWORK=off go run . -out .")
+	}
+}
+
+// TestNormativeTranscript compares every run with handshake-transcript.json (written only after
+// this implementation had produced and committed its own output: 5b67d50, then e1d9a03):
+// payloads, every step's h/ck/k/n, h before each payload, message bytes, the finals, the §8.4
+// sealed-record example and the rotation block (the responder's failed first pass).
+func TestNormativeTranscript(t *testing.T) {
+	norm := loadJSON("handshake-transcript.json")
+	byName := map[string]scenario{}
+	for _, sc := range scenarios() {
+		byName[sc.ID] = sc
+	}
+	list := norm["transcripts"].([]any)
+	if len(list) != len(byName) {
+		t.Fatalf("%d normative transcripts, %d here", len(list), len(byName))
+	}
+	for _, e := range list {
+		tr := e.(map[string]any)
+		name := tr["name"].(string)
+		sc, ok := byName[name]
+		if !ok {
+			t.Fatalf("no run for %s", name)
+		}
+		ini, _, err := run(sc.XX, sc.In)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr["protocol_name"].(string) != sc.In.Name {
+			t.Errorf("%s: protocol name", name)
+		}
+		eqHex(t, name+" prologue", sc.In.Prologue, jget(tr, "inputs", "prologue"))
+		var steps []any
+		steps = append(steps, tr["initialize"].([]any)...)
+		msgs := tr["messages"].([]any)
+		pls := [][]byte{ini.P1, ini.P2, ini.P3}
+		// index of the step right before each payload token, in our log
+		var before []int
+		for i, s := range ini.Steps {
+			if s.Token == "payload" {
+				before = append(before, i-1)
+			}
+		}
+		for i, me := range msgs {
+			m := me.(map[string]any)
+			steps = append(steps, m["steps"].([]any)...)
+			eqHex(t, name+" message bytes", ini.Msgs[i], m["bytes"].(string))
+			eqHex(t, name+" message sha256", sha(ini.Msgs[i]), m["sha256"].(string))
+			eqHex(t, name+" payload", pls[i], m["payload"].(string))
+			if ini.Steps[before[i]].H != m["h_before_payload"].(string) {
+				t.Errorf("%s: h before payload %d", name, i+1)
+			}
+		}
+		if len(steps) != len(ini.Steps) {
+			t.Fatalf("%s: %d steps, %d here", name, len(steps), len(ini.Steps))
+		}
+		for i, se := range steps {
+			s := se.(map[string]any)
+			mine := ini.Steps[i]
+			if s["h"] != mine.H || s["ck"] != mine.CK || s["k"] != mine.K || uint64(s["n"].(float64)) != mine.N {
+				t.Errorf("%s step %d (%v / %s) differs", name, i, s["token"], mine.Token)
+			}
+		}
+		fin := tr["final"].(map[string]any)
+		for k, v := range map[string][]byte{"h": ini.H, "ck": ini.CK, "k_i2r": ini.KI2R, "k_r2i": ini.KR2I, "session_secret": ini.SessionSecret, "sid": ini.SID} {
+			eqHex(t, name+" final "+k, v, fin[k].(string))
+		}
+		// §8.4 record with the normative example's plaintext (our own example used another one).
+		se := fin["sealed_record_example"].(map[string]any)
+		aad, sealed, record := sealRecord(ini.KI2R, ini.SID, uint64(se["n"].(float64)), 1, 0, 0, fromHex(se["plaintext"].(string)))
+		eqHex(t, name+" sealed aad", aad, se["aad"].(string))
+		eqHex(t, name+" sealed", sealed, se["sealed"].(string))
+		eqHex(t, name+" record", record, se["record"].(string))
+
+		if sc.In.RespPrevS != nil {
+			_, resp, _ := run(false, sc.In)
+			fp := resp.FailedPasses[0]
+			rot := norm["rotation"].(map[string]any)
+			first := rot["first_pass"].(map[string]any)
+			eqHex(t, "rotation rs", x25519Public(sc.In.RespS), first["rs"].(string))
+			if fp[2].H != first["h_after_premessage"] || fp[5].H != first["h1"] || fp[5].CK != first["ck_after_es"] || fp[5].K != first["k_after_es"] {
+				t.Errorf("rotation first pass differs")
+			}
+			second := rot["second_pass"].(map[string]any)
+			eqHex(t, "rotation second rs", x25519Public(sc.In.RespPrevS), second["rs"].(string))
+			eqHex(t, "rotation second h1", ini.Extra["h1"], second["h1"].(string))
+		}
+	}
+}
+
+func TestHelloChecks(t *testing.T) {
+	ok := func(b []byte, sup []uint16) {
+		t.Helper()
+		if err := checkHello(b, sup); err != nil {
+			t.Errorf("%x rejected: %v", b, err)
+		}
+	}
+	bad := func(b []byte, sup []uint16, why string) {
+		t.Helper()
+		if checkHello(b, sup) == nil {
+			t.Errorf("%x accepted (%s)", b, why)
+		}
+	}
+	pub := []uint16{1, 2}
+	ok(helloXK, pub)
+	ok(helloXKHidden, []uint16{1})
+	ok(helloXX, pub)
+	ok(fromHex("02000100020001039dc93509d0bb2bb8c9ed254591c07fab00000000000008e2"), pub) // with puzzle solution
+	h := func(offered []uint16, chosen uint16, flags byte) []byte {
+		b := []byte{byte(len(offered))}
+		for _, v := range offered {
+			b = append(b, u16be(v)...)
+		}
+		return join(b, u16be(chosen), []byte{flags})
+	}
+	bad(h([]uint16{1, 1}, 1, 2), pub, "repeat")
+	bad(h([]uint16{1, 0x0a0a, 0x1a1a}, 1, 2), pub, "two GREASE")
+	bad(h([]uint16{0x0a0a}, 0x0a0a, 0), pub, "only GREASE")
+	bad(h([]uint16{1, 2}, 3, 2), pub, "chosen not offered")
+	bad(h([]uint16{1, 0x0a0a}, 0x0a0a, 2), pub, "GREASE chosen")
+	bad(h([]uint16{1, 2}, 2, 2), pub, "chosen not first non-GREASE")
+	bad(h(nil, 1, 0), pub, "count 0")
+	bad(h([]uint16{1, 2, 3, 4, 5, 6, 7, 8, 9}, 1, 0), pub, "count 9")
+	bad(append(append([]byte(nil), helloXK...), 0), pub, "trailing byte")
+	bad(helloXK[:len(helloXK)-1], pub, "short")
+	bad(h([]uint16{2, 1}, 2, 0), pub, "suite: responder prefers 1")
+	bad(helloXX, []uint16{1}, "hidden node: no XX")
+}
+
+func TestXXP1Check(t *testing.T) {
+	if err := checkXXP1(nil, hsInit(nil, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkXXP1(nil, append(hsInit(nil, 0), pbw(nil).bytesField(15, []byte{0, 0})...)); err != nil {
+		t.Fatal("pad refused:", err)
+	}
+	if checkXXP1(nil, hsInit(nil, 5)) == nil {
+		t.Fatal("known_card_seq accepted")
+	}
+	if checkXXP1(nil, hsInit(accessMsg(make([]byte, 8), make([]byte, 32)), 0)) == nil {
+		t.Fatal("access accepted")
+	}
+}
+
+func TestRotation(t *testing.T) {
+	var rot scenario
+	for _, sc := range scenarios() {
+		if sc.ID == "XKhfs-rotation-prev-hs" {
+			rot = sc
+		}
+	}
+	eqHex(t, "prev hs", join([]byte{2}, x25519Public(rot.In.RespPrevS)), jget(loadJSON("node-card.json"), "prev_hs_akey"))
+	ini, resp, err := run(false, rot.In)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.FailedPasses) != 1 || len(resp.FailedPasses[0]) != 6 {
+		t.Fatalf("failed passes %v", len(resp.FailedPasses))
+	}
+	// the initiator's h1 differs from the access-proof transcript (other rs), so the proof differs
+	if bytes.Equal(ini.P1, scenarios()[1].In.P1(ini.Extra["h1"])) == false {
+		t.Fatal("P1 builder mismatch")
+	}
+	// without the previous key the responder fails at P1
+	noPrev := rot.In
+	noPrev.RespPrevS = nil
+	if _, _, err := run(false, noPrev); err == nil {
+		t.Fatal("rotation accepted without prev key")
+	}
+}
