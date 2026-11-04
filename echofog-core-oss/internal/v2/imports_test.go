@@ -1,6 +1,10 @@
 package v2_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -224,4 +228,121 @@ func TestImportBoundary(t *testing.T) {
 				root, strings.Join(chain, "\n    -> "))
 		}
 	}
+}
+
+// modulePathFromGoMod reads the module directive of echofog-core-oss/go.mod. The test package
+// lives in internal/v2, so the module root is two levels up.
+func modulePathFromGoMod(t *testing.T) string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	t.Fatalf("go.mod has no module directive")
+	return ""
+}
+
+// forbiddenImport reports whether path is a v1 package that v2 code must not import, directly or
+// transitively (AD1). Paths outside the core module are never v2's business.
+func forbiddenImport(path, module string) bool {
+	rel, ok := strings.CutPrefix(path, module+"/")
+	if !ok {
+		return false
+	}
+
+	for _, family := range forbiddenFamilies {
+		if rel == family || strings.HasPrefix(rel, family+"/") {
+			return true
+		}
+	}
+
+	if rel == "internal/network" || strings.HasPrefix(rel, "internal/network/") {
+		for _, allowed := range allowedV1 {
+			rest, ok := strings.CutPrefix(allowed, "internal/network/")
+			if !ok {
+				continue
+			}
+			if rel == "internal/network/"+rest || strings.HasPrefix(rel, "internal/network/"+rest+"/") {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+// findChain returns the shortest import chain from root to a package for which bad is true.
+// A nil result means root's transitive imports are clean. Breadth-first search keeps the
+// reported chain short, which is what a failing CI message needs.
+func findChain(root string, imports map[string][]string, bad func(string) bool) []string {
+	if bad(root) {
+		return []string{root}
+	}
+
+	type step struct {
+		path  string
+		chain []string
+	}
+	seen := map[string]bool{root: true}
+	queue := []step{{path: root, chain: []string{root}}}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, next := range imports[cur.path] {
+			if seen[next] {
+				continue
+			}
+			seen[next] = true
+			chain := append(append([]string(nil), cur.chain...), next)
+			if bad(next) {
+				return chain
+			}
+			queue = append(queue, step{path: next, chain: chain})
+		}
+	}
+	return nil
+}
+
+type listedPackage struct {
+	ImportPath string
+	DepOnly    bool
+	Imports    []string
+}
+
+// listDeps runs `go list -deps -json` for the given patterns from the module root.
+func listDeps(t *testing.T, dir string, patterns []string) map[string]*listedPackage {
+	t.Helper()
+
+	args := append([]string{"list", "-deps", "-json"}, patterns...)
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list -deps %s: %v\n%s", strings.Join(patterns, " "), err, stderr.String())
+	}
+
+	pkgs := make(map[string]*listedPackage)
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var p listedPackage
+		err := dec.Decode(&p)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode `go list -deps -json` output: %v", err)
+		}
+		pkgs[p.ImportPath] = &p
+	}
+	return pkgs
 }

@@ -1,6 +1,7 @@
 package v2_test
 
 import (
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"os"
@@ -187,4 +188,86 @@ func collectGoFiles(t *testing.T, roots ...string) []string {
 	}
 	sort.Strings(files)
 	return files
+}
+
+// buildConstraint returns the `//go:build` expression of a source file, or "" when the file has
+// none. Constraints after the package clause do not count (the go tool ignores them too).
+func buildConstraint(src []byte) string {
+	for _, line := range strings.Split(string(src), "\n") {
+		line = strings.TrimSpace(line)
+		if constraint.IsGoBuild(line) {
+			expr, err := constraint.Parse(line)
+			if err != nil {
+				return ""
+			}
+			return expr.String()
+		}
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		break
+	}
+	return ""
+}
+
+func isPlatformTag(tag string) bool {
+	for _, t := range platformTags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func isArchTag(tag string) bool {
+	for _, t := range archTags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func mentionsPlatform(expr constraint.Expr) bool {
+	switch e := expr.(type) {
+	case *constraint.TagExpr:
+		return isPlatformTag(e.Tag) || isArchTag(e.Tag)
+	case *constraint.NotExpr:
+		return mentionsPlatform(e.X)
+	case *constraint.AndExpr:
+		return mentionsPlatform(e.X) || mentionsPlatform(e.Y)
+	case *constraint.OrExpr:
+		return mentionsPlatform(e.X) || mentionsPlatform(e.Y)
+	default:
+		return false
+	}
+}
+
+// classifyPlatformFile decides whether a file is platform-specific and which base name it shares
+// with its portable fallback. Constraints come from both places the go tool reads: the `_GOOS` /
+// `_GOARCH` file-name suffix and the `//go:build` expression.
+func classifyPlatformFile(name, goBuild string) (constrained bool, base string) {
+	base = strings.TrimSuffix(name, ".go")
+	base = strings.TrimSuffix(base, "_test")
+
+	for {
+		i := strings.LastIndexByte(base, '_')
+		if i <= 0 {
+			break
+		}
+		tag := base[i+1:]
+		if !isPlatformTag(tag) && !isArchTag(tag) {
+			break
+		}
+		constrained = true
+		base = base[:i]
+	}
+	base = strings.TrimSuffix(base, "_other")
+
+	if goBuild != "" {
+		if expr, err := constraint.Parse("//go:build " + goBuild); err == nil && mentionsPlatform(expr) {
+			constrained = true
+		}
+	}
+	return constrained, base
 }
