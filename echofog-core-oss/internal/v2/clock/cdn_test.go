@@ -285,6 +285,70 @@ func TestCDNTooFewAnswers(t *testing.T) {
 	}
 }
 
+// TestCDNTwoSecondAgreement checks the 2 s window itself: two of three answers form a
+// strict majority only when they agree within 2 s.
+func TestCDNTwoSecondAgreement(t *testing.T) {
+	cases := []struct {
+		name   string
+		deltas []time.Duration
+		want   time.Duration
+	}{
+		{"pair within the window", []time.Duration{100 * time.Second, 101 * time.Second, 105 * time.Second}, 100 * time.Second},
+		{"pair beyond the window from the first answer", []time.Duration{100 * time.Second, 103 * time.Second, 103 * time.Second}, 103 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := newFakeClock(base)
+			m := make(map[string]time.Duration, len(tc.deltas))
+			for i, d := range tc.deltas {
+				m[fmt.Sprintf("clock%d.test", i)] = d
+			}
+			client := &fakeHTTP{fn: deltasByHost(fc, m)}
+			c := newCDNClock(t, fc, client, endpoints(len(tc.deltas)))
+
+			res, err := c.MaybeCheckCDN(t.Context(), false)
+			if err != nil {
+				t.Fatalf("MaybeCheckCDN: %v", err)
+			}
+			if res.Offset != tc.want || res.Agreeing != 2 {
+				t.Fatalf("Result = %+v, want offset %v agreed by 2 answers", res, tc.want)
+			}
+		})
+	}
+}
+
+// TestCDNNoMajorityKeepsOffset: a later check without a majority must not undo a good
+// offset learned earlier.
+func TestCDNNoMajorityKeepsOffset(t *testing.T) {
+	fc := newFakeClock(base)
+	client := &fakeHTTP{fn: func(*http.Request) (*http.Response, error) {
+		return dateAt(fc.Now().Add(120 * time.Second)), nil
+	}}
+	c := newCDNClock(t, fc, client, endpoints(3))
+
+	if _, err := c.MaybeCheckCDN(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Offset(); got != 120*time.Second {
+		t.Fatalf("first check offset = %v, want 120s", got)
+	}
+
+	fc.Advance(10 * time.Minute)
+	deltas := []time.Duration{100 * time.Second, -100 * time.Second, 1000 * time.Second}
+	client.fn = func(req *http.Request) (*http.Response, error) {
+		var index int
+		_, _ = fmt.Sscanf(req.URL.Host, "clock%d.test", &index)
+		return dateAt(fc.Now().Add(deltas[index])), nil
+	}
+	res, err := c.MaybeCheckCDN(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Agreeing != 0 || res.Offset != 120*time.Second || res.Changed {
+		t.Fatalf("Result = %+v, want the previous 120s offset", res)
+	}
+}
+
 func TestCDNRateLimit(t *testing.T) {
 	fc := newFakeClock(base)
 	client := &fakeHTTP{fn: func(*http.Request) (*http.Response, error) {
@@ -304,6 +368,9 @@ func TestCDNRateLimit(t *testing.T) {
 	if err != nil || res.Ran {
 		t.Fatalf("second check within 10 minutes: res=%+v err=%v", res, err)
 	}
+	if res.Offset != 120*time.Second {
+		t.Fatalf("gated call Offset = %v, want the current 120s", res.Offset)
+	}
 	if n := client.callCount(); n != 3 {
 		t.Fatalf("requests after a gated call = %d, want 3", n)
 	}
@@ -322,6 +389,24 @@ func TestCDNRateLimit(t *testing.T) {
 	}
 	if n := client.callCount(); n != 6 {
 		t.Fatalf("requests after 10 minutes = %d, want 6", n)
+	}
+}
+
+// TestCDNCheckAfterClockJumpBack: fixing the system clock backwards must not leave the
+// rate limit looking like it expires in the future.
+func TestCDNCheckAfterClockJumpBack(t *testing.T) {
+	fc := newFakeClock(base)
+	client := &fakeHTTP{fn: func(*http.Request) (*http.Response, error) {
+		return dateAt(fc.Now()), nil
+	}}
+	c := newCDNClock(t, fc, client, endpoints(3))
+
+	if res, err := c.MaybeCheckCDN(t.Context(), false); err != nil || !res.Ran {
+		t.Fatalf("first check: res=%+v err=%v", res, err)
+	}
+	fc.Advance(-time.Hour)
+	if res, err := c.MaybeCheckCDN(t.Context(), false); err != nil || !res.Ran {
+		t.Fatalf("check after a backwards clock jump: res=%+v err=%v", res, err)
 	}
 }
 
@@ -376,8 +461,8 @@ func TestCDNRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaybeCheckCDN: %v", err)
 	}
-	if res.Changed || res.Warning {
-		t.Fatalf("Result = %+v, want a 30s offset without a warning", res)
+	if !res.Changed || res.Warning {
+		t.Fatalf("Result = %+v, want a changed 30s offset without a warning", res)
 	}
 	calls := client.recordedCalls()
 	if len(calls) != 3 {
@@ -534,6 +619,6 @@ func TestNewHTTPClient(t *testing.T) {
 
 	direct := NewHTTPClient(nil, 0)
 	if got := direct.Transport.(*http.Transport).Proxy; got != nil {
-		t.Fatalf("direct client has a proxy function: %v", got)
+		t.Fatal("direct client has a proxy function")
 	}
 }

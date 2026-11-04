@@ -97,9 +97,9 @@ func TestPeerOffsets(t *testing.T) {
 	}
 }
 
-// TestNoConsensusKeepsOffset pins the strict reading of "median": when the middle two
-// samples disagree there is no estimate, and the previous offset stays in force.
-func TestNoConsensusKeepsOffset(t *testing.T) {
+// TestNoConsensusRevertsToRawClock pins the strict reading of "median": when the
+// central two samples disagree there is no estimate, and no peer correction applies.
+func TestNoConsensusRevertsToRawClock(t *testing.T) {
 	fc := newFakeClock(base)
 	c := newClock(t, fc.Now, endpoints(3))
 
@@ -109,8 +109,11 @@ func TestNoConsensusKeepsOffset(t *testing.T) {
 	}
 
 	c.AddPeerSample(peerID(2), base.Add(-30*time.Second))
-	if got := c.Offset(); got != 30*time.Second {
-		t.Fatalf("Offset() after disagreement = %v, want the previous 30s", got)
+	if got := c.Offset(); got != 0 {
+		t.Fatalf("Offset() after disagreement = %v, want 0", got)
+	}
+	if got := c.Now(); !got.Equal(base) {
+		t.Fatalf("Now() after disagreement = %v, want raw %v", got, base)
 	}
 }
 
