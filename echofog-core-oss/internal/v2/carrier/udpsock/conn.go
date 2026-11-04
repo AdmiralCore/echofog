@@ -73,6 +73,20 @@ type Conn struct {
 
 var _ net.PacketConn = (*Conn)(nil)
 
+// oobPacketConn is the surface quic-go probes for its UDP fast path
+// (third_party/quic-go/sys_conn.go: OOBCapablePacketConn plus ReadBatch). ReadBatch stands in
+// for net.Conn, which quic-go accepts when a batch reader is missing.
+type oobPacketConn interface {
+	net.PacketConn
+	SyscallConn() (syscall.RawConn, error)
+	SetReadBuffer(int) error
+	ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net.UDPAddr, err error)
+	WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error)
+	ReadBatch(ms []ipv4.Message, flags int) (int, error)
+}
+
+var _ oobPacketConn = (*Conn)(nil)
+
 // Listen opens an unconnected UDP socket on laddr (nil means every local address).
 func Listen(ctx context.Context, network string, laddr *net.UDPAddr, opt Options) (*Conn, error) {
 	if network == "" {

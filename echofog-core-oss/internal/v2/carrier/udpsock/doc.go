@@ -23,8 +23,8 @@
 // The socket is meant to be handed to the v2 transports. quic-go turns its fast path on only
 // when the connection offers ReadMsgUDP, WriteMsgUDP, SyscallConn and either ReadBatch or
 // net.Conn (third_party/quic-go/sys_conn.go). Conn offers all of them, so GSO, ECN and batch
-// reads survive under noise3 and QUIC; TransportConn returns the bare socket in restricted mode,
-// where quic-go must stay on single calls too.
+// reads survive under noise3 and QUIC; TransportConn returns a plain view of the socket in
+// restricted mode, where quic-go must stay on single calls too.
 //
 // Build tags:
 //
