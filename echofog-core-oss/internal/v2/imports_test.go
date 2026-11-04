@@ -119,14 +119,14 @@ func TestFindChain(t *testing.T) {
 			want:    nil,
 		},
 		{
-			name:    "root itself is forbidden",
-			imports: map[string][]string{"root": {}},
-			want:    nil,
-		},
-		{
 			name:    "cycle terminates",
 			imports: map[string][]string{"root": {"a"}, "a": {"b"}, "b": {"a"}},
 			want:    nil,
+		},
+		{
+			name:    "direct dependency",
+			imports: map[string][]string{"root": {"bad"}},
+			want:    []string{"root", "bad"},
 		},
 	}
 
@@ -134,18 +134,22 @@ func TestFindChain(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			root := "root"
-			if tc.name == "root itself is forbidden" {
-				got := findChain(root, tc.imports, func(path string) bool { return path == root })
-				if len(got) != 1 || got[0] != root {
-					t.Fatalf("findChain(%q) = %v, want [%s]", root, got, root)
-				}
-				return
-			}
-			if got := findChain(root, tc.imports, bad); strings.Join(got, " ") != strings.Join(tc.want, " ") {
-				t.Fatalf("findChain(%q) = %v, want %v", root, got, tc.want)
+			if got := findChain("root", tc.imports, bad); strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("findChain(%q) = %v, want %v", "root", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFindChainSkipsRoot pins the semantics that matter for the v1 port packages: the root is a
+// subject of the check, not a dependency of itself. internal/network/exit_gateway/core sits inside
+// a family that AD1 forbids v2 code to import, yet its own dependencies are what the check audits.
+func TestFindChainSkipsRoot(t *testing.T) {
+	t.Parallel()
+
+	imports := map[string][]string{"root": {"a"}, "a": {}}
+	if got := findChain("root", imports, func(path string) bool { return path == "root" }); got != nil {
+		t.Fatalf("findChain(%q) = %v, want nil: the root is not a dependency of itself", "root", got)
 	}
 }
 
@@ -278,14 +282,12 @@ func forbiddenImport(path, module string) bool {
 	return false
 }
 
-// findChain returns the shortest import chain from root to a package for which bad is true.
-// A nil result means root's transitive imports are clean. Breadth-first search keeps the
-// reported chain short, which is what a failing CI message needs.
+// findChain returns the shortest import chain from root to a package that root depends on and for
+// which bad is true. A nil result means root's transitive imports are clean. The root itself is
+// not judged: internal/network/exit_gateway/core, a v1 port package, sits inside a family AD1
+// forbids v2 code to import, yet its own dependencies are exactly what the port check audits.
+// Breadth-first search keeps the reported chain short, which is what a failing CI message needs.
 func findChain(root string, imports map[string][]string, bad func(string) bool) []string {
-	if bad(root) {
-		return []string{root}
-	}
-
 	type step struct {
 		path  string
 		chain []string
