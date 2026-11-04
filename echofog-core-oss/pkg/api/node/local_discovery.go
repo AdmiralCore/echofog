@@ -10,6 +10,10 @@ import (
 )
 
 func (n *NodeApi) StartLocalDiscovery(myAlias string) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	if n.node.AccessMode() != config.AccessPublic {
 		return // a hidden node does not announce itself, not even on the local network
 	}
@@ -22,10 +26,18 @@ func (n *NodeApi) StartLocalDiscovery(myAlias string) {
 }
 
 func (n *NodeApi) StopLocalDiscovery() {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	n.node.MDNS.Stop()
 }
 
 func (n *NodeApi) PeerDiscoveryHandler() <-chan dto.PeerDTO {
+	if n.v2Unavailable() != nil {
+		return nil
+	}
+
 	readCh := make(chan dto.PeerDTO, 100)
 
 	n.node.MDNS.SetOnPeerFound(func(id types.PeerID, addr string, alias string) {

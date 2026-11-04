@@ -488,6 +488,10 @@ func (n *NodeApi) payInit() {
 
 // GetExitPayment describes what the connected exit costs and what is left of what was paid.
 func (n *NodeApi) GetExitPayment() ExitPaymentStatus {
+	if n.v2Unavailable() != nil {
+		return ExitPaymentStatus{}
+	}
+
 	n.payInit()
 	n.pay.mu.Lock()
 	defer n.pay.mu.Unlock()
@@ -510,6 +514,10 @@ func (n *NodeApi) GetExitPayment() ExitPaymentStatus {
 
 // SetPayAsset chooses how traffic is paid: "auto", "TON" or "USDT".
 func (n *NodeApi) SetPayAsset(asset string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	switch asset {
 	case PayAuto, PayTON, PayUSDT:
 	default:
@@ -562,6 +570,10 @@ func (n *NodeApi) payExit(ctx context.Context, info *exit_gateway.AccountInfo, m
 
 // SetAutoPay turns automatic top-ups on or off and sets their size and daily limit (USDT).
 func (n *NodeApi) SetAutoPay(enabled bool, chunkUSDT, dailyCapUSDT string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	chunk, err := tonwallet.ParseUnits(chunkUSDT, 6)
 	if err != nil {
 		return errors.New("enter the top-up amount in USDT, for example 1")
@@ -590,6 +602,10 @@ func (n *NodeApi) SetAutoPay(enabled bool, chunkUSDT, dailyCapUSDT string) error
 // PayExit pays the connected exit now, for an amount the user chose. It works whether or not
 // automatic payments are on, and counts toward today's total.
 func (n *NodeApi) PayExit(ctx context.Context, amountUSDT string) (string, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return "", ErrV2NotBuilt
+	}
+
 	micro, err := tonwallet.ParseUnits(amountUSDT, 6)
 	if err != nil {
 		return "", err

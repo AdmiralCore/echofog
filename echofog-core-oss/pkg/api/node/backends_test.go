@@ -48,6 +48,30 @@ func TestBackendsProtocol2AnswerNotBuilt(t *testing.T) {
 	require.Nil(t, api.backends.net.GetPeers(), "a method without an error result returns the zero value")
 }
 
+// Until T11.1b-e move the bodies, the facade methods themselves answer the same way: a network
+// method with an error result says why it cannot run, one without returns the zero value, and the
+// local settings keep working.
+func TestProtocol2FacadeAnswersNotBuilt(t *testing.T) {
+	api := newFacadeNode(t, config.ProtocolV2)
+	require.ErrorIs(t, api.v2Unavailable(), ErrV2NotBuilt)
+	require.Equal(t, config.ProtocolV2, api.GetProtocol())
+
+	_, err := api.GetContacts()
+	require.ErrorIs(t, err, ErrV2NotBuilt)
+	err = api.ConnectToPeer("127.0.0.1:1/deadbeef")
+	require.ErrorIs(t, err, ErrV2NotBuilt)
+	require.Nil(t, api.GetPeers(), "no error result: the zero value")
+
+	_, err = api.GetSettings()
+	require.NoError(t, err, "settings stay local and work")
+	require.Equal(t, coreNode.DefaultPrivacy, api.GetPrivacy(), "privacy settings stay local")
+}
+
+func TestProtocol1FacadeIsAvailable(t *testing.T) {
+	api := newFacadeNode(t, config.ProtocolV1)
+	require.NoError(t, api.v2Unavailable())
+}
+
 // An unknown value in the config means v1: a half mode is worse than none.
 func TestChooseBackendsTreatsUnknownAsV1(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV1)

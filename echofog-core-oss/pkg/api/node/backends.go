@@ -23,6 +23,19 @@ import (
 // backends are not built yet.
 var ErrV2NotBuilt = errors.New("v2 ещё не собран")
 
+// v2Unavailable reports ErrV2NotBuilt while the node runs protocol 2. The network methods of the
+// facade ask it until T11.1b-e replace their bodies with delegation to the selected backends; at
+// protocol 1 it always returns nil, so the v1 behaviour is untouched.
+func (n *NodeApi) v2Unavailable() error {
+	if n == nil || n.node == nil {
+		return nil
+	}
+	if n.node.Cfg.ProtocolOrDefault() == config.ProtocolV2 {
+		return ErrV2NotBuilt
+	}
+	return nil
+}
+
 // netBackend is the network and access domain.
 type netBackend interface {
 	AddBootstrapNode(entry string) error

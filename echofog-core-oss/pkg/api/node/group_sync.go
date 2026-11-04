@@ -980,6 +980,7 @@ func (f *groupsFacade) KeepCallAlive(groupID, room, callID, coordinator string) 
 // 1,000 sent ~20,000 messages every 45 s. Now each member in the call tells
 //   - the others in the call (they show who is in it);
 //   - the members it has a link to, at most maxAliveLinked;
+//
 // and one member of the call, the speaker (the coordinator while it is in, else the lowest id),
 // also tells the members it has no link to, at most maxAliveRelayed a round, going round the list.
 var (

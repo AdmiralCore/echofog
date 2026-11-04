@@ -80,6 +80,10 @@ func (n *NodeApi) bootstrapNode(entry string) BootstrapNode {
 
 // GetBootstrapNodes returns the built-in and the user's bootstrap nodes and which are connected.
 func (n *NodeApi) GetBootstrapNodes() (BootstrapStatus, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return BootstrapStatus{}, ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return BootstrapStatus{}, errors.New("node not started")
 	}
@@ -105,6 +109,10 @@ func (n *NodeApi) GetBootstrapNodes() (BootstrapStatus, error) {
 // and dials it at once. The peer ID is required: every node's traffic is obfuscated with a key
 // derived from its ID, so an address alone cannot be dialed.
 func (n *NodeApi) AddBootstrapNode(entry string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}
@@ -145,6 +153,10 @@ func (n *NodeApi) AddBootstrapNode(entry string) error {
 
 // RemoveBootstrapNode forgets one of the user's bootstrap nodes (by any accepted form of it).
 func (n *NodeApi) RemoveBootstrapNode(entry string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}

@@ -71,10 +71,19 @@ func (n *NodeApi) autoSwitchOn() bool {
 }
 
 // GetVPNAutoSwitch tells whether the proxy moves to another exit by itself when one stops working.
-func (n *NodeApi) GetVPNAutoSwitch() bool { return n.autoSwitchOn() }
+func (n *NodeApi) GetVPNAutoSwitch() bool {
+	if n.v2Unavailable() != nil {
+		return false
+	}
+	return n.autoSwitchOn()
+}
 
 // SetVPNAutoSwitch turns automatic exit switching on or off (it is on unless turned off).
 func (n *NodeApi) SetVPNAutoSwitch(on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node is not running")
 	}

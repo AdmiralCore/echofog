@@ -54,6 +54,10 @@ func snapshotKey(password string, salt []byte) []byte {
 
 // GroupSnapshotExport writes a group's snapshot to path, sealed with password.
 func (n *NodeApi) GroupSnapshotExport(groupID, path, password string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if utf8.RuneCountInString(password) < snapshotMinPass {
 		return fmt.Errorf("the password needs at least %d characters", snapshotMinPass)
 	}
@@ -106,6 +110,10 @@ var errSnapshot = errors.New("not a group file, or the password is wrong")
 // GroupSnapshotImport opens a snapshot: it joins the group by its invitation and takes its events
 // in as history.
 func (n *NodeApi) GroupSnapshotImport(path, password string) (GroupSnapshotInfo, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupSnapshotInfo{}, ErrV2NotBuilt
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return GroupSnapshotInfo{}, err

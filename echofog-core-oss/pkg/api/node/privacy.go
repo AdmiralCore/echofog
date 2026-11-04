@@ -54,6 +54,10 @@ func (n *NodeApi) contactsReady() (*contacts.ContactService, error) {
 // BlockPeer blocks a peer: its messages, calls, files and group invitations are ignored, and in
 // shared groups its messages and calls stay hidden. It is not told.
 func (n *NodeApi) BlockPeer(peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	c, err := n.contactsReady()
 	if err != nil {
 		return err
@@ -72,6 +76,10 @@ func (n *NodeApi) BlockPeer(peerID string) error {
 
 // UnblockPeer lifts a block.
 func (n *NodeApi) UnblockPeer(peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	c, err := n.contactsReady()
 	if err != nil {
 		return err
@@ -81,6 +89,10 @@ func (n *NodeApi) UnblockPeer(peerID string) error {
 
 // GetBlockedPeers lists the blocked peers, the latest first.
 func (n *NodeApi) GetBlockedPeers() ([]contacts.Blocked, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	c, err := n.contactsReady()
 	if err != nil {
 		return nil, err
@@ -95,6 +107,10 @@ func (n *NodeApi) GetBlockedPeers() ([]contacts.Blocked, error) {
 // GetMessageRequests lists strangers who wrote first, the latest first. Their messages are read
 // with GetMessages like any chat.
 func (n *NodeApi) GetMessageRequests() ([]contacts.Request, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	c, err := n.contactsReady()
 	if err != nil {
 		return nil, err
@@ -108,6 +124,10 @@ func (n *NodeApi) GetMessageRequests() ([]contacts.Request, error) {
 
 // AcceptMessageRequest makes the stranger a contact named alias.
 func (n *NodeApi) AcceptMessageRequest(peerID, alias string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	c, err := n.contactsReady()
 	if err != nil {
 		return err
@@ -117,6 +137,10 @@ func (n *NodeApi) AcceptMessageRequest(peerID, alias string) error {
 
 // DismissMessageRequest removes a request without blocking; the stranger can write again.
 func (n *NodeApi) DismissMessageRequest(peerID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	c, err := n.contactsReady()
 	if err != nil {
 		return err
@@ -127,6 +151,10 @@ func (n *NodeApi) DismissMessageRequest(peerID string) error {
 // CanRing reports whether a direct call from peer may ring (blocked peers and, by default,
 // strangers may not).
 func (n *NodeApi) CanRing(peerID string) bool {
+	if n.v2Unavailable() != nil {
+		return false
+	}
+
 	id, err := types.PeerIDFromString(strings.ToLower(strings.TrimSpace(peerID)))
 	if err != nil || n.node == nil {
 		return false

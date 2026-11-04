@@ -762,6 +762,10 @@ func (n *NodeApi) openGroups() (*groupsFacade, bool, error) {
 }
 
 func (n *NodeApi) CreateGroup(title, description, kind string) (GroupDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupDTO{}, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupDTO{}, err
@@ -770,6 +774,10 @@ func (n *NodeApi) CreateGroup(title, description, kind string) (GroupDTO, error)
 }
 
 func (n *NodeApi) ListGroups() ([]GroupDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -778,10 +786,18 @@ func (n *NodeApi) ListGroups() ([]GroupDTO, error) {
 }
 
 func (n *NodeApi) GetGroupInvite(groupID string) (string, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return "", ErrV2NotBuilt
+	}
+
 	return n.quickInvite(groupID)
 }
 
 func (n *NodeApi) JoinGroup(invite string) (GroupDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupDTO{}, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupDTO{}, err
@@ -790,6 +806,10 @@ func (n *NodeApi) JoinGroup(invite string) (GroupDTO, error) {
 }
 
 func (n *NodeApi) AddGroupMember(groupID, pubKeyHex string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -798,6 +818,10 @@ func (n *NodeApi) AddGroupMember(groupID, pubKeyHex string) error {
 }
 
 func (n *NodeApi) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -819,6 +843,10 @@ func (n *NodeApi) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
 }
 
 func (n *NodeApi) SendGroupMessage(groupID, text string) (GroupMessageDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupMessageDTO{}, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupMessageDTO{}, err
@@ -851,6 +879,10 @@ func (n *NodeApi) mirrorOwnGroupPost(groupID string, d GroupMessageDTO, err erro
 // in the thread under root ("" none). Every member gets the offer; each who accepts fetches it
 // from this node (the transfer's Delivered counts them).
 func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupMessageDTO{}, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupMessageDTO{}, err
@@ -879,6 +911,10 @@ func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMes
 // GetGroupMessages returns a group's messages, oldest first. A group on the conversation log is
 // read from the log (edits applied, deleted messages left out).
 func (n *NodeApi) GetGroupMessages(groupID string, limit int) ([]GroupMessageDTO, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return nil, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -914,6 +950,10 @@ type CallInvite struct {
 }
 
 func (n *NodeApi) InviteToCall(pubKeyHex string) (CallInvite, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return CallInvite{}, ErrV2NotBuilt
+	}
+
 	pub, derr := hex.DecodeString(strings.TrimSpace(pubKeyHex))
 	if derr != nil || len(pub) != 32 {
 		return CallInvite{}, errors.New("peer key must be 32 bytes of hex")
@@ -957,6 +997,10 @@ func ParseCallInvite(text string) (callID, coordinator string, ok bool) {
 // SubscribeGroupEvents calls cb whenever something happens in a group: a message arrived, members
 // changed, somebody started a call, the node was added to or removed from a group.
 func (n *NodeApi) SubscribeGroupEvents(cb func(GroupEvent)) {
+	if n.v2Unavailable() != nil {
+		return
+	}
+
 	n.groupsH.mu.Lock()
 	n.groupsH.subs = append(n.groupsH.subs, cb)
 	n.groupsH.mu.Unlock()
@@ -973,6 +1017,10 @@ func (n *NodeApi) publishGroupEvent(ev GroupEvent) {
 
 // SetGroupRole gives a member the role admin, moderator, member or restricted.
 func (n *NodeApi) SetGroupRole(groupID, memberID, role string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -982,6 +1030,10 @@ func (n *NodeApi) SetGroupRole(groupID, memberID, role string) error {
 
 // RemoveGroupMember kicks a member out of the group, or bans them.
 func (n *NodeApi) RemoveGroupMember(groupID, memberID string, ban bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -991,6 +1043,10 @@ func (n *NodeApi) RemoveGroupMember(groupID, memberID string, ban bool) error {
 
 // LeaveGroup leaves the group and forgets it on this node.
 func (n *NodeApi) LeaveGroup(groupID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1000,6 +1056,10 @@ func (n *NodeApi) LeaveGroup(groupID string) error {
 
 // StartGroupCall tells the members that a call opens and returns what the caller joins with.
 func (n *NodeApi) StartGroupCall(groupID string) (GroupCall, error) {
+	if err := n.v2Unavailable(); err != nil {
+		return GroupCall{}, ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupCall{}, err
@@ -1009,6 +1069,10 @@ func (n *NodeApi) StartGroupCall(groupID string) (GroupCall, error) {
 
 // KeepGroupCallAlive tells the group the call is still going; call it periodically while in it.
 func (n *NodeApi) KeepGroupCallAlive(groupID, callID, coordinator string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1018,6 +1082,10 @@ func (n *NodeApi) KeepGroupCallAlive(groupID, callID, coordinator string) error 
 
 // ActiveGroupCall is the call going on in the group, if there is one.
 func (n *NodeApi) ActiveGroupCall(groupID string) (GroupCall, bool) {
+	if n.v2Unavailable() != nil {
+		return GroupCall{}, false
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupCall{}, false
@@ -1027,6 +1095,10 @@ func (n *NodeApi) ActiveGroupCall(groupID string) (GroupCall, bool) {
 
 // TransferGroupOwnership hands the group to another member; the owner becomes an admin.
 func (n *NodeApi) TransferGroupOwnership(groupID, memberID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1036,6 +1108,10 @@ func (n *NodeApi) TransferGroupOwnership(groupID, memberID string) error {
 
 // DeleteGroup removes the group for everybody. Only the owner can.
 func (n *NodeApi) DeleteGroup(groupID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1045,6 +1121,10 @@ func (n *NodeApi) DeleteGroup(groupID string) error {
 
 // EndGroupCall tells the group that its call is over. Call it when the last person leaves.
 func (n *NodeApi) EndGroupCall(groupID, callID string) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err

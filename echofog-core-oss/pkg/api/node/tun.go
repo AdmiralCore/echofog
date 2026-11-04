@@ -60,10 +60,19 @@ func ReleaseKillSwitch() error {
 }
 
 // KillSwitchOn reports whether the kill switch is on.
-func (n *NodeApi) KillSwitchOn() bool { return n.tun.killSwitch.Load() }
+func (n *NodeApi) KillSwitchOn() bool {
+	if n.v2Unavailable() != nil {
+		return false
+	}
+	return n.tun.killSwitch.Load()
+}
 
 // SetKillSwitch saves the kill switch and applies it at once, to a running TUN too.
 func (n *NodeApi) SetKillSwitch(on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node is not running")
 	}
@@ -107,11 +116,20 @@ func (n *NodeApi) adoptHeldTun() {
 }
 
 // WholeComputerSupported reports whether this OS can route all traffic through EchoFog.
-func (n *NodeApi) WholeComputerSupported() bool { return tunmode.Supported() }
+func (n *NodeApi) WholeComputerSupported() bool {
+	if n.v2Unavailable() != nil {
+		return false
+	}
+	return tunmode.Supported()
+}
 
 // SetWholeComputer turns whole-computer mode on or off. Turning it on asks for administrator
 // rights (UAC on Windows, polkit on Linux) and requires the proxy to be running.
 func (n *NodeApi) SetWholeComputer(on bool) error {
+	if err := n.v2Unavailable(); err != nil {
+		return ErrV2NotBuilt
+	}
+
 	if n == nil {
 		return errors.New("node is not running")
 	}
