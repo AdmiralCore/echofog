@@ -4,20 +4,21 @@ import (
 	"context"
 	"errors"
 
-	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/internal/storage"
+	apitypes "github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/dto"
 )
 
 type ContactService struct {
 	storage storage.Storage
-	sw      *swarm.Swarm
+	// wire is the network side (see Wire); nil on a node without one, or in tests.
+	wire Wire
 }
 
-func NewContactService(storage storage.Storage, sw *swarm.Swarm) *ContactService {
+func NewContactService(storage storage.Storage, wire Wire) *ContactService {
 	return &ContactService{
 		storage: storage,
-		sw:      sw,
+		wire:    wire,
 	}
 }
 
@@ -104,6 +105,20 @@ func (c *ContactService) NewContact(contactDTO dto.ContactDTO) error {
 
 func (c *ContactService) Exists(contactID string) bool {
 	return c.storage.Exists(c.contactKey(contactID))
+}
+
+// Online reports whether the network has a live session with peerID (its 64-character hex form).
+// A node without a wire — a server-role node, or a test — knows no reachable peer and answers
+// false; a malformed ID does too. This is the one question contacts asks the network (Wire).
+func (c *ContactService) Online(peerID string) bool {
+	if c.wire == nil {
+		return false
+	}
+	id, err := apitypes.PeerIDFromString(peerID)
+	if err != nil {
+		return false
+	}
+	return c.wire.Connected(id)
 }
 
 // The peer ID in a key is blinded, so the database does not list whom we know.

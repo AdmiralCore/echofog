@@ -48,24 +48,56 @@ var (
 	ErrIdentityMismatch   = errors.New("the init packet names another identity key than the sender's bundle")
 	ErrInitWithoutMessage = errors.New("the init packet carries no message")
 	ErrInitRejected       = errors.New("no prekey of ours opens this init packet")
+	ErrNoIdentityKey      = errors.New("the X3DH identity key source is not set")
 )
 
 type X3DHEngine struct {
 	bundle       *keymanager.PublicBundle
 	st           storage.Storage
 	accntManager *keymanager.AccountManager
+	labels       Labels
+	identity     IdentityKeySource
 }
 
+// NewX3DHEngine is the v1 engine: the v1 key-schedule labels, and the identity key derived from
+// the account.
 func NewX3DHEngine(
 	myBundle *keymanager.PublicBundle,
 	st storage.Storage,
 	ac *keymanager.AccountManager,
 ) *X3DHEngine {
+	return NewX3DHEngineWithConfig(myBundle, st, ac, Config{})
+}
+
+// NewX3DHEngineWithConfig builds an engine whose key-schedule labels and identity key source are
+// parameters. A zero Config gives exactly the v1 engine.
+func NewX3DHEngineWithConfig(
+	myBundle *keymanager.PublicBundle,
+	st storage.Storage,
+	ac *keymanager.AccountManager,
+	cfg Config,
+) *X3DHEngine {
 	return &X3DHEngine{
 		bundle:       myBundle,
 		st:           st,
 		accntManager: ac,
+		labels:       cfg.Labels.resolved(),
+		identity:     cfg.Identity,
 	}
+}
+
+// identityKey returns the private X3DH identity DH key of this node: from the configured source,
+// or from the account (v1).
+func (x *X3DHEngine) identityKey() (*memguard.Enclave, error) {
+	src := x.identity
+	if src == nil {
+		if x.accntManager == nil {
+			return nil, ErrNoIdentityKey
+		}
+		src = x.accntManager
+	}
+	priv, _, err := src.GetEncryptionKey()
+	return priv, err
 }
 
 type X3DHParameters struct {
@@ -116,7 +148,7 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 		defer kem.wipe()
 	}
 
-	idPrivEnc, _, err := x.accntManager.GetEncryptionKey()
+	idPrivEnc, err := x.identityKey()
 	if err != nil {
 		return nil, types.X3DHInit{}, err
 	}
@@ -145,7 +177,7 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 		KEM:                kem,
 	}
 
-	rootKeyEnc, err := CalculateX3DH(params)
+	rootKeyEnc, err := CalculateX3DHWithLabels(params, x.labels)
 	if err != nil {
 		return nil, types.X3DHInit{}, err
 	}
@@ -161,12 +193,13 @@ func (x *X3DHEngine) X3DHInit(peerBundle keymanager.PublicBundle) (*X3DHSession,
 		initPacket.KEMCiphertext, initPacket.KEMKeyID = kem.Ciphertext, &id
 	}
 
-	x3dhSession, err := NewX3DHSession(
+	x3dhSession, err := newX3DHSession(
 		rootKeyEnc,
 		empPrivEnc,
 		peerBundle.PeerID,
 		peerBundle.SignedPreKey,
 		true,
+		x.labels,
 	)
 	if err != nil {
 		return nil, types.X3DHInit{}, err
@@ -281,12 +314,12 @@ func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBu
 	if !bytes.Equal(init.IdentityKey[:], peerBundle.IdentityKey[:]) {
 		return nil, ErrIdentityMismatch
 	}
-	idPrivEnc, _, err := x.accntManager.GetEncryptionKey()
+	idPrivEnc, err := x.identityKey()
 	if err != nil {
 		return nil, err
 	}
 
-	rootKeyEnc, err := calculateReceiver(idPrivEnc, spk, opk, peerBundle.IdentityKey, init.EphemeralKey, kem)
+	rootKeyEnc, err := calculateReceiver(idPrivEnc, spk, opk, peerBundle.IdentityKey, init.EphemeralKey, kem, x.labels)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +329,7 @@ func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBu
 		return nil, err
 	}
 
-	session, err := NewX3DHSession(rootKeyEnc, newPrivEnc, peerBundle.PeerID, init.EphemeralKey, false)
+	session, err := newX3DHSession(rootKeyEnc, newPrivEnc, peerBundle.PeerID, init.EphemeralKey, false, x.labels)
 	if err != nil {
 		return nil, err
 	}
@@ -310,8 +343,14 @@ func (x *X3DHEngine) receive(init types.X3DHInit, peerBundle keymanager.PublicBu
 }
 
 // CalculateX3DH is the initiator's side: DH1 = DH(IK_A, SPK_B), DH2 = DH(EK_A, IK_B),
-// DH3 = DH(EK_A, SPK_B), DH4 = DH(EK_A, OPK_B).
+// DH3 = DH(EK_A, SPK_B), DH4 = DH(EK_A, OPK_B). It uses the v1 labels; v2 calls
+// CalculateX3DHWithLabels.
 func CalculateX3DH(params X3DHParameters) (*memguard.Enclave, error) {
+	return CalculateX3DHWithLabels(params, V1Labels)
+}
+
+// CalculateX3DHWithLabels is CalculateX3DH with the KDF labels of the protocol version.
+func CalculateX3DHWithLabels(params X3DHParameters, labels Labels) (*memguard.Enclave, error) {
 	dh1, err := dhSecure(params.MyIdentityPriv, params.RemoteSignedPrePub)
 	if err != nil {
 		return nil, err
@@ -341,10 +380,10 @@ func CalculateX3DH(params X3DHParameters) (*memguard.Enclave, error) {
 		}
 	}
 
-	return dhHKDF(dh1, dh2, dh3, dh4, params.KEM)
+	return dhHKDF(dh1, dh2, dh3, dh4, params.KEM, labels)
 }
 
-// CalculateX3DH_Receiver is the responder's side of classic X3DH.
+// CalculateX3DH_Receiver is the responder's side of classic X3DH, with the v1 labels.
 func CalculateX3DH_Receiver(
 	myIdentityPrivEnc *memguard.Enclave,
 	mySignedPrePrivEnc *memguard.Enclave,
@@ -352,7 +391,7 @@ func CalculateX3DH_Receiver(
 	remoteIdentityPub [32]byte,
 	remoteEphemeralPub [32]byte,
 ) (*memguard.Enclave, error) {
-	return calculateReceiver(myIdentityPrivEnc, mySignedPrePrivEnc, myOneTimePrivEnc, remoteIdentityPub, remoteEphemeralPub, nil)
+	return calculateReceiver(myIdentityPrivEnc, mySignedPrePrivEnc, myOneTimePrivEnc, remoteIdentityPub, remoteEphemeralPub, nil, V1Labels)
 }
 
 // calculateReceiver is the responder's side; kem is the KEM part of a PQXDH init, nil for classic.
@@ -363,6 +402,7 @@ func calculateReceiver(
 	remoteIdentityPub [32]byte,
 	remoteEphemeralPub [32]byte,
 	kem *KEMInput,
+	labels Labels,
 ) (*memguard.Enclave, error) {
 
 	dh1, err := dhSecure(mySignedPrePrivEnc, remoteIdentityPub)
@@ -394,7 +434,7 @@ func calculateReceiver(
 		}
 	}
 
-	return dhHKDF(dh1, dh2, dh3, dh4, kem)
+	return dhHKDF(dh1, dh2, dh3, dh4, kem, labels)
 }
 
 func dhSecure(privEnc *memguard.Enclave, pub [32]byte) ([]byte, error) {
@@ -413,9 +453,9 @@ func dhSecure(privEnc *memguard.Enclave, pub [32]byte) ([]byte, error) {
 
 // dhHKDF: SK = HKDF(F || DH1 || DH2 || DH3 [|| DH4]) with F = 32 bytes of 0xFF, a zero salt and
 // the protocol name as info, as the X3DH specification gives for X25519. With kem (PQXDH, as in
-// Signal's PQXDH) the KEM shared secret follows the DH outputs, and the info is infoPQXDH || KEM
-// key id || SHA-256(KEM ciphertext). The classic form is unchanged from v0.2.0.
-func dhHKDF(dh1, dh2, dh3, dh4 []byte, kem *KEMInput) (*memguard.Enclave, error) {
+// Signal's PQXDH) the KEM shared secret follows the DH outputs, and the info is the PQXDH label ||
+// KEM key id || SHA-256(KEM ciphertext). The v1 labels are unchanged from v0.2.0.
+func dhHKDF(dh1, dh2, dh3, dh4 []byte, kem *KEMInput, labels Labels) (*memguard.Enclave, error) {
 	defer memguard.WipeBytes(dh1)
 	defer memguard.WipeBytes(dh2)
 	defer memguard.WipeBytes(dh3)
@@ -438,14 +478,14 @@ func dhHKDF(dh1, dh2, dh3, dh4 []byte, kem *KEMInput) (*memguard.Enclave, error)
 		}
 	}
 
-	info := []byte(DOMAIN_SEPARATION)
+	info := []byte(labels.Session)
 	if kem != nil {
 		if len(kem.SharedSecret) != mlkem.SharedKeySize {
 			return nil, ErrBadKEMInit
 		}
 		idx += copy(buf[idx:], kem.SharedSecret)
 		ctHash := sha256.Sum256(kem.Ciphertext)
-		info = append(append([]byte(infoPQXDH), kem.KeyID[:]...), ctHash[:]...)
+		info = append(append([]byte(labels.PQXDH), kem.KeyID[:]...), ctHash[:]...)
 	}
 
 	salt := make([]byte, 32)

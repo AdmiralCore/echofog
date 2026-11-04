@@ -59,7 +59,7 @@ func (am *AccountManager) StorageKey() (*memguard.Enclave, error) {
 	}
 	defer seed.Destroy()
 	key := make([]byte, 32)
-	if _, err := io.ReadFull(hkdf.New(sha256.New, seed.Bytes(), nil, []byte("FOG_STORAGE_KEY_V1")), key); err != nil {
+	if _, err := io.ReadFull(hkdf.New(sha256.New, seed.Bytes(), nil, []byte(am.options.storageKeyInfo())), key); err != nil {
 		return nil, err
 	}
 	am.storageKey = memguard.NewEnclave(key) // wipes key

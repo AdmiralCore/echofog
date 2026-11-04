@@ -33,6 +33,17 @@ type x3dhSessionDTO struct {
 	InitMsgKey       []byte
 	PastRemoteDH     [][32]byte // absent in sessions stored before it: decodes as none
 	PQ               bool       // absent in sessions stored before PQXDH: classic
+	// Labels of the key schedule. Absent in sessions stored by v1: they decode as empty and mean
+	// the v1 labels (see FromBytes).
+	Labels labelsDTO
+}
+
+// labelsDTO is Labels on the wire of the session store.
+type labelsDTO struct {
+	Session    string
+	PQXDH      string
+	InitChains string
+	Root       string
 }
 
 type chainStateDTO struct {
@@ -53,7 +64,13 @@ func (x *X3DHSession) ToBytes() ([]byte, error) {
 		RemoteRatchetPub: x.RemoteRatchetPub,
 		IsInitiator:      x.IsInitiator,
 		PQ:               x.PQ,
-		SkippedKeys:      make(map[[32]byte]map[uint32][]byte),
+		Labels: labelsDTO{
+			Session:    x.labels.Session,
+			PQXDH:      x.labels.PQXDH,
+			InitChains: x.labels.InitChains,
+			Root:       x.labels.Root,
+		},
+		SkippedKeys: make(map[[32]byte]map[uint32][]byte),
 	}
 
 	getEnc := func(e *memguard.Enclave) ([]byte, error) {
@@ -143,6 +160,12 @@ func FromBytes(data []byte) (*X3DHSession, error) {
 		AD:               dto.AD,
 		InitEK:           dto.InitEK,
 		PQ:               dto.PQ,
+		labels: Labels{
+			Session:    dto.Labels.Session,
+			PQXDH:      dto.Labels.PQXDH,
+			InitChains: dto.Labels.InitChains,
+			Root:       dto.Labels.Root,
+		}.resolved(),
 	}
 
 	session.RootKey = sealEnc(dto.RootKey)
