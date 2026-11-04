@@ -3,7 +3,6 @@ package call
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
@@ -225,7 +224,7 @@ func (m *CallManager) RequestRelayChange(streamID string) error {
 		return ErrNotWatching
 	}
 	m.logger.Info("Asking for another relay on user request", "stream", streamID, "relay", calllog.Peer(parent))
-	room.reparentAsked[streamID] = time.Now()
+	room.reparentAsked[streamID] = m.now()
 	m.toCoordinatorLocked(room, signaling.ActionStreamReparent, signaling.ReparentPayload{StreamID: streamID, Avoid: parent, Reason: "user"})
 	m.unlockAndFlush()
 	return nil
@@ -306,7 +305,7 @@ func (m *CallManager) subscribeLocked(room *ActiveRoomState, sub signaling.Strea
 	m.floodLocked(room, signaling.ActionStreamTreeUpdate, sm)
 	m.afterStreamTreeChangeLocked(room, sm)
 	if sub.Subscriber == m.selfID {
-		m.requestKeyframeLocked(room, sub.StreamID, time.Now())
+		m.requestKeyframeLocked(room, sub.StreamID, m.now())
 	}
 }
 
@@ -336,7 +335,7 @@ func (m *CallManager) applyStreamManifestLocked(room *ActiveRoomState, sm *tree.
 	}
 	if attached && room.watching[sm.StreamID] && (!wasAttached || parent != prevParent) {
 		// new path: ask for a keyframe instead of waiting for the next periodic one
-		m.requestKeyframeLocked(room, sm.StreamID, time.Now())
+		m.requestKeyframeLocked(room, sm.StreamID, m.now())
 	}
 	m.afterStreamTreeChangeLocked(room, sm)
 }

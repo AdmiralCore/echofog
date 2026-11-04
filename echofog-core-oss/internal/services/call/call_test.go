@@ -16,6 +16,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
+	"github.com/echofog/echofog-core/internal/testutil"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,7 +134,10 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	m.sent.Add(1)
 	data := append([]byte(nil), payload...)
 	wait := time.Duration(0)
-	if link != nil {
+	// The shapes model a media bottleneck. Call control is small and travels reliably: letting
+	// a full media queue drop a heartbeat or a new media key would fail the room, not the link.
+	media := t == net_types.TypeCallMediaAudio || t == net_types.TypeCallMediaVideo
+	if link != nil && media {
 		var ok bool
 		if wait, ok = link.admit(len(payload), time.Now()); !ok {
 			return nil
@@ -232,7 +236,7 @@ func newRoom(t *testing.T, m *mesh, n int) ([]*testNode, []byte) {
 			_ = nd.cm.LeaveRoom()
 		}
 	})
-	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 5*time.Second, 20*time.Millisecond, "room did not form")
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, testutil.Slow(5*time.Second), 20*time.Millisecond, "room did not form")
 	return nodes, key
 }
 
@@ -282,6 +286,23 @@ func unit(i uint32, size int) []byte {
 	b := make([]byte, size)
 	binary.BigEndian.PutUint32(b, i)
 	return b
+}
+
+// A manager takes the times of its events from its clock, so a test can pin them; the
+// default is time.Now.
+func TestRoom_JoinUsesTheManagerClock(t *testing.T) {
+	m := newMesh()
+	s := newTestSigner()
+	cm := newCallManager(meshPort{m, s.id()}, s, s.id())
+	fixed := time.Now().Add(-time.Minute)
+	cm.now = func() time.Time { return fixed }
+	require.NoError(t, cm.JoinRoom("room-1", s.id(), make([]byte, 32), tree.PeerNodeProfile{UploadKbps: 40000}))
+	t.Cleanup(func() { _ = cm.LeaveRoom() })
+
+	cm.mu.RLock()
+	got := cm.activeRoom.startedAt
+	cm.mu.RUnlock()
+	assert.Equal(t, fixed, got)
 }
 
 func TestRoom_FormsAndAgreesOnTopology(t *testing.T) {
@@ -1007,6 +1028,74 @@ func TestRoom_StaleReportAboutCoordinatorIsIgnored(t *testing.T) {
 	assert.True(t, still, "the coordinator stays in its own room")
 }
 
+// A node that led the call and then joined the half that kept going is no longer the coordinator.
+// A member of its old half that still probes it must not take its answer as proof of life, or it
+// never notices the new coordinator and stays behind alone at the old epoch.
+func TestRoom_AFormerCoordinatorDoesNotAnswerForTheCoordinator(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 2)
+	wasCoord, member := nodes[0], nodes[1]
+
+	wasCoord.cm.mu.Lock()
+	wasCoord.cm.activeRoom.Coordinator = member.id
+	wasCoord.cm.activeRoom.IsCoordinator = false
+	wasCoord.cm.mu.Unlock()
+
+	var pongs atomic.Int32
+	m.mu.Lock()
+	m.tap = func(from, to types.PeerID, _ net_types.MessageType, payload []byte) {
+		if from != wasCoord.id || to != member.id {
+			return
+		}
+		env, err := signaling.DecodeSignal(member.cm.peekSignal(from, payload))
+		if err == nil && env.Action == signaling.ActionPong {
+			pongs.Add(1)
+		}
+	}
+	m.mu.Unlock()
+
+	raw, err := signaling.EncodeSignedSignal(member.cm.signer, signaling.ActionPing, "room-1", member.id, 1, nil)
+	require.NoError(t, err)
+	require.NoError(t, wasCoord.cm.handleIncomingSignaling(raw, member.id))
+	time.Sleep(200 * time.Millisecond) // the pong, if any, travels asynchronously
+	assert.Zero(t, pongs.Load(), "a node that no longer leads does not answer for the coordinator")
+}
+
+// A coordinator left alone by a cut line has counted down its members on its own, so its epoch is
+// higher than that of the room that kept going. When it asks that room to take it back, the room's
+// sync must bring it in even at the older epoch: the lone half yields, the half with the members
+// keeps the call.
+func TestRoom_LoneCoordinatorTakesTheRoomThatKeptGoing(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	kept, cut := nodes[0], nodes[1]
+
+	// the cut-off node as it comes back: alone, leading its own half at a higher epoch
+	cut.cm.mu.Lock()
+	room := cut.cm.activeRoom
+	room.Coordinator, room.IsCoordinator = cut.id, true
+	room.formerCoordinator = kept.id
+	room.joined = true
+	room.Epoch = 40
+	room.ConnectedPeers = map[types.PeerID]tree.PeerNodeProfile{cut.id: room.MyProfile}
+	cut.cm.mu.Unlock()
+
+	kept.cm.mu.Lock()
+	sync := signaling.RoomSyncPayload{Voice: kept.cm.activeRoom.VoiceManifest, Streams: kept.cm.activeRoom.StreamEngine.Snapshot()}
+	raw, err := kept.cm.encodeLocked(kept.cm.activeRoom, signaling.ActionRoomSync, sync)
+	kept.cm.mu.Unlock()
+	require.NoError(t, err)
+	require.Greater(t, len(sync.Voice.Profiles), 1, "the kept room has the other members")
+
+	require.NoError(t, cut.cm.handleIncomingSignaling(raw, kept.id))
+	s, ok := cut.cm.Snapshot()
+	require.True(t, ok)
+	assert.Equal(t, kept.id, s.Coordinator, "the lone half joins the room that kept going")
+	assert.False(t, s.IsCoordinator)
+	assert.Equal(t, sync.Voice.Epoch, s.Epoch)
+	assert.True(t, s.Joined)
+}
+
 // A member cut off for longer than the timeouts takes over; once its line is back the two halves
 // become one room again.
 func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
@@ -1018,16 +1107,16 @@ func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
 	require.Eventually(t, func() bool {
 		s, ok := cut.cm.Snapshot()
 		return ok && s.IsCoordinator
-	}, 6*time.Second, 50*time.Millisecond, "the cut-off member takes over alone")
+	}, testutil.Slow(6*time.Second), 50*time.Millisecond, "the cut-off member takes over alone")
 	require.Eventually(t, func() bool {
 		s, _ := nodes[0].cm.Snapshot()
 		return len(s.Members) == 2
-	}, 6*time.Second, 50*time.Millisecond, "the coordinator drops it")
+	}, testutil.Slow(6*time.Second), 50*time.Millisecond, "the coordinator drops it")
 
 	m.mu.Lock()
 	delete(m.dead, cut.id)
 	m.mu.Unlock()
-	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 6*time.Second, 50*time.Millisecond,
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, testutil.Slow(6*time.Second), 50*time.Millisecond,
 		"one room again: %v", dumpRoom(nodes, nil))
 }
 
