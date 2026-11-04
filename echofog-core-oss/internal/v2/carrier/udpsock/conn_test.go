@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -163,6 +164,16 @@ func TestDialWritesToConnectedSocket(t *testing.T) {
 	if ua, ok := from.(*net.UDPAddr); !ok || ua.Port != addrOf(t, a).Port {
 		t.Fatalf("source %v, want %v", from, addrOf(t, a))
 	}
+
+	// A batch read on a connected socket reads like a single one (quic-go never connects its
+	// sockets, but the socket layer must not care).
+	if _, err := a.WriteTo([]byte("pong2"), addrOf(t, c)); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	ms = messages(1, 64)
+	if n, err := c.ReadBatch(ms, 0); err != nil || n != 1 || string(ms[0].Buffers[0][:ms[0].N]) != "pong2" {
+		t.Fatalf("batch read on a connected socket: %d %v", n, err)
+	}
 }
 
 func TestWriteBatchOnConnectedSocket(t *testing.T) {
@@ -251,6 +262,11 @@ func TestTransportConn(t *testing.T) {
 		ReadMsgUDP(b, oob []byte) (int, int, int, *net.UDPAddr, error)
 	}); ok {
 		t.Fatalf("restricted mode hands %T to the transport with its OOB methods", handed)
+	}
+	if _, ok := handed.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	}); !ok {
+		t.Fatalf("restricted mode hides SyscallConn: the transport cannot set DF or tune the buffers")
 	}
 	if restricted.ecnOn || restricted.gso.Load() || restricted.batchRead.Load() {
 		t.Fatalf("restricted socket has ecn=%v gso=%v batch=%v, want all off",

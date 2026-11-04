@@ -38,8 +38,8 @@ const (
 // Options are the local policy and app hooks of one socket (platforms.md §1.1, §2).
 type Options struct {
 	// Restricted is the udp=restricted flag: no GSO, no recvmmsg and no ECN from the start,
-	// one call per datagram. The app also gets the bare socket from TransportConn, so a
-	// transport that probes for the fast path stays on single calls.
+	// one call per datagram. TransportConn then hands the transport a plain view of the
+	// socket, so a transport that probes for the fast path stays on single calls.
 	Restricted bool
 
 	// Protect receives the socket's file descriptor before the socket binds, connects or sees
@@ -52,8 +52,8 @@ type Options struct {
 // quic-go probes for its fast path: SyscallConn, ReadMsgUDP, WriteMsgUDP, SetReadBuffer,
 // SetWriteBuffer and ReadBatch.
 //
-// One goroutine may read while any number of goroutines write; ReadBatch and ReadMsgUDP must
-// not run concurrently with each other.
+// One goroutine may read (through ReadFrom, ReadMsgUDP or ReadBatch, one at a time) while any
+// number of goroutines write.
 type Conn struct {
 	c   *net.UDPConn
 	pc  *ipv4.PacketConn
@@ -175,8 +175,25 @@ func (c *Conn) TransportConn() net.PacketConn {
 }
 
 // plainConn is the net.PacketConn view of a socket without the OOB methods. quic-go enables its
-// fast path for any *net.UDPConn, so restricted mode must hide even the bare socket's methods.
-type plainConn struct{ net.PacketConn }
+// fast path for any *net.UDPConn, so restricted mode must hide even the bare socket's methods;
+// it keeps SyscallConn and the buffer setters, which the transport uses to set DF and grow the
+// kernel buffers without turning GSO, recvmmsg or ECN on.
+type plainConn struct{ c *net.UDPConn }
+
+func (p plainConn) ReadFrom(b []byte) (int, net.Addr, error) { return p.c.ReadFrom(b) }
+func (p plainConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return p.c.WriteTo(b, addr)
+}
+func (p plainConn) Close() error                       { return p.c.Close() }
+func (p plainConn) LocalAddr() net.Addr                { return p.c.LocalAddr() }
+func (p plainConn) SetDeadline(t time.Time) error      { return p.c.SetDeadline(t) }
+func (p plainConn) SetReadDeadline(t time.Time) error  { return p.c.SetReadDeadline(t) }
+func (p plainConn) SetWriteDeadline(t time.Time) error { return p.c.SetWriteDeadline(t) }
+func (p plainConn) SetReadBuffer(n int) error          { return p.c.SetReadBuffer(n) }
+func (p plainConn) SetWriteBuffer(n int) error         { return p.c.SetWriteBuffer(n) }
+func (p plainConn) SyscallConn() (syscall.RawConn, error) {
+	return p.c.SyscallConn()
+}
 
 // ReadFrom reads one datagram without its control messages.
 func (c *Conn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -187,7 +204,8 @@ func (c *Conn) ReadFrom(p []byte) (int, net.Addr, error) {
 	return n, addr, nil
 }
 
-// WriteTo writes one datagram without control messages.
+// WriteTo writes one datagram without control messages. On a connected socket the destination
+// is the peer from Dial, whatever addr says.
 func (c *Conn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	var ua *net.UDPAddr
 	if addr != nil {
@@ -242,8 +260,10 @@ func (c *Conn) ReadBatch(ms []ipv4.Message, flags int) (int, error) {
 	if len(ms) == 0 {
 		return 0, nil
 	}
-	if len(ms[0].Buffers) == 0 || ms[0].Buffers[0] == nil {
-		return 0, ErrNoBuffer
+	for i := range ms {
+		if len(ms[i].Buffers) == 0 || ms[i].Buffers[0] == nil {
+			return 0, ErrNoBuffer
+		}
 	}
 	if c.opt.Restricted || !c.batchRead.Load() {
 		return c.readOne(ms)
@@ -281,6 +301,9 @@ func (c *Conn) WriteBatch(addr *net.UDPAddr, bufs [][]byte) (int, error) {
 		}
 		if seg := segmentable(chunk); seg >= minGSOSegment && !c.opt.Restricted && c.gso.Load() {
 			if limit := maxTrainBytes / seg; limit < len(chunk) {
+				if limit < 2 {
+					limit = 2
+				}
 				chunk = chunk[:limit]
 			}
 			err := c.writeGSO(chunk, addr, seg)
@@ -397,5 +420,5 @@ func (c *Conn) SetDeadline(t time.Time) error      { return c.c.SetDeadline(t) }
 func (c *Conn) SetReadDeadline(t time.Time) error  { return c.c.SetReadDeadline(t) }
 func (c *Conn) SetWriteDeadline(t time.Time) error { return c.c.SetWriteDeadline(t) }
 
-func (c *Conn) SetReadBuffer(bytes int) error  { return c.c.SetReadBuffer(bytes) }
-func (c *Conn) SetWriteBuffer(bytes int) error { return c.c.SetWriteBuffer(bytes) }
+func (c *Conn) SetReadBuffer(n int) error  { return c.c.SetReadBuffer(n) }
+func (c *Conn) SetWriteBuffer(n int) error { return c.c.SetWriteBuffer(n) }
