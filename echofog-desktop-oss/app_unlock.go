@@ -156,7 +156,7 @@ func (a *App) AutoUnlock() AutoUnlockDTO {
 		return AutoUnlockDTO{}
 	}
 	a.activeProfile = profile
-	cfg := api.GetDefaultConfig(profile)
+	cfg := api.GetConfiguredConfig(profile)
 	node := coreNode.NewNode(a.ctx, cfg, profile)
 	nodeAPI := api.NewNodeApi(node)
 	askPayments, err := nodeAPI.LoginRemembered()

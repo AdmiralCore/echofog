@@ -57,6 +57,10 @@ type NodeApi struct {
 	nextAnon         *string  // anonymous mode saved for the next start, nil: not changed (guarded by settingsMu)
 	nextAnonWallet   *bool    // the wallet allowed out in anonymous mode, saved (guarded by settingsMu)
 
+	// backends are the domain implementations chosen at start-up: the facade itself at protocol 1,
+	// the not-built v2 backends at protocol 2 (T11.1b-e replace the bodies with delegation).
+	backends backends
+
 	Logger *slog.Logger
 }
 
@@ -71,6 +75,7 @@ func NewNodeApi(node *node.Node) *NodeApi {
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}
 	api.tun.killSwitch.Store(saved.KillSwitch == nil || *saved.KillSwitch)
+	api.backends = chooseBackends(node.Cfg.ProtocolOrDefault(), api)
 	tonwallet.SetHTTPClient(api.OwnHTTPClient) // the wallet's lookups go where the app's own do
 	// the conversation logs take chat traffic from the very first message on
 	node.OnMessengerReady(func() { _, _ = api.convsFacade() })
@@ -109,6 +114,10 @@ func (n *NodeApi) StartNode() error {
 	pinned := n.pinHeldNode()
 	if err := n.node.Start(); err != nil {
 		return err
+	}
+	if n.node.NetworkOff() {
+		// protocol 2: storage, wallet, profile and settings are up; there is no v1 network to tune
+		return nil
 	}
 	if pinned != 0 && n.node.Transport != nil {
 		_ = n.node.Transport.BindToInterface(pinned)

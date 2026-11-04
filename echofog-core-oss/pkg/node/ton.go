@@ -64,7 +64,11 @@ func (n *Node) initTonWallet() {
 	n.Logger.Info("TON wallet ready", "network", net, "address", w.Address())
 
 	// Vouchers signed to this node and not cashed yet are money: keep cashing them even when the
-	// exit is not shared any more.
+	// exit is not shared any more. Protocol 2 keeps the v1 network off, and cashing goes to the
+	// TON network, so the book waits for the v2 stack.
+	if n.NetworkOff() {
+		return
+	}
 	if p := n.exitVoucherPath(); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			n.exitLedgerMu.Lock()

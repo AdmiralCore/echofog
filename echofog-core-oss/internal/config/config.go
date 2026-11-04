@@ -48,6 +48,25 @@ type AccessConfig struct {
 // Gated reports whether the node keeps to the people it invited.
 func (a AccessConfig) Gated() bool { return a.Mode == AccessHidden || a.Mode == AccessIsolated }
 
+// Values of AppConfig.Protocol: which node implementation runs, not the wire protocol version
+// (that is NetworkConfig.ProtocolVersion).
+const (
+	// ProtocolV1 runs the v1 network stack. The default.
+	ProtocolV1 = 1
+	// ProtocolV2 runs v2: for now the node starts without the v1 network (storage, wallet,
+	// profile and settings still work) while internal/v2/app is being built.
+	ProtocolV2 = 2
+)
+
+// protocolFromEnv lets a test build or the owner switch the mode without editing a profile:
+// ECHOFOG_PROTOCOL=2 starts in v2 mode. The saved profile setting still wins over it.
+func protocolFromEnv() int {
+	if strings.TrimSpace(os.Getenv("ECHOFOG_PROTOCOL")) == "2" {
+		return ProtocolV2
+	}
+	return ProtocolV1
+}
+
 // Values of AppConfig.Role.
 const (
 	// RoleClient runs everything a person needs: chat, contacts, calls, file transfer, and answers
@@ -493,10 +512,25 @@ type AppConfig struct {
 	Access   AccessConfig   `json:"access"`
 	// Role is RoleClient (default, also when empty) or RoleServer.
 	Role string `json:"role,omitempty"`
+	// Protocol is ProtocolV1 (default, also when empty or unknown) or ProtocolV2. It selects the
+	// implementation at the next start; the saved profile setting overrides the default.
+	Protocol int `json:"protocol,omitempty"`
 }
 
 // IsServer reports whether the node runs as a server: network services only, no chat or calls.
 func (c *AppConfig) IsServer() bool { return c != nil && c.Role == RoleServer }
+
+// ProtocolOrDefault is the protocol to run: ProtocolV2 only when asked for it explicitly,
+// ProtocolV1 otherwise. An unknown value never selects a half-working mode.
+func (c *AppConfig) ProtocolOrDefault() int {
+	if c != nil && c.Protocol == ProtocolV2 {
+		return ProtocolV2
+	}
+	return ProtocolV1
+}
+
+// IsV2 reports whether this configuration starts the v2 node (without the v1 network for now).
+func (c *AppConfig) IsV2() bool { return c.ProtocolOrDefault() == ProtocolV2 }
 
 // DefaultTonNetwork is the TON network of the built-in wallet: "testnet" while the vault contract
 // has not had an independent security audit, so testers never pay real money. A release build
@@ -516,6 +550,7 @@ func DefaultConfig(profileName string) *AppConfig {
 	cfg.Ton.Network = DefaultTonNetwork
 	cfg.Access.Mode = AccessPublic
 	cfg.Role = RoleClient
+	cfg.Protocol = protocolFromEnv()
 
 	cfg.Network.ListenAddr = ":0"
 	cfg.Network.MaxConnections = 100
