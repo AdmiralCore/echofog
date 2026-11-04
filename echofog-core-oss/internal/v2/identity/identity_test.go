@@ -240,6 +240,12 @@ func TestSealDeviceList(t *testing.T) {
 	if _, err := a.SealDeviceList(9, notAfter, []identity.DeviceEntry{{Key: d.Handshake().Public()}}); err == nil {
 		t.Fatal("an x25519 key was accepted as a device key")
 	}
+
+	// The format holds at most 16 entries (objects.md §6).
+	tooMany := make([]identity.DeviceEntry, identity.MaxDevices+1)
+	if _, err := a.SealDeviceList(10, notAfter, tooMany); err == nil {
+		t.Fatal("17 devices were accepted")
+	}
 }
 
 func TestExitIdentity(t *testing.T) {

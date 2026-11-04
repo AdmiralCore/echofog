@@ -95,6 +95,9 @@ func TestObserveNotCalledWhenLocked(t *testing.T) {
 	if called {
 		t.Fatal("reduced-protection observer called with locked memory")
 	}
+	if len(observers) != 0 {
+		t.Fatalf("observers kept after a locked probe: %d", len(observers))
+	}
 }
 
 func TestLockedValue(t *testing.T) {

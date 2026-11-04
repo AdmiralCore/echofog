@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/keys"
@@ -10,6 +11,9 @@ import (
 
 // DeviceListLifetime is the lifetime of a device list (objects.md §6: at most 30 days).
 const DeviceListLifetime = 30 * 24 * time.Hour
+
+// MaxDevices is the processing limit of a device list (objects.md §6).
+const MaxDevices = 16
 
 // DeviceEntry is one device in a signed device list.
 type DeviceEntry struct {
@@ -27,6 +31,9 @@ type DeviceEntry struct {
 // object is verified before it is returned, so a bad entry (for example a non-Ed25519 key) is an
 // error here rather than at the peer.
 func (a *Account) SealDeviceList(seq, notAfter uint64, entries []DeviceEntry) ([]byte, error) {
+	if len(entries) > MaxDevices {
+		return nil, fmt.Errorf("identity: %d devices in a list of at most %d", len(entries), MaxDevices)
+	}
 	body := &pb.DeviceList{Devices: make([]*pb.Device, 0, len(entries))}
 	for _, e := range entries {
 		var flags uint32

@@ -91,13 +91,15 @@ func Probe() Status {
 	probeMu.Lock()
 	st := probeRes
 	var obs []func(Status)
-	if decided && st.Level != LevelLocked && len(observers) > 0 {
+	if decided {
 		obs, observers = observers, nil
 	}
 	probeMu.Unlock()
 
-	for _, fn := range obs {
-		fn(st)
+	if st.Level != LevelLocked {
+		for _, fn := range obs {
+			fn(st)
+		}
 	}
 	return st
 }
