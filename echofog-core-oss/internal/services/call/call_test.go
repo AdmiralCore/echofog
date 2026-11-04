@@ -1028,6 +1028,41 @@ func TestRoom_StaleReportAboutCoordinatorIsIgnored(t *testing.T) {
 	assert.True(t, still, "the coordinator stays in its own room")
 }
 
+// A coordinator left alone by a cut line has counted down its members on its own, so its epoch is
+// higher than that of the room that kept going. When it asks that room to take it back, the room's
+// sync must bring it in even at the older epoch: the lone half yields, the half with the members
+// keeps the call.
+func TestRoom_LoneCoordinatorTakesTheRoomThatKeptGoing(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	kept, cut := nodes[0], nodes[1]
+
+	// the cut-off node as it comes back: alone, leading its own half at a higher epoch
+	cut.cm.mu.Lock()
+	room := cut.cm.activeRoom
+	room.Coordinator, room.IsCoordinator = cut.id, true
+	room.formerCoordinator = kept.id
+	room.joined = true
+	room.Epoch = 40
+	room.ConnectedPeers = map[types.PeerID]tree.PeerNodeProfile{cut.id: room.MyProfile}
+	cut.cm.mu.Unlock()
+
+	kept.cm.mu.Lock()
+	sync := signaling.RoomSyncPayload{Voice: kept.cm.activeRoom.VoiceManifest, Streams: kept.cm.activeRoom.StreamEngine.Snapshot()}
+	raw, err := kept.cm.encodeLocked(kept.cm.activeRoom, signaling.ActionRoomSync, sync)
+	kept.cm.mu.Unlock()
+	require.NoError(t, err)
+	require.Greater(t, len(sync.Voice.Profiles), 1, "the kept room has the other members")
+
+	require.NoError(t, cut.cm.handleIncomingSignaling(raw, kept.id))
+	s, ok := cut.cm.Snapshot()
+	require.True(t, ok)
+	assert.Equal(t, kept.id, s.Coordinator, "the lone half joins the room that kept going")
+	assert.False(t, s.IsCoordinator)
+	assert.Equal(t, sync.Voice.Epoch, s.Epoch)
+	assert.True(t, s.Joined)
+}
+
 // A member cut off for longer than the timeouts takes over; once its line is back the two halves
 // become one room again.
 func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
