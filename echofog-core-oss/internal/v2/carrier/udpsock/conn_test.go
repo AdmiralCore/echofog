@@ -160,7 +160,7 @@ func TestDialWritesToConnectedSocket(t *testing.T) {
 	if err != nil || string(buf[:n]) != "pong" {
 		t.Fatalf("read: %q %v", buf[:n], err)
 	}
-	if from.Port != addrOf(t, a).Port {
+	if ua, ok := from.(*net.UDPAddr); !ok || ua.Port != addrOf(t, a).Port {
 		t.Fatalf("source %v, want %v", from, addrOf(t, a))
 	}
 }
@@ -243,9 +243,14 @@ func TestTransportConn(t *testing.T) {
 	}
 
 	restricted := listen(t, Options{Restricted: true})
-	plain, ok := restricted.TransportConn().(*net.UDPConn)
-	if !ok || plain == nil {
-		t.Fatalf("restricted mode hands %T to the transport, want the bare *net.UDPConn", restricted.TransportConn())
+	handed := restricted.TransportConn()
+	if _, ok := handed.(*Conn); ok {
+		t.Fatal("restricted mode hands the Conn to the transport, which turns the fast path on")
+	}
+	if _, ok := handed.(interface {
+		ReadMsgUDP(b, oob []byte) (int, int, int, *net.UDPAddr, error)
+	}); ok {
+		t.Fatalf("restricted mode hands %T to the transport with its OOB methods", handed)
 	}
 	if restricted.ecnOn || restricted.gso.Load() || restricted.batchRead.Load() {
 		t.Fatalf("restricted socket has ecn=%v gso=%v batch=%v, want all off",
@@ -259,9 +264,11 @@ func TestTransportConn(t *testing.T) {
 		t.Error("restricted socket used a batch read")
 		return 0, errors.New("unexpected")
 	}
-	restricted.writeMsgFn = func([]byte, []byte, *net.UDPAddr) (int, int, error) {
-		t.Error("restricted socket used a control-message write")
-		return 0, 0, errors.New("unexpected")
+	restricted.writeMsgFn = func(p, oob []byte, addr *net.UDPAddr) (int, int, error) {
+		if oob != nil {
+			t.Error("restricted socket wrote with control messages")
+		}
+		return restricted.writeRaw(p, oob, addr)
 	}
 	if _, err := peer.WriteTo([]byte("x"), addrOf(t, restricted)); err != nil {
 		t.Fatalf("write: %v", err)
@@ -404,6 +411,31 @@ func TestReadDeadlineIsNotABatchFailure(t *testing.T) {
 
 // TestNoGSOWithoutTheFlag checks that a restricted socket never asks for a GSO train, and a full
 // socket does at least try one on a kernel that offers it.
+func TestSegmentable(t *testing.T) {
+	buf := func(n int) []byte { return make([]byte, n) }
+	cases := []struct {
+		name string
+		bufs [][]byte
+		want int
+	}{
+		{"one datagram", [][]byte{buf(1200)}, 0},
+		{"empty", nil, 0},
+		{"equal", [][]byte{buf(1200), buf(1200), buf(1200)}, 1200},
+		{"last shorter", [][]byte{buf(1200), buf(1200), buf(700)}, 1200},
+		{"last longer", [][]byte{buf(1200), buf(1400)}, 0},
+		{"middle differs", [][]byte{buf(1200), buf(900), buf(1200)}, 0},
+		{"zero first", [][]byte{buf(0), buf(0)}, 0},
+		{"jumbo", [][]byte{buf(65536), buf(65536)}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := segmentable(tc.bufs); got != tc.want {
+				t.Fatalf("segmentable = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNoGSOWithoutTheFlag(t *testing.T) {
 	if !listen(t, Options{}).gso.Load() {
 		t.Skip("the platform has no GSO")

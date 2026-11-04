@@ -10,6 +10,40 @@ import (
 	"testing"
 )
 
+// TestWriteBatchUsesOneSend proves a train of equal datagrams costs one system call and carries
+// the segment size the kernel expects.
+func TestWriteBatchUsesOneSend(t *testing.T) {
+	a := listen(t, Options{})
+	b := listen(t, Options{})
+	if !a.gso.Load() {
+		t.Skip("the platform has no GSO")
+	}
+	var sends atomic.Int32
+	a.writeMsgFn = func(p, oob []byte, addr *net.UDPAddr) (int, int, error) {
+		sends.Add(1)
+		if seg := gsoSegment(oob); seg != trainSeg {
+			t.Errorf("segment size %d, want %d", seg, trainSeg)
+		}
+		if len(p) != 8*trainSeg {
+			t.Errorf("train of %d bytes, want %d", len(p), 8*trainSeg)
+		}
+		return a.writeRaw(p, oob, addr)
+	}
+	bufs := make([][]byte, 8)
+	for i := range bufs {
+		bufs[i] = bytes.Repeat([]byte{byte(i)}, trainSeg)
+	}
+	if n, err := a.WriteBatch(addrOf(t, b), bufs); err != nil || n != len(bufs) {
+		t.Fatalf("batch write: %d %v", n, err)
+	}
+	if got := sends.Load(); got != 1 {
+		t.Fatalf("%d system calls for one train, want 1", got)
+	}
+	if got := readMessages(t, b, len(bufs)); !equal(got, bufs) {
+		t.Fatalf("train arrived as %d datagrams", len(got))
+	}
+}
+
 // TestWriteMsgUDPGSORefusedSplitsTrain covers the path a QUIC transport takes: it hands one
 // sendmsg with a UDP_SEGMENT control message, the kernel refuses it, and the datagrams still go
 // out one by one.
@@ -23,7 +57,7 @@ func TestWriteMsgUDPGSORefusedSplitsTrain(t *testing.T) {
 	refused := errors.New("UDP_SEGMENT refused")
 	var trains atomic.Int32
 	a.writeMsgFn = func(p, oob []byte, addr *net.UDPAddr) (int, int, error) {
-		if seg, _ := gsoSegment(oob); seg > 0 {
+		if seg := gsoSegment(oob); seg > 0 {
 			trains.Add(1)
 			return 0, 0, refused
 		}
@@ -62,7 +96,7 @@ func TestWriteMsgUDPGSORefusedSplitsTrain(t *testing.T) {
 	// From here on the socket never asks for a train again.
 	before := a.writeMsgFn
 	a.writeMsgFn = func(p, oob []byte, addr *net.UDPAddr) (int, int, error) {
-		if seg, _ := gsoSegment(oob); seg > 0 {
+		if seg := gsoSegment(oob); seg > 0 {
 			t.Error("GSO was tried again after the fallback")
 		}
 		return before(p, oob, addr)
@@ -74,3 +108,5 @@ func TestWriteMsgUDPGSORefusedSplitsTrain(t *testing.T) {
 		t.Fatalf("second train: %d datagrams arrived", len(got))
 	}
 }
+
+const trainSeg = 1200

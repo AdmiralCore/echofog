@@ -14,7 +14,7 @@ func FuzzControlMessages(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		_ = stripECN(nil, b)
 		_ = hasECN(b)
-		_, _ = gsoSegment(b)
+		_ = gsoSegment(b)
 		_ = dropGSO(nil, b)
 	})
 }
