@@ -13,16 +13,18 @@ import (
 	"time"
 )
 
-// androidPackages are the packages gomobile bind compiles with cgo enabled. The desktop
-// WebRTC bridge and the system TUN helper must not reach that build: the first pulls
-// wlynxg/anet through pion, the second needs os/exec and tun2socks.
+// androidPackages are the packages T12.0 changes. The desktop WebRTC bridge and the
+// system TUN helper must not reach a cgo-enabled Android build: the first pulls pion,
+// the second needs os/exec and tun2socks. The rest of internal/services/call keeps the
+// v1 network until T9.0 ports its transport.
 var androidPackages = []string{
-	"./internal/services/call/...",
+	"./internal/services/call/bridge",
 	"./internal/network/tunmode",
 }
 
 var forbiddenAndroidDeps = []string{
 	"github.com/wlynxg/anet",
+	"github.com/pion/webrtc/v4",
 	"github.com/xjasonlyu/tun2socks/v2",
 	"os/exec",
 }
