@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -22,6 +23,13 @@ const fallbackDNS = "1.1.1.1:53"
 // SetFakeDNS turns on DNS interception for whole-computer (TUN) mode: queries on port 53 are
 // answered from m and connections to its fake IPs are sent to the exit by domain name.
 func (s *SOCKS5Server) SetFakeDNS(m FakeDNS) {
+	if m != nil {
+		// A typed nil (*fakedns.Mapper)(nil) must turn interception off, as it did when the
+		// field was a concrete pointer: an interface holding it would not compare to nil.
+		if v := reflect.ValueOf(m); v.Kind() == reflect.Ptr && v.IsNil() {
+			m = nil
+		}
+	}
 	s.mu.Lock()
 	s.fake = m
 	s.mu.Unlock()
