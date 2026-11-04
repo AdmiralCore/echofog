@@ -137,6 +137,9 @@ type layerTap struct {
 	backs    int           // base frames that arrived out of order
 	lastBase uint16
 	baseSeen bool
+	// parent names the feeder the viewer currently hangs on, when the test can tell it: a jump
+	// in the RTP numbers across a change of feeder is neither a loss nor a reordering.
+	parent func() types.PeerID
 }
 
 func (l *layerTap) tap(p *media.MediaPacket) {
@@ -188,6 +191,40 @@ func (l *layerTap) take() (perLayer map[uint8]int, holes, backs int) {
 	holes, backs = l.holes, l.backs
 	l.frames, l.holes, l.backs = map[int]uint8{}, 0, 0
 	return perLayer, holes, backs
+}
+
+// oneBase is a base frame of the layer pump, in the packet a viewer's tap sees.
+func oneBase(seq uint16, frame uint32) *media.MediaPacket {
+	pl := make([]byte, 100)
+	pl[0] = 0x41
+	binary.BigEndian.PutUint32(pl[1:5], frame)
+	pk := rtp.Packet{
+		Header:  rtp.Header{Version: 2, PayloadType: 112, SequenceNumber: seq, Timestamp: frame * 1500, SSRC: 9, Marker: true},
+		Payload: pl,
+	}
+	pk.Header.Extension, pk.Header.ExtensionProfile = true, 0xBEDE
+	m := videolayer.Mark{TID: 0, Start: true, End: true, Index: 0, Count: 1}
+	_ = pk.Header.SetExtension(videolayer.ExtensionID, m.Data())
+	b, _ := pk.Marshal()
+	return &media.MediaPacket{Kind: media.FrameVideo, Payload: b}
+}
+
+// A viewer may be moved to another feeder: the new feeder's RTP numbers are elsewhere, and that
+// jump is neither a lost base frame nor one that came out of order.
+func TestLayerTap_AParentSwitchIsNotALoss(t *testing.T) {
+	parent := types.PeerID{1}
+	tap := &layerTap{frames: map[int]uint8{}, parent: func() types.PeerID { return parent }}
+	tap.tap(oneBase(1, 0))
+	tap.tap(oneBase(5, 1))
+	tap.tap(oneBase(9, 2))
+
+	parent = types.PeerID{2}
+	tap.tap(oneBase(401, 10))
+	tap.tap(oneBase(405, 11))
+
+	_, holes, backs := tap.take()
+	assert.Zero(t, holes, "a new feeder's numbering is not a hole")
+	assert.Zero(t, backs, "a new feeder's numbering is not a reordering")
 }
 
 // Two viewers watch a 720p60 stream with three temporal layers straight from its broadcaster; the
@@ -288,8 +325,9 @@ func TestRoom_AWeakChildGetsTheBaseLayer(t *testing.T) {
 	assert.GreaterOrEqual(t, wl[0], published/4*8/10, "the weak viewer plays the base, about a quarter of the frames")
 	assert.LessOrEqual(t, wl[1]+wl[2], weakFrames/4, "and little above it")
 	assert.Zero(t, wHoles, "no base frame is lost")
-	// Out-of-order base frames are not a loss: the webview's jitter buffer reorders them.
-	// wBacks is logged above and deliberately not asserted.
+	// Out-of-order base frames are not a loss, but on a link that dropped nothing they do not
+	// happen either.
+	assert.Zero(t, wBacks, "no base frame arrives out of order")
 	assert.GreaterOrEqual(t, sl[0]+sl[1]+sl[2], published*8/10, "the strong viewer keeps the frames the streamer published")
 	assert.Greater(t, sl[2], published/2*7/10, "and the top layer, about half of them")
 	assert.Greater(t, enc.bps.Load(), uint64(4500_000), "the stream is not held back for the weak viewer")
