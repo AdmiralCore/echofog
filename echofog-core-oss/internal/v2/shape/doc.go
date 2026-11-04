@@ -44,4 +44,6 @@
 //     length; everything else in the template is copied unchanged.
 //   - Idle padding is disabled under the platform `low_power` flag (platforms.md §2). Keepalive is
 //     not changed here: platforms.md lowers its rate, and that policy belongs to the node.
+//   - PadFor returns padding for a datagram or record; a UDP carrier clamps it to the path MTU
+//     (wire.md §2.4, §9). The package does not know the path MTU and does not guess it.
 package shape
