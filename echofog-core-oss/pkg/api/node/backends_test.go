@@ -3,11 +3,13 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/pkg/dto"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 	"github.com/stretchr/testify/require"
 )
@@ -128,4 +130,61 @@ func TestGetConfiguredConfigDefaultsToV1(t *testing.T) {
 
 	cfg := GetConfiguredConfig("p1")
 	require.Equal(t, config.ProtocolV1, cfg.Protocol)
+}
+
+// stubNetBackend proves the facade methods of the moved domains call the chosen backend. It
+// implements only the methods the test uses; the embedded interface satisfies the rest.
+type stubNetBackend struct{ netBackend }
+
+func (stubNetBackend) GetPeers() []dto.PeerDTO       { return []dto.PeerDTO{{PeerID: "stub"}} }
+func (stubNetBackend) AddBootstrapNode(string) error { return errStubBackend }
+
+// stubContactBackend is the same for the contacts domain.
+type stubContactBackend struct{ contactBackend }
+
+func (stubContactBackend) GetContacts() ([]dto.ContactDTO, error) {
+	return []dto.ContactDTO{{PeerID: "stub"}}, nil
+}
+func (stubContactBackend) NewContact(dto.ContactDTO) error { return errStubBackend }
+
+var errStubBackend = errors.New("stub backend")
+
+// The facade methods of the moved domains are delegates. At protocol 2 they must reach the
+// selected backend rather than answering "v2 not built" themselves, or a future v2 backend would
+// be closed off (the inheritance of T11.1a, item 1).
+func TestMovedDomainsDelegateAtProtocol2(t *testing.T) {
+	api := newFacadeNode(t, config.ProtocolV2)
+
+	api.backends.net = stubNetBackend{}
+	require.Equal(t, []dto.PeerDTO{{PeerID: "stub"}}, api.GetPeers())
+	require.ErrorIs(t, api.AddBootstrapNode("1.2.3.4:4001/"+peerA), errStubBackend)
+
+	api.backends.contact = stubContactBackend{}
+	got, err := api.GetContacts()
+	require.NoError(t, err)
+	require.Equal(t, []dto.ContactDTO{{PeerID: "stub"}}, got)
+	require.ErrorIs(t, api.NewContact(dto.ContactDTO{}), errStubBackend)
+}
+
+// requireClosed fails when ch is nil or open: a receive must complete with ok == false at once.
+func requireClosed[T any](t *testing.T, name string, ch <-chan T) {
+	t.Helper()
+	select {
+	case _, ok := <-ch:
+		require.False(t, ok, "%s must be closed", name)
+	default:
+		t.Fatalf("%s must be closed at protocol 2, not nil or open", name)
+	}
+}
+
+// The desktop ranges over MessageHandler and PeerDiscoveryHandler. At protocol 2 there is
+// nothing to deliver, so both must be closed rather than nil: a nil channel would hang those
+// goroutines for the whole run (the inheritance of T11.1a, item 2).
+func TestProtocol2HandlersReturnClosedChannels(t *testing.T) {
+	api := newFacadeNode(t, config.ProtocolV2)
+
+	requireClosed(t, "PeerDiscoveryHandler", api.PeerDiscoveryHandler())
+	requireClosed(t, "MessageHandler", api.MessageHandler())
+	requireClosed(t, "the pending net backend", api.backends.net.PeerDiscoveryHandler())
+	requireClosed(t, "the pending chat backend", api.backends.chat.MessageHandler())
 }
