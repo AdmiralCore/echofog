@@ -35,7 +35,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 	engine := tree.NewStreamTreeEngine()
 	profile.PeerID = m.selfID
 	profile.Backdrop = tree.CleanBackdrop(profile.Backdrop)
-	now := time.Now()
+	now := m.now()
 
 	room := &ActiveRoomState{
 		CallID:         callID,
@@ -252,7 +252,7 @@ func (m *CallManager) ensureConnectedLocked(peer types.PeerID) {
 	if m.swarm != nil && m.swarm.GetPeer(peer) != nil {
 		return
 	}
-	now := time.Now()
+	now := m.now()
 	if now.Sub(m.connecting[peer]) < connectRetryInterval {
 		return
 	}

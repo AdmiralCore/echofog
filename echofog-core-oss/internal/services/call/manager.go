@@ -214,6 +214,11 @@ type CallManager struct {
 	connector  PeerConnector
 	connecting map[types.PeerID]time.Time
 
+	// now is the manager's wall clock; tests may replace it so events carry a time they
+	// control. Everything that schedules from an event goes through it; the room ticker
+	// still uses the real ticker time.
+	now func() time.Time
+
 	pending []func()
 
 	// encoders are captures encoded outside the webview, by capture role (see SetLocalEncoder)
@@ -295,6 +300,7 @@ func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID ty
 		signer:     signer,
 		connecting: make(map[types.PeerID]time.Time),
 		encoders:   make(map[string]LocalEncoder),
+		now:        time.Now,
 	}
 }
 

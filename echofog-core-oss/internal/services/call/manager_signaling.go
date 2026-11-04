@@ -63,7 +63,7 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 			m.mu.Unlock()
 			return nil
 		}
-		room.seen[key] = time.Now()
+		room.seen[key] = m.now()
 		if m.applyFloodLocked(room, env, from) {
 			for _, n := range room.Dispatcher.VoiceNeighbors() {
 				if n != from && n != env.Sender {
@@ -137,7 +137,7 @@ func (m *CallManager) knownInCallLocked(room *ActiveRoomState, id types.PeerID) 
 }
 
 func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope, from types.PeerID) bool {
-	now := time.Now()
+	now := m.now()
 	switch env.Action {
 	case signaling.ActionTreeManifest:
 		var manifest tree.TreeManifest
@@ -255,7 +255,7 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 }
 
 func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope) {
-	now := time.Now()
+	now := m.now()
 	sender := env.Sender
 	switch env.Action {
 	case signaling.ActionJoin, signaling.ActionMemberHeartbeat:
@@ -521,9 +521,9 @@ func (m *CallManager) toCoordinatorLocked(room *ActiveRoomState, action signalin
 	case signaling.ActionStreamUnsub:
 		m.unsubscribeLocked(room, data.(string), m.selfID)
 	case signaling.ActionStreamReparent:
-		m.reparentLocked(room, m.selfID, data.(signaling.ReparentPayload), time.Now())
+		m.reparentLocked(room, m.selfID, data.(signaling.ReparentPayload), m.now())
 	case signaling.ActionReport:
-		m.reportLocked(room, m.selfID, data.(signaling.ReportPayload), time.Now())
+		m.reportLocked(room, m.selfID, data.(signaling.ReportPayload), m.now())
 	case signaling.ActionStreamWeak:
 		m.weakLocked(room, m.selfID, data.(signaling.StreamWeakPayload))
 	}
