@@ -55,16 +55,26 @@ var ErrDestroyed = errors.New("secret: value is destroyed")
 // probeFunc checks that a page can be locked. It is a variable so tests can force a refusal.
 var probeFunc = probeLock
 
+// minLockBytes is the least locked-memory budget with which the process stays in locked mode:
+// 256 KiB is 64 pages, enough for the device keys, prekeys and ephemeral keys a node holds at
+// once.
+const minLockBytes = 256 << 10
+
 func probeLock() error {
-	b, err := memcall.Alloc(4096)
+	limit, known := lockLimit()
+	if err := checkLockBudget(limit, known); err != nil {
+		return err
+	}
+
+	page, err := memcall.Alloc(4096)
 	if err != nil {
 		return err
 	}
-	defer memcall.Free(b)
-	if err := memcall.Lock(b); err != nil {
+	defer memcall.Free(page)
+	if err := memcall.Lock(page); err != nil {
 		return err
 	}
-	return memcall.Unlock(b)
+	return memcall.Unlock(page)
 }
 
 var (
