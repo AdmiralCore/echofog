@@ -29,6 +29,7 @@ var forbiddenFamilies = []string{
 //
 // AD2: v1 domain logic is used on the spot through ports, not copied. A v1 package that is not
 // on this list needs a port task in the dev branch before v2 may import it.
+// AD16: the exit core without swarm; only this package, not exit_gateway.
 var allowedV1 = []string{
 	"pkg/api/types",
 	"internal/network/net_types",
@@ -47,6 +48,7 @@ var allowedV1 = []string{
 	"internal/services/filexfer",
 	"internal/protection/osprotect",
 	"internal/network/tunmode",
+	"internal/network/exit_gateway/core",
 }
 
 func TestModulePathMatchesGoMod(t *testing.T) {
@@ -79,7 +81,11 @@ func TestForbiddenImport(t *testing.T) {
 		{"network handshake", mod + "internal/network/handshake", true},
 		{"network net_types", mod + "internal/network/net_types", false},
 		{"network tunmode", mod + "internal/network/tunmode", false},
-		{"network tunmode subpackage", mod + "internal/network/tunmode/helper", false},
+		{"network tunmode subpackage", mod + "internal/network/tunmode/helper", true},
+		{"network exit_gateway", mod + "internal/network/exit_gateway", true},
+		{"network exit_gateway subpackage", mod + "internal/network/exit_gateway/swarm", true},
+		{"network exit_gateway core (AD16)", mod + "internal/network/exit_gateway/core", false},
+		{"network exit_gateway core subpackage", mod + "internal/network/exit_gateway/core/transport", true},
 		{"v1 port package", mod + "internal/services/contacts", false},
 		// A path that merely contains "internal/proto" is not the v1 proto tree.
 		{"protobuf internal", "google.golang.org/protobuf/internal/protolazy", false},
@@ -154,11 +160,15 @@ func TestFindChainSkipsRoot(t *testing.T) {
 }
 
 // TestAllowedV1NetworkExceptions keeps the AD1 network whitelist and the §4.1 list from drifting
-// apart: only net_types and tunmode may be imported from internal/network/....
+// apart: only net_types, tunmode and (AD16) exit_gateway/core may be imported from internal/network/.
 func TestAllowedV1NetworkExceptions(t *testing.T) {
 	t.Parallel()
 
-	want := map[string]bool{"net_types": true, "tunmode": true}
+	want := map[string]bool{
+		"net_types":         true,
+		"tunmode":           true,
+		"exit_gateway/core": true,
+	}
 	got := map[string]bool{}
 	for _, path := range allowedV1 {
 		if rest, ok := strings.CutPrefix(path, "internal/network/"); ok {
@@ -267,12 +277,11 @@ func forbiddenImport(path, module string) bool {
 	}
 
 	if rel == "internal/network" || strings.HasPrefix(rel, "internal/network/") {
+		// The exceptions are exact packages: AD1 names net_types and tunmode, AD16 names
+		// exit_gateway/core "only this package, not exit_gateway". A subpackage needs its own
+		// decision rather than riding along.
 		for _, allowed := range allowedV1 {
-			rest, ok := strings.CutPrefix(allowed, "internal/network/")
-			if !ok {
-				continue
-			}
-			if rel == "internal/network/"+rest || strings.HasPrefix(rel, "internal/network/"+rest+"/") {
+			if rel == allowed {
 				return false
 			}
 		}
