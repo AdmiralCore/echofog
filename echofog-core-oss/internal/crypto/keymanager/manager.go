@@ -53,6 +53,7 @@ type AccountManager struct {
 	AccountKey *memguard.Enclave
 	AccountCC  *memguard.Enclave
 	storage    storage.Storage
+	options    Options
 
 	mu         sync.Mutex
 	storageKey *memguard.Enclave
@@ -95,7 +96,15 @@ func NewKeyManagerWithMnemonic(mnemonic []byte, passphrase []byte, storage stora
 	}, nil
 }
 
+// GetAccount returns the v1 account: secrets are sealed with the v1 label and the X3DH identity DH
+// key is derived at index 1'.
 func (km *KeyManager) GetAccount(accountIndex uint32) (*AccountManager, error) {
+	return km.GetAccountWithOptions(accountIndex, Options{})
+}
+
+// GetAccountWithOptions returns an account tuned by opts (T7.0). An empty Options gives exactly
+// GetAccount.
+func (km *KeyManager) GetAccountWithOptions(accountIndex uint32, opts Options) (*AccountManager, error) {
 	k44, c44, err := deriveSecureSLIP0010(km.masterKey, km.masterCC, HardenedIndexStandard+BipStandard)
 	if err != nil {
 		return nil, err
@@ -116,6 +125,7 @@ func (km *KeyManager) GetAccount(accountIndex uint32) (*AccountManager, error) {
 		AccountKey: accKey,
 		AccountCC:  accCC,
 		storage:    km.storage,
+		options:    opts,
 	}, nil
 }
 
@@ -150,6 +160,9 @@ func (am *AccountManager) GetIdentityKey() (*memguard.Enclave, ed25519.PublicKey
 }
 
 func (am *AccountManager) GetEncryptionKey() (*memguard.Enclave, []byte, error) {
+	if am.options.IdentityKeySource != nil {
+		return am.options.IdentityKeySource.GetEncryptionKey()
+	}
 	encryptEnc, _, err := deriveSecureSLIP0010(am.AccountKey, am.AccountCC, HardenedIndexStandard+EncryptionKeyIndex)
 	if err != nil {
 		return nil, nil, err
