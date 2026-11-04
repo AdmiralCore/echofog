@@ -40,8 +40,6 @@
 // Initiator/Responder state machines with all checks of §7 (TestTranscriptVectors,
 // TestApplicationTranscripts).
 //
-// Card checks use CardVerifier. DefaultCardVerifier covers what the handshake needs (envelope,
-// RFC 8032 signature with canonical S and no small-order signer, lifetimes, the top-level body,
-// hs_key, prev_hs and the embedded device list); the full object rules belong to
-// internal/v2/objects, which can be plugged in through the interface.
+// Card checks use CardVerifier. DefaultCardVerifier is objects.VerifyCard, the one card parser in
+// the tree, with every rule of objects.md §3; the interface lets a node add its own checks.
 package handshake

@@ -104,13 +104,7 @@ func TestCardTamperedSignature(t *testing.T) {
 // negative.json, case by case.
 func TestNegativeVectors(t *testing.T) {
 	v := loadVector(t, "negative.json")
-	for _, e := range v["non_canonical_bodies"].([]any) {
-		m := e.(map[string]any)
-		body := hexField(t, m, "body")
-		if _, err := parseNodeCard(body); err == nil {
-			t.Errorf("NodeCard body %x accepted (%s)", body, m["reason"])
-		}
-	}
+	// non_canonical_bodies (NodeCard) are checked by internal/v2/objects, which verifies the cards.
 	// The same rules apply to the handshake payloads (one encoding; see the package doc).
 	for _, b := range []string{"300108c801", "8800c801", "08c80108c901"} {
 		if _, err := ParseHsInit(mustHex(t, b)); err == nil {

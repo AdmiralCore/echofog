@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/noise"
+	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
 // PassStore finds invitation and personal passes by pass_id (handshake.md §5).
@@ -415,7 +416,7 @@ func (r *Responder) cardForP2(p1 *HsInit, suite uint16, personal bool, now time.
 		}
 		return nil // invitation pass: the contact gets its peer card after redemption
 	}
-	if issued.Scope == scopeInvite {
+	if issued.Scope == uint32(objects.ScopeInvite) {
 		return nil
 	}
 	if c, ok := cur[issued.Scope]; ok && c.Seq > p1.KnownCardSeq {

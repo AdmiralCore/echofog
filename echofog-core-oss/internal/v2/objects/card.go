@@ -154,17 +154,17 @@ func verifyCardAt(b []byte, now *time.Time) (*Card, error) {
 	}
 	c.NodeID = c.Account.ID()
 	if len(body.GetDevices()) == 0 {
-		return nil, invalid("devices: missing")
+		return nil, invalidDevices("missing")
 	}
 	dl, err := verifyDeviceListAt(body.GetDevices(), now)
 	if err != nil {
-		return nil, invalid("devices: %v", err)
+		return nil, invalidDevices("%v", err)
 	}
 	if !dl.Account.Equal(c.Account) {
-		return nil, invalid("devices: signed by another key than the card's account")
+		return nil, invalidDevices("signed by another key than the card's account")
 	}
 	if !dl.Contains(c.DeviceKey) {
-		return nil, invalid("devices: the signing device is not in the account's device list")
+		return nil, invalidDevices("the signing device is not in the account's device list")
 	}
 	c.Devices = dl
 

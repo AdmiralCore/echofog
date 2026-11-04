@@ -109,13 +109,6 @@ func FuzzVerifyCard(f *testing.F) {
 	})
 }
 
-func FuzzNodeCardBody(f *testing.F) {
-	for _, e := range loadVector(f, "negative.json")["non_canonical_bodies"].([]any) {
-		f.Add(hexField(f, e.(map[string]any), "body"))
-	}
-	f.Fuzz(func(t *testing.T, b []byte) { parseNodeCard(b) })
-}
-
 // FuzzResponderMessage1 feeds arbitrary HS_HELLO and message 1 bytes to public and hidden
 // responders. A hidden node must never answer.
 func FuzzResponderMessage1(f *testing.F) {

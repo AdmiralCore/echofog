@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
 var testCB = bytes.Repeat([]byte{0xcb}, 32)
@@ -232,7 +234,8 @@ func TestResponderCardOnlyWhenNewer(t *testing.T) {
 		t.Fatal("newer card not sent")
 	}
 	// An initiator holding an invitation card never gets a card in P2.
-	inv := w.rID.card(t, CardOptions{Scope: 2, Seq: fixedTime - 2, Suites: []uint16{SuiteXK}})
+	inv := w.rID.card(t, CardOptions{Scope: 2, Seq: fixedTime - 2, Suites: []uint16{SuiteXK},
+		InviteID: make([]byte, 8), Flags: objects.FlagUnlisted | objects.FlagInviteScoped})
 	if w.ic.Remote, _ = (DefaultCardVerifier{}).VerifyCard(inv, w.now); w.ic.Remote == nil {
 		t.Fatal("invite card")
 	}

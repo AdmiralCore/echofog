@@ -31,6 +31,12 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
+// invalidDevices reports a card whose embedded device list is missing, invalid or does not list
+// the card's signer; the error matches both ErrInvalid and ErrDevices.
+func invalidDevices(format string, args ...any) error {
+	return fmt.Errorf("%w: %w: %s", ErrInvalid, ErrDevices, fmt.Sprintf(format, args...))
+}
+
 func expectLabel(e *Envelope, label string) error {
 	if e.Label != label {
 		return fmt.Errorf("%w: %q, want %q", ErrWrongLabel, e.Label, label)

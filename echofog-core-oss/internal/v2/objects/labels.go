@@ -77,6 +77,9 @@ var (
 	ErrNonCanonical = errors.New("objects: body not canonical")
 	// ErrInvalid reports a body that breaks a label-specific rule.
 	ErrInvalid = errors.New("objects: invalid object")
+	// ErrDevices reports a card whose embedded device list is missing, invalid or does not list
+	// the signer (objects.md §3.1, D35). It is returned together with ErrInvalid.
+	ErrDevices = errors.New("objects: card device list invalid")
 	// ErrWrongLabel reports an object of another label than the one expected.
 	ErrWrongLabel = errors.New("objects: unexpected label")
 )
