@@ -24,6 +24,7 @@ capitals.
 | [registries.md](registries.md) | every number and string: frame and datagram types, services, features, suites, labels, algorithm tags, DHT record kinds, error codes |
 | [dht.md](dht.md) | DHT v2: keyspace, records, storage, lookup, routing-table rules |
 | [services.md](services.md) | L3: dht, pex, chat, mailbox, relay, exit, files, call |
+| [cluster.md](cluster.md) | operator clusters: root key and masters, membership, `cluster/2`, cluster pass, anonymous reports |
 | [security.md](security.md) | claimed properties, the attack each defeats, mapping to v1 weaknesses, residual risks |
 | [platforms.md](platforms.md) | gomobile builds (Android, iOS), non-portable pieces and their fallbacks, capability profile and flags, mobile testing |
 | [CHANGES-from-v1.md](CHANGES-from-v1.md) | what changed and why, tied to weakness IDs |

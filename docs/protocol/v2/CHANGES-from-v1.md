@@ -102,6 +102,9 @@ required a choice. Each is stated where it applies.
 | D39 | (OQ10) Call media authenticated by batch signatures (≤ 100 ms batches, per-unit hashes, overlap with the previous batch) | services §9.3, registries §2 |
 | D40 | (OQ5) Ship with the current vault; cross-exit payment linkage is a residual risk; vault contract v2 on the payments roadmap | services §7, security §4.8 |
 | D41 | The core builds with `gomobile bind` (android/arm64, android/amd64, ios/arm64), without cgo, with build-tagged platform code and portable fallbacks; platform differences are a runtime profile and capability flags that never change the wire | platforms.md |
+| D42 | Clusters trust a root key that delegates to up to 4 masters (epoch rule, standby takeover), not a master's own key | cluster.md §1, §5 |
+| D43 | The operator chooses the pass scope per pass; the default is the whole cluster | cluster.md §7 |
+| D44 | Anonymous client reports are opt-in, off by default | cluster.md §8 |
 
 ## 4. Open questions
 

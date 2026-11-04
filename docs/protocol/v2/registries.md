@@ -86,6 +86,7 @@ Unknown datagram types are dropped silently and counted. Datagrams are never ans
 | 8 | `call` | 2 | no | services.md §9 |
 | 9 | `names` | reserved | — | crypto usernames, later |
 | 10 | `sync` | reserved | — | group log sync as its own service, later |
+| 11 | `cluster` | 2 | no | cluster.md §4 |
 | 0xf000–0xffff | — | experimental | — | — |
 
 The text form of a service version is `name/version`, for example `chat/2`. On the wire a service is
@@ -104,9 +105,10 @@ uniqueness. A type without a stated maximum does not exist.
 | chat/2 | 0x40 DELIVER, 0x41 DELIVERED, 0x42 BUNDLE_GET, 0x43 BUNDLE |
 | mailbox/2 | 0x40 QUEUE_CREATE, 0x41 QUEUE_OK, 0x42 DEPOSIT, 0x43 DEPOSITED, 0x44 FETCH, 0x45 ITEMS, 0x46 ACK, 0x47 FORWARD, 0x48 ERROR |
 | relay/2 | 0x40 CONNECT, 0x41 INCOMING, 0x42 ACCEPT, 0x43 REFUSE, 0x44 CONNECTED, 0x45 REFUSED, 0x46 REGISTER, 0x47 REGISTERED, 0x48 PEER_ADDR |
-| exit/2 | 0x40 TCP_CONNECT, 0x41 RESULT, 0x42 DATA, 0x43 UDP_OPEN, 0x44 UDP_OK, 0x45 UDP_PKT, 0x46 ACCOUNT_GET, 0x47 ACCOUNT, 0x48 VOUCHER, 0x49 VOUCHER_RESULT |
+| exit/2 | 0x40 TCP_CONNECT, 0x41 RESULT, 0x42 DATA, 0x43 UDP_OPEN, 0x44 UDP_OK, 0x45 UDP_PKT, 0x46 ACCOUNT_GET, 0x47 ACCOUNT, 0x48 VOUCHER, 0x49 VOUCHER_RESULT, 0x4a PASS, 0x4b PASS_RESULT |
 | files/2 | 0x40 WANT, 0x41 CHUNK, 0x42 CANCEL, 0x43 DONE |
 | call/2 | 0x40 SIGNAL |
+| cluster/2 | 0x40 JOIN, 0x41 JOINED, 0x42 HEARTBEAT, 0x43 HEARTBEAT_ACK, 0x44 ASSIGN, 0x45 ASSIGNED, 0x46 REVOKE, 0x47 REPORT, 0x48 SYNC, 0x49 NOT_ACTIVE, 0x4a ERROR |
 
 ## 5. Features (L2)
 
@@ -195,6 +197,9 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/mailbox-hint/2` | mailbox rendezvous hint | 6144 (envelope ≤ 6400) | 6 hours | objects.md §7 |
 | `echofog/name/2` | crypto-username binding (format only; not stored in the v2 DHT) | 512 (envelope ≤ 768) | 30 days | objects.md §8 |
 | `echofog/release/2` | release manifest with co-signatures | 20000 | 400 days | objects.md §9 |
+| `echofog/cluster-master/2` | cluster master delegation (signed by the cluster root key) | 512 | 90 days | cluster.md §1.1 |
+| `echofog/cluster/2` | cluster membership of one node | 512 | 14 days | cluster.md §1.2 |
+| `echofog/cluster-pass/2` | cluster pass | 1024 | by term | cluster.md §7 |
 
 ### 7.2 L0 labels
 
@@ -248,6 +253,7 @@ Labels are ASCII, case-sensitive, without a terminating zero.
 | `echofog/call2/sender-key` | per-sender media key | services.md §9 |
 | `echofog/call2/signal` | signature input prefix of forwarded call signals | services.md §9 |
 | `echofog/call2/epoch` | call epoch secret chain | services.md §9 |
+| `echofog/cluster/id` | cluster ID from the root key | cluster.md §1 |
 
 ### 7.6 Retired v1 labels
 
@@ -379,7 +385,8 @@ A hidden node never sends REJECT before a valid access proof ([handshake.md](han
 | 4 | `invite-scoped` | an invitation card: never published or forwarded |
 | 5 | `exit` | the card's `exit` offer is live |
 | 6 | `domestic-only` | a server that is never dialed across a border (no camouflaged address needed) |
-| 7–31 | — | reserved: sent as zero, **ignored** on receipt (a later version may assign them) |
+| 7 | `cluster` | the card carries a `cluster` reference (cluster.md §2) |
+| 8–31 | — | reserved: sent as zero, **ignored** on receipt (a later version may assign them) |
 
 ## 12. Clock endpoints
 

@@ -22,7 +22,7 @@ opening a stream with `OPEN{service, version}` ([wire.md](wire.md) §6.3); its f
 - Every limit below is per session unless stated; nodes also apply the same limits per network
   diversity unit (IPv4 /24, IPv6 /32; [dht.md](dht.md) §1) with a factor of 3, and per authenticated
   node ID per day where stated, so new sessions do not reset quotas.
-- Text forms: `dht/2`, `pex/2`, `chat/2`, `mailbox/2`, `relay/2`, `exit/2`, `files/2`, `call/2`.
+- Text forms: `dht/2`, `pex/2`, `chat/2`, `mailbox/2`, `relay/2`, `exit/2`, `files/2`, `call/2`, `cluster/2` ([cluster.md](cluster.md)).
 
 ## 2. dht/2 (service 1)
 
