@@ -293,6 +293,27 @@ func TestIdlePad(t *testing.T) {
 	}
 }
 
+func TestNilRand(t *testing.T) {
+	// A nil source uses the package-level generator; values must still respect the profile.
+	s := NewSender(mustProfile(t, &Profile{InitLen: &Range{1300, 1300}, Keepalive: Range{30, 30}}), nil, false)
+	if n := s.NextInitLen(); n != 1300 {
+		t.Fatalf("NextInitLen() = %d, want 1300", n)
+	}
+	if pad := s.PadFor(10); pad != 0 {
+		t.Fatalf("PadFor(10) = %d, want 0", pad)
+	}
+	if d := s.Keepalive(); d != 30*time.Second {
+		t.Fatalf("Keepalive() = %v, want 30s", d)
+	}
+	if _, ok := s.IdlePad(); ok {
+		t.Fatal("IdlePad() enabled without idle_pad_ms")
+	}
+	raw := NewSender(mustProfile(t, &Profile{Decoys: []Decoy{{Kind: DecoyRaw, Template: []byte{1, 2}}}, Keepalive: Range{12, 24}}), nil, false).Decoys()
+	if len(raw) != 1 || len(raw[0].Data) != 2 || raw[0].Data[0] != 1 || raw[0].Data[1] != 2 {
+		t.Fatalf("Decoys() = %+v, want the unchanged template", raw)
+	}
+}
+
 func TestDeterministic(t *testing.T) {
 	p := mustProfile(t, &Profile{
 		InitLen:   &Range{1280, 1420},
