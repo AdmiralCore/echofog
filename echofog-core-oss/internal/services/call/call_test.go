@@ -1028,6 +1028,39 @@ func TestRoom_StaleReportAboutCoordinatorIsIgnored(t *testing.T) {
 	assert.True(t, still, "the coordinator stays in its own room")
 }
 
+// A node that led the call and then joined the half that kept going is no longer the coordinator.
+// A member of its old half that still probes it must not take its answer as proof of life, or it
+// never notices the new coordinator and stays behind alone at the old epoch.
+func TestRoom_AFormerCoordinatorDoesNotAnswerForTheCoordinator(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 2)
+	wasCoord, member := nodes[0], nodes[1]
+
+	wasCoord.cm.mu.Lock()
+	wasCoord.cm.activeRoom.Coordinator = member.id
+	wasCoord.cm.activeRoom.IsCoordinator = false
+	wasCoord.cm.mu.Unlock()
+
+	var pongs atomic.Int32
+	m.mu.Lock()
+	m.tap = func(from, to types.PeerID, _ net_types.MessageType, payload []byte) {
+		if from != wasCoord.id || to != member.id {
+			return
+		}
+		env, err := signaling.DecodeSignal(member.cm.peekSignal(from, payload))
+		if err == nil && env.Action == signaling.ActionPong {
+			pongs.Add(1)
+		}
+	}
+	m.mu.Unlock()
+
+	raw, err := signaling.EncodeSignedSignal(member.cm.signer, signaling.ActionPing, "room-1", member.id, 1, nil)
+	require.NoError(t, err)
+	require.NoError(t, wasCoord.cm.handleIncomingSignaling(raw, member.id))
+	time.Sleep(200 * time.Millisecond) // the pong, if any, travels asynchronously
+	assert.Zero(t, pongs.Load(), "a node that no longer leads does not answer for the coordinator")
+}
+
 // A coordinator left alone by a cut line has counted down its members on its own, so its epoch is
 // higher than that of the room that kept going. When it asks that room to take it back, the room's
 // sync must bring it in even at the older epoch: the lone half yields, the half with the members
