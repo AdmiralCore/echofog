@@ -39,11 +39,7 @@ func normalizeCallRoute(r string) (string, error) {
 }
 
 // GetProxySettings reports the proxy and call route, saved and in effect.
-func (n *NodeApi) GetProxySettings() (ProxyStatus, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return ProxyStatus{}, ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) GetProxySettings() (ProxyStatus, error) {
 	if n.node == nil || n.node.Cfg == nil {
 		return ProxyStatus{}, errors.New("node not started")
 	}
@@ -67,11 +63,7 @@ func (n *NodeApi) GetProxySettings() (ProxyStatus, error) {
 
 // SetProxySettings saves the proxy ("" for none; host:port, or with socks5://) and the call route
 // for the next start. Before the node first starts they apply to that very start.
-func (n *NodeApi) SetProxySettings(proxy, callRoute string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) SetProxySettings(proxy, callRoute string) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}
@@ -99,11 +91,7 @@ func (n *NodeApi) SetProxySettings(proxy, callRoute string) error {
 
 // CheckProxy connects through the proxy at addr to a public site and closes the connection: the
 // proxy is running and lets the app out. Nothing is sent.
-func (n *NodeApi) CheckProxy(addr string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) CheckProxy(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return network.CheckProxy(ctx, addr, proxyCheckTarget)

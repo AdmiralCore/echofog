@@ -24,11 +24,14 @@ func newFacadeNode(t *testing.T, protocol int) *NodeApi {
 	return NewNodeApi(node)
 }
 
-// Protocol 1 keeps the facade itself as every backend: no code moved, no behaviour changed.
+// Protocol 1 keeps the v1 code in the domain backends: the network and contacts domains run in
+// their own v1 structs since T11.1b, the other domains still keep the facade itself.
 func TestBackendsProtocol1IsTheFacade(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV1)
-	require.Same(t, api, api.backends.net)
-	require.Same(t, api, api.backends.contact)
+	require.IsType(t, &v1NetBackend{}, api.backends.net)
+	require.Same(t, api, api.backends.net.(*v1NetBackend).NodeApi)
+	require.IsType(t, &v1ContactBackend{}, api.backends.contact)
+	require.Same(t, api, api.backends.contact.(*v1ContactBackend).NodeApi)
 	require.Same(t, api, api.backends.chat)
 	require.Same(t, api, api.backends.group)
 	require.Same(t, api, api.backends.file)
@@ -78,7 +81,7 @@ func TestProtocol1FacadeIsAvailable(t *testing.T) {
 func TestChooseBackendsTreatsUnknownAsV1(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV1)
 	api.node.Cfg.Protocol = 9
-	require.Same(t, api, chooseBackends(api.node.Cfg.ProtocolOrDefault(), api).net)
+	require.IsType(t, &v1NetBackend{}, chooseBackends(api.node.Cfg.ProtocolOrDefault(), api).net)
 }
 
 // Settings persist the mode for the next start; GetConfiguredConfig applies it before NewNode, so

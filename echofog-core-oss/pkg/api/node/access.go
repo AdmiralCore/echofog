@@ -40,11 +40,7 @@ type JoinedPeer struct {
 }
 
 // GetAccessStatus returns the access mode, the invitation link and who joined with it.
-func (n *NodeApi) GetAccessStatus() (AccessStatus, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return AccessStatus{}, ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) GetAccessStatus() (AccessStatus, error) {
 	if n.node == nil || n.node.Access == nil {
 		return AccessStatus{}, errors.New("node is not running")
 	}
@@ -75,11 +71,7 @@ func (n *NodeApi) GetAccessStatus() (AccessStatus, error) {
 // SetAccessMode saves the access mode ("public" or "hidden") for the next start of the node, or
 // for the coming one when the node has not started yet.
 // Isolated is for servers only and is set in the node's configuration.
-func (n *NodeApi) SetAccessMode(mode string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) SetAccessMode(mode string) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node is not running")
 	}
@@ -102,11 +94,7 @@ func (n *NodeApi) SetAccessMode(mode string) error {
 
 // RotateAccessSecret makes a new link: the old one stops letting new people in; those who joined
 // with it stay until removed.
-func (n *NodeApi) RotateAccessSecret() (string, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return "", ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) RotateAccessSecret() (string, error) {
 	if n.node == nil {
 		return "", errors.New("node is not running")
 	}
@@ -114,11 +102,7 @@ func (n *NodeApi) RotateAccessSecret() (string, error) {
 }
 
 // RemoveJoinedPeer takes somebody off the list of those who joined with the link.
-func (n *NodeApi) RemoveJoinedPeer(peerID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) RemoveJoinedPeer(peerID string) error {
 	if n.node == nil {
 		return errors.New("node is not running")
 	}
@@ -142,11 +126,7 @@ type InviteInfo struct {
 
 // ParseInvite reads an invitation link. It tells a link of another network (a fork) and one made
 // by a newer app apart from a broken one.
-func (n *NodeApi) ParseInvite(link string) (InviteInfo, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return InviteInfo{}, ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) ParseInvite(link string) (InviteInfo, error) {
 	inv, err := access.ParseLink(link, config.NetworkName)
 	if err != nil {
 		return InviteInfo{}, err
@@ -156,11 +136,7 @@ func (n *NodeApi) ParseInvite(link string) (InviteInfo, error) {
 }
 
 // JoinInvite stores the invitation and connects to the node it names; it returns the node's peer ID.
-func (n *NodeApi) JoinInvite(link string) (string, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return "", ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) JoinInvite(link string) (string, error) {
 	if n.node == nil || n.node.Swarm == nil {
 		return "", errors.New("node is not running")
 	}
@@ -178,11 +154,7 @@ func (n *NodeApi) JoinInvite(link string) (string, error) {
 }
 
 // ForgetInvite drops the stored invitation to a hidden node.
-func (n *NodeApi) ForgetInvite(peerID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) ForgetInvite(peerID string) error {
 	if n.node == nil {
 		return errors.New("node is not running")
 	}
