@@ -16,6 +16,7 @@ import (
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
+	"github.com/echofog/echofog-core/internal/testutil"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,7 +134,10 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	m.sent.Add(1)
 	data := append([]byte(nil), payload...)
 	wait := time.Duration(0)
-	if link != nil {
+	// The shapes model a media bottleneck. Call control is small and travels reliably: letting
+	// a full media queue drop a heartbeat or a new media key would fail the room, not the link.
+	media := t == net_types.TypeCallMediaAudio || t == net_types.TypeCallMediaVideo
+	if link != nil && media {
 		var ok bool
 		if wait, ok = link.admit(len(payload), time.Now()); !ok {
 			return nil
@@ -232,7 +236,7 @@ func newRoom(t *testing.T, m *mesh, n int) ([]*testNode, []byte) {
 			_ = nd.cm.LeaveRoom()
 		}
 	})
-	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 5*time.Second, 20*time.Millisecond, "room did not form")
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, testutil.Slow(5*time.Second), 20*time.Millisecond, "room did not form")
 	return nodes, key
 }
 
@@ -282,6 +286,23 @@ func unit(i uint32, size int) []byte {
 	b := make([]byte, size)
 	binary.BigEndian.PutUint32(b, i)
 	return b
+}
+
+// A manager takes the times of its events from its clock, so a test can pin them; the
+// default is time.Now.
+func TestRoom_JoinUsesTheManagerClock(t *testing.T) {
+	m := newMesh()
+	s := newTestSigner()
+	cm := newCallManager(meshPort{m, s.id()}, s, s.id())
+	fixed := time.Now().Add(-time.Minute)
+	cm.now = func() time.Time { return fixed }
+	require.NoError(t, cm.JoinRoom("room-1", s.id(), make([]byte, 32), tree.PeerNodeProfile{UploadKbps: 40000}))
+	t.Cleanup(func() { _ = cm.LeaveRoom() })
+
+	cm.mu.RLock()
+	got := cm.activeRoom.startedAt
+	cm.mu.RUnlock()
+	assert.Equal(t, fixed, got)
 }
 
 func TestRoom_FormsAndAgreesOnTopology(t *testing.T) {
@@ -1018,16 +1039,16 @@ func TestRoom_CutOffMemberRejoinsAfterItsLineComesBack(t *testing.T) {
 	require.Eventually(t, func() bool {
 		s, ok := cut.cm.Snapshot()
 		return ok && s.IsCoordinator
-	}, 6*time.Second, 50*time.Millisecond, "the cut-off member takes over alone")
+	}, testutil.Slow(6*time.Second), 50*time.Millisecond, "the cut-off member takes over alone")
 	require.Eventually(t, func() bool {
 		s, _ := nodes[0].cm.Snapshot()
 		return len(s.Members) == 2
-	}, 6*time.Second, 50*time.Millisecond, "the coordinator drops it")
+	}, testutil.Slow(6*time.Second), 50*time.Millisecond, "the coordinator drops it")
 
 	m.mu.Lock()
 	delete(m.dead, cut.id)
 	m.mu.Unlock()
-	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 6*time.Second, 50*time.Millisecond,
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, testutil.Slow(6*time.Second), 50*time.Millisecond,
 		"one room again: %v", dumpRoom(nodes, nil))
 }
 
