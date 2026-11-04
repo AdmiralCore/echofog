@@ -167,6 +167,9 @@ type ActiveRoomState struct {
 	lastRejoinProbe time.Time
 	lastStatsLog    time.Time
 	lastStats       media.DispatcherStats
+	// pendingKeys holds keys sent by a coordinator we do not follow yet (we still think we lead
+	// the call); the one from the coordinator we yield to is applied then (mediakey.go)
+	pendingKeys map[types.PeerID]signaling.MediaKeyPayload
 
 	// coordinator: a member's tile backdrop changed since the manifest last went out
 	backdropsChanged  bool

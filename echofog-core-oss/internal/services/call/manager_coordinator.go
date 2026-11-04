@@ -249,6 +249,10 @@ func (m *CallManager) setCoordinatorLocked(room *ActiveRoomState, leader types.P
 	room.LastCoordPulse = now
 	room.candidate = types.PeerID{}
 	room.suspects = make(map[types.PeerID]bool)
+	if !room.IsCoordinator {
+		// a key that came from leader while we still thought we led the call is ours to take now
+		m.adoptPendingMediaKeyLocked(room, leader, now)
+	}
 	if !changed {
 		return
 	}

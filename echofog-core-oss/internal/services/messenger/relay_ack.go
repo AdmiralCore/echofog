@@ -99,13 +99,25 @@ func (s *MessageBroker) HandleRelayAck(relay types.PeerID, reqID []byte, answer 
 			continue
 		}
 		switch answer {
-		case RelayStored, RelayForwarded:
+		case RelayStored:
 			if !it.Relayed {
 				return // the recipient took it directly meanwhile
 			}
 			it.RelayKept = true
 			it.Next = now.Add(relayKeptRetry).UnixNano()
 			s.log.Info("MessageBroker: a relay keeps the message for the peer", "peer", w.target.String()[:8], "relay", relay.String()[:8])
+		case RelayForwarded:
+			// The relay wrote the message to the recipient's link, which proves nothing: a
+			// recipient killed a moment ago still has its link open until the transport notices,
+			// and the message written there is gone. Only the recipient's receipt confirms it, so
+			// the message goes again until one comes, as it did before relays answered at all.
+			if !it.Relayed {
+				return // the recipient took it directly meanwhile
+			}
+			it.RelayKept = false
+			it.Next = now.Add(relayedBackoff(it.Attempts)).UnixNano()
+			s.log.Debug("MessageBroker: a relay passed the message on, waiting for the recipient's receipt",
+				"peer", w.target.String()[:8], "relay", relay.String()[:8])
 		default:
 			it.RelayKept = false
 			if it.Relayed {

@@ -239,12 +239,38 @@ func signerKeys(in map[types.PeerID][]byte) map[types.PeerID]ed25519.PublicKey {
 
 // takeMediaKeyLocked applies a media key the coordinator sent this node.
 func (m *CallManager) takeMediaKeyLocked(room *ActiveRoomState, from types.PeerID, p signaling.MediaKeyPayload, now time.Time) {
-	if from != room.Coordinator || room.IsCoordinator || p.KeyEpoch <= room.keyEpoch && from == room.keyFrom {
+	if from == m.selfID || m.olderNode {
 		return
 	}
-	if m.olderNode {
+	if room.IsCoordinator {
+		// We lead the call, or think we do: a key from another claimant is not used while we
+		// lead. Keep the newest one anyway: the claimant may be the coordinator the others kept,
+		// and when we yield to it the room's key must not be lost with our mistaken takeover.
+		if len(p.Eph) == 0 || len(p.Sealed) == 0 {
+			return
+		}
+		if room.pendingKeys == nil {
+			room.pendingKeys = make(map[types.PeerID]signaling.MediaKeyPayload)
+		}
+		if _, known := room.pendingKeys[from]; !known && len(room.pendingKeys) >= maxPendingMediaKeys {
+			return
+		}
+		if old, ok := room.pendingKeys[from]; !ok || p.KeyEpoch >= old.KeyEpoch {
+			room.pendingKeys[from] = p
+		}
 		return
 	}
+	if from != room.Coordinator || (p.KeyEpoch <= room.keyEpoch && from == room.keyFrom) {
+		return
+	}
+	m.installMediaKeyLocked(room, from, p, now)
+}
+
+// maxPendingMediaKeys bounds the keys kept from coordinators we do not follow yet.
+const maxPendingMediaKeys = 16
+
+// installMediaKeyLocked opens a media key coordinator from handed out and starts the room on it.
+func (m *CallManager) installMediaKeyLocked(room *ActiveRoomState, from types.PeerID, p signaling.MediaKeyPayload, now time.Time) {
 	key, err := openMediaKey(p, room.kxPriv, room.CallID, m.selfID)
 	if err != nil {
 		m.warnOnce("mediakey:"+from.String(), "Call media key did not open", "coordinator", calllog.Peer(from))
@@ -252,4 +278,15 @@ func (m *CallManager) takeMediaKeyLocked(room *ActiveRoomState, from types.PeerI
 	}
 	room.keyEpoch, room.keyFrom = p.KeyEpoch, from
 	_ = room.Dispatcher.SetMediaKey(key, signerKeys(p.Signers), now)
+}
+
+// adoptPendingMediaKeyLocked takes the key leader sent while we still thought we led the call,
+// now that we follow it: the others speak it already, and our own would leave us unheard.
+func (m *CallManager) adoptPendingMediaKeyLocked(room *ActiveRoomState, leader types.PeerID, now time.Time) {
+	p, ok := room.pendingKeys[leader]
+	if !ok {
+		return
+	}
+	delete(room.pendingKeys, leader)
+	m.installMediaKeyLocked(room, leader, p, now)
 }
