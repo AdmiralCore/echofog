@@ -138,6 +138,7 @@ message NodeCard {
   uint32 scope = 16;                    // 0 public, 1 peer, 2 invite (§3.2)
   bytes  invite_id = 17;                // scope invite: the invitation's pass_id (8 bytes)
   bytes  devices = 18;                  // the account's current devices/2 envelope; REQUIRED
+  ClusterRef cluster = 19;              // operator cluster membership; cluster.md §2
 }
 
 message HsKey {

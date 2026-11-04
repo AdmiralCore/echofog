@@ -651,6 +651,11 @@ PATH_BIND_OK  payload = path_id(varint)
   `max(1 s, 3 × RTT)`, or when it carries no authenticated packet for 10 s while the node has data or
   PINGs outstanding on it. A failing active path is replaced by the best standby path at once; it
   stays a standby path until it is dead (60 s) or recovers. Idleness alone never abandons a path.
+- **Outstanding data without acknowledgements.** The mux has no acknowledgements, so "data outstanding"
+  cannot be read off the wire. A node that has sent data on the active path and received nothing on it
+  for 5 s (half of the 10 s above) sends a **probe PING** on that path at once, whatever its idle
+  timer says; the PONG deadline above then decides. Without the probe, a one-way sender would
+  mark a healthy path as failing. A node that has no data outstanding sends no probe.
 - Resuming a stream across paths (the successor of v1 TCP rotation against flow-freezing) is a later
   feature, `stream-resume` (reserved, [registries.md](registries.md) §5).
 
@@ -691,6 +696,10 @@ record  = u16(1 + len(body)) ‖ kind(u8) ‖ body
 - A `SEALED` datagram whose plaintext is again a `SEALED` datagram, a `SEALED` datagram on a path that
   is not in sealed mode and not a relay path, and a plaintext datagram on a sealed path are dropped and
   counted.
+- **Relay paths are always sealed for datagrams.** Every datagram on a relay path is a `SEALED`
+  datagram (class 2, bound to that path by `path_id`), whether or not the session has a sealed direct
+  path; a plaintext datagram on a relay path is dropped and counted. A direct path that is not in
+  sealed mode carries plaintext datagrams only.
 - **Datagram circuits** carry one `SEALED` datagram (type 0x02) per relay datagram; its payload is
   `sealed` and its plaintext is one inner datagram (§6.5).
 - A relayed session's handshake runs inside the first stream circuit (kind-0 records), with the
@@ -703,7 +712,16 @@ A direct path whose carrier TLS negotiated a classical group (a REALITY path who
 stream on that path, stream 0 included, are records of §8.4 (kind 1), and every datagram is a `SEALED`
 datagram. On QUIC each QUIC stream is a pipe of its own; on a byte-stream carrier the records wrap the
 whole connection-level frame sequence (MUX_* frames included), so the carrier is one pipe, as a stream
-circuit is. Both sides know the
+circuit is.
+
+**The switch point on a byte-stream carrier.** There is no marker in the bytes: the first record
+starts exactly where the last byte of the handshake (or of `PATH_BIND_OK` on a bound path) ended. So:
+the handshake reader reads stream 0 one frame at a time and never reads ahead (it must not buffer
+bytes beyond the frame it returns); it leaves the sealing switch to the session layer, which calls
+it once, after the handshake completes (after `PATH_BIND_OK` on a bound path), before any other
+read of the carrier. Every byte after that point is a record; a plaintext frame there ends the path.
+Both sides know the point because both know when the last handshake frame was sent and received.
+Both sides know the
 negotiated group, so no signalling is needed. Paths with `X25519MLKEM768` are never in sealed mode.
 
 ## 9. Padding and shape profiles
