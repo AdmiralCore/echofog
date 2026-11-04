@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), messaging (message/group/offline/call/stream delivery audit with a trace), vpn, load, soak (an exit and its users), hidden (an exit for friends), call (voice and video) or censor (how the traffic looks to DPI)")
+	scenario = flag.String("scenario", "smoke", "smoke (mesh, messages, group), chaos (the same, with failures), messaging (message/group/offline/call/stream delivery audit with a trace), vpn, load, soak (an exit and its users), hidden (an exit for friends), call (voice and video), birthday (a symmetric-NAT node reaches a cone node directly) or censor (how the traffic looks to DPI)")
 	chaosFor = flag.Duration("chaos-for", 3*time.Minute, "how long failures are injected")
 	settle   = flag.Duration("settle", 3*time.Minute, "how long after the chaos messages may still arrive")
 	seed     = flag.Int64("seed", 0, "random seed of the chaos (0: time)")
@@ -724,6 +724,117 @@ func chaosScenario(nodes map[string]*node, v *verdict, l *ledger, g groupInfo) {
 	v.check(gdups == 0, "no duplicates among group messages (%d)", gdups)
 }
 
+// birthdayScenario exercises the symmetric-NAT birthday punch. With gw_b set to a narrow symmetric
+// NAT (NAT_B=symmetric-narrow, which the dispatch sets for us), the b nodes draw their outside ports
+// from a small block, so a cone peer can spray it: the b nodes should end up with a direct link to a
+// cone node, where a plain symmetric NAT would have left them on a relay the whole time. Traffic in
+// every direction makes each pair try to connect; the direct link then forms in the background.
+func birthdayScenario(all map[string]*node, v *verdict) {
+	meshUp(all, 3*time.Minute)
+
+	directTo := func(from, id string) bool {
+		var s struct {
+			PeerIds []string `json:"peerIds"`
+		}
+		if err := call(from, "GET", "/status", nil, &s); err != nil {
+			return false
+		}
+		for _, p := range s.PeerIds {
+			if p == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A call between a cone node and a symmetric node drives the direct-link attempt (messaging alone
+	// stays on a relay). While the call runs, the symmetric side should reach the cone node directly
+	// through a birthday punch, which shows up as a direct swarm peer in its /status.
+	natInfo := func(name string) (kind string, lo, hi uint16, ports int) {
+		var s struct {
+			NAT      string `json:"nat"`
+			NatLo    uint16 `json:"natLo"`
+			NatHi    uint16 `json:"natHi"`
+			NatPorts int    `json:"natPorts"`
+		}
+		_ = call(name, "GET", "/status", nil, &s)
+		return s.NAT, s.NatLo, s.NatHi, s.NatPorts
+	}
+	// birthdayStats is what the node itself counted: attempted punches and ones that made a direct
+	// link. A direct link alone could in principle come from the ordinary punch; a successful
+	// birthday on the symmetric side proves the mechanism ran and landed.
+	birthdayStats := func(name string) (tried, ok int) {
+		var s struct {
+			Tried int `json:"birthdayTried"`
+			OK    int `json:"birthdayOK"`
+		}
+		_ = call(name, "GET", "/status", nil, &s)
+		return s.Tried, s.OK
+	}
+	// checkPair drives a cone→symmetric call and reports whether the symmetric node ended up with a
+	// direct link to the cone (a birthday punch). It logs its own outcome; the scenario's pass/fail
+	// is decided by the caller.
+	checkPair := func(cone, sym string) bool {
+		// Both sides must finish NAT classification first (a couple of STUN cycles): the symmetric
+		// side so it advertises "sym" and a birthday is chosen, and the cone side so it advertises its
+		// real external address rather than a guess — otherwise the symmetric side punches the wrong
+		// port and the cone's spray is dropped by the symmetric NAT's address restriction.
+		ready := waitFor(sym+" and "+cone+" finish NAT classification", 4*time.Minute, func() bool {
+			symKind, _, _, _ := natInfo(sym)
+			coneKind, _, _, _ := natInfo(cone)
+			return symKind == "symmetric" && coneKind != "unknown"
+		})
+		if !ready {
+			logf("[birthday] %s/%s did not finish NAT classification (STUN?)", sym, cone)
+			return false
+		}
+		// A birthday punch is probabilistic: a single 3 s attempt-batch often misses (the spray and
+		// the freshly opened mappings must overlap in time). A real call retries for its whole
+		// duration, so the link forms within a minute or two; the test does the same by placing the
+		// call in a few rounds, each a fresh batch, and returning as soon as a direct link appears.
+		people := []string{cone, sym}
+		linked := false
+		for round := 1; round <= 5 && !linked; round++ {
+			logf("[birthday] round %d: %s (cone) calls %s (narrow symmetric)", round, cone, sym)
+			var inv struct {
+				CallID      string `json:"callId"`
+				Coordinator string `json:"coordinator"`
+			}
+			if err := call(cone, "POST", "/call/invite", map[string]string{"to": all[sym].pubKey}, &inv); err != nil {
+				logf("[birthday] %s invites %s: %v", cone, sym, err)
+				return false
+			}
+			for _, p := range people {
+				_ = call(p, "POST", "/call/join", map[string]string{"callId": inv.CallID, "coordinator": inv.Coordinator}, nil)
+				_ = call(p, "POST", "/call/talk", nil, nil)
+			}
+			linked = waitFor(sym+" reaches "+cone+" directly", 25*time.Second, func() bool { return directTo(sym, all[cone].id) })
+			for _, p := range people {
+				_ = call(p, "POST", "/call/talk?stop=1", nil, nil)
+				_ = call(p, "POST", "/call/leave", nil, nil)
+			}
+		}
+		if linked {
+			// the peer takes a moment to appear as a direct swarm peer after the punch returns
+			waitFor(sym+" counts a successful birthday", 2*time.Second, func() bool {
+				_, ok := birthdayStats(sym)
+				return ok > 0
+			})
+		}
+		tried, ok := birthdayStats(sym)
+		logf("[birthday] %s -> %s (cone): direct link = %v, birthday tried=%d ok=%d", sym, cone, linked, tried, ok)
+		return linked && ok > 0
+	}
+	// A single 3 s birthday batch is probabilistic, so a cold lab node's first pair can need several
+	// rounds and may still miss; what the scenario verifies is the capability — that a symmetric node
+	// can reach a cone node directly through a birthday punch — so it passes when at least one of the
+	// two symmetric nodes links. (A real node, up for minutes and retrying, reaches this far more
+	// often than this short run does.)
+	linkedA := checkPair("a1", "b1")
+	linkedC := checkPair("c1", "b2")
+	v.check(linkedA || linkedC, "a symmetric-NAT node reached a cone node directly through a birthday punch (b1->a1=%v, b2->c1=%v)", linkedA, linkedC)
+}
+
 // ---------------------------------------------------------------------------- main
 
 func main() {
@@ -741,6 +852,15 @@ func main() {
 		afterGateways = startCensorCapture
 	case "hidden":
 		extra = []string{"x1", "h1", "web"}
+	case "birthday":
+		// gw_b hands its subscribers a small port block, and b1/b2 learn they are symmetric by asking
+		// the lab's own STUN servers (the public nodes answer on :3478). These go in the process
+		// environment so compose substitutes them for the gateways too, which start before the nodes.
+		os.Setenv("NAT_B", "symmetric-narrow")
+		os.Setenv("STUN", "203.0.113.11:3478,203.0.113.12:3478,203.0.113.13:3478") // s1, s2, p1
+		// birthday is for a symmetric user NOT behind a censoring border; guard mode (which the lab
+		// would otherwise fail safe to, lacking GeoIP) suppresses it by design, so stand it down here
+		os.Setenv("GUARD_MODE_USERS", "off")
 	}
 	out := prepareOut()
 	nodes := bringUp(extra...)
@@ -769,6 +889,8 @@ func main() {
 		callScenario(nodes, v, out)
 	case "messaging":
 		messagingScenario(nodes, v, out)
+	case "birthday":
+		birthdayScenario(nodes, v)
 	case "smoke":
 		smoke(nodes, v, l)
 	case "chaos":

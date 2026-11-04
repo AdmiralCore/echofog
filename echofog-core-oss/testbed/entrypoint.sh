@@ -22,8 +22,20 @@ gateway)
   case "${NAT:-cone}" in
   # port-restricted cone: one outside port per inside socket, answers only from who was written to
   cone) iptables -t nat -A POSTROUTING -o "$WAN_IF" -j MASQUERADE ;;
-  # symmetric: a new, random outside port for every destination
-  symmetric) iptables -t nat -A POSTROUTING -o "$WAN_IF" -j MASQUERADE --random ;;
+  # symmetric: a new outside port for every destination, drawn at random from the whole range
+  # (--random-fully uses the kernel's full-range PRNG, the hardest case for a birthday punch)
+  symmetric) iptables -t nat -A POSTROUTING -o "$WAN_IF" -j MASQUERADE --random-fully ;;
+  # symmetric-narrow: a symmetric NAT whose outside ports come from a small block, as a carrier's
+  # CGNAT hands each subscriber. This is the case a birthday punch is meant for: the peer aims its
+  # spray at the block (PORTBLOCK, e.g. 40000-44000). Still a new port per destination, so the
+  # ordinary punch cannot reach it.
+  symmetric-narrow)
+    # --to-ports needs a protocol, so UDP and TCP are restricted to the block and the rest (ICMP etc.)
+    # keeps a plain random mapping
+    iptables -t nat -A POSTROUTING -o "$WAN_IF" -p udp -j MASQUERADE --random-fully --to-ports "${PORTBLOCK:-40000-44000}"
+    iptables -t nat -A POSTROUTING -o "$WAN_IF" -p tcp -j MASQUERADE --random-fully --to-ports "${PORTBLOCK:-40000-44000}"
+    iptables -t nat -A POSTROUTING -o "$WAN_IF" -j MASQUERADE --random-fully
+    ;;
   *) echo "unknown NAT '${NAT}'" >&2; exit 1 ;;
   esac
 
@@ -45,7 +57,7 @@ node)
   fi
   exec testnode \
     -name "${NAME:-node}" \
-    -listen ":4242" \
+    -listen "${LISTEN:-:4242}" \
     -http ":8080" \
     -bootstrap "${BOOTSTRAP:-}" \
     -transport "${TRANSPORT:-}"

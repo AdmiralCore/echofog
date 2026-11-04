@@ -14,9 +14,15 @@ delay packets, nodes that crash, and the promise that a message the API accepted
 
 | Router | NAT | Direct connection to another LAN |
 | --- | --- | --- |
-| gw_a | port-restricted cone | with c: by hole punching; with b: never |
-| gw_b | symmetric (new random port per destination) | never, relays only |
+| gw_a | port-restricted cone | with c: by hole punching; with b: a birthday punch (below) |
+| gw_b | symmetric (new random port per destination) | with a cone LAN: a birthday punch; wide range → relay |
 | gw_c | port-restricted cone | with a: by hole punching |
+
+`gw_b`'s NAT is set by `NAT_B` (default `symmetric`, a full-range random port per destination —
+the hard case). Set `NAT_B=symmetric-narrow` (optionally `PORTBLOCK_B=40000-44000`) to make it a
+carrier-style CGNAT whose outside ports come from a small block: the case the birthday punch is
+built for, where a cone peer can spray the block and reach it directly. The `birthday` scenario sets
+this itself.
 
 Needs Docker with Compose (Docker Desktop is enough, also on Windows). Nothing leaves the machine.
 
@@ -31,8 +37,24 @@ go run ./testbed/runner -scenario load           # ~3 minutes: many downloads at
 go run ./testbed/runner -scenario soak -soak-for 2h   # steady use for hours, graphing resources
 go run ./testbed/runner -scenario hidden         # an exit for friends, reached only by its link
 go run ./testbed/runner -scenario call           # a call across the three NATs, voice and video counted
+go run ./testbed/runner -scenario birthday       # a narrow-symmetric node reaches a cone node directly
 go run ./testbed/runner -scenario censor         # how EchoFog's traffic looks to DPI at the border
 ```
+
+**birthday** sets `gw_b` to a narrow symmetric NAT (`NAT_B=symmetric-narrow`), lets the mesh form,
+sends traffic in every direction, and then checks that `b1` and `b2` (behind that NAT) end up with a
+**direct** link to a cone node — not just a relay path. Success shows in each b node's `/status`
+`peerIds` (a direct swarm peer), in its `birthdayTried`/`birthdayOK` counters (a successful birthday,
+not a direct link that happened another way), and in its log as `Birthday punch reached a peer behind
+a symmetric NAT`. With the default wide `NAT_B=symmetric` the b nodes fall back to a relay (a
+full-range birthday is attempted but rarely lands), which is the honest baseline.
+
+On two real machines on mobile operators (the field test the lab cannot stand in for), run the
+desktop app or `echofog-node` on each, start a call or a chat between them, and watch the log: a
+`Birthday punch reached a peer behind a symmetric NAT` line, or `Direct link made to a peer that a
+relay carried`, with the peer then showing as a direct connection, means the punch replaced the
+`meetViaRelay` fallback. The connection report (Proxy screen, or `echofog-node status`) also shows a
+`birthday punch (symmetric NAT): tried N, direct link made M` line once an attempt has run.
 
 **censor** records what leaves each router while people use the VPN over QUIC and over the TCP
 fallback, write to each other, and one of them visits the cover site as a browser (the control).

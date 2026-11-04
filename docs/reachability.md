@@ -31,13 +31,18 @@ means your computer cannot be someone else's relay or public exit.
 
 ### When both sides are hard to reach
 
-Hole punching does not pass a **symmetric NAT** (most mobile networks, some home routers), so two
-such people start out **through a relay**: chat messages, group join requests, the group's keys and
-history, and calls all go that way. While a relay carries a peer, the app keeps looking for a
-direct link in the background (at most every two minutes per peer): your LAN address when you both
-sit behind the same router, a dial from both ends, which gets through when the other side's NAT is
-easier, and IPv6 (below). When one works, calls and messages move to it by themselves. Two symmetric
-NATs in different networks without IPv6 stay on the relay. The servers a fresh install joins through may be *signaling only* (they
+Ordinary hole punching does not pass a **symmetric NAT** (most mobile networks, some home routers),
+which hands out a different public port for every peer, so two such people start out **through a
+relay**: chat messages, group join requests, the group's keys and history, and calls all go that
+way. While a relay carries a peer, the app keeps looking for a direct link in the background (at
+most every two minutes per peer): your LAN address when you both sit behind the same router, a dial
+from both ends, which gets through when the other side's NAT is easier, IPv6 (below), and a
+**birthday punch** when one of you is behind a symmetric NAT and the other is not. In a birthday
+punch the symmetric side opens many sockets at once and the other side sends packets across many
+ports, until a pair meets (the same idea as the birthday paradox). It works best when the symmetric
+NAT draws its ports from a small block, which many carrier NATs do; a symmetric NAT that spreads its
+ports across the whole range, and two symmetric NATs together, still stay on the relay (IPv6 aside).
+When a direct link works, calls and messages move to it by themselves. The servers a fresh install joins through may be *signaling only* (they
 help with hole punching but carry nothing); if no relay is connected at all, nothing gets through,
 and the app says so:
 
@@ -79,7 +84,7 @@ to one of those. Under **Your relay link**:
 |---|---|---|
 | Router does not forward a port | Ordinary home NAT | UPnP → forward a port → public IP → IPv6 → VPS |
 | Carrier-grade or double NAT (CGNAT) | Your router has no public address; port forwarding cannot help | public IP → VPS → IPv6 |
-| NAT that changes its address for every peer (symmetric NAT) | Hole punching rarely works | public IP → VPS → forward a port |
+| NAT that changes its address for every peer (symmetric NAT) | Ordinary hole punching does not work; a birthday punch can still reach a peer on an easier NAT when your ports come from a small block (many carrier NATs), otherwise a relay carries you | public IP → VPS → forward a port |
 
 On a server running `echofog-node`, `echofog-node status` shows the same thing in its `NAT:` line
 (`public`, `cone`, `symmetric` or `unknown`).

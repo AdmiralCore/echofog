@@ -17,6 +17,7 @@
 package holepunch
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
@@ -26,6 +27,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -88,6 +90,73 @@ type Config struct {
 	// noise-dial rule (a server across a border with no known cover is not reached by noise).
 	// Punching bypasses the swarm's dial path, so it applies the rule itself.
 	Refuse func(peer types.PeerID, addr string) bool
+	// OwnNAT, when set, reports our NAT so a birthday punch can be chosen for a symmetric NAT (see
+	// package network, BirthdayDial). Nil, or a transport without the birthday half, means only the
+	// ordinary DCUtR punch is ever run.
+	OwnNAT func() NATInfo
+	// OwnID is this node's peer ID. It decides, deterministically on both sides, which is the dialer
+	// in the both-symmetric case (the lower ID dials, the higher listens).
+	OwnID types.PeerID
+}
+
+// NATInfo describes this node's NAT for the purpose of choosing a punch strategy.
+type NATInfo struct {
+	// Sym: behind a symmetric NAT with no forwarded port, so the ordinary punch cannot reach us and
+	// only a birthday punch, or a relay, can.
+	Sym bool
+	// Unknown: the NAT check has not classified us yet (or could not). A birthday role needs to know
+	// whether our mapping is stable, so we advertise this instead of pretending to be cone.
+	Unknown bool
+	// Lo, Hi and Ports describe the public IPv4 port block the NAT was seen to use (natcheck). A
+	// narrow block lets a peer aim a birthday spray; a wide one, or too few observations, does not.
+	Lo, Hi uint16
+	Ports  int
+}
+
+const (
+	ntCone    = "cone"
+	ntSym     = "sym"
+	ntUnknown = "unknown"
+	// birthdayNarrowRange is the widest observed port block still treated as narrow enough for a
+	// birthday punch to be worth it (mirrors the transport's own figure).
+	birthdayNarrowRange = 8000
+	// maxBirthdaySockets caps the sockets the symmetric side opens.
+	maxBirthdaySockets = 256
+	// maxBirthdayNode caps birthday punches running on this node at once.
+	maxBirthdayNode = 2
+)
+
+// ErrNoPunchPath: the NAT pair has no direct path a punch can make (both symmetric, or a wide
+// symmetric range), so the caller should use a relay. Connect stops trying on it.
+var ErrNoPunchPath = errors.New("no direct path for this NAT pair; use a relay")
+
+// The birthday roles carried in SYNC. The initiator chooses the role from both NAT reports (its own
+// and the responder's ANSWER), so the two ends always run complementary halves. Recomputing the mode
+// on the responder made it act on older information and run the wrong half of the punch.
+const (
+	roleDial   = "dial"   // open the birthday sockets and dial the peer's stable address
+	roleSpray  = "spray"  // spray the peer's observed port block
+	roleMutual = "mutual" // both sides open sockets and spray each other's block
+)
+
+// punchMode is the strategy chosen for a peer from the pair of NATs.
+type punchMode int
+
+const (
+	modeOrdinary       punchMode = iota // cone/cone (or an older peer we can punch): DCUtR
+	modeBirthdayDial                    // we are symmetric, the peer is cone: we open the sockets
+	modeBirthdaySpray                   // the peer is symmetric, we are cone: we spray its range
+	modeBirthdayMutual                  // both symmetric with narrow ranges: both open sockets and spray
+	modeNone                            // no direct path: relay
+)
+
+// birthdayTransport is the transport's birthday-punch half. A transport without it never runs one.
+type birthdayTransport interface {
+	BirthdayDial(ctx context.Context, remoteAddr string, peer types.PeerID, n int) error
+	BirthdaySpray(ctx context.Context, ip string, lo, hi uint16, m int, peer types.PeerID) error
+	// BirthdayMutual is the both-symmetric case: open n sockets, spray the peer's range from each,
+	// and — as the dialer — dial whichever socket the peer reaches; as the listener, accept on them.
+	BirthdayMutual(ctx context.Context, ip string, lo, hi uint16, n int, peer types.PeerID, asDialer bool) error
 }
 
 type message struct {
@@ -98,6 +167,15 @@ type message struct {
 	Both  bool     `json:"b,omitempty"` // sync: both sides dial
 	// Ticket proves an invitation to a hidden node (connect only; see package access).
 	Ticket []byte `json:"k,omitempty"`
+	// Birthday-punch fields, carried on connect and answer. A peer running v0.2.0 sends none of
+	// them (and ignores them, since the decoder does not reject unknown fields), so a birthday punch
+	// is only ever chosen when both sides sent NT: an old peer is treated as cone, never sprayed to.
+	NT string    `json:"nt,omitempty"` // our NAT: "cone" (public/cone/mapped), "sym" or "unknown"
+	PR [2]uint16 `json:"pr,omitempty"` // the public port block our NAT was seen to use [lo, hi]
+	PN int       `json:"pn,omitempty"` // how many distinct ports were observed (confidence)
+	BD bool      `json:"bd,omitempty"` // sync: run a birthday punch rather than the ordinary one
+	BR string    `json:"br,omitempty"` // sync: the birthday role the responder must run (roleDial/…)
+	NS uint16    `json:"ns,omitempty"` // sync: how many sockets the symmetric side opens (informational)
 }
 
 type sessKey struct {
@@ -108,6 +186,10 @@ type sessKey struct {
 type incoming struct {
 	addrs []netip.AddrPort
 	timer *time.Timer
+	// the peer's NAT, learned from its CONNECT, so onSync can choose the birthday role.
+	peerNT         string
+	peerLo, peerHi uint16
+	peerPorts      int
 }
 
 // Service runs both roles.
@@ -121,7 +203,16 @@ type Service struct {
 	lastAccept map[types.PeerID][]time.Time
 	wanted     map[types.PeerID]time.Time // peers this node set out to reach, and when
 	responders int
+	birthdays  int // birthday punches running on this node now (both roles)
 	closed     bool
+
+	bdTried, bdOK atomic.Int64 // birthday punches started and ones that made a direct link
+}
+
+// BirthdayStats reports how many birthday punches this node has started and how many produced a
+// direct link, for the connection report.
+func (s *Service) BirthdayStats() (tried, ok int64) {
+	return s.bdTried.Load(), s.bdOK.Load()
 }
 
 // Want notes that this node is trying to reach peer: for wantWindow, a CONNECT from that peer is
@@ -308,7 +399,7 @@ func (s *Service) Connect(ctx context.Context, peer types.PeerID) error {
 		if lastErr == nil || s.cfg.Connected(peer) {
 			return nil
 		}
-		if errors.Is(lastErr, ErrNoOwnAddr) || errors.Is(lastErr, ErrNoRemoteAddr) {
+		if errors.Is(lastErr, ErrNoOwnAddr) || errors.Is(lastErr, ErrNoRemoteAddr) || errors.Is(lastErr, ErrNoPunchPath) {
 			return lastErr
 		}
 		slog.Debug("hole punch attempt failed", "peer", peer.String()[:8], "attempt", attempt, "err", lastErr)
@@ -342,8 +433,10 @@ func (s *Service) attempt(ctx context.Context, peer types.PeerID, both bool) err
 		s.mu.Unlock()
 	}()
 
+	ownNAT := s.ownNAT()
 	start := time.Now()
 	req := message{T: "connect", N: key.n, Addr: addrStrings(own), Local: s.ownLocal()}
+	ownNAT.fill(&req)
 	if s.cfg.Ticket != nil {
 		req.Ticket = s.cfg.Ticket(peer)
 	}
@@ -375,7 +468,34 @@ func (s *Service) attempt(ctx context.Context, peer types.PeerID, both bool) err
 		return fmt.Errorf("the path through the relay is too slow to synchronise (rtt %v)", rtt)
 	}
 
-	if err := s.send(ctx, peer, message{T: "sync", N: key.n, Both: both}); err != nil {
+	mode := s.chooseMode(ownNAT, answer.NT, answer.PR[0], answer.PR[1], answer.PN)
+	if mode == modeNone {
+		// no direct path for this NAT pair (both symmetric, or a wide symmetric range): do not send
+		// SYNC, which would only make the peer dial an address it cannot reach. The caller relays.
+		return ErrNoPunchPath
+	}
+	// A birthday punch is an IPv4 mechanism: its sockets and its spray target IPv4 only. When the
+	// pair has no public IPv4 candidate (an IPv6-only network, or the peer's IPv4 was filtered), the
+	// ordinary punch over IPv6 is the direct path, exactly as it is over a cone NAT.
+	if mode != modeOrdinary && !firstPublicV4(remote).IsValid() {
+		mode = modeOrdinary
+	}
+	sync := message{T: "sync", N: key.n, Both: both}
+	switch mode {
+	case modeBirthdayDial:
+		// We are the symmetric side and open the sockets; the peer's cone side sprays our block.
+		sync.BD = true
+		sync.BR = roleSpray
+		sync.NS = uint16(s.birthdaySockets(ownNAT))
+	case modeBirthdaySpray:
+		// The peer is symmetric and opens the sockets; we spray its block.
+		sync.BD = true
+		sync.BR = roleDial
+	case modeBirthdayMutual:
+		sync.BD = true
+		sync.BR = roleMutual
+	}
+	if err := s.send(ctx, peer, sync); err != nil {
 		return fmt.Errorf("send SYNC: %w", err)
 	}
 	// SYNC takes about half a round trip to arrive; start when it does
@@ -385,6 +505,16 @@ func (s *Service) attempt(ctx context.Context, peer types.PeerID, both bool) err
 		return ctx.Err()
 	}
 
+	switch mode {
+	case modeBirthdayDial:
+		return s.birthdayDial(ctx, peer, remote, int(sync.NS))
+	case modeBirthdaySpray:
+		return s.birthdaySpray(ctx, peer, remote, answer.PR[0], answer.PR[1], answer.PN)
+	case modeBirthdayMutual:
+		return s.birthdayMutual(ctx, peer, remote, answer.PR[0], answer.PR[1], answer.PN)
+	case modeNone:
+		return ErrNoPunchPath
+	}
 	if both {
 		return s.dialAll(ctx, peer, remote)
 	}
@@ -468,7 +598,7 @@ func (s *Service) onConnect(from types.PeerID, m message) {
 		return
 	}
 	key := sessKey{from, m.N}
-	in := &incoming{addrs: remote}
+	in := &incoming{addrs: remote, peerNT: m.NT, peerLo: m.PR[0], peerHi: m.PR[1], peerPorts: m.PN}
 	s.responders++
 	in.timer = time.AfterFunc(syncWait, func() {
 		s.mu.Lock()
@@ -483,7 +613,9 @@ func (s *Service) onConnect(from types.PeerID, m message) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.send(ctx, from, message{T: "answer", N: m.N, Addr: addrStrings(own), Local: ownLocal}); err != nil {
+	ans := message{T: "answer", N: m.N, Addr: addrStrings(own), Local: ownLocal}
+	s.ownNAT().fill(&ans)
+	if err := s.send(ctx, from, ans); err != nil {
 		slog.Debug("hole punch: could not answer CONNECT", "err", err)
 	}
 }
@@ -501,8 +633,47 @@ func (s *Service) onSync(from types.PeerID, m message) {
 	if !ok {
 		return
 	}
-	// the initiator is already starting: dial now. In "both" mode it dials too, otherwise it
-	// punches toward us while we dial it.
+	// The initiator is already starting. For a birthday punch it names our role in SYNC: it chose the
+	// mode from both NAT reports, and deriving it again here on older information made the two ends
+	// run the wrong halves (both spraying, or neither). A birthday SYNC without a role comes from a
+	// build that predates the field; derive it as that build did, as a compatibility fallback.
+	if m.BD {
+		role := m.BR
+		if role == "" {
+			switch s.chooseMode(s.ownNAT(), in.peerNT, in.peerLo, in.peerHi, in.peerPorts) {
+			case modeBirthdayDial:
+				role = roleDial
+			case modeBirthdaySpray:
+				role = roleSpray
+			case modeBirthdayMutual:
+				role = roleMutual
+			}
+		}
+		if role == "" {
+			slog.Debug("birthday punch: no role for this NAT pair", "peer", from.String()[:8])
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			var err error
+			switch role {
+			case roleDial:
+				err = s.birthdayDial(ctx, from, in.addrs, s.birthdaySockets(s.ownNAT()))
+			case roleSpray:
+				err = s.birthdaySpray(ctx, from, in.addrs, in.peerLo, in.peerHi, in.peerPorts)
+			case roleMutual:
+				err = s.birthdayMutual(ctx, from, in.addrs, in.peerLo, in.peerHi, in.peerPorts)
+			default:
+				slog.Debug("birthday punch: unknown role in SYNC", "peer", from.String()[:8], "role", role)
+				return
+			}
+			if err != nil {
+				slog.Debug("birthday punch failed", "peer", from.String()[:8], "role", role, "err", err)
+			}
+		}()
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -549,6 +720,220 @@ func (s *Service) race(ctx context.Context, peer types.PeerID, addrs []netip.Add
 	}
 	return last
 }
+
+// ownNAT reports this node's NAT (the zero value when no source is wired: then NT is "cone" and no
+// birthday punch is ever chosen for us).
+func (s *Service) ownNAT() NATInfo {
+	if s.cfg.OwnNAT == nil {
+		return NATInfo{}
+	}
+	return s.cfg.OwnNAT()
+}
+
+// nt is the wire NAT type of a NATInfo.
+func (ni NATInfo) nt() string {
+	switch {
+	case ni.Unknown:
+		return ntUnknown
+	case ni.Sym:
+		return ntSym
+	default:
+		return ntCone
+	}
+}
+
+// fill writes this NAT into a message (connect or answer).
+func (ni NATInfo) fill(m *message) {
+	m.NT = ni.nt()
+	m.PR = [2]uint16{ni.Lo, ni.Hi}
+	m.PN = ni.Ports
+}
+
+// narrowRange reports whether a symmetric NAT's observed port block is tight enough, and seen often
+// enough, for a birthday punch to be worth aiming at it.
+func narrowRange(lo, hi uint16, ports int) bool {
+	return lo >= 1024 && hi >= lo && ports >= 2 && int(hi-lo) <= birthdayNarrowRange
+}
+
+// chooseMode picks the punch strategy from this node's NAT and the peer's (as it reported it). An
+// older peer that sent no NT counts as cone: it is punched the ordinary way if we can, never
+// sprayed to (it would not spray back). Symmetric↔cone is tried whatever the range (a narrow block
+// is swept, a wide one sprayed at random over the dynamic range). Both-symmetric is tried only when
+// both ranges are narrow, where a double birthday has a chance; otherwise it falls to a relay.
+func (s *Service) chooseMode(own NATInfo, peerNT string, peerLo, peerHi uint16, peerPorts int) punchMode {
+	peerSym := peerNT == ntSym
+	peerUnknown := peerNT == "" || peerNT == ntUnknown
+	switch {
+	case !own.Sym && !peerSym:
+		// Both sides have (or may have) a stable mapping: the ordinary punch is the safe try. That
+		// includes an unclassified NAT, where a birthday role would be a guess.
+		return modeOrdinary
+	case own.Unknown && peerSym:
+		// Our NAT is not classified yet. If it turns out to be cone, spraying the peer's range is the
+		// only direct path; if it is symmetric, the attempt fails and the pair falls back to a relay.
+		return modeBirthdaySpray
+	case own.Sym && peerUnknown:
+		// We are symmetric and the peer cannot spray back (old build, or its own NAT is unknown):
+		// nothing direct can be arranged.
+		return modeNone
+	case own.Sym && !peerSym:
+		// we are symmetric, the peer is cone and knows birthday: it sprays our range
+		return modeBirthdayDial
+	case !own.Sym && peerSym:
+		// the peer is symmetric, we are cone: we spray its range
+		return modeBirthdaySpray
+	default: // own.Sym && peerSym
+		// both symmetric: a double birthday, worth it only when both ranges are narrow
+		if narrowRange(own.Lo, own.Hi, own.Ports) && narrowRange(peerLo, peerHi, peerPorts) {
+			return modeBirthdayMutual
+		}
+		return modeNone
+	}
+}
+
+// birthdaySockets is how many sockets we open as the symmetric side. More sockets mean more open
+// mappings for the cone's spray to hit, so we use the cap: the extra mappings cost little and the
+// per-attempt success is what makes a direct link form inside a call's short window.
+func (s *Service) birthdaySockets(own NATInfo) int {
+	return maxBirthdaySockets
+}
+
+// spraysFor is how many packets the cone side sends: enough to sweep a narrow block, widened, a few
+// times over; the whole dynamic range (lo below 1024, our marker for "wide or unknown") takes the
+// cap. Always within the transport's own limit.
+func spraysFor(lo, hi uint16) int {
+	if lo < 1024 || hi < lo {
+		return maxBirthdaySpray
+	}
+	m := (int(hi-lo) + 1) * 6
+	if m < 256 {
+		m = 256
+	}
+	if m > maxBirthdaySpray {
+		m = maxBirthdaySpray
+	}
+	return m
+}
+
+// maxBirthdaySpray mirrors the transport's cap so the Service never asks for more.
+const maxBirthdaySpray = 900
+
+// firstPublicV4 is the first IPv4 address of a list (birthday punching is an IPv4-NAT affair).
+func firstPublicV4(addrs []netip.AddrPort) netip.AddrPort {
+	for _, a := range addrs {
+		if a.Addr().Unmap().Is4() {
+			return a
+		}
+	}
+	return netip.AddrPort{}
+}
+
+// beginBirthday reserves one of the node's birthday-punch slots; end releases it.
+func (s *Service) beginBirthday() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.birthdays >= maxBirthdayNode {
+		return false
+	}
+	s.birthdays++
+	return true
+}
+
+func (s *Service) endBirthday() {
+	s.mu.Lock()
+	if s.birthdays > 0 {
+		s.birthdays--
+	}
+	s.mu.Unlock()
+}
+
+// birthdayDial runs our symmetric-side half: open n sockets and dial the peer from whichever one it
+// reaches. remote is already filtered by the noise-dial rule, so its first IPv4 address is a target
+// we are allowed to punch toward.
+func (s *Service) birthdayDial(ctx context.Context, peer types.PeerID, remote []netip.AddrPort, n int) error {
+	bt, ok := s.cfg.Transport.(birthdayTransport)
+	if !ok {
+		return ErrFailed
+	}
+	target := firstPublicV4(remote)
+	if !target.IsValid() {
+		return ErrNoRemoteAddr
+	}
+	if !s.beginBirthday() {
+		return ErrBusy
+	}
+	defer s.endBirthday()
+	s.bdTried.Add(1)
+	err := bt.BirthdayDial(ctx, target.String(), peer, n)
+	if err == nil {
+		s.bdOK.Add(1)
+	}
+	return err
+}
+
+// birthdaySpray runs our cone-side half: spray the peer's IP across the port block its NAT uses. A
+// range that is not narrow enough to trust (wide, or too few observations) is zeroed, which the
+// transport reads as "spray the whole dynamic range".
+func (s *Service) birthdaySpray(ctx context.Context, peer types.PeerID, remote []netip.AddrPort, lo, hi uint16, ports int) error {
+	bt, ok := s.cfg.Transport.(birthdayTransport)
+	if !ok {
+		return ErrFailed
+	}
+	target := firstPublicV4(remote)
+	if !target.IsValid() {
+		return ErrNoRemoteAddr
+	}
+	if !narrowRange(lo, hi, ports) {
+		lo, hi = 0, 0
+	}
+	if !s.beginBirthday() {
+		return ErrBusy
+	}
+	defer s.endBirthday()
+	s.bdTried.Add(1)
+	err := bt.BirthdaySpray(ctx, target.Addr().String(), lo, hi, spraysFor(lo, hi), peer)
+	if err == nil {
+		s.bdOK.Add(1)
+	}
+	return err
+}
+
+// amDialer decides, the same way on both sides, which end dials in the both-symmetric case: the
+// lower peer ID dials, the higher listens. Without an OwnID the node never dials (it listens),
+// which still lets a peer that does have one drive the rendezvous.
+func (s *Service) amDialer(peer types.PeerID) bool {
+	return bytes.Compare(s.cfg.OwnID[:], peer[:]) < 0
+}
+
+// birthdayMutual runs the both-symmetric case: both ends open sockets and spray each other's narrow
+// range; the dialer dials the socket the peer reaches, the listener accepts on its own.
+func (s *Service) birthdayMutual(ctx context.Context, peer types.PeerID, remote []netip.AddrPort, lo, hi uint16, ports int) error {
+	bt, ok := s.cfg.Transport.(birthdayTransport)
+	if !ok {
+		return ErrFailed
+	}
+	target := firstPublicV4(remote)
+	if !target.IsValid() {
+		return ErrNoRemoteAddr
+	}
+	if !narrowRange(lo, hi, ports) {
+		return ErrNoPunchPath // both-narrow only
+	}
+	if !s.beginBirthday() {
+		return ErrBusy
+	}
+	defer s.endBirthday()
+	s.bdTried.Add(1)
+	err := bt.BirthdayMutual(ctx, target.Addr().String(), lo, hi, maxBirthdayMutualSockets, peer, s.amDialer(peer))
+	if err == nil {
+		s.bdOK.Add(1)
+	}
+	return err
+}
+
+// maxBirthdayMutualSockets is how many sockets each side opens in the both-symmetric case; kept
+// well below the single-side cap because both ends run listeners on them at once.
+const maxBirthdayMutualSockets = 64
 
 func addrStrings(in []netip.AddrPort) []string {
 	out := make([]string, len(in))

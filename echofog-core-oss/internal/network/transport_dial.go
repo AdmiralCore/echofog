@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/apernet/quic-go"
 	"github.com/echofog/echofog-core/internal/network/dpi"
@@ -153,6 +154,19 @@ func (q *QuicTransport) ExpectPeer(addr string, id types.PeerID) {
 	} else if s, ok := q.book.getSNIByID(id); ok && s != "" {
 		q.obfs.SetRaw(ua.AddrPort(), true)
 	}
+}
+
+// ExpectPeerIP tells the transport that the node at ip has peer ID id for any port. A birthday
+// punch sprays guessed ports, so the peer is known by IP before its exact address is.
+func (q *QuicTransport) ExpectPeerIP(ip string, id types.PeerID) {
+	if q.obfs == nil {
+		return
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return
+	}
+	_ = q.obfs.ExpectIP(addr.Unmap(), dpi.NodeKey(q.obfsSecret, id))
 }
 
 // SetRegionNoise installs the region policy: a predicate that reports whether the node at addr is
