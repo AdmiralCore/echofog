@@ -72,6 +72,8 @@ type CardOptions struct {
 	Seq      uint64 // default: fixedTime
 	PrevHs   []byte
 	InviteID []byte
+	ProtoVer uint32 // default: 200
+	Flags    uint32
 }
 
 func (k *testIdentity) card(t testing.TB, o CardOptions) []byte {
@@ -92,8 +94,12 @@ func (k *testIdentity) cardWithDevices(t testing.TB, devices []byte, o CardOptio
 	for _, x := range suites {
 		s = append(s, uint64(x))
 	}
-	w := new(pbWriter).uint(1, 200).bytes(2, append([]byte{AlgX25519}, hs...)).packed(3, s...)
-	w.uint(6, 0).uint(7, 0)
+	pv := o.ProtoVer
+	if pv == 0 {
+		pv = 200
+	}
+	w := new(pbWriter).uint(1, uint64(pv)).bytes(2, append([]byte{AlgX25519}, hs...)).packed(3, s...)
+	w.uint(6, 0).uint(7, uint64(o.Flags))
 	w.bytes(13, akeyEd(k.account.Public().(ed25519.PublicKey)))
 	if o.PrevHs != nil {
 		w.bytes(15, new(pbWriter).bytes(1, append([]byte{AlgX25519}, o.PrevHs...)).uint(2, fixedTime+6*86400).b)

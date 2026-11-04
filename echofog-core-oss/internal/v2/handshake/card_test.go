@@ -168,3 +168,17 @@ func TestDeviceListMustListSigner(t *testing.T) {
 		t.Fatalf("own card: %v", err)
 	}
 }
+
+// The handshake verifies cards with the full rules of objects.md §3, not a subset: there is one
+// card parser in the tree (internal/v2/objects).
+func TestCardVerifierAppliesObjectRules(t *testing.T) {
+	k := newTestIdentity(t, 1)
+	for name, o := range map[string]CardOptions{
+		"proto_ver below 200":          {ProtoVer: 199},
+		"flag exit without exit offer": {Flags: 1 << 5},
+	} {
+		if _, err := (DefaultCardVerifier{}).VerifyCard(k.card(t, o), fixedNow); !errors.Is(err, ErrCardMalformed) {
+			t.Errorf("%s: %v, want ErrCardMalformed", name, err)
+		}
+	}
+}
