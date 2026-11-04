@@ -102,6 +102,35 @@ func NewDevice() (*Device, error) {
 	}, nil
 }
 
+// DeviceFromKeys rebuilds a device from the material the store keeps: the Ed25519 seed of the
+// device key and the X25519 private keys of hs and of the contacts masking key.
+func DeviceFromKeys(seed, hsPriv, maskPriv []byte) (*Device, error) {
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("%w: device seed is %d bytes", ErrKeyLength, len(seed))
+	}
+	signer, err := keys.NewEd25519Signer(seed)
+	if err != nil {
+		return nil, err
+	}
+	hs, err := KeyPairFromPrivate(hsPriv)
+	if err != nil {
+		return nil, err
+	}
+	mask, err := KeyPairFromPrivate(maskPriv)
+	if err != nil {
+		hs.Destroy()
+		return nil, err
+	}
+	pub := signer.Public()
+	return &Device{
+		seed: secret.New(seed),
+		pub:  append(keys.AKey(nil), pub...),
+		id:   pub.ID(),
+		hs:   hs,
+		mask: mask,
+	}, nil
+}
+
 // Public returns the algorithm-tagged device key. The caller may keep the copy.
 func (d *Device) Public() keys.AKey { return append(keys.AKey(nil), d.pub...) }
 
@@ -138,6 +167,9 @@ func (d *Device) Sign(msg []byte) ([]byte, error) {
 	})
 	return sig, err
 }
+
+// WithSeed runs fn with the Ed25519 seed of the device key, so the store can seal it.
+func (d *Device) WithSeed(fn func([]byte) error) error { return d.seed.Use(fn) }
 
 // Destroy wipes the device secrets.
 func (d *Device) Destroy() {

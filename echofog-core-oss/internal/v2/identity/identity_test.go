@@ -288,6 +288,50 @@ func TestExitIdentity(t *testing.T) {
 	}
 }
 
+func TestDeviceFromKeys(t *testing.T) {
+	d := mustDevice(t)
+	var seed, hsPriv, maskPriv []byte
+	if err := d.WithSeed(func(b []byte) error { seed = append([]byte(nil), b...); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	defer secret.Wipe(seed)
+	if err := d.Handshake().WithPrivate(func(b []byte) error { hsPriv = append([]byte(nil), b...); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	defer secret.Wipe(hsPriv)
+	if err := d.Masking().WithPrivate(func(b []byte) error { maskPriv = append([]byte(nil), b...); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	defer secret.Wipe(maskPriv)
+
+	back, err := identity.DeviceFromKeys(seed, hsPriv, maskPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Destroy()
+	if back.ID() != d.ID() || !back.Public().Equal(d.Public()) {
+		t.Fatal("the rebuilt device has another key")
+	}
+	if !back.Handshake().Public().Equal(d.Handshake().Public()) ||
+		!back.Masking().Public().Equal(d.Masking().Public()) {
+		t.Fatal("the rebuilt device has another hs or masking key")
+	}
+	sig, err := back.Sign([]byte("card"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.Verify(d.Public(), []byte("card"), sig); err != nil {
+		t.Fatalf("the rebuilt device signs differently: %v", err)
+	}
+
+	if _, err := identity.DeviceFromKeys(seed[:31], hsPriv, maskPriv); err == nil {
+		t.Fatal("a short seed was accepted")
+	}
+	if _, err := identity.DeviceFromKeys(seed, hsPriv[:31], maskPriv); err == nil {
+		t.Fatal("a short hs key was accepted")
+	}
+}
+
 func TestThrowawayIdentity(t *testing.T) {
 	main := mustAccount(t)
 	a, err := identity.NewThrowaway()
