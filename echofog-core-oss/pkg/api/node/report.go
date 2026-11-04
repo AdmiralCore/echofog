@@ -58,6 +58,12 @@ func (n *NodeApi) ConnectionReport(appVersion string) (ConnectionReport, error) 
 		}
 		line("nat: %s  port mapped: %s  reachable from outside: %s", orUnknown(reach.NAT), yesNo(reach.Mapped), reachable)
 
+		if hp := n.node.HolePunch; hp != nil {
+			if tried, ok := hp.BirthdayStats(); tried > 0 {
+				line("birthday punch (symmetric NAT): tried %d, direct link made %d", tried, ok)
+			}
+		}
+
 		udp := "yes"
 		if n.node.Swarm.PrefersTCPHere() {
 			udp = "no, TCP goes first on this network"

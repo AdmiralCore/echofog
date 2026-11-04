@@ -151,6 +151,8 @@ func (n *Node) startHolePunch() {
 		Ticket:     func(p types.PeerID) []byte { return n.Invites.Ticket(p, n.ID) },
 		Admit:      n.admitPunch,
 		Refuse:     n.Swarm.NoiseDialRefused,
+		OwnNAT:     n.ownNATInfo,
+		OwnID:      n.ID,
 	})
 	n.HolePunch = svc
 	n.Swarm.RegisterFastFrameHandler(net_types.TypeHolePunch, func(payload []byte, from types.PeerID) error {
@@ -293,6 +295,28 @@ func (n *Node) CallRelayCapacity() int {
 		return CallFanoutCone
 	default:
 		return 0
+	}
+}
+
+// ownNATInfo tells the hole-punch service our NAT, so it can choose a birthday punch when we sit
+// behind a symmetric NAT with no forwarded port. A forwarded port (CanBeRouter) means we are
+// reachable the ordinary way, so it is never reported as symmetric.
+func (n *Node) ownNATInfo() holepunch.NATInfo {
+	if n.NAT == nil {
+		return holepunch.NATInfo{Unknown: true}
+	}
+	lo, hi, ports := n.NAT.PortRange()
+	_, t := n.NAT.GetNATProfile()
+	switch {
+	case t == routing.NATUnknown:
+		// No classification yet (start-up, STUN blocked, a guard-mode node): say so. Claiming cone
+		// would make a symmetric peer believe a birthday spray can reach us.
+		return holepunch.NATInfo{Unknown: true}
+	case t == routing.NATSymmetric && !n.NAT.CanBeRouter():
+		return holepunch.NATInfo{Sym: true, Lo: lo, Hi: hi, Ports: ports}
+	default:
+		// A forwarded port makes us reachable the ordinary way, whatever the mapping does.
+		return holepunch.NATInfo{}
 	}
 }
 

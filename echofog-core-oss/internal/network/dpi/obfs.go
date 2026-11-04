@@ -63,6 +63,9 @@ type NodeObfs struct {
 	mu    sync.RWMutex
 	peers map[netip.AddrPort][KeyLen]byte
 	byIP  map[netip.Addr][][KeyLen]byte
+	// ipKeys is the key of the node at an IP when no port is known: a birthday punch sprays
+	// guessed ports, so the packets it sends cannot be keyed by an exact address.
+	ipKeys map[netip.Addr][KeyLen]byte
 	// heard is the key the last packet from an address opened with. The expected key of an
 	// address can belong to another node: two computers behind one NAT, where the router gave
 	// the first the outside port the second announces, so this node expects the second there
@@ -87,6 +90,7 @@ func NewNodeObfs(ownKey []byte) (*NodeObfs, error) {
 	o := &NodeObfs{
 		peers:    make(map[netip.AddrPort][KeyLen]byte),
 		byIP:     make(map[netip.Addr][][KeyLen]byte),
+		ipKeys:   make(map[netip.Addr][KeyLen]byte),
 		heard:    make(map[netip.AddrPort]heardKey),
 		rawPeers: make(map[netip.AddrPort]bool),
 	}
@@ -162,6 +166,7 @@ func (o *NodeObfs) Expect(addr netip.AddrPort, key []byte) error {
 	if len(o.peers) >= maxPeerKeys {
 		o.peers = make(map[netip.AddrPort][KeyLen]byte)
 		o.byIP = make(map[netip.Addr][][KeyLen]byte)
+		o.ipKeys = make(map[netip.Addr][KeyLen]byte)
 	}
 	o.peers[addr] = k
 	list := o.byIP[addr.Addr()]
@@ -176,11 +181,40 @@ func (o *NodeObfs) Expect(addr netip.AddrPort, key []byte) error {
 	return nil
 }
 
+// ExpectIP records that the node at ip uses key for any port: a birthday punch aims at guessed
+// ports, so the exact addresses it sends to are not known in advance. Call it before the punch.
+func (o *NodeObfs) ExpectIP(ip netip.Addr, key []byte) error {
+	if len(key) != KeyLen {
+		return ErrBadKeyLen
+	}
+	ip = ip.Unmap()
+	var k [KeyLen]byte
+	copy(k[:], key)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.ipKeys) >= maxPeerKeys {
+		o.ipKeys = make(map[netip.Addr][KeyLen]byte)
+		o.byIP = make(map[netip.Addr][][KeyLen]byte)
+	}
+	o.ipKeys[ip] = k
+	list := o.byIP[ip]
+	for _, have := range list {
+		if have == k {
+			return nil
+		}
+	}
+	if len(list) < 8 {
+		o.byIP[ip] = append(list, k)
+	}
+	return nil
+}
+
 func (o *NodeObfs) sendKey(addr net.Addr) [KeyLen]byte {
 	if ap, ok := addrPortOf(addr); ok {
 		o.mu.RLock()
 		h, heard := o.heard[ap]
 		k, found := o.peers[ap]
+		pk, ipFound := o.ipKeys[ap.Addr()]
 		o.mu.RUnlock()
 		// whoever really speaks from the address is answered, as long as it still speaks: a dial
 		// to the node expected there (that may be another node behind the same NAT) must not cut
@@ -190,6 +224,10 @@ func (o *NodeObfs) sendKey(addr net.Addr) [KeyLen]byte {
 		}
 		if found {
 			return k
+		}
+		// A guessed port (a birthday spray): the peer is known by IP, not by address.
+		if ipFound {
+			return pk
 		}
 	}
 	return o.own
@@ -239,10 +277,20 @@ func (o *NodeObfs) candidates(addr net.Addr, buf [][KeyLen]byte) [][KeyLen]byte 
 		if found {
 			buf = append(buf, first)
 		}
+		ipKey, haveIP := o.ipKeys[ap.Addr()]
+		haveIP = haveIP && (!found || ipKey != first)
 		for _, k := range o.byIP[ap.Addr()] {
 			if !found || k != first {
 				buf = append(buf, k)
 			}
+			if haveIP && k == ipKey {
+				haveIP = false
+			}
+		}
+		if haveIP {
+			// the per-IP list is capped at eight keys; the node this punch is for must still be
+			// tried when the IP is crowded (many nodes behind one NAT)
+			buf = append(buf, ipKey)
 		}
 		o.mu.RUnlock()
 	}

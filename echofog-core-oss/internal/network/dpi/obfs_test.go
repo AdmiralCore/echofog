@@ -44,6 +44,54 @@ func TestNodeKeyDependsOnIDAndSecret(t *testing.T) {
 	}
 }
 
+// A birthday punch sends to guessed ports, so the peer is known by IP only. ExpectIP must key those
+// packets with the peer's key; otherwise they are sealed with the sender's own key and the peer
+// silently drops every one of them.
+func TestExpectIPKeysGuessedPorts(t *testing.T) {
+	sender, senderKey := newObfs(t, 1)
+	receiver, receiverKey := newObfs(t, 2)
+	ip := netip.MustParseAddr("203.0.113.9")
+	guessed := &net.UDPAddr{IP: net.IP(ip.AsSlice()), Port: 51234}
+
+	before := sender.sendKey(guessed)
+	if !bytes.Equal(before[:], sender.own[:]) {
+		t.Fatal("without an expectation a guessed port must use the sender's own key")
+	}
+	if err := sender.ExpectIP(ip, receiverKey); err != nil {
+		t.Fatal(err)
+	}
+	after := sender.sendKey(guessed)
+	if !bytes.Equal(after[:], receiverKey) {
+		t.Fatal("ExpectIP did not key a guessed port with the peer's key")
+	}
+
+	// What the receiver opens with is its own key, so the sealed packet must round-trip.
+	payload := []byte("birthday punch")
+	salt := make([]byte, SaltLen)
+	_, _ = rand.Read(salt)
+	wire, out := make([]byte, 256), make([]byte, 256)
+	var key [KeyLen]byte
+	copy(key[:], after[:])
+	n, err := seal(&key, payload, wire, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := open(&receiver.own, wire[:n], out)
+	if !ok || !bytes.Equal(out[:m], payload) {
+		t.Fatal("the receiver could not open a packet sealed for its IP")
+	}
+
+	// The other direction of a mutual punch: the receiver also learns the sender by IP, so its
+	// packets to a guessed port of the sender are sealed with the sender's key.
+	if err := receiver.ExpectIP(netip.MustParseAddr("198.51.100.5"), senderKey); err != nil {
+		t.Fatal(err)
+	}
+	back := receiver.sendKey(&net.UDPAddr{IP: net.IPv4(198, 51, 100, 5), Port: 51235})
+	if !bytes.Equal(back[:], senderKey) {
+		t.Fatal("ExpectIP did not key the reverse direction")
+	}
+}
+
 func TestSealOpenRoundTrip(t *testing.T) {
 	_, k := newObfs(t, 1)
 	var key [KeyLen]byte

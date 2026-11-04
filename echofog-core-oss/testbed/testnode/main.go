@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -24,7 +25,41 @@ import (
 	"github.com/echofog/echofog-core/internal/config"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/node"
+	"github.com/pion/stun/v4"
 )
+
+// serveSTUN answers STUN binding requests on addr with the source address it sees, standing in for
+// the public STUN servers the lab cannot reach. A node behind a NAT that asks several of these
+// learns its public port and whether it varies by destination (a symmetric NAT).
+func serveSTUN(addr string) {
+	pc, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		log.Printf("STUN responder: %v", err)
+		return
+	}
+	buf := make([]byte, 1500)
+	for {
+		n, from, err := pc.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		var req stun.Message
+		req.Raw = append([]byte(nil), buf[:n]...)
+		if req.Decode() != nil || req.Type != stun.BindingRequest {
+			continue
+		}
+		ua, ok := from.(*net.UDPAddr)
+		if !ok {
+			continue
+		}
+		resp, err := stun.Build(stun.NewTransactionIDSetter(req.TransactionID), stun.BindingSuccess,
+			&stun.XORMappedAddress{IP: ua.IP, Port: ua.Port}, stun.Fingerprint)
+		if err != nil {
+			continue
+		}
+		_, _ = pc.WriteTo(resp.Raw, from)
+	}
+}
 
 type testNode struct {
 	name    string
@@ -67,7 +102,10 @@ func main() {
 	cfg.Network.ListenAddr = *listen
 	cfg.Storage.DatabasePath = filepath.Join(*dataDir, "db")
 	cfg.Network.PortMapping = false
-	cfg.Network.STUNServers = []string{*stun}
+	cfg.Network.STUNServers = strings.Split(*stun, ",")
+	if v := os.Getenv("STUN"); v != "" { // a scenario may point the node at the lab's own STUN servers
+		cfg.Network.STUNServers = strings.Split(v, ",")
+	}
 	if *transport != "" {
 		cfg.Network.Transport = *transport
 	}
@@ -120,6 +158,13 @@ func main() {
 	a := api.NewNodeApi(n)
 	if err := a.StartNode(); err != nil { // also starts the group service
 		log.Fatalf("start: %v", err)
+	}
+
+	if *server {
+		// the lab has no Internet, so public STUN is unreachable; a server node answers STUN on :3478
+		// with the address it sees, which lets a node behind a NAT learn its public port (and, from
+		// several servers, whether that port varies by destination — a symmetric NAT)
+		go serveSTUN(":3478")
 	}
 
 	t := &testNode{name: *name, started: time.Now(), n: n, api: a}
@@ -206,9 +251,23 @@ func (t *testNode) status(w http.ResponseWriter, _ *http.Request) {
 	for _, p := range peers {
 		ids = append(ids, p.PeerID)
 	}
+	nat := "unknown"
+	var natLo, natHi uint16
+	var natPorts int
+	if t.n.NAT != nil {
+		_, kind := t.n.NAT.GetNATProfile()
+		nat = kind.String()
+		natLo, natHi, natPorts = t.n.NAT.PortRange()
+	}
+	var bdTried, bdOK int64
+	if t.n.HolePunch != nil {
+		bdTried, bdOK = t.n.HolePunch.BirthdayStats()
+	}
 	reply(w, map[string]any{
 		"name": t.name, "id": t.api.GetMyID(), "pubKey": t.api.GetMyPubKey(),
 		"peers": len(peers), "peerIds": ids, "uptimeSec": int(time.Since(t.started).Seconds()),
+		"nat": nat, "natLo": natLo, "natHi": natHi, "natPorts": natPorts,
+		"birthdayTried": bdTried, "birthdayOK": bdOK,
 	}, nil)
 }
 
