@@ -71,9 +71,7 @@ func TestAccountKeyEqualsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if priv != nil {
-		priv.Destroy()
-	}
+	_ = priv
 
 	a := mustAccount(t)
 	if a.Public().Alg() != keys.Ed25519 {
@@ -87,7 +85,8 @@ func TestAccountKeyEqualsV1(t *testing.T) {
 	if got := hexOf(t, a.Public()); got != "01"+v1IdentityPub {
 		t.Fatalf("account akey %s", got)
 	}
-	if got := hexOf(t, a.NodeID()[:]); got != v1NodeID {
+	nodeID := a.NodeID()
+	if got := hexOf(t, nodeID[:]); got != v1NodeID {
 		t.Fatalf("node id %s", got)
 	}
 }
@@ -280,6 +279,42 @@ func TestExitIdentity(t *testing.T) {
 	defer e2.Destroy()
 	if e2.Account.NodeID() == e.Account.NodeID() || e2.Device.ID() == e.Device.ID() {
 		t.Fatal("two exit identities share a key")
+	}
+}
+
+func TestThrowawayIdentity(t *testing.T) {
+	main := mustAccount(t)
+	a, err := identity.NewThrowaway()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Destroy()
+	b, err := identity.NewThrowaway()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Destroy()
+	if a.Account.NodeID() == b.Account.NodeID() || a.Device.ID() == b.Device.ID() {
+		t.Fatal("two throwaway identities share a key")
+	}
+	if a.Account.NodeID() == main.NodeID() || a.Device.Public().Equal(main.Public()) {
+		t.Fatal("a throwaway identity is tied to the messenger identity")
+	}
+	if a.Device.Handshake().Public().Equal(main.Public()) {
+		t.Fatal("the throwaway reused the real handshake key")
+	}
+
+	now := time.Unix(1_700_000_000, 0)
+	list, err := a.DeviceList(1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dl, err := objects.VerifyDeviceList(list, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dl.NodeID != a.Account.NodeID() || len(dl.Devices()) != 1 || !dl.Contains(a.Device.Public()) {
+		t.Fatal("the throwaway device list is wrong")
 	}
 }
 
