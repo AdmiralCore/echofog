@@ -80,19 +80,67 @@ func TestPadForBuckets(t *testing.T) {
 	}
 }
 
+// TestPadBudgetPerDirection pins the window semantics of decisions.md (T2.5, п. 2): the budget
+// counts the direction's total bytes, including the record itself, and padding never crosses the
+// end of the window.
 func TestPadBudgetPerDirection(t *testing.T) {
-	p := mustProfile(t, &Profile{
-		Buckets:   []uint32{512, 1024},
+	window := func(buckets []uint32, budget Range) *Profile {
+		return mustProfile(t, &Profile{
+			Buckets:   buckets,
+			PadBudget: &budget,
+			Keepalive: Range{12, 24},
+		})
+	}
+	cases := []struct {
+		name    string
+		buckets []uint32
+		calls   []struct{ n, want int }
+	}{
+		{
+			name:    "record fills the whole window",
+			buckets: []uint32{512},
+			calls:   []struct{ n, want int }{{100, 0}},
+		},
+		{
+			name:    "padding stops at the window end",
+			buckets: []uint32{512},
+			calls:   []struct{ n, want int }{{60, 40}, {1, 0}},
+		},
+		{
+			name:    "several records exhaust the window",
+			buckets: []uint32{512},
+			calls:   []struct{ n, want int }{{10, 90}, {10, 0}, {10, 0}},
+		},
+		{
+			name:    "record larger than the remaining window",
+			buckets: []uint32{64},
+			calls:   []struct{ n, want int }{{40, 24}, {50, 0}, {1, 0}},
+		},
+		{
+			name:    "record larger than the whole window",
+			buckets: []uint32{512},
+			calls:   []struct{ n, want int }{{200, 0}, {1, 0}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSender(window(tc.buckets, Range{100, 100}), newRand(7), false)
+			for i, c := range tc.calls {
+				if pad := s.PadFor(c.n); pad != c.want {
+					t.Fatalf("PadFor #%d(%d) = %d, want %d", i, c.n, pad, c.want)
+				}
+			}
+		})
+	}
+
+	// Uniform padding is capped by the same window: the record plus its padding never exceeds it.
+	uniform := NewSender(mustProfile(t, &Profile{
+		Pad:       &Range{0, 1000},
 		PadBudget: &Range{100, 100},
 		Keepalive: Range{12, 24},
-	})
-	s := NewSender(p, newRand(7), false)
-	// The first 100 bytes of the direction are inside the padding window: pad is capped by it.
-	if pad := s.PadFor(100); pad != 100 {
-		t.Fatalf("first PadFor(100) = %d, want 100", pad)
-	}
-	if pad := s.PadFor(100); pad != 0 {
-		t.Fatalf("second PadFor(100) = %d, want 0 (budget spent)", pad)
+	}), newRand(7), false)
+	if pad := uniform.PadFor(60); pad > 40 {
+		t.Fatalf("uniform PadFor(60) = %d, want at most 40", pad)
 	}
 
 	// A zero-length window disables padding from the first byte.

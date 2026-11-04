@@ -244,3 +244,40 @@ func TestParseValidation(t *testing.T) {
 		t.Fatalf("Validate(valid) = %v", err)
 	}
 }
+
+// TestParseKeepalivePresence checks that a present keepalive_s is valid only in [1, 59], while an
+// absent field falls back to the wire.md §7.1 interval [12, 24] (decisions.md, T2.5, п. 3).
+func TestParseKeepalivePresence(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      *objectspb.Range
+		want    Range
+		wantErr bool
+	}{
+		{"absent", nil, Range{12, 24}, false},
+		{"present minimum", rng(1, 1), Range{1, 1}, false},
+		{"present maximum", rng(59, 59), Range{59, 59}, false},
+		{"present in range", rng(20, 30), Range{20, 30}, false},
+		{"present zero", rng(0, 0), Range{}, true},
+		{"present zero to default max", rng(0, 24), Range{}, true},
+		{"present min above max", rng(24, 12), Range{}, true},
+		{"present at the path timeout", rng(12, 60), Range{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse(&objectspb.ShapeProfile{KeepaliveS: tc.in})
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidProfile) {
+					t.Fatalf("Parse(keepalive_s=%v) = %v, want ErrInvalidProfile", tc.in, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse(keepalive_s=%v): %v", tc.in, err)
+			}
+			if got.Keepalive != tc.want {
+				t.Fatalf("Parse(keepalive_s=%v).Keepalive = %v, want %v", tc.in, got.Keepalive, tc.want)
+			}
+		})
+	}
+}
