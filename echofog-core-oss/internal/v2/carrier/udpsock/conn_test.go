@@ -425,6 +425,69 @@ func TestReadDeadlineIsNotABatchFailure(t *testing.T) {
 	}
 }
 
+// TestClosedSocketIsNotABatchFailure proves a closed socket keeps the batched flags as they are:
+// a closed socket says nothing about the kernel's willingness to batch. The error itself must
+// still reach the caller.
+func TestClosedSocketIsNotABatchFailure(t *testing.T) {
+	t.Run("read", func(t *testing.T) {
+		c := listen(t, Options{})
+		if !c.batchRead.Load() {
+			t.Skip("the platform has no batch read")
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		if _, err := c.ReadBatch(messages(1, 16), 0); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("read on a closed socket: %v, want net.ErrClosed", err)
+		}
+		if !c.batchRead.Load() {
+			t.Fatal("batch read was disabled by a closed socket")
+		}
+	})
+
+	t.Run("write", func(t *testing.T) {
+		c := listen(t, Options{})
+		if !c.gso.Load() {
+			t.Skip("the platform has no GSO")
+		}
+		peer := listen(t, Options{})
+		if err := c.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		bufs := [][]byte{bytes.Repeat([]byte{1}, 300), bytes.Repeat([]byte{2}, 300)}
+		n, err := c.WriteBatch(addrOf(t, peer), bufs)
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("write on a closed socket: %v, want net.ErrClosed", err)
+		}
+		if n != 0 {
+			t.Fatalf("%d datagrams reported as sent on a closed socket, want 0", n)
+		}
+		if !c.gso.Load() {
+			t.Fatal("GSO was disabled by a closed socket")
+		}
+	})
+}
+
+func TestBatchFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"deadline", fmt.Errorf("read: %w", os.ErrDeadlineExceeded), false},
+		{"closed", fmt.Errorf("write: %w", net.ErrClosed), false},
+		{"refused", errors.New("UDP_SEGMENT refused"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := batchFailure(tc.err); got != tc.want {
+				t.Fatalf("batchFailure(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestNoGSOWithoutTheFlag checks that a restricted socket never asks for a GSO train, and a full
 // socket does at least try one on a kernel that offers it.
 func TestSegmentable(t *testing.T) {
@@ -438,6 +501,7 @@ func TestSegmentable(t *testing.T) {
 		{"empty", nil, 0},
 		{"equal", [][]byte{buf(1200), buf(1200), buf(1200)}, 1200},
 		{"last shorter", [][]byte{buf(1200), buf(1200), buf(700)}, 1200},
+		{"last zero", [][]byte{buf(1200), buf(0)}, 0},
 		{"last longer", [][]byte{buf(1200), buf(1400)}, 0},
 		{"middle differs", [][]byte{buf(1200), buf(900), buf(1200)}, 0},
 		{"zero first", [][]byte{buf(0), buf(0)}, 0},

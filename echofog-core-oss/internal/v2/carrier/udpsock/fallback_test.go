@@ -154,6 +154,29 @@ func TestWriteBatchReportsWriteError(t *testing.T) {
 	}
 }
 
+// TestWriteBatchDeliversZeroLengthTail proves a zero-length datagram at the end of a batch is
+// sent as its own datagram: inside a GSO train the kernel cuts only the non-empty bytes and the
+// empty datagram disappears.
+func TestWriteBatchDeliversZeroLengthTail(t *testing.T) {
+	a := listen(t, Options{})
+	b := listen(t, Options{})
+	bufs := [][]byte{bytes.Repeat([]byte{7}, 1200), {}}
+	n, err := a.WriteBatch(addrOf(t, b), bufs)
+	if err != nil || n != len(bufs) {
+		t.Fatalf("batch write: %d %v", n, err)
+	}
+	got := readMessages(t, b, len(bufs))
+	if len(got) != len(bufs) {
+		t.Fatalf("%d datagrams arrived, want %d", len(got), len(bufs))
+	}
+	if !bytes.Equal(got[0], bufs[0]) {
+		t.Fatalf("first datagram is %d bytes, want %d", len(got[0]), len(bufs[0]))
+	}
+	if len(got[1]) != 0 {
+		t.Fatalf("last datagram is %d bytes, want the empty one", len(got[1]))
+	}
+}
+
 func equal(got, want [][]byte) bool {
 	if len(got) != len(want) {
 		return false
