@@ -33,6 +33,15 @@ message NodeCard {
   uint32 scope = 16;                    // 0 public, 1 peer, 2 invite
   bytes  invite_id = 17;                // scope invite: the invitation's pass_id (8 bytes)
   bytes  devices = 18;                  // the account's current devices/2 envelope; REQUIRED
+  ClusterRef cluster = 19;              // operator cluster membership; cluster.md §2
+}
+
+// objects.md §3, cluster.md §2. Scope public and peer only; never in an invite card.
+message ClusterRef {
+  bytes root = 1;                       // akey (ed25519) of the cluster root key C
+  bytes delegation = 2;                 // echofog/cluster-master/2 envelope; empty when the
+                                        //   signer of membership is C itself
+  bytes membership = 3;                 // echofog/cluster/2 envelope for this node
 }
 
 message HsKey {

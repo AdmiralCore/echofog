@@ -43,6 +43,7 @@ const (
 	FlagInviteScoped = 1 << 4
 	FlagExit         = 1 << 5
 	FlagDomesticOnly = 1 << 6
+	FlagCluster      = 1 << 7
 
 	// AddrFlagBootstrap is Addr.flags bit 0: the address accepts XX handshakes.
 	AddrFlagBootstrap = 1 << 0

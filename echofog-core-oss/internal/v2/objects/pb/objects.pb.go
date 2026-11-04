@@ -49,6 +49,7 @@ type NodeCard struct {
 	Scope         uint32                 `protobuf:"varint,16,opt,name=scope,proto3" json:"scope,omitempty"`                               // 0 public, 1 peer, 2 invite
 	InviteId      []byte                 `protobuf:"bytes,17,opt,name=invite_id,json=inviteId,proto3" json:"invite_id,omitempty"`          // scope invite: the invitation's pass_id (8 bytes)
 	Devices       []byte                 `protobuf:"bytes,18,opt,name=devices,proto3" json:"devices,omitempty"`                            // the account's current devices/2 envelope; REQUIRED
+	Cluster       *ClusterRef            `protobuf:"bytes,19,opt,name=cluster,proto3" json:"cluster,omitempty"`                            // operator cluster membership; cluster.md §2
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -209,6 +210,75 @@ func (x *NodeCard) GetDevices() []byte {
 	return nil
 }
 
+func (x *NodeCard) GetCluster() *ClusterRef {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+// objects.md §3, cluster.md §2. Scope public and peer only; never in an invite card.
+type ClusterRef struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Root       []byte                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`             // akey (ed25519) of the cluster root key C
+	Delegation []byte                 `protobuf:"bytes,2,opt,name=delegation,proto3" json:"delegation,omitempty"` // echofog/cluster-master/2 envelope; empty when the
+	// signer of membership is C itself
+	Membership    []byte `protobuf:"bytes,3,opt,name=membership,proto3" json:"membership,omitempty"` // echofog/cluster/2 envelope for this node
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterRef) Reset() {
+	*x = ClusterRef{}
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterRef) ProtoMessage() {}
+
+func (x *ClusterRef) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterRef.ProtoReflect.Descriptor instead.
+func (*ClusterRef) Descriptor() ([]byte, []int) {
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ClusterRef) GetRoot() []byte {
+	if x != nil {
+		return x.Root
+	}
+	return nil
+}
+
+func (x *ClusterRef) GetDelegation() []byte {
+	if x != nil {
+		return x.Delegation
+	}
+	return nil
+}
+
+func (x *ClusterRef) GetMembership() []byte {
+	if x != nil {
+		return x.Membership
+	}
+	return nil
+}
+
 type HsKey struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"` // akey (x25519)
@@ -219,7 +289,7 @@ type HsKey struct {
 
 func (x *HsKey) Reset() {
 	*x = HsKey{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[1]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -231,7 +301,7 @@ func (x *HsKey) String() string {
 func (*HsKey) ProtoMessage() {}
 
 func (x *HsKey) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[1]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -244,7 +314,7 @@ func (x *HsKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HsKey.ProtoReflect.Descriptor instead.
 func (*HsKey) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{1}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *HsKey) GetKey() []byte {
@@ -276,7 +346,7 @@ type Addr struct {
 
 func (x *Addr) Reset() {
 	*x = Addr{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[2]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -288,7 +358,7 @@ func (x *Addr) String() string {
 func (*Addr) ProtoMessage() {}
 
 func (x *Addr) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[2]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -301,7 +371,7 @@ func (x *Addr) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Addr.ProtoReflect.Descriptor instead.
 func (*Addr) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{2}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Addr) GetSuite() uint32 {
@@ -363,7 +433,7 @@ type MaskKey struct {
 
 func (x *MaskKey) Reset() {
 	*x = MaskKey{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[3]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -375,7 +445,7 @@ func (x *MaskKey) String() string {
 func (*MaskKey) ProtoMessage() {}
 
 func (x *MaskKey) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[3]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -388,7 +458,7 @@ func (x *MaskKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MaskKey.ProtoReflect.Descriptor instead.
 func (*MaskKey) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{3}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *MaskKey) GetKey() []byte {
@@ -415,7 +485,7 @@ type SuiteParams struct {
 
 func (x *SuiteParams) Reset() {
 	*x = SuiteParams{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[4]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +497,7 @@ func (x *SuiteParams) String() string {
 func (*SuiteParams) ProtoMessage() {}
 
 func (x *SuiteParams) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[4]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,7 +510,7 @@ func (x *SuiteParams) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuiteParams.ProtoReflect.Descriptor instead.
 func (*SuiteParams) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{4}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SuiteParams) GetSni() string {
@@ -468,7 +538,7 @@ type ServiceOffer struct {
 
 func (x *ServiceOffer) Reset() {
 	*x = ServiceOffer{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[5]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -480,7 +550,7 @@ func (x *ServiceOffer) String() string {
 func (*ServiceOffer) ProtoMessage() {}
 
 func (x *ServiceOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[5]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -493,7 +563,7 @@ func (x *ServiceOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceOffer.ProtoReflect.Descriptor instead.
 func (*ServiceOffer) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{5}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ServiceOffer) GetId() uint32 {
@@ -528,7 +598,7 @@ type ShapeProfile struct {
 
 func (x *ShapeProfile) Reset() {
 	*x = ShapeProfile{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[6]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -540,7 +610,7 @@ func (x *ShapeProfile) String() string {
 func (*ShapeProfile) ProtoMessage() {}
 
 func (x *ShapeProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[6]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -553,7 +623,7 @@ func (x *ShapeProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShapeProfile.ProtoReflect.Descriptor instead.
 func (*ShapeProfile) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{6}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ShapeProfile) GetId() uint32 {
@@ -629,7 +699,7 @@ type Range struct {
 
 func (x *Range) Reset() {
 	*x = Range{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[7]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -641,7 +711,7 @@ func (x *Range) String() string {
 func (*Range) ProtoMessage() {}
 
 func (x *Range) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[7]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -654,7 +724,7 @@ func (x *Range) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Range.ProtoReflect.Descriptor instead.
 func (*Range) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{7}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Range) GetMin() uint32 {
@@ -682,7 +752,7 @@ type Junk struct {
 
 func (x *Junk) Reset() {
 	*x = Junk{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[8]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -694,7 +764,7 @@ func (x *Junk) String() string {
 func (*Junk) ProtoMessage() {}
 
 func (x *Junk) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[8]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -707,7 +777,7 @@ func (x *Junk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Junk.ProtoReflect.Descriptor instead.
 func (*Junk) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{8}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Junk) GetCount() *Range {
@@ -742,7 +812,7 @@ type Decoy struct {
 
 func (x *Decoy) Reset() {
 	*x = Decoy{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[9]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -754,7 +824,7 @@ func (x *Decoy) String() string {
 func (*Decoy) ProtoMessage() {}
 
 func (x *Decoy) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[9]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -767,7 +837,7 @@ func (x *Decoy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Decoy.ProtoReflect.Descriptor instead.
 func (*Decoy) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{9}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Decoy) GetKind() uint32 {
@@ -807,7 +877,7 @@ type ExitOffer struct {
 
 func (x *ExitOffer) Reset() {
 	*x = ExitOffer{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[10]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -819,7 +889,7 @@ func (x *ExitOffer) String() string {
 func (*ExitOffer) ProtoMessage() {}
 
 func (x *ExitOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[10]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -832,7 +902,7 @@ func (x *ExitOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExitOffer.ProtoReflect.Descriptor instead.
 func (*ExitOffer) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{10}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ExitOffer) GetPrice() uint64 {
@@ -898,7 +968,7 @@ type Prekeys struct {
 
 func (x *Prekeys) Reset() {
 	*x = Prekeys{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[11]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -910,7 +980,7 @@ func (x *Prekeys) String() string {
 func (*Prekeys) ProtoMessage() {}
 
 func (x *Prekeys) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[11]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -923,7 +993,7 @@ func (x *Prekeys) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Prekeys.ProtoReflect.Descriptor instead.
 func (*Prekeys) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{11}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Prekeys) GetIk() []byte {
@@ -977,7 +1047,7 @@ type DeviceList struct {
 
 func (x *DeviceList) Reset() {
 	*x = DeviceList{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[12]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -989,7 +1059,7 @@ func (x *DeviceList) String() string {
 func (*DeviceList) ProtoMessage() {}
 
 func (x *DeviceList) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[12]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1002,7 +1072,7 @@ func (x *DeviceList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeviceList.ProtoReflect.Descriptor instead.
 func (*DeviceList) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{12}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeviceList) GetDevices() []*Device {
@@ -1024,7 +1094,7 @@ type Device struct {
 
 func (x *Device) Reset() {
 	*x = Device{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[13]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1036,7 +1106,7 @@ func (x *Device) String() string {
 func (*Device) ProtoMessage() {}
 
 func (x *Device) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[13]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1049,7 +1119,7 @@ func (x *Device) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Device.ProtoReflect.Descriptor instead.
 func (*Device) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{13}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Device) GetKey() []byte {
@@ -1089,7 +1159,7 @@ type MailboxHint struct {
 
 func (x *MailboxHint) Reset() {
 	*x = MailboxHint{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[14]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1101,7 +1171,7 @@ func (x *MailboxHint) String() string {
 func (*MailboxHint) ProtoMessage() {}
 
 func (x *MailboxHint) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[14]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1114,7 +1184,7 @@ func (x *MailboxHint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailboxHint.ProtoReflect.Descriptor instead.
 func (*MailboxHint) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{14}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *MailboxHint) GetHints() []*Hint {
@@ -1136,7 +1206,7 @@ type Hint struct {
 
 func (x *Hint) Reset() {
 	*x = Hint{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[15]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1148,7 +1218,7 @@ func (x *Hint) String() string {
 func (*Hint) ProtoMessage() {}
 
 func (x *Hint) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[15]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1161,7 +1231,7 @@ func (x *Hint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hint.ProtoReflect.Descriptor instead.
 func (*Hint) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{15}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Hint) GetRelay() []byte {
@@ -1204,7 +1274,7 @@ type NameBinding struct {
 
 func (x *NameBinding) Reset() {
 	*x = NameBinding{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[16]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1216,7 +1286,7 @@ func (x *NameBinding) String() string {
 func (*NameBinding) ProtoMessage() {}
 
 func (x *NameBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[16]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1229,7 +1299,7 @@ func (x *NameBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NameBinding.ProtoReflect.Descriptor instead.
 func (*NameBinding) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{16}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *NameBinding) GetName() string {
@@ -1270,7 +1340,7 @@ type ReleaseObject struct {
 
 func (x *ReleaseObject) Reset() {
 	*x = ReleaseObject{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[17]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1282,7 +1352,7 @@ func (x *ReleaseObject) String() string {
 func (*ReleaseObject) ProtoMessage() {}
 
 func (x *ReleaseObject) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[17]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1295,7 +1365,7 @@ func (x *ReleaseObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseObject.ProtoReflect.Descriptor instead.
 func (*ReleaseObject) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{17}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ReleaseObject) GetManifest() []byte {
@@ -1322,7 +1392,7 @@ type CoSig struct {
 
 func (x *CoSig) Reset() {
 	*x = CoSig{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[18]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1334,7 +1404,7 @@ func (x *CoSig) String() string {
 func (*CoSig) ProtoMessage() {}
 
 func (x *CoSig) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[18]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1347,7 +1417,7 @@ func (x *CoSig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoSig.ProtoReflect.Descriptor instead.
 func (*CoSig) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{18}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CoSig) GetKey() []byte {
@@ -1379,7 +1449,7 @@ type Release struct {
 
 func (x *Release) Reset() {
 	*x = Release{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[19]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1391,7 +1461,7 @@ func (x *Release) String() string {
 func (*Release) ProtoMessage() {}
 
 func (x *Release) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[19]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1404,7 +1474,7 @@ func (x *Release) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Release.ProtoReflect.Descriptor instead.
 func (*Release) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{19}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Release) GetVersion() string {
@@ -1468,7 +1538,7 @@ type Policy struct {
 
 func (x *Policy) Reset() {
 	*x = Policy{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[20]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1480,7 +1550,7 @@ func (x *Policy) String() string {
 func (*Policy) ProtoMessage() {}
 
 func (x *Policy) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[20]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1493,7 +1563,7 @@ func (x *Policy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Policy.ProtoReflect.Descriptor instead.
 func (*Policy) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{20}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Policy) GetComponent() string {
@@ -1537,7 +1607,7 @@ type Artifact struct {
 
 func (x *Artifact) Reset() {
 	*x = Artifact{}
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[21]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1549,7 +1619,7 @@ func (x *Artifact) String() string {
 func (*Artifact) ProtoMessage() {}
 
 func (x *Artifact) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[21]
+	mi := &file_internal_v2_objects_pb_objects_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1562,7 +1632,7 @@ func (x *Artifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Artifact.ProtoReflect.Descriptor instead.
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{21}
+	return file_internal_v2_objects_pb_objects_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Artifact) GetPlatform() string {
@@ -1604,7 +1674,7 @@ var File_internal_v2_objects_pb_objects_proto protoreflect.FileDescriptor
 
 const file_internal_v2_objects_pb_objects_proto_rawDesc = "" +
 	"\n" +
-	"$internal/v2/objects/pb/objects.proto\x12\x12echofog.v2.objects\"\xe8\x04\n" +
+	"$internal/v2/objects/pb/objects.proto\x12\x12echofog.v2.objects\"\xa2\x05\n" +
 	"\bNodeCard\x12\x1b\n" +
 	"\tproto_ver\x18\x01 \x01(\rR\bprotoVer\x12\x15\n" +
 	"\x06hs_key\x18\x02 \x01(\fR\x05hsKey\x12\x1b\n" +
@@ -1624,7 +1694,17 @@ const file_internal_v2_objects_pb_objects_proto_rawDesc = "" +
 	"\aprev_hs\x18\x0f \x01(\v2\x19.echofog.v2.objects.HsKeyR\x06prevHs\x12\x14\n" +
 	"\x05scope\x18\x10 \x01(\rR\x05scope\x12\x1b\n" +
 	"\tinvite_id\x18\x11 \x01(\fR\binviteId\x12\x18\n" +
-	"\adevices\x18\x12 \x01(\fR\adevices\"6\n" +
+	"\adevices\x18\x12 \x01(\fR\adevices\x128\n" +
+	"\acluster\x18\x13 \x01(\v2\x1e.echofog.v2.objects.ClusterRefR\acluster\"`\n" +
+	"\n" +
+	"ClusterRef\x12\x12\n" +
+	"\x04root\x18\x01 \x01(\fR\x04root\x12\x1e\n" +
+	"\n" +
+	"delegation\x18\x02 \x01(\fR\n" +
+	"delegation\x12\x1e\n" +
+	"\n" +
+	"membership\x18\x03 \x01(\fR\n" +
+	"membership\"6\n" +
 	"\x05HsKey\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x1b\n" +
 	"\tnot_after\x18\x02 \x01(\x04R\bnotAfter\"\x98\x01\n" +
@@ -1747,58 +1827,60 @@ func file_internal_v2_objects_pb_objects_proto_rawDescGZIP() []byte {
 	return file_internal_v2_objects_pb_objects_proto_rawDescData
 }
 
-var file_internal_v2_objects_pb_objects_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_internal_v2_objects_pb_objects_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_internal_v2_objects_pb_objects_proto_goTypes = []any{
 	(*NodeCard)(nil),      // 0: echofog.v2.objects.NodeCard
-	(*HsKey)(nil),         // 1: echofog.v2.objects.HsKey
-	(*Addr)(nil),          // 2: echofog.v2.objects.Addr
-	(*MaskKey)(nil),       // 3: echofog.v2.objects.MaskKey
-	(*SuiteParams)(nil),   // 4: echofog.v2.objects.SuiteParams
-	(*ServiceOffer)(nil),  // 5: echofog.v2.objects.ServiceOffer
-	(*ShapeProfile)(nil),  // 6: echofog.v2.objects.ShapeProfile
-	(*Range)(nil),         // 7: echofog.v2.objects.Range
-	(*Junk)(nil),          // 8: echofog.v2.objects.Junk
-	(*Decoy)(nil),         // 9: echofog.v2.objects.Decoy
-	(*ExitOffer)(nil),     // 10: echofog.v2.objects.ExitOffer
-	(*Prekeys)(nil),       // 11: echofog.v2.objects.Prekeys
-	(*DeviceList)(nil),    // 12: echofog.v2.objects.DeviceList
-	(*Device)(nil),        // 13: echofog.v2.objects.Device
-	(*MailboxHint)(nil),   // 14: echofog.v2.objects.MailboxHint
-	(*Hint)(nil),          // 15: echofog.v2.objects.Hint
-	(*NameBinding)(nil),   // 16: echofog.v2.objects.NameBinding
-	(*ReleaseObject)(nil), // 17: echofog.v2.objects.ReleaseObject
-	(*CoSig)(nil),         // 18: echofog.v2.objects.CoSig
-	(*Release)(nil),       // 19: echofog.v2.objects.Release
-	(*Policy)(nil),        // 20: echofog.v2.objects.Policy
-	(*Artifact)(nil),      // 21: echofog.v2.objects.Artifact
+	(*ClusterRef)(nil),    // 1: echofog.v2.objects.ClusterRef
+	(*HsKey)(nil),         // 2: echofog.v2.objects.HsKey
+	(*Addr)(nil),          // 3: echofog.v2.objects.Addr
+	(*MaskKey)(nil),       // 4: echofog.v2.objects.MaskKey
+	(*SuiteParams)(nil),   // 5: echofog.v2.objects.SuiteParams
+	(*ServiceOffer)(nil),  // 6: echofog.v2.objects.ServiceOffer
+	(*ShapeProfile)(nil),  // 7: echofog.v2.objects.ShapeProfile
+	(*Range)(nil),         // 8: echofog.v2.objects.Range
+	(*Junk)(nil),          // 9: echofog.v2.objects.Junk
+	(*Decoy)(nil),         // 10: echofog.v2.objects.Decoy
+	(*ExitOffer)(nil),     // 11: echofog.v2.objects.ExitOffer
+	(*Prekeys)(nil),       // 12: echofog.v2.objects.Prekeys
+	(*DeviceList)(nil),    // 13: echofog.v2.objects.DeviceList
+	(*Device)(nil),        // 14: echofog.v2.objects.Device
+	(*MailboxHint)(nil),   // 15: echofog.v2.objects.MailboxHint
+	(*Hint)(nil),          // 16: echofog.v2.objects.Hint
+	(*NameBinding)(nil),   // 17: echofog.v2.objects.NameBinding
+	(*ReleaseObject)(nil), // 18: echofog.v2.objects.ReleaseObject
+	(*CoSig)(nil),         // 19: echofog.v2.objects.CoSig
+	(*Release)(nil),       // 20: echofog.v2.objects.Release
+	(*Policy)(nil),        // 21: echofog.v2.objects.Policy
+	(*Artifact)(nil),      // 22: echofog.v2.objects.Artifact
 }
 var file_internal_v2_objects_pb_objects_proto_depIdxs = []int32{
-	2,  // 0: echofog.v2.objects.NodeCard.addrs:type_name -> echofog.v2.objects.Addr
-	3,  // 1: echofog.v2.objects.NodeCard.mask_keys:type_name -> echofog.v2.objects.MaskKey
-	5,  // 2: echofog.v2.objects.NodeCard.services:type_name -> echofog.v2.objects.ServiceOffer
-	10, // 3: echofog.v2.objects.NodeCard.exit:type_name -> echofog.v2.objects.ExitOffer
-	1,  // 4: echofog.v2.objects.NodeCard.prev_hs:type_name -> echofog.v2.objects.HsKey
-	6,  // 5: echofog.v2.objects.SuiteParams.shape:type_name -> echofog.v2.objects.ShapeProfile
-	7,  // 6: echofog.v2.objects.ShapeProfile.init_len:type_name -> echofog.v2.objects.Range
-	7,  // 7: echofog.v2.objects.ShapeProfile.pad:type_name -> echofog.v2.objects.Range
-	7,  // 8: echofog.v2.objects.ShapeProfile.pad_budget:type_name -> echofog.v2.objects.Range
-	8,  // 9: echofog.v2.objects.ShapeProfile.junk:type_name -> echofog.v2.objects.Junk
-	9,  // 10: echofog.v2.objects.ShapeProfile.decoys:type_name -> echofog.v2.objects.Decoy
-	7,  // 11: echofog.v2.objects.ShapeProfile.keepalive_s:type_name -> echofog.v2.objects.Range
-	7,  // 12: echofog.v2.objects.ShapeProfile.idle_pad_ms:type_name -> echofog.v2.objects.Range
-	7,  // 13: echofog.v2.objects.Junk.count:type_name -> echofog.v2.objects.Range
-	7,  // 14: echofog.v2.objects.Junk.len:type_name -> echofog.v2.objects.Range
-	7,  // 15: echofog.v2.objects.Junk.gap_ms:type_name -> echofog.v2.objects.Range
-	13, // 16: echofog.v2.objects.DeviceList.devices:type_name -> echofog.v2.objects.Device
-	15, // 17: echofog.v2.objects.MailboxHint.hints:type_name -> echofog.v2.objects.Hint
-	18, // 18: echofog.v2.objects.ReleaseObject.cosigs:type_name -> echofog.v2.objects.CoSig
-	20, // 19: echofog.v2.objects.Release.policies:type_name -> echofog.v2.objects.Policy
-	21, // 20: echofog.v2.objects.Release.artifacts:type_name -> echofog.v2.objects.Artifact
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	3,  // 0: echofog.v2.objects.NodeCard.addrs:type_name -> echofog.v2.objects.Addr
+	4,  // 1: echofog.v2.objects.NodeCard.mask_keys:type_name -> echofog.v2.objects.MaskKey
+	6,  // 2: echofog.v2.objects.NodeCard.services:type_name -> echofog.v2.objects.ServiceOffer
+	11, // 3: echofog.v2.objects.NodeCard.exit:type_name -> echofog.v2.objects.ExitOffer
+	2,  // 4: echofog.v2.objects.NodeCard.prev_hs:type_name -> echofog.v2.objects.HsKey
+	1,  // 5: echofog.v2.objects.NodeCard.cluster:type_name -> echofog.v2.objects.ClusterRef
+	7,  // 6: echofog.v2.objects.SuiteParams.shape:type_name -> echofog.v2.objects.ShapeProfile
+	8,  // 7: echofog.v2.objects.ShapeProfile.init_len:type_name -> echofog.v2.objects.Range
+	8,  // 8: echofog.v2.objects.ShapeProfile.pad:type_name -> echofog.v2.objects.Range
+	8,  // 9: echofog.v2.objects.ShapeProfile.pad_budget:type_name -> echofog.v2.objects.Range
+	9,  // 10: echofog.v2.objects.ShapeProfile.junk:type_name -> echofog.v2.objects.Junk
+	10, // 11: echofog.v2.objects.ShapeProfile.decoys:type_name -> echofog.v2.objects.Decoy
+	8,  // 12: echofog.v2.objects.ShapeProfile.keepalive_s:type_name -> echofog.v2.objects.Range
+	8,  // 13: echofog.v2.objects.ShapeProfile.idle_pad_ms:type_name -> echofog.v2.objects.Range
+	8,  // 14: echofog.v2.objects.Junk.count:type_name -> echofog.v2.objects.Range
+	8,  // 15: echofog.v2.objects.Junk.len:type_name -> echofog.v2.objects.Range
+	8,  // 16: echofog.v2.objects.Junk.gap_ms:type_name -> echofog.v2.objects.Range
+	14, // 17: echofog.v2.objects.DeviceList.devices:type_name -> echofog.v2.objects.Device
+	16, // 18: echofog.v2.objects.MailboxHint.hints:type_name -> echofog.v2.objects.Hint
+	19, // 19: echofog.v2.objects.ReleaseObject.cosigs:type_name -> echofog.v2.objects.CoSig
+	21, // 20: echofog.v2.objects.Release.policies:type_name -> echofog.v2.objects.Policy
+	22, // 21: echofog.v2.objects.Release.artifacts:type_name -> echofog.v2.objects.Artifact
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_internal_v2_objects_pb_objects_proto_init() }
@@ -1812,7 +1894,7 @@ func file_internal_v2_objects_pb_objects_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_v2_objects_pb_objects_proto_rawDesc), len(file_internal_v2_objects_pb_objects_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
