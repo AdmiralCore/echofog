@@ -69,6 +69,8 @@ jobs:
           set -euo pipefail
           ( cd docs/protocol/v2/vectors/gen && go run . -out .. )
           git diff --exit-code -- docs/protocol/v2/vectors ':!docs/protocol/v2/vectors/link.json'
+          # The diff above cannot see a newly written file; catch that separately.
+          test -z "$(git ls-files --others --exclude-standard -- docs/protocol/v2/vectors)"
 
   build:
     name: Cross build
