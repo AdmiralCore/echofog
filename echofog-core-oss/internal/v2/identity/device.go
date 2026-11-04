@@ -11,6 +11,9 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/secret"
 )
 
+// x25519KeySize is the size of an X25519 private or public key.
+const x25519KeySize = 32
+
 // KeyPair is an X25519 private key and its public key: the Noise static key hs and the masking
 // keys are key pairs of this shape (README.md §5.1).
 type KeyPair struct {
@@ -20,7 +23,7 @@ type KeyPair struct {
 
 // NewKeyPair makes a random X25519 key pair.
 func NewKeyPair() (*KeyPair, error) {
-	priv := make([]byte, ed25519.SeedSize)
+	priv := make([]byte, x25519KeySize)
 	if _, err := rand.Read(priv); err != nil {
 		return nil, err
 	}
@@ -31,7 +34,7 @@ func NewKeyPair() (*KeyPair, error) {
 // KeyPairFromPrivate rebuilds a key pair from its 32-byte private key, for loading it from the
 // store.
 func KeyPairFromPrivate(priv []byte) (*KeyPair, error) {
-	if len(priv) != ed25519.SeedSize {
+	if len(priv) != x25519KeySize {
 		return nil, fmt.Errorf("%w: x25519 private key is %d bytes", ErrKeyLength, len(priv))
 	}
 	key, err := ecdh.X25519().NewPrivateKey(priv)
