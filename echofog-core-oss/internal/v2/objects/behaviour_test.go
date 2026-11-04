@@ -326,12 +326,12 @@ func TestCardFutureVersionFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Top-level unknown fields after field 18, one of them repeated.
-	body = appendField(body, 19, protowire.BytesType, []byte("new field"))
-	body = appendField(body, 20, protowire.VarintType, protowire.AppendVarint(nil, 7))
-	body = appendField(body, 21, protowire.BytesType, []byte("a"))
-	body = appendField(body, 21, protowire.BytesType, []byte("b"))
-	body = appendField(body, 22, protowire.Fixed64Type, []byte{1, 2, 3, 4, 5, 6, 7, 8})
+	// Top-level unknown fields after field 19 (the cluster reference), one of them repeated.
+	body = appendField(body, 20, protowire.BytesType, []byte("new field"))
+	body = appendField(body, 21, protowire.VarintType, protowire.AppendVarint(nil, 7))
+	body = appendField(body, 22, protowire.BytesType, []byte("a"))
+	body = appendField(body, 22, protowire.BytesType, []byte("b"))
+	body = appendField(body, 23, protowire.Fixed64Type, []byte{1, 2, 3, 4, 5, 6, 7, 8})
 
 	env, err := Seal(LabelCard, f.device, fixedTime, fixedTime+day, body)
 	if err != nil {
@@ -356,11 +356,11 @@ func TestCardFutureVersionFields(t *testing.T) {
 
 	// What a future field may not do.
 	bad := map[string][]byte{
-		"unknown field before a known one": appendField(appendField(nil, 19, protowire.VarintType, []byte{1}), 1, protowire.VarintType, []byte{0x01}),
+		"unknown field before a known one": appendField(appendField(nil, 20, protowire.VarintType, []byte{1}), 1, protowire.VarintType, []byte{0x01}),
 		"unknown group":                    append(append([]byte(nil), body...), protowire.AppendTag(nil, 30, protowire.StartGroupType)...),
-		"unknown non-minimal varint":       append(append([]byte(nil), body...), 0xb8, 0x01, 0x81, 0x00), // field 23 wt0, value 1 in 2 bytes
-		"unknown non-minimal tag":          append(append([]byte(nil), body...), 0xc0, 0x81, 0x00, 0x01), // field 24 tag in 3 bytes
-		"truncated unknown field":          append(append([]byte(nil), body...), 0xba, 0x01, 0x05, 0x01),
+		"unknown non-minimal varint":       append(append([]byte(nil), body...), 0xc0, 0x01, 0x81, 0x00), // field 24 wt0, value 1 in 2 bytes
+		"unknown non-minimal tag":          append(append([]byte(nil), body...), 0xc8, 0x81, 0x00, 0x01), // field 25 tag in 3 bytes
+		"truncated unknown field":          append(append([]byte(nil), body...), 0xc2, 0x01, 0x05, 0x01),
 	}
 	for name, b := range bad {
 		env := sealRaw(LabelCard, f.device, fixedTime, fixedTime+day, b)
