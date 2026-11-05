@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -203,6 +204,10 @@ type Server struct {
 	rnd io.Reader
 	log *slog.Logger
 	hs  *identity.KeyPair
+
+	// underflows counts deductions that would have taken a counter below zero. The counters are
+	// clamped, but each one means an item was deducted without being found (AD19).
+	underflows atomic.Uint64
 
 	salt [32]byte
 
@@ -846,11 +851,7 @@ func (s *Server) Ack(p Peer, m Ack) error {
 	if delItems == 0 {
 		return nil
 	}
-	rec.Count = clampSub(rec.Count, uint32(delItems))
-	rec.Bytes -= delBytes
-	if rec.Bytes < 0 {
-		rec.Bytes = 0
-	}
+	s.subRecord(&rec, delItems, delBytes)
 	if err := s.putQueueLocked(m.Queue, rec, now); err != nil {
 		return err
 	}
@@ -1076,6 +1077,11 @@ func (s *Server) putQueueLocked(q []byte, rec queueRecord, now time.Time) error 
 		return err
 	}
 	remaining := time.Unix(rec.Expires, 0).Sub(now) + storeGrace
+	if remaining < storeGrace {
+		// A queue past its lifetime whose entry the index has not reached yet (a pass that
+		// settles item shares first): keep the record until that entry removes it.
+		remaining = storeGrace
+	}
 	return s.cfg.Store.PutTTL(queueKey(q), rec.encode(), remaining)
 }
 
@@ -1125,7 +1131,17 @@ func (s *Server) pruneExpiredLocked(now time.Time) error {
 				cursor = append(cursor[:0], e.Key...)
 				continue
 			}
-			size, err := parseExpiryIndexValue(e.Value)
+			// The snapshot may be stale: a queue entry earlier in this pass removes its items'
+			// entries. Read the entry again; no entry found means no deduction.
+			fresh, err := s.cfg.Store.Get(e.Key)
+			if errors.Is(err, store.ErrNotFound) {
+				cursor = append(cursor[:0], e.Key...)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			size, err := parseExpiryIndexValue(fresh)
 			if err != nil {
 				return err
 			}
@@ -1192,11 +1208,7 @@ func (s *Server) applyExpiryDeltasLocked(deltas []*expiryDelta, now time.Time) e
 		if err != nil {
 			return err
 		}
-		rec.Count = clampSub(rec.Count, uint32(d.items))
-		rec.Bytes -= d.bytes
-		if rec.Bytes < 0 {
-			rec.Bytes = 0
-		}
+		s.subRecord(&rec, d.items, d.bytes)
 		if err := s.putQueueLocked(d.queue, rec, now); err != nil {
 			return err
 		}
@@ -1279,11 +1291,7 @@ scan:
 		}
 	}
 	if expiredItems > 0 {
-		rec.Count = clampSub(rec.Count, uint32(expiredItems))
-		rec.Bytes -= expiredBytes
-		if rec.Bytes < 0 {
-			rec.Bytes = 0
-		}
+		s.subRecord(&rec, expiredItems, expiredBytes)
 		if err := s.putQueueLocked(q, rec, now); err != nil {
 			return nil, false, err
 		}
@@ -1309,6 +1317,9 @@ func (s *Server) addTotalLocked(public bool, items, bytes int64) error {
 	c, err := s.totalLocked(public)
 	if err != nil {
 		return err
+	}
+	if int64(c.Items)+items < 0 || int64(c.Bytes)+bytes < 0 {
+		s.noteUnderflow("relay totals", items, bytes)
 	}
 	c.Items = uint64(max(int64(c.Items)+items, 0))
 	c.Bytes = uint64(max(int64(c.Bytes)+bytes, 0))
@@ -1441,6 +1452,26 @@ func (s *Server) notify(queue string) {
 	s.waiterNum -= len(s.waiters[queue])
 	delete(s.waiters, queue)
 }
+
+// subRecord takes items and bytes off a queue record, clamping at zero and counting a clamp.
+func (s *Server) subRecord(rec *queueRecord, items, bytes int64) {
+	if items > int64(rec.Count) || bytes > rec.Bytes {
+		s.noteUnderflow("queue record", items, bytes)
+	}
+	rec.Count = clampSub(rec.Count, uint32(items))
+	rec.Bytes -= bytes
+	if rec.Bytes < 0 {
+		rec.Bytes = 0
+	}
+}
+
+func (s *Server) noteUnderflow(what string, items, bytes int64) {
+	s.underflows.Add(1)
+	s.log.Error("mailbox counter would go below zero; clamped", "counter", what, "items", items, "bytes", bytes)
+}
+
+// UnderflowErrors reports how often a counter was asked to go below zero.
+func (s *Server) UnderflowErrors() uint64 { return s.underflows.Load() }
 
 func clampSub(v uint32, n uint32) uint32 {
 	if n >= v {

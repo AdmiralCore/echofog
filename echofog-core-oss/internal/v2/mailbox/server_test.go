@@ -92,6 +92,12 @@ func newFixture(t *testing.T, mutate func(*Config)) *fixture {
 		t.Fatalf("New: %v", err)
 	}
 
+	t.Cleanup(func() {
+		if n := srv.UnderflowErrors(); n != 0 {
+			t.Errorf("a mailbox counter was asked to go below zero %d times", n)
+		}
+	})
+
 	return &fixture{
 		srv:    srv,
 		clock:  clock,

@@ -155,3 +155,19 @@ func TestCountersMatchRecountOracle(t *testing.T) {
 		})
 	}
 }
+
+// Subtracting more than is held is clamped to zero, but it is counted: it means an item was
+// deducted without being found.
+func TestUnderflowIsCounted(t *testing.T) {
+	f := newFixture(t, nil)
+	f.srv.mu.Lock()
+	err := f.srv.addTotalLocked(false, -3, -9)
+	f.srv.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := f.srv.UnderflowErrors(); n != 1 {
+		t.Fatalf("UnderflowErrors = %d, want 1", n)
+	}
+	f.srv.underflows.Store(0) // provoked on purpose
+}

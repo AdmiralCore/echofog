@@ -156,11 +156,18 @@ func TestLegacyQueueRecordIsReadAndMigrated(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	f.srv.mu.Lock() // the legacy item is part of the relay totals, as it was when it was stored
+	err := f.srv.addTotalLocked(false, 1, 3)
+	f.srv.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	items, _ := f.fetch(t, p, nil, 10, 0)
 	if len(items) != 1 || string(items[0].Blob) != "old" {
 		t.Fatalf("FETCH on a v1 record: %+v", items)
 	}
-	err := f.srv.Ack(p, Ack{Req: 3, Queue: f.queue, IDs: [][]byte{id},
+	err = f.srv.Ack(p, Ack{Req: 3, Queue: f.queue, IDs: [][]byte{id},
 		Auth: signFor(t, f.signer, OpAck, p.SID, f.queue, 3)})
 	if err != nil {
 		t.Fatalf("ACK on a v1 record: %v", err)
