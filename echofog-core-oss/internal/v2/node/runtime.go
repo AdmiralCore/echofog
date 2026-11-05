@@ -20,6 +20,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/pex"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"github.com/echofog/echofog-core/internal/v2/store"
@@ -111,6 +112,8 @@ type Runtime struct {
 	identity Identity
 	vis      cards.Visibility
 	cards    cardSource
+	peers    *pex.Store
+	pex      *pex.Service
 
 	mu        sync.Mutex
 	handlers  map[[2]uint64]Handler
@@ -214,6 +217,24 @@ func New(cfg Config) (*Runtime, error) {
 		Visibility: r.vis,
 	}
 	r.cards = cardSource{builder: cfg.Cards, book: r.cardBook}
+
+	peers, err := pex.Open(pex.Options{KV: cfg.Store.Store(pex.Namespace), Log: log, Now: r.clock.Now})
+	if err != nil {
+		return nil, fmt.Errorf("node: pex candidates: %w", err)
+	}
+	r.peers = peers
+	r.pex, err = pex.New(pex.Config{
+		Store:      peers,
+		SelfNode:   [32]byte(r.identity.NodeID),
+		SelfDevice: [32]byte(r.identity.DeviceID),
+		OwnCard:    r.ownPublicCard,
+		Now:        r.clock.Now,
+		Log:        log,
+		// Release stays nil until T4.5: release = true is not answered without a release store.
+	})
+	if err != nil {
+		return nil, fmt.Errorf("node: pex service: %w", err)
+	}
 
 	r.localInfo = cfg.LocalInfo
 	if r.localInfo.CountryOf == nil {
@@ -375,6 +396,10 @@ func (r *Runtime) Self() Identity { return r.identity }
 
 // Cards returns the node's card view for services.
 func (r *Runtime) Cards() CardSource { return r.cards }
+
+// Peers returns the pex/2 candidate table (T5.4). It is created in New, so it is available before
+// the runtime starts and survives a runtime restart on the same store.
+func (r *Runtime) Peers() PeerStore { return r.peers }
 
 // Store returns one persistent namespace (T4.3).
 func (r *Runtime) Store(ns string) KV { return r.cfg.Store.Store(ns) }

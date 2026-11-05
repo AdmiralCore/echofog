@@ -52,6 +52,8 @@ func thirdPartyCard(t *testing.T, name, host string, port uint32) *objects.Card 
 		ProtoVer: 200,
 		HsKey:    hsKey,
 		L1Suites: []uint32{1, 2},
+		Role:     objects.RoleServer,
+		Flags:    objects.FlagRelay,
 		Account:  account.Public(),
 		Devices:  devices,
 		Scope:    uint32(objects.ScopePublic),
@@ -101,7 +103,7 @@ func TestPexGetOverTwoRuntimes(t *testing.T) {
 	defer cancel()
 
 	peer, stream, err := a.rt.Open(ctx, b.id.DeviceID, service.PEX, node.DialOpt{
-		Card:    b.peerCard(t),
+		Card:    b.publicCard(t),
 		Carrier: pair.Client,
 	})
 	if err != nil {
@@ -109,6 +111,15 @@ func TestPexGetOverTwoRuntimes(t *testing.T) {
 	}
 	if peer.Device != b.id.DeviceID {
 		t.Fatalf("peer device %x, want %x", peer.Device, b.id.DeviceID)
+	}
+	if a.rt.Peers().LenTried() != 1 {
+		tried := time.Now().Add(2 * time.Second)
+		for a.rt.Peers().LenTried() != 1 {
+			if time.Now().After(tried) {
+				t.Fatalf("the working session did not enter the tried table: %d", a.rt.Peers().LenTried())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 	get, err := objects.Marshal(&pexpb.Get{Req: 7, Max: 16, Release: true})
 	if err != nil {

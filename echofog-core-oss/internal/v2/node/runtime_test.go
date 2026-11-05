@@ -144,6 +144,19 @@ func (n *testNode) peerCard(t *testing.T) *objects.Card {
 	return card
 }
 
+func (n *testNode) publicCard(t *testing.T) *objects.Card {
+	t.Helper()
+	env, ok := n.rt.Cards().Own(objects.ScopePublic)
+	if !ok {
+		t.Fatal("node has no public card")
+	}
+	card, err := objects.VerifyCard(env, time.Now())
+	if err != nil {
+		t.Fatalf("verify own public card: %v", err)
+	}
+	return card
+}
+
 // ---- in-memory carrier listener
 
 type carrierQueue struct {
