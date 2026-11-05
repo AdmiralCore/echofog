@@ -179,3 +179,73 @@ func TestReplacingThreeKeyRecordMovesOwnerOnce(t *testing.T) {
 	}
 	s.checkInvariants(t)
 }
+
+// A record already stored gains the day keys it lacked without a second slot.
+func TestSameRecordGainsKeysWithoutNewSlot(t *testing.T) {
+	sg := seededSigner(t, 4700)
+	ks := newKeySet()
+	ks.add(dayKey("echofog/test/g", sg, srvNow))
+	s := newServer(t, ks.config)
+	p := testPeer("192.0.2.0/24")
+	rec := unknownRecord(t, "echofog/test/g", sg, 1, expiry(time.Hour))
+	if r := s.StoreAt(p, rec, srvNow); r.Status != StatusStored {
+		t.Fatal(r)
+	}
+	for _, k := range allKeys("echofog/test/g", 4700, t, srvNow) {
+		ks.add(k)
+	}
+	if r := s.StoreAt(p, rec, srvNow.Add(time.Second)); r.Status != StatusStored {
+		t.Fatal(r)
+	}
+	if _, _, sess, _ := quotaOf(s, signerID(sg), p.SID, p.Unit.String()); sess != 1 || s.Len() != 1 {
+		t.Fatalf("session=%d Len=%d, want 1/1", sess, s.Len())
+	}
+	for _, k := range allKeys("echofog/test/g", 4700, t, srvNow) {
+		if got, _ := s.FindValue(k); got == nil {
+			t.Fatal("key lost")
+		}
+	}
+	s.checkInvariants(t)
+}
+
+// A newer record that is stored under only some keys leaves the older one under the rest, and both
+// are counted once until the older one expires.
+func TestPartialReplacementKeepsOlderUnderOtherKeys(t *testing.T) {
+	now := srvNow
+	sg := seededSigner(t, 4800)
+	ks := newKeySet()
+	for _, k := range allKeys("echofog/test/h", 4800, t, srvNow) {
+		ks.add(k)
+	}
+	s := newServer(t, func(c *ServerConfig) { ks.config(c); c.Now = func() time.Time { return now } })
+	p := testPeer("192.0.2.0/24")
+	if r := s.StoreAt(p, unknownRecord(t, "echofog/test/h", sg, 1, expiry(time.Hour)), now); r.Status != StatusStored {
+		t.Fatal(r)
+	}
+	delete(ks.m, dayKey("echofog/test/h", sg, srvNow)) // the current-day key only is taken over...
+	ks.add(dayKey("echofog/test/h", sg, srvNow))
+	for _, k := range allKeys("echofog/test/h", 4800, t, srvNow) {
+		if k != dayKey("echofog/test/h", sg, srvNow) {
+			delete(ks.m, k)
+		}
+	}
+	if r := s.StoreAt(p, unknownRecord(t, "echofog/test/h", sg, 2, expiry(3*time.Hour)), now.Add(time.Second)); r.Status != StatusStored {
+		t.Fatal(r)
+	}
+	if _, unk, sess, _ := quotaOf(s, signerID(sg), p.SID, p.Unit.String()); unk != 2 || sess != 2 || s.Len() != 2 {
+		t.Fatalf("unknown=%d session=%d Len=%d, want 2/2/2", unk, sess, s.Len())
+	}
+	s.checkInvariants(t)
+	now = srvNow.Add(2 * time.Hour) // the older record expires, the newer stays
+	s.Expire(now)
+	if _, unk, sess, _ := quotaOf(s, signerID(sg), p.SID, p.Unit.String()); unk != 1 || sess != 1 || s.Len() != 1 {
+		t.Fatalf("after expiry unknown=%d session=%d Len=%d, want 1/1/1", unk, sess, s.Len())
+	}
+	s.checkInvariants(t)
+	now = srvNow.Add(4 * time.Hour)
+	s.Expire(now)
+	if s.Len() != 0 {
+		t.Fatal("record outlived expiry")
+	}
+	s.checkInvariants(t)
+}

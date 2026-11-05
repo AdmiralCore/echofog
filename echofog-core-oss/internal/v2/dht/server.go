@@ -87,13 +87,14 @@ type ServerConfig struct {
 // ErrServerConfig is a local wiring error.
 var ErrServerConfig = errors.New("dht: invalid server configuration")
 
-// record is one stored copy of a signed object under one DHT key. All of its accounting lives in
-// the Server and changes only in removeLocked and addLocked (AD19).
+// record is one stored signed object. The DHT keys of the adjacent days (d-1, d, d+1) are indexes of
+// this one record: it is one slot in every quota however many keys point at it. All of its
+// accounting lives in the Server and changes only in removeLocked and addLocked (AD19).
 type record struct {
-	key    [32]byte
+	keys   [][32]byte // keys of Server.records that point at this record; never empty while stored
 	env    *objects.Envelope
 	expiry uint64
-	dist   [32]byte // key XOR self
+	dist   [32]byte // the smallest key XOR self over keys: how near the record is to this node
 	signer [32]byte
 	known  bool
 	sid    [16]byte
@@ -172,11 +173,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	return s, nil
 }
 
-// Len returns the number of stored records (cached copies are not counted).
+// Len returns the number of stored records, each counted once whatever its keys (cached copies are
+// not counted).
 func (s *Server) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.records)
+	return len(s.expq)
 }
 
 // CacheLen returns the number of cached copies.
@@ -217,7 +219,10 @@ func (h *farHeap) Pop() any {
 
 // addLocked inserts r and charges every counter. It is the only place counters grow.
 func (s *Server) addLocked(r *record) {
-	s.records[r.key] = r
+	for _, k := range r.keys {
+		s.records[k] = r
+	}
+	r.setDist(s.cfg.Self)
 	heap.Push(&s.expq, r)
 	heap.Push(&s.farq, r)
 	sc := s.signers[r.signer]
@@ -234,6 +239,45 @@ func (s *Server) addLocked(r *record) {
 	s.units[r.unit]++
 }
 
+func (r *record) setDist(self DeviceID) {
+	for i, k := range r.keys {
+		var d [32]byte
+		for j := range k {
+			d[j] = k[j] ^ self[j]
+		}
+		if i == 0 || bytes.Compare(d[:], r.dist[:]) < 0 {
+			r.dist = d
+		}
+	}
+}
+
+// detachKeyLocked takes key out of r's index and reports whether r has no key left; the caller then
+// removes it with removeLocked. Counters do not change: the record is still one record.
+func (s *Server) detachKeyLocked(r *record, key [32]byte) (empty bool) {
+	if s.records[key] == r {
+		delete(s.records, key)
+	}
+	for i, k := range r.keys {
+		if k == key {
+			r.keys = append(r.keys[:i:i], r.keys[i+1:]...)
+			break
+		}
+	}
+	if len(r.keys) > 0 {
+		r.setDist(s.cfg.Self)
+		heap.Fix(&s.farq, r.farIdx)
+	}
+	return len(r.keys) == 0
+}
+
+// attachKeyLocked adds key to r's index.
+func (s *Server) attachKeyLocked(r *record, key [32]byte) {
+	s.records[key] = r
+	r.keys = append(r.keys, key)
+	r.setDist(s.cfg.Self)
+	heap.Fix(&s.farq, r.farIdx)
+}
+
 // removeLocked deletes r from the store, both heaps and every counter, exactly once: a record
 // that expires and is evicted or replaced in the same pass is already gone the second time.
 func (s *Server) removeLocked(r *record) {
@@ -241,8 +285,10 @@ func (s *Server) removeLocked(r *record) {
 		return
 	}
 	r.gone = true
-	if s.records[r.key] == r {
-		delete(s.records, r.key)
+	for _, k := range r.keys {
+		if s.records[k] == r {
+			delete(s.records, k)
+		}
 	}
 	heap.Remove(&s.expq, r.expIdx)
 	heap.Remove(&s.farq, r.farIdx)
@@ -470,57 +516,81 @@ func (s *Server) StoreAt(p Peer, rec []byte, now time.Time) Result {
 	if len(keys) == 0 {
 		return Result{Err: CodeWrongKey}
 	}
-	var first Result
-	stored := false
-	for _, k := range keys {
-		r := s.insertLocked(p, c, k)
-		if r.Status == StatusStored {
-			stored = true
-		} else if first == (Result{}) {
-			first = r
-		}
-	}
-	if stored {
-		return Result{Status: StatusStored}
-	}
-	return first
+	return s.insertLocked(p, c, keys)
 }
 
-func (s *Server) insertLocked(p Peer, c *checked, key [32]byte) Result {
+// insertLocked stores one record under all of keys (its day keys this node is responsible for). The
+// record is one slot in every quota, and its expiry and eviction run through the single logical
+// indexes, so counters change once however many keys it has (AD19).
+func (s *Server) insertLocked(p Peer, c *checked, keys [][32]byte) Result {
 	env := c.env
-	old := s.records[key]
-	if old != nil {
-		switch {
-		case env.Seq < old.env.Seq:
-			return Result{Status: StatusStale}
-		case bytes.Equal(env.Raw, old.env.Raw):
-			return Result{Status: StatusStored}
-		case objects.Prefer(old.env, env) == old.env && env.Seq == old.env.Seq:
+	var same *record
+	stale := false
+	var targets [][32]byte
+	for _, k := range keys {
+		if old := s.records[k]; old != nil {
+			switch {
+			case env.Seq < old.env.Seq:
+				stale = true
+				continue
+			case bytes.Equal(env.Raw, old.env.Raw):
+				same = old
+				continue
+			case objects.Prefer(old.env, env) == old.env && env.Seq == old.env.Seq:
+				stale = true
+				continue
+			}
+		}
+		targets = append(targets, k)
+	}
+	if same != nil {
+		// The same object is already stored: it only gains the keys it lacks.
+		for _, k := range targets {
+			s.takeKeyLocked(k)
+			s.attachKeyLocked(same, k)
+			s.cacheRemoveLocked(k)
+		}
+		return Result{Status: StatusStored}
+	}
+	if len(targets) == 0 {
+		if stale {
 			return Result{Status: StatusStale}
 		}
+		return Result{Status: StatusStored}
 	}
+
+	// Records every key of which this one takes over are replaced; the others keep their other keys.
+	hits := map[*record]int{}
+	for _, k := range targets {
+		if old := s.records[k]; old != nil {
+			hits[old]++
+		}
+	}
+	replaced := map[*record]bool{}
+	for old, n := range hits {
+		if n == len(old.keys) {
+			replaced[old] = true
+		}
+	}
+
 	signer := env.SignerID()
 	known := env.Known()
 	unit := s.unitKey(p)
 
-	// Quotas, counted without the record this one replaces.
-	sc := s.signers[signer]
+	// Quotas, counted without the records this one replaces.
 	known0, unknown0 := 0, 0
-	if sc != nil {
+	if sc := s.signers[signer]; sc != nil {
 		known0, unknown0 = sc.known, sc.unknown
 	}
-	if old != nil && old.signer == signer {
-		if old.known {
-			known0--
-		} else {
-			unknown0--
+	sessionN, unitN, total := s.sessions[p.SID], s.units[unit], len(s.expq)
+	for old := range replaced {
+		if old.signer == signer {
+			if old.known {
+				known0--
+			} else {
+				unknown0--
+			}
 		}
-	}
-	if known && known0 >= SignerKnown || !known && unknown0 >= SignerUnknown {
-		return Result{Status: StatusQuota}
-	}
-	sessionN, unitN, total := s.sessions[p.SID], s.units[unit], len(s.records)
-	if old != nil {
 		if old.sid == p.SID {
 			sessionN--
 		}
@@ -529,21 +599,22 @@ func (s *Server) insertLocked(p Peer, c *checked, key [32]byte) Result {
 		}
 		total--
 	}
+	if known && known0 >= SignerKnown || !known && unknown0 >= SignerUnknown {
+		return Result{Status: StatusQuota}
+	}
 	if sessionN >= sessionLimit(p) || unitN >= UnitFactor*sessionLimit(p) {
 		return Result{Status: StatusQuota}
 	}
 	r := &record{
-		key: key, env: env, expiry: c.expiry, signer: signer, known: known, sid: p.SID, unit: unit,
+		keys: append([][32]byte(nil), targets...), env: env, expiry: c.expiry,
+		signer: signer, known: known, sid: p.SID, unit: unit,
 	}
-	for i := range key {
-		r.dist[i] = key[i] ^ s.cfg.Self[i]
-	}
+	r.setDist(s.cfg.Self)
 	var evict *record
 	if total >= s.max {
 		far := s.farq[0]
-		if far == old {
-			// The replaced record is the farthest: removing it already makes room.
-			far = nil
+		if replaced[far] {
+			far = nil // removing a replaced record already makes room
 		}
 		if far != nil {
 			if bytes.Compare(r.dist[:], far.dist[:]) >= 0 {
@@ -552,15 +623,22 @@ func (s *Server) insertLocked(p Peer, c *checked, key [32]byte) Result {
 			evict = far
 		}
 	}
-	if old != nil {
-		s.removeLocked(old)
+	for _, k := range targets {
+		s.takeKeyLocked(k)
+		s.cacheRemoveLocked(k)
 	}
 	if evict != nil {
 		s.removeLocked(evict)
 	}
 	s.addLocked(r)
-	s.cacheRemoveLocked(key)
 	return Result{Status: StatusStored}
+}
+
+// takeKeyLocked frees key from the record it points at; a record left without keys is removed.
+func (s *Server) takeKeyLocked(key [32]byte) {
+	if old := s.records[key]; old != nil && s.detachKeyLocked(old, key) {
+		s.removeLocked(old)
+	}
 }
 
 // --- answers ---
@@ -699,10 +777,17 @@ func (s *Server) checkInvariantsErr() error {
 	signers := map[[32]byte]signerCount{}
 	sessions := map[[16]byte]int{}
 	units := map[string]int{}
-	for k, r := range s.records {
-		if r.gone || r.key != k {
-			return fmt.Errorf("record %x: gone=%v", k[:4], r.gone)
+	nkeys := 0
+	for _, r := range s.expq {
+		if r.gone || len(r.keys) == 0 {
+			return fmt.Errorf("record gone=%v with %d keys", r.gone, len(r.keys))
 		}
+		for _, k := range r.keys {
+			if s.records[k] != r {
+				return fmt.Errorf("key %x does not point at its record", k[:4])
+			}
+		}
+		nkeys += len(r.keys)
 		c := signers[r.signer]
 		if r.known {
 			c.known++
@@ -713,8 +798,11 @@ func (s *Server) checkInvariantsErr() error {
 		sessions[r.sid]++
 		units[r.unit]++
 	}
-	if len(s.expq) != len(s.records) || len(s.farq) != len(s.records) {
-		return fmt.Errorf("heaps %d/%d for %d records", len(s.expq), len(s.farq), len(s.records))
+	if nkeys != len(s.records) {
+		return fmt.Errorf("%d keys in the records index, records say %d", len(s.records), nkeys)
+	}
+	if len(s.farq) != len(s.expq) {
+		return fmt.Errorf("heaps %d/%d", len(s.expq), len(s.farq))
 	}
 	if len(signers) != len(s.signers) || len(sessions) != len(s.sessions) || len(units) != len(s.units) {
 		return fmt.Errorf("counter maps differ: signers %d/%d sessions %d/%d units %d/%d",
