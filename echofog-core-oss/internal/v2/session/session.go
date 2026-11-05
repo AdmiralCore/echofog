@@ -143,9 +143,9 @@ func mapHandshakeError(err error) error {
 		return &ErrRejected{Reason: handshake.ReasonVersion, Cause: err}
 	case errors.Is(err, handshake.ErrClockSkew):
 		return &ErrRejected{Reason: handshake.ReasonClockSkew, Cause: err}
-	case errors.Is(err, handshake.ErrSelection):
-		return &ErrRejected{Reason: handshake.ReasonFeatureRequired, Cause: err}
 	}
+	// A selection violation aborts without a message (handshake §7 and §11); it is a protocol
+	// error, not a REJECT.
 	return wrapSilent(err)
 }
 
@@ -278,7 +278,7 @@ func finish(c mux.Carrier, g *mux.Guard, control mux.RawStream, hs *handshake.Se
 	ms, err := mux.NewSession(cfg, g, control, kind)
 	if err != nil {
 		_ = c.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: mux session: %w", ErrConfig, err)
 	}
 	var sid [16]byte
 	copy(sid[:], hs.SID)

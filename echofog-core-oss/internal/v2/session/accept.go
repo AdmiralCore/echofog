@@ -213,7 +213,7 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			}
 			hs, err := resp.HandleFinish(fin.Payload)
 			if err != nil {
-				return nil, rejectAfterFinish(c, pend.Stream, clk, err)
+				return nil, rejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, err)
 			}
 			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, cfg.Local, remoteOf(c))
 		default:
@@ -224,20 +224,51 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 }
 
 // rejectAfterFinish sends REJECT{card-invalid} after message 3 when the initiator's card is
-// invalid (handshake §8); every other failure closes without a message (§11). On a sealed carrier
-// the switch point has already passed, so this plaintext REJECT ends the path instead; the
-// ambiguity is recorded in reports/T3.1.md.
-func rejectAfterFinish(c mux.Carrier, s mux.RawStream, clk carrier.Clock, err error) error {
+// invalid (handshake §8); every other failure closes without a message (§11). The switch point
+// has already passed on a sealed carrier, so there the REJECT is a sealed kind-1 record on the
+// control stream (wire §8.5, decisions.md T3.1), never plaintext.
+func rejectAfterFinish(c mux.Carrier, s mux.RawStream, clk carrier.Clock, hs *handshake.Session, kind mux.PathKind, err error) error {
 	card := errors.Is(err, handshake.ErrPeerCard) || errors.Is(err, handshake.ErrKeyBinding)
-	if !card {
+	if !card || hs == nil {
 		_ = c.Close()
 		return wrapSilent(err)
 	}
 	payload := (&handshake.Reject{Reason: handshake.ReasonCardInvalid}).Marshal()
-	if werr := writeFrame(s, clk, frame.TypeReject, payload); werr != nil {
+	sealed := c.Sealed() || kind == mux.PathRelay
+	if sealed {
+		body := frame.AppendFrame(nil, frame.Frame{Type: frame.TypeReject, Payload: payload})
+		if werr := writeSealed(c, s, clk, hs, body); werr != nil {
+			_ = c.Close()
+			return wrapSilent(werr)
+		}
+	} else if werr := writeFrame(s, clk, frame.TypeReject, payload); werr != nil {
 		_ = c.Close()
 		return wrapSilent(err)
 	}
 	closeAfterFlush(c, clk)
 	return &ErrRejected{Reason: handshake.ReasonCardInvalid, Cause: err}
+}
+
+// writeSealed writes one plaintext frame as a sealed record of path 0 on the control stream. A
+// byte-stream carrier wraps its whole connection-level frame sequence as one pipe; a carrier with
+// native streams (QUIC) seals stream 0 as its own pipe (wire §8.5).
+func writeSealed(c mux.Carrier, control mux.RawStream, clk carrier.Clock, hs *handshake.Session, body []byte) error {
+	sealer, err := mux.NewSealer(sessionKeys{hs: hs})
+	if err != nil {
+		return err
+	}
+	if err := control.SetWriteDeadline(clk.Now().Add(handshake.MessageTimeout)); err != nil {
+		return err
+	}
+	if sw, ok := c.(interface {
+		StartSealing(*mux.Sealer, uint64)
+	}); ok {
+		sw.StartSealing(sealer, 0)
+		_, err = control.Write(body)
+		return err
+	}
+	rc := mux.NewRecordConn(control)
+	rc.StartSealing(sealer, 0, control.ID())
+	_, err = rc.Write(body)
+	return err
 }

@@ -668,67 +668,71 @@ func sameSuites(a, b []uint16) bool {
 // TestSuiteRetryKeepsOriginalOffered checks that the single retry resends the full original
 // offered list, including the same GREASE value (handshake §3.1, decisions.md T3.1 point 2).
 func TestSuiteRetryKeepsOriginalOffered(t *testing.T) {
+	// The retry draws a new random GREASE value on the old code about 14 times out of 15, so a
+	// handful of independent attempts makes the regression deterministic without a test hook.
 	for i := 0; i < 8; i++ {
-		now := time.Now()
-		cliNode, srvNode := newTestNode(t), newTestNode(t)
-		nc := srvNode.cards(t, now)
-		cliCard := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK, handshake.SuiteXX}, 34,
-			uint64(now.Add(24*time.Hour).Unix()))
-		remote := verifyCard(t, nc.peer, now)
-		first, second := memcarrier.NewQUIC(), memcarrier.NewQUIC()
+		t.Run(fmt.Sprintf("try-%d", i), func(t *testing.T) {
+			now := time.Now()
+			cliNode, srvNode := newTestNode(t), newTestNode(t)
+			nc := srvNode.cards(t, now)
+			cliCard := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK, handshake.SuiteXX}, 34,
+				uint64(now.Add(24*time.Hour).Unix()))
+			remote := verifyCard(t, nc.peer, now)
+			first, second := memcarrier.NewQUIC(), memcarrier.NewQUIC()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		results := make(chan rejectRecord, 2)
-		go func() { results <- recordSuiteReject(ctx, 1, first.Server) }()
-		go func() { results <- recordSuiteReject(ctx, 2, second.Server) }()
-		var calls atomic.Int32
-		_, err := session.Dial(ctx, remote, dialAttempt(),
-			cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXX, handshake.SuiteXK}, false),
-			session.WithCarrierFunc(func(context.Context) (mux.Carrier, error) {
-				switch calls.Add(1) {
-				case 1:
-					return first.Client, nil
-				case 2:
-					return second.Client, nil
-				}
-				return nil, errors.New("unexpected third dial")
-			}))
-		cancel()
-		byIdx := make(map[int]rejectRecord, 2)
-		for n := 0; n < 2; n++ {
-			r := <-results
-			byIdx[r.idx] = r
-		}
-		for _, r := range byIdx {
-			if r.err != nil {
-				t.Fatalf("iteration %d: fake responder: %v", i, r.err)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			results := make(chan rejectRecord, 2)
+			go func() { results <- recordSuiteReject(ctx, 1, first.Server) }()
+			go func() { results <- recordSuiteReject(ctx, 2, second.Server) }()
+			var calls atomic.Int32
+			_, err := session.Dial(ctx, remote, dialAttempt(),
+				cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXX, handshake.SuiteXK}, false),
+				session.WithCarrierFunc(func(context.Context) (mux.Carrier, error) {
+					switch calls.Add(1) {
+					case 1:
+						return first.Client, nil
+					case 2:
+						return second.Client, nil
+					}
+					return nil, errors.New("unexpected third dial")
+				}))
+			cancel()
+			byIdx := make(map[int]rejectRecord, 2)
+			for n := 0; n < 2; n++ {
+				r := <-results
+				byIdx[r.idx] = r
 			}
-		}
-		var rejected *session.ErrRejected
-		if !errors.As(err, &rejected) || rejected.Reason != handshake.ReasonSuite {
-			t.Fatalf("iteration %d: Dial = %v, want REJECT{suite}", i, err)
-		}
-		if got := calls.Load(); got != 2 {
-			t.Fatalf("iteration %d: %d dials, want 2", i, got)
-		}
-		h1, err := handshake.ParseHello(byIdx[1].hello)
-		if err != nil {
-			t.Fatalf("iteration %d: first hello: %v", i, err)
-		}
-		h2, err := handshake.ParseHello(byIdx[2].hello)
-		if err != nil {
-			t.Fatalf("iteration %d: second hello: %v", i, err)
-		}
-		if h2.Chosen != handshake.SuiteXK {
-			t.Fatalf("iteration %d: retry chose %#04x, want XK", i, h2.Chosen)
-		}
-		if !sameSuites(h1.Offered, h2.Offered) {
-			t.Fatalf("iteration %d: retry offered %v, first %v", i, h2.Offered, h1.Offered)
-		}
-		g1, g2 := greaseOf(h1.Offered), greaseOf(h2.Offered)
-		if g1 == 0 || g1 != g2 {
-			t.Fatalf("iteration %d: retry changed GREASE: %#04x -> %#04x", i, g1, g2)
-		}
+			for _, r := range byIdx {
+				if r.err != nil {
+					t.Fatalf("fake responder: %v", r.err)
+				}
+			}
+			var rejected *session.ErrRejected
+			if !errors.As(err, &rejected) || rejected.Reason != handshake.ReasonSuite {
+				t.Fatalf("Dial = %v, want REJECT{suite}", err)
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("%d dials, want 2", got)
+			}
+			h1, err := handshake.ParseHello(byIdx[1].hello)
+			if err != nil {
+				t.Fatalf("first hello: %v", err)
+			}
+			h2, err := handshake.ParseHello(byIdx[2].hello)
+			if err != nil {
+				t.Fatalf("second hello: %v", err)
+			}
+			if h2.Chosen != handshake.SuiteXK {
+				t.Fatalf("retry chose %#04x, want XK", h2.Chosen)
+			}
+			if !sameSuites(h1.Offered, h2.Offered) {
+				t.Fatalf("retry offered %v, first %v", h2.Offered, h1.Offered)
+			}
+			g1, g2 := greaseOf(h1.Offered), greaseOf(h2.Offered)
+			if g1 == 0 || g1 != g2 {
+				t.Fatalf("retry changed GREASE: %#04x -> %#04x", g1, g2)
+			}
+		})
 	}
 }
 

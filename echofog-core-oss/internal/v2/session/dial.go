@@ -117,13 +117,13 @@ func Dial(ctx context.Context, card *objects.Card, attempt carrier.Attempt, loca
 		return nil, fmt.Errorf("%w: no local card for message 3", ErrConfig)
 	}
 
-	suites := local.Suites
+	var offered []uint16
 	for try := 0; ; try++ {
 		c, err := o.open(ctx, card, attempt)
 		if err != nil {
 			return nil, err
 		}
-		est, next, err := dialOnce(ctx, c, card, remote, attempt, local, o, suites)
+		est, next, err := dialOnce(ctx, c, card, remote, attempt, local, o, offered)
 		if next != nil {
 			_ = c.Close()
 			if try >= 1 {
@@ -131,7 +131,7 @@ func Dial(ctx context.Context, card *objects.Card, attempt carrier.Attempt, loca
 				// rejection the second responder sent.
 				return nil, err
 			}
-			suites = next
+			offered = next
 			continue
 		}
 		if err != nil {
@@ -164,7 +164,7 @@ func (o *dialConfig) open(ctx context.Context, card *objects.Card, attempt carri
 // dialOnce runs one handshake on one carrier. A non-nil next means the peer sent REJECT{suite}
 // and the caller must try once more with the returned suite preference.
 func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *handshake.CardInfo,
-	attempt carrier.Attempt, local LocalIdentity, o *dialConfig, suites []uint16) (*Established, []uint16, error) {
+	attempt carrier.Attempt, local LocalIdentity, o *dialConfig, offered []uint16) (*Established, []uint16, error) {
 	clk := o.clock
 	static, err := staticKey(local.Device)
 	if err != nil {
@@ -175,7 +175,8 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 		Card:             local.Card,
 		Remote:           remote,
 		ExpectedDeviceID: o.expected,
-		Suites:           suites,
+		Suites:           local.Suites,
+		Offered:          offered,
 		Features:         local.Features,
 		Services:         local.Services,
 		AccessSecret:     local.AccessSecret,
@@ -233,13 +234,18 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 				}
 				return nil, nil, wrapSilent(err)
 			}
-			// The next flight must run on a fresh carrier: the responder closed this one. Keep
-			// the complete offered set and only move the best common suite to the front.
+			// The next flight must run on a fresh carrier: the responder closed this one. Resend
+			// the complete original offered list, GREASE value included; only the best common
+			// suite moves to the front (B3).
+			h1, err := handshake.ParseHello(hello)
+			if err != nil {
+				return nil, nil, wrapSilent(err)
+			}
 			h2, err := handshake.ParseHello(hello2)
 			if err != nil {
 				return nil, nil, wrapSilent(err)
 			}
-			return nil, preferSuite(effectiveSuites(suites), h2.Chosen), rejection(*rej)
+			return nil, preferSuite(h1.Offered, h2.Chosen), rejection(*rej)
 		case frame.TypeHsMsg:
 			msg3, hs, err := ini.HandleMsg2(f.Payload)
 			if err != nil {
@@ -264,13 +270,6 @@ func writeFlight(w mux.RawStream, clk carrier.Clock, hello, msg1 []byte) error {
 	buf = frame.AppendFrame(buf, frame.Frame{Type: frame.TypeHsMsg, Payload: msg1})
 	_, err := w.Write(buf)
 	return err
-}
-
-func effectiveSuites(suites []uint16) []uint16 {
-	if len(suites) == 0 {
-		return append([]uint16(nil), handshake.DefaultSuites...)
-	}
-	return suites
 }
 
 // preferSuite moves chosen to the front, keeping the rest in the original order.

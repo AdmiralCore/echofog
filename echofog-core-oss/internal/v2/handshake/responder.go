@@ -427,6 +427,11 @@ func (r *Responder) cardForP2(p1 *HsInit, suite uint16, personal bool, now time.
 
 // HandleFinish processes message 3 and checks the initiator's card. Admission (bans, limits)
 // is the caller's: a refusal is a REJECT frame on the control stream.
+//
+// The transport keys are computed as soon as message 3 is authentic, before the card is
+// checked. If the card is rejected the returned Session is non-nil and carries only the keys
+// (Peer is nil), so the caller can report the rejection as a sealed REJECT on the control
+// stream (handshake §8, decisions.md T3.1).
 func (r *Responder) HandleFinish(msg3 []byte) (*Session, error) {
 	hs, pend := r.hs, r.pending
 	r.hs, r.pending = nil, nil
@@ -441,22 +446,22 @@ func (r *Responder) HandleFinish(msg3 []byte) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p3.Card == nil {
-		return nil, fmt.Errorf("%w: no card", ErrPeerCard)
-	}
-	info, err := r.cfg.Cards.VerifyCard(p3.Card, r.now())
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPeerCard, err)
-	}
-	if !ctEqual(info.HsKey, hs.RemoteStatic()) {
-		return nil, fmt.Errorf("%w: hs_key is not the Noise static key", ErrPeerCard)
-	}
-	if err := bindCard(r.cfg.Bindings, info); err != nil {
-		return nil, err
-	}
 	s, err := newSession(hs, r.suite, false)
 	if err != nil {
 		return nil, err
+	}
+	if p3.Card == nil {
+		return s, fmt.Errorf("%w: no card", ErrPeerCard)
+	}
+	info, err := r.cfg.Cards.VerifyCard(p3.Card, r.now())
+	if err != nil {
+		return s, fmt.Errorf("%w: %v", ErrPeerCard, err)
+	}
+	if !ctEqual(info.HsKey, s.RemoteStatic) {
+		return s, fmt.Errorf("%w: hs_key is not the Noise static key", ErrPeerCard)
+	}
+	if err := bindCard(r.cfg.Bindings, info); err != nil {
+		return s, err
 	}
 	s.Peer = info
 	s.Features, s.Services = pend.Features, pend.Services
