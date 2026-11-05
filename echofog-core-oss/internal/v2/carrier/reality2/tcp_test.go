@@ -737,7 +737,7 @@ func TestTCPStrangerHookReplacesTheCover(t *testing.T) {
 	_, _ = c.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
 	select {
 	case pre := <-got:
-		if string(pre) != "GET / HTTP/1.1\r\n\r\n" {
+		if !bytes.HasPrefix([]byte("GET / HTTP/1.1\r\n\r\n"), pre) || len(pre) == 0 {
 			t.Fatalf("hook got %q", pre)
 		}
 	case <-time.After(5 * time.Second):

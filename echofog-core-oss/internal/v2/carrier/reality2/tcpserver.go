@@ -137,7 +137,7 @@ var ErrTCPCover = errors.New("reality2: the TCP cover address and profile are re
 
 // ListenTCP serves reality2-tcp on ln. The listener owns ln and closes it.
 func ListenTCP(ln net.Listener, cfg TCPListenerConfig) (*TCPListener, error) {
-	if cfg.CoverAddr == "" || (cfg.ServerTLS == nil && (cfg.Cover.Group == 0 || cfg.Cover.Cert == nil)) {
+	if (cfg.CoverAddr == "" && cfg.Stranger == nil) || (cfg.ServerTLS == nil && (cfg.Cover.Group == 0 || cfg.Cover.Cert == nil)) {
 		return nil, ErrTCPCover
 	}
 	if cfg.Now == nil {
@@ -292,7 +292,7 @@ func (l *TCPListener) handle(c net.Conn) {
 	case l.slots <- struct{}{}:
 	default:
 		// Over the limit: straight to the cover, unread, never reset (wire.md §4.2).
-		l.toCover(c, nil)
+		l.reject(c, nil)
 		return
 	}
 	buf, hello := readFirstRecord(c, l.cfg.FirstRecordTimeout)
@@ -308,7 +308,7 @@ func (l *TCPListener) handle(c net.Conn) {
 		l.admit(&prefixConn{Conn: c, pre: buf})
 		return
 	}
-	l.toCover(c, buf)
+	l.reject(c, buf)
 }
 
 // admit completes TLS 1.3 on a connection with a valid token and hands out its carrier. The
@@ -379,6 +379,15 @@ func (l *TCPListener) reserve(c net.Conn) func() {
 			l.mu.Unlock()
 		})
 	}
+}
+
+// reject hands a connection that is not admitted to the Stranger hook, or to the cover.
+func (l *TCPListener) reject(c net.Conn, pre []byte) {
+	if l.cfg.Stranger != nil {
+		l.cfg.Stranger(c, pre)
+		return
+	}
+	l.toCover(c, pre)
 }
 
 // toCover proxies c to the cover, with the bytes already read in front. It never resets a

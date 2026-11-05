@@ -275,7 +275,12 @@ func TestStrangersAreClosedWith1008(t *testing.T) {
 		"garbage": func(ws *websocket.Conn) {
 			_ = ws.WriteMessage(websocket.BinaryMessage, []byte("GET / HTTP/1.1\r\n\r\n"))
 		},
-		"short": func(ws *websocket.Conn) { _ = ws.WriteMessage(websocket.BinaryMessage, []byte{0x16, 3, 1, 0, 10, 1}) },
+		"not a handshake record": func(ws *websocket.Conn) {
+			_ = ws.WriteMessage(websocket.BinaryMessage, []byte{0x17, 3, 3, 0, 5, 1, 2, 3, 4, 5})
+		},
+		"huge record": func(ws *websocket.Conn) {
+			_ = ws.WriteMessage(websocket.BinaryMessage, []byte{0x16, 3, 1, 0xff, 0xff, 1})
+		},
 		"stdlib hello": func(ws *websocket.Conn) {
 			c := tls.Client(&wsPipe{ws: ws}, &tls.Config{InsecureSkipVerify: true, ServerName: "cover.example"})
 			go func() { _ = c.Handshake() }()
@@ -347,7 +352,7 @@ func TestWritesAreBinaryMessagesUpTo16KiB(t *testing.T) {
 	defer cws.Close()
 	sws := <-srvWS
 	defer sws.Close()
-	conn := newConn(cws, nil)
+	conn := newConn(cws, nil, nil)
 	const total = 3*MaxMessage + 123
 	go func() { _, _ = conn.Write(make([]byte, total)) }()
 	got := 0
