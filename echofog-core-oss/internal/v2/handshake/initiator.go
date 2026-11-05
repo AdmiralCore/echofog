@@ -24,13 +24,18 @@ type InitiatorConfig struct {
 	// ExpectedDeviceID is the responder device ID for XX without a card (bootstrap lists).
 	ExpectedDeviceID *[32]byte
 	Suites           []uint16 // supported, preference order; default XK, XX
-	Features         []uint32
-	Services         []ServiceOffer
-	AccessSecret     []byte // 16-byte pass secret for a hidden responder (XK only)
-	Early            []byte // frames of one 0-RTT stream (XK, feature early-data), ≤ 1200 bytes
-	Now              func() time.Time
-	Offset           time.Duration
-	Grease           bool // add one GREASE value to offered, features and services (§3.4)
+	// Offered, when non-nil, is the exact offered sequence for this flight: the full list of the
+	// previous HS_HELLO including its GREASE value, with Chosen as the first non-GREASE entry.
+	// It exists for the single retry after REJECT{suite}, which resends the full original
+	// offered list (handshake §3.1). When nil, offered is built from Suites and Grease.
+	Offered      []uint16
+	Features     []uint32
+	Services     []ServiceOffer
+	AccessSecret []byte // 16-byte pass secret for a hidden responder (XK only)
+	Early        []byte // frames of one 0-RTT stream (XK, feature early-data), ≤ 1200 bytes
+	Now          func() time.Time
+	Offset       time.Duration
+	Grease       bool // add one GREASE value to offered, features and services (§3.4)
 	// Throwaway confirms, for XX to a bare address (no Remote, no ExpectedDeviceID), that Static
 	// and Card are a throwaway identity: fresh account, device and hs keys, never reused (B4).
 	Throwaway bool
@@ -89,7 +94,30 @@ func NewInitiator(cfg InitiatorConfig, cb []byte) (*Initiator, error) {
 		cfg.Suites = DefaultSuites
 	}
 	i := &Initiator{cfg: cfg, cb: clone(cb)}
-	if cfg.Remote != nil {
+	switch {
+	case cfg.Remote != nil:
+		i.rid = cfg.Remote.DeviceID[:]
+	case cfg.ExpectedDeviceID != nil:
+		i.rid = cfg.ExpectedDeviceID[:]
+	default:
+		if !cfg.Throwaway {
+			return nil, fmt.Errorf("%w: XX to a bare address needs a throwaway identity", ErrConfig)
+		}
+		info, err := cfg.Cards.VerifyCard(cfg.Card, cfg.Now().Add(cfg.Offset))
+		if err != nil || !bytes.Equal(info.HsKey, cfg.Static.PublicKey().Bytes()) {
+			return nil, fmt.Errorf("%w: the throwaway card must name the throwaway hs key", ErrConfig)
+		}
+	}
+	switch {
+	case cfg.Offered != nil:
+		// A retry resends the previous full list, GREASE included; the caller moves the chosen
+		// suite to the front (B3) without adding another GREASE value.
+		i.offered = slices.Clone(cfg.Offered)
+		i.chosen = firstNonGrease(i.offered)
+		if i.chosen == 0 {
+			return nil, fmt.Errorf("%w: offered has no non-GREASE suite", ErrConfig)
+		}
+	case cfg.Remote != nil:
 		for _, s := range cfg.Suites {
 			if _, ok := SuiteByID(s); ok && slices.Contains(cfg.Remote.L1Suites, s) {
 				i.offered = append(i.offered, s)
@@ -98,22 +126,11 @@ func NewInitiator(cfg InitiatorConfig, cb []byte) (*Initiator, error) {
 		if len(i.offered) == 0 {
 			return nil, fmt.Errorf("%w: no common suite with the card", ErrConfig)
 		}
-		i.rid = cfg.Remote.DeviceID[:]
-	} else {
+		i.chosen = i.offered[0]
+	default:
 		i.offered = []uint16{SuiteXX}
-		if cfg.ExpectedDeviceID != nil {
-			i.rid = cfg.ExpectedDeviceID[:]
-		} else {
-			if !cfg.Throwaway {
-				return nil, fmt.Errorf("%w: XX to a bare address needs a throwaway identity", ErrConfig)
-			}
-			info, err := cfg.Cards.VerifyCard(cfg.Card, cfg.Now().Add(cfg.Offset))
-			if err != nil || !bytes.Equal(info.HsKey, cfg.Static.PublicKey().Bytes()) {
-				return nil, fmt.Errorf("%w: the throwaway card must name the throwaway hs key", ErrConfig)
-			}
-		}
+		i.chosen = SuiteXX
 	}
-	i.chosen = i.offered[0]
 	if i.chosen != SuiteXK && (cfg.AccessSecret != nil || cfg.Early != nil) {
 		return nil, fmt.Errorf("%w: access and early data are XK only", ErrConfig)
 	}
@@ -129,7 +146,10 @@ func NewInitiator(cfg InitiatorConfig, cb []byte) (*Initiator, error) {
 			return nil, err
 		}
 		g := func(x byte) uint16 { n := uint16(x%15)<<4 | 0x0a; return n<<8 | n }
-		i.greaseSuite, i.greaseFeature, i.greaseService = g(b[0]), g(b[1]), g(b[2])
+		if cfg.Offered == nil {
+			i.greaseSuite = g(b[0]) // an explicit Offered already carries its GREASE
+		}
+		i.greaseFeature, i.greaseService = g(b[1]), g(b[2])
 	}
 	return i, nil
 }
