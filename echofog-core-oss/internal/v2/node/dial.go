@@ -119,14 +119,23 @@ func (r *Runtime) dialIdentity(ctx context.Context, opt DialOpt) (session.LocalI
 // and a suite retry after REJECT{suite} dials the plan again on a fresh carrier.
 func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.LocalIdentity, opt DialOpt, extra []session.DialOption) (*session.Established, error) {
 	attempts := opt.Attempts
-	if len(attempts) == 0 {
+	// A bootstrap dial has no card: the carrier gets a shell that holds only the masking key of
+	// the list, and the handshake runs XX (T5.5).
+	carrierCard := card
+	if opt.CarrierCard != nil {
+		carrierCard, card = opt.CarrierCard, nil
+	}
+	if len(attempts) == 0 && card != nil {
 		attempts = carrier.Plan(card, r.planInfo())
 	}
 	if len(attempts) == 0 {
+		if card == nil {
+			return nil, ErrNoRoute
+		}
 		return nil, fmt.Errorf("%w: %s", ErrNoRoute, DeviceID(card.DeviceID))
 	}
 
-	req := carrier.DialRequest{Card: card, DialContext: r.cfg.DialContext}
+	req := carrier.DialRequest{Card: carrierCard, DialContext: r.cfg.DialContext}
 	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
 
 	var reserved []session.Pair
@@ -240,7 +249,10 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 			return nil, fmt.Errorf("node: session readiness: %w", perr)
 		}
 	}
-	r.samplePeer(est)
+	if !est.Unverified {
+		// The clock of an unauthenticated responder says nothing (handshake.md section 4.2).
+		r.samplePeer(est)
+	}
 	return est, nil
 }
 

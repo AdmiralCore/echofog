@@ -5,4 +5,6 @@ import (
 )
 
 // fakeCard is a card shell: the fake host never inspects it.
-func fakeCard() *objects.Card { return &objects.Card{DeviceID: [32]byte{1}} }
+func fakeCard() *objects.Card {
+	return &objects.Card{DeviceID: [32]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}}
+}
