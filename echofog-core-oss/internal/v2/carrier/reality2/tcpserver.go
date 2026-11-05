@@ -291,8 +291,15 @@ func (l *TCPListener) handle(c net.Conn) {
 		return
 	}
 	buf, hello := readFirstRecord(c, l.cfg.FirstRecordTimeout)
+	ok := false
+	if hello != nil {
+		if l.verifyHook != nil {
+			l.verifyHook()
+		}
+		ok = l.verifier.Verify(hello)
+	}
 	<-l.slots // released as soon as the token is checked, whatever the answer
-	if hello != nil && l.verifier.Verify(hello) {
+	if ok {
 		l.admit(&prefixConn{Conn: c, pre: buf})
 		return
 	}
@@ -397,14 +404,21 @@ func (l *TCPListener) toCover(c net.Conn, pre []byte) {
 }
 
 // proxy copies both ways until either side ends; each read has an idle limit so that a stalled
-// stranger cannot hold a cover connection for ever.
+// stranger cannot hold a cover connection for ever, and the whole connection has a lifetime.
 func proxy(a, b net.Conn) {
 	var wg sync.WaitGroup
+	end := time.Now().Add(coverMaxLife) // a hard end, so a trickling or non-reading stranger lets go
+	_ = a.SetWriteDeadline(end)
+	_ = b.SetWriteDeadline(end)
 	cp := func(dst, src net.Conn) {
 		defer wg.Done()
 		buf := make([]byte, proxyBufSize)
 		for {
-			_ = src.SetReadDeadline(time.Now().Add(coverIdleTimeout))
+			rd := time.Now().Add(coverIdleTimeout)
+			if rd.After(end) {
+				rd = end
+			}
+			_ = src.SetReadDeadline(rd)
 			n, err := src.Read(buf)
 			if n > 0 {
 				if _, werr := dst.Write(buf[:n]); werr != nil {
