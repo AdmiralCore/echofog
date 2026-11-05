@@ -389,8 +389,11 @@ func TestMemoryCapEvictsLRU(t *testing.T) {
 	if tbl.Len() != 3 {
 		t.Fatalf("in-memory table has %d entries, want 3", tbl.Len())
 	}
-	if tbl.Has(DeviceID(cards[0].DeviceID)) {
-		t.Fatal("the least recently confirmed entry was not evicted")
+	if !tbl.Has(DeviceID(cards[0].DeviceID)) {
+		t.Fatal("the least recently confirmed entry was dropped from the disk index")
+	}
+	if tbl.Card(DeviceID(cards[0].DeviceID)) != nil {
+		t.Fatal("the least recently confirmed entry is still in memory")
 	}
 	if n := kv.count([]byte{entryPrefix}); n != 5 {
 		t.Fatalf("store holds %d entries, want 5 (evicted entries stay on disk)", n)

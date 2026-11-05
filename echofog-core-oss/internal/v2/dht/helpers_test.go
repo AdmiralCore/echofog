@@ -75,6 +75,19 @@ func testAddr(host string, port uint32) *pb.Addr {
 	return &pb.Addr{Suite: 0x77, Host: host, Port: port}
 }
 
+// seedInBucket finds a deterministic seed whose device lands in the requested bucket.
+func seedInBucket(t *testing.T, self DeviceID, bucket int, start uint64, now time.Time) uint64 {
+	t.Helper()
+	for seed := start; seed < start+1<<20; seed++ {
+		c := buildCard(t, seed, 1, now, objects.ScopePublic, 0)
+		if bucketIndex(self, DeviceID(c.DeviceID)) == bucket {
+			return seed
+		}
+	}
+	t.Fatalf("no seed found in bucket %d", bucket)
+	return 0
+}
+
 // cardInBucket grinds deterministic device keys until one lands in the requested bucket. The
 // caller supplies a counter so tests can build many distinct devices of one bucket.
 func cardInBucket(t *testing.T, self DeviceID, bucket int, counter uint64, now time.Time, addrs ...*pb.Addr) *objects.Card {
@@ -217,4 +230,116 @@ func (k *memKV) count(prefix []byte) int {
 		}
 	}
 	return n
+}
+
+// storedSeq returns the seq of the card kept in the store, or 0 when there is no record.
+func storedSeq(t *testing.T, kv *memKV, id DeviceID) uint64 {
+	t.Helper()
+	value, err := kv.Get(entryKey(id))
+	if err != nil {
+		return 0
+	}
+	raw, _, ok := decodeEntry(value)
+	if !ok {
+		t.Fatalf("stored entry of %x is damaged", id)
+	}
+	env, err := objects.Parse(raw)
+	if err != nil {
+		t.Fatalf("stored card of %x: %v", id, err)
+	}
+	return env.Seq
+}
+
+func storedConfirmed(t *testing.T, kv *memKV, id DeviceID) time.Time {
+	t.Helper()
+	value, err := kv.Get(entryKey(id))
+	if err != nil {
+		t.Fatalf("no stored entry for %x: %v", id, err)
+	}
+	_, at, ok := decodeEntry(value)
+	if !ok {
+		t.Fatalf("stored entry of %x is damaged", id)
+	}
+	return at
+}
+
+// gatedKV lets a test hold Puts in flight. Every Put announces itself on started; while a gate
+// is set, Puts wait for it to be closed. It reproduces the order of writes that a fast second
+// update could overtake.
+type gatedKV struct {
+	*memKV
+	mu      sync.Mutex
+	gate    chan struct{}
+	started chan struct{}
+}
+
+func newGatedKV() *gatedKV {
+	return &gatedKV{memKV: newMemKV(), started: make(chan struct{}, 16)}
+}
+
+func (k *gatedKV) setGate(gate chan struct{}) {
+	k.mu.Lock()
+	k.gate = gate
+	k.mu.Unlock()
+}
+
+func (k *gatedKV) drainStarted() {
+	for {
+		select {
+		case <-k.started:
+		default:
+			return
+		}
+	}
+}
+
+func (k *gatedKV) Put(key, value []byte) error {
+	k.mu.Lock()
+	gate, started := k.gate, k.started
+	k.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+	}
+	if gate != nil {
+		<-gate
+	}
+	return k.memKV.Put(key, value)
+}
+
+// blockingPinger keeps a liveness check in flight until the test releases it.
+type blockingPinger struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func newBlockingPinger() *blockingPinger {
+	return &blockingPinger{started: make(chan struct{}, 1), release: make(chan struct{})}
+}
+
+func (p *blockingPinger) Ping(ctx context.Context, _ *objects.Card) error {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	select {
+	case p.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-p.release:
+		return p.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *blockingPinger) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
