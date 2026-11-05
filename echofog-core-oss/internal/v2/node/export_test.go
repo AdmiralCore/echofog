@@ -13,6 +13,18 @@ import (
 )
 
 var (
+	// OpenSessions counts the live (not closed) sessions in the runtime's session table.
+	OpenSessions = func(r *Runtime) int {
+		n := 0
+		for _, est := range r.table.Sessions() {
+			select {
+			case <-est.Session.Done():
+			default:
+				n++
+			}
+		}
+		return n
+	}
 	// SetBeforeAdd installs the hook that runs before an accepted session enters the table.
 	SetBeforeAdd = func(f func(*session.Established)) { beforeAdd = f }
 	// LocalInfoOf returns the carrier-plan view built from the profile.

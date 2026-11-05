@@ -72,11 +72,10 @@ func TestAccessRevokedContactLiveSessionGetsNoCardAndIsClosed(t *testing.T) {
 	if _, err := server.rt.RevokeContactAccess(ctx, client.id.NodeID); err != nil {
 		t.Fatalf("RevokeContactAccess: %v", err)
 	}
-	select {
-	case <-sess.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the live session of a revoked contact is still open")
-	}
+	_ = sess
+	waitFor(t, 5*time.Second, "the revoked contact's session to close on the node", func() bool {
+		return node.OpenSessions(server.rt) == 0
+	})
 	time.Sleep(200 * time.Millisecond)
 	if got := client.rt.Cards().Peer(server.id.DeviceID); got == nil || !bytes.Equal(got.Env.Raw, before) {
 		t.Fatal("the revoked contact received the rotated peer card")
@@ -145,37 +144,53 @@ func publicOfMask(t *testing.T, k noise3.MaskKey) []byte {
 	return pub
 }
 
+// hasAKey reports whether the raw X25519 public keys contain the typed key (one type byte, then 32).
+func hasAKey(raw [][]byte, akey []byte) bool {
+	if len(akey) != 33 {
+		return false
+	}
+	return hasPublicKey(raw, akey[1:])
+}
+
 // N3: the rotation reaches the contacts listener: the new key plus the previous one until its
 // RetireAfter; the revoked-away key is gone once it retires.
 func TestAccessRotationReachesContactListener(t *testing.T) {
 	f := newAccessFactory()
 	cl := &contactListener{carrierQueue: newCarrierQueue()}
-	server, _, _ := newHiddenAccessNodeCfg(t, f.build, func(c *node.Config, q *carrierQueue) {
+	server, _, mgr := newHiddenAccessNodeCfg(t, f.build, func(c *node.Config, q *carrierQueue) {
 		c.Listeners = nil
 		c.ContactListeners = []carrier.Listener{cl}
 	})
 	server.start(t)
 	ctx := t.Context()
 
+	// A contact with a pass exists, so the previous key stays valid during the overlap.
+	redeemContact(t, ctx, server, mgr, f)
 	rot, err := server.rt.RotateAccessKeys(ctx)
 	if err != nil {
 		t.Fatalf("RotateAccessKeys: %v", err)
 	}
-	waitFor(t, 5*time.Second, "contacts listener key update", func() bool { return cl.last() != nil })
+	pubsOf := func() [][]byte {
+		var pubs [][]byte
+		for _, k := range cl.last() {
+			pubs = append(pubs, publicOfMask(t, k))
+		}
+		return pubs
+	}
+	waitFor(t, 5*time.Second, "the new contacts key at the contacts listener", func() bool {
+		return hasAKey(pubsOf(), rot.ContactsKey)
+	})
 	keys := cl.last()
-	var pubs [][]byte
-	for _, k := range keys {
-		pubs = append(pubs, publicOfMask(t, k))
+	pubs := pubsOf()
+	if rot.PreviousKey == nil {
+		t.Fatal("no previous contacts key during the overlap")
 	}
-	if !hasPublicKey(pubs, rot.ContactsKey) {
-		t.Fatal("the contacts listener does not accept the new contacts key")
-	}
-	if rot.PreviousKey != nil {
-		if !hasPublicKey(pubs, rot.PreviousKey) {
+	{
+		if !hasAKey(pubs, rot.PreviousKey) {
 			t.Fatal("the previous contacts key is not kept during the overlap")
 		}
 		for _, k := range keys {
-			if bytes.Equal(publicOfMask(t, k), rot.PreviousKey) && k.NotAfter.IsZero() {
+			if len(rot.PreviousKey) == 33 && bytes.Equal(publicOfMask(t, k), rot.PreviousKey[1:]) && k.NotAfter.IsZero() {
 				t.Fatal("the previous contacts key has no deadline")
 			}
 		}

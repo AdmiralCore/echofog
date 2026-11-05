@@ -61,36 +61,81 @@ func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 			continue
 		}
 
-		if beforeAdd != nil {
-			beforeAdd(est)
-		}
-		kept, err := r.table.Add(local, est)
-		if err != nil {
-			_ = est.Session.Close()
-			r.log.Warn("node: session table rejected an accepted session", "err", err)
+		if est.Access == nil || r.accessMgr == nil {
+			r.takeAccepted(ctx, local, est, nil, nil)
 			continue
 		}
-		if kept != est {
-			// Add drains the loser by the duplicate rule of wire.md §7.3.
-			continue
-		}
+		// A hidden node books the pass (redeem or renew) before the session enters the table, off
+		// the accept loop: a slow store write of one contact must not stop the others from being
+		// accepted (T3.6b). A pass that cannot be booked is not kept: fail closed.
 		if r.Background() == BackgroundSuspended {
-			// suspended closes sessions with GOAWAY (platforms.md §2); a peer that dialed us
-			// during the suspension is told to come back later.
-			_ = kept.GoAway(ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+			// A pass is not spent while suspended: the peer is told to come back later.
+			_ = est.GoAway(ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
 			continue
 		}
-		// A hidden node admits a session through an invitation or a personal pass; the pass is
-		// consumed or renewed here, and the contact receives the peer card over the session
-		// (handshake.md §5, T3.6b). A pass that cannot be booked is not kept: fail closed.
-		if err := r.handleAccess(ctx, kept); err != nil {
-			r.log.Debug("node: access session refused", "err", err)
-			_ = kept.Session.Close()
-			continue
+		select {
+		case r.admitSem <- struct{}{}:
+		case <-ctx.Done():
+			_ = est.Session.Close()
+			return
 		}
-		r.samplePeer(kept)
-		r.ensureServing(kept)
+		r.wg.Add(1)
+		go func(local session.LocalIdentity, est *session.Established) {
+			defer r.wg.Done()
+			defer func() { <-r.admitSem }()
+			adm, card, err := r.admit(ctx, est)
+			if err != nil {
+				r.log.Debug("node: access session refused", "err", err)
+				_ = est.Session.Close()
+				return
+			}
+			r.takeAccepted(ctx, local, est, &adm, card)
+			if err := r.RefreshAccess(ctx); err != nil {
+				// The pass is booked and the session is valid; a failed listener refresh must
+				// not drop it. The next RefreshAccess retries from the same persistent state.
+				r.log.Warn("node: access refresh after a session", "err", err)
+			}
+		}(local, est)
 	}
+}
+
+// takeAccepted enters an accepted (and, on a hidden node, already admitted) session into the
+// table and starts serving it. adm is non-nil for a session booked with a pass; such a session
+// receives card, the peer card of the contact (handshake.md section 5).
+func (r *Runtime) takeAccepted(ctx context.Context, local session.LocalIdentity, est *session.Established, adm *admission, card []byte) {
+	if adm != nil {
+		r.markAdmitted(est, *adm)
+	}
+	if beforeAdd != nil {
+		beforeAdd(est)
+	}
+	kept, err := r.table.Add(local, est)
+	if err != nil {
+		r.forgetAdmitted(est)
+		_ = est.Session.Close()
+		r.log.Warn("node: session table rejected an accepted session", "err", err)
+		return
+	}
+	if kept != est {
+		// Add drains the loser by the duplicate rule of wire.md section 7.3.
+		r.forgetAdmitted(est)
+		return
+	}
+	if r.Background() == BackgroundSuspended {
+		// suspended closes sessions with GOAWAY (platforms.md section 2); a peer that dialed us
+		// during the suspension is told to come back later.
+		r.forgetAdmitted(est)
+		_ = kept.GoAway(ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+		return
+	}
+	if adm != nil && len(card) > 0 {
+		if err := est.PushCard(card); err != nil && !errors.Is(err, mux.ErrFeatureNotSelected) {
+			// The peer card also travels in P2 on later sessions; a push failure is not fatal.
+			r.log.Debug("node: access peer card push failed", "err", err)
+		}
+	}
+	r.samplePeer(kept)
+	r.ensureServing(kept)
 }
 
 // ensureServing starts exactly one service loop and one datagram pump per live session. A
@@ -106,6 +151,7 @@ func (r *Runtime) ensureServing(est *session.Established) {
 	go func() {
 		defer r.wg.Done()
 		defer r.serving.Delete(est.Session)
+		defer r.forgetAdmitted(est)
 		peer := r.peerOf(est)
 		r.noteSession(peer.Card)
 		r.notePeerSession(peer, est.Remote)

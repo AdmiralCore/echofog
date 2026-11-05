@@ -12,6 +12,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -70,9 +71,7 @@ func (r *Runtime) startAccess(ctx context.Context) error {
 	if r.accessMgr == nil {
 		return nil
 	}
-	r.accessMu.Lock()
-	defer r.accessMu.Unlock()
-	return r.refreshAccessLocked(ctx)
+	return r.refreshAccess(ctx)
 }
 
 // stopAccess closes every access listener. It is idempotent and does not close the manager: the
@@ -112,9 +111,26 @@ func (r *Runtime) RefreshAccess(ctx context.Context) error {
 		// Listeners are installed by Start; the manager state is already persistent.
 		return nil
 	}
+	return r.refreshAccess(run)
+}
+
+// refreshAccess first moves the contacts key (card builder, contacts listeners, card push) and
+// then the invitation listeners. The two parts use separate locks: the first one writes the card
+// store and sends frames, the second one binds sockets; neither holds up the other.
+func (r *Runtime) refreshAccess(ctx context.Context) error {
+	var errs []error
+	r.contactsMu.Lock()
+	if err := r.syncAccessContactsLocked(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	r.contactsMu.Unlock()
+
 	r.accessMu.Lock()
-	defer r.accessMu.Unlock()
-	return r.refreshAccessLocked(run)
+	if err := r.refreshAccessLocked(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	r.accessMu.Unlock()
+	return errors.Join(errs...)
 }
 
 func (r *Runtime) accessContext() context.Context {
@@ -123,46 +139,110 @@ func (r *Runtime) accessContext() context.Context {
 	return r.ctx
 }
 
-// handleAccess books a hidden-node session: an invitation is redeemed, a personal pass renewed,
-// and the contact receives the peer card over the session (handshake.md §5). The caller closes
-// the session when this returns an error, so an unbooked pass never keeps a session alive.
-func (r *Runtime) handleAccess(ctx context.Context, est *session.Established) error {
-	if r.accessMgr == nil || est == nil || est.Access == nil {
-		return nil
-	}
+// maxAdmitting bounds the pass bookings that run beside the accept loop.
+const maxAdmitting = 64
+
+// admission is the pass a hidden-node session was booked with. Only such sessions receive the
+// peer card; the pass is the personal pass (an invitation is exchanged for one on redemption).
+type admission struct {
+	pass access.PassID
+	node NodeID
+}
+
+// admit books a hidden-node session before it enters the session table: an invitation is
+// redeemed, a personal pass renewed (handshake.md section 5). A pass that cannot be booked is an
+// error and the caller closes the session without it ever having displaced a live one (wire.md
+// 7.3). It returns the peer card to deliver.
+func (r *Runtime) admit(ctx context.Context, est *session.Established) (admission, []byte, error) {
 	id := access.PassID(est.Access.PassID)
-	var card []byte
+	if est.Peer == nil {
+		return admission{}, nil, fmt.Errorf("%w: no peer card for a pass", ErrConfig)
+	}
+	adm := admission{pass: id, node: NodeID(est.Peer.NodeID)}
 	if est.Access.Personal {
 		if _, err := r.accessMgr.Renew(ctx, id); err != nil {
-			return fmt.Errorf("node: renew personal pass: %w", err)
+			return admission{}, nil, fmt.Errorf("node: renew personal pass: %w", err)
 		}
+		var card []byte
 		if ic, err := r.cfg.Cards.Current(ctx, objects.ScopePeer); err == nil {
 			card = ic.Envelope
 		}
-	} else {
-		if est.Peer == nil {
-			return fmt.Errorf("%w: no peer card for redemption", ErrConfig)
-		}
-		redeemed, err := r.accessMgr.Redeem(ctx, access.RedeemRequest{
-			PassID: id, Node: est.Peer.NodeID, Device: est.Peer.DeviceID,
-		})
-		if err != nil {
-			return fmt.Errorf("node: redeem invitation: %w", err)
-		}
-		card = redeemed.PeerCard
+		return adm, card, nil
 	}
-	if len(card) > 0 {
+	redeemed, err := r.accessMgr.Redeem(ctx, access.RedeemRequest{
+		PassID: id, Node: est.Peer.NodeID, Device: est.Peer.DeviceID,
+	})
+	if err != nil {
+		return admission{}, nil, fmt.Errorf("node: redeem invitation: %w", err)
+	}
+	adm.pass = redeemed.PassID
+	return adm, redeemed.PeerCard, nil
+}
+
+func (r *Runtime) markAdmitted(est *session.Established, adm admission) {
+	r.admitMu.Lock()
+	r.admitted[est] = adm
+	r.admitMu.Unlock()
+}
+
+func (r *Runtime) forgetAdmitted(est *session.Established) {
+	if r.accessMgr == nil {
+		return
+	}
+	r.admitMu.Lock()
+	delete(r.admitted, est)
+	r.admitMu.Unlock()
+}
+
+// liveAdmitted returns the admitted sessions whose pass is still active and unrevoked. A session
+// whose pass is gone (revoked contact, expired pass) is closed and forgotten: it must neither
+// stay up nor learn the rotated contacts key (D11).
+func (r *Runtime) liveAdmitted() []*session.Established {
+	if r.accessMgr == nil {
+		return nil
+	}
+	now := r.clock.Now()
+	r.admitMu.Lock()
+	var live, dead []*session.Established
+	for est, adm := range r.admitted {
+		if _, ok := r.accessMgr.LookupPass(adm.pass[:], now); ok && est.Session != nil {
+			live = append(live, est)
+			continue
+		}
+		dead = append(dead, est)
+		delete(r.admitted, est)
+	}
+	r.admitMu.Unlock()
+	for _, est := range dead {
+		if est.Session != nil {
+			go closeRevoked(est)
+		}
+	}
+	return live
+}
+
+// closeRevoked ends the session of a contact whose pass is gone: a GOAWAY without a reason tells
+// the peer to stop, then the session is closed even if the peer does not drain.
+func closeRevoked(est *session.Established) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = est.GoAway(ctx, frame.CodeGoingAway, "", 0)
+	_ = est.Session.Close()
+}
+
+// pushPeerCard sends the peer card to the sessions that hold an active pass. Other sessions of
+// the same local identity (outgoing ones, sessions that never booked a pass) never get it: the
+// card carries the contacts key and the hidden listener address.
+func (r *Runtime) pushPeerCard(card []byte) {
+	if len(card) == 0 {
+		return
+	}
+	for _, est := range r.liveAdmitted() {
 		if err := est.PushCard(card); err != nil && !errors.Is(err, mux.ErrFeatureNotSelected) {
 			// The peer card also travels in P2 on later sessions; a push failure is not fatal.
 			r.log.Debug("node: access peer card push failed", "err", err)
 		}
 	}
-	if err := r.RefreshAccess(ctx); err != nil {
-		// The pass is booked and the session is valid; a failed listener refresh must not drop
-		// it. The next RefreshAccess retries from the same persistent state.
-		r.log.Warn("node: access refresh after a session", "err", err)
-	}
-	return nil
 }
 
 // refreshAccessLocked compares the desired invitation key set with the installed listeners.
@@ -170,10 +250,6 @@ func (r *Runtime) handleAccess(ctx context.Context, est *session.Established) er
 // is part of its configuration. A slot without keys is closed (fail closed).
 func (r *Runtime) refreshAccessLocked(ctx context.Context) error {
 	var errs []error
-	if err := r.syncAccessContactsLocked(ctx); err != nil {
-		errs = append(errs, err)
-	}
-
 	desired := make(map[int][]access.KeyInfo)
 	for _, k := range r.accessMgr.MaskKeys() {
 		if k.Contacts || k.Slot < 0 {
@@ -245,25 +321,33 @@ func (r *Runtime) addAcceptLoop(st *accessSlot) bool {
 	return true
 }
 
-// syncAccessContactsLocked keeps the card builder on the current contacts key and, after a
-// rotation, sends the new peer card to every live contact (objects.md §10.3, T3.6b).
+// syncAccessContactsLocked (contactsMu held) keeps the contacts key consistent everywhere it
+// lives: the contacts listeners (L0) accept the current key and the previous one until its
+// RetireAfter, the card builder signs the peer card with the current key, and after a rotation the
+// new peer card goes to the sessions that hold an active pass (objects.md 10.3, D11).
 func (r *Runtime) syncAccessContactsLocked(ctx context.Context) error {
 	infos := r.accessMgr.ContactsKeys()
 	if len(infos) == 0 {
 		return nil
 	}
+	var errs []error
+	if err := r.syncContactListenersLocked(infos); err != nil {
+		errs = append(errs, err)
+	}
+
 	next := append(keys.AKey(nil), infos[0].Public...)
 	old := r.accessContacts
 	if !r.accessContactsSet {
 		old = r.cfg.Device.Masking().Public()
 	}
 	if r.accessContactsSet && bytes.Equal(old, next) {
-		return nil
+		return errors.Join(errs...)
 	}
 
 	changed, err := r.cfg.Cards.ReplaceMask(old, next)
 	if err != nil {
-		return fmt.Errorf("node: contacts key in the card builder: %w", err)
+		errs = append(errs, fmt.Errorf("node: contacts key in the card builder: %w", err))
+		return errors.Join(errs...)
 	}
 	r.accessContacts = next
 	r.accessContactsSet = true
@@ -271,24 +355,77 @@ func (r *Runtime) syncAccessContactsLocked(ctx context.Context) error {
 		if !bytes.Equal(old, next) {
 			r.log.Warn("node: card builder does not use the configured contacts key")
 		}
-		return nil
-	}
-	r.mu.Lock()
-	table := r.table
-	r.mu.Unlock()
-	if table == nil || r.cfg.Device == nil {
-		return nil
+		return errors.Join(errs...)
 	}
 	card, err := r.cfg.Cards.Current(ctx, objects.ScopePeer)
 	if err != nil {
-		return fmt.Errorf("node: peer card after contacts rotation: %w", err)
+		errs = append(errs, fmt.Errorf("node: peer card after contacts rotation: %w", err))
+		return errors.Join(errs...)
 	}
-	if _, err := table.PushCard(r.cfg.Device.ID(), card.Envelope); err != nil {
-		// A session that is draining cannot receive the card; the contact gets it in P2 of the
-		// next session and Renew records the coverage. Never fail the rotation for that.
-		r.log.Debug("node: rotated peer card push", "err", err)
+	r.pushPeerCard(card.Envelope)
+	return errors.Join(errs...)
+}
+
+// contactKeyDeadline is the instant after which L0 stops accepting a contacts key: its RetireAfter
+// during the overlap, otherwise its NotAfter.
+func contactKeyDeadline(k access.KeyInfo) time.Time {
+	d := k.NotAfter
+	if !k.RetireAfter.IsZero() && (d.IsZero() || k.RetireAfter.Before(d)) {
+		d = k.RetireAfter
 	}
-	return nil
+	return d
+}
+
+// syncContactListenersLocked installs the live contacts keys in every contacts listener. A
+// listener that cannot take them in place, or refuses them, is closed: it would go on accepting a
+// key that was rotated away.
+func (r *Runtime) syncContactListenersLocked(infos []access.KeyInfo) error {
+	if len(r.contactLs) == 0 {
+		return nil
+	}
+	prints := make([]accessKeyPrint, 0, len(infos))
+	for _, k := range infos {
+		var na int64
+		if d := contactKeyDeadline(k); !d.IsZero() {
+			na = d.Unix()
+		}
+		prints = append(prints, accessKeyPrint{public: string(k.Public), notAfter: na})
+	}
+	if equalAccessPrints(r.contactPrints, prints) {
+		return nil
+	}
+	masks, err := r.accessMasks(infos)
+	if err != nil {
+		return err
+	}
+	for i := range masks {
+		masks[i].NotAfter = contactKeyDeadline(infos[i])
+	}
+	var errs []error
+	for i, l := range r.contactLs {
+		if l == nil {
+			continue
+		}
+		updater, ok := l.(maskKeyUpdater)
+		if !ok {
+			_ = l.Close()
+			r.contactLs[i] = nil
+			errs = append(errs, fmt.Errorf("%w: contacts listener %d cannot replace its keys in place", ErrConfig, i))
+			continue
+		}
+		if err := updater.SetKeys(masks); err != nil {
+			_ = l.Close()
+			r.contactLs[i] = nil
+			errs = append(errs, fmt.Errorf("node: contacts listener %d keys: %w", i, err))
+		}
+	}
+	for i := range masks {
+		masks[i].Private = [32]byte{}
+	}
+	if len(errs) == 0 {
+		r.contactPrints = prints
+	}
+	return errors.Join(errs...)
 }
 
 func (r *Runtime) openAccessSlotLocked(ctx context.Context, slot int, infos []access.KeyInfo) (*accessSlot, error) {
@@ -451,11 +588,8 @@ func (r *Runtime) RevokeAccess(ctx context.Context, id access.PassID) (*access.R
 	if err != nil {
 		return nil, err
 	}
-	r.deliverReissued(res.Reissued)
-	if err := r.RefreshAccess(ctx); err != nil {
-		return res, err
-	}
-	return res, nil
+	r.liveAdmitted()
+	return res, r.refreshThenDeliver(ctx, res.Reissued)
 }
 
 // RevokeContactAccess revokes a contact's personal passes and rotates the contacts key. The
@@ -468,11 +602,8 @@ func (r *Runtime) RevokeContactAccess(ctx context.Context, node NodeID) (*access
 	if err != nil {
 		return nil, err
 	}
-	r.deliverReissued(res.Reissued)
-	if err := r.RefreshAccess(ctx); err != nil {
-		return res, err
-	}
-	return res, nil
+	r.liveAdmitted()
+	return res, r.refreshThenDeliver(ctx, res.Reissued)
 }
 
 // ExtendAccess extends a pass and refreshes the masking-key deadlines.
@@ -501,11 +632,17 @@ func (r *Runtime) RotateAccessKeys(ctx context.Context) (*access.Rotation, error
 	if err != nil {
 		return nil, err
 	}
-	r.deliverReissued(rot.Reissued)
-	if err := r.RefreshAccess(ctx); err != nil {
-		return rot, err
-	}
-	return rot, nil
+	r.liveAdmitted()
+	return rot, r.refreshThenDeliver(ctx, rot.Reissued)
+}
+
+// refreshThenDeliver installs the new keys at L0 and only then hands the reissued links to the
+// application: a holder must not get a link that L0 does not accept yet. A failed refresh does not
+// withhold them, since the manager already revoked the old ones; the error is returned.
+func (r *Runtime) refreshThenDeliver(ctx context.Context, list []access.Minted) error {
+	err := r.RefreshAccess(ctx)
+	r.deliverReissued(list)
+	return err
 }
 
 // deliverReissued hands new invitation links to the application, the only channel that can

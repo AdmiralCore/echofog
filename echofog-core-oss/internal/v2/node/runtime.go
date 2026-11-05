@@ -81,10 +81,14 @@ type Config struct {
 
 	// Listeners are already built carriers; ListenerSources are built at Start.
 	Listeners []carrier.Listener
-	// ContactListeners carry the contacts masking key; the runtime keeps their key set equal to
-	// the access manager's contacts keys (T3.6b).
+	// ContactListeners are listeners that carry the contacts masking key (L0 of the peer card).
+	// They are started with Listeners; the runtime keeps their key set equal to the access
+	// manager's current and previous contacts keys, so a rotation (D11) reaches L0 (T3.6b).
+	// A listener that cannot replace its keys in place is closed on rotation: fail closed.
 	ContactListeners []carrier.Listener
-	ListenerSources  []ListenerSource
+	// ContactListenerSources are built at Start like ListenerSources and treated like ContactListeners.
+	ContactListenerSources []ListenerSource
+	ListenerSources        []ListenerSource
 	// Registry replaces the carrier suite registry (tests, a build without a suite).
 	Registry *carrier.Registry
 	// CarrierClock is the raw carrier clock for tests (AD13). Nil means the system clock. When a
@@ -182,11 +186,22 @@ type Runtime struct {
 
 	// accessMgr is the invitation/pass manager of a hidden node (T3.6b). accessMu guards the
 	// installed invitation listeners and the contacts key the card builder uses.
-	accessMgr         *access.Manager
-	accessMu          sync.Mutex
-	accessSlots       map[int]*accessSlot
+	accessMgr   *access.Manager
+	accessMu    sync.Mutex
+	accessSlots map[int]*accessSlot
+	// contactsMu guards the contacts-key state below. It is taken before accessMu and never while
+	// holding it, so a slow listener build does not hold up the card builder (and vice versa).
+	contactsMu        sync.Mutex
 	accessContacts    keys.AKey
 	accessContactsSet bool
+	contactLs         []carrier.Listener
+	contactPrints     []accessKeyPrint
+	// admitMu guards admitted: the sessions that passed handleAccess with a pass. Only they get
+	// the peer card (objects.md §10.3); a session leaves the set when it ends or its pass dies.
+	admitMu  sync.Mutex
+	admitted map[*session.Established]admission
+	// admitSem bounds the concurrent pass bookings of accepted sessions.
+	admitSem chan struct{}
 }
 
 var _ Host = (*Runtime)(nil)
@@ -250,6 +265,8 @@ func New(cfg Config) (*Runtime, error) {
 	r.accessMgr = cfg.Access
 	if r.accessMgr != nil {
 		r.accessSlots = make(map[int]*accessSlot)
+		r.admitted = make(map[*session.Established]admission)
+		r.admitSem = make(chan struct{}, maxAdmitting)
 	}
 
 	r.clock = cfg.Clock
@@ -409,6 +426,34 @@ func (r *Runtime) Start(ctx context.Context) error {
 		}
 		listeners = append(listeners, l)
 	}
+	var contactLs []carrier.Listener
+	for i, src := range r.cfg.ContactListenerSources {
+		if src == nil {
+			closeListeners(listeners)
+			_ = table.Close()
+			cancel()
+			r.mu.Unlock()
+			return fmt.Errorf("%w: contact listener source %d is nil", ErrConfig, i)
+		}
+		l, lerr := src.Listen(runCtx)
+		if lerr != nil {
+			closeListeners(listeners)
+			_ = table.Close()
+			cancel()
+			r.mu.Unlock()
+			return fmt.Errorf("node: building contact listener %d: %w", i, lerr)
+		}
+		listeners = append(listeners, l)
+		contactLs = append(contactLs, l)
+	}
+	for _, l := range r.cfg.ContactListeners {
+		if l == nil {
+			continue
+		}
+		listeners = append(listeners, l)
+		contactLs = append(contactLs, l)
+	}
+	r.contactLs = contactLs
 	r.listeners = listeners
 	r.mu.Unlock()
 
