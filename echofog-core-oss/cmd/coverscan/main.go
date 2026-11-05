@@ -41,9 +41,29 @@ func main() {
 	want := flag.Int("want", 20, "stop after this many hosts that serve HTTP/3")
 	samples := flag.Int("samples", 5, "connections per cover and transport")
 	gap := flag.Duration("gap", time.Second, "least time between two connection starts")
+	from := flag.String("from", "", "render a saved -json file instead of measuring")
 	jsonOut := flag.String("json", "", "write raw results here")
 	mdOut := flag.String("md", "", "write the table here")
 	flag.Parse()
+
+	if *from != "" {
+		b, err := os.ReadFile(*from)
+		var rs []result
+		if err == nil {
+			err = json.Unmarshal(b, &rs)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "coverscan:", err)
+			os.Exit(2)
+		}
+		out := render(rs)
+		if *mdOut != "" {
+			_ = os.WriteFile(*mdOut, []byte(out), 0o644)
+		} else {
+			fmt.Print(out)
+		}
+		return
+	}
 
 	hosts, err := readLines(*sitesFile)
 	if err != nil || len(hosts) == 0 {
@@ -278,6 +298,28 @@ func render(rs []result) string {
 				no++
 			}
 		}
+		discrete, hist := 0, map[string]int{}
+		for _, r := range sel {
+			only := true
+			for _, d := range r.Observed {
+				hist[d.Item]++
+				switch d.Item {
+				case profile.ItemPacking, profile.ItemFlightLen, profile.ItemTicketCount, profile.ItemTicketLen:
+				default:
+					only = false
+				}
+			}
+			if only {
+				discrete++
+			}
+		}
+		var hs []string
+		for k, n := range hist {
+			hs = append(hs, fmt.Sprintf("%s %d", k, n))
+		}
+		sort.Strings(hs)
+		fmt.Fprintf(&b, "\n%s: covers whose open ServerHello items (version, cipher, group, HRR, ALPN, extension order, ID lengths) all match: %d of %d. Covers differing per item: %s.\n",
+			strings.ToUpper(string(tr)), discrete, total, strings.Join(hs, ", "))
 		fmt.Fprintf(&b, "\n%s: %d covers with data; reproduced as is: %d; reproduced with exact-length certificate padding: %d; not reproduced: %d.\n",
 			strings.ToUpper(string(tr)), total, yes, pad, no)
 	}
@@ -293,6 +335,13 @@ func mark(ds []profile.Diff, item string) string {
 		names = []string{profile.ItemTicketCount, profile.ItemTicketLen}
 	}
 	m := "+"
+	if item == profile.ItemFlightLen {
+		for _, d := range ds {
+			if d.Item == profile.ItemPacking {
+				return "?" // lengths of unequal layouts are not comparable
+			}
+		}
+	}
 	for _, d := range ds {
 		for _, n := range names {
 			if d.Item == n {
