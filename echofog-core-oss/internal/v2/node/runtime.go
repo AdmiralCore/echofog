@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/dht"
@@ -79,8 +80,15 @@ type Config struct {
 	GreaseInterval func() time.Duration
 
 	// Listeners are already built carriers; ListenerSources are built at Start.
-	Listeners       []carrier.Listener
-	ListenerSources []ListenerSource
+	Listeners []carrier.Listener
+	// ContactListeners are listeners that carry the contacts masking key (L0 of the peer card).
+	// They are started with Listeners; the runtime keeps their key set equal to the access
+	// manager's current and previous contacts keys, so a rotation (D11) reaches L0 (T3.6b).
+	// A listener that cannot replace its keys in place is closed on rotation: fail closed.
+	ContactListeners []carrier.Listener
+	// ContactListenerSources are built at Start like ListenerSources and treated like ContactListeners.
+	ContactListenerSources []ListenerSource
+	ListenerSources        []ListenerSource
 	// Registry replaces the carrier suite registry (tests, a build without a suite).
 	Registry *carrier.Registry
 	// CarrierClock is the raw carrier clock for tests (AD13). Nil means the system clock. When a
@@ -98,6 +106,19 @@ type Config struct {
 	Features []uint32
 	// Passes resolves invitation and personal pass secrets for a hidden responder (T3.6).
 	Passes handshake.PassStore
+	// Access is the invitation, pass and masking-key manager of a hidden node (T3.6b). When set
+	// it is also the responder's PassStore: the runtime redeems or renews access after a
+	// hidden-node session, installs its invitation listeners and follows the contacts-key
+	// rotation.
+	Access *access.Manager
+	// AccessListener builds the L0 listener of one invitation slot from its live masking keys.
+	// Nil builds the built-in noise3 listener from the slot address; a non-noise3 suite needs a
+	// factory. The factory must not retain the private key bytes.
+	AccessListener AccessListenerFactory
+	// AccessReissued receives the invitations that Revoke and RotateKeys reissued. The holders
+	// have no session yet, so the only delivery path is the application (a messenger message).
+	// The payload contains new secrets and links: the sink must never log it.
+	AccessReissued func([]access.Minted)
 	// Puzzle enables HS_RETRY under load (T3.5).
 	Puzzle *handshake.PuzzleConfig
 	// RetryAfter is the GOAWAY retry_after used for runtime shutdown and idle closes, in seconds.
@@ -163,6 +184,25 @@ type Runtime struct {
 	// localMu guards localAddrs, which a network change may replace while sessions dial.
 	localMu    sync.RWMutex
 	localAddrs []netip.Addr
+
+	// accessMgr is the invitation/pass manager of a hidden node (T3.6b). accessMu guards the
+	// installed invitation listeners and the contacts key the card builder uses.
+	accessMgr   *access.Manager
+	accessMu    sync.Mutex
+	accessSlots map[int]*accessSlot
+	// contactsMu guards the contacts-key state below. It is taken before accessMu and never while
+	// holding it, so a slow listener build does not hold up the card builder (and vice versa).
+	contactsMu        sync.Mutex
+	accessContacts    keys.AKey
+	accessContactsSet bool
+	contactLs         []carrier.Listener
+	contactPrints     []accessKeyPrint
+	// admitMu guards admitted: the sessions that passed handleAccess with a pass. Only they get
+	// the peer card (objects.md §10.3); a session leaves the set when it ends or its pass dies.
+	admitMu  sync.Mutex
+	admitted map[*session.Established]admission
+	// admitSem bounds the concurrent pass bookings of accepted sessions.
+	admitSem chan struct{}
 }
 
 var _ Host = (*Runtime)(nil)
@@ -183,6 +223,12 @@ func New(cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("%w: no card builder", ErrConfig)
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: no store", ErrConfig)
+	}
+
+	// Access is always the responder's PassStore: redeeming a pass the handshake did not use
+	// would be inconsistent (T3.6b).
+	if cfg.Access != nil {
+		cfg.Passes = cfg.Access
 	}
 
 	log := cfg.Log
@@ -217,6 +263,12 @@ func New(cfg Config) (*Runtime, error) {
 		background:   cfg.Profile.Background,
 	}
 	r.dgrams = newDatagramBroker(r)
+	r.accessMgr = cfg.Access
+	if r.accessMgr != nil {
+		r.accessSlots = make(map[int]*accessSlot)
+		r.admitted = make(map[*session.Established]admission)
+		r.admitSem = make(chan struct{}, maxAdmitting)
+	}
 
 	r.clock = cfg.Clock
 	if r.clock == nil {
@@ -375,6 +427,34 @@ func (r *Runtime) Start(ctx context.Context) error {
 		}
 		listeners = append(listeners, l)
 	}
+	var contactLs []carrier.Listener
+	for i, src := range r.cfg.ContactListenerSources {
+		if src == nil {
+			closeListeners(listeners)
+			_ = table.Close()
+			cancel()
+			r.mu.Unlock()
+			return fmt.Errorf("%w: contact listener source %d is nil", ErrConfig, i)
+		}
+		l, lerr := src.Listen(runCtx)
+		if lerr != nil {
+			closeListeners(listeners)
+			_ = table.Close()
+			cancel()
+			r.mu.Unlock()
+			return fmt.Errorf("node: building contact listener %d: %w", i, lerr)
+		}
+		listeners = append(listeners, l)
+		contactLs = append(contactLs, l)
+	}
+	for _, l := range r.cfg.ContactListeners {
+		if l == nil {
+			continue
+		}
+		listeners = append(listeners, l)
+		contactLs = append(contactLs, l)
+	}
+	r.contactLs = contactLs
 	r.listeners = listeners
 	r.mu.Unlock()
 
@@ -391,10 +471,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 
 	r.modules.Do(r.registerModules)
+	if err := r.startAccess(runCtx); err != nil {
+		r.cleanupAfterStartFailure()
+		return fmt.Errorf("node: access listeners: %w", err)
+	}
 
 	for _, l := range listeners {
 		r.wg.Add(1)
-		go r.acceptLoop(l)
+		go r.acceptLoop(runCtx, l)
 	}
 
 	r.mu.Lock()
@@ -441,6 +525,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	if table != nil {
 		_ = table.Close()
 	}
+	r.stopAccess()
 	r.dgrams.close()
 
 	done := make(chan struct{})
@@ -462,6 +547,7 @@ func (r *Runtime) cleanupAfterStartFailure() {
 	table := r.table
 	r.mu.Unlock()
 	closeListeners(listeners)
+	r.stopAccess()
 	if table != nil {
 		_ = table.Close()
 	}

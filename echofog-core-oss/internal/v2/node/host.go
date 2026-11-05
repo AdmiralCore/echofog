@@ -64,6 +64,9 @@ type DialOpt struct {
 	Attempts []carrier.Attempt
 	// Local overrides the main identity (throwaway XX, an identity for one exit).
 	Local *session.LocalIdentity
+	// AccessSecret is the 16-byte invitation or personal pass secret for XK to a hidden node
+	// (handshake.md §5). It is copied for the duration of the handshake.
+	AccessSecret []byte
 	// ExpectedDeviceID sets the rid binding of an XX handshake without a card.
 	ExpectedDeviceID *DeviceID
 	// PathKind is the kind of the carrier created by this call: direct (default) or relay

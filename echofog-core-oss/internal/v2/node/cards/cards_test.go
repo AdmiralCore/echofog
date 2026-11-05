@@ -752,3 +752,54 @@ type fixedExit struct{ offer *pb.ExitOffer }
 func (f fixedExit) ExitOffer() *pb.ExitOffer { return f.offer }
 
 func exitOffer(o *pb.ExitOffer) ExitSource { return fixedExit{offer: o} }
+
+// TestReplaceMaskMovesContactsKey covers the contacts-key rotation (T3.6b): the builder must
+// switch its listener to the new key and reissue the peer card so a revocation does not leave
+// contacts with a dead address.
+func TestReplaceMaskMovesContactsKey(t *testing.T) {
+	m := newMaterial(t)
+	oldMask, nextMask := newMask(t), newMask(t)
+	cfg := baseConfig(t, m, newMapKV(), newFakeClock())
+	cfg.Listeners[0].Mask = oldMask
+	b, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	before, err := b.Current(t.Context(), objects.ScopePeer)
+	if err != nil {
+		t.Fatalf("peer card before: %v", err)
+	}
+	n, err := b.ReplaceMask(oldMask, nextMask)
+	if err != nil {
+		t.Fatalf("ReplaceMask: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("%d listeners changed, want 1", n)
+	}
+	after, err := b.Current(t.Context(), objects.ScopePeer)
+	if err != nil {
+		t.Fatalf("peer card after: %v", err)
+	}
+	if string(before.Envelope) == string(after.Envelope) {
+		t.Fatal("the peer card was not reissued")
+	}
+	card := verifyBytes(t, after.Envelope, b.clk.Now())
+	found := false
+	for _, k := range card.Body.GetMaskKeys() {
+		if string(k.GetKey()) == string(nextMask) {
+			found = true
+		}
+		if string(k.GetKey()) == string(oldMask) {
+			t.Fatal("the peer card still carries the old contacts key")
+		}
+	}
+	if !found {
+		t.Fatal("the peer card does not carry the new contacts key")
+	}
+
+	// The old key is gone after the replacement, so a second call changes nothing.
+	if n, err := b.ReplaceMask(oldMask, nextMask); err != nil || n != 0 {
+		t.Fatalf("second ReplaceMask = %d, %v; want 0, nil", n, err)
+	}
+}

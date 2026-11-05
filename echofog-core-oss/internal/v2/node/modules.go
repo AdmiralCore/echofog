@@ -13,4 +13,5 @@ func (r *Runtime) registerModules() {
 	r.registerExit()
 	r.registerFiles()
 	r.registerCall()
+	r.registerAccess()
 }
