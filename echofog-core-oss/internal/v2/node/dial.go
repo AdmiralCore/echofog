@@ -172,7 +172,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	// on the control stream is answered only after that attach, so it is a deterministic
 	// readiness barrier before the caller opens service streams.
 	if est.Role == session.RoleInitiator {
-		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		_, perr := est.Session.Ping(waitCtx)
 		cancel()
 		if perr != nil {
