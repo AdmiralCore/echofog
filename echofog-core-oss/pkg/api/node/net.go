@@ -145,11 +145,7 @@ func (n *NodeApi) noteExitState(relay string, info *exit_gateway.AccountInfo, er
 	}
 }
 
-func (n *NodeApi) GetNetworkStats() NetworkStats {
-	if n.v2Unavailable() != nil {
-		return NetworkStats{}
-	}
-
+func (n *v1NetBackend) GetNetworkStats() NetworkStats {
 	if n == nil || n.node == nil || n.node.Swarm == nil {
 		return NetworkStats{}
 	}

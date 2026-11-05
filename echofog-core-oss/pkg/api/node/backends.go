@@ -23,8 +23,18 @@ import (
 // backends are not built yet.
 var ErrV2NotBuilt = errors.New("v2 ещё не собран")
 
+// closedChannel returns a channel that is already closed. A handler that cannot deliver anything
+// yet returns it rather than nil: the desktop ranges over these channels, and a nil one would hang
+// that goroutine for the whole run.
+func closedChannel[T any]() <-chan T {
+	ch := make(chan T)
+	close(ch)
+	return ch
+}
+
 // v2Unavailable reports ErrV2NotBuilt while the node runs protocol 2. The network methods of the
-// facade ask it until T11.1b-e replace their bodies with delegation to the selected backends; at
+// facade ask it until T11.1b-e replace their bodies with delegation to the selected backends; the
+// network and contacts domains delegate since T11.1b, so their methods do not ask it any more. At
 // protocol 1 it always returns nil, so the v1 behaviour is untouched. It reads the mode the node
 // started with, not the one saved for the next start (see SetProtocol).
 func (n *NodeApi) v2Unavailable() error {
@@ -279,20 +289,24 @@ type backends struct {
 	vpn     vpnBackend
 }
 
-// chooseBackends returns the v1 implementation (the facade itself) for protocol 1, and the
-// not-built v2 backend for protocol 2.
+// chooseBackends returns the protocol 1 implementation for each domain, and the not-built v2
+// backend for protocol 2. The network and contacts domains run in their own v1 backends since
+// T11.1b; the other domains still keep the facade itself, whose methods carry the v1 code until
+// T11.1c-e move it.
 func chooseBackends(protocol int, v1 *NodeApi) backends {
 	if protocol == config.ProtocolV2 {
 		pending := v2PendingBackend{}
 		return backends{net: pending, contact: pending, chat: pending, group: pending, file: pending, call: pending, vpn: pending}
 	}
-	return backends{net: v1, contact: v1, chat: v1, group: v1, file: v1, call: v1, vpn: v1}
+	return backends{net: &v1NetBackend{v1}, contact: &v1ContactBackend{v1}, chat: v1, group: v1, file: v1, call: v1, vpn: v1}
 }
 
 var (
 	_ netBackend     = (*NodeApi)(nil)
+	_ netBackend     = (*v1NetBackend)(nil)
 	_ netBackend     = v2PendingBackend{}
 	_ contactBackend = (*NodeApi)(nil)
+	_ contactBackend = (*v1ContactBackend)(nil)
 	_ contactBackend = v2PendingBackend{}
 	_ chatBackend    = (*NodeApi)(nil)
 	_ chatBackend    = v2PendingBackend{}

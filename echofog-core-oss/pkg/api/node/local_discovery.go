@@ -9,11 +9,7 @@ import (
 	"github.com/echofog/echofog-core/pkg/dto"
 )
 
-func (n *NodeApi) StartLocalDiscovery(myAlias string) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1NetBackend) StartLocalDiscovery(myAlias string) {
 	if n.node.AccessMode() != config.AccessPublic {
 		return // a hidden node does not announce itself, not even on the local network
 	}
@@ -25,19 +21,11 @@ func (n *NodeApi) StartLocalDiscovery(myAlias string) {
 	n.node.Logger.Info("mDNS Discovery started by user")
 }
 
-func (n *NodeApi) StopLocalDiscovery() {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1NetBackend) StopLocalDiscovery() {
 	n.node.MDNS.Stop()
 }
 
-func (n *NodeApi) PeerDiscoveryHandler() <-chan dto.PeerDTO {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1NetBackend) PeerDiscoveryHandler() <-chan dto.PeerDTO {
 	readCh := make(chan dto.PeerDTO, 100)
 
 	n.node.MDNS.SetOnPeerFound(func(id types.PeerID, addr string, alias string) {
