@@ -252,6 +252,16 @@ func ObserveQUIC(events []Event) (Vector, error) {
 	}
 	var clientDCID []byte
 	haveClient, retried := false, false
+	// The first client Initial keys the server's, whatever order the capture recorded them in.
+	for _, e := range events {
+		if e.FromServer {
+			continue
+		}
+		if pk, err := splitDatagram(e.Data); err == nil && len(pk) > 0 && pk[0].kind == "initial" {
+			clientDCID, haveClient = append([]byte(nil), pk[0].dcid...), true
+			break
+		}
+	}
 	frags := map[int][]byte{}
 	unit := 0
 	sawSCID := false
@@ -271,7 +281,7 @@ func ObserveQUIC(events []Event) (Vector, error) {
 			continue
 		}
 		if !haveClient {
-			return v, fmt.Errorf("%w: server datagram before the client's Initial", ErrMalformed)
+			return v, fmt.Errorf("%w: no client Initial in the capture", ErrMalformed)
 		}
 		pk, err := splitDatagram(e.Data)
 		if err != nil {

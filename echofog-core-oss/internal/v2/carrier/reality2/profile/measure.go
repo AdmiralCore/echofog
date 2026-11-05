@@ -197,11 +197,9 @@ func (c *recConn) Read(b []byte) (int, error) {
 }
 
 func (c *recConn) Write(b []byte) (int, error) {
-	n, err := c.Conn.Write(b)
-	if n > 0 {
-		c.add(false, b[:n])
-	}
-	return n, err
+	// Recorded before the send: the peer's answer can be read before Write returns.
+	c.add(false, b)
+	return c.Conn.Write(b)
 }
 
 func (c *recConn) add(fromServer bool, b []byte) {
@@ -351,11 +349,9 @@ func (c *recPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 }
 
 func (c *recPacketConn) WriteTo(b []byte, a net.Addr) (int, error) {
-	n, err := c.PacketConn.WriteTo(b, a)
-	if n > 0 {
-		c.add(false, b[:n])
-	}
-	return n, err
+	// Recorded before the send: the peer's answer can be read before WriteTo returns.
+	c.add(false, b)
+	return c.PacketConn.WriteTo(b, a)
 }
 
 func (c *recPacketConn) add(fromServer bool, b []byte) {
