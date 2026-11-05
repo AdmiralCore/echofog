@@ -556,6 +556,19 @@ func TestGetReleaseIgnoresRecordsTheCallerDoesNotTrust(t *testing.T) {
 	attacker := seededSigner(t, 1101)
 	real := releaseRecord(t, trusted, 5, srvNow.Add(time.Hour))
 	fake := releaseRecord(t, attacker, 1<<40, srvNow.Add(time.Hour))
+	for i, fn := range net.nodes {
+		fn.rogue = i%10 < 3 // 30 % of the servers take any release/2 object
+	}
+	net.relCheck = func(raw []byte, now time.Time) error {
+		env, err := objects.Verify(raw, now)
+		if err != nil {
+			return err
+		}
+		if env.SignerID() != signerID(trusted) {
+			return errors.New("not a release key")
+		}
+		return nil
+	}
 	net.storeOn(t, real, func(i int) bool { return i%10 >= 3 }) // 70 % hold the real manifest
 	net.storeOn(t, fake, func(i int) bool { return i%10 < 3 })  // 30 % hold the forgery
 	trustedID := signerID(trusted)
@@ -593,7 +606,7 @@ func TestGetReleaseIgnoresRecordsTheCallerDoesNotTrust(t *testing.T) {
 func TestCardsWithUnroutableAddressesAreNotDialled(t *testing.T) {
 	rnd := rand.New(rand.NewSource(131))
 	net := newFakeNet(t, 60, 30, false, rnd)
-	for i, host := range []string{"127.0.0.1", "10.9.9.9", "169.254.169.254", "192.168.1.5", "100.64.0.9", "::1"} {
+	for i, host := range []string{"127.0.0.1", "::ffff:127.0.0.1", "10.9.9.9", "169.254.169.254", "192.168.1.5", "100.64.0.9", "::1"} {
 		net.lures = append(net.lures, buildCard(t, uint64(3000+i), 1, srvNow, objects.ScopePublic, 0, testAddr(host, 4430)))
 	}
 	reader := newTestClient(t, net, 8500, rnd, nil)

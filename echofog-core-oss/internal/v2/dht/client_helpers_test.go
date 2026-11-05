@@ -33,6 +33,7 @@ type fakeNode struct {
 	card  *objects.Card
 	srv   *Server
 	mode  mode
+	rogue bool // stores release/2 objects without a check (an old or hostile node)
 	known []*objects.Card
 	stale []byte // answer of a liarStale node, set per test
 	forge []byte // answer of a forger node
@@ -54,6 +55,7 @@ type fakeNet struct {
 	storeLog    []DeviceID
 	lures       []*objects.Card // hostile cards every node adds to its answers
 	lureHits    int
+	relCheck    func(raw []byte, now time.Time) error
 }
 
 func (n *fakeNet) Now() time.Time {
@@ -100,6 +102,18 @@ func newFakeNet(t *testing.T, size, knows int, pairs bool, rnd *rand.Rand) *fake
 			Responsible: func([32]byte) bool { return true },
 			Reached:     func(time.Time) []*objects.Card { return fn.known },
 			Now:         n.Now,
+			ReleaseCheck: func(raw []byte, now time.Time) error {
+				if fn.rogue {
+					return nil
+				}
+				n.mu.Lock()
+				check := n.relCheck
+				n.mu.Unlock()
+				if check == nil {
+					return errors.New("no release check")
+				}
+				return check(raw, now)
+			},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -365,3 +379,5 @@ func (n *fakeNet) storeOn(t testing.TB, rec []byte, pick func(i int) bool) {
 		}
 	}
 }
+
+func newRand(seed int64) *rand.Rand { return rand.New(rand.NewSource(seed)) }
