@@ -209,8 +209,8 @@ func registerClient(t *testing.T, n *testNode) {
 
 func TestMailboxServiceOverTwoRuntimes(t *testing.T) {
 	q := newCarrierQueue()
-	m := newNode(t, node.Profile{Platform: "server", Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
-	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	m := newNode(t, node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: node.PlatformDesktop}, nil)
 	registerClient(t, c)
 	m.start(t)
 	c.start(t)
@@ -278,8 +278,8 @@ func TestMailboxServiceOverTwoRuntimes(t *testing.T) {
 
 func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 	q := newCarrierQueue()
-	m := newNode(t, node.Profile{Platform: "test"}, []carrier.Listener{q})
-	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	m := newNode(t, node.Profile{Platform: node.PlatformDesktop}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: node.PlatformDesktop}, nil)
 	registerClient(t, c)
 	m.start(t)
 	c.start(t)
@@ -298,8 +298,8 @@ func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 
 func TestLongPollDoesNotBlockTheStream(t *testing.T) {
 	q := newCarrierQueue()
-	m := newNode(t, node.Profile{Platform: "server", Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
-	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	m := newNode(t, node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: node.PlatformDesktop}, nil)
 	registerClient(t, c)
 	m.start(t)
 	c.start(t)
@@ -348,8 +348,8 @@ func TestLongPollDoesNotBlockTheStream(t *testing.T) {
 
 func TestFetchAuthFromAnotherStreamIsRefused(t *testing.T) {
 	q := newCarrierQueue()
-	m := newNode(t, node.Profile{Platform: "server", Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
-	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	m := newNode(t, node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: node.PlatformDesktop}, nil)
 	registerClient(t, c)
 	m.start(t)
 	c.start(t)
@@ -384,8 +384,8 @@ func TestFetchAuthFromAnotherStreamIsRefused(t *testing.T) {
 // parks more than 32 FETCH requests is closed with "overloaded" instead of growing goroutines.
 func TestTooManyLongPollsCloseTheStream(t *testing.T) {
 	q := newCarrierQueue()
-	m := newNode(t, node.Profile{Platform: "server", Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
-	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	m := newNode(t, node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: node.PlatformDesktop}, nil)
 	registerClient(t, c)
 	m.start(t)
 	c.start(t)
