@@ -437,9 +437,10 @@ func (r *Runtime) noteVisibility(v cards.Visibility) {
 	r.identity.Visibility = v
 	r.mu.Unlock()
 	r.events.Emit(Event{
-		Kind:    EventVisibility,
-		Message: fmt.Sprintf("node visibility is now %s", v),
-		At:      time.Now(),
+		Kind:       EventVisibility,
+		Message:    fmt.Sprintf("node visibility is now %s", v),
+		At:         time.Now(),
+		Visibility: v,
 	})
 }
 
@@ -508,9 +509,11 @@ func (r *Runtime) SetBackground(bg Background) error {
 		}
 	}
 	r.events.Emit(Event{
-		Kind:    EventBackground,
-		Message: fmt.Sprintf("background mode %s: %d session(s) told to go away", bg, closed),
-		At:      time.Now(),
+		Kind:       EventBackground,
+		Message:    fmt.Sprintf("background mode %s: %d session(s) told to go away", bg, closed),
+		At:         time.Now(),
+		Background: bg,
+		Closed:     closed,
 	})
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/secret"
 )
 
@@ -32,12 +33,22 @@ const (
 )
 
 // Event is one runtime event. Message is operator-facing text; it never contains keys, addresses
-// of hidden listeners or peer identities.
+// of hidden listeners or peer identities. The typed fields are the payload of their kind and are
+// meaningful only for it, so the facade never parses the message.
 type Event struct {
 	Kind    EventKind
 	Message string
 	At      time.Time
 	Err     error
+
+	// Background and Closed are the payload of EventBackground: the new mode and the number of
+	// sessions told to go away.
+	Background Background
+	Closed     int
+	// Visibility is the payload of EventVisibility.
+	Visibility cards.Visibility
+	// MemoryLevel is the payload of EventMemoryProtection.
+	MemoryLevel secret.Level
 }
 
 // EventSink receives runtime events. Implementations must not block: the runtime calls Emit from
@@ -63,8 +74,9 @@ func (r *Runtime) watchMemoryProtection() {
 			Kind: EventMemoryProtection,
 			Message: "memory protection is reduced: secret pages cannot be locked and are kept " +
 				"in ordinary memory, wiped after use",
-			At:  time.Now(),
-			Err: st.Err,
+			At:          time.Now(),
+			Err:         st.Err,
+			MemoryLevel: st.Level,
 		})
 	})
 }
