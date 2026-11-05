@@ -30,7 +30,7 @@ identity ([handshake.md](handshake.md) §4.2), and nothing learned through it is
    same country (see 3). A card with flag `domestic-only` is never dialed across a border. A server card without a camouflaged address is not dialed directly across a
    border; it is reached through a relay.
 2. If the initiator is in the same country as the responder and holds a peer- or invite-scope card
-   with a noise3 address (§2.1), it MAY use `noise3`.
+   with a noise3 address (§2.1), it MAY use `noise3` on a path that meets the path requirement of §2.4.
 3. "Same country" requires positive knowledge: both public addresses map to the same country in the
    node's built-in offline GeoIP database. An unknown country counts as a border. A node MUST NOT query
    an online GeoIP service with peer addresses (K7).
@@ -168,12 +168,20 @@ InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner
   Initial datagrams of exactly 1200 bytes.
 - The total length is `max(drawn, 71 + inner_len)`, where `drawn` comes from the shape profile (§9;
   default uniform in [1280, 1420]), and is never more than the path MTU minus IP and UDP headers
-  (1452 for IPv4 on a 1500-byte path, 1232 bytes of payload is the floor any path must carry). If the
+  (1452 for IPv4 on a 1500-byte path; the path requirement of noise3 is stated below). If the
   inner datagram does not fit, the sender takes the largest allowed length; it never splits an inner
   datagram.
 - `flags` bits are reserved; senders MUST send 0; receivers MUST ignore them (they are inside the
   AEAD, so they cannot be used to fingerprint).
 - Overhead: 71 bytes plus padding.
+
+**Path requirement (`ErrPathTooSmall`).** An Init carries 71 bytes of header and a 1200-byte inner QUIC
+Initial, so noise3 needs a path that carries at least **1271 bytes** of UDP payload: an IPv4 path MTU of
+at least 1299, or an IPv6 path MTU of at least 1319. The floor of 1232 bytes applies to the other
+carriers only. An Init is never split across datagrams. If the initiator learns that the path cannot
+carry 1271 bytes (an ICMP Packet Too Big message, a known path MTU below that, or no answer to an Init
+after its retries), it marks noise3 unusable on that path. A sender whose datagram ceiling is below
+1271 bytes fails with `ErrPathTooSmall` for noise3. The session then uses `reality2-*` or `ws2` (§1).
 
 Until it has received an authenticated responder packet, the initiator sends every outgoing inner
 datagram as a **fresh** Init (new ephemeral key, new `repr`), so retransmissions never repeat bytes
