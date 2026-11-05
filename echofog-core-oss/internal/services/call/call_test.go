@@ -51,6 +51,9 @@ type mesh struct {
 	links map[[2]types.PeerID]*shaper                                          // bottlenecks, by (from, to)
 	tap   func(from, to types.PeerID, t net_types.MessageType, payload []byte) // sees every frame sent
 	block func(from, to types.PeerID, t net_types.MessageType) bool            // a link that swallows frames
+	// dropTo loses a frame on one direction of one link, by what it carries: a test can lose one
+	// signal without cutting the link.
+	dropTo func(from, to types.PeerID, t net_types.MessageType, payload []byte) bool
 }
 
 func newMesh() *mesh {
@@ -116,6 +119,7 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	target := m.nodes[to]
 	cut := m.dead[from] || m.dead[to]
 	drop := m.drop
+	dropTo := m.dropTo
 	link := m.links[[2]types.PeerID{from, to}]
 	tap := m.tap
 	if m.block != nil && m.block(from, to, t) {
@@ -128,7 +132,8 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	if target == nil {
 		return fmt.Errorf("peer %s not connected", to)
 	}
-	if cut || (drop != nil && drop(t, target.peekSignal(from, payload))) {
+	if cut || (drop != nil && drop(t, target.peekSignal(from, payload))) ||
+		(dropTo != nil && dropTo(from, to, t, target.peekSignal(from, payload))) {
 		return nil // a crashed peer or a lossy link silently swallows traffic
 	}
 	m.sent.Add(1)

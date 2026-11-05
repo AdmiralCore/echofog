@@ -9,11 +9,13 @@ import (
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/p2p/routing"
+	internal_pb "github.com/echofog/echofog-core/internal/proto"
 	"github.com/echofog/echofog-core/internal/services/messenger"
 	"github.com/echofog/echofog-core/pkg/api/node"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func start(t *testing.T, name string) (*coreNode.Node, *node.NodeApi) {
@@ -132,4 +134,31 @@ func TestRelayAnswersEveryMessageRequest(t *testing.T) {
 		}
 		return false
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+// The relay hands a stored mailbox item to the recipient it was kept for as soon as the recipient
+// is connected to it: the handout path itself, without the lab.
+func TestAStoredMailboxItemIsHandedOverOnConnect(t *testing.T) {
+	rN, _ := start(t, "relay")
+	zN, _ := start(t, "zed")
+	connect(t, zN, rN) // zed has used the relay, so its mailbox here is open
+	require.Eventually(t, func() bool { return rN.Swarm.GetPeer(zN.ID) != nil }, 5*time.Second, 20*time.Millisecond)
+
+	env, err := proto.Marshal(&internal_pb.Envelope{Data: []byte("stored")})
+	require.NoError(t, err)
+	now := time.Now()
+	item := messenger.MailboxItem{
+		RecipientID: zN.ID,
+		SenderID:    types.PeerID{9},
+		Payload:     env,
+		CreatedAt:   now.Unix(),
+		ExpiresAt:   now.Add(time.Hour).Unix(),
+	}
+	require.NoError(t, rN.MailboxManager.Store(item))
+	require.Equal(t, 1, rN.MailboxManager.Count(zN.ID))
+
+	before := rN.RelayServer.Stats().Delivered
+	rN.RelayServer.OnPeerConnected(zN.ID, types.PeerPublicKey{}, "")
+	require.Eventually(t, func() bool { return rN.RelayServer.Stats().Delivered > before },
+		5*time.Second, 20*time.Millisecond, "the relay did not hand over the stored item")
 }

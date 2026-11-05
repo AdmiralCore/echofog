@@ -154,6 +154,10 @@ func (m *CallManager) scheduleRekeyLocked(room *ActiveRoomState, now time.Time) 
 	}
 }
 
+// keyResendEvery is how often the coordinator repeats a key a member has not confirmed yet: the
+// path that broke while the key was in flight is often back a moment later.
+const keyResendEvery = 500 * time.Millisecond
+
 // rekeyTickLocked hands out a new media key once one is due (coordinator only).
 func (m *CallManager) rekeyTickLocked(room *ActiveRoomState, now time.Time) {
 	if !room.IsCoordinator || room.rekeyAt.IsZero() || now.Before(room.rekeyAt) {
@@ -187,6 +191,11 @@ func (m *CallManager) rekeyTickLocked(room *ActiveRoomState, now time.Time) {
 		signers = m.signersLocked(room)
 	}
 	room.keyEpoch++
+	room.prevMediaKey, room.prevMediaKeyEpoch = room.mediaKey, room.mediaKeyEpoch
+	room.mediaKey, room.mediaKeyEpoch = append([]byte(nil), key...), room.keyEpoch
+	room.mediaKeySigners = signers
+	room.keyWait = make(map[types.PeerID]struct{})
+	room.keyWaitEpoch, room.keyWaitSince = room.keyEpoch, now
 	for p := range room.ConnectedPeers {
 		kx, ok := room.memberKX[p]
 		if p == m.selfID || !ok {
@@ -198,10 +207,74 @@ func (m *CallManager) rekeyTickLocked(room *ActiveRoomState, now time.Time) {
 		}
 		mk.Signers = signers
 		m.sendLocked(room, p, signaling.ActionMediaKey, mk)
+		room.keyWait[p] = struct{}{} // until the member confirms it (see keyWaitTickLocked)
 	}
 	_ = room.Dispatcher.SetMediaKey(key, signerKeys(signers), now)
 	m.logger.Info("New call media key", "call_id", calllog.Call(room.CallID), "key_epoch", room.keyEpoch,
 		"members", others+1, "older_nodes", missing, "signed", signers != nil)
+}
+
+// keyWaitTickLocked repeats the newest key to the members that have not confirmed it and keeps
+// units on the key they do have meanwhile. A key handed out once can be lost on the link that had
+// just come back; without this the member went without it to the end of the call.
+func (m *CallManager) keyWaitTickLocked(room *ActiveRoomState, now time.Time) {
+	if len(room.keyWait) == 0 {
+		return
+	}
+	if now.Sub(room.keyWaitSince) >= kxWait {
+		room.keyWait = nil
+		m.releaseKeySwitchLocked(room, now)
+		m.logger.Warn("Call media key not confirmed by every member, sending with it anyway",
+			"call_id", calllog.Call(room.CallID), "key_epoch", room.keyWaitEpoch)
+		return
+	}
+	if now.Sub(room.lastKeyResend) >= keyResendEvery {
+		room.lastKeyResend = now
+		m.resendMediaKeyLocked(room)
+	}
+	if room.Dispatcher != nil {
+		room.Dispatcher.PostponeMediaKeySwitch(now)
+	}
+}
+
+// resendMediaKeyLocked repeats the newest key to the members that have not confirmed it.
+func (m *CallManager) resendMediaKeyLocked(room *ActiveRoomState) {
+	if len(room.mediaKey) != 32 {
+		return
+	}
+	for p := range room.keyWait {
+		kx, ok := room.memberKX[p]
+		if !ok {
+			continue
+		}
+		mk, err := sealMediaKey(room.mediaKey, kx, room.CallID, p, room.mediaKeyEpoch)
+		if err != nil {
+			continue
+		}
+		mk.Signers = room.mediaKeySigners
+		m.sendLocked(room, p, signaling.ActionMediaKey, mk)
+	}
+}
+
+// handleMediaKeyAckLocked takes a member's confirmation of the newest key, and lets units go out
+// with it once every member has it.
+func (m *CallManager) handleMediaKeyAckLocked(room *ActiveRoomState, from types.PeerID, epoch uint64) {
+	if !room.IsCoordinator || len(room.keyWait) == 0 || epoch != room.keyWaitEpoch {
+		return
+	}
+	delete(room.keyWait, from)
+	if len(room.keyWait) == 0 {
+		m.releaseKeySwitchLocked(room, m.now())
+		m.logger.Info("New call media key confirmed by every member", "call_id", calllog.Call(room.CallID),
+			"key_epoch", room.keyWaitEpoch)
+	}
+}
+
+// releaseKeySwitchLocked lets units go out with the newest key now.
+func (m *CallManager) releaseKeySwitchLocked(room *ActiveRoomState, now time.Time) {
+	if room.Dispatcher != nil {
+		room.Dispatcher.ReleaseMediaKeySwitch(now)
+	}
 }
 
 // signersLocked names the signing key of every member, this node included, or nil if one of them
@@ -250,20 +323,31 @@ func (m *CallManager) takeMediaKeyLocked(room *ActiveRoomState, from types.PeerI
 			return
 		}
 		if room.pendingKeys == nil {
-			room.pendingKeys = make(map[types.PeerID]signaling.MediaKeyPayload)
+			room.pendingKeys = make(map[types.PeerID]pendingMediaKey)
+		}
+		for id, e := range room.pendingKeys {
+			if now.Sub(e.at) > pendingKeyTTL {
+				delete(room.pendingKeys, id) // a claimant we never followed: its key goes with it
+			}
 		}
 		if _, known := room.pendingKeys[from]; !known && len(room.pendingKeys) >= maxPendingMediaKeys {
 			return
 		}
-		if old, ok := room.pendingKeys[from]; !ok || p.KeyEpoch >= old.KeyEpoch {
-			room.pendingKeys[from] = p
+		if old, ok := room.pendingKeys[from]; !ok || p.KeyEpoch >= old.payload.KeyEpoch {
+			room.pendingKeys[from] = pendingMediaKey{payload: p, at: now}
 		}
 		return
 	}
-	if from != room.Coordinator || (p.KeyEpoch <= room.keyEpoch && from == room.keyFrom) {
+	if from != room.Coordinator {
 		return
 	}
-	m.installMediaKeyLocked(room, from, p, now)
+	if p.KeyEpoch <= room.keyEpoch && from == room.keyFrom {
+		m.ackMediaKeyLocked(room, from, p.KeyEpoch) // a repeat: the first confirmation may be lost
+		return
+	}
+	if m.installMediaKeyLocked(room, from, p, now) {
+		m.ackMediaKeyLocked(room, from, p.KeyEpoch)
+	}
 }
 
 // maxPendingMediaKeys bounds the keys kept from coordinators we do not follow yet.
@@ -273,15 +357,30 @@ const maxPendingMediaKeys = 16
 // never becomes our coordinator is forgotten with its key.
 const pendingKeyTTL = time.Minute
 
+// pendingMediaKey is a key handed out by a claimant we do not follow (yet) and when it came.
+type pendingMediaKey struct {
+	payload signaling.MediaKeyPayload
+	at      time.Time
+}
+
+// ackMediaKeyLocked tells the coordinator we took the key of epoch.
+func (m *CallManager) ackMediaKeyLocked(room *ActiveRoomState, to types.PeerID, epoch uint64) {
+	if room.IsCoordinator || to != room.Coordinator || epoch == 0 {
+		return
+	}
+	m.sendLocked(room, to, signaling.ActionMediaKeyAck, signaling.KeyAckPayload{Epoch: epoch})
+}
+
 // installMediaKeyLocked opens a media key coordinator from handed out and starts the room on it.
-func (m *CallManager) installMediaKeyLocked(room *ActiveRoomState, from types.PeerID, p signaling.MediaKeyPayload, now time.Time) {
+func (m *CallManager) installMediaKeyLocked(room *ActiveRoomState, from types.PeerID, p signaling.MediaKeyPayload, now time.Time) bool {
 	key, err := openMediaKey(p, room.kxPriv, room.CallID, m.selfID)
 	if err != nil {
 		m.warnOnce("mediakey:"+from.String(), "Call media key did not open", "coordinator", calllog.Peer(from))
-		return
+		return false
 	}
 	room.keyEpoch, room.keyFrom = p.KeyEpoch, from
 	_ = room.Dispatcher.SetMediaKey(key, signerKeys(p.Signers), now)
+	return true
 }
 
 // adoptPendingMediaKeyLocked takes the key leader sent while we still thought we led the call,
@@ -292,5 +391,34 @@ func (m *CallManager) adoptPendingMediaKeyLocked(room *ActiveRoomState, leader t
 		return
 	}
 	delete(room.pendingKeys, leader)
-	m.installMediaKeyLocked(room, leader, p, now)
+	if now.Sub(p.at) > pendingKeyTTL {
+		return
+	}
+	if m.installMediaKeyLocked(room, leader, p.payload, now) {
+		m.ackMediaKeyLocked(room, leader, p.payload.KeyEpoch)
+	}
+}
+
+// sendRoomKeysLocked hands a member taken in the keys it needs to open what reaches it at once:
+// the newest key, and while other members confirm it, the one media still goes out with.
+func (m *CallManager) sendRoomKeysLocked(room *ActiveRoomState, peer types.PeerID, now time.Time) {
+	if !room.IsCoordinator {
+		return
+	}
+	kx, ok := room.memberKX[peer]
+	if !ok || len(kx) != 32 {
+		return
+	}
+	if len(room.keyWait) > 0 && len(room.prevMediaKey) == 32 &&
+		room.prevMediaKeyEpoch != 0 && room.prevMediaKeyEpoch != room.mediaKeyEpoch {
+		if mk, err := sealMediaKey(room.prevMediaKey, kx, room.CallID, peer, room.prevMediaKeyEpoch); err == nil {
+			m.sendLocked(room, peer, signaling.ActionMediaKey, mk)
+		}
+	}
+	if len(room.mediaKey) == 32 {
+		if mk, err := sealMediaKey(room.mediaKey, kx, room.CallID, peer, room.mediaKeyEpoch); err == nil {
+			mk.Signers = room.mediaKeySigners
+			m.sendLocked(room, peer, signaling.ActionMediaKey, mk)
+		}
+	}
 }

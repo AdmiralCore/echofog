@@ -567,6 +567,17 @@ func (m *CallManager) runLoop(ctx context.Context, room *ActiveRoomState) {
 	}
 }
 
+// coordinatorHeartbeatLocked is what a coordinator sends periodically and in answer to a claim
+// from a smaller half (see applyFloodLocked): who leads, at what epoch, and how many it kept.
+func (m *CallManager) coordinatorHeartbeatLocked(room *ActiveRoomState) signaling.CoordinatorHeartbeatPayload {
+	hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64),
+		Members: len(room.ConnectedPeers)}
+	for _, sm := range room.StreamEngine.Snapshot() {
+		hb.Streams[sm.StreamID] = sm.Epoch
+	}
+	return hb
+}
+
 func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time) {
 	if f := room.formerCoordinator; f != (types.PeerID{}) && m.aloneLocked(room) && now.Sub(room.lastRejoinProbe) >= joinRetryInterval {
 		// alone after taking over: the old coordinator may well be alive with the others, and
@@ -577,11 +588,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	}
 	if now.Sub(room.lastCoordHB) >= coordHeartbeatInterval {
 		room.lastCoordHB = now
-		hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64),
-			Members: len(room.ConnectedPeers)}
-		for _, sm := range room.StreamEngine.Snapshot() {
-			hb.Streams[sm.StreamID] = sm.Epoch
-		}
+		hb := m.coordinatorHeartbeatLocked(room)
 		m.floodLocked(room, signaling.ActionCoordinatorHeartbeat, hb)
 		if f := room.formerCoordinator; f != (types.PeerID{}) && now.Sub(room.coordSince) < formerHeartbeatWindow {
 			if _, member := room.ConnectedPeers[f]; !member {
@@ -598,6 +605,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 		}
 	}
 	m.rekeyTickLocked(room, now)
+	m.keyWaitTickLocked(room, now)
 	// A child reported its parent silent: drop the parent as soon as its heartbeats confirm it,
 	// instead of waiting for the full member timeout. A heartbeat after the report means only
 	// the link broke, so the parent stays.

@@ -59,6 +59,10 @@ const (
 	// Older nodes reject it as unknown; they keep the room key, which the coordinator then returns
 	// everybody to.
 	ActionMediaKey SignalAction = "media_key"
+	// ActionMediaKeyAck is a member confirming it took the key of KeyAckPayload.Epoch. The
+	// coordinator keeps sending with the previous key until every member has confirmed the new
+	// one; a key handed out once may be lost on a link that had just come back.
+	ActionMediaKeyAck SignalAction = "media_key_ack"
 )
 
 // Kept for source compatibility with older callers.
@@ -142,6 +146,11 @@ type MediaKeyPayload struct {
 	Eph      []byte                  `json:"eph"`
 	Sealed   []byte                  `json:"sealed"`
 	Signers  map[types.PeerID][]byte `json:"signers,omitempty"`
+}
+
+// KeyAckPayload confirms the media key of one epoch: a member telling the coordinator it has it.
+type KeyAckPayload struct {
+	Epoch uint64 `json:"epoch"`
 }
 
 // RoomSyncPayload brings a joiner or a lagging member up to date in one message.

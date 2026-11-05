@@ -117,12 +117,25 @@ func TestRoom_AKeyLostInFlightIsSentAgain(t *testing.T) {
 	time.Sleep(2*rekeyDelay + media.MediaKeySwitch)
 	before := waitForOneKey(t, nodes, nil)
 
-	// d leaves, which rotates the key; the new key's frame to b is lost on the way
-	var lost atomic.Bool
-	lost.Store(true)
-	m.blockLink(coord.id, b.id, func(tp net_types.MessageType) bool {
-		return tp == net_types.TypeCallSignaling || tp == net_types.TypeCallSignalingLossy
-	}, lost.Load)
+	// the next key's frame to b is lost on the way (heartbeats and media still get through)
+	m.mu.Lock()
+	m.dropTo = func(from, to types.PeerID, tp net_types.MessageType, payload []byte) bool {
+		if from != coord.id || to != b.id {
+			return false
+		}
+		if tp != net_types.TypeCallSignaling && tp != net_types.TypeCallSignalingLossy {
+			return false
+		}
+		env, err := signaling.DecodeSignal(payload)
+		return err == nil && env.Action == signaling.ActionMediaKey
+	}
+	m.mu.Unlock()
+	t.Cleanup(func() {
+		m.mu.Lock()
+		m.dropTo = nil
+		m.mu.Unlock()
+	})
+	// d leaves, which rotates the key; d is cut off so it cannot rejoin meanwhile
 	for _, nd := range []*testNode{coord, b, c} {
 		m.blockLink(d.id, nd.id, nil, func() bool { return true })
 		m.blockLink(nd.id, d.id, nil, func() bool { return true })
@@ -139,7 +152,7 @@ func TestRoom_AKeyLostInFlightIsSentAgain(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond, "the coordinator never asked for a confirmation")
 	time.Sleep(media.MediaKeySwitch + 500*time.Millisecond)
 	coord.cm.mu.Lock()
-	sendNow := coord.cm.dispatcher().SendKeyID()
+	sendNow := coord.cm.activeRoom.Dispatcher.SendKeyID()
 	coord.cm.unlockAndFlush()
 	assert.Equal(t, before, sendNow, "the coordinator switched to a key b never got")
 
@@ -147,19 +160,24 @@ func TestRoom_AKeyLostInFlightIsSentAgain(t *testing.T) {
 	beforeUnits := b.log.count(media.FrameAudio, coord.id, "voice")
 	unit := make([]byte, 8)
 	unit[7] = 42
-	require.NoError(t, coord.cm.dispatcher().BroadcastLocalAudio(unit))
+	coord.cm.mu.RLock()
+	cd := coord.cm.activeRoom.Dispatcher
+	coord.cm.mu.RUnlock()
+	require.NoError(t, cd.BroadcastLocalAudio(unit))
 	require.Eventually(t, func() bool {
 		return b.log.count(media.FrameAudio, coord.id, "voice") > beforeUnits
 	}, 3*time.Second, 20*time.Millisecond, "the member could not open what was sent while it lacked the new key")
 
 	// the path works again: the key goes through and both speak it
-	lost.Store(false)
+	m.mu.Lock()
+	m.dropTo = nil
+	m.mu.Unlock()
 	require.Eventually(t, func() bool {
 		coord.cm.mu.Lock()
-		coordID := coord.cm.dispatcher().SendKeyID()
+		coordID := coord.cm.activeRoom.Dispatcher.SendKeyID()
 		coord.cm.unlockAndFlush()
 		b.cm.mu.Lock()
-		bID := b.cm.dispatcher().SendKeyID()
+		bID := b.cm.activeRoom.Dispatcher.SendKeyID()
 		b.cm.unlockAndFlush()
 		return coordID == bID && coordID != before
 	}, 15*time.Second, 50*time.Millisecond, "the lost key was never sent again")
