@@ -317,8 +317,10 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 	}
 	b := t.buckets[t.bucketOf(id)]
 	if len(b.entries) < K {
-		t.insertLocked(b, cand)
+		// Snapshot before insert: insertLocked may trim the candidate itself to cold, and
+		// eviction drops its card pointer.
 		state := cand.state()
+		t.insertLocked(b, cand)
 		t.beginWriteLocked()
 		t.persist(state)
 		t.endWrite()
@@ -364,8 +366,9 @@ func (t *Table) checkAndReplace(b *bucket, victim *entry, victimCard *objects.Ca
 		default:
 			removed = t.deleteKnownLocked(victim)
 			if t.index[cand.device] == nil && t.cold[cand.device] == nil && t.fitsLocked(cand, nil) && len(b.entries) < K {
-				t.insertLocked(b, cand)
+				// Snapshot before insert: the in-memory cap may trim the candidate at once.
 				state := cand.state()
+				t.insertLocked(b, cand)
 				added = &state
 			}
 		}
