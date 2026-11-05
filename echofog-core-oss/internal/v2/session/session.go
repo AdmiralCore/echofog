@@ -265,17 +265,25 @@ func verifyRemote(card *objects.Card, now time.Time, v handshake.CardVerifier) (
 
 // finish hands the handshake result to the mux. mux.NewSession makes the single sealing switch
 // (wire.md §8.5) when the carrier reports Sealed.
-func finish(c mux.Carrier, g *mux.Guard, control mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort) (*Established, error) {
+func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers) (*Established, error) {
 	// The handshake read deadline belongs to the handshake, not to the session: its control
 	// stream must wait for peer traffic indefinitely (the mux applies its own timers).
-	_ = control.SetReadDeadline(time.Time{})
-	_ = control.SetWriteDeadline(time.Time{})
+	_ = ctrl.SetReadDeadline(time.Time{})
+	_ = ctrl.SetWriteDeadline(time.Time{})
 	cfg := mux.Config{
 		Keys:     sessionKeys{hs: hs},
 		Features: muxFeatures(hs.Features),
 		Policy:   policyFor(hs.Services),
+		Timers:   timers,
 	}
-	ms, err := mux.NewSession(cfg, g, control, kind)
+	var peerID [32]byte
+	if hs.Peer != nil {
+		peerID = hs.Peer.DeviceID
+	}
+	if ctl != nil {
+		cfg.OnControl = func(_ uint64, f frame.Frame) { ctl.handle(peerID, f) }
+	}
+	ms, err := mux.NewSession(cfg, g, ctrl, kind)
 	if err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("%w: mux session: %w", ErrConfig, err)

@@ -35,9 +35,7 @@ func openStoreAt(t *testing.T, dir string, key *secret.Value) *store.Store {
 // TestKeyBindingsPersistAcrossRestart: hs↔device bindings live in the store (handshake.md §7,
 // S15) and a conflicting binding is abuse against the device that supplied the card.
 func TestKeyBindingsPersistAcrossRestart(t *testing.T) {
-	now := time.Now()
 	a, b := newTestNode(t), newTestNode(t)
-	_ = a
 	hs := b.device.Handshake().Public().Key()
 
 	dir := t.TempDir()

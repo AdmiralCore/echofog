@@ -27,7 +27,8 @@ func localWithFeatures(n *testNode, nc nodeCards) session.LocalIdentity {
 }
 
 // establishWith is establish with Dial options and AcceptConfig fields for CARD_UPDATE and timers.
-func establishWith(t *testing.T, pair *memcarrier.Pair, card *objects.Card, cli, srv session.LocalIdentity,
+// cfg.Local is the accepting identity.
+func establishWith(t *testing.T, pair *memcarrier.Pair, card *objects.Card, cli session.LocalIdentity,
 	cfg session.AcceptConfig, opts ...session.DialOption) (*session.Established, *session.Established) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -40,7 +41,6 @@ func establishWith(t *testing.T, pair *memcarrier.Pair, card *objects.Card, cli,
 		dialed <- runResult{est, err}
 	}()
 
-	cfg.Local = srv
 	srvEst, err := session.Accept(ctx, &oneListener{c: pair.Server}, cfg)
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
@@ -398,13 +398,16 @@ func TestGoAwayDrainDeadline(t *testing.T) {
 
 	timers := mux.Timers{Tick: 10 * time.Millisecond, GoAwayDrain: 300 * time.Millisecond}
 	pair := memcarrier.NewQUIC()
-	estA, _ := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
+	estA, estB := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
 		session.AcceptConfig{Local: bLocal, Timers: timers}, session.WithTimers(timers))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := estA.Session.OpenStream(ctx, 3, 2); err != nil {
 		t.Fatalf("OpenStream: %v", err)
+	}
+	if _, err := estB.Session.AcceptStream(ctx); err != nil {
+		t.Fatalf("AcceptStream: %v", err)
 	}
 
 	start := time.Now()
@@ -450,15 +453,15 @@ func TestCardUpdateAppliesNewerCardAndIgnoresOldSeq(t *testing.T) {
 	bLocal := localWithFeatures(b, bc)
 
 	pair := memcarrier.NewQUIC()
-	estA, _ := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
-		session.AcceptConfig{Local: bLocal, Control: ctl}, session.WithControl(ctl))
+	_, estB := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
+		session.AcceptConfig{Local: bLocal}, session.WithControl(ctl))
 
 	notAfter := uint64(now.Add(24 * time.Hour).Unix())
 	suites := []uint16{handshake.SuiteXK, handshake.SuiteXX}
 	newer := b.card(t, objects.ScopePeer, suites, 20, notAfter)
 	older := b.card(t, objects.ScopePeer, suites, 15, notAfter)
 
-	if err := estA.PushCard(newer); err != nil {
+	if err := estB.PushCard(newer); err != nil {
 		t.Fatalf("PushCard newer: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool {
@@ -466,7 +469,7 @@ func TestCardUpdateAppliesNewerCardAndIgnoresOldSeq(t *testing.T) {
 		return c != nil && c.Env.Seq == 20
 	})
 
-	if err := estA.PushCard(older); err != nil {
+	if err := estB.PushCard(older); err != nil {
 		t.Fatalf("PushCard older: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool {
@@ -509,21 +512,21 @@ func TestCardUpdateEquivocation(t *testing.T) {
 	bLocal := localWithFeatures(b, bc)
 
 	pair := memcarrier.NewQUIC()
-	estA, _ := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
-		session.AcceptConfig{Local: bLocal, Control: ctl}, session.WithControl(ctl))
+	_, estB := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
+		session.AcceptConfig{Local: bLocal}, session.WithControl(ctl))
 
 	suites := []uint16{handshake.SuiteXK, handshake.SuiteXX}
 	first := b.card(t, objects.ScopePeer, suites, 30, uint64(now.Add(24*time.Hour).Unix()))
 	second := b.card(t, objects.ScopePeer, suites, 30, uint64(now.Add(48*time.Hour).Unix()))
 
-	if err := estA.PushCard(first); err != nil {
+	if err := estB.PushCard(first); err != nil {
 		t.Fatalf("PushCard first: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool {
 		c := book.Get(b.device.ID(), objects.ScopePeer, nil)
 		return c != nil && c.Env.Seq == 30
 	})
-	if err := estA.PushCard(second); err != nil {
+	if err := estB.PushCard(second); err != nil {
 		t.Fatalf("PushCard second: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool { return equivocations.Load() == 1 })
@@ -548,16 +551,17 @@ func TestTablePushCardOnlyReachesCardPushPeers(t *testing.T) {
 	ctl := session.NewControl(session.ControlConfig{Cards: book})
 
 	pair := memcarrier.NewQUIC()
-	estA, estB := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
-		session.AcceptConfig{Local: bLocal, Control: ctl}, session.WithControl(ctl))
+	estA, _ := establishWith(t, pair, verifyCard(t, bc.peer, now), aLocal,
+		session.AcceptConfig{Local: bLocal, Control: ctl})
 
 	tbl := newTable(t)
 	if _, err := tbl.Add(aLocal, estA); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
+	// A pushes its own new card; B is the receiver with the card book.
 	notAfter := uint64(now.Add(24 * time.Hour).Unix())
-	newer := b.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK, handshake.SuiteXX}, 40, notAfter)
+	newer := a.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK, handshake.SuiteXX}, 40, notAfter)
 	sent, err := tbl.PushCard(a.device.ID(), newer)
 	if err != nil {
 		t.Fatalf("PushCard: %v", err)
@@ -566,10 +570,9 @@ func TestTablePushCardOnlyReachesCardPushPeers(t *testing.T) {
 		t.Fatalf("PushCard sent to %d peers, want 1", sent)
 	}
 	waitFor(t, 5*time.Second, func() bool {
-		c := book.Get(b.device.ID(), objects.ScopePeer, nil)
+		c := book.Get(a.device.ID(), objects.ScopePeer, nil)
 		return c != nil && c.Env.Seq == 40
 	})
-	_ = estB
 }
 
 func waitFor(t *testing.T, within time.Duration, cond func() bool) {
