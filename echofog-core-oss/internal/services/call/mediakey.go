@@ -269,6 +269,10 @@ func (m *CallManager) takeMediaKeyLocked(room *ActiveRoomState, from types.PeerI
 // maxPendingMediaKeys bounds the keys kept from coordinators we do not follow yet.
 const maxPendingMediaKeys = 16
 
+// pendingKeyTTL bounds how long a key from a coordinator we do not follow yet is kept: one that
+// never becomes our coordinator is forgotten with its key.
+const pendingKeyTTL = time.Minute
+
 // installMediaKeyLocked opens a media key coordinator from handed out and starts the room on it.
 func (m *CallManager) installMediaKeyLocked(room *ActiveRoomState, from types.PeerID, p signaling.MediaKeyPayload, now time.Time) {
 	key, err := openMediaKey(p, room.kxPriv, room.CallID, m.selfID)

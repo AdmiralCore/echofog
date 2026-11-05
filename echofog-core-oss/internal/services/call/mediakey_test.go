@@ -246,3 +246,37 @@ func TestRoom_YieldedCoordinatorAdoptsTheMediaKeyItMissed(t *testing.T) {
 		return sendKeyIDs([]*testNode{b}, nil)[wantID] == 1
 	}, 5*time.Second, 20*time.Millisecond, "the yielded coordinator still speaks the key from its own takeover")
 }
+
+// A key from a claimant we do not follow is not kept forever: after its time it is dropped, even
+// if we never yield to that claimant.
+func TestRoom_AKeyFromAClaimantExpires(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 2)
+	coord, b := nodes[0], nodes[1]
+	b.cm.mu.Lock()
+	broom := b.cm.activeRoom
+	b.cm.becomeCoordinatorLocked(broom, b.cm.now())
+	b.cm.unlockAndFlush()
+
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	coord.cm.mu.Lock()
+	croom := coord.cm.activeRoom
+	bKX := croom.memberKX[b.id]
+	epoch := croom.keyEpoch + 1
+	require.Len(t, bKX, 32, "the coordinator never learnt b's key exchange key")
+	mk, err := sealMediaKey(key, bKX, croom.CallID, b.id, epoch)
+	require.NoError(t, err)
+	coord.cm.unlockAndFlush()
+
+	now := b.cm.now()
+	b.cm.mu.Lock()
+	b.cm.takeMediaKeyLocked(broom, coord.id, mk, now)
+	kept := len(broom.pendingKeys)
+	// a later key from another claimant prunes the one that has waited too long
+	b.cm.takeMediaKeyLocked(broom, types.PeerID{0x77}, mk, now.Add(pendingKeyTTL+time.Second))
+	_, oldThere := broom.pendingKeys[coord.id]
+	b.cm.unlockAndFlush()
+	assert.Equal(t, 1, kept, "the key from the claimant was not kept")
+	assert.False(t, oldThere, "a key from a claimant stayed after its time")
+}

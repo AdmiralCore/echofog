@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -46,16 +47,21 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 	time.Sleep(2*rekeyDelay + media.MediaKeySwitch)
 	before := waitForOneKey(t, nodes, nil)
 
-	// a's line goes dark: no frames in or out, and the coordinator times it out
+	// a's line goes dark: it hears nothing, elects itself, and the coordinator times it out
 	var dark atomic.Bool
 	dark.Store(true)
 	for _, nd := range []*testNode{coord, b, c} {
 		m.blockLink(a.id, nd.id, nil, dark.Load)
 		m.blockLink(nd.id, a.id, nil, dark.Load)
 	}
+	a.cm.mu.Lock()
+	aroom := a.cm.activeRoom
+	a.cm.becomeCoordinatorLocked(aroom, a.cm.now())
+	a.cm.unlockAndFlush()
 	coord.cm.mu.Lock()
 	room := coord.cm.activeRoom
 	room.rekeyAt = time.Time{} // isolate what the removal itself asks for
+	epoch := room.keyEpoch
 	coord.cm.removeMemberLocked(room, a.id, "timeout")
 	scheduled := !room.rekeyAt.IsZero()
 	coord.cm.unlockAndFlush()
@@ -64,18 +70,23 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 	assert.Equal(t, map[string]int{before: 3}, sendKeyIDs([]*testNode{coord, b, c}, nil),
 		"a network timeout rotated the media key: the member that comes back cannot open what it missed")
 
-	// and it is taken back in without a rotation: it still has the key the room speaks
+	// and it is taken back in without a rotation, through the real join: the member, its line
+	// back, yields to the coordinator that kept the call and sends it a join
 	dark.Store(false)
-	coord.cm.mu.Lock()
-	room = coord.cm.activeRoom
-	prof := room.ConnectedPeers[coord.id]
-	prof.PeerID = a.id
-	room.rekeyAt = time.Time{}
-	coord.cm.admitLocked(room, a.id, prof, coord.cm.now())
-	backScheduled := !room.rekeyAt.IsZero()
-	coord.cm.unlockAndFlush()
-	assert.False(t, backScheduled, "taking a member lost to a timeout back in scheduled a new media key")
+	a.cm.mu.Lock()
+	a.cm.yieldLocked(aroom, coord.id, epoch, a.cm.now())
+	a.cm.unlockAndFlush()
+	require.Eventually(t, func() bool {
+		coord.cm.mu.Lock()
+		defer coord.cm.mu.Unlock()
+		_, member := coord.cm.activeRoom.ConnectedPeers[a.id]
+		return member
+	}, 5*time.Second, 20*time.Millisecond, "the returning member was not taken back in")
 	time.Sleep(rekeyDelay + media.MediaKeySwitch + 300*time.Millisecond)
+	coord.cm.mu.Lock()
+	keyNow := coord.cm.activeRoom.keyEpoch
+	coord.cm.unlockAndFlush()
+	assert.Equal(t, epoch, keyNow, "the real join rotated the key the member already has")
 	assert.Equal(t, map[string]int{before: 4}, sendKeyIDs(nodes, nil),
 		"taking a member lost to a timeout back in rotated the key it already has")
 
@@ -92,6 +103,67 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 	leftScheduled := !room.rekeyAt.IsZero()
 	coord.cm.unlockAndFlush()
 	assert.True(t, leftScheduled, "a member that left did not schedule a new media key")
+}
+
+// A media key handed out once can be lost on a link that broke while it was in flight. The member
+// then cannot open anything, and nothing asks again: it is without the key to the end of the call.
+// The coordinator must keep sending the key until the member confirms it, and keep sending media
+// with the key the member has meanwhile, so no unit is lost to the gap.
+func TestRoom_AKeyLostInFlightIsSentAgain(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 4)
+	coord, b, c, d := nodes[0], nodes[1], nodes[2], nodes[3]
+	waitForOneKey(t, nodes, nil)
+	time.Sleep(2*rekeyDelay + media.MediaKeySwitch)
+	before := waitForOneKey(t, nodes, nil)
+
+	// d leaves, which rotates the key; the new key's frame to b is lost on the way
+	var lost atomic.Bool
+	lost.Store(true)
+	m.blockLink(coord.id, b.id, func(tp net_types.MessageType) bool {
+		return tp == net_types.TypeCallSignaling || tp == net_types.TypeCallSignalingLossy
+	}, lost.Load)
+	for _, nd := range []*testNode{coord, b, c} {
+		m.blockLink(d.id, nd.id, nil, func() bool { return true })
+		m.blockLink(nd.id, d.id, nil, func() bool { return true })
+	}
+	coord.cm.mu.Lock()
+	coord.cm.removeMemberLocked(coord.cm.activeRoom, d.id, "left")
+	coord.cm.unlockAndFlush()
+
+	// the coordinator waits for b's confirmation: it keeps sending with the key b has
+	require.Eventually(t, func() bool {
+		coord.cm.mu.Lock()
+		defer coord.cm.mu.Unlock()
+		return len(coord.cm.activeRoom.keyWait) > 0
+	}, 5*time.Second, 20*time.Millisecond, "the coordinator never asked for a confirmation")
+	time.Sleep(media.MediaKeySwitch + 500*time.Millisecond)
+	coord.cm.mu.Lock()
+	sendNow := coord.cm.dispatcher().SendKeyID()
+	coord.cm.unlockAndFlush()
+	assert.Equal(t, before, sendNow, "the coordinator switched to a key b never got")
+
+	// what it sends meanwhile is still openable by b
+	beforeUnits := b.log.count(media.FrameAudio, coord.id, "voice")
+	unit := make([]byte, 8)
+	unit[7] = 42
+	require.NoError(t, coord.cm.dispatcher().BroadcastLocalAudio(unit))
+	require.Eventually(t, func() bool {
+		return b.log.count(media.FrameAudio, coord.id, "voice") > beforeUnits
+	}, 3*time.Second, 20*time.Millisecond, "the member could not open what was sent while it lacked the new key")
+
+	// the path works again: the key goes through and both speak it
+	lost.Store(false)
+	require.Eventually(t, func() bool {
+		coord.cm.mu.Lock()
+		coordID := coord.cm.dispatcher().SendKeyID()
+		coord.cm.unlockAndFlush()
+		b.cm.mu.Lock()
+		bID := b.cm.dispatcher().SendKeyID()
+		b.cm.unlockAndFlush()
+		return coordID == bID && coordID != before
+	}, 15*time.Second, 50*time.Millisecond, "the lost key was never sent again")
+	assert.Zero(t, b.cm.dispatcher().Stats().DecryptFailures, "the member lost units to the key it did not have")
 }
 
 // An election ran on a node cut off from the call: it led a half of one member and then heard
@@ -123,4 +195,52 @@ func TestRoom_ASmallerHalfDoesNotTakeTheCallOver(t *testing.T) {
 	s, ok := coord.cm.Snapshot()
 	require.True(t, ok)
 	assert.Equal(t, coord.id, s.Coordinator, "the smaller half took a room that kept the others")
+}
+
+// A call split by a blackout into halves of three and two, both with a coordinator and more than
+// one member: the half that kept fewer members yields to the one that kept more, whatever its
+// epoch, or the two halves keep rejecting each other's heartbeats and stay apart.
+func TestRoom_ASmallerHalfYieldsToTheLarger(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 5)
+	large, small := nodes[:3], nodes[3:]
+
+	var cut atomic.Bool
+	cut.Store(true)
+	for _, l := range large {
+		for _, s := range small {
+			m.blockLink(l.id, s.id, nil, cut.Load)
+			m.blockLink(s.id, l.id, nil, cut.Load)
+		}
+	}
+	// both halves lose the others to timeouts and settle at their own members
+	require.Eventually(t, func() bool {
+		for _, nd := range large {
+			s, ok := nd.cm.Snapshot()
+			if !ok || !s.Joined || len(s.Members) != len(large) {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 100*time.Millisecond, "the larger half never settled at its members")
+	require.Eventually(t, func() bool {
+		leaders := 0
+		for _, nd := range small {
+			s, ok := nd.cm.Snapshot()
+			if ok && s.Joined && len(s.Members) == len(small) && s.IsCoordinator {
+				leaders++
+			}
+		}
+		return leaders == 1
+	}, 30*time.Second, 100*time.Millisecond, "the smaller half never settled on one coordinator")
+
+	// the halves meet again: the larger one is the call
+	cut.Store(false)
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 20*time.Second, 100*time.Millisecond,
+		"the halves stayed apart: %v", dumpRoom(nodes, nil))
+	for _, nd := range nodes {
+		s, ok := nd.cm.Snapshot()
+		require.True(t, ok)
+		assert.Equal(t, nodes[0].id, s.Coordinator, "a half with fewer members kept the call")
+	}
 }

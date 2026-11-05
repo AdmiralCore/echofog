@@ -173,6 +173,17 @@ type ActiveRoomState struct {
 	// timedOut remembers members dropped for a network reason and the key epoch they had when
 	// dropped: one taken back in before any rotation still speaks the room's key (mediakey.go)
 	timedOut map[types.PeerID]uint64
+	// The newest key handed out, for resends and for a member taken in while others confirm it,
+	// and the members that have not confirmed it yet (mediakey.go)
+	mediaKey          []byte
+	mediaKeyEpoch     uint64
+	prevMediaKey      []byte
+	prevMediaKeyEpoch uint64
+	keyWait           map[types.PeerID]struct{}
+	keyWaitEpoch      uint64
+	keyWaitSince      time.Time
+	lastKeyResend     time.Time
+	mediaKeySigners   map[types.PeerID][]byte
 
 	// coordinator: a member's tile backdrop changed since the manifest last went out
 	backdropsChanged  bool
