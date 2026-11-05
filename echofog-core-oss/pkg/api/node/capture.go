@@ -15,11 +15,7 @@ type CaptureEncoder interface {
 
 // SetCaptureEncoder routes the rate and keyframe requests of a capture role ("screen") to enc;
 // nil gives the role back to the webview.
-func (n *NodeApi) SetCaptureEncoder(role string, enc CaptureEncoder) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) SetCaptureEncoder(role string, enc CaptureEncoder) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -29,11 +25,7 @@ func (n *NodeApi) SetCaptureEncoder(role string, enc CaptureEncoder) error {
 
 // PublishCaptureRTP sends one RTP packet of such a capture into the call, as the webview's
 // capture goes through the media bridge: the stream started for its role carries it.
-func (n *NodeApi) PublishCaptureRTP(role string, packet []byte) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1CallBackend) PublishCaptureRTP(role string, packet []byte) {
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -42,9 +34,6 @@ func (n *NodeApi) PublishCaptureRTP(role string, packet []byte) {
 
 // CaptureRTPBudget is the largest RTP packet of a stream that travels to the first relay as one
 // datagram.
-func (n *NodeApi) CaptureRTPBudget(streamID string) int {
-	if n.v2Unavailable() != nil {
-		return 0
-	}
+func (n *v1CallBackend) CaptureRTPBudget(streamID string) int {
 	return media.VideoUnitBudget(len(streamID))
 }

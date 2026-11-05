@@ -190,11 +190,7 @@ func (c *callPathSeen) relayedFor(callID string, peer types.PeerID, now time.Tim
 
 // GetCallPath says how the active call reaches each member. Each look also pings every relayed
 // link once (at most every half second): the round trip it measures shows in the next look.
-func (n *NodeApi) GetCallPath() CallPath {
-	if n.v2Unavailable() != nil {
-		return CallPath{}
-	}
-
+func (n *v1CallBackend) GetCallPath() CallPath {
 	p := CallPath{Members: []CallPathMember{}}
 	nd := n.node
 	if nd == nil || nd.CallManager == nil || nd.Swarm == nil || nd.Cfg == nil {
@@ -284,11 +280,7 @@ const (
 
 // GetCallRelays lists the relays a call can go through: the connected ones, best first, each
 // pinged, then the paid ones known from their adverts. Nothing can be bought yet.
-func (n *NodeApi) GetCallRelays() []CallRelay {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1CallBackend) GetCallRelays() []CallRelay {
 	out := []CallRelay{}
 	nd := n.node
 	if nd == nil || nd.Swarm == nil || nd.RelayClient == nil {
@@ -296,7 +288,7 @@ func (n *NodeApi) GetCallRelays() []CallRelay {
 	}
 	rc := nd.RelayClient
 	carrying := map[types.PeerID]int{}
-	if s, ok := callSnapshot(n); ok {
+	if s, ok := callSnapshot(n.NodeApi); ok {
 		for _, id := range s {
 			if r, ok := rc.RouteTo(id); ok && nd.Swarm.GetPeer(id) == nil {
 				carrying[r.Relay]++
@@ -388,12 +380,8 @@ var errNothingRelayed = errors.New("no member of the call goes through a relay")
 // SwitchCallRelay moves every call member this node reaches through a relay onto another relay:
 // via (a relay's peer ID) when given, else the best one other than the current. Members stay
 // where they are when no relay can take them; it fails only when none moved.
-func (n *NodeApi) SwitchCallRelay(via string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
-	members, ok := callSnapshot(n)
+func (n *v1CallBackend) SwitchCallRelay(via string) error {
+	members, ok := callSnapshot(n.NodeApi)
 	if !ok {
 		return errCallsUnavailable
 	}
