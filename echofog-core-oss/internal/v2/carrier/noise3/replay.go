@@ -68,7 +68,7 @@ func (r *replayCache) seen(sel []byte, now time.Time) bool {
 func (r *replayCache) maybeFlush(now time.Time) {
 	r.mu.Lock()
 	r.set.rotate(now)
-	if now.Before(r.nextFlush) {
+	if r.kv == nil || now.Before(r.nextFlush) {
 		r.mu.Unlock()
 		return
 	}
@@ -76,19 +76,19 @@ func (r *replayCache) maybeFlush(now time.Time) {
 	data := r.set.marshal()
 	kv := r.kv
 	r.mu.Unlock()
-	if kv != nil {
-		_ = kv.PutTTL([]byte(bloomKey), data, replayTTL)
-	}
+	_ = kv.PutTTL([]byte(bloomKey), data, replayTTL)
 }
 
 // flush persists the filter now (on shutdown).
 func (r *replayCache) flush(now time.Time) {
 	r.mu.Lock()
 	r.set.rotate(now)
-	data := r.set.marshal()
 	kv := r.kv
-	r.mu.Unlock()
-	if kv != nil {
-		_ = kv.PutTTL([]byte(bloomKey), data, replayTTL)
+	if kv == nil {
+		r.mu.Unlock()
+		return
 	}
+	data := r.set.marshal()
+	r.mu.Unlock()
+	_ = kv.PutTTL([]byte(bloomKey), data, replayTTL)
 }
