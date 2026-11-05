@@ -30,7 +30,7 @@ identity ([handshake.md](handshake.md) §4.2), and nothing learned through it is
    same country (see 3). A card with flag `domestic-only` is never dialed across a border. A server card without a camouflaged address is not dialed directly across a
    border; it is reached through a relay.
 2. If the initiator is in the same country as the responder and holds a peer- or invite-scope card
-   with a noise3 address (§2.1), it MAY use `noise3`.
+   with a noise3 address (§2.1), it MAY use `noise3` on a path that meets the path requirement of §2.4.
 3. "Same country" requires positive knowledge: both public addresses map to the same country in the
    node's built-in offline GeoIP database. An unknown country counts as a border. A node MUST NOT query
    an online GeoIP service with peer addresses (K7).
@@ -48,6 +48,16 @@ noise3 makes every datagram of a flow indistinguishable from uniformly random by
 who does not know the initiator's ephemeral secret or the responder's masking **private** key. Knowing
 the responder's card, including its masking public key, does not let a passive observer recognise a
 flow (K1). It wraps the datagrams of an inner QUIC v1 connection (§5).
+
+**Byte order (applies to all of §2).** README §6 makes integers big-endian unless a field says `le`. In
+this section the names below are exact:
+
+| Notation | Size | Byte order |
+|---|---|---|
+| `u8` | 1 | — |
+| `u16`, `u32` | 2, 4 | big-endian (network order): `inner_len`, `ts`, the AEAD AAD `u32(n mod 2^32)` |
+| `u32le`, `u64le` | 4, 8 | little-endian: the ChaCha20 counter `u32le(sample[0:4])`, the nonce `u64le(n)` |
+| `LE(x)`, `LE32(x)` | 32 | little-endian field elements (§2.2) |
 
 ### 2.1 Keys and where they are published
 
@@ -117,7 +127,15 @@ encoding, not the shared secret.
 2. `x1 = −A / (1 + 2·r²)`.
 3. `g(x) = x³ + A·x² + x`. If `g(x1)` is a square, `u = x1`; otherwise `u = −x1 − A`.
 
-Implementations MUST check, for every generated key, that the forward map returns `u_e`.
+The case `1 + 2r² = 0` cannot occur. For `p = 2^255 − 19` the value −2 is not a square modulo p
+(p ≡ 5 mod 8), so the denominator in step 2 is never zero and no separate branch is needed.
+
+Two maps are meant and must not be confused. The **element map** `E(r)` is the RFC 9380 §6.7.1 map of a
+full field element `r ∈ [0, p)`: steps 2 and 3 above with `r` as given. The **wire map** `W(repr)` is
+`E(LE(repr))` with bits 254 and 255 cleared, which is steps 1–3 above. The RFC cross-check applies `E` to
+full field elements; the check on generated keys applies `W` to the wire bytes.
+
+Implementations MUST check, for every generated key, that the wire map `W(repr)` returns `u_e`.
 
 ### 2.3 Key schedule
 
@@ -168,16 +186,28 @@ InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner
   Initial datagrams of exactly 1200 bytes.
 - The total length is `max(drawn, 71 + inner_len)`, where `drawn` comes from the shape profile (§9;
   default uniform in [1280, 1420]), and is never more than the path MTU minus IP and UDP headers
-  (1452 for IPv4 on a 1500-byte path, 1232 bytes of payload is the floor any path must carry). If the
+  (1452 for IPv4 on a 1500-byte path; the path requirement of noise3 is stated below). If the
   inner datagram does not fit, the sender takes the largest allowed length; it never splits an inner
   datagram.
 - `flags` bits are reserved; senders MUST send 0; receivers MUST ignore them (they are inside the
   AEAD, so they cannot be used to fingerprint).
 - Overhead: 71 bytes plus padding.
 
+**Path requirement (`ErrPathTooSmall`).** An Init carries 71 bytes of header and a 1200-byte inner QUIC
+Initial, so noise3 needs a path that carries at least **1271 bytes** of UDP payload: an IPv4 path MTU of
+at least 1299, or an IPv6 path MTU of at least 1319. The floor of 1232 bytes applies to the other
+carriers only. An Init is never split across datagrams. If the initiator learns that the path cannot
+carry 1271 bytes (an ICMP Packet Too Big message, a known path MTU below that, or no answer to an Init
+after its retries), it marks noise3 unusable on that path. A sender whose datagram ceiling is below
+1271 bytes fails with `ErrPathTooSmall` for noise3. The session then uses `reality2-*` or `ws2` (§1).
+
 Until it has received an authenticated responder packet, the initiator sends every outgoing inner
 datagram as a **fresh** Init (new ephemeral key, new `repr`), so retransmissions never repeat bytes
 on the wire. It keeps the keys of up to 4 outstanding Inits.
+
+The Init box uses the nonce `0^12` under `k_init`. This is safe only because `k_init` is derived from a
+fresh ephemeral key for every Init, so no (key, nonce) pair repeats. Reusing an ephemeral key for a second
+Init is **MUST NOT**.
 
 ### 2.5 Responder processing of an Init
 
@@ -229,9 +259,12 @@ This is QUIC's header protection (RFC 9001 §5.4.4) applied to a 4-byte packet n
 
 - `dir` is `i2r` or `r2i`; `n` is the packet number of that direction, starting at 0 and increasing by
   one per packet (the Init does not count). A sender MUST NOT send with `n ≥ 2^62`.
-- The receiver unmasks `pn`, reconstructs the full `n` as in RFC 9000 Appendix A.3 (32-bit encoding,
-  expected value = highest received + 1), and opens `box`. Any number of lost packets in a row can be
-  recovered from, since the reconstruction window is ±2^31 packets. A replay bitmap covers the last
+- The receiver unmasks `pn` and reconstructs the full `n` as in RFC 9000 Appendix A.3 with 32-bit
+  encoding: `expected_pn = largest_pn + 1`, where `largest_pn` is the highest packet number authenticated
+  so far in this direction, and `n` is the value congruent to `pn` modulo 2^32 in the window
+  `[expected_pn − 2^31, expected_pn + 2^31)`. Before the first authenticated packet of a direction,
+  `largest_pn` is undefined and `expected_pn = 0`. Then it opens `box`. Any number of lost packets in a row
+  can be recovered from, since the reconstruction window is ±2^31 packets. A replay bitmap covers the last
   1024 numbers below the highest; older or duplicate numbers are dropped.
 - **Finding the flow.** By source IP:port. A packet from an unknown IP:port is tried, within the
   stranger budget, against the established flows of the same source IP and then against the 8 most

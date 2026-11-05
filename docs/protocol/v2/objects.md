@@ -180,8 +180,9 @@ message SuiteParams {
 - `seq` SHOULD be `max(previous seq + 1, issue time in unix seconds)`; one counter per node covers all
   scopes.
 - **Scopes.** A node issues cards of three scopes:
-  - `public` (0): the card stored in the DHT and passed in PEX. It MUST NOT contain `noise3` addresses
-    or the masking keys they use, and SHOULD NOT contain `ws2` addresses (wire.md §2.1, §4.4).
+  - `public` (0): the card stored in the DHT and passed in PEX. It MAY contain `reality2-*` and `ws2`
+    addresses (wire.md §3, §4.4), and MUST NOT contain `noise3` addresses or the masking keys they use
+    (wire.md §2.1).
   - `peer` (1): sent only inside sessions (`HsResp.card`, `HsFinish.card`, `CARD_UPDATE`) to peers the
     node chooses; may contain everything. Receivers MUST NOT forward or publish it.
   - `invite` (2): delivered in an invitation link (§10.3); carries `invite_id`; never forwarded.
