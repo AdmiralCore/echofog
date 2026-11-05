@@ -46,8 +46,16 @@ func logf(format string, args ...any) {
 	fmt.Printf("%s  %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
 }
 
+// releaseRunLock is set once the run lock is taken; fatalf and the final os.Exit call it, because
+// os.Exit does not run deferred functions.
+var releaseRunLock func()
+
 func fatalf(format string, args ...any) {
 	logf("FAILED: "+format, args...)
+	if releaseRunLock != nil {
+		releaseRunLock()
+		releaseRunLock = nil
+	}
 	os.Exit(1)
 }
 
@@ -866,6 +874,7 @@ func main() {
 	if err != nil {
 		fatalf("%v", err)
 	}
+	releaseRunLock = release
 	defer release()
 	logf("run lock: %s", *runLockPath)
 	if out, err := run("docker", "info", "--format", "{{.ServerVersion}}"); err != nil {
@@ -952,6 +961,10 @@ func main() {
 		}
 		*keep = true // leave the containers for a look
 		logf("containers left running: docker compose -f %s -p %s logs <service>; stop them with: docker compose -f %s -p %s down -v", composeFile, project, composeFile, project)
+		if releaseRunLock != nil {
+			releaseRunLock()
+			releaseRunLock = nil
+		}
 		os.Exit(1)
 	}
 	logf("all checks passed")

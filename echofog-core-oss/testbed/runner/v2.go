@@ -28,10 +28,7 @@ import (
 	"github.com/echofog/echofog-core/testbed/censor"
 )
 
-const (
-	carrierPort = 4343
-	webIP       = "203.0.113.30"
-)
+const webIP = "203.0.113.30"
 
 type byteSizeFlag struct{ v int64 }
 
@@ -109,11 +106,9 @@ func v2PhaseList(scenario string) ([]string, error) {
 
 // ---------------------------------------------------------------------------- run
 
-type harnessWindow struct {
+type harnessLabel struct {
 	Suite string
 	Label censor.Label
-	Start time.Time
-	End   time.Time
 }
 
 func runV2(nodes map[string]*node, v *verdict, out string) {
@@ -130,7 +125,9 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	behaviour := map[string]any{"seed": seed, "profile": *v2Profile, "network": *v2Network}
 
 	profilePath := filepath.Join("testbed", "browserprofiles", "profiles.json")
-	db, err := browserprofiles.LoadOrCapture(context.Background(), profilePath, "lab", *v2Network)
+	// The capture is made on this machine, so it is always a lab capture; a run for another
+	// network uses the lab family and says so, instead of pretending the bytes came from there.
+	db, err := browserprofiles.LoadOrCapture(context.Background(), profilePath, "lab", "lab")
 	if err != nil {
 		v.check(false, "browser profile database: %v", err)
 		db = &browserprofiles.Database{Version: browserprofiles.DBVersion}
@@ -163,18 +160,20 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	agg := aggregateFor(labeled)
 	flows := countFlows(labeled)
 
-	// The pcap is evidence only for a red run. A green analysis deletes it, even with -pcap.
-	green := len(v.failed) == 0
 	for id, m := range metrics {
 		if m.FPR > 0.01 {
-			green = false
-			findings = append(findings, fmt.Sprintf("%s false-positive rate %.3f on the browser control (gate 0.01)", id, m.FPR))
+			line := fmt.Sprintf("%s false-positive rate %.3f on the browser control (gate 0.01)", id, m.FPR)
+			findings = append(findings, line)
+			v.check(false, "%s", line)
 		}
-		if (id == "D1" || id == "D2") && m.Positives > 0 && m.Recall < 1 {
-			green = false
-			findings = append(findings, fmt.Sprintf("%s recall %.2f on its control flows (want 1)", id, m.Recall))
+		if m.Positives > 0 && m.Recall < 1 {
+			line := fmt.Sprintf("%s recall %.2f on its control flows (want 1)", id, m.Recall)
+			findings = append(findings, line)
+			v.check(false, "%s", line)
 		}
 	}
+	// The pcap is evidence only for a red run. A green analysis deletes it, even with -pcap.
+	green := len(v.failed) == 0
 	pcap := pcapInfo{Requested: *v2Pcap, BudgetBytes: v2PcapBudget.v}
 	if capture != nil {
 		pcap = capture.finalizeInfo(*v2Pcap, green)
@@ -279,7 +278,7 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 		return nil, nil, carrierInfo{Name: "none"}
 	}
 
-	carrier, windows, err := runCarrierHarness(nodes, v, seed)
+	carrier, labels, err := runCarrierHarness(nodes, v, seed)
 	if err != nil {
 		v.check(false, "v2 carrier harness: %v", err)
 	}
@@ -304,7 +303,7 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	censor.CheckSNI(flows, hosted)
 	labeled := make([]censor.LabeledFlow, 0, len(flows))
 	for _, f := range flows {
-		labeled = append(labeled, labelFlow(f, windows))
+		labeled = append(labeled, labelFlow(f, labels))
 	}
 	if len(labeled) == 0 {
 		v.check(false, "the capture of %s has no flows", gw)
@@ -315,54 +314,64 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 
 // ---------------------------------------------------------------------------- harness
 
-func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierInfo, []harnessWindow, error) {
+func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierInfo, map[uint16]harnessLabel, error) {
 	info := carrierInfo{Name: "v2carrier (synthetic noise3 stand-in)", Synthetic: true,
 		Note: "noise3 is not merged into v2 (T2.4) and efv2 does not exist (T0.3): udp-noise has the same wire shape and the same detectors are used"}
+	labels := map[uint16]harnessLabel{}
 	bin, err := buildCarrierBinary()
 	if err != nil {
-		return info, nil, err
+		return info, labels, err
 	}
 	for _, n := range []string{"x1", "b1"} {
 		if out, err := run("docker", "cp", bin, container(n)+":/tmp/v2carrier"); err != nil {
-			return info, nil, fmt.Errorf("copy the carrier to %s: %v %s", n, err, out)
+			return info, labels, fmt.Errorf("copy the carrier to %s: %v %s", n, err, out)
 		}
 		_, _ = run("docker", "exec", container(n), "chmod", "+x", "/tmp/v2carrier")
 	}
-	_, _ = run("docker", "exec", container("x1"), "rm", "-f", "/tmp/v2carrier.ready")
-	if out, err := run("docker", "exec", "-d", container("x1"), "/tmp/v2carrier", "-mode", "serve", "-listen", fmt.Sprintf(":%d", carrierPort), "-ready", "/tmp/v2carrier.ready"); err != nil {
-		return info, nil, fmt.Errorf("start the carrier server: %v %s", err, out)
+
+	// One port per mode: a flow's label then comes from the server port, not from a wall-clock
+	// window (the capture timestamps are taken in the container, and a window would be a guess).
+	specs := []struct {
+		mode, sni, label, suite string
+		conns                   int
+		port                    uint16
+	}{
+		{"udp-noise", "cover.lab", string(censor.LabelCarrier), "udp-noise", 1, 4341},
+		{"tcp-random", "cover.lab", string(censor.LabelCarrier), "tcp-random", 6, 4342},
+		{"tls-go", "foreign.example", string(censor.LabelTool), "tls-go", 1, 4343},
+		{"tls-chrome", "cover.lab", string(censor.LabelBrowser), "utls-chrome", 1, 4344},
+		{"quic-go", "blocked.example", string(censor.LabelTool), "quic-go", 1, 4345},
+		{"quic-chrome", "cover.lab", string(censor.LabelBrowser), "quic-go-chromeparrot", 1, 4346},
+	}
+	for _, s := range specs {
+		labels[s.port] = harnessLabel{Suite: s.suite, Label: censor.Label(s.label)}
+		ready := fmt.Sprintf("/tmp/v2carrier-%d.ready", s.port)
+		_, _ = run("docker", "exec", container("x1"), "rm", "-f", ready)
+		if out, err := run("docker", "exec", "-d", container("x1"), "/tmp/v2carrier",
+			"-mode", "serve", "-listen", fmt.Sprintf(":%d", s.port), "-ready", ready); err != nil {
+			return info, labels, fmt.Errorf("start the carrier server on %d: %v %s", s.port, err, out)
+		}
 	}
 	defer func() {
 		_, _ = run("docker", "exec", container("x1"), "pkill", "-f", "/tmp/v2carrier")
 	}()
-	ready := waitFor("the carrier server to listen", 20*time.Second, func() bool {
-		_, err := run("docker", "exec", container("x1"), "sh", "-c", "test -f /tmp/v2carrier.ready")
-		return err == nil
-	})
-	if !ready {
-		return info, nil, fmt.Errorf("the carrier server did not become ready")
+	for _, s := range specs {
+		ready := fmt.Sprintf("/tmp/v2carrier-%d.ready", s.port)
+		ok := waitFor(fmt.Sprintf("the carrier server on %d", s.port), 20*time.Second, func() bool {
+			_, err := run("docker", "exec", container("x1"), "sh", "-c", "test -f "+ready)
+			return err == nil
+		})
+		if !ok {
+			return info, labels, fmt.Errorf("the carrier server on %d did not become ready", s.port)
+		}
 	}
 
-	var windows []harnessWindow
-	specs := []struct {
-		mode, sni, label, suite string
-		conns                   int
-	}{
-		{"udp-noise", "cover.lab", string(censor.LabelCarrier), "udp-noise", 1},
-		{"tcp-random", "cover.lab", string(censor.LabelCarrier), "tcp-random", 6},
-		{"tls-go", "foreign.example", string(censor.LabelTool), "tls-go", 1},
-		{"tls-chrome", "cover.lab", string(censor.LabelBrowser), "utls-chrome", 1},
-		{"quic-go", "blocked.example", string(censor.LabelTool), "quic-go", 1},
-		{"quic-chrome", "cover.lab", string(censor.LabelBrowser), "quic-go-chromeparrot", 1},
-	}
-	peer := fmt.Sprintf("203.0.113.15:%d", carrierPort) // x1
 	for _, s := range specs {
+		peer := fmt.Sprintf("203.0.113.15:%d", s.port) // x1
 		args := []string{"/tmp/v2carrier", "-mode", s.mode, "-peer", peer, "-sni", s.sni,
 			"-duration", "4s", "-conns", strconv.Itoa(s.conns), "-seed", strconv.FormatInt(seed, 10)}
-		start := time.Now().Add(-time.Second)
 		full := append([]string{"exec", container("b1")}, args...)
 		out, err := run("docker", full...)
-		end := time.Now().Add(time.Second)
 		if err != nil {
 			v.check(false, "carrier mode %s: %v %s", s.mode, err, out)
 			continue
@@ -378,9 +387,8 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 		if s.mode == "udp-noise" || s.mode == "tcp-random" {
 			logf("carrier mode %s: %d bytes in %d packets", s.mode, res.Bytes, res.Packets)
 		}
-		windows = append(windows, harnessWindow{Suite: s.suite, Label: censor.Label(s.label), Start: start, End: end})
 	}
-	return info, windows, nil
+	return info, labels, nil
 }
 
 func buildCarrierBinary() (string, error) {
@@ -426,36 +434,30 @@ func runProductTraffic(nodes map[string]*node, v *verdict) {
 
 // ---------------------------------------------------------------------------- labeling and config
 
-func labelFlow(f censor.Flow, windows []harnessWindow) censor.LabeledFlow {
+func labelFlow(f censor.Flow, labels map[uint16]harnessLabel) censor.LabeledFlow {
 	lf := censor.LabeledFlow{Flow: f, Label: censor.LabelLab}
-	switch {
-	case f.Server.Port() == carrierPort:
-		lf.Label = censor.LabelCarrier
-		lf.Suite = "carrier-unknown"
-		lf.Synthetic = true
-		for _, w := range windows {
-			if !f.Start.Before(w.Start) && !f.Start.After(w.End) {
-				lf.Label, lf.Suite = w.Label, w.Suite
-				break
-			}
+	if lab, ok := labels[f.Server.Port()]; ok {
+		lf.Label, lf.Suite = lab.Label, lab.Suite
+		if lab.Label == censor.LabelCarrier {
+			lf.Synthetic = true
 		}
+		return lf
+	}
+	switch {
 	case f.Server.Port() == 443 && f.Server.Addr().String() == webIP:
-		lf.Label, lf.Suite = censor.LabelBrowser, "curl-control"
-	case f.Server.Port() == 4242 && isLabNode(f.Server.Addr()):
+		// curl is an honest small tool, not a browser: the browser control is the uTLS Chrome mode.
+		lf.Label, lf.Suite = censor.LabelTool, "curl-control"
+	case f.Server.Port() == 4242 && isExitNode(f.Server.Addr()):
 		lf.Label, lf.Suite = censor.LabelProduct, "v1-product"
 	}
 	return lf
 }
 
-func isLabNode(a netip.Addr) bool {
+// isExitNode is x1/x2: the public exits the v1 product dials. The other lab nodes' own traffic
+// (bootstrap, relay, DHT) is not product traffic.
+func isExitNode(a netip.Addr) bool {
 	s := a.String()
-	for _, ip := range []string{"203.0.113.11", "203.0.113.12", "203.0.113.13", "203.0.113.14",
-		"203.0.113.15", "203.0.113.16", "203.0.113.17", "203.0.113.18"} {
-		if s == ip {
-			return true
-		}
-	}
-	return false
+	return s == "203.0.113.15" || s == "203.0.113.16"
 }
 
 func labHosted() map[netip.Addr][]string {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,6 +138,33 @@ func TestPruneOutKeepsSevenDays(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, names[0])); err != nil {
 		t.Errorf("fresh run was removed: %v", err)
+	}
+}
+
+func TestLabelFlowUsesTheHarnessPortNotTheClock(t *testing.T) {
+	labels := map[uint16]harnessLabel{
+		4341: {Suite: "udp-noise", Label: censor.LabelCarrier},
+		4344: {Suite: "utls-chrome", Label: censor.LabelBrowser},
+		4345: {Suite: "quic-go", Label: censor.LabelTool},
+	}
+	cases := []struct {
+		server string
+		label  censor.Label
+		suite  string
+	}{
+		{"203.0.113.15:4341", censor.LabelCarrier, "udp-noise"},
+		{"203.0.113.15:4344", censor.LabelBrowser, "utls-chrome"},
+		{"203.0.113.15:4345", censor.LabelTool, "quic-go"},
+		{"203.0.113.30:443", censor.LabelTool, "curl-control"},
+		{"203.0.113.15:4242", censor.LabelProduct, "v1-product"},
+		{"203.0.113.11:4242", censor.LabelLab, ""},
+	}
+	for _, tc := range cases {
+		f := censor.Flow{Proto: "tcp", Server: netip.MustParseAddrPort(tc.server)}
+		got := labelFlow(f, labels)
+		if got.Label != tc.label || got.Suite != tc.suite {
+			t.Errorf("%s: label=%q suite=%q, want %q/%q", tc.server, got.Label, got.Suite, tc.label, tc.suite)
+		}
 	}
 }
 

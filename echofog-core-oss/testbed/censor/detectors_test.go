@@ -84,6 +84,26 @@ func TestEvaluateDetectorsFindsControlsAndKeepsBrowserClean(t *testing.T) {
 	}
 }
 
+func TestD4PrefersJA4OverShuffledJA3(t *testing.T) {
+	// uTLS Chrome shuffles extension order, so JA3 changes while JA4 stays. A browser must not be
+	// flagged just because its JA3 differs from the one captured for the profile.
+	fl := LabeledFlow{
+		Flow:  Flow{Hello: &clientHello{Grease: true, JA4: "t13d1516h2_browser", JA3: "shuffled"}},
+		Label: LabelBrowser, Suite: "utls-chrome",
+	}
+	cfg := DetectorConfig{
+		BrowserJA4: map[string]bool{"t13d1516h2_browser": true},
+		BrowserJA3: map[string]bool{"other-order": true},
+	}
+	if (fingerprintDetector{}).Flag(fl, cfg) {
+		t.Error("D4 flagged a browser whose JA4 matches")
+	}
+	fl.Hello.JA4 = "t13d1516h2_unknown"
+	if !(fingerprintDetector{}).Flag(fl, cfg) {
+		t.Error("D4 did not flag an unknown JA4")
+	}
+}
+
 func TestD10DoesNotFlagRealQUIC(t *testing.T) {
 	real := Flow{Proto: "udp", Looks: "QUIC", QUICDecrypted: true, UDPFirst: 1250, UDPPackets: 40, UDPEntropy: 7.9}
 	noise := Flow{Proto: "udp", Looks: "QUIC-shaped noise", UDPFirst: 1200, UDPPackets: 40, UDPEntropy: 7.9}

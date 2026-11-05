@@ -282,12 +282,17 @@ func encryptedPayload(n int, rng *mrand.Rand) []byte {
 	out := make([]byte, n)
 	for i := range out {
 		var b byte
-		for k := 0; k < 4; k++ {
-			b |= 1 << rng.Intn(8)
-		}
-		// keep it non-printable: the FET rule would otherwise exempt a run of text
-		if b >= 0x20 && b <= 0x7e {
-			b &^= 0x01
+		for {
+			b = 0
+			// four *distinct* bits: OR-ing four random positions averages 3.31 set bits,
+			// which the FET rule exempts as "not near half ones per byte"
+			for _, k := range rng.Perm(8)[:4] {
+				b |= 1 << k
+			}
+			// keep it non-printable: the FET rule exempts text
+			if b < 0x20 || b > 0x7e {
+				break
+			}
 		}
 		out[i] = b
 	}

@@ -219,9 +219,13 @@ func (fingerprintDetector) Flag(f LabeledFlow, cfg DetectorConfig) bool {
 	if !h.Grease {
 		return true
 	}
-	if (len(cfg.BrowserJA4) > 0 && h.JA4 != "" && !cfg.BrowserJA4[h.JA4]) ||
-		(len(cfg.BrowserJA3) > 0 && h.JA3 != "" && !cfg.BrowserJA3[h.JA3]) {
-		return true
+	// JA4 is order-independent (uTLS Chrome shuffles extensions), so it is the primary label;
+	// JA3 is the fallback only when no JA4 could be computed.
+	if len(cfg.BrowserJA4) > 0 && h.JA4 != "" {
+		return !cfg.BrowserJA4[h.JA4]
+	}
+	if len(cfg.BrowserJA3) > 0 && h.JA3 != "" {
+		return !cfg.BrowserJA3[h.JA3]
 	}
 	return false
 }
