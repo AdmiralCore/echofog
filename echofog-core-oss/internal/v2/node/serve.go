@@ -1,7 +1,10 @@
 package node
 
 import (
+	"context"
 	"errors"
+	"net/netip"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -86,11 +89,40 @@ func (r *Runtime) ensureServing(est *session.Established) {
 		defer r.serving.Delete(est.Session)
 		peer := r.peerOf(est)
 		r.noteSession(peer.Card)
+		r.notePeerSession(peer, est.Remote)
 		r.wg.Add(1)
 		go r.greaseLoop(est.Session)
 		go r.datagramPump(est, peer)
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.pex.Run(r.ctx, est.Session, r.cfg.Profile.LowPower)
+		}()
 		r.serveSession(est, peer)
 	}()
+}
+
+// notePeerSession records a working session in the pex candidate table: the device becomes tried,
+// and the 24-hour PEX confirmation is refreshed when the session used an address of its card.
+func (r *Runtime) notePeerSession(p Peer, remote netip.AddrPort) {
+	if r.peers == nil || p.Card == nil {
+		return
+	}
+	r.peers.NoteSession(p.Card, remote, r.clock.Now())
+}
+
+// ownPublicCard returns the node's current public card, verified against the corrected clock, or
+// nil when the node has no public card (D37).
+func (r *Runtime) ownPublicCard(now time.Time) *objects.Card {
+	ic, err := r.cfg.Cards.Current(context.Background(), objects.ScopePublic)
+	if err != nil {
+		return nil
+	}
+	c, err := objects.VerifyCard(ic.Envelope, now)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // serveSession dispatches incoming service streams of one session to the modules.
