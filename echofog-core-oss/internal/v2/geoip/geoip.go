@@ -21,14 +21,15 @@ var (
 	dbErr  error
 )
 
-// CountryOf reports the ISO 3166-1 alpha-2 country of a public IPv4 or IPv6 address. It returns
-// false for private, reserved and unknown addresses; callers treat that as a border
+// CountryOf reports the country of a public IPv4 or IPv6 address as an ISO 3166-1 alpha-2 code,
+// except that XK (Kosovo) is a DB-IP pseudocode and not part of ISO 3166-1 (see doc.go). It
+// returns false for private, reserved and unknown addresses; callers treat that as a border
 // (wire.md §1 point 3).
 func CountryOf(a netip.Addr) (string, bool) {
 	if !a.IsValid() {
 		return "", false
 	}
-	a = a.Unmap()
+	a = a.WithZone("").Unmap()
 	if isReserved(a) {
 		return "", false
 	}
@@ -72,6 +73,7 @@ var reservedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("3fff::/20"),      // documentation (RFC 9637)
 	netip.MustParsePrefix("5f00::/16"),      // segment routing SIDs
 	netip.MustParsePrefix("fc00::/7"),       // unique local (private)
+	netip.MustParsePrefix("fe00::/9"),       // reserved (RFC 4291 §2.7; DB-IP maps it to CH)
 	netip.MustParsePrefix("fe80::/10"),      // link-local
 	netip.MustParsePrefix("fec0::/10"),      // site-local (deprecated)
 	netip.MustParsePrefix("ff00::/8"),       // multicast

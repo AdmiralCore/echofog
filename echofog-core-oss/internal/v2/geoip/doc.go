@@ -25,11 +25,14 @@
 //
 // # Semantics
 //
-// CountryOf returns the ISO 3166-1 alpha-2 code for a public IPv4 or IPv6 address. Private,
-// loopback, link-local, multicast and other reserved or special-purpose addresses return
-// unknown, even if the upstream file maps them somewhere. Unknown is also returned for addresses
-// the database does not cover and for an invalid netip.Addr. An IPv4-mapped IPv6 address is
-// resolved as its IPv4 address.
+// CountryOf returns the ISO 3166-1 alpha-2 code for a public IPv4 or IPv6 address. One exception
+// comes from the source: XK (Kosovo) is a user-assigned DB-IP pseudocode, not part of ISO 3166-1.
+// It is kept as in the source, and callers must not treat it as an error. Private, loopback,
+// link-local, multicast, the RFC 4291 reserved block fe00::/9 and other reserved or
+// special-purpose addresses return unknown, even if the upstream file maps them somewhere.
+// Unknown is also returned for addresses the database does not cover and for an invalid
+// netip.Addr. An IPv4-mapped IPv6 address is resolved as its IPv4 address, and an IPv6 zone
+// (for example fe80::1%eth0) is ignored before the reserved check and the lookup.
 //
 // "Unknown counts as a border" (wire.md §1 point 3), so callers must treat false as "not known to
 // be in the same country" and never as "same country".
