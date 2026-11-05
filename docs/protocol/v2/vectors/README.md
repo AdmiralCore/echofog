@@ -29,7 +29,7 @@ encapsulation, and signature verification and canonical field order of every sig
 | File | Contents | Spec |
 |---|---|---|
 | `varint.json` | QUIC varints, valid and non-minimal (to be rejected) | wire.md §6 |
-| `frames.json` | every session-level frame type, mux frames, a service frame, datagrams | wire.md §5–§6 |
+| `frames.json` | every session-level frame type, mux frames, a service frame, datagrams, two whole-connection byte-stream mux sequences (several streams, PADDING, window, FIN, reset) | wire.md §5–§6 |
 | `elligator2.json` | dirty ephemeral keys, representatives, forward map, a key without a representative, RFC 9380 cross-check, ECDH check | wire.md §2.2 |
 | `noise3.json` | masking key, ephemeral, ECDH-keyed selector, key schedule, a 1300-byte Init datagram, data packets with packet-number protection (including recovery after 4998 lost packets) | wire.md §2.3–§2.6 |
 | `reality2.json` | REALITY v2 token for a synthetic ClientHello, bound to the dialed address; C from a hybrid share | wire.md §3.2 |

@@ -664,11 +664,52 @@ func genFrames() any {
 	adddg("PADDING", 0x01, make([]byte, 8))
 	adddg("RELAY_DGRAM", 0x30, cat(qv(77), []byte("sealed…")))
 	adddg("EXIT_UDP fragment 0", 0x20, cat(qv(5), u16(1), []byte{0, 1}, []byte{14}, []byte("192.0.2.53:53"), []byte{0xab, 0xcd}))
+
+	// Byte-stream mux (wire.md §5.2): the connection-level byte sequence one side sends, with
+	// several interleaved streams, an empty announcing frame, PADDING, window updates and FIN.
+	// A receiver that reads it from the start must end with the listed streams and bytes.
+	ms := func(id uint64, flags byte, data string) []byte {
+		return frame(0x18, 0, cat(qv(id), []byte{flags}, []byte(data)))
+	}
+	type muxStep struct {
+		note string
+		b    []byte
+	}
+	mkSeq := func(name, from string, steps []muxStep, streams []any) O {
+		var all []byte
+		var evs []any
+		for _, s := range steps {
+			all = append(all, s.b...)
+			evs = append(evs, O{{"frame", hx(s.b)}, {"note", s.note}})
+		}
+		return O{{"name", name}, {"sender", from}, {"frames", evs}, {"bytes", hx(all)}, {"streams", streams}}
+	}
+	stream := func(id uint64, data string, fin bool) O {
+		return O{{"id", id}, {"data", data}, {"data_hex", hx([]byte(data))}, {"fin", fin}}
+	}
+	clientSeq := mkSeq("client to server, three streams", "client", []muxStep{
+		{"stream 0 (control) opens with data", ms(0, 0, "hello")},
+		{"stream 2 announced by an empty MUX_STREAM", ms(2, 0, "")},
+		{"PADDING of 8 zero bytes between frames", frame(0x01, 0, make([]byte, 8))},
+		{"stream 4 opens with data; stream 2 is still open", ms(4, 0, "four")},
+		{"stream 2 data and FIN, interleaved after stream 4", ms(2, 1, "two")},
+		{"MUX_WINDOW on stream 0, increment 65536", frame(0x1a, 0, cat(qv(0), qv(65536)))},
+		{"MUX_MAX_DATA, increment 1048576", frame(0x1b, 0, qv(1048576))},
+		{"stream 4 FIN with no data", ms(4, 1, "")},
+		{"stream 0 more data and FIN", ms(0, 1, " world")},
+	}, []any{stream(0, "hello world", true), stream(2, "two", true), stream(4, "four", true)})
+	serverSeq := mkSeq("server to client, own streams and a reset", "server", []muxStep{
+		{"stream 1 (the server's first) opens with data", ms(1, 0, "srv")},
+		{"stream 3 announced", ms(3, 0, "")},
+		{"stream 1 data, FIN", ms(1, 1, "-one")},
+		{"MUX_RESET stream 3, code 5 refused", frame(0x19, 0, cat(qv(3), qv(5)))},
+	}, []any{stream(1, "srv-one", true), O{{"id", 3}, {"reset", 5}}})
 	return O{
-		{"description", "frame v2: type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload; datagrams: type(varint) ‖ payload"},
-		{"spec", "wire.md §6, registries.md §1–§2"},
+		{"description", "frame v2: type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload; datagrams: type(varint) ‖ payload; mux_sequences: whole connection-level byte sequences of the byte-stream mux"},
+		{"spec", "wire.md §5.2, §6, registries.md §1–§2"},
 		{"frames", fr},
 		{"datagrams", dg},
+		{"mux_sequences", []any{clientSeq, serverSeq}},
 	}
 }
 
