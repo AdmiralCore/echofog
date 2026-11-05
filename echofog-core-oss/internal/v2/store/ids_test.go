@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -148,6 +149,28 @@ func TestIDsDoNotLeakIntoErrors(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), string(raw)) {
 		t.Fatalf("the closed error repeats the raw id: %v", err)
+	}
+}
+
+// TestBlindingDoesNotLog pins that neither the raw id nor its blinded form reaches the default
+// logger: a stable pseudonym in a log file would re-link records across restarts.
+func TestBlindingDoesNotLog(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+
+	ids, err := NewIDs(testKey(t, 27))
+	if err != nil {
+		t.Fatalf("NewIDs: %v", err)
+	}
+	if _, err := ids.Blind(DomainPeer, []byte("private peer identifier")); err != nil {
+		t.Fatalf("Blind: %v", err)
+	}
+	ids.Close()
+
+	if logged.Len() != 0 {
+		t.Fatalf("blinding wrote to the log: %s", logged.String())
 	}
 }
 
