@@ -271,7 +271,7 @@ func (w *world) join(n *tnode, ip string, listed bool) *side {
 				return
 			}
 			if d.Type == frame.DgramRelay {
-				s.hub.HandleDatagram(d.Payload)
+				s.hub.HandleDatagram(w.rNode, d.Payload)
 			}
 		}
 	}()

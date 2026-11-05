@@ -44,7 +44,8 @@ type DatagramCircuit struct {
 	once   sync.Once
 }
 
-func (h *Hub) newCircuit(cid uint64, send func(uint64, []byte) error, anchor *mux.Stream) *DatagramCircuit {
+func (h *Hub) newCircuit(relay [32]byte, cid uint64, send func(uint64, []byte) error, anchor *mux.Stream) (*DatagramCircuit, error) {
+	_ = relay
 	d := &DatagramCircuit{cid: cid, hub: h, send: send, anchor: anchor,
 		in: make(chan []byte, dgramQueue), done: make(chan struct{})}
 	h.mu.Lock()
@@ -57,7 +58,7 @@ func (h *Hub) newCircuit(cid uint64, send func(uint64, []byte) error, anchor *mu
 			d.Close()
 		}()
 	}
-	return d
+	return d, nil
 }
 
 // CID is the circuit ID.
@@ -105,7 +106,8 @@ func (d *DatagramCircuit) Close() {
 
 // HandleDatagram delivers a RELAY_DGRAM payload (`varint cid ‖ datagram`) received from a relay.
 // Unknown circuits and full queues drop (a datagram is never answered, wire.md §6.5).
-func (h *Hub) HandleDatagram(payload []byte) {
+func (h *Hub) HandleDatagram(from [32]byte, payload []byte) {
+	_ = from
 	cid, n, err := frame.ParseVarint(payload)
 	h.mu.Lock()
 	defer h.mu.Unlock()

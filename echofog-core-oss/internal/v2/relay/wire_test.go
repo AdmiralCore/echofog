@@ -75,7 +75,8 @@ func TestRelayDgramVector(t *testing.T) {
 	}
 	h := NewHub()
 	var sent []byte
-	d := h.newCircuit(77, func(typ uint64, p []byte) error {
+	relay := [32]byte{1}
+	d, _ := h.newCircuit(relay, 77, func(typ uint64, p []byte) error {
 		if typ != frame.DgramRelay {
 			t.Fatalf("type %#x", typ)
 		}
@@ -85,8 +86,8 @@ func TestRelayDgramVector(t *testing.T) {
 	if err := d.Send([]byte("sealed…")); err != nil || !bytes.Equal(sent, payload) {
 		t.Fatalf("sent %x err %v", sent, err)
 	}
-	h.HandleDatagram(payload)
-	h.HandleDatagram(append(frame.AppendVarint(nil, 78), 1)) // unknown circuit
+	h.HandleDatagram(relay, payload)
+	h.HandleDatagram(relay, append(frame.AppendVarint(nil, 78), 1)) // unknown circuit
 	if h.Dropped() != 1 {
 		t.Fatalf("dropped %d, want 1", h.Dropped())
 	}

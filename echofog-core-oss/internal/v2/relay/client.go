@@ -125,7 +125,7 @@ func DialDatagram(ctx context.Context, open Opener, hub *Hub, send func(typ uint
 	if err != nil {
 		return nil, err
 	}
-	return hub.newCircuit(cid, send, st), nil
+	return hub.newCircuit(relayNode, cid, send, st)
 }
 
 // Inbound is what a node that received INCOMING holds: exactly one of Stream and Datagram is set
@@ -167,7 +167,11 @@ func Answer(st *mux.Stream, relayNode [32]byte, hub *Hub, send func(typ uint64, 
 		return res, err
 	}
 	if in.Mode == ModeDatagram {
-		res.Datagram = hub.newCircuit(in.CID, send, st)
+		d, err := hub.newCircuit(relayNode, in.CID, send, st)
+		if err != nil {
+			return res, err
+		}
+		res.Datagram = d
 		return res, nil
 	}
 	cb := [32]byte(handshake.CircuitBinding(relayNode[:], in.CID))
