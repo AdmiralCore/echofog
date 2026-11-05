@@ -361,6 +361,18 @@ func TestUnderLoad(t *testing.T) {
 	}
 }
 
+func TestListenerKeyLimit(t *testing.T) {
+	keys := make([]MaskKey, MaxMaskKeys+1)
+	for i := range keys {
+		if _, err := rand.Read(keys[i].Private[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Listen("127.0.0.1:0", ListenerConfig{Keys: keys, Profile: mustProfile(t)}); !errors.Is(err, ErrBadConfig) {
+		t.Fatalf("Listen with %d keys = %v, want ErrBadConfig", len(keys), err)
+	}
+}
+
 func TestSweepRemovesIdleFlows(t *testing.T) {
 	clock := &fakeClock{t: time.Unix(6000, 0)}
 	mk, _ := newMaskKey(t, time.Now())

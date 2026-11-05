@@ -295,12 +295,9 @@ func TestLoopback1GiB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ss, err := server.AcceptStream(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	const total = int64(1 << 30)
 	const chunk = 64 << 10
+	werr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, chunk)
 		for sent := int64(0); sent < total; {
@@ -309,15 +306,26 @@ func TestLoopback1GiB(t *testing.T) {
 				n = total - sent
 			}
 			if _, err := cs.Write(buf[:n]); err != nil {
+				werr <- err
 				return
 			}
 			sent += n
 		}
 		_ = cs.CloseWrite()
+		werr <- nil
 	}()
+	ss, err := server.AcceptStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	n, err := io.CopyN(io.Discard, ss, total)
 	if err != nil {
-		t.Fatalf("read after %d bytes: %v", n, err)
+		select {
+		case e := <-werr:
+			t.Fatalf("read after %d bytes: %v (writer: %v)", n, err, e)
+		default:
+			t.Fatalf("read after %d bytes: %v", n, err)
+		}
 	}
 	if n != total {
 		t.Fatalf("read %d bytes, want %d", n, total)
