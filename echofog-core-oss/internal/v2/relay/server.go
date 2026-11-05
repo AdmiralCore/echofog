@@ -318,25 +318,33 @@ func (s *Server) resolve(a Peer, c Connect) (Target, bool) {
 	return nil, false
 }
 
-// reserve counts the circuit against the sessions and the source IP. A slot at the requester's
-// side is a limit the requester can see ("limit"); a full target or relay is not distinguishable
-// from an absent target (the caller answers "unavailable").
-func (s *Server) reserve(a, b Peer) (limit bool, ok bool) {
+// reserveRequester counts a circuit against the requester's session, source IP and the relay's
+// total, before the target is looked up and whatever the target is. The limit is therefore
+// answered the same way for present and absent targets (§6.3: a prober learns nothing).
+func (s *Server) reserveRequester(a Peer) bool {
 	ip := a.Remote.Addr().Unmap()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	lim := s.cfg.Limits
 	if s.perSess[a.SID] >= lim.PerSession || s.perIP[ip] >= lim.PerIP || s.active >= lim.Total {
-		return true, false
-	}
-	if s.perSess[b.SID] >= lim.PerSession {
-		return false, false
+		return false
 	}
 	s.perSess[a.SID]++
-	s.perSess[b.SID]++
 	s.perIP[ip]++
 	s.active++
-	return false, true
+	return true
+}
+
+// reserveTarget counts the circuit against the target's session. A full target is not
+// distinguishable from an absent one (the caller answers "unavailable").
+func (s *Server) reserveTarget(b Peer) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.perSess[b.SID] >= s.cfg.Limits.PerSession {
+		return false
+	}
+	s.perSess[b.SID]++
+	return true
 }
 
 func (s *Server) release(c *circuit) {
@@ -389,19 +397,20 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 		s.violation(st, "connect mode")
 		return
 	}
+	if !s.reserveRequester(a) {
+		s.refuseLimit(st, c)
+		return
+	}
 	t, ok := s.resolve(a, c)
 	if !ok {
+		s.unreserveRequester(a)
 		s.refuseAt(ctx, st, c, start, delay)
 		return
 	}
 	bp := t.Peer()
-	limit, ok := s.reserve(a, bp)
-	if !ok {
-		if limit {
-			s.refuseLimit(st, c)
-		} else {
-			s.refuseAt(ctx, st, c, start, delay)
-		}
+	if !s.reserveTarget(bp) {
+		s.unreserveRequester(a)
+		s.refuseAt(ctx, st, c, start, delay)
 		return
 	}
 	cid, err := s.newCID()
@@ -438,6 +447,20 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 
 func (s *Server) unreserve(a, b Peer) {
 	s.release(&circuit{a: end{peer: a}, b: end{peer: b}})
+}
+
+// unreserveRequester returns the slot taken by reserveRequester when no circuit follows.
+func (s *Server) unreserveRequester(a Peer) {
+	ip := a.Remote.Addr().Unmap()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active--
+	if s.perSess[a.SID]--; s.perSess[a.SID] <= 0 {
+		delete(s.perSess, a.SID)
+	}
+	if s.perIP[ip]--; s.perIP[ip] <= 0 {
+		delete(s.perIP, ip)
+	}
 }
 
 // invite opens the stream to B, sends INCOMING and waits for ACCEPT. INCOMING.source is the
