@@ -1,5 +1,5 @@
 // Command efv2 is the laboratory CLI of EchoFog v2: it creates a profile, runs a node, prints
-// its card, dials a card, echoes a stream and datagrams and shows the node status.
+// its card and links, dials a card, echoes a stream and datagrams and shows the node status.
 package main
 
 import (
@@ -32,6 +32,8 @@ func run(args []string) error {
 		return cmdRun(args[1:])
 	case "card":
 		return cmdCard(args[1:])
+	case "link":
+		return cmdLink(args[1:])
 	case "dial":
 		return cmdDial(args[1:])
 	case "echo":
@@ -78,6 +80,9 @@ usage:
   efv2 init   --data DIR --profile server|desktop|android
   efv2 run    --data DIR [--listen noise3=HOST:PORT[,reality2-quic=HOST:PORT --cover HOST:PORT]]
   efv2 card   --data DIR [--scope public|peer] [--listen ...]
+  efv2 link   --data DIR [--join-host HOST]
+  efv2 link open <link>
+  efv2 link join --data DIR <link>
   efv2 dial   --data DIR <card.json>
   efv2 echo   --data DIR <device-id> [--card card.json] [--bytes N] [--datagrams N]
   efv2 status --data DIR
