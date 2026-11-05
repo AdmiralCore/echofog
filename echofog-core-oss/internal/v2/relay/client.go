@@ -125,7 +125,14 @@ func DialDatagram(ctx context.Context, open Opener, hub *Hub, send func(typ uint
 	if err != nil {
 		return nil, err
 	}
-	return hub.newCircuit(relayNode, cid, send, st)
+	d, err := hub.newCircuit(relayNode, cid, send, st)
+	if err != nil {
+		// R offered an ID this node already holds for it: the new circuit is closed, the old one
+		// keeps its route.
+		st.Reset(frame.CodeProtocolViolation)
+		return nil, err
+	}
+	return d, nil
 }
 
 // Inbound is what a node that received INCOMING holds: exactly one of Stream and Datagram is set
@@ -163,15 +170,25 @@ func Answer(st *mux.Stream, relayNode [32]byte, hub *Hub, send func(typ uint64, 
 		_ = st.Close()
 		return res, &RefusedError{Reason: ReasonUnavailable}
 	}
-	if err := st.WriteFrame(TypeAccept, 0, Accept{CID: in.CID}.Append(nil)); err != nil {
-		return res, err
-	}
+	var dg *DatagramCircuit
 	if in.Mode == ModeDatagram {
-		d, err := hub.newCircuit(relayNode, in.CID, send, st)
-		if err != nil {
+		// Register before ACCEPT: an ID that is already in use at this node for R is refused,
+		// not silently taking over the route of the circuit that holds it.
+		var err error
+		if dg, err = hub.newCircuit(relayNode, in.CID, send, st); err != nil {
+			_ = st.WriteFrame(TypeRefuse, 0, Refuse{CID: in.CID}.Append(nil))
+			_ = st.Close()
 			return res, err
 		}
-		res.Datagram = d
+	}
+	if err := st.WriteFrame(TypeAccept, 0, Accept{CID: in.CID}.Append(nil)); err != nil {
+		if dg != nil {
+			dg.Close()
+		}
+		return res, err
+	}
+	if dg != nil {
+		res.Datagram = dg
 		return res, nil
 	}
 	cb := [32]byte(handshake.CircuitBinding(relayNode[:], in.CID))
