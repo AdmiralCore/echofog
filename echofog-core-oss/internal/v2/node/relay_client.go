@@ -2,13 +2,16 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
 	"net/netip"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -364,4 +367,85 @@ func (r *Runtime) estOf(sess *mux.Session) *session.Established {
 		}
 	}
 	return nil
+}
+
+// registerPoll is how often a hidden or unlisted node checks that its relays hold its rendezvous IDs
+// (jittered ±20 %, AD13). A relay that restarted, a new contact and the change of day are all caught
+// within one poll.
+const (
+	registerPoll  = 30 * time.Second
+	registerRetry = 3 * time.Second // while a relay does not hold the IDs yet, or none is connected
+)
+
+// registerLoop keeps a hidden or unlisted node registered, under rendezvous IDs only, at every relay
+// it holds a session with (services.md §6.3). The node never sends its node ID to a relay.
+func (c *relayClient) registerLoop(ctx context.Context) {
+	r := c.r
+	done := map[*mux.Session]string{} // session → fingerprint of what its relay holds
+	for ctx.Err() == nil {
+		poll := registerPoll
+		if !c.registerOnce(ctx, done) {
+			poll = registerRetry
+		}
+		d := poll - poll/5 + time.Duration(mrand.Int64N(int64(poll)*2/5+1))
+		ch := make(chan struct{})
+		t := r.carrierClock.AfterFunc(d, func() { close(ch) })
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-ch:
+		}
+	}
+}
+
+// registerOnce registers the current IDs at every relay that does not hold them yet.
+func (c *relayClient) registerOnce(ctx context.Context, done map[*mux.Session]string) (all bool) {
+	r := c.r
+	list, err := r.accessMgr.List(ctx)
+	if err != nil {
+		return false
+	}
+	var secrets [][]byte
+	for _, in := range list {
+		if in.Kind == access.Personal && in.State == access.Active && len(in.Secret) > 0 {
+			secrets = append(secrets, in.Secret)
+		}
+	}
+	set := punch.IDs(secrets, r.clock.Now(), relay.MaxRegisterIDs)
+	h := sha256.New()
+	for _, id := range append(append([][32]byte(nil), set.Today...), set.Tomorrow...) {
+		h.Write(id[:])
+	}
+	print := fmt.Sprintf("%d/%x", set.Day, h.Sum(nil))
+	live := map[*mux.Session]bool{}
+	all = true
+	seen := 0
+	for _, est := range r.table.Sessions() {
+		if est == nil || est.Peer == nil || est.Session == nil || est.Role != session.RoleInitiator ||
+			est.Peer.Flags&objects.FlagRelay == 0 || !liveSession(est) {
+			continue
+		}
+		live[est.Session] = true
+		seen++
+		if len(set.Today) == 0 || done[est.Session] == print {
+			continue
+		}
+		open := hopOf(est).Open
+		rctx, cancel := context.WithTimeout(ctx, 2*relay.RegisterTimeout)
+		_, err1 := relay.RegisterIDs(rctx, open, set.Today, set.Day)
+		_, err2 := relay.RegisterIDs(rctx, open, set.Tomorrow, set.Day+1)
+		cancel()
+		if err1 == nil && err2 == nil {
+			done[est.Session] = print
+		} else {
+			all = false
+		}
+	}
+	for s := range done {
+		if !live[s] {
+			delete(done, s)
+		}
+	}
+	return all && seen > 0
 }

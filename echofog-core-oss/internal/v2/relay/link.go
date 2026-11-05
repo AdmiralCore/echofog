@@ -199,6 +199,16 @@ func (s *Standby) step(ctx context.Context) {
 		}
 	}
 	need := s.Want - len(s.paths)
+	// N4: never ask the session for more paths than it may hold. A low_power session holds only its
+	// first path and trims every bound one at once; reading that as a dead relay would rebind it
+	// every Poll. Otherwise one active path and two standby paths (mux default).
+	limit := 3
+	if s.Est.Session.LowPower() {
+		limit = 1
+	}
+	if room := limit - len(ids); need > room {
+		need = room
+	}
 	exclude := map[[32]byte]struct{}{}
 	for _, n := range s.paths {
 		exclude[n] = struct{}{}

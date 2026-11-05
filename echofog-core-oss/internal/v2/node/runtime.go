@@ -314,6 +314,12 @@ func New(cfg Config) (*Runtime, error) {
 		OnChange: r.publicAddrChanged,
 	})
 	r.relayc = newRelayClient(r)
+	if !relaysForOthers(cfg.Profile) {
+		// N6: a card must not announce a relay that would answer UNSUPPORTED.
+		if err := cfg.Cards.ClearFlags(objects.FlagRelay); err != nil {
+			return nil, fmt.Errorf("node: card relay flag: %w", err)
+		}
+	}
 	r.control = session.NewControl(session.ControlConfig{
 		Cards:      r.cardBook,
 		Abuse:      r.abuse,
@@ -498,6 +504,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 	for _, l := range listeners {
 		r.wg.Add(1)
 		go r.acceptLoop(runCtx, l)
+	}
+
+	if r.vis != cards.Visible && r.accessMgr != nil {
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.relayc.registerLoop(runCtx)
+		}()
 	}
 
 	r.mu.Lock()

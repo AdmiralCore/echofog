@@ -10,6 +10,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -273,8 +274,14 @@ func TestHiddenNodeReachedThroughRendezvous(t *testing.T) {
 	waitFor(t, 10*time.Second, "peer card", func() bool { peerCard = client.rt.Cards().Peer(server.id.DeviceID); return peerCard != nil })
 	_ = sess1.Close()
 
-	// Both connect out to R; the hidden node registers by itself.
-	for _, n := range []*testNode{server, client} {
+	// The contact returns on another device (the table keeps the first session draining); both connect
+	// out to R and the hidden node registers by itself.
+	contact := newTestNodeWith(t, cards.Visible, true, nil, nil, func(c *node.Config) {
+		c.Features = []uint32{uint32(frame.FeatureCardPush)}
+	})
+	registerFakeModule(t, contact.rt, mod)
+	contact.start(t)
+	for _, n := range []*testNode{server, contact} {
 		pair := memcarrier.NewQUIC()
 		rq.push(pair.Server)
 		if _, _, err := n.rt.Session(ctx, r.id.DeviceID, node.DialOpt{Card: r.peerCard(t), Carrier: pair.Client}); err != nil {
@@ -285,10 +292,13 @@ func TestHiddenNodeReachedThroughRendezvous(t *testing.T) {
 
 	var p node.Peer
 	var st *mux.Stream
-	waitUntil(t, 15*time.Second, "rendezvous session through R", func() bool {
+	waitUntil(t, 25*time.Second, "rendezvous session through R", func() bool {
 		var err error
-		p, st, err = client.rt.Open(ctx, server.id.DeviceID, service.Chat, node.DialOpt{
+		p, st, err = contact.rt.Open(ctx, server.id.DeviceID, service.Chat, node.DialOpt{
 			Card: peerCard, AccessSecret: personal.Secret, ViaRelay: true})
+		if err != nil {
+			t.Logf("open: %v", err)
+		}
 		return err == nil
 	})
 	if p.Path != mux.PathRelay {
@@ -297,7 +307,7 @@ func TestHiddenNodeReachedThroughRendezvous(t *testing.T) {
 	_ = st.Close()
 	select {
 	case got := <-mod.got:
-		if got.Device != client.id.DeviceID {
+		if got.Device != contact.id.DeviceID {
 			t.Fatalf("hidden node sees %x", got.Device)
 		}
 	case <-time.After(5 * time.Second):
