@@ -49,6 +49,8 @@ type nodeFile struct {
 	Profile string   `json:"profile"`
 	Listen  []string `json:"listen,omitempty"`
 	Cover   string   `json:"cover,omitempty"`
+	// Bootstrap is the path of the bootstrap list (T5.5).
+	Bootstrap string `json:"bootstrap,omitempty"`
 }
 
 func identityPath(dataDir string) string { return filepath.Join(dataDir, identityFileName) }

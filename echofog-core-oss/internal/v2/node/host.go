@@ -70,6 +70,9 @@ type DialOpt struct {
 	AccessSecret []byte
 	// ExpectedDeviceID sets the rid binding of an XX handshake without a card.
 	ExpectedDeviceID *DeviceID
+	// CarrierCard is a shell card that carries only the masking key of a bootstrap list entry. It
+	// is set by DialBootstrap; the handshake then runs XX because it gets no card (T5.5).
+	CarrierCard *objects.Card
 	// PathKind is the kind of the carrier created by this call: direct (default) or relay
 	// (wire.md §8). Relay suites are T6.1; tests and relay circuits pass PathRelay here.
 	PathKind mux.PathKind

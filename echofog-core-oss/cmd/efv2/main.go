@@ -78,7 +78,7 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `efv2 — EchoFog v2 laboratory CLI
 usage:
   efv2 init   --data DIR --profile server|desktop|android
-  efv2 run    --data DIR [--listen noise3=HOST:PORT[,reality2-quic=HOST:PORT --cover HOST:PORT]]
+  efv2 run    --data DIR [--listen noise3=HOST:PORT[,reality2-quic=HOST:PORT --cover HOST:PORT]] [--bootstrap LIST]
   efv2 card   --data DIR [--scope public|peer] [--listen ...]
   efv2 link   --data DIR [--join-host HOST]
   efv2 link open <link>
