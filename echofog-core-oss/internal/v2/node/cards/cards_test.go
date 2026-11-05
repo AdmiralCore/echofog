@@ -107,6 +107,15 @@ func TestHiddenAndAnonymousCards(t *testing.T) {
 			if c.Body.GetFlags()&objects.FlagUnlisted == 0 {
 				t.Fatalf("hidden peer card is not unlisted")
 			}
+			foundNoise := false
+			for _, a := range c.Body.GetAddrs() {
+				if a.GetSuite() == objects.SuiteNoise3 {
+					foundNoise = true
+				}
+			}
+			if !foundNoise {
+				t.Fatalf("hidden peer card lost its noise3 address")
+			}
 			own, err := b.OwnCards(context.Background())
 			if err != nil {
 				t.Fatalf("OwnCards: %v", err)
@@ -405,6 +414,73 @@ func TestShopAndReleaseValidation(t *testing.T) {
 	}
 }
 
+func TestListenerLimits(t *testing.T) {
+	m := newMaterial(t)
+	mask := newMask(t)
+	cases := []struct {
+		name      string
+		listeners func() []Listener
+	}{
+		{"no masking key", func() []Listener {
+			return []Listener{{Suite: objects.SuiteReality2QUIC, Host: "203.0.113.1", Port: 443}}
+		}},
+		{"ws2 without url", func() []Listener {
+			return []Listener{{Suite: objects.SuiteWS2, Mask: mask}}
+		}},
+		{"too many listeners", func() []Listener {
+			out := make([]Listener, 17)
+			for i := range out {
+				out[i] = Listener{Suite: objects.SuiteReality2QUIC, Host: "203.0.113.1", Port: 443, Mask: mask}
+			}
+			return out
+		}},
+		{"too many masking keys", func() []Listener {
+			out := make([]Listener, 9)
+			for i := range out {
+				out[i] = Listener{Suite: objects.SuiteReality2QUIC, Host: "203.0.113.1", Port: 443, Mask: newMask(t)}
+			}
+			return out
+		}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseConfig(t, m, newMapKV(), newFakeClock())
+			cfg.Listeners = tc.listeners()
+			if _, err := New(cfg); err == nil {
+				t.Fatalf("New accepted invalid listeners")
+			}
+		})
+	}
+}
+
+func TestUpdateKeepsThePreviousConfigOnError(t *testing.T) {
+	m := newMaterial(t)
+	clk := newFakeClock()
+	cfg := baseConfig(t, m, newMapKV(), clk)
+	b, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := b.Current(ctx, objects.ScopePeer); err != nil {
+		t.Fatalf("Current: %v", err)
+	}
+	bad := cfg
+	bad.Shop = []string{"http://example.com"}
+	if err := b.Update(bad); err == nil {
+		t.Fatalf("Update accepted an invalid configuration")
+	}
+	cur, err := b.Current(ctx, objects.ScopePeer)
+	if err != nil {
+		t.Fatalf("Current after failed Update: %v", err)
+	}
+	c := verifyBytes(t, cur.Envelope, clk.Now())
+	if c.Body.GetRelease() != cfg.Release {
+		t.Fatalf("failed Update changed the material")
+	}
+}
+
 func TestExitOfferSetsTheFlag(t *testing.T) {
 	m := newMaterial(t)
 	clk := newFakeClock()
@@ -467,6 +543,14 @@ func TestRestartRemembersKnownCardSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
+	peer, err := b1.Issue(ctx, objects.ScopePeer)
+	if err != nil {
+		t.Fatalf("Issue(peer): %v", err)
+	}
+	invite, err := b1.IssueInvite(ctx, InviteOptions{InviteID: []byte{1, 2, 3, 4, 5, 6, 7, 8}})
+	if err != nil {
+		t.Fatalf("IssueInvite: %v", err)
+	}
 
 	b2, err := New(cfg)
 	if err != nil {
@@ -483,9 +567,16 @@ func TestRestartRemembersKnownCardSeq(t *testing.T) {
 	if cur.Seq != first.Seq || !bytes.Equal(cur.Envelope, first.Envelope) {
 		t.Fatalf("restart changed the current public card")
 	}
+	peerCur, ok := own.Current[uint32(objects.ScopePeer)]
+	if !ok || peerCur.Seq != peer.Seq || !bytes.Equal(peerCur.Envelope, peer.Envelope) {
+		t.Fatalf("restart changed the current peer card")
+	}
 	rec, ok := own.Issued[first.Seq]
 	if !ok || rec.Scope != uint32(objects.ScopePublic) {
 		t.Fatalf("restart forgot the issued seq %d: %+v", first.Seq, own.Issued)
+	}
+	if rec, ok := own.Issued[invite.Seq]; !ok || rec.Scope != uint32(objects.ScopeInvite) {
+		t.Fatalf("restart forgot the issued invitation seq: %+v", own.Issued)
 	}
 
 	cfg.Release = "0.3.1"
