@@ -96,7 +96,7 @@ func noPreludeProfile(t *testing.T) *shape.Profile {
 	return p
 }
 
-func newUnitDialConn(t *testing.T, clock Clock, maskPub [32]byte, dial func(context.Context) (net.PacketConn, error)) *dialConn {
+func newUnitDialConn(t *testing.T, clock Clock, maskPub [32]byte, dial func(context.Context) (net.PacketConn, net.Addr, error)) *dialConn {
 	t.Helper()
 	return newDialConn(DialerConfig{}, clock,
 		noPreludeProfile(t), maskPub, dial, flowAddr{id: 3})
@@ -112,8 +112,8 @@ func TestClientSendsFreshInits(t *testing.T) {
 		t.Fatal(err)
 	}
 	pc := newFakePC()
-	c := newUnitDialConn(t, &fakeClock{t: time.Unix(1000, 0)}, maskPub, func(context.Context) (net.PacketConn, error) {
-		return pc, nil
+	c := newUnitDialConn(t, &fakeClock{t: time.Unix(1000, 0)}, maskPub, func(context.Context) (net.PacketConn, net.Addr, error) {
+		return pc, flowAddr{id: 3}, nil
 	})
 	c.conn = pc
 
@@ -178,12 +178,12 @@ func TestDialConnRestartsAfterSilence(t *testing.T) {
 	first := newFakePC()
 	second := newFakePC()
 	calls := 0
-	c := newUnitDialConn(t, clock, maskPub, func(context.Context) (net.PacketConn, error) {
+	c := newUnitDialConn(t, clock, maskPub, func(context.Context) (net.PacketConn, net.Addr, error) {
 		calls++
 		if calls == 1 {
-			return first, nil
+			return first, flowAddr{id: 3}, nil
 		}
-		return second, nil
+		return second, flowAddr{id: 3}, nil
 	})
 	t.Cleanup(func() { _ = c.Close() })
 	if err := c.start(context.Background()); err != nil {

@@ -242,7 +242,9 @@ func TestPreludeBeforeFirstInit(t *testing.T) {
 	}}
 	c := newDialConn(DialerConfig{},
 		&fakeClock{t: time.Unix(5000, 0)}, profile, maskPub,
-		func(context.Context) (net.PacketConn, error) { return pc, nil }, flowAddr{id: 3})
+		func(context.Context) (net.PacketConn, net.Addr, error) {
+			return pc, flowAddr{id: 3}, nil
+		}, flowAddr{id: 3})
 	c.conn = pc
 	if _, err := c.write(make([]byte, 1200)); err != nil {
 		t.Fatal(err)

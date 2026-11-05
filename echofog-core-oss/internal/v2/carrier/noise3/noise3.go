@@ -128,6 +128,9 @@ func cardMaskKey(card *objects.Card, addr *pb.Addr) ([32]byte, error) {
 	if err != nil {
 		return out, fmt.Errorf("%w: masking key: %v", ErrBadConfig, err)
 	}
+	if na := list[i-1].GetNotAfter(); na != 0 && uint64(time.Now().Unix()) > na {
+		return out, fmt.Errorf("%w: masking key expired", ErrBadConfig)
+	}
 	copy(out[:], k.Key())
 	return out, nil
 }

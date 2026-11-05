@@ -23,7 +23,7 @@ type dialConn struct {
 	pc     *queueConn
 	remote net.Addr
 
-	dial func(context.Context) (net.PacketConn, error)
+	dial func(context.Context) (net.PacketConn, net.Addr, error)
 
 	maskPub [32]byte
 	sender  *shape.Sender
@@ -53,7 +53,7 @@ var clientVAddr = flowAddr{id: 1}
 var clientLocalAddr = flowAddr{id: 2}
 
 func newDialConn(cfg DialerConfig, clock Clock, profile *shape.Profile, maskPub [32]byte,
-	dial func(context.Context) (net.PacketConn, error), remote net.Addr) *dialConn {
+	dial func(context.Context) (net.PacketConn, net.Addr, error), remote net.Addr) *dialConn {
 	c := &dialConn{
 		remote:       remote,
 		dial:         dial,
@@ -67,12 +67,13 @@ func newDialConn(cfg DialerConfig, clock Clock, profile *shape.Profile, maskPub 
 }
 
 func (c *dialConn) start(ctx context.Context) error {
-	conn, err := c.dial(ctx)
+	conn, remote, err := c.dial(ctx)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
 	c.conn = conn
+	c.remote = remote
 	c.mu.Unlock()
 	go c.readFrom(conn)
 	return nil
@@ -121,7 +122,7 @@ func (c *dialConn) write(p []byte) (int, error) {
 func (c *dialConn) restartLocked(now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, err := c.dial(ctx)
+	conn, remote, err := c.dial(ctx)
 	if err != nil {
 		return err
 	}
@@ -129,6 +130,7 @@ func (c *dialConn) restartLocked(now time.Time) error {
 		_ = c.conn.Close()
 	}
 	c.conn = conn
+	c.remote = remote
 	c.sets = nil
 	c.adopted = nil
 	c.sendN = 0

@@ -89,7 +89,7 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 	if req.DialContext != nil {
 		dial = req.DialContext
 	}
-	dialFn := func(ctx context.Context) (net.PacketConn, error) {
+	dialFn := func(ctx context.Context) (net.PacketConn, net.Addr, error) {
 		var (
 			c   net.Conn
 			err error
@@ -101,19 +101,17 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 			c, err = nd.DialContext(ctx, "udp", address)
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return udpPacketConn(c), nil
+		return udpPacketConn(c), c.RemoteAddr(), nil
 	}
 
-	first, err := dialFn(ctx)
+	first, remote, err := dialFn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("noise3: dial %s: %w", address, err)
 	}
-	remote, err := net.ResolveUDPAddr("udp", address)
-	if err != nil {
-		_ = first.Close()
-		return nil, fmt.Errorf("noise3: resolve %s: %w", address, err)
+	if remote == nil {
+		remote = &net.UDPAddr{}
 	}
 	dc := newDialConn(d.cfg, clock, profile, maskPub, dialFn, remote)
 	dc.mu.Lock()
