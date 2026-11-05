@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -62,8 +63,9 @@ func cmdRun(args []string) error {
 	}
 	startDatagramEcho(ctx, a.rt)
 
-	fmt.Fprintf(os.Stdout, "efv2 node ready\nnode id:   %s\ndevice id: %s\nlisten:    %s\ncards:     %s/peer.json\n",
-		a.rt.Self().NodeID, a.rt.Self().DeviceID, listenText(*listen), *data+string(os.PathSeparator)+cardsDirName)
+	fmt.Fprintf(os.Stdout, "efv2 node ready\nnode id:   %s\ndevice id: %s\nlisten:    %s\ncards:     %s\n",
+		a.rt.Self().NodeID, a.rt.Self().DeviceID, listenText(*listen),
+		filepath.Join(*data, cardsDirName, "peer.json"))
 	go statusLoop(ctx, a, log)
 
 	<-ctx.Done()
