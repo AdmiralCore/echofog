@@ -26,7 +26,6 @@ const idlePaddingFeature uint32 = 0x0003
 
 // TestDefaultProfiles pins the default flag set of every platform profile.
 func TestDefaultProfiles(t *testing.T) {
-	t.Parallel()
 
 	cases := []struct {
 		platform node.Platform
@@ -80,7 +79,6 @@ func TestDefaultProfiles(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(string(tc.platform), func(t *testing.T) {
-			t.Parallel()
 			if got := node.DefaultProfile(tc.platform); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("DefaultProfile(%s) = %+v, want %+v", tc.platform, got, tc.want)
 			}
@@ -94,7 +92,6 @@ func TestDefaultProfiles(t *testing.T) {
 // TestProfileDefaultsAndValidation: the zero value is completed to a safe desktop-like profile;
 // unknown values are refused rather than silently treated as something else.
 func TestProfileDefaultsAndValidation(t *testing.T) {
-	t.Parallel()
 
 	got := node.Profile{}.WithDefaults()
 	if got.Platform != node.PlatformDesktop {
@@ -127,7 +124,6 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 	for _, tc := range bad {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			if err := tc.profile.Validate(); err == nil {
 				t.Fatalf("Validate accepted %+v", tc.profile)
 			}
@@ -142,7 +138,6 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 }
 
 func TestProfileHasRole(t *testing.T) {
-	t.Parallel()
 
 	server := node.DefaultProfile(node.PlatformServer)
 	for _, r := range []node.Role{node.RoleDHTServer, node.RoleMailbox, node.RoleRelay} {
@@ -163,7 +158,6 @@ func TestProfileHasRole(t *testing.T) {
 // TestRuntimeAppliesProfileDefaults: New completes and validates the profile, Profile() reports
 // the effective values.
 func TestRuntimeAppliesProfileDefaults(t *testing.T) {
-	t.Parallel()
 
 	n := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) {
 		c.Profile = node.Profile{Platform: node.PlatformIOS}
@@ -177,7 +171,6 @@ func TestRuntimeAppliesProfileDefaults(t *testing.T) {
 // TestRuntimeCarriesEveryFlag: the flags that no runtime component acts on yet are still carried
 // for the tasks that consume them (carriers, DHT, PEX, relay, mailbox, identity).
 func TestRuntimeCarriesEveryFlag(t *testing.T) {
-	t.Parallel()
 
 	protect := func(uintptr) error { return nil }
 	addrs := func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("192.0.2.7")} }
@@ -217,13 +210,12 @@ func TestRuntimeCarriesEveryFlag(t *testing.T) {
 
 type fakeProtector struct{}
 
-func (fakeProtector) Protect(string, []byte) ([]byte, error)   { return nil, nil }
+func (fakeProtector) Protect([]byte, []byte) ([]byte, error)   { return nil, nil }
 func (fakeProtector) Unprotect([]byte, []byte) ([]byte, error) { return nil, nil }
 
 // TestLocalAddrsFeedTheCarrierPlan: the app's local addresses are the ones D21 compares against
 // the responder addresses (platforms.md §2, wire.md §1 rule 3).
 func TestLocalAddrsFeedTheCarrierPlan(t *testing.T) {
-	t.Parallel()
 
 	addr := netip.MustParseAddr("198.51.100.9")
 	n := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
@@ -237,7 +229,6 @@ func TestLocalAddrsFeedTheCarrierPlan(t *testing.T) {
 
 // TestMemCapLimitsTheSessionTable: mem_cap_mb selects the mobile session limit (platforms.md §2).
 func TestMemCapLimitsTheSessionTable(t *testing.T) {
-	t.Parallel()
 
 	mobile := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
 		c.Profile = node.DefaultProfile(node.PlatformAndroid)
@@ -259,7 +250,6 @@ func TestMemCapLimitsTheSessionTable(t *testing.T) {
 // TestRuntimeLowPowerSession: low_power reaches the mux (40–55 s keepalive, no standby paths) and
 // makes the node stop offering idle-padding (platforms.md §2).
 func TestRuntimeLowPowerSession(t *testing.T) {
-	t.Parallel()
 
 	qMobile, qDesktop := newCarrierQueue(), newCarrierQueue()
 	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{qMobile}, nil, func(c *node.Config) {
@@ -300,11 +290,9 @@ func TestRuntimeLowPowerSession(t *testing.T) {
 
 // ---- udp
 
-// TestRuntimeUDPBlockedHasNoPlan: udp=blocked removes every UDP suite from the D21 plan, so a peer
-// reachable only over UDP is not dialed at all (platforms.md §2).
+// TestRuntimeUDPBlockedHasNoPlan: udp=blocked reaches the D21 plan; every UDP suite is removed and
+// only the relay fallback remains (platforms.md §2, wire.md §1).
 func TestRuntimeUDPBlockedHasNoPlan(t *testing.T) {
-	t.Parallel()
-
 	queue := newCarrierQueue()
 	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
 	a := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
@@ -314,16 +302,14 @@ func TestRuntimeUDPBlockedHasNoPlan(t *testing.T) {
 	b.start(t)
 	a.start(t)
 
-	pair := memcarrier.NewQUIC()
-	queue.push(pair.Server)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, _, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{
-		Card:    b.peerCard(t),
-		Carrier: pair.Client,
-	})
-	if !errors.Is(err, node.ErrNoRoute) {
-		t.Fatalf("udp=blocked dial error %v, want ErrNoRoute", err)
+	info := node.LocalInfoOf(a.rt)
+	if !info.UDPBlocked {
+		t.Fatalf("udp=blocked did not reach the carrier plan: %+v", info)
+	}
+	for _, at := range carrier.Plan(b.peerCard(t), info) {
+		if at.Kind != carrier.AttemptRelay {
+			t.Fatalf("udp=blocked plan dials suite %d (kind %v), want relay only", at.Suite, at.Kind)
+		}
 	}
 }
 
@@ -332,7 +318,6 @@ func TestRuntimeUDPBlockedHasNoPlan(t *testing.T) {
 // TestRuntimeBackgroundSuspendedClosesAllSessions: suspended sends GOAWAY to every session and
 // refuses new outgoing sessions; the operator is told through the typed event.
 func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
-	t.Parallel()
 
 	events := &captureEvents{}
 	q1, q2 := newCarrierQueue(), newCarrierQueue()
@@ -366,7 +351,6 @@ func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
 // TestRuntimeBackgroundLimitedKeepsMailboxRelay: limited keeps exactly one session and prefers a
 // mailbox relay, then a relay, then the most recently active session (platforms.md §2).
 func TestRuntimeBackgroundLimitedKeepsMailboxRelay(t *testing.T) {
-	t.Parallel()
 
 	qMail, qPlain, qRelay := newCarrierQueue(), newCarrierQueue(), newCarrierQueue()
 	bMail := newTestNodeFull(t, cards.Visible, true, []carrier.Listener{qMail}, nil, func(c *cards.Config) {
@@ -400,7 +384,6 @@ func TestRuntimeBackgroundLimitedKeepsMailboxRelay(t *testing.T) {
 
 // TestRuntimeGreaseTimer: every session gets a GREASE timer with random intervals.
 func TestRuntimeGreaseTimer(t *testing.T) {
-	t.Parallel()
 
 	q1, q2 := newCarrierQueue(), newCarrierQueue()
 	b1 := newTestNode(t, cards.Visible, true, []carrier.Listener{q1}, nil)
@@ -429,7 +412,6 @@ func TestRuntimeGreaseTimer(t *testing.T) {
 // TestGreaseIntervalIsRandom: the default interval is inside the chosen bounds and is not a
 // constant (D18: "at random intervals", AD13: injectable timers).
 func TestGreaseIntervalIsRandom(t *testing.T) {
-	t.Parallel()
 
 	seen := make(map[time.Duration]struct{})
 	for i := 0; i < 200; i++ {
@@ -449,7 +431,6 @@ func TestGreaseIntervalIsRandom(t *testing.T) {
 // TestVisibilityChangeEvent: a card reissue that changes the visibility is reported once and the
 // runtime's identity follows it (T3.7a risk 4).
 func TestVisibilityChangeEvent(t *testing.T) {
-	t.Parallel()
 
 	events := &captureEvents{}
 	n := newTestNode(t, cards.Visible, true, nil, events)
@@ -468,7 +449,6 @@ func TestVisibilityChangeEvent(t *testing.T) {
 // TestListenerStoppedEvent: an accept loop that stops on a local error tells the operator instead
 // of failing silently (T3.7a risk 3).
 func TestListenerStoppedEvent(t *testing.T) {
-	t.Parallel()
 
 	events := &captureEvents{}
 	n := newTestNode(t, cards.Hidden, false, nil, events)
@@ -488,7 +468,7 @@ func TestMemoryProtectionEvent(t *testing.T) {
 	events := &captureEvents{}
 	n := newTestNode(t, cards.Hidden, false, nil, events)
 
-	var observe func(func(secret.Status))
+	var observe func(secret.Status)
 	node.SetSecretObserver(func(fn func(secret.Status)) { observe = fn })
 	defer node.SetSecretObserver(secret.Observe)
 

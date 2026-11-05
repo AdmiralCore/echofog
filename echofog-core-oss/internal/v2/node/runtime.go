@@ -13,6 +13,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/geoip"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/identity"
@@ -37,6 +38,9 @@ var (
 	ErrPeerCard = errors.New("node: peer card does not match the device")
 	// ErrNoRoute means carrier.Plan found no usable direct attempt (relay is T6.1).
 	ErrNoRoute = errors.New("node: no carrier route to the peer")
+	// ErrBackground means the node is suspended and does not open new sessions
+	// (platforms.md §2: suspended closes sessions with GOAWAY).
+	ErrBackground = errors.New("node: background mode is suspended")
 )
 
 // Config assembles one runtime.
@@ -61,6 +65,9 @@ type Config struct {
 	Events EventSink
 	// Profile is the platform profile and flags (platforms.md §2).
 	Profile Profile
+	// GreaseInterval returns the delay before the next GREASE frame of a session (D18). Nil
+	// means a uniform random interval in [greaseMin, greaseMax]; tests inject a short one.
+	GreaseInterval func() time.Duration
 
 	// Listeners are already built carriers; ListenerSources are built at Start.
 	Listeners       []carrier.Listener
@@ -112,19 +119,20 @@ type Runtime struct {
 	vis      cards.Visibility
 	cards    cardSource
 
-	mu        sync.Mutex
-	handlers  map[[2]uint64]Handler
-	table     *session.Table
-	listeners []carrier.Listener
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	serving   sync.Map
-	dgrams    *datagramBroker
-	modules   sync.Once
-	started   bool
-	stopped   bool
-	noCover   bool
+	mu         sync.Mutex
+	handlers   map[[2]uint64]Handler
+	table      *session.Table
+	listeners  []carrier.Listener
+	background Background
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	serving    sync.Map
+	dgrams     *datagramBroker
+	modules    sync.Once
+	started    bool
+	stopped    bool
+	noCover    bool
 }
 
 var _ Host = (*Runtime)(nil)
@@ -132,6 +140,10 @@ var _ Host = (*Runtime)(nil)
 // New validates the configuration and opens the persistent session state. Listeners are not
 // started until Start.
 func New(cfg Config) (*Runtime, error) {
+	cfg.Profile = cfg.Profile.WithDefaults()
+	if err := cfg.Profile.Validate(); err != nil {
+		return nil, err
+	}
 	switch {
 	case cfg.Account == nil:
 		return nil, fmt.Errorf("%w: no account", ErrConfig)
@@ -168,6 +180,7 @@ func New(cfg Config) (*Runtime, error) {
 		carrierClock: carrierClock,
 		services:     service.NewRegistry(),
 		handlers:     map[[2]uint64]Handler{},
+		background:   cfg.Profile.Background,
 	}
 	r.dgrams = newDatagramBroker(r)
 
@@ -218,6 +231,15 @@ func New(cfg Config) (*Runtime, error) {
 	r.localInfo = cfg.LocalInfo
 	if r.localInfo.CountryOf == nil {
 		r.localInfo.CountryOf = r.Country
+	}
+	// The app's local addrs callback replaces net.Interfaces on mobile (platforms.md §1.1,
+	// §2); an explicit Config.LocalInfo still wins.
+	if len(r.localInfo.Addrs) == 0 && cfg.Profile.LocalAddrs != nil {
+		r.localInfo.Addrs = append([]netip.Addr(nil), cfg.Profile.LocalAddrs()...)
+	}
+	// udp=blocked leaves only TCP suites in the D21 plan (platforms.md §2).
+	if cfg.Profile.UDP == UDPBlocked {
+		r.localInfo.UDPBlocked = true
 	}
 	return r, nil
 }
@@ -278,6 +300,11 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	r.listeners = listeners
 	r.mu.Unlock()
+
+	// Platform events that describe this process, reported once at startup: reduced memory
+	// protection (T4.1) and a visibility that changed since the builder was created.
+	r.watchMemoryProtection()
+	r.noteVisibility(r.cfg.Cards.Visibility())
 
 	// D37: a visible node without a camouflaged listener has no public card. This is not a
 	// startup error; the operator is told and the node keeps serving peers and invitees.
@@ -370,8 +397,12 @@ func (r *Runtime) running() bool {
 	return r.started && !r.stopped
 }
 
-// Self returns the local identity.
-func (r *Runtime) Self() Identity { return r.identity }
+// Self returns the local identity. Visibility follows a card builder update (T3.7a risk 4).
+func (r *Runtime) Self() Identity {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.identity
+}
 
 // Cards returns the node's card view for services.
 func (r *Runtime) Cards() CardSource { return r.cards }
@@ -385,8 +416,151 @@ func (r *Runtime) Clock() Clock { return r.clock }
 // HTTP returns the node's single HTTP client (02-architecture §3.1).
 func (r *Runtime) HTTP() *http.Client { return r.http }
 
-// Profile returns the platform profile.
-func (r *Runtime) Profile() Profile { return r.cfg.Profile }
+// Profile returns the platform profile. Background is the current app lifecycle state.
+func (r *Runtime) Profile() Profile {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.cfg.Profile
+	p.Roles = append([]Role(nil), p.Roles...)
+	return p
+}
+
+// noteVisibility applies the current visibility of the card builder. A change is reported once
+// so the app and the D37 public-card condition follow a card reissue without a restart.
+func (r *Runtime) noteVisibility(v cards.Visibility) {
+	r.mu.Lock()
+	if r.vis == v {
+		r.mu.Unlock()
+		return
+	}
+	r.vis = v
+	r.identity.Visibility = v
+	r.mu.Unlock()
+	r.events.Emit(Event{
+		Kind:    EventVisibility,
+		Message: fmt.Sprintf("node visibility is now %s", v),
+		At:      time.Now(),
+	})
+}
+
+// listenerStopped reports an accept loop that ended on a local error; the listener no longer
+// accepts, so silent degradation is not an option (T3.7a risk 3).
+func (r *Runtime) listenerStopped(err error) {
+	r.log.Warn("node: accept loop stopped", "err", err)
+	r.events.Emit(Event{
+		Kind:    EventListenerStopped,
+		Message: "a listener stopped accepting: no new sessions arrive on it",
+		At:      time.Now(),
+		Err:     err,
+	})
+}
+
+// Background returns the current app lifecycle state.
+func (r *Runtime) Background() Background {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.background
+}
+
+// SetBackground applies the app lifecycle state to live sessions (platforms.md §2). suspended
+// sends GOAWAY to every session and refuses new outgoing ones; limited keeps one session to a
+// guard or mailbox relay and closes the rest. foreground has no immediate effect: sessions are
+// re-established lazily.
+func (r *Runtime) SetBackground(bg Background) error {
+	if bg == "" {
+		bg = BackgroundForeground
+	}
+	switch bg {
+	case BackgroundForeground, BackgroundLimited, BackgroundSuspended:
+	default:
+		return fmt.Errorf("%w: background %q", ErrConfig, bg)
+	}
+
+	r.mu.Lock()
+	if r.background == bg {
+		r.mu.Unlock()
+		return nil
+	}
+	r.background = bg
+	r.cfg.Profile.Background = bg
+	table := r.table
+	r.mu.Unlock()
+
+	var keep *session.Established
+	switch bg {
+	case BackgroundSuspended:
+	case BackgroundLimited:
+		if table != nil {
+			keep = limitedKeep(table.Sessions())
+		}
+	}
+
+	closed := 0
+	if table != nil {
+		for _, est := range table.Sessions() {
+			if est == keep || !liveSession(est) {
+				continue
+			}
+			go func(est *session.Established) {
+				_ = est.GoAway(context.Background(), frame.CodeGoingAway, "background-"+string(bg), r.cfg.RetryAfter)
+			}(est)
+			closed++
+		}
+	}
+	r.events.Emit(Event{
+		Kind:    EventBackground,
+		Message: fmt.Sprintf("background mode %s: %d session(s) told to go away", bg, closed),
+		At:      time.Now(),
+	})
+	return nil
+}
+
+// limitedKeep picks the one session limited mode may keep: a mailbox relay first, then a relay
+// (the guard class of PEX, T5.4), then the most recently active session.
+func limitedKeep(sessions []*session.Established) *session.Established {
+	score := func(est *session.Established) int {
+		if est == nil || est.Peer == nil {
+			return 0
+		}
+		switch {
+		case est.Peer.Flags&objects.FlagMailbox != 0:
+			return 2
+		case est.Peer.Flags&objects.FlagRelay != 0:
+			return 1
+		}
+		return 0
+	}
+	var best *session.Established
+	for _, est := range sessions {
+		if !liveSession(est) {
+			continue
+		}
+		if best == nil || score(est) > score(best) ||
+			(score(est) == score(best) && lastActivity(est).After(lastActivity(best))) {
+			best = est
+		}
+	}
+	return best
+}
+
+func liveSession(est *session.Established) bool {
+	if est == nil || est.Session == nil {
+		return false
+	}
+	select {
+	case <-est.Session.Done():
+		return false
+	default:
+		return !est.Session.GoingAway()
+	}
+}
+
+func lastActivity(est *session.Established) time.Time {
+	if est == nil || est.Session == nil {
+		return time.Time{}
+	}
+	return est.Session.LastActivity()
+}
 
 // Events returns the runtime event sink.
 func (r *Runtime) Events() EventSink { return r.events }
@@ -447,6 +621,8 @@ func (r *Runtime) handlerFor(svc, version uint64) Handler {
 // mainLocal builds the session identity of the main account from the current card material. It is
 // called for every handshake so a card reissued by the builder (T4.2a) is used without a restart.
 func (r *Runtime) mainLocal(ctx context.Context) (session.LocalIdentity, error) {
+	// A card reissue (T4.2a) may change visibility; the runtime follows it without a restart.
+	r.noteVisibility(r.cfg.Cards.Visibility())
 	peer, err := r.cfg.Cards.Current(ctx, objects.ScopePeer)
 	if err != nil {
 		return session.LocalIdentity{}, fmt.Errorf("node: peer card: %w", err)
@@ -459,16 +635,32 @@ func (r *Runtime) mainLocal(ctx context.Context) (session.LocalIdentity, error) 
 	if len(suites) == 0 {
 		suites = append([]uint16(nil), handshake.DefaultSuites...)
 	}
+	features := append([]uint32(nil), r.cfg.Features...)
+	if r.cfg.Profile.LowPower {
+		// A low_power node does not offer idle padding (platforms.md §2).
+		features = withoutFeature(features, idlePaddingFeature)
+	}
 	return session.LocalIdentity{
 		Device:   r.cfg.Device,
 		Card:     peer.Envelope,
 		OwnCards: own,
 		Suites:   suites,
-		Features: append([]uint32(nil), r.cfg.Features...),
+		Features: features,
 		// The handshake adds its own GREASE service (D18), so the registry offer must not add a
 		// second one: two random GREASE IDs occasionally collide and break "strictly ascending".
 		Services: handshakeServices(r.services.Offer(false)),
 	}, nil
+}
+
+// withoutFeature returns features without id.
+func withoutFeature(features []uint32, id uint32) []uint32 {
+	out := features[:0]
+	for _, f := range features {
+		if f != id {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // ownCards returns the card material for handshakes. On a visible node without a cover the
@@ -476,7 +668,7 @@ func (r *Runtime) mainLocal(ctx context.Context) (session.LocalIdentity, error) 
 func (r *Runtime) ownCards(ctx context.Context) (handshake.OwnCards, error) {
 	own, err := r.cfg.Cards.OwnCards(ctx)
 	if err == nil {
-		if r.vis == cards.Visible {
+		if r.Self().Visibility == cards.Visible {
 			if _, ok := own.Current[uint32(objects.ScopePublic)]; !ok {
 				r.noCoverEvent()
 			}

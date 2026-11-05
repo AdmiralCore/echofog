@@ -53,6 +53,9 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	if !r.running() {
 		return nil, Peer{}, ErrClosed
 	}
+	if r.Background() == BackgroundSuspended {
+		return nil, Peer{}, ErrBackground
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -149,13 +152,14 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		return c, err
 	}
 
-	opts := make([]session.DialOption, 0, len(extra)+5)
+	opts := make([]session.DialOption, 0, len(extra)+6)
 	opts = append(opts,
 		session.WithClock(r.carrierClock),
 		session.WithOffset(r.clock.Offset()),
 		session.WithBindings(r.bindings),
 		session.WithPolicy(r.policyFunc),
 		session.WithCarrierFunc(carrierFn),
+		session.WithLowPower(r.cfg.Profile.LowPower),
 	)
 	opts = append(opts, extra...)
 	if opt.ExpectedDeviceID != nil {

@@ -144,6 +144,26 @@ func (t *Table) Len() int {
 	return len(t.sessions)
 }
 
+// Max returns the session limit of the table (from mem_cap_mb or TableConfig.MaxSessions).
+func (t *Table) Max() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.max
+}
+
+// Sessions returns a snapshot of the sessions currently kept. A draining session stays here until
+// its successor replaces it, exactly as for Get; callers that act on the snapshot check the
+// session state themselves.
+func (t *Table) Sessions() []*Established {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]*Established, 0, len(t.sessions))
+	for _, est := range t.sessions {
+		out = append(out, est)
+	}
+	return out
+}
+
 func (t *Table) schedule() {
 	t.mu.Lock()
 	if t.closed {

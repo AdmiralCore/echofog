@@ -51,6 +51,8 @@ type AcceptConfig struct {
 	Control *Control
 	// Timers replaces the mux session timers (tests and platform profiles).
 	Timers mux.Timers
+	// LowPower applies the platform profile's low_power flag (platforms.md §2).
+	LowPower bool
 	// Policy builds the mux stream policy from the negotiated services (T3.7a).
 	Policy PolicyFunc
 	// MessageTimeout and HandshakeTimeout override the handshake §11 defaults.
@@ -221,7 +223,7 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			if err != nil {
 				return nil, rejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, err)
 			}
-			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, cfg.Local, remoteOf(c), cfg.Control, cfg.Timers, cfg.Policy)
+			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, cfg.Local, remoteOf(c), cfg.Control, cfg.Timers, cfg.Policy, cfg.LowPower)
 		default:
 			_ = c.Close()
 			return nil, wrapSilent(fmt.Errorf("unexpected handshake action %d", reply.Action))

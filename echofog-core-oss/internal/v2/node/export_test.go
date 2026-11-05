@@ -21,7 +21,7 @@ var (
 	// NoteListenerStopped reports a stopped accept loop.
 	NoteListenerStopped = func(r *Runtime, err error) { r.listenerStopped(err) }
 	// SetSecretObserver replaces secret.Observe for the memory-protection event test.
-	SetSecretObserver = func(fn func(secret.Status)) { observeSecret = fn }
+	SetSecretObserver = func(observe func(func(secret.Status))) { observeSecret = observe }
 	// GreaseIntervalDefault exposes the default random interval.
 	GreaseIntervalDefault func() time.Duration = defaultGreaseInterval
 )
