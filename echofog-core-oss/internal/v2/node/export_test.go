@@ -25,6 +25,8 @@ var (
 		}
 		return n
 	}
+	// LimitsOf returns the pre-authentication limits of the accept path (handshake 11).
+	LimitsOf = func(r *Runtime) *session.Limits { return r.limits }
 	// ObserverOf returns the runtime's own-address observer (wire.md §7.2).
 	ObserverOf = func(r *Runtime) *session.Observer { return r.observer }
 	// SetBeforeAdd installs the hook that runs before an accepted session enters the table.
