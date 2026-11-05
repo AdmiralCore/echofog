@@ -155,6 +155,7 @@ type Server struct {
 	day      int64
 	dayBytes map[[32]byte]uint64
 	buckets  map[[32]byte]*bucket
+	pruned   time.Time // last sweep of idle buckets
 	// Rendezvous registrations (AD19): their lifetime lives in one index, rdvDays. rdvOf holds
 	// each node's IDs with their day and is the only source of a node's count; rdv is the lookup.
 	// Only expireLocked and register/forget change them, so each registration is counted once
@@ -349,11 +350,21 @@ func (s *Server) resolve(a Peer, c Connect) (Target, bool) {
 	return nil, false
 }
 
+// ipKey is the unit the per-IP limit counts: an IPv4 address, or the /64 of an IPv6 one (a host
+// owns a whole /64, so counting single addresses would give it no limit; T2.4-fix1 A-4).
+func ipKey(a netip.Addr) netip.Addr {
+	a = a.Unmap()
+	if a.Is6() {
+		return netip.PrefixFrom(a, 64).Masked().Addr()
+	}
+	return a
+}
+
 // reserveRequester counts a circuit against the requester's session, source IP and the relay's
 // total, before the target is looked up and whatever the target is. The limit is therefore
 // answered the same way for present and absent targets (§6.3: a prober learns nothing).
 func (s *Server) reserveRequester(a Peer) bool {
-	ip := a.Remote.Addr().Unmap()
+	ip := ipKey(a.Remote.Addr())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	lim := s.cfg.Limits
@@ -379,7 +390,7 @@ func (s *Server) reserveTarget(b Peer) bool {
 }
 
 func (s *Server) release(c *circuit) {
-	ip := c.a.peer.Remote.Addr().Unmap()
+	ip := ipKey(c.a.peer.Remote.Addr())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.circuits, c.cid)
@@ -393,6 +404,23 @@ func (s *Server) release(c *circuit) {
 	dec(c.b.peer.SID)
 	if s.perIP[ip]--; s.perIP[ip] <= 0 {
 		delete(s.perIP, ip)
+	}
+}
+
+// maxRememberedCIDs bounds the 24-hour memory of circuit IDs; with 62-bit IDs a repeat after an
+// early eviction is negligible.
+const maxRememberedCIDs = 1 << 18
+
+// forgetCID releases the ID of a circuit that never connected: nobody holds it.
+func (s *Server) forgetCID(cid uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.usedCIDs, cid)
+	for i := len(s.cidOrder) - 1; i >= 0; i-- {
+		if s.cidOrder[i].cid == cid {
+			s.cidOrder = append(s.cidOrder[:i], s.cidOrder[i+1:]...)
+			break
+		}
 	}
 }
 
@@ -416,6 +444,10 @@ func (s *Server) newCID() (uint64, error) {
 		}
 		s.usedCIDs[cid] = struct{}{}
 		s.cidOrder = append(s.cidOrder, cidStamp{cid, now})
+		if len(s.cidOrder) > maxRememberedCIDs { // a flood of circuits cannot grow it without bound
+			delete(s.usedCIDs, s.cidOrder[0].cid)
+			s.cidOrder = s.cidOrder[1:]
+		}
 		return cid, nil
 	}
 	return 0, errors.New("relay: no free circuit id")
@@ -470,6 +502,7 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 	}
 	bst, ok := s.invite(bctx, t, cir, a, c)
 	if !ok {
+		s.forgetCID(cid)
 		s.refuseAt(ctx, st, c, start, delay)
 		return
 	}
@@ -487,7 +520,7 @@ func (s *Server) unreserve(a, b Peer) {
 
 // unreserveRequester returns the slot taken by reserveRequester when no circuit follows.
 func (s *Server) unreserveRequester(a Peer) {
-	ip := a.Remote.Addr().Unmap()
+	ip := ipKey(a.Remote.Addr())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active--
@@ -797,6 +830,9 @@ func (s *Server) account(c *circuit, sender [32]byte, n uint64, datagram bool) (
 		}
 		return over()
 	}
+	if now.Sub(s.pruned) >= time.Second {
+		s.pruneBucketsLocked(now)
+	}
 	b := s.buckets[sender]
 	if b == nil {
 		b = &bucket{rate: float64(lim.RateBytes), tokens: float64(lim.RateBytes), at: now}
@@ -812,6 +848,16 @@ func (s *Server) account(c *circuit, sender [32]byte, n uint64, datagram bool) (
 	}
 	s.dayBytes[sender] += n
 	return verdictOK, b.take(now, float64(n))
+}
+
+// pruneBucketsLocked drops the buckets that have refilled: they behave exactly like no bucket.
+func (s *Server) pruneBucketsLocked(now time.Time) {
+	s.pruned = now
+	for k, b := range s.buckets {
+		if b.tokens+now.Sub(b.at).Seconds()*b.rate >= b.rate {
+			delete(s.buckets, k)
+		}
+	}
 }
 
 type bucket struct {
