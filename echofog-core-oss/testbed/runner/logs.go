@@ -22,6 +22,9 @@ func prepareOut() string {
 	dir := *outDir
 	if dir == "" {
 		base := filepath.Join("testbed", "out")
+		if removed, err := pruneOut(base, 7*24*time.Hour, time.Now()); err == nil && len(removed) > 0 {
+			logf("removed %d run directories older than 7 days", len(removed))
+		}
 		prunePcaps(base, *keepPcaps)
 		dir = filepath.Join(base, time.Now().Format("20060102-150405")+"-"+*scenario)
 	}
@@ -53,7 +56,10 @@ func kindOf(line string) string {
 
 // collectLogs saves the log of every container and writes a summary of what stands out: crashes,
 // errors, and the warnings that came most often.
-func collectLogs(dir string) {
+func collectLogs(dir string) { collectLogsTo(dir, "summary.txt") }
+
+// collectLogsTo keeps the log analysis out of the human summary.txt when a v2 run writes its own.
+func collectLogsTo(dir, name string) {
 	out, err := run("docker", "ps", "-a", "--filter", "name="+project+"-", "--format", "{{.Names}}")
 	if err != nil {
 		logf("cannot list containers: %v", err)
@@ -121,7 +127,7 @@ func collectLogs(dir string) {
 		sort.Strings(where)
 		fmt.Fprintf(&sum, "  %6d  [%s]  %s\n", x.n, strings.Join(where, ","), x.k)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "summary.txt"), []byte(sum.String()), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, name), []byte(sum.String()), 0o644)
 
 	logf("logs and summary: %s", dir)
 	logf("crashes and errors in the logs: %d", len(alarms))

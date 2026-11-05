@@ -1,11 +1,15 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+var runLockPath = flag.String("lock", filepath.Join("testbed", ".testbed.lock"),
+	"the run lock the runner holds for the whole run (testbed.lock in the coordinator's locks/ is separate)")
 
 // acquireRunLock takes testbed/.testbed.lock for the whole run. It is the runner's own guard on top
 // of the coordinator's locks/testbed.lock: one run per machine, no exceptions.

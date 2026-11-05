@@ -838,7 +838,36 @@ func birthdayScenario(all map[string]*node, v *verdict) {
 // ---------------------------------------------------------------------------- main
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compare" {
+		if len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, "usage: runner compare <before.json> <after.json>")
+			os.Exit(2)
+		}
+		a, err := os.ReadFile(os.Args[2])
+		if err != nil {
+			fatalf("read %s: %v", os.Args[2], err)
+		}
+		b, err := os.ReadFile(os.Args[3])
+		if err != nil {
+			fatalf("read %s: %v", os.Args[3], err)
+		}
+		out, err := compareReports(a, b)
+		if err != nil {
+			fatalf("compare: %v", err)
+		}
+		fmt.Print(out)
+		return
+	}
 	flag.Parse()
+	if err := validateV2Flags(*scenario); err != nil {
+		fatalf("%v", err)
+	}
+	release, err := acquireRunLock(*runLockPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer release()
+	logf("run lock: %s", *runLockPath)
 	if out, err := run("docker", "info", "--format", "{{.ServerVersion}}"); err != nil {
 		fatalf("Docker is not running: %v %s", err, out)
 	}
@@ -850,6 +879,8 @@ func main() {
 		extra = []string{"x1", "x2", "web"}
 		extraEnv = []string{"TRANSPORT_C1=tcp"} // c1 shows the TCP fallback
 		afterGateways = startCensorCapture
+	case "v2-censor", "v2-carrier":
+		extra = []string{"x1", "x2", "web"}
 	case "hidden":
 		extra = []string{"x1", "h1", "web"}
 	case "birthday":
@@ -875,6 +906,8 @@ func main() {
 	}()
 
 	switch *scenario {
+	case "v2-basic", "v2-censor", "v2-carrier":
+		runV2(nodes, v, out)
 	case "vpn":
 		vpnScenario(nodes, v, out)
 	case "load":
@@ -905,7 +938,11 @@ func main() {
 	}
 
 	fmt.Println()
-	collectLogs(out)
+	if isV2Scenario(*scenario) {
+		collectLogsTo(out, "logs-summary.txt")
+	} else {
+		collectLogs(out)
+	}
 	fmt.Println()
 	printDeliverySummary() // the delivery trace + error summary, last, when a scenario recorded flows
 	if len(v.failed) > 0 {

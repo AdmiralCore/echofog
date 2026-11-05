@@ -16,3 +16,7 @@ GEMINI.md
 
 # test bed logs and reports
 testbed/out/
+
+# launchpad v2 run lock and results (results/ is kept locally for compare)
+testbed/.testbed.lock
+testbed/results/
