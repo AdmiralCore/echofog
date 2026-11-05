@@ -3,9 +3,15 @@ package quicx
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"testing"
 	"time"
@@ -71,14 +77,38 @@ func dialPair(t *testing.T, clientTLS, serverTLS *tls.Config, clientConf, server
 	return client, server
 }
 
+// testServerCert returns an ECDSA P-256 self-signed certificate, the shape a real cover uses.
+// The noise3 certificate is Ed25519 by spec; the pinned Chrome ClientHello does not offer an
+// Ed25519 signature scheme, so it cannot be used for the ChromeParrot path.
 func testServerCert(t *testing.T) *tls.Certificate {
 	t.Helper()
-	_, server, err := Noise3TLSConfig()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("Noise3TLSConfig: %v", err)
+		t.Fatalf("generating P-256 key: %v", err)
 	}
-	cert := server.Certificates[0]
-	return &cert
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		t.Fatalf("generating serial: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "cover.example"},
+		DNSNames:              []string{"cover.example"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("creating certificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parsing certificate: %v", err)
+	}
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
 }
 
 func noise3Pair(t *testing.T) (clientTLS, serverTLS *tls.Config, conf *quic.Config) {
