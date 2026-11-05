@@ -80,11 +80,13 @@ func TestXKSessionAndServiceStream(t *testing.T) {
 			if rst.Open().Service != 3 || rst.Open().Version != 2 {
 				t.Fatalf("open %+v", rst.Open())
 			}
-			if err := st.WriteFrame(frame.TypePadding, 0, make([]byte, 32)); err != nil {
-				t.Fatalf("WriteFrame: %v", err)
+			if err := st.CloseWithCode(frame.CodeNoError, ""); err != nil {
+				t.Fatalf("CloseWithCode: %v", err)
 			}
-			if _, err := rst.ReadFrame(); err != nil {
-				t.Fatalf("ReadFrame: %v", err)
+			_, err = rst.ReadFrame()
+			var closed *mux.CloseError
+			if !errors.As(err, &closed) || closed.Code != frame.CodeNoError {
+				t.Fatalf("ReadFrame: %v, want CLOSE", err)
 			}
 
 			back, err := srv.Session.OpenStream(ctx, 3, 2)
@@ -166,18 +168,25 @@ func TestSealedCarrierPlaintextAfterSwitchClosesPath(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = r.est.Session.Close(); _ = srvEst.Session.Close() })
 
-	// A plaintext PING frame is not a record: the peer's path must end.
+	// A plaintext PING frame is not a record: the peer's path must end. The write itself may
+	// fail when the peer closes during it, which is the outcome under test.
 	raw := frame.AppendFrame(nil, frame.Frame{Type: frame.TypePing, Payload: make([]byte, 8)})
 	if err := a.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Write(raw); err != nil {
-		t.Fatalf("inject plaintext: %v", err)
-	}
-	select {
-	case <-srvEst.Session.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("sealed path accepted a plaintext frame")
+	_, _ = a.Write(raw)
+	// A failed path is dropped at once; the session itself may be kept for a replacement path
+	// (wire.md §8.3, the no-path grace period), so wait for the path to disappear.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ids, _, active := srvEst.Session.Paths()
+		if len(ids) == 0 && !active {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sealed path accepted a plaintext frame")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -244,9 +253,11 @@ func (oneReader) Read(p []byte) (int, error) {
 func TestDialRejectsExpiredOrInvalidCard(t *testing.T) {
 	now := time.Now()
 	node := newTestNode(t)
+	// Seal the card 70 s in the past, then verify it 40 s in the past: objects allows 60 s of
+	// skew, so the verification succeeds and Dial sees a card that expired by the time it runs.
 	expiredEnv := node.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK}, 2,
-		uint64(now.Add(-2*time.Hour).Unix()))
-	expired := verifyCard(t, expiredEnv, now.Add(-4*time.Hour))
+		uint64(now.Add(-70*time.Second).Unix()))
+	expired := verifyCard(t, expiredEnv, now.Add(-40*time.Second))
 
 	local := node.local(nil, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false)
 	_, err := session.Dial(context.Background(), expired, dialAttempt(), local)
@@ -264,13 +275,50 @@ func TestDialRejectsExpiredOrInvalidCard(t *testing.T) {
 	}
 }
 
-// TestDialRejectsWrongExpectedDeviceID checks the rid binding of handshake §3.3 / §4.2.
-func TestDialRejectsWrongExpectedDeviceID(t *testing.T) {
+// TestDialRejectsClockSkew checks a rejection inside P2 (handshake §7): the reason is visible to
+// both sides as ErrRejected.
+func TestDialRejectsClockSkew(t *testing.T) {
 	now := time.Now()
 	cliNode, srvNode := newTestNode(t), newTestNode(t)
 	nc := srvNode.cards(t, now)
-	throwaway := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXX}, 4,
+	cliCard := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK}, 15,
 		uint64(now.Add(24*time.Hour).Unix()))
+	remote := verifyCard(t, nc.peer, now)
+	pair := memcarrier.NewQUIC()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	accepted := acceptIn(ctx, &oneListener{c: pair.Server}, session.AcceptConfig{
+		Local: srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK}, false),
+	})
+	_, err := session.Dial(ctx, remote, dialAttempt(),
+		cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false),
+		session.WithCarrier(pair.Client), session.WithOffset(20*time.Minute))
+	var rejected *session.ErrRejected
+	if !errors.As(err, &rejected) || rejected.Reason != handshake.ReasonClockSkew {
+		t.Fatalf("Dial: %v, want clock-skew rejection", err)
+	}
+	r := <-accepted
+	if r.est != nil || !errors.As(r.err, &rejected) || rejected.Reason != handshake.ReasonClockSkew {
+		t.Fatalf("Accept: %v %v, want clock-skew rejection", r.est, r.err)
+	}
+}
+
+// TestDialRejectsWrongExpectedDeviceID checks the rid binding of handshake §3.3 / §4.2: the
+// prologue names the expected device, but the card in P2 is signed by another one. The initiator
+// must abort without sending message 3.
+func TestDialRejectsWrongExpectedDeviceID(t *testing.T) {
+	now := time.Now()
+	cliNode, srvNode, foreign := newTestNode(t), newTestNode(t), newTestNode(t)
+	notAfter := uint64(now.Add(24 * time.Hour).Unix())
+	// The hs key is the responder's, so the Noise pre-message and the card check agree; the
+	// signer is a different device, so the card does not name the expected rid.
+	foreignCard := foreign.cardWithHs(t, srvNode.device.Handshake().Public(), objects.ScopePublic,
+		[]uint16{handshake.SuiteXK, handshake.SuiteXX}, 11, notAfter)
+	own := handshake.OwnCards{Current: map[uint32]handshake.OwnCard{
+		uint32(objects.ScopePublic): {Seq: 11, Envelope: foreignCard},
+	}}
+	throwaway := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXX}, 4, notAfter)
 	pair := memcarrier.NewQUIC()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -278,15 +326,15 @@ func TestDialRejectsWrongExpectedDeviceID(t *testing.T) {
 	accepted := make(chan runResult, 1)
 	go func() {
 		est, err := session.Accept(ctx, &oneListener{c: pair.Server}, session.AcceptConfig{
-			Local: srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK, handshake.SuiteXX}, false),
+			Local: srvNode.local(nil, own, []uint16{handshake.SuiteXK, handshake.SuiteXX}, false),
 		})
 		accepted <- runResult{est, err}
 	}()
 
-	wrong := [32]byte{0xaa}
+	expected := srvNode.device.ID()
 	_, err := session.Dial(ctx, nil, dialAttempt(),
 		cliNode.local(throwaway, handshake.OwnCards{}, []uint16{handshake.SuiteXX}, true),
-		session.WithCarrier(pair.Client), session.WithExpectedDeviceID(wrong))
+		session.WithCarrier(pair.Client), session.WithExpectedDeviceID(expected))
 	var rejected *session.ErrRejected
 	if !errors.As(err, &rejected) || rejected.Reason != handshake.ReasonCardInvalid {
 		t.Fatalf("wrong rid: %v", err)
@@ -492,6 +540,48 @@ func TestDialRetriesSuiteRejectOnce(t *testing.T) {
 	})
 }
 
+// TestAcceptBindsPathToBinder routes a PATH_BIND into the mux.Binder of a live session instead
+// of starting a new handshake (wire.md §6.2, §8.2).
+func TestAcceptBindsPathToBinder(t *testing.T) {
+	now := time.Now()
+	cliNode, srvNode := newTestNode(t), newTestNode(t)
+	nc := srvNode.cards(t, now)
+	cliCard := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK}, 12,
+		uint64(now.Add(24*time.Hour).Unix()))
+	remote := verifyCard(t, nc.peer, now)
+	features := []uint32{uint32(frame.FeaturePathMigration)}
+	cliLocal := cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false)
+	cliLocal.Features = features
+	srvLocal := srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK}, false)
+	srvLocal.Features = features
+
+	cli, srv := establish(t, memcarrier.NewQUIC(), remote, cliLocal, srvLocal, session.AcceptConfig{})
+	if !cli.Session.HasFeature(frame.FeaturePathMigration) {
+		t.Skip("path-migration was not negotiated")
+	}
+
+	binder := mux.NewBinder()
+	binder.Add(srv.Session)
+	pair := memcarrier.NewQUIC()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	bound := acceptIn(ctx, &oneListener{c: pair.Server}, session.AcceptConfig{
+		Local:  srvLocal,
+		Binder: binder,
+	})
+	id, err := cli.Session.BindPath(ctx, mux.NewGuard(pair.Client), mux.PathDirect)
+	if err != nil {
+		t.Fatalf("BindPath: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("path ID 0")
+	}
+	r := <-bound
+	if r.est != nil || !errors.Is(r.err, session.ErrPathBound) {
+		t.Fatalf("Accept: %v %v, want ErrPathBound", r.est, r.err)
+	}
+}
+
 // TestAcceptClosesOnNonHandshakeFirstFrame verifies the "anything else: silent close" rule.
 func TestAcceptClosesOnNonHandshakeFirstFrame(t *testing.T) {
 	srvNode := newTestNode(t)
@@ -518,6 +608,5 @@ func TestAcceptClosesOnNonHandshakeFirstFrame(t *testing.T) {
 	}
 }
 
-// Compile-time check that the test carriers satisfy carrier.Listener.
+// Compile-time check that the test listener satisfies carrier.Listener.
 var _ carrier.Listener = (*oneListener)(nil)
-var _ carrier.Listener = (*queueListener)(nil)

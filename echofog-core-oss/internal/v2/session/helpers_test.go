@@ -45,9 +45,17 @@ func newTestNode(t *testing.T) *testNode {
 	return &testNode{account: tw.Account, device: tw.Device, devices: devices}
 }
 
-// card seals a card of the given scope. The caller controls seq and not_after, so expired cards
-// (sealed with a nil clock check, as objects.SealCard does) are easy to make.
+// card seals a card of the given scope with the node's own hs key. The caller controls seq and
+// not_after, so expired cards (sealed with a nil clock check, as objects.SealCard does) are easy
+// to make.
 func (n *testNode) card(t *testing.T, scope objects.Scope, suites []uint16, seq, notAfter uint64) []byte {
+	t.Helper()
+	return n.cardWithHs(t, n.device.Handshake().Public(), scope, suites, seq, notAfter)
+}
+
+// cardWithHs is card with an arbitrary hs key. Signing still uses n's device, which lets a test
+// build a card whose hs key matches one node while its signer (device ID) is another.
+func (n *testNode) cardWithHs(t *testing.T, hs keys.AKey, scope objects.Scope, suites []uint16, seq, notAfter uint64) []byte {
 	t.Helper()
 	l1 := make([]uint32, 0, len(suites))
 	for _, s := range suites {
@@ -55,7 +63,7 @@ func (n *testNode) card(t *testing.T, scope objects.Scope, suites []uint16, seq,
 	}
 	body := &pb.NodeCard{
 		ProtoVer: handshake.ProtoVer,
-		HsKey:    n.device.Handshake().Public(),
+		HsKey:    hs,
 		L1Suites: l1,
 		Account:  n.account.Public(),
 		Devices:  n.devices,
@@ -135,31 +143,6 @@ func (l *oneListener) Accept(ctx context.Context) (mux.Carrier, error) {
 func (l *oneListener) Addr() net.Addr { return nil }
 func (l *oneListener) Close() error   { return nil }
 
-// queueListener hands out carriers in order and blocks when empty.
-type queueListener struct {
-	ch chan mux.Carrier
-}
-
-func newQueueListener(cs ...mux.Carrier) *queueListener {
-	l := &queueListener{ch: make(chan mux.Carrier, len(cs))}
-	for _, c := range cs {
-		l.ch <- c
-	}
-	return l
-}
-
-func (l *queueListener) Accept(ctx context.Context) (mux.Carrier, error) {
-	select {
-	case c := <-l.ch:
-		return c, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (l *queueListener) Addr() net.Addr { return nil }
-func (l *queueListener) Close() error   { return nil }
-
 // countingCarrier counts the bytes the local side writes to every stream of a carrier.
 type countingCarrier struct {
 	mux.Carrier
@@ -198,6 +181,16 @@ func (s *countingStream) Write(p []byte) (int, error) {
 type runResult struct {
 	est *session.Established
 	err error
+}
+
+// acceptIn starts session.Accept in the background.
+func acceptIn(ctx context.Context, l carrier.Listener, cfg session.AcceptConfig) <-chan runResult {
+	ch := make(chan runResult, 1)
+	go func() {
+		est, err := session.Accept(ctx, l, cfg)
+		ch <- runResult{est, err}
+	}()
+	return ch
 }
 
 // establish runs Dial and Accept on a fresh in-memory pair and returns both sides.
