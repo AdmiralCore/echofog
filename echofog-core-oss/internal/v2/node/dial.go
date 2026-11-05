@@ -86,7 +86,16 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 		return nil, Peer{}, ErrClosed
 	}
 	est, err := table.Get(ctx, local, [32]byte(peer), func(ctx context.Context, extra ...session.DialOption) (*session.Established, error) {
-		return r.dial(ctx, card, local, opt, extra)
+		if opt.ViaRelay && opt.Carrier == nil && opt.CarrierFunc == nil {
+			return r.dialViaRelay(ctx, card, local, opt, extra)
+		}
+		est, err := r.dial(ctx, card, local, opt, extra)
+		if err != nil && ctx.Err() == nil && relayFallback(err, opt) {
+			if viaRelay, rerr := r.dialViaRelay(ctx, card, local, opt, extra); rerr == nil {
+				return viaRelay, nil
+			}
+		}
+		return est, err
 	})
 	if err != nil {
 		return nil, Peer{}, err
@@ -156,7 +165,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 				r.failReservations(reserved)
 			}
 			r.maybeClockCheck()
-			return nil, fmt.Errorf("node: carrier dial: %w", err)
+			return nil, fmt.Errorf("%w: %w", errCarrierDial, err)
 		}
 		first, attempt = c, chosen
 		chosenPair = pairOfAttempt(chosen)

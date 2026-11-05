@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/frame"
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
@@ -238,6 +240,9 @@ type ControlConfig struct {
 	// Observer receives OBSERVED_ADDR frames and the address of HsResp.observed (wire.md §7.2).
 	// Nil drops them.
 	Observer *Observer
+	// OnPunch receives PUNCH_OFFER and PUNCH_SYNC with the session they arrived on (T6.2). Nil drops
+	// them.
+	OnPunch func(*mux.Session, frame.Frame)
 }
 
 // observed feeds one OBSERVED_ADDR payload or HsResp.observed value to the Observer.
@@ -269,6 +274,9 @@ type controlSource struct {
 	peer   [32]byte
 	remote netip.Addr
 	socket string
+	// sess is the mux session the frame arrived on; it is set right after the session exists, a frame
+	// that beats it is dropped (PUNCH frames are retried by their sender).
+	sess *atomic.Pointer[mux.Session]
 }
 
 func (c *Control) handle(src controlSource, f frame.Frame) {
@@ -277,6 +285,14 @@ func (c *Control) handle(src controlSource, f frame.Frame) {
 	}
 	if f.Type == frame.TypeObservedAddr {
 		c.observed(src, f.Payload)
+		return
+	}
+	if f.Type == frame.TypePunchOffer || f.Type == frame.TypePunchSync {
+		if c.cfg.OnPunch != nil && src.sess != nil {
+			if s := src.sess.Load(); s != nil {
+				c.cfg.OnPunch(s, f)
+			}
+		}
 		return
 	}
 	peer := src.peer

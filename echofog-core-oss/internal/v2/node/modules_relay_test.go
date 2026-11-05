@@ -30,8 +30,13 @@ func TestRelayServedOnlyWhereThePlatformAllows(t *testing.T) {
 			n := newTestNodeFull(t, cards.Visible, false, nil, nil, relayRole,
 				func(c *node.Config) { c.Profile = tc.prof })
 			n.start(t)
-			if got := node.HasHandler(n.rt, service.Relay, 2); got != tc.want {
-				t.Fatalf("relay/2 served = %v, want %v", got, tc.want)
+			// The handler is there on every node (the client side answers INCOMING from its relays,
+			// T6.2); only the roles that relay for others serve CONNECT and REGISTER.
+			if !node.HasHandler(n.rt, service.Relay, 2) {
+				t.Fatal("relay/2 has no handler: INCOMING from a relay could not be answered")
+			}
+			if got := node.RelaysForOthers(tc.prof); got != tc.want {
+				t.Fatalf("relays for others = %v, want %v", got, tc.want)
 			}
 		})
 	}

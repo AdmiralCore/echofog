@@ -25,17 +25,22 @@ func relayLimits(p Profile) relay.Limits { return relay.Limits{MemCapMB: p.MemCa
 // registerRelay registers relay/2 (T6.1) when the profile allows relaying for others. Otherwise the
 // service is not offered and a peer's CONNECT gets UNSUPPORTED like for any service the node lacks.
 func (r *Runtime) registerRelay() {
-	if !relaysForOthers(r.cfg.Profile) {
-		return
-	}
 	spec, ok := service.Builtin(service.Relay)
 	if !ok {
 		return
 	}
-	srv := relay.NewServer(relay.ServerConfig{Directory: relayDirectory{r}, Limits: relayLimits(r.cfg.Profile)})
+	// Every node answers INCOMING from the relays it dialed (the client side of relay/2, T6.2). Only a
+	// node that may relay for others serves CONNECT and REGISTER; the others end such streams with
+	// CodeServiceUnsupported.
+	serves := relaysForOthers(r.cfg.Profile)
+	srv := relay.NewServer(relay.ServerConfig{Directory: relayDirectory{r}, Limits: relayLimits(r.cfg.Profile),
+		Refuse: !serves, Incoming: r.relayc.onIncoming})
 	r.Register(spec, func(ctx context.Context, p Peer, st *mux.Stream) {
 		srv.Handle(ctx, r.relayPeer(p, nil), st)
 	})
+	if !serves {
+		return
+	}
 	port := r.Datagrams(frame.DgramRelay)
 	r.wg.Add(1)
 	go func() {

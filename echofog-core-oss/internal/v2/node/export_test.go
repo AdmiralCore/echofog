@@ -47,3 +47,4 @@ var (
 
 // HasHandler reports whether the runtime serves the service version (a registered module).
 var HasHandler = func(r *Runtime, svc, version uint64) bool { return r.handlerFor(svc, version) != nil }
+var RelaysForOthers = relaysForOthers

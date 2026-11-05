@@ -145,6 +145,7 @@ type Runtime struct {
 	registry     *carrier.Registry
 	services     *service.Registry
 	localInfo    carrier.LocalInfo
+	relayc       *relayClient
 
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
@@ -312,12 +313,14 @@ func New(cfg Config) (*Runtime, error) {
 		Now:      r.clock.Now,
 		OnChange: r.publicAddrChanged,
 	})
+	r.relayc = newRelayClient(r)
 	r.control = session.NewControl(session.ControlConfig{
 		Cards:      r.cardBook,
 		Abuse:      r.abuse,
 		Clock:      r.carrierClock,
 		OffsetFunc: r.clock.Offset,
 		Observer:   r.observer,
+		OnPunch:    r.relayc.onPunch,
 	})
 
 	r.vis = cfg.Cards.Visibility()

@@ -55,6 +55,12 @@ func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 
 // serveCarrier runs the handshake of one accepted carrier and enters the session.
 func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
+	r.serveCarrierAs(ctx, c, mux.PathDirect, netip.AddrPort{})
+}
+
+// serveCarrierAs is serveCarrier for a carrier of the given kind: a relay circuit answered for INCOMING
+// is PathRelay, and peerAddr is the PEER_ADDR R sent with it (maybe invalid).
+func (r *Runtime) serveCarrierAs(ctx context.Context, c mux.Carrier, kind mux.PathKind, peerAddr netip.AddrPort) {
 	local, err := r.mainLocal(ctx)
 	if err != nil {
 		_ = c.Close()
@@ -74,7 +80,7 @@ func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
 		Control:       r.control,
 		Clock:         r.carrierClock,
 		Offset:        r.clock.Offset(),
-		Kind:          mux.PathDirect,
+		Kind:          kind,
 		Policy:        r.policyFunc,
 		Verifier:      nil,
 		Binder:        r.binder,
@@ -93,6 +99,9 @@ func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
 	default:
 		r.log.Debug("node: accepted carrier refused", "err", err)
 		return
+	}
+	if peerAddr.IsValid() {
+		r.relayc.notePeerAddr(est.Session, peerAddr)
 	}
 
 	if est.Access == nil || r.accessMgr == nil {

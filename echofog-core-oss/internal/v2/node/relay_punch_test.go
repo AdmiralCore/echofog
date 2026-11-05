@@ -106,16 +106,22 @@ func newRelayWorld(t *testing.T, punchNet bool) *relayWorld {
 		bAddr: netip.MustParseAddrPort("203.0.113.5:61000"), aAddr: netip.MustParseAddrPort("198.51.100.9:50000"),
 		bq: newCarrierQueue()}
 	rq := newCarrierQueue()
-	setNet := func(c *node.Config) {
-		if punchNet {
-			c.PunchNet = natNetwork{nat}
+	setNet := func(own string) func(c *node.Config) {
+		return func(c *node.Config) {
+			if punchNet {
+				c.PunchNet = natNetwork{nat}
+				pathFeatures(c)
+				// One country for everybody: noise3 is allowed between the two (D21).
+				c.Country = func(netip.Addr) (string, bool) { return "ZZ", true }
+				c.Profile.LocalAddrs = func() []netip.Addr { return []netip.Addr{netip.MustParseAddr(own)} }
+			}
 		}
 	}
 	r := newTestNodeFull(t, cards.Visible, false, []carrier.Listener{rq}, nil, relayRoleCards, func(c *node.Config) {
 		c.Profile = node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleRelay}}
 	})
-	a := newTestNodeFull(t, cards.Hidden, false, nil, nil, publicListener("198.51.100.9", 50000), setNet)
-	b := newTestNodeFull(t, cards.Hidden, false, []carrier.Listener{nat.bq}, nil, publicListener("203.0.113.5", 61000), setNet)
+	a := newTestNodeFull(t, cards.Visible, false, nil, nil, publicListener("198.51.100.9", 50000), setNet("198.51.100.9"))
+	b := newTestNodeFull(t, cards.Visible, false, []carrier.Listener{nat.bq}, nil, publicListener("203.0.113.5", 61000), setNet("203.0.113.5"))
 	mod := &fakeModule{got: make(chan node.Peer, 4), errs: make(chan error, 4)}
 	registerFakeModule(t, a.rt, mod)
 	registerFakeModule(t, b.rt, mod)
