@@ -30,6 +30,10 @@ type testNode struct {
 }
 
 func newTestNode(t *testing.T, visibility cards.Visibility, cover bool, listeners []carrier.Listener, events node.EventSink) *testNode {
+	return newTestNodeWith(t, visibility, cover, listeners, events, nil)
+}
+
+func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, listeners []carrier.Listener, events node.EventSink, mutate func(*node.Config)) *testNode {
 	t.Helper()
 
 	tw, err := identity.NewThrowaway()
@@ -80,7 +84,7 @@ func newTestNode(t *testing.T, visibility cards.Visibility, cover bool, listener
 		t.Fatalf("store.Open: %v", err)
 	}
 
-	rt, err := node.New(node.Config{
+	cfg := node.Config{
 		Account:   tw.Account,
 		Device:    tw.Device,
 		Cards:     builder,
@@ -88,7 +92,11 @@ func newTestNode(t *testing.T, visibility cards.Visibility, cover bool, listener
 		Listeners: listeners,
 		Events:    events,
 		Profile:   node.Profile{Platform: "test"},
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	rt, err := node.New(cfg)
 	if err != nil {
 		_ = st.Close()
 		tw.Destroy()
@@ -253,7 +261,12 @@ func TestFakeModuleSeesPeerOverTwoRuntimes(t *testing.T) {
 	}
 	reply, err := stream.ReadFrame()
 	if err != nil {
-		t.Fatalf("read pong: %v", err)
+		select {
+		case modErr := <-mod.errs:
+			t.Fatalf("read pong: %v (handler error: %v)", err, modErr)
+		default:
+			t.Fatalf("read pong: %v", err)
+		}
 	}
 	if reply.Type != 0x41 || string(reply.Payload) != "pong" {
 		t.Fatalf("got frame %d %q, want 0x41 pong", reply.Type, reply.Payload)
