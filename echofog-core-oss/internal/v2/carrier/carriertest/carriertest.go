@@ -99,6 +99,12 @@ func Run(t *testing.T, newPair NewPair) {
 		if err != nil {
 			t.Fatalf("client.OpenStream: %v", err)
 		}
+		// A QUIC stream is created on the peer by its first STREAM frame, so a
+		// stream has to carry at least one byte before it can be accepted. The
+		// byte is irrelevant to the reset being tested.
+		if _, err := cs.Write([]byte("x")); err != nil {
+			t.Fatalf("client write: %v", err)
+		}
 		ss, err := server.AcceptStream(ctx)
 		if err != nil {
 			t.Fatalf("server.AcceptStream: %v", err)
