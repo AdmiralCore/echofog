@@ -269,7 +269,8 @@ func (s *Service) Run(ctx context.Context, sess Session, lowPower bool) {
 
 // delay returns the uniform initial delay in [1 s, 10 s].
 func (s *Service) delay() time.Duration {
-	n := s.cfg.Rand(int(LazyDelayMax-LazyDelayMin)/int(time.Second) + 1)
+	steps := int((LazyDelayMax - LazyDelayMin) / time.Second)
+	n := s.cfg.Rand(steps + 1)
 	if n < 0 {
 		n = 0
 	}
