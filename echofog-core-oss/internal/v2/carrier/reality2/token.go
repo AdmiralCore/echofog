@@ -182,7 +182,14 @@ func tokenAEAD(key []byte) (cipher.AEAD, error) {
 // or, when there is none, the last 32 bytes of the X25519MLKEM768 entry (wire.md §3.1).
 //
 // Any malformed or truncated input is ErrHello; the parser never panics on wire data.
-func ParseHello(msg []byte) (*Hello, error) {
+func ParseHello(msg []byte) (*Hello, error) { return parseHello(msg, false) }
+
+// ParseHelloTCP is ParseHello for reality2-tcp (wire.md §4.1): the token is the 32-byte
+// legacy_session_id and ClientHello.random stays random, so CH0 is the message with the
+// session id zeroed. A hello whose session id is not 32 bytes carries no token (ErrHello).
+func ParseHelloTCP(msg []byte) (*Hello, error) { return parseHello(msg, true) }
+
+func parseHello(msg []byte, inSessionID bool) (*Hello, error) {
 	if len(msg) < 4+2+32 || msg[0] != 1 {
 		return nil, ErrHello
 	}
@@ -203,6 +210,13 @@ func ParseHello(msg []byte) (*Hello, error) {
 	p++
 	if p+idLen > len(msg) {
 		return nil, ErrHello
+	}
+	sidOff := p
+	if inSessionID {
+		if idLen != 32 {
+			return nil, ErrHello
+		}
+		token = append([]byte(nil), msg[sidOff:sidOff+32]...)
 	}
 	p += idLen // legacy_session_id (QUIC: empty)
 	if p+2 > len(msg) {
@@ -248,7 +262,11 @@ func ParseHello(msg []byte) (*Hello, error) {
 	}
 
 	ch0 := append([]byte(nil), msg...)
-	clear(ch0[randomOffset : randomOffset+32])
+	if inSessionID {
+		clear(ch0[sidOff : sidOff+32])
+	} else {
+		clear(ch0[randomOffset : randomOffset+32])
+	}
 	return &Hello{Token: token, CH0: ch0, C: C}, nil
 }
 
