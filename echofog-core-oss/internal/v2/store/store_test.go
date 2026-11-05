@@ -342,6 +342,43 @@ func TestValuesAreBoundToTheirKey(t *testing.T) {
 	}
 }
 
+// TestValueCannotMoveToAnotherNamespace pins the other half of the associated data: the namespace
+// prefix is part of it, so alpha/k moved to beta/k does not open.
+func TestValueCannotMoveToAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	st := openStore(t, dir, testKey(t, 18), 0)
+	if err := st.Store("alpha").Put([]byte("k"), []byte("for alpha")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	raw := readRaw(t, dir, rawKey(t, "alpha", "k"))
+	db, err := badger.Open(badger.DefaultOptions(dir).WithLogger(nil))
+	if err != nil {
+		t.Fatalf("open raw badger: %v", err)
+	}
+	if err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set(rawKey(t, "beta", "k"), raw)
+	}); err != nil {
+		t.Fatalf("moving the value: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw badger: %v", err)
+	}
+
+	st = openStore(t, dir, testKey(t, 18), 0)
+	if _, err := st.Store("beta").Get([]byte("k")); !errors.Is(err, ErrValueDamaged) {
+		t.Fatalf("Get of a value moved into another namespace: %v, want ErrValueDamaged", err)
+	}
+	if got, err := st.Store("alpha").Get([]byte("k")); err != nil || string(got) != "for alpha" {
+		t.Fatalf("the original record = %q, %v", got, err)
+	}
+}
+
 func TestWrongStorageKeyDoesNotOpenValues(t *testing.T) {
 	t.Parallel()
 
@@ -452,14 +489,114 @@ func TestScanAndScanFrom(t *testing.T) {
 	}
 
 	entries, err = kv.ScanFrom(nil, []byte("c"), 2)
-	if err != nil || keysOf(entries) != "c,d" {
-		t.Fatalf("ScanFrom(c) = %s, %v", keysOf(entries), err)
+	if err != nil || keysOf(entries) != "d" {
+		t.Fatalf("ScanFrom(after c) = %s, %v, want d", keysOf(entries), err)
+	}
+
+	// A cursor below the prefix starts at the first record of the prefix, not before it.
+	entries, err = kv.ScanFrom([]byte("c"), []byte("a"), 10)
+	if err != nil || keysOf(entries) != "c" {
+		t.Fatalf("ScanFrom(prefix c, after a) = %s, %v, want c", keysOf(entries), err)
+	}
+	entries, err = kv.ScanFrom([]byte("c"), []byte("c"), 10)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("ScanFrom(prefix c, after c) = %s, %v, want empty", keysOf(entries), err)
 	}
 
 	for _, limit := range []int{0, -1, MaxScanLimit + 1} {
 		if _, err := kv.Scan(nil, limit); !errors.Is(err, ErrBadLimit) {
 			t.Fatalf("Scan with limit %d: %v, want ErrBadLimit", limit, err)
 		}
+	}
+}
+
+// TestScanFromPagesThroughEverything checks the contract a paginator uses: hand the last key of
+// one page to ScanFrom and get the next records, each exactly once.
+func TestScanFromPagesThroughEverything(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t, t.TempDir(), testKey(t, 16), 0)
+	kv := st.Store("test")
+	keys := []string{"aa", "ab", "ac", "ad", "ae", "af", "ag"}
+	for _, key := range keys {
+		if err := kv.Put([]byte(key), []byte("value "+key)); err != nil {
+			t.Fatalf("Put(%s): %v", key, err)
+		}
+	}
+
+	for _, limit := range []int{1, 2, 3} {
+		var got []string
+		var cursor []byte
+		for pages := 0; ; pages++ {
+			if pages > len(keys) {
+				t.Fatalf("limit %d: the scan does not end, got %v", limit, got)
+			}
+			page, err := kv.ScanFrom(nil, cursor, limit)
+			if err != nil {
+				t.Fatalf("limit %d, page %d: %v", limit, pages, err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			if len(page) > limit {
+				t.Fatalf("limit %d: a page of %d records", limit, len(page))
+			}
+			for _, entry := range page {
+				if cursor != nil && string(entry.Key) <= string(cursor) {
+					t.Fatalf("limit %d: page repeats %q after cursor %q", limit, entry.Key, cursor)
+				}
+				got = append(got, string(entry.Key))
+			}
+			cursor = page[len(page)-1].Key
+		}
+		if strings.Join(got, ",") != strings.Join(keys, ",") {
+			t.Fatalf("limit %d: paged through %v, want %v", limit, got, keys)
+		}
+	}
+
+	// The boundaries of the walk.
+	for _, tc := range []struct {
+		name   string
+		cursor string
+		want   string
+	}{
+		{"after the last key", "ag", ""},
+		{"beyond the namespace", "zz", ""},
+		{"before the first key", "a", strings.Join(keys, ",")},
+	} {
+		entries, err := kv.ScanFrom(nil, []byte(tc.cursor), 10)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if keysOf(entries) != tc.want {
+			t.Fatalf("%s: got %s, want %q", tc.name, keysOf(entries), tc.want)
+		}
+	}
+
+	// An empty namespace has no pages.
+	if entries, err := st.Store("empty").ScanFrom(nil, []byte("a"), 10); err != nil || len(entries) != 0 {
+		t.Fatalf("empty namespace: %v, %v", entries, err)
+	}
+}
+
+// TestScanFromCursorAtAKeyPrefix is the edge the cursor encoding exists for: a key that is a
+// proper prefix of another must not drag the longer key into the next page.
+func TestScanFromCursorAtAKeyPrefix(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t, t.TempDir(), testKey(t, 17), 0)
+	kv := st.Store("test")
+	for _, key := range []string{"a", "ab", "b"} {
+		if err := kv.Put([]byte(key), []byte("value "+key)); err != nil {
+			t.Fatalf("Put(%s): %v", key, err)
+		}
+	}
+
+	if entries, err := kv.ScanFrom(nil, []byte("a"), 10); err != nil || keysOf(entries) != "ab,b" {
+		t.Fatalf("after a: %s, %v, want ab,b", keysOf(entries), err)
+	}
+	if entries, err := kv.ScanFrom(nil, []byte("ab"), 10); err != nil || keysOf(entries) != "b" {
+		t.Fatalf("after ab: %s, %v, want b", keysOf(entries), err)
 	}
 }
 
