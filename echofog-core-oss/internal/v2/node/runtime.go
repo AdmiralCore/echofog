@@ -146,6 +146,7 @@ type Runtime struct {
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
+	limits   *session.Limits
 	control  *session.Control
 	observer *session.Observer
 	binder   *mux.Binder
@@ -204,6 +205,8 @@ type Runtime struct {
 	admitted map[*session.Established]admission
 	// admitSem bounds the concurrent pass bookings of accepted sessions.
 	admitSem chan struct{}
+	// hsSem bounds the goroutines that run pre-authentication handshakes (serve.go).
+	hsSem chan struct{}
 }
 
 var _ Host = (*Runtime)(nil)
@@ -263,6 +266,7 @@ func New(cfg Config) (*Runtime, error) {
 		deadPaths:    map[pathKey]struct{}{},
 		background:   cfg.Profile.Background,
 	}
+	r.hsSem = make(chan struct{}, maxHandshaking)
 	r.dgrams = newDatagramBroker(r)
 	r.accessMgr = cfg.Access
 	if r.accessMgr != nil {
@@ -293,6 +297,9 @@ func New(cfg Config) (*Runtime, error) {
 	r.abuse, err = session.NewAbuseLog(cfg.Store.Store(session.AbuseNamespace))
 	if err != nil {
 		return nil, fmt.Errorf("node: abuse log: %w", err)
+	}
+	if r.limits, err = session.NewLimits(session.LimitsConfig{Now: r.carrierClock.Now, Abuse: r.abuse}); err != nil {
+		return nil, fmt.Errorf("node: limits: %w", err)
 	}
 	r.bindings, err = session.NewKeyBindings(cfg.Store.Store(session.BindingsNamespace), r.abuse)
 	if err != nil {

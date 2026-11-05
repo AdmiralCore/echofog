@@ -67,6 +67,9 @@ type ResponderConfig struct {
 	Cards      CardVerifier
 	Bindings   KeyBinder
 	Rand       io.Reader
+	// AdmitVersion, when set, is asked with the peer's protocol version before P2 is built; false
+	// answers REJECT{version} (versioning.md §2 rule 4, §5). The release policy decides.
+	AdmitVersion func(peerProto uint32) bool
 
 	// testEphemeral and testEncap fix the responder's randomness (vectors only).
 	testEphemeral *ecdh.PrivateKey
@@ -346,6 +349,10 @@ func (r *Responder) buildP2(p1 *HsInit, suite uint16, hs *noise.HandshakeState, 
 	}
 	p2 := &HsResp{ProtoVer: ProtoVer, Time: t}
 	if p1.ProtoVer < ProtoVer {
+		p2.Reject = &Reject{Reason: ReasonVersion, Min: ProtoVer, Max: ProtoVer}
+		return p2
+	}
+	if r.cfg.AdmitVersion != nil && !r.cfg.AdmitVersion(p1.ProtoVer) {
 		p2.Reject = &Reject{Reason: ReasonVersion, Min: ProtoVer, Max: ProtoVer}
 		return p2
 	}

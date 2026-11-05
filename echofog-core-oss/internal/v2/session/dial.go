@@ -316,7 +316,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 			}
 			est, err := finish(c, g, raw, hs, RoleInitiator, o.pathKind, local, remoteOfCard(attempt.Addr),
 				o.control, o.timers, o.policy, o.lowPower,
-				newIdlePadding(o.idlePad, o.idleRand, o.lowPower), o.onEst, o.onFail)
+				newIdlePadding(o.idlePad, o.idleRand, o.lowPower), o.onEst, o.onFail, nil)
 			return est, nil, err
 		default:
 			return nil, nil, wrapSilent(fmt.Errorf("unexpected %s before the handshake completed", frame.TypeName(f.Type)))

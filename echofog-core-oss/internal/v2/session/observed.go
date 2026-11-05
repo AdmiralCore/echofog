@@ -147,6 +147,50 @@ type Observer struct {
 	recs       map[obsKey]obsRec
 	decided    netip.Addr
 	lastChange time.Time
+	buckets    map[[32]byte]obsBucket
+}
+
+// ObservePeerBurst is how many reports one peer may land at once; the bucket refills one report
+// per second (T3.4 inheritance: a peer cannot flood Observe).
+const ObservePeerBurst = 8
+
+// maxObsBuckets bounds the per-peer buckets.
+const maxObsBuckets = 4096
+
+type obsBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// takeTokenLocked spends one report of the peer's bucket.
+func (o *Observer) takeTokenLocked(peer [32]byte, now time.Time) bool {
+	b, ok := o.buckets[peer]
+	if !ok {
+		if len(o.buckets) >= maxObsBuckets {
+			for p, x := range o.buckets {
+				if now.Sub(x.at).Seconds()+x.tokens >= ObservePeerBurst {
+					delete(o.buckets, p)
+				}
+			}
+			for p := range o.buckets {
+				if len(o.buckets) < maxObsBuckets {
+					break
+				}
+				delete(o.buckets, p)
+			}
+		}
+		b = obsBucket{tokens: ObservePeerBurst, at: now}
+	} else if d := now.Sub(b.at).Seconds(); d > 0 {
+		b.tokens = min(ObservePeerBurst, b.tokens+d)
+		b.at = now
+	}
+	if b.tokens < 1 {
+		o.buckets[peer] = b
+		return false
+	}
+	b.tokens--
+	o.buckets[peer] = b
+	return true
 }
 
 // NewObserver returns an empty Observer.
@@ -154,7 +198,7 @@ func NewObserver(cfg ObserverConfig) *Observer {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Observer{cfg: cfg, recs: make(map[obsKey]obsRec)}
+	return &Observer{cfg: cfg, recs: make(map[obsKey]obsRec), buckets: make(map[[32]byte]obsBucket)}
 }
 
 // ParseObserved decodes the HsResp.observed value (family ‖ address ‖ port).
@@ -249,6 +293,10 @@ func (o *Observer) Observe(ob Observation) Verdict {
 	defer o.cbMu.Unlock()
 	o.mu.Lock()
 
+	if !o.takeTokenLocked(ob.Peer, now) {
+		o.mu.Unlock()
+		return ObsIgnored
+	}
 	o.expireLocked(now)
 	// The newest word of a peer about the IP replaces what it said before.
 	for k, r := range o.recs {
