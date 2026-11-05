@@ -302,8 +302,19 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 	if hs.Peer != nil {
 		peerID = hs.Peer.DeviceID
 	}
+	var src controlSource
 	if ctl != nil {
-		cfg.OnControl = func(_ uint64, f frame.Frame) { ctl.handle(peerID, f) }
+		src = controlSource{peer: peerID}
+		if kind == mux.PathDirect {
+			// Only a direct path says anything about the peer's network and our socket.
+			peer := remote
+			if !peer.IsValid() {
+				peer = remoteOf(c)
+			}
+			src.remote = peer.Addr()
+			src.socket = localSocketOf(c)
+		}
+		cfg.OnControl = func(_ uint64, f frame.Frame) { ctl.handle(src, f) }
 	}
 	ms, err := mux.NewSession(cfg, g, ctrl, kind)
 	if err != nil {
@@ -312,6 +323,11 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 	}
 	if onEstablished != nil {
 		onEstablished(ms)
+	}
+	if ctl != nil && len(hs.Observed) > 0 {
+		// HsResp.observed (wire.md §7.2): the responder's view of our address, authenticated by
+		// the handshake like an OBSERVED_ADDR frame.
+		ctl.handle(src, frame.Frame{Type: frame.TypeObservedAddr, Payload: hs.Observed})
 	}
 	var sid [16]byte
 	copy(sid[:], hs.SID)
@@ -388,6 +404,21 @@ func waitUntil(clk carrier.Clock, t time.Time) {
 	tm := clk.AfterFunc(d, func() { close(ch) })
 	<-ch
 	tm.Stop()
+}
+
+// localSocketOf names the local socket of a carrier when it exposes one. NAT classification
+// compares only reports of one socket; without a name a report takes part in the public-IP
+// decision only.
+func localSocketOf(c mux.Carrier) string {
+	l, ok := c.(interface{ LocalAddr() net.Addr })
+	if !ok {
+		return ""
+	}
+	a := l.LocalAddr()
+	if a == nil {
+		return ""
+	}
+	return a.Network() + "/" + a.String()
 }
 
 // remoteOf reads a carrier's peer address when the carrier exposes one.

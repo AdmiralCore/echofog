@@ -148,6 +148,9 @@ func (r *Runtime) NetworkChanged(ctx context.Context, opt DialOpt) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// What peers saw before says nothing about the new uplink: the public IP and the NAT class
+	// are decided again from new reports.
+	r.observer.Reset()
 	sessions := r.table.Sessions()
 	eligible := make([]*session.Established, 0, len(sessions))
 	for _, est := range sessions {

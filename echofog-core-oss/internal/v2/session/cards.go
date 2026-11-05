@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -234,6 +235,21 @@ type ControlConfig struct {
 	// OnCard is called after every CARD_UPDATE that verified, with the book's result. The
 	// runtime uses it to refresh the card it serves to services.
 	OnCard func(*objects.Card, objects.AddResult, error)
+	// Observer receives OBSERVED_ADDR frames and the address of HsResp.observed (wire.md §7.2).
+	// Nil drops them.
+	Observer *Observer
+}
+
+// observed feeds one OBSERVED_ADDR payload or HsResp.observed value to the Observer.
+func (c *Control) observed(src controlSource, payload []byte) {
+	if c.cfg.Observer == nil {
+		return
+	}
+	ap, ok := ParseObserved(payload)
+	if !ok {
+		return
+	}
+	c.cfg.Observer.Observe(Observation{Peer: src.peer, PeerAddr: src.remote, Reported: ap, Socket: src.socket})
 }
 
 // Control handles session control frames that belong to this layer. One Control may be shared
@@ -246,8 +262,25 @@ type Control struct {
 // still accepted on the wire when the feature was negotiated).
 func NewControl(cfg ControlConfig) *Control { return &Control{cfg: cfg} }
 
-func (c *Control) handle(peer [32]byte, f frame.Frame) {
-	if c == nil || c.cfg.Cards == nil || f.Type != frame.TypeCardUpdate {
+// controlSource says who sent a control frame and over what: the authenticated device, the
+// peer's network address and the local socket. Peer address and socket stay empty on a relayed
+// path, where they describe the relay and not the peer.
+type controlSource struct {
+	peer   [32]byte
+	remote netip.Addr
+	socket string
+}
+
+func (c *Control) handle(src controlSource, f frame.Frame) {
+	if c == nil {
+		return
+	}
+	if f.Type == frame.TypeObservedAddr {
+		c.observed(src, f.Payload)
+		return
+	}
+	peer := src.peer
+	if c.cfg.Cards == nil || f.Type != frame.TypeCardUpdate {
 		return
 	}
 	now := clockOr(c.cfg.Clock).Now()

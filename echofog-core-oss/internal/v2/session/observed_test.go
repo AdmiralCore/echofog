@@ -1,6 +1,8 @@
 package session_test
 
 import (
+	"fmt"
+	"math/rand/v2"
 	"net/netip"
 	"sync"
 	"testing"
@@ -209,10 +211,10 @@ func TestSameDecisionRepeatedFiresOnce(t *testing.T) {
 func TestUnusableObservationsAreIgnored(t *testing.T) {
 	r := newObsRig(t)
 	bad := []session.Observation{
-		obs(1, "198.51.100.1", "10.0.0.5:4000", "s"),    // private
-		obs(2, "192.0.2.9", "127.0.0.1:4000", "s"),      // loopback
-		obs(3, "100.64.0.1", "0.0.0.0:4000", "s"),       // unspecified
-		obs(4, "198.51.101.1", "169.254.1.1:4000", "s"), // link local
+		obs(1, "198.51.100.1", "10.0.0.5:4000", "s"),     // private
+		obs(2, "192.0.2.9", "127.0.0.1:4000", "s"),       // loopback
+		obs(3, "100.64.0.1", "0.0.0.0:4000", "s"),        // unspecified
+		obs(4, "198.51.101.1", "169.254.1.1:4000", "s"),  // link local
 		{Peer: peerID(5), Reported: ap("203.0.113.5:1")}, // no peer address (relay circuit)
 		{Peer: peerID(6), PeerAddr: netip.MustParseAddr("127.0.0.1"), Reported: ap("203.0.113.5:1")},
 		{Peer: peerID(7), PeerAddr: netip.MustParseAddr("192.0.2.77")}, // no reported address
@@ -358,5 +360,35 @@ func TestParseObservedHandshakeValue(t *testing.T) {
 		if _, ok := session.ParseObserved(bad); ok {
 			t.Fatalf("ParseObserved(%x) accepted", bad)
 		}
+	}
+}
+
+// TestRandomLiarsNeverOutvoteHonestNetworks: with 3 honest networks and one lying network (any
+// number of liars inside it, any order), the decision is the honest address whenever it is made,
+// and no divergent address is ever decided.
+func TestRandomLiarsNeverOutvoteHonestNetworks(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	for iter := 0; iter < 300; iter++ {
+		r := newObsRig(t)
+		type rep struct {
+			n        byte
+			addr, ip string
+		}
+		var reps []rep
+		for i := 0; i < 3; i++ { // honest: one network each
+			reps = append(reps, rep{byte(10 + i), fmt.Sprintf("198.%d.0.%d", 51+i, i+1), "203.0.113.5:4000"})
+		}
+		for i := 0; i < 1+rng.IntN(4); i++ { // liars: all inside 100.64/16
+			reps = append(reps, rep{byte(50 + i), fmt.Sprintf("100.64.%d.%d", i, i+1),
+				fmt.Sprintf("203.0.113.%d:4000", 100+rng.IntN(100))})
+		}
+		rng.Shuffle(len(reps), func(i, j int) { reps[i], reps[j] = reps[j], reps[i] })
+		for _, x := range reps {
+			r.o.Observe(obs(x.n, x.addr, x.ip, "s"))
+			if got, ok := r.o.PublicAddr(); ok && got != netip.MustParseAddr("203.0.113.5") {
+				t.Fatalf("iter %d: decided %v with %d reports", iter, got, len(reps))
+			}
+		}
+		wantPublic(t, r.o, "203.0.113.5")
 	}
 }

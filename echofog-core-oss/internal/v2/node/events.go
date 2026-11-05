@@ -2,6 +2,7 @@ package node
 
 import (
 	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -30,6 +31,10 @@ const (
 	// EventVisibility: a card reissue changed the node's visibility, so the public card and the
 	// D37 condition changed (T3.7a risk 4).
 	EventVisibility EventKind = "node.visibility"
+	// EventPublicAddr: the node's public IP was decided or changed by OBSERVED_ADDR agreement
+	// (wire.md §7.2) and its cards were pointed at it. Event.PublicAddr carries the address:
+	// it is the node's own public IP, shown to its operator only.
+	EventPublicAddr EventKind = "node.public-addr"
 	// EventListenerStopped: an accept loop stopped on a local error and the node no longer
 	// accepts on that listener (T3.7a risk 3).
 	EventListenerStopped EventKind = "node.listener-stopped"
@@ -50,6 +55,8 @@ type Event struct {
 	Closed     int
 	// Visibility is the payload of EventVisibility.
 	Visibility cards.Visibility
+	// PublicAddr is the payload of EventPublicAddr.
+	PublicAddr netip.Addr
 	// MemoryLevel is the payload of EventMemoryProtection.
 	MemoryLevel secret.Level
 }
