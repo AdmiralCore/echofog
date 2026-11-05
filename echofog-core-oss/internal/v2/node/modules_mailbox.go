@@ -18,7 +18,7 @@ const MailboxNamespace = "v2/mailbox"
 // The relay stores deposits only for others; on a metered profile it still answers drains of
 // existing queues but refuses new queues and deposits (mailbox.Config.Metered).
 func (r *Runtime) registerMailbox() {
-	if !profileHasRole(r.cfg.Profile.Roles, "mailbox") {
+	if !profileHasRole(r.cfg.Profile.Roles, RoleMailbox) {
 		return
 	}
 	spec, ok := service.Builtin(service.Mailbox)
@@ -48,7 +48,7 @@ func (r *Runtime) registerMailbox() {
 	})
 }
 
-func profileHasRole(roles []string, want string) bool {
+func profileHasRole(roles []Role, want Role) bool {
 	for _, role := range roles {
 		if role == want {
 			return true
