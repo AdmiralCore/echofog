@@ -40,8 +40,19 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 	m := newMesh()
 	nodes, _ := newRoom(t, m, 4)
 	coord, a, b, c := nodes[0], nodes[1], nodes[2], nodes[3]
+	waitForOneKey(t, nodes, nil)
+	// heartbeats carry each member's key exchange key; the first ones after the joins may ask for
+	// one more key. Let the room settle before taking the key it speaks.
+	time.Sleep(2*rekeyDelay + media.MediaKeySwitch)
 	before := waitForOneKey(t, nodes, nil)
 
+	// a's line goes dark: no frames in or out, and the coordinator times it out
+	var dark atomic.Bool
+	dark.Store(true)
+	for _, nd := range []*testNode{coord, b, c} {
+		m.blockLink(a.id, nd.id, nil, dark.Load)
+		m.blockLink(nd.id, a.id, nil, dark.Load)
+	}
 	coord.cm.mu.Lock()
 	coord.cm.removeMemberLocked(coord.cm.activeRoom, a.id, "timeout")
 	coord.cm.unlockAndFlush()
@@ -50,11 +61,19 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 		"a network timeout rotated the media key: the member that comes back cannot open what it missed")
 
 	// a member that leaves, though, takes its key with it
+	for _, nd := range []*testNode{coord, c} {
+		m.blockLink(b.id, nd.id, nil, dark.Load)
+		m.blockLink(nd.id, b.id, nil, dark.Load)
+	}
 	coord.cm.mu.Lock()
 	coord.cm.removeMemberLocked(coord.cm.activeRoom, b.id, "left")
 	coord.cm.unlockAndFlush()
-	after := waitForOneKey(t, []*testNode{coord, c}, nil)
-	assert.NotEqual(t, before, after, "a member that left kept the key the others went on speaking")
+	require.Eventually(t, func() bool {
+		for k, n := range sendKeyIDs([]*testNode{coord, c}, nil) {
+			return n == 2 && k != before
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "a member that left kept the key the others went on speaking")
 }
 
 // An election ran on a node cut off from the call: it led a half of one member and then heard

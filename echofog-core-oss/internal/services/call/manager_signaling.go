@@ -162,7 +162,7 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 				return m.rejectLocked(room, env, "heartbeat from outside the call", true)
 			}
 			var other signaling.CoordinatorHeartbeatPayload
-			_ = decodePayload(env.Payload, &other)
+			read := decodePayload(env.Payload, &other) == nil
 			switch {
 			case m.aloneLocked(room) && other.Members == 1 && !m.authorityLocked(room, env.Sender, env.Epoch):
 				// two coordinators, each alone (a blackout split the call): the one with the
@@ -172,6 +172,11 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 			case m.aloneLocked(room):
 				// we took over while cut off and nobody followed: the sender has the call
 				m.yieldLocked(room, env.Sender, env.Epoch, now)
+			case read && other.Members > 0 && other.Members < len(room.ConnectedPeers):
+				// an election ran on a node cut off from the call: its half is smaller than the
+				// one we kept. The smaller half yields; taking its claim would make the two
+				// halves swap the lead and the call would not become one room again.
+				return m.rejectLocked(room, env, "a smaller half yields to us", false)
 			case !m.authorityLocked(room, env.Sender, env.Epoch):
 				return m.rejectLocked(room, env, "heartbeat from a superseded coordinator", false)
 			default:

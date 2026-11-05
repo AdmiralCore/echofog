@@ -113,7 +113,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		room.ConnectedPeers[m.selfID] = room.MyProfile
 		room.memberSeen[m.selfID] = now
 		room.joined, room.everJoined = true, true
-		m.rebuildVoiceLocked(room)
+		m.rebuildVoiceLocked(room, true)
 	} else {
 		m.ensureConnectedLocked(coordinator)
 		m.sendJoinLocked(room, now)
@@ -201,9 +201,9 @@ func (m *CallManager) admitLocked(room *ActiveRoomState, peer types.PeerID, prof
 	if !known {
 		m.logger.Info("Call member joined", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer),
 			"members", len(room.ConnectedPeers), "upload_kbps", profile.UploadKbps, "relay_children", profile.MaxRelayChildren)
-		m.rebuildVoiceLocked(room)
+		m.rebuildVoiceLocked(room, true)
 	} else if newKX {
-		m.rebuildVoiceLocked(room) // it restarted: the others must seal its signals to the new key
+		m.rebuildVoiceLocked(room, true) // it restarted: the others must seal its signals to the new key
 	}
 	m.sendRoomSyncLocked(room, peer)
 }
@@ -229,7 +229,11 @@ func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerI
 	}
 	m.emit("call:member_removed", map[string]any{"call_id": room.CallID, "peer": peer.String()})
 
-	m.rebuildVoiceLocked(room)
+	// A member that left or was kicked goes without the key the others go on with. One lost to a
+	// timeout or a silent parent has not left: it is out of the voice tree, so no media reaches it
+	// meanwhile, and when its line comes back it is that member again. Rotating then would only
+	// leave it unable to open what reaches it on return.
+	m.rebuildVoiceLocked(room, reason == "left" || reason == "kicked")
 	changed, closed := room.StreamEngine.RemovePeer(peer)
 	for _, sm := range changed {
 		m.floodLocked(room, signaling.ActionStreamTreeUpdate, sm)

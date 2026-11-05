@@ -133,7 +133,10 @@ func (m *CallManager) refloodBackdropsLocked(room *ActiveRoomState, now time.Tim
 	m.floodLocked(room, signaling.ActionTreeManifest, &mf)
 }
 
-func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
+// rebuildVoiceLocked builds the voice tree for the current members. rekey asks for a new media key
+// with it: members joined or left, so what is said next is closed to whoever is not in the room.
+// A member merely lost to a timeout is not a departure (see removeMemberLocked).
+func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState, rekey bool) {
 	profiles := make([]tree.PeerNodeProfile, 0, len(room.ConnectedPeers))
 	for id, p := range room.ConnectedPeers {
 		// a member we reach only through a relay most likely has no direct link to the others
@@ -144,8 +147,10 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 		profiles = append(profiles, p)
 	}
 	room.Epoch++
-	room.backdropsChanged = false        // the new manifest carries them
-	m.scheduleRekeyLocked(room, m.now()) // the members changed: a key whoever left does not have
+	room.backdropsChanged = false // the new manifest carries them
+	if rekey {
+		m.scheduleRekeyLocked(room, m.now())
+	}
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
 	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
 		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
@@ -201,7 +206,7 @@ func (m *CallManager) becomeCoordinatorLocked(room *ActiveRoomState, now time.Ti
 	m.logger.Warn("Took over as call coordinator", "call_id", calllog.Call(room.CallID), "previous", calllog.Peer(old),
 		"epoch", room.Epoch, "members", len(room.ConnectedPeers))
 	m.floodLocked(room, signaling.ActionCoordinatorElection, m.selfID)
-	m.rebuildVoiceLocked(room)
+	m.rebuildVoiceLocked(room, true) // a new lead brings a key of its own: the old one dies with it
 
 	for _, sm := range room.StreamEngine.Snapshot() {
 		if _, alive := room.ConnectedPeers[sm.Broadcaster]; !alive {
