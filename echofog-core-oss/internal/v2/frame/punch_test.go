@@ -42,11 +42,12 @@ func TestPunchOfferMalformed(t *testing.T) {
 // More than MaxPunchAddrs addresses are malformed: a sender never sends them, and a parser that
 // accepted any number would let one frame carry 256 bytes of garbage targets.
 func TestPunchOfferTooManyAddrs(t *testing.T) {
-	o := PunchOffer{Nonce: 1}
+	one := PunchOffer{Addrs: []netip.AddrPort{ap("203.0.113.5:4433")}}.Append(nil)
+	var b []byte
 	for i := 0; i < MaxPunchAddrs+1; i++ {
-		o.Addrs = append(o.Addrs, ap("203.0.113.5:4433"))
+		b = append(b, one...)
 	}
-	if _, err := ParsePunchOffer(o.Append(nil)); !errors.Is(err, ErrMalformed) {
+	if _, err := ParsePunchOffer(b); !errors.Is(err, ErrMalformed) {
 		t.Fatalf("err = %v", err)
 	}
 }
