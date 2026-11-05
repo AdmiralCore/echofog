@@ -312,7 +312,7 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	if len(labeled) == 0 {
 		v.check(false, "the capture of %s has no flows", gw)
 	}
-	logf("captured %d flows on %s (%s on disk)", len(labeled), gw, humanBytes(cap.bytes()))
+	logf("captured %d flows on %s (%s captured)", len(labeled), gw, humanBytes(cap.bytes()))
 	return labeled, cap, carrier
 }
 
@@ -765,6 +765,11 @@ func (c *v2Capture) pump(r io.Reader) {
 					logf("write the capture: %v", werr)
 				}
 				_, _ = run("docker", "exec", c.container, "pkill", "-INT", "tcpdump")
+				// The docker exec client may still be blocked on the pipe; kill it so Wait cannot
+				// hang after the reader has stopped.
+				if c.cmd != nil && c.cmd.Process != nil {
+					_ = c.cmd.Process.Kill()
+				}
 				return
 			}
 		}
@@ -791,12 +796,22 @@ func (c *v2Capture) stop() {
 		select {
 		case <-c.pumpDone:
 		case <-time.After(10 * time.Second):
-			if c.cmd != nil && c.cmd.Process != nil {
+		}
+		// Kill the docker exec client even when the reader has already stopped: otherwise Wait
+		// can stay blocked on the pipe after a hard budget stop.
+		if c.cmd != nil {
+			if c.cmd.Process != nil {
 				_ = c.cmd.Process.Kill()
 			}
-		}
-		if c.cmd != nil {
-			_ = c.cmd.Wait()
+			done := make(chan struct{})
+			go func() {
+				_ = c.cmd.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+			}
 		}
 		if c.file != nil {
 			_ = c.file.Close()

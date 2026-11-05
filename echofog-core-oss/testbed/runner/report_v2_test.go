@@ -93,6 +93,9 @@ func TestReportSchemaTwo(t *testing.T) {
 	if r.Schema != 2 {
 		t.Fatalf("schema = %d, want 2", r.Schema)
 	}
+	if !strings.HasPrefix(r.Spec, "v2@") {
+		t.Errorf("spec = %q, want v2@<hash>", r.Spec)
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)

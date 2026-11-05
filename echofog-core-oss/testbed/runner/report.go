@@ -140,7 +140,12 @@ func specLabel(sha string) string {
 // specVersion is the last commit that touched docs/protocol/v2, so two runs are comparable by the
 // spec they were measured against, not just by the code commit.
 func specVersion() string {
-	sha, err := run("git", "log", "-1", "--format=%h", "--", "docs/protocol/v2")
+	// The runner lives in echofog-core-oss, while the specification is at the repository root.
+	root, err := run("git", "rev-parse", "--show-toplevel")
+	if err != nil || root == "" {
+		return specLabel("")
+	}
+	sha, err := run("git", "-C", root, "log", "-1", "--format=%h", "--", "docs/protocol/v2")
 	if err != nil {
 		return specLabel("")
 	}
