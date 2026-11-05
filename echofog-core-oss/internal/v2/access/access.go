@@ -582,36 +582,15 @@ func (m *Manager) Mint(ctx context.Context, opt MintOptions) (*Minted, error) {
 		return nil, err
 	}
 	linkExpires := now.Add(linkTTL)
-	if key.NotAfter != 0 && unix(linkExpires) > key.NotAfter {
-		// A shared key lives no longer than the first invitation that created it.
-		linkExpires = time.Unix(key.NotAfter, 0)
-	}
-	if fresh {
-		key.NotAfter = unix(linkExpires)
-		if err := m.saveKey(key); err != nil {
-			_ = m.removeKeyLocked(key.ID)
-			wipe(secret)
-			return nil, fmt.Errorf("%w: save masking key: %v", ErrState, err)
-		}
-	}
-	maskPub := m.publicOf(key.ID)
-	listener := m.listeners[key.Slot]
-	listener.Mask = maskPub
-	listener.MaskNotAfter = uint64(unix(linkExpires))
-
-	ic, err := m.cards.IssueInvite(ctx, cards.InviteOptions{
-		InviteID:  pid.Bytes(),
-		Listeners: []cards.Listener{listener},
-		OnlyThese: true,
-	})
-	if err != nil {
+	if err := m.ensureKeyNotAfterLocked(key, unix(linkExpires)); err != nil {
 		if fresh {
 			_ = m.removeKeyLocked(key.ID)
 		}
 		wipe(secret)
-		return nil, fmt.Errorf("%w: invitation card: %v", ErrState, err)
+		return nil, err
 	}
-	card, err := validateInviteCard(ic.Envelope, pid, maskPub, now)
+	maskPub := m.publicOf(key.ID)
+	ic, card, err := m.issueInvitationCardLocked(ctx, pid, key, unix(linkExpires), now)
 	if err != nil {
 		if fresh {
 			_ = m.removeKeyLocked(key.ID)
@@ -644,6 +623,35 @@ func (m *Manager) Mint(ctx context.Context, opt MintOptions) (*Minted, error) {
 		Link: link, LinkExpires: linkExpires, MaxEntries: maxEntries,
 		MaskKey: append(keys.AKey(nil), maskPub...), Listener: int(key.Slot),
 	}, nil
+}
+
+// issueInvitationCardLocked builds, signs and checks an invitation card for one key. maskNotAfter
+// is the invitation's own masking-key deadline: an extension or a reissue of an expired link must
+// put it in the future, otherwise the initiator refuses the card (T3.6 fix 1-2).
+func (m *Manager) issueInvitationCardLocked(ctx context.Context, pid PassID, key *keyRecord, maskNotAfter int64, now time.Time) (*cards.IssuedCard, *objects.Card, error) {
+	if int(key.Slot) >= len(m.listeners) {
+		return nil, nil, fmt.Errorf("%w: listener slot %d is gone", ErrState, key.Slot)
+	}
+	if maskNotAfter <= unix(now) {
+		return nil, nil, fmt.Errorf("%w: mask deadline %d is not in the future", ErrState, maskNotAfter)
+	}
+	maskPub := m.publicOf(key.ID)
+	listener := m.listeners[key.Slot]
+	listener.Mask = maskPub
+	listener.MaskNotAfter = uint64(maskNotAfter)
+	ic, err := m.cards.IssueInvite(ctx, cards.InviteOptions{
+		InviteID:  pid.Bytes(),
+		Listeners: []cards.Listener{listener},
+		OnlyThese: true,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: invitation card: %v", ErrState, err)
+	}
+	card, err := validateInviteCard(ic.Envelope, pid, maskPub, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ic, card, nil
 }
 
 // newPassIDLocked draws a secret and its selector, avoiding a collision with any known pass.
@@ -857,12 +865,27 @@ func (m *Manager) Extend(ctx context.Context, id PassID, d time.Duration) (Info,
 		case inv.Entries >= inv.MaxEntries || len(inv.Secret) != secretLen:
 			return Info{}, ErrUsedUp
 		}
+		key := m.keys[inv.KeyID]
+		if key == nil {
+			return Info{}, fmt.Errorf("%w: invitation key is gone", ErrState)
+		}
 		next := *inv
 		base := inv.LinkExpires
 		if unix(now) > base {
 			base = unix(now)
 		}
-		next.LinkExpires = minInt64(base+delta, inv.CardNotAfter)
+		// A renewed card carries a new 30-day lifetime; the old card's not_after must not cap it.
+		desired := minInt64(base+delta, unix(now)+int64(DefaultLinkTTL/time.Second))
+		ic, card, err := m.issueInvitationCardLocked(ctx, inv.PassID, key, desired, now)
+		if err != nil {
+			return Info{}, err
+		}
+		if err := m.ensureKeyNotAfterLocked(key, desired); err != nil {
+			return Info{}, err
+		}
+		next.LinkExpires = desired
+		next.Card = append([]byte(nil), ic.Envelope...)
+		next.CardNotAfter = int64(card.Env.NotAfter)
 		if next.AccessExpires != 0 {
 			base = next.AccessExpires
 			if unix(now) > base {
@@ -922,31 +945,39 @@ func (m *Manager) RevokeContact(ctx context.Context, node [32]byte) (*RevokeResu
 		return nil, ErrClosed
 	}
 	now := m.clk.Now()
-	var first *personalRecord
+	var records []*personalRecord
 	for _, r := range m.personal {
 		if r.Node != node || r.Revoked {
 			continue
 		}
-		if first == nil {
-			first = r
-		}
+		records = append(records, r)
+	}
+	if len(records) == 0 {
+		return nil, ErrNotFound
+	}
+	// Fail closed for every pass of the contact before any write: a later store error must not
+	// leave another device of the same contact active.
+	for _, r := range records {
 		next := *r
 		next.Revoked = true
 		wipe(next.Secret)
 		next.Secret = nil
-		if err := m.savePersonal(&next); err != nil {
-			return nil, fmt.Errorf("%w: save personal pass: %v", ErrState, err)
-		}
 		*r = next
 	}
-	if first == nil {
-		return nil, ErrNotFound
+	var errs []error
+	for _, r := range records {
+		if err := m.savePersonal(r); err != nil {
+			errs = append(errs, fmt.Errorf("%w: save personal pass: %v", ErrState, err))
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
 	next, old, err := m.rotateContactsLocked(now)
 	if err != nil {
 		return nil, err
 	}
-	return &RevokeResult{Pass: m.infoPersonalLocked(first, now), Contacts: m.rotationOf(next, old)}, nil
+	return &RevokeResult{Pass: m.infoPersonalLocked(records[0], now), Contacts: m.rotationOf(next, old)}, nil
 }
 
 func (m *Manager) revokePersonalLocked(r *personalRecord, now time.Time) (*RevokeResult, error) {
@@ -957,10 +988,10 @@ func (m *Manager) revokePersonalLocked(r *personalRecord, now time.Time) (*Revok
 	next.Revoked = true
 	wipe(next.Secret)
 	next.Secret = nil
+	*r = next
 	if err := m.savePersonal(&next); err != nil {
 		return nil, fmt.Errorf("%w: save personal pass: %v", ErrState, err)
 	}
-	*r = next
 	nextKey, old, err := m.rotateContactsLocked(now)
 	if err != nil {
 		return nil, err
@@ -994,31 +1025,30 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 
 	if len(others) == 0 {
 		if err := m.removeKeyLocked(oldKey); err != nil {
-			return nil, err
-		}
-		if err := m.saveInvitation(&next); err != nil {
 			*r = next
-			return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
+			return nil, errors.Join(err, m.markRevokedLocked([]*invitationRecord{r}))
 		}
 		*r = next
+		if err := m.saveInvitation(&next); err != nil {
+			return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
+		}
 		return &RevokeResult{Pass: m.infoInvitationLocked(r, now), KeyRemoved: oldPub}, nil
 	}
 
 	// The old key must die before anything is reissued: a crashed reissue then leaves the other
 	// invitations broken (fail closed) rather than reviving the revoked key.
 	if err := m.removeKeyLocked(oldKey); err != nil {
-		return nil, err
-	}
-	if err := m.saveInvitation(&next); err != nil {
 		*r = next
-		return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
+		return nil, errors.Join(err, m.markRevokedLocked(append([]*invitationRecord{r}, others...)))
 	}
 	*r = next
+	if err := m.saveInvitation(&next); err != nil {
+		return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
+	}
 
 	fresh, err := m.newKeyLocked(keyInvitation, slot, now, 0, 0, 0)
 	if err != nil {
-		m.markRevokedLocked(others)
-		return nil, err
+		return nil, errors.Join(err, m.markRevokedLocked(others))
 	}
 	var reissued []Minted
 	for i, o := range others {
@@ -1026,8 +1056,7 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 		if err != nil {
 			// The old key is already gone; every invitation not moved to the new key must stop
 			// admitting rather than linger without a listener.
-			m.markRevokedLocked(others[i:])
-			return nil, err
+			return nil, errors.Join(err, m.markRevokedLocked(others[i:]))
 		}
 		reissued = append(reissued, *min)
 	}
@@ -1038,49 +1067,44 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 }
 
 // markRevokedLocked fails closed: an invitation that lost its masking key can never be reached,
-// so it must not keep admitting through a stale in-memory record.
-func (m *Manager) markRevokedLocked(list []*invitationRecord) {
+// so it must not keep admitting through a stale in-memory record. The in-memory change happens
+// before the write; a write failure is returned but does not undo it.
+func (m *Manager) markRevokedLocked(list []*invitationRecord) error {
+	var errs []error
 	for _, r := range list {
 		next := *r
 		next.Revoked = true
 		wipe(next.Secret)
 		next.Secret = nil
-		if err := m.saveInvitation(&next); err == nil {
-			*r = next
+		*r = next
+		if err := m.saveInvitation(&next); err != nil {
+			errs = append(errs, fmt.Errorf("%w: save invitation: %v", ErrState, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // reissueInvitationLocked moves one invitation to a new secret, pass_id and card on the given key.
 // The old record is deleted after the new one is written; a crash leaves the invitation broken.
+// An expired link gets a future mask deadline so RotateKeys does not fail on it; the link itself
+// stays expired until the owner calls Extend (T3.6 fix 2).
 func (m *Manager) reissueInvitationLocked(ctx context.Context, r *invitationRecord, key *keyRecord, now time.Time) (*Minted, error) {
 	secret, pid, err := m.newPassIDLocked()
 	if err != nil {
 		return nil, err
 	}
-	maskPub := m.publicOf(key.ID)
-	listener := m.listeners[key.Slot]
-	listener.Mask = maskPub
-	linkExpires := time.Unix(r.LinkExpires, 0)
-	if key.NotAfter == 0 || unix(linkExpires) > key.NotAfter {
-		key.NotAfter = unix(linkExpires)
-		if err := m.saveKey(key); err != nil {
-			wipe(secret)
-			return nil, fmt.Errorf("%w: save masking key: %v", ErrState, err)
-		}
+	maskNA := r.LinkExpires
+	if maskNA <= unix(now) {
+		maskNA = unix(now) + int64(DefaultLinkTTL/time.Second)
 	}
-	listener.MaskNotAfter = uint64(unix(linkExpires))
-	ic, err := m.cards.IssueInvite(ctx, cards.InviteOptions{
-		InviteID: pid.Bytes(), Listeners: []cards.Listener{listener}, OnlyThese: true,
-	})
+	ic, card, err := m.issueInvitationCardLocked(ctx, pid, key, maskNA, now)
 	if err != nil {
 		wipe(secret)
-		return nil, fmt.Errorf("%w: invitation card: %v", ErrState, err)
+		return nil, errors.Join(err, m.markRevokedLocked([]*invitationRecord{r}))
 	}
-	card, err := validateInviteCard(ic.Envelope, pid, maskPub, now)
-	if err != nil {
+	if err := m.ensureKeyNotAfterLocked(key, maskNA); err != nil {
 		wipe(secret)
-		return nil, err
+		return nil, errors.Join(err, m.markRevokedLocked([]*invitationRecord{r}))
 	}
 	next := &invitationRecord{
 		PassID: pid, Secret: secret, KeyID: key.ID, Slot: key.Slot,
@@ -1091,14 +1115,14 @@ func (m *Manager) reissueInvitationLocked(ctx context.Context, r *invitationReco
 	}
 	if err := m.saveInvitation(next); err != nil {
 		wipe(secret)
-		return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
+		return nil, errors.Join(fmt.Errorf("%w: save invitation: %v", ErrState, err), m.markRevokedLocked([]*invitationRecord{r}))
 	}
 	if err := m.deleteInvitation(r.PassID); err != nil {
 		// The new record is written; leaving the old one would keep the old link alive. Delete the
 		// new record and report, so the invitation is lost rather than duplicated.
 		_ = m.deleteInvitation(pid)
 		wipe(secret)
-		return nil, fmt.Errorf("%w: delete old invitation: %v", ErrState, err)
+		return nil, errors.Join(fmt.Errorf("%w: delete old invitation: %v", ErrState, err), m.markRevokedLocked([]*invitationRecord{r}))
 	}
 	delete(m.invitations, r.PassID)
 	m.invitations[pid] = next
@@ -1109,7 +1133,7 @@ func (m *Manager) reissueInvitationLocked(ctx context.Context, r *invitationReco
 	return &Minted{
 		PassID: pid, Secret: append([]byte(nil), secret...), Card: append([]byte(nil), ic.Envelope...),
 		Link: link, LinkExpires: time.Unix(next.LinkExpires, 0), MaxEntries: next.MaxEntries,
-		MaskKey: append(keys.AKey(nil), maskPub...), Listener: int(key.Slot),
+		MaskKey: append(keys.AKey(nil), m.publicOf(key.ID)...), Listener: int(key.Slot),
 	}, nil
 }
 
@@ -1147,12 +1171,12 @@ func (m *Manager) RotateKeys(ctx context.Context) (*Rotation, error) {
 	for keyID, invites := range groups {
 		slot := m.keys[keyID].Slot
 		if err := m.removeKeyLocked(keyID); err != nil {
-			return nil, err
+			// The key is already gone from memory; the passes that named it must not admit.
+			return nil, errors.Join(err, m.markRevokedLocked(invites))
 		}
 		fresh, err := m.newKeyLocked(keyInvitation, slot, now, 0, 0, 0)
 		if err != nil {
-			m.markRevokedLocked(invites)
-			return nil, err
+			return nil, errors.Join(err, m.markRevokedLocked(invites))
 		}
 		sort.Slice(invites, func(i, j int) bool {
 			return bytesCompare(invites[i].PassID[:], invites[j].PassID[:]) < 0
@@ -1161,8 +1185,7 @@ func (m *Manager) RotateKeys(ctx context.Context) (*Rotation, error) {
 			min, err := m.reissueInvitationLocked(ctx, inv, fresh, now)
 			if err != nil {
 				// The old key is gone; fail closed for everything not yet moved.
-				m.markRevokedLocked(invites[i:])
-				return nil, err
+				return nil, errors.Join(err, m.markRevokedLocked(invites[i:]))
 			}
 			rot.Reissued = append(rot.Reissued, *min)
 		}

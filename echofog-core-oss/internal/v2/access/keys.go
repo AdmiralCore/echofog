@@ -1,9 +1,9 @@
 package access
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/identity"
@@ -29,24 +29,24 @@ func (m *Manager) publicOf(id [8]byte) keys.AKey {
 // newKeyLocked makes, records and persists one masking key pair. The caller holds m.mu.
 func (m *Manager) newKeyLocked(kind uint8, slot uint32, now time.Time, notAfter, retireAfter int64, version uint64) (*keyRecord, error) {
 	var id [8]byte
-	for {
-		if _, err := rand.Read(id[:]); err != nil {
+	for i := 0; ; i++ {
+		if _, err := io.ReadFull(m.rand, id[:]); err != nil {
 			return nil, fmt.Errorf("%w: key id: %v", ErrState, err)
 		}
 		if _, dup := m.keys[id]; !dup {
 			break
 		}
+		if i >= 7 {
+			return nil, fmt.Errorf("%w: key id collision", ErrState)
+		}
 	}
-	kp, err := identity.NewKeyPair()
-	if err != nil {
+	priv := make([]byte, privateKeyLen)
+	if _, err := io.ReadFull(m.rand, priv); err != nil {
 		return nil, fmt.Errorf("%w: masking key: %v", ErrState, err)
 	}
-	var priv []byte
-	if err := kp.WithPrivate(func(b []byte) error {
-		priv = append([]byte(nil), b...)
-		return nil
-	}); err != nil {
-		kp.Destroy()
+	kp, err := identity.KeyPairFromPrivate(priv)
+	if err != nil {
+		wipe(priv)
 		return nil, fmt.Errorf("%w: masking key: %v", ErrState, err)
 	}
 	rec := &keyRecord{
@@ -59,9 +59,25 @@ func (m *Manager) newKeyLocked(kind uint8, slot uint32, now time.Time, notAfter,
 		delete(m.keys, id)
 		delete(m.live, id)
 		kp.Destroy()
+		wipe(priv)
 		return nil, fmt.Errorf("%w: save masking key: %v", ErrState, err)
 	}
 	return rec, nil
+}
+
+// ensureKeyNotAfterLocked extends the key's accepted window. A restart of an expired invitation or
+// a new invitation sharing an old group must not keep the old deadline (T3.6 fix 1-3).
+func (m *Manager) ensureKeyNotAfterLocked(key *keyRecord, notAfter int64) error {
+	if notAfter <= key.NotAfter {
+		return nil
+	}
+	prev := key.NotAfter
+	key.NotAfter = notAfter
+	if err := m.saveKey(key); err != nil {
+		key.NotAfter = prev
+		return fmt.Errorf("%w: save masking key: %v", ErrState, err)
+	}
+	return nil
 }
 
 func (m *Manager) removeKeyLocked(id [8]byte) error {
@@ -168,7 +184,9 @@ func (m *Manager) keyForMintLocked(now time.Time, share bool) (*keyRecord, bool,
 		if r.Kind != keyInvitation || int(r.Slot) >= len(m.listeners) {
 			continue
 		}
-		n := len(m.refsLocked(id, now))
+		// Expired passes still hold the key for a later Extend; a new invitation may share it and
+		// give the key a fresh NotAfter (T3.6 fix 3).
+		n := len(m.holdersLocked(id))
 		if n == 0 {
 			continue
 		}
