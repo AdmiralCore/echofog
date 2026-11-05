@@ -100,6 +100,10 @@ func flatten(prefix string, v any, out map[string]string) {
 		}
 		out[prefix] = strings.Join(parts, ",")
 	default:
+		if x == nil {
+			out[prefix] = "null"
+			return
+		}
 		out[prefix] = fmt.Sprint(x)
 	}
 }

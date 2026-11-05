@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"time"
 )
 
@@ -31,15 +30,10 @@ const (
 	linkLinuxSLL = 113
 )
 
-// readPcap reads every IPv4 TCP/UDP packet of a classic pcap file.
-func readPcap(path string) ([]packet, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+// readPcap reads every IPv4 TCP/UDP packet of a classic pcap stream.
+func readPcap(r io.Reader) ([]packet, error) {
 	var hdr [24]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return nil, fmt.Errorf("pcap header: %w", err)
 	}
 	var bo binary.ByteOrder
@@ -61,7 +55,7 @@ func readPcap(path string) ([]packet, error) {
 	var out []packet
 	var rec [16]byte
 	for {
-		if _, err := io.ReadFull(f, rec[:]); err != nil {
+		if _, err := io.ReadFull(r, rec[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return out, nil
 			}
@@ -73,7 +67,7 @@ func readPcap(path string) ([]packet, error) {
 			return out, errors.New("pcap record too large")
 		}
 		data := make([]byte, incl)
-		if _, err := io.ReadFull(f, data); err != nil {
+		if _, err := io.ReadFull(r, data); err != nil {
 			return out, nil // a capture cut off mid-record
 		}
 		ns := int64(frac) * 1000

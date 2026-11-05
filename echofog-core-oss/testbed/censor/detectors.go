@@ -45,8 +45,9 @@ type DetectorConfig struct {
 }
 
 // DetectorMetric is one row of report.json: how a detector did on the labelled flows.
+// Recall is nil when the run had no positive sample: "no control flows" is not "recall 1".
 type DetectorMetric struct {
-	Recall           float64  `json:"recall"`
+	Recall           *float64 `json:"recall"`
 	FPR              float64  `json:"fpr"`
 	N                int      `json:"n"`
 	Positives        int      `json:"positives"`
@@ -82,6 +83,7 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 	out := map[string]DetectorMetric{}
 	for _, d := range Detectors() {
 		m := DetectorMetric{}
+		recalled := 0
 		for i := range flows {
 			fl := flows[i]
 			if !d.Applies(fl) {
@@ -93,7 +95,7 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 			if truth {
 				m.Positives++
 				if flag {
-					m.Recall++
+					recalled++
 				}
 				continue
 			}
@@ -106,10 +108,11 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 			}
 		}
 		if m.Positives > 0 {
-			m.Recall /= float64(m.Positives)
+			v := float64(recalled) / float64(m.Positives)
+			m.Recall = &v
 		} else {
-			m.Recall = 1
-			m.Notes = append(m.Notes, "no positive samples in this run")
+			m.Recall = nil
+			m.Notes = append(m.Notes, "recall unavailable: no positive samples in this run")
 		}
 		if m.BrowserNegatives > 0 {
 			m.FPR = float64(m.BrowserFP) / float64(m.BrowserNegatives)
@@ -146,7 +149,9 @@ func (quicSNIDetector) Applies(f LabeledFlow) bool {
 	return f.Proto == "udp" && f.SNI != ""
 }
 func (quicSNIDetector) Truth(f LabeledFlow, cfg DetectorConfig) bool {
-	return cfg.BlockedSNI[f.SNI]
+	// The scenario's control is the quic-go flow with a blocked SNI. The detector's own list is
+	// not the truth, otherwise a parser regression would silently shrink the positive set.
+	return f.Suite == "quic-go" && cfg.BlockedSNI[f.SNI]
 }
 func (quicSNIDetector) Flag(f LabeledFlow, cfg DetectorConfig) bool {
 	return cfg.BlockedSNI[f.SNI]
@@ -161,8 +166,10 @@ func (sniAddressDetector) Name() string { return "SNI against the address and AS
 func (sniAddressDetector) Applies(f LabeledFlow) bool {
 	return f.SNI != ""
 }
-func (sniAddressDetector) Truth(f LabeledFlow, cfg DetectorConfig) bool {
-	return foreign(f.Flow, cfg)
+func (sniAddressDetector) Truth(f LabeledFlow, _ DetectorConfig) bool {
+	// The scenario's controls are tls-go (foreign.example) and quic-go (blocked.example). Truth
+	// comes from the labels, not from foreign(): the rule must not grade itself.
+	return f.SNI != "" && (f.Suite == "tls-go" || f.Suite == "quic-go")
 }
 func (sniAddressDetector) Flag(f LabeledFlow, cfg DetectorConfig) bool {
 	return foreign(f.Flow, cfg)
@@ -173,6 +180,15 @@ func (sniAddressDetector) Flag(f LabeledFlow, cfg DetectorConfig) bool {
 func foreign(f Flow, cfg DetectorConfig) bool {
 	if f.SNI == "" {
 		return false
+	}
+	// Hosted is what CheckSNI uses and what the address really serves. If it serves the name,
+	// the flow is not foreign even when the DNS table is shorter than the Hosted table.
+	if names, ok := cfg.Hosted[f.Server.Addr()]; ok {
+		for _, n := range names {
+			if n == f.SNI {
+				return false
+			}
+		}
 	}
 	if f.SNIForeign {
 		return true

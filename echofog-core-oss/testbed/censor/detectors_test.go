@@ -26,6 +26,7 @@ func TestEvaluateDetectorsFindsControlsAndKeepsBrowserClean(t *testing.T) {
 		ServerASN:  map[netip.Addr]string{netip.MustParseAddr("203.0.113.15"): "AS64500"},
 		DNS: map[string]ResolvedName{
 			"cover.lab":       {IPs: []netip.Addr{netip.MustParseAddr("203.0.113.15")}, ASN: "AS64500"},
+			"blocked.example": {IPs: []netip.Addr{netip.MustParseAddr("198.51.100.20")}, ASN: "AS64501"},
 			"foreign.example": {IPs: []netip.Addr{netip.MustParseAddr("198.51.100.7")}, ASN: "AS64501"},
 		},
 		BrowserJA4: map[string]bool{"t13d1516h2_browser": true},

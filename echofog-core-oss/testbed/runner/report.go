@@ -120,12 +120,39 @@ func buildReport(in reportInput) reportV2 {
 		in.Resources = map[string]any{}
 	}
 	return reportV2{
-		Schema: 2, When: time.Now().UTC().Format(time.RFC3339), Commit: commit(), Spec: "v2",
+		Schema: 2, When: time.Now().UTC().Format(time.RFC3339), Commit: commit(), Spec: specVersion(),
 		Profile: in.Profile, Scenario: in.Scenario, Seed: in.Seed, Network: in.Network,
 		Phases: in.Phases, Detectors: in.Detectors, Aggregate: in.Aggregate, Coverage: in.Coverage,
 		Behaviour: in.Behaviour, Resources: in.Resources, Carrier: in.Carrier,
 		BrowserProfiles: in.BrowserProfiles, Pcap: in.Pcap, Flows: in.Flows, Findings: in.Findings,
 	}
+}
+
+// specLabel pins a report to a specification revision. An empty hash means the worktree has no
+// git history (a copied tree); it is still better than a bare "v2" that compares as equal.
+func specLabel(sha string) string {
+	if sha == "" {
+		return "v2"
+	}
+	return "v2@" + sha
+}
+
+// specVersion is the last commit that touched docs/protocol/v2, so two runs are comparable by the
+// spec they were measured against, not just by the code commit.
+func specVersion() string {
+	sha, err := run("git", "log", "-1", "--format=%h", "--", "docs/protocol/v2")
+	if err != nil {
+		return specLabel("")
+	}
+	return specLabel(sha)
+}
+
+// recallText renders unavailable recall where JSON has null.
+func recallText(r *float64) string {
+	if r == nil {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%.2f", *r)
 }
 
 // commit returns the short hash of the run's tree and +dirty when tracked files are modified.
@@ -212,7 +239,7 @@ func writeSummary(w io.Writer, r reportV2, flowLines []censor.LabeledFlow) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		m := r.Detectors[id]
-		fmt.Fprintf(w, "  %-3s recall %.2f  FPR %.3f  n=%d  positives=%d\n", id, m.Recall, m.FPR, m.N, m.Positives)
+		fmt.Fprintf(w, "  %-3s recall %s  FPR %.3f  n=%d  positives=%d\n", id, recallText(m.Recall), m.FPR, m.N, m.Positives)
 	}
 	fmt.Fprintf(w, "\nbrowser profiles: version %s, %d entries\n", r.BrowserProfiles.Version, r.BrowserProfiles.Entries)
 	if r.BrowserProfiles.Note != "" {

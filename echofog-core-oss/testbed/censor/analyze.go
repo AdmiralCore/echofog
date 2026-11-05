@@ -2,7 +2,9 @@ package censor
 
 import (
 	"fmt"
+	"io"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -104,13 +106,29 @@ type flowKey struct {
 	gen      int // a source port reused by a later connection starts the next generation
 }
 
-// Analyze reads a capture and returns its flows, the busiest first. A TCP flow's client is the
-// side that sent the SYN; a UDP flow's, the side that sent first.
+// Analyze reads a capture file and returns its flows, the busiest first.
 func Analyze(pcapPath string) ([]Flow, error) {
-	pkts, err := readPcap(pcapPath)
+	f, err := os.Open(pcapPath)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+	return AnalyzeReader(f)
+}
+
+// AnalyzeReader reads a classic pcap stream. The launchpad uses it for a capture that never
+// touches the disk when -pcap is not requested.
+func AnalyzeReader(r io.Reader) ([]Flow, error) {
+	pkts, err := readPcap(r)
+	if err != nil {
+		return nil, err
+	}
+	return analyzePackets(pkts), nil
+}
+
+// analyzePackets turns an ordered packet list into flows. A TCP flow's client is the side that
+// sent the SYN; a UDP flow's, the side that sent first.
+func analyzePackets(pkts []packet) []Flow {
 	type state struct {
 		f        *Flow
 		upStream []byte // first client bytes of a TCP flow
@@ -265,7 +283,7 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		out = append(out, *f)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].BytesUp+out[i].BytesDn > out[j].BytesUp+out[j].BytesDn })
-	return out, nil
+	return out
 }
 
 // Report renders flows as a table; label names the server addresses ("x1", "web", ...).

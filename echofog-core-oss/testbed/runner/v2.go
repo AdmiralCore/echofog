@@ -10,10 +10,13 @@ package main
 // carrier lands.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -134,7 +137,7 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	}
 	stamp := browserProfileStamp{Version: db.Version, Entries: len(db.Entries)}
 	stamp.Sources = profileSources(db)
-	stamp.Note = fmt.Sprintf("captured for country/network lab/%s; real Chrome is used when installed, otherwise the uTLS Chrome preset, curl and quic-go are recorded honestly", *v2Network)
+	stamp.Note = browserProfileNote(db, *v2Network)
 	cfg := detectorConfig(db)
 
 	var labeled []censor.LabeledFlow
@@ -166,8 +169,8 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 			findings = append(findings, line)
 			v.check(false, "%s", line)
 		}
-		if m.Positives > 0 && m.Recall < 1 {
-			line := fmt.Sprintf("%s recall %.2f on its control flows (want 1)", id, m.Recall)
+		if m.Recall != nil && *m.Recall < 1 {
+			line := fmt.Sprintf("%s recall %.2f on its control flows (want 1)", id, *m.Recall)
 			findings = append(findings, line)
 			v.check(false, "%s", line)
 		}
@@ -231,7 +234,7 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	logf("report: %s", filepath.Join(out, "report.json"))
 	logf("flows: %d total, %d labelled; visibility %.1f%%", flows.Total, flows.Labelled, agg.VisibilityPct)
 	for id, m := range metrics {
-		logf("  %-3s recall %.2f fpr %.3f n=%d", id, m.Recall, m.FPR, m.N)
+		logf("  %-3s recall %s fpr %.3f n=%d", id, recallText(m.Recall), m.FPR, m.N)
 	}
 }
 
@@ -272,7 +275,7 @@ func v2ServicesPhase(nodes map[string]*node, v *verdict, behaviour map[string]an
 // the same testbed/censor detectors the v1 censor scenario uses.
 func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) ([]censor.LabeledFlow, *v2Capture, carrierInfo) {
 	gw := "gw_b" // b1 (harness + browser) and b2 (the v1 product) are behind it
-	cap, err := startV2Capture(gw, out, v2PcapBudget.v)
+	cap, err := startV2Capture(gw, out, v2PcapBudget.v, *v2Pcap)
 	if err != nil {
 		v.check(false, "start the capture on %s: %v", gw, err)
 		return nil, nil, carrierInfo{Name: "none"}
@@ -287,15 +290,15 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	time.Sleep(2 * time.Second)
 	cap.stop()
 
-	path := cap.path()
-	if path == "" {
-		v.check(false, "no capture was copied from %s", gw)
+	data := cap.data()
+	if len(data) == 0 {
+		v.check(false, "no packets were captured on %s", gw)
 		return nil, cap, carrier
 	}
 	if cap.overBudget() {
-		v.check(false, "the capture went over its budget of %s", humanBytes(cap.budget))
+		v.check(false, "the capture reached its budget of %s; analysis uses the first %s", humanBytes(cap.budget), humanBytes(cap.bytes()))
 	}
-	flows, err := censor.Analyze(path)
+	flows, err := censor.AnalyzeReader(bytes.NewReader(data))
 	if err != nil {
 		v.check(false, "analyze the capture of %s: %v", gw, err)
 		return nil, cap, carrier
@@ -503,6 +506,26 @@ func profileSources(db *browserprofiles.Database) []string {
 	return out
 }
 
+// browserProfileNote says where the capture really came from. -network only labels a run; it does
+// not turn a lab capture into a capture on a mobile operator's network.
+func browserProfileNote(db *browserprofiles.Database, runNetwork string) string {
+	if len(db.Entries) == 0 {
+		return fmt.Sprintf("no browser profile entries; run network label: %s; real captures belong to T15.2", runNetwork)
+	}
+	seen := map[string]bool{}
+	var nets []string
+	for _, p := range db.Entries {
+		k := p.Country + "/" + p.Network
+		if !seen[k] {
+			seen[k] = true
+			nets = append(nets, k)
+		}
+	}
+	sort.Strings(nets)
+	return fmt.Sprintf("profile entries: country/network %s; run network label: %s; real %s captures belong to T15.2",
+		strings.Join(nets, ", "), runNetwork, runNetwork)
+}
+
 // ---------------------------------------------------------------------------- aggregates
 
 func aggregateFor(flows []censor.LabeledFlow) aggregate {
@@ -566,16 +589,18 @@ func coverageFor(metrics map[string]censor.DetectorMetric, carrier carrierInfo) 
 			continue
 		}
 		switch {
+		case m.Positives == 0 || m.Recall == nil:
+			rows[i].Verdict = "no positive control: recall unavailable"
 		case m.FPR > 0.01:
 			rows[i].Verdict = "finding: browser FPR above 1%"
-		case m.Positives > 0 && m.Recall < 1:
+		case *m.Recall < 1:
 			rows[i].Verdict = "finding: missed its control flows"
 		case rows[i].Detector == "D10" && carrier.Synthetic:
 			rows[i].Verdict = "caught the synthetic stand-in (expected)"
 		default:
 			rows[i].Verdict = "control works"
 		}
-		rows[i].Note = fmt.Sprintf("recall %.2f, browser FPR %.3f, n=%d", m.Recall, m.FPR, m.N)
+		rows[i].Note = fmt.Sprintf("recall %s, browser FPR %.3f, n=%d", recallText(m.Recall), m.FPR, m.N)
 	}
 	return rows
 }
@@ -602,100 +627,190 @@ func pcapFinding(p pcapInfo) []string {
 
 // ---------------------------------------------------------------------------- capture
 
+var errCaptureLimit = errors.New("pcap budget reached")
+
+// captureSink enforces the pcap budget while the bytes arrive, not by polling a file afterwards.
+// It keeps the capture in memory for the detectors and, only with -pcap, tees it to a file. The
+// file can never grow past the limit because Write truncates the last chunk.
+type captureSink struct {
+	mu    sync.Mutex
+	limit int64
+	n     int64
+	over  bool
+	buf   bytes.Buffer
+	file  *os.File
+}
+
+func newCaptureSink(limit int64, file *os.File) *captureSink {
+	return &captureSink{limit: limit, file: file}
+}
+
+func (s *captureSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if s.limit > 0 {
+		remaining := s.limit - s.n
+		if remaining <= 0 {
+			s.over = true
+			return 0, errCaptureLimit
+		}
+		if int64(len(p)) > remaining {
+			p = p[:remaining]
+			s.over = true
+		}
+	}
+	n, err := s.buf.Write(p)
+	if err != nil {
+		return n, err
+	}
+	if s.file != nil {
+		if _, err := s.file.Write(p); err != nil {
+			return n, err
+		}
+	}
+	s.n += int64(n)
+	if s.over {
+		return n, errCaptureLimit
+	}
+	return n, nil
+}
+
+func (s *captureSink) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.buf.Bytes()...)
+}
+
+func (s *captureSink) Size() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
+}
+
+func (s *captureSink) Over() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.over
+}
+
 type v2Capture struct {
 	gw        string
 	out       string
 	container string
-	hostPath  string
+	tempPath  string // only when -pcap asked for a file
 	budget    int64
-	size      int64
-	violated  bool
-	done      chan struct{}
+	sink      *captureSink
+	file      *os.File
+	cmd       *exec.Cmd
+	stderr    bytes.Buffer
+	pumpDone  chan struct{}
 	once      sync.Once
 	mu        sync.Mutex
+	violated  bool
 }
 
-func startV2Capture(gw, out string, budget int64) (*v2Capture, error) {
+func startV2Capture(gw, out string, budget int64, keep bool) (*v2Capture, error) {
+	c := &v2Capture{gw: gw, out: out, container: container(gw), budget: budget, pumpDone: make(chan struct{})}
+	if keep {
+		// The only pcap on disk is the one -pcap asked for. It is deleted after a green analysis
+		// and renamed to wan-<gw>.pcap after a red one.
+		c.tempPath = filepath.Join(out, ".wan-"+gw+".pcap")
+		f, err := os.Create(c.tempPath)
+		if err != nil {
+			return nil, err
+		}
+		c.file = f
+	}
+	c.sink = newCaptureSink(budget, c.file)
 	for i := 0; i < 30; i++ {
-		if o, err := run("docker", "exec", container(gw), "cat", "/tmp/wan_if"); err == nil && o != "" {
+		if o, err := run("docker", "exec", c.container, "cat", "/tmp/wan_if"); err == nil && o != "" {
 			break
 		}
 		time.Sleep(time.Second)
 	}
-	_, _ = run("docker", "exec", container(gw), "sh", "-c", "pkill -INT tcpdump 2>/dev/null; rm -f /tmp/wan.pcap; true")
-	if o, err := run("docker", "exec", "-d", container(gw), "tcpdump", "-i", wanIf(gw), "-s", "0", "-U", "-w", "/tmp/wan.pcap", "ip"); err != nil {
-		return nil, fmt.Errorf("%v %s", err, o)
+	cmd := exec.Command("docker", "exec", c.container, "tcpdump", "-i", wanIf(gw), "-s", "0", "-U", "-w", "-", "ip")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		c.cleanup()
+		return nil, err
 	}
-	c := &v2Capture{gw: gw, out: out, container: container(gw), budget: budget, done: make(chan struct{})}
-	go c.monitor()
+	cmd.Stderr = &c.stderr
+	if err := cmd.Start(); err != nil {
+		c.cleanup()
+		return nil, err
+	}
+	c.cmd = cmd
+	go c.pump(stdout)
 	time.Sleep(time.Second)
 	return c, nil
 }
 
-func (c *v2Capture) monitor() {
-	t := time.NewTicker(500 * time.Millisecond)
-	defer t.Stop()
+// pump copies the pcap stream into the sink; the sink stops it at the byte where the budget ends.
+func (c *v2Capture) pump(r io.Reader) {
+	defer close(c.pumpDone)
+	buf := make([]byte, 64<<10)
 	for {
-		select {
-		case <-c.done:
-			return
-		case <-t.C:
-			out, err := run("docker", "exec", c.container, "stat", "-c", "%s", "/tmp/wan.pcap")
-			if err != nil {
-				continue
-			}
-			n, _ := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-			c.mu.Lock()
-			c.size = n
-			over := n > c.budget && !c.violated
-			if over {
-				c.violated = true
-			}
-			c.mu.Unlock()
-			if over {
-				logf("pcap budget %s exceeded (%s); stopping the capture", humanBytes(c.budget), humanBytes(n))
-				c.stop()
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := c.sink.Write(buf[:n]); werr != nil {
+				if errors.Is(werr, errCaptureLimit) {
+					c.mu.Lock()
+					c.violated = true
+					c.mu.Unlock()
+					logf("pcap budget %s reached; stopping the capture at %s", humanBytes(c.budget), humanBytes(c.sink.Size()))
+				} else {
+					logf("write the capture: %v", werr)
+				}
+				_, _ = run("docker", "exec", c.container, "pkill", "-INT", "tcpdump")
 				return
 			}
 		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (c *v2Capture) cleanup() {
+	if c.file != nil {
+		_ = c.file.Close()
+		c.file = nil
+	}
+	if c.tempPath != "" {
+		_ = os.Remove(c.tempPath)
+		c.tempPath = ""
 	}
 }
 
 func (c *v2Capture) stop() {
 	c.once.Do(func() {
-		close(c.done)
 		_, _ = run("docker", "exec", c.container, "pkill", "-INT", "tcpdump")
-		time.Sleep(time.Second)
-		path := filepath.Join(c.out, ".wan-"+c.gw+".pcap")
-		if out, err := run("docker", "cp", c.container+":/tmp/wan.pcap", path); err != nil {
-			logf("copy the capture of %s: %v %s", c.gw, err, out)
-			return
+		select {
+		case <-c.pumpDone:
+		case <-time.After(10 * time.Second):
+			if c.cmd != nil && c.cmd.Process != nil {
+				_ = c.cmd.Process.Kill()
+			}
+		}
+		if c.cmd != nil {
+			_ = c.cmd.Wait()
+		}
+		if c.file != nil {
+			_ = c.file.Close()
+			c.file = nil
 		}
 		c.mu.Lock()
-		c.hostPath = path
+		c.violated = c.violated || c.sink.Over()
 		c.mu.Unlock()
-		if fi, err := os.Stat(path); err == nil {
-			c.mu.Lock()
-			c.size = fi.Size()
-			if c.size > c.budget {
-				c.violated = true
-			}
-			c.mu.Unlock()
-		}
 	})
 }
 
-func (c *v2Capture) path() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.hostPath
-}
+func (c *v2Capture) data() []byte { return c.sink.Bytes() }
 
-func (c *v2Capture) bytes() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.size
-}
+func (c *v2Capture) bytes() int64 { return c.sink.Size() }
 
 func (c *v2Capture) overBudget() bool {
 	c.mu.Lock()
@@ -705,35 +820,32 @@ func (c *v2Capture) overBudget() bool {
 
 // finalizeInfo renames or deletes the capture once, after the analysis decided green or red.
 func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
-	c.mu.Lock()
-	size, violated, path := c.size, c.violated, c.hostPath
-	c.mu.Unlock()
+	size := c.sink.Size()
+	violated := c.overBudget()
 	info := pcapInfo{Requested: requested, BudgetBytes: c.budget, CapturedBytes: size}
 	if violated {
-		info.Reason = "budget exceeded; the capture was stopped"
+		info.Reason = "budget reached; the capture was stopped at the limit"
 	}
-	keep := requested && !green && path != ""
-	if keep {
-		final := filepath.Join(c.out, "wan-"+c.gw+".pcap")
-		if err := os.Rename(path, final); err == nil {
-			info.Kept = true
-			info.Files = []string{filepath.Base(final)}
-			c.mu.Lock()
-			c.hostPath = final
-			c.mu.Unlock()
-		}
-	} else if path != "" {
-		_ = os.Remove(path)
+	if !requested {
+		info.Reason = "no -pcap; the capture stayed in memory and was discarded after analysis"
+		return info
+	}
+	if c.tempPath == "" {
+		return info
+	}
+	if green {
+		_ = os.Remove(c.tempPath)
 		info.Deleted = true
-		switch {
-		case !requested:
-			info.Reason = "no -pcap; analysis used a temporary capture"
-		case green:
-			info.Reason = "deleted after a green analysis"
-		}
-		c.mu.Lock()
-		c.hostPath = ""
-		c.mu.Unlock()
+		info.Reason = "deleted after a green analysis"
+		return info
+	}
+	final := filepath.Join(c.out, "wan-"+c.gw+".pcap")
+	if err := os.Rename(c.tempPath, final); err == nil {
+		info.Kept = true
+		info.Files = []string{filepath.Base(final)}
+		c.tempPath = ""
+	} else {
+		info.Reason = fmt.Sprintf("keep the capture: %v", err)
 	}
 	return info
 }
