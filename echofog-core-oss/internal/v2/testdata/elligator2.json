@@ -1,0 +1,109 @@
+{
+  "description": "Elligator2 for Curve25519 with dirty ephemeral keys: P = [clamp(sk)]B + [sk[0]&7]T, u = Montgomery u of P; repr from the inverse map with tweak bit 0 selecting the root formula and tweak bits 6-7 as the two top bits; forward map per RFC 9380 §6.7.1 (Z = 2). sk_i = SHA-256(seed_base ‖ u32(i)) for the first i whose dirty key has a representative.",
+  "spec": "wire.md §2.2",
+  "T_order8": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "seeds": {
+    "elligator2/sample0": "273b74207d85d2d4b6a75424dff01fe5637428d70a457fa290135689eb8d382f",
+    "elligator2/tweak0": "81dad3d0d46721495407d3be32a764e72f0208768d25a845cb8020bb22b09e41",
+    "elligator2/sample1": "ffc95d07fbf01d7111027f1892e65c4cc2035341beaf5c4188eb2d59aa701c30",
+    "elligator2/tweak1": "e2322004caf3df9d46519db88f4a7ecd03ec8526a807363d8ec3b6e6d370c42d",
+    "elligator2/sample2": "c5b6ed862d0861d25f078a309c7589941b26a399157338d3c6e86956d6373c04",
+    "elligator2/tweak2": "ba37dc4fecbaf584582aa3cc6dae5ed70d50d7d1a8880998ced91035b88d74ca",
+    "elligator2/sample3": "479c23bf38ce275606a5b908b89dc7ef57f05d706719f1a0f8f036c46694bea2",
+    "elligator2/tweak3": "17485678f8bdbd6d08015b585749bd074c97ef63d9bd573be372ec3b6e765df8",
+    "elligator2/no_representative": "3b44326edb0ec5ce344041cce3e320889ba3c428216e0a671d56ef6d750e683a",
+    "elligator2/peer_sk": "4c03a9b44ebab8a818795c4a586e34c94e253e804437f9cb8b4de1e640ac6507",
+    "elligator2/sample0": "273b74207d85d2d4b6a75424dff01fe5637428d70a457fa290135689eb8d382f",
+    "elligator2/tweak0": "81dad3d0d46721495407d3be32a764e72f0208768d25a845cb8020bb22b09e41"
+  },
+  "samples": [
+    {
+      "seed_base": "273b74207d85d2d4b6a75424dff01fe5637428d70a457fa290135689eb8d382f",
+      "attempt": 6,
+      "sk": "69dc68f04a442bf29e06181185366f292cbf119ef75b84af3360ec2222535411",
+      "sk0_low3": 1,
+      "tweak": "81",
+      "clean_pub": "67bdd17a02f76aa072eaccd5721307fe188db0fa6ee1f519d1b52fe095535311",
+      "dirty_pub": "47e94e628debd954c60d58a1b6ef11f9678a2436e03570db95aabe80015d7122",
+      "repr": "b1aa49f5e2cf604f9fd64f6eae64d3475d2df061d56ac48c153545f1c89b8d93",
+      "forward_repr": "47e94e628debd954c60d58a1b6ef11f9678a2436e03570db95aabe80015d7122",
+      "keys_without_representative_before": 6
+    },
+    {
+      "seed_base": "ffc95d07fbf01d7111027f1892e65c4cc2035341beaf5c4188eb2d59aa701c30",
+      "attempt": 2,
+      "sk": "651408f5957975125d81d0eb7fb66da7cea87bae119d6c78c20540471b9cb642",
+      "sk0_low3": 5,
+      "tweak": "e2",
+      "clean_pub": "10709648662ed70d8327d8d2e2e39d422f6fa3bfe328778b4aa24662d8939925",
+      "dirty_pub": "13343bb5fcb46dbe996995572b7876bd81618a4efbe0e50e21c697b1edf37958",
+      "repr": "dee5b557fae6fdf82dfd2894224e97f4c43c4c8708ccb905233d24c25df350eb",
+      "forward_repr": "13343bb5fcb46dbe996995572b7876bd81618a4efbe0e50e21c697b1edf37958",
+      "keys_without_representative_before": 2
+    },
+    {
+      "seed_base": "c5b6ed862d0861d25f078a309c7589941b26a399157338d3c6e86956d6373c04",
+      "attempt": 0,
+      "sk": "64c17bdc6262dad6626ae95facf6dc27e3f7efcb858a4667767c279180f3a3da",
+      "sk0_low3": 4,
+      "tweak": "ba",
+      "clean_pub": "7a82adb44c4696206f3513237d59530a567770b614fdf5bb93b743a95efa1255",
+      "dirty_pub": "6ce7cf877a98e8a9fcf3fc10ed508deecd3d2384e80860fbb6c64de290b24a65",
+      "repr": "0373982cbeb1432b747fe55ba01c681739bee2a4f44860df9383e84f882e9d95",
+      "forward_repr": "6ce7cf877a98e8a9fcf3fc10ed508deecd3d2384e80860fbb6c64de290b24a65",
+      "keys_without_representative_before": 0
+    },
+    {
+      "seed_base": "479c23bf38ce275606a5b908b89dc7ef57f05d706719f1a0f8f036c46694bea2",
+      "attempt": 4,
+      "sk": "0b4a67a413379d26ac8f61108f09be08d747afc58e81cf5b70657c1301721779",
+      "sk0_low3": 3,
+      "tweak": "17",
+      "clean_pub": "cdc0ef7eb5b86bee47f191636807d86784918b97a09b1d78fad38373e719dd32",
+      "dirty_pub": "784f20d60fc6647d7dd66f02e9db7d044bf9d9bfeb0e15065595539ab63f3c6c",
+      "repr": "edf1bfb9775b78435d40d8387cfd671f6fbbabe7b35f6675993ccb06a2d9b93a",
+      "forward_repr": "784f20d60fc6647d7dd66f02e9db7d044bf9d9bfeb0e15065595539ab63f3c6c",
+      "keys_without_representative_before": 4
+    }
+  ],
+  "forward_only": [
+    {
+      "repr": "0000000000000000000000000000000000000000000000000000000000000000",
+      "u": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "repr": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "u": "4e4c39ac31d3b3b16617427847178670e6afce5430eaa6aa41166cd7b1552525"
+    },
+    {
+      "repr": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "u": "80e5132b658f7f451b2b658f7f451b2b658f7f451b2b658f7f451b2b658f7f45"
+    }
+  ],
+  "no_representative": {
+    "seed_base": "3b44326edb0ec5ce344041cce3e320889ba3c428216e0a671d56ef6d750e683a",
+    "attempt": 0,
+    "sk": "68e260dac8768c7f669521dec08445510a1cd1300c9786e96e8a8349cb35bd8e",
+    "dirty_pub": "22e1ebfc230d98d42067a98af57736603e47958c36361b4f26f100cc5d3fc964",
+    "reason": "-2u(u+A) is not a square: the encoder must pick a new key"
+  },
+  "rfc9380_crosscheck": {
+    "note": "the generator checks its forward map on full field elements against RFC 9380 Appendix J.4.2 (u[0] → Q.x); values big-endian as in the RFC",
+    "cases": [
+      {
+        "u0_be": "608d892b641f0328523802a6603427c26e55e6f27e71a91a478148d45b5093cd",
+        "Q.x_be": "51125222da5e763d97f3c10fcc92ea6860b9ccbbd2eb1285728f566721c1e65b"
+      },
+      {
+        "u0_be": "46f5b22494bfeaa7f232cc8d054be68561af50230234d7d1d63d1d9abeca8da5",
+        "Q.x_be": "7d56d1e08cb0ccb92baf069c18c49bb5a0dcd927eff8dcf75ca921ef7f3e6eeb"
+      }
+    ]
+  },
+  "ecdh_check": {
+    "peer_sk": "4c03a9b44ebab8a818795c4a586e34c94e253e804437f9cb8b4de1e640ac6507",
+    "x25519_peer_sk_sample0_dirty_pub": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
+    "x25519_peer_sk_sample0_clean_pub": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604",
+    "x25519_sample0_sk_peer_pub": "cca475e801baa39cff87202d9c8b62e84f25694d34ed00e5e8d04fb9e127d604"
+  }
+}
