@@ -64,6 +64,7 @@ type Listener struct {
 	inner    *queueConn
 	tr       *quic.Transport
 	quicLn   *quic.Listener
+	keysMu   sync.RWMutex
 	keys     []maskKey
 	profile  *shape.Profile
 	clock    Clock
@@ -180,6 +181,39 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 	return l, nil
 }
 
+// SetMaskKeys replaces the live masking keys in place. Established flows keep their derived keys,
+// so a rotation or revocation stops new handshakes without breaking live sessions. A listener
+// always needs at least one key: the owner closes it when the set becomes empty.
+func (l *Listener) SetMaskKeys(keys []MaskKey) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("%w: no masking keys", ErrBadConfig)
+	}
+	if len(keys) > MaxMaskKeys {
+		return fmt.Errorf("%w: %d masking keys, at most %d", ErrBadConfig, len(keys), MaxMaskKeys)
+	}
+	next := make([]maskKey, 0, len(keys))
+	for _, k := range keys {
+		pub, err := maskPublic(k.Private)
+		if err != nil {
+			return fmt.Errorf("noise3: masking key: %w", err)
+		}
+		next = append(next, maskKey{secret: k.Private, public: pub, notAfter: k.NotAfter})
+	}
+	l.keysMu.Lock()
+	l.keys = next
+	l.keysMu.Unlock()
+	return nil
+}
+
+// maskKeys returns the current key slice. A writer replaces the slice instead of mutating it, so
+// the returned slice stays valid for the duration of one datagram.
+func (l *Listener) maskKeys() []maskKey {
+	l.keysMu.RLock()
+	k := l.keys
+	l.keysMu.RUnlock()
+	return k
+}
+
 // Listen binds addr and starts a listener.
 func Listen(addr string, cfg ListenerConfig) (*Listener, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
@@ -281,7 +315,7 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 		if !l.budget.allow(src.Addr().String(), now) {
 			return
 		}
-		l.handleInit(d, src, l.keys, now)
+		l.handleInit(d, src, l.maskKeys(), now)
 		return
 	}
 
@@ -296,7 +330,7 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 	if len(d) < packet.MinInitLen {
 		return
 	}
-	l.handleInit(d, src, l.keys, now)
+	l.handleInit(d, src, l.maskKeys(), now)
 }
 
 // deliverData records an authenticated data packet and hands its inner datagram to QUIC.

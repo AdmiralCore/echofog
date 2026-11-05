@@ -91,10 +91,20 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 // dialIdentity returns the local identity of the handshake: the main one, or the one supplied by
 // the caller (a throwaway identity for XX to a bare address, an identity for one exit).
 func (r *Runtime) dialIdentity(ctx context.Context, opt DialOpt) (session.LocalIdentity, error) {
+	local := session.LocalIdentity{}
 	if opt.Local != nil {
-		return *opt.Local, nil
+		local = *opt.Local
+	} else {
+		var err error
+		local, err = r.mainLocal(ctx)
+		if err != nil {
+			return session.LocalIdentity{}, err
+		}
 	}
-	return r.mainLocal(ctx)
+	if len(opt.AccessSecret) > 0 {
+		local.AccessSecret = append([]byte(nil), opt.AccessSecret...)
+	}
+	return local, nil
 }
 
 // dial runs one session.Dial with the runtime's clock, bindings, policy and carrier plan. The

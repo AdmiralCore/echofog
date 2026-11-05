@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -89,6 +90,19 @@ type Config struct {
 	Features []uint32
 	// Passes resolves invitation and personal pass secrets for a hidden responder (T3.6).
 	Passes handshake.PassStore
+	// Access is the invitation, pass and masking-key manager of a hidden node (T3.6b). When set
+	// it also becomes Passes (unless one is supplied explicitly), the runtime redeems or renews
+	// access after a hidden-node session, installs its invitation listeners and follows the
+	// contacts-key rotation.
+	Access *access.Manager
+	// AccessListener builds the L0 listener of one invitation slot from its live masking keys.
+	// Nil builds the built-in noise3 listener from the slot address; a non-noise3 suite needs a
+	// factory. The factory must not retain the private key bytes.
+	AccessListener AccessListenerFactory
+	// AccessReissued receives the invitations that Revoke and RotateKeys reissued. The holders
+	// have no session yet, so the only delivery path is the application (a messenger message).
+	// The payload contains new secrets and links: the sink must never log it.
+	AccessReissued func([]access.Minted)
 	// Puzzle enables HS_RETRY under load (T3.5).
 	Puzzle *handshake.PuzzleConfig
 	// RetryAfter is the GOAWAY retry_after used for runtime shutdown and idle closes, in seconds.
@@ -137,6 +151,14 @@ type Runtime struct {
 	// localMu guards localAddrs, which a network change may replace while sessions dial.
 	localMu    sync.RWMutex
 	localAddrs []netip.Addr
+
+	// accessMgr is the invitation/pass manager of a hidden node (T3.6b). accessMu guards the
+	// installed invitation listeners and the contacts key the card builder uses.
+	accessMgr         *access.Manager
+	accessMu          sync.Mutex
+	accessSlots       map[int]*accessSlot
+	accessContacts    keys.AKey
+	accessContactsSet bool
 }
 
 var _ Host = (*Runtime)(nil)
@@ -157,6 +179,11 @@ func New(cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("%w: no card builder", ErrConfig)
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: no store", ErrConfig)
+	}
+
+	// Access is the responder's PassStore unless the caller supplied another one (T3.6b).
+	if cfg.Access != nil && cfg.Passes == nil {
+		cfg.Passes = cfg.Access
 	}
 
 	log := cfg.Log
@@ -187,6 +214,10 @@ func New(cfg Config) (*Runtime, error) {
 		background:   cfg.Profile.Background,
 	}
 	r.dgrams = newDatagramBroker(r)
+	r.accessMgr = cfg.Access
+	if r.accessMgr != nil {
+		r.accessSlots = make(map[int]*accessSlot)
+	}
 
 	r.clock = cfg.Clock
 	if r.clock == nil {
@@ -343,10 +374,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 
 	r.modules.Do(r.registerModules)
+	if err := r.startAccess(runCtx); err != nil {
+		r.cleanupAfterStartFailure()
+		return fmt.Errorf("node: access listeners: %w", err)
+	}
 
 	for _, l := range listeners {
 		r.wg.Add(1)
-		go r.acceptLoop(l)
+		go r.acceptLoop(runCtx, l)
 	}
 
 	r.mu.Lock()
@@ -380,6 +415,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		cancel()
 	}
 	closeListeners(listeners)
+	r.stopAccess()
 	if table != nil {
 		_ = table.Close()
 	}
@@ -404,6 +440,7 @@ func (r *Runtime) cleanupAfterStartFailure() {
 	table := r.table
 	r.mu.Unlock()
 	closeListeners(listeners)
+	r.stopAccess()
 	if table != nil {
 		_ = table.Close()
 	}

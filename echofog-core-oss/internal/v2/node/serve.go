@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -14,12 +15,12 @@ import (
 // acceptLoop accepts carriers from one listener and turns each completed handshake into a table
 // entry and a service loop. Refusals are ordinary protocol behaviour (a hidden node closes
 // silently, an expired card gets REJECT), so they are not runtime errors.
-func (r *Runtime) acceptLoop(l carrier.Listener) {
+func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 	defer r.wg.Done()
-	for r.ctx.Err() == nil {
-		local, err := r.mainLocal(r.ctx)
+	for ctx.Err() == nil {
+		local, err := r.mainLocal(ctx)
 		if err != nil {
-			if r.ctx.Err() == nil {
+			if ctx.Err() == nil {
 				r.listenerStopped(err)
 			}
 			return
@@ -38,10 +39,10 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 			Policy:   r.policyFunc,
 			Verifier: nil,
 		}
-		est, err := session.Accept(r.ctx, l, cfg)
+		est, err := session.Accept(ctx, l, cfg)
 		switch {
 		case err == nil:
-		case r.ctx.Err() != nil:
+		case ctx.Err() != nil:
 			return
 		case errors.Is(err, session.ErrPathBound):
 			continue
@@ -63,7 +64,15 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 		if r.Background() == BackgroundSuspended {
 			// suspended closes sessions with GOAWAY (platforms.md §2); a peer that dialed us
 			// during the suspension is told to come back later.
-			_ = kept.GoAway(r.ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+			_ = kept.GoAway(ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+			continue
+		}
+		// A hidden node admits a session through an invitation or a personal pass; the pass is
+		// consumed or renewed here, and the contact receives the peer card over the session
+		// (handshake.md §5, T3.6b). A pass that cannot be booked is not kept: fail closed.
+		if err := r.handleAccess(ctx, kept); err != nil {
+			r.log.Debug("node: access session refused", "err", err)
+			_ = kept.Session.Close()
 			continue
 		}
 		r.samplePeer(kept)

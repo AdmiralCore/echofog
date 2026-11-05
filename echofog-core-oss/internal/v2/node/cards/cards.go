@@ -1,6 +1,7 @@
 package cards
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -230,6 +231,35 @@ func (b *CardBuilder) Update(cfg Config) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.applyConfig(cfg, false)
+}
+
+// ReplaceMask changes every listener that uses old as its masking key to next and returns the
+// number of listeners changed. The runtime calls it when the contacts key rotates (T3.6b): the
+// next Current reissues the affected cards with the new key.
+func (b *CardBuilder) ReplaceMask(old, next keys.AKey) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(old) == 0 || len(next) == 0 {
+		return 0, fmt.Errorf("%w: empty masking key", ErrConfig)
+	}
+	if bytes.Equal(old, next) {
+		return 0, nil
+	}
+	cfg := cloneConfig(b.cfg)
+	n := 0
+	for i := range cfg.Listeners {
+		if bytes.Equal(cfg.Listeners[i].Mask, old) {
+			cfg.Listeners[i].Mask = clone(next)
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := b.applyConfig(cfg, false); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // Visibility returns the configured visibility of the node (objects.md §3.2, wire.md §2.1).

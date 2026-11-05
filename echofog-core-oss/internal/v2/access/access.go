@@ -1274,6 +1274,22 @@ func (m *Manager) MaskKeys() []KeyInfo {
 	return out
 }
 
+// Listener returns the configured invitation listener of a slot. Its Mask is not meaningful: the
+// runtime installs the live mask keys from MaskKeys (T3.6b). The returned value is a copy.
+func (m *Manager) Listener(slot int) (cards.Listener, bool) {
+	if m == nil {
+		return cards.Listener{}, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.closed || slot < 0 || slot >= len(m.listeners) {
+		return cards.Listener{}, false
+	}
+	l := m.listeners[slot]
+	l.Mask = append(keys.AKey(nil), l.Mask...)
+	return l, true
+}
+
 // ContactsKeys returns the contacts masking keys: the current one first, then the previous keys
 // still accepted during the overlap.
 func (m *Manager) ContactsKeys() []KeyInfo {
