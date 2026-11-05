@@ -93,6 +93,11 @@ type TCPListenerConfig struct {
 	MaxPreToken        int
 	MaxPerAddr         int
 	MaxCover           int
+	// Stranger, when set, takes every connection that is not admitted (no token, over the
+	// pre-token limit, garbage, timeout) instead of the cover proxy, with the bytes already read;
+	// it owns the connection. ws2 uses it to close the WebSocket (wire.md §4.4). CoverAddr is then
+	// not required.
+	Stranger func(c net.Conn, pre []byte)
 	// Now is the injectable clock; nil means time.Now.
 	Now func() time.Time
 	// OnError receives replay persistence errors; nil ignores them.

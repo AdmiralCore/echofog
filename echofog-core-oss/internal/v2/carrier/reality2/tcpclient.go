@@ -14,6 +14,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/shape"
 )
 
@@ -172,4 +173,10 @@ func PrepareTCPHello(uc *utls.UConn, maskPub []byte, addr string, now func() tim
 		return errors.New("the hello changed between the two marshals")
 	}
 	return nil
+}
+
+// DialOver runs the reality2-tcp client over raw, an already open byte stream (ws2 passes the
+// WebSocket here, wire.md §4.4). tokenAddr is the address string the token binds to.
+func (d *TCPDialer) DialOver(ctx context.Context, raw net.Conn, card *objects.Card, a *pb.Addr, tokenAddr string) (mux.Carrier, error) {
+	return nil, errors.New("reality2: DialOver not implemented")
 }
