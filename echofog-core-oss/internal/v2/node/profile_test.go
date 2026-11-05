@@ -11,6 +11,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -18,11 +19,11 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/secret"
 )
 
-// idlePaddingFeature is registries.md Â§5 feature 0x0003. The runtime does not define the full
+// idlePaddingFeature is registries.md §5 feature 0x0003. The runtime does not define the full
 // feature list; the application passes it in Config.Features.
 const idlePaddingFeature uint32 = 0x0003
 
-// ---- profiles (platforms.md Â§2)
+// ---- profiles (platforms.md §2)
 
 // TestDefaultProfiles pins the default flag set of every platform profile.
 func TestDefaultProfiles(t *testing.T) {
@@ -34,8 +35,8 @@ func TestDefaultProfiles(t *testing.T) {
 			platform: node.PlatformAndroid,
 			want: node.Profile{
 				Platform:   node.PlatformAndroid,
-				LowPower:   true,
-				Metered:    true,
+				LowPower:   false,
+				Metered:    false,
 				Background: node.BackgroundForeground,
 				TunFD:      -1,
 				MemCapMB:   128,
@@ -46,8 +47,8 @@ func TestDefaultProfiles(t *testing.T) {
 			platform: node.PlatformIOS,
 			want: node.Profile{
 				Platform:   node.PlatformIOS,
-				LowPower:   true,
-				Metered:    true,
+				LowPower:   false,
+				Metered:    false,
 				Background: node.BackgroundForeground,
 				TunFD:      -1,
 				MemCapMB:   40,
@@ -85,6 +86,25 @@ func TestDefaultProfiles(t *testing.T) {
 				t.Fatalf("default profile does not validate: %v", err)
 			}
 		})
+	}
+}
+
+// TestMobileDefaultsDoNotEnableSavings pins decisions.md T3.7b п.2: the profile does not silently
+// switch on battery/network savings; platforms §4 sets low_power and metered dynamically, and an
+// explicit platform setting survives WithDefaults.
+func TestMobileDefaultsDoNotEnableSavings(t *testing.T) {
+	for _, platform := range []node.Platform{node.PlatformAndroid, node.PlatformIOS} {
+		def := node.DefaultProfile(platform)
+		if def.LowPower || def.Metered {
+			t.Fatalf("%s default enables savings (low_power=%v metered=%v)", platform, def.LowPower, def.Metered)
+		}
+		// The platform layer (battery saver / metered network) turns them on at runtime.
+		app := def
+		app.LowPower, app.Metered = true, true
+		got := app.WithDefaults()
+		if !got.LowPower || !got.Metered {
+			t.Fatalf("%s: WithDefaults dropped the platform's explicit flags: %+v", platform, got)
+		}
 	}
 }
 
@@ -135,6 +155,34 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+// TestProfileTunFD pins decisions.md T3.7b п.5: tun_fd is −1 (no TUN) or a real descriptor above
+// the standard streams; 0/1/2 and every other negative value are configuration errors.
+func TestProfileTunFD(t *testing.T) {
+	base := node.DefaultProfile(node.PlatformDesktop)
+	for _, fd := range []int{0, 1, 2, -2, -100} {
+		p := base
+		p.TunFD = fd
+		if err := p.Validate(); err == nil {
+			t.Fatalf("Validate accepted tun_fd %d", fd)
+		}
+	}
+	for _, fd := range []int{-1, 3, 4, 1024} {
+		p := base
+		p.TunFD = fd
+		if err := p.Validate(); err != nil {
+			t.Fatalf("Validate rejected tun_fd %d: %v", fd, err)
+		}
+	}
+	// New refuses the same invalid values before it opens anything.
+	for _, fd := range []int{1, 2, -2} {
+		cfg := node.Config{Profile: base}
+		cfg.Profile.TunFD = fd
+		if _, err := node.New(cfg); !errors.Is(err, node.ErrConfig) || !strings.Contains(err.Error(), "tun_fd") {
+			t.Fatalf("New with tun_fd %d: %v, want an ErrConfig mentioning tun_fd", fd, err)
+		}
+	}
+}
+
 func TestProfileHasRole(t *testing.T) {
 	server := node.DefaultProfile(node.PlatformServer)
 	for _, r := range []node.Role{node.RoleDHTServer, node.RoleMailbox, node.RoleRelay} {
@@ -147,7 +195,7 @@ func TestProfileHasRole(t *testing.T) {
 	}
 	for _, r := range []node.Role{node.RoleRelay, node.RoleExit, node.RoleMailbox, node.RoleDHTServer} {
 		if node.DefaultProfile(node.PlatformAndroid).HasRole(r) {
-			t.Fatalf("mobile profile offers role %q (platforms.md Â§2: empty on mobile)", r)
+			t.Fatalf("mobile profile offers role %q (platforms.md §2: empty on mobile)", r)
 		}
 	}
 }
@@ -209,7 +257,7 @@ func (fakeProtector) Protect([]byte, []byte) ([]byte, error)   { return nil, nil
 func (fakeProtector) Unprotect([]byte, []byte) ([]byte, error) { return nil, nil }
 
 // TestLocalAddrsFeedTheCarrierPlan: the app's local addresses are the ones D21 compares against
-// the responder addresses (platforms.md Â§2, wire.md Â§1 rule 3).
+// the responder addresses (platforms.md §2, wire.md §1 rule 3).
 func TestLocalAddrsFeedTheCarrierPlan(t *testing.T) {
 	addr := netip.MustParseAddr("198.51.100.9")
 	n := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
@@ -221,7 +269,7 @@ func TestLocalAddrsFeedTheCarrierPlan(t *testing.T) {
 	}
 }
 
-// TestMemCapLimitsTheSessionTable: mem_cap_mb selects the mobile session limit (platforms.md Â§2).
+// TestMemCapLimitsTheSessionTable: mem_cap_mb selects the mobile session limit (platforms.md §2).
 func TestMemCapLimitsTheSessionTable(t *testing.T) {
 	mobile := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
 		c.Profile = node.DefaultProfile(node.PlatformAndroid)
@@ -240,8 +288,8 @@ func TestMemCapLimitsTheSessionTable(t *testing.T) {
 
 // ---- low_power
 
-// TestRuntimeLowPowerSession: low_power reaches the mux (40â€“55 s keepalive, no standby paths) and
-// makes the node stop offering idle-padding (platforms.md Â§2).
+// TestRuntimeLowPowerSession: low_power reaches the mux (40–55 s keepalive, no standby paths) and
+// makes the node stop offering idle-padding (platforms.md §2).
 func TestRuntimeLowPowerSession(t *testing.T) {
 	qMobile, qDesktop := newCarrierQueue(), newCarrierQueue()
 	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{qMobile}, nil, func(c *node.Config) {
@@ -259,7 +307,7 @@ func TestRuntimeLowPowerSession(t *testing.T) {
 		t.Fatal("low_power profile did not reach the mux session")
 	}
 	if sess.HasFeature(uint16(idlePaddingFeature)) {
-		t.Fatal("a low_power node offered idle-padding (platforms.md Â§2)")
+		t.Fatal("a low_power node offered idle-padding (platforms.md §2)")
 	}
 
 	// The same application feature list on a desktop profile negotiates idle-padding.
@@ -282,8 +330,27 @@ func TestRuntimeLowPowerSession(t *testing.T) {
 
 // ---- udp
 
+// TestRuntimeLocalAddrsRefresh: a network change reported by the app is applied to the carrier
+// plan without a runtime restart (platforms.md §2; the network event itself is T3.3).
+func TestRuntimeLocalAddrsRefresh(t *testing.T) {
+	first := netip.MustParseAddr("198.51.100.9")
+	second := netip.MustParseAddr("203.0.113.44")
+	current := first
+	n := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
+		c.Profile.LocalAddrs = func() []netip.Addr { return []netip.Addr{current} }
+	})
+	if got := node.LocalInfoOf(n.rt).Addrs; len(got) != 1 || got[0] != first {
+		t.Fatalf("carrier plan addresses %v, want [%v]", got, first)
+	}
+	current = second
+	n.rt.RefreshLocalAddrs()
+	if got := node.LocalInfoOf(n.rt).Addrs; len(got) != 1 || got[0] != second {
+		t.Fatalf("carrier plan addresses after refresh %v, want [%v]", got, second)
+	}
+}
+
 // TestRuntimeUDPBlockedHasNoPlan: udp=blocked reaches the D21 plan; every UDP suite is removed and
-// only the relay fallback remains (platforms.md Â§2, wire.md Â§1).
+// only the relay fallback remains (platforms.md §2, wire.md §1).
 func TestRuntimeUDPBlockedHasNoPlan(t *testing.T) {
 	queue := newCarrierQueue()
 	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
@@ -314,7 +381,9 @@ func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
 	q1, q2 := newCarrierQueue(), newCarrierQueue()
 	b1 := newTestNode(t, cards.Visible, true, []carrier.Listener{q1}, nil)
 	b2 := newTestNode(t, cards.Visible, true, []carrier.Listener{q2}, nil)
-	a := newTestNode(t, cards.Hidden, false, nil, events)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, events, func(c *node.Config) {
+		c.RetryAfter = 42
+	})
 	b1.start(t)
 	b2.start(t)
 	a.start(t)
@@ -327,6 +396,15 @@ func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
 	}
 	waitClosed(t, s1)
 	waitClosed(t, s2)
+	for i, s := range []*mux.Session{s1, s2} {
+		var ga *mux.GoAwayError
+		if !errors.As(s.Err(), &ga) {
+			t.Fatalf("session %d ended with %v, want GOAWAY", i, s.Err())
+		}
+		if ga.Code != frame.CodeGoingAway || !ga.Remote || ga.RetryAfter != 42 {
+			t.Fatalf("session %d GOAWAY %+v, want going-away/remote/retry_after=42", i, ga.GoAway)
+		}
+	}
 	if !events.has(node.EventBackground) {
 		t.Fatal("the operator was not told about the background mode")
 	}
@@ -343,7 +421,7 @@ func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
 }
 
 // TestRuntimeBackgroundLimitedKeepsMailboxRelay: limited keeps exactly one session and prefers a
-// mailbox relay, then a relay, then the most recently active session (platforms.md Â§2).
+// mailbox relay, then a relay, then the most recently active session (platforms.md §2).
 func TestRuntimeBackgroundLimitedKeepsMailboxRelay(t *testing.T) {
 	qMail, qPlain, qRelay := newCarrierQueue(), newCarrierQueue(), newCarrierQueue()
 	bMail := newTestNodeFull(t, cards.Visible, true, []carrier.Listener{qMail}, nil, func(c *cards.Config) {
@@ -374,6 +452,39 @@ func TestRuntimeBackgroundLimitedKeepsMailboxRelay(t *testing.T) {
 	}
 	if e, ok := events.last(node.EventBackground); !ok || e.Background != node.BackgroundLimited || e.Closed != 2 {
 		t.Fatalf("background event payload %+v, want limited with 2 closed sessions", e)
+	}
+}
+
+// TestRuntimeBackgroundLimitedKeepsMostRecent covers the third level of the order: with no
+// mailbox or relay flags the most recently active session survives (decisions.md T3.7b п.4).
+func TestRuntimeBackgroundLimitedKeepsMostRecent(t *testing.T) {
+	q1, q2, q3 := newCarrierQueue(), newCarrierQueue(), newCarrierQueue()
+	b1 := newTestNode(t, cards.Visible, true, []carrier.Listener{q1}, nil)
+	b2 := newTestNode(t, cards.Visible, true, []carrier.Listener{q2}, nil)
+	b3 := newTestNode(t, cards.Visible, true, []carrier.Listener{q3}, nil)
+	a := newTestNode(t, cards.Hidden, false, nil, nil)
+	b1.start(t)
+	b2.start(t)
+	b3.start(t)
+	a.start(t)
+
+	s1, _ := dialTo(t, a, b1, q1)
+	s2, _ := dialTo(t, a, b2, q2)
+	s3, _ := dialTo(t, a, b3, q3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s3.Ping(ctx); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+
+	if err := a.rt.SetBackground(node.BackgroundLimited); err != nil {
+		t.Fatalf("SetBackground: %v", err)
+	}
+	waitClosed(t, s1)
+	waitClosed(t, s2)
+	if closedWithinS(s3, time.Second) {
+		t.Fatal("limited closed the most recently active session")
 	}
 }
 
