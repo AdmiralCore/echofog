@@ -82,6 +82,11 @@ type ServerConfig struct {
 	MaxRecords int
 	// Log receives diagnostics. Nil is silent.
 	Log *slog.Logger
+	// ReleaseCheck decides whether a release/2 object may be stored: the compiled release keys and
+	// the threshold (objects.ReleaseState.Check). The day key of a release does not depend on the
+	// signer, so without a check any signer could occupy it with a huge seq (T5.2 G1). Nil refuses
+	// every release/2 object.
+	ReleaseCheck func(raw []byte, now time.Time) error
 }
 
 // ErrServerConfig is a local wiring error.
@@ -434,6 +439,17 @@ func (s *Server) check(rec []byte, now time.Time) (*checked, Result) {
 		}
 		env = card.Env
 	} else {
+		if env.Label == objects.LabelRelease {
+			// The day key of a release is the same for every signer, so a record that only passes the
+			// generic checks would let anybody occupy it with a huge seq and make the genuine manifest
+			// "stale" (T5.2 G1). Only the release keys can tell; a node without them stores none.
+			if s.cfg.ReleaseCheck == nil {
+				return nil, Result{Status: StatusRefused}
+			}
+			if err := s.cfg.ReleaseCheck(rec, now); err != nil {
+				return nil, Result{Status: StatusInvalid}
+			}
+		}
 		env, err = objects.Verify(rec, now)
 		if err != nil {
 			return nil, Result{Status: StatusInvalid}

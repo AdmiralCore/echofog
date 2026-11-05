@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -93,6 +94,8 @@ type Host interface {
 	Register(spec service.Spec, h Handler)
 	Datagrams(types ...uint64) DatagramPort
 	Peers() PeerStore
+	// DHT is the lookup and publishing client of dht/2 (T5.2).
+	DHT() *dht.Client
 	Store(ns string) KV
 	Clock() Clock
 	Country(netip.Addr) (string, bool)
