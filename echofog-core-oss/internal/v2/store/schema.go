@@ -29,8 +29,17 @@ func readSchema(dir string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	version, err := parseSchema(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s", err, filepath.Join(dir, schemaFile))
+	}
+	return version, nil
+}
+
+// parseSchema decodes the header: the number first, then the magic. It never trusts the input.
+func parseSchema(raw []byte) (uint32, error) {
 	if len(raw) < 4+len(schemaMagic) || !bytes.Equal(raw[4:4+len(schemaMagic)], schemaMagic) {
-		return 0, fmt.Errorf("%w: %s", ErrSchemaCorrupt, filepath.Join(dir, schemaFile))
+		return 0, ErrSchemaCorrupt
 	}
 	return binary.BigEndian.Uint32(raw[:4]), nil
 }
