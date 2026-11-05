@@ -241,10 +241,12 @@ func (r *rig) managerWith(t *testing.T, kv store.KV, listeners []cards.Listener,
 // it cannot be persisted.
 type failingKV struct {
 	store.KV
-	mu     sync.Mutex
-	failAt int
-	puts   int
-	err    error
+	mu        sync.Mutex
+	failAt    int
+	puts      int
+	delFailAt int
+	deletes   int
+	err       error
 }
 
 func (f *failingKV) Put(key, value []byte) error {
@@ -258,9 +260,26 @@ func (f *failingKV) Put(key, value []byte) error {
 	return f.KV.Put(key, value)
 }
 
+func (f *failingKV) Delete(key []byte) error {
+	f.mu.Lock()
+	f.deletes++
+	fail := f.delFailAt > 0 && f.deletes >= f.delFailAt
+	f.mu.Unlock()
+	if fail {
+		return f.err
+	}
+	return f.KV.Delete(key)
+}
+
 func (f *failingKV) arm(n int) {
 	f.mu.Lock()
 	f.failAt, f.puts = n, 0
+	f.mu.Unlock()
+}
+
+func (f *failingKV) armDelete(n int) {
+	f.mu.Lock()
+	f.delFailAt, f.deletes = n, 0
 	f.mu.Unlock()
 }
 

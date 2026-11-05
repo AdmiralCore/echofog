@@ -917,6 +917,64 @@ func TestRotateKeysFailsClosedOnStoreError(t *testing.T) {
 	}
 }
 
+// TestRotateKeysFailsClosedOnDeleteError covers both delete paths of finding 4: removing the old
+// key and deleting the old invitation record. A store error must not leave the pass active.
+func TestRotateKeysFailsClosedOnDeleteError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		armDel int
+	}{
+		{"old key", 1},
+		{"old record", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			ctx := t.Context()
+
+			redeemed, err := r.mgr.Mint(ctx, access.MintOptions{})
+			if err != nil {
+				t.Fatalf("Mint: %v", err)
+			}
+			client := r.clientNode(t)
+			if _, err := r.mgr.Redeem(ctx, access.RedeemRequest{
+				PassID: redeemed.PassID, Node: client.account.Public().ID(), Device: client.device.ID(),
+			}); err != nil {
+				t.Fatalf("Redeem: %v", err)
+			}
+			minted, err := r.mgr.Mint(ctx, access.MintOptions{})
+			if err != nil {
+				t.Fatalf("Mint: %v", err)
+			}
+			r.mgr.Close()
+
+			fkv := &failingKV{KV: r.kv, err: errors.New("injected store failure")}
+			m := r.managerWith(t, fkv, []cards.Listener{{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242}}, nil)
+			defer m.Close()
+
+			fkv.armDelete(tc.armDel)
+			if _, err := m.RotateKeys(ctx); err == nil {
+				t.Fatal("RotateKeys must report the delete failure")
+			}
+			if _, ok := m.LookupPass(minted.PassID[:], r.clock.Now()); ok {
+				t.Fatal("invitation still admits after a failed delete")
+			}
+			list, err := m.List(ctx)
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			var got *access.Info
+			for i := range list {
+				if list[i].Kind == access.Invitation {
+					got = &list[i]
+				}
+			}
+			if got == nil || got.State != access.Revoked {
+				t.Fatalf("invitation after failed delete: %+v", got)
+			}
+		})
+	}
+}
+
 // TestListenerRemovalRevokesInvitation is finding 5: an invitation whose listener slot no longer
 // exists cannot be reached, so the next Open revokes it instead of leaving it active.
 func TestListenerRemovalRevokesInvitation(t *testing.T) {
