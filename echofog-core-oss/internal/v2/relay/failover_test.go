@@ -116,7 +116,7 @@ func TestEstablishFallsThroughToTheNextRelay(t *testing.T) {
 
 func TestEstablishAllRelaysRefuse(t *testing.T) {
 	m := newMulti(t, 2, nil)
-	_, _, err := Establish(m.worlds[0].ctx, []Hop{m.hop(0), m.hop(1)}, id(9), m.dialSession, ConnectOptions{})
+	_, _, err := Establish(m.worlds[0].ctx, []Hop{m.hop(0), m.hop(1)}, nid(9), m.dialSession, ConnectOptions{})
 	var re *RefusedError
 	if !errors.As(err, &re) {
 		t.Fatalf("error %v is not a RefusedError", err)
@@ -124,7 +124,7 @@ func TestEstablishAllRelaysRefuse(t *testing.T) {
 }
 
 func TestEstablishWithoutHops(t *testing.T) {
-	_, _, err := Establish(context.Background(), nil, id(9), nil, ConnectOptions{})
+	_, _, err := Establish(context.Background(), nil, nid(9), nil, ConnectOptions{})
 	if !errors.Is(err, ErrNoRelay) {
 		t.Fatalf("got %v, want ErrNoRelay", err)
 	}

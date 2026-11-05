@@ -6,22 +6,22 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
-func id(b byte) [32]byte { var x [32]byte; x[0] = b; return x }
+func nid(b byte) [32]byte { var x [32]byte; x[0] = b; return x }
 
 // Only connected relay-flag nodes are candidates; relays B is known to use come first (they are
 // the ones A and B can both reach); excluded ones are dropped.
 func TestChooseOrdersCommonRelaysFirst(t *testing.T) {
 	cands := []Candidate{
-		{Node: id(1), Device: id(1), Flags: objects.FlagRelay, Connected: true},  // PEX relay, B unknown
-		{Node: id(2), Device: id(2), Flags: objects.FlagRelay, Connected: true},  // relay of B
-		{Node: id(3), Device: id(3), Flags: 0, Connected: true},                  // not a relay
-		{Node: id(4), Device: id(4), Flags: objects.FlagRelay, Connected: false}, // no session with it
-		{Node: id(5), Device: id(5), Flags: objects.FlagRelay, Connected: true},  // excluded
-		{Node: id(6), Device: id(6), Flags: objects.FlagRelay, Connected: true},  // relay of B
+		{Node: nid(1), Device: nid(1), Flags: objects.FlagRelay, Connected: true},  // PEX relay, B unknown
+		{Node: nid(2), Device: nid(2), Flags: objects.FlagRelay, Connected: true},  // relay of B
+		{Node: nid(3), Device: nid(3), Flags: 0, Connected: true},                  // not a relay
+		{Node: nid(4), Device: nid(4), Flags: objects.FlagRelay, Connected: false}, // no session with it
+		{Node: nid(5), Device: nid(5), Flags: objects.FlagRelay, Connected: true},  // excluded
+		{Node: nid(6), Device: nid(6), Flags: objects.FlagRelay, Connected: true},  // relay of B
 	}
-	common := map[[32]byte]struct{}{id(2): {}, id(6): {}, id(5): {}}
-	got := Choose(cands, common, map[[32]byte]struct{}{id(5): {}}, nil)
-	want := [][32]byte{id(2), id(6), id(1)}
+	common := map[[32]byte]struct{}{nid(2): {}, nid(6): {}, nid(5): {}}
+	got := Choose(cands, common, map[[32]byte]struct{}{nid(5): {}}, nil)
+	want := [][32]byte{nid(2), nid(6), nid(1)}
 	if len(got) != len(want) {
 		t.Fatalf("got %d candidates, want %d", len(got), len(want))
 	}
@@ -34,12 +34,12 @@ func TestChooseOrdersCommonRelaysFirst(t *testing.T) {
 
 func TestChooseShufflesInsideATier(t *testing.T) {
 	cands := []Candidate{
-		{Node: id(1), Device: id(1), Flags: objects.FlagRelay, Connected: true},
-		{Node: id(2), Device: id(2), Flags: objects.FlagRelay, Connected: true},
-		{Node: id(3), Device: id(3), Flags: objects.FlagRelay, Connected: true},
+		{Node: nid(1), Device: nid(1), Flags: objects.FlagRelay, Connected: true},
+		{Node: nid(2), Device: nid(2), Flags: objects.FlagRelay, Connected: true},
+		{Node: nid(3), Device: nid(3), Flags: objects.FlagRelay, Connected: true},
 	}
-	last := func(n int) int { return n - 1 } // always picks the last: deterministic, not the identity
-	a := Choose(cands, nil, nil, last)
+	first := func(n int) int { return 0 } // always picks index 0: deterministic, not the identity
+	a := Choose(cands, nil, nil, first)
 	b := Choose(cands, nil, nil, nil)
 	if len(a) != 3 || len(b) != 3 {
 		t.Fatal("lost candidates")
