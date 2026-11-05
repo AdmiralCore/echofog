@@ -102,8 +102,8 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 	}
 	queue := level
 	viewer, weak := m.viewersLocked(room, now)
-	if viewer.viewer == (types.PeerID{}) && !m.otherViewerLocked(room, weak.viewer, now) {
-		viewer = weak // the weak viewer is the one viewer: the stream is theirs to follow
+	if viewer.viewer == (types.PeerID{}) {
+		viewer = weak // only weak viewers report: the stream is theirs to follow
 	}
 	level = max(level, viewer.fb.Level)
 	floor := float64(rateFloorKbps * len(room.localStreams))

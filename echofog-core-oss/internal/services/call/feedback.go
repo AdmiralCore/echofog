@@ -177,7 +177,7 @@ func (m *CallManager) viewersLocked(room *ActiveRoomState, now time.Time) (stron
 			seen[r.viewer] = true
 		}
 		for v, p := range paths {
-			if !seen[v] && now.Sub(p.lastSeen) > weakRelease {
+			if !seen[v] && now.Sub(p.lastHeavy) > weakRelease {
 				delete(paths, v) // left, or went silent long ago
 			}
 		}
