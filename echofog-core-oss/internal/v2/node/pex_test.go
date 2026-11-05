@@ -161,7 +161,7 @@ func TestPexGetOverTwoRuntimes(t *testing.T) {
 	// candidate from the answer in the new table.
 	deadline := time.Now().Add(18 * time.Second)
 	for {
-		cands := a.rt.Peers().DialCandidates(16)
+		cands := a.rt.Peers().DialCandidates(16, time.Now())
 		for _, c := range cands {
 			if c.DeviceID == third.DeviceID {
 				return

@@ -114,6 +114,20 @@ func Open(opts Options) (*Store, error) {
 	if err := s.load(keyTried, s.tried); err != nil {
 		return nil, err
 	}
+	// A crash between dropping the new record and saving the tried one leaves a device in both
+	// tables. tried wins, and both tables are clipped to their limits before first use.
+	for id := range s.tried {
+		if _, ok := s.new[id]; ok {
+			delete(s.new, id)
+			s.drop(keyNew, id)
+		}
+	}
+	for len(s.new) > s.maxNew {
+		s.evictNewLocked()
+	}
+	for len(s.tried) > s.maxTried {
+		s.evictTriedLocked(nil)
+	}
 	return s, nil
 }
 
@@ -224,7 +238,7 @@ func (s *Store) NoteSession(c *objects.Card, remote netip.AddrPort, now time.Tim
 		e = &entry{card: c, first: nowu}
 		s.tried[c.DeviceID] = e
 		if len(s.tried) > s.maxTried {
-			s.evictTriedLocked(c.DeviceID)
+			s.evictTriedLocked(&c.DeviceID)
 		}
 	}
 	if c.Env.Seq > e.card.Env.Seq {
@@ -247,6 +261,9 @@ func (s *Store) Serve(now time.Time) []*objects.Card {
 	cutoff := unix(now)
 	var out []*entry
 	for _, e := range s.tried {
+		if !cardLive(e.card, now) {
+			continue
+		}
 		if e.reached == 0 || e.addr.IsValid() == false {
 			continue
 		}
@@ -269,32 +286,39 @@ func (s *Store) Serve(now time.Time) []*objects.Card {
 }
 
 // Guards returns guard candidates: devices in the tried table only, most recently reached first
-// (services.md §3: a card never yet reached is not a guard candidate).
-func (s *Store) Guards(limit int) []*objects.Card {
+// (services.md §3: a card never yet reached is not a guard candidate). An expired card is never a
+// guard, even if its device was reached long ago.
+func (s *Store) Guards(limit int, now time.Time) []*objects.Card {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*entry, 0, len(s.tried))
 	for _, e := range s.tried {
-		out = append(out, e)
+		if cardLive(e.card, now) {
+			out = append(out, e)
+		}
 	}
 	sortEntries(out, func(e *entry) uint64 { return e.last })
 	return limitCards(out, limit)
 }
 
 // DialCandidates returns cards for outgoing connections, tried before new (as Bitcoin's addrman).
-// Within a table the most recently active card comes first.
-func (s *Store) DialCandidates(limit int) []*objects.Card {
+// Within a table the most recently active card comes first. Expired cards are never dial targets.
+func (s *Store) DialCandidates(limit int, now time.Time) []*objects.Card {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tried := make([]*entry, 0, len(s.tried))
 	for _, e := range s.tried {
-		tried = append(tried, e)
+		if cardLive(e.card, now) {
+			tried = append(tried, e)
+		}
 	}
 	sortEntries(tried, func(e *entry) uint64 { return e.last })
 
 	fresh := make([]*entry, 0, len(s.new))
 	for _, e := range s.new {
-		fresh = append(fresh, e)
+		if cardLive(e.card, now) {
+			fresh = append(fresh, e)
+		}
 	}
 	sortEntries(fresh, func(e *entry) uint64 { return e.first })
 
@@ -373,11 +397,11 @@ func (s *Store) evictNewLocked() {
 	}
 }
 
-func (s *Store) evictTriedLocked(keep [32]byte) {
+func (s *Store) evictTriedLocked(keep *[32]byte) {
 	var oldest *entry
 	var id [32]byte
 	for k, e := range s.tried {
-		if k == keep {
+		if keep != nil && k == *keep {
 			continue
 		}
 		if oldest == nil || e.last < oldest.last {
@@ -467,6 +491,16 @@ func decodeRecord(b []byte) (*entry, bool) {
 		reached: reached,
 		addr:    addr,
 	}, true
+}
+
+// cardLive reports whether the card may still be used at now. It follows the same rule as
+// objects.Verify: not_after plus the 60 s clock-skew tolerance (objects.md §2.2 step 4).
+func cardLive(c *objects.Card, now time.Time) bool {
+	if c == nil || c.Env == nil {
+		return false
+	}
+	t, na := unix(now), c.Env.NotAfter
+	return !(t >= na && t-na >= uint64(objects.ClockSkew))
 }
 
 func unix(t time.Time) uint64 {

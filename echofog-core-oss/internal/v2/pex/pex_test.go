@@ -204,13 +204,13 @@ func TestCandidateIsNewNotGuard(t *testing.T) {
 	if st.LenNew() != 1 || st.LenTried() != 0 {
 		t.Fatalf("new/tried = %d/%d, want 1/0", st.LenNew(), st.LenTried())
 	}
-	if got := st.Guards(10); len(got) != 0 {
+	if got := st.Guards(10, testNow); len(got) != 0 {
 		t.Fatalf("a card never reached became a guard candidate: %d", len(got))
 	}
 	if got := st.Serve(testNow); len(got) != 0 {
 		t.Fatalf("a card never reached is served to PEX: %d", len(got))
 	}
-	if got := st.DialCandidates(10); len(got) != 1 || got[0].DeviceID != c.DeviceID {
+	if got := st.DialCandidates(10, testNow); len(got) != 1 || got[0].DeviceID != c.DeviceID {
 		t.Fatalf("dial candidates %d, want the new one", len(got))
 	}
 }
@@ -229,7 +229,7 @@ func TestWorkingSessionMovesCandidateToTried(t *testing.T) {
 	if st.LenNew() != 0 || st.LenTried() != 1 {
 		t.Fatalf("new/tried = %d/%d, want 0/1", st.LenNew(), st.LenTried())
 	}
-	if got := st.Guards(10); len(got) != 1 {
+	if got := st.Guards(10, testNow); len(got) != 1 {
 		t.Fatalf("tried card is not a guard candidate: %d", len(got))
 	}
 	if got := st.Serve(testNow); len(got) != 1 {
@@ -241,7 +241,7 @@ func TestWorkingSessionMovesCandidateToTried(t *testing.T) {
 	if got := st.Serve(later); len(got) != 0 {
 		t.Fatalf("a card reached 25 h ago is still served: %d", len(got))
 	}
-	if got := st.Guards(10); len(got) != 1 {
+	if got := st.Guards(10, later); len(got) != 1 {
 		t.Fatalf("a tried card stopped being a guard candidate: %d", len(got))
 	}
 	if !st.NoteSession(c, addrOf(t, c), later) {
@@ -266,10 +266,10 @@ func TestExpiredCardsAreNotOffered(t *testing.T) {
 	if got := st.Serve(later); len(got) != 0 {
 		t.Fatalf("Serve returned an expired card: %d", len(got))
 	}
-	if got := st.Guards(10); len(got) != 0 {
+	if got := st.Guards(10, later); len(got) != 0 {
 		t.Fatalf("Guards returned an expired card: %d", len(got))
 	}
-	if got := st.DialCandidates(10); len(got) != 0 {
+	if got := st.DialCandidates(10, later); len(got) != 0 {
 		t.Fatalf("DialCandidates returned an expired card: %d", len(got))
 	}
 
@@ -281,10 +281,10 @@ func TestExpiredCardsAreNotOffered(t *testing.T) {
 	if got := st.Serve(later); len(got) != 1 || got[0].DeviceID != long.DeviceID {
 		t.Fatalf("Serve = %d cards, want only the live one", len(got))
 	}
-	if got := st.Guards(10); len(got) != 1 || got[0].DeviceID != long.DeviceID {
+	if got := st.Guards(10, later); len(got) != 1 || got[0].DeviceID != long.DeviceID {
 		t.Fatalf("Guards = %d cards, want only the live one", len(got))
 	}
-	if got := st.DialCandidates(10); len(got) != 1 || got[0].DeviceID != long.DeviceID {
+	if got := st.DialCandidates(10, later); len(got) != 1 || got[0].DeviceID != long.DeviceID {
 		t.Fatalf("DialCandidates = %d cards, want only the live one", len(got))
 	}
 }
@@ -307,7 +307,7 @@ func TestServeRequiresTheReachedAddressInTheCurrentCard(t *testing.T) {
 	if got := st.Serve(testNow.Add(time.Minute)); len(got) != 0 {
 		t.Fatalf("served a card whose new address was never reached: %d", len(got))
 	}
-	if got := st.Guards(10); len(got) != 1 {
+	if got := st.Guards(10, testNow.Add(time.Minute)); len(got) != 1 {
 		t.Fatalf("guards = %d, want the tried device", len(got))
 	}
 	if !st.NoteSession(next, addrOf(t, next), testNow.Add(2*time.Minute)) {
@@ -332,7 +332,7 @@ func TestUnlistedIsNeverStored(t *testing.T) {
 	if st.LenNew() != 0 || st.LenTried() != 0 {
 		t.Fatalf("unlisted card entered the tables: new/tried = %d/%d", st.LenNew(), st.LenTried())
 	}
-	if len(st.Serve(testNow)) != 0 || len(st.Guards(10)) != 0 || len(st.DialCandidates(10)) != 0 {
+	if len(st.Serve(testNow)) != 0 || len(st.Guards(10, testNow)) != 0 || len(st.DialCandidates(10, testNow)) != 0 {
 		t.Fatal("unlisted card is used")
 	}
 }
@@ -625,7 +625,7 @@ func TestOpenAppliesTableLimitsAndDeduplicates(t *testing.T) {
 		t.Fatalf("after limits new/tried = %d/%d, want 2/1", limited.LenNew(), limited.LenTried())
 	}
 	seen := map[[32]byte]bool{}
-	for _, c := range limited.DialCandidates(10) {
+	for _, c := range limited.DialCandidates(10, testNow) {
 		if seen[c.DeviceID] {
 			t.Fatalf("device %x appears twice in DialCandidates", c.DeviceID)
 		}

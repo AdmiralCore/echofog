@@ -84,8 +84,13 @@ type Config struct {
 	OwnCard func(now time.Time) *objects.Card
 	// Release returns the release manifest to hand out for release = true. Nil until T4.5.
 	Release func() []byte
-	// Now is the corrected clock (AD13). Nil means time.Now.
+	// Now is the corrected clock (AD13) for card verification and the 24-hour confirmation. Nil
+	// means time.Now.
 	Now func() time.Time
+	// Deadline is the raw system clock used for network deadlines (SetReadDeadline). It must not
+	// be the corrected clock: the mux compares deadlines with the system time, so a learned offset
+	// would stretch or collapse the 4 s timeout. Nil means time.Now.
+	Deadline func() time.Time
 	// Rand returns a value in [0,n). Nil means math/rand/v2.
 	Rand func(n int) int
 	// Timers drives the lazy client; nil means time.After.
@@ -123,6 +128,9 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.Deadline == nil {
+		cfg.Deadline = time.Now
 	}
 	if cfg.Rand == nil {
 		cfg.Rand = rand.IntN
@@ -185,7 +193,7 @@ func (s *Service) Response(p Peer, req Request, now time.Time) ([]*objects.Card,
 	if s.cfg.OwnCard != nil {
 		if own := s.cfg.OwnCard(now); own != nil {
 			ownDevice = own.DeviceID
-			if own.NodeID != p.Node && matches(own, req) {
+			if own.NodeID != p.Node && matches(own, req, now) {
 				out = append(out, own)
 			}
 		}
@@ -198,7 +206,7 @@ func (s *Service) Response(p Peer, req Request, now time.Time) ([]*objects.Card,
 			if c.DeviceID == p.Device || c.NodeID == p.Node || c.DeviceID == ownDevice {
 				continue
 			}
-			if !matches(c, req) {
+			if !matches(c, req, now) {
 				continue
 			}
 			out = append(out, c)
@@ -213,9 +221,9 @@ func (s *Service) Response(p Peer, req Request, now time.Time) ([]*objects.Card,
 }
 
 // matches applies the GET filters. want_flags requires every requested bit; want_role and region
-// are ignored when zero/empty.
-func matches(c *objects.Card, req Request) bool {
-	if c == nil || !c.Publishable() {
+// are ignored when zero/empty. A card past not_after (+ clock skew) is never offered.
+func matches(c *objects.Card, req Request, now time.Time) bool {
+	if c == nil || !c.Publishable() || !cardLive(c, now) {
 		return false
 	}
 	if req.WantFlags != 0 && c.Body.GetFlags()&req.WantFlags != req.WantFlags {
@@ -233,14 +241,13 @@ func matches(c *objects.Card, req Request) bool {
 	return true
 }
 
-// shouldAsk is the lazy PEX trigger: fewer than eight working peers or no relay; low_power lowers
-// the peer threshold to four (platforms.md §2).
+// shouldAsk is the lazy PEX trigger. Normally it is fewer than eight working peers or no relay;
+// low_power asks only below four peers, relay or not (platforms.md §2).
 func shouldAsk(working int, hasRelay, lowPower bool) bool {
-	threshold := LazyThreshold
 	if lowPower {
-		threshold = LazyThresholdLowPower
+		return working < LazyThresholdLowPower
 	}
-	return working < threshold || !hasRelay
+	return working < LazyThreshold || !hasRelay
 }
 
 // Run is the lazy PEX client of one session. It waits uniform(1, 10) s from session start and then
@@ -275,6 +282,12 @@ func (s *Service) delay() time.Duration {
 		n = 0
 	}
 	return LazyDelayMin + time.Duration(n)*time.Second
+}
+
+// readDeadline returns the network deadline of one GET. It deliberately uses the raw clock
+// (Deadline), not the corrected one: SetReadDeadline is compared with the system time.
+func (s *Service) readDeadline() time.Time {
+	return s.cfg.Deadline().Add(GetTimeout)
 }
 
 func (s *Service) wait(ctx context.Context, sess Session, d time.Duration) bool {
@@ -316,7 +329,7 @@ func (s *Service) Ask(ctx context.Context, sess Session, lowPower bool) error {
 	if err != nil {
 		return err
 	}
-	if err := st.SetReadDeadline(s.cfg.Now().Add(GetTimeout)); err != nil {
+	if err := st.SetReadDeadline(s.readDeadline()); err != nil {
 		return err
 	}
 	if err := st.WriteFrame(TypeGet, 0, payload); err != nil {
