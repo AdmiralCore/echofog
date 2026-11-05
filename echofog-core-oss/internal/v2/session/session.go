@@ -84,6 +84,9 @@ type Established struct {
 	Observed      []byte
 	EarlyStatus   uint32
 	EarlyResponse []byte
+	// Access names the pass that admitted a hidden-node session (responder side only). The runtime
+	// redeems an invitation or renews a personal pass with it (T3.6).
+	Access *handshake.AccessInfo
 }
 
 // Errors a caller distinguishes locally. On the wire the handshake follows handshake.md §8:
@@ -304,6 +307,7 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 		Observed:      append([]byte(nil), hs.Observed...),
 		EarlyStatus:   hs.EarlyStatus,
 		EarlyResponse: append([]byte(nil), hs.EarlyResponse...),
+		Access:        hs.Access,
 	}, nil
 }
 

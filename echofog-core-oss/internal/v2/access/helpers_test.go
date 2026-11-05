@@ -215,7 +215,7 @@ func (r *rig) newManager(t *testing.T) *access.Manager {
 		KV:          r.kv,
 		Cards:       r.builder,
 		Clock:       r.clock,
-		ContactsKey: r.device.Masking().Public(),
+		ContactsKey: r.device.Masking(),
 		Listeners: []cards.Listener{{
 			Suite: objects.SuiteNoise3,
 			Host:  "203.0.113.10",

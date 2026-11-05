@@ -169,6 +169,10 @@ type InviteOptions struct {
 	// Listeners are extra listeners used only by this invitation, for example the separate
 	// noise3 masking key of an unredeemed invitation (wire.md §2.1).
 	Listeners []Listener
+	// OnlyThese replaces the node's listeners with Listeners instead of adding to them. An
+	// invitation must carry only its own masking key and listener, never the contacts key or the
+	// contacts listener (objects.md §10.3).
+	OnlyThese bool
 }
 
 // Errors of the builder.
@@ -232,18 +236,22 @@ func (b *CardBuilder) Update(cfg Config) error {
 func (b *CardBuilder) Issue(ctx context.Context, scope objects.Scope) (*IssuedCard, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.issueLocked(ctx, scope, nil, nil)
+	return b.issueLocked(ctx, scope, nil, nil, false)
 }
 
 // IssueInvite builds an invitation card. The card is recorded for known_card_seq but is not a
-// current card: it travels in the invitation link (objects.md §10.3).
+// current card: it travels in the invitation link (objects.md §10.3). With OnlyThese the card
+// carries exactly opt.Listeners and no listener of the node itself.
 func (b *CardBuilder) IssueInvite(ctx context.Context, opt InviteOptions) (*IssuedCard, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(opt.InviteID) != inviteIDLen {
 		return nil, fmt.Errorf("%w: invite_id is %d bytes, want %d", ErrConfig, len(opt.InviteID), inviteIDLen)
 	}
-	return b.issueLocked(ctx, objects.ScopeInvite, opt.InviteID, opt.Listeners)
+	if opt.OnlyThese && len(opt.Listeners) == 0 {
+		return nil, fmt.Errorf("%w: an invitation needs a listener", ErrConfig)
+	}
+	return b.issueLocked(ctx, objects.ScopeInvite, opt.InviteID, opt.Listeners, opt.OnlyThese)
 }
 
 // Current returns the current card of the scope. It reissues when the card has less than
@@ -313,10 +321,10 @@ func (b *CardBuilder) currentLocked(ctx context.Context, scope objects.Scope) (*
 		rec.notAfter > unix(now)+uint64(RepublishBefore/time.Second) {
 		return &IssuedCard{Scope: scope, Seq: rec.seq, NotAfter: rec.notAfter, Envelope: clone(rec.envelope)}, nil
 	}
-	return b.issueLocked(ctx, scope, nil, nil)
+	return b.issueLocked(ctx, scope, nil, nil, false)
 }
 
-func (b *CardBuilder) issueLocked(ctx context.Context, scope objects.Scope, inviteID []byte, extra []Listener) (*IssuedCard, error) {
+func (b *CardBuilder) issueLocked(ctx context.Context, scope objects.Scope, inviteID []byte, extra []Listener, onlyThese bool) (*IssuedCard, error) {
 	switch scope {
 	case objects.ScopePublic:
 		if b.cfg.Visibility != Visible {
@@ -349,12 +357,20 @@ func (b *CardBuilder) issueLocked(ctx context.Context, scope objects.Scope, invi
 
 	listeners := make([]Listener, 0, len(b.cfg.Listeners)+len(extra))
 	if len(extra) > 0 {
-		if err := validateExtraListeners(b.cfg.Listeners, extra); err != nil {
+		if onlyThese {
+			if err := validateExtraListeners(nil, extra); err != nil {
+				return nil, err
+			}
+		} else if err := validateExtraListeners(b.cfg.Listeners, extra); err != nil {
 			return nil, err
 		}
 	}
-	listeners = append(listeners, cloneListeners(b.cfg.Listeners)...)
-	listeners = append(listeners, cloneListeners(extra)...)
+	if onlyThese {
+		listeners = append(listeners, cloneListeners(extra)...)
+	} else {
+		listeners = append(listeners, cloneListeners(b.cfg.Listeners)...)
+		listeners = append(listeners, cloneListeners(extra)...)
+	}
 
 	var fp [32]byte
 	if scope != objects.ScopeInvite {

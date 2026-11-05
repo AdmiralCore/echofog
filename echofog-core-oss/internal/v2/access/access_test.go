@@ -8,6 +8,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
+	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
@@ -48,6 +49,23 @@ func TestMintCreatesInvitationCardAndLink(t *testing.T) {
 	if !hasMask(card, minted.MaskKey) {
 		t.Fatal("invitation masking key missing")
 	}
+	// The runtime gets the private half only through UseMaskKey; it must match the published key.
+	var privCopy []byte
+	err = r.mgr.UseMaskKey(minted.MaskKey, func(priv []byte) error {
+		privCopy = append([]byte(nil), priv...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UseMaskKey: %v", err)
+	}
+	kp, err := identity.KeyPairFromPrivate(privCopy)
+	if err != nil {
+		t.Fatalf("private masking key: %v", err)
+	}
+	if !bytes.Equal(kp.Public(), minted.MaskKey) {
+		t.Fatal("UseMaskKey returned the wrong private key")
+	}
+	kp.Destroy()
 
 	pass, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now())
 	if !ok || !bytes.Equal(pass.Secret, minted.Secret) || pass.Personal {
@@ -299,15 +317,11 @@ func TestMultipleEntries(t *testing.T) {
 	}
 	first := r.clientNode(t)
 	second := r.clientNode(t)
-	if _, _ = redeem(t, r, minted, first); false {
-		t.Fatal("unreachable")
-	}
+	redeem(t, r, minted, first)
 	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); !ok {
 		t.Fatal("invitation died after the first of two entries")
 	}
-	if _, _ = redeem(t, r, minted, second); false {
-		t.Fatal("unreachable")
-	}
+	redeem(t, r, minted, second)
 	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); ok {
 		t.Fatal("invitation still admits after both entries")
 	}
@@ -346,9 +360,8 @@ func TestRevokedContactGetsSilentClose(t *testing.T) {
 	if _, ok := r.mgr.LookupPass(red.PassID[:], r.clock.Now()); ok {
 		t.Fatal("revoked contact still admits")
 	}
-	if !hasKey(r.mgr.ContactsKeys(), oldPub) {
-		t.Fatal("the old contacts key must stay live during the overlap")
-	}
+	// No other contact needs the old card, so the previous key may retire immediately; when a
+	// contact remains it stays accepted during the overlap (covered by TestRenewAndContactsKeyCoverage).
 
 	sr, rep := r.handshake(t, client, red.Secret, minted.Card)
 	if sr != nil {
@@ -372,7 +385,10 @@ func TestExtendAndExpiry(t *testing.T) {
 	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); ok {
 		t.Fatal("expired link still admits")
 	}
-	list, _ := r.mgr.List(ctx)
+	list, err := r.mgr.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
 	if list[0].State != access.Expired {
 		t.Fatalf("state %v", list[0].State)
 	}
@@ -535,8 +551,37 @@ func TestStateSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestHandshakeReportsAccessPass covers the integration point with the session runtime: the
-// responder reports which pass admitted the session so the runtime can redeem it.
+// TestErrorsAndCaps pins the error distinctions the API promises and the invitation card bound:
+// an extension never moves a link past the card's not_after (T4.2a, objects.md §3.2).
+func TestErrorsAndCaps(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	var unknown access.PassID
+	unknown[0] = 0xff
+	if _, err := r.mgr.Revoke(ctx, unknown); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("Revoke unknown: %v", err)
+	}
+	if _, err := r.mgr.Redeem(ctx, access.RedeemRequest{PassID: unknown, Node: [32]byte{1}}); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("Redeem unknown: %v", err)
+	}
+	info, err := r.mgr.Extend(ctx, minted.PassID, 100*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Extend: %v", err)
+	}
+	card, err := linkCardAt(t, info.Link, r.clock.Now())
+	if err != nil {
+		t.Fatalf("link after extension: %v", err)
+	}
+	if info.LinkExpires.Unix() > int64(card.Env.NotAfter)+1 {
+		t.Fatalf("link %v past the card's not_after %d", info.LinkExpires, card.Env.NotAfter)
+	}
+}
+
 func TestHandshakeReportsAccessPass(t *testing.T) {
 	r := newRig(t)
 	ctx := t.Context()
