@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/echofog/echofog-core/internal/v2/handshake"
@@ -71,6 +72,39 @@ func (a *AbuseLog) Report(source [32]byte) error {
 	out := make([]byte, 8)
 	binary.LittleEndian.PutUint64(out, n)
 	return a.kv.Put(key, out)
+}
+
+// AbuseCount is one persisted counter for the operator view (T0.3 `efv2 status`).
+type AbuseCount struct {
+	Source [32]byte
+	Count  uint64
+}
+
+// Snapshot returns every stored abuse counter, sorted by source device ID. A damaged record is
+// skipped: a status view must stay available even when one counter needs repair, while Count
+// keeps reporting the damage for the code that acts on it.
+func (a *AbuseLog) Snapshot() ([]AbuseCount, error) {
+	if a == nil || a.kv == nil {
+		return nil, nil
+	}
+	entries, err := a.kv.Scan([]byte{'a'}, store.MaxScanLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AbuseCount, 0, len(entries))
+	for _, e := range entries {
+		if len(e.Key) != 1+32 || len(e.Value) != 8 {
+			continue
+		}
+		var c AbuseCount
+		copy(c.Source[:], e.Key[1:])
+		c.Count = binary.LittleEndian.Uint64(e.Value)
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].Source[:], out[j].Source[:]) < 0
+	})
+	return out, nil
 }
 
 // Count returns the number of findings recorded against source.

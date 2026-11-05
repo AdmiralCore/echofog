@@ -135,6 +135,7 @@ type Runtime struct {
 	started    bool
 	stopped    bool
 	noCover    bool
+	startedAt  time.Time
 
 	// localMu guards localAddrs, which a network change may replace while sessions dial.
 	localMu    sync.RWMutex
@@ -353,6 +354,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 	r.mu.Lock()
 	r.started = true
+	r.startedAt = time.Now()
 	r.mu.Unlock()
 	return nil
 }

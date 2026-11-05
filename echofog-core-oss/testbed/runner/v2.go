@@ -46,11 +46,12 @@ func (b *byteSizeFlag) Set(s string) error {
 }
 
 var (
-	v2Phases     = flag.String("phases", "", "v2: comma-separated phases (censor,net,services); default depends on the scenario")
+	v2Phases     = flag.String("phases", "", "v2: comma-separated phases (censor,net,services,echo); default depends on the scenario")
 	v2Profile    = flag.String("profile", "desktop", "v2: desktop or android")
 	v2Network    = flag.String("network", "lab", "v2: lab, ru-mobile, cn or ir")
 	v2Pcap       = flag.Bool("pcap", false, "v2: keep the packet capture until the analysis is green (it is deleted after)")
 	v2PcapBudget = &byteSizeFlag{v: maxPcapBudget}
+	v2EchoBytes  = flag.Int64("v2-echo-bytes", 1<<30, "v2-basic: bytes sent through the echo stream (default 1 GiB)")
 )
 
 func init() {
@@ -79,6 +80,9 @@ func validateV2Flags(scenario string) error {
 	if _, err := v2PhaseList(scenario); err != nil {
 		return err
 	}
+	if *v2EchoBytes <= 0 {
+		return fmt.Errorf("-v2-echo-bytes %d: want a positive count", *v2EchoBytes)
+	}
 	return nil
 }
 
@@ -89,7 +93,7 @@ func v2PhaseList(scenario string) ([]string, error) {
 	} else {
 		switch scenario {
 		case "v2-basic":
-			phases = []string{"net", "services"}
+			phases = []string{"echo"}
 		case "v2-censor", "v2-carrier":
 			phases = []string{"censor"}
 		default:
@@ -99,9 +103,9 @@ func v2PhaseList(scenario string) ([]string, error) {
 	for i := range phases {
 		phases[i] = strings.TrimSpace(phases[i])
 		switch phases[i] {
-		case "censor", "net", "services":
+		case "censor", "net", "services", "echo":
 		default:
-			return nil, fmt.Errorf("unknown phase %q (censor, net, services)", phases[i])
+			return nil, fmt.Errorf("unknown phase %q (censor, net, services, echo)", phases[i])
 		}
 	}
 	return phases, nil
