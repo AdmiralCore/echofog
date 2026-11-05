@@ -1,11 +1,32 @@
 package quicx
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/tls"
+	"crypto/x509"
+	"sync"
 	"testing"
 	"time"
 )
+
+// serverCertificate returns the certificate the server config selects for a ClientHello that
+// offers schemes.
+func serverCertificate(t *testing.T, cfg *tls.Config, schemes ...tls.SignatureScheme) *x509.Certificate {
+	t.Helper()
+	if cfg.GetCertificate == nil {
+		t.Fatal("server config has no GetCertificate callback")
+	}
+	cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{SignatureSchemes: schemes})
+	if err != nil {
+		t.Fatalf("GetCertificate(%v): %v", schemes, err)
+	}
+	if cert == nil || cert.Leaf == nil {
+		t.Fatal("GetCertificate returned no parsed certificate")
+	}
+	return cert.Leaf
+}
 
 func TestNoise3TLSConfig(t *testing.T) {
 	client, server, err := Noise3TLSConfig()
@@ -26,16 +47,14 @@ func TestNoise3TLSConfig(t *testing.T) {
 	if !client.InsecureSkipVerify {
 		t.Error("client does not skip certificate verification (wire.md §5.1: the Noise handshake authenticates)")
 	}
-	if len(server.Certificates) != 1 {
-		t.Fatalf("server has %d certificates, want 1", len(server.Certificates))
-	}
 
-	leaf := server.Certificates[0].Leaf
-	if leaf == nil {
-		t.Fatal("server certificate has no parsed Leaf")
+	leaf := serverCertificate(t, server, tls.ECDSAWithP256AndSHA256)
+	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("default certificate key is %T, want ECDSA P-256 (the pinned Chrome hello has no Ed25519)", leaf.PublicKey)
 	}
-	if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok {
-		t.Errorf("public key is %T, want ed25519.PublicKey", leaf.PublicKey)
+	if pub.Curve != elliptic.P256() {
+		t.Errorf("ECDSA curve = %v, want P-256", pub.Curve)
 	}
 	if len(leaf.Subject.Names) != 0 || leaf.Subject.CommonName != "" {
 		t.Errorf("subject = %v, want empty", leaf.Subject)
@@ -49,8 +68,118 @@ func TestNoise3TLSConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Noise3TLSConfig: %v", err)
 	}
-	if leaf.SerialNumber.Cmp(server2.Certificates[0].Leaf.SerialNumber) == 0 {
+	if leaf.SerialNumber.Cmp(serverCertificate(t, server2, tls.ECDSAWithP256AndSHA256).SerialNumber) == 0 {
 		t.Error("two certificates share a serial number")
+	}
+}
+
+// TestNoise3CertificateSelection: Ed25519 is generated only for a profile that offers it, and a
+// certificate is served only to a ClientHello that can verify it.
+func TestNoise3CertificateSelection(t *testing.T) {
+	// A profile without Ed25519 keeps the ECDSA default and never has an Ed25519 key.
+	_, plain, err := Noise3TLSConfigForProfile([]tls.SignatureScheme{
+		tls.ECDSAWithP256AndSHA256, tls.PSSWithSHA256,
+	})
+	if err != nil {
+		t.Fatalf("Noise3TLSConfigForProfile without ed25519: %v", err)
+	}
+	if leaf := serverCertificate(t, plain, tls.ECDSAWithP256AndSHA256); leaf.PublicKey == nil {
+		t.Fatal("no certificate for an ECDSA client")
+	} else if _, ok := leaf.PublicKey.(*ecdsa.PublicKey); !ok {
+		t.Fatalf("certificate without an Ed25519 offer is %T, want ECDSA", leaf.PublicKey)
+	}
+
+	// A profile with Ed25519 prefers it when the client offers it and falls back to ECDSA when
+	// the client does not (the pinned Chrome ClientHello).
+	_, withEd, err := Noise3TLSConfigForProfile([]tls.SignatureScheme{
+		tls.Ed25519, tls.ECDSAWithP256AndSHA256,
+	})
+	if err != nil {
+		t.Fatalf("Noise3TLSConfigForProfile with ed25519: %v", err)
+	}
+	if leaf := serverCertificate(t, withEd, tls.Ed25519); leaf.PublicKey == nil {
+		t.Fatal("no certificate for an Ed25519 client")
+	} else if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok {
+		t.Fatalf("certificate for an Ed25519 client is %T, want ed25519", leaf.PublicKey)
+	}
+	if leaf := serverCertificate(t, withEd, tls.ECDSAWithP256AndSHA256); leaf.PublicKey == nil {
+		t.Fatal("no fallback certificate for a client without Ed25519")
+	} else if _, ok := leaf.PublicKey.(*ecdsa.PublicKey); !ok {
+		t.Fatalf("Ed25519 was chosen for a hello without it: %T", leaf.PublicKey)
+	}
+	if _, err := withEd.GetCertificate(&tls.ClientHelloInfo{
+		SignatureSchemes: []tls.SignatureScheme{tls.PSSWithSHA256},
+	}); err == nil {
+		t.Error("a certificate was served for a ClientHello with no matching scheme")
+	}
+}
+
+// TestNoise3Ed25519Handshake: a client that offers Ed25519 really gets an Ed25519 certificate.
+func TestNoise3Ed25519Handshake(t *testing.T) {
+	clientTLS, serverTLS, err := Noise3TLSConfigForProfile([]tls.SignatureScheme{
+		tls.Ed25519, tls.ECDSAWithP256AndSHA256,
+	})
+	if err != nil {
+		t.Fatalf("Noise3TLSConfigForProfile: %v", err)
+	}
+	conf, err := Noise3QUICConfig(48)
+	if err != nil {
+		t.Fatalf("Noise3QUICConfig: %v", err)
+	}
+	clientConn, _ := dialPair(t, clientTLS, serverTLS, conf.Clone(), conf.Clone())
+	peers := clientConn.ConnectionState().TLS.PeerCertificates
+	if len(peers) == 0 {
+		t.Fatal("the client received no certificate")
+	}
+	if _, ok := peers[0].PublicKey.(ed25519.PublicKey); !ok {
+		t.Fatalf("certificate key is %T, want ed25519 (the client offered it)", peers[0].PublicKey)
+	}
+}
+
+// TestNoise3ChromeHelloHandshake: the pinned Chrome ClientHello (no Ed25519 in
+// signature_algorithms) completes a noise3 handshake, and the certificate served to it uses a
+// key type from its own signature_algorithms. This is the regression test for Ed25519 not being
+// chosen for a hello without it.
+func TestNoise3ChromeHelloHandshake(t *testing.T) {
+	clientTLS, serverTLS, err := Noise3TLSConfigForProfile([]tls.SignatureScheme{
+		tls.Ed25519, tls.ECDSAWithP256AndSHA256,
+	})
+	if err != nil {
+		t.Fatalf("Noise3TLSConfigForProfile: %v", err)
+	}
+	var mu sync.Mutex
+	var seen []tls.SignatureScheme
+	serverTLS.GetConfigForClient = func(chi *tls.ClientHelloInfo) (*tls.Config, error) {
+		mu.Lock()
+		seen = append([]tls.SignatureScheme(nil), chi.SignatureSchemes...)
+		mu.Unlock()
+		return serverTLS, nil
+	}
+
+	conf, err := Noise3QUICConfig(48)
+	if err != nil {
+		t.Fatalf("Noise3QUICConfig: %v", err)
+	}
+	clientConn, _ := dialPair(t, clientTLS, serverTLS, Reality2QUICConfig(), conf.Clone())
+
+	mu.Lock()
+	offered := append([]tls.SignatureScheme(nil), seen...)
+	mu.Unlock()
+	if len(offered) == 0 {
+		t.Fatal("the server saw no signature_algorithms")
+	}
+	peers := clientConn.ConnectionState().TLS.PeerCertificates
+	if len(peers) == 0 {
+		t.Fatal("the client received no certificate")
+	}
+	if _, ok := peers[0].PublicKey.(*ecdsa.PublicKey); !ok {
+		t.Fatalf("certificate key is %T, want ECDSA P-256", peers[0].PublicKey)
+	}
+	if !hasSignatureScheme(offered, tls.ECDSAWithP256AndSHA256) {
+		t.Fatalf("the served key type is not in the hello's signature_algorithms %v", offered)
+	}
+	if hasSignatureScheme(offered, tls.Ed25519) {
+		t.Fatalf("the pinned Chrome hello unexpectedly offers Ed25519: %v", offered)
 	}
 }
 
