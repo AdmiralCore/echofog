@@ -17,11 +17,7 @@ func slotDTO(ev bridge.SlotEvent) dto.CallMediaSlotDTO {
 }
 
 // SetupCallMediaCallbacks wires per-source playback slots and moderation events to the UI.
-func (n *NodeApi) SetupCallMediaCallbacks(onSlot func(dto.CallMediaSlotDTO), onKicked func(reason string)) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1CallBackend) SetupCallMediaCallbacks(onSlot func(dto.CallMediaSlotDTO), onKicked func(reason string)) {
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -35,11 +31,7 @@ func (n *NodeApi) SetupCallMediaCallbacks(onSlot func(dto.CallMediaSlotDTO), onK
 }
 
 // GetCallSlots returns current slot assignments, so a reloaded UI can relabel its tracks.
-func (n *NodeApi) GetCallSlots() []dto.CallMediaSlotDTO {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1CallBackend) GetCallSlots() []dto.CallMediaSlotDTO {
 	if n.node == nil || n.node.CallManager == nil {
 		return nil
 	}
@@ -51,11 +43,7 @@ func (n *NodeApi) GetCallSlots() []dto.CallMediaSlotDTO {
 }
 
 // GetCallRoster lists the members of the active call (empty when not in a call).
-func (n *NodeApi) GetCallRoster() dto.CallRosterDTO {
-	if n.v2Unavailable() != nil {
-		return dto.CallRosterDTO{}
-	}
-
+func (n *v1CallBackend) GetCallRoster() dto.CallRosterDTO {
 	if n.node == nil || n.node.CallManager == nil {
 		return dto.CallRosterDTO{}
 	}
@@ -79,11 +67,7 @@ func (n *NodeApi) GetCallRoster() dto.CallRosterDTO {
 
 // SetCallBackdrop picks the animated background the others see on this node's call tile ("" for
 // the plain one). It is kept for the calls joined later too.
-func (n *NodeApi) SetCallBackdrop(name string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) SetCallBackdrop(name string) error {
 	if tree.CleanBackdrop(name) != name {
 		return errors.New("a backdrop name is lowercase letters, digits and dashes")
 	}
@@ -95,11 +79,7 @@ func (n *NodeApi) SetCallBackdrop(name string) error {
 }
 
 // ReportCallMember flags a member for spam; enough reports remove and ban it from the room.
-func (n *NodeApi) ReportCallMember(peerHex, reason string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) ReportCallMember(peerHex, reason string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errCallsUnavailable
 	}
@@ -111,11 +91,7 @@ func (n *NodeApi) ReportCallMember(peerHex, reason string) error {
 }
 
 // RequestRelayChange asks to receive a watched stream through another relay.
-func (n *NodeApi) RequestRelayChange(streamID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) RequestRelayChange(streamID string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errCallsUnavailable
 	}

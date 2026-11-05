@@ -73,6 +73,10 @@ func (p dhtPinger) Ping(ctx context.Context, card *objects.Card) error {
 	}
 	_, sess, err := p.h.Session(ctx, DeviceID(card.DeviceID), DialOpt{Card: card})
 	if err != nil {
+		if errors.Is(err, ErrBackground) {
+			// A suspended node does not dial; that says nothing about the peer.
+			return dht.ErrUnavailable
+		}
 		return err
 	}
 	_, err = sess.Ping(ctx)

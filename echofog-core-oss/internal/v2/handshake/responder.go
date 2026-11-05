@@ -26,6 +26,14 @@ type Pass struct {
 	Personal bool   // a personal pass of a contact (false: an invitation pass)
 }
 
+// AccessInfo names the pass that admitted a hidden-node session, so the caller can redeem an
+// invitation or renew the contact's personal pass (handshake.md §5, objects.md §10.3). It is set
+// on the responder side only; the initiator already knows its own secret.
+type AccessInfo struct {
+	PassID   [8]byte
+	Personal bool
+}
+
 // EarlyHandler processes the frames of the 0-RTT stream. It returns ok = false when the request
 // is not a 0-RTT safe operation (registries.md §3); the responder then reports early_status 2.
 type EarlyHandler func(early []byte) (response []byte, ok bool)
@@ -132,6 +140,7 @@ type Responder struct {
 	pending *Session
 	early   []byte
 	hidden  bool
+	access  *AccessInfo
 
 	// test hooks
 	timeOverride   uint64
@@ -176,6 +185,7 @@ func (r *Responder) uniformDelay() time.Duration {
 // the same stream after an HS_RETRY.
 func (r *Responder) HandleFirst(cb, hello, msg1 []byte, arrival time.Time) Reply {
 	r.hs, r.pending, r.early = nil, nil, nil
+	r.access = nil
 	var closeAt time.Time
 	if r.hidden {
 		// Drawn first, so the delay never depends on which check fails.
@@ -270,6 +280,9 @@ func (r *Responder) HandleFirst(cb, hello, msg1 []byte, arrival time.Time) Reply
 			return fail(errors.New("handshake: access proof"))
 		}
 		personal = pass.Personal
+		var pid [8]byte
+		copy(pid[:], p1.Access.PassID)
+		r.access = &AccessInfo{PassID: pid, Personal: personal}
 	}
 
 	// 5. Early data, P2, message 2.
@@ -467,5 +480,6 @@ func (r *Responder) HandleFinish(msg3 []byte) (*Session, error) {
 	s.Features, s.Services = pend.Features, pend.Services
 	s.PeerProtoVer, s.PeerTime = pend.PeerProtoVer, pend.PeerTime
 	s.EarlyRequest, s.ResponderCardSent = pend.EarlyRequest, pend.ResponderCardSent
+	s.Access = r.access
 	return s, nil
 }

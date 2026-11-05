@@ -25,8 +25,8 @@ func newFacadeNode(t *testing.T, protocol int) *NodeApi {
 }
 
 // Protocol 1 keeps the v1 code in the domain backends: the network and contacts domains run in
-// their own v1 structs since T11.1b, the chats, groups and files domains since T11.1c; the calls
-// and VPN domains still keep the facade itself.
+// their own v1 structs since T11.1b, the chats, groups and files domains since T11.1c, the calls
+// and streams domain since T11.1d; the VPN domain still keeps the facade itself.
 func TestBackendsProtocol1PicksV1Backends(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV1)
 	require.IsType(t, &v1NetBackend{}, api.backends.net)
@@ -39,7 +39,8 @@ func TestBackendsProtocol1PicksV1Backends(t *testing.T) {
 	require.Same(t, api, api.backends.group.(*v1GroupBackend).NodeApi)
 	require.IsType(t, &v1FileBackend{}, api.backends.file)
 	require.Same(t, api, api.backends.file.(*v1FileBackend).NodeApi)
-	require.Same(t, api, api.backends.call)
+	require.IsType(t, &v1CallBackend{}, api.backends.call)
+	require.Same(t, api, api.backends.call.(*v1CallBackend).NodeApi)
 	require.Same(t, api, api.backends.vpn)
 }
 
@@ -59,7 +60,7 @@ func TestBackendsProtocol2AnswerNotBuilt(t *testing.T) {
 
 // At protocol 2 the facade answers through the pending backends: a network method with an error
 // result says why it cannot run, one without returns the zero value, and the local settings keep
-// working. The calls and VPN domains still carry their check in the facade until T11.1d-e.
+// working. The VPN domain still carries its check in the facade until T11.1e.
 func TestProtocol2FacadeAnswersNotBuilt(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV2)
 	require.ErrorIs(t, api.v2Unavailable(), ErrV2NotBuilt)
@@ -182,6 +183,15 @@ func (stubFileBackend) AcceptFile(string) (dto.FileTransferDTO, error) {
 	return dto.FileTransferDTO{}, errStubBackend
 }
 
+// stubCallBackend is the same for the calls and streams domain T11.1d moves.
+type stubCallBackend struct{ callBackend }
+
+func (stubCallBackend) GetCallRoster() dto.CallRosterDTO {
+	return dto.CallRosterDTO{CallID: "stub"}
+}
+func (stubCallBackend) GetCallPath() CallPath { return CallPath{InCall: true} }
+func (stubCallBackend) LeaveCall() error      { return errStubBackend }
+
 var errStubBackend = errors.New("stub backend")
 
 // The facade methods of the moved domains are delegates. At protocol 2 they must reach the
@@ -218,6 +228,11 @@ func TestMovedDomainsDelegateAtProtocol2(t *testing.T) {
 	require.Equal(t, "stub", api.DownloadDir())
 	_, err = api.AcceptFile("file-1")
 	require.ErrorIs(t, err, errStubBackend)
+
+	api.backends.call = stubCallBackend{}
+	require.Equal(t, "stub", api.GetCallRoster().CallID)
+	require.True(t, api.GetCallPath().InCall)
+	require.ErrorIs(t, api.LeaveCall(), errStubBackend)
 }
 
 // requireClosed fails when ch is nil or open: a receive must complete with ok == false at once.

@@ -66,6 +66,11 @@ const (
 // ErrConfig is a local wiring error.
 var ErrConfig = errors.New("dht: invalid configuration")
 
+// ErrUnavailable means a liveness check could not be made (for example the node is suspended
+// and does not open sessions). It is not evidence that the peer is dead, so the table keeps the
+// entry.
+var ErrUnavailable = errors.New("dht: liveness check unavailable")
+
 // DeviceID is a device position in the keyspace: SHA-256 of the device akey (dht.md §1).
 type DeviceID [32]byte
 
@@ -362,6 +367,9 @@ func (t *Table) checkAndReplace(b *bucket, victim *entry, victimCard *objects.Ca
 		case victim.gen != victimGen:
 			// The node was seen again while the check was in flight; the failed ping is
 			// not evidence that it is dead.
+			t.sortBucketLocked(t.bucketOf(victim.device))
+		case errors.Is(err, ErrUnavailable):
+			// The check could not be made (a suspended node does not dial); keep the entry.
 			t.sortBucketLocked(t.bucketOf(victim.device))
 		default:
 			removed = t.deleteKnownLocked(victim)
@@ -874,6 +882,10 @@ func (t *Table) Prune(ctx context.Context) {
 				// dead.
 			case c.e.gen != gen:
 				// The node was seen again while the check was in flight.
+				t.sortBucketLocked(c.idx)
+			case errors.Is(err, ErrUnavailable):
+				// The check could not be made (a suspended node does not dial); keep the
+				// entry for the next pass.
 				t.sortBucketLocked(c.idx)
 			default:
 				t.deleteKnownLocked(c.e)
