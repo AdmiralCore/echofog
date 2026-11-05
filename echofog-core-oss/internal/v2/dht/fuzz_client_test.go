@@ -23,7 +23,7 @@ func FuzzClientAnswers(f *testing.F) {
 		copy(signer[:], signerRaw)
 		switch kind % 4 {
 		case 0:
-			if env, err := acceptRecord(objects.LabelMailboxHint, signer, data, srvNow); err == nil {
+			if env, err := acceptRecord(objects.LabelMailboxHint, signer, data, srvNow, nil); err == nil {
 				if env.Label != objects.LabelMailboxHint || env.SignerID() != signer {
 					t.Fatalf("accepted a record of %q by %x", env.Label, env.SignerID())
 				}

@@ -52,6 +52,8 @@ type fakeNet struct {
 	afterFirst  int // queries sent after the first record answer
 	stores      map[DeviceID]int
 	storeLog    []DeviceID
+	lures       []*objects.Card // hostile cards every node adds to its answers
+	lureHits    int
 }
 
 func (n *fakeNet) Now() time.Time {
@@ -157,6 +159,11 @@ func (f *fakeTransport) node(ctx context.Context, to *objects.Card) (*fakeNode, 
 	}
 	f.net.mu.Unlock()
 	fn := f.net.byID[DeviceID(to.DeviceID)]
+	if fn == nil {
+		f.net.mu.Lock()
+		f.net.lureHits++
+		f.net.mu.Unlock()
+	}
 	if fn == nil || fn.mode == dead {
 		return nil, errFakeDown
 	}
@@ -171,7 +178,7 @@ func (f *fakeTransport) FindNode(ctx context.Context, to *objects.Card, target [
 	if fn.mode == badCards {
 		return [][]byte{[]byte("not a card")}, nil
 	}
-	return fn.srv.FindNodeAt(target, f.net.Now()), nil
+	return f.net.withLures(fn.srv.FindNodeAt(target, f.net.Now())), nil
 }
 
 func (f *fakeTransport) FindValue(ctx context.Context, to *objects.Card, key [32]byte) ([]byte, [][]byte, error) {
@@ -198,6 +205,9 @@ func (f *fakeTransport) FindValue(ctx context.Context, to *objects.Card, key [32
 	rec, cards := fn.srv.FindValueAt(key, now)
 	if rec != nil {
 		f.net.recordAnswer()
+	}
+	if rec == nil {
+		cards = f.net.withLures(cards)
 	}
 	return rec, cards, nil
 }
@@ -311,4 +321,47 @@ func deviceSignerOf(t testing.TB, seed uint64) *keys.Signer {
 // netipFrom makes a distinct public-looking IPv4 address (own /24) for a counter.
 func netipFrom(n uint64) string {
 	return fmt.Sprintf("%d.%d.%d.9", 30+(n>>16)&0x3f, (n>>8)&0xff, n&0xff)
+}
+
+// withLures puts the hostile cards at the front of an answer (up to the 20 cards a NODES allows).
+func (n *fakeNet) withLures(cards [][]byte) [][]byte {
+	if len(n.lures) == 0 {
+		return cards
+	}
+	var out [][]byte
+	for _, l := range n.lures {
+		out = append(out, l.Env.Raw)
+	}
+	out = append(out, cards...)
+	if len(out) > K {
+		out = out[:K]
+	}
+	return out
+}
+
+// releaseRecord seals a release/2 object with an empty body (the DHT's generic checks only).
+func releaseRecord(t testing.TB, sg *keys.Signer, seq uint64, notAfter time.Time) []byte {
+	t.Helper()
+	b, err := objects.Seal(objects.LabelRelease, sg, seq, uint64(notAfter.Unix()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// storeEverywhere puts a record straight into the servers picked by pick (a test's way to make
+// nodes "hold" something, however they got it).
+func (n *fakeNet) storeOn(t testing.TB, rec []byte, pick func(i int) bool) {
+	t.Helper()
+	for i, fn := range n.nodes {
+		if !pick(i) {
+			continue
+		}
+		var sid [16]byte
+		sid[0], sid[1] = byte(i), byte(i>>8)
+		res := fn.srv.StoreAt(Peer{SID: sid, Device: DeviceID{byte(i + 1)}}, rec, n.Now())
+		if res.Err != 0 || res.Status != StatusStored {
+			t.Fatalf("node %d did not store: %+v", i, res)
+		}
+	}
 }

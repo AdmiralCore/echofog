@@ -545,3 +545,83 @@ func mustMarshalPrekeys(t *testing.T, dev *keys.Signer) []byte {
 	}
 	return b
 }
+
+// TestGetReleaseIgnoresRecordsTheCallerDoesNotTrust (T5.2 F1): any signer can put a release/2
+// object with a huge seq under the day key. The caller's predicate (the compiled release keys)
+// decides which records take part; a forgery with a higher seq neither wins nor is remembered.
+func TestGetReleaseIgnoresRecordsTheCallerDoesNotTrust(t *testing.T) {
+	rnd := rand.New(rand.NewSource(121))
+	net := newFakeNet(t, 60, 30, false, rnd)
+	trusted := seededSigner(t, 1100)
+	attacker := seededSigner(t, 1101)
+	real := releaseRecord(t, trusted, 5, srvNow.Add(time.Hour))
+	fake := releaseRecord(t, attacker, 1<<40, srvNow.Add(time.Hour))
+	net.storeOn(t, real, func(i int) bool { return i%10 >= 3 }) // 70 % hold the real manifest
+	net.storeOn(t, fake, func(i int) bool { return i%10 < 3 })  // 30 % hold the forgery
+	trustedID := signerID(trusted)
+	valid := func(raw []byte, now time.Time) error {
+		env, err := objects.Verify(raw, now)
+		if err != nil {
+			return err
+		}
+		if env.SignerID() != trustedID {
+			return errors.New("not a release key")
+		}
+		return nil
+	}
+
+	for r := 0; r < 4; r++ {
+		reader := newTestClient(t, net, uint64(8400+r), rnd, nil)
+		env, err := reader.GetRelease(ctxT(t), valid)
+		if err != nil || env.Seq != 5 || env.SignerID() != trustedID {
+			t.Fatalf("reader %d: %v %v", r, env, err)
+		}
+		if _, ok, _ := reader.mem.Seq(objects.LabelRelease, signerID(attacker)); ok {
+			t.Fatalf("reader %d remembered a seq of an untrusted signer", r)
+		}
+	}
+	// Without a predicate nothing is accepted: the DHT cannot judge a release by itself.
+	reader := newTestClient(t, net, 8410, rnd, nil)
+	if env, err := reader.GetRelease(ctxT(t), nil); err == nil {
+		t.Fatalf("a release was accepted without a check: %v", env)
+	}
+}
+
+// TestCardsWithUnroutableAddressesAreNotDialled (T5.2 F2): a hostile node hands out signed cards
+// that point at loopback, private, link-local and metadata addresses. The client neither queries
+// them nor returns them.
+func TestCardsWithUnroutableAddressesAreNotDialled(t *testing.T) {
+	rnd := rand.New(rand.NewSource(131))
+	net := newFakeNet(t, 60, 30, false, rnd)
+	for i, host := range []string{"127.0.0.1", "10.9.9.9", "169.254.169.254", "192.168.1.5", "100.64.0.9", "::1"} {
+		net.lures = append(net.lures, buildCard(t, uint64(3000+i), 1, srvNow, objects.ScopePublic, 0, testAddr(host, 4430)))
+	}
+	reader := newTestClient(t, net, 8500, rnd, nil)
+	cards, err := reader.FindNode(ctxT(t), [32]byte{0x31})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lure := map[[32]byte]bool{}
+	for _, l := range net.lures {
+		lure[l.DeviceID] = true
+	}
+	for _, c := range cards {
+		if lure[c.DeviceID] {
+			t.Fatalf("an unroutable card is in the result")
+		}
+	}
+	if _, err := reader.Get(ctxT(t), objects.LabelCard, [32]byte{4}); err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrInconclusive) {
+		t.Fatal(err)
+	}
+	net.mu.Lock()
+	hits := net.lureHits
+	net.mu.Unlock()
+	if hits != 0 {
+		t.Fatalf("%d queries went to unroutable cards", hits)
+	}
+	for _, l := range net.lures {
+		if reader.table.Has(DeviceID(l.DeviceID)) {
+			t.Fatal("an unroutable card entered the routing table")
+		}
+	}
+}

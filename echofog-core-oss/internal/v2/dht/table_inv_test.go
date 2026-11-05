@@ -178,7 +178,13 @@ func invCards(t *testing.T, now time.Time) [][]*objects.Card {
 
 // TestTableInvariantsRandomSteps runs random insertions, session updates, evictions to disk,
 // failing pings, pruning, time jumps and restarts, and checks the invariants after every step.
-func TestTableInvariantsRandomSteps(t *testing.T) {
+func TestTableInvariantsRandomSteps(t *testing.T) { runInvariantSteps(t, false) }
+
+// TestTableInvariantsRandomStepsAsync is the same run in the production mode (AsyncChecks): the
+// background checks are awaited before every invariant check (T5.2 F6).
+func TestTableInvariantsRandomStepsAsync(t *testing.T) { runInvariantSteps(t, true) }
+
+func runInvariantSteps(t *testing.T, async bool) {
 	now := time.Unix(1_700_000_000, 0)
 	pool := invCards(t, now)
 	seed := invSeed.Add(1)
@@ -194,7 +200,7 @@ func TestTableInvariantsRandomSteps(t *testing.T) {
 	open := func() *Table {
 		tbl, err := Open(Config{
 			Self: testSelf, Store: kv, Now: func() time.Time { return clock },
-			Rand: rand.New(rand.NewSource(seed)), Pinger: pinger, MemoryLimit: 14,
+			Rand: rand.New(rand.NewSource(seed)), Pinger: pinger, MemoryLimit: 14, AsyncChecks: async,
 		})
 		if err != nil {
 			t.Fatalf("seed %d: Open: %v", seed, err)
@@ -218,6 +224,7 @@ func TestTableInvariantsRandomSteps(t *testing.T) {
 	}
 
 	for step := 0; step < steps; step++ {
+		tbl.wg.Wait()
 		before := snapshot()
 		op := rnd.Intn(10)
 		sessionStep := false
@@ -251,6 +258,7 @@ func TestTableInvariantsRandomSteps(t *testing.T) {
 				t.Fatalf("seed %d step %d: restart changed the known set (%d -> %d entries)", seed, step, len(before), len(after))
 			}
 		}
+		tbl.wg.Wait()
 		if err := tbl.checkInvariantsErr(kv, false); err != nil {
 			t.Fatalf("seed %d step %d (op %d): %v", seed, step, op, err)
 		}

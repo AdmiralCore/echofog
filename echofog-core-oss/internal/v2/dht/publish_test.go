@@ -82,3 +82,35 @@ func TestRepublishKeepsBothDayKeysFilled(t *testing.T) {
 		}
 	}
 }
+
+// TestFailedPublicationRetriesWithJitter (T5.2 F7, AD13): the retry after a publication that stored
+// nowhere is 5 minutes ± 20 %, not a fixed period.
+func TestFailedPublicationRetriesWithJitter(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for seed := int64(0); seed < 12; seed++ {
+		rnd := rand.New(rand.NewSource(seed))
+		net := newFakeNet(t, 20, 10, false, rnd)
+		for _, fn := range net.nodes {
+			fn.mode = dead
+		}
+		card := buildCard(t, 6000, 1, srvNow, objects.ScopePublic, 0, testAddr("203.0.113.60", 4430))
+		pub := newTestClient(t, net, uint64(8600+seed), rnd, nil)
+		if err := pub.Publish(card.Env.Raw); err != nil {
+			t.Fatal(err)
+		}
+		pub.Step(ctxT(t))
+		pub.pubMu.Lock()
+		var d time.Duration
+		for _, p := range pub.pubs {
+			d = p.next.Sub(net.Now())
+		}
+		pub.pubMu.Unlock()
+		if d < 4*time.Minute || d > 6*time.Minute {
+			t.Fatalf("retry after %v, want 5 min ± 20 %%", d)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 6 {
+		t.Fatalf("only %d distinct retry delays: no jitter", len(seen))
+	}
+}

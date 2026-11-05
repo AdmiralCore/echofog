@@ -13,7 +13,7 @@ import (
 // the answer, however valid it is (a node could otherwise answer with someone else's object).
 // The release manifest has a day key independent of the signer, so any signer passes there; its
 // threshold signatures are the caller's check (objects.md §9).
-func acceptRecord(label string, signer [32]byte, raw []byte, now time.Time) (*objects.Envelope, error) {
+func acceptRecord(label string, signer [32]byte, raw []byte, now time.Time, valid func([]byte, time.Time) error) (*objects.Envelope, error) {
 	if len(raw) == 0 || len(raw) > maxRecordBytes {
 		return nil, fmt.Errorf("dht: record of %d bytes", len(raw))
 	}

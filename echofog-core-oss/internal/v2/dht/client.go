@@ -174,14 +174,14 @@ func (c *Client) Get(ctx context.Context, label string, signer [32]byte) (*objec
 
 // GetRelease looks up the release manifest of the day (any signer: manifests of rotated release
 // keys share the key, objects.md §9). The caller checks the threshold signatures.
-func (c *Client) GetRelease(ctx context.Context) (*objects.Envelope, error) {
+func (c *Client) GetRelease(ctx context.Context, valid func(raw []byte, now time.Time) error) (*objects.Envelope, error) {
 	return c.get(ctx, objects.LabelRelease, [32]byte{}, objects.ReleaseDHTKey)
 }
 
 func (c *Client) get(ctx context.Context, label string, signer [32]byte, keyOf func(day uint32) [32]byte) (*objects.Envelope, error) {
 	now := c.now()
 	days := readDays(now)
-	accept := func(raw []byte) (*objects.Envelope, error) { return acceptRecord(label, signer, raw, now) }
+	accept := func(raw []byte) (*objects.Envelope, error) { return acceptRecord(label, signer, raw, now, nil) }
 
 	lookups := make([]*lookup, len(days))
 	var wg sync.WaitGroup
