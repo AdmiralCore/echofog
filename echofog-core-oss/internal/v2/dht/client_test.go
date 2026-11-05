@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,11 +155,14 @@ func TestLookupBudget(t *testing.T) {
 	net := newFakeNet(t, 20, 10, false, rnd)
 	sg := seededSigner(t, 980)
 	counts := map[int]int{}
+	var countsMu sync.Mutex
 	reader := newTestClient(t, net, 7500, rnd, func(c *ClientConfig) {
 		c.Transport = &endlessTransport{t: t}
 		prev := c.OnQuery
 		c.OnQuery = func(path int, to DeviceID) {
+			countsMu.Lock()
 			counts[path]++
+			countsMu.Unlock()
 			prev(path, to)
 		}
 	})
@@ -188,12 +192,15 @@ func TestLookupBudget(t *testing.T) {
 
 // endlessTransport answers every query with 20 cards nobody has seen before.
 type endlessTransport struct {
+	mu   sync.Mutex
 	t    *testing.T
 	next uint64
 	pool [][]byte
 }
 
 func (e *endlessTransport) fresh() [][]byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	var out [][]byte
 	for i := 0; i < K; i++ {
 		e.next++
