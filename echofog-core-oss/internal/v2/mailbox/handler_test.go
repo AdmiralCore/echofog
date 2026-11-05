@@ -222,7 +222,7 @@ func TestMailboxServiceOverTwoRuntimes(t *testing.T) {
 	auth := authSigner(t)
 
 	send(t, st, mailbox.FrameQueueCreate, mailbox.QueueCreate{
-		Req: 1, Queue: queue, AuthKey: auth.Public(), TTL: 3600, Public: false,
+		Req: 1, Queue: queue, AuthKey: auth.Public(), TTL: 1, Public: false,
 	}.Append(nil))
 	typ, payload := recv(t, st)
 	if typ != mailbox.FrameQueueOK {
@@ -378,4 +378,55 @@ func TestFetchAuthFromAnotherStreamIsRefused(t *testing.T) {
 		t.Fatalf("auth failure: %v, want CLOSE{refused}", err)
 	}
 	_ = peer
+}
+
+// TestTooManyLongPollsCloseTheStream covers the guard added before the fix round: a stream that
+// parks more than 32 FETCH requests is closed with "overloaded" instead of growing goroutines.
+func TestTooManyLongPollsCloseTheStream(t *testing.T) {
+	q := newCarrierQueue()
+	m := newNode(t, node.Profile{Platform: "server", Roles: []string{"mailbox"}}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	registerClient(t, c)
+	m.start(t)
+	c.start(t)
+
+	peer, st := openMailbox(t, c, m, q)
+	defer st.Close()
+	auth := authSigner(t)
+
+	// The stream allows 32 long polls; the 33rd is refused. Different queues keep the per-queue
+	// waiter cap (8) out of the way.
+	queues := make([][]byte, 32)
+	for i := range queues {
+		queues[i] = bytes.Repeat([]byte{byte(0x93 + i)}, mailbox.QueueSize)
+		send(t, st, mailbox.FrameQueueCreate, mailbox.QueueCreate{
+			Req: uint64(i + 1), Queue: queues[i], AuthKey: auth.Public(),
+		}.Append(nil))
+		if typ, _ := recv(t, st); typ != mailbox.FrameQueueOK {
+			t.Fatalf("queue %d create answer 0x%x", i, typ)
+		}
+	}
+
+	req := uint64(100)
+	for _, queue := range queues {
+		req++
+		send(t, st, mailbox.FrameFetch, mailbox.Fetch{
+			Req: req, Queue: queue, Max: 10, Wait: 30,
+			Auth: auth.Sign(mailbox.AuthInput(mailbox.OpFetch, peer.SID, queue, req)),
+		}.Append(nil))
+	}
+	req++
+	send(t, st, mailbox.FrameFetch, mailbox.Fetch{
+		Req: req, Queue: queues[0], Max: 10, Wait: 30,
+		Auth: auth.Sign(mailbox.AuthInput(mailbox.OpFetch, peer.SID, queues[0], req)),
+	}.Append(nil))
+
+	if err := st.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.ReadFrame()
+	var ce *mux.CloseError
+	if !errors.As(err, &ce) || ce.Code != frame.CodeOverloaded {
+		t.Fatalf("too many long polls: %v, want CLOSE{overloaded}", err)
+	}
 }

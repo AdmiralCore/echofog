@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"net/netip"
 	"sync"
 	"testing"
@@ -46,6 +48,8 @@ type fixture struct {
 	self   [32]byte
 	hs     *identity.KeyPair
 	queue  []byte
+	cfg    Config
+	kv     store.KV
 }
 
 func newFixture(t *testing.T, mutate func(*Config)) *fixture {
@@ -96,6 +100,8 @@ func newFixture(t *testing.T, mutate func(*Config)) *fixture {
 		self:   tw.Account.NodeID(),
 		hs:     hs,
 		queue:  bytes.Repeat([]byte{0x90}, QueueSize),
+		cfg:    cfg,
+		kv:     cfg.Store,
 	}
 }
 
@@ -162,8 +168,8 @@ func depositStatus(t *testing.T, s *Server, p Peer, queue, blob []byte) uint32 {
 func TestQueueCreateDepositFetchAck(t *testing.T) {
 	f := newFixture(t, nil)
 	p := f.peer(1)
-	exp := f.create(t, p, 3600, false, 0)
-	if want := uint64(f.clock.Now().Add(time.Hour).Unix()); exp != want {
+	exp := f.create(t, p, 1, false, 0)
+	if want := uint64(f.clock.Now().Add(24 * time.Hour).Unix()); exp != want {
 		t.Fatalf("expires %d, want %d", exp, want)
 	}
 
@@ -205,7 +211,7 @@ func TestQueueCreateRejectsBadRequests(t *testing.T) {
 	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: f.queue, AuthKey: []byte{1, 2}}); !errors.Is(err, ErrBadRequest) {
 		t.Fatalf("a short auth key: %v", err)
 	}
-	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: f.queue, AuthKey: f.authKey(), TTL: 30*86400 + 1}); !errors.Is(err, ErrBadRequest) {
+	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: f.queue, AuthKey: f.authKey(), TTL: 31}); !errors.Is(err, ErrBadRequest) {
 		t.Fatalf("a TTL above 30 days: %v", err)
 	}
 	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: f.queue, AuthKey: f.authKey(), Public: true, PowBits: MaxPowBits + 1}); !errors.Is(err, ErrBadRequest) {
@@ -680,4 +686,441 @@ func privateOf(t *testing.T, kp *identity.KeyPair) []byte {
 		t.Fatalf("private key: %v", err)
 	}
 	return out
+}
+
+// ---- T7.3 fix 1: expiry, units, defaults and resources ----------------------
+
+// countingKV counts every value byte a scan materialises, so a test can prove FETCH does not read
+// the whole queue before applying the page limit.
+type countingKV struct {
+	store.KV
+	scanned int64
+}
+
+func (c *countingKV) Scan(prefix []byte, limit int) ([]store.Entry, error) {
+	entries, err := c.KV.Scan(prefix, limit)
+	for _, e := range entries {
+		c.scanned += int64(len(e.Value))
+	}
+	return entries, err
+}
+
+func (c *countingKV) ScanFrom(prefix, start []byte, limit int) ([]store.Entry, error) {
+	entries, err := c.KV.ScanFrom(prefix, start, limit)
+	for _, e := range entries {
+		c.scanned += int64(len(e.Value))
+	}
+	return entries, err
+}
+
+// TestExpiredItemsReleaseQueueAndTotalsOnRealTime uses the real clock: the store must not be the
+// thing that reclaims quota. After every item is past ItemTTL, the queue counters and the relay
+// totals must both be free again.
+func TestExpiredItemsReleaseQueueAndTotalsOnRealTime(t *testing.T) {
+	const itemTTL = 80 * time.Millisecond
+	const pause = 250 * time.Millisecond
+
+	t.Run("queue", func(t *testing.T) {
+		f := newFixture(t, func(c *Config) {
+			c.Now = time.Now
+			c.Limits = &Limits{PrivateItems: 1, ItemTTL: itemTTL}
+		})
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		if st, _ := f.deposit(t, p, []byte("old"), 0); st != StatusStored {
+			t.Fatalf("first deposit: status %d", st)
+		}
+		time.Sleep(pause)
+		if st, _ := f.deposit(t, p, []byte("new"), 0); st != StatusStored {
+			t.Fatalf("a queue held its quota after every item expired: status %d", st)
+		}
+	})
+
+	t.Run("totals", func(t *testing.T) {
+		f := newFixture(t, func(c *Config) {
+			c.Now = time.Now
+			c.Limits = &Limits{TotalItems: 1, ItemTTL: itemTTL}
+		})
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		if st, _ := f.deposit(t, p, []byte("old"), 0); st != StatusStored {
+			t.Fatalf("first deposit: status %d", st)
+		}
+
+		other := bytes.Repeat([]byte{0x91}, QueueSize)
+		if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: other, AuthKey: f.authKey()}); err != nil {
+			t.Fatalf("second queue: %v", err)
+		}
+		time.Sleep(pause)
+		if st := depositStatus(t, f.srv, p, other, []byte("new")); st != StatusStored {
+			t.Fatalf("relay totals held an expired item and blocked a second queue: status %d", st)
+		}
+	})
+}
+
+// TestQueueTTLIsInDays pins the unit decision: ttl is days, 0 means 30, 31 is refused.
+func TestQueueTTLIsInDays(t *testing.T) {
+	f := newFixture(t, nil)
+	p := f.peer(1)
+	cases := []struct {
+		name    string
+		ttl     uint32
+		days    int
+		wantErr bool
+	}{
+		{"zero is thirty days", 0, 30, false},
+		{"one day", 1, 1, false},
+		{"thirty days", 30, 30, false},
+		{"above the maximum", 31, 0, true},
+		{"uint32 maximum", math.MaxUint32, 0, true},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := bytes.Repeat([]byte{byte(0xa0 + i)}, QueueSize)
+			exp, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: q, AuthKey: f.authKey(), TTL: tc.ttl})
+			if tc.wantErr {
+				if !errors.Is(err, ErrBadRequest) {
+					t.Fatalf("ttl %d: %v, want ErrBadRequest", tc.ttl, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ttl %d: %v", tc.ttl, err)
+			}
+			want := uint64(f.clock.Now().Add(time.Duration(tc.days) * 24 * time.Hour).Unix())
+			if exp != want {
+				t.Fatalf("ttl %d expires %d, want %d (%d days)", tc.ttl, exp, want, tc.days)
+			}
+		})
+	}
+}
+
+func TestFetchMaxZeroReturnsTheDefaultPage(t *testing.T) {
+	t.Run("many items", func(t *testing.T) {
+		f := newFixture(t, nil)
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		for i := 0; i < 40; i++ {
+			if st, _ := f.deposit(t, p, []byte{byte(i)}, 0); st != StatusStored {
+				t.Fatalf("deposit %d: %d", i, st)
+			}
+		}
+		items, more := f.fetch(t, p, nil, 0, 0)
+		if len(items) != 32 || !more {
+			t.Fatalf("max=0 on 40 items: %d items more=%v, want 32/true", len(items), more)
+		}
+	})
+
+	t.Run("few items", func(t *testing.T) {
+		f := newFixture(t, nil)
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		for i := 0; i < 5; i++ {
+			if st, _ := f.deposit(t, p, []byte{byte(i)}, 0); st != StatusStored {
+				t.Fatalf("deposit %d: %d", i, st)
+			}
+		}
+		items, more := f.fetch(t, p, nil, 0, 0)
+		if len(items) != 5 || more {
+			t.Fatalf("max=0 on 5 items: %d items more=%v, want 5/false", len(items), more)
+		}
+	})
+
+	t.Run("bounded by ITEMS", func(t *testing.T) {
+		f := newFixture(t, func(c *Config) { c.Limits = &Limits{FetchItems: 3} })
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		for i := 0; i < 5; i++ {
+			if st, _ := f.deposit(t, p, []byte{byte(i)}, 0); st != StatusStored {
+				t.Fatalf("deposit %d: %d", i, st)
+			}
+		}
+		items, _ := f.fetch(t, p, nil, 0, 0)
+		if len(items) != 3 {
+			t.Fatalf("max=0 with FetchItems=3: %d items", len(items))
+		}
+	})
+}
+
+// TestMeteredRefusesOnlyDeposits keeps a metered node useful: it still drains what it already
+// accepted and can create queues, but it does not store new deposits.
+func TestMeteredRefusesOnlyDeposits(t *testing.T) {
+	f := newFixture(t, nil)
+	p := f.peer(1)
+	f.create(t, p, 0, false, 0)
+	_, id := f.deposit(t, p, []byte("accepted before metering"), 0)
+
+	f.srv.cfg.Metered = true
+
+	if st := depositStatus(t, f.srv, p, f.queue, []byte("new")); st != StatusRefused {
+		t.Fatalf("metered DEPOSIT: status %d, want refused", st)
+	}
+	other := bytes.Repeat([]byte{0x92}, QueueSize)
+	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: other, AuthKey: f.authKey()}); err != nil {
+		t.Fatalf("metered QUEUE_CREATE: %v", err)
+	}
+	items, _ := f.fetch(t, p, nil, 10, 0)
+	if len(items) != 1 {
+		t.Fatalf("metered FETCH returned %d items, want the stored one", len(items))
+	}
+	if err := f.srv.Ack(p, Ack{
+		Req: 4, Queue: f.queue, IDs: [][]byte{id},
+		Auth: signFor(t, f.signer, OpAck, p.SID, f.queue, 4),
+	}); err != nil {
+		t.Fatalf("metered ACK: %v", err)
+	}
+}
+
+// TestQueueRecordKeepsNoRawAuthKey proves the store holds a verifier/binding, not the key bytes,
+// and that a restarted relay can still verify FETCH auth.
+func TestQueueRecordKeepsNoRawAuthKey(t *testing.T) {
+	f := newFixture(t, nil)
+	p := f.peer(1)
+	f.create(t, p, 0, false, 0)
+	if _, id := f.deposit(t, p, []byte("after restart"), 0); len(id) != ItemSize {
+		t.Fatalf("deposit id %x", id)
+	}
+
+	raw, err := f.kv.Get(queueKey(f.queue))
+	if err != nil {
+		t.Fatalf("queue record: %v", err)
+	}
+	if bytes.Contains(raw, f.authKey()) {
+		t.Fatal("the queue record contains the raw auth_key")
+	}
+
+	restarted, err := New(f.cfg)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	items, _, err := restarted.Fetch(context.Background(), p, Fetch{
+		Req: 2, Queue: f.queue, Max: 10,
+		Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 2),
+	})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("FETCH after restart: %d items, %v", len(items), err)
+	}
+}
+
+// TestFetchReadsOnlyThePageBudget makes one small FETCH on a queue of large items; the store must
+// not materialise the whole queue before the 1 MiB page limit applies.
+func TestFetchReadsOnlyThePageBudget(t *testing.T) {
+	counter := &countingKV{}
+	f := newFixture(t, func(c *Config) {
+		counter.KV = c.Store
+		c.Store = counter
+	})
+	p := f.peer(1)
+	f.create(t, p, 0, false, 0)
+	blob := bytes.Repeat([]byte{0xab}, MaxBlob)
+	for i := 0; i < 100; i++ {
+		if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob}); err != nil || st != StatusStored {
+			t.Fatalf("deposit %d: %d %v", i, st, err)
+		}
+	}
+
+	counter.scanned = 0
+	items, _, err := f.srv.Fetch(context.Background(), p, Fetch{
+		Req: 2, Queue: f.queue, Max: 500,
+		Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("a non-empty queue returned an empty page")
+	}
+	// Page (<=1 MiB) plus one look-ahead chunk of at most 8 items.
+	const budget = 2 << 20
+	if counter.scanned > budget {
+		t.Fatalf("FETCH scanned %d bytes, budget %d", counter.scanned, budget)
+	}
+}
+
+// timerClock jumps backwards once, which is what a corrected clock can do while a FETCH waits.
+type timerClock struct {
+	mu        sync.Mutex
+	base      time.Time
+	calls     int
+	jumpAfter int
+	back      time.Duration
+}
+
+func (c *timerClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.jumpAfter > 0 && c.calls > c.jumpAfter {
+		return c.base.Add(-c.back)
+	}
+	return c.base
+}
+
+func (c *timerClock) reset() {
+	c.mu.Lock()
+	c.calls = 0
+	c.mu.Unlock()
+}
+
+// TestFetchTimerWindowIsCapped checks the timer branch added with the long-poll guard: even when
+// the corrected clock moves backwards, one timer is never longer than FetchWait.
+func TestFetchTimerWindowIsCapped(t *testing.T) {
+	clk := &timerClock{
+		base:      time.Unix(1793664000, 0),
+		jumpAfter: 6,
+		back:      2 * MaxWait,
+	}
+	fired := make(chan time.Duration, 1)
+	block := make(chan time.Time)
+	f := newFixture(t, func(c *Config) {
+		c.Now = clk.Now
+		c.After = func(d time.Duration) <-chan time.Time {
+			fired <- d
+			return block
+		}
+	})
+	p := f.peer(1)
+	f.create(t, p, 0, false, 0)
+	clk.reset()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := f.srv.Fetch(ctx, p, Fetch{
+			Req: 2, Queue: f.queue, Max: 10, Wait: 3600,
+			Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 2),
+		})
+		done <- err
+	}()
+
+	select {
+	case d := <-fired:
+		if d > f.srv.Limits().FetchWait {
+			t.Fatalf("timer window %s exceeds FetchWait %s", d, f.srv.Limits().FetchWait)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("FETCH never started its timer")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled FETCH: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled FETCH did not return")
+	}
+}
+
+// TestFetchWaiterCaps checks both long-poll limits: per queue and per relay.
+func TestFetchWaiterCaps(t *testing.T) {
+	t.Run("per queue", func(t *testing.T) {
+		f := newFixture(t, nil)
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		for i := 0; i < MaxWaitersPerKey; i++ {
+			if _, ok := f.srv.addWaiter(string(f.queue)); !ok {
+				t.Fatalf("waiter %d of %d was refused", i, MaxWaitersPerKey)
+			}
+		}
+		start := time.Now()
+		items, more, err := f.srv.Fetch(context.Background(), p, Fetch{
+			Req: 2, Queue: f.queue, Max: 10, Wait: 30,
+			Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 2),
+		})
+		if err != nil || len(items) != 0 || more {
+			t.Fatalf("over the waiter cap: %d items more=%v err=%v", len(items), more, err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("FETCH blocked for %s over the waiter cap", elapsed)
+		}
+	})
+
+	t.Run("relay", func(t *testing.T) {
+		f := newFixture(t, nil)
+		p := f.peer(1)
+		f.create(t, p, 0, false, 0)
+		for i := 0; i < MaxWaiters; i++ {
+			if _, ok := f.srv.addWaiter(fmt.Sprintf("other/%d", i)); !ok {
+				t.Fatalf("global waiter %d of %d was refused", i, MaxWaiters)
+			}
+		}
+		start := time.Now()
+		items, _, err := f.srv.Fetch(context.Background(), p, Fetch{
+			Req: 2, Queue: f.queue, Max: 10, Wait: 30,
+			Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 2),
+		})
+		if err != nil || len(items) != 0 {
+			t.Fatalf("over the global waiter cap: %d items err=%v", len(items), err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("FETCH blocked for %s over the global waiter cap", elapsed)
+		}
+	})
+}
+
+// TestDiversityUnitPrefixes pins the quota unit: /24 for IPv4 and /32 for IPv6.
+func TestDiversityUnitPrefixes(t *testing.T) {
+	cases := []struct {
+		addr string
+		want string
+	}{
+		{"203.0.113.7:443", "203.0.113.0/24"},
+		{"198.51.100.200:443", "198.51.100.0/24"},
+		{"[2001:db8:1::5]:443", "2001:db8::/32"},
+		{"[2001:db9::5]:443", "2001:db9::/32"},
+	}
+	for _, tc := range cases {
+		p := Peer{Path: mux.PathDirect, Remote: netip.MustParseAddrPort(tc.addr)}
+		if got := diversityUnit(p); got != tc.want {
+			t.Fatalf("%s: unit %q, want %q", tc.addr, got, tc.want)
+		}
+	}
+	if got := diversityUnit(Peer{Path: mux.PathRelay, Remote: netip.MustParseAddrPort("203.0.113.7:443")}); got != "" {
+		t.Fatalf("a relayed path has a diversity unit: %q", got)
+	}
+}
+
+// TestUnitQuotaUsesTheDiversityPrefix checks that two different nodes on one /24 (IPv4) or /32
+// (IPv6) share the unit quota while another unit is unaffected.
+func TestUnitQuotaUsesTheDiversityPrefix(t *testing.T) {
+	cases := []struct {
+		name      string
+		first     string
+		sameUnit  string
+		otherUnit string
+	}{
+		{"ipv4 /24", "203.0.113.10:443", "203.0.113.20:443", "203.0.114.10:443"},
+		{"ipv6 /32", "[2001:db8::10]:443", "[2001:db8::20]:443", "[2001:db9::10]:443"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, func(c *Config) {
+				c.Limits = &Limits{QuotaItemsPerDay: 1, QuotaFactor: 1}
+			})
+			owner := f.peer(1)
+			f.create(t, owner, 0, false, 0)
+
+			peerAt := func(n byte, addr string) Peer {
+				p := f.peer(n)
+				p.Node[0] ^= n
+				p.Remote = netip.MustParseAddrPort(addr)
+				return p
+			}
+			first := peerAt(2, tc.first)
+			same := peerAt(3, tc.sameUnit)
+			other := peerAt(4, tc.otherUnit)
+
+			if st := depositStatus(t, f.srv, first, f.queue, []byte("a")); st != StatusStored {
+				t.Fatalf("first unit deposit: %d", st)
+			}
+			if st := depositStatus(t, f.srv, same, f.queue, []byte("b")); st != StatusRefused {
+				t.Fatalf("another node in the same unit: %d, want refused", st)
+			}
+			if st := depositStatus(t, f.srv, other, f.queue, []byte("c")); st != StatusStored {
+				t.Fatalf("another unit: %d", st)
+			}
+		})
+	}
 }
