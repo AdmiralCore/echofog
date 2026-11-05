@@ -52,6 +52,7 @@ type Stream struct {
 	path    *path
 	raw     RawStream
 	rd      *frame.Reader
+	br      io.Reader // the reader under rd: frame.Reader never reads ahead, so Detach may use it
 	w       io.Writer
 	control bool
 	local   bool
@@ -73,14 +74,57 @@ func (s *Session) newStream(p *path, raw RawStream, local, control bool) *Stream
 	st := &Stream{sess: s, path: p, raw: raw, local: local, control: control}
 	if p.pipeSeal {
 		rc := newPipeRecordConn(raw, s.sealer, p.id, raw.ID())
+		st.br = rc
 		st.rd = frame.NewReader(rc, nil)
 		st.w = rc
 	} else {
+		st.br = raw
 		st.rd = frame.NewReader(raw, nil)
 		st.w = raw
 	}
 	return st
 }
+
+// Detached is the byte pipe of a stream after Detach.
+type Detached struct{ st *Stream }
+
+// Detach hands the rest of the stream to the caller as plain bytes: a relay copies the bytes of a
+// circuit without parsing frames (services.md §6.2). The caller must not use ReadFrame or
+// WriteFrame afterwards. The frame reader keeps no read-ahead, so no byte is lost.
+func (st *Stream) Detach() *Detached { return &Detached{st} }
+
+func (d *Detached) Read(p []byte) (int, error) {
+	n, err := d.st.br.Read(p)
+	if n > 0 {
+		d.st.path.touchRecv()
+	}
+	return n, err
+}
+
+func (d *Detached) Write(p []byte) (int, error) {
+	d.st.wmu.Lock()
+	defer d.st.wmu.Unlock()
+	n, err := d.st.w.Write(p)
+	if err == nil {
+		d.st.path.touchSend()
+	}
+	return n, d.st.mapErr(err)
+}
+
+// CloseWrite ends the sending direction.
+func (d *Detached) CloseWrite() error { return d.st.CloseWrite() }
+
+// Close ends the stream.
+func (d *Detached) Close() error { return d.st.Close() }
+
+// Reset aborts the stream.
+func (d *Detached) Reset(code uint64) { d.st.Reset(code) }
+
+// SetReadDeadline sets the read deadline of the carrier stream.
+func (d *Detached) SetReadDeadline(t time.Time) error { return d.st.raw.SetReadDeadline(t) }
+
+// SetWriteDeadline sets the write deadline of the carrier stream.
+func (d *Detached) SetWriteDeadline(t time.Time) error { return d.st.raw.SetWriteDeadline(t) }
 
 // Open returns the stream's OPEN (service, version, flags).
 func (st *Stream) Open() frame.Open { return st.open }

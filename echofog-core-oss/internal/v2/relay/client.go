@@ -1,0 +1,176 @@
+package relay
+
+import (
+	"context"
+	crand "crypto/rand"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/frame"
+	"github.com/echofog/echofog-core/internal/v2/handshake"
+	"github.com/echofog/echofog-core/internal/v2/mux"
+)
+
+// Timeouts of services.md §6.1.
+const (
+	ConnectTimeout  = 8 * time.Second
+	RegisterTimeout = 5 * time.Second
+)
+
+// RefusedError is REFUSED from R. Reason Unavailable says nothing about why (§6.3).
+type RefusedError struct{ Reason uint32 }
+
+func (e *RefusedError) Error() string {
+	if e.Reason == ReasonLimit {
+		return "relay: refused: limit"
+	}
+	return "relay: refused: unavailable"
+}
+
+// ErrProtocol: R or B broke the relay/2 framing.
+var ErrProtocol = errors.New("relay: protocol violation")
+
+// Opener opens a relay/2 stream on the session with R (service.Open on that session).
+type Opener func(ctx context.Context) (*mux.Stream, error)
+
+// ConnectOptions are the optional parts of CONNECT.
+type ConnectOptions struct {
+	Mode       uint32 // default ModeStream
+	TargetKind uint32
+	WantAddr   bool
+	// Timeout overrides ConnectTimeout (tests).
+	Timeout time.Duration
+}
+
+func readFrameTimeout(st *mux.Stream, d time.Duration) (frame.Frame, error) {
+	_ = st.SetReadDeadline(time.Now().Add(d))
+	f, err := st.ReadFrame()
+	_ = st.SetReadDeadline(time.Time{})
+	return f, err
+}
+
+func randU64() uint64 {
+	var b [8]byte
+	_, _ = crand.Read(b[:])
+	return binary.BigEndian.Uint64(b[:])
+}
+
+func connect(ctx context.Context, open Opener, relayNode, target [32]byte, opt ConnectOptions) (*mux.Stream, uint64, [32]byte, error) {
+	if opt.Mode == 0 {
+		opt.Mode = ModeStream
+	}
+	if opt.Timeout == 0 {
+		opt.Timeout = ConnectTimeout
+	}
+	var cb [32]byte
+	st, err := open(ctx)
+	if err != nil {
+		return nil, 0, cb, err
+	}
+	st.SetLimiter(limiter())
+	req := randU64()
+	c := Connect{Req: req, Target: target[:], Mode: opt.Mode, TargetKind: opt.TargetKind, WantAddr: opt.WantAddr}
+	if err := st.WriteFrame(TypeConnect, 0, c.Append(nil)); err != nil {
+		return nil, 0, cb, err
+	}
+	f, err := readFrameTimeout(st, opt.Timeout)
+	if err != nil {
+		st.Reset(frame.CodePathFailed)
+		return nil, 0, cb, fmt.Errorf("relay: waiting for CONNECTED: %w", err)
+	}
+	switch f.Type {
+	case TypeRefused:
+		r, err := ParseRefused(f.Payload)
+		if err != nil || r.Req != req {
+			st.Reset(frame.CodeProtocolViolation)
+			return nil, 0, cb, ErrProtocol
+		}
+		_ = st.Close()
+		return nil, 0, cb, &RefusedError{Reason: r.Reason}
+	case TypeConnected:
+		r, err := ParseConnected(f.Payload)
+		if err != nil || r.Req != req || r.CID == 0 || r.CID > MaxCID || string(r.Target) != string(target[:]) {
+			st.Reset(frame.CodeProtocolViolation)
+			return nil, 0, cb, ErrProtocol
+		}
+		return st, r.CID, [32]byte(handshake.CircuitBinding(relayNode[:], r.CID)), nil
+	}
+	st.Reset(frame.CodeProtocolViolation)
+	return nil, 0, cb, ErrProtocol
+}
+
+// Dial asks R (relayNode is R's node ID, taken from R's own session or card, never from the
+// network) for a stream or signal circuit to target. On success the returned Circuit is a
+// carrier whose first use is the end-to-end handshake with the target.
+func Dial(ctx context.Context, open Opener, relayNode, target [32]byte, opt ConnectOptions) (*Circuit, error) {
+	if opt.Mode == ModeDatagram {
+		return nil, errors.New("relay: use DialDatagram for datagram circuits")
+	}
+	st, cid, cb, err := connect(ctx, open, relayNode, target, opt)
+	if err != nil {
+		return nil, err
+	}
+	return NewCircuit(st.Detach(), cb, cid, true), nil
+}
+
+// DialDatagram asks R for a datagram circuit. send is SendDatagram of the session with R; the
+// circuit's datagrams are RELAY_DGRAM on that session, and Hub.HandleDatagram feeds the
+// replies. The circuit stays valid while its anchor stream is open.
+func DialDatagram(ctx context.Context, open Opener, hub *Hub, send func(typ uint64, p []byte) error,
+	relayNode, target [32]byte, opt ConnectOptions) (*DatagramCircuit, error) {
+	opt.Mode = ModeDatagram
+	st, cid, _, err := connect(ctx, open, relayNode, target, opt)
+	if err != nil {
+		return nil, err
+	}
+	return hub.newCircuit(cid, send, st), nil
+}
+
+// Inbound is what a node that received INCOMING holds: exactly one of Stream and Datagram is set
+// when the circuit was accepted.
+type Inbound struct {
+	Incoming Incoming
+	Stream   *Circuit
+	Datagram *DatagramCircuit
+}
+
+// Answer is the B side: it reads INCOMING from the stream R opened, lets ok decide, and answers
+// ACCEPT or REFUSE. relayNode is the node ID of the session that carried the stream (R); it keys
+// the circuit binding. INCOMING.source is only a hint: the end-to-end handshake authenticates A
+// (K8). hub and send are used for datagram circuits only.
+func Answer(st *mux.Stream, relayNode [32]byte, hub *Hub, send func(typ uint64, p []byte) error,
+	ok func(Incoming) bool) (Inbound, error) {
+	st.SetLimiter(limiter())
+	f, err := readFrameTimeout(st, ConnectTimeout)
+	if err != nil {
+		st.Reset(frame.CodePathFailed)
+		return Inbound{}, err
+	}
+	if f.Type != TypeIncoming {
+		st.Reset(frame.CodeProtocolViolation)
+		return Inbound{}, ErrProtocol
+	}
+	in, err := ParseIncoming(f.Payload)
+	if err != nil || in.CID == 0 || in.CID > MaxCID || in.Mode < ModeStream || in.Mode > ModeSignal {
+		st.Reset(frame.CodeProtocolViolation)
+		return Inbound{}, ErrProtocol
+	}
+	res := Inbound{Incoming: in}
+	if ok != nil && !ok(in) {
+		_ = st.WriteFrame(TypeRefuse, 0, Refuse{CID: in.CID}.Append(nil))
+		_ = st.Close()
+		return res, &RefusedError{Reason: ReasonUnavailable}
+	}
+	if err := st.WriteFrame(TypeAccept, 0, Accept{CID: in.CID}.Append(nil)); err != nil {
+		return res, err
+	}
+	if in.Mode == ModeDatagram {
+		res.Datagram = hub.newCircuit(in.CID, send, st)
+		return res, nil
+	}
+	cb := [32]byte(handshake.CircuitBinding(relayNode[:], in.CID))
+	res.Stream = NewCircuit(st.Detach(), cb, in.CID, false)
+	return res, nil
+}
