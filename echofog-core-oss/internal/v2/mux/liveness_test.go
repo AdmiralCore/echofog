@@ -114,7 +114,12 @@ func TestActiveFailingOnSilenceWithDataOutstanding(t *testing.T) {
 }
 
 func TestStandbyLimit(t *testing.T) {
-	pr := fastPair(t, nil)
+	// Spec-default liveness timers: binding trims standby paths synchronously. With the fast
+	// timers used by the liveness tests above, a loaded scheduler can declare the active path
+	// failing and make another standby active; the limit then drops that path (wire.md §8.3
+	// keeps the oldest *standby*), so the set of IDs is no longer fixed. The limit itself is
+	// what this test checks, and it is checked here without timing interference.
+	pr := sessionPair(t, false, nil)
 	for i := 0; i < 3; i++ {
 		bindNewPath(t, pr, false)
 	}
