@@ -339,6 +339,9 @@ func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
 	if !events.has(node.EventBackground) {
 		t.Fatal("the operator was not told about the background mode")
 	}
+	if e, ok := events.last(node.EventBackground); !ok || e.Background != node.BackgroundSuspended || e.Closed != 2 {
+		t.Fatalf("background event payload %+v, want suspended with 2 closed sessions", e)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -360,7 +363,8 @@ func TestRuntimeBackgroundLimitedKeepsMailboxRelay(t *testing.T) {
 	bRelay := newTestNodeFull(t, cards.Visible, true, []carrier.Listener{qRelay}, nil, func(c *cards.Config) {
 		c.Flags = objects.FlagRelay
 	}, nil)
-	a := newTestNode(t, cards.Hidden, false, nil, nil)
+	events := &captureEvents{}
+	a := newTestNode(t, cards.Hidden, false, nil, events)
 	bMail.start(t)
 	bPlain.start(t)
 	bRelay.start(t)
@@ -377,6 +381,9 @@ func TestRuntimeBackgroundLimitedKeepsMailboxRelay(t *testing.T) {
 	waitClosed(t, relay)
 	if closedWithinS(mail, time.Second) {
 		t.Fatal("limited closed the mailbox relay session")
+	}
+	if e, ok := events.last(node.EventBackground); !ok || e.Background != node.BackgroundLimited || e.Closed != 2 {
+		t.Fatalf("background event payload %+v, want limited with 2 closed sessions", e)
 	}
 }
 
@@ -444,6 +451,9 @@ func TestVisibilityChangeEvent(t *testing.T) {
 	if got := events.count(node.EventVisibility); got != 1 {
 		t.Fatalf("visibility events %d, want 1", got)
 	}
+	if e, ok := events.last(node.EventVisibility); !ok || e.Visibility != cards.Hidden {
+		t.Fatalf("visibility event payload %+v, want hidden", e)
+	}
 }
 
 // TestListenerStoppedEvent: an accept loop that stops on a local error tells the operator instead
@@ -483,6 +493,9 @@ func TestMemoryProtectionEvent(t *testing.T) {
 	}
 	if e.Err == nil {
 		t.Fatal("memory protection event has no error")
+	}
+	if e.MemoryLevel != secret.LevelOrdinary {
+		t.Fatalf("memory protection level %v, want ordinary", e.MemoryLevel)
 	}
 }
 
