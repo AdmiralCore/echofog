@@ -167,7 +167,7 @@ func encodeFamily(records []Record, index map[string]byte, addrSize int) ([]byte
 		startHi, startLo := addrParts(r.Start)
 		endHi, endLo := addrParts(r.End)
 		if i%blockSize == 0 {
-			if rec.Len() > math.MaxUint32 {
+			if uint64(rec.Len()) > math.MaxUint32 {
 				return nil, errors.New("record section exceeds 4 GiB")
 			}
 			blocks = append(blocks, blockIndex{startHi: startHi, startLo: startLo, off: uint32(rec.Len())})
