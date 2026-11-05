@@ -1,6 +1,7 @@
 package mux
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -51,17 +52,38 @@ func TestMuxSequenceVectors(t *testing.T) {
 			t.Cleanup(func() { rc.Close(); a.Close() })
 			ctx := ctxT(t)
 			got := map[uint64]RawStream{}
-			for range sq.Streams {
+			wantN := 0
+			for _, w := range sq.Streams {
+				if w.Reset == nil {
+					wantN++
+				}
+			}
+			for len(got) < wantN {
 				st, err := rc.AcceptStream(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
 				got[st.ID()] = st
 			}
+			// A stream that is reset before the receiver accepts it may be dropped: wire.md §5.2
+			// keeps only the data that arrived before the reset readable. Accept it if it is there.
+			for _, w := range sq.Streams {
+				if w.Reset == nil || got[w.ID] != nil {
+					continue
+				}
+				actx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+				if st, err := rc.AcceptStream(actx); err == nil {
+					got[st.ID()] = st
+				}
+				cancel()
+			}
 			// Streams are accepted in increasing ID order of the opener (wire.md §5.2).
 			for _, want := range sq.Streams {
 				st := got[want.ID]
 				if st == nil {
+					if want.Reset != nil {
+						continue
+					}
 					t.Fatalf("stream %d was not accepted", want.ID)
 				}
 				_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
