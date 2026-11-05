@@ -37,7 +37,7 @@ func backupsOf(t *testing.T, dir string) []string {
 func TestRepairUnwrittenTable(t *testing.T) {
 	dir := t.TempDir()
 	for _, v := range []string{"first", "second"} {
-		st, err := Open(Options{Dir: dir, Key: testKey(21), MemCapMB: 40})
+		st, err := Open(Options{Dir: dir, Key: testKey(t, 21), MemCapMB: 40})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -62,7 +62,7 @@ func TestRepairUnwrittenTable(t *testing.T) {
 		t.Fatalf("zero %s: %v", last, err)
 	}
 
-	st, err := Open(Options{Dir: dir, Key: testKey(21), MemCapMB: 40})
+	st, err := Open(Options{Dir: dir, Key: testKey(t, 21), MemCapMB: 40})
 	if err != nil {
 		t.Fatalf("Open after the damage: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestRepairUnwrittenTable(t *testing.T) {
 // never reached the disk. The store rebuilds the table from its blocks, so every record survives.
 func TestRepairBrokenTable(t *testing.T) {
 	dir := t.TempDir()
-	st, err := Open(Options{Dir: dir, Key: testKey(22), MemCapMB: 40})
+	st, err := Open(Options{Dir: dir, Key: testKey(t, 22), MemCapMB: 40})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRepairBrokenTable(t *testing.T) {
 		t.Fatalf("damage %s: %v", table, err)
 	}
 
-	st, err = Open(Options{Dir: dir, Key: testKey(22), MemCapMB: 40})
+	st, err = Open(Options{Dir: dir, Key: testKey(t, 22), MemCapMB: 40})
 	if err != nil {
 		t.Fatalf("Open after the damage: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestRepairBrokenTable(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	st, err = Open(Options{Dir: dir, Key: testKey(22), MemCapMB: 40})
+	st, err = Open(Options{Dir: dir, Key: testKey(t, 22), MemCapMB: 40})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestRepairBrokenTable(t *testing.T) {
 func TestRepairLeavesASoundStoreAlone(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 3; i++ {
-		st, err := Open(Options{Dir: dir, Key: testKey(23)})
+		st, err := Open(Options{Dir: dir, Key: testKey(t, 23)})
 		if err != nil {
 			t.Fatalf("Open %d: %v", i, err)
 		}

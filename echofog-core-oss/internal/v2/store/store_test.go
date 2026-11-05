@@ -15,13 +15,19 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/secret"
 )
 
-// testKey is a deterministic 32-byte storage key; a different seed is a different profile.
-func testKey(seed byte) *secret.Value {
+// testKey is a deterministic 32-byte storage key; a different seed is a different profile. The
+// test's cleanup destroys it: locked pages are a finite budget, and memguard panics when it runs
+// out (the T4.1 risk).
+func testKey(t *testing.T, seed byte) *secret.Value {
+	t.Helper()
+
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = seed + byte(i)
 	}
-	return secret.New(key)
+	value := secret.New(key)
+	t.Cleanup(value.Destroy)
+	return value
 }
 
 func openStore(t *testing.T, dir string, key *secret.Value, memCapMB int) *Store {
@@ -106,7 +112,7 @@ func TestOpenCreatesSchema200(t *testing.T) {
 	t.Parallel()
 
 	dir := filepath.Join(t.TempDir(), "v2")
-	st := openStore(t, dir, testKey(1), 0)
+	st := openStore(t, dir, testKey(t, 1), 0)
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -142,7 +148,7 @@ func TestOpenRefusesANewerSchema(t *testing.T) {
 		t.Fatalf("writeSchema: %v", err)
 	}
 
-	_, err := Open(Options{Dir: dir, Key: testKey(1)})
+	_, err := Open(Options{Dir: dir, Key: testKey(t, 1)})
 	if !errors.Is(err, ErrSchemaNewer) {
 		t.Fatalf("Open on schema %d: %v, want ErrSchemaNewer", Schema+1, err)
 	}
@@ -164,7 +170,7 @@ func TestOpenRefusesAnOlderSchemaWithNoMigration(t *testing.T) {
 		t.Fatalf("writeSchema: %v", err)
 	}
 
-	_, err := Open(Options{Dir: dir, Key: testKey(1)})
+	_, err := Open(Options{Dir: dir, Key: testKey(t, 1)})
 	if !errors.Is(err, ErrSchemaUnknown) {
 		t.Fatalf("Open on schema 150 with no migration: %v, want ErrSchemaUnknown", err)
 	}
@@ -181,7 +187,7 @@ func TestOpenRefusesADirectoryWithDataButNoSchema(t *testing.T) {
 		t.Fatalf("write MANIFEST: %v", err)
 	}
 
-	if _, err := Open(Options{Dir: dir, Key: testKey(1)}); !errors.Is(err, ErrSchemaMissing) {
+	if _, err := Open(Options{Dir: dir, Key: testKey(t, 1)}); !errors.Is(err, ErrSchemaMissing) {
 		t.Fatalf("Open on a database without a schema number: %v, want ErrSchemaMissing", err)
 	}
 }
@@ -189,7 +195,7 @@ func TestOpenRefusesADirectoryWithDataButNoSchema(t *testing.T) {
 func TestNamespaceIsolation(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(2), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 2), 0)
 	alpha := st.Store("alpha")
 	beta := st.Store("beta")
 
@@ -227,7 +233,7 @@ func TestNamespaceIsolation(t *testing.T) {
 func TestNamespaceNamesCannotOverlap(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(3), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 3), 0)
 	first := st.Store("a")
 	second := st.Store("a:b")
 
@@ -252,7 +258,7 @@ func TestNamespaceNamesCannotOverlap(t *testing.T) {
 func TestBadNamespace(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(4), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 4), 0)
 	for _, ns := range []string{"", strings.Repeat("n", 256)} {
 		kv := st.Store(ns)
 		if _, err := kv.Get([]byte("k")); !errors.Is(err, ErrBadNamespace) {
@@ -272,7 +278,7 @@ func TestValuesAreEncryptedAtRest(t *testing.T) {
 
 	dir := t.TempDir()
 	plain := []byte("the plaintext marker 0123456789")
-	st := openStore(t, dir, testKey(5), 0)
+	st := openStore(t, dir, testKey(t, 5), 0)
 	if err := st.Store("chat").Put([]byte("k"), plain); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -292,7 +298,7 @@ func TestValuesAreEncryptedAtRest(t *testing.T) {
 		t.Fatalf("stored value is %d bytes, want %d (nonce, ciphertext, tag)", len(raw), want)
 	}
 
-	st = openStore(t, dir, testKey(5), 0)
+	st = openStore(t, dir, testKey(t, 5), 0)
 	got, err := st.Store("chat").Get([]byte("k"))
 	if err != nil {
 		t.Fatalf("Get after reopen: %v", err)
@@ -308,7 +314,7 @@ func TestValuesAreBoundToTheirKey(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	st := openStore(t, dir, testKey(6), 0)
+	st := openStore(t, dir, testKey(t, 6), 0)
 	if err := st.Store("chat").Put([]byte("a"), []byte("for a")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -330,7 +336,7 @@ func TestValuesAreBoundToTheirKey(t *testing.T) {
 		t.Fatalf("close raw badger: %v", err)
 	}
 
-	st = openStore(t, dir, testKey(6), 0)
+	st = openStore(t, dir, testKey(t, 6), 0)
 	if _, err := st.Store("chat").Get([]byte("b")); !errors.Is(err, ErrValueDamaged) {
 		t.Fatalf("Get of a value moved under another key: %v, want ErrValueDamaged", err)
 	}
@@ -340,7 +346,7 @@ func TestWrongStorageKeyDoesNotOpenValues(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	st := openStore(t, dir, testKey(7), 0)
+	st := openStore(t, dir, testKey(t, 7), 0)
 	if err := st.Store("chat").Put([]byte("k"), []byte("secret")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -348,7 +354,7 @@ func TestWrongStorageKeyDoesNotOpenValues(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	st = openStore(t, dir, testKey(8), 0)
+	st = openStore(t, dir, testKey(t, 8), 0)
 	if _, err := st.Store("chat").Get([]byte("k")); !errors.Is(err, ErrValueDamaged) {
 		t.Fatalf("Get under another storage key: %v, want ErrValueDamaged", err)
 	}
@@ -357,7 +363,7 @@ func TestWrongStorageKeyDoesNotOpenValues(t *testing.T) {
 func TestPutDeleteHasAndEmptyValues(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(9), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 9), 0)
 	kv := st.Store("test")
 
 	if has, err := kv.Has([]byte("missing")); err != nil || has {
@@ -390,7 +396,7 @@ func TestPutDeleteHasAndEmptyValues(t *testing.T) {
 func TestPutTTLExpires(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(10), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 10), 0)
 	kv := st.Store("test")
 
 	if err := kv.PutTTL([]byte("k"), []byte("v"), 0); !errors.Is(err, ErrBadTTL) {
@@ -419,7 +425,7 @@ func TestPutTTLExpires(t *testing.T) {
 func TestScanAndScanFrom(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(11), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 11), 0)
 	kv := st.Store("test")
 	for _, key := range []string{"b", "a", "c", "d"} {
 		if err := kv.Put([]byte(key), []byte("value "+key)); err != nil {
@@ -460,7 +466,7 @@ func TestScanAndScanFrom(t *testing.T) {
 func TestScanDecryptsAndKeepsValuesOutOfKeys(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(12), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 12), 0)
 	kv := st.Store("test")
 	if err := kv.Put([]byte("a"), []byte("plain a")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -477,7 +483,7 @@ func TestScanDecryptsAndKeepsValuesOutOfKeys(t *testing.T) {
 func TestCloseIsIdempotentAndRefusesLaterUse(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(13), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 13), 0)
 	kv := st.Store("test")
 	if err := kv.Put([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -507,7 +513,7 @@ func keysOf(entries []Entry) string {
 func TestScanResultIsACopy(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(14), 0)
+	st := openStore(t, t.TempDir(), testKey(t, 14), 0)
 	kv := st.Store("test")
 	if err := kv.Put([]byte("a"), []byte("value")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -527,7 +533,7 @@ func TestScanResultIsACopy(t *testing.T) {
 func TestConcurrentNamespaces(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(15), 40)
+	st := openStore(t, t.TempDir(), testKey(t, 15), 40)
 	errs := make(chan error, 8)
 	for i := 0; i < cap(errs); i++ {
 		go func(i int) {

@@ -62,7 +62,9 @@ func ensureNewDir(dir string) error {
 	for _, entry := range entries {
 		if entry.Name() == schemaTemp {
 			// A creation interrupted between the temporary file and the rename.
-			os.Remove(filepath.Join(dir, schemaTemp))
+			if err := os.Remove(filepath.Join(dir, schemaTemp)); err != nil {
+				return fmt.Errorf("store: removing %s: %w", schemaTemp, err)
+			}
 			continue
 		}
 		return fmt.Errorf("%w: %s", ErrSchemaMissing, dir)
@@ -71,7 +73,9 @@ func ensureNewDir(dir string) error {
 }
 
 // migration is one step from schema version to version+1. It sees the database before the store
-// is wrapped, and the account's storage key so it can open and rewrite encrypted values.
+// is wrapped, and the account's storage key so it can open and rewrite encrypted values. A step
+// must be idempotent: the new schema number is written only after it returns, so a crash in
+// between runs the step again on the next start.
 type migration func(db *badger.DB, key *secret.Value) error
 
 var (

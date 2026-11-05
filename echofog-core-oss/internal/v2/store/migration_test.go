@@ -90,7 +90,7 @@ func TestMigrationKeepsABackup(t *testing.T) {
 		})
 	})
 
-	st, err := Open(Options{Dir: dir, Key: testKey(30)})
+	st, err := Open(Options{Dir: dir, Key: testKey(t, 30)})
 	if err != nil {
 		t.Fatalf("Open with a migration: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestMigrationFailureKeepsTheSchema(t *testing.T) {
 		return errors.New("step failed")
 	})
 
-	if _, err := Open(Options{Dir: dir, Key: testKey(31)}); err == nil {
+	if _, err := Open(Options{Dir: dir, Key: testKey(t, 31)}); err == nil {
 		t.Fatal("Open succeeded with a failing migration")
 	}
 	version, err := readSchema(dir)
@@ -159,7 +159,7 @@ func TestSchemaCorrupt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, schemaFile), []byte{0, 0}, 0o600); err != nil {
 		t.Fatalf("write %s: %v", schemaFile, err)
 	}
-	if _, err := Open(Options{Dir: dir, Key: testKey(32)}); !errors.Is(err, ErrSchemaCorrupt) {
+	if _, err := Open(Options{Dir: dir, Key: testKey(t, 32)}); !errors.Is(err, ErrSchemaCorrupt) {
 		t.Fatalf("Open with a two-byte schema marker: %v, want ErrSchemaCorrupt", err)
 	}
 }

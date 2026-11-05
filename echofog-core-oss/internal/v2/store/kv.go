@@ -47,7 +47,8 @@ type KV interface {
 // even when their concatenations would be equal.
 func namespacePrefix(ns string) ([]byte, error) {
 	if ns == "" || len(ns) > 255 {
-		return nil, fmt.Errorf("%w: %q", ErrBadNamespace, ns)
+		// The name is not echoed: a caller could have built it from user data.
+		return nil, fmt.Errorf("%w: %d bytes", ErrBadNamespace, len(ns))
 	}
 	prefix := make([]byte, 2+len(ns))
 	prefix[0] = namespaceRecord

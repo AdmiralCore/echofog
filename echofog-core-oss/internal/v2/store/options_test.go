@@ -69,7 +69,7 @@ func TestDesktopBadgerOptions(t *testing.T) {
 func TestMobileOptionsActuallyOpen(t *testing.T) {
 	t.Parallel()
 
-	st := openStore(t, t.TempDir(), testKey(20), 40)
+	st := openStore(t, t.TempDir(), testKey(t, 20), 40)
 	if err := st.Store("test").Put([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
