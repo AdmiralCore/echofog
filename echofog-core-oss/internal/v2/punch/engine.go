@@ -308,10 +308,17 @@ func (e *Engine) onOffer(o frame.PunchOffer) {
 		}
 		return
 	}
-	if e.cfg.Role != Responder || !e.cfg.Allowed() {
+	if e.cfg.Role != Responder {
 		return
 	}
+	// F2: the cheap rate check comes before Allowed, which verifies a card and looks up countries.
 	now := e.now()
+	e.mu.Lock()
+	limited := e.answered && now.Sub(e.lastPeer) < OfferInterval
+	e.mu.Unlock()
+	if limited || !e.cfg.Allowed() {
+		return
+	}
 	e.mu.Lock()
 	if e.answered && now.Sub(e.lastPeer) < OfferInterval {
 		e.mu.Unlock()
@@ -328,13 +335,22 @@ func (e *Engine) onOffer(o frame.PunchOffer) {
 }
 
 func (e *Engine) onSync(nonce uint64) {
-	if e.cfg.Role != Responder || nonce == 0 || !e.cfg.Allowed() {
+	if e.cfg.Role != Responder || nonce == 0 {
 		return
 	}
 	now := e.now()
 	e.mu.Lock()
 	p := &e.pend
 	if p.nonce != nonce || now.After(p.expires) || p.syncs >= MaxAttempts || e.junking || len(p.targets) == 0 {
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+	if !e.cfg.Allowed() {
+		return
+	}
+	e.mu.Lock()
+	if p.nonce != nonce || p.syncs >= MaxAttempts || e.junking {
 		e.mu.Unlock()
 		return
 	}

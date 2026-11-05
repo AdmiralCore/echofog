@@ -173,6 +173,7 @@ func (r *Runtime) takeAccepted(ctx context.Context, local session.LocalIdentity,
 	}
 	r.samplePeer(kept)
 	r.ensureServing(kept)
+	r.relayc.sessionReady(kept.Session)
 }
 
 // ensureServing starts exactly one service loop and one datagram pump per live session. A

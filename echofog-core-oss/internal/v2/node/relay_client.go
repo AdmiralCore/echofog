@@ -44,6 +44,7 @@ type relayClient struct {
 	mu          sync.Mutex
 	engines     map[*mux.Session]*punchState
 	pendingAddr map[*mux.Session]netip.AddrPort // PEER_ADDR of an answered circuit until its engine exists
+	early       map[*mux.Session][]frame.Frame  // F1: PUNCH frames that beat the session into the table
 	lastRelay   map[[32]byte][32]byte           // peer device → relay device that carried the last session
 }
 
@@ -53,12 +54,15 @@ type punchState struct {
 	est      *session.Established
 	peerAddr netip.AddrPort // the peer's address as its relay saw it (PEER_ADDR), maybe invalid
 	direct   atomic.Bool
+	cardOnce sync.Once // F2: the peer card is verified once per session, not per PUNCH frame
+	cardIPs  []netip.Addr
 }
 
 func newRelayClient(r *Runtime) *relayClient {
 	return &relayClient{r: r, sem: make(chan struct{}, maxIncomingCircuits),
 		engines:     map[*mux.Session]*punchState{},
 		pendingAddr: map[*mux.Session]netip.AddrPort{},
+		early:       map[*mux.Session][]frame.Frame{},
 		lastRelay:   map[[32]byte][32]byte{}}
 }
 
@@ -291,15 +295,19 @@ func (c *relayClient) rules(ps *punchState) punch.Rules {
 	if own, ok := c.r.PublicAddr(); ok {
 		rl.OwnIP = own
 	}
-	if ps.est != nil && ps.est.Peer != nil {
+	ps.cardOnce.Do(func() {
+		if ps.est == nil || ps.est.Peer == nil {
+			return
+		}
 		if card, err := objects.VerifyCard(ps.est.Peer.Raw, c.r.clock.Now()); err == nil {
 			for _, a := range card.Addrs() {
 				if ip, err := netip.ParseAddr(a.GetHost()); err == nil {
-					rl.CardIPs = append(rl.CardIPs, ip)
+					ps.cardIPs = append(ps.cardIPs, ip)
 				}
 			}
 		}
-	}
+	})
+	rl.CardIPs = ps.cardIPs
 	return rl
 }
 
@@ -348,12 +356,54 @@ func (c *relayClient) onPunch(sess *mux.Session, f frame.Frame) {
 			return
 		}
 		est := c.r.estOf(sess)
-		if est == nil || est.Role != session.RoleResponder || est.Kind != mux.PathRelay {
+		if est == nil {
+			c.holdEarly(sess, f)
+			return
+		}
+		if est.Role != session.RoleResponder || est.Kind != mux.PathRelay {
 			return
 		}
 		ps = c.startPunch(est, punch.Responder, netip.AddrPort{})
 	}
 	ps.eng.HandleControl(f)
+}
+
+const (
+	maxEarlySessions = 64 // sessions with held PUNCH frames at once
+	maxEarlyFrames   = 4  // frames held per session
+)
+
+// holdEarly keeps a PUNCH frame of a session that is not in the table yet (a hidden node books its
+// pass first, F1). takeAccepted replays them through sessionReady.
+func (c *relayClient) holdEarly(sess *mux.Session, f frame.Frame) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	q, known := c.early[sess]
+	if !known {
+		if len(c.early) >= maxEarlySessions {
+			return
+		}
+		go func() {
+			<-sess.Done()
+			c.mu.Lock()
+			delete(c.early, sess)
+			c.mu.Unlock()
+		}()
+	}
+	if len(q) < maxEarlyFrames {
+		c.early[sess] = append(q, f)
+	}
+}
+
+// sessionReady replays the PUNCH frames held for a session that has just entered the table.
+func (c *relayClient) sessionReady(sess *mux.Session) {
+	c.mu.Lock()
+	q := c.early[sess]
+	delete(c.early, sess)
+	c.mu.Unlock()
+	for _, f := range q {
+		c.onPunch(sess, f)
+	}
 }
 
 // estOf finds the Established of a mux session in the table.
@@ -382,10 +432,18 @@ const (
 func (c *relayClient) registerLoop(ctx context.Context) {
 	r := c.r
 	done := map[*mux.Session]string{} // session → fingerprint of what its relay holds
+	fails := 0
 	for ctx.Err() == nil {
 		poll := registerPoll
-		if !c.registerOnce(ctx, done) {
-			poll = registerRetry
+		all, failed := c.registerOnce(ctx, done)
+		switch {
+		case failed:
+			poll = registerBackoff(fails)
+			fails++
+		case !all:
+			poll, fails = registerRetry, 0
+		default:
+			fails = 0
 		}
 		d := poll - poll/5 + time.Duration(mrand.Int64N(int64(poll)*2/5+1))
 		ch := make(chan struct{})
@@ -400,11 +458,11 @@ func (c *relayClient) registerLoop(ctx context.Context) {
 }
 
 // registerOnce registers the current IDs at every relay that does not hold them yet.
-func (c *relayClient) registerOnce(ctx context.Context, done map[*mux.Session]string) (all bool) {
+func (c *relayClient) registerOnce(ctx context.Context, done map[*mux.Session]string) (all, failed bool) {
 	r := c.r
 	list, err := r.accessMgr.List(ctx)
 	if err != nil {
-		return false
+		return false, false
 	}
 	var secrets [][]byte
 	for _, in := range list {
@@ -439,7 +497,7 @@ func (c *relayClient) registerOnce(ctx context.Context, done map[*mux.Session]st
 		if err1 == nil && err2 == nil {
 			done[est.Session] = print
 		} else {
-			all = false
+			all, failed = false, true
 		}
 	}
 	for s := range done {
@@ -447,8 +505,14 @@ func (c *relayClient) registerOnce(ctx context.Context, done map[*mux.Session]st
 			delete(done, s)
 		}
 	}
-	return all && seen > 0
+	return all && seen > 0, failed
 }
 
 // registerBackoff is the pause after fails consecutive polls with a relay that did not take the IDs.
-func registerBackoff(fails int) time.Duration { return registerRetry }
+func registerBackoff(fails int) time.Duration {
+	d := registerRetry
+	for i := 0; i < fails && d < registerPoll*10; i++ {
+		d *= 2
+	}
+	return min(d, registerPoll*10)
+}
