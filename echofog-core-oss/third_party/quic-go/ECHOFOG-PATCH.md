@@ -6,7 +6,7 @@ with three small, self-contained changes. `go.mod` in `echofog-core-oss` points 
 this copy with a `replace` directive. Test files (`*_test.go`), mocks, and the
 `integrationtests/`, `interop/`, `example/`, `testutils/` and `metrics/` trees
 were dropped to keep the copy reviewable; nothing in the library's own build path
-imported them.
+imported them. The one exception is the fuzz target for patch 3; see below.
 
 To review, diff this tree against the upstream module at that version
 (`go mod download github.com/apernet/quic-go@v0.63.1-0.20261004180939-a10df75c260c`
@@ -76,8 +76,7 @@ second ServerHello decides. `ConnectionState()` then sets
 `CurveID: tls.CurveID(c.curveID)`. A group that cannot be read stays zero, which
 EchoFog treats as classical (sealed), never as post-quantum.
 
-The same patch makes the advertised `max_udp_payload_size` configurable. It used
-to be hardcoded to 1452 in the transport parameters of both client and server.
+The same patch makes the advertised `max_udp_payload_size` configurable. It usedto be hardcoded to 1452 in the transport parameters of both client and server.
 `wire.md` §5.1 requires the noise3 value to be reduced by the L0 packet overhead
 and the shape profile's maximum padding, because the inner QUIC datagram must
 still fit one outer datagram. `quic.Config` gained `MaxUDPPayloadSize` (uint16;
@@ -85,3 +84,6 @@ still fit one outer datagram. `quic.Config` gained `MaxUDPPayloadSize` (uint16;
 the peer's advertised value as its ceiling, so both ends of a noise3 path settle
 on the reduced size. `ChromeParrot` still overwrites the parameter with Chrome's
 1472, since there the value is part of the fingerprint.
+
+`internal/handshake/server_hello_group_test.go` is the only test file in this
+copy: a fuzz target for the parser above (30 s clean, 3.6M execs).
