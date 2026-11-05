@@ -32,9 +32,9 @@ func closedChannel[T any]() <-chan T {
 	return ch
 }
 
-// v2Unavailable reports ErrV2NotBuilt while the node runs protocol 2. The network methods of the
-// facade ask it until T11.1b-e replace their bodies with delegation to the selected backends; the
-// network and contacts domains delegate since T11.1b, so their methods do not ask it any more. At
+// v2Unavailable reports ErrV2NotBuilt while the node runs protocol 2. Only the VPN methods of the
+// facade still ask it: the network, contacts, chats, groups, files, calls and streams domains are
+// delegates of the selected backends since T11.1b-d, so their methods do not ask it any more. At
 // protocol 1 it always returns nil, so the v1 behaviour is untouched. It reads the mode the node
 // started with, not the one saved for the next start (see SetProtocol).
 func (n *NodeApi) v2Unavailable() error {
@@ -291,14 +291,15 @@ type backends struct {
 
 // chooseBackends returns the protocol 1 implementation for each domain, and the not-built v2
 // backend for protocol 2. The network and contacts domains run in their own v1 backends since
-// T11.1b, the chats, groups and files domains since T11.1c; the calls and VPN domains still keep
-// the facade itself, whose methods carry the v1 code until T11.1d-e move it.
+// T11.1b, the chats, groups and files domains since T11.1c, the calls and streams domain since
+// T11.1d; the VPN domain still keeps the facade itself, whose methods carry the v1 code until
+// T11.1e moves it.
 func chooseBackends(protocol int, v1 *NodeApi) backends {
 	if protocol == config.ProtocolV2 {
 		pending := v2PendingBackend{}
 		return backends{net: pending, contact: pending, chat: pending, group: pending, file: pending, call: pending, vpn: pending}
 	}
-	return backends{net: &v1NetBackend{v1}, contact: &v1ContactBackend{v1}, chat: &v1ChatBackend{v1}, group: &v1GroupBackend{v1}, file: &v1FileBackend{v1}, call: v1, vpn: v1}
+	return backends{net: &v1NetBackend{v1}, contact: &v1ContactBackend{v1}, chat: &v1ChatBackend{v1}, group: &v1GroupBackend{v1}, file: &v1FileBackend{v1}, call: &v1CallBackend{v1}, vpn: v1}
 }
 
 var (
@@ -317,7 +318,7 @@ var (
 	_ fileBackend    = (*NodeApi)(nil)
 	_ fileBackend    = (*v1FileBackend)(nil)
 	_ fileBackend    = v2PendingBackend{}
-	_ callBackend    = (*NodeApi)(nil)
+	_ callBackend    = (*v1CallBackend)(nil)
 	_ callBackend    = v2PendingBackend{}
 	_ vpnBackend     = (*NodeApi)(nil)
 	_ vpnBackend     = v2PendingBackend{}

@@ -913,11 +913,7 @@ type CallInvite struct {
 	State       string `json:"state"`
 }
 
-func (n *NodeApi) InviteToCall(pubKeyHex string) (CallInvite, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return CallInvite{}, ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) InviteToCall(pubKeyHex string) (CallInvite, error) {
 	pub, derr := hex.DecodeString(strings.TrimSpace(pubKeyHex))
 	if derr != nil || len(pub) != 32 {
 		return CallInvite{}, errors.New("peer key must be 32 bytes of hex")
@@ -1003,11 +999,7 @@ func (n *v1GroupBackend) LeaveGroup(groupID string) error {
 }
 
 // StartGroupCall tells the members that a call opens and returns what the caller joins with.
-func (n *NodeApi) StartGroupCall(groupID string) (GroupCall, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupCall{}, ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) StartGroupCall(groupID string) (GroupCall, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupCall{}, err
@@ -1016,11 +1008,7 @@ func (n *NodeApi) StartGroupCall(groupID string) (GroupCall, error) {
 }
 
 // KeepGroupCallAlive tells the group the call is still going; call it periodically while in it.
-func (n *NodeApi) KeepGroupCallAlive(groupID, callID, coordinator string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) KeepGroupCallAlive(groupID, callID, coordinator string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1029,11 +1017,7 @@ func (n *NodeApi) KeepGroupCallAlive(groupID, callID, coordinator string) error 
 }
 
 // ActiveGroupCall is the call going on in the group, if there is one.
-func (n *NodeApi) ActiveGroupCall(groupID string) (GroupCall, bool) {
-	if n.v2Unavailable() != nil {
-		return GroupCall{}, false
-	}
-
+func (n *v1CallBackend) ActiveGroupCall(groupID string) (GroupCall, bool) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupCall{}, false
@@ -1060,11 +1044,7 @@ func (n *v1GroupBackend) DeleteGroup(groupID string) error {
 }
 
 // EndGroupCall tells the group that its call is over. Call it when the last person leaves.
-func (n *NodeApi) EndGroupCall(groupID, callID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) EndGroupCall(groupID, callID string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
