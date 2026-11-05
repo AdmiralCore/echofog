@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/testbed/browserprofiles"
 	"github.com/echofog/echofog-core/testbed/censor"
 )
+
+func f64(v float64) *float64 { return &v }
 
 func TestParseByteSize(t *testing.T) {
 	cases := map[string]int64{
@@ -82,7 +86,7 @@ func TestReportSchemaTwo(t *testing.T) {
 		Scenario: "v2-censor", Seed: 42, Profile: "desktop", Network: "lab",
 		Phases: []string{"censor"},
 		Detectors: map[string]censor.DetectorMetric{
-			"D1": {Recall: 1, FPR: 0, N: 3},
+			"D1": {Recall: f64(1), FPR: 0, N: 3},
 		},
 		Aggregate: aggregate{VisibilityPct: 12.5},
 	})
@@ -165,6 +169,99 @@ func TestLabelFlowUsesTheHarnessPortNotTheClock(t *testing.T) {
 		if got.Label != tc.label || got.Suite != tc.suite {
 			t.Errorf("%s: label=%q suite=%q, want %q/%q", tc.server, got.Label, got.Suite, tc.label, tc.suite)
 		}
+	}
+}
+
+// A hard pcap budget: the sink must stop at the limit, not sometime after it.
+func TestCaptureSinkNeverExceedsBudget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wan.pcap")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	const limit = 1000
+	s := newCaptureSink(limit, f)
+	chunk := bytes.Repeat([]byte{0xaa}, 700)
+	if _, err := s.Write(chunk); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	_, err = s.Write(chunk)
+	if !errors.Is(err, errCaptureLimit) {
+		t.Fatalf("second write error = %v, want errCaptureLimit", err)
+	}
+	if s.Size() > limit {
+		t.Errorf("sink size %d > budget %d", s.Size(), limit)
+	}
+	if !s.Over() {
+		t.Error("the sink did not record a budget violation")
+	}
+	if fi, err := f.Stat(); err != nil || fi.Size() > limit {
+		t.Errorf("file size = %v, %v; want <= %d", fi, err, limit)
+	}
+}
+
+// Without -pcap no file may be created at all, not even a temporary one.
+func TestNoPcapRequestLeavesNoFile(t *testing.T) {
+	dir := t.TempDir()
+	c := &v2Capture{gw: "gw_b", out: dir, budget: 1 << 20}
+	c.sink = newCaptureSink(c.budget, nil)
+	if _, err := c.sink.Write([]byte("pcap bytes")); err != nil {
+		t.Fatal(err)
+	}
+	info := c.finalizeInfo(false, true)
+	if info.Kept || info.Deleted {
+		t.Errorf("no -pcap: kept=%v deleted=%v, want neither", info.Kept, info.Deleted)
+	}
+	if !strings.Contains(info.Reason, "memory") {
+		t.Errorf("reason = %q, want an explanation that nothing was written", info.Reason)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("files were created without -pcap: %v", entries)
+	}
+}
+
+// A detector with no positive control must not be reported as working.
+func TestCoverageDoesNotClaimControlWorksWithoutPositives(t *testing.T) {
+	rows := coverageFor(map[string]censor.DetectorMetric{
+		"D1": {Recall: nil, FPR: 0, Positives: 0, N: 0},
+	}, carrierInfo{})
+	for _, r := range rows {
+		if r.Detector == "D1" {
+			if strings.Contains(r.Verdict, "control works") {
+				t.Errorf("D1 with no positives: %q", r.Verdict)
+			}
+			if !strings.Contains(r.Verdict, "no positive") && !strings.Contains(r.Verdict, "unavailable") {
+				t.Errorf("D1 verdict = %q, want a no-positive/unavailable explanation", r.Verdict)
+			}
+		}
+	}
+}
+
+func TestSpecLabelPinsTheSpec(t *testing.T) {
+	if got := specLabel("abc123"); got != "v2@abc123" {
+		t.Errorf("specLabel = %q, want v2@abc123", got)
+	}
+	if got := specLabel(""); got != "v2" {
+		t.Errorf("specLabel empty = %q, want v2", got)
+	}
+}
+
+func TestBrowserProfileNoteUsesTheCaptureNetwork(t *testing.T) {
+	db := &browserprofiles.Database{Version: "1", Entries: []browserprofiles.Profile{
+		{ID: "chrome-lab-lab", Country: "lab", Network: "lab"},
+	}}
+	note := browserProfileNote(db, "ru-mobile")
+	if strings.Contains(note, "lab/ru-mobile") {
+		t.Errorf("note still claims the capture is lab/ru-mobile: %s", note)
+	}
+	if !strings.Contains(note, "lab/lab") || !strings.Contains(note, "ru-mobile") {
+		t.Errorf("note = %q, want the capture network and the run label", note)
 	}
 }
 
