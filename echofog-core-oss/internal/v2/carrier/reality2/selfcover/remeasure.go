@@ -49,14 +49,20 @@ func (r *Report) OK() bool {
 const variableSlack = 4
 
 // CompareOwn compares the profile of the website with that of a selected connection for the own
-// cover. It is profile.Compare with two allowances that hold only because both sides are one
+// cover. It is profile.Compare with three allowances that hold only because both sides are one
 // stack with one certificate: an item the website itself varies is returned as unstable instead
-// of as a difference, and a length that varies between samples may exceed the observed range by
-// variableSlack bytes.
+// of as a difference, the packing of a flight may vary on either side, and a length that varies
+// between samples may exceed the observed range by variableSlack bytes.
 func CompareOwn(site, ours *profile.CoverProfile) (diffs []profile.Diff, unstable []string) {
 	for _, d := range profile.Compare(site, ours) {
 		switch {
 		case d.Cover == "unstable":
+			unstable = append(unstable, d.Item)
+		case d.Item == profile.ItemPacking && d.Ours == "unstable":
+			// How a flight is cut into segments or packets depends on timing, and the selected
+			// connection also runs through the gate: under load it varies in a window where the
+			// website's longer measurement did not. One stack serves both, so this is not a
+			// difference (T2.6b-2 F2). Every other item unstable on our side only still is one.
 			unstable = append(unstable, d.Item)
 		case onlyVariableSlack(d, site, ours):
 		default:
