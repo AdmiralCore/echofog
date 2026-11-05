@@ -149,7 +149,7 @@ toolchain does not honour the custom reader, with that reason.
 
 These two changes were already in EchoFog's copy when the numbered patches were
 introduced. They are listed here so the fork is fully accounted for; a diff against
-upstream shows them alongside ง1-ง4.
+upstream shows them alongside ยง1-ยง4.
 
 ### 5.1 `chrome_parrot.go`: `ChromeParrotKeyShare`
 Adds the exported `ChromeParrotKeyShare(rand io.Reader, alpn []string) ([]byte, error)`,

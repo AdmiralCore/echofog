@@ -228,8 +228,10 @@ func (r *Replay) acquire() {
 	r.done = done
 	r.flushers.Add(1)
 	go func() {
-		defer r.flushers.Add(-1)
+		// LIFO: the counter drops before done closes, so release (which waits on done)
+		// always observes zero flushers.
 		defer close(done)
+		defer r.flushers.Add(-1)
 		r.runLoop(ctx)
 	}()
 }
