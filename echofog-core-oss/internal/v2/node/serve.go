@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -15,7 +16,7 @@ import (
 )
 
 // beforeAdd is a test seam that runs right before an accepted session enters the table.
-var beforeAdd func(*session.Established)
+var beforeAdd atomic.Pointer[func(*session.Established)]
 
 // maxHandshaking bounds the goroutines that run handshakes at once. It is a hard cap above the
 // pre-authentication limits (handshake §11): up to MaxPreAuthTotal handshakes are in flight before
@@ -143,8 +144,8 @@ func (r *Runtime) takeAccepted(ctx context.Context, local session.LocalIdentity,
 	if adm != nil {
 		r.markAdmitted(est, *adm)
 	}
-	if beforeAdd != nil {
-		beforeAdd(est)
+	if f := beforeAdd.Load(); f != nil {
+		(*f)(est)
 	}
 	kept, err := r.table.Add(local, est)
 	if err != nil {
