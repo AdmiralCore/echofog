@@ -1,4 +1,4 @@
-﻿package session_test
+package session_test
 
 import (
 	"bytes"
@@ -95,6 +95,28 @@ func waitPath(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// chatPolicy is the stream policy of the tests: chat/2 with DELIVER (0x40) and DELIVERED (0x41).
+type chatPolicy struct{}
+
+func (chatPolicy) Limiter(service, version uint64) (frame.Limiter, bool) {
+	if service != 3 || version != 2 {
+		return nil, false
+	}
+	return func(typ uint64) (int, bool) {
+		switch typ {
+		case 0x40:
+			return 61504, true
+		case 0x41:
+			return 32, true
+		}
+		return 0, false
+	}, true
+}
+
+func chatPolicyFunc() session.PolicyFunc {
+	return func([]handshake.ServiceChoice) mux.StreamPolicy { return chatPolicy{} }
+}
+
 // establishWithBinder establishes a session whose responder accepts later PATH_BIND frames
 // (wire.md Â§8.2). The first carrier is a normal handshake.
 func establishWithBinder(t *testing.T, pair *memcarrier.Pair, card *objects.Card,
@@ -107,9 +129,12 @@ func establishWithBinder(t *testing.T, pair *memcarrier.Pair, card *objects.Card
 	binder := mux.NewBinder()
 	cfg.Binder = binder
 	cfg.Local = srv
+	if cfg.Policy == nil {
+		cfg.Policy = chatPolicyFunc()
+	}
 
 	dialed := make(chan runResult, 1)
-	dOpts := append([]session.DialOption{session.WithCarrier(pair.Client)}, opts...)
+	dOpts := append([]session.DialOption{session.WithCarrier(pair.Client), session.WithPolicy(chatPolicyFunc())}, opts...)
 	go func() {
 		est, err := session.Dial(ctx, card, dialAttempt(), cli, dOpts...)
 		dialed <- runResult{est, err}
@@ -187,6 +212,9 @@ func TestAdditionalCarrierBindsAsPath(t *testing.T) {
 	// Streams work over the new path.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := est.Session.SetActivePath(id); err != nil {
+		t.Fatal(err)
+	}
 	st, err := est.Session.OpenStream(ctx, 3, 2)
 	if err != nil || st.PathID() != 2 {
 		t.Fatalf("stream on path %d: %v", st.PathID(), err)
@@ -359,6 +387,9 @@ func TestServiceStreamsSurvivePathDeath(t *testing.T) {
 // TestSessionWithoutPathsLivesTheGraceTime pins wire.md Â§8/Â§10: after the last path dies the
 // session waits for a PATH_BIND (60 s in the specification; shortened here) and only then ends.
 func TestSessionWithoutPathsLivesTheGraceTime(t *testing.T) {
+	if got := mux.DefaultTimers().NoPathGrace; got != 60*time.Second {
+		t.Fatalf("default no-path grace %v, want 60 s (wire.md §10)", got)
+	}
 	now := time.Now()
 	a, b := newTestNode(t), newTestNode(t)
 	ac, bc := a.cards(t, now), b.cards(t, now)
@@ -534,4 +565,3 @@ func TestPathPolicyPairLimitAndBackoff(t *testing.T) {
 		t.Fatalf("the failure count did not reset: %v", err)
 	}
 }
-

@@ -275,7 +275,7 @@ type PolicyFunc func(choices []handshake.ServiceChoice) mux.StreamPolicy
 
 // finish hands the handshake result to the mux. mux.NewSession makes the single sealing switch
 // (wire.md §8.5) when the carrier reports Sealed.
-func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc) (*Established, error) {
+func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc, lowPower bool, pad *idlePadding, onEstablished func(*mux.Session), onPathFailed func(mux.PathFailure)) (*Established, error) {
 	// The handshake read deadline belongs to the handshake, not to the session: its control
 	// stream must wait for peer traffic indefinitely (the mux applies its own timers).
 	_ = ctrl.SetReadDeadline(time.Time{})
@@ -285,10 +285,15 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 		pol = policy(hs.Services)
 	}
 	cfg := mux.Config{
-		Keys:     sessionKeys{hs: hs},
-		Features: muxFeatures(hs.Features),
-		Policy:   pol,
-		Timers:   timers,
+		Keys:         sessionKeys{hs: hs},
+		Features:     muxFeatures(hs.Features),
+		Policy:       pol,
+		Timers:       timers,
+		LowPower:     lowPower,
+		OnPathFailed: onPathFailed,
+	}
+	if pad != nil {
+		cfg.IdlePad = pad.next
 	}
 	var peerID [32]byte
 	if hs.Peer != nil {
@@ -301,6 +306,9 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 	if err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("%w: mux session: %w", ErrConfig, err)
+	}
+	if onEstablished != nil {
+		onEstablished(ms)
 	}
 	var sid [16]byte
 	copy(sid[:], hs.SID)

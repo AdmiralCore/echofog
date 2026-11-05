@@ -1,4 +1,4 @@
-﻿package node_test
+package node_test
 
 import (
 	"context"
@@ -9,9 +9,15 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 )
+
+// pathFeatures offers path-migration on both test runtimes.
+func pathFeatures(cfg *node.Config) {
+	cfg.Features = []uint32{uint32(frame.FeaturePathMigration)}
+}
 
 // waitPaths waits until both runtimes see the given path IDs for the peer.
 func waitPaths(t *testing.T, rt *node.Runtime, peer node.DeviceID, want []uint64) {
@@ -34,8 +40,8 @@ func waitPaths(t *testing.T, rt *node.Runtime, peer node.DeviceID, want []uint64
 // level: another carrier to the same peer becomes a path, and at most two standby paths stay.
 func TestAddPathBindsSecondCarrierAndKeepsTheStandbyLimit(t *testing.T) {
 	queue := newCarrierQueue()
-	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
-	a := newTestNode(t, cards.Hidden, false, nil, nil)
+	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{queue}, nil, pathFeatures)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, pathFeatures)
 	b.start(t)
 	a.start(t)
 
@@ -77,8 +83,11 @@ func TestAddPathBindsSecondCarrierAndKeepsTheStandbyLimit(t *testing.T) {
 func TestNetworkChangedOpensANewPathAndAbandonsTheOld(t *testing.T) {
 	queue := newCarrierQueue()
 	events := &captureEvents{}
-	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, events)
-	a := newTestNode(t, cards.Hidden, false, nil, nil)
+	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{queue}, events, pathFeatures)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(cfg *node.Config) {
+		cfg.Features = []uint32{uint32(frame.FeaturePathMigration)}
+		cfg.Events = events
+	})
 	b.start(t)
 	a.start(t)
 
@@ -118,8 +127,9 @@ func TestNetworkChangedOpensANewPathAndAbandonsTheOld(t *testing.T) {
 // TestAddPathRefusedUnderLowPower pins platforms.md Â§2: low_power keeps no standby paths.
 func TestAddPathRefusedUnderLowPower(t *testing.T) {
 	queue := newCarrierQueue()
-	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
+	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{queue}, nil, pathFeatures)
 	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(cfg *node.Config) {
+		cfg.Features = []uint32{uint32(frame.FeaturePathMigration)}
 		cfg.Profile.LowPower = true
 	})
 	b.start(t)
@@ -146,4 +156,3 @@ func TestAddPathRefusedUnderLowPower(t *testing.T) {
 		t.Fatal("the unused carrier was not closed")
 	}
 }
-

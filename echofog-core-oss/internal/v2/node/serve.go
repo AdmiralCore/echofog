@@ -24,18 +24,24 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 			}
 			return
 		}
+		onEstablished, onPathFailed := r.pathHooks()
 		cfg := session.AcceptConfig{
-			Local:    local,
-			Hidden:   r.vis != cards.Visible,
-			Passes:   r.cfg.Passes,
-			Puzzle:   r.cfg.Puzzle,
-			Bindings: r.bindings,
-			Control:  r.control,
-			Clock:    r.carrierClock,
-			Offset:   r.clock.Offset(),
-			Kind:     mux.PathDirect,
-			Policy:   r.policyFunc,
-			Verifier: nil,
+			Local:         local,
+			Hidden:        r.vis != cards.Visible,
+			Passes:        r.cfg.Passes,
+			Puzzle:        r.cfg.Puzzle,
+			Bindings:      r.bindings,
+			Control:       r.control,
+			Clock:         r.carrierClock,
+			Offset:        r.clock.Offset(),
+			Kind:          mux.PathDirect,
+			Policy:        r.policyFunc,
+			Verifier:      nil,
+			Binder:        r.binder,
+			LowPower:      r.cfg.Profile.LowPower,
+			IdlePadding:   r.cfg.ShapeProfile,
+			OnEstablished: onEstablished,
+			OnPathFailed:  onPathFailed,
 		}
 		est, err := session.Accept(r.ctx, l, cfg)
 		switch {

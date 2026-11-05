@@ -22,6 +22,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
+	"github.com/echofog/echofog-core/internal/v2/shape"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
 
@@ -37,6 +38,12 @@ var (
 	ErrPeerCard = errors.New("node: peer card does not match the device")
 	// ErrNoRoute means carrier.Plan found no usable direct attempt (relay is T6.1).
 	ErrNoRoute = errors.New("node: no carrier route to the peer")
+	// ErrNoSession means a path operation needs a live session to the peer.
+	ErrNoSession = errors.New("node: no live session to the peer")
+	// ErrTooManyPaths means the platform or the standby limit forbids another path now.
+	ErrTooManyPaths = errors.New("node: too many paths to the peer")
+	// ErrPathFeature means the peer did not negotiate path-migration.
+	ErrPathFeature = errors.New("node: path-migration was not negotiated")
 )
 
 // Config assembles one runtime.
@@ -88,6 +95,9 @@ type Config struct {
 	RetryAfter uint32
 	// Country is the offline GeoIP lookup; nil means internal/v2/geoip.
 	Country func(netip.Addr) (string, bool)
+	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
+	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
+	ShapeProfile *shape.Profile
 }
 
 // Runtime is one running v2 node (02-architecture AD5).
@@ -107,6 +117,13 @@ type Runtime struct {
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
 	control  *session.Control
+	binder   *mux.Binder
+	policy   *session.PathPolicy
+
+	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
+	// this node opened as a carrier client are counted.
+	pathsMu   sync.Mutex
+	pathPairs map[pathKey]session.Pair
 
 	identity Identity
 	vis      cards.Visibility
@@ -168,6 +185,9 @@ func New(cfg Config) (*Runtime, error) {
 		carrierClock: carrierClock,
 		services:     service.NewRegistry(),
 		handlers:     map[[2]uint64]Handler{},
+		binder:       mux.NewBinder(),
+		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
+		pathPairs:    map[pathKey]session.Pair{},
 	}
 	r.dgrams = newDatagramBroker(r)
 
@@ -464,7 +484,7 @@ func (r *Runtime) mainLocal(ctx context.Context) (session.LocalIdentity, error) 
 		Card:     peer.Envelope,
 		OwnCards: own,
 		Suites:   suites,
-		Features: append([]uint32(nil), r.cfg.Features...),
+		Features: session.FeaturesFor(r.cfg.Features, r.cfg.Profile.LowPower),
 		// The handshake adds its own GREASE service (D18), so the registry offer must not add a
 		// second one: two random GREASE IDs occasionally collide and break "strictly ascending".
 		Services: handshakeServices(r.services.Offer(false)),

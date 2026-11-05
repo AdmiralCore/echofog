@@ -18,10 +18,15 @@ func countPadding(b []byte) int {
 		if err != nil {
 			return n
 		}
-		if f.Type == frame.TypePadding {
-			n++
-		}
 		b = b[used:]
+		switch f.Type {
+		case frame.TypePadding:
+			n++
+		case frame.TypeMuxStream:
+			if m, merr := frame.ParseMuxStream(f.Payload); merr == nil {
+				n += countPadding(m.Data)
+			}
+		}
 	}
 	return n
 }

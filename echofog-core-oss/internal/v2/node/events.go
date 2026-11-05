@@ -15,6 +15,9 @@ const (
 	EventNoCover EventKind = "node.no-cover"
 	// EventClockWarning is the D36 >60 s clock warning.
 	EventClockWarning EventKind = "node.clock-warning"
+	// EventNetworkChanged reports that the local network changed and live sessions moved to new
+	// paths (wire.md §8.2–§8.3). The message never carries addresses.
+	EventNetworkChanged EventKind = "node.network-changed"
 )
 
 // Event is one runtime event. Message is operator-facing text; it never contains keys, addresses

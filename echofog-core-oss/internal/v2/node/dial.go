@@ -149,24 +149,46 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		return c, err
 	}
 
-	opts := make([]session.DialOption, 0, len(extra)+5)
+	opts := make([]session.DialOption, 0, len(extra)+8)
+	onEstablished, onPathFailed := r.pathHooks()
 	opts = append(opts,
 		session.WithClock(r.carrierClock),
 		session.WithOffset(r.clock.Offset()),
 		session.WithBindings(r.bindings),
 		session.WithPolicy(r.policyFunc),
 		session.WithCarrierFunc(carrierFn),
+		session.WithPathKind(opt.PathKind),
+		session.WithLowPower(r.cfg.Profile.LowPower),
+		session.WithIdlePadding(r.cfg.ShapeProfile, nil),
+		session.WithOnEstablished(onEstablished),
+		session.WithOnPathFailed(onPathFailed),
 	)
 	opts = append(opts, extra...)
 	if opt.ExpectedDeviceID != nil {
 		opts = append(opts, session.WithExpectedDeviceID([32]byte(*opt.ExpectedDeviceID)))
 	}
 
+	// Count this client carrier against the (address, SNI) pair before the handshake (H11). A
+	// handshake timeout or reset is the penalty signal of H15.
+	pair := pairOfAttempt(attempt)
+	if err := r.policy.Acquire(pair); err != nil {
+		if first != nil {
+			_ = first.Close()
+		}
+		return nil, err
+	}
 	est, err := session.Dial(ctx, card, attempt, local, opts...)
 	if err != nil {
 		r.maybeClockCheck()
+		if penalizeDial(err) {
+			r.policy.Penalize(pair)
+		} else {
+			r.policy.Release(pair)
+		}
 		return nil, err
 	}
+	r.policy.Succeeded(pair)
+	r.recordPair(est.SID, 0, pair)
 	// The initiator may send on a new stream the moment message 3 is written, while the responder
 	// is still finishing the handshake and has not attached its Guard to the session yet. A PING
 	// on the control stream is answered only after that attach, so it is a deterministic

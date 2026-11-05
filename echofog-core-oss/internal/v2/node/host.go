@@ -76,6 +76,9 @@ type DialOpt struct {
 	Local *session.LocalIdentity
 	// ExpectedDeviceID sets the rid binding of an XX handshake without a card.
 	ExpectedDeviceID *DeviceID
+	// PathKind is the kind of the carrier created by this call: direct (default) or relay
+	// (wire.md §8). Relay suites are T6.1; tests and relay circuits pass PathRelay here.
+	PathKind mux.PathKind
 }
 
 // Host is what services see (02-architecture §3.1). The final shape is fixed by T3.7a: the DHT,

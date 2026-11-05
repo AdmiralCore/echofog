@@ -98,6 +98,22 @@ type Config struct {
 	// OnControl receives control-stream frames for other layers: OBSERVED_ADDR, CARD_UPDATE,
 	// PUNCH_OFFER, PUNCH_SYNC (each only when its feature was negotiated).
 	OnControl func(pathID uint64, f frame.Frame)
+	// IdlePad draws the gap until the next PADDING-only frame and its payload size when the
+	// idle-padding feature was negotiated (wire.md §6.4, §9). A nil function, a false result or
+	// a non-positive gap disables idle padding.
+	IdlePad func() (time.Duration, int, bool)
+	// OnPathFailed reports a path that just died. It is called without session locks held and
+	// must not block; the path policy uses it to release a carrier slot or start a backoff.
+	OnPathFailed func(PathFailure)
+}
+
+// PathFailure describes a path that died (wire.md §8.3): a broken carrier, an abandoned path or
+// a failed liveness check.
+type PathFailure struct {
+	SID    [16]byte
+	PathID uint64
+	Kind   PathKind
+	Cause  error
 }
 
 // Datagram is a received datagram (wire.md §6.5).
@@ -201,9 +217,13 @@ type Session struct {
 	goAwayAt     time.Time
 	goingAway    bool
 	noPathSince  time.Time
-	closed       bool
-	closeErr     error
-	stats        SessionStats
+	// idle padding of the active path (wire.md §6.4, §9): the gap drawn from the shape policy
+	// and the instant the next padding-only frame is due.
+	idlePadGap time.Duration
+	idlePadAt  time.Time
+	closed     bool
+	closeErr   error
+	stats      SessionStats
 
 	accept  chan *Stream
 	dgrams  chan Datagram
@@ -339,7 +359,7 @@ func (s *Session) Paths() (ids []uint64, active uint64, ok bool) {
 // on stream 0 before anything else (PATH_BIND_OK), after the guard hands streams to the session.
 func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStream, pre []byte) (*path, error) {
 	p := &path{
-		id: id, kind: kind, carrier: g.c, guard: g, sealed: g.c.Sealed(),
+		id: id, kind: kind, carrier: g.c, guard: g, sealed: g.c.Sealed() || kind == PathRelay,
 		streams: map[*Stream]struct{}{}, pings: map[[8]byte]*pingWait{},
 	}
 	// Sealed mode: a byte-stream carrier seals the whole connection as one pipe; a carrier with
@@ -635,7 +655,7 @@ func (s *Session) handleControl(p *path, f frame.Frame) bool {
 		q := s.paths[pa.PathID]
 		s.mu.Unlock()
 		if q != nil {
-			s.failPath(q, fmt.Errorf("%w: abandoned by peer (code %d)", ErrPathFailed, pa.Code))
+			s.failPath(q, fmt.Errorf("%w (peer code %d)", ErrPathAbandoned, pa.Code))
 			if q == p {
 				return false
 			}
@@ -900,7 +920,7 @@ func (s *Session) AbandonPath(id, code uint64) error {
 		return errors.New("mux: cannot abandon the only path")
 	}
 	other.ctrl.WriteFrame(frame.TypePathAbandon, 0, frame.PathAbandon{PathID: id, Code: code}.Append(nil))
-	s.failPath(p, fmt.Errorf("%w: abandoned", ErrPathFailed))
+	s.failPath(p, ErrPathAbandoned)
 	return nil
 }
 
@@ -954,6 +974,9 @@ func (s *Session) failPath(p *path, cause error) {
 		st.failPath()
 	}
 	p.carrier.Close()
+	if h := s.cfg.OnPathFailed; h != nil {
+		h(PathFailure{SID: s.sid, PathID: p.id, Kind: p.kind, Cause: cause})
+	}
 }
 
 // ---- datagrams
@@ -1137,7 +1160,55 @@ func (s *Session) tick(now time.Time) {
 		}
 	}
 	_ = active
+	if send, p, n := s.idlePaddingDue(now); send {
+		_ = p.ctrl.WritePadding(n)
+	}
 	s.maybeDrained()
+}
+
+// idlePaddingDue decides whether the active path owes a PADDING-only frame (wire.md §6.4, §9).
+// The gap comes from the caller's shape policy; padding restarts after any traffic on the path,
+// so only an idle path is padded. It is called from the tick loop.
+func (s *Session) idlePaddingDue(now time.Time) (bool, *path, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.goingAway || s.cfg.IdlePad == nil ||
+		!s.features[frame.FeatureIdlePadding] || s.active == nil {
+		return false, nil, 0
+	}
+	p := s.active
+	last := time.Unix(0, p.lastSend.Load())
+	if r := p.lastReceive(); r.After(last) {
+		last = r
+	}
+	if s.idlePadAt.IsZero() {
+		if d, _, ok := s.cfg.IdlePad(); ok && d > 0 {
+			s.idlePadGap = d
+			s.idlePadAt = now.Add(d)
+		}
+		return false, nil, 0
+	}
+	if now.Before(s.idlePadAt) {
+		return false, nil, 0
+	}
+	if now.Sub(last) < s.idlePadGap {
+		// Traffic happened inside the gap: the path is not idle, try again later.
+		s.idlePadAt = now.Add(s.idlePadGap)
+		return false, nil, 0
+	}
+	d, n, ok := s.cfg.IdlePad()
+	if !ok || d <= 0 {
+		s.idlePadGap, s.idlePadAt = 0, time.Time{}
+		return false, nil, 0
+	}
+	s.idlePadGap, s.idlePadAt = d, now.Add(d)
+	if n < 0 {
+		n = 0
+	}
+	if n > 16384 {
+		n = 16384
+	}
+	return true, p, n
 }
 
 // closeCarrier lets queued frames (a final GOAWAY) leave before the carrier closes, where the
