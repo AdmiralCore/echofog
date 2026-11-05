@@ -190,7 +190,7 @@ func TestRelayedSessionPunchesToDirectPath(t *testing.T) {
 		return ok && len(ids) >= 2
 	})
 	ids, active, _ := w.a.rt.Paths(w.b.id.DeviceID)
-	if len(ids) < 2 || active == ids[0] {
+	if len(ids) < 2 || active == 0 { // path 0 is the relay path of the first handshake
 		t.Fatalf("paths %v active %d: the session did not move to the direct path", ids, active)
 	}
 	w.nat.mu.Lock()
