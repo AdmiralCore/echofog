@@ -58,10 +58,11 @@ relay carried`, with the peer then showing as a direct connection, means the pun
 
 **v2-basic / v2-censor / v2-carrier** are the launchpad v2 entry point: one scenario, phases
 `censor`/`net`/`services`, one `testbed/out/<time>-<scenario>/` with `report.json` (schema 2),
-`flows.csv` and `summary.txt`, and a `testbed/results/` copy for `compare`. `v2-censor` captures
-the b network (only with `-pcap`, under a budget that is 2 GB by default and maximum), runs the
-D1–D4/D10 detectors, and drives `testbed/v2carrier` — a separate process — plus a browser control.
-A green analysis deletes the pcap; a red one keeps it. See `LAUNCHPAD-V2.md`.
+`flows.csv` and `summary.txt`, and a `testbed/results/` copy for `compare`. `v2-censor` reads the
+b network as a stream (no file unless `-pcap`), under a byte budget that is 2 GB by default and
+maximum and is enforced while writing; it runs the D1–D4/D10 detectors and drives
+`testbed/v2carrier` — a separate process — plus a browser control. A green analysis deletes the
+pcap; a red one keeps it. See `LAUNCHPAD-V2.md`.
 
 ```bash
 go run ./testbed/runner -scenario v2-basic
