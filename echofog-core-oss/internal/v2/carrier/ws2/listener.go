@@ -51,7 +51,8 @@ type Config struct {
 	// Site answers every request that is not an upgrade on Path; nil is a bare 404 page.
 	Site http.Handler
 	// ClientIPHeader names the header a CDN puts the client's address in (Cloudflare:
-	// CF-Connecting-IP); per-address limits count that address. Set it only when the node is
+	// CF-Connecting-IP); per-address limits count that address. Only a header that holds one
+	// address is used (not a list such as X-Forwarded-For). Set it only when the node is
 	// reachable through the CDN alone. Empty uses the connection's own source address.
 	ClientIPHeader string
 	// MaxConns bounds the open WebSockets; zero is DefaultMaxConns.
@@ -156,8 +157,8 @@ func (l *Listener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (l *Listener) clientAddr(r *http.Request) net.Addr {
 	var ip netip.Addr
 	if h := l.cfg.ClientIPHeader; h != "" {
-		v, _, _ := strings.Cut(r.Header.Get(h), ",") // X-Forwarded-For: client, proxy1, ...
-		if a, err := netip.ParseAddr(strings.TrimSpace(v)); err == nil {
+		// One address only: a list (X-Forwarded-For) has a left part that the client writes.
+		if a, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get(h))); err == nil {
 			ip = a
 		}
 	}

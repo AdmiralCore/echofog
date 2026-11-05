@@ -20,6 +20,7 @@ type conn struct {
 
 	rmu sync.Mutex
 	r   io.Reader
+	got int // bytes of the current message read so far
 
 	wmu sync.Mutex
 
@@ -29,12 +30,18 @@ type conn struct {
 // newConn wraps ws. remote, when not nil, replaces RemoteAddr (the client behind a CDN); onEnd,
 // when not nil, runs once when the connection is closed.
 func newConn(ws *websocket.Conn, remote net.Addr, onEnd func()) *conn {
-	ws.SetReadLimit(MaxMessage)
 	return &conn{ws: ws, remote: remote, onEnd: onEnd}
 }
 
-var errNotBinary = errors.New("ws2: a message that is not binary")
+var (
+	errNotBinary = errors.New("ws2: a message that is not binary")
+	errTooBig    = errors.New("ws2: a message above 16 KiB")
+)
 
+// Read returns the bytes of binary messages. A violation (a text message, a message above
+// MaxMessage) is an error and nothing else: this layer writes no close frame, so that a stranger's
+// connection ends only through the listener's one refusal (wire.md §4.4, AD20); an admitted
+// connection simply closes.
 func (c *conn) Read(p []byte) (int, error) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
@@ -45,13 +52,15 @@ func (c *conn) Read(p []byte) (int, error) {
 				return 0, err
 			}
 			if mt != websocket.BinaryMessage {
-				_ = c.ws.WriteControl(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseUnsupportedData, ""), time.Now().Add(time.Second))
 				return 0, errNotBinary
 			}
-			c.r = r
+			c.r, c.got = r, 0
 		}
 		n, err := c.r.Read(p)
+		c.got += n
+		if c.got > MaxMessage {
+			return 0, errTooBig
+		}
 		if errors.Is(err, io.EOF) {
 			c.r = nil
 			if n > 0 {
