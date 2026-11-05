@@ -5,7 +5,10 @@
 //
 // Two suites sit on this package:
 //
-//   - noise3 (wire.md §2, §5.1): the inner TLS is X25519MLKEM768 only. A classical group is a
+//   - noise3 (wire.md §2, §5.1): the inner TLS is X25519MLKEM768 only. The server certificate
+//     is self-signed ECDSA P-256 with an empty subject and a random serial by default, because
+//     the pinned Chrome ClientHello does not offer Ed25519; a cover profile that does offer
+//     Ed25519 gets an Ed25519 certificate (Noise3TLSConfigForProfile). A classical group is a
 //     protocol failure, so the noise3 dialer and listener use WrapNoise3.
 //   - reality2-quic (wire.md §3, §5.1): the inner TLS mirrors the cover's group. With a
 //     classical cover group the path runs in sealed mode; Wrap reports that through Sealed.

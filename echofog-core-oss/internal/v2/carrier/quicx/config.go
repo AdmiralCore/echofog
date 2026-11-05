@@ -1,7 +1,10 @@
 package quicx
 
 import (
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -31,15 +34,41 @@ const (
 )
 
 // Noise3TLSConfig returns the inner TLS configs of a noise3 QUIC path (wire.md §5.1): a
-// self-signed Ed25519 certificate with an empty subject and a random serial on the server, ALPN
-// h3, and X25519MLKEM768 as the only key exchange group on both sides. Certificates are not
-// verified: authentication is the Noise handshake, bound to this TLS session by
+// self-signed ECDSA P-256 certificate with an empty subject and a random serial on the server,
+// ALPN h3, and X25519MLKEM768 as the only key exchange group on both sides. Certificates are
+// not verified: authentication is the Noise handshake, bound to this TLS session by
 // ChannelBinding.
+//
+// ECDSA P-256 is the default because the pinned Chrome ClientHello (fork patch #1) does not
+// offer Ed25519, and a certificate whose key type the client cannot verify fails the handshake.
+// A cover profile that does offer Ed25519 is handled by Noise3TLSConfigForProfile.
 func Noise3TLSConfig() (client, server *tls.Config, err error) {
-	cert, err := selfSignedEd25519()
+	return noise3TLSConfig(false)
+}
+
+// Noise3TLSConfigForProfile is Noise3TLSConfig for a cover profile whose signature_algorithms
+// are schemes. An Ed25519 certificate is generated and preferred only when schemes offers
+// tls.Ed25519; otherwise the default ECDSA P-256 certificate is used. In both cases the server
+// serves only a certificate whose key type the ClientHello actually offered, so a
+// Chrome-parroting client without Ed25519 still gets ECDSA.
+func Noise3TLSConfigForProfile(schemes []tls.SignatureScheme) (client, server *tls.Config, err error) {
+	return noise3TLSConfig(hasSignatureScheme(schemes, tls.Ed25519))
+}
+
+func noise3TLSConfig(preferEd25519 bool) (client, server *tls.Config, err error) {
+	ecdsaCert, err := selfSignedECDSA()
 	if err != nil {
 		return nil, nil, err
 	}
+	preferred, fallback := ecdsaCert, ecdsaCert
+	if preferEd25519 {
+		ed25519Cert, err := selfSignedEd25519()
+		if err != nil {
+			return nil, nil, err
+		}
+		preferred, fallback = ed25519Cert, ecdsaCert
+	}
+
 	client = &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		CurvePreferences:   []tls.CurveID{tls.X25519MLKEM768},
@@ -50,9 +79,35 @@ func Noise3TLSConfig() (client, server *tls.Config, err error) {
 		MinVersion:       tls.VersionTLS13,
 		CurvePreferences: []tls.CurveID{tls.X25519MLKEM768},
 		NextProtos:       []string{alpnH3},
-		Certificates:     []tls.Certificate{cert},
+		// Certificates is deliberately empty: crypto/tls calls GetCertificate only when the
+		// client sends SNI or Certificates is empty, and noise3 sends no SNI.
+		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			for _, cert := range []*tls.Certificate{&preferred, &fallback} {
+				if hasSignatureScheme(chi.SignatureSchemes, certificateScheme(cert)) {
+					return cert, nil
+				}
+			}
+			return nil, fmt.Errorf("quicx: no noise3 certificate for the client's signature algorithms")
+		},
 	}
 	return client, server, nil
+}
+
+// certificateScheme is the TLS signature scheme a noise3 certificate can sign with.
+func certificateScheme(c *tls.Certificate) tls.SignatureScheme {
+	if _, ok := c.PrivateKey.(ed25519.PrivateKey); ok {
+		return tls.Ed25519
+	}
+	return tls.ECDSAWithP256AndSHA256
+}
+
+func hasSignatureScheme(schemes []tls.SignatureScheme, want tls.SignatureScheme) bool {
+	for _, scheme := range schemes {
+		if scheme == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Reality2TLSConfig returns the inner TLS configs of a reality2-quic path (wire.md §3.4,
@@ -128,13 +183,29 @@ func Reality2QUICConfig() *quic.Config {
 	}
 }
 
-// selfSignedEd25519 builds the noise3 inner certificate: Ed25519, an empty subject, and a
-// random serial (wire.md §5.1).
+// selfSignedECDSA builds the default noise3 inner certificate: ECDSA P-256, an empty subject,
+// and a random serial (wire.md §5.1).
+func selfSignedECDSA() (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("quicx: generating ECDSA P-256 key: %w", err)
+	}
+	return selfSigned(&key.PublicKey, key)
+}
+
+// selfSignedEd25519 builds the noise3 certificate for a profile that offers Ed25519: Ed25519,
+// an empty subject, and a random serial (wire.md §5.1).
 func selfSignedEd25519() (tls.Certificate, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("quicx: generating Ed25519 key: %w", err)
 	}
+	return selfSigned(pub, priv)
+}
+
+// selfSigned creates a self-signed certificate with an empty subject and a random 128-bit
+// serial (wire.md §5.1). Clients do not verify it.
+func selfSigned(pub crypto.PublicKey, priv crypto.Signer) (tls.Certificate, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("quicx: generating serial: %w", err)
