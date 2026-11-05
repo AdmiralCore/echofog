@@ -60,6 +60,8 @@ type Session struct {
 	Unverified bool
 	// ResponderCardSent reports whether P2 carried the responder's card.
 	ResponderCardSent bool
+	// Access is the pass that admitted a hidden-node session (responder side only).
+	Access *AccessInfo
 }
 
 func newSession(hs *noise.HandshakeState, suite uint16, initiator bool) (*Session, error) {

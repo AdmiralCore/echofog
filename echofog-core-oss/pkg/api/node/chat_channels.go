@@ -365,11 +365,7 @@ func (n *v1GroupBackend) ChatGroupPhoto(ref ChatRef, photoBase64 string) error {
 
 // StartRoomCall joins a group's voice room: the call going on in it, or a new one (which does not
 // ring anybody).
-func (n *NodeApi) StartRoomCall(groupID, room string) (GroupCall, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupCall{}, ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) StartRoomCall(groupID, room string) (GroupCall, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupCall{}, err
@@ -389,11 +385,7 @@ func (n *NodeApi) StartRoomCall(groupID, room string) (GroupCall, error) {
 }
 
 // KeepRoomCallAlive tells the members that the call in a voice room is still going.
-func (n *NodeApi) KeepRoomCallAlive(groupID, room, callID, coordinator string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) KeepRoomCallAlive(groupID, room, callID, coordinator string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -402,11 +394,7 @@ func (n *NodeApi) KeepRoomCallAlive(groupID, room, callID, coordinator string) e
 }
 
 // LeaveRoomCall says we left a voice room whose call others stay in.
-func (n *NodeApi) LeaveRoomCall(groupID, room, callID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) LeaveRoomCall(groupID, room, callID string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -416,11 +404,7 @@ func (n *NodeApi) LeaveRoomCall(groupID, room, callID string) error {
 }
 
 // EndRoomCall ends the call in a voice room (the last one out does).
-func (n *NodeApi) EndRoomCall(groupID, room, callID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) EndRoomCall(groupID, room, callID string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err

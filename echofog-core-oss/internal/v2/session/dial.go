@@ -29,6 +29,7 @@ type dialConfig struct {
 	control    *Control
 	timers     mux.Timers
 	policy     PolicyFunc
+	lowPower   bool
 	dialConfig carrier.DialConfig
 }
 
@@ -92,6 +93,12 @@ func WithTimers(t mux.Timers) DialOption {
 // service.Registry.Policy so service-local framing knows its per-type limits (T3.7a).
 func WithPolicy(p PolicyFunc) DialOption {
 	return func(o *dialConfig) { o.policy = p }
+}
+
+// WithLowPower applies the platform profile's low_power flag: 40–55 s keepalive and no standby
+// paths (platforms.md §2).
+func WithLowPower(on bool) DialOption {
+	return func(o *dialConfig) { o.lowPower = on }
 }
 
 // WithDialConfig passes carrier dial options (registry, network memory, clock) through.
@@ -275,7 +282,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 			if err := writeFrame(raw, clk, frame.TypeHsMsg, msg3); err != nil {
 				return nil, nil, err
 			}
-			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr), o.control, o.timers, o.policy)
+			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr), o.control, o.timers, o.policy, o.lowPower)
 			return est, nil, err
 		default:
 			return nil, nil, wrapSilent(fmt.Errorf("unexpected %s before the handshake completed", frame.TypeName(f.Type)))

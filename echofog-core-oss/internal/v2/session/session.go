@@ -89,6 +89,9 @@ type Established struct {
 	Observed      []byte
 	EarlyStatus   uint32
 	EarlyResponse []byte
+	// Access names the pass that admitted a hidden-node session (responder side only). The runtime
+	// redeems an invitation or renews a personal pass with it (T3.6).
+	Access *handshake.AccessInfo
 }
 
 // Errors a caller distinguishes locally. On the wire the handshake follows handshake.md §8:
@@ -275,7 +278,7 @@ type PolicyFunc func(choices []handshake.ServiceChoice) mux.StreamPolicy
 
 // finish hands the handshake result to the mux. mux.NewSession makes the single sealing switch
 // (wire.md §8.5) when the carrier reports Sealed.
-func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc) (*Established, error) {
+func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc, lowPower bool) (*Established, error) {
 	// The handshake read deadline belongs to the handshake, not to the session: its control
 	// stream must wait for peer traffic indefinitely (the mux applies its own timers).
 	_ = ctrl.SetReadDeadline(time.Time{})
@@ -289,6 +292,7 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 		Features: muxFeatures(hs.Features),
 		Policy:   pol,
 		Timers:   timers,
+		LowPower: lowPower,
 	}
 	var peerID [32]byte
 	if hs.Peer != nil {
@@ -320,6 +324,7 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 		Observed:      append([]byte(nil), hs.Observed...),
 		EarlyStatus:   hs.EarlyStatus,
 		EarlyResponse: append([]byte(nil), hs.EarlyResponse...),
+		Access:        hs.Access,
 	}, nil
 }
 
