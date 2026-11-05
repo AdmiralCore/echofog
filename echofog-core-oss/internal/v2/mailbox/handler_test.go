@@ -52,7 +52,7 @@ func newNode(t *testing.T, profile node.Profile, listeners []carrier.Listener) *
 		Role:       objects.RoleUser,
 		Listeners:  []cards.Listener{{Suite: objects.SuiteNoise3, Host: "127.0.0.1", Port: 4430, Mask: tw.Device.Masking().Public()}},
 		Devices:    devices,
-		Visibility: cards.Hidden,
+		Visibility: cards.Visible,
 	})
 	if err != nil {
 		tw.Destroy()
@@ -194,12 +194,24 @@ func authSigner(t *testing.T) *keys.Signer {
 	return s
 }
 
+// registerClient makes a test node offer mailbox/2 as a client. T7.4 adds the real client; here a
+// handler is required by the runtime API and the test node has no listener, so it never serves.
+func registerClient(t *testing.T, n *testNode) {
+	t.Helper()
+	spec, ok := service.Builtin(service.Mailbox)
+	if !ok {
+		t.Fatal("mailbox is not a built-in service")
+	}
+	n.rt.Register(spec, func(_ context.Context, _ node.Peer, st *mux.Stream) { _ = st.Close() })
+}
+
 // ---- end-to-end
 
 func TestMailboxServiceOverTwoRuntimes(t *testing.T) {
 	q := newCarrierQueue()
 	m := newNode(t, node.Profile{Platform: "server", Roles: []string{"mailbox"}}, []carrier.Listener{q})
 	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	registerClient(t, c)
 	m.start(t)
 	c.start(t)
 
@@ -268,6 +280,7 @@ func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 	q := newCarrierQueue()
 	m := newNode(t, node.Profile{Platform: "test"}, []carrier.Listener{q})
 	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	registerClient(t, c)
 	m.start(t)
 	c.start(t)
 
@@ -279,7 +292,7 @@ func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 		Card: m.peerCard(t), Carrier: pair.Client,
 	}); err == nil {
 		_ = st.Close()
-		t.Fatal("a node without the mailbox role opened mailbox/2")
+		t.Fatal("a node without the mailbox role offered mailbox/2")
 	}
 }
 
@@ -287,6 +300,7 @@ func TestLongPollDoesNotBlockTheStream(t *testing.T) {
 	q := newCarrierQueue()
 	m := newNode(t, node.Profile{Platform: "server", Roles: []string{"mailbox"}}, []carrier.Listener{q})
 	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	registerClient(t, c)
 	m.start(t)
 	c.start(t)
 
@@ -336,6 +350,7 @@ func TestFetchAuthFromAnotherStreamIsRefused(t *testing.T) {
 	q := newCarrierQueue()
 	m := newNode(t, node.Profile{Platform: "server", Roles: []string{"mailbox"}}, []carrier.Listener{q})
 	c := newNode(t, node.Profile{Platform: "test"}, nil)
+	registerClient(t, c)
 	m.start(t)
 	c.start(t)
 

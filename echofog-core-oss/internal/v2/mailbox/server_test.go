@@ -1,4 +1,4 @@
-﻿package mailbox
+package mailbox
 
 import (
 	"bytes"
@@ -362,20 +362,28 @@ func TestPublicQueueFullDoesNotBlockPrivate(t *testing.T) {
 	for _, q := range [][]byte{pub, priv} {
 		if _, err := f.srv.CreateQueue(p, QueueCreate{
 			Req: 1, Queue: q, AuthKey: f.authKey(), Public: bytes.Equal(q, pub),
+			PowBits: 1,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	blob := []byte("x")
-	for i := 0; i < 2; i++ {
-		if st, _ := depositStatus(t, f.srv, p, pub, blob); st != StatusStored {
-			t.Fatalf("public deposit %d: status %d", i, st)
+	var good uint64
+	for good = 0; ; good++ {
+		if ValidPow(pub, blob, good, 1) {
+			break
 		}
 	}
-	if st, _ := depositStatus(t, f.srv, p, pub, blob); st != StatusFull {
-		t.Fatalf("full public queue: status %d", st)
+	for i := 0; i < 2; i++ {
+		st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: pub, Blob: blob, Pow: good})
+		if err != nil || st != StatusStored {
+			t.Fatalf("public deposit %d: status %d err %v", i, st, err)
+		}
 	}
-	if st, _ := depositStatus(t, f.srv, p, priv, blob); st != StatusStored {
+	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: pub, Blob: blob, Pow: good}); err != nil || st != StatusFull {
+		t.Fatalf("full public queue: status %d err %v", st, err)
+	}
+	if st := depositStatus(t, f.srv, p, priv, blob); st != StatusStored {
 		t.Fatalf("private queue after a public flood: status %d", st)
 	}
 }
@@ -468,11 +476,24 @@ func TestPerNodeQuotaCountsTheForwarder(t *testing.T) {
 func TestMeteredServerStoresNothing(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.Metered = true })
 	p := f.peer(1)
-	if st, _ := f.deposit(t, p, []byte("x"), 0); st != StatusRefused {
-		t.Fatalf("a metered server stored a deposit: %d", st)
-	}
 	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: f.queue, AuthKey: f.authKey()}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a metered server created a queue: %v", err)
+	}
+
+	// A FORWARD is the heavy path; it is refused even if the queue already existed from before
+	// the profile became metered.
+	eph, err := identity.NewKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(eph.Destroy)
+	body := Deposit{Req: 1, Queue: f.queue, Blob: []byte("x")}.Append(nil)
+	sealed, err := SealForward(privateOf(t, eph), f.hs.Public().Key(), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.srv.Forward(context.Background(), p, Forward{Req: 1, Relay: f.self[:], Sealed: sealed}); st != StatusRefused {
+		t.Fatalf("a metered server forwarded a deposit: %d", st)
 	}
 }
 
@@ -566,6 +587,35 @@ func TestFetchLongPollWakesOnDeposit(t *testing.T) {
 	}
 }
 
+func TestFetchPageFitsTheFrameMaximum(t *testing.T) {
+	f := newFixture(t, nil)
+	p := f.peer(1)
+	f.create(t, p, 0, false, 0)
+	blob := bytes.Repeat([]byte{0xab}, 32768)
+	for i := 0; i < 40; i++ { // 40 * 32 KiB = 1.25 MiB
+		if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob}); err != nil || st != StatusStored {
+			t.Fatalf("deposit %d: %d %v", i, st, err)
+		}
+	}
+	items, more, err := f.srv.Fetch(context.Background(), p, Fetch{
+		Req: 2, Queue: f.queue, Max: 100,
+		Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !more {
+		t.Fatal("a 1.25 MiB queue was returned in one page without more")
+	}
+	enc := Items{Req: 2, Items: items, More: more}.Append(nil)
+	if len(enc) > MaxItemsBytes {
+		t.Fatalf("ITEMS payload is %d bytes, maximum is %d", len(enc), MaxItemsBytes)
+	}
+	if len(items) == 0 {
+		t.Fatal("a non-empty queue returned an empty page")
+	}
+}
+
 func TestFetchPaging(t *testing.T) {
 	f := newFixture(t, nil)
 	p := f.peer(1)
@@ -615,4 +665,3 @@ func privateOf(t *testing.T, kp *identity.KeyPair) []byte {
 	}
 	return out
 }
-

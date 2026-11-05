@@ -1,11 +1,10 @@
-﻿package mailbox
+package mailbox
 
 import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -69,6 +68,15 @@ func vhex(t testing.TB, m map[string]any, key string) []byte {
 	return b
 }
 
+// patternQueue is the incrementing byte pattern the vector generator uses for ids.
+func patternQueue(start byte) []byte {
+	q := make([]byte, QueueSize)
+	for i := range q {
+		q[i] = start + byte(i)
+	}
+	return q
+}
+
 func TestVectorDepositFrame(t *testing.T) {
 	v := kdfVector(t)
 	raw := vhex(t, v, "deposit")
@@ -79,7 +87,7 @@ func TestVectorDepositFrame(t *testing.T) {
 	if d.Req != 9 {
 		t.Fatalf("req %d, want 9", d.Req)
 	}
-	if !bytes.Equal(d.Queue, bytes.Repeat([]byte{0x90}, QueueSize)) {
+	if !bytes.Equal(d.Queue, patternQueue(0x90)) {
 		t.Fatalf("queue %x", d.Queue)
 	}
 	seal := kdfAll(t)["chat2_seal"].(map[string]any)
@@ -147,4 +155,3 @@ func TestVectorProofOfWork(t *testing.T) {
 		t.Fatalf("the vector proof does not satisfy %d bits", bits)
 	}
 }
-
