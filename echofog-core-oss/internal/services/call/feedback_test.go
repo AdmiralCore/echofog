@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
@@ -170,7 +170,7 @@ func TestRoom_SoundSurvivesScatteredLoss(t *testing.T) {
 
 	var n atomic.Uint64
 	m.mu.Lock()
-	m.drop = func(tp net_types.MessageType, payload []byte) bool {
+	m.drop = func(tp transport.Kind, payload []byte) bool {
 		p, err := media.Decode(payload)
 		return err == nil && (p.Kind == media.FrameAudio || p.Kind == media.FrameStreamAudio) && n.Add(1)%10 == 0
 	}

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/videolayer"
@@ -438,7 +438,7 @@ func (d *MediaDispatcher) ProcessIncomingAudio(rawBytes []byte, fromPeer types.P
 	for _, n := range neighbors {
 		if n != fromPeer && n != p.Broadcaster {
 			d.relayed.Add(1)
-			d.sendAudio(n, src, net_types.TypeCallMediaAudio, raws, now)
+			d.sendAudio(n, src, transport.MediaAudio, raws, now)
 		}
 	}
 
@@ -511,7 +511,7 @@ func (d *MediaDispatcher) processVideo(rawBytes []byte, fromPeer types.PeerID, r
 				if p.Kind == FrameStreamAudio {
 					// sound rides the audio lane: a gap in it is heard, a late video frame is not
 					d.relayed.Add(uint64(len(raws)))
-					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, net_types.TypeCallMediaVideo, raws, now)
+					d.sendAudio(child, sourceKey{p.Kind, p.Broadcaster, p.StreamID}, transport.MediaVideo, raws, now)
 				} else {
 					d.sendVideo(child, p.StreamID, lay, raws)
 				}
@@ -573,7 +573,7 @@ func (d *MediaDispatcher) sendVideo(child types.PeerID, streamID string, lay uni
 		if hop != 0 {
 			raw = withHopCap(raw, hop-1)
 		}
-		d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, raw)
+		d.outbox.Send(child, ClassVideo, transport.MediaVideo, raw)
 	}
 }
 
@@ -590,7 +590,7 @@ func (d *MediaDispatcher) processParity(p *MediaPacket, rawBytes []byte, fromPee
 		for _, child := range d.streamEngine.GetDownstream(p.StreamID, d.selfID) {
 			if child != fromPeer && child != p.Broadcaster && d.parityFor(child, p.StreamID, class) {
 				d.relayed.Add(1)
-				d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, rawBytes)
+				d.outbox.Send(child, ClassVideo, transport.MediaVideo, rawBytes)
 				forwarded = true
 			}
 		}
@@ -987,7 +987,7 @@ func (d *MediaDispatcher) BroadcastLocalAudio(opusBytes []byte) error {
 	}
 	src, now := sourceKey{FrameAudio, d.selfID, voiceStreamID}, time.Now()
 	for _, n := range d.VoiceNeighbors() {
-		d.sendAudio(n, src, net_types.TypeCallMediaAudio, frags, now)
+		d.sendAudio(n, src, transport.MediaAudio, frags, now)
 	}
 	return nil
 }
@@ -1089,7 +1089,7 @@ func (d *MediaDispatcher) sendParity(subs []types.PeerID, par fecParityOut, now 
 	class := parityClass(pkt)
 	for _, sub := range subs {
 		if d.parityFor(sub, par.streamID, class) {
-			d.outbox.Send(sub, ClassVideo, net_types.TypeCallMediaVideo, raw)
+			d.outbox.Send(sub, ClassVideo, transport.MediaVideo, raw)
 		}
 	}
 }
@@ -1154,7 +1154,7 @@ func (d *MediaDispatcher) BroadcastLocalStreamAudio(streamID string, opusBytes [
 	subs := d.streamEngine.GetDownstream(streamID, d.selfID)
 	src, now := sourceKey{FrameStreamAudio, d.selfID, streamID}, time.Now()
 	for _, sub := range subs {
-		d.sendAudio(sub, src, net_types.TypeCallMediaVideo, frags, now)
+		d.sendAudio(sub, src, transport.MediaVideo, frags, now)
 	}
 	if len(subs) > 0 {
 		d.markForwarded(streamID, now)
@@ -1204,7 +1204,7 @@ func (d *MediaDispatcher) sendPulses(now time.Time) {
 		}
 		pulse := (&MediaPacket{Kind: FramePulse, Broadcaster: d.selfID, StreamID: streamID, FragCount: 1}).Encode()
 		for _, c := range children {
-			d.outbox.Send(c, ClassAudio, net_types.TypeCallMediaVideo, pulse) // tiny: rides the audio lane
+			d.outbox.Send(c, ClassAudio, transport.MediaVideo, pulse) // tiny: rides the audio lane
 		}
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -36,7 +36,7 @@ type audioRepeat struct {
 }
 
 // sendAudio sends a unit of sound to a peer, then the unit before it again.
-func (d *MediaDispatcher) sendAudio(to types.PeerID, src sourceKey, t net_types.MessageType, frags [][]byte, now time.Time) {
+func (d *MediaDispatcher) sendAudio(to types.PeerID, src sourceKey, t transport.Kind, frags [][]byte, now time.Time) {
 	for _, f := range frags {
 		d.outbox.Send(to, ClassAudio, t, f)
 	}

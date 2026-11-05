@@ -7,11 +7,11 @@ import (
 	"crypto/rand"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -153,7 +153,7 @@ func (m *CallManager) LeaveRoom() error {
 			for _, t := range targets {
 				b := m.sealSignalLocked(room, t, leave)
 				go func(t types.PeerID) {
-					if err := sender.SendRawFrame(t, net_types.TypeCallSignaling, b); err != nil {
+					if err := sender.SendRawFrame(t, transport.Signal, b); err != nil {
 						// the peer finds out from the missing heartbeats, only later
 						log.Debug("Could not tell a call peer that we left", "peer", calllog.Peer(t), "err", err)
 					}
@@ -278,7 +278,7 @@ func (m *CallManager) ensureConnectedLocked(peer types.PeerID) {
 	if m.connector == nil || peer == m.selfID || peer == (types.PeerID{}) {
 		return
 	}
-	if m.swarm != nil && m.swarm.GetPeer(peer) != nil {
+	if l, ok := m.sender.(transport.DirectLink); ok && l.DirectLink(peer) {
 		return
 	}
 	now := m.now()
