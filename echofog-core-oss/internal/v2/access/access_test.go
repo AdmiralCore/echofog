@@ -1084,3 +1084,20 @@ func hasKey(keys []access.KeyInfo, pub []byte) bool {
 	}
 	return false
 }
+
+// TestListenerReportsConfiguredSlot exposes the invitation listener material to the runtime,
+// which installs fresh L0 listeners from the live mask keys (T3.6b).
+func TestListenerReportsConfiguredSlot(t *testing.T) {
+	r := newRig(t)
+
+	l, ok := r.mgr.Listener(0)
+	if !ok {
+		t.Fatal("slot 0 is missing")
+	}
+	if l.Suite != objects.SuiteNoise3 || l.Host != "203.0.113.10" || l.Port != 4242 {
+		t.Fatalf("slot 0 = %+v", l)
+	}
+	if _, ok := r.mgr.Listener(1); ok {
+		t.Fatal("slot 1 exists, want none")
+	}
+}
