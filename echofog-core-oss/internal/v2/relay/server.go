@@ -155,13 +155,20 @@ type Server struct {
 	day      int64
 	dayBytes map[[32]byte]uint64
 	buckets  map[[32]byte]*bucket
-	rdv      map[[32]byte][][32]byte // rendezvous ID → registered nodes
-	rdvOf    map[[32]byte]map[[32]byte]struct{}
+	// Rendezvous registrations (AD19): their lifetime lives in one index, rdvDays. rdvOf holds
+	// each node's IDs with their day and is the only source of a node's count; rdv is the lookup.
+	// Only expireLocked and register/forget change them, so each registration is counted once
+	// and uncounted once.
+	rdv     map[[32]byte][][32]byte // rendezvous ID → registered nodes
+	rdvOf   map[[32]byte]map[[32]byte]uint32
+	rdvDays map[uint32]map[regKey]struct{} // day → registrations that expire when it ends
 
 	stats Stats
 	// tap, set by tests only, sees (and may change) every chunk R copies.
 	tap func(cid uint64, sender [32]byte, b []byte)
 }
+
+type regKey struct{ node, rid [32]byte }
 
 type cidStamp struct {
 	cid uint64
@@ -176,6 +183,7 @@ type Stats struct {
 	DatagramsDropped atomic.Uint64
 	Violations       atomic.Uint64
 	Forwarded        atomic.Uint64 // RELAY_DGRAM forwarded
+	RegisterRejected atomic.Uint64 // REGISTER with a bad day or over the per-node limit
 }
 
 // NewServer returns a relay server.
@@ -196,7 +204,8 @@ func NewServer(cfg ServerConfig) *Server {
 	return &Server{cfg: cfg, clk: cfg.Clock,
 		circuits: map[uint64]*circuit{}, perSess: map[[16]byte]int{}, perIP: map[netip.Addr]int{},
 		usedCIDs: map[uint64]struct{}{}, dayBytes: map[[32]byte]uint64{}, buckets: map[[32]byte]*bucket{},
-		rdv: map[[32]byte][][32]byte{}, rdvOf: map[[32]byte]map[[32]byte]struct{}{}}
+		rdv: map[[32]byte][][32]byte{}, rdvOf: map[[32]byte]map[[32]byte]uint32{},
+		rdvDays: map[uint32]map[regKey]struct{}{}}
 }
 
 // Stats returns the counters.
@@ -328,6 +337,7 @@ func (s *Server) resolve(a Peer, c Connect) (Target, bool) {
 		return t, true
 	case TargetRendezvous:
 		s.mu.Lock()
+		s.expireLocked()
 		nodes := append([][32]byte(nil), s.rdv[node]...)
 		s.mu.Unlock()
 		for _, n := range nodes {
@@ -532,29 +542,117 @@ func (s *Server) invite(ctx context.Context, t Target, cir *circuit, a Peer, c C
 	return nil, false
 }
 
+// today is the day number of the server clock (wire day = floor(unix / 86400)).
+func (s *Server) today() uint32 { return uint32(s.clk.Now().Unix() / 86400) }
+
+// expireLocked drops the registrations of finished days: a registration for day D serves the
+// contacts' lookups of day D and ends with it. s.mu is held.
+func (s *Server) expireLocked() {
+	today := s.today()
+	for day, set := range s.rdvDays {
+		if day >= today {
+			continue
+		}
+		for k := range set {
+			s.dropRegLocked(k.node, k.rid)
+		}
+		delete(s.rdvDays, day)
+	}
+}
+
+// dropRegLocked removes one registration from rdvOf, rdv and the day index.
+func (s *Server) dropRegLocked(node, rid [32]byte) {
+	of := s.rdvOf[node]
+	day, ok := of[rid]
+	if !ok {
+		return
+	}
+	delete(of, rid)
+	if len(of) == 0 {
+		delete(s.rdvOf, node)
+	}
+	if set := s.rdvDays[day]; set != nil {
+		delete(set, regKey{node, rid})
+		if len(set) == 0 {
+			delete(s.rdvDays, day)
+		}
+	}
+	nodes := s.rdv[rid][:0]
+	for _, n := range s.rdv[rid] {
+		if n != node {
+			nodes = append(nodes, n)
+		}
+	}
+	if len(nodes) == 0 {
+		delete(s.rdv, rid)
+	} else {
+		s.rdv[rid] = nodes
+	}
+}
+
+// handleRegister stores a node's rendezvous IDs for the current or the next day. A day outside
+// that window, or more IDs than the node may hold, ends the stream with an error code instead of
+// a REGISTERED that looks like success; the IDs that fit stay registered.
 func (s *Server) handleRegister(p Peer, st *mux.Stream, r Register) {
+	// The exchange is short; a stalled peer must not hold the stream longer than RegisterTimeout.
+	tm := s.clk.AfterFunc(s.cfg.RegisterTimeout, func() { st.Reset(frame.CodeTimeout) })
+	defer tm.Stop()
 	s.mu.Lock()
+	s.expireLocked()
+	today := s.today()
+	if r.Day != today && r.Day != today+1 {
+		s.mu.Unlock()
+		s.stats.RegisterRejected.Add(1)
+		st.Reset(frame.CodeRefused)
+		return
+	}
 	of := s.rdvOf[p.Node]
 	if of == nil {
-		of = map[[32]byte]struct{}{}
+		of = map[[32]byte]uint32{}
 		s.rdvOf[p.Node] = of
 	}
+	overflow := false
 	for _, id := range r.IDs {
 		var rid [32]byte
 		copy(rid[:], id)
-		if _, have := of[rid]; have {
+		k := regKey{p.Node, rid}
+		if old, have := of[rid]; have {
+			if old < r.Day { // renewed for a later day: move it in the index
+				delete(s.rdvDays[old], k)
+				of[rid] = r.Day
+				s.indexLocked(r.Day, k)
+			}
 			continue
 		}
 		if len(of) >= s.cfg.Limits.MaxRendezvous {
+			overflow = true
 			break
 		}
-		of[rid] = struct{}{}
+		of[rid] = r.Day
+		s.indexLocked(r.Day, k)
 		s.rdv[rid] = append(s.rdv[rid], p.Node)
 	}
 	n := len(of)
+	if n == 0 {
+		delete(s.rdvOf, p.Node)
+	}
 	s.mu.Unlock()
+	if overflow {
+		s.stats.RegisterRejected.Add(1)
+		st.Reset(frame.CodeOverloaded)
+		return
+	}
 	_ = st.WriteFrame(TypeRegistered, 0, Registered{Req: r.Req, Count: uint32(n)}.Append(nil))
 	_ = st.Close()
+}
+
+func (s *Server) indexLocked(day uint32, k regKey) {
+	set := s.rdvDays[day]
+	if set == nil {
+		set = map[regKey]struct{}{}
+		s.rdvDays[day] = set
+	}
+	set[k] = struct{}{}
 }
 
 // ForgetNode drops the registrations of a node whose session with R ended.
@@ -562,19 +660,8 @@ func (s *Server) ForgetNode(node [32]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for rid := range s.rdvOf[node] {
-		nodes := s.rdv[rid][:0]
-		for _, n := range s.rdv[rid] {
-			if n != node {
-				nodes = append(nodes, n)
-			}
-		}
-		if len(nodes) == 0 {
-			delete(s.rdv, rid)
-		} else {
-			s.rdv[rid] = nodes
-		}
+		s.dropRegLocked(node, rid)
 	}
-	delete(s.rdvOf, node)
 }
 
 // run carries the circuit until it ends.

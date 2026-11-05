@@ -89,7 +89,19 @@ func TestRegistrationsExpireByDayAndFreeTheirSlots(t *testing.T) {
 		t.Fatalf("after the day change: count %d, %v (the old IDs must be gone and uncounted)", n, err)
 	}
 	var re *RefusedError
-	if err := a.dialRID(rid(1)); !errors.As(err, &re) || re.Reason != ReasonUnavailable {
+	// The refusal waits on the server clock: keep it moving while the dial is out.
+	res := make(chan error, 1)
+	go func() { res <- a.dialRID(rid(1)) }()
+	var err error
+	advanceUntil(t, clk, time.Second, 200, func() bool {
+		select {
+		case err = <-res:
+			return true
+		default:
+			return false
+		}
+	})
+	if !errors.As(err, &re) || re.Reason != ReasonUnavailable {
 		t.Fatalf("expired rendezvous ID still served: %v", err)
 	}
 	if err := a.dialRID(rid(5)); err != nil {
