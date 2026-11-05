@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -39,7 +40,9 @@ type KV interface {
 	// Scan returns up to limit records whose keys start with prefix, in key order. A nil prefix
 	// means the whole namespace.
 	Scan(prefix []byte, limit int) ([]Entry, error)
-	// ScanFrom is Scan starting at start, inclusive. Pass the last returned key to page.
+	// ScanFrom is Scan starting strictly after start: a paginator passes the last returned key and
+	// never sees it again. A start that is not inside prefix (for example a cursor before the
+	// prefix) starts at the first record of the prefix.
 	ScanFrom(prefix, start []byte, limit int) ([]Entry, error)
 }
 
@@ -184,7 +187,12 @@ func (n *namespace) scan(prefix, start []byte, limit int) ([]Entry, error) {
 	fullPrefix := n.fullKey(prefix)
 	seek := fullPrefix
 	if len(start) > 0 {
-		seek = n.fullKey(start)
+		// The cursor is exclusive. Appending 0x00 gives the smallest key strictly after start
+		// (every longer key whose prefix is start begins with that byte or more). A cursor below
+		// the prefix must not move the iterator past the prefix's records.
+		if cursor := append(n.fullKey(start), 0x00); bytes.Compare(cursor, seek) > 0 {
+			seek = cursor
+		}
 	}
 
 	var entries []Entry
