@@ -111,6 +111,9 @@ type Config struct {
 	Lookup LookupFunc
 	// Log receives diagnostics. Nil means slog.Default.
 	Log *slog.Logger
+	// AsyncChecks runs the liveness check of a full bucket in the background, so AddFromSession and
+	// AddFromCard return at once (T5.2). Without it the check runs in the calling goroutine.
+	AsyncChecks bool
 }
 
 // entryState is a lock-free snapshot of the fields the store needs. The card itself is immutable,

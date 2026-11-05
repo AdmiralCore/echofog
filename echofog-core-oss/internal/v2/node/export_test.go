@@ -4,6 +4,7 @@ package node
 // that the platform flags and typed events are actually wired, without widening the public API.
 
 import (
+	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"time"
 
@@ -45,3 +46,6 @@ var (
 
 // HasHandler reports whether the runtime serves the service version (a registered module).
 var HasHandler = func(r *Runtime, svc, version uint64) bool { return r.handlerFor(svc, version) != nil }
+
+// SetDHTDialHook makes the DHT client of a runtime dial through the given options (memory carriers).
+var SetDHTDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) { r.dhtDialHook = f }

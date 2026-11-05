@@ -139,3 +139,6 @@ func (p dhtPinger) Ping(ctx context.Context, card *objects.Card) error {
 	_, err = sess.Ping(ctx)
 	return err
 }
+
+// DHT returns the lookup and publishing client (T5.2). Red-commit stub: nil.
+func (r *Runtime) DHT() *dht.Client { return nil }

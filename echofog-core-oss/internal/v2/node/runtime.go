@@ -176,11 +176,14 @@ type Runtime struct {
 	dgrams     *datagramBroker
 	dht        *dht.Table
 	dhtServer  *dht.Server
-	modules    sync.Once
-	started    bool
-	stopped    bool
-	noCover    bool
-	startedAt  time.Time
+	dhtClient  *dht.Client
+	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
+	dhtDialHook func(*objects.Card) DialOpt
+	modules     sync.Once
+	started     bool
+	stopped     bool
+	noCover     bool
+	startedAt   time.Time
 
 	// localMu guards localAddrs, which a network change may replace while sessions dial.
 	localMu    sync.RWMutex
