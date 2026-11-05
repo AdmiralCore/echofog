@@ -252,3 +252,16 @@ func TestMalformedFramesAreViolations(t *testing.T) {
 		_ = name
 	}
 }
+
+func TestMemCapLimitsCircuits(t *testing.T) {
+	l := Limits{MemCapMB: 40}
+	l.fill()
+	if l.Total != 16 || l.PerSession != 16 {
+		t.Fatalf("mem_cap_mb node: total %d per session %d, want at most 16", l.Total, l.PerSession)
+	}
+	var d Limits
+	d.fill()
+	if d.Total != 200 || d.PerSession != 16 || d.PerIP != 32 || d.MaxRendezvous != 256 {
+		t.Fatalf("defaults %+v", d)
+	}
+}

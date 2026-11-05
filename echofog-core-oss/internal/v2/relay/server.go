@@ -29,7 +29,8 @@ type Limits struct {
 	PerPeerDay    uint64        // bytes per peer per day (16 GiB)
 	RateBytes     int64         // bytes per second per peer (50 Mbit/s)
 	MaxRendezvous int           // rendezvous IDs per node (256)
-	// MemCapCircuits lowers PerSession/Total on a node with mem_cap_mb (≤ 16 circuits).
+	// MemCapMB is the node's mem_cap_mb: a positive value allows at most 16 circuits (T6.1).
+	MemCapMB    int
 	SignalBytes uint64        // signal circuit size (64 KiB)
 	SignalTime  time.Duration // signal circuit lifetime (2 min)
 }
@@ -44,6 +45,9 @@ func (l *Limits) fill() {
 	def(&l.PerIP, 32)
 	def(&l.Total, 200)
 	def(&l.MaxRendezvous, MaxRegisterIDs)
+	if l.MemCapMB > 0 {
+		l.PerSession, l.Total = min(l.PerSession, 16), min(l.Total, 16)
+	}
 	if l.Idle == 0 {
 		l.Idle = 5 * time.Minute
 	}
