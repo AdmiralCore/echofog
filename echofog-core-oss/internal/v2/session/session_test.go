@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -194,6 +196,55 @@ type noPasses struct{}
 
 func (noPasses) LookupPass([]byte, time.Time) (handshake.Pass, bool) { return handshake.Pass{}, false }
 
+// TestSealedResponderRejectsInvalidInitiatorCard checks that REJECT{card-invalid} after message 3
+// travels as a sealed record on a sealed carrier (decisions.md T3.1, handshake §8, wire §8.5),
+// so the initiator sees mux.RejectError instead of a failed path.
+func TestSealedResponderRejectsInvalidInitiatorCard(t *testing.T) {
+	now := time.Now()
+	cliNode, srvNode := newTestNode(t), newTestNode(t)
+	nc := srvNode.cards(t, now)
+	expired := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK}, 31,
+		uint64(now.Add(-70*time.Second).Unix()))
+	remote := verifyCard(t, nc.peer, now)
+
+	a, b := net.Pipe()
+	var cb [32]byte
+	if _, err := rand.Read(cb[:]); err != nil {
+		t.Fatal(err)
+	}
+	client := mux.NewConn(a, mux.ConnConfig{Client: true, ChannelBinding: cb, Sealed: true})
+	server := mux.NewConn(b, mux.ConnConfig{Client: false, ChannelBinding: cb, Sealed: true})
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	accepted := acceptIn(ctx, &oneListener{c: server}, session.AcceptConfig{
+		Local: srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK}, false),
+	})
+	est, err := session.Dial(ctx, remote, dialAttempt(),
+		cliNode.local(expired, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false),
+		session.WithCarrier(client))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = est.Session.Close() })
+
+	r := <-accepted
+	var rejected *session.ErrRejected
+	if r.est != nil || !errors.As(r.err, &rejected) || rejected.Reason != handshake.ReasonCardInvalid {
+		t.Fatalf("Accept: %v %v, want REJECT{card-invalid}", r.est, r.err)
+	}
+	select {
+	case <-est.Session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("sealed REJECT did not reach the initiator")
+	}
+	var muxReject *mux.RejectError
+	if !errors.As(est.Session.Err(), &muxReject) || muxReject.Reason != handshake.ReasonCardInvalid {
+		t.Fatalf("initiator session error: %v", est.Session.Err())
+	}
+}
+
 // TestHiddenNodeWithoutAccessSendsNothing checks the uniform silent failure of handshake §5:
 // zero bytes leave the hidden node.
 func TestHiddenNodeWithoutAccessSendsNothing(t *testing.T) {
@@ -249,6 +300,77 @@ func (oneReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// delayReader feeds a chosen 64-bit value to handshake.uniformDelay and then a fixed stream to
+// the Noise handshake, so the silent-close delay is deterministic without all-zero keys.
+type delayReader struct {
+	first [8]byte
+	n     int
+}
+
+func (r *delayReader) Read(p []byte) (int, error) {
+	for i := range p {
+		if r.n < len(r.first) {
+			p[i] = r.first[r.n]
+		} else {
+			p[i] = 1
+		}
+		r.n++
+	}
+	return len(p), nil
+}
+
+func hiddenSilentDelay(t *testing.T, first uint64) time.Duration {
+	t.Helper()
+	now := time.Now()
+	cliNode, srvNode := newTestNode(t), newTestNode(t)
+	nc := srvNode.cards(t, now)
+	cliCard := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK}, 33,
+		uint64(now.Add(24*time.Hour).Unix()))
+	remote := verifyCard(t, nc.peer, now)
+	pair := memcarrier.NewQUIC()
+
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], first)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	accepted := acceptIn(ctx, &oneListener{c: pair.Server}, session.AcceptConfig{
+		Local:  srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK}, false),
+		Hidden: true,
+		Passes: noPasses{},
+		Rand:   &delayReader{first: b},
+	})
+	start := time.Now()
+	est, err := session.Dial(ctx, remote, dialAttempt(),
+		cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false),
+		session.WithCarrier(pair.Client))
+	elapsed := time.Since(start)
+	if est != nil {
+		_ = est.Session.Close()
+		t.Fatal("hidden node without access completed the handshake")
+	}
+	if !errors.Is(err, session.ErrSilent) {
+		t.Fatalf("Dial: %v, want ErrSilent", err)
+	}
+	<-accepted
+	return elapsed
+}
+
+// TestHiddenNodeSilentDelay checks that the session honours the handshake's CloseAt instead of
+// closing at once, and that the wait follows the drawn uniform delay (range, not exact value).
+func TestHiddenNodeSilentDelay(t *testing.T) {
+	short := hiddenSilentDelay(t, 0)            // 0.5 s lower bound of uniform(0.5, 3)
+	long := hiddenSilentDelay(t, 2_000_000_000) // 0.5 s + 2 s
+	if short < 400*time.Millisecond || short > 1200*time.Millisecond {
+		t.Fatalf("short delay %v outside [0.4 s, 1.2 s]", short)
+	}
+	if long < 2*time.Second || long > 3200*time.Millisecond {
+		t.Fatalf("long delay %v outside [2 s, 3.2 s]", long)
+	}
+	if long-short < 500*time.Millisecond {
+		t.Fatalf("close delay does not follow CloseAt: short %v long %v", short, long)
+	}
+}
+
 // TestDialRejectsExpiredOrInvalidCard maps a bad peer card to ErrRejected{card-invalid}.
 func TestDialRejectsExpiredOrInvalidCard(t *testing.T) {
 	now := time.Now()
@@ -302,6 +424,36 @@ func TestDialRejectsClockSkew(t *testing.T) {
 	if r.est != nil || !errors.As(r.err, &rejected) || rejected.Reason != handshake.ReasonClockSkew {
 		t.Fatalf("Accept: %v %v, want clock-skew rejection", r.est, r.err)
 	}
+}
+
+// TestDialWrongExpectedDeviceIDIsSilent checks decisions.md T3.1 point 3: a wrong expected device
+// ID fails the prologue before Noise confirms anything, so the local error is ErrSilent (the
+// device's existence is not confirmed), never a REJECT.
+func TestDialWrongExpectedDeviceIDIsSilent(t *testing.T) {
+	now := time.Now()
+	cliNode, srvNode := newTestNode(t), newTestNode(t)
+	nc := srvNode.cards(t, now)
+	throwaway := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXX}, 32,
+		uint64(now.Add(24*time.Hour).Unix()))
+	pair := memcarrier.NewQUIC()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	accepted := acceptIn(ctx, &oneListener{c: pair.Server}, session.AcceptConfig{
+		Local: srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK, handshake.SuiteXX}, false),
+	})
+	wrong := [32]byte{0xbb}
+	_, err := session.Dial(ctx, nil, dialAttempt(),
+		cliNode.local(throwaway, handshake.OwnCards{}, []uint16{handshake.SuiteXX}, true),
+		session.WithCarrier(pair.Client), session.WithExpectedDeviceID(wrong))
+	if !errors.Is(err, session.ErrSilent) {
+		t.Fatalf("wrong rid: %v, want ErrSilent", err)
+	}
+	var rejected *session.ErrRejected
+	if errors.As(err, &rejected) {
+		t.Fatalf("wrong rid produced a REJECT: %v", err)
+	}
+	<-accepted
 }
 
 // TestDialRejectsWrongExpectedDeviceID checks the rid binding of handshake §3.3 / §4.2: the
@@ -443,6 +595,140 @@ func TestPuzzleRetriesAtMostTwo(t *testing.T) {
 	r := <-accepted
 	if r.est != nil || !errors.Is(r.err, session.ErrSilent) {
 		t.Fatalf("Accept: %v %v, want ErrSilent", r.est, r.err)
+	}
+}
+
+type rejectRecord struct {
+	idx   int
+	hello []byte
+	err   error
+}
+
+// recordSuiteReject answers one HS_HELLO with REJECT{suite, detail = 0001} and returns the hello
+// payload it saw. It is a minimal responder: the suite retry happens before any Noise step.
+func recordSuiteReject(ctx context.Context, idx int, c mux.Carrier) rejectRecord {
+	g := mux.NewGuard(c)
+	raw, err := g.Stream0(ctx)
+	if err != nil {
+		return rejectRecord{idx: idx, err: err}
+	}
+	rd := frame.NewReader(raw, nil)
+	f, err := rd.ReadFrame()
+	if err != nil {
+		return rejectRecord{idx: idx, err: err}
+	}
+	if f.Type != frame.TypeHsHello {
+		return rejectRecord{idx: idx, err: fmt.Errorf("first frame %s", frame.TypeName(f.Type))}
+	}
+	hello := append([]byte(nil), f.Payload...)
+	if _, err := rd.ReadFrame(); err != nil { // message 1
+		return rejectRecord{idx: idx, hello: hello, err: err}
+	}
+	rej := (&handshake.Reject{Reason: handshake.ReasonSuite, Detail: "0001"}).Marshal()
+	_ = raw.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	if _, err := raw.Write(frame.AppendFrame(nil, frame.Frame{Type: frame.TypeReject, Payload: rej})); err != nil {
+		return rejectRecord{idx: idx, hello: hello, err: err}
+	}
+	select {
+	case <-c.Done():
+	case <-time.After(2 * time.Second):
+	}
+	_ = c.Close()
+	return rejectRecord{idx: idx, hello: hello}
+}
+
+func greaseOf(suites []uint16) uint16 {
+	for _, s := range suites {
+		if handshake.IsGrease(s) {
+			return s
+		}
+	}
+	return 0
+}
+
+func sameSuites(a, b []uint16) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	count := make(map[uint16]int, len(a))
+	for _, s := range a {
+		count[s]++
+	}
+	for _, s := range b {
+		count[s]--
+	}
+	for _, n := range count {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSuiteRetryKeepsOriginalOffered checks that the single retry resends the full original
+// offered list, including the same GREASE value (handshake §3.1, decisions.md T3.1 point 2).
+func TestSuiteRetryKeepsOriginalOffered(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		now := time.Now()
+		cliNode, srvNode := newTestNode(t), newTestNode(t)
+		nc := srvNode.cards(t, now)
+		cliCard := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK, handshake.SuiteXX}, 34,
+			uint64(now.Add(24*time.Hour).Unix()))
+		remote := verifyCard(t, nc.peer, now)
+		first, second := memcarrier.NewQUIC(), memcarrier.NewQUIC()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		results := make(chan rejectRecord, 2)
+		go func() { results <- recordSuiteReject(ctx, 1, first.Server) }()
+		go func() { results <- recordSuiteReject(ctx, 2, second.Server) }()
+		var calls atomic.Int32
+		_, err := session.Dial(ctx, remote, dialAttempt(),
+			cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXX, handshake.SuiteXK}, false),
+			session.WithCarrierFunc(func(context.Context) (mux.Carrier, error) {
+				switch calls.Add(1) {
+				case 1:
+					return first.Client, nil
+				case 2:
+					return second.Client, nil
+				}
+				return nil, errors.New("unexpected third dial")
+			}))
+		cancel()
+		byIdx := make(map[int]rejectRecord, 2)
+		for n := 0; n < 2; n++ {
+			r := <-results
+			byIdx[r.idx] = r
+		}
+		for _, r := range byIdx {
+			if r.err != nil {
+				t.Fatalf("iteration %d: fake responder: %v", i, r.err)
+			}
+		}
+		var rejected *session.ErrRejected
+		if !errors.As(err, &rejected) || rejected.Reason != handshake.ReasonSuite {
+			t.Fatalf("iteration %d: Dial = %v, want REJECT{suite}", i, err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("iteration %d: %d dials, want 2", i, got)
+		}
+		h1, err := handshake.ParseHello(byIdx[1].hello)
+		if err != nil {
+			t.Fatalf("iteration %d: first hello: %v", i, err)
+		}
+		h2, err := handshake.ParseHello(byIdx[2].hello)
+		if err != nil {
+			t.Fatalf("iteration %d: second hello: %v", i, err)
+		}
+		if h2.Chosen != handshake.SuiteXK {
+			t.Fatalf("iteration %d: retry chose %#04x, want XK", i, h2.Chosen)
+		}
+		if !sameSuites(h1.Offered, h2.Offered) {
+			t.Fatalf("iteration %d: retry offered %v, first %v", i, h2.Offered, h1.Offered)
+		}
+		g1, g2 := greaseOf(h1.Offered), greaseOf(h2.Offered)
+		if g1 == 0 || g1 != g2 {
+			t.Fatalf("iteration %d: retry changed GREASE: %#04x -> %#04x", i, g1, g2)
+		}
 	}
 }
 
