@@ -80,6 +80,8 @@ func TestCountryOfUnknown(t *testing.T) {
 		"::1",
 		"fc00::1",
 		"fd12:3456::1",
+		"fe00::1",      // RFC 4291 reserved (fe00::/9)
+		"fe7f:ffff::1", // last /9 block before fe80::/10
 		"fe80::1",
 		"ff02::1",
 		"2001:db8::1",
@@ -87,6 +89,10 @@ func TestCountryOfUnknown(t *testing.T) {
 		"2002::1",
 		"100::1",
 		"3fff::1",
+		// Zoned IPv6 addresses must not slip past the reserved check.
+		"2001::1%eth0",
+		"3fff::1%eth0",
+		"ff02::1%eth0",
 		// IPv4-mapped private address
 		"::ffff:192.168.1.1",
 	}
