@@ -85,6 +85,7 @@ func (r *Runtime) ensureServing(est *session.Established) {
 		defer r.wg.Done()
 		defer r.serving.Delete(est.Session)
 		peer := r.peerOf(est)
+		r.noteSession(peer.Card)
 		r.wg.Add(1)
 		go r.greaseLoop(est.Session)
 		go r.datagramPump(est, peer)
