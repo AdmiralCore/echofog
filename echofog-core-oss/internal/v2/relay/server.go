@@ -629,7 +629,8 @@ func (s *Server) splice(c *circuit, sender [32]byte, src, dst *mux.Detached) {
 			if s.tap != nil {
 				s.tap(c.cid, sender, buf[:n])
 			}
-			if !s.account(c, sender, uint64(n)) {
+			v, wait := s.account(c, sender, uint64(n), false)
+			if v == verdictKill || (wait > 0 && !s.sleep(c, wait)) {
 				s.kill(c)
 				return
 			}
@@ -649,39 +650,78 @@ func (s *Server) splice(c *circuit, sender [32]byte, src, dst *mux.Detached) {
 	}
 }
 
-// account adds n bytes and applies the circuit, day and signal limits and the rate limit.
-func (s *Server) account(c *circuit, sender [32]byte, n uint64) bool {
+type verdict int
+
+const (
+	verdictOK   verdict = iota // forward
+	verdictDrop                // datagram only: over the rate or a cap, not forwarded
+	verdictKill                // stream only: a cap is exceeded, the circuit ends
+)
+
+// account adds n bytes and applies the circuit, day, signal and rate limits. A stream is paced:
+// the returned wait is how long the copier must pause. A datagram is never delayed (its caller is
+// the read loop of the sender's session): over a limit it is dropped and not counted.
+func (s *Server) account(c *circuit, sender [32]byte, n uint64, datagram bool) (verdict, time.Duration) {
 	lim := s.cfg.Limits
+	over := func() (verdict, time.Duration) {
+		if datagram {
+			return verdictDrop, 0
+		}
+		return verdictKill, 0
+	}
 	total := c.bytes.Add(n)
 	if total > lim.PerCircuit || (c.mode == ModeSignal && total > lim.SignalBytes) {
-		return false
+		if datagram {
+			c.bytes.Add(^(n - 1))
+		}
+		return over()
 	}
 	now := s.clk.Now()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if d := now.Unix() / 86400; d != s.day {
 		s.day, s.dayBytes = d, map[[32]byte]uint64{}
 	}
-	s.dayBytes[sender] += n
-	over := s.dayBytes[sender] > lim.PerPeerDay
+	if s.dayBytes[sender]+n > lim.PerPeerDay {
+		if datagram {
+			c.bytes.Add(^(n - 1))
+		}
+		return over()
+	}
 	b := s.buckets[sender]
 	if b == nil {
 		b = &bucket{rate: float64(lim.RateBytes), tokens: float64(lim.RateBytes), at: now}
 		s.buckets[sender] = b
 	}
-	wait := b.take(now, float64(n))
-	s.mu.Unlock()
-	if over {
-		return false
+	if datagram {
+		if !b.tryTake(now, float64(n)) {
+			c.bytes.Add(^(n - 1))
+			return verdictDrop, 0
+		}
+		s.dayBytes[sender] += n
+		return verdictOK, 0
 	}
-	if wait > 0 {
-		time.Sleep(wait)
-	}
-	return true
+	s.dayBytes[sender] += n
+	return verdictOK, b.take(now, float64(n))
 }
 
 type bucket struct {
 	rate, tokens float64
 	at           time.Time
+}
+
+// tryTake removes n tokens only if they are there.
+func (b *bucket) tryTake(now time.Time, n float64) bool {
+	b.tokens += now.Sub(b.at).Seconds() * b.rate
+	if b.tokens > b.rate {
+		b.tokens = b.rate
+	}
+	b.at = now
+	if b.tokens < n {
+		return false
+	}
+	b.tokens -= n
+	return true
 }
 
 // take removes n tokens and returns how long the caller must wait for them (burst: one second).
@@ -716,7 +756,11 @@ func (s *Server) HandleDatagram(from Peer, payload []byte) {
 		return
 	}
 	to, ok := c.other(from.SID)
-	if !ok || to.peer.SendDatagram == nil || !s.account(c, from.Node, uint64(len(payload)-n)) {
+	if !ok || to.peer.SendDatagram == nil {
+		s.stats.DatagramsDropped.Add(1)
+		return
+	}
+	if v, _ := s.account(c, from.Node, uint64(len(payload)-n), true); v != verdictOK {
 		s.stats.DatagramsDropped.Add(1)
 		return
 	}
@@ -728,8 +772,15 @@ func (s *Server) HandleDatagram(from Peer, payload []byte) {
 	s.stats.Forwarded.Add(1)
 }
 
-// sleep waits d for pacing and reports false if the circuit ended first.
+// sleep waits d for pacing on the server clock and reports false if the circuit ended first.
 func (s *Server) sleep(c *circuit, d time.Duration) bool {
-	time.Sleep(min(d, 2*time.Second))
-	return true
+	fired := make(chan struct{})
+	tm := s.clk.AfterFunc(d, func() { close(fired) })
+	defer tm.Stop()
+	select {
+	case <-fired:
+		return true
+	case <-c.done:
+		return false
+	}
 }
