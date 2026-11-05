@@ -607,7 +607,7 @@ func (l *Listener) newFlowFor(src netip.AddrPort, keys packet.Keys, initial int,
 		sender:      shape.NewSender(l.profile, nil, l.lowPower),
 		maxDatagram: l.maxDatagram,
 	}
-	f.silenceLimit = restartMin + time.Duration(randIntN(l.rnd, int(restartMax-restartMin)/int(time.Millisecond)+1))*time.Millisecond
+	f.silenceLimit = restartMin + time.Duration(randIntN(l.rnd, int((restartMax-restartMin)/time.Millisecond)+1))*time.Millisecond
 	if parent != nil {
 		if parent.successor != nil || l.flows[src] != parent {
 			return nil
