@@ -11,13 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/crypto"
-	"github.com/echofog/echofog-core/internal/network/net_types"
-	"github.com/echofog/echofog-core/internal/p2p/swarm"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/echofog/echofog-core/pkg/events"
@@ -214,12 +212,9 @@ type CallManager struct {
 	// lim folds repeating lines (rejected signals, failed publishes, retries) into one per key.
 	lim *calllog.Limiter
 
-	selfID     types.PeerID
-	swarm      *swarm.Swarm
-	sender     media.FrameSender
-	signer     signaling.Signer
-	sesManager *swarm.SessionManager
-	crypto     *crypto.CryptoEngine
+	selfID types.PeerID
+	sender media.FrameSender
+	signer signaling.Signer
 
 	activeRoom *ActiveRoomState
 	// olderNode makes this node act as a version before media key rotation (tests only).
@@ -262,39 +257,30 @@ type CallManager struct {
 	OnMemberKicked func(peer types.PeerID)
 }
 
-// NewCallManager initializes the CallManager with swarm integration.
-func NewCallManager(s *swarm.Swarm, ses *swarm.SessionManager, crypt *crypto.CryptoEngine, selfID types.PeerID) *CallManager {
-	var (
-		sender media.FrameSender
-		signer signaling.Signer
-	)
-	if s != nil {
-		sender, signer = s, s
+// NewCallManager initializes the CallManager over the node's transport. A nil transport is only
+// acceptable for a manager that never joins a call; a nil signer disables signal signatures,
+// which is only acceptable for in-memory tests.
+func NewCallManager(tr transport.Transport, signer signaling.Signer, selfID types.PeerID) *CallManager {
+	var sender media.FrameSender
+	if tr != nil {
+		sender = tr
 	}
 	cm := newCallManager(sender, signer, selfID)
-	cm.swarm, cm.sesManager, cm.crypto = s, ses, crypt
 
-	if s != nil {
-		// The swarm logs every handler error at Warn with no limit, which a bad peer turns into a
-		// flood; the call layer logs them itself, rate limited and with call context.
-		s.RegisterFastFrameHandler(net_types.TypeCallSignaling, cm.inbound("signal", cm.handleIncomingSignaling))
-		s.RegisterFastFrameHandler(net_types.TypeCallSignalingLossy, cm.inbound("signal", cm.handleIncomingSignaling))
-		s.RegisterFastFrameHandler(net_types.TypeCallMediaAudio, cm.inbound("audio", cm.handleIncomingAudio))
-		s.RegisterFastFrameHandler(net_types.TypeCallMediaVideo, cm.inbound("video", cm.handleIncomingVideo))
+	if tr != nil {
+		// The transport would log every handler error without a limit, which a bad peer turns
+		// into a flood; the call layer logs them itself, rate limited and with call context.
+		tr.RegisterFastFrameHandler(transport.Signal, cm.inbound("signal", cm.handleIncomingSignaling))
+		tr.RegisterFastFrameHandler(transport.SignalLossy, cm.inbound("signal", cm.handleIncomingSignaling))
+		tr.RegisterFastFrameHandler(transport.MediaAudio, cm.inbound("audio", cm.handleIncomingAudio))
+		tr.RegisterFastFrameHandler(transport.MediaVideo, cm.inbound("video", cm.handleIncomingVideo))
 	}
 	return cm
 }
 
-// newCallManager builds a manager over an arbitrary transport. A nil signer disables signal
-// signatures, which is only acceptable for in-memory tests.
-// relayAware is a FrameSender that can tell which peers it reaches only through a relay.
-type relayAware interface {
-	Relayed(peer types.PeerID) bool
-}
-
 // relayedLocked: this node reaches peer only through a relay circuit, not over a direct link.
 func (m *CallManager) relayedLocked(peer types.PeerID) bool {
-	r, ok := m.sender.(relayAware)
+	r, ok := m.sender.(transport.RelayAware)
 	return ok && peer != m.selfID && peer != (types.PeerID{}) && r.Relayed(peer)
 }
 
@@ -307,6 +293,8 @@ func (m *CallManager) waitLocked(peer types.PeerID, direct, relayed time.Duratio
 	return direct
 }
 
+// newCallManager builds a manager over an arbitrary transport. A nil signer disables signal
+// signatures, which is only acceptable for in-memory tests.
 func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID types.PeerID) *CallManager {
 	return &CallManager{
 		logger:     slog.Default().With("component", "call"),

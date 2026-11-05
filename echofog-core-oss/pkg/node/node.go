@@ -759,16 +759,14 @@ func (n *Node) startNetwork() error {
 	}
 
 	if !server {
-		n.CallManager = call.NewCallManager(n.Swarm, nil, n.crypto, n.ID)
+		n.CallManager = call.NewCallManager(newSwarmCallTransport(n), n.Swarm, n.ID)
 		n.CallManager.SetPeerConnector(n.connectForCall)
 		if n.RelayClient != nil {
 			// peers no hole punch reaches (a symmetric NAT) take part through relay circuits
-			n.CallManager.SetFrameSender(newCallLink(n))
 			cm := n.CallManager
 			n.RelayClient.AddDataListener(func(_ uint32, t net_types.MessageType, payload []byte, remote types.PeerID) {
-				switch t {
-				case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy, net_types.TypeCallMediaAudio, net_types.TypeCallMediaVideo:
-					cm.HandleRelayedFrame(t, payload, remote)
+				if kind, ok := callKindOf(t); ok {
+					cm.HandleRelayedFrame(kind, payload, remote)
 				}
 			})
 		}

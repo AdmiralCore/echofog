@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -119,11 +119,11 @@ func TestRoom_AKeyLostInFlightIsSentAgain(t *testing.T) {
 
 	// the next key's frame to b is lost on the way (heartbeats and media still get through)
 	m.mu.Lock()
-	m.dropTo = func(from, to types.PeerID, tp net_types.MessageType, payload []byte) bool {
+	m.dropTo = func(from, to types.PeerID, tp transport.Kind, payload []byte) bool {
 		if from != coord.id || to != b.id {
 			return false
 		}
-		if tp != net_types.TypeCallSignaling && tp != net_types.TypeCallSignalingLossy {
+		if tp != transport.Signal && tp != transport.SignalLossy {
 			return false
 		}
 		env, err := signaling.DecodeSignal(payload)

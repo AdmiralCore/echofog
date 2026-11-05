@@ -7,18 +7,14 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/echofog/echofog-core/internal/network"
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
-// FrameSender abstracts the peer transport. SendRawFrame is reliable (signaling),
-// SendUnreliableFrame is best-effort (media datagrams).
-type FrameSender interface {
-	SendRawFrame(peerID types.PeerID, msgType net_types.MessageType, payload []byte) error
-	SendUnreliableFrame(peerID types.PeerID, msgType net_types.MessageType, payload []byte) error
-}
+// FrameSender is the transport port the media layer sends through. SendRawFrame is reliable
+// (signaling), SendUnreliableFrame is best-effort (media datagrams).
+type FrameSender = transport.FrameSender
 
 // TrafficClass orders outbound frames: control beats audio, audio beats video.
 type TrafficClass int
@@ -36,7 +32,7 @@ const (
 )
 
 type outFrame struct {
-	msgType net_types.MessageType
+	kind    transport.Kind
 	payload []byte
 }
 
@@ -92,7 +88,7 @@ func className(c TrafficClass) string {
 }
 
 // Send enqueues without blocking; it returns false if the frame was dropped.
-func (o *Outbox) Send(peer types.PeerID, class TrafficClass, msgType net_types.MessageType, payload []byte) bool {
+func (o *Outbox) Send(peer types.PeerID, class TrafficClass, kind transport.Kind, payload []byte) bool {
 	if o == nil || o.sender == nil {
 		return false
 	}
@@ -108,7 +104,7 @@ func (o *Outbox) Send(peer types.PeerID, class TrafficClass, msgType net_types.M
 		ch = q.audio
 	}
 	select {
-	case ch <- outFrame{msgType, payload}:
+	case ch <- outFrame{kind, payload}:
 		return true
 	default:
 		o.dropped[class].Add(1)
@@ -220,12 +216,12 @@ func (o *Outbox) run(ctx context.Context, peer types.PeerID, q *peerQueue) {
 func (o *Outbox) deliver(peer types.PeerID, class TrafficClass, f outFrame) {
 	var err error
 	if class == ClassControl {
-		err = o.sender.SendRawFrame(peer, f.msgType, f.payload)
+		err = o.sender.SendRawFrame(peer, f.kind, f.payload)
 	} else {
-		err = o.sender.SendUnreliableFrame(peer, f.msgType, f.payload)
-		if errors.Is(err, network.ErrDatagramTooLarge) {
+		err = o.sender.SendUnreliableFrame(peer, f.kind, f.payload)
+		if errors.Is(err, transport.ErrDatagramTooLarge) {
 			// path MTU smaller than expected: keep the call alive over the reliable path
-			err = o.sender.SendRawFrame(peer, f.msgType, f.payload)
+			err = o.sender.SendRawFrame(peer, f.kind, f.payload)
 		}
 	}
 	if err != nil {

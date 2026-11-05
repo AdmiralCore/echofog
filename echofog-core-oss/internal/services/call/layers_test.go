@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/internal/testutil"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -395,8 +395,8 @@ func TestRoom_AnOlderWeakViewerGetsTheWholeStream(t *testing.T) {
 	strong, b, weak := nodes[0], nodes[1], nodes[2]
 	weak.cm.beforeLayers = true
 	var capped atomic.Int32
-	m.tap = func(from, to types.PeerID, mt net_types.MessageType, payload []byte) {
-		if to == weak.id && mt == net_types.TypeCallMediaVideo {
+	m.tap = func(from, to types.PeerID, mt transport.Kind, payload []byte) {
+		if to == weak.id && mt == transport.MediaVideo {
 			if p, err := media.Decode(payload); err == nil && p.HopCap != 0 {
 				capped.Add(1)
 			}

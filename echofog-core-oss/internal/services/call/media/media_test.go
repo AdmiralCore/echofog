@@ -10,8 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network"
-	"github.com/echofog/echofog-core/internal/network/net_types"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +19,7 @@ import (
 
 type sentFrame struct {
 	peer     types.PeerID
-	kind     net_types.MessageType
+	kind     transport.Kind
 	data     []byte
 	reliable bool
 }
@@ -33,7 +32,7 @@ type mockSender struct {
 	failFor map[types.PeerID]bool
 }
 
-func (m *mockSender) record(peer types.PeerID, kind net_types.MessageType, data []byte, reliable bool) error {
+func (m *mockSender) record(peer types.PeerID, kind transport.Kind, data []byte, reliable bool) error {
 	m.mu.Lock()
 	gate := m.block[peer]
 	fail := m.failFor[peer]
@@ -50,13 +49,13 @@ func (m *mockSender) record(peer types.PeerID, kind net_types.MessageType, data 
 	return nil
 }
 
-func (m *mockSender) SendRawFrame(peerID types.PeerID, msgType net_types.MessageType, payload []byte) error {
+func (m *mockSender) SendRawFrame(peerID types.PeerID, msgType transport.Kind, payload []byte) error {
 	return m.record(peerID, msgType, payload, true)
 }
 
-func (m *mockSender) SendUnreliableFrame(peerID types.PeerID, msgType net_types.MessageType, payload []byte) error {
+func (m *mockSender) SendUnreliableFrame(peerID types.PeerID, msgType transport.Kind, payload []byte) error {
 	if m.tooBig {
-		return network.ErrDatagramTooLarge
+		return transport.ErrDatagramTooLarge
 	}
 	return m.record(peerID, msgType, payload, false)
 }
@@ -525,10 +524,10 @@ func TestOutbox_SlowPeerDoesNotBlockOthersAndFallsBack(t *testing.T) {
 	defer ob.Close()
 
 	for i := 0; i < videoQueueLen+500; i++ {
-		ob.Send(slow, ClassVideo, net_types.TypeCallMediaVideo, []byte{1})
+		ob.Send(slow, ClassVideo, transport.MediaVideo, []byte{1})
 	}
 	for i := 0; i < 50; i++ {
-		ob.Send(fast, ClassVideo, net_types.TypeCallMediaVideo, []byte{2})
+		ob.Send(fast, ClassVideo, transport.MediaVideo, []byte{2})
 	}
 	assert.Eventually(t, func() bool { return len(sender.to(fast)) == 50 }, time.Second, 5*time.Millisecond)
 	assert.Greater(t, ob.Stats().Dropped[ClassVideo], uint64(400), "slow peer sheds load instead of buffering forever")
@@ -537,7 +536,7 @@ func TestOutbox_SlowPeerDoesNotBlockOthersAndFallsBack(t *testing.T) {
 	big := &mockSender{tooBig: true}
 	ob2 := NewOutbox(big)
 	defer ob2.Close()
-	ob2.Send(fast, ClassAudio, net_types.TypeCallMediaAudio, []byte{3})
+	ob2.Send(fast, ClassAudio, transport.MediaAudio, []byte{3})
 	assert.Eventually(t, func() bool { f := big.to(fast); return len(f) == 1 && f[0].reliable }, time.Second, 5*time.Millisecond)
 }
 
@@ -548,13 +547,13 @@ func TestOutbox_ControlBeforeMedia(t *testing.T) {
 	ob := NewOutbox(sender)
 	defer ob.Close()
 
-	ob.Send(p, ClassVideo, net_types.TypeCallMediaVideo, []byte("v0")) // occupies the worker
+	ob.Send(p, ClassVideo, transport.MediaVideo, []byte("v0")) // occupies the worker
 	time.Sleep(20 * time.Millisecond)
 	for i := 0; i < 5; i++ {
-		ob.Send(p, ClassVideo, net_types.TypeCallMediaVideo, []byte("v"))
+		ob.Send(p, ClassVideo, transport.MediaVideo, []byte("v"))
 	}
-	ob.Send(p, ClassAudio, net_types.TypeCallMediaAudio, []byte("a"))
-	ob.Send(p, ClassControl, net_types.TypeCallSignaling, []byte("c"))
+	ob.Send(p, ClassAudio, transport.MediaAudio, []byte("a"))
+	ob.Send(p, ClassControl, transport.Signal, []byte("c"))
 	close(gate)
 
 	assert.Eventually(t, func() bool { return sender.count() == 8 }, time.Second, 5*time.Millisecond)
@@ -653,7 +652,7 @@ func TestMediaDispatcher_BroadcastLocalStreamAudio(t *testing.T) {
 	require.NoError(t, d.BroadcastLocalStreamAudio("s1", []byte("opus")))
 	require.Eventually(t, func() bool { return len(sender.to(child)) == 1 }, time.Second, 5*time.Millisecond)
 	f := sender.to(child)[0]
-	assert.Equal(t, net_types.TypeCallMediaVideo, f.kind, "it travels the stream path")
+	assert.Equal(t, transport.MediaVideo, f.kind, "it travels the stream path")
 	p, err := Decode(f.data)
 	require.NoError(t, err)
 	assert.Equal(t, FrameStreamAudio, p.Kind)

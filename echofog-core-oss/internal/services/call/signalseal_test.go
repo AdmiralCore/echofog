@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
@@ -26,8 +26,8 @@ type wireFrame struct {
 	data     []byte
 }
 
-func (w *wire) tap(from, to types.PeerID, t net_types.MessageType, payload []byte) {
-	if t != net_types.TypeCallSignaling && t != net_types.TypeCallSignalingLossy {
+func (w *wire) tap(from, to types.PeerID, t transport.Kind, payload []byte) {
+	if t != transport.Signal && t != transport.SignalLossy {
 		return
 	}
 	w.mu.Lock()

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/internal/testutil"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -47,13 +47,13 @@ type mesh struct {
 	nodes map[types.PeerID]*CallManager
 	dead  map[types.PeerID]bool
 	sent  atomic.Uint64
-	drop  func(t net_types.MessageType, payload []byte) bool                   // simulated packet loss
-	links map[[2]types.PeerID]*shaper                                          // bottlenecks, by (from, to)
-	tap   func(from, to types.PeerID, t net_types.MessageType, payload []byte) // sees every frame sent
-	block func(from, to types.PeerID, t net_types.MessageType) bool            // a link that swallows frames
+	drop  func(t transport.Kind, payload []byte) bool                   // simulated packet loss
+	links map[[2]types.PeerID]*shaper                                   // bottlenecks, by (from, to)
+	tap   func(from, to types.PeerID, t transport.Kind, payload []byte) // sees every frame sent
+	block func(from, to types.PeerID, t transport.Kind) bool            // a link that swallows frames
 	// dropTo loses a frame on one direction of one link, by what it carries: a test can lose one
 	// signal without cutting the link.
-	dropTo func(from, to types.PeerID, t net_types.MessageType, payload []byte) bool
+	dropTo func(from, to types.PeerID, t transport.Kind, payload []byte) bool
 }
 
 func newMesh() *mesh {
@@ -106,15 +106,15 @@ type meshPort struct {
 	self types.PeerID
 }
 
-func (p meshPort) SendRawFrame(to types.PeerID, t net_types.MessageType, payload []byte) error {
+func (p meshPort) SendRawFrame(to types.PeerID, t transport.Kind, payload []byte) error {
 	return p.m.deliver(p.self, to, t, payload)
 }
 
-func (p meshPort) SendUnreliableFrame(to types.PeerID, t net_types.MessageType, payload []byte) error {
+func (p meshPort) SendUnreliableFrame(to types.PeerID, t transport.Kind, payload []byte) error {
 	return p.m.deliver(p.self, to, t, payload)
 }
 
-func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload []byte) error {
+func (m *mesh) deliver(from, to types.PeerID, t transport.Kind, payload []byte) error {
 	m.mu.Lock()
 	target := m.nodes[to]
 	cut := m.dead[from] || m.dead[to]
@@ -141,7 +141,7 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	wait := time.Duration(0)
 	// The shapes model a media bottleneck. Call control is small and travels reliably: letting
 	// a full media queue drop a heartbeat or a new media key would fail the room, not the link.
-	media := t == net_types.TypeCallMediaAudio || t == net_types.TypeCallMediaVideo
+	media := t == transport.MediaAudio || t == transport.MediaVideo
 	if link != nil && media {
 		var ok bool
 		if wait, ok = link.admit(len(payload), time.Now()); !ok {
@@ -150,11 +150,11 @@ func (m *mesh) deliver(from, to types.PeerID, t net_types.MessageType, payload [
 	}
 	time.AfterFunc(wait, func() {
 		switch t {
-		case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy:
+		case transport.Signal, transport.SignalLossy:
 			_ = target.handleIncomingSignaling(data, from)
-		case net_types.TypeCallMediaAudio:
+		case transport.MediaAudio:
 			_ = target.handleIncomingAudio(data, from)
-		case net_types.TypeCallMediaVideo:
+		case transport.MediaVideo:
 			_ = target.handleIncomingVideo(data, from)
 		}
 	})
@@ -550,10 +550,10 @@ func TestRoom_KeyframeRequestReachesBroadcaster(t *testing.T) {
 		}
 	}
 	m.mu.Lock()
-	m.drop = func(t net_types.MessageType, payload []byte) bool {
+	m.drop = func(t transport.Kind, payload []byte) bool {
 		p, err := media.Decode(payload)
 		// with its parity too, or FEC rebuilds it
-		return t == net_types.TypeCallMediaVideo && err == nil && (p.Seq == 2 || p.Kind == media.FrameVideoFEC)
+		return t == transport.MediaVideo && err == nil && (p.Seq == 2 || p.Kind == media.FrameVideoFEC)
 	}
 	m.mu.Unlock()
 	require.NoError(t, b.cm.PublishVideo("s", unit(0, 100))) // seq 1
@@ -611,9 +611,9 @@ func TestRoom_LostFragmentRecoveredByNack(t *testing.T) {
 	var dropped atomic.Bool
 	var keyframeRequests, nackSignals atomic.Int32
 	m.mu.Lock()
-	m.drop = func(t net_types.MessageType, payload []byte) bool {
+	m.drop = func(t transport.Kind, payload []byte) bool {
 		switch t {
-		case net_types.TypeCallSignaling:
+		case transport.Signal:
 			if env, err := signaling.DecodeSignal(payload); err == nil {
 				switch env.Action {
 				case signaling.ActionKeyframeRequest:
@@ -622,7 +622,7 @@ func TestRoom_LostFragmentRecoveredByNack(t *testing.T) {
 					nackSignals.Add(1)
 				}
 			}
-		case net_types.TypeCallMediaVideo:
+		case transport.MediaVideo:
 			p, err := media.Decode(payload)
 			// the first copy of fragment 1 of seq 2 is lost, on whichever link carries it first
 			return err == nil && p.Seq == 2 && p.FragIdx == 1 && dropped.CompareAndSwap(false, true)
@@ -922,9 +922,9 @@ func parentLostCounter(m *mesh, from types.PeerID) func() map[types.PeerID]int {
 	var mu sync.Mutex
 	got := make(map[types.PeerID]int)
 	m.mu.Lock()
-	m.drop = func(t net_types.MessageType, payload []byte) bool {
+	m.drop = func(t transport.Kind, payload []byte) bool {
 		var env signaling.CallSignalEnvelope
-		if t != net_types.TypeCallSignaling || json.Unmarshal(payload, &env) != nil ||
+		if t != transport.Signal || json.Unmarshal(payload, &env) != nil ||
 			env.Action != signaling.ActionParentLost || env.Sender != from {
 			return false
 		}
@@ -1048,7 +1048,7 @@ func TestRoom_AFormerCoordinatorDoesNotAnswerForTheCoordinator(t *testing.T) {
 
 	var pongs atomic.Int32
 	m.mu.Lock()
-	m.tap = func(from, to types.PeerID, _ net_types.MessageType, payload []byte) {
+	m.tap = func(from, to types.PeerID, _ transport.Kind, payload []byte) {
 		if from != wasCoord.id || to != member.id {
 			return
 		}

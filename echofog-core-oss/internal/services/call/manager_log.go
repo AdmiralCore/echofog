@@ -4,9 +4,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -33,13 +33,13 @@ func (m *CallManager) inbound(kind string, h func([]byte, types.PeerID) error) f
 // from somebody behind a symmetric NAT, which no hole punch gets through. from is what the circuit
 // claims; signals carry their own signature and media its room encryption, so a relay can neither
 // forge nor read them.
-func (m *CallManager) HandleRelayedFrame(t net_types.MessageType, payload []byte, from types.PeerID) {
-	switch t {
-	case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy:
+func (m *CallManager) HandleRelayedFrame(kind transport.Kind, payload []byte, from types.PeerID) {
+	switch kind {
+	case transport.Signal, transport.SignalLossy:
 		_ = m.inbound("signal", m.handleIncomingSignaling)(payload, from)
-	case net_types.TypeCallMediaAudio:
+	case transport.MediaAudio:
 		_ = m.inbound("audio", m.handleIncomingAudio)(payload, from)
-	case net_types.TypeCallMediaVideo:
+	case transport.MediaVideo:
 		_ = m.inbound("video", m.handleIncomingVideo)(payload, from)
 	}
 }

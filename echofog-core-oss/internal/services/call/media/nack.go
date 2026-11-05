@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
@@ -244,7 +244,7 @@ func (d *MediaDispatcher) ServeNack(child types.PeerID, streamID string, lost []
 		for _, f := range frags {
 			d.retransmitted.Add(1)
 			sent++
-			d.outbox.Send(child, ClassVideo, net_types.TypeCallMediaVideo, f)
+			d.outbox.Send(child, ClassVideo, transport.MediaVideo, f)
 		}
 		if !complete {
 			// whatever arrives from upstream is forwarded to every child, so ask for all we lack

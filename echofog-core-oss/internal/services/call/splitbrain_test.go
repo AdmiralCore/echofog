@@ -7,19 +7,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/require"
 )
 
 // blockLink drops what goes from one peer to another while on() is true, of the frame types
 // what says (nil: everything).
-func (m *mesh) blockLink(from, to types.PeerID, what func(net_types.MessageType) bool, on func() bool) {
+func (m *mesh) blockLink(from, to types.PeerID, what func(transport.Kind) bool, on func() bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	prev := m.block
-	m.block = func(f, t types.PeerID, mt net_types.MessageType) bool {
+	m.block = func(f, t types.PeerID, mt transport.Kind) bool {
 		if prev != nil && prev(f, t, mt) {
 			return true
 		}
@@ -28,7 +28,7 @@ func (m *mesh) blockLink(from, to types.PeerID, what func(net_types.MessageType)
 }
 
 // reliableSignals is a stalled stream: signals sent by stream do not arrive, datagrams still do.
-func reliableSignals(mt net_types.MessageType) bool { return mt == net_types.TypeCallSignaling }
+func reliableSignals(mt transport.Kind) bool { return mt == transport.Signal }
 
 // heardAgain checks that both members hear each other's voice once the room is whole again.
 func heardAgain(t *testing.T, a, b *testNode, seq uint32) {
