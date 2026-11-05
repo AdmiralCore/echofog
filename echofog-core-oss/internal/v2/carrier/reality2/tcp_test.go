@@ -617,3 +617,88 @@ func FuzzReadFirstRecord(f *testing.F) {
 		}
 	})
 }
+
+// TestTCPSlotHeldUntilTheTokenIsChecked: wire.md §4.2 releases the pre-token slot as soon as the
+// token is checked, not before (T2.8 F2).
+func TestTCPSlotHeldUntilTheTokenIsChecked(t *testing.T) {
+	r := newTCPRig(t, func(c *TCPListenerConfig) { c.MaxPreToken = 1 })
+	held := make(chan int, 1)
+	r.ln.verifyHook = func() { held <- len(r.ln.slots) }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		if s, err := r.ln.Accept(ctx); err == nil {
+			s.Close()
+		}
+	}()
+	c, err := r.dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	select {
+	case n := <-held:
+		if n != 1 {
+			t.Fatalf("slots held during the token check: %d, want 1", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the token check did not run the hook")
+	}
+	// and the slot is free afterwards
+	deadline := time.Now().Add(2 * time.Second)
+	for len(r.ln.slots) != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(r.ln.slots) != 0 {
+		t.Fatal("the slot was not released after the check")
+	}
+}
+
+// TestTCPProxyHasALifetime: a stranger that trickles a byte now and then, or never reads what the
+// cover sends, cannot hold a cover connection for ever (T2.8 F3).
+func TestTCPProxyHasALifetime(t *testing.T) {
+	old := coverMaxLife
+	coverMaxLife = 600 * time.Millisecond
+	defer func() { coverMaxLife = old }()
+	hold, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Close()
+	go func() { // a cover that keeps every connection open and says nothing
+		for {
+			c, err := hold.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	r := newTCPRig(t, func(c *TCPListenerConfig) { c.CoverAddr = hold.Addr().String() })
+	c, err := net.Dial("tcp", r.ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	stop := time.After(4 * time.Second)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			if _, err := c.Write([]byte{0}); err != nil {
+				return // closed by the node
+			}
+			_ = c.SetReadDeadline(time.Now().Add(time.Millisecond))
+			var b [64]byte
+			if _, err := c.Read(b[:]); err != nil {
+				var ne net.Error
+				if !errors.As(err, &ne) || !ne.Timeout() {
+					return // EOF or reset: the node ended it
+				}
+			}
+		case <-stop:
+			t.Fatal("a trickling stranger held the cover connection past its lifetime")
+		}
+	}
+}

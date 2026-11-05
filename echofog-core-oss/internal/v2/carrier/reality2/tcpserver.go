@@ -16,6 +16,9 @@ import (
 )
 
 // Limits of wire.md §4.2 and the defaults of this listener.
+// coverMaxLife bounds one proxied connection to the cover.
+var coverMaxLife = 10 * time.Minute
+
 const (
 	// FirstRecordTimeout is how long the server waits for the first TLS record of a connection.
 	FirstRecordTimeout = 10 * time.Second
@@ -118,6 +121,8 @@ type TCPListener struct {
 	wg      sync.WaitGroup
 	once    sync.Once
 	err     error
+
+	verifyHook func() // test hook: runs just before the token check
 }
 
 var _ carrier.Listener = (*TCPListener)(nil)
