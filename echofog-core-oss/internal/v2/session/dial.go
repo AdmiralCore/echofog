@@ -26,6 +26,8 @@ type dialConfig struct {
 	offset     time.Duration
 	verifier   handshake.CardVerifier
 	bindings   handshake.KeyBinder
+	control    *Control
+	timers     mux.Timers
 	dialConfig carrier.DialConfig
 }
 
@@ -71,6 +73,18 @@ func WithVerifier(v handshake.CardVerifier) DialOption {
 // WithBindings sets the hs-key-to-device binding table the handshake checks (handshake §7).
 func WithBindings(b handshake.KeyBinder) DialOption {
 	return func(o *dialConfig) { o.bindings = b }
+}
+
+// WithControl installs the CARD_UPDATE handler (objects.md §3.6). A session table passes its
+// own handler here.
+func WithControl(c *Control) DialOption {
+	return func(o *dialConfig) { o.control = c }
+}
+
+// WithTimers replaces the mux session timers (tests and platform profiles). Zero fields keep
+// the specification defaults.
+func WithTimers(t mux.Timers) DialOption {
+	return func(o *dialConfig) { o.timers = t }
 }
 
 // WithDialConfig passes carrier dial options (registry, network memory, clock) through.
@@ -254,7 +268,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 			if err := writeFrame(raw, clk, frame.TypeHsMsg, msg3); err != nil {
 				return nil, nil, err
 			}
-			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr))
+			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr), o.control, o.timers)
 			return est, nil, err
 		default:
 			return nil, nil, wrapSilent(fmt.Errorf("unexpected %s before the handshake completed", frame.TypeName(f.Type)))

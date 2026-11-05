@@ -592,6 +592,13 @@ has encoded frames of every session-level type with a fixed payload.
 opens no new streams and closes the session when the streams of **both** sides have ended, or after
 15 s.
 
+**One session per pair.** A node keeps at most one live session per (local identity, peer device
+ID). When both sides dial each other at the same time, the session whose **initiator has the
+smaller device ID** (bytewise, 32 bytes) is kept, and the other one is closed with
+`GOAWAY{code = 0 no-error}` (with `retry_after` when the caller has one). Both sides know both
+device IDs, so the decision is symmetric and needs no extra message; the losing session drains
+under the rule above before it goes away.
+
 ## 8. Paths
 
 A **session** ([handshake.md](handshake.md) §9) is identified by its 16-byte session ID `sid` and

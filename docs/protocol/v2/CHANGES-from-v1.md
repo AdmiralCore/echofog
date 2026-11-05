@@ -208,6 +208,7 @@ Readings that the independent implementations needed, now written into the speci
 | invite and peer cards and the camouflage rule | the rule applies to public cards only | objects §3.2 |
 | exit offer vs flag | offer without flag: valid, not live; flag without offer: invalid | objects §3.2 |
 | raw prekey sizes vs akey | `spk` and `kem` are raw by definition; listed as exceptions | objects §5, registries §8 |
+| one session per (local identity, peer device) | simultaneous dials keep the session whose initiator has the smaller device ID (bytewise); the other leaves with `GOAWAY{no-error}` | wire §7.3 |
 | mailbox-hint size | body ≤ 6144, at most one relay card | objects §7, registries §7.1, §9 |
 | name envelope | body ≤ 512, envelope ≤ 768 | objects §8, registries §7.1 |
 | card lifetime | by the `scope` field: 7 days public/peer, 30 days invite | objects §3.2, §2.2 |

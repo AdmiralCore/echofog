@@ -47,6 +47,10 @@ type AcceptConfig struct {
 	Verifier handshake.CardVerifier
 	// Bindings sets the hs-key-to-device binding table (handshake §7).
 	Bindings handshake.KeyBinder
+	// Control handles CARD_UPDATE for the accepted session (objects.md §3.6).
+	Control *Control
+	// Timers replaces the mux session timers (tests and platform profiles).
+	Timers mux.Timers
 	// MessageTimeout and HandshakeTimeout override the handshake §11 defaults.
 	MessageTimeout   time.Duration
 	HandshakeTimeout time.Duration
@@ -215,7 +219,7 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			if err != nil {
 				return nil, rejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, err)
 			}
-			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, cfg.Local, remoteOf(c))
+			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, cfg.Local, remoteOf(c), cfg.Control, cfg.Timers)
 		default:
 			_ = c.Close()
 			return nil, wrapSilent(fmt.Errorf("unexpected handshake action %d", reply.Action))
