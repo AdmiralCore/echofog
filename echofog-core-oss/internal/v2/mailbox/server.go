@@ -150,6 +150,11 @@ const pruneBatch = 128
 // MaxQueueDays is the queue lifetime unit (services.md §5.2): QUEUE_CREATE.ttl is in days.
 const MaxQueueDays = 30
 
+// storeGrace is how far past its logical lifetime the store may keep a record. The store's TTL is
+// only a backstop against garbage (AD19): every lifetime that matters is in the E/ index, and the
+// counters never depend on the store dropping a record.
+const storeGrace = 24 * time.Hour
+
 // maxItemOverhead is the conservative encoded overhead of one Item (tags, lengths, id, timestamp).
 const maxItemOverhead = 64
 
@@ -409,16 +414,24 @@ func expiryKey(q, id []byte, expires int64, public bool) []byte {
 	return append(b, id...)
 }
 
-func parseExpiryKey(b []byte) (expires int64, public bool, q, id []byte, err error) {
+// queueExpiryKey is the index entry of a whole queue: flag bit 1, zero item id.
+func queueExpiryKey(q []byte, expires int64, public bool) []byte {
+	b := expiryKey(q, make([]byte, ItemSize), expires, public)
+	b[10] |= 2
+	return b
+}
+
+func parseExpiryKey(b []byte) (expires int64, public, isQueue bool, q, id []byte, err error) {
 	const fixed = 2 + 8 + 1
 	if len(b) != fixed+QueueSize+ItemSize || !bytes.HasPrefix(b, []byte(expiryIndexPrefix)) {
-		return 0, false, nil, nil, ErrCorrupt
+		return 0, false, false, nil, nil, ErrCorrupt
 	}
 	expires = int64(binary.BigEndian.Uint64(b[2:10]))
 	public = b[10]&1 != 0
+	isQueue = b[10]&2 != 0
 	q = b[fixed : fixed+QueueSize]
 	id = b[fixed+QueueSize:]
-	return expires, public, q, id, nil
+	return expires, public, isQueue, q, id, nil
 }
 
 func expiryIndexValue(size int64) []byte {
@@ -573,9 +586,10 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 	if err := s.putQueueLocked(m.Queue, rec, now); err != nil {
 		return 0, err
 	}
-	remaining := time.Unix(rec.Expires, 0).Sub(now)
+	remaining := time.Unix(rec.Expires, 0).Sub(now) + storeGrace
 	if err := s.cfg.Store.PutTTL(ownerKey(owner, m.Queue), []byte{1}, remaining); err != nil {
 		_ = s.cfg.Store.Delete(queueKey(m.Queue))
+		_ = s.cfg.Store.Delete(queueExpiryKey(m.Queue, rec.Expires*int64(time.Second), rec.Public))
 		return 0, err
 	}
 	return uint64(rec.Expires), nil
@@ -644,10 +658,7 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	}
 	stored := now.UnixNano()
 	expires := s.itemExpiry(stored)
-	itemStoreTTL := s.lim.QueueTTL
-	if s.lim.ItemTTL > itemStoreTTL {
-		itemStoreTTL = s.lim.ItemTTL
-	}
+	itemStoreTTL := s.lim.ItemTTL + storeGrace
 	if err := s.cfg.Store.PutTTL(itemKey(m.Queue, id), encodeItem(stored, m.Blob), itemStoreTTL); err != nil {
 		s.mu.Unlock()
 		return 0, nil, err
@@ -1046,19 +1057,25 @@ func (s *Server) expireQueueLocked(q []byte, rec queueRecord, now time.Time) err
 		}
 	}
 	_ = s.cfg.Store.Delete(queueKey(q))
+	_ = s.cfg.Store.Delete(queueExpiryKey(q, rec.Expires*int64(time.Second), rec.Public))
 	owner := s.opaque("mailbox-owner", rec.Owner[:])
 	_ = s.cfg.Store.Delete(ownerKey(owner, q))
 	return nil
 }
 
+// putQueueLocked writes the queue record. Its logical lifetime is the E/ entry written by
+// CreateQueue; the store keeps the record one grace period longer as a backstop only.
 func (s *Server) putQueueLocked(q []byte, rec queueRecord, now time.Time) error {
+	if rec.AuthSealed == ([authKeySealedSize]byte{}) {
+		// A v1 record has no queue entry in the index yet; add it while migrating.
+		if err := s.cfg.Store.Put(queueExpiryKey(q, rec.Expires*int64(time.Second), rec.Public), expiryIndexValue(0)); err != nil {
+			return err
+		}
+	}
 	if err := s.sealAuthKey(q, &rec); err != nil {
 		return err
 	}
-	remaining := time.Unix(rec.Expires, 0).Sub(now)
-	if remaining <= 0 {
-		return ErrUnknownQueue
-	}
+	remaining := time.Unix(rec.Expires, 0).Sub(now) + storeGrace
 	return s.cfg.Store.PutTTL(queueKey(q), rec.encode(), remaining)
 }
 
@@ -1089,13 +1106,24 @@ func (s *Server) pruneExpiredLocked(now time.Time) error {
 			live   bool
 		)
 		for _, e := range entries {
-			expires, public, q, id, err := parseExpiryKey(e.Key)
+			expires, public, isQueue, q, id, err := parseExpiryKey(e.Key)
 			if err != nil {
 				return err
 			}
 			if expires > nowNanos {
 				live = true
 				break
+			}
+			if isQueue {
+				if err := s.applyExpiryDeltasLocked(deltas, now); err != nil {
+					return err
+				}
+				deltas, byKey = nil, make(map[string]*expiryDelta)
+				if err := s.expireQueueEntryLocked(q, expires, e.Key, now); err != nil {
+					return err
+				}
+				cursor = append(cursor[:0], e.Key...)
+				continue
 			}
 			size, err := parseExpiryIndexValue(e.Value)
 			if err != nil {
@@ -1127,6 +1155,27 @@ func (s *Server) pruneExpiredLocked(now time.Time) error {
 	}
 }
 
+// expireQueueEntryLocked processes one queue entry of the index: the queue leaves with its items
+// and their share of the counters. An entry that no longer matches the record is stale and is
+// only dropped.
+func (s *Server) expireQueueEntryLocked(q []byte, expires int64, indexKey []byte, now time.Time) error {
+	raw, err := s.cfg.Store.Get(queueKey(q))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return s.cfg.Store.Delete(indexKey)
+	case err != nil:
+		return err
+	}
+	rec, err := parseQueueRecord(raw)
+	if err != nil {
+		return err
+	}
+	if rec.Expires*int64(time.Second) != expires {
+		return s.cfg.Store.Delete(indexKey)
+	}
+	return s.expireQueueLocked(q, rec, now)
+}
+
 func (s *Server) applyExpiryDeltasLocked(deltas []*expiryDelta, now time.Time) error {
 	for _, d := range deltas {
 		if err := s.addTotalLocked(d.public, -d.items, -d.bytes); err != nil {
@@ -1142,12 +1191,6 @@ func (s *Server) applyExpiryDeltasLocked(deltas []*expiryDelta, now time.Time) e
 		rec, err := parseQueueRecord(raw)
 		if err != nil {
 			return err
-		}
-		if now.Unix() >= rec.Expires {
-			if err := s.expireQueueLocked(d.queue, rec, now); err != nil {
-				return err
-			}
-			continue
 		}
 		rec.Count = clampSub(rec.Count, uint32(d.items))
 		rec.Bytes -= d.bytes

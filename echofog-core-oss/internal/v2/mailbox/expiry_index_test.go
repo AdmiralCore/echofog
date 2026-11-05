@@ -38,7 +38,7 @@ func readTotals(t *testing.T, s *Server, public bool) counter {
 
 func indexEntries(t *testing.T, kv store.KV) int {
 	t.Helper()
-	entries, err := kv.Scan([]byte(expiryIndexPrefix), 10000)
+	entries, err := kv.Scan([]byte(expiryIndexPrefix), 500)
 	if err != nil {
 		t.Fatalf("scan index: %v", err)
 	}
