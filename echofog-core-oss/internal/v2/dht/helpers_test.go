@@ -90,22 +90,7 @@ func cardInBucket(t *testing.T, self DeviceID, bucket int, counter uint64, now t
 	return nil
 }
 
-// bucketIndex is the number of leading bits self and other share; kept here so the tests check
-// the same definition the table uses.
-func bucketIndex(self, other DeviceID) int {
-	for i := 0; i < len(self); i++ {
-		x := self[i] ^ other[i]
-		if x != 0 {
-			n := 0
-			for x&0x80 == 0 {
-				n++
-				x <<= 1
-			}
-			return i*8 + n
-		}
-	}
-	return -1
-}
+// bucketIndex is the number of leading bits self and other share; the table defines it.
 
 func cardAddr(c *objects.Card) string {
 	a := c.Addrs()

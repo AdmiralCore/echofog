@@ -3,19 +3,25 @@ package dht
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/store"
 )
 
 func newTable(t *testing.T, kv *memKV, now *time.Time) *Table {
 	t.Helper()
+	var persistent store.KV
+	if kv != nil {
+		persistent = kv
+	}
 	tbl, err := Open(Config{
-		Self: testSelf,
-		Store: kv,
+		Self:  testSelf,
+		Store: persistent,
 		Now:   func() time.Time { return *now },
 		Rand:  rand.New(rand.NewSource(1)),
 	})
@@ -183,7 +189,7 @@ func TestBucketKeepsTwentyAndPingsBeforeReplacing(t *testing.T) {
 
 	const bucket = 0
 	for i := uint64(0); i < K; i++ {
-		c := cardInBucket(t, testSelf, bucket, i+1, now, testAddr("10.4.1.1", uint32(1000+i)))
+		c := cardInBucket(t, testSelf, bucket, i+1, now, testAddr(fmt.Sprintf("10.4.%d.1", i+1), 443))
 		if !tbl.AddFromSession(c) {
 			t.Fatalf("entry %d was rejected", i)
 		}
@@ -192,7 +198,7 @@ func TestBucketKeepsTwentyAndPingsBeforeReplacing(t *testing.T) {
 		t.Fatalf("bucket holds %d entries, want %d", tbl.BucketLen(bucket), K)
 	}
 
-	candidate := cardInBucket(t, testSelf, bucket, K+1, now, testAddr("10.4.2.2", 2000))
+	candidate := cardInBucket(t, testSelf, bucket, K+1, now, testAddr("10.5.1.1", 2000))
 	// The candidate does not fit yet: the entry chosen for the check is still in the bucket.
 	if tbl.AddFromCard(candidate) {
 		t.Fatal("a full bucket accepted a candidate before the ping")
@@ -213,7 +219,7 @@ func TestBucketKeepsTwentyAndPingsBeforeReplacing(t *testing.T) {
 	// Now the pinged entry is dead and the next candidate takes its place.
 	dead := &fakePinger{err: errors.New("dead"), done: make(chan struct{}, 1)}
 	tbl.SetPinger(dead)
-	next := cardInBucket(t, testSelf, bucket, K+2, now, testAddr("10.4.3.3", 3000))
+	next := cardInBucket(t, testSelf, bucket, K+2, now, testAddr("10.6.1.1", 3000))
 	if tbl.AddFromCard(next) {
 		t.Fatal("a full bucket accepted a candidate before the ping")
 	}
@@ -373,7 +379,7 @@ func TestMemoryCapEvictsLRU(t *testing.T) {
 
 	var cards []*objects.Card
 	for i := 0; i < 5; i++ {
-		c := buildCard(t, uint64(40+i), 1, now, objects.ScopePublic, 0, testAddr("10.10.10.10", uint32(1000+i)))
+		c := buildCard(t, uint64(40+i), 1, now, objects.ScopePublic, 0, testAddr(fmt.Sprintf("10.10.%d.1", i+1), 443))
 		cards = append(cards, c)
 		if !tbl.AddFromSession(c) {
 			t.Fatalf("card %d was rejected", i)
@@ -398,7 +404,7 @@ func TestClosestOrdersByXOR(t *testing.T) {
 
 	var cards []*objects.Card
 	for i := uint64(0); i < 6; i++ {
-		c := buildCard(t, 60+i, 1, now, objects.ScopePublic, 0, testAddr("10.11.1.1", uint32(1000+i)))
+		c := buildCard(t, 60+i, 1, now, objects.ScopePublic, 0, testAddr(fmt.Sprintf("10.11.%d.1", i+1), 443))
 		cards = append(cards, c)
 		if !tbl.AddFromSession(c) {
 			t.Fatalf("card %d was rejected", i)
@@ -411,7 +417,9 @@ func TestClosestOrdersByXOR(t *testing.T) {
 		t.Fatalf("Closest returned %d cards, want 3", len(got))
 	}
 	for i := 1; i < len(got); i++ {
-		if distance(DeviceID(got[i-1].DeviceID), target) > distance(DeviceID(got[i].DeviceID), target) {
+		a := DeviceID(got[i-1].DeviceID)
+		b := DeviceID(got[i].DeviceID)
+		if lessDistance(b, a, target) {
 			t.Fatal("Closest is not sorted by XOR distance")
 		}
 	}
