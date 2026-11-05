@@ -228,6 +228,13 @@ func (b *CardBuilder) Update(cfg Config) error {
 	return b.applyConfig(cfg, false)
 }
 
+// Visibility returns the configured visibility of the node (objects.md §3.2, wire.md §2.1).
+func (b *CardBuilder) Visibility() Visibility {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.cfg.Visibility
+}
+
 // Issue builds, signs and records a fresh card of the scope.
 func (b *CardBuilder) Issue(ctx context.Context, scope objects.Scope) (*IssuedCard, error) {
 	b.mu.Lock()
@@ -269,10 +276,16 @@ func (b *CardBuilder) OwnCards(ctx context.Context) (handshake.OwnCards, error) 
 	}
 	if b.cfg.Visibility == Visible {
 		c, err := b.currentLocked(ctx, objects.ScopePublic)
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrNoPublicCard):
+			// D37: a visible node without a camouflaged listener has no public card. It still
+			// answers handshakes with its peer card, so omit the public entry instead of
+			// failing the whole handshake material.
+		case err != nil:
 			return handshake.OwnCards{}, err
+		default:
+			out.Current[uint32(objects.ScopePublic)] = handshake.OwnCard{Seq: c.Seq, Envelope: c.Envelope}
 		}
-		out.Current[uint32(objects.ScopePublic)] = handshake.OwnCard{Seq: c.Seq, Envelope: c.Envelope}
 	}
 	peer, err := b.currentLocked(ctx, objects.ScopePeer)
 	if err != nil {

@@ -72,6 +72,11 @@ type Established struct {
 	// Features and Services are the negotiated values (GREASE removed, responder selection).
 	Features []uint32
 	Services []handshake.ServiceChoice
+	// Kind is the kind of the carrier that carries the session: direct or relay (wire.md §8).
+	Kind mux.PathKind
+	// PeerTime is the peer clock from HsInit.time/HsResp.time as the peer reported it, in unix
+	// seconds. The runtime feeds it to node/clock for the median offset (handshake.md §7, T3.8).
+	PeerTime uint64
 	// Remote is the peer's carrier address when the carrier exposes one (Dial: the dialed
 	// address); it is the zero value for carriers without an address (in-memory tests).
 	Remote netip.AddrPort
@@ -263,17 +268,26 @@ func verifyRemote(card *objects.Card, now time.Time, v handshake.CardVerifier) (
 	return info, nil
 }
 
+// PolicyFunc builds the stream policy of one session from its negotiated services. The runtime
+// passes service.Registry.Policy here so the service layer sees the same selection and per-type
+// limiters the handshake produced (02-architecture §3.1, T3.7a).
+type PolicyFunc func(choices []handshake.ServiceChoice) mux.StreamPolicy
+
 // finish hands the handshake result to the mux. mux.NewSession makes the single sealing switch
 // (wire.md §8.5) when the carrier reports Sealed.
-func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers) (*Established, error) {
+func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc) (*Established, error) {
 	// The handshake read deadline belongs to the handshake, not to the session: its control
 	// stream must wait for peer traffic indefinitely (the mux applies its own timers).
 	_ = ctrl.SetReadDeadline(time.Time{})
 	_ = ctrl.SetWriteDeadline(time.Time{})
+	pol := policyFor(hs.Services)
+	if policy != nil {
+		pol = policy(hs.Services)
+	}
 	cfg := mux.Config{
 		Keys:     sessionKeys{hs: hs},
 		Features: muxFeatures(hs.Features),
-		Policy:   policyFor(hs.Services),
+		Policy:   pol,
 		Timers:   timers,
 	}
 	var peerID [32]byte
@@ -298,6 +312,8 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 		SID:           sid,
 		Features:      append([]uint32(nil), hs.Features...),
 		Services:      append([]handshake.ServiceChoice(nil), hs.Services...),
+		Kind:          kind,
+		PeerTime:      hs.PeerTime,
 		Remote:        remote,
 		Local:         local,
 		Unverified:    hs.Unverified,
