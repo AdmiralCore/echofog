@@ -75,10 +75,13 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 3. **Bulk data post-quantum confidentiality** rests on `X25519MLKEM768` TLS or on sealed mode; a bug in
    the group check would weaken it silently.
 4. **Fully random first datagrams.** A noise3 Init is a ≥ 1271-byte datagram without any structure.
-   "Fully encrypted traffic" classifiers (as used by the GFW for TCP) can flag the class without
-   knowing any key; protocol-shaped first packets are future work. Flow timing, sizes beyond the
-   profile, connection counts and data-centre destinations remain visible; censors that block all
-   unknown UDP or freeze flows to data-centre IPs (~16 KB) are not defeated by masking.
+   "Fully encrypted traffic" (FET) classifiers can flag the class without knowing any key. The GFW
+   applies its FET rule to TCP today; moving the rule to UDP is a cheap evolution, so `noise3` is
+   used for same-country hops only (D21) and is not claimed as protection against a global passive
+   censor. Protocol-shaped first packets are future work (`wire` §2.7); the first public report of
+   UDP FET is a monitoring trigger. Flow timing, sizes beyond the profile, connection counts and
+   data-centre destinations remain visible; a censor that blocks all unknown UDP is not defeated by
+   masking, and the volume freeze of TCP flows is a separate residual risk (§4.22).
 5. **noise3 has no L0 forward secrecy** (Decision D11): a stolen `mask_sk` exposes recorded flows' inner
    QUIC packets (still TLS-protected) and makes them recognisable after the fact.
 6. **Signatures are classical.** Ed25519 identities are forgeable by a future real-time quantum
@@ -124,6 +127,37 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
     but a successful handshake shows whether the initiator used the current or the previous key. This
     reveals only which valid card generation an initiator holds; accepted. An operator that cares can
     shorten the overlap, at the cost of rejecting cards issued just before a rotation.
+20. **TLS-in-TLS and cross-layer RTT inside exit traffic.** Nested TLS handshakes are detectable
+    protocol-agnostically, and multiplexing and padding alone do not remove the class (USENIX
+    Security 2024); correlating outer and inner round-trip times gives a second signal (NDSS 2025).
+    v2.0 narrows this only partly: the client and exit/2 pad the first 8 records or 16 KB in each
+    direction of each new exit stream into `shape` buckets in the same carrier record, add jitter
+    ≤ 30 ms and mix streams on one carrier (T10.1/T10.2). Chat and signalling get no such
+    protection. The residual is measured by the TLS-in-TLS and RTT detectors; the acceptance
+    threshold is set at the M4 audit, and cover traffic on an exit path would be a separate decision,
+    not current behaviour.
+21. **Country allow-lists and hosting-range blocks.** A network can replace block-lists with
+    allow-lists of SNI, addresses and services, and block hosting ranges by ASN or CIDR. Signed
+    cards, cover selection and REALITY do not make a node reachable where its address or cover SNI is
+    not allowed. The answer is operational, not cryptographic: a first hop in the user's own country
+    (T6.4), covers filtered by the signed allowed-SNI/CIDR file (T2.6c), and a "domestic entry"
+    preset and document (T12.5) whose address lies in a CIDR allocated to a service on the
+    allow-list, not in an arbitrary national cloud — operators have already separated cloud ranges,
+    so a neighbouring VPS is not a workaround (reports, January 2026). Where such an entry cannot be
+    obtained, Russian mobile networks behind allow-lists are not supported in v2.0.
+22. **Volume freeze on Russian mobile networks.** A TCP flow to a foreign data centre can be frozen at
+    about 16–20 KB (25 packets) without a reset; the state is keyed to the source address and
+    destination SNI, with a penalty of about 120 s and up to 600 s after a change of fingerprint
+    (reported in 2026). The answer is the same operational one as §4.21: from Russian mobile
+    networks no direct TCP to a foreign data centre above 12 KB, no blind UDP to foreign addresses,
+    and the first hop is domestic (T6.4); `stream-resume` is not raised for v2.0. A session can move
+    to another path, but a frozen stream does not resume on the same carrier.
+23. **Application-level VPN detection.** Since 15 April 2026 applications in Russia are required to
+    detect VPN use, and 22 of 30 popular applications do. This is outside the protocol: carrier
+    shape and cover selection cannot hide the tunnel from an application running on the same device.
+    Product measures only: exclude selected applications from the VPN on Android (T12.2), warn in
+    the UI, and say in the release notes that invisibility from applications is not promised. A VPN
+    interface such as `tun0` stays visible to any application through the interface list.
 
 ## 5. Coverage of the v1 weaknesses
 
