@@ -27,13 +27,20 @@ type testNode struct {
 	id      node.Identity
 	rt      *node.Runtime
 	store   *store.Store
+	builder *cards.CardBuilder
 }
 
 func newTestNode(t *testing.T, visibility cards.Visibility, cover bool, listeners []carrier.Listener, events node.EventSink) *testNode {
-	return newTestNodeWith(t, visibility, cover, listeners, events, nil)
+	return newTestNodeFull(t, visibility, cover, listeners, events, nil, nil)
 }
 
 func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, listeners []carrier.Listener, events node.EventSink, mutate func(*node.Config)) *testNode {
+	return newTestNodeFull(t, visibility, cover, listeners, events, nil, mutate)
+}
+
+// newTestNodeFull also lets a test change the card material (roles and flags) before the builder
+// seals its cards, and the runtime configuration.
+func newTestNodeFull(t *testing.T, visibility cards.Visibility, cover bool, listeners []carrier.Listener, events node.EventSink, cardsMutate func(*cards.Config), mutate func(*node.Config)) *testNode {
 	t.Helper()
 
 	tw, err := identity.NewThrowaway()
@@ -63,7 +70,7 @@ func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, list
 		})
 	}
 
-	builder, err := cards.New(cards.Config{
+	cardCfg := cards.Config{
 		Account:    tw.Account.Public(),
 		Device:     tw.Device,
 		HsKey:      tw.Device.Handshake().Public(),
@@ -72,7 +79,11 @@ func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, list
 		Listeners:  cardListeners,
 		Devices:    devices,
 		Visibility: visibility,
-	})
+	}
+	if cardsMutate != nil {
+		cardsMutate(&cardCfg)
+	}
+	builder, err := cards.New(cardCfg)
 	if err != nil {
 		tw.Destroy()
 		t.Fatalf("cards.New: %v", err)
@@ -91,7 +102,7 @@ func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, list
 		Store:     st,
 		Listeners: listeners,
 		Events:    events,
-		Profile:   node.Profile{Platform: "test"},
+		Profile:   node.Profile{Platform: node.PlatformDesktop},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -117,8 +128,9 @@ func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, list
 			NodeID:   node.NodeID(tw.Account.NodeID()),
 			DeviceID: node.DeviceID(tw.Device.ID()),
 		},
-		rt:    rt,
-		store: st,
+		rt:      rt,
+		store:   st,
+		builder: builder,
 	}
 }
 
@@ -140,6 +152,19 @@ func (n *testNode) peerCard(t *testing.T) *objects.Card {
 	card, err := objects.VerifyCard(env, time.Now())
 	if err != nil {
 		t.Fatalf("verify own peer card: %v", err)
+	}
+	return card
+}
+
+func (n *testNode) publicCard(t *testing.T) *objects.Card {
+	t.Helper()
+	env, ok := n.rt.Cards().Own(objects.ScopePublic)
+	if !ok {
+		t.Fatal("node has no public card")
+	}
+	card, err := objects.VerifyCard(env, time.Now())
+	if err != nil {
+		t.Fatalf("verify own public card: %v", err)
 	}
 	return card
 }
@@ -322,6 +347,17 @@ func (c *captureEvents) has(kind node.EventKind) bool {
 		}
 	}
 	return false
+}
+
+func (c *captureEvents) last(kind node.EventKind) (node.Event, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.list) - 1; i >= 0; i-- {
+		if c.list[i].Kind == kind {
+			return c.list[i], true
+		}
+	}
+	return node.Event{}, false
 }
 
 // TestNoCoverDoesNotPublishPublicCardButServesPeers pins D37: a node without a camouflaged

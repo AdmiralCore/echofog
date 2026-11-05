@@ -13,10 +13,11 @@
 При `protocol: 2` выбранные сетевые бэкенды — `v2PendingBackend`: каждый метод с результатом
 `error` возвращает `ErrV2NotBuilt` («v2 ещё не собран»); метод без `error` возвращает нулевое
 значение. Методы доменов «сеть и доступ» и «контакты» с T11.1b, «чаты», «группы и каналы» и
-«файлы» с T11.1c — делегаты своих бэкендов (`v1NetBackend`/`v1ContactBackend`/`v1ChatBackend`/
-`v1GroupBackend`/`v1FileBackend` при `protocol: 1`, `v2PendingBackend` при `protocol: 2`) и своей
-проверки режима не делают. Остальные сетевые домены (звонки, VPN) до T11.1d-e по-прежнему сами
-проверяют режим (`NodeApi.v2Unavailable`) и после переноса станут такими же делегатами.
+«файлы» с T11.1c, «звонки и стримы» с T11.1d — делегаты своих бэкендов (`v1NetBackend`/
+`v1ContactBackend`/`v1ChatBackend`/`v1GroupBackend`/`v1FileBackend`/`v1CallBackend` при
+`protocol: 1`, `v2PendingBackend` при `protocol: 2`) и своей проверки режима не делают. Остальной
+сетевой домен (VPN) до T11.1e по-прежнему сам проверяет режим (`NodeApi.v2Unavailable`) и после
+переноса станет таким же делегатом.
 
 Всего экспортированных методов: **237**. В их телах обращений `.node.*`: **282**, из них к `.node.Swarm`: **42**. По всему пакету `pkg/api/node` (329 методов `NodeApi`, включая неэкспортированные помощники; без `_test.go`): **438** обращений `.node.*`, из них **87** к `.node.Swarm` (с `_test.go` — 449 и 88; в задаче указаны 417/88 — расхождение в подсчёте, см. примечание 5).
 
@@ -28,44 +29,44 @@ DHT/relay/выхода; нет — если работает только с л�
 
 | Метод | Домен | Бэкенд | Сеть v1 | `.node.*` | `.node.Swarm` |
 |---|---|---|---:|---:|---:|
-| `ActiveGroupCall` | звонки и стримы | — | да | 0 | 0 |
-| `CallStreamStats` | звонки и стримы | — | да | 2 | 0 |
-| `CaptureRTPBudget` | звонки и стримы | — | нет | 0 | 0 |
-| `EndGroupCall` | звонки и стримы | — | да | 0 | 0 |
-| `EndRoomCall` | звонки и стримы | — | да | 0 | 0 |
-| `GetCallManager` | звонки и стримы | — | да | 1 | 0 |
-| `GetCallPath` | звонки и стримы | — | да | 0 | 0 |
-| `GetCallRelays` | звонки и стримы | — | да | 0 | 0 |
-| `GetCallRoster` | звонки и стримы | — | да | 3 | 0 |
-| `GetCallSlots` | звонки и стримы | — | да | 2 | 0 |
-| `InviteToCall` | звонки и стримы | — | да | 2 | 0 |
-| `JoinCall` | звонки и стримы | — | да | 7 | 0 |
-| `KeepGroupCallAlive` | звонки и стримы | — | да | 0 | 0 |
-| `KeepRoomCallAlive` | звонки и стримы | — | да | 0 | 0 |
-| `LeaveCall` | звонки и стримы | — | да | 2 | 0 |
-| `LeaveRoomCall` | звонки и стримы | — | да | 0 | 0 |
-| `ListStreamQualities` | звонки и стримы | — | нет | 0 | 0 |
-| `PublishCaptureRTP` | звонки и стримы | — | да | 2 | 0 |
-| `ReportCallMember` | звонки и стримы | — | да | 2 | 0 |
-| `RequestRelayChange` | звонки и стримы | — | да | 2 | 0 |
-| `SetCallBackdrop` | звонки и стримы | — | да | 2 | 0 |
-| `SetCaptureEncoder` | звонки и стримы | — | да | 2 | 0 |
-| `SetDisplayRate` | звонки и стримы | — | да | 2 | 0 |
-| `SetUploadCapacity` | звонки и стримы | — | да | 2 | 0 |
-| `SetVADState` | звонки и стримы | — | да | 2 | 0 |
-| `SetupCallCallbacks` | звонки и стримы | — | да | 2 | 0 |
-| `SetupCallMediaCallbacks` | звонки и стримы | — | да | 2 | 0 |
-| `SetupStreamInfoCallback` | звонки и стримы | — | да | 2 | 0 |
-| `StartGroupCall` | звонки и стримы | — | да | 0 | 0 |
-| `StartRoomCall` | звонки и стримы | — | да | 0 | 0 |
-| `StartScreenShare` | звонки и стримы | — | да | 2 | 0 |
-| `StartStream` | звонки и стримы | — | да | 2 | 0 |
-| `StopScreenShare` | звонки и стримы | — | да | 2 | 0 |
-| `SubmitCallAnswer` | звонки и стримы | — | да | 2 | 0 |
-| `SwitchCallRelay` | звонки и стримы | — | да | 0 | 0 |
-| `UnwatchStream` | звонки и стримы | — | да | 2 | 0 |
-| `UpdateStreamQuality` | звонки и стримы | — | да | 2 | 0 |
-| `WatchStream` | звонки и стримы | — | да | 2 | 0 |
+| `ActiveGroupCall` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `CallStreamStats` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `CaptureRTPBudget` | звонки и стримы | v1CallBackend | нет | 0 | 0 |
+| `EndGroupCall` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `EndRoomCall` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `GetCallManager` | звонки и стримы | v1CallBackend | да | 1 | 0 |
+| `GetCallPath` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `GetCallRelays` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `GetCallRoster` | звонки и стримы | v1CallBackend | да | 3 | 0 |
+| `GetCallSlots` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `InviteToCall` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `JoinCall` | звонки и стримы | v1CallBackend | да | 7 | 0 |
+| `KeepGroupCallAlive` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `KeepRoomCallAlive` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `LeaveCall` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `LeaveRoomCall` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `ListStreamQualities` | звонки и стримы | v1CallBackend | нет | 0 | 0 |
+| `PublishCaptureRTP` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `ReportCallMember` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `RequestRelayChange` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetCallBackdrop` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetCaptureEncoder` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetDisplayRate` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetUploadCapacity` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetVADState` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetupCallCallbacks` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetupCallMediaCallbacks` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SetupStreamInfoCallback` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `StartGroupCall` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `StartRoomCall` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `StartScreenShare` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `StartStream` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `StopScreenShare` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SubmitCallAnswer` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `SwitchCallRelay` | звонки и стримы | v1CallBackend | да | 0 | 0 |
+| `UnwatchStream` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `UpdateStreamQuality` | звонки и стримы | v1CallBackend | да | 2 | 0 |
+| `WatchStream` | звонки и стримы | v1CallBackend | да | 2 | 0 |
 | `ChatAttachments` | чаты | v1ChatBackend | да | 0 | 0 |
 | `ChatDelete` | чаты | v1ChatBackend | да | 0 | 0 |
 | `ChatEdit` | чаты | v1ChatBackend | да | 0 | 0 |
@@ -290,5 +291,6 @@ DHT/relay/выхода; нет — если работает только с л�
 7. Колонка «Бэкенд» — реализация, которой метод делегирует при `protocol: 1`: `v1NetBackend`
    (39 методов домена «сеть и доступ») и `v1ContactBackend` (12 методов домена «контакты»),
    перенесённые в T11.1b; `v1ChatBackend` (22), `v1GroupBackend` (39), `v1FileBackend` (10),
-   перенесённые в T11.1c; `—` — метод пока остаётся на фасаде и проверяет режим сам. При
-   `protocol: 2` на месте любого сетевого бэкенда стоит `v2PendingBackend`.
+   перенесённые в T11.1c; `v1CallBackend` (38 методов домена «звонки и стримы»), перенесённый в
+   T11.1d; `—` — метод пока остаётся на фасаде и проверяет режим сам. При `protocol: 2` на месте
+   любого сетевого бэкенда стоит `v2PendingBackend`.

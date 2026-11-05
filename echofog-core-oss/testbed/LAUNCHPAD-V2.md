@@ -14,12 +14,13 @@ go run ./testbed/runner compare testbed/results/<a>.json testbed/results/<b>.jso
 
 | Scenario | Default phases | What it does |
 |---|---|---|
-| `v2-basic` | `net,services` | the lab mesh forms; a few messages are delivered exactly once (v1 product until `efv2` exists) |
+| `v2-basic` | `echo` | two `efv2` nodes on the WAN; 1 GiB through the echo stream over real noise3, 100 datagrams, the server's `efv2 status` |
 | `v2-censor` | `censor` | captures the b network, drives the v2 carrier harness and the browser control, runs D1–D4/D10 |
 | `v2-carrier` | `censor` | the same capture/harness path, for a carrier-only run |
 
-`-phases censor,net,services` overrides the default. Other flags: `-seed`, `-profile
-desktop|android`, `-network lab|ru-mobile|cn|ir`, `-pcap`, `-pcap-budget` (default and maximum
+`-phases censor,net,services,echo` overrides the default. Other flags: `-seed`, `-profile
+desktop|android`, `-network lab|ru-mobile|cn|ir`, `-v2-echo-bytes` (default 1 GiB), `-pcap`,
+`-pcap-budget` (default and maximum
 2GB), `-lock` (default `testbed/.testbed.lock`). The budget is enforced in the writer: the capture
 stops at the limit, never a poll interval later. The runner refuses to start without a valid pcap
 budget, and holds the run lock for the whole run. The coordinator's `locks/testbed.lock` is a
@@ -81,7 +82,7 @@ it into the lab nodes, starts `-mode serve` on `x1:4343`, and runs one mode at a
 
 | Mode | Label | Purpose |
 |---|---|---|
-| `udp-noise` | carrier, synthetic | noise3-shaped UDP; **the real `carrier/noise3` is not merged in v2 yet (T2.4), and `efv2` is not built (T0.3)** |
+| `udp-noise` | carrier, synthetic | noise3-shaped UDP; `carrier/noise3` is merged (T2.4) and `v2-basic` exercises it, but this harness mode is still a synthetic stand-in with the same wire shape |
 | `tcp-random` | carrier, synthetic | D1 control: the fully-encrypted first payload |
 | `tls-go` | tool | `crypto/tls`: no GREASE, a library fingerprint |
 | `tls-chrome` | browser | uTLS Chrome preset |
@@ -115,8 +116,8 @@ C4Container
 
 ## What is still open
 
-- `efv2` (T0.3) and `carrier/noise3` (T2.4) are not in `v2`; this run is synthetic plus the v1
-  product, and the report says so in `findings`.
+- `v2-censor` still drives the synthetic `udp-noise` harness mode: the real `carrier/noise3` is
+  exercised by `v2-basic` (and `carrier/reality2-quic` joins it when T2.6b lands).
 - D5–D9 and the active/behavioral detectors are T15.0b/T15.0c.
 - Real Chrome captures for RU/IR/CN networks are field work (T15.2); the lab file is honest about
   which source produced each entry.

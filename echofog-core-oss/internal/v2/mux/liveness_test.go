@@ -127,13 +127,16 @@ func TestStandbyLimit(t *testing.T) {
 	waitFor(t, func() bool { return slices.Equal(pathIDs(pr.a), []uint64{0, 4, 6}) })
 	waitFor(t, func() bool { return slices.Equal(pathIDs(pr.b), []uint64{0, 4, 6}) })
 
-	// low_power: no standby paths at all.
+	// low_power: no standby paths at all. A newly bound path therefore replaces the old one
+	// (the same rule a network change relies on), instead of being trimmed away.
 	lp := sessionPair(t, false, func(a, b *Config) { a.LowPower = true })
 	if lp.a.cfg.Timers.KeepaliveMin != 40*time.Second || lp.a.cfg.Timers.KeepaliveMax != 55*time.Second {
 		t.Fatalf("low_power keepalive %v..%v", lp.a.cfg.Timers.KeepaliveMin, lp.a.cfg.Timers.KeepaliveMax)
 	}
 	bindNewPath(t, lp, false)
-	waitFor(t, func() bool { return slices.Equal(pathIDs(lp.a), []uint64{0}) })
+	waitFor(t, func() bool { return slices.Equal(pathIDs(lp.a), []uint64{2}) })
+	waitFor(t, func() bool { return activeOf(lp.a) == 2 })
+	waitFor(t, func() bool { return slices.Equal(pathIDs(lp.b), []uint64{2}) })
 }
 
 func TestDirectPathPreferredOverRelay(t *testing.T) {

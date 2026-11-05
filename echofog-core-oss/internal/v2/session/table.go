@@ -144,6 +144,50 @@ func (t *Table) Len() int {
 	return len(t.sessions)
 }
 
+// Max returns the session limit of the table (from mem_cap_mb or TableConfig.MaxSessions).
+func (t *Table) Max() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.max
+}
+
+// Lookup returns the live session for (local, peer), or nil.
+func (t *Table) Lookup(local, peer [32]byte) *Established {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	est := t.sessions[Key{Local: local, Peer: peer}]
+	if est == nil || !sessionUsable(est) {
+		return nil
+	}
+	return est
+}
+
+// ByPeer returns a live session to the peer device, of any local identity. It is used by path
+// operations that are local policy and do not carry an identity.
+func (t *Table) ByPeer(peer [32]byte) *Established {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, est := range t.sessions {
+		if est.Peer != nil && est.Peer.DeviceID == peer && sessionUsable(est) {
+			return est
+		}
+	}
+	return nil
+}
+
+// Sessions returns a snapshot of the sessions currently kept. A draining session stays here until
+// its successor replaces it, exactly as for Get; callers that act on the snapshot check the
+// session state themselves.
+func (t *Table) Sessions() []*Established {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]*Established, 0, len(t.sessions))
+	for _, est := range t.sessions {
+		out = append(out, est)
+	}
+	return out
+}
+
 func (t *Table) schedule() {
 	t.mu.Lock()
 	if t.closed {

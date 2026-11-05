@@ -372,11 +372,7 @@ func (n *v1ChatBackend) GetMessages(contactID string, limit int, beforeTimestamp
 	return msgs, nil
 }
 
-func (n *NodeApi) GetCallManager() *call.CallManager {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1CallBackend) GetCallManager() *call.CallManager {
 	if n.node == nil {
 		return nil
 	}
@@ -384,11 +380,7 @@ func (n *NodeApi) GetCallManager() *call.CallManager {
 }
 
 // JoinCall connects to a call room, sets up local loopback bridge, and returns the SDP Offer.
-func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return "", ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) JoinCall(callID string, coordPeerID string) (string, error) {
 	if n.node == nil || n.node.CallManager == nil {
 		return "", errors.New("call manager not initialized")
 	}
@@ -425,11 +417,7 @@ func (n *NodeApi) JoinCall(callID string, coordPeerID string) (string, error) {
 }
 
 // SubmitCallAnswer delivers the frontend WebRTC SDP Answer to the Go loopback bridge.
-func (n *NodeApi) SubmitCallAnswer(sdpAnswer string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) SubmitCallAnswer(sdpAnswer string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -437,11 +425,7 @@ func (n *NodeApi) SubmitCallAnswer(sdpAnswer string) error {
 }
 
 // LeaveCall cleanly exits the call room and releases media resources.
-func (n *NodeApi) LeaveCall() error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) LeaveCall() error {
 	if n.node == nil || n.node.CallManager == nil {
 		return nil
 	}
@@ -449,11 +433,7 @@ func (n *NodeApi) LeaveCall() error {
 }
 
 // StartScreenShare registers and announces a screen share stream in the P2P network.
-func (n *NodeApi) StartScreenShare(streamID string, bitrate int) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) StartScreenShare(streamID string, bitrate int) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -461,11 +441,7 @@ func (n *NodeApi) StartScreenShare(streamID string, bitrate int) error {
 }
 
 // StopScreenShare closes the screen broadcast.
-func (n *NodeApi) StopScreenShare(streamID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) StopScreenShare(streamID string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -474,11 +450,7 @@ func (n *NodeApi) StopScreenShare(streamID string) error {
 
 // SetDisplayRate notes the refresh rate of the screen streams are watched on (0: not known), for
 // the broadcasters of the streams watched to pick a frame rate it shows evenly.
-func (n *NodeApi) SetDisplayRate(hz int) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1CallBackend) SetDisplayRate(hz int) {
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -486,11 +458,7 @@ func (n *NodeApi) SetDisplayRate(hz int) {
 }
 
 // WatchStream subscribes to another peer's stream.
-func (n *NodeApi) WatchStream(streamID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) WatchStream(streamID string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -517,11 +485,7 @@ type StreamStatsDTO struct {
 }
 
 // CallStreamStats returns the counters of one stream of the active call.
-func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return StreamStatsDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) CallStreamStats(streamID string) (StreamStatsDTO, error) {
 	if n.node == nil || n.node.CallManager == nil {
 		return StreamStatsDTO{}, errors.New("call manager not initialized")
 	}
@@ -536,11 +500,7 @@ func (n *NodeApi) CallStreamStats(streamID string) (StreamStatsDTO, error) {
 }
 
 // UnwatchStream cancels subscription to another peer's stream.
-func (n *NodeApi) UnwatchStream(streamID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) UnwatchStream(streamID string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -548,11 +508,7 @@ func (n *NodeApi) UnwatchStream(streamID string) error {
 }
 
 // SetVADState broadcasts voice activity detection status to the call room.
-func (n *NodeApi) SetVADState(speaking bool, audioDb float64) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1CallBackend) SetVADState(speaking bool, audioDb float64) {
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -560,16 +516,12 @@ func (n *NodeApi) SetVADState(speaking bool, audioDb float64) {
 }
 
 // SetupCallCallbacks wires up CallManager events to external listeners.
-func (n *NodeApi) SetupCallCallbacks(
+func (n *v1CallBackend) SetupCallCallbacks(
 	onActiveSpeaker func(speaker string, speaking bool, db float32),
 	onStreamAnnounced func(streamID string, broadcaster string, mediaType string, bitrate int),
 	onStreamClosed func(streamID string),
 	onTopologyUpdated func(epoch uint64, coordinator string),
 ) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
 	if n.node == nil || n.node.CallManager == nil {
 		return
 	}
@@ -611,11 +563,7 @@ func (n *NodeApi) callUploadKbps() int {
 }
 
 // SetUploadCapacity declares the local upstream bandwidth (kbps) used to validate stream quality.
-func (n *NodeApi) SetUploadCapacity(kbps int) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) SetUploadCapacity(kbps int) error {
 	if kbps <= 0 {
 		return errors.New("upload capacity must be positive")
 	}
@@ -627,11 +575,7 @@ func (n *NodeApi) SetUploadCapacity(kbps int) error {
 }
 
 // ListStreamQualities returns every broadcast preset and whether the current upload capacity sustains it.
-func (n *NodeApi) ListStreamQualities() []dto.StreamQualityDTO {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1CallBackend) ListStreamQualities() []dto.StreamQualityDTO {
 	upload := n.callUploadKbps()
 	out := make([]dto.StreamQualityDTO, 0, len(tree.QualityPresets))
 	for _, q := range tree.QualityPresets {
@@ -644,11 +588,7 @@ func (n *NodeApi) ListStreamQualities() []dto.StreamQualityDTO {
 }
 
 // StartStream announces a broadcast at a named quality preset (e.g. "2160p60").
-func (n *NodeApi) StartStream(streamID, mediaType, qualityID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) StartStream(streamID, mediaType, qualityID string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -674,11 +614,7 @@ func (n *NodeApi) allowQuality(q tree.StreamQuality) {
 }
 
 // UpdateStreamQuality switches a running broadcast to another preset.
-func (n *NodeApi) UpdateStreamQuality(streamID, qualityID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1CallBackend) UpdateStreamQuality(streamID, qualityID string) error {
 	if n.node == nil || n.node.CallManager == nil {
 		return errors.New("call manager not initialized")
 	}
@@ -691,11 +627,7 @@ func (n *NodeApi) UpdateStreamQuality(streamID, qualityID string) error {
 }
 
 // SetupStreamInfoCallback delivers announced streams together with their quality metadata.
-func (n *NodeApi) SetupStreamInfoCallback(fn func(info dto.StreamInfoDTO)) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1CallBackend) SetupStreamInfoCallback(fn func(info dto.StreamInfoDTO)) {
 	if fn == nil || n.node == nil || n.node.CallManager == nil {
 		return
 	}

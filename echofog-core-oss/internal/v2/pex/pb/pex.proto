@@ -1,0 +1,26 @@
+// Frames of pex/2 (docs/protocol/v2/services.md §3).
+//
+// Every frame body is canonical protobuf (objects.md §2.3, versioning.md §3.5). Field numbers are
+// never reused. The "Max" values are in service.builtin and are enforced by the frame limiter.
+syntax = "proto3";
+
+package echofog.v2.pex;
+
+option go_package = "github.com/echofog/echofog-core/internal/v2/pex/pb;pexpb";
+
+// 0x40 GET.
+message Get {
+  uint64 req = 1;
+  uint32 max = 2;        // requested number of cards; the answer is never longer than 16
+  uint32 want_flags = 3; // card flag bits the answer must carry (registries.md §11)
+  uint32 want_role = 4;  // card role; 0 means any (the user role itself is 0)
+  string region = 5;     // filters exit cards by ExitOffer.region
+  bool release = 6;      // ask for the latest release manifest the answerer holds
+}
+
+// 0x41 CARDS.
+message Cards {
+  uint64 req = 1;
+  repeated bytes cards = 2;  // exactly the signed card envelopes, at most 16
+  bytes release = 3;         // optional echofog/release/2 envelope (T4.5)
+}

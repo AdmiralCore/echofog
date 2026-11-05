@@ -12,6 +12,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/pex"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"github.com/echofog/echofog-core/internal/v2/store"
@@ -49,17 +50,6 @@ type CardSource interface {
 	Devices(node NodeID) *objects.DeviceList
 }
 
-// Profile is the platform profile and the flags that are local policy (platforms.md §2). T3.7b
-// fills the full flag set; the runtime only needs the platform name and the memory cap so far.
-type Profile struct {
-	Platform   string
-	MemCapMB   int
-	LowPower   bool
-	Metered    bool
-	Roles      []string
-	Background string
-}
-
 // DialOpt changes one Session or Open call.
 type DialOpt struct {
 	// Card is the verified peer card to dial. When nil the runtime takes the newest card of the
@@ -76,7 +66,15 @@ type DialOpt struct {
 	Local *session.LocalIdentity
 	// ExpectedDeviceID sets the rid binding of an XX handshake without a card.
 	ExpectedDeviceID *DeviceID
+	// PathKind is the kind of the carrier created by this call: direct (default) or relay
+	// (wire.md §8). Relay suites are T6.1; tests and relay circuits pass PathRelay here.
+	PathKind mux.PathKind
 }
+
+// PeerStore is Host.Peers(): the new/tried candidate table of pex/2 (services.md §3). A candidate
+// received in a PEX answer enters the new table; a device reached in a working session moves to
+// tried and may become a guard. The tables persist in the store.
+type PeerStore = *pex.Store
 
 // Host is what services see (02-architecture §3.1). The final shape is fixed by T3.7a: the DHT,
 // PEX and access stores are added by T5.x, T5.4 and T3.6 over the same runtime, not guessed here.
@@ -88,6 +86,7 @@ type Host interface {
 	Open(ctx context.Context, peer DeviceID, service uint64, opt DialOpt) (Peer, *mux.Stream, error)
 	Register(spec service.Spec, h Handler)
 	Datagrams(types ...uint64) DatagramPort
+	Peers() PeerStore
 	Store(ns string) KV
 	Clock() Clock
 	Country(netip.Addr) (string, bool)

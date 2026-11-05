@@ -1,7 +1,10 @@
 package node
 
 import (
+	"context"
 	"errors"
+	"net/netip"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -20,22 +23,28 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 		local, err := r.mainLocal(r.ctx)
 		if err != nil {
 			if r.ctx.Err() == nil {
-				r.log.Warn("node: cannot build the accepting identity", "err", err)
+				r.listenerStopped(err)
 			}
 			return
 		}
+		onEstablished, onPathFailed := r.pathHooks()
 		cfg := session.AcceptConfig{
-			Local:    local,
-			Hidden:   r.vis != cards.Visible,
-			Passes:   r.cfg.Passes,
-			Puzzle:   r.cfg.Puzzle,
-			Bindings: r.bindings,
-			Control:  r.control,
-			Clock:    r.carrierClock,
-			Offset:   r.clock.Offset(),
-			Kind:     mux.PathDirect,
-			Policy:   r.policyFunc,
-			Verifier: nil,
+			Local:         local,
+			Hidden:        r.Self().Visibility != cards.Visible,
+			Passes:        r.cfg.Passes,
+			Puzzle:        r.cfg.Puzzle,
+			Bindings:      r.bindings,
+			Control:       r.control,
+			Clock:         r.carrierClock,
+			Offset:        r.clock.Offset(),
+			Kind:          mux.PathDirect,
+			Policy:        r.policyFunc,
+			Verifier:      nil,
+			Binder:        r.binder,
+			LowPower:      r.cfg.Profile.LowPower,
+			IdlePadding:   r.cfg.ShapeProfile,
+			OnEstablished: onEstablished,
+			OnPathFailed:  onPathFailed,
 		}
 		est, err := session.Accept(r.ctx, l, cfg)
 		switch {
@@ -59,6 +68,12 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 			// Add drains the loser by the duplicate rule of wire.md §7.3.
 			continue
 		}
+		if r.Background() == BackgroundSuspended {
+			// suspended closes sessions with GOAWAY (platforms.md §2); a peer that dialed us
+			// during the suspension is told to come back later.
+			_ = kept.GoAway(r.ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+			continue
+		}
 		r.samplePeer(kept)
 		r.ensureServing(kept)
 	}
@@ -78,9 +93,41 @@ func (r *Runtime) ensureServing(est *session.Established) {
 		defer r.wg.Done()
 		defer r.serving.Delete(est.Session)
 		peer := r.peerOf(est)
+		r.noteSession(peer.Card)
+		r.notePeerSession(peer, est.Remote)
+		r.wg.Add(1)
+		go r.greaseLoop(est.Session)
 		go r.datagramPump(est, peer)
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.pex.Run(r.ctx, est.Session, r.cfg.Profile.LowPower)
+		}()
 		r.serveSession(est, peer)
 	}()
+}
+
+// notePeerSession records a working session in the pex candidate table: the device becomes tried,
+// and the 24-hour PEX confirmation is refreshed when the session used an address of its card.
+func (r *Runtime) notePeerSession(p Peer, remote netip.AddrPort) {
+	if r.peers == nil || p.Card == nil {
+		return
+	}
+	r.peers.NoteSession(p.Card, remote, r.clock.Now())
+}
+
+// ownPublicCard returns the node's current public card, verified against the corrected clock, or
+// nil when the node has no public card (D37).
+func (r *Runtime) ownPublicCard(now time.Time) *objects.Card {
+	ic, err := r.cfg.Cards.Current(context.Background(), objects.ScopePublic)
+	if err != nil {
+		return nil
+	}
+	c, err := objects.VerifyCard(ic.Envelope, now)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // serveSession dispatches incoming service streams of one session to the modules.
