@@ -150,5 +150,12 @@ var datagramTypes = map[uint64]string{
 	DgramExitUDP: "EXIT_UDP", DgramRelay: "RELAY_DGRAM",
 }
 
-// DatagramKnown reports whether t is a registered datagram type.
-func DatagramKnown(t uint64) bool { _, ok := datagramTypes[t]; return ok }
+// DatagramKnown reports whether t is a registered datagram type. Values in the experimental
+// service range (0xf000–0xffff, registries.md §3) are allowed between consenting builds, as the
+// registry preamble permits for experimental ranges; the lab CLI's echo service uses one.
+func DatagramKnown(t uint64) bool {
+	if _, ok := datagramTypes[t]; ok {
+		return true
+	}
+	return t >= 0xf000 && t <= 0xffff
+}

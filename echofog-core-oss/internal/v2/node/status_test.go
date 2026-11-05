@@ -19,6 +19,9 @@ func TestRuntimeStatusReportsSessions(t *testing.T) {
 	queue := newCarrierQueue()
 	a := newTestNode(t, cards.Hidden, false, nil, nil)
 	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
+	mod := &fakeModule{got: make(chan node.Peer, 1), errs: make(chan error, 1)}
+	registerFakeModule(t, a.rt, mod)
+	registerFakeModule(t, b.rt, mod)
 	b.start(t)
 	a.start(t)
 
