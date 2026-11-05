@@ -47,6 +47,19 @@ type ProbeConfig struct {
 	Timeout time.Duration
 	// NoRequest skips the HEAD request (local servers do not speak HTTP).
 	NoRequest bool
+	// PrepareTCP, when set, runs on the uTLS connection before its handshake: the own-cover
+	// check uses it to put a token into the hello, so that the probe is a selected connection.
+	PrepareTCP func(uc *utls.UConn) error
+	// PrepareQUIC, when set, runs on the QUIC config of each sample (ClientHelloHook for a token).
+	PrepareQUIC func(conf *quic.Config)
+	// IgnorePost drops the records or packets after the handshake from every sample before they
+	// are folded into the profile. The own-cover check uses it: what follows the handshake is
+	// application data (the website's HTTP/2 SETTINGS, the HTTP/3 control streams) on one side
+	// and the carrier's first frames on the other, and varies from connection to connection.
+	IgnorePost bool
+	// OnLocal, when set, receives the local address of every sample connection before its
+	// handshake, so the server in the same process can tell its own check from a client.
+	OnLocal func(net.Addr)
 	// Now and Sleep are the injectable clock.
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -144,6 +157,9 @@ func (p *Prober) measure(ctx context.Context, t Target, tr Transport,
 		if err != nil {
 			return nil, fmt.Errorf("profile: %s sample %d of %s: %w", tr, i+1, t.Host, err)
 		}
+		if p.cfg.IgnorePost {
+			v.Post = nil
+		}
 		vs = append(vs, v)
 		alpn[info.alpn] = true
 		last = info
@@ -226,10 +242,18 @@ func (p *Prober) sampleTCP(ctx context.Context, t Target) (Vector, sampleInfo, e
 	if err != nil {
 		return Vector{}, info, err
 	}
+	if p.cfg.OnLocal != nil {
+		p.cfg.OnLocal(raw.LocalAddr())
+	}
 	rec := &recConn{Conn: raw}
 	var keylog bytes.Buffer // the secrets of this one connection, written during the handshake
 	uc := utls.UClient(rec, &utls.Config{ServerName: t.SNI, InsecureSkipVerify: true, KeyLogWriter: &keylog}, utls.HelloChrome_Auto)
 	defer uc.Close()
+	if p.cfg.PrepareTCP != nil {
+		if err := p.cfg.PrepareTCP(uc); err != nil {
+			return Vector{}, info, fmt.Errorf("prepare: %w", err)
+		}
+	}
 	deadline, _ := ctx.Deadline()
 	_ = uc.SetDeadline(deadline)
 	if err := uc.HandshakeContext(ctx); err != nil {
@@ -386,13 +410,20 @@ func (p *Prober) sampleQUIC(ctx context.Context, t Target) (Vector, sampleInfo, 
 		return Vector{}, info, err
 	}
 	defer udp.Close()
+	if p.cfg.OnLocal != nil {
+		p.cfg.OnLocal(udp.LocalAddr())
+	}
 	rec := &recPacketConn{PacketConn: udp}
+	qconf := &quic.Config{ChromeParrot: true}
+	if p.cfg.PrepareQUIC != nil {
+		p.cfg.PrepareQUIC(qconf)
+	}
 	conn, err := quic.Dial(ctx, rec, raddr, &tls.Config{
 		ServerName:         t.SNI,
 		NextProtos:         []string{"h3"},
 		MinVersion:         tls.VersionTLS13,
 		InsecureSkipVerify: true,
-	}, &quic.Config{ChromeParrot: true})
+	}, qconf)
 	if err != nil {
 		return Vector{}, info, fmt.Errorf("handshake: %w", err)
 	}

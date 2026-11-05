@@ -44,6 +44,13 @@ type ListenerConfig struct {
 	Now func() time.Time
 	// OnError receives replay persistence errors and cover socket errors; nil ignores them.
 	OnError func(error)
+	// ServerTLS, when set, is the TLS config of the admitted connections instead of one built
+	// from Cover. The own-cover mode (T2.6b-2) passes the very config its website uses, so the
+	// two cannot drift apart. NextProtos must contain "h3"; Cover.Cert may then be nil.
+	ServerTLS *tls.Config
+	// QUICConfig, when set, replaces the default QUIC config. The own-cover mode passes the
+	// config its HTTP/3 website uses, so the transport parameters match.
+	QUICConfig *quic.Config
 }
 
 // Listener accepts reality2-quic connections: the gate verifies tokens, the cover answers
@@ -64,7 +71,7 @@ var ErrCover = errors.New("reality2: the cover profile is required until T2.6b")
 // Listen wraps conn (a bound UDP socket) in the server gate and starts the QUIC listener.
 // The listener owns conn and closes it.
 func Listen(conn net.PacketConn, cfg ListenerConfig) (*Listener, error) {
-	if cfg.Cover.Group == 0 || cfg.Cover.Cert == nil {
+	if cfg.ServerTLS == nil && (cfg.Cover.Group == 0 || cfg.Cover.Cert == nil) {
 		return nil, ErrCover
 	}
 	if cfg.CoverAddr == nil {
@@ -102,12 +109,19 @@ func Listen(conn net.PacketConn, cfg ListenerConfig) (*Listener, error) {
 		return nil, err
 	}
 
-	_, serverTLS := quicx.Reality2TLSConfig(cfg.Cover.Group, cfg.Cover.Cert)
-	ql, err := quic.Listen(gate, serverTLS, &quic.Config{
-		EnableDatagrams:       true,
-		MaxIncomingStreams:    256,
-		MaxIncomingUniStreams: -1, // mux.Carrier has no unidirectional streams
-	})
+	serverTLS := cfg.ServerTLS
+	if serverTLS == nil {
+		_, serverTLS = quicx.Reality2TLSConfig(cfg.Cover.Group, cfg.Cover.Cert)
+	}
+	qconf := cfg.QUICConfig
+	if qconf == nil {
+		qconf = &quic.Config{
+			EnableDatagrams:       true,
+			MaxIncomingStreams:    256,
+			MaxIncomingUniStreams: -1, // mux.Carrier has no unidirectional streams
+		}
+	}
+	ql, err := quic.Listen(gate, serverTLS, qconf)
 	if err != nil {
 		replay.release()
 		_ = cover.Close()
@@ -125,6 +139,14 @@ func (l *Listener) Accept(ctx context.Context) (mux.Carrier, error) {
 	}
 	return quicx.Wrap(conn, false), nil
 }
+
+// AcceptConn returns the next admitted connection as the raw QUIC connection, for a caller
+// that needs its remote address before it wraps it (the own-cover mode drains its own check
+// connections). Use Accept or AcceptConn, not both.
+func (l *Listener) AcceptConn(ctx context.Context) (*quic.Conn, error) { return l.ql.Accept(ctx) }
+
+// Wrap makes a carrier of a connection returned by AcceptConn.
+func Wrap(conn *quic.Conn) mux.Carrier { return quicx.Wrap(conn, false) }
 
 // Addr is the local address of the gate's socket.
 func (l *Listener) Addr() net.Addr { return l.gate.LocalAddr() }

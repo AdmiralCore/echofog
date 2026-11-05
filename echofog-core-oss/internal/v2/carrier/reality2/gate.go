@@ -329,32 +329,7 @@ func (g *Gate) forwardAll(pkts []coverPkt) {
 // verify checks the token of a parsed hello against every live masking key and every address.
 // A token that verifies but was already seen is a replay and is rejected.
 func (g *Gate) verify(hello *Hello) bool {
-	if hello == nil || len(hello.C) != 32 || len(hello.Token) != TokenLen {
-		return false
-	}
-	C, err := ecdh.X25519().NewPublicKey(hello.C)
-	if err != nil {
-		return false
-	}
-	aad := HelloAAD(hello.CH0)
-	now := g.now()
-	for _, m := range g.masks {
-		z, err := m.sk.ECDH(C)
-		if err != nil {
-			continue
-		}
-		for _, addr := range g.addrs {
-			key := TokenKey(z, m.pub, hello.C, addr)
-			if key == nil {
-				continue
-			}
-			if _, err := OpenToken(key, aad, hello.Token, now); err != nil {
-				continue
-			}
-			return !g.replay.SeenOrAdd(m.id, hello.Token)
-		}
-	}
-	return false
+	return verifyHello(g.masks, g.addrs, g.replay, g.now(), hello)
 }
 
 // popDelivery returns the next buffered packet of an admitted flight.
