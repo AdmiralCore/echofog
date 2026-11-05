@@ -130,7 +130,11 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		attempt = firstAttempt(attempts)
 		c, chosen, err := carrier.Dial(ctx, req, attempts, dialCfg)
 		if err != nil {
-			r.failReservations(reserved)
+			if ctx.Err() != nil {
+				r.releaseReservations(reserved)
+			} else {
+				r.failReservations(reserved)
+			}
 			r.maybeClockCheck()
 			return nil, fmt.Errorf("node: carrier dial: %w", err)
 		}
@@ -189,7 +193,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	if err != nil {
 		r.maybeClockCheck()
 		if havePair {
-			if penalizeDial(err) {
+			if ctx.Err() == nil && penalizeDial(err) {
 				r.policy.Penalize(chosenPair)
 			} else {
 				r.policy.Release(chosenPair)

@@ -425,6 +425,13 @@ func (r *Runtime) failReservations(reserved []session.Pair) {
 	}
 }
 
+// releaseReservations returns every reserved slot without a penalty (a caller cancellation).
+func (r *Runtime) releaseReservations(reserved []session.Pair) {
+	for _, p := range reserved {
+		r.policy.Release(p)
+	}
+}
+
 // pathAttempts puts an address on another family and an unused address first: on a network
 // change the new carrier must not repeat the old (address, SNI) pair (H15).
 func (r *Runtime) pathAttempts(est *session.Established, attempts []carrier.Attempt) []carrier.Attempt {
