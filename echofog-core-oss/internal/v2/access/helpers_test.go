@@ -2,6 +2,7 @@ package access_test
 
 import (
 	"crypto/ecdh"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -211,21 +212,66 @@ func (r *rig) open(t *testing.T) {
 
 func (r *rig) newManager(t *testing.T) *access.Manager {
 	t.Helper()
+	return r.managerWith(t, r.kv, []cards.Listener{{
+		Suite: objects.SuiteNoise3,
+		Host:  "203.0.113.10",
+		Port:  4242,
+	}}, nil)
+}
+
+// managerWith opens a manager over an explicit KV and listener set (used to simulate a listener
+// disappearing or an injected store failure).
+func (r *rig) managerWith(t *testing.T, kv store.KV, listeners []cards.Listener, rand io.Reader) *access.Manager {
+	t.Helper()
 	m, err := access.New(access.Config{
-		KV:          r.kv,
+		KV:          kv,
 		Cards:       r.builder,
 		Clock:       r.clock,
 		ContactsKey: r.device.Masking(),
-		Listeners: []cards.Listener{{
-			Suite: objects.SuiteNoise3,
-			Host:  "203.0.113.10",
-			Port:  4242,
-		}},
+		Listeners:   listeners,
+		Rand:        rand,
 	})
 	if err != nil {
 		t.Fatalf("access.New: %v", err)
 	}
 	return m
+}
+
+// failingKV injects one Put failure, to prove that a state change is applied in memory even when
+// it cannot be persisted.
+type failingKV struct {
+	store.KV
+	mu     sync.Mutex
+	failAt int
+	puts   int
+	err    error
+}
+
+func (f *failingKV) Put(key, value []byte) error {
+	f.mu.Lock()
+	f.puts++
+	fail := f.failAt > 0 && f.puts >= f.failAt
+	f.mu.Unlock()
+	if fail {
+		return f.err
+	}
+	return f.KV.Put(key, value)
+}
+
+func (f *failingKV) arm(n int) {
+	f.mu.Lock()
+	f.failAt, f.puts = n, 0
+	f.mu.Unlock()
+}
+
+// fixedRand is a deterministic randomness source: every byte is b.
+type fixedRand struct{ b byte }
+
+func (r fixedRand) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.b
+	}
+	return len(p), nil
 }
 
 // reopen closes the store and opens the manager again over the same directory.

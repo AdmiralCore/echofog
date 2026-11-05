@@ -742,6 +742,282 @@ func (r *rig) handshake(t *testing.T, client *node, secret, remoteCard []byte) (
 	return sr, reply
 }
 
+// TestExtendRevivesMaskKeyAndCard is finding 1 of T3.6-accept: an extension must update the key's
+// NotAfter and reissue the invitation card, otherwise MaskKeys drops the key and the initiator
+// rejects the old mask_not_after.
+func TestExtendRevivesMaskKeyAndCard(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: time.Hour, AccessTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	r.clock.Advance(2 * time.Hour)
+
+	info, err := r.mgr.Extend(ctx, minted.PassID, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("Extend: %v", err)
+	}
+	if info.Link == minted.Link {
+		t.Fatal("Extend did not reissue the invitation card")
+	}
+	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); !ok {
+		t.Fatal("extended invitation does not admit")
+	}
+	ki, ok := keyInfo(r.mgr.MaskKeys(), minted.MaskKey)
+	if !ok {
+		t.Fatal("extended invitation key is not live in MaskKeys")
+	}
+	if !ki.NotAfter.After(r.clock.Now()) {
+		t.Fatalf("key not_after %v is not in the future", ki.NotAfter)
+	}
+	card, err := linkCardAt(t, info.Link, r.clock.Now())
+	if err != nil {
+		t.Fatalf("extended link: %v", err)
+	}
+	if len(card.Body.GetMaskKeys()) != 1 || len(card.Body.GetAddrs()) != 1 {
+		t.Fatalf("extended card: %d keys, %d addrs", len(card.Body.GetMaskKeys()), len(card.Body.GetAddrs()))
+	}
+	if na := card.Body.GetMaskKeys()[0].GetNotAfter(); na <= uint64(r.clock.Now().Unix()) {
+		t.Fatalf("card mask_not_after %d is not in the future", na)
+	}
+}
+
+// TestRotateKeysWithExpiredInvitations is finding 2 of T3.6-accept: RotateKeys must not fail on an
+// expired invitation (cards refused a past MaskKey.NotAfter) and must not kill the group.
+func TestRotateKeysWithExpiredInvitations(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	var minted []*access.Minted
+	for i := 0; i < 2; i++ {
+		m, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: time.Hour})
+		if err != nil {
+			t.Fatalf("Mint %d: %v", i, err)
+		}
+		minted = append(minted, m)
+	}
+	r.clock.Advance(2 * time.Hour)
+
+	rot, err := r.mgr.RotateKeys(ctx)
+	if err != nil {
+		t.Fatalf("RotateKeys with expired invitations: %v", err)
+	}
+	if len(rot.Reissued) != len(minted) {
+		t.Fatalf("%d reissued, want %d", len(rot.Reissued), len(minted))
+	}
+	for i, again := range rot.Reissued {
+		if _, ok := r.mgr.LookupPass(again.PassID[:], r.clock.Now()); ok {
+			t.Fatalf("expired reissued invitation %d admits", i)
+		}
+		if _, err := r.mgr.Extend(ctx, again.PassID, 30*time.Minute); err != nil {
+			t.Fatalf("Extend reissued %d: %v", i, err)
+		}
+		if _, ok := r.mgr.LookupPass(again.PassID[:], r.clock.Now()); !ok {
+			t.Fatalf("reissued invitation %d does not admit after Extend", i)
+		}
+		if !hasKey(r.mgr.MaskKeys(), again.MaskKey) {
+			t.Fatalf("reissued invitation %d key is not live", i)
+		}
+	}
+}
+
+// TestMintAfterExpiredKeys is finding 3 of T3.6-accept: eight expired invitations must not make the
+// next Mint fail with ErrKeyLimit; it shares a group key (T3.6 decision 1) with a fresh NotAfter.
+func TestMintAfterExpiredKeys(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	for i := 0; i < access.KeysPerListener; i++ {
+		if _, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: time.Hour}); err != nil {
+			t.Fatalf("Mint %d: %v", i, err)
+		}
+	}
+	r.clock.Advance(2 * time.Hour)
+
+	ninth, err := r.mgr.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatalf("Mint after eight expired invitations: %v", err)
+	}
+	if _, ok := r.mgr.LookupPass(ninth.PassID[:], r.clock.Now()); !ok {
+		t.Fatal("ninth invitation does not admit")
+	}
+	ki, ok := keyInfo(r.mgr.MaskKeys(), ninth.MaskKey)
+	if !ok {
+		t.Fatal("ninth invitation key is not live")
+	}
+	if !ki.NotAfter.After(r.clock.Now()) {
+		t.Fatalf("shared key not_after %v is not in the future", ki.NotAfter)
+	}
+}
+
+// TestRevokeFailsClosedOnStoreError is finding 4 of T3.6-accept: a failed write must not leave the
+// pass active in memory after its key was removed.
+func TestRevokeFailsClosedOnStoreError(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	r.mgr.Close()
+
+	fkv := &failingKV{KV: r.kv, err: errors.New("injected store failure")}
+	m := r.managerWith(t, fkv, []cards.Listener{{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242}}, nil)
+	defer m.Close()
+
+	fkv.arm(1)
+	if _, err := m.Revoke(ctx, minted.PassID); err == nil {
+		t.Fatal("Revoke must report the store failure")
+	}
+	if _, ok := m.LookupPass(minted.PassID[:], r.clock.Now()); ok {
+		t.Fatal("revoked invitation still admits after a failed save")
+	}
+	list, err := m.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].State != access.Revoked {
+		t.Fatalf("state after failed revoke: %+v", list)
+	}
+}
+
+// TestRotateKeysFailsClosedOnStoreError is finding 4 on the reissue path: after the old key is
+// removed, a failed new-key write must revoke the invitations rather than keep them active.
+func TestRotateKeysFailsClosedOnStoreError(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	r.mgr.Close()
+
+	fkv := &failingKV{KV: r.kv, err: errors.New("injected store failure")}
+	m := r.managerWith(t, fkv, []cards.Listener{{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242}}, nil)
+	defer m.Close()
+
+	// 1: new contacts key, 2: meta, 3: previous contacts key, 4: new invitation key.
+	fkv.arm(4)
+	if _, err := m.RotateKeys(ctx); err == nil {
+		t.Fatal("RotateKeys must report the store failure")
+	}
+	if _, ok := m.LookupPass(minted.PassID[:], r.clock.Now()); ok {
+		t.Fatal("invitation still admits after a failed reissue")
+	}
+	list, err := m.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].State != access.Revoked {
+		t.Fatalf("state after failed reissue: %+v", list)
+	}
+}
+
+// TestListenerRemovalRevokesInvitation is finding 5: an invitation whose listener slot no longer
+// exists cannot be reached, so the next Open revokes it instead of leaving it active.
+func TestListenerRemovalRevokesInvitation(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	// Fill the only listener with eight keys.
+	var minted []*access.Minted
+	for i := 0; i < access.KeysPerListener; i++ {
+		m, err := r.mgr.Mint(ctx, access.MintOptions{})
+		if err != nil {
+			t.Fatalf("Mint %d: %v", i, err)
+		}
+		minted = append(minted, m)
+	}
+	r.mgr.Close()
+
+	// A second listener takes the ninth fresh key.
+	two := r.managerWith(t, r.kv, []cards.Listener{
+		{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242},
+		{Suite: objects.SuiteNoise3, Host: "203.0.113.11", Port: 4243},
+	}, nil)
+	ninth, err := two.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		two.Close()
+		t.Fatalf("Mint on the second listener: %v", err)
+	}
+	two.Close()
+	if ninth.Listener != 1 {
+		t.Fatalf("ninth invitation is on slot %d, want 1", ninth.Listener)
+	}
+	minted = append(minted, ninth)
+
+	one := r.managerWith(t, r.kv, []cards.Listener{
+		{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242},
+	}, nil)
+	defer one.Close()
+
+	if _, ok := one.LookupPass(minted[len(minted)-1].PassID[:], r.clock.Now()); ok {
+		t.Fatal("invitation on a removed listener still admits")
+	}
+	if _, ok := one.LookupPass(minted[0].PassID[:], r.clock.Now()); !ok {
+		t.Fatal("invitation on a live listener stopped admitting")
+	}
+	list, err := one.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var removed *access.Info
+	for i := range list {
+		if list[i].ID == minted[len(minted)-1].PassID {
+			removed = &list[i]
+		}
+	}
+	if removed == nil || removed.State != access.Revoked {
+		t.Fatalf("removed-listener invitation: %+v", removed)
+	}
+}
+
+// TestRandIsUsedForKeyMaterial is finding 6: Config.Rand must drive the masking-key bytes too, not
+// only pass secrets and ids.
+func TestRandIsUsedForKeyMaterial(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	r.mgr.Close()
+	m := r.managerWith(t, r.kv, []cards.Listener{
+		{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242},
+	}, fixedRand{b: 0x5a})
+	defer m.Close()
+
+	minted, err := m.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	var priv []byte
+	if err := m.UseMaskKey(minted.MaskKey, func(b []byte) error {
+		priv = append([]byte(nil), b...)
+		return nil
+	}); err != nil {
+		t.Fatalf("UseMaskKey: %v", err)
+	}
+	if len(priv) != 32 {
+		t.Fatalf("private key is %d bytes", len(priv))
+	}
+	for i, b := range priv {
+		if b != 0x5a {
+			t.Fatalf("private key byte %d is %#x, want 0x5a", i, b)
+		}
+	}
+}
+
+func keyInfo(keys []access.KeyInfo, pub []byte) (access.KeyInfo, bool) {
+	for _, k := range keys {
+		if bytes.Equal(k.Public, pub) {
+			return k, true
+		}
+	}
+	return access.KeyInfo{}, false
+}
+
 func hasKey(keys []access.KeyInfo, pub []byte) bool {
 	for _, k := range keys {
 		if bytes.Equal(k.Public, pub) {
