@@ -316,6 +316,16 @@ func (s *Server) refuseAt(ctx context.Context, st *mux.Stream, c Connect, start 
 	_ = st.Close()
 }
 
+// unavailable is the one exit for every refusal that must not tell whether the target exists
+// (no target, full, silent, refusing, internal error; AD20): answer after the delay, and only
+// then return the requester's (and target's) slots through release (nil: the caller's defer does).
+func (s *Server) unavailable(ctx context.Context, st *mux.Stream, c Connect, start time.Time, d time.Duration, release func()) {
+	if release != nil {
+		defer release()
+	}
+	s.refuseAt(ctx, st, c, start, d)
+}
+
 func (s *Server) refuseLimit(st *mux.Stream, c Connect) {
 	s.stats.LimitRefused.Add(1)
 	_ = st.WriteFrame(TypeRefused, 0, Refused{Req: c.Req, Target: c.Target, Reason: ReasonLimit}.Append(nil))
@@ -464,22 +474,22 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 		s.refuseLimit(st, c)
 		return
 	}
+	// AD20: every "unavailable" exit goes through unavailable(), which returns the slots after the
+	// answer is sent; nothing is released before it, so the time the requester's slots stay taken
+	// is the same for every cause.
 	t, ok := s.resolve(a, c)
 	if !ok {
-		s.unreserveRequester(a)
-		s.refuseAt(ctx, st, c, start, delay)
+		s.unavailable(ctx, st, c, start, delay, func() { s.unreserveRequester(a) })
 		return
 	}
 	bp := t.Peer()
 	if !s.reserveTarget(bp) {
-		s.unreserveRequester(a)
-		s.refuseAt(ctx, st, c, start, delay)
+		s.unavailable(ctx, st, c, start, delay, func() { s.unreserveRequester(a) })
 		return
 	}
 	cid, err := s.newCID()
 	if err != nil {
-		s.unreserve(a, bp)
-		s.refuseAt(ctx, st, c, start, delay)
+		s.unavailable(ctx, st, c, start, delay, func() { s.unreserve(a, bp) })
 		return
 	}
 	cir := &circuit{cid: cid, mode: c.Mode, created: start, done: make(chan struct{}),
@@ -489,7 +499,7 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 	s.circuits[cid] = cir
 	s.mu.Unlock()
 	s.stats.Circuits.Add(1)
-	defer s.release(cir)
+	defer s.release(cir) // runs after the answer or the end of the circuit, never before
 
 	// The wait for B ends at the refusal deadline: a target that is slow, silent, refusing or
 	// unreachable looks the same to the requester as an absent one.
@@ -503,7 +513,7 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 	bst, ok := s.invite(bctx, t, cir, a, c)
 	if !ok {
 		s.forgetCID(cid)
-		s.refuseAt(ctx, st, c, start, delay)
+		s.unavailable(ctx, st, c, start, delay, nil) // the deferred release follows the answer
 		return
 	}
 	cir.b.stream = bst
