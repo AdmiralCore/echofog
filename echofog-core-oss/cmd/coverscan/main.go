@@ -2,9 +2,10 @@
 // cover and transport, at most one connection per second, handshake plus one HEAD) and compares
 // each with the TLS server the node would run for it. It produces the table of T2.6b-1.
 //
-//	go run ./internal/v2/carrier/reality2/profile/coverscan -sites sites.txt -json out.json -md out.md
+//	go run ./cmd/coverscan -sites sites.txt -json out.json -md out.md
 //
-// It needs GODEBUG-free defaults; nothing here is part of a product binary.
+// Nothing here is part of a product binary; it lives outside internal/v2 so that the mobile
+// builds of internal/v2/... do not try to link it.
 package main
 
 import (
