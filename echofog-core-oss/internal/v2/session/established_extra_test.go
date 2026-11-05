@@ -31,8 +31,8 @@ func TestEstablishedReportsPathAndPeerTime(t *testing.T) {
 	aLocal := a.local(ac.peer, ac.own, []uint16{1, 2}, false)
 	bLocal := b.local(bc.peer, bc.own, []uint16{1, 2}, false)
 
-	est, srvEst := establish(t, memcarrier.NewQUIC(), verifyCard(t, bc.peer, now), aLocal,
-		session.AcceptConfig{Local: bLocal})
+	est, srvEst := establish(t, memcarrier.NewQUIC(), verifyCard(t, bc.peer, now), aLocal, bLocal,
+		session.AcceptConfig{})
 
 	if est.Kind != mux.PathDirect {
 		t.Fatalf("initiator path kind %v, want direct", est.Kind)

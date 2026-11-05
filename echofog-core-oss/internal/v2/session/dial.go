@@ -28,6 +28,7 @@ type dialConfig struct {
 	bindings   handshake.KeyBinder
 	control    *Control
 	timers     mux.Timers
+	policy     PolicyFunc
 	dialConfig carrier.DialConfig
 }
 
@@ -85,6 +86,12 @@ func WithControl(c *Control) DialOption {
 // the specification defaults.
 func WithTimers(t mux.Timers) DialOption {
 	return func(o *dialConfig) { o.timers = t }
+}
+
+// WithPolicy builds the mux stream policy from the negotiated services. The runtime passes
+// service.Registry.Policy so service-local framing knows its per-type limits (T3.7a).
+func WithPolicy(p PolicyFunc) DialOption {
+	return func(o *dialConfig) { o.policy = p }
 }
 
 // WithDialConfig passes carrier dial options (registry, network memory, clock) through.
@@ -268,7 +275,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 			if err := writeFrame(raw, clk, frame.TypeHsMsg, msg3); err != nil {
 				return nil, nil, err
 			}
-			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr), o.control, o.timers)
+			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr), o.control, o.timers, o.policy)
 			return est, nil, err
 		default:
 			return nil, nil, wrapSilent(fmt.Errorf("unexpected %s before the handshake completed", frame.TypeName(f.Type)))
