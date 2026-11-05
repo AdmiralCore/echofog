@@ -42,10 +42,10 @@ type vectors struct {
 		} `json:"cases"`
 	} `json:"rfc9380_crosscheck"`
 	ECDHCheck struct {
-		PeerSK           string `json:"peer_sk"`
-		PeerSKDirty      string `json:"x25519_peer_sk_sample0_dirty_pub"`
-		PeerSKClean      string `json:"x25519_peer_sk_sample0_clean_pub"`
-		SampleSKPeerPub  string `json:"x25519_sample0_sk_peer_pub"`
+		PeerSK          string `json:"peer_sk"`
+		PeerSKDirty     string `json:"x25519_peer_sk_sample0_dirty_pub"`
+		PeerSKClean     string `json:"x25519_peer_sk_sample0_clean_pub"`
+		SampleSKPeerPub string `json:"x25519_sample0_sk_peer_pub"`
 	} `json:"ecdh_check"`
 }
 
@@ -185,9 +185,15 @@ func TestGenerate(t *testing.T) {
 		if !bytes.Equal(Forward(repr), dirty) {
 			t.Fatalf("iteration %d: forward(repr) != dirty public key", i)
 		}
-		z1 := x25519(t, sk, x25519Pub(t, clean))
-		z2 := x25519(t, sk, x25519Pub(t, dirty))
-		if !bytes.Equal(z1, z2) {
+		peerSK := make([]byte, 32)
+		if _, err := rand.Read(peerSK); err != nil {
+			t.Fatal(err)
+		}
+		peerPub := x25519Pub(t, peerSK)
+		zLocal := x25519(t, sk, peerPub)
+		zPeerDirty := x25519(t, peerSK, dirty)
+		zPeerClean := x25519(t, peerSK, clean)
+		if !bytes.Equal(zLocal, zPeerDirty) || !bytes.Equal(zLocal, zPeerClean) {
 			t.Fatalf("iteration %d: torsion changed the shared secret", i)
 		}
 	}

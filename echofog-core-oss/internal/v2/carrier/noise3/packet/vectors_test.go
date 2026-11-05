@@ -11,9 +11,9 @@ import (
 const vectorPath = "../../../testdata/noise3.json"
 
 type vectors struct {
-	MaskSK   string `json:"mask_sk"`
-	MaskPub  string `json:"mask_pub"`
-	Z        string `json:"z"`
+	MaskSK    string `json:"mask_sk"`
+	MaskPub   string `json:"mask_pub"`
+	Z         string `json:"z"`
 	Ephemeral struct {
 		SK    string `json:"sk"`
 		Repr  string `json:"repr"`
@@ -83,7 +83,7 @@ func pattern(n int, start byte) []byte {
 
 func TestDeriveKeys(t *testing.T) {
 	v := loadVectors(t)
-	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty))
+	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty), hx(t, v.Ephemeral.Repr))
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -117,14 +117,14 @@ func TestDeriveKeys(t *testing.T) {
 	if got := hex.EncodeToString(Info(hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty))); got != v.HKDFInfo {
 		t.Errorf("info = %s, want %s", got, v.HKDFInfo)
 	}
-	if _, err := Derive(make([]byte, 32), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty)); err == nil {
+	if _, err := Derive(make([]byte, 32), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty), hx(t, v.Ephemeral.Repr)); err == nil {
 		t.Error("Derive accepted an all-zero z")
 	}
 }
 
 func TestInitVector(t *testing.T) {
 	v := loadVectors(t)
-	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty))
+	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty), hx(t, v.Ephemeral.Repr))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestInitVector(t *testing.T) {
 
 func TestDataVectors(t *testing.T) {
 	v := loadVectors(t)
-	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty))
+	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty), hx(t, v.Ephemeral.Repr))
 	if err != nil {
 		t.Fatal(err)
 	}
