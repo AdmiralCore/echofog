@@ -14,6 +14,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/shape"
 )
 
@@ -55,25 +56,17 @@ func (d *TCPDialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carr
 	if req.Card == nil {
 		return nil, fmt.Errorf("%w: no card", ErrCard)
 	}
-	maskPub, err := maskPublic(req.Card, a.GetMask())
-	if err != nil {
-		return nil, err
-	}
-	sp := objects.SuiteParams(a)
-	sni := sp.GetSni()
-	if sni == "" {
-		return nil, fmt.Errorf("%w: no SNI in the card", ErrCard)
-	}
 	if a.GetHost() == "" || a.GetPort() == 0 {
 		return nil, fmt.Errorf("%w: no host or port", ErrCard)
 	}
-	prof, err := shape.Parse(sp.GetShape())
-	if err != nil {
-		return nil, fmt.Errorf("%w: shape profile: %v", ErrCard, err)
+	// Validate the card before touching the network.
+	if _, _, _, err := cardParams(req.Card, a); err != nil {
+		return nil, err
 	}
 	addr := AddressString(a.GetHost(), a.GetPort())
 
 	var raw net.Conn
+	var err error
 	if req.DialContext != nil {
 		raw, err = req.DialContext(ctx, "tcp", addr)
 	} else {
@@ -82,6 +75,40 @@ func (d *TCPDialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carr
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reality2: dial %s: %w", addr, err)
+	}
+	return d.DialOver(ctx, raw, req.Card, a, addr)
+}
+
+// cardParams extracts the masking key, the SNI and the shape profile of a card address.
+func cardParams(card *objects.Card, a *pb.Addr) (maskPub []byte, sni string, prof *shape.Profile, err error) {
+	if card == nil {
+		return nil, "", nil, fmt.Errorf("%w: no card", ErrCard)
+	}
+	maskPub, err = maskPublic(card, a.GetMask())
+	if err != nil {
+		return nil, "", nil, err
+	}
+	sp := objects.SuiteParams(a)
+	sni = sp.GetSni()
+	if sni == "" {
+		return nil, "", nil, fmt.Errorf("%w: no SNI in the card", ErrCard)
+	}
+	prof, err = shape.Parse(sp.GetShape())
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("%w: shape profile: %v", ErrCard, err)
+	}
+	return maskPub, sni, prof, nil
+}
+
+// DialOver runs the reality2-tcp client over raw, an already open byte stream (ws2 passes the
+// WebSocket here, wire.md §4.4); it takes ownership of raw and closes it on failure. tokenAddr is
+// the address string the token binds to.
+func (d *TCPDialer) DialOver(ctx context.Context, raw net.Conn, card *objects.Card, a *pb.Addr, tokenAddr string) (mux.Carrier, error) {
+	addr := tokenAddr
+	maskPub, sni, prof, err := cardParams(card, a)
+	if err != nil {
+		_ = raw.Close()
+		return nil, err
 	}
 	// The context bounds the handshake; a cancelled context closes the socket.
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
