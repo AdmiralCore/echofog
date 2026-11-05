@@ -291,15 +291,15 @@ func TestReplayCachePersists(t *testing.T) {
 	now := time.Unix(4000, 0)
 	c := newReplayCache(kv, now, nil)
 	sel := bytes.Repeat([]byte{0x42}, 16)
-	if c.seen(sel) {
+	if c.seen(sel, now) {
 		t.Fatal("a fresh selector is reported as a replay")
 	}
-	if !c.seen(sel) {
+	if !c.seen(sel, now) {
 		t.Fatal("the same selector is not reported as a replay")
 	}
-	c.flush()
+	c.flush(now)
 	again := newReplayCache(kv, now, nil)
-	if !again.seen(sel) {
+	if !again.seen(sel, now) {
 		t.Fatal("the replay cache did not survive a restart")
 	}
 }
@@ -319,14 +319,14 @@ func TestPendingLimitsAndEviction(t *testing.T) {
 	ip := netip.MustParseAddr("192.0.2.10")
 	keys := packet.Keys{}
 	for i := 0; i < 2; i++ {
-		if f := l.newFlow(netip.AddrPortFrom(ip, uint16(1000+i)), keys, 1300, time.Now()); f == nil {
+		if f := l.newFlow(netip.AddrPortFrom(ip, uint16(1000+i)), keys, 1300, 0, time.Now()); f == nil {
 			t.Fatal("newFlow returned nil below the per-IP limit")
 		}
 	}
 	if l.pending != 2 {
 		t.Fatalf("pending = %d, want 2", l.pending)
 	}
-	if f := l.newFlow(netip.AddrPortFrom(ip, 2000), keys, 1300, time.Now()); f == nil {
+	if f := l.newFlow(netip.AddrPortFrom(ip, 2000), keys, 1300, 0, time.Now()); f == nil {
 		t.Fatal("newFlow returned nil above the per-IP limit")
 	}
 	if l.pendingIP[ip] != 2 || l.pending != 2 {
@@ -334,7 +334,7 @@ func TestPendingLimitsAndEviction(t *testing.T) {
 	}
 	// A different IP fills the total limit and then evicts a random pending flow.
 	for i := 0; i < 2; i++ {
-		l.newFlow(netip.AddrPortFrom(netip.MustParseAddr("192.0.2.11"), uint16(3000+i)), keys, 1300, time.Now())
+		l.newFlow(netip.AddrPortFrom(netip.MustParseAddr("192.0.2.11"), uint16(3000+i)), keys, 1300, 0, time.Now())
 	}
 	if len(l.flows) != 3 {
 		t.Fatalf("flows = %d, want the total limit 3", len(l.flows))
@@ -354,7 +354,7 @@ func TestUnderLoad(t *testing.T) {
 	}
 	keys := packet.Keys{}
 	for i := 0; i < 3; i++ {
-		l.newFlow(netip.AddrPortFrom(netip.MustParseAddr("192.0.2.20"), uint16(4000+i)), keys, 1300, time.Now())
+		l.newFlow(netip.AddrPortFrom(netip.MustParseAddr("192.0.2.20"), uint16(4000+i)), keys, 1300, 0, time.Now())
 	}
 	if !l.underLoad(nil) {
 		t.Fatal("listener at 75% of the pending limit does not report load")
@@ -382,7 +382,7 @@ func TestSweepRemovesIdleFlows(t *testing.T) {
 	}
 	defer l.Close()
 	src := netip.AddrPortFrom(netip.MustParseAddr("192.0.2.30"), 5000)
-	l.newFlow(src, packet.Keys{}, 1300, clock.Now())
+	l.newFlow(src, packet.Keys{}, 1300, 0, clock.Now())
 	clock.Advance(flowIdleTimeout - time.Second)
 	l.sweep(clock.Now())
 	l.mu.Lock()

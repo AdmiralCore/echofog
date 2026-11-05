@@ -62,6 +62,11 @@ const (
 // ErrBadConfig reports an unusable Listener or Dialer configuration.
 var ErrBadConfig = errors.New("noise3: invalid configuration")
 
+// ErrDNSName means a noise3 address names a host but no resolver/dialer hook was supplied. The
+// carrier never resolves peer names with the local system resolver: that would leak the hidden
+// node to local DNS (see objects.md §3.1 and wire.md §1).
+var ErrDNSName = errors.New("noise3: DNS host requires a resolver")
+
 // MaskKey is one live masking X25519 private key of a listener.
 type MaskKey struct {
 	Private  [32]byte
@@ -114,7 +119,7 @@ func maskPublic(sk [32]byte) ([32]byte, error) {
 }
 
 // cardMaskKey extracts the masking public key an address points at (1-based mask index).
-func cardMaskKey(card *objects.Card, addr *pb.Addr) ([32]byte, error) {
+func cardMaskKey(card *objects.Card, addr *pb.Addr, now time.Time) ([32]byte, error) {
 	var out [32]byte
 	if card == nil || addr == nil {
 		return out, ErrBadConfig
@@ -128,7 +133,7 @@ func cardMaskKey(card *objects.Card, addr *pb.Addr) ([32]byte, error) {
 	if err != nil {
 		return out, fmt.Errorf("%w: masking key: %v", ErrBadConfig, err)
 	}
-	if na := list[i-1].GetNotAfter(); na != 0 && uint64(time.Now().Unix()) > na {
+	if na := list[i-1].GetNotAfter(); na != 0 && uint64(now.Unix()) > na {
 		return out, fmt.Errorf("%w: masking key expired", ErrBadConfig)
 	}
 	copy(out[:], k.Key())
@@ -158,10 +163,18 @@ func maxPadding(profile *shape.Profile) int {
 }
 
 // innerQUICConfig returns the inner QUIC configuration with the Initial packet size of wire.md
-// §2.4: every inner QUIC Initial is exactly 1200 bytes, so 71+1200 fits any path MTU (the T2.3
-// default uses the data-packet overhead instead, which is 49 bytes smaller). MaxUDPPayloadSize
-// keeps the data-packet ceiling: 1452 minus the 22-byte data overhead minus the profile padding.
-func innerQUICConfig(base *quic.Config, pad int) (*quic.Config, error) {
+// §2.4: every inner QUIC Initial is exactly 1200 bytes, so 71+1200 fits any path the carrier is
+// willing to use. maxDatagram is the outer noise3 ceiling; the inner QUIC stack must never emit a
+// datagram that does not fit behind the data overhead. A ceiling below 1271 cannot carry an Init
+// at all and is rejected.
+func innerQUICConfig(base *quic.Config, pad, maxDatagram int) (*quic.Config, error) {
+	if maxDatagram <= 0 {
+		maxDatagram = packet.MaxDatagramLen
+	}
+	if maxDatagram < packet.MinInitLen {
+		return nil, fmt.Errorf("%w: %d-byte datagrams cannot carry a %d-byte Init",
+			ErrBadConfig, maxDatagram, packet.MinInitLen)
+	}
 	if base == nil {
 		var err error
 		base, err = quicx.Noise3QUICConfig(pad)
@@ -171,7 +184,21 @@ func innerQUICConfig(base *quic.Config, pad int) (*quic.Config, error) {
 	}
 	out := *base
 	out.InitialPacketSize = packet.MinInner
+	if inner := maxDatagram - packet.DataOverhead; int(out.MaxUDPPayloadSize) == 0 || int(out.MaxUDPPayloadSize) > inner {
+		out.MaxUDPPayloadSize = uint16(inner)
+	}
+	if out.MaxDatagramFrameSize == 0 || out.MaxDatagramFrameSize > int64(maxDatagram-packet.DataOverhead) {
+		out.MaxDatagramFrameSize = int64(maxDatagram - packet.DataOverhead)
+	}
 	return &out, nil
+}
+
+// l0MaxDatagram returns the configured outer ceiling or the IPv4 default.
+func l0MaxDatagram(v int) int {
+	if v <= 0 || v > packet.MaxDatagramLen {
+		return packet.MaxDatagramLen
+	}
+	return v
 }
 
 // RegisterDialer registers d under the noise3 suite number.

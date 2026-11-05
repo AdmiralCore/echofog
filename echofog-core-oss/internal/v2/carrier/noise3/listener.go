@@ -45,10 +45,16 @@ type ListenerConfig struct {
 	Rand *mrand.Rand
 	// LowPower disables idle padding (platforms.md §2).
 	LowPower bool
-	// MaxPending and MaxPendingPerIP override the §10 pending-flow limits (4096 and 64).
-	// Tests use smaller values; zero means the specification default.
+	// MaxDatagramLen is the outer noise3 payload ceiling (path MTU minus IP and UDP headers).
+	// Zero means packet.MaxDatagramLen (1452, an IPv4 1500-byte path); values above it are
+	// clamped to it. It must be at least 71+1200, otherwise an Init cannot carry the inner QUIC
+	// Initial (see doc.go).
+	MaxDatagramLen int
+	// MaxPending, MaxPendingPerIP and MaxFlows override the §10 pending-flow limits (4096, 64)
+	// and the local total-flow bound (4096). Tests use smaller values; zero means the default.
 	MaxPending      int
 	MaxPendingPerIP int
+	MaxFlows        int
 }
 
 // Listener is one noise3 UDP port. It authenticates Init datagrams, keeps pending flows, feeds
@@ -78,6 +84,8 @@ type Listener struct {
 	closed          bool
 	maxPending      int
 	maxPendingPerIP int
+	maxFlows        int
+	maxDatagram     int
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -117,7 +125,7 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 		tlsConf = server
 	}
 	quicConf := cfg.QUICConfig
-	quicConf, err := innerQUICConfig(quicConf, maxPadding(profile))
+	quicConf, err := innerQUICConfig(quicConf, maxPadding(profile), l0MaxDatagram(cfg.MaxDatagramLen))
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +138,8 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 		lowPower:        cfg.LowPower,
 		maxPending:      cfg.MaxPending,
 		maxPendingPerIP: cfg.MaxPendingPerIP,
+		maxFlows:        cfg.MaxFlows,
+		maxDatagram:     l0MaxDatagram(cfg.MaxDatagramLen),
 		budget:          newBudgets(),
 		flows:           make(map[netip.AddrPort]*flow),
 		byVAddr:         make(map[uint64]*flow),
@@ -144,6 +154,9 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 	}
 	if l.maxPendingPerIP <= 0 {
 		l.maxPendingPerIP = MaxPendingPerIP
+	}
+	if l.maxFlows <= 0 {
+		l.maxFlows = MaxPendingFlows
 	}
 	l.replay = newReplayCache(cfg.KV, clock.Now(), nil)
 	for _, k := range cfg.Keys {
@@ -224,7 +237,7 @@ func (l *Listener) Close() error {
 		if l.inner != nil {
 			_ = l.inner.Close()
 		}
-		l.replay.flush()
+		l.replay.flush(l.clock.Now())
 		l.wg.Wait()
 	})
 	return err
@@ -394,7 +407,7 @@ func (l *Listener) handleInit(d []byte, src netip.AddrPort, keys []maskKey, now 
 	}
 	var sel [16]byte
 	copy(sel[:], d[32:48])
-	if l.replay.seen(sel[:]) {
+	if l.replay.seen(sel[:], now) {
 		return
 	}
 
@@ -413,20 +426,33 @@ func (l *Listener) handleInit(d []byte, src netip.AddrPort, keys []maskKey, now 
 		f = l.flows[src]
 		l.mu.Unlock()
 	}
+	if f != nil && f.isEstablished() && newerInitTS(f.firstTimestamp(), init.TS) {
+		// A new handshake on the same 4-tuple cannot use the old reply keys: the initiator
+		// discarded them. Replace the established flow with a new one. A late sibling of the
+		// current handshake carries the same ts and is still handled as a sibling below.
+		l.mu.Lock()
+		if l.flows[src] == f && f.isEstablished() {
+			l.removeLocked(f)
+		}
+		l.mu.Unlock()
+		l.mu.Lock()
+		f = l.flows[src]
+		l.mu.Unlock()
+	}
 	if f != nil {
 		f.addKeys(matched)
 		f.acceptInit(len(d), now)
 		l.inner.deliver(init.Inner, f.vaddr)
 		return
 	}
-	f = l.newFlow(src, matched, len(d), now)
+	f = l.newFlow(src, matched, len(d), init.TS, now)
 	if f == nil {
 		return
 	}
 	l.inner.deliver(init.Inner, f.vaddr)
 }
 
-func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, now time.Time) *flow {
+func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, ts uint32, now time.Time) *flow {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
@@ -434,25 +460,38 @@ func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, no
 	}
 	ip := src.Addr()
 	if l.pendingIP[ip] >= l.maxPendingPerIP {
-		l.evictLocked(ip, true)
+		if !l.evictPendingLocked(ip) {
+			return nil
+		}
 	}
 	if l.pending >= l.maxPending {
-		l.evictLocked(netip.Addr{}, false)
+		if !l.evictPendingLocked(netip.Addr{}) {
+			return nil
+		}
 	}
-	if len(l.flows) >= l.maxPending {
-		l.evictLocked(netip.Addr{}, false)
+	if len(l.flows) >= l.maxFlows {
+		if !l.evictPendingLocked(netip.Addr{}) {
+			// The local total-flow bound is full of established flows. §2.5 step 7 only
+			// allows evicting a pending flow, so the new Init is dropped instead.
+			return nil
+		}
+	}
+	if l.pendingIP[ip] >= l.maxPendingPerIP || l.pending >= l.maxPending || len(l.flows) >= l.maxFlows {
+		return nil
 	}
 	id := l.nextID
 	l.nextID++
 	f := &flow{
-		l:          l,
-		vaddr:      flowAddr{id: id},
-		src:        src,
-		keys:       []packet.Keys{keys},
-		inBytes:    int64(initial),
-		createdAt:  now,
-		lastActive: now,
-		sender:     shape.NewSender(l.profile, nil, l.lowPower),
+		l:           l,
+		vaddr:       flowAddr{id: id},
+		src:         src,
+		keys:        []packet.Keys{keys},
+		firstTS:     ts,
+		inBytes:     int64(initial),
+		createdAt:   now,
+		lastActive:  now,
+		sender:      shape.NewSender(l.profile, nil, l.lowPower),
+		maxDatagram: l.maxDatagram,
 	}
 	l.flows[src] = f
 	l.byVAddr[id] = f
@@ -462,35 +501,23 @@ func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, no
 	return f
 }
 
-// evictLocked removes a random pending flow (of ip, or of any IP when ip is invalid) or, when
-// there is no pending flow, any flow. Random eviction keeps an attacker from predicting which
-// honest flow it pushes out (wire.md §2.5 step 7).
-func (l *Listener) evictLocked(ip netip.Addr, pendingOnly bool) {
+// evictPendingLocked removes a random pending flow of ip, or of any IP when ip is invalid. It
+// never evicts an established flow (wire.md §2.5 step 7) and reports whether a flow was removed.
+func (l *Listener) evictPendingLocked(ip netip.Addr) bool {
 	var candidates []*flow
 	for _, f := range l.flows {
-		if pendingOnly && !ip.IsValid() {
-			if f.isPending() {
-				candidates = append(candidates, f)
-			}
-			continue
-		}
 		if ip.IsValid() && f.address().Addr() != ip {
 			continue
 		}
-		if pendingOnly && !f.isPending() {
-			continue
-		}
-		candidates = append(candidates, f)
-	}
-	if len(candidates) == 0 && !pendingOnly {
-		for _, f := range l.flows {
+		if f.isPending() {
 			candidates = append(candidates, f)
 		}
 	}
 	if len(candidates) == 0 {
-		return
+		return false
 	}
 	l.removeLocked(candidates[randIntN(l.rnd, len(candidates))])
+	return true
 }
 
 func (l *Listener) removeLocked(f *flow) {
@@ -606,7 +633,7 @@ func (l *Listener) touchRecent(f *flow) {
 func (l *Listener) underLoad(net.Addr) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.pending*4 >= l.maxPending*3 || len(l.flows)*4 >= l.maxPending*3
+	return l.pending*4 >= l.maxPending*3 || len(l.flows)*4 >= l.maxFlows*3
 }
 
 // confirmFlow marks the flow whose inner QUIC handshake just completed; after that the flow is
@@ -637,6 +664,10 @@ func (l *Listener) scheduleSweep() {
 }
 
 func (l *Listener) sweep(now time.Time) {
+	// Persist the replay filter from the timer as well: a kill -9 must not lose more than the
+	// flush interval of selectors (wire.md §2.5 step 5). This is done before the listener lock
+	// because the KV write must not block packet processing.
+	l.replay.maybeFlush(now)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.lastSweep = now
@@ -689,7 +720,8 @@ type flow struct {
 	vaddr flowAddr
 	src   netip.AddrPort
 
-	keys []packet.Keys // first Init keys, then siblings
+	keys    []packet.Keys // first Init keys, then siblings
+	firstTS uint32        // ts of the first Init of the flow
 
 	sender *shape.Sender
 
@@ -701,10 +733,11 @@ type flow struct {
 	confirmed   bool
 	addrAuthed  bool
 
-	inBytes  int64
-	outBytes int64
-	sendN    uint64
-	replay   packet.Window
+	inBytes     int64
+	outBytes    int64
+	sendN       uint64
+	replay      packet.Window
+	maxDatagram int
 
 	cand      netip.AddrPort
 	candCount int
@@ -733,6 +766,19 @@ func (f *flow) created() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.createdAt
+}
+
+func (f *flow) firstTimestamp() uint32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.firstTS
+}
+
+// newerInitTS distinguishes a new handshake from a late sibling of the current one. The initiator
+// stamps every Init with its own clock; the Inits of one handshake share the same second, while a
+// dead-flow restart is at least uniform(12,18) s later (wire.md §2.4, §2.6).
+func newerInitTS(old, next uint32) bool {
+	return int64(next) > int64(old)+1
 }
 
 func (f *flow) isEstablished() bool {
@@ -864,12 +910,12 @@ func (f *flow) send(inner []byte, now time.Time) (int, error) {
 		f.mu.Unlock()
 		return len(inner), nil
 	}
-	if packet.DataOverhead+len(inner) > packet.MaxDatagramLen {
+	if packet.DataOverhead+len(inner) > f.maxDatagram {
 		f.mu.Unlock()
 		return 0, packet.ErrMalformed
 	}
 	pad := f.sender.PadFor(packet.DataOverhead + len(inner))
-	if room := packet.MaxDatagramLen - packet.DataOverhead - len(inner); pad > room {
+	if room := f.maxDatagram - packet.DataOverhead - len(inner); pad > room {
 		pad = room
 	}
 	key := &f.keys[0]

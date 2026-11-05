@@ -3,6 +3,7 @@ package noise3
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"net"
@@ -219,8 +220,14 @@ func TestRestartRedrawsSilenceInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	pc := newFakePC()
+	next := newFakePC()
+	calls := 0
 	c := newUnitDialConn(t, clock, maskPub, func(context.Context) (net.PacketConn, net.Addr, error) {
-		return pc, flowAddr{id: 3}, nil
+		calls++
+		if calls == 1 {
+			return pc, flowAddr{id: 3}, nil
+		}
+		return next, flowAddr{id: 3}, nil
 	})
 	t.Cleanup(func() { _ = c.Close() })
 	if err := c.start(context.Background()); err != nil {
@@ -348,6 +355,161 @@ func TestLateSiblingInitKeepsFlow(t *testing.T) {
 	f.mu.Unlock()
 	if n < 2 {
 		t.Fatalf("sibling keys were not kept (%d sets)", n)
+	}
+}
+
+// Н-6: a blocked restart (dial or prelude sleep) must not stop the read path from making
+// progress; the state mutex is not held across I/O.
+func TestWriteDoesNotBlockHandleWhileDialing(t *testing.T) {
+	clock := &fakeClock{t: time.Unix(60_000, 0)}
+	var maskPub [32]byte
+	pc := newFakePC()
+	release := make(chan struct{})
+	dialing := make(chan struct{})
+	c := newUnitDialConn(t, clock, maskPub, func(context.Context) (net.PacketConn, net.Addr, error) {
+		close(dialing)
+		<-release
+		return newFakePC(), flowAddr{id: 3}, nil
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		_ = c.Close()
+	})
+	c.mu.Lock()
+	c.conn = pc
+	key := packet.Keys{}
+	c.adopted = &key
+	c.sentPrelude = true
+	c.restartAfter = time.Second
+	c.lastAuth = clock.Now()
+	c.lastSend = clock.Now().Add(time.Millisecond)
+	c.mu.Unlock()
+	clock.Advance(2 * time.Second)
+
+	writeDone := make(chan struct{})
+	go func() {
+		_, _ = c.write(make([]byte, 1200))
+		close(writeDone)
+	}()
+	select {
+	case <-dialing:
+	case <-time.After(time.Second):
+		t.Fatal("the writer did not enter the restart dial")
+	}
+	dg, err := packet.SealData(key.KR2I, key.HPR2I, 0, []byte("inner"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan struct{})
+	go func() {
+		c.handle(dg, clock.Now())
+		close(handled)
+	}()
+	select {
+	case <-handled:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("handle blocked while the writer was dialing")
+	}
+	close(release)
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("the writer did not finish after the dial")
+	}
+}
+
+// Н-7: the outer ceiling is configurable and is never exceeded; a ceiling below the minimum Init
+// is rejected at construction.
+func TestMaxDatagramLen(t *testing.T) {
+	var maskSK [32]byte
+	if _, err := rand.Read(maskSK[:]); err != nil {
+		t.Fatal(err)
+	}
+	maskPub, err := maskPublic(maskSK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk, _ := newMaskKey(t, time.Now())
+	if _, err := Listen("127.0.0.1:0", ListenerConfig{Keys: []MaskKey{mk}, Profile: mustProfile(t), MaxDatagramLen: 1270}); !errors.Is(err, ErrBadConfig) {
+		t.Fatalf("Listen with a 1270-byte ceiling = %v, want ErrBadConfig", err)
+	}
+	pc := newFakePC()
+	c := newDialConn(DialerConfig{MaxDatagramLen: 1270}, &fakeClock{t: time.Unix(70_000, 0)},
+		noPreludeProfile(t), maskPub,
+		func(context.Context) (net.PacketConn, net.Addr, error) { return pc, flowAddr{id: 3}, nil }, flowAddr{id: 3})
+	c.conn = pc
+	if _, err := c.write(make([]byte, 1200)); err == nil {
+		t.Fatal("a 1200-byte inner datagram was sent under a 1270-byte outer ceiling")
+	}
+	pc2 := newFakePC()
+	c2 := newDialConn(DialerConfig{MaxDatagramLen: 1300}, &fakeClock{t: time.Unix(70_000, 0)},
+		noPreludeProfile(t), maskPub,
+		func(context.Context) (net.PacketConn, net.Addr, error) { return pc2, flowAddr{id: 3}, nil }, flowAddr{id: 3})
+	c2.conn = pc2
+	if _, err := c2.write(make([]byte, 1200)); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range pc2.snapshot() {
+		if len(d) > 1300 {
+			t.Fatalf("Init is %d bytes, above the 1300-byte ceiling", len(d))
+		}
+	}
+}
+
+func TestSweepFlushesReplayCache(t *testing.T) {
+	kv := newMapKV()
+	clock := &fakeClock{t: time.Unix(80_000, 0)}
+	mk, _ := newMaskKey(t, time.Now())
+	l, err := Listen("127.0.0.1:0", ListenerConfig{Keys: []MaskKey{mk}, Profile: mustProfile(t), Clock: clock, KV: kv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	l.replay.seen(selFor("sweep-flush"), clock.Now())
+	clock.Advance(13 * time.Second)
+	l.sweep(clock.Now())
+	if ok, _ := kv.Has([]byte(bloomKey)); !ok {
+		t.Fatal("the sweep timer did not flush the replay cache")
+	}
+}
+
+func TestPendingEvictionChoosesPending(t *testing.T) {
+	mk, _ := newMaskKey(t, time.Now())
+	l, err := Listen("127.0.0.1:0", ListenerConfig{
+		Keys:            []MaskKey{mk},
+		Profile:         mustProfile(t),
+		MaxPending:      2,
+		MaxPendingPerIP: 2,
+		MaxFlows:        2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	now := time.Now()
+	ip1 := netip.MustParseAddr("192.0.2.51")
+	f1 := l.newFlow(netip.AddrPortFrom(ip1, 1000), packet.Keys{}, 1300, 0, now)
+	f1.markEstablished()
+	l.establish(f1)
+	ip2 := netip.MustParseAddr("192.0.2.52")
+	f2 := l.newFlow(netip.AddrPortFrom(ip2, 2000), packet.Keys{}, 1300, 0, now)
+	if f2 == nil {
+		t.Fatal("the pending flow was not created")
+	}
+	ip3 := netip.MustParseAddr("192.0.2.53")
+	f3 := l.newFlow(netip.AddrPortFrom(ip3, 3000), packet.Keys{}, 1300, 0, now)
+	if f3 == nil {
+		t.Fatal("no pending flow was available for eviction")
+	}
+	if f1.isClosed() {
+		t.Fatal("the established flow was evicted")
+	}
+	if !f2.isClosed() {
+		t.Fatal("the pending flow survived eviction")
 	}
 }
 

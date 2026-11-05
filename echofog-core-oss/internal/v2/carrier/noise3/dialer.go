@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
+	"strings"
 
 	quic "github.com/apernet/quic-go"
 
@@ -28,6 +30,11 @@ type DialerConfig struct {
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
 	// LowPower disables idle padding (platforms.md §2).
 	LowPower bool
+	// MaxDatagramLen is the outer noise3 payload ceiling (path MTU minus IP and UDP headers).
+	// Zero means packet.MaxDatagramLen (1452, an IPv4 1500-byte path); values above it are
+	// clamped to it. It must be at least 71+1200, otherwise an Init cannot carry the inner QUIC
+	// Initial (see doc.go).
+	MaxDatagramLen int
 }
 
 // Dialer opens noise3 carriers. It satisfies carrier.Dialer and is registered under
@@ -54,11 +61,16 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 		return nil, fmt.Errorf("%w: suite %d is not noise3", ErrBadConfig, req.Addr.GetSuite())
 	}
 	host := req.Addr.GetHost()
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
 	port := req.Addr.GetPort()
 	if host == "" || port == 0 || port > 65535 {
 		return nil, fmt.Errorf("%w: bad noise3 address", ErrBadConfig)
 	}
-	maskPub, err := cardMaskKey(req.Card, req.Addr)
+	clock := d.cfg.Clock
+	if clock == nil {
+		clock = newSystemClock()
+	}
+	maskPub, err := cardMaskKey(req.Card, req.Addr, clock.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -75,19 +87,18 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 		tlsConf = client
 	}
 	quicConf := d.cfg.QUICConfig
-	quicConf, err = innerQUICConfig(quicConf, maxPadding(profile))
+	quicConf, err = innerQUICConfig(quicConf, maxPadding(profile), l0MaxDatagram(d.cfg.MaxDatagramLen))
 	if err != nil {
 		return nil, err
-	}
-	clock := d.cfg.Clock
-	if clock == nil {
-		clock = newSystemClock()
 	}
 
 	address := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	dial := d.cfg.DialContext
 	if req.DialContext != nil {
 		dial = req.DialContext
+	}
+	if _, err := netip.ParseAddr(host); err != nil && dial == nil {
+		return nil, fmt.Errorf("%w: %q", ErrDNSName, host)
 	}
 	dialFn := func(ctx context.Context) (net.PacketConn, net.Addr, error) {
 		var (
