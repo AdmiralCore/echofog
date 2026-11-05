@@ -82,6 +82,20 @@ func TestRecoverX25519Key(t *testing.T) {
 	}
 }
 
+// TestHelloX25519ShareShort checks review finding 8: a 38-byte hello (header, version and
+// random, no session id) must not panic the parser.
+func TestHelloX25519ShareShort(t *testing.T) {
+	msg := make([]byte, 38)
+	msg[0] = 1
+	msg[3] = 34 // body length: version + random, nothing after the random
+	if C, ok := helloX25519Share(msg); ok || C != nil {
+		t.Fatalf("a hello without a key_share returned %x", C)
+	}
+	if C, ok := helloX25519Share(msg[:37]); ok || C != nil {
+		t.Fatalf("a truncated hello returned %x", C)
+	}
+}
+
 // helloWithX25519Share builds a minimal ClientHello handshake message carrying C as its X25519
 // key share.
 func helloWithX25519Share(t testing.TB, C []byte) []byte {
