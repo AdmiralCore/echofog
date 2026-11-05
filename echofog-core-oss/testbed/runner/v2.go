@@ -287,14 +287,15 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	time.Sleep(2 * time.Second)
 	cap.stop()
 
-	if cap.hostPath == "" {
+	path := cap.path()
+	if path == "" {
 		v.check(false, "no capture was copied from %s", gw)
 		return nil, cap, carrier
 	}
-	if cap.violated {
+	if cap.overBudget() {
 		v.check(false, "the capture went over its budget of %s", humanBytes(cap.budget))
 	}
-	flows, err := censor.Analyze(cap.hostPath)
+	flows, err := censor.Analyze(path)
 	if err != nil {
 		v.check(false, "analyze the capture of %s: %v", gw, err)
 		return nil, cap, carrier
@@ -308,7 +309,7 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	if len(labeled) == 0 {
 		v.check(false, "the capture of %s has no flows", gw)
 	}
-	logf("captured %d flows on %s (%s on disk)", len(labeled), gw, humanBytes(cap.size))
+	logf("captured %d flows on %s (%s on disk)", len(labeled), gw, humanBytes(cap.bytes()))
 	return labeled, cap, carrier
 }
 
@@ -665,13 +666,15 @@ func (c *v2Capture) stop() {
 		close(c.done)
 		_, _ = run("docker", "exec", c.container, "pkill", "-INT", "tcpdump")
 		time.Sleep(time.Second)
-		c.hostPath = filepath.Join(c.out, ".wan-"+c.gw+".pcap")
-		if out, err := run("docker", "cp", c.container+":/tmp/wan.pcap", c.hostPath); err != nil {
+		path := filepath.Join(c.out, ".wan-"+c.gw+".pcap")
+		if out, err := run("docker", "cp", c.container+":/tmp/wan.pcap", path); err != nil {
 			logf("copy the capture of %s: %v %s", c.gw, err, out)
-			c.hostPath = ""
 			return
 		}
-		if fi, err := os.Stat(c.hostPath); err == nil {
+		c.mu.Lock()
+		c.hostPath = path
+		c.mu.Unlock()
+		if fi, err := os.Stat(path); err == nil {
 			c.mu.Lock()
 			c.size = fi.Size()
 			if c.size > c.budget {
@@ -682,22 +685,45 @@ func (c *v2Capture) stop() {
 	})
 }
 
-// finalizeInfo is finalize without touching the files a second time; used when report.json is built.
+func (c *v2Capture) path() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hostPath
+}
+
+func (c *v2Capture) bytes() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.size
+}
+
+func (c *v2Capture) overBudget() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.violated
+}
+
+// finalizeInfo renames or deletes the capture once, after the analysis decided green or red.
 func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
-	info := pcapInfo{Requested: requested, BudgetBytes: c.budget, CapturedBytes: c.size}
-	if c.violated {
+	c.mu.Lock()
+	size, violated, path := c.size, c.violated, c.hostPath
+	c.mu.Unlock()
+	info := pcapInfo{Requested: requested, BudgetBytes: c.budget, CapturedBytes: size}
+	if violated {
 		info.Reason = "budget exceeded; the capture was stopped"
 	}
-	keep := requested && !green && c.hostPath != ""
+	keep := requested && !green && path != ""
 	if keep {
 		final := filepath.Join(c.out, "wan-"+c.gw+".pcap")
-		if err := os.Rename(c.hostPath, final); err == nil {
+		if err := os.Rename(path, final); err == nil {
 			info.Kept = true
 			info.Files = []string{filepath.Base(final)}
+			c.mu.Lock()
 			c.hostPath = final
+			c.mu.Unlock()
 		}
-	} else if c.hostPath != "" {
-		_ = os.Remove(c.hostPath)
+	} else if path != "" {
+		_ = os.Remove(path)
 		info.Deleted = true
 		switch {
 		case !requested:
@@ -705,7 +731,9 @@ func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
 		case green:
 			info.Reason = "deleted after a green analysis"
 		}
+		c.mu.Lock()
 		c.hostPath = ""
+		c.mu.Unlock()
 	}
 	return info
 }
