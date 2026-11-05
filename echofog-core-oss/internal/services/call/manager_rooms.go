@@ -113,7 +113,7 @@ func (m *CallManager) JoinRoom(callID string, coordinator types.PeerID, roomKey 
 		room.ConnectedPeers[m.selfID] = room.MyProfile
 		room.memberSeen[m.selfID] = now
 		room.joined, room.everJoined = true, true
-		m.rebuildVoiceLocked(room)
+		m.rebuildVoiceLocked(room, true)
 	} else {
 		m.ensureConnectedLocked(coordinator)
 		m.sendJoinLocked(room, now)
@@ -198,12 +198,19 @@ func (m *CallManager) admitLocked(room *ActiveRoomState, peer types.PeerID, prof
 	delete(room.suspects, peer)
 	room.StreamEngine.UpdatePeerProfile(profile)
 	m.ensureConnectedLocked(peer)
+	// A member taken back in after a timeout that outlived no key change still has the key the
+	// room speaks: it was out of the tree, not away, and a rotation would only leave it unable to
+	// open what reaches it now. Any other (re)join brings a key the member did not have.
+	keyAtTimeout, wasTimedOut := room.timedOut[peer]
+	delete(room.timedOut, peer)
+	rekey := newKX || (!known && !(wasTimedOut && keyAtTimeout == room.keyEpoch))
 	if !known {
 		m.logger.Info("Call member joined", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer),
 			"members", len(room.ConnectedPeers), "upload_kbps", profile.UploadKbps, "relay_children", profile.MaxRelayChildren)
-		m.rebuildVoiceLocked(room)
+		m.sendRoomKeysLocked(room, peer, now) // before its tree place: it can open what reaches it at once
+		m.rebuildVoiceLocked(room, rekey)
 	} else if newKX {
-		m.rebuildVoiceLocked(room) // it restarted: the others must seal its signals to the new key
+		m.rebuildVoiceLocked(room, true) // it restarted: the others must seal its signals to the new key
 	}
 	m.sendRoomSyncLocked(room, peer)
 }
@@ -220,8 +227,6 @@ func (m *CallManager) sendRoomSyncLocked(room *ActiveRoomState, peer types.PeerI
 func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerID, reason string) {
 	delete(room.ConnectedPeers, peer)
 	delete(room.memberSeen, peer)
-	delete(room.memberKX, peer)
-	delete(room.memberSK, peer)
 	if reason == "left" {
 		m.logger.Info("Call member left", "call_id", calllog.Call(room.CallID), "peer", calllog.Peer(peer), "members", len(room.ConnectedPeers))
 	} else {
@@ -229,7 +234,24 @@ func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerI
 	}
 	m.emit("call:member_removed", map[string]any{"call_id": room.CallID, "peer": peer.String()})
 
-	m.rebuildVoiceLocked(room)
+	// A member that left or was kicked goes without the key the others go on with, and without its
+	// keys here. One lost to a timeout or a silent parent has not left: it is out of the voice tree,
+	// so no media reaches it meanwhile, and when its line comes back it is that member again. Keep
+	// its key exchange keys: otherwise its own join looks like a restart and rotates the key it
+	// still has, which is exactly what leaves it unable to open what reaches it on return.
+	networkReason := reason == "timeout" || reason == "reported silent by a child"
+	if networkReason {
+		if room.timedOut == nil {
+			room.timedOut = make(map[types.PeerID]uint64)
+		}
+		room.timedOut[peer] = room.keyEpoch // the key it goes on holding
+	} else {
+		delete(room.memberKX, peer)
+		delete(room.memberSK, peer)
+		delete(room.timedOut, peer)
+		delete(room.pendingKeys, peer)
+	}
+	m.rebuildVoiceLocked(room, reason == "left" || reason == "kicked")
 	changed, closed := room.StreamEngine.RemovePeer(peer)
 	for _, sm := range changed {
 		m.floodLocked(room, signaling.ActionStreamTreeUpdate, sm)
@@ -241,6 +263,13 @@ func (m *CallManager) removeMemberLocked(room *ActiveRoomState, peer types.PeerI
 	}
 	if ob := room.Dispatcher.Outbox(); ob != nil {
 		ob.Forget(peer)
+	}
+	if len(room.keyWait) > 0 {
+		// it is not here to confirm any more; the others' confirmations still decide the switch
+		delete(room.keyWait, peer)
+		if len(room.keyWait) == 0 {
+			m.releaseKeySwitchLocked(room, m.now())
+		}
 	}
 }
 

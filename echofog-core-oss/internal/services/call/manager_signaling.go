@@ -120,6 +120,11 @@ func (m *CallManager) knownInCallLocked(room *ActiveRoomState, id types.PeerID) 
 	if _, ok := room.ConnectedPeers[id]; ok {
 		return true
 	}
+	if _, ok := room.timedOut[id]; ok {
+		// a member lost to a timeout or a silent parent is not a stranger: it may come back, and
+		// a claim of its own is one a half we kept must answer
+		return true
+	}
 	if mf := room.VoiceManifest; mf != nil {
 		if id == mf.Coordinator {
 			return true
@@ -158,11 +163,17 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 
 	case signaling.ActionCoordinatorHeartbeat:
 		if env.Sender != room.Coordinator {
-			if !m.knownInCallLocked(room, env.Sender) {
-				return m.rejectLocked(room, env, "heartbeat from outside the call", true)
+			known := m.knownInCallLocked(room, env.Sender)
+			if !known {
+				// a flooded claim our own coordinator forwarded to us is one it took: the half
+				// it joined is the call, and this is how its members learn where it went.
+				vouched := from == room.Coordinator && m.knownInCallLocked(room, from)
+				if !vouched {
+					return m.rejectLocked(room, env, "heartbeat from outside the call", true)
+				}
 			}
 			var other signaling.CoordinatorHeartbeatPayload
-			_ = decodePayload(env.Payload, &other)
+			read := decodePayload(env.Payload, &other) == nil
 			switch {
 			case m.aloneLocked(room) && other.Members == 1 && !m.authorityLocked(room, env.Sender, env.Epoch):
 				// two coordinators, each alone (a blackout split the call): the one with the
@@ -172,6 +183,25 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 			case m.aloneLocked(room):
 				// we took over while cut off and nobody followed: the sender has the call
 				m.yieldLocked(room, env.Sender, env.Epoch, now)
+			case read && other.Members > 0 && other.Members < len(room.ConnectedPeers):
+				// an election ran on a node cut off from the call: its half is smaller than the
+				// one we kept. The smaller half yields; taking its claim would make the two
+				// halves swap the lead and the call would not become one room again. Answer with
+				// our own heartbeat, which reaches the half it leads: floods do not cross the
+				// split, but this one is sent to the claimant directly.
+				if room.IsCoordinator {
+					m.sendLocked(room, env.Sender, signaling.ActionCoordinatorHeartbeat, m.coordinatorHeartbeatLocked(room))
+				}
+				return m.rejectLocked(room, env, "a smaller half yields to us", false)
+			case read && other.Members > len(room.ConnectedPeers):
+				// the sender kept strictly more members: its half is the call, ours is the
+				// splinter. A member follows the larger half; a coordinator of the smaller one
+				// yields to it and asks to be taken in, whatever its epoch.
+				if room.IsCoordinator {
+					m.yieldLocked(room, env.Sender, env.Epoch, now)
+				} else {
+					m.setCoordinatorLocked(room, env.Sender, env.Epoch, now)
+				}
 			case !m.authorityLocked(room, env.Sender, env.Epoch):
 				return m.rejectLocked(room, env, "heartbeat from a superseded coordinator", false)
 			default:
@@ -499,6 +529,18 @@ func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.C
 			return
 		}
 		m.takeMediaKeyLocked(room, sender, mk, now)
+
+	case signaling.ActionMediaKeyAck:
+		var ack signaling.KeyAckPayload
+		if decodePayload(env.Payload, &ack) != nil {
+			m.rejectLocked(room, env, "malformed", true)
+			return
+		}
+		if _, member := room.ConnectedPeers[sender]; !member {
+			m.rejectLocked(room, env, "confirmation from outside the call", false)
+			return
+		}
+		m.handleMediaKeyAckLocked(room, sender, ack.Epoch)
 
 	default:
 		// a newer peer may speak actions this build does not know

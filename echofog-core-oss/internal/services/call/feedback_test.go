@@ -237,3 +237,47 @@ func TestRoom_AWeakViewersKeyframeRequestsAreHeldBack(t *testing.T) {
 	ask(nodes[0]) // a strong viewer's goes on
 	require.Eventually(t, func() bool { return served.Load() == before+2 }, time.Second, 20*time.Millisecond)
 }
+
+// A viewer found weak does not set the rate when another viewer's report is merely late: its
+// report travels the same paths as the media, and a second without one must not hand the stream
+// to the weak viewer's link and cut the rate for everybody. Only when the weak viewer is the one
+// viewer does the stream follow it as any viewer.
+func TestRoom_ALateReportDoesNotHandTheRateToAWeakViewer(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	b := nodes[1]
+	weak := nodes[2].id
+	relay := nodes[0].id
+	heavy := media.Feedback{Level: media.PathFlood, Kbps: 800, Loss: 0.7, DelayMs: 200}
+	clean := [pathSamples]media.Congestion{media.PathClean, media.PathClean, media.PathClean, media.PathClean, media.PathClean, media.PathClean, media.PathClean, media.PathClean}
+
+	b.cm.mu.Lock()
+	room := b.cm.activeRoom
+	require.NotNil(t, room)
+	room.localStreams["s"] = signaling.StreamAnnouncePayload{StreamID: "s", MediaType: "screen", BitrateKbps: 6000}
+	room.paths["s"] = map[types.PeerID]*viewerPath{
+		weak:  {weak: true, n: pathSamples, lastSeen: b.cm.now(), grades: [pathSamples]media.Congestion{media.PathFlood, media.PathFlood, media.PathFlood, media.PathHeavy, media.PathHeavy, media.PathHeavy, media.PathHeavy, media.PathHeavy}},
+		relay: {n: pathSamples, lastSeen: b.cm.now().Add(-rateInterval), grades: clean},
+	}
+	// only the weak viewer's report is fresh; the clean viewer's is a tick late
+	room.feedback["s"] = map[types.PeerID]viewerReport{weak: {fb: heavy, viewer: weak, at: b.cm.now()}}
+	room.sendRate = sendRateState{kbps: 6000}
+	before := room.sendRate.kbps
+	b.cm.rateTickLocked(room, b.cm.now())
+	after := room.sendRate.kbps
+	b.cm.mu.Unlock()
+
+	require.Greater(t, after, 4000.0, "a late report from the clean viewer handed the rate to the weak one: %.0f -> %.0f kbps", before, after)
+
+	// with the weak viewer alone, the stream follows it as any viewer
+	b.cm.mu.Lock()
+	room.paths["s"] = map[types.PeerID]*viewerPath{
+		weak: {weak: true, n: pathSamples, grades: [pathSamples]media.Congestion{media.PathFlood, media.PathFlood, media.PathFlood, media.PathHeavy, media.PathHeavy, media.PathHeavy, media.PathHeavy, media.PathHeavy}},
+	}
+	room.feedback["s"] = map[types.PeerID]viewerReport{weak: {fb: heavy, viewer: weak, at: b.cm.now()}}
+	room.sendRate = sendRateState{kbps: 6000}
+	b.cm.rateTickLocked(room, b.cm.now())
+	alone := room.sendRate.kbps
+	b.cm.mu.Unlock()
+	require.Less(t, alone, 4000.0, "the only viewer, found weak, no longer sets the rate: %.0f kbps", alone)
+}

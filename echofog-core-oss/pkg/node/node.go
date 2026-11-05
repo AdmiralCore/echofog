@@ -714,7 +714,14 @@ func (n *Node) startNetwork() error {
 		n.Messenger.SetRelaySelector(n.RelayClient.IsPreferred)
 		n.Messenger.SetRelayFullCheck(n.RelayClient.IsFull)
 		n.RelayClient.OnRelayAck(func(relay types.PeerID, reqID []byte, status, _ byte) {
-			n.Messenger.HandleRelayAck(relay, reqID, status == routing.RelayAckStored || status == routing.RelayAckForwarded)
+			answer := messenger.RelayRefused
+			switch status {
+			case routing.RelayAckStored:
+				answer = messenger.RelayStored
+			case routing.RelayAckForwarded:
+				answer = messenger.RelayForwarded
+			}
+			n.Messenger.HandleRelayAck(relay, reqID, answer)
 		})
 	}
 	if !n.isolated() {
