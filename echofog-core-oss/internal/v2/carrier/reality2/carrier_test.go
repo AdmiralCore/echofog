@@ -25,18 +25,14 @@ import (
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
 
-// The end-to-end client test needs GODEBUG=cryptocustomrand=1: since Go 1.24 crypto/ecdh
-// ignores tls.Config.Rand unless it is set, and the client's token is derived from the private
-// key of its key share (see ErrRandomNotHonoured). Run it with
-// `GODEBUG=cryptocustomrand=1 go test ./internal/v2/carrier/reality2/`.
+// The end-to-end client test runs without GODEBUG=cryptocustomrand (T12.6): the client picks
+// its X25519 key itself and hands it to the token hook, so it does not depend on the toolchain
+// honouring tls.Config.Rand.
 
 // TestClientServerEndToEnd dials the listener through the gate and opens a stream: the token
 // is admitted, the 4-tuple passes, QUIC completes and both sides agree on the channel
 // binding. The cover never sees the client.
 func TestClientServerEndToEnd(t *testing.T) {
-	if !NewDialer(DialerConfig{}).customRandHonoured() {
-		t.Skip("needs GODEBUG=cryptocustomrand=1: the toolchain otherwise ignores tls.Config.Rand for X25519")
-	}
 	coverAddr := newCoverServer(t)
 	sk, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
