@@ -30,9 +30,9 @@ func compareReports(a, b []byte) (string, error) {
 	var ks []string
 	for k := range keys {
 		switch {
-		case k == "when", k == "commit", k == "pcap.captured_bytes", k == "pcap.files",
-			k == "pcap.kept", k == "pcap.deleted", k == "pcap.reason":
-			continue // run identity and raw capture size are not metrics
+		case k == "when", k == "commit", k == "findings",
+			k == "pcap.captured_bytes", k == "pcap.files", k == "pcap.kept", k == "pcap.deleted", k == "pcap.reason":
+			continue // run identity, findings (printed separately) and raw capture size are not metrics
 		}
 		ks = append(ks, k)
 	}
