@@ -415,10 +415,10 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		cancel()
 	}
 	closeListeners(listeners)
-	r.stopAccess()
 	if table != nil {
 		_ = table.Close()
 	}
+	r.stopAccess()
 	r.dgrams.close()
 
 	done := make(chan struct{})
