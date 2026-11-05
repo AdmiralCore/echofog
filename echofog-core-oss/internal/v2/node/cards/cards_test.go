@@ -340,7 +340,9 @@ func TestMaxFieldsFitTheCardLimit(t *testing.T) {
 		if len(issued.Envelope) > 4096 {
 			t.Fatalf("%s envelope = %d bytes", scope, len(issued.Envelope))
 		}
-		verifyBytes(t, issued.Envelope, clk.Now())
+		c := verifyBytes(t, issued.Envelope, clk.Now())
+		t.Logf("%s card: %d-byte envelope, %d addresses, %d masking keys",
+			scope, len(issued.Envelope), len(c.Body.GetAddrs()), len(c.Body.GetMaskKeys()))
 	}
 }
 
