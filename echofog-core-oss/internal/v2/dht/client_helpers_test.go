@@ -76,7 +76,7 @@ func newFakeNet(t *testing.T, size, knows int, pairs bool, rnd *rand.Rand) *fake
 		if pairs {
 			unit = i / 2
 		}
-		host := fmt.Sprintf("10.%d.%d.%d", 1+unit/200, unit%200, 1+i%2)
+		host := fmt.Sprintf("%d.%d.1.%d", 20+unit/250, unit%250, 1+i%2) // every unit in its own /16
 		card := buildCard(t, uint64(1000+i), 1, srvNow, objects.ScopePublic, 0, testAddr(host, 4430))
 		fn := &fakeNode{card: card}
 		n.nodes = append(n.nodes, fn)

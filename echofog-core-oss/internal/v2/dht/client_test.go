@@ -439,7 +439,7 @@ func TestPutAndGetAroundMidnight(t *testing.T) {
 	// Noon: only today's key is served by the replicas chosen.
 	net.setClock(day.Add(12 * time.Hour))
 	pub := newTestClient(t, net, 8100, rnd, nil)
-	rec := hint(t, sg, 1, day.Add(30*time.Hour))
+	rec := hint(t, sg, 1, day.Add(17*time.Hour))
 	if _, err := pub.Put(ctxT(t), rec); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestPutAndGetAroundMidnight(t *testing.T) {
 	// 23:30: also the next day's key, so the replica set is the union of both.
 	net.setClock(day.Add(23*time.Hour + 30*time.Minute))
 	net.storeLog = nil
-	rec2 := hint(t, sg, 2, day.Add(30*time.Hour))
+	rec2 := hint(t, sg, 2, day.Add(28*time.Hour))
 	if _, err := pub.Put(ctxT(t), rec2); err != nil {
 		t.Fatal(err)
 	}

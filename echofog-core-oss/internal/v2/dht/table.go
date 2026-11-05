@@ -152,16 +152,19 @@ type bucket struct {
 
 // Table is the DHT routing table of dht.md §5. It is safe for concurrent use.
 type Table struct {
-	self     DeviceID
-	kv       store.KV
-	now      func() time.Time
-	rnd      *rand.Rand
-	lowPower bool
-	memLimit int
-	maxPer16 int
-	pinger   Pinger
-	lookup   LookupFunc
-	log      *slog.Logger
+	self        DeviceID
+	kv          store.KV
+	now         func() time.Time
+	rnd         *rand.Rand
+	lowPower    bool
+	memLimit    int
+	maxPer16    int
+	pinger      Pinger
+	async       bool
+	checkCtx    context.Context
+	checkCancel context.CancelFunc
+	lookup      LookupFunc
+	log         *slog.Logger
 
 	mu        sync.Mutex
 	buckets   [BucketCount]*bucket
@@ -207,6 +210,7 @@ func Open(cfg Config) (*Table, error) {
 		lowPower:  cfg.LowPower,
 		maxPer16:  BucketCount * K / 10, // 10 % of the table
 		pinger:    cfg.Pinger,
+		async:     cfg.AsyncChecks,
 		lookup:    cfg.Lookup,
 		log:       log,
 		index:     make(map[DeviceID]*entry),
@@ -219,6 +223,7 @@ func Open(cfg Config) (*Table, error) {
 	case cfg.MemCapMB > 0:
 		t.memLimit = MemCapBuckets * K
 	}
+	t.checkCtx, t.checkCancel = context.WithCancel(context.Background())
 	start := now()
 	for i := range t.buckets {
 		t.buckets[i] = &bucket{nextRefresh: start.Add(refreshAfter(t.lowPower, rnd))}
@@ -345,6 +350,17 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 	victimCard := victim.card
 	victimGen := victim.gen
 	b.checking = true
+	if t.async {
+		// The caller is the path that accepts a session: it must not wait for a ping that can
+		// last PingTimeout (T5.1b-dht200). Stop waits for the check through wg.
+		t.wg.Add(1)
+		t.mu.Unlock()
+		go func() {
+			defer t.wg.Done()
+			t.checkAndReplace(b, victim, victimCard, victimGen, cand)
+		}()
+		return false
+	}
 	t.mu.Unlock()
 
 	t.checkAndReplace(b, victim, victimCard, victimGen, cand)
@@ -353,9 +369,13 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 
 // checkAndReplace pings the victim and inserts the candidate only when the check fails.
 func (t *Table) checkAndReplace(b *bucket, victim *entry, victimCard *objects.Card, victimGen uint64, cand *entry) {
-	ctx, cancel := context.WithTimeout(context.Background(), PingTimeout)
+	ctx, cancel := context.WithTimeout(t.checkCtx, PingTimeout)
 	err := t.pinger.Ping(ctx, victimCard)
 	cancel()
+	if err != nil && t.checkCtx.Err() != nil {
+		// Stop ended the check: that says nothing about the peer.
+		err = ErrUnavailable
+	}
 
 	t.mu.Lock()
 	b.checking = false
@@ -771,10 +791,12 @@ func (t *Table) Stop() {
 	}
 	t.stopped = true
 	cancel := t.cancel
+	checkCancel := t.checkCancel
 	t.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	checkCancel()
 	t.wg.Wait()
 	if err := t.Save(); err != nil {
 		t.log.Warn("dht: saving the routing table at shutdown", "err", err)
