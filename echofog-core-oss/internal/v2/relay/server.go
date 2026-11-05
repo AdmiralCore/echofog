@@ -252,6 +252,14 @@ func (s *Server) Handle(ctx context.Context, p Peer, st *mux.Stream) {
 		st.Reset(frame.CodeProtocolViolation)
 		return
 	}
+	if f.Type == TypeIncoming && s.cfg.Incoming != nil {
+		s.cfg.Incoming(ctx, p, st, f)
+		return
+	}
+	if s.cfg.Refuse && (f.Type == TypeConnect || f.Type == TypeRegister) {
+		st.Reset(frame.CodeServiceUnsupported)
+		return
+	}
 	switch f.Type {
 	case TypeConnect:
 		c, err := ParseConnect(f.Payload)

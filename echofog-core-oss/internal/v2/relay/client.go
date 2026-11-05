@@ -181,6 +181,17 @@ func AnswerAddr(st *mux.Stream, relayNode [32]byte, hub *Hub, send func(typ uint
 		st.Reset(frame.CodeProtocolViolation)
 		return Inbound{}, ErrProtocol
 	}
+	return AnswerFrame(st, f, relayNode, hub, send, ok, wantAddr)
+}
+
+// AnswerFrame is AnswerAddr for an INCOMING frame that was already read (a Server.Incoming hook).
+func AnswerFrame(st *mux.Stream, f frame.Frame, relayNode [32]byte, hub *Hub, send func(typ uint64, p []byte) error,
+	ok func(Incoming) bool, wantAddr func(Incoming) bool) (Inbound, error) {
+	st.SetLimiter(limiter())
+	if f.Type != TypeIncoming {
+		st.Reset(frame.CodeProtocolViolation)
+		return Inbound{}, ErrProtocol
+	}
 	in, err := ParseIncoming(f.Payload)
 	if err != nil || in.CID == 0 || in.CID > MaxCID || in.Mode < ModeStream || in.Mode > ModeSignal {
 		st.Reset(frame.CodeProtocolViolation)
@@ -258,5 +269,36 @@ func readPeerAddr(st *mux.Stream, cid uint64, d time.Duration) (netip.AddrPort, 
 // RegisterIDs sends REGISTER{ids, day} to R and returns the number of IDs R now holds for this node
 // (REGISTERED.count). At most MaxRegisterIDs per call, day is today or tomorrow of R's clock.
 func RegisterIDs(ctx context.Context, open Opener, ids [][32]byte, day uint32) (uint32, error) {
-	return 0, errors.New("relay: RegisterIDs not implemented")
+	if len(ids) == 0 || len(ids) > MaxRegisterIDs {
+		return 0, fmt.Errorf("relay: REGISTER carries 1..%d IDs, got %d", MaxRegisterIDs, len(ids))
+	}
+	st, err := open(ctx)
+	if err != nil {
+		return 0, err
+	}
+	st.SetLimiter(limiter())
+	req := randU64()
+	r := Register{Req: req, Day: day}
+	for i := range ids {
+		r.IDs = append(r.IDs, ids[i][:])
+	}
+	if err := st.WriteFrame(TypeRegister, 0, r.Append(nil)); err != nil {
+		return 0, err
+	}
+	f, err := readFrameTimeout(st, RegisterTimeout)
+	if err != nil {
+		st.Reset(frame.CodePathFailed)
+		return 0, fmt.Errorf("relay: waiting for REGISTERED: %w", err)
+	}
+	if f.Type != TypeRegistered {
+		st.Reset(frame.CodeProtocolViolation)
+		return 0, ErrProtocol
+	}
+	ans, err := ParseRegistered(f.Payload)
+	if err != nil || ans.Req != req {
+		st.Reset(frame.CodeProtocolViolation)
+		return 0, ErrProtocol
+	}
+	_ = st.Close()
+	return ans.Count, nil
 }
