@@ -254,3 +254,9 @@ func readPeerAddr(st *mux.Stream, cid uint64, d time.Duration) (netip.AddrPort, 
 	}
 	return ap, nil
 }
+
+// RegisterIDs sends REGISTER{ids, day} to R and returns the number of IDs R now holds for this node
+// (REGISTERED.count). At most MaxRegisterIDs per call, day is today or tomorrow of R's clock.
+func RegisterIDs(ctx context.Context, open Opener, ids [][32]byte, day uint32) (uint32, error) {
+	return 0, errors.New("relay: RegisterIDs not implemented")
+}

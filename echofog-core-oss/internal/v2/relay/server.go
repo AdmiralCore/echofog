@@ -104,6 +104,12 @@ type ServerConfig struct {
 	ConnectTimeout  time.Duration
 	RegisterTimeout time.Duration
 	Limits          Limits
+	// Refuse makes the server an endpoint that never relays for others: CONNECT and REGISTER end the
+	// stream with CodeServiceUnsupported (metered networks and phones, platforms.md §2).
+	Refuse bool
+	// Incoming, when set, takes the streams whose first frame is INCOMING (R → B); the first frame is
+	// passed on because it was already read.
+	Incoming func(ctx context.Context, p Peer, st *mux.Stream, first frame.Frame)
 }
 
 type sysClock struct{}
