@@ -80,8 +80,11 @@ type Config struct {
 	GreaseInterval func() time.Duration
 
 	// Listeners are already built carriers; ListenerSources are built at Start.
-	Listeners       []carrier.Listener
-	ListenerSources []ListenerSource
+	Listeners []carrier.Listener
+	// ContactListeners carry the contacts masking key; the runtime keeps their key set equal to
+	// the access manager's contacts keys (T3.6b).
+	ContactListeners []carrier.Listener
+	ListenerSources  []ListenerSource
 	// Registry replaces the carrier suite registry (tests, a build without a suite).
 	Registry *carrier.Registry
 	// CarrierClock is the raw carrier clock for tests (AD13). Nil means the system clock. When a

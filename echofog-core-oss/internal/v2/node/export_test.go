@@ -4,6 +4,7 @@ package node
 // that the platform flags and typed events are actually wired, without widening the public API.
 
 import (
+	"github.com/echofog/echofog-core/internal/v2/session"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -12,6 +13,8 @@ import (
 )
 
 var (
+	// SetBeforeAdd installs the hook that runs before an accepted session enters the table.
+	SetBeforeAdd = func(f func(*session.Established)) { beforeAdd = f }
 	// LocalInfoOf returns the carrier-plan view built from the profile.
 	LocalInfoOf = func(r *Runtime) carrier.LocalInfo { return r.planInfo() }
 	// SessionLimitOf returns the limit of the running session table.

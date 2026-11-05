@@ -91,6 +91,10 @@ func (f *accessFactory) lastKeys(slot int) [][]byte {
 // newHiddenAccessNode builds a hidden runtime whose passes live in the store and whose access
 // listeners come from the factory.
 func newHiddenAccessNode(t *testing.T, f node.AccessListenerFactory) (*testNode, *carrierQueue, *access.Manager) {
+	return newHiddenAccessNodeCfg(t, f, nil)
+}
+
+func newHiddenAccessNodeCfg(t *testing.T, f node.AccessListenerFactory, mutate func(*node.Config, *carrierQueue)) (*testNode, *carrierQueue, *access.Manager) {
 	t.Helper()
 
 	tw, err := identity.NewThrowaway()
@@ -145,7 +149,7 @@ func newHiddenAccessNode(t *testing.T, f node.AccessListenerFactory) (*testNode,
 	}
 
 	contacts := newCarrierQueue()
-	rt, err := node.New(node.Config{
+	cfg := node.Config{
 		Account:        tw.Account,
 		Device:         tw.Device,
 		Cards:          builder,
@@ -155,7 +159,11 @@ func newHiddenAccessNode(t *testing.T, f node.AccessListenerFactory) (*testNode,
 		Listeners:      []carrier.Listener{contacts},
 		Features:       []uint32{uint32(frame.FeatureCardPush)},
 		Profile:        node.Profile{Platform: node.PlatformDesktop},
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg, contacts)
+	}
+	rt, err := node.New(cfg)
 	if err != nil {
 		mgr.Close()
 		_ = st.Close()

@@ -14,6 +14,9 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/session"
 )
 
+// beforeAdd is a test seam that runs right before an accepted session enters the table.
+var beforeAdd func(*session.Established)
+
 // acceptLoop accepts carriers from one listener and turns each completed handshake into a table
 // entry and a service loop. Refusals are ordinary protocol behaviour (a hidden node closes
 // silently, an expired card gets REJECT), so they are not runtime errors.
@@ -58,6 +61,9 @@ func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 			continue
 		}
 
+		if beforeAdd != nil {
+			beforeAdd(est)
+		}
 		kept, err := r.table.Add(local, est)
 		if err != nil {
 			_ = est.Session.Close()
