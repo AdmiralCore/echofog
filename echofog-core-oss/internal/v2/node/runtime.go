@@ -121,9 +121,11 @@ type Runtime struct {
 	policy   *session.PathPolicy
 
 	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
-	// this node opened as a carrier client are counted.
+	// this node opened as a carrier client are counted. deadPaths remembers failures that
+	// arrived before the pair was recorded, so a late record cannot resurrect a slot.
 	pathsMu   sync.Mutex
 	pathPairs map[pathKey]session.Pair
+	deadPaths map[pathKey]struct{}
 
 	identity Identity
 	vis      cards.Visibility
@@ -188,6 +190,7 @@ func New(cfg Config) (*Runtime, error) {
 		binder:       mux.NewBinder(),
 		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
 		pathPairs:    map[pathKey]session.Pair{},
+		deadPaths:    map[pathKey]struct{}{},
 	}
 	r.dgrams = newDatagramBroker(r)
 

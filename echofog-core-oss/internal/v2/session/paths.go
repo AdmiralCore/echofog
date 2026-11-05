@@ -13,13 +13,31 @@ import (
 // BindCarrier binds one more carrier to the session with PATH_BIND (wire.md §8.2). It returns
 // the new path ID. The caller owns c until this call; on any failure the carrier is closed.
 func (e *Established) BindCarrier(ctx context.Context, c mux.Carrier, kind mux.PathKind) (uint64, error) {
+	return e.bindCarrier(ctx, c, kind, false)
+}
+
+// BindCarrierActive binds one more carrier and makes it the active path before the standby trim.
+// A network change uses it so a platform with no standby paths keeps the new carrier.
+func (e *Established) BindCarrierActive(ctx context.Context, c mux.Carrier, kind mux.PathKind) (uint64, error) {
+	return e.bindCarrier(ctx, c, kind, true)
+}
+
+func (e *Established) bindCarrier(ctx context.Context, c mux.Carrier, kind mux.PathKind, activate bool) (uint64, error) {
 	if e == nil || e.Session == nil || c == nil {
 		if c != nil {
 			_ = c.Close()
 		}
 		return 0, fmt.Errorf("%w: no session or carrier", ErrConfig)
 	}
-	id, err := e.Session.BindPath(ctx, mux.NewGuard(c), kind)
+	var (
+		id  uint64
+		err error
+	)
+	if activate {
+		id, err = e.Session.BindPathActive(ctx, mux.NewGuard(c), kind)
+	} else {
+		id, err = e.Session.BindPath(ctx, mux.NewGuard(c), kind)
+	}
 	if err != nil {
 		_ = c.Close()
 		return 0, err
@@ -221,6 +239,9 @@ func (p *PathPolicy) Open(pair Pair) int {
 	defer p.mu.Unlock()
 	return p.state(pair).open
 }
+
+// MaxPerPair is the concurrent carrier limit of one pair (H11).
+func (p *PathPolicy) MaxPerPair() int { return p.max }
 
 func (p *PathPolicy) state(pair Pair) *pairState {
 	st := p.pairs[pair]

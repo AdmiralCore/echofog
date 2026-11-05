@@ -278,7 +278,7 @@ func NewSession(cfg Config, g *Guard, control RawStream, kind PathKind) (*Sessio
 	} else {
 		s.nextPathID = 1
 	}
-	s.attachPath(0, kind, g, control, nil)
+	s.attachPath(0, kind, g, control, nil, false)
 	go s.tickLoop()
 	return s, nil
 }
@@ -357,7 +357,9 @@ func (s *Session) Paths() (ids []uint64, active uint64, ok bool) {
 
 // attachPath registers a path whose stream 0 is control. pre, if set, is written in plaintext
 // on stream 0 before anything else (PATH_BIND_OK), after the guard hands streams to the session.
-func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStream, pre []byte) (*path, error) {
+// forceActive makes the new path active before the standby trim: a network change must keep the
+// freshly bound path even on a platform with no standby slots (low_power).
+func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStream, pre []byte, forceActive bool) (*path, error) {
 	p := &path{
 		id: id, kind: kind, carrier: g.c, guard: g, sealed: g.c.Sealed() || kind == PathRelay,
 		streams: map[*Stream]struct{}{}, pings: map[[8]byte]*pingWait{},
@@ -374,7 +376,13 @@ func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStre
 	p.seq = s.nextPathSeq
 	s.nextPathSeq++
 	s.paths[id] = p
-	if s.active == nil || better(p, s.active) {
+	activate := forceActive
+	if !activate && s.active != nil && s.cfg.MaxStandby == 0 {
+		// No standby slots: a newly bound carrier must not be trimmed away. A direct path still
+		// wins over a relay one; otherwise the newest path is the new carrier/network.
+		activate = kind != PathRelay || s.active.kind != PathDirect
+	}
+	if s.active == nil || activate || better(p, s.active) {
 		s.active = p
 	}
 	s.noPathSince = time.Time{}
@@ -818,8 +826,19 @@ func (s *Session) maybeDrained() {
 
 // BindPath binds a new carrier, opened by this side, to the session with PATH_BIND (wire.md
 // §8.2). The carrier's stream 0 becomes a control stream of the session. It requires the
-// feature path-migration.
+// feature path-migration. The active path is chosen by the usual preference rules.
 func (s *Session) BindPath(ctx context.Context, g *Guard, kind PathKind) (uint64, error) {
+	return s.bindPath(ctx, g, kind, false)
+}
+
+// BindPathActive is BindPath and makes the new path active before the standby trim. A network
+// change uses it: with MaxStandby = 0 (low_power) the freshly bound path must not be the one
+// trimmed away (wire.md §8.3, platforms.md §2).
+func (s *Session) BindPathActive(ctx context.Context, g *Guard, kind PathKind) (uint64, error) {
+	return s.bindPath(ctx, g, kind, true)
+}
+
+func (s *Session) bindPath(ctx context.Context, g *Guard, kind PathKind, activate bool) (uint64, error) {
 	if !s.HasFeature(frame.FeaturePathMigration) {
 		return 0, ErrFeatureNotSelected
 	}
@@ -859,7 +878,7 @@ func (s *Session) BindPath(ctx context.Context, g *Guard, kind PathKind) (uint64
 		return 0, fmt.Errorf("mux: PATH_BIND: unexpected answer %s", frame.TypeName(f.Type))
 	}
 	raw.SetReadDeadline(time.Time{})
-	if _, err := s.attachPath(id, kind, g, raw, nil); err != nil {
+	if _, err := s.attachPath(id, kind, g, raw, nil, activate); err != nil {
 		return 0, err
 	}
 	return id, nil

@@ -23,15 +23,6 @@ type pathKey struct {
 	id  uint64
 }
 
-// maxStandby is the number of standby paths of the platform profile (wire.md §8.3,
-// platforms.md §2): none under low_power, two otherwise.
-func (r *Runtime) maxStandby() int {
-	if r.cfg.Profile.LowPower {
-		return 0
-	}
-	return 2
-}
-
 // pathHooks builds the session callbacks: the binder learns the session before it is returned
 // (so a peer can bind a path immediately), and every path failure updates the carrier policy.
 func (r *Runtime) pathHooks() (func(*mux.Session), func(mux.PathFailure)) {
@@ -51,6 +42,7 @@ func (r *Runtime) pathFailed(f mux.PathFailure) {
 	r.pathsMu.Lock()
 	pair, ok := r.pathPairs[key]
 	delete(r.pathPairs, key)
+	r.deadPaths[key] = struct{}{}
 	r.pathsMu.Unlock()
 	if !ok {
 		return
@@ -63,10 +55,23 @@ func (r *Runtime) pathFailed(f mux.PathFailure) {
 	}
 }
 
-func (r *Runtime) recordPair(sid [16]byte, id uint64, pair session.Pair) {
+// recordPair stores the carrier pair of a newly bound path. It refuses when the path or the
+// session already died: the failure hook then ran before this record and the slot is not ours to
+// keep. The caller releases the slot when it returns false.
+func (r *Runtime) recordPair(sid [16]byte, id uint64, pair session.Pair, done <-chan struct{}) bool {
+	key := pathKey{sid: sid, id: id}
 	r.pathsMu.Lock()
-	r.pathPairs[pathKey{sid: sid, id: id}] = pair
-	r.pathsMu.Unlock()
+	defer r.pathsMu.Unlock()
+	if _, dead := r.deadPaths[key]; dead {
+		return false
+	}
+	select {
+	case <-done:
+		return false
+	default:
+	}
+	r.pathPairs[key] = pair
+	return true
 }
 
 func (r *Runtime) releaseSessionPathPairs(sid [16]byte) {
@@ -76,6 +81,11 @@ func (r *Runtime) releaseSessionPathPairs(sid [16]byte) {
 		if k.sid == sid {
 			delete(r.pathPairs, k)
 			pairs = append(pairs, pair)
+		}
+	}
+	for k := range r.deadPaths {
+		if k.sid == sid {
+			delete(r.deadPaths, k)
 		}
 	}
 	r.pathsMu.Unlock()
@@ -104,7 +114,13 @@ func (r *Runtime) sessionHosts(sid [16]byte) map[string]bool {
 // opt.Carrier, opt.CarrierFunc and opt.Attempts work as in DialOpt. For an injected carrier the
 // carrier pair policy is not applied: it is a test or relay-circuit input, not a TLS dial.
 func (r *Runtime) AddPath(ctx context.Context, peer DeviceID, opt DialOpt) (uint64, error) {
+	closeInjected := func() {
+		if opt.Carrier != nil {
+			_ = opt.Carrier.Close()
+		}
+	}
 	if !r.running() {
+		closeInjected()
 		return 0, ErrClosed
 	}
 	if ctx == nil {
@@ -112,6 +128,7 @@ func (r *Runtime) AddPath(ctx context.Context, peer DeviceID, opt DialOpt) (uint
 	}
 	est, err := r.existingSession(ctx, peer, opt)
 	if err != nil {
+		closeInjected()
 		return 0, err
 	}
 	return r.addPathTo(ctx, est, opt, false)
@@ -150,13 +167,14 @@ func (r *Runtime) NetworkChanged(ctx context.Context, opt DialOpt) error {
 			errs = append(errs, fmt.Errorf("node: path for %x: %w", est.Peer.DeviceID, err))
 			continue
 		}
-		for _, p := range old {
-			if p == id {
-				continue
+		if err := r.abandonReplaced(est, old, id); err != nil {
+			// The switch did not complete: roll the new path back and report a real failure.
+			// moved and the operator event stay untouched.
+			if rerr := est.AbandonPath(id, frame.CodeNoError); rerr != nil && !errors.Is(rerr, mux.ErrNoPath) {
+				err = errors.Join(err, fmt.Errorf("rollback of path %d: %w", id, rerr))
 			}
-			if aerr := est.AbandonPath(p, frame.CodeNoError); aerr != nil && !errors.Is(aerr, mux.ErrNoPath) {
-				errs = append(errs, fmt.Errorf("node: abandon path %d: %w", p, aerr))
-			}
+			errs = append(errs, fmt.Errorf("node: network change for %x: %w", est.Peer.DeviceID, err))
+			continue
 		}
 		moved++
 	}
@@ -168,6 +186,25 @@ func (r *Runtime) NetworkChanged(ctx context.Context, opt DialOpt) error {
 		})
 	}
 	return errors.Join(errs...)
+}
+
+// abandonReplaced abandons the old paths of a network change after the new path is active. A path
+// that the standby trim already removed (ErrNoPath / no longer live) counts as abandoned.
+func (r *Runtime) abandonReplaced(est *session.Established, old []uint64, keep uint64) error {
+	ids, _, _ := est.Paths()
+	live := make(map[uint64]bool, len(ids))
+	for _, id := range ids {
+		live[id] = true
+	}
+	for _, p := range old {
+		if p == keep || !live[p] {
+			continue
+		}
+		if err := est.AbandonPath(p, frame.CodeNoError); err != nil && !errors.Is(err, mux.ErrNoPath) {
+			return fmt.Errorf("abandon old path %d: %w", p, err)
+		}
+	}
+	return nil
 }
 
 // AbandonPath tells the peer that a path is no longer used and closes it (wire.md §8.3).
@@ -209,8 +246,10 @@ func (r *Runtime) existingSession(ctx context.Context, peer DeviceID, opt DialOp
 	return est, nil
 }
 
-// addPathTo binds one more path. replace is the network-change mode: old paths may be dropped
-// before binding when the platform keeps no standby paths.
+// addPathTo binds one more path. replace is the network-change mode: the new path becomes active
+// before the standby trim, so on a platform with no standby slots it is the old path that is
+// abandoned (wire.md §8.3, platforms.md §2). The caller abandons the remaining old paths after
+// this returns and rolls the new one back if that fails.
 func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt DialOpt, replace bool) (uint64, error) {
 	closeInjected := func() {
 		if opt.Carrier != nil {
@@ -225,26 +264,9 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 		closeInjected()
 		return 0, ErrPathFeature
 	}
-	old, active, hasActive := est.Paths()
-	if r.cfg.Profile.LowPower && hasActive && !replace {
+	if _, _, hasActive := est.Paths(); r.cfg.Profile.LowPower && hasActive && !replace {
 		closeInjected()
 		return 0, ErrTooManyPaths
-	}
-	if replace && r.cfg.Profile.LowPower {
-		// No standby paths exist on this platform: drop the old path before the new one is
-		// bound (the session keeps its 60 s no-path grace if the bind then fails).
-		for _, p := range old {
-			_ = est.AbandonPath(p, frame.CodeNoError)
-		}
-	} else if replace && len(old) >= 1+r.maxStandby() {
-		// Make room inside the standby limit before binding so the mux does not have to pick
-		// a victim on its own.
-		for _, p := range old {
-			if hasActive && p == active {
-				continue
-			}
-			_ = est.AbandonPath(p, frame.CodeNoError)
-		}
 	}
 
 	kind := opt.PathKind
@@ -307,7 +329,15 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 		}
 	}
 
-	id, err := est.BindCarrier(ctx, c, kind)
+	var (
+		id  uint64
+		err error
+	)
+	if replace {
+		id, err = est.BindCarrierActive(ctx, c, kind)
+	} else {
+		id, err = est.BindCarrier(ctx, c, kind)
+	}
 	if err != nil {
 		if counted {
 			if errors.Is(err, mux.ErrSessionClosed) || errors.Is(err, mux.ErrFeatureNotSelected) {
@@ -319,10 +349,80 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 		return 0, err
 	}
 	if counted {
-		r.policy.Succeeded(pair)
-		r.recordPair(est.SID, id, pair)
+		if r.recordPair(est.SID, id, pair, est.Session.Done()) {
+			r.policy.Succeeded(pair)
+		} else {
+			// The path died (or the session closed) before its carrier slot was recorded; the
+			// failure hook could not see it. Release the slot here.
+			r.policy.Release(pair)
+		}
 	}
 	return id, nil
+}
+
+// reserveAttempts applies the H11 carrier limit to a happy-eyeballs plan before any handshake
+// starts: at most MaxPerPair attempts per (address, SNI), and no attempt to a pair inside a
+// backoff window. It returns one reserved policy slot per allowed attempt; the caller settles
+// them with settleReservations or failReservations.
+func (r *Runtime) reserveAttempts(attempts []carrier.Attempt) ([]carrier.Attempt, []session.Pair, error) {
+	out := make([]carrier.Attempt, 0, len(attempts))
+	reserved := make([]session.Pair, 0, len(attempts))
+	counts := map[session.Pair]int{}
+	direct := 0
+	var last error
+	for _, a := range attempts {
+		if a.Kind != carrier.AttemptCarrier || a.Addr == nil {
+			out = append(out, a)
+			continue
+		}
+		direct++
+		p := pairOfAttempt(a)
+		if counts[p] >= r.policy.MaxPerPair() {
+			continue
+		}
+		if err := r.policy.Acquire(p); err != nil {
+			last = err
+			continue
+		}
+		counts[p]++
+		reserved = append(reserved, p)
+		out = append(out, a)
+	}
+	if direct == 0 {
+		// No direct suite: let carrier.Dial report ErrNeedRelay (the relay is T6.1).
+		return attempts, nil, nil
+	}
+	if len(reserved) == 0 {
+		if last == nil {
+			last = ErrNoRoute
+		}
+		return nil, nil, fmt.Errorf("node: no carrier attempt allowed: %w", last)
+	}
+	return out, reserved, nil
+}
+
+// settleReservations keeps one slot for the winning pair and releases the others.
+func (r *Runtime) settleReservations(reserved []session.Pair, chosen session.Pair) {
+	kept := false
+	for _, p := range reserved {
+		if p == chosen && !kept {
+			kept = true
+			continue
+		}
+		r.policy.Release(p)
+	}
+}
+
+// failReservations penalties the first attempt's pair and releases the rest. A carrier.Dial
+// failure is a reset/timeout (H15); the first attempt is the one the plan preferred.
+func (r *Runtime) failReservations(reserved []session.Pair) {
+	if len(reserved) == 0 {
+		return
+	}
+	r.policy.Penalize(reserved[0])
+	for _, p := range reserved[1:] {
+		r.policy.Release(p)
+	}
 }
 
 // pathAttempts puts an address on another family and an unused address first: on a network

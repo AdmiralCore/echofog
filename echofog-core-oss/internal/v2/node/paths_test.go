@@ -231,3 +231,33 @@ func TestNetworkChangedLowPower(t *testing.T) {
 		t.Fatalf("the session ended on a low_power network change: %v", err)
 	}
 }
+
+// TestAddPathClosesSuppliedCarrierOnEarlyErrors pins resource ownership: when AddPath refuses
+// before handing the carrier to addPathTo, it still closes the carrier the caller gave it.
+func TestAddPathClosesSuppliedCarrierOnEarlyErrors(t *testing.T) {
+	n := newTestNodeWith(t, cards.Hidden, false, nil, nil, pathFeatures)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stopped := memcarrier.NewQUIC()
+	peer := node.DeviceID([32]byte{0xab})
+	if _, err := n.rt.AddPath(ctx, peer, node.DialOpt{Carrier: stopped.Client}); !errors.Is(err, node.ErrClosed) {
+		t.Fatalf("AddPath on a stopped runtime: %v, want ErrClosed", err)
+	}
+	select {
+	case <-stopped.Client.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("AddPath leaked the carrier on a stopped runtime")
+	}
+
+	n.start(t)
+	withoutSession := memcarrier.NewQUIC()
+	if _, err := n.rt.AddPath(ctx, peer, node.DialOpt{Carrier: withoutSession.Client}); !errors.Is(err, node.ErrNoSession) {
+		t.Fatalf("AddPath without a session: %v, want ErrNoSession", err)
+	}
+	select {
+	case <-withoutSession.Client.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("AddPath leaked the carrier without a session")
+	}
+}

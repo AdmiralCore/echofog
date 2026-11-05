@@ -109,20 +109,35 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	req := carrier.DialRequest{Card: card, DialContext: r.cfg.DialContext}
 	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
 
+	var reserved []session.Pair
+	var chosenPair session.Pair
+	havePair := false
+
 	attempt := firstAttempt(attempts)
 	var first mux.Carrier
 	switch {
 	case opt.Carrier != nil:
 		first = opt.Carrier
 	case opt.CarrierFunc != nil:
-		// The factory is called by session.Dial itself.
+		// The factory is called by session.Dial itself. An injected carrier is not counted by
+		// the H11 policy: it is not a TLS dial to the card's address.
 	default:
+		var rerr error
+		attempts, reserved, rerr = r.reserveAttempts(attempts)
+		if rerr != nil {
+			return nil, rerr
+		}
+		attempt = firstAttempt(attempts)
 		c, chosen, err := carrier.Dial(ctx, req, attempts, dialCfg)
 		if err != nil {
+			r.failReservations(reserved)
 			r.maybeClockCheck()
 			return nil, fmt.Errorf("node: carrier dial: %w", err)
 		}
 		first, attempt = c, chosen
+		chosenPair = pairOfAttempt(chosen)
+		havePair = true
+		r.settleReservations(reserved, chosenPair)
 	}
 
 	provided := opt.Carrier
@@ -145,7 +160,9 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		if c != nil {
 			return c, nil
 		}
-		c, _, err := carrier.Dial(ctx, req, attempts, dialCfg)
+		// The one suite retry stays on the chosen address/pair (H11): it is a fresh carrier for
+		// the same handshake, not a new route.
+		c, _, err := carrier.Dial(ctx, req, []carrier.Attempt{attempt}, dialCfg)
 		return c, err
 	}
 
@@ -168,27 +185,24 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		opts = append(opts, session.WithExpectedDeviceID([32]byte(*opt.ExpectedDeviceID)))
 	}
 
-	// Count this client carrier against the (address, SNI) pair before the handshake (H11). A
-	// handshake timeout or reset is the penalty signal of H15.
-	pair := pairOfAttempt(attempt)
-	if err := r.policy.Acquire(pair); err != nil {
-		if first != nil {
-			_ = first.Close()
-		}
-		return nil, err
-	}
 	est, err := session.Dial(ctx, card, attempt, local, opts...)
 	if err != nil {
 		r.maybeClockCheck()
-		if penalizeDial(err) {
-			r.policy.Penalize(pair)
-		} else {
-			r.policy.Release(pair)
+		if havePair {
+			if penalizeDial(err) {
+				r.policy.Penalize(chosenPair)
+			} else {
+				r.policy.Release(chosenPair)
+			}
 		}
 		return nil, err
 	}
-	r.policy.Succeeded(pair)
-	r.recordPair(est.SID, 0, pair)
+	if havePair {
+		r.policy.Succeeded(chosenPair)
+		if !r.recordPair(est.SID, 0, chosenPair, est.Session.Done()) {
+			r.policy.Release(chosenPair)
+		}
+	}
 	// The initiator may send on a new stream the moment message 3 is written, while the responder
 	// is still finishing the handshake and has not attached its Guard to the session yet. A PING
 	// on the control stream is answered only after that attach, so it is a deterministic
