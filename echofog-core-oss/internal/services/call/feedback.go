@@ -235,12 +235,14 @@ func (m *CallManager) viewersLocked(room *ActiveRoomState, now time.Time) (stron
 	return strong, weak
 }
 
-// otherViewerLocked says whether a stream has a viewer other than weak that is not itself weak:
-// one whose report is merely late must keep the rate off the weak viewer's link.
-func (m *CallManager) otherViewerLocked(room *ActiveRoomState, weak types.PeerID) bool {
+// otherViewerLocked says whether a stream has a viewer other than weak, not itself weak, whose
+// report is recent enough to know its path: the rate control follows the other viewers, not the
+// weak one. A report a tick late still counts; one silent for longer means the viewer is gone, and
+// then the stream follows whoever is left.
+func (m *CallManager) otherViewerLocked(room *ActiveRoomState, weak types.PeerID, now time.Time) bool {
 	for _, paths := range room.paths {
 		for v, p := range paths {
-			if v != weak && !p.weak {
+			if v != weak && !p.weak && now.Sub(p.lastSeen) <= 2*feedbackTTL {
 				return true
 			}
 		}
