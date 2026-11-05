@@ -245,6 +245,47 @@ func TestSealedResponderRejectsInvalidInitiatorCard(t *testing.T) {
 	}
 }
 
+// TestSealedNativeResponderRejectsInvalidInitiatorCard is the same check on a carrier with native
+// streams: there stream 0 is sealed as its own pipe (wire §8.5), which is a different branch from
+// the byte-stream carrier above.
+func TestSealedNativeResponderRejectsInvalidInitiatorCard(t *testing.T) {
+	now := time.Now()
+	cliNode, srvNode := newTestNode(t), newTestNode(t)
+	nc := srvNode.cards(t, now)
+	expired := cliNode.card(t, objects.ScopePeer, []uint16{handshake.SuiteXK}, 35,
+		uint64(now.Add(-70*time.Second).Unix()))
+	remote := verifyCard(t, nc.peer, now)
+	pair := memcarrier.NewQUIC(memcarrier.WithSealed(true))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	accepted := acceptIn(ctx, &oneListener{c: pair.Server}, session.AcceptConfig{
+		Local: srvNode.local(nil, nc.own, []uint16{handshake.SuiteXK}, false),
+	})
+	est, err := session.Dial(ctx, remote, dialAttempt(),
+		cliNode.local(expired, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false),
+		session.WithCarrier(pair.Client))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = est.Session.Close() })
+
+	r := <-accepted
+	var rejected *session.ErrRejected
+	if r.est != nil || !errors.As(r.err, &rejected) || rejected.Reason != handshake.ReasonCardInvalid {
+		t.Fatalf("Accept: %v %v, want REJECT{card-invalid}", r.est, r.err)
+	}
+	select {
+	case <-est.Session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("sealed REJECT did not reach the initiator")
+	}
+	var muxReject *mux.RejectError
+	if !errors.As(est.Session.Err(), &muxReject) || muxReject.Reason != handshake.ReasonCardInvalid {
+		t.Fatalf("initiator session error: %v", est.Session.Err())
+	}
+}
+
 // TestHiddenNodeWithoutAccessSendsNothing checks the uniform silent failure of handshake §5:
 // zero bytes leave the hidden node.
 func TestHiddenNodeWithoutAccessSendsNothing(t *testing.T) {
