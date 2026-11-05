@@ -217,7 +217,24 @@ type Config struct {
 	// Client side only; it has no effect on a listener. Because it pins the
 	// values above, settings that conflict with Chrome's are ignored.
 	ChromeParrot bool
+
+	// ClientHelloHook runs before the ChromeParrot client builds its ClientHello
+	// for real (ECHOFOG-PATCH.md, patch 4). It receives CH0 — the exact marshalled
+	// ClientHello handshake message (type byte, 3-byte length, body) with its
+	// 32-byte random field set to zero — and c, the private X25519 key of the
+	// hello's X25519 key share (or of the X25519 half of X25519MLKEM768 when the
+	// hello has no separate X25519 share). The 32 bytes it returns become the
+	// random of the hello that is hashed and sent; the returned hello is
+	// byte-for-byte CH0 except for those bytes.
+	//
+	// An error aborts the dial before anything is sent. A hook is only honoured
+	// together with ChromeParrot: the plain crypto/tls client has no Chrome hello
+	// and no way to hand out its private key.
+	ClientHelloHook ClientHelloHook
 }
+
+// ClientHelloHook is the token hook of fork patch 4; see Config.ClientHelloHook.
+type ClientHelloHook func(ch0, c []byte) ([32]byte, error)
 
 // ClientInfo contains information about an incoming connection attempt.
 type ClientInfo struct {

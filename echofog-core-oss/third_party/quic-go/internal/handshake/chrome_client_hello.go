@@ -2,10 +2,15 @@ package handshake
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
+	mrand "math/rand"
 	"slices"
+	"time"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -24,9 +29,80 @@ import (
 // which is worse than an imperfect fingerprint. The match is exact only for the
 // protocol Chrome would negotiate.
 func chromeQUICClientHelloSpec(alpn []string) *utls.ClientHelloSpec {
+	return chromeQUICClientHelloSpecSeeded(alpn, utls.BoringGREASEECH(), &utls.QUICTransportParametersExtension{}, randomOrderSeed())
+}
+
+// chromeQUICClientHelloSpecSeeded is chromeQUICClientHelloSpec with the two parts
+// that uTLS draws from crypto/rand taken from the caller: the GREASE ECH extension,
+// the QUIC transport parameters extension and the extension-order seed. Patch 4
+// (ECHOFOG-PATCH.md) builds the same hello twice, so both passes must share those
+// three: a second instance would generate other bytes and the two hellos would
+// differ outside the random.
+func chromeQUICClientHelloSpecSeeded(alpn []string, ech utls.TLSExtension, qtp *utls.QUICTransportParametersExtension, seed int64) *utls.ClientHelloSpec {
 	if len(alpn) == 0 {
 		alpn = []string{"h3"}
 	}
+	exts := []utls.TLSExtension{
+		// The first of Chrome's two GREASE extensions. ShuffleChromeTLSExtensions
+		// treats GREASE as positionally invariant, so this one stays first and its
+		// sibling below stays last, bracketing the list as Chrome does.
+		&utls.UtlsGREASEExtension{},
+		&utls.SNIExtension{},
+		// A GREASE curve first, as real Chrome sends.
+		&utls.SupportedCurvesExtension{Curves: []utls.CurveID{
+			utls.CurveID(utls.GREASE_PLACEHOLDER),
+			utls.X25519MLKEM768,
+			utls.X25519,
+			utls.CurveP256,
+			utls.CurveP384,
+		}},
+		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []utls.SignatureScheme{
+			utls.ECDSAWithP256AndSHA256,
+			utls.PSSWithSHA256,
+			utls.PKCS1WithSHA256,
+			utls.ECDSAWithP384AndSHA384,
+			utls.PSSWithSHA384,
+			utls.PKCS1WithSHA384,
+			utls.PSSWithSHA512,
+			utls.PKCS1WithSHA512,
+			utls.PKCS1WithSHA1,
+		}},
+		&utls.ALPNExtension{AlpnProtocols: alpn},
+		&utls.UtlsCompressCertExtension{Algorithms: []utls.CertCompressionAlgo{
+			utls.CertCompressionBrotli,
+		}},
+		// TLS 1.3, preceded by a GREASE version, as real Chrome sends.
+		&utls.SupportedVersionsExtension{Versions: []uint16{
+			utls.GREASE_PLACEHOLDER,
+			utls.VersionTLS13,
+		}},
+		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
+		// A GREASE key share first (one zero byte of key data, as Chrome sends),
+		// then the real ones. The ML-KEM share is what pushes the ClientHello past
+		// a single packet, giving the characteristic two Initial datagrams.
+		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{
+			{Group: utls.CurveID(utls.GREASE_PLACEHOLDER), Data: []byte{0}},
+			{Group: utls.X25519MLKEM768},
+			{Group: utls.X25519},
+		}},
+		// Populated from quic-go's own marshalled parameters; see
+		// utlsQUICConn.SetTransportParameters. Patch 4 shares one instance between
+		// the two passes, so its random GREASE parameter is encoded once.
+		qtp,
+		// ALPS at the newer codepoint; uTLS's presets use the older one.
+		&utls.ApplicationSettingsExtensionNew{SupportedProtocols: alpn},
+		// An ECH extension is always present: real when a config is available
+		// from DNS, GREASE otherwise. GREASE is right here, and is structurally
+		// indistinguishable from the real thing without decrypting it. Note its
+		// type (0xfe0d) is not a GREASE type, so it does not stand in for the
+		// GREASE cipher/extension/group above that a JA3/JA4 censor looks for.
+		ech,
+		// uTLS has no native support for trust_anchors, so it goes out raw.
+		&utls.GenericExtension{Id: extensionTrustAnchors, Data: chromeTrustAnchorsData},
+		// The second of Chrome's two GREASE extensions, kept last by the shuffle.
+		&utls.UtlsGREASEExtension{},
+	}
+	shuffleChromeTLSExtensions(exts, seed)
 	return &utls.ClientHelloSpec{
 		// A GREASE cipher suite first, as real Chrome sends. uTLS rewrites the
 		// GREASE_PLACEHOLDER into a per-connection 0x?a?a value from its GREASE seed.
@@ -39,66 +115,40 @@ func chromeQUICClientHelloSpec(alpn []string) *utls.ClientHelloSpec {
 			utls.TLS_CHACHA20_POLY1305_SHA256,
 		},
 		CompressionMethods: []byte{0x00},
-		Extensions: utls.ShuffleChromeTLSExtensions([]utls.TLSExtension{
-			// The first of Chrome's two GREASE extensions. ShuffleChromeTLSExtensions
-			// treats GREASE as positionally invariant, so this one stays first and its
-			// sibling below stays last, bracketing the list as Chrome does.
-			&utls.UtlsGREASEExtension{},
-			&utls.SNIExtension{},
-			// A GREASE curve first, as real Chrome sends.
-			&utls.SupportedCurvesExtension{Curves: []utls.CurveID{
-				utls.CurveID(utls.GREASE_PLACEHOLDER),
-				utls.X25519MLKEM768,
-				utls.X25519,
-				utls.CurveP256,
-				utls.CurveP384,
-			}},
-			&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []utls.SignatureScheme{
-				utls.ECDSAWithP256AndSHA256,
-				utls.PSSWithSHA256,
-				utls.PKCS1WithSHA256,
-				utls.ECDSAWithP384AndSHA384,
-				utls.PSSWithSHA384,
-				utls.PKCS1WithSHA384,
-				utls.PSSWithSHA512,
-				utls.PKCS1WithSHA512,
-				utls.PKCS1WithSHA1,
-			}},
-			&utls.ALPNExtension{AlpnProtocols: alpn},
-			&utls.UtlsCompressCertExtension{Algorithms: []utls.CertCompressionAlgo{
-				utls.CertCompressionBrotli,
-			}},
-			// TLS 1.3, preceded by a GREASE version, as real Chrome sends.
-			&utls.SupportedVersionsExtension{Versions: []uint16{
-				utls.GREASE_PLACEHOLDER,
-				utls.VersionTLS13,
-			}},
-			&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
-			// A GREASE key share first (one zero byte of key data, as Chrome sends),
-			// then the real ones. The ML-KEM share is what pushes the ClientHello past
-			// a single packet, giving the characteristic two Initial datagrams.
-			&utls.KeyShareExtension{KeyShares: []utls.KeyShare{
-				{Group: utls.CurveID(utls.GREASE_PLACEHOLDER), Data: []byte{0}},
-				{Group: utls.X25519MLKEM768},
-				{Group: utls.X25519},
-			}},
-			// Populated from quic-go's own marshalled parameters; see
-			// utlsQUICConn.SetTransportParameters.
-			&utls.QUICTransportParametersExtension{},
-			// ALPS at the newer codepoint; uTLS's presets use the older one.
-			&utls.ApplicationSettingsExtensionNew{SupportedProtocols: alpn},
-			// An ECH extension is always present: real when a config is available
-			// from DNS, GREASE otherwise. GREASE is right here, and is structurally
-			// indistinguishable from the real thing without decrypting it. Note its
-			// type (0xfe0d) is not a GREASE type, so it does not stand in for the
-			// GREASE cipher/extension/group above that a JA3/JA4 censor looks for.
-			utls.BoringGREASEECH(),
-			// uTLS has no native support for trust_anchors, so it goes out raw.
-			&utls.GenericExtension{Id: extensionTrustAnchors, Data: chromeTrustAnchorsData},
-			// The second of Chrome's two GREASE extensions, kept last by the shuffle.
-			&utls.UtlsGREASEExtension{},
-		}),
+		Extensions:         exts,
 	}
+}
+
+// shuffleChromeTLSExtensions is uTLS's ShuffleChromeTLSExtensions with a caller-supplied
+// seed: Chrome permutes its extension order per connection, but patch 4 must reproduce
+// the same permutation in both passes of one hello.
+func shuffleChromeTLSExtensions(exts []utls.TLSExtension, seed int64) {
+	r := mrand.New(mrand.NewSource(seed))
+	r.Shuffle(len(exts), func(i, j int) {
+		if positionInvariant(exts[i]) || positionInvariant(exts[j]) {
+			return
+		}
+		exts[i], exts[j] = exts[j], exts[i]
+	})
+}
+
+// positionInvariant reports whether uTLS keeps an extension at its position, as Chrome does
+// with GREASE, padding and the pre-shared key.
+func positionInvariant(e utls.TLSExtension) bool {
+	switch e.(type) {
+	case *utls.UtlsGREASEExtension, *utls.UtlsPaddingExtension, utls.PreSharedKeyExtension:
+		return true
+	}
+	return false
+}
+
+// randomOrderSeed draws the extension-order seed of one ClientHello.
+func randomOrderSeed() int64 {
+	n, err := crand.Int(crand.Reader, big.NewInt(math.MaxInt64))
+	if err != nil {
+		return time.Now().UnixNano()
+	}
+	return n.Int64()
 }
 
 // ChromeParrotKeyShare builds the Chrome QUIC ClientHello with rand as the TLS randomness source and

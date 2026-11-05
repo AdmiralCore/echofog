@@ -55,4 +55,13 @@
 //
 // SendDatagram is best effort, as mux.Carrier requires: datagrams queue up to datagramQueue
 // entries and are dropped beyond that. QUIC itself never retransmits DATAGRAM frames.
+//
+// # Toolchain requirement of the reality2-quic client (interim, T2.6a)
+//
+// The reality2-quic client uses Config.ClientHelloHook (fork patch #4) to put its token into
+// ClientHello.random. The hook recovers the private X25519 key of the hello's key share from the
+// randomness stream, which requires the toolchain to honour a custom tls.Config.Rand for
+// crypto/ecdh: since Go 1.24 it does so only with //go:debug cryptocustomrand=1 in the main
+// package or GODEBUG=cryptocustomrand=1. The carrier package checks this
+// (reality2.CheckRandomHonoured) and fails closed; noise3 is unaffected.
 package quicx

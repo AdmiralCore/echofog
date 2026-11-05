@@ -2,15 +2,17 @@
 
 This is `github.com/apernet/quic-go` at
 `v0.63.1-0.20261004180939-a10df75c260c`, the version EchoFog already depended on,
-with three small, self-contained changes. `go.mod` in `echofog-core-oss` points at
-this copy with a `replace` directive. Test files (`*_test.go`), mocks, and the
-`integrationtests/`, `interop/`, `example/`, `testutils/` and `metrics/` trees
-were dropped to keep the copy reviewable; nothing in the library's own build path
-imported them. The one exception is the fuzz target for patch 3; see below.
+with four numbered patches (§1–§4) and two earlier local changes that predate the
+numbering (§5). `go.mod` in `echofog-core-oss` points at this copy with a `replace`
+directive. Test files (`*_test.go`), mocks, and the `integrationtests/`, `interop/`,
+`example/`, `testutils/` and `metrics/` trees were dropped to keep the copy reviewable;
+nothing in the library's own build path imported them. The exceptions are the fuzz
+target for patch 3 and the tests of patch 4; see below.
 
 To review, diff this tree against the upstream module at that version
 (`go mod download github.com/apernet/quic-go@v0.63.1-0.20261004180939-a10df75c260c`
-gives the cache path). The only functional changes are the three below.
+gives the cache path). Nine files differ in total: §1–§4 explain seven of them, §5 the
+other two (`chrome_parrot.go`, `datagram_queue.go`).
 
 ## 1. Real GREASE in the Chrome QUIC ClientHello
 `internal/handshake/chrome_client_hello.go`
@@ -87,3 +89,79 @@ on the reduced size. `ChromeParrot` still overwrites the parameter with Chrome's
 
 `internal/handshake/server_hello_group_test.go` is the only test file in this
 copy: a fuzz target for the parser above (30 s clean, 3.6M execs).
+
+## 4. A hook for the EchoFog REALITY v2 token in `ClientHello.random`
+`interface.go`, `config.go`, `connection.go`, `internal/handshake/crypto_setup.go`,
+`internal/handshake/tls_conn_utls.go`, `internal/handshake/client_hello_hook.go`,
+`internal/handshake/chrome_client_hello.go`
+
+`quic.Config.ClientHelloHook` is called before a `ChromeParrot` client builds its
+ClientHello. It receives two things and returns the 32 bytes to put in
+`ClientHello.random`:
+
+- `ch0` — the exact marshalled ClientHello handshake message (type byte, 3-byte
+  length, body) with `random` zeroed. This is the value `wire.md` §3.2 hashes into
+  the token's associated data.
+- `c` — the private X25519 key of the hello's `X25519` key share (or of the
+  `X25519MLKEM768` share's X25519 half when there is no separate `X25519` entry).
+  The token key is derived from `X25519(c, mask_pub)`, so the client must know it.
+
+The token cannot be computed in one pass: `random` is drawn before the key shares
+exist, and the associated data covers the finished hello. Patch 4 therefore builds
+the hello twice over one recorded randomness stream:
+
+1. **Pre-pass.** A throwaway uTLS QUIC client builds the hello with `crypto/rand`
+   (or the caller's `tls.Config.Rand`) behind a recording reader. The reader serves
+   zeros for the first 32 bytes — the client random — and records everything else.
+   The resulting `QUICWriteData` event at the Initial level is CH0.
+2. The private key is recovered by matching: uTLS generated the X25519 share from
+   a 32-byte read of that stream, so the read whose public key equals the hello's
+   share is `c`. (Without this check a changed uTLS could silently break the
+   binding; the hook is not called at all then.)
+3. The hook returns the token, and the real handshake replays the recorded stream
+   with the token in place of the first 32 bytes. Every other byte of the hello is
+   identical, so the server's `CH0` equals the one the hook saw.
+
+Two parts of the hello that uTLS draws from `crypto/rand` rather than from
+`tls.Config.Rand` are shared between the passes: the GREASE ECH extension (its
+payload length and contents) and the `quic_transport_parameters` extension (its
+greased transport parameter). The extension order, which Chrome permutes per
+connection, is drawn once per connection from `crypto/rand` and applied to both
+passes with the same seed.
+
+**Requirement on the Go toolchain.** Since Go 1.24 `crypto/ecdh` ignores the
+reader passed to `GenerateKey` and uses the process CSPRNG, unless
+`GODEBUG=cryptocustomrand=1` is set (`crypto/internal/rand.CustomReader`). With the
+default setting the X25519 share is not derived from the recorded stream; the hook
+then fails with `the X25519 key share is not derived from the randomness stream`
+instead of sending a hello whose token cannot be verified. When that GODEBUG is on,
+`crypto/internal/rand` probes a custom reader with a discarded one-byte read
+(`randutil.MaybeReadByte`); the recording and replay readers serve that probe from a
+separate source so the two passes stay aligned.
+
+`client_hello_hook_test.go` checks the whole path: the hook's `CH0`, the private key
+it receives against the hello's share, the random on the wire (decrypted from the
+client's Initial packets) and a completed handshake. It skips itself when the
+toolchain does not honour the custom reader, with that reason.
+
+
+## 5. Earlier local changes (present before patches 1-4)
+
+These two changes were already in EchoFog's copy when the numbered patches were
+introduced. They are listed here so the fork is fully accounted for; a diff against
+upstream shows them alongside §1-§4.
+
+### 5.1 `chrome_parrot.go`: `ChromeParrotKeyShare`
+Adds the exported `ChromeParrotKeyShare(rand io.Reader, alpn []string) ([]byte, error)`,
+a thin wrapper over `internal/handshake.ChromeParrotKeyShare`. It builds a throwaway
+Chrome ClientHello over the given randomness and returns its key_share extension body.
+v1's REALITY QUIC dial (`internal/network/mimicry`, `internal/network/quic_reality_conn.go`)
+uses it to predict the key share before sending the stealth token. v2 does not use it;
+the change is inert for callers that do not call it.
+
+### 5.2 `datagram_queue.go`: deeper queues and a drop counter
+Raises `maxDatagramSendQueueLen` from 32 to 64 and `maxDatagramRcvQueueLen` from 128 to
+2048, so a burst (a video keyframe is hundreds of datagrams) is not discarded while the
+reader pauses. Adds `DiscardedDatagrams() uint64`, a process-wide counter of received
+DATAGRAM frames dropped because the receive queue was full. No wire behaviour changes;
+buffers are bounded, and the queues live only for a connection.

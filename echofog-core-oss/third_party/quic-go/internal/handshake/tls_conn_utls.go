@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"context"
+	crand "crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -44,18 +45,120 @@ var _ tlsQUICConn = (*utlsQUICConn)(nil)
 // own SessionState with unexported internals, so a uTLS session cannot be
 // converted into the *tls.SessionState the resumption path expects. The events
 // are turned off at the source rather than half-supported.
-func newUTLSQUICClient(tlsConf *tls.Config) (*utlsQUICConn, error) {
+//
+// clientHelloHook is fork patch 4 (ECHOFOG-PATCH.md): when set, the ClientHello
+// is first built with a zeroed random (CH0), the hook receives it together with
+// the private X25519 key of the hello's key share and returns the 32 bytes to
+// place in random, and the real handshake replays the pre-pass randomness with
+// those bytes in front. params are the marshalled transport parameters, which
+// must be in CH0 exactly as in the real hello.
+func newUTLSQUICClient(tlsConf *tls.Config, params []byte, clientHelloHook func(ch0, c []byte) ([32]byte, error)) (*utlsQUICConn, error) {
 	uConf, err := utlsConfigFromStd(tlsConf)
 	if err != nil {
 		return nil, err
 	}
-	spec := chromeQUICClientHelloSpec(tlsConf.NextProtos)
+	if clientHelloHook == nil {
+		spec := chromeQUICClientHelloSpec(tlsConf.NextProtos)
+		if err := installTransportParameters(spec, params); err != nil {
+			return nil, err
+		}
+		return newUTLSQUICConn(uConf, spec)
+	}
+	return newUTLSQUICConnWithHook(tlsConf, params, clientHelloHook)
+}
 
+// newUTLSQUICConn starts a uTLS QUIC client from an already configured spec.
+func newUTLSQUICConn(uConf *utls.Config, spec *utls.ClientHelloSpec) (*utlsQUICConn, error) {
 	conn := utls.UQUICClient(&utls.QUICConfig{TLSConfig: uConf}, utls.HelloCustom)
 	if err := conn.ApplyPreset(spec); err != nil {
 		return nil, fmt.Errorf("applying Chrome ClientHello spec: %w", err)
 	}
 	return &utlsQUICConn{conn: conn, spec: spec}, nil
+}
+
+// newUTLSQUICConnWithHook runs the two-pass ClientHello of patch 4.
+//
+// The pre-pass builds the hello over a recorded randomness stream with the random
+// zeroed. The real pass reads the same stream again, with the hook's 32 bytes in
+// the place of the random, so every other byte of the hello — GREASE values, key
+// shares, transport parameters, the ECH GREASE extension — is identical. The GREASE
+// ECH extension is the one part uTLS draws from crypto/rand rather than the config's
+// Rand; both passes therefore share one instance of it.
+func newUTLSQUICConnWithHook(tlsConf *tls.Config, params []byte, hook func(ch0, c []byte) ([32]byte, error)) (*utlsQUICConn, error) {
+	alpn := tlsConf.NextProtos
+	ech := utls.BoringGREASEECH()
+	qtp := &utls.QUICTransportParametersExtension{}
+	seed := randomOrderSeed()
+
+	preConf, err := utlsConfigFromStd(tlsConf)
+	if err != nil {
+		return nil, err
+	}
+	preRand := newCH0Rand(preConf.Rand)
+	preConf.Rand = preRand
+	preSpec := chromeQUICClientHelloSpecSeeded(alpn, ech, qtp, seed)
+	if err := installTransportParameters(preSpec, params); err != nil {
+		return nil, err
+	}
+	ch0, err := buildClientHello(preConf, preSpec, params)
+	if err != nil {
+		return nil, fmt.Errorf("building CH0 for the ClientHello hook: %w", err)
+	}
+	c, err := recoverX25519Key(ch0, preRand.reads)
+	if err != nil {
+		return nil, err
+	}
+	token, err := hook(ch0, c)
+	if err != nil {
+		return nil, fmt.Errorf("ClientHello hook: %w", err)
+	}
+
+	realConf, err := utlsConfigFromStd(tlsConf)
+	if err != nil {
+		return nil, err
+	}
+	fallback := realConf.Rand
+	if fallback == nil {
+		fallback = crand.Reader
+	}
+	realConf.Rand = &tokenFirstRand{token: token, recorded: preRand.recorded, fallback: fallback}
+	realSpec := chromeQUICClientHelloSpecSeeded(alpn, ech, qtp, seed)
+	if err := installTransportParameters(realSpec, params); err != nil {
+		return nil, err
+	}
+	return newUTLSQUICConn(realConf, realSpec)
+}
+
+// buildClientHello runs a throwaway uTLS QUIC client until it produces its first
+// Initial-level write (the ClientHello) and returns those bytes. The connection
+// has no peer and is closed before returning.
+func buildClientHello(uConf *utls.Config, spec *utls.ClientHelloSpec, params []byte) ([]byte, error) {
+	conn := utls.UQUICClient(&utls.QUICConfig{TLSConfig: uConf}, utls.HelloCustom)
+	if err := conn.ApplyPreset(spec); err != nil {
+		return nil, fmt.Errorf("applying Chrome ClientHello spec: %w", err)
+	}
+	// Set before Start, so the hello is built with them and the handshake never
+	// blocks on QUICTransportParametersRequired.
+	conn.SetTransportParameters(params)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := conn.Start(ctx); err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	for {
+		ev := conn.NextEvent()
+		switch ev.Kind {
+		case utls.QUICWriteData:
+			if ev.Level == utls.QUICEncryptionLevelInitial {
+				return append([]byte(nil), ev.Data...), nil
+			}
+		case utls.QUICNoEvent:
+			return nil, errors.New("the pre-pass connection produced no ClientHello")
+		case utls.QUICHandshakeDone:
+			return nil, errors.New("the pre-pass connection completed without a ClientHello")
+		}
+	}
 }
 
 // utlsConfigFromStd converts a crypto/tls client config into the uTLS
@@ -188,19 +291,26 @@ func (c *utlsQUICConn) recordServerHello(data []byte) {
 func (c *utlsQUICConn) SetTransportParameters(params []byte) {
 	// Still call through so uTLS's internal copy stays consistent.
 	c.conn.SetTransportParameters(params)
+	if err := installTransportParameters(c.spec, params); err != nil {
+		// Our own marshaller produced these, so this is unreachable short of a bug.
+		panic(fmt.Sprintf("handshake BUG: %s", err))
+	}
+}
 
+// installTransportParameters writes quic-go's marshalled transport parameters into
+// a ClientHello spec (patch 4 needs them in both passes of the hello).
+func installTransportParameters(spec *utls.ClientHelloSpec, params []byte) error {
 	tps, err := splitTransportParameters(params)
 	if err != nil {
-		// Our own marshaller produced these, so this is unreachable short of a bug.
-		panic(fmt.Sprintf("handshake BUG: cannot split marshalled transport parameters: %s", err))
+		return fmt.Errorf("cannot split marshalled transport parameters: %w", err)
 	}
-	for _, ext := range c.spec.Extensions {
+	for _, ext := range spec.Extensions {
 		if qtp, ok := ext.(*utls.QUICTransportParametersExtension); ok {
 			qtp.TransportParameters = tps
-			return
+			return nil
 		}
 	}
-	panic("handshake BUG: Chrome ClientHello spec has no quic_transport_parameters extension")
+	return errors.New("Chrome ClientHello spec has no quic_transport_parameters extension")
 }
 
 // splitTransportParameters parses a marshalled transport parameter blob back into

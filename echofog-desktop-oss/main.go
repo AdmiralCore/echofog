@@ -1,3 +1,9 @@
+// The REALITY v2 carrier derives its token from the private key of the client's X25519 key
+// share. Since Go 1.24 crypto/ecdh ignores the tls.Config.Rand it is given unless custom
+// randomness is enabled, so the v2 client needs this build-time default. It is not a user
+// setting: reality2.CheckRandomHonoured fails closed if the directive (or GODEBUG) is missing.
+//
+//go:debug cryptocustomrand=1
 package main
 
 import (
