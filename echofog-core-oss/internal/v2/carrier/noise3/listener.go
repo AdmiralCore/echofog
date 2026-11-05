@@ -183,12 +183,54 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 // SetKeys replaces the live masking keys (rotation, wire.md §2.1). Init datagrams for a key that
 // is no longer listed are dropped from now on; established flows are not touched.
 func (l *Listener) SetKeys(keys []MaskKey) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("%w: no masking keys", ErrBadConfig)
+	}
+	if len(keys) > MaxMaskKeys {
+		return fmt.Errorf("%w: %d masking keys, at most %d", ErrBadConfig, len(keys), MaxMaskKeys)
+	}
+	set := make([]maskKey, 0, len(keys))
+	for _, k := range keys {
+		pub, err := maskPublic(k.Private)
+		if err != nil {
+			return fmt.Errorf("%w: masking key: %v", ErrBadConfig, err)
+		}
+		set = append(set, maskKey{secret: k.Private, public: pub, notAfter: k.NotAfter})
+	}
+	l.mu.Lock()
+	l.keys = set
+	l.mu.Unlock()
 	return nil
+}
+
+// liveKeys returns the current key set; the slice is never modified after it is published.
+func (l *Listener) liveKeys() []maskKey {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.keys
 }
 
 // Revoke stops accepting Init datagrams for the masking key with this public value at once. The
 // last remaining key cannot be revoked: use SetKeys with a replacement.
 func (l *Listener) Revoke(public [32]byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	idx := -1
+	for i := range l.keys {
+		if l.keys[i].public == public {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("%w: unknown masking key", ErrBadConfig)
+	}
+	if len(l.keys) == 1 {
+		return fmt.Errorf("%w: the last masking key cannot be revoked", ErrBadConfig)
+	}
+	set := make([]maskKey, 0, len(l.keys)-1)
+	set = append(set, l.keys[:idx]...)
+	set = append(set, l.keys[idx+1:]...)
+	l.keys = set
 	return nil
 }
 
@@ -308,7 +350,7 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 		if !l.budget.allow(budgetKey(src.Addr()), now) {
 			return
 		}
-		l.handleInit(d, src, l.keys, now)
+		l.handleInit(d, src, l.liveKeys(), now)
 		return
 	}
 
@@ -323,7 +365,7 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 	if len(d) < packet.MinInitLen {
 		return
 	}
-	l.handleInit(d, src, l.keys, now)
+	l.handleInit(d, src, l.liveKeys(), now)
 }
 
 // promote makes the successor the flow of src after its first authentic data packet (A-2).
