@@ -51,7 +51,7 @@ type vectors struct {
 	} `json:"data"`
 }
 
-func loadVectors(t *testing.T) vectors {
+func loadVectors(t testing.TB) vectors {
 	t.Helper()
 	b, err := os.ReadFile(vectorPath)
 	if err != nil {
@@ -64,7 +64,7 @@ func loadVectors(t *testing.T) vectors {
 	return v
 }
 
-func hx(t *testing.T, s string) []byte {
+func hx(t testing.TB, s string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
 	if err != nil {

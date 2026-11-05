@@ -217,7 +217,7 @@ func reverseBytes(b []byte) []byte {
 }
 
 func TestTestdataCopyMatchesSpec(t *testing.T) {
-	spec := filepath.Join("..", "..", "..", "..", "..", "docs", "protocol", "v2", "vectors", "elligator2.json")
+	spec := filepath.Join("..", "..", "..", "..", "..", "..", "docs", "protocol", "v2", "vectors", "elligator2.json")
 	if _, err := os.Stat(spec); err != nil {
 		t.Skip("spec vectors not present (OSS copy)")
 	}
