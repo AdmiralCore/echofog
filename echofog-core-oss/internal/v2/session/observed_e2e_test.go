@@ -31,6 +31,12 @@ func (c addrCarrier) RemoteAddr() net.Addr {
 // observedSession runs one handshake in which the responder sees the initiator at seen and the
 // initiator sits at server (its peer address) on socket local.
 func observedSession(t *testing.T, ctl *session.Control, kind mux.PathKind, local, server, seen string) *session.Established {
+	cli, _ := observedPair(t, ctl, kind, local, server, seen)
+	return cli
+}
+
+// observedPair is observedSession that also returns the responder side.
+func observedPair(t *testing.T, ctl *session.Control, kind mux.PathKind, local, server, seen string) (*session.Established, *session.Established) {
 	t.Helper()
 	now := time.Now()
 	cliNode, srvNode := newTestNode(t), newTestNode(t)
@@ -67,7 +73,7 @@ func observedSession(t *testing.T, ctl *session.Control, kind mux.PathKind, loca
 		_ = srvEst.Session.Close()
 		_ = r.est.Session.Close()
 	})
-	return r.est
+	return r.est, srvEst
 }
 
 func TestHandshakeObservedFeedsObserver(t *testing.T) {

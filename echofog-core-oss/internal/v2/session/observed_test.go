@@ -393,3 +393,35 @@ func TestRandomLiarsNeverOutvoteHonestNetworks(t *testing.T) {
 		wantPublic(t, r.o, "8.8.8.8")
 	}
 }
+
+// TestObserverConcurrentUse: Observe, PublicAddr, NAT, NATClass, Len and Reset from many
+// goroutines (run under -race).
+func TestObserverConcurrentUse(t *testing.T) {
+	o := session.NewObserver(session.ObserverConfig{
+		OnChange:     func(session.PublicAddrChange) {},
+		OnSuspicious: func([32]byte) {},
+	})
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 400; i++ {
+				o.Observe(session.Observation{
+					Peer:     [32]byte{byte(g), byte(i % 7)},
+					PeerAddr: netip.AddrFrom4([4]byte{byte(11 + g), byte(i % 5), 1, 1}),
+					Reported: netip.AddrPortFrom(netip.AddrFrom4([4]byte{8, 8, 8, byte(8 - i%2*4)}), uint16(4000+i%3)),
+					Socket:   "s",
+				})
+				_, _ = o.PublicAddr()
+				_ = o.NAT("s")
+				_ = o.NATClass()
+				_ = o.Len()
+				if i%97 == 0 {
+					o.Reset()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
