@@ -30,6 +30,17 @@ type Flow struct {
 	// Shape: share of client packets of each size class, the most common payload size.
 	SizeClasses [4]int // <=200, <=600, <=1200, >1200 bytes of payload, client side
 	TopSize     int
+	FirstSize   int // first client payload (TCP) or datagram (UDP), bytes
+
+	// UDP shape: what D10 looks at. A real QUIC Initial opens with the keys of its own connection
+	// ID; noise that only borrows the header does not, and a long random stream keeps entropy high.
+	UDPFirst      int     // first client datagram, bytes
+	UDPPackets    int     // client datagrams (up to the first 25 counted in full)
+	UDPEntropy    float64 // Shannon entropy of the first bytes, bits per byte
+	UDPPopAvg     float64 // average set bits per byte
+	QUICVersion   uint32
+	QUICFixedBit  bool
+	QUICDecrypted bool
 
 	// SNIForeign: the SNI names a site the server's address does not host. A censor resolves the
 	// name and finds other addresses; set by CheckSNI.
@@ -104,6 +115,8 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		f        *Flow
 		upStream []byte // first client bytes of a TCP flow
 		firstUp  []byte
+		udpFirst []byte // first UDP datagram of the flow
+		udpCount int
 		quic     quicInitial
 		sizes    map[int]int
 	}
@@ -153,6 +166,15 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		if len(p.payload) == 0 {
 			continue
 		}
+		if f.FirstSize == 0 {
+			f.FirstSize = len(p.payload)
+		}
+		if p.proto == 17 {
+			st.udpCount++
+			if st.udpFirst == nil {
+				st.udpFirst = append([]byte(nil), p.payload...)
+			}
+		}
 		n := len(p.payload)
 		switch {
 		case n <= 200:
@@ -196,6 +218,21 @@ func Analyze(pcapPath string) ([]Flow, error) {
 			}
 		}
 		f.TopSize = top
+		if f.Proto == "udp" {
+			first := st.udpFirst
+			if len(first) > 256 {
+				first = first[:256]
+			}
+			f.UDPFirst = len(st.udpFirst)
+			f.UDPPackets = st.udpCount
+			f.UDPEntropy = shannon(first)
+			f.UDPPopAvg = popAvg(first)
+			f.QUICVersion = st.quic.version
+			f.QUICDecrypted = st.quic.decrypted
+			if len(st.udpFirst) > 0 {
+				f.QUICFixedBit = st.udpFirst[0]&0x40 != 0
+			}
+		}
 		switch {
 		case len(st.firstUp) == 0:
 			f.Looks, f.FET = "no data", false

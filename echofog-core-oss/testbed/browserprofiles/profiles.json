@@ -1,0 +1,109 @@
+{
+  "version": "2026.11.1",
+  "generated_at": "2026-11-05T03:22:31Z",
+  "entries": [
+    {
+      "id": "chrome-lab-lab",
+      "source": "chrome",
+      "source_version": "chrome.exe (version not reported: an instance was already running)",
+      "country": "lab",
+      "network": "lab",
+      "captured_at": "2026-11-05T03:22:31Z",
+      "tls": {
+        "ja3": "8fba567a0e5fc2bf6266e47f3834e024",
+        "ja4": "t13d1517h2_8daaf6152771_c703ddcf9108",
+        "grease": true,
+        "ciphers": 15,
+        "extensions": 17,
+        "alpn": "h2,http/1.1",
+        "version": 771,
+        "pq": true,
+        "ech": true,
+        "bytes": 1976,
+        "sha256": "89906ead55b1d395"
+      }
+    },
+    {
+      "id": "crypto/tls-lab-lab",
+      "source": "crypto/tls",
+      "source_version": "go1.27.3",
+      "country": "lab",
+      "network": "lab",
+      "captured_at": "2026-11-05T03:22:31Z",
+      "tls": {
+        "ja3": "03117a8ed39ef02427ebbc39f121275c",
+        "ja4": "t13d1312h2_f57a46bbacb6_92185d8b5389",
+        "grease": false,
+        "ciphers": 13,
+        "extensions": 12,
+        "alpn": "h2",
+        "version": 771,
+        "pq": true,
+        "ech": false,
+        "bytes": 1517,
+        "sha256": "746b53d2f1de3699"
+      }
+    },
+    {
+      "id": "curl-lab-lab",
+      "source": "curl",
+      "source_version": "curl 8.21.0 (Windows) libcurl/8.21.0 Schannel zlib/1.3.2 WinIDN WinLDAP",
+      "country": "lab",
+      "network": "lab",
+      "captured_at": "2026-11-05T03:22:31Z",
+      "tls": {
+        "ja3": "f34f36bcf09a4664f01e969eab45db80",
+        "ja4": "t13i0211h1_62ed6f6ca7ad_17c8b4158a4e",
+        "grease": false,
+        "ciphers": 2,
+        "extensions": 11,
+        "alpn": "http/1.1",
+        "version": 771,
+        "pq": false,
+        "ech": false,
+        "bytes": 386,
+        "sha256": "0c2e06fcaaf146a0"
+      }
+    },
+    {
+      "id": "quic-go-chromeparrot-lab-lab",
+      "source": "quic-go-chromeparrot",
+      "source_version": "v0.63.1-0.20261004180939-a10df75c260c",
+      "country": "lab",
+      "network": "lab",
+      "captured_at": "2026-11-05T03:22:31Z",
+      "quic": {
+        "version": 1,
+        "first_size": 1250,
+        "fixed_bit": true,
+        "decrypted": true,
+        "ja4": "q13d0312h3_55b375c5d22e_ea8537015a9f",
+        "sni": "cover.lab",
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "id": "utls-chrome-lab-lab",
+      "source": "utls-chrome",
+      "source_version": "v1.8.2",
+      "country": "lab",
+      "network": "lab",
+      "captured_at": "2026-11-05T03:22:31Z",
+      "tls": {
+        "ja3": "2c24529507270cbe6dcd557ed39806d2",
+        "ja4": "t13d1516h2_8daaf6152771_0e284abb3885",
+        "grease": true,
+        "ciphers": 15,
+        "extensions": 16,
+        "alpn": "h2,http/1.1",
+        "version": 771,
+        "pq": true,
+        "ech": true,
+        "bytes": 1810,
+        "sha256": "d45e8316a8839766"
+      }
+    }
+  ]
+}
