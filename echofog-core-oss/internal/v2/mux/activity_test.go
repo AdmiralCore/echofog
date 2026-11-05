@@ -18,6 +18,7 @@ func TestSessionActivityAndStreamCounts(t *testing.T) {
 	if before.IsZero() {
 		t.Fatal("fresh session has no activity time")
 	}
+	time.Sleep(20 * time.Millisecond) // the platform clock tick is coarser than the work below
 
 	st, err := pr.a.OpenStream(ctx, 3, 2)
 	if err != nil {
@@ -34,7 +35,7 @@ func TestSessionActivityAndStreamCounts(t *testing.T) {
 		t.Fatalf("peer streams = %d/%d, want 0/1", l, p)
 	}
 	if !pr.a.LastActivity().After(before) {
-		t.Fatal("opening a stream did not advance the activity time")
+		t.Fatalf("opening a stream did not advance the activity time: before=%v after=%v", before, pr.a.LastActivity())
 	}
 
 	// A stream the peer opens counts on this side as a peer stream.

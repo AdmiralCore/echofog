@@ -177,3 +177,23 @@ func (b *CardBook) Misbehaving(signerID [32]byte) bool {
 	defer b.mu.Unlock()
 	return b.misbehaving[signerID]
 }
+
+// MisbehavingIDs returns the signers seen equivocating, in no particular order. A persistent
+// card book stores the markers and restores them with MarkMisbehaving.
+func (b *CardBook) MisbehavingIDs() [][32]byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ids := make([][32]byte, 0, len(b.misbehaving))
+	for id := range b.misbehaving {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// MarkMisbehaving records a signer as having equivocated. It exists for restoring a persisted
+// card book: the marker cannot be derived from the surviving cards alone.
+func (b *CardBook) MarkMisbehaving(signerID [32]byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.misbehaving[signerID] = true
+}

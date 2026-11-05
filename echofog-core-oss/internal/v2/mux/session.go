@@ -54,6 +54,14 @@ type Timers struct {
 	Tick        time.Duration // timer resolution, 500 ms
 }
 
+// DefaultTimers returns the timer set with every zero value replaced by the specification
+// default (wire.md §7.1, §7.3, §8.3, §10).
+func DefaultTimers() Timers {
+	var t Timers
+	t.fill()
+	return t
+}
+
 func (t *Timers) fill() {
 	def := func(d *time.Duration, v time.Duration) {
 		if *d == 0 {
@@ -261,6 +269,14 @@ func (s *Session) SID() [16]byte { return s.sid }
 // HasFeature reports whether a feature was negotiated.
 func (s *Session) HasFeature(id uint16) bool { return s.features[id] }
 
+// GoingAway reports whether GOAWAY was sent or received: no new streams may be opened, the
+// session is draining (wire.md §7.3).
+func (s *Session) GoingAway() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.goingAway
+}
+
 // Done is closed when the session ends.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
@@ -272,6 +288,34 @@ func (s *Session) Err() error {
 }
 
 // Stats returns a snapshot of the counters.
+// LastActivity returns the most recent send or receive on any path. A session with no
+// authenticated traffic for the path-dead time dies on its own (wire.md §8.3); the session
+// table uses this value for its own idle policy.
+func (s *Session) LastActivity() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var last time.Time
+	for _, p := range s.paths {
+		for _, ns := range [2]int64{p.lastSend.Load(), p.lastRecv.Load()} {
+			if ns == 0 {
+				continue
+			}
+			if t := time.Unix(0, ns); t.After(last) {
+				last = t
+			}
+		}
+	}
+	return last
+}
+
+// StreamCounts returns the number of open non-control streams opened by this side and by the
+// peer. GOAWAY waits for both (wire.md §7.3).
+func (s *Session) StreamCounts() (local, peer int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.localStreams, s.peerStreams
+}
+
 func (s *Session) Stats() SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
