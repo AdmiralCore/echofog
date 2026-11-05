@@ -71,6 +71,11 @@ type instance struct {
 	cards   *cards.CardBuilder
 }
 
+// countryOf is the GeoIP lookup of the carrier plan. The canary has no database yet (T2.7 data
+// reaches the binding with T12.1), so every address counts as across a border, which keeps
+// noise3 off; tests that need it replace the function.
+var countryOf = func(netip.Addr) (string, bool) { return "", false }
+
 var (
 	mu  sync.Mutex
 	cur *instance
@@ -279,7 +284,7 @@ func open(cfg config, cb Callbacks, host hostListeners) (inst *instance, err err
 		Profile:         prof,
 		ListenerSources: sources,
 		LocalInfo:       carrier.LocalInfo{Addrs: local},
-		Country:         func(netip.Addr) (string, bool) { return "", false },
+		Country:         countryOf,
 	}); err != nil {
 		return nil, fmt.Errorf("mobile: node: %w", err)
 	}
