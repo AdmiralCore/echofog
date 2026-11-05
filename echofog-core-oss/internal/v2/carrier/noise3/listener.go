@@ -74,6 +74,8 @@ type Listener struct {
 
 	mu              sync.Mutex
 	flows           map[netip.AddrPort]*flow
+	rmu             sync.Mutex
+	routes          map[netip.AddrPort]*routeConn // DialFrom: datagrams from these remotes go to the dial
 	byVAddr         map[uint64]*flow
 	ipFlows         map[netip.Addr][]*flow
 	recent          []*flow
@@ -313,6 +315,10 @@ func (l *Listener) readLoop() {
 func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 	src, ok := addrPort(addr)
 	if !ok {
+		return
+	}
+	if rc := l.route(src); rc != nil {
+		rc.q.deliver(d, addr)
 		return
 	}
 	l.maybeSweep(now)
