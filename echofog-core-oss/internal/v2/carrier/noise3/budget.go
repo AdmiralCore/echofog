@@ -3,6 +3,7 @@ package noise3
 import (
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -44,6 +45,12 @@ type budgets struct {
 	mu       sync.Mutex
 	listener bucket
 	perIP    map[string]*bucket
+}
+
+// budgetKey is the per-source budget key. An IPv6 subscriber moves freely inside its /64, so the
+// key is the /64 prefix; IPv4 (and v4-mapped) addresses keep the full address.
+func budgetKey(a netip.Addr) string {
+	return a.String()
 }
 
 func newBudgets() *budgets {

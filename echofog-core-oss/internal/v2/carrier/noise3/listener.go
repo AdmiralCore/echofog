@@ -278,7 +278,7 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 		if len(d) < packet.MinInitLen {
 			return
 		}
-		if !l.budget.allow(src.Addr().String(), now) {
+		if !l.budget.allow(budgetKey(src.Addr()), now) {
 			return
 		}
 		l.handleInit(d, src, l.keys, now)
@@ -287,7 +287,7 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 
 	// A datagram from an unknown address is tried against established flows first (NAT
 	// rebinding), then treated as a candidate Init. Both are charged to the stranger budget.
-	if !l.budget.allow(src.Addr().String(), now) {
+	if !l.budget.allow(budgetKey(src.Addr()), now) {
 		return
 	}
 	if l.rebind(d, src, now) {
