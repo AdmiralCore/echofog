@@ -56,6 +56,7 @@ func (a viewerReport) worse(b viewerReport) bool {
 type viewerPath struct {
 	grades    [pathSamples]media.Congestion
 	n         int
+	lastSeen  time.Time
 	lastHeavy time.Time
 	weak      bool
 }
@@ -63,6 +64,7 @@ type viewerPath struct {
 func (p *viewerPath) add(c media.Congestion, now time.Time) {
 	p.grades[p.n%pathSamples] = c
 	p.n++
+	p.lastSeen = now
 	if c >= media.PathHeavy {
 		p.lastHeavy = now
 	}
@@ -175,7 +177,7 @@ func (m *CallManager) viewersLocked(room *ActiveRoomState, now time.Time) (stron
 			seen[r.viewer] = true
 		}
 		for v, p := range paths {
-			if !seen[v] && now.Sub(p.lastHeavy) > weakRelease {
+			if !seen[v] && now.Sub(p.lastSeen) > weakRelease {
 				delete(paths, v) // left, or went silent long ago
 			}
 		}
@@ -231,6 +233,19 @@ func (m *CallManager) viewersLocked(room *ActiveRoomState, now time.Time) (stron
 		}
 	}
 	return strong, weak
+}
+
+// otherViewerLocked says whether a stream has a viewer other than weak that is not itself weak:
+// one whose report is merely late must keep the rate off the weak viewer's link.
+func (m *CallManager) otherViewerLocked(room *ActiveRoomState, weak types.PeerID) bool {
+	for _, paths := range room.paths {
+		for v, p := range paths {
+			if v != weak && !p.weak {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // weakLocked (coordinator) applies the broadcaster's list of weak viewers to its stream's tree.
