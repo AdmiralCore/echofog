@@ -61,9 +61,6 @@ func (r *Runtime) pathFailed(f mux.PathFailure) {
 		// A reset, a handshake timeout or a dead path is the penalty signal of H15.
 		r.policy.Penalize(pair)
 	}
-	// No addresses or errors here: a dial error may contain the destination IP.
-	r.log.Debug("node: path failed", "path", f.PathID, "kind", f.Kind,
-		"abandoned", errors.Is(f.Cause, mux.ErrPathAbandoned))
 }
 
 func (r *Runtime) recordPair(sid [16]byte, id uint64, pair session.Pair) {
@@ -135,12 +132,18 @@ func (r *Runtime) NetworkChanged(ctx context.Context, opt DialOpt) error {
 		ctx = context.Background()
 	}
 	sessions := r.table.Sessions()
+	eligible := make([]*session.Established, 0, len(sessions))
+	for _, est := range sessions {
+		if est.HasFeature(frame.FeaturePathMigration) {
+			eligible = append(eligible, est)
+		}
+	}
+	if opt.Carrier != nil && len(eligible) > 1 {
+		return errors.New("node: one injected carrier serves one session")
+	}
 	var errs []error
 	moved := 0
-	for _, est := range sessions {
-		if !est.HasFeature(frame.FeaturePathMigration) {
-			continue
-		}
+	for _, est := range eligible {
 		old, _, _ := est.Paths()
 		id, err := r.addPathTo(ctx, est, opt, true)
 		if err != nil {
