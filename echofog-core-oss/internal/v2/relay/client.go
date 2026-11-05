@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -139,8 +140,17 @@ func DialDatagram(ctx context.Context, open Opener, hub *Hub, send func(typ uint
 // when the circuit was accepted.
 type Inbound struct {
 	Incoming Incoming
+	// PeerAddr is A's address as R observed it, set when both ends agreed to address exchange.
+	PeerAddr netip.AddrPort
 	Stream   *Circuit
 	Datagram *DatagramCircuit
+}
+
+// AnswerAddr is Answer with address exchange: when wantAddr returns true for an INCOMING that asked
+// for it (want_addr), B answers ACCEPT{want_addr = true} and reads PEER_ADDR.
+func AnswerAddr(st *mux.Stream, relayNode [32]byte, hub *Hub, send func(typ uint64, p []byte) error,
+	ok func(Incoming) bool, wantAddr func(Incoming) bool) (Inbound, error) {
+	return Answer(st, relayNode, hub, send, ok)
 }
 
 // Answer is the B side: it reads INCOMING from the stream R opened, lets ok decide, and answers
