@@ -128,6 +128,9 @@ type Config struct {
 	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
 	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
 	ShapeProfile *shape.Profile
+	// PunchNet supplies the datagram side of hole punching (T6.2). Nil disables punching: sessions
+	// through a relay stay relayed.
+	PunchNet PunchNetwork
 }
 
 // Runtime is one running v2 node (02-architecture AD5).
