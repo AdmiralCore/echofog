@@ -275,7 +275,7 @@ type PolicyFunc func(choices []handshake.ServiceChoice) mux.StreamPolicy
 
 // finish hands the handshake result to the mux. mux.NewSession makes the single sealing switch
 // (wire.md §8.5) when the carrier reports Sealed.
-func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc) (*Established, error) {
+func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc, lowPower bool) (*Established, error) {
 	// The handshake read deadline belongs to the handshake, not to the session: its control
 	// stream must wait for peer traffic indefinitely (the mux applies its own timers).
 	_ = ctrl.SetReadDeadline(time.Time{})
@@ -289,6 +289,7 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 		Features: muxFeatures(hs.Features),
 		Policy:   pol,
 		Timers:   timers,
+		LowPower: lowPower,
 	}
 	var peerID [32]byte
 	if hs.Peer != nil {
