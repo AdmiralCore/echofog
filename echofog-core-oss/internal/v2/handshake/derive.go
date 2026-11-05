@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"context"
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -113,12 +114,25 @@ func PuzzleOK(cookie, cb []byte, nonce uint64, difficulty uint8) bool {
 	return leadingZeroBits(PuzzleHash(cookie, cb, nonce)) >= int(difficulty)
 }
 
+// puzzleCheckEvery is how many hashes pass between context checks (a power of two).
+const puzzleCheckEvery = 1 << 16
+
 // SolvePuzzle returns the smallest nonce that solves the puzzle. Difficulty above 24 is refused.
 func SolvePuzzle(cookie, cb []byte, difficulty uint8) (uint64, error) {
+	return SolvePuzzleContext(context.Background(), cookie, cb, difficulty)
+}
+
+// SolvePuzzleContext is SolvePuzzle that stops when ctx is done.
+func SolvePuzzleContext(ctx context.Context, cookie, cb []byte, difficulty uint8) (uint64, error) {
 	if difficulty > MaxDifficulty {
 		return 0, ErrRetry
 	}
 	for nonce := uint64(0); ; nonce++ {
+		if nonce&(puzzleCheckEvery-1) == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
 		if PuzzleOK(cookie, cb, nonce, difficulty) {
 			return nonce, nil
 		}

@@ -278,7 +278,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 		}
 		switch f.Type {
 		case frame.TypeHsRetry:
-			h, m, err := ini.HandleRetry(f.Payload)
+			h, m, err := ini.HandleRetryContext(ctx, f.Payload)
 			if err != nil {
 				return nil, nil, wrapSilent(err)
 			}

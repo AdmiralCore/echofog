@@ -3,6 +3,8 @@ package noise3
 import (
 	"encoding/binary"
 	"errors"
+	"net/netip"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -43,6 +45,18 @@ type budgets struct {
 	mu       sync.Mutex
 	listener bucket
 	perIP    map[string]*bucket
+}
+
+// budgetKey is the per-source budget key. An IPv6 subscriber moves freely inside its /64, so the
+// key is the /64 prefix; IPv4 (and v4-mapped) addresses keep the full address.
+func budgetKey(a netip.Addr) string {
+	a = a.Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return a.String()
 }
 
 func newBudgets() *budgets {
@@ -96,11 +110,13 @@ const (
 	bloomGenWords = bloomGenBits / 64
 	bloomHash     = 6
 	bloomKey      = "replay-bloom"
-	bloomMagic    = "N3B2"
+	bloomMagic    = "N3B3"
 )
 
 type bloom struct {
 	bits [bloomGenWords]uint64
+	// used is true when any bit may be set; dirty is true when the persisted copy differs.
+	used, dirty bool
 }
 
 func (b *bloom) indexes(sel []byte) [bloomHash]uint64 {
@@ -129,9 +145,16 @@ func (b *bloom) add(sel []byte) {
 	for _, i := range b.indexes(sel) {
 		b.bits[i/64] |= 1 << (i % 64)
 	}
+	b.used, b.dirty = true, true
 }
 
-func (b *bloom) clear() { b.bits = [bloomGenWords]uint64{} }
+func (b *bloom) clear() {
+	if b.used {
+		b.dirty = true
+	}
+	b.bits = [bloomGenWords]uint64{}
+	b.used = false
+}
 
 func (b *bloom) marshal() []byte {
 	out := make([]byte, bloomGenWords*8)
@@ -147,7 +170,11 @@ func (b *bloom) unmarshal(data []byte) error {
 	}
 	for i := range b.bits {
 		b.bits[i] = binary.LittleEndian.Uint64(data[i*8:])
+		if b.bits[i] != 0 {
+			b.used = true
+		}
 	}
+	b.dirty = false
 	return nil
 }
 
@@ -195,37 +222,37 @@ func (s *bloomSet) seen(sel []byte, now time.Time) bool {
 	return false
 }
 
-func (s *bloomSet) marshal() []byte {
-	out := make([]byte, 0, len(bloomMagic)+1+8+bloomGens*bloomGenWords*8)
+// metaMarshal encodes the rotation state; each generation is a separate KV value so that a
+// flush rewrites only the generations that changed.
+func (s *bloomSet) metaMarshal() []byte {
+	out := make([]byte, 0, len(bloomMagic)+1+8)
 	out = append(out, bloomMagic...)
 	out = append(out, byte(s.current))
 	var stamp [8]byte
 	binary.LittleEndian.PutUint64(stamp[:], uint64(s.lastRotate.Unix()))
-	out = append(out, stamp[:]...)
-	for i := range s.gens {
-		out = append(out, s.gens[i].marshal()...)
-	}
-	return out
+	return append(out, stamp[:]...)
 }
 
-func (s *bloomSet) unmarshal(data []byte) error {
-	const header = 4 + 1 + 8
-	const body = bloomGens * bloomGenWords * 8
-	if len(data) != header+body || string(data[:4]) != bloomMagic {
+func (s *bloomSet) metaUnmarshal(data []byte) error {
+	if len(data) != len(bloomMagic)+1+8 || string(data[:4]) != bloomMagic {
 		return errors.New("noise3: replay bloom has the wrong size or version")
 	}
 	current := int(data[4])
-	if current < 0 || current >= bloomGens {
+	if current >= bloomGens {
 		return errors.New("noise3: replay bloom has a bad generation")
 	}
 	s.current = current
-	unix := int64(binary.LittleEndian.Uint64(data[5:13]))
-	s.lastRotate = time.Unix(unix, 0)
-	bodyData := data[header:]
-	for i := range s.gens {
-		if err := s.gens[i].unmarshal(bodyData[i*bloomGenWords*8 : (i+1)*bloomGenWords*8]); err != nil {
-			return err
-		}
-	}
+	s.lastRotate = time.Unix(int64(binary.LittleEndian.Uint64(data[5:13])), 0)
 	return nil
 }
+
+func (s *bloomSet) anyDirty() bool {
+	for i := range s.gens {
+		if s.gens[i].dirty {
+			return true
+		}
+	}
+	return false
+}
+
+func genKey(i int) []byte { return []byte(bloomKey + "/g" + strconv.Itoa(i)) }
