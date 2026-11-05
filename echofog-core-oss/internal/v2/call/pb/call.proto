@@ -1,0 +1,315 @@
+// Signalling of call/2 (docs/protocol/v2/services.md 9.1).
+//
+// Every SIGNAL frame body is a Signal message (services.md 9.1):
+//
+//   { bytes origin = 1; bytes body = 2; bytes sig = 3; }
+//
+// body is a CallSignal with the v1 call actions as an enum and the v1 payloads as typed messages.
+// A signal forwarded beyond its first hop carries the originator's device akey in origin and
+// sig = Ed25519(origin key, "echofog/call2/signal" || body); the signature covers the exact body
+// bytes, so a relay never re-encodes them. Hop-local signals (ping, pong, NACK, reports, the
+// unicast requests to the coordinator) carry no origin and no sig: the session authenticates them.
+//
+// Field numbers are never reused (versioning.md 3.5).
+syntax = "proto3";
+
+package echofog.v2.call;
+
+option go_package = "github.com/echofog/echofog-core/internal/v2/call/pb;callpb";
+
+// Action is the v1 call signal action (call/signaling/signals.go) as a wire enum.
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  // Flooded over the voice tree, originated by the coordinator.
+  ACTION_TREE_MANIFEST = 1;
+  ACTION_COORDINATOR_HEARTBEAT = 2;
+  ACTION_STREAM_ANNOUNCE = 3;
+  ACTION_STREAM_CLOSE = 4;
+  ACTION_STREAM_TREE_UPDATE = 5;
+  // Flooded, originated by the peer the payload is about.
+  ACTION_COORDINATOR_ELECTION = 6;
+  ACTION_VAD_STATE = 7;
+  // Join and its signed variants.
+  ACTION_JOIN = 8;
+  ACTION_LEAVE = 9;
+  ACTION_MEMBER_HEARTBEAT = 10;
+  ACTION_PARENT_LOST = 11;
+  ACTION_STREAM_REGISTER = 12;
+  ACTION_STREAM_UNREGISTER = 13;
+  ACTION_STREAM_SUBSCRIBE = 14;
+  ACTION_STREAM_UNSUBSCRIBE = 15;
+  ACTION_PING = 16;
+  ACTION_SYNC_REQUEST = 17;
+  ACTION_STREAM_REPARENT = 18;
+  ACTION_REPORT = 19;
+  // Unicast between neighbours.
+  ACTION_PONG = 20;
+  ACTION_ROOM_SYNC = 21;
+  ACTION_ADOPT = 22;
+  ACTION_KEYFRAME_REQUEST = 23;
+  ACTION_KICKED = 24;
+  ACTION_NACK = 25;
+  ACTION_STREAM_FEEDBACK = 26;
+  ACTION_STREAM_WEAK = 27;
+  ACTION_MEDIA_KEY = 28;
+  ACTION_MEDIA_KEY_ACK = 29;
+}
+
+// Signal is one SIGNAL frame body (services.md 9.1).
+message Signal {
+  // The originator's device akey (Ed25519): tag + 32-byte key. Empty on hop-local signals.
+  bytes origin = 1;
+  // The exact CallSignal bytes the signature covers. A relay forwards them unchanged.
+  bytes body = 2;
+  // Ed25519(origin key, "echofog/call2/signal" || body). Empty on hop-local signals.
+  bytes sig = 3;
+}
+
+// CallSignal is the typed body of a SIGNAL frame.
+message CallSignal {
+  Action action = 1;
+  string call_id = 2;
+  // sender is the originator's device ID (SHA-256 of its device akey), 32 bytes. It is checked
+  // against origin on forwarded signals and against the authenticated session peer otherwise.
+  bytes sender = 3;
+  uint64 msg_id = 4;
+  uint64 epoch = 5;
+  int64 timestamp = 6;
+  // req is non-zero on a request that expects an answer; the answer echoes it (services.md 1).
+  uint64 req = 7;
+
+  oneof payload {
+    TreeManifest tree_manifest = 16;
+    CoordinatorHeartbeat coordinator_heartbeat = 17;
+    StreamAnnounce stream_announce = 18;
+    // stream_id is the payload of stream_close, stream_unregister, stream_unsubscribe and
+    // keyframe_request.
+    string stream_id = 19;
+    StreamManifest stream_manifest = 20;
+    // peer is the payload of coordinator_election (the winner) and parent_lost (the parent).
+    bytes peer = 21;
+    VADState vad = 22;
+    Join join = 23;
+    StreamSubscribe stream_subscribe = 24;
+    Reparent stream_reparent = 25;
+    Report report = 26;
+    RoomSync room_sync = 27;
+    // reason is the payload of kicked.
+    string reason = 28;
+    Nack nack = 29;
+    StreamFeedback stream_feedback = 30;
+    StreamWeak stream_weak = 31;
+    MediaKey media_key = 32;
+    KeyAck media_key_ack = 33;
+  }
+}
+
+// PeerNodeProfile mirrors tree.PeerNodeProfile (call/tree/types.go).
+message PeerNodeProfile {
+  bytes peer_id = 1;
+  int64 upload_kbps = 2;
+  int64 max_relay_children = 3;
+  // rtt_nanos is the round trip of this peer to the coordinator in nanoseconds.
+  int64 rtt_nanos = 4;
+  float packet_loss_percent = 5;
+  bool is_mobile = 6;
+  bool relay_only = 7;
+  // last_heartbeat_unix_nano is tree.PeerNodeProfile.LastHeartbeat.
+  int64 last_heartbeat_unix_nano = 8;
+  string backdrop = 9;
+  int64 display_hz = 10;
+  // signal_kx is the member's X25519 key for sealed call signals.
+  bytes signal_kx = 11;
+}
+
+// ParentAssignment mirrors tree.ParentAssignment.
+message ParentAssignment {
+  bytes peer = 1;
+  bytes primary = 2;
+  bytes standby = 3;
+}
+
+// ChildrenEntry is one map[PeerID][]PeerID entry (children_map, distribution_tree).
+message ChildrenEntry {
+  bytes peer = 1;
+  repeated bytes children = 2;
+}
+
+// ProfileEntry is one map[PeerID]PeerNodeProfile entry.
+message ProfileEntry {
+  bytes peer = 1;
+  PeerNodeProfile profile = 2;
+}
+
+// ParentEntry is one map[PeerID]PeerID entry (a stream's parent_map).
+message ParentEntry {
+  bytes peer = 1;
+  bytes parent = 2;
+}
+
+// AvoidEntry is one map[PeerID][]PeerID entry (a stream's avoid list).
+message AvoidEntry {
+  bytes peer = 1;
+  repeated bytes avoid = 2;
+}
+
+// TreeManifest mirrors tree.TreeManifest.
+message TreeManifest {
+  string call_id = 1;
+  uint64 epoch = 2;
+  bytes coordinator = 3;
+  repeated bytes standby_coordinators = 4;
+  repeated ParentAssignment parent_map = 5;
+  repeated ChildrenEntry children_map = 6;
+  repeated ProfileEntry profiles = 7;
+  int64 timestamp = 8;
+}
+
+// StreamManifest mirrors tree.StreamManifest.
+message StreamManifest {
+  string stream_id = 1;
+  bytes broadcaster = 2;
+  string media_type = 3;
+  int64 bitrate_kbps = 4;
+  int64 width = 5;
+  int64 height = 6;
+  int64 fps = 7;
+  string codec = 8;
+  string quality_id = 9;
+  uint64 epoch = 10;
+  repeated bytes subscribers = 11;
+  repeated ChildrenEntry distribution_tree = 12;
+  repeated ParentEntry parent_map = 13;
+  repeated ProfileEntry profiles = 14;
+  repeated bytes overflow = 15;
+  repeated AvoidEntry avoid = 16;
+  repeated bytes weak = 17;
+}
+
+// StreamAnnounce mirrors signaling.StreamAnnouncePayload.
+message StreamAnnounce {
+  string stream_id = 1;
+  bytes broadcaster = 2;
+  string media_type = 3;
+  int64 bitrate_kbps = 4;
+  int64 width = 5;
+  int64 height = 6;
+  int64 fps = 7;
+  string codec = 8;
+  string quality_id = 9;
+  PeerNodeProfile profile = 10;
+}
+
+// StreamSubscribe mirrors signaling.StreamSubscribePayload.
+message StreamSubscribe {
+  string stream_id = 1;
+  bytes subscriber = 2;
+  PeerNodeProfile profile = 3;
+}
+
+// Join mirrors signaling.JoinPayload and adds the v2 per-join media secrets (services.md 9.1).
+message Join {
+  PeerNodeProfile profile = 1;
+  bytes proof = 2;
+  // kx is the member's X25519 key for the call; the coordinator seals media keys to it.
+  bytes kx = 3;
+  // media_key is the member's fresh per-join Ed25519 media signing key (32 bytes).
+  bytes media_key = 4;
+  // join_salt is a fresh 16-byte salt for the per-sender media key derivation (services.md 9.2).
+  bytes join_salt = 5;
+}
+
+// MediaKey mirrors signaling.MediaKeyPayload.
+message MediaKey {
+  uint64 key_epoch = 1;
+  bytes eph = 2;
+  bytes sealed = 3;
+  repeated SignerEntry signers = 4;
+}
+
+// SignerEntry is one entry of MediaKey.signers.
+message SignerEntry {
+  bytes peer = 1;
+  bytes key = 2;
+}
+
+// KeyAck mirrors signaling.KeyAckPayload.
+message KeyAck {
+  uint64 epoch = 1;
+}
+
+// RoomSync mirrors signaling.RoomSyncPayload.
+message RoomSync {
+  TreeManifest voice = 1;
+  repeated StreamManifest streams = 2;
+  repeated StreamAnnounce announces = 3;
+}
+
+// Reparent mirrors signaling.ReparentPayload.
+message Reparent {
+  string stream_id = 1;
+  bytes avoid = 2;
+  string reason = 3;
+}
+
+// Nack mirrors signaling.NackPayload.
+message Nack {
+  string stream_id = 1;
+  repeated NackEntry lost = 2;
+}
+
+// NackEntry mirrors media.NackEntry.
+message NackEntry {
+  uint32 seq = 1;
+  // have is a fragment bitmap: bit i set means fragment i is not needed.
+  uint32 have = 2;
+}
+
+// StreamFeedback mirrors signaling.StreamFeedbackPayload.
+message StreamFeedback {
+  string stream_id = 1;
+  repeated ViewerFeedback reports = 2;
+  bool layered = 3;
+}
+
+// ViewerFeedback mirrors signaling.ViewerFeedback.
+message ViewerFeedback {
+  bytes viewer = 1;
+  uint32 level = 2;
+  int64 kbps = 3;
+  float loss = 4;
+  int64 delay_ms = 5;
+}
+
+// StreamWeak mirrors signaling.StreamWeakPayload.
+message StreamWeak {
+  string stream_id = 1;
+  repeated bytes weak = 2;
+}
+
+// Report mirrors signaling.ReportPayload.
+message Report {
+  bytes target = 1;
+  string reason = 2;
+}
+
+// VADState mirrors signaling.VADPayload.
+message VADState {
+  bytes speaker = 1;
+  bool speaking = 2;
+  float audio_db = 3;
+}
+
+// CoordinatorHeartbeat mirrors signaling.CoordinatorHeartbeatPayload.
+message CoordinatorHeartbeat {
+  bytes coordinator = 1;
+  uint64 epoch = 2;
+  repeated StreamEntry streams = 3;
+  int64 members = 4;
+}
+
+// StreamEntry is one entry of CoordinatorHeartbeat.streams.
+message StreamEntry {
+  string stream_id = 1;
+  uint64 epoch = 2;
+}
