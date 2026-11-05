@@ -13,6 +13,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
+	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/geoip"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
@@ -132,6 +133,7 @@ type Runtime struct {
 	wg         sync.WaitGroup
 	serving    sync.Map
 	dgrams     *datagramBroker
+	dht        *dht.Table
 	modules    sync.Once
 	started    bool
 	stopped    bool
@@ -392,6 +394,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	cancel := r.cancel
 	listeners := r.listeners
 	table := r.table
+	dhtTable := r.dht
 	r.mu.Unlock()
 
 	if !started {
@@ -401,6 +404,14 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		cancel()
 	}
 	closeListeners(listeners)
+	if dhtTable != nil {
+		// Stop saves as well; the explicit save keeps the runtime contract visible and is
+		// idempotent.
+		if err := dhtTable.Save(); err != nil {
+			r.log.Warn("node: saving the dht routing table", "err", err)
+		}
+		dhtTable.Stop()
+	}
 	if table != nil {
 		_ = table.Close()
 	}
