@@ -251,7 +251,7 @@ func ObserveQUIC(events []Event) (Vector, error) {
 		return v, ErrTooBig
 	}
 	var clientDCID []byte
-	haveClient := false
+	haveClient, retried := false, false
 	frags := map[int][]byte{}
 	unit := 0
 	sawSCID := false
@@ -259,8 +259,12 @@ func ObserveQUIC(events []Event) (Vector, error) {
 		if !e.FromServer {
 			pk, err := splitDatagram(e.Data)
 			if err == nil && len(pk) > 0 && pk[0].kind == "initial" {
-				// After a Retry the client's Initial carries a new DCID, which keys the server's.
-				clientDCID, haveClient = append([]byte(nil), pk[0].dcid...), true
+				// The server's Initial keys come from the client's first DCID. Later client
+				// Initials carry the server's SCID as DCID and must not replace it, except after
+				// a Retry, which restarts the Initial space with a new DCID.
+				if !haveClient || retried {
+					clientDCID, haveClient, retried = append([]byte(nil), pk[0].dcid...), true, false
+				}
 			} else if !haveClient {
 				return v, fmt.Errorf("%w: first client datagram is not an Initial", ErrMalformed)
 			}
@@ -274,6 +278,9 @@ func ObserveQUIC(events []Event) (Vector, error) {
 			return v, err
 		}
 		for _, p := range pk {
+			if p.kind == "retry" {
+				retried = true
+			}
 			it := Item{Kind: p.kind, Unit: unit, Len: len(p.raw)}
 			if p.kind == "1rtt" {
 				v.Post = append(v.Post, it)
