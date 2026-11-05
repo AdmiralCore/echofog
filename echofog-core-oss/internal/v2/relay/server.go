@@ -231,13 +231,11 @@ func (s *Server) violation(st *mux.Stream, why string) {
 // Handle serves one relay/2 stream opened by an authenticated peer.
 func (s *Server) Handle(ctx context.Context, p Peer, st *mux.Stream) {
 	st.SetLimiter(limiter())
-	_ = st.SetReadDeadline(s.clk.Now().Add(s.cfg.ConnectTimeout))
-	f, err := st.ReadFrame()
+	f, err := s.readWithin(st, s.cfg.ConnectTimeout)
 	if err != nil {
 		st.Reset(frame.CodeProtocolViolation)
 		return
 	}
-	_ = st.SetReadDeadline(time.Time{})
 	switch f.Type {
 	case TypeConnect:
 		c, err := ParseConnect(f.Payload)
@@ -257,6 +255,29 @@ func (s *Server) Handle(ctx context.Context, p Peer, st *mux.Stream) {
 		// Everything else is only valid on a stream R opened itself.
 		s.violation(st, "unexpected frame")
 	}
+}
+
+// readWithin reads the next frame, giving up after d of the server clock. The transport has its
+// own (real) deadlines; the injected clock only decides when to ask for one.
+func (s *Server) readWithin(st *mux.Stream, d time.Duration) (frame.Frame, error) {
+	var mu sync.Mutex
+	finished := false
+	tm := s.clk.AfterFunc(d, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !finished {
+			_ = st.SetReadDeadline(time.Now())
+		}
+	})
+	f, err := st.ReadFrame()
+	tm.Stop()
+	mu.Lock()
+	finished = true
+	if err == nil {
+		_ = st.SetReadDeadline(time.Time{})
+	}
+	mu.Unlock()
+	return f, err
 }
 
 func (s *Server) wait(ctx context.Context, d time.Duration) bool {
@@ -430,8 +451,13 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 
 	// The wait for B ends at the refusal deadline: a target that is slow, silent, refusing or
 	// unreachable looks the same to the requester as an absent one.
-	bctx, cancel := context.WithDeadline(ctx, start.Add(delay))
+	bctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if rest := delay - s.clk.Now().Sub(start); rest > 0 {
+		defer s.clk.AfterFunc(rest, cancel).Stop()
+	} else {
+		cancel()
+	}
 	bst, ok := s.invite(bctx, t, cir, a, c)
 	if !ok {
 		s.refuseAt(ctx, st, c, start, delay)
@@ -595,12 +621,8 @@ func (s *Server) watch(c *circuit) {
 		tick = 5 * time.Millisecond
 	}
 	for {
-		tm := time.NewTimer(tick)
-		select {
-		case <-c.done:
-			tm.Stop()
+		if !s.sleep(c, tick) {
 			return
-		case <-tm.C:
 		}
 		now := s.clk.Now()
 		idle := now.Sub(time.Unix(0, c.last.Load())) > lim.Idle
