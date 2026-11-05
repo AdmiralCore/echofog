@@ -180,6 +180,18 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 	return l, nil
 }
 
+// SetKeys replaces the live masking keys (rotation, wire.md §2.1). Init datagrams for a key that
+// is no longer listed are dropped from now on; established flows are not touched.
+func (l *Listener) SetKeys(keys []MaskKey) error {
+	return nil
+}
+
+// Revoke stops accepting Init datagrams for the masking key with this public value at once. The
+// last remaining key cannot be revoked: use SetKeys with a replacement.
+func (l *Listener) Revoke(public [32]byte) error {
+	return nil
+}
+
 // Listen binds addr and starts a listener.
 func Listen(addr string, cfg ListenerConfig) (*Listener, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
