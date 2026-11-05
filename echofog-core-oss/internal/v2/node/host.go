@@ -76,6 +76,9 @@ type DialOpt struct {
 	// PathKind is the kind of the carrier created by this call: direct (default) or relay
 	// (wire.md §8). Relay suites are T6.1; tests and relay circuits pass PathRelay here.
 	PathKind mux.PathKind
+	// ViaRelay skips the direct carrier plan and reaches the peer through a relay the node already
+	// holds a session with (T6.2). Without it a relay is the fallback after the direct plan fails.
+	ViaRelay bool
 }
 
 // PeerStore is Host.Peers(): the new/tried candidate table of pex/2 (services.md §3). A candidate

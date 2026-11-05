@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -33,6 +34,8 @@ type Circuit struct {
 	client bool
 	cid    uint64
 
+	peerAddr netip.AddrPort // the peer's address R reported (PEER_ADDR), if both ends asked for it
+
 	mu      sync.Mutex
 	conn    *mux.Conn
 	ready   chan struct{} // closed when conn exists
@@ -52,6 +55,10 @@ func NewCircuit(p Pipe, cb [32]byte, cid uint64, client bool) *Circuit {
 	return &Circuit{pipe: p, rc: mux.NewRecordConn(p), cb: cb, client: client, cid: cid,
 		ready: make(chan struct{}), st0Cond: make(chan struct{}), done: make(chan struct{}), started: time.Now()}
 }
+
+// PeerAddr is the peer's public address as R observed it (PEER_ADDR, services.md §6.4 step 1). It is
+// invalid unless both ends agreed to it.
+func (c *Circuit) PeerAddr() netip.AddrPort { return c.peerAddr }
 
 // CID is the circuit ID R assigned (the same value at both ends).
 func (c *Circuit) CID() uint64 { return c.cid }

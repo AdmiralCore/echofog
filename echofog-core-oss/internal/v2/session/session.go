@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -320,12 +321,16 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 			src.remote = peer.Addr()
 			src.socket = localSocketOf(c)
 		}
+		src.sess = new(atomic.Pointer[mux.Session])
 		cfg.OnControl = func(_ uint64, f frame.Frame) { ctl.handle(src, f) }
 	}
 	ms, err := mux.NewSession(cfg, g, ctrl, kind)
 	if err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("%w: mux session: %w", ErrConfig, err)
+	}
+	if src.sess != nil {
+		src.sess.Store(ms)
 	}
 	if onEstablished != nil {
 		onEstablished(ms)

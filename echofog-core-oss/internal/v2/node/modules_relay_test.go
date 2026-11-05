@@ -30,8 +30,39 @@ func TestRelayServedOnlyWhereThePlatformAllows(t *testing.T) {
 			n := newTestNodeFull(t, cards.Visible, false, nil, nil, relayRole,
 				func(c *node.Config) { c.Profile = tc.prof })
 			n.start(t)
-			if got := node.HasHandler(n.rt, service.Relay, 2); got != tc.want {
-				t.Fatalf("relay/2 served = %v, want %v", got, tc.want)
+			// The handler is there on every node (the client side answers INCOMING from its relays,
+			// T6.2); only the roles that relay for others serve CONNECT and REGISTER.
+			if !node.HasHandler(n.rt, service.Relay, 2) {
+				t.Fatal("relay/2 has no handler: INCOMING from a relay could not be answered")
+			}
+			if got := node.RelaysForOthers(tc.prof); got != tc.want {
+				t.Fatalf("relays for others = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// N6: a card must not announce the relay flag on a node that does not relay for others (metered,
+// phone, no relay role): peers would choose it as R and get UNSUPPORTED.
+func TestCardDoesNotAnnounceRelayWhereNodeDoesNotRelay(t *testing.T) {
+	relayFlag := func(c *cards.Config) { c.Role = objects.RoleServer; c.Flags |= objects.FlagRelay }
+	cases := []struct {
+		name string
+		prof node.Profile
+		want bool
+	}{
+		{"server with relay role", node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleRelay}}, true},
+		{"no relay role", node.Profile{Platform: node.PlatformServer}, false},
+		{"metered", node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleRelay}, Metered: true}, false},
+		{"android", node.Profile{Platform: node.PlatformAndroid, Roles: []node.Role{node.RoleRelay}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newTestNodeFull(t, cards.Visible, false, nil, nil, relayFlag, func(c *node.Config) { c.Profile = tc.prof })
+			n.start(t)
+			got := n.peerCard(t).Body.GetFlags()&objects.FlagRelay != 0
+			if got != tc.want {
+				t.Fatalf("card announces relay = %v, want %v", got, tc.want)
 			}
 		})
 	}

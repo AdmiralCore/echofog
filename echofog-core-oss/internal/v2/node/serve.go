@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -15,7 +16,7 @@ import (
 )
 
 // beforeAdd is a test seam that runs right before an accepted session enters the table.
-var beforeAdd func(*session.Established)
+var beforeAdd atomic.Pointer[func(*session.Established)]
 
 // maxHandshaking bounds the goroutines that run handshakes at once. It is a hard cap above the
 // pre-authentication limits (handshake §11): up to MaxPreAuthTotal handshakes are in flight before
@@ -55,6 +56,12 @@ func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 
 // serveCarrier runs the handshake of one accepted carrier and enters the session.
 func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
+	r.serveCarrierAs(ctx, c, mux.PathDirect, netip.AddrPort{})
+}
+
+// serveCarrierAs is serveCarrier for a carrier of the given kind: a relay circuit answered for INCOMING
+// is PathRelay, and peerAddr is the PEER_ADDR R sent with it (maybe invalid).
+func (r *Runtime) serveCarrierAs(ctx context.Context, c mux.Carrier, kind mux.PathKind, peerAddr netip.AddrPort) {
 	local, err := r.mainLocal(ctx)
 	if err != nil {
 		_ = c.Close()
@@ -74,7 +81,7 @@ func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
 		Control:       r.control,
 		Clock:         r.carrierClock,
 		Offset:        r.clock.Offset(),
-		Kind:          mux.PathDirect,
+		Kind:          kind,
 		Policy:        r.policyFunc,
 		Verifier:      nil,
 		Binder:        r.binder,
@@ -93,6 +100,9 @@ func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
 	default:
 		r.log.Debug("node: accepted carrier refused", "err", err)
 		return
+	}
+	if peerAddr.IsValid() {
+		r.relayc.notePeerAddr(est.Session, peerAddr)
 	}
 
 	if est.Access == nil || r.accessMgr == nil {
@@ -134,8 +144,8 @@ func (r *Runtime) takeAccepted(ctx context.Context, local session.LocalIdentity,
 	if adm != nil {
 		r.markAdmitted(est, *adm)
 	}
-	if beforeAdd != nil {
-		beforeAdd(est)
+	if f := beforeAdd.Load(); f != nil {
+		(*f)(est)
 	}
 	kept, err := r.table.Add(local, est)
 	if err != nil {
@@ -164,6 +174,7 @@ func (r *Runtime) takeAccepted(ctx context.Context, local session.LocalIdentity,
 	}
 	r.samplePeer(kept)
 	r.ensureServing(kept)
+	r.relayc.sessionReady(kept.Session)
 }
 
 // ensureServing starts exactly one service loop and one datagram pump per live session. A

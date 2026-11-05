@@ -292,6 +292,19 @@ func (b *CardBuilder) SetPublicHost(host string) (int, error) {
 	return n, nil
 }
 
+// ClearFlags removes caller-chosen card flags (FlagRelay on a node that may not relay, N6). A changed
+// flag set reissues the cards with a higher seq on the next Current.
+func (b *CardBuilder) ClearFlags(flags uint32) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cfg.Flags&flags == 0 {
+		return nil
+	}
+	cfg := cloneConfig(b.cfg)
+	cfg.Flags &^= flags
+	return b.applyConfig(cfg, false)
+}
+
 // Visibility returns the configured visibility of the node (objects.md §3.2, wire.md §2.1).
 func (b *CardBuilder) Visibility() Visibility {
 	b.mu.Lock()

@@ -35,6 +35,9 @@ type Noise3Listener struct {
 	LowPower bool
 	// MaxDatagramLen is the outer datagram ceiling; zero means packet.MaxDatagramLen.
 	MaxDatagramLen int
+	// Punch, when set, receives the listener once it is up: hole punching (T6.2) sends junk and Init
+	// datagrams from this listener's socket. Pass the same value as Config.PunchNet.
+	Punch *Noise3Punch
 }
 
 // Listen implements ListenerSource.
@@ -53,6 +56,9 @@ func (n Noise3Listener) Listen(ctx context.Context) (carrier.Listener, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: noise3 listener: %w", err)
+	}
+	if n.Punch != nil {
+		n.Punch.attach(l)
 	}
 	return l, nil
 }

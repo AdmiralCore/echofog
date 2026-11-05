@@ -104,6 +104,12 @@ type ServerConfig struct {
 	ConnectTimeout  time.Duration
 	RegisterTimeout time.Duration
 	Limits          Limits
+	// Refuse makes the server an endpoint that never relays for others: CONNECT and REGISTER end the
+	// stream with CodeServiceUnsupported (metered networks and phones, platforms.md §2).
+	Refuse bool
+	// Incoming, when set, takes the streams whose first frame is INCOMING (R → B); the first frame is
+	// passed on because it was already read.
+	Incoming func(ctx context.Context, p Peer, st *mux.Stream, first frame.Frame)
 }
 
 type sysClock struct{}
@@ -244,6 +250,14 @@ func (s *Server) Handle(ctx context.Context, p Peer, st *mux.Stream) {
 	f, err := s.readWithin(st, s.cfg.ConnectTimeout)
 	if err != nil {
 		st.Reset(frame.CodeProtocolViolation)
+		return
+	}
+	if f.Type == TypeIncoming && s.cfg.Incoming != nil {
+		s.cfg.Incoming(ctx, p, st, f)
+		return
+	}
+	if s.cfg.Refuse && (f.Type == TypeConnect || f.Type == TypeRegister) {
+		st.Reset(frame.CodeServiceUnsupported)
 		return
 	}
 	switch f.Type {
@@ -510,7 +524,7 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 	} else {
 		cancel()
 	}
-	bst, ok := s.invite(bctx, t, cir, a, c)
+	bst, bWantsAddr, ok := s.invite(bctx, t, cir, a, c)
 	if !ok {
 		s.forgetCID(cid)
 		s.unavailable(ctx, st, c, start, delay, nil) // the deferred release follows the answer
@@ -519,6 +533,11 @@ func (s *Server) handleConnect(ctx context.Context, a Peer, st *mux.Stream, c Co
 	cir.b.stream = bst
 	if err := st.WriteFrame(TypeConnected, 0, Connected{Req: c.Req, CID: cid, Target: c.Target}.Append(nil)); err != nil {
 		bst.Reset(frame.CodePathFailed)
+		return
+	}
+	if err := s.exchangeAddrs(cir, c.WantAddr, bWantsAddr); err != nil {
+		bst.Reset(frame.CodePathFailed)
+		st.Reset(frame.CodePathFailed)
 		return
 	}
 	s.run(ctx, cir)
@@ -544,19 +563,19 @@ func (s *Server) unreserveRequester(a Peer) {
 
 // invite opens the stream to B, sends INCOMING and waits for ACCEPT. INCOMING.source is the
 // node R authenticated on its session with A.
-func (s *Server) invite(ctx context.Context, t Target, cir *circuit, a Peer, c Connect) (*mux.Stream, bool) {
+func (s *Server) invite(ctx context.Context, t Target, cir *circuit, a Peer, c Connect) (*mux.Stream, bool, bool) {
 	bst, err := t.OpenStream(ctx)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	bst.SetLimiter(limiter())
 	inc := Incoming{CID: cir.cid, Source: a.Node[:], Mode: c.Mode, Target: c.Target, WantAddr: c.WantAddr}
 	if err := bst.WriteFrame(TypeIncoming, 0, inc.Append(nil)); err != nil {
 		bst.Reset(frame.CodePathFailed)
-		return nil, false
+		return nil, false, false
 	}
 	type result struct {
-		ok bool
+		ok, addr bool
 	}
 	ch := make(chan result, 1)
 	go func() {
@@ -568,7 +587,7 @@ func (s *Server) invite(ctx context.Context, t Target, cir *circuit, a Peer, c C
 		switch f.Type {
 		case TypeAccept:
 			acc, err := ParseAccept(f.Payload)
-			ch <- result{err == nil && acc.CID == cir.cid}
+			ch <- result{ok: err == nil && acc.CID == cir.cid, addr: err == nil && acc.WantAddr}
 		default: // REFUSE, a wrong CID, or any other frame
 			ch <- result{}
 		}
@@ -576,13 +595,44 @@ func (s *Server) invite(ctx context.Context, t Target, cir *circuit, a Peer, c C
 	select {
 	case r := <-ch:
 		if r.ok {
-			return bst, true
+			// B's agreement counts only when A asked: B cannot start an exchange on its own.
+			return bst, r.addr && c.WantAddr, true
 		}
 	case <-ctx.Done():
 		_ = bst.SetReadDeadline(time.Now())
 	}
 	bst.Reset(frame.CodeProtocolViolation)
-	return nil, false
+	return nil, false, false
+}
+
+// exchangeAddrs sends PEER_ADDR (services.md §6.4 step 1) after CONNECTED, before the streams are
+// spliced. A asked for it (aWants): A always gets a PEER_ADDR frame, empty unless B agreed too, so A
+// can tell "B declined" from "nothing yet" without R sending B's address on A's say-so alone. B gets A's
+// address only when both agreed.
+func (s *Server) exchangeAddrs(c *circuit, aWants, bAgrees bool) error {
+	if !aWants {
+		return nil
+	}
+	var toA, toB []byte
+	if bAgrees {
+		toA = addrBytes(c.b.peer.Remote)
+		toB = addrBytes(c.a.peer.Remote)
+	}
+	if err := c.a.stream.WriteFrame(TypePeerAddr, 0, PeerAddr{CID: c.cid, Addr: toA}.Append(nil)); err != nil {
+		return err
+	}
+	if bAgrees {
+		return c.b.stream.WriteFrame(TypePeerAddr, 0, PeerAddr{CID: c.cid, Addr: toB}.Append(nil))
+	}
+	return nil
+}
+
+// addrBytes encodes a network address as family(1) ‖ ip ‖ port(2), or nil when R has none to give.
+func addrBytes(ap netip.AddrPort) []byte {
+	if !ap.IsValid() || ap.Port() == 0 {
+		return nil
+	}
+	return frame.AppendObservedAddr(nil, netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()))
 }
 
 // today is the day number of the server clock (wire day = floor(unix / 86400)).

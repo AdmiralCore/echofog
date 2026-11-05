@@ -131,6 +131,9 @@ type Config struct {
 	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
 	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
 	ShapeProfile *shape.Profile
+	// PunchNet supplies the datagram side of hole punching (T6.2). Nil disables punching: sessions
+	// through a relay stay relayed.
+	PunchNet PunchNetwork
 }
 
 // Runtime is one running v2 node (02-architecture AD5).
@@ -145,6 +148,7 @@ type Runtime struct {
 	registry     *carrier.Registry
 	services     *service.Registry
 	localInfo    carrier.LocalInfo
+	relayc       *relayClient
 
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
@@ -315,12 +319,23 @@ func New(cfg Config) (*Runtime, error) {
 		Now:      r.clock.Now,
 		OnChange: r.publicAddrChanged,
 	})
+	r.relayc = newRelayClient(r)
+	if b, ok := cfg.PunchNet.(interface{ bind(*Runtime) }); ok {
+		b.bind(r)
+	}
+	if !relaysForOthers(cfg.Profile) {
+		// N6: a card must not announce a relay that would answer UNSUPPORTED.
+		if err := cfg.Cards.ClearFlags(objects.FlagRelay); err != nil {
+			return nil, fmt.Errorf("node: card relay flag: %w", err)
+		}
+	}
 	r.control = session.NewControl(session.ControlConfig{
 		Cards:      r.cardBook,
 		Abuse:      r.abuse,
 		Clock:      r.carrierClock,
 		OffsetFunc: r.clock.Offset,
 		Observer:   r.observer,
+		OnPunch:    r.relayc.onPunch,
 	})
 
 	r.vis = cfg.Cards.Visibility()
@@ -498,6 +513,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 	for _, l := range listeners {
 		r.wg.Add(1)
 		go r.acceptLoop(runCtx, l)
+	}
+
+	if r.vis != cards.Visible && r.accessMgr != nil {
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.relayc.registerLoop(runCtx)
+		}()
 	}
 
 	r.mu.Lock()
