@@ -133,7 +133,10 @@ func (m *CallManager) refloodBackdropsLocked(room *ActiveRoomState, now time.Tim
 	m.floodLocked(room, signaling.ActionTreeManifest, &mf)
 }
 
-func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
+// rebuildVoiceLocked builds the voice tree for the current members. rekey asks for a new media key
+// with it: members joined or left, so what is said next is closed to whoever is not in the room.
+// A member merely lost to a timeout is not a departure (see removeMemberLocked).
+func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState, rekey bool) {
 	profiles := make([]tree.PeerNodeProfile, 0, len(room.ConnectedPeers))
 	for id, p := range room.ConnectedPeers {
 		// a member we reach only through a relay most likely has no direct link to the others
@@ -144,8 +147,10 @@ func (m *CallManager) rebuildVoiceLocked(room *ActiveRoomState) {
 		profiles = append(profiles, p)
 	}
 	room.Epoch++
-	room.backdropsChanged = false        // the new manifest carries them
-	m.scheduleRekeyLocked(room, m.now()) // the members changed: a key whoever left does not have
+	room.backdropsChanged = false // the new manifest carries them
+	if rekey {
+		m.scheduleRekeyLocked(room, m.now())
+	}
 	manifest := tree.BuildVoiceTopology(room.CallID, room.Epoch, m.selfID, profiles)
 	m.treeLog.Info("Rebuilt voice tree", "call_id", calllog.Call(room.CallID), "epoch", room.Epoch,
 		"members", len(profiles), "coordinator_children", len(manifest.ChildrenMap[m.selfID]))
@@ -201,7 +206,7 @@ func (m *CallManager) becomeCoordinatorLocked(room *ActiveRoomState, now time.Ti
 	m.logger.Warn("Took over as call coordinator", "call_id", calllog.Call(room.CallID), "previous", calllog.Peer(old),
 		"epoch", room.Epoch, "members", len(room.ConnectedPeers))
 	m.floodLocked(room, signaling.ActionCoordinatorElection, m.selfID)
-	m.rebuildVoiceLocked(room)
+	m.rebuildVoiceLocked(room, true) // a new lead brings a key of its own: the old one dies with it
 
 	for _, sm := range room.StreamEngine.Snapshot() {
 		if _, alive := room.ConnectedPeers[sm.Broadcaster]; !alive {
@@ -249,6 +254,10 @@ func (m *CallManager) setCoordinatorLocked(room *ActiveRoomState, leader types.P
 	room.LastCoordPulse = now
 	room.candidate = types.PeerID{}
 	room.suspects = make(map[types.PeerID]bool)
+	if !room.IsCoordinator {
+		// a key that came from leader while we still thought we led the call is ours to take now
+		m.adoptPendingMediaKeyLocked(room, leader, now)
+	}
 	if !changed {
 		return
 	}
@@ -558,6 +567,17 @@ func (m *CallManager) runLoop(ctx context.Context, room *ActiveRoomState) {
 	}
 }
 
+// coordinatorHeartbeatLocked is what a coordinator sends periodically and in answer to a claim
+// from a smaller half (see applyFloodLocked): who leads, at what epoch, and how many it kept.
+func (m *CallManager) coordinatorHeartbeatLocked(room *ActiveRoomState) signaling.CoordinatorHeartbeatPayload {
+	hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64),
+		Members: len(room.ConnectedPeers)}
+	for _, sm := range room.StreamEngine.Snapshot() {
+		hb.Streams[sm.StreamID] = sm.Epoch
+	}
+	return hb
+}
+
 func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time) {
 	if f := room.formerCoordinator; f != (types.PeerID{}) && m.aloneLocked(room) && now.Sub(room.lastRejoinProbe) >= joinRetryInterval {
 		// alone after taking over: the old coordinator may well be alive with the others, and
@@ -568,11 +588,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 	}
 	if now.Sub(room.lastCoordHB) >= coordHeartbeatInterval {
 		room.lastCoordHB = now
-		hb := signaling.CoordinatorHeartbeatPayload{Coordinator: m.selfID, Epoch: room.Epoch, Streams: make(map[string]uint64),
-			Members: len(room.ConnectedPeers)}
-		for _, sm := range room.StreamEngine.Snapshot() {
-			hb.Streams[sm.StreamID] = sm.Epoch
-		}
+		hb := m.coordinatorHeartbeatLocked(room)
 		m.floodLocked(room, signaling.ActionCoordinatorHeartbeat, hb)
 		if f := room.formerCoordinator; f != (types.PeerID{}) && now.Sub(room.coordSince) < formerHeartbeatWindow {
 			if _, member := room.ConnectedPeers[f]; !member {
@@ -589,6 +605,7 @@ func (m *CallManager) coordinatorTickLocked(room *ActiveRoomState, now time.Time
 		}
 	}
 	m.rekeyTickLocked(room, now)
+	m.keyWaitTickLocked(room, now)
 	// A child reported its parent silent: drop the parent as soon as its heartbeats confirm it,
 	// instead of waiting for the full member timeout. A heartbeat after the report means only
 	// the link broke, so the parent stays.

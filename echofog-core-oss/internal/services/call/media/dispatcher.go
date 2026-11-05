@@ -240,6 +240,25 @@ func (d *MediaDispatcher) SetMediaKey(key []byte, signers map[types.PeerID]ed255
 	return nil
 }
 
+// PostponeMediaKeySwitch keeps units on the key before the newest one: a member has not confirmed
+// the new key yet, and what goes out must stay openable by it.
+func (d *MediaDispatcher) PostponeMediaKeySwitch(now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cur.key != nil {
+		d.curFrom = now.Add(MediaKeySwitch)
+	}
+}
+
+// ReleaseMediaKeySwitch lets units go out with the newest key now: every member confirmed it.
+func (d *MediaDispatcher) ReleaseMediaKeySwitch(now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cur.key != nil && d.curFrom.After(now) {
+		d.curFrom = now
+	}
+}
+
 // SendKeyID names the key units go out with now by the first bytes of its hash, for the logs and
 // tests (it says nothing of the key).
 func (d *MediaDispatcher) SendKeyID() string {

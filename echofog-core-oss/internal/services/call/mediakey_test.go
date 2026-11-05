@@ -3,10 +3,14 @@ package call
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/media"
+	"github.com/echofog/echofog-core/internal/services/call/signaling"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/assert"
@@ -191,4 +195,88 @@ func TestRoom_OlderNodeKeepsEverybodyOnTheRoomKey(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return nodes[2].log.count(media.FrameAudio, nodes[1].id, "voice") > before
 	}, 5*time.Second, 20*time.Millisecond, "the older node hears nothing")
+}
+
+// A node whose line breaks elects itself while the others go on without it. The coordinator hands
+// it the new media key when it is taken back in, but it still thinks it leads the call and drops
+// it. When the two halves meet and the node yields to the coordinator that kept the others, it
+// must speak that key at once: the one meant for it is kept, not lost with the takeover.
+func TestRoom_YieldedCoordinatorAdoptsTheMediaKeyItMissed(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 3)
+	coord, b := nodes[0], nodes[1]
+
+	// b's line breaks: it is cut off from the rest and takes the call over alone
+	var cut atomic.Bool
+	cut.Store(true)
+	for _, nd := range []*testNode{coord, nodes[2]} {
+		m.blockLink(b.id, nd.id, nil, cut.Load)
+		m.blockLink(nd.id, b.id, nil, cut.Load)
+	}
+	b.cm.mu.Lock()
+	broom := b.cm.activeRoom
+	b.cm.becomeCoordinatorLocked(broom, b.cm.now())
+	b.cm.unlockAndFlush()
+
+	// the coordinator keeps the others and makes a new key after the membership change; it hands
+	// one to b, which still thinks it leads the call
+	newKey := make([]byte, 32)
+	_, _ = rand.Read(newKey)
+	coord.cm.mu.Lock()
+	croom := coord.cm.activeRoom
+	bKX := croom.memberKX[b.id]
+	epoch := croom.keyEpoch + 1
+	require.Len(t, bKX, 32, "the coordinator never learnt b's key exchange key")
+	mk, err := sealMediaKey(newKey, bKX, croom.CallID, b.id, epoch)
+	require.NoError(t, err)
+	data, err := coord.cm.encodeLocked(croom, signaling.ActionMediaKey, mk)
+	coord.cm.unlockAndFlush()
+	require.NoError(t, err)
+	require.NoError(t, b.cm.handleIncomingSignaling(data, coord.id))
+
+	// the halves meet: b yields to the coordinator that kept the call going
+	cut.Store(false)
+	b.cm.mu.Lock()
+	b.cm.yieldLocked(broom, coord.id, croom.Epoch, b.cm.now())
+	b.cm.unlockAndFlush()
+
+	want := sha256.Sum256(newKey)
+	wantID := hex.EncodeToString(want[:4])
+	require.Eventually(t, func() bool {
+		return sendKeyIDs([]*testNode{b}, nil)[wantID] == 1
+	}, 5*time.Second, 20*time.Millisecond, "the yielded coordinator still speaks the key from its own takeover")
+}
+
+// A key from a claimant we do not follow is not kept forever: after its time it is dropped, even
+// if we never yield to that claimant.
+func TestRoom_AKeyFromAClaimantExpires(t *testing.T) {
+	m := newMesh()
+	nodes, _ := newRoom(t, m, 2)
+	coord, b := nodes[0], nodes[1]
+	b.cm.mu.Lock()
+	broom := b.cm.activeRoom
+	b.cm.becomeCoordinatorLocked(broom, b.cm.now())
+	b.cm.unlockAndFlush()
+
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	coord.cm.mu.Lock()
+	croom := coord.cm.activeRoom
+	bKX := croom.memberKX[b.id]
+	epoch := croom.keyEpoch + 1
+	require.Len(t, bKX, 32, "the coordinator never learnt b's key exchange key")
+	mk, err := sealMediaKey(key, bKX, croom.CallID, b.id, epoch)
+	require.NoError(t, err)
+	coord.cm.unlockAndFlush()
+
+	now := b.cm.now()
+	b.cm.mu.Lock()
+	b.cm.takeMediaKeyLocked(broom, coord.id, mk, now)
+	kept := len(broom.pendingKeys)
+	// a later key from another claimant prunes the one that has waited too long
+	b.cm.takeMediaKeyLocked(broom, types.PeerID{0x77}, mk, now.Add(pendingKeyTTL+time.Second))
+	_, oldThere := broom.pendingKeys[coord.id]
+	b.cm.unlockAndFlush()
+	assert.Equal(t, 1, kept, "the key from the claimant was not kept")
+	assert.False(t, oldThere, "a key from a claimant stayed after its time")
 }
