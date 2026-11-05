@@ -439,6 +439,17 @@ func (s *Server) check(rec []byte, now time.Time) (*checked, Result) {
 		}
 		env = card.Env
 	} else {
+		if env.Label == objects.LabelRelease {
+			// The day key of a release is the same for every signer, so a record that only passes the
+			// generic checks would let anybody occupy it with a huge seq and make the genuine manifest
+			// "stale" (T5.2 G1). Only the release keys can tell; a node without them stores none.
+			if s.cfg.ReleaseCheck == nil {
+				return nil, Result{Status: StatusRefused}
+			}
+			if err := s.cfg.ReleaseCheck(rec, now); err != nil {
+				return nil, Result{Status: StatusInvalid}
+			}
+		}
 		env, err = objects.Verify(rec, now)
 		if err != nil {
 			return nil, Result{Status: StatusInvalid}

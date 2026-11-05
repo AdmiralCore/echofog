@@ -75,6 +75,9 @@ type Config struct {
 	Events EventSink
 	// Profile is the platform profile and flags (platforms.md §2).
 	Profile Profile
+	// ReleaseCheck verifies a release/2 object against the compiled release keys and the threshold
+	// (objects.ReleaseState.Check; wired by T4.5). Nil: this node stores no release in the DHT.
+	ReleaseCheck func(raw []byte, now time.Time) error
 	// GreaseInterval returns the delay before the next GREASE frame of a session (D18). Nil
 	// means a uniform random interval in [greaseMin, greaseMax]; tests inject a short one.
 	GreaseInterval func() time.Duration

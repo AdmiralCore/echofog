@@ -45,12 +45,13 @@ func (r *Runtime) registerDHT() {
 		return
 	}
 	srv, err := dht.NewServer(dht.ServerConfig{
-		Self:     dht.DeviceID(r.identity.DeviceID),
-		Table:    tbl,
-		Reached:  r.peers.Serve,
-		Now:      r.clock.Now,
-		MemCapMB: r.cfg.Profile.MemCapMB,
-		Log:      r.log,
+		Self:         dht.DeviceID(r.identity.DeviceID),
+		Table:        tbl,
+		Reached:      r.peers.Serve,
+		ReleaseCheck: r.cfg.ReleaseCheck,
+		Now:          r.clock.Now,
+		MemCapMB:     r.cfg.Profile.MemCapMB,
+		Log:          r.log,
 	})
 	if err != nil {
 		r.log.Warn("node: dht server", "err", err)
