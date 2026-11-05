@@ -60,7 +60,19 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 	assert.Equal(t, map[string]int{before: 3}, sendKeyIDs([]*testNode{coord, b, c}, nil),
 		"a network timeout rotated the media key: the member that comes back cannot open what it missed")
 
+	// and it is taken back in without a rotation: it still has the key the room speaks
+	dark.Store(false)
+	coord.cm.mu.Lock()
+	prof := coord.cm.activeRoom.ConnectedPeers[coord.id]
+	prof.PeerID = a.id
+	coord.cm.admitLocked(coord.cm.activeRoom, a.id, prof, coord.cm.now())
+	coord.cm.unlockAndFlush()
+	time.Sleep(rekeyDelay + media.MediaKeySwitch + 300*time.Millisecond)
+	assert.Equal(t, map[string]int{before: 4}, sendKeyIDs(nodes, nil),
+		"taking a member lost to a timeout back in rotated the key it already has")
+
 	// a member that leaves, though, takes its key with it
+	dark.Store(true)
 	for _, nd := range []*testNode{coord, c} {
 		m.blockLink(b.id, nd.id, nil, dark.Load)
 		m.blockLink(nd.id, b.id, nil, dark.Load)

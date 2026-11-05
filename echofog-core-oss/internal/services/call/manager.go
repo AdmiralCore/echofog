@@ -170,6 +170,9 @@ type ActiveRoomState struct {
 	// pendingKeys holds keys sent by a coordinator we do not follow yet (we still think we lead
 	// the call); the one from the coordinator we yield to is applied then (mediakey.go)
 	pendingKeys map[types.PeerID]signaling.MediaKeyPayload
+	// timedOut remembers members dropped for a network reason and the key epoch they had when
+	// dropped: one taken back in before any rotation still speaks the room's key (mediakey.go)
+	timedOut map[types.PeerID]uint64
 
 	// coordinator: a member's tile backdrop changed since the manifest last went out
 	backdropsChanged  bool
