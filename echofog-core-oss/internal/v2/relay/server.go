@@ -727,3 +727,9 @@ func (s *Server) HandleDatagram(from Peer, payload []byte) {
 	}
 	s.stats.Forwarded.Add(1)
 }
+
+// sleep waits d for pacing and reports false if the circuit ended first.
+func (s *Server) sleep(c *circuit, d time.Duration) bool {
+	time.Sleep(min(d, 2*time.Second))
+	return true
+}
