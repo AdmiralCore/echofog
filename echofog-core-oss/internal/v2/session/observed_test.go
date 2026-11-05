@@ -1,0 +1,362 @@
+package session_test
+
+import (
+	"net/netip"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/session"
+)
+
+type obsClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *obsClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *obsClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+type obsRig struct {
+	o       *session.Observer
+	clk     *obsClock
+	mu      sync.Mutex
+	changes []session.PublicAddrChange
+	sus     int
+}
+
+func newObsRig(t *testing.T) *obsRig {
+	t.Helper()
+	r := &obsRig{clk: &obsClock{t: time.Unix(1_800_000_000, 0)}}
+	r.o = session.NewObserver(session.ObserverConfig{
+		Now: r.clk.Now,
+		OnChange: func(c session.PublicAddrChange) {
+			r.mu.Lock()
+			r.changes = append(r.changes, c)
+			r.mu.Unlock()
+		},
+		OnSuspicious: func([32]byte) {
+			r.mu.Lock()
+			r.sus++
+			r.mu.Unlock()
+		},
+	})
+	return r
+}
+
+func (r *obsRig) nChanges() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.changes)
+}
+
+func peerID(n byte) [32]byte { return [32]byte{n} }
+
+func ap(s string) netip.AddrPort { return netip.MustParseAddrPort(s) }
+
+// obs builds an observation by peer n at address peerAddr that reports reported on socket.
+func obs(n byte, peerAddr, reported, socket string) session.Observation {
+	return session.Observation{
+		Peer:     peerID(n),
+		PeerAddr: netip.MustParseAddr(peerAddr),
+		Reported: ap(reported),
+		Socket:   socket,
+	}
+}
+
+func wantPublic(t *testing.T, o *session.Observer, want string) {
+	t.Helper()
+	got, ok := o.PublicAddr()
+	if want == "" {
+		if ok {
+			t.Fatalf("public address = %v, want none", got)
+		}
+		return
+	}
+	if !ok || got != netip.MustParseAddr(want) {
+		t.Fatalf("public address = %v ok=%v, want %s", got, ok, want)
+	}
+}
+
+func TestOneObservationIsNotEnough(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "")
+}
+
+func TestTwoPeersDifferentSlash16Decide(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+	if r.nChanges() != 1 {
+		t.Fatalf("changes = %d, want 1", r.nChanges())
+	}
+	c := r.changes[0]
+	if c.Old.IsValid() || c.New != netip.MustParseAddr("203.0.113.5") {
+		t.Fatalf("change = %+v", c)
+	}
+}
+
+func TestTwoPeersSameSlash16DoNotDecide(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.1.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "198.51.200.2", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "198.51.77.3", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "")
+	if r.nChanges() != 0 {
+		t.Fatalf("changes = %d, want 0", r.nChanges())
+	}
+}
+
+func TestIPv6GroupIsSlash32(t *testing.T) {
+	r := newObsRig(t)
+	// same /32, different /48: one group
+	r.o.Observe(obs(1, "2001:db8:1::1", "[2001:db9::1]:5000", "s"))
+	r.o.Observe(obs(2, "2001:db8:2::1", "[2001:db9::1]:5000", "s"))
+	wantPublic(t, r.o, "")
+	// a different /32 completes the quorum
+	r.o.Observe(obs(3, "2001:dba::1", "[2001:db9::1]:5000", "s"))
+	wantPublic(t, r.o, "2001:db9::1")
+}
+
+func TestOneLiarDoesNotChangeDecision(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.77:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+	if r.nChanges() != 1 {
+		t.Fatalf("changes = %d, want 1", r.nChanges())
+	}
+	if r.sus != 1 {
+		t.Fatalf("suspicious = %d, want 1", r.sus)
+	}
+}
+
+func TestLiarFirstCannotForceAnAddress(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.77:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "") // 1 vs 1: no decision, and no tie-break by order
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+}
+
+func TestLiarsInOneSlash16AreOneVote(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.77:4000", "s"))
+	r.o.Observe(obs(4, "100.64.9.9", "203.0.113.77:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+	if r.nChanges() != 1 {
+		t.Fatalf("changes = %d, want 1", r.nChanges())
+	}
+}
+
+func TestTieDecidesNothingAndKeepsOldDecision(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+	// 2 peers for a new address in other groups: 2 vs 2 is a tie, the decision stays
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.9:4000", "s"))
+	r.o.Observe(obs(4, "100.65.0.1", "203.0.113.9:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.5")
+	if r.nChanges() != 1 {
+		t.Fatalf("changes = %d, want 1", r.nChanges())
+	}
+}
+
+func TestStrictMajorityChangesAddress(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	// the node moved: the same peers now report the new address
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.9:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.9:4000", "s"))
+	wantPublic(t, r.o, "203.0.113.9")
+	if r.nChanges() != 2 {
+		t.Fatalf("changes = %d, want 2", r.nChanges())
+	}
+	if c := r.changes[1]; c.Old != netip.MustParseAddr("203.0.113.5") || c.New != netip.MustParseAddr("203.0.113.9") {
+		t.Fatalf("change = %+v", c)
+	}
+}
+
+func TestSameDecisionRepeatedFiresOnce(t *testing.T) {
+	r := newObsRig(t)
+	for i := 0; i < 5; i++ {
+		r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+		r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	}
+	if r.nChanges() != 1 {
+		t.Fatalf("changes = %d, want 1", r.nChanges())
+	}
+}
+
+func TestUnusableObservationsAreIgnored(t *testing.T) {
+	r := newObsRig(t)
+	bad := []session.Observation{
+		obs(1, "198.51.100.1", "10.0.0.5:4000", "s"),    // private
+		obs(2, "192.0.2.9", "127.0.0.1:4000", "s"),      // loopback
+		obs(3, "100.64.0.1", "0.0.0.0:4000", "s"),       // unspecified
+		obs(4, "198.51.101.1", "169.254.1.1:4000", "s"), // link local
+		{Peer: peerID(5), Reported: ap("203.0.113.5:1")}, // no peer address (relay circuit)
+		{Peer: peerID(6), PeerAddr: netip.MustParseAddr("127.0.0.1"), Reported: ap("203.0.113.5:1")},
+		{Peer: peerID(7), PeerAddr: netip.MustParseAddr("192.0.2.77")}, // no reported address
+	}
+	for _, b := range bad {
+		if v := r.o.Observe(b); v != session.ObsIgnored {
+			t.Fatalf("verdict for %+v = %v, want ignored", b, v)
+		}
+	}
+	wantPublic(t, r.o, "")
+}
+
+func TestObservationsExpire(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.clk.advance(session.ObservationTTL + time.Second)
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	wantPublic(t, r.o, "") // the first one is gone
+}
+
+func TestResetForgetsEverything(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Reset()
+	wantPublic(t, r.o, "")
+	if got := r.o.NAT("s"); got != session.NATUnknown {
+		t.Fatalf("NAT after reset = %v", got)
+	}
+}
+
+func TestObservationCapEvictsOldest(t *testing.T) {
+	r := newObsRig(t)
+	for i := 0; i < session.MaxObservations+50; i++ {
+		r.clk.advance(time.Second)
+		r.o.Observe(session.Observation{
+			Peer:     [32]byte{byte(i), byte(i >> 8), 1},
+			PeerAddr: netip.AddrFrom4([4]byte{byte(11 + i%200), byte(i / 200), 1, 1}),
+			Reported: ap("203.0.113.5:4000"),
+			Socket:   "s",
+		})
+	}
+	if n := r.o.Len(); n > session.MaxObservations {
+		t.Fatalf("held %d observations, cap %d", n, session.MaxObservations)
+	}
+}
+
+func TestNATNeedsThreeObservations(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	if got := r.o.NAT("s"); got != session.NATUnknown {
+		t.Fatalf("NAT with 2 observations = %v, want unknown", got)
+	}
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4000", "s"))
+	if got := r.o.NAT("s"); got != session.NATCone {
+		t.Fatalf("NAT with 3 equal observations = %v, want cone", got)
+	}
+}
+
+func TestNATSymmetricNeedsThreeDistinctPorts(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4001", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4002", "s"))
+	if got := r.o.NAT("s"); got != session.NATUnknown {
+		t.Fatalf("NAT with 2 = %v", got)
+	}
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4003", "s"))
+	if got := r.o.NAT("s"); got != session.NATSymmetric {
+		t.Fatalf("NAT = %v, want symmetric", got)
+	}
+}
+
+func TestOneLyingPortIsNotSymmetric(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:7777", "s"))
+	if got := r.o.NAT("s"); got == session.NATSymmetric {
+		t.Fatalf("one divergent port made the NAT symmetric")
+	}
+	// a fourth honest observation makes it cone again
+	r.o.Observe(obs(4, "100.65.0.1", "203.0.113.5:4000", "s"))
+	if got := r.o.NAT("s"); got != session.NATCone {
+		t.Fatalf("NAT = %v, want cone (3 of 4)", got)
+	}
+}
+
+func TestDivergentIPIsNotEvidenceOfSymmetricNAT(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(4, "100.65.0.1", "203.0.113.99:5555", "s"))
+	if got := r.o.NAT("s"); got != session.NATCone {
+		t.Fatalf("NAT = %v, want cone: the divergent IP is suspicious, not symmetric evidence", got)
+	}
+}
+
+func TestNATNeedsOneLocalSocket(t *testing.T) {
+	r := newObsRig(t)
+	// each session on its own socket: a cone NAT shows different ports, that proves nothing
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4001", "a"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4002", "b"))
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4003", "c"))
+	for _, s := range []string{"a", "b", "c", ""} {
+		if got := r.o.NAT(s); got != session.NATUnknown {
+			t.Fatalf("NAT(%q) = %v, want unknown", s, got)
+		}
+	}
+	if got := r.o.NATClass(); got != session.NATUnknown {
+		t.Fatalf("NATClass = %v, want unknown", got)
+	}
+}
+
+func TestNATSameGroupCountsOnce(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4001", "s"))
+	r.o.Observe(obs(2, "198.51.100.2", "203.0.113.5:4002", "s"))
+	r.o.Observe(obs(3, "198.51.100.3", "203.0.113.5:4003", "s"))
+	if got := r.o.NAT("s"); got != session.NATUnknown {
+		t.Fatalf("three peers of one /16 classified the NAT as %v", got)
+	}
+}
+
+func TestNATClassUsesTheBestSocketOnly(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4000", "s"))
+	if got := r.o.NATClass(); got != session.NATCone {
+		t.Fatalf("NATClass = %v, want cone", got)
+	}
+}
+
+func TestParseObservedHandshakeValue(t *testing.T) {
+	good := []byte{4, 203, 0, 113, 5, 0x0f, 0xa0}
+	got, ok := session.ParseObserved(good)
+	if !ok || got != netip.MustParseAddrPort("203.0.113.5:4000") {
+		t.Fatalf("ParseObserved = %v %v", got, ok)
+	}
+	for _, bad := range [][]byte{nil, {4, 1, 2}, {5, 1, 2, 3, 4, 0, 1}, append(append([]byte(nil), good...), 0)} {
+		if _, ok := session.ParseObserved(bad); ok {
+			t.Fatalf("ParseObserved(%x) accepted", bad)
+		}
+	}
+}
