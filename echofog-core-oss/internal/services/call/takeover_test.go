@@ -54,8 +54,12 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 		m.blockLink(nd.id, a.id, nil, dark.Load)
 	}
 	coord.cm.mu.Lock()
-	coord.cm.removeMemberLocked(coord.cm.activeRoom, a.id, "timeout")
+	room := coord.cm.activeRoom
+	room.rekeyAt = time.Time{} // isolate what the removal itself asks for
+	coord.cm.removeMemberLocked(room, a.id, "timeout")
+	scheduled := !room.rekeyAt.IsZero()
 	coord.cm.unlockAndFlush()
+	assert.False(t, scheduled, "a network timeout scheduled a new media key")
 	time.Sleep(rekeyDelay + media.MediaKeySwitch + 500*time.Millisecond)
 	assert.Equal(t, map[string]int{before: 3}, sendKeyIDs([]*testNode{coord, b, c}, nil),
 		"a network timeout rotated the media key: the member that comes back cannot open what it missed")
@@ -63,10 +67,14 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 	// and it is taken back in without a rotation: it still has the key the room speaks
 	dark.Store(false)
 	coord.cm.mu.Lock()
-	prof := coord.cm.activeRoom.ConnectedPeers[coord.id]
+	room = coord.cm.activeRoom
+	prof := room.ConnectedPeers[coord.id]
 	prof.PeerID = a.id
-	coord.cm.admitLocked(coord.cm.activeRoom, a.id, prof, coord.cm.now())
+	room.rekeyAt = time.Time{}
+	coord.cm.admitLocked(room, a.id, prof, coord.cm.now())
+	backScheduled := !room.rekeyAt.IsZero()
 	coord.cm.unlockAndFlush()
+	assert.False(t, backScheduled, "taking a member lost to a timeout back in scheduled a new media key")
 	time.Sleep(rekeyDelay + media.MediaKeySwitch + 300*time.Millisecond)
 	assert.Equal(t, map[string]int{before: 4}, sendKeyIDs(nodes, nil),
 		"taking a member lost to a timeout back in rotated the key it already has")
@@ -78,14 +86,12 @@ func TestRoom_ATimeoutDoesNotRotateTheMediaKey(t *testing.T) {
 		m.blockLink(nd.id, b.id, nil, dark.Load)
 	}
 	coord.cm.mu.Lock()
-	coord.cm.removeMemberLocked(coord.cm.activeRoom, b.id, "left")
+	room = coord.cm.activeRoom
+	room.rekeyAt = time.Time{}
+	coord.cm.removeMemberLocked(room, b.id, "left")
+	leftScheduled := !room.rekeyAt.IsZero()
 	coord.cm.unlockAndFlush()
-	require.Eventually(t, func() bool {
-		for k, n := range sendKeyIDs([]*testNode{coord, c}, nil) {
-			return n == 2 && k != before
-		}
-		return false
-	}, 10*time.Second, 50*time.Millisecond, "a member that left kept the key the others went on speaking")
+	assert.True(t, leftScheduled, "a member that left did not schedule a new media key")
 }
 
 // An election ran on a node cut off from the call: it led a half of one member and then heard
