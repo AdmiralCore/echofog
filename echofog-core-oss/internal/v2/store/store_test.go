@@ -92,12 +92,15 @@ func TestPathIsTheV2Directory(t *testing.T) {
 func TestOpenRequiresAStorageKey(t *testing.T) {
 	t.Parallel()
 
+	short := secret.New([]byte{1, 2, 3})
+	t.Cleanup(short.Destroy)
+
 	for _, tc := range []struct {
 		name string
 		key  *secret.Value
 	}{
 		{"nil", nil},
-		{"short", secret.New([]byte{1, 2, 3})},
+		{"short", short},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
