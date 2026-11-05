@@ -1,6 +1,6 @@
 {
-  "description": "frame v2: type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload; datagrams: type(varint) ‖ payload",
-  "spec": "wire.md §6, registries.md §1–§2",
+  "description": "frame v2: type(varint) ‖ flags(u8) ‖ length(varint) ‖ payload; datagrams: type(varint) ‖ payload; mux_sequences: whole connection-level byte sequences of the byte-stream mux",
+  "spec": "wire.md §5.2, §6, registries.md §1–§2",
   "frames": [
     {
       "name": "PADDING",
@@ -191,6 +191,106 @@
       "type": 32,
       "payload": "05000100010e3139322e302e322e35333a3533abcd",
       "encoded": "2005000100010e3139322e302e322e35333a3533abcd"
+    }
+  ],
+  "mux_sequences": [
+    {
+      "name": "client to server, three streams",
+      "sender": "client",
+      "frames": [
+        {
+          "frame": "180007000068656c6c6f",
+          "note": "stream 0 (control) opens with data"
+        },
+        {
+          "frame": "1800020200",
+          "note": "stream 2 announced by an empty MUX_STREAM"
+        },
+        {
+          "frame": "0100080000000000000000",
+          "note": "PADDING of 8 zero bytes between frames"
+        },
+        {
+          "frame": "1800060400666f7572",
+          "note": "stream 4 opens with data; stream 2 is still open"
+        },
+        {
+          "frame": "180005020174776f",
+          "note": "stream 2 data and FIN, interleaved after stream 4"
+        },
+        {
+          "frame": "1a00050080010000",
+          "note": "MUX_WINDOW on stream 0, increment 65536"
+        },
+        {
+          "frame": "1b000480100000",
+          "note": "MUX_MAX_DATA, increment 1048576"
+        },
+        {
+          "frame": "1800020401",
+          "note": "stream 4 FIN with no data"
+        },
+        {
+          "frame": "180008000120776f726c64",
+          "note": "stream 0 more data and FIN"
+        }
+      ],
+      "bytes": "180007000068656c6c6f180002020001000800000000000000001800060400666f7572180005020174776f1a000500800100001b0004801000001800020401180008000120776f726c64",
+      "streams": [
+        {
+          "id": 0,
+          "data": "hello world",
+          "data_hex": "68656c6c6f20776f726c64",
+          "fin": true
+        },
+        {
+          "id": 2,
+          "data": "two",
+          "data_hex": "74776f",
+          "fin": true
+        },
+        {
+          "id": 4,
+          "data": "four",
+          "data_hex": "666f7572",
+          "fin": true
+        }
+      ]
+    },
+    {
+      "name": "server to client, own streams and a reset",
+      "sender": "server",
+      "frames": [
+        {
+          "frame": "1800050100737276",
+          "note": "stream 1 (the server's first) opens with data"
+        },
+        {
+          "frame": "1800020300",
+          "note": "stream 3 announced"
+        },
+        {
+          "frame": "18000601012d6f6e65",
+          "note": "stream 1 data, FIN"
+        },
+        {
+          "frame": "1900020305",
+          "note": "MUX_RESET stream 3, code 5 refused"
+        }
+      ],
+      "bytes": "1800050100737276180002030018000601012d6f6e651900020305",
+      "streams": [
+        {
+          "id": 1,
+          "data": "srv-one",
+          "data_hex": "7372762d6f6e65",
+          "fin": true
+        },
+        {
+          "id": 3,
+          "reset": 5
+        }
+      ]
     }
   ]
 }

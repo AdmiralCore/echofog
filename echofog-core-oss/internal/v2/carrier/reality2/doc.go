@@ -19,6 +19,10 @@
 //   - cover.go: the outbound sockets that carry stranger packets to the cover (wire.md §3.3).
 //   - replay.go: the 900-second token replay cache, a Bloom filter persisted through carrier.KV.
 //   - client.go / server.go: carrier.Dialer and carrier.Listener on top of quicx.
+//   - tcpclient.go / tcpserver.go / tcpconn.go: reality2-tcp (wire.md §4.1-§4.3): the uTLS Chrome
+//     client with the token in legacy_session_id, the server that reads the first TLS record,
+//     admits a valid token and proxies everything else to the cover, and the byte-stream mux
+//     (mux.NewConn) over the TLS application data with profile padding.
 //
 // # The ClientHello hook
 //

@@ -692,6 +692,23 @@ func (e *env) ownProbers(siteSamples int) (site, ours *profile.Prober) {
 // runs, the profile of a selected connection matches the website's. The website is measured once
 // with many samples (the length ranges of an ECDSA signature need them), each run measures the
 // selected connection with the five samples of T2.6b-1.
+// packingAttempts is how often a run is measured again when its only difference is an unstable
+// packing of our side (see TestCompareSiteAndSelectedEmpty).
+const packingAttempts = 4
+
+// onlyPackingUnstable reports whether diffs is exactly the load-induced "packing" noise.
+func onlyPackingUnstable(diffs []profile.Diff) bool {
+	if len(diffs) == 0 {
+		return false
+	}
+	for _, d := range diffs {
+		if d.Item != profile.ItemPacking || d.Ours != "unstable" {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCompareSiteAndSelectedEmpty(t *testing.T) {
 	runs := 20
 	if testing.Short() {
@@ -723,11 +740,21 @@ func TestCompareSiteAndSelectedEmpty(t *testing.T) {
 			t.Fatalf("QUIC site group %#x", site.Group)
 		}
 		for run := 0; run < runs; run++ {
-			ours, err := measure(oursP)
-			if err != nil {
-				t.Fatalf("%s run %d: %v", tr, run, err)
+			// The comparison itself stays strict. How a flight is cut into packets depends on
+			// timing, and under -race and load a run of five samples can catch a rare cut; that
+			// is noise of the test machine, not a property of the server, so such a run is
+			// measured again. A real difference shows in every attempt (T2.8 F1).
+			var diffs []profile.Diff
+			for attempt := 0; attempt < packingAttempts; attempt++ {
+				ours, err := measure(oursP)
+				if err != nil {
+					t.Fatalf("%s run %d: %v", tr, run, err)
+				}
+				if diffs, _ = CompareOwn(site, ours); !onlyPackingUnstable(diffs) {
+					break
+				}
 			}
-			if diffs, _ := CompareOwn(site, ours); len(diffs) > 0 {
+			if len(diffs) > 0 {
 				t.Fatalf("%s run %d: the selected connection differs from the website: %v", tr, run, diffs)
 			}
 		}

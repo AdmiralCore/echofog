@@ -175,7 +175,7 @@ Section numbers refer to the audit report (`audit-spec-v2.md`, November 2026).
 | 7 #2 | medium | L0 clock windows narrower than the handshake's | fixed: ±300 s and learned offsets | wire §2.5, §3.3; handshake §7 |
 | 7 #3–#5, #16, #17 | low | `FOG_X3DH_V2`, domestic-only flag, unknown frame on stream 0, timer wording, higher `proto_ver` | fixed | registries §7.6, §11; wire §6.2, §7.1; handshake §7 |
 | 8.1 | medium | no handshake vectors | deferred to step 2 with an exit criterion of two independent implementations | handshake §12 |
-| 8.2 | low | vector gaps | partly: negative vectors, real cookie, full sealed envelope and mailbox seal, hybrid-share example, card scopes added; a real Chrome ClientHello split over two Initials and a multi-stream MUX example remain to do | vectors/ |
+| 8.2 | low | vector gaps | partly: negative vectors, real cookie, full sealed envelope and mailbox seal, hybrid-share example, card scopes added; a multi-stream MUX example added in `frames.json` (`mux_sequences`, T2.8); a real Chrome ClientHello split over two Initials remains to do | vectors/ |
 
 ## 6. Clarifications from the step-2 implementations
 

@@ -1,10 +1,7 @@
 package selfcover
 
 import (
-	"bytes"
 	"crypto/ecdh"
-	"errors"
-	"fmt"
 	"time"
 
 	quic "github.com/apernet/quic-go"
@@ -54,36 +51,7 @@ func (m *minter) quicHook(conf *quic.Config) {
 }
 
 // tcpPrepare puts a token into the 32-byte session id of a Chrome-shaped uTLS hello (wire.md
-// §4.1): the hello is built with a zero session id, CH0 is taken from it, and the token replaces
-// the zeros. The second marshal must give the same CH0, or the token would not bind.
+// §4.1): reality2.PrepareTCPHello, the code the reality2-tcp client uses.
 func (m *minter) tcpPrepare(uc *utls.UConn) error {
-	if err := uc.BuildHandshakeState(); err != nil {
-		return err
-	}
-	hello := uc.HandshakeState.Hello
-	hello.SessionId = make([]byte, 32)
-	if err := uc.MarshalClientHello(); err != nil {
-		return err
-	}
-	parsed, err := reality2.ParseHelloTCP(hello.Raw)
-	if err != nil {
-		return fmt.Errorf("own hello: %w", err)
-	}
-	ks := uc.HandshakeState.State13.KeyShareKeys
-	if ks == nil || ks.Ecdhe == nil || !bytes.Equal(ks.Ecdhe.PublicKey().Bytes(), parsed.C) {
-		return errors.New("selfcover: the hello's X25519 share has no private key to bind the token to")
-	}
-	tok, err := m.seal(parsed.CH0, ks.Ecdhe)
-	if err != nil {
-		return err
-	}
-	hello.SessionId = tok
-	if err := uc.MarshalClientHello(); err != nil {
-		return err
-	}
-	again, err := reality2.ParseHelloTCP(hello.Raw)
-	if err != nil || !bytes.Equal(again.CH0, parsed.CH0) {
-		return errors.New("selfcover: the hello changed between the two marshals")
-	}
-	return nil
+	return reality2.PrepareTCPHello(uc, m.maskPub, m.addr, m.now)
 }

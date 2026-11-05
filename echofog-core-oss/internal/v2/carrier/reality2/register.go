@@ -29,3 +29,20 @@ func Register(reg *carrier.Registry, d *Dialer, l *Listener) error {
 	}
 	return nil
 }
+
+// RegisterTCP installs the reality2-tcp dialer and listener in reg. Either may be nil.
+func RegisterTCP(reg *carrier.Registry, d *TCPDialer, l *TCPListener) error {
+	if reg == nil {
+		return errors.New("reality2: nil carrier registry")
+	}
+	if d == nil && l == nil {
+		return fmt.Errorf("%w: nothing to register", ErrCard)
+	}
+	if d != nil {
+		reg.RegisterDialer(objects.SuiteReality2TCP, d)
+	}
+	if l != nil {
+		reg.RegisterListener(objects.SuiteReality2TCP, l)
+	}
+	return nil
+}
