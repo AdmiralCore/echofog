@@ -2,15 +2,16 @@
 
 This is `github.com/apernet/quic-go` at
 `v0.63.1-0.20261004180939-a10df75c260c`, the version EchoFog already depended on,
-with three small, self-contained changes. `go.mod` in `echofog-core-oss` points at
+with four small, self-contained changes. `go.mod` in `echofog-core-oss` points at
 this copy with a `replace` directive. Test files (`*_test.go`), mocks, and the
 `integrationtests/`, `interop/`, `example/`, `testutils/` and `metrics/` trees
 were dropped to keep the copy reviewable; nothing in the library's own build path
-imported them. The one exception is the fuzz target for patch 3; see below.
+imported them. The exceptions are the fuzz target for patch 3 and the tests of
+patch 4; see below.
 
 To review, diff this tree against the upstream module at that version
 (`go mod download github.com/apernet/quic-go@v0.63.1-0.20261004180939-a10df75c260c`
-gives the cache path). The only functional changes are the three below.
+gives the cache path). The only functional changes are the four below.
 
 ## 1. Real GREASE in the Chrome QUIC ClientHello
 `internal/handshake/chrome_client_hello.go`
