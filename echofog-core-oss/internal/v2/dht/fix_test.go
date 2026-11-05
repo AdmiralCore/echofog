@@ -1,6 +1,7 @@
 package dht
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -379,6 +380,99 @@ func TestSessionDuringCheckKeepsNode(t *testing.T) {
 	}
 	if !tbl.Has(victimID) {
 		t.Fatal("a node seen again during the check was removed by the failed ping")
+	}
+}
+
+// TestSelfEvictionPersistsNewEntry is F5: a new entry that is immediately evicted to the cold
+// index in the same add must still be written to the store.
+func TestSelfEvictionPersistsNewEntry(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	kv := newMemKV()
+	tbl := fixTable(t, kv, &now, 1, nil)
+
+	var cards []*objects.Card
+	for i := 0; i < 4; i++ {
+		cards = append(cards, buildCard(t, uint64(900+i), 1, now, objects.ScopePublic, 0,
+			testAddr(fmt.Sprintf("10.60.%d.1", i+1), 443)))
+	}
+	// The table orders entries with equal confirmation time and seq by device ID; the smallest
+	// is the one the trim removes. B is therefore evicted immediately after it is inserted.
+	a, b := cards[0], cards[1]
+	for _, c := range cards {
+		if bytes.Compare(a.DeviceID[:], c.DeviceID[:]) < 0 {
+			a = c
+		}
+		if bytes.Compare(b.DeviceID[:], c.DeviceID[:]) > 0 {
+			b = c
+		}
+	}
+	if bytes.Compare(b.DeviceID[:], a.DeviceID[:]) >= 0 {
+		t.Fatal("could not build a smaller device ID")
+	}
+
+	if !tbl.AddFromSession(a) || !tbl.AddFromSession(b) {
+		t.Fatal("cards were not added")
+	}
+	id := DeviceID(b.DeviceID)
+	if !tbl.Has(id) || tbl.Card(id) != nil {
+		t.Fatalf("new entry was not self-evicted: Has=%v Card==nil:%v", tbl.Has(id), tbl.Card(id) == nil)
+	}
+	if got := storedSeq(t, kv, id); got != 1 {
+		t.Fatalf("self-evicted entry was not persisted (stored seq %d)", got)
+	}
+
+	restarted := fixTable(t, kv, &now, 1, nil)
+	if !restarted.Has(id) {
+		t.Fatal("self-evicted entry disappeared after a restart")
+	}
+}
+
+// TestSelfEvictionAfterReplacementPersists covers the same bug in checkAndReplace: the candidate
+// inserted after a failed ping can be trimmed away at once and must still reach the store.
+func TestSelfEvictionAfterReplacementPersists(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	kv := newMemKV()
+	p := &fakePinger{err: errors.New("dead")}
+	tbl := fixTable(t, kv, &now, 0, p)
+
+	const bucket = 0
+	var cards []*objects.Card
+	for i := 0; i < K+1; i++ {
+		seed := seedInBucket(t, testSelf, bucket, uint64(2000+i*100000), now)
+		cards = append(cards, buildCard(t, seed, 1, now, objects.ScopePublic, 0,
+			testAddr(fmt.Sprintf("10.61.%d.1", i+1), 443)))
+	}
+	candidate := cards[0]
+	for _, c := range cards {
+		if bytes.Compare(c.DeviceID[:], candidate.DeviceID[:]) < 0 {
+			candidate = c
+		}
+	}
+	for _, c := range cards {
+		if c == candidate {
+			continue
+		}
+		if !tbl.AddFromSession(c) {
+			t.Fatal("preparing the bucket failed")
+		}
+	}
+	if tbl.BucketLen(bucket) != K {
+		t.Fatalf("bucket holds %d entries, want %d", tbl.BucketLen(bucket), K)
+	}
+	// Tighten the cap so the inserted candidate is the least recently confirmed entry.
+	tbl.mu.Lock()
+	tbl.memLimit = K - 1
+	tbl.mu.Unlock()
+
+	if tbl.AddFromCard(candidate) {
+		t.Fatal("a full bucket accepted a candidate without a failed ping")
+	}
+	id := DeviceID(candidate.DeviceID)
+	if !tbl.Has(id) || tbl.Card(id) != nil {
+		t.Fatalf("candidate was not self-evicted: Has=%v Card==nil:%v", tbl.Has(id), tbl.Card(id) == nil)
+	}
+	if got := storedSeq(t, kv, id); got != 1 {
+		t.Fatalf("self-evicted candidate was not persisted (stored seq %d)", got)
 	}
 }
 
