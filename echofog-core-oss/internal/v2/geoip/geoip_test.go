@@ -51,6 +51,15 @@ func TestCountryOfKnownAddresses(t *testing.T) {
 			t.Fatalf("CountryOf(::ffff:8.8.8.8) = %q, %v; want US, true", got, ok)
 		}
 	})
+
+	// The zone is interface-local and must not prevent a lookup: it is stripped before both the
+	// reserved check and the database search.
+	t.Run("zoned ipv6", func(t *testing.T) {
+		got, ok := CountryOf(netip.MustParseAddr("2606:4700:4700::1111%eth0"))
+		if !ok || got != "US" {
+			t.Fatalf("CountryOf(2606:4700:4700::1111%%eth0) = %q, %v; want US, true", got, ok)
+		}
+	})
 }
 
 // TestCountryOfUnknown pins that addresses that cannot name a country never do: invalid,
