@@ -449,3 +449,6 @@ func (c *relayClient) registerOnce(ctx context.Context, done map[*mux.Session]st
 	}
 	return all && seen > 0
 }
+
+// registerBackoff is the pause after fails consecutive polls with a relay that did not take the IDs.
+func registerBackoff(fails int) time.Duration { return registerRetry }

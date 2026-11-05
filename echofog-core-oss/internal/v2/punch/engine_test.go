@@ -553,3 +553,24 @@ func TestInitiatorDoesNotAnswerForeignOffer(t *testing.T) {
 		t.Fatal("initiator answered an unsolicited offer")
 	}
 }
+
+// F2: a peer that floods PUNCH frames must not make the node verify cards and look up countries for
+// each one: Allowed is consulted only for a frame that passed the cheap checks (rate, pending nonce).
+func TestResponderFloodDoesNotCallAllowed(t *testing.T) {
+	r := newRig(t, Responder)
+	var calls int
+	var mu sync.Mutex
+	r.eng = New(Config{Role: Responder, Link: r.link, Net: r.net, Clock: r.clk, Rand: func(n int64) int64 { return n / 2 },
+		Rules:   func() Rules { return r.rules },
+		Allowed: func() bool { mu.Lock(); calls++; mu.Unlock(); return true }})
+	r.eng.HandleControl(offerFrame(1, "203.0.113.5:61000"))
+	for i := 0; i < 200; i++ {
+		r.eng.HandleControl(offerFrame(uint64(i+2), "203.0.113.5:61000")) // all within 30 s
+		r.eng.HandleControl(syncFrame(uint64(1000 + i)))                  // no pending nonce
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls > 2 {
+		t.Fatalf("Allowed called %d times for a flood of 400 frames, want at most 2", calls)
+	}
+}

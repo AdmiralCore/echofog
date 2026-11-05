@@ -17,6 +17,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	"github.com/echofog/echofog-core/internal/v2/service"
+	"github.com/echofog/echofog-core/internal/v2/session"
 )
 
 // natWorld imitates two address-restricted cone NATs between A and B (T6.2): a datagram from X to Y
@@ -313,4 +314,18 @@ func TestHiddenNodeReachedThroughRendezvous(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("hidden node's module saw nothing")
 	}
+}
+
+// F1: the answering end must not lose the first PUNCH_OFFER when it arrives while the accepted session
+// is still on its way into the table (a hidden node books its pass first). The initiator retries only
+// after 90 s, so the punch has to work in the first round.
+func TestPunchSurvivesSlowAdmissionOfTheResponder(t *testing.T) {
+	w := newRelayWorld(t, true)
+	node.SetBeforeAdd(func(*session.Established) { time.Sleep(1500 * time.Millisecond) })
+	t.Cleanup(func() { node.SetBeforeAdd(nil) })
+	w.openChat(t)
+	waitUntil(t, 12*time.Second, "a second path on A", func() bool {
+		ids, _, ok := w.a.rt.Paths(w.b.id.DeviceID)
+		return ok && len(ids) >= 2
+	})
 }
