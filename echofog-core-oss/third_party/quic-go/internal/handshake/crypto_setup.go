@@ -70,12 +70,14 @@ var _ CryptoSetup = &cryptoSetup{}
 // chromeParrot makes the client emit Chrome's TLS ClientHello via uTLS instead of
 // crypto/tls. It forces enable0RTT off: see newUTLSQUICClient for why resumption
 // can't be carried across the two TLS stacks.
+// clientHelloHook is fork patch 4 (ECHOFOG-PATCH.md): see newUTLSQUICClient.
 func NewCryptoSetupClient(
 	connID protocol.ConnectionID,
 	tp *wire.TransportParameters,
 	tlsConf *tls.Config,
 	enable0RTT bool,
 	chromeParrot bool,
+	clientHelloHook func(ch0, c []byte) ([32]byte, error),
 	rttStats *utils.RTTStats,
 	qlogger qlogwriter.Recorder,
 	logger utils.Logger,
@@ -96,7 +98,7 @@ func NewCryptoSetupClient(
 	cs.allow0RTT = enable0RTT && !chromeParrot
 
 	if chromeParrot {
-		conn, err := newUTLSQUICClient(tlsConf)
+		conn, err := newUTLSQUICClient(tlsConf, cs.ourParams.Marshal(protocol.PerspectiveClient), clientHelloHook)
 		if err != nil {
 			return nil, err
 		}

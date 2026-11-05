@@ -28,6 +28,9 @@ import (
 // ClientHello with a zeroed random) and the private X25519 key of the hello's X25519 share, and
 // its 32 bytes become the random of the hello that is actually hashed and sent.
 func TestClientHelloHook(t *testing.T) {
+	if !customRandomHonoured() {
+		t.Skip("the Go toolchain ignores a custom tls.Config.Rand for X25519 unless GODEBUG=cryptocustomrand=1")
+	}
 	cert := testServerCertificate(t)
 	ln, err := ListenAddr("127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{cert},
@@ -40,13 +43,14 @@ func TestClientHelloHook(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	accepted := make(chan error, 1)
+	accepted := make(chan *Conn, 1)
 	go func() {
 		conn, err := ln.Accept(ctx)
-		if err == nil {
-			_ = conn.CloseWithError(0, "")
+		if err != nil {
+			accepted <- nil
+			return
 		}
-		accepted <- err
+		accepted <- conn
 	}()
 
 	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -77,10 +81,12 @@ func TestClientHelloHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	_ = conn.CloseWithError(0, "")
-	if err := <-accepted; err != nil {
-		t.Fatalf("accept: %v", err)
+	serverConn := <-accepted
+	if serverConn == nil {
+		t.Fatal("server did not accept the connection")
 	}
+	_ = serverConn.CloseWithError(0, "")
+	_ = conn.CloseWithError(0, "")
 
 	if calls != 1 {
 		t.Fatalf("hook called %d times, want once", calls)
@@ -361,6 +367,21 @@ func keyShareC(t *testing.T, msg []byte) []byte {
 	}
 	t.Fatal("hello has no X25519 key share")
 	return nil
+}
+
+// customRandomHonoured reports whether crypto/ecdh derives a key from the supplied reader.
+// Since Go 1.24 it uses the global CSPRNG unless GODEBUG=cryptocustomrand=1 is set.
+func customRandomHonoured() bool {
+	seed := bytes.Repeat([]byte{0x42}, 32)
+	k, err := ecdh.X25519().GenerateKey(bytes.NewReader(seed))
+	if err != nil {
+		return false
+	}
+	want, err := ecdh.X25519().NewPrivateKey(seed)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(k.PublicKey().Bytes(), want.PublicKey().Bytes())
 }
 
 func testServerCertificate(t *testing.T) tls.Certificate {
