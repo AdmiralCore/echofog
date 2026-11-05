@@ -10,7 +10,6 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 )
 
-
 // sink is a bare UDP socket that records who sent to it.
 func sink(t *testing.T) (*net.UDPConn, chan netip.AddrPort) {
 	t.Helper()
