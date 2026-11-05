@@ -51,6 +51,7 @@ const (
 // registry can say which frame a feature introduces; the service package owns the feature list.
 const (
 	FeaturePathMigration uint16 = 0x0001
+	FeatureIdlePadding   uint16 = 0x0003
 	FeatureObservedAddr  uint16 = 0x0004
 	FeatureCardPush      uint16 = 0x0006
 )

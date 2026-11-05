@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/mux"
+	"github.com/echofog/echofog-core/internal/v2/shape"
 )
 
 // AcceptConfig configures one Accept call. Local and Local.Device are required; everything else
@@ -51,13 +53,24 @@ type AcceptConfig struct {
 	Control *Control
 	// Timers replaces the mux session timers (tests and platform profiles).
 	Timers mux.Timers
-	// LowPower applies the platform profile's low_power flag (platforms.md §2).
-	LowPower bool
 	// Policy builds the mux stream policy from the negotiated services (T3.7a).
 	Policy PolicyFunc
 	// MessageTimeout and HandshakeTimeout override the handshake §11 defaults.
 	MessageTimeout   time.Duration
 	HandshakeTimeout time.Duration
+	// LowPower marks the platform as low_power (platforms.md §2): no standby paths and no
+	// idle-padding feature offered.
+	LowPower bool
+	// IdlePadding is the shape profile whose idle_pad_ms drives PADDING-only frames when the
+	// feature was negotiated (wire.md §6.4, §9). Nil disables idle padding.
+	IdlePadding *shape.Profile
+	// IdlePaddingRand is the deterministic random source for tests.
+	IdlePaddingRand *mrand.Rand
+	// OnEstablished receives the mux session before Accept returns, so the runtime can register
+	// it in its PATH_BIND binder without a window (wire.md §8.2).
+	OnEstablished func(*mux.Session)
+	// OnPathFailed reports every path failure of the session (wire.md §8.3).
+	OnPathFailed func(mux.PathFailure)
 }
 
 func (c *AcceptConfig) messageTimeout() time.Duration {
@@ -122,6 +135,8 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 		_ = c.Close()
 		return nil, err
 	}
+	local := cfg.Local
+	local.Features = FeaturesFor(local.Features, cfg.LowPower)
 	resp := handshake.NewResponder(handshake.ResponderConfig{
 		Static:     static,
 		PrevStatic: cfg.PrevStatic,
@@ -130,7 +145,7 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 		Suites:     cfg.Local.Suites,
 		Hidden:     cfg.Hidden,
 		Passes:     cfg.Passes,
-		Features:   cfg.Local.Features,
+		Features:   local.Features,
 		Services:   cfg.Local.Services,
 		Now:        clk.Now,
 		Offset:     cfg.Offset,
@@ -223,7 +238,10 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			if err != nil {
 				return nil, rejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, err)
 			}
-			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, cfg.Local, remoteOf(c), cfg.Control, cfg.Timers, cfg.Policy, cfg.LowPower)
+			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, local, remoteOf(c),
+				cfg.Control, cfg.Timers, cfg.Policy, cfg.LowPower,
+				newIdlePadding(cfg.IdlePadding, cfg.IdlePaddingRand, cfg.LowPower),
+				cfg.OnEstablished, cfg.OnPathFailed)
 		default:
 			_ = c.Close()
 			return nil, wrapSilent(fmt.Errorf("unexpected handshake action %d", reply.Action))

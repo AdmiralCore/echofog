@@ -349,18 +349,6 @@ func (c *captureEvents) has(kind node.EventKind) bool {
 	return false
 }
 
-func (c *captureEvents) count(kind node.EventKind) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	n := 0
-	for _, e := range c.list {
-		if e.Kind == kind {
-			n++
-		}
-	}
-	return n
-}
-
 func (c *captureEvents) last(kind node.EventKind) (node.Event, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

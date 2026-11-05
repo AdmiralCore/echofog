@@ -12,7 +12,10 @@ import (
 )
 
 var (
-	ErrPathFailed         = errors.New("mux: path failed")
+	ErrPathFailed = errors.New("mux: path failed")
+	// ErrPathAbandoned marks a path that was ended on purpose, locally or by the peer with
+	// PATH_ABANDON (wire.md §8.3). It matches errors.Is(err, ErrPathFailed) too.
+	ErrPathAbandoned      = fmt.Errorf("%w: path abandoned", ErrPathFailed)
 	ErrGoingAway          = errors.New("mux: session is going away")
 	ErrNoPath             = errors.New("mux: session has no live path")
 	ErrSessionClosed      = errors.New("mux: session closed")
