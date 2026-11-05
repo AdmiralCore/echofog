@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	filippo.io/edwards25519 v1.2.0
 	github.com/apernet/quic-go v0.63.1-0.20261004180939-a10df75c260c
+	github.com/awnumar/memcall v0.4.0
 	github.com/awnumar/memguard v0.23.0
 	github.com/dgraph-io/badger/v4 v4.9.0
 	github.com/google/uuid v1.6.0
@@ -39,7 +40,6 @@ require (
 require (
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
-	github.com/awnumar/memcall v0.4.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
