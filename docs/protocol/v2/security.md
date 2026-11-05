@@ -158,6 +158,16 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
     Product measures only: exclude selected applications from the VPN on Android (T12.2), warn in
     the UI, and say in the release notes that invisibility from applications is not promised. A VPN
     interface such as `tun0` stays visible to any application through the interface list.
+24. **Slot takeover on an unauthenticated Init (R-1, accepted).** An attacker who can forge the UDP source
+    address, knows the responder's `mask_pub` and the victim's IP:port, and sends an Init followed by data
+    packets keyed to the Init sender's keys can take the slot of a noise3 flow (wire §2.5, §2.6). The effect
+    is that one handshake fails; the client retries and gets through. Nothing is decrypted or altered. Accepted
+    as a residual risk (decision of 2026-11-05). Binding the slot to the address changes the wire behaviour,
+    so it is deferred to v2.1 and is to be reviewed together with an audit of the carriers.
+25. **Empty device unit on relayed sessions (F3, accepted).** On a relayed session the device unit of `Peer`
+    is empty, so the per-unit limit does not apply to that peer. The limits there are enforced by the session
+    itself and by the signer of the peer's card. The per-unit guarantee holds on direct paths only. Accepted
+    as a residual risk ("direct path only"); to be revisited with the relay limits of T6.1.
 
 ## 5. Coverage of the v1 weaknesses
 
