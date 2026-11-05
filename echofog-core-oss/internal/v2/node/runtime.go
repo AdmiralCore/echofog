@@ -320,6 +320,9 @@ func New(cfg Config) (*Runtime, error) {
 		OnChange: r.publicAddrChanged,
 	})
 	r.relayc = newRelayClient(r)
+	if b, ok := cfg.PunchNet.(interface{ bind(*Runtime) }); ok {
+		b.bind(r)
+	}
 	if !relaysForOthers(cfg.Profile) {
 		// N6: a card must not announce a relay that would answer UNSUPPORTED.
 		if err := cfg.Cards.ClearFlags(objects.FlagRelay); err != nil {
