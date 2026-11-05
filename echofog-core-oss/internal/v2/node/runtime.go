@@ -91,9 +91,9 @@ type Config struct {
 	// Passes resolves invitation and personal pass secrets for a hidden responder (T3.6).
 	Passes handshake.PassStore
 	// Access is the invitation, pass and masking-key manager of a hidden node (T3.6b). When set
-	// it also becomes Passes (unless one is supplied explicitly), the runtime redeems or renews
-	// access after a hidden-node session, installs its invitation listeners and follows the
-	// contacts-key rotation.
+	// it is also the responder's PassStore: the runtime redeems or renews access after a
+	// hidden-node session, installs its invitation listeners and follows the contacts-key
+	// rotation.
 	Access *access.Manager
 	// AccessListener builds the L0 listener of one invitation slot from its live masking keys.
 	// Nil builds the built-in noise3 listener from the slot address; a non-noise3 suite needs a
@@ -181,8 +181,9 @@ func New(cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("%w: no store", ErrConfig)
 	}
 
-	// Access is the responder's PassStore unless the caller supplied another one (T3.6b).
-	if cfg.Access != nil && cfg.Passes == nil {
+	// Access is always the responder's PassStore: redeeming a pass the handshake did not use
+	// would be inconsistent (T3.6b).
+	if cfg.Access != nil {
 		cfg.Passes = cfg.Access
 	}
 
