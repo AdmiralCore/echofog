@@ -328,6 +328,11 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	}
 	closeListeners(listeners)
 	if dhtTable != nil {
+		// Stop saves as well; the explicit save keeps the runtime contract visible and is
+		// idempotent.
+		if err := dhtTable.Save(); err != nil {
+			r.log.Warn("node: saving the dht routing table", "err", err)
+		}
 		dhtTable.Stop()
 	}
 	if table != nil {

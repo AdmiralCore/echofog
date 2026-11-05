@@ -125,6 +125,7 @@ type entry struct {
 	device    DeviceID
 	card      *objects.Card
 	seq       uint64
+	gen       uint64 // bumped on every update; guards in-flight checks
 	confirmed time.Time
 	units     []netip.Prefix // diversity units: IPv4 /24, IPv6 /32
 	wide      []netip.Prefix // dht.md §5 table cap: IPv4 /16, IPv6 /24
@@ -156,11 +157,17 @@ type Table struct {
 
 	mu        sync.Mutex
 	buckets   [BucketCount]*bucket
-	index     map[DeviceID]*entry
-	endpoints map[string]DeviceID
-	total     int
+	index     map[DeviceID]*entry // cards in memory
+	cold      map[DeviceID]*entry // metadata of cards kept on disk only
+	endpoints map[string]DeviceID // every known address, hot or cold
+	total     int                 // cards in memory
 	nextSave  time.Time
 	nextPrune time.Time
+
+	// writeMu serialises store operations. Every writer acquires it while still holding mu,
+	// then releases mu before the I/O; this makes the order of Puts and Deletes match the
+	// order of the table mutations they belong to.
+	writeMu sync.Mutex
 
 	started bool
 	stopped bool
@@ -195,6 +202,7 @@ func Open(cfg Config) (*Table, error) {
 		lookup:    cfg.Lookup,
 		log:       log,
 		index:     make(map[DeviceID]*entry),
+		cold:      make(map[DeviceID]*entry),
 		endpoints: make(map[string]DeviceID),
 	}
 	switch {
@@ -237,16 +245,24 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 	now := t.now()
 
 	t.mu.Lock()
-	old := t.index[id]
-	if card.Body.GetFlags()&objects.FlagUnlisted != 0 {
-		// An unlisted node is never in the table, whatever the source.
-		if old != nil {
-			t.removeLocked(old)
-		}
+	if t.stopped {
 		t.mu.Unlock()
+		return false
+	}
+	old := t.index[id]
+	if old == nil {
+		old = t.cold[id]
+	}
+	if card.Body.GetFlags()&objects.FlagUnlisted != 0 {
+		// An unlisted node is never in the table, whatever the source and wherever its card
+		// is kept. The store record is deleted even when the table knows nothing about the
+		// device: a replay of an older visible card must not survive this.
 		if old != nil {
-			t.deleteEntry(id)
+			t.deleteKnownLocked(old)
 		}
+		t.beginWriteLocked()
+		t.deleteEntry(id)
+		t.endWrite()
 		return false
 	}
 
@@ -260,18 +276,38 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 			t.mu.Unlock()
 			return false
 		}
-		t.removeEndpointsLocked(old)
-		old.card = cand.card
-		old.seq = cand.seq
-		old.confirmed = now
-		old.units = cand.units
-		old.wide = cand.wide
-		old.endpoints = cand.endpoints
-		t.addEndpointsLocked(old)
-		t.sortBucketLocked(t.bucketOf(id))
-		state := old.state()
-		t.mu.Unlock()
+		if t.index[id] == old {
+			// A hot entry stays hot: only the card and its bookkeeping change.
+			t.removeEndpointsLocked(old)
+			old.card = cand.card
+			old.seq = cand.seq
+			old.gen++
+			old.confirmed = now
+			old.units = cand.units
+			old.wide = cand.wide
+			old.endpoints = cand.endpoints
+			t.addEndpointsLocked(old)
+			t.sortBucketLocked(t.bucketOf(id))
+			state := old.state()
+			t.beginWriteLocked()
+			t.persist(state)
+			t.endWrite()
+			return true
+		}
+
+		// A cold entry is only metadata; the new card may return to memory if the bucket has
+		// room, otherwise it stays on disk with its updated seq and limits.
+		t.deleteColdLocked(old)
+		state := cand.state()
+		b := t.buckets[t.bucketOf(id)]
+		if len(b.entries) < K {
+			t.insertLocked(b, cand)
+		} else {
+			t.placeColdLocked(cand)
+		}
+		t.beginWriteLocked()
 		t.persist(state)
+		t.endWrite()
 		return true
 	}
 
@@ -283,8 +319,9 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 	if len(b.entries) < K {
 		t.insertLocked(b, cand)
 		state := cand.state()
-		t.mu.Unlock()
+		t.beginWriteLocked()
 		t.persist(state)
+		t.endWrite()
 		return true
 	}
 
@@ -296,15 +333,16 @@ func (t *Table) add(card *objects.Card, session bool) bool {
 	}
 	victim := b.entries[0] // buckets are ordered by confirmation time, oldest first
 	victimCard := victim.card
+	victimGen := victim.gen
 	b.checking = true
 	t.mu.Unlock()
 
-	t.checkAndReplace(b, victim, victimCard, cand)
+	t.checkAndReplace(b, victim, victimCard, victimGen, cand)
 	return false
 }
 
 // checkAndReplace pings the victim and inserts the candidate only when the check fails.
-func (t *Table) checkAndReplace(b *bucket, victim *entry, victimCard *objects.Card, cand *entry) {
+func (t *Table) checkAndReplace(b *bucket, victim *entry, victimCard *objects.Card, victimGen uint64, cand *entry) {
 	ctx, cancel := context.WithTimeout(context.Background(), PingTimeout)
 	err := t.pinger.Ping(ctx, victimCard)
 	cancel()
@@ -315,30 +353,36 @@ func (t *Table) checkAndReplace(b *bucket, victim *entry, victimCard *objects.Ca
 	var removed *entry
 	var added *entryState
 	if cur == victim {
-		if err != nil {
-			removed = t.removeLocked(victim)
-			if t.index[cand.device] == nil && t.fitsLocked(cand, nil) && len(b.entries) < K {
+		switch {
+		case err == nil:
+			victim.confirmed = t.now()
+			t.sortBucketLocked(t.bucketOf(victim.device))
+		case victim.gen != victimGen:
+			// The node was seen again while the check was in flight; the failed ping is
+			// not evidence that it is dead.
+			t.sortBucketLocked(t.bucketOf(victim.device))
+		default:
+			removed = t.deleteKnownLocked(victim)
+			if t.index[cand.device] == nil && t.cold[cand.device] == nil && t.fitsLocked(cand, nil) && len(b.entries) < K {
 				t.insertLocked(b, cand)
 				state := cand.state()
 				added = &state
 			}
-		} else {
-			victim.confirmed = t.now()
-			t.sortBucketLocked(t.bucketOf(victim.device))
 		}
 	}
-	t.mu.Unlock()
-
+	t.beginWriteLocked()
 	if removed != nil {
 		t.deleteEntry(removed.device)
 	}
 	if added != nil {
 		t.persist(*added)
 	}
+	t.endWrite()
 }
 
 // fitsLocked applies the diversity, address and table-wide caps to a candidate. ignore is the
-// entry the candidate is about to replace.
+// entry the candidate is about to replace. Cold entries (metadata of cards on disk) count too:
+// eviction from memory must not create a way around the caps.
 func (t *Table) fitsLocked(cand *entry, ignore *entry) bool {
 	for _, ep := range cand.endpoints {
 		if owner, ok := t.endpoints[ep]; ok {
@@ -349,11 +393,20 @@ func (t *Table) fitsLocked(cand *entry, ignore *entry) bool {
 		}
 	}
 
-	b := t.buckets[t.bucketOf(cand.device)]
+	idx := t.bucketOf(cand.device)
+	b := t.buckets[idx]
 	for _, unit := range cand.units {
 		n := 0
 		for _, e := range b.entries {
 			if e == ignore {
+				continue
+			}
+			if hasPrefix(e.units, unit) {
+				n++
+			}
+		}
+		for _, e := range t.cold {
+			if e == ignore || t.bucketOf(e.device) != idx {
 				continue
 			}
 			if hasPrefix(e.units, unit) {
@@ -378,6 +431,14 @@ func (t *Table) fitsLocked(cand *entry, ignore *entry) bool {
 					}
 				}
 			}
+			for _, e := range t.cold {
+				if e == ignore {
+					continue
+				}
+				if hasPrefix(e.wide, wide) {
+					n++
+				}
+			}
 			if n >= t.maxPer16 {
 				// At most 10 % of the table per /16 (IPv6 /24).
 				return false
@@ -398,24 +459,38 @@ func hasPrefix(list []netip.Prefix, want netip.Prefix) bool {
 
 // insertLocked puts a fresh entry into a bucket and trims the in-memory table.
 func (t *Table) insertLocked(b *bucket, e *entry) {
+	t.placeHotLocked(b, e)
+	t.trimMemoryLocked()
+}
+
+// placeHotLocked puts an entry into memory without trimming: the caller has already made room or
+// is restoring the table.
+func (t *Table) placeHotLocked(b *bucket, e *entry) {
 	b.entries = append(b.entries, e)
 	t.index[e.device] = e
 	t.addEndpointsLocked(e)
 	t.total++
 	b.nextRefresh = t.now().Add(refreshAfter(t.lowPower, t.rnd))
 	t.sortBucketLocked(t.bucketOf(e.device))
-	t.trimMemoryLocked()
 }
 
-// trimMemoryLocked keeps at most memLimit entries in memory. Entries dropped here stay in the
-// store (platforms.md §2: "the rest on disk").
+// placeColdLocked keeps the metadata of a card that is only on disk. Endpoints stay reserved so
+// that eviction cannot give an address to another device.
+func (t *Table) placeColdLocked(e *entry) {
+	e.card = nil
+	t.cold[e.device] = e
+	t.addEndpointsLocked(e)
+}
+
+// trimMemoryLocked keeps at most memLimit cards in memory. The evicted entries keep their seq,
+// endpoints and diversity metadata and stay in the store (platforms.md §2: "the rest on disk").
 func (t *Table) trimMemoryLocked() {
 	for t.memLimit > 0 && t.total > t.memLimit {
 		victim := t.leastRecentLocked()
 		if victim == nil {
 			return
 		}
-		t.removeLocked(victim)
+		t.evictLocked(victim)
 	}
 }
 
@@ -431,9 +506,17 @@ func (t *Table) leastRecentLocked() *entry {
 	return victim
 }
 
-func (t *Table) removeLocked(e *entry) *entry {
+// evictLocked moves the card out of memory but keeps its metadata and its store record.
+func (t *Table) evictLocked(e *entry) {
+	t.removeHotLocked(e)
+	e.card = nil
+	t.cold[e.device] = e
+}
+
+// removeHotLocked drops a card from memory and leaves its endpoints reserved for the cold entry.
+func (t *Table) removeHotLocked(e *entry) {
 	if e == nil {
-		return nil
+		return
 	}
 	b := t.buckets[t.bucketOf(e.device)]
 	for i, cur := range b.entries {
@@ -444,10 +527,44 @@ func (t *Table) removeLocked(e *entry) *entry {
 	}
 	if t.index[e.device] == e {
 		delete(t.index, e.device)
-		t.removeEndpointsLocked(e)
 		t.total--
 	}
+}
+
+// deleteColdLocked removes metadata kept for a card on disk.
+func (t *Table) deleteColdLocked(e *entry) {
+	if e == nil {
+		return
+	}
+	if t.cold[e.device] == e {
+		delete(t.cold, e.device)
+	}
+	t.removeEndpointsLocked(e)
+}
+
+// deleteKnownLocked removes an entry from memory and from the disk index, and frees its endpoints.
+func (t *Table) deleteKnownLocked(e *entry) *entry {
+	if e == nil {
+		return nil
+	}
+	t.removeHotLocked(e)
+	if t.cold[e.device] == e {
+		delete(t.cold, e.device)
+	}
+	t.removeEndpointsLocked(e)
 	return e
+}
+
+// beginWriteLocked must be called with mu held. It serialises the store operation and lets other
+// table operations proceed while the I/O runs. Because a writer takes writeMu before releasing
+// mu, the order of Puts and Deletes matches the order of the mutations.
+func (t *Table) beginWriteLocked() {
+	t.writeMu.Lock()
+	t.mu.Unlock()
+}
+
+func (t *Table) endWrite() {
+	t.writeMu.Unlock()
 }
 
 func (t *Table) addEndpointsLocked(e *entry) {
@@ -504,15 +621,14 @@ func bucketIndex(self, other DeviceID) int {
 	return -1
 }
 
-// Has reports whether a device is in the table.
+// Has reports whether a device is in the table, in memory or in the disk index.
 func (t *Table) Has(id DeviceID) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, ok := t.index[id]
-	return ok
+	return t.index[id] != nil || t.cold[id] != nil
 }
 
-// Card returns the card of a device, or nil.
+// Card returns the card of a device when it is in memory, or nil when it is kept only on disk.
 func (t *Table) Card(id DeviceID) *objects.Card {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -631,7 +747,8 @@ func (t *Table) Start(ctx context.Context) {
 	go t.maintain(runCtx)
 }
 
-// Stop stops the maintenance loop. It is idempotent and does not close the store.
+// Stop stops the maintenance loop and saves the table. It is idempotent and does not close the
+// store.
 func (t *Table) Stop() {
 	t.mu.Lock()
 	if t.stopped {
@@ -645,6 +762,9 @@ func (t *Table) Stop() {
 		cancel()
 	}
 	t.wg.Wait()
+	if err := t.Save(); err != nil {
+		t.log.Warn("dht: saving the routing table at shutdown", "err", err)
+	}
 }
 
 func (t *Table) maintain(ctx context.Context) {
@@ -686,59 +806,86 @@ func (t *Table) tick(ctx context.Context) {
 }
 
 // Prune pings entries that have not been confirmed for DeadAfter and drops the ones that do not
-// answer (dht.md §5).
+// answer (dht.md §5). It takes the same per-bucket check slot as a replacement, so two checks of
+// one bucket never overlap.
 func (t *Table) Prune(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// Ping the stale entries without holding the lock; the card pointer is immutable.
-	stale := make([]struct {
-		e    *entry
-		card *objects.Card
-	}, 0)
 	t.mu.Lock()
 	p := t.pinger
 	now := t.now()
+	type candidate struct {
+		idx int
+		e   *entry
+	}
+	var candidates []candidate
 	if p != nil {
-		for _, b := range t.buckets {
+		for i, b := range t.buckets {
+			if b.checking {
+				continue
+			}
 			for _, e := range b.entries {
-				if e.confirmed.IsZero() || now.Sub(e.confirmed) >= DeadAfter {
-					stale = append(stale, struct {
-						e    *entry
-						card *objects.Card
-					}{e: e, card: e.card})
+				if staleEntry(e, now) {
+					// One stale entry per bucket per pass: the rest wait for the next pass.
+					candidates = append(candidates, candidate{idx: i, e: e})
+					break
 				}
 			}
 		}
 	}
 	t.mu.Unlock()
-	if p == nil || len(stale) == 0 {
+	if p == nil {
 		return
 	}
 
-	var removed []*entry
-	for _, s := range stale {
+	for _, c := range candidates {
 		if ctx.Err() != nil {
-			break
+			return
 		}
+
+		t.mu.Lock()
+		b := t.buckets[c.idx]
+		if b.checking || t.index[c.e.device] != c.e || !staleEntry(c.e, t.now()) {
+			t.mu.Unlock()
+			continue
+		}
+		b.checking = true
+		card := c.e.card
+		gen := c.e.gen
+		t.mu.Unlock()
+
 		pctx, cancel := context.WithTimeout(ctx, PingTimeout)
-		err := p.Ping(pctx, s.card)
+		err := p.Ping(pctx, card)
 		cancel()
 
 		t.mu.Lock()
-		if t.index[s.e.device] == s.e {
-			if err != nil {
-				removed = append(removed, t.removeLocked(s.e))
-			} else {
-				s.e.confirmed = t.now()
-				t.sortBucketLocked(t.bucketOf(s.e.device))
+		b.checking = false
+		if t.index[c.e.device] == c.e {
+			switch {
+			case err == nil:
+				c.e.confirmed = t.now()
+				t.sortBucketLocked(c.idx)
+			case ctx.Err() != nil:
+				// The caller stopped us; a cancelled check is not evidence that the node is
+				// dead.
+			case c.e.gen != gen:
+				// The node was seen again while the check was in flight.
+				t.sortBucketLocked(c.idx)
+			default:
+				t.deleteKnownLocked(c.e)
+				t.beginWriteLocked()
+				t.deleteEntry(c.e.device)
+				t.endWrite()
+				continue
 			}
 		}
 		t.mu.Unlock()
 	}
-	for _, e := range removed {
-		t.deleteEntry(e.device)
-	}
+}
+
+func staleEntry(e *entry, now time.Time) bool {
+	return e.confirmed.IsZero() || now.Sub(e.confirmed) >= DeadAfter
 }
 
 // Refresh runs one lookup of a random ID in every bucket that has not been touched for its

@@ -50,8 +50,9 @@ func decodeEntry(value []byte) ([]byte, time.Time, bool) {
 	return value[entryHeader:], at, true
 }
 
-// persist writes one card and its confirmation time. A storage failure is logged but never
-// breaks the session that produced the card.
+// persist writes one card and its confirmation time. The caller must hold writeMu (through
+// beginWriteLocked); a storage failure is logged but never breaks the session that produced the
+// card.
 func (t *Table) persist(e entryState) {
 	if t.kv == nil || e.card == nil || e.card.Env == nil {
 		return
@@ -61,6 +62,7 @@ func (t *Table) persist(e entryState) {
 	}
 }
 
+// deleteEntry removes one record. The caller must hold writeMu (through beginWriteLocked).
 func (t *Table) deleteEntry(id DeviceID) {
 	if t.kv == nil {
 		return
@@ -84,7 +86,8 @@ func (t *Table) Save() error {
 			entries = append(entries, e.state())
 		}
 	}
-	t.mu.Unlock()
+	t.beginWriteLocked()
+	defer t.endWrite()
 
 	var firstErr error
 	for _, e := range entries {
@@ -143,22 +146,18 @@ func (t *Table) load() error {
 	})
 
 	for _, r := range cards {
-		if t.memLimit > 0 && t.total >= t.memLimit {
-			break
-		}
 		cand := newEntry(r.card, r.confirmed)
 		if !t.fitsLocked(cand, nil) {
 			continue
 		}
 		b := t.buckets[t.bucketOf(r.id)]
-		if len(b.entries) >= K {
+		if len(b.entries) < K && (t.memLimit == 0 || t.total < t.memLimit) {
+			t.placeHotLocked(b, cand)
 			continue
 		}
-		b.entries = append(b.entries, cand)
-		t.index[cand.device] = cand
-		t.addEndpointsLocked(cand)
-		t.total++
-		t.sortBucketLocked(t.bucketOf(r.id))
+		// The card stays on disk but its seq, endpoints and diversity still constrain new
+		// entries: eviction (or the in-memory cap at start) must not bypass the rules.
+		t.placeColdLocked(cand)
 	}
 	return nil
 }
