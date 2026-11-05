@@ -575,6 +575,48 @@ func TestTablePushCardOnlyReachesCardPushPeers(t *testing.T) {
 	})
 }
 
+// TestTableMaxSessionsEvictsTheOldest: the platform limit is enforced on insert, not only at
+// the next sweep.
+func TestTableMaxSessionsEvictsTheOldest(t *testing.T) {
+	now := time.Now()
+	a, b, c := newTestNode(t), newTestNode(t), newTestNode(t)
+	ac, bc, cc := a.cards(t, now), b.cards(t, now), c.cards(t, now)
+	aLocal := a.local(ac.peer, ac.own, []uint16{handshake.SuiteXK, handshake.SuiteXX}, false)
+	bLocal := b.local(bc.peer, bc.own, []uint16{handshake.SuiteXK, handshake.SuiteXX}, false)
+	cLocal := c.local(cc.peer, cc.own, []uint16{handshake.SuiteXK, handshake.SuiteXX}, false)
+
+	pairAB := memcarrier.NewQUIC()
+	estAB, _ := establishWith(t, pairAB, verifyCard(t, bc.peer, now), aLocal, session.AcceptConfig{Local: bLocal})
+	pairAC := memcarrier.NewQUIC()
+	estAC, _ := establishWith(t, pairAC, verifyCard(t, cc.peer, now), aLocal, session.AcceptConfig{Local: cLocal})
+
+	tbl, err := session.NewTable(session.TableConfig{MaxSessions: 1})
+	if err != nil {
+		t.Fatalf("NewTable: %v", err)
+	}
+	t.Cleanup(func() { _ = tbl.Close() })
+
+	if _, err := tbl.Add(aLocal, estAB); err != nil {
+		t.Fatalf("Add first: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond) // a later activity stamp for the second session
+	kept, err := tbl.Add(aLocal, estAC)
+	if err != nil {
+		t.Fatalf("Add second: %v", err)
+	}
+	if tbl.Len() != 1 {
+		t.Fatalf("table holds %d sessions, want 1", tbl.Len())
+	}
+	if kept != estAC {
+		t.Fatal("the newest session was not kept")
+	}
+	waitDone(t, estAB.Session, 5*time.Second)
+	var ga *mux.GoAwayError
+	if err := estAB.Session.Err(); !errors.As(err, &ga) || ga.Code != frame.CodeGoingAway {
+		t.Fatalf("evicted session ended with %v, want GOAWAY{going-away}", err)
+	}
+}
+
 func waitFor(t *testing.T, within time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(within)
