@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -633,9 +633,9 @@ func (m *CallManager) sendRawLocked(room *ActiveRoomState, to types.PeerID, acti
 	b = m.sealSignalLocked(room, to, b)
 	ob := room.Dispatcher.Outbox()
 	if byDatagramToo(action) {
-		ob.Send(to, media.ClassAudio, net_types.TypeCallSignalingLossy, b)
+		ob.Send(to, media.ClassAudio, transport.SignalLossy, b)
 	}
-	ob.Send(to, media.ClassControl, net_types.TypeCallSignaling, b) // the outbox logs drops
+	ob.Send(to, media.ClassControl, transport.Signal, b) // the outbox logs drops
 }
 
 func (m *CallManager) notifyAnnounceLocked(a signaling.StreamAnnouncePayload) {

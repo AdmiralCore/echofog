@@ -6,10 +6,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -325,6 +325,6 @@ func (m *CallManager) feedbackTickLocked(room *ActiveRoomState, now time.Time) {
 			continue
 		}
 		// a datagram on the audio lane: a late report is worth nothing, the next one comes soon
-		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, m.sealSignalLocked(room, up, b))
+		ob.Send(up, media.ClassAudio, transport.SignalLossy, m.sealSignalLocked(room, up, b))
 	}
 }

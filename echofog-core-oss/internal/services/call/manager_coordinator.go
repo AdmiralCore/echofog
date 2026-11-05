@@ -6,10 +6,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/internal/calllog"
 	"github.com/echofog/echofog-core/internal/services/call/media"
 	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -425,7 +425,7 @@ func (m *CallManager) reportLocked(room *ActiveRoomState, reporter types.PeerID,
 		sender, log := m.sender, m.logger
 		kicked = m.sealSignalLocked(room, target, kicked)
 		go func() {
-			if err := sender.SendRawFrame(target, net_types.TypeCallSignaling, kicked); err != nil {
+			if err := sender.SendRawFrame(target, transport.Signal, kicked); err != nil {
 				log.Debug("Could not tell a kicked member", "peer", calllog.Peer(target), "err", err)
 			}
 		}()
@@ -459,8 +459,8 @@ func (m *CallManager) nackUpstreamLocked(room *ActiveRoomState, streamID string,
 		}
 		ob := room.Dispatcher.Outbox()
 		b = m.sealSignalLocked(room, up, b)
-		ob.Send(up, media.ClassAudio, net_types.TypeCallSignalingLossy, b) // small and urgent: the audio lane
-		ob.Send(up, media.ClassControl, net_types.TypeCallSignaling, b)
+		ob.Send(up, media.ClassAudio, transport.SignalLossy, b) // small and urgent: the audio lane
+		ob.Send(up, media.ClassControl, transport.Signal, b)
 		return
 	}
 	m.debugOnce("nack-noup:"+streamID, "Lost video units but no parent to ask on this stream", "stream", streamID, "units", len(lost))

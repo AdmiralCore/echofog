@@ -14,6 +14,7 @@ import (
 	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/p2p/swarm"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/testutil"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/stretchr/testify/require"
@@ -51,9 +52,24 @@ type fallbackCounter struct {
 	reliable atomic.Int64
 }
 
-func (f *fallbackCounter) SendRawFrame(peer types.PeerID, t net_types.MessageType, b []byte) error {
+func (f *fallbackCounter) SendRawFrame(peer types.PeerID, kind transport.Kind, b []byte) error {
 	f.reliable.Add(1)
-	return f.Swarm.SendRawFrame(peer, t, b)
+	return f.Swarm.SendRawFrame(peer, testWireType(kind), b)
+}
+
+func (f *fallbackCounter) SendUnreliableFrame(peer types.PeerID, kind transport.Kind, b []byte) error {
+	return f.Swarm.SendUnreliableFrame(peer, testWireType(kind), b)
+}
+
+// testWireType maps the port's kind onto a swarm frame type for the real QUIC link.
+func testWireType(kind transport.Kind) net_types.MessageType {
+	switch kind {
+	case transport.MediaAudio:
+		return net_types.TypeCallMediaAudio
+	case transport.MediaVideo:
+		return net_types.TypeCallMediaVideo
+	}
+	return net_types.TypeUnknown
 }
 
 // Exit UDP keeps a margin under the datagram limit the connection reports after path MTU
@@ -108,7 +124,7 @@ func TestMediaFramesAtTheBudgetSurvivePMTUD(t *testing.T) {
 			b := make([]byte, size)
 			binary.BigEndian.PutUint32(b, seq)
 			seq++
-			require.True(t, out.Send(peer, ClassVideo, net_types.TypeCallMediaVideo, b))
+			require.True(t, out.Send(peer, ClassVideo, transport.MediaVideo, b))
 			time.Sleep(500 * time.Microsecond) // pace under the loopback queues: only size may lose frames
 		}
 		return from, seq

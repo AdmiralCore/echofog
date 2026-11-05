@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echofog/echofog-core/internal/network/net_types"
 	"github.com/echofog/echofog-core/internal/services/call/bridge"
+	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/pkg/api/types"
 	"github.com/pion/rtp"
@@ -243,7 +243,7 @@ type benchNet struct {
 
 type benchFrame struct {
 	from types.PeerID
-	typ  net_types.MessageType
+	typ  transport.Kind
 	data []byte
 }
 
@@ -254,15 +254,15 @@ type benchPort struct {
 	self types.PeerID
 }
 
-func (p benchPort) SendRawFrame(to types.PeerID, t net_types.MessageType, payload []byte) error {
+func (p benchPort) SendRawFrame(to types.PeerID, t transport.Kind, payload []byte) error {
 	return p.n.deliver(p.self, to, t, payload)
 }
 
-func (p benchPort) SendUnreliableFrame(to types.PeerID, t net_types.MessageType, payload []byte) error {
+func (p benchPort) SendUnreliableFrame(to types.PeerID, t transport.Kind, payload []byte) error {
 	return p.n.deliver(p.self, to, t, payload)
 }
 
-func (n *benchNet) deliver(from, to types.PeerID, t net_types.MessageType, payload []byte) error {
+func (n *benchNet) deliver(from, to types.PeerID, t transport.Kind, payload []byte) error {
 	n.mu.Lock()
 	q := n.nodes[to]
 	n.mu.Unlock()
@@ -286,11 +286,11 @@ func (n *benchNet) node() *CallManager {
 	go func() {
 		for f := range q {
 			switch f.typ {
-			case net_types.TypeCallSignaling, net_types.TypeCallSignalingLossy:
+			case transport.Signal, transport.SignalLossy:
 				_ = cm.handleIncomingSignaling(f.data, f.from)
-			case net_types.TypeCallMediaAudio:
+			case transport.MediaAudio:
 				_ = cm.handleIncomingAudio(f.data, f.from)
-			case net_types.TypeCallMediaVideo:
+			case transport.MediaVideo:
 				_ = cm.handleIncomingVideo(f.data, f.from)
 			}
 		}
