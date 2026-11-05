@@ -137,7 +137,10 @@ type path struct {
 	// pipeSeal: each stream is its own record pipe (carriers with native streams).
 	pipeSeal bool
 	ctrl     *Stream
-	created  time.Time
+	// seq is the attachment order in this session: the standby limit drops the path attached
+	// first. A wall-clock timestamp is not enough: time.Now may return equal values for two
+	// paths bound in the same tick, and then "oldest" would depend on map order.
+	seq uint64
 
 	lastSend atomic.Int64
 	lastRecv atomic.Int64
@@ -183,6 +186,7 @@ type Session struct {
 	paths        map[uint64]*path
 	active       *path
 	nextPathID   uint64
+	nextPathSeq  uint64
 	usedPeerIDs  map[uint64]bool
 	localStreams int
 	peerStreams  int
@@ -291,7 +295,7 @@ func (s *Session) Paths() (ids []uint64, active uint64, ok bool) {
 // on stream 0 before anything else (PATH_BIND_OK), after the guard hands streams to the session.
 func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStream, pre []byte) (*path, error) {
 	p := &path{
-		id: id, kind: kind, carrier: g.c, guard: g, sealed: g.c.Sealed(), created: time.Now(),
+		id: id, kind: kind, carrier: g.c, guard: g, sealed: g.c.Sealed(),
 		streams: map[*Stream]struct{}{}, pings: map[[8]byte]*pingWait{},
 	}
 	// Sealed mode: a byte-stream carrier seals the whole connection as one pipe; a carrier with
@@ -303,6 +307,8 @@ func (s *Session) attachPath(id uint64, kind PathKind, g *Guard, control RawStre
 	p.ctrl = s.newStream(p, control, true, true)
 	p.ctrl.wmu.Lock()
 	s.mu.Lock()
+	p.seq = s.nextPathSeq
+	s.nextPathSeq++
 	s.paths[id] = p
 	if s.active == nil || better(p, s.active) {
 		s.active = p
@@ -345,7 +351,7 @@ func (s *Session) trimStandby() {
 				continue
 			}
 			n++
-			if oldest == nil || q.created.Before(oldest.created) {
+			if oldest == nil || q.seq < oldest.seq {
 				oldest = q
 			}
 		}

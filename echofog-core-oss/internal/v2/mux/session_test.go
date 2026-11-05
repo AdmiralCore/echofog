@@ -2,6 +2,7 @@ package mux
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -330,18 +331,36 @@ func waitFor(t testing.TB, cond func() bool) {
 func TestSessionStreamLimit(t *testing.T) {
 	pr := sessionPair(t, false, func(a, b *Config) { a.MaxStreams = 1000; b.MaxStreams = 3 })
 	ctx := ctxT(t)
-	var sts []*Stream
-	for i := 0; i < 4; i++ {
-		st, err := pr.a.OpenStream(ctx, 3, 2)
-		if err != nil {
+	for i := 0; i < 3; i++ {
+		if _, err := pr.a.OpenStream(ctx, 3, 2); err != nil {
 			t.Fatal(err)
 		}
-		sts = append(sts, st)
 	}
-	_, err := sts[3].ReadFrame()
+	// Wait until the peer has all three open: the fourth stream then meets a full peer limit
+	// whatever the order in which the accept goroutines run (guard.go hands each stream over in
+	// its own goroutine, so the refused stream is not necessarily the one opened last).
+	for i := 0; i < 3; i++ {
+		if _, err := pr.b.AcceptStream(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st4, err := pr.a.OpenStream(ctx, 3, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st4.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st4.ReadFrame()
 	var ce *CloseError
-	if !errors.As(err, &ce) || ce.Code != frame.CodeRefused {
+	if !errors.As(err, &ce) || ce.Code != frame.CodeRefused || !ce.Remote {
 		t.Fatalf("fourth stream: %v, want CLOSE{refused}", err)
+	}
+	// Nothing else was handed to the service.
+	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if _, err := pr.b.AcceptStream(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("peer accepted a fourth stream: %v", err)
 	}
 	if pr.abuseB.Load() != 0 {
 		t.Fatal("refusal counted as abuse")
