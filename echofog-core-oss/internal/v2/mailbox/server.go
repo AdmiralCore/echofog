@@ -627,6 +627,9 @@ func (s *Server) Fetch(ctx context.Context, p Peer, m Fetch) ([]Item, bool, erro
 			s.removeWaiter(string(m.Queue), ch)
 			return nil, false, nil
 		}
+		if remaining > s.lim.FetchWait {
+			remaining = s.lim.FetchWait
+		}
 		select {
 		case <-ch:
 		case <-s.aft(remaining):

@@ -42,6 +42,9 @@ loop:
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			break loop
+		default:
+			s.fail(st, frame.CodeOverloaded)
+			break loop
 		}
 		wg.Add(1)
 		go func(f frame.Frame) {
