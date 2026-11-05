@@ -265,3 +265,59 @@ func TestMemCapLimitsCircuits(t *testing.T) {
 		t.Fatalf("defaults %+v", d)
 	}
 }
+
+// H1 (accept 1): the requester's own limits are checked and reserved before the target is
+// looked up, so a requester at a limit gets the same answer, at the same time, whether the target
+// exists or not. The prober learns nothing about presence (§6.3).
+func TestLimitRefusalDoesNotDependOnTarget(t *testing.T) {
+	probe := func(t *testing.T, a *side, target [32]byte) (uint32, time.Duration) {
+		t.Helper()
+		start := time.Now()
+		_, err := Dial(a.w.ctx, a.open, a.w.rNode, target, ConnectOptions{})
+		var re *RefusedError
+		if !errors.As(err, &re) {
+			t.Fatalf("got %v, want a REFUSED", err)
+		}
+		return re.Reason, time.Since(start)
+	}
+	var unknown [32]byte
+	unknown[0] = 7
+	check := func(t *testing.T, a, exists *side) {
+		t.Helper()
+		r1, d1 := probe(t, a, exists.node)
+		r2, d2 := probe(t, a, unknown)
+		if r1 != r2 {
+			t.Fatalf("existing target: reason %d, absent target: reason %d", r1, r2)
+		}
+		if d1 > d2+150*time.Millisecond || d2 > d1+150*time.Millisecond {
+			t.Fatalf("existing target answered after %v, absent after %v", d1, d2)
+		}
+	}
+	const delay = 600 * time.Millisecond
+	t.Run("per session", func(t *testing.T) {
+		w := newWorld(t, ServerConfig{Delay: func() time.Duration { return delay }, Limits: Limits{PerSession: 1}})
+		a, b, c := w.join(newTNode(t), "10.0.0.1", true), w.join(newTNode(t), "10.0.0.2", true), w.join(newTNode(t), "10.0.0.3", true)
+		if _, err := a.dial(b); err != nil {
+			t.Fatal(err)
+		}
+		check(t, a, c)
+	})
+	t.Run("per ip", func(t *testing.T) {
+		w := newWorld(t, ServerConfig{Delay: func() time.Duration { return delay }, Limits: Limits{PerIP: 1}})
+		a1, a2 := w.join(newTNode(t), "10.0.0.9", true), w.join(newTNode(t), "10.0.0.9", true)
+		b, c := w.join(newTNode(t), "10.0.0.2", true), w.join(newTNode(t), "10.0.0.3", true)
+		if _, err := a1.dial(b); err != nil {
+			t.Fatal(err)
+		}
+		check(t, a2, c)
+	})
+	t.Run("total", func(t *testing.T) {
+		w := newWorld(t, ServerConfig{Delay: func() time.Duration { return delay }, Limits: Limits{Total: 1}})
+		x, a := w.join(newTNode(t), "10.0.0.1", true), w.join(newTNode(t), "10.0.0.5", true)
+		b, c := w.join(newTNode(t), "10.0.0.2", true), w.join(newTNode(t), "10.0.0.3", true)
+		if _, err := x.dial(b); err != nil {
+			t.Fatal(err)
+		}
+		check(t, a, c)
+	})
+}
