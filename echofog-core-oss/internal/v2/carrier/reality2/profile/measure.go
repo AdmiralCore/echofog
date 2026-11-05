@@ -240,8 +240,10 @@ func (p *Prober) sampleTCP(ctx context.Context, t Target) (Vector, sampleInfo, e
 	// Let the server's post-handshake records arrive: crypto/tls reads them only on a Read.
 	_ = uc.SetReadDeadline(p.cfg.Now().Add(p.cfg.Settle))
 	var scratch [4096]byte
+	var pre []byte // application bytes read while settling (an HTTP/2 SETTINGS frame), replayed
 	for {
 		n, err := uc.Read(scratch[:])
+		pre = append(pre, scratch[:n]...)
 		if err != nil || n == 0 {
 			var ne net.Error
 			if err != nil && !(errors.As(err, &ne) && ne.Timeout()) {
@@ -260,9 +262,24 @@ func (p *Prober) sampleTCP(ctx context.Context, t Target) (Vector, sampleInfo, e
 	info.alpn = st.NegotiatedProtocol
 	info.leafKey, info.certVerified = describeLeaf(st.PeerCertificates, t.SNI)
 	if !p.cfg.NoRequest {
-		info.requestOK, info.requestInfo = headTCP(ctx, uc, st.NegotiatedProtocol, t.SNI)
+		info.requestOK, info.requestInfo = headTCP(ctx, &replayConn{Conn: uc, pre: pre}, st.NegotiatedProtocol, t.SNI)
 	}
 	return v, info, nil
+}
+
+// replayConn serves bytes already read before it reads from the connection.
+type replayConn struct {
+	net.Conn
+	pre []byte
+}
+
+func (c *replayConn) Read(b []byte) (int, error) {
+	if len(c.pre) > 0 {
+		n := copy(b, c.pre)
+		c.pre = c.pre[n:]
+		return n, nil
+	}
+	return c.Conn.Read(b)
 }
 
 func headTCP(ctx context.Context, c net.Conn, alpn, host string) (bool, string) {

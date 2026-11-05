@@ -159,6 +159,8 @@ type Diff struct {
 	// raised to the cover's length by padding (an X.509 extension for the certificate); a longer
 	// position cannot be fixed.
 	PadFixable bool
+	// Slots are the positions of a length difference.
+	Slots []int
 }
 
 func (d Diff) String() string {
@@ -270,6 +272,7 @@ func shape(s []Slot) string {
 // the range the cover showed.
 func lengthDiff(item string, cover, ours []Slot) (Diff, bool) {
 	var bad []string
+	var idx []int
 	fixable := true
 	for i := range cover {
 		c, o := cover[i], ours[i]
@@ -277,6 +280,7 @@ func lengthDiff(item string, cover, ours []Slot) (Diff, bool) {
 			continue
 		}
 		bad = append(bad, fmt.Sprintf("#%d cover %d-%d ours %d-%d", i, c.Min, c.Max, o.Min, o.Max))
+		idx = append(idx, i)
 		if o.Max >= c.Min {
 			fixable = false
 		}
@@ -284,7 +288,7 @@ func lengthDiff(item string, cover, ours []Slot) (Diff, bool) {
 	if len(bad) == 0 {
 		return Diff{}, false
 	}
-	return Diff{Item: item, Cover: "see detail", Ours: "see detail", Detail: fmt.Sprint(bad), PadFixable: fixable}, true
+	return Diff{Item: item, Cover: "see detail", Ours: "see detail", Detail: fmt.Sprint(bad), PadFixable: fixable, Slots: idx}, true
 }
 
 // postCountItem names the item a difference in the number of post-handshake records belongs to:
@@ -294,4 +298,13 @@ func postCountItem(decrypted bool) string {
 		return ItemPacking
 	}
 	return ItemTicketCount
+}
+
+// Observable returns p without what only the key log gave (the decrypted messages): the part an
+// observer has. A verdict about what an observer can tell apart is Compare of Observable
+// profiles; Compare of the full profiles explains the differences.
+func (p *CoverProfile) Observable() *CoverProfile {
+	c := *p
+	c.Decrypted, c.Inner, c.Tickets = false, nil, nil
+	return &c
 }

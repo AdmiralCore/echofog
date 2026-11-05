@@ -33,6 +33,9 @@ type OwnConfig struct {
 	ALPN string
 	// Key is x509.ECDSA (P-256) or x509.RSA (2048).
 	Key x509.PublicKeyAlgorithm
+	// SCIDLen is the length of the connection IDs the QUIC server issues (quic.Transport
+	// ConnectionIDLength); zero keeps the library default.
+	SCIDLen int
 	// NoTickets turns session tickets off (used to build a deliberately different server).
 	NoTickets bool
 }
@@ -135,8 +138,14 @@ func StartOwnQUIC(cfg OwnConfig) (*OwnServer, error) {
 	}
 	_, srvTLS := quicx.Reality2TLSConfig(cfg.Group, &cert)
 	srvTLS.SessionTicketsDisabled = cfg.NoTickets
-	ql, err := quic.ListenAddr("127.0.0.1:0", srvTLS, &quic.Config{EnableDatagrams: true})
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
+		return nil, err
+	}
+	tr := &quic.Transport{Conn: udp, ConnectionIDLength: cfg.SCIDLen}
+	ql, err := tr.Listen(srvTLS, &quic.Config{EnableDatagrams: true})
+	if err != nil {
+		_ = udp.Close()
 		return nil, fmt.Errorf("profile: own QUIC server: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -156,5 +165,5 @@ func StartOwnQUIC(cfg OwnConfig) (*OwnServer, error) {
 			}()
 		}
 	}()
-	return &OwnServer{Addr: ql.Addr().String(), stop: func() { cancel(); _ = ql.Close(); wg.Wait() }}, nil
+	return &OwnServer{Addr: ql.Addr().String(), stop: func() { cancel(); _ = ql.Close(); _ = tr.Close(); wg.Wait() }}, nil
 }

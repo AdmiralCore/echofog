@@ -122,9 +122,9 @@ func expandLabel(secret []byte, label string, n int) []byte {
 	return out
 }
 
-// serverInitialCrypto decrypts a server Initial packet and returns the CRYPTO frame bytes that
-// start at offset 0.
-func serverInitialCrypto(p quicPacket, clientDCID []byte) ([]byte, error) {
+// serverInitialCrypto decrypts a server Initial packet and returns its CRYPTO fragments by
+// offset. A ServerHello with a post-quantum key share does not fit one packet.
+func serverInitialCrypto(p quicPacket, clientDCID []byte) (map[int][]byte, error) {
 	secret := hkdf.Extract(sha256.New, clientDCID, quicV1Salt)
 	s := expandLabel(secret, "server in", 32)
 	key, iv, hp := expandLabel(s, "quic key", 16), expandLabel(s, "quic iv", 12), expandLabel(s, "quic hp", 16)
@@ -165,11 +165,11 @@ func serverInitialCrypto(p quicPacket, clientDCID []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: server Initial does not decrypt", ErrMalformed)
 	}
-	return cryptoStream(plain), nil
+	return cryptoFrags(plain), nil
 }
 
-// cryptoStream returns the contiguous CRYPTO data from offset 0 of a decrypted Initial payload.
-func cryptoStream(plain []byte) []byte {
+// cryptoFrags returns the CRYPTO frames of a decrypted Initial payload by offset.
+func cryptoFrags(plain []byte) map[int][]byte {
 	frags := map[int][]byte{}
 	for len(plain) > 0 {
 		t, n, ok := varint(plain)
@@ -184,7 +184,7 @@ func cryptoStream(plain []byte) []byte {
 			for i := range v {
 				x, m, ok := varint(plain)
 				if !ok {
-					return joinCrypto(frags)
+					return frags
 				}
 				v[i], plain = x, plain[m:]
 			}
@@ -192,7 +192,7 @@ func cryptoStream(plain []byte) []byte {
 				for k := 0; k < 2; k++ {
 					_, m, ok := varint(plain)
 					if !ok {
-						return joinCrypto(frags)
+						return frags
 					}
 					plain = plain[m:]
 				}
@@ -201,7 +201,7 @@ func cryptoStream(plain []byte) []byte {
 				for k := 0; k < 3; k++ {
 					_, m, ok := varint(plain)
 					if !ok {
-						return joinCrypto(frags)
+						return frags
 					}
 					plain = plain[m:]
 				}
@@ -209,22 +209,23 @@ func cryptoStream(plain []byte) []byte {
 		case 0x06: // CRYPTO
 			off, m, ok := varint(plain)
 			if !ok {
-				return joinCrypto(frags)
+				return frags
 			}
 			plain = plain[m:]
 			l, m, ok := varint(plain)
 			if !ok || uint64(len(plain)-m) < l || off > maxCaptureBytes {
-				return joinCrypto(frags)
+				return frags
 			}
 			frags[int(off)] = plain[m : m+int(l)]
 			plain = plain[m+int(l):]
 		default:
-			return joinCrypto(frags)
+			return frags
 		}
 	}
-	return joinCrypto(frags)
+	return frags
 }
 
+// joinCrypto returns the contiguous CRYPTO data from offset 0.
 func joinCrypto(frags map[int][]byte) []byte {
 	var out []byte
 	for {
@@ -251,7 +252,7 @@ func ObserveQUIC(events []Event) (Vector, error) {
 	}
 	var clientDCID []byte
 	haveClient := false
-	var hs []byte
+	frags := map[int][]byte{}
 	unit := 0
 	sawSCID := false
 	for _, e := range events {
@@ -282,9 +283,11 @@ func ObserveQUIC(events []Event) (Vector, error) {
 			if !sawSCID && p.kind != "1rtt" && p.kind != "vneg" {
 				v.SCIDLen, sawSCID = len(p.scid), true
 			}
-			if p.kind == "initial" && p.version == quicV1 && len(hs) == 0 {
+			if p.kind == "initial" && p.version == quicV1 {
 				if c, err := serverInitialCrypto(p, clientDCID); err == nil {
-					hs = c
+					for off, d := range c {
+						frags[off] = d
+					}
 				}
 			}
 		}
@@ -294,5 +297,5 @@ func ObserveQUIC(events []Event) (Vector, error) {
 		}
 	}
 	// A QUIC ServerHello can be preceded by nothing else in the Initial CRYPTO stream.
-	return finishHello(v, hs)
+	return finishHello(v, joinCrypto(frags))
 }
