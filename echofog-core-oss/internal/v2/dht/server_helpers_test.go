@@ -2,6 +2,7 @@ package dht
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -106,5 +107,16 @@ func respondAll(c *ServerConfig) { c.Responsible = func([32]byte) bool { return 
 // publicCard builds a card of a device seed with a public address.
 func publicCard(t *testing.T, seed, seq uint64, scope objects.Scope, flags uint32) *objects.Card {
 	t.Helper()
-	return buildCard(t, seed, seq, srvNow, scope, flags, testAddr("198.51.100.7", 4430))
+	// A distinct address and network per seed: the routing table keeps one entry per endpoint and
+	// two per network in a bucket.
+	host := fmt.Sprintf("%d.%d.%d.7", 20+(seed>>16)&0x7f, (seed>>8)&0xff, seed&0xff)
+	return buildCard(t, seed, seq, srvNow, scope, flags, testAddr(host, 4430))
+}
+
+// checkInvariants fails the test when a counter, heap or cache disagrees with the stored records.
+func (s *Server) checkInvariants(t testing.TB) {
+	t.Helper()
+	if err := s.checkInvariantsErr(); err != nil {
+		t.Fatalf("server invariants: %v", err)
+	}
 }

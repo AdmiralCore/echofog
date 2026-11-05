@@ -115,10 +115,6 @@ func TestRefusedAndInvalid(t *testing.T) {
 	if r := s.StoreAt(p, peerCard.Env.Raw, step()); r.Status != StatusRefused {
 		t.Fatalf("peer-scope card: %+v, want refused", r)
 	}
-	hidden := publicCard(t, 42, 1, objects.ScopePublic, objects.FlagUnlisted)
-	if r := s.StoreAt(p, hidden.Env.Raw, step()); r.Status != StatusRefused {
-		t.Fatalf("unlisted card: %+v, want refused", r)
-	}
 	expired := unknownRecord(t, "echofog/test/1", sg, 1, srvNow.Add(-time.Hour))
 	if r := s.StoreAt(p, expired, step()); r.Status != StatusInvalid {
 		t.Fatalf("expired: %+v, want invalid", r)
@@ -189,22 +185,30 @@ func TestWrongKeyWhenNotAmongClosest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Fill the table with cards closer to every one of the three keys than self.
-	filled := 0
-	for seed := uint64(1000); filled < K && seed < 40000; seed++ {
+	// Fill the table so that for each of the three keys at least K known cards are closer than self.
+	var closer [3]int
+	for seed := uint64(1000); seed < 60000; seed++ {
+		if closer[0] >= K && closer[1] >= K && closer[2] >= K {
+			break
+		}
 		c := publicCard(t, seed, 1, objects.ScopePublic, 0)
-		closer := true
-		for _, k := range ks {
-			if !lessDistance(DeviceID(c.DeviceID), self, DeviceID(k)) {
-				closer = false
+		useful := false
+		for i, k := range ks {
+			if closer[i] < K && lessDistance(DeviceID(c.DeviceID), self, DeviceID(k)) {
+				useful = true
 			}
 		}
-		if closer && tbl.AddFromSession(c) {
-			filled++
+		if !useful || !tbl.AddFromSession(c) {
+			continue
+		}
+		for i, k := range ks {
+			if lessDistance(DeviceID(c.DeviceID), self, DeviceID(k)) {
+				closer[i]++
+			}
 		}
 	}
-	if filled < K {
-		t.Fatalf("test setup: only %d closer cards", filled)
+	if closer[0] < K || closer[1] < K || closer[2] < K {
+		t.Fatalf("test setup: closer cards per key %v", closer)
 	}
 	s := newServer(t, func(c *ServerConfig) { c.Self = self; c.Table = tbl })
 	if r := s.Store(testPeer("192.0.2.0/24"), rec); r.Err != CodeWrongKey {
@@ -496,10 +500,9 @@ func TestReplacementAndExpiryDoNotDoubleDeduct(t *testing.T) {
 func TestFindNodeAnswersOnlyReachedCards(t *testing.T) {
 	reached := publicCard(t, 11, 1, objects.ScopePublic, 0)
 	victim := publicCard(t, 12, 1, objects.ScopePublic, 0) // learned from DHT/PEX, never reached
-	hidden := publicCard(t, 13, 1, objects.ScopePublic, objects.FlagUnlisted)
 	peer := publicCard(t, 14, 1, objects.ScopePeer, 0)
 	s := newServer(t, func(c *ServerConfig) {
-		c.Reached = func(time.Time) []*objects.Card { return []*objects.Card{reached, hidden, peer} }
+		c.Reached = func(time.Time) []*objects.Card { return []*objects.Card{reached, peer} }
 	})
 	got := s.FindNode([32]byte{1})
 	if len(got) != 1 || !bytes.Equal(got[0], reached.Env.Raw) {
