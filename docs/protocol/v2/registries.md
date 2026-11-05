@@ -297,7 +297,9 @@ unusable (the object is skipped, not an error for the whole message).
 ## 9. DHT record kinds
 
 See [dht.md](dht.md). A record's kind is its object label. The key rule says how the DHT key is
-derived; "signer" means `SHA-256("echofog/dht2/key" ‖ u32(day) ‖ u8 len(label) ‖ label ‖ signer_node_id)`
+derived; "signer" means `SHA-256("echofog/dht2/key" ‖ u32(day) ‖ u8 len(label) ‖ label ‖ signer_id)`, where `signer_id` is the
+SHA-256 of the envelope signer's akey (the device ID for objects a device signs, the node ID for the account-signed
+device list; [dht.md](dht.md) §2)
 and "release" means `SHA-256("echofog/dht2/release" ‖ u32(day))`, with `day = floor(unix / 86400)`.
 
 | Label | Key rule | Max record (envelope) | Max lifetime | Per signer | Replicas |

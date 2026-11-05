@@ -1,0 +1,52 @@
+// Frames of dht/2 (docs/protocol/v2/services.md §2).
+//
+// Every frame body is canonical protobuf (objects.md §2.3, versioning.md §3.5). Field numbers are
+// never reused. The "Max" values are in service.builtin and are enforced by the frame limiter.
+syntax = "proto3";
+
+package echofog.v2.dht;
+
+option go_package = "github.com/echofog/echofog-core/internal/v2/dht/pb;dhtpb";
+
+// 0x40 FIND_NODE.
+message FindNode {
+  uint64 req = 1;
+  bytes target = 2;  // 32 bytes
+}
+
+// 0x41 NODES.
+message Nodes {
+  uint64 req = 1;
+  repeated bytes cards = 2;  // at most 20 signed card envelopes
+}
+
+// 0x42 FIND_VALUE.
+message FindValue {
+  uint64 req = 1;
+  bytes key = 2;  // 32 bytes
+}
+
+// 0x43 VALUE: the record when present, otherwise up to 20 closer cards.
+message Value {
+  uint64 req = 1;
+  bytes record = 2;
+  repeated bytes cards = 3;
+}
+
+// 0x44 STORE.
+message Store {
+  uint64 req = 1;
+  bytes record = 2;
+}
+
+// 0x45 STORED. status: 0 stored, 1 stale, 2 refused, 3 quota, 4 invalid.
+message Stored {
+  uint64 req = 1;
+  uint32 status = 2;
+}
+
+// 0x46 ERROR. code: 0x100 bad-record, 0x101 wrong-key.
+message Error {
+  uint64 req = 1;
+  uint32 code = 2;
+}

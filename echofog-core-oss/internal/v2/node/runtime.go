@@ -153,6 +153,7 @@ type Runtime struct {
 	serving    sync.Map
 	dgrams     *datagramBroker
 	dht        *dht.Table
+	dhtServer  *dht.Server
 	modules    sync.Once
 	started    bool
 	stopped    bool
