@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -229,4 +230,77 @@ func waitUntil(t *testing.T, d time.Duration, what string, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// A hidden node is registered at its relays under rendezvous IDs only (services.md §6.3): a contact
+// with the personal pass reaches it through R by the ID of the day, and R never saw the node ID in a
+// CONNECT.
+func TestHiddenNodeReachedThroughRendezvous(t *testing.T) {
+	f := newAccessFactory()
+	server, contacts, mgr := newHiddenAccessNode(t, f.build)
+	_ = contacts
+	rq := newCarrierQueue()
+	r := newTestNodeFull(t, cards.Visible, false, []carrier.Listener{rq}, nil, relayRoleCards, func(c *node.Config) {
+		c.Profile = node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleRelay}}
+	})
+	client := newCardPushClient(t)
+	mod := &fakeModule{got: make(chan node.Peer, 4), errs: make(chan error, 4)}
+	registerFakeModule(t, server.rt, mod)
+	r.start(t)
+	server.start(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Second)
+	defer cancel()
+
+	// The client redeems an invitation and learns the personal pass and the peer card.
+	minted, err := server.rt.MintInvitation(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := objects.VerifyCard(minted.Card, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := memcarrier.NewQUIC()
+	f.latest(minted.Listener).push(first.Server)
+	_, sess1, err := client.rt.Session(ctx, server.id.DeviceID, node.DialOpt{Card: invite, Carrier: first.Client, AccessSecret: minted.Secret})
+	if err != nil {
+		t.Fatalf("first session: %v", err)
+	}
+	var personal *access.Info
+	waitFor(t, 10*time.Second, "personal pass", func() bool { personal = personalPass(t, mgr); return personal != nil })
+	var peerCard *objects.Card
+	waitFor(t, 10*time.Second, "peer card", func() bool { peerCard = client.rt.Cards().Peer(server.id.DeviceID); return peerCard != nil })
+	_ = sess1.Close()
+
+	// Both connect out to R; the hidden node registers by itself.
+	for _, n := range []*testNode{server, client} {
+		pair := memcarrier.NewQUIC()
+		rq.push(pair.Server)
+		if _, _, err := n.rt.Session(ctx, r.id.DeviceID, node.DialOpt{Card: r.peerCard(t), Carrier: pair.Client}); err != nil {
+			t.Fatalf("dial R: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	var p node.Peer
+	var st *mux.Stream
+	waitUntil(t, 15*time.Second, "rendezvous session through R", func() bool {
+		var err error
+		p, st, err = client.rt.Open(ctx, server.id.DeviceID, service.Chat, node.DialOpt{
+			Card: peerCard, AccessSecret: personal.Secret, ViaRelay: true})
+		return err == nil
+	})
+	if p.Path != mux.PathRelay {
+		t.Fatalf("path %v, want relay", p.Path)
+	}
+	_ = st.Close()
+	select {
+	case got := <-mod.got:
+		if got.Device != client.id.DeviceID {
+			t.Fatalf("hidden node sees %x", got.Device)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("hidden node's module saw nothing")
+	}
 }
