@@ -659,7 +659,9 @@ func TestTCPSlotHeldUntilTheTokenIsChecked(t *testing.T) {
 func TestTCPProxyHasALifetime(t *testing.T) {
 	old := coverMaxLife
 	coverMaxLife = 600 * time.Millisecond
-	defer func() { coverMaxLife = old }()
+	// Restored by a cleanup registered before the rig's: it runs after the listener has closed and
+	// its proxies have ended, so no proxy goroutine still reads the variable (-race).
+	t.Cleanup(func() { coverMaxLife = old })
 	hold, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
