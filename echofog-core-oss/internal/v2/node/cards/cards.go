@@ -339,7 +339,20 @@ func (b *CardBuilder) issueLocked(ctx context.Context, scope objects.Scope, invi
 	}
 	notAfter := nowUnix + uint64(lifetime/time.Second)
 
+	devicePub, err := parseDeviceKey(b.cfg.Device)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkDeviceList(b.cfg.Devices, b.cfg.Account, devicePub, now); err != nil {
+		return nil, err
+	}
+
 	listeners := make([]Listener, 0, len(b.cfg.Listeners)+len(extra))
+	if len(extra) > 0 {
+		if err := validateExtraListeners(b.cfg.Listeners, extra); err != nil {
+			return nil, err
+		}
+	}
 	listeners = append(listeners, cloneListeners(b.cfg.Listeners)...)
 	listeners = append(listeners, cloneListeners(extra)...)
 
@@ -375,10 +388,6 @@ func (b *CardBuilder) issueLocked(ctx context.Context, scope objects.Scope, invi
 	seq := b.seq + 1
 	if nowUnix > seq {
 		seq = nowUnix
-	}
-	devicePub, err := parseDeviceKey(b.cfg.Device)
-	if err != nil {
-		return nil, err
 	}
 	var envelope []byte
 	err = b.cfg.Device.WithSigner(func(signer *keys.Signer) error {
@@ -447,6 +456,6 @@ func unix(t time.Time) uint64 {
 	return uint64(s)
 }
 
-func timeToUnix(t time.Time) int64 { return t.Unix() }
+func timeToUnix(t time.Time) int64 { return int64(unix(t)) }
 
 func clone(b []byte) []byte { return append([]byte(nil), b...) }

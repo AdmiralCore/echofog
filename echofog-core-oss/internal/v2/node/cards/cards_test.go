@@ -481,6 +481,50 @@ func TestUpdateKeepsThePreviousConfigOnError(t *testing.T) {
 	}
 }
 
+func TestInviteExtraListeners(t *testing.T) {
+	m := newMaterial(t)
+	clk := newFakeClock()
+	b, err := New(baseConfig(t, m, newMapKV(), clk))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	extra := Listener{Suite: objects.SuiteNoise3, Host: "203.0.113.20", Port: 444, Mask: newMask(t)}
+	inv, err := b.IssueInvite(ctx, InviteOptions{InviteID: randomBytes(t, 8), Listeners: []Listener{extra}})
+	if err != nil {
+		t.Fatalf("IssueInvite: %v", err)
+	}
+	c := verifyBytes(t, inv.Envelope, clk.Now())
+	found := false
+	for _, a := range c.Body.GetAddrs() {
+		if a.GetSuite() == objects.SuiteNoise3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("invitation card lost its own noise3 listener")
+	}
+
+	if _, err := b.IssueInvite(ctx, InviteOptions{
+		InviteID:  randomBytes(t, 8),
+		Listeners: make([]Listener, maxAddrs+1),
+	}); err == nil {
+		t.Fatalf("IssueInvite accepted too many listeners")
+	}
+}
+
+func TestInvalidServiceDoesNotPanic(t *testing.T) {
+	m := newMaterial(t)
+	cfg := baseConfig(t, m, newMapKV(), newFakeClock())
+	cfg.Services = []*pb.ServiceOffer{nil}
+	if _, err := New(cfg); err == nil {
+		t.Fatalf("New accepted a nil service")
+	}
+	if _, err := New(baseConfig(t, m, newMapKV(), newFakeClock())); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+}
+
 func TestExitOfferSetsTheFlag(t *testing.T) {
 	m := newMaterial(t)
 	clk := newFakeClock()
@@ -605,7 +649,8 @@ func TestRestartRemembersKnownCardSeq(t *testing.T) {
 func TestIssuedMemoryIsPruned(t *testing.T) {
 	m := newMaterial(t)
 	clk := newFakeClock()
-	b, err := New(baseConfig(t, m, newMapKV(), clk))
+	cfg := baseConfig(t, m, newMapKV(), clk)
+	b, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -614,7 +659,17 @@ func TestIssuedMemoryIsPruned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
+	// The device list lives 30 days too; refresh it before the check so the card material stays
+	// valid and the test exercises only the issued memory.
 	clk.Advance(31 * 24 * time.Hour)
+	devices, err := m.account.SealSingleDeviceList(m.device, 2, clk.Now())
+	if err != nil {
+		t.Fatalf("device list: %v", err)
+	}
+	cfg.Devices = devices
+	if err := b.Update(cfg); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
 	own, err := b.OwnCards(ctx)
 	if err != nil {
 		t.Fatalf("OwnCards: %v", err)

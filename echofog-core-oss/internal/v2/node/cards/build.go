@@ -77,15 +77,8 @@ func prepareConfig(cfg *Config, now time.Time) error {
 	if len(cfg.Devices) == 0 {
 		return fmt.Errorf("%w: no device list", ErrConfig)
 	}
-	dl, err := objects.VerifyDeviceList(cfg.Devices, now)
-	if err != nil {
-		return fmt.Errorf("%w: device list: %v", ErrConfig, err)
-	}
-	if !dl.Account.Equal(account) {
-		return fmt.Errorf("%w: device list is signed by another account", ErrConfig)
-	}
-	if !dl.Contains(devicePub) {
-		return fmt.Errorf("%w: device list does not list the card signer", ErrConfig)
+	if err := checkDeviceList(cfg.Devices, cfg.Account, devicePub, now); err != nil {
+		return err
 	}
 	cfg.Devices = clone(cfg.Devices)
 
@@ -210,6 +203,27 @@ func validateListener(l Listener) error {
 	return nil
 }
 
+// validateExtraListeners checks the listeners an invitation adds to the node's own set.
+func validateExtraListeners(base, extra []Listener) error {
+	if len(base)+len(extra) > maxAddrs {
+		return fmt.Errorf("%w: more than %d addresses", ErrConfig, maxAddrs)
+	}
+	masks := make(map[string]struct{}, len(base)+len(extra))
+	for _, l := range base {
+		masks[string(l.Mask)] = struct{}{}
+	}
+	for i, l := range extra {
+		if err := validateListener(l); err != nil {
+			return fmt.Errorf("%w: invitation listener %d: %v", ErrConfig, i+1, err)
+		}
+		masks[string(l.Mask)] = struct{}{}
+	}
+	if len(masks) > maxMaskKeys {
+		return fmt.Errorf("%w: more than %d masking keys", ErrConfig, maxMaskKeys)
+	}
+	return nil
+}
+
 func validateExitOffer(o *pb.ExitOffer) error {
 	if o == nil {
 		return nil
@@ -217,6 +231,20 @@ func validateExitOffer(o *pb.ExitOffer) error {
 	r := o.GetRegion()
 	if r != "" && (len(r) != 2 || r[0] < 'A' || r[0] > 'Z' || r[1] < 'A' || r[1] > 'Z') {
 		return fmt.Errorf("%w: exit region %q", ErrConfig, r)
+	}
+	return nil
+}
+
+func checkDeviceList(raw []byte, account, device keys.AKey, now time.Time) error {
+	dl, err := objects.VerifyDeviceList(raw, now)
+	if err != nil {
+		return fmt.Errorf("%w: device list: %v", ErrConfig, err)
+	}
+	if !dl.Account.Equal(account) {
+		return fmt.Errorf("%w: device list is signed by another account", ErrConfig)
+	}
+	if !dl.Contains(device) {
+		return fmt.Errorf("%w: device list does not list the card signer", ErrConfig)
 	}
 	return nil
 }
@@ -425,6 +453,9 @@ func cloneServices(in []*pb.ServiceOffer) []*pb.ServiceOffer {
 	}
 	out := make([]*pb.ServiceOffer, len(in))
 	for i, s := range in {
+		if s == nil {
+			continue
+		}
 		out[i] = proto.Clone(s).(*pb.ServiceOffer)
 	}
 	return out
