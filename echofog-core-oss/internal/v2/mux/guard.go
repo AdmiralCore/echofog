@@ -165,7 +165,7 @@ func (b *Binder) Accept(ctx context.Context, g *Guard, kind PathKind) (*Session,
 	// PATH_BIND_OK is the last plaintext frame of the new stream 0; in sealed mode the control
 	// stream continues as records.
 	ok := frame.AppendFrame(nil, frame.Frame{Type: frame.TypePathBindOK, Payload: frame.AppendVarint(nil, pb.PathID)})
-	if _, err := s.attachPath(pb.PathID, kind, g, raw, ok); err != nil {
+	if _, err := s.attachPath(pb.PathID, kind, g, raw, ok, false); err != nil {
 		return nil, nil, err
 	}
 	return s, nil, nil

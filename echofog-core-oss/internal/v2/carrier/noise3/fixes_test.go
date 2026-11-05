@@ -293,6 +293,11 @@ func TestNewInitOnEstablishedTupleStartsNewFlow(t *testing.T) {
 	if _, err := conn.Write(next); err != nil {
 		t.Fatal(err)
 	}
+	// A-2: the new flow takes over on its first authentic data packet, not on the Init.
+	time.Sleep(100 * time.Millisecond)
+	if _, err := conn.Write(mustSeal(t, nextKeys, 0, 40)); err != nil {
+		t.Fatal(err)
+	}
 	deadline = time.Now().Add(2 * time.Second)
 	var f2 *flow
 	for time.Now().Before(deadline) {

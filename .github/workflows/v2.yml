@@ -99,13 +99,15 @@ jobs:
             echo "::endgroup::"
           done
 
-      # platforms.md §1.1 requires `gomobile bind -target=android` to succeed. The binding
-      # package arrives in T12.1, so the step waits for the directory to exist.
+      # platforms.md §1.1 requires `gomobile bind -target=android` to succeed. The T12.6 canary
+      # binding lives in echofog-core-oss/mobile; the step waits for the directory to exist.
+      # No GODEBUG or //go:debug is involved: the REALITY client needs neither (T12.6).
       - name: gomobile bind (android)
         if: hashFiles('echofog-core-oss/mobile/**') != ''
         run: |
           set -eux
           go install golang.org/x/mobile/cmd/gomobile@latest
+          go get golang.org/x/mobile/bind
           "$(go env GOPATH)/bin/gomobile" init
           "$(go env GOPATH)/bin/gomobile" bind -target=android -androidapi 26 -o mobile.aar ./mobile
 

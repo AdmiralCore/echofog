@@ -1,7 +1,7 @@
 BINARY  := bin/echofog-node
 VERSION ?= dev
 
-.PHONY: all build test test-race test-calls test-calls-4k test-calls-tcp test-tun vet lint vuln fuzz testbed testbed-chaos clean
+.PHONY: all build test test-race test-calls test-calls-4k test-calls-tcp test-tun vet lint vuln fuzz testbed testbed-chaos mobile-aar clean
 
 all: build
 
@@ -55,6 +55,13 @@ test-tun:
 	docker run --rm --cap-add NET_ADMIN --device /dev/net/tun --add-host echo.test:127.0.0.1 \
 		-v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27.3 \
 		sh -c "apt-get update -qq && apt-get install -y -qq iproute2 >/dev/null && go test -tags tune2e -run TestLinuxTunEndToEnd -count=1 -v ./internal/network/tunmode/"
+
+# Android library of the v2 core (platforms.md §1.1); needs the Android SDK/NDK and gomobile.
+mobile-aar:
+	go install golang.org/x/mobile/cmd/gomobile@latest
+	go get golang.org/x/mobile/bind
+	gomobile init
+	gomobile bind -target=android -androidapi 26 -o bin/mobile.aar ./mobile
 
 clean:
 	rm -rf bin

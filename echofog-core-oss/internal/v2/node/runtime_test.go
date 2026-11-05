@@ -156,6 +156,19 @@ func (n *testNode) peerCard(t *testing.T) *objects.Card {
 	return card
 }
 
+func (n *testNode) publicCard(t *testing.T) *objects.Card {
+	t.Helper()
+	env, ok := n.rt.Cards().Own(objects.ScopePublic)
+	if !ok {
+		t.Fatal("node has no public card")
+	}
+	card, err := objects.VerifyCard(env, time.Now())
+	if err != nil {
+		t.Fatalf("verify own public card: %v", err)
+	}
+	return card
+}
+
 // ---- in-memory carrier listener
 
 type carrierQueue struct {
@@ -334,18 +347,6 @@ func (c *captureEvents) has(kind node.EventKind) bool {
 		}
 	}
 	return false
-}
-
-func (c *captureEvents) count(kind node.EventKind) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	n := 0
-	for _, e := range c.list {
-		if e.Kind == kind {
-			n++
-		}
-	}
-	return n
 }
 
 func (c *captureEvents) last(kind node.EventKind) (node.Event, bool) {

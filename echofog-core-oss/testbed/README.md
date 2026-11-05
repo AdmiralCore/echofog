@@ -57,18 +57,43 @@ relay carried`, with the peer then showing as a direct connection, means the pun
 `birthday punch (symmetric NAT): tried N, direct link made M` line once an attempt has run.
 
 **v2-basic / v2-censor / v2-carrier** are the launchpad v2 entry point: one scenario, phases
-`censor`/`net`/`services`, one `testbed/out/<time>-<scenario>/` with `report.json` (schema 2),
-`flows.csv` and `summary.txt`, and a `testbed/results/` copy for `compare`. `v2-censor` reads the
-b network as a stream (no file unless `-pcap`), under a byte budget that is 2 GB by default and
-maximum and is enforced while writing; it runs the D1–D4/D10 detectors and drives
+`censor`/`net`/`services`/`echo`, one `testbed/out/<time>-<scenario>/` with `report.json` (schema 2),
+`flows.csv` and `summary.txt`, and a `testbed/results/` copy for `compare`.
+
+`v2-basic` starts two `efv2` nodes (`v2a` at 203.0.113.41, `v2b` at 203.0.113.42) on the WAN
+bridge. `v2b` runs `efv2 run --listen noise3=203.0.113.42:4433`; `v2a` dials its peer card and
+`efv2 echo` sends 1 GiB through the echo stream of the experimental service `0xf000`, then 100
+request/reply datagrams. The scenario checks the byte count, `noise3`, a direct path, the datagram
+replies, and the server's `efv2 status` (session, path, standby, abuse counters). Throughput is
+**recorded as the baseline of this machine and not gated**: `behaviour.echo.mbps` in `report.json`
+and the `echo.json` file. `-v2-echo-bytes` changes the size (default 1 GiB; use a smaller value
+while iterating). `reality2-quic` joins this scenario when T2.6b (the reproducible cover) is
+merged; until then the CLI refuses a `reality2-quic` listener with that reason.
+
+`v2-censor` reads the b network as a stream (no file unless `-pcap`), under a byte budget that is 2
+GB by default and maximum and is enforced while writing; it runs the D1–D4/D10 detectors and drives
 `testbed/v2carrier` — a separate process — plus a browser control. A green analysis deletes the
-pcap; a red one keeps it. See `LAUNCHPAD-V2.md`.
+pcap; a red one keeps it. See `LAUNCHPAD-V2.md`. The test bed image also builds `efv2`, so
+`docker exec efbed-v2b efv2 status --data /data` works by hand.
 
 ```bash
 go run ./testbed/runner -scenario v2-basic
+go run ./testbed/runner -scenario v2-basic -v2-echo-bytes 64MB      # a quick run
 go run ./testbed/runner -scenario v2-censor -pcap -pcap-budget 64MB -seed 42
 go run ./testbed/runner compare testbed/results/<a>.json testbed/results/<b>.json
 ```
+
+By hand, two local nodes on loopback (no Docker):
+
+```bash
+go run ./cmd/efv2 init --data /tmp/ef-a --profile desktop     # keep the phrase
+go run ./cmd/efv2 init --data /tmp/ef-b --profile desktop
+go run ./cmd/efv2 run  --data /tmp/ef-b --listen noise3=127.0.0.1:4433
+go run ./cmd/efv2 card --data /tmp/ef-b --scope peer > /tmp/ef-b-peer.json
+go run ./cmd/efv2 echo --data /tmp/ef-a <device-id from>/tmp/ef-b-peer.json --card /tmp/ef-b-peer.json --bytes 64MB
+go run ./cmd/efv2 status --data /tmp/ef-b
+```
+
 
 **censor** records what leaves each router while people use the VPN over QUIC and over the TCP
 fallback, write to each other, and one of them visits the cover site as a browser (the control).

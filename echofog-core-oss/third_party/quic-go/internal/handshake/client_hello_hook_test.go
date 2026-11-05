@@ -5,6 +5,8 @@ import (
 	"crypto/ecdh"
 	"io"
 	"testing"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // TestCH0RandZeroesRandom pins the pre-pass reader: the first 32 bytes it serves are zeros
@@ -54,31 +56,29 @@ func TestTokenFirstRandReplays(t *testing.T) {
 	}
 }
 
-// TestRecoverX25519Key checks that the private key of the hello's X25519 share is found among
-// the 32-byte reads of the randomness stream, which is what patch 4 hands to the hook.
-func TestRecoverX25519Key(t *testing.T) {
-	priv, err := ecdh.X25519().GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x42}, 128)))
+// TestCheckShare checks that the hook's key must be the one behind the hello's X25519 share.
+func TestCheckShare(t *testing.T) {
+	priv, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{0x42}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ch0 := helloWithX25519Share(t, priv.PublicKey().Bytes())
-	reads := [][]byte{
-		make([]byte, 32), // the zeroed random
-		priv.Bytes(),
-	}
-	got, err := recoverX25519Key(ch0, reads)
-	if err != nil {
+	if err := checkShare(ch0, priv.Bytes()); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, priv.Bytes()) {
-		t.Fatalf("recovered key %x, want %x", got, priv.Bytes())
+	if err := checkShare(ch0, bytes.Repeat([]byte{0x43}, 32)); err == nil {
+		t.Fatal("accepted a key that is not behind the share")
 	}
+	if err := checkShare(ch0[:20], priv.Bytes()); err == nil {
+		t.Fatal("accepted a truncated hello")
+	}
+}
 
-	if _, err := recoverX25519Key(ch0, [][]byte{make([]byte, 32)}); err == nil {
-		t.Fatal("recovered a key that is not in the stream")
-	}
-	if _, err := recoverX25519Key(helloWithX25519Share(t, make([]byte, 32))[:20], reads); err == nil {
-		t.Fatal("recovered a key from a truncated hello")
+// TestUconnOf pins the uTLS layout the fork relies on.
+func TestUconnOf(t *testing.T) {
+	q := utls.UQUICClient(&utls.QUICConfig{TLSConfig: &utls.Config{MinVersion: utls.VersionTLS13}}, utls.HelloCustom)
+	if uc, err := uconnOf(q); err != nil || uc == nil {
+		t.Fatalf("uconnOf: %v", err)
 	}
 }
 

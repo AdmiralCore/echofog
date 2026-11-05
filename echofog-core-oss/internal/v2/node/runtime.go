@@ -14,6 +14,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
+	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/geoip"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
@@ -22,8 +23,10 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/pex"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
+	"github.com/echofog/echofog-core/internal/v2/shape"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
 
@@ -39,6 +42,12 @@ var (
 	ErrPeerCard = errors.New("node: peer card does not match the device")
 	// ErrNoRoute means carrier.Plan found no usable direct attempt (relay is T6.1).
 	ErrNoRoute = errors.New("node: no carrier route to the peer")
+	// ErrNoSession means a path operation needs a live session to the peer.
+	ErrNoSession = errors.New("node: no live session to the peer")
+	// ErrTooManyPaths means the platform or the standby limit forbids another path now.
+	ErrTooManyPaths = errors.New("node: too many paths to the peer")
+	// ErrPathFeature means the peer did not negotiate path-migration.
+	ErrPathFeature = errors.New("node: path-migration was not negotiated")
 	// ErrBackground means the node is suspended and does not open new sessions
 	// (platforms.md §2: suspended closes sessions with GOAWAY).
 	ErrBackground = errors.New("node: background mode is suspended")
@@ -109,6 +118,9 @@ type Config struct {
 	RetryAfter uint32
 	// Country is the offline GeoIP lookup; nil means internal/v2/geoip.
 	Country func(netip.Addr) (string, bool)
+	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
+	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
+	ShapeProfile *shape.Profile
 }
 
 // Runtime is one running v2 node (02-architecture AD5).
@@ -128,10 +140,21 @@ type Runtime struct {
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
 	control  *session.Control
+	binder   *mux.Binder
+	policy   *session.PathPolicy
+
+	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
+	// this node opened as a carrier client are counted. deadPaths remembers failures that
+	// arrived before the pair was recorded, so a late record cannot resurrect a slot.
+	pathsMu   sync.Mutex
+	pathPairs map[pathKey]session.Pair
+	deadPaths map[pathKey]struct{}
 
 	identity Identity
 	vis      cards.Visibility
 	cards    cardSource
+	peers    *pex.Store
+	pex      *pex.Service
 
 	mu         sync.Mutex
 	handlers   map[[2]uint64]Handler
@@ -143,10 +166,12 @@ type Runtime struct {
 	wg         sync.WaitGroup
 	serving    sync.Map
 	dgrams     *datagramBroker
+	dht        *dht.Table
 	modules    sync.Once
 	started    bool
 	stopped    bool
 	noCover    bool
+	startedAt  time.Time
 
 	// localMu guards localAddrs, which a network change may replace while sessions dial.
 	localMu    sync.RWMutex
@@ -212,6 +237,10 @@ func New(cfg Config) (*Runtime, error) {
 		carrierClock: carrierClock,
 		services:     service.NewRegistry(),
 		handlers:     map[[2]uint64]Handler{},
+		binder:       mux.NewBinder(),
+		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
+		pathPairs:    map[pathKey]session.Pair{},
+		deadPaths:    map[pathKey]struct{}{},
 		background:   cfg.Profile.Background,
 	}
 	r.dgrams = newDatagramBroker(r)
@@ -263,6 +292,24 @@ func New(cfg Config) (*Runtime, error) {
 		Visibility: r.vis,
 	}
 	r.cards = cardSource{builder: cfg.Cards, book: r.cardBook}
+
+	peers, err := pex.Open(pex.Options{KV: cfg.Store.Store(pex.Namespace), Log: log, Now: r.clock.Now})
+	if err != nil {
+		return nil, fmt.Errorf("node: pex candidates: %w", err)
+	}
+	r.peers = peers
+	r.pex, err = pex.New(pex.Config{
+		Store:      peers,
+		SelfNode:   [32]byte(r.identity.NodeID),
+		SelfDevice: [32]byte(r.identity.DeviceID),
+		OwnCard:    r.ownPublicCard,
+		Now:        r.clock.Now,
+		Log:        log,
+		// Release stays nil until T4.5: release = true is not answered without a release store.
+	})
+	if err != nil {
+		return nil, fmt.Errorf("node: pex service: %w", err)
+	}
 
 	r.localInfo = cfg.LocalInfo
 	if r.localInfo.CountryOf == nil {
@@ -387,6 +434,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 	r.mu.Lock()
 	r.started = true
+	r.startedAt = time.Now()
 	r.mu.Unlock()
 	return nil
 }
@@ -407,6 +455,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	cancel := r.cancel
 	listeners := r.listeners
 	table := r.table
+	dhtTable := r.dht
 	r.mu.Unlock()
 
 	if !started {
@@ -416,6 +465,14 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		cancel()
 	}
 	closeListeners(listeners)
+	if dhtTable != nil {
+		// Stop saves as well; the explicit save keeps the runtime contract visible and is
+		// idempotent.
+		if err := dhtTable.Save(); err != nil {
+			r.log.Warn("node: saving the dht routing table", "err", err)
+		}
+		dhtTable.Stop()
+	}
 	if table != nil {
 		_ = table.Close()
 	}
@@ -473,6 +530,10 @@ func (r *Runtime) Self() Identity {
 
 // Cards returns the node's card view for services.
 func (r *Runtime) Cards() CardSource { return r.cards }
+
+// Peers returns the pex/2 candidate table (T5.4). It is created in New, so it is available before
+// the runtime starts and survives a runtime restart on the same store.
+func (r *Runtime) Peers() PeerStore { return r.peers }
 
 // Store returns one persistent namespace (T4.3).
 func (r *Runtime) Store(ns string) KV { return r.cfg.Store.Store(ns) }

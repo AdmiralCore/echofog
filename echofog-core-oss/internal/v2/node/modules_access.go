@@ -51,7 +51,7 @@ type accessKeyPrint struct {
 // maskKeyUpdater is implemented by listeners that can replace their key set in place. The
 // built-in noise3 listener implements it, so a revocation does not restart the UDP port.
 type maskKeyUpdater interface {
-	SetMaskKeys([]noise3.MaskKey) error
+	SetKeys([]noise3.MaskKey) error
 }
 
 // registerAccess is the module registration point of the access service (T3.6b). It runs before
@@ -203,7 +203,7 @@ func (r *Runtime) refreshAccessLocked(ctx context.Context) error {
 					errs = append(errs, err)
 					continue
 				}
-				if err := updater.SetMaskKeys(masks); err != nil {
+				if err := updater.SetKeys(masks); err != nil {
 					r.closeAccessSlotLocked(st)
 					delete(r.accessSlots, slot)
 					errs = append(errs, fmt.Errorf("node: access slot %d keys: %w", slot, err))

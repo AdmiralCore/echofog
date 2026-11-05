@@ -64,7 +64,6 @@ type Listener struct {
 	inner    *queueConn
 	tr       *quic.Transport
 	quicLn   *quic.Listener
-	keysMu   sync.RWMutex
 	keys     []maskKey
 	profile  *shape.Profile
 	clock    Clock
@@ -181,37 +180,58 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 	return l, nil
 }
 
-// SetMaskKeys replaces the live masking keys in place. Established flows keep their derived keys,
-// so a rotation or revocation stops new handshakes without breaking live sessions. A listener
-// always needs at least one key: the owner closes it when the set becomes empty.
-func (l *Listener) SetMaskKeys(keys []MaskKey) error {
+// SetKeys replaces the live masking keys (rotation, wire.md §2.1). Init datagrams for a key that
+// is no longer listed are dropped from now on; established flows are not touched.
+func (l *Listener) SetKeys(keys []MaskKey) error {
 	if len(keys) == 0 {
 		return fmt.Errorf("%w: no masking keys", ErrBadConfig)
 	}
 	if len(keys) > MaxMaskKeys {
 		return fmt.Errorf("%w: %d masking keys, at most %d", ErrBadConfig, len(keys), MaxMaskKeys)
 	}
-	next := make([]maskKey, 0, len(keys))
+	set := make([]maskKey, 0, len(keys))
 	for _, k := range keys {
 		pub, err := maskPublic(k.Private)
 		if err != nil {
-			return fmt.Errorf("noise3: masking key: %w", err)
+			return fmt.Errorf("%w: masking key: %v", ErrBadConfig, err)
 		}
-		next = append(next, maskKey{secret: k.Private, public: pub, notAfter: k.NotAfter})
+		set = append(set, maskKey{secret: k.Private, public: pub, notAfter: k.NotAfter})
 	}
-	l.keysMu.Lock()
-	l.keys = next
-	l.keysMu.Unlock()
+	l.mu.Lock()
+	l.keys = set
+	l.mu.Unlock()
 	return nil
 }
 
-// maskKeys returns the current key slice. A writer replaces the slice instead of mutating it, so
-// the returned slice stays valid for the duration of one datagram.
-func (l *Listener) maskKeys() []maskKey {
-	l.keysMu.RLock()
-	k := l.keys
-	l.keysMu.RUnlock()
-	return k
+// liveKeys returns the current key set; the slice is never modified after it is published.
+func (l *Listener) liveKeys() []maskKey {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.keys
+}
+
+// Revoke stops accepting Init datagrams for the masking key with this public value at once. The
+// last remaining key cannot be revoked: use SetKeys with a replacement.
+func (l *Listener) Revoke(public [32]byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	idx := -1
+	for i := range l.keys {
+		if l.keys[i].public == public {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("%w: unknown masking key", ErrBadConfig)
+	}
+	if len(l.keys) == 1 {
+		return fmt.Errorf("%w: the last masking key cannot be revoked", ErrBadConfig)
+	}
+	set := make([]maskKey, 0, len(l.keys)-1)
+	set = append(set, l.keys[:idx]...)
+	set = append(set, l.keys[idx+1:]...)
+	l.keys = set
+	return nil
 }
 
 // Listen binds addr and starts a listener.
@@ -300,6 +320,10 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 
 	l.mu.Lock()
 	f := l.flows[src]
+	var succ *flow
+	if f != nil {
+		succ = f.successor
+	}
 	l.mu.Unlock()
 
 	if f != nil {
@@ -309,19 +333,30 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 			}
 			return
 		}
+		if succ != nil {
+			// The packet may belong to the handshake that replaces this flow (A-2): the old flow
+			// stays in place until the new one proves itself with an authentic data packet.
+			if n, inner, prev, status := succ.openData(d, now); status != dataNoMatch {
+				if status == dataOK {
+					l.promote(f, succ, src)
+					l.deliverData(succ, src, n, prev, len(d), inner, now)
+				}
+				return
+			}
+		}
 		if len(d) < packet.MinInitLen {
 			return
 		}
-		if !l.budget.allow(src.Addr().String(), now) {
+		if !l.budget.allow(budgetKey(src.Addr()), now) {
 			return
 		}
-		l.handleInit(d, src, l.maskKeys(), now)
+		l.handleInit(d, src, l.liveKeys(), now)
 		return
 	}
 
 	// A datagram from an unknown address is tried against established flows first (NAT
 	// rebinding), then treated as a candidate Init. Both are charged to the stranger budget.
-	if !l.budget.allow(src.Addr().String(), now) {
+	if !l.budget.allow(budgetKey(src.Addr()), now) {
 		return
 	}
 	if l.rebind(d, src, now) {
@@ -330,7 +365,20 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 	if len(d) < packet.MinInitLen {
 		return
 	}
-	l.handleInit(d, src, l.maskKeys(), now)
+	l.handleInit(d, src, l.liveKeys(), now)
+}
+
+// promote makes the successor the flow of src after its first authentic data packet (A-2).
+func (l *Listener) promote(old, succ *flow, src netip.AddrPort) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.flows[src] != old || old.successor != succ || succ.isClosed() {
+		return
+	}
+	old.successor = nil
+	succ.parent = nil
+	l.removeLocked(old)
+	l.flows[src] = succ
 }
 
 // deliverData records an authenticated data packet and hands its inner datagram to QUIC.
@@ -461,17 +509,43 @@ func (l *Listener) handleInit(d []byte, src netip.AddrPort, keys []maskKey, now 
 		l.mu.Unlock()
 	}
 	if f != nil && f.isEstablished() && newerInitTS(f.firstTimestamp(), init.TS) {
-		// A new handshake on the same 4-tuple cannot use the old reply keys: the initiator
-		// discarded them. Replace the established flow with a new one. A late sibling of the
-		// current handshake carries the same ts and is still handled as a sibling below.
+		// A new handshake on the same 4-tuple (A-2). It cannot use the old reply keys, but any
+		// contact of a hidden node can build an authentic Init, so it must not cut a flow that
+		// is still alive. If the old flow has been silent for its restart interval the client
+		// has evidently restarted and the new Init replaces it. Otherwise the new Init starts
+		// a successor flow and the old one stays until the successor's first data packet.
 		l.mu.Lock()
-		if l.flows[src] == f && f.isEstablished() {
-			l.removeLocked(f)
+		succ := f.successor
+		silent := f.silentSince(now) >= f.silenceLimit
+		l.mu.Unlock()
+		switch {
+		case silent:
+			l.mu.Lock()
+			if l.flows[src] == f && f.isEstablished() {
+				if succ != nil {
+					l.removeLocked(succ)
+				}
+				l.removeLocked(f)
+			}
+			f = l.flows[src]
+			l.mu.Unlock()
+		case succ != nil && !newerInitTS(succ.firstTimestamp(), init.TS):
+			// A sibling Init of the successor handshake.
+			succ.addKeys(matched)
+			succ.acceptInit(len(d), now)
+			l.inner.deliver(init.Inner, succ.vaddr)
+			return
+		default:
+			if succ != nil {
+				l.mu.Lock()
+				l.removeLocked(succ)
+				l.mu.Unlock()
+			}
+			if nf := l.newFlowFor(src, matched, len(d), init.TS, now, f); nf != nil {
+				l.inner.deliver(init.Inner, nf.vaddr)
+			}
+			return
 		}
-		l.mu.Unlock()
-		l.mu.Lock()
-		f = l.flows[src]
-		l.mu.Unlock()
 	}
 	if f != nil {
 		f.addKeys(matched)
@@ -487,6 +561,12 @@ func (l *Listener) handleInit(d []byte, src netip.AddrPort, keys []maskKey, now 
 }
 
 func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, ts uint32, now time.Time) *flow {
+	return l.newFlowFor(src, keys, initial, ts, now, nil)
+}
+
+// newFlowFor creates a flow; with a parent it is that flow's successor (A-2) and is not entered in
+// the address table until it takes over.
+func (l *Listener) newFlowFor(src netip.AddrPort, keys packet.Keys, initial int, ts uint32, now time.Time, parent *flow) *flow {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
@@ -503,14 +583,14 @@ func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, ts
 			return nil
 		}
 	}
-	if len(l.flows) >= l.maxFlows {
+	if parent == nil && len(l.flows) >= l.maxFlows {
 		if !l.evictPendingLocked(netip.Addr{}) {
 			// The local total-flow bound is full of established flows. §2.5 step 7 only
 			// allows evicting a pending flow, so the new Init is dropped instead.
 			return nil
 		}
 	}
-	if l.pendingIP[ip] >= l.maxPendingPerIP || l.pending >= l.maxPending || len(l.flows) >= l.maxFlows {
+	if l.pendingIP[ip] >= l.maxPendingPerIP || l.pending >= l.maxPending || (parent == nil && len(l.flows) >= l.maxFlows) {
 		return nil
 	}
 	id := l.nextID
@@ -527,7 +607,16 @@ func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, ts
 		sender:      shape.NewSender(l.profile, nil, l.lowPower),
 		maxDatagram: l.maxDatagram,
 	}
-	l.flows[src] = f
+	f.silenceLimit = restartMin + time.Duration(randIntN(l.rnd, int((restartMax-restartMin)/time.Millisecond)+1))*time.Millisecond
+	if parent != nil {
+		if parent.successor != nil || l.flows[src] != parent {
+			return nil
+		}
+		parent.successor = f
+		f.parent = parent
+	} else {
+		l.flows[src] = f
+	}
 	l.byVAddr[id] = f
 	l.ipFlows[ip] = append(l.ipFlows[ip], f)
 	l.pending++
@@ -539,12 +628,18 @@ func (l *Listener) newFlow(src netip.AddrPort, keys packet.Keys, initial int, ts
 // never evicts an established flow (wire.md §2.5 step 7) and reports whether a flow was removed.
 func (l *Listener) evictPendingLocked(ip netip.Addr) bool {
 	var candidates []*flow
-	for _, f := range l.flows {
+	consider := func(f *flow) {
 		if ip.IsValid() && f.address().Addr() != ip {
-			continue
+			return
 		}
 		if f.isPending() {
 			candidates = append(candidates, f)
+		}
+	}
+	for _, f := range l.flows {
+		consider(f)
+		if f.successor != nil {
+			consider(f.successor)
 		}
 	}
 	if len(candidates) == 0 {
@@ -559,7 +654,25 @@ func (l *Listener) removeLocked(f *flow) {
 		return
 	}
 	src := f.address()
-	delete(l.flows, src)
+	if l.flows[src] == f {
+		delete(l.flows, src)
+	}
+	if p := f.parent; p != nil {
+		if p.successor == f {
+			p.successor = nil
+		}
+		f.parent = nil
+	}
+	if s := f.successor; s != nil {
+		// The old flow goes away: its successor, if it is still alive, takes the slot.
+		f.successor = nil
+		s.parent = nil
+		if l.flows[src] == nil && !s.isClosed() {
+			l.flows[src] = s
+		} else {
+			l.removeLocked(s)
+		}
+	}
 	delete(l.byVAddr, f.vaddr.id)
 	l.dropIPLocked(f, src.Addr())
 	l.dropRecentLocked(f)
@@ -709,6 +822,15 @@ func (l *Listener) sweep(now time.Time) {
 	for _, f := range l.flows {
 		if f.idleFor(now) > flowIdleTimeout {
 			expired = append(expired, f)
+			continue
+		}
+		if s := f.successor; s != nil {
+			if s.idleFor(now) > flowIdleTimeout {
+				expired = append(expired, s)
+			} else if f.silentSince(now) >= f.silenceLimit {
+				// The old flow is silent: the successor takes over (removeLocked promotes it).
+				expired = append(expired, f)
+			}
 		}
 	}
 	for _, f := range expired {
@@ -776,6 +898,13 @@ type flow struct {
 	cand      netip.AddrPort
 	candCount int
 	candMax   uint64
+
+	// silenceLimit is the uniform(12, 18) s inbound silence after which a new Init replaces the
+	// flow (A-2). successor and parent link a flow to the handshake that may replace it; both
+	// are guarded by Listener.mu.
+	silenceLimit time.Duration
+	successor    *flow
+	parent       *flow
 }
 
 func (f *flow) isPending() bool {

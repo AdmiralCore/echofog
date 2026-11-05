@@ -61,6 +61,13 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	}
 	card := opt.Card
 	if card == nil {
+		// A module may answer on a session the runtime already has, for example the echo
+		// service replying to a datagram of the peer that just sent it. The card is only
+		// needed to dial a new session, so reuse a live main-identity session first.
+		if est := r.liveMainSession(peer); est != nil {
+			r.ensureServing(est)
+			return est, r.peerOf(est), nil
+		}
 		card = r.cardBook.Latest([32]byte(peer))
 		if card == nil {
 			return nil, Peer{}, fmt.Errorf("%w: %s", ErrNoPeerCard, peer)
@@ -122,20 +129,39 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	req := carrier.DialRequest{Card: card, DialContext: r.cfg.DialContext}
 	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
 
+	var reserved []session.Pair
+	var chosenPair session.Pair
+	havePair := false
+
 	attempt := firstAttempt(attempts)
 	var first mux.Carrier
 	switch {
 	case opt.Carrier != nil:
 		first = opt.Carrier
 	case opt.CarrierFunc != nil:
-		// The factory is called by session.Dial itself.
+		// The factory is called by session.Dial itself. An injected carrier is not counted by
+		// the H11 policy: it is not a TLS dial to the card's address.
 	default:
+		var rerr error
+		attempts, reserved, rerr = r.reserveAttempts(attempts)
+		if rerr != nil {
+			return nil, rerr
+		}
+		attempt = firstAttempt(attempts)
 		c, chosen, err := carrier.Dial(ctx, req, attempts, dialCfg)
 		if err != nil {
+			if ctx.Err() != nil {
+				r.releaseReservations(reserved)
+			} else {
+				r.failReservations(reserved)
+			}
 			r.maybeClockCheck()
 			return nil, fmt.Errorf("node: carrier dial: %w", err)
 		}
 		first, attempt = c, chosen
+		chosenPair = pairOfAttempt(chosen)
+		havePair = true
+		r.settleReservations(reserved, chosenPair)
 	}
 
 	provided := opt.Carrier
@@ -158,18 +184,25 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		if c != nil {
 			return c, nil
 		}
-		c, _, err := carrier.Dial(ctx, req, attempts, dialCfg)
+		// The one suite retry stays on the chosen address/pair (H11): it is a fresh carrier for
+		// the same handshake, not a new route.
+		c, _, err := carrier.Dial(ctx, req, []carrier.Attempt{attempt}, dialCfg)
 		return c, err
 	}
 
-	opts := make([]session.DialOption, 0, len(extra)+6)
+	opts := make([]session.DialOption, 0, len(extra)+8)
+	onEstablished, onPathFailed := r.pathHooks()
 	opts = append(opts,
 		session.WithClock(r.carrierClock),
 		session.WithOffset(r.clock.Offset()),
 		session.WithBindings(r.bindings),
 		session.WithPolicy(r.policyFunc),
 		session.WithCarrierFunc(carrierFn),
+		session.WithPathKind(opt.PathKind),
 		session.WithLowPower(r.cfg.Profile.LowPower),
+		session.WithIdlePadding(r.cfg.ShapeProfile, nil),
+		session.WithOnEstablished(onEstablished),
+		session.WithOnPathFailed(onPathFailed),
 	)
 	opts = append(opts, extra...)
 	if opt.ExpectedDeviceID != nil {
@@ -179,7 +212,20 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	est, err := session.Dial(ctx, card, attempt, local, opts...)
 	if err != nil {
 		r.maybeClockCheck()
+		if havePair {
+			if ctx.Err() == nil && penalizeDial(err) {
+				r.policy.Penalize(chosenPair)
+			} else {
+				r.policy.Release(chosenPair)
+			}
+		}
 		return nil, err
+	}
+	if havePair {
+		r.policy.Succeeded(chosenPair)
+		if !r.recordPair(est.SID, 0, chosenPair, est.Session.Done()) {
+			r.policy.Release(chosenPair)
+		}
 	}
 	// The initiator may send on a new stream the moment message 3 is written, while the responder
 	// is still finishing the handshake and has not attached its Guard to the session yet. A PING
@@ -196,6 +242,34 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	}
 	r.samplePeer(est)
 	return est, nil
+}
+
+// liveMainSession returns a live session of the main local identity to peer, without dialing.
+// It lets a module answer on a session it did not open with an explicit card.
+func (r *Runtime) liveMainSession(peer DeviceID) *session.Established {
+	table := r.table
+	if table == nil || r.cfg.Device == nil {
+		return nil
+	}
+	local := r.cfg.Device.ID()
+	for _, est := range table.Sessions() {
+		if est == nil || est.Peer == nil || est.Session == nil {
+			continue
+		}
+		if DeviceID(est.Peer.DeviceID) != peer || est.Local.Device == nil || est.Local.Device.ID() != local {
+			continue
+		}
+		select {
+		case <-est.Session.Done():
+			continue
+		default:
+		}
+		if est.Session.GoingAway() {
+			continue
+		}
+		return est
+	}
+	return nil
 }
 
 func firstAttempt(attempts []carrier.Attempt) carrier.Attempt {

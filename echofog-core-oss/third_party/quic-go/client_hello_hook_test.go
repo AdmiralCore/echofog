@@ -26,11 +26,9 @@ import (
 
 // TestClientHelloHook covers fork patch 4 (ECHOFOG-PATCH.md): the hook receives CH0 (the exact
 // ClientHello with a zeroed random) and the private X25519 key of the hello's X25519 share, and
-// its 32 bytes become the random of the hello that is actually hashed and sent.
+// its 32 bytes become the random of the hello that is actually hashed and sent. It runs without
+// GODEBUG=cryptocustomrand: the hook's key is chosen by the fork, not drawn from tls.Config.Rand.
 func TestClientHelloHook(t *testing.T) {
-	if !customRandomHonoured() {
-		t.Skip("the Go toolchain ignores a custom tls.Config.Rand for X25519 unless GODEBUG=cryptocustomrand=1")
-	}
 	cert := testServerCertificate(t)
 	ln, err := ListenAddr("127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{cert},

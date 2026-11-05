@@ -287,6 +287,11 @@ func TestDatagramErrors(t *testing.T) {
 	if !DatagramKnown(DgramSealed) || DatagramKnown(0x77) {
 		t.Fatal("datagram registry")
 	}
+	// The experimental range carries lab-only datagram types between consenting builds
+	// (T0.3 `efv2 echo`, registries.md §3 service range 0xf000–0xffff).
+	if !DatagramKnown(0xf000) || !DatagramKnown(0xffff) || DatagramKnown(0xefff) {
+		t.Fatal("experimental datagram range")
+	}
 }
 
 func TestGrease(t *testing.T) {

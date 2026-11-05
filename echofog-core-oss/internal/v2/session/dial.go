@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	mrand "math/rand/v2"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -10,6 +11,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/shape"
 )
 
 // DialOption changes one Dial call. The zero options keep the production behaviour: a carrier
@@ -29,8 +31,13 @@ type dialConfig struct {
 	control    *Control
 	timers     mux.Timers
 	policy     PolicyFunc
-	lowPower   bool
 	dialConfig carrier.DialConfig
+	pathKind   mux.PathKind
+	lowPower   bool
+	idlePad    *shape.Profile
+	idleRand   *mrand.Rand
+	onEst      func(*mux.Session)
+	onFail     func(mux.PathFailure)
 }
 
 // WithCarrier supplies the carrier directly (relay circuits, tests). It is used once: a suite
@@ -95,19 +102,44 @@ func WithPolicy(p PolicyFunc) DialOption {
 	return func(o *dialConfig) { o.policy = p }
 }
 
-// WithLowPower applies the platform profile's low_power flag: 40–55 s keepalive and no standby
-// paths (platforms.md §2).
-func WithLowPower(on bool) DialOption {
-	return func(o *dialConfig) { o.lowPower = on }
-}
-
 // WithDialConfig passes carrier dial options (registry, network memory, clock) through.
 func WithDialConfig(c carrier.DialConfig) DialOption {
 	return func(o *dialConfig) { o.dialConfig = c }
 }
 
+// WithPathKind sets the kind of the carrier this dial creates: direct (default) or relay
+// (wire.md §8). The relay suite itself is T6.1; tests and relay circuits pass PathRelay here.
+func WithPathKind(kind mux.PathKind) DialOption {
+	return func(o *dialConfig) { o.pathKind = kind }
+}
+
+// WithLowPower marks the platform as low_power (platforms.md §2): no standby paths, the
+// [40, 55] s keepalive, and no idle-padding feature offered.
+func WithLowPower(on bool) DialOption {
+	return func(o *dialConfig) { o.lowPower = on }
+}
+
+// WithIdlePadding supplies the shape profile whose idle_pad_ms drives PADDING-only frames when
+// the idle-padding feature was negotiated (wire.md §6.4, §9). r is for deterministic tests.
+func WithIdlePadding(profile *shape.Profile, r *mrand.Rand) DialOption {
+	return func(o *dialConfig) { o.idlePad, o.idleRand = profile, r }
+}
+
+// WithOnEstablished receives the mux session as soon as it exists, before Dial returns. The
+// runtime registers it in its PATH_BIND binder here, closing the window in which a peer could
+// bind a second path before the session was known (wire.md §8.2).
+func WithOnEstablished(f func(*mux.Session)) DialOption {
+	return func(o *dialConfig) { o.onEst = f }
+}
+
+// WithOnPathFailed receives every path failure of the session (wire.md §8.3). The path policy
+// uses it to release carrier slots and start a backoff.
+func WithOnPathFailed(f func(mux.PathFailure)) DialOption {
+	return func(o *dialConfig) { o.onFail = f }
+}
+
 func newDialConfig(opts []DialOption) *dialConfig {
-	o := &dialConfig{grease: true, clock: systemClock{}}
+	o := &dialConfig{grease: true, clock: systemClock{}, pathKind: mux.PathDirect}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -205,7 +237,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 		ExpectedDeviceID: o.expected,
 		Suites:           local.Suites,
 		Offered:          offered,
-		Features:         local.Features,
+		Features:         FeaturesFor(local.Features, o.lowPower),
 		Services:         local.Services,
 		AccessSecret:     local.AccessSecret,
 		Now:              clk.Now,
@@ -246,7 +278,7 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 		}
 		switch f.Type {
 		case frame.TypeHsRetry:
-			h, m, err := ini.HandleRetry(f.Payload)
+			h, m, err := ini.HandleRetryContext(ctx, f.Payload)
 			if err != nil {
 				return nil, nil, wrapSilent(err)
 			}
@@ -282,7 +314,9 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 			if err := writeFrame(raw, clk, frame.TypeHsMsg, msg3); err != nil {
 				return nil, nil, err
 			}
-			est, err := finish(c, g, raw, hs, RoleInitiator, mux.PathDirect, local, remoteOfCard(attempt.Addr), o.control, o.timers, o.policy, o.lowPower)
+			est, err := finish(c, g, raw, hs, RoleInitiator, o.pathKind, local, remoteOfCard(attempt.Addr),
+				o.control, o.timers, o.policy, o.lowPower,
+				newIdlePadding(o.idlePad, o.idleRand, o.lowPower), o.onEst, o.onFail)
 			return est, nil, err
 		default:
 			return nil, nil, wrapSilent(fmt.Errorf("unexpected %s before the handshake completed", frame.TypeName(f.Type)))
