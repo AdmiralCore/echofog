@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/echofog/echofog-core/internal/config"
@@ -58,4 +59,28 @@ func TestSetProtocolSurvivesSettingsSave(t *testing.T) {
 
 	require.Equal(t, config.ProtocolV2, persistedProtocol(t, api))
 	require.Equal(t, config.ProtocolV1, api.GetProtocol(), "the running node is still v1")
+}
+
+// ECHOFOG_PROTOCOL is only the default: a profile that saved its own mode wins over it.
+func TestProtocolFromEnvIsTheDefaultAndProfileOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("ECHOFOG_PROTOCOL", "2")
+
+	// no settings file: the environment decides the mode of the profile
+	require.Equal(t, config.ProtocolV2, GetConfiguredConfig("env-only").Protocol)
+
+	// a profile that saved v1 overrides the env default
+	dir := filepath.Join(home, ".echofog", "profiles", "saved-v1")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ui_settings.json"), []byte(`{"protocol":1}`), 0o600))
+	require.Equal(t, config.ProtocolV1, GetConfiguredConfig("saved-v1").Protocol)
+
+	// and a saved v2 wins when the env says v1
+	t.Setenv("ECHOFOG_PROTOCOL", "1")
+	dir = filepath.Join(home, ".echofog", "profiles", "saved-v2")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ui_settings.json"), []byte(`{"protocol":2}`), 0o600))
+	require.Equal(t, config.ProtocolV2, GetConfiguredConfig("saved-v2").Protocol)
 }

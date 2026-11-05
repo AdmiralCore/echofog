@@ -108,7 +108,7 @@ func (v2PendingBackend) ParseInvite(link string) (InviteInfo, error) {
 }
 
 func (v2PendingBackend) PeerDiscoveryHandler() <-chan dto.PeerDTO {
-	return nil
+	return closedChannel[dto.PeerDTO]()
 }
 
 func (v2PendingBackend) PinGuard(entry string) error {
@@ -278,7 +278,7 @@ func (v2PendingBackend) ListSavedMessages() ([]dto.SavedMessageDTO, error) {
 }
 
 func (v2PendingBackend) MessageHandler() <-chan *dto.MessageDTO {
-	return nil
+	return closedChannel[*dto.MessageDTO]()
 }
 
 func (v2PendingBackend) OnMessageState(cb func(MessageStateDTO)) {

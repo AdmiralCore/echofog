@@ -146,11 +146,7 @@ func (n *NodeApi) StopNode() {
 	}
 }
 
-func (n *NodeApi) GetPeers() []dto.PeerDTO {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1NetBackend) GetPeers() []dto.PeerDTO {
 	internalPeers := n.node.Swarm.GetAllPeers()
 
 	result := make([]dto.PeerDTO, 0, len(internalPeers))
@@ -190,11 +186,7 @@ func (n *NodeApi) GetMyPubKey() string {
 // ConnectToPeer dials "host:port/<peer id>". The peer ID is needed because the packets to a node
 // are obfuscated with a key derived from it; without it only a node running without obfuscation
 // can be reached.
-func (n *NodeApi) ConnectToPeer(addr string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) ConnectToPeer(addr string) error {
 	ctx, cancel := context.WithTimeout(n.node.Ctx, 15*time.Second)
 	defer cancel()
 	info := network.ParseAddrInfo(addr)
@@ -265,7 +257,9 @@ func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
 
 func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 	if n.v2Unavailable() != nil {
-		return nil
+		// nothing arrives at protocol 2: a closed channel ends the desktop's range loop at once,
+		// a nil one would hang that goroutine for the whole run
+		return closedChannel[*dto.MessageDTO]()
 	}
 
 	readCh := make(chan *dto.MessageDTO, 100)
@@ -283,11 +277,7 @@ func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 	return readCh
 }
 
-func (n *NodeApi) GetContacts() ([]dto.ContactDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1ContactBackend) GetContacts() ([]dto.ContactDTO, error) {
 	if n.node.Contact == nil {
 		return nil, errNoChat
 	}
@@ -318,11 +308,7 @@ type PeerStateDTO struct {
 
 // OnPeerState calls cb whenever a connection to a peer comes up or goes away, so a contact's
 // online mark follows it without reloading the contacts.
-func (n *NodeApi) OnPeerState(cb func(PeerStateDTO)) func() {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1NetBackend) OnPeerState(cb func(PeerStateDTO)) func() {
 	if n.node == nil || n.node.EventBus == nil {
 		return func() {}
 	}
@@ -341,22 +327,14 @@ func (n *NodeApi) OnPeerState(cb func(PeerStateDTO)) func() {
 	})
 }
 
-func (n *NodeApi) NewContact(contact dto.ContactDTO) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ContactBackend) NewContact(contact dto.ContactDTO) error {
 	if n.node.Contact == nil {
 		return errNoChat
 	}
 	return n.node.Contact.NewContact(contact)
 }
 
-func (n *NodeApi) DeleteContact(peerID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ContactBackend) DeleteContact(peerID string) error {
 	if n.node.Contact == nil {
 		return errNoChat
 	}
@@ -364,11 +342,7 @@ func (n *NodeApi) DeleteContact(peerID string) error {
 }
 
 // BanContact blocks a peer (see BlockPeer); it stays in the contacts, so unblocking restores it.
-func (n *NodeApi) BanContact(peerID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ContactBackend) BanContact(peerID string) error {
 	return n.BlockPeer(peerID)
 }
 

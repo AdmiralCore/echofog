@@ -103,11 +103,7 @@ const maxAvatarBytes = 512 << 10
 
 // SetContactProfile renames a contact and sets the picture I see for it ("" removes it). Both are
 // mine alone: the contact is not told.
-func (n *NodeApi) SetContactProfile(peerID, alias, avatarBase64 string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ContactBackend) SetContactProfile(peerID, alias, avatarBase64 string) error {
 	cs, err := n.contactsReady()
 	if err != nil {
 		return err

@@ -49,11 +49,7 @@ type GuardStatus struct {
 }
 
 // GetGuardStatus reports how the node enters the network and its guards.
-func (n *NodeApi) GetGuardStatus() (GuardStatus, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GuardStatus{}, ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) GetGuardStatus() (GuardStatus, error) {
 	if n.node == nil || n.node.Cfg == nil {
 		return GuardStatus{}, errors.New("node not started")
 	}
@@ -89,11 +85,7 @@ func (n *NodeApi) GetGuardStatus() (GuardStatus, error) {
 
 // SetGuardMode saves how the node enters the network and applies it: "auto", "on" or "off". It
 // takes effect for new dials at once and fully as the node settles on its guards.
-func (n *NodeApi) SetGuardMode(mode string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) SetGuardMode(mode string) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node is not running")
 	}
@@ -146,11 +138,7 @@ func normalizePinnedGuards(in []string) ([]string, error) {
 // PinGuard saves a relay to always route through (a relay link or host:port/<peer id>?sni=…) and
 // starts holding it as a guard at once. The node leans on pinned relays first, so its mesh traffic
 // goes through them.
-func (n *NodeApi) PinGuard(entry string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) PinGuard(entry string) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}
@@ -190,11 +178,7 @@ func (n *NodeApi) PinGuard(entry string) error {
 
 // UnpinGuard forgets one of the user's pinned relays (by any accepted form of it). It keeps its
 // place in the guard rotation until it expires like any other, then makes room for another.
-func (n *NodeApi) UnpinGuard(entry string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1NetBackend) UnpinGuard(entry string) error {
 	if n.node == nil || n.node.Cfg == nil {
 		return errors.New("node not started")
 	}
