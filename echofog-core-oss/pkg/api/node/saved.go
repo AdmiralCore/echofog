@@ -17,11 +17,7 @@ const savedPrefix = "bm:"
 const maxSavedText = 64 << 10
 
 // SaveMessage bookmarks a copy of a message. Saving it again updates the copy.
-func (n *NodeApi) SaveMessage(m dto.SavedMessageDTO) (dto.SavedMessageDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return dto.SavedMessageDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) SaveMessage(m dto.SavedMessageDTO) (dto.SavedMessageDTO, error) {
 	if n.node == nil || n.node.Storage == nil {
 		return m, errors.New("node not started")
 	}
@@ -45,11 +41,7 @@ func (n *NodeApi) SaveMessage(m dto.SavedMessageDTO) (dto.SavedMessageDTO, error
 }
 
 // UnsaveMessage removes a bookmark.
-func (n *NodeApi) UnsaveMessage(id string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) UnsaveMessage(id string) error {
 	if n.node == nil || n.node.Storage == nil {
 		return errors.New("node not started")
 	}
@@ -57,11 +49,7 @@ func (n *NodeApi) UnsaveMessage(id string) error {
 }
 
 // ListSavedMessages is every bookmark, the latest saved first.
-func (n *NodeApi) ListSavedMessages() ([]dto.SavedMessageDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) ListSavedMessages() ([]dto.SavedMessageDTO, error) {
 	if n.node == nil || n.node.Storage == nil {
 		return nil, errors.New("node not started")
 	}

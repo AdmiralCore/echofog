@@ -27,11 +27,7 @@ type GroupInvitePreview struct {
 
 // InspectGroupInvite reads a group invitation (any of its forms) without joining: the group's
 // creator signature is checked, so the title is the one its creator gave.
-func (n *NodeApi) InspectGroupInvite(text string) (GroupInvitePreview, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupInvitePreview{}, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) InspectGroupInvite(text string) (GroupInvitePreview, error) {
 	invite := groupInviteText(text)
 	var g *groups.GroupGenesisManifest
 	var w groupWire

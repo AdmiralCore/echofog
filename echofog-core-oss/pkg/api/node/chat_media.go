@@ -47,11 +47,7 @@ func isMedia(mime, name string) bool {
 }
 
 // ChatAttachments lists a chat's media, files and links (every channel of a group), newest first.
-func (n *NodeApi) ChatAttachments(ref ChatRef) (ChatAttachments, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return ChatAttachments{}, ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) ChatAttachments(ref ChatRef) (ChatAttachments, error) {
 	f, c, err := n.chat(ref)
 	if err != nil {
 		return ChatAttachments{}, err

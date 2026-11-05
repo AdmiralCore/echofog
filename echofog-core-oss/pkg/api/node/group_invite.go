@@ -152,11 +152,7 @@ func (n *NodeApi) invitesLog(groupID string) (*convsFacade, convlog.Conv, *group
 }
 
 // GroupInvites lists a private group's invitations, the newest first.
-func (n *NodeApi) GroupInvites(groupID string) ([]GroupInviteDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupInvites(groupID string) ([]GroupInviteDTO, error) {
 	f, c, gf, err := n.invitesLog(groupID)
 	if err != nil {
 		return nil, err
@@ -188,11 +184,7 @@ func (n *NodeApi) GroupInvites(groupID string) ([]GroupInviteDTO, error) {
 }
 
 // GroupInviteCreate makes an invitation to a private group and returns it with its link.
-func (n *NodeApi) GroupInviteCreate(groupID string, spec GroupInviteSpec) (GroupInviteDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupInviteDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupInviteCreate(groupID string, spec GroupInviteSpec) (GroupInviteDTO, error) {
 	f, c, gf, err := n.invitesLog(groupID)
 	if err != nil {
 		return GroupInviteDTO{}, err
@@ -221,11 +213,7 @@ func (n *NodeApi) GroupInviteCreate(groupID string, spec GroupInviteSpec) (Group
 }
 
 // GroupInviteRevoke ends an invitation: nobody new comes in with it.
-func (n *NodeApi) GroupInviteRevoke(groupID, nonce string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupInviteRevoke(groupID, nonce string) error {
 	f, c, _, err := n.invitesLog(groupID)
 	if err != nil {
 		return err
@@ -249,11 +237,7 @@ func (n *NodeApi) GroupInviteRevoke(groupID, nonce string) error {
 // their own (in a private group: for one person, for a week, with role, "" the default) as a
 // message, which their app shows as a card with a button to join. It returns how many got one;
 // the first failure ends it.
-func (n *NodeApi) GroupInviteContacts(groupID string, peerIDs []string, role string) (int, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return 0, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupInviteContacts(groupID string, peerIDs []string, role string) (int, error) {
 	if len(peerIDs) == 0 {
 		return 0, nil
 	}

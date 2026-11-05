@@ -291,14 +291,14 @@ type backends struct {
 
 // chooseBackends returns the protocol 1 implementation for each domain, and the not-built v2
 // backend for protocol 2. The network and contacts domains run in their own v1 backends since
-// T11.1b; the other domains still keep the facade itself, whose methods carry the v1 code until
-// T11.1c-e move it.
+// T11.1b, the chats, groups and files domains since T11.1c; the calls and VPN domains still keep
+// the facade itself, whose methods carry the v1 code until T11.1d-e move it.
 func chooseBackends(protocol int, v1 *NodeApi) backends {
 	if protocol == config.ProtocolV2 {
 		pending := v2PendingBackend{}
 		return backends{net: pending, contact: pending, chat: pending, group: pending, file: pending, call: pending, vpn: pending}
 	}
-	return backends{net: &v1NetBackend{v1}, contact: &v1ContactBackend{v1}, chat: v1, group: v1, file: v1, call: v1, vpn: v1}
+	return backends{net: &v1NetBackend{v1}, contact: &v1ContactBackend{v1}, chat: &v1ChatBackend{v1}, group: &v1GroupBackend{v1}, file: &v1FileBackend{v1}, call: v1, vpn: v1}
 }
 
 var (
@@ -309,10 +309,13 @@ var (
 	_ contactBackend = (*v1ContactBackend)(nil)
 	_ contactBackend = v2PendingBackend{}
 	_ chatBackend    = (*NodeApi)(nil)
+	_ chatBackend    = (*v1ChatBackend)(nil)
 	_ chatBackend    = v2PendingBackend{}
 	_ groupBackend   = (*NodeApi)(nil)
+	_ groupBackend   = (*v1GroupBackend)(nil)
 	_ groupBackend   = v2PendingBackend{}
 	_ fileBackend    = (*NodeApi)(nil)
+	_ fileBackend    = (*v1FileBackend)(nil)
 	_ fileBackend    = v2PendingBackend{}
 	_ callBackend    = (*NodeApi)(nil)
 	_ callBackend    = v2PendingBackend{}
