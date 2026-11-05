@@ -2,8 +2,11 @@ package handshake
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestHelloVectors(t *testing.T) {
@@ -282,5 +285,36 @@ func TestSuiteNames(t *testing.T) {
 		if IsGrease(g) {
 			t.Fatalf("%04x is not GREASE", g)
 		}
+	}
+}
+
+// A-3: the puzzle search is cancellable.
+func TestSolvePuzzleContextCancel(t *testing.T) {
+	cookie := make([]byte, 16)
+	cb := make([]byte, 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		// Difficulty 24 needs 2^24 hashes on average; a cancelled context must stop it at once.
+		_, err := SolvePuzzleContext(ctx, cookie, cb, 24)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("puzzle search ignores cancellation")
+	}
+}
+
+func TestSolvePuzzleContextStillSolves(t *testing.T) {
+	cookie := make([]byte, 16)
+	cb := make([]byte, 32)
+	n, err := SolvePuzzleContext(context.Background(), cookie, cb, 8)
+	if err != nil || !PuzzleOK(cookie, cb, n, 8) {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 }

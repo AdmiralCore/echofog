@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
@@ -269,6 +270,11 @@ func (i *Initiator) buildP1(suite uint16) *HsInit {
 // HandleRetry answers HS_RETRY: it solves the puzzle and returns a new flight with fresh
 // ephemerals. A difficulty above 24 is refused.
 func (i *Initiator) HandleRetry(payload []byte) (hello, msg1 []byte, err error) {
+	return i.HandleRetryContext(context.Background(), payload)
+}
+
+// HandleRetryContext is HandleRetry whose puzzle search stops when ctx is done.
+func (i *Initiator) HandleRetryContext(ctx context.Context, payload []byte) (hello, msg1 []byte, err error) {
 	if !i.started {
 		return nil, nil, ErrState
 	}
@@ -280,7 +286,7 @@ func (i *Initiator) HandleRetry(payload []byte) (hello, msg1 []byte, err error) 
 		return nil, nil, ErrRetries
 	}
 	i.retries++
-	n, err := SolvePuzzle(r.Cookie[:], i.cb, r.Difficulty)
+	n, err := SolvePuzzleContext(ctx, r.Cookie[:], i.cb, r.Difficulty)
 	if err != nil {
 		return nil, nil, err
 	}
