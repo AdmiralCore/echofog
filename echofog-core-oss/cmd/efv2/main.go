@@ -32,6 +32,8 @@ func run(args []string) error {
 		return cmdRun(args[1:])
 	case "card":
 		return cmdCard(args[1:])
+	case "link":
+		return cmdLink(args[1:])
 	case "dial":
 		return cmdDial(args[1:])
 	case "echo":
