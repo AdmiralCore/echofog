@@ -42,6 +42,9 @@ var (
 	// ErrValueDamaged is returned when a stored value does not open: the storage key is not the
 	// one the value was written with, or the value was changed on disk.
 	ErrValueDamaged = errors.New("store: stored value does not open")
+	// ErrWrongStorageKey is returned by Open when the store's key verifier was written with
+	// another storage key, or is damaged.
+	ErrWrongStorageKey = errors.New("store: wrong storage key")
 	// ErrSchemaNewer is returned for a store written by a newer build.
 	ErrSchemaNewer = errors.New("store: schema is newer than this build")
 	// ErrSchemaUnknown is returned when no migration path from the stored schema exists.
@@ -98,6 +101,10 @@ func Path(dataDir string) string {
 // A new directory starts at Schema. A store with a higher number is refused untouched. A lower
 // number is migrated forward after a copy of the whole directory is written; a schema with no
 // migration step is refused. Damaged tables left by a crash are repaired before badger opens them.
+//
+// The storage key is checked against the store's verifier before any record is read or written:
+// another key gives ErrWrongStorageKey. A store written before the verifier existed is adopted by
+// the first open and gets one then.
 func Open(opts Options) (*Store, error) {
 	if opts.Dir == "" {
 		return nil, ErrNoDir
@@ -153,6 +160,13 @@ func Open(opts Options) (*Store, error) {
 	db, err := badger.Open(badgerOpts)
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s: %w", opts.Dir, err)
+	}
+
+	// Refuse another key before migration or any caller access: otherwise new records would be
+	// written under the wrong key and the mistake would surface only on the first read.
+	if err := checkStorageKey(db, opts.Key); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	if version < Schema {

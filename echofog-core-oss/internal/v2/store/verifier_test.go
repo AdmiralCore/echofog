@@ -41,6 +41,7 @@ func rawExists(t *testing.T, dir string, key []byte) bool {
 		return false
 	case err != nil:
 		t.Fatalf("read raw key: %v", err)
+		return false
 	default:
 		return true
 	}
