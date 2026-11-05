@@ -58,7 +58,7 @@ func NewCircuit(p Pipe, cb [32]byte, cid uint64, client bool) *Circuit {
 
 // PeerAddr is the peer's public address as R observed it (PEER_ADDR, services.md §6.4 step 1). It is
 // invalid unless both ends agreed to it.
-func (c *Circuit) PeerAddr() netip.AddrPort { return netip.AddrPort{} }
+func (c *Circuit) PeerAddr() netip.AddrPort { return c.peerAddr }
 
 // CID is the circuit ID R assigned (the same value at both ends).
 func (c *Circuit) CID() uint64 { return c.cid }
