@@ -96,16 +96,23 @@ func newUTLSQUICConnWithHook(tlsConf *tls.Config, params []byte, hook func(ch0, 
 	}
 	preRand := newCH0Rand(preConf.Rand)
 	preConf.Rand = preRand
+	own, err := newOwnKeyShares()
+	if err != nil {
+		return nil, err
+	}
 	preSpec := chromeQUICClientHelloSpecSeeded(alpn, ech, qtp, seed)
 	if err := installTransportParameters(preSpec, params); err != nil {
+		return nil, err
+	}
+	if err := own.fill(preSpec); err != nil {
 		return nil, err
 	}
 	ch0, err := buildClientHello(preConf, preSpec, params)
 	if err != nil {
 		return nil, fmt.Errorf("building CH0 for the ClientHello hook: %w", err)
 	}
-	c, err := recoverX25519Key(ch0, preRand.reads)
-	if err != nil {
+	c := own.x25519.Bytes()
+	if err := checkShare(ch0, c); err != nil {
 		return nil, err
 	}
 	token, err := hook(ch0, c)
@@ -126,7 +133,21 @@ func newUTLSQUICConnWithHook(tlsConf *tls.Config, params []byte, hook func(ch0, 
 	if err := installTransportParameters(realSpec, params); err != nil {
 		return nil, err
 	}
-	return newUTLSQUICConn(realConf, realSpec)
+	if err := own.fill(realSpec); err != nil {
+		return nil, err
+	}
+	conn, err := newUTLSQUICConn(realConf, realSpec)
+	if err != nil {
+		return nil, err
+	}
+	// ApplyPreset left the private key state empty for the shares it did not generate; install
+	// the fork's own keys so uTLS can finish the key exchange.
+	uc, err := uconnOf(conn.conn)
+	if err != nil {
+		return nil, err
+	}
+	uc.HandshakeState.State13.KeyShareKeys = own.private()
+	return conn, nil
 }
 
 // buildClientHello runs a throwaway uTLS QUIC client until it produces its first

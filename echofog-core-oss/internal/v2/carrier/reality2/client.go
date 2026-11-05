@@ -1,13 +1,11 @@
 package reality2
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdh"
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	quic "github.com/apernet/quic-go"
@@ -18,15 +16,6 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 )
-
-// ErrRandomNotHonoured reports a Go toolchain that ignores tls.Config.Rand for X25519.
-// Since Go 1.24 crypto/ecdh uses the process CSPRNG unless custom randomness is enabled at
-// build time (//go:debug cryptocustomrand=1 in the main package) or through the environment
-// (GODEBUG=cryptocustomrand=1). Without it the client cannot know the private key of its own
-// X25519 key share, which the token of wire.md §3.2 is derived from, so a dial fails closed
-// before anything is sent.
-var ErrRandomNotHonoured = errors.New("reality2: the Go toolchain ignores tls.Config.Rand for X25519 " +
-	"(add //go:debug cryptocustomrand=1 to the main package or set GODEBUG=cryptocustomrand=1)")
 
 // ErrCard reports a card or address that cannot be dialed with this suite.
 var ErrCard = errors.New("reality2: unusable card or address")
@@ -70,9 +59,6 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 	addr := AddressString(a.GetHost(), a.GetPort())
 	if a.GetHost() == "" || a.GetPort() == 0 {
 		return nil, fmt.Errorf("%w: no host or port", ErrCard)
-	}
-	if !d.customRandHonoured() {
-		return nil, ErrRandomNotHonoured
 	}
 
 	clientTLS, _ := quicx.Reality2TLSConfig(d.cfg.Group, nil)
@@ -124,38 +110,3 @@ func maskPublic(card *objects.Card, mask uint32) ([]byte, error) {
 	}
 	return key.Key(), nil
 }
-
-// CheckRandomHonoured verifies that the toolchain derives an X25519 key from the reader it is
-// given, which the REALITY v2 client needs for its token (§ErrRandomNotHonoured). The answer
-// is fixed for the life of the process, so it is computed once. An application that starts the
-// dialer should call it once at start-up and refuse to serve the suite when it fails; Dial
-// checks it too, so a missed check still fails closed before a single packet is sent.
-func CheckRandomHonoured() error {
-	randProbe.Do(func() {
-		// All 32 bytes are equal: cryptocustomrand's one-byte probe may shift the read, but
-		// the key it produces is the same either way.
-		seed := bytes.Repeat([]byte{0x5a}, 128)
-		k, err := ecdh.X25519().GenerateKey(bytes.NewReader(seed))
-		if err != nil {
-			randProbeErr = fmt.Errorf("%w: %v", ErrRandomNotHonoured, err)
-			return
-		}
-		want, err := ecdh.X25519().NewPrivateKey(seed[:32])
-		if err != nil {
-			randProbeErr = fmt.Errorf("%w: %v", ErrRandomNotHonoured, err)
-			return
-		}
-		if !bytes.Equal(k.PublicKey().Bytes(), want.PublicKey().Bytes()) {
-			randProbeErr = ErrRandomNotHonoured
-		}
-	})
-	return randProbeErr
-}
-
-var (
-	randProbe    sync.Once
-	randProbeErr error
-)
-
-// customRandHonoured is CheckRandomHonoured for the dialer's fast path.
-func (d *Dialer) customRandHonoured() bool { return CheckRandomHonoured() == nil }

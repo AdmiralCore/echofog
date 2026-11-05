@@ -1,12 +1,5 @@
 // Command efv2 is the laboratory CLI of EchoFog v2: it creates a profile, runs a node, prints
 // its card, dials a card, echoes a stream and datagrams and shows the node status.
-//
-// The REALITY v2 client derives its token from the private key of its X25519 key share. Since Go
-// 1.24 crypto/ecdh ignores the tls.Config.Rand it is given unless custom randomness is enabled,
-// so this client needs the build-time default (T2.6a, decisions.md 2026-11-05). It is not a user
-// setting: reality2.CheckRandomHonoured fails closed if the directive is missing.
-//
-//go:debug cryptocustomrand=1
 package main
 
 import (

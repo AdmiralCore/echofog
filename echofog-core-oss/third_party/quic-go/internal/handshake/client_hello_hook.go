@@ -2,10 +2,14 @@ package handshake
 
 import (
 	"crypto/ecdh"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"io"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // This file is fork patch 4 (ECHOFOG-PATCH.md): the mechanics behind
@@ -22,8 +26,7 @@ const clientRandomLen = 32
 // the ClientHello random. The pre-pass hello therefore is CH0 by construction.
 type ch0Rand struct {
 	src      io.Reader
-	recorded []byte   // everything served, in order
-	reads    [][]byte // every individual Read after the zeroing, for key recovery
+	recorded []byte // everything served, in order
 	served   int
 }
 
@@ -51,9 +54,7 @@ func (r *ch0Rand) Read(p []byte) (int, error) {
 			clear(p[:min(n, clientRandomLen-r.served)])
 		}
 		r.served += n
-		buf := append([]byte(nil), p[:n]...)
-		r.recorded = append(r.recorded, buf...)
-		r.reads = append(r.reads, buf)
+		r.recorded = append(r.recorded, p[:n]...)
 	}
 	return n, err
 }
@@ -94,28 +95,92 @@ func (r *tokenFirstRand) Read(p []byte) (int, error) {
 	return n + m, err
 }
 
-// recoverX25519Key finds the private key of the hello's X25519 key share among the
-// 32-byte reads of the pre-pass. uTLS generated that key from the randomness stream
-// (io.ReadFull of 32 bytes into a private key), so the read whose public key equals
-// the share is the key the live handshake will use, not a copy of it.
-func recoverX25519Key(ch0 []byte, reads [][]byte) ([]byte, error) {
+// ownKeyShares are the ephemeral key-exchange keys of one hook-path ClientHello. uTLS would
+// generate them with crypto/ecdh's GenerateKey, which since Go 1.24 ignores the reader it is
+// given unless GODEBUG=cryptocustomrand=1; the token hook has to know the X25519 private key,
+// and a mobile library has no main package to set that default. The fork therefore picks the
+// keys itself and writes them into the key_share extension, so the hook receives c explicitly.
+//
+// One X25519 key serves both the standalone X25519 share and the X25519 half of the
+// X25519MLKEM768 share, as in Chrome (BoringSSL reuses it); either share then names the same c
+// to a server that parses the hello.
+type ownKeyShares struct {
+	x25519 *ecdh.PrivateKey
+	mlkem  *mlkem.DecapsulationKey768
+}
+
+func newOwnKeyShares() (*ownKeyShares, error) {
+	x, err := ecdh.X25519().NewPrivateKey(randBytes(32))
+	if err != nil {
+		return nil, err
+	}
+	seed := randBytes(mlkem.SeedSize)
+	m, err := mlkem.NewDecapsulationKey768(seed)
+	if err != nil {
+		return nil, err
+	}
+	return &ownKeyShares{x25519: x, mlkem: m}, nil
+}
+
+func randBytes(n int) []byte {
+	b := make([]byte, n)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		panic("quic: crypto/rand failed: " + err.Error())
+	}
+	return b
+}
+
+// fill writes the public halves into every non-GREASE key share of the spec's key_share
+// extension. uTLS keeps a share whose Data is already longer than one byte.
+func (k *ownKeyShares) fill(spec *utls.ClientHelloSpec) error {
+	found := false
+	for _, ext := range spec.Extensions {
+		ks, ok := ext.(*utls.KeyShareExtension)
+		if !ok {
+			continue
+		}
+		found = true
+		for i := range ks.KeyShares {
+			switch ks.KeyShares[i].Group {
+			case utls.X25519:
+				ks.KeyShares[i].Data = k.x25519.PublicKey().Bytes()
+			case utls.X25519MLKEM768:
+				ks.KeyShares[i].Data = append(k.mlkem.EncapsulationKey().Bytes(), k.x25519.PublicKey().Bytes()...)
+			default:
+				if len(ks.KeyShares[i].Data) <= 1 && !isGREASEGroup(uint16(ks.KeyShares[i].Group)) {
+					return fmt.Errorf("quic: ClientHello hook: no own key for key share group %#x", uint16(ks.KeyShares[i].Group))
+				}
+			}
+		}
+	}
+	if !found {
+		return errors.New("quic: ClientHello hook: the ClientHello spec has no key_share extension")
+	}
+	return nil
+}
+
+func isGREASEGroup(v uint16) bool { return v&0x0f0f == 0x0a0a }
+
+// private is the key state to install on the live connection after ApplyPreset, which resets it.
+func (k *ownKeyShares) private() *utls.KeySharePrivateKeys {
+	return &utls.KeySharePrivateKeys{Ecdhe: k.x25519, Mlkem: k.mlkem, MlkemEcdhe: k.x25519}
+}
+
+// checkShare verifies that c is the private key behind the hello's X25519 share, so a changed
+// uTLS can never hand the hook a key that does not match the wire.
+func checkShare(ch0, c []byte) error {
 	C, ok := helloX25519Share(ch0)
 	if !ok {
-		return nil, errors.New("quic: ClientHello hook: CH0 has no X25519 key share")
+		return errors.New("quic: ClientHello hook: CH0 has no X25519 key share")
 	}
-	for _, r := range reads {
-		if len(r) != 32 {
-			continue
-		}
-		key, err := ecdh.X25519().NewPrivateKey(r)
-		if err != nil {
-			continue
-		}
-		if subtle.ConstantTimeCompare(key.PublicKey().Bytes(), C) == 1 {
-			return append([]byte(nil), r...), nil
-		}
+	key, err := ecdh.X25519().NewPrivateKey(c)
+	if err != nil {
+		return err
 	}
-	return nil, errors.New("quic: ClientHello hook: the X25519 key share is not derived from the randomness stream")
+	if subtle.ConstantTimeCompare(key.PublicKey().Bytes(), C) != 1 {
+		return errors.New("quic: ClientHello hook: the X25519 key share is not the fork's own key")
+	}
+	return nil
 }
 
 // helloX25519Share returns the X25519 public key of a ClientHello handshake message:
