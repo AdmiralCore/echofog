@@ -95,11 +95,7 @@ func (f *groupsFacade) requestsLocked(groupID string) []joinRequest {
 }
 
 // GroupJoinRequests lists the requests to join a group waiting for us to decide.
-func (n *NodeApi) GroupJoinRequests(groupID string) ([]GroupJoinRequestDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupJoinRequests(groupID string) ([]GroupJoinRequestDTO, error) {
 	gf, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -117,11 +113,7 @@ func (n *NodeApi) GroupJoinRequests(groupID string) ([]GroupJoinRequestDTO, erro
 }
 
 // GroupJoinDecide accepts a request (the newcomer is let in) or declines it (they are told).
-func (n *NodeApi) GroupJoinDecide(groupID, peerID string, accept bool) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupJoinDecide(groupID, peerID string, accept bool) error {
 	gf, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -219,11 +211,7 @@ func (n *NodeApi) quickInvite(groupID string) (string, error) {
 }
 
 // GroupTimeout keeps a member from writing for minutes (0 lifts a timeout); the member stays.
-func (n *NodeApi) GroupTimeout(groupID, memberID string, minutes int) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupTimeout(groupID, memberID string, minutes int) error {
 	f, c, err := n.roleLog(groupID)
 	if err != nil {
 		return err
@@ -265,11 +253,7 @@ func (n *NodeApi) GroupTimeout(groupID, memberID string, minutes int) error {
 type GroupModEntry = convlog.ModEntry
 
 // GroupModerationLog is what a group's members did to each other, the newest first.
-func (n *NodeApi) GroupModerationLog(groupID string) ([]GroupModEntry, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GroupModerationLog(groupID string) ([]GroupModEntry, error) {
 	f, c, err := n.roleLog(groupID)
 	if err != nil {
 		return nil, err

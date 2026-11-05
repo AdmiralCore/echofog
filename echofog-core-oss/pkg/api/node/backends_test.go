@@ -25,16 +25,20 @@ func newFacadeNode(t *testing.T, protocol int) *NodeApi {
 }
 
 // Protocol 1 keeps the v1 code in the domain backends: the network and contacts domains run in
-// their own v1 structs since T11.1b, the other domains still keep the facade itself.
-func TestBackendsProtocol1IsTheFacade(t *testing.T) {
+// their own v1 structs since T11.1b, the chats, groups and files domains since T11.1c; the calls
+// and VPN domains still keep the facade itself.
+func TestBackendsProtocol1PicksV1Backends(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV1)
 	require.IsType(t, &v1NetBackend{}, api.backends.net)
 	require.Same(t, api, api.backends.net.(*v1NetBackend).NodeApi)
 	require.IsType(t, &v1ContactBackend{}, api.backends.contact)
 	require.Same(t, api, api.backends.contact.(*v1ContactBackend).NodeApi)
-	require.Same(t, api, api.backends.chat)
-	require.Same(t, api, api.backends.group)
-	require.Same(t, api, api.backends.file)
+	require.IsType(t, &v1ChatBackend{}, api.backends.chat)
+	require.Same(t, api, api.backends.chat.(*v1ChatBackend).NodeApi)
+	require.IsType(t, &v1GroupBackend{}, api.backends.group)
+	require.Same(t, api, api.backends.group.(*v1GroupBackend).NodeApi)
+	require.IsType(t, &v1FileBackend{}, api.backends.file)
+	require.Same(t, api, api.backends.file.(*v1FileBackend).NodeApi)
 	require.Same(t, api, api.backends.call)
 	require.Same(t, api, api.backends.vpn)
 }
@@ -53,9 +57,9 @@ func TestBackendsProtocol2AnswerNotBuilt(t *testing.T) {
 	require.Nil(t, api.backends.net.GetPeers(), "a method without an error result returns the zero value")
 }
 
-// Until T11.1b-e move the bodies, the facade methods themselves answer the same way: a network
-// method with an error result says why it cannot run, one without returns the zero value, and the
-// local settings keep working.
+// At protocol 2 the facade answers through the pending backends: a network method with an error
+// result says why it cannot run, one without returns the zero value, and the local settings keep
+// working. The calls and VPN domains still carry their check in the facade until T11.1d-e.
 func TestProtocol2FacadeAnswersNotBuilt(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV2)
 	require.ErrorIs(t, api.v2Unavailable(), ErrV2NotBuilt)
@@ -150,6 +154,34 @@ func (stubContactBackend) GetContacts() ([]dto.ContactDTO, error) {
 }
 func (stubContactBackend) NewContact(dto.ContactDTO) error { return errStubBackend }
 
+// stubChatBackend, stubGroupBackend and stubFileBackend are the same for the domains T11.1c
+// moves: chats, groups and files.
+type stubChatBackend struct{ chatBackend }
+
+func (stubChatBackend) ChatRows() ([]ConversationDTO, error) {
+	return []ConversationDTO{{Title: "stub"}}, nil
+}
+func (stubChatBackend) SendMessage(string, string) error { return errStubBackend }
+func (stubChatBackend) MessageHandler() <-chan *dto.MessageDTO {
+	return closedChannel[*dto.MessageDTO]()
+}
+
+type stubGroupBackend struct{ groupBackend }
+
+func (stubGroupBackend) ListGroups() ([]GroupDTO, error) {
+	return []GroupDTO{{ID: "stub"}}, nil
+}
+func (stubGroupBackend) CreateGroup(string, string, string) (GroupDTO, error) {
+	return GroupDTO{}, errStubBackend
+}
+
+type stubFileBackend struct{ fileBackend }
+
+func (stubFileBackend) DownloadDir() string { return "stub" }
+func (stubFileBackend) AcceptFile(string) (dto.FileTransferDTO, error) {
+	return dto.FileTransferDTO{}, errStubBackend
+}
+
 var errStubBackend = errors.New("stub backend")
 
 // The facade methods of the moved domains are delegates. At protocol 2 they must reach the
@@ -167,6 +199,25 @@ func TestMovedDomainsDelegateAtProtocol2(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []dto.ContactDTO{{PeerID: "stub"}}, got)
 	require.ErrorIs(t, api.NewContact(dto.ContactDTO{}), errStubBackend)
+
+	api.backends.chat = stubChatBackend{}
+	rows, err := api.ChatRows()
+	require.NoError(t, err)
+	require.Equal(t, []ConversationDTO{{Title: "stub"}}, rows)
+	require.ErrorIs(t, api.SendMessage("00", "hi"), errStubBackend)
+	requireClosed(t, "the stub chat backend", api.MessageHandler())
+
+	api.backends.group = stubGroupBackend{}
+	groups, err := api.ListGroups()
+	require.NoError(t, err)
+	require.Equal(t, []GroupDTO{{ID: "stub"}}, groups)
+	_, err = api.CreateGroup("title", "description", "group")
+	require.ErrorIs(t, err, errStubBackend)
+
+	api.backends.file = stubFileBackend{}
+	require.Equal(t, "stub", api.DownloadDir())
+	_, err = api.AcceptFile("file-1")
+	require.ErrorIs(t, err, errStubBackend)
 }
 
 // requireClosed fails when ch is nil or open: a receive must complete with ok == false at once.

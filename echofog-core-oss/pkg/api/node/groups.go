@@ -761,11 +761,7 @@ func (n *NodeApi) openGroups() (*groupsFacade, bool, error) {
 	return f, true, nil
 }
 
-func (n *NodeApi) CreateGroup(title, description, kind string) (GroupDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) CreateGroup(title, description, kind string) (GroupDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupDTO{}, err
@@ -773,11 +769,7 @@ func (n *NodeApi) CreateGroup(title, description, kind string) (GroupDTO, error)
 	return f.Create(title, description, kind)
 }
 
-func (n *NodeApi) ListGroups() ([]GroupDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) ListGroups() ([]GroupDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -785,19 +777,11 @@ func (n *NodeApi) ListGroups() ([]GroupDTO, error) {
 	return f.List()
 }
 
-func (n *NodeApi) GetGroupInvite(groupID string) (string, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return "", ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GetGroupInvite(groupID string) (string, error) {
 	return n.quickInvite(groupID)
 }
 
-func (n *NodeApi) JoinGroup(invite string) (GroupDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) JoinGroup(invite string) (GroupDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupDTO{}, err
@@ -805,11 +789,7 @@ func (n *NodeApi) JoinGroup(invite string) (GroupDTO, error) {
 	return f.Join(invite)
 }
 
-func (n *NodeApi) AddGroupMember(groupID, pubKeyHex string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) AddGroupMember(groupID, pubKeyHex string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -817,11 +797,7 @@ func (n *NodeApi) AddGroupMember(groupID, pubKeyHex string) error {
 	return f.AddMember(groupID, pubKeyHex)
 }
 
-func (n *NodeApi) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -842,11 +818,7 @@ func (n *NodeApi) ListGroupMembers(groupID string) ([]GroupMemberDTO, error) {
 	return list, nil
 }
 
-func (n *NodeApi) SendGroupMessage(groupID, text string) (GroupMessageDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupMessageDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) SendGroupMessage(groupID, text string) (GroupMessageDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupMessageDTO{}, err
@@ -878,11 +850,7 @@ func (n *NodeApi) mirrorOwnGroupPost(groupID string, d GroupMessageDTO, err erro
 // SendGroupFile posts a file in a group: in a channel of a space ("" the main one), or as a comment
 // in the thread under root ("" none). Every member gets the offer; each who accepts fetches it
 // from this node (the transfer's Delivered counts them).
-func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return GroupMessageDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) SendGroupFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return GroupMessageDTO{}, err
@@ -910,11 +878,7 @@ func (n *NodeApi) SendGroupFile(groupID, channel, thread, path string) (GroupMes
 
 // GetGroupMessages returns a group's messages, oldest first. A group on the conversation log is
 // read from the log (edits applied, deleted messages left out).
-func (n *NodeApi) GetGroupMessages(groupID string, limit int) ([]GroupMessageDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) GetGroupMessages(groupID string, limit int) ([]GroupMessageDTO, error) {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return nil, err
@@ -996,11 +960,7 @@ func ParseCallInvite(text string) (callID, coordinator string, ok bool) {
 
 // SubscribeGroupEvents calls cb whenever something happens in a group: a message arrived, members
 // changed, somebody started a call, the node was added to or removed from a group.
-func (n *NodeApi) SubscribeGroupEvents(cb func(GroupEvent)) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1GroupBackend) SubscribeGroupEvents(cb func(GroupEvent)) {
 	n.groupsH.mu.Lock()
 	n.groupsH.subs = append(n.groupsH.subs, cb)
 	n.groupsH.mu.Unlock()
@@ -1016,11 +976,7 @@ func (n *NodeApi) publishGroupEvent(ev GroupEvent) {
 }
 
 // SetGroupRole gives a member the role admin, moderator, member or restricted.
-func (n *NodeApi) SetGroupRole(groupID, memberID, role string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) SetGroupRole(groupID, memberID, role string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1029,11 +985,7 @@ func (n *NodeApi) SetGroupRole(groupID, memberID, role string) error {
 }
 
 // RemoveGroupMember kicks a member out of the group, or bans them.
-func (n *NodeApi) RemoveGroupMember(groupID, memberID string, ban bool) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) RemoveGroupMember(groupID, memberID string, ban bool) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1042,11 +994,7 @@ func (n *NodeApi) RemoveGroupMember(groupID, memberID string, ban bool) error {
 }
 
 // LeaveGroup leaves the group and forgets it on this node.
-func (n *NodeApi) LeaveGroup(groupID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) LeaveGroup(groupID string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1094,11 +1042,7 @@ func (n *NodeApi) ActiveGroupCall(groupID string) (GroupCall, bool) {
 }
 
 // TransferGroupOwnership hands the group to another member; the owner becomes an admin.
-func (n *NodeApi) TransferGroupOwnership(groupID, memberID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) TransferGroupOwnership(groupID, memberID string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err
@@ -1107,11 +1051,7 @@ func (n *NodeApi) TransferGroupOwnership(groupID, memberID string) error {
 }
 
 // DeleteGroup removes the group for everybody. Only the owner can.
-func (n *NodeApi) DeleteGroup(groupID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1GroupBackend) DeleteGroup(groupID string) error {
 	f, err := n.groupsFacade()
 	if err != nil {
 		return err

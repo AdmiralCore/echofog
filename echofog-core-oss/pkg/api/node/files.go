@@ -31,11 +31,7 @@ func (n *NodeApi) files() (*filexfer.Service, error) {
 
 // SendFile offers a file to the contact with this public key. It shows in the chat at once; its
 // bytes move once the contact accepts.
-func (n *NodeApi) SendFile(pubKeyHex string, path string) (dto.FileTransferDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return dto.FileTransferDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) SendFile(pubKeyHex string, path string) (dto.FileTransferDTO, error) {
 	if _, err := n.files(); err != nil {
 		return dto.FileTransferDTO{}, err
 	}
@@ -54,11 +50,7 @@ func (n *NodeApi) SendFile(pubKeyHex string, path string) (dto.FileTransferDTO, 
 }
 
 // AcceptFile starts receiving an offered file into the download folder.
-func (n *NodeApi) AcceptFile(id string) (dto.FileTransferDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return dto.FileTransferDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) AcceptFile(id string) (dto.FileTransferDTO, error) {
 	f, err := n.files()
 	if err != nil {
 		return dto.FileTransferDTO{}, err
@@ -71,11 +63,7 @@ func (n *NodeApi) AcceptFile(id string) (dto.FileTransferDTO, error) {
 }
 
 // DeclineFile turns an offered file down.
-func (n *NodeApi) DeclineFile(id string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) DeclineFile(id string) error {
 	f, err := n.files()
 	if err != nil {
 		return err
@@ -84,11 +72,7 @@ func (n *NodeApi) DeclineFile(id string) error {
 }
 
 // CancelFile stops a transfer either way.
-func (n *NodeApi) CancelFile(id string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) CancelFile(id string) error {
 	f, err := n.files()
 	if err != nil {
 		return err
@@ -97,11 +81,7 @@ func (n *NodeApi) CancelFile(id string) error {
 }
 
 // GetFileTransfer is one transfer.
-func (n *NodeApi) GetFileTransfer(id string) (dto.FileTransferDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return dto.FileTransferDTO{}, ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) GetFileTransfer(id string) (dto.FileTransferDTO, error) {
 	f, err := n.files()
 	if err != nil {
 		return dto.FileTransferDTO{}, err
@@ -114,11 +94,7 @@ func (n *NodeApi) GetFileTransfer(id string) (dto.FileTransferDTO, error) {
 }
 
 // ListFileTransfers is every transfer with a contact (peer ID in hex), or all of them for "".
-func (n *NodeApi) ListFileTransfers(peerIDHex string) ([]dto.FileTransferDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) ListFileTransfers(peerIDHex string) ([]dto.FileTransferDTO, error) {
 	f, err := n.files()
 	if err != nil {
 		return nil, err
@@ -139,11 +115,7 @@ func (n *NodeApi) ListFileTransfers(peerIDHex string) ([]dto.FileTransferDTO, er
 
 // FileTransferPath is the file of a finished incoming transfer (or the source of an outgoing one),
 // when it is still there: for "open" and "show in folder".
-func (n *NodeApi) FileTransferPath(id string) (string, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return "", ErrV2NotBuilt
-	}
-
+func (n *v1FileBackend) FileTransferPath(id string) (string, error) {
 	f, err := n.files()
 	if err != nil {
 		return "", err
@@ -162,11 +134,7 @@ func (n *NodeApi) FileTransferPath(id string) (string, error) {
 }
 
 // DownloadDir is where received files go.
-func (n *NodeApi) DownloadDir() string {
-	if n.v2Unavailable() != nil {
-		return ""
-	}
-
+func (n *v1FileBackend) DownloadDir() string {
 	if n.node == nil {
 		return ""
 	}
@@ -174,11 +142,7 @@ func (n *NodeApi) DownloadDir() string {
 }
 
 // OnFileTransfer calls cb whenever a transfer changes (progress a few times a second).
-func (n *NodeApi) OnFileTransfer(cb func(dto.FileTransferDTO)) func() {
-	if n.v2Unavailable() != nil {
-		return nil
-	}
-
+func (n *v1FileBackend) OnFileTransfer(cb func(dto.FileTransferDTO)) func() {
 	if n.node == nil || n.node.EventBus == nil {
 		return func() {}
 	}
