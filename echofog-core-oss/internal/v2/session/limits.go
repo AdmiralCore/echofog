@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"sort"
 	"sync"
 	"time"
 
@@ -336,33 +337,79 @@ func rateDifficulty(perSecond int) uint8 {
 // device peer. Only a malformed frame of a known type reaches it (versioning §2 rule 2), and only
 // an authenticated device ID is ever banned: the zero ID stands for "not authenticated".
 func (l *Limits) AbuseHandler(peer [32]byte) func(mux.Abuse) {
-	if peer == ([32]byte{}) {
-		return func(mux.Abuse) {}
-	}
-	return func(mux.Abuse) { l.reportAbuse(peer) }
+	return l.AbuseHandlerFor(peer, [32]byte{})
 }
 
-func (l *Limits) reportAbuse(peer [32]byte) {
-	_ = l.cfg.Abuse.Report(peer)
+// AbuseHandlerFor is AbuseHandler for a session whose peer authenticated as device on node. The
+// findings count for the device and, added up over all its devices, for the node ID, and a ban
+// covers both: a new device key under the same account does not shake it off (handshake §11).
+func (l *Limits) AbuseHandlerFor(device, node [32]byte) func(mux.Abuse) {
+	if device == ([32]byte{}) {
+		return func(mux.Abuse) {}
+	}
+	return func(mux.Abuse) { l.reportAbuse(device, node) }
+}
+
+func (l *Limits) reportAbuse(device, node [32]byte) {
+	_ = l.cfg.Abuse.Report(device)
 	now := l.cfg.Now()
 	l.amu.Lock()
 	defer l.amu.Unlock()
-	if _, ok := l.scores[peer]; !ok && len(l.scores)+len(l.bans) >= MaxTrackedSources {
-		l.evictAbuseLocked(now)
+	banned := l.scoreLocked(device, now)
+	if node != ([32]byte{}) && l.scoreLocked(node, now) {
+		banned = true
 	}
-	kept := l.scores[peer][:0]
-	for _, t := range l.scores[peer] {
+	if banned {
+		l.banLocked(device, now)
+		if node != ([32]byte{}) {
+			l.banLocked(node, now)
+		}
+	}
+}
+
+// scoreLocked adds one finding to id and reports whether it reached the ban threshold. When the
+// table is full of bans and nothing can be evicted, the finding is not recorded.
+func (l *Limits) scoreLocked(id [32]byte, now time.Time) bool {
+	if _, ok := l.scores[id]; !ok && len(l.scores)+len(l.bans) >= MaxTrackedSources {
+		l.evictAbuseLocked(now)
+		if len(l.scores)+len(l.bans) >= MaxTrackedSources {
+			return false
+		}
+	}
+	kept := l.scores[id][:0]
+	for _, t := range l.scores[id] {
 		if now.Sub(t) < l.cfg.BanWindow {
 			kept = append(kept, t)
 		}
 	}
 	kept = append(kept, now)
 	if len(kept) >= l.cfg.BanAfter {
-		l.bans[peer] = now.Add(l.cfg.BanFor)
-		delete(l.scores, peer)
+		return true
+	}
+	l.scores[id] = kept
+	return false
+}
+
+func (l *Limits) banLocked(id [32]byte, now time.Time) {
+	delete(l.scores, id)
+	if _, ok := l.bans[id]; !ok && len(l.bans) >= MaxTrackedSources {
 		return
 	}
-	l.scores[peer] = kept
+	l.bans[id] = now.Add(l.cfg.BanFor)
+}
+
+// BanDevice bans an authenticated device ID for d (an operator decision).
+func (l *Limits) BanDevice(id [32]byte, d time.Duration) {
+	if id == ([32]byte{}) {
+		return
+	}
+	l.amu.Lock()
+	defer l.amu.Unlock()
+	now := l.cfg.Now()
+	l.banLocked(id, now)
+	if _, ok := l.bans[id]; ok {
+		l.bans[id] = now.Add(d)
+	}
 }
 
 // evictAbuseLocked frees room: expired bans and stale scores first, then an arbitrary score.
@@ -402,6 +449,14 @@ func (l *Limits) Banned(peer [32]byte) bool {
 		return false
 	}
 	return true
+}
+
+// BannedNode reports whether the authenticated node ID is banned now.
+func (l *Limits) BannedNode(node [32]byte) bool { return l.Banned(node) }
+
+// BannedPeer reports whether a peer authenticated as device on node is banned: either ID suffices.
+func (l *Limits) BannedPeer(device, node [32]byte) bool {
+	return l.Banned(device) || l.Banned(node)
 }
 
 // ---- quotas (services.md §1)
@@ -487,7 +542,14 @@ func (l *Limits) Allow(rule Rule, sid [16]byte, src netip.Addr, node [32]byte) b
 	if fresh > 0 && len(l.quota)+fresh > MaxTrackedSources {
 		l.purgeQuotaLocked(now)
 		if len(l.quota)+fresh > MaxTrackedSources {
-			return false // full of live entries: fail closed
+			// Full of live entries. Failing closed would let anybody who invents node IDs lock
+			// every honest key out for a day, so the entries closest to their end are dropped
+			// (a dropped entry only forgets a count; it never refuses anybody).
+			keep := make(map[quotaKey]struct{}, len(needs))
+			for _, nd := range needs {
+				keep[nd.key] = struct{}{}
+			}
+			l.evictQuotaLocked(keep)
 		}
 	}
 	for i, nd := range needs {
@@ -498,6 +560,29 @@ func (l *Limits) Allow(rule Rule, sid [16]byte, src netip.Addr, node [32]byte) b
 		ents[i].n++
 	}
 	return true
+}
+
+// evictQuotaLocked drops the earliest-expiring eighth of the table, except the keys of the call in
+// progress. A batch keeps the cost of a flood at O(1) per call.
+func (l *Limits) evictQuotaLocked(keep map[quotaKey]struct{}) {
+	type kv struct {
+		k     quotaKey
+		until time.Time
+	}
+	all := make([]kv, 0, len(l.quota))
+	for k, e := range l.quota {
+		if _, ok := keep[k]; !ok {
+			all = append(all, kv{k, e.until})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].until.Before(all[j].until) })
+	n := MaxTrackedSources / 8
+	if n > len(all) {
+		n = len(all)
+	}
+	for _, e := range all[:n] {
+		delete(l.quota, e.k)
+	}
 }
 
 func (l *Limits) purgeQuotaLocked(now time.Time) {

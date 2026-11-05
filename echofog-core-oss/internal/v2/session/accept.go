@@ -103,9 +103,10 @@ func (c *AcceptConfig) handshakeTimeout() time.Duration {
 	return handshake.HandshakeTimeout
 }
 
-// Accept accepts one carrier from l and either completes a new session (Established) or, when
-// stream 0 starts with a PATH_BIND and Binder is set, binds it to an existing session and
-// returns ErrPathBound. Every other first frame closes the carrier without a message.
+// Accept accepts one carrier from l and runs AcceptCarrier on it. A caller that must serve many
+// carriers at once (the node) calls l.Accept itself and gives each carrier its own AcceptCarrier,
+// so that one slow initiator cannot hold up the others and the limits of handshake §11 count
+// handshakes that are really in flight.
 func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Established, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -113,12 +114,25 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 	if l == nil || cfg.Local.Device == nil {
 		return nil, fmt.Errorf("%w: listener and device are required", ErrConfig)
 	}
-	clk := clockOr(cfg.Clock)
-
 	c, err := l.Accept(ctx)
 	if err != nil {
 		return nil, err
 	}
+	return AcceptCarrier(ctx, c, cfg)
+}
+
+// AcceptCarrier serves one already accepted carrier: it either completes a new session
+// (Established) or, when stream 0 starts with a PATH_BIND and Binder is set, binds it to an
+// existing session and returns ErrPathBound. Every other first frame closes the carrier without a
+// message. The carrier is always closed or handed to the session. It is safe to call concurrently.
+func AcceptCarrier(ctx context.Context, c mux.Carrier, cfg AcceptConfig) (*Established, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c == nil || cfg.Local.Device == nil {
+		return nil, fmt.Errorf("%w: carrier and device are required", ErrConfig)
+	}
+	clk := clockOr(cfg.Clock)
 	g := mux.NewGuard(c)
 
 	var adm *Admission
@@ -287,11 +301,12 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			if err != nil {
 				return nil, rejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, err)
 			}
-			if hs.Peer != nil && cfg.Limits.Banned(hs.Peer.DeviceID) {
-				// A ban applies to an authenticated device ID only, so it is enforced here, once
-				// message 3 has named the peer; never to a source address (handshake §11).
-				_ = c.Close()
-				return nil, ErrBanned
+			if hs.Peer != nil && cfg.Limits.BannedPeer(hs.Peer.DeviceID, hs.Peer.NodeID) {
+				// A ban applies to an authenticated device or node ID only, so it is enforced
+				// here, once message 3 has named the peer; never to a source address
+				// (handshake §11). The answer is REJECT{banned} (§8), sent like every other
+				// refusal after message 3 so that timing does not tell the reasons apart (AD20).
+				return nil, sendRejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, handshake.ReasonBanned, ErrBanned)
 			}
 			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, local, remoteOf(c),
 				cfg.Control, cfg.Timers, cfg.Policy, cfg.LowPower,
@@ -314,7 +329,12 @@ func rejectAfterFinish(c mux.Carrier, s mux.RawStream, clk carrier.Clock, hs *ha
 		_ = c.Close()
 		return wrapSilent(err)
 	}
-	payload := (&handshake.Reject{Reason: handshake.ReasonCardInvalid}).Marshal()
+	return sendRejectAfterFinish(c, s, clk, hs, kind, handshake.ReasonCardInvalid, err)
+}
+
+// sendRejectAfterFinish sends REJECT{reason} after message 3 and closes once it is flushed.
+func sendRejectAfterFinish(c mux.Carrier, s mux.RawStream, clk carrier.Clock, hs *handshake.Session, kind mux.PathKind, reason uint32, cause error) error {
+	payload := (&handshake.Reject{Reason: reason}).Marshal()
 	sealed := c.Sealed() || kind == mux.PathRelay
 	if sealed {
 		body := frame.AppendFrame(nil, frame.Frame{Type: frame.TypeReject, Payload: payload})
@@ -324,10 +344,10 @@ func rejectAfterFinish(c mux.Carrier, s mux.RawStream, clk carrier.Clock, hs *ha
 		}
 	} else if werr := writeFrame(s, clk, frame.TypeReject, payload); werr != nil {
 		_ = c.Close()
-		return wrapSilent(err)
+		return wrapSilent(cause)
 	}
 	closeAfterFlush(c, clk)
-	return &ErrRejected{Reason: handshake.ReasonCardInvalid, Cause: err}
+	return &ErrRejected{Reason: reason, Cause: cause}
 }
 
 // writeSealed writes one plaintext frame as a sealed record of path 0 on the control stream. A

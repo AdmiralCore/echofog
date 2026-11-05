@@ -64,8 +64,17 @@ func TestAcceptSendsRejectBannedAfterMessage3(t *testing.T) {
 		t.Fatalf("Accept: %v, want ErrBanned", srvErr)
 	}
 	r := <-dialed
-	var rej *session.ErrRejected
-	if !errors.As(r.err, &rej) || rej.Reason != handshake.ReasonBanned {
-		t.Fatalf("Dial: %v, want REJECT{banned}", r.err)
+	if r.err != nil {
+		t.Fatalf("Dial: %v", r.err)
+	}
+	t.Cleanup(func() { _ = r.est.Session.Close() })
+	select {
+	case <-r.est.Session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("REJECT{banned} did not reach the initiator")
+	}
+	var rej *mux.RejectError
+	if !errors.As(r.est.Session.Err(), &rej) || rej.Reason != handshake.ReasonBanned {
+		t.Fatalf("initiator session error: %v, want REJECT{banned}", r.est.Session.Err())
 	}
 }

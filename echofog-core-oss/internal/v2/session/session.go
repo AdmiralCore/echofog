@@ -301,12 +301,12 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 	if pad != nil {
 		cfg.IdlePad = pad.next
 	}
-	var peerID [32]byte
+	var peerID, peerNode [32]byte
 	if hs.Peer != nil {
-		peerID = hs.Peer.DeviceID
+		peerID, peerNode = hs.Peer.DeviceID, hs.Peer.NodeID
 	}
 	if lim != nil {
-		cfg.OnAbuse = lim.AbuseHandler(peerID)
+		cfg.OnAbuse = lim.AbuseHandlerFor(peerID, peerNode)
 	}
 	var src controlSource
 	if ctl != nil {

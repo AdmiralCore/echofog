@@ -17,86 +17,113 @@ import (
 // beforeAdd is a test seam that runs right before an accepted session enters the table.
 var beforeAdd func(*session.Established)
 
-// acceptLoop accepts carriers from one listener and turns each completed handshake into a table
-// entry and a service loop. Refusals are ordinary protocol behaviour (a hidden node closes
-// silently, an expired card gets REJECT), so they are not runtime errors.
+// maxHandshaking bounds the goroutines that run handshakes at once. It is a hard cap above the
+// pre-authentication limits (handshake §11): up to MaxPreAuthTotal handshakes are in flight before
+// the puzzle gets harder, and a carrier beyond the cap is closed without a byte.
+const maxHandshaking = 4 * session.MaxPreAuthTotal
+
+// acceptLoop takes carriers from one listener and hands each to its own goroutine, which runs the
+// handshake and turns it into a table entry and a service loop. The loop itself only accepts, so
+// one slow initiator never holds up the others and the limits and the puzzle policy of Limits see
+// the handshakes that are really in flight (T3.5). Refusals are ordinary protocol behaviour (a
+// hidden node closes silently, an expired card gets REJECT), so they are not runtime errors.
 func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 	defer r.wg.Done()
 	for ctx.Err() == nil {
-		local, err := r.mainLocal(ctx)
+		c, err := l.Accept(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				r.listenerStopped(err)
 			}
 			return
 		}
-		onEstablished, onPathFailed := r.pathHooks()
-		cfg := session.AcceptConfig{
-			Local:         local,
-			Hidden:        r.Self().Visibility != cards.Visible,
-			Passes:        r.cfg.Passes,
-			Puzzle:        r.cfg.Puzzle,
-			Limits:        r.limits,
-			Bindings:      r.bindings,
-			Control:       r.control,
-			Clock:         r.carrierClock,
-			Offset:        r.clock.Offset(),
-			Kind:          mux.PathDirect,
-			Policy:        r.policyFunc,
-			Verifier:      nil,
-			Binder:        r.binder,
-			LowPower:      r.cfg.Profile.LowPower,
-			IdlePadding:   r.cfg.ShapeProfile,
-			OnEstablished: onEstablished,
-			OnPathFailed:  onPathFailed,
-		}
-		est, err := session.Accept(ctx, l, cfg)
-		switch {
-		case err == nil:
-		case ctx.Err() != nil:
-			return
-		case errors.Is(err, session.ErrPathBound):
-			continue
-		default:
-			r.log.Debug("node: accepted carrier refused", "err", err)
-			continue
-		}
-
-		if est.Access == nil || r.accessMgr == nil {
-			r.takeAccepted(ctx, local, est, nil, nil)
-			continue
-		}
-		// A hidden node books the pass (redeem or renew) before the session enters the table, off
-		// the accept loop: a slow store write of one contact must not stop the others from being
-		// accepted (T3.6b). A pass that cannot be booked is not kept: fail closed.
-		if r.Background() == BackgroundSuspended {
-			// A pass is not spent while suspended: the peer is told to come back later.
-			_ = est.GoAway(ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
-			continue
-		}
 		select {
-		case r.admitSem <- struct{}{}:
-		case <-ctx.Done():
-			_ = est.Session.Close()
-			return
+		case r.hsSem <- struct{}{}:
+		default:
+			// Over the hard cap: nothing is read or sent.
+			_ = c.Close()
+			continue
 		}
 		r.wg.Add(1)
-		go func(local session.LocalIdentity, est *session.Established) {
+		go func() {
 			defer r.wg.Done()
-			defer func() { <-r.admitSem }()
-			adm, card, err := r.admit(ctx, est)
-			if err != nil {
-				r.log.Debug("node: access session refused", "err", err)
-				_ = est.Session.Close()
-				return
-			}
-			r.takeAccepted(ctx, local, est, &adm, card)
-			if err := r.RefreshAccess(ctx); err != nil {
-				// The pass is booked and the session is valid; a failed listener refresh must
-				// not drop it. The next RefreshAccess retries from the same persistent state.
-				r.log.Warn("node: access refresh after a session", "err", err)
-			}
-		}(local, est)
+			defer func() { <-r.hsSem }()
+			r.serveCarrier(ctx, c)
+		}()
+	}
+}
+
+// serveCarrier runs the handshake of one accepted carrier and enters the session.
+func (r *Runtime) serveCarrier(ctx context.Context, c mux.Carrier) {
+	local, err := r.mainLocal(ctx)
+	if err != nil {
+		_ = c.Close()
+		if ctx.Err() == nil {
+			r.listenerStopped(err)
+		}
+		return
+	}
+	onEstablished, onPathFailed := r.pathHooks()
+	cfg := session.AcceptConfig{
+		Local:         local,
+		Hidden:        r.Self().Visibility != cards.Visible,
+		Passes:        r.cfg.Passes,
+		Puzzle:        r.cfg.Puzzle,
+		Limits:        r.limits,
+		Bindings:      r.bindings,
+		Control:       r.control,
+		Clock:         r.carrierClock,
+		Offset:        r.clock.Offset(),
+		Kind:          mux.PathDirect,
+		Policy:        r.policyFunc,
+		Verifier:      nil,
+		Binder:        r.binder,
+		LowPower:      r.cfg.Profile.LowPower,
+		IdlePadding:   r.cfg.ShapeProfile,
+		OnEstablished: onEstablished,
+		OnPathFailed:  onPathFailed,
+	}
+	est, err := session.AcceptCarrier(ctx, c, cfg)
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		return
+	case errors.Is(err, session.ErrPathBound):
+		return
+	default:
+		r.log.Debug("node: accepted carrier refused", "err", err)
+		return
+	}
+
+	if est.Access == nil || r.accessMgr == nil {
+		r.takeAccepted(ctx, local, est, nil, nil)
+		return
+	}
+	// A hidden node books the pass (redeem or renew) before the session enters the table. A pass
+	// that cannot be booked is not kept: fail closed. The bookings are bounded by admitSem.
+	if r.Background() == BackgroundSuspended {
+		// A pass is not spent while suspended: the peer is told to come back later.
+		_ = est.GoAway(ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+		return
+	}
+	select {
+	case r.admitSem <- struct{}{}:
+	case <-ctx.Done():
+		_ = est.Session.Close()
+		return
+	}
+	defer func() { <-r.admitSem }()
+	adm, card, err := r.admit(ctx, est)
+	if err != nil {
+		r.log.Debug("node: access session refused", "err", err)
+		_ = est.Session.Close()
+		return
+	}
+	r.takeAccepted(ctx, local, est, &adm, card)
+	if err := r.RefreshAccess(ctx); err != nil {
+		// The pass is booked and the session is valid; a failed listener refresh must not drop
+		// it. The next RefreshAccess retries from the same persistent state.
+		r.log.Warn("node: access refresh after a session", "err", err)
 	}
 }
 
