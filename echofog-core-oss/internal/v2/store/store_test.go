@@ -382,11 +382,14 @@ func TestValueCannotMoveToAnotherNamespace(t *testing.T) {
 	}
 }
 
-func TestWrongStorageKeyDoesNotOpenValues(t *testing.T) {
+// TestWrongStorageKeyFailsOnOpen pins that another storage key is refused by Open, before the
+// caller can read old values or write new ones under the wrong key.
+func TestWrongStorageKeyFailsOnOpen(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	st := openStore(t, dir, testKey(t, 7), 0)
+	key := testKey(t, 7)
+	st := openStore(t, dir, key, 0)
 	if err := st.Store("chat").Put([]byte("k"), []byte("secret")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -394,9 +397,13 @@ func TestWrongStorageKeyDoesNotOpenValues(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	st = openStore(t, dir, testKey(t, 8), 0)
-	if _, err := st.Store("chat").Get([]byte("k")); !errors.Is(err, ErrValueDamaged) {
-		t.Fatalf("Get under another storage key: %v, want ErrValueDamaged", err)
+	if _, err := Open(Options{Dir: dir, Key: testKey(t, 8)}); !errors.Is(err, ErrWrongStorageKey) {
+		t.Fatalf("Open under another storage key: %v, want ErrWrongStorageKey", err)
+	}
+
+	st = openStore(t, dir, key, 0)
+	if got, err := st.Store("chat").Get([]byte("k")); err != nil || string(got) != "secret" {
+		t.Fatalf("Get after the refused open = %q, %v", got, err)
 	}
 }
 

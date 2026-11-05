@@ -7,8 +7,15 @@
 //
 // Values are encrypted with the account's storage key (T4.1) before they reach badger; a value is
 // bound to its namespaced key as associated data, so it cannot be moved under another key. Keys
-// stay in the clear so that ordering and prefix scans work; a service blinds identifiers before
-// it builds them when they identify people.
+// stay in the clear so that ordering and prefix scans work. A service therefore puts only an
+// opaque id into a key: NewIDs blinds a raw identifier under the storage key and a domain (peer,
+// chat, group, device), deterministically and irreversibly. Raw identifiers never reach the disk,
+// logs or errors.
+//
+// Open checks the storage key against a verifier record before any other record is touched: another
+// key returns ErrWrongStorageKey. The verifier lives in the same schema 200 store as a store-level
+// record, so a database written before it existed opens once with its key and receives one; the
+// schema number does not change.
 //
 // Services do not see the database. They get one namespace at a time through Store(ns), which is
 // the KV that node.Host.Store(ns) returns (02-architecture §3.1). Namespaces are separated by an
