@@ -130,6 +130,9 @@ func helloX25519Share(msg []byte) ([]byte, bool) {
 	}
 	msg = msg[:end]
 	p := 4 + 2 + 32
+	if p >= len(msg) {
+		return nil, false
+	}
 	p += 1 + int(msg[p])
 	if p+2 > len(msg) {
 		return nil, false

@@ -53,7 +53,6 @@ type Listener struct {
 	ql     *quic.Listener
 	cover  *UDPCover
 	replay *Replay
-	cancel context.CancelFunc
 
 	closeOnce sync.Once
 	closeErr  error
@@ -77,9 +76,10 @@ func Listen(conn net.PacketConn, cfg ListenerConfig) (*Listener, error) {
 	}
 
 	cover, err := NewUDPCover(CoverConfig{
-		Addr:  cfg.CoverAddr,
-		Reply: func(p []byte, src net.Addr) { _, _ = conn.WriteTo(p, src) },
-		Now:   now,
+		Addr:    cfg.CoverAddr,
+		Reply:   func(p []byte, src net.Addr) { _, _ = conn.WriteTo(p, src) },
+		Now:     now,
+		OnError: cfg.OnError,
 	})
 	if err != nil {
 		return nil, err
@@ -88,6 +88,7 @@ func Listen(conn net.PacketConn, cfg ListenerConfig) (*Listener, error) {
 	if replay == nil {
 		replay = NewReplay(ReplayConfig{Now: now, OnError: cfg.OnError})
 	}
+	replay.acquire()
 	gate, err := NewGate(conn, GateConfig{
 		Masks:  cfg.Masks,
 		Addrs:  cfg.Addrs,
@@ -96,6 +97,7 @@ func Listen(conn net.PacketConn, cfg ListenerConfig) (*Listener, error) {
 		Now:    now,
 	})
 	if err != nil {
+		replay.release()
 		_ = cover.Close()
 		return nil, err
 	}
@@ -107,13 +109,12 @@ func Listen(conn net.PacketConn, cfg ListenerConfig) (*Listener, error) {
 		MaxIncomingUniStreams: -1, // mux.Carrier has no unidirectional streams
 	})
 	if err != nil {
+		replay.release()
 		_ = cover.Close()
 		_ = conn.Close()
 		return nil, fmt.Errorf("reality2: listen: %w", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go replay.Run(ctx)
-	return &Listener{gate: gate, ql: ql, cover: cover, replay: replay, cancel: cancel}, nil
+	return &Listener{gate: gate, ql: ql, cover: cover, replay: replay}, nil
 }
 
 // Accept returns the next admitted connection as a carrier.
@@ -131,8 +132,7 @@ func (l *Listener) Addr() net.Addr { return l.gate.LocalAddr() }
 // Close stops the listener, the replay flusher and every cover socket. It is idempotent.
 func (l *Listener) Close() error {
 	l.closeOnce.Do(func() {
-		l.cancel()
-		l.replay.Flush()
+		l.replay.release()
 		err := l.ql.Close()
 		if cerr := l.cover.Close(); err == nil {
 			err = cerr

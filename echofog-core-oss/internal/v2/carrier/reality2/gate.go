@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/sha256"
 	"errors"
+	mrand "math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -19,11 +20,15 @@ const (
 	DefaultMaxPending = 256
 	// DefaultMaxPendingBytes is how many bytes one stranger source may buffer.
 	DefaultMaxPendingBytes = 8 << 10
-	// DefaultPendingTTL is how long a partial flight waits for its remaining Initials.
+	// DefaultPendingTTL is how long a partial flight waits for its remaining Initials before
+	// it is forwarded to the cover.
 	DefaultPendingTTL = 500 * time.Millisecond
-	// admittedIdle is how long an admitted 4-tuple is remembered. It only bounds memory: a
-	// packet after that is simply treated as new, never dropped.
-	admittedIdle = 10 * time.Minute
+	// admittedIdle is how long an admitted 4-tuple keeps its entry without any traffic in
+	// either direction. Every packet to or from the source renews the lease, so a live
+	// connection is never cut. The value is deliberately longer than a QUIC idle timeout: it
+	// is only a bound on the map of sources that went silent, and a stale tuple costs
+	// nothing (the QUIC stack ignores packets of an unknown connection).
+	admittedIdle = 30 * time.Minute
 )
 
 // MaskKey is one live masking key of the listener (wire.md §3.3: at most 8).
@@ -73,6 +78,10 @@ type Gate struct {
 	pending  map[string]*pendingFlight
 	admitted map[string]time.Time
 	queue    []delivery
+
+	stop      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 }
 
 type delivery struct {
@@ -119,6 +128,7 @@ func NewGate(conn net.PacketConn, cfg GateConfig) (*Gate, error) {
 		ttl:        cfg.PendingTTL,
 		pending:    make(map[string]*pendingFlight),
 		admitted:   make(map[string]time.Time),
+		stop:       make(chan struct{}),
 	}
 	if g.now == nil {
 		g.now = time.Now
@@ -139,7 +149,48 @@ func NewGate(conn net.PacketConn, cfg GateConfig) (*Gate, error) {
 		pub := m.Private.PublicKey().Bytes()
 		g.masks = append(g.masks, maskEntry{sk: m.Private, pub: pub, id: sha256.Sum256(pub)})
 	}
+	go g.reapLoop()
 	return g, nil
+}
+
+// reapLoop forwards partial flights that passed PendingTTL even when no further packet from
+// their source arrives: a lone Initial must end at the cover by the clock, not only when the
+// next packet happens to come. Decisions use the injectable clock; the ticker only wakes the
+// loop up, at half the TTL with the ±20 % jitter of AD13.
+func (g *Gate) reapLoop() {
+	period := g.ttl / 2
+	if period < time.Millisecond {
+		period = time.Millisecond
+	}
+	jitter := period / 5
+	timer := time.NewTimer(period + mrand.N(jitter+1))
+	defer timer.Stop()
+	for {
+		select {
+		case <-g.stop:
+			return
+		case <-timer.C:
+			g.reapExpired()
+			timer.Reset(period + mrand.N(jitter+1))
+		}
+	}
+}
+
+// reapExpired moves every pending flight older than the TTL to the cover.
+func (g *Gate) reapExpired() {
+	now := g.now()
+	var expired []coverPkt
+	g.mu.Lock()
+	for k, f := range g.pending {
+		if now.Sub(f.started) > g.ttl {
+			for _, raw := range f.raws {
+				expired = append(expired, coverPkt{f.src, raw})
+			}
+			delete(g.pending, k)
+		}
+	}
+	g.mu.Unlock()
+	g.forwardAll(expired)
 }
 
 // ReadFrom returns the next packet for the QUIC stack. Packets from strangers are verified or
@@ -318,17 +369,23 @@ func (g *Gate) popDelivery() (delivery, bool) {
 	return d, true
 }
 
+// isAdmitted reports whether key is an admitted 4-tuple and renews its lease. Every packet in
+// either direction keeps a live connection admitted, so a session is never cut after a fixed
+// time; only a source silent for admittedIdle loses its entry (and then a new hello is needed,
+// which is exactly what a dead connection would send).
 func (g *Gate) isAdmitted(key string) bool {
+	now := g.now()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	at, ok := g.admitted[key]
 	if !ok {
 		return false
 	}
-	if g.now().Sub(at) > admittedIdle {
+	if now.Sub(at) > admittedIdle {
 		delete(g.admitted, key)
 		return false
 	}
+	g.admitted[key] = now
 	return true
 }
 
@@ -347,7 +404,15 @@ func (g *Gate) WriteTo(p []byte, addr net.Addr) (int, error) {
 	return g.conn.WriteTo(p, addr)
 }
 
-func (g *Gate) Close() error                       { return g.conn.Close() }
+// Close stops the pending-flight reaper and closes the socket. It is idempotent.
+func (g *Gate) Close() error {
+	g.closeOnce.Do(func() {
+		close(g.stop)
+		g.closeErr = g.conn.Close()
+	})
+	return g.closeErr
+}
+
 func (g *Gate) LocalAddr() net.Addr                { return g.conn.LocalAddr() }
 func (g *Gate) SetDeadline(t time.Time) error      { return g.conn.SetDeadline(t) }
 func (g *Gate) SetReadDeadline(t time.Time) error  { return g.conn.SetReadDeadline(t) }

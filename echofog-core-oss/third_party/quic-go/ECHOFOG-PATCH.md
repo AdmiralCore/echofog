@@ -2,16 +2,17 @@
 
 This is `github.com/apernet/quic-go` at
 `v0.63.1-0.20261004180939-a10df75c260c`, the version EchoFog already depended on,
-with four small, self-contained changes. `go.mod` in `echofog-core-oss` points at
-this copy with a `replace` directive. Test files (`*_test.go`), mocks, and the
-`integrationtests/`, `interop/`, `example/`, `testutils/` and `metrics/` trees
-were dropped to keep the copy reviewable; nothing in the library's own build path
-imported them. The exceptions are the fuzz target for patch 3 and the tests of
-patch 4; see below.
+with four numbered patches (§1–§4) and two earlier local changes that predate the
+numbering (§5). `go.mod` in `echofog-core-oss` points at this copy with a `replace`
+directive. Test files (`*_test.go`), mocks, and the `integrationtests/`, `interop/`,
+`example/`, `testutils/` and `metrics/` trees were dropped to keep the copy reviewable;
+nothing in the library's own build path imported them. The exceptions are the fuzz
+target for patch 3 and the tests of patch 4; see below.
 
 To review, diff this tree against the upstream module at that version
 (`go mod download github.com/apernet/quic-go@v0.63.1-0.20261004180939-a10df75c260c`
-gives the cache path). The only functional changes are the four below.
+gives the cache path). Nine files differ in total: §1–§4 explain seven of them, §5 the
+other two (`chrome_parrot.go`, `datagram_queue.go`).
 
 ## 1. Real GREASE in the Chrome QUIC ClientHello
 `internal/handshake/chrome_client_hello.go`
@@ -143,3 +144,24 @@ it receives against the hello's share, the random on the wire (decrypted from th
 client's Initial packets) and a completed handshake. It skips itself when the
 toolchain does not honour the custom reader, with that reason.
 
+
+## 5. Earlier local changes (present before patches 1-4)
+
+These two changes were already in EchoFog's copy when the numbered patches were
+introduced. They are listed here so the fork is fully accounted for; a diff against
+upstream shows them alongside �1-�4.
+
+### 5.1 `chrome_parrot.go`: `ChromeParrotKeyShare`
+Adds the exported `ChromeParrotKeyShare(rand io.Reader, alpn []string) ([]byte, error)`,
+a thin wrapper over `internal/handshake.ChromeParrotKeyShare`. It builds a throwaway
+Chrome ClientHello over the given randomness and returns its key_share extension body.
+v1's REALITY QUIC dial (`internal/network/mimicry`, `internal/network/quic_reality_conn.go`)
+uses it to predict the key share before sending the stealth token. v2 does not use it;
+the change is inert for callers that do not call it.
+
+### 5.2 `datagram_queue.go`: deeper queues and a drop counter
+Raises `maxDatagramSendQueueLen` from 32 to 64 and `maxDatagramRcvQueueLen` from 128 to
+2048, so a burst (a video keyframe is hundreds of datagrams) is not discarded while the
+reader pauses. Adds `DiscardedDatagrams() uint64`, a process-wide counter of received
+DATAGRAM frames dropped because the receive queue was full. No wire behaviour changes;
+buffers are bounded, and the queues live only for a connection.

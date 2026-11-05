@@ -3,6 +3,7 @@ package reality2
 import (
 	"errors"
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
@@ -41,11 +42,17 @@ type CoverConfig struct {
 	IdleTimeout time.Duration
 	// Now is the injectable clock; nil means time.Now.
 	Now func() time.Time
+	// OnError receives cover socket errors (a failed dial, a failed write, a read that ends
+	// abnormally). Nil ignores them. A stranger's traffic is best effort either way.
+	OnError func(error)
 }
 
 // UDPCover is the cover forwarder of wire.md §3.3.
 type UDPCover struct {
 	cfg CoverConfig
+
+	// dial opens an outbound UDP socket; net.DialUDP unless a test replaces it.
+	dial func(network string, laddr, raddr *net.UDPAddr) (*net.UDPConn, error)
 
 	mu       sync.Mutex
 	sessions map[string]*coverSession
@@ -77,7 +84,18 @@ func NewUDPCover(cfg CoverConfig) (*UDPCover, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &UDPCover{cfg: cfg, sessions: make(map[string]*coverSession)}, nil
+	return &UDPCover{
+		cfg:      cfg,
+		dial:     net.DialUDP,
+		sessions: make(map[string]*coverSession),
+	}, nil
+}
+
+// report passes a cover socket error to the configured handler, if any.
+func (c *UDPCover) report(err error) {
+	if c.cfg.OnError != nil && !errors.Is(err, net.ErrClosed) {
+		c.cfg.OnError(err)
+	}
 }
 
 // Forward sends p from src to the cover.
@@ -96,27 +114,44 @@ func (c *UDPCover) Forward(src net.Addr, p []byte) {
 	if s := c.sessions[key]; s != nil {
 		s.lastUsed = now
 		c.mu.Unlock()
-		_, _ = s.conn.Write(p)
+		if _, err := s.conn.Write(p); err != nil {
+			c.report(err)
+		}
 		return
 	}
-	if len(c.sessions) < c.cfg.MaxSessions {
+	// A full table is where eviction matters: sessions idle for longer than IdleTimeout are
+	// closed to make room for the new stranger (wire.md §3.3). Below the limit no scan runs,
+	// so a stream of new sources does not pay for one per packet.
+	if len(c.sessions) >= c.cfg.MaxSessions {
 		c.evictIdleLocked(now)
 	}
 	if len(c.sessions) < c.cfg.MaxSessions {
-		conn, err := net.DialUDP("udp", nil, c.cfg.Addr)
+		dial := c.dial
+		if dial == nil {
+			dial = net.DialUDP
+		}
+		conn, err := dial("udp", nil, c.cfg.Addr)
 		if err == nil {
 			s := &coverSession{conn: conn, src: src, lastUsed: now}
 			c.sessions[key] = s
 			c.mu.Unlock()
 			go c.readSession(s)
-			_, _ = conn.Write(p)
+			if _, err := conn.Write(p); err != nil {
+				c.report(err)
+			}
 			return
 		}
+		c.report(err)
 	}
 	if c.shared == nil {
-		shared, err := newSharedCover(c.cfg)
+		dial := c.dial
+		if dial == nil {
+			dial = net.DialUDP
+		}
+		shared, err := newSharedCover(c.cfg, dial)
 		if err != nil {
 			c.mu.Unlock()
+			c.report(err)
 			return
 		}
 		c.shared = shared
@@ -143,6 +178,7 @@ func (c *UDPCover) readSession(s *coverSession) {
 	for {
 		n, err := s.conn.Read(buf)
 		if err != nil {
+			c.report(err)
 			return
 		}
 		c.mu.Lock()
@@ -157,6 +193,7 @@ func (c *UDPCover) readShared(s *sharedCover) {
 	for {
 		n, err := s.conn.Read(buf)
 		if err != nil {
+			c.report(err)
 			return
 		}
 		if src, ok := s.lookup(buf[:n]); ok {
@@ -190,15 +227,18 @@ type sharedCover struct {
 	conn net.Conn
 	addr *net.UDPAddr
 
-	mu     sync.Mutex
-	byCID  map[string]net.Addr
-	order  []string
-	lens   map[int]struct{}
-	closed bool
+	mu    sync.Mutex
+	byCID map[string]net.Addr
+	order []string
+	lens  map[int]struct{}
+	onErr func(error)
 }
 
-func newSharedCover(cfg CoverConfig) (*sharedCover, error) {
-	conn, err := net.DialUDP("udp", nil, cfg.Addr)
+func newSharedCover(cfg CoverConfig, dial func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)) (*sharedCover, error) {
+	if dial == nil {
+		dial = net.DialUDP
+	}
+	conn, err := dial("udp", nil, cfg.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -207,29 +247,40 @@ func newSharedCover(cfg CoverConfig) (*sharedCover, error) {
 		addr:  cfg.Addr,
 		byCID: make(map[string]net.Addr),
 		lens:  make(map[int]struct{}),
+		onErr: cfg.OnError,
 	}, nil
 }
 
+// forward sends one packet and remembers which stranger owns the source connection ID. The
+// first owner wins: a stranger that reuses another's CID must not take over its replies, and a
+// real client never reuses a CID across sources.
 func (s *sharedCover) forward(src net.Addr, p []byte) {
 	if cid, ok := clientSCID(p); ok && len(cid) > 0 {
 		key := string(cid)
 		s.mu.Lock()
-		if _, seen := s.byCID[key]; !seen {
+		owner, seen := s.byCID[key]
+		if !seen {
 			s.order = append(s.order, key)
 			if len(s.order) > maxSharedCIDs {
 				delete(s.byCID, s.order[0])
 				s.order = s.order[1:]
 			}
+			s.byCID[key] = src
+		} else if owner.String() == src.String() {
+			// The same source sent another Initial/Coalesced packet: nothing to update.
 		}
-		s.byCID[key] = src
 		s.lens[len(cid)] = struct{}{}
 		s.mu.Unlock()
 	}
-	_, _ = s.conn.Write(p)
+	if _, err := s.conn.Write(p); err != nil && s.onErr != nil && !errors.Is(err, net.ErrClosed) {
+		s.onErr(err)
+	}
 }
 
-// lookup finds the stranger a cover reply belongs to. A long header carries the DCID length;
-// a short header does not, so every client CID length seen on this socket is tried.
+// lookup finds the stranger a cover reply belongs to. A long header carries the DCID length; a
+// short header does not, so every client CID length seen on this socket is tried, longest
+// first: the most specific match wins, so a short CID that is a prefix of another cannot
+// capture the longer one's replies.
 func (s *sharedCover) lookup(p []byte) (net.Addr, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -247,7 +298,12 @@ func (s *sharedCover) lookup(p []byte) (net.Addr, bool) {
 		src, ok := s.byCID[string(p[6:6+l])]
 		return src, ok
 	}
+	lens := make([]int, 0, len(s.lens))
 	for l := range s.lens {
+		lens = append(lens, l)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(lens)))
+	for _, l := range lens {
 		if len(p) < 1+l {
 			continue
 		}
@@ -277,5 +333,3 @@ func clientSCID(p []byte) ([]byte, bool) {
 	}
 	return p[off : off+scidLen], true
 }
-
-// serverCIDLen returns the length of the destination connection ID in a long-header packet.

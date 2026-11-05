@@ -9,6 +9,7 @@ import (
 	"fmt"
 	mrand "math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -16,10 +17,16 @@ import (
 
 // The token replay cache of wire.md §3.3 step 4: the 32-byte tokens of admitted hellos,
 // kept 900 s, shared by every listener that uses the same masking key, persisted across
-// restarts as a Bloom filter.
+// restarts as a Bloom filter. A cache that cannot be read fails closed: tokens are refused
+// (sent to the cover) until the store answers again, because admitting them would reopen the
+// 900-second replay window.
 const (
 	// ReplayTTL is how long an accepted token stays in the cache.
 	ReplayTTL = 900 * time.Second
+
+	// replayLoadRetry is how long a failed KV load is remembered before trying again. While
+	// the load has failed, SeenOrAdd treats every token as a replay (fail-closed).
+	replayLoadRetry = time.Second
 
 	// Bloom geometry: 2^19 bits (64 KiB) with 4 probes holds roughly 45 000 tokens at a 1 %
 	// false-positive rate, well above 900 s of admissions for any single masking key.
@@ -36,13 +43,13 @@ const (
 	replayVersion = 1
 )
 
-// ErrReplay is the KV read/write error of the replay cache; a broken cache never admits a
-// token the node has seen (which is a stronger failure than refusing to start).
+// ErrReplay is the KV read/write error of the replay cache. A failed load makes the cache
+// refuse tokens (fail-closed) until it recovers; a failed save only delays persistence.
 var ErrReplay = errors.New("reality2: replay cache")
 
 // ReplayConfig configures Replay.
 type ReplayConfig struct {
-	// KV persists the filters. Nil keeps them in memory only.
+	// KV persists the filters. Nil keeps them in memory only (no restart persistence).
 	KV carrier.KV
 	// Now is the injectable clock; nil means time.Now.
 	Now func() time.Time
@@ -58,6 +65,12 @@ type Replay struct {
 
 	mu   sync.Mutex
 	sets map[[32]byte]*replaySet
+
+	runMu    sync.Mutex
+	refs     int
+	cancel   context.CancelFunc
+	done     chan struct{}
+	flushers atomic.Int32
 }
 
 // replaySet is two Bloom generations of one masking key: the current one and the previous
@@ -67,6 +80,10 @@ type replaySet struct {
 	rotated   time.Time
 	loaded    bool
 	dirty     bool
+	// loadErr is the last failed KV load. While it is set SeenOrAdd refuses every token;
+	// retryAt is when the next load attempt happens.
+	loadErr error
+	retryAt time.Time
 }
 
 // NewReplay builds a replay cache. A nil KV makes it memory-only.
@@ -90,6 +107,11 @@ func (r *Replay) SeenOrAdd(maskID [32]byte, token []byte) bool {
 	if set == nil {
 		return false
 	}
+	if set.loadErr != nil {
+		// Fail closed: without the stored filter a token may be a replay from before the
+		// restart, and admitting it would reopen the window.
+		return true
+	}
 	if r.now().Sub(set.rotated) >= ReplayTTL {
 		set.prev = set.cur
 		set.cur = [bloomBits / 8]byte{}
@@ -106,9 +128,10 @@ func (r *Replay) SeenOrAdd(maskID [32]byte, token []byte) bool {
 
 // setLocked returns the set of maskID, loading it from the KV on first use.
 func (r *Replay) setLocked(maskID [32]byte) *replaySet {
+	now := r.now()
 	if s := r.sets[maskID]; s != nil {
-		if !s.loaded {
-			r.loadLocked(maskID, s)
+		if !s.loaded || (s.loadErr != nil && !now.Before(s.retryAt)) {
+			r.loadLocked(maskID, s, now)
 		}
 		return s
 	}
@@ -126,28 +149,36 @@ func (r *Replay) setLocked(maskID [32]byte) *replaySet {
 		}
 		delete(r.sets, oldest)
 	}
-	s := &replaySet{rotated: r.now()}
+	s := &replaySet{rotated: now}
 	r.sets[maskID] = s
-	r.loadLocked(maskID, s)
+	r.loadLocked(maskID, s, now)
 	return s
 }
 
-func (r *Replay) loadLocked(maskID [32]byte, s *replaySet) {
+func (r *Replay) loadLocked(maskID [32]byte, s *replaySet, now time.Time) {
 	s.loaded = true
 	if r.kv == nil {
 		return
 	}
 	value, ok, err := r.kv.Get(context.Background(), replayKey(maskID))
 	if err != nil {
-		r.report(fmt.Errorf("%w: load: %v", ErrReplay, err))
+		s.loadErr = fmt.Errorf("%w: load: %v", ErrReplay, err)
+		s.retryAt = now.Add(replayLoadRetry)
+		r.report(s.loadErr)
 		return
 	}
-	if !ok {
-		return
+	if ok {
+		if err := s.unmarshal(value); err != nil {
+			// A corrupt stored filter cannot be recovered: start a fresh one and mark it
+			// dirty so the next Flush replaces the damaged value. Unlike a failed read this
+			// does not fail closed forever; there is nothing to preserve.
+			r.report(err)
+			s.cur = [bloomBits / 8]byte{}
+			s.prev = [bloomBits / 8]byte{}
+			s.dirty = true
+		}
 	}
-	if err := s.unmarshal(value); err != nil {
-		r.report(err)
-	}
+	s.loadErr = nil
 }
 
 // Flush persists every dirty set. It is called periodically by Run and on Close.
@@ -181,17 +212,54 @@ func (r *Replay) Flush() {
 	}
 }
 
-// Run flushes the cache every uniform(8, 12) s until ctx is done. It then flushes once more.
-func (r *Replay) Run(ctx context.Context) {
-	if r.kv == nil {
+// acquire registers one listener as a user of the cache. The periodic flusher runs while at
+// least one listener holds the cache, so a cache shared by several listeners of one masking
+// key has exactly one flusher. With no KV nothing is persisted and no flusher starts.
+func (r *Replay) acquire() {
+	r.runMu.Lock()
+	defer r.runMu.Unlock()
+	r.refs++
+	if r.refs > 1 || r.kv == nil {
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	r.cancel = cancel
+	r.done = done
+	r.flushers.Add(1)
+	go func() {
+		defer r.flushers.Add(-1)
+		defer close(done)
+		r.runLoop(ctx)
+	}()
+}
+
+// release drops one listener's hold; the last one stops the flusher and persists what is dirty.
+func (r *Replay) release() {
+	r.runMu.Lock()
+	r.refs--
+	if r.refs > 0 {
+		r.runMu.Unlock()
+		return
+	}
+	r.refs = 0
+	cancel, done := r.cancel, r.done
+	r.cancel, r.done = nil, nil
+	r.runMu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+	r.Flush()
+}
+
+// runLoop flushes the cache every uniform(8, 12) s until ctx is done.
+func (r *Replay) runLoop(ctx context.Context) {
 	timer := time.NewTimer(replayFlushMin + time.Duration(mrand.Int64N(int64(replayFlushJitter))))
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			r.Flush()
 			return
 		case <-timer.C:
 			r.Flush()

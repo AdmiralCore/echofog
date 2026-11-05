@@ -18,12 +18,11 @@ import (
 func TestGateAdmissionPersists(t *testing.T) {
 	conn := newFakeConn()
 	cover := &fakeCover{}
-	g, mask := newTestGate(t, conn, cover, nil, 0)
-	now := time.Unix(1793664000, 0)
-	g.now = func() time.Time { return now }
+	clk := newTestClock(time.Unix(1793664000, 0))
+	g, mask := newTestGate(t, conn, cover, nil, 0, clk)
 
 	src := fakeAddr("198.51.100.20:2000")
-	for _, p := range initialFlight(t, tokenHello(t, mask, testAddr, now)) {
+	for _, p := range initialFlight(t, tokenHello(t, mask, testAddr, clk.Now())) {
 		conn.in <- fakePacket{p, src}
 	}
 	if _, _, ok := readGate(t, g); !ok {
@@ -33,7 +32,7 @@ func TestGateAdmissionPersists(t *testing.T) {
 		t.Fatal("second Initial was not delivered")
 	}
 
-	now = now.Add(11 * time.Minute)
+	clk.Advance(11 * time.Minute)
 	short := []byte{0x41, 0x00, 0x01, 0x02, 0x03}
 	conn.in <- fakePacket{short, src}
 	got, _, ok := readGate(t, g)
@@ -106,14 +105,14 @@ func TestGatePendingFlightExpires(t *testing.T) {
 	conn := newFakeConn()
 	cover := &fakeCover{}
 	sk := mustMask(t)
-	now := time.Unix(1793664000, 0)
+	clk := newTestClock(time.Unix(1793664000, 0))
 	g, err := NewGate(conn, GateConfig{
 		Masks:      []MaskKey{{Private: sk}},
 		Addrs:      []string{testAddr},
 		Cover:      cover,
 		Replay:     NewReplay(ReplayConfig{}),
 		PendingTTL: 20 * time.Millisecond,
-		Now:        func() time.Time { return now },
+		Now:        clk.Now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -122,12 +121,12 @@ func TestGatePendingFlightExpires(t *testing.T) {
 	startPump(t, g)
 
 	src := fakeAddr("198.51.100.30:3")
-	conn.in <- fakePacket{initialFlight(t, tokenHello(t, sk, testAddr, now))[0], src}
+	conn.in <- fakePacket{initialFlight(t, tokenHello(t, sk, testAddr, clk.Now()))[0], src}
 	waitReads(t, conn, 2)
 	if cover.count() != 0 {
 		t.Fatal("a partial flight was forwarded before its TTL")
 	}
-	now = now.Add(21 * time.Millisecond)
+	clk.Advance(21 * time.Millisecond)
 	waitCount(t, cover, 1)
 }
 
@@ -310,6 +309,94 @@ func newCIDReplyServer(t *testing.T) *net.UDPAddr {
 		}
 	}()
 	return conn.LocalAddr().(*net.UDPAddr)
+}
+
+// TestCoverKeepsActiveSession covers the other half of finding 4: a session with recent
+// traffic is never evicted to make room, even at capacity; the newcomer waits on the shared
+// socket.
+func TestCoverKeepsActiveSession(t *testing.T) {
+	srv := newPortEchoServer(t)
+	replies := make(chan string, 8)
+	now := time.Unix(1793664000, 0)
+	c, err := NewUDPCover(CoverConfig{
+		Addr:        srv,
+		Reply:       func(p []byte, src net.Addr) { replies <- string(p) },
+		MaxSessions: 1,
+		IdleTimeout: 30 * time.Second,
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	sourceA := fakeAddr("198.51.100.1:1")
+	sourceB := fakeAddr("198.51.100.2:2")
+	reply := func() string {
+		t.Helper()
+		select {
+		case p := <-replies:
+			return p
+		case <-time.After(2 * time.Second):
+			t.Fatal("no cover reply")
+			return ""
+		}
+	}
+
+	c.Forward(sourceA, clientInitialForCID([]byte{1, 2, 3, 4}))
+	portA := portOf(t, reply())
+	now = now.Add(10 * time.Second)
+	c.Forward(sourceB, clientInitialForCID([]byte{5, 6, 7, 8}))
+	_ = reply()
+	now = now.Add(10 * time.Second)
+	c.Forward(sourceA, clientInitialForCID([]byte{1, 2, 3, 4}))
+	if portA2 := portOf(t, reply()); portA2 != portA {
+		t.Fatalf("an active session was evicted: port %s became %s", portA, portA2)
+	}
+}
+
+// TestCoverReportsErrors covers finding 5: cover socket errors reach ListenerConfig.OnError.
+func TestCoverReportsErrors(t *testing.T) {
+	errs := make(chan error, 4)
+	c, err := NewUDPCover(CoverConfig{
+		Addr:    &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 443},
+		Reply:   func([]byte, net.Addr) {},
+		OnError: func(err error) { errs <- err },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.dial = func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error) {
+		return nil, errors.New("dial failed")
+	}
+	c.Forward(fakeAddr("198.51.100.9:9"), []byte("x"))
+	select {
+	case err := <-errs:
+		if !strings.Contains(err.Error(), "dial failed") {
+			t.Fatalf("reported %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cover socket error was not reported")
+	}
+}
+
+// TestReplaySingleFlusher covers finding 10: a cache shared by several listeners runs one
+// flusher, not one per listener.
+func TestReplaySingleFlusher(t *testing.T) {
+	r := NewReplay(ReplayConfig{KV: newMemKV()})
+	r.acquire()
+	r.acquire()
+	if n := r.flushers.Load(); n != 1 {
+		t.Fatalf("%d flushers for two listeners, want 1", n)
+	}
+	r.release()
+	if n := r.flushers.Load(); n != 1 {
+		t.Fatalf("%d flushers after one release, want 1", n)
+	}
+	r.release()
+	if n := r.flushers.Load(); n != 0 {
+		t.Fatalf("%d flushers after the last release, want 0", n)
+	}
 }
 
 // flakyKV is a KV whose reads fail until setErr(nil).

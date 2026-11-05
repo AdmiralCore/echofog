@@ -82,19 +82,20 @@ func TestGateTriesEveryAddress(t *testing.T) {
 	conn := newFakeConn()
 	cover := &fakeCover{}
 	sk := mustMask(t)
+	clk := newTestClock(time.Unix(1793664000, 0))
 	g, err := NewGate(conn, GateConfig{
 		Masks:  []MaskKey{{Private: sk}},
 		Addrs:  []string{"192.0.2.10:443", "192.0.2.11:443"},
 		Cover:  cover,
 		Replay: NewReplay(ReplayConfig{}),
+		Now:    clk.Now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Unix(1793664000, 0)
-	g.now = func() time.Time { return now }
+	t.Cleanup(func() { _ = g.Close() })
 	src := fakeAddr("198.51.100.4:4")
-	for _, p := range initialFlight(t, tokenHello(t, sk, "192.0.2.11:443", now)) {
+	for _, p := range initialFlight(t, tokenHello(t, sk, "192.0.2.11:443", clk.Now())) {
 		conn.in <- fakePacket{p, src}
 	}
 	if _, _, ok := readGate(t, g); !ok {

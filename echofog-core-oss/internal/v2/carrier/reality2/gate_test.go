@@ -106,8 +106,30 @@ func (a fakeAddr) String() string  { return string(a) }
 
 const testAddr = "192.0.2.10:443"
 
-// newTestGate builds a gate with one masking key and one token address.
-func newTestGate(t *testing.T, conn net.PacketConn, cover Cover, replay *Replay, maxPending int) (*Gate, *ecdh.PrivateKey) {
+// testClock is a thread-safe injectable clock: the gate's pending-flight reaper reads it from
+// its own goroutine, so the tests must not write a plain time.Time from theirs.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newTestClock(t time.Time) *testClock { return &testClock{now: t} }
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// newTestGate builds a gate with one masking key and one token address. An optional clock makes
+// time deterministic for the whole gate, including its reaper.
+func newTestGate(t *testing.T, conn net.PacketConn, cover Cover, replay *Replay, maxPending int, clocks ...*testClock) (*Gate, *ecdh.PrivateKey) {
 	t.Helper()
 	sk, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -116,16 +138,21 @@ func newTestGate(t *testing.T, conn net.PacketConn, cover Cover, replay *Replay,
 	if replay == nil {
 		replay = NewReplay(ReplayConfig{})
 	}
-	g, err := NewGate(conn, GateConfig{
+	cfg := GateConfig{
 		Masks:      []MaskKey{{Private: sk}},
 		Addrs:      []string{testAddr},
 		Cover:      cover,
 		Replay:     replay,
 		MaxPending: maxPending,
-	})
+	}
+	if len(clocks) > 0 && clocks[0] != nil {
+		cfg.Now = clocks[0].Now
+	}
+	g, err := NewGate(conn, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = g.Close() })
 	return g, sk
 }
 
@@ -271,12 +298,11 @@ func readGate(t *testing.T, g *Gate) ([]byte, net.Addr, bool) {
 func TestGateAdmitsValidToken(t *testing.T) {
 	conn := newFakeConn()
 	cover := &fakeCover{}
-	g, mask := newTestGate(t, conn, cover, nil, 0)
-	now := time.Unix(1793664000, 0)
-	g.now = func() time.Time { return now }
+	clk := newTestClock(time.Unix(1793664000, 0))
+	g, mask := newTestGate(t, conn, cover, nil, 0, clk)
 
 	src := fakeAddr("198.51.100.7:5555")
-	flight := initialFlight(t, tokenHello(t, mask, testAddr, now))
+	flight := initialFlight(t, tokenHello(t, mask, testAddr, clk.Now()))
 	for _, p := range flight {
 		conn.in <- fakePacket{p, src}
 	}
@@ -311,19 +337,19 @@ func TestGateAdmitsValidToken(t *testing.T) {
 // TestGateStrangersToCover checks every rejection path of wire.md §3.3: the flight goes to
 // the cover and the node sends nothing to the stranger.
 func TestGateStrangersToCover(t *testing.T) {
-	now := time.Unix(1793664000, 0)
+	clk := newTestClock(time.Unix(1793664000, 0))
 	cases := []struct {
 		name  string
 		build func(t *testing.T, mask *ecdh.PrivateKey) [][]byte
 	}{
 		{"token for another address", func(t *testing.T, mask *ecdh.PrivateKey) [][]byte {
-			return initialFlight(t, tokenHello(t, mask, "198.51.100.9:443", now))
+			return initialFlight(t, tokenHello(t, mask, "198.51.100.9:443", clk.Now()))
 		}},
 		{"old timestamp", func(t *testing.T, mask *ecdh.PrivateKey) [][]byte {
-			return initialFlight(t, tokenHello(t, mask, testAddr, now.Add(-301*time.Second)))
+			return initialFlight(t, tokenHello(t, mask, testAddr, clk.Now().Add(-301*time.Second)))
 		}},
 		{"future timestamp", func(t *testing.T, mask *ecdh.PrivateKey) [][]byte {
-			return initialFlight(t, tokenHello(t, mask, testAddr, now.Add(301*time.Second)))
+			return initialFlight(t, tokenHello(t, mask, testAddr, clk.Now().Add(301*time.Second)))
 		}},
 		{"garbage", func(t *testing.T, mask *ecdh.PrivateKey) [][]byte {
 			return [][]byte{bytes.Repeat([]byte{0xa5}, 200)}
@@ -344,8 +370,7 @@ func TestGateStrangersToCover(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := newFakeConn()
 			cover := &fakeCover{}
-			g, mask := newTestGate(t, conn, cover, nil, 0)
-			g.now = func() time.Time { return now }
+			g, mask := newTestGate(t, conn, cover, nil, 0, clk)
 			src := fakeAddr("203.0.113.50:7777")
 			flight := tc.build(t, mask)
 			startPump(t, g)
@@ -369,11 +394,10 @@ func TestGateReplay(t *testing.T) {
 	conn := newFakeConn()
 	cover := &fakeCover{}
 	replay := NewReplay(ReplayConfig{})
-	g, mask := newTestGate(t, conn, cover, replay, 0)
-	now := time.Unix(1793664000, 0)
-	g.now = func() time.Time { return now }
+	clk := newTestClock(time.Unix(1793664000, 0))
+	g, mask := newTestGate(t, conn, cover, replay, 0, clk)
 
-	hello := tokenHello(t, mask, testAddr, now)
+	hello := tokenHello(t, mask, testAddr, clk.Now())
 	src := fakeAddr("198.51.100.8:4444")
 	for _, p := range initialFlight(t, hello) {
 		conn.in <- fakePacket{p, src}
@@ -384,9 +408,8 @@ func TestGateReplay(t *testing.T) {
 
 	// The same hello from another source: the token is a replay.
 	conn2 := newFakeConn()
-	g2, _ := newTestGate(t, conn2, cover, replay, 0)
+	g2, _ := newTestGate(t, conn2, cover, replay, 0, clk)
 	g2.masks = g.masks
-	g2.now = func() time.Time { return now }
 	src2 := fakeAddr("198.51.100.8:4445")
 	startPump(t, g2)
 	for _, p := range initialFlight(t, hello) {
@@ -401,14 +424,13 @@ func TestGateReplay(t *testing.T) {
 // TestGateLimits checks the two buffers of wire.md §3.3 step 2: a partial flight is evicted
 // when the pending table is full, and a source over 8 KiB is evicted at once.
 func TestGateLimits(t *testing.T) {
-	now := time.Unix(1793664000, 0)
-	hello := tokenHello(t, mustMask(t), testAddr, now)
+	clk := newTestClock(time.Unix(1793664000, 0))
+	hello := tokenHello(t, mustMask(t), testAddr, clk.Now())
 
 	t.Run("pending table full", func(t *testing.T) {
 		conn := newFakeConn()
 		cover := &fakeCover{}
-		g, mask := newTestGate(t, conn, cover, nil, 1)
-		g.now = func() time.Time { return now }
+		g, mask := newTestGate(t, conn, cover, nil, 1, clk)
 		_ = mask
 		partial := initialFlight(t, hello)[0]
 		startPump(t, g)
@@ -433,11 +455,12 @@ func TestGateLimits(t *testing.T) {
 			Cover:           cover,
 			Replay:          replay,
 			MaxPendingBytes: 64,
-			Now:             func() time.Time { return now },
+			Now:             clk.Now,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = g.Close() })
 		startPump(t, g)
 		p := initialFlight(t, hello)[0]
 		conn.in <- fakePacket{p, fakeAddr("198.51.100.3:3")}
