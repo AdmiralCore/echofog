@@ -67,7 +67,9 @@ type Config struct {
 	ListenerSources []ListenerSource
 	// Registry replaces the carrier suite registry (tests, a build without a suite).
 	Registry *carrier.Registry
-	// CarrierClock is the raw carrier clock for tests (AD13). Nil means the system clock.
+	// CarrierClock is the raw carrier clock for tests (AD13). Nil means the system clock. When a
+	// custom Clock is supplied, both must read the same raw time: the handshake adds
+	// Clock.Offset() to CarrierClock.Now().
 	CarrierClock carrier.Clock
 	// LocalInfo feeds the D21 carrier plan (own public addresses, country lookup, UDP flag).
 	LocalInfo carrier.LocalInfo
@@ -463,6 +465,8 @@ func (r *Runtime) mainLocal(ctx context.Context) (session.LocalIdentity, error) 
 		OwnCards: own,
 		Suites:   suites,
 		Features: append([]uint32(nil), r.cfg.Features...),
+		// The handshake adds its own GREASE service (D18), so the registry offer must not add a
+		// second one: two random GREASE IDs occasionally collide and break "strictly ascending".
 		Services: handshakeServices(r.services.Offer(false)),
 	}, nil
 }

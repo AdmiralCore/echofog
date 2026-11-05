@@ -107,6 +107,14 @@ func (r *Runtime) dispatch(st *mux.Stream, peer Peer) {
 		_ = st.Close()
 		return
 	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			// A service bug must not take the whole node down; the stream is closed with the
+			// internal code and the other sessions keep running.
+			r.log.Error("node: service handler panicked", "service", o.Service, "recover", rec)
+			_ = st.CloseWithCode(frame.CodeInternal, "")
+		}
+	}()
 	h(r.ctx, peer, st)
 }
 
