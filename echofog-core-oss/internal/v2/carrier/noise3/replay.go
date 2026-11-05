@@ -37,15 +37,36 @@ func newReplayCache(kv KV, now time.Time, rnd *mrand.Rand) *replayCache {
 	r := &replayCache{set: &bloomSet{lastRotate: now}, kv: kv, rnd: rnd}
 	r.nextFlush = now.Add(r.drawFlush())
 	if kv != nil {
-		if ok, err := kv.Has([]byte(bloomKey)); err == nil && ok {
-			if data, err := kv.Get([]byte(bloomKey)); err == nil {
-				if err := r.set.unmarshal(data); err == nil {
-					r.set.rotate(now)
-				}
-			}
-		}
+		r.load(now)
 	}
 	return r
+}
+
+// load restores the filter; any missing or damaged part leaves an empty filter.
+func (r *replayCache) load(now time.Time) {
+	kv := r.kv
+	if ok, err := kv.Has([]byte(bloomKey)); err != nil || !ok {
+		return
+	}
+	meta, err := kv.Get([]byte(bloomKey))
+	if err != nil {
+		return
+	}
+	var loaded bloomSet
+	if err := loaded.metaUnmarshal(meta); err != nil {
+		return
+	}
+	for i := range loaded.gens {
+		if ok, err := kv.Has(genKey(i)); err != nil || !ok {
+			continue
+		}
+		data, err := kv.Get(genKey(i))
+		if err != nil || loaded.gens[i].unmarshal(data) != nil {
+			loaded.gens[i].clear()
+		}
+	}
+	*r.set = loaded
+	r.set.rotate(now)
 }
 
 func (r *replayCache) drawFlush() time.Duration {
@@ -63,8 +84,8 @@ func (r *replayCache) seen(sel []byte, now time.Time) bool {
 	return r.set.seen(sel, now)
 }
 
-// maybeFlush persists the filter when the flush interval has passed. The listener's sweep timer
-// calls it even when no packet arrives.
+// maybeFlush persists the filter when the flush interval has passed and something changed since
+// the last write. The listener's sweep timer calls it even when no packet arrives.
 func (r *replayCache) maybeFlush(now time.Time) {
 	r.mu.Lock()
 	r.set.rotate(now)
@@ -73,22 +94,42 @@ func (r *replayCache) maybeFlush(now time.Time) {
 		return
 	}
 	r.nextFlush = now.Add(r.drawFlush())
-	data := r.set.marshal()
-	kv := r.kv
-	r.mu.Unlock()
-	_ = kv.PutTTL([]byte(bloomKey), data, replayTTL)
+	r.persistLocked()
 }
 
 // flush persists the filter now (on shutdown).
 func (r *replayCache) flush(now time.Time) {
 	r.mu.Lock()
 	r.set.rotate(now)
-	kv := r.kv
-	if kv == nil {
+	if r.kv == nil {
 		r.mu.Unlock()
 		return
 	}
-	data := r.set.marshal()
+	r.persistLocked()
+}
+
+// persistLocked writes only the changed generations, then the rotation state, and releases the
+// lock before the KV calls. A nothing-changed filter writes nothing (the idle case).
+func (r *replayCache) persistLocked() {
+	if !r.set.anyDirty() {
+		r.mu.Unlock()
+		return
+	}
+	type part struct {
+		key  []byte
+		data []byte
+	}
+	var parts []part
+	for i := range r.set.gens {
+		if g := &r.set.gens[i]; g.dirty {
+			parts = append(parts, part{genKey(i), g.marshal()})
+			g.dirty = false
+		}
+	}
+	parts = append(parts, part{[]byte(bloomKey), r.set.metaMarshal()})
+	kv := r.kv
 	r.mu.Unlock()
-	_ = kv.PutTTL([]byte(bloomKey), data, replayTTL)
+	for _, p := range parts {
+		_ = kv.PutTTL(p.key, p.data, replayTTL)
+	}
 }
