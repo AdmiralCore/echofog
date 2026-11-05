@@ -98,14 +98,15 @@ func hasPrefix(b, prefix []byte) bool {
 var testNow = time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 
 type cardOpts struct {
-	name   string
-	seq    uint64
-	scope  objects.Scope
-	role   uint32
-	flags  uint32
-	region string
-	host   string
-	port   uint32
+	name     string
+	seq      uint64
+	scope    objects.Scope
+	role     uint32
+	flags    uint32
+	region   string
+	host     string
+	port     uint32
+	notAfter time.Duration
 }
 
 func testCard(t *testing.T, o cardOpts) *objects.Card {
@@ -115,6 +116,9 @@ func testCard(t *testing.T, o cardOpts) *objects.Card {
 	}
 	if o.port == 0 {
 		o.port = 443
+	}
+	if o.notAfter == 0 {
+		o.notAfter = 24 * time.Hour
 	}
 	seed := func(what string) []byte {
 		h := sha256.Sum256([]byte("pex test " + o.name + " " + what))
@@ -133,7 +137,7 @@ func testCard(t *testing.T, o cardOpts) *objects.Card {
 	hsKey := keys.New(keys.X25519, raw)
 	maskKey := keys.New(keys.X25519, raw)
 
-	notAfter := uint64(testNow.Add(24 * time.Hour).Unix())
+	notAfter := uint64(testNow.Add(o.notAfter).Unix())
 	devices, err := objects.SealDeviceList(account, 1, notAfter, &pb.DeviceList{
 		Devices: []*pb.Device{{Key: device.Public(), Added: uint64(testNow.Unix())}},
 	})
@@ -214,7 +218,7 @@ func TestCandidateIsNewNotGuard(t *testing.T) {
 func TestWorkingSessionMovesCandidateToTried(t *testing.T) {
 	kv := newMemKV()
 	st := openTestStore(t, kv)
-	c := testCard(t, cardOpts{name: "tried", seq: 10})
+	c := testCard(t, cardOpts{name: "tried", seq: 10, notAfter: 72 * time.Hour})
 
 	if st.AddCandidate(c, testNow) != true {
 		t.Fatal("AddCandidate")
@@ -231,7 +235,8 @@ func TestWorkingSessionMovesCandidateToTried(t *testing.T) {
 	if got := st.Serve(testNow); len(got) != 1 {
 		t.Fatalf("tried card reached now is not served: %d", len(got))
 	}
-	// 25 hours later the 24-hour confirmation is stale for PEX but the node stays tried.
+	// 25 hours later the 24-hour confirmation is stale for PEX but the node stays tried: the card
+	// itself is still valid (72 h lifetime).
 	later := testNow.Add(25 * time.Hour)
 	if got := st.Serve(later); len(got) != 0 {
 		t.Fatalf("a card reached 25 h ago is still served: %d", len(got))
@@ -244,6 +249,43 @@ func TestWorkingSessionMovesCandidateToTried(t *testing.T) {
 	}
 	if got := st.Serve(later); len(got) != 1 {
 		t.Fatalf("re-confirmed card is not served: %d", len(got))
+	}
+}
+
+func TestExpiredCardsAreNotOffered(t *testing.T) {
+	kv := newMemKV()
+	st := openTestStore(t, kv)
+	short := testCard(t, cardOpts{name: "short", seq: 10, port: 6100})
+	if !st.NoteSession(short, addrOf(t, short), testNow) {
+		t.Fatal("NoteSession short")
+	}
+
+	// 25 hours later the 24-hour card is past not_after (and the skew window): it must be neither
+	// served nor offered for guards or dials.
+	later := testNow.Add(25 * time.Hour)
+	if got := st.Serve(later); len(got) != 0 {
+		t.Fatalf("Serve returned an expired card: %d", len(got))
+	}
+	if got := st.Guards(10); len(got) != 0 {
+		t.Fatalf("Guards returned an expired card: %d", len(got))
+	}
+	if got := st.DialCandidates(10); len(got) != 0 {
+		t.Fatalf("DialCandidates returned an expired card: %d", len(got))
+	}
+
+	// A live card is still offered: only expiry is filtered, not the whole tried table.
+	long := testCard(t, cardOpts{name: "long", seq: 10, port: 6101, notAfter: 72 * time.Hour})
+	if !st.NoteSession(long, addrOf(t, long), later) {
+		t.Fatal("NoteSession long")
+	}
+	if got := st.Serve(later); len(got) != 1 || got[0].DeviceID != long.DeviceID {
+		t.Fatalf("Serve = %d cards, want only the live one", len(got))
+	}
+	if got := st.Guards(10); len(got) != 1 || got[0].DeviceID != long.DeviceID {
+		t.Fatalf("Guards = %d cards, want only the live one", len(got))
+	}
+	if got := st.DialCandidates(10); len(got) != 1 || got[0].DeviceID != long.DeviceID {
+		t.Fatalf("DialCandidates = %d cards, want only the live one", len(got))
 	}
 }
 
@@ -482,12 +524,115 @@ func TestLazyTrigger(t *testing.T) {
 		{8, true, false, false},
 		{8, false, false, true},
 		{3, true, true, true},
+		{3, false, true, true},
 		{4, true, true, false},
+		// low_power: "only below 4 peers", regardless of relay (platforms.md §2).
+		{10, false, true, false},
 	}
 	for _, tc := range cases {
 		if got := shouldAsk(tc.working, tc.relay, tc.lowPower); got != tc.want {
 			t.Fatalf("shouldAsk(%d, %v, %v) = %v, want %v", tc.working, tc.relay, tc.lowPower, got, tc.want)
 		}
+	}
+}
+
+func TestLazyDelayRange(t *testing.T) {
+	cases := []struct {
+		index int
+		want  time.Duration
+	}{
+		{0, LazyDelayMin},
+		{9, LazyDelayMax},
+		{4, 5 * time.Second},
+	}
+	for _, tc := range cases {
+		var seen int
+		svc, err := New(Config{
+			Store: openTestStore(t, newMemKV()),
+			Rand: func(n int) int {
+				seen = n
+				return tc.index
+			},
+		})
+		if err != nil {
+			t.Fatalf("pex.New: %v", err)
+		}
+		if got := svc.delay(); got != tc.want {
+			t.Fatalf("delay(index %d) = %s, want %s", tc.index, got, tc.want)
+		}
+		if seen != 10 {
+			t.Fatalf("delay asked for %d buckets, want 10", seen)
+		}
+	}
+}
+
+// TestGetDeadlineUsesSystemClock pins the fix for the 4-second GET timeout: the corrected clock
+// (Now) may be off by any offset, but the mux deadline must be built from the system clock, or the
+// real wait becomes 4 s + offset (and negative offsets expire immediately).
+func TestGetDeadlineUsesSystemClock(t *testing.T) {
+	base := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for _, offset := range []time.Duration{-1000 * time.Second, 0, 1000 * time.Second} {
+		offset := offset
+		svc, err := New(Config{
+			Store:    openTestStore(t, newMemKV()),
+			Now:      func() time.Time { return base.Add(offset) },
+			Deadline: func() time.Time { return base },
+		})
+		if err != nil {
+			t.Fatalf("pex.New: %v", err)
+		}
+		if got, want := svc.readDeadline(), base.Add(GetTimeout); !got.Equal(want) {
+			t.Fatalf("offset %s: deadline %s, want %s (the corrected clock leaked into the deadline)",
+				offset, got, want)
+		}
+	}
+
+	// The default deadline source is the system clock: about 4 s from now.
+	svc, err := New(Config{Store: openTestStore(t, newMemKV())})
+	if err != nil {
+		t.Fatalf("pex.New: %v", err)
+	}
+	if d := time.Until(svc.readDeadline()); d < 3*time.Second || d > 5*time.Second {
+		t.Fatalf("default GET timeout is %s, want about %s", d, GetTimeout)
+	}
+}
+
+func TestOpenAppliesTableLimitsAndDeduplicates(t *testing.T) {
+	kv := newMemKV()
+	st := openTestStore(t, kv)
+	for i := 0; i < 3; i++ {
+		c := testCard(t, cardOpts{name: fmt.Sprintf("limit-%d", i), seq: 10, port: uint32(6200 + i)})
+		if !st.AddCandidate(c, testNow) {
+			t.Fatalf("AddCandidate %d", i)
+		}
+	}
+	// Simulate a crash between moving a device: the same device is in both tables. tried must win
+	// and the tables must be clipped to their configured limits on load.
+	dup := testCard(t, cardOpts{name: "dup", seq: 10, port: 6300})
+	e := &entry{card: dup, first: uint64(testNow.Unix()), last: uint64(testNow.Unix())}
+	if err := kv.Put(recordKey(keyNew, dup.DeviceID), encodeRecord(e)); err != nil {
+		t.Fatalf("put new: %v", err)
+	}
+	if err := kv.Put(recordKey(keyTried, dup.DeviceID), encodeRecord(e)); err != nil {
+		t.Fatalf("put tried: %v", err)
+	}
+
+	limited, err := Open(Options{KV: kv, Now: func() time.Time { return testNow }, MaxNew: 2, MaxTried: 1})
+	if err != nil {
+		t.Fatalf("pex.Open: %v", err)
+	}
+	if limited.LenNew() != 2 || limited.LenTried() != 1 {
+		t.Fatalf("after limits new/tried = %d/%d, want 2/1", limited.LenNew(), limited.LenTried())
+	}
+	seen := map[[32]byte]bool{}
+	for _, c := range limited.DialCandidates(10) {
+		if seen[c.DeviceID] {
+			t.Fatalf("device %x appears twice in DialCandidates", c.DeviceID)
+		}
+		seen[c.DeviceID] = true
+	}
+	if !seen[dup.DeviceID] {
+		t.Fatal("the tried copy of a duplicated device was not kept")
 	}
 }
 

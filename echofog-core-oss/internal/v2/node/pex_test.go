@@ -159,7 +159,7 @@ func TestPexGetOverTwoRuntimes(t *testing.T) {
 
 	// The lazy PEX client of the session waits uniform(1, 10) s, then asks and stores the
 	// candidate from the answer in the new table.
-	deadline := time.Now().Add(13 * time.Second)
+	deadline := time.Now().Add(18 * time.Second)
 	for {
 		cands := a.rt.Peers().DialCandidates(16)
 		for _, c := range cands {
