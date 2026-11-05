@@ -17,7 +17,7 @@ import (
 var (
 	platformTags = []string{
 		"aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios",
-		"js", "linux", "netbsd", "openbsd", "plan9", "solaris", "unix", "wasip1", "windows",
+		"js", "linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows",
 	}
 	archTags = []string{
 		"386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le",
@@ -57,12 +57,17 @@ func TestPlatformFallbacks(t *testing.T) {
 
 	groups := map[string][]scannedFile{}
 	for _, path := range collectGoFiles(t, protocolRoots(t)...) {
+		if strings.HasSuffix(path, "_test.go") {
+			// Tests only have to compile where their build tags hold, they ship nowhere and
+			// cannot be expected to have a portable fallback.
+			continue
+		}
 		src, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
 		constrained, base := classifyPlatformFile(filepath.Base(path), buildConstraint(src))
-		key := filepath.Dir(path) + "/" + base
+		key := filepath.Dir(path) + "/" + groupBase(base)
 		groups[key] = append(groups[key], scannedFile{path: path, constrained: constrained})
 	}
 
@@ -96,12 +101,17 @@ func TestClassifyPlatformFile(t *testing.T) {
 	}{
 		{name: "plain file", file: "doc.go", base: "doc"},
 		{name: "test file", file: "doc_test.go", base: "doc"},
-		{name: "goos suffix", file: "helper_windows.go", constrained: true, base: "helper"},
-		{name: "goarch suffix", file: "asm_arm64.go", constrained: true, base: "asm"},
+		{name: "goos suffix", file: "helper_linux.go", constrained: true, base: "helper"},
+		{name: "goarch suffix", file: "helper_arm64.go", constrained: true, base: "helper"},
 		{name: "goos and goarch suffix", file: "sock_linux_amd64.go", constrained: true, base: "sock"},
+		{name: "unix is not a platform suffix", file: "helper_unix.go", base: "helper_unix"},
 		{name: "other suffix is portable", file: "helper_other.go", base: "helper"},
+		{name: "other suffix is portable with a positive tag", file: "helper_other.go", build: "ios", base: "helper"},
 		{name: "build tag", file: "helper.go", build: "windows", constrained: true, base: "helper"},
-		{name: "negated build tag", file: "helper.go", build: "!windows", constrained: true, base: "helper"},
+		{name: "negative build tag is a fallback", file: "helper.go", build: "!windows", base: "helper"},
+		{name: "only negative tags are a fallback", file: "helper.go", build: "!linux && !darwin", base: "helper"},
+		{name: "positive build tag", file: "helper.go", build: "linux", constrained: true, base: "helper"},
+		{name: "positive alternatives", file: "helper.go", build: "linux || darwin", constrained: true, base: "helper"},
 		{name: "combined build tag", file: "helper.go", build: "linux && !android", constrained: true, base: "helper"},
 		{name: "non-platform build tag", file: "helper.go", build: "ignore", base: "helper"},
 		{name: "tag and suffix", file: "helper_linux.go", build: "linux && !android", constrained: true, base: "helper"},
@@ -228,16 +238,19 @@ func isArchTag(tag string) bool {
 	return false
 }
 
-func mentionsPlatform(expr constraint.Expr) bool {
+// hasPositivePlatform reports whether the expression requires a real GOOS or GOARCH tag.
+// A negated tag ("!linux") only selects the fallback and does not make a file platform-specific;
+// "unix" is a meta tag, not a GOOS, and is deliberately absent from both lists.
+func hasPositivePlatform(expr constraint.Expr) bool {
 	switch e := expr.(type) {
 	case *constraint.TagExpr:
 		return isPlatformTag(e.Tag) || isArchTag(e.Tag)
 	case *constraint.NotExpr:
-		return mentionsPlatform(e.X)
+		return false
 	case *constraint.AndExpr:
-		return mentionsPlatform(e.X) || mentionsPlatform(e.Y)
+		return hasPositivePlatform(e.X) || hasPositivePlatform(e.Y)
 	case *constraint.OrExpr:
-		return mentionsPlatform(e.X) || mentionsPlatform(e.Y)
+		return hasPositivePlatform(e.X) || hasPositivePlatform(e.Y)
 	default:
 		return false
 	}
@@ -262,12 +275,23 @@ func classifyPlatformFile(name, goBuild string) (constrained bool, base string) 
 		constrained = true
 		base = base[:i]
 	}
-	base = strings.TrimSuffix(base, "_other")
+	if strings.HasSuffix(base, "_other") {
+		// "_other" is the fallback convention. It stays portable even when its build
+		// expression names a platform (for example "!linux || ios").
+		return false, strings.TrimSuffix(base, "_other")
+	}
 
 	if goBuild != "" {
-		if expr, err := constraint.Parse("//go:build " + goBuild); err == nil && mentionsPlatform(expr) {
+		if expr, err := constraint.Parse("//go:build " + goBuild); err == nil && hasPositivePlatform(expr) {
 			constrained = true
 		}
 	}
 	return constrained, base
+}
+
+// groupBase returns the name a file shares with its portable fallback. The project names shared
+// unix implementations "..._unix.go" next to their "..._other.go" fallback: "unix" is not a GOOS
+// tag and never constrains a file, but both files belong to the same group.
+func groupBase(base string) string {
+	return strings.TrimSuffix(base, "_unix")
 }
