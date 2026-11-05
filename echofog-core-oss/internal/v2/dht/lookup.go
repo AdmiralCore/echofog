@@ -3,6 +3,7 @@ package dht
 import (
 	"context"
 	"encoding/hex"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -204,6 +205,8 @@ func (p *lpath) verdict() (answered int, majorityNo bool) {
 	p.lk.mu.Lock()
 	defer p.lk.mu.Unlock()
 	set := closestSet(p.sorted(func(cd *lcand) bool { return cd.state == candAnswered }))
+	// With no valid record found anywhere every answering node has said "no"; the majority rule is
+	// kept for a lookup that did find one (then notFound is false anyway).
 	no := 0
 	for _, cd := range set {
 		if !cd.record {
@@ -327,6 +330,10 @@ func (p *lpath) take(a answer) {
 	var cards []*objects.Card
 	for _, raw := range a.cards {
 		card, err := objects.VerifyCard(raw, now)
+		if err == nil && !c.allowLocal.Load() && !routableCard(card) {
+			// Not an invalid card, just one nobody should be sent to: skip it.
+			continue
+		}
 		if err != nil || !card.Publishable() {
 			c.log.Debug("dht: invalid card in an answer", "from", a.cd.id, "err", err)
 			fail()
@@ -369,4 +376,23 @@ func (p *lpath) take(a answer) {
 			c.cfg.Learn(card)
 		}
 	}
+}
+
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// routableCard reports whether every IP address of a card is a public unicast address. A card that
+// reached us through the DHT is chosen by whoever sent it: loopback, private, link-local (cloud
+// metadata) and shared addresses would make the reader probe its own network or someone else's
+// (T5.2 F2). Host names cannot be judged here and pass.
+func routableCard(card *objects.Card) bool {
+	for _, a := range card.Addrs() {
+		ip, ok := parseHost(a.GetHost())
+		if !ok {
+			continue
+		}
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }

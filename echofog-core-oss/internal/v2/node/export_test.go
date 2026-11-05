@@ -48,4 +48,8 @@ var (
 var HasHandler = func(r *Runtime, svc, version uint64) bool { return r.handlerFor(svc, version) != nil }
 
 // SetDHTDialHook makes the DHT client of a runtime dial through the given options (memory carriers).
-var SetDHTDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) { r.dhtDialHook = f }
+var SetDHTDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) {
+	r.dhtDialHook = f
+	// The test networks live on private and loopback addresses.
+	r.dhtClient.SetAllowNonRoutable(true)
+}

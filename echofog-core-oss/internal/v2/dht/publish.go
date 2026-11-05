@@ -128,7 +128,7 @@ func (c *Client) Step(ctx context.Context) {
 		if err != nil {
 			p.failed++
 			c.log.Debug("dht: publication", "label", p.env.Label, "stored", res.Stored, "err", err)
-			if retry := now.Add(retryAfter); ok && retry.Before(at) {
+			if retry := now.Add(time.Duration(float64(retryAfter) * (0.8 + 0.4*c.random()))); ok && retry.Before(at) {
 				at = retry
 			}
 		} else {

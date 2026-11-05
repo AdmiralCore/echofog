@@ -1,6 +1,7 @@
 package dht
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -42,6 +43,16 @@ func acceptRecord(label string, signer [32]byte, raw []byte, now time.Time, vali
 		var h *objects.MailboxHint
 		if h, err = objects.VerifyMailboxHint(raw, now); err == nil {
 			env = h.Env
+		}
+	case objects.LabelRelease:
+		// Any signer can put a release/2 object under the day key, with any seq. Only the caller
+		// knows the release keys (objects.ReleaseState), so a release is accepted only after its
+		// check passes; without one nothing is accepted (T5.2 F1).
+		if valid == nil {
+			return nil, errors.New("dht: a release record needs the caller's check")
+		}
+		if err = valid(raw, now); err == nil {
+			env, err = objects.Verify(raw, now)
 		}
 	case objects.LabelName:
 		return nil, ErrNotStorable

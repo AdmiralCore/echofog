@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -25,7 +26,7 @@ const (
 	RequestTimeout = 2 * time.Second
 	// QueryTimeout bounds one query including opening the stream, which may dial and
 	// handshake first.
-	QueryTimeout = 12 * time.Second
+	QueryTimeout = 6 * time.Second
 	// maxRecordBytes is the largest record a node accepts or a VALUE carries (STORE maximum).
 	maxRecordBytes = 24576
 )
@@ -83,6 +84,9 @@ type ClientConfig struct {
 	// Own returns the records this node publishes by itself; Step registers them again each time,
 	// so a new card (a higher seq) replaces the old one. Nil means none.
 	Own func() [][]byte
+	// AllowNonRoutable lets cards with loopback, private or link-local addresses through (tests on a
+	// local network). Off by default: cards from the DHT choose where the reader dials.
+	AllowNonRoutable bool
 	// Log receives diagnostics. Nil is silent.
 	Log *slog.Logger
 }
@@ -98,6 +102,8 @@ type Client struct {
 
 	rndMu sync.Mutex
 	rnd   *rand.Rand
+
+	allowLocal atomic.Bool
 
 	pubMu sync.Mutex
 	pubs  map[string]*published
@@ -124,15 +130,20 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		tbl := cfg.Table
 		cfg.Learn = func(c *objects.Card) { tbl.AddFromCard(c) }
 	}
-	return &Client{
+	c := &Client{
 		cfg:  cfg,
 		now:  now,
 		mem:  NewMemory(cfg.Memory),
 		log:  log,
 		rnd:  rnd,
 		pubs: map[string]*published{},
-	}, nil
+	}
+	c.allowLocal.Store(cfg.AllowNonRoutable)
+	return c, nil
 }
+
+// SetAllowNonRoutable changes ClientConfig.AllowNonRoutable (tests on a local network).
+func (c *Client) SetAllowNonRoutable(v bool) { c.allowLocal.Store(v) }
 
 type discard struct{}
 
@@ -169,19 +180,22 @@ func (c *Client) FindNode(ctx context.Context, target [32]byte) ([]*objects.Card
 // closest nodes on every path said so, or ErrRollback when the best record is older than one the
 // reader has accepted before.
 func (c *Client) Get(ctx context.Context, label string, signer [32]byte) (*objects.Envelope, error) {
-	return c.get(ctx, label, signer, func(day uint32) [32]byte { return objects.DHTKey(label, signer, day) })
+	return c.get(ctx, label, signer, func(day uint32) [32]byte { return objects.DHTKey(label, signer, day) }, nil)
 }
 
-// GetRelease looks up the release manifest of the day (any signer: manifests of rotated release
-// keys share the key, objects.md §9). The caller checks the threshold signatures.
+// GetRelease looks up the release manifest of the day. The key is independent of the signer
+// (manifests of rotated release keys share it, objects.md §9), so anybody can put a release/2
+// object under it with any seq: valid is the caller's check (the compiled release keys and the
+// threshold, objects.ReleaseState.Check), and only records that pass it take part in the choice
+// or enter the reader memory. A nil valid accepts nothing.
 func (c *Client) GetRelease(ctx context.Context, valid func(raw []byte, now time.Time) error) (*objects.Envelope, error) {
-	return c.get(ctx, objects.LabelRelease, [32]byte{}, objects.ReleaseDHTKey)
+	return c.get(ctx, objects.LabelRelease, [32]byte{}, objects.ReleaseDHTKey, valid)
 }
 
-func (c *Client) get(ctx context.Context, label string, signer [32]byte, keyOf func(day uint32) [32]byte) (*objects.Envelope, error) {
+func (c *Client) get(ctx context.Context, label string, signer [32]byte, keyOf func(day uint32) [32]byte, valid func([]byte, time.Time) error) (*objects.Envelope, error) {
 	now := c.now()
 	days := readDays(now)
-	accept := func(raw []byte) (*objects.Envelope, error) { return acceptRecord(label, signer, raw, now, nil) }
+	accept := func(raw []byte) (*objects.Envelope, error) { return acceptRecord(label, signer, raw, now, valid) }
 
 	lookups := make([]*lookup, len(days))
 	var wg sync.WaitGroup
