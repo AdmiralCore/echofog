@@ -283,7 +283,7 @@ func TestStrangersAreClosedWith1008(t *testing.T) {
 		},
 		"stdlib hello": func(ws *websocket.Conn) {
 			c := tls.Client(&wsPipe{ws: ws}, &tls.Config{InsecureSkipVerify: true, ServerName: "cover.example"})
-			go func() { _ = c.Handshake() }()
+			_ = c.Handshake() // sends the hello, then fails reading: the test reads the answer itself
 		},
 	}
 	var wg sync.WaitGroup
@@ -418,22 +418,11 @@ func TestDialerRejectsBadAddresses(t *testing.T) {
 
 // wsPipe lets a standard TLS client run over a raw WebSocket in tests.
 type wsPipe struct {
-	ws  *websocket.Conn
-	buf []byte
+	ws *websocket.Conn
 }
 
-func (p *wsPipe) Read(b []byte) (int, error) {
-	for len(p.buf) == 0 {
-		_, m, err := p.ws.ReadMessage()
-		if err != nil {
-			return 0, err
-		}
-		p.buf = m
-	}
-	n := copy(b, p.buf)
-	p.buf = p.buf[n:]
-	return n, nil
-}
+// Read never reads the WebSocket: only the test's own goroutine does.
+func (p *wsPipe) Read([]byte) (int, error) { return 0, io.EOF }
 func (p *wsPipe) Write(b []byte) (int, error) {
 	return len(b), p.ws.WriteMessage(websocket.BinaryMessage, b)
 }
