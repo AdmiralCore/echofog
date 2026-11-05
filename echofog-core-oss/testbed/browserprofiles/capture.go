@@ -187,8 +187,14 @@ func captureChrome(ctx context.Context) (Profile, error) {
 		"--ignore-certificate-errors", "--no-proxy-server",
 		"--host-resolver-rules=MAP "+captureSNI+" 127.0.0.1",
 		"--user-data-dir="+dir, url)
-	_ = cmd.Start()
-	defer func() { _ = cmd.Process.Kill() }()
+	if err := cmd.Start(); err != nil {
+		return Profile{}, err
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}()
 	select {
 	case r := <-ch:
 		if r.err != nil || len(r.data) == 0 {
