@@ -3,10 +3,13 @@ package session
 import (
 	"context"
 	"crypto/ecdh"
+	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand/v2"
+	"net/netip"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
@@ -28,8 +31,19 @@ type AcceptConfig struct {
 	PrevStatic *ecdh.PrivateKey
 	// Passes resolves invitation and personal pass secrets for a hidden node.
 	Passes handshake.PassStore
-	// Puzzle enables HS_RETRY under load (handshake §6).
+	// Puzzle enables HS_RETRY under load (handshake §6). When nil and Limits is set, the puzzle
+	// of Limits is used with the difficulty of this carrier's admission.
 	Puzzle *handshake.PuzzleConfig
+	// Limits admits the carrier before any handshake byte is read (handshake §11), picks the puzzle
+	// difficulty, scores authenticated abuse of the session and refuses banned devices. Nil
+	// disables all of it.
+	Limits *Limits
+	// Source overrides the address the carrier reports for Limits (tests; a relay circuit, whose
+	// carrier address is the relay's).
+	Source netip.Addr
+	// AdmitVersion refuses peers by protocol version with REJECT{version} (versioning §5). The
+	// runtime wires objects.ReleaseState.PeerRefused here; nil admits everyone.
+	AdmitVersion func(peerProto uint32) bool
 	// Replay is the 0-RTT replay cache (handshake §10).
 	Replay *handshake.ReplayCache
 	// Observed overrides the initiator's address as seen (feature observed-addr, wire.md §7.2).
@@ -107,6 +121,30 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 	}
 	g := mux.NewGuard(c)
 
+	var adm *Admission
+	if cfg.Limits != nil {
+		src := cfg.Source
+		if !src.IsValid() {
+			src = remoteOf(c).Addr()
+		}
+		adm = cfg.Limits.Admit(src, cfg.Hidden)
+		defer adm.Release()
+		if adm.Refused() {
+			// A hidden node over a per-source limit: no byte is read or sent; the carrier is
+			// closed after the uniform delay of handshake §5, as for every other failure.
+			waitUntil(clk, clk.Now().Add(uniformSilentDelay(cfg.Rand)))
+			_ = c.Close()
+			return nil, ErrSilent
+		}
+	}
+	puzzle := cfg.Puzzle
+	if puzzle == nil && adm != nil && !cfg.Hidden {
+		pc := cfg.Limits.Puzzle()
+		d := adm.Difficulty()
+		pc.Difficulty = func() uint8 { return d }
+		puzzle = pc
+	}
+
 	var pend *mux.Pending
 	if cfg.Binder != nil {
 		_, p, err := cfg.Binder.Accept(ctx, g, cfg.Kind)
@@ -157,12 +195,14 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 		Services:   cfg.Local.Services,
 		Now:        clk.Now,
 		Offset:     cfg.Offset,
-		Puzzle:     cfg.Puzzle,
+		Puzzle:     puzzle,
 		Replay:     cfg.Replay,
 		Observed:   observed,
 		Cards:      cfg.Verifier,
 		Bindings:   cfg.Bindings,
 		Rand:       cfg.Rand,
+
+		AdmitVersion: cfg.AdmitVersion,
 	})
 
 	cb := c.ChannelBinding()
@@ -208,6 +248,7 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			return nil, ErrSilent
 		case handshake.ActSend:
 			if reply.FrameType == handshake.FrameRetry {
+				cfg.Limits.noteRetry()
 				if err := writeFrame(pend.Stream, clk, uint64(reply.FrameType), reply.Payload); err != nil {
 					_ = c.Close()
 					return nil, wrapSilent(err)
@@ -246,10 +287,16 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 			if err != nil {
 				return nil, rejectAfterFinish(c, pend.Stream, clk, hs, cfg.Kind, err)
 			}
+			if hs.Peer != nil && cfg.Limits.Banned(hs.Peer.DeviceID) {
+				// A ban applies to an authenticated device ID only, so it is enforced here, once
+				// message 3 has named the peer; never to a source address (handshake §11).
+				_ = c.Close()
+				return nil, ErrBanned
+			}
 			return finish(c, pend.Guard, pend.Stream, hs, RoleResponder, cfg.Kind, local, remoteOf(c),
 				cfg.Control, cfg.Timers, cfg.Policy, cfg.LowPower,
 				newIdlePadding(cfg.IdlePadding, cfg.IdlePaddingRand, cfg.LowPower),
-				cfg.OnEstablished, cfg.OnPathFailed)
+				cfg.OnEstablished, cfg.OnPathFailed, cfg.Limits)
 		default:
 			_ = c.Close()
 			return nil, wrapSilent(fmt.Errorf("unexpected handshake action %d", reply.Action))
@@ -305,4 +352,17 @@ func writeSealed(c mux.Carrier, control mux.RawStream, clk carrier.Clock, hs *ha
 	rc.StartSealing(sealer, 0, control.ID())
 	_, err = rc.Write(body)
 	return err
+}
+
+// uniformSilentDelay draws uniform(0.5, 3) s for the silent close of a refused carrier (handshake
+// §5). A failing source of randomness gives the upper bound.
+func uniformSilentDelay(r io.Reader) time.Duration {
+	if r == nil {
+		r = crand.Reader
+	}
+	var b [8]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return 3 * time.Second
+	}
+	return 500*time.Millisecond + time.Duration(binary.BigEndian.Uint64(b[:])%uint64(2500*time.Millisecond+1))
 }

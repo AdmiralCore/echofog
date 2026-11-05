@@ -36,6 +36,7 @@ func (r *Runtime) acceptLoop(ctx context.Context, l carrier.Listener) {
 			Hidden:        r.Self().Visibility != cards.Visible,
 			Passes:        r.cfg.Passes,
 			Puzzle:        r.cfg.Puzzle,
+			Limits:        r.limits,
 			Bindings:      r.bindings,
 			Control:       r.control,
 			Clock:         r.carrierClock,

@@ -182,3 +182,26 @@ func TestAcceptAdmitsPeerByVersionGate(t *testing.T) {
 		t.Fatalf("the gate saw peer version %d, want %d", seen, handshake.ProtoVer)
 	}
 }
+
+type stubPolicy struct {
+	got struct {
+		component string
+		own, peer uint32
+	}
+}
+
+func (s *stubPolicy) PeerRefused(component string, own, peer uint32, _ time.Time) bool {
+	s.got.component, s.got.own, s.got.peer = component, own, peer
+	return peer < own
+}
+
+func TestReleaseAdmitAsksThePolicy(t *testing.T) {
+	p := &stubPolicy{}
+	admit := session.ReleaseAdmit(p, "proto", 200, nil)
+	if admit(199) || !admit(200) || !admit(201) {
+		t.Fatal("ReleaseAdmit does not follow PeerRefused")
+	}
+	if p.got.component != "proto" || p.got.own != 200 {
+		t.Fatalf("policy asked %+v", p.got)
+	}
+}

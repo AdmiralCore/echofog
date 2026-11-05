@@ -105,6 +105,9 @@ var (
 	ErrPathBound = errors.New("session: carrier bound as a path of an existing session")
 	// ErrConfig is a local wiring error (no device, no card, no carrier).
 	ErrConfig = errors.New("session: invalid configuration")
+	// ErrBanned means the authenticated peer device is banned for abuse (Limits); the session was
+	// closed.
+	ErrBanned = errors.New("session: peer device is banned")
 )
 
 // ErrRejected is a protocol rejection: a REJECT received from the peer or the local decision
@@ -278,7 +281,7 @@ type PolicyFunc func(choices []handshake.ServiceChoice) mux.StreamPolicy
 
 // finish hands the handshake result to the mux. mux.NewSession makes the single sealing switch
 // (wire.md §8.5) when the carrier reports Sealed.
-func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc, lowPower bool, pad *idlePadding, onEstablished func(*mux.Session), onPathFailed func(mux.PathFailure)) (*Established, error) {
+func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Session, role Role, kind mux.PathKind, local LocalIdentity, remote netip.AddrPort, ctl *Control, timers mux.Timers, policy PolicyFunc, lowPower bool, pad *idlePadding, onEstablished func(*mux.Session), onPathFailed func(mux.PathFailure), lim *Limits) (*Established, error) {
 	// The handshake read deadline belongs to the handshake, not to the session: its control
 	// stream must wait for peer traffic indefinitely (the mux applies its own timers).
 	_ = ctrl.SetReadDeadline(time.Time{})
@@ -301,6 +304,9 @@ func finish(c mux.Carrier, g *mux.Guard, ctrl mux.RawStream, hs *handshake.Sessi
 	var peerID [32]byte
 	if hs.Peer != nil {
 		peerID = hs.Peer.DeviceID
+	}
+	if lim != nil {
+		cfg.OnAbuse = lim.AbuseHandler(peerID)
 	}
 	var src controlSource
 	if ctl != nil {

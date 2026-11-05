@@ -161,7 +161,7 @@ func TestDifficultyFollowsTheV1Table(t *testing.T) {
 	cases := []struct {
 		perSec int
 		want   uint8
-	}{{1, 0}, {23, 0}, {24, 16}, {99, 16}, {100, 20}, {399, 20}, {400, 22}, {3000, 22}}
+	}{{1, 0}, {23, 0}, {24, 16}, {98, 16}, {99, 20}, {398, 20}, {399, 22}, {3000, 22}}
 	for _, tc := range cases {
 		clk := newClock()
 		l := newLimits(t, clk, nil)

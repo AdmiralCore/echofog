@@ -54,7 +54,7 @@ func TestMapHandshakeError(t *testing.T) {
 func TestFinishWrapsMuxNewSessionError(t *testing.T) {
 	// CipherStates without a key make mux.NewSealer fail.
 	hs := &handshake.Session{KI2R: &noise.CipherState{}, KR2I: &noise.CipherState{}}
-	_, err := finish(stubCarrier{}, nil, stubStream{}, hs, RoleResponder, mux.PathDirect, LocalIdentity{}, netip.AddrPort{}, nil, mux.Timers{}, nil, false, nil, nil, nil)
+	_, err := finish(stubCarrier{}, nil, stubStream{}, hs, RoleResponder, mux.PathDirect, LocalIdentity{}, netip.AddrPort{}, nil, mux.Timers{}, nil, false, nil, nil, nil, nil)
 	if !errors.Is(err, ErrConfig) {
 		t.Fatalf("finish: %v, want ErrConfig", err)
 	}
