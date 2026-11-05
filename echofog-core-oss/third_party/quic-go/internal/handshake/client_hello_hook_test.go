@@ -57,7 +57,7 @@ func TestTokenFirstRandReplays(t *testing.T) {
 // TestRecoverX25519Key checks that the private key of the hello's X25519 share is found among
 // the 32-byte reads of the randomness stream, which is what patch 4 hands to the hook.
 func TestRecoverX25519Key(t *testing.T) {
-	priv, err := ecdh.X25519().GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)))
+	priv, err := ecdh.X25519().GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x42}, 128)))
 	if err != nil {
 		t.Fatal(err)
 	}

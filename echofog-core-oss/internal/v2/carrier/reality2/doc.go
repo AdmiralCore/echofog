@@ -29,6 +29,24 @@
 // installs the hook's 32 bytes as the random of the real handshake. The client never sets
 // tls.Config.Rand itself, so the ephemeral key of the token is the key the live handshake uses.
 //
+// # Toolchain requirement (interim, T2.6a)
+//
+// Since Go 1.24 crypto/ecdh ignores the reader passed to X25519 GenerateKey and uses the process
+// CSPRNG, unless the build enables custom randomness: //go:debug cryptocustomrand=1 in the main
+// package, or GODEBUG=cryptocustomrand=1 in the environment. Without it uTLS generates the key
+// share from entropy the client cannot see, and the REALITY token (wire.md §3.2) cannot be
+// computed. CheckRandomHonoured verifies the build and Dial fails closed with
+// ErrRandomNotHonoured; the main packages that start the client carry the directive.
+//
+// Tests of this package that dial (TestClientServerEndToEnd, and the patch-4 test in
+// third_party/quic-go) therefore need the same setting; run them with
+//
+//	GODEBUG=cryptocustomrand=1 go test ./internal/v2/carrier/reality2/
+//
+// and without it they skip with that reason. Everything on the server side — the gate, the cover
+// forwarder, the replay cache, the token check and registration — is independent of the setting:
+// it never generates an X25519 key from a custom reader.
+//
 // # Manual cover until T2.6b
 //
 // Until the cover profile is measured (T2.6b), the listener takes the group and certificate of

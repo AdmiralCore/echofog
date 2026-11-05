@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,21 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
+
+func TestCheckRandomHonoured(t *testing.T) {
+	err := CheckRandomHonoured()
+	if err == nil {
+		// Custom randomness is enabled (//go:debug in a main package or GODEBUG); the
+		// end-to-end test exercises the client in that case.
+		return
+	}
+	if !errors.Is(err, ErrRandomNotHonoured) {
+		t.Fatalf("check failed with %v, want ErrRandomNotHonoured", err)
+	}
+	if !strings.Contains(err.Error(), "cryptocustomrand") {
+		t.Fatalf("error %q does not tell the operator how to enable it", err)
+	}
+}
 
 func TestRegister(t *testing.T) {
 	reg := carrier.NewRegistry()

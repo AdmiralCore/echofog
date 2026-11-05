@@ -372,12 +372,14 @@ func keyShareC(t *testing.T, msg []byte) []byte {
 // customRandomHonoured reports whether crypto/ecdh derives a key from the supplied reader.
 // Since Go 1.24 it uses the global CSPRNG unless GODEBUG=cryptocustomrand=1 is set.
 func customRandomHonoured() bool {
-	seed := bytes.Repeat([]byte{0x42}, 32)
+	// All bytes equal: cryptocustomrand's one-byte probe may shift the read, the key is the
+	// same either way.
+	seed := bytes.Repeat([]byte{0x42}, 128)
 	k, err := ecdh.X25519().GenerateKey(bytes.NewReader(seed))
 	if err != nil {
 		return false
 	}
-	want, err := ecdh.X25519().NewPrivateKey(seed)
+	want, err := ecdh.X25519().NewPrivateKey(seed[:32])
 	if err != nil {
 		return false
 	}
