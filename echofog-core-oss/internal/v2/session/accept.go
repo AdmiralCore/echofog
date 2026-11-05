@@ -32,7 +32,9 @@ type AcceptConfig struct {
 	Puzzle *handshake.PuzzleConfig
 	// Replay is the 0-RTT replay cache (handshake §10).
 	Replay *handshake.ReplayCache
-	// Observed is the initiator's address as seen (feature observed-addr, wire.md §7.2).
+	// Observed overrides the initiator's address as seen (feature observed-addr, wire.md §7.2).
+	// Empty means the address the carrier reports, for a direct path only: over a relay circuit
+	// the carrier's peer is the relay, and reporting it would mislead the initiator.
 	Observed []byte
 	// Binder receives a stream 0 that starts with PATH_BIND (wire.md §8.2). When nil, a
 	// PATH_BIND is an unexpected first frame and the carrier is closed silently.
@@ -137,6 +139,12 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 	}
 	local := cfg.Local
 	local.Features = FeaturesFor(local.Features, cfg.LowPower)
+	observed := cfg.Observed
+	if len(observed) == 0 && cfg.Kind == mux.PathDirect {
+		if ra := remoteOf(c); ra.IsValid() {
+			observed = frame.AppendObservedAddr(nil, ra)
+		}
+	}
 	resp := handshake.NewResponder(handshake.ResponderConfig{
 		Static:     static,
 		PrevStatic: cfg.PrevStatic,
@@ -151,7 +159,7 @@ func Accept(ctx context.Context, l carrier.Listener, cfg AcceptConfig) (*Establi
 		Offset:     cfg.Offset,
 		Puzzle:     cfg.Puzzle,
 		Replay:     cfg.Replay,
-		Observed:   cfg.Observed,
+		Observed:   observed,
 		Cards:      cfg.Verifier,
 		Bindings:   cfg.Bindings,
 		Rand:       cfg.Rand,

@@ -109,6 +109,10 @@ type Listener struct {
 	Bootstrap bool
 	// Mask is the algorithm-tagged X25519 masking public key (akey).
 	Mask keys.AKey
+	// FollowPublic makes Host follow the node's decided public IP (wire.md §7.2): the runtime
+	// calls SetPublicHost when OBSERVED_ADDR peers agree on a new address, and the next Current
+	// reissues the card. Host stays the placeholder until then.
+	FollowPublic bool
 	// MaskNotAfter is the unix time the key stops being accepted. Zero means the card's not_after;
 	// the builder caps the value at card not_after + 7 days.
 	MaskNotAfter uint64
@@ -250,6 +254,32 @@ func (b *CardBuilder) ReplaceMask(old, next keys.AKey) (int, error) {
 	for i := range cfg.Listeners {
 		if bytes.Equal(cfg.Listeners[i].Mask, old) {
 			cfg.Listeners[i].Mask = clone(next)
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := b.applyConfig(cfg, false); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// SetPublicHost points every FollowPublic listener at host (the node's public IP) and returns the
+// number of listeners changed. A changed host changes the card material, so the next Current
+// reissues the cards with a higher seq (the address-change event of T3.4).
+func (b *CardBuilder) SetPublicHost(host string) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if host == "" || len(host) > maxHost {
+		return 0, fmt.Errorf("%w: public host of %d bytes", ErrConfig, len(host))
+	}
+	cfg := cloneConfig(b.cfg)
+	n := 0
+	for i := range cfg.Listeners {
+		if cfg.Listeners[i].FollowPublic && cfg.Listeners[i].Host != host {
+			cfg.Listeners[i].Host = host
 			n++
 		}
 	}

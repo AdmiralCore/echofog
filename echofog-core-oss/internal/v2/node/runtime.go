@@ -147,6 +147,7 @@ type Runtime struct {
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
 	control  *session.Control
+	observer *session.Observer
 	binder   *mux.Binder
 	policy   *session.PathPolicy
 
@@ -297,11 +298,16 @@ func New(cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("node: key bindings: %w", err)
 	}
+	r.observer = session.NewObserver(session.ObserverConfig{
+		Now:      r.clock.Now,
+		OnChange: r.publicAddrChanged,
+	})
 	r.control = session.NewControl(session.ControlConfig{
 		Cards:      r.cardBook,
 		Abuse:      r.abuse,
 		Clock:      r.carrierClock,
 		OffsetFunc: r.clock.Offset,
+		Observer:   r.observer,
 	})
 
 	r.vis = cfg.Cards.Visibility()

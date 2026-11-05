@@ -25,6 +25,8 @@ var (
 		}
 		return n
 	}
+	// ObserverOf returns the runtime's own-address observer (wire.md §7.2).
+	ObserverOf = func(r *Runtime) *session.Observer { return r.observer }
 	// SetBeforeAdd installs the hook that runs before an accepted session enters the table.
 	SetBeforeAdd = func(f func(*session.Established)) { beforeAdd = f }
 	// LocalInfoOf returns the carrier-plan view built from the profile.
