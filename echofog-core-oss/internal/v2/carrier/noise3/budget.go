@@ -50,6 +50,12 @@ type budgets struct {
 // budgetKey is the per-source budget key. An IPv6 subscriber moves freely inside its /64, so the
 // key is the /64 prefix; IPv4 (and v4-mapped) addresses keep the full address.
 func budgetKey(a netip.Addr) string {
+	a = a.Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
 	return a.String()
 }
 
