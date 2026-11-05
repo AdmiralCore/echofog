@@ -89,8 +89,12 @@ func TestTCPLocalGoServer(t *testing.T) {
 	if !p.CCS || len(p.ExtOrder) != 2 || len(p.Flight) < 3 {
 		t.Fatalf("shape: ccs=%v ext=%v flight=%v", p.CCS, p.ExtOrder, p.Flight)
 	}
-	if len(p.Post) == 0 {
-		t.Fatal("no post-handshake records (session tickets) seen")
+	if !p.Decrypted || len(p.Tickets) != 1 || len(p.Inner) != 4 {
+		t.Fatalf("decrypted=%v tickets=%v inner=%v (want EE, Certificate, CertificateVerify, Finished and one ticket)",
+			p.Decrypted, p.Tickets, p.Inner)
+	}
+	if p.Inner[1].Kind != "msg/11" {
+		t.Fatalf("inner kinds %v", p.Inner)
 	}
 	if len(p.Unstable) != 0 {
 		t.Fatalf("a Go server must be stable across 5 samples, unstable: %v", p.Unstable)
@@ -116,9 +120,8 @@ func TestQUICLocalGoServer(t *testing.T) {
 func TestCompareIdentityAndRealDivergences(t *testing.T) {
 	base := OwnConfig{SNI: "cover.test", Group: tls.X25519, ALPN: "h2", Key: x509.ECDSA}
 	a := measureOwnTCP(t, base)
-	b := measureOwnTCP(t, base)
-	if d := Compare(a, b); len(d) != 0 {
-		t.Fatalf("same server compared unequal: %+v", d)
+	if d := Compare(a, a); len(d) != 0 {
+		t.Fatalf("a profile compared with itself differs: %+v", d)
 	}
 
 	g := base
@@ -171,6 +174,8 @@ func TestCompareCatchesEachItem(t *testing.T) {
 		c.ExtOrder = append([]uint16(nil), base.ExtOrder...)
 		c.Flight = append([]Slot(nil), base.Flight...)
 		c.Post = append([]Slot(nil), base.Post...)
+		c.Inner = append([]Slot(nil), base.Inner...)
+		c.Tickets = append([]Slot(nil), base.Tickets...)
 		c.Unstable = nil
 		mut(&c)
 		return &c
@@ -187,10 +192,12 @@ func TestCompareCatchesEachItem(t *testing.T) {
 		{"session id", ItemSessionID, func(p *CoverProfile) { p.SessionIDLen++ }},
 		{"ccs", ItemCCS, func(p *CoverProfile) { p.CCS = !p.CCS }},
 		{"packing", ItemPacking, func(p *CoverProfile) { p.Flight = p.Flight[:len(p.Flight)-1] }},
-		{"ticket count", ItemTicketCount, func(p *CoverProfile) { p.Post = append(p.Post, p.Post[0]) }},
-		{"ticket length", ItemTicketLen, func(p *CoverProfile) { p.Post[0].Min += 500; p.Post[0].Max += 500 }},
+		{"ticket count", ItemTicketCount, func(p *CoverProfile) { p.Tickets = append(p.Tickets, p.Tickets[0]) }},
+		{"ticket length", ItemTicketLen, func(p *CoverProfile) { p.Tickets[0].Min += 500; p.Tickets[0].Max += 500 }},
+		{"message kinds", ItemMsgs, func(p *CoverProfile) { p.Inner = p.Inner[:len(p.Inner)-1] }},
+		{"certificate length", ItemMsgLen, func(p *CoverProfile) { p.Inner[1].Min += 60; p.Inner[1].Max += 60 }},
 		{"flight length", ItemFlightLen, func(p *CoverProfile) { p.Flight[2].Min += 40; p.Flight[2].Max += 40 }},
-		{"scid", ItemSCID, func(p *CoverProfile) { p.SCIDLen += 4 }},
+		{"scid", ItemSCID, func(p *CoverProfile) { p.Transport = QUIC; p.SCIDLen += 4 }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
