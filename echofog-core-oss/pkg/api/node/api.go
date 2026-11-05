@@ -207,11 +207,7 @@ func (n *v1NetBackend) ConnectToPeer(addr string) error {
 	return n.node.Net.DialEarly(ctx, host)
 }
 
-func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) SendMessage(pubKeyHex string, text string) error {
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
 		return err
@@ -242,11 +238,7 @@ type MessageStateDTO struct {
 }
 
 // OnMessageState calls cb whenever the state of a message of ours changes.
-func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
-	if n.v2Unavailable() != nil {
-		return
-	}
-
+func (n *v1ChatBackend) OnMessageState(cb func(MessageStateDTO)) {
 	if n.node == nil || n.node.Messenger == nil {
 		return
 	}
@@ -255,13 +247,7 @@ func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
 	})
 }
 
-func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
-	if n.v2Unavailable() != nil {
-		// nothing arrives at protocol 2: a closed channel ends the desktop's range loop at once,
-		// a nil one would hang that goroutine for the whole run
-		return closedChannel[*dto.MessageDTO]()
-	}
-
+func (n *v1ChatBackend) MessageHandler() <-chan *dto.MessageDTO {
 	readCh := make(chan *dto.MessageDTO, 100)
 	if n.node.Messenger == nil {
 		return readCh // nothing ever arrives
@@ -346,11 +332,7 @@ func (n *v1ContactBackend) BanContact(peerID string) error {
 	return n.BlockPeer(peerID)
 }
 
-func (n *NodeApi) GetMessages(contactID string, limit int, beforeTimestamp uint64) ([]dto.MessageDTO, error) {
-	if err := n.v2Unavailable(); err != nil {
-		return nil, ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) GetMessages(contactID string, limit int, beforeTimestamp uint64) ([]dto.MessageDTO, error) {
 	if n.node.Messenger == nil {
 		return nil, errNoChat
 	}
@@ -735,11 +717,7 @@ func (n *NodeApi) TriggerPanicButton() error {
 
 // ResetEncryptionSession forgets the end-to-end session with a contact. Use it when messages with
 // them stop arriving although both are online; the next message starts a fresh session.
-func (n *NodeApi) ResetEncryptionSession(peerID string) error {
-	if err := n.v2Unavailable(); err != nil {
-		return ErrV2NotBuilt
-	}
-
+func (n *v1ChatBackend) ResetEncryptionSession(peerID string) error {
 	raw, err := hex.DecodeString(peerID)
 	if err != nil || len(raw) != len(types.PeerID{}) {
 		return errors.New("bad peer id")

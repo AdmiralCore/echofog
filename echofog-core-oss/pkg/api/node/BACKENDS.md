@@ -12,10 +12,11 @@
 
 При `protocol: 2` выбранные сетевые бэкенды — `v2PendingBackend`: каждый метод с результатом
 `error` возвращает `ErrV2NotBuilt` («v2 ещё не собран»); метод без `error` возвращает нулевое
-значение. Методы доменов «сеть и доступ» и «контакты» с T11.1b — делегаты `netBackend` и
-`contactBackend` (`v1NetBackend`/`v1ContactBackend` при `protocol: 1`, `v2PendingBackend` при
-`protocol: 2`) и своей проверки режима не делают. Остальные сетевые домены до T11.1c-e по-прежнему
-сами проверяют режим (`NodeApi.v2Unavailable`) и после переноса станут такими же делегатами.
+значение. Методы доменов «сеть и доступ» и «контакты» с T11.1b, «чаты», «группы и каналы» и
+«файлы» с T11.1c — делегаты своих бэкендов (`v1NetBackend`/`v1ContactBackend`/`v1ChatBackend`/
+`v1GroupBackend`/`v1FileBackend` при `protocol: 1`, `v2PendingBackend` при `protocol: 2`) и своей
+проверки режима не делают. Остальные сетевые домены (звонки, VPN) до T11.1d-e по-прежнему сами
+проверяют режим (`NodeApi.v2Unavailable`) и после переноса станут такими же делегатами.
 
 Всего экспортированных методов: **237**. В их телах обращений `.node.*`: **282**, из них к `.node.Swarm`: **42**. По всему пакету `pkg/api/node` (329 методов `NodeApi`, включая неэкспортированные помощники; без `_test.go`): **438** обращений `.node.*`, из них **87** к `.node.Swarm` (с `_test.go` — 449 и 88; в задаче указаны 417/88 — расхождение в подсчёте, см. примечание 5).
 
@@ -65,28 +66,28 @@ DHT/relay/выхода; нет — если работает только с л�
 | `UnwatchStream` | звонки и стримы | — | да | 2 | 0 |
 | `UpdateStreamQuality` | звонки и стримы | — | да | 2 | 0 |
 | `WatchStream` | звонки и стримы | — | да | 2 | 0 |
-| `ChatAttachments` | чаты | — | да | 0 | 0 |
-| `ChatDelete` | чаты | — | да | 0 | 0 |
-| `ChatEdit` | чаты | — | да | 0 | 0 |
-| `ChatHistory` | чаты | — | да | 0 | 0 |
-| `ChatMarkRead` | чаты | — | да | 0 | 0 |
-| `ChatMessage` | чаты | — | да | 0 | 0 |
-| `ChatPin` | чаты | — | да | 0 | 0 |
-| `ChatPins` | чаты | — | да | 0 | 0 |
-| `ChatReact` | чаты | — | да | 0 | 0 |
-| `ChatRows` | чаты | — | да | 1 | 0 |
-| `ChatSend` | чаты | — | да | 0 | 0 |
-| `ChatThread` | чаты | — | да | 0 | 0 |
-| `Conversations` | чаты | — | да | 0 | 0 |
-| `GetMessages` | чаты | — | да | 3 | 0 |
-| `ListSavedMessages` | чаты | — | да | 2 | 0 |
-| `MessageHandler` | чаты | — | да | 2 | 0 |
-| `OnMessageState` | чаты | — | да | 2 | 0 |
-| `ResetEncryptionSession` | чаты | — | да | 2 | 0 |
-| `SaveMessage` | чаты | — | да | 2 | 0 |
-| `SendMessage` | чаты | — | да | 2 | 0 |
-| `SubscribeConversations` | чаты | — | нет | 0 | 0 |
-| `UnsaveMessage` | чаты | — | да | 2 | 0 |
+| `ChatAttachments` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatDelete` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatEdit` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatHistory` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatMarkRead` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatMessage` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatPin` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatPins` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatReact` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatRows` | чаты | v1ChatBackend | да | 1 | 0 |
+| `ChatSend` | чаты | v1ChatBackend | да | 0 | 0 |
+| `ChatThread` | чаты | v1ChatBackend | да | 0 | 0 |
+| `Conversations` | чаты | v1ChatBackend | да | 0 | 0 |
+| `GetMessages` | чаты | v1ChatBackend | да | 3 | 0 |
+| `ListSavedMessages` | чаты | v1ChatBackend | да | 2 | 0 |
+| `MessageHandler` | чаты | v1ChatBackend | да | 2 | 0 |
+| `OnMessageState` | чаты | v1ChatBackend | да | 2 | 0 |
+| `ResetEncryptionSession` | чаты | v1ChatBackend | да | 2 | 0 |
+| `SaveMessage` | чаты | v1ChatBackend | да | 2 | 0 |
+| `SendMessage` | чаты | v1ChatBackend | да | 2 | 0 |
+| `SubscribeConversations` | чаты | v1ChatBackend | нет | 0 | 0 |
+| `UnsaveMessage` | чаты | v1ChatBackend | да | 2 | 0 |
 | `AcceptMessageRequest` | контакты | v1ContactBackend | да | 0 | 0 |
 | `BanContact` | контакты | v1ContactBackend | да | 0 | 0 |
 | `BlockPeer` | контакты | v1ContactBackend | да | 0 | 0 |
@@ -99,55 +100,55 @@ DHT/relay/выхода; нет — если работает только с л�
 | `NewContact` | контакты | v1ContactBackend | да | 2 | 0 |
 | `SetContactProfile` | контакты | v1ContactBackend | да | 0 | 0 |
 | `UnblockPeer` | контакты | v1ContactBackend | да | 0 | 0 |
-| `AcceptFile` | файлы | — | да | 0 | 0 |
-| `CancelFile` | файлы | — | да | 0 | 0 |
-| `DeclineFile` | файлы | — | да | 0 | 0 |
-| `DownloadDir` | файлы | — | нет | 1 | 0 |
-| `FileTransferPath` | файлы | — | да | 0 | 0 |
-| `GetFileTransfer` | файлы | — | да | 0 | 0 |
-| `ListFileTransfers` | файлы | — | да | 0 | 0 |
-| `OnFileTransfer` | файлы | — | да | 2 | 0 |
-| `SendFile` | файлы | — | да | 1 | 0 |
-| `SendGroupFile` | файлы | — | да | 0 | 0 |
-| `AddGroupMember` | группы и каналы | — | да | 0 | 0 |
-| `ChatCategoriesSetup` | группы и каналы | — | да | 0 | 0 |
-| `ChatChannelMove` | группы и каналы | — | да | 0 | 0 |
-| `ChatChannelPlace` | группы и каналы | — | да | 0 | 0 |
-| `ChatChannelRemove` | группы и каналы | — | да | 0 | 0 |
-| `ChatChannelSave` | группы и каналы | — | да | 0 | 0 |
-| `ChatChannels` | группы и каналы | — | да | 0 | 0 |
-| `ChatGroupPhoto` | группы и каналы | — | да | 0 | 0 |
-| `ChatMainChannel` | группы и каналы | — | да | 0 | 0 |
-| `ChatMainChannelSave` | группы и каналы | — | да | 0 | 0 |
-| `ChatThreadTitle` | группы и каналы | — | да | 0 | 0 |
-| `ChatThreads` | группы и каналы | — | да | 0 | 0 |
-| `CreateGroup` | группы и каналы | — | да | 0 | 0 |
-| `DeleteGroup` | группы и каналы | — | да | 0 | 0 |
-| `GetGroupInvite` | группы и каналы | — | да | 0 | 0 |
-| `GetGroupMessages` | группы и каналы | — | да | 0 | 0 |
-| `GroupInviteContacts` | группы и каналы | — | да | 0 | 0 |
-| `GroupInviteCreate` | группы и каналы | — | да | 0 | 0 |
-| `GroupInviteRevoke` | группы и каналы | — | да | 0 | 0 |
-| `GroupInvites` | группы и каналы | — | да | 0 | 0 |
-| `GroupJoinDecide` | группы и каналы | — | да | 0 | 0 |
-| `GroupJoinRequests` | группы и каналы | — | да | 0 | 0 |
-| `GroupModerationLog` | группы и каналы | — | да | 0 | 0 |
-| `GroupRoleRemove` | группы и каналы | — | да | 0 | 0 |
-| `GroupRoleSave` | группы и каналы | — | да | 0 | 0 |
-| `GroupRoles` | группы и каналы | — | да | 0 | 0 |
-| `GroupSnapshotExport` | группы и каналы | — | да | 0 | 0 |
-| `GroupSnapshotImport` | группы и каналы | — | да | 0 | 0 |
-| `GroupTimeout` | группы и каналы | — | да | 0 | 0 |
-| `InspectGroupInvite` | группы и каналы | — | да | 0 | 0 |
-| `JoinGroup` | группы и каналы | — | да | 0 | 0 |
-| `LeaveGroup` | группы и каналы | — | да | 0 | 0 |
-| `ListGroupMembers` | группы и каналы | — | да | 0 | 0 |
-| `ListGroups` | группы и каналы | — | да | 0 | 0 |
-| `RemoveGroupMember` | группы и каналы | — | да | 0 | 0 |
-| `SendGroupMessage` | группы и каналы | — | да | 0 | 0 |
-| `SetGroupRole` | группы и каналы | — | да | 0 | 0 |
-| `SubscribeGroupEvents` | группы и каналы | — | нет | 0 | 0 |
-| `TransferGroupOwnership` | группы и каналы | — | да | 0 | 0 |
+| `AcceptFile` | файлы | v1FileBackend | да | 0 | 0 |
+| `CancelFile` | файлы | v1FileBackend | да | 0 | 0 |
+| `DeclineFile` | файлы | v1FileBackend | да | 0 | 0 |
+| `DownloadDir` | файлы | v1FileBackend | нет | 1 | 0 |
+| `FileTransferPath` | файлы | v1FileBackend | да | 0 | 0 |
+| `GetFileTransfer` | файлы | v1FileBackend | да | 0 | 0 |
+| `ListFileTransfers` | файлы | v1FileBackend | да | 0 | 0 |
+| `OnFileTransfer` | файлы | v1FileBackend | да | 2 | 0 |
+| `SendFile` | файлы | v1FileBackend | да | 1 | 0 |
+| `SendGroupFile` | файлы | v1FileBackend | да | 0 | 0 |
+| `AddGroupMember` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatCategoriesSetup` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatChannelMove` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatChannelPlace` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatChannelRemove` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatChannelSave` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatChannels` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatGroupPhoto` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatMainChannel` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatMainChannelSave` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatThreadTitle` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ChatThreads` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `CreateGroup` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `DeleteGroup` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GetGroupInvite` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GetGroupMessages` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupInviteContacts` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupInviteCreate` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupInviteRevoke` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupInvites` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupJoinDecide` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupJoinRequests` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupModerationLog` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupRoleRemove` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupRoleSave` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupRoles` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupSnapshotExport` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupSnapshotImport` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `GroupTimeout` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `InspectGroupInvite` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `JoinGroup` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `LeaveGroup` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ListGroupMembers` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `ListGroups` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `RemoveGroupMember` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `SendGroupMessage` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `SetGroupRole` | группы и каналы | v1GroupBackend | да | 0 | 0 |
+| `SubscribeGroupEvents` | группы и каналы | v1GroupBackend | нет | 0 | 0 |
+| `TransferGroupOwnership` | группы и каналы | v1GroupBackend | да | 0 | 0 |
 | `AddBootstrapNode` | сеть и доступ | v1NetBackend | да | 6 | 2 |
 | `AddRelay` | сеть и доступ | v1NetBackend | да | 1 | 0 |
 | `CheckProxy` | сеть и доступ | v1NetBackend | да | 0 | 0 |
@@ -288,5 +289,6 @@ DHT/relay/выхода; нет — если работает только с л�
    обращений стоит в неэкспортированных помощниках (329 методов всего).
 7. Колонка «Бэкенд» — реализация, которой метод делегирует при `protocol: 1`: `v1NetBackend`
    (39 методов домена «сеть и доступ») и `v1ContactBackend` (12 методов домена «контакты»),
-   перенесённые в T11.1b; `—` — метод пока остаётся на фасаде и проверяет режим сам. При
+   перенесённые в T11.1b; `v1ChatBackend` (22), `v1GroupBackend` (39), `v1FileBackend` (10),
+   перенесённые в T11.1c; `—` — метод пока остаётся на фасаде и проверяет режим сам. При
    `protocol: 2` на месте любого сетевого бэкенда стоит `v2PendingBackend`.

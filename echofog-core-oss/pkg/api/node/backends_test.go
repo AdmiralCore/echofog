@@ -25,16 +25,20 @@ func newFacadeNode(t *testing.T, protocol int) *NodeApi {
 }
 
 // Protocol 1 keeps the v1 code in the domain backends: the network and contacts domains run in
-// their own v1 structs since T11.1b, the other domains still keep the facade itself.
-func TestBackendsProtocol1IsTheFacade(t *testing.T) {
+// their own v1 structs since T11.1b, the chats, groups and files domains since T11.1c; the calls
+// and VPN domains still keep the facade itself.
+func TestBackendsProtocol1PicksV1Backends(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV1)
 	require.IsType(t, &v1NetBackend{}, api.backends.net)
 	require.Same(t, api, api.backends.net.(*v1NetBackend).NodeApi)
 	require.IsType(t, &v1ContactBackend{}, api.backends.contact)
 	require.Same(t, api, api.backends.contact.(*v1ContactBackend).NodeApi)
-	require.Same(t, api, api.backends.chat)
-	require.Same(t, api, api.backends.group)
-	require.Same(t, api, api.backends.file)
+	require.IsType(t, &v1ChatBackend{}, api.backends.chat)
+	require.Same(t, api, api.backends.chat.(*v1ChatBackend).NodeApi)
+	require.IsType(t, &v1GroupBackend{}, api.backends.group)
+	require.Same(t, api, api.backends.group.(*v1GroupBackend).NodeApi)
+	require.IsType(t, &v1FileBackend{}, api.backends.file)
+	require.Same(t, api, api.backends.file.(*v1FileBackend).NodeApi)
 	require.Same(t, api, api.backends.call)
 	require.Same(t, api, api.backends.vpn)
 }
