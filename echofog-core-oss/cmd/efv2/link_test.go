@@ -19,11 +19,12 @@ func vectorLink(t *testing.T, which string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc map[string]map[string]any
+	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	s, _ := doc[which]["link"].(string)
+	sub, _ := doc[which].(map[string]any)
+	s, _ := sub["link"].(string)
 	if s == "" {
 		t.Fatalf("no %s link in the vector", which)
 	}

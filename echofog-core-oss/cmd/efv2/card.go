@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -110,11 +111,13 @@ func runningLikely(dataDir string) bool {
 	return time.Since(fi.ModTime()) < 15*time.Second
 }
 
-func printJSON(v any) error {
+func printJSON(v any) error { return writeJSON(os.Stdout, v) }
+
+func writeJSON(w io.Writer, v any) error {
 	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout, string(raw))
+	_, err = fmt.Fprintln(w, string(raw))
 	return err
 }

@@ -19,8 +19,15 @@ import (
 //	card64 = base64url-nopad(method(u8) ‖ data), method 0: the envelope, 1: raw DEFLATE of it
 
 const (
-	linkPrefix    = "echofog://join?"
-	webMarker     = "/join/#join?"
+	linkPrefix = "echofog://join?"
+	webMarker  = "/join/#join?"
+	// The slash forms are what v1 links looked like in chats (join/?): the decoder takes them, the
+	// encoder never writes them.
+	linkPrefixSlash = "echofog://join/?"
+	webMarkerSlash  = "/join/#join/?"
+	// maxLink bounds the whole link before it is split: the card parameter alone is bounded by
+	// maxCard64, but unknown parameters are ignored and must not cost unbounded work.
+	maxLink       = 16 << 10
 	maxCardEnv    = 4096
 	accessSecretN = 16
 	// maxCard64 bounds the card parameter before decoding (a DEFLATE stream of a 4096-byte card
@@ -93,17 +100,26 @@ func WebLink(joinHost, link string) string {
 // Link.Verify). Unknown parameters are ignored; the known ones must appear in the order v, card, s,
 // each at most once.
 func ParseLink(s string) (*Link, error) {
+	if len(s) > maxLink {
+		return nil, badLink("link of %d bytes", len(s))
+	}
 	var q string
 	switch {
 	case strings.HasPrefix(s, linkPrefix):
 		q = s[len(linkPrefix):]
+	case strings.HasPrefix(s, linkPrefixSlash):
+		q = s[len(linkPrefixSlash):]
 	case strings.HasPrefix(s, "https://"):
 		rest := s[len("https://"):]
-		i := strings.Index(rest, webMarker)
+		marker := webMarker
+		i := strings.Index(rest, marker)
+		if j := strings.Index(rest, webMarkerSlash); j > 0 && (i < 0 || j < i) {
+			marker, i = webMarkerSlash, j
+		}
 		if i <= 0 || strings.ContainsAny(rest[:i], "/?#@\\") {
 			return nil, badLink("not a join page")
 		}
-		q = rest[i+len(webMarker):]
+		q = rest[i+len(marker):]
 	default:
 		return nil, badLink("not an echofog://join link")
 	}
