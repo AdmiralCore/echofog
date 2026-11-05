@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	utls "github.com/refraction-networking/utls"
 
@@ -22,9 +23,12 @@ type utlsQUICConn struct {
 	spec *utls.ClientHelloSpec
 	// initialHandshake buffers Initial-level handshake bytes until a ServerHello
 	// is complete enough to read its key_share group; curveID is that group.
-	// See recordServerHello (ECHOFOG-PATCH.md, patch 3).
+	// See recordServerHello (ECHOFOG-PATCH.md, patch 3). curveID is read from
+	// ConnectionState, which quic-go calls from a different goroutine than
+	// HandleData, so it is atomic; initialHandshake is only touched by the
+	// handshake reader.
 	initialHandshake []byte
-	curveID          utls.CurveID
+	curveID          atomic.Uint32
 }
 
 // maxServerHelloBytes bounds the Initial-level buffer. A ServerHello is a few
@@ -135,7 +139,7 @@ func (c *utlsQUICConn) HandleData(level tls.QUICEncryptionLevel, data []byte) er
 	// The client's ServerHello arrives at the Initial encryption level. Read its
 	// key_share group before handing the bytes to uTLS, so ConnectionState can
 	// report the same CurveID crypto/tls reports on the server side.
-	if level == tls.QUICEncryptionLevelInitial && c.curveID == 0 {
+	if level == tls.QUICEncryptionLevelInitial && c.curveID.Load() == 0 {
 		c.recordServerHello(data)
 	}
 	return c.conn.HandleData(utlsEncryptionLevel(level), data)
@@ -166,7 +170,7 @@ func (c *utlsQUICConn) recordServerHello(data []byte) {
 		msg := c.initialHandshake[:4+length]
 		c.initialHandshake = c.initialHandshake[4+length:]
 		if group, ok := serverHelloKeyShareGroup(msg); ok {
-			c.curveID = group
+			c.curveID.Store(uint32(group))
 			c.initialHandshake = nil
 			return
 		}
@@ -285,7 +289,7 @@ func (c *utlsQUICConn) ConnectionState() tls.ConnectionState {
 		HandshakeComplete:           s.HandshakeComplete,
 		DidResume:                   s.DidResume,
 		CipherSuite:                 s.CipherSuite,
-		CurveID:                     tls.CurveID(c.curveID),
+		CurveID:                     tls.CurveID(c.curveID.Load()),
 		NegotiatedProtocol:          s.NegotiatedProtocol,
 		NegotiatedProtocolIsMutual:  true,
 		ServerName:                  s.ServerName,
