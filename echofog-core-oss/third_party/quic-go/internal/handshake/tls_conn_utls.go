@@ -20,7 +20,17 @@ type utlsQUICConn struct {
 	// the ClientHello extension rather than handed to uTLS directly; see
 	// SetTransportParameters.
 	spec *utls.ClientHelloSpec
+	// initialHandshake buffers Initial-level handshake bytes until a ServerHello
+	// is complete enough to read its key_share group; curveID is that group.
+	// See recordServerHello (ECHOFOG-PATCH.md, patch 3).
+	initialHandshake []byte
+	curveID          utls.CurveID
 }
+
+// maxServerHelloBytes bounds the Initial-level buffer. A ServerHello is a few
+// hundred bytes; the buffer drains as soon as its group is known, and only
+// accumulates across CRYPTO frames before that.
+const maxServerHelloBytes = 16 << 10
 
 var _ tlsQUICConn = (*utlsQUICConn)(nil)
 
@@ -122,7 +132,45 @@ func (c *utlsQUICConn) Start(ctx context.Context) error { return c.conn.Start(ct
 func (c *utlsQUICConn) Close() error                    { return c.conn.Close() }
 
 func (c *utlsQUICConn) HandleData(level tls.QUICEncryptionLevel, data []byte) error {
+	// The client's ServerHello arrives at the Initial encryption level. Read its
+	// key_share group before handing the bytes to uTLS, so ConnectionState can
+	// report the same CurveID crypto/tls reports on the server side.
+	if level == tls.QUICEncryptionLevelInitial && c.curveID == 0 {
+		c.recordServerHello(data)
+	}
 	return c.conn.HandleData(utlsEncryptionLevel(level), data)
+}
+
+// recordServerHello walks buffered handshake messages and remembers the group of
+// the first ServerHello that carries a key_share entry. A HelloRetryRequest is
+// skipped by serverHelloKeyShareGroup, so the second ServerHello decides.
+func (c *utlsQUICConn) recordServerHello(data []byte) {
+	if len(c.initialHandshake)+len(data) > maxServerHelloBytes {
+		// Not a ServerHello we can read; leave curveID at zero (classical) and
+		// stop buffering. uTLS itself will fail the handshake if it is broken.
+		c.initialHandshake = nil
+		return
+	}
+	c.initialHandshake = append(c.initialHandshake, data...)
+	for len(c.initialHandshake) >= 4 {
+		length := int(c.initialHandshake[1])<<16 |
+			int(c.initialHandshake[2])<<8 |
+			int(c.initialHandshake[3])
+		if length > maxServerHelloBytes {
+			c.initialHandshake = nil
+			return
+		}
+		if len(c.initialHandshake) < 4+length {
+			return
+		}
+		msg := c.initialHandshake[:4+length]
+		c.initialHandshake = c.initialHandshake[4+length:]
+		if group, ok := serverHelloKeyShareGroup(msg); ok {
+			c.curveID = group
+			c.initialHandshake = nil
+			return
+		}
+	}
 }
 
 // SetTransportParameters installs quic-go's marshalled transport parameters into
@@ -237,6 +285,7 @@ func (c *utlsQUICConn) ConnectionState() tls.ConnectionState {
 		HandshakeComplete:           s.HandshakeComplete,
 		DidResume:                   s.DidResume,
 		CipherSuite:                 s.CipherSuite,
+		CurveID:                     tls.CurveID(c.curveID),
 		NegotiatedProtocol:          s.NegotiatedProtocol,
 		NegotiatedProtocolIsMutual:  true,
 		ServerName:                  s.ServerName,

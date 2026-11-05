@@ -18,6 +18,15 @@ func (c *Config) handshakeTimeout() time.Duration {
 	return 2 * c.HandshakeIdleTimeout
 }
 
+// maxUDPPayloadSize is the max_udp_payload_size to advertise: the configured
+// value, or quic-go's historical 1452.
+func (c *Config) maxUDPPayloadSize() protocol.ByteCount {
+	if c.MaxUDPPayloadSize > 0 {
+		return protocol.ByteCount(c.MaxUDPPayloadSize)
+	}
+	return protocol.MaxPacketBufferSize
+}
+
 func (c *Config) maxRetryTokenAge() time.Duration {
 	return c.handshakeTimeout()
 }
@@ -44,6 +53,9 @@ func validateConfig(config *Config) error {
 	}
 	if config.InitialPacketSize > protocol.MaxPacketBufferSize {
 		config.InitialPacketSize = protocol.MaxPacketBufferSize
+	}
+	if config.MaxUDPPayloadSize != 0 && config.MaxUDPPayloadSize < protocol.MinInitialPacketSize {
+		return fmt.Errorf("invalid max_udp_payload_size: %d (minimum %d)", config.MaxUDPPayloadSize, protocol.MinInitialPacketSize)
 	}
 	// check that all QUIC versions are actually supported
 	for _, v := range config.Versions {
@@ -143,6 +155,7 @@ func populateConfig(config *Config) *Config {
 		OmitMaxDatagramFrameSize:         omitMaxDatagramFrameSize,
 		AssumePeerMaxDatagramFrameSize:   config.AssumePeerMaxDatagramFrameSize,
 		InitialPacketSize:                initialPacketSize,
+		MaxUDPPayloadSize:                config.MaxUDPPayloadSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,
