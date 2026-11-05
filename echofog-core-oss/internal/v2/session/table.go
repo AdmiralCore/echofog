@@ -186,22 +186,7 @@ func (t *Table) sweepOnce() {
 		}
 	}
 	if len(t.sessions) > t.max {
-		live := make([]*Established, 0, len(t.sessions))
-		for _, est := range t.sessions {
-			live = append(live, est)
-		}
-		sort.Slice(live, func(i, j int) bool {
-			return lastActivity(live[i]).Before(lastActivity(live[j]))
-		})
-		for _, est := range live[:len(live)-t.max] {
-			for key, e := range t.sessions {
-				if e == est {
-					delete(t.sessions, key)
-					break
-				}
-			}
-			victims = append(victims, est)
-		}
+		victims = append(victims, t.evictLocked(nil)...)
 	}
 	t.mu.Unlock()
 
@@ -210,6 +195,38 @@ func (t *Table) sweepOnce() {
 			_ = est.GoAway(context.Background(), frame.CodeGoingAway, "idle", t.cfg.RetryAfter)
 		}(est)
 	}
+}
+
+// evictLocked removes the least recently active sessions above the limit and returns them.
+// keep, when not nil, is never evicted (the session the caller just created).
+func (t *Table) evictLocked(keep *Established) []*Established {
+	if len(t.sessions) <= t.max {
+		return nil
+	}
+	live := make([]*Established, 0, len(t.sessions))
+	for _, est := range t.sessions {
+		if est != keep {
+			live = append(live, est)
+		}
+	}
+	sort.Slice(live, func(i, j int) bool {
+		return lastActivity(live[i]).Before(lastActivity(live[j]))
+	})
+	over := len(t.sessions) - t.max
+	if over > len(live) {
+		over = len(live)
+	}
+	victims := make([]*Established, 0, over)
+	for _, est := range live[:over] {
+		for key, e := range t.sessions {
+			if e == est {
+				delete(t.sessions, key)
+				break
+			}
+		}
+		victims = append(victims, est)
+	}
+	return victims
 }
 
 // Get returns the live session for (local, peer). Concurrent callers for the same key share one
@@ -280,7 +297,13 @@ func (t *Table) Get(ctx context.Context, local LocalIdentity, peer [32]byte, ope
 			default:
 				t.mu.Lock()
 				kept, loser = t.insertLocked(key, est)
+				evicted := t.evictLocked(kept)
 				t.mu.Unlock()
+				for _, old := range evicted {
+					go func(old *Established) {
+						_ = old.GoAway(context.Background(), frame.CodeGoingAway, "over limit", t.cfg.RetryAfter)
+					}(old)
+				}
 			}
 		}
 
@@ -325,9 +348,15 @@ func (t *Table) Add(local LocalIdentity, est *Established) (*Established, error)
 		return nil, fmt.Errorf("%w: table is closed", ErrConfig)
 	}
 	kept, loser := t.insertLocked(Key{Local: lid, Peer: est.Peer.DeviceID}, est)
+	evicted := t.evictLocked(kept)
 	t.mu.Unlock()
 	if loser != nil {
 		go t.closeDuplicate(loser)
+	}
+	for _, old := range evicted {
+		go func(old *Established) {
+			_ = old.GoAway(context.Background(), frame.CodeGoingAway, "over limit", t.cfg.RetryAfter)
+		}(old)
 	}
 	return kept, nil
 }
