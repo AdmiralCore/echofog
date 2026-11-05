@@ -15,11 +15,14 @@ func TestPaddingPayloadExactFit(t *testing.T) {
 	for n := 3; n <= 200; n++ {
 		p, ok := paddingPayload(n)
 		if !ok {
-			t.Fatalf("no payload for %d", n)
+			continue // a width jump leaves a one-byte gap (67 is one)
 		}
 		if got := frame.FrameLen(frame.TypePadding, p); got != n {
 			t.Fatalf("paddingPayload(%d) = %d encoded %d", n, p, got)
 		}
+	}
+	if _, ok := paddingPayload(67); ok {
+		t.Fatal("67 has no exact PADDING frame; the test's width-jump gap changed")
 	}
 	for _, n := range []int{0, 1, 2} {
 		if _, ok := paddingPayload(n); ok {

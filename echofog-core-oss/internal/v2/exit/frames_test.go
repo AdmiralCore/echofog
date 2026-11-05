@@ -77,7 +77,7 @@ func TestResultAndUDPEncodings(t *testing.T) {
 	}
 
 	pkt := UDPPkt{Addr: "192.0.2.53:53", Data: []byte{0xab, 0xcd}}
-	want := mustHex(t, "0a0e3139322e302e322e35333a35331202abcd")
+	want := mustHex(t, "0a0d3139322e302e322e35333a35331202abcd")
 	if got := pkt.Append(nil); !bytes.Equal(got, want) {
 		t.Fatalf("UDP_PKT = %x, want %x", got, want)
 	}
@@ -142,10 +142,10 @@ func TestFramesRejectMalformed(t *testing.T) {
 		{"tcp short tag", func(b []byte) error { _, err := ParseTCPConnect(b); return err }, []byte{0x0a}},
 		{"tcp bad utf8 host", func(b []byte) error { _, err := ParseTCPConnect(b); return err }, mustHex(t, "0a02c328")},
 		{"tcp host too long", func(b []byte) error { _, err := ParseTCPConnect(b); return err },
-			append(append([]byte{0x0a, 254}, bytes.Repeat([]byte{'a'}, 254)...), 0x10, 80)},
+			append(append([]byte{0x0a, 0xfe, 0x01}, bytes.Repeat([]byte{'a'}, 254)...), 0x10, 80)},
 		{"tcp port zero", func(b []byte) error { _, err := ParseTCPConnect(b); return err }, mustHex(t, "0a01611000")},
 		{"tcp port too big", func(b []byte) error { _, err := ParseTCPConnect(b); return err }, mustHex(t, "0a016110808004")},
-		{"result wrong type", func(b []byte) error { _, err := ParseResult(b); return err }, mustHex(t, "1201ff")},
+		{"result wrong type", func(b []byte) error { _, err := ParseResult(b); return err }, mustHex(t, "0a0101")},
 		{"udp_open short", func(b []byte) error { _, err := ParseUDPOpen(b); return err }, mustHex(t, "0801")[:1]},
 		{"udp_ok bad req type", func(b []byte) error { _, err := ParseUDPOK(b); return err }, mustHex(t, "0a0101")},
 		{"udp_pkt bad addr", func(b []byte) error { _, err := ParseUDPPkt(b); return err }, mustHex(t, "0a02c328")},
@@ -171,7 +171,7 @@ func TestFramesRejectMalformed(t *testing.T) {
 
 	// Host of exactly 253 bytes is allowed.
 	host := bytes.Repeat([]byte{'a'}, 253)
-	ok := append([]byte{0x0a, 253}, host...)
+	ok := append([]byte{0x0a, 0xfd, 0x01}, host...)
 	ok = append(ok, 0x10, 80)
 	if _, err := ParseTCPConnect(ok); err != nil {
 		t.Fatalf("253-byte host rejected: %v", err)

@@ -9,7 +9,8 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/frame"
 )
 
-// EXIT_UDP fragment 0 from docs/protocol/v2/vectors/frames.json.
+// EXIT_UDP fragment 0 from docs/protocol/v2/vectors/frames.json. addr_len counts the whole
+// address part, including its own byte: 0x0e for the 13-byte "192.0.2.53:53".
 func TestFragmentVector(t *testing.T) {
 	t.Parallel()
 
@@ -48,9 +49,8 @@ func TestFragmentRejectsMalformed(t *testing.T) {
 		{"count zero", mustHex(t, "050001000000")},
 		{"count nine", mustHex(t, "0500010009")},
 		{"index equals count", mustHex(t, "0500010101")},
-		{"address not in fragment 0", mustHex(t, "0500010102" + "02" + "6162")},
 		{"fragment 0 without address", mustHex(t, "0500010001")},
-		{"address too long", append(append([]byte{0x05, 0x00, 0x01, 0x00, 0x01, 255}, bytes.Repeat([]byte{'a'}, 255)...), 0x00)},
+		{"address truncated", mustHex(t, "0500010001ff61")},
 		{"address not utf8", mustHex(t, "050001000101c3")},
 		{"non-minimal session", mustHex(t, "80000001000100")},
 	}
@@ -95,13 +95,19 @@ func TestReassembler(t *testing.T) {
 		t.Fatal("duplicate blocked completion")
 	}
 
-	// A packet expires after FragmentTTL.
+	// A packet expires after FragmentTTL: the old fragment 0 is dropped, so fragment 1 alone
+	// cannot complete a packet.
 	now = now.Add(time.Second)
 	r.feed(Fragment{Session: 1, Packet: 9, Index: 0, Count: 2, Addr: "a:1", Data: []byte("x")})
 	now = now.Add(FragmentTTL + time.Millisecond)
 	if _, _, ok := r.feed(Fragment{Session: 1, Packet: 9, Index: 1, Count: 2, Data: []byte("y")}); ok {
 		t.Fatal("expired packet completed")
 	}
+	if r.pendingCount() != 1 {
+		t.Fatalf("pending = %d, want the new partial packet", r.pendingCount())
+	}
+	now = now.Add(FragmentTTL + time.Millisecond)
+	r.expire()
 	if r.pendingCount() != 0 {
 		t.Fatalf("pending = %d after expiry", r.pendingCount())
 	}

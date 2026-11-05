@@ -294,6 +294,7 @@ func (r *rig) open(t *testing.T) *mux.Stream {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
+	st.SetLimiter(limiter())
 	return st
 }
 
@@ -530,6 +531,7 @@ func TestUDPRelayDatagrams(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pc.Close()
+	echoed := make(chan int, 4)
 	go func() {
 		buf := make([]byte, 2048)
 		for {
@@ -537,7 +539,9 @@ func TestUDPRelayDatagrams(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_, _ = pc.WriteTo(buf[:n], addr)
+			echoed <- n
+			// A large reply exercises the exit's own fragmentation.
+			_, _ = pc.WriteTo(bytes.Repeat([]byte("back"), 800), addr)
 		}
 	}()
 	host, portStr, _ := net.SplitHostPort(pc.LocalAddr().String())
@@ -562,8 +566,9 @@ func TestUDPRelayDatagrams(t *testing.T) {
 		t.Fatalf("UDP_OK = %+v, want ok with a datagram session", ok)
 	}
 
-	// Fragments of the reply may arrive out of order and in any count from 1 to 8.
-	payload := bytes.Repeat([]byte("udp!"), 800) // 3200 bytes
+	// The request needs two fragments; the reply is large enough to need several on the way back.
+	payload := bytes.Repeat([]byte("q"), 1500)
+	want := bytes.Repeat([]byte("back"), 800)
 	frags := splitForTest(ok.Session, 1, net.JoinHostPort(host, portStr), payload)
 	for i := len(frags) - 1; i >= 0; i-- {
 		if err := rig.client.SendDatagram(frame.DgramExitUDP, frags[i].Append(nil)); err != nil {
@@ -598,14 +603,23 @@ func TestUDPRelayDatagrams(t *testing.T) {
 				addr = fr.Addr
 			}
 		case <-deadline:
-			t.Fatalf("got %d/%d fragments", len(got), count)
+			select {
+			case n := <-echoed:
+				t.Logf("the UDP target received %d bytes", n)
+			default:
+				t.Log("the UDP target received nothing")
+			}
+			st := rig.srv.Stats()
+			t.Fatalf("got %d/%d fragments (accepted=%d udp=%d dgrams=%d dropped=%d reassembled=%d)",
+				len(got), count, st.Accepted.Load(), st.UDPAccepted.Load(), len(rig.dgrams),
+				st.DatagramsDropped.Load(), st.FragmentsReassembled.Load())
 		}
 	}
 	if addr != net.JoinHostPort(host, portStr) {
 		// The exit labels replies with the address the client used.
 		t.Fatalf("addr = %q", addr)
 	}
-	reassembled := make([]byte, 0, len(payload))
+	reassembled := make([]byte, 0, len(want))
 	for i := uint8(0); i < count; i++ {
 		part, ok := got[i]
 		if !ok {
@@ -613,8 +627,8 @@ func TestUDPRelayDatagrams(t *testing.T) {
 		}
 		reassembled = append(reassembled, part...)
 	}
-	if !bytes.Equal(reassembled, payload) {
-		t.Fatalf("reassembled payload mismatch: %d bytes", len(reassembled))
+	if !bytes.Equal(reassembled, want) {
+		t.Fatalf("reassembled payload mismatch: %d bytes, want %d", len(reassembled), len(want))
 	}
 }
 
