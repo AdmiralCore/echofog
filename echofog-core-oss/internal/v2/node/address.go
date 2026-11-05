@@ -2,7 +2,6 @@ package node
 
 import (
 	"net/netip"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/session"
 )
@@ -30,7 +29,7 @@ func (r *Runtime) publicAddrChanged(c session.PublicAddrChange) {
 	r.events.Emit(Event{
 		Kind:       EventPublicAddr,
 		Message:    msg,
-		At:         time.Now(),
+		At:         r.clock.Now(),
 		Err:        err,
 		PublicAddr: c.New,
 	})

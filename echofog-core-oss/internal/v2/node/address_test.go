@@ -38,15 +38,15 @@ func TestPublicAddrDecisionReissuesCardsAndEmitsEvent(t *testing.T) {
 		t.Fatal("public address known before any report")
 	}
 
-	obs.Observe(observation(1, "198.51.100.1", "203.0.113.5:4000"))
-	obs.Observe(observation(9, "100.64.0.1", "203.0.113.99:4000")) // a liar
+	obs.Observe(observation(1, "198.51.100.1", "8.8.8.8:4000"))
+	obs.Observe(observation(9, "100.64.0.1", "1.1.1.1:4000")) // a liar
 	if ev.has(node.EventPublicAddr) {
 		t.Fatal("event before the agreement")
 	}
-	obs.Observe(observation(2, "192.0.2.9", "203.0.113.5:4000"))
+	obs.Observe(observation(2, "192.0.2.9", "8.8.8.8:4000"))
 
 	got, ok := n.rt.PublicAddr()
-	if !ok || got != netip.MustParseAddr("203.0.113.5") {
+	if !ok || got != netip.MustParseAddr("8.8.8.8") {
 		t.Fatalf("PublicAddr = %v %v", got, ok)
 	}
 	e, ok := ev.last(node.EventPublicAddr)
@@ -64,7 +64,7 @@ func TestPublicAddrDecisionReissuesCardsAndEmitsEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyCard: %v", err)
 	}
-	if host := card.Body.GetAddrs()[0].GetHost(); host != "203.0.113.5" {
+	if host := card.Body.GetAddrs()[0].GetHost(); host != "8.8.8.8" {
 		t.Fatalf("card host = %q", host)
 	}
 	if c := n.rt.NATClass(); c != session.NATUnknown {

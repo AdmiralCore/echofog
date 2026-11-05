@@ -74,8 +74,8 @@ func TestHandshakeObservedFeedsObserver(t *testing.T) {
 	r := newObsRig(t)
 	ctl := session.NewControl(session.ControlConfig{Observer: r.o})
 
-	est := observedSession(t, ctl, mux.PathDirect, "10.0.0.2:5000", "192.0.2.9:443", "203.0.113.5:4000")
-	if got, ok := session.ParseObserved(est.Observed); !ok || got != netip.MustParseAddrPort("203.0.113.5:4000") {
+	est := observedSession(t, ctl, mux.PathDirect, "10.0.0.2:5000", "192.0.2.9:443", "8.8.8.8:4000")
+	if got, ok := session.ParseObserved(est.Observed); !ok || got != netip.MustParseAddrPort("8.8.8.8:4000") {
 		t.Fatalf("Established.Observed = %x", est.Observed)
 	}
 	if r.o.Len() != 1 {
@@ -83,8 +83,8 @@ func TestHandshakeObservedFeedsObserver(t *testing.T) {
 	}
 	wantPublic(t, r.o, "") // one peer decides nothing
 
-	observedSession(t, ctl, mux.PathDirect, "10.0.0.2:5000", "198.51.100.77:443", "203.0.113.5:4000")
-	wantPublic(t, r.o, "203.0.113.5")
+	observedSession(t, ctl, mux.PathDirect, "10.0.0.2:5000", "198.51.100.77:443", "8.8.8.8:4000")
+	wantPublic(t, r.o, "8.8.8.8")
 }
 
 func TestRelayedPathIsNotObserved(t *testing.T) {
@@ -92,7 +92,7 @@ func TestRelayedPathIsNotObserved(t *testing.T) {
 	ctl := session.NewControl(session.ControlConfig{Observer: r.o})
 	// The responder accepted over a relay circuit: it sends no address (the carrier's peer is the
 	// relay), and the initiator's path kind is relay, so the report is not counted either.
-	est := observedSession(t, ctl, mux.PathRelay, "10.0.0.2:5000", "192.0.2.9:443", "203.0.113.5:4000")
+	est := observedSession(t, ctl, mux.PathRelay, "10.0.0.2:5000", "192.0.2.9:443", "8.8.8.8:4000")
 	if len(est.Observed) != 0 {
 		t.Fatalf("responder over a relay reported %x", est.Observed)
 	}

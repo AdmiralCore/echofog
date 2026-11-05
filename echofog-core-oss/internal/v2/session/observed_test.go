@@ -91,29 +91,29 @@ func wantPublic(t *testing.T, o *session.Observer, want string) {
 
 func TestOneObservationIsNotEnough(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
 	wantPublic(t, r.o, "")
 }
 
 func TestTwoPeersDifferentSlash16Decide(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
 	if r.nChanges() != 1 {
 		t.Fatalf("changes = %d, want 1", r.nChanges())
 	}
 	c := r.changes[0]
-	if c.Old.IsValid() || c.New != netip.MustParseAddr("203.0.113.5") {
+	if c.Old.IsValid() || c.New != netip.MustParseAddr("8.8.8.8") {
 		t.Fatalf("change = %+v", c)
 	}
 }
 
 func TestTwoPeersSameSlash16DoNotDecide(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.1.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "198.51.200.2", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(3, "198.51.77.3", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.1.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "198.51.200.2", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(3, "198.51.77.3", "8.8.8.8:4000", "s"))
 	wantPublic(t, r.o, "")
 	if r.nChanges() != 0 {
 		t.Fatalf("changes = %d, want 0", r.nChanges())
@@ -133,11 +133,11 @@ func TestIPv6GroupIsSlash32(t *testing.T) {
 
 func TestOneLiarDoesNotChangeDecision(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.77:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.4.4:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
 	if r.nChanges() != 1 {
 		t.Fatalf("changes = %d, want 1", r.nChanges())
 	}
@@ -148,20 +148,20 @@ func TestOneLiarDoesNotChangeDecision(t *testing.T) {
 
 func TestLiarFirstCannotForceAnAddress(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.77:4000", "s"))
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.4.4:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
 	wantPublic(t, r.o, "") // 1 vs 1: no decision, and no tie-break by order
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
 }
 
 func TestLiarsInOneSlash16AreOneVote(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.77:4000", "s"))
-	r.o.Observe(obs(4, "100.64.9.9", "203.0.113.77:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.4.4:4000", "s"))
+	r.o.Observe(obs(4, "100.64.9.9", "8.8.4.4:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
 	if r.nChanges() != 1 {
 		t.Fatalf("changes = %d, want 1", r.nChanges())
 	}
@@ -169,13 +169,13 @@ func TestLiarsInOneSlash16AreOneVote(t *testing.T) {
 
 func TestTieDecidesNothingAndKeepsOldDecision(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
 	// 2 peers for a new address in other groups: 2 vs 2 is a tie, the decision stays
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.9:4000", "s"))
-	r.o.Observe(obs(4, "100.65.0.1", "203.0.113.9:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.5")
+	r.o.Observe(obs(3, "100.64.0.1", "9.9.9.9:4000", "s"))
+	r.o.Observe(obs(4, "100.65.0.1", "9.9.9.9:4000", "s"))
+	wantPublic(t, r.o, "8.8.8.8")
 	if r.nChanges() != 1 {
 		t.Fatalf("changes = %d, want 1", r.nChanges())
 	}
@@ -183,16 +183,17 @@ func TestTieDecidesNothingAndKeepsOldDecision(t *testing.T) {
 
 func TestStrictMajorityChangesAddress(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
 	// the node moved: the same peers now report the new address
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.9:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.9:4000", "s"))
-	wantPublic(t, r.o, "203.0.113.9")
+	r.clk.advance(session.MinChangeInterval + time.Second)
+	r.o.Observe(obs(1, "198.51.100.1", "9.9.9.9:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "9.9.9.9:4000", "s"))
+	wantPublic(t, r.o, "9.9.9.9")
 	if r.nChanges() != 2 {
 		t.Fatalf("changes = %d, want 2", r.nChanges())
 	}
-	if c := r.changes[1]; c.Old != netip.MustParseAddr("203.0.113.5") || c.New != netip.MustParseAddr("203.0.113.9") {
+	if c := r.changes[1]; c.Old != netip.MustParseAddr("8.8.8.8") || c.New != netip.MustParseAddr("9.9.9.9") {
 		t.Fatalf("change = %+v", c)
 	}
 }
@@ -200,8 +201,8 @@ func TestStrictMajorityChangesAddress(t *testing.T) {
 func TestSameDecisionRepeatedFiresOnce(t *testing.T) {
 	r := newObsRig(t)
 	for i := 0; i < 5; i++ {
-		r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-		r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+		r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+		r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
 	}
 	if r.nChanges() != 1 {
 		t.Fatalf("changes = %d, want 1", r.nChanges())
@@ -211,12 +212,12 @@ func TestSameDecisionRepeatedFiresOnce(t *testing.T) {
 func TestUnusableObservationsAreIgnored(t *testing.T) {
 	r := newObsRig(t)
 	bad := []session.Observation{
-		obs(1, "198.51.100.1", "10.0.0.5:4000", "s"),     // private
-		obs(2, "192.0.2.9", "127.0.0.1:4000", "s"),       // loopback
-		obs(3, "100.64.0.1", "0.0.0.0:4000", "s"),        // unspecified
-		obs(4, "198.51.101.1", "169.254.1.1:4000", "s"),  // link local
-		{Peer: peerID(5), Reported: ap("203.0.113.5:1")}, // no peer address (relay circuit)
-		{Peer: peerID(6), PeerAddr: netip.MustParseAddr("127.0.0.1"), Reported: ap("203.0.113.5:1")},
+		obs(1, "198.51.100.1", "10.0.0.5:4000", "s"),    // private
+		obs(2, "192.0.2.9", "127.0.0.1:4000", "s"),      // loopback
+		obs(3, "100.64.0.1", "0.0.0.0:4000", "s"),       // unspecified
+		obs(4, "198.51.101.1", "169.254.1.1:4000", "s"), // link local
+		{Peer: peerID(5), Reported: ap("8.8.8.8:1")},    // no peer address (relay circuit)
+		{Peer: peerID(6), PeerAddr: netip.MustParseAddr("127.0.0.1"), Reported: ap("8.8.8.8:1")},
 		{Peer: peerID(7), PeerAddr: netip.MustParseAddr("192.0.2.77")}, // no reported address
 	}
 	for _, b := range bad {
@@ -229,16 +230,16 @@ func TestUnusableObservationsAreIgnored(t *testing.T) {
 
 func TestObservationsExpire(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
 	r.clk.advance(session.ObservationTTL + time.Second)
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
 	wantPublic(t, r.o, "") // the first one is gone
 }
 
 func TestResetForgetsEverything(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
 	r.o.Reset()
 	wantPublic(t, r.o, "")
 	if got := r.o.NAT("s"); got != session.NATUnknown {
@@ -253,7 +254,7 @@ func TestObservationCapEvictsOldest(t *testing.T) {
 		r.o.Observe(session.Observation{
 			Peer:     [32]byte{byte(i), byte(i >> 8), 1},
 			PeerAddr: netip.AddrFrom4([4]byte{byte(11 + i%200), byte(i / 200), 1, 1}),
-			Reported: ap("203.0.113.5:4000"),
+			Reported: ap("8.8.8.8:4000"),
 			Socket:   "s",
 		})
 	}
@@ -264,12 +265,12 @@ func TestObservationCapEvictsOldest(t *testing.T) {
 
 func TestNATNeedsThreeObservations(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
 	if got := r.o.NAT("s"); got != session.NATUnknown {
 		t.Fatalf("NAT with 2 observations = %v, want unknown", got)
 	}
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:4000", "s"))
 	if got := r.o.NAT("s"); got != session.NATCone {
 		t.Fatalf("NAT with 3 equal observations = %v, want cone", got)
 	}
@@ -277,12 +278,12 @@ func TestNATNeedsThreeObservations(t *testing.T) {
 
 func TestNATSymmetricNeedsThreeDistinctPorts(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4001", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4002", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4001", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4002", "s"))
 	if got := r.o.NAT("s"); got != session.NATUnknown {
 		t.Fatalf("NAT with 2 = %v", got)
 	}
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4003", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:4003", "s"))
 	if got := r.o.NAT("s"); got != session.NATSymmetric {
 		t.Fatalf("NAT = %v, want symmetric", got)
 	}
@@ -290,14 +291,14 @@ func TestNATSymmetricNeedsThreeDistinctPorts(t *testing.T) {
 
 func TestOneLyingPortIsNotSymmetric(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:7777", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:7777", "s"))
 	if got := r.o.NAT("s"); got == session.NATSymmetric {
 		t.Fatalf("one divergent port made the NAT symmetric")
 	}
 	// a fourth honest observation makes it cone again
-	r.o.Observe(obs(4, "100.65.0.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(4, "100.65.0.1", "8.8.8.8:4000", "s"))
 	if got := r.o.NAT("s"); got != session.NATCone {
 		t.Fatalf("NAT = %v, want cone (3 of 4)", got)
 	}
@@ -305,10 +306,10 @@ func TestOneLyingPortIsNotSymmetric(t *testing.T) {
 
 func TestDivergentIPIsNotEvidenceOfSymmetricNAT(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(4, "100.65.0.1", "203.0.113.99:5555", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(4, "100.65.0.1", "1.1.1.1:5555", "s"))
 	if got := r.o.NAT("s"); got != session.NATCone {
 		t.Fatalf("NAT = %v, want cone: the divergent IP is suspicious, not symmetric evidence", got)
 	}
@@ -317,9 +318,9 @@ func TestDivergentIPIsNotEvidenceOfSymmetricNAT(t *testing.T) {
 func TestNATNeedsOneLocalSocket(t *testing.T) {
 	r := newObsRig(t)
 	// each session on its own socket: a cone NAT shows different ports, that proves nothing
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4001", "a"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4002", "b"))
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4003", "c"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4001", "a"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4002", "b"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:4003", "c"))
 	for _, s := range []string{"a", "b", "c", ""} {
 		if got := r.o.NAT(s); got != session.NATUnknown {
 			t.Fatalf("NAT(%q) = %v, want unknown", s, got)
@@ -332,9 +333,9 @@ func TestNATNeedsOneLocalSocket(t *testing.T) {
 
 func TestNATSameGroupCountsOnce(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4001", "s"))
-	r.o.Observe(obs(2, "198.51.100.2", "203.0.113.5:4002", "s"))
-	r.o.Observe(obs(3, "198.51.100.3", "203.0.113.5:4003", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4001", "s"))
+	r.o.Observe(obs(2, "198.51.100.2", "8.8.8.8:4002", "s"))
+	r.o.Observe(obs(3, "198.51.100.3", "8.8.8.8:4003", "s"))
 	if got := r.o.NAT("s"); got != session.NATUnknown {
 		t.Fatalf("three peers of one /16 classified the NAT as %v", got)
 	}
@@ -342,9 +343,9 @@ func TestNATSameGroupCountsOnce(t *testing.T) {
 
 func TestNATClassUsesTheBestSocketOnly(t *testing.T) {
 	r := newObsRig(t)
-	r.o.Observe(obs(1, "198.51.100.1", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(2, "192.0.2.9", "203.0.113.5:4000", "s"))
-	r.o.Observe(obs(3, "100.64.0.1", "203.0.113.5:4000", "s"))
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:4000", "s"))
 	if got := r.o.NATClass(); got != session.NATCone {
 		t.Fatalf("NATClass = %v, want cone", got)
 	}
@@ -376,19 +377,19 @@ func TestRandomLiarsNeverOutvoteHonestNetworks(t *testing.T) {
 		}
 		var reps []rep
 		for i := 0; i < 3; i++ { // honest: one network each
-			reps = append(reps, rep{byte(10 + i), fmt.Sprintf("198.%d.0.%d", 51+i, i+1), "203.0.113.5:4000"})
+			reps = append(reps, rep{byte(10 + i), fmt.Sprintf("198.%d.0.%d", 51+i, i+1), "8.8.8.8:4000"})
 		}
 		for i := 0; i < 1+rng.IntN(4); i++ { // liars: all inside 100.64/16
 			reps = append(reps, rep{byte(50 + i), fmt.Sprintf("100.64.%d.%d", i, i+1),
-				fmt.Sprintf("203.0.113.%d:4000", 100+rng.IntN(100))})
+				fmt.Sprintf("5.5.5.%d:4000", 100+rng.IntN(100))})
 		}
 		rng.Shuffle(len(reps), func(i, j int) { reps[i], reps[j] = reps[j], reps[i] })
 		for _, x := range reps {
 			r.o.Observe(obs(x.n, x.addr, x.ip, "s"))
-			if got, ok := r.o.PublicAddr(); ok && got != netip.MustParseAddr("203.0.113.5") {
+			if got, ok := r.o.PublicAddr(); ok && got != netip.MustParseAddr("8.8.8.8") {
 				t.Fatalf("iter %d: decided %v with %d reports", iter, got, len(reps))
 			}
 		}
-		wantPublic(t, r.o, "203.0.113.5")
+		wantPublic(t, r.o, "8.8.8.8")
 	}
 }
