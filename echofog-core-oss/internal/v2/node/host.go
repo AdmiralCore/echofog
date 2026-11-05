@@ -49,17 +49,6 @@ type CardSource interface {
 	Devices(node NodeID) *objects.DeviceList
 }
 
-// Profile is the platform profile and the flags that are local policy (platforms.md §2). T3.7b
-// fills the full flag set; the runtime only needs the platform name and the memory cap so far.
-type Profile struct {
-	Platform   string
-	MemCapMB   int
-	LowPower   bool
-	Metered    bool
-	Roles      []string
-	Background string
-}
-
 // DialOpt changes one Session or Open call.
 type DialOpt struct {
 	// Card is the verified peer card to dial. When nil the runtime takes the newest card of the

@@ -128,6 +128,9 @@ type SessionStats struct {
 	DatagramsUnknown uint64
 	DatagramsBad     uint64
 	DatagramsDropped uint64
+	// GreaseSent counts the GREASE frames this side wrote (D18). It is the observable side of
+	// the runtime's per-session GREASE timer.
+	GreaseSent uint64
 }
 
 // RejectError: the peer refused the session after the handshake (REJECT on the control stream).
@@ -736,8 +739,15 @@ func (s *Session) SendGrease() error {
 	if p == nil {
 		return ErrNoPath
 	}
-	return p.ctrl.WriteGrease()
+	if err := p.ctrl.WriteGrease(); err != nil {
+		return err
+	}
+	s.count(func(st *SessionStats) { st.GreaseSent++ })
+	return nil
 }
+
+// LowPower reports the platform profile's low_power flag of this session (platforms.md §2).
+func (s *Session) LowPower() bool { return s.cfg.LowPower }
 
 // Ping measures the RTT of the active path.
 func (s *Session) Ping(ctx context.Context) (time.Duration, error) {

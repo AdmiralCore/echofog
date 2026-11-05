@@ -151,6 +151,11 @@ func (r *Runtime) NetworkChanged(ctx context.Context, opt DialOpt) error {
 	sessions := r.table.Sessions()
 	eligible := make([]*session.Established, 0, len(sessions))
 	for _, est := range sessions {
+		// The table keeps a draining session until its successor replaces it (T3.7b); a network
+		// change only migrates live ones.
+		if !liveSession(est) {
+			continue
+		}
 		if est.HasFeature(frame.FeaturePathMigration) {
 			eligible = append(eligible, est)
 		}

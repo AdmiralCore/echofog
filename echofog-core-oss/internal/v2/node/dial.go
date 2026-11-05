@@ -53,6 +53,9 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	if !r.running() {
 		return nil, Peer{}, ErrClosed
 	}
+	if r.Background() == BackgroundSuspended {
+		return nil, Peer{}, ErrBackground
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -100,7 +103,7 @@ func (r *Runtime) dialIdentity(ctx context.Context, opt DialOpt) (session.LocalI
 func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.LocalIdentity, opt DialOpt, extra []session.DialOption) (*session.Established, error) {
 	attempts := opt.Attempts
 	if len(attempts) == 0 {
-		attempts = carrier.Plan(card, r.localInfo)
+		attempts = carrier.Plan(card, r.planInfo())
 	}
 	if len(attempts) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrNoRoute, DeviceID(card.DeviceID))

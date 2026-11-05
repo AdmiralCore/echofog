@@ -20,14 +20,14 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 		local, err := r.mainLocal(r.ctx)
 		if err != nil {
 			if r.ctx.Err() == nil {
-				r.log.Warn("node: cannot build the accepting identity", "err", err)
+				r.listenerStopped(err)
 			}
 			return
 		}
 		onEstablished, onPathFailed := r.pathHooks()
 		cfg := session.AcceptConfig{
 			Local:         local,
-			Hidden:        r.vis != cards.Visible,
+			Hidden:        r.Self().Visibility != cards.Visible,
 			Passes:        r.cfg.Passes,
 			Puzzle:        r.cfg.Puzzle,
 			Bindings:      r.bindings,
@@ -65,6 +65,12 @@ func (r *Runtime) acceptLoop(l carrier.Listener) {
 			// Add drains the loser by the duplicate rule of wire.md §7.3.
 			continue
 		}
+		if r.Background() == BackgroundSuspended {
+			// suspended closes sessions with GOAWAY (platforms.md §2); a peer that dialed us
+			// during the suspension is told to come back later.
+			_ = kept.GoAway(r.ctx, frame.CodeGoingAway, "background-suspended", r.cfg.RetryAfter)
+			continue
+		}
 		r.samplePeer(kept)
 		r.ensureServing(kept)
 	}
@@ -84,6 +90,9 @@ func (r *Runtime) ensureServing(est *session.Established) {
 		defer r.wg.Done()
 		defer r.serving.Delete(est.Session)
 		peer := r.peerOf(est)
+		r.noteSession(peer.Card)
+		r.wg.Add(1)
+		go r.greaseLoop(est.Session)
 		go r.datagramPump(est, peer)
 		r.serveSession(est, peer)
 	}()
