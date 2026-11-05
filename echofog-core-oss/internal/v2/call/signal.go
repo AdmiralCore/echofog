@@ -145,7 +145,7 @@ func IsForwarded(a Action) bool {
 	switch a {
 	case ActionTreeManifest, ActionCoordinatorHeartbeat, ActionStreamAnnounce,
 		ActionStreamClose, ActionStreamTreeUpdate, ActionCoordinatorElection,
-		ActionVADState, ActionJoin, ActionMemberHeartbeat:
+		ActionVADState, ActionJoin:
 		return true
 	}
 	return false

@@ -53,7 +53,7 @@ var v1Actions = []v1Action{
 	{"vad_state", ActionVADState, true, false},
 	{"join", ActionJoin, true, false},
 	{"leave", ActionLeave, false, false},
-	{"member_heartbeat", ActionMemberHeartbeat, true, false},
+	{"member_heartbeat", ActionMemberHeartbeat, false, false},
 	{"parent_lost", ActionParentLost, false, false},
 	{"stream_register", ActionStreamRegister, false, false},
 	{"stream_unregister", ActionStreamUnregister, false, false},
