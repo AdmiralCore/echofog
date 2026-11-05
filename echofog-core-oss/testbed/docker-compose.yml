@@ -113,6 +113,23 @@ services:
     restart: "no"
     networks: { wan: { ipv4_address: 203.0.113.30 } }
 
+  # ---- the two efv2 nodes of v2-basic. v2b serves noise3 and writes its peer card; v2a creates
+  # its identity and waits, because the echo command needs the store lock itself.
+  v2a:
+    <<: *image
+    container_name: efbed-v2a
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["efv2 init --data /data --profile desktop >/tmp/init.log 2>&1; exec sleep infinity"]
+    networks: { wan: { ipv4_address: 203.0.113.41 } }
+  v2b:
+    <<: *image
+    container_name: efbed-v2b
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["efv2 init --data /data --profile desktop >/tmp/init.log 2>&1; exec efv2 run --data /data --listen noise3=203.0.113.42:4433"]
+    networks: { wan: { ipv4_address: 203.0.113.42 } }
+
   # ---- routers
   gw_a:
     <<: *gateway

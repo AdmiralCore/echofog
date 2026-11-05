@@ -61,6 +61,13 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	}
 	card := opt.Card
 	if card == nil {
+		// A module may answer on a session the runtime already has, for example the echo
+		// service replying to a datagram of the peer that just sent it. The card is only
+		// needed to dial a new session, so reuse a live main-identity session first.
+		if est := r.liveMainSession(peer); est != nil {
+			r.ensureServing(est)
+			return est, r.peerOf(est), nil
+		}
 		card = r.cardBook.Latest([32]byte(peer))
 		if card == nil {
 			return nil, Peer{}, fmt.Errorf("%w: %s", ErrNoPeerCard, peer)
@@ -225,6 +232,34 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	}
 	r.samplePeer(est)
 	return est, nil
+}
+
+// liveMainSession returns a live session of the main local identity to peer, without dialing.
+// It lets a module answer on a session it did not open with an explicit card.
+func (r *Runtime) liveMainSession(peer DeviceID) *session.Established {
+	table := r.table
+	if table == nil || r.cfg.Device == nil {
+		return nil
+	}
+	local := r.cfg.Device.ID()
+	for _, est := range table.Sessions() {
+		if est == nil || est.Peer == nil || est.Session == nil {
+			continue
+		}
+		if DeviceID(est.Peer.DeviceID) != peer || est.Local.Device == nil || est.Local.Device.ID() != local {
+			continue
+		}
+		select {
+		case <-est.Session.Done():
+			continue
+		default:
+		}
+		if est.Session.GoingAway() {
+			continue
+		}
+		return est
+	}
+	return nil
 }
 
 func firstAttempt(attempts []carrier.Attempt) carrier.Attempt {

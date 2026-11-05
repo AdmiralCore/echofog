@@ -903,7 +903,13 @@ func main() {
 		os.Setenv("GUARD_MODE_USERS", "off")
 	}
 	out := prepareOut()
-	nodes := bringUp(extra...)
+	var nodes map[string]*node
+	if *scenario == "v2-basic" {
+		// v2-basic is two efv2 nodes on the WAN; it does not start the v1 lab.
+		v2BasicBringUp()
+	} else {
+		nodes = bringUp(extra...)
+	}
 	l := &ledger{}
 	v := &verdict{}
 
@@ -915,7 +921,9 @@ func main() {
 	}()
 
 	switch *scenario {
-	case "v2-basic", "v2-censor", "v2-carrier":
+	case "v2-basic":
+		runV2Basic(v, out)
+	case "v2-censor", "v2-carrier":
 		runV2(nodes, v, out)
 	case "vpn":
 		vpnScenario(nodes, v, out)
