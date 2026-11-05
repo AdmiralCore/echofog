@@ -109,6 +109,18 @@ func (m *Manager) refsLocked(id [8]byte, now time.Time) []PassID {
 	return out
 }
 
+// holdersLocked returns every invitation that still has an access secret: an expired link can be
+// extended by the owner, so its masking key must stay until the record is revoked or used up.
+func (m *Manager) holdersLocked(id [8]byte) []*invitationRecord {
+	var out []*invitationRecord
+	for _, r := range m.invitations {
+		if r.KeyID == id && !r.Revoked && len(r.Secret) == secretLen {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // keyCountsLocked counts invitation keys per listener slot.
 func (m *Manager) keyCountsLocked() map[uint32]int {
 	counts := make(map[uint32]int, len(m.listeners))
@@ -174,15 +186,15 @@ func (m *Manager) keyForMintLocked(now time.Time, share bool) (*keyRecord, bool,
 	return nil, false, fmt.Errorf("%w: all %d listeners hold %d keys", ErrKeyLimit, len(m.listeners), KeysPerListener)
 }
 
-// pruneInvitationKeysLocked removes invitation keys that no active invitation references. The
-// caller persists nothing else: key deletion is one store operation.
+// pruneInvitationKeysLocked removes keys no invitation can use any more. An expired invitation
+// still holds its secret and can be extended, so its key stays until the pass is revoked or spent.
 func (m *Manager) pruneInvitationKeysLocked(now time.Time) error {
 	var errs []error
 	for id, r := range m.keys {
 		if r.Kind != keyInvitation {
 			continue
 		}
-		if len(m.refsLocked(id, now)) > 0 {
+		if len(m.holdersLocked(id)) > 0 {
 			continue
 		}
 		if err := m.removeKeyLocked(id); err != nil {

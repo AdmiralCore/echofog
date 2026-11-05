@@ -588,6 +588,37 @@ func TestRedeemRejectsPeerCardWithInvitationKey(t *testing.T) {
 	}
 }
 
+// TestExpiredInvitationCanBeExtended pins the owner's renewal decision: an expired link keeps its
+// masking key (it cannot be reached, but it can be extended), across pruning and a restart.
+func TestExpiredInvitationCanBeExtended(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: time.Hour})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	r.clock.Advance(2 * time.Hour)
+	// A new Mint prunes unused keys; the expired invitation is not unused.
+	if _, err := r.mgr.Mint(ctx, access.MintOptions{}); err != nil {
+		t.Fatalf("Mint after expiry: %v", err)
+	}
+	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); ok {
+		t.Fatal("expired link admits")
+	}
+	if _, err := r.mgr.Extend(ctx, minted.PassID, 30*time.Minute); err != nil {
+		t.Fatalf("Extend expired invitation: %v", err)
+	}
+	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); !ok {
+		t.Fatal("extended invitation does not admit")
+	}
+
+	r.reopen(t)
+	if _, ok := r.mgr.LookupPass(minted.PassID[:], r.clock.Now()); !ok {
+		t.Fatal("extended invitation lost its key across restart")
+	}
+}
+
 // TestErrorsAndCaps pins the error distinctions the API promises and the invitation card bound:
 // an extension never moves a link past the card's not_after (T4.2a, objects.md §3.2).
 func TestErrorsAndCaps(t *testing.T) {

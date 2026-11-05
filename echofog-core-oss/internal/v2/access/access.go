@@ -974,13 +974,11 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 		return &RevokeResult{Pass: info}, nil
 	}
 	var others []*invitationRecord
-	for _, o := range m.invitations {
-		if o.PassID == r.PassID || o.KeyID != r.KeyID {
+	for _, o := range m.holdersLocked(r.KeyID) {
+		if o.PassID == r.PassID {
 			continue
 		}
-		if invitationActive(o, now) {
-			others = append(others, o)
-		}
+		others = append(others, o)
 	}
 	sort.Slice(others, func(i, j int) bool {
 		return bytesCompare(others[i].PassID[:], others[j].PassID[:]) < 0
@@ -1125,20 +1123,19 @@ func (m *Manager) RotateKeys(ctx context.Context) (*Rotation, error) {
 	}
 	now := m.clk.Now()
 
-	// Snapshot the invitation-key groups before touching the key map.
+	// Snapshot the invitation-key groups before touching the key map. Expired invitations are
+	// included too: after D11 they must get a fresh key so an extension keeps working.
 	groups := make(map[[8]byte][]*invitationRecord)
 	for id := range m.keys {
 		r := m.keys[id]
 		if r.Kind != keyInvitation {
 			continue
 		}
-		refs := m.refsLocked(id, now)
-		if len(refs) == 0 {
+		holders := m.holdersLocked(id)
+		if len(holders) == 0 {
 			continue
 		}
-		for _, pid := range refs {
-			groups[id] = append(groups[id], m.invitations[pid])
-		}
+		groups[id] = holders
 	}
 
 	next, old, err := m.rotateContactsLocked(now)
