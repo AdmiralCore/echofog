@@ -48,6 +48,10 @@ func newDHTNet(t *testing.T, n int) *dhtNet {
 				c.Profile = node.Profile{Platform: node.PlatformDesktop, Roles: []node.Role{node.RoleDHTServer}}
 			})
 		nd.start(t)
+		// The addresses are made up and every link is an in-memory carrier: a liveness check of
+		// a full bucket would dial a real network address and wait out the dial timeouts one
+		// after another while the test seeds the tables.
+		nd.rt.RoutingTable().SetPinger(noPing{})
 		net.nodes = append(net.nodes, nd)
 		net.queues = append(net.queues, q)
 		c := nd.publicCard(t)
@@ -194,6 +198,12 @@ func (n *dhtNet) lookup(from int, key [32]byte) []int {
 	}
 	return res
 }
+
+// noPing is the liveness checker of the memory network: no check can be made, so the table keeps
+// its entries (dht.ErrUnavailable) instead of dialing the made-up addresses.
+type noPing struct{}
+
+func (noPing) Ping(context.Context, *objects.Card) error { return dht.ErrUnavailable }
 
 func lessID(a, b, key [32]byte) bool {
 	return dht.DeviceID(a) != dht.DeviceID(b) && lessDist(a, b, key)
