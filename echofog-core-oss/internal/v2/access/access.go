@@ -88,6 +88,9 @@ var (
 	ErrLimit = errors.New("access: too many passes")
 )
 
+// Manager implements the handshake's pass lookup (handshake.md §5).
+var _ handshake.PassStore = (*Manager)(nil)
+
 // Clock is the node's corrected clock (AD13).
 type Clock interface{ Now() time.Time }
 
@@ -249,6 +252,34 @@ type Redeemed struct {
 	PeerCardSeq uint64
 }
 
+// dropKeysOutsideConfigLocked revokes invitations whose listener slot no longer exists. A card
+// that names an address the node does not serve is unreachable; failing closed is better than
+// keeping a pass that can never be used and a key the runtime cannot install.
+func (m *Manager) dropKeysOutsideConfigLocked() error {
+	var errs []error
+	for id, r := range m.keys {
+		if r.Kind != keyInvitation || int(r.Slot) < len(m.listeners) {
+			continue
+		}
+		for _, inv := range m.invitations {
+			if inv.KeyID != id {
+				continue
+			}
+			inv.Revoked = true
+			wipe(inv.Secret)
+			inv.Secret = nil
+			inv.Entries = inv.MaxEntries
+			if err := m.saveInvitation(inv); err != nil {
+				errs = append(errs, fmt.Errorf("%w: save invitation: %v", ErrState, err))
+			}
+		}
+		if err := m.removeKeyLocked(id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // KeyInfo is one live masking key as the L0 listener and the card builder need it.
 type KeyInfo struct {
 	Public      keys.AKey
@@ -366,6 +397,10 @@ func New(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	if err := m.initContactsKey(cfg.ContactsKey); err != nil {
+		m.Close()
+		return nil, err
+	}
+	if err := m.dropKeysOutsideConfigLocked(); err != nil {
 		m.Close()
 		return nil, err
 	}
@@ -964,6 +999,7 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 			return nil, err
 		}
 		if err := m.saveInvitation(&next); err != nil {
+			*r = next
 			return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
 		}
 		*r = next
@@ -976,18 +1012,23 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 		return nil, err
 	}
 	if err := m.saveInvitation(&next); err != nil {
+		*r = next
 		return nil, fmt.Errorf("%w: save invitation: %v", ErrState, err)
 	}
 	*r = next
 
 	fresh, err := m.newKeyLocked(keyInvitation, slot, now, 0, 0, 0)
 	if err != nil {
+		m.markRevokedLocked(others)
 		return nil, err
 	}
 	var reissued []Minted
-	for _, o := range others {
+	for i, o := range others {
 		min, err := m.reissueInvitationLocked(ctx, o, fresh, now)
 		if err != nil {
+			// The old key is already gone; every invitation not moved to the new key must stop
+			// admitting rather than linger without a listener.
+			m.markRevokedLocked(others[i:])
 			return nil, err
 		}
 		reissued = append(reissued, *min)
@@ -996,6 +1037,20 @@ func (m *Manager) revokeInvitationLocked(ctx context.Context, r *invitationRecor
 		Pass:       m.infoInvitationLocked(r, now),
 		KeyRemoved: oldPub, Reissued: reissued,
 	}, nil
+}
+
+// markRevokedLocked fails closed: an invitation that lost its masking key can never be reached,
+// so it must not keep admitting through a stale in-memory record.
+func (m *Manager) markRevokedLocked(list []*invitationRecord) {
+	for _, r := range list {
+		next := *r
+		next.Revoked = true
+		wipe(next.Secret)
+		next.Secret = nil
+		if err := m.saveInvitation(&next); err == nil {
+			*r = next
+		}
+	}
 }
 
 // reissueInvitationLocked moves one invitation to a new secret, pass_id and card on the given key.
@@ -1099,14 +1154,17 @@ func (m *Manager) RotateKeys(ctx context.Context) (*Rotation, error) {
 		}
 		fresh, err := m.newKeyLocked(keyInvitation, slot, now, 0, 0, 0)
 		if err != nil {
+			m.markRevokedLocked(invites)
 			return nil, err
 		}
 		sort.Slice(invites, func(i, j int) bool {
 			return bytesCompare(invites[i].PassID[:], invites[j].PassID[:]) < 0
 		})
-		for _, inv := range invites {
+		for i, inv := range invites {
 			min, err := m.reissueInvitationLocked(ctx, inv, fresh, now)
 			if err != nil {
+				// The old key is gone; fail closed for everything not yet moved.
+				m.markRevokedLocked(invites[i:])
 				return nil, err
 			}
 			rot.Reissued = append(rot.Reissued, *min)

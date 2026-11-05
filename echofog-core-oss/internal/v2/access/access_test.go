@@ -9,6 +9,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
@@ -548,6 +549,42 @@ func TestStateSurvivesRestart(t *testing.T) {
 	}
 	if len(r.mgr.MaskKeys()) == 0 {
 		t.Fatal("masking keys lost across restart")
+	}
+}
+
+// TestRedeemRejectsPeerCardWithInvitationKey is the defense in depth for objects.md §10.3: the
+// card handed to a contact must use the contacts key; a misconfigured builder that puts an
+// invitation key into the peer card is refused instead of leaking that key to the contact.
+func TestRedeemRejectsPeerCardWithInvitationKey(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	r.mgr.Close()
+
+	badBuilder := buildCards(t, r.account, r.device, r.devices, r.clock, cards.Hidden,
+		objects.SuiteNoise3, "198.51.100.20", 5555, minted.MaskKey)
+	bad, err := access.New(access.Config{
+		KV:          r.kv,
+		Cards:       badBuilder,
+		Clock:       r.clock,
+		ContactsKey: r.device.Masking(),
+		Listeners:   []cards.Listener{{Suite: objects.SuiteNoise3, Host: "203.0.113.10", Port: 4242}},
+	})
+	if err != nil {
+		t.Fatalf("access.New: %v", err)
+	}
+	defer bad.Close()
+
+	client := r.clientNode(t)
+	_, err = bad.Redeem(ctx, access.RedeemRequest{
+		PassID: minted.PassID, Node: client.account.Public().ID(), Device: client.device.ID(),
+	})
+	if !errors.Is(err, access.ErrPeerCard) {
+		t.Fatalf("Redeem: %v, want ErrPeerCard", err)
 	}
 }
 

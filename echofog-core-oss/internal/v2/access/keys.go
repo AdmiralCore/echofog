@@ -153,7 +153,7 @@ func (m *Manager) keyForMintLocked(now time.Time, share bool) (*keyRecord, bool,
 	var best *keyRecord
 	bestRefs := 0
 	for id, r := range m.keys {
-		if r.Kind != keyInvitation {
+		if r.Kind != keyInvitation || int(r.Slot) >= len(m.listeners) {
 			continue
 		}
 		n := len(m.refsLocked(id, now))
