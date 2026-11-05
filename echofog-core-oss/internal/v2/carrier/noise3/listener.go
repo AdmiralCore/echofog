@@ -317,6 +317,9 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 	if !ok {
 		return
 	}
+	// A live dial takes every datagram from its target before parsing and limits (during the
+	// punch window, <= 5 s, the responder side does not see that address; the engine dials from the
+	// initiator only).
 	if rc := l.route(src); rc != nil {
 		rc.q.deliver(d, addr)
 		return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -45,6 +46,7 @@ func (c *routeConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Write counts datagrams against the Init budget until DialFrom lifts it after the handshake.
 func (c *routeConn) Write(p []byte) (int, error) {
 	if c.budget.Add(-1) < 0 {
 		return len(p), nil // beyond the budget: dropped, not an error (the dial just runs out)
@@ -72,8 +74,10 @@ func (c *routedCarrier) Close() error {
 	return c.Carrier.Close()
 }
 
-// route returns the dial that expects datagrams from src, if any.
+// route returns the dial that expects datagrams from src, if any. Routes are keyed by the unmapped
+// address: a dual-stack socket reports IPv4 peers as 4in6.
 func (l *Listener) route(src netip.AddrPort) *routeConn {
+	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
 	l.rmu.Lock()
 	defer l.rmu.Unlock()
 	return l.routes[src]
@@ -124,5 +128,7 @@ func (l *Listener) DialFrom(ctx context.Context, cfg DialerConfig, req carrier.D
 		end()
 		return nil, err
 	}
+	// The budget bounds the Init handshake only; the carrier's own data is not an Init.
+	rc.budget.Store(math.MaxInt64)
 	return &routedCarrier{Carrier: c, end: end}, nil
 }
