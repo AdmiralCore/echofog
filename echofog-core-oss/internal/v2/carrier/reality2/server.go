@@ -140,6 +140,14 @@ func (l *Listener) Accept(ctx context.Context) (mux.Carrier, error) {
 	return quicx.Wrap(conn, false), nil
 }
 
+// AcceptConn returns the next admitted connection as the raw QUIC connection, for a caller
+// that needs its remote address before it wraps it (the own-cover mode drains its own check
+// connections). Use Accept or AcceptConn, not both.
+func (l *Listener) AcceptConn(ctx context.Context) (*quic.Conn, error) { return l.ql.Accept(ctx) }
+
+// Wrap makes a carrier of a connection returned by AcceptConn.
+func Wrap(conn *quic.Conn) mux.Carrier { return quicx.Wrap(conn, false) }
+
 // Addr is the local address of the gate's socket.
 func (l *Listener) Addr() net.Addr { return l.gate.LocalAddr() }
 

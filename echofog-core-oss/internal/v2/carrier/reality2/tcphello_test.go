@@ -121,3 +121,21 @@ func TestNewVerifierRejectsBadInput(t *testing.T) {
 		t.Fatal("no replay cache accepted")
 	}
 }
+
+func FuzzParseHelloTCP(f *testing.F) {
+	c, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	shares := keyShareX25519(c.PublicKey().Bytes())
+	f.Add(tcpHello(f, make([]byte, 32), make([]byte, 32), shares))
+	f.Add(tcpHello(f, make([]byte, 32), nil, shares))
+	f.Add([]byte{1, 0, 0, 0})
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, msg []byte) {
+		h, err := ParseHelloTCP(msg)
+		if err != nil {
+			return
+		}
+		if len(h.Token) != 32 || len(h.C) != 32 || len(h.CH0) > len(msg) {
+			t.Fatalf("malformed result: token %d C %d CH0 %d of %d", len(h.Token), len(h.C), len(h.CH0), len(msg))
+		}
+	})
+}

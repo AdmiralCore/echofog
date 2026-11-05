@@ -52,6 +52,14 @@ type ProbeConfig struct {
 	PrepareTCP func(uc *utls.UConn) error
 	// PrepareQUIC, when set, runs on the QUIC config of each sample (ClientHelloHook for a token).
 	PrepareQUIC func(conf *quic.Config)
+	// IgnorePost drops the records or packets after the handshake from every sample before they
+	// are folded into the profile. The own-cover check uses it: what follows the handshake is
+	// application data (the website's HTTP/2 SETTINGS, the HTTP/3 control streams) on one side
+	// and the carrier's first frames on the other, and varies from connection to connection.
+	IgnorePost bool
+	// OnLocal, when set, receives the local address of every sample connection before its
+	// handshake, so the server in the same process can tell its own check from a client.
+	OnLocal func(net.Addr)
 	// Now and Sleep are the injectable clock.
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -149,6 +157,9 @@ func (p *Prober) measure(ctx context.Context, t Target, tr Transport,
 		if err != nil {
 			return nil, fmt.Errorf("profile: %s sample %d of %s: %w", tr, i+1, t.Host, err)
 		}
+		if p.cfg.IgnorePost {
+			v.Post = nil
+		}
 		vs = append(vs, v)
 		alpn[info.alpn] = true
 		last = info
@@ -230,6 +241,9 @@ func (p *Prober) sampleTCP(ctx context.Context, t Target) (Vector, sampleInfo, e
 	raw, err := d.DialContext(ctx, "tcp", t.Addr)
 	if err != nil {
 		return Vector{}, info, err
+	}
+	if p.cfg.OnLocal != nil {
+		p.cfg.OnLocal(raw.LocalAddr())
 	}
 	rec := &recConn{Conn: raw}
 	var keylog bytes.Buffer // the secrets of this one connection, written during the handshake
@@ -396,6 +410,9 @@ func (p *Prober) sampleQUIC(ctx context.Context, t Target) (Vector, sampleInfo, 
 		return Vector{}, info, err
 	}
 	defer udp.Close()
+	if p.cfg.OnLocal != nil {
+		p.cfg.OnLocal(udp.LocalAddr())
+	}
 	rec := &recPacketConn{PacketConn: udp}
 	qconf := &quic.Config{ChromeParrot: true}
 	if p.cfg.PrepareQUIC != nil {
