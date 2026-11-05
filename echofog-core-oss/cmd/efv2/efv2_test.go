@@ -140,7 +140,7 @@ func TestInitAndEchoLoopback(t *testing.T) {
 		AdvertiseHost: "127.0.0.1",
 		Port:          uint32(port),
 	}}
-	srv, err := openApp(ctx, serverDir, listeners)
+	srv, err := openApp(ctx, serverDir, listeners, nil)
 	if err != nil {
 		t.Fatalf("openApp(server): %v", err)
 	}
@@ -148,6 +148,7 @@ func TestInitAndEchoLoopback(t *testing.T) {
 	if err := srv.rt.Start(ctx); err != nil {
 		t.Fatalf("server Start: %v", err)
 	}
+	startDatagramEcho(ctx, srv.rt)
 	if err := srv.WriteCards(ctx); err != nil {
 		t.Fatalf("WriteCards: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestInitAndEchoLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read server card: %v", err)
 	}
-	cli, err := openApp(ctx, clientDir, nil)
+	cli, err := openApp(ctx, clientDir, nil, nil)
 	if err != nil {
 		t.Fatalf("openApp(client): %v", err)
 	}
