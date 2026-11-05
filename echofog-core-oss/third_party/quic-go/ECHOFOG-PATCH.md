@@ -114,10 +114,17 @@ the hello twice over one recorded randomness stream:
    (or the caller's `tls.Config.Rand`) behind a recording reader. The reader serves
    zeros for the first 32 bytes — the client random — and records everything else.
    The resulting `QUICWriteData` event at the Initial level is CH0.
-2. The private key is recovered by matching: uTLS generated the X25519 share from
-   a 32-byte read of that stream, so the read whose public key equals the hello's
-   share is `c`. (Without this check a changed uTLS could silently break the
-   binding; the hook is not called at all then.)
+2. **(T12.6) The fork picks the X25519 key itself.** uTLS generates key shares with
+   `ecdh.GenerateKey(rand)`, which since Go 1.24 ignores `rand` unless
+   `GODEBUG=cryptocustomrand=1`, so the key cannot be learned from the randomness stream. The
+   fork instead creates one X25519 key (`NewPrivateKey` over 32 `crypto/rand` bytes) and one
+   ML-KEM-768 key, writes their public halves into the X25519 and X25519MLKEM768 shares of the
+   spec (uTLS keeps a share whose `Data` is already set; as in Chrome one X25519 key serves both
+   shares), and after `ApplyPreset` installs the private keys in
+   `UConn.HandshakeState.State13.KeyShareKeys`. `UQUICConn` hides its `*UConn`, so
+   `uconnOf` (`internal/handshake/utls_uconn.go`) reaches it with `reflect` + `unsafe` and fails
+   closed if the uTLS layout changes (test `TestUconnOf`). `checkShare` verifies the key against
+   CH0's share before the hook runs.
 3. The hook returns the token, and the real handshake replays the recorded stream
    with the token in place of the first 32 bytes. Every other byte of the hello is
    identical, so the server's `CH0` equals the one the hook saw.
@@ -129,20 +136,15 @@ greased transport parameter). The extension order, which Chrome permutes per
 connection, is drawn once per connection from `crypto/rand` and applied to both
 passes with the same seed.
 
-**Requirement on the Go toolchain.** Since Go 1.24 `crypto/ecdh` ignores the
-reader passed to `GenerateKey` and uses the process CSPRNG, unless
-`GODEBUG=cryptocustomrand=1` is set (`crypto/internal/rand.CustomReader`). With the
-default setting the X25519 share is not derived from the recorded stream; the hook
-then fails with `the X25519 key share is not derived from the randomness stream`
-instead of sending a hello whose token cannot be verified. When that GODEBUG is on,
-`crypto/internal/rand` probes a custom reader with a discarded one-byte read
-(`randutil.MaybeReadByte`); the recording and replay readers serve that probe from a
-separate source so the two passes stay aligned.
+**No toolchain requirement (since T12.6).** The hook no longer depends on `crypto/ecdh`
+honouring `tls.Config.Rand`, so neither `GODEBUG=cryptocustomrand=1` nor `//go:debug` is needed
+and the client works inside a gomobile library, which has no `main` package. The recording and
+replay readers still serve the one-byte `MaybeReadByte` probe from a separate source in case the
+setting is on for other reasons.
 
 `client_hello_hook_test.go` checks the whole path: the hook's `CH0`, the private key
 it receives against the hello's share, the random on the wire (decrypted from the
-client's Initial packets) and a completed handshake. It skips itself when the
-toolchain does not honour the custom reader, with that reason.
+client's Initial packets) and a completed handshake. It runs without any GODEBUG.
 
 
 ## 5. Earlier local changes (present before patches 1-4)
