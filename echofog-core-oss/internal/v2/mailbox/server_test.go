@@ -221,6 +221,22 @@ func TestQueueCreateRejectsBadRequests(t *testing.T) {
 	}
 }
 
+func TestQueuesPerNodeLimit(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.Limits = &Limits{QueuesPerNode: 1} })
+	p := f.peer(1)
+	f.create(t, p, 0, false, 0)
+	other := bytes.Repeat([]byte{0x77}, QueueSize)
+	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: other, AuthKey: f.authKey()}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a second queue for one node: %v", err)
+	}
+	// Another node is unaffected.
+	q := f.peer(2)
+	q.Node[0] ^= 0xff
+	if _, err := f.srv.CreateQueue(q, QueueCreate{Req: 1, Queue: other, AuthKey: f.authKey()}); err != nil {
+		t.Fatalf("another node: %v", err)
+	}
+}
+
 func TestQueueExpires(t *testing.T) {
 	f := newFixture(t, nil)
 	p := f.peer(1)

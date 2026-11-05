@@ -214,7 +214,10 @@ func ParseDeposit(p []byte) (Deposit, error) {
 			}
 			m.Queue = s
 		case 3:
-			if typ != protowire.BytesType || len(s) > MaxBlob {
+			// The frame limiter bounds the message; the parser allows the small overhead above
+			// MaxBlob so a too-large blob reaches DEPOSIT and is answered status "too-large"
+			// instead of closing the stream.
+			if typ != protowire.BytesType || len(s) > MaxForwardBytes {
 				return malformed("deposit.blob")
 			}
 			m.Blob = s

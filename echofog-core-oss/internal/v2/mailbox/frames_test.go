@@ -77,9 +77,9 @@ func TestFrameRejectsWrongWireType(t *testing.T) {
 }
 
 func TestFrameRejectsOversizedFields(t *testing.T) {
-	// A 65537-byte blob is outside DEPOSIT's stated blob limit; the frame limiter bounds the
-	// payload, the parser bounds the field.
-	blob := bytes.Repeat([]byte{9}, MaxBlob+1)
+	// A blob above even the forward body bound is malformed; a blob between MaxBlob and that
+	// bound reaches DEPOSIT and is answered "too-large" (services.md §5.1).
+	blob := bytes.Repeat([]byte{9}, MaxForwardBytes+1)
 	raw := append([]byte{0x1a}, binary.AppendUvarint(nil, uint64(len(blob)))...)
 	raw = append(raw, blob...)
 	if _, err := ParseDeposit(raw); err == nil {

@@ -22,9 +22,9 @@ var ErrAuth = errors.New("mailbox: bad fetch auth")
 // ErrPowInvalid reports a proof of work that does not meet the queue's threshold.
 var ErrPowInvalid = errors.New("mailbox: invalid proof of work")
 
-// AuthInput builds the signed bytes of FETCH and ACK (services.md Â§5.2):
+// AuthInput builds the signed bytes of FETCH and ACK (services.md §5.2):
 //
-//	"echofog/mailbox2/fetch-auth" â€– sid(16) â€– u8(op) â€– queue(16) â€– u64(req)
+//	"echofog/mailbox2/fetch-auth" – sid(16) – u8(op) – queue(16) – u64(req)
 //
 // Every part has a fixed length, so the concatenation is unambiguous.
 func AuthInput(op byte, sid [16]byte, queue []byte, req uint64) []byte {
@@ -73,8 +73,8 @@ func normalizeAuthKey(b []byte) (keys.AKey, error) {
 	return pub, nil
 }
 
-// PowHash is SHA-256("echofog/mailbox2/pow" â€– queue(16) â€– SHA-256(blob) â€– u64(pow)) as required
-// for a deposit to a public queue (services.md Â§5.2).
+// PowHash is SHA-256("echofog/mailbox2/pow" – queue(16) – SHA-256(blob) – u64(pow)) as required
+// for a deposit to a public queue (services.md §5.2).
 func PowHash(queue, blob []byte, pow uint64) [32]byte {
 	blobHash := sha256.Sum256(blob)
 	h := sha256.New()
@@ -111,12 +111,12 @@ func ValidPow(queue, blob []byte, pow uint64, bits uint32) bool {
 	return LeadingZeroBits(h[:]) >= int(bits)
 }
 
-// ---- forwarded deposit sealing (services.md Â§5.3) -------------------------------------------
+// ---- forwarded deposit sealing (services.md §5.3) -------------------------------------------
 
 // forwardKey derives the sealing key from the ephemeral private key and M's handshake public key:
 //
 //	k = HKDF-SHA256(ikm = X25519(eph_sk, hs_M), salt = empty,
-//	                info = "echofog/mailbox2/forward" â€– eph(32) â€– hs_M(32), L = 32)
+//	                info = "echofog/mailbox2/forward" – eph(32) – hs_M(32), L = 32)
 func forwardKey(ephPrivate, hsPublic []byte) ([]byte, error) {
 	priv, err := ecdh.X25519().NewPrivateKey(ephPrivate)
 	if err != nil {

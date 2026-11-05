@@ -32,33 +32,37 @@ var (
 // Limits are the mailbox relay's local limits. A zero field takes the value of DefaultLimits;
 // a caller that needs another value sets that field.
 type Limits struct {
-	// Per private queue (services.md Â§5.4).
+	// Per private queue (services.md §5.4).
 	PrivateItems int
 	PrivateBytes int64
-	// Per public queue (services.md Â§5.2: separate from private queues).
+	// Per public queue (services.md §5.2: separate from private queues).
 	PublicItems int
 	PublicBytes int64
 	// Whole relay. Private and public deposits have separate counters, so a flood of first
 	// contacts cannot exhaust the budget of contacts' mail.
 	TotalItems int
 	TotalBytes int64
-	// ItemMax is the largest blob in one DEPOSIT (services.md Â§5).
+	// ItemMax is the largest blob in one DEPOSIT (services.md §5).
 	ItemMax int
+	// QueuesPerNode bounds empty queue records one node may keep at once. The spec has per-queue
+	// and total item limits but no queue-count limit; without this an authenticated peer could
+	// fill the store with small records.
+	QueuesPerNode int
 	// Daily quota of the node that hands deposits to this relay (F) and of its diversity unit
-	// (services.md Â§5.4). The unit's quota is QuotaFactor times the node's.
+	// (services.md §5.4). The unit's quota is QuotaFactor times the node's.
 	QuotaItemsPerDay int
 	QuotaBytesPerDay int64
 	QuotaFactor      int
 	// Lifetimes.
-	QueueTTL  time.Duration // at most 30 days (services.md Â§5.2)
-	ItemTTL   time.Duration // unacknowledged items live 7 days (services.md Â§5.3)
-	DedupeTTL time.Duration // SHA-256(sealed) memory (services.md Â§5.3)
-	// One FETCH long-poll (services.md Â§5.3) and its page.
+	QueueTTL  time.Duration // at most 30 days (services.md §5.2)
+	ItemTTL   time.Duration // unacknowledged items live 7 days (services.md §5.3)
+	DedupeTTL time.Duration // SHA-256(sealed) memory (services.md §5.3)
+	// One FETCH long-poll (services.md §5.3) and its page.
 	FetchWait  time.Duration
 	FetchItems int
 }
 
-// DefaultLimits returns the normative limits of services.md Â§5.
+// DefaultLimits returns the normative limits of services.md §5.
 func DefaultLimits() Limits {
 	return Limits{
 		PrivateItems:     500,
@@ -68,6 +72,7 @@ func DefaultLimits() Limits {
 		TotalItems:       100000,
 		TotalBytes:       100 << 20,
 		ItemMax:          MaxBlob,
+		QueuesPerNode:    64,
 		QuotaItemsPerDay: 5000,
 		QuotaBytesPerDay: 50 << 20,
 		QuotaFactor:      3,
@@ -87,6 +92,7 @@ func (l Limits) withDefaults() Limits {
 	}{
 		{&l.PrivateItems, d.PrivateItems}, {&l.PublicItems, d.PublicItems},
 		{&l.TotalItems, d.TotalItems}, {&l.ItemMax, d.ItemMax},
+		{&l.QueuesPerNode, d.QueuesPerNode},
 		{&l.QuotaItemsPerDay, d.QuotaItemsPerDay}, {&l.QuotaFactor, d.QuotaFactor},
 		{&l.FetchItems, d.FetchItems},
 	} {
@@ -128,12 +134,12 @@ const MaxScanForFetch = 500
 // maxItemOverhead is the conservative encoded overhead of one Item (tags, lengths, id, timestamp).
 const maxItemOverhead = 64
 
-// Peer is the authenticated peer of the session a stream belongs to (02-architecture Â§3.1). The
+// Peer is the authenticated peer of the session a stream belongs to (02-architecture §3.1). The
 // package does not import the node runtime.
 type Peer struct {
 	Node   [32]byte
 	Device [32]byte
-	// SID is the session id; FETCH and ACK auth is bound to it (services.md Â§5.2).
+	// SID is the session id; FETCH and ACK auth is bound to it (services.md §5.2).
 	SID [16]byte
 	// Path is the kind of the active path: the diversity unit of a relayed peer is unknown.
 	Path mux.PathKind
@@ -143,7 +149,7 @@ type Peer struct {
 
 // Config assembles a mailbox relay.
 type Config struct {
-	// Self is the node ID used in FORWARD.relay (services.md Â§5.3: M recognises relay = self).
+	// Self is the node ID used in FORWARD.relay (services.md §5.3: M recognises relay = self).
 	Self [32]byte
 	// HS is the node's handshake static key; forwarded deposits are sealed to it.
 	HS *identity.KeyPair
@@ -158,7 +164,7 @@ type Config struct {
 	// Log receives warnings; nil is silent.
 	Log *slog.Logger
 	// Metered is the platform flag: a metered node does not store deposits for others
-	// (platforms.md Â§2).
+	// (platforms.md §2).
 	Metered bool
 	// Limits override DefaultLimits field by field.
 	Limits *Limits
@@ -340,6 +346,18 @@ func dedupeKey(hash []byte) []byte {
 	return append(out, hash...)
 }
 
+func ownerPrefix(opaque []byte) []byte {
+	out := make([]byte, 0, 2+len(opaque)+1)
+	out = append(out, "o/"...)
+	out = append(out, opaque...)
+	return append(out, '/')
+}
+
+func ownerKey(opaque, q []byte) []byte {
+	out := ownerPrefix(opaque)
+	return append(out, q...)
+}
+
 func totalsKey(public bool) []byte {
 	if public {
 		return []byte("s/public")
@@ -431,7 +449,20 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return 0, err
 	}
+	owner := s.opaque("mailbox-owner", p.Node[:])
+	owned, err := s.cfg.Store.Scan(ownerPrefix(owner), s.lim.QueuesPerNode+1)
+	if err != nil {
+		return 0, err
+	}
+	if len(owned) >= s.lim.QueuesPerNode {
+		return 0, ErrRefused
+	}
 	if err := s.putQueueLocked(m.Queue, rec, now); err != nil {
+		return 0, err
+	}
+	remaining := time.Unix(rec.Expires, 0).Sub(now)
+	if err := s.cfg.Store.PutTTL(ownerKey(owner, m.Queue), []byte{1}, remaining); err != nil {
+		_ = s.cfg.Store.Delete(queueKey(m.Queue))
 		return 0, err
 	}
 	return uint64(rec.Expires), nil
@@ -529,7 +560,7 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 }
 
 // Fetch returns up to m.Max unacknowledged items after m.After, waiting for a deposit for at most
-// m.Wait seconds (services.md Â§5.3). more reports that another page exists.
+// m.Wait seconds (services.md §5.3). more reports that another page exists.
 func (s *Server) Fetch(ctx context.Context, p Peer, m Fetch) ([]Item, bool, error) {
 	if len(m.Queue) != QueueSize {
 		return nil, false, ErrBadRequest
@@ -608,7 +639,7 @@ func (s *Server) Fetch(ctx context.Context, p Peer, m Fetch) ([]Item, bool, erro
 }
 
 // Ack deletes the acknowledged items. Anything not acknowledged stays until its 7-day expiry
-// (services.md Â§5.3). There is no answer frame for a successful ACK.
+// (services.md §5.3). There is no answer frame for a successful ACK.
 func (s *Server) Ack(p Peer, m Ack) error {
 	if len(m.Queue) != QueueSize {
 		return ErrBadRequest
@@ -661,7 +692,7 @@ func (s *Server) Ack(p Peer, m Ack) error {
 	return s.addTotalLocked(rec.Public, -delItems, -delBytes)
 }
 
-// Forward handles the receiving half of a forwarded deposit (services.md Â§5.3). F addressed this
+// Forward handles the receiving half of a forwarded deposit (services.md §5.3). F addressed this
 // node as M in relay; the sealed body is a DEPOSIT. Replays of the same sealed bytes are answered
 // stored without a second copy for DedupeTTL.
 func (s *Server) Forward(_ context.Context, p Peer, m Forward) (uint32, error) {
