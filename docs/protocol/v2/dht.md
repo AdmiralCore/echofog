@@ -56,7 +56,10 @@ Record kinds, sizes, lifetimes and replica counts: [registries.md](registries.md
 `STORE{record}`. A storing node MUST:
 
 1. verify the object ([objects.md](objects.md) §2.2), including its signature; for unknown labels
-   starting with `echofog/` apply the generic limits and clip the lifetime to 24 hours;
+   starting with `echofog/` apply the generic limits and clip the lifetime to 24 hours; a `release/2` object is stored only if it also
+   passes the node's release check (the compiled release keys and the threshold, [objects.md](objects.md) §9): its
+   day key does not depend on the signer, so otherwise anybody could occupy it with a huge `seq`. A node without
+   release keys stores none (`STORED{refused}`);
 2. check that the request's key equals the derivation of §2 for the current or an adjacent day;
 3. replace a stored record only with a higher `seq` from the same signer; equal `seq` with different
    bytes keeps the smaller `object_id`; a lower `seq` is refused (`STORED{stale}`);
