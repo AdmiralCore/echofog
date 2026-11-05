@@ -19,7 +19,11 @@ func DisplayRate() int { return 0 }
 // Stream is a native screen stream; there are none outside Windows.
 type Stream struct{}
 
-func Start(Options) (*Stream, error)    { return nil, errNotWindows }
+// Start fails off Windows: there is no native capture.
+func Start(Options) (*Stream, error) { return nil, errNotWindows }
+
+// SetBitrate, RequestKeyframe, SetViewerRates, Stats, Stop and Done do nothing: no Stream exists off
+// Windows.
 func (s *Stream) SetBitrate(uint64)     {}
 func (s *Stream) RequestKeyframe()      {}
 func (s *Stream) SetViewerRates([]int)  {}
@@ -33,5 +37,8 @@ func Previews([]string) map[string]string { return nil }
 // AudioCapture is the capture of the computer's sound; there is none outside Windows.
 type AudioCapture struct{}
 
+// StartAudio fails off Windows.
 func StartAudio(string, func([]byte)) (*AudioCapture, error) { return nil, errNotWindows }
-func (a *AudioCapture) Stop()                                {}
+
+// Stop does nothing: no AudioCapture exists off Windows.
+func (a *AudioCapture) Stop() {}

@@ -160,6 +160,12 @@ type wgcCapture struct {
 	latestNew          bool          // latest holds a picture not sent yet
 }
 
+// newWGCCapture starts capturing a window or a monitor with Windows.Graphics.Capture on the device d:
+// it makes the capture item, a free-threaded frame pool of buffers frames (the capture's own queue; the
+// encoder never waits on it), the session, and hooks the FrameArrived delegate. The cursor setting, the
+// yellow border (turned off where the system allows) and the minimum interval between frames (1 ms:
+// the system's default holds a capture to its own pace, far below a fast screen's) are set on the
+// session. A source with no picture (a minimized window) fails here.
 func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.Duration, buffers int) (*wgcCapture, error) {
 	c := &wgcCapture{d: d, handler: &frameHandler{vtbl: &frameHandlerVtbl, arrived: make(chan struct{}, 1)}, hwnd: src.hwnd, buffers: uintptr(buffers)}
 	fail := func(err error) (*wgcCapture, error) { c.close(); return nil, err }
@@ -234,8 +240,10 @@ func newWGCCapture(d *device, src captureTarget, cursor bool, minInterval time.D
 	return c, nil
 }
 
+// packSize packs a SizeInt32 into the one register WinRT passes it in.
 func packSize(w, h int32) uintptr { return uintptr(uint32(w)) | uintptr(uint32(h))<<32 }
 
+// boolArg is a bool as a register argument.
 func boolArg(b bool) uintptr {
 	if b {
 		return 1
@@ -243,6 +251,7 @@ func boolArg(b bool) uintptr {
 	return 0
 }
 
+// newLatest makes the texture c.latest copies the newest picture into: BGRA, the pool's size.
 func (c *wgcCapture) newLatest() (unsafe.Pointer, error) {
 	return c.d.texture(texture2DDesc{Width: uint32(c.poolW), Height: uint32(c.poolH), Format: dxgiFormatB8G8R8A8,
 		BindFlags: d3d11BindRenderTarget | d3d11BindShaderResource})
@@ -335,6 +344,8 @@ func closeObject(obj unsafe.Pointer) {
 // gone reports whether the captured window was closed.
 func (c *wgcCapture) gone() bool { return c.hwnd != 0 && !windows.IsWindow(c.hwnd) }
 
+// close ends the capture. The delegate stays registered for a few seconds more: the pool may still be
+// inside it on another thread.
 func (c *wgcCapture) close() {
 	if c.pool != nil && c.token != 0 {
 		comCall(c.pool, poolRemoveFrameArrived, uintptr(c.token))

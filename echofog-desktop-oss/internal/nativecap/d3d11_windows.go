@@ -65,6 +65,7 @@ const (
 	vctxVideoProcessorBlt              = 53
 )
 
+// texture2DDesc is D3D11_TEXTURE2D_DESC.
 type texture2DDesc struct {
 	Width, Height, MipLevels, ArraySize uint32
 	Format                              uint32
@@ -73,6 +74,7 @@ type texture2DDesc struct {
 	MiscFlags                           uint32
 }
 
+// rect is a RECT.
 type rect struct{ Left, Top, Right, Bottom int32 }
 
 // device is the D3D11 device everything runs on: capture, conversion and the encoder.
@@ -85,6 +87,8 @@ type device struct {
 	adapterVendor uint32
 }
 
+// newDevice creates the D3D11 device the whole pipeline shares (capture, conversion, encoder), with
+// video and BGRA support and multithread protection on, as the encoder uses it from its own threads.
 func newDevice() (*device, error) {
 	d := &device{}
 	levels := []uint32{0xb100, 0xb000} // 11.1, 11.0
@@ -146,6 +150,7 @@ func newDevice() (*device, error) {
 	return d, nil
 }
 
+// close releases the device and its video interfaces.
 func (d *device) close() {
 	for _, p := range []*unsafe.Pointer{&d.winrt, &d.vctx, &d.vdev, &d.ctx, &d.dev} {
 		release(*p)
@@ -158,6 +163,7 @@ func (d *device) removed() error {
 	return hresult(comCall(d.dev, devGetDeviceRemovedReason)).err("device removed")
 }
 
+// texture creates a 2D texture; zero mip, array and sample counts mean one.
 func (d *device) texture(desc texture2DDesc) (unsafe.Pointer, error) {
 	if desc.MipLevels == 0 {
 		desc.MipLevels = 1
@@ -175,16 +181,19 @@ func (d *device) texture(desc texture2DDesc) (unsafe.Pointer, error) {
 	return tex, nil
 }
 
+// textureDesc reads a texture's description.
 func textureDesc(tex unsafe.Pointer) texture2DDesc {
 	var desc texture2DDesc
 	comCall(tex, texGetDesc, uintptr(unsafe.Pointer(&desc)))
 	return desc
 }
 
+// copyResource queues a GPU copy of src into dst.
 func (d *device) copyResource(dst, src unsafe.Pointer) {
 	comCall(d.ctx, ctxCopyResource, uintptr(dst), uintptr(src))
 }
 
+// flush hands the queued GPU work to the driver without waiting for it.
 func (d *device) flush() { comCall(d.ctx, ctxFlush) }
 
 // readPixels copies a BGRA texture to the CPU (tests and thumbnails only: it waits for the GPU).
@@ -233,6 +242,9 @@ const (
 	colorSpaceBT709Studio = 1<<2 | 1<<4 // BT.709 matrix, 16-235
 )
 
+// newConverter makes the video processor that scales BGRA pictures of inW x inH into frames of
+// outW x outH (NV12, BT.709 limited range; with rgb, BGRA full range, for thumbnails). The color spaces
+// are set on both sides explicitly (see the color space constants), not left to the processor.
 func newConverter(d *device, inW, inH, outW, outH uint32, rgb bool) (*converter, error) {
 	c := &converter{d: d, inW: inW, inH: inH, outW: outW, outH: outH, inputs: make(map[unsafe.Pointer]unsafe.Pointer)}
 	desc := struct {
@@ -274,7 +286,11 @@ func newConverter(d *device, inW, inH, outW, outH uint32, rgb bool) (*converter,
 	return c, nil
 }
 
+// close releases the processor and the input views it made.
 func (c *converter) close() {
+	if c == nil {
+		return // a failed rebuild leaves nil; the deferred close must not crash on it
+	}
 	for _, v := range c.inputs {
 		release(v)
 	}
@@ -298,6 +314,7 @@ func (c *converter) outputView(nv12 unsafe.Pointer) (unsafe.Pointer, error) {
 	return view, nil
 }
 
+// inputView returns the processor's input view of a capture texture, made once per texture.
 func (c *converter) inputView(tex unsafe.Pointer) (unsafe.Pointer, error) {
 	if v, ok := c.inputs[tex]; ok {
 		return v, nil

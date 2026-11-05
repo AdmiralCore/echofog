@@ -101,6 +101,9 @@ func (a *AudioCapture) Stop() {
 	<-a.done
 }
 
+// run is the capture's goroutine: it opens the loopback client (a window's process tree, or all
+// but this one), reads packets whenever the buffer event fires and passes them to onPCM; a silent
+// packet is passed as zeros so the sound keeps its timing. It reports to ready once it started.
 func (a *AudioCapture) run(pid uint32, onPCM func([]byte), ready chan<- error) {
 	defer close(a.done)
 	started := false
