@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/bootstrap"
 )
 
 func cmdRun(args []string) error {
@@ -19,6 +21,7 @@ func cmdRun(args []string) error {
 	data := fs.String("data", "", "profile data directory")
 	listen := fs.String("listen", "", "noise3=HOST:PORT[,reality2-quic=HOST:PORT]")
 	cover := fs.String("cover", "", "cover host:port of reality2-quic (waits for T2.6b)")
+	bootstrapPath := fs.String("bootstrap", "", "bootstrap list file (cards, device IDs and addresses); saved in the profile")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -38,6 +41,15 @@ func cmdRun(args []string) error {
 	}
 	nf.Listen = splitListen(*listen)
 	nf.Cover = *cover
+	if *bootstrapPath != "" {
+		nf.Bootstrap = *bootstrapPath
+	}
+	var entries []bootstrap.Entry
+	if nf.Bootstrap != "" {
+		if entries, err = loadBootstrapFile(nf.Bootstrap, time.Now()); err != nil {
+			return err
+		}
+	}
 	if err := saveNodeFile(*data, nf); err != nil {
 		return err
 	}
@@ -62,6 +74,9 @@ func cmdRun(args []string) error {
 		log.Warn("could not write the status snapshot", "err", err)
 	}
 	startDatagramEcho(ctx, a.rt)
+	if len(entries) > 0 {
+		go runBootstrap(ctx, a, entries, log)
+	}
 
 	fmt.Fprintf(os.Stdout, "efv2 node ready\nnode id:   %s\ndevice id: %s\nlisten:    %s\ncards:     %s\n",
 		a.rt.Self().NodeID, a.rt.Self().DeviceID, listenText(*listen),

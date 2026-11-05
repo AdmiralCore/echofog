@@ -659,7 +659,9 @@ func TestTCPSlotHeldUntilTheTokenIsChecked(t *testing.T) {
 func TestTCPProxyHasALifetime(t *testing.T) {
 	old := coverMaxLife
 	coverMaxLife = 600 * time.Millisecond
-	defer func() { coverMaxLife = old }()
+	// Restored by a cleanup registered before the rig's: it runs after the listener has closed and
+	// its proxies have ended, so no proxy goroutine still reads the variable (-race).
+	t.Cleanup(func() { coverMaxLife = old })
 	hold, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -700,5 +702,47 @@ func TestTCPProxyHasALifetime(t *testing.T) {
 		case <-stop:
 			t.Fatal("a trickling stranger held the cover connection past its lifetime")
 		}
+	}
+}
+
+// TestTCPStrangerHookReplacesTheCover: with a Stranger hook a listener needs no cover; every
+// connection that is not admitted goes to the hook with the bytes it sent.
+func TestTCPStrangerHookReplacesTheCover(t *testing.T) {
+	sk, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := testCertificate(t)
+	got := make(chan []byte, 1)
+	ln, err := ListenTCP(raw, TCPListenerConfig{
+		Cover: TCPCover{Group: tls.X25519MLKEM768, ALPN: "h2", Cert: &own},
+		Masks: []MaskKey{{Private: sk}},
+		Addrs: []string{AddressString("127.0.0.1", 1)},
+		Stranger: func(c net.Conn, pre []byte) {
+			defer c.Close()
+			got <- append([]byte(nil), pre...)
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListenTCP without a cover but with a Stranger hook: %v", err)
+	}
+	defer ln.Close()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
+	select {
+	case pre := <-got:
+		if !bytes.HasPrefix([]byte("GET / HTTP/1.1\r\n\r\n"), pre) || len(pre) == 0 {
+			t.Fatalf("hook got %q", pre)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hook was not called")
 	}
 }
