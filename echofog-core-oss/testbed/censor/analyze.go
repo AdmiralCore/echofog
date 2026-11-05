@@ -2,7 +2,9 @@ package censor
 
 import (
 	"fmt"
+	"io"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +32,17 @@ type Flow struct {
 	// Shape: share of client packets of each size class, the most common payload size.
 	SizeClasses [4]int // <=200, <=600, <=1200, >1200 bytes of payload, client side
 	TopSize     int
+	FirstSize   int // first client payload (TCP) or datagram (UDP), bytes
+
+	// UDP shape: what D10 looks at. A real QUIC Initial opens with the keys of its own connection
+	// ID; noise that only borrows the header does not, and a long random stream keeps entropy high.
+	UDPFirst      int     // first client datagram, bytes
+	UDPPackets    int     // client datagrams (up to the first 25 counted in full)
+	UDPEntropy    float64 // Shannon entropy of the first bytes, bits per byte
+	UDPPopAvg     float64 // average set bits per byte
+	QUICVersion   uint32
+	QUICFixedBit  bool
+	QUICDecrypted bool
 
 	// SNIForeign: the SNI names a site the server's address does not host. A censor resolves the
 	// name and finds other addresses; set by CheckSNI.
@@ -93,17 +106,35 @@ type flowKey struct {
 	gen      int // a source port reused by a later connection starts the next generation
 }
 
-// Analyze reads a capture and returns its flows, the busiest first. A TCP flow's client is the
-// side that sent the SYN; a UDP flow's, the side that sent first.
+// Analyze reads a capture file and returns its flows, the busiest first.
 func Analyze(pcapPath string) ([]Flow, error) {
-	pkts, err := readPcap(pcapPath)
+	f, err := os.Open(pcapPath)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+	return AnalyzeReader(f)
+}
+
+// AnalyzeReader reads a classic pcap stream. The launchpad uses it for a capture that never
+// touches the disk when -pcap is not requested.
+func AnalyzeReader(r io.Reader) ([]Flow, error) {
+	pkts, err := readPcap(r)
+	if err != nil {
+		return nil, err
+	}
+	return analyzePackets(pkts), nil
+}
+
+// analyzePackets turns an ordered packet list into flows. A TCP flow's client is the side that
+// sent the SYN; a UDP flow's, the side that sent first.
+func analyzePackets(pkts []packet) []Flow {
 	type state struct {
 		f        *Flow
 		upStream []byte // first client bytes of a TCP flow
 		firstUp  []byte
+		udpFirst []byte // first UDP datagram of the flow
+		udpCount int
 		quic     quicInitial
 		sizes    map[int]int
 	}
@@ -153,6 +184,15 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		if len(p.payload) == 0 {
 			continue
 		}
+		if f.FirstSize == 0 {
+			f.FirstSize = len(p.payload)
+		}
+		if p.proto == 17 {
+			st.udpCount++
+			if st.udpFirst == nil {
+				st.udpFirst = append([]byte(nil), p.payload...)
+			}
+		}
 		n := len(p.payload)
 		switch {
 		case n <= 200:
@@ -196,6 +236,21 @@ func Analyze(pcapPath string) ([]Flow, error) {
 			}
 		}
 		f.TopSize = top
+		if f.Proto == "udp" {
+			first := st.udpFirst
+			if len(first) > 256 {
+				first = first[:256]
+			}
+			f.UDPFirst = len(st.udpFirst)
+			f.UDPPackets = st.udpCount
+			f.UDPEntropy = shannon(first)
+			f.UDPPopAvg = popAvg(first)
+			f.QUICVersion = st.quic.version
+			f.QUICDecrypted = st.quic.decrypted
+			if len(st.udpFirst) > 0 {
+				f.QUICFixedBit = st.udpFirst[0]&0x40 != 0
+			}
+		}
 		switch {
 		case len(st.firstUp) == 0:
 			f.Looks, f.FET = "no data", false
@@ -228,7 +283,7 @@ func Analyze(pcapPath string) ([]Flow, error) {
 		out = append(out, *f)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].BytesUp+out[i].BytesDn > out[j].BytesUp+out[j].BytesDn })
-	return out, nil
+	return out
 }
 
 // Report renders flows as a table; label names the server addresses ("x1", "web", ...).
