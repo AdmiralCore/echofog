@@ -38,18 +38,24 @@ type front struct {
 	selected chan net.Conn
 	slots    chan struct{}
 
+	mu       sync.Mutex
+	inflight map[net.Conn]struct{} // connections still waiting for their first record
+
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	done      chan struct{}
 }
 
-func newFront(ln net.Listener, v *reality2.Verifier, tlsCfg *tls.Config, site *connQueue, maxPre int) *front {
+func newFront(ln net.Listener, v *reality2.Verifier, tlsCfg *tls.Config, site *connQueue, maxPre int, timeout time.Duration) *front {
+	if timeout <= 0 {
+		timeout = firstRecordTimeout
+	}
 	if maxPre <= 0 {
 		maxPre = DefaultMaxPreToken
 	}
 	f := &front{
-		ln: ln, verifier: v, tlsCfg: tlsCfg, site: site, timeout: firstRecordTimeout,
-		selected: make(chan net.Conn, selectedBacklog), slots: make(chan struct{}, maxPre), done: make(chan struct{}),
+		ln: ln, verifier: v, tlsCfg: tlsCfg, site: site, timeout: timeout,
+		selected: make(chan net.Conn, selectedBacklog), slots: make(chan struct{}, maxPre), done: make(chan struct{}), inflight: map[net.Conn]struct{}{},
 	}
 	f.wg.Add(1)
 	go f.acceptLoop()
@@ -84,7 +90,13 @@ func (f *front) handle(c net.Conn) {
 		f.toSite(c, nil)
 		return
 	}
+	f.mu.Lock()
+	f.inflight[c] = struct{}{}
+	f.mu.Unlock()
 	buf, hello := f.readFirst(c)
+	f.mu.Lock()
+	delete(f.inflight, c)
+	f.mu.Unlock()
 	<-f.slots // released as soon as the token is checked, whatever the answer
 
 	if hello != nil && f.verifier.Verify(hello) {
@@ -158,6 +170,11 @@ func (f *front) close() {
 	f.closeOnce.Do(func() {
 		close(f.done)
 		_ = f.ln.Close()
+		f.mu.Lock()
+		for c := range f.inflight {
+			_ = c.Close() // ends a read that waits for a first record
+		}
+		f.mu.Unlock()
 		f.site.close()
 		f.wg.Wait()
 		for {

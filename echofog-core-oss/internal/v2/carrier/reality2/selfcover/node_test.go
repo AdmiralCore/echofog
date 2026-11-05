@@ -85,6 +85,7 @@ type opts struct {
 	emptyDir  bool
 	maxPre    int
 	samples   int
+	firstRec  time.Duration
 }
 
 func startNode(t *testing.T, o opts) *env {
@@ -128,7 +129,7 @@ func startNode(t *testing.T, o opts) *env {
 		Masks:   []reality2.MaskKey{{Private: mask}},
 		Addrs:   []string{e.card},
 		TCPAddr: tcpAddr, UDPAddr: udpAddr,
-		MaxPreToken: o.maxPre, Samples: o.samples, Settle: 50 * time.Millisecond,
+		MaxPreToken: o.maxPre, FirstRecordTimeout: o.firstRec, Samples: o.samples, Settle: 50 * time.Millisecond,
 		Interval: func() time.Duration { return time.Hour },
 		OnWarn:   func(s string) { e.warns = append(e.warns, s) },
 		OnReport: func(r *Report) { e.reps <- r },
@@ -562,8 +563,7 @@ func TestSelectedConnectionIsOursAndReplayGoesToTheSite(t *testing.T) {
 }
 
 func TestSlowStrangersDoNotBlockTheSite(t *testing.T) {
-	e := startNode(t, opts{maxPre: 2, samples: 5})
-	e.node.front.timeout = 300 * time.Millisecond
+	e := startNode(t, opts{maxPre: 2, samples: 5, firstRec: 300 * time.Millisecond})
 
 	var holders []net.Conn
 	for i := 0; i < 2; i++ {

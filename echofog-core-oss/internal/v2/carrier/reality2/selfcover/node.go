@@ -53,6 +53,8 @@ type Config struct {
 	TCPAddr, UDPAddr, HTTPAddr string
 	// MaxPreToken overrides DefaultMaxPreToken.
 	MaxPreToken int
+	// FirstRecordTimeout overrides the 10 s wait for the first TLS record.
+	FirstRecordTimeout time.Duration
 
 	// Samples is the number of connections the own check measures the website with; zero means 20.
 	// The selected side always uses 5, as the rule of T2.6b-1 says.
@@ -262,7 +264,7 @@ func (n *Node) startTCP(site http.Handler) error {
 		defer n.wg.Done()
 		_ = n.siteSrv.ServeTLS(n.siteQ, "", "")
 	}()
-	n.front = newFront(ln, v, n.tcpTLS, n.siteQ, n.cfg.MaxPreToken)
+	n.front = newFront(ln, v, n.tcpTLS, n.siteQ, n.cfg.MaxPreToken, n.cfg.FirstRecordTimeout)
 	n.wg.Add(1)
 	go n.dispatchTCP()
 	return nil
