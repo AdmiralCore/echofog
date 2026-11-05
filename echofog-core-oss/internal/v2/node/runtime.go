@@ -133,6 +133,10 @@ type Runtime struct {
 	started    bool
 	stopped    bool
 	noCover    bool
+
+	// localMu guards localAddrs, which a network change may replace while sessions dial.
+	localMu    sync.RWMutex
+	localAddrs []netip.Addr
 }
 
 var _ Host = (*Runtime)(nil)
@@ -234,14 +238,39 @@ func New(cfg Config) (*Runtime, error) {
 	}
 	// The app's local addrs callback replaces net.Interfaces on mobile (platforms.md §1.1,
 	// §2); an explicit Config.LocalInfo still wins.
-	if len(r.localInfo.Addrs) == 0 && cfg.Profile.LocalAddrs != nil {
-		r.localInfo.Addrs = append([]netip.Addr(nil), cfg.Profile.LocalAddrs()...)
+	r.localAddrs = append([]netip.Addr(nil), cfg.LocalInfo.Addrs...)
+	if len(r.localAddrs) == 0 && cfg.Profile.LocalAddrs != nil {
+		r.localAddrs = append([]netip.Addr(nil), cfg.Profile.LocalAddrs()...)
 	}
 	// udp=blocked leaves only TCP suites in the D21 plan (platforms.md §2).
 	if cfg.Profile.UDP == UDPBlocked {
 		r.localInfo.UDPBlocked = true
 	}
 	return r, nil
+}
+
+// planInfo is the D21 view of this node with the current local addresses.
+func (r *Runtime) planInfo() carrier.LocalInfo {
+	info := r.localInfo
+	r.localMu.RLock()
+	info.Addrs = append([]netip.Addr(nil), r.localAddrs...)
+	r.localMu.RUnlock()
+	return info
+}
+
+// RefreshLocalAddrs re-reads the platform local_addrs callback and returns the addresses the
+// carrier plan now uses. The app calls it when the OS reports a network change; wiring that
+// event to the runtime is T3.3 (platforms.md §2).
+func (r *Runtime) RefreshLocalAddrs() []netip.Addr {
+	if r.cfg.Profile.LocalAddrs != nil {
+		addrs := append([]netip.Addr(nil), r.cfg.Profile.LocalAddrs()...)
+		r.localMu.Lock()
+		r.localAddrs = addrs
+		r.localMu.Unlock()
+	}
+	r.localMu.RLock()
+	defer r.localMu.RUnlock()
+	return append([]netip.Addr(nil), r.localAddrs...)
 }
 
 // Start opens the session table, builds listeners, checks the D37 public-card condition and
@@ -496,16 +525,32 @@ func (r *Runtime) SetBackground(bg Background) error {
 		}
 	}
 
-	closed := 0
+	var victims []*session.Established
 	if table != nil {
 		for _, est := range table.Sessions() {
-			if est == keep || !liveSession(est) {
-				continue
+			if est != keep && liveSession(est) {
+				victims = append(victims, est)
 			}
-			go func(est *session.Established) {
-				_ = est.GoAway(context.Background(), frame.CodeGoingAway, "background-"+string(bg), r.cfg.RetryAfter)
-			}(est)
-			closed++
+		}
+	}
+	closed := len(victims)
+	if len(victims) > 0 {
+		// Announce under the runtime lock: Stop takes the same lock before it waits, so a
+		// wg.Add here can never race with wg.Wait and the goroutines are drained by Stop.
+		r.mu.Lock()
+		var ctx context.Context
+		if r.started && !r.stopped && r.ctx != nil {
+			ctx = r.ctx
+			r.wg.Add(len(victims))
+		}
+		r.mu.Unlock()
+		if ctx != nil {
+			for _, est := range victims {
+				go func(est *session.Established) {
+					defer r.wg.Done()
+					_ = est.GoAway(ctx, frame.CodeGoingAway, "background-"+string(bg), r.cfg.RetryAfter)
+				}(est)
+			}
 		}
 	}
 	r.events.Emit(Event{

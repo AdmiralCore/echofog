@@ -297,6 +297,8 @@ func TestRuntimeLowPowerSession(t *testing.T) {
 	})
 	a := newTestNodeFull(t, cards.Hidden, false, nil, nil, nil, func(c *node.Config) {
 		c.Profile = node.DefaultProfile(node.PlatformAndroid)
+		// The platform layer turns savings on when the OS reports battery saver (§4).
+		c.Profile.LowPower = true
 		c.Features = []uint32{idlePaddingFeature}
 	})
 	b.start(t)
@@ -401,8 +403,8 @@ func TestRuntimeBackgroundSuspendedClosesAllSessions(t *testing.T) {
 		if !errors.As(s.Err(), &ga) {
 			t.Fatalf("session %d ended with %v, want GOAWAY", i, s.Err())
 		}
-		if ga.Code != frame.CodeGoingAway || !ga.Remote || ga.RetryAfter != 42 {
-			t.Fatalf("session %d GOAWAY %+v, want going-away/remote/retry_after=42", i, ga.GoAway)
+		if ga.Code != frame.CodeGoingAway || ga.Reason != "background-suspended" || ga.RetryAfter != 42 {
+			t.Fatalf("session %d GOAWAY %+v, want going-away/background-suspended/retry_after=42", i, ga.GoAway)
 		}
 	}
 	if !events.has(node.EventBackground) {

@@ -13,7 +13,7 @@ import (
 
 var (
 	// LocalInfoOf returns the carrier-plan view built from the profile.
-	LocalInfoOf = func(r *Runtime) carrier.LocalInfo { return r.localInfo }
+	LocalInfoOf = func(r *Runtime) carrier.LocalInfo { return r.planInfo() }
 	// SessionLimitOf returns the limit of the running session table.
 	SessionLimitOf = func(r *Runtime) int { return r.table.Max() }
 	// NoteVisibility feeds one card visibility to the runtime (the card builder's Update hook).

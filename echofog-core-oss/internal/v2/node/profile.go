@@ -101,9 +101,11 @@ type Profile struct {
 
 // DefaultProfile returns the default flags of one platform (platforms.md §2, §4).
 //
-// Mobile defaults follow the conformance profile of platforms.md §4: low_power and metered on,
-// no roles, udp=restricted, mem_cap_mb 128 (iOS extension 40), no STUN, no port mapping. A mobile
-// node never sets role=server and never runs a public listener for strangers.
+// Mobile defaults follow the conformance profile of platforms.md §4: no roles, udp=restricted,
+// mem_cap_mb 128 (iOS extension 40), no STUN, no port mapping. low_power and metered are **off**:
+// the platform layer sets them dynamically when the OS reports battery saver or a metered network
+// (decisions.md T3.7b п.2); the profile never enables savings silently. A mobile node never sets
+// role=server and never runs a public listener for strangers.
 //
 // A server offers dht-server, mailbox and relay: a server that offers nothing is not a server.
 // The exit role is never on by default because it is a separate paid service with an ExitOffer
@@ -116,10 +118,8 @@ func DefaultProfile(p Platform) Profile {
 	}
 	switch p {
 	case PlatformAndroid:
-		prof.LowPower, prof.Metered = true, true
 		prof.MemCapMB, prof.UDP = 128, UDPRestricted
 	case PlatformIOS:
-		prof.LowPower, prof.Metered = true, true
 		prof.MemCapMB, prof.UDP = 40, UDPRestricted
 	case PlatformServer:
 		prof.Roles = []Role{RoleDHTServer, RoleMailbox, RoleRelay}
@@ -202,6 +202,12 @@ func (p Profile) Validate() error {
 	}
 	if p.MemCapMB < 0 {
 		return fmt.Errorf("%w: profile mem_cap_mb %d", ErrConfig, p.MemCapMB)
+	}
+	// tun_fd is −1 (no TUN) or a real descriptor above the standard streams: 0/1/2 are
+	// stdin/stdout/stderr, and every other negative value is not a descriptor
+	// (decisions.md T3.7b п.5).
+	if p.TunFD != -1 && p.TunFD <= 2 {
+		return fmt.Errorf("%w: profile tun_fd %d (want -1 or > 2)", ErrConfig, p.TunFD)
 	}
 	return nil
 }
