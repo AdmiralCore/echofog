@@ -361,6 +361,34 @@ func TestUnderLoad(t *testing.T) {
 	}
 }
 
+func TestSweepRemovesIdleFlows(t *testing.T) {
+	clock := &fakeClock{t: time.Unix(6000, 0)}
+	mk, _ := newMaskKey(t, time.Now())
+	l, err := Listen("127.0.0.1:0", ListenerConfig{Keys: []MaskKey{mk}, Profile: mustProfile(t), Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	src := netip.AddrPortFrom(netip.MustParseAddr("192.0.2.30"), 5000)
+	l.newFlow(src, packet.Keys{}, 1300, clock.Now())
+	clock.Advance(flowIdleTimeout - time.Second)
+	l.sweep(clock.Now())
+	l.mu.Lock()
+	kept := len(l.flows)
+	l.mu.Unlock()
+	if kept != 1 {
+		t.Fatalf("a flow younger than the idle timeout was removed (%d left)", kept)
+	}
+	clock.Advance(2 * time.Second)
+	l.sweep(clock.Now())
+	l.mu.Lock()
+	left := len(l.flows)
+	l.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("an idle flow survived the sweep (%d left)", left)
+	}
+}
+
 func TestAntiAmplification(t *testing.T) {
 	f := &flow{inBytes: 100}
 	if !f.maySendLocked(300) {

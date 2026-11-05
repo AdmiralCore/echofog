@@ -40,7 +40,8 @@ type ListenerConfig struct {
 	QUICConfig *quic.Config
 	// Clock is the injectable time source; nil means the system clock.
 	Clock Clock
-	// Rand draws padding, junk and random eviction; nil uses math/rand/v2.
+	// Rand draws the random pending-flow eviction; nil uses math/rand/v2. It is not used for
+	// keys: those come from crypto/rand.
 	Rand *mrand.Rand
 	// LowPower disables idle padding (platforms.md §2).
 	LowPower bool
@@ -144,7 +145,7 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 	if l.maxPendingPerIP <= 0 {
 		l.maxPendingPerIP = MaxPendingPerIP
 	}
-	l.replay = newReplayCache(cfg.KV, clock.Now(), cfg.Rand)
+	l.replay = newReplayCache(cfg.KV, clock.Now(), nil)
 	for _, k := range cfg.Keys {
 		pub, err := maskPublic(k.Private)
 		if err != nil {
@@ -262,6 +263,9 @@ func (l *Listener) handle(d []byte, addr net.Addr, now time.Time) {
 			return
 		}
 		if len(d) < packet.MinInitLen {
+			return
+		}
+		if !l.budget.allow(src.Addr().String(), now) {
 			return
 		}
 		l.handleInit(d, src, l.keys, now)
