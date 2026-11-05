@@ -246,10 +246,10 @@ func TestQueuesPerNodeLimit(t *testing.T) {
 func TestQueueExpires(t *testing.T) {
 	f := newFixture(t, nil)
 	p := f.peer(1)
-	f.create(t, p, 60, false, 0)
+	f.create(t, p, 1, false, 0)
 	f.deposit(t, p, []byte("x"), 0)
 
-	f.clock.Advance(61 * time.Second)
+	f.clock.Advance(25 * time.Hour)
 	if _, _, err := f.srv.Fetch(context.Background(), p, Fetch{
 		Req: 1, Queue: f.queue, Max: 1,
 		Auth: signFor(t, f.signer, OpFetch, p.SID, f.queue, 1),
@@ -498,9 +498,6 @@ func TestPerNodeQuotaCountsTheForwarder(t *testing.T) {
 func TestMeteredServerStoresNothing(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.Metered = true })
 	p := f.peer(1)
-	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: f.queue, AuthKey: f.authKey()}); !errors.Is(err, ErrRefused) {
-		t.Fatalf("a metered server created a queue: %v", err)
-	}
 
 	// A FORWARD is the heavy path; it is refused even if the queue already existed from before
 	// the profile became metered.

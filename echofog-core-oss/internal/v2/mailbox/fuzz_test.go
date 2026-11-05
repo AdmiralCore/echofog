@@ -60,7 +60,8 @@ func FuzzParseQueueRecord(f *testing.F) {
 	rec := queueRecord{
 		Public: true, PowBits: 20, Created: 1, Expires: 2, Count: 3, Bytes: 4,
 	}
-	copy(rec.AuthKey[:], make([]byte, 32))
+	copy(rec.AuthKeyID[:], make([]byte, 32))
+	copy(rec.AuthSealed[:], make([]byte, authKeySealedSize))
 	f.Add(rec.encode())
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, b []byte) {

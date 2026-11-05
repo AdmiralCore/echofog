@@ -3,6 +3,7 @@ package mailbox
 import (
 	"bytes"
 	"context"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,6 +15,8 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -130,6 +133,22 @@ func (l Limits) withDefaults() Limits {
 
 // MaxScanForFetch bounds one FETCH page below the store's scan ceiling.
 const MaxScanForFetch = 500
+
+// defaultFetchMax is what FETCH.max = 0 asks for: a useful page, not an empty one
+// (decisions.md T7.3 fix 3). It is still capped by Limits.FetchItems.
+const defaultFetchMax = 32
+
+// fetchScanChunk bounds how many item values one store scan materialises. The page is assembled
+// chunk by chunk so a 160-byte FETCH cannot read tens of MiB of blobs before the 1 MiB page
+// limit applies (fix 6). The look-ahead chunk is the reserve above the page budget.
+const fetchScanChunk = 8
+
+// pruneBatch bounds one scan of the expiry index. Pruning stops at the first live entry, so the
+// usual cost of a deposit is one small index record.
+const pruneBatch = 128
+
+// MaxQueueDays is the queue lifetime unit (services.md §5.2): QUEUE_CREATE.ttl is in days.
+const MaxQueueDays = 30
 
 // maxItemOverhead is the conservative encoded overhead of one Item (tags, lengths, id, timestamp).
 const maxItemOverhead = 64
@@ -272,22 +291,37 @@ func (s *Server) loadSalt() ([32]byte, error) {
 
 // ---- storage layout -------------------------------------------------------------------------
 
-// Queue records are versioned; the version is the first byte.
-const queueRecordVersion byte = 1
+// Queue records are versioned; the version is the first byte. Version 2 keeps a hash of the
+// queue's auth key and the key itself sealed under the profile salt, never the raw key bytes.
+const (
+	queueRecordVersion       byte = 2
+	queueRecordVersionLegacy byte = 1
+	authKeySealedSize             = chacha20poly1305.NonceSize + 32 + chacha20poly1305.Overhead
+)
 
-// queueRecordSize is version(1) + flags(1) + pow_bits(1) + auth_key(32) + created(8) +
-// expires(8) + count(4) + bytes(8) + owner(32).
-const queueRecordSize = 1 + 1 + 1 + 32 + 8 + 8 + 4 + 8 + 32
+// queueRecordSize is version(1) + flags(1) + pow_bits(1) + auth_id(32) + auth_sealed(60) +
+// created(8) + expires(8) + count(4) + bytes(8) + owner(32).
+const queueRecordSize = 1 + 1 + 1 + 32 + authKeySealedSize + 8 + 8 + 4 + 8 + 32
+
+// queueRecordLegacySize is the read-only layout written before the fix round: it carried the
+// raw auth_key. Records of this layout are accepted and rewritten as version 2.
+const queueRecordLegacySize = 1 + 1 + 1 + 32 + 8 + 8 + 4 + 8 + 32
 
 type queueRecord struct {
-	Public  bool
-	PowBits uint32
-	AuthKey [32]byte
-	Created int64
-	Expires int64
-	Count   uint32
-	Bytes   int64
-	Owner   [32]byte
+	Public    bool
+	PowBits   uint32
+	AuthKeyID [32]byte
+	// AuthSealed is ChaCha20-Poly1305(nonce, key = HKDF(profile salt, queue), aad = queue) over
+	// the 32-byte raw auth key. The store sees a verifier and a sealed binding, not the key.
+	AuthSealed [authKeySealedSize]byte
+	Created    int64
+	Expires    int64
+	Count      uint32
+	Bytes      int64
+	Owner      [32]byte
+
+	// legacyAuthKey is filled only when a version 1 record is read; putQueueLocked re-seals it.
+	legacyAuthKey [32]byte
 }
 
 func (r queueRecord) encode() []byte {
@@ -297,29 +331,46 @@ func (r queueRecord) encode() []byte {
 		b[1] = 1
 	}
 	b[2] = byte(r.PowBits)
-	copy(b[3:35], r.AuthKey[:])
-	binary.BigEndian.PutUint64(b[35:43], uint64(r.Created))
-	binary.BigEndian.PutUint64(b[43:51], uint64(r.Expires))
-	binary.BigEndian.PutUint32(b[51:55], r.Count)
-	binary.BigEndian.PutUint64(b[55:63], uint64(r.Bytes))
-	copy(b[63:95], r.Owner[:])
+	copy(b[3:35], r.AuthKeyID[:])
+	copy(b[35:35+authKeySealedSize], r.AuthSealed[:])
+	off := 35 + authKeySealedSize
+	binary.BigEndian.PutUint64(b[off:off+8], uint64(r.Created))
+	binary.BigEndian.PutUint64(b[off+8:off+16], uint64(r.Expires))
+	binary.BigEndian.PutUint32(b[off+16:off+20], r.Count)
+	binary.BigEndian.PutUint64(b[off+20:off+28], uint64(r.Bytes))
+	copy(b[off+28:off+60], r.Owner[:])
 	return b
 }
 
 func parseQueueRecord(b []byte) (queueRecord, error) {
 	var r queueRecord
-	if len(b) != queueRecordSize || b[0] != queueRecordVersion {
+	switch {
+	case len(b) == queueRecordSize && b[0] == queueRecordVersion:
+		r.Public = b[1]&1 != 0
+		r.PowBits = uint32(b[2])
+		copy(r.AuthKeyID[:], b[3:35])
+		copy(r.AuthSealed[:], b[35:35+authKeySealedSize])
+		off := 35 + authKeySealedSize
+		r.Created = int64(binary.BigEndian.Uint64(b[off : off+8]))
+		r.Expires = int64(binary.BigEndian.Uint64(b[off+8 : off+16]))
+		r.Count = binary.BigEndian.Uint32(b[off+16 : off+20])
+		r.Bytes = int64(binary.BigEndian.Uint64(b[off+20 : off+28]))
+		copy(r.Owner[:], b[off+28:off+60])
+		return r, nil
+	case len(b) == queueRecordLegacySize && b[0] == queueRecordVersionLegacy:
+		r.Public = b[1]&1 != 0
+		r.PowBits = uint32(b[2])
+		copy(r.legacyAuthKey[:], b[3:35])
+		r.AuthKeyID = sha256.Sum256(r.legacyAuthKey[:])
+		r.Created = int64(binary.BigEndian.Uint64(b[35:43]))
+		r.Expires = int64(binary.BigEndian.Uint64(b[43:51]))
+		r.Count = binary.BigEndian.Uint32(b[51:55])
+		r.Bytes = int64(binary.BigEndian.Uint64(b[55:63]))
+		copy(r.Owner[:], b[63:95])
+		return r, nil
+	default:
 		return r, ErrCorrupt
 	}
-	r.Public = b[1]&1 != 0
-	r.PowBits = uint32(b[2])
-	copy(r.AuthKey[:], b[3:35])
-	r.Created = int64(binary.BigEndian.Uint64(b[35:43]))
-	r.Expires = int64(binary.BigEndian.Uint64(b[43:51]))
-	r.Count = binary.BigEndian.Uint32(b[51:55])
-	r.Bytes = int64(binary.BigEndian.Uint64(b[55:63]))
-	copy(r.Owner[:], b[63:95])
-	return r, nil
 }
 
 func queueKey(q []byte) []byte {
@@ -338,6 +389,49 @@ func itemPrefix(q []byte) []byte {
 func itemKey(q, id []byte) []byte {
 	out := itemPrefix(q)
 	return append(out, id...)
+}
+
+// The expiry index is sorted by expiry time first: one scan from "E/" walks every entry that has
+// passed its logical lifetime, so the relay counters never depend on badger's TTL deleting an
+// item before someone looks at it (decisions.md T7.3 fix 1).
+const expiryIndexPrefix = "E/"
+
+func expiryKey(q, id []byte, expires int64, public bool) []byte {
+	b := make([]byte, 0, 2+8+1+len(q)+len(id))
+	b = append(b, expiryIndexPrefix...)
+	b = binary.BigEndian.AppendUint64(b, uint64(expires))
+	if public {
+		b = append(b, 1)
+	} else {
+		b = append(b, 0)
+	}
+	b = append(b, q...)
+	return append(b, id...)
+}
+
+func parseExpiryKey(b []byte) (expires int64, public bool, q, id []byte, err error) {
+	const fixed = 2 + 8 + 1
+	if len(b) != fixed+QueueSize+ItemSize || !bytes.HasPrefix(b, []byte(expiryIndexPrefix)) {
+		return 0, false, nil, nil, ErrCorrupt
+	}
+	expires = int64(binary.BigEndian.Uint64(b[2:10]))
+	public = b[10]&1 != 0
+	q = b[fixed : fixed+QueueSize]
+	id = b[fixed+QueueSize:]
+	return expires, public, q, id, nil
+}
+
+func expiryIndexValue(size int64) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(size))
+	return b
+}
+
+func parseExpiryIndexValue(b []byte) (int64, error) {
+	if len(b) != 8 {
+		return 0, ErrCorrupt
+	}
+	return int64(binary.BigEndian.Uint64(b)), nil
 }
 
 func dedupeKey(hash []byte) []byte {
@@ -365,17 +459,36 @@ func totalsKey(public bool) []byte {
 	return []byte("s/private")
 }
 
+// itemValueVersion marks the nanosecond layout. Version 0 is the old 8-byte Unix-seconds layout;
+// its first byte is zero at current dates, so the two are unambiguous.
+const itemValueVersion byte = 2
+
 func encodeItem(stored int64, blob []byte) []byte {
-	b := make([]byte, 8, 8+len(blob))
-	binary.BigEndian.PutUint64(b, uint64(stored))
+	b := make([]byte, 9, 9+len(blob))
+	b[0] = itemValueVersion
+	binary.BigEndian.PutUint64(b[1:9], uint64(stored))
 	return append(b, blob...)
 }
 
+// parseItemValue returns the internal stored time in Unix nanoseconds.
 func parseItemValue(b []byte) (stored int64, blob []byte, err error) {
-	if len(b) < 8 {
-		return 0, nil, ErrCorrupt
+	if len(b) >= 9 && b[0] == itemValueVersion {
+		return int64(binary.BigEndian.Uint64(b[1:9])), b[9:], nil
 	}
-	return int64(binary.BigEndian.Uint64(b[:8])), b[8:], nil
+	if len(b) >= 8 {
+		return int64(binary.BigEndian.Uint64(b[:8])) * int64(time.Second), b[8:], nil
+	}
+	return 0, nil, ErrCorrupt
+}
+
+func itemBlobLen(raw []byte) int64 {
+	if len(raw) >= 9 && raw[0] == itemValueVersion {
+		return int64(len(raw) - 9)
+	}
+	if len(raw) > 8 {
+		return int64(len(raw) - 8)
+	}
+	return 0
 }
 
 type counter struct {
@@ -405,9 +518,6 @@ func parseCounter(b []byte) (counter, error) {
 // CreateQueue creates a queue and returns its expiry in Unix seconds. The queue belongs to the
 // peer that created it; its auth key is the only credential for FETCH and ACK.
 func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
-	if s.cfg.Metered {
-		return 0, ErrRefused
-	}
 	if len(m.Queue) != QueueSize {
 		return 0, ErrBadRequest
 	}
@@ -415,12 +525,15 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 	if err != nil {
 		return 0, ErrBadRequest
 	}
-	ttl := time.Duration(m.TTL) * time.Second
-	if ttl > s.lim.QueueTTL {
+	if m.TTL > MaxQueueDays {
 		return 0, ErrBadRequest
 	}
-	if ttl == 0 {
-		ttl = s.lim.QueueTTL
+	ttl := s.lim.QueueTTL
+	if m.TTL > 0 {
+		ttl = time.Duration(m.TTL) * 24 * time.Hour
+		if ttl > s.lim.QueueTTL {
+			return 0, ErrBadRequest
+		}
 	}
 	powBits := m.PowBits
 	if m.Public {
@@ -439,7 +552,7 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 		Created: now.Unix(),
 		Expires: now.Add(ttl).Unix(),
 	}
-	copy(rec.AuthKey[:], auth.Key())
+	copy(rec.legacyAuthKey[:], auth.Key())
 	copy(rec.Owner[:], p.Node[:])
 
 	s.mu.Lock()
@@ -481,6 +594,10 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 
 	now := s.now()
 	s.mu.Lock()
+	if err := s.pruneExpiredLocked(now); err != nil {
+		s.mu.Unlock()
+		return 0, nil, err
+	}
 	rec, err := s.loadQueueLocked(m.Queue, now)
 	if err != nil {
 		s.mu.Unlock()
@@ -525,7 +642,19 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 		s.mu.Unlock()
 		return 0, nil, err
 	}
-	if err := s.cfg.Store.PutTTL(itemKey(m.Queue, id), encodeItem(now.Unix(), m.Blob), s.lim.ItemTTL); err != nil {
+	stored := now.UnixNano()
+	expires := s.itemExpiry(stored)
+	itemStoreTTL := s.lim.QueueTTL
+	if s.lim.ItemTTL > itemStoreTTL {
+		itemStoreTTL = s.lim.ItemTTL
+	}
+	if err := s.cfg.Store.PutTTL(itemKey(m.Queue, id), encodeItem(stored, m.Blob), itemStoreTTL); err != nil {
+		s.mu.Unlock()
+		return 0, nil, err
+	}
+	indexKey := expiryKey(m.Queue, id, expires, rec.Public)
+	if err := s.cfg.Store.Put(indexKey, expiryIndexValue(int64(len(m.Blob)))); err != nil {
+		_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
 		s.mu.Unlock()
 		return 0, nil, err
 	}
@@ -533,6 +662,7 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	rec.Bytes += int64(len(m.Blob))
 	if err := s.putQueueLocked(m.Queue, rec, now); err != nil {
 		_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+		_ = s.cfg.Store.Delete(indexKey)
 		s.mu.Unlock()
 		return 0, nil, err
 	}
@@ -541,6 +671,7 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 		rec.Bytes -= int64(len(m.Blob))
 		_ = s.putQueueLocked(m.Queue, rec, now)
 		_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+		_ = s.cfg.Store.Delete(indexKey)
 		s.mu.Unlock()
 		return 0, nil, err
 	}
@@ -550,6 +681,7 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 		rec.Bytes -= int64(len(m.Blob))
 		_ = s.putQueueLocked(m.Queue, rec, now)
 		_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+		_ = s.cfg.Store.Delete(indexKey)
 		s.mu.Unlock()
 		return 0, nil, err
 	}
@@ -571,10 +703,10 @@ func (s *Server) Fetch(ctx context.Context, p Peer, m Fetch) ([]Item, bool, erro
 	if err := VerifyAuth(s.authKeyOf(m.Queue), m.Auth, OpFetch, p.SID, m.Queue, m.Req); err != nil {
 		return nil, false, err
 	}
-	if m.Max == 0 {
-		return nil, false, nil
-	}
 	limit := int(m.Max)
+	if limit == 0 {
+		limit = defaultFetchMax
+	}
 	if limit > s.lim.FetchItems {
 		limit = s.lim.FetchItems
 	}
@@ -585,13 +717,18 @@ func (s *Server) Fetch(ctx context.Context, p Peer, m Fetch) ([]Item, bool, erro
 	deadline := s.now().Add(wait)
 
 	for {
+		now := s.now()
 		s.mu.Lock()
-		rec, err := s.loadQueueLocked(m.Queue, s.now())
+		if err := s.pruneExpiredLocked(now); err != nil {
+			s.mu.Unlock()
+			return nil, false, err
+		}
+		rec, err := s.loadQueueLocked(m.Queue, now)
 		if err != nil {
 			s.mu.Unlock()
 			return nil, false, err
 		}
-		items, more, err := s.itemsLocked(m.Queue, rec, m.After, limit, s.now())
+		items, more, err := s.itemsLocked(m.Queue, rec, m.After, limit, now)
 		s.mu.Unlock()
 		if err != nil {
 			return nil, false, err
@@ -608,14 +745,20 @@ func (s *Server) Fetch(ctx context.Context, p Peer, m Fetch) ([]Item, bool, erro
 		// Close the race between the scan above and registering the waiter: a deposit that
 		// landed in between is visible here. The record is reloaded so that counters a
 		// concurrent deposit advanced are not overwritten by the expiry housekeeping.
+		now = s.now()
 		s.mu.Lock()
-		rec, err = s.loadQueueLocked(m.Queue, s.now())
+		if err := s.pruneExpiredLocked(now); err != nil {
+			s.mu.Unlock()
+			s.removeWaiter(string(m.Queue), ch)
+			return nil, false, err
+		}
+		rec, err = s.loadQueueLocked(m.Queue, now)
 		if err != nil {
 			s.mu.Unlock()
 			s.removeWaiter(string(m.Queue), ch)
 			return nil, false, err
 		}
-		items, more, err = s.itemsLocked(m.Queue, rec, m.After, limit, s.now())
+		items, more, err = s.itemsLocked(m.Queue, rec, m.After, limit, now)
 		s.mu.Unlock()
 		if err != nil || len(items) > 0 {
 			s.removeWaiter(string(m.Queue), ch)
@@ -657,6 +800,9 @@ func (s *Server) Ack(p Peer, m Ack) error {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.pruneExpiredLocked(now); err != nil {
+		return err
+	}
 	rec, err := s.loadQueueLocked(m.Queue, now)
 	if err != nil {
 		return err
@@ -673,13 +819,18 @@ func (s *Server) Ack(p Peer, m Ack) error {
 		if err != nil {
 			return err
 		}
+		stored, _, err := parseItemValue(raw)
+		if err != nil {
+			return err
+		}
 		if err := s.cfg.Store.Delete(itemKey(m.Queue, id)); err != nil {
 			return err
 		}
-		delItems++
-		if len(raw) > 8 {
-			delBytes += int64(len(raw) - 8)
+		if err := s.cfg.Store.Delete(expiryKey(m.Queue, id, s.itemExpiry(stored), rec.Public)); err != nil {
+			return err
 		}
+		delItems++
+		delBytes += itemBlobLen(raw)
 	}
 	if delItems == 0 {
 		return nil
@@ -741,6 +892,74 @@ func (s *Server) Forward(_ context.Context, p Peer, m Forward) (uint32, error) {
 
 // ---- internals ------------------------------------------------------------------------------
 
+const authKeyDeriveLabel = "echofog/mailbox2/queue-auth"
+
+// authKeyCipherKey binds the sealed auth key to its queue and to this profile's salt.
+func (s *Server) authKeyCipherKey(queue []byte) ([]byte, error) {
+	info := make([]byte, 0, len(authKeyDeriveLabel)+len(queue))
+	info = append(info, authKeyDeriveLabel...)
+	info = append(info, queue...)
+	key, err := hkdf.Key(sha256.New, s.salt[:], nil, string(info), chacha20poly1305.KeySize)
+	if err != nil {
+		return nil, fmt.Errorf("mailbox: auth key KDF: %w", err)
+	}
+	return key, nil
+}
+
+// sealAuthKey replaces the raw key with its SHA-256 id and a sealed copy under the profile salt.
+// The store already encrypts values; this keeps the queue record itself from carrying the key
+// bytes that decisions.md T7.3 fix 7 says not to store.
+func (s *Server) sealAuthKey(queue []byte, rec *queueRecord) error {
+	if rec.AuthSealed != ([authKeySealedSize]byte{}) {
+		return nil
+	}
+	raw := rec.legacyAuthKey
+	if raw == ([32]byte{}) {
+		return ErrCorrupt
+	}
+	key, err := s.authKeyCipherKey(queue)
+	if err != nil {
+		return err
+	}
+	aead, err := chacha20poly1305.New(key)
+	if err != nil {
+		return fmt.Errorf("mailbox: auth key AEAD: %w", err)
+	}
+	nonce := rec.AuthSealed[:chacha20poly1305.NonceSize]
+	if _, err := io.ReadFull(s.rnd, nonce); err != nil {
+		return err
+	}
+	sealed := aead.Seal(nonce, nonce, raw[:], queue)
+	if len(sealed) != authKeySealedSize {
+		return ErrCorrupt
+	}
+	rec.AuthKeyID = sha256.Sum256(raw[:])
+	return nil
+}
+
+func (s *Server) openAuthKey(queue []byte, rec queueRecord) []byte {
+	if rec.AuthSealed != ([authKeySealedSize]byte{}) {
+		key, err := s.authKeyCipherKey(queue)
+		if err != nil {
+			return nil
+		}
+		aead, err := chacha20poly1305.New(key)
+		if err != nil {
+			return nil
+		}
+		nonce := rec.AuthSealed[:chacha20poly1305.NonceSize]
+		raw, err := aead.Open(nil, nonce, rec.AuthSealed[chacha20poly1305.NonceSize:], queue)
+		if err != nil || len(raw) != 32 || sha256.Sum256(raw) != rec.AuthKeyID {
+			return nil
+		}
+		return raw
+	}
+	if rec.legacyAuthKey != ([32]byte{}) {
+		return rec.legacyAuthKey[:]
+	}
+	return nil
+}
+
 func (s *Server) authKeyOf(queue []byte) []byte {
 	raw, err := s.cfg.Store.Get(queueKey(queue))
 	if err != nil {
@@ -750,7 +969,7 @@ func (s *Server) authKeyOf(queue []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	return rec.AuthKey[:]
+	return s.openAuthKey(queue, rec)
 }
 
 func (s *Server) queueLimits(rec queueRecord) (int, int64) {
@@ -758,6 +977,10 @@ func (s *Server) queueLimits(rec queueRecord) (int, int64) {
 		return s.lim.PublicItems, s.lim.PublicBytes
 	}
 	return s.lim.PrivateItems, s.lim.PrivateBytes
+}
+
+func (s *Server) itemExpiry(stored int64) int64 {
+	return stored + int64(s.lim.ItemTTL)
 }
 
 func (s *Server) loadQueueLocked(q []byte, now time.Time) (queueRecord, error) {
@@ -773,12 +996,65 @@ func (s *Server) loadQueueLocked(q []byte, now time.Time) (queueRecord, error) {
 		return queueRecord{}, err
 	}
 	if now.Unix() >= rec.Expires {
+		if err := s.expireQueueLocked(q, rec, now); err != nil {
+			return queueRecord{}, err
+		}
 		return queueRecord{}, ErrUnknownQueue
 	}
 	return rec, nil
 }
 
+// expireQueueLocked removes an expired queue record and whatever it still holds. Items are
+// normally gone by their 7-day life, but a queue created with a shorter ttl must not leave its
+// blobs counted against the relay until the slower item expiry catches up.
+func (s *Server) expireQueueLocked(q []byte, rec queueRecord, now time.Time) error {
+	prefix := itemPrefix(q)
+	var (
+		start    []byte
+		delItems int64
+		delBytes int64
+	)
+	for {
+		entries, err := s.cfg.Store.ScanFrom(prefix, start, 64)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			break
+		}
+		for _, e := range entries {
+			start = e.Key
+			id := e.Key[len(prefix):]
+			stored, blob, err := parseItemValue(e.Value)
+			if err != nil {
+				return err
+			}
+			if err := s.cfg.Store.Delete(itemKey(q, id)); err != nil {
+				return err
+			}
+			_ = s.cfg.Store.Delete(expiryKey(q, id, s.itemExpiry(stored), rec.Public))
+			delItems++
+			delBytes += int64(len(blob))
+		}
+		if len(entries) < 64 {
+			break
+		}
+	}
+	if delItems > 0 {
+		if err := s.addTotalLocked(rec.Public, -delItems, -delBytes); err != nil {
+			return err
+		}
+	}
+	_ = s.cfg.Store.Delete(queueKey(q))
+	owner := s.opaque("mailbox-owner", rec.Owner[:])
+	_ = s.cfg.Store.Delete(ownerKey(owner, q))
+	return nil
+}
+
 func (s *Server) putQueueLocked(q []byte, rec queueRecord, now time.Time) error {
+	if err := s.sealAuthKey(q, &rec); err != nil {
+		return err
+	}
 	remaining := time.Unix(rec.Expires, 0).Sub(now)
 	if remaining <= 0 {
 		return ErrUnknownQueue
@@ -786,62 +1062,178 @@ func (s *Server) putQueueLocked(q []byte, rec queueRecord, now time.Time) error 
 	return s.cfg.Store.PutTTL(queueKey(q), rec.encode(), remaining)
 }
 
-// itemsLocked returns one page and removes items that passed their 7-day life. The caller holds
-// s.mu.
-func (s *Server) itemsLocked(q []byte, rec queueRecord, after []byte, limit int, now time.Time) ([]Item, bool, error) {
-	prefix := itemPrefix(q)
-	var (
-		entries []store.Entry
-		err     error
-	)
-	if len(after) > 0 {
-		entries, err = s.cfg.Store.ScanFrom(prefix, itemKey(q, after), limit+1)
-	} else {
-		entries, err = s.cfg.Store.Scan(prefix, limit+1)
+type expiryDelta struct {
+	queue  []byte
+	public bool
+	items  int64
+	bytes  int64
+}
+
+// pruneExpiredLocked walks the expiry index from the oldest entry and releases every item whose
+// logical lifetime has passed. It stops at the first live entry, so an idle queue costs one small
+// scan. The caller holds s.mu.
+func (s *Server) pruneExpiredLocked(now time.Time) error {
+	nowNanos := now.UnixNano()
+	var cursor []byte
+	for {
+		entries, err := s.cfg.Store.ScanFrom([]byte(expiryIndexPrefix), cursor, pruneBatch)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			return nil
+		}
+		var (
+			deltas []*expiryDelta
+			byKey  = make(map[string]*expiryDelta)
+			live   bool
+		)
+		for _, e := range entries {
+			expires, public, q, id, err := parseExpiryKey(e.Key)
+			if err != nil {
+				return err
+			}
+			if expires > nowNanos {
+				live = true
+				break
+			}
+			size, err := parseExpiryIndexValue(e.Value)
+			if err != nil {
+				return err
+			}
+			if err := s.cfg.Store.Delete(itemKey(q, id)); err != nil {
+				return err
+			}
+			if err := s.cfg.Store.Delete(e.Key); err != nil {
+				return err
+			}
+			key := string(q)
+			d := byKey[key]
+			if d == nil {
+				d = &expiryDelta{queue: append([]byte(nil), q...), public: public}
+				byKey[key] = d
+				deltas = append(deltas, d)
+			}
+			d.items++
+			d.bytes += size
+			cursor = append(cursor[:0], e.Key...)
+		}
+		if err := s.applyExpiryDeltasLocked(deltas, now); err != nil {
+			return err
+		}
+		if live || len(entries) < pruneBatch {
+			return nil
+		}
 	}
-	if err != nil {
-		return nil, false, err
+}
+
+func (s *Server) applyExpiryDeltasLocked(deltas []*expiryDelta, now time.Time) error {
+	for _, d := range deltas {
+		if err := s.addTotalLocked(d.public, -d.items, -d.bytes); err != nil {
+			return err
+		}
+		raw, err := s.cfg.Store.Get(queueKey(d.queue))
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return err
+		}
+		rec, err := parseQueueRecord(raw)
+		if err != nil {
+			return err
+		}
+		if now.Unix() >= rec.Expires {
+			if err := s.expireQueueLocked(d.queue, rec, now); err != nil {
+				return err
+			}
+			continue
+		}
+		rec.Count = clampSub(rec.Count, uint32(d.items))
+		rec.Bytes -= d.bytes
+		if rec.Bytes < 0 {
+			rec.Bytes = 0
+		}
+		if err := s.putQueueLocked(d.queue, rec, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// itemsLocked returns one page and reaps expired records left by an older layout. Live expiry is
+// handled by pruneExpiredLocked. The caller holds s.mu.
+func (s *Server) itemsLocked(q []byte, rec queueRecord, after []byte, limit int, now time.Time) ([]Item, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	prefix := itemPrefix(q)
+	start := []byte(nil)
+	if len(after) > 0 {
+		start = itemKey(q, after)
 	}
 
-	items := make([]Item, 0, min(limit, len(entries)))
+	items := make([]Item, 0, min(limit, fetchScanChunk))
 	var expiredItems, expiredBytes int64
 	used := 0
 	more := false
-	for _, e := range entries {
-		id := e.Key[len(prefix):]
-		stored, blob, err := parseItemValue(e.Value)
+	live := 0
+	want := limit + 1
+
+scan:
+	for {
+		n := want - live
+		if n > fetchScanChunk {
+			n = fetchScanChunk
+		}
+		if n <= 0 {
+			break
+		}
+		entries, err := s.cfg.Store.ScanFrom(prefix, start, n)
 		if err != nil {
 			return nil, false, err
 		}
-		if !now.Before(time.Unix(stored, 0).Add(s.lim.ItemTTL)) {
-			if err := s.cfg.Store.Delete(itemKey(q, id)); err != nil {
+		if len(entries) == 0 {
+			break
+		}
+		for _, e := range entries {
+			start = e.Key
+			id := e.Key[len(prefix):]
+			stored, blob, err := parseItemValue(e.Value)
+			if err != nil {
 				return nil, false, err
 			}
-			expiredItems++
-			expiredBytes += int64(len(blob))
-			continue
+			expires := s.itemExpiry(stored)
+			if now.UnixNano() >= expires {
+				if err := s.cfg.Store.Delete(itemKey(q, id)); err != nil {
+					return nil, false, err
+				}
+				_ = s.cfg.Store.Delete(expiryKey(q, id, expires, rec.Public))
+				expiredItems++
+				expiredBytes += int64(len(blob))
+				continue
+			}
+			if live >= limit {
+				more = true
+				break scan
+			}
+			// Keep the encoded ITEMS message under its normative maximum (services.md §5.1).
+			// The per-item overhead of the protobuf encoding is well under 64 bytes.
+			if len(items) > 0 && used+len(blob)+maxItemOverhead > MaxItemsBytes {
+				more = true
+				break scan
+			}
+			used += len(blob) + maxItemOverhead
+			items = append(items, Item{
+				ID:     append([]byte(nil), id...),
+				Blob:   append([]byte(nil), blob...),
+				Stored: uint64(time.Unix(0, stored).Unix()),
+			})
+			live++
 		}
-		if len(items) >= limit {
-			more = true
+		if len(entries) < n {
 			break
 		}
-		// Keep the encoded ITEMS message under its normative maximum (services.md §5.1). The
-		// per-item overhead of the protobuf encoding is well under 64 bytes.
-		if len(items) > 0 && used+len(blob)+maxItemOverhead > MaxItemsBytes {
-			more = true
-			break
-		}
-		used += len(blob) + maxItemOverhead
-		items = append(items, Item{
-			ID:     append([]byte(nil), id...),
-			Blob:   append([]byte(nil), blob...),
-			Stored: uint64(stored),
-		})
-	}
-	// Expired records consumed part of the look-ahead window, so another page may exist beyond
-	// it even when this one is not full.
-	if expiredItems > 0 && len(entries) == limit+1 {
-		more = true
 	}
 	if expiredItems > 0 {
 		rec.Count = clampSub(rec.Count, uint32(expiredItems))
