@@ -305,3 +305,76 @@ func TestReassemblerBoundsAndExpiry(t *testing.T) {
 		t.Fatal("fragment with another count completed the unit")
 	}
 }
+
+func fragsOf(h Header3, ct []byte, n int) []Fragment3 {
+	size := (len(ct) + n - 1) / n
+	out := make([]Fragment3, n)
+	for i := range out {
+		out[i] = Fragment3{Header: h, Idx: byte(i), Count: byte(n), Payload: ct[i*size : min((i+1)*size, len(ct))]}
+	}
+	return out
+}
+
+func TestForgedFragmentDoesNotShadowTheRealOne(t *testing.T) {
+	clk := newFakeClock()
+	r := NewReassembler3(clk.Now)
+	h := Header3{Kind: Kind3Video, Sender: 2, Gen: 1, Seq: 7}
+	real := pattern(200, 1)
+	fake := pattern(200, 100)
+	var got [][]byte
+	collect := func(f Fragment3) {
+		for _, a := range r.AddAll(f) {
+			got = append(got, a.Ciphertext)
+		}
+	}
+	for _, f := range fragsOf(h, fake, 2) { // the insider's fragments come first
+		collect(f)
+	}
+	for _, f := range fragsOf(h, real, 2) {
+		collect(f)
+	}
+	var sawReal bool
+	for _, g := range got {
+		if bytes.Equal(g, real) {
+			sawReal = true
+		}
+	}
+	if !sawReal {
+		t.Fatalf("the real unit was never assembled (%d assemblies): a forged fragment shadowed it", len(got))
+	}
+}
+
+func TestFragmentFloodOfOneSenderDoesNotEvictAnother(t *testing.T) {
+	clk := newFakeClock()
+	r := NewReassembler3(clk.Now)
+	real := Header3{Kind: Kind3Video, Sender: 5, Gen: 1, Seq: 1}
+	ct := pattern(100, 3)
+	frs := fragsOf(real, ct, 2)
+	r.AddAll(frs[0])
+	for i := uint32(0); i < 300; i++ { // another member invents units for 300 ms
+		r.AddAll(Fragment3{Header: Header3{Kind: Kind3Video, Sender: 6, Gen: 1, Seq: 1000 + i}, Idx: 0, Count: 2, Payload: []byte{1}})
+		clk.Advance(time.Millisecond)
+	}
+	out := r.AddAll(frs[1])
+	if len(out) != 1 || !bytes.Equal(out[0].Ciphertext, ct) {
+		t.Fatalf("the real partial unit was evicted by another sender's flood: %d assemblies", len(out))
+	}
+}
+
+func TestReassemblerDropsUnannouncedSenders(t *testing.T) {
+	clk := newFakeClock()
+	r := NewReassembler3(clk.Now)
+	r.Known = func(sender, gen byte) bool { return sender == 1 }
+	for i := uint32(0); i < 5000; i++ {
+		r.AddAll(Fragment3{Header: Header3{Kind: Kind3Video, Sender: 9, Seq: i}, Idx: 0, Count: 2, Payload: []byte{1}})
+	}
+	if n := len(r.pending); n != 0 {
+		t.Fatalf("%d pending units of an unannounced sender", n)
+	}
+	h := Header3{Kind: Kind3Video, Sender: 1, Seq: 1}
+	frs := fragsOf(h, pattern(50, 1), 2)
+	r.AddAll(frs[0])
+	if out := r.AddAll(frs[1]); len(out) != 1 {
+		t.Fatalf("announced sender: %d assemblies", len(out))
+	}
+}

@@ -208,9 +208,23 @@ type partial3 struct {
 // Reassembler3 joins fragments of one unit; bounded in units and time. It is not safe for
 // concurrent use: one per receive loop.
 type Reassembler3 struct {
+	// Known says whether the sender announced a media key; fragments of others are dropped before
+	// any state is created. Nil accepts all.
+	Known   func(sender, gen byte) bool
 	now     func() time.Time
 	pending map[Header3]*partial3
 }
+
+// Assembled3 is a sealed unit put together from fragments.
+type Assembled3 struct {
+	Header     Header3
+	Ciphertext []byte
+}
+
+// AddAll takes one fragment and returns every sealed unit it completed. Fragments are not
+// authenticated one by one, so the reassembler keeps up to 4 variants per fragment index and
+// returns each distinct assembly (the receiver picks the one the CALL_AUTH vouches for).
+func (r *Reassembler3) AddAll(f Fragment3) []Assembled3 { return nil }
 
 // NewReassembler3 returns a reassembler on the given clock.
 func NewReassembler3(now func() time.Time) *Reassembler3 {
