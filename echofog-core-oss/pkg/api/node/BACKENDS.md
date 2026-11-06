@@ -309,3 +309,15 @@ DHT/relay/выхода; нет — если работает только с л�
 `ConnectionReport`; контакты: `GetContacts`, `SetContactProfile` (аватар пока не хранится),
 `DeleteContact`, `BlockPeer`, `UnblockPeer`, `GetBlockedPeers`. Не сделаны: `NewContact` (контакт
 добавляется по ссылке), `ConnectToPeer`, `AddRelay`, bootstrap-методы, запросы на переписку, `BanContact`.
+
+## T9.4: домен «звонки и стримы» при `protocol: 2`
+
+`NodeApi.AttachV2Calls(calls)` подключает `app.Calls` (`internal/v2/app/calls.go`): менеджер звонка v1
+(деревья, слои, мост WebRTC в webview) над транспортом звонка поверх сессий v2. Бэкенд звонков
+становится `v2CallBackend` (`backends_v2_call.go`). Работают: вход и выход (`JoinCall` отдаёт SDP-offer
+моста, `SubmitCallAnswer`, `LeaveCall`), состав и слоты, стримы (`StartStream`, `StartScreenShare`,
+`WatchStream`, качество, статистика), голос (`SetVADState`), фон плитки, жалобы, `SetCaptureEncoder`,
+`PublishCaptureRTP` и `CaptureRTPBudget` — через них десктоп ведёт нативный захват (`nativecap`) без
+правок. Не сделаны (остаются `ErrV2NotBuilt`): звонки групп и комнат (ждут чаты v2), `GetCallPath`,
+`GetCallRelays`, `SwitchCallRelay`, `InviteToCall`. Медиа принимается только от участников комнаты,
+в которой находится узел (`Runtime.SetCallAdmit` из состава комнаты, кэш 100 мс).
