@@ -140,7 +140,7 @@ func (b *datagramBroker) deliver(peer Peer, d mux.Datagram) {
 	}
 	b.mu.Unlock()
 
-	msg := Datagram{Peer: peer, Type: d.Type, Payload: append([]byte(nil), d.Payload...)}
+	msg := Datagram{Peer: peer, Type: d.Type, Payload: append([]byte(nil), d.Payload...), PathKind: d.Kind}
 	for _, p := range targets {
 		select {
 		case p.ch <- msg:

@@ -1107,7 +1107,7 @@ func (s *Session) datagramLoop(p *path) {
 			continue
 		}
 		select {
-		case s.dgrams <- Datagram{Type: typ, Payload: payload, Path: p.id}:
+		case s.dgrams <- Datagram{Type: typ, Payload: payload, Path: p.id, Kind: p.kind}:
 		default:
 			s.count(func(st *SessionStats) { st.DatagramsDropped++ })
 		}

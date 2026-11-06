@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/echofog/echofog-core/internal/v2/call/callnet"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
@@ -186,10 +188,14 @@ type Runtime struct {
 	wg         sync.WaitGroup
 	serving    sync.Map
 	dgrams     *datagramBroker
-	dht        *dht.Table
-	dhtServer  *dht.Server
-	dhtClient  *dht.Client
-	devList    ownDevices
+	// call media (T9.3): the transport over live sessions, call_route and the signal port
+	callTr      *callnet.Transport
+	callRoute   atomic.Uint32
+	callSignals atomic.Pointer[signalHolder]
+	dht         *dht.Table
+	dhtServer   *dht.Server
+	dhtClient   *dht.Client
+	devList     ownDevices
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
 	modules     sync.Once

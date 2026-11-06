@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 
 	"github.com/echofog/echofog-core/internal/v2/call"
 	"github.com/echofog/echofog-core/internal/v2/call/callnet"
@@ -39,6 +40,7 @@ func (r *Runtime) registerCall() {
 	r.Register(spec, func(ctx context.Context, p Peer, st *mux.Stream) {
 		srv.Handle(ctx, callPeer(p), st)
 	})
+	r.startCallMedia()
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
@@ -91,9 +93,72 @@ func (p *callDatagramPort) Receive(ctx context.Context) (call.Datagram, error) {
 
 func (p *callDatagramPort) Close() error { return p.port.Close() }
 
-// SetCallRoute sets network.call_route: the kind of path call media takes (T9.3).
-func (r *Runtime) SetCallRoute(rt route.Route) {}
+// signalHolder lets the signal port be set after the runtime is built (the call layer is created
+// by the app, once its identity and room exist).
+type signalHolder struct{ port callnet.SignalPort }
+
+// SetCallRoute sets network.call_route: the kind of path call media takes (T9.3). It applies to
+// the next datagram sent or received.
+func (r *Runtime) SetCallRoute(rt route.Route) { r.callRoute.Store(uint32(rt)) }
+
+// CallRoute returns the current call_route.
+func (r *Runtime) CallRoute() route.Route { return route.Route(r.callRoute.Load()) }
+
+// SetCallSignals sets the port that carries the call layer's signals (T9.1 call/2 mapping).
+func (r *Runtime) SetCallSignals(p callnet.SignalPort) {
+	r.callSignals.Store(&signalHolder{port: p})
+}
 
 // CallTransport returns the call layer's transport over this node's sessions (T9.3). Nil when
 // call/2 is not registered.
-func (r *Runtime) CallTransport() *callnet.Transport { return nil }
+func (r *Runtime) CallTransport() *callnet.Transport { return r.callTr }
+
+// ErrNoCallSignals: no signal port was set; call signals cannot be sent.
+var ErrNoCallSignals = errors.New("node: no call signal port")
+
+// callSignalPort forwards to the port set by SetCallSignals.
+type callSignalPort struct{ r *Runtime }
+
+func (p callSignalPort) SendSignal(to [32]byte, lossy bool, payload []byte) error {
+	h := p.r.callSignals.Load()
+	if h == nil || h.port == nil {
+		return ErrNoCallSignals
+	}
+	return h.port.SendSignal(to, lossy, payload)
+}
+
+// callLinks gives the call transport the live session with a participant, without dialing: the
+// call layer connects its tree neighbours itself.
+type callLinks struct{ r *Runtime }
+
+func (l callLinks) Link(device [32]byte) (route.Link, bool) {
+	est := l.r.liveMainSession(DeviceID(device))
+	if est == nil {
+		return nil, false
+	}
+	return est.Session, true
+}
+
+// startCallMedia builds the call transport and pumps CALL_AUDIO / CALL_VIDEO datagrams into it.
+func (r *Runtime) startCallMedia() {
+	r.callTr = callnet.New(callnet.Config{
+		Links:   callLinks{r},
+		Signals: callSignalPort{r},
+		Route:   r.CallRoute,
+	})
+	port := r.Datagrams(frame.DgramCallAudio, frame.DgramCallVideo)
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer port.Close()
+		for {
+			d, err := port.Receive(r.ctx)
+			if err != nil {
+				return
+			}
+			r.callTr.Deliver(callnet.Inbound{
+				Device: [32]byte(d.Peer.Device), Type: d.Type, Payload: d.Payload, Path: d.PathKind,
+			})
+		}
+	}()
+}
