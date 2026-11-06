@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"time"
 
@@ -233,3 +234,21 @@ func (t *Throwaway) Destroy() {
 		t.Device.Destroy()
 	}
 }
+
+// ThrowawaySeeds is the secret material of one per-exit client identity, as the store keeps it
+// (services.md §7: "stored locally, never derived from the mnemonic"). It is random, so it only
+// ever restores the same exit identity, never the messenger one.
+type ThrowawaySeeds struct {
+	Account   [32]byte
+	Device    [32]byte
+	Handshake [32]byte
+	Mask      [32]byte
+}
+
+// NewThrowawaySeeds draws fresh random seeds.
+func NewThrowawaySeeds() (ThrowawaySeeds, error) { return ThrowawaySeeds{}, errNotImplemented }
+
+// ThrowawayFromSeeds rebuilds a throwaway identity from its seeds.
+func ThrowawayFromSeeds(ThrowawaySeeds) (*Throwaway, error) { return nil, errNotImplemented }
+
+var errNotImplemented = errors.New("identity: not implemented")
