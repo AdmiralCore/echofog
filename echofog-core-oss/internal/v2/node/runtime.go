@@ -191,6 +191,12 @@ type Runtime struct {
 	routeMu   sync.Mutex
 	routeInfo map[DeviceID]RouteReport
 
+	// The sources of the own country (T6.4c); countryLast is the one last reported.
+	countryMu   sync.Mutex
+	countryUser string
+	countryHint string
+	countryLast string
+
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
@@ -480,6 +486,7 @@ func (r *Runtime) RefreshLocalAddrs() []netip.Addr {
 		r.localAddrs = addrs
 		r.localMu.Unlock()
 	}
+	r.noteCountry()
 	r.localMu.RLock()
 	defer r.localMu.RUnlock()
 	return append([]netip.Addr(nil), r.localAddrs...)

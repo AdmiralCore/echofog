@@ -136,6 +136,8 @@ var (
 	cnForeign = []uint32{objects.SuiteReality2QUIC, objects.SuiteReality2TCP, objects.SuiteWS2}
 	// IR: 53/80/443 and an allow-list of services: TCP suites at 443; QUIC only when udp is allowed.
 	irForeign = []uint32{objects.SuiteReality2TCP, objects.SuiteWS2}
+	// Unknown own country: what a censor cannot tell from a browser, over TCP.
+	unknownRow = []uint32{objects.SuiteReality2TCP, objects.SuiteWS2}
 )
 
 // Decide returns the table row for a client in country own on a network of class net, towards dest.
@@ -147,6 +149,10 @@ func (r *Rules) Decide(own string, net NetClass, dest DestClass) Decision {
 	}
 	var d Decision
 	switch {
+	case own == "":
+		// The country is not known (T6.4c): TLS-shaped carriers over TCP only, whatever the network;
+		// no noise3, no QUIC, no UDP, no hole punching. Not stricter for a mobile network by itself.
+		d = Decision{RuleID: "unknown", Direct: true, Suites: slices.Clone(unknownRow)}
 	case dest == DestDomestic && own == "RU" && net == NetMobile:
 		d = Decision{RuleID: "ru-mobile-domestic", Direct: true, Suites: slices.Clone(allSuites), UDP: true}
 	case dest == DestDomestic:

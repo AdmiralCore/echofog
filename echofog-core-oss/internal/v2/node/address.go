@@ -18,6 +18,7 @@ func (r *Runtime) NATClass() session.NATClass { return r.observer.NATClass() }
 // publicAddrChanged is the address-change event: the cards follow the new public IP (the next
 // Current reissues them) and the operator is told.
 func (r *Runtime) publicAddrChanged(c session.PublicAddrChange) {
+	r.noteCountry()     // the confirmed address may decide the country (T6.4c)
 	r.pm.Confirm(c.New) // peers vouch for the IP: a mapping on it becomes a candidate (T6.5b)
 	_, err := r.cfg.Cards.SetPublicHost(c.New.String())
 	if err != nil {
