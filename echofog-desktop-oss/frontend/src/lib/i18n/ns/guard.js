@@ -19,7 +19,7 @@ export default {
     'guard.pin.placeholder': 'echofog://relay/… or host:port/id?sni=…',
     'guard.pin.add': 'Pin',
     'guard.pin.remove': 'Remove',
-    'guard.exitNote': 'This is about how the app joins the network. The VPN that carries your browsing is chosen on the Proxy page and has its own disguise.',
+    'guard.exitNote': 'This is about how the app joins the network. The VPN that carries your browsing is chosen on the VPN page and has its own disguise.',
   },
   ru: {
     'guard.title': 'Вход в сеть',
@@ -40,6 +40,6 @@ export default {
     'guard.pin.placeholder': 'echofog://relay/… или host:port/id?sni=…',
     'guard.pin.add': 'Закрепить',
     'guard.pin.remove': 'Убрать',
-    'guard.exitNote': 'Это про то, как приложение заходит в сеть. VPN-выход, через который идёт ваш интернет, выбирается на вкладке «Прокси» и маскируется отдельно.',
+    'guard.exitNote': 'Это про то, как приложение заходит в сеть. VPN-выход, через который идёт ваш интернет, выбирается в разделе «VPN» и маскируется отдельно.',
   },
 };
