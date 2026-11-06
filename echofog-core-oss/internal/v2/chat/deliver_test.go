@@ -148,7 +148,14 @@ func TestBundleGetTimesOut(t *testing.T) {
 	b := &slowBundler{block: block}
 	fire := make(chan time.Time)
 	var asked time.Duration
-	srv := New(Config{Bundles: b, Now: c.Now, After: func(d time.Duration) <-chan time.Time { asked = d; return fire }})
+	never := make(chan time.Time)
+	srv := New(Config{Bundles: b, Now: c.Now, After: func(d time.Duration) <-chan time.Time {
+		if d != BundleGetTimeout {
+			return never // the idle timer of the stream
+		}
+		asked = d
+		return fire
+	}})
 	st, stop := run(t, srv, direct("203.0.113.5:4430"))
 	defer func() { close(block); stop() }()
 	st.in <- get(t, 1)

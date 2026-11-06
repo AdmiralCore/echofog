@@ -415,6 +415,8 @@ func (c *Crypto) prevKey(device [32]byte) []byte {
 	return []byte(prevPrefix + c.sessDB.BlindID(hex.EncodeToString(device[:])))
 }
 
+// There is one slot: two replacements within 7 days leave only the session replaced last, so a
+// message of the one before is lost (it is sent again by its sender after a failed delivery).
 // keepPrev moves the current session with device, if there is one, to the replaced slot: a session
 // replaced by a fresh one still opens messages sent before the replacement for 7 days. c.mu is held.
 func (c *Crypto) keepPrev(device [32]byte) error {

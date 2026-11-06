@@ -193,11 +193,41 @@ func (s *Server) prune(now time.Time) {
 // is the same CLOSE{refused}: a peer learns nothing about the node from which one it got (AD20).
 func (s *Server) Handle(ctx context.Context, p Peer, st Stream) {
 	defer st.Close()
-	for ctx.Err() == nil {
-		f, err := st.ReadFrame()
-		if err != nil {
+	type read struct {
+		f   frame.Frame
+		err error
+	}
+	// The reader runs on its own so that the wait for the next frame can be limited: a peer that opens
+	// a stream and says nothing is closed after DeliverTimeout (services.md 4.1). It ends when the
+	// stream is closed.
+	frames := make(chan read)
+	go func() {
+		for {
+			f, err := st.ReadFrame()
+			select {
+			case frames <- read{f, err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	for {
+		var r read
+		select {
+		case r = <-frames:
+		case <-s.after(DeliverTimeout):
+			_ = st.CloseWithCode(frame.CodeTimeout, "")
+			return
+		case <-ctx.Done():
 			return
 		}
+		if r.err != nil {
+			return
+		}
+		f := r.f
 		if f.Ignorable() {
 			continue
 		}
@@ -262,7 +292,19 @@ func (s *Server) handleDeliver(ctx context.Context, p Peer, st Stream, f frame.F
 	}
 	status := chatpb.StatusRefused
 	if s.receiver != nil {
-		status = s.receiver.Receive(ctx, req.Envelope)
+		// Receive may look an account up in the DHT, chosen by the sender: it has the DELIVER time,
+		// and is cancelled when that passes.
+		rctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan uint32, 1)
+		go func() { done <- s.receiver.Receive(rctx, req.Envelope) }()
+		select {
+		case status = <-done:
+		case <-s.after(DeliverTimeout):
+			cancel()
+			_ = st.CloseWithCode(frame.CodeTimeout, "")
+			return false
+		}
 	}
 	out, err := objects.Marshal(&chatpb.Delivered{Req: req.Req, Status: status})
 	return err == nil && st.WriteFrame(FrameDelivered, 0, out) == nil

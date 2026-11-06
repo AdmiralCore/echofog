@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -133,12 +132,6 @@ type Stats struct {
 	Seen    int
 }
 
-// Stats returns the maintained counters.
-func (s *Service) Stats() Stats { return Stats{} }
-
-// Recount counts the same things again from the store; the two must always agree (AD19).
-func (s *Service) Recount() Stats { return Stats{} }
-
 // Service is the delivery side of chat/2: outbox, receiving, deduplication and recovery.
 type Service struct {
 	cfg ServiceConfig
@@ -147,8 +140,20 @@ type Service struct {
 
 	mu    sync.Mutex
 	items map[[16]byte]*item
-	fails map[[32]byte][]failure // by sender device
-	recov map[[32]byte]time.Time // last recovery start by sender device
+	fails map[[32]byte][]failure // by sender device, at most maxTrackedDevices
+	recov map[[32]byte]time.Time // last recovery start by sender device, at most maxTrackedDevices
+
+	// counters (accounting.go): active outbox items, by account, receipts by account, bytes
+	count    int
+	perPeer  map[[32]byte]int
+	receipts map[[32]byte]int
+	bytes    int
+	// remembered incoming IDs: in all and by sender device
+	seenN   int
+	seenDev map[[32]byte]int
+	// lookups of accounts that failed, until when they are not tried again (finding 6)
+	lookupFail map[[32]byte]time.Time
+	seq        uint64
 }
 
 type failure struct {
@@ -168,6 +173,10 @@ type item struct {
 	Next      int64    `json:"next"` // unix nanoseconds
 	ForceInit bool     `json:"force_init,omitempty"`
 	Control   bool     `json:"control,omitempty"`
+	Receipt   bool     `json:"receipt,omitempty"`
+	Created   int64    `json:"created"` // unix seconds
+	Seq       uint64   `json:"seq"`     // order of sending, so that messages made in one instant keep it
+	acct      int      // bytes counted for it while it is active, 0 when it is not counted
 	Since     int64    `json:"since"` // when it entered StateMailbox, StateDelivered or StateFailed, unix seconds
 }
 
@@ -208,7 +217,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 	if cfg.Crypto == nil || cfg.Dir == nil || cfg.Link == nil || cfg.Store == nil || cfg.Now == nil {
 		return nil, errors.New("chat: Crypto, Dir, Link, Store and Now are required")
 	}
-	s := &Service{cfg: cfg, items: map[[16]byte]*item{}, fails: map[[32]byte][]failure{}, recov: map[[32]byte]time.Time{}}
+	s := &Service{cfg: cfg, items: map[[16]byte]*item{}, fails: map[[32]byte][]failure{}, recov: map[[32]byte]time.Time{},
+		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, lookupFail: map[[32]byte]time.Time{}}
 	var after []byte
 	for {
 		var (
@@ -228,12 +238,24 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 			if json.Unmarshal(e.Value, &it) != nil {
 				continue // a record this build cannot read is skipped, not fatal
 			}
+			if it.Created == 0 {
+				it.Created = cfg.Now().Unix() // a record from before the lifetimes: it starts now
+			}
 			s.items[it.ID] = &it
+			if it.Seq > s.seq {
+				s.seq = it.Seq
+			}
+			if it.active() {
+				s.addLocked(&it)
+			}
 		}
 		if len(page) < store.MaxScanLimit {
 			break
 		}
 		after = page[len(page)-1].Key
+	}
+	if err := s.loadSeen(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -269,14 +291,23 @@ func (s *Service) enqueue(to [32]byte, m *chatpb.PersonalMessageProto, forceInit
 	if err != nil {
 		return id, err
 	}
-	it := &item{ID: id, To: to, Plain: plain, State: StateWaiting, Next: s.cfg.Now().UnixNano(), ForceInit: forceInit,
-		Control: msg.GetControl() != nil}
+	now := s.cfg.Now()
+	it := &item{ID: id, To: to, Plain: plain, State: StateWaiting, Next: now.UnixNano(), ForceInit: forceInit,
+		Control: msg.GetControl() != nil, Receipt: msg.GetControl().GetDelivered() != nil, Created: now.Unix()}
 	s.mu.Lock()
+	if !s.admitLocked(it) {
+		s.mu.Unlock()
+		return id, ErrOutboxFull
+	}
 	if err := s.persist(it); err != nil {
 		s.mu.Unlock()
 		return id, err
 	}
+	s.seq++
+	it.Seq = s.seq
 	s.items[id] = it
+	s.addLocked(it)
+	_ = s.persist(it)
 	s.mu.Unlock()
 	s.emitStatus(id, StateWaiting)
 	return id, nil
@@ -305,26 +336,52 @@ func (s *Service) Tick(ctx context.Context) error {
 	defer s.tickMu.Unlock()
 	now := s.cfg.Now()
 
+	s.expireSeen(now)
+
 	s.mu.Lock()
-	var due []*item
-	for id, it := range s.items {
+	var due, failed []*item
+	for _, it := range s.items {
 		switch {
-		case (it.State == StateDelivered || it.State == StateFailed) && now.Sub(time.Unix(it.Since, 0)) > doneFor:
-			delete(s.items, id)
-			_ = s.cfg.Store.Delete(outKey(id))
-		case (it.State == StateWaiting || it.State == StateMailbox) && it.Next <= now.UnixNano():
+		case !it.active():
+			if now.Sub(time.Unix(it.Since, 0)) > doneFor {
+				s.removeLocked(it)
+			}
+		case it.Receipt && now.Sub(time.Unix(it.Created, 0)) > receiptLife:
+			s.removeLocked(it) // a receipt that waited a day is not worth sending any more
+		case now.Sub(time.Unix(it.Created, 0)) > outboxLife:
+			failed = append(failed, it)
+		case it.Next <= now.UnixNano():
 			due = append(due, it)
 		}
 	}
+	for k, until := range s.lookupFail {
+		if !now.Before(until) {
+			delete(s.lookupFail, k)
+		}
+	}
 	s.mu.Unlock()
-	sort.Slice(due, func(i, j int) bool { return due[i].Next < due[j].Next })
+	for _, it := range failed {
+		s.set(it, StateFailed, time.Time{})
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if due[i].Next != due[j].Next {
+			return due[i].Next < due[j].Next
+		}
+		return due[i].Seq < due[j].Seq
+	})
+	lookups := map[[32]byte]lookup{} // one lookup per account and Tick, not one per item
 	for _, it := range due {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		s.attempt(ctx, it)
+		s.attempt(ctx, it, lookups)
 	}
 	return nil
+}
+
+type lookup struct {
+	res *dht.Resolved
+	err error
 }
 
 // set moves an item to a state and stores it.
@@ -336,6 +393,7 @@ func (s *Service) set(it *item, st State, next time.Time) {
 		it.Since = s.cfg.Now().Unix()
 	}
 	if st == StateDelivered || st == StateFailed {
+		s.dropLocked(it)
 		it.Plain, it.Env = nil, nil
 	}
 	if !next.IsZero() {
@@ -361,8 +419,13 @@ func (s *Service) retry(it *item, st State) {
 	s.set(it, st, s.cfg.Now().Add(pause))
 }
 
-func (s *Service) attempt(ctx context.Context, it *item) {
-	res, err := s.cfg.Dir.Resolve(ctx, it.To)
+func (s *Service) attempt(ctx context.Context, it *item, lookups map[[32]byte]lookup) {
+	l, ok := lookups[it.To]
+	if !ok {
+		l.res, l.err = s.cfg.Dir.Resolve(ctx, it.To)
+		lookups[it.To] = l
+	}
+	res, err := l.res, l.err
 	if err != nil || res == nil || res.Devices == nil {
 		s.retry(it, s.keepState(it))
 		return
@@ -387,6 +450,7 @@ func (s *Service) attempt(ctx context.Context, it *item) {
 		}
 		s.mu.Lock()
 		it.Env, it.Device, it.ForceInit = env, pk.DeviceID, false
+		s.resizeLocked(it)
 		_ = s.persist(it)
 		s.mu.Unlock()
 	}
@@ -399,6 +463,7 @@ func (s *Service) attempt(ctx context.Context, it *item) {
 			// the recipient lost the session: start again with a fresh PQXDH
 			s.mu.Lock()
 			it.Env, it.ForceInit = nil, true
+			s.resizeLocked(it)
 			s.mu.Unlock()
 			s.retry(it, StateWaiting)
 		case chatpb.StatusTooLarge:
@@ -492,11 +557,6 @@ func (s *Service) build(it *item, pk *objects.Prekeys, dl *objects.DeviceList) (
 	return env, nil
 }
 
-func seenKey(device [32]byte, id []byte) []byte {
-	h := sha256.Sum256(append(append([]byte(nil), device[:]...), id...))
-	return []byte(seenPrefix + hex.EncodeToString(h[:]))
-}
-
 // Receive handles one incoming envelope (from a DELIVER or from a mailbox) and returns the DELIVERED
 // status. Every refusal is the same status 4: which check failed is not told (AD20).
 func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
@@ -520,14 +580,18 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 	var id [16]byte
 	copy(id[:], in.Id)
 
-	if ok, _ := s.cfg.Store.Has(seenKey(device, in.Id)); ok {
+	if s.seenBefore(device, in.Id) {
 		return chatpb.StatusDuplicate
 	}
 
 	var plain []byte
 	if len(in.PqxdhInit) > 0 {
+		if s.lookupFailed(node) {
+			return chatpb.StatusRefused
+		}
 		res, err := s.cfg.Dir.Resolve(ctx, node)
 		if err != nil || res == nil || res.Devices == nil || res.Devices.NodeID != node {
+			s.noteLookupFailed(node)
 			return chatpb.StatusRefused
 		}
 		var pk *objects.Prekeys
@@ -537,6 +601,7 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 			}
 		}
 		if pk == nil {
+			s.noteLookupFailed(node)
 			return chatpb.StatusRefused
 		}
 		plain, err = s.cfg.Crypto.Accept(pk, res.Devices, in.PqxdhInit)
@@ -550,12 +615,15 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 		if bound, ok := s.cfg.Crypto.Peer(device); !ok || bound != node {
 			return chatpb.StatusRefused
 		}
+		s.invalidate(node) // what waits for this account was made for the old session
 	} else {
+		// A ratchet message from a device we have no session with and one that fails to open get the
+		// same answer: an envelope can be sealed by anybody, so a different answer would tell whether
+		// this node talks to the device (AD20). The sender is helped by the recovery after three
+		// failures (noteFailure), not by a status.
 		bound, ok := s.cfg.Crypto.Peer(device)
-		if !ok {
-			return chatpb.StatusNoSession
-		}
-		if bound != node { // the sender is not the account the session is bound to: dropped
+		if !ok || bound != node { // no session, or the sender is not the account it is bound to
+			s.noteFailure(device, node, id)
 			return chatpb.StatusRefused
 		}
 		plain, err = s.cfg.Crypto.Decrypt(device, in.Ratchet)
@@ -569,7 +637,7 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 	if err != nil {
 		return chatpb.StatusRefused
 	}
-	_ = s.cfg.Store.PutTTL(seenKey(device, in.Id), []byte{1}, seenFor+24*time.Hour)
+	s.rememberSeen(device, in.Id)
 	s.dispatch(node, device, id, pm)
 	return chatpb.StatusOK
 }
@@ -608,15 +676,17 @@ func (s *Service) dispatch(node, device [32]byte, id [16]byte, pm *chatpb.Person
 func (s *Service) noteFailure(device, node [32]byte, id [16]byte) {
 	now := s.cfg.Now()
 	s.mu.Lock()
+	s.pruneFailuresLocked(now)
 	var list []failure
 	seen := false
 	for _, f := range s.fails[device] {
-		if now.Sub(f.at) < failWindow {
-			list = append(list, f)
-			if f.id == id {
-				seen = true
-			}
+		list = append(list, f)
+		if f.id == id {
+			seen = true
 		}
+	}
+	if _, known := s.fails[device]; !known && len(s.fails) >= maxTrackedDevices {
+		s.evictOldestFailureLocked()
 	}
 	if !seen {
 		list = append(list, failure{id: id, at: now})
@@ -624,6 +694,9 @@ func (s *Service) noteFailure(device, node [32]byte, id [16]byte) {
 	s.fails[device] = list
 	start := len(list) >= failThreshold && now.Sub(s.recov[device]) >= failWindow
 	if start {
+		if _, known := s.recov[device]; !known && len(s.recov) >= maxTrackedDevices {
+			s.evictOldestRecoveryLocked()
+		}
 		s.recov[device] = now
 		delete(s.fails, device)
 	}
@@ -632,5 +705,85 @@ func (s *Service) noteFailure(device, node [32]byte, id [16]byte) {
 		// the first message of the new session says so; the old session is kept 7 days
 		reset := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Reset_{Reset_: &chatpb.Reset{}}}}
 		_, _ = s.enqueue(node, reset, true)
+	}
+}
+
+// pruneFailuresLocked drops what is older than the window. s.mu is held.
+func (s *Service) pruneFailuresLocked(now time.Time) {
+	for dev, list := range s.fails {
+		kept := list[:0:0]
+		for _, f := range list {
+			if now.Sub(f.at) < failWindow {
+				kept = append(kept, f)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.fails, dev)
+		} else {
+			s.fails[dev] = kept
+		}
+	}
+	for dev, at := range s.recov {
+		if now.Sub(at) >= failWindow {
+			delete(s.recov, dev)
+		}
+	}
+}
+
+func (s *Service) evictOldestFailureLocked() {
+	var oldest [32]byte
+	var at time.Time
+	first := true
+	for dev, list := range s.fails {
+		last := list[len(list)-1].at
+		if first || last.Before(at) {
+			oldest, at, first = dev, last, false
+		}
+	}
+	delete(s.fails, oldest)
+}
+
+func (s *Service) evictOldestRecoveryLocked() {
+	var oldest [32]byte
+	var at time.Time
+	first := true
+	for dev, t := range s.recov {
+		if first || t.Before(at) {
+			oldest, at, first = dev, t, false
+		}
+	}
+	delete(s.recov, oldest)
+}
+
+// lookupPause is how long an account whose lookup failed is not looked up again for an incoming init.
+const lookupPause = time.Minute
+
+func (s *Service) lookupFailed(node [32]byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	until, ok := s.lookupFail[node]
+	return ok && s.cfg.Now().Before(until)
+}
+
+func (s *Service) noteLookupFailed(node [32]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.lookupFail[node]; !ok && len(s.lookupFail) >= maxTrackedDevices {
+		return // full: skip remembering, never grow
+	}
+	s.lookupFail[node] = s.cfg.Now().Add(lookupPause)
+}
+
+// invalidate drops the envelopes made for an account before its session was replaced: they cannot be
+// opened by the new one, so they are made again at the next attempt.
+func (s *Service) invalidate(node [32]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.items {
+		if it.To == node && it.active() && len(it.Env) > 0 {
+			it.Env = nil
+			s.resizeLocked(it)
+			_ = s.persist(it)
+		}
 	}
 }
