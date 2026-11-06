@@ -83,6 +83,8 @@ func TestCallMediaFollowsCallRouteOnARelayedAndPunchedSession(t *testing.T) {
 		waitUntil(t, 5*time.Second, "media delivered", func() bool { return got.Load() >= want })
 	}
 
+	adm := w.a.id.DeviceID
+	w.b.rt.SetCallAdmit(func(d [32]byte) bool { return d == [32]byte(adm) })
 	w.a.rt.SetCallRoute(route.Relay)
 	w.b.rt.SetCallRoute(route.Relay)
 	send(30)
@@ -107,4 +109,34 @@ func TestCallMediaFollowsCallRouteOnARelayedAndPunchedSession(t *testing.T) {
 	if got.Load() != 40 {
 		t.Fatalf("the call layer received %d units, want 40", got.Load())
 	}
+}
+
+// Media is accepted only from the members of the room the node is in.
+func TestCallMediaAdmitsOnlyRoomMembers(t *testing.T) {
+	w := newRelayWorld(t, false)
+	w.openChat(t)
+	ta, tb := w.a.rt.CallTransport(), w.b.rt.CallTransport()
+	var got atomic.Int64
+	tb.RegisterFastFrameHandler(transport.MediaAudio, func([]byte, types.PeerID) error { got.Add(1); return nil })
+	send := func() {
+		if err := ta.SendUnreliableFrame(types.PeerID(w.b.id.DeviceID), transport.MediaAudio, []byte("u")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// no room: nothing is accepted
+	send()
+	waitUntil(t, 5*time.Second, "dropped", func() bool { return tb.Stats().DroppedAdmit >= 1 })
+	if got.Load() != 0 {
+		t.Fatal("a node outside a call took media")
+	}
+	// a room without A
+	w.b.rt.SetCallAdmit(func(d [32]byte) bool { return d == [32]byte{9} })
+	send()
+	waitUntil(t, 5*time.Second, "dropped again", func() bool { return tb.Stats().DroppedAdmit >= 2 })
+	// A joins the room
+	adm := w.a.id.DeviceID
+	w.b.rt.SetCallAdmit(func(d [32]byte) bool { return d == [32]byte(adm) })
+	send()
+	waitUntil(t, 5*time.Second, "delivered", func() bool { return got.Load() == 1 })
 }

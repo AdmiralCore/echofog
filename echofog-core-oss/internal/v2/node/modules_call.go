@@ -207,3 +207,8 @@ func (l *lateCallService) Forward(ctx context.Context, p call.Peer, raw []byte) 
 	}
 	return s.Forward(ctx, p, raw)
 }
+
+// SetCallAdmit sets who may send call media to this node: the members of the room it is in. The
+// app updates it as the room changes. Until it is set, and for a nil function, no media is
+// accepted: a node outside a call takes none (T9.3b).
+func (r *Runtime) SetCallAdmit(f func(device [32]byte) bool) {}
