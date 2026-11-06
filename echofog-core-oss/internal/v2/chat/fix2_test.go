@@ -115,8 +115,9 @@ func TestForgedAccountOfAKnownDeviceStartsNoRecovery(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		b.svc.Receive(context.Background(), bentFrom(t, a, b, c.self.Account, a.self.DeviceKey))
 	}
-	if st := b.svc.Stats(); st.Outbox != 0 {
-		t.Fatalf("%d messages queued by forged envelopes", st.Outbox)
+	// (b has one receipt queued for a, the honest message; nothing is queued for c)
+	if st := b.svc.Stats(); st.PerPeer[c.self.Node] != 0 {
+		t.Fatalf("%d messages queued for c by forged envelopes", st.PerPeer[c.self.Node])
 	}
 	w.tick(b)
 	if len(c.ctrl) != 0 {

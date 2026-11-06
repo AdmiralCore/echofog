@@ -155,15 +155,21 @@ type Service struct {
 	seenN   int
 	seenDev map[[32]byte]int
 	// lookups of accounts that failed, until when they are not tried again (finding 6)
-	lookupFail map[[32]byte]time.Time
-	unbound    map[[32]byte][]failure
+	lookupFail map[lookupKey]time.Time
+	unbound    map[[32]byte][]failure // failures of devices we have no session with
+	unboundAt  []time.Time            // recoveries started for them in the last hour
+	receiptN   int
 	seq        uint64
 }
 
 type failure struct {
-	id [16]byte
-	at time.Time
+	id   [16]byte
+	at   time.Time
+	node [32]byte // the account the envelope named (unbound failures only)
 }
+
+// lookupKey is an (account, device) pair named by an incoming init.
+type lookupKey struct{ node, device [32]byte }
 
 // item is one outgoing message in the outbox.
 type item struct {
@@ -222,7 +228,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		return nil, errors.New("chat: Crypto, Dir, Link, Store and Now are required")
 	}
 	s := &Service{cfg: cfg, items: map[[16]byte]*item{}, fails: map[[32]byte][]failure{}, recov: map[[32]byte]time.Time{},
-		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, lookupFail: map[[32]byte]time.Time{}}
+		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, lookupFail: map[lookupKey]time.Time{}, unbound: map[[32]byte][]failure{}}
 	var after []byte
 	for {
 		var (
@@ -590,12 +596,18 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 
 	var plain []byte
 	if len(in.PqxdhInit) > 0 {
-		if s.lookupFailed(node) {
+		key := lookupKey{node, device}
+		if s.lookupFailed(key) {
 			return chatpb.StatusRefused
 		}
 		res, err := s.cfg.Dir.Resolve(ctx, node)
-		if err != nil || res == nil || res.Devices == nil || res.Devices.NodeID != node {
-			s.noteLookupFailed(node)
+		if err != nil {
+			// only a failed lookup is remembered, per (account, device): an envelope that names a device
+			// the account does not have must not keep the account's real init out
+			s.noteLookupFailed(key)
+			return chatpb.StatusRefused
+		}
+		if res == nil || res.Devices == nil || res.Devices.NodeID != node {
 			return chatpb.StatusRefused
 		}
 		var pk *objects.Prekeys
@@ -605,7 +617,6 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 			}
 		}
 		if pk == nil {
-			s.noteLookupFailed(node)
 			return chatpb.StatusRefused
 		}
 		plain, err = s.cfg.Crypto.Accept(pk, res.Devices, in.PqxdhInit)
@@ -626,8 +637,14 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 		// this node talks to the device (AD20). The sender is helped by the recovery after three
 		// failures (noteFailure), not by a status.
 		bound, ok := s.cfg.Crypto.Peer(device)
-		if !ok || bound != node { // no session, or the sender is not the account it is bound to
-			s.noteFailure(device, node, id)
+		switch {
+		case !ok:
+			// no session: counted apart, against one small budget (noteUnbound)
+			s.noteUnbound(device, node, id)
+			return chatpb.StatusRefused
+		case bound != node:
+			// a device we have a session with, named by another account: an impersonation, never a
+			// reason to start anything
 			return chatpb.StatusRefused
 		}
 		plain, err = s.cfg.Crypto.Decrypt(device, in.Ratchet)
@@ -762,20 +779,85 @@ func (s *Service) evictOldestRecoveryLocked() {
 // lookupPause is how long an account whose lookup failed is not looked up again for an incoming init.
 const lookupPause = time.Minute
 
-func (s *Service) lookupFailed(node [32]byte) bool {
+func (s *Service) lookupFailed(key lookupKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	until, ok := s.lookupFail[node]
+	until, ok := s.lookupFail[key]
 	return ok && s.cfg.Now().Before(until)
 }
 
-func (s *Service) noteLookupFailed(node [32]byte) {
+func (s *Service) noteLookupFailed(key lookupKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.lookupFail[node]; !ok && len(s.lookupFail) >= maxTrackedDevices {
+	if _, ok := s.lookupFail[key]; !ok && len(s.lookupFail) >= maxTrackedDevices {
 		return // full: skip remembering, never grow
 	}
-	s.lookupFail[node] = s.cfg.Now().Add(lookupPause)
+	s.lookupFail[key] = s.cfg.Now().Add(lookupPause)
+}
+
+// unboundBudget is how many recoveries may be started in an hour for devices we have no session with
+// (all of them together): the envelope that names such a device is not authenticated, so this is
+// small. The recovery of a lost state needs no more.
+const unboundBudget = 2
+
+// noteUnbound records a ratchet message from a device we have no session with. Three distinct ones
+// within ten minutes start a recovery, if the shared budget of the hour allows.
+func (s *Service) noteUnbound(device, node [32]byte, id [16]byte) {
+	now := s.cfg.Now()
+	s.mu.Lock()
+	for dev, list := range s.unbound {
+		kept := list[:0:0]
+		for _, f := range list {
+			if now.Sub(f.at) < failWindow {
+				kept = append(kept, f)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.unbound, dev)
+		} else {
+			s.unbound[dev] = kept
+		}
+	}
+	list := s.unbound[device]
+	for _, f := range list {
+		if f.id == id {
+			s.mu.Unlock()
+			return
+		}
+	}
+	if _, known := s.unbound[device]; !known && len(s.unbound) >= maxUnboundDevices {
+		var oldest [32]byte
+		var at time.Time
+		first := true
+		for dev, l := range s.unbound {
+			if last := l[len(l)-1].at; first || last.Before(at) {
+				oldest, at, first = dev, last, false
+			}
+		}
+		delete(s.unbound, oldest)
+	}
+	list = append(list, failure{id: id, at: now, node: node})
+	s.unbound[device] = list
+	start := false
+	if len(list) >= failThreshold {
+		delete(s.unbound, device)
+		kept := s.unboundAt[:0:0]
+		for _, t := range s.unboundAt {
+			if now.Sub(t) < time.Hour {
+				kept = append(kept, t)
+			}
+		}
+		s.unboundAt = kept
+		if len(kept) < unboundBudget {
+			s.unboundAt = append(s.unboundAt, now)
+			start = true
+		}
+	}
+	s.mu.Unlock()
+	if start {
+		reset := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Reset_{Reset_: &chatpb.Reset{}}}}
+		_, _ = s.enqueue(node, reset, true)
+	}
 }
 
 // invalidate drops the envelopes made for an account before its session was replaced: they cannot be

@@ -55,6 +55,7 @@ func (s *Service) addLocked(it *item) {
 	s.perPeer[it.To]++
 	if it.Receipt {
 		s.receipts[it.To]++
+		s.receiptN++
 	}
 	it.acct = it.size()
 	s.bytes += it.acct
@@ -70,6 +71,7 @@ func (s *Service) dropLocked(it *item) {
 		delete(s.perPeer, it.To)
 	}
 	if it.Receipt {
+		s.receiptN--
 		if s.receipts[it.To]--; s.receipts[it.To] <= 0 {
 			delete(s.receipts, it.To)
 		}
@@ -101,7 +103,8 @@ func (s *Service) admitLocked(it *item) bool {
 		s.perPeer[it.To] >= s.cfg.maxPerPeer(),
 		s.bytes+it.size() > s.cfg.maxBytes():
 		return false
-	case it.Receipt && s.receipts[it.To] >= MaxReceiptsPerPeer:
+	case it.Receipt && (s.receipts[it.To] >= MaxReceiptsPerPeer || s.receiptN >= s.cfg.maxOutbox()/2):
+		// receipts are at most half of the outbox: the rest is for the messages of the user
 		return false
 	}
 	return true

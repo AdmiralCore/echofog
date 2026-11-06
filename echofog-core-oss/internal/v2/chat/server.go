@@ -201,11 +201,15 @@ func (s *Server) Handle(ctx context.Context, p Peer, st Stream) {
 	// a stream and says nothing is closed after DeliverTimeout (services.md 4.1). It ends when the
 	// stream is closed.
 	frames := make(chan read)
+	done := make(chan struct{})
+	defer close(done) // the reader ends when Handle returns, whatever the context of the node
 	go func() {
 		for {
 			f, err := st.ReadFrame()
 			select {
 			case frames <- read{f, err}:
+			case <-done:
+				return
 			case <-ctx.Done():
 				return
 			}
