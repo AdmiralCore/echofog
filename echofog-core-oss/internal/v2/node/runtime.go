@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
@@ -166,6 +167,12 @@ type Runtime struct {
 	localInfo    carrier.LocalInfo
 	relayc       *relayClient
 
+	// rules is the country policy table; netClass the kind of the client's network (T6.4).
+	rules     *routepolicy.Rules
+	netClass  atomic.Uint32
+	routeMu   sync.Mutex
+	routeInfo map[DeviceID]RouteReport
+
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
@@ -295,7 +302,12 @@ func New(cfg Config) (*Runtime, error) {
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
 		background:   cfg.Profile.Background,
+		rules:        cfg.RoutePolicy,
 	}
+	if r.rules == nil {
+		r.rules = routepolicy.Default()
+	}
+	r.netClass.Store(uint32(cfg.NetClass))
 	r.hsSem = make(chan struct{}, maxHandshaking)
 	r.dgrams = newDatagramBroker(r)
 	r.accessMgr = cfg.Access
