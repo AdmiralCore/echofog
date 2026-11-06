@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/echofog/echofog-core/internal/v2/links"
+	"github.com/echofog/echofog-core/internal/v2/node"
 )
 
 const (
@@ -154,6 +155,10 @@ func UserMessage(err error) string {
 		return "Неверные параметры: проверьте сроки и число входов"
 	case errors.Is(err, ErrNoPass):
 		return "Такого пропуска нет"
+	case errors.Is(err, node.ErrNoDomesticEntry):
+		return "В вашей стране нет подходящего входного узла: подключение по этой сети невозможно"
+	case errors.Is(err, node.ErrRouteUnsupported):
+		return "Эта сеть пока не поддерживается без проверенного входного узла"
 	case errors.Is(err, ErrRunning):
 		return "Сеть уже запущена"
 	case errors.Is(err, links.ErrNotLink), errors.Is(err, links.ErrOtherVersion), errors.Is(err, links.ErrMismatch),
