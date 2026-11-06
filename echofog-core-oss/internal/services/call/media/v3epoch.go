@@ -172,7 +172,9 @@ type Sender3 struct {
 	batchers map[streamKind]*Batcher
 }
 
-// NewSender3 returns a sender. The join_salt is the one announced in the signed join.
+// NewSender3 returns a sender. The join_salt is the one announced in the signed join. The caller
+// MUST use a fresh join_salt (and gen) for every Sender3 of a device: a second Sender3 with the
+// same salt restarts seq at 0 under the same key and repeats nonces. A restart rejoins.
 func NewSender3(cfg Sender3Config) (*Sender3, error) {
 	if len(cfg.JoinSalt) != JoinSalt3Len || len(cfg.MediaPriv) != ed25519.PrivateKeySize ||
 		cfg.Epochs == nil || cfg.Now == nil {

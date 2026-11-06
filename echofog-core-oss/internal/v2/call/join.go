@@ -42,6 +42,7 @@ type JoinGuard struct {
 	mu      sync.Mutex
 	pending map[[32]byte]int
 	salts   map[saltKey]time.Time
+	perDev  map[[32]byte]int
 	order   []saltEntry // insertion order: the oldest first
 }
 
@@ -75,7 +76,10 @@ func NewJoinGuard(cfg JoinGuardConfig) *JoinGuard {
 	if cfg.MaxSalts == 0 {
 		cfg.MaxSalts = 4096
 	}
-	return &JoinGuard{cfg: cfg, pending: map[[32]byte]int{}, salts: map[saltKey]time.Time{}}
+	if cfg.MaxSaltsPerDevice == 0 {
+		cfg.MaxSaltsPerDevice = 64
+	}
+	return &JoinGuard{cfg: cfg, pending: map[[32]byte]int{}, salts: map[saltKey]time.Time{}, perDev: map[[32]byte]int{}}
 }
 
 // Admit accepts a verified join or refuses it with ErrJoinRefused. timestampMs is the signal's
@@ -122,18 +126,27 @@ func (g *JoinGuard) admit(callID string, device [32]byte, j *pb.Join, timestampM
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	// A pair is remembered for twice the window: after that its timestamp is stale anyway.
+	// A pair is remembered for twice the window: after that its timestamp is stale anyway. Only
+	// expired pairs are forgotten; a full table refuses new joins instead of dropping a live
+	// pair, which would let a flood of joins re-admit a replay.
 	retain := 2 * g.cfg.Window
-	for len(g.order) > 0 && (now.Sub(g.order[0].at) > retain || len(g.order) >= g.cfg.MaxSalts) {
+	for len(g.order) > 0 && now.Sub(g.order[0].at) > retain {
 		e := g.order[0]
 		g.order = g.order[1:]
-		if g.salts[e.key] == e.at {
+		if g.salts[e.key].Equal(e.at) {
 			delete(g.salts, e.key)
+			if g.perDev[e.key.device]--; g.perDev[e.key.device] <= 0 {
+				delete(g.perDev, e.key.device)
+			}
 		}
 	}
-	if at, ok := g.salts[k]; ok && now.Sub(at) <= retain {
+	if _, ok := g.salts[k]; ok {
 		return false
 	}
+	if len(g.salts) >= g.cfg.MaxSalts || g.perDev[device] >= g.cfg.MaxSaltsPerDevice {
+		return false
+	}
+	g.perDev[device]++
 	g.salts[k] = now
 	g.order = append(g.order, saltEntry{key: k, at: now})
 	return true
