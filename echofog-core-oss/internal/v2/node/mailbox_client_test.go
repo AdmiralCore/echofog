@@ -149,7 +149,9 @@ func TestMailboxClientThroughRealSessions(t *testing.T) {
 // F never dials a private address from a relay card the sender supplied.
 func TestForwardingRelayRefusesAPrivateRelayCard(t *testing.T) {
 	w := newMailboxWorld(t)
-	node.AllowRelayCardAddrs(func(ip netip.Addr) bool { return !ip.IsLoopback() && !ip.IsPrivate() })
+	// the addresses of the test cards are in the documentation range 203.0.113.0/24: refuse that one
+	doc := netip.MustParsePrefix("203.0.113.0/24")
+	node.AllowRelayCardAddrs(func(ip netip.Addr) bool { return !doc.Contains(ip) && !ip.IsLoopback() && !ip.IsPrivate() })
 	var (
 		got [][]byte
 		mu  sync.Mutex
