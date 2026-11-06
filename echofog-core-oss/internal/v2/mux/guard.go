@@ -35,6 +35,19 @@ func NewGuard(c Carrier) *Guard {
 	return g
 }
 
+// HoldConfig configures Guard.Hold.
+type HoldConfig struct {
+	MaxStreams int
+	For        time.Duration
+	After      func(d time.Duration, f func()) (stop func() bool)
+}
+
+// Hold is not implemented yet (T3.11 red stub).
+func (g *Guard) Hold(HoldConfig) {}
+
+// Held returns how many streams wait for the session.
+func (g *Guard) Held() int { return 0 }
+
 // Carrier returns the guarded carrier.
 func (g *Guard) Carrier() Carrier { return g.c }
 
