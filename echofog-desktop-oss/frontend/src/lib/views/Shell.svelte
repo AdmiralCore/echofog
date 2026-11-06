@@ -11,6 +11,7 @@
   import { view, focus } from '../stores/nav.js';
   import { anon, refreshAnon } from '../stores/anon.js';
   import { fly } from 'svelte/transition';
+  import { netStatus } from '../stores/net.js';
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import { displayName } from '../contact.js';
   import { bindSounds } from '../soundsBind.js';
@@ -66,17 +67,10 @@
   let poll;
   let width = 1200;
 
-  // the apps panel can be collapsed to a narrow icon rail; the choice is remembered
-  let navCollapsed = false;
-  try { navCollapsed = localStorage.getItem('echofog.navCollapsed') === '1'; } catch (_) {}
-  function toggleNav() {
-    navCollapsed = !navCollapsed;
-    try { localStorage.setItem('echofog.navCollapsed', navCollapsed ? '1' : '0'); } catch (_) {}
-  }
-
-  // narrow windows fold the panel to a rail, very narrow ones move it to a bottom tab bar
+  // the sections sit on a narrow icon rail (the space goes to the channels, the call and the chat);
+  // a very narrow window moves it to a bottom tab bar
   $: bottom = width < 640;
-  $: rail = !bottom && (navCollapsed || width < 980);
+  $: rail = !bottom;
   $: activeIndex = Math.max(0, views.findIndex((v) => v.id === $view));
   $: myName = ($displayName || '').trim() || $profile || $t('shell.me');
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
@@ -95,7 +89,7 @@
   $: statusText = net.status === 'ONLINE' ? $t('shell.peers', { n: net.peerCount }) : $t('shell.offline');
 
   async function refresh() {
-    try { net = await App.GetNetworkStatus(); } catch (_) { /* keep last */ }
+    try { net = await App.GetNetworkStatus(); netStatus.set(net); } catch (_) { /* keep last */ }
   }
 
   let offSounds = () => {};
@@ -143,11 +137,6 @@
       <div class="brand">
         <span class="mark" aria-hidden="true"><span></span></span>
         <span class="name">EchoFog</span>
-        {#if width >= 980}
-          <button class="collapse" title={navCollapsed ? $t('shell.expand') : $t('shell.collapse')} aria-label={navCollapsed ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} on:click={toggleNav}>
-            <Icon name={navCollapsed ? 'chevronRight' : 'chevronLeft'} size={15} />
-          </button>
-        {/if}
       </div>
     {/if}
 
@@ -250,16 +239,14 @@
   .shell.bottom { flex-direction: column-reverse; }
 
   nav {
-    width: 208px; flex: none; display: flex; flex-direction: column; gap: 2px;
+    width: 56px; flex: none; display: flex; flex-direction: column; gap: 2px;
     padding: 12px 8px 8px; background: var(--surface-1); border-right: 1px solid var(--border);
     overflow: hidden; position: relative; z-index: 2;
   }
-  nav:not(.bottom) { transition: width var(--dur-slow) var(--ease); }
-  nav.rail { width: 56px; }
 
   .brand { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 2px 0 6px; margin-bottom: 10px; white-space: nowrap; }
   .name { flex: 1; font-weight: var(--fw-bold); font-size: var(--fs-md); letter-spacing: -0.01em; transition: opacity var(--dur); }
-  nav.rail .name { opacity: 0; pointer-events: none; }
+  nav.rail .name { display: none; }
   .mark {
     width: 24px; height: 24px; border-radius: var(--r-md); flex: none; position: relative; overflow: hidden; background: var(--accent);
   }
@@ -268,14 +255,7 @@
     border: 2px solid var(--accent-ink); border-right-color: transparent; transform: rotate(-30deg);
   }
   .mark::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--accent-ink); left: 10px; top: 10px; }
-  .collapse {
-    width: var(--ctl-sm); height: var(--ctl-sm); padding: 0; border-radius: var(--r-md); flex: none; color: var(--faint);
-    display: grid; place-items: center; background: transparent; border: none;
-  }
-  .collapse:hover:not(:disabled) { color: var(--text); background: var(--hover); border: none; }
-  nav.rail .collapse { position: absolute; left: 50%; top: 50px; transform: translateX(-50%); opacity: 0; transition: opacity var(--dur); }
-  nav.rail:hover .collapse { opacity: 1; }
-  nav.rail .brand { margin-bottom: 28px; padding-left: 7px; }
+  nav.rail .brand { margin-bottom: 18px; padding-left: 7px; }
 
   .items { position: relative; display: flex; flex-direction: column; gap: 2px; }
   .indicator {
@@ -294,7 +274,7 @@
   .item.active .ic { color: var(--accent-fg); }
   .ic { position: relative; display: grid; place-items: center; flex: none; }
   .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; transition: opacity var(--dur); }
-  nav.rail .label { opacity: 0; }
+  nav.rail .label { display: none; }
   nav.rail .badge { display: none; }
   .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-2xs); font-weight: var(--fw-bold); display: inline-grid; place-items: center; }
   .pip {
@@ -325,7 +305,7 @@
   .presence { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--faint); border: 2px solid var(--surface-1); }
   .presence.on { background: var(--ok); }
   .who { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; transition: opacity var(--dur); }
-  nav.rail .who, nav.rail .theme .label { opacity: 0; }
+  nav.rail .who, nav.rail .theme .label { display: none; }
   .nm { color: var(--text); font-weight: var(--fw-semibold); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; }
   .st { font-size: var(--fs-xs); color: var(--faint); font-weight: var(--fw-regular); }
   .st.on { color: var(--ok-fg); }
