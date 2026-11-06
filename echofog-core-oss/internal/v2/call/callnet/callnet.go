@@ -170,7 +170,46 @@ func (t *Transport) RegisterFastFrameHandler(kind transport.Kind, h transport.Ha
 }
 
 // admitRate takes one token from the device's bucket.
-func (t *Transport) admitRate(device [32]byte) bool { return true }
+func (t *Transport) admitRate(device [32]byte) bool {
+	limit := float64(t.cfg.MaxPerSecond)
+	if limit <= 0 {
+		limit = DefaultMaxPerSecond
+	}
+	now := time.Now
+	if t.cfg.Now != nil {
+		now = t.cfg.Now
+	}
+	at := now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	b := t.rate[device]
+	if b == nil {
+		if len(t.rate) >= maxSources {
+			// Forget the device that has been quiet the longest.
+			var oldest [32]byte
+			var oldestAt time.Time
+			first := true
+			for d, x := range t.rate {
+				if first || x.at.Before(oldestAt) {
+					oldest, oldestAt, first = d, x.at, false
+				}
+			}
+			delete(t.rate, oldest)
+		}
+		b = &bucket{tokens: limit, at: at}
+		t.rate[device] = b
+	}
+	if el := at.Sub(b.at); el > 0 {
+		b.tokens = min(limit, b.tokens+limit*el.Seconds())
+		b.at = at
+	}
+	if b.tokens < 1 {
+		t.stats.DroppedRate++
+		return false
+	}
+	b.tokens--
+	return true
+}
 
 // Deliver hands a received datagram to the call layer. Media is dropped before the call layer
 // sees it when it arrived on a path kind the route forbids (call_route=relay accepts no media
