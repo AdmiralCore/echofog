@@ -131,6 +131,10 @@ type Config struct {
 	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
 	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
 	ShapeProfile *shape.Profile
+	// ExitShapeProfile is the shape profile of the exit address: the profile H1 pads the first
+	// records of every exit tunnel with (services.md §7). Nil takes the profile of the node's
+	// listeners; padding is never silently off.
+	ExitShapeProfile *shape.Profile
 	// PunchNet supplies the datagram side of hole punching (T6.2). Nil disables punching: sessions
 	// through a relay stay relayed.
 	PunchNet PunchNetwork
@@ -188,10 +192,13 @@ type Runtime struct {
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
 	modules     sync.Once
-	started     bool
-	stopped     bool
-	noCover     bool
-	startedAt   time.Time
+	// exitMu guards exitIdents, the per-exit client identities loaded in this run (T10.2).
+	exitMu     sync.Mutex
+	exitIdents map[DeviceID]*exitIdent
+	started    bool
+	stopped    bool
+	noCover    bool
+	startedAt  time.Time
 
 	// localMu guards localAddrs, which a network change may replace while sessions dial.
 	localMu    sync.RWMutex
@@ -577,6 +584,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
+		r.destroyExitIdentities()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
