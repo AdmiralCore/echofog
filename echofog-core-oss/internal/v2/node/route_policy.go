@@ -136,6 +136,20 @@ func (r *Runtime) applyRoutePolicy(card *objects.Card, attempts []carrier.Attemp
 	return kept, probeBudget, nil
 }
 
+// udpAllowedTo reports whether the country policy lets UDP go to ip; an unknown address counts as a
+// foreign one (the strictest reading). Hole punching is the one UDP use that begins in a relayed
+// session, so it asks here.
+func (r *Runtime) udpAllowedTo(ip netip.Addr) bool {
+	own := r.ownCountry()
+	dest := routepolicy.DestForeign
+	if ip.IsValid() {
+		if c, ok := r.Country(ip.Unmap()); ok {
+			dest = r.rules.Classify(own, c)
+		}
+	}
+	return r.rules.Decide(own, r.NetClass(), dest).UDP
+}
+
 // errProbeBudget ends a probe connection that used its byte budget.
 var errProbeBudget = errors.New("node: probe budget used")
 

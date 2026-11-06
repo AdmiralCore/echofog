@@ -160,7 +160,8 @@ func (r *Runtime) dialViaRelay(ctx context.Context, card *objects.Card, local se
 		}
 		return nil, relay.ErrNoRelay
 	}
-	co := relay.ConnectOptions{WantAddr: r.punchEnabled()}
+	punching := r.punchEnabled() && dec.UDP // the row of this peer may forbid UDP altogether (T6.4)
+	co := relay.ConnectOptions{WantAddr: punching}
 	target := card.NodeID
 	if len(local.AccessSecret) > 0 {
 		// A hidden or unlisted peer is registered under rendezvous IDs only (services.md §6.3).
@@ -181,7 +182,7 @@ func (r *Runtime) dialViaRelay(ctx context.Context, card *objects.Card, local se
 	c.lastRelay[card.DeviceID] = hop.Device
 	c.mu.Unlock()
 	r.noteRoute(card.DeviceID, dec, dest, keep != nil)
-	if r.punchEnabled() && est.Session.HasFeature(frame.FeaturePathMigration) {
+	if punching && est.Session.HasFeature(frame.FeaturePathMigration) {
 		var pa netip.AddrPort
 		if circ != nil {
 			pa = circ.PeerAddr()
@@ -223,7 +224,7 @@ func (c *relayClient) onIncoming(ctx context.Context, p relay.Peer, st *mux.Stre
 	}
 	in, err := relay.AnswerFrame(st, first, [32]byte(p.Node), nil, nil,
 		func(in relay.Incoming) bool { return in.Mode != relay.ModeDatagram },
-		func(relay.Incoming) bool { return r.punchEnabled() })
+		func(relay.Incoming) bool { return r.punchEnabled() && r.udpAllowedTo(netip.Addr{}) })
 	if err != nil || in.Stream == nil {
 		return
 	}
@@ -334,12 +335,16 @@ func (c *relayClient) allowed(ps *punchState) bool {
 		return false
 	}
 	rl := c.rules(ps)
-	if rl.PeerIP.IsValid() && rl.OwnIP.IsValid() && rl.PeerIP.Unmap() == rl.OwnIP.Unmap() {
-		return true
-	}
 	ip := rl.PeerIP
 	if !ip.IsValid() && len(rl.CardIPs) > 0 {
 		ip = rl.CardIPs[0]
+	}
+	// The country policy first: a row with udp=false forbids punching even behind one NAT.
+	if !r.udpAllowedTo(ip) {
+		return false
+	}
+	if rl.PeerIP.IsValid() && rl.OwnIP.IsValid() && rl.PeerIP.Unmap() == rl.OwnIP.Unmap() {
+		return true
 	}
 	if !ip.IsValid() {
 		return false
@@ -367,7 +372,7 @@ func (c *relayClient) onPunch(sess *mux.Session, f frame.Frame) {
 	ps := c.engines[sess]
 	c.mu.Unlock()
 	if ps == nil {
-		if !c.r.punchEnabled() {
+		if !c.r.punchEnabled() || !c.r.udpAllowedTo(netip.Addr{}) {
 			return
 		}
 		est := c.r.estOf(sess)

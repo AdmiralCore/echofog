@@ -305,6 +305,11 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 			attempts = carrier.Plan(card, r.localInfo)
 		}
 		attempts = r.pathAttempts(est, attempts)
+		// A new path is a new direct dial: the country policy applies to it as to the first one.
+		var perr error
+		if attempts, _, perr = r.applyRoutePolicy(card, attempts, false); perr != nil {
+			return 0, perr
+		}
 		if len(attempts) == 0 {
 			return 0, fmt.Errorf("%w: %s", ErrNoRoute, est.Peer.DeviceID)
 		}
