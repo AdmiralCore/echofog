@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
@@ -19,6 +20,9 @@ const devicesKey = "devices"
 // deviceListRenewBefore is how long before the end of its lifetime the device list is issued
 // again (objects.md §6: republished when less than 10 days remain).
 const deviceListRenewBefore = 10 * 24 * time.Hour
+
+// ErrNotListed is PublishOwn on a node without a public listing (see listed).
+var ErrNotListed = errors.New("node: the node is not publicly listed, nothing of it goes into the DHT")
 
 // ErrNotOwnRecord is a record PublishOwn refuses: not signed by this node's device (or, for
 // devices/2, by its account) or not one of the labels a node publishes about itself.
@@ -35,6 +39,9 @@ type ownDevices struct {
 // signed by another key and any card that is not public is refused, so a service cannot put a
 // peer card (it carries the noise3 masking keys) or somebody else's record into the DHT.
 func (r *Runtime) PublishOwn(raw []byte) error {
+	if !r.listed() {
+		return ErrNotListed
+	}
 	env, err := objects.Verify(raw, r.clock.Now())
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrNotOwnRecord, err)
@@ -103,4 +110,17 @@ func (r *Runtime) currentDeviceList(now time.Time) ([]byte, error) {
 	}
 	d.raw = raw
 	return raw, nil
+}
+
+// listed reports whether the node has a public listing: a visible node with a public card.
+// dht.md §7: records of hidden or unlisted nodes are never published; that includes the device
+// list, which would tie the node ID to the device key, and the hints of a node nobody may find.
+// Hidden and anonymous nodes and a visible node without a camouflaged listener (D37) are not
+// listed. Visibility is read from the card builder each time, so a change takes effect at once.
+func (r *Runtime) listed() bool {
+	if r.cfg.Cards.Visibility() != cards.Visible {
+		return false
+	}
+	_, ok := r.cards.Own(objects.ScopePublic)
+	return ok
 }

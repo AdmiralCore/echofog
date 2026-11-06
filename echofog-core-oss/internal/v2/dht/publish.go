@@ -169,8 +169,19 @@ func (c *Client) Pending() int {
 
 // WithdrawAll forgets every registered record: a node that stopped being listed must not store
 // them again (dht.md §7). Records already stored expire by themselves.
-func (c *Client) WithdrawAll() {}
+func (c *Client) WithdrawAll() {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	clear(c.pubs)
+}
 
 // PublishNow makes every registered record due at the next Step, also after a failed attempt
 // that is waiting for its retry (for example when the routing table was empty at start-up).
-func (c *Client) PublishNow() {}
+func (c *Client) PublishNow() {
+	now := c.now()
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	for _, p := range c.pubs {
+		p.next = now
+	}
+}

@@ -195,6 +195,14 @@ const DHTMemoryNamespace = "v2/dht/seen"
 // hidden one, has none: D37). Other records (prekeys, mailbox hints) are registered by their owners
 // with PublishOwn.
 func (r *Runtime) ownDHTRecords() [][]byte {
+	if !r.listed() {
+		// Nothing of an unlisted node is stored, and what was registered while it was listed is
+		// forgotten (dht.md §7).
+		if cl := r.DHT(); cl != nil {
+			cl.WithdrawAll()
+		}
+		return nil
+	}
 	var out [][]byte
 	if dl, err := r.currentDeviceList(r.clock.Now()); err != nil {
 		r.log.Warn("node: device list for the DHT", "err", err)
