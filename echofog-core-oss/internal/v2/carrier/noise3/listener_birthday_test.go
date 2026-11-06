@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
 
@@ -81,5 +82,34 @@ func TestSiblingDialsAndAccepts(t *testing.T) {
 	}
 	if err := <-acc2; err != nil {
 		t.Fatalf("sibling Accept: %v", err)
+	}
+}
+
+// An accepted carrier reports the outer address of its peer: the relay needs it for PEER_ADDR
+// (services.md §6.4 step 1); the inner QUIC only knows the virtual flow address.
+func TestAcceptedCarrierReportsTheOuterAddress(t *testing.T) {
+	a, _, _ := startNoise3(t)
+	b, card, addr := startNoise3(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	acc := make(chan mux.Carrier, 1)
+	go func() { c, _ := b.Accept(ctx); acc <- c }()
+	if _, err := a.DialFrom(ctx, DialerConfig{}, carrier.DialRequest{Card: card, Addr: addr}, 24); err != nil {
+		t.Fatal(err)
+	}
+	c := <-acc
+	if c == nil {
+		t.Fatal("no carrier accepted")
+	}
+	r, ok := c.(interface{ RemoteAddr() net.Addr })
+	if !ok {
+		t.Fatal("the accepted carrier has no RemoteAddr")
+	}
+	got, err := netip.ParseAddrPort(r.RemoteAddr().String())
+	if err != nil {
+		t.Fatalf("RemoteAddr %q: %v", r.RemoteAddr(), err)
+	}
+	if want := a.Addr().(*net.UDPAddr).AddrPort(); got.Port() != want.Port() {
+		t.Fatalf("RemoteAddr %v, want the dialing socket %v", got, want)
 	}
 }
