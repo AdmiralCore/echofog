@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/testbed/censor"
+	"github.com/echofog/echofog-core/testbed/probe"
 )
 
 // aggregate is the censor's summary over the product and carrier flows.
@@ -89,6 +90,10 @@ type reportV2 struct {
 	Pcap            pcapInfo                         `json:"pcap"`
 	Flows           flowCounts                       `json:"flows"`
 	Findings        []string                         `json:"findings"`
+
+	V2Gate *censor.V2GateResult `json:"v2_gate,omitempty"`
+	H1a    *censor.H1aResult    `json:"h1a,omitempty"`
+	Probes []probe.Report       `json:"probes,omitempty"`
 }
 
 type reportInput struct {
@@ -107,6 +112,10 @@ type reportInput struct {
 	Pcap            pcapInfo
 	Flows           flowCounts
 	Findings        []string
+
+	V2Gate *censor.V2GateResult
+	H1a    *censor.H1aResult
+	Probes []probe.Report
 }
 
 func buildReport(in reportInput) reportV2 {
@@ -125,6 +134,7 @@ func buildReport(in reportInput) reportV2 {
 		Phases: in.Phases, Detectors: in.Detectors, Aggregate: in.Aggregate, Coverage: in.Coverage,
 		Behaviour: in.Behaviour, Resources: in.Resources, Carrier: in.Carrier,
 		BrowserProfiles: in.BrowserProfiles, Pcap: in.Pcap, Flows: in.Flows, Findings: in.Findings,
+		V2Gate: in.V2Gate, H1a: in.H1a, Probes: in.Probes,
 	}
 }
 
