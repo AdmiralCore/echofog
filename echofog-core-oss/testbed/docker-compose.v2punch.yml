@@ -1,0 +1,112 @@
+# Lab of the v2 birthday punch (T6.7), the v2 twin of `-scenario birthday`:
+#
+#   wan 203.0.113.0/24   the "Internet": relay r1 and the outsides of two routers
+#   lan_a  behind gw_a, port-restricted cone NAT                          node a1
+#   lan_b  behind gw_b, symmetric NAT whose ports come from one block     node b1
+#
+# b1 keeps a session with the relay r1; a1 reaches b1 through r1 and the punch engines then try a
+# direct noise3 path. The ordinary punch cannot reach b1 (a new outside port per destination);
+# birthday punching can. Run it with testbed/v2punch/run.sh.
+x-image: &image
+  image: efpunch-lab
+  build:
+    context: ..
+    dockerfile: testbed/Dockerfile
+
+x-gateway: &gateway
+  <<: *image
+  cap_add: [NET_ADMIN]
+  sysctls:
+    net.ipv4.ip_forward: "1"
+  restart: "no"
+  stop_grace_period: 1s
+
+x-node: &node
+  <<: *image
+  cap_add: [NET_ADMIN]
+  restart: "no"
+  stop_grace_period: 3s
+  volumes: [shared:/shared]
+
+volumes:
+  shared:
+
+networks:
+  wan:
+    driver: bridge
+    driver_opts: { com.docker.network.bridge.gateway_mode_ipv4: nat-unprotected }
+    ipam:
+      config: [{ subnet: 203.0.113.0/24 }]
+  lan_a:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.20.1.0/24 }]
+  lan_b:
+    driver: bridge
+    ipam:
+      config: [{ subnet: 10.20.2.0/24 }]
+
+services:
+  gw_a:
+    <<: *gateway
+    container_name: efpunch-gw_a
+    environment: { ROLE: gateway, NAT: cone }
+    networks:
+      wan: { ipv4_address: 203.0.113.21 }
+      lan_a: { ipv4_address: 10.20.1.2 }
+  gw_b:
+    <<: *gateway
+    container_name: efpunch-gw_b
+    environment: { ROLE: gateway, NAT: "${NAT_B:-symmetric-narrow}", PORTBLOCK: "${PORTBLOCK_B:-40000-40999}" }
+    networks:
+      wan: { ipv4_address: 203.0.113.22 }
+      lan_b: { ipv4_address: 10.20.2.2 }
+
+  r1:
+    <<: *node
+    container_name: efpunch-r1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        efv2 init --data /data --profile server >/tmp/init.log 2>&1
+        efv2 run --data /data --listen noise3=203.0.113.50:4433 >/tmp/run.log 2>&1 &
+        until [ -f /data/efv2-cards/peer.json ]; do sleep 0.5; done
+        cp /data/efv2-cards/peer.json /shared/r1.json
+        wait
+    networks: { wan: { ipv4_address: 203.0.113.50 } }
+
+  # b1: behind the symmetric router; keeps a session with r1 and publishes its card
+  b1:
+    <<: *node
+    container_name: efpunch-b1
+    environment:
+      EFV2_PUNCH: "1"
+      EFV2_PUBLIC_IP: 203.0.113.22
+      EFV2_NAT: "symmetric:${PORTBLOCK_B_RANGE:-40000-40999}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ip route replace default via 10.20.2.2
+        efv2 init --data /data --profile desktop >/tmp/init.log 2>&1
+        until [ -f /shared/r1.json ]; do sleep 0.5; done
+        efv2 run --data /data --listen noise3=10.20.2.21:4433 --join /shared/r1.json >/tmp/run.log 2>&1 &
+        until [ -f /data/efv2-cards/peer.json ]; do sleep 0.5; done
+        cp /data/efv2-cards/peer.json /shared/b1.json
+        wait
+    networks: { lan_b: { ipv4_address: 10.20.2.21 } }
+
+  # a1: behind the cone router; the script runs `efv2 dial` in it
+  a1:
+    <<: *node
+    container_name: efpunch-a1
+    environment:
+      EFV2_PUNCH: "1"
+      EFV2_PUBLIC_IP: 203.0.113.21
+      EFV2_NAT: cone
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ip route replace default via 10.20.1.2
+        efv2 init --data /data --profile desktop >/tmp/init.log 2>&1
+        exec sleep infinity
+    networks: { lan_a: { ipv4_address: 10.20.1.11 } }
