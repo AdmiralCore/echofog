@@ -216,3 +216,43 @@ func (c *counterReader) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+func TestSenderStopsBeforeSeqWraps(t *testing.T) {
+	clk := newFakeClock()
+	ek := NewEpochKeys(clk.Now)
+	ek.Install(0, testKey(1), time.Time{})
+	priv, _ := testMediaKey(1)
+	s, err := NewSender3(Sender3Config{JoinSalt: make([]byte, 16), MediaPriv: priv, Epochs: ek, Now: clk.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.seq[streamKind{0, Kind3Audio}] = ^uint32(0)
+	// a wrapped seq would reuse a nonce under the same key: the sender refuses and a rejoin
+	// (new join_salt, new key) is needed.
+	if _, err := s.Send(Kind3Audio, 0, 0, []byte("x")); !errors.Is(err, ErrSeqExhausted) {
+		t.Fatalf("send at seq 2^32-1: %v, want ErrSeqExhausted", err)
+	}
+}
+
+func TestSenderKeyFollowsReinstalledEpochNumber(t *testing.T) {
+	// epoch is one byte and wraps after 256 rotations: the same number may carry another secret.
+	clk := newFakeClock()
+	ek := NewEpochKeys(clk.Now)
+	priv, _ := testMediaKey(1)
+	dev := [32]byte{4}
+	salt := bytes.Repeat([]byte{6}, 16)
+	s, _ := NewSender3(Sender3Config{Device: dev, JoinSalt: salt, MediaPriv: priv, Epochs: ek, Now: clk.Now})
+	ek.Install(7, testKey(1), time.Time{})
+	s.Send(Kind3Audio, 0, 0, []byte("a"))
+	clk.Advance(time.Minute)
+	ek.Install(7, testKey(2), time.Time{})
+	sent, err := s.Send(Kind3Audio, 0, 0, []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := DecodeFragment3(sent.Fragments[0])
+	want, _ := SenderKey3(testKey(2), dev, salt)
+	if _, err := Open3(f.Header, want, f.Payload); err != nil {
+		t.Fatalf("unit sealed under a stale key: %v", err)
+	}
+}

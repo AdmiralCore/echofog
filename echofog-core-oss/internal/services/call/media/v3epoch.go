@@ -12,6 +12,9 @@ import (
 // ErrNoEpoch is returned to a sender that has no current epoch secret: it MUST NOT send media.
 var ErrNoEpoch = errors.New("media v3: no epoch secret")
 
+// ErrSeqExhausted is returned when the next seq would wrap: the nonce would repeat under one key.
+var ErrSeqExhausted = errors.New("media v3: sequence numbers exhausted, rejoin")
+
 // EpochGrace3 is how long the previous epoch secret stays valid after a switch.
 const EpochGrace3 = 5 * time.Second
 
