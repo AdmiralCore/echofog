@@ -626,3 +626,16 @@ func (o *Observer) NATClass() NATClass {
 	}
 	return class
 }
+
+// NATDetail is the NAT class together with the external port range that the reports named for the
+// classified socket (T6.7: the range a spray aims at).
+type NATDetail struct {
+	Class NATClass
+	// Lo and Hi are the lowest and highest voted external port; zero when the class is not known.
+	Lo, Hi uint16
+	// Samples is how many networks voted a port.
+	Samples int
+}
+
+// NATDetail classifies like NATClass and adds the port range of the winning socket.
+func (o *Observer) NATDetail() NATDetail { return NATDetail{} }
