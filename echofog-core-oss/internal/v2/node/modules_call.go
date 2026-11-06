@@ -171,7 +171,7 @@ func (r *Runtime) initCallTransport() {
 }
 
 func (r *Runtime) startCallMedia() {
-	port := r.Datagrams(frame.DgramCallAudio, frame.DgramCallVideo)
+	port := r.Datagrams(frame.DgramCallAudio, frame.DgramCallVideo, frame.DgramCallAuth)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()

@@ -165,7 +165,7 @@ func TestDeliverRoutesByTypeAndKnowsTheSender(t *testing.T) {
 	tr.Deliver(Inbound{Device: dev(4), Type: frame.DgramCallAudio, Payload: []byte("a"), Path: mux.PathDirect})
 	tr.Deliver(Inbound{Device: dev(5), Type: frame.DgramCallVideo, Payload: []byte("v"), Path: mux.PathRelay})
 	tr.Deliver(Inbound{Device: dev(6), Type: frame.DgramCallSignal, Payload: []byte("s"), Path: mux.PathRelay})
-	tr.Deliver(Inbound{Device: dev(7), Type: frame.DgramCallAuth, Payload: []byte("?"), Path: mux.PathRelay})
+	tr.Deliver(Inbound{Device: dev(7), Type: 0x14, Payload: []byte("?"), Path: mux.PathRelay})
 	if len(got) != 3 || got[0] != "a@4" || got[1] != "v@5" || got[2] != "s@6" {
 		t.Fatalf("%v", got)
 	}
@@ -306,7 +306,7 @@ func TestCallAuthIsMediaForRouteAdmitAndRate(t *testing.T) {
 	rx.RegisterFastFrameHandler(transport.MediaAuth, func([]byte, types.PeerID) error { n++; return nil })
 	rx.Deliver(Inbound{Device: dev(4), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathRelay})
 	rx.Deliver(Inbound{Device: dev(4), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathDirect}) // forbidden kind
-	rx.Deliver(Inbound{Device: dev(8), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathRelay}) // stranger
+	rx.Deliver(Inbound{Device: dev(8), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathRelay})  // stranger
 	if n != 1 {
 		t.Fatalf("%d authenticators reached the call layer, want 1; stats %+v", n, rx.Stats())
 	}

@@ -134,6 +134,8 @@ func (t *Transport) SendUnreliableFrame(peer types.PeerID, kind transport.Kind, 
 		typ = frame.DgramCallAudio
 	case transport.MediaVideo:
 		typ = frame.DgramCallVideo
+	case transport.MediaAuth:
+		typ = frame.DgramCallAuth
 	case transport.SignalLossy:
 		return t.signal(peer, true, payload)
 	default:
@@ -225,6 +227,8 @@ func (t *Transport) Deliver(in Inbound) {
 		kind, isMedia = transport.MediaAudio, true
 	case frame.DgramCallVideo:
 		kind, isMedia = transport.MediaVideo, true
+	case frame.DgramCallAuth:
+		kind, isMedia = transport.MediaAuth, true
 	case frame.DgramCallSignal:
 		kind = transport.SignalLossy
 	default:
