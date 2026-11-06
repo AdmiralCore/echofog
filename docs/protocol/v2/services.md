@@ -456,6 +456,11 @@ kind(u8) ‖ epoch(u8) ‖ sender(u8) ‖ stream(u8) ‖ gen(u8) ‖ seq(u32) �
   media until it has received the current epoch secret after its (re)join.
 - A unit is `ciphertext ‖ tag` (the nonce comes from the header and is not sent), split into at most 16
   fragments.
+- **The `frag_idx` byte.** Bits 0–3 are the fragment index (0–15, since `frag_count ≤ 16`). Bit 7 flags a
+  hop cap and bits 4–6 hold its value. The hop cap is a hop-local label: each hop removes it on arrival,
+  before any XOR or check, and sets its own on departure. It is not authenticated; a receiver only reads it.
+  A false cap from a relay is no worse than the relay's ability to cut layers. The cap bits are outside
+  `header_i` and the AAD, so they never change a tag.
 
 ### 9.3 Batched source authentication
 
@@ -477,6 +482,9 @@ sig = Ed25519(media_key, "echofog/call2/batch" ‖ all bytes of CALL_AUTH before
 ```
 
 `prev_count` hashes of the **previous** batch come first, then the `count` hashes of this one.
+
+`header_i` is the unit header: the fields `kind` through `ts`, that is everything before `frag_idx`. These
+are the same bytes as the AAD of §9.2.
 
 - **Redundancy.** Each CALL_AUTH also covers the previous batch, so every unit is authenticated by two
   consecutive authenticators: losing one CALL_AUTH loses nothing. Receivers and relays may NACK a
@@ -508,6 +516,14 @@ sig = Ed25519(media_key, "echofog/call2/batch" ‖ all bytes of CALL_AUTH before
   On every join, leave or kick the coordinator draws a new random epoch secret, sends it to each
   participant over its end-to-end session, and switches `uniform(1.5, 2.5)` s later; a kicked member
   never receives it.
+- **Epoch-scoped indices.** `sender` and the other manifest indices are meaningful only within one epoch.
+  Within an epoch participants keep their indices. A new manifest with different indices is introduced only
+  together with a change of epoch, which already happens on every join, leave or kick. A unit and a
+  CALL_AUTH are read against the manifest of the epoch named in their own header. A receiver keeps the
+  previous epoch's manifest map for 5 s after its switch. A batch never crosses an epoch change: at the
+  switch the sender closes its current batch and sends its CALL_AUTH before the first unit of the new epoch.
+  `gen` distinguishes a re-entry of the same sender within the same epoch; with the per-join `join_salt`
+  it keeps keys and nonces apart (§9.2).
 - NACK retransmissions have a budget per child (at most 2× the child's recent receive rate); claimed
   relay capacity is capped by measured upload (P1).
 - Later: MLS epochs (`mls`), SFrame-style headers, a constant-rate shaping profile for calls (P9), a
