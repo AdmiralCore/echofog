@@ -213,7 +213,17 @@ func check(e *Event) error {
 	return nil
 }
 
-// Decode parses and verifies an encoded event.
+// KnownKind reports whether this build has a view of events of kind k.
+func KnownKind(k uint32) bool {
+	switch k {
+	case KindMsg, KindEdit, KindDelete, KindReact, KindPin, KindMember, KindChannel, KindThread, KindProfile:
+		return true
+	}
+	return false
+}
+
+// Decode parses and verifies an encoded event. The fields it does not know stay in the event (they
+// are kept and forwarded), up to MaxUnknownFields: past that the event is refused whole.
 func Decode(raw []byte) (*Event, EventID, error) {
 	if len(raw) > MaxEventSize {
 		return nil, EventID{}, errors.New("event too large")
@@ -221,6 +231,9 @@ func Decode(raw []byte) (*Event, EventID, error) {
 	var e Event
 	if err := proto.Unmarshal(raw, &e); err != nil {
 		return nil, EventID{}, err
+	}
+	if len(e.ProtoReflect().GetUnknown()) > MaxUnknownFields {
+		return nil, EventID{}, errors.New("too many unknown fields")
 	}
 	if err := check(&e); err != nil {
 		return nil, EventID{}, err

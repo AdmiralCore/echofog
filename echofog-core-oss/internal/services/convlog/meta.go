@@ -64,6 +64,9 @@ type Meta struct {
 	// membership event at or below it may change what that event was allowed to do.
 	HeldLamport uint64 `json:"held_lamport,omitempty"`
 
+	// Unknown counts, per author, the events of kinds this build does not know that were taken.
+	Unknown map[string]uint32 `json:"unknown,omitempty"`
+
 	// Chans: a group's channels other than the main one, where each ends and where its reader is.
 	Chans map[string]*ChanStat `json:"chans,omitempty"`
 }

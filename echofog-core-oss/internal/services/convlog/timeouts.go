@@ -88,7 +88,7 @@ func muted(r Rights) Rights {
 
 // timedOutKind: the kinds of event a timeout refuses (deleting one's own messages stays).
 func timedOutKind(k uint32) bool {
-	return k == KindMsg || k == KindEdit || k == KindReact || k == KindPin || k == KindThread
+	return k == KindMsg || k == KindEdit || k == KindReact || k == KindPin || k == KindThread || !KnownKind(k)
 }
 
 // AppendTimeout keeps member (identity key) from writing in a group until until (unix seconds; a

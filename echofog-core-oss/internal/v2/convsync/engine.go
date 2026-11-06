@@ -276,7 +276,8 @@ func (e *Engine) passOn(ctx context.Context, c convlog.Conv, from [32]byte, raw 
 	if len(members) <= MeshLimit {
 		return // the author sent it to everybody
 	}
-	key := string(raw)
+	sum := sha256.Sum256(raw)
+	key := string(sum[:])
 	e.mu.Lock()
 	if e.passed[key] {
 		e.mu.Unlock()
@@ -347,23 +348,14 @@ type Stub struct {
 	lamport uint64
 }
 
-func knownKind(k uint32) bool {
-	switch k {
-	case convlog.KindMsg, convlog.KindEdit, convlog.KindDelete, convlog.KindReact, convlog.KindPin,
-		convlog.KindMember, convlog.KindChannel, convlog.KindThread, convlog.KindProfile:
-		return true
-	}
-	return false
-}
-
 // Stubs lists the events of c whose kind this build does not know, in log order. The log keeps them
 // (and counts them in its version vector and digest) but has no view of them.
 func (e *Engine) Stubs(c convlog.Conv) []Stub {
 	var out []Stub
 	for _, raw := range e.log.Export(c, 64<<20) {
 		ev, id, err := convlog.Decode(raw)
-		if err != nil || knownKind(ev.Kind) {
-			continue
+		if err != nil || convlog.KnownKind(ev.Kind) || !e.log.Accepted(c, id) {
+			continue // known, or refused: nobody sees a stub of what the author had no right to write
 		}
 		var author [32]byte
 		copy(author[:], ev.Author)
@@ -377,5 +369,3 @@ func (e *Engine) Stubs(c convlog.Conv) []Stub {
 	})
 	return out
 }
-
-var _ = sha256.Size
