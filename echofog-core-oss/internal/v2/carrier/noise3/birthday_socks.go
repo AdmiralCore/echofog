@@ -190,3 +190,11 @@ func (c *sibCarrier) Close() error {
 	c.once.Do(func() { _ = c.sib.Close() })
 	return err
 }
+
+// RemoteAddr passes the outer address of the peer through, when the wrapped carrier has one.
+func (c *sibCarrier) RemoteAddr() net.Addr {
+	if r, ok := c.Carrier.(interface{ RemoteAddr() net.Addr }); ok {
+		return r.RemoteAddr()
+	}
+	return flowAddr{}
+}

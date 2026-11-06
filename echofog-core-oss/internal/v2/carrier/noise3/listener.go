@@ -268,10 +268,32 @@ func (l *Listener) Accept(ctx context.Context) (mux.Carrier, error) {
 	if err != nil {
 		return nil, err
 	}
+	var id uint64
 	if a, ok := conn.RemoteAddr().(flowAddr); ok {
+		id = a.id
 		l.confirmFlow(a.id)
 	}
-	return quicx.WrapNoise3(conn, false), nil
+	return &acceptedCarrier{Carrier: quicx.WrapNoise3(conn, false), l: l, id: id}, nil
+}
+
+// acceptedCarrier adds the outer address of the peer to an accepted carrier: the inner QUIC sees only
+// the virtual flow address, but the relay reports the peer address (PEER_ADDR) from it.
+type acceptedCarrier struct {
+	mux.Carrier
+	l  *Listener
+	id uint64
+}
+
+// RemoteAddr is the current outer source address of the flow (it follows a NAT rebinding), or nil
+// the virtual flow address once the flow is gone.
+func (c *acceptedCarrier) RemoteAddr() net.Addr {
+	c.l.mu.Lock()
+	f := c.l.byVAddr[c.id]
+	c.l.mu.Unlock()
+	if f == nil {
+		return flowAddr{id: c.id}
+	}
+	return net.UDPAddrFromAddrPort(f.address())
 }
 
 // Addr returns the bound UDP address.
