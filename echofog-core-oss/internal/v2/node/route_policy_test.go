@@ -18,6 +18,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/punch"
 	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
 	"github.com/echofog/echofog-core/internal/v2/service"
 )
@@ -83,6 +84,9 @@ type routeOpts struct {
 	bCover  bool
 	hook    func(req carrier.DialRequest)
 	dialCtx func(context.Context, string, string) (net.Conn, error)
+	// features turns path-migration on for A and B; punchNet is A's hole-punching network.
+	features bool
+	punchNet node.PunchNetwork
 }
 
 type routeWorld struct {
@@ -112,9 +116,19 @@ func newRouteWorld(t *testing.T, o routeOpts) *routeWorld {
 		c.Registry, c.Country = reg, routeCountry
 		c.NetClass, c.RoutePolicy = o.net, o.rules
 		c.DialContext = o.dialCtx
+		if o.features {
+			pathFeatures(c)
+		}
+		if o.punchNet != nil {
+			c.PunchNet = o.punchNet
+		}
 		c.Profile.LocalAddrs = func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("198.51.100.9")} }
 	})
-	b := newTestNodeFull(t, cards.Visible, o.bCover, []carrier.Listener{bq}, nil, o.bMutate, nil)
+	b := newTestNodeFull(t, cards.Visible, o.bCover, []carrier.Listener{bq}, nil, o.bMutate, func(c *node.Config) {
+		if o.features {
+			pathFeatures(c)
+		}
+	})
 	mod := &fakeModule{got: make(chan node.Peer, 4), errs: make(chan error, 4)}
 	registerFakeModule(t, b.rt, mod)
 	registerFakeModule(t, a.rt, &fakeModule{got: make(chan node.Peer, 4), errs: make(chan error, 4)})
@@ -310,5 +324,64 @@ func TestSetNetClass(t *testing.T) {
 	w.a.rt.SetNetClass(rp.NetMobile)
 	if w.a.rt.NetClass() != rp.NetMobile {
 		t.Fatal("SetNetClass")
+	}
+}
+
+// H1: a new path of a live session (AddPath, a network change) goes through the same policy as the
+// first dial: from a Russian mobile network no direct carrier to the foreign address is opened.
+func TestPathsOfALiveSessionHonourThePolicy(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{net: rp.NetMobile, rules: entryRules(t, "198.51.100.0/24"), bCover: true, features: true})
+	if _, err := w.open(t, node.DialOpt{}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	foreign := func(c dialCall) bool { return strings.HasPrefix(c.host, "203.0.113.") }
+	if _, err := w.a.rt.AddPath(w.ctx, w.b.id.DeviceID, node.DialOpt{Card: w.b.peerCard(t)}); err == nil {
+		t.Fatal("AddPath opened a direct path to the foreign address")
+	}
+	_ = w.a.rt.NetworkChanged(w.ctx, node.DialOpt{Card: w.b.peerCard(t)})
+	if n := w.log.count(foreign); n != 0 {
+		t.Fatalf("%d direct dials to the foreign address for new paths, want none", n)
+	}
+}
+
+// countingPunch records every use of the hole-punching network.
+type countingPunch struct {
+	mu   sync.Mutex
+	uses int
+}
+
+func (c *countingPunch) use() { c.mu.Lock(); c.uses++; c.mu.Unlock() }
+
+func (c *countingPunch) Net(node.DeviceID, punch.Role) punch.Net {
+	c.use()
+	return countingPunchNet{c}
+}
+
+func (c *countingPunch) count() int { c.mu.Lock(); defer c.mu.Unlock(); return c.uses }
+
+type countingPunchNet struct{ c *countingPunch }
+
+func (n countingPunchNet) OwnAddrs() []netip.AddrPort {
+	n.c.use()
+	return []netip.AddrPort{netip.MustParseAddrPort("198.51.100.9:50000")}
+}
+func (n countingPunchNet) SendJunk(netip.AddrPort, []byte) error { n.c.use(); return nil }
+func (n countingPunchNet) Dial(context.Context, []netip.AddrPort, int) (mux.Carrier, error) {
+	n.c.use()
+	return nil, errors.New("no network")
+}
+
+// H2: the row of a Russian mobile network towards abroad says udp=false, so the relayed session
+// starts no hole punching at all: the punching network is never used.
+func TestNoHolePunchingWhereThePolicyDeniesUDP(t *testing.T) {
+	pn := &countingPunch{}
+	w := newRouteWorld(t, routeOpts{net: rp.NetMobile, rules: entryRules(t, "198.51.100.0/24"), bCover: true,
+		features: true, punchNet: pn})
+	if _, err := w.open(t, node.DialOpt{}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	if n := pn.count(); n != 0 {
+		t.Fatalf("the punching network was used %d times from a network where UDP is denied", n)
 	}
 }
