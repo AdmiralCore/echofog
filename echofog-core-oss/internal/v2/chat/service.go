@@ -15,6 +15,7 @@ import (
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
 	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/keys"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/store"
 	"google.golang.org/protobuf/proto"
@@ -95,6 +96,8 @@ type ServiceConfig struct {
 	Store  store.KV
 	Now    func() time.Time
 	Events Events
+	// MailDir remembers the queues contacts announce (Control.mailbox); nil ignores announcements.
+	MailDir MailDirectory
 	// NoJitter turns the +-20 % of the retry pauses off (tests, AD13).
 	NoJitter bool
 
@@ -873,3 +876,18 @@ func (s *Service) invalidate(node [32]byte) {
 		}
 	}
 }
+
+// AnnounceQueue tells a contact where this node receives mail while away (services.md 5.2). It is
+// sent as an end-to-end message like any other, and again whenever the queue rotates.
+func (s *Service) AnnounceQueue(to [32]byte, q mailbox.QueueRef, card []byte) error {
+	return errNotImplemented
+}
+
+// ReceiveItem handles an envelope taken from a mailbox queue and says whether the item may be
+// acknowledged: true once the envelope was handled or can never be, false when handling failed for a
+// reason that may pass (a lookup that failed), so that the relay keeps the item.
+func (s *Service) ReceiveItem(ctx context.Context, envelope []byte) bool { return false }
+
+// Expires says when an outgoing message that is not delivered by then is given up: seven days after it
+// was queued, or after it was handed to a mailbox.
+func (s *Service) Expires(id [16]byte) (time.Time, bool) { return time.Time{}, false }
