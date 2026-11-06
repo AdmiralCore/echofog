@@ -99,10 +99,7 @@ func (r *Runtime) registerChat() {
 		mailDir = &chat.KVMailDirectory{KV: r.cfg.Store.Store("v2/chat/mail"), IDs: ids}
 		cfg.MailDir = mailDir
 		sender = &mailbox.Sender{Dial: mailboxDialer{r: r, opts: func(device [32]byte) DialOpt {
-			if f := r.mailboxClientOpts; f != nil {
-				return f(device)
-			}
-			return DialOpt{}
+			return r.clientDialOpt(device)
 		}}}
 		if cfg.Mail == nil {
 			via := r.cfg.MailboxVia
@@ -131,13 +128,8 @@ func (r *Runtime) registerChat() {
 	var recv *mailbox.Receiver
 	if r.cfg.MailboxRelays != nil {
 		recv, err = mailbox.NewReceiver(mailbox.ReceiverConfig{
-			Store: r.cfg.Store.Store("v2/mailbox/client"),
-			Dial: mailboxDialer{r: r, opts: func(device [32]byte) DialOpt {
-				if f := r.mailboxClientOpts; f != nil {
-					return f(device)
-				}
-				return DialOpt{}
-			}},
+			Store:  r.cfg.Store.Store("v2/mailbox/client"),
+			Dial:   mailboxDialer{r: r, opts: r.clientDialOpt},
 			Relays: r.cfg.MailboxRelays,
 			Now:    r.clock.Now,
 			Handle: svc.ReceiveItem,
@@ -246,4 +238,16 @@ func (r *Runtime) relayHandshakeKey(relay [32]byte, card []byte) ([]byte, error)
 		}
 	}
 	return nil, errors.New("node: no card of the mailbox relay")
+}
+
+// clientDialOpt is the dial options of the mailbox client; production leaves them empty (the card
+// book decides), a test sets them (in-memory carriers).
+func (r *Runtime) clientDialOpt(device [32]byte) DialOpt {
+	r.mu.Lock()
+	f := r.mailboxClientOpts
+	r.mu.Unlock()
+	if f != nil {
+		return f(device)
+	}
+	return DialOpt{}
 }

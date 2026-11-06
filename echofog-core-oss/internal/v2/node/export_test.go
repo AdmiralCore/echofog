@@ -124,7 +124,11 @@ var MailboxReceiverTick = func(r *Runtime, ctx context.Context) error {
 }
 
 // SetMailboxClientOpts lets a test choose the dial options of the node's mailbox client (in-memory carriers).
-var SetMailboxClientOpts = func(r *Runtime, f func([32]byte) DialOpt) { r.mailboxClientOpts = f }
+var SetMailboxClientOpts = func(r *Runtime, f func([32]byte) DialOpt) {
+	r.mu.Lock()
+	r.mailboxClientOpts = f
+	r.mu.Unlock()
+}
 
 // MailboxQueues returns the current queues of the node's mailbox receiver.
 var MailboxQueues = func(r *Runtime) []mailbox.QueueRef {
