@@ -62,3 +62,6 @@ var SetDHTDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) {
 	// The test networks live on private and loopback addresses.
 	r.dhtClient.SetAllowNonRoutable(true)
 }
+
+// OwnDHTRecords returns what the runtime asks the DHT client to publish by itself.
+var OwnDHTRecords = func(r *Runtime) [][]byte { return r.ownDHTRecords() }

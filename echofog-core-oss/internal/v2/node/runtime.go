@@ -189,6 +189,7 @@ type Runtime struct {
 	dht        *dht.Table
 	dhtServer  *dht.Server
 	dhtClient  *dht.Client
+	devList    ownDevices
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
 	modules     sync.Once

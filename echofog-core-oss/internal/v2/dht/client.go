@@ -44,6 +44,9 @@ var (
 	ErrNotStored = errors.New("dht: record stored on no node")
 	// ErrNotStorable means the DHT never stores this record (name bindings, foreign labels).
 	ErrNotStorable = errors.New("dht: record is not storable")
+	// ErrNotPublishable is a card that must not leave the node: a peer or invitation card (they carry
+	// the noise3 masking keys) or an unlisted one (objects.md §3.3).
+	ErrNotPublishable = errors.New("dht: card is not publishable")
 )
 
 // RemoteError is an ERROR frame of a peer (services.md §2: 0x100 bad-record, 0x101 wrong-key).
@@ -311,6 +314,9 @@ func (c *Client) Put(ctx context.Context, record []byte) (PutResult, error) {
 	if !storable(env.Label) {
 		return PutResult{}, ErrNotStorable
 	}
+	if err := checkPublishable(env, now); err != nil {
+		return PutResult{}, err
+	}
 
 	chosen := map[DeviceID]*objects.Card{}
 	var order []DeviceID
@@ -377,6 +383,19 @@ func (c *Client) Put(ctx context.Context, record []byte) (PutResult, error) {
 		return res, ErrNotStored
 	}
 	return res, nil
+}
+
+// checkPublishable refuses a card that must not leave the node (objects.md §3.3): only the public,
+// listed card is stored in the DHT.
+func checkPublishable(env *objects.Envelope, now time.Time) error {
+	if env.Label != objects.LabelCard {
+		return nil
+	}
+	card, err := objects.VerifyCard(env.Raw, now)
+	if err != nil || !card.Publishable() {
+		return ErrNotPublishable
+	}
+	return nil
 }
 
 func storable(label string) bool {

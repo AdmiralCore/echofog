@@ -80,6 +80,9 @@ func (c *Client) Publish(record []byte) error {
 	if !storable(env.Label) {
 		return ErrNotStorable
 	}
+	if err := checkPublishable(env, now); err != nil {
+		return err
+	}
 	c.pubMu.Lock()
 	defer c.pubMu.Unlock()
 	k := pubKey(env)
@@ -154,5 +157,31 @@ func (c *Client) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// Pending is the number of own records registered for republication.
+func (c *Client) Pending() int {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	return len(c.pubs)
+}
+
+// WithdrawAll forgets every registered record: a node that stopped being listed must not store
+// them again (dht.md §7). Records already stored expire by themselves.
+func (c *Client) WithdrawAll() {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	clear(c.pubs)
+}
+
+// PublishNow makes every registered record due at the next Step, also after a failed attempt
+// that is waiting for its retry (for example when the routing table was empty at start-up).
+func (c *Client) PublishNow() {
+	now := c.now()
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	for _, p := range c.pubs {
+		p.next = now
 	}
 }
