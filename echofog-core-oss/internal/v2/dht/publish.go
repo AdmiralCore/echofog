@@ -80,6 +80,9 @@ func (c *Client) Publish(record []byte) error {
 	if !storable(env.Label) {
 		return ErrNotStorable
 	}
+	if err := checkPublishable(env, now); err != nil {
+		return err
+	}
 	c.pubMu.Lock()
 	defer c.pubMu.Unlock()
 	k := pubKey(env)

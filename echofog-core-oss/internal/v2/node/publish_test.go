@@ -52,14 +52,10 @@ func ownDevices(t *testing.T, nd *testNode, now time.Time) (*objects.DeviceList,
 	var found *objects.DeviceList
 	var raw []byte
 	for _, rec := range node.OwnDHTRecords(nd.rt) {
-		env, err := objects.Verify(rec, now)
-		if err != nil {
-			t.Fatalf("own record does not verify: %v", err)
-		}
-		if env.Label != objects.LabelDevices {
-			continue
-		}
 		dl, err := objects.VerifyDeviceList(rec, now)
+		if errors.Is(err, objects.ErrWrongLabel) || errors.Is(err, objects.ErrExpired) {
+			continue // the card expires after 7 days of the moved clock; an expired list is not skipped silently: it is missing
+		}
 		if err != nil {
 			t.Fatalf("own device list: %v", err)
 		}

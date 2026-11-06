@@ -190,15 +190,21 @@ func (r *Runtime) startDHTClient(tbl *dht.Table) {
 // DHTMemoryNamespace is the store namespace of the DHT reader memory (dht.md §4.2, AD13).
 const DHTMemoryNamespace = "v2/dht/seen"
 
-// ownDHTRecords are the records this node publishes by itself: its public card, if it has one
-// (a node without a cover, or a hidden one, has none: D37). Other records (prekeys, device list,
-// mailbox hints) are registered by their owners with Client.Publish.
+// ownDHTRecords are the records this node publishes by itself: the account's device list under
+// the node ID (objects.md §6) and its public card, if it has one (a node without a cover, or a
+// hidden one, has none: D37). Other records (prekeys, mailbox hints) are registered by their owners
+// with PublishOwn.
 func (r *Runtime) ownDHTRecords() [][]byte {
-	raw, ok := r.cards.Own(objects.ScopePublic)
-	if !ok {
-		return nil
+	var out [][]byte
+	if dl, err := r.currentDeviceList(r.clock.Now()); err != nil {
+		r.log.Warn("node: device list for the DHT", "err", err)
+	} else {
+		out = append(out, dl)
 	}
-	return [][]byte{raw}
+	if raw, ok := r.cards.Own(objects.ScopePublic); ok {
+		out = append(out, raw)
+	}
+	return out
 }
 
 // dhtTransport sends dht/2 requests over the session layer: one stream per request, on a live
