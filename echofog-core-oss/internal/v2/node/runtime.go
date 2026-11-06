@@ -179,6 +179,9 @@ type Config struct {
 	// PortMap holds the test seams and tuning of port mapping (T6.5b). Whether it runs is
 	// Profile.PortMapping; Enabled here is ignored. Zero values select the production gateway.
 	PortMap portmap.Config
+	// NATOverride replaces the NAT that peers' reports imply (lab and tests: a lab with every public
+	// node in one /16 never reaches the three networks the classification needs).
+	NATOverride func() punch.NATInfo
 }
 
 // Runtime is one running v2 node (02-architecture AD5).

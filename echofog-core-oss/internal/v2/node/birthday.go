@@ -33,6 +33,9 @@ type BirthdayNetwork interface {
 // natInfo is this node's NAT as the punch engine states it: the class peers' reports imply and, for
 // a symmetric NAT, the port range they named.
 func (r *Runtime) natInfo() punch.NATInfo {
+	if r.cfg.NATOverride != nil {
+		return r.cfg.NATOverride()
+	}
 	d := r.observer.NATDetail()
 	n := punch.NATInfo{Lo: d.Lo, Hi: d.Hi, Samples: d.Samples}
 	switch d.Class {
@@ -94,4 +97,3 @@ func (r *Runtime) serveBirthdayCarrier(c mux.Carrier) {
 
 // BirthdayStats returns the birthday attempts and the ones that found a mapping (counts only).
 func (r *Runtime) BirthdayStats() (tried, ok int64) { return r.bd.Stats() }
-

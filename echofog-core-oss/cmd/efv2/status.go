@@ -23,6 +23,9 @@ type statusDoc struct {
 	Stale      bool         `json:"stale"`
 	Sessions   []sessionDoc `json:"sessions"`
 	Abuse      []abuseDoc   `json:"abuse"`
+	// BirthdayTried and BirthdayOK count birthday punch attempts and the ones that found a path.
+	BirthdayTried int64 `json:"birthday_tried"`
+	BirthdayOK    int64 `json:"birthday_ok"`
 }
 
 type sessionDoc struct {
@@ -55,14 +58,16 @@ type abuseDoc struct {
 func (a *app) statusDoc() statusDoc {
 	st := a.rt.Status()
 	doc := statusDoc{
-		NodeID:     hex.EncodeToString(st.Node[:]),
-		DeviceID:   hex.EncodeToString(st.Device[:]),
-		Profile:    string(st.Profile.Platform),
-		Background: string(st.Background),
-		StartedAt:  st.StartedAt,
-		UpdatedAt:  time.Now().UTC(),
-		Sessions:   make([]sessionDoc, 0, len(st.Sessions)),
-		Abuse:      make([]abuseDoc, 0, len(st.Abuse)),
+		NodeID:        hex.EncodeToString(st.Node[:]),
+		DeviceID:      hex.EncodeToString(st.Device[:]),
+		Profile:       string(st.Profile.Platform),
+		Background:    string(st.Background),
+		StartedAt:     st.StartedAt,
+		UpdatedAt:     time.Now().UTC(),
+		Sessions:      make([]sessionDoc, 0, len(st.Sessions)),
+		Abuse:         make([]abuseDoc, 0, len(st.Abuse)),
+		BirthdayTried: st.Birthday.Tried,
+		BirthdayOK:    st.Birthday.OK,
 	}
 	for _, s := range st.Sessions {
 		remote := ""

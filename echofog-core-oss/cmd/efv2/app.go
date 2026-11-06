@@ -130,6 +130,10 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 	}
 	a.builder = builder
 
+	lab, err := labFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	var sources []node.ListenerSource
 	shapeProfile, err := shape.Builtin(shape.IDDefaultUDP)
 	if err != nil {
@@ -142,6 +146,7 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 	localAddrs := make([]netip.Addr, 0, len(listeners))
 	for _, l := range listeners {
 		sources = append(sources, node.Noise3Listener{
+			Punch:    lab.punch,
 			Addr:     l.Bind,
 			Masks:    []noise3.MaskKey{{Private: maskPriv}},
 			Profile:  shapeProfile,
@@ -168,6 +173,9 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 		ExitShapeProfile: shapeProfile,
 		LocalInfo:        carrier.LocalInfo{Addrs: localAddrs},
 		Country:          labCountry,
+		PunchNet:         lab.punchNet(),
+		Features:         lab.features,
+		NATOverride:      lab.natFunc(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: %w", err)

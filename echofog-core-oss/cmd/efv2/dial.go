@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 )
 
@@ -20,12 +21,20 @@ type dialDoc struct {
 	RTTMs         float64 `json:"rtt_ms"`
 	Remote        string  `json:"remote,omitempty"`
 	SID           string  `json:"sid"`
+	// Lab fields of --via / --wait-direct: the paths of the session and the birthday counters.
+	Paths         int   `json:"paths,omitempty"`
+	Direct        bool  `json:"direct"`
+	BirthdayTried int64 `json:"birthday_tried"`
+	BirthdayOK    int64 `json:"birthday_ok"`
+	WaitedMs      int64 `json:"waited_ms,omitempty"`
 }
 
 func cmdDial(args []string) error {
 	fs := flag.NewFlagSet("dial", flag.ContinueOnError)
 	data := fs.String("data", "", "profile data directory")
 	timeout := fs.Duration("timeout", 30*time.Second, "session and RTT timeout")
+	via := fs.String("via", "", "card file of a relay to hold a session with first (the peer is then reached through it)")
+	waitDirect := fs.Duration("wait-direct", 0, "wait up to this long for a hole-punched direct path (lab)")
 	if err := parseInterspersed(fs, args); err != nil {
 		return err
 	}
@@ -59,6 +68,19 @@ func cmdDial(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *via != "" {
+		vdoc, err := readCardFile(*via)
+		if err != nil {
+			return err
+		}
+		vcard, _, err := verifyCardDoc(vdoc, "", a.clock.Now())
+		if err != nil {
+			return err
+		}
+		if _, _, err := a.rt.Session(ctx, node.DeviceID(vcard.DeviceID), node.DialOpt{Card: vcard}); err != nil {
+			return err
+		}
+	}
 	device := node.DeviceID(card.DeviceID)
 	localID := a.device.ID()
 	peer, sess, err := a.rt.Session(ctx, device, node.DialOpt{Card: card})
@@ -83,6 +105,26 @@ func cmdDial(args []string) error {
 	if s, ok := a.sessionStatus(device); ok {
 		out.Suite = s.Suite
 	}
+	started := time.Now()
+	for *waitDirect > 0 && time.Since(started) < *waitDirect {
+		if s, ok := a.sessionStatus(device); ok && (s.Path != mux.PathRelay || len(s.Paths) > 1) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if s, ok := a.sessionStatus(device); ok {
+		out.Paths = len(s.Paths)
+		out.Direct = s.Path != mux.PathRelay || len(s.Paths) > 1
+		out.Path = pathName(s.Path)
+		if out.Direct {
+			out.Path = "direct"
+		}
+	}
+	out.BirthdayTried, out.BirthdayOK = a.rt.BirthdayStats()
+	out.WaitedMs = time.Since(started).Milliseconds()
 	if err := saveKnownCard(*data, hex.EncodeToString(device[:]), doc); err != nil {
 		return err
 	}
