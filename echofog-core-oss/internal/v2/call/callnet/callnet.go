@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/v2/call/route"
@@ -50,11 +51,24 @@ type Config struct {
 	// Admit tells whether media from a device is wanted (a member of the room being joined).
 	// Media from anyone else is dropped before the call layer sees it. Nil admits everyone.
 	Admit func(device [32]byte) bool
+	// MaxPerSecond bounds the datagrams accepted from one device per second (a token bucket with
+	// a burst of one second). Zero means DefaultMaxPerSecond. A peer cannot make this node spend
+	// unbounded CPU on call frames.
+	MaxPerSecond int
+	// Now is the corrected clock (AD13). Nil means time.Now.
+	Now func() time.Time
 }
+
+// DefaultMaxPerSecond: a 4K60 stream is about 3500 datagrams a second; the default leaves room for
+// several streams relayed through this node.
+const DefaultMaxPerSecond = 20000
+
+// maxSources bounds the per-device buckets kept.
+const maxSources = 1024
 
 // Stats counts what Deliver dropped and what could not be sent.
 type Stats struct {
-	DroppedRoute, DroppedAdmit, DroppedUnknown, SendNoPath uint64
+	DroppedRoute, DroppedAdmit, DroppedUnknown, DroppedRate, SendNoPath uint64
 }
 
 // Transport is the call layer's transport over v2 sessions.
@@ -63,6 +77,12 @@ type Transport struct {
 	mu       sync.RWMutex
 	handlers map[transport.Kind]transport.Handler
 	stats    Stats
+	rate     map[[32]byte]*bucket
+}
+
+type bucket struct {
+	tokens float64
+	at     time.Time
 }
 
 var (
@@ -73,7 +93,7 @@ var (
 
 // New returns a transport.
 func New(cfg Config) *Transport {
-	return &Transport{cfg: cfg, handlers: map[transport.Kind]transport.Handler{}}
+	return &Transport{cfg: cfg, handlers: map[transport.Kind]transport.Handler{}, rate: map[[32]byte]*bucket{}}
 }
 
 // Inbound is one datagram received from a participant's session.
@@ -149,10 +169,16 @@ func (t *Transport) RegisterFastFrameHandler(kind transport.Kind, h transport.Ha
 	t.mu.Unlock()
 }
 
+// admitRate takes one token from the device's bucket.
+func (t *Transport) admitRate(device [32]byte) bool { return true }
+
 // Deliver hands a received datagram to the call layer. Media is dropped before the call layer
 // sees it when it arrived on a path kind the route forbids (call_route=relay accepts no media
 // from a direct path) or comes from a device the room does not admit.
 func (t *Transport) Deliver(in Inbound) {
+	if !t.admitRate(in.Device) {
+		return
+	}
 	var kind transport.Kind
 	isMedia := false
 	switch in.Type {

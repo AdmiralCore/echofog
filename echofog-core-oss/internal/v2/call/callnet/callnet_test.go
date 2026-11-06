@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/v2/call/route"
@@ -237,5 +238,50 @@ func TestRouteIsReadOnEverySend(t *testing.T) {
 	_ = tr.SendUnreliableFrame(dev(2), transport.MediaAudio, []byte("2"))
 	if len(l.out) != 2 || l.out[0].kind != mux.PathDirect || l.out[1].kind != mux.PathRelay {
 		t.Fatalf("%+v", l.out)
+	}
+}
+
+func TestDeliverBoundsTheRatePerDevice(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	tr := New(Config{Links: links{}, MaxPerSecond: 100, Now: func() time.Time { return now }})
+	n := 0
+	tr.RegisterFastFrameHandler(transport.MediaAudio, func([]byte, types.PeerID) error { n++; return nil })
+	send := func(d byte, k int) {
+		for i := 0; i < k; i++ {
+			tr.Deliver(Inbound{Device: dev(d), Type: frame.DgramCallAudio, Payload: []byte("a"), Path: mux.PathDirect})
+		}
+	}
+	send(1, 150)
+	if n != 100 || tr.Stats().DroppedRate != 50 {
+		t.Fatalf("a flood from one device: %d passed, stats %+v; want 100 and 50 dropped", n, tr.Stats())
+	}
+	send(2, 100)
+	if n != 200 {
+		t.Fatalf("another device shares the budget of the flooder: %d", n)
+	}
+	now = now.Add(500 * time.Millisecond)
+	send(1, 100)
+	if n != 250 {
+		t.Fatalf("half a second refills half the budget: %d, want 250", n)
+	}
+	now = now.Add(10 * time.Second)
+	send(1, 150)
+	if n != 350 {
+		t.Fatalf("a long pause refills at most one second: %d, want 350", n)
+	}
+}
+
+func TestDeliverBucketsAreBounded(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	tr := New(Config{Links: links{}, MaxPerSecond: 10, Now: func() time.Time { return now }})
+	for i := 0; i < 5000; i++ {
+		var d [32]byte
+		d[0], d[1] = byte(i), byte(i>>8)
+		tr.Deliver(Inbound{Device: d, Type: frame.DgramCallAudio, Payload: []byte("a"), Path: mux.PathDirect})
+	}
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	if len(tr.rate) > maxSources {
+		t.Fatalf("%d buckets kept, limit %d", len(tr.rate), maxSources)
 	}
 }
