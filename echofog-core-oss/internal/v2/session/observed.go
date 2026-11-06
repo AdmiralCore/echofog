@@ -638,4 +638,55 @@ type NATDetail struct {
 }
 
 // NATDetail classifies like NATClass and adds the port range of the winning socket.
-func (o *Observer) NATDetail() NATDetail { return NATDetail{} }
+func (o *Observer) NATDetail() NATDetail {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.expireLocked(o.cfg.Now())
+	sockets := make(map[string]struct{})
+	for k := range o.recs {
+		if k.socket != "" {
+			sockets[k.socket] = struct{}{}
+		}
+	}
+	best, bestSock, class, tie := 0, "", NATUnknown, false
+	for s := range sockets {
+		n, c := o.natCountLocked(s)
+		if c == NATUnknown {
+			continue
+		}
+		switch {
+		case n > best:
+			best, bestSock, class, tie = n, s, c, false
+		case n == best && c != class:
+			tie = true
+		}
+	}
+	if tie || class == NATUnknown {
+		return NATDetail{}
+	}
+	d := NATDetail{Class: class}
+	if class != NATSymmetric {
+		return d
+	}
+	perGroup := make(map[netip.Prefix][]voteItem[uint16])
+	for k, r := range o.recs {
+		if k.socket != bestSock || r.ip != o.decided || !r.group.IsValid() {
+			continue
+		}
+		perGroup[r.group] = append(perGroup[r.group], voteItem[uint16]{k.peer, r.port, r.portSince})
+	}
+	for _, items := range perGroup {
+		p, ok := networkVote(items)
+		if !ok {
+			continue
+		}
+		if d.Samples == 0 || p < d.Lo {
+			d.Lo = p
+		}
+		if p > d.Hi {
+			d.Hi = p
+		}
+		d.Samples++
+	}
+	return d
+}
