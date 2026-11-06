@@ -10,10 +10,12 @@ package callnet
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/echofog/echofog-core/internal/services/call/transport"
 	"github.com/echofog/echofog-core/internal/v2/call/route"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/pkg/api/types"
 )
@@ -82,27 +84,135 @@ type Inbound struct {
 	Path    mux.PathKind
 }
 
-// SendRawFrame sends a reliable frame: signals only.
+func (t *Transport) route() route.Route {
+	if t.cfg.Route == nil {
+		return route.Auto
+	}
+	return t.cfg.Route()
+}
+
+func (t *Transport) count(f func(*Stats)) {
+	t.mu.Lock()
+	f(&t.stats)
+	t.mu.Unlock()
+}
+
+// SendRawFrame sends a reliable frame: signals only. Media never travels reliably.
 func (t *Transport) SendRawFrame(peer types.PeerID, kind transport.Kind, payload []byte) error {
-	return errors.New("callnet: not implemented")
+	switch kind {
+	case transport.Signal, transport.SignalLossy:
+		return t.signal(peer, false, payload)
+	}
+	return ErrMediaNeedsDatagram
 }
 
 // SendUnreliableFrame sends a best-effort frame: media datagrams and lossy signals.
 func (t *Transport) SendUnreliableFrame(peer types.PeerID, kind transport.Kind, payload []byte) error {
-	return errors.New("callnet: not implemented")
+	var typ uint64
+	switch kind {
+	case transport.MediaAudio:
+		typ = frame.DgramCallAudio
+	case transport.MediaVideo:
+		typ = frame.DgramCallVideo
+	case transport.SignalLossy:
+		return t.signal(peer, true, payload)
+	default:
+		return fmt.Errorf("callnet: kind %d is not sent unreliably", kind)
+	}
+	if len(payload) > MaxDatagram {
+		return transport.ErrDatagramTooLarge
+	}
+	l, ok := t.cfg.Links.Link(peer)
+	if !ok {
+		return ErrNoLink
+	}
+	if _, err := route.Send(t.route(), l, typ, payload); err != nil {
+		if errors.Is(err, route.ErrNoPath) {
+			t.count(func(s *Stats) { s.SendNoPath++ })
+		}
+		return err
+	}
+	return nil
+}
+
+func (t *Transport) signal(peer types.PeerID, lossy bool, payload []byte) error {
+	if t.cfg.Signals == nil {
+		return errors.New("callnet: no signal port")
+	}
+	return t.cfg.Signals.SendSignal(peer, lossy, payload)
 }
 
 // RegisterFastFrameHandler sets the handler of one kind of inbound frame.
-func (t *Transport) RegisterFastFrameHandler(kind transport.Kind, h transport.Handler) {}
+func (t *Transport) RegisterFastFrameHandler(kind transport.Kind, h transport.Handler) {
+	t.mu.Lock()
+	t.handlers[kind] = h
+	t.mu.Unlock()
+}
 
-// Deliver hands a received datagram to the call layer.
-func (t *Transport) Deliver(in Inbound) {}
+// Deliver hands a received datagram to the call layer. Media is dropped before the call layer
+// sees it when it arrived on a path kind the route forbids (call_route=relay accepts no media
+// from a direct path) or comes from a device the room does not admit.
+func (t *Transport) Deliver(in Inbound) {
+	var kind transport.Kind
+	isMedia := false
+	switch in.Type {
+	case frame.DgramCallAudio:
+		kind, isMedia = transport.MediaAudio, true
+	case frame.DgramCallVideo:
+		kind, isMedia = transport.MediaVideo, true
+	case frame.DgramCallSignal:
+		kind = transport.SignalLossy
+	default:
+		t.count(func(s *Stats) { s.DroppedUnknown++ })
+		return
+	}
+	if isMedia {
+		if k, err := route.Choose(t.route(), map[mux.PathKind]int{in.Path: 1}); err != nil || k != in.Path {
+			t.count(func(s *Stats) { s.DroppedRoute++ })
+			return
+		}
+		if t.cfg.Admit != nil && !t.cfg.Admit(in.Device) {
+			t.count(func(s *Stats) { s.DroppedAdmit++ })
+			return
+		}
+	}
+	t.mu.RLock()
+	h := t.handlers[kind]
+	t.mu.RUnlock()
+	if h != nil {
+		_ = h(in.Payload, types.PeerID(in.Device))
+	}
+}
 
-// Relayed reports whether the participant is reached only through a relay.
-func (t *Transport) Relayed(peer types.PeerID) bool { return false }
+// Relayed reports whether the participant is reached only through a relay, so the call layer
+// stretches its watchdogs for the extra hop. Under call_route=direct a relay path carries no
+// media, so the peer is not "relayed".
+func (t *Transport) Relayed(peer types.PeerID) bool {
+	l, ok := t.cfg.Links.Link(peer)
+	if !ok || t.route() == route.Direct {
+		return false
+	}
+	return route.OnlyRelayed(l.PathKinds())
+}
 
-// DirectLink reports whether the call layer should not ask for a connection to the peer.
-func (t *Transport) DirectLink(peer types.PeerID) bool { return false }
+// DirectLink reports whether the call layer should not ask for a connection to the peer. Under
+// call_route=relay no direct path is wanted, so any live session counts: the call layer must not
+// dial the participant directly.
+func (t *Transport) DirectLink(peer types.PeerID) bool {
+	l, ok := t.cfg.Links.Link(peer)
+	if !ok {
+		return false
+	}
+	kinds := l.PathKinds()
+	if t.route() == route.Relay {
+		return kinds[mux.PathDirect]+kinds[mux.PathRelay] > 0
+	}
+	return kinds[mux.PathDirect] > 0
+}
 
 // Stats returns the counters.
-func (t *Transport) Stats() Stats { return Stats{} }
+func (t *Transport) Stats() Stats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.stats
+}
