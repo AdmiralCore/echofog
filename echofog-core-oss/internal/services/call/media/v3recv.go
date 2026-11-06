@@ -56,6 +56,16 @@ type VerifiedUnit struct {
 type AuthResult struct {
 	Verified []VerifiedUnit
 	Forged   bool
+	// Need lists units this authenticator vouches for whose copy was dropped because forged
+	// candidates filled the slot: the caller asks the feeder to send them again (NACK), and the
+	// retransmission is verified against the same authenticator.
+	Need []NeedUnit
+}
+
+// NeedUnit names a unit to ask for again.
+type NeedUnit struct {
+	Sender, Gen, Stream, Kind byte
+	Seq                       uint32
 }
 
 type srcKey struct{ sender, gen, stream, kind byte }

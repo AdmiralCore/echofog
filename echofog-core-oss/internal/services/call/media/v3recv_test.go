@@ -221,11 +221,11 @@ func TestUnknownSenderKeyIsDropped(t *testing.T) {
 	}
 }
 
-func TestAtMostFourCandidatesPerNumber(t *testing.T) {
+func TestFifthCandidateDoesNotSuppressRealUnit(t *testing.T) {
 	h := newRx(t, false)
 	hd, _ := unit3(Kind3Audio, 0)
 	played := 0
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 4; i++ { // four forged copies fill the slots of seq 0
 		ct := make([]byte, 40)
 		ct[0] = byte(i + 1)
 		if r := h.r.OnUnit(hd, ct); r.Forward {
@@ -235,11 +235,10 @@ func TestAtMostFourCandidatesPerNumber(t *testing.T) {
 	if played != 1 {
 		t.Fatalf("%d candidates forwarded at once, want only the first", played)
 	}
-	// the real unit is a fifth-or-later candidate: it is dropped (spec: up to 4), but the
-	// first four verify nothing, so nothing forged is accepted.
 	var auths [][]byte
 	for seq := uint32(0); seq < 5; seq++ {
-		_, _, a := h.send(seq)
+		hd, ct, a := h.send(seq)
+		h.r.OnUnit(hd, ct) // the real seq 0 is the fifth candidate: no room
 		auths = append(auths, a...)
 	}
 	res, _ := h.r.OnAuth(auths[0])
@@ -247,6 +246,51 @@ func TestAtMostFourCandidatesPerNumber(t *testing.T) {
 		if v.Header.Seq == 0 {
 			t.Fatal("a forged candidate was verified")
 		}
+	}
+	want := NeedUnit{Sender: 3, Gen: 1, Stream: 0, Kind: Kind3Audio, Seq: 0}
+	if len(res.Need) != 1 || res.Need[0] != want {
+		t.Fatalf("Need = %+v, want the suppressed seq 0 so it can be asked for again", res.Need)
+	}
+	// the retransmission is verified against the authenticator that already arrived.
+	if r := h.r.OnUnit(h.units[0].h, h.units[0].ct); !r.Verified || !r.Play {
+		t.Fatalf("retransmitted real unit: %+v", r)
+	}
+}
+
+func TestFourCandidatesAreKeptNothingLost(t *testing.T) {
+	h := newRx(t, false)
+	hd, _ := unit3(Kind3Audio, 0)
+	for i := 0; i < 3; i++ { // 3 forged + the real one = 4 candidates
+		ct := make([]byte, 40)
+		ct[0] = byte(i + 1)
+		h.r.OnUnit(hd, ct)
+	}
+	var auths [][]byte
+	for seq := uint32(0); seq < 5; seq++ {
+		hd, ct, a := h.send(seq)
+		h.r.OnUnit(hd, ct)
+		auths = append(auths, a...)
+	}
+	res, _ := h.r.OnAuth(auths[0])
+	if len(res.Verified) != 5 || len(res.Need) != 0 {
+		t.Fatalf("verified %d need %v, want all 5 and nothing to ask for", len(res.Verified), res.Need)
+	}
+}
+
+func TestLateVerifiedUnitIsNotReplayed(t *testing.T) {
+	h := newRx(t, false)
+	var auths [][]byte
+	for seq := uint32(0); seq < 5; seq++ {
+		_, _, a := h.send(seq) // no unit reaches the receiver before the authenticator
+		auths = append(auths, a...)
+	}
+	h.r.OnAuth(auths[0])
+	u := h.units[2]
+	if r := h.r.OnUnit(u.h, u.ct); !r.Verified {
+		t.Fatalf("late unit: %+v", r)
+	}
+	if r := h.r.OnUnit(u.h, u.ct); !r.Duplicate || r.Play {
+		t.Fatalf("a verified late unit played twice: %+v", r)
 	}
 }
 
