@@ -235,6 +235,9 @@ type Server struct {
 
 	// fwdMu serialises the dedupe check and the deposit of one sealed body.
 	fwdMu sync.Mutex
+
+	// dials counts the new connections F made for each sender session in the last minute.
+	dials map[[16]byte][]time.Time
 }
 
 // MaxWaiters bounds the goroutines parked in long-poll FETCH, so a peer cannot hold one per
@@ -263,6 +266,7 @@ func New(cfg Config) (*Server, error) {
 		log:     cfg.Log,
 		hs:      cfg.HS,
 		waiters: map[string][]chan struct{}{},
+		dials:   map[[16]byte][]time.Time{},
 	}
 	if cfg.Limits != nil {
 		s.lim = cfg.Limits.withDefaults()
@@ -876,9 +880,9 @@ func (s *Server) Ack(p Peer, m Ack) error {
 // Forward handles the receiving half of a forwarded deposit (services.md §5.3). F addressed this
 // node as M in relay; the sealed body is a DEPOSIT. Replays of the same sealed bytes are answered
 // stored without a second copy for DedupeTTL.
-func (s *Server) Forward(_ context.Context, p Peer, m Forward) (uint32, error) {
-	if len(m.Relay) != len(s.cfg.Self) || !bytes.Equal(m.Relay, s.cfg.Self[:]) {
-		return StatusRelayUnreachable, nil
+func (s *Server) Forward(ctx context.Context, p Peer, m Forward) (uint32, error) {
+	if !s.isSelf(m.Relay) {
+		return s.forwardOn(ctx, p, m)
 	}
 	if s.cfg.Metered {
 		return StatusRefused, nil
@@ -915,6 +919,95 @@ func (s *Server) Forward(_ context.Context, p Peer, m Forward) (uint32, error) {
 		}
 	}
 	return status, nil
+}
+
+// isSelf reports whether a FORWARD names this relay: by node ID, or by device ID as hints do.
+func (s *Server) isSelf(relay []byte) bool {
+	if len(relay) != 32 {
+		return false
+	}
+	if bytes.Equal(relay, s.cfg.Self[:]) {
+		return true
+	}
+	return s.cfg.SelfDevice != ([32]byte{}) && bytes.Equal(relay, s.cfg.SelfDevice[:])
+}
+
+// Limits of the forwarding role (services.md 5.3).
+const (
+	// MaxDialsPerMinute is how many new connections F makes for one sender session in a minute.
+	MaxDialsPerMinute = 10
+	// ForwardTimeout is the time F gives a forwarded deposit (services.md 5.1).
+	ForwardTimeout = 20 * time.Second
+)
+
+// forwardOn is the role F: pass a FORWARD on to the mailbox relay it names. F cannot read the sealed
+// deposit. The sender's quota per day (node ID and unit) is checked first and spent whatever M
+// answers; a new connection costs one of ten dials a minute for the sender's session.
+func (s *Server) forwardOn(ctx context.Context, p Peer, m Forward) (uint32, error) {
+	if s.cfg.Forwarder == nil || len(m.Relay) != 32 {
+		return StatusRelayUnreachable, nil
+	}
+	if s.cfg.Metered {
+		return StatusRefused, nil
+	}
+	now := s.now()
+	connected := s.cfg.Forwarder.Connected(m.Relay)
+
+	s.mu.Lock()
+	if !s.quotaAllowsLocked(now, p, 1, uint64(len(m.Sealed))) {
+		s.mu.Unlock()
+		return StatusRefused, nil
+	}
+	if !connected {
+		for sid, ts := range s.dials {
+			kept := ts[:0:0]
+			for _, t := range ts {
+				if now.Sub(t) < time.Minute {
+					kept = append(kept, t)
+				}
+			}
+			if len(kept) == 0 {
+				delete(s.dials, sid)
+			} else {
+				s.dials[sid] = kept
+			}
+		}
+		ts := s.dials[p.SID]
+		if len(ts) >= MaxDialsPerMinute || (len(ts) == 0 && len(s.dials) >= MaxWaiters*16) {
+			s.mu.Unlock()
+			return StatusRefused, nil
+		}
+		s.dials[p.SID] = append(ts, now)
+	}
+	if err := s.quotaAddLocked(now, p, 1, uint64(len(m.Sealed))); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
+	s.mu.Unlock()
+
+	fctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		st  uint32
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		st, err := s.cfg.Forwarder.Forward(fctx, m)
+		done <- result{st, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			return StatusRelayUnreachable, nil
+		}
+		return r.st, nil
+	case <-s.aft(ForwardTimeout):
+		cancel()
+		return StatusRelayUnreachable, nil
+	case <-ctx.Done():
+		return StatusRelayUnreachable, nil
+	}
 }
 
 // ---- internals ------------------------------------------------------------------------------

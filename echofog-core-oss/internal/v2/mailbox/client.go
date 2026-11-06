@@ -2,10 +2,17 @@ package mailbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
 
@@ -26,8 +33,6 @@ type Conn interface {
 type Dialer interface {
 	Dial(ctx context.Context, device [32]byte) (Conn, error)
 }
-
-var errNotImplemented = errors.New("mailbox: not implemented")
 
 // Target is where a sender puts a message: a queue on a mailbox relay M.
 type Target struct {
@@ -52,10 +57,67 @@ type Sender struct {
 }
 
 // Deposit seals a DEPOSIT for M, sends FORWARD to F and returns M's DEPOSITED status. For a public
-// queue it first finds the proof of work; ctx cancels the search.
+// queue it first finds the proof of work; ctx cancels the search. An error means F could not be
+// used (the caller picks another F); a status other than StatusStored is M's answer.
 func (s *Sender) Deposit(ctx context.Context, via [32]byte, t Target, blob []byte) (uint32, error) {
-	return 0, errNotImplemented
+	if len(blob) > MaxBlob {
+		return 0, ErrTooLarge
+	}
+	if len(t.Queue) != QueueSize || len(t.HS) != 32 {
+		return 0, ErrBadRequest
+	}
+	dep := Deposit{Req: 1, Queue: t.Queue, Blob: blob}
+	if t.Public {
+		if t.PowBits > MaxPowBits {
+			return 0, ErrBadRequest
+		}
+		pow, err := minePow(ctx, t.Queue, blob, t.PowBits)
+		if err != nil {
+			return 0, err
+		}
+		dep.Pow = pow
+	}
+	rnd := s.Rand
+	if rnd == nil {
+		rnd = rand.Reader
+	}
+	eph := make([]byte, 32)
+	if _, err := io.ReadFull(rnd, eph); err != nil {
+		return 0, err
+	}
+	sealed, err := SealForward(eph, t.HS, dep.Append(nil))
+	zero(eph)
+	if err != nil {
+		return 0, err
+	}
+	conn, err := s.Dial.Dial(ctx, via)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	d, err := conn.Forward(ctx, Forward{Req: 1, Relay: t.Relay[:], RelayCard: t.RelayCard, Sealed: sealed})
+	if err != nil {
+		return 0, err
+	}
+	return d.Status, nil
 }
+
+// minePow finds a proof of work of bits leading zero bits for a deposit (services.md 5.2). The cost is
+// about 2^bits hashes; ctx is looked at every few thousand.
+func minePow(ctx context.Context, queue, blob []byte, bits uint32) (uint64, error) {
+	for pow := uint64(0); ; pow++ {
+		if pow&0xfff == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
+		if ValidPow(queue, blob, pow, bits) {
+			return pow, nil
+		}
+	}
+}
+
+// ---- the recipient ----------------------------------------------------------------------------
 
 // QueueRef names a queue of the recipient on a mailbox relay.
 type QueueRef struct {
@@ -77,20 +139,255 @@ type ReceiverConfig struct {
 	Handle func(ctx context.Context, blob []byte) bool
 	// Announce is called with each new current queue, so that contacts can be told (services.md 5.2).
 	Announce func(QueueRef)
-	// Limited says the node is in background=limited mode: no long-poll, no polling on its own.
+	// Limited says the node is in background=limited mode: no long-poll.
 	Limited func() bool
 	// Wait is the long-poll time of a FETCH; zero means 30 s.
 	Wait time.Duration
 }
 
+const (
+	queuePrefix = "q:"
+	// rotateMin and rotateSpan give uniform(20, 28) hours (services.md 5.2).
+	rotateMin  = 20 * time.Hour
+	rotateSpan = 8 * time.Hour
+	// retireAfter keeps a replaced queue read for 7 days (services.md 5.2).
+	retireAfter = 7 * 24 * time.Hour
+	// queueDays is the life asked of a queue: a rotation period plus the 7 days of the old queue.
+	queueDays = 9
+	fetchPage = 100
+)
+
+// queueState is one stored queue of the recipient.
+type queueState struct {
+	Relay    [32]byte `json:"relay"`
+	Queue    [16]byte `json:"queue"`
+	Seed     [32]byte `json:"seed"` // Ed25519 seed of the queue's auth key
+	Created  int64    `json:"created"`
+	Expires  int64    `json:"expires"`
+	RotateAt int64    `json:"rotate_at"`
+	Old      bool     `json:"old,omitempty"`
+	RetireAt int64    `json:"retire_at,omitempty"`
+}
+
 // Receiver owns the recipient's queues: it creates them, rotates them, fetches and acknowledges.
-type Receiver struct{}
+type Receiver struct {
+	cfg ReceiverConfig
+	rnd io.Reader
+
+	mu     sync.Mutex // one Tick at a time
+	queues map[[16]byte]*queueState
+	req    uint64
+}
 
 // NewReceiver builds a Receiver over its stored queues.
-func NewReceiver(cfg ReceiverConfig) (*Receiver, error) { return nil, errNotImplemented }
+func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
+	if cfg.Store == nil || cfg.Dial == nil || cfg.Relays == nil || cfg.Now == nil || cfg.Handle == nil {
+		return nil, fmt.Errorf("%w: Store, Dial, Relays, Now and Handle are required", ErrBadRequest)
+	}
+	r := &Receiver{cfg: cfg, rnd: cfg.Rand, queues: map[[16]byte]*queueState{}}
+	if r.rnd == nil {
+		r.rnd = rand.Reader
+	}
+	var after []byte
+	for {
+		var (
+			page []store.Entry
+			err  error
+		)
+		if after == nil {
+			page, err = cfg.Store.Scan([]byte(queuePrefix), store.MaxScanLimit)
+		} else {
+			page, err = cfg.Store.ScanFrom([]byte(queuePrefix), after, store.MaxScanLimit)
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range page {
+			var q queueState
+			if json.Unmarshal(e.Value, &q) == nil {
+				r.queues[q.Queue] = &q
+			}
+		}
+		if len(page) < store.MaxScanLimit {
+			break
+		}
+		after = page[len(page)-1].Key
+	}
+	return r, nil
+}
 
-// Tick creates the first queue or the next one when it is due, then fetches every queue once.
-func (r *Receiver) Tick(ctx context.Context) error { return errNotImplemented }
+func queueKeyOf(q [16]byte) []byte { return []byte(queuePrefix + hex.EncodeToString(q[:])) }
+
+func (r *Receiver) save(q *queueState) error {
+	raw, err := json.Marshal(q)
+	if err != nil {
+		return err
+	}
+	return r.cfg.Store.Put(queueKeyOf(q.Queue), raw)
+}
+
+// current returns the current (not replaced) queue, if any and not expired.
+func (r *Receiver) current(now time.Time) *queueState {
+	for _, q := range r.queues {
+		if !q.Old && now.Unix() < q.Expires {
+			return q
+		}
+	}
+	return nil
+}
 
 // Queues returns the current queue of each relay in use.
-func (r *Receiver) Queues() []QueueRef { return nil }
+func (r *Receiver) Queues() []QueueRef {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []QueueRef
+	if q := r.current(r.cfg.Now()); q != nil {
+		out = append(out, QueueRef{Relay: q.Relay, Queue: q.Queue, Expires: time.Unix(q.Expires, 0)})
+	}
+	return out
+}
+
+// Tick creates the first queue or the next one when it is due, retires queues replaced 7 days ago, then
+// fetches every queue once. Errors are joined; a queue that could not be reached stays.
+func (r *Receiver) Tick(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.cfg.Now()
+	var errs []error
+
+	cur := r.current(now)
+	if cur == nil || now.Unix() >= cur.RotateAt {
+		if err := r.rotate(ctx, cur, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for id, q := range r.queues {
+		if q.Old && now.Unix() >= q.RetireAt {
+			delete(r.queues, id)
+			_ = r.cfg.Store.Delete(queueKeyOf(id))
+		}
+	}
+	conns := map[[32]byte]Conn{}
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	cur = r.current(now)
+	for _, q := range r.queues {
+		conn, ok := conns[q.Relay]
+		if !ok {
+			var err error
+			if conn, err = r.cfg.Dial.Dial(ctx, q.Relay); err != nil {
+				errs = append(errs, fmt.Errorf("mailbox: relay %x: %w", q.Relay[:4], err))
+				continue
+			}
+			conns[q.Relay] = conn
+		}
+		if err := r.poll(ctx, conn, q, q == cur); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// rotate makes a new current queue on the preferred relay and replaces cur.
+func (r *Receiver) rotate(ctx context.Context, cur *queueState, now time.Time) error {
+	relays := r.cfg.Relays()
+	if len(relays) == 0 {
+		return nil
+	}
+	relay := relays[0]
+	var q queueState
+	q.Relay = relay
+	if _, err := io.ReadFull(r.rnd, q.Queue[:]); err != nil {
+		return err
+	}
+	if _, err := io.ReadFull(r.rnd, q.Seed[:]); err != nil {
+		return err
+	}
+	var span [8]byte
+	if _, err := io.ReadFull(r.rnd, span[:]); err != nil {
+		return err
+	}
+	q.RotateAt = now.Add(rotateMin + time.Duration(binary.BigEndian.Uint64(span[:])%uint64(rotateSpan))).Unix()
+	signer, err := keys.NewEd25519Signer(q.Seed[:])
+	if err != nil {
+		return err
+	}
+	conn, err := r.cfg.Dial.Dial(ctx, relay)
+	if err != nil {
+		return fmt.Errorf("mailbox: relay %x: %w", relay[:4], err)
+	}
+	defer conn.Close()
+	r.req++
+	expires, err := conn.CreateQueue(ctx, QueueCreate{Req: r.req, Queue: q.Queue[:], AuthKey: signer.Public().Key(), TTL: queueDays})
+	if err != nil {
+		return fmt.Errorf("mailbox: creating a queue: %w", err)
+	}
+	q.Created, q.Expires = now.Unix(), int64(expires)
+	if err := r.save(&q); err != nil {
+		return err
+	}
+	r.queues[q.Queue] = &q
+	if cur != nil {
+		cur.Old, cur.RetireAt = true, now.Add(retireAfter).Unix()
+		_ = r.save(cur)
+	}
+	if r.cfg.Announce != nil {
+		r.cfg.Announce(QueueRef{Relay: q.Relay, Queue: q.Queue, Expires: time.Unix(q.Expires, 0)})
+	}
+	return nil
+}
+
+func (r *Receiver) wait(current bool) uint32 {
+	if !current || (r.cfg.Limited != nil && r.cfg.Limited()) {
+		return 0
+	}
+	w := r.cfg.Wait
+	if w == 0 {
+		w = 30 * time.Second
+	}
+	if s := uint32(w / time.Second); s > 0 {
+		return s
+	}
+	return 1
+}
+
+// poll fetches a queue and acknowledges what the handler took, page by page.
+func (r *Receiver) poll(ctx context.Context, conn Conn, q *queueState, current bool) error {
+	signer, err := keys.NewEd25519Signer(q.Seed[:])
+	if err != nil {
+		return err
+	}
+	wait := r.wait(current)
+	for {
+		r.req++
+		req := r.req
+		items, err := conn.Fetch(ctx, Fetch{Req: req, Queue: q.Queue[:], Max: fetchPage, Wait: wait,
+			Auth: signer.Sign(AuthInput(OpFetch, conn.SID(), q.Queue[:], req))})
+		if err != nil {
+			return fmt.Errorf("mailbox: fetch: %w", err)
+		}
+		wait = 0 // only the first request of a poll waits
+		var ids [][]byte
+		for _, it := range items.Items {
+			if r.cfg.Handle(ctx, it.Blob) {
+				ids = append(ids, it.ID)
+			}
+		}
+		if len(ids) > 0 {
+			r.req++
+			req = r.req
+			if err := conn.Ack(ctx, Ack{Req: req, Queue: q.Queue[:], IDs: ids,
+				Auth: signer.Sign(AuthInput(OpAck, conn.SID(), q.Queue[:], req))}); err != nil {
+				return fmt.Errorf("mailbox: ack: %w", err)
+			}
+		}
+		// more: the next page starts again at the front, which is right only when something was
+		// removed; if nothing was taken the same page would come back
+		if !items.More || len(ids) == 0 {
+			return nil
+		}
+	}
+}

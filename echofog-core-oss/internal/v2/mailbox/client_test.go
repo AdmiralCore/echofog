@@ -94,7 +94,15 @@ func newRelay(t *testing.T, clock *testClock, mutate func(*Config)) *relayNode {
 	t.Helper()
 	fx := newFixture(t, func(c *Config) {
 		c.Now = clock.Now
-		c.After = func(time.Duration) <-chan time.Time { ch := make(chan time.Time, 1); ch <- time.Time{}; return ch }
+		c.After = func(d time.Duration) <-chan time.Time { // a long-poll that times out: the clock moves on
+			if d == ForwardTimeout {
+				return make(chan time.Time) // never: the forwarder answers
+			}
+			clock.Advance(d)
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		}
 		if mutate != nil {
 			mutate(c)
 		}
