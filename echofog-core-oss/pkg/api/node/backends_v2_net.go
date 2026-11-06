@@ -29,6 +29,8 @@ type v2App interface {
 	Unblock(node string) error
 	NetStatus() app.NetStatus
 	Report() string
+	Subscribe(fn func(app.Notice)) (cancel func())
+	LastUpdate() *app.UpdateView
 }
 
 var _ v2App = (*app.App)(nil)

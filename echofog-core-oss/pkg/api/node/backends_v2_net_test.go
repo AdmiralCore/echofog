@@ -53,6 +53,8 @@ func (s *stubV2App) NetStatus() app.NetStatus {
 		Peers: []app.PeerStatus{{Device: "aabbccdd", Path: "direct"}, {Device: "11223344", Path: "relay"}}}
 }
 func (s *stubV2App) Report() string { return "EchoFog connection report — stub" }
+func (s *stubV2App) Subscribe(func(app.Notice)) func() { return func() {} }
+func (s *stubV2App) LastUpdate() *app.UpdateView { return nil }
 
 func TestAttachV2SwitchesTheNetworkAndContactsDomains(t *testing.T) {
 	api := newFacadeNode(t, config.ProtocolV2)

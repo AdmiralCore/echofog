@@ -93,3 +93,11 @@ export function findGroupLink(text) {
   }
   return '';
 }
+
+/** The longest link the app takes (a v2 card link with its secret fits). */
+export const MAX_LINK = 16 * 1024;
+
+/** Which version a join link is and whether it carries a secret: { version, hasSecret } or null. */
+export function joinInfo(text) {
+  return null;
+}

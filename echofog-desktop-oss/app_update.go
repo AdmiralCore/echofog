@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	api "github.com/echofog/echofog-core/pkg/api/node"
 )
 
 // version is the app's release, set at build time: -ldflags "-X main.version=0.1.1". Builds
@@ -25,6 +27,14 @@ type UpdateInfo struct {
 	Latest  string `json:"latest,omitempty"`
 	URL     string `json:"url,omitempty"` // the release page to download from
 	Newer   bool   `json:"newer"`
+	// Important: the signed manifest says this build falls below the supported version.
+	Important  bool     `json:"important,omitempty"`
+	Components []string `json:"components,omitempty"`
+}
+
+// updateInfoFromNotice shows the newest release of the signed manifest (protocol 2).
+func updateInfoFromNotice(current string, n *api.UpdateNotice) UpdateInfo {
+	return UpdateInfo{Current: current}
 }
 
 // AppVersion is the version of this build.

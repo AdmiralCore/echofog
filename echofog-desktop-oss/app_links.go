@@ -23,6 +23,9 @@ import (
 
 const linkScheme = "echofog://"
 
+// maxLinkBytes is the longest link the app takes (a v2 card link with its secret fits).
+const maxLinkBytes = 16 << 10
+
 var (
 	startLinkMu sync.Mutex
 	startLink   string // the link this process was started with, until the UI takes it
@@ -133,4 +136,9 @@ func (a *App) serveLinkHandoff(ctx context.Context) {
 			_ = os.Remove(file)
 		}
 	}()
+}
+
+// linkHandoffHandler receives a link from a later process and passes it to open.
+func linkHandoffHandler(token string, open func(link string)) http.Handler {
+	return http.NotFoundHandler()
 }
