@@ -151,3 +151,24 @@ func FuzzParseDuration(f *testing.F) {
 		}
 	})
 }
+
+// T12.4a acceptance M1: an operator who switches every role off gets none, not the defaults.
+func TestEmptyRolesStayEmpty(t *testing.T) {
+	empty := strings.Replace(goodConfig, `"roles": ["relay", "exit"]`, `"roles": []`, 1)
+	c, err := servernode.ParseConfig([]byte(empty))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if len(c.Roles) != 0 {
+		t.Fatalf("roles %v: an explicit empty list became the defaults", c.Roles)
+	}
+	absent := strings.Replace(goodConfig, `  "roles": ["relay", "exit"],`+"\n", ``, 1)
+	c, err = servernode.ParseConfig([]byte(absent))
+	if err != nil || len(c.Roles) != 3 {
+		t.Fatalf("absent roles: %v, %v; want the defaults", c, err)
+	}
+	null := strings.Replace(goodConfig, `["relay", "exit"]`, `null`, 1)
+	if _, err := servernode.ParseConfig([]byte(null)); !errors.Is(err, servernode.ErrConfig) {
+		t.Errorf("null roles: %v", err)
+	}
+}

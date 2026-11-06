@@ -3,6 +3,7 @@ package servernode_test
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -110,5 +111,21 @@ func TestCLIStatusWhenNotRunning(t *testing.T) {
 	code, _, errs := runCLI(nil, "status", "--data", dir)
 	if code != 1 || !strings.Contains(errs, "running") {
 		t.Fatalf("status of a stopped node: %d %q", code, errs)
+	}
+}
+
+func TestCLIEmptyRolesAreKept(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "node")
+	code, _, errs := runCLI(nil, "init", "--data", dir, "--listen", "noise3=0.0.0.0:443", "--advertise", "203.0.113.10", "--roles", "")
+	if code != 0 {
+		t.Fatalf("init: %d %s", code, errs)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "server.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := servernode.ParseConfig(raw)
+	if err != nil || len(c.Roles) != 0 {
+		t.Fatalf("saved config: %v, %v; --roles \"\" must switch every role off", c, err)
 	}
 }
