@@ -23,8 +23,13 @@
     <span class="sc-dot" class:on={online}></span>
   </span>
   <div class="sc-who">
-    <b>{myName}</b>
-    {#if $anon && $anon.running && !$anon.broken}<span class="sc-anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
+    {#if $anon && $anon.running && !$anon.broken && $isCallActive}
+      <!-- in a call there is no room for the line: the icon keeps it, the tooltip says it -->
+      <span class="sc-name"><b>{myName}</b><span class="sc-anon ic" title={$t('anon.now.' + $anon.seenBy)} aria-label={$t('anon.now.' + $anon.seenBy)} role="img"><Icon name="eyeOff" size={13} /></span></span>
+    {:else}
+      <b>{myName}</b>
+      {#if $anon && $anon.running && !$anon.broken}<span class="sc-anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
+    {/if}
     <span>{online ? $t('layout.statusOnline') : $t('layout.statusOffline')} · {$t('shell.peers', { n: $netStatus.peerCount })}</span>
   </div>
   {#if $isCallActive}
@@ -45,5 +50,8 @@
   .ib { width: 30px; height: 30px; padding: 0; border: none; border-radius: var(--r-md); display: grid; place-items: center; flex: none; background: transparent; color: var(--muted); }
   .ib:hover:not(:disabled) { background: var(--hover); color: var(--text); border: none; }
   .ib.off { color: var(--danger-fg); }
+  .sc-who span.sc-name { color: var(--text); display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .sc-name b { min-width: 0; }
+  .sc-who span.sc-anon.ic { flex: none; }
   .sc-who span.sc-anon { display: inline-flex; align-items: center; gap: 4px; color: var(--ok-fg); }
 </style>
