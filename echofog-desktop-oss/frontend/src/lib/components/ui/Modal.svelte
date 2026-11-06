@@ -31,8 +31,8 @@
 
 {#if on}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="backdrop" class:wide in:fade={{ duration: 140 }} on:click|self={close}>
-    <div class="win" role="dialog" aria-modal="true" aria-label={label} style="--w:{width}px" in:scale={{ start: 0.96, duration: 180 }}>
+  <div class="backdrop" class:wide in:fade={{ duration: 120 }} on:click|self={close}>
+    <div class="win" role="dialog" aria-modal="true" aria-label={label} style="--w:{width}px" in:scale={{ start: 0.97, duration: 160 }}>
       <slot />
     </div>
   </div>
@@ -42,13 +42,13 @@
 
 <style>
   .backdrop {
-    position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 16px;
-    background: rgba(8, 10, 18, 0.45); backdrop-filter: blur(4px);
+    position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 16px;
+    background: var(--scrim);
   }
   .win {
     width: min(var(--w), 100%); max-height: calc(100vh - 32px); overflow: auto;
-    border-radius: var(--radius-xl, 22px); background: var(--panel, var(--bg));
-    border: 1px solid var(--line-soft); box-shadow: var(--shadow-lg);
+    border-radius: var(--r-xl); background: var(--surface-1);
+    border: 1px solid var(--border-strong); box-shadow: var(--shadow-xl);
     display: flex; flex-direction: column;
   }
   @media (max-width: 640px) {

@@ -1,94 +1,25 @@
 <script>
-    /** Stroke icons used across chat and calls (24x24, currentColor). */
+    /**
+     * The one icon set: Lucide (ISC), stroke icons on a 24x24 grid, drawn in currentColor.
+     * Only the icons the app uses are bundled (lib/icons.js); add one by name there.
+     * Sizes: 16 inside controls and lists, 20 in toolbars.
+     */
+    import { ICONS } from '../../icons.js';
+
     export let name;
     export let size = 20;
-    export let stroke = 1.9;
+    export let stroke = 1.5;
     export let className = '';
     export let fill = 'none';
+    /** a label for an icon that stands alone; without it the icon is hidden from screen readers */
+    export let label = '';
 
-    const P = {
-        mic: 'M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3',
-        micOff: 'M12 3a3 3 0 00-3 3v4M15 9.3V6a3 3 0 00-5.6-1.5M5 11a7 7 0 0011.5 5.4M19 11a7 7 0 01-.6 2.8M12 18v3M3 3l18 18',
-        headphones: 'M3 17v-4a9 9 0 0118 0v4M3 17a2 2 0 002 2h1a1 1 0 001-1v-4a1 1 0 00-1-1H3zM21 17a2 2 0 01-2 2h-1a1 1 0 01-1-1v-4a1 1 0 011-1h3z',
-        headphonesOff: 'M3 17v-4a9 9 0 0115.4-6.4M21 13v4M3 17a2 2 0 002 2h1a1 1 0 001-1v-4a1 1 0 00-1-1H3zM21 17a2 2 0 01-2 2h-1a1 1 0 01-1-1v-3M3 3l18 18',
-        video: 'M15 10l5-3v10l-5-3M4 6h9a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2z',
-        videoOff: 'M15 10l5-3v10l-1.5-.9M10 6h3a2 2 0 012 2v3M15 15v1a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2M3 3l18 18',
-        screen: 'M3 5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5zM8 21h8M12 17v4',
-        screenUp: 'M3 5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5zM8 21h8M12 17v4M12 13V7M9 10l3-3 3 3',
-        phone: 'M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3.1 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.2 2 2 0 014.1 2h3a2 2 0 012 1.7c.1 1 .4 1.9.7 2.8a2 2 0 01-.5 2.1L8.1 9.9a16 16 0 006 6l1.3-1.3a2 2 0 012.1-.4c.9.3 1.8.6 2.8.7a2 2 0 011.7 2z',
-        hangup: 'M3.6 14.6l2.1-2.1c.5-.5.6-1.2.3-1.8-.2-.6-.4-1.2-.5-1.8a17.6 17.6 0 0113 0c-.1.6-.3 1.2-.5 1.8-.3.6-.2 1.3.3 1.8l2.1 2.1c.6.6 1.6.6 2.2 0l.9-.9c.6-.6.6-1.7 0-2.3a19.8 19.8 0 00-22 0c-.6.6-.6 1.7 0 2.3l.9.9c.6.6 1.6.6 2.2 0z',
-        chevronUp: 'M6 15l6-6 6 6',
-        chevronDown: 'M6 9l6 6 6-6',
-        chevronLeft: 'M15 18l-6-6 6-6',
-        chevronRight: 'M9 18l6-6-6-6',
-        expand: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
-        collapse: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5',
-        fullscreen: 'M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3',
-        more: 'M12 6.5a1 1 0 110-2 1 1 0 010 2zM12 13a1 1 0 110-2 1 1 0 010 2zM12 19.5a1 1 0 110-2 1 1 0 010 2z',
-        eye: 'M2 12s3.5-7.5 10-7.5S22 12 22 12s-3.5 7.5-10 7.5S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
-        eyeOff: 'M3 3l18 18M10.6 6.1A10 10 0 0122 12a17 17 0 01-3.2 4.4M6.2 6.2A17 17 0 002 12s3.5 7.5 10 7.5c1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 004.2 4.2',
-        relay: 'M4 7h11l-3-3M20 17H9l3 3M20 7l-3 3M4 17l3-3',
-        flag: 'M4 22V4M4 4h12l-2 4 2 4H4',
-        image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z',
-        bellOff: 'M9 18a3 3 0 0 0 6 0M8.6 4.4A6 6 0 0 1 18 9v3l2 3H9M6 9v3l-2 3h4M3 3l18 18',
-        camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
-        volume: 'M11 5L6 9H3v6h3l5 4V5zM15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13',
-        volumeOff: 'M11 5L6 9H3v6h3l5 4V5zM22 9l-6 6M16 9l6 6',
-        copy: 'M9 9h10v12H9zM5 15H4a1 1 0 01-1-1V4a1 1 0 011-1h10a1 1 0 011 1v1',
-        settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
-        users: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8',
-        search: 'M11 18a7 7 0 100-14 7 7 0 000 14zM21 21l-4.3-4.3',
-        plus: 'M12 5v14M5 12h14',
-        send: 'M4 12l16-8-6 16-2.5-6.5L4 12z',
-        smile: 'M12 21a9 9 0 100-18 9 9 0 000 18zM8 14s1.5 2 4 2 4-2 4-2M9 9.5h.01M15 9.5h.01',
-        coin: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v10M9.5 9.5h4a1.5 1.5 0 010 3h-3a1.5 1.5 0 000 3h4',
-        panel: 'M3 5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5zM15 3v18',
-        close: 'M6 6l12 12M18 6L6 18',
-        check: 'M5 13l4 4L19 7',
-        checks: 'M2 13l4 4L16 7M11 15l2 2L22 7',
-        lock: 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4',
-        signal: 'M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 20V4',
-        arrowDown: 'M12 5v14M19 12l-7 7-7-7',
-        live: 'M12 13a1 1 0 100-2 1 1 0 000 2zM8.5 8.5a5 5 0 000 7M15.5 8.5a5 5 0 010 7M5.6 5.6a9 9 0 000 12.8M18.4 5.6a9 9 0 010 12.8',
-        pin: 'M12 17v5M9 3h6l-1 6 3 3H7l3-3-1-6z',
-        message: 'M21 11.5a8.5 8.5 0 01-12.3 7.6L3 20.5l1.4-5.2A8.5 8.5 0 1121 11.5z',
-        shield: 'M12 3l8 3v6c0 4.9-3.4 8.1-8 9-4.6-.9-8-4.1-8-9V6l8-3zM9 12l2 2 4-4',
-        wallet: 'M4 7.5A2.5 2.5 0 016.5 5H18a1 1 0 011 1v2.5M4 7.5V18a2 2 0 002 2h13a1 1 0 001-1v-3M4 7.5h15a1 1 0 011 1V12h-4a2 2 0 000 4h4',
-        userPlus: 'M15 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M8.5 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6',
-        link: 'M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1',
-        qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2M14 18h2M18 18h2v2h-2',
-        info: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 11v5M12 7.5h.01',
-        sun: 'M12 16a4 4 0 100-8 4 4 0 000 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
-        moon: 'M20.5 14.5A8.5 8.5 0 019.5 3.5a8.5 8.5 0 1011 11z',
-        monitor: 'M3 5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5zM8 21h8M12 17v4',
-        terminal: 'M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zM7 9l3 3-3 3M13 15h4',
-        arrowLeft: 'M19 12H5M12 19l-7-7 7-7',
-        globe: 'M12 21a9 9 0 100-18 9 9 0 000 18zM3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18',
-        upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
-        download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
-        zap: 'M13 2L4 14h7l-1 8 9-12h-7l1-8z',
-        refresh: 'M20 11a8 8 0 00-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0014.3 4.9L20 16M20 20v-4h-4',
-        key: 'M15 7a4 4 0 11-3.9 4.9L3 20v-3h3v-3h3l2.1-2.1A4 4 0 0115 7zM16.5 8.5h.01',
-        bell: 'M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 003.4 0',
-        logout: 'M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9',
-        palette: 'M12 21a9 9 0 110-18c5 0 9 3.6 9 8 0 2.8-2.2 4-4.5 4H15a2 2 0 00-1.5 3.3c.4.5.5 1 .5 1.4 0 .8-.9 1.3-2 1.3zM7.5 11.5h.01M10 7.5h.01M15 7.5h.01M17.5 11.5h.01',
-        trash: 'M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6',
-        lockOpen: 'M5 11h14v10H5zM8 11V7a4 4 0 017.7-1.5',
-        bookmark: 'M7 3h10a1 1 0 011 1v17l-6-4-6 4V4a1 1 0 011-1z',
-        paperclip: 'M20.5 11.5l-8.2 8.2a5 5 0 01-7-7l8.6-8.6a3.4 3.4 0 014.8 4.8l-8.5 8.5a1.7 1.7 0 01-2.4-2.4l7.8-7.8',
-        file: 'M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5zM14 3v5h5',
-        folder: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z',
-        external: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5',
-        clock: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
-        record: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 15a3 3 0 100-6 3 3 0 000 6z',
-        star: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z',
-        edit: 'M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4',
-        reply: 'M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 010 11H11',
-    };
+    $: body = ICONS[name] || '';
 </script>
 
 <svg
     class="shrink-0 {className}"
+    class:spin={name === 'spinner'}
     width={size}
     height={size}
     viewBox="0 0 24 24"
@@ -97,5 +28,11 @@
     stroke-width={stroke}
     stroke-linecap="round"
     stroke-linejoin="round"
-    aria-hidden="true"
-><path d={P[name] || ''} /></svg>
+    aria-hidden={label ? undefined : 'true'}
+    role={label ? 'img' : undefined}
+    aria-label={label || undefined}
+>{@html body}</svg>
+
+<style>
+    .spin { animation: spin 0.9s linear infinite; }
+</style>
