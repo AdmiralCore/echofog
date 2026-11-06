@@ -89,6 +89,11 @@ type Config struct {
 	// ReleaseCheck verifies a release/2 object against the compiled release keys and the threshold
 	// (objects.ReleaseState.Check; wired by T4.5). Nil: this node stores no release in the DHT.
 	ReleaseCheck func(raw []byte, now time.Time) error
+	// ReleaseKeys are the release public keys compiled into the build (objects.md §9, D16). With
+	// them the runtime keeps the release manifest (T4.5): it checks DHT records, offers the
+	// manifest in pex/2, refuses peers below min_supported with REJECT{version} and reports
+	// available updates. Nil: no manifest handling.
+	ReleaseKeys []keys.AKey
 	// GreaseInterval returns the delay before the next GREASE frame of a session (D18). Nil
 	// means a uniform random interval in [greaseMin, greaseMax]; tests inject a short one.
 	GreaseInterval func() time.Duration
