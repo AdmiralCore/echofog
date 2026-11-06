@@ -31,7 +31,7 @@
 .chat-screen .findbar .count { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; padding: 0 6px; }
 .chat-screen .findbar .count.none { color: var(--danger); }
 .chat-screen .icon.tiny { width: var(--ctl-sm); height: var(--ctl-sm); border-radius: var(--r-md); }
-.chat-screen .messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 16px clamp(12px, 3vw, 24px) 8px; display: flex; flex-direction: column; }
+.chat-screen .messages { flex: 1; min-height: 0; scroll-padding-top: 12px; overflow-y: auto; overflow-x: hidden; padding: 16px clamp(12px, 3vw, 24px) 8px; display: flex; flex-direction: column; }
 .chat-screen .wails-drop-target-active .messages { outline: 2px dashed var(--accent); outline-offset: -8px; border-radius: var(--r-xl); }
 .chat-screen .day { align-self: stretch; display: flex; align-items: center; gap: 12px; margin: 14px 0 4px; color: var(--faint); }
 .chat-screen .day::before, .chat-screen .day::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -154,7 +154,8 @@
 .chat-screen .frow:hover { background: var(--hover); }
 .chat-screen .fmeta { min-width: 0; display: flex; flex-direction: column; }
 .chat-screen .fname { color: var(--text); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
-/* pins, the old-group banner, older pages */
+/* pins, the old-group banner, older pages: strips in the column above the feed, never squeezed and never over it */
+.chat-screen .main > .pinbar, .chat-screen .main > .upg { flex: none; }
 .chat-screen .pinbar {
     display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 12px 6px 16px; border: none; border-radius: 0;
     border-bottom: 1px solid var(--border); background: var(--surface-1); text-align: left; font-weight: 400; position: relative; z-index: 1;
