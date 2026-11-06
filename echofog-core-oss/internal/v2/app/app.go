@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
+	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/routepolicy"
@@ -39,6 +40,8 @@ var (
 	ErrNoContact = errors.New("app: no such contact")
 	// ErrNoPass reports an unknown pass.
 	ErrNoPass = errors.New("app: no such pass")
+	// ErrTooManyContacts reports a new contact beyond the limit.
+	ErrTooManyContacts = errors.New("app: too many contacts")
 	// ErrRequest reports a request with a bad term or count.
 	ErrRequest = errors.New("app: bad request")
 )
@@ -74,6 +77,11 @@ type Links interface {
 	Redeem(ctx context.Context, link string) (node.Peer, error)
 }
 
+// Chat is the part of the chat service the contact knock uses.
+type Chat interface {
+	Send(ctx context.Context, to [32]byte, m *chatpb.PersonalMessageProto) ([16]byte, error)
+}
+
 // Clock is the node's corrected clock.
 type Clock interface{ Now() time.Time }
 
@@ -84,6 +92,17 @@ type Config struct {
 	// Store keeps the app's own records (contacts, the saved mode). Required.
 	Store store.KV
 	Clock Clock
+	// MaxContacts bounds the contact list; zero means 10000. A link beyond it is refused before
+	// anything is dialed.
+	MaxContacts int
+	// Chat sends knocks; nil disables Knock and the answers to knocks.
+	Chat Chat
+	// OwnCard returns the node's current peer card envelope, the answer to a knock.
+	OwnCard func() ([]byte, bool)
+	// IngestCard receives the card a contact answered a knock with. The receiver verifies it
+	// (objects.VerifyCard, the account must be the sender); the app only passes bounded bytes
+	// from contacts.
+	IngestCard func(from [32]byte, envelope []byte)
 	// Self is this node's account node ID, to refuse a link to oneself.
 	Self [32]byte
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
