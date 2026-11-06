@@ -10,6 +10,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/dht"
+	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -229,24 +230,92 @@ func TestPublishOwnRefusesForeignAndNonPublic(t *testing.T) {
 	}
 }
 
-// A hidden node has no public card and publishes none; its device list is still its own record.
-func TestHiddenNodePublishesNoCard(t *testing.T) {
+// dht.md §7: records of hidden or unlisted nodes are never published. Every profile that has no
+// public listing offers nothing to the DHT, registers nothing, and the helper refuses all labels,
+// the device list included (it would tie the node ID to the device key).
+func TestUnlistedProfilesPublishNothing(t *testing.T) {
+	cases := []struct {
+		name   string
+		vis    cards.Visibility
+		cover  bool
+		listed bool
+	}{
+		{"visible with cover", cards.Visible, true, true},
+		{"visible without cover (D37)", cards.Visible, false, false},
+		{"hidden", cards.Hidden, false, false},
+		{"hidden with cover", cards.Hidden, true, false},
+		{"anonymous", cards.Anonymous, false, false},
+		{"anonymous with cover", cards.Anonymous, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := &settableClock{now: time.Now()}
+			clk, err := clock.New(clock.Config{Now: raw.Now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			nd := newTestNodeWith(t, tc.vis, tc.cover, nil, nil, func(c *node.Config) { c.Clock = clk })
+			nd.start(t)
+
+			own := node.OwnDHTRecords(nd.rt)
+			if tc.listed && len(own) != 2 {
+				t.Fatalf("a listed node offers %d records, want the list and the card", len(own))
+			}
+			if !tc.listed && len(own) != 0 {
+				t.Fatalf("an unlisted node offers %d records to the DHT", len(own))
+			}
+
+			devs, err := nd.account.SealSingleDeviceList(nd.device, 5, raw.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			hint := sealOwnHint(t, nd, 1, raw.Now().Add(time.Hour))
+			for name, rec := range map[string][]byte{"devices": devs, "mailbox-hint": hint} {
+				err := nd.rt.PublishOwn(rec)
+				if tc.listed && err != nil {
+					t.Fatalf("%s of a listed node: %v", name, err)
+				}
+				if !tc.listed && err == nil {
+					t.Fatalf("%s of an unlisted node was accepted", name)
+				}
+			}
+
+			nd.rt.DHT().Step(context.Background())
+			want := 0
+			if tc.listed {
+				want = 3 // the list and the card of the node itself, and the hint
+			}
+			if got := nd.rt.DHT().Pending(); got != want {
+				t.Fatalf("%d records registered for republication, want %d", got, want)
+			}
+		})
+	}
+}
+
+// The seq of a new list is above the previous one even when the clock is behind it.
+func TestDeviceListSeqIsAbovePreviousWhenClockIsBehind(t *testing.T) {
 	raw := &settableClock{now: time.Now()}
 	clk, err := clock.New(clock.Config{Now: raw.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	nd := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) { c.Clock = clk })
-	nd.start(t)
-	for _, rec := range node.OwnDHTRecords(nd.rt) {
-		if _, err := objects.VerifyCard(rec, raw.Now()); err == nil {
-			t.Fatal("a hidden node offers a card for the DHT")
-		}
+	nd := newTestNodeWith(t, cards.Visible, true, nil, nil, func(c *node.Config) { c.Clock = clk })
+	ahead := uint64(raw.Now().Unix()) + 1_000_000
+	old, err := nd.account.SealDeviceList(ahead, uint64(raw.Now().Add(5*24*time.Hour).Unix()),
+		[]identity.DeviceEntry{{Key: nd.device.Public(), Added: raw.Now(), Primary: true}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	peer, ok := nd.rt.Cards().Own(objects.ScopePeer)
-	if ok {
-		if err := nd.rt.PublishOwn(peer); err == nil {
-			t.Fatal("a hidden node's peer card was accepted")
-		}
+	if err := nd.store.Store(node.PublishNamespace).Put([]byte("devices"), old); err != nil {
+		t.Fatal(err)
+	}
+	nd.start(t)
+
+	dl, _ := ownDevices(t, nd, raw.Now())
+	if dl == nil {
+		t.Fatal("no devices/2")
+	}
+	if dl.Env.Seq != ahead+1 {
+		t.Fatalf("seq %d, want %d: a list at or below the previous one is refused by the readers", dl.Env.Seq, ahead+1)
 	}
 }

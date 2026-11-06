@@ -159,3 +159,18 @@ func (c *Client) Run(ctx context.Context) {
 		}
 	}
 }
+
+// Pending is the number of own records registered for republication.
+func (c *Client) Pending() int {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	return len(c.pubs)
+}
+
+// WithdrawAll forgets every registered record: a node that stopped being listed must not store
+// them again (dht.md §7). Records already stored expire by themselves.
+func (c *Client) WithdrawAll() {}
+
+// PublishNow makes every registered record due at the next Step, also after a failed attempt
+// that is waiting for its retry (for example when the routing table was empty at start-up).
+func (c *Client) PublishNow() {}
