@@ -1,9 +1,11 @@
 package files
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,19 +18,34 @@ import (
 // spaceMargin stays free on the disk besides the file being received (as in v1).
 const spaceMargin = 64 << 20
 
+const (
+	leafLen   = 32
+	bitsMagic = "EFB1"
+)
+
 // FileStore keeps a download on disk: the verified chunks in "<fid>.part" (preallocated to the
-// size of the file), the resume bitmap in "<fid>.bits", and on Commit the finished file under a
-// safe, unused name. The bitmap is only a claim: it is trusted when the part file has exactly the
-// expected size and the bitmap the expected length, and it is written after the part file is
-// synced, so it never claims what a crash could have lost.
+// size of the file), the SHA-256 leaf hash of each stored chunk in "<fid>.leaves", the resume
+// bitmap in "<fid>.bits", and on Commit the finished file under a safe, unused name.
+//
+// Nothing on disk is believed at face value. The bitmap carries the root of the offer it belongs
+// to, so an offer with the same fid and another root starts from nothing. On open every chunk the
+// bitmap marks is read back and hashed against the leaf hash stored when it was verified; a chunk
+// that changed while the download was off is dropped. Commit hashes the whole part file and checks
+// the tree against the root of the offer before the file gets its final name.
+//
+// Put trusts its caller: the chunk has been checked against the root through its audit path
+// (Fetch does that). The bitmap is written after the part and leaves files are synced, so it never
+// claims what a crash could have lost.
 type FileStore struct {
 	mu       sync.Mutex
 	dir      string
 	offer    Offer
 	n        int
 	part     *os.File
+	leaves   *os.File
 	partPath string
 	bitsPath string
+	leafPath string
 	bits     []byte
 	have     int
 	dirty    bool
@@ -47,20 +64,9 @@ func OpenFileStore(dir string, offer Offer, free func(dir string) (uint64, error
 	}
 	id := hex.EncodeToString(offer.FID[:])
 	s := &FileStore{dir: dir, offer: offer, n: offer.Chunks(),
-		partPath: filepath.Join(dir, id+".part"), bitsPath: filepath.Join(dir, id+".bits")}
+		partPath: filepath.Join(dir, id+".part"), bitsPath: filepath.Join(dir, id+".bits"), leafPath: filepath.Join(dir, id+".leaves")}
 	s.bits = make([]byte, (s.n+7)/8)
-	trusted := false
-	if fi, err := os.Stat(s.partPath); err == nil && fi.Size() == int64(offer.Size) {
-		if raw, err := os.ReadFile(s.bitsPath); err == nil && len(raw) == len(s.bits) && tailClear(raw, s.n) {
-			copy(s.bits, raw)
-			trusted = true
-		}
-	}
-	for i := 0; i < s.n; i++ {
-		if trusted && s.bit(i) {
-			s.have++
-		}
-	}
+	trusted := s.loadResume()
 	missing := int64(0)
 	for i := 0; i < s.n; i++ {
 		if !(trusted && s.bit(i)) {
@@ -74,7 +80,7 @@ func OpenFileStore(dir string, offer Offer, free func(dir string) (uint64, error
 	if err != nil {
 		return nil, fmt.Errorf("files: free space: %w", err)
 	}
-	if avail < uint64(missing)+spaceMargin {
+	if avail < uint64(missing)+uint64(s.n)*leafLen+spaceMargin {
 		return nil, ErrDisk
 	}
 	if !trusted {
@@ -86,18 +92,83 @@ func OpenFileStore(dir string, offer Offer, free func(dir string) (uint64, error
 	if err != nil {
 		return nil, err
 	}
+	lf, err := os.OpenFile(s.leafPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
 	if !trusted {
-		if err := f.Truncate(0); err != nil {
-			f.Close()
-			return nil, err
-		}
-		if err := f.Truncate(int64(offer.Size)); err != nil {
-			f.Close()
-			return nil, err
+		sizes := []struct {
+			f    *os.File
+			size int64
+		}{{f, int64(offer.Size)}, {lf, int64(s.n) * leafLen}}
+		for _, t := range sizes {
+			if err := t.f.Truncate(0); err != nil {
+				f.Close()
+				lf.Close()
+				return nil, err
+			}
+			if err := t.f.Truncate(t.size); err != nil {
+				f.Close()
+				lf.Close()
+				return nil, err
+			}
 		}
 	}
-	s.part = f
+	s.part, s.leaves = f, lf
 	return s, nil
+}
+
+// loadResume reads the bitmap and checks it against the files and the offer. It fills s.bits and
+// s.have with the chunks that are still good and reports whether any of the earlier download is
+// kept (false: start from nothing).
+func (s *FileStore) loadResume() bool {
+	pfi, err := os.Stat(s.partPath)
+	if err != nil || pfi.Size() != int64(s.offer.Size) {
+		return false
+	}
+	lfi, err := os.Stat(s.leafPath)
+	if err != nil || lfi.Size() != int64(s.n)*leafLen {
+		return false
+	}
+	raw, err := os.ReadFile(s.bitsPath)
+	if err != nil || len(raw) != len(bitsMagic)+32+len(s.bits) || string(raw[:len(bitsMagic)]) != bitsMagic ||
+		!bytes.Equal(raw[len(bitsMagic):len(bitsMagic)+32], s.offer.Root[:]) {
+		return false
+	}
+	bm := raw[len(bitsMagic)+32:]
+	if !tailClear(bm, s.n) {
+		return false
+	}
+	part, err := os.Open(s.partPath)
+	if err != nil {
+		return false
+	}
+	defer part.Close()
+	leaves, err := os.Open(s.leafPath)
+	if err != nil {
+		return false
+	}
+	defer leaves.Close()
+	buf := make([]byte, ChunkSize)
+	var want [leafLen]byte
+	for i := 0; i < s.n; i++ {
+		if bm[i>>3]&(1<<(uint(i)&7)) == 0 {
+			continue
+		}
+		l := chunkLen(int64(s.offer.Size), i)
+		if _, err := part.ReadAt(buf[:l], int64(i)*ChunkSize); err != nil && !(errors.Is(err, io.EOF) && l == 0) {
+			continue
+		}
+		if _, err := leaves.ReadAt(want[:], int64(i)*leafLen); err != nil {
+			continue
+		}
+		if got := filexfer.LeafHash(buf[:l]); [leafLen]byte(got) == want {
+			s.bits[i>>3] |= 1 << (uint(i) & 7)
+			s.have++
+		}
+	}
+	return true
 }
 
 // tailClear: the unused bits of the last byte are zero.
@@ -136,7 +207,7 @@ func (s *FileStore) Count() int {
 }
 
 // Put implements Store. The chunk must be exactly the length chunk i has; a chunk stored already
-// is left as it is.
+// is left as it is. The caller has checked the chunk against the root of the offer.
 func (s *FileStore) Put(i int, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,13 +223,17 @@ func (s *FileStore) Put(i int, data []byte) error {
 	if _, err := s.part.WriteAt(data, int64(i)*ChunkSize); err != nil {
 		return err
 	}
+	leaf := filexfer.LeafHash(data)
+	if _, err := s.leaves.WriteAt(leaf[:], int64(i)*leafLen); err != nil {
+		return err
+	}
 	s.bits[i>>3] |= 1 << (uint(i) & 7)
 	s.have++
 	s.dirty = true
 	return nil
 }
 
-// Flush syncs the part file and writes the resume bitmap.
+// Flush syncs the part and leaf files and writes the resume bitmap.
 func (s *FileStore) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,8 +247,12 @@ func (s *FileStore) flushLocked() error {
 	if err := s.part.Sync(); err != nil {
 		return err
 	}
+	if err := s.leaves.Sync(); err != nil {
+		return err
+	}
 	tmp := s.bitsPath + ".tmp"
-	if err := os.WriteFile(tmp, s.bits, 0o600); err != nil {
+	hdr := append(append([]byte(bitsMagic), s.offer.Root[:]...), s.bits...)
+	if err := os.WriteFile(tmp, hdr, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.bitsPath); err != nil {
@@ -192,16 +271,22 @@ func (s *FileStore) Close() error {
 	}
 	s.closed = true
 	err := s.flushLocked()
-	if s.part != nil {
-		if cerr := s.part.Close(); err == nil {
-			err = cerr
+	for _, f := range []**os.File{&s.part, &s.leaves} {
+		if *f != nil {
+			if cerr := (*f).Close(); err == nil {
+				err = cerr
+			}
+			*f = nil
 		}
-		s.part = nil
 	}
 	return err
 }
 
-// Commit moves the finished file to its final name. It needs every chunk.
+// Commit proves the finished file and moves it to its final name. It needs every chunk. The part
+// file is read back once: a chunk whose bytes no longer match the leaf hash stored with it is
+// dropped (the next fetch asks for it again) and Commit fails with ErrCorrupt; when every chunk
+// matches but the tree does not give the root of the offer, nothing in the download can be
+// trusted and it starts over, also with ErrCorrupt.
 func (s *FileStore) Commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -214,10 +299,42 @@ func (s *FileStore) Commit() error {
 	if err := s.part.Sync(); err != nil {
 		return err
 	}
+	hashes := make([]filexfer.Hash, s.n)
+	buf := make([]byte, ChunkSize)
+	var stored [leafLen]byte
+	bad := 0
+	for i := 0; i < s.n; i++ {
+		l := chunkLen(int64(s.offer.Size), i)
+		if _, err := s.part.ReadAt(buf[:l], int64(i)*ChunkSize); err != nil && !(errors.Is(err, io.EOF) && l == 0) {
+			return err
+		}
+		hashes[i] = filexfer.LeafHash(buf[:l])
+		if _, err := s.leaves.ReadAt(stored[:], int64(i)*leafLen); err != nil {
+			return err
+		}
+		if [leafLen]byte(hashes[i]) != stored {
+			s.bits[i>>3] &^= 1 << (uint(i) & 7)
+			s.have--
+			bad++
+		}
+	}
+	if bad > 0 {
+		s.dirty = true
+		_ = s.flushLocked()
+		return fmt.Errorf("%w: %d chunks changed on disk", ErrCorrupt, bad)
+	}
+	if [32]byte(filexfer.NewTree(hashes).Root()) != s.offer.Root {
+		s.bits = make([]byte, len(s.bits))
+		s.have = 0
+		s.dirty = true
+		_ = s.flushLocked()
+		return fmt.Errorf("%w: the file does not match the offered root", ErrCorrupt)
+	}
 	if err := s.part.Close(); err != nil {
 		return err
 	}
-	s.part, s.closed = nil, true
+	_ = s.leaves.Close()
+	s.part, s.leaves, s.closed = nil, nil, true
 	path, err := reserveName(s.dir, filexfer.SafeName(s.offer.Name))
 	if err != nil {
 		return err
@@ -227,6 +344,7 @@ func (s *FileStore) Commit() error {
 		return err
 	}
 	_ = os.Remove(s.bitsPath)
+	_ = os.Remove(s.leafPath)
 	markFromInternet(path)
 	s.final = path
 	return nil

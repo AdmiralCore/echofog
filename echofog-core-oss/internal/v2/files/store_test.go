@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/echofog/echofog-core/internal/services/filexfer"
 )
 
 // openStore opens a store and closes it when the test ends (Windows cannot remove an open file).
@@ -22,8 +24,12 @@ func openStore(t *testing.T, dir string, o Offer, free func(string) (uint64, err
 
 func storeOffer(name string, chunks int) (Offer, []byte) {
 	data := content(chunks*ChunkSize-100, int64(chunks))
+	tree, err := filexfer.HashFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		panic(err)
+	}
 	o := goodOffer()
-	o.Name, o.Size = name, uint64(len(data))
+	o.Name, o.Size, o.Root = name, uint64(len(data)), [32]byte(tree.Root())
 	return o, data
 }
 
@@ -193,7 +199,7 @@ func TestFileStoreChecksTheDisk(t *testing.T) {
 	putAll(t, s, data, func(i int) bool { return i < 3 })
 	_ = s.Flush()
 	_ = s.Close()
-	fits := func(string) (uint64, error) { return 64<<20 + ChunkSize, nil }
+	fits := func(string) (uint64, error) { return 64<<20 + 2*ChunkSize, nil }
 	if _, err := openStore(t, dir, o, fits); err != nil {
 		t.Fatalf("one chunk missing, room for it: %v", err)
 	}
