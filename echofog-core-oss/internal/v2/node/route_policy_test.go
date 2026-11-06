@@ -14,10 +14,12 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
 	"github.com/echofog/echofog-core/internal/v2/service"
@@ -383,5 +385,50 @@ func TestNoHolePunchingWhereThePolicyDeniesUDP(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 	if n := pn.count(); n != 0 {
 		t.Fatalf("the punching network was used %d times from a network where UDP is denied", n)
+	}
+}
+
+// M5: a card with a home and a foreign address. The punch target rules take the card's addresses as
+// legitimate targets, so the foreign one must not be among them where the row denies UDP to it.
+func TestPunchTargetsLeaveOutTheForeignAddressOfACard(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{net: rp.NetMobile, rules: entryRules(t, "198.51.100.0/24"), bCover: true,
+		features: true,
+		bMutate: func(c *cards.Config) {
+			c.Listeners[0].Host = "198.51.100.50"
+			c.Listeners = append(c.Listeners, cards.Listener{Suite: objects.SuiteNoise3, Host: "203.0.113.5", Port: 61000,
+				Mask: c.Listeners[0].Mask})
+		}})
+	raw, ok := w.b.rt.Cards().Own(objects.ScopePeer)
+	if !ok {
+		t.Fatal("B has no peer card")
+	}
+	rl := node.PunchRulesOf(w.a.rt, raw, netip.MustParseAddrPort("198.51.100.50:40000"))
+	var home, foreign bool
+	for _, ip := range rl.CardIPs {
+		home = home || ip == netip.MustParseAddr("198.51.100.50")
+		foreign = foreign || ip == netip.MustParseAddr("203.0.113.5")
+	}
+	if !home {
+		t.Fatalf("card IPs %v lack the home address", rl.CardIPs)
+	}
+	if foreign {
+		t.Fatalf("card IPs %v contain the foreign address: a punch target there is UDP to abroad", rl.CardIPs)
+	}
+}
+
+// L6: a bootstrap dial has no card, but its address is still a direct dial: from a Russian mobile
+// network a foreign list address gets no TCP or UDP connection at all.
+func TestBootstrapDialHonoursThePolicy(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{net: rp.NetMobile, rules: entryRules(t, "198.51.100.0/24"), bCover: true})
+	mask := keys.New(keys.X25519, make([]byte, 32))
+	for _, s := range []uint32{objects.SuiteNoise3, objects.SuiteReality2QUIC, objects.SuiteReality2TCP} {
+		_, err := w.a.rt.DialBootstrap(w.ctx, node.BootstrapTarget{
+			Addr: &pb.Addr{Suite: s, Host: "203.0.113.5", Port: 4430}, Mask: mask}, node.DialOpt{})
+		if err == nil {
+			t.Fatalf("suite %d: the foreign bootstrap address was dialed", s)
+		}
+	}
+	if n := w.log.count(func(c dialCall) bool { return strings.HasPrefix(c.host, "203.0.113.") }); n != 0 {
+		t.Fatalf("%d direct dials to the foreign bootstrap address, want none", n)
 	}
 }
