@@ -91,11 +91,18 @@ The local storage key (L6) is renamed the same way: `echofog/storage2/key` repla
 | Type | Frame | Body | Max |
 |---|---|---|---|
 | 0x40 | DELIVER | `{ uint64 req = 1; bytes envelope = 2; }` a `SealedEnvelope` ≤ 61440 bytes | 61504 |
-| 0x41 | DELIVERED | `{ uint64 req = 1; uint32 status = 2; }` 0 ok, 1 duplicate (also ok), 2 no-session, 3 too-large, 4 refused | 32 |
+| 0x41 | DELIVERED | `{ uint64 req = 1; uint32 status = 2; }` 0 ok, 1 duplicate (also ok), 2 retired (never sent, see below), 3 too-large, 4 refused | 32 |
 | 0x42 | BUNDLE_GET | `{ uint64 req = 1; }` | 16 |
 | 0x43 | BUNDLE | `{ uint64 req = 1; bytes prekeys = 2; }` a `prekeys/2` object with one fresh one-time prekey | 8256 |
 
 Timeouts: DELIVER 15 s, BUNDLE_GET 5 s.
+
+**One refusal.** A receiver answers every envelope it does not accept with `refused` (4): a bad
+envelope, an unknown or unbound sender device, a failed decryption, a failed lookup, or a message
+from a device it has no session with. The answer does not say which check failed. So a sender cannot
+learn from DELIVERED whether the recipient has a session with it (the earlier `no-session` status 2
+told it). A v2 node never sends status 2. A sender that gets 2 from an older node drops its ratchet
+envelope and starts again with a fresh PQXDH init, as the sender code does.
 
 ### 4.2 Sealed sender
 
