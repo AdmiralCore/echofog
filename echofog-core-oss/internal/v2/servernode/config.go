@@ -56,8 +56,12 @@ type Config struct {
 	Roles []string `json:"roles"`
 	// Cover is host:port of the site the camouflaged suites imitate. Without a camouflaged listener
 	// the node has no public card (D37) and tells the operator.
-	Cover    string       `json:"cover,omitempty"`
-	Operator OperatorSpec `json:"operator"`
+	Cover string `json:"cover,omitempty"`
+	// SiteDir is the folder with the site the cover imitates (T12.5); CoverCert is the certificate
+	// file of the cover domain, which the doctor watches for expiry.
+	SiteDir   string       `json:"site_dir,omitempty"`
+	CoverCert string       `json:"cover_cert,omitempty"`
+	Operator  OperatorSpec `json:"operator"`
 }
 
 var allRoles = map[string]bool{"relay": true, "exit": true, "mailbox": true, "dht-server": true}

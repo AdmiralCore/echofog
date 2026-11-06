@@ -71,8 +71,15 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	return pos, nil
 }
 
-// Main runs an `echofog-node v2` command and returns the exit code: 0 done, 1 failed, 2 misuse.
+// Main runs an `echofog-node v2` command with the process's standard input.
 func Main(args []string, env func(string) string, stdout, stderr io.Writer) int {
+	return MainIO(args, env, os.Stdin, stdout, stderr)
+}
+
+// MainIO runs an `echofog-node v2` command and returns the exit code: 0 done, 1 failed, 2 misuse.
+// stdin answers the questions of the setup wizard.
+func MainIO(args []string, env func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
+	_ = stdin
 	if env == nil {
 		env = func(string) string { return "" }
 	}
