@@ -53,6 +53,9 @@ func TestDecideTable(t *testing.T) {
 		{"IR to foreign: no QUIC until udp is allowed", "IR", rp.NetWired, rp.DestForeign, true, []uint32{rt, ws}, 0, false, true, false, 0},
 		{"others to foreign", "DE", rp.NetMobile, rp.DestForeign, true, nil, 0, true, true, false, 0},
 		{"others to own country", "DE", rp.NetWired, rp.DestDomestic, true, nil, 0, true, false, false, 0},
+		{"unknown country: TLS over TCP only", "", rp.NetWired, rp.DestForeign, true, []uint32{rt, ws}, 0, false, false, false, 0},
+		{"unknown country, mobile: not stricter by itself", "", rp.NetMobile, rp.DestForeign, true, []uint32{rt, ws}, 0, false, false, false, 0},
+		{"unknown country, a domestic class cannot exist", "", rp.NetWired, rp.DestDomestic, true, []uint32{rt, ws}, 0, false, false, false, 0},
 	}
 	r := rp.Default()
 	for _, c := range cases {

@@ -38,6 +38,9 @@ const (
 	// EventNoDomesticEntry: the country policy needs an entry node in the own country and there is
 	// none (or none verified); Event.Err is ErrNoDomesticEntry or ErrRouteUnsupported (T6.4).
 	EventNoDomesticEntry EventKind = "node.no-domestic-entry"
+	// EventCountryChanged: the client's own country was decided or changed (user setting, GeoIP of
+	// the public address, platform hint); new paths follow the new row, live sessions stay (T6.4c).
+	EventCountryChanged EventKind = "node.country-changed"
 	// EventPortMapping: the set of ports the router forwards for this node changed and the cards
 	// follow it (T6.5b). The message never carries addresses.
 	EventPortMapping EventKind = "node.port-mapping"

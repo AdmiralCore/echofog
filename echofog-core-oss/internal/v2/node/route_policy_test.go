@@ -89,6 +89,8 @@ type routeOpts struct {
 	// features turns path-migration on for A and B; punchNet is A's hole-punching network.
 	features bool
 	punchNet node.PunchNetwork
+	// noLocal leaves A without any public address: its own country is not known.
+	noLocal bool
 }
 
 type routeWorld struct {
@@ -124,7 +126,9 @@ func newRouteWorld(t *testing.T, o routeOpts) *routeWorld {
 		if o.punchNet != nil {
 			c.PunchNet = o.punchNet
 		}
-		c.Profile.LocalAddrs = func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("198.51.100.9")} }
+		if !o.noLocal {
+			c.Profile.LocalAddrs = func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("198.51.100.9")} }
+		}
 	})
 	b := newTestNodeFull(t, cards.Visible, o.bCover, []carrier.Listener{bq}, nil, o.bMutate, func(c *node.Config) {
 		if o.features {

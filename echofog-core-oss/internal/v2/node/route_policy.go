@@ -28,6 +28,9 @@ type RouteReport struct {
 	Dest         routepolicy.DestClass
 	// ViaEntry: the first hop was an entry node inside the own country.
 	ViaEntry bool
+	// Country and CountrySource: the client's own country at that dial and where it came from.
+	Country       string
+	CountrySource CountrySource
 }
 
 // SetNetClass changes the kind of the client's network (T6.4).
