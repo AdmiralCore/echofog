@@ -34,6 +34,10 @@ type world struct {
 	mail  map[[32]byte][][]byte
 	// mailDown makes Deposit fail
 	mailDown bool
+	// tune changes the configuration of every service built after it is set
+	tune func(*ServiceConfig)
+	// resolves counts Directory.Resolve calls by node
+	resolves map[[32]byte]int
 	sent     []sentEnv // every envelope given to Link.Deliver or Mail.Deposit
 }
 
@@ -57,13 +61,14 @@ type peer struct {
 	inbox  []Incoming
 	status map[[16]byte]State
 	ctrl   []*chatpb.Control
+	evMu   sync.Mutex // the event callbacks run on the goroutines of other peers
 }
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	t.Cleanup(memguard.Purge)
 	return &world{t: t, clock: &clock{t: time.Unix(1_800_000_000, 0)}, users: map[[32]byte]*peer{}, byDev: map[[32]byte]*peer{},
-		down: map[[32]byte]bool{}, mail: map[[32]byte][][]byte{}}
+		down: map[[32]byte]bool{}, mail: map[[32]byte][][]byte{}, resolves: map[[32]byte]int{}}
 }
 
 func (w *world) newPeer() *peer {
@@ -107,15 +112,19 @@ func (p *peer) open() {
 		t.Fatal(err)
 	}
 	p.st, p.ids, p.cr = st, ids, cr
-	p.svc, err = NewService(ServiceConfig{
+	sc := ServiceConfig{
 		Self: p.self, Crypto: cr, Dir: (*dirFake)(p.w), Link: &linkFake{w: p.w, from: p}, Mail: &mailFake{w: p.w},
 		Store: st.Store("v2/chat/outbox"), Now: p.w.clock.Now, NoJitter: true,
 		Events: Events{
-			Message: func(in Incoming) { p.inbox = append(p.inbox, in) },
-			Status:  func(id [16]byte, s State) { p.status[id] = s },
-			Control: func(from [32]byte, c *chatpb.Control) { p.ctrl = append(p.ctrl, c) },
+			Message: func(in Incoming) { p.evMu.Lock(); p.inbox = append(p.inbox, in); p.evMu.Unlock() },
+			Status:  func(id [16]byte, s State) { p.evMu.Lock(); p.status[id] = s; p.evMu.Unlock() },
+			Control: func(from [32]byte, c *chatpb.Control) { p.evMu.Lock(); p.ctrl = append(p.ctrl, c); p.evMu.Unlock() },
 		},
-	})
+	}
+	if p.w.tune != nil {
+		p.w.tune(&sc)
+	}
+	p.svc, err = NewService(sc)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -156,6 +165,7 @@ func (d *dirFake) Resolve(ctx context.Context, node [32]byte) (*dht.Resolved, er
 	w := (*world)(d)
 	w.mu.Lock()
 	p := w.users[node]
+	w.resolves[node]++
 	w.mu.Unlock()
 	if p == nil {
 		return nil, errors.New("not found")
@@ -341,28 +351,40 @@ func TestNothingReachableStaysWaiting(t *testing.T) {
 	}
 }
 
-func TestRefusedAndNoSessionAreNotDelivered(t *testing.T) {
+func TestLostSessionIsRepairedByTheReceiver(t *testing.T) {
 	w := newWorld(t)
 	a, b := w.newPeer(), w.newPeer()
-	id := w.send(a, b, "first")
+	w.send(a, b, "first")
 	w.tick(a)
-	// b loses its sessions (a new store): the next ratchet message gets no-session, a starts again
+	// b loses its sessions (a new store). It answers every ratchet message with the same refusal,
+	// whether it has a session or not; after three distinct ones it starts a new session itself.
 	b.dir = t.TempDir()
 	b.restart()
-	id2 := w.send(a, b, "after b lost its state")
-	w.tick(a)
-	if st, _ := a.svc.Status(id2); st == StateDelivered {
-		t.Fatal("delivered although b answered no-session")
+	var ids [][16]byte
+	for _, s := range []string{"m1", "m2", "m3"} {
+		ids = append(ids, w.send(a, b, s))
 	}
-	w.clock.Add(time.Minute)
 	w.tick(a)
-	if st, _ := a.svc.Status(id2); st != StateDelivered {
-		t.Fatalf("not delivered after the new session: %v", st)
+	for _, id := range ids {
+		if st, _ := a.svc.Status(id); st == StateDelivered {
+			t.Fatal("delivered although b could not read it")
+		}
 	}
-	if got := b.texts(); len(got) == 0 || got[len(got)-1] != "after b lost its state" {
+	w.tick(b) // b starts the new session
+	// the pending messages were made for the lost session: a makes them again for the new one
+	for i := 0; i < 3; i++ {
+		w.clock.Add(time.Minute)
+		w.tick(a, b)
+	}
+	for _, id := range ids {
+		if st, _ := a.svc.Status(id); st != StateDelivered {
+			t.Fatalf("not delivered after the repair: %v", st)
+		}
+	}
+	got := b.texts()
+	if len(got) < 3 || got[len(got)-1] != "m3" {
 		t.Fatalf("b got %v", got)
 	}
-	_ = id
 }
 
 func TestOutboxSurvivesRestart(t *testing.T) {
@@ -440,8 +462,8 @@ func TestReceiveDropsRepeatsAndMismatches(t *testing.T) {
 		t.Fatalf("misaddressed: %d", st)
 	}
 	// a ratchet message from a device without a session
-	if st := b.svc.Receive(context.Background(), craft(t, b, c, c.self.Account, c.self.DeviceKey, []byte("m"), false)); st != chatpb.StatusNoSession {
-		t.Fatalf("no session: %d", st)
+	if st := b.svc.Receive(context.Background(), craft(t, b, c, c.self.Account, c.self.DeviceKey, []byte("m"), false)); st != chatpb.StatusRefused {
+		t.Fatalf("no session: %d (an unauthenticated sender learns nothing about sessions, AD20)", st)
 	}
 	// a ratchet message that names another account than the session is bound to is dropped
 	other := craft(t, b, a, c.self.Account, a.self.DeviceKey, mustEnc(t, a, b, "forged sender"), false)
@@ -450,7 +472,7 @@ func TestReceiveDropsRepeatsAndMismatches(t *testing.T) {
 	}
 	// ... and so is one that names another device
 	other = craft(t, b, a, a.self.Account, c.self.DeviceKey, mustEnc(t, a, b, "forged device"), false)
-	if st := b.svc.Receive(context.Background(), other); st != chatpb.StatusNoSession && st != chatpb.StatusRefused {
+	if st := b.svc.Receive(context.Background(), other); st != chatpb.StatusRefused {
 		t.Fatalf("device not matching the session: %d", st)
 	}
 	for _, s := range b.texts() {

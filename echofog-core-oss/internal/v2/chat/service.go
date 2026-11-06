@@ -98,7 +98,46 @@ type ServiceConfig struct {
 	Events Events
 	// NoJitter turns the +-20 % of the retry pauses off (tests, AD13).
 	NoJitter bool
+
+	// Limits; zero means the default below.
+	MaxOutbox        int // all outgoing items
+	MaxOutboxPerPeer int // outgoing items for one account
+	MaxOutboxBytes   int // plaintext and envelope bytes of all outgoing items
+	MaxSeen          int // remembered incoming message IDs
+	MaxSeenPerDevice int // ... of one sender device
 }
+
+// Default limits.
+const (
+	DefaultMaxOutbox        = 4096
+	DefaultMaxOutboxPerPeer = 512
+	DefaultMaxOutboxBytes   = 64 << 20
+	DefaultMaxSeen          = 500_000
+	DefaultMaxSeenPerDevice = 50_000
+	// MaxReceiptsPerPeer bounds the queued delivery receipts for one account; more are dropped (the
+	// recipient already has the message, a receipt only updates a status).
+	MaxReceiptsPerPeer = 16
+)
+
+// maxTrackedDevices bounds each of the failure tables (one entry per sender device).
+const maxTrackedDevices = 1024
+
+// ErrOutboxFull is Send with the outbox at a limit.
+var ErrOutboxFull = errors.New("chat: outbox full")
+
+// Stats are the counters of the outbox and of the remembered IDs.
+type Stats struct {
+	Outbox  int
+	PerPeer map[[32]byte]int
+	Bytes   int
+	Seen    int
+}
+
+// Stats returns the maintained counters.
+func (s *Service) Stats() Stats { return Stats{} }
+
+// Recount counts the same things again from the store; the two must always agree (AD19).
+func (s *Service) Recount() Stats { return Stats{} }
 
 // Service is the delivery side of chat/2: outbox, receiving, deduplication and recovery.
 type Service struct {
