@@ -77,6 +77,9 @@ var PunchRulesOf = func(r *Runtime, raw []byte, peer netip.AddrPort) punch.Rules
 	return r.relayc.rules(ps)
 }
 
+// CheckClockForTest runs the post-failure clock check (D36) as a failed dial would.
+func (r *Runtime) CheckClockForTest() { r.maybeClockCheck() }
+
 // AdmitVersionOf returns the handshake version admission of the runtime (T4.5).
 var AdmitVersionOf = func(r *Runtime) func(uint32) bool { return r.admitVersion() }
 

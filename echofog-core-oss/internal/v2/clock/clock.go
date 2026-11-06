@@ -1,15 +1,21 @@
 package clock
 
 import (
+	"net/netip"
 	"slices"
 	"sync"
 	"time"
 )
 
 const (
-	// maxPeerSamples is the number of authenticated peers whose offsets the clock keeps
-	// (handshake.md §7: "the median offset to its last 5 authenticated peers").
+	// maxPeerSamples is the number of networks whose samples the clock keeps (handshake.md §7).
 	maxPeerSamples = 5
+	// minNetworks is the least number of distinct /16 networks a median needs.
+	minNetworks = 3
+	// maxPeerOffset bounds the offset peers can set, from the raw clock; maxPeerStep bounds one
+	// update. A larger correction needs the CDN check (handshake.md §7, audit M1 B-2).
+	maxPeerOffset = 600 * time.Second
+	maxPeerStep   = 120 * time.Second
 	// peerAgreement is how close two central samples must be to form a median when the
 	// number of samples is even. Peer times travel in whole unix seconds, so honest
 	// peers differ by at most about a second through receive-time jitter.
@@ -17,10 +23,6 @@ const (
 	noPeerAfter   = time.Hour
 	warnAfter     = 60 * time.Second
 )
-
-// PeerID is the authenticated identity of a peer that supplied a clock sample. The node
-// passes the device ID it authenticated in the handshake; the clock treats it as opaque.
-type PeerID [32]byte
 
 // Config configures a Clock.
 type Config struct {
@@ -54,9 +56,25 @@ type Clock struct {
 	warned    bool
 }
 
+// netKey names the network of a sample: the /16 of an IPv4 address, the /32 of an IPv6 one.
+type netKey [5]byte
+
 type peerSample struct {
-	peer   PeerID
+	net    netKey
 	offset time.Duration
+}
+
+func keyOf(a netip.Addr) (netKey, bool) {
+	a = a.Unmap()
+	switch {
+	case a.Is4():
+		b := a.As4()
+		return netKey{4, b[0], b[1]}, true
+	case a.Is6():
+		b := a.As16()
+		return netKey{6, b[0], b[1], b[2], b[3]}, true
+	}
+	return netKey{}, false
 }
 
 // New returns a Clock. Without Config.Now it uses time.Now; without Config.Endpoints it
@@ -111,34 +129,39 @@ func (c *Clock) Offset() time.Duration {
 	return c.offset
 }
 
-// AddPeerSample records the time reported by one authenticated peer. peerTime is the
-// peer's HsInit.time or HsResp.time as received; the sample counts only after the peer
-// has been authenticated (handshake.md §7).
-func (c *Clock) AddPeerSample(peer PeerID, peerTime time.Time) {
+// AddOutgoingSample records the time reported by the peer of one session this node dialed
+// (HsResp.time, authenticated). Incoming sessions give no sample: anyone can open one (handshake.md
+// section 7). At most one sample counts per /16 network (IPv6: /32), the median is used only when at
+// least 3 networks gave samples, it never moves the offset by more than 120 s at once, and the
+// offset never exceeds 600 s from the raw clock; only the CDN check can set a larger one.
+func (c *Clock) AddOutgoingSample(remote netip.Addr, peerTime time.Time) {
 	raw := c.now()
 	c.mu.Lock()
 	c.lastPeer = raw
 
 	warn := false
-	if !peerTime.IsZero() {
+	if key, ok := keyOf(remote); ok && !peerTime.IsZero() {
 		offset := peerTime.Truncate(time.Second).Sub(raw.Truncate(time.Second))
 		for i := range c.samples {
-			if c.samples[i].peer == peer {
+			if c.samples[i].net == key {
 				c.samples = append(c.samples[:i], c.samples[i+1:]...)
 				break
 			}
 		}
-		c.samples = append(c.samples, peerSample{peer: peer, offset: offset})
+		c.samples = append(c.samples, peerSample{net: key, offset: offset})
 		if len(c.samples) > maxPeerSamples {
 			copy(c.samples, c.samples[len(c.samples)-maxPeerSamples:])
 			c.samples = c.samples[:maxPeerSamples]
 		}
-		if offset, ok := medianOffset(c.samples); ok {
-			warn = c.setOffsetLocked(offset)
-		} else {
-			// The two central samples disagree: fall back to the raw local clock
-			// rather than keep a correction one sample supplied.
-			warn = c.setOffsetLocked(0)
+		if len(c.samples) >= minNetworks {
+			target, ok := medianOffset(c.samples)
+			if !ok {
+				// The two central samples disagree: no estimate, drift back to the raw clock.
+				target = 0
+			}
+			target = clampDuration(target, maxPeerOffset)
+			next := c.offset + clampDuration(target-c.offset, maxPeerStep)
+			warn = c.setOffsetLocked(next)
 		}
 	}
 	offset := c.offset
@@ -147,6 +170,16 @@ func (c *Clock) AddPeerSample(peer PeerID, peerTime time.Time) {
 	if warn && c.warn != nil {
 		c.warn(offset)
 	}
+}
+
+func clampDuration(d, limit time.Duration) time.Duration {
+	if d > limit {
+		return limit
+	}
+	if d < -limit {
+		return -limit
+	}
+	return d
 }
 
 // setOffsetLocked applies offset and reports whether a new warning must be raised.

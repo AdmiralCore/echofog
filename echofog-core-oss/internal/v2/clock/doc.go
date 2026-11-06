@@ -3,23 +3,22 @@
 // available, by the Date headers of large CDN endpoints (handshake.md §7, Decision D36;
 // registries.md §12).
 //
-// The corrected time is what the node puts into HsInit.time and HsResp.time
-// (handshake.md §7) and into the ts field of the first L0 packets (wire.md §2.4, §3.2).
-// Callers use Now or Unix for both; the package never changes a wire format itself.
+// The corrected time is what the node puts into the ts field of the first L0 packets
+// (wire.md §2.4, §3.2). The handshake (HsInit.time, HsResp.time and its +-600 s check) and card
+// lifetimes use the raw clock, never the offset (handshake.md §7). The package never changes a
+// wire format itself.
 //
 // # Peer offset
 //
-// AddPeerSample records the offset between one authenticated peer's reported time and
-// the raw local clock. The clock keeps the last five distinct peers: a newer sample from
-// the same peer replaces its previous one, and the sixth peer pushes out the oldest.
-// Offset is the median of those samples.
+// AddOutgoingSample records the time one peer of a session this node dialed reported. Incoming
+// sessions give no sample. The clock keeps one sample per /16 network (IPv6: /32), the last five
+// networks; a newer sample from a network replaces its previous one. The offset is the median of
+// the samples and is used only when at least 3 networks gave samples. One update moves it by at most
+// 120 s and it never exceeds 600 s from the raw clock; a larger correction needs the CDN check.
 //
-// With an even number of samples the median is the midpoint of the two central values,
-// and the clock applies it only when they agree within 2 s. Otherwise the two central
-// values disagree, so there is no median correction and the clock falls back to the raw
-// local time instead of keeping a correction that one sample supplied. This is the
-// strict reading that makes two liars reporting different times produce no correction
-// while two agreeing liars out of three still move the clock.
+// With an even number of samples the median is the midpoint of the two central values, applied only
+// when they agree within 2 s; otherwise there is no estimate and the offset drifts back to the raw
+// clock by the same step limit.
 //
 // # CDN check
 //
