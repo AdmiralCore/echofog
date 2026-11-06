@@ -165,6 +165,8 @@ func (r *Runtime) initCallTransport() {
 		Links:   callLinks{r},
 		Signals: callSignalPort{r},
 		Route:   r.CallRoute,
+		Admit:   r.admitCallMedia,
+		Now:     r.clock.Now,
 	})
 }
 
@@ -211,4 +213,15 @@ func (l *lateCallService) Forward(ctx context.Context, p call.Peer, raw []byte) 
 // SetCallAdmit sets who may send call media to this node: the members of the room it is in. The
 // app updates it as the room changes. Until it is set, and for a nil function, no media is
 // accepted: a node outside a call takes none (T9.3b).
-func (r *Runtime) SetCallAdmit(f func(device [32]byte) bool) {}
+func (r *Runtime) SetCallAdmit(f func(device [32]byte) bool) {
+	if f == nil {
+		r.callAdmit.Store(nil)
+		return
+	}
+	r.callAdmit.Store(&f)
+}
+
+func (r *Runtime) admitCallMedia(device [32]byte) bool {
+	f := r.callAdmit.Load()
+	return f != nil && (*f)(device)
+}

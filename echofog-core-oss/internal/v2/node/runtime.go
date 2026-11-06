@@ -192,6 +192,7 @@ type Runtime struct {
 	// call media (T9.3): the transport over live sessions, call_route and the signal port
 	callTr      *callnet.Transport
 	callSvc     *call.Service
+	callAdmit   atomic.Pointer[func([32]byte) bool]
 	callRoute   atomic.Uint32
 	callSignals atomic.Pointer[signalHolder]
 	dht         *dht.Table
