@@ -72,9 +72,9 @@ func TestBirthdayListenerSock(t *testing.T) {
 // Dial from one extra socket to an extra socket that accepts: the birthday pair on loopback.
 func TestBirthdayDialFromAcceptOn(t *testing.T) {
 	a, _, _ := startNoise3(t)
-	b, cardB, _ := startNoise3(t)
+	b, cardB, addrB := startNoise3(t)
 	delivered := make(chan mux.Carrier, 1)
-	sa := &BirthdaySocks{Main: a, Card: cardB}
+	sa := &BirthdaySocks{Main: a, Card: cardB, Base: addrB}
 	sb := &BirthdaySocks{Main: b, Card: nil, Deliver: func(c mux.Carrier) { delivered <- c }}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
