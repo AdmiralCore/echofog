@@ -939,6 +939,112 @@ func (x *Receipt) GetIds() [][]byte {
 	return nil
 }
 
+// DELIVER body (0x40): a SealedEnvelope of at most 61440 bytes.
+type Deliver struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Req           uint64                 `protobuf:"varint,1,opt,name=req,proto3" json:"req,omitempty"`
+	Envelope      []byte                 `protobuf:"bytes,2,opt,name=envelope,proto3" json:"envelope,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Deliver) Reset() {
+	*x = Deliver{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Deliver) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Deliver) ProtoMessage() {}
+
+func (x *Deliver) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Deliver.ProtoReflect.Descriptor instead.
+func (*Deliver) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *Deliver) GetReq() uint64 {
+	if x != nil {
+		return x.Req
+	}
+	return 0
+}
+
+func (x *Deliver) GetEnvelope() []byte {
+	if x != nil {
+		return x.Envelope
+	}
+	return nil
+}
+
+// DELIVERED body (0x41): 0 ok, 1 duplicate (also ok), 2 no-session, 3 too-large, 4 refused.
+type Delivered struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Req           uint64                 `protobuf:"varint,1,opt,name=req,proto3" json:"req,omitempty"`
+	Status        uint32                 `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Delivered) Reset() {
+	*x = Delivered{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Delivered) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Delivered) ProtoMessage() {}
+
+func (x *Delivered) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Delivered.ProtoReflect.Descriptor instead.
+func (*Delivered) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *Delivered) GetReq() uint64 {
+	if x != nil {
+		return x.Req
+	}
+	return 0
+}
+
+func (x *Delivered) GetStatus() uint32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
 var File_internal_v2_chat_pb_chat_proto protoreflect.FileDescriptor
 
 const file_internal_v2_chat_pb_chat_proto_rawDesc = "" +
@@ -1007,7 +1113,13 @@ const file_internal_v2_chat_pb_chat_proto_rawDesc = "" +
 	"\x04card\x18\x02 \x01(\fR\x04card\"\a\n" +
 	"\x05Reset\"\x1b\n" +
 	"\aReceipt\x12\x10\n" +
-	"\x03ids\x18\x01 \x03(\fR\x03ids*\x8f\x01\n" +
+	"\x03ids\x18\x01 \x03(\fR\x03ids\"7\n" +
+	"\aDeliver\x12\x10\n" +
+	"\x03req\x18\x01 \x01(\x04R\x03req\x12\x1a\n" +
+	"\benvelope\x18\x02 \x01(\fR\benvelope\"5\n" +
+	"\tDelivered\x12\x10\n" +
+	"\x03req\x18\x01 \x01(\x04R\x03req\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\rR\x06status*\x8f\x01\n" +
 	"\x13PersonalMessageType\x12\x11\n" +
 	"\rMSG_TYPE_TEXT\x10\x00\x12\x12\n" +
 	"\x0eMSG_TYPE_PHOTO\x10\x01\x12\x12\n" +
@@ -1029,7 +1141,7 @@ func file_internal_v2_chat_pb_chat_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_v2_chat_pb_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_v2_chat_pb_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_internal_v2_chat_pb_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_internal_v2_chat_pb_chat_proto_goTypes = []any{
 	(PersonalMessageType)(0),     // 0: echofog.v2.chat.PersonalMessageType
 	(*RatchetHeader)(nil),        // 1: echofog.v2.chat.RatchetHeader
@@ -1044,6 +1156,8 @@ var file_internal_v2_chat_pb_chat_proto_goTypes = []any{
 	(*Knock)(nil),                // 10: echofog.v2.chat.Knock
 	(*Reset)(nil),                // 11: echofog.v2.chat.Reset
 	(*Receipt)(nil),              // 12: echofog.v2.chat.Receipt
+	(*Deliver)(nil),              // 13: echofog.v2.chat.Deliver
+	(*Delivered)(nil),            // 14: echofog.v2.chat.Delivered
 }
 var file_internal_v2_chat_pb_chat_proto_depIdxs = []int32{
 	1,  // 0: echofog.v2.chat.SecureMessage.header:type_name -> echofog.v2.chat.RatchetHeader
@@ -1078,7 +1192,7 @@ func file_internal_v2_chat_pb_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_v2_chat_pb_chat_proto_rawDesc), len(file_internal_v2_chat_pb_chat_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
