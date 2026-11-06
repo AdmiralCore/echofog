@@ -52,6 +52,8 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == api.TunHelperFlag {
 		os.Exit(api.RunTunHelper(os.Args[2:]))
 	}
+	servernode.BuildVersion = version
+	servernode.FreeBytes = freeBytes
 	cmd, args := "run", os.Args[1:]
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]

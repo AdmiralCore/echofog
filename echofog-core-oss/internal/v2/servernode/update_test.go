@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -91,7 +92,7 @@ func (r *updRig) publish(version string, signers ...*keys.Signer) {
 	sum := sha256.Sum256(r.artifact)
 	rel := &pb.Release{Version: version, ReleasedAt: uint64(updNow.Add(-time.Hour).Unix()), Artifacts: []*pb.Artifact{
 		{Platform: "linux-amd64", Name: "echofog-node", Sha256: sum[:], Size: uint64(len(r.artifact)), Url: r.srv.URL + "/echofog-node"},
-		{Platform: "windows-amd64", Name: "echofog-node.exe", Sha256: sum[:], Size: 1, Url: r.srv.URL + "/echofog-node.exe"},
+		{Platform: runtime.GOOS + "-" + runtime.GOARCH, Name: "echofog-node", Sha256: sum[:], Size: uint64(len(r.artifact)), Url: r.srv.URL + "/echofog-node"},
 	}}
 	raw, err := objects.SealRelease(signers[0], rel.ReleasedAt+399*86400, rel, signers[1:]...)
 	if err != nil {
@@ -318,8 +319,10 @@ func TestCLIUpdate(t *testing.T) {
 	servernode.UpdateHTTPClient = r.srv.Client()
 	servernode.UpdateExePath = r.exe
 	servernode.BuildVersion = "0.3.0"
+	servernode.UpdateNow = func() time.Time { return updNow }
 	t.Cleanup(func() {
 		servernode.ReleaseKeys, servernode.UpdateHTTPClient, servernode.UpdateExePath, servernode.BuildVersion = nil, nil, "", "dev"
+		servernode.UpdateNow = nil
 	})
 
 	dir, _ := profile(t, false)
