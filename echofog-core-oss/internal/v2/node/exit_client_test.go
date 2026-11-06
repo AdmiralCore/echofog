@@ -2,11 +2,13 @@ package node_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -114,5 +116,43 @@ func TestExitClientUsesPerExitIdentity(t *testing.T) {
 	n2, d2, err := client.rt.ExitIdentityIDs(ctx, b.id.DeviceID)
 	if err != nil || n2 != n || d2 != d {
 		t.Fatalf("the identity of an exit is not stable: %v", err)
+	}
+}
+
+// T10.4: a failure to reach the exit is NoCamouflage when its card has no cover, NoPath otherwise.
+func TestExitClientReasonWhenUnreachable(t *testing.T) {
+	client := newTestNode(t, cards.Hidden, false, nil, nil)
+	withCover := newTestNodeFull(t, cards.Visible, true, nil, nil, asExit, nil)
+	noCover := newTestNodeFull(t, cards.Visible, false, nil, nil, asExit, nil)
+	client.start(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, tc := range []struct {
+		name string
+		exit *testNode
+		want exit.Reason
+	}{
+		{"exit with a cover", withCover, exit.ReasonNoPath},
+		{"exit without a cover", noCover, exit.ReasonNoCamouflage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := tc.exit.peerCard(t)
+			cl, err := client.rt.ExitClient(ctx, card, node.DialOpt{
+				CarrierFunc: func(context.Context) (mux.Carrier, error) { return nil, errors.New("no route") },
+			})
+			if err != nil {
+				t.Fatalf("ExitClient: %v", err)
+			}
+			defer cl.Close()
+			conn, err := cl.DialExitStream(ctx, "192.0.2.1:80")
+			if err == nil {
+				defer conn.Close()
+				_, err = conn.Read(make([]byte, 1))
+			}
+			if got := exit.ReasonOf(err); got != tc.want {
+				t.Fatalf("reason %s (%v), want %s", got, err, tc.want)
+			}
+		})
 	}
 }

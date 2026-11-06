@@ -189,9 +189,11 @@ func (r *Runtime) ExitClient(ctx context.Context, card *objects.Card, opt DialOp
 			}
 			return est.Session.SendDatagram(typ, payload)
 		},
-		Shape:   exitAddrShape(card),
-		Clock:   r.carrierClock,
-		OnClose: func() { _ = port.Close() },
+		Shape: exitAddrShape(card),
+		// A failure to reach an exit without a cover is told apart from a plain missing path.
+		NoCamouflage: !exit.CardHasCamouflage(card),
+		Clock:        r.carrierClock,
+		OnClose:      func() { _ = port.Close() },
 	})
 	if err != nil {
 		_ = port.Close()
