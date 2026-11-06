@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/awnumar/memguard"
@@ -237,22 +239,28 @@ func TestSessionLabelsSurviveTheStore(t *testing.T) {
 		t.Fatalf("labels lost in the store: %+v", back.labels)
 	}
 
-	// a session written by v1 carries no labels and must read as v1
-	plain, err := NewX3DHSession(memguard.NewEnclave(bytes.Repeat([]byte{3}, 32)), eph, types.PeerID{1}, pub, true)
+	// A session written by v1: bytes produced by the code of v0.2.0 (commit 79aac72, before the
+	// labels existed), not by the DTO of this build. It carries no labels and must read as v1.
+	hexRec, err := os.ReadFile("testdata/session_v1_79aac72.hex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain.AD = bytes.Repeat([]byte{1}, 64)
-	raw, err = plain.ToBytes()
+	rec, err := hex.DecodeString(strings.TrimSpace(string(hexRec)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	old, err := FromBytes(raw)
+	old, err := FromBytes(rec)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a session stored by v1 cannot be read: %v", err)
 	}
 	if old.labels != V1Labels {
 		t.Fatalf("a session without labels is not v1: %+v", old.labels)
+	}
+	if !old.IsInitiator || old.RemotePeerID != (types.PeerID{1}) || old.RemoteRatchetPub != pub || !bytes.Equal(old.AD, bytes.Repeat([]byte{1}, 64)) {
+		t.Fatalf("the stored v1 session was read wrongly: %+v", old)
+	}
+	if _, err := old.RatchetEncrypt([]byte("still works")); err != nil {
+		t.Fatalf("the stored v1 session does not work: %v", err)
 	}
 }
 
