@@ -6,9 +6,10 @@
 package routepolicy
 
 import (
-	"crypto/ed25519"
-	"errors"
 	"net/netip"
+	"slices"
+
+	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
 // NetClass is the kind of the client's network. It is a user setting (desktop) or the platform
@@ -21,10 +22,23 @@ const (
 	NetMobile
 )
 
-func (c NetClass) String() string { return "" }
+func (c NetClass) String() string {
+	switch c {
+	case NetWired:
+		return "wired"
+	case NetMobile:
+		return "mobile"
+	}
+	return "unknown"
+}
 
 // Effective maps unknown to wired.
-func (c NetClass) Effective() NetClass { return c }
+func (c NetClass) Effective() NetClass {
+	if c == NetUnknown {
+		return NetWired
+	}
+	return c
+}
 
 // DestClass is where the destination lies relative to the client. The zero value is the worst
 // case, so a missing classification is never treated as domestic.
@@ -36,7 +50,15 @@ const (
 	DestDomestic
 )
 
-func (c DestClass) String() string { return "" }
+func (c DestClass) String() string {
+	switch c {
+	case DestNeighbor:
+		return "neighbor"
+	case DestDomestic:
+		return "domestic"
+	}
+	return "foreign"
+}
 
 // ProbeBytes is the most a probe connection to a foreign data centre may carry from a network where
 // TCP freezes after 16–20 KiB (decisions.md, freeze_safe_bytes).
@@ -62,46 +84,116 @@ type Decision struct {
 	Probe int
 }
 
-// AllowsSuite reports whether the decision lets suite be dialed.
-func (d Decision) AllowsSuite(suite uint32) bool { return false }
+// AllowsSuite reports whether the decision lets suite be dialed: it is in the list (when there is
+// one) and, for the UDP suites, UDP is allowed.
+func (d Decision) AllowsSuite(suite uint32) bool {
+	if d.Suites != nil && !slices.Contains(d.Suites, suite) {
+		return false
+	}
+	if !d.UDP && IsUDP(suite) {
+		return false
+	}
+	return true
+}
+
+// IsUDP reports whether the suite runs over UDP.
+func IsUDP(suite uint32) bool {
+	return suite == objects.SuiteNoise3 || suite == objects.SuiteReality2QUIC
+}
 
 // Rules is the policy data: the built-in table plus the optional signed rules file.
 type Rules struct {
 	Seq     uint64
 	Version string
+
+	allowed   []netip.Prefix      // verified entry ranges (allowed_cidrs, H14)
+	mobileASN []uint32            // mobile operators (a desktop without TRANSPORT_CELLULAR)
+	neighbors map[string][]string // country → neighbouring countries (data for the report only)
+	tcpLimit  int                 // file: extra cap on foreign TCP, 0 = none
+	udpDenied []string            // file: countries where UDP towards abroad is off
 }
 
 // Default returns the built-in table.
-func Default() *Rules { return &Rules{} }
+func Default() *Rules { return &Rules{Version: "builtin-1"} }
 
 // Classify places a peer country relative to the client's own one. An unknown country is foreign.
-func (r *Rules) Classify(own, peer string) DestClass { return DestDomestic }
+func (r *Rules) Classify(own, peer string) DestClass {
+	if own == "" || peer == "" {
+		return DestForeign
+	}
+	if own == peer {
+		return DestDomestic
+	}
+	if r != nil && slices.Contains(r.neighbors[own], peer) {
+		return DestNeighbor
+	}
+	return DestForeign
+}
+
+var (
+	allSuites = []uint32{objects.SuiteNoise3, objects.SuiteReality2QUIC, objects.SuiteReality2TCP, objects.SuiteWS2}
+	// Towards abroad only the camouflaged suites exist anyway (wire.md §1); the CN row writes that out.
+	cnForeign = []uint32{objects.SuiteReality2QUIC, objects.SuiteReality2TCP, objects.SuiteWS2}
+	// IR: 53/80/443 and an allow-list of services: TCP suites at 443; QUIC only when udp is allowed.
+	irForeign = []uint32{objects.SuiteReality2TCP, objects.SuiteWS2}
+)
 
 // Decide returns the table row for a client in country own on a network of class net, towards dest.
 // A neighbouring country decides like a foreign one until the measurement says otherwise.
 func (r *Rules) Decide(own string, net NetClass, dest DestClass) Decision {
-	return Decision{Direct: true, UDP: true}
+	net = net.Effective()
+	if dest == DestNeighbor {
+		dest = DestForeign
+	}
+	var d Decision
+	switch {
+	case dest == DestDomestic && own == "RU" && net == NetMobile:
+		d = Decision{RuleID: "ru-mobile-domestic", Direct: true, Suites: slices.Clone(allSuites), UDP: true}
+	case dest == DestDomestic:
+		d = Decision{RuleID: "domestic", Direct: true, UDP: true}
+	case own == "RU" && net == NetMobile:
+		d = Decision{RuleID: "ru-mobile-foreign", Direct: false, TCPLimit: ProbeBytes, Probe: ProbeBytes,
+			EntryInCountry: true}
+	case own == "RU":
+		d = Decision{RuleID: "ru-wired-foreign", Direct: true, UDP: true, Rotate: true}
+	case own == "CN":
+		d = Decision{RuleID: "cn-foreign", Direct: true, Suites: slices.Clone(cnForeign), UDP: true, Rotate: true}
+	case own == "IR":
+		d = Decision{RuleID: "ir-foreign", Direct: true, Suites: slices.Clone(irForeign), Rotate: true}
+	default:
+		d = Decision{RuleID: "foreign", Direct: true, UDP: true, Rotate: true}
+	}
+	if dest != DestDomestic && r != nil {
+		if r.tcpLimit > 0 && (d.TCPLimit == 0 || r.tcpLimit < d.TCPLimit) {
+			d.TCPLimit = r.tcpLimit
+			if d.Probe > 0 {
+				d.Probe = r.tcpLimit
+			}
+		}
+		if slices.Contains(r.udpDenied, own) {
+			d.UDP = false
+		}
+	}
+	return d
 }
 
 // EntryAllowed reports whether ip is a verified entry (allowed_cidrs) for a client in own on net.
-// Without a verified list nothing is allowed: v2.0 does not support that network.
-func (r *Rules) EntryAllowed(own string, net NetClass, ip netip.Addr) bool { return true }
-
-// HasVerifiedEntries reports whether the rules name any verified entry range.
-func (r *Rules) HasVerifiedEntries() bool { return true }
-
-// MobileASN reports whether the autonomous system is in the list of mobile operators.
-func (r *Rules) MobileASN(asn uint32) bool { return false }
-
-// ErrRules wraps every refusal of a rules file.
-var ErrRules = errors.New("routepolicy: bad rules file")
-
-// Parse verifies and decodes a signed rules file (signature 64 bytes, then the JSON body). minSeq is
-// the highest sequence number seen before: an older file is refused. The file can only tighten the
-// built-in table.
-func Parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, error) {
-	return nil, errors.New("not implemented")
+// Without a verified list nothing is allowed: v2.0 does not support that network (H14).
+func (r *Rules) EntryAllowed(own string, net NetClass, ip netip.Addr) bool {
+	if r == nil || !ip.IsValid() {
+		return false
+	}
+	ip = ip.Unmap()
+	for _, p := range r.allowed {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
-// Sign produces a rules file for body (the owner's offline tool and the tests).
-func Sign(priv ed25519.PrivateKey, body []byte) []byte { return nil }
+// HasVerifiedEntries reports whether the rules name any verified entry range.
+func (r *Rules) HasVerifiedEntries() bool { return r != nil && len(r.allowed) > 0 }
+
+// MobileASN reports whether the autonomous system is in the list of mobile operators.
+func (r *Rules) MobileASN(asn uint32) bool { return r != nil && slices.Contains(r.mobileASN, asn) }
