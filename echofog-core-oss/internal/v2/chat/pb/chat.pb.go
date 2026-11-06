@@ -36,6 +36,67 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// PersonalMessageType, PersonalMessageProto: copies of v1's messenger/personal_messages.proto with
+// the same numbers (checked against bytes made by v1), plus control (11) and pad (15)
+// (services.md 4.3). The serialised plaintext is padded to a bucket with pad.
+type PersonalMessageType int32
+
+const (
+	PersonalMessageType_MSG_TYPE_TEXT     PersonalMessageType = 0
+	PersonalMessageType_MSG_TYPE_PHOTO    PersonalMessageType = 1
+	PersonalMessageType_MSG_TYPE_VOICE    PersonalMessageType = 2
+	PersonalMessageType_MSG_TYPE_CIRCLE   PersonalMessageType = 3
+	PersonalMessageType_MSG_TYPE_FILE     PersonalMessageType = 4
+	PersonalMessageType_MSG_TYPE_LOCATION PersonalMessageType = 5
+)
+
+// Enum value maps for PersonalMessageType.
+var (
+	PersonalMessageType_name = map[int32]string{
+		0: "MSG_TYPE_TEXT",
+		1: "MSG_TYPE_PHOTO",
+		2: "MSG_TYPE_VOICE",
+		3: "MSG_TYPE_CIRCLE",
+		4: "MSG_TYPE_FILE",
+		5: "MSG_TYPE_LOCATION",
+	}
+	PersonalMessageType_value = map[string]int32{
+		"MSG_TYPE_TEXT":     0,
+		"MSG_TYPE_PHOTO":    1,
+		"MSG_TYPE_VOICE":    2,
+		"MSG_TYPE_CIRCLE":   3,
+		"MSG_TYPE_FILE":     4,
+		"MSG_TYPE_LOCATION": 5,
+	}
+)
+
+func (x PersonalMessageType) Enum() *PersonalMessageType {
+	p := new(PersonalMessageType)
+	*p = x
+	return p
+}
+
+func (x PersonalMessageType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PersonalMessageType) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_v2_chat_pb_chat_proto_enumTypes[0].Descriptor()
+}
+
+func (PersonalMessageType) Type() protoreflect.EnumType {
+	return &file_internal_v2_chat_pb_chat_proto_enumTypes[0]
+}
+
+func (x PersonalMessageType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PersonalMessageType.Descriptor instead.
+func (PersonalMessageType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{0}
+}
+
 type RatchetHeader struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RatchetKey    []byte                 `protobuf:"bytes,1,opt,name=ratchet_key,json=ratchetKey,proto3" json:"ratchet_key,omitempty"`
@@ -346,6 +407,565 @@ func (x *Bundle) GetPrekeys() []byte {
 	return nil
 }
 
+// SealedEnvelope is the DELIVER payload (services.md 4.2): the recipient's node ID, an ephemeral
+// X25519 key and the box that holds an Inner. Nothing else is in the serialised envelope.
+type SealedEnvelope struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	To            []byte                 `protobuf:"bytes,1,opt,name=to,proto3" json:"to,omitempty"`
+	Eph           []byte                 `protobuf:"bytes,2,opt,name=eph,proto3" json:"eph,omitempty"`
+	Box           []byte                 `protobuf:"bytes,3,opt,name=box,proto3" json:"box,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SealedEnvelope) Reset() {
+	*x = SealedEnvelope{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SealedEnvelope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SealedEnvelope) ProtoMessage() {}
+
+func (x *SealedEnvelope) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SealedEnvelope.ProtoReflect.Descriptor instead.
+func (*SealedEnvelope) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SealedEnvelope) GetTo() []byte {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+func (x *SealedEnvelope) GetEph() []byte {
+	if x != nil {
+		return x.Eph
+	}
+	return nil
+}
+
+func (x *SealedEnvelope) GetBox() []byte {
+	if x != nil {
+		return x.Box
+	}
+	return nil
+}
+
+// Inner is what the box holds.
+type Inner struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Sender []byte                 `protobuf:"bytes,1,opt,name=sender,proto3" json:"sender,omitempty"` // akey of the sender's account key
+	Id     []byte                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`         // 16-byte message ID
+	Time   uint64                 `protobuf:"varint,3,opt,name=time,proto3" json:"time,omitempty"`
+	// Types that are valid to be assigned to Body:
+	//
+	//	*Inner_PqxdhInit
+	//	*Inner_Ratchet
+	Body          isInner_Body `protobuf_oneof:"body"`
+	Device        []byte       `protobuf:"bytes,6,opt,name=device,proto3" json:"device,omitempty"` // akey of the sending device key
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Inner) Reset() {
+	*x = Inner{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Inner) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Inner) ProtoMessage() {}
+
+func (x *Inner) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Inner.ProtoReflect.Descriptor instead.
+func (*Inner) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *Inner) GetSender() []byte {
+	if x != nil {
+		return x.Sender
+	}
+	return nil
+}
+
+func (x *Inner) GetId() []byte {
+	if x != nil {
+		return x.Id
+	}
+	return nil
+}
+
+func (x *Inner) GetTime() uint64 {
+	if x != nil {
+		return x.Time
+	}
+	return 0
+}
+
+func (x *Inner) GetBody() isInner_Body {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *Inner) GetPqxdhInit() []byte {
+	if x != nil {
+		if x, ok := x.Body.(*Inner_PqxdhInit); ok {
+			return x.PqxdhInit
+		}
+	}
+	return nil
+}
+
+func (x *Inner) GetRatchet() []byte {
+	if x != nil {
+		if x, ok := x.Body.(*Inner_Ratchet); ok {
+			return x.Ratchet
+		}
+	}
+	return nil
+}
+
+func (x *Inner) GetDevice() []byte {
+	if x != nil {
+		return x.Device
+	}
+	return nil
+}
+
+type isInner_Body interface {
+	isInner_Body()
+}
+
+type Inner_PqxdhInit struct {
+	PqxdhInit []byte `protobuf:"bytes,4,opt,name=pqxdh_init,json=pqxdhInit,proto3,oneof"` // an X3DHInit message
+}
+
+type Inner_Ratchet struct {
+	Ratchet []byte `protobuf:"bytes,5,opt,name=ratchet,proto3,oneof"` // a SecureMessage
+}
+
+func (*Inner_PqxdhInit) isInner_Body() {}
+
+func (*Inner_Ratchet) isInner_Body() {}
+
+type PersonalMessageProto struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SenderId      string                 `protobuf:"bytes,2,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
+	Type          PersonalMessageType    `protobuf:"varint,3,opt,name=type,proto3,enum=echofog.v2.chat.PersonalMessageType" json:"type,omitempty"`
+	Text          string                 `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
+	ContentHash   string                 `protobuf:"bytes,5,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	Metadata      string                 `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Timestamp     int64                  `protobuf:"varint,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ReplyToId     string                 `protobuf:"bytes,8,opt,name=reply_to_id,json=replyToId,proto3" json:"reply_to_id,omitempty"`
+	ConvEvent     []byte                 `protobuf:"bytes,9,opt,name=conv_event,json=convEvent,proto3" json:"conv_event,omitempty"`
+	ConvSync      []byte                 `protobuf:"bytes,10,opt,name=conv_sync,json=convSync,proto3" json:"conv_sync,omitempty"`
+	Control       *Control               `protobuf:"bytes,11,opt,name=control,proto3" json:"control,omitempty"`
+	Pad           []byte                 `protobuf:"bytes,15,opt,name=pad,proto3" json:"pad,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PersonalMessageProto) Reset() {
+	*x = PersonalMessageProto{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PersonalMessageProto) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PersonalMessageProto) ProtoMessage() {}
+
+func (x *PersonalMessageProto) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PersonalMessageProto.ProtoReflect.Descriptor instead.
+func (*PersonalMessageProto) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PersonalMessageProto) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PersonalMessageProto) GetSenderId() string {
+	if x != nil {
+		return x.SenderId
+	}
+	return ""
+}
+
+func (x *PersonalMessageProto) GetType() PersonalMessageType {
+	if x != nil {
+		return x.Type
+	}
+	return PersonalMessageType_MSG_TYPE_TEXT
+}
+
+func (x *PersonalMessageProto) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *PersonalMessageProto) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+func (x *PersonalMessageProto) GetMetadata() string {
+	if x != nil {
+		return x.Metadata
+	}
+	return ""
+}
+
+func (x *PersonalMessageProto) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *PersonalMessageProto) GetReplyToId() string {
+	if x != nil {
+		return x.ReplyToId
+	}
+	return ""
+}
+
+func (x *PersonalMessageProto) GetConvEvent() []byte {
+	if x != nil {
+		return x.ConvEvent
+	}
+	return nil
+}
+
+func (x *PersonalMessageProto) GetConvSync() []byte {
+	if x != nil {
+		return x.ConvSync
+	}
+	return nil
+}
+
+func (x *PersonalMessageProto) GetControl() *Control {
+	if x != nil {
+		return x.Control
+	}
+	return nil
+}
+
+func (x *PersonalMessageProto) GetPad() []byte {
+	if x != nil {
+		return x.Pad
+	}
+	return nil
+}
+
+// Control replaces v1's text prefixes fogknock1:, fogreset1: and fogack1: (K3).
+type Control struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*Control_Knock
+	//	*Control_Reset_
+	//	*Control_Read
+	//	*Control_Delivered
+	Kind          isControl_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Control) Reset() {
+	*x = Control{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Control) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Control) ProtoMessage() {}
+
+func (x *Control) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Control.ProtoReflect.Descriptor instead.
+func (*Control) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Control) GetKind() isControl_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *Control) GetKnock() *Knock {
+	if x != nil {
+		if x, ok := x.Kind.(*Control_Knock); ok {
+			return x.Knock
+		}
+	}
+	return nil
+}
+
+func (x *Control) GetReset_() *Reset {
+	if x != nil {
+		if x, ok := x.Kind.(*Control_Reset_); ok {
+			return x.Reset_
+		}
+	}
+	return nil
+}
+
+func (x *Control) GetRead() *Receipt {
+	if x != nil {
+		if x, ok := x.Kind.(*Control_Read); ok {
+			return x.Read
+		}
+	}
+	return nil
+}
+
+func (x *Control) GetDelivered() *Receipt {
+	if x != nil {
+		if x, ok := x.Kind.(*Control_Delivered); ok {
+			return x.Delivered
+		}
+	}
+	return nil
+}
+
+type isControl_Kind interface {
+	isControl_Kind()
+}
+
+type Control_Knock struct {
+	Knock *Knock `protobuf:"bytes,1,opt,name=knock,proto3,oneof"`
+}
+
+type Control_Reset_ struct {
+	Reset_ *Reset `protobuf:"bytes,2,opt,name=reset,proto3,oneof"`
+}
+
+type Control_Read struct {
+	Read *Receipt `protobuf:"bytes,3,opt,name=read,proto3,oneof"`
+}
+
+type Control_Delivered struct {
+	Delivered *Receipt `protobuf:"bytes,4,opt,name=delivered,proto3,oneof"`
+}
+
+func (*Control_Knock) isControl_Kind() {}
+
+func (*Control_Reset_) isControl_Kind() {}
+
+func (*Control_Read) isControl_Kind() {}
+
+func (*Control_Delivered) isControl_Kind() {}
+
+// Knock asks (ask = true) or answers with a card; card is a card/2 envelope.
+type Knock struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ask           bool                   `protobuf:"varint,1,opt,name=ask,proto3" json:"ask,omitempty"`
+	Card          []byte                 `protobuf:"bytes,2,opt,name=card,proto3" json:"card,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Knock) Reset() {
+	*x = Knock{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Knock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Knock) ProtoMessage() {}
+
+func (x *Knock) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Knock.ProtoReflect.Descriptor instead.
+func (*Knock) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *Knock) GetAsk() bool {
+	if x != nil {
+		return x.Ask
+	}
+	return false
+}
+
+func (x *Knock) GetCard() []byte {
+	if x != nil {
+		return x.Card
+	}
+	return nil
+}
+
+// Reset says the sender's session with the receiver is broken and a new one is coming.
+type Reset struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Reset) Reset() {
+	*x = Reset{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Reset) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Reset) ProtoMessage() {}
+
+func (x *Reset) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Reset.ProtoReflect.Descriptor instead.
+func (*Reset) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{10}
+}
+
+// Receipt names the messages it confirms.
+type Receipt struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ids           [][]byte               `protobuf:"bytes,1,rep,name=ids,proto3" json:"ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Receipt) Reset() {
+	*x = Receipt{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Receipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Receipt) ProtoMessage() {}
+
+func (x *Receipt) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Receipt.ProtoReflect.Descriptor instead.
+func (*Receipt) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *Receipt) GetIds() [][]byte {
+	if x != nil {
+		return x.Ids
+	}
+	return nil
+}
+
 var File_internal_v2_chat_pb_chat_proto protoreflect.FileDescriptor
 
 const file_internal_v2_chat_pb_chat_proto_rawDesc = "" +
@@ -375,7 +995,54 @@ const file_internal_v2_chat_pb_chat_proto_rawDesc = "" +
 	"\x03req\x18\x01 \x01(\x04R\x03req\"4\n" +
 	"\x06Bundle\x12\x10\n" +
 	"\x03req\x18\x01 \x01(\x04R\x03req\x12\x18\n" +
-	"\aprekeys\x18\x02 \x01(\fR\aprekeysB<Z:github.com/echofog/echofog-core/internal/v2/chat/pb;chatpbb\x06proto3"
+	"\aprekeys\x18\x02 \x01(\fR\aprekeys\"D\n" +
+	"\x0eSealedEnvelope\x12\x0e\n" +
+	"\x02to\x18\x01 \x01(\fR\x02to\x12\x10\n" +
+	"\x03eph\x18\x02 \x01(\fR\x03eph\x12\x10\n" +
+	"\x03box\x18\x03 \x01(\fR\x03box\"\xa0\x01\n" +
+	"\x05Inner\x12\x16\n" +
+	"\x06sender\x18\x01 \x01(\fR\x06sender\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\fR\x02id\x12\x12\n" +
+	"\x04time\x18\x03 \x01(\x04R\x04time\x12\x1f\n" +
+	"\n" +
+	"pqxdh_init\x18\x04 \x01(\fH\x00R\tpqxdhInit\x12\x1a\n" +
+	"\aratchet\x18\x05 \x01(\fH\x00R\aratchet\x12\x16\n" +
+	"\x06device\x18\x06 \x01(\fR\x06deviceB\x06\n" +
+	"\x04body\"\x90\x03\n" +
+	"\x14PersonalMessageProto\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
+	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x128\n" +
+	"\x04type\x18\x03 \x01(\x0e2$.echofog.v2.chat.PersonalMessageTypeR\x04type\x12\x12\n" +
+	"\x04text\x18\x04 \x01(\tR\x04text\x12!\n" +
+	"\fcontent_hash\x18\x05 \x01(\tR\vcontentHash\x12\x1a\n" +
+	"\bmetadata\x18\x06 \x01(\tR\bmetadata\x12\x1c\n" +
+	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x12\x1e\n" +
+	"\vreply_to_id\x18\b \x01(\tR\treplyToId\x12\x1d\n" +
+	"\n" +
+	"conv_event\x18\t \x01(\fR\tconvEvent\x12\x1b\n" +
+	"\tconv_sync\x18\n" +
+	" \x01(\fR\bconvSync\x122\n" +
+	"\acontrol\x18\v \x01(\v2\x18.echofog.v2.chat.ControlR\acontrol\x12\x10\n" +
+	"\x03pad\x18\x0f \x01(\fR\x03pad\"\xdb\x01\n" +
+	"\aControl\x12.\n" +
+	"\x05knock\x18\x01 \x01(\v2\x16.echofog.v2.chat.KnockH\x00R\x05knock\x12.\n" +
+	"\x05reset\x18\x02 \x01(\v2\x16.echofog.v2.chat.ResetH\x00R\x05reset\x12.\n" +
+	"\x04read\x18\x03 \x01(\v2\x18.echofog.v2.chat.ReceiptH\x00R\x04read\x128\n" +
+	"\tdelivered\x18\x04 \x01(\v2\x18.echofog.v2.chat.ReceiptH\x00R\tdeliveredB\x06\n" +
+	"\x04kind\"-\n" +
+	"\x05Knock\x12\x10\n" +
+	"\x03ask\x18\x01 \x01(\bR\x03ask\x12\x12\n" +
+	"\x04card\x18\x02 \x01(\fR\x04card\"\a\n" +
+	"\x05Reset\"\x1b\n" +
+	"\aReceipt\x12\x10\n" +
+	"\x03ids\x18\x01 \x03(\fR\x03ids*\x8f\x01\n" +
+	"\x13PersonalMessageType\x12\x11\n" +
+	"\rMSG_TYPE_TEXT\x10\x00\x12\x12\n" +
+	"\x0eMSG_TYPE_PHOTO\x10\x01\x12\x12\n" +
+	"\x0eMSG_TYPE_VOICE\x10\x02\x12\x13\n" +
+	"\x0fMSG_TYPE_CIRCLE\x10\x03\x12\x11\n" +
+	"\rMSG_TYPE_FILE\x10\x04\x12\x15\n" +
+	"\x11MSG_TYPE_LOCATION\x10\x05B<Z:github.com/echofog/echofog-core/internal/v2/chat/pb;chatpbb\x06proto3"
 
 var (
 	file_internal_v2_chat_pb_chat_proto_rawDescOnce sync.Once
@@ -389,22 +1056,37 @@ func file_internal_v2_chat_pb_chat_proto_rawDescGZIP() []byte {
 	return file_internal_v2_chat_pb_chat_proto_rawDescData
 }
 
-var file_internal_v2_chat_pb_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_internal_v2_chat_pb_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_internal_v2_chat_pb_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_internal_v2_chat_pb_chat_proto_goTypes = []any{
-	(*RatchetHeader)(nil), // 0: echofog.v2.chat.RatchetHeader
-	(*SecureMessage)(nil), // 1: echofog.v2.chat.SecureMessage
-	(*X3DHInit)(nil),      // 2: echofog.v2.chat.X3DHInit
-	(*BundleGet)(nil),     // 3: echofog.v2.chat.BundleGet
-	(*Bundle)(nil),        // 4: echofog.v2.chat.Bundle
+	(PersonalMessageType)(0),     // 0: echofog.v2.chat.PersonalMessageType
+	(*RatchetHeader)(nil),        // 1: echofog.v2.chat.RatchetHeader
+	(*SecureMessage)(nil),        // 2: echofog.v2.chat.SecureMessage
+	(*X3DHInit)(nil),             // 3: echofog.v2.chat.X3DHInit
+	(*BundleGet)(nil),            // 4: echofog.v2.chat.BundleGet
+	(*Bundle)(nil),               // 5: echofog.v2.chat.Bundle
+	(*SealedEnvelope)(nil),       // 6: echofog.v2.chat.SealedEnvelope
+	(*Inner)(nil),                // 7: echofog.v2.chat.Inner
+	(*PersonalMessageProto)(nil), // 8: echofog.v2.chat.PersonalMessageProto
+	(*Control)(nil),              // 9: echofog.v2.chat.Control
+	(*Knock)(nil),                // 10: echofog.v2.chat.Knock
+	(*Reset)(nil),                // 11: echofog.v2.chat.Reset
+	(*Receipt)(nil),              // 12: echofog.v2.chat.Receipt
 }
 var file_internal_v2_chat_pb_chat_proto_depIdxs = []int32{
-	0, // 0: echofog.v2.chat.SecureMessage.header:type_name -> echofog.v2.chat.RatchetHeader
-	1, // 1: echofog.v2.chat.X3DHInit.initial_ciphertext:type_name -> echofog.v2.chat.SecureMessage
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1,  // 0: echofog.v2.chat.SecureMessage.header:type_name -> echofog.v2.chat.RatchetHeader
+	2,  // 1: echofog.v2.chat.X3DHInit.initial_ciphertext:type_name -> echofog.v2.chat.SecureMessage
+	0,  // 2: echofog.v2.chat.PersonalMessageProto.type:type_name -> echofog.v2.chat.PersonalMessageType
+	9,  // 3: echofog.v2.chat.PersonalMessageProto.control:type_name -> echofog.v2.chat.Control
+	10, // 4: echofog.v2.chat.Control.knock:type_name -> echofog.v2.chat.Knock
+	11, // 5: echofog.v2.chat.Control.reset:type_name -> echofog.v2.chat.Reset
+	12, // 6: echofog.v2.chat.Control.read:type_name -> echofog.v2.chat.Receipt
+	12, // 7: echofog.v2.chat.Control.delivered:type_name -> echofog.v2.chat.Receipt
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_internal_v2_chat_pb_chat_proto_init() }
@@ -412,18 +1094,29 @@ func file_internal_v2_chat_pb_chat_proto_init() {
 	if File_internal_v2_chat_pb_chat_proto != nil {
 		return
 	}
+	file_internal_v2_chat_pb_chat_proto_msgTypes[6].OneofWrappers = []any{
+		(*Inner_PqxdhInit)(nil),
+		(*Inner_Ratchet)(nil),
+	}
+	file_internal_v2_chat_pb_chat_proto_msgTypes[8].OneofWrappers = []any{
+		(*Control_Knock)(nil),
+		(*Control_Reset_)(nil),
+		(*Control_Read)(nil),
+		(*Control_Delivered)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_v2_chat_pb_chat_proto_rawDesc), len(file_internal_v2_chat_pb_chat_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   5,
+			NumEnums:      1,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_internal_v2_chat_pb_chat_proto_goTypes,
 		DependencyIndexes: file_internal_v2_chat_pb_chat_proto_depIdxs,
+		EnumInfos:         file_internal_v2_chat_pb_chat_proto_enumTypes,
 		MessageInfos:      file_internal_v2_chat_pb_chat_proto_msgTypes,
 	}.Build()
 	File_internal_v2_chat_pb_chat_proto = out.File
