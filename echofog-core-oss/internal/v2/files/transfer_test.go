@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -557,4 +558,37 @@ func TestOfflineAuthorIsAStateNotAFailure(t *testing.T) {
 	if Waiting(ErrCorrupt) || Waiting(ErrDeclined) || Waiting(nil) {
 		t.Fatal("Waiting is true for a final failure")
 	}
+}
+
+// Fetches and servers that end leave no goroutine behind.
+func TestNoGoroutinesLeak(t *testing.T) {
+	l := newLab(t, ServerConfig{})
+	o := l.share(content(40*ChunkSize, 20), nodeB)
+	k, kC := l.dial(nodeB), l.dial(nodeC)
+	run := func() {
+		_ = l.fetch(k, o, newMemStore(o), fast())
+		ctx, cancel := context.WithCancel(l.ctx)
+		opt := fast()
+		opt.OnProgress = func(done, _ int) {
+			if done > 3 {
+				cancel()
+			}
+		}
+		_ = Fetch(ctx, l.open(k), o, newMemStore(o), opt)
+		_ = l.fetch(kC, o, newMemStore(o), fast()) // refused
+	}
+	run() // warm up
+	time.Sleep(200 * time.Millisecond)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		run()
+	}
+	var after int
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		after = runtime.NumGoroutine()
+		if after <= before+6 {
+			return
+		}
+	}
+	t.Fatalf("goroutines: %d before, %d after 5 rounds", before, after)
 }

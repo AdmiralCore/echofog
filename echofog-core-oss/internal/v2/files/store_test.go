@@ -2,12 +2,23 @@ package files
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// openStore opens a store and closes it when the test ends (Windows cannot remove an open file).
+func openStore(t *testing.T, dir string, o Offer, free func(string) (uint64, error)) (*FileStore, error) {
+	t.Helper()
+	s, err := OpenFileStore(dir, o, free)
+	if err == nil {
+		t.Cleanup(func() { _ = s.Close() })
+	}
+	return s, err
+}
 
 func storeOffer(name string, chunks int) (Offer, []byte) {
 	data := content(chunks*ChunkSize-100, int64(chunks))
@@ -32,7 +43,7 @@ func putAll(t *testing.T, s *FileStore, data []byte, only func(i int) bool) {
 func TestFileStoreWritesAndCommits(t *testing.T) {
 	dir := t.TempDir()
 	o, data := storeOffer("отчёт.txt", 5)
-	s, err := OpenFileStore(dir, o, nil)
+	s, err := openStore(t, dir, o, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +74,7 @@ func TestFileStoreWritesAndCommits(t *testing.T) {
 func TestFileStoreResumesFromTheBitmap(t *testing.T) {
 	dir := t.TempDir()
 	o, data := storeOffer("a.bin", 8)
-	s, err := OpenFileStore(dir, o, nil)
+	s, err := openStore(t, dir, o, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +84,7 @@ func TestFileStoreResumesFromTheBitmap(t *testing.T) {
 	}
 	_ = s.Close()
 
-	s2, err := OpenFileStore(dir, o, nil)
+	s2, err := openStore(t, dir, o, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +109,7 @@ func TestFileStoreResumesFromTheBitmap(t *testing.T) {
 func TestFileStoreDoesNotTrustAStaleBitmap(t *testing.T) {
 	dir := t.TempDir()
 	o, data := storeOffer("b.bin", 6)
-	s, _ := OpenFileStore(dir, o, nil)
+	s, _ := openStore(t, dir, o, nil)
 	putAll(t, s, data, nil)
 	_ = s.Flush()
 	_ = s.Close()
@@ -109,7 +120,7 @@ func TestFileStoreDoesNotTrustAStaleBitmap(t *testing.T) {
 	if err := os.Truncate(parts[0], 2*ChunkSize); err != nil {
 		t.Fatal(err)
 	}
-	s2, err := OpenFileStore(dir, o, nil)
+	s2, err := openStore(t, dir, o, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,9 +128,9 @@ func TestFileStoreDoesNotTrustAStaleBitmap(t *testing.T) {
 		t.Fatalf("Count = %d: chunks past the end of the part file counted as present", s2.Count())
 	}
 	// a bitmap of the wrong length is dropped too
-	bits, _ := filepath.Glob(filepath.Join(dir, "*.bits"))
-	_ = os.WriteFile(bits[0], []byte{0xff, 0xff, 0xff, 0xff, 0xff}, 0o600)
-	s3, err := OpenFileStore(dir, o, nil)
+	_ = s2.Close()
+	_ = os.WriteFile(filepath.Join(dir, hex.EncodeToString(o.FID[:])+".bits"), []byte{0xff, 0xff, 0xff, 0xff, 0xff}, 0o600)
+	s3, err := openStore(t, dir, o, nil)
 	if err != nil || s3.Count() != 0 {
 		t.Fatalf("garbage bitmap: count %d, err %v", s3.Count(), err)
 	}
@@ -127,7 +138,7 @@ func TestFileStoreDoesNotTrustAStaleBitmap(t *testing.T) {
 
 func TestFileStoreCommitNeedsEveryChunk(t *testing.T) {
 	o, data := storeOffer("c.bin", 4)
-	s, _ := OpenFileStore(t.TempDir(), o, nil)
+	s, _ := openStore(t, t.TempDir(), o, nil)
 	putAll(t, s, data, func(i int) bool { return i != 2 })
 	if err := s.Commit(); err == nil {
 		t.Fatal("committed an incomplete file")
@@ -140,7 +151,7 @@ func TestFileStoreNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	o, data := storeOffer("same.txt", 2)
-	s, _ := OpenFileStore(dir, o, nil)
+	s, _ := openStore(t, dir, o, nil)
 	putAll(t, s, data, nil)
 	if err := s.Commit(); err != nil {
 		t.Fatal(err)
@@ -155,7 +166,7 @@ func TestFileStoreNames(t *testing.T) {
 	// store must not rely on that
 	o2, data2 := storeOffer("x.bin", 2)
 	o2.Name = `..\..\evil.exe`
-	s2, err := OpenFileStore(dir, o2, nil)
+	s2, err := openStore(t, dir, o2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,22 +183,22 @@ func TestFileStoreNames(t *testing.T) {
 func TestFileStoreChecksTheDisk(t *testing.T) {
 	o, _ := storeOffer("d.bin", 4)
 	small := func(string) (uint64, error) { return 1 << 20, nil }
-	if _, err := OpenFileStore(t.TempDir(), o, small); !errors.Is(err, ErrDisk) {
+	if _, err := openStore(t, t.TempDir(), o, small); !errors.Is(err, ErrDisk) {
 		t.Fatalf("1 MiB free for 256 KiB + margin: err = %v", err)
 	}
 	// resuming needs room only for what is missing
 	dir := t.TempDir()
-	s, _ := OpenFileStore(dir, o, nil)
+	s, _ := openStore(t, dir, o, nil)
 	_, data := storeOffer("d.bin", 4)
 	putAll(t, s, data, func(i int) bool { return i < 3 })
 	_ = s.Flush()
 	_ = s.Close()
 	fits := func(string) (uint64, error) { return 64<<20 + ChunkSize, nil }
-	if _, err := OpenFileStore(dir, o, fits); err != nil {
+	if _, err := openStore(t, dir, o, fits); err != nil {
 		t.Fatalf("one chunk missing, room for it: %v", err)
 	}
 	err := func() error {
-		_, e := OpenFileStore(t.TempDir(), o, func(string) (uint64, error) { return 0, errors.New("statfs") })
+		_, e := openStore(t, t.TempDir(), o, func(string) (uint64, error) { return 0, errors.New("statfs") })
 		return e
 	}()
 	if err == nil {
@@ -197,7 +208,7 @@ func TestFileStoreChecksTheDisk(t *testing.T) {
 
 func TestFileStorePutValidatesTheIndexAndLength(t *testing.T) {
 	o, data := storeOffer("e.bin", 3)
-	s, _ := OpenFileStore(t.TempDir(), o, nil)
+	s, _ := openStore(t, t.TempDir(), o, nil)
 	if err := s.Put(-1, data[:10]); err == nil {
 		t.Error("negative index")
 	}
@@ -213,4 +224,33 @@ func TestFileStorePutValidatesTheIndexAndLength(t *testing.T) {
 	if s.Count() != 0 {
 		t.Fatalf("Count = %d after refused puts", s.Count())
 	}
+}
+
+// FuzzFileStoreOpen: whatever a crash or a hand edit left in the part and bitmap files, opening
+// never panics and never claims more chunks than the file has.
+func FuzzFileStoreOpen(f *testing.F) {
+	f.Add([]byte{0xff}, 3*ChunkSize)
+	f.Add([]byte{}, 0)
+	f.Add(bytes.Repeat([]byte{0xff}, 40), 10)
+	f.Fuzz(func(t *testing.T, bits []byte, partLen int) {
+		if partLen < 0 || partLen > 8*ChunkSize {
+			return
+		}
+		dir := t.TempDir()
+		o, _ := storeOffer("f.bin", 5)
+		id := hex.EncodeToString(o.FID[:])
+		_ = os.WriteFile(filepath.Join(dir, id+".bits"), bits, 0o600)
+		_ = os.WriteFile(filepath.Join(dir, id+".part"), make([]byte, partLen), 0o600)
+		s, err := OpenFileStore(dir, o, func(string) (uint64, error) { return 1 << 40, nil })
+		if err != nil {
+			return
+		}
+		defer s.Close()
+		if s.Count() < 0 || s.Count() > o.Chunks() {
+			t.Fatalf("Count = %d of %d", s.Count(), o.Chunks())
+		}
+		if int64(partLen) != int64(o.Size) && s.Count() != 0 {
+			t.Fatalf("a part file of %d bytes (expected %d) was trusted", partLen, o.Size)
+		}
+	})
 }
