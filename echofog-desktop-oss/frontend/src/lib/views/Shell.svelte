@@ -10,7 +10,7 @@
   import { loadPeerDirectory } from '../stores/peers.store.js';
   import { view, focus } from '../stores/nav.js';
   import { anon, refreshAnon } from '../stores/anon.js';
-  import { fly } from 'svelte/transition';
+  import { slide } from 'svelte/transition';
   import { netStatus } from '../stores/net.js';
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import { displayName } from '../contact.js';
@@ -249,7 +249,7 @@
   <main>
     <div class="banners">
     {#if crash && !crashOpen}
-      <div class="banner crash" role="alert" transition:fly={{ y: -16, duration: 300 }}>
+      <div class="banner crash" role="alert" transition:slide={{ duration: 200 }}>
         <span class="off-ic crash-ic"><Icon name="info" size={17} /></span>
         <div class="grow off-text">
           <b>{$t('crash.banner')}</b>
@@ -260,7 +260,7 @@
       </div>
     {/if}
     {#if update}
-      <div class="banner update" role="status" transition:fly={{ y: -16, duration: 300 }}>
+      <div class="banner update" role="status" transition:slide={{ duration: 200 }}>
         <span class="off-ic up-ic"><Icon name="download" size={17} /></span>
         <div class="grow off-text">
           <b>{$t('update.title', { v: update.latest })}</b>
@@ -272,7 +272,7 @@
       </div>
     {/if}
     {#if showOffline}
-      <div class="banner offline" role="status" transition:fly={{ y: -16, duration: 300 }}>
+      <div class="banner offline" role="status" transition:slide={{ duration: 200 }}>
         <span class="off-ic"><Icon name="globe" size={17} /></span>
         <div class="grow off-text">
           <b>{$t('boot.offlineTitle')}</b>
@@ -283,6 +283,7 @@
       </div>
     {/if}
     </div>
+    <div class="content">
     <!-- Chats stays mounted so a running call keeps its video elements -->
     <div class="fill" hidden={$view !== 'chats'}><Chats /></div>
     {#key $view}
@@ -294,6 +295,7 @@
         </div>
       {/if}
     {/key}
+    </div>
   </main>
 </div>
 
@@ -386,19 +388,17 @@
   nav.bottom .label { flex: none; opacity: 1; }
   nav.bottom .item.active { color: var(--accent-fg); }
 
-  .banners {
-    position: absolute; z-index: 20; top: 12px; left: 50%; transform: translateX(-50%);
-    width: min(680px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; pointer-events: none;
-  }
+  /* strips in the flow above the content: they push the page down instead of covering its header */
+  .banners { flex: none; display: flex; flex-direction: column; }
+  .banners:empty { display: none; }
   .banner {
-    pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 12px;
-    border-radius: var(--r-xl); background: var(--surface-2);
-    border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); box-shadow: var(--shadow-md);
+    display: flex; align-items: center; gap: 12px; padding: 6px 12px;
+    background: var(--surface-2); border-bottom: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
   }
-  .banner.crash { border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+  .banner.crash { border-bottom-color: color-mix(in srgb, var(--danger) 50%, transparent); }
   .crash-ic { background: var(--danger-soft) !important; color: var(--danger-fg) !important; }
   .banner.crash .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .banner.update { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .banner.update { border-bottom-color: color-mix(in srgb, var(--accent) 45%, transparent); }
   .up-ic { background: var(--accent-soft) !important; color: var(--accent-fg) !important; }
   .tg { background: var(--surface-3); color: var(--text); border: 1px solid var(--border); }
   .off-ic { width: 28px; height: 28px; border-radius: var(--r-md); flex: none; display: grid; place-items: center; background: var(--warn-soft); color: var(--warn-fg); }
@@ -406,6 +406,7 @@
   .off-text b { color: var(--text); font-size: var(--fs-sm); font-weight: var(--fw-semibold); }
   .off-x { width: var(--ctl-sm); height: var(--ctl-sm); }
   main { flex: 1; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  .content { flex: 1; min-height: 0; position: relative; }
   .fill { position: absolute; inset: 0; }
   .fill[hidden] { display: none; }
   .enter { animation: view-in var(--dur-slow) var(--ease) both; }
