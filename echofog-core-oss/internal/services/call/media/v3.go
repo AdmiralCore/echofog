@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
@@ -59,8 +60,7 @@ const (
 	epochInfo     = "echofog/call2/epoch"
 	unitHashLabel = "echofog/call2/unit"
 
-	maxPendingUnits3 = 128
-	pendingTTL3      = time.Second
+	pendingTTL3 = time.Second
 )
 
 // Marshal returns the 13 header bytes.
@@ -198,15 +198,29 @@ func UnitHash3(h Header3, ct []byte) [UnitHash3Len]byte {
 	return out
 }
 
+const (
+	maxVariants3          = 4  // distinct payloads kept per fragment index
+	maxAssemblies3        = 64 // combinations tried per added fragment
+	maxPendingPerSource3  = 16 // incomplete units per (sender, gen)
+	maxCompletedPerSource = 32 // completed units kept to catch late variants
+)
+
 type partial3 struct {
-	count byte
-	have  byte
-	parts [][]byte
-	at    time.Time
+	count     byte
+	variants  [][][]byte // per index, up to maxVariants3 distinct payloads
+	missing   int        // indexes with no payload yet
+	returned  map[[UnitHash3Len]byte]bool
+	completed bool
+	at        time.Time
 }
 
-// Reassembler3 joins fragments of one unit; bounded in units and time. It is not safe for
-// concurrent use: one per receive loop.
+type srcID struct{ sender, gen byte }
+
+// Reassembler3 joins fragments of one unit. Fragments are not authenticated one by one, so a
+// forged fragment with the real header must not shadow the real one: up to four variants are
+// kept per index and every distinct assembly is returned, for the receiver to match against
+// the CALL_AUTH. State is bounded per sender, so one member cannot evict another's units.
+// Not safe for concurrent use: one per receive loop.
 type Reassembler3 struct {
 	// Known says whether the sender announced a media key; fragments of others are dropped before
 	// any state is created. Nil accepts all.
@@ -215,71 +229,129 @@ type Reassembler3 struct {
 	pending map[Header3]*partial3
 }
 
+// NewReassembler3 returns a reassembler on the given clock.
+func NewReassembler3(now func() time.Time) *Reassembler3 {
+	return &Reassembler3{now: now, pending: map[Header3]*partial3{}}
+}
+
 // Assembled3 is a sealed unit put together from fragments.
 type Assembled3 struct {
 	Header     Header3
 	Ciphertext []byte
 }
 
-// AddAll takes one fragment and returns every sealed unit it completed. Fragments are not
-// authenticated one by one, so the reassembler keeps up to 4 variants per fragment index and
-// returns each distinct assembly (the receiver picks the one the CALL_AUTH vouches for).
-func (r *Reassembler3) AddAll(f Fragment3) []Assembled3 { return nil }
-
-// NewReassembler3 returns a reassembler on the given clock.
-func NewReassembler3(now func() time.Time) *Reassembler3 {
-	return &Reassembler3{now: now, pending: map[Header3]*partial3{}}
+// Add returns the first sealed unit the fragment completed.
+func (r *Reassembler3) Add(f Fragment3) (Header3, []byte, bool) {
+	if out := r.AddAll(f); len(out) > 0 {
+		return out[0].Header, out[0].Ciphertext, true
+	}
+	return Header3{}, nil, false
 }
 
-// Add returns the sealed unit once its last fragment arrived. Incomplete units older than one
-// second are dropped, and at most 128 are held: the oldest goes first.
-func (r *Reassembler3) Add(f Fragment3) (Header3, []byte, bool) {
-	now := r.now()
-	if f.Count == 1 {
-		return f.Header, append([]byte(nil), f.Payload...), true
+// AddAll takes one fragment and returns every sealed unit it completed.
+func (r *Reassembler3) AddAll(f Fragment3) []Assembled3 {
+	if r.Known != nil && !r.Known(f.Header.Sender, f.Header.Gen) {
+		return nil
 	}
+	if f.Count == 1 {
+		return []Assembled3{{f.Header, append([]byte(nil), f.Payload...)}}
+	}
+	if f.Count == 0 || f.Count > MaxFragments3 || f.Idx >= f.Count {
+		return nil
+	}
+	now := r.now()
 	p := r.pending[f.Header]
 	if p != nil && now.Sub(p.at) > pendingTTL3 {
 		delete(r.pending, f.Header)
 		p = nil
 	}
 	if p == nil {
-		if len(r.pending) >= maxPendingUnits3 {
-			r.evict(now)
-		}
-		p = &partial3{count: f.Count, parts: make([][]byte, f.Count), at: now}
+		r.makeRoom(f.Header, now)
+		p = &partial3{count: f.Count, variants: make([][][]byte, f.Count), missing: int(f.Count),
+			returned: map[[UnitHash3Len]byte]bool{}, at: now}
 		r.pending[f.Header] = p
 	}
-	if p.count != f.Count || f.Idx >= p.count || p.parts[f.Idx] != nil {
-		return Header3{}, nil, false
+	if p.count != f.Count {
+		return nil
 	}
-	p.parts[f.Idx] = append([]byte{}, f.Payload...)
-	p.have++
-	if p.have < p.count {
-		return Header3{}, nil, false
+	vs := p.variants[f.Idx]
+	for _, v := range vs {
+		if bytes.Equal(v, f.Payload) {
+			return nil
+		}
 	}
-	delete(r.pending, f.Header)
-	var out []byte
-	for _, part := range p.parts {
-		out = append(out, part...)
+	if len(vs) >= maxVariants3 {
+		return nil
 	}
-	return f.Header, out, true
+	if len(vs) == 0 {
+		p.missing--
+	}
+	p.variants[f.Idx] = append(vs, append([]byte{}, f.Payload...))
+	if p.missing > 0 {
+		return nil
+	}
+	return r.assemble(f.Header, p)
 }
 
-func (r *Reassembler3) evict(now time.Time) {
-	var oldest Header3
-	var oldestAt time.Time
-	first := true
+// assemble tries the combinations of variants and returns those not returned before.
+func (r *Reassembler3) assemble(h Header3, p *partial3) []Assembled3 {
+	var out []Assembled3
+	pick := make([]int, p.count)
+	for tried := 0; tried < maxAssemblies3; tried++ {
+		var ct []byte
+		for i, v := range pick {
+			ct = append(ct, p.variants[i][v]...)
+		}
+		if k := UnitHash3(h, ct); !p.returned[k] {
+			p.returned[k] = true
+			out = append(out, Assembled3{h, ct})
+		}
+		i := 0 // odometer over the variants of each index
+		for ; i < len(pick); i++ {
+			if pick[i]++; pick[i] < len(p.variants[i]) {
+				break
+			}
+			pick[i] = 0
+		}
+		if i == len(pick) {
+			break
+		}
+	}
+	p.completed = true
+	return out
+}
+
+// makeRoom frees a slot for a new unit of h's sender: expired entries first, then the oldest of
+// the same sender. Other senders' units are never touched.
+func (r *Reassembler3) makeRoom(h Header3, now time.Time) {
+	var pend, done int
+	var oldestPend, oldestDone *Header3
+	var atPend, atDone time.Time
 	for k, p := range r.pending {
 		if now.Sub(p.at) > pendingTTL3 {
 			delete(r.pending, k)
 			continue
 		}
-		if first || p.at.Before(oldestAt) {
-			oldest, oldestAt, first = k, p.at, false
+		if k.Sender != h.Sender || k.Gen != h.Gen {
+			continue
+		}
+		kk := k
+		if p.completed {
+			done++
+			if oldestDone == nil || p.at.Before(atDone) {
+				oldestDone, atDone = &kk, p.at
+			}
+		} else {
+			pend++
+			if oldestPend == nil || p.at.Before(atPend) {
+				oldestPend, atPend = &kk, p.at
+			}
 		}
 	}
-	if len(r.pending) >= maxPendingUnits3 && !first {
-		delete(r.pending, oldest)
+	if pend >= maxPendingPerSource3 && oldestPend != nil {
+		delete(r.pending, *oldestPend)
+	}
+	if done >= maxCompletedPerSource && oldestDone != nil {
+		delete(r.pending, *oldestDone)
 	}
 }
