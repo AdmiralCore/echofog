@@ -92,6 +92,7 @@ type knownHash struct {
 }
 
 type source struct {
+	bytes int // ciphertext held as candidates
 	win   replayWindow
 	cands map[uint32]*candSet
 	known map[uint32]knownHash
@@ -110,6 +111,8 @@ type Receiver struct {
 	mu   sync.Mutex
 	src  map[srcKey]*source
 	mute map[byte]time.Time
+
+	lastSweep time.Time
 }
 
 // NewReceiver returns a Receiver.
@@ -155,9 +158,18 @@ func (r *Receiver) OnUnit(h Header3, ct []byte) UnitResult {
 }
 
 func (r *Receiver) onUnit(h Header3, ct []byte, reports *[]report) UnitResult {
+	// No state before authentication: only a sender whose signed join announced a media key
+	// gets a source, so unannounced numbers cannot fill the table or the memory.
+	if r.cfg.MediaKey == nil {
+		return UnitResult{}
+	}
+	if _, ok := r.cfg.MediaKey(h.Sender, h.Gen); !ok {
+		return UnitResult{}
+	}
 	now := r.cfg.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.maybeSweepLocked(now)
 	s := r.source(srcKey{h.Sender, h.Gen, h.Stream, h.Kind})
 	if s == nil {
 		return UnitResult{}
@@ -176,7 +188,7 @@ func (r *Receiver) onUnit(h Header3, ct []byte, reports *[]report) UnitResult {
 	}
 	cs := s.cands[h.Seq]
 	if cs != nil && now.Sub(cs.at) > CandidateTTL3 {
-		delete(s.cands, h.Seq)
+		s.removeCands(h.Seq)
 		cs = nil
 	}
 	if cs == nil {
@@ -191,10 +203,11 @@ func (r *Receiver) onUnit(h Header3, ct []byte, reports *[]report) UnitResult {
 			return UnitResult{Duplicate: true}
 		}
 	}
-	if len(cs.list) >= MaxCandidates3 {
+	if len(cs.list) >= MaxCandidates3 || s.bytes+len(ct) > maxSourceBytes3 {
 		cs.overflow = true
 		return UnitResult{}
 	}
+	s.bytes += len(ct)
 	first := len(cs.list) == 0
 	cs.list = append(cs.list, cand{h: h, ct: ct, hash: hash})
 	if !first {
@@ -210,7 +223,7 @@ func (s *source) makeRoom(now time.Time) {
 	first := true
 	for seq, cs := range s.cands {
 		if now.Sub(cs.at) > CandidateTTL3 {
-			delete(s.cands, seq)
+			s.removeCands(seq)
 			continue
 		}
 		if first || cs.at.Before(oldestAt) {
@@ -218,8 +231,19 @@ func (s *source) makeRoom(now time.Time) {
 		}
 	}
 	if len(s.cands) >= maxPerSource3 && !first {
-		delete(s.cands, oldest)
+		s.removeCands(oldest)
 	}
+}
+
+func (s *source) removeCands(seq uint32) {
+	cs := s.cands[seq]
+	if cs == nil {
+		return
+	}
+	for _, c := range cs.list {
+		s.bytes -= len(c.ct)
+	}
+	delete(s.cands, seq)
 }
 
 // OnAuth handles one CALL_AUTH payload.
@@ -245,6 +269,7 @@ func (r *Receiver) onAuth(payload []byte, reports *[]report) (AuthResult, error)
 	now := r.cfg.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.maybeSweepLocked(now)
 	if !a.Verify(pub) {
 		r.flag(a.Sender, a.Gen, ErrForgedAuth, now, reports)
 		return AuthResult{Forged: true}, ErrForgedAuth
@@ -269,7 +294,7 @@ func (r *Receiver) onAuth(payload []byte, reports *[]report) (AuthResult, error)
 		if cs == nil {
 			continue
 		}
-		delete(s.cands, seq)
+		s.removeCands(seq)
 		if now.Sub(cs.at) > CandidateTTL3 {
 			continue
 		}
@@ -323,6 +348,19 @@ func (r *Receiver) Sweep() {
 	now := r.cfg.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.sweepLocked(now)
+}
+
+// maybeSweepLocked ages the state at most every 100 ms, so a caller that never calls Sweep
+// still has bounded state.
+func (r *Receiver) maybeSweepLocked(now time.Time) {
+	if now.Sub(r.lastSweep) >= BatchMaxAge {
+		r.sweepLocked(now)
+	}
+}
+
+func (r *Receiver) sweepLocked(now time.Time) {
+	r.lastSweep = now
 	for sender, until := range r.mute {
 		if !now.Before(until) {
 			delete(r.mute, sender)
@@ -331,7 +369,7 @@ func (r *Receiver) Sweep() {
 	for k, s := range r.src {
 		for seq, cs := range s.cands {
 			if now.Sub(cs.at) > CandidateTTL3 {
-				delete(s.cands, seq)
+				s.removeCands(seq)
 			}
 		}
 		for seq, kh := range s.known {

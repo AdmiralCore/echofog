@@ -373,6 +373,9 @@ func TestUnknownSendersCreateNoState(t *testing.T) {
 	h := newRx(t, false)
 	for i := 0; i < 5000; i++ { // nobody announced these senders in a signed join
 		hd := Header3{Kind: Kind3Audio, Sender: byte(i), Gen: byte(i >> 8), Stream: byte(i >> 4), Seq: uint32(i)}
+		if hd.Sender == 3 && hd.Gen == 1 {
+			continue // the one announced sender
+		}
 		if r := h.r.OnUnit(hd, []byte{1}); r.Play || r.Forward {
 			t.Fatalf("unit of an unknown sender is played/forwarded: %+v", r)
 		}
