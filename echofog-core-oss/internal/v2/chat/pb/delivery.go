@@ -152,9 +152,25 @@ const (
 )
 
 // ParseDeliver parses a DELIVER body: a request ID and an envelope of at most MaxEnvelope bytes.
-func ParseDeliver(b []byte) (*Deliver, error) { return nil, errNotImplemented }
+func ParseDeliver(b []byte) (*Deliver, error) {
+	m := &Deliver{}
+	if err := parse(b, m); err != nil {
+		return nil, err
+	}
+	if n := len(m.GetEnvelope()); n == 0 || n > MaxEnvelope {
+		return nil, invalid("envelope of %d bytes", n)
+	}
+	return m, nil
+}
 
 // ParseDelivered parses a DELIVERED body; the status is one of the five defined values.
-func ParseDelivered(b []byte) (*Delivered, error) { return nil, errNotImplemented }
-
-var errNotImplemented = errors.New("chat/pb: not implemented")
+func ParseDelivered(b []byte) (*Delivered, error) {
+	m := &Delivered{}
+	if err := parse(b, m); err != nil {
+		return nil, err
+	}
+	if m.GetStatus() > StatusRefused {
+		return nil, invalid("status %d", m.GetStatus())
+	}
+	return m, nil
+}
