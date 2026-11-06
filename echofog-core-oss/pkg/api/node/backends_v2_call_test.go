@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/services/call/media"
@@ -179,4 +180,18 @@ func TestV2GroupCallsAndRelayChoiceStayPending(t *testing.T) {
 	_, err = api.StartRoomCall("g", "r")
 	require.ErrorIs(t, err, ErrV2NotBuilt)
 	require.ErrorIs(t, api.SwitchCallRelay("x"), ErrV2NotBuilt)
+}
+
+func TestV2OwnStreamDrivesTheNativeEncoder(t *testing.T) {
+	api, _ := newV2CallApi(t)
+	_, err := api.JoinCall("invite-secret", "")
+	require.NoError(t, err)
+	enc := &fakeEncoder{}
+	require.NoError(t, api.SetCaptureEncoder("screen", enc))
+	require.NoError(t, api.StartStream("s1", "screen", "2160p60"))
+	require.Eventually(t, func() bool {
+		enc.mu.Lock()
+		defer enc.mu.Unlock()
+		return len(enc.bitrates) > 0 || enc.keys > 0
+	}, 3*time.Second, 20*time.Millisecond, "the call's rate control or keyframe request reaches the app's encoder")
 }
