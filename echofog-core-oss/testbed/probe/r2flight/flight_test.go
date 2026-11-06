@@ -1,7 +1,6 @@
 package r2flight
 
 import (
-	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -36,11 +35,12 @@ func cert(t *testing.T) tls.Certificate {
 }
 
 type rig struct {
-	ln     *reality2.TCPListener
-	mask   *ecdh.PrivateKey
-	addr   string
-	covers atomic.Int64
-	clock  atomic.Int64
+	ln        *reality2.TCPListener
+	mask      *ecdh.PrivateKey
+	addr      string
+	covers    atomic.Int64
+	coverAddr string
+	clock     atomic.Int64
 }
 
 func newRig(t *testing.T) *rig {
@@ -60,6 +60,7 @@ func newRig(t *testing.T) *rig {
 			go func() { defer c.Close(); _, _ = io.Copy(io.Discard, c) }()
 		}
 	}()
+	r.coverAddr = cover.Addr().String()
 	r.mask, err = ecdh.X25519().GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
@@ -78,32 +79,26 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
-func send(t *testing.T, addr string, b []byte) {
+// send writes b to addr and returns the first bytes that come back.
+func send(t *testing.T, addr string, b []byte) []byte {
 	t.Helper()
 	c, err := net.Dial("tcp", addr)
 	require.NoError(t, err)
 	defer c.Close()
 	_, err = c.Write(b)
 	require.NoError(t, err)
-	time.Sleep(300 * time.Millisecond)
+	_ = c.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+	got := make([]byte, 16)
+	n, _ := io.ReadFull(c, got)
+	return got[:n]
 }
 
+// Both answers start with a handshake record, so the cover is counted: a foreign token is forwarded
+// to it, a fresh valid one is answered by the node itself and never reaches it.
 func TestAFreshFlightIsAdmittedAndAForeignOneGoesToTheCover(t *testing.T) {
 	r := newRig(t)
 	now := time.Unix(0, r.clock.Load())
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	admitted := make(chan struct{}, 4)
-	go func() {
-		for {
-			c, err := r.ln.Accept(ctx)
-			if err != nil {
-				return
-			}
-			admitted <- struct{}{}
-			_ = c.Close()
-		}
-	}()
+
 	valid, err := Flight(r.mask.PublicKey().Bytes(), r.addr, "cover.example", now)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(valid), 5)
@@ -114,20 +109,14 @@ func TestAFreshFlightIsAdmittedAndAForeignOneGoesToTheCover(t *testing.T) {
 	foreign, err := Flight(other.PublicKey().Bytes(), r.addr, "cover.example", now)
 	require.NoError(t, err)
 
-	send(t, r.addr, foreign)
-	select {
-	case <-admitted:
-		t.Fatal("a flight made for another key was admitted")
-	default:
-	}
+	got := send(t, r.addr, foreign)
+	require.GreaterOrEqual(t, len(got), 5)
 	assert.EqualValues(t, 1, r.covers.Load(), "the foreign flight went to the cover")
 
-	send(t, r.addr, valid)
-	select {
-	case <-admitted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("a fresh valid flight was not admitted")
-	}
+	got = send(t, r.addr, valid)
+	require.GreaterOrEqual(t, len(got), 5, "the node answered a fresh valid flight itself")
+	assert.Equal(t, byte(0x16), got[0], "with its own ServerHello")
+	assert.EqualValues(t, 1, r.covers.Load(), "and did not forward it to the cover")
 	assert.NotEqual(t, valid, foreign)
 }
 

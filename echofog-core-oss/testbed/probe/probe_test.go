@@ -2,9 +2,16 @@ package probe
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"io"
+	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +41,7 @@ func TestReduceMakesStableAnswers(t *testing.T) {
 		{"closed", "tcp", nil, io.EOF, Answer{Class: "closed"}},
 		{"reset", "tcp", nil, syscall.ECONNRESET, Answer{Class: "reset"}},
 		{"alert", "tcp", alert, io.EOF, Answer{Class: "alert", Detail: "70"}},
-		{"handshake record", "tcp", []byte{0x16, 0x03, 0x03, 0x00, 0x7a, 0x02}, nil, Answer{Class: "tls", Detail: "22/0303"}},
+		{"handshake record", "tcp", []byte{0x16, 0x03, 0x03, 0x00, 0x7a, 0x02}, nil, Answer{Class: "tls", Detail: "22/0303/122"}},
 		{"http", "tcp", []byte("HTTP/1.1 400 Bad Request\r\n\r\n"), io.EOF, Answer{Class: "http", Detail: "400"}},
 		{"other bytes", "tcp", []byte{1, 2, 3}, nil, Answer{Class: "bytes"}},
 		{"udp silence", "udp", nil, errors.New("i/o timeout (deadline exceeded)"), Answer{Class: "silence"}},
@@ -50,8 +57,9 @@ func TestReduceMakesStableAnswers(t *testing.T) {
 
 func TestEquivalent(t *testing.T) {
 	assert.True(t, Equivalent(Answer{Class: "silence"}, Answer{Class: "silence"}))
-	assert.True(t, Equivalent(Answer{Class: "tls", Detail: "22/0303"}, Answer{Class: "tls", Detail: "22/0303"}))
-	assert.False(t, Equivalent(Answer{Class: "tls", Detail: "22/0303"}, Answer{Class: "alert", Detail: "70"}))
+	assert.True(t, Equivalent(Answer{Class: "tls", Detail: "22/0303/122"}, Answer{Class: "tls", Detail: "22/0303/122"}))
+	assert.False(t, Equivalent(Answer{Class: "tls", Detail: "22/0303/122"}, Answer{Class: "tls", Detail: "22/0303/123"}), "the length of the first record is part of the answer")
+	assert.False(t, Equivalent(Answer{Class: "tls", Detail: "22/0303/122"}, Answer{Class: "alert", Detail: "70"}))
 	assert.False(t, Equivalent(Answer{Class: "http", Detail: "400"}, Answer{Class: "http", Detail: "404"}))
 	assert.False(t, Equivalent(Answer{Class: "closed"}, Answer{Class: "reset"}))
 }
@@ -79,12 +87,28 @@ func newCover(t *testing.T) *lab {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, "<html>the cover page</html>")
 	}))
-	srv.TLS = &tls.Config{NextProtos: []string{"http/1.1"}}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.TLS = &tls.Config{NextProtos: []string{"http/1.1"}, Certificates: []tls.Certificate{selfSigned(t)}}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	l.coverSrv = srv
 	l.coverAddr = srv.Listener.Addr().String()
 	return l
+}
+
+// selfSigned makes a certificate of its own: httptest servers all share one, which would make two
+// different covers look like the same site.
+func selfSigned(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 100))
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "cover.lab"}, DNSNames: []string{"cover.lab"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 type nodeBehaviour struct {
