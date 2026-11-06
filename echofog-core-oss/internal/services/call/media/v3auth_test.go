@@ -49,6 +49,9 @@ func TestDecodeAuthRejectsMalformed(t *testing.T) {
 	priv, _ := testMediaKey(1)
 	a := &Auth{Kind: 1, Sender: 1, Cur: [][UnitHash3Len]byte{{1}}}
 	good := a.Sign(priv)
+	if len(good) < 12 {
+		t.Fatal("Sign returned no CALL_AUTH")
+	}
 	prefix := 11 // kind epoch sender stream gen first_seq prev_count count
 	cases := map[string][]byte{
 		"empty":        nil,
