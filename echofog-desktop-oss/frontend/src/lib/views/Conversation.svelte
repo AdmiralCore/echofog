@@ -23,6 +23,7 @@
   import ChatInfo from '../features/chat/ChatInfo.svelte';
   import ContactProfile from '../features/chat/ContactProfile.svelte';
   import ChannelBar from '../features/chat/ChannelBar.svelte';
+  import PanelHost from '../features/chat/PanelHost.svelte';
   import ThreadsList from '../features/chat/ThreadsList.svelte';
   import MembersPanel from '../features/chat/MembersPanel.svelte';
   import { provideChat } from '../features/chat/context.js';
@@ -31,9 +32,10 @@
   /** An open chat: it puts the parts of features/chat together and holds what they share. What I may
    *  do here and with each message comes from the core (conv.can, m.can). */
   export let conv;
-  /** back: show a back arrow (narrow window, the list is hidden); indent: leave room for the show-list button */
+  /** back: show a back arrow (narrow window, the list is hidden) */
   export let back = false;
-  export let indent = false;
+  /** which side column the head's button hides: 'personal' for a one-to-one chat in the list ('' none) */
+  export let panelButton = '';
   /** stage: a call's stage is in the default slot, between the channels and the chat; chatOpen: the chat
    *  beside it is shown; theatre: the stage takes everything (no channels, no chat) */
   export let stage = false;
@@ -289,7 +291,13 @@
 
 <div class="chat-screen" class:compact class:stage class:sheet class:chat-off={stage && (!chatOpen || theatre)} class:theatre={stage && theatre} bind:clientWidth={screenW}>
   {#if conv.kind === 'group' && (!compact || chansOpen) && !(stage && theatre)}
-    <ChannelBar {conv} indent={indent && !compact} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+    {#if compact}
+      <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+    {:else}
+      <PanelHost kind="space" label={$t('panel.pin')}>
+        <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+      </PanelHost>
+    {/if}
   {/if}
   {#if compact && chansOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
@@ -297,7 +305,7 @@
   {/if}
   {#if stage}<div class="stage-slot"><slot {compact} toggleChannels={() => (chansOpen = !chansOpen)} /></div>{/if}
   <div class="main">
-    <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} panelButton={conv.kind === 'group' ? 'space' : panelButton} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}

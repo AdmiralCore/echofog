@@ -21,7 +21,10 @@
   import Popover from '../components/ui/Popover.svelte';
   import Skeleton from '../components/ui/Skeleton.svelte';
   import SelfCard from '../features/chat/SelfCard.svelte';
-  import { chatsAction } from '../stores/nav.js';
+  import { chatsAction, view } from '../stores/nav.js';
+  import { panelHidden, togglePanel } from '../stores/panels.js';
+  import PanelHost from '../features/chat/PanelHost.svelte';
+  import IconButton from '../components/ui/IconButton.svelte';
 
   let panel = ''; // '' | 'contact' | 'group' | 'join' | 'me'
   let contactInput = '';
@@ -34,12 +37,15 @@
   let scanning = false;
   let qr = '';
 
-  // the chat list can be hidden so the conversation uses the full width; the choice is remembered
-  let listCollapsed = false;
-  try { listCollapsed = localStorage.getItem('echofog.chatsCollapsed') === '1'; } catch (_) {}
-  function toggleList() {
-    listCollapsed = !listCollapsed;
-    try { localStorage.setItem('echofog.chatsCollapsed', listCollapsed ? '1' : '0'); } catch (_) {}
+  // the chat list can be hidden (a strip by the rail, PanelHost); the choice is remembered apart for the
+  // personal list and for spaces
+  const listHidden = panelHidden.personal;
+  // Ctrl+B hides or shows the column of what is open: the channels of a space, or the personal list
+  function onKey(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'b') return;
+    if ($view !== 'chats' || narrow) return;
+    e.preventDefault();
+    togglePanel(isSpace ? 'space' : 'personal');
   }
 
   // the list can be resized by dragging its edge; the width is remembered
@@ -64,17 +70,22 @@
   // a narrow window shows either the list or the open chat, like a phone
   let width = 1000;
   $: narrow = width < 700;
+  // under 640 px the window has no rail of spaces (a bottom bar instead), so the list brings them back
+  let winW = 1200;
+  $: noRail = winW < 640;
 
   let query = '';
   $: q = query.trim().toLowerCase();
   $: sorted = [...$chats]
     .filter((c) => !q || (c.name || '').toLowerCase().includes(q) || (c.last || '').toLowerCase().includes(q))
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));
-  // spaces (groups) first, then the people
+  // the rail of spaces shows the spaces, so the list holds the people only; a search looks through
+  // everything, and a window with no rail gets the spaces back
   $: spaces = sorted.filter((c) => c.kind === 'group');
   $: people = sorted.filter((c) => c.kind !== 'group');
+  $: withSpaces = noRail || !!q;
   $: sections = [
-    { key: 'spaces', title: $t('chats.sectionSpaces'), list: spaces },
+    ...(withSpaces ? [{ key: 'spaces', title: $t('chats.sectionSpaces'), list: spaces }] : []),
     { key: 'people', title: $t('chats.sectionPeople'), list: people },
   ].filter((s) => s.list.length);
 
@@ -94,7 +105,7 @@
   $: if (!showCall) maximized = false;
   // a space shows its own column of channels instead of this list (its header switches chats)
   $: isSpace = !!active && active.kind === 'group';
-  $: showAside = narrow ? !opened : !listCollapsed && !isSpace;
+  $: showAside = narrow ? !opened : !isSpace;
 
   // the chat beside a call opens and closes; the choice is remembered, and without one the chat is open
   // only when the window is wide enough to leave the picture its width
@@ -155,7 +166,7 @@
     const what = $chatsAction;
     chatsAction.set('');
     activeId.set('');
-    listCollapsed = false;
+    listHidden.set(false);
     panel = '';
     toggle(what);
   }
@@ -195,16 +206,17 @@
   }
 </script>
 
-<svelte:window on:mousemove={onResize} on:mouseup={endResize} />
+<svelte:window on:mousemove={onResize} on:mouseup={endResize} on:keydown={onKey} bind:innerWidth={winW} />
 
 <div class="chats" class:narrow bind:clientWidth={width} class:resizing={!!resizing}>
   {#if showAside}
+  <PanelHost kind="personal" off={narrow} label={$t('panel.pin')}>
   <aside style={narrow ? '' : `width:${listWidth}px`}>
     <div class="head">
       <h2 class="grow">{$t('chats.title')}</h2>
       <button class="icon new" bind:this={newBtn} class:on={newMenu || ['contact', 'group', 'join'].includes(panel)} title={$t('chats.new')} aria-label={$t('chats.new')} on:click={() => (newMenu = !newMenu)}><Icon name="edit" size={17} /></button>
       <button class="icon" class:on={panel === 'me'} title={$t('chats.myContact')} aria-label={$t('chats.myContact')} on:click={() => toggle('me')}><Icon name="qr" size={17} /></button>
-      {#if !narrow}<button class="icon" title={$t('chats.hideList')} aria-label={$t('chats.hideList')} on:click={toggleList}><Icon name="panel" size={18} /></button>{/if}
+      {#if !narrow}<IconButton icon="panel" label={$t($listHidden ? 'panel.pin' : 'panel.hide') + ' · Ctrl+B'} pressed={$listHidden} size="sm" on:click={() => togglePanel('personal')} />{/if}
     </div>
 
     {#if newMenu}
@@ -286,7 +298,7 @@
         </button>
       {/if}
       {#each sections as sec (sec.key)}
-      <div class="section">{sec.title}<span class="cnt">{sec.list.length}</span></div>
+      {#if sections.length > 1}<div class="section">{sec.title}<span class="cnt">{sec.list.length}</span></div>{/if}
       {#each sec.list as c (c.id)}
         <button class="conv" class:sel={c.id === $activeId} class:unread={c.unread} on:click={() => openChat(c.id)}>
           <div class="avatar">
@@ -334,17 +346,15 @@
       <div class="resize" title={$t('chats.dragResize')} on:mousedown|preventDefault={startResize} on:dblclick={() => { listWidth = 320; endResize(); }}></div>
     {/if}
   </aside>
+  </PanelHost>
   {/if}
 
   {#if !narrow || opened}
   <section>
-    {#if listCollapsed && !narrow && !isSpace}
-      <button class="show-list" title={$t('chats.showList')} aria-label={$t('chats.showList')} on:click={toggleList}><Icon name="panel" size={17} /></button>
-    {/if}
     {#if showSaved}
-      <Saved back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />
+      <Saved back={narrow} panelButton={!narrow ? 'personal' : ''} on:back={() => activeId.set('')} />
     {:else if active}
-      <Conversation conv={active} back={narrow} indent={listCollapsed && !narrow && !isSpace} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')} let:compact let:toggleChannels>
+      <Conversation conv={active} back={narrow} panelButton={!narrow && !isSpace ? 'personal' : ''} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')} let:compact let:toggleChannels>
         {#if showCall}<CallStage title={stageTitle(active)} bind:maximized {chatOpen} unread={missed} channelsButton={compact && isSpace} on:channels={toggleChannels} on:togglechat={toggleCallChat} />{/if}
       </Conversation>
     {:else}
@@ -430,12 +440,6 @@
   .resize:hover::after, .resizing .resize::after { opacity: 0.6; }
 
   section { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--bg); }
-  .show-list {
-    position: absolute; z-index: 5; top: 11px; left: 12px;
-    width: var(--ctl-md); height: var(--ctl-md); padding: 0; border-radius: var(--r-md); display: grid; place-items: center;
-    background: var(--surface-1); border: 1px solid var(--border); color: var(--muted);
-  }
-  .show-list:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
 
   .placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
   .ph-ic { width: 56px; height: 56px; border-radius: var(--r-xl); display: grid; place-items: center; background: var(--surface-2); color: var(--muted); margin-bottom: 8px; }

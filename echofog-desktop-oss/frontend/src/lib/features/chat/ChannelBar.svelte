@@ -7,7 +7,10 @@
   import Icon from '../../components/ui/Icon.svelte';
   import Popover from '../../components/ui/Popover.svelte';
   import ChannelRow from './ChannelRow.svelte';
-  import ChannelPerms from './ChannelPerms.svelte';
+  import ChannelSettings from './ChannelSettings.svelte';
+  import IconButton from '../../components/ui/IconButton.svelte';
+  import Menu from '../../components/ui/Menu.svelte';
+  import { panelHidden, togglePanel } from '../../stores/panels.js';
   import SelfCard from './SelfCard.svelte';
   import Avatar from '../../components/ui/Avatar.svelte';
   import { App } from '../../api.js';
@@ -18,11 +21,9 @@
    *  them real categories (ChatCategoriesSetup). Channels in no category sit on top. Who may manage
    *  channels (conv.can.channels) adds, sets up, reorders, files and removes them. */
   export let conv;
-  /** indent: leave room for the show-list button, which sits over this column's head */
-  export let indent = false;
+  const hid = panelHidden.space;
 
   const dispatch = createEventDispatcher();
-  const SLOW = [0, 5, 10, 30, 60, 300, 900, 3600];
   const MAIN = { id: '', main: true };
   const kind = (c) => (c.main ? 3 : c.category ? 2 : c.voice ? 1 : 0);
 
@@ -125,7 +126,7 @@
   }
 
   // ---- settings of a channel, a category (a heading) or the main channel -------------------------
-  let editing = null; // { ch, sec, main, anchor, name, topic, readOnly, slowSecs, parent, open, overrides }
+  let editing = null; // { ch, sec, main, name, topic, readOnly, slowSecs, parent, open, overrides }
   let roles = []; // the group's roles but the owner's, for a channel's permissions
   async function loadRoles() {
     try { roles = ((await App.GroupRoles(conv.groupId)) || []).filter((r) => r.rank < 100); } catch (_) { roles = []; }
@@ -134,11 +135,10 @@
     e.preventDefault();
     e.stopPropagation();
     if (!manage) return;
-    const anchor = e.currentTarget.closest('.chan-row, .cat-head') || e.currentTarget;
-    if (sec) return (editing = { sec, ch: sec.cat || { category: true }, anchor, name: sec.name });
+    if (sec) return (editing = { sec, ch: sec.cat || { category: true }, name: sec.name });
     const main = !!ch.main;
     const src = main ? $mainChannel : ch;
-    editing = { ch, main, anchor, name: main ? src.name || '' : src.name, topic: src.topic || '', readOnly: !!src.readOnly,
+    editing = { ch, main, name: main ? src.name || '' : src.name, topic: src.topic || '', readOnly: !!src.readOnly,
       slowSecs: src.slowSecs || 0, parent: parentOf(ch), open: main ? src.open || '' : '', overrides: [...(src.overrides || [])] };
     loadRoles();
   }
@@ -179,7 +179,6 @@
     const id = ed.sec ? await categoryOf(ed.sec) : ed.ch.id;
     if (id) removeChannel(id);
   }
-  const slowLabel = (s) => (!s ? $t('chats.slowOff') : s < 60 ? $t('chats.slowSec', { n: s }) : s < 3600 ? $t('chats.slowMin', { n: s / 60 }) : $t('chats.slowHour', { n: s / 3600 }));
 
   // ---- dragging: reorder among the same kind, or file into a category ----------------------------
   let dragged = null;
@@ -223,13 +222,12 @@
 </script>
 
 <nav class="chanbar" aria-label={$t('chats.channels')}>
-  <div class="space-head" class:indent>
+  <div class="space-head">
     <button class="space-switch" bind:this={switchBtn} class:open={switching} aria-haspopup="menu" aria-expanded={switching} title={$t('layout.switch')} on:click={() => (switching = !switching)}>
       <span class="space-name" title={conv.name}>{conv.name}</span><Icon name="chevronDown" size={15} />
     </button>
     <span class="grow"></span>
-    {#if manage}<button class="icon tiny" title={$t('chats.newCategory')} aria-label={$t('chats.newCategory')} on:click={() => startAdd('category')}><Icon name="folder" size={15} /></button>{/if}
-    <button class="icon tiny" title={$t('chats.spaceSettings')} aria-label={$t('chats.spaceSettings')} on:click={() => dispatch('settings')}><Icon name="settings" size={16} /></button>
+    <IconButton icon="panel" size="sm" label={$t($hid ? 'panel.pin' : 'panel.hide') + ' · Ctrl+B'} pressed={$hid} on:click={() => togglePanel('space')} />
     <span class="space-sub">{$t('layout.membersLine', { n: conv.members })}</span>
   </div>
   <div class="chips" role="group" aria-label={$t('chats.channels')}>
@@ -255,8 +253,9 @@
           <Icon name={folded.has(sec.key) ? 'chevronRight' : 'chevronDown'} size={12} /><span class="nm">{sec.name}</span>
         </button>
         {#if manage}
-          <button class="icon tiny" title={$t('chats.newChannel')} aria-label={$t('chats.newChannel')} on:click={() => startAdd('text', sec)}><Icon name="plus" size={14} /></button>
-          <button class="icon tiny" title={$t('chats.newRoom')} aria-label={$t('chats.newRoom')} on:click={() => startAdd('voice', sec)}><Icon name="volume" size={13} /></button>
+          <Menu width={200} label={$t('chats.newChannel')} items={[{ id: 'text', label: $t('chats.newChannel'), icon: 'hash' }, { id: 'voice', label: $t('chats.newRoom'), icon: 'volume' }]} on:select={(e) => startAdd(e.detail, sec)}>
+            <button slot="trigger" let:toggle class="icon tiny" title={$t('chats.newChannel')} aria-label={$t('chats.newChannel')} aria-haspopup="menu" on:click={toggle}><Icon name="plus" size={14} /></button>
+          </Menu>
           <button class="icon tiny" title={$t('chats.categorySettings')} aria-label={$t('chats.categorySettings')} on:click={(e) => edit(e, null, sec)}><Icon name="settings" size={13} /></button>
         {/if}
       </div>
@@ -301,6 +300,9 @@
 {#if switching}
   <Popover anchor={switchBtn} width={264} label={$t('layout.switch')} on:close={() => (switching = false)}>
     <div class="switch">
+      <button class="sw-item" on:click={() => { switching = false; dispatch('settings'); }}><Icon name="settings" size={17} /><span class="grow nm">{$t('chats.spaceSettings')}</span></button>
+      {#if manage}<button class="sw-item" on:click={() => { switching = false; startAdd('category'); }}><Icon name="folder" size={17} /><span class="grow nm">{$t('chats.newCategory')}</span></button>{/if}
+      <span class="sw-sep" aria-hidden="true"></span>
       {#each sortedChats as c (c.id)}
         <button class="sw-item" class:sel={c.id === $activeId} on:click={() => pick(c.id)}>
           <Avatar id={c.peerId || c.id} name={c.name} src={c.avatar} size={26} />
@@ -314,63 +316,19 @@
 {/if}
 
 {#if editing}
-  <Popover anchor={editing.anchor} width={editing.ch.category ? 290 : 330} label={editing.main ? $t('chats.mainSettings') : editing.ch.category ? $t('chats.categorySettings') : $t('chats.channelSettings')} on:close={() => (editing = null)}>
-    <form class="ch-edit" on:submit|preventDefault={saveEdit}>
-      <label class="small faint" for="ch-name">{editing.ch.category ? $t('chats.categoryName') : $t('chats.channelName')}</label>
-      <input id="ch-name" bind:value={editing.name} maxlength="64" placeholder={editing.main ? $t('chats.mainChannel') : ''} />
-      {#if editing.main || (!editing.ch.voice && !editing.ch.category)}
-        <label class="small faint" for="ch-topic">{$t('chats.channelTopic')}</label>
-        <input id="ch-topic" bind:value={editing.topic} maxlength="256" />
-        <label class="small faint" for="ch-slow">{$t('chats.slowMode')}</label>
-        <select id="ch-slow" bind:value={editing.slowSecs}>
-          {#each SLOW as s}<option value={s}>{slowLabel(s)}</option>{/each}
-        </select>
-        <label class="check"><input type="checkbox" bind:checked={editing.readOnly} /> <span>{$t('chats.readOnlyChannel')}</span></label>
-        <p class="small faint">{$t('chats.readOnlyHint')}</p>
-      {/if}
-      {#if !editing.ch.category && cats.length}
-        <label class="small faint" for="ch-cat">{$t('chats.category')}</label>
-        <select id="ch-cat" bind:value={editing.parent}>
-          <option value="">{$t('chats.noCategory')}</option>
-          {#each cats as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
-        </select>
-      {/if}
-      {#if !editing.ch.category && conv.groupKind !== 'channel'}
-        <ChannelPerms bind:overrides={editing.overrides} {roles} voice={!!editing.ch.voice} />
-      {/if}
-      {#if editing.main}
-        <label class="small faint" for="ch-open">{$t('chats.openOn')}</label>
-        <select id="ch-open" bind:value={editing.open}>
-          <option value="">{mainName}</option>
-          {#each textChannels as c (c.id)}<option value={c.id}>#{c.name}</option>{/each}
-        </select>
-      {/if}
-      <div class="row ch-actions">
-        {#if !editing.main && !editing.sec?.virtual}
-          <button type="button" class="icon" title={$t('chats.moveUp')} aria-label={$t('chats.moveUp')} on:click={() => move(-1)}><Icon name="chevronUp" size={16} /></button>
-          <button type="button" class="icon" title={$t('chats.moveDown')} aria-label={$t('chats.moveDown')} on:click={() => move(1)}><Icon name="chevronDown" size={16} /></button>
-        {/if}
-        <span class="grow"></span>
-        {#if !editing.main}<button type="button" class="danger small" on:click={remove}>{$t('common.remove')}</button>{/if}
-        <button type="submit" class="primary small" disabled={!editing.main && !editing.name.trim()}>{$t('common.save')}</button>
-      </div>
-    </form>
-  </Popover>
+  <ChannelSettings ed={editing} {cats} {roles} {textChannels} {mainName} groupKind={conv.groupKind} canMove={!editing.main && !editing.sec?.virtual}
+    on:save={saveEdit} on:remove={remove} on:move={(e) => move(e.detail)} on:close={() => (editing = null)} />
 {/if}
 
 <style>
   .switch { display: flex; flex-direction: column; gap: 1px; padding: 4px; max-height: 340px; overflow-y: auto; }
   .sw-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: none; border-radius: var(--r-md); background: transparent; text-align: left; font-weight: var(--fw-medium); font-size: var(--fs-md); }
   .sw-item:hover:not(:disabled) { background: var(--hover); border: none; }
+  .sw-sep { height: 1px; background: var(--border); margin: 4px 0; flex: none; }
   .sw-item.sel { background: var(--surface-3); }
   .sw-item .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sw-item .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-2xs); font-weight: var(--fw-bold); display: inline-grid; place-items: center; }
   .sw-item.all { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 var(--r-md) var(--r-md); color: var(--muted); padding-top: 9px; }
-  .ch-edit { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
-  .ch-edit label.small { margin-top: 4px; }
-  .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
-  .check input { width: auto; }
-  .ch-actions { margin-top: 8px; gap: 4px; align-items: center; }
   .cat-head { margin-top: 10px; border-radius: 8px; }
   .cat-head:first-of-type { margin-top: 2px; }
   .cat-head.over { box-shadow: inset 0 0 0 1px var(--accent); }

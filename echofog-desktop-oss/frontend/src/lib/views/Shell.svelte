@@ -5,7 +5,7 @@
   import OpenLink from '../components/OpenLink.svelte';
   import CrashDialog from '../components/CrashDialog.svelte';
   import { profile } from '../stores/session.js';
-  import { chats } from '../stores/chats.js';
+  import { chats, activeId } from '../stores/chats.js';
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
   import { loadPeerDirectory } from '../stores/peers.store.js';
   import { view, focus } from '../stores/nav.js';
@@ -20,20 +20,43 @@
   import Proxy from './Proxy.svelte';
   import Wallet from './Wallet.svelte';
   import Settings from './Settings.svelte';
-  import Logs from './Logs.svelte';
+  import Menu from '../components/ui/Menu.svelte';
+  import Tooltip from '../components/ui/Tooltip.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
   import SpacesRail from '../features/chat/SpacesRail.svelte';
   import { t } from '../i18n/index.js';
 
-  const views = [
-    { id: 'chats', label: 'shell.chats', icon: 'message' },
-    { id: 'proxy', label: 'shell.proxy', icon: 'shield' },
-    { id: 'wallet', label: 'shell.wallet', icon: 'wallet' },
-    { id: 'logs', label: 'shell.logs', icon: 'terminal' },
+  // the rail is "where I go": the personal chats and the spaces on top (SpacesRail), then the places of
+  // the app at the foot (VPN, wallet); settings sit behind the avatar, the logs in Settings > Diagnostics.
+  // The bottom bar of a very narrow window has no spaces rail, so it holds the four of them
+  const DEST = [
+    { id: 'proxy', label: 'shell.proxy', icon: 'globe', key: 'Ctrl+2' },
+    { id: 'wallet', label: 'shell.wallet', icon: 'wallet', key: 'Ctrl+3' },
+  ];
+  const BOTTOM = [
+    { id: 'chats', label: 'shell.personal', icon: 'message' },
+    ...DEST,
     { id: 'settings', label: 'shell.settings', icon: 'settings' },
   ];
-  const ITEM = 38; // item height + gap, for the sliding highlight
+  const goPersonal = () => {
+    const c = $chats.find((x) => x.id === $activeId);
+    view.set('chats');
+    if (c && c.kind === 'group') activeId.set('');
+  };
+  const tip = (v) => $t(v.label) + (v.key ? ' · ' + v.key : '');
+  function openDiag() { focus.set('diagnostics'); view.set('settings'); }
+  function menuPick(e) {
+    if (e.detail === 'settings') view.set('settings');
+    else if (e.detail === 'diag') openDiag();
+    else if (e.detail === 'theme') toggleTheme();
+  }
+  $: avatarMenu = [
+    { id: 'settings', label: $t('shell.settings'), icon: 'settings', hint: 'Ctrl+,' },
+    { id: 'diag', label: $t('shell.diagnostics'), icon: 'terminal' },
+    { separator: true },
+    { id: 'theme', label: $resolvedTheme === 'dark' ? $t('shell.lightTheme') : $t('shell.darkTheme'), icon: $resolvedTheme === 'dark' ? 'sun' : 'moon' },
+  ];
 
   // a newer release on GitHub: one quiet banner, until the user closes it for that version
   const UPDATE_SEEN = 'echofog.updateDismissed';
@@ -81,7 +104,6 @@
   }
   $: rail = !bottom && !(wideNav && width >= 980);
   $: showSpaces = !bottom;
-  $: activeIndex = Math.max(0, views.findIndex((v) => v.id === $view));
   $: myName = ($displayName || '').trim() || $profile || $t('shell.me');
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
   $: online = net.status === 'ONLINE' && net.peerCount > 0;
@@ -112,6 +134,12 @@
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'l') {
       e.preventDefault();
       openLinkDialog('');
+      return;
+    }
+    // the places of the rail
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      const go = { '1': goPersonal, '2': () => view.set('proxy'), '3': () => view.set('wallet'), ',': () => view.set('settings') }[e.key];
+      if (go) { e.preventDefault(); go(); }
     }
   }
   function onPaste(e) {
@@ -150,20 +178,20 @@
       </div>
     {/if}
 
-    <div class="items">
-      {#if !bottom}<span class="indicator" style="transform: translateY({activeIndex * ITEM}px)" aria-hidden="true"></span>{/if}
-      {#each views as v}
-        <button class="item" class:active={$view === v.id} title={rail || bottom ? $t(v.label) : ''} aria-current={$view === v.id ? 'page' : undefined} on:click={() => view.set(v.id)}>
-          <span class="ic">
-            <Icon name={v.icon} size={18} />
-            {#if v.id === 'chats' && unread && (rail || bottom)}<span class="pip">{unread > 99 ? '99+' : unread}</span>{/if}
-            {#if v.id === 'chats' && $isCallActive}<span class="live" title={$t('shell.inCall')}></span>{/if}
-          </span>
-          <span class="label">{$t(v.label)}</span>
-          {#if v.id === 'chats' && unread && !rail && !bottom}<span class="badge">{unread}</span>{/if}
-        </button>
-      {/each}
-    </div>
+    {#if bottom}
+      <div class="items">
+        {#each BOTTOM as v}
+          <button class="item" class:active={$view === v.id} aria-current={$view === v.id ? 'page' : undefined} on:click={() => (v.id === 'chats' ? goPersonal() : view.set(v.id))}>
+            <span class="ic">
+              <Icon name={v.icon} size={18} />
+              {#if v.id === 'chats' && unread}<span class="pip">{unread > 99 ? '99+' : unread}</span>{/if}
+              {#if v.id === 'chats' && $isCallActive}<span class="live" title={$t('shell.inCall')}></span>{/if}
+            </span>
+            <span class="label">{$t(v.label)}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     {#if showSpaces}
       <div class="spaces-slot"><SpacesRail wide={!rail} /></div>
@@ -172,30 +200,48 @@
     {#if !bottom}
       <div class="grow" />
       <div class="foot">
+        <div class="dest">
+          {#each DEST as v}
+            <Tooltip text={rail ? tip(v) : ''} placement="right">
+              <button class="item" class:active={$view === v.id} aria-current={$view === v.id ? 'page' : undefined} aria-label={$t(v.label)} on:click={() => view.set(v.id)}>
+                <span class="ic"><Icon name={v.icon} size={18} /></span>
+                <span class="label">{$t(v.label)}</span>
+                {#if !rail}<kbd class="small faint">{v.key}</kbd>{/if}
+              </button>
+            </Tooltip>
+          {/each}
+        </div>
         {#if width >= 980}
-          <button class="theme widen" title={rail ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} aria-label={rail ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} aria-pressed={!rail} on:click={toggleWide}>
-            <Icon name={rail ? 'chevronRight' : 'chevronLeft'} size={17} />
-            <span class="label">{$t('shell.collapse')}</span>
-          </button>
+          <Tooltip text={rail ? $t('shell.expandSidebar') : ''} placement="right">
+            <button class="theme widen" aria-label={rail ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} aria-pressed={!rail} on:click={toggleWide}>
+              <Icon name={rail ? 'chevronRight' : 'chevronLeft'} size={17} />
+              <span class="label">{$t('shell.collapse')}</span>
+            </button>
+          </Tooltip>
         {/if}
-        <button class="theme" title={$resolvedTheme === 'dark' ? $t('shell.lightTheme') : $t('shell.darkTheme')} aria-label={$t('shell.toggleTheme')} on:click={toggleTheme}>
-          <span class="swap" class:dark={$resolvedTheme === 'dark'}>
-            <span class="i sun"><Icon name="sun" size={17} /></span>
-            <span class="i moon"><Icon name="moon" size={17} /></span>
-          </span>
-          <span class="label">{$resolvedTheme === 'dark' ? $t('shell.darkTheme') : $t('shell.lightTheme')}</span>
-        </button>
-        <button class="me" title={rail ? `${myName} · ${statusText}${$anon && $anon.running && !$anon.broken ? ' · ' + $t('anon.badge.' + $anon.seenBy) : ''}` : $t('shell.settings')} on:click={() => view.set('settings')}>
-          <span class="av">
-            <Avatar id={$profile} name={myName} size={32} />
-            <span class="presence" class:on={online}></span>
-          </span>
-          <span class="who">
-            <span class="nm">{myName}</span>
-            <span class="st" class:on={online}>{statusText}</span>
-            {#if $anon && $anon.running && !$anon.broken}<span class="anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
-          </span>
-        </button>
+        <Tooltip text={rail ? ($resolvedTheme === 'dark' ? $t('shell.lightTheme') : $t('shell.darkTheme')) : ''} placement="right">
+          <button class="theme" aria-label={$t('shell.toggleTheme')} on:click={toggleTheme}>
+            <span class="swap" class:dark={$resolvedTheme === 'dark'}>
+              <span class="i sun"><Icon name="sun" size={17} /></span>
+              <span class="i moon"><Icon name="moon" size={17} /></span>
+            </span>
+            <span class="label">{$resolvedTheme === 'dark' ? $t('shell.darkTheme') : $t('shell.lightTheme')}</span>
+          </button>
+        </Tooltip>
+        <Menu items={avatarMenu} width={236} label={myName} on:select={menuPick}>
+          <button slot="trigger" let:toggle let:open class="me" class:active={$view === 'settings'} aria-haspopup="menu" aria-expanded={open}
+            title={`${myName} · ${statusText}${$anon && $anon.running && !$anon.broken ? ' · ' + $t('anon.badge.' + $anon.seenBy) : ''}`} on:click={toggle}>
+            <span class="av">
+              <Avatar id={$profile} name={myName} size={32} />
+              <span class="presence" class:on={online}></span>
+            </span>
+            <span class="who">
+              <span class="nm">{myName}</span>
+              <span class="st" class:on={online}>{statusText}</span>
+              {#if $anon && $anon.running && !$anon.broken}<span class="anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
+            </span>
+          </button>
+        </Menu>
       </div>
     {/if}
   </nav>
@@ -244,7 +290,6 @@
         <div class="fill enter">
           {#if $view === 'proxy'}<Proxy />{/if}
           {#if $view === 'wallet'}<Wallet />{/if}
-          {#if $view === 'logs'}<Logs />{/if}
           {#if $view === 'settings'}<Settings />{/if}
         </div>
       {/if}
@@ -278,13 +323,13 @@
   nav.rail .brand { margin-bottom: 18px; padding-left: 7px; }
 
   .items { position: relative; display: flex; flex-direction: column; gap: 2px; }
-  .indicator {
-    position: absolute; left: 0; right: 0; top: 0; height: 36px; border-radius: var(--r-md);
-    background: var(--surface-3); transition: transform var(--dur-slow) var(--ease);
-  }
-  .indicator::before {
-    content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
-  }
+  .dest { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+  .dest :global(.host), .foot :global(.host) { display: block; }
+  .dest .item, .foot .theme { width: 100%; }
+  .dest .item.active { background: var(--surface-3); }
+  .dest .item.active::before { content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+  .me.active { background: var(--surface-3); }
+  kbd.small { font-size: var(--fs-2xs); }
   .item {
     position: relative; display: flex; gap: 12px; align-items: center; height: 36px; padding: 0 10px;
     background: transparent; border: none; color: var(--muted); font-weight: var(--fw-medium); font-size: var(--fs-md); text-align: left; border-radius: var(--r-md);
@@ -295,8 +340,6 @@
   .ic { position: relative; display: grid; place-items: center; flex: none; }
   .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; transition: opacity var(--dur); }
   nav.rail .label { display: none; }
-  nav.rail .badge { display: none; }
-  .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-2xs); font-weight: var(--fw-bold); display: inline-grid; place-items: center; }
   .pip {
     position: absolute; top: -6px; right: -9px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-pill);
     background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: var(--fw-bold); display: grid; place-items: center;
@@ -309,7 +352,7 @@
   @keyframes live { 50% { opacity: 0.4; } }
 
   nav:not(.rail):not(.bottom) { width: 208px; }
-  .spaces-slot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); min-height: 0; flex: 0 1 auto; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+  .spaces-slot { margin-top: 4px; min-height: 0; flex: 0 1 auto; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
   .spaces-slot::-webkit-scrollbar { display: none; }
   .foot { display: flex; flex-direction: column; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); }
   .theme, .me {

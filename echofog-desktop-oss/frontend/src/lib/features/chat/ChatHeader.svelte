@@ -4,6 +4,8 @@
   import { t } from '../../i18n/index.js';
   import Avatar from '../../components/ui/Avatar.svelte';
   import Icon from '../../components/ui/Icon.svelte';
+  import IconButton from '../../components/ui/IconButton.svelte';
+  import { panelHidden, togglePanel } from '../../stores/panels.js';
 
   /** The chat's head. A direct chat or a plain group: who or what it is, calls, search, info. A
    *  space: the channel shown and its topic, search, threads and members; its calls live in its
@@ -11,6 +13,8 @@
   export let conv;
   export let back = false;
   export let indent = false;
+  /** which side column this chat's head can hide and show: 'personal', 'space' or '' (none) */
+  export let panelButton = '';
   export let searching = false;
   export let info = false;
   export let threadsOpen = false;
@@ -19,6 +23,9 @@
   export let channelsButton = false; // a narrow space: its channels open from here
 
   const dispatch = createEventDispatcher();
+  const hidP = panelHidden.personal;
+  const hidS = panelHidden.space;
+  $: hid = panelButton === 'space' ? $hidS : $hidP;
   $: space = conv.kind === 'group';
   $: calls = !space || !hasRooms;
 </script>
@@ -26,6 +33,9 @@
 <header class:indent>
   {#if back}
     <button class="icon" title={$t('chats.backToChats')} aria-label={$t('chats.backToChats')} on:click={() => dispatch('back')}><Icon name="arrowLeft" size={19} /></button>
+  {/if}
+  {#if panelButton && !channelsButton}
+    <IconButton icon="panel" label={$t(hid ? 'panel.show' : 'panel.hide') + ' · Ctrl+B'} pressed={hid} on:click={() => togglePanel(panelButton)} />
   {/if}
   {#if space && channelsButton}
     <button class="icon" title={$t('chats.channels')} aria-label={$t('chats.channels')} on:click={() => dispatch('channels')}><Icon name="panel" size={18} /></button>

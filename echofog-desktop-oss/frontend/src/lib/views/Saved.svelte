@@ -10,10 +10,14 @@
   import { t, lang } from '../i18n/index.js';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import IconButton from '../components/ui/IconButton.svelte';
+  import { panelHidden, togglePanel } from '../stores/panels.js';
 
   export let back = false;
   export let indent = false;
+  export let panelButton = '';
   const dispatch = createEventDispatcher();
+  const hid = panelHidden.personal;
 
   let query = '';
   let copied = '';
@@ -50,6 +54,7 @@
     {#if back}
       <button class="icon" title={$t('chats.backToChats')} aria-label={$t('chats.backToChats')} on:click={() => dispatch('back')}><Icon name="arrowLeft" size={19} /></button>
     {/if}
+    {#if panelButton}<IconButton icon="panel" label={$t($hid ? 'panel.show' : 'panel.hide') + ' · Ctrl+B'} pressed={$hid} on:click={() => togglePanel('personal')} />{/if}
     <span class="badge-ic"><Icon name="bookmark" size={19} /></span>
     <div class="title grow">
       <h3>{$t('saved.title')}</h3>

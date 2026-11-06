@@ -1,5 +1,7 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
+  /** embedded: a part of Settings > Diagnostics (its own heading and frame), not a page of its own */
+  export let embedded = false;
   import { App, errText, copy } from '../api.js';
   import Button from '../components/ui/Button.svelte';
   import IconButton from '../components/ui/IconButton.svelte';
@@ -115,7 +117,7 @@
   let reporting = false;
 </script>
 
-<div class="logs">
+<div class="logs" class:embedded>
   <header class="head">
     <div class="grow">
       <h1>{$t('logs.title')}</h1>
@@ -168,6 +170,8 @@
 
 <style>
   .logs { display: flex; flex-direction: column; height: 100%; gap: var(--sp-3); padding: var(--sp-6) var(--sp-6) var(--sp-4); }
+  .logs.embedded { padding: var(--sp-4); border-radius: var(--r-xl); background: var(--surface-1); border: 1px solid var(--border); height: max(480px, calc(100vh - 220px)); }
+  .embedded h1 { font-size: var(--fs-lg); line-height: var(--lh-lg); }
   .head { display: flex; align-items: flex-end; gap: var(--sp-3); }
   .bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
   .search { flex: 1; min-width: 180px; }

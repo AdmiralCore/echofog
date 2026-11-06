@@ -2,7 +2,7 @@
 export default {
   en: {
     'spaces.title': 'Spaces',
-    'spaces.personal': 'Personal chats',
+    'spaces.personal': 'Personal',
     'spaces.add': 'Create or join a space',
     'layout.filter.all': 'All',
     'layout.searchChannels': 'Search channels',
@@ -40,7 +40,7 @@ export default {
   },
   ru: {
     'spaces.title': 'Пространства',
-    'spaces.personal': 'Личные чаты',
+    'spaces.personal': 'Личные',
     'spaces.add': 'Создать или вступить',
     'layout.filter.all': 'Все',
     'layout.searchChannels': 'Поиск по каналам',

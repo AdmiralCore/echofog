@@ -31,6 +31,7 @@
   import RememberCard from '../components/RememberCard.svelte';
   import PasswordCard from '../components/PasswordCard.svelte';
   import AutostartCard from '../components/AutostartCard.svelte';
+  import Logs from './Logs.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
@@ -48,6 +49,7 @@
     { id: 'privacy', label: 'settings.g.privacy', icon: 'shield' },
     { id: 'network', label: 'settings.g.network', icon: 'globe' },
     { id: 'app', label: 'settings.g.app', icon: 'settings' },
+    { id: 'diag', label: 'settings.g.diag', icon: 'terminal' },
   ];
   const SECTIONS = [
     { id: 'profile', g: 'profile', kw: ['settings.g.profile', 'settings.displayName', 'settings.yourKey', 'settings.signOut'] },
@@ -65,12 +67,13 @@
     { id: 'guard', g: 'network', kw: ['guard.title'] },
     { id: 'proxy', g: 'network', kw: ['netproxy.title'] },
     { id: 'boot', g: 'network', kw: ['boot.title'] },
+    { id: 'logs', g: 'diag', kw: ['settings.g.diag', 'logs.title', 'logs.subtitle', 'report.open'] },
     { id: 'autostart', g: 'app', kw: ['autostart.title'] },
     { id: 'links', g: 'app', kw: ['links.title', 'links.hint'] },
   ];
 
   // the offline banner sends people to the node-address card: open its group
-  let active = $focus === 'bootstrap' ? 'network' : 'profile';
+  let active = $focus === 'bootstrap' ? 'network' : $focus === 'diagnostics' ? 'diag' : 'profile';
   let query = '';
   $: q = query.trim().toLowerCase();
   $: searching = q.length > 0;
@@ -312,6 +315,8 @@
           </div>
         </section>
       {/if}
+
+      {#if shown('logs')}<div id="s-logs"><Logs embedded /></div>{/if}
 
       {#if shown('anon')}<div id="s-anon"><AnonymityCard /></div>{/if}
       {#if shown('guard')}<div id="s-guard"><GuardCard /></div>{/if}

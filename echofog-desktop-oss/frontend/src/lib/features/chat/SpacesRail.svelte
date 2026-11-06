@@ -3,6 +3,7 @@
   import { view, chatsAction } from '../../stores/nav.js';
   import { openLinkDialog } from '../../links.js';
   import { t } from '../../i18n/index.js';
+  import { isCallActive, peerInfo } from '../../stores/call.store.js';
   import Avatar from '../../components/ui/Avatar.svelte';
   import Icon from '../../components/ui/Icon.svelte';
   import Tooltip from '../../components/ui/Tooltip.svelte';
@@ -30,6 +31,8 @@
   $: active = $chats.find((c) => c.id === $activeId);
   $: inSpace = !!active && active.kind === 'group';
   $: inPersonal = $view === 'chats' && !inSpace;
+  // a call in a one-to-one chat: the dot sits on "Personal", a space's call has its own on the avatar
+  $: personalCall = $isCallActive && !!$peerInfo.chatId && $chats.some((c) => c.id === $peerInfo.chatId && c.kind !== 'group');
 
   function goPersonal() {
     view.set('chats');
@@ -76,10 +79,10 @@
 </script>
 
 <div class="spaces" class:wide role="navigation" aria-label={$t('spaces.title')}>
-  <Tooltip text={wide ? '' : $t('spaces.personal')} placement="right">
+  <Tooltip text={wide ? '' : $t('spaces.personal') + ' · Ctrl+1'} placement="right">
     <button class="sp personal" class:on={inPersonal} aria-current={inPersonal ? 'page' : undefined} aria-label={$t('spaces.personal')} on:click={goPersonal}>
-      <span class="av home"><Icon name="user" size={18} />{#if personalUnread}<span class="cnt">{personalUnread > 99 ? '99+' : personalUnread}</span>{/if}</span>
-      {#if wide}<span class="nm">{$t('spaces.personal')}</span>{/if}
+      <span class="av home"><Icon name="message" size={18} />{#if personalUnread}<span class="cnt">{personalUnread > 99 ? '99+' : personalUnread}</span>{/if}{#if personalCall}<span class="call" title={$t('shell.inCall')}></span>{/if}</span>
+      {#if wide}<span class="nm">{$t('spaces.personal')}</span><kbd class="small faint">Ctrl+1</kbd>{/if}
     </button>
   </Tooltip>
   {#if spaces.length}<span class="sep" aria-hidden="true"></span>{/if}
