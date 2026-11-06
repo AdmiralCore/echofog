@@ -50,13 +50,14 @@
         bind:this={anchor}
         class="path-badge shrink-0"
         class:warn={badge.warn}
+        class:direct={badge.direct}
         class:open
         title={$t(badge.direct ? 'callpath.badgeDirectTitle' : 'callpath.badgeTitle')}
         aria-haspopup="dialog"
         aria-expanded={open}
         on:click={() => (open = !open)}
     >
-        <Icon name={badge.direct ? 'check' : 'relay'} size={13} />
+        <Icon name={badge.direct ? 'check' : 'relay'} size={12} />
         <span>{$t(badge.key, badge.params)}</span>
     </button>
 {/if}
@@ -69,26 +70,12 @@
 
 <style>
     .path-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        height: 22px;
-        padding: 0 9px;
-        border: none;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.07);
-        color: #b5bac1;
-        font-size: 12px;
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
+        display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: none;
+        border-radius: var(--r-sm); background: var(--badge-bg); color: var(--badge-text); font-size: var(--fs-2xs);
+        font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; white-space: nowrap;
     }
-    .path-badge:hover:not(:disabled),
-    .path-badge.open {
-        background: rgba(255, 255, 255, 0.13);
-        border: none;
-        color: #fff;
-    }
-    .path-badge.warn { background: rgba(240, 178, 50, 0.14); color: #f0b232; }
-    .path-badge.warn:hover:not(:disabled),
-    .path-badge.warn.open { background: rgba(240, 178, 50, 0.24); color: #ffc94d; }
+    .path-badge.direct { background: var(--ok-soft); color: var(--ok-fg); }
+    .path-badge:hover:not(:disabled), .path-badge.open { background: var(--ok-soft); border: none; filter: brightness(1.15); }
+    .path-badge.warn { background: var(--warn-soft); color: var(--warn-fg); }
+    .path-badge:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
 </style>

@@ -103,11 +103,11 @@
             aria-pressed={s.isMicMuted}
             on:click={toggleMute}
         >
-            <Icon name={s.isMicMuted ? 'micOff' : 'mic'} size={21} />
+            <Icon name={s.isMicMuted ? 'micOff' : 'mic'} size={18} />
         </button>
         {#if !compact}
             <button class="ctl-caret" class:open={menu === 'audio'} title={$t('call.micAndSpeakers')} aria-label={$t('call.micAndSpeakers')} on:click={() => toggleMenu('audio')}>
-                <Icon name="chevronUp" size={13} stroke={2.4} />
+                <Icon name="chevronUp" size={12} stroke={2} />
             </button>
         {/if}
     </div>
@@ -119,7 +119,7 @@
         aria-pressed={s.isDeafened}
         on:click={toggleDeafen}
     >
-        <Icon name={s.isDeafened ? 'headphonesOff' : 'headphones'} size={21} />
+        <Icon name={s.isDeafened ? 'headphonesOff' : 'headphones'} size={18} />
     </button>
 
     {#if !compact}
@@ -131,10 +131,10 @@
                 aria-pressed={s.isCameraOn}
                 on:click={toggleVideo}
             >
-                <Icon name={s.isCameraOn ? 'video' : 'videoOff'} size={21} />
+                <Icon name={s.isCameraOn ? 'video' : 'videoOff'} size={18} />
             </button>
             <button class="ctl-caret" class:open={menu === 'camera'} title={$t('call.chooseCamera')} aria-label={$t('call.camera')} on:click={() => toggleMenu('camera')}>
-                <Icon name="chevronUp" size={13} stroke={2.4} />
+                <Icon name="chevronUp" size={12} stroke={2} />
             </button>
         </div>
     {/if}
@@ -147,11 +147,11 @@
             aria-pressed={s.isScreenSharing}
             on:click={toggleScreenShare}
         >
-            <Icon name="screenUp" size={21} />
+            <Icon name="screenUp" size={18} />
         </button>
         {#if !compact}
             <button class="ctl-caret" class:open={menu === 'quality'} title="{$t('call.quality')} {qLabel ? '· ' + qLabel : ''}" aria-label={$t('call.quality')} on:click={() => toggleMenu('quality')}>
-                <Icon name="chevronUp" size={13} stroke={2.4} />
+                <Icon name="chevronUp" size={12} stroke={2} />
             </button>
         {/if}
     </div>
@@ -159,7 +159,7 @@
     <div class="sep"></div>
 
     <button class="ctl ctl-leave" title={$t('call.leave')} aria-label={$t('call.leave')} on:click={endCall}>
-        <Icon name="hangup" size={21} />
+        <Icon name="hangup" size={18} />
     </button>
 </div>
 
@@ -250,112 +250,68 @@
 {/if}
 
 <style>
+    /* one dense bar under the video: 36 px controls, the arrow of a split button is part of it */
     .bar {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        padding: 7px;
-        border-radius: 20px;
-        background: rgba(18, 19, 24, 0.78);
-        backdrop-filter: blur(16px) saturate(1.3);
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+        display: flex; align-items: center; justify-content: center; gap: 6px; padding: 5px;
+        border-radius: var(--r-xl); background: var(--surface-2); border: 1px solid var(--border);
     }
-    .bar.compact {
-        padding: 0;
-        background: none;
-        border: none;
-        box-shadow: none;
-        backdrop-filter: none;
-    }
+    .bar.compact { padding: 0; background: none; border: none; }
     .ctl {
-        width: 50px;
-        height: 46px;
-        padding: 0;
-        border: none;
-        border-radius: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(255, 255, 255, 0.07);
-        color: #e6e7ea;
-        transition: background 0.15s, color 0.15s, transform 0.1s;
+        width: 40px; height: var(--ctl-lg); padding: 0; border: none; border-radius: var(--r-md);
+        display: flex; align-items: center; justify-content: center;
+        background: var(--surface-3); color: var(--text);
+        transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
     }
-    .ctl:hover:not(:disabled) { background: rgba(255, 255, 255, 0.13); }
-    .ctl:active { transform: scale(0.96); }
-    .ctl-off { background: rgba(240, 80, 80, 0.16); color: #ff7a7a; }
-    .ctl-off:hover:not(:disabled) { background: rgba(240, 80, 80, 0.26); }
-    .ctl-on { background: #f2f3f5; color: #15161a; }
-    .ctl-on:hover:not(:disabled) { background: #ffffff; }
-    .ctl-leave { width: 62px; background: #e5484d; color: #fff; }
-    .ctl-leave:hover:not(:disabled) { background: #d13a3f; }
-    .sep { width: 1px; height: 28px; background: rgba(255, 255, 255, 0.1); margin: 0 2px; }
+    .ctl:hover:not(:disabled) { background: var(--press); border: none; }
+    .ctl:active { transform: none; }
+    .ctl:focus-visible, .ctl-caret:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+    .ctl-off { background: var(--danger-soft); color: var(--danger-fg); }
+    .ctl-off:hover:not(:disabled) { background: var(--danger-soft); filter: brightness(1.12); }
+    .ctl-on { background: var(--accent); color: var(--accent-ink); }
+    .ctl-on:hover:not(:disabled) { background: var(--accent-hover); }
+    .ctl-leave { width: 48px; background: var(--danger); color: var(--danger-ink); }
+    .ctl-leave:hover:not(:disabled) { background: var(--danger); filter: brightness(1.1); }
+    .sep { width: 1px; height: 22px; background: var(--border-strong); margin: 0 2px; }
     .split { position: relative; display: flex; }
+    .split .ctl { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .bar.compact .split .ctl { border-radius: var(--r-md); }
     .ctl-caret {
-        position: absolute;
-        right: -5px;
-        top: -5px;
-        width: 20px;
-        height: 20px;
-        padding: 0;
-        border-radius: 999px;
-        background: #1c1d23;
-        color: #b8bcc6;
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: color 0.15s, background 0.15s, transform 0.15s;
+        width: 18px; height: var(--ctl-lg); padding: 0; border: none; border-left: 1px solid var(--border);
+        border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--surface-3); color: var(--muted);
+        display: flex; align-items: center; justify-content: center;
+        transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
     }
-    .ctl-caret:hover:not(:disabled),
-    .ctl-caret.open { color: #fff; background: var(--accent); border-color: var(--accent); }
-    .ctl-caret.open { transform: rotate(180deg); }
+    .ctl-caret:hover:not(:disabled), .ctl-caret.open { color: var(--text); background: var(--press); border-left-color: var(--border); }
+    .ctl-caret.open :global(svg) { transform: rotate(180deg); }
+    .split:has(.ctl-on) .ctl-caret { background: var(--accent); color: var(--accent-ink); border-left-color: rgba(0, 0, 0, 0.18); }
+    .split:has(.ctl-off) .ctl-caret { background: var(--danger-soft); color: var(--danger-fg); }
 
     :global(.pop .pop-title) {
-        padding: 8px 10px 4px;
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--faint);
+        padding: 8px 10px 4px; font-size: var(--fs-2xs); font-weight: var(--fw-semibold); text-transform: uppercase;
+        letter-spacing: 0.06em; color: var(--faint);
     }
     :global(.pop .pop-row) {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border: none;
-        border-radius: 9px;
-        background: transparent;
-        color: var(--muted);
-        text-align: left;
+        width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: none;
+        border-radius: var(--r-md); background: transparent; color: var(--muted); text-align: left; font-size: var(--fs-sm);
     }
     :global(.pop .pop-row:hover:not(:disabled)) { background: var(--hover); color: var(--text); }
-    :global(.pop .pop-row.sel) { color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+    :global(.pop .pop-row.sel) { color: var(--text); background: var(--accent-soft); }
     :global(.pop .label) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    :global(.pop .strong) { font-weight: 600; }
-    :global(.pop .tick) { color: var(--accent); }
-    :global(.pop .hint) { font-size: 11px; color: var(--warn); }
-    :global(.pop .rate) { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
-    :global(.pop .pop-empty) { padding: 8px 10px; color: var(--faint); }
+    :global(.pop .strong) { font-weight: var(--fw-semibold); }
+    :global(.pop .tick) { color: var(--accent-fg); }
+    :global(.pop .hint) { font-size: var(--fs-2xs); color: var(--warn-fg); }
+    :global(.pop .rate) { font-size: var(--fs-2xs); color: var(--faint); font-variant-numeric: tabular-nums; }
+    :global(.pop .pop-empty) { padding: 8px 10px; color: var(--faint); font-size: var(--fs-sm); }
     :global(.pop .upload) {
-        margin-top: 6px;
-        padding: 10px 10px 6px;
-        border-top: 1px solid var(--line);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        font-size: 12px;
-        color: var(--muted);
+        margin-top: 6px; padding: 10px 10px 6px; border-top: 1px solid var(--border-strong);
+        display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-xs); color: var(--muted);
     }
-    :global(.pop .upload input) { height: 32px; padding: 4px 10px; font-size: 12px; }
-    :global(.pop .upload button) { height: 32px; padding: 0 12px; }
-    :global(.pop .upload .link) { height: auto; padding: 0; background: none; border: none; color: var(--accent); font-weight: 600; }
+    :global(.pop .upload input) { height: var(--ctl-sm); padding: 4px 10px; font-size: var(--fs-xs); }
+    :global(.pop .upload button) { height: var(--ctl-sm); padding: 0 12px; }
+    :global(.pop .upload .link) { height: auto; padding: 0; background: none; border: none; color: var(--accent-fg); font-weight: var(--fw-semibold); }
     :global(.pop .note-text) { line-height: 1.4; color: var(--faint); }
     .mode { padding: 2px 10px 4px; }
-    .pop-hint { margin: 0 10px 6px; font-size: 11.5px; line-height: 1.35; color: var(--faint); }
-    .enc { margin: 2px 10px 8px; padding: 6px 9px; border-radius: 9px; font-size: 11.5px; font-variant-numeric: tabular-nums; background: var(--raised); color: var(--muted); }
-    .enc.warn { color: var(--warn, #f5a524); }
+    .pop-hint { margin: 0 10px 6px; font-size: var(--fs-xs); line-height: 1.35; color: var(--faint); }
+    .enc { margin: 2px 10px 8px; padding: 6px 9px; border-radius: var(--r-md); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; background: var(--surface-3); color: var(--muted); }
+    .enc.warn { color: var(--warn-fg); }
 </style>
