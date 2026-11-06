@@ -331,6 +331,8 @@
   .sheet-in { padding: 12px; border-radius: var(--r-xl); background: var(--surface-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
   .sheet-in textarea, .sheet-in input { background: var(--surface-1); }
   .sheet-head { margin: -2px -4px -2px 2px; }
+  .sheet-in .row { gap: 6px; }
+  .sheet-in .row > button { min-width: 0; padding: 6px 8px; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; }
   .icon.tiny { width: var(--ctl-xs); height: var(--ctl-xs); border-radius: var(--r-md); }
   .center { justify-content: center; }
   .qr { width: 176px; height: 176px; border-radius: var(--r-xl); align-self: center; padding: 8px; background: #fff; box-shadow: var(--shadow-sm); }
