@@ -141,6 +141,7 @@ type Manager struct {
 	client     gateway // used by the worker, and by Close after the worker stopped
 	confirmed  netip.Addr
 	closed     bool
+	started    bool // the worker goroutine runs
 	timer      carrier.Timer
 	discFails  int
 	discoverAt time.Time
@@ -152,11 +153,6 @@ func New(cfg Config) *Manager {
 	cfg = withDefaults(cfg)
 	m := &Manager{cfg: cfg, clock: cfg.Clock, entries: map[key]*entry{}, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
-	if !cfg.Enabled {
-		close(m.done)
-		return m
-	}
-	go m.run()
 	return m
 }
 
@@ -181,6 +177,10 @@ func (m *Manager) Add(proto Proto, port uint16) error {
 		return ErrTooMany
 	}
 	m.entries[k] = &entry{}
+	if !m.started { // the worker exists only once there is something to do
+		m.started = true
+		go m.run()
+	}
 	m.poke()
 	return nil
 }
@@ -249,7 +249,25 @@ func (m *Manager) list(confirmedOnly bool) []Mapping {
 
 // Rediscover forgets the gateway and looks for it again at once, and renews every mapping: the
 // network changed and the old router no longer holds them.
-func (m *Manager) Rediscover() {}
+func (m *Manager) Rediscover() {
+	if !m.cfg.Enabled {
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	now := m.clock.Now()
+	m.client, m.discFails, m.mapFails, m.discoverAt = nil, 0, 0, now
+	for _, e := range m.entries {
+		// the old router's answer says nothing about the new one
+		e.mapped, e.extPort, e.fails, e.nextAt = false, 0, 0, now
+	}
+	m.poke()
+	m.mu.Unlock()
+	m.changed()
+}
 
 // Close drops every mapping and stops the manager. The unmapping is best effort: the router
 // forgets a mapping when its lifetime runs out anyway.
@@ -261,6 +279,9 @@ func (m *Manager) Close(ctx context.Context) error {
 	}
 	m.closed = true
 	m.cancel()
+	if !m.started {
+		close(m.done)
+	}
 	m.mu.Unlock()
 	<-m.done
 

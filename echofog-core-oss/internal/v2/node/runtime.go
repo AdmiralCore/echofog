@@ -164,8 +164,14 @@ type Runtime struct {
 	limits   *session.Limits
 	control  *session.Control
 	observer *session.Observer
-	binder   *mux.Binder
-	policy   *session.PathPolicy
+	// pm forwards the listener ports at the home router (T6.5b); pmApply serializes the cards
+	// following it, pmPorts is what Start asked for.
+	pm      *portmap.Manager
+	pmApply sync.Mutex
+	pmMu    sync.Mutex
+	pmPorts []mappedPort
+	binder  *mux.Binder
+	policy  *session.PathPolicy
 
 	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
 	// this node opened as a carrier client are counted. deadPaths remembers failures that
@@ -331,6 +337,13 @@ func New(cfg Config) (*Runtime, error) {
 		Now:      r.clock.Now,
 		OnChange: r.publicAddrChanged,
 	})
+	pmCfg := cfg.PortMap
+	pmCfg.Enabled = cfg.Profile.PortMapping
+	if pmCfg.Clock == nil {
+		pmCfg.Clock = r.carrierClock
+	}
+	pmCfg.OnChange = r.portMapChanged
+	r.pm = portmap.New(pmCfg)
 	r.relayc = newRelayClient(r)
 	if b, ok := cfg.PunchNet.(interface{ bind(*Runtime) }); ok {
 		b.bind(r)
@@ -522,6 +535,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("node: access listeners: %w", err)
 	}
 
+	r.startPortMapping(listeners[:len(r.cfg.Listeners)+len(r.cfg.ListenerSources)])
+
 	for _, l := range listeners {
 		r.wg.Add(1)
 		go r.acceptLoop(runCtx, l)
@@ -568,6 +583,8 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		cancel()
 	}
 	closeListeners(listeners)
+	// the router forgets the forwarded ports now, not when their lifetime runs out
+	_ = r.pm.Close(ctx)
 	if dhtTable != nil {
 		// Stop saves as well; the explicit save keeps the runtime contract visible and is
 		// idempotent.

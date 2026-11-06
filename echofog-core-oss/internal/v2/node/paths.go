@@ -151,6 +151,8 @@ func (r *Runtime) NetworkChanged(ctx context.Context, opt DialOpt) error {
 	// What peers saw before says nothing about the new uplink: the public IP and the NAT class
 	// are decided again from new reports.
 	r.observer.Reset()
+	r.pm.Confirm(netip.Addr{})
+	r.pm.Rediscover() // the old router holds the mappings, not the new one
 	sessions := r.table.Sessions()
 	eligible := make([]*session.Established, 0, len(sessions))
 	for _, est := range sessions {

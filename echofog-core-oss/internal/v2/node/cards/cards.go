@@ -113,6 +113,9 @@ type Listener struct {
 	// calls SetPublicHost when OBSERVED_ADDR peers agree on a new address, and the next Current
 	// reissues the card. Host stays the placeholder until then.
 	FollowPublic bool
+	// PublicPort, when not zero, is the port the card announces instead of Port: the external
+	// port a router mapped for a FollowPublic listener (SetPublicPort, T6.5b).
+	PublicPort uint32
 	// MaskNotAfter is the unix time the key stops being accepted. Zero means the card's not_after;
 	// the builder caps the value at card not_after + 7 days.
 	MaskNotAfter uint64
@@ -295,7 +298,42 @@ func (b *CardBuilder) SetPublicHost(host string) (int, error) {
 // SetPublicPort makes the FollowPublic listeners of one transport whose configured port is
 // internal announce external instead (a port the router mapped, T6.5b); external 0 restores the
 // configured port. It returns the number of listeners changed.
-func (b *CardBuilder) SetPublicPort(udp bool, internal, external uint32) (int, error) { return 0, nil }
+func (b *CardBuilder) SetPublicPort(udp bool, internal, external uint32) (int, error) {
+	if external > 65535 {
+		return 0, fmt.Errorf("%w: public port %d", ErrConfig, external)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cfg := cloneConfig(b.cfg)
+	n := 0
+	for i := range cfg.Listeners {
+		l := &cfg.Listeners[i]
+		if !l.FollowPublic || l.Port != internal || l.PublicPort == external {
+			continue
+		}
+		switch l.Suite {
+		case objects.SuiteNoise3, objects.SuiteReality2QUIC:
+			if !udp {
+				continue
+			}
+		case objects.SuiteReality2TCP:
+			if udp {
+				continue
+			}
+		default:
+			continue
+		}
+		l.PublicPort = external
+		n++
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := b.applyConfig(cfg, false); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
 
 // ClearFlags removes caller-chosen card flags (FlagRelay on a node that may not relay, N6). A changed
 // flag set reissues the cards with a higher seq on the next Current.
