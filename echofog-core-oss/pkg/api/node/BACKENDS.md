@@ -294,3 +294,18 @@ DHT/relay/выхода; нет — если работает только с л�
    перенесённые в T11.1c; `v1CallBackend` (38 методов домена «звонки и стримы»), перенесённый в
    T11.1d; `—` — метод пока остаётся на фасаде и проверяет режим сам. При `protocol: 2` на месте
    любого сетевого бэкенда стоит `v2PendingBackend`.
+
+## T11.2: методы «сеть и доступ» и «контакты» при `protocol: 2`
+
+`NodeApi.AttachV2(app)` подключает слой `internal/v2/app`: бэкенды сети и контактов становятся
+`v2NetBackend`/`v2ContactBackend` (`backends_v2_net.go`). Остальные методы этих доменов отвечают
+`ErrV2NotBuilt` через встроенный `v2PendingBackend`. Ошибки слоя `app` доходят до интерфейса русским
+текстом в нейтральной форме (`app.UserMessage`), без внутренних строк.
+
+Работают: `GetAccessStatus`, `SetAccessMode` (public/hidden; «isolated» — отказ), `ParseInvite`,
+`JoinInvite`, `GetPeers` (без адресов), `GetNetworkStats`, `GetGuardStatus` (режим = класс сети
+политики маршрута, `connected` = сессии через relay), `ListPasses`, `CreatePass` (приглашение скрытого
+узла; ссылка отдаётся один раз), `ExtendPass`, `RevokePass`, `RemoveJoinedPeer`, `RotateAccessSecret`,
+`ConnectionReport`; контакты: `GetContacts`, `SetContactProfile` (аватар пока не хранится),
+`DeleteContact`, `BlockPeer`, `UnblockPeer`, `GetBlockedPeers`. Не сделаны: `NewContact` (контакт
+добавляется по ссылке), `ConnectToPeer`, `AddRelay`, bootstrap-методы, запросы на переписку, `BanContact`.

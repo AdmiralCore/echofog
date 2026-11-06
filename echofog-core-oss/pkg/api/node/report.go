@@ -36,6 +36,9 @@ func (n *NodeApi) ConnectionReport(appVersion string) (ConnectionReport, error) 
 	if n.node == nil || n.node.Cfg == nil {
 		return ConnectionReport{}, fmt.Errorf("node is not running")
 	}
+	if b, ok := n.backends.net.(*v2NetBackend); ok {
+		return b.connectionReport(appVersion), nil
+	}
 	cfg := n.node.Cfg
 	r := ConnectionReport{Version: appVersion}
 	var b strings.Builder
