@@ -46,10 +46,29 @@ func (a *App) maxContacts() int {
 	return maxContacts
 }
 
+// scanContacts returns up to limit contact records, paging through the store (one scan returns at
+// most store.MaxScanLimit).
+func (a *App) scanContacts(limit int) ([]store.Entry, error) {
+	var out []store.Entry
+	var start []byte
+	for len(out) < limit {
+		page, err := a.cfg.Store.ScanFrom([]byte(contactPrefix), start, min(limit-len(out), store.MaxScanLimit))
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		out = append(out, page...)
+		start = page[len(page)-1].Key
+	}
+	return out, nil
+}
+
 // full reports whether the list holds the most contacts it may. The caller holds cmu.
 func (a *App) full() (bool, error) {
 	n := a.maxContacts()
-	ents, err := a.cfg.Store.Scan([]byte(contactPrefix), n)
+	ents, err := a.scanContacts(n)
 	if err != nil {
 		return false, err
 	}
@@ -84,7 +103,7 @@ func (a *App) saveContact(node string, r contactRec) error {
 
 // Contacts lists contacts by alias.
 func (a *App) Contacts() ([]Contact, error) {
-	ents, err := a.cfg.Store.Scan([]byte(contactPrefix), a.maxContacts())
+	ents, err := a.scanContacts(a.maxContacts())
 	if err != nil {
 		return nil, err
 	}
