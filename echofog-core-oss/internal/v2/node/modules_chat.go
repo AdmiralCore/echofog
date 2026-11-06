@@ -139,7 +139,11 @@ func (r *Runtime) registerChat() {
 					contacts = r.cfg.ChatContacts()
 				}
 				for _, c := range contacts {
-					if err := svc.AnnounceQueue(c, q, nil); err != nil {
+					var card []byte
+					if rc := r.cardBook.Latest(q.Relay); rc != nil {
+						card = rc.Env.Raw // a contact whose book lacks the relay can still deposit
+					}
+					if err := svc.AnnounceQueue(c, q, card); err != nil {
 						r.log.Warn("node: announcing a mailbox queue", "err", err)
 					}
 				}
@@ -162,14 +166,16 @@ func (r *Runtime) registerChat() {
 		r.wg.Add(1)
 		go func() {
 			defer r.wg.Done()
+			var pause time.Duration
 			for {
+				var failed bool
 				if r.Background() != BackgroundSuspended {
-					_ = recv.Tick(r.ctx)
+					if err := recv.Tick(r.ctx); err != nil {
+						failed = true
+						r.log.Debug("node: mailbox fetch", "err", err)
+					}
 				}
-				pause := time.Second
-				if r.Background() == BackgroundLimited {
-					pause = mailboxLimitedPoll
-				}
+				pause = nextFetchPause(pause, failed, r.Background() == BackgroundLimited)
 				select {
 				case <-r.ctx.Done():
 					return
@@ -255,5 +261,15 @@ func (r *Runtime) clientDialOpt(device [32]byte) DialOpt {
 // nextFetchPause is the pause after a round of the fetch loop: a second after a success, doubling after
 // each failure up to five minutes, and five minutes in background=limited mode.
 func nextFetchPause(prev time.Duration, failed, limited bool) time.Duration {
-	return 0
+	switch {
+	case limited:
+		return mailboxLimitedPoll
+	case !failed:
+		return time.Second
+	case prev < time.Second:
+		return 2 * time.Second
+	case prev >= mailboxLimitedPoll/2:
+		return mailboxLimitedPoll
+	}
+	return 2 * prev
 }

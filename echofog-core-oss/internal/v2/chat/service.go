@@ -353,6 +353,9 @@ func (s *Service) Tick(ctx context.Context) error {
 	now := s.cfg.Now()
 
 	s.expireSeen(now)
+	if p, ok := s.cfg.MailDir.(interface{ Prune(time.Time) }); ok {
+		p.Prune(now)
+	}
 
 	s.mu.Lock()
 	var due, failed []*item
@@ -681,13 +684,14 @@ func (s *Service) dispatch(node, device [32]byte, id [16]byte, pm *chatpb.Person
 		if q := c.GetMailbox(); q != nil {
 			// where the contact receives mail while away; the newest announcement wins, one that has
 			// ended is ignored
-			if s.cfg.MailDir != nil {
+			if s.cfg.MailDir != nil && (s.cfg.IsContact == nil || s.cfg.IsContact(node)) {
 				var t MailTarget
 				copy(t.Relay[:], q.GetRelay())
 				copy(t.Queue[:], q.GetQueue())
 				t.NotAfter = time.Unix(int64(q.GetNotAfter()), 0)
 				t.RelayCard = q.GetRelayCard()
-				if s.cfg.Now().Before(t.NotAfter) {
+				// it must end in the future and within a queue's longest life (30 days)
+				if now := s.cfg.Now(); now.Before(t.NotAfter) && !t.NotAfter.After(now.Add(maxQueueLife)) {
 					if old, ok := s.cfg.MailDir.Get(node); !ok || !t.NotAfter.Before(old.NotAfter) {
 						_ = s.cfg.MailDir.Put(node, t)
 					}

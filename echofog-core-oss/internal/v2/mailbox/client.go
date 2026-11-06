@@ -177,6 +177,7 @@ type Receiver struct {
 	mu     sync.Mutex // one Tick at a time
 	queues map[[16]byte]*queueState
 	req    uint64
+	held   map[string]time.Time // items the handler did not take, by queue and id: first seen
 }
 
 // NewReceiver builds a Receiver over its stored queues.
@@ -255,6 +256,13 @@ func (r *Receiver) Tick(ctx context.Context) error {
 	now := r.cfg.Now()
 	var errs []error
 
+	// a queue that ended on the relay (the node was off for longer than it lives) is forgotten
+	for id, q := range r.queues {
+		if now.Unix() >= q.Expires {
+			delete(r.queues, id)
+			_ = r.cfg.Store.Delete(queueKeyOf(id))
+		}
+	}
 	cur := r.current(now)
 	if cur == nil || now.Unix() >= cur.RotateAt {
 		if err := r.rotate(ctx, cur, now); err != nil {
@@ -361,10 +369,11 @@ func (r *Receiver) poll(ctx context.Context, conn Conn, q *queueState, current b
 		return err
 	}
 	wait := r.wait(current)
-	for {
+	var after []byte
+	for page := 0; page < maxPollPages; page++ {
 		r.req++
 		req := r.req
-		items, err := conn.Fetch(ctx, Fetch{Req: req, Queue: q.Queue[:], Max: fetchPage, Wait: wait,
+		items, err := conn.Fetch(ctx, Fetch{Req: req, Queue: q.Queue[:], After: after, Max: fetchPage, Wait: wait,
 			Auth: signer.Sign(AuthInput(OpFetch, conn.SID(), q.Queue[:], req))})
 		if err != nil {
 			return fmt.Errorf("mailbox: fetch: %w", err)
@@ -372,8 +381,9 @@ func (r *Receiver) poll(ctx context.Context, conn Conn, q *queueState, current b
 		wait = 0 // only the first request of a poll waits
 		var ids [][]byte
 		for _, it := range items.Items {
-			if r.cfg.Handle(ctx, it.Blob) {
+			if r.cfg.Handle(ctx, it.Blob) || r.giveUp(q.Queue, it.ID) {
 				ids = append(ids, it.ID)
+				r.forget(q.Queue, it.ID)
 			}
 		}
 		if len(ids) > 0 {
@@ -384,10 +394,43 @@ func (r *Receiver) poll(ctx context.Context, conn Conn, q *queueState, current b
 				return fmt.Errorf("mailbox: ack: %w", err)
 			}
 		}
-		// more: the next page starts again at the front, which is right only when something was
-		// removed; if nothing was taken the same page would come back
-		if !items.More || len(ids) == 0 {
+		// the next page starts after the last item of this one, whether or not it was taken: items the
+		// handler left must not hide the ones behind them
+		if !items.More || len(items.Items) == 0 {
 			return nil
 		}
+		after = items.Items[len(items.Items)-1].ID
 	}
+	return nil
 }
+
+const (
+	// maxPollPages bounds one poll: a queue holds at most 500 items, 100 to a page.
+	maxPollPages = 10
+	// holdFor is how long an item the handler does not take is kept in the queue; after it the item is
+	// acknowledged and lost, so that items nobody can handle (a sender that cannot be looked up) block
+	// nothing for long.
+	holdFor = time.Hour
+	// maxHeld bounds the table of such items; past it an item is given up at once.
+	maxHeld = 4096
+)
+
+// giveUp notes that the handler did not take an item and says whether it has waited long enough.
+func (r *Receiver) giveUp(queue [16]byte, id []byte) bool {
+	now := r.cfg.Now()
+	key := string(queue[:]) + string(id)
+	if r.held == nil {
+		r.held = map[string]time.Time{}
+	}
+	first, ok := r.held[key]
+	if !ok {
+		if len(r.held) >= maxHeld {
+			return true
+		}
+		r.held[key] = now
+		return false
+	}
+	return now.Sub(first) >= holdFor
+}
+
+func (r *Receiver) forget(queue [16]byte, id []byte) { delete(r.held, string(queue[:])+string(id)) }
