@@ -102,14 +102,14 @@
             </span>
         </button>
         {#if confirmReport && !reported}
-            <p class="note">{$t('call.reportNote')}</p>
+            <p class="pm-note">{$t('call.reportNote')}</p>
         {/if}
         <div class="sep"></div>
     {:else}
         <div class="bg">
             <p class="eyebrow">{$t('call.bg.title')}</p>
             <BackdropPicker {peer} compact />
-            <p class="note flat">{$t('call.bg.hint')}</p>
+            <p class="pm-note flat">{$t('call.bg.hint')}</p>
         </div>
         <div class="sep"></div>
     {/if}
@@ -140,8 +140,8 @@
     .range { width: 100%; accent-color: var(--accent); }
     .bg .eyebrow { margin-bottom: 6px; }
     .sep { height: 1px; background: var(--border); margin: 4px 2px; }
-    .note { padding: 0 10px 6px; font-size: var(--fs-xs); line-height: 1.4; color: var(--muted); }
-    .note.flat { padding: 0; margin-top: 6px; color: var(--faint); }
+    .pm-note { padding: 0 10px 6px; font-size: var(--fs-xs); line-height: 1.4; color: var(--muted); }
+    .pm-note.flat { padding: 0; margin-top: 6px; color: var(--faint); }
     .menu-row {
         display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: none; border-radius: var(--r-md);
         background: transparent; color: var(--text); font-weight: var(--fw-medium); text-align: left;
