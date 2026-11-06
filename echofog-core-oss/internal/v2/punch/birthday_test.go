@@ -257,50 +257,62 @@ func TestSprayNarrowCoversWidenedBlock(t *testing.T) {
 }
 
 // symmetric <-> symmetric with narrow blocks: a double birthday forms a link on the socket pair
-// that guessed each other's ports; each socket aims at one port of the peer's range.
+// that guessed each other's ports; each socket aims at one port of the peer's range. With blocks as
+// small as the socket count the chance of a match in one attempt is about 63 %, so the test runs 20
+// seeded attempts and requires most to succeed. Every attempt keeps the limits.
 func TestMutualNarrow(t *testing.T) {
-	clk := newFakeClock()
-	w := newSimWorld(clk)
-	a := w.addNAT("203.0.113.5", true, 40000, 40029, 11)
-	b := w.addNAT("198.51.100.9", true, 50000, 50029, 12)
-	ab := newBD(clk, a, 21, openGates())
-	bb := newBD(clk, b, 22, openGates())
-	var ha, hb Hit
-	var ea, eb error
-	drive(clk, func() {
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); ha, ea = ab.Mutual(context.Background(), b.ip, 50000, 50029) }()
-		go func() { defer wg.Done(); hb, eb = bb.Mutual(context.Background(), a.ip, 40000, 40029) }()
-		wg.Wait()
-	})
-	if ea != nil || eb != nil {
-		t.Fatalf("A: %v, B: %v", ea, eb)
-	}
-	if ha.Target != b.extFor(hb.Sock, netip.AddrPortFrom(a.ip, ha.Target.Port())) && !ha.Target.IsValid() {
-		t.Fatalf("A's hit %+v does not point at B's socket", ha)
-	}
-	if !ha.Target.IsValid() || !hb.Target.IsValid() || ha.Sock == nil || hb.Sock == nil {
-		t.Fatalf("hits %+v %+v", ha, hb)
-	}
-	checkLimits(t, "A", a, MaxMutualSockets, 0)
-	checkLimits(t, "B", b, MaxMutualSockets, 0)
-	// every socket aimed at exactly one destination
-	for _, n := range []*simNAT{a, b} {
-		n.mu.Lock()
-		per := map[*simSock]map[netip.AddrPort]bool{}
-		for _, p := range n.maps {
-			if per[p.sock] == nil {
-				per[p.sock] = map[netip.AddrPort]bool{}
+	succeeded := 0
+	const runs = 20
+	for seed := uint64(1); seed <= runs; seed++ {
+		clk := newFakeClock()
+		w := newSimWorld(clk)
+		a := w.addNAT("203.0.113.5", true, 40000, 40063, seed*11)
+		b := w.addNAT("198.51.100.9", true, 50000, 50063, seed*13)
+		ab := newBD(clk, a, seed*21, openGates())
+		bb := newBD(clk, b, seed*22, openGates())
+		var ha, hb Hit
+		var ea, eb error
+		drive(clk, func() {
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() { defer wg.Done(); ha, ea = ab.Mutual(context.Background(), b.ip, 50000, 50063) }()
+			go func() { defer wg.Done(); hb, eb = bb.Mutual(context.Background(), a.ip, 40000, 40063) }()
+			wg.Wait()
+		})
+		checkLimits(t, "A", a, MaxMutualSockets, 0)
+		checkLimits(t, "B", b, MaxMutualSockets, 0)
+		// every socket aimed at exactly one destination
+		for _, n := range []*simNAT{a, b} {
+			n.mu.Lock()
+			per := map[*simSock]map[netip.AddrPort]bool{}
+			for _, p := range n.maps {
+				if per[p.sock] == nil {
+					per[p.sock] = map[netip.AddrPort]bool{}
+				}
+				per[p.sock][p.dest] = true
 			}
-			per[p.sock][p.dest] = true
-		}
-		n.mu.Unlock()
-		for s, d := range per {
-			if len(d) != 1 {
-				t.Fatalf("a mutual socket %p sent to %d destinations, want 1", s, len(d))
+			n.mu.Unlock()
+			for _, d := range per {
+				if len(d) != 1 {
+					t.Fatalf("a mutual socket sent to %d destinations, want 1", len(d))
+				}
 			}
 		}
+		if ea == nil && eb == nil {
+			succeeded++
+			// each side's target is the other side's real external address for that socket
+			if ha.Target.Addr() != b.ip || hb.Target.Addr() != a.ip || ha.Sock == nil || hb.Sock == nil {
+				t.Fatalf("seed %d: hits %+v %+v", seed, ha, hb)
+			}
+			if got := a.extFor(ha.Sock, ha.Target); !got.IsValid() {
+				t.Fatalf("seed %d: A's hit socket never sent to its target", seed)
+			}
+		} else if !errors.Is(ea, ErrNoHit) && ea != nil || !errors.Is(eb, ErrNoHit) && eb != nil {
+			t.Fatalf("seed %d: A: %v, B: %v", seed, ea, eb)
+		}
+	}
+	if succeeded < runs/3 {
+		t.Fatalf("only %d of %d double-birthday attempts found a mapping", succeeded, runs)
 	}
 }
 

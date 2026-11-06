@@ -361,7 +361,9 @@ ever sent and no fixed-size or fixed-content packet appears.
   first datagram it receives from that IP is the target for step 4.
 - *mutual*: each side opens up to 64 sockets; each socket sends junk to exactly one guessed port of
   the other's range (one destination per socket keeps a symmetric mapping stable). The socket pair
-  where both guessed right is the hit; the lower-ID side then sends Init from its hit socket.
+  where both guessed right is the hit. A socket that receives a datagram from the port it aimed at
+  answers with one junk datagram (its peer may have stopped sending); the lower-ID side then sends
+  Init from its hit socket.
 
 Once a flow completes its inner QUIC handshake, step 5 applies: PATH_BIND on stream 0, no new Noise
 handshake.
