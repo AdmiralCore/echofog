@@ -110,6 +110,18 @@ func (a *App) AddByLink(ctx context.Context, text string) (Contact, error) {
 	if oerr == nil && old.Blocked {
 		return Contact{}, ErrBlocked
 	}
+	if oerr != nil {
+		// a new contact needs room; asked before anything is dialed
+		a.cmu.Lock()
+		full, ferr := a.full()
+		a.cmu.Unlock()
+		if ferr != nil {
+			return Contact{}, ferr
+		}
+		if full {
+			return Contact{}, ErrTooManyContacts
+		}
+	}
 	peer, err := a.cfg.Links.Redeem(ctx, link)
 	if err != nil {
 		return Contact{}, err
@@ -122,6 +134,11 @@ func (a *App) AddByLink(ctx context.Context, text string) (Contact, error) {
 	rec, err := a.loadContact(info.Node)
 	switch {
 	case errors.Is(err, ErrNoContact):
+		if full, ferr := a.full(); ferr != nil { // the list may have filled while we dialed
+			return Contact{}, ferr
+		} else if full {
+			return Contact{}, ErrTooManyContacts
+		}
 		rec = contactRec{Alias: "Контакт " + info.Node[:6], Added: a.cfg.Clock.Now().Unix()}
 	case err != nil:
 		return Contact{}, err
@@ -147,6 +164,8 @@ func UserMessage(err error) string {
 		return "Имя должно быть непустым, не длиннее 64 символов и без служебных знаков"
 	case errors.Is(err, ErrNoContact):
 		return "Такого контакта нет"
+	case errors.Is(err, ErrTooManyContacts):
+		return "Слишком много контактов: удалите ненужные и повторите"
 	case errors.Is(err, ErrMode):
 		return "Неизвестный режим доступа"
 	case errors.Is(err, ErrNotHidden):

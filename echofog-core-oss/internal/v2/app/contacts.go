@@ -38,6 +38,24 @@ func (r contactRec) contact(node string) Contact {
 	return Contact{Node: node, Device: r.Device, Alias: r.Alias, Added: time.Unix(r.Added, 0), Blocked: r.Blocked}
 }
 
+// maxContacts is the contact limit in force.
+func (a *App) maxContacts() int {
+	if a.cfg.MaxContacts > 0 {
+		return a.cfg.MaxContacts
+	}
+	return maxContacts
+}
+
+// full reports whether the list holds the most contacts it may. The caller holds cmu.
+func (a *App) full() (bool, error) {
+	n := a.maxContacts()
+	ents, err := a.cfg.Store.Scan([]byte(contactPrefix), n)
+	if err != nil {
+		return false, err
+	}
+	return len(ents) >= n, nil
+}
+
 func ckey(node string) []byte { return []byte(contactPrefix + strings.ToLower(node)) }
 
 // loadContact reads one contact; the caller holds cmu for a read-modify-write.
@@ -66,7 +84,7 @@ func (a *App) saveContact(node string, r contactRec) error {
 
 // Contacts lists contacts by alias.
 func (a *App) Contacts() ([]Contact, error) {
-	ents, err := a.cfg.Store.Scan([]byte(contactPrefix), maxContacts)
+	ents, err := a.cfg.Store.Scan([]byte(contactPrefix), a.maxContacts())
 	if err != nil {
 		return nil, err
 	}
