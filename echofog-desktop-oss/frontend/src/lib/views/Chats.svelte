@@ -19,6 +19,7 @@
   import Avatar from '../components/ui/Avatar.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Popover from '../components/ui/Popover.svelte';
+  import Skeleton from '../components/ui/Skeleton.svelte';
 
   let panel = ''; // '' | 'contact' | 'group' | 'join' | 'me'
   let contactInput = '';
@@ -92,8 +93,10 @@
   $: parsed = parseContactInput(contactInput);
   $: myLink = $me.pubKey ? makeContactLink(currentDisplayName($profile), $me.pubKey) : '';
 
+  // the list is a skeleton until the first load answers
+  let listLoaded = false;
   onMount(() => {
-    loadChats();
+    Promise.resolve(loadChats()).finally(() => (listLoaded = true));
     loadSaved();
     loadTransfers('');
   });
@@ -149,8 +152,8 @@
   <aside style={narrow ? '' : `width:${listWidth}px`}>
     <div class="head">
       <h2 class="grow">{$t('chats.title')}</h2>
-      <button class="icon new" bind:this={newBtn} class:on={newMenu || ['contact', 'group', 'join'].includes(panel)} title={$t('chats.new')} aria-label={$t('chats.new')} on:click={() => (newMenu = !newMenu)}><Icon name="edit" size={18} /></button>
-      <button class="icon" class:on={panel === 'me'} title={$t('chats.myContact')} aria-label={$t('chats.myContact')} on:click={() => toggle('me')}><Icon name="qr" size={18} /></button>
+      <button class="icon new" bind:this={newBtn} class:on={newMenu || ['contact', 'group', 'join'].includes(panel)} title={$t('chats.new')} aria-label={$t('chats.new')} on:click={() => (newMenu = !newMenu)}><Icon name="edit" size={17} /></button>
+      <button class="icon" class:on={panel === 'me'} title={$t('chats.myContact')} aria-label={$t('chats.myContact')} on:click={() => toggle('me')}><Icon name="qr" size={17} /></button>
       {#if !narrow}<button class="icon" title={$t('chats.hideList')} aria-label={$t('chats.hideList')} on:click={toggleList}><Icon name="panel" size={18} /></button>{/if}
     </div>
 
@@ -225,7 +228,7 @@
     <div class="list">
       {#if savedRow}
         <button class="conv" class:sel={showSaved} on:click={() => activeId.set(SAVED_ID)}>
-          <div class="avatar"><span class="saved-av"><Icon name="bookmark" size={20} /></span></div>
+          <div class="avatar"><span class="saved-av"><Icon name="bookmark" size={18} /></span></div>
           <div class="body">
             <div class="row"><span class="grow name">{$t('saved.title')}</span></div>
             <div class="row"><span class="grow last">{$saved.length ? $t('saved.count', { n: $saved.length }) : $t('saved.hint')}</span></div>
@@ -233,12 +236,12 @@
         </button>
       {/if}
       {#each sections as sec (sec.key)}
-      <div class="section">{sec.title}</div>
+      <div class="section">{sec.title}<span class="cnt">{sec.list.length}</span></div>
       {#each sec.list as c (c.id)}
         <button class="conv" class:sel={c.id === $activeId} class:unread={c.unread} on:click={() => openChat(c.id)}>
           <div class="avatar">
-            <Avatar id={c.peerId || c.id} name={c.name} src={c.avatar} size={44} />
-            {#if c.kind === 'direct'}<span class="presence" class:on={c.online} />{:else}<span class="kind">#</span>{/if}
+            <Avatar id={c.peerId || c.id} name={c.name} src={c.avatar} size={38} />
+            {#if c.kind === 'direct'}<span class="presence" class:on={c.online} />{:else}<span class="kind"><Icon name="hash" size={11} stroke={2.2} /></span>{/if}
           </div>
           <div class="body">
             <div class="row">
@@ -252,12 +255,18 @@
               <span class="grow last">{c.last || (c.kind === 'group' ? $t('chats.members', { n: c.members }) : $t('chats.noMessages'))}</span>
               {#if c.pending}<span class="tag wait" title={$t('chats.pending.' + c.pending)}><Icon name="clock" size={11} /></span>{/if}
               {#if c.requests}<span class="tag reqs" title={$t('chats.req.title', { n: c.requests })}><Icon name="userPlus" size={11} /> {c.requests}</span>{/if}
-              {#if c.unread}<span class="badge">{c.unread}</span>{/if}
+              {#if c.mentions}<span class="badge mention" title={$t('chats.mentionsTitle', { n: c.mentions })}>@</span>{/if}
+              {#if c.unread}<span class="badge" title={$t('chats.unreadTitle', { n: c.unread })}>{c.unread}</span>{/if}
             </div>
           </div>
         </button>
       {/each}
       {:else}
+        {#if !listLoaded && !q}
+          {#each [0, 1, 2, 3, 4] as i (i)}
+            <div class="skel"><Skeleton circle height={38} /><div class="lines"><Skeleton width="55%" height={12} /><Skeleton width="80%" height={10} /></div></div>
+          {/each}
+        {:else}
         <div class="empty">
           {#if q}
             {#if !savedRow}<p class="small muted">{$t('chats.nothingFound', { query })}</p>{/if}
@@ -266,6 +275,7 @@
             <p class="small muted">{$t('chats.empty')}</p>
           {/if}
         </div>
+        {/if}
       {/each}
     </div>
     {#if !narrow}
@@ -289,9 +299,7 @@
       {#if !maximized}<Conversation conv={active} back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />{/if}
     {:else}
       <div class="placeholder">
-        <div class="ph-art" aria-hidden="true">
-          <span class="b b1"></span><span class="b b2"></span><span class="b b3"></span>
-        </div>
+        <span class="ph-ic" aria-hidden="true"><Icon name="message" size={26} /></span>
         <h3>{$t('chats.selectChat')}</h3>
         <p class="small muted">{$t('chats.e2e')}</p>
       </div>
@@ -305,88 +313,86 @@
   .chats.resizing { user-select: none; }
   aside {
     position: relative; flex: none; display: flex; flex-direction: column; min-height: 0;
-    border-right: 1px solid var(--line-soft); background: var(--panel);
-    animation: slide-in-left 0.32s var(--ease);
+    border-right: 1px solid var(--border); background: var(--surface-1);
   }
   .narrow aside { width: 100%; border-right: none; }
-  @keyframes slide-in-left { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
-  .head { display: flex; align-items: center; gap: 2px; padding: 16px 12px 8px 20px; }
-  .head h2 { font-size: 20px; }
+  .head { display: flex; align-items: center; gap: 2px; padding: 12px 8px 8px 16px; min-height: 56px; }
+  .head h2 { font-size: var(--fs-lg); line-height: var(--lh-lg); }
 
-  .head .new { border: 1px solid var(--line); border-radius: 11px; margin-right: 4px; }
-  .newmenu { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
-  .nm-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border: none; border-radius: 10px; background: transparent; text-align: left; font-weight: 500; }
+  .head .new { border: 1px solid var(--border); margin-right: 4px; width: var(--ctl-md); height: var(--ctl-md); }
+  .head .icon { width: var(--ctl-md); height: var(--ctl-md); }
+  .newmenu { display: flex; flex-direction: column; padding: 4px; gap: 1px; }
+  .nm-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: none; border-radius: var(--r-md); background: transparent; text-align: left; font-weight: var(--fw-medium); font-size: var(--fs-md); }
   .nm-item:hover:not(:disabled) { background: var(--hover); border: none; }
-  .section { padding: 10px 12px 4px; font-size: 11.5px; font-weight: 650; color: var(--faint); letter-spacing: 0.02em; }
+  .section { display: flex; align-items: center; gap: 6px; padding: 12px 10px 4px; font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--faint); letter-spacing: 0.05em; text-transform: uppercase; }
+  .section .cnt { font-weight: var(--fw-medium); letter-spacing: 0; }
 
-  .sheet { padding: 0 14px 10px; overflow: hidden; }
-  .sheet-in { padding: 12px; border-radius: 16px; background: var(--raised); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; }
-  .sheet-in textarea, .sheet-in input { background: var(--panel); }
+  .sheet { padding: 0 12px 8px; overflow: hidden; }
+  .sheet-in { padding: 12px; border-radius: var(--r-xl); background: var(--surface-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+  .sheet-in textarea, .sheet-in input { background: var(--surface-1); }
   .sheet-head { margin: -2px -4px -2px 2px; }
-  .icon.tiny { width: 24px; height: 24px; border-radius: 7px; }
-  .kind { align-self: stretch; }
+  .icon.tiny { width: var(--ctl-xs); height: var(--ctl-xs); border-radius: var(--r-md); }
   .center { justify-content: center; }
-  .qr { width: 176px; height: 176px; border-radius: 16px; align-self: center; padding: 8px; background: #fff; box-shadow: var(--shadow); animation: pop 0.4s var(--spring); }
+  .qr { width: 176px; height: 176px; border-radius: var(--r-xl); align-self: center; padding: 8px; background: #fff; box-shadow: var(--shadow-sm); }
 
   .search {
-    display: flex; align-items: center; gap: 8px; margin: 0 14px 8px; padding: 0 6px 0 12px; height: 38px;
-    border-radius: 12px; background: var(--raised); color: var(--faint); border: 1px solid transparent;
+    display: flex; align-items: center; gap: 8px; margin: 0 12px 6px; padding: 0 4px 0 10px; height: var(--ctl-md);
+    border-radius: var(--r-md); background: var(--surface-2); color: var(--faint); border: 1px solid transparent;
     transition: border-color var(--dur), box-shadow var(--dur), background var(--dur), color var(--dur);
   }
-  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--panel); color: var(--accent); }
-  .search input { border: none; background: transparent; padding: 0; height: 100%; box-shadow: none; }
+  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--accent-fg); }
+  .search input { border: none; background: transparent; padding: 0; height: 100%; box-shadow: none; font-size: var(--fs-md); }
   .search input:focus { box-shadow: none; background: transparent; }
 
-  .list { flex: 1; overflow-y: auto; padding: 2px 8px 10px; }
+  .list { flex: 1; overflow-y: auto; padding: 0 6px 8px; }
   .conv {
-    width: 100%; text-align: left; display: flex; gap: 12px; align-items: center; padding: 9px 10px;
-    border-radius: 14px; margin-bottom: 2px; background: transparent; border: none; font-weight: 400;
-    animation: fade-up 0.3s var(--ease) both;
+    width: 100%; text-align: left; display: flex; gap: 10px; align-items: center; padding: 6px 8px; min-height: var(--row-h);
+    border-radius: var(--r-lg); margin-bottom: 1px; background: transparent; border: none; font-weight: 400;
   }
   .conv:hover:not(:disabled) { background: var(--hover); border: none; }
-  .conv:active:not(:disabled) { transform: scale(0.985); }
-  .conv.sel, .conv.sel:hover:not(:disabled) { background: var(--accent-soft); }
+  .conv.sel, .conv.sel:hover:not(:disabled) { background: var(--surface-3); }
   .avatar { position: relative; flex: none; }
-  .presence { position: absolute; right: -1px; bottom: -1px; width: 13px; height: 13px; border-radius: 50%; background: var(--faint); border: 2.5px solid var(--panel); transition: background 0.3s; }
+  .presence { position: absolute; right: -2px; bottom: -2px; width: 11px; height: 11px; border-radius: 50%; background: var(--faint); border: 2px solid var(--surface-1); }
+  .conv.sel .presence { border-color: var(--surface-3); }
   .presence.on { background: var(--ok); }
-  .saved-av { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
-  .avatar .kind { position: absolute; right: -3px; bottom: -3px; width: 18px; height: 18px; border-radius: 6px; background: var(--raised); border: 2px solid var(--panel); color: var(--muted); font-size: 10px; font-weight: 750; display: grid; place-items: center; }
+  .saved-av { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: var(--accent-fg); background: var(--accent-soft); }
+  .avatar .kind { position: absolute; right: -4px; bottom: -4px; width: 17px; height: 17px; border-radius: var(--r-sm); background: var(--surface-3); border: 2px solid var(--surface-1); color: var(--muted); display: grid; place-items: center; }
+  .conv.sel .avatar .kind { border-color: var(--surface-3); background: var(--surface-1); }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; color: var(--text); }
-  .time { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-  .oncall { display: inline-flex; color: var(--ok); }
-  .conv.unread .time { color: var(--accent); font-weight: 600; }
-  .last { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--fw-medium); font-size: var(--fs-md); color: var(--text); }
+  .time { color: var(--faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+  .oncall { display: inline-flex; color: var(--ok-fg); }
+  .conv.unread .name { font-weight: var(--fw-semibold); }
+  .conv.unread .time { color: var(--accent-fg); font-weight: var(--fw-semibold); }
+  .last { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
   .conv.unread .last { color: var(--text); }
+  .conv .badge { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-2xs); font-weight: var(--fw-bold); display: inline-grid; place-items: center; }
+  .conv .badge.mention { background: var(--danger); color: var(--danger-ink); }
   .empty { padding: 28px 18px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
-  .empty-ic { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .empty-ic { width: 44px; height: 44px; border-radius: var(--r-xl); display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+  .skel { display: flex; align-items: center; gap: 10px; padding: 8px 8px; }
+  .skel .lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
 
   .resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; z-index: 3; }
-  .resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: var(--accent); opacity: 0; transition: opacity 0.2s; }
+  .resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: var(--accent); opacity: 0; transition: opacity var(--dur); }
   .resize:hover::after, .resizing .resize::after { opacity: 0.6; }
 
   section { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--bg); }
-  .narrow section { animation: slide-in-right 0.3s var(--ease); }
   .show-list {
-    position: absolute; z-index: 5; top: 14px; left: 14px;
-    width: 34px; height: 34px; padding: 0; border-radius: 11px; display: grid; place-items: center;
-    background: var(--panel); border: 1px solid var(--line-soft); color: var(--muted); box-shadow: var(--shadow-sm);
+    position: absolute; z-index: 5; top: 11px; left: 12px;
+    width: var(--ctl-md); height: var(--ctl-md); padding: 0; border-radius: var(--r-md); display: grid; place-items: center;
+    background: var(--surface-1); border: 1px solid var(--border); color: var(--muted);
   }
-  .show-list:hover:not(:disabled) { color: var(--text); background: var(--panel); }
-  .call { height: 58%; min-height: 300px; flex: none; background: #000; transition: height 0.35s var(--ease); }
+  .show-list:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+  .call { height: 58%; min-height: 300px; flex: none; background: #000; transition: height var(--dur-slow) var(--ease); }
   .call.full { height: 100%; flex: 1; }
 
-  .placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; animation: fade 0.5s ease-out; }
-  .ph-art { position: relative; width: 120px; height: 90px; margin-bottom: 14px; }
-  .b { position: absolute; border-radius: 18px; animation: float 5s ease-in-out infinite; }
-  .b1 { left: 0; top: 10px; width: 72px; height: 34px; background: var(--raised); border: 1px solid var(--line-soft); border-bottom-left-radius: 6px; }
-  .b2 { right: 0; top: 34px; width: 80px; height: 34px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-bottom-right-radius: 6px; animation-delay: -1.6s; box-shadow: var(--glow); }
-  .b3 { left: 14px; top: 62px; width: 46px; height: 24px; background: var(--raised); border: 1px solid var(--line-soft); border-bottom-left-radius: 6px; animation-delay: -3.2s; }
-  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-  .tag { flex: none; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 6px; display: inline-flex; align-items: center; }
-  .tag.req { background: var(--accent-soft, rgba(88,101,242,.18)); color: var(--accent, #5865f2); }
-  .tag.blk { background: var(--danger-soft, rgba(242,63,67,.15)); color: var(--danger, #f23f43); }
-  .tag.wait { background: var(--warn-soft, rgba(245,165,36,.15)); color: var(--warn, #f5a524); display: inline-flex; align-items: center; }
-  .tag.reqs { background: var(--accent-soft, rgba(88,101,242,.18)); color: var(--accent, #5865f2); display: inline-flex; align-items: center; gap: 3px; }
+  .placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
+  .ph-ic { width: 56px; height: 56px; border-radius: var(--r-xl); display: grid; place-items: center; background: var(--surface-2); color: var(--muted); margin-bottom: 8px; }
+  .tag { flex: none; font-size: var(--fs-2xs); font-weight: var(--fw-bold); padding: 1px 6px; border-radius: var(--r-sm); display: inline-flex; align-items: center; }
+  .tag.req { background: var(--accent-soft); color: var(--accent-fg); }
+  .tag.blk { background: var(--danger-soft); color: var(--danger-fg); }
+  .tag.wait { background: var(--warn-soft); color: var(--warn-fg); }
+  .tag.reqs { background: var(--accent-soft); color: var(--accent-fg); gap: 3px; }
 </style>
 

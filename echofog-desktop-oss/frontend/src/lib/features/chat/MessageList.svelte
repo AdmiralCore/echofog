@@ -5,6 +5,7 @@
   import { time } from '../../format.js';
   import { t, lang, intlLocale } from '../../i18n/index.js';
   import Avatar from '../../components/ui/Avatar.svelte';
+  import { feedPref, feedMode } from '../../stores/feed.js';
   import MessageBubble from './MessageBubble.svelte';
   import { sameGroup, dayKey } from './context.js';
 
@@ -139,7 +140,7 @@
   }
 </script>
 
-<div class="messages" bind:this={scroller} on:scroll={onScroll}>
+<div class="messages" data-feed={feedMode($feedPref, conv.kind === 'group' ? conv.members || 0 : 0)} bind:this={scroller} on:scroll={onScroll}>
   {#if $hasOlder}<div class="older small faint">{$t('chats.loadingOlder')}</div>{/if}
   {#each $messages as m, i (m.id)}
     {#if i === 0 || dayKey($messages[i - 1].ts) !== dayKey(m.ts)}

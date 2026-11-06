@@ -98,31 +98,31 @@
 <style>
   .saved { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   header {
-    display: flex; align-items: center; gap: 12px; padding: 10px 16px; min-height: 64px;
-    border-bottom: 1px solid var(--line-soft); background: var(--glass); backdrop-filter: blur(16px) saturate(1.3);
+    display: flex; align-items: center; gap: 12px; padding: 8px 16px; min-height: 56px;
+    border-bottom: 1px solid var(--border); background: var(--surface-1);
   }
-  header.indent { padding-left: 58px; }
-  .badge-ic { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex: none; }
-  .title h3 { font-size: 16px; }
+  header.indent { padding-left: 56px; }
+  .badge-ic { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--accent-fg); background: var(--accent-soft); flex: none; }
+  .title h3 { font-size: var(--fs-md); }
   .search {
-    display: flex; align-items: center; gap: 8px; margin: 12px clamp(12px, 3vw, 28px) 4px; padding: 0 6px 0 12px; height: 38px;
-    border-radius: 12px; background: var(--raised); color: var(--faint); border: 1px solid transparent;
+    display: flex; align-items: center; gap: 8px; margin: 12px clamp(12px, 3vw, 24px) 4px; padding: 0 4px 0 10px; height: var(--ctl-md);
+    border-radius: var(--r-md); background: var(--surface-2); color: var(--faint); border: 1px solid transparent;
   }
-  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--panel); color: var(--accent); }
+  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--accent-fg); }
   .search input { border: none; background: transparent; padding: 0; height: 100%; box-shadow: none; }
   .search input:focus { box-shadow: none; background: transparent; }
-  .icon.tiny { width: 26px; height: 26px; border-radius: 8px; }
+  .icon.tiny { width: var(--ctl-xs); height: var(--ctl-xs); border-radius: var(--r-md); }
   .bar { padding: 6px 20px; }
   .list { flex: 1; overflow-y: auto; padding: 10px clamp(12px, 3vw, 28px) 18px; display: flex; flex-direction: column; gap: 10px; }
-  .item { padding: 12px 14px 8px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line-soft); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+  .item { padding: 12px 14px 8px; border-radius: var(--r-xl); background: var(--surface-1); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
   .head { gap: 8px; }
-  .chat { font-weight: 620; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
-  .text a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-  .text mark { background: color-mix(in srgb, #ffd54a 70%, transparent); color: inherit; border-radius: 3px; }
-  .file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: var(--raised); color: var(--muted); }
-  .fname { color: var(--text); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat { font-weight: var(--fw-semibold); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--lh-chat); font-size: var(--fs-chat); margin: 0; }
+  .text a { color: var(--accent-fg); text-decoration: underline; text-underline-offset: 2px; }
+  .text mark { background: color-mix(in srgb, var(--warn) 55%, transparent); color: inherit; border-radius: 3px; }
+  .file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-lg); background: var(--surface-2); color: var(--muted); }
+  .fname { color: var(--text); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acts { gap: 4px; flex-wrap: wrap; margin: 0 -6px; }
   .empty { margin: 40px auto; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; max-width: 320px; }
-  .empty-ic { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .empty-ic { width: 44px; height: 44px; border-radius: var(--r-xl); display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
 </style>

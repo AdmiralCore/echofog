@@ -88,36 +88,28 @@
 </div>
 
 <style>
-  .thumb { display: block; width: 100%; max-width: 100%; max-height: 260px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; background: var(--raised); }
+  .thumb { display: block; width: 100%; max-width: 100%; max-height: 260px; object-fit: cover; border-radius: var(--r-lg); margin-bottom: 8px; background: var(--surface-2); }
   .thumb.open { cursor: zoom-in; }
   .file.pic { width: 300px; }
   /* as wide as it likes up to the bubble, which a narrow chat makes small: nothing sticks out */
   .file { display: flex; flex-direction: column; gap: 8px; width: 280px; max-width: 100%; min-width: 0; padding: 2px 0 2px; }
   .top { display: flex; gap: 10px; align-items: center; }
   .ic {
-    position: relative; flex: none; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
-    background: var(--accent-soft); color: var(--accent);
+    position: relative; flex: none; width: 40px; height: 40px; border-radius: var(--r-lg); display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent-fg);
   }
-  .ic.done { background: var(--ok-soft); color: var(--ok); }
-  .mine .ic, .mine .ic.done { background: rgba(255, 255, 255, 0.18); color: #fff; }
-  .ext { position: absolute; bottom: -4px; right: -6px; padding: 1px 4px; border-radius: 5px; font-size: 8.5px; font-weight: 750; letter-spacing: 0.02em; background: var(--panel); color: var(--muted); border: 1px solid var(--line-soft); }
+  .ic.done { background: var(--ok-soft); color: var(--ok-fg); }
+  .ext { position: absolute; bottom: -4px; right: -6px; padding: 1px 4px; border-radius: var(--r-xs); font-size: 9px; font-weight: var(--fw-bold); letter-spacing: 0.02em; background: var(--surface-1); color: var(--muted); border: 1px solid var(--border); }
   .what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .name { font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .name { font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
   .delivered { display: inline-flex; align-items: center; gap: 4px; }
-  .mine .sub { color: rgba(255, 255, 255, 0.78); }
-  .prog { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
-  .mine .prog { background: rgba(255, 255, 255, 0.25); }
-  .prog span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.25s linear; }
-  .mine .prog span { background: #fff; }
+  .prog { height: 4px; border-radius: var(--r-pill); background: var(--border-strong); overflow: hidden; }
+  .prog span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--dur-slow) linear; }
   .prog span.stalled { opacity: 0.5; }
-  .note { font-size: 11.5px; color: var(--muted); }
-  .mine .note { color: rgba(255, 255, 255, 0.8); }
+  .note { font-size: var(--fs-xs); color: var(--muted); }
   .note.err { color: var(--danger); }
-  .mine .note.err { color: #fff; font-weight: 600; }
   .acts { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
   .acts button { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acts:empty { display: none; }
-  .mine .acts button { color: #fff; border-color: rgba(255, 255, 255, 0.4); background: rgba(255, 255, 255, 0.12); }
-  .mine .acts button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.22); }
 </style>

@@ -51,10 +51,10 @@
 <style>
   .cperms { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border, rgba(127, 127, 127, 0.2)); }
   .cp-row { display: flex; align-items: center; gap: 8px; min-height: 26px; }
-  .tri { display: inline-flex; border-radius: 7px; overflow: hidden; border: 1px solid var(--border, rgba(127, 127, 127, 0.3)); flex: none; }
+  .tri { display: inline-flex; border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--border, rgba(127, 127, 127, 0.3)); flex: none; }
   .tri button { width: 26px; height: 22px; padding: 0; border: 0; border-radius: 0; background: none; color: var(--faint); font-size: 12px; line-height: 22px; cursor: pointer; }
   .tri button + button { border-left: 1px solid var(--border, rgba(127, 127, 127, 0.3)); }
   .tri button.on { background: var(--accent-soft); color: var(--text); }
-  .tri button.deny.on { background: rgba(229, 72, 77, 0.22); color: #e5484d; }
-  .tri button.allow.on { background: rgba(70, 167, 88, 0.22); color: #46a758; }
+  .tri button.deny.on { background: var(--danger-soft); color: var(--danger-fg); }
+  .tri button.allow.on { background: var(--ok-soft); color: var(--ok-fg); }
 </style>

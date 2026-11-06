@@ -33,7 +33,7 @@
   {#if space}
     <div class="who chan-who">
       <div class="title">
-        <h3><span class="chan-title"># {channel ? channel.name : $t('chats.mainChannel')}</span>{#if channel && channel.topic}<span class="topic">{channel.topic}</span>{/if}</h3>
+        <h3><span class="chan-title"><Icon name="hash" size={16} />{channel ? channel.name : $t('chats.mainChannel')}</span>{#if channel && channel.topic}<span class="topic">{channel.topic}</span>{/if}</h3>
         <p class="small">{conv.name} · {$t('chats.members', { n: conv.members })}</p>
       </div>
     </div>

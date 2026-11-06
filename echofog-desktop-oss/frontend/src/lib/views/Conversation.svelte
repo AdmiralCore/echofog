@@ -24,6 +24,7 @@
   import ContactProfile from '../features/chat/ContactProfile.svelte';
   import ChannelBar from '../features/chat/ChannelBar.svelte';
   import ThreadsList from '../features/chat/ThreadsList.svelte';
+  import MembersPanel from '../features/chat/MembersPanel.svelte';
   import { provideChat } from '../features/chat/context.js';
   import '../features/chat/chat.css';
 
@@ -68,6 +69,13 @@
   let shownChannel = '';
   let info = false;
   let threadsOpen = false; // a space's list of threads
+  // a space's members by role, at the right of the chat; the choice is remembered
+  let membersOpen = false;
+  try { membersOpen = localStorage.getItem('echofog.membersPanel') === '1'; } catch (_) {}
+  function toggleMembers() {
+    membersOpen = !membersOpen;
+    try { localStorage.setItem('echofog.membersPanel', membersOpen ? '1' : '0'); } catch (_) {}
+  }
   let menu = null; // { m, anchor }
   let text = '';
   let replyTo = null;
@@ -279,7 +287,7 @@
     <div class="chan-scrim" transition:fade={{ duration: 150 }} on:click={() => (chansOpen = false)}></div>
   {/if}
   <div class="main">
-    <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}
@@ -298,6 +306,11 @@
     {/if}
 
     <MessageList bind:this={list} {conv} {q} {matches} {currentMatch} />
+
+    <!-- who is typing: shown when the core reports it (conv.typing, a list of names); nothing otherwise -->
+    {#if conv.typing && conv.typing.length}
+      <div class="typing" aria-live="polite"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{conv.typing.length === 1 ? $t('chats.typing.one', { name: conv.typing[0] }) : $t('chats.typing.many', { names: conv.typing.join(', ') })}</div>
+    {/if}
 
     {#if groupCall && !inThisCall}
       <div class="callbar" transition:fly={{ y: -6, duration: 200 }}>
@@ -339,6 +352,10 @@
     {:else}
       <ChatInfo {conv} windowed on:close={toggleInfo} />
     {/if}
+  {/if}
+
+  {#if conv.kind === 'group' && membersOpen && !info && !$thread && !threadsOpen}
+    <MembersPanel {conv} float={screenW < 1000} on:close={toggleMembers} on:settings={() => { info = true; threadsOpen = false; }} />
   {/if}
 
   {#if threadsOpen && !info && !$thread}

@@ -216,7 +216,7 @@
   .link-btn { border: none; background: transparent; color: var(--faint); padding: 0; text-decoration: underline; }
   .link-btn:hover:not(:disabled) { background: transparent; border: none; color: var(--text); }
   .quick { display: flex; justify-content: center; gap: 10px; }
-  .q { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; padding: 0; background: var(--raised); border: none; color: var(--muted); }
+  .q { width: 44px; height: 44px; border-radius: var(--r-lg); display: grid; place-items: center; padding: 0; background: var(--surface-2); border: none; color: var(--muted); }
   .q:hover:not(:disabled) { background: var(--hover); border: none; color: var(--text); }
   .q.on { color: var(--accent); background: var(--accent-soft); }
   .tabs { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--raised); }

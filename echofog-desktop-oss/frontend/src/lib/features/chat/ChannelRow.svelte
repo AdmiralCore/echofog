@@ -25,11 +25,11 @@
   {#if ch.voice}
     <button class="chan room" class:here={inRoom === ch.id} disabled={!(ch.canJoin ?? conv.can.call) || ($isCallActive && inRoom !== ch.id)}
       title={inRoom === ch.id ? $t('chats.inRoom') : $t('chats.joinRoom')} on:click={() => inRoom !== ch.id && dispatch('room', ch)}>
-      <span class="vol"><Icon name="volume" size={15} /></span><span class="grow nm">{ch.name}</span>
+      <span class="vol" class:stream={ch.stream}><Icon name={ch.stream ? 'live' : 'volume'} size={16} /></span><span class="grow nm">{ch.name}</span>
     </button>
   {:else}
     <button class="chan" class:on={$activeChannel === ch.id} class:unread={ch.unread > 0} title={ch.topic || ch.name} on:click={() => openChannel(ch.id)}>
-      <span class="hash">#</span><span class="grow nm">{ch.name}</span>
+      <span class="hash"><Icon name="hash" size={16} /></span><span class="grow nm">{ch.name}</span>
       {#if ch.unread > 0 && $activeChannel !== ch.id}<span class="badge">{ch.unread}</span>
       {:else if ch.readOnly}<span class="ro-ic" title={$t('chats.readOnlyChannel')}><Icon name="lock" size={12} /></span>
       {:else if ch.slowSecs}<span class="ro-ic" title={$t('chats.slowOn', { s: ch.slowSecs })}><Icon name="clock" size={12} /></span>{/if}
