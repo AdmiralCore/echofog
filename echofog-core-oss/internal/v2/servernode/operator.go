@@ -33,6 +33,11 @@ type StatusInfo struct {
 	PublicCard bool     `json:"public_card"`
 	Warnings   []string `json:"warnings,omitempty"`
 	Listen     []string `json:"listen,omitempty"`
+	// Version is the build version, UptimeSeconds how long the node runs, Invites how many
+	// invitations and passes it keeps.
+	Version       string `json:"version,omitempty"`
+	UptimeSeconds int64  `json:"uptime_seconds,omitempty"`
+	Invites       int    `json:"invites,omitempty"`
 }
 
 // ErrNoInvites: invitations are off (no invite listener configured).

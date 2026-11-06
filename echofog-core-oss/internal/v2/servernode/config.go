@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrConfig is a configuration that is refused.
@@ -56,8 +57,12 @@ type Config struct {
 	Roles []string `json:"roles"`
 	// Cover is host:port of the site the camouflaged suites imitate. Without a camouflaged listener
 	// the node has no public card (D37) and tells the operator.
-	Cover    string       `json:"cover,omitempty"`
-	Operator OperatorSpec `json:"operator"`
+	Cover string `json:"cover,omitempty"`
+	// SiteDir is the folder with the site the cover imitates (T12.5); CoverCert is the certificate
+	// file of the cover domain, which the doctor watches for expiry.
+	SiteDir   string       `json:"site_dir,omitempty"`
+	CoverCert string       `json:"cover_cert,omitempty"`
+	Operator  OperatorSpec `json:"operator"`
 }
 
 var allRoles = map[string]bool{"relay": true, "exit": true, "mailbox": true, "dht-server": true}
@@ -74,6 +79,7 @@ func ParseConfig(b []byte) (*Config, error) {
 	if len(b) > MaxConfigSize {
 		return nil, fmt.Errorf("%w: %d bytes, at most %d", ErrConfig, len(b), MaxConfigSize)
 	}
+	b = stripComments(b)
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	var c Config
@@ -101,6 +107,19 @@ func ParseConfig(b []byte) (*Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// stripComments blanks the lines that start with // (after white space). A JSON string cannot hold
+// a raw line break, so a value never loses text to this.
+func stripComments(b []byte) []byte {
+	nl := []byte{'\n'}
+	lines := bytes.Split(b, nl)
+	for i, l := range lines {
+		if bytes.HasPrefix(bytes.TrimSpace(l), []byte("//")) {
+			lines[i] = nil
+		}
+	}
+	return bytes.Join(lines, nl)
 }
 
 func bad(format string, a ...any) error {
@@ -150,6 +169,11 @@ func (c *Config) Validate() error {
 		host, port, err := net.SplitHostPort(c.Cover)
 		if p, perr := strconv.ParseUint(port, 10, 16); err != nil || host == "" || len(host) > 253 || perr != nil || p == 0 {
 			return bad("cover %q: want host:port", c.Cover)
+		}
+	}
+	for what, v := range map[string]string{"site_dir": c.SiteDir, "cover_cert": c.CoverCert} {
+		if len(v) > 4096 || strings.ContainsRune(v, 0) || !utf8.ValidString(v) {
+			return bad("%s: a path of at most 4096 bytes without NUL", what)
 		}
 	}
 	ap, err := netip.ParseAddrPort(c.Operator.Addr)

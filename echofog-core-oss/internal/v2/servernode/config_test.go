@@ -117,6 +117,7 @@ func TestParseDuration(t *testing.T) {
 
 func FuzzParseConfig(f *testing.F) {
 	f.Add([]byte(goodConfig))
+	f.Add([]byte("// a comment\n" + goodConfig + "\n// more\n"))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`{"version":1,"listen":[{"suite":"noise3","bind":"[::1]:1","advertise":"::1"}],"operator":{"addr":"[::1]:9"}}`))
 	f.Fuzz(func(t *testing.T, b []byte) {

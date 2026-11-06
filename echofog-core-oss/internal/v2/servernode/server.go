@@ -119,7 +119,10 @@ func readLimited(path string, max int64) ([]byte, error) {
 
 // Init creates the profile in dataDir: identity (recovery phrase returned once), store, server.json
 // and the operator token. It refuses a directory that already holds a profile.
-func Init(dataDir string, cfg Config) (string, error) {
+func Init(dataDir string, cfg Config) (string, error) { return InitLang(dataDir, cfg, "en") }
+
+// InitLang is Init with the comments of server.json in the given language ("ru" or "en").
+func InitLang(dataDir string, cfg Config, lang string) (string, error) {
 	if err := cfg.Validate(); err != nil {
 		return "", err
 	}
@@ -178,7 +181,7 @@ func Init(dataDir string, cfg Config) (string, error) {
 	if err := saveIdentity(dataDir, idf); err != nil {
 		return "", err
 	}
-	raw, err := json.MarshalIndent(cfg, "", "  ")
+	raw, err := RenderConfig(cfg, lang)
 	if err != nil {
 		return "", err
 	}
@@ -286,6 +289,7 @@ type Server struct {
 	http     *http.Server
 	started  bool
 	closed   bool
+	startAt  time.Time
 }
 
 func rolesOf(names []string) []node.Role {
@@ -545,6 +549,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("servernode: already started or closed")
 	}
 	s.started = true
+	s.startAt = time.Now()
 	s.mu.Unlock()
 
 	tok, err := NewTokenFile(filepath.Join(s.dir, tokenFileName))
@@ -632,12 +637,22 @@ func (s *Server) Close(ctx context.Context) error {
 // Status implements Backend.
 func (s *Server) Status() StatusInfo {
 	nid, did := s.account.NodeID(), s.device.ID()
-	st := StatusInfo{NodeID: hex.EncodeToString(nid[:]), DeviceID: hex.EncodeToString(did[:]), Roles: s.cfg.Roles}
+	st := StatusInfo{NodeID: hex.EncodeToString(nid[:]), DeviceID: hex.EncodeToString(did[:]), Roles: s.cfg.Roles, Version: BuildVersion}
+	s.mu.Lock()
+	if !s.startAt.IsZero() {
+		st.UptimeSeconds = int64(time.Since(s.startAt).Seconds())
+	}
+	s.mu.Unlock()
 	if s.rt != nil {
 		st.Sessions = len(s.rt.Status().Sessions)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	if s.access != nil {
+		if infos, err := s.rt.AccessList(ctx); err == nil {
+			st.Invites = len(infos)
+		}
+	}
 	_, perr := s.builder.Current(ctx, objects.ScopePublic)
 	st.PublicCard = perr == nil
 	s.mu.Lock()
