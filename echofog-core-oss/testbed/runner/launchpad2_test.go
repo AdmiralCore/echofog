@@ -153,3 +153,17 @@ func TestProbeFindingsNameTheLeakAndSkipTheExpected(t *testing.T) {
 		t.Error("no probes, no findings")
 	}
 }
+
+func TestProbePhaseNeedsASpecBecauseTheLabKnowsNoV2Node(t *testing.T) {
+	oldPhases, oldSpec := *v2Phases, *v2ProbeSpec
+	defer func() { *v2Phases, *v2ProbeSpec = oldPhases, oldSpec }()
+	*v2Phases, *v2ProbeSpec = "censor,probe", ""
+	if _, err := v2PhaseList("v2-censor"); err == nil {
+		t.Error("the probe phase without a spec must be refused before Docker is touched")
+	}
+	*v2ProbeSpec = "nodes.json"
+	got, err := v2PhaseList("v2-censor")
+	if err != nil || len(got) != 2 || got[1] != "probe" {
+		t.Errorf("phases %v, err %v", got, err)
+	}
+}

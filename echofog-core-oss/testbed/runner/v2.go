@@ -29,6 +29,7 @@ import (
 
 	"github.com/echofog/echofog-core/testbed/browserprofiles"
 	"github.com/echofog/echofog-core/testbed/censor"
+	"github.com/echofog/echofog-core/testbed/probe"
 )
 
 const webIP = "203.0.113.30"
@@ -46,12 +47,13 @@ func (b *byteSizeFlag) Set(s string) error {
 }
 
 var (
-	v2Phases     = flag.String("phases", "", "v2: comma-separated phases (censor,net,services,echo); default depends on the scenario")
+	v2Phases     = flag.String("phases", "", "v2: comma-separated phases (censor,net,services,echo,probe); default depends on the scenario")
 	v2Profile    = flag.String("profile", "desktop", "v2: desktop or android")
 	v2Network    = flag.String("network", "lab", "v2: lab, ru-mobile, cn or ir")
 	v2Pcap       = flag.Bool("pcap", false, "v2: keep the packet capture until the analysis is green (it is deleted after)")
 	v2PcapBudget = &byteSizeFlag{v: maxPcapBudget}
 	v2EchoBytes  = flag.Int64("v2-echo-bytes", 1<<30, "v2-basic: bytes sent through the echo stream (default 1 GiB)")
+	v2ProbeSpec  = flag.String("probe-spec", "", "v2: JSON spec of the nodes the probe phase asks (D11-D15, from gw_b); see testbed/probe")
 )
 
 func init() {
@@ -104,8 +106,12 @@ func v2PhaseList(scenario string) ([]string, error) {
 		phases[i] = strings.TrimSpace(phases[i])
 		switch phases[i] {
 		case "censor", "net", "services", "echo":
+		case "probe":
+			if *v2ProbeSpec == "" {
+				return nil, fmt.Errorf("phase probe needs -probe-spec: the nodes to ask are not known to the lab")
+			}
 		default:
-			return nil, fmt.Errorf("unknown phase %q (censor, net, services, echo)", phases[i])
+			return nil, fmt.Errorf("unknown phase %q (censor, net, services, echo, probe)", phases[i])
 		}
 	}
 	return phases, nil
@@ -148,6 +154,7 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	var labeled []censor.LabeledFlow
 	var capture *v2Capture
 	var carrier carrierInfo
+	var probes []probe.Report
 	carrier.Name = "none"
 
 	for _, phase := range phases {
@@ -158,6 +165,8 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 			v2ServicesPhase(nodes, v, behaviour)
 		case "censor":
 			labeled, capture, carrier = v2CensorPhase(nodes, v, out, seed)
+		case "probe":
+			probes = v2ProbePhase(v, out, *v2ProbeSpec)
 		}
 	}
 
@@ -189,6 +198,10 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	gate := censor.V2GateResult{}
 	if v2gate != nil {
 		gate = *v2gate
+	}
+	for _, line := range probeFindings(probes) {
+		findings = append(findings, line)
+		v.check(false, "%s", line)
 	}
 	for _, line := range gateFindings(metrics, gate) {
 		findings = append(findings, line)
@@ -226,7 +239,7 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 		Phases: phases, Detectors: metrics, Aggregate: agg,
 		Coverage: coverageFor(metrics, carrier), Behaviour: behaviour, Resources: resources,
 		Carrier: carrier, BrowserProfiles: stamp, Pcap: pcap, Flows: flows, Findings: findings,
-		V2Gate: v2gate, H1a: h1a,
+		V2Gate: v2gate, H1a: h1a, Probes: probes,
 	})
 	if err := writeJSON(filepath.Join(out, "report.json"), report); err != nil {
 		v.check(false, "write report.json: %v", err)
@@ -453,13 +466,49 @@ func withSeed(args []string, seed int64) []string {
 }
 
 func buildCarrierBinary() (string, error) {
-	out := filepath.Join(os.TempDir(), "echofog-v2carrier-linux")
-	cmd := exec.Command("go", "build", "-trimpath", "-o", out, "./testbed/v2carrier")
+	return buildLinuxBinary("echofog-v2carrier-linux", "./testbed/v2carrier")
+}
+
+// buildLinuxBinary builds a package of the module for the lab containers.
+func buildLinuxBinary(name, pkg string) (string, error) {
+	out := filepath.Join(os.TempDir(), name)
+	cmd := exec.Command("go", "build", "-trimpath", "-o", out, pkg)
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOWORK=off")
 	if raw, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("build testbed/v2carrier: %v\n%s", err, raw)
+		return "", fmt.Errorf("build %s: %v\n%s", pkg, err, raw)
 	}
 	return out, nil
+}
+
+// v2ProbePhase runs the active probes D11-D15 from the border: the prober is copied into gw_b and
+// asks the nodes of the spec from there, never from a node. The spec comes from the person who
+// started the run (the lab does not run a v2 node of its own until efv2 exists, T0.3).
+func v2ProbePhase(v *verdict, out, specPath string) []probe.Report {
+	const gw = "gw_b"
+	bin, err := buildLinuxBinary("echofog-launchpad-probe-linux", "./testbed/probe/cmd/launchpad-probe")
+	if err != nil {
+		v.check(false, "probe phase: %v", err)
+		return nil
+	}
+	c := container(gw)
+	if o, err := run("docker", "cp", bin, c+":/tmp/launchpad-probe"); err != nil {
+		v.check(false, "probe phase: copy the prober to %s: %v %s", gw, err, o)
+		return nil
+	}
+	if o, err := run("docker", "cp", specPath, c+":/tmp/probe.json"); err != nil {
+		v.check(false, "probe phase: copy the spec to %s: %v %s", gw, err, o)
+		return nil
+	}
+	_, _ = run("docker", "exec", c, "chmod", "+x", "/tmp/launchpad-probe")
+	// exit 1 means "an answer of the node's own was found": the reports are still on stdout
+	raw, err := run("docker", "exec", c, "/tmp/launchpad-probe", "-spec", "/tmp/probe.json")
+	var reps []probe.Report
+	if jerr := json.Unmarshal([]byte(raw), &reps); jerr != nil {
+		v.check(false, "probe phase: no reports from %s: %v %v", gw, err, jerr)
+		return nil
+	}
+	_ = writeJSON(filepath.Join(out, "probes.json"), reps)
+	return reps
 }
 
 func runBrowserControl(v *verdict) {

@@ -207,9 +207,18 @@ func one(ctx context.Context, d Dialer, network, addr string, payload []byte, li
 func compare(ctx context.Context, t Target, d Dialer, det, name string, payload []byte, listen time.Duration) Outcome {
 	o := Outcome{Detector: det, Case: name}
 	o.Node = one(ctx, d, t.network(), t.Addr, payload, listen)
-	o.Cover = one(ctx, t.Dial, t.network(), t.Cover, payload, listen)
+	o.Cover = reference(ctx, t, payload, listen)
 	o.Own = !Equivalent(o.Node, o.Cover)
 	return o
+}
+
+// reference is what the cover answers to the same bytes. A hidden node has no cover: what a
+// stranger is owed is silence.
+func reference(ctx context.Context, t Target, payload []byte, listen time.Duration) Answer {
+	if t.Cover == "" {
+		return Answer{Class: "silence"}
+	}
+	return one(ctx, t.Dial, t.network(), t.Cover, payload, listen)
 }
 
 func skipped(det, name, why string) Outcome {
@@ -302,10 +311,10 @@ func Malformed(ctx context.Context, t Target, in Inputs) []Outcome {
 // CoverCheck is D13: the certificate, ALPN, protocol version and the page of a stranger's visit.
 func CoverCheck(ctx context.Context, t Target, in Inputs) []Outcome {
 	names := []string{"certificate", "alpn", "page"}
-	if t.network() != "tcp" {
+	if t.network() != "tcp" || t.Cover == "" {
 		out := make([]Outcome, len(names))
 		for i, n := range names {
-			out[i] = skipped("D13", n, "the cover check reads a TLS site over TCP; HTTP/3 covers are not read here")
+			out[i] = skipped("D13", n, "the cover check reads a TLS site over TCP and needs a cover to compare with; HTTP/3 covers are not read here")
 		}
 		return out
 	}
@@ -331,7 +340,10 @@ func PostSuspicion(ctx context.Context, t Target, in Inputs) []Outcome {
 		name := fmt.Sprintf("%d bytes", n)
 		o := Outcome{Detector: "D14", Case: name}
 		o.Node = afterSuspicion(ctx, t.Dial, t.network(), t.Addr, suspicious, filler(n, byte(n)), in.listen())
-		o.Cover = afterSuspicion(ctx, t.Dial, t.network(), t.Cover, suspicious, filler(n, byte(n)), in.listen())
+		o.Cover = Answer{Class: "silence"}
+		if t.Cover != "" {
+			o.Cover = afterSuspicion(ctx, t.Dial, t.network(), t.Cover, suspicious, filler(n, byte(n)), in.listen())
+		}
 		o.Own = !Equivalent(o.Node, o.Cover)
 		out = append(out, o)
 	}
