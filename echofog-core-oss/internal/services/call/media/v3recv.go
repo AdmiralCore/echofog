@@ -79,6 +79,9 @@ type cand struct {
 type candSet struct {
 	list []cand
 	at   time.Time
+	// overflow: a copy was dropped because the slots were full. If no kept candidate matches
+	// the authenticator, the real unit may be the dropped one and must be asked for again.
+	overflow bool
 }
 
 type knownHash struct {
@@ -187,6 +190,7 @@ func (r *Receiver) onUnit(h Header3, ct []byte, reports *[]report) UnitResult {
 		}
 	}
 	if len(cs.list) >= MaxCandidates3 {
+		cs.overflow = true
 		return UnitResult{}
 	}
 	first := len(cs.list) == 0
@@ -267,14 +271,19 @@ func (r *Receiver) onAuth(payload []byte, reports *[]report) (AuthResult, error)
 		if now.Sub(cs.at) > CandidateTTL3 {
 			continue
 		}
+		matched := false
 		for _, c := range cs.list {
 			if c.hash != hash {
 				res.Forged = true
 				continue
 			}
+			matched = true
 			if s.win.mark(seq, now) {
 				res.Verified = append(res.Verified, VerifiedUnit{Header: c.h, Ciphertext: c.ct})
 			}
+		}
+		if !matched && cs.overflow {
+			res.Need = append(res.Need, NeedUnit{Sender: a.Sender, Gen: a.Gen, Stream: a.Stream, Kind: a.Kind, Seq: seq})
 		}
 	}
 	if res.Forged {
