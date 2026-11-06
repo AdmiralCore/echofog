@@ -18,6 +18,7 @@ import (
 
 func main() {
 	spec := flag.String("spec", "", "path of the JSON spec (see probe.LoadSpec)")
+	allowPublic := flag.Bool("allow-public", false, "let the spec name public addresses and host names (default: lab, private and loopback only)")
 	timeout := flag.Duration("timeout", 10*time.Minute, "give up after this long")
 	flag.Parse()
 	if *spec == "" {
@@ -32,7 +33,7 @@ func main() {
 	defer f.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	own, err := probe.RunSpec(ctx, f, os.Stdout)
+	own, err := probe.RunSpecWith(ctx, f, os.Stdout, probe.SpecOptions{AllowPublic: *allowPublic})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "launchpad-probe:", err)
 		os.Exit(2)

@@ -158,11 +158,11 @@ type analyzer struct {
 	gens  map[flowKey]int // the generation of a pair of addresses now in use
 
 	maxFlows int // flows kept; the packets of any flow past it are counted and not analysed
-	dropped  int // packets of flows that did not fit
+	dropped  int // new flows that did not fit (a UDP flow past the bound counts once per packet it sends)
 }
 
 // MaxFlows bounds the flows one analysis keeps, so a scan or a storm under the pcap budget cannot
-// turn into millions of flows of state. Packets of flows past the bound are counted, not read.
+// turn into millions of flows of state. Flows past the bound are counted, not read.
 var MaxFlows = 200_000
 
 func newAnalyzer() *analyzer {
@@ -191,6 +191,10 @@ func (a *analyzer) add(p packet) {
 	if st == nil {
 		if p.proto == 6 && !p.syn {
 			return // joined mid-connection: the client is unknown
+		}
+		if len(a.flows) >= a.maxFlows {
+			a.dropped++ // no room for another flow: counted, not read; the rest of a TCP flow is ignored as mid-connection
+			return
 		}
 		proto := "udp"
 		if p.proto == 6 {

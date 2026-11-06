@@ -32,41 +32,46 @@ type Record struct {
 // per-flow state, so a big capture costs memory in proportion to its flows. When the stream is
 // not a pcap file the analyzer stops, and writes to the writer fail instead of blocking.
 func AnalyzeStream() (io.WriteCloser, func() ([]Flow, error)) {
-	pr, pw := io.Pipe()
-	type result struct {
-		flows []Flow
-		err   error
+	w, wait := AnalyzeStreamStats()
+	return w, func() ([]Flow, error) {
+		a, err := wait()
+		return a.Flows, err
 	}
-	done := make(chan result, 1)
+}
+
+// Analysis is the result of a stream analysis: the flows and how many new flows past
+// MaxFlows were not analysed.
+type Analysis struct {
+	Flows          []Flow
+	DroppedFlows int
+}
+
+// AnalyzeStreamStats is AnalyzeStream with the count of what did not fit.
+func AnalyzeStreamStats() (io.WriteCloser, func() (Analysis, error)) {
+	pr, pw := io.Pipe()
+	done := make(chan struct {
+		a   Analysis
+		err error
+	}, 1)
 	go func() {
 		an := newAnalyzer()
 		err := streamPcap(pr, an.add)
 		if err != nil {
 			_ = pr.CloseWithError(err) // a writer that is still writing gets the error, not a hang
-			done <- result{nil, err}
+			done <- struct {
+				a   Analysis
+				err error
+			}{Analysis{}, err}
 			return
 		}
 		_, _ = io.Copy(io.Discard, pr) // anything after the last record (a cut-off tail)
-		done <- result{an.finish(), nil}
+		done <- struct {
+			a   Analysis
+			err error
+		}{Analysis{Flows: an.finish(), DroppedFlows: an.dropped}, nil}
 	}()
-	return pw, func() ([]Flow, error) {
+	return pw, func() (Analysis, error) {
 		r := <-done
-		return r.flows, r.err
-	}
-}
-
-// Analysis is the result of a stream analysis: the flows and how many packets of flows past
-// MaxFlows were not analysed.
-type Analysis struct {
-	Flows          []Flow
-	DroppedPackets int
-}
-
-// AnalyzeStreamStats is AnalyzeStream with the count of what did not fit.
-func AnalyzeStreamStats() (io.WriteCloser, func() (Analysis, error)) {
-	w, wait := AnalyzeStream()
-	return w, func() (Analysis, error) {
-		f, err := wait()
-		return Analysis{Flows: f}, err
+		return r.a, r.err
 	}
 }

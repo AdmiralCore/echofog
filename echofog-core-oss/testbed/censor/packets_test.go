@@ -264,7 +264,7 @@ func TestAnalyzerCapsTheFlowsAndCountsTheRest(t *testing.T) {
 	require.NoError(t, streamPcap(bytes.NewReader(b.buf.Bytes()), an.add))
 	flows := an.finish()
 	assert.Len(t, flows, 10, "the first ten flows are kept whole")
-	assert.Equal(t, 80, an.dropped, "forty flows of two packets are counted, not analysed")
+	assert.Equal(t, 40, an.dropped, "forty flows past the bound are counted, not analysed")
 	for _, f := range flows {
 		assert.Equal(t, 2, f.Packets)
 	}
@@ -276,7 +276,7 @@ func TestAnalyzerCapsTheFlowsAndCountsTheRest(t *testing.T) {
 	res, err := wait()
 	require.NoError(t, err)
 	assert.Len(t, res.Flows, 50, "under the default bound nothing is dropped")
-	assert.Zero(t, res.DroppedPackets)
+	assert.Zero(t, res.DroppedFlows)
 }
 
 func TestTheDefaultFlowBoundIsLarge(t *testing.T) {

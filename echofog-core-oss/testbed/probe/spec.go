@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
 	"time"
 )
 
@@ -53,11 +55,6 @@ type SpecOptions struct {
 
 // LoadSpecWith is LoadSpec with options.
 func LoadSpecWith(r io.Reader, o SpecOptions) ([]Case, error) {
-	_ = o
-	return loadSpecOld(r)
-}
-
-func loadSpecOld(r io.Reader) ([]Case, error) {
 	var entries []specEntry
 	if err := json.NewDecoder(r).Decode(&entries); err != nil {
 		return nil, fmt.Errorf("probe spec: %w", err)
@@ -81,6 +78,11 @@ func loadSpecOld(r io.Reader) ([]Case, error) {
 		}
 		if e.Addr == "" {
 			return nil, fmt.Errorf("probe spec: entry %d has no address", i)
+		}
+		for _, a := range []string{e.Addr, e.Cover} {
+			if err := checkTarget(a, o.AllowPublic); err != nil {
+				return nil, fmt.Errorf("probe spec: entry %d: %w", i, err)
+			}
 		}
 		network := e.Network
 		if network == "" {
@@ -114,7 +116,12 @@ func loadSpecOld(r io.Reader) ([]Case, error) {
 // RunSpec reads a spec, runs every case from this machine (the border), writes the reports as JSON
 // to w and returns how many answers of a node's own were not expected.
 func RunSpec(ctx context.Context, r io.Reader, w io.Writer) (own int, err error) {
-	cases, err := LoadSpec(r)
+	return RunSpecWith(ctx, r, w, SpecOptions{})
+}
+
+// RunSpecWith is RunSpec with options.
+func RunSpecWith(ctx context.Context, r io.Reader, w io.Writer, o SpecOptions) (own int, err error) {
+	cases, err := LoadSpecWith(r, o)
 	if err != nil {
 		return 0, err
 	}
@@ -127,4 +134,41 @@ func RunSpec(ctx context.Context, r io.Reader, w io.Writer) (own int, err error)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return own, enc.Encode(reps)
+}
+
+// labNets are the addresses a lab prober may ask without being told otherwise: the documentation
+// ranges the stand uses, CGNAT, and everything netip calls private, loopback or link-local.
+var labNets = []netip.Prefix{
+	netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("100.64.0.0/10"),
+}
+
+// checkTarget refuses an address that is not host:port with an IP literal inside the lab ranges,
+// unless public addresses are allowed (then any host:port will do). An empty address is the cover
+// of a hidden node and is not checked.
+func checkTarget(addr string, allowPublic bool) error {
+	if addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("%q is not host:port", addr)
+	}
+	if allowPublic {
+		return nil
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("%q: a host name is not accepted without -allow-public (the prober asks IP literals of the lab)", addr)
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return nil
+	}
+	for _, p := range labNets {
+		if p.Contains(ip) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is a public address: the prober asks the lab only unless -allow-public says that a public node is meant", addr)
 }
