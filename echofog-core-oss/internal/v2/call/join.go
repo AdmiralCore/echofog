@@ -25,6 +25,8 @@ type JoinGuardConfig struct {
 	MaxPending int
 	// MaxSalts bounds the remembered (device, join_salt) pairs. Zero: 4096.
 	MaxSalts int
+	// MaxSaltsPerDevice bounds the pairs one device may have remembered. Zero: 64.
+	MaxSaltsPerDevice int
 	// Allowed says whether the device may join this call now: the call exists, the device is not
 	// kicked, the room has space. Nil allows all.
 	Allowed func(callID string, device [32]byte) bool

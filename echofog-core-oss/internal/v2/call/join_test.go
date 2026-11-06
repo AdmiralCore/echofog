@@ -193,16 +193,76 @@ func TestJoinGuardParallelRefusalsHoldTheSameResources(t *testing.T) {
 	}
 }
 
-func TestJoinGuardRememberedSaltsAreBounded(t *testing.T) {
+func instantAfter(time.Duration) <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	ch <- time.Time{}
+	return ch
+}
+
+func saltJoin(t testing.TB, n int) *pb.Join {
+	j := testJoin(t, 1)
+	j.JoinSalt = []byte{byte(n), byte(n >> 8), byte(n >> 16), 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7}
+	return j
+}
+
+func TestJoinGuardOtherDeviceCannotMakeItForgetReplays(t *testing.T) {
 	c := newGuardClock()
-	g := NewJoinGuard(JoinGuardConfig{Now: c.Now, After: c.After, MaxSalts: 16})
-	for i := 0; i < 1000; i++ {
-		j := testJoin(t, 1)
-		j.JoinSalt = bytes.Repeat([]byte{byte(i)}, 15)
-		j.JoinSalt = append(j.JoinSalt, byte(i>>8))
+	g := NewJoinGuard(JoinGuardConfig{Now: c.Now, After: instantAfter, MaxSalts: 4096})
+	victim, attacker := [32]byte{1}, [32]byte{2}
+	vj := saltJoin(t, 0)
+	if err := g.Admit(context.Background(), "room", victim, vj, c.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	// another member sends 5000 fresh joins inside the window to push the victim's pair out.
+	for i := 1; i <= 5000; i++ {
+		_ = g.Admit(context.Background(), "room", attacker, saltJoin(t, i), c.Now().UnixMilli())
+	}
+	if err := g.Admit(context.Background(), "room", victim, vj, c.Now().UnixMilli()); !errors.Is(err, ErrJoinRefused) {
+		t.Fatalf("replay of the victim's join after a flood: %v, want ErrJoinRefused", err)
+	}
+}
+
+func TestJoinGuardFullTableRefusesInsteadOfForgetting(t *testing.T) {
+	c := newGuardClock()
+	g := NewJoinGuard(JoinGuardConfig{Now: c.Now, After: instantAfter, MaxSalts: 16, MaxSaltsPerDevice: 4})
+	first := saltJoin(t, 0)
+	for i := 0; i < 16; i++ { // 16 devices fill the table
+		j := first
+		if i > 0 {
+			j = saltJoin(t, i)
+		}
 		if err := g.Admit(context.Background(), "room", [32]byte{byte(i)}, j, c.Now().UnixMilli()); err != nil {
 			t.Fatalf("join %d: %v", i, err)
 		}
+	}
+	if err := g.Admit(context.Background(), "room", [32]byte{99}, saltJoin(t, 99), c.Now().UnixMilli()); !errors.Is(err, ErrJoinRefused) {
+		t.Fatalf("join into a full table: %v, want a refusal (not forgetting an old pair)", err)
+	}
+	if err := g.Admit(context.Background(), "room", [32]byte{0}, first, c.Now().UnixMilli()); !errors.Is(err, ErrJoinRefused) {
+		t.Fatalf("replay with a full table: %v", err)
+	}
+	// once the pairs are older than the retention, room is made again.
+	c.Advance(3 * time.Minute)
+	if err := g.Admit(context.Background(), "room", [32]byte{99}, saltJoin(t, 99), c.Now().UnixMilli()); err != nil {
+		t.Fatalf("after the retention: %v", err)
+	}
+}
+
+func TestJoinGuardPerDeviceLimit(t *testing.T) {
+	c := newGuardClock()
+	g := NewJoinGuard(JoinGuardConfig{Now: c.Now, After: instantAfter, MaxSaltsPerDevice: 3})
+	dev := [32]byte{5}
+	var ok int
+	for i := 0; i < 10; i++ {
+		if g.Admit(context.Background(), "room", dev, saltJoin(t, i), c.Now().UnixMilli()) == nil {
+			ok++
+		}
+	}
+	if ok != 3 {
+		t.Fatalf("%d joins of one device admitted, want 3", ok)
+	}
+	if err := g.Admit(context.Background(), "room", [32]byte{6}, saltJoin(t, 0), c.Now().UnixMilli()); err != nil {
+		t.Fatalf("another device is not limited by the first: %v", err)
 	}
 }
 
