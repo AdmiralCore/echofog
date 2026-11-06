@@ -59,7 +59,6 @@ type ResponderConfig struct {
 	Features   []uint32
 	Services   []ServiceOffer // served services and their versions
 	Now        func() time.Time
-	Offset     time.Duration // learned clock offset, added to Now
 	Puzzle     *PuzzleConfig
 	Replay     *ReplayCache
 	Early      EarlyHandler
@@ -171,7 +170,7 @@ func NewResponder(cfg ResponderConfig) *Responder {
 	return &Responder{cfg: cfg, hidden: cfg.Hidden}
 }
 
-func (r *Responder) now() time.Time { return r.cfg.Now().Add(r.cfg.Offset) }
+func (r *Responder) now() time.Time { return r.cfg.Now() }
 
 // uniformDelay draws uniform(0.5, 3) s.
 func (r *Responder) uniformDelay() time.Duration {

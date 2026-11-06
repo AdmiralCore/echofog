@@ -35,7 +35,6 @@ type InitiatorConfig struct {
 	AccessSecret []byte // 16-byte pass secret for a hidden responder (XK only)
 	Early        []byte // frames of one 0-RTT stream (XK, feature early-data), ≤ 1200 bytes
 	Now          func() time.Time
-	Offset       time.Duration
 	Grease       bool // add one GREASE value to offered, features and services (§3.4)
 	// Throwaway confirms, for XX to a bare address (no Remote, no ExpectedDeviceID), that Static
 	// and Card are a throwaway identity: fresh account, device and hs keys, never reused (B4).
@@ -104,7 +103,7 @@ func NewInitiator(cfg InitiatorConfig, cb []byte) (*Initiator, error) {
 		if !cfg.Throwaway {
 			return nil, fmt.Errorf("%w: XX to a bare address needs a throwaway identity", ErrConfig)
 		}
-		info, err := cfg.Cards.VerifyCard(cfg.Card, cfg.Now().Add(cfg.Offset))
+		info, err := cfg.Cards.VerifyCard(cfg.Card, cfg.Now())
 		if err != nil || !bytes.Equal(info.HsKey, cfg.Static.PublicKey().Bytes()) {
 			return nil, fmt.Errorf("%w: the throwaway card must name the throwaway hs key", ErrConfig)
 		}
@@ -172,7 +171,7 @@ func insertSorted(list []uint16, g uint16) []uint16 {
 	return out
 }
 
-func (i *Initiator) now() time.Time { return i.cfg.Now().Add(i.cfg.Offset) }
+func (i *Initiator) now() time.Time { return i.cfg.Now() }
 
 // Start returns HS_HELLO and message 1, sent in one flight on stream 0.
 func (i *Initiator) Start() (hello, msg1 []byte, err error) {

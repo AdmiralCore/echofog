@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	mrand "math/rand/v2"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -25,7 +24,6 @@ type dialConfig struct {
 	expected   *[32]byte
 	clock      carrier.Clock
 	grease     bool
-	offset     time.Duration
 	verifier   handshake.CardVerifier
 	bindings   handshake.KeyBinder
 	control    *Control
@@ -67,11 +65,6 @@ func WithClock(c carrier.Clock) DialOption {
 // D18). It exists for vectors and for a peer that cannot ignore GREASE.
 func WithGrease(on bool) DialOption {
 	return func(o *dialConfig) { o.grease = on }
-}
-
-// WithOffset applies a learned clock offset to every timestamp and deadline (T3.8).
-func WithOffset(d time.Duration) DialOption {
-	return func(o *dialConfig) { o.offset = d }
 }
 
 // WithVerifier replaces the card verifier (default handshake.DefaultCardVerifier).
@@ -164,7 +157,7 @@ func Dial(ctx context.Context, card *objects.Card, attempt carrier.Attempt, loca
 
 	var remote *handshake.CardInfo
 	if card != nil {
-		info, err := verifyRemote(card, clk.Now().Add(o.offset), o.verifier)
+		info, err := verifyRemote(card, clk.Now(), o.verifier)
 		if err != nil {
 			return nil, err
 		}
@@ -241,7 +234,6 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 		Services:         local.Services,
 		AccessSecret:     local.AccessSecret,
 		Now:              clk.Now,
-		Offset:           o.offset,
 		Grease:           o.grease,
 		Throwaway:        local.Throwaway,
 		Cards:            o.verifier,

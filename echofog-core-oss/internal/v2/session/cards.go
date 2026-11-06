@@ -228,12 +228,6 @@ type ControlConfig struct {
 	Abuse *AbuseLog
 	// Clock checks card lifetimes; nil is the system clock.
 	Clock carrier.Clock
-	// Offset is the learned clock offset applied to card lifetime checks (T3.8).
-	Offset time.Duration
-	// OffsetFunc, when set, supplies the current learned offset on every frame; it takes
-	// precedence over Offset so a runtime whose clock correction changes keeps checking card
-	// lifetimes against the latest value.
-	OffsetFunc func() time.Duration
 	// OnCard is called after every CARD_UPDATE that verified, with the book's result. The
 	// runtime uses it to refresh the card it serves to services.
 	OnCard func(*objects.Card, objects.AddResult, error)
@@ -300,11 +294,6 @@ func (c *Control) handle(src controlSource, f frame.Frame) {
 		return
 	}
 	now := clockOr(c.cfg.Clock).Now()
-	offset := c.cfg.Offset
-	if c.cfg.OffsetFunc != nil {
-		offset = c.cfg.OffsetFunc()
-	}
-	now = now.Add(offset)
 	card, err := objects.VerifyCard(f.Payload, now)
 	if err != nil {
 		// A forged or damaged card proves nothing about its sender and is not counted as

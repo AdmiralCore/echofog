@@ -57,8 +57,6 @@ type AcceptConfig struct {
 	Kind mux.PathKind
 	// Clock is the injectable time source (AD13); nil means the system clock.
 	Clock carrier.Clock
-	// Offset is the learned clock offset (T3.8).
-	Offset time.Duration
 	// Rand draws the hidden node's uniform close delay (tests inject a deterministic reader).
 	Rand io.Reader
 	// Verifier replaces the card verifier (default handshake.DefaultCardVerifier).
@@ -208,7 +206,6 @@ func AcceptCarrier(ctx context.Context, c mux.Carrier, cfg AcceptConfig) (*Estab
 		Features:   local.Features,
 		Services:   cfg.Local.Services,
 		Now:        clk.Now,
-		Offset:     cfg.Offset,
 		Puzzle:     puzzle,
 		Replay:     cfg.Replay,
 		Observed:   observed,

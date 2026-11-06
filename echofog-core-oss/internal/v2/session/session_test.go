@@ -456,7 +456,7 @@ func TestDialRejectsClockSkew(t *testing.T) {
 	})
 	_, err := session.Dial(ctx, remote, dialAttempt(),
 		cliNode.local(cliCard, handshake.OwnCards{}, []uint16{handshake.SuiteXK}, false),
-		session.WithCarrier(pair.Client), session.WithOffset(20*time.Minute))
+		session.WithCarrier(pair.Client), session.WithClock(skewedClock{20 * time.Minute}))
 	var rejected *session.ErrRejected
 	if !errors.As(err, &rejected) || rejected.Reason != handshake.ReasonClockSkew {
 		t.Fatalf("Dial: %v, want clock-skew rejection", err)
@@ -941,3 +941,11 @@ func TestAcceptClosesOnNonHandshakeFirstFrame(t *testing.T) {
 
 // Compile-time check that the test listener satisfies carrier.Listener.
 var _ carrier.Listener = (*oneListener)(nil)
+
+// skewedClock is a carrier clock that runs ahead of the real one.
+type skewedClock struct{ ahead time.Duration }
+
+func (c skewedClock) Now() time.Time { return time.Now().Add(c.ahead) }
+func (c skewedClock) AfterFunc(d time.Duration, f func()) carrier.Timer {
+	return time.AfterFunc(d, f)
+}

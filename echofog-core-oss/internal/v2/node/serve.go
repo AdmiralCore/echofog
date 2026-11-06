@@ -80,7 +80,6 @@ func (r *Runtime) serveCarrierAs(ctx context.Context, c mux.Carrier, kind mux.Pa
 		Bindings:      r.bindings,
 		Control:       r.control,
 		Clock:         r.carrierClock,
-		Offset:        r.clock.Offset(),
 		Kind:          kind,
 		Policy:        r.policyFunc,
 		Verifier:      nil,
@@ -172,7 +171,6 @@ func (r *Runtime) takeAccepted(ctx context.Context, local session.LocalIdentity,
 			r.log.Debug("node: access peer card push failed", "err", err)
 		}
 	}
-	r.samplePeer(kept)
 	r.ensureServing(kept)
 	r.relayc.sessionReady(kept.Session)
 }
@@ -279,7 +277,7 @@ func (r *Runtime) peerOf(est *session.Established) Peer {
 	}
 	p.Node = NodeID(est.Peer.NodeID)
 	p.Device = DeviceID(est.Peer.DeviceID)
-	card, err := objects.VerifyCard(est.Peer.Raw, r.clock.Now())
+	card, err := objects.VerifyCard(est.Peer.Raw, r.carrierClock.Now())
 	if err != nil {
 		r.log.Warn("node: peer card no longer verifies", "device", p.Device, "err", err)
 		return p

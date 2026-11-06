@@ -418,13 +418,13 @@ func TestCDNTriggers(t *testing.T) {
 		want        bool
 	}{
 		{"no peer ever", func(*Clock, *fakeClock) {}, false, true},
-		{"peer seen just now", func(c *Clock, fc *fakeClock) { c.AddPeerSample(peerID(1), fc.Now()) }, false, false},
+		{"peer seen just now", func(c *Clock, fc *fakeClock) { c.AddOutgoingSample(netAddr(1), fc.Now()) }, false, false},
 		{"peer seen just now, all L0 dials failed",
-			func(c *Clock, fc *fakeClock) { c.AddPeerSample(peerID(1), fc.Now()) }, true, true},
+			func(c *Clock, fc *fakeClock) { c.AddOutgoingSample(netAddr(1), fc.Now()) }, true, true},
 		{"peer seen 59 minutes ago",
-			func(c *Clock, fc *fakeClock) { c.AddPeerSample(peerID(1), fc.Now()); fc.Advance(59 * time.Minute) }, false, false},
+			func(c *Clock, fc *fakeClock) { c.AddOutgoingSample(netAddr(1), fc.Now()); fc.Advance(59 * time.Minute) }, false, false},
 		{"peer seen 61 minutes ago",
-			func(c *Clock, fc *fakeClock) { c.AddPeerSample(peerID(1), fc.Now()); fc.Advance(61 * time.Minute) }, false, true},
+			func(c *Clock, fc *fakeClock) { c.AddOutgoingSample(netAddr(1), fc.Now()); fc.Advance(61 * time.Minute) }, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

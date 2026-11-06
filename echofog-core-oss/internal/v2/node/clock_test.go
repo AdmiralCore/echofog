@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,8 +13,10 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
+	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
+	"github.com/echofog/echofog-core/internal/v2/session"
 )
 
 // fakeRaw is a raw wall clock that is deliberately wrong; the runtime's learned offset brings it
@@ -36,11 +39,10 @@ func (c fakeCarrierClock) AfterFunc(d time.Duration, f func()) carrier.Timer {
 	return time.AfterFunc(d, f)
 }
 
-// TestRuntimeAppliesLearnedClockOffset pins the T3.7a clock integration: a node whose raw clock is
-// 1000 s ahead can still handshake because the learned offset (T3.8) is passed into the
-// handshake. Without the offset the responder would answer REJECT{clock-skew} (>600 s,
-// handshake.md §7).
-func TestRuntimeAppliesLearnedClockOffset(t *testing.T) {
+// TestRuntimeHandshakeUsesTheRawClock: a node whose raw clock is 1000 s ahead is rejected with
+// clock-skew even though its clock carries a matching learned offset: the +-600 s check of the
+// handshake uses the raw clock only (handshake.md section 7, audit M1 B-2).
+func TestRuntimeHandshakeUsesTheRawClock(t *testing.T) {
 	queue := newCarrierQueue()
 	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
 
@@ -50,9 +52,13 @@ func TestRuntimeAppliesLearnedClockOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clock.New: %v", err)
 	}
-	clk.AddPeerSample(clock.PeerID(b.id.DeviceID), realNow)
-	if off := clk.Offset(); off > -990*time.Second || off < -1010*time.Second {
-		t.Fatalf("learned offset %v, want about -1000 s", off)
+	// Three outgoing networks that agree with real time pull the offset toward -1000 s, one step
+	// of 120 s at a time (more than the cap would never be reached by peers alone).
+	for n := 1; n <= 3; n++ {
+		clk.AddOutgoingSample(netip.AddrFrom4([4]byte{10, byte(n), 0, 1}), realNow)
+	}
+	if off := clk.Offset(); off != -120*time.Second {
+		t.Fatalf("learned offset %v, want one 120 s step", off)
 	}
 
 	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) {
@@ -69,20 +75,17 @@ func TestRuntimeAppliesLearnedClockOffset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	peer, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{
+	_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{
 		Card:    b.peerCard(t),
 		Carrier: pair.Client,
 	})
-	if err != nil {
-		t.Fatalf("Session with a learned clock offset: %v", err)
+	if err == nil {
+		_ = sess.Close()
+		t.Fatal("a node with a raw clock 1000 s ahead was admitted because of its offset")
 	}
-	if peer.Device != b.id.DeviceID {
-		t.Fatalf("session peer %x, want %x", peer.Device, b.id.DeviceID)
-	}
-	_ = sess.Close()
-
-	if off := a.rt.Clock().Offset(); off > -990*time.Second || off < -1010*time.Second {
-		t.Fatalf("offset after the handshake %v, want about -1000 s", off)
+	var rej *session.ErrRejected
+	if !errors.As(err, &rej) || rej.Reason != handshake.ReasonClockSkew {
+		t.Fatalf("Session: %v, want a clock-skew rejection", err)
 	}
 }
 

@@ -78,9 +78,20 @@ func suiteRegistry(cfg Config, clock carrier.Clock) (*carrier.Registry, error) {
 	return reg, nil
 }
 
-// systemClock is the raw time source of the carrier layer. The corrected clock is Host.Clock;
-// handshake timestamps add clock.Offset explicitly (handshake.md §7), so the carrier layer must
-// stay raw or the correction would be applied twice.
+// l0Clock is the clock of the L0 first packets (wire.md section 2.4, 3.2): the raw carrier clock
+// plus the learned offset. Only these timestamps use the offset; the handshake and card lifetimes
+// stay on the raw clock (handshake.md section 7). Timers are not shifted.
+type l0Clock struct {
+	raw    carrier.Clock
+	offset func() time.Duration
+}
+
+func (c l0Clock) Now() time.Time { return c.raw.Now().Add(c.offset()) }
+func (c l0Clock) AfterFunc(d time.Duration, f func()) carrier.Timer {
+	return c.raw.AfterFunc(d, f)
+}
+
+// systemClock is the raw time source of the carrier layer.
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }

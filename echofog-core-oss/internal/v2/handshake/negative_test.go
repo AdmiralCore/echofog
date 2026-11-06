@@ -515,23 +515,12 @@ func TestClockSkewReject(t *testing.T) {
 	if _, _, err := ini.HandleMsg2(rep.Payload); err != nil {
 		t.Fatalf("600 s: %v", err)
 	}
-	// The learned offset is applied before the check.
-	w = newWorld(t)
-	w.rc.Offset = 700 * time.Second
-	ini, _ = NewInitiator(w.ic, testCB)
-	ini.timeOverride = fixedTime + 700
-	hello, m1, _ = ini.Start()
-	rep = NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now)
-	if rep.Action != ActSend {
-		t.Fatalf("offset not applied: %v", rep.Action)
-	}
 }
 
 // TestHandshakeChecksTheRawClock: the +-600 s check, in both directions, uses the raw clock and
 // never the learned offset (handshake.md section 7, audit M1 B-2).
 func TestHandshakeChecksTheRawClock(t *testing.T) {
 	w := newWorld(t)
-	w.rc.Offset = 700 * time.Second // must be ignored
 	ini, _ := NewInitiator(w.ic, testCB)
 	ini.timeOverride = fixedTime + 700
 	hello, m1, _ := ini.Start()
@@ -543,22 +532,13 @@ func TestHandshakeChecksTheRawClock(t *testing.T) {
 
 func TestInitiatorChecksResponderClock(t *testing.T) {
 	w := newWorld(t)
+	w.rc.Now = func() time.Time { return fixedNow }
+	// A responder whose P2.time is off by 700 s.
 	ini, _ := NewInitiator(w.ic, testCB)
 	hello, m1, _ := ini.Start()
-	w.rc.Now = func() time.Time { return fixedNow.Add(-700 * time.Second) }
-	w.rc.Offset = 700 * time.Second // the responder's corrected clock still matches P1.time
-	rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, fixedNow)
-	if rep.Action != ActSend {
-		t.Fatalf("responder: %v", rep.Action)
-	}
-	w.rc.Offset = 0
-	w.rc.Now = func() time.Time { return fixedNow }
-	// Re-run with a responder whose P2.time is off by 700 s.
-	ini, _ = NewInitiator(w.ic, testCB)
-	hello, m1, _ = ini.Start()
 	res := NewResponder(w.rc)
 	res.timeOverride = fixedTime + 700
-	rep = res.HandleFirst(testCB, hello, m1, fixedNow)
+	rep := res.HandleFirst(testCB, hello, m1, fixedNow)
 	if _, _, err := ini.HandleMsg2(rep.Payload); !errors.Is(err, ErrClockSkew) {
 		t.Fatalf("initiator accepted a skewed responder: %v", err)
 	}

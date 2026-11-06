@@ -77,8 +77,9 @@ type Config struct {
 
 	// Clock is the corrected clock (T3.8). When nil the runtime creates one over HTTP.
 	Clock *clock.Clock
-	// HTTP is the single HTTP client of the node (02-architecture §3.1). Nil creates a plain
-	// stdlib client; production supplies the browser-shaped, proxied one (T11.6).
+	// HTTP is the single HTTP client of the node (02-architecture §3.1). Nil leaves it unset and
+	// the CDN clock check off: production supplies a uTLS Chrome-hello client that goes through
+	// the node's proxy settings (T11.6, handshake.md D36); the runtime never builds one of its own.
 	HTTP *http.Client
 	// Log receives structured diagnostics. Nil means slog.Default.
 	Log *slog.Logger
@@ -106,8 +107,8 @@ type Config struct {
 	// Registry replaces the carrier suite registry (tests, a build without a suite).
 	Registry *carrier.Registry
 	// CarrierClock is the raw carrier clock for tests (AD13). Nil means the system clock. When a
-	// custom Clock is supplied, both must read the same raw time: the handshake adds
-	// Clock.Offset() to CarrierClock.Now().
+	// custom Clock is supplied, both must read the same raw time. The handshake and card
+	// lifetimes use CarrierClock.Now(); only the L0 first packets add Clock.Offset().
 	CarrierClock carrier.Clock
 	// LocalInfo feeds the D21 carrier plan (own public addresses, country lookup, UDP flag).
 	LocalInfo carrier.LocalInfo
@@ -298,10 +299,10 @@ func New(cfg Config) (*Runtime, error) {
 	if events == nil {
 		events = logSink{log: log}
 	}
+	// Without cfg.HTTP the CDN clock check stays off (handshake.md D36, audit M1 B-4): the node
+	// never builds a Go-TLS client of its own, whose fingerprint and environment proxy would
+	// betray it.
 	httpClient := cfg.HTTP
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
-	}
 	carrierClock := cfg.CarrierClock
 	if carrierClock == nil {
 		carrierClock = systemClock{}
@@ -337,14 +338,18 @@ func New(cfg Config) (*Runtime, error) {
 
 	r.clock = cfg.Clock
 	if r.clock == nil {
-		c, err := clock.New(clock.Config{HTTP: httpClient, Warn: r.clockWarn})
+		ccfg := clock.Config{Warn: r.clockWarn}
+		if httpClient != nil {
+			ccfg.HTTP = httpClient
+		}
+		c, err := clock.New(ccfg)
 		if err != nil {
 			return nil, fmt.Errorf("node: clock: %w", err)
 		}
 		r.clock = c
 	}
 
-	reg, err := suiteRegistry(cfg, carrierClock)
+	reg, err := suiteRegistry(cfg, l0Clock{raw: carrierClock, offset: r.clock.Offset})
 	if err != nil {
 		return nil, err
 	}
@@ -387,12 +392,11 @@ func New(cfg Config) (*Runtime, error) {
 		}
 	}
 	r.control = session.NewControl(session.ControlConfig{
-		Cards:      r.cardBook,
-		Abuse:      r.abuse,
-		Clock:      r.carrierClock,
-		OffsetFunc: r.clock.Offset,
-		Observer:   r.observer,
-		OnPunch:    r.relayc.onPunch,
+		Cards:    r.cardBook,
+		Abuse:    r.abuse,
+		Clock:    r.carrierClock,
+		Observer: r.observer,
+		OnPunch:  r.relayc.onPunch,
 	})
 
 	r.vis = cfg.Cards.Visibility()
@@ -1048,11 +1052,13 @@ func handshakeServices(offers []service.Offer) []handshake.ServiceOffer {
 	return out
 }
 
+// samplePeer gives the clock the time of the peer of a session this node dialed. Incoming sessions
+// never call it: anyone can open one (handshake.md section 7).
 func (r *Runtime) samplePeer(est *session.Established) {
 	if est == nil || est.Peer == nil || est.PeerTime == 0 {
 		return
 	}
-	r.clock.AddPeerSample(clock.PeerID(est.Peer.DeviceID), time.Unix(int64(est.PeerTime), 0))
+	r.clock.AddOutgoingSample(est.Remote.Addr(), time.Unix(int64(est.PeerTime), 0))
 }
 
 // cardSource is Host.Cards over the card builder and the persistent card book.

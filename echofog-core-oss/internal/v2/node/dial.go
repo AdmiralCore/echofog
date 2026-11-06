@@ -233,7 +233,6 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	onEstablished, onPathFailed := r.pathHooks()
 	opts = append(opts,
 		session.WithClock(r.carrierClock),
-		session.WithOffset(r.clock.Offset()),
 		session.WithBindings(r.bindings),
 		session.WithPolicy(r.policyFunc),
 		session.WithCarrierFunc(carrierFn),
