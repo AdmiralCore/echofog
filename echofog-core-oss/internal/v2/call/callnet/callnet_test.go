@@ -285,3 +285,29 @@ func TestDeliverBucketsAreBounded(t *testing.T) {
 		t.Fatalf("%d buckets kept, limit %d", len(tr.rate), maxSources)
 	}
 }
+
+func TestCallAuthIsMediaForRouteAdmitAndRate(t *testing.T) {
+	l := &fakeLink{kinds: map[mux.PathKind]int{mux.PathDirect: 1, mux.PathRelay: 1}}
+	tr, _ := newT(links{dev(2): l}, route.Relay)
+	if err := tr.SendUnreliableFrame(dev(2), transport.MediaAuth, []byte("auth")); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.out) != 1 || l.out[0].typ != frame.DgramCallAuth || l.out[0].kind != mux.PathRelay {
+		t.Fatalf("%+v", l.out)
+	}
+	if err := tr.SendRawFrame(dev(2), transport.MediaAuth, []byte("auth")); !errors.Is(err, ErrMediaNeedsDatagram) {
+		t.Fatalf("reliable auth: %v", err)
+	}
+
+	r := route.Relay
+	admit := map[[32]byte]bool{dev(4): true}
+	rx := New(Config{Links: links{}, Route: func() route.Route { return r }, Admit: func(d [32]byte) bool { return admit[d] }})
+	n := 0
+	rx.RegisterFastFrameHandler(transport.MediaAuth, func([]byte, types.PeerID) error { n++; return nil })
+	rx.Deliver(Inbound{Device: dev(4), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathRelay})
+	rx.Deliver(Inbound{Device: dev(4), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathDirect}) // forbidden kind
+	rx.Deliver(Inbound{Device: dev(8), Type: frame.DgramCallAuth, Payload: []byte("a"), Path: mux.PathRelay}) // stranger
+	if n != 1 {
+		t.Fatalf("%d authenticators reached the call layer, want 1; stats %+v", n, rx.Stats())
+	}
+}
