@@ -83,8 +83,16 @@ func ParseConfig(b []byte) (*Config, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: data after the configuration", ErrConfig)
 	}
-	if len(c.Roles) == 0 {
+	// An absent "roles" means the defaults; a present one, even empty, is what the operator chose
+	// (T12.4a acceptance M1). null is neither.
+	var probe map[string]json.RawMessage
+	_ = json.Unmarshal(b, &probe)
+	if raw, present := probe["roles"]; !present {
 		c.Roles = DefaultConfig().Roles
+	} else if string(bytes.TrimSpace(raw)) == "null" {
+		return nil, fmt.Errorf("%w: roles is null; use [] to switch every role off", ErrConfig)
+	} else if c.Roles == nil {
+		c.Roles = []string{}
 	}
 	if c.Operator.Addr == "" {
 		c.Operator.Addr = DefaultConfig().Operator.Addr

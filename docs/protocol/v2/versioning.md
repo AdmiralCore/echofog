@@ -38,6 +38,8 @@ name (`EchoFog/3/…`).
    - Unknown frame type without IGNORABLE → `CLOSE{unknown-frame}` of that stream only.
    - Unknown protobuf field → skipped (and preserved in signed bodies).
    - Unknown feature, suite, algorithm tag, DHT record kind → ignored, or stored under quota (DHT).
+   - Unknown conversation-log event kind → stored, synced, forwarded unchanged, shown as a
+     placeholder (§3.9).
    - None of these may raise an abuse score. Abuse scoring applies only to frames that are
      malformed for a *known* type.
 3. **Refusals are explained** inside the encrypted channel before closing:
@@ -144,6 +146,29 @@ name (`EchoFog/3/…`).
   (hybrid). Because node IDs hash the tagged key, the hybrid identity has a new node ID; the old
   identity vouches for the new one with a device list (`echofog/devices/2`) signed by both. The
   details are left to the version that introduces the algorithm.
+
+### 3.9 Unknown event kinds of the conversation log
+
+Later versions add event kinds to the conversation log (polls, tags, wiki pages). The event layout and
+the kinds are in `echofog-core-oss/docs/design/conversation-log.md` (§2.5). A client that does not know
+an event's `kind` MUST:
+
+1. **Store** the event with all its fields, its `body` bytes as received, and its signature.
+2. **Sync** it as an ordinary event: it counts in the version vector and in the digest exactly as a
+   known event does, and anti-entropy transfers it the same way.
+3. **Forward** it unchanged to other participants and to holders (mailboxes, relays, stores). It sends
+   the stored bytes: it MUST NOT re-encode the event, drop unknown fields, or alter the signature
+   (rule 3 of §3.5).
+4. **Show a placeholder, not the content.** The view renders the neutral text
+   «Сообщение из новой версии приложения — обновите приложение» and offers a way to hide it. The
+   `body` is neither decoded nor displayed.
+5. **Not fail.** An unknown `kind` or unknown field never makes parsing or the view fail, never drops
+   the event, and never raises an abuse score (§2, rule 2).
+6. **Keep the limits.** Size limits and per-conversation quotas apply to an unknown kind exactly as to
+   a known one.
+
+Conformance for the v2 log is tested in T7.5a: an event with an unknown kind is stored, synced,
+forwarded byte-for-byte with its signature, and rendered as the placeholder without a crash.
 
 ## 4. Dual stack for future major versions
 
