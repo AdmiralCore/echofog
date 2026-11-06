@@ -134,6 +134,10 @@ type JoinPayload struct {
 	// SK is the member's Ed25519 key for this call, fresh per call: it signs every media unit the
 	// member sends under a key handed out to members that all have one. Older nodes send none.
 	SK []byte `json:"sk,omitempty"`
+	// JoinSalt is 16 fresh random bytes per join: with the epoch secret and the member's ID it
+	// derives the member's media sender key on call/2 (media v3, services.md 9.2). Nothing reads it
+	// on v1.
+	JoinSalt []byte `json:"join_salt,omitempty"`
 }
 
 // MediaKeyPayload carries a new media key for one member: Eph is the coordinator's ephemeral

@@ -121,6 +121,8 @@ type Datagram struct {
 	Type    uint64
 	Payload []byte
 	Path    uint64
+	// Kind is the kind of the path the datagram arrived on.
+	Kind PathKind
 }
 
 // SessionStats counts dropped input.
@@ -1019,6 +1021,10 @@ func (s *Session) SendDatagram(typ uint64, payload []byte) error {
 	if p == nil {
 		return ErrNoPath
 	}
+	return s.sendDatagramOn(p, typ, payload)
+}
+
+func (s *Session) sendDatagramOn(p *path, typ uint64, payload []byte) error {
 	d := frame.AppendDatagram(nil, typ, payload)
 	if p.sealedDatagrams() {
 		sealed, err := s.sealer.Seal(nil, d, ClassDatagram, p.id, 0)
@@ -1101,7 +1107,7 @@ func (s *Session) datagramLoop(p *path) {
 			continue
 		}
 		select {
-		case s.dgrams <- Datagram{Type: typ, Payload: payload, Path: p.id}:
+		case s.dgrams <- Datagram{Type: typ, Payload: payload, Path: p.id, Kind: p.kind}:
 		default:
 			s.count(func(st *SessionStats) { st.DatagramsDropped++ })
 		}
@@ -1294,4 +1300,49 @@ func (s *Session) addOnClose(f func()) {
 	if closed {
 		f()
 	}
+}
+
+// ErrNoPathKind: the session has no live path of the requested kind (SendDatagramVia).
+var ErrNoPathKind = errors.New("mux: session has no live path of that kind")
+
+// PathKinds returns the number of live paths per kind.
+func (s *Session) PathKinds() map[PathKind]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[PathKind]int{}
+	for _, p := range s.paths {
+		if !p.isDead() {
+			out[p.kind]++
+		}
+	}
+	return out
+}
+
+// SendDatagramVia sends a datagram on a live path of the given kind, never on another kind
+// (T9.3: a call route that forbids direct paths must not fall back to one). Without such a path
+// it returns ErrNoPathKind and sends nothing. The nonce counter is the session's one counter, so
+// datagrams alternating over several paths never reuse a value (wire.md 8.4).
+func (s *Session) SendDatagramVia(kind PathKind, typ uint64, payload []byte) error {
+	s.mu.Lock()
+	p := s.pickKindLocked(kind)
+	s.mu.Unlock()
+	if p == nil {
+		return ErrNoPathKind
+	}
+	return s.sendDatagramOn(p, typ, payload)
+}
+
+// pickKindLocked returns the best live path of a kind: a healthy one before a failing one, the
+// active path if it is of the kind, else the lowest RTT.
+func (s *Session) pickKindLocked(kind PathKind) *path {
+	var best *path
+	for _, p := range s.paths {
+		if p.isDead() || p.kind != kind {
+			continue
+		}
+		if best == nil || (best.failing && !p.failing) || (best.failing == p.failing && better(p, best)) {
+			best = p
+		}
+	}
+	return best
 }
