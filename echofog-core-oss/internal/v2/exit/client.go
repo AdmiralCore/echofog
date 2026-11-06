@@ -38,6 +38,9 @@ type ClientConfig struct {
 	Sleep func(time.Duration)
 	// Clock times the reassembly of EXIT_UDP fragments (AD13); nil means the system clock.
 	Clock carrier.Clock
+	// NoCamouflage says the exit's card has no camouflaged address: a failure to reach it is then
+	// reported as ReasonNoCamouflage instead of ReasonNoPath.
+	NoCamouflage bool
 	// OnClose runs once when the client is closed (it releases the datagram port).
 	OnClose func()
 }
