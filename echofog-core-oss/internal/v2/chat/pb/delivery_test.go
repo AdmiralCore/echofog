@@ -169,7 +169,7 @@ func TestParsePersonal(t *testing.T) {
 
 func goodInner() *Inner {
 	return &Inner{Sender: append([]byte{1}, bytes.Repeat([]byte{7}, 32)...), Device: append([]byte{1}, bytes.Repeat([]byte{8}, 32)...),
-		Id: bytes.Repeat([]byte{9}, 16), Time: 1760000000, Body: &Inner_Ratchet{Ratchet: []byte("secure message")}}
+		Id: bytes.Repeat([]byte{9}, 16), Time: 1760000000, Ratchet: []byte("secure message")}
 }
 
 func TestParseInner(t *testing.T) {
@@ -181,9 +181,10 @@ func TestParseInner(t *testing.T) {
 		ok   bool
 	}{
 		{"ratchet body", mustMarshal(t, goodInner()), true},
-		{"init body", mod(func(i *Inner) { i.Body = &Inner_PqxdhInit{PqxdhInit: []byte("init")} }), true},
-		{"no body", mod(func(i *Inner) { i.Body = nil }), false},
-		{"empty ratchet body", mod(func(i *Inner) { i.Body = &Inner_Ratchet{} }), false},
+		{"init body", mod(func(i *Inner) { i.Ratchet, i.PqxdhInit = nil, []byte("init") }), true},
+		{"no body", mod(func(i *Inner) { i.Ratchet = nil }), false},
+		{"both bodies", mod(func(i *Inner) { i.PqxdhInit = []byte("x") }), false},
+		{"empty ratchet body", mod(func(i *Inner) { i.Ratchet = []byte{} }), false},
 		{"short sender", mod(func(i *Inner) { i.Sender = i.Sender[:32] }), false},
 		{"no device", mod(func(i *Inner) { i.Device = nil }), false},
 		{"short id", mod(func(i *Inner) { i.Id = i.Id[:15] }), false},
@@ -227,11 +228,14 @@ func TestEnvelopeVectorBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var all map[string]map[string]any
+	var all map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &all); err != nil {
 		t.Fatal(err)
 	}
-	v := all["chat2_seal"]
+	var v map[string]any
+	if err := json.Unmarshal(all["chat2_seal"], &v); err != nil {
+		t.Fatal(err)
+	}
 	h := func(k string) []byte {
 		b, err := hex.DecodeString(v[k].(string))
 		if err != nil {

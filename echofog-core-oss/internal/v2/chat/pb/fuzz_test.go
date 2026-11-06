@@ -46,3 +46,33 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseDelivery covers the decoders of the delivery messages: no panic, and what parses
+// re-encodes to something that parses again.
+func FuzzParseDelivery(f *testing.F) {
+	for _, s := range personalSamples(f) {
+		f.Add(s)
+	}
+	pad, _ := PadPersonal(&PersonalMessageProto{Id: "x", Text: "hi"})
+	f.Add(pad)
+	f.Add(mustMarshal(f, goodInner()))
+	f.Add(mustMarshal(f, &SealedEnvelope{To: rep(1, 32), Eph: rep(2, 32), Box: rep(3, 40)}))
+
+	f.Fuzz(func(t *testing.T, b []byte) {
+		if m, err := ParsePersonal(b); err == nil {
+			if _, err := ParsePersonal(mustMarshal(t, m)); err != nil {
+				t.Fatalf("re-encoding of a parsed message does not parse: %v", err)
+			}
+		}
+		if m, err := ParseInner(b); err == nil {
+			if _, err := ParseInner(mustMarshal(t, m)); err != nil {
+				t.Fatalf("re-encoding of a parsed inner does not parse: %v", err)
+			}
+		}
+		if m, err := ParseSealedEnvelope(b); err == nil {
+			if _, err := ParseSealedEnvelope(mustMarshal(t, m)); err != nil {
+				t.Fatalf("re-encoding of a parsed envelope does not parse: %v", err)
+			}
+		}
+	})
+}

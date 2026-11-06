@@ -475,12 +475,12 @@ type Inner struct {
 	Sender []byte                 `protobuf:"bytes,1,opt,name=sender,proto3" json:"sender,omitempty"` // akey of the sender's account key
 	Id     []byte                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`         // 16-byte message ID
 	Time   uint64                 `protobuf:"varint,3,opt,name=time,proto3" json:"time,omitempty"`
-	// Types that are valid to be assigned to Body:
-	//
-	//	*Inner_PqxdhInit
-	//	*Inner_Ratchet
-	Body          isInner_Body `protobuf_oneof:"body"`
-	Device        []byte       `protobuf:"bytes,6,opt,name=device,proto3" json:"device,omitempty"` // akey of the sending device key
+	// Exactly one of pqxdh_init and ratchet is set (the parser checks it). They are plain fields, not
+	// a oneof: the Go encoder writes oneof members last, after device (6), which the canonical
+	// encoding forbids. The wire format is the same as the spec's oneof.
+	PqxdhInit     []byte `protobuf:"bytes,4,opt,name=pqxdh_init,json=pqxdhInit,proto3" json:"pqxdh_init,omitempty"` // an X3DHInit message
+	Ratchet       []byte `protobuf:"bytes,5,opt,name=ratchet,proto3" json:"ratchet,omitempty"`                      // a SecureMessage
+	Device        []byte `protobuf:"bytes,6,opt,name=device,proto3" json:"device,omitempty"`                        // akey of the sending device key
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -536,27 +536,16 @@ func (x *Inner) GetTime() uint64 {
 	return 0
 }
 
-func (x *Inner) GetBody() isInner_Body {
-	if x != nil {
-		return x.Body
-	}
-	return nil
-}
-
 func (x *Inner) GetPqxdhInit() []byte {
 	if x != nil {
-		if x, ok := x.Body.(*Inner_PqxdhInit); ok {
-			return x.PqxdhInit
-		}
+		return x.PqxdhInit
 	}
 	return nil
 }
 
 func (x *Inner) GetRatchet() []byte {
 	if x != nil {
-		if x, ok := x.Body.(*Inner_Ratchet); ok {
-			return x.Ratchet
-		}
+		return x.Ratchet
 	}
 	return nil
 }
@@ -567,22 +556,6 @@ func (x *Inner) GetDevice() []byte {
 	}
 	return nil
 }
-
-type isInner_Body interface {
-	isInner_Body()
-}
-
-type Inner_PqxdhInit struct {
-	PqxdhInit []byte `protobuf:"bytes,4,opt,name=pqxdh_init,json=pqxdhInit,proto3,oneof"` // an X3DHInit message
-}
-
-type Inner_Ratchet struct {
-	Ratchet []byte `protobuf:"bytes,5,opt,name=ratchet,proto3,oneof"` // a SecureMessage
-}
-
-func (*Inner_PqxdhInit) isInner_Body() {}
-
-func (*Inner_Ratchet) isInner_Body() {}
 
 type PersonalMessageProto struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -999,16 +972,15 @@ const file_internal_v2_chat_pb_chat_proto_rawDesc = "" +
 	"\x0eSealedEnvelope\x12\x0e\n" +
 	"\x02to\x18\x01 \x01(\fR\x02to\x12\x10\n" +
 	"\x03eph\x18\x02 \x01(\fR\x03eph\x12\x10\n" +
-	"\x03box\x18\x03 \x01(\fR\x03box\"\xa0\x01\n" +
+	"\x03box\x18\x03 \x01(\fR\x03box\"\x94\x01\n" +
 	"\x05Inner\x12\x16\n" +
 	"\x06sender\x18\x01 \x01(\fR\x06sender\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\fR\x02id\x12\x12\n" +
-	"\x04time\x18\x03 \x01(\x04R\x04time\x12\x1f\n" +
+	"\x04time\x18\x03 \x01(\x04R\x04time\x12\x1d\n" +
 	"\n" +
-	"pqxdh_init\x18\x04 \x01(\fH\x00R\tpqxdhInit\x12\x1a\n" +
-	"\aratchet\x18\x05 \x01(\fH\x00R\aratchet\x12\x16\n" +
-	"\x06device\x18\x06 \x01(\fR\x06deviceB\x06\n" +
-	"\x04body\"\x90\x03\n" +
+	"pqxdh_init\x18\x04 \x01(\fR\tpqxdhInit\x12\x18\n" +
+	"\aratchet\x18\x05 \x01(\fR\aratchet\x12\x16\n" +
+	"\x06device\x18\x06 \x01(\fR\x06device\"\x90\x03\n" +
 	"\x14PersonalMessageProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x128\n" +
@@ -1093,10 +1065,6 @@ func init() { file_internal_v2_chat_pb_chat_proto_init() }
 func file_internal_v2_chat_pb_chat_proto_init() {
 	if File_internal_v2_chat_pb_chat_proto != nil {
 		return
-	}
-	file_internal_v2_chat_pb_chat_proto_msgTypes[6].OneofWrappers = []any{
-		(*Inner_PqxdhInit)(nil),
-		(*Inner_Ratchet)(nil),
 	}
 	file_internal_v2_chat_pb_chat_proto_msgTypes[8].OneofWrappers = []any{
 		(*Control_Knock)(nil),
