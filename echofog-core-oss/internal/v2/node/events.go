@@ -38,6 +38,9 @@ const (
 	// EventNoDomesticEntry: the country policy needs an entry node in the own country and there is
 	// none (or none verified); Event.Err is ErrNoDomesticEntry or ErrRouteUnsupported (T6.4).
 	EventNoDomesticEntry EventKind = "node.no-domestic-entry"
+	// EventPortMapping: the set of ports the router forwards for this node changed and the cards
+	// follow it (T6.5b). The message never carries addresses.
+	EventPortMapping EventKind = "node.port-mapping"
 	// EventListenerStopped: an accept loop stopped on a local error and the node no longer
 	// accepts on that listener (T3.7a risk 3).
 	EventListenerStopped EventKind = "node.listener-stopped"

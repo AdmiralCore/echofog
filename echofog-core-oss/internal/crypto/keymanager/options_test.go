@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"testing"
 
@@ -118,30 +119,33 @@ func TestIdentityKeySourceIsParameter(t *testing.T) {
 	}
 }
 
-// The default account still derives the X3DH identity DH key at index 1' of the account.
+// The default account still derives the X3DH identity DH key at index 1' of the account. The
+// expected bytes are fixed: SLIP-0010 m/44'/999'/0'/1' from the root bytes 0x00..0x3f, worked out
+// by hand with HMAC-SHA512 outside this code (the key is that of v0.2.0, a node that changed it
+// would lose every contact), not derived by the code under test.
 func TestDefaultIdentityKeyIsTheAccountDerivation(t *testing.T) {
 	defer memguard.Purge()
 
-	acc, err := NewKeyManager(newRoot(t), &mockStorage{data: map[string][]byte{}}).GetAccount(0)
+	const (
+		wantPriv = "25b6384a2b2e5944698a2c3e675e012941c6f78411e63e76d4cdb5c79fc1ed3a"
+		wantPub  = "b3c3c8bbe0b97d3e2c88ef0b8b2a4ffbd5a2c7acb791f3d69005b54d0a86d907"
+	)
+	root := make([]byte, 64)
+	for i := range root {
+		root[i] = byte(i)
+	}
+	acc, err := NewKeyManager(root, &mockStorage{data: map[string][]byte{}}).GetAccount(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedEnc, _, err := deriveSecureSLIP0010(acc.AccountKey, acc.AccountCC, HardenedIndexStandard+EncryptionKeyIndex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var priv, want [32]byte
-	copy(priv[:], openBytes(t, seedEnc))
-	curve25519.ScalarBaseMult(&want, &priv)
-
 	gotEnc, gotPub, err := acc.GetEncryptionKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(openBytes(t, gotEnc), priv[:]) {
-		t.Fatal("the default identity key is not the account derivation")
+	if got := hex.EncodeToString(openBytes(t, gotEnc)); got != wantPriv {
+		t.Fatalf("the default identity key changed: %s", got)
 	}
-	if !bytes.Equal(gotPub, want[:]) {
-		t.Fatal("the default identity public key is not the account derivation")
+	if got := hex.EncodeToString(gotPub); got != wantPub {
+		t.Fatalf("the default identity public key changed: %s", got)
 	}
 }

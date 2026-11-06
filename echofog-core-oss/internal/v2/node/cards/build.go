@@ -194,6 +194,9 @@ func validateListener(l Listener) error {
 		}
 		return nil
 	}
+	if l.PublicPort > 65535 {
+		return fmt.Errorf("public port %d", l.PublicPort)
+	}
 	if l.Host == "" || l.Port == 0 || l.Port > 65535 {
 		return fmt.Errorf("host and port required")
 	}
@@ -377,6 +380,9 @@ func addrFromListener(l Listener) (*pb.Addr, error) {
 	} else {
 		a.Host = l.Host
 		a.Port = l.Port
+		if l.PublicPort != 0 {
+			a.Port = l.PublicPort
+		}
 	}
 	sp := &pb.SuiteParams{Sni: l.SNI}
 	if l.Shape != nil {
