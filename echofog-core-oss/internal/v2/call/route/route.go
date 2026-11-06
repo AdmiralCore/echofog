@@ -10,6 +10,7 @@ package route
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/echofog/echofog-core/internal/v2/mux"
 )
@@ -47,7 +48,15 @@ func (r Route) String() string {
 
 // Parse reads a call_route setting. The empty string means auto.
 func Parse(s string) (Route, error) {
-	return Auto, nil
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "auto":
+		return Auto, nil
+	case "direct":
+		return Direct, nil
+	case "relay":
+		return Relay, nil
+	}
+	return Auto, fmt.Errorf("%w: %q", ErrBadRoute, s)
 }
 
 // Link is the part of a session the policy needs. *mux.Session satisfies it.
@@ -58,7 +67,27 @@ type Link interface {
 
 // Choose returns the kind of path the policy picks given the live paths, or ErrNoPath.
 func Choose(r Route, kinds map[mux.PathKind]int) (mux.PathKind, error) {
-	return mux.PathDirect, nil
+	direct, relay := kinds[mux.PathDirect] > 0, kinds[mux.PathRelay] > 0
+	switch r {
+	case Auto:
+		switch {
+		case direct:
+			return mux.PathDirect, nil
+		case relay:
+			return mux.PathRelay, nil
+		}
+	case Direct:
+		if direct {
+			return mux.PathDirect, nil
+		}
+	case Relay:
+		if relay {
+			return mux.PathRelay, nil
+		}
+	default:
+		return 0, fmt.Errorf("%w: %d", ErrBadRoute, uint8(r))
+	}
+	return 0, ErrNoPath
 }
 
 // Send sends one datagram on the path kind the policy picks and reports the kind used. The
@@ -66,11 +95,18 @@ func Choose(r Route, kinds map[mux.PathKind]int) (mux.PathKind, error) {
 // with mux.ErrNoPathKind, and the datagram is lost (datagrams are best effort), never sent on
 // another kind.
 func Send(r Route, l Link, typ uint64, payload []byte) (mux.PathKind, error) {
-	return mux.PathDirect, l.SendDatagramVia(mux.PathDirect, typ, payload)
+	k, err := Choose(r, l.PathKinds())
+	if err != nil {
+		return 0, err
+	}
+	if err := l.SendDatagramVia(k, typ, payload); err != nil {
+		return 0, err
+	}
+	return k, nil
 }
 
 // OnlyRelayed reports whether the live paths are relay paths only: the peer is reached through a
 // relay and not directly. A session with no live path is not "relayed".
 func OnlyRelayed(kinds map[mux.PathKind]int) bool {
-	return false
+	return kinds[mux.PathRelay] > 0 && kinds[mux.PathDirect] == 0
 }
