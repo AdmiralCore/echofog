@@ -34,7 +34,7 @@ func rec(t testing.TB, seconds int) Recording {
 	return Recording{Ogg: clip(t, seconds), Levels: levels(seconds * 50)}
 }
 
-func metaOf(t testing.TB, m *chatpb.PersonalMessageProto) Meta {
+func metaFrom(t testing.TB, m *chatpb.PersonalMessageProto) Meta {
 	t.Helper()
 	raw, err := base64.RawURLEncoding.Strict().DecodeString(m.Metadata)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestComposeInlineAndFile(t *testing.T) {
 	if short.Share != nil || short.Message.Type != chatpb.PersonalMessageType_MSG_TYPE_VOICE {
 		t.Fatalf("10 s: share=%v type=%v, want an inline voice message", short.Share != nil, short.Message.Type)
 	}
-	if m := metaOf(t, short.Message); m.Offer != nil || len(m.Inline) != len(short.Audio) || m.DurationMS != 10_000 {
+	if m := metaFrom(t, short.Message); m.Offer != nil || len(m.Inline) != len(short.Audio) || m.DurationMS != 10_000 {
 		t.Fatalf("inline meta: %+v", m)
 	}
 	if _, err := chatpb.PadPersonal(short.Message); err != nil {
@@ -76,7 +76,7 @@ func TestComposeInlineAndFile(t *testing.T) {
 		if o.Mime != MIME || o.Name != FileName || o.Size != uint64(len(d.Audio)) || o.Sender != alice {
 			t.Fatalf("%d s: offer %+v", secs, o)
 		}
-		m := metaOf(t, d.Message)
+		m := metaFrom(t, d.Message)
 		if m.Offer == nil || *m.Offer != o || m.Inline != nil {
 			t.Fatalf("%d s: the message does not carry the offer", secs)
 		}
@@ -96,7 +96,11 @@ func TestInlineLimitFitsTheLargestBucket(t *testing.T) {
 	// find the largest clip with at most MaxInlineAudio bytes
 	for p := 100; ; p++ {
 		o.packets = p
-		if len(buildOgg(o)) > MaxInlineAudio {
+		clean, _, err := Sanitize(buildOgg(o))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(clean) > MaxInlineAudio {
 			o.packets = p - 1
 			break
 		}
@@ -129,7 +133,7 @@ func TestComposeRefuses(t *testing.T) {
 	if _, err := Compose(Recording{Ogg: over, Levels: levels(301 * 50)}, alice, [][32]byte{bob}); !errors.Is(err, ErrTooLong) {
 		t.Fatalf("301 s: %v", err)
 	}
-	if _, err := Compose(rec(t, 5), alice, nil); err == nil {
+	if _, err := Compose(rec(t, 40), alice, nil); err == nil {
 		t.Fatal("a file clip without recipients was accepted")
 	}
 	// a heavy clip (a stream far above 32 kbit/s) is not a voice message
@@ -171,7 +175,11 @@ func TestComposeLeaksNothing(t *testing.T) {
 }
 
 func TestWaveform(t *testing.T) {
-	w := Waveform(levels(500), WavePoints)
+	rising := make([]byte, 500)
+	for i := range rising {
+		rising[i] = byte(i * 255 / 500)
+	}
+	w := Waveform(rising, WavePoints)
 	if len(w) != WavePoints {
 		t.Fatalf("%d points", len(w))
 	}
@@ -196,7 +204,7 @@ func TestWaveform(t *testing.T) {
 func wave(n int) []byte { return bytes.Repeat([]byte{7}, n) }
 
 func goodOffer() files.Offer {
-	return files.Offer{FID: [16]byte{1}, Size: 100_000, Root: [32]byte{2}, ChunkSize: files.ChunkSize, Name: FileName, Mime: MIME, Sender: alice}
+	return files.Offer{FID: [16]byte{1}, Size: 20_000, Root: [32]byte{2}, ChunkSize: files.ChunkSize, Name: FileName, Mime: MIME, Sender: alice}
 }
 
 func rawMeta(fields ...[]byte) []byte {

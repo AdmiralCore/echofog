@@ -9,7 +9,7 @@ import (
 // A fake codec: the "packets" are arbitrary bytes, the container is a real Ogg Opus stream
 // (RFC 3533, RFC 7845). The tests never decode audio.
 
-var crcTab = func() (t [256]uint32) {
+var refTab = func() (t [256]uint32) {
 	for i := range t {
 		r := uint32(i) << 24
 		for j := 0; j < 8; j++ {
@@ -24,10 +24,10 @@ var crcTab = func() (t [256]uint32) {
 	return
 }()
 
-func oggCRC(b []byte) uint32 {
+func refCRC(b []byte) uint32 {
 	var c uint32
 	for _, x := range b {
-		c = c<<8 ^ crcTab[byte(c>>24)^x]
+		c = c<<8 ^ refTab[byte(c>>24)^x]
 	}
 	return c
 }
@@ -80,7 +80,7 @@ func page(typ byte, granule int64, serial, seq uint32, packets ...[]byte) []byte
 	binary.LittleEndian.PutUint32(h[18:], seq)
 	h[26] = byte(len(segs))
 	out := append(append(h, segs...), body...)
-	binary.LittleEndian.PutUint32(out[22:], oggCRC(out))
+	binary.LittleEndian.PutUint32(out[22:], refCRC(out))
 	return out
 }
 
