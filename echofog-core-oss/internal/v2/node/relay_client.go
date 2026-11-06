@@ -83,7 +83,7 @@ func hopOf(est *session.Established) relay.Hop {
 // hops returns the relays to try to reach target, best first (relay.Choose): relays that carried the
 // last session to the same peer first, then the other connected relays, then relay cards from PEX
 // that have no session yet (N2; their Open dials first).
-func (c *relayClient) hops(target, targetDevice [32]byte) []relay.Hop {
+func (c *relayClient) hops(target, targetDevice [32]byte, keep func(*objects.Card) bool) []relay.Hop {
 	r := c.r
 	byNode := map[[32]byte]*session.Established{}
 	var cands []relay.Candidate
@@ -93,6 +93,12 @@ func (c *relayClient) hops(target, targetDevice [32]byte) []relay.Hop {
 		}
 		if est.Peer.NodeID == target || est.Peer.DeviceID == targetDevice {
 			continue
+		}
+		if keep != nil {
+			card, err := objects.VerifyCard(est.Peer.Raw, r.clock.Now())
+			if err != nil || !keep(card) {
+				continue
+			}
 		}
 		byNode[est.Peer.NodeID] = est
 		cands = append(cands, relay.Candidate{Node: est.Peer.NodeID, Device: est.Peer.DeviceID,
@@ -119,6 +125,9 @@ func (c *relayClient) hops(target, targetDevice [32]byte) []relay.Hop {
 				card.NodeID == target || card.DeviceID == targetDevice {
 				continue
 			}
+			if keep != nil && !keep(card) {
+				continue
+			}
 			if _, have := byNode[card.NodeID]; have {
 				continue
 			}
@@ -142,11 +151,17 @@ func (c *relayClient) hops(target, targetDevice [32]byte) []relay.Hop {
 // records only.
 func (r *Runtime) dialViaRelay(ctx context.Context, card *objects.Card, local session.LocalIdentity, opt DialOpt, extra []session.DialOption) (*session.Established, error) {
 	c := r.relayc
-	hops := c.hops(card.NodeID, card.DeviceID)
+	own, dest, dec := r.cardRoute(card)
+	keep := r.entryFilter(dec, own)
+	hops := c.hops(card.NodeID, card.DeviceID, keep)
 	if len(hops) == 0 {
+		if keep != nil {
+			return nil, r.noEntry()
+		}
 		return nil, relay.ErrNoRelay
 	}
-	co := relay.ConnectOptions{WantAddr: r.punchEnabled()}
+	punching := r.punchEnabled() && dec.UDP // the row of this peer may forbid UDP altogether (T6.4)
+	co := relay.ConnectOptions{WantAddr: punching}
 	target := card.NodeID
 	if len(local.AccessSecret) > 0 {
 		// A hidden or unlisted peer is registered under rendezvous IDs only (services.md §6.3).
@@ -166,7 +181,8 @@ func (r *Runtime) dialViaRelay(ctx context.Context, card *objects.Card, local se
 	c.mu.Lock()
 	c.lastRelay[card.DeviceID] = hop.Device
 	c.mu.Unlock()
-	if r.punchEnabled() && est.Session.HasFeature(frame.FeaturePathMigration) {
+	r.noteRoute(card.DeviceID, dec, dest, keep != nil)
+	if punching && est.Session.HasFeature(frame.FeaturePathMigration) {
 		var pa netip.AddrPort
 		if circ != nil {
 			pa = circ.PeerAddr()
@@ -183,7 +199,7 @@ func relayFallback(err error, opt DialOpt) bool {
 	if opt.Carrier != nil || opt.CarrierFunc != nil {
 		return false
 	}
-	return errors.Is(err, carrier.ErrNeedRelay) || errors.Is(err, errCarrierDial)
+	return errors.Is(err, carrier.ErrNeedRelay) || errors.Is(err, errCarrierDial) || errors.Is(err, errPolicyBlocked)
 }
 
 // errCarrierDial marks "no direct carrier could be opened" (the handshake never started).
@@ -208,7 +224,7 @@ func (c *relayClient) onIncoming(ctx context.Context, p relay.Peer, st *mux.Stre
 	}
 	in, err := relay.AnswerFrame(st, first, [32]byte(p.Node), nil, nil,
 		func(in relay.Incoming) bool { return in.Mode != relay.ModeDatagram },
-		func(relay.Incoming) bool { return r.punchEnabled() })
+		func(relay.Incoming) bool { return r.punchEnabled() && r.udpAllowedTo(netip.Addr{}) })
 	if err != nil || in.Stream == nil {
 		return
 	}
@@ -319,12 +335,16 @@ func (c *relayClient) allowed(ps *punchState) bool {
 		return false
 	}
 	rl := c.rules(ps)
-	if rl.PeerIP.IsValid() && rl.OwnIP.IsValid() && rl.PeerIP.Unmap() == rl.OwnIP.Unmap() {
-		return true
-	}
 	ip := rl.PeerIP
 	if !ip.IsValid() && len(rl.CardIPs) > 0 {
 		ip = rl.CardIPs[0]
+	}
+	// The country policy first: a row with udp=false forbids punching even behind one NAT.
+	if !r.udpAllowedTo(ip) {
+		return false
+	}
+	if rl.PeerIP.IsValid() && rl.OwnIP.IsValid() && rl.PeerIP.Unmap() == rl.OwnIP.Unmap() {
+		return true
 	}
 	if !ip.IsValid() {
 		return false
@@ -352,7 +372,7 @@ func (c *relayClient) onPunch(sess *mux.Session, f frame.Frame) {
 	ps := c.engines[sess]
 	c.mu.Unlock()
 	if ps == nil {
-		if !c.r.punchEnabled() {
+		if !c.r.punchEnabled() || !c.r.udpAllowedTo(netip.Addr{}) {
 			return
 		}
 		est := c.r.estOf(sess)

@@ -28,6 +28,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/pex"
 	"github.com/echofog/echofog-core/internal/v2/portmap"
+	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"github.com/echofog/echofog-core/internal/v2/shape"
@@ -46,6 +47,12 @@ var (
 	ErrPeerCard = errors.New("node: peer card does not match the device")
 	// ErrNoRoute means carrier.Plan found no usable direct attempt (relay is T6.1).
 	ErrNoRoute = errors.New("node: no carrier route to the peer")
+	// ErrNoDomesticEntry: the country policy requires a first hop inside the client's country and
+	// the node has none (T6.4). It is an event for the application, not a quiet degradation.
+	ErrNoDomesticEntry = errors.New("node: no entry node in the own country")
+	// ErrRouteUnsupported: the policy requires an entry in the client's country but the rules name
+	// no verified range (allowed_cidrs), so v2.0 does not support this network (T6.4, H14).
+	ErrRouteUnsupported = errors.New("node: v2.0 does not support this network without a verified entry")
 	// ErrNoSession means a path operation needs a live session to the peer.
 	ErrNoSession = errors.New("node: no live session to the peer")
 	// ErrTooManyPaths means the platform or the standby limit forbids another path now.
@@ -132,6 +139,11 @@ type Config struct {
 	RetryAfter uint32
 	// Country is the offline GeoIP lookup; nil means internal/v2/geoip.
 	Country func(netip.Addr) (string, bool)
+	// RoutePolicy is the country policy table (T6.4); nil means the built-in table.
+	RoutePolicy *routepolicy.Rules
+	// NetClass is the initial kind of the client's network (user setting or the platform report);
+	// the application changes it with SetNetClass. Unknown counts as wired.
+	NetClass routepolicy.NetClass
 	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
 	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
 	ShapeProfile *shape.Profile
@@ -160,6 +172,12 @@ type Runtime struct {
 	services     *service.Registry
 	localInfo    carrier.LocalInfo
 	relayc       *relayClient
+
+	// rules is the country policy table; netClass the kind of the client's network (T6.4).
+	rules     *routepolicy.Rules
+	netClass  atomic.Uint32
+	routeMu   sync.Mutex
+	routeInfo map[DeviceID]RouteReport
 
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
@@ -302,7 +320,12 @@ func New(cfg Config) (*Runtime, error) {
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
 		background:   cfg.Profile.Background,
+		rules:        cfg.RoutePolicy,
 	}
+	if r.rules == nil {
+		r.rules = routepolicy.Default()
+	}
+	r.netClass.Store(uint32(cfg.NetClass))
 	r.hsSem = make(chan struct{}, maxHandshaking)
 	r.dgrams = newDatagramBroker(r)
 	r.accessMgr = cfg.Access

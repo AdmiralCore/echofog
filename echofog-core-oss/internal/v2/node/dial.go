@@ -91,9 +91,17 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 		}
 		est, err := r.dial(ctx, card, local, opt, extra)
 		if err != nil && ctx.Err() == nil && relayFallback(err, opt) {
-			if viaRelay, rerr := r.dialViaRelay(ctx, card, local, opt, extra); rerr == nil {
+			viaRelay, rerr := r.dialViaRelay(ctx, card, local, opt, extra)
+			if rerr == nil {
 				return viaRelay, nil
 			}
+			if errors.Is(rerr, ErrNoDomesticEntry) || errors.Is(rerr, ErrRouteUnsupported) {
+				return nil, rerr
+			}
+		}
+		if err == nil && opt.Carrier == nil && opt.CarrierFunc == nil && opt.CarrierCard == nil {
+			_, dest, dec := r.cardRoute(card)
+			r.noteRoute(card.DeviceID, dec, dest, false)
 		}
 		return est, err
 	})
@@ -137,6 +145,16 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	if len(attempts) == 0 && card != nil {
 		attempts = carrier.Plan(card, r.planInfo())
 	}
+	// The country policy (T6.4) drops the attempts the network class forbids. A relay circuit, an
+	// injected carrier and a bootstrap shell are not direct dials to a card address.
+	var probeBudget int
+	if card != nil && opt.Carrier == nil && opt.CarrierFunc == nil && opt.CarrierCard == nil {
+		var perr error
+		attempts, probeBudget, perr = r.applyRoutePolicy(card, attempts, opt.Probe)
+		if perr != nil {
+			return nil, perr
+		}
+	}
 	if len(attempts) == 0 {
 		if card == nil {
 			return nil, ErrNoRoute
@@ -145,6 +163,9 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	}
 
 	req := carrier.DialRequest{Card: carrierCard, DialContext: r.cfg.DialContext}
+	if probeBudget > 0 {
+		req.DialContext = r.probeDialContext(probeBudget)
+	}
 	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
 
 	var reserved []session.Pair
