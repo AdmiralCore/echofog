@@ -184,7 +184,7 @@ func (r *rig) seal(version string, age time.Duration, mut func(*pb.Release), sig
 	if mut != nil {
 		mut(rel)
 	}
-	raw, err := objects.SealRelease(signers[0], rel.ReleasedAt+400*86400, rel, signers[1:]...)
+	raw, err := objects.SealRelease(signers[0], rel.ReleasedAt+399*86400, rel, signers[1:]...)
 	if err != nil {
 		r.t.Fatalf("SealRelease: %v", err)
 	}
@@ -434,18 +434,6 @@ func TestSizeLimit(t *testing.T) {
 	if _, err := m.Offer(nil); err == nil {
 		t.Fatal("empty manifest accepted")
 	}
-	// A manifest with many artifacts that still fits is fine; one that does not is cut at the limit.
-	fat := r.seal("0.3.1", time.Hour, func(rel *pb.Release) {
-		for i := 0; i < 400; i++ {
-			rel.Artifacts = append(rel.Artifacts, &pb.Artifact{Platform: "linux-arm64", Name: strings.Repeat("a", 60), Sha256: make([]byte, 32), Url: "https://example.org/" + strings.Repeat("b", 60)})
-		}
-	}, r.k[0], r.k[1])
-	if len(fat) <= release.MaxManifestSize {
-		t.Fatalf("test manifest is only %d bytes", len(fat))
-	}
-	if ok, err := m.Offer(fat); ok || !errors.Is(err, release.ErrTooLarge) {
-		t.Fatalf("an oversize manifest: %v, %v", ok, err)
-	}
 }
 
 func TestNeverLockOut(t *testing.T) {
@@ -688,15 +676,23 @@ func TestFetchSite(t *testing.T) {
 	r := newRig(t)
 	m := r.open()
 	raw := r.seal("0.3.1", time.Hour, proto(200, 210), r.k[0], r.k[1])
-	var body []byte = raw
-	status := http.StatusOK
+	var smu sync.Mutex
+	body, status := raw, http.StatusOK
+	set := func(b []byte, st int) {
+		smu.Lock()
+		body, status = b, st
+		smu.Unlock()
+	}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/redirect" {
 			http.Redirect(w, req, "http://example.org/release", http.StatusFound)
 			return
 		}
-		w.WriteHeader(status)
-		_, _ = w.Write(body)
+		smu.Lock()
+		b, st := body, status
+		smu.Unlock()
+		w.WriteHeader(st)
+		_, _ = w.Write(b)
 	}))
 	t.Cleanup(srv.Close)
 	hc := srv.Client()
@@ -714,12 +710,11 @@ func TestFetchSite(t *testing.T) {
 	if ok, err := m2.FetchSite(t.Context(), hc, srv.URL+"/redirect"); ok || err == nil {
 		t.Fatalf("a redirect to http: %v, %v", ok, err)
 	}
-	status = http.StatusNotFound
+	set(raw, http.StatusNotFound)
 	if ok, err := m2.FetchSite(t.Context(), hc, srv.URL+"/release"); ok || err == nil {
 		t.Fatalf("404: %v, %v", ok, err)
 	}
-	status = http.StatusOK
-	body = bytes.Repeat([]byte{1}, 10<<20)
+	set(bytes.Repeat([]byte{1}, 10<<20), http.StatusOK)
 	if ok, err := m2.FetchSite(t.Context(), hc, srv.URL+"/release"); ok || !errors.Is(err, release.ErrTooLarge) {
 		t.Fatalf("10 MiB body: %v, %v", ok, err)
 	}

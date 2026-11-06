@@ -28,6 +28,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/pex"
 	"github.com/echofog/echofog-core/internal/v2/portmap"
+	"github.com/echofog/echofog-core/internal/v2/release"
 	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
@@ -94,6 +95,11 @@ type Config struct {
 	// manifest in pex/2, refuses peers below min_supported with REJECT{version} and reports
 	// available updates. Nil: no manifest handling.
 	ReleaseKeys []keys.AKey
+	// ReleaseSiteURL is the https URL of the manifest on the download page; empty disables that
+	// source (the DHT and pex/2 remain).
+	ReleaseSiteURL string
+	// ReleasePoll overrides the 24-hour poll interval of the DHT and the download page (tests).
+	ReleasePoll time.Duration
 	// GreaseInterval returns the delay before the next GREASE frame of a session (D18). Nil
 	// means a uniform random interval in [greaseMin, greaseMax]; tests inject a short one.
 	GreaseInterval func() time.Duration
@@ -231,6 +237,7 @@ type Runtime struct {
 	dht         *dht.Table
 	dhtServer   *dht.Server
 	dhtClient   *dht.Client
+	releaseM    *release.Manager
 	devList     ownDevices
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
@@ -410,6 +417,10 @@ func New(cfg Config) (*Runtime, error) {
 	}
 	r.cards = cardSource{builder: cfg.Cards, book: r.cardBook}
 
+	if r.releaseM, err = r.newReleaseManager(); err != nil {
+		return nil, fmt.Errorf("node: release manifest: %w", err)
+	}
+
 	peers, err := pex.Open(pex.Options{KV: cfg.Store.Store(pex.Namespace), Log: log, Now: r.clock.Now})
 	if err != nil {
 		return nil, fmt.Errorf("node: pex candidates: %w", err)
@@ -422,7 +433,8 @@ func New(cfg Config) (*Runtime, error) {
 		OwnCard:    r.ownPublicCard,
 		Now:        r.clock.Now,
 		Log:        log,
-		// Release stays nil until T4.5: release = true is not answered without a release store.
+		Release:    r.pexRelease(),
+		OnRelease:  r.pexOnRelease(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: pex service: %w", err)
@@ -567,6 +579,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 
 	r.modules.Do(r.registerModules)
+	if r.releaseM != nil {
+		r.wg.Add(1)
+		go r.releaseLoop(runCtx)
+	}
 	if err := r.startAccess(runCtx); err != nil {
 		r.cleanupAfterStartFailure()
 		return fmt.Errorf("node: access listeners: %w", err)

@@ -82,8 +82,12 @@ type Config struct {
 	SelfDevice [32]byte
 	// OwnCard returns the node's current verified public card, or nil when it has none (D37).
 	OwnCard func(now time.Time) *objects.Card
-	// Release returns the release manifest to hand out for release = true. Nil until T4.5.
+	// Release returns the release manifest to hand out for release = true. Nil: none is held.
 	Release func() []byte
+	// OnRelease receives the release manifest of a CARDS answer. When set, the lazy client asks
+	// for it (release = true). The callback verifies; the bytes are untrusted and at most one
+	// frame long.
+	OnRelease func(raw []byte)
 	// Now is the corrected clock (AD13) for card verification and the 24-hour confirmation. Nil
 	// means time.Now.
 	Now func() time.Time
@@ -320,7 +324,7 @@ func (s *Service) Ask(ctx context.Context, sess Session, lowPower bool) error {
 		st.SetLimiter(spec.Versions[Version].Limiter())
 	}
 
-	req := Request{Max: MaxCards}
+	req := Request{Max: MaxCards, Release: s.cfg.OnRelease != nil}
 	if !s.cfg.Store.HasRelay() {
 		// No relay among the working peers: ask specifically for relay cards.
 		req.WantFlags = objects.FlagRelay
@@ -367,7 +371,9 @@ func (s *Service) Ask(ctx context.Context, sess Session, lowPower bool) error {
 			}
 			s.cfg.Store.AddCandidate(c, now)
 		}
-		// release is for T4.5; a client ignores it until then.
+		if rel := msg.GetRelease(); len(rel) > 0 && s.cfg.OnRelease != nil {
+			s.cfg.OnRelease(rel)
+		}
 		return nil
 	}
 }

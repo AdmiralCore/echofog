@@ -146,7 +146,7 @@ func TestSignedManifestIsAcceptedByTheNode(t *testing.T) {
 	}
 	// Another key set does not verify either.
 	_, otherPub := keygen(t, dir, "k9")
-	if _, err := do(t, "verify", "--keys", otherPub+","+pubs[0]+","+pubs[1], signed); err == nil {
+	if _, err := do(t, "verify", "--keys", otherPub+","+pubs[0]+","+pubs[2], signed); err == nil {
 		t.Fatal("verify accepts a manifest signed by keys outside the set")
 	}
 }

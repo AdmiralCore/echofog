@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
+	"github.com/echofog/echofog-core/internal/v2/release"
 	"github.com/echofog/echofog-core/internal/v2/secret"
 )
 
@@ -41,6 +42,9 @@ const (
 	// EventPortMapping: the set of ports the router forwards for this node changed and the cards
 	// follow it (T6.5b). The message never carries addresses.
 	EventPortMapping EventKind = "node.port-mapping"
+	// EventUpdateAvailable: an applied release manifest says that this node's own version is below
+	// recommended or min_supported; Event.Update has the details (T4.5). Nothing is downloaded.
+	EventUpdateAvailable EventKind = "node.update-available"
 	// EventListenerStopped: an accept loop stopped on a local error and the node no longer
 	// accepts on that listener (T3.7a risk 3).
 	EventListenerStopped EventKind = "node.listener-stopped"
@@ -63,6 +67,8 @@ type Event struct {
 	Visibility cards.Visibility
 	// PublicAddr is the payload of EventPublicAddr.
 	PublicAddr netip.Addr
+	// Update is the payload of EventUpdateAvailable.
+	Update *release.Event
 	// MemoryLevel is the payload of EventMemoryProtection.
 	MemoryLevel secret.Level
 }
