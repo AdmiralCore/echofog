@@ -168,7 +168,7 @@ func (b signalBus) SendSignal(to [32]byte, lossy bool, payload []byte) error {
 	target := b.f.nodes[to]
 	b.f.mu.Unlock()
 	if target == nil {
-		return nil
+		return callnet.ErrNoLink // no session with that participant: the runtime's signal port fails too (T9.5)
 	}
 	data := append([]byte(nil), payload...)
 	time.AfterFunc(2*time.Millisecond, func() {
