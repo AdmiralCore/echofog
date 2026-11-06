@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
-	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/secret"
 	"github.com/echofog/echofog-core/internal/v2/store"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -147,28 +147,25 @@ func newCluster(t *testing.T, size int, groupMembers int) *cluster {
 	for i := 0; i < groupMembers; i++ {
 		gm = append(gm, accts[i].pub)
 	}
-	for _, a := range accts {
+	// one store and one blinding key for all members (each has its own namespace): every secret locks
+	// memory, and a Windows process has little quota for it
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	sk := secret.New(key)
+	st, err := store.Open(store.Options{Dir: filepath.Join(t.TempDir(), "v2"), Key: sk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.NewIDs(sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ids.Close(); _ = st.Close(); sk.Destroy() })
+	for i, a := range accts {
 		a := a
-		tw, err := identity.NewThrowaway()
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(tw.Destroy)
-		key := make([]byte, 32)
-		_, _ = rand.Read(key)
-		sk := secret.New(key)
-		st, err := store.Open(store.Options{Dir: filepath.Join(t.TempDir(), "v2"), Key: sk})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ids, err := store.NewIDs(sk)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ids.Close(); _ = st.Close(); sk.Destroy() })
 		e, err := New(Config{
 			Pub: a.pub, Sign: func(b []byte) ([]byte, error) { return ed25519.Sign(a.priv, b), nil },
-			Store: st.Store("v2/convlog"), IDs: ids, Rules: rules{founder: founder},
+			Store: st.Store(fmt.Sprintf("v2/convlog/%d", i)), IDs: ids, Rules: rules{founder: founder},
 			Net: port{c.n, a.node}, Dir: c.n,
 			Groups:       func(id convlog.ConvID) (convlog.Conv, bool) { return c.group, id == c.group.ID },
 			Members:      func(convlog.Conv) [][32]byte { return gm },
@@ -217,9 +214,8 @@ func (c *cluster) say(i int, text string) convlog.EventID {
 	if err != nil {
 		c.t.Fatalf("%d says %q: %v", i, text, err)
 	}
-	if err := c.members[i].e.Publish(context.Background(), c.group, raw); err != nil {
-		c.t.Fatal(err)
-	}
+	// an unreachable group is not an error of the author: the event stays in the log and the sync brings it
+	_ = c.members[i].e.Publish(context.Background(), c.group, raw)
 	return id
 }
 
@@ -334,7 +330,17 @@ func TestRightsAreCheckedAtThePointOfTheEvent(t *testing.T) {
 	c := newCluster(t, 4, 4)
 	c.rosterOf(4, map[int]string{3: "subscriber"})
 	c.say(1, "from a member")
-	c.say(3, "from a reader") // refused everywhere
+	// a reader cannot write: the author's own log refuses it ...
+	if _, _, err := c.members[3].e.Log().AppendMessage(c.group, "from a reader", 0, "", convlog.EventID{}, convlog.EventID{}); err == nil {
+		t.Fatal("a reader wrote a message")
+	}
+	// ... and so does everybody else, when the event is made by hand and sent
+	body, _ := proto.Marshal(&convlog.MsgBody{Text: "from a reader"})
+	forged, _, err := c.members[3].e.Log().AppendKept(c.group, convlog.Draft{Kind: convlog.KindMsg, Body: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.members[3].e.Publish(context.Background(), c.group, forged)
 	c.n.drain(t)
 	c.syncAll(4)
 	for i := 0; i < 4; i++ {
@@ -346,14 +352,23 @@ func TestRightsAreCheckedAtThePointOfTheEvent(t *testing.T) {
 	// the founder removes member 2; what 2 wrote before stays, what they write after is refused
 	c.say(2, "written while in")
 	c.n.drain(t)
-	body, _ := proto.Marshal(&convlog.MemberBody{Action: convlog.MemberRemove, Member: c.members[2].a.pub[:]})
+	body, _ = proto.Marshal(&convlog.MemberBody{Action: convlog.MemberRemove, Member: c.members[2].a.pub[:]})
 	rm, _, err := c.members[0].e.Log().AppendKept(c.group, convlog.Draft{Kind: convlog.KindMember, Body: body})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = c.members[0].e.Publish(context.Background(), c.group, rm)
 	c.n.drain(t)
-	c.say(2, "written after the removal")
+	// the removed member's own log refuses to write; an event made by hand is refused by the others
+	if _, _, err := c.members[2].e.Log().AppendMessage(c.group, "written after the removal", 0, "", convlog.EventID{}, convlog.EventID{}); err == nil {
+		t.Fatal("a removed member wrote a message")
+	}
+	body, _ = proto.Marshal(&convlog.MsgBody{Text: "written after the removal"})
+	late, _, err := c.members[2].e.Log().AppendKept(c.group, convlog.Draft{Kind: convlog.KindMsg, Body: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.members[2].e.Publish(context.Background(), c.group, late)
 	c.n.drain(t)
 	c.syncAll(4)
 	for _, i := range []int{0, 1, 3} {
@@ -416,10 +431,13 @@ func TestUnknownKindsAreStoredSyncedAndForwardedUnchanged(t *testing.T) {
 	if len(stubs) != 1 || stubs[0].Kind != 77 || stubs[0].Text != StubText || stubs[0].Author != a.a.pub {
 		t.Fatalf("b's stubs: %+v", stubs)
 	}
-	// b passes it on in sync, byte for byte
-	c.n.cut = nil
-	c.syncAll(3)
-	for _, m := range []*member{b, d} {
+	// b passes it on in sync, byte for byte; d still cannot reach a, so b is the only source
+	for round := 0; round < 3; round++ {
+		_ = b.e.Hello(context.Background(), d.a.pub)
+		_ = d.e.Hello(context.Background(), b.a.pub)
+		c.n.drain(t)
+	}
+	for name, m := range map[string]*member{"b": b, "d": d} {
 		var found bool
 		for _, r := range m.e.Log().Export(c.group, 1<<20) {
 			if bytes.Equal(r, raw) {
@@ -427,13 +445,15 @@ func TestUnknownKindsAreStoredSyncedAndForwardedUnchanged(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("a member holds the event changed or not at all")
+			t.Fatalf("%s holds the event changed, or not at all", name)
 		}
 	}
 	if len(d.e.Stubs(c.group)) != 1 {
 		t.Fatalf("d's stubs: %+v", d.e.Stubs(c.group))
 	}
-	// the chat history is intact, and the digest agrees everywhere
+	// the chat history is intact, and once a reaches d the digest agrees everywhere
+	c.n.cut = nil
+	c.syncAll(3)
 	ma, _ := a.e.Log().Meta(c.group)
 	md, _ := d.e.Log().Meta(c.group)
 	if !bytes.Equal(ma.Digest(), md.Digest()) {
