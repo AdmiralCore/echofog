@@ -1,7 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import { activeChannel, openChannel } from '../../stores/chats.js';
-  import { isCallActive } from '../../stores/call.store.js';
   import { me } from '../../stores/session.js';
   import { t } from '../../i18n/index.js';
   import Avatar from '../../components/ui/Avatar.svelte';
@@ -24,7 +23,7 @@
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div class="chan-row" class:over draggable={manage} on:dragstart on:dragover on:dragleave on:drop on:contextmenu={(e) => dispatch('edit', e)}>
   {#if ch.voice}
-    <button class="chan room" class:here={inRoom === ch.id} disabled={!(ch.canJoin ?? conv.can.call) || ($isCallActive && inRoom !== ch.id)}
+    <button class="chan room" class:here={inRoom === ch.id} disabled={!(ch.canJoin ?? conv.can.call)}
       title={inRoom === ch.id ? $t('chats.inRoom') : $t('chats.joinRoom')} on:click={() => inRoom !== ch.id && dispatch('room', ch)}>
       <span class="ci" class:stream={ch.stream}><Icon name={ch.stream ? 'live' : 'volume'} size={16} /></span>
       <span class="cb"><span class="nm">{ch.name}</span><span class="pv">{ch.stream ? $t('layout.roomStream') : people ? $t('layout.roomPeople', { n: people }) : $t('layout.roomEmpty')}</span></span>
@@ -41,7 +40,8 @@
   {#if manage}<button class="icon tiny gear" title={$t('chats.channelSettings')} aria-label={$t('chats.channelSettings')} on:click={(e) => dispatch('edit', e)}><Icon name="settings" size={13} /></button>{/if}
 </div>
 {#if ch.voice && ch.call && ch.call.members && ch.call.members.length}
-  <div class="in-room">
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+  <div class="in-room" class:joinable={inRoom !== ch.id && (ch.canJoin ?? conv.can.call)} on:click={() => inRoom !== ch.id && (ch.canJoin ?? conv.can.call) && dispatch('room', ch)}>
     {#each ch.call.members as id (id)}
       <div class="who-in"><Avatar {id} name={id === $me.id ? $t('chats.You') : $nameOf(id)} size={18} /><span class="nm">{id === $me.id ? $t('chats.You') : $nameOf(id)}</span></div>
     {/each}

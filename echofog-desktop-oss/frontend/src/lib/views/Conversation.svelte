@@ -5,7 +5,8 @@
   import { App, errText, openURL } from '../api.js';
   import { classifyLink, fromWebLink, openLinkDialog } from '../links.js';
   import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel, mainChannel } from '../stores/chats.js';
-  import { isCallActive, startCall, peerInfo } from '../stores/call.store.js';
+  import { isCallActive, startCall, endCall, peerInfo } from '../stores/call.store.js';
+  import { ask } from '../stores/dialog.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
   import { savedError } from '../stores/saved.js';
   import { nameOf } from '../stores/people.js';
@@ -193,7 +194,13 @@
     }
   }
   // a space's voice room: its call is joined (or started, without ringing anybody)
+  // one click on a room joins it; inside another call or room that call is left first, after asking
   async function joinRoom(room) {
+    if ($isCallActive) {
+      const ok = await ask({ message: $t('chats.switchRoom', { name: room.name }), confirm: $t('chats.switchRoomYes'), cancel: $t('common.cancel') });
+      if (!ok) return;
+      await endCall();
+    }
     try {
       const c = await App.StartRoomCall(conv.groupId, room.id);
       startCall({ alias: `${conv.name} · ${room.name}`, callId: c.callId, coordinator: c.coordinator, chatId: conv.id, room: room.id }, false);
