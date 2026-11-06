@@ -108,6 +108,10 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
     from the majority of several CDN `Date` headers (registries.md §12). Where a censor blocks or
     falsifies most of those endpoints, a node with a clock off by more than 5 minutes and no prior peer
     cannot dial any camouflaged or masked address until the user corrects the clock.
+    Residual from the offset rule (handshake §7): Sybil peers in three distinct /16 networks, reached by
+    outgoing sessions, can move a node's L0 timestamps by up to 600 s. This breaks connectivity with that
+    node only; the security of the handshake does not depend on the offset, because its ±600 s check uses
+    the raw clock.
 13. **Hidden-node invitations are bearer secrets**; whoever holds a link can enter until it is revoked.
 14. **Group semantics** (P2–P6, P10) are application-level and unchanged by v2; chat/2 carries the group
     log as before. **Call traffic shape** (P9) is unchanged: voice and video rates and timers are
