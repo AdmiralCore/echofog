@@ -561,3 +561,9 @@ func unix(t time.Time) uint64 {
 func timeToUnix(t time.Time) int64 { return int64(unix(t)) }
 
 func clone(b []byte) []byte { return append([]byte(nil), b...) }
+
+// SetPrekeysHash sets the SHA-256 of the current prekeys/2 envelope that cards carry (objects.md
+// §3); nil clears it. A changed hash reissues the cards with a higher seq on the next Current.
+func (b *CardBuilder) SetPrekeysHash(h []byte) error {
+	return ErrConfig
+}
