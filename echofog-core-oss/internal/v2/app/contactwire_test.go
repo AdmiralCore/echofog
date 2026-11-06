@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -267,5 +268,28 @@ func TestContactRecordsLiveUnderTheDocumentedPrefix(t *testing.T) {
 	}
 	if _, err := r.kv.Get([]byte("c/" + c.Node)); err == nil {
 		t.Fatal("DeleteContact left the record")
+	}
+}
+
+func TestMoreContactsThanOneScanPageAreListedAndCounted(t *testing.T) {
+	w := newWireRig(t, 1500)
+	for i := 0; i < 1100; i++ { // more than store.MaxScanLimit
+		rec := fmt.Sprintf(`{"d":"","a":"c%04d","t":1}`, i)
+		if err := w.kv.Put([]byte(fmt.Sprintf("c/%064x", i+1000)), []byte(rec)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := w.a.Contacts()
+	if err != nil || len(list) != 1100 {
+		t.Fatalf("Contacts = %d, %v, want 1100", len(list), err)
+	}
+	w.addContact(t, 7) // below the limit of 1500 although the list is longer than a page
+	small := newWireRig(t, 1050)
+	for i := 0; i < 1100; i++ {
+		_ = small.kv.Put([]byte(fmt.Sprintf("c/%064x", i+1000)), []byte(`{"a":"x","t":1}`))
+	}
+	small.ln.preview["echofog://join?v=2&card=Z"] = &links.Preview{Kind: links.KindContact, Node: nid(70), Device: nid(71), NotAfter: testNow.Add(3600e9)}
+	if _, err := small.a.AddByLink(context.Background(), "echofog://join?v=2&card=Z"); !errors.Is(err, app.ErrTooManyContacts) {
+		t.Fatalf("beyond the limit past one page: %v", err)
 	}
 }
