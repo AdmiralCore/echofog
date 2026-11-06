@@ -165,7 +165,7 @@
           </span>
           <span class="label">{$resolvedTheme === 'dark' ? $t('shell.darkTheme') : $t('shell.lightTheme')}</span>
         </button>
-        <button class="me" title={rail ? `${myName} · ${statusText}` : $t('shell.settings')} on:click={() => view.set('settings')}>
+        <button class="me" title={rail ? `${myName} · ${statusText}${$anon && $anon.running && !$anon.broken ? ' · ' + $t('anon.badge.' + $anon.seenBy) : ''}` : $t('shell.settings')} on:click={() => view.set('settings')}>
           <span class="av">
             <Avatar id={$profile} name={myName} size={32} />
             <span class="presence" class:on={online}></span>

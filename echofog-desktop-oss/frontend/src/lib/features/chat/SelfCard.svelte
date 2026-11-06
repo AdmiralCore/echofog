@@ -3,6 +3,7 @@
   import { displayName } from '../../contact.js';
   import { view } from '../../stores/nav.js';
   import { netStatus } from '../../stores/net.js';
+  import { anon } from '../../stores/anon.js';
   import { callState } from '../../services/call.service.js';
   import { isCallActive, toggleMute, toggleDeafen } from '../../stores/call.store.js';
   import { t } from '../../i18n/index.js';
@@ -23,6 +24,7 @@
   </span>
   <div class="sc-who">
     <b>{myName}</b>
+    {#if $anon && $anon.running && !$anon.broken}<span class="sc-anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
     <span>{online ? $t('layout.statusOnline') : $t('layout.statusOffline')} · {$t('shell.peers', { n: $netStatus.peerCount })}</span>
   </div>
   {#if $isCallActive}
@@ -43,4 +45,5 @@
   .ib { width: 30px; height: 30px; padding: 0; border: none; border-radius: var(--r-md); display: grid; place-items: center; flex: none; background: transparent; color: var(--muted); }
   .ib:hover:not(:disabled) { background: var(--hover); color: var(--text); border: none; }
   .ib.off { color: var(--danger-fg); }
+  .sc-who span.sc-anon { display: inline-flex; align-items: center; gap: 4px; color: var(--ok-fg); }
 </style>
