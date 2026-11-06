@@ -39,6 +39,13 @@
     // a one-to-one chat that is open stays; from a space the list of people shows
     if (inSpace) activeId.set('');
   }
+  // Ctrl+Alt+1…9: the space at that place of the rail (by key position, so AltGr layouts work too)
+  function onKey(e) {
+    if (!(e.ctrlKey || e.metaKey) || !e.altKey || e.shiftKey) return;
+    const m = /^Digit([1-9])$/.exec(e.code || '');
+    const c = m && spaces[+m[1] - 1];
+    if (c) { e.preventDefault(); goSpace(c); }
+  }
   function goSpace(c) {
     view.set('chats');
     openChat(c.id);
@@ -78,6 +85,8 @@
   }
 </script>
 
+<svelte:window on:keydown={onKey} />
+
 <div class="spaces" class:wide role="navigation" aria-label={$t('spaces.title')}>
   <Tooltip text={wide ? '' : $t('spaces.personal') + ' · Ctrl+1'} placement="right">
     <button class="sp personal" class:on={inPersonal} aria-current={inPersonal ? 'page' : undefined} aria-label={$t('spaces.personal')} on:click={goPersonal}>
@@ -86,9 +95,9 @@
     </button>
   </Tooltip>
   {#if spaces.length}<span class="sep" aria-hidden="true"></span>{/if}
-  {#each spaces as c (c.id)}
+  {#each spaces as c, i (c.id)}
     {@const here = inSpace && c.id === $activeId && $view === 'chats'}
-    <Tooltip text={wide ? '' : c.name} placement="right">
+    <Tooltip text={wide ? '' : i < 9 ? `${c.name} · Ctrl+Alt+${i + 1}` : c.name} placement="right">
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <button class="sp" class:on={here} class:over={over === c.id} draggable="true" aria-current={here ? 'page' : undefined} aria-label={c.name}
         on:click={() => goSpace(c)} on:dragstart={(e) => dragStart(e, c)} on:dragover={(e) => dragOver(e, c)} on:dragleave={() => (over = '')}
@@ -98,7 +107,7 @@
           {#if c.unread}<span class="cnt" class:ment={c.mentions}>{c.unread > 99 ? '99+' : c.unread}</span>{/if}
           {#if $activeGroupCalls[c.id]}<span class="call" title={$t('chats.callActive')}></span>{/if}
         </span>
-        {#if wide}<span class="nm" class:unread={c.unread}>{c.name}</span>{/if}
+        {#if wide}<span class="nm" class:unread={c.unread}>{c.name}</span>{#if i < 9}<kbd class="small faint">Ctrl+Alt+{i + 1}</kbd>{/if}{/if}
       </button>
     </Tooltip>
   {/each}
