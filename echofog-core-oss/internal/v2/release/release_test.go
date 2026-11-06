@@ -54,9 +54,11 @@ func signer(t testing.TB, n byte) *keys.Signer {
 
 // memKV is an in-memory store.KV with an injectable Put failure.
 type memKV struct {
-	mu      sync.Mutex
-	m       map[string][]byte
-	failPut bool
+	mu       sync.Mutex
+	m        map[string][]byte
+	failPut  bool
+	failGet  bool
+	failScan bool
 }
 
 func newKV() *memKV { return &memKV{m: map[string][]byte{}} }
@@ -64,6 +66,9 @@ func newKV() *memKV { return &memKV{m: map[string][]byte{}} }
 func (k *memKV) Get(key []byte) ([]byte, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.failGet {
+		return nil, errors.New("io error")
+	}
 	v, ok := k.m[string(key)]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -104,6 +109,9 @@ func (k *memKV) Scan(prefix []byte, limit int) ([]store.Entry, error) {
 func (k *memKV) ScanFrom(prefix, start []byte, limit int) ([]store.Entry, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.failScan {
+		return nil, errors.New("io error")
+	}
 	var keysSorted []string
 	for key := range k.m {
 		if strings.HasPrefix(key, string(prefix)) && (start == nil || key > string(start)) {
@@ -341,48 +349,142 @@ func TestChainSurvivesRestartAndKeyRotation(t *testing.T) {
 	}
 }
 
-func TestReplayWithOtherCompiledKeysStartsClean(t *testing.T) {
+func TestCheckOfTheAppliedManifest(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	m := r.open()
+	older := r.seal("0.3.0", 48*time.Hour, proto(200, 200), r.k[0], r.k[1])
+	applied := r.seal("0.3.1", time.Hour, proto(200, 200), r.k[1], r.k[2])
+	if ok, err := m.Offer(applied); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	// The DHT server asks Check about the very manifest the node runs on: it must keep storing it.
+	if err := m.Check(applied, r.clk.Now()); err != nil {
+		t.Fatalf("Check of the applied manifest: %v", err)
+	}
+	if err := m.Check(older, r.clk.Now()); err == nil {
+		t.Fatal("Check accepts an older manifest")
+	}
+	if err := m.Check(r.seal("0.3.2", time.Minute, proto(200, 200), r.k[0]), r.clk.Now()); err == nil {
+		t.Fatal("Check accepts one signature")
+	}
+	// Equal bytes are not a free pass: an expired object is not stored.
+	if err := m.Check(applied, r.clk.Now().Add(401*24*time.Hour)); err == nil {
+		t.Fatal("Check accepts the applied manifest after it expired")
+	}
+	// The same after a restart (the latest manifest is replayed from the chain).
+	if err := r.open().Check(applied, r.clk.Now()); err != nil {
+		t.Fatalf("Check after a restart: %v", err)
+	}
+}
+
+// breakStore corrupts the stored chain in one of the ways a profile can lose it.
+func breakStore(t *testing.T, kv *memKV, how string) {
+	t.Helper()
+	switch how {
+	case "garbage record":
+		kv.mu.Lock()
+		for k := range kv.m {
+			if strings.HasPrefix(k, "m/") {
+				kv.m[k] = []byte("garbage")
+			}
+		}
+		kv.mu.Unlock()
+	case "unknown schema version":
+		kv.mu.Lock()
+		kv.m["v"] = []byte{99}
+		kv.mu.Unlock()
+	case "version read error":
+		kv.failGet = true
+	case "scan error":
+		kv.failScan = true
+	case "records without a version":
+		kv.mu.Lock()
+		delete(kv.m, "v")
+		kv.mu.Unlock()
+	default:
+		t.Fatal(how)
+	}
+}
+
+// TestLostChainFailsClosed (L2): the chain says a key was revoked; when it cannot be read the
+// revoked key must not come back, so the manager refuses manifests instead of starting from the
+// compiled keys.
+func TestLostChainFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, how := range []string{"garbage record", "unknown schema version", "version read error", "scan error", "records without a version"} {
+		t.Run(how, func(t *testing.T) {
+			r := newRig(t)
+			m := r.open()
+			k4 := signer(t, 4)
+			rot := r.seal("0.3.1", 5*time.Hour, func(rel *pb.Release) {
+				rel.NextKeys = [][]byte{k4.Public()}
+				rel.RevokedKeys = [][]byte{r.k[2].Public()}
+			}, r.k[0], r.k[1])
+			if ok, err := m.Offer(rot); err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			breakStore(t, r.kv, how)
+
+			m2 := r.open()
+			if m2.Err() == nil {
+				t.Fatal("a lost chain is not reported")
+			}
+			// An old manifest signed by the revoked key and a good one would count as "newer than
+			// nothing": it must be refused, and Check must not vouch for it either.
+			old := r.seal("0.3.0", 6*time.Hour, proto(200, 200), r.k[2], r.k[0])
+			if ok, err := m2.Offer(old); ok || !errors.Is(err, release.ErrChainUnavailable) {
+				t.Fatalf("Offer on a lost chain: %v, %v", ok, err)
+			}
+			if err := m2.Check(old, r.clk.Now()); !errors.Is(err, release.ErrChainUnavailable) {
+				t.Fatalf("Check on a lost chain: %v", err)
+			}
+			// Reset is the explicit recovery: compiled keys again, an empty chain.
+			r.kv.failGet, r.kv.failScan = false, false
+			if err := m2.Reset(); err != nil {
+				t.Fatalf("Reset: %v", err)
+			}
+			if m2.Err() != nil || r.kv.count("m/") != 0 {
+				t.Fatalf("after Reset: err=%v records=%d", m2.Err(), r.kv.count("m/"))
+			}
+			if ok, err := m2.Offer(r.seal("0.3.2", time.Hour, proto(200, 200), r.k[0], r.k[1])); err != nil || !ok {
+				t.Fatalf("Offer after Reset: %v, %v", ok, err)
+			}
+			if r.open().Err() != nil {
+				t.Fatal("the chain written after Reset does not load")
+			}
+		})
+	}
+}
+
+// TestChainOfAnotherBuildFailsClosed: a chain that does not verify under the compiled keys is not
+// trusted either; the build's owner resets it.
+func TestChainOfAnotherBuildFailsClosed(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	m := r.open()
 	if ok, err := m.Offer(r.seal("0.3.1", time.Hour, proto(200, 200), r.k[0], r.k[1])); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	// A build with other release keys cannot trust the stored chain: fail closed to its own keys.
 	cfg := r.config()
 	cfg.Keys = []keys.AKey{signer(t, 7).Public(), signer(t, 8).Public(), signer(t, 9).Public()}
 	m2, err := release.Open(cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if m2.Latest() != nil || len(m2.Keys()) != 3 {
+	if m2.Err() == nil || m2.Latest() != nil || len(m2.Keys()) != 3 {
 		t.Fatal("a chain signed by other keys was trusted")
+	}
+	if ok, err := m2.Offer(r.seal("0.3.2", 0, nil, r.k[0], r.k[1])); ok || !errors.Is(err, release.ErrChainUnavailable) {
+		t.Fatalf("Offer: %v, %v", ok, err)
 	}
 }
 
-func TestCorruptStateIsIgnored(t *testing.T) {
+func TestEmptyStoreIsNotAnError(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	m := r.open()
-	if ok, err := m.Offer(r.seal("0.3.1", time.Hour, proto(200, 200), r.k[0], r.k[1])); err != nil || !ok {
-		t.Fatal(ok, err)
-	}
-	r.kv.mu.Lock()
-	for k := range r.kv.m {
-		if strings.HasPrefix(k, "m/") {
-			r.kv.m[k] = []byte("garbage")
-		}
-	}
-	r.kv.mu.Unlock()
-	if m2 := r.open(); m2.Latest() != nil {
-		t.Fatal("garbage became the current manifest")
-	}
-	// And an unknown schema version is not read at all.
-	r.kv.mu.Lock()
-	r.kv.m["v"] = []byte{99}
-	r.kv.mu.Unlock()
-	if m3 := r.open(); m3.Latest() != nil {
-		t.Fatal("a chain of an unknown schema version was read")
+	if m := r.open(); m.Err() != nil {
+		t.Fatalf("fresh profile: %v", m.Err())
 	}
 }
 

@@ -45,6 +45,9 @@ const (
 	// EventUpdateAvailable: an applied release manifest says that this node's own version is below
 	// recommended or min_supported; Event.Update has the details (T4.5). Nothing is downloaded.
 	EventUpdateAvailable EventKind = "node.update-available"
+	// EventReleaseUnavailable: the stored release manifest chain could not be read or verified, so
+	// the node refuses manifests until the profile repairs it (T4.5 L2). The node keeps running.
+	EventReleaseUnavailable EventKind = "node.release-unavailable"
 	// EventListenerStopped: an accept loop stopped on a local error and the node no longer
 	// accepts on that listener (T3.7a risk 3).
 	EventListenerStopped EventKind = "node.listener-stopped"

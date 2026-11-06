@@ -68,6 +68,9 @@ var (
 	ErrStale = errors.New("release: not newer than the applied manifest")
 	// ErrChainFull reports that the profile already keeps MaxChain manifests.
 	ErrChainFull = errors.New("release: manifest chain is full")
+	// ErrChainUnavailable reports that the stored chain could not be read or verified: the key set
+	// is unknown, so the manager refuses manifests (fail closed) until Reset.
+	ErrChainUnavailable = errors.New("release: stored manifest chain unavailable")
 	// ErrSource reports a bad download source (not https, no client, bad status).
 	ErrSource = errors.New("release: bad source")
 )
@@ -386,3 +389,9 @@ func (m *Manager) FetchSite(ctx context.Context, hc *http.Client, rawURL string)
 	}
 	return m.Offer(body)
 }
+
+// Err reports why the stored chain is unavailable, or nil (stub).
+func (m *Manager) Err() error { return nil }
+
+// Reset forgets the stored chain and starts from the compiled keys (stub).
+func (m *Manager) Reset() error { return nil }

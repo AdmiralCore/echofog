@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/pex"
 	pexpb "github.com/echofog/echofog-core/internal/v2/pex/pb"
+	"github.com/echofog/echofog-core/internal/v2/release"
 	"github.com/echofog/echofog-core/internal/v2/service"
 )
 
@@ -152,4 +154,66 @@ func TestReleaseCheckGuardsTheDHT(t *testing.T) {
 	if err := check(one, time.Now()); err == nil {
 		t.Fatal("a manifest with one signature passes the DHT check")
 	}
+}
+
+// TestReleaseCheckKeepsTheAppliedManifest (M1): the DHT release check must vouch for the manifest
+// the node itself runs on, otherwise the node stops storing the current release.
+func TestReleaseCheckKeepsTheAppliedManifest(t *testing.T) {
+	ss := releaseSigners(t)
+	n := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) { c.ReleaseKeys = releaseKeysOf(ss) })
+	n.start(t)
+	raw := sealRelease(t, ss, 200, 200)
+	if ok, err := n.rt.Release().Offer(raw); err != nil || !ok {
+		t.Fatalf("Offer: %v, %v", ok, err)
+	}
+	check := node.ReleaseCheckOf(n.rt)
+	if err := check(raw, time.Now()); err != nil {
+		t.Fatalf("the applied manifest is not stored any more: %v", err)
+	}
+	older := sealReleaseAt(t, ss, 200, 200, 48*time.Hour)
+	if err := check(older, time.Now()); err == nil {
+		t.Fatal("an older manifest passes the DHT check")
+	}
+}
+
+// TestLostReleaseChainIsReported (L2): an unreadable chain fails closed and the operator is told.
+func TestLostReleaseChainIsReported(t *testing.T) {
+	ss := releaseSigners(t)
+	var mu sync.Mutex
+	var got []node.Event
+	sink := node.EventFunc(func(e node.Event) {
+		mu.Lock()
+		got = append(got, e)
+		mu.Unlock()
+	})
+	n := newTestNodeWith(t, cards.Hidden, false, nil, sink, func(c *node.Config) {
+		c.ReleaseKeys = releaseKeysOf(ss)
+		_ = c.Store.Store(release.Namespace).Put([]byte("v"), []byte{99})
+	})
+	if n.rt.Release() == nil || n.rt.Release().Err() == nil {
+		t.Fatal("an unreadable chain is not reported by the manager")
+	}
+	n.start(t)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, e := range got {
+		if e.Kind == node.EventReleaseUnavailable {
+			return
+		}
+	}
+	t.Fatal("no EventReleaseUnavailable")
+}
+
+func sealReleaseAt(t *testing.T, ss []*keys.Signer, minSupported, recommended uint32, age time.Duration) []byte {
+	t.Helper()
+	rel := &pb.Release{
+		Version:    "0.3.0",
+		ReleasedAt: uint64(time.Now().Add(-age).Unix()),
+		Policies:   []*pb.Policy{{Component: "proto", MinSupported: minSupported, Recommended: recommended}},
+	}
+	raw, err := objects.SealRelease(ss[0], rel.ReleasedAt+86400*30, rel, ss[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
