@@ -59,6 +59,7 @@ type Runtime interface {
 	Stop(ctx context.Context) error
 	Status() node.Status
 	NetClass() routepolicy.NetClass
+	RouteReport(peer node.DeviceID) (node.RouteReport, bool)
 	AccessList(ctx context.Context) ([]access.Info, error)
 	RevokeAccess(ctx context.Context, id access.PassID) (*access.RevokeResult, error)
 	ExtendAccess(ctx context.Context, id access.PassID, d time.Duration) (access.Info, error)

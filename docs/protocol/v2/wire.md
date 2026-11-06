@@ -460,8 +460,10 @@ Rules for every inner TLS:
 
 - certificates are not verified (authentication is the Noise handshake, bound to this TLS session by
   the exporter, [handshake.md](handshake.md) §3.2);
-- the noise3 inner certificate is a self-signed Ed25519 certificate with an empty subject and a random
-  serial; ALPN `h3`;
+- the noise3 inner certificate is self-signed with an empty subject and a random serial; ALPN `h3`. Its
+  key is **ECDSA P-256** by default. An Ed25519 key is used only when the cover profile offers `ed25519`
+  in its signature algorithms; otherwise ECDSA P-256 is kept. The server serves only a key type that the
+  ClientHello actually offered;
 - noise3: the key exchange group MUST be `X25519MLKEM768`. REALITY suites: the group mirrors the
   cover (§3.4); when it is classical the path runs in sealed mode (§8.5). Each side checks the
   negotiated group and refuses a classical group on a path that is not in sealed mode;
@@ -498,7 +500,7 @@ MUX_DATAGRAM  payload = one datagram (§6.5); best effort, dropped when the queu
   below the highest it has seen, and not currently open, as a finished stream: its data is discarded.
 - At most 256 streams open per side, counted per mux connection and per session. An excess stream is
   refused with `MUX_RESET{refused}` (mux) or `CLOSE{refused}` (QUIC); this is not abuse.
-- The mux has no unidirectional streams (its IDs carry no direction bit). The 64 unidirectional
+- The mux has no unidirectional streams (its IDs carry no direction bit). The 64 incoming unidirectional
   streams of §10 exist only on QUIC carriers; on the mux, one-way traffic uses a bidirectional stream
   that the receiver never writes to.
 - `MUX_RESET` ends a stream at once; data received before the reset stays readable (so a `CLOSE`
@@ -808,6 +810,11 @@ Built-in profiles:
 The initiator SHOULD use the responder's profile for what it sends to that address, so both directions
 match what the address's network is expected to look like.
 
+**Buckets and pad.** When `buckets` is set, `pad` is not used: each packet or TLS record is padded up to
+the next bucket size and nothing more. `pad_budget` is counted per stream direction, not per sender. The
+`default-tls` row above lists both `pad` and `buckets`; which of the two it keeps is an open question for
+the architect (see SPEC-FIX-1106b report), so the row is unchanged here.
+
 ## 10. Limits and timeouts
 
 | Item | Value |
@@ -826,7 +833,7 @@ match what the address's network is expected to look like.
 | frame payload | per type; never > 1 MiB |
 | mux stream data per frame | ≤ 16384 |
 | mux windows | 256 KiB per stream, 4 MiB per connection |
-| streams per session per side | 256 bidirectional, 64 unidirectional (QUIC only) |
+| streams per session per side | 256 bidirectional, 64 incoming unidirectional (QUIC only: the limit a side grants its peer) |
 | idle keepalive / path dead | `uniform(12, 24)` s / 60 s |
 | sealed replay protection | ordered records: strictly growing `n` per pipe; datagrams: window of 4096 per direction per session |
 | standby paths | ≤ 2 per session; keepalive like the active path; dead after 60 s |

@@ -81,6 +81,7 @@ func (r *Runtime) serveCarrierAs(ctx context.Context, c mux.Carrier, kind mux.Pa
 		Control:       r.control,
 		Clock:         r.carrierClock,
 		Kind:          kind,
+		AdmitVersion:  r.admitVersion(),
 		Policy:        r.policyFunc,
 		Verifier:      nil,
 		Binder:        r.binder,
