@@ -2,10 +2,10 @@
 // process and a separate binary, as T15.0a requires: the runner starts it inside the test bed,
 // records what crosses a gateway, and feeds the same testbed/censor detectors.
 //
-// The v2 branch does not have carrier/noise3 yet (T2.4 is not merged, T0.3 is not built), so the
-// udp-noise mode is an explicitly synthetic stand-in with the shape noise3 will have. When the real
-// carrier lands, it replaces the body of that mode; the capture, budget, labels and detectors do
-// not change.
+// The noise3 modes run the real carrier of internal/v2/carrier/noise3 (a listener that echoes and a
+// dialer that sends), with the masking key derived from the run's seed. The udp-noise mode stays as
+// the synthetic control: a stream with noise3's shape that needs no handshake, so the D10 control
+// does not depend on the carrier being right.
 //
 //	go run ./testbed/v2carrier -mode serve -listen :4343 -ready /tmp/ready
 //	go run ./testbed/v2carrier -mode udp-noise -peer 203.0.113.15:4343 -duration 5s
@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"math/big"
 	mrand "math/rand"
 	"net"
@@ -43,12 +42,13 @@ type result struct {
 	Bytes       int64  `json:"bytes"`
 	Packets     int64  `json:"packets"`
 	Connections int    `json:"connections"`
+	EchoedBytes int64  `json:"echoed_bytes,omitempty"`
 	DurationMS  int64  `json:"duration_ms"`
 	Error       string `json:"error,omitempty"`
 }
 
 func main() {
-	mode := flag.String("mode", "serve", "serve, udp-noise, tcp-random, tls-go, tls-chrome, quic-go or quic-chrome")
+	mode := flag.String("mode", "serve", "serve, noise3-serve, noise3, udp-noise, tcp-random, tls-go, tls-chrome, visit, tls-in-tls, const-size, conn-storm, quic-go or quic-chrome")
 	peer := flag.String("peer", "", "host:port of the server")
 	listen := flag.String("listen", ":4343", "serve: address to listen on")
 	ready := flag.String("ready", "", "serve: write this file once both listeners are up")
@@ -65,6 +65,11 @@ func main() {
 	case "serve":
 		err = serve(*listen, *ready)
 		res = result{Mode: *mode, Carrier: "v2-harness"}
+	case "noise3-serve":
+		res = result{Mode: *mode, Carrier: "noise3"}
+		err = serveNoise3(*listen, *ready, *seed)
+	case "noise3":
+		res, err = noise3Client(*peer, *seed, *duration)
 	case "udp-noise":
 		res, err = udpNoise(*peer, *duration, *seed)
 	case "tcp-random":
@@ -73,6 +78,14 @@ func main() {
 		res, err = tlsGo(*peer, *sni)
 	case "tls-chrome":
 		res, err = tlsChrome(*peer, *sni)
+	case "visit":
+		res, err = labVisit(*peer, *sni, max(1, *conns), *seed)
+	case "tls-in-tls":
+		res, err = tlsInTLS(*peer, *sni, *seed)
+	case "const-size":
+		res, err = constSize(*peer, *sni, *seed)
+	case "conn-storm":
+		res, err = connStorm(*peer, *sni, max(1, *conns))
 	case "quic-go":
 		res, err = quicDial(*peer, *sni, false, *duration)
 	case "quic-chrome":
@@ -90,15 +103,30 @@ func main() {
 	}
 }
 
-// ---------------------------------------------------------------------------- server
-
-func serve(addr, ready string) error {
-	cert, err := selfSigned()
+// serveNoise3 runs the real carrier/noise3 listener on a UDP port until a signal arrives.
+func serveNoise3(addr, ready string, seed int64) error {
+	pc, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	return noise3Serve(ctx, pc, seed, ready)
+}
+
+// ---------------------------------------------------------------------------- server
+
+func serve(addr, ready string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return serveCtx(ctx, addr, ready)
+}
+
+func serveCtx(ctx context.Context, addr, ready string) error {
+	cert, err := selfSigned()
+	if err != nil {
+		return err
+	}
 
 	ln, err := tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
 	if err != nil {
@@ -119,13 +147,7 @@ func serve(addr, ready string) error {
 				return
 			}
 			tcpConns.Add(1)
-			go func() {
-				defer conn.Close()
-				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-				buf := make([]byte, 4096)
-				_, _ = io.ReadFull(conn, buf)
-				_, _ = conn.Write([]byte("ok"))
-			}()
+			go serveConn(conn, cert)
 		}
 	}()
 	go func() {

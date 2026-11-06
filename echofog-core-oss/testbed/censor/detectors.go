@@ -2,6 +2,7 @@ package censor
 
 import (
 	"net/netip"
+	"time"
 )
 
 // A label is what the scenario knows about a flow. A detector never sees it: the label is only
@@ -25,6 +26,8 @@ type LabeledFlow struct {
 	Service   string          `json:"service,omitempty"`
 	Synthetic bool            `json:"synthetic,omitempty"`
 	Flags     map[string]bool `json:"flags,omitempty"` // per-detector verdicts, filled by EvaluateDetectors
+
+	id int // position in the run (1-based), set by EvaluateDetectors for detectors that look across flows
 }
 
 // ResolvedName is what DNS says about an SNI: the addresses and, when known, the ASN.
@@ -42,6 +45,20 @@ type DetectorConfig struct {
 	DNS        map[string]ResolvedName `json:"dns,omitempty"`
 	BrowserJA4 map[string]bool         `json:"browser_ja4,omitempty"`
 	BrowserJA3 map[string]bool         `json:"browser_ja3,omitempty"`
+
+	// D7: the browser control's record sizes (bytes, first 16 KB) and the KS distance a flow may
+	// have to it. Zero means "calibrate from the browser flows of the run".
+	KSThreshold float64 `json:"ks_threshold,omitempty"`
+
+	// D8: a flow that lasted LongMin and carried LongBytes is long and heavy; MaxConnsPerIP
+	// connections to one address inside ConnWindow are a storm.
+	LongMin       time.Duration `json:"long_min,omitempty"`
+	LongBytes     int           `json:"long_bytes,omitempty"`
+	MaxConnsPerIP int           `json:"max_conns_per_ip,omitempty"`
+	ConnWindow    time.Duration `json:"conn_window,omitempty"`
+
+	// D9: the seed of the forest.
+	Seed int64 `json:"seed,omitempty"`
 }
 
 // DetectorMetric is one row of report.json: how a detector did on the labelled flows.
@@ -55,6 +72,10 @@ type DetectorMetric struct {
 	BrowserNegatives int      `json:"browser_negatives"`
 	BrowserFP        int      `json:"browser_false_positives"`
 	Notes            []string `json:"notes,omitempty"`
+
+	// For scoring detectors (D6, D9): AUC and the share of positives found at 1% FPR.
+	AUC    *float64 `json:"auc,omitempty"`
+	TPRAt1 *float64 `json:"tpr_at_1pct_fpr,omitempty"`
 }
 
 // A Detector is one published censor rule. Applies says whether the flow is in its scope; Truth is
@@ -67,23 +88,29 @@ type Detector interface {
 	Flag(LabeledFlow, DetectorConfig) bool
 }
 
-// Detectors returns D1–D4 and D10, the passive detectors of the M1 launchpad.
+// Detectors returns the passive detectors D1–D10 of the launchpad.
 func Detectors() []Detector {
-	return []Detector{fetDetector{}, quicSNIDetector{}, sniAddressDetector{}, fingerprintDetector{}, udpShapeDetector{}}
+	return []Detector{fetDetector{}, quicSNIDetector{}, sniAddressDetector{}, fingerprintDetector{},
+		tlsInTLSDetector{}, &crossLayerRTTDetector{}, &sizeTimingDetector{}, &longHeavyDetector{}, &flowPhysicsDetector{},
+		udpShapeDetector{}}
 }
 
 // EvaluateDetectors runs every detector over the labelled flows and counts recall on the positives
 // and the false-positive rate on the browser control only (a censor must not block ordinary people).
 func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]DetectorMetric {
 	for i := range flows {
-		if flows[i].Flags == nil {
-			flows[i].Flags = map[string]bool{}
-		}
+		flows[i].Flags = map[string]bool{}
+		flows[i].id = i + 1
 	}
 	out := map[string]DetectorMetric{}
 	for _, d := range Detectors() {
 		m := DetectorMetric{}
 		recalled := 0
+		if c, ok := d.(Contextual); ok {
+			c.Begin(flows, cfg)
+		}
+		sc, scores := d.(Scorer)
+		var posScores, negScores []float64
 		for i := range flows {
 			fl := flows[i]
 			if !d.Applies(fl) {
@@ -92,6 +119,13 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 			truth := d.Truth(fl, cfg)
 			flag := d.Flag(fl, cfg)
 			flows[i].Flags[d.ID()] = flag
+			if scores {
+				if s := sc.Score(fl, cfg); truth {
+					posScores = append(posScores, s)
+				} else if fl.Label == LabelBrowser {
+					negScores = append(negScores, s)
+				}
+			}
 			if truth {
 				m.Positives++
 				if flag {
@@ -106,6 +140,13 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 					m.BrowserFP++
 				}
 			}
+		}
+		if scores && len(posScores) > 0 && len(negScores) > 0 {
+			auc, tpr := AUC(posScores, negScores), TPRAtFPR(posScores, negScores, 0.01)
+			m.AUC, m.TPRAt1 = &auc, &tpr
+		}
+		if n, ok := d.(Noter); ok {
+			m.Notes = append(m.Notes, n.Notes()...)
 		}
 		if m.Positives > 0 {
 			v := float64(recalled) / float64(m.Positives)

@@ -48,6 +48,11 @@ type Flow struct {
 	// name and finds other addresses; set by CheckSNI.
 	SNIForeign bool
 
+	// Pkts is the packet-level view of the flow (at most maxPkts packets, both directions, empty
+	// ACKs included); Records are the TLS records of the first 16 KB each way. D5–D9 read them.
+	Pkts    []Pkt
+	Records []Record
+
 	// LongHeavy: one connection that lasted long and carried a lot, which an ordinary visit to a
 	// site rarely does however well each packet looks; set by MarkLongHeavy. It is about the shape
 	// of the flow, so it is shown apart from the verdict on what the packets look like.
@@ -116,117 +121,145 @@ func Analyze(pcapPath string) ([]Flow, error) {
 	return AnalyzeReader(f)
 }
 
-// AnalyzeReader reads a classic pcap stream. The launchpad uses it for a capture that never
-// touches the disk when -pcap is not requested.
+// AnalyzeReader reads a classic pcap stream packet by packet; only the per-flow state is kept.
 func AnalyzeReader(r io.Reader) ([]Flow, error) {
-	pkts, err := readPcap(r)
-	if err != nil {
+	an := newAnalyzer()
+	if err := streamPcap(r, an.add); err != nil {
 		return nil, err
 	}
-	return analyzePackets(pkts), nil
+	return an.finish(), nil
 }
 
 // analyzePackets turns an ordered packet list into flows. A TCP flow's client is the side that
 // sent the SYN; a UDP flow's, the side that sent first.
 func analyzePackets(pkts []packet) []Flow {
-	type state struct {
-		f        *Flow
-		upStream []byte // first client bytes of a TCP flow
-		firstUp  []byte
-		udpFirst []byte // first UDP datagram of the flow
-		udpCount int
-		quic     quicInitial
-		sizes    map[int]int
-	}
-	flows := map[flowKey]*state{}
-	var order []flowKey
-	gens := map[flowKey]int{} // the generation of a pair of addresses now in use
+	an := newAnalyzer()
 	for _, p := range pkts {
-		base := flowKey{proto: p.proto, cli: p.src, srv: p.dst}
-		k := base
-		k.gen = gens[base]
-		up := true
-		st, ok := flows[k]
-		if ok && p.proto == 6 && p.syn && st.f.Packets > 4 {
-			// a new connection from a port that already carried one: a flow of its own
-			gens[base]++
-			k.gen = gens[base]
-			st, ok = nil, false
+		an.add(p)
+	}
+	return an.finish()
+}
+
+// flowState is what the analyzer keeps of one flow.
+type flowState struct {
+	f        *Flow
+	upStream []byte // first client bytes of a TCP flow
+	firstUp  []byte
+	udpFirst []byte // first UDP datagram of the flow
+	udpCount int
+	quic     quicInitial
+	sizes    map[int]int
+	rec      [2]recordScanner // TLS records, server to client and client to server
+}
+
+type analyzer struct {
+	flows map[flowKey]*flowState
+	order []flowKey
+	gens  map[flowKey]int // the generation of a pair of addresses now in use
+}
+
+func newAnalyzer() *analyzer {
+	return &analyzer{flows: map[flowKey]*flowState{}, gens: map[flowKey]int{}}
+}
+
+func (a *analyzer) add(p packet) {
+	base := flowKey{proto: p.proto, cli: p.src, srv: p.dst}
+	k := base
+	k.gen = a.gens[base]
+	up := true
+	st, ok := a.flows[k]
+	if ok && p.proto == 6 && p.syn && st.f.Packets > 4 {
+		// a new connection from a port that already carried one: a flow of its own
+		a.gens[base]++
+		k.gen = a.gens[base]
+		st, ok = nil, false
+	}
+	if !ok {
+		rb := flowKey{proto: p.proto, cli: p.dst, srv: p.src}
+		rb.gen = a.gens[rb]
+		if rev, ok2 := a.flows[rb]; ok2 {
+			st, up = rev, false
 		}
-		if !ok {
-			rb := flowKey{proto: p.proto, cli: p.dst, srv: p.src}
-			rb.gen = gens[rb]
-			if rev, ok2 := flows[rb]; ok2 {
-				st, up = rev, false
-			}
+	}
+	if st == nil {
+		if p.proto == 6 && !p.syn {
+			return // joined mid-connection: the client is unknown
 		}
-		if st == nil {
-			if p.proto == 6 && !p.syn {
-				continue // joined mid-connection: the client is unknown
-			}
-			proto := "udp"
-			if p.proto == 6 {
-				proto = "tcp"
-			}
-			st = &state{f: &Flow{Proto: proto, Client: p.src, Server: p.dst, Start: p.at}, sizes: map[int]int{}}
-			flows[k] = st
-			order = append(order, k)
+		proto := "udp"
+		if p.proto == 6 {
+			proto = "tcp"
 		}
-		f := st.f
-		f.Packets++
-		f.Duration = p.at.Sub(f.Start)
-		if !up {
-			f.BytesDn += p.size
-			f.PayDn += len(p.payload)
-			continue
+		st = &flowState{f: &Flow{Proto: proto, Client: p.src, Server: p.dst, Start: p.at}, sizes: map[int]int{}}
+		a.flows[k] = st
+		a.order = append(a.order, k)
+	}
+	f := st.f
+	f.Packets++
+	f.Duration = p.at.Sub(f.Start)
+	if len(f.Pkts) < maxPkts {
+		f.Pkts = append(f.Pkts, Pkt{At: f.Duration, Up: up, Payload: len(p.payload), Seq: p.seq, Ack: p.ack, Flags: p.flags})
+	}
+	if p.proto == 6 && len(p.payload) > 0 {
+		dir := 0
+		if up {
+			dir = 1
 		}
-		f.BytesUp += p.size
-		if len(p.payload) == 0 {
-			continue
+		st.rec[dir].feed(p.payload, f.Duration, up, &f.Records)
+	}
+	if !up {
+		f.BytesDn += p.size
+		f.PayDn += len(p.payload)
+		return
+	}
+	f.BytesUp += p.size
+	if len(p.payload) == 0 {
+		return
+	}
+	if f.FirstSize == 0 {
+		f.FirstSize = len(p.payload)
+	}
+	if p.proto == 17 {
+		st.udpCount++
+		if st.udpFirst == nil {
+			st.udpFirst = append([]byte(nil), p.payload...)
 		}
-		if f.FirstSize == 0 {
-			f.FirstSize = len(p.payload)
-		}
-		if p.proto == 17 {
-			st.udpCount++
-			if st.udpFirst == nil {
-				st.udpFirst = append([]byte(nil), p.payload...)
-			}
-		}
-		n := len(p.payload)
-		switch {
-		case n <= 200:
-			f.SizeClasses[0]++
-		case n <= 600:
-			f.SizeClasses[1]++
-		case n <= 1200:
-			f.SizeClasses[2]++
-		default:
-			f.SizeClasses[3]++
-		}
-		st.sizes[n]++
-		if st.firstUp == nil {
-			st.firstUp = append([]byte(nil), p.payload...)
-		}
-		if p.proto == 6 && len(st.upStream) < 16<<10 {
-			st.upStream = append(st.upStream, p.payload...)
-		}
-		if p.proto == 17 && (st.quic.crypto == nil || f.Packets <= 6) {
-			q := openInitials(p.payload)
-			if st.quic.crypto == nil {
-				st.quic = q
-			} else if q.decrypted {
-				st.quic.decrypted = true
-				for o, d := range q.crypto {
-					st.quic.crypto[o] = d
-				}
+	}
+	n := len(p.payload)
+	switch {
+	case n <= 200:
+		f.SizeClasses[0]++
+	case n <= 600:
+		f.SizeClasses[1]++
+	case n <= 1200:
+		f.SizeClasses[2]++
+	default:
+		f.SizeClasses[3]++
+	}
+	st.sizes[n]++
+	if st.firstUp == nil {
+		st.firstUp = append([]byte(nil), p.payload...)
+	}
+	if p.proto == 6 && len(st.upStream) < 16<<10 {
+		st.upStream = append(st.upStream, p.payload...)
+	}
+	if p.proto == 17 && (st.quic.crypto == nil || f.Packets <= 6) {
+		q := openInitials(p.payload)
+		if st.quic.crypto == nil {
+			st.quic = q
+		} else if q.decrypted {
+			st.quic.decrypted = true
+			for o, d := range q.crypto {
+				st.quic.crypto[o] = d
 			}
 		}
 	}
+}
 
-	out := make([]Flow, 0, len(order))
-	for _, k := range order {
-		st := flows[k]
+// finish classifies every flow and returns them, the busiest first.
+func (a *analyzer) finish() []Flow {
+	out := make([]Flow, 0, len(a.order))
+	for _, k := range a.order {
+		st := a.flows[k]
 		f := st.f
 		f.FET, f.FETWhy = fullyEncrypted(st.firstUp)
 		top, topN := 0, 0
