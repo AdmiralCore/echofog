@@ -61,18 +61,9 @@ func (r *Runtime) noteRoute(peer [32]byte, dec routepolicy.Decision, dest routep
 			break
 		}
 	}
+	cc, src := r.OwnCountry()
 	r.routeInfo[DeviceID(peer)] = RouteReport{RuleID: dec.RuleID, TableVersion: r.rules.Version,
-		Net: r.NetClass().Effective(), Dest: dest, ViaEntry: viaEntry}
-}
-
-// ownCountry is the client's country: that of the first of its public addresses that the GeoIP knows.
-func (r *Runtime) ownCountry() string {
-	for _, a := range r.planInfo().Addrs {
-		if c, ok := r.Country(a); ok {
-			return c
-		}
-	}
-	return ""
+		Net: r.NetClass().Effective(), Dest: dest, ViaEntry: viaEntry, Country: cc, CountrySource: src}
 }
 
 // addrCountry is the country of a card address; a DNS name or an unknown address has none, so it

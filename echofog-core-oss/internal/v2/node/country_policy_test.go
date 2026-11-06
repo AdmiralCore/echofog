@@ -7,6 +7,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
@@ -19,8 +20,16 @@ func isUDPSuite(c dialCall) bool {
 	return c.suite == objects.SuiteNoise3 || c.suite == objects.SuiteReality2QUIC
 }
 
+// bTLS gives B a reality2-tcp and a reality2-quic address (distinct pairs, so one failed dial does
+// not back the other off) besides its noise3 one.
+func bTLS(c *cards.Config) {
+	c.Listeners = append(c.Listeners,
+		cards.Listener{Suite: objects.SuiteReality2TCP, Host: "203.0.113.10", Port: 443, SNI: "example.com", Mask: c.Listeners[0].Mask},
+		cards.Listener{Suite: objects.SuiteReality2QUIC, Host: "203.0.113.11", Port: 443, SNI: "example.com", Mask: c.Listeners[0].Mask})
+}
+
 func TestUnknownCountryDialsTLSOverTCPOnly(t *testing.T) {
-	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true})
+	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true, bMutate: bTLS})
 	_, _ = w.open(t, node.DialOpt{})
 	if n := w.log.count(isUDPSuite); n != 0 {
 		t.Fatalf("%d noise3 or QUIC dials while the country is unknown, want none", n)
@@ -55,17 +64,33 @@ func TestUnknownCountryNoHolePunching(t *testing.T) {
 	}
 }
 
-// The country becomes known: the next dial follows the new row; no live session is dropped.
-func TestCountryBecomingKnownRecalculatesNewPathsOnly(t *testing.T) {
-	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true})
-	live := node.OpenSessions(w.a.rt)
+// The country becomes known: the next dial follows the new row (no relay here, so a failed dial
+// leaves nothing to reuse) ...
+func TestCountryBecomingKnownRecalculatesNewPaths(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{noLocal: true, noEntry: true, bCover: true, bMutate: bTLS})
+	_, _ = w.open(t, node.DialOpt{})
+	if n := w.log.count(isUDPSuite); n != 0 {
+		t.Fatalf("%d UDP dials before the country is known", n)
+	}
 	w.a.rt.SetCountry("DE")
 	_, _ = w.open(t, node.DialOpt{})
-	if n := w.log.count(func(c dialCall) bool { return c.suite == objects.SuiteNoise3 }); n == 0 {
-		t.Fatal("a known country (DE, destination DE) still gets no noise3 attempt")
+	if n := w.log.count(isUDPSuite); n == 0 {
+		t.Fatal("a known country (DE) still gets no QUIC attempt: the new paths follow the new row")
 	}
-	if got := node.OpenSessions(w.a.rt); got < live {
-		t.Fatalf("open sessions fell from %d to %d when the country became known", live, got)
+}
+
+// ... and a live session is not dropped by it.
+func TestCountryBecomingKnownKeepsLiveSessions(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true, bMutate: bTLS})
+	if _, err := w.open(t, node.DialOpt{}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	live := node.OpenSessions(w.a.rt)
+	w.a.rt.SetCountry("DE")
+	w.a.rt.SetCountry("RU")
+	time.Sleep(200 * time.Millisecond)
+	if got := node.OpenSessions(w.a.rt); got != live {
+		t.Fatalf("open sessions %d -> %d when the country changed", live, got)
 	}
 }
 
