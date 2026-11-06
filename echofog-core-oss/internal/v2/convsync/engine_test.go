@@ -47,7 +47,7 @@ type acct struct {
 	node [32]byte
 }
 
-func newAcct(t *testing.T) acct {
+func newAcct(t testing.TB) acct {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -102,7 +102,7 @@ func (n *netw) Pub(ctx context.Context, node [32]byte) ([32]byte, error) {
 }
 
 // drain delivers until nothing is left to deliver.
-func (n *netw) drain(t *testing.T) {
+func (n *netw) drain(t testing.TB) {
 	t.Helper()
 	for i := 0; i < 100000; i++ {
 		n.mu.Lock()
@@ -127,14 +127,14 @@ type member struct {
 }
 
 type cluster struct {
-	t       *testing.T
+	t       testing.TB
 	n       *netw
 	members []*member
 	group   convlog.Conv
 	clock   time.Time
 }
 
-func newCluster(t *testing.T, size int, groupMembers int) *cluster {
+func newCluster(t testing.TB, size int, groupMembers int) *cluster {
 	t.Helper()
 	c := &cluster{t: t, n: &netw{engines: map[[32]byte]*Engine{}, pubs: map[[32]byte][32]byte{}, sentBy: map[[32]byte]int{}}, group: convlog.Group("g1")}
 	var accts []acct
