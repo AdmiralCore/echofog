@@ -193,7 +193,12 @@ func (r *Runtime) ensureServing(est *session.Established) {
 	if f := beforeServe.Load(); f != nil {
 		(*f)(0)
 	}
-	r.wg.Add(1)
+	if !r.track() {
+		// The runtime has stopped: nothing is served any more, and a late counted goroutine would race
+		// with the wait in Stop.
+		r.serving.Delete(est.Session)
+		return
+	}
 	go func() {
 		defer r.wg.Done()
 		defer r.serving.Delete(est.Session)
