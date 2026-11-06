@@ -91,6 +91,9 @@ func (m *CallManager) linkAEADLocked(room *ActiveRoomState, peer types.PeerID, p
 
 // sealSignalLocked returns a signal for to: sealed when both ends announced a key, as it is otherwise.
 func (m *CallManager) sealSignalLocked(room *ActiveRoomState, to types.PeerID, b []byte) []byte {
+	if m.plainSignals {
+		return b
+	}
 	own := m.signalKXLocked(room)
 	peerKX := m.peerSignalKXLocked(room, to)
 	if own == nil || peerKX == nil {

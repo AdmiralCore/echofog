@@ -24,6 +24,9 @@ const (
 	MediaAudio
 	// MediaVideo is video down a stream's distribution tree.
 	MediaVideo
+	// MediaAuth is the batch authenticator of media units (CALL_AUTH on call/2). A transport that
+	// has no such frame never sends or receives it.
+	MediaAuth
 )
 
 // Handler receives one inbound call frame; from is the transport peer it came from.

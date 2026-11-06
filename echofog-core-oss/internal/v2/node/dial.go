@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
@@ -91,9 +90,17 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 		}
 		est, err := r.dial(ctx, card, local, opt, extra)
 		if err != nil && ctx.Err() == nil && relayFallback(err, opt) {
-			if viaRelay, rerr := r.dialViaRelay(ctx, card, local, opt, extra); rerr == nil {
+			viaRelay, rerr := r.dialViaRelay(ctx, card, local, opt, extra)
+			if rerr == nil {
 				return viaRelay, nil
 			}
+			if errors.Is(rerr, ErrNoDomesticEntry) || errors.Is(rerr, ErrRouteUnsupported) {
+				return nil, rerr
+			}
+		}
+		if err == nil && opt.Carrier == nil && opt.CarrierFunc == nil && opt.CarrierCard == nil {
+			_, dest, dec := r.cardRoute(card)
+			r.noteRoute(card.DeviceID, dec, dest, false)
 		}
 		return est, err
 	})
@@ -137,6 +144,17 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	if len(attempts) == 0 && card != nil {
 		attempts = carrier.Plan(card, r.planInfo())
 	}
+	// The country policy (T6.4) drops the attempts the network class forbids. A relay circuit, an
+	// injected carrier is not a direct dial to a card address. A bootstrap dial is one, to the address
+	// of the list: it has no card, but the row for that address applies all the same (L6).
+	var probeBudget int
+	if (card != nil || opt.CarrierCard != nil) && opt.Carrier == nil && opt.CarrierFunc == nil {
+		var perr error
+		attempts, probeBudget, perr = r.applyRoutePolicy(card, attempts, opt.Probe)
+		if perr != nil {
+			return nil, perr
+		}
+	}
 	if len(attempts) == 0 {
 		if card == nil {
 			return nil, ErrNoRoute
@@ -145,6 +163,9 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	}
 
 	req := carrier.DialRequest{Card: carrierCard, DialContext: r.cfg.DialContext}
+	if probeBudget > 0 {
+		req.DialContext = r.probeDialContext(probeBudget)
+	}
 	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
 
 	var reserved []session.Pair
@@ -243,19 +264,6 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		r.policy.Succeeded(chosenPair)
 		if !r.recordPair(est.SID, 0, chosenPair, est.Session.Done()) {
 			r.policy.Release(chosenPair)
-		}
-	}
-	// The initiator may send on a new stream the moment message 3 is written, while the responder
-	// is still finishing the handshake and has not attached its Guard to the session yet. A PING
-	// on the control stream is answered only after that attach, so it is a deterministic
-	// readiness barrier before the caller opens service streams.
-	if est.Role == session.RoleInitiator {
-		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, perr := est.Session.Ping(waitCtx)
-		cancel()
-		if perr != nil {
-			_ = est.Session.Close()
-			return nil, fmt.Errorf("node: session readiness: %w", perr)
 		}
 	}
 	if !est.Unverified {

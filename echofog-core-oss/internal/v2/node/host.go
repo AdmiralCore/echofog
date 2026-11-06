@@ -79,6 +79,9 @@ type DialOpt struct {
 	// ViaRelay skips the direct carrier plan and reaches the peer through a relay the node already
 	// holds a session with (T6.2). Without it a relay is the fallback after the direct plan fails.
 	ViaRelay bool
+	// Probe makes a direct dial that the country policy would forbid, limited to the probe budget of
+	// the rule and to TCP suites: a reachability check, never a session to carry traffic (T6.4).
+	Probe bool
 }
 
 // PeerStore is Host.Peers(): the new/tried candidate table of pex/2 (services.md §3). A candidate

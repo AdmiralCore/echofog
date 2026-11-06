@@ -284,6 +284,11 @@ func AcceptCarrier(ctx context.Context, c mux.Carrier, cfg AcceptConfig) (*Estab
 				_ = c.Close()
 				return nil, wrapSilent(fmt.Errorf("unexpected reply type %d", reply.FrameType))
 			}
+			// From the moment message 2 leaves, an honest initiator may open service streams
+			// right after its message 3, before this side has attached the session: the guard
+			// queues them (bounded, with a deadline on the injected clock) instead of
+			// refusing them (wire.md §6.2, T3.11).
+			pend.Guard.Hold(mux.HoldConfig{For: cfg.handshakeTimeout(), After: holdAfter(clk)})
 			if err := writeFrame(pend.Stream, clk, uint64(reply.FrameType), reply.Payload); err != nil {
 				_ = c.Close()
 				return nil, wrapSilent(err)
@@ -317,6 +322,11 @@ func AcceptCarrier(ctx context.Context, c mux.Carrier, cfg AcceptConfig) (*Estab
 			return nil, wrapSilent(fmt.Errorf("unexpected handshake action %d", reply.Action))
 		}
 	}
+}
+
+// holdAfter adapts the injected clock to mux.HoldConfig.After.
+func holdAfter(clk carrier.Clock) func(time.Duration, func()) func() bool {
+	return func(d time.Duration, f func()) func() bool { return clk.AfterFunc(d, f).Stop }
 }
 
 // rejectAfterFinish sends REJECT{card-invalid} after message 3 when the initiator's card is

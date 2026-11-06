@@ -217,6 +217,9 @@ type CallManager struct {
 	signer signaling.Signer
 
 	activeRoom *ActiveRoomState
+	// plainSignals sends every signal unsealed: on call/2 the session already seals them end to end
+	// and each signal is a typed, signed CallSignal that sealed bytes could not be mapped to.
+	plainSignals bool
 	// olderNode makes this node act as a version before media key rotation (tests only).
 	olderNode bool
 	// unsignedNode makes it act as a version with rotation but before unit signatures (tests only).
@@ -307,6 +310,14 @@ func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID ty
 		encoders:   make(map[string]LocalEncoder),
 		now:        time.Now,
 	}
+}
+
+// SetPlainSignals makes the manager send its signals unsealed (call/2 carries them sealed by the
+// session). It must be set before joining a room.
+func (m *CallManager) SetPlainSignals(on bool) {
+	m.mu.Lock()
+	m.plainSignals = on
+	m.mu.Unlock()
 }
 
 // Name identifies this service (it implements the node's service interface).

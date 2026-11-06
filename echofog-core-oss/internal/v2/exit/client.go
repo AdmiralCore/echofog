@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -38,6 +39,9 @@ type ClientConfig struct {
 	Sleep func(time.Duration)
 	// Clock times the reassembly of EXIT_UDP fragments (AD13); nil means the system clock.
 	Clock carrier.Clock
+	// NoCamouflage says the exit's card has no camouflaged address: a failure to reach it is then
+	// reported as ReasonNoCamouflage instead of ReasonNoPath.
+	NoCamouflage bool
 	// OnClose runs once when the client is closed (it releases the datagram port).
 	OnClose func()
 }
@@ -77,13 +81,30 @@ func (c *Client) DialExitStream(ctx context.Context, target string) (io.ReadWrit
 	if _, _, err := splitTarget(target); err != nil {
 		return nil, err
 	}
-	return c.dialer.DialExitStream(ctx, target)
+	var cs *clientStream
+	d := core.NewP2PDialer(func(ctx context.Context) (core.FramedStream, error) {
+		st, err := c.open(ctx)
+		cs, _ = st.(*clientStream)
+		return st, err
+	})
+	conn, err := d.DialExitStream(ctx, target)
+	if err != nil {
+		return nil, c.dialErr(err)
+	}
+	if cs == nil {
+		return conn, nil
+	}
+	return &refusalStream{ReadWriteCloser: conn, cs: cs}, nil
 }
 
 // DialExitUDP implements core.UDPDialer: a UDP tunnel, on EXIT_UDP datagrams when the session
 // carries them and on UDP_PKT frames otherwise.
 func (c *Client) DialExitUDP(ctx context.Context) (*core.UDPSession, error) {
-	return c.dialer.DialExitUDP(ctx)
+	u, err := c.dialer.DialExitUDP(ctx)
+	if err != nil {
+		return nil, c.dialErr(err)
+	}
+	return u, nil
 }
 
 // Close ends the client's datagram subscriptions. Open tunnels belong to their callers.
@@ -263,6 +284,8 @@ type clientStream struct {
 	mode tunnelMode
 	req  uint64
 
+	code atomic.Uint64 // 1 + the exit's RESULT or UDP_OK code; 0 until it answered
+
 	buf []byte // the rest of a DATA frame that did not fit the reader's buffer
 }
 
@@ -360,6 +383,7 @@ func (s *clientStream) ReadFrame() (net_types.MessageType, []byte, error) {
 			if err != nil {
 				return 0, nil, err
 			}
+			s.code.Store(uint64(r.Code) + 1)
 			return net_types.TypeExitConnectResult, []byte{resultByte(r.Code)}, nil
 		case f.Type == TypeUDPOK && mode == modeUDP:
 			ok, err := ParseUDPOK(f.Payload)
@@ -369,6 +393,7 @@ func (s *clientStream) ReadFrame() (net_types.MessageType, []byte, error) {
 			if ok.Req != req {
 				return 0, nil, errors.New("exit: UDP_OK for another request")
 			}
+			s.code.Store(uint64(ok.Code) + 1)
 			out := []byte{resultByte(ok.Code)}
 			if ok.Code == ResultOK && ok.Session != 0 {
 				out = binary.BigEndian.AppendUint32(out, ok.Session)
@@ -385,6 +410,12 @@ func (s *clientStream) ReadFrame() (net_types.MessageType, []byte, error) {
 		}
 		return 0, nil, fmt.Errorf("exit: frame %#x from the exit in tunnel mode %d", f.Type, mode)
 	}
+}
+
+// resultCode is the exit's answer to the request, once it came.
+func (s *clientStream) resultCode() (uint32, bool) {
+	v := s.code.Load()
+	return uint32(v - 1), v != 0
 }
 
 // resultByte maps an exit/2 RESULT code to the byte the v1 core understands. 0..4 are the same

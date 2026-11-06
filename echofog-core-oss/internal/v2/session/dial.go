@@ -311,6 +311,9 @@ func dialOnce(ctx context.Context, c mux.Carrier, card *objects.Card, remote *ha
 			if err != nil {
 				return nil, nil, mapHandshakeError(err)
 			}
+			// The responder may open a stream as soon as it has read message 3, before finish has
+			// attached our session: the guard holds it (T3.11).
+			g.Hold(mux.HoldConfig{For: handshake.HandshakeTimeout, After: holdAfter(clk)})
 			if err := writeFrame(raw, clk, frame.TypeHsMsg, msg3); err != nil {
 				return nil, nil, err
 			}

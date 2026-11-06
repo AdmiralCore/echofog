@@ -15,12 +15,24 @@ import (
 // (after the handshake or PATH_BIND on stream 0), every stream other than stream 0 is answered
 // with CLOSE{protocol-violation} and reset, its data discarded (wire.md §6.2). Afterwards it
 // hands accepted streams to the session.
+//
+// The one exception is armed by Hold: once the responder has answered message 1, the initiator
+// may open service streams the moment it writes message 3, while the responder is still checking
+// it and has not attached its session. Those streams are queued, bounded in number and in time,
+// and handed to the session when it binds; whatever is left when the hold ends is refused as
+// before.
 type Guard struct {
 	c     Carrier
 	ch0   chan RawStream
 	bound atomic.Pointer[boundPath]
 	// Rejected counts streams refused before the session was attached.
 	rejected atomic.Uint64
+
+	mu      sync.Mutex
+	holding bool
+	maxHeld int
+	held    []RawStream
+	stop    func() bool
 }
 
 type boundPath struct {
@@ -28,11 +40,57 @@ type boundPath struct {
 	p *path
 }
 
+// Hold limits. A held stream is never read by the Guard, so the bytes behind it wait in the
+// carrier's own flow-control window (DefaultStreamWindow per stream on the byte-stream mux): the
+// memory the hold can pin is at most MaxStreams windows, and no stream data is copied.
+const (
+	DefaultHoldStreams = 16
+	DefaultHoldFor     = 10 * time.Second
+)
+
+// HoldConfig configures Guard.Hold.
+type HoldConfig struct {
+	// MaxStreams is the most streams held at once; further ones are refused (default 16).
+	MaxStreams int
+	// For is how long the hold lasts (default 10 s, the handshake timeout).
+	For time.Duration
+	// After starts the expiry timer (AD13); nil means time.AfterFunc. It returns a stop function.
+	After func(d time.Duration, f func()) (stop func() bool)
+}
+
 // NewGuard starts guarding the carrier.
 func NewGuard(c Carrier) *Guard {
 	g := &Guard{c: c, ch0: make(chan RawStream, 1)}
 	go g.loop()
 	return g
+}
+
+// Hold starts queueing streams that arrive before the session is bound (see Guard). It is a
+// no-op when the session is already bound or a hold is running.
+func (g *Guard) Hold(cfg HoldConfig) {
+	if cfg.MaxStreams <= 0 {
+		cfg.MaxStreams = DefaultHoldStreams
+	}
+	if cfg.For <= 0 {
+		cfg.For = DefaultHoldFor
+	}
+	if cfg.After == nil {
+		cfg.After = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.holding || g.bound.Load() != nil {
+		return
+	}
+	g.holding, g.maxHeld = true, cfg.MaxStreams
+	g.stop = cfg.After(cfg.For, g.expireHold)
+}
+
+// Held returns how many streams wait for the session.
+func (g *Guard) Held() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.held)
 }
 
 // Carrier returns the guarded carrier.
@@ -53,9 +111,65 @@ func (g *Guard) Stream0(ctx context.Context) (RawStream, error) {
 	}
 }
 
-func (g *Guard) bind(s *Session, p *path) { g.bound.Store(&boundPath{s, p}) }
+// bind attaches the session and hands it the streams held so far, in arrival order.
+func (g *Guard) bind(s *Session, p *path) {
+	b := &boundPath{s, p}
+	g.mu.Lock()
+	g.bound.Store(b)
+	held := g.endHoldLocked()
+	g.mu.Unlock()
+	for _, raw := range held {
+		go s.handleIncoming(p, raw)
+	}
+}
+
+// endHoldLocked stops the hold and returns the queue.
+func (g *Guard) endHoldLocked() []RawStream {
+	if g.stop != nil {
+		g.stop()
+		g.stop = nil
+	}
+	g.holding = false
+	held := g.held
+	g.held = nil
+	return held
+}
+
+// expireHold ends a hold whose session never bound: the queued streams are refused as §6.2 says.
+func (g *Guard) expireHold() {
+	g.mu.Lock()
+	if !g.holding {
+		g.mu.Unlock()
+		return
+	}
+	held := g.endHoldLocked()
+	g.mu.Unlock()
+	for _, raw := range held {
+		g.refuse(raw)
+	}
+}
+
+// dropHeld releases the queue when the carrier is gone: nothing is left to answer.
+func (g *Guard) dropHeld() {
+	g.mu.Lock()
+	held := g.endHoldLocked()
+	g.mu.Unlock()
+	for _, raw := range held {
+		raw.Reset(frame.CodeProtocolViolation)
+	}
+}
+
+func (g *Guard) refuse(raw RawStream) {
+	g.rejected.Add(1)
+	go func() {
+		raw.Write(frame.AppendFrame(nil, frame.Frame{Type: frame.TypeClose,
+			Payload: frame.Close{Code: frame.CodeProtocolViolation}.Append(nil)}))
+		raw.Reset(frame.CodeProtocolViolation)
+	}()
+}
 
 func (g *Guard) loop() {
+	defer g.dropHeld()
 	got0 := false
 	for {
 		raw, err := g.c.AcceptStream(context.Background())
@@ -71,12 +185,19 @@ func (g *Guard) loop() {
 			g.ch0 <- raw
 			continue
 		}
-		g.rejected.Add(1)
-		go func() {
-			raw.Write(frame.AppendFrame(nil, frame.Frame{Type: frame.TypeClose,
-				Payload: frame.Close{Code: frame.CodeProtocolViolation}.Append(nil)}))
-			raw.Reset(frame.CodeProtocolViolation)
-		}()
+		g.mu.Lock()
+		if b := g.bound.Load(); b != nil {
+			g.mu.Unlock()
+			go b.s.handleIncoming(b.p, raw)
+			continue
+		}
+		if g.holding && len(g.held) < g.maxHeld {
+			g.held = append(g.held, raw)
+			g.mu.Unlock()
+			continue
+		}
+		g.mu.Unlock()
+		g.refuse(raw)
 	}
 }
 

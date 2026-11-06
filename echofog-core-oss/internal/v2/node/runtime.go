@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/echofog/echofog-core/internal/v2/call"
+	"github.com/echofog/echofog-core/internal/v2/call/callnet"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
@@ -26,6 +29,8 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/pex"
+	"github.com/echofog/echofog-core/internal/v2/portmap"
+	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"github.com/echofog/echofog-core/internal/v2/shape"
@@ -44,6 +49,12 @@ var (
 	ErrPeerCard = errors.New("node: peer card does not match the device")
 	// ErrNoRoute means carrier.Plan found no usable direct attempt (relay is T6.1).
 	ErrNoRoute = errors.New("node: no carrier route to the peer")
+	// ErrNoDomesticEntry: the country policy requires a first hop inside the client's country and
+	// the node has none (T6.4). It is an event for the application, not a quiet degradation.
+	ErrNoDomesticEntry = errors.New("node: no entry node in the own country")
+	// ErrRouteUnsupported: the policy requires an entry in the client's country but the rules name
+	// no verified range (allowed_cidrs), so v2.0 does not support this network (T6.4, H14).
+	ErrRouteUnsupported = errors.New("node: v2.0 does not support this network without a verified entry")
 	// ErrNoSession means a path operation needs a live session to the peer.
 	ErrNoSession = errors.New("node: no live session to the peer")
 	// ErrTooManyPaths means the platform or the standby limit forbids another path now.
@@ -137,6 +148,11 @@ type Config struct {
 	RetryAfter uint32
 	// Country is the offline GeoIP lookup; nil means internal/v2/geoip.
 	Country func(netip.Addr) (string, bool)
+	// RoutePolicy is the country policy table (T6.4); nil means the built-in table.
+	RoutePolicy *routepolicy.Rules
+	// NetClass is the initial kind of the client's network (user setting or the platform report);
+	// the application changes it with SetNetClass. Unknown counts as wired.
+	NetClass routepolicy.NetClass
 	// ShapeProfile is the local shape profile used for idle PADDING when the idle-padding
 	// feature is negotiated (wire.md §6.4, §9). Nil disables idle padding.
 	ShapeProfile *shape.Profile
@@ -147,6 +163,9 @@ type Config struct {
 	// PunchNet supplies the datagram side of hole punching (T6.2). Nil disables punching: sessions
 	// through a relay stay relayed.
 	PunchNet PunchNetwork
+	// PortMap holds the test seams and tuning of port mapping (T6.5b). Whether it runs is
+	// Profile.PortMapping; Enabled here is ignored. Zero values select the production gateway.
+	PortMap portmap.Config
 }
 
 // Runtime is one running v2 node (02-architecture AD5).
@@ -163,14 +182,26 @@ type Runtime struct {
 	localInfo    carrier.LocalInfo
 	relayc       *relayClient
 
+	// rules is the country policy table; netClass the kind of the client's network (T6.4).
+	rules     *routepolicy.Rules
+	netClass  atomic.Uint32
+	routeMu   sync.Mutex
+	routeInfo map[DeviceID]RouteReport
+
 	cardBook *session.CardBook
 	bindings *session.KeyBindings
 	abuse    *session.AbuseLog
 	limits   *session.Limits
 	control  *session.Control
 	observer *session.Observer
-	binder   *mux.Binder
-	policy   *session.PathPolicy
+	// pm forwards the listener ports at the home router (T6.5b); pmApply serializes the cards
+	// following it, pmPorts is what Start asked for.
+	pm      *portmap.Manager
+	pmApply sync.Mutex
+	pmMu    sync.Mutex
+	pmPorts []mappedPort
+	binder  *mux.Binder
+	policy  *session.PathPolicy
 
 	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
 	// this node opened as a carrier client are counted. deadPaths remembers failures that
@@ -195,12 +226,18 @@ type Runtime struct {
 	wg         sync.WaitGroup
 	serving    sync.Map
 	dgrams     *datagramBroker
-	dht        *dht.Table
-	dhtServer  *dht.Server
-	dhtClient  *dht.Client
-	devList    ownDevices
-	chat       *chat.Service
-	chatKeys   *chatcrypto.Crypto
+	// call media (T9.3): the transport over live sessions, call_route and the signal port
+	callTr      *callnet.Transport
+	callSvc     *call.Service
+	callAdmit   atomic.Pointer[func([32]byte) bool]
+	callRoute   atomic.Uint32
+	callSignals atomic.Pointer[signalHolder]
+	dht         *dht.Table
+	dhtServer   *dht.Server
+	dhtClient   *dht.Client
+	devList     ownDevices
+	chat        *chat.Service
+	chatKeys    *chatcrypto.Crypto
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
 	modules     sync.Once
@@ -294,7 +331,12 @@ func New(cfg Config) (*Runtime, error) {
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
 		background:   cfg.Profile.Background,
+		rules:        cfg.RoutePolicy,
 	}
+	if r.rules == nil {
+		r.rules = routepolicy.Default()
+	}
+	r.netClass.Store(uint32(cfg.NetClass))
 	r.hsSem = make(chan struct{}, maxHandshaking)
 	r.dgrams = newDatagramBroker(r)
 	r.accessMgr = cfg.Access
@@ -338,6 +380,13 @@ func New(cfg Config) (*Runtime, error) {
 		Now:      r.clock.Now,
 		OnChange: r.publicAddrChanged,
 	})
+	pmCfg := cfg.PortMap
+	pmCfg.Enabled = cfg.Profile.PortMapping
+	if pmCfg.Clock == nil {
+		pmCfg.Clock = r.carrierClock
+	}
+	pmCfg.OnChange = r.portMapChanged
+	r.pm = portmap.New(pmCfg)
 	r.relayc = newRelayClient(r)
 	if b, ok := cfg.PunchNet.(interface{ bind(*Runtime) }); ok {
 		b.bind(r)
@@ -529,6 +578,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("node: access listeners: %w", err)
 	}
 
+	r.startPortMapping(listeners[:len(r.cfg.Listeners)+len(r.cfg.ListenerSources)])
+
 	for _, l := range listeners {
 		r.wg.Add(1)
 		go r.acceptLoop(runCtx, l)
@@ -575,6 +626,8 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		cancel()
 	}
 	closeListeners(listeners)
+	// the router forgets the forwarded ports now, not when their lifetime runs out
+	_ = r.pm.Close(ctx)
 	if dhtTable != nil {
 		// Stop saves as well; the explicit save keeps the runtime contract visible and is
 		// idempotent.
