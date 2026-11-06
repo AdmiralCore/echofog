@@ -146,7 +146,7 @@
         {#if preview}
             <div class="relative aspect-video bg-black">
                 <VideoView stream={preview} />
-                <span class="absolute left-2 top-2 rounded bg-[#f23f43] px-1.5 py-0.5 text-[10px] font-extrabold uppercase">{$t('call.live')}</span>
+                <span class="absolute left-2 top-2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase" style="background:var(--live);color:var(--live-ink)">{$t('call.live')}</span>
             </div>
         {/if}
         <div class="px-3 pt-3 flex items-center gap-2">
@@ -224,17 +224,16 @@
         background: var(--elevated);
         color: var(--text);
         border: 1px solid var(--line-soft);
-        box-shadow: var(--shadow);
+        box-shadow: var(--shadow-lg);
     }
     .dismiss { padding: 0; background: none; border: none; color: var(--faint); }
     .dismiss:hover:not(:disabled) { color: var(--text); background: none; border: none; }
     .mini-card {
         background: var(--glass);
-        backdrop-filter: blur(20px) saturate(1.4);
         color: var(--text);
         border: 1px solid var(--line-soft);
         box-shadow: var(--shadow-lg);
-        transition: box-shadow 0.2s, transform 0.25s var(--spring);
+        transition: box-shadow 0.2s, transform var(--dur) var(--ease);
     }
     .mini-card.dragging { transform: scale(1.02); box-shadow: var(--shadow-lg), 0 0 0 2px var(--accent-ring); }
     :global(.mini-av) { box-shadow: 0 0 0 2px var(--panel); }

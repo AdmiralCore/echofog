@@ -120,11 +120,10 @@
 <style>
     .pmenu {
         background: var(--glass);
-        backdrop-filter: blur(20px) saturate(1.4);
         color: var(--text);
         border: 1px solid var(--line-soft);
         box-shadow: var(--shadow-lg);
-        animation: pm-in 0.28s var(--spring);
+        animation: pm-in var(--dur) var(--ease);
         transform-origin: top left;
     }
     @keyframes pm-in { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }

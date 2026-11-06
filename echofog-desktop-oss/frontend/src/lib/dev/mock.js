@@ -1612,4 +1612,31 @@ if (new URLSearchParams(location.search).has('missed')) {
   }, 200);
 }
 
+
+// ?mock&streamchannel: a model of a stream channel (video, chat by role, moderation) over the app.
+// There is no core behind it; the screen exists only here, so a real build never has it.
+if (new URLSearchParams(location.search).has('streamchannel')) {
+  const roles = { viewer: { tone: 'neutral' }, booster: { tone: 'accent' }, moderator: { tone: 'info' }, owner: { tone: 'warn' } };
+  const people = [
+    { id: 'alice', name: 'Alice Moreau', role: 'owner', onStage: true },
+    { id: 'bob', name: 'Bob Ivanov', role: 'moderator', onStage: true },
+    { id: 'nina', name: 'Nina Park', role: 'booster' },
+    { id: 'marco', name: 'Marco Rossi', role: 'viewer' },
+    { id: 'tom', name: 'Tom Berg', role: 'viewer' },
+    { id: 'eva', name: 'Eva Lind', role: 'booster' },
+  ];
+  const lines = [
+    ['nina', 'Cool boss design, which game is this?'], ['marco', 'What graphics preset is it?'], ['bob', 'Please keep spoilers out of the chat'],
+    ['alice', 'Phase 2, attempt 12. Wish me luck'], ['tom', 'How many attempts so far?'], ['eva', 'Two hours in, he is persistent'],
+  ];
+  const at = Date.now();
+  const messages = lines.map(([from, text], i) => ({ from, text, at: at - (lines.length - i) * 40000 }));
+  import('../components/call/StreamChannel.svelte').then(({ default: StreamChannel }) => {
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;inset:0;z-index:9000';
+    document.body.appendChild(host);
+    const view = new StreamChannel({ target: host, props: { data: { title: 'Boss raid, phase 2 · attempt 12', host: 'Alice Moreau', viewers: 1248, roles, people, messages }, onClose: () => { view.$destroy(); host.remove(); } } });
+  });
+}
+
 console.info('[wails-mock] fake Go core active');

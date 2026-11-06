@@ -70,7 +70,7 @@
 <style>
     .stats {
         position: absolute; right: 8px; bottom: 8px; z-index: 5; width: 240px; padding: 8px 10px 9px;
-        border-radius: 10px; background: rgba(8, 10, 16, 0.78); backdrop-filter: blur(6px);
+        border-radius: 10px; background: rgba(8, 10, 13, 0.82);
         color: #e8eaf0; font-size: 11px; line-height: 1.45; font-variant-numeric: tabular-nums; pointer-events: none;
     }
     .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; font-weight: 650; }

@@ -13,6 +13,9 @@
 
     export let media;
     export let mirror = false;
+    /** the layout of a camera that is not the call's own (a stream channel preview): {x,y,w,shape,hidden} */
+    export let state = null;
+    export let onChange = null;
 
     // width / height of each shape
     const SHAPES = { circle: 1, rounded: 4 / 3, square: 1, hexagon: 1.155, wide: 16 / 9 };
@@ -22,7 +25,10 @@
 
     let W = 0;
     let H = 0;
-    $: pip = $callState.pip;
+    $: pip = state || $callState.pip;
+    const setPip = (patch, persist) => (onChange ? onChange(patch, persist) : callService.setPip(patch, persist));
+    // near an edge the camera snaps into the corner
+    const snap = (v) => (v < 0.07 ? 0 : v > 0.93 ? 1 : v);
     $: shape = SHAPES[pip.shape] ? pip.shape : 'circle';
     $: w = Math.max(64, Math.min(W * pip.w, W - 2 * MARGIN, (H - 2 * MARGIN) * SHAPES[shape]));
     $: h = w / SHAPES[shape];
@@ -46,18 +52,20 @@
         if (drag.kind === 'move') {
             const roomX = Math.max(1, W - w - 2 * MARGIN);
             const roomY = Math.max(1, H - h - 2 * MARGIN);
-            callService.setPip({ x: clamp(drag.x + dx / roomX, 0, 1), y: clamp(drag.y + dy / roomY, 0, 1) }, false);
+            setPip({ x: clamp(drag.x + dx / roomX, 0, 1), y: clamp(drag.y + dy / roomY, 0, 1) }, false);
         } else {
             // the handle sits on the corner that faces the middle of the tile
             const sign = pip.x > 0.5 ? -1 : 1;
-            callService.setPip({ w: clamp(drag.w + (sign * dx) / Math.max(1, W), MIN_W, MAX_W) }, false);
+            setPip({ w: clamp(drag.w + (sign * dx) / Math.max(1, W), MIN_W, MAX_W) }, false);
         }
     }
 
     function end() {
         if (!drag) return;
+        const was = drag;
         drag = null;
-        callService.setPip({}, true); // remembered once it is let go
+        if (was.kind === 'move') setPip({ x: snap(pip.x), y: snap(pip.y) }, false);
+        setPip({}, true); // remembered once it is let go
     }
 
     const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -80,10 +88,10 @@
             <div class="bar" on:pointerdown|stopPropagation>
                 {#each Object.keys(SHAPES) as s (s)}
                     <button class="swatch" class:on={s === shape} title={$t('call.pip.shape.' + s)} aria-label={$t('call.pip.shape.' + s)} aria-pressed={s === shape}
-                        on:click|stopPropagation={() => callService.setPip({ shape: s })}><span class="glyph glyph-{s}"></span></button>
+                        on:click|stopPropagation={() => setPip({ shape: s })}><span class="glyph glyph-{s}"></span></button>
                 {/each}
-                <button class="swatch" title={$t('call.pip.hide')} aria-label={$t('call.pip.hide')} on:click|stopPropagation={() => callService.setPip({ hidden: true })}>
-                    <Icon name="close" size={12} stroke={2.4} />
+                <button class="swatch" title={$t('call.pip.toTile')} aria-label={$t('call.pip.toTile')} on:click|stopPropagation={() => setPip({ hidden: true })}>
+                    <Icon name="layout" size={12} stroke={2} />
                 </button>
             </div>
             <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -97,23 +105,23 @@
     .room { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
     .pip {
         position: absolute; pointer-events: auto; cursor: grab; touch-action: none;
-        filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.55));
     }
     .pip.dragging { cursor: grabbing; }
-    .frame { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    .frame { width: 100%; height: 100%; overflow: hidden; background: #000; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 4px 14px rgba(0, 0, 0, 0.5); }
+    .shape-hexagon .frame { box-shadow: none; }
     .shape-circle .frame { border-radius: 50%; }
-    .shape-rounded .frame { border-radius: 18px; }
+    .shape-rounded .frame { border-radius: 14px; }
     .shape-square .frame { border-radius: 4px; }
     .shape-wide .frame { border-radius: 10px; }
     .shape-hexagon .frame { clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); }
     .bar {
         position: absolute; left: 50%; top: 6px; transform: translateX(-50%);
-        display: flex; gap: 3px; padding: 3px; border-radius: 99px; background: rgba(0, 0, 0, 0.7);
-        opacity: 0; transition: opacity 0.15s; cursor: default;
+        display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: rgba(8, 10, 13, 0.78);
+        opacity: 0; transition: opacity var(--dur) var(--ease); cursor: default;
     }
-    .pip:hover .bar, .pip:focus-within .bar { opacity: 1; }
+    .pip:hover .bar, .pip:focus-within .bar, .pip.dragging .bar { opacity: 1; }
     .swatch {
-        width: 20px; height: 20px; padding: 0; border: none; border-radius: 99px; background: transparent; color: #fff;
+        width: 20px; height: 20px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: #fff;
         display: flex; align-items: center; justify-content: center;
     }
     .swatch:hover:not(:disabled), .swatch.on { background: rgba(255, 255, 255, 0.22); border: none; }
