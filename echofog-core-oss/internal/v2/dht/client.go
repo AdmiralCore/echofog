@@ -44,6 +44,9 @@ var (
 	ErrNotStored = errors.New("dht: record stored on no node")
 	// ErrNotStorable means the DHT never stores this record (name bindings, foreign labels).
 	ErrNotStorable = errors.New("dht: record is not storable")
+	// ErrNotPublishable is a card that must not leave the node: a peer or invitation card (they carry
+	// the noise3 masking keys) or an unlisted one (objects.md §3.3).
+	ErrNotPublishable = errors.New("dht: card is not publishable")
 )
 
 // RemoteError is an ERROR frame of a peer (services.md §2: 0x100 bad-record, 0x101 wrong-key).
