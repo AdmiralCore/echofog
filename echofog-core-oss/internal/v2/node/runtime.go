@@ -13,6 +13,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/chat"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -60,6 +61,13 @@ type Config struct {
 	Device  *identity.Device
 	// Cards builds and remembers the node's own cards. Required.
 	Cards *cards.CardBuilder
+	// Chat turns chat/2 on (T7.1/T7.2): the prekeys of the device are published, BUNDLE_GET and DELIVER are
+	// served and the outbox runs. ChatEvents receives incoming messages and statuses, ChatMail is the
+	// mailbox client for recipients that are away (mailbox/2 client, T7.4; nil until then).
+	Chat       bool
+	ChatEvents chat.Events
+	ChatMail   chat.Mail
+
 	// Store is the persistent store; the runtime opens its own namespaces in it. It does not
 	// close the store: the owner keeps it across runtime restarts. Required.
 	Store *store.Store
