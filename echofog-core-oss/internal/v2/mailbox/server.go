@@ -1601,3 +1601,14 @@ func max(a, b int64) int64 {
 	}
 	return b
 }
+
+// PrivateItems is how many items the private queues hold (metrics and tests).
+func (s *Server) PrivateItems() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.totalLocked(false)
+	if err != nil {
+		return -1
+	}
+	return int(c.Items)
+}

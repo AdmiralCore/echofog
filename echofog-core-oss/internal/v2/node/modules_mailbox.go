@@ -45,6 +45,7 @@ func (r *Runtime) registerMailbox() {
 		r.log.Warn("node: mailbox relay", "err", err)
 		return
 	}
+	r.mailSrv = srv
 	r.Register(spec, func(ctx context.Context, p Peer, st *mux.Stream) {
 		srv.Handle(ctx, mailbox.Peer{
 			Node:   [32]byte(p.Node),

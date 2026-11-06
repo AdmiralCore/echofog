@@ -138,3 +138,11 @@ func (r *Runtime) chatPrekeys() []byte {
 	}
 	return raw
 }
+
+// mailboxItems counts the items this node's mailbox relay holds in private queues (tests).
+func (r *Runtime) mailboxItems() int {
+	if r.mailSrv == nil {
+		return -1
+	}
+	return r.mailSrv.PrivateItems()
+}

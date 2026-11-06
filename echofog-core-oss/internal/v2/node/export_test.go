@@ -4,6 +4,9 @@ package node
 // that the platform flags and typed events are actually wired, without widening the public API.
 
 import (
+	"context"
+	"errors"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"net/netip"
 
 	"github.com/echofog/echofog-core/internal/v2/handshake"
@@ -111,3 +114,25 @@ var AllowRelayCardAddrs = func(f func(netip.Addr) bool) func(netip.Addr) bool {
 	relayCardAddrOK = f
 	return old
 }
+
+// MailboxReceiverTick runs one round of the node's mailbox receiver (the runtime also does it on a timer).
+var MailboxReceiverTick = func(r *Runtime, ctx context.Context) error {
+	if r.mailRecv == nil {
+		return errors.New("no mailbox receiver")
+	}
+	return r.mailRecv.Tick(ctx)
+}
+
+// SetMailboxClientOpts lets a test choose the dial options of the node's mailbox client (in-memory carriers).
+var SetMailboxClientOpts = func(r *Runtime, f func([32]byte) DialOpt) { r.mailboxClientOpts = f }
+
+// MailboxQueues returns the current queues of the node's mailbox receiver.
+var MailboxQueues = func(r *Runtime) []mailbox.QueueRef {
+	if r.mailRecv == nil {
+		return nil
+	}
+	return r.mailRecv.Queues()
+}
+
+// MailboxItems counts the items a mailbox relay holds (private queues).
+var MailboxItems = func(r *Runtime) int { return r.mailboxItems() }

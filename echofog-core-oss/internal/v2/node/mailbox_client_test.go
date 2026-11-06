@@ -219,3 +219,36 @@ func TestClientOnlyNodeDoesNotServeMailbox(t *testing.T) {
 		}
 	}
 }
+
+// A chat node with MailboxRelays keeps a queue on M: the queue exists, and a deposit of a sender
+// reaches the node's chat service through the fetch loop (the item is acknowledged once handled).
+func TestChatNodeKeepsAQueueOnItsMailboxRelay(t *testing.T) {
+	w := newMailboxWorld(t)
+	var contacts [][32]byte
+	rcpt := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) {
+		c.Chat = true
+		c.MailboxRelays = func() [][32]byte { return [][32]byte{[32]byte(w.m.id.DeviceID)} }
+		c.ChatContacts = func() [][32]byte { return contacts }
+	})
+	rcpt.start(t)
+	node.SetMailboxClientOpts(rcpt.rt, w.dialOpts(t))
+	if err := node.MailboxReceiverTick(rcpt.rt, context.Background()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	q := node.MailboxQueues(rcpt.rt)
+	if len(q) != 1 || q[0].Relay != [32]byte(w.m.id.DeviceID) {
+		t.Fatalf("queues %v", q)
+	}
+	// a deposit of garbage reaches the chat service, which finds it final and lets it go
+	s := &mailbox.Sender{Dial: w.s.rt.MailboxDialer(w.dialOpts(t))}
+	st, err := s.Deposit(context.Background(), [32]byte(w.f.id.DeviceID), w.target(t, q[0].Queue[:]), bytes.Repeat([]byte{1}, 200))
+	if err != nil || st != mailbox.StatusStored {
+		t.Fatalf("deposit: %d %v", st, err)
+	}
+	if err := node.MailboxReceiverTick(rcpt.rt, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := node.MailboxItems(w.m.rt); n != 0 {
+		t.Fatalf("M still holds %d items: the chat service did not take them", n)
+	}
+}
