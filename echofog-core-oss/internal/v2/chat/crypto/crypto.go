@@ -107,6 +107,7 @@ const (
 	metaKey    = "v2-meta"    // when the current signed and KEM prekeys were first seen
 	prekeysKey = "v2-prekeys" // the prekeys/2 envelope issued last
 	bindPrefix = "bind:"      // sessions namespace: device -> account (node ID)
+	prevPrefix = "prev:"      // sessions namespace: device -> end (unix seconds) of the kept replaced session
 	clockSkew  = time.Minute  // tolerance when a creation time is in the future
 	metaLen    = 32 + 8 + 32 + 8
 )
@@ -402,6 +403,56 @@ func (c *Crypto) Peer(device [32]byte) (node [32]byte, ok bool) {
 	return node, true
 }
 
+// PrevRetention is how long a replaced session stays for messages still on the way (services.md 4.4).
+const PrevRetention = 7 * 24 * time.Hour
+
+// prevID is the session-manager key under which the replaced session of device is kept.
+func prevID(device [32]byte) types.PeerID {
+	return types.PeerID(sha256.Sum256(append([]byte("echofog/chat2/prev"), device[:]...)))
+}
+
+func (c *Crypto) prevKey(device [32]byte) []byte {
+	return []byte(prevPrefix + c.sessDB.BlindID(hex.EncodeToString(device[:])))
+}
+
+// keepPrev moves the current session with device, if there is one, to the replaced slot: a session
+// replaced by a fresh one still opens messages sent before the replacement for 7 days. c.mu is held.
+func (c *Crypto) keepPrev(device [32]byte) error {
+	old, err := c.sm.Load(types.PeerID(device))
+	if err != nil {
+		return nil // no session to keep
+	}
+	if err := c.sm.Save(prevID(device), old); err != nil {
+		return err
+	}
+	end := uint64(c.cfg.Now().Add(PrevRetention).Unix())
+	return c.sessKV.Put(c.prevKey(device), binary.BigEndian.AppendUint64(nil, end))
+}
+
+// dropPrev forgets the replaced session of device. c.mu is held.
+func (c *Crypto) dropPrev(device [32]byte) {
+	_ = c.sm.Delete(prevID(device))
+	_ = c.sessKV.Delete(c.prevKey(device))
+}
+
+// loadPrev returns the replaced session of device while it is within its 7 days; an expired one is
+// deleted. c.mu is held.
+func (c *Crypto) loadPrev(device [32]byte) *x3dh.X3DHSession {
+	b, err := c.sessKV.Get(c.prevKey(device))
+	if err != nil || len(b) != 8 {
+		return nil
+	}
+	if c.cfg.Now().Unix() >= int64(binary.BigEndian.Uint64(b)) {
+		c.dropPrev(device)
+		return nil
+	}
+	sess, err := c.sm.Load(prevID(device))
+	if err != nil {
+		return nil
+	}
+	return sess
+}
+
 // ikOf reads the identity DH key of a prekeys/2 object.
 func ikOf(p *objects.Prekeys) ([32]byte, error) {
 	var out [32]byte
@@ -487,6 +538,9 @@ func (c *Crypto) Start(peer *objects.Prekeys, dl *objects.DeviceList, first []by
 	if _, err := chatpb.ParseX3DHInit(out); err != nil {
 		return nil, err // a bug: Start must never build what the parser refuses
 	}
+	if err := c.keepPrev(peer.DeviceID); err != nil {
+		return nil, err
+	}
 	if err := c.sm.Save(types.PeerID(peer.DeviceID), sess); err != nil {
 		return nil, err
 	}
@@ -547,6 +601,9 @@ func (c *Crypto) Accept(sender *objects.Prekeys, dl *objects.DeviceList, init []
 	if err != nil {
 		return nil, ErrRejected
 	}
+	if err := c.keepPrev(sender.DeviceID); err != nil {
+		return nil, err
+	}
 	if err := c.sm.Save(types.PeerID(sender.DeviceID), sess); err != nil {
 		return nil, err
 	}
@@ -602,12 +659,24 @@ func (c *Crypto) Decrypt(device [32]byte, msg []byte) ([]byte, error) {
 	if err != nil {
 		return nil, ErrRejected
 	}
-	plain, err := sess.RatchetDecrypt(types.EncryptedMessage{
+	em := types.EncryptedMessage{
 		Header:     types.RatchetHeader{DH: types.RatchetPublicKey(m.GetHeader().GetRatchetKey()), PN: m.GetHeader().GetPn(), N: m.GetHeader().GetN()},
 		Ciphertext: m.GetCiphertext(),
-	})
+	}
+	plain, err := sess.RatchetDecrypt(em)
 	if err != nil {
-		return nil, ErrRejected
+		// a message sent before the session was replaced
+		prev := c.loadPrev(device)
+		if prev == nil {
+			return nil, ErrRejected
+		}
+		if plain, err = prev.RatchetDecrypt(em); err != nil {
+			return nil, ErrRejected
+		}
+		if err := c.sm.Save(prevID(device), prev); err != nil {
+			return nil, err
+		}
+		return plain, nil
 	}
 	if err := c.sm.Save(types.PeerID(device), sess); err != nil {
 		return nil, err
