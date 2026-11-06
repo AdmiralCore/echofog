@@ -21,6 +21,8 @@ const (
 	maxSources3   = 1024
 	maxPerSource3 = 512
 	sourceIdle3   = 30 * time.Second
+	// maxSourceBytes3 bounds the ciphertext one source keeps as candidates.
+	maxSourceBytes3 = 2 << 20
 )
 
 var (

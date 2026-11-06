@@ -368,3 +368,72 @@ func BenchmarkFiftyAudioSenders(b *testing.B) {
 		rx.Sweep()
 	}
 }
+
+func TestUnknownSendersCreateNoState(t *testing.T) {
+	h := newRx(t, false)
+	for i := 0; i < 5000; i++ { // nobody announced these senders in a signed join
+		hd := Header3{Kind: Kind3Audio, Sender: byte(i), Gen: byte(i >> 8), Stream: byte(i >> 4), Seq: uint32(i)}
+		if r := h.r.OnUnit(hd, []byte{1}); r.Play || r.Forward {
+			t.Fatalf("unit of an unknown sender is played/forwarded: %+v", r)
+		}
+	}
+	h.r.mu.Lock()
+	n := len(h.r.src)
+	h.r.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d sources created before authentication", n)
+	}
+	var auths [][]byte
+	for seq := uint32(0); seq < 5; seq++ {
+		hd, ct, a := h.send(seq)
+		h.r.OnUnit(hd, ct)
+		auths = append(auths, a...)
+	}
+	if res, _ := h.r.OnAuth(auths[0]); len(res.Verified) != 5 {
+		t.Fatalf("the real source was crowded out: verified %d", len(res.Verified))
+	}
+}
+
+func TestCandidateBytesAreBounded(t *testing.T) {
+	h := newRx(t, false)
+	big := make([]byte, 19000)
+	for seq := uint32(0); seq < 500; seq++ {
+		hd, _ := unit3(Kind3Video, seq)
+		for v := 0; v < MaxCandidates3; v++ {
+			c := append([]byte(nil), big...)
+			c[0] = byte(v)
+			h.r.OnUnit(hd, c)
+		}
+	}
+	h.r.mu.Lock()
+	defer h.r.mu.Unlock()
+	for k, s := range h.r.src {
+		total := 0
+		for _, cs := range s.cands {
+			for _, c := range cs.list {
+				total += len(c.ct)
+			}
+		}
+		if total > maxSourceBytes3 {
+			t.Fatalf("source %+v holds %d bytes of candidates, limit %d", k, total, maxSourceBytes3)
+		}
+	}
+}
+
+func TestStaleCandidatesGoWithoutExplicitSweep(t *testing.T) {
+	h := newRx(t, false)
+	for seq := uint32(0); seq < 400; seq++ {
+		hd, _ := unit3(Kind3Audio, seq)
+		h.r.OnUnit(hd, []byte{1, 2, 3})
+	}
+	h.clk.Advance(3 * time.Second)
+	hd, _ := unit3(Kind3Audio, 1000)
+	h.r.OnUnit(hd, []byte{9})
+	h.r.mu.Lock()
+	defer h.r.mu.Unlock()
+	for _, s := range h.r.src {
+		if len(s.cands) > 5 {
+			t.Fatalf("%d stale candidates kept: nothing calls Sweep, the receiver must age state itself", len(s.cands))
+		}
+	}
+}
