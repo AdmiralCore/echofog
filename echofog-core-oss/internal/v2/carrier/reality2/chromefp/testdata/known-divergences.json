@@ -1,0 +1,19 @@
+{
+ "chrome": "156.0.8078.81",
+ "tcp": [
+  "ja4: chrome t13d1517h2_8daaf6152771_f10ceb9fcfd7, ours t13d1516h2_8daaf6152771_d8a2da3f94cd",
+  "extensions: chrome 0000,0005,000a,000b,000d,0010,0012,0017,001b,0023,002b,002d,0033,0a0a,0a0a,44cd,ca34,fe0d,ff01, ours 0000,0005,000a,000b,000d,0010,0012,0017,001b,0023,002b,002d,0033,0a0a,0a0a,44cd,fe0d,ff01",
+  "sig_algs: chrome 0a0a,0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601, ours 0403,0804,0401,0503,0805,0501,0806,0601",
+  "body_lens: chrome map[5:5 10:12 11:2 13:26 18:0 23:0 27:3 35:0 43:7 45:2 51764:186 65281:1], ours map[5:5 10:12 11:2 13:18 18:0 23:0 27:3 35:0 43:7 45:2 65281:1]"
+ ],
+ "quic": [
+  "ciphers: chrome 1301,1302,1303, ours 0a0a,1301,1302,1303",
+  "extensions: chrome 0000,000a,000d,0010,001b,002b,002d,0033,0039,44cd,ca34,fe0d, ours 0000,000a,000d,0010,001b,002b,002d,0033,0039,0a0a,0a0a,44cd,ca34,fe0d",
+  "grease_first: chrome false, ours true",
+  "grease_last: chrome false, ours true",
+  "groups: chrome 11ec,001d,0017,0018, ours 0a0a,11ec,001d,0017,0018",
+  "versions: chrome 0304, ours 0a0a,0304",
+  "key_shares: chrome [{4588 1216} {29 32}], ours [{2570 1} {4588 1216} {29 32}]",
+  "body_lens: chrome map[10:10 13:20 27:3 43:3 45:2 51764:186], ours map[10:12 13:20 27:3 43:5 45:2 51764:186]"
+ ]
+}

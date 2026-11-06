@@ -171,7 +171,9 @@ func TestLiveChrome(t *testing.T) {
 		t.Skip("no stable Chrome on this machine (set CHROME_BIN); the stored samples still gate CI")
 	}
 	update := os.Getenv("CHROMEFP_UPDATE") == "1"
+	accept := os.Getenv("CHROMEFP_ACCEPT") == "1"
 	k := loadKnown(t)
+	accepted := known{Chrome: ver}
 	for _, tc := range []struct {
 		transport string
 		capture   func(*testing.T, string) []byte
@@ -204,6 +206,18 @@ func TestLiveChrome(t *testing.T) {
 			diffs := Compare(live[0], parseOurs(t, tc.ours(t)))
 			if k.Chrome != "" && k.Chrome != ver {
 				t.Logf("known-divergences.json is for Chrome %s, this is %s", k.Chrome, ver)
+			}
+			if accept {
+				// Writes the current divergences as the list awaiting review; the diff of this
+				// file in git is the review.
+				if tc.transport == "tcp" {
+					accepted.TCP = diffs
+				} else {
+					accepted.QUIC = diffs
+				}
+				b, _ := json.MarshalIndent(accepted, "", " ")
+				_ = os.WriteFile(knownFile, append(b, 10), 0o644)
+				return
 			}
 			checkDivergences(t, diffs, tc.listed)
 			stored := newestSample(t, tc.transport)
