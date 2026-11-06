@@ -273,6 +273,11 @@ func usableReported(a netip.Addr) bool {
 	return true
 }
 
+// PublicAddr reports whether an address is a public unicast address: not private, loopback, link-local,
+// shared, documentation, benchmarking, multicast or reserved, and not an IPv6 form that carries an IPv4
+// address (NAT64, 6to4, Teredo; the IPv4-mapped form is judged as the IPv4 address it holds).
+func PublicAddr(a netip.Addr) bool { return usableReported(a) }
+
 // usablePeer reports whether an address can place a peer in a network.
 func usablePeer(a netip.Addr) bool {
 	a = a.Unmap()

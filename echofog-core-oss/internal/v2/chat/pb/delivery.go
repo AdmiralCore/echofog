@@ -91,6 +91,10 @@ func ParsePersonal(b []byte) (*PersonalMessageProto, error) {
 			if err := checkReceipt(k.Delivered); err != nil {
 				return nil, err
 			}
+		case *Control_Mailbox:
+			if q := k.Mailbox; len(q.GetRelay()) != KeyLen || len(q.GetQueue()) != 16 || len(q.GetRelayCard()) > 4096 || q.GetNotAfter() == 0 {
+				return nil, invalid("mailbox queue of a wrong shape")
+			}
 		default:
 			return nil, invalid("control without a kind")
 		}

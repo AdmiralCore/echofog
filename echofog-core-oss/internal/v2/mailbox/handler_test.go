@@ -288,11 +288,22 @@ func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 	q.push(pair.Server)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, st, err := c.rt.Open(ctx, m.id.DeviceID, service.Mailbox, node.DialOpt{
+	// Since T7.4 every node offers mailbox/2 as a client, so the stream may open; a node without the
+	// role must still store and serve nothing: the stream ends without an answer.
+	_, st, err := c.rt.Open(ctx, m.id.DeviceID, service.Mailbox, node.DialOpt{
 		Card: m.peerCard(t), Carrier: pair.Client,
-	}); err == nil {
-		_ = st.Close()
-		t.Fatal("a node without the mailbox role offered mailbox/2")
+	})
+	if err != nil {
+		return
+	}
+	defer st.Close()
+	body := mailbox.QueueCreate{Req: 1, Queue: bytes.Repeat([]byte{1}, mailbox.QueueSize), AuthKey: bytes.Repeat([]byte{2}, 32)}.Append(nil)
+	if err := st.WriteFrame(mailbox.FrameQueueCreate, 0, body); err != nil {
+		return
+	}
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if f, err := st.ReadFrame(); err == nil {
+		t.Fatalf("a node without the mailbox role answered with frame 0x%x", f.Type)
 	}
 }
 

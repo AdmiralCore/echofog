@@ -25,6 +25,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/keys"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -80,6 +81,14 @@ type Config struct {
 	Chat       bool
 	ChatEvents chat.Events
 	ChatMail   chat.Mail
+	// MailboxRelays are the mailbox relays M where this node keeps its queues while it is away (T7.4);
+	// nil means the node has no queue. MailboxVia are the forwarding relays F it hands deposits to
+	// (default: the same). ChatContacts lists the accounts told about a new queue.
+	MailboxRelays func() [][32]byte
+	MailboxVia    func() [][32]byte
+	ChatContacts  func() [][32]byte
+	// MailboxWait is the long-poll time of the fetch loop; zero means 30 s.
+	MailboxWait time.Duration
 
 	// Store is the persistent store; the runtime opens its own namespaces in it. It does not
 	// close the store: the owner keeps it across runtime restarts. Required.
@@ -245,21 +254,26 @@ type Runtime struct {
 	serving    sync.Map
 	dgrams     *datagramBroker
 	// call media (T9.3): the transport over live sessions, call_route and the signal port
-	callTr      *callnet.Transport
-	callSvc     *call.Service
-	callAdmit   atomic.Pointer[func([32]byte) bool]
-	callRoute   atomic.Uint32
-	callSignals atomic.Pointer[signalHolder]
-	dht         *dht.Table
-	dhtServer   *dht.Server
-	dhtClient   *dht.Client
-	releaseM    *release.Manager
-	devList     ownDevices
-	chat        *chat.Service
-	chatKeys    *chatcrypto.Crypto
+	callTr            *callnet.Transport
+	callSvc           *call.Service
+	callAdmit         atomic.Pointer[func([32]byte) bool]
+	callRoute         atomic.Uint32
+	callSignals       atomic.Pointer[signalHolder]
+	dht               *dht.Table
+	dhtServer         *dht.Server
+	dhtClient         *dht.Client
+	releaseM          *release.Manager
+	devList           ownDevices
+	chat              *chat.Service
+	chatKeys          *chatcrypto.Crypto
+	mailRecv          *mailbox.Receiver
+	mailboxClientOpts func([32]byte) DialOpt
+	mailSrv           *mailbox.Server
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
-	modules     sync.Once
+	// mailboxDialHook is the same for the dials of the forwarding relay F.
+	mailboxDialHook func(*objects.Card) DialOpt
+	modules         sync.Once
 	// exitMu guards exitIdents, the per-exit client identities loaded in this run (T10.2).
 	exitMu     sync.Mutex
 	exitIdents map[DeviceID]*exitIdent
