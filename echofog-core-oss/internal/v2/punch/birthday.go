@@ -190,6 +190,12 @@ func NewBirthday(cfg BirthdayConfig) *Birthday {
 	return &Birthday{cfg: cfg}
 }
 
+// Enabled reports whether the gates are open now.
+func (b *Birthday) Enabled() bool { return b.cfg.Gates != nil && b.cfg.Gates().Open() }
+
+// Net is the socket side the modes run on.
+func (b *Birthday) Net() SockNet { return b.cfg.Net }
+
 // Stats returns the attempts started and the ones that found a mapping (counts only).
 func (b *Birthday) Stats() (tried, ok int64) { return b.tried.Load(), b.ok.Load() }
 

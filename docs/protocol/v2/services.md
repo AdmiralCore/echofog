@@ -333,10 +333,12 @@ function, and states it in `mode`. A range is *narrow* when `1024 ≤ port_lo �
 | symmetric | unknown or not stated | none (the peer would not spray back) |
 | symmetric | symmetric | mutual if both ranges are narrow, else none |
 
-A side runs its mode only when the peer's offered `mode` is the counterpart (dial ↔ spray, mutual ↔
-mutual, ordinary ↔ ordinary). Any other pair, or a missing `mode`, means ordinary if both are
-cone/unknown, else none. `mode` is a statement, not a command: it never makes a side send anything
-that its own function would not choose.
+The initiator's offer comes first and states `nat`, the range and `samples`, but no `mode`; the
+responder computes its mode from that offer and states it in the answer. The initiator computes its
+own mode from the answer and runs it only when the answer's `mode` is the counterpart (dial ↔
+spray, mutual ↔ mutual, ordinary ↔ ordinary); any other pair means none. The responder runs the
+mode it stated on PUNCH_SYNC. `mode` is a statement, not a command: it never makes a side send
+anything that its own function would not choose.
 
 **Targets.** Every target IP still obeys step 2: the IP of `PEER_ADDR` or of the peer's card. Only
 the ports are new, and only the sender of datagrams chooses them. Ports below 1024 are never targets.
@@ -351,8 +353,9 @@ random content) until a flow is found; then the usual Init (≤ 24, step 4) foll
 ever sent and no fixed-size or fixed-content packet appears.
 
 - *dial* (symmetric side): opens up to 256 UDP sockets, each sends junk to the cone peer's address
-  from `PEER_ADDR` and listens for the peer's datagrams. A socket that receives a datagram from the
-  peer's IP is the hit: the others are closed. If this side is the noise3 initiator, it sends Init from
+  from `PEER_ADDR` and listens for the peer's datagrams. A socket that receives any datagram from
+  the peer's IP is the hit (its spray, its junk that passed the filter, or its Init): the others are
+  closed. If this side is the noise3 initiator, it sends Init from
   the hit socket to the peer's listener; otherwise it answers with junk from the hit socket, and the
   peer takes that datagram's source address as the target for its Init.
 - *spray* (cone side): from the socket of its noise3 listener sends junk to the symmetric side's IP

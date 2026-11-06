@@ -129,8 +129,20 @@ func TestConeInitiatorSpraysAndBinds(t *testing.T) {
 	wg.Add(1)
 	go func() { defer wg.Done(); hs, _ = sym.Dial(ctx, r.own.coneAddr(), true) }()
 	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return r.net.dialCount() > 0 })
-	wg.Wait()
 	d := r.net.dials[0]
+	// The Init arrives at that address: the socket behind it is the one the peer's dial must take
+	// (any datagram from the cone's IP is a hit), whichever socket it had found by then.
+	_ = r.own.listener.Send(d.targets[0], make([]byte, 40))
+	done2 := make(chan struct{})
+	go func() { wg.Wait(); close(done2) }()
+	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool {
+		select {
+		case <-done2:
+			return true
+		default:
+			return false
+		}
+	})
 	want := symNAT.extFor(hs.Sock, r.own.coneAddr())
 	if len(d.targets) != 1 || d.targets[0] != want || !want.IsValid() {
 		t.Fatalf("Init targets %v, want the answering socket's address %v", d.targets, want)
