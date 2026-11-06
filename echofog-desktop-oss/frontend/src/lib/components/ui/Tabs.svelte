@@ -37,6 +37,7 @@
     }
 </script>
 
+<!-- svelte-ignore a11y-interactive-supports-focus (the selected tab is the focus stop: roving tabindex) -->
 <div class="tabs {variant}" role="tablist" aria-label={label || undefined} bind:this={list} on:keydown={onKey}>
     {#each items as it (it.id)}
         <button

@@ -27,6 +27,7 @@
 </script>
 
 <div class="area" class:top class:bottom>
+    <!-- svelte-ignore a11y-no-noninteractive-tabindex (a scrolling region must be reachable by keyboard) -->
     <div
         class="scroll"
         class:h={horizontal}

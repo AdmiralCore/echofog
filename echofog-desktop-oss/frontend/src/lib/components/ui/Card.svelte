@@ -35,7 +35,7 @@
     .p-lg { padding: var(--sp-6); }
     header { margin-bottom: var(--sp-3); }
     footer { margin-top: var(--sp-4); display: flex; justify-content: flex-end; gap: var(--sp-2); }
-    .int { cursor: pointer; font-weight: var(--fw-regular); transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+    .int { cursor: pointer; font-weight: var(--fw-regular); white-space: normal; font-size: var(--fs-md); transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
     .int:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); }
     .int:active:not(:disabled) { transform: none; }
     .int:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; box-shadow: none; }
