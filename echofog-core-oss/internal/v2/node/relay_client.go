@@ -95,7 +95,7 @@ func (c *relayClient) hops(target, targetDevice [32]byte, keep func(*objects.Car
 			continue
 		}
 		if keep != nil {
-			card, err := objects.VerifyCard(est.Peer.Raw, r.clock.Now())
+			card, err := objects.VerifyCard(est.Peer.Raw, r.carrierClock.Now())
 			if err != nil || !keep(card) {
 				continue
 			}
@@ -315,7 +315,7 @@ func (c *relayClient) rules(ps *punchState) punch.Rules {
 		if ps.est == nil || ps.est.Peer == nil {
 			return
 		}
-		if card, err := objects.VerifyCard(ps.est.Peer.Raw, c.r.clock.Now()); err == nil {
+		if card, err := objects.VerifyCard(ps.est.Peer.Raw, c.r.carrierClock.Now()); err == nil {
 			for _, a := range card.Addrs() {
 				// A card address the country policy keeps UDP away from is no punch target (M5).
 				if ip, err := netip.ParseAddr(a.GetHost()); err == nil && c.r.udpAllowedTo(ip) {
