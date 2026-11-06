@@ -167,6 +167,7 @@ func newCluster(t testing.TB, size int, groupMembers int) *cluster {
 			Pub: a.pub, Sign: func(b []byte) ([]byte, error) { return ed25519.Sign(a.priv, b), nil },
 			Store: st.Store(fmt.Sprintf("v2/convlog/%d", i)), IDs: ids, Rules: rules{founder: founder},
 			Net: port{c.n, a.node}, Dir: c.n,
+			Now:          func() time.Time { return time.Unix(1_800_000_000, 0) }, // frozen: the rate limit does not refill mid-test
 			Groups:       func(id convlog.ConvID) (convlog.Conv, bool) { return c.group, id == c.group.ID },
 			Members:      func(convlog.Conv) [][32]byte { return gm },
 			SharedGroups: func([32]byte) []convlog.Conv { return []convlog.Conv{c.group} },
