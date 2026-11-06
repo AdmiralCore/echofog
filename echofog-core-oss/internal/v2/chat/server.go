@@ -80,21 +80,31 @@ const maxTracked = 4096
 
 // Server answers BUNDLE_GET.
 type Server struct {
-	bundles Bundler
-	now     func() time.Time
+	bundles  Bundler
+	receiver Receiver
+	now      func() time.Time
+	after    func(d time.Duration) <-chan time.Time
 
 	mu       sync.Mutex
 	sessions map[[16]byte][]time.Time
 	units    map[netip.Prefix][]time.Time
+	delivers map[[16]byte][]time.Time // DELIVER times of the last second, by session
 }
 
 // New builds a Server.
 func New(cfg Config) *Server {
+	after := cfg.After
+	if after == nil {
+		after = time.After
+	}
 	return &Server{
 		bundles:  cfg.Bundles,
+		receiver: cfg.Receiver,
 		now:      cfg.Now,
+		after:    after,
 		sessions: map[[16]byte][]time.Time{},
 		units:    map[netip.Prefix][]time.Time{},
+		delivers: map[[16]byte][]time.Time{},
 	}
 }
 
@@ -128,6 +138,30 @@ func (s *Server) allow(p Peer) bool {
 	return true
 }
 
+// allowDeliver counts one DELIVER against the session: at most DeliverRate in any second.
+func (s *Server) allowDeliver(sid [16]byte) bool {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, ts := range s.delivers {
+		i := 0
+		for i < len(ts) && now.Sub(ts[i]) >= time.Second {
+			i++
+		}
+		if ts = ts[i:]; len(ts) == 0 {
+			delete(s.delivers, k)
+		} else {
+			s.delivers[k] = ts
+		}
+	}
+	ts := s.delivers[sid]
+	if len(ts) >= DeliverRate || (len(ts) == 0 && len(s.delivers) >= maxTracked) {
+		return false
+	}
+	s.delivers[sid] = append(ts, now)
+	return true
+}
+
 // prune drops the entries older than the window. s.mu is held.
 func (s *Server) prune(now time.Time) {
 	keep := func(ts []time.Time) []time.Time {
@@ -155,8 +189,8 @@ func (s *Server) prune(now time.Time) {
 
 // Handle serves one chat/2 stream. It owns the stream and closes it.
 //
-// Every refusal of BUNDLE_GET (a relayed session, a quota, a failure to make the prekey) is the same
-// CLOSE{refused}: a peer learns nothing about the node from which one it got (AD20).
+// Every refusal of BUNDLE_GET (a relayed session, a quota, a timeout, a failure to make the prekey)
+// is the same CLOSE{refused}: a peer learns nothing about the node from which one it got (AD20).
 func (s *Server) Handle(ctx context.Context, p Peer, st Stream) {
 	defer st.Close()
 	for ctx.Err() == nil {
@@ -167,27 +201,69 @@ func (s *Server) Handle(ctx context.Context, p Peer, st Stream) {
 		if f.Ignorable() {
 			continue
 		}
-		if f.Type != FrameBundleGet {
+		switch f.Type {
+		case FrameBundleGet:
+			if !s.handleBundleGet(p, st, f) {
+				return
+			}
+		case FrameDeliver:
+			if !s.handleDeliver(ctx, p, st, f) {
+				return
+			}
+		default:
 			_ = st.CloseWithCode(frame.CodeUnknownFrame, "")
 			return
 		}
-		req, err := chatpb.ParseBundleGet(f.Payload)
-		if err != nil {
-			_ = st.CloseWithCode(frame.CodeProtocolViolation, "")
-			return
-		}
-		if p.Path != mux.PathDirect || !s.allow(p) {
-			_ = st.CloseWithCode(frame.CodeRefused, "")
-			return
-		}
-		raw, err := s.bundles.Bundle()
-		if err != nil {
-			_ = st.CloseWithCode(frame.CodeRefused, "")
-			return
-		}
-		out, err := objects.Marshal(&chatpb.Bundle{Req: req.Req, Prekeys: raw})
-		if err != nil || st.WriteFrame(FrameBundle, 0, out) != nil {
-			return
-		}
 	}
+}
+
+func (s *Server) handleBundleGet(p Peer, st Stream, f frame.Frame) bool {
+	req, err := chatpb.ParseBundleGet(f.Payload)
+	if err != nil {
+		_ = st.CloseWithCode(frame.CodeProtocolViolation, "")
+		return false
+	}
+	if p.Path != mux.PathDirect || !s.allow(p) {
+		_ = st.CloseWithCode(frame.CodeRefused, "")
+		return false
+	}
+	type result struct {
+		raw []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		raw, err := s.bundles.Bundle()
+		done <- result{raw, err}
+	}()
+	var r result
+	select {
+	case r = <-done:
+	case <-s.after(BundleGetTimeout):
+		r.err = context.DeadlineExceeded
+	}
+	if r.err != nil {
+		_ = st.CloseWithCode(frame.CodeRefused, "")
+		return false
+	}
+	out, err := objects.Marshal(&chatpb.Bundle{Req: req.Req, Prekeys: r.raw})
+	return err == nil && st.WriteFrame(FrameBundle, 0, out) == nil
+}
+
+func (s *Server) handleDeliver(ctx context.Context, p Peer, st Stream, f frame.Frame) bool {
+	req, err := chatpb.ParseDeliver(f.Payload)
+	if err != nil {
+		_ = st.CloseWithCode(frame.CodeProtocolViolation, "")
+		return false
+	}
+	if !s.allowDeliver(p.SID) {
+		_ = st.CloseWithCode(frame.CodeOverloaded, "")
+		return false
+	}
+	status := chatpb.StatusRefused
+	if s.receiver != nil {
+		status = s.receiver.Receive(ctx, req.Envelope)
+	}
+	out, err := objects.Marshal(&chatpb.Delivered{Req: req.Req, Status: status})
+	return err == nil && st.WriteFrame(FrameDelivered, 0, out) == nil
 }
