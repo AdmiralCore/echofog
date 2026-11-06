@@ -144,3 +144,41 @@ func TestVisitsHaveVaryingAnswerSizes(t *testing.T) {
 	}
 	assert.Greater(t, len(sizes), 3, "a browser control whose every visit is the same size is not a control")
 }
+
+// H1a on real traffic: the external records of the first 16 KB of a flow, compared with the browser
+// control. A second set of browser visits is as far from the control as the control is from itself;
+// a TLS inside a TLS and a fixed-size tunnel are not.
+func TestH1aOnRealTraffic(t *testing.T) {
+	lab := startLab(t)
+	flowsOf := func(fs []censor.Flow) []censor.Flow { return fs }
+
+	_, err := labVisit(lab.addr, "cover.lab", 60, 11)
+	require.NoError(t, err)
+	control := flowsOf(lab.take())
+	_, err = labVisit(lab.addr, "cover.lab", 20, 12)
+	require.NoError(t, err)
+	visits := flowsOf(lab.take())
+
+	var tunnels []censor.Flow
+	for i := 0; i < 20; i++ {
+		_, err := tlsInTLS(lab.addr, "cover.lab", int64(i+1))
+		require.NoError(t, err)
+		tunnels = append(tunnels, lab.take()...)
+	}
+	var fixed []censor.Flow
+	for i := 0; i < 5; i++ {
+		_, err := constSize(lab.addr, "cover.lab", int64(i+1))
+		require.NoError(t, err)
+		fixed = append(fixed, lab.take()...)
+	}
+
+	like := censor.H1aMeasure(visits, control)
+	t.Logf("browser-like visits: KS %.3f against %.3f", like.KS, like.Threshold)
+	assert.True(t, like.Pass)
+	tun := censor.H1aMeasure(tunnels, control)
+	t.Logf("nested TLS: KS %.3f against %.3f", tun.KS, tun.Threshold)
+	assert.False(t, tun.Pass, "a TLS inside a TLS does not look like a browser's first 16 KB")
+	fix := censor.H1aMeasure(fixed, control)
+	t.Logf("fixed size: KS %.3f against %.3f", fix.KS, fix.Threshold)
+	assert.False(t, fix.Pass)
+}
