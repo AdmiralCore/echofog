@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { openURL } from '../api.js';
   import Icon from './ui/Icon.svelte';
+  import Button from './ui/Button.svelte';
   import { t } from '../i18n/index.js';
   import { tonNetwork, faucetHidden, loadTonNetwork } from '../stores/tonnet.js';
 
@@ -24,8 +25,8 @@
       <div class="faucet">
         <span>{$t('testnet.faucet')}</span>
         <div class="row wrap">
-          <button class="small with-icon" on:click={() => openURL(FAUCET)}><Icon name="external" size={14} /> @testgiver_ton_bot</button>
-          <button class="ghost small" on:click={() => faucetHidden.set(true)}>{$t('testnet.gotIt')}</button>
+          <Button size="sm" icon="external" on:click={() => openURL(FAUCET)}>@testgiver_ton_bot</Button>
+          <Button size="sm" variant="ghost" on:click={() => faucetHidden.set(true)}>{$t('testnet.gotIt')}</Button>
         </div>
       </div>
     {/if}
@@ -33,10 +34,10 @@
 {/if}
 
 <style>
-  .tn { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-soft); border-left: 3px solid var(--warn); line-height: 1.45; }
-  .tn.compact { padding: 7px 10px; border-radius: 10px; }
+  .tn { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--warn-soft); line-height: 1.45; }
+  .tn.compact { padding: 6px 10px; }
   .warn-line { gap: 8px; align-items: flex-start; }
-  .warn-line :global(svg) { color: var(--warn); flex: none; margin-top: 2px; }
-  .warn-line b { color: var(--warn); }
+  .warn-line :global(svg) { color: var(--warn-fg); flex: none; margin-top: 2px; }
+  .warn-line b { color: var(--warn-fg); }
   .faucet { display: flex; flex-direction: column; gap: 8px; color: var(--muted); padding-left: 23px; }
 </style>

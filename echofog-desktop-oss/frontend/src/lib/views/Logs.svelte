@@ -1,6 +1,11 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
   import { App, errText, copy } from '../api.js';
+  import Button from '../components/ui/Button.svelte';
+  import IconButton from '../components/ui/IconButton.svelte';
+  import Input from '../components/ui/Input.svelte';
+  import Tabs from '../components/ui/Tabs.svelte';
+  import Toggle from '../components/ui/Toggle.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import ReportDialog from '../components/ReportDialog.svelte';
   import { t, lang, intlLocale } from '../i18n/index.js';
@@ -111,52 +116,41 @@
 </script>
 
 <div class="logs">
-  <div class="page-head">
+  <header class="head">
     <div class="grow">
       <h1>{$t('logs.title')}</h1>
       <p class="muted small">{$t('logs.subtitle')}</p>
     </div>
-  </div>
+    <Button variant="primary" size="sm" icon="flag" on:click={() => (reporting = true)}>{$t('report.open')}</Button>
+  </header>
 
   <div class="bar">
-    <div class="seg levels">
-      {#each ['all', 'debug', 'info', 'warn', 'error'] as l}
-        <button class:active={level === l} on:click={() => (level = l)}>{l === 'all' ? $t('logs.all') : l}</button>
-      {/each}
-    </div>
-    <div class="search">
-      <Icon name="search" size={15} />
-      <input placeholder={$t('logs.filter')} bind:value={query} spellcheck="false" />
-    </div>
-    <label class="row live"><input type="checkbox" class="switch" bind:checked={autoRefresh} /> {$t('logs.live')}</label>
+    <Tabs variant="segment" label={$t('logs.filter')} bind:value={level}
+      items={['all', 'debug', 'info', 'warn', 'error'].map((l) => ({ id: l, label: l === 'all' ? $t('logs.all') : l }))} />
+    <div class="search"><Input size="sm" icon="search" aria-label={$t('logs.filter')} placeholder={$t('logs.filter')} bind:value={query} spellcheck="false" /></div>
+    <Toggle bind:checked={autoRefresh} label={$t('logs.live')} />
     <div class="row btns">
-      <button class="icon" title={$t('common.refresh')} aria-label={$t('common.refresh')} on:click={load}><Icon name="refresh" size={17} /></button>
-      <button class="with-icon small" on:click={copyAll}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? $t('common.copied') : $t('logs.copyAll')}</button>
-      <button class="with-icon small" on:click={saveFile}><Icon name="download" size={14} /> {$t('common.save')}</button>
-      <button class="with-icon small primary" on:click={() => (reporting = true)}><Icon name="flag" size={14} /> {$t('report.open')}</button>
+      <IconButton icon="refresh" label={$t('common.refresh')} on:click={load} />
+      <Button size="sm" icon={copied ? 'check' : 'copy'} on:click={copyAll}>{copied ? $t('common.copied') : $t('logs.copyAll')}</Button>
+      <Button size="sm" icon="download" on:click={saveFile}>{$t('common.save')}</Button>
     </div>
   </div>
 
-  <div class="warn-box" role="note">
-    <span class="w-ic"><Icon name="eye" size={16} /></span>
-    <div><b>{$t('logs.warnTitle')}</b> {$t('logs.warnText')}</div>
-  </div>
+  <p class="privacy" role="note"><Icon name="eye" size={14} /> <span><b>{$t('logs.warnTitle')}</b> {$t('logs.warnText')}</span></p>
 
-  {#if error}<div class="small error">{error}</div>{/if}
-  {#if savedPath}<div class="small ok">{$t('logs.savedTo', { path: savedPath })}</div>{/if}
+  {#if error}<div class="small error" role="alert">{error}</div>{/if}
+  {#if savedPath}<div class="small ok" role="status">{$t('logs.savedTo', { path: savedPath })}</div>{/if}
 
   <div class="row small meta">
-    <div class="seg order">
-      <button class:active={newestFirst} on:click={() => setOrder(true)}>{$t('logs.newest')}</button>
-      <button class:active={!newestFirst} on:click={() => setOrder(false)}>{$t('logs.oldest')}</button>
-    </div>
+    <Tabs variant="segment" label={$t('logs.newest')} value={newestFirst ? 'new' : 'old'} on:change={(e) => setOrder(e.detail === 'new')}
+      items={[{ id: 'new', label: $t('logs.newest') }, { id: 'old', label: $t('logs.oldest') }]} />
     <span class="faint grow">{$t('logs.shown', { n: filtered.length })}</span>
     {#if unseen}
-      <button class="small primary jump" on:click={jumpToNew}><Icon name={newestFirst ? 'chevronUp' : 'chevronDown'} size={14} /> {$t('logs.jump')} · {unseen}</button>
+      <Button size="sm" variant="primary" icon={newestFirst ? 'chevronUp' : 'chevronDown'} on:click={jumpToNew}>{$t('logs.jump')} · {unseen}</Button>
     {/if}
   </div>
 
-  <div class="list" bind:this={list} on:scroll={() => { if (atNewEdge()) unseen = 0; }}>
+  <div class="list" bind:this={list} on:scroll={() => { if (atNewEdge()) unseen = 0; }} role="log" aria-label={$t('logs.title')}>
     {#if filtered.length === 0}
       <div class="empty">{$t('logs.empty')}</div>
     {/if}
@@ -173,47 +167,35 @@
 {#if reporting}<ReportDialog on:close={() => (reporting = false)} />{/if}
 
 <style>
-  .logs { display: flex; flex-direction: column; height: 100%; gap: 12px; padding: clamp(18px, 4vw, 36px) clamp(16px, 4vw, 40px) 20px; animation: fade-up 0.35s var(--ease); }
-  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-  .warn-box {
-    display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border-radius: var(--radius);
-    background: var(--warn-soft); border-left: 3px solid var(--warn); font-size: 12.5px; color: var(--muted); line-height: 1.45;
+  .logs { display: flex; flex-direction: column; height: 100%; gap: var(--sp-3); padding: var(--sp-6) var(--sp-6) var(--sp-4); }
+  .head { display: flex; align-items: flex-end; gap: var(--sp-3); }
+  .bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+  .search { flex: 1; min-width: 180px; }
+  .btns { gap: var(--sp-1); }
+  .privacy {
+    display: flex; gap: var(--sp-2); align-items: flex-start; padding: 6px var(--sp-3); border-radius: var(--r-md);
+    background: var(--surface-2); font-size: var(--fs-xs); line-height: var(--lh-xs); color: var(--muted);
   }
-  .warn-box b { color: var(--text); }
-  .w-ic { color: var(--warn); flex: none; margin-top: 1px; }
-  .meta { gap: 10px; flex-wrap: wrap; }
-  .order button { padding: 4px 12px; font-size: 12px; }
-  .jump { display: inline-flex; align-items: center; gap: 6px; animation: pop 0.3s var(--spring); }
-  .levels button { padding: 5px 12px; font-size: 12.5px; text-transform: capitalize; }
-  .search {
-    flex: 1; min-width: 160px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px;
-    border-radius: 12px; background: var(--raised); color: var(--faint); border: 1px solid transparent;
-    transition: border-color var(--dur), box-shadow var(--dur), color var(--dur);
-  }
-  .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--accent); }
-  .search input { border: none; background: transparent; padding: 0; height: 100%; }
-  .search input:focus { box-shadow: none; background: transparent; }
-  .live { font-size: 13px; gap: 8px; }
-  .btns { gap: 4px; }
+  .privacy :global(svg) { flex: none; margin-top: 1px; color: var(--faint); }
+  .privacy b { color: var(--text); font-weight: var(--fw-medium); }
+  .meta { gap: var(--sp-3); flex-wrap: wrap; }
+
+  /* a dense monospace table: one line per record */
   .list {
-    flex: 1; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55;
-    background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 10px 6px;
-    box-shadow: var(--shadow-sm);
+    flex: 1; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 18px;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-xl); padding: var(--sp-1) 0;
   }
-  .empty { color: var(--faint); padding: 12px; }
-  .line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-word; padding: 2px 8px; border-radius: 6px; }
+  .empty { color: var(--faint); padding: var(--sp-3); font-family: var(--font); font-size: var(--fs-sm); }
+  .line { display: flex; gap: var(--sp-3); white-space: pre-wrap; word-break: break-word; padding: 1px var(--sp-3); border-left: 2px solid transparent; }
   .line:hover { background: var(--hover); }
   .time { color: var(--faint); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-  .lvl {
-    flex-shrink: 0; width: 50px; text-align: center; text-transform: uppercase; font-size: 9.5px; font-weight: 700; align-self: center;
-    padding: 1px 0; border-radius: 5px; background: var(--hover); color: var(--muted); letter-spacing: 0.04em;
-  }
+  .lvl { flex-shrink: 0; width: 40px; text-transform: uppercase; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--faint); }
   .msg { flex: 1; color: var(--text); }
-  .attrs { color: var(--faint); margin-left: 10px; }
-  .line.info .lvl { color: var(--accent); background: var(--accent-soft); }
-  .line.warn .lvl { color: var(--warn); background: var(--warn-soft); }
-  .line.warn .msg { color: var(--warn); }
-  .line.error .lvl { color: var(--danger); background: var(--danger-soft); }
-  .line.error .msg { color: var(--danger); }
-  .line.debug { opacity: 0.65; }
+  .attrs { color: var(--faint); margin-left: var(--sp-2); }
+  .line.info .lvl { color: var(--accent-fg); }
+  .line.warn { border-left-color: var(--warn); }
+  .line.warn .lvl, .line.warn .msg { color: var(--warn-fg); }
+  .line.error { border-left-color: var(--danger); background: var(--danger-soft); }
+  .line.error .lvl, .line.error .msg { color: var(--danger-fg); }
+  .line.debug .msg { color: var(--muted); }
 </style>

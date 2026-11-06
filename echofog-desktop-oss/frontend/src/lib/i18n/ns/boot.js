@@ -2,7 +2,7 @@
 export default {
   en: {
     'boot.title': 'Bootstrap nodes',
-    'boot.hint': 'The app joins the network through these. If the built-in nodes are blocked, add a node address from a friend or from the EchoFog channel.',
+    'boot.hint': 'The app joins the network through these. If the built-in nodes are not reachable, add a node address from a friend or from the EchoFog channel.',
     'boot.inputLabel': 'Node address or link',
     'boot.add': 'Add and connect',
     'boot.added': 'Added. Connecting to it now…',
@@ -16,13 +16,13 @@ export default {
     'boot.peers': { one: '{n} peer', other: '{n} peers' },
     'boot.noPeers': 'no connection',
     'boot.offlineTitle': 'No connection to the network',
-    'boot.offlineText': 'If the built-in nodes are blocked where you are, add a node address by hand.',
+    'boot.offlineText': 'If the built-in nodes are not reachable from your network, add a node address by hand.',
     'boot.offlineAction': 'Add a node',
     'boot.dismiss': 'Hide',
   },
   ru: {
     'boot.title': 'Бутстрап-ноды',
-    'boot.hint': 'Через них приложение входит в сеть. Если встроенные ноды заблокированы, добавьте адрес ноды от друга или из канала EchoFog.',
+    'boot.hint': 'Через них приложение входит в сеть. Если встроенные ноды недоступны, добавьте адрес ноды от друга или из канала EchoFog.',
     'boot.inputLabel': 'Адрес или ссылка ноды',
     'boot.add': 'Добавить и подключиться',
     'boot.added': 'Добавлено. Подключаемся…',
@@ -36,7 +36,7 @@ export default {
     'boot.peers': { one: '{n} узел', few: '{n} узла', many: '{n} узлов', other: '{n} узла' },
     'boot.noPeers': 'нет связи',
     'boot.offlineTitle': 'Нет подключения к сети',
-    'boot.offlineText': 'Если встроенные ноды у вас заблокированы, добавьте адрес ноды вручную.',
+    'boot.offlineText': 'Если встроенные ноды недоступны из вашей сети, добавьте адрес ноды вручную.',
     'boot.offlineAction': 'Добавить ноду',
     'boot.dismiss': 'Скрыть',
   },

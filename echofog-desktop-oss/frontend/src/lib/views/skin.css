@@ -1,0 +1,54 @@
+/*
+ * "Lamp" skin for the settings-style screens (Settings, Wallet, Proxy, Logs) and the cards inside them.
+ * The cards were written against the old global .card / .card-head / .switch rules; instead of editing
+ * a dozen files for the same look, everything under .skin gets the D2 values here: flat surfaces,
+ * 12 px cards, 8 px controls, short transitions, no springs.
+ */
+.skin .card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: none;
+}
+.skin .card.stack { gap: var(--sp-3); }
+.skin .card-head { gap: var(--sp-3); align-items: center; }
+.skin .card-head .ico {
+  width: 30px; height: 30px; border-radius: var(--r-md);
+  background: var(--surface-2); color: var(--muted);
+}
+.skin .card-head .ico.ok { background: var(--ok-soft); color: var(--ok-fg); }
+.skin .card-head .ico.warn { background: var(--warn-soft); color: var(--warn-fg); }
+.skin .card-head .ico.danger { background: var(--danger-soft); color: var(--danger-fg); }
+.skin .card-head h2 { font-size: var(--fs-md); line-height: var(--lh-md); font-weight: var(--fw-semibold); letter-spacing: 0; }
+.skin .card-head p { margin-top: 1px; font-size: var(--fs-sm); line-height: var(--lh-sm); }
+.skin h3 { font-size: var(--fs-md); line-height: var(--lh-md); font-weight: var(--fw-semibold); }
+
+/* switches: same shape as ui/Toggle, no spring */
+.skin input[type="checkbox"].switch {
+  width: 34px; height: 20px;
+  background: var(--surface-3); border: 1px solid var(--border-strong);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.skin input[type="checkbox"].switch::after {
+  width: 14px; height: 14px; top: 2px; left: 2px;
+  transition: transform var(--dur) var(--ease);
+}
+.skin input[type="checkbox"].switch:active::after { width: 14px; }
+.skin input[type="checkbox"].switch:checked { background: var(--accent); border-color: var(--accent); }
+.skin input[type="checkbox"].switch:checked::after { transform: translateX(14px); }
+.skin input[type="checkbox"].switch:checked:active::after { transform: translateX(14px); }
+
+/* segmented control used by old markup */
+.skin .seg { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 2px; display: flex; gap: 2px; }
+.skin .seg button { border-radius: var(--r-sm); padding: 4px 12px; font-size: var(--fs-sm); }
+.skin .seg button.active, .skin .seg button.active:hover:not(:disabled) { background: var(--seg-on); color: var(--text); box-shadow: none; }
+
+.skin .chip { border-radius: var(--r-sm); }
+.skin .note { border-radius: var(--r-md); border-left-width: 2px; background: var(--surface-2); }
+.skin .note.warn, .skin .note.warning { background: var(--warn-soft); }
+.skin label { font-size: var(--fs-sm); }
+.skin .eyebrow { font-size: var(--fs-2xs); }
+
+/* children of these pages do not fade in one after another */
+.skin.page > .stack > * { animation: none; }
