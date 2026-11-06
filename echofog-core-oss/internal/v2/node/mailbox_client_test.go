@@ -229,6 +229,7 @@ func TestChatNodeKeepsAQueueOnItsMailboxRelay(t *testing.T) {
 		c.Chat = true
 		c.MailboxRelays = func() [][32]byte { return [][32]byte{[32]byte(w.m.id.DeviceID)} }
 		c.ChatContacts = func() [][32]byte { return contacts }
+		c.MailboxWait = time.Second
 	})
 	rcpt.start(t)
 	node.SetMailboxClientOpts(rcpt.rt, w.dialOpts(t))

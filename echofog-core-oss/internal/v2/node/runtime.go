@@ -87,6 +87,8 @@ type Config struct {
 	MailboxRelays func() [][32]byte
 	MailboxVia    func() [][32]byte
 	ChatContacts  func() [][32]byte
+	// MailboxWait is the long-poll time of the fetch loop; zero means 30 s.
+	MailboxWait time.Duration
 
 	// Store is the persistent store; the runtime opens its own namespaces in it. It does not
 	// close the store: the owner keeps it across runtime restarts. Required.
