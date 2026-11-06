@@ -29,7 +29,7 @@
     const setPip = (patch, persist) => (onChange ? onChange(patch, persist) : callService.setPip(patch, persist));
     // near an edge the camera snaps into the corner
     const snap = (v) => (v < 0.07 ? 0 : v > 0.93 ? 1 : v);
-    $: shape = SHAPES[pip.shape] ? pip.shape : 'circle';
+    $: shape = SHAPES[pip.shape] ? pip.shape : 'rounded';
     $: w = Math.max(64, Math.min(W * pip.w, W - 2 * MARGIN, (H - 2 * MARGIN) * SHAPES[shape]));
     $: h = w / SHAPES[shape];
     $: left = MARGIN + pip.x * Math.max(0, W - w - 2 * MARGIN);
