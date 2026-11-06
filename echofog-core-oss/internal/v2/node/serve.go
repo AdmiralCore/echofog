@@ -18,6 +18,10 @@ import (
 // beforeAdd is a test seam that runs right before an accepted session enters the table.
 var beforeAdd atomic.Pointer[func(*session.Established)]
 
+// beforeServe is a test seam of ensureServing: stage 0 runs after the session was claimed and before
+// the service goroutine is counted, stage 1 runs inside that goroutine.
+var beforeServe atomic.Pointer[func(stage int)]
+
 // maxHandshaking bounds the goroutines that run handshakes at once. It is a hard cap above the
 // pre-authentication limits (handshake §11): up to MaxPreAuthTotal handshakes are in flight before
 // the puzzle gets harder, and a carrier beyond the cap is closed without a byte.
@@ -186,10 +190,16 @@ func (r *Runtime) ensureServing(est *session.Established) {
 	if _, loaded := r.serving.LoadOrStore(est.Session, struct{}{}); loaded {
 		return
 	}
+	if f := beforeServe.Load(); f != nil {
+		(*f)(0)
+	}
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		defer r.serving.Delete(est.Session)
+		if f := beforeServe.Load(); f != nil {
+			(*f)(1)
+		}
 		defer r.forgetAdmitted(est)
 		peer := r.peerOf(est)
 		r.noteSession(peer.Card)

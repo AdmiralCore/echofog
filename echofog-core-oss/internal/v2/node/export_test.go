@@ -42,6 +42,21 @@ var (
 		}
 		beforeAdd.Store(&f)
 	}
+	// SetBeforeServe installs the hook that runs in ensureServing before the goroutine is counted (stage 0) and inside it (stage 1).
+	SetBeforeServe = func(f func(stage int)) {
+		if f == nil {
+			beforeServe.Store(nil)
+			return
+		}
+		beforeServe.Store(&f)
+	}
+	// TableSessions lists the sessions of the runtime's table.
+	TableSessions = func(r *Runtime) []*session.Established { return r.table.Sessions() }
+	// ReServe forgets that the session is served and starts serving it again.
+	ReServe = func(r *Runtime, est *session.Established) {
+		r.serving.Delete(est.Session)
+		r.ensureServing(est)
+	}
 	// LocalInfoOf returns the carrier-plan view built from the profile.
 	LocalInfoOf = func(r *Runtime) carrier.LocalInfo { return r.planInfo() }
 	// SessionLimitOf returns the limit of the running session table.
