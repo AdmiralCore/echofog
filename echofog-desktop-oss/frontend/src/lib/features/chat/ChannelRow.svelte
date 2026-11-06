@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { activeChannel, openChannel } from '../../stores/chats.js';
   import { me } from '../../stores/session.js';
+  import { callState } from '../../services/call.service.js';
   import { t } from '../../i18n/index.js';
   import Avatar from '../../components/ui/Avatar.svelte';
   import Icon from '../../components/ui/Icon.svelte';
@@ -17,7 +18,12 @@
 
   const dispatch = createEventDispatcher();
   const { nameOf } = useChat();
-  $: people = ch.call?.members?.length || 0;
+  // in the room I am in, the live call is the truth (the channel list is read again only on a core event
+  // and lags behind a join); in the others the list's members, as before
+  $: members = inRoom === ch.id
+    ? [...new Set([$me.id, ...($callState.members?.length ? $callState.members : ch.call?.members || [])])]
+    : ch.call?.members || [];
+  $: people = members.length;
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -39,10 +45,10 @@
   {/if}
   {#if manage}<button class="icon tiny gear" title={$t('chats.channelSettings')} aria-label={$t('chats.channelSettings')} on:click={(e) => dispatch('edit', e)}><Icon name="settings" size={13} /></button>{/if}
 </div>
-{#if ch.voice && ch.call && ch.call.members && ch.call.members.length}
+{#if ch.voice && members.length}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="in-room" class:joinable={inRoom !== ch.id && (ch.canJoin ?? conv.can.call)} on:click={() => inRoom !== ch.id && (ch.canJoin ?? conv.can.call) && dispatch('room', ch)}>
-    {#each ch.call.members as id (id)}
+    {#each members as id (id)}
       <div class="who-in"><Avatar {id} name={id === $me.id ? $t('chats.You') : $nameOf(id)} size={18} /><span class="nm">{id === $me.id ? $t('chats.You') : $nameOf(id)}</span></div>
     {/each}
   </div>
