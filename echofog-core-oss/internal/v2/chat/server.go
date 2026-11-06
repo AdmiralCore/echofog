@@ -53,9 +53,27 @@ type Peer struct {
 // Config configures a Server.
 type Config struct {
 	Bundles Bundler
+	// Receiver takes the envelopes of DELIVER; nil refuses them.
+	Receiver Receiver
 	// Now is the node clock (AD13).
 	Now func() time.Time
+	// After returns a channel that fires after d (AD13: timeouts through an injectable timer); nil
+	// means time.After.
+	After func(d time.Duration) <-chan time.Time
 }
+
+// Receiver handles an incoming envelope and returns the DELIVERED status; *Service satisfies it.
+type Receiver interface {
+	Receive(ctx context.Context, envelope []byte) uint32
+}
+
+// Timeouts (services.md 4.1).
+const (
+	DeliverTimeout   = 15 * time.Second
+	BundleGetTimeout = 5 * time.Second
+	// DeliverRate is the most DELIVER frames per second one session may send (services.md 4.4).
+	DeliverRate = 20
+)
 
 // maxTracked bounds the rate tables: a flood of sessions cannot grow them without limit.
 const maxTracked = 4096
