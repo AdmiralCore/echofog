@@ -73,11 +73,14 @@ func (tlsInTLSDetector) Truth(f LabeledFlow, _ DetectorConfig) bool { return f.S
 func (tlsInTLSDetector) Flag(f LabeledFlow, _ DetectorConfig) bool  { return innerHandshake(f.Records) }
 
 // innerHandshake looks for the shape of a second handshake riding in the first application data
-// (the rule the TLS-in-TLS papers publish): after the outer Finished, the first client record is
-// the size of a ClientHello plus overhead, the server answers with a flight of more than a
-// kilobyte (ServerHello, certificate, Finished), and the client replies at once with a record the
-// size of a CCS and a Finished. A browser's first exchange has the first two, but its next record
-// is a small window update, or a request after the page has been read.
+// (the rule the TLS-in-TLS papers publish): after the outer Finished, the first thing the client
+// sends is the size of a ClientHello plus overhead, the server answers with a flight of more than a
+// kilobyte (ServerHello, certificate, Finished), and the client replies at once with about the size
+// of a CCS and a Finished. A browser's first exchange has the first two, but what follows it is a
+// small window update, or a request after the page has been read.
+//
+// "Thing" is a burst: the records one write produces arrive together, and a ClientHello that does
+// not fit one TLS record is two records of one burst.
 func innerHandshake(recs []Record) bool {
 	i := -1
 	for k, r := range recs {
@@ -97,25 +100,37 @@ func innerHandshake(recs []Record) bool {
 			break
 		}
 	}
-	if a < 0 {
+	if a < 0 || rest[a].Type != 23 {
 		return false
 	}
-	first := rest[a]
-	if first.Type != 23 || first.Len < 200 || first.Len > 2000 {
+	hello, k := 0, a
+	for ; k < len(rest) && rest[k].Up && (k == a || rest[k].At-rest[k-1].At <= burstRecordGap); k++ {
+		hello += rest[k].Len
+	}
+	if hello < 200 || hello > 2600 {
 		return false
 	}
-	flight, last := 0, first.At
-	k := a + 1
+	flight, last := 0, rest[k-1].At
 	for ; k < len(rest) && !rest[k].Up; k++ {
 		flight += rest[k].Len
 		last = rest[k].At
 	}
-	if k >= len(rest) {
+	if flight < 1200 || k >= len(rest) || rest[k].At-last > 20*time.Millisecond {
 		return false
 	}
-	reply := rest[k]
-	return flight >= 1200 && reply.Type == 23 && reply.Len >= 70 && reply.Len <= 140 && reply.At-last <= 20*time.Millisecond
+	// the reply: the first records of the burst, up to the point they add up to a Finished
+	reply := 0
+	for j := k; j < len(rest) && rest[j].Up && (j == k || rest[j].At-rest[j-1].At <= burstRecordGap); j++ {
+		reply += rest[j].Len
+		if reply >= 70 {
+			break
+		}
+	}
+	return reply >= 70 && reply <= 160
 }
+
+// burstRecordGap is how close two records are to be one write.
+const burstRecordGap = 3 * time.Millisecond
 
 // ---------------------------------------------------------------------------- D6
 

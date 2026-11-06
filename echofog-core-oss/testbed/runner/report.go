@@ -195,7 +195,7 @@ func writeFlowsCSV(w io.Writer, flows []censor.LabeledFlow, limit int) error {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 	header := []string{"proto", "client", "server", "suite", "service", "bytes", "duration_ms",
-		"first_size", "label", "looks", "sni", "ja3", "ja4", "verdict", "d1", "d2", "d3", "d4", "d10"}
+		"first_size", "label", "looks", "sni", "ja3", "ja4", "verdict", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "d10"}
 	if err := cw.Write(header); err != nil {
 		return err
 	}
@@ -208,7 +208,8 @@ func writeFlowsCSV(w io.Writer, flows []censor.LabeledFlow, limit int) error {
 			f.Proto, f.Client.String(), f.Server.String(), f.Suite, f.Service,
 			strconv.Itoa(f.BytesUp + f.BytesDn), strconv.FormatInt(f.Duration.Milliseconds(), 10),
 			strconv.Itoa(f.FirstSize), string(f.Label), f.Looks, f.SNI, ja3, ja4, f.Verdict(),
-			score(f, "D1"), score(f, "D2"), score(f, "D3"), score(f, "D4"), score(f, "D10"),
+			score(f, "D1"), score(f, "D2"), score(f, "D3"), score(f, "D4"), score(f, "D5"), score(f, "D6"),
+			score(f, "D7"), score(f, "D8"), score(f, "D9"), score(f, "D10"),
 		}
 		if err := cw.Write(row); err != nil {
 			return err
@@ -254,7 +255,44 @@ func writeSummary(w io.Writer, r reportV2, flowLines []censor.LabeledFlow) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		m := r.Detectors[id]
-		fmt.Fprintf(w, "  %-3s recall %s  FPR %.3f  n=%d  positives=%d\n", id, recallText(m.Recall), m.FPR, m.N, m.Positives)
+		fmt.Fprintf(w, "  %-3s recall %s  FPR %.3f  n=%d  positives=%d", id, recallText(m.Recall), m.FPR, m.N, m.Positives)
+		if m.AUC != nil {
+			fmt.Fprintf(w, "  AUC %.2f", *m.AUC)
+		}
+		if m.TPRAt1 != nil {
+			fmt.Fprintf(w, "  TPR@1%%FPR %.2f", *m.TPRAt1)
+		}
+		fmt.Fprintln(w)
+	}
+	if r.V2Gate != nil {
+		fmt.Fprintf(w, "\nv2 side of the gate (share of the real v2 flows a detector flags, at most 10%%; D6 AUC at most 0.65):\n")
+		for _, row := range r.V2Gate.Rows {
+			switch {
+			case !row.Measured:
+				fmt.Fprintf(w, "  %-3s not measured\n", row.Detector)
+			case row.AUC != nil:
+				fmt.Fprintf(w, "  %-3s AUC %.2f over %d v2 flows  pass=%v\n", row.Detector, *row.AUC, row.N, row.Pass)
+			default:
+				fmt.Fprintf(w, "  %-3s %d of %d flagged (%.0f%%)  pass=%v\n", row.Detector, row.Flagged, row.N, 100*row.Share, row.Pass)
+			}
+		}
+	}
+	if r.H1a != nil {
+		fmt.Fprintf(w, "\nH1a: KS %.3f of the exit records to the browser control (threshold %.3f, %d flows)  pass=%v\n",
+			r.H1a.KS, r.H1a.Threshold, r.H1a.Flows, r.H1a.Pass)
+	}
+	for _, p := range r.Probes {
+		own, n := 0, 0
+		for _, o := range p.Outcomes {
+			if o.Skipped != "" {
+				continue
+			}
+			n++
+			if o.Own && !o.Expected {
+				own++
+			}
+		}
+		fmt.Fprintf(w, "\nprobe %s: %d cases, %d answers of the node's own\n", p.Target, n, own)
 	}
 	fmt.Fprintf(w, "\nbrowser profiles: version %s, %d entries\n", r.BrowserProfiles.Version, r.BrowserProfiles.Entries)
 	if r.BrowserProfiles.Note != "" {

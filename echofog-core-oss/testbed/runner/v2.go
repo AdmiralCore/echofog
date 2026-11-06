@@ -114,8 +114,9 @@ func v2PhaseList(scenario string) ([]string, error) {
 // ---------------------------------------------------------------------------- run
 
 type harnessLabel struct {
-	Suite string
-	Label censor.Label
+	Suite     string
+	Label     censor.Label
+	Synthetic bool // a control made for a detector, not a v2 carrier
 }
 
 func runV2(nodes map[string]*node, v *verdict, out string) {
@@ -161,23 +162,37 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	}
 
 	metrics := map[string]censor.DetectorMetric{}
+	var v2gate *censor.V2GateResult
+	var h1a *censor.H1aResult
 	if len(labeled) > 0 {
 		metrics = censor.EvaluateDetectors(labeled, cfg)
+		g := censor.V2Gate(labeled, cfg)
+		v2gate = &g
+		if exit, browser := h1aFlows(labeled); len(exit) > 0 {
+			r := censor.H1aMeasure(exit, browser)
+			h1a = &r
+			if !r.Pass {
+				findings = append(findings, fmt.Sprintf("H1a: the external records of the exit flows are KS %.3f from the browser control (threshold %.3f)", r.KS, r.Threshold))
+			}
+		} else {
+			findings = append(findings, "H1a not measured: no v2 TCP exit flow with TLS records in this run (the v2 carriers of the lab are UDP; reality2-tcp and ws2 join with T0.3)")
+		}
+		for _, row := range g.Rows {
+			if !row.Measured && (row.Detector == "D5" || row.Detector == "D6" || row.Detector == "D7") {
+				findings = append(findings, fmt.Sprintf("%s not measured on v2: no v2 flow of the kind it reads (TCP with records) was in this run", row.Detector))
+			}
+		}
 	}
 	agg := aggregateFor(labeled)
 	flows := countFlows(labeled)
 
-	for id, m := range metrics {
-		if m.FPR > 0.01 {
-			line := fmt.Sprintf("%s false-positive rate %.3f on the browser control (gate 0.01)", id, m.FPR)
-			findings = append(findings, line)
-			v.check(false, "%s", line)
-		}
-		if m.Recall != nil && *m.Recall < 1 {
-			line := fmt.Sprintf("%s recall %.2f on its control flows (want 1)", id, *m.Recall)
-			findings = append(findings, line)
-			v.check(false, "%s", line)
-		}
+	gate := censor.V2GateResult{}
+	if v2gate != nil {
+		gate = *v2gate
+	}
+	for _, line := range gateFindings(metrics, gate) {
+		findings = append(findings, line)
+		v.check(false, "%s", line)
 	}
 	// The pcap is evidence only for a red run. A green analysis deletes it, even with -pcap.
 	green := len(v.failed) == 0
@@ -198,7 +213,7 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 	}
 
 	if carrier.Synthetic {
-		findings = append(findings, "the v2 carrier is synthetic: T0.3 (efv2) and T2.4 (noise3) are not built yet; udp-noise is a stand-in with the same wire shape, and the v1 product flows are the real traffic in this run")
+		findings = append(findings, "the v2 carrier is synthetic: the real noise3 mode did not run; udp-noise is a stand-in with the same wire shape, and the v1 product flows are the real traffic in this run")
 	}
 	if len(db.Entries) > 0 {
 		findings = append(findings, fmt.Sprintf("browser profiles %s: %s", db.Version, strings.Join(stamp.Sources, ", ")))
@@ -211,6 +226,7 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 		Phases: phases, Detectors: metrics, Aggregate: agg,
 		Coverage: coverageFor(metrics, carrier), Behaviour: behaviour, Resources: resources,
 		Carrier: carrier, BrowserProfiles: stamp, Pcap: pcap, Flows: flows, Findings: findings,
+		V2Gate: v2gate, H1a: h1a,
 	})
 	if err := writeJSON(filepath.Join(out, "report.json"), report); err != nil {
 		v.check(false, "write report.json: %v", err)
@@ -294,15 +310,14 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	time.Sleep(2 * time.Second)
 	cap.stop()
 
-	data := cap.data()
-	if len(data) == 0 {
+	if cap.bytes() == 0 {
 		v.check(false, "no packets were captured on %s", gw)
 		return nil, cap, carrier
 	}
 	if cap.overBudget() {
 		v.check(false, "the capture reached its budget of %s; analysis uses the first %s", humanBytes(cap.budget), humanBytes(cap.bytes()))
 	}
-	flows, err := censor.AnalyzeReader(bytes.NewReader(data))
+	flows, err := cap.sink.Finish()
 	if err != nil {
 		v.check(false, "analyze the capture of %s: %v", gw, err)
 		return nil, cap, carrier
@@ -323,8 +338,8 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 // ---------------------------------------------------------------------------- harness
 
 func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierInfo, map[uint16]harnessLabel, error) {
-	info := carrierInfo{Name: "v2carrier (synthetic noise3 stand-in)", Synthetic: true,
-		Note: "noise3 is not merged into v2 (T2.4) and efv2 does not exist (T0.3): udp-noise has the same wire shape and the same detectors are used"}
+	info := carrierInfo{Name: "v2carrier (real noise3 + controls)", Synthetic: false,
+		Note: "noise3 is the real carrier of internal/v2; udp-noise stays as the synthetic D10 control, and tls-in-tls, const-size and conn-storm are the controls of D5-D8; efv2 (T0.3) does not exist yet, so reality2 and ws2 are not in the lab"}
 	labels := map[uint16]harnessLabel{}
 	bin, err := buildCarrierBinary()
 	if err != nil {
@@ -339,24 +354,37 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 
 	// One port per mode: a flow's label then comes from the server port, not from a wall-clock
 	// window (the capture timestamps are taken in the container, and a window would be a guess).
-	specs := []struct {
+	type carrierSpec struct {
 		mode, sni, label, suite string
 		conns                   int
 		port                    uint16
-	}{
-		{"udp-noise", "cover.lab", string(censor.LabelCarrier), "udp-noise", 1, 4341},
-		{"tcp-random", "cover.lab", string(censor.LabelCarrier), "tcp-random", 6, 4342},
-		{"tls-go", "foreign.example", string(censor.LabelTool), "tls-go", 1, 4343},
-		{"tls-chrome", "cover.lab", string(censor.LabelBrowser), "utls-chrome", 1, 4344},
-		{"quic-go", "blocked.example", string(censor.LabelTool), "quic-go", 1, 4345},
-		{"quic-chrome", "cover.lab", string(censor.LabelBrowser), "quic-go-chromeparrot", 1, 4346},
+		synthetic               bool   // a control made for a detector, not a v2 carrier
+		serve                   string // the server mode; "serve" unless the carrier has its own listener
+		repeat                  int    // how many times the client runs (one flow each)
 	}
+	specs := []carrierSpec{
+		{mode: "noise3", sni: "cover.lab", label: string(censor.LabelCarrier), suite: "noise3", conns: 1, port: 4347, serve: "noise3-serve"},
+		{mode: "udp-noise", sni: "cover.lab", label: string(censor.LabelCarrier), suite: "udp-noise", conns: 1, port: 4341, synthetic: true},
+		{mode: "tcp-random", sni: "cover.lab", label: string(censor.LabelCarrier), suite: "tcp-random", conns: 6, port: 4342, synthetic: true},
+		{mode: "tls-go", sni: "foreign.example", label: string(censor.LabelTool), suite: "tls-go", conns: 1, port: 4343},
+		{mode: "visit", sni: "cover.lab", label: string(censor.LabelBrowser), suite: "utls-chrome", conns: 25, port: 4344},
+		{mode: "quic-go", sni: "blocked.example", label: string(censor.LabelTool), suite: "quic-go", conns: 1, port: 4345},
+		{mode: "quic-chrome", sni: "cover.lab", label: string(censor.LabelBrowser), suite: "quic-go-chromeparrot", conns: 1, port: 4346},
+		{mode: "tls-in-tls", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteTLSInTLS, conns: 1, port: 4348, synthetic: true, repeat: 20},
+		{mode: "const-size", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteConstSize, conns: 1, port: 4349, synthetic: true, repeat: 6},
+		{mode: "conn-storm", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteConnStorm, conns: 30, port: 4350, synthetic: true},
+	}
+	noise3OK := false
 	for _, s := range specs {
-		labels[s.port] = harnessLabel{Suite: s.suite, Label: censor.Label(s.label)}
+		labels[s.port] = harnessLabel{Suite: s.suite, Label: censor.Label(s.label), Synthetic: s.synthetic}
+		serveMode := s.serve
+		if serveMode == "" {
+			serveMode = "serve"
+		}
 		ready := fmt.Sprintf("/tmp/v2carrier-%d.ready", s.port)
 		_, _ = run("docker", "exec", container("x1"), "rm", "-f", ready)
 		if out, err := run("docker", "exec", "-d", container("x1"), "/tmp/v2carrier",
-			"-mode", "serve", "-listen", fmt.Sprintf(":%d", s.port), "-ready", ready); err != nil {
+			"-mode", serveMode, "-listen", fmt.Sprintf(":%d", s.port), "-seed", strconv.FormatInt(seed, 10), "-ready", ready); err != nil {
 			return info, labels, fmt.Errorf("start the carrier server on %d: %v %s", s.port, err, out)
 		}
 	}
@@ -379,24 +407,49 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 		args := []string{"/tmp/v2carrier", "-mode", s.mode, "-peer", peer, "-sni", s.sni,
 			"-duration", "4s", "-conns", strconv.Itoa(s.conns), "-seed", strconv.FormatInt(seed, 10)}
 		full := append([]string{"exec", container("b1")}, args...)
-		out, err := run("docker", full...)
-		if err != nil {
-			v.check(false, "carrier mode %s: %v %s", s.mode, err, out)
-			continue
-		}
-		var res struct {
-			Bytes   int64 `json:"bytes"`
-			Packets int64 `json:"packets"`
-		}
-		_ = json.Unmarshal([]byte(out), &res)
-		info.Modes = append(info.Modes, s.mode)
-		info.Bytes += res.Bytes
-		info.Packets += res.Packets
-		if s.mode == "udp-noise" || s.mode == "tcp-random" {
-			logf("carrier mode %s: %d bytes in %d packets", s.mode, res.Bytes, res.Packets)
+		runs := max(1, s.repeat)
+		for k := 0; k < runs; k++ {
+			if s.repeat > 0 {
+				// every repetition is a flow of its own with its own seed
+				full = append([]string{"exec", container("b1")}, withSeed(args, seed+int64(k))...)
+			}
+			out, err := run("docker", full...)
+			if err != nil {
+				v.check(false, "carrier mode %s: %v %s", s.mode, err, out)
+				break
+			}
+			var res struct {
+				Bytes   int64 `json:"bytes"`
+				Packets int64 `json:"packets"`
+			}
+			_ = json.Unmarshal([]byte(out), &res)
+			if k == 0 {
+				info.Modes = append(info.Modes, s.mode)
+			}
+			info.Bytes += res.Bytes
+			info.Packets += res.Packets
+			if s.mode == "noise3" {
+				noise3OK = true
+			}
+			if s.mode == "udp-noise" || s.mode == "tcp-random" || s.mode == "noise3" {
+				logf("carrier mode %s: %d bytes in %d packets", s.mode, res.Bytes, res.Packets)
+			}
 		}
 	}
+	// without the real carrier the run says so, and D10 is then judged on the stand-in alone
+	info.Synthetic = !noise3OK
 	return info, labels, nil
+}
+
+// withSeed returns args with the value after -seed replaced.
+func withSeed(args []string, seed int64) []string {
+	out := append([]string(nil), args...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "-seed" {
+			out[i+1] = strconv.FormatInt(seed, 10)
+		}
+	}
+	return out
 }
 
 func buildCarrierBinary() (string, error) {
@@ -445,10 +498,7 @@ func runProductTraffic(nodes map[string]*node, v *verdict) {
 func labelFlow(f censor.Flow, labels map[uint16]harnessLabel) censor.LabeledFlow {
 	lf := censor.LabeledFlow{Flow: f, Label: censor.LabelLab}
 	if lab, ok := labels[f.Server.Port()]; ok {
-		lf.Label, lf.Suite = lab.Label, lab.Suite
-		if lab.Label == censor.LabelCarrier {
-			lf.Synthetic = true
-		}
+		lf.Label, lf.Suite, lf.Synthetic = lab.Label, lab.Suite, lab.Synthetic
 		return lf
 	}
 	switch {
@@ -584,27 +634,51 @@ func coverageFor(metrics map[string]censor.DetectorMetric, carrier carrierInfo) 
 		{"P7 QUIC SNI", "D2", "", ""},
 		{"SNI against IP/ASN", "D3", "", ""},
 		{"P14 ClientHello fingerprint (JA3/JA4)", "D4", "", ""},
+		{"H1a TLS inside TLS", "D5", "", ""},
+		{"H1a cross-layer RTT", "D6", "", ""},
+		{"H1a record sizes and timings", "D7", "", ""},
+		{"long and heavy flows, connection storms", "D8", "", ""},
+		{"ML flow physics", "D9", "", ""},
 		{"P7/P14 UDP shape", "D10", "", ""},
 	}
 	for i := range rows {
-		m, ok := metrics[rows[i].Detector]
+		id := rows[i].Detector
+		m, ok := metrics[id]
 		if !ok {
 			rows[i].Verdict = "no data"
 			continue
 		}
+		rows[i].Note = fmt.Sprintf("recall %s, browser FPR %.3f, n=%d", recallText(m.Recall), m.FPR, m.N)
 		switch {
+		case id == "D9":
+			if m.AUC == nil || m.TPRAt1 == nil {
+				rows[i].Verdict = "outside the gate: no training set in this run"
+				break
+			}
+			rows[i].Verdict = "outside the gate: reported only"
+			rows[i].Note = fmt.Sprintf("AUC %.2f, TPR@1%%FPR %.2f, n=%d", *m.AUC, *m.TPRAt1, m.N)
+		case id == "D6":
+			if m.AUC == nil {
+				rows[i].Verdict = "no positive control: AUC unavailable"
+				break
+			}
+			rows[i].Verdict = "control works on a naive proxy; the v2 side is in v2_gate"
+			rows[i].Note = fmt.Sprintf("AUC %.2f, TPR@1%%FPR %s, n=%d", *m.AUC, recallText(m.TPRAt1), m.N)
 		case m.Positives == 0 || m.Recall == nil:
 			rows[i].Verdict = "no positive control: recall unavailable"
 		case m.FPR > 0.01:
 			rows[i].Verdict = "finding: browser FPR above 1%"
-		case *m.Recall < 1:
+		case id == "D5" && *m.Recall < 0.9:
+			rows[i].Verdict = "finding: missed nested TLS"
+		case (id == "D7" || id == "D8") && *m.Recall < 0.9:
+			rows[i].Verdict = "reported: recall below 90% (not gated)"
+		case id != "D5" && id != "D7" && id != "D8" && *m.Recall < 1:
 			rows[i].Verdict = "finding: missed its control flows"
-		case rows[i].Detector == "D10" && carrier.Synthetic:
+		case id == "D10" && carrier.Synthetic:
 			rows[i].Verdict = "caught the synthetic stand-in (expected)"
 		default:
 			rows[i].Verdict = "control works"
 		}
-		rows[i].Note = fmt.Sprintf("recall %s, browser FPR %.3f, n=%d", recallText(m.Recall), m.FPR, m.N)
 	}
 	return rows
 }
@@ -643,6 +717,10 @@ type captureSink struct {
 	over  bool
 	buf   bytes.Buffer
 	file  *os.File
+
+	// A streaming sink hands the bytes to the censor's stream analyzer instead of keeping them.
+	an   io.WriteCloser
+	wait func() ([]censor.Flow, error)
 }
 
 func newCaptureSink(limit int64, file *os.File) *captureSink {
@@ -666,7 +744,13 @@ func (s *captureSink) Write(p []byte) (int, error) {
 			s.over = true
 		}
 	}
-	n, err := s.buf.Write(p)
+	var n int
+	var err error
+	if s.an != nil {
+		n, err = s.an.Write(p)
+	} else {
+		n, err = s.buf.Write(p)
+	}
 	if err != nil {
 		return n, err
 	}
@@ -685,6 +769,9 @@ func (s *captureSink) Write(p []byte) (int, error) {
 func (s *captureSink) Bytes() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.an != nil {
+		return nil
+	}
 	return append([]byte(nil), s.buf.Bytes()...)
 }
 
@@ -728,7 +815,7 @@ func startV2Capture(gw, out string, budget int64, keep bool) (*v2Capture, error)
 		}
 		c.file = f
 	}
-	c.sink = newCaptureSink(budget, c.file)
+	c.sink = newStreamingSink(budget, c.file)
 	for i := 0; i < 30; i++ {
 		if o, err := run("docker", "exec", c.container, "cat", "/tmp/wan_if"); err == nil && o != "" {
 			break
@@ -827,8 +914,6 @@ func (c *v2Capture) stop() {
 	})
 }
 
-func (c *v2Capture) data() []byte { return c.sink.Bytes() }
-
 func (c *v2Capture) bytes() int64 { return c.sink.Size() }
 
 func (c *v2Capture) overBudget() bool {
@@ -869,15 +954,28 @@ func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
 	return info
 }
 
-// streamingSink is a captureSink that feeds the censor's stream analyzer instead of keeping the
-// capture in memory (T15.0b item 5): memory follows the number of flows, not the budget. The
-// bytes still obey the budget and still reach the -pcap file when there is one.
+// newStreamingSink is a captureSink that feeds the censor's stream analyzer instead of keeping the
+// capture in memory (T15.0b item 5): memory follows the number of flows, not the budget. The bytes
+// still obey the budget and still reach the -pcap file when there is one.
 func newStreamingSink(limit int64, file *os.File) *captureSink {
-	return newCaptureSink(limit, file)
+	s := newCaptureSink(limit, file)
+	s.an, s.wait = censor.AnalyzeStream()
+	return s
 }
 
 // buffered is how many bytes of the capture the sink holds in memory.
-func (s *captureSink) buffered() int { return s.buf.Len() }
+func (s *captureSink) buffered() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Len()
+}
 
-// Finish ends a streaming sink and returns the flows it analysed.
-func (s *captureSink) Finish() ([]censor.Flow, error) { return nil, nil }
+// Finish ends a streaming sink and returns the flows it analysed. A capture cut at the budget, or
+// in the middle of a record, is read up to there; an empty capture is an error.
+func (s *captureSink) Finish() ([]censor.Flow, error) {
+	if s.an == nil {
+		return nil, errors.New("not a streaming sink")
+	}
+	_ = s.an.Close()
+	return s.wait()
+}

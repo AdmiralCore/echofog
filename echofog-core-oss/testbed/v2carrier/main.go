@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"math/big"
 	mrand "math/rand"
 	"net"
@@ -49,7 +48,7 @@ type result struct {
 }
 
 func main() {
-	mode := flag.String("mode", "serve", "serve, noise3-serve, noise3, udp-noise, tcp-random, tls-go, tls-chrome, quic-go or quic-chrome")
+	mode := flag.String("mode", "serve", "serve, noise3-serve, noise3, udp-noise, tcp-random, tls-go, tls-chrome, visit, tls-in-tls, const-size, conn-storm, quic-go or quic-chrome")
 	peer := flag.String("peer", "", "host:port of the server")
 	listen := flag.String("listen", ":4343", "serve: address to listen on")
 	ready := flag.String("ready", "", "serve: write this file once both listeners are up")
@@ -79,6 +78,14 @@ func main() {
 		res, err = tlsGo(*peer, *sni)
 	case "tls-chrome":
 		res, err = tlsChrome(*peer, *sni)
+	case "visit":
+		res, err = labVisit(*peer, *sni, max(1, *conns), *seed)
+	case "tls-in-tls":
+		res, err = tlsInTLS(*peer, *sni, *seed)
+	case "const-size":
+		res, err = constSize(*peer, *sni, *seed)
+	case "conn-storm":
+		res, err = connStorm(*peer, *sni, max(1, *conns))
 	case "quic-go":
 		res, err = quicDial(*peer, *sni, false, *duration)
 	case "quic-chrome":
@@ -140,13 +147,7 @@ func serveCtx(ctx context.Context, addr, ready string) error {
 				return
 			}
 			tcpConns.Add(1)
-			go func() {
-				defer conn.Close()
-				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-				buf := make([]byte, 4096)
-				_, _ = io.ReadFull(conn, buf)
-				_, _ = conn.Write([]byte("ok"))
-			}()
+			go serveConn(conn, cert)
 		}
 	}()
 	go func() {
