@@ -71,12 +71,12 @@ func TestUDPBanCostsOneHappyEyeballsDelay(t *testing.T) {
 
 	free := MeasureDial(card, ruWired, CensorConfig{}, rtt)
 	require.True(t, free.OK, free.Err)
-	assert.Equal(t, objects.SuiteReality2QUIC, free.Suite)
+	assert.Equal(t, uint32(objects.SuiteReality2QUIC), free.Suite)
 	assert.Less(t, free.Elapsed, 300*time.Millisecond, "QUIC wins before the second attempt even starts")
 
 	banned := MeasureDial(card, ruWired, CensorConfig{UDPDrop: true}, rtt)
 	require.True(t, banned.OK, banned.Err)
-	assert.Equal(t, objects.SuiteReality2TCP, banned.Suite)
+	assert.Equal(t, uint32(objects.SuiteReality2TCP), banned.Suite)
 	assert.GreaterOrEqual(t, banned.Elapsed, 300*time.Millisecond, "TCP starts after the specification's delay")
 	assert.Less(t, banned.Elapsed, time.Second, "and nothing waits for the 4 s QUIC timeout")
 	assert.Equal(t, 2, banned.Attempts)

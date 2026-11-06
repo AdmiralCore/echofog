@@ -100,7 +100,7 @@ func TestNetemCutIsABlackholeForAWhile(t *testing.T) {
 
 func transfer(t *testing.T, cfg NetemConfig, n int64, hook func(*Netem, int64)) (TransferResult, *Netem) {
 	t.Helper()
-	addr, stop, err := StartEcho(cfg.Seed + 100)
+	addr, stop, err := StartEcho(cfg.Seed)
 	require.NoError(t, err)
 	t.Cleanup(stop)
 	nm, err := StartNetem(addr, cfg)
@@ -112,7 +112,7 @@ func transfer(t *testing.T, cfg NetemConfig, n int64, hook func(*Netem, int64)) 
 	if hook != nil {
 		h = func(sent int64) { hook(nm, sent) }
 	}
-	return RunTransfer(ctx, nm.Addr(), cfg.Seed+200, n, h), nm
+	return RunTransfer(ctx, nm.Addr(), cfg.Seed, n, h), nm
 }
 
 // The matrix cells that fit a unit test. The full matrix (0/1/5/15/40 % by 0/50/150/300 ms) is
@@ -139,11 +139,7 @@ func TestNoise3CarriesATransferThroughLossAndDelay(t *testing.T) {
 // "The session survives a change of path in at most 10 s": the client's source address changes
 // halfway (NAT rebinding, Wi-Fi to mobile) and the transfer goes on.
 func TestNoise3SurvivesAChangeOfSourceAddress(t *testing.T) {
-	r, nm := transfer(t, NetemConfig{Seed: 4, Delay: 10 * time.Millisecond}, 512<<10, func(n *Netem, sent int64) {
-		if sent >= 128<<10 {
-			n.Rebind()
-		}
-	})
+	r, nm := transfer(t, NetemConfig{Seed: 4, Delay: 10 * time.Millisecond}, 512<<10, once(func(n *Netem) { n.Rebind() }))
 	require.True(t, r.Connected, r.Err)
 	assert.Equal(t, r.Bytes, r.Echoed)
 	assert.LessOrEqual(t, r.MaxGap, 10*time.Second, "no stall longer than the 10 s of the criterion")
@@ -153,11 +149,7 @@ func TestNoise3SurvivesAChangeOfSourceAddress(t *testing.T) {
 // "After a break, recovery in at most 60 s": the route is cut for 3 s (a short cut for a unit
 // test) and the transfer resumes by itself.
 func TestNoise3RecoversAfterACut(t *testing.T) {
-	r, _ := transfer(t, NetemConfig{Seed: 5}, 512<<10, func(n *Netem, sent int64) {
-		if sent >= 128<<10 {
-			n.Cut(3 * time.Second)
-		}
-	})
+	r, _ := transfer(t, NetemConfig{Seed: 5}, 512<<10, once(func(n *Netem) { n.Cut(3 * time.Second) }))
 	require.True(t, r.Connected, r.Err)
 	assert.Equal(t, r.Bytes, r.Echoed)
 	assert.LessOrEqual(t, r.MaxGap, 60*time.Second)
