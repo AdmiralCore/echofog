@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -296,7 +298,9 @@ func newClient(t *testing.T) *node.Runtime {
 		t.Fatal(err)
 	}
 	rt, err := node.New(node.Config{Account: tw.Account, Device: tw.Device, Cards: builder, Store: st,
-		Profile: node.Profile{Platform: node.PlatformDesktop}})
+		Profile:   node.Profile{Platform: node.PlatformDesktop},
+		Country:   func(netip.Addr) (string, bool) { return "lab", true },
+		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}})
 	if err != nil {
 		t.Fatal(err)
 	}

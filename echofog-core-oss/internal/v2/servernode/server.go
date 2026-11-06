@@ -2,38 +2,650 @@ package servernode
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/access"
+	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/clock"
+	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
+	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
+	"github.com/echofog/echofog-core/internal/v2/service"
+	"github.com/echofog/echofog-core/internal/v2/shape"
+	"github.com/echofog/echofog-core/internal/v2/store"
 )
 
-// Init creates the profile in dataDir: identity (recovery phrase returned once), store and
-// server.json. It refuses a directory that already holds a profile.
-func Init(dataDir string, cfg Config) (mnemonic string, err error) {
-	return "", errors.New("servernode: not implemented")
+// Files of a server profile. The identity file keeps the recovery phrase and the device secrets
+// (mode 0600, never logged); the store keeps sessions, cards and passes.
+const (
+	identityFileName = "server-identity.json"
+	configFileName   = "server.json"
+	tokenFileName    = "operator.token"
+	addrFileName     = "operator.addr"
+	fileVersion      = 1
+)
+
+type identityFile struct {
+	Version     int    `json:"version"`
+	Mnemonic    string `json:"mnemonic"`
+	DeviceSeed  string `json:"device_seed"`
+	HsPrivate   string `json:"hs_private"`
+	MaskPrivate string `json:"mask_private"`
+
+	NodeID   string `json:"node_id"`
+	DeviceID string `json:"device_id"`
+
+	CreatedAt          int64  `json:"created_at"`
+	DeviceListSeq      uint64 `json:"device_list_seq"`
+	DeviceListNotAfter uint64 `json:"device_list_not_after"`
+}
+
+func writePrivate(path string, raw []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func readLimited(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("%s is larger than %d bytes", filepath.Base(path), max)
+	}
+	return b, nil
+}
+
+// Init creates the profile in dataDir: identity (recovery phrase returned once), store, server.json
+// and the operator token. It refuses a directory that already holds a profile.
+func Init(dataDir string, cfg Config) (string, error) {
+	if err := cfg.Validate(); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, identityFileName)); err == nil {
+		return "", fmt.Errorf("%s already holds a server profile", dataDir)
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return "", err
+	}
+	phrase, err := identity.NewMnemonic(12)
+	if err != nil {
+		return "", err
+	}
+	account, err := identity.FromMnemonic(phrase, "")
+	if err != nil {
+		return "", err
+	}
+	defer account.Destroy()
+	device, err := identity.NewDevice()
+	if err != nil {
+		return "", err
+	}
+	defer device.Destroy()
+
+	var seed, hs, mask []byte
+	if err := device.WithSeed(func(b []byte) error { seed = append([]byte(nil), b...); return nil }); err != nil {
+		return "", err
+	}
+	if err := device.Handshake().WithPrivate(func(b []byte) error { hs = append([]byte(nil), b...); return nil }); err != nil {
+		return "", err
+	}
+	if err := device.Masking().WithPrivate(func(b []byte) error { mask = append([]byte(nil), b...); return nil }); err != nil {
+		return "", err
+	}
+	now := time.Now()
+	nodeID, deviceID := account.NodeID(), device.ID()
+	idf := &identityFile{
+		Version: fileVersion, Mnemonic: phrase,
+		DeviceSeed: hex.EncodeToString(seed), HsPrivate: hex.EncodeToString(hs), MaskPrivate: hex.EncodeToString(mask),
+		NodeID: hex.EncodeToString(nodeID[:]), DeviceID: hex.EncodeToString(deviceID[:]),
+		CreatedAt: now.Unix(), DeviceListSeq: 1, DeviceListNotAfter: uint64(now.Add(identity.DeviceListLifetime).Unix()),
+	}
+	// The store first: a profile whose store cannot be created is not a profile.
+	st, err := store.Open(store.Options{Dir: store.Path(dataDir), Key: account.StorageKey(), MemCapMB: node.DefaultProfile(node.PlatformServer).MemCapMB})
+	if err != nil {
+		return "", fmt.Errorf("create the v2 store: %w", err)
+	}
+	if err := st.Close(); err != nil {
+		return "", err
+	}
+	if err := saveIdentity(dataDir, idf); err != nil {
+		return "", err
+	}
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := writePrivate(filepath.Join(dataDir, configFileName), raw); err != nil {
+		return "", err
+	}
+	if _, err := NewTokenFile(filepath.Join(dataDir, tokenFileName)); err != nil {
+		return "", err
+	}
+	return phrase, nil
+}
+
+func saveIdentity(dataDir string, f *identityFile) error {
+	raw, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writePrivate(filepath.Join(dataDir, identityFileName), raw)
+}
+
+func loadIdentity(dataDir string) (*identityFile, error) {
+	raw, err := readLimited(filepath.Join(dataDir, identityFileName), 64<<10)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%s is not a server profile: run `echofog-node v2 init` first", dataDir)
+		}
+		return nil, err
+	}
+	var f identityFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return nil, fmt.Errorf("identity file: %w", err)
+	}
+	if f.Version != fileVersion {
+		return nil, fmt.Errorf("identity file: version %d, want %d", f.Version, fileVersion)
+	}
+	return &f, nil
+}
+
+func decodeKey(text, what string) ([]byte, error) {
+	b, err := hex.DecodeString(text)
+	if err != nil || len(b) != 32 {
+		return nil, fmt.Errorf("identity file: %s: want 64 hex characters", what)
+	}
+	return b, nil
+}
+
+func deriveIdentity(f *identityFile) (*identity.Account, *identity.Device, error) {
+	account, err := identity.FromMnemonic(f.Mnemonic, "")
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity: %w", err)
+	}
+	seed, err1 := decodeKey(f.DeviceSeed, "device seed")
+	hs, err2 := decodeKey(f.HsPrivate, "hs key")
+	mask, err3 := decodeKey(f.MaskPrivate, "mask key")
+	if err := errors.Join(err1, err2, err3); err != nil {
+		account.Destroy()
+		return nil, nil, err
+	}
+	device, err := identity.DeviceFromKeys(seed, hs, mask)
+	if err != nil {
+		account.Destroy()
+		return nil, nil, fmt.Errorf("identity: %w", err)
+	}
+	n, d := account.NodeID(), device.ID()
+	if f.NodeID != hex.EncodeToString(n[:]) || f.DeviceID != hex.EncodeToString(d[:]) {
+		account.Destroy()
+		device.Destroy()
+		return nil, nil, errors.New("identity file: ids do not match the keys")
+	}
+	return account, device, nil
+}
+
+func sealDeviceList(account *identity.Account, device *identity.Device, idf *identityFile, now time.Time) ([]byte, bool, error) {
+	added := time.Unix(idf.CreatedAt, 0).UTC()
+	entry := []identity.DeviceEntry{{Key: device.Public(), Added: added, Primary: true}}
+	if idf.DeviceListNotAfter > uint64(now.Add(24*time.Hour).Unix()) {
+		raw, err := account.SealDeviceList(idf.DeviceListSeq, idf.DeviceListNotAfter, entry)
+		return raw, false, err
+	}
+	seq := idf.DeviceListSeq + 1
+	notAfter := now.Add(identity.DeviceListLifetime)
+	raw, err := account.SealDeviceList(seq, uint64(notAfter.Unix()), entry)
+	if err != nil {
+		return nil, false, err
+	}
+	idf.DeviceListSeq, idf.DeviceListNotAfter = seq, uint64(notAfter.Unix())
+	return raw, true, nil
 }
 
 // Server is an open profile with its runtime and operator API.
-type Server struct{}
+type Server struct {
+	dir     string
+	cfg     *Config
+	log     *slog.Logger
+	account *identity.Account
+	device  *identity.Device
+	store   *store.Store
+	builder *cards.CardBuilder
+	access  *access.Manager
+	rt      *node.Runtime
 
-// Open opens the profile of dataDir.
+	mu       sync.Mutex
+	warnings map[string]string
+	listener net.Listener
+	http     *http.Server
+	started  bool
+	closed   bool
+}
+
+func rolesOf(names []string) []node.Role {
+	var out []node.Role
+	for _, n := range names {
+		switch n {
+		case "relay":
+			out = append(out, node.RoleRelay)
+		case "exit":
+			out = append(out, node.RoleExit)
+		case "mailbox":
+			out = append(out, node.RoleMailbox)
+		case "dht-server":
+			out = append(out, node.RoleDHTServer)
+		}
+	}
+	return out
+}
+
+func serviceOffers(names []string) []*pb.ServiceOffer {
+	ids := map[string]uint64{"relay": service.Relay, "exit": service.Exit, "mailbox": service.Mailbox, "dht-server": service.DHT}
+	var out []*pb.ServiceOffer
+	for _, n := range names {
+		sp, ok := service.Builtin(ids[n])
+		if !ok {
+			continue
+		}
+		o := &pb.ServiceOffer{Id: uint32(sp.ID)}
+		for v := range sp.Versions {
+			o.Versions = append(o.Versions, uint32(v))
+		}
+		sort.Slice(o.Versions, func(i, j int) bool { return o.Versions[i] < o.Versions[j] })
+		out = append(out, o)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Id < out[j].Id })
+	return out
+}
+
+func roleAndFlags(p node.Profile) (uint32, uint32) {
+	var flags uint32
+	for _, r := range p.Roles {
+		switch r {
+		case node.RoleRelay:
+			flags |= objects.FlagRelay
+		case node.RoleDHTServer:
+			flags |= objects.FlagDHTServer
+		case node.RoleMailbox:
+			flags |= objects.FlagMailbox
+		case node.RoleExit:
+			flags |= objects.FlagExit
+		}
+	}
+	return objects.RoleServer, flags
+}
+
+// freeExit is the exit offer of a server that serves without payment.
+type freeExit struct{}
+
+func (freeExit) ExitOffer() *pb.ExitOffer { return &pb.ExitOffer{} }
+
+type cardsKV struct{ kv store.KV }
+
+func (k cardsKV) Get(_ context.Context, key []byte) ([]byte, bool, error) {
+	v, err := k.kv.Get(key)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, false, nil
+	}
+	return v, err == nil, err
+}
+
+func (k cardsKV) Put(_ context.Context, key, value []byte) error { return k.kv.Put(key, value) }
+
+func cardListener(l ListenSpec, mask []byte) (cards.Listener, error) {
+	_, port, err := net.SplitHostPort(l.Bind)
+	if err != nil {
+		return cards.Listener{}, err
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return cards.Listener{}, err
+	}
+	adv, err := netip.ParseAddr(l.Advertise)
+	if err != nil {
+		return cards.Listener{}, err
+	}
+	return cards.Listener{Suite: objects.SuiteNoise3, Host: adv.Unmap().String(), Port: uint32(p), Mask: mask,
+		Shape: &pb.ShapeProfile{Id: shape.IDDefaultUDP}}, nil
+}
+
+// Open opens the profile of dataDir and builds the runtime without starting it.
 func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error) {
-	return nil, errors.New("servernode: not implemented")
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	raw, err := readLimited(filepath.Join(dataDir, configFileName), MaxConfigSize)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%s is not a server profile: run `echofog-node v2 init` first", dataDir)
+		}
+		return nil, err
+	}
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	idf, err := loadIdentity(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	account, device, err := deriveIdentity(idf)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{dir: dataDir, cfg: cfg, log: log, account: account, device: device, warnings: map[string]string{}}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = s.Close(context.Background())
+		}
+	}()
+
+	profile := node.DefaultProfile(node.PlatformServer)
+	profile.Roles = rolesOf(cfg.Roles)
+
+	now := time.Now()
+	devices, changed, err := sealDeviceList(account, device, idf, now)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		if err := saveIdentity(dataDir, idf); err != nil {
+			return nil, err
+		}
+	}
+	st, err := store.Open(store.Options{Dir: store.Path(dataDir), Key: account.StorageKey(), MemCapMB: profile.MemCapMB, Log: log})
+	if err != nil {
+		return nil, fmt.Errorf("open the v2 store: %w", err)
+	}
+	s.store = st
+	clk, err := clock.New(clock.Config{})
+	if err != nil {
+		return nil, err
+	}
+
+	maskPub := device.Masking().Public()
+	var cardListeners []cards.Listener
+	for _, l := range cfg.Listen {
+		cl, err := cardListener(l, maskPub)
+		if err != nil {
+			return nil, err
+		}
+		cardListeners = append(cardListeners, cl)
+	}
+	role, flags := roleAndFlags(profile)
+	var exitOffer cards.ExitSource
+	if slices.Contains(cfg.Roles, "exit") {
+		exitOffer = freeExit{} // the price and payments are T10.3
+	}
+	builder, err := cards.New(cards.Config{
+		Exit:    exitOffer,
+		Account: account.Public(), Device: device, HsKey: device.Handshake().Public(),
+		Role: role, Flags: flags, Services: serviceOffers(cfg.Roles), Listeners: cardListeners, Devices: devices,
+		Release: "echofog-node/v2", Visibility: cards.Visible, Clock: clk, KV: cardsKV{st.Store("v2/node/cards")},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("card builder: %w", err)
+	}
+	s.builder = builder
+
+	maskPriv, err := decodeKey(idf.MaskPrivate, "mask key")
+	if err != nil {
+		return nil, err
+	}
+	shapeProfile, err := shape.Builtin(shape.IDDefaultUDP)
+	if err != nil {
+		return nil, err
+	}
+	var sources []node.ListenerSource
+	var local []netip.Addr
+	for _, l := range cfg.Listen {
+		var mk noise3.MaskKey
+		copy(mk.Private[:], maskPriv)
+		sources = append(sources, node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
+			ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower})
+		if a, err := netip.ParseAddr(l.Advertise); err == nil {
+			local = append(local, a.Unmap())
+		}
+	}
+
+	ncfg := node.Config{
+		Account: account, Device: device, Cards: builder, Store: st, Clock: clk, Log: log,
+		Events:           node.EventFunc(s.onEvent),
+		Profile:          profile,
+		ListenerSources:  sources,
+		ExitShapeProfile: shapeProfile,
+		LocalInfo:        carrier.LocalInfo{Addrs: local},
+		// HTTP stays nil: no CDN clock check from a server until a uTLS client is wired (T11.6).
+	}
+	if cfg.InviteListen != nil {
+		il, err := cardListener(*cfg.InviteListen, nil)
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := access.New(access.Config{KV: st.Store(access.Namespace), Cards: builder,
+			ContactsKey: device.Masking(), Listeners: []cards.Listener{il}})
+		if err != nil {
+			return nil, fmt.Errorf("access manager: %w", err)
+		}
+		s.access = mgr
+		ncfg.Access = mgr
+		bind := cfg.InviteListen.Bind
+		ncfg.AccessListener = func(slot int, ks []node.AccessMaskKey) (carrier.Listener, error) {
+			masks := make([]noise3.MaskKey, 0, len(ks))
+			for _, k := range ks {
+				var mk noise3.MaskKey
+				copy(mk.Private[:], k.Private)
+				mk.NotAfter = k.NotAfter
+				masks = append(masks, mk)
+			}
+			return node.Noise3Listener{Addr: bind, Masks: masks, Profile: shapeProfile, LowPower: profile.LowPower,
+				ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
+		}
+	}
+	rt, err := node.New(ncfg)
+	if err != nil {
+		return nil, fmt.Errorf("node: %w", err)
+	}
+	s.rt = rt
+	ok = true
+	return s, nil
+}
+
+// onEvent keeps the operator warnings: the latest event of each kind that needs attention.
+func (s *Server) onEvent(e node.Event) {
+	var key string
+	switch e.Kind {
+	case node.EventNoCover:
+		key = "no-cover"
+	case node.EventClockWarning:
+		key = "clock-warning"
+	case node.EventMemoryProtection:
+		key = "memory-protection"
+	default:
+		return
+	}
+	s.mu.Lock()
+	s.warnings[key] = key + ": " + e.Message
+	s.mu.Unlock()
+	s.log.Warn("operator notice", "kind", key)
 }
 
 // Start starts the runtime and the operator API.
-func (s *Server) Start(ctx context.Context) error { return errors.New("servernode: not implemented") }
+func (s *Server) Start(ctx context.Context) error {
+	s.mu.Lock()
+	if s.started || s.closed {
+		s.mu.Unlock()
+		return errors.New("servernode: already started or closed")
+	}
+	s.started = true
+	s.mu.Unlock()
+
+	tok, err := NewTokenFile(filepath.Join(s.dir, tokenFileName))
+	if err != nil {
+		return err
+	}
+	if err := s.rt.Start(ctx); err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", s.cfg.Operator.Addr)
+	if err != nil {
+		return fmt.Errorf("operator API: %w", err)
+	}
+	h := NewOperator(OperatorOptions{Backend: s, Token: tok, Log: s.log})
+	srv := &http.Server{
+		Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second,
+		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10, ErrorLog: slog.NewLogLogger(slog.NewTextHandler(io.Discard, nil), slog.LevelError),
+	}
+	s.mu.Lock()
+	s.listener, s.http = ln, srv
+	s.mu.Unlock()
+	if err := writePrivate(filepath.Join(s.dir, addrFileName), []byte(ln.Addr().String()+"\n")); err != nil {
+		return err
+	}
+	go func() { _ = srv.Serve(ln) }()
+	return nil
+}
 
 // OperatorAddr is the address the operator API listens on.
-func (s *Server) OperatorAddr() string { return "" }
+func (s *Server) OperatorAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
+}
 
 // PeerCard returns the node's current peer-scope card envelope.
 func (s *Server) PeerCard(ctx context.Context) ([]byte, error) {
-	return nil, errors.New("servernode: not implemented")
+	ic, err := s.builder.Current(ctx, objects.ScopePeer)
+	if err != nil {
+		return nil, err
+	}
+	return ic.Envelope, nil
 }
 
 // Close stops everything and wipes the keys.
-func (s *Server) Close(ctx context.Context) error { return nil }
+func (s *Server) Close(ctx context.Context) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	srv := s.http
+	s.mu.Unlock()
+	var errs []error
+	if srv != nil {
+		c, cancel := context.WithTimeout(ctx, 5*time.Second)
+		errs = append(errs, srv.Shutdown(c))
+		cancel()
+		_ = os.Remove(filepath.Join(s.dir, addrFileName))
+	}
+	if s.rt != nil {
+		errs = append(errs, s.rt.Stop(ctx))
+	}
+	if s.access != nil {
+		s.access.Close()
+	}
+	if s.store != nil {
+		errs = append(errs, s.store.Close())
+	}
+	if s.account != nil {
+		s.account.Destroy()
+	}
+	if s.device != nil {
+		s.device.Destroy()
+	}
+	return errors.Join(errs...)
+}
 
-// Main runs an `echofog-node v2` command and returns the exit code.
-func Main(args []string, env func(string) string, stdout, stderr io.Writer) int { return 1 }
+// ---- Backend
+
+// Status implements Backend.
+func (s *Server) Status() StatusInfo {
+	nid, did := s.account.NodeID(), s.device.ID()
+	st := StatusInfo{NodeID: hex.EncodeToString(nid[:]), DeviceID: hex.EncodeToString(did[:]), Roles: s.cfg.Roles}
+	if s.rt != nil {
+		st.Sessions = len(s.rt.Status().Sessions)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, perr := s.builder.Current(ctx, objects.ScopePublic)
+	st.PublicCard = perr == nil
+	s.mu.Lock()
+	for _, w := range s.warnings {
+		st.Warnings = append(st.Warnings, w)
+	}
+	s.mu.Unlock()
+	sort.Strings(st.Warnings)
+	for _, l := range s.cfg.Listen {
+		st.Listen = append(st.Listen, l.Suite+" "+l.Advertise+" ("+l.Bind+")")
+	}
+	return st
+}
+
+// MintInvite implements Backend.
+func (s *Server) MintInvite(ctx context.Context, opt access.MintOptions) (*access.Minted, error) {
+	if s.access == nil {
+		return nil, ErrNoInvites
+	}
+	return s.rt.MintInvitation(ctx, opt)
+}
+
+// ListAccess implements Backend.
+func (s *Server) ListAccess(ctx context.Context) ([]access.Info, error) {
+	if s.access == nil {
+		return nil, ErrNoInvites
+	}
+	return s.rt.AccessList(ctx)
+}
+
+// ExtendAccess implements Backend.
+func (s *Server) ExtendAccess(ctx context.Context, id access.PassID, d time.Duration) (access.Info, error) {
+	if s.access == nil {
+		return access.Info{}, ErrNoInvites
+	}
+	return s.rt.ExtendAccess(ctx, id, d)
+}
+
+// RotateKeys implements Backend.
+func (s *Server) RotateKeys(ctx context.Context) (*access.Rotation, error) {
+	if s.access == nil {
+		return nil, ErrNoInvites
+	}
+	return s.rt.RotateAccessKeys(ctx)
+}

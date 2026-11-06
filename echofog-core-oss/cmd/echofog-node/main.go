@@ -4,6 +4,7 @@
 //	echofog-node init                 create a new identity and show its recovery phrase
 //	echofog-node restore              restore an identity from its recovery phrase
 //	echofog-node run [flags]          start the node (the default command)
+//	echofog-node v2 <command>         the protocol v2 server node (init, run, status, invite, rotate-keys)
 //	echofog-node status               what a running node does: peers, relayed traffic, earnings
 //	echofog-node wallet               the TON wallet of a running node
 //	echofog-node invite               the invitation link of a running node
@@ -18,6 +19,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/echofog/echofog-core/internal/v2/servernode"
 	api "github.com/echofog/echofog-core/pkg/api/node"
 )
 
@@ -33,6 +35,7 @@ Commands:
   init      create a new identity and print its recovery phrase
   restore   restore an identity from its recovery phrase (asks for it, or --mnemonic-file)
   run       start the node: DHT, relay for others, optionally an exit (default command)
+  v2        the protocol v2 server node: "echofog-node v2 help"
   status    show what the running node does: peers, relayed traffic, exit earnings, wallet
   wallet    show the TON wallet address and balance of the running node
   invite    print the invitation link of the running node (--list, --rotate, --remove, --new-secret)
@@ -53,7 +56,13 @@ func main() {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
+	if err := protocolGuard(cmd, os.Getenv); err != nil {
+		fmt.Fprintln(os.Stderr, "echofog-node:", err)
+		os.Exit(2)
+	}
 	switch cmd {
+	case "v2":
+		os.Exit(servernode.Main(args, os.Getenv, os.Stdout, os.Stderr))
 	case "run":
 		os.Exit(runCmd(args))
 	case "init":
