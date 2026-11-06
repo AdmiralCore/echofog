@@ -89,6 +89,8 @@ var cases = []struct {
 	{signaling.ActionMediaKeyAck, signaling.KeyAckPayload{Epoch: 4}, func() any { return new(signaling.KeyAckPayload) }},
 }
 
+var sender = pid(2)
+
 func envelope(t *testing.T, action signaling.SignalAction, payload any) []byte {
 	t.Helper()
 	b, err := signaling.EncodeSignal(action, "c1", pid(2), 7, payload)
@@ -122,7 +124,7 @@ func TestRoundTripAllActions(t *testing.T) {
 			if v1name := call.V1Name(m.Action); v1name != string(c.action) {
 				t.Fatalf("action %v maps to %q", m.Action, v1name)
 			}
-			if string(m.Sender) != string(pid(2)[:]) || m.CallId != "c1" || m.Epoch != 7 {
+			if !bytes.Equal(m.Sender, sender[:]) || m.CallId != "c1" || m.Epoch != 7 {
 				t.Fatalf("header: %+v", m)
 			}
 			// Through the wire form: canonical protobuf, as call.Encode / call.Parse do.
