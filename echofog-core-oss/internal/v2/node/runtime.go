@@ -775,6 +775,21 @@ func (r *Runtime) listenerStopped(err error) {
 	})
 }
 
+// track counts one more goroutine of the runtime in r.wg, unless Stop has begun. Goroutines that
+// are started from code the runtime does not track (service handlers, relay callbacks, callers of
+// Open) must be counted through it: Add under r.mu cannot overlap the wait of Stop, which takes the
+// same lock to set stopped before it waits. A false result means the runtime has stopped and the
+// goroutine must not be started; the caller runs the goroutine itself and calls r.wg.Done when it ends.
+func (r *Runtime) track() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return false
+	}
+	r.wg.Add(1)
+	return true
+}
+
 // Background returns the current app lifecycle state.
 func (r *Runtime) Background() Background {
 	r.mu.Lock()

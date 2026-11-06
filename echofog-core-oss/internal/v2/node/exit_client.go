@@ -199,7 +199,10 @@ func (r *Runtime) ExitClient(ctx context.Context, card *objects.Card, opt DialOp
 		_ = port.Close()
 		return nil, err
 	}
-	r.wg.Add(1)
+	if !r.track() {
+		_ = port.Close()
+		return nil, ErrClosed
+	}
 	go func() {
 		defer r.wg.Done()
 		for {

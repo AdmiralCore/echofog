@@ -283,8 +283,7 @@ func (c *relayClient) startPunch(est *session.Established, role punch.Role, peer
 		delete(c.engines, sess)
 		c.mu.Unlock()
 	}()
-	if role == punch.Initiator {
-		r.wg.Add(1)
+	if role == punch.Initiator && r.track() {
 		go func() {
 			defer r.wg.Done()
 			ctx, cancel := context.WithCancel(r.ctx)
