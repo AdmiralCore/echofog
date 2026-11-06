@@ -1,0 +1,52 @@
+// chat/2 messages (docs/protocol/v2/services.md 4).
+//
+// SecureMessage, RatchetHeader and X3DHInit are copies of v1's internal/proto/message.proto with the
+// SAME field numbers and types: services 4.2 puts the v1 messages inside Inner, and the key
+// agreement and the ratchet keep v1's constructions, so the encoding must stay byte-equal
+// (checked against bytes made by v1 in testdata/v1_samples.json).
+//
+// X3DHInit.sender_bundle (5) is declared only to keep the number: v2 binds the sender's identity key
+// through the sender's prekeys/2 (objects.md 5), never through a bundle sent in the init, and a
+// sender must leave it empty. A receiver ignores it.
+//
+// BundleGet and Bundle are the bodies of BUNDLE_GET and BUNDLE (services 4.1).
+//
+// Field numbers are never reused (versioning.md 3.5).
+syntax = "proto3";
+
+package echofog.v2.chat;
+
+option go_package = "github.com/echofog/echofog-core/internal/v2/chat/pb;chatpb";
+
+message RatchetHeader {
+  bytes ratchet_key = 1;
+  uint32 pn = 2;
+  uint32 n = 3;
+}
+
+message SecureMessage {
+  RatchetHeader header = 1;
+  bytes ciphertext = 2;
+}
+
+message X3DHInit {
+  bytes ephemeral_key = 1;
+  bytes identity_key = 2;
+  bytes one_time_key_id = 3;
+  SecureMessage initial_ciphertext = 4;
+  bytes sender_bundle = 5; // unused in v2
+  bytes kem_ciphertext = 6;
+  bytes kem_key_id = 7;
+  int64 bundle_created_at = 8; // unused in v2 (every v2 init is PQXDH)
+}
+
+// BUNDLE_GET body (0x42).
+message BundleGet {
+  uint64 req = 1;
+}
+
+// BUNDLE body (0x43): a prekeys/2 envelope with one fresh one-time prekey.
+message Bundle {
+  uint64 req = 1;
+  bytes prekeys = 2;
+}
