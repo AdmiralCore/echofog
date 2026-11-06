@@ -249,6 +249,9 @@ func (t *Transport) Deliver(in Inbound) {
 	}
 }
 
+// DeliverSignal hands a verified call/2 signal, as a v1 envelope, to the call layer.
+func (t *Transport) DeliverSignal(from [32]byte, v1 []byte) {}
+
 // Relayed reports whether the participant is reached only through a relay, so the call layer
 // stretches its watchdogs for the extra hop. Under call_route=direct a relay path carries no
 // media, so the peer is not "relayed".

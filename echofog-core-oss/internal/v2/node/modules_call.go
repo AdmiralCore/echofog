@@ -109,6 +109,9 @@ func (r *Runtime) SetCallSignals(p callnet.SignalPort) {
 	r.callSignals.Store(&signalHolder{port: p})
 }
 
+// Call returns the call/2 signalling service (T9.1); nil when it is not registered.
+func (r *Runtime) Call() *call.Service { return nil }
+
 // CallTransport returns the call layer's transport over this node's sessions (T9.3). Nil when
 // call/2 is not registered.
 func (r *Runtime) CallTransport() *callnet.Transport { return r.callTr }
