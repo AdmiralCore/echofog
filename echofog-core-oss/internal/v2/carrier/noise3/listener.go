@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	quic "github.com/apernet/quic-go"
@@ -60,6 +61,8 @@ type ListenerConfig struct {
 // Listener is one noise3 UDP port. It authenticates Init datagrams, keeps pending flows, feeds
 // their inner datagrams to one inner QUIC listener and returns mux.Carrier connections on Accept.
 type Listener struct {
+	cfg      ListenerConfig
+	tap      atomic.Pointer[func(netip.AddrPort, []byte)]
 	conn     net.PacketConn
 	inner    *queueConn
 	tr       *quic.Transport
@@ -133,6 +136,7 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 	}
 
 	l := &Listener{
+		cfg:             cfg,
 		conn:            cfg.Conn,
 		profile:         profile,
 		clock:           clock,
