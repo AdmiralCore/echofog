@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/keys"
@@ -116,11 +117,14 @@ type Config struct {
 // Manager is the release state of one node. It is safe for concurrent use.
 type Manager struct {
 	cfg   Config
-	state *objects.ReleaseState
+	state atomic.Pointer[objects.ReleaseState] // replaced only by Reset
 
-	mu       sync.Mutex // serialises Offer; guards latest and chainLen
+	mu       sync.Mutex // serialises Offer, Check and Reset; guards the fields below
 	latest   []byte
 	chainLen int
+	// broken is set when the stored chain could not be read or verified. The key set is then
+	// unknown (a key the chain revoked would count again), so Offer and Check refuse (L2).
+	broken error
 }
 
 // Open creates a Manager and replays the persisted chain.
@@ -132,7 +136,8 @@ func Open(cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("release: compiled keys: %w", err)
 	}
-	m := &Manager{cfg: cfg, state: st}
+	m := &Manager{cfg: cfg}
+	m.state.Store(st)
 	m.replay()
 	return m, nil
 }
@@ -150,6 +155,14 @@ func chainKey(releasedAt uint64) []byte {
 	return k
 }
 
+// lost marks the stored chain unavailable. The state keeps whatever was replayed before the
+// failure: its policies still serve the handshake, but no new manifest is taken on a key set that
+// may have lost a revocation.
+func (m *Manager) lost(format string, args ...any) {
+	m.broken = fmt.Errorf("%w: %s", ErrChainUnavailable, fmt.Sprintf(format, args...))
+	m.warn("release: stored chain unavailable; manifests are refused until Reset", "err", m.broken)
+}
+
 func (m *Manager) replay() {
 	kv := m.cfg.KV
 	if kv == nil {
@@ -157,25 +170,38 @@ func (m *Manager) replay() {
 	}
 	v, err := kv.Get(versionKey)
 	if errors.Is(err, store.ErrNotFound) {
+		// A fresh profile has no records either; records without a version are a damaged chain.
+		rest, serr := kv.Scan(chainPref, 1)
+		switch {
+		case serr != nil:
+			m.lost("reading the chain: %v", serr)
+		case len(rest) > 0:
+			m.lost("records without a schema version")
+		}
 		return
 	}
-	if err != nil || len(v) != 1 || v[0] != schemaVersion {
-		m.warn("release: stored chain ignored", "err", err)
+	if err != nil {
+		m.lost("reading the schema version: %v", err)
+		return
+	}
+	if len(v) != 1 || v[0] != schemaVersion {
+		m.lost("unknown schema version")
 		return
 	}
 	entries, err := kv.Scan(chainPref, MaxChain+1)
 	if err != nil {
-		m.warn("release: reading the chain", "err", err)
+		m.lost("reading the chain: %v", err)
 		return
 	}
+	st := m.state.Load()
 	for _, e := range entries {
 		if len(e.Key) != len(chainPref)+8 || len(e.Value) > MaxManifestSize {
-			m.warn("release: bad record in the chain; the rest is ignored")
+			m.lost("bad record")
 			return
 		}
 		at := time.Unix(int64(binary.BigEndian.Uint64(e.Key[len(chainPref):])), 0)
-		if _, err := m.state.Apply(e.Value, at); err != nil {
-			m.warn("release: stored manifest does not verify; the rest is ignored", "err", err)
+		if _, err := st.Apply(e.Value, at); err != nil {
+			m.lost("a stored manifest does not verify: %v", err)
 			return
 		}
 		m.latest = append(m.latest[:0], e.Value...)
@@ -185,11 +211,30 @@ func (m *Manager) replay() {
 
 // Check verifies a release object against the current state without applying it. It is the DHT
 // server's ReleaseCheck: the compiled keys and the threshold decide what a node stores.
+//
+// The manifest the node runs on is vouched for as well: "newer than the last applied" is a rule for
+// Offer, not for storing the current release (M1). It still has to be a valid, unexpired release
+// object.
 func (m *Manager) Check(raw []byte, now time.Time) error {
 	if len(raw) == 0 || len(raw) > MaxManifestSize {
 		return ErrTooLarge
 	}
-	_, err := m.state.Check(raw, now)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.broken != nil {
+		return m.broken
+	}
+	if m.latest != nil && bytes.Equal(raw, m.latest) {
+		e, err := objects.Verify(raw, now)
+		if err != nil {
+			return err
+		}
+		if e.Label != objects.LabelRelease {
+			return fmt.Errorf("release: label %q", e.Label)
+		}
+		return nil
+	}
+	_, err := m.state.Load().Check(raw, now)
 	return err
 }
 
@@ -205,12 +250,17 @@ func (m *Manager) Offer(raw []byte) (bool, error) {
 		return false, ErrTooLarge
 	}
 	m.mu.Lock()
+	if m.broken != nil {
+		err := m.broken
+		m.mu.Unlock()
+		return false, err
+	}
 	if bytes.Equal(raw, m.latest) {
 		m.mu.Unlock()
 		return false, nil
 	}
 	now := m.cfg.Clock.Now()
-	mf, err := m.state.Check(raw, now)
+	mf, err := m.state.Load().Check(raw, now)
 	if err != nil {
 		m.mu.Unlock()
 		if m.stale(raw, now) {
@@ -234,7 +284,7 @@ func (m *Manager) Offer(raw []byte) (bool, error) {
 			return false, fmt.Errorf("release: persist: %w", err)
 		}
 	}
-	applied, err := m.state.Apply(raw, now)
+	applied, err := m.state.Load().Apply(raw, now)
 	if err != nil {
 		// Check just passed under the same lock; if this happens the record must not stay.
 		if kv := m.cfg.KV; kv != nil {
@@ -256,7 +306,7 @@ func (m *Manager) Offer(raw []byte) (bool, error) {
 // stale reports whether raw is a well-formed signed object whose seq (= released_at) is not newer
 // than the applied manifest. It only picks the error to return.
 func (m *Manager) stale(raw []byte, now time.Time) bool {
-	last := m.state.Last()
+	last := m.state.Load().Last()
 	if last == nil {
 		return false
 	}
@@ -273,7 +323,7 @@ func (m *Manager) eventFor(mf *objects.Manifest, now time.Time) (Event, bool) {
 	sort.Strings(names)
 	for _, c := range names {
 		own := m.cfg.Own[c]
-		st := m.state.Status(c, own, now)
+		st := m.state.Load().Status(c, own, now)
 		if st == objects.UpToDate {
 			continue
 		}
@@ -296,25 +346,25 @@ func (m *Manager) Latest() []byte {
 }
 
 // Last returns the last applied manifest, or nil.
-func (m *Manager) Last() *objects.Manifest { return m.state.Last() }
+func (m *Manager) Last() *objects.Manifest { return m.state.Load().Last() }
 
 // Keys returns the current release key set.
-func (m *Manager) Keys() []keys.AKey { return m.state.Keys() }
+func (m *Manager) Keys() []keys.AKey { return m.state.Load().Keys() }
 
 // Policy returns the effective policy of a component, or nil.
-func (m *Manager) Policy(component string) *pb.Policy { return m.state.Policy(component) }
+func (m *Manager) Policy(component string) *pb.Policy { return m.state.Load().Policy(component) }
 
 // PeerRefused implements session.PeerPolicy. Never lock out: only peers strictly below the node's
 // own version are refused (objects.ReleaseState).
 func (m *Manager) PeerRefused(component string, own, peer uint32, now time.Time) bool {
-	return m.state.PeerRefused(component, own, peer, now)
+	return m.state.Load().PeerRefused(component, own, peer, now)
 }
 
 // Admit returns the handshake version admission for a component and the node's own version
 // (session.AcceptConfig.AdmitVersion): false makes the responder answer REJECT{version}.
 func (m *Manager) Admit(component string, own uint32) func(peerVersion uint32) bool {
 	return func(peer uint32) bool {
-		return !m.state.PeerRefused(component, own, peer, m.cfg.Clock.Now())
+		return !m.state.Load().PeerRefused(component, own, peer, m.cfg.Clock.Now())
 	}
 }
 
@@ -324,7 +374,7 @@ func (m *Manager) Status(component string) objects.UpdateStatus {
 	if !ok {
 		return objects.UpToDate
 	}
-	return m.state.Status(component, own, m.cfg.Clock.Now())
+	return m.state.Load().Status(component, own, m.cfg.Clock.Now())
 }
 
 // DHTSource is the lookup client (dht.Client).
@@ -390,8 +440,43 @@ func (m *Manager) FetchSite(ctx context.Context, hc *http.Client, rawURL string)
 	return m.Offer(body)
 }
 
-// Err reports why the stored chain is unavailable, or nil (stub).
-func (m *Manager) Err() error { return nil }
+// Err reports why the stored chain is unavailable (an ErrChainUnavailable), or nil.
+func (m *Manager) Err() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.broken
+}
 
-// Reset forgets the stored chain and starts from the compiled keys (stub).
-func (m *Manager) Reset() error { return nil }
+// Reset forgets the stored chain and starts again from the compiled keys. It is the explicit
+// repair after a lost chain (or a build with other release keys): the key set it returns to may
+// contain keys the lost chain had revoked, so the caller decides, not the manager.
+func (m *Manager) Reset() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if kv := m.cfg.KV; kv != nil {
+		for i := 0; i < 8; i++ {
+			rest, err := kv.Scan(chainPref, store.MaxScanLimit)
+			if err != nil {
+				return fmt.Errorf("release: reset: %w", err)
+			}
+			if len(rest) == 0 {
+				break
+			}
+			for _, e := range rest {
+				if err := kv.Delete(append(append([]byte(nil), chainPref...), e.Key[len(chainPref):]...)); err != nil {
+					return fmt.Errorf("release: reset: %w", err)
+				}
+			}
+		}
+		if err := kv.Delete(versionKey); err != nil {
+			return fmt.Errorf("release: reset: %w", err)
+		}
+	}
+	st, err := objects.NewReleaseState(m.cfg.Keys)
+	if err != nil {
+		return err
+	}
+	m.state.Store(st)
+	m.latest, m.chainLen, m.broken = nil, 0, nil
+	return nil
+}

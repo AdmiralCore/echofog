@@ -580,8 +580,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 	r.modules.Do(r.registerModules)
 	if r.releaseM != nil {
-		r.wg.Add(1)
-		go r.releaseLoop(runCtx)
+		if err := r.releaseM.Err(); err != nil {
+			// Fail closed (T4.5 L2): the stored chain is unreadable, so manifests are refused and
+			// polling would only fail. The operator repairs the profile (Release().Reset()).
+			r.events.Emit(Event{Kind: EventReleaseUnavailable, Message: "the stored release manifest chain is unavailable", At: r.clock.Now(), Err: err})
+		} else {
+			r.wg.Add(1)
+			go r.releaseLoop(runCtx)
+		}
 	}
 	if err := r.startAccess(runCtx); err != nil {
 		r.cleanupAfterStartFailure()
