@@ -29,9 +29,28 @@ type Record struct {
 
 // AnalyzeStream returns a writer to feed a classic pcap stream into and a function that waits for
 // the end of the stream and returns the flows. Nothing is buffered beyond one record and the
-// per-flow state, so a big capture costs memory in proportion to its flows.
+// per-flow state, so a big capture costs memory in proportion to its flows. When the stream is
+// not a pcap file the analyzer stops, and writes to the writer fail instead of blocking.
 func AnalyzeStream() (io.WriteCloser, func() ([]Flow, error)) {
 	pr, pw := io.Pipe()
-	go func() { _, _ = io.Copy(io.Discard, pr) }()
-	return pw, func() ([]Flow, error) { return nil, io.EOF }
+	type result struct {
+		flows []Flow
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		an := newAnalyzer()
+		err := streamPcap(pr, an.add)
+		if err != nil {
+			_ = pr.CloseWithError(err) // a writer that is still writing gets the error, not a hang
+			done <- result{nil, err}
+			return
+		}
+		_, _ = io.Copy(io.Discard, pr) // anything after the last record (a cut-off tail)
+		done <- result{an.finish(), nil}
+	}()
+	return pw, func() ([]Flow, error) {
+		r := <-done
+		return r.flows, r.err
+	}
 }

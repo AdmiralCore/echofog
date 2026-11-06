@@ -26,6 +26,8 @@ type LabeledFlow struct {
 	Service   string          `json:"service,omitempty"`
 	Synthetic bool            `json:"synthetic,omitempty"`
 	Flags     map[string]bool `json:"flags,omitempty"` // per-detector verdicts, filled by EvaluateDetectors
+
+	id int // position in the run (1-based), set by EvaluateDetectors for detectors that look across flows
 }
 
 // ResolvedName is what DNS says about an SNI: the addresses and, when known, the ASN.
@@ -89,7 +91,7 @@ type Detector interface {
 // Detectors returns the passive detectors D1–D10 of the launchpad.
 func Detectors() []Detector {
 	return []Detector{fetDetector{}, quicSNIDetector{}, sniAddressDetector{}, fingerprintDetector{},
-		tlsInTLSDetector{}, crossLayerRTTDetector{}, &sizeTimingDetector{}, &longHeavyDetector{}, &flowPhysicsDetector{},
+		tlsInTLSDetector{}, &crossLayerRTTDetector{}, &sizeTimingDetector{}, &longHeavyDetector{}, &flowPhysicsDetector{},
 		udpShapeDetector{}}
 }
 
@@ -97,14 +99,18 @@ func Detectors() []Detector {
 // and the false-positive rate on the browser control only (a censor must not block ordinary people).
 func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]DetectorMetric {
 	for i := range flows {
-		if flows[i].Flags == nil {
-			flows[i].Flags = map[string]bool{}
-		}
+		flows[i].Flags = map[string]bool{}
+		flows[i].id = i + 1
 	}
 	out := map[string]DetectorMetric{}
 	for _, d := range Detectors() {
 		m := DetectorMetric{}
 		recalled := 0
+		if c, ok := d.(Contextual); ok {
+			c.Begin(flows, cfg)
+		}
+		sc, scores := d.(Scorer)
+		var posScores, negScores []float64
 		for i := range flows {
 			fl := flows[i]
 			if !d.Applies(fl) {
@@ -113,6 +119,13 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 			truth := d.Truth(fl, cfg)
 			flag := d.Flag(fl, cfg)
 			flows[i].Flags[d.ID()] = flag
+			if scores {
+				if s := sc.Score(fl, cfg); truth {
+					posScores = append(posScores, s)
+				} else if fl.Label == LabelBrowser {
+					negScores = append(negScores, s)
+				}
+			}
 			if truth {
 				m.Positives++
 				if flag {
@@ -127,6 +140,13 @@ func EvaluateDetectors(flows []LabeledFlow, cfg DetectorConfig) map[string]Detec
 					m.BrowserFP++
 				}
 			}
+		}
+		if scores && len(posScores) > 0 && len(negScores) > 0 {
+			auc, tpr := AUC(posScores, negScores), TPRAtFPR(posScores, negScores, 0.01)
+			m.AUC, m.TPRAt1 = &auc, &tpr
+		}
+		if n, ok := d.(Noter); ok {
+			m.Notes = append(m.Notes, n.Notes()...)
 		}
 		if m.Positives > 0 {
 			v := float64(recalled) / float64(m.Positives)

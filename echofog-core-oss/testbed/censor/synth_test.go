@@ -65,6 +65,12 @@ func (b *pktBuilder) ack(afterUp time.Duration) {
 	b.pkt(false, 0)
 }
 
+// reaction is how long a client takes to answer a flight it has just received: the border sits on
+// the client's side, so this is processing time, not a round trip.
+func (b *pktBuilder) reaction() time.Duration {
+	return time.Duration(rngSize(b.rng, 1, 8)) * time.Millisecond
+}
+
 func (b *pktBuilder) jitter(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (0.8 + 0.4*b.rng.Float64()))
 }
@@ -86,7 +92,7 @@ func synthFlow(kind synthKind, seed int64, i int) LabeledFlow {
 		b.record(false, 22, 122)                      // ServerHello
 		b.record(false, 20, 6)                        // CCS
 		b.record(false, 23, rngSize(rng, 2400, 4600)) // encrypted extensions, certificate, finished
-		b.t += b.jitter(b.rtt)
+		b.t += b.reaction()
 		b.record(true, 20, 6)
 		b.record(true, 23, 74) // Finished
 	}
@@ -105,7 +111,10 @@ func synthFlow(kind synthKind, seed int64, i int) LabeledFlow {
 			for r := 0; r < rngSize(rng, 1, 4); r++ {
 				b.record(false, 23, rngSize(rng, 300, 16389))
 			}
-			b.record(true, 23, rngSize(rng, 33, 60))
+			if rng.Float64() >= 0.4 { // a WINDOW_UPDATE; otherwise the next request comes after the page is read
+				b.t += b.reaction()
+				b.record(true, 23, rngSize(rng, 33, 60))
+			}
 		}
 	case kTunnel, kTunnelEdge:
 		lf.Label, lf.Suite = LabelCarrier, SuiteTLSInTLS
@@ -113,7 +122,7 @@ func synthFlow(kind synthKind, seed int64, i int) LabeledFlow {
 		handshake()
 		far := time.Duration(rngSize(rng, 30, 160)) * time.Millisecond
 		if kind == kTunnelEdge {
-			far = b.jitter(time.Duration(rngSize(rng, 4, 40)) * time.Millisecond) // the same think time a site has
+			far = 0 // the exit answers from the edge: only the think time a site has, which is added below
 		}
 		b.t += time.Duration(rngSize(rng, 20, 120)) * time.Millisecond
 		// the inner handshake: ClientHello, ServerHello + the rest of the flight, client Finished
@@ -123,7 +132,7 @@ func synthFlow(kind synthKind, seed int64, i int) LabeledFlow {
 		b.t = sent + b.rtt + far
 		b.record(false, 23, 122+recOverhead)
 		b.record(false, 23, rngSize(rng, 2400, 4600)+recOverhead)
-		b.t += b.jitter(b.rtt)
+		b.t += b.reaction()
 		b.record(true, 23, rngSize(rng, 70, 110)+recOverhead) // inner CCS + Finished
 		n := rngSize(rng, 2, 10)
 		for k := 0; k < n; k++ {
@@ -186,6 +195,8 @@ func stormFlows(n int) []LabeledFlow {
 	for i := range out {
 		f := synthFlow(kBrowser, int64(i+1), 1000+i)
 		f.Label, f.Suite, f.Synthetic = LabelCarrier, SuiteConnStorm, true
+		f.Client = netip.AddrPortFrom(netip.MustParseAddr("203.0.113.99"), uint16(30000+i))
+		f.Server = netip.AddrPortFrom(netip.MustParseAddr("203.0.113.77"), 443)
 		f.Start = time.Unix(1_700_000_000, 0).Add(time.Duration(i) * 300 * time.Millisecond)
 		out[i] = f
 	}

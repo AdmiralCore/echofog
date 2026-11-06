@@ -34,9 +34,18 @@ const (
 
 // readPcap reads every IPv4 TCP/UDP packet of a classic pcap stream.
 func readPcap(r io.Reader) ([]packet, error) {
+	var out []packet
+	err := streamPcap(r, func(p packet) { out = append(out, p) })
+	return out, err
+}
+
+// streamPcap reads a classic pcap stream and hands each IPv4 TCP/UDP packet to fn as it arrives,
+// keeping nothing: memory is one record, not the capture. A capture cut off mid-record ends
+// without an error; a stream that is not a pcap file returns one.
+func streamPcap(r io.Reader, fn func(packet)) error {
 	var hdr [24]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return nil, fmt.Errorf("pcap header: %w", err)
+		return fmt.Errorf("pcap header: %w", err)
 	}
 	var bo binary.ByteOrder
 	nano := false
@@ -50,27 +59,30 @@ func readPcap(r io.Reader) ([]packet, error) {
 	case 0x4d3cb2a1:
 		bo, nano = binary.BigEndian, true
 	default:
-		return nil, errors.New("not a classic pcap file (pcapng is not read)")
+		return errors.New("not a classic pcap file (pcapng is not read)")
 	}
 	link := bo.Uint32(hdr[20:24])
 
-	var out []packet
 	var rec [16]byte
+	data := make([]byte, 0, 2048)
 	for {
 		if _, err := io.ReadFull(r, rec[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return out, nil
+				return nil
 			}
-			return out, err
+			return err
 		}
 		sec, frac := bo.Uint32(rec[0:4]), bo.Uint32(rec[4:8])
 		incl := bo.Uint32(rec[8:12])
 		if incl > 1<<18 {
-			return out, errors.New("pcap record too large")
+			return errors.New("pcap record too large")
 		}
-		data := make([]byte, incl)
+		if cap(data) < int(incl) {
+			data = make([]byte, incl)
+		}
+		data = data[:incl]
 		if _, err := io.ReadFull(r, data); err != nil {
-			return out, nil // a capture cut off mid-record
+			return nil // a capture cut off mid-record
 		}
 		ns := int64(frac) * 1000
 		if nano {
@@ -78,7 +90,9 @@ func readPcap(r io.Reader) ([]packet, error) {
 		}
 		if p, ok := decode(link, data); ok {
 			p.at = time.Unix(int64(sec), ns)
-			out = append(out, p)
+			// the payload points into data, which the next record overwrites
+			p.payload = append([]byte(nil), p.payload...)
+			fn(p)
 		}
 	}
 }
@@ -141,6 +155,7 @@ func decodeIPv4(b []byte) (packet, bool) {
 		p.src = netip.AddrPortFrom(src, binary.BigEndian.Uint16(l4[0:2]))
 		p.dst = netip.AddrPortFrom(dst, binary.BigEndian.Uint16(l4[2:4]))
 		p.syn = l4[13]&0x02 != 0 && l4[13]&0x10 == 0
+		p.seq, p.ack, p.flags = binary.BigEndian.Uint32(l4[4:8]), binary.BigEndian.Uint32(l4[8:12]), l4[13]
 		p.payload = l4[off:]
 	case 17:
 		if len(l4) < 8 {
