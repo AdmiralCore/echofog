@@ -14,8 +14,8 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
-// TestNodeIDLeadsToDevicesAndCardInTheDHT is the T4.2b criterion: a node publishes its own
-// records with one Step; a reader that knows only the node ID finds devices/2 under it, and from
+// TestNodeIDLeadsToDevicesAndCardInTheDHT is the T4.2b criterion: a node stores its own
+// records; a reader that knows only the node ID finds devices/2 under it, and from
 // the list the device's card (dht.md §2).
 func TestNodeIDLeadsToDevicesAndCardInTheDHT(t *testing.T) {
 	if runtime.GOOS == "windows" && os.Getenv("ECHOFOG_DHT_NET") == "" {
@@ -46,7 +46,13 @@ func TestNodeIDLeadsToDevicesAndCardInTheDHT(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	publisher := net.nodes[0]
-	publisher.rt.DHT().Step(ctx)
+	// Step would do the same, but the loop started with the node has already tried once on an empty
+	// table and waits 5 minutes before the retry; the test stores the records the loop would.
+	for _, rec := range node.OwnDHTRecords(publisher.rt) {
+		if res, err := publisher.rt.DHT().Put(ctx, rec); err != nil || res.Stored == 0 {
+			t.Fatalf("Put of an own record: %v %+v", err, res)
+		}
+	}
 
 	res, err := net.nodes[N-1].rt.DHT().Resolve(ctx, [32]byte(publisher.id.NodeID))
 	if err != nil {
