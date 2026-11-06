@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	api "github.com/echofog/echofog-core/pkg/api/node"
 )
 
 // version is the app's release, set at build time: -ldflags "-X main.version=0.1.1". Builds
@@ -25,6 +27,35 @@ type UpdateInfo struct {
 	Latest  string `json:"latest,omitempty"`
 	URL     string `json:"url,omitempty"` // the release page to download from
 	Newer   bool   `json:"newer"`
+	// Important: the signed manifest says this build falls below the supported version.
+	Manifest   bool     `json:"manifest,omitempty"` // from the signed v2 manifest, not from GitHub
+	Important  bool     `json:"important,omitempty"`
+	Components []string `json:"components,omitempty"`
+}
+
+// releasesPage stands in for a notes page that is missing or is not https.
+const releasesPage = "https://github.com/AdmiralCore/EchoFog/releases/latest"
+
+// updateInfoFromNotice shows the newest release of the signed manifest (protocol 2). The notice
+// exists only when the manifest says a component of this build is behind, so Newer is true even
+// when the app version itself is the same.
+func updateInfoFromNotice(current string, n *api.UpdateNotice) UpdateInfo {
+	info := UpdateInfo{Current: current}
+	if n == nil {
+		return info
+	}
+	info.Latest = strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '.' || r == '-' || r == '+' || r == '_' {
+			return r
+		}
+		return -1
+	}, n.Version)
+	info.URL = releasesPage
+	if isPlainHTTPS(n.NotesURL) {
+		info.URL = n.NotesURL
+	}
+	info.Newer, info.Manifest, info.Important, info.Components = true, true, n.Important, n.Components
+	return info
 }
 
 // AppVersion is the version of this build.
@@ -42,6 +73,11 @@ func (a *App) CheckForUpdate() (UpdateInfo, error) {
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
 		return info, nil // the profile, and with it how lookups may go, is not open yet
+	}
+	if nodeAPI.GetProtocol() == 2 {
+		// protocol 2: the signed manifest the node holds (2 of 3 release keys, checked by the node) is
+		// the only source; the app asks no site, and nothing is downloaded or installed
+		return updateInfoFromNotice(version, nodeAPI.V2Update()), nil
 	}
 	c := nodeAPI.OwnHTTPClient()
 	if c == nil {
@@ -117,4 +153,17 @@ func splitVersion(v string) ([3]int, string) {
 		out[i] = n
 	}
 	return out, suffix
+}
+
+// isPlainHTTPS: an https URL with no blanks or control characters; it is handed to the browser.
+func isPlainHTTPS(u string) bool {
+	if !strings.HasPrefix(u, "https://") || len(u) <= len("https://") {
+		return false
+	}
+	for _, r := range u {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -23,19 +24,43 @@ import (
 
 const linkScheme = "echofog://"
 
+// maxLinkBytes is the longest link the app takes (a v2 card link with its secret fits).
+const maxLinkBytes = 16 << 10
+
 var (
 	startLinkMu sync.Mutex
 	startLink   string // the link this process was started with, until the UI takes it
 )
 
-// linkFromArgs finds an EchoFog link among the command line arguments.
+// linkFromArgs finds an EchoFog link among the command line arguments. A browser or the OS may
+// hand the scheme without its slashes ("echofog:join?…"); the link comes back in the usual form.
+// Text that is too long or holds control characters is not a link.
 func linkFromArgs(args []string) string {
 	for _, a := range args {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(a)), linkScheme) {
-			return strings.TrimSpace(a)
+		if l := normalizeLink(strings.TrimSpace(a)); l != "" {
+			return l
 		}
 	}
 	return ""
+}
+
+func normalizeLink(t string) string {
+	if len(t) > maxLinkBytes || len(t) <= len("echofog:") || !strings.EqualFold(t[:len("echofog:")], "echofog:") {
+		return ""
+	}
+	for _, r := range t {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	rest := strings.TrimLeft(t[len("echofog:"):], "/")
+	if rest == "" {
+		return ""
+	}
+	if strings.HasPrefix(t[len("echofog:"):], "//") && !strings.HasPrefix(t[len("echofog:"):], "///") {
+		return t
+	}
+	return t[:len("echofog:")] + "//" + rest
 }
 
 // TakeStartLink returns the link the app was started with, once ("" when there is none).
@@ -54,7 +79,9 @@ func (a *App) JoinInvite(link string) (string, error) {
 	if nodeAPI == nil {
 		return "", errNodeNotStarted
 	}
-	return nodeAPI.JoinInvite(link)
+	id, err := nodeAPI.JoinInvite(link)
+	a.emitErrorScreen(err)
+	return id, err
 }
 
 // linkHandoffFile is where the running window says how to reach it.
@@ -108,21 +135,10 @@ func (a *App) serveLinkHandoff(ctx context.Context) {
 		_ = ln.Close()
 		return
 	}
-	srv := &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/link" || r.Header.Get("X-EchoFog-Token") != token {
-			http.NotFound(w, r)
-			return
-		}
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<10))
-		link := linkFromArgs([]string{string(body)})
-		if link == "" {
-			http.Error(w, "not an EchoFog link", http.StatusBadRequest)
-			return
-		}
+	srv := &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: linkHandoffHandler(token, func(link string) {
 		runtime.WindowUnminimise(ctx)
 		runtime.WindowShow(ctx)
 		safeEventsEmit(ctx, "link:open", link)
-		w.WriteHeader(http.StatusNoContent)
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	go func() {
@@ -133,4 +149,27 @@ func (a *App) serveLinkHandoff(ctx context.Context) {
 			_ = os.Remove(file)
 		}
 	}()
+}
+
+// linkHandoffHandler receives a link from a later process and passes it to open. It answers only
+// POST /link with the token written next to the address.
+func linkHandoffHandler(token string, open func(link string)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/link" || r.Header.Get("X-EchoFog-Token") != token {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, maxLinkBytes+1))
+		if len(body) > maxLinkBytes {
+			http.Error(w, "link too long", http.StatusRequestEntityTooLarge)
+			return
+		}
+		link := linkFromArgs([]string{string(body)})
+		if link == "" {
+			http.Error(w, "not an EchoFog link", http.StatusBadRequest)
+			return
+		}
+		open(link)
+		w.WriteHeader(http.StatusNoContent)
+	})
 }

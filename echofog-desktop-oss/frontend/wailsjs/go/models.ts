@@ -781,6 +781,9 @@ export namespace main {
 	    latest?: string;
 	    url?: string;
 	    newer: boolean;
+	    manifest?: boolean;
+	    important?: boolean;
+	    components?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
@@ -792,6 +795,9 @@ export namespace main {
 	        this.latest = source["latest"];
 	        this.url = source["url"];
 	        this.newer = source["newer"];
+	        this.manifest = source["manifest"];
+	        this.important = source["important"];
+	        this.components = source["components"];
 	    }
 	}
 
