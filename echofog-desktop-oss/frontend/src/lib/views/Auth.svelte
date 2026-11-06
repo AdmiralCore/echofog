@@ -159,10 +159,10 @@
     </header>
 
     {#if held}
-      <div class="notice warn" role="alert">
+      <div class="notice warn held" role="alert">
         <Icon name="warning" size={16} />
         <span class="grow">{$t('proxy.killHeld')}</span>
-        <Button size="sm" on:click={unblock}>{$t('proxy.killUnblock')}</Button>
+        <div class="held-btn"><Button size="sm" on:click={unblock}>{$t('proxy.killUnblock')}</Button></div>
       </div>
     {/if}
 
@@ -353,6 +353,9 @@
   .mode.sel .radio { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
 
   .notice { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); font-size: var(--fs-sm); }
-  .notice.warn { background: var(--warn-soft); color: var(--warn-fg); align-items: center; }
+  .notice.warn { background: var(--warn-soft); color: var(--warn-fg); }
+  .notice.held { flex-wrap: wrap; }
+  .notice.held .grow { flex: 1 1 200px; line-height: 1.45; }
+  .held-btn { flex-basis: 100%; padding-left: 24px; }
   .notice.err { background: var(--danger-soft); color: var(--danger-fg); }
 </style>

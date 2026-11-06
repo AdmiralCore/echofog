@@ -3,7 +3,7 @@ export default {
   en: {
     'report.open': 'Connection report',
     'report.title': 'Report a problem',
-    'report.hint': 'What the app knows about how it connects: country, provider, NAT, which transports get through, guards, the VPN and the latest problems. No IP address, ID, link or contact. Nothing is sent: you post it yourself.',
+    'report.hint': 'A summary of how the app connects, without personal data. Read the text below before you post it.',
     'report.building': 'Putting the report together…',
     'report.check': 'Read it before you post it. If something in it points at you, delete that line.',
     'report.issue': 'Open GitHub Issues page',
@@ -18,7 +18,7 @@ export default {
   ru: {
     'report.open': 'Отчёт о подключении',
     'report.title': 'Сообщить о проблеме',
-    'report.hint': 'Что приложение знает о своём подключении: страна, провайдер, NAT, какие транспорты проходят, охранные узлы, VPN и последние проблемы. Без IP-адресов, ID, ссылок и контактов. Ничего не отправляется: вы публикуете его сами.',
+    'report.hint': 'Сводка о том, как приложение подключается к сети, без личных данных. Прочитайте текст ниже перед отправкой.',
     'report.building': 'Собираю отчёт…',
     'report.check': 'Прочитайте перед отправкой. Если что-то в нём указывает на вас, удалите эту строку.',
     'report.issue': 'Открыть страницу GitHub Issues',

@@ -150,15 +150,15 @@
   .opts { display: flex; gap: 8px; flex-wrap: wrap; }
   .opt {
     flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
-    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface-2); white-space: normal; height: auto; font-weight: var(--fw-regular); color: var(--text);
     cursor: pointer; text-align: left;
   }
-  .opt.sel { border-color: var(--accent); background: var(--accent-weak, var(--surface)); }
+  .opt.sel { border-color: var(--accent); background: var(--accent-soft); }
   .opt .name { font-weight: 600; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .calls h3 { margin: 0 0 6px; font-weight: 600; }
-  .note { border-top: 1px solid var(--line); padding-top: 8px; }
+  .note { border-top: 1px solid var(--border-strong); padding-top: 8px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-  .dot.ok { background: #38c172; }
-  .warn { color: #c98a00; }
+  .dot.ok { background: var(--ok); }
+  .warn { color: var(--warn-fg); }
 </style>
