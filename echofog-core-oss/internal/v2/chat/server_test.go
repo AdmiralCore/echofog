@@ -57,12 +57,18 @@ func newStream() *fakeStream {
 	return &fakeStream{in: make(chan frame.Frame, 16), done: make(chan struct{})}
 }
 
+// ReadFrame returns when a frame comes, when the test closes in, or when the stream is closed: a
+// closed mux stream wakes its reader the same way.
 func (s *fakeStream) ReadFrame() (frame.Frame, error) {
-	f, ok := <-s.in
-	if !ok {
+	select {
+	case f, ok := <-s.in:
+		if !ok {
+			return frame.Frame{}, io.EOF
+		}
+		return f, nil
+	case <-s.done:
 		return frame.Frame{}, io.EOF
 	}
-	return f, nil
 }
 
 func (s *fakeStream) WriteFrame(typ uint64, flags byte, payload []byte) error {

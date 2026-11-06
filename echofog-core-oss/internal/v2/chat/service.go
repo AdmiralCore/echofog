@@ -121,6 +121,9 @@ const (
 // maxTrackedDevices bounds each of the failure tables (one entry per sender device).
 const maxTrackedDevices = 1024
 
+// maxUnboundDevices bounds the table of failing devices we have no session with.
+const maxUnboundDevices = 64
+
 // ErrOutboxFull is Send with the outbox at a limit.
 var ErrOutboxFull = errors.New("chat: outbox full")
 
@@ -153,6 +156,7 @@ type Service struct {
 	seenDev map[[32]byte]int
 	// lookups of accounts that failed, until when they are not tried again (finding 6)
 	lookupFail map[[32]byte]time.Time
+	unbound    map[[32]byte][]failure
 	seq        uint64
 }
 

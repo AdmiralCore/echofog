@@ -394,8 +394,9 @@ func TestFailedLookupIsRemembered(t *testing.T) {
 	b := w.newPeer()
 	ghost := fakeAccount()
 	node := ghost.ID()
+	dev := fakeDevice()
 	for i := 0; i < 5; i++ {
-		env := craft(t, b, b, ghost, fakeDevice(), []byte("init bytes"), true)
+		env := craft(t, b, b, ghost, dev, []byte("init bytes"), true)
 		if st := b.svc.Receive(context.Background(), env); st != chatpb.StatusRefused {
 			t.Fatalf("init %d: %d", i, st)
 		}
@@ -404,7 +405,7 @@ func TestFailedLookupIsRemembered(t *testing.T) {
 		t.Fatalf("%d lookups for five inits of an unknown account", n)
 	}
 	w.clock.Add(2 * time.Minute)
-	b.svc.Receive(context.Background(), craft(t, b, b, ghost, fakeDevice(), []byte("init bytes"), true))
+	b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev, []byte("init bytes"), true))
 	if n := w.resolves[node]; n != 2 {
 		t.Fatalf("%d lookups after the pause, want 2", n)
 	}
