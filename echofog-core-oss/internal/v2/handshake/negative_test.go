@@ -527,6 +527,20 @@ func TestClockSkewReject(t *testing.T) {
 	}
 }
 
+// TestHandshakeChecksTheRawClock: the +-600 s check, in both directions, uses the raw clock and
+// never the learned offset (handshake.md section 7, audit M1 B-2).
+func TestHandshakeChecksTheRawClock(t *testing.T) {
+	w := newWorld(t)
+	w.rc.Offset = 700 * time.Second // must be ignored
+	ini, _ := NewInitiator(w.ic, testCB)
+	ini.timeOverride = fixedTime + 700
+	hello, m1, _ := ini.Start()
+	rep := NewResponder(w.rc).HandleFirst(testCB, hello, m1, w.now)
+	if rep.Action != ActSendAndClose {
+		t.Fatalf("a hello 700 s off the raw clock was accepted because of an offset: %v", rep.Action)
+	}
+}
+
 func TestInitiatorChecksResponderClock(t *testing.T) {
 	w := newWorld(t)
 	ini, _ := NewInitiator(w.ic, testCB)

@@ -1,6 +1,7 @@
 package clock
 
 import (
+	"net/netip"
 	"slices"
 	"sync"
 	"time"
@@ -193,4 +194,11 @@ func absDuration(d time.Duration) time.Duration {
 		return -d
 	}
 	return d
+}
+
+// AddOutgoingSample is the new entry point (stub until the fix).
+func (c *Clock) AddOutgoingSample(remote netip.Addr, peerTime time.Time) {
+	var p PeerID
+	copy(p[:], remote.AsSlice())
+	c.AddPeerSample(p, peerTime)
 }

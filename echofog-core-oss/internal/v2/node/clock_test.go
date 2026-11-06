@@ -2,7 +2,10 @@ package node_test
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,3 +85,54 @@ func TestRuntimeAppliesLearnedClockOffset(t *testing.T) {
 		t.Fatalf("offset after the handshake %v, want about -1000 s", off)
 	}
 }
+
+// TestIncomingSessionsGiveNoClockSample: three incoming peers whose clocks are 500 s fast (inside the
+// +-600 s window) must not move the responder's offset (audit M1 B-2: only outgoing sessions
+// count).
+func TestIncomingSessionsGiveNoClockSample(t *testing.T) {
+	queue := newCarrierQueue()
+	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
+	b.start(t)
+	for i := 0; i < 3; i++ {
+		raw := &fakeRaw{now: time.Now().Add(500 * time.Second)}
+		a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) {
+			c.CarrierClock = fakeCarrierClock{raw: raw}
+		})
+		a.start(t)
+		pair := memcarrier.NewQUIC()
+		queue.push(pair.Server)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t), Carrier: pair.Client})
+		cancel()
+		if err != nil {
+			t.Fatalf("liar %d: %v", i, err)
+		}
+		defer sess.Close()
+	}
+	if off := b.rt.Clock().Offset(); off != 0 {
+		t.Fatalf("three incoming liars moved the responder's offset to %v", off)
+	}
+}
+
+// TestRuntimeWithoutHTTPClientMakesNoRequest: without cfg.HTTP the clock check is off (fail
+// closed, audit M1 B-4): no HTTP request leaves the node.
+func TestRuntimeWithoutHTTPClientMakesNoRequest(t *testing.T) {
+	var n atomic.Int32
+	a := newTestNode(t, cards.Hidden, false, nil, nil)
+	a.start(t)
+	if a.rt.HTTP() != nil {
+		t.Fatal("the runtime built an HTTP client of its own")
+	}
+	old := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) { n.Add(1); return nil, errors.New("blocked") })
+	defer func() { http.DefaultTransport = old }()
+	a.rt.CheckClockForTest()
+	time.Sleep(200 * time.Millisecond)
+	if got := n.Load(); got != 0 {
+		t.Fatalf("%d HTTP requests without a configured client", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

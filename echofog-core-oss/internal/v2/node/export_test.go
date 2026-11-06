@@ -76,3 +76,6 @@ var PunchRulesOf = func(r *Runtime, raw []byte, peer netip.AddrPort) punch.Rules
 	ps := &punchState{peerAddr: peer, est: &session.Established{Peer: &handshake.CardInfo{Raw: raw}}}
 	return r.relayc.rules(ps)
 }
+
+// CheckClockForTest runs the post-failure clock check (D36) as a failed dial would.
+func (r *Runtime) CheckClockForTest() { r.maybeClockCheck() }
