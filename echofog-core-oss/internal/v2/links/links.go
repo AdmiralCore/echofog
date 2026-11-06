@@ -263,6 +263,11 @@ func (s *Service) Redeem(ctx context.Context, link string) (node.Peer, error) {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return node.Peer{}, err
 		}
+		// A refusal of the route policy is a clear answer, not a silent close: it must not read as
+		// "revoked".
+		if errors.Is(err, node.ErrNoDomesticEntry) || errors.Is(err, node.ErrRouteUnsupported) {
+			return node.Peer{}, err
+		}
 		if pv.Kind == KindInvitation {
 			return node.Peer{}, fmt.Errorf("%w: %v", ErrRevoked, err)
 		}

@@ -99,6 +99,7 @@ type fakeRuntime struct {
 	extended map[access.PassID]time.Duration
 	revoked  []access.PassID
 	rotated  int
+	routes   map[node.DeviceID]node.RouteReport
 }
 
 func (f *fakeRuntime) Start(context.Context) error {
@@ -112,6 +113,10 @@ func (f *fakeRuntime) Stop(context.Context) error {
 	defer f.mu.Unlock()
 	f.stops++
 	return nil
+}
+func (f *fakeRuntime) RouteReport(d node.DeviceID) (node.RouteReport, bool) {
+	r, ok := f.routes[d]
+	return r, ok
 }
 func (f *fakeRuntime) Status() node.Status            { return f.status }
 func (f *fakeRuntime) NetClass() routepolicy.NetClass { return f.class }
@@ -636,3 +641,51 @@ func TestUserMessageIsRussianAndNeverRepeatsTheInternalText(t *testing.T) {
 func mustAddr(s string) netip.AddrPort { return netip.MustParseAddrPort(s) }
 
 func hx(b [32]byte) string { return hex.EncodeToString(b[:]) }
+
+func TestReportShowsTheAppliedRuleAndTableVersion(t *testing.T) {
+	r := newRig(t, app.ModePublic)
+	r.rt.status = node.Status{Sessions: sessions()}
+	r.rt.routes = map[node.DeviceID]node.RouteReport{
+		node.DeviceID(nid(50)): {RuleID: "ru-mobile-domestic", TableVersion: "2026-11-03"},
+		node.DeviceID(nid(51)): {RuleID: "ru-mobile-domestic", TableVersion: "2026-11-03"},
+		node.DeviceID(nid(52)): {RuleID: "default", TableVersion: "2026-11-03"},
+	}
+	rep := r.a.Report()
+	for _, want := range []string{"route rule ru-mobile-domestic: 2 sessions", "route rule default: 1 session", "route table: 2026-11-03"} {
+		if !strings.Contains(rep, want) {
+			t.Errorf("report lacks %q: %s", want, rep)
+		}
+	}
+	if ipv4.MatchString(rep) || hex8.MatchString(rep) {
+		t.Fatalf("leak: %s", rep)
+	}
+	r.rt.routes = nil
+	if rep := r.a.Report(); !strings.Contains(rep, "route: no decision yet") {
+		t.Fatalf("no decisions: %s", rep)
+	}
+}
+
+func TestPolicyRefusalsHaveTheirOwnRussianText(t *testing.T) {
+	seen := map[string]bool{}
+	for _, err := range []error{node.ErrNoDomesticEntry, node.ErrRouteUnsupported, fmt.Errorf("dial: %w", node.ErrNoDomesticEntry)} {
+		m := app.UserMessage(err)
+		if m == "" || strings.Contains(m, "node:") || m == app.UserMessage(errors.New("x")) || m == app.UserMessage(links.ErrRevoked) {
+			t.Errorf("%v -> %q", err, m)
+		}
+		seen[m] = true
+	}
+	if len(seen) != 2 {
+		t.Fatalf("the two refusals must read differently: %v", seen)
+	}
+}
+
+func TestAddByLinkKeepsAPolicyRefusalVisible(t *testing.T) {
+	r := newRig(t, app.ModePublic)
+	r.ln.redeemErr = fmt.Errorf("session: %w", node.ErrNoDomesticEntry)
+	for _, l := range []string{contactURL, inviteURL} {
+		_, err := r.a.AddByLink(context.Background(), l)
+		if !errors.Is(err, node.ErrNoDomesticEntry) || app.UserMessage(err) == app.UserMessage(links.ErrRevoked) {
+			t.Fatalf("%s: %v -> %q", l, err, app.UserMessage(err))
+		}
+	}
+}

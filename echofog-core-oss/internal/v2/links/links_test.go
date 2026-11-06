@@ -492,6 +492,23 @@ func TestRedeemFailures(t *testing.T) {
 			t.Fatalf("Redeem: %v", err)
 		}
 	})
+	t.Run("route policy refusal is not revoked", func(t *testing.T) {
+		for _, policy := range []error{node.ErrNoDomesticEntry, node.ErrRouteUnsupported} {
+			d := &fakeDialer{err: fmt.Errorf("dial: %w", policy)}
+			s := hid.service(t, d)
+			inv, err := s.Invite(t.Context(), access.MintOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Redeem(t.Context(), inv.URL); !errors.Is(err, policy) || errors.Is(err, links.ErrRevoked) {
+				t.Fatalf("invitation, %v: %v", policy, err)
+			}
+			cs := pub.service(t, &fakeDialer{err: policy})
+			if _, err := cs.Redeem(t.Context(), mustContact(t, cs).URL); !errors.Is(err, policy) {
+				t.Fatalf("contact, %v: %v", policy, err)
+			}
+		}
+	})
 	t.Run("contact link failure is not revoked", func(t *testing.T) {
 		d := &fakeDialer{err: boom}
 		s := pub.service(t, d)
