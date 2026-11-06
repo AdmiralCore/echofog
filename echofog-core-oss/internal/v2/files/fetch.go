@@ -84,6 +84,8 @@ const (
 	// rejected maxRejectsPerChunk times, or maxRejects in all.
 	maxRejectsPerChunk = 3
 	maxRejects         = 64
+	// maxCommitTries is how many times a store that failed its proof is repaired by asking again.
+	maxCommitTries = 2
 )
 
 type inflightEntry struct {
@@ -141,11 +143,6 @@ func Fetch(ctx context.Context, st *mux.Stream, offer Offer, store Store, opt Fe
 			_ = flusher.Flush()
 		}
 	}()
-	if store.Count() >= n {
-		_ = st.Close()
-		return store.Commit()
-	}
-
 	st.SetLimiter(filesLimiter())
 	events := make(chan fetchEvent, 64)
 	quit := make(chan struct{})
@@ -182,16 +179,25 @@ func Fetch(ctx context.Context, st *mux.Stream, offer Offer, store Store, opt Fe
 		rto:      opt.MinRTO * 2,
 	}
 	f.lastFlush = clk.Now()
+	commitTries := 0
 
 	for {
 		if store.Count() >= n {
-			_ = st.WriteFrame(TypeDone, 0, Done{FID: offer.FID}.Append(nil))
-			if err := store.Commit(); err != nil {
-				return err
+			// Commit proves the file against the root first; the sender is told only after that. A
+			// store that finds damaged chunks drops them and the loop asks for them again.
+			cerr := store.Commit()
+			if cerr == nil {
+				_ = st.WriteFrame(TypeDone, 0, Done{FID: offer.FID}.Append(nil))
+				finished = true
+				_ = st.Close()
+				return nil
 			}
-			finished = true
-			_ = st.Close()
-			return nil
+			if !errors.Is(cerr, ErrCorrupt) || commitTries >= maxCommitTries {
+				return cerr
+			}
+			commitTries++
+			f.restart()
+			continue
 		}
 		if err := f.pump(); err != nil {
 			return f.streamErr(ctx, err)
@@ -281,6 +287,13 @@ type fetcher struct {
 	rto                    time.Duration
 	lastLoss               time.Time
 	lastFlush              time.Time
+}
+
+// restart forgets what is in flight and looks the file over again after the store dropped chunks.
+func (f *fetcher) restart() {
+	f.inflight = map[int]inflightEntry{}
+	f.retry = nil
+	f.cursor = 0
 }
 
 func (f *fetcher) wasAsked(i int) bool { return f.asked[i>>3]&(1<<(uint(i)&7)) != 0 }

@@ -132,7 +132,7 @@ func TestResumeRechecksStoredChunks(t *testing.T) {
 
 // Commit proves the whole file against the root of the offer. A chunk the caller stored without
 // checking, or one changed behind the store's back, makes Commit fail, drops that chunk and
-// leaves the rest for a resume.
+// restarts or repairs the download (a changed chunk is told apart, a wrong one stored as it came is not).
 func TestCommitProvesTheRoot(t *testing.T) {
 	data := content(4*ChunkSize, 4)
 	o := offerOf(t, "c.bin", data, fid(9))
@@ -152,11 +152,15 @@ func TestCommitProvesTheRoot(t *testing.T) {
 	if s.Path() != "" {
 		t.Fatal("a file that failed the proof was moved to its final name")
 	}
-	if s.Have(2) || s.Count() != 3 {
-		t.Fatalf("after the failed proof Have(2)=%v Count=%d, want the bad chunk dropped and 3 kept", s.Have(2), s.Count())
+	// the leaf hashes agree with the bytes, so the bad chunk cannot be told from the good ones:
+	// the download starts over (fail closed)
+	if s.Count() != 0 {
+		t.Fatalf("after the failed proof Count=%d, want a fresh start", s.Count())
 	}
-	if err := s.Put(2, chunkOf(data, 2)); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 4; i++ {
+		if err := s.Put(i, chunkOf(data, i)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.Commit(); err != nil {
 		t.Fatalf("Commit after repairing the chunk: %v", err)
