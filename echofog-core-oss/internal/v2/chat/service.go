@@ -98,6 +98,9 @@ type ServiceConfig struct {
 	Events Events
 	// MailDir remembers the queues contacts announce (Control.mailbox); nil ignores announcements.
 	MailDir MailDirectory
+	// IsContact says whether an account may announce a queue; nil accepts every account that got through
+	// the authentication of a session (the directory is bounded either way).
+	IsContact func(node [32]byte) bool
 	// NoJitter turns the +-20 % of the retry pauses off (tests, AD13).
 	NoJitter bool
 

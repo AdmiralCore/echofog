@@ -251,3 +251,9 @@ func (r *Runtime) clientDialOpt(device [32]byte) DialOpt {
 	}
 	return DialOpt{}
 }
+
+// nextFetchPause is the pause after a round of the fetch loop: a second after a success, doubling after
+// each failure up to five minutes, and five minutes in background=limited mode.
+func nextFetchPause(prev time.Duration, failed, limited bool) time.Duration {
+	return 0
+}

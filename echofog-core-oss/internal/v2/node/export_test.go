@@ -104,6 +104,12 @@ var AdmitVersionOf = func(r *Runtime) func(uint32) bool { return r.admitVersion(
 // ReleaseCheckOf returns the release check handed to the DHT server.
 var ReleaseCheckOf = func(r *Runtime) func(raw []byte, now time.Time) error { return r.releaseCheck() }
 
+// RelayCardAddrDefault is the address rule F applies to relay cards.
+var RelayCardAddrDefault = relayCardAddrDefault
+
+// NextFetchPause is the pause of the mailbox fetch loop.
+var NextFetchPause = nextFetchPause
+
 // SetMailboxDialHook lets a test choose the dial options F uses to reach a mailbox relay (in-memory
 // carriers).
 var SetMailboxDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) { r.mailboxDialHook = f }

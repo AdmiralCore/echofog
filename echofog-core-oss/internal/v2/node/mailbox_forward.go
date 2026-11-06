@@ -14,7 +14,9 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // relayCardAddrOK says whether F may dial an address of a relay card the sender supplied. Only public
 // unicast addresses pass (services.md 5.3); a test replaces it to use in-memory carriers.
-var relayCardAddrOK = func(ip netip.Addr) bool {
+var relayCardAddrOK = relayCardAddrDefault
+
+func relayCardAddrDefault(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !cgnatPrefix.Contains(ip)
 }

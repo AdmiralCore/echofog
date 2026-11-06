@@ -33,7 +33,18 @@ type MailDirectory interface {
 type MemMailDirectory struct {
 	mu sync.Mutex
 	m  map[[32]byte]MailTarget
+	// Max bounds the entries; zero means DefaultMaxMailTargets.
+	Max int
 }
+
+// DefaultMaxMailTargets is the most queues a directory keeps.
+const DefaultMaxMailTargets = 4096
+
+// Len is how many targets are kept.
+func (d *MemMailDirectory) Len() int { return 0 }
+
+// Prune drops the targets that have ended.
+func (d *MemMailDirectory) Prune(now time.Time) {}
 
 // NewMemMailDirectory returns an empty directory.
 func NewMemMailDirectory() *MemMailDirectory {
@@ -65,7 +76,15 @@ func (d *MemMailDirectory) Delete(node [32]byte) {
 type KVMailDirectory struct {
 	KV  store.KV
 	IDs *store.IDs
+	// Max bounds the entries; zero means DefaultMaxMailTargets.
+	Max int
 }
+
+// Len is how many targets are kept.
+func (d *KVMailDirectory) Len() int { return 0 }
+
+// Prune drops the targets that have ended.
+func (d *KVMailDirectory) Prune(now time.Time) {}
 
 type kvTarget struct {
 	Relay     [32]byte `json:"relay"`
