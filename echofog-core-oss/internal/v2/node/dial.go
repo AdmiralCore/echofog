@@ -146,9 +146,10 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		attempts = carrier.Plan(card, r.planInfo())
 	}
 	// The country policy (T6.4) drops the attempts the network class forbids. A relay circuit, an
-	// injected carrier and a bootstrap shell are not direct dials to a card address.
+	// injected carrier is not a direct dial to a card address. A bootstrap dial is one, to the address
+	// of the list: it has no card, but the row for that address applies all the same (L6).
 	var probeBudget int
-	if card != nil && opt.Carrier == nil && opt.CarrierFunc == nil && opt.CarrierCard == nil {
+	if (card != nil || opt.CarrierCard != nil) && opt.Carrier == nil && opt.CarrierFunc == nil {
 		var perr error
 		attempts, probeBudget, perr = r.applyRoutePolicy(card, attempts, opt.Probe)
 		if perr != nil {

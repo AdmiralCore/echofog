@@ -317,7 +317,8 @@ func (c *relayClient) rules(ps *punchState) punch.Rules {
 		}
 		if card, err := objects.VerifyCard(ps.est.Peer.Raw, c.r.clock.Now()); err == nil {
 			for _, a := range card.Addrs() {
-				if ip, err := netip.ParseAddr(a.GetHost()); err == nil {
+				// A card address the country policy keeps UDP away from is no punch target (M5).
+				if ip, err := netip.ParseAddr(a.GetHost()); err == nil && c.r.udpAllowedTo(ip) {
 					ps.cardIPs = append(ps.cardIPs, ip)
 				}
 			}

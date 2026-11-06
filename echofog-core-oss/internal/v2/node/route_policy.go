@@ -131,6 +131,9 @@ func (r *Runtime) applyRoutePolicy(card *objects.Card, attempts []carrier.Attemp
 		}
 	}
 	if len(kept) == 0 && dropped {
+		if card == nil { // a bootstrap address
+			return nil, 0, errPolicyBlocked
+		}
 		return nil, 0, fmt.Errorf("%w: %s", errPolicyBlocked, DeviceID(card.DeviceID))
 	}
 	return kept, probeBudget, nil
