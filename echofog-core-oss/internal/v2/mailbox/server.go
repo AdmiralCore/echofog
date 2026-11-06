@@ -193,6 +193,21 @@ type Config struct {
 	Metered bool
 	// Limits override DefaultLimits field by field.
 	Limits *Limits
+	// SelfDevice is this relay's device ID. hints name a relay by device ID, so FORWARD.relay may be
+	// the node ID (Self) or the device ID.
+	SelfDevice [32]byte
+	// Forwarder makes this node a forwarding relay F (services.md 5.3): a FORWARD for another relay
+	// is passed on. Nil: such a FORWARD is answered relay-unreachable.
+	Forwarder Forwarder
+}
+
+// Forwarder carries a FORWARD to the mailbox relay it names, over a session of this node.
+type Forwarder interface {
+	// Connected reports whether a session with the relay exists, so that no dial is needed.
+	Connected(relay []byte) bool
+	// Forward sends m to the relay (dialing it only with a card F verified itself or a relay_card signed
+	// by the relay, never to a private or reserved address) and returns the status M answered.
+	Forward(ctx context.Context, m Forward) (uint32, error)
 }
 
 // Server is the mailbox relay state. It is safe for concurrent use.
