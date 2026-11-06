@@ -20,6 +20,8 @@ type packet struct {
 	proto    uint8 // 6 TCP, 17 UDP
 	src, dst netip.AddrPort
 	syn      bool
+	seq, ack uint32 // TCP sequence and acknowledgement numbers
+	flags    uint8  // TCP flags
 	payload  []byte
 	size     int // IP packet length
 }

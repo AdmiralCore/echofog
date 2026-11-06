@@ -48,6 +48,11 @@ type Flow struct {
 	// name and finds other addresses; set by CheckSNI.
 	SNIForeign bool
 
+	// Pkts is the packet-level view of the flow (at most maxPkts packets, both directions, empty
+	// ACKs included); Records are the TLS records of the first 16 KB each way. D5–D9 read them.
+	Pkts    []Pkt
+	Records []Record
+
 	// LongHeavy: one connection that lasted long and carried a lot, which an ordinary visit to a
 	// site rarely does however well each packet looks; set by MarkLongHeavy. It is about the shape
 	// of the flow, so it is shown apart from the verdict on what the packets look like.

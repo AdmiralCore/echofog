@@ -43,6 +43,7 @@ type result struct {
 	Bytes       int64  `json:"bytes"`
 	Packets     int64  `json:"packets"`
 	Connections int    `json:"connections"`
+	EchoedBytes int64  `json:"echoed_bytes,omitempty"`
 	DurationMS  int64  `json:"duration_ms"`
 	Error       string `json:"error,omitempty"`
 }

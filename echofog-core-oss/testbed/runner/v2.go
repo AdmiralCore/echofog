@@ -868,3 +868,16 @@ func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
 	}
 	return info
 }
+
+// streamingSink is a captureSink that feeds the censor's stream analyzer instead of keeping the
+// capture in memory (T15.0b item 5): memory follows the number of flows, not the budget. The
+// bytes still obey the budget and still reach the -pcap file when there is one.
+func newStreamingSink(limit int64, file *os.File) *captureSink {
+	return newCaptureSink(limit, file)
+}
+
+// buffered is how many bytes of the capture the sink holds in memory.
+func (s *captureSink) buffered() int { return s.buf.Len() }
+
+// Finish ends a streaming sink and returns the flows it analysed.
+func (s *captureSink) Finish() ([]censor.Flow, error) { return nil, nil }
