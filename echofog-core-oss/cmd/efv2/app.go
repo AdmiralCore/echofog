@@ -157,16 +157,17 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 	}
 
 	rt, err := node.New(node.Config{
-		Account:         account,
-		Device:          device,
-		Cards:           builder,
-		Store:           st,
-		Clock:           clk,
-		Log:             log,
-		Profile:         a.profile,
-		ListenerSources: sources,
-		LocalInfo:       carrier.LocalInfo{Addrs: localAddrs},
-		Country:         labCountry,
+		Account:          account,
+		Device:           device,
+		Cards:            builder,
+		Store:            st,
+		Clock:            clk,
+		Log:              log,
+		Profile:          a.profile,
+		ListenerSources:  sources,
+		ExitShapeProfile: shapeProfile,
+		LocalInfo:        carrier.LocalInfo{Addrs: localAddrs},
+		Country:          labCountry,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: %w", err)
