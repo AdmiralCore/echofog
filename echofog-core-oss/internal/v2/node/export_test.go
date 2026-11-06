@@ -4,7 +4,11 @@ package node
 // that the platform flags and typed events are actually wired, without widening the public API.
 
 import (
+	"net/netip"
+
+	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/punch"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"time"
 
@@ -65,3 +69,10 @@ var SetDHTDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) {
 
 // OwnDHTRecords returns what the runtime asks the DHT client to publish by itself.
 var OwnDHTRecords = func(r *Runtime) [][]byte { return r.ownDHTRecords() }
+
+// PunchRulesOf returns the target rules the runtime builds for a relayed session whose peer card is
+// raw and whose PEER_ADDR is peer.
+var PunchRulesOf = func(r *Runtime, raw []byte, peer netip.AddrPort) punch.Rules {
+	ps := &punchState{peerAddr: peer, est: &session.Established{Peer: &handshake.CardInfo{Raw: raw}}}
+	return r.relayc.rules(ps)
+}
