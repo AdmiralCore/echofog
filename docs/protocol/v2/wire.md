@@ -500,7 +500,7 @@ MUX_DATAGRAM  payload = one datagram (§6.5); best effort, dropped when the queu
   below the highest it has seen, and not currently open, as a finished stream: its data is discarded.
 - At most 256 streams open per side, counted per mux connection and per session. An excess stream is
   refused with `MUX_RESET{refused}` (mux) or `CLOSE{refused}` (QUIC); this is not abuse.
-- The mux has no unidirectional streams (its IDs carry no direction bit). The 64 unidirectional
+- The mux has no unidirectional streams (its IDs carry no direction bit). The 64 incoming unidirectional
   streams of §10 exist only on QUIC carriers; on the mux, one-way traffic uses a bidirectional stream
   that the receiver never writes to.
 - `MUX_RESET` ends a stream at once; data received before the reset stays readable (so a `CLOSE`
@@ -828,7 +828,7 @@ match what the address's network is expected to look like.
 | frame payload | per type; never > 1 MiB |
 | mux stream data per frame | ≤ 16384 |
 | mux windows | 256 KiB per stream, 4 MiB per connection |
-| streams per session per side | 256 bidirectional, 64 unidirectional (QUIC only) |
+| streams per session per side | 256 bidirectional, 64 incoming unidirectional (QUIC only: the limit a side grants its peer) |
 | idle keepalive / path dead | `uniform(12, 24)` s / 60 s |
 | sealed replay protection | ordered records: strictly growing `n` per pipe; datagrams: window of 4096 per direction per session |
 | standby paths | ≤ 2 per session; keepalive like the active path; dead after 60 s |
