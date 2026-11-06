@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
@@ -158,13 +159,15 @@ type Sent struct {
 	Auths     [][]byte
 }
 
+type senderKeyEntry struct{ secret, key []byte }
+
 type streamKind struct{ stream, kind byte }
 
 // Sender3 seals, fragments and authenticates the media of one participant (one join). It is not
 // safe for concurrent use: media is produced by one goroutine per participant.
 type Sender3 struct {
 	cfg      Sender3Config
-	keys     map[byte][]byte // epoch -> k_sender
+	keys     map[byte]senderKeyEntry // epoch -> k_sender and the secret it came from
 	seq      map[streamKind]uint32
 	batchers map[streamKind]*Batcher
 }
@@ -175,22 +178,22 @@ func NewSender3(cfg Sender3Config) (*Sender3, error) {
 		cfg.Epochs == nil || cfg.Now == nil {
 		return nil, ErrBadKey3
 	}
-	return &Sender3{cfg: cfg, keys: map[byte][]byte{}, seq: map[streamKind]uint32{},
+	return &Sender3{cfg: cfg, keys: map[byte]senderKeyEntry{}, seq: map[streamKind]uint32{},
 		batchers: map[streamKind]*Batcher{}}, nil
 }
 
 func (s *Sender3) key(epoch byte, secret []byte) ([]byte, error) {
-	if k, ok := s.keys[epoch]; ok {
-		return k, nil
+	if e, ok := s.keys[epoch]; ok && bytes.Equal(e.secret, secret) {
+		return e.key, nil
 	}
 	k, err := SenderKey3(secret, s.cfg.Device, s.cfg.JoinSalt)
 	if err != nil {
 		return nil, err
 	}
 	if len(s.keys) > 8 {
-		s.keys = map[byte][]byte{}
+		s.keys = map[byte]senderKeyEntry{}
 	}
-	s.keys[epoch] = k
+	s.keys[epoch] = senderKeyEntry{secret: append([]byte(nil), secret...), key: k}
 	return k, nil
 }
 
@@ -206,6 +209,9 @@ func (s *Sender3) Send(kind, stream byte, ts uint32, plain []byte) (Sent, error)
 		return Sent{}, err
 	}
 	sk := streamKind{stream, kind}
+	if s.seq[sk] == ^uint32(0) {
+		return Sent{}, ErrSeqExhausted
+	}
 	h := Header3{Kind: kind, Epoch: epoch, Sender: s.cfg.Index, Stream: stream, Gen: s.cfg.Gen, Seq: s.seq[sk], TS: ts}
 	ct, err := Seal3(h, k, plain)
 	if err != nil {
