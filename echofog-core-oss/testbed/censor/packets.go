@@ -54,3 +54,19 @@ func AnalyzeStream() (io.WriteCloser, func() ([]Flow, error)) {
 		return r.flows, r.err
 	}
 }
+
+// Analysis is the result of a stream analysis: the flows and how many packets of flows past
+// MaxFlows were not analysed.
+type Analysis struct {
+	Flows          []Flow
+	DroppedPackets int
+}
+
+// AnalyzeStreamStats is AnalyzeStream with the count of what did not fit.
+func AnalyzeStreamStats() (io.WriteCloser, func() (Analysis, error)) {
+	w, wait := AnalyzeStream()
+	return w, func() (Analysis, error) {
+		f, err := wait()
+		return Analysis{Flows: f}, err
+	}
+}

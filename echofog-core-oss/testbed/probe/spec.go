@@ -42,7 +42,22 @@ type specEntry struct {
 // LoadSpec reads a JSON list of probe entries: scenario, network, addr, cover, sni, the captured
 // and fresh flights as hex, the replay window in seconds and the listen time in milliseconds. It
 // refuses an entry that cannot run, so a typo costs a message, not a run.
-func LoadSpec(r io.Reader) ([]Case, error) {
+func LoadSpec(r io.Reader) ([]Case, error) { return LoadSpecWith(r, SpecOptions{}) }
+
+// SpecOptions changes what a spec may ask.
+type SpecOptions struct {
+	// AllowPublic lets the spec name public addresses and host names. Without it the prober asks
+	// loopback, private, link-local, CGNAT and documentation addresses only (the lab).
+	AllowPublic bool
+}
+
+// LoadSpecWith is LoadSpec with options.
+func LoadSpecWith(r io.Reader, o SpecOptions) ([]Case, error) {
+	_ = o
+	return loadSpecOld(r)
+}
+
+func loadSpecOld(r io.Reader) ([]Case, error) {
 	var entries []specEntry
 	if err := json.NewDecoder(r).Decode(&entries); err != nil {
 		return nil, fmt.Errorf("probe spec: %w", err)

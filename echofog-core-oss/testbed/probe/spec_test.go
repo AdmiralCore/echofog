@@ -123,3 +123,35 @@ func TestRunSpecWritesReportsAndCountsLeaks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, own, 0)
 }
+
+// N1 of the T15.0b acceptance: the prober asks lab and private addresses only, unless it is told
+// that a public one is meant.
+func TestLoadSpecRefusesPublicAddressesUnlessAllowed(t *testing.T) {
+	for name, entry := range map[string]string{
+		"loopback":      `{"scenario":"ordinary","addr":"127.0.0.1:443","cover":"127.0.0.1:8443"}`,
+		"private":       `{"scenario":"ordinary","addr":"10.1.2.3:443","cover":"192.168.0.9:443"}`,
+		"documentation": `{"scenario":"ordinary","addr":"203.0.113.15:443","cover":"198.51.100.20:443"}`,
+		"cgnat":         `{"scenario":"hidden","network":"udp","addr":"100.64.1.2:4343"}`,
+		"ipv6 local":    `{"scenario":"hidden","network":"udp","addr":"[::1]:4343"}`,
+	} {
+		_, err := LoadSpec(strings.NewReader("[" + entry + "]"))
+		assert.NoError(t, err, name)
+	}
+	for name, entry := range map[string]string{
+		"public node":  `{"scenario":"ordinary","addr":"8.8.8.8:443","cover":"10.0.0.1:443"}`,
+		"public cover": `{"scenario":"ordinary","addr":"10.0.0.1:443","cover":"1.1.1.1:443"}`,
+		"a name":       `{"scenario":"ordinary","addr":"example.org:443","cover":"10.0.0.1:443"}`,
+		"public ipv6":  `{"scenario":"hidden","network":"udp","addr":"[2001:4860:4860::8888]:443"}`,
+		"no port":      `{"scenario":"hidden","network":"udp","addr":"10.0.0.1"}`,
+	} {
+		_, err := LoadSpec(strings.NewReader("[" + entry + "]"))
+		assert.Error(t, err, name)
+		cases, err := LoadSpecWith(strings.NewReader("["+entry+"]"), SpecOptions{AllowPublic: true})
+		if name == "no port" {
+			assert.Error(t, err, "a missing port is wrong whatever is allowed")
+			continue
+		}
+		assert.NoError(t, err, name)
+		assert.Len(t, cases, 1)
+	}
+}

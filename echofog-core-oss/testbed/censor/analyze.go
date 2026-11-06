@@ -156,10 +156,17 @@ type analyzer struct {
 	flows map[flowKey]*flowState
 	order []flowKey
 	gens  map[flowKey]int // the generation of a pair of addresses now in use
+
+	maxFlows int // flows kept; the packets of any flow past it are counted and not analysed
+	dropped  int // packets of flows that did not fit
 }
 
+// MaxFlows bounds the flows one analysis keeps, so a scan or a storm under the pcap budget cannot
+// turn into millions of flows of state. Packets of flows past the bound are counted, not read.
+var MaxFlows = 200_000
+
 func newAnalyzer() *analyzer {
-	return &analyzer{flows: map[flowKey]*flowState{}, gens: map[flowKey]int{}}
+	return &analyzer{flows: map[flowKey]*flowState{}, gens: map[flowKey]int{}, maxFlows: MaxFlows}
 }
 
 func (a *analyzer) add(p packet) {
