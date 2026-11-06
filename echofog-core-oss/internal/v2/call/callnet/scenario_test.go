@@ -166,7 +166,11 @@ type signalBus struct {
 func (b signalBus) SendSignal(to [32]byte, lossy bool, payload []byte) error {
 	b.f.mu.Lock()
 	target := b.f.nodes[to]
+	_, session := b.f.kinds[[2]types.PeerID{b.self, to}]
 	b.f.mu.Unlock()
+	if !session {
+		return callnet.ErrNoLink // no session with that participant: the runtime's signal port fails too
+	}
 	if target == nil {
 		return callnet.ErrNoLink // no session with that participant: the runtime's signal port fails too (T9.5)
 	}

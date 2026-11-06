@@ -185,6 +185,8 @@ type gcall struct {
 	nodes  []*gnode
 	sentBy func(types.PeerID) int
 	sentTo func(types.PeerID) int
+	// cut takes the member's sessions away and returns the function that gives them back.
+	cut func(types.PeerID) func()
 	// crash cuts a member off without a word: nothing reaches it, nothing it sends goes out.
 	crash func(types.PeerID)
 }
@@ -247,6 +249,26 @@ func buildGate(t *testing.T, v2 bool, n int, kinds func(i, j int) map[mux.PathKi
 	} else {
 		gc.sentBy = func(id types.PeerID) int { pn.mu.Lock(); defer pn.mu.Unlock(); return pn.sentBy[id] }
 		gc.sentTo = func(id types.PeerID) int { pn.mu.Lock(); defer pn.mu.Unlock(); return pn.sentTo[id] }
+	}
+	gc.cut = func(id types.PeerID) func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		saved := map[[2]types.PeerID]map[mux.PathKind]int{}
+		for _, o := range gc.nodes {
+			for _, k := range [][2]types.PeerID{{id, o.id}, {o.id, id}} {
+				if v, ok := f.kinds[k]; ok {
+					saved[k] = v
+					delete(f.kinds, k)
+				}
+			}
+		}
+		return func() {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			for k, v := range saved {
+				f.kinds[k] = v
+			}
+		}
 	}
 	gc.crash = func(id types.PeerID) {
 		if v2 {
@@ -760,6 +782,31 @@ func TestGateVoiceRoomOfFive(t *testing.T) {
 		require.LessOrEqual(t, time.Duration(medianF(rh2)), time.Duration(gate.RehangRatio*medianF(rh1))+gate.Rehang,
 			"the tree re-hangs after the relaying member "+how+" as fast as v1's")
 	}
+}
+
+// TestJitterBlipKeepsTheVoiceTree: a member's sessions go quiet for 300 ms, well inside the
+// watchdogs (parent 800 ms, member 2.5 s). The tree must not change: the coordinator still lists
+// the member and its epoch stays.
+func TestJitterBlipKeepsTheVoiceTree(t *testing.T) {
+	gc := buildGate(t, true, 5, func(i, j int) map[mux.PathKind]int { return bothKinds }, 0, func(i int) tree.PeerNodeProfile {
+		if i == 0 || i == 2 {
+			return tree.PeerNodeProfile{UploadKbps: 40000 - 100*i, MaxRelayChildren: 2}
+		}
+		return tree.PeerNodeProfile{UploadKbps: 3000 - 100*i, IsMobile: true}
+	})
+	coord, blip := gc.nodes[0], gc.nodes[2]
+	time.Sleep(1500 * time.Millisecond)
+	before, ok := coord.cm.Snapshot()
+	require.True(t, ok)
+	require.Contains(t, before.Members, blip.id)
+	saved := gc.cut(blip.id)
+	time.Sleep(300 * time.Millisecond)
+	saved()
+	time.Sleep(2500 * time.Millisecond)
+	after, ok := coord.cm.Snapshot()
+	require.True(t, ok)
+	require.Contains(t, after.Members, blip.id, "a 300 ms blip does not drop the member")
+	require.Equal(t, before.Epoch, after.Epoch, "and does not rebuild the tree")
 }
 
 func scaleMs(v []float64) []float64 {
