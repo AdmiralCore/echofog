@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 
 	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -55,4 +56,19 @@ func profileHasRole(roles []Role, want Role) bool {
 		}
 	}
 	return false
+}
+
+// MailboxDialer opens mailbox/2 sessions for a client (a recipient fetching its queues, a sender
+// handing a deposit to F). opts chooses the dial options for a device; nil means the card book.
+func (r *Runtime) MailboxDialer(opts func(device [32]byte) DialOpt) mailbox.Dialer {
+	return mailboxDialer{r: r, opts: opts}
+}
+
+type mailboxDialer struct {
+	r    *Runtime
+	opts func(device [32]byte) DialOpt
+}
+
+func (d mailboxDialer) Dial(ctx context.Context, device [32]byte) (mailbox.Conn, error) {
+	return nil, errors.New("node: mailbox client not implemented")
 }

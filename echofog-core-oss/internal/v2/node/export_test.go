@@ -100,3 +100,14 @@ var AdmitVersionOf = func(r *Runtime) func(uint32) bool { return r.admitVersion(
 
 // ReleaseCheckOf returns the release check handed to the DHT server.
 var ReleaseCheckOf = func(r *Runtime) func(raw []byte, now time.Time) error { return r.releaseCheck() }
+
+// SetMailboxDialHook lets a test choose the dial options F uses to reach a mailbox relay (in-memory
+// carriers).
+var SetMailboxDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) { r.mailboxDialHook = f }
+
+// AllowRelayCardAddrs replaces the address check of relay cards; it returns the old check.
+var AllowRelayCardAddrs = func(f func(netip.Addr) bool) func(netip.Addr) bool {
+	old := relayCardAddrOK
+	relayCardAddrOK = f
+	return old
+}

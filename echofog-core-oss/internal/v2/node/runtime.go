@@ -259,7 +259,9 @@ type Runtime struct {
 	chatKeys    *chatcrypto.Crypto
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
-	modules     sync.Once
+	// mailboxDialHook is the same for the dials of the forwarding relay F.
+	mailboxDialHook func(*objects.Card) DialOpt
+	modules         sync.Once
 	// exitMu guards exitIdents, the per-exit client identities loaded in this run (T10.2).
 	exitMu     sync.Mutex
 	exitIdents map[DeviceID]*exitIdent
