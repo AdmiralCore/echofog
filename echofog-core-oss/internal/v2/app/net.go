@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/echofog/echofog-core/internal/v2/mux"
+	"github.com/echofog/echofog-core/internal/v2/node"
 )
 
 // PeerStatus is one live session as the network screen shows it. It has no address and only a
@@ -78,6 +79,7 @@ func (a *App) Report() string {
 	}
 	line("running: %s", yesNo(ns.Running))
 	line("sessions: %d  direct %d  relay %d  paths: %d  standby: %d", ns.Sessions, ns.Direct, ns.Relay, paths, standby)
+	a.routeLines(st, line)
 	ids := make([]int, 0, len(suites))
 	for s := range suites {
 		ids = append(ids, int(s))
@@ -94,4 +96,40 @@ func yesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// routeLines tells which route-policy rule applied to the sessions and which table it came from
+// (T6.4): rule IDs and the table version only, no address.
+func (a *App) routeLines(st node.Status, line func(string, ...any)) {
+	rules := map[string]int{}
+	tables := map[string]bool{}
+	for _, s := range st.Sessions {
+		if r, ok := a.cfg.Runtime.RouteReport(s.Device); ok {
+			rules[r.RuleID]++
+			tables[r.TableVersion] = true
+		}
+	}
+	if len(rules) == 0 {
+		line("route: no decision yet")
+		return
+	}
+	ids := make([]string, 0, len(rules))
+	for id := range rules {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		n := rules[id]
+		word := "sessions"
+		if n == 1 {
+			word = "session"
+		}
+		line("route rule %s: %d %s", id, n, word)
+	}
+	vs := make([]string, 0, len(tables))
+	for v := range tables {
+		vs = append(vs, v)
+	}
+	sort.Strings(vs)
+	line("route table: %s", strings.Join(vs, ", "))
 }
