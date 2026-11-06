@@ -2,6 +2,7 @@ package v1sig
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -65,9 +66,9 @@ var cases = []struct {
 	{signaling.ActionStreamTreeUpdate, streamMF(), func() any { return new(tree.StreamManifest) }},
 	{signaling.ActionCoordinatorElection, pid(4), func() any { return new(types.PeerID) }},
 	{signaling.ActionVADState, signaling.VADPayload{Speaker: pid(2), Speaking: true, AudioDb: -23.5}, func() any { return new(signaling.VADPayload) }},
-	{signaling.ActionJoin, signaling.JoinPayload{Profile: prof(2), Proof: bytes.Repeat([]byte{9}, 32), KX: bytes.Repeat([]byte{8}, 32), SK: bytes.Repeat([]byte{7}, 32), JoinSalt: bytes.Repeat([]byte{6}, 16)}, func() any { return new(signaling.JoinPayload) }},
+	{signaling.ActionJoin, signaling.JoinPayload{Profile: prof(2), Proof: bytes.Repeat([]byte{9}, 32), KX: bytes.Repeat([]byte{8}, 32), SK: mediaKey(), JoinSalt: bytes.Repeat([]byte{6}, 16)}, func() any { return new(signaling.JoinPayload) }},
 	{signaling.ActionLeave, nil, nil},
-	{signaling.ActionMemberHeartbeat, signaling.JoinPayload{Profile: prof(3), Proof: bytes.Repeat([]byte{9}, 32), KX: bytes.Repeat([]byte{8}, 32), SK: bytes.Repeat([]byte{7}, 32), JoinSalt: bytes.Repeat([]byte{6}, 16)}, func() any { return new(signaling.JoinPayload) }},
+	{signaling.ActionMemberHeartbeat, signaling.JoinPayload{Profile: prof(3), Proof: bytes.Repeat([]byte{9}, 32), KX: bytes.Repeat([]byte{8}, 32), SK: mediaKey(), JoinSalt: bytes.Repeat([]byte{6}, 16)}, func() any { return new(signaling.JoinPayload) }},
 	{signaling.ActionParentLost, pid(4), func() any { return new(types.PeerID) }},
 	{signaling.ActionStreamRegister, announce(), func() any { return new(signaling.StreamAnnouncePayload) }},
 	{signaling.ActionStreamUnregister, "s", func() any { return new(string) }},
@@ -90,6 +91,10 @@ var cases = []struct {
 }
 
 var sender = pid(2)
+
+func mediaKey() []byte {
+	return []byte(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)).Public().(ed25519.PublicKey))
+}
 
 func envelope(t *testing.T, action signaling.SignalAction, payload any) []byte {
 	t.Helper()
