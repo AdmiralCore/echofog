@@ -42,7 +42,7 @@ func AnalyzeStream() (io.WriteCloser, func() ([]Flow, error)) {
 // Analysis is the result of a stream analysis: the flows and how many new flows past
 // MaxFlows were not analysed.
 type Analysis struct {
-	Flows          []Flow
+	Flows        []Flow
 	DroppedFlows int
 }
 
