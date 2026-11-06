@@ -124,3 +124,15 @@ message Reset {}
 message Receipt {
   repeated bytes ids = 1;
 }
+
+// DELIVER body (0x40): a SealedEnvelope of at most 61440 bytes.
+message Deliver {
+  uint64 req = 1;
+  bytes envelope = 2;
+}
+
+// DELIVERED body (0x41): 0 ok, 1 duplicate (also ok), 2 no-session, 3 too-large, 4 refused.
+message Delivered {
+  uint64 req = 1;
+  uint32 status = 2;
+}

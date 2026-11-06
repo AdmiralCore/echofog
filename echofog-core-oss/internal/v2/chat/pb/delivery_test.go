@@ -259,3 +259,27 @@ func TestEnvelopeVectorBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseDeliverFrames(t *testing.T) {
+	t.Parallel()
+	if d, err := ParseDeliver(mustMarshal(t, &Deliver{Req: 4, Envelope: rep(1, MaxEnvelope-100)})); err != nil || d.Req != 4 {
+		t.Fatalf("DELIVER: %v %v", d, err)
+	}
+	for name, in := range map[string][]byte{
+		"empty envelope": mustMarshal(t, &Deliver{Req: 4}),
+		"huge envelope":  mustMarshal(t, &Deliver{Req: 4, Envelope: rep(1, MaxEnvelope+1)}),
+		"garbage":        {0xff},
+	} {
+		if _, err := ParseDeliver(in); !errors.Is(err, ErrInvalid) {
+			t.Errorf("DELIVER %s: %v", name, err)
+		}
+	}
+	for st := uint32(0); st <= 4; st++ {
+		if d, err := ParseDelivered(mustMarshal(t, &Delivered{Req: 1, Status: st})); err != nil || d.Status != st {
+			t.Errorf("DELIVERED %d: %v %v", st, d, err)
+		}
+	}
+	if _, err := ParseDelivered(mustMarshal(t, &Delivered{Req: 1, Status: 5})); !errors.Is(err, ErrInvalid) {
+		t.Errorf("DELIVERED status 5: %v", err)
+	}
+}

@@ -141,3 +141,20 @@ func ParseSealedEnvelope(b []byte) (*SealedEnvelope, error) {
 	}
 	return m, nil
 }
+
+// DELIVERED status values (services.md 4.1).
+const (
+	StatusOK        uint32 = 0
+	StatusDuplicate uint32 = 1
+	StatusNoSession uint32 = 2
+	StatusTooLarge  uint32 = 3
+	StatusRefused   uint32 = 4
+)
+
+// ParseDeliver parses a DELIVER body: a request ID and an envelope of at most MaxEnvelope bytes.
+func ParseDeliver(b []byte) (*Deliver, error) { return nil, errNotImplemented }
+
+// ParseDelivered parses a DELIVERED body; the status is one of the five defined values.
+func ParseDelivered(b []byte) (*Delivered, error) { return nil, errNotImplemented }
+
+var errNotImplemented = errors.New("chat/pb: not implemented")
