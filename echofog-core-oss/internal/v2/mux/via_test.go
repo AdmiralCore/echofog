@@ -12,7 +12,7 @@ import (
 // bindRelay binds a second path of kind PathRelay from A and returns its ID.
 func bindRelay(t testing.TB, pr *pair) (uint64, *carrierEnds) {
 	t.Helper()
-	e := newCarrier(t, false)
+	e := newCarrier(t, true) // a relay circuit is a sealed byte carrier
 	ctx := ctxT(t)
 	type res struct {
 		id  uint64
@@ -51,7 +51,7 @@ func TestSendDatagramViaPicksTheKindOfPath(t *testing.T) {
 	}
 	d, err := pr.b.ReceiveDatagram(ctx)
 	if err != nil || string(d.Payload) != "VIA-RELAY-UNIT" || d.Path != relayID {
-		t.Fatalf("via relay arrived as %+v, %v; want path %d", d, err, relayID)
+		t.Fatalf("via relay arrived as %+v, %v; want path %d; stats %+v", d, err, relayID, pr.b.Stats())
 	}
 	if bytes.Contains(relay.ta.Bytes(), []byte("VIA-RELAY-UNIT")) {
 		t.Fatal("plaintext datagram on a relay path (wire.md 8.4)")
@@ -90,6 +90,7 @@ func TestSendDatagramViaSharesOneCounter(t *testing.T) {
 	ctx := ctxT(t)
 	bindRelay(t, pr)
 	const n = 200
+	seen := map[byte]bool{}
 	for i := 0; i < n; i++ {
 		kind := PathDirect
 		if i%2 == 1 {
@@ -98,14 +99,14 @@ func TestSendDatagramViaSharesOneCounter(t *testing.T) {
 		if err := pr.a.SendDatagramVia(kind, frame.DgramCallAudio, []byte{byte(i)}); err != nil {
 			t.Fatalf("send %d: %v", i, err)
 		}
-	}
-	seen := map[byte]bool{}
-	for len(seen) < n {
 		d, err := pr.b.ReceiveDatagram(ctx)
 		if err != nil {
-			t.Fatalf("got %d of %d: %v (stats %+v)", len(seen), n, err, pr.b.Stats())
+			t.Fatalf("receive %d: %v (stats %+v)", i, err, pr.b.Stats())
 		}
 		seen[d.Payload[0]] = true
+	}
+	if len(seen) != n {
+		t.Fatalf("got %d of %d distinct datagrams", len(seen), n)
 	}
 	if st := pr.b.Stats(); st.DatagramsBad != 0 {
 		t.Fatalf("bad datagrams %d", st.DatagramsBad)
