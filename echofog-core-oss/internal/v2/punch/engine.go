@@ -78,6 +78,15 @@ type Config struct {
 	HasDirect func() bool
 	// Bind attaches the punched carrier to the session (PATH_BIND).
 	Bind func(ctx context.Context, c mux.Carrier) error
+
+	// Birthday punching (services.md §6.4.1). A nil Birthday keeps the engine on the ordinary
+	// algorithm and out of the new offer fields.
+	Birthday *Birthday
+	// OwnNAT is this node's NAT class and observed port range (from OBSERVED_ADDR).
+	OwnNAT func() NATInfo
+	// OwnID and PeerID are the node IDs of the session ends: in mutual the lower one is the noise3
+	// initiator.
+	OwnID, PeerID [32]byte
 }
 
 // Engine coordinates hole punching on one relayed session. The initiator runs Run; both ends feed
