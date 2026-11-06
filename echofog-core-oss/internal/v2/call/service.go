@@ -104,8 +104,14 @@ type Service struct {
 	links  map[[32]byte]*link
 	closed bool
 
-	seenMu sync.Mutex
-	seen   map[dedupeKey]time.Time
+	seenMu    sync.Mutex
+	seen      map[dedupeKey]time.Time
+	seenOrder []dedupeEntry // insertion order: the oldest first
+}
+
+type dedupeEntry struct {
+	key dedupeKey
+	at  time.Time
 }
 
 type dedupeKey struct {
@@ -461,17 +467,17 @@ func (s *Service) duplicate(sender []byte, msgID uint64) bool {
 	if t, ok := s.seen[k]; ok && now.Sub(t) < dedupeTTL {
 		return true
 	}
-	if len(s.seen) >= dedupeMax {
-		for kk, t := range s.seen {
-			if now.Sub(t) >= dedupeTTL {
-				delete(s.seen, kk)
-			}
-		}
-		if len(s.seen) >= dedupeMax {
-			s.seen = map[dedupeKey]time.Time{}
+	// Make room by dropping the oldest entries only: forgetting everything would let a peer that
+	// fills the table replay signals it saw just before (T9.1 finding 2).
+	for len(s.seenOrder) > 0 && (len(s.seen) >= dedupeMax || now.Sub(s.seenOrder[0].at) >= dedupeTTL) {
+		e := s.seenOrder[0]
+		s.seenOrder = s.seenOrder[1:]
+		if s.seen[e.key] == e.at {
+			delete(s.seen, e.key)
 		}
 	}
 	s.seen[k] = now
+	s.seenOrder = append(s.seenOrder, dedupeEntry{key: k, at: now})
 	return false
 }
 
