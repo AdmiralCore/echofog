@@ -365,7 +365,7 @@ func TestConcurrentCap(t *testing.T) {
 		wg.Add(1)
 		go func() { defer wg.Done(); _, _ = b.Dial(ctx, peer, true) }()
 	}
-	waitFor(t, "two attempts running", func() bool { return n.peakSockets() >= MaxConcurrent })
+	waitFor(t, "two attempts running", func() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.active == MaxConcurrent })
 	if _, err := b.Dial(ctx, peer, true); !errors.Is(err, ErrBusy) {
 		t.Fatalf("third concurrent attempt: %v, want ErrBusy", err)
 	}

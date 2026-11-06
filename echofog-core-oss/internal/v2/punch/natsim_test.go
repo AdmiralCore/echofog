@@ -227,7 +227,7 @@ func drive(clk *fakeClock, f func()) (elapsed time.Duration) {
 			panic("birthday attempt ran past 30 s of fake time")
 		}
 		clk.Advance(5 * time.Millisecond)
-		time.Sleep(150 * time.Microsecond)
+		time.Sleep(600 * time.Microsecond)
 	}
 }
 
