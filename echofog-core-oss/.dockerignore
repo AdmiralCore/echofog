@@ -4,3 +4,11 @@
 docs
 deploy/.env
 testbed/out
+.env
+**/.env
+server-identity.json
+operator.token
+recovery-phrase.txt
+*.key
+*.pem
+.claude

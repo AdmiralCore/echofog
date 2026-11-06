@@ -125,8 +125,50 @@ func expandLabel(secret []byte, label string, n int) []byte {
 // serverInitialCrypto decrypts a server Initial packet and returns its CRYPTO fragments by
 // offset. A ServerHello with a post-quantum key share does not fit one packet.
 func serverInitialCrypto(p quicPacket, clientDCID []byte) (map[int][]byte, error) {
+	return initialCrypto(p, clientDCID, "server in")
+}
+
+// ClientHelloFromInitials returns the ClientHello (handshake message) carried by the client's
+// Initial packets, given the client-to-server datagrams of a QUIC v1 connection in order. Chrome
+// splits its post-quantum ClientHello over two Initials. The first Initial's DCID keys all of
+// them; a later Initial with another DCID (after a Retry) is ignored.
+func ClientHelloFromInitials(datagrams [][]byte) ([]byte, error) {
+	frags := map[int][]byte{}
+	var dcid []byte
+	for _, d := range datagrams {
+		pk, err := splitDatagram(d)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range pk {
+			if p.kind != "initial" || p.version != quicV1 {
+				continue
+			}
+			if dcid == nil {
+				dcid = append([]byte(nil), p.dcid...)
+			}
+			c, err := initialCrypto(p, p.dcid, "client in")
+			if err != nil {
+				return nil, err
+			}
+			for off, b := range c {
+				frags[off] = b
+			}
+		}
+	}
+	hello := joinCrypto(frags)
+	if len(hello) < 4 || hello[0] != 1 {
+		return nil, ErrMalformed
+	}
+	if n := int(hello[1])<<16 | int(hello[2])<<8 | int(hello[3]); len(hello) < 4+n {
+		return nil, ErrMalformed
+	}
+	return hello, nil
+}
+
+func initialCrypto(p quicPacket, clientDCID []byte, label string) (map[int][]byte, error) {
 	secret := hkdf.Extract(sha256.New, clientDCID, quicV1Salt)
-	s := expandLabel(secret, "server in", 32)
+	s := expandLabel(secret, label, 32)
 	key, iv, hp := expandLabel(s, "quic key", 16), expandLabel(s, "quic iv", 12), expandLabel(s, "quic hp", 16)
 
 	pkt := append([]byte(nil), p.raw...)
