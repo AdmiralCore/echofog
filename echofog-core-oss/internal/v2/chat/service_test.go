@@ -515,40 +515,41 @@ func mustEnc(t *testing.T, from, to *peer, s string) []byte {
 func randID() []byte { b := make([]byte, 16); _, _ = rand.Read(b); return b }
 
 // Every envelope is its bucket plus fixed overheads: two messages in different buckets differ by
-// exactly the bucket difference, and two in one bucket have the same size (services.md 4.3).
+// exactly the bucket difference, and two in one bucket have the same size (services.md 4.3). At most
+// four devices per test: memguard locks pages and a Windows process has little quota.
 func TestEnvelopeSizesAreBucketPlusOverhead(t *testing.T) {
 	w := newWorld(t)
-	a, b := w.newPeer(), w.newPeer()
-	sizes := func(textLen int) (init, ratchet int) {
+	a, b, c, d := w.newPeer(), w.newPeer(), w.newPeer(), w.newPeer()
+	one := func(to *peer, n int) int {
 		before := len(w.sent)
-		w.send(a, b, strings.Repeat("x", textLen))
-		w.send(a, b, strings.Repeat("y", textLen))
+		w.send(a, to, strings.Repeat("x", n))
 		w.tick(a)
-		if len(w.sent)-before != 2 {
+		if len(w.sent)-before != 1 {
 			t.Fatalf("%d sends", len(w.sent)-before)
 		}
-		return len(w.sent[before].env), len(w.sent[before+1].env)
+		return len(w.sent[before].env)
 	}
-	// one session per size pair would change the init size: use a fresh recipient for each
-	var inits, ratchets []int
-	for _, n := range []int{10, 100, 600, 3000} {
-		b = w.newPeer()
-		i, r := sizes(n)
-		inits, ratchets = append(inits, i), append(ratchets, r)
+	// the first message to b starts the session and is an init; the rest are ratchet messages
+	i10 := one(b, 10)
+	r10, r100, r600, r3000 := one(b, 10), one(b, 100), one(b, 600), one(b, 3000)
+	if r10 != r100 {
+		t.Fatalf("two messages of one bucket differ: %d and %d", r10, r100)
 	}
-	// bucket sizes of the plaintexts 256, 256, 1024, 4096
-	buckets := []int{256, 256, 1024, 4096}
-	for i := 1; i < len(buckets); i++ {
-		if d := buckets[i] - buckets[0]; inits[i]-inits[0] != d || ratchets[i]-ratchets[0] != d {
-			t.Fatalf("size difference for bucket %d: init %d ratchet %d, want %d", buckets[i], inits[i]-inits[0], ratchets[i]-ratchets[0], d)
-		}
+	if r600-r10 != 1024-256 || r3000-r10 != 4096-256 {
+		t.Fatalf("ratchet sizes %d %d %d: bucket differences not kept", r10, r600, r3000)
+	}
+	// init messages to fresh recipients
+	i3000 := one(c, 3000)
+	if i3000-i10 != 4096-256 {
+		t.Fatalf("init sizes %d and %d: bucket difference not kept", i10, i3000)
+	}
+	if i10 <= r10 {
+		t.Fatalf("an init (%d) is not larger than a ratchet message (%d)", i10, r10)
 	}
 	// the largest message still fits one mailbox item
-	b = w.newPeer()
-	w.send(a, b, strings.Repeat("z", 57300))
-	w.tick(a)
-	if n := len(w.sent[len(w.sent)-1].env); n > chatpb.MaxEnvelope {
-		t.Fatalf("the largest envelope is %d bytes", n)
+	iMax := one(d, 57300)
+	if iMax > chatpb.MaxEnvelope {
+		t.Fatalf("the largest init envelope is %d bytes", iMax)
 	}
 }
 
