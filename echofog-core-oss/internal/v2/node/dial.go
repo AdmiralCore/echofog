@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/clock"
@@ -265,19 +264,6 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		r.policy.Succeeded(chosenPair)
 		if !r.recordPair(est.SID, 0, chosenPair, est.Session.Done()) {
 			r.policy.Release(chosenPair)
-		}
-	}
-	// The initiator may send on a new stream the moment message 3 is written, while the responder
-	// is still finishing the handshake and has not attached its Guard to the session yet. A PING
-	// on the control stream is answered only after that attach, so it is a deterministic
-	// readiness barrier before the caller opens service streams.
-	if est.Role == session.RoleInitiator {
-		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, perr := est.Session.Ping(waitCtx)
-		cancel()
-		if perr != nil {
-			_ = est.Session.Close()
-			return nil, fmt.Errorf("node: session readiness: %w", perr)
 		}
 	}
 	if !est.Unverified {
