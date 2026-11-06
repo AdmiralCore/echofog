@@ -129,9 +129,11 @@ func DefaultProfile(p Platform) Profile {
 	case PlatformServer:
 		prof.Roles = []Role{RoleDHTServer, RoleMailbox, RoleRelay}
 		prof.UDP = UDPFull
+		prof.Birthday = true
 	default:
 		prof.Platform = PlatformDesktop
 		prof.UDP = UDPFull
+		prof.Birthday = true
 	}
 	return prof
 }

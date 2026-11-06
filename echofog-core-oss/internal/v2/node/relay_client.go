@@ -272,6 +272,10 @@ func (c *relayClient) startPunch(est *session.Established, role punch.Role, peer
 			ps.direct.Store(true)
 			return nil
 		},
+		Birthday: c.birthdayFor(ps),
+		OwnNAT:   r.natInfo,
+		OwnID:    [32]byte(r.Self().NodeID),
+		PeerID:   [32]byte(est.Peer.NodeID),
 	})
 	c.engines[est.Session] = ps
 	c.mu.Unlock()

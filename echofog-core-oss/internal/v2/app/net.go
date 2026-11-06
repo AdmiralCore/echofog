@@ -80,6 +80,7 @@ func (a *App) Report() string {
 	line("running: %s", yesNo(ns.Running))
 	line("sessions: %d  direct %d  relay %d  paths: %d  standby: %d", ns.Sessions, ns.Direct, ns.Relay, paths, standby)
 	a.routeLines(st, line)
+	line("birthday punch: tried %d, direct %d", st.Birthday.Tried, st.Birthday.OK)
 	ids := make([]int, 0, len(suites))
 	for s := range suites {
 		ids = append(ids, int(s))

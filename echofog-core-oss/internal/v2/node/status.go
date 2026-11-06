@@ -67,6 +67,7 @@ func (r *Runtime) Status() Status {
 		Background: r.background,
 		StartedAt:  r.startedAt,
 	}
+	st.Birthday.Tried, st.Birthday.OK = r.bd.Stats()
 	st.Profile.Roles = append([]Role(nil), st.Profile.Roles...)
 	table := r.table
 	r.mu.Unlock()

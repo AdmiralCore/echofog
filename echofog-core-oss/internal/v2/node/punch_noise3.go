@@ -96,3 +96,24 @@ func (unavailableNet) SendJunk(netip.AddrPort, []byte) error {
 func (unavailableNet) Dial(context.Context, []netip.AddrPort, int) (mux.Carrier, error) {
 	return nil, errors.New("node: no noise3 listener")
 }
+
+var _ BirthdayNetwork = (*Noise3Punch)(nil)
+
+// Socks implements BirthdayNetwork: extra UDP sockets for the symmetric side, the listener's socket
+// for the spray, Init and accept on the socket a mapping was found for (T6.7).
+func (p *Noise3Punch) Socks(peer DeviceID, deliver func(mux.Carrier)) punch.SockNet {
+	p.mu.Lock()
+	l, rt := p.listener, p.rt
+	p.mu.Unlock()
+	if l == nil {
+		return nil
+	}
+	var card *objects.Card
+	switch {
+	case p.Card != nil:
+		card = p.Card(peer)
+	case rt != nil:
+		card = rt.cardBook.Latest([32]byte(peer))
+	}
+	return &noise3.BirthdaySocks{Main: l, Card: card, Deliver: deliver}
+}
