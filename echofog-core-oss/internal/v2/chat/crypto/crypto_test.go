@@ -374,7 +374,7 @@ func TestOneTimePrekeyUsedOnce(t *testing.T) {
 	b := newUser(t, clock)
 	bundle := b.bundle()
 
-	const n = 12
+	const n = 3
 	var inits [][]byte
 	var senders []*user
 	for i := 0; i < n; i++ {

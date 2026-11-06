@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/echofog/echofog-core/internal/crypto/keymanager"
 	"github.com/echofog/echofog-core/internal/storage"
 	"github.com/echofog/echofog-core/internal/v2/identity"
@@ -55,6 +56,9 @@ type user struct {
 
 func newUser(t *testing.T, clock *testClock) *user {
 	t.Helper()
+	// memguard locks pages and the quota of a Windows process is small: the buffers leaked by one
+	// test are released after it (the v1 tests do the same), or a later test hangs in Purge.
+	t.Cleanup(memguard.Purge)
 	tw, err := identity.NewThrowaway()
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +78,7 @@ func newUser(t *testing.T, clock *testClock) *user {
 	}
 	u := &user{t: t, clock: clock, tw: tw, key: secret.New(k), dir: t.TempDir(), dl: dl}
 	u.open()
-	t.Cleanup(u.close)
+	t.Cleanup(func() { u.close(); u.key.Destroy() })
 	return u
 }
 

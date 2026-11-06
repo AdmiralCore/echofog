@@ -17,7 +17,7 @@ func (c *Crypto) ageKeysForTest(t *testing.T, d time.Duration) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kv := c.keysKV()
+	kv := c.keysKV
 	for _, name := range []string{"spk:current", "kem:current"} {
 		sealed, err := kv.Get([]byte(name))
 		if err != nil {
