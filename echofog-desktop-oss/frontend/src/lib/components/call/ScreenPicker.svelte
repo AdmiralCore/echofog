@@ -8,6 +8,10 @@
     import { callService, callState } from '../../services/call.service.js';
     import Modal from '../ui/Modal.svelte';
     import Icon from '../ui/Icon.svelte';
+    import IconButton from '../ui/IconButton.svelte';
+    import Checkbox from '../ui/Checkbox.svelte';
+    import Button from '../ui/Button.svelte';
+    import Badge from '../ui/Badge.svelte';
     import { t } from '../../i18n/index.js';
 
     export let sources = [];
@@ -43,28 +47,28 @@
     const app = (w) => (w.app ? w.app.replace(/\.exe$/i, '') : '');
 </script>
 
-<Modal width={760} wide label={$t('call.pick.title')} on:close={close}>
-    <div class="head">
-        <span class="eyebrow grow">{$t('call.pick.title')}</span>
-        <button class="icon" title={$t('call.pick.refresh')} aria-label={$t('call.pick.refresh')} on:click={() => callService.refreshSources()}><Icon name="refresh" size={16} /></button>
-        <button class="icon" aria-label={$t('common.close')} on:click={close}><Icon name="close" size={17} /></button>
-    </div>
+<Modal width={800} wide label={$t('call.pick.title')} on:close={close}>
+    <header>
+        <h2 class="grow">{$t('call.pick.title')}</h2>
+        <IconButton icon="refresh" label={$t('call.pick.refresh')} on:click={() => callService.refreshSources()} />
+        <IconButton icon="close" label={$t('common.close')} on:click={close} />
+    </header>
 
     <div class="body">
-        <p class="sect">{$t('call.pick.screens')}</p>
+        <p class="eyebrow">{$t('call.pick.screens')}</p>
         <div class="grid screens">
             {#each screens as s, i (s.id)}
                 <button class="card" on:click={() => pick(s)}>
                     <span class="shot">
                         {#if previews[s.id]}<img src={previews[s.id]} alt="" />{:else}<Icon name="monitor" size={30} />{/if}
                     </span>
-                    <span class="name">{$t('call.pick.screen', { n: i + 1 })}{#if s.primary}<span class="tag">{$t('call.pick.primary')}</span>{/if}</span>
+                    <span class="name">{$t('call.pick.screen', { n: i + 1 })}{#if s.primary}<Badge variant="accent" size="sm">{$t('call.pick.primary')}</Badge>{/if}</span>
                     <span class="meta">{s.width}×{s.height}{s.refreshHz ? ` · ${s.refreshHz} Hz` : ''}</span>
                 </button>
             {/each}
         </div>
 
-        <p class="sect">{$t('call.pick.windows')}</p>
+        <p class="eyebrow">{$t('call.pick.windows')}</p>
         <div class="grid windows">
             {#each windows as w (w.id)}
                 <button class="card" class:min={w.minimized} on:click={() => pick(w)} title={w.minimized ? $t('call.pick.minimized') : w.title}>
@@ -75,48 +79,41 @@
                     <span class="meta">{app(w)}{#if w.minimized}{' · '}{$t('call.pick.minimizedShort')}{:else if w.width}{' · '}{w.width}×{w.height}{/if}</span>
                 </button>
             {:else}
-                <p class="empty">{$t('call.pick.none')}</p>
+                <p class="empty small muted">{$t('call.pick.none')}</p>
             {/each}
         </div>
     </div>
 
-    <div class="foot">
-        <label class="sound" title={$t('call.pick.soundHint')}>
-            <input type="checkbox" bind:checked={sound} />
-            <span>{$t('call.pick.sound')}<span class="hint">{$t('call.pick.soundHint')}</span></span>
-        </label>
-        <button class="link" on:click={() => pick({ webview: true })}>{$t('call.pick.useBrowser')}</button>
-    </div>
+    <footer>
+        <div class="grow"><Checkbox bind:checked={sound} label={$t('call.pick.sound')} hint={$t('call.pick.soundHint')} /></div>
+        <Button variant="ghost" on:click={() => pick({ webview: true })}>{$t('call.pick.useBrowser')}</Button>
+    </footer>
 </Modal>
 
 <style>
-    .head { display: flex; align-items: center; gap: 6px; padding: 14px 14px 6px 18px; }
-    .grow { flex: 1; }
-    .body { padding: 0 14px 6px; overflow: auto; }
-    .sect { margin: 10px 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
-    .grid { display: grid; gap: 10px; }
+    header { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-4) var(--sp-4) var(--sp-2) var(--sp-5); }
+    header h2 { font-size: var(--fs-lg); line-height: var(--lh-lg); }
+    .body { padding: 0 var(--sp-4) var(--sp-3) var(--sp-5); overflow: auto; min-height: 0; }
+    .eyebrow { margin: var(--sp-3) 0 var(--sp-2); }
+    .grid { display: grid; gap: var(--sp-3); }
     .screens { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
     .windows { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); }
     .card {
-        display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 8px; min-width: 0;
-        border-radius: 12px; border: 1px solid var(--line-soft); background: var(--raised); color: var(--text); text-align: left;
-        transition: border-color var(--dur, 0.15s), background var(--dur, 0.15s);
+        display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: var(--sp-2); min-width: 0;
+        border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-align: left;
+        transition: border-color var(--dur), background var(--dur);
     }
-    .card:hover { border-color: var(--accent); background: var(--hover); }
+    .card:hover:not(:disabled) { border-color: var(--accent); background: var(--hover); }
+    .card:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
     .card.min { opacity: 0.55; }
     .shot {
-        aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: #0d0e12;
+        aspect-ratio: 16 / 9; border-radius: var(--r-md); overflow: hidden; background: var(--tile);
         display: flex; align-items: center; justify-content: center; color: var(--faint); margin-bottom: 4px;
     }
     .shot img { width: 100%; height: 100%; object-fit: contain; display: block; }
-    .name { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .name { font-weight: var(--fw-semibold); font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; min-width: 0; }
     .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tag { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
-    .meta { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .empty { padding: 8px 10px; color: var(--faint); }
-    .foot { display: flex; align-items: center; gap: 12px; padding: 12px 18px 16px; border-top: 1px solid var(--line-soft); margin-top: 8px; }
-    .sound { flex: 1; display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
-    .sound input { margin-top: 2px; accent-color: var(--accent); }
-    .hint { display: block; font-size: 11.5px; color: var(--faint); }
-    .link { border: none; background: none; color: var(--accent); font-weight: 600; font-size: 12.5px; padding: 4px 0; white-space: nowrap; }
+    .meta { font-size: var(--fs-xs); color: var(--faint); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { padding: var(--sp-2); }
+    footer { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--border); background: var(--surface-2); }
 </style>
