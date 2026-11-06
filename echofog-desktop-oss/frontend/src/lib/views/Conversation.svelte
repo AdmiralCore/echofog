@@ -34,6 +34,11 @@
   /** back: show a back arrow (narrow window, the list is hidden); indent: leave room for the show-list button */
   export let back = false;
   export let indent = false;
+  /** stage: a call's stage is in the default slot, between the channels and the chat; chatOpen: the chat
+   *  beside it is shown; theatre: the stage takes everything (no channels, no chat) */
+  export let stage = false;
+  export let chatOpen = true;
+  export let theatre = false;
 
   const dispatch = createEventDispatcher();
   let list;
@@ -70,11 +75,13 @@
   let info = false;
   let threadsOpen = false; // a space's list of threads
   // a space's members by role, at the right of the chat; the choice is remembered
-  let membersOpen = false;
-  try { membersOpen = localStorage.getItem('echofog.membersPanel') === '1'; } catch (_) {}
+  // without a choice made, the list is open when the chat is wide enough for it
+  let membersPref = null;
+  try { const v = localStorage.getItem('echofog.membersPanel'); membersPref = v === '1' ? true : v === '0' ? false : null; } catch (_) {}
+  $: membersOpen = membersPref ?? (!stage && screenW >= 1100);
   function toggleMembers() {
-    membersOpen = !membersOpen;
-    try { localStorage.setItem('echofog.membersPanel', membersOpen ? '1' : '0'); } catch (_) {}
+    membersPref = !membersOpen;
+    try { localStorage.setItem('echofog.membersPanel', membersPref ? '1' : '0'); } catch (_) {}
   }
   let menu = null; // { m, anchor }
   let text = '';
@@ -278,14 +285,15 @@
 
 <svelte:window on:keydown={windowKey} />
 
-<div class="chat-screen" class:compact bind:clientWidth={screenW}>
-  {#if conv.kind === 'group' && (!compact || chansOpen)}
+<div class="chat-screen" class:compact class:stage class:chat-off={stage && (!chatOpen || theatre)} class:theatre={stage && theatre} bind:clientWidth={screenW}>
+  {#if conv.kind === 'group' && (!compact || chansOpen) && !(stage && theatre)}
     <ChannelBar {conv} indent={indent && !compact} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
   {/if}
   {#if compact && chansOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
     <div class="chan-scrim" transition:fade={{ duration: 150 }} on:click={() => (chansOpen = false)}></div>
   {/if}
+  {#if stage}<div class="stage-slot"><slot /></div>{/if}
   <div class="main">
     <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
@@ -355,7 +363,7 @@
   {/if}
 
   {#if conv.kind === 'group' && membersOpen && !info && !$thread && !threadsOpen}
-    <MembersPanel {conv} float={screenW < 1000} on:close={toggleMembers} on:settings={() => { info = true; threadsOpen = false; }} />
+    <MembersPanel {conv} float={screenW < 1000 || stage} on:close={toggleMembers} on:settings={() => { info = true; threadsOpen = false; }} />
   {/if}
 
   {#if threadsOpen && !info && !$thread}

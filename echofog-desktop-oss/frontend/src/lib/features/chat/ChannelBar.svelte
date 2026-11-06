@@ -1,6 +1,6 @@
 <script>
   import { createEventDispatcher, tick } from 'svelte';
-  import { channels, activeChannel, mainChannel, openChannel, createChannel, createCategory, removeChannel, saveChannel, saveMainChannel, moveChannel, placeChannel, setupCategories } from '../../stores/chats.js';
+  import { chats, activeId, openChat, channels, activeChannel, mainChannel, openChannel, createChannel, createCategory, removeChannel, saveChannel, saveMainChannel, moveChannel, placeChannel, setupCategories } from '../../stores/chats.js';
   import { isCallActive, peerInfo } from '../../stores/call.store.js';
   import { t } from '../../i18n/index.js';
   import { ask } from '../../stores/dialog.js';
@@ -8,6 +8,8 @@
   import Popover from '../../components/ui/Popover.svelte';
   import ChannelRow from './ChannelRow.svelte';
   import ChannelPerms from './ChannelPerms.svelte';
+  import SelfCard from './SelfCard.svelte';
+  import Avatar from '../../components/ui/Avatar.svelte';
   import { App } from '../../api.js';
 
   /** A space's column: its name and settings, then its categories, each with text channels and
@@ -40,13 +42,38 @@
   $: sections = cats.length
     ? [{ key: 'loose', loose: true, items: itemsIn('') }, ...cats.map((c) => ({ key: c.id, cat: c, name: c.name, items: itemsIn(c.id) }))]
     : [
-        { key: 'v:text', virtual: 'text', name: $t('chats.text'), items: [MAIN, ...$channels.filter((c) => !c.voice && !c.category)] },
-        { key: 'v:voice', virtual: 'voice', name: $t('chats.voice'), items: $channels.filter((c) => c.voice) },
+        { key: 'v:text', virtual: 'text', name: $t('layout.headText'), items: [MAIN, ...$channels.filter((c) => !c.voice && !c.category)] },
+        { key: 'v:voice', virtual: 'voice', name: $t('layout.headVoice'), items: $channels.filter((c) => c.voice) },
       ];
   $: textChannels = $channels.filter((c) => !c.voice && !c.category);
   $: inRoom = $isCallActive && $peerInfo.chatId === conv.id ? $peerInfo.room || '' : '';
   $: manage = !!(conv.can.channels ?? conv.can.manage);
   $: mainName = $mainChannel.name || $t('chats.mainChannel');
+
+  // ---- the column's own filter (all / text / voice) and search ------------------------------------
+  let filter = 'all';
+  let query = '';
+  $: q = query.trim().toLowerCase();
+  $: shownItems = (sec) => sec.items.filter((ch) => {
+    if (filter === 'text' && ch.voice) return false;
+    if (filter === 'voice' && !ch.voice) return false;
+    return !q || (ch.main ? mainName : ch.name).toLowerCase().includes(q);
+  });
+  $: showSec = (sec) => (filter === 'all' && !q) || shownItems(sec).length > 0 || adding?.sec?.key === sec.key;
+  $: anyShown = sections.some((sec) => shownItems(sec).length > 0);
+  $: sortedChats = [...$chats].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  // ---- switching to another chat without leaving the column ---------------------------------------
+  let switchBtn;
+  let switching = false;
+  function pick(id) {
+    switching = false;
+    openChat(id);
+  }
+  function allChats() {
+    switching = false;
+    activeId.set('');
+  }
 
   // the real category behind a section: a virtual heading becomes one first
   async function categoryOf(sec) {
@@ -197,12 +224,28 @@
 
 <nav class="chanbar" aria-label={$t('chats.channels')}>
   <div class="space-head" class:indent>
-    <span class="space-name grow" title={conv.name}>{conv.name}</span>
+    <button class="space-switch" bind:this={switchBtn} class:open={switching} aria-haspopup="menu" aria-expanded={switching} title={$t('layout.switch')} on:click={() => (switching = !switching)}>
+      <span class="space-name" title={conv.name}>{conv.name}</span><Icon name="chevronDown" size={15} />
+    </button>
+    <span class="grow"></span>
     {#if manage}<button class="icon tiny" title={$t('chats.newCategory')} aria-label={$t('chats.newCategory')} on:click={() => startAdd('category')}><Icon name="folder" size={15} /></button>{/if}
     <button class="icon tiny" title={$t('chats.spaceSettings')} aria-label={$t('chats.spaceSettings')} on:click={() => dispatch('settings')}><Icon name="settings" size={16} /></button>
+    <span class="space-sub">{$t('layout.membersLine', { n: conv.members })}</span>
+  </div>
+  <div class="chips" role="group" aria-label={$t('chats.channels')}>
+    <button class:on={filter === 'all'} aria-pressed={filter === 'all'} on:click={() => (filter = 'all')}>{$t('layout.filter.all')}</button>
+    <button class:on={filter === 'text'} aria-pressed={filter === 'text'} on:click={() => (filter = 'text')}>{$t('chats.text')}</button>
+    <button class:on={filter === 'voice'} aria-pressed={filter === 'voice'} on:click={() => (filter = 'voice')}>{$t('chats.voice')}</button>
+  </div>
+  <div class="side-search">
+    <Icon name="search" size={15} />
+    <input placeholder={$t('layout.searchChannels')} bind:value={query} spellcheck="false" />
+    {#if query}<button class="icon tiny" aria-label={$t('chats.clearSearch')} on:click={() => (query = '')}><Icon name="close" size={13} stroke={2.2} /></button>{/if}
   </div>
 
+  <div class="chan-scroll">
   {#each sections as sec (sec.key)}
+   {#if showSec(sec)}
     {#if !sec.loose}
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="chan-head cat-head" class:over={over === 'sec:' + sec.key || (sec.cat && over === sec.cat.id)} draggable={manage && !!sec.cat}
@@ -219,12 +262,13 @@
       </div>
     {/if}
     {#if sec.loose || !folded.has(sec.key)}
-      {#each sec.items as ch (ch.main ? '#main' : ch.id)}
+      {#each shownItems(sec) as ch (ch.main ? '#main' : ch.id)}
         {#if ch.main}
           <!-- svelte-ignore a11y-no-static-element-interactions -->
           <div class="chan-row" draggable={manage} on:dragstart={(e) => dragStart(e, MAIN)} on:contextmenu={(e) => edit(e, MAIN)}>
             <button class="chan" class:on={$activeChannel === ''} title={$mainChannel.topic || mainName} on:click={() => openChannel('')}>
-              <span class="hash">#</span><span class="grow nm">{mainName}</span>
+              <span class="ci"><Icon name="hash" size={16} /></span>
+              <span class="cb"><span class="nm">{mainName}</span>{#if $mainChannel.topic}<span class="pv">{$mainChannel.topic}</span>{/if}</span>
               {#if $mainChannel.readOnly}<span class="ro-ic" title={$t('chats.readOnlyChannel')}><Icon name="lock" size={12} /></span>
               {:else if $mainChannel.slowSecs}<span class="ro-ic" title={$t('chats.slowOn', { s: $mainChannel.slowSecs })}><Icon name="clock" size={12} /></span>{/if}
             </button>
@@ -244,11 +288,30 @@
         <input bind:this={input} bind:value={name} maxlength="64" placeholder={$t('chats.channelName')} on:keydown={key} on:blur={add} />
       </form>
     {/if}
+   {/if}
   {/each}
+  {#if (q || filter !== 'all') && !anyShown}<p class="small faint empty-rooms">{$t('layout.nothing')}</p>{/if}
   {#if adding?.kind === 'category'}
     <form class="adding" on:submit|preventDefault={add}><Icon name="folder" size={14} /><input bind:this={input} bind:value={name} maxlength="64" placeholder={$t('chats.categoryName')} on:keydown={key} on:blur={add} /></form>
   {/if}
+  </div>
+  <SelfCard />
 </nav>
+
+{#if switching}
+  <Popover anchor={switchBtn} width={264} label={$t('layout.switch')} on:close={() => (switching = false)}>
+    <div class="switch">
+      {#each sortedChats as c (c.id)}
+        <button class="sw-item" class:sel={c.id === $activeId} on:click={() => pick(c.id)}>
+          <Avatar id={c.peerId || c.id} name={c.name} src={c.avatar} size={26} />
+          <span class="grow nm">{c.name}</span>
+          {#if c.unread}<span class="badge">{c.unread}</span>{/if}
+        </button>
+      {/each}
+      <button class="sw-item all" on:click={allChats}><Icon name="message" size={17} /><span class="grow nm">{$t('layout.allChats')}</span></button>
+    </div>
+  </Popover>
+{/if}
 
 {#if editing}
   <Popover anchor={editing.anchor} width={editing.ch.category ? 290 : 330} label={editing.main ? $t('chats.mainSettings') : editing.ch.category ? $t('chats.categorySettings') : $t('chats.channelSettings')} on:close={() => (editing = null)}>
@@ -296,6 +359,13 @@
 {/if}
 
 <style>
+  .switch { display: flex; flex-direction: column; gap: 1px; padding: 4px; max-height: 340px; overflow-y: auto; }
+  .sw-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: none; border-radius: var(--r-md); background: transparent; text-align: left; font-weight: var(--fw-medium); font-size: var(--fs-md); }
+  .sw-item:hover:not(:disabled) { background: var(--hover); border: none; }
+  .sw-item.sel { background: var(--surface-3); }
+  .sw-item .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw-item .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-2xs); font-weight: var(--fw-bold); display: inline-grid; place-items: center; }
+  .sw-item.all { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 var(--r-md) var(--r-md); color: var(--muted); padding-top: 9px; }
   .ch-edit { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
   .ch-edit label.small { margin-top: 4px; }
   .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }

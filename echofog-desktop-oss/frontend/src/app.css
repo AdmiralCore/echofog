@@ -184,6 +184,9 @@
   /* layout contract for rooms and streams: participants column and its collapsed strip */
   --participants-w: 176px;
   --participants-w-strip: 56px;
+  --top-h: 56px; /* head of a column: chat head, call head */
+  --side-w: 272px; /* the channels / chat-list column */
+  --room-chat-w: 340px; /* the chat beside a call */
 
   /* layers */
   --z-sticky: 20; --z-menu: 800; --z-modal: 900; --z-dialog: 1000; --z-toast: 1100; --z-tooltip: 1200;

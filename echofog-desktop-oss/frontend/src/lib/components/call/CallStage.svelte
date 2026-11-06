@@ -1,5 +1,7 @@
 <script>
+    import { createEventDispatcher } from 'svelte';
     import { fade } from 'svelte/transition';
+    import { peerInfo } from '../../stores/call.store.js';
     import { callService, callState, videoStreams } from '../../services/call.service.js';
     import { callDuration, formatDuration, stageExpanded, waitingKey, toggleMute } from '../../stores/call.store.js';
     import ParticipantTile from './ParticipantTile.svelte';
@@ -17,19 +19,23 @@
     export let title = '';
     /** maximized ("theatre"): the stage takes the whole chat column */
     export let maximized = false;
+    /** the chat beside the stage is shown (the button in the head opens and closes it) */
+    export let chatOpen = false;
+
+    const dispatch = createEventDispatcher();
 
     // how the room is laid out is remembered on this device: tiles in a grid, or the stream big
     // with the people in a strip beside it / under it; the strip can fold to faces only
     const LS = 'echofog.call.layout';
     let layout = 'side'; // grid | side | bottom
-    let railFolded = false;
+    let railPref = null; // null: the column folds by itself when the picture would get narrower than PIC_MIN
     try {
         const saved = JSON.parse(localStorage.getItem(LS) || '{}');
         if (['grid', 'side', 'bottom'].includes(saved.layout)) layout = saved.layout;
-        railFolded = !!saved.railFolded;
+        if (typeof saved.railPref === 'boolean') railPref = saved.railPref;
     } catch (_) {}
     function remember() {
-        try { localStorage.setItem(LS, JSON.stringify({ layout, railFolded })); } catch (_) {}
+        try { localStorage.setItem(LS, JSON.stringify({ layout, railPref })); } catch (_) {}
     }
     function setLayout(l) {
         layout = l;
@@ -37,13 +43,14 @@
         remember();
     }
     function foldRail() {
-        railFolded = !railFolded;
+        railPref = !railFolded;
         remember();
     }
 
     let menu = null; // { peer, x, y }
     let root;
     let stageW = 0;
+    const PIC_MIN = 1000; // the picture is not made narrower than this by the people beside it
 
     $: s = $callState;
     $: members = orderMembers(s.members.length ? s.members : s.self ? [s.self] : [], s.self);
@@ -56,6 +63,9 @@
     $: others = main ? screens.filter((st) => st.streamId !== main.streamId) : [];
     $: tiles = screens.length + members.length;
     $: rail = layout === 'bottom' ? 'bottom' : 'side';
+    // the people beside the picture: full tiles while the picture keeps PIC_MIN, else faces only
+    $: railFolded = railPref ?? (stageW > 0 && stageW - 32 - 176 - 12 < PIC_MIN);
+    $: isRoom = !!$peerInfo.room;
     $: wide = stageW > 900; // below this the badges that the video tags repeat are left out of the header
     $: qualityBadge = main ? qualityLabel(main) : screens[0] ? qualityLabel(screens[0]) : '';
     $: anyLive = screens.length > 0;
@@ -138,10 +148,10 @@
 <svelte:window on:keydown={onKey} />
 
 <section bind:this={root} bind:clientWidth={stageW} class="call-stage relative flex flex-col w-full h-full min-h-0 select-none" aria-label={$t('call.call')}>
-    <header class="h-10 shrink-0 flex items-center justify-between px-3 gap-3 border-b" style="border-color:var(--border)">
-        <div class="flex items-center gap-2 min-w-0">
-            <span class="w-2 h-2 rounded-full shrink-0 {s.inCall ? '' : 'animate-pulse'}" style="background:{s.inCall ? 'var(--ok)' : 'var(--warn)'}"></span>
-            <span class="font-semibold truncate text-fg" style="font-size:var(--fs-md)">{title || $t('call.call')}</span>
+    <header class="head shrink-0 flex items-center justify-between px-4 gap-3 border-b" style="border-color:var(--border)">
+        <div class="flex items-center gap-2.5 min-w-0">
+            <span class="head-ic shrink-0 {s.inCall ? '' : 'animate-pulse'}" class:wait={!s.inCall}><Icon name={isRoom ? 'volume' : 'phone'} size={17} /></span>
+            <span class="font-bold truncate text-fg" style="font-size:var(--fs-lg)">{title || $t('call.call')}</span>
             <span class="shrink-0 tabular-nums" style="font-size:var(--fs-sm);color:var(--muted)">
                 {#if s.inCall}{formatDuration($callDuration)} · {$t('call.people', { n: members.length })}{:else}{$t(waitingKey(s))}{/if}
             </span>
@@ -161,17 +171,18 @@
             {#if main && rail === 'side'}
                 <IconButton size="sm" icon={railFolded ? 'chevronLeft' : 'chevronRight'} label={railFolded ? $t('call.rail.unfold') : $t('call.rail.fold')} on:click={foldRail} />
             {/if}
+            <IconButton size="sm" icon="message" label={chatOpen ? $t('call.chatHide') : $t('call.chatShow')} pressed={chatOpen} on:click={() => dispatch('togglechat')} />
             <IconButton size="sm" icon={maximized ? 'collapse' : 'theater'} label="{maximized ? $t('call.showChat') : $t('call.theater')} (T)" pressed={maximized} on:click={() => (maximized = !maximized)} />
             <IconButton size="sm" icon="fullscreen" label="{$t('call.fullscreen')} (F)" on:click={fullscreenMain} />
             <IconButton size="sm" icon="chevronUp" label={$t('call.minimize')} on:click={() => stageExpanded.set(false)} />
         </div>
     </header>
 
-    <div class="flex-1 min-h-0 p-2">
+    <div class="flex-1 min-h-0 p-4">
         {#if main}
-            <div class="flex w-full h-full min-h-0 gap-2" class:flex-col={rail === 'bottom'}>
-                <div class="flex-1 min-w-0 min-h-0">
-                    <StreamTile stream={main} focused camera={cameraOf[main.broadcaster]} />
+            <div class="flex w-full h-full min-h-0 gap-2.5" class:flex-col={rail === 'bottom'}>
+                <div class="pic flex-1 min-w-0 min-h-0">
+                    <div class="pic-box"><StreamTile stream={main} focused camera={cameraOf[main.broadcaster]} /></div>
                 </div>
                 {#if rail === 'side'}
                     {#if railFolded}
@@ -184,12 +195,12 @@
                             {/each}
                         </div>
                     {:else}
-                        <div class="shrink-0 flex flex-col gap-2 overflow-y-auto pr-0.5" style="width:var(--participants-w)">
+                        <div class="shrink-0 flex flex-col gap-2.5 overflow-y-auto" style="width:var(--participants-w)">
                             {#each others as st (st.streamId)}
                                 <div class="aspect-video shrink-0"><StreamTile stream={st} compact /></div>
                             {/each}
                             {#each members as peer (peer)}
-                                <div class="aspect-video shrink-0"><ParticipantTile {peer} camera={cameraOf[peer]} compact on:menu={openMenu} /></div>
+                                <div class="aspect-square shrink-0"><ParticipantTile {peer} camera={cameraOf[peer]} compact on:menu={openMenu} /></div>
                             {/each}
                         </div>
                     {/if}
@@ -218,7 +229,7 @@
         {/if}
     </div>
 
-    <footer class="shrink-0 flex justify-center pb-2.5 pt-0.5">
+    <footer class="shrink-0 flex justify-center pb-4 pt-1">
         <CallControls />
     </footer>
 
@@ -236,6 +247,12 @@
 <style>
     .call-stage { background: var(--stage); color: var(--text); }
     :global(.call-stage:fullscreen) { background: #000; }
+    .head { height: var(--top-h, 56px); }
+    .head-ic { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
+    .head-ic.wait { color: var(--warn-fg); }
+    /* the picture: a 16:9 box as large as the area allows, centred; the stage colour shows round it */
+    .pic { container-type: size; display: flex; align-items: center; justify-content: center; }
+    .pic-box { width: min(100cqw, calc(100cqh * 16 / 9)); aspect-ratio: 16 / 9; }
     .e2e { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--faint); }
     .seg { display: flex; gap: 2px; padding: 2px; margin-right: 4px; border-radius: var(--r-md); background: var(--surface-2); }
     .strip-stream { background: var(--surface-3); color: var(--text); flex: none; width: 40px; height: 40px; }

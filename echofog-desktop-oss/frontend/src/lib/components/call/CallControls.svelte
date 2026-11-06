@@ -141,13 +141,13 @@
 
     <div class="split" bind:this={shareAnchor}>
         <button
-            class="ctl {s.isScreenSharing ? 'ctl-on' : ''}"
+            class="ctl {compact ? '' : 'lab'} {s.isScreenSharing ? 'ctl-on' : ''}"
             title={s.isScreenSharing ? $t('call.stopSharing') : $t('call.shareYourScreen')}
             aria-label={s.isScreenSharing ? $t('call.stopSharing') : $t('call.shareYourScreen')}
             aria-pressed={s.isScreenSharing}
             on:click={toggleScreenShare}
         >
-            <Icon name="screenUp" size={18} />
+            <Icon name="screenUp" size={18} />{#if !compact}<span class="lbl">{$t('call.screenShort')}</span>{/if}
         </button>
         {#if !compact}
             <button class="ctl-caret" class:open={menu === 'quality'} title="{$t('call.quality')} {qLabel ? '· ' + qLabel : ''}" aria-label={$t('call.quality')} on:click={() => toggleMenu('quality')}>
@@ -156,10 +156,8 @@
         {/if}
     </div>
 
-    <div class="sep"></div>
-
-    <button class="ctl ctl-leave" title={$t('call.leave')} aria-label={$t('call.leave')} on:click={endCall}>
-        <Icon name="hangup" size={18} />
+    <button class="ctl ctl-leave {compact ? '' : 'lab'}" title={$t('call.leave')} aria-label={$t('call.leave')} on:click={endCall}>
+        <Icon name="hangup" size={18} />{#if !compact}<span class="lbl">{$t('call.leaveShort')}</span>{/if}
     </button>
 </div>
 
@@ -250,38 +248,37 @@
 {/if}
 
 <style>
-    /* one dense bar under the video: 36 px controls, the arrow of a split button is part of it */
-    .bar {
-        display: flex; align-items: center; justify-content: center; gap: 6px; padding: 5px;
-        border-radius: var(--r-xl); background: var(--surface-2); border: 1px solid var(--border);
-    }
-    .bar.compact { padding: 0; background: none; border: none; }
+    /* the dock under the picture: round buttons and two labelled ones, no frame round them; the arrow of a
+       split button is part of its pill */
+    .bar { display: flex; align-items: center; justify-content: center; gap: 10px; }
     .ctl {
-        width: 40px; height: var(--ctl-lg); padding: 0; border: none; border-radius: var(--r-md);
-        display: flex; align-items: center; justify-content: center;
-        background: var(--surface-3); color: var(--text);
+        width: 44px; height: 44px; padding: 0; border: none; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center; gap: 8px;
+        background: var(--surface-2); color: var(--text);
         transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
     }
-    .ctl:hover:not(:disabled) { background: var(--press); border: none; }
+    .ctl.lab { width: auto; padding: 0 18px; border-radius: 22px; font-weight: var(--fw-semibold); font-size: var(--fs-md); }
+    .ctl:hover:not(:disabled) { background: var(--surface-3); border: none; }
     .ctl:active { transform: none; }
     .ctl:focus-visible, .ctl-caret:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
     .ctl-off { background: var(--danger-soft); color: var(--danger-fg); }
     .ctl-off:hover:not(:disabled) { background: var(--danger-soft); filter: brightness(1.12); }
     .ctl-on { background: var(--accent); color: var(--accent-ink); }
     .ctl-on:hover:not(:disabled) { background: var(--accent-hover); }
-    .ctl-leave { width: 48px; background: var(--danger); color: var(--danger-ink); }
+    .ctl-leave { background: var(--danger); color: var(--danger-ink); }
+    .ctl-leave:not(.lab) { width: 44px; }
     .ctl-leave:hover:not(:disabled) { background: var(--danger); filter: brightness(1.1); }
-    .sep { width: 1px; height: 22px; background: var(--border-strong); margin: 0 2px; }
     .split { position: relative; display: flex; }
     .split .ctl { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-    .bar.compact .split .ctl { border-radius: var(--r-md); }
+    .split .ctl:not(.lab) { width: 40px; border-radius: 22px 0 0 22px; }
+    .bar.compact .split .ctl { border-radius: 50%; width: 44px; }
     .ctl-caret {
-        width: 18px; height: var(--ctl-lg); padding: 0; border: none; border-left: 1px solid var(--border);
-        border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--surface-3); color: var(--muted);
+        width: 22px; height: 44px; padding: 0; border: none; border-left: 1px solid var(--border);
+        border-radius: 0 22px 22px 0; background: var(--surface-2); color: var(--muted);
         display: flex; align-items: center; justify-content: center;
         transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
     }
-    .ctl-caret:hover:not(:disabled), .ctl-caret.open { color: var(--text); background: var(--press); border-left-color: var(--border); }
+    .ctl-caret:hover:not(:disabled), .ctl-caret.open { color: var(--text); background: var(--surface-3); border-left-color: var(--border); }
     .ctl-caret.open :global(svg) { transform: rotate(180deg); }
     .split:has(.ctl-on) .ctl-caret { background: var(--accent); color: var(--accent-ink); border-left-color: rgba(0, 0, 0, 0.18); }
     .split:has(.ctl-off) .ctl-caret { background: var(--danger-soft); color: var(--danger-fg); }

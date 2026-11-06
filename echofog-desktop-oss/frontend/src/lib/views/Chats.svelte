@@ -20,6 +20,7 @@
   import Icon from '../components/ui/Icon.svelte';
   import Popover from '../components/ui/Popover.svelte';
   import Skeleton from '../components/ui/Skeleton.svelte';
+  import SelfCard from '../features/chat/SelfCard.svelte';
 
   let panel = ''; // '' | 'contact' | 'group' | 'join' | 'me'
   let contactInput = '';
@@ -88,8 +89,23 @@
   $: opened = !!active || showSaved;
   $: savedRow = !q || $t('saved.title').toLowerCase().includes(q);
   $: showCall = $isCallActive && !!active && $peerInfo.chatId === $activeId && $stageExpanded;
-  let maximized = false;
+  let maximized = false; // "theatre": the stage takes the whole window beside the rail
   $: if (!showCall) maximized = false;
+  // a space shows its own column of channels instead of this list (its header switches chats)
+  $: isSpace = !!active && active.kind === 'group';
+  $: showAside = narrow ? !opened : !listCollapsed && !isSpace;
+
+  // the chat beside a call opens and closes; the choice is remembered, and without one the chat is open
+  // only when the window is wide enough to leave the picture its width
+  let chatPref = null;
+  try { const v = localStorage.getItem('echofog.call.chat'); chatPref = v === '1' ? true : v === '0' ? false : null; } catch (_) {}
+  $: chatOpen = chatPref ?? width >= 1800;
+  function toggleCallChat() {
+    chatPref = !chatOpen;
+    try { localStorage.setItem('echofog.call.chat', chatPref ? '1' : '0'); } catch (_) {}
+  }
+  // a voice room's call is named after the room, a chat's after the person or the group
+  const stageTitle = (c) => ($peerInfo.room ? String($peerInfo.alias || '').split(' \u00b7 ').pop() : c.name);
   $: parsed = parseContactInput(contactInput);
   $: myLink = $me.pubKey ? makeContactLink(currentDisplayName($profile), $me.pubKey) : '';
 
@@ -148,7 +164,7 @@
 <svelte:window on:mousemove={onResize} on:mouseup={endResize} />
 
 <div class="chats" class:narrow bind:clientWidth={width} class:resizing={!!resizing}>
-  {#if (!listCollapsed || narrow) && (!narrow || !opened)}
+  {#if showAside}
   <aside style={narrow ? '' : `width:${listWidth}px`}>
     <div class="head">
       <h2 class="grow">{$t('chats.title')}</h2>
@@ -278,6 +294,7 @@
         {/if}
       {/each}
     </div>
+    <SelfCard />
     {#if !narrow}
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="resize" title={$t('chats.dragResize')} on:mousedown|preventDefault={startResize} on:dblclick={() => { listWidth = 320; endResize(); }}></div>
@@ -287,16 +304,15 @@
 
   {#if !narrow || opened}
   <section>
-    {#if listCollapsed && !narrow}
+    {#if listCollapsed && !narrow && !isSpace}
       <button class="show-list" title={$t('chats.showList')} aria-label={$t('chats.showList')} on:click={toggleList}><Icon name="panel" size={17} /></button>
-    {/if}
-    {#if showCall}
-      <div class="call" class:full={maximized}><CallStage title={active.name} bind:maximized /></div>
     {/if}
     {#if showSaved}
       <Saved back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />
     {:else if active}
-      {#if !maximized}<Conversation conv={active} back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />{/if}
+      <Conversation conv={active} back={narrow} indent={listCollapsed && !narrow && !isSpace} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')}>
+        {#if showCall}<CallStage title={stageTitle(active)} bind:maximized {chatOpen} on:togglechat={toggleCallChat} />{/if}
+      </Conversation>
     {:else}
       <div class="placeholder">
         <span class="ph-ic" aria-hidden="true"><Icon name="message" size={26} /></span>
@@ -386,8 +402,6 @@
     background: var(--surface-1); border: 1px solid var(--border); color: var(--muted);
   }
   .show-list:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
-  .call { height: 58%; min-height: 300px; flex: none; background: #000; transition: height var(--dur-slow) var(--ease); }
-  .call.full { height: 100%; flex: 1; }
 
   .placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
   .ph-ic { width: 56px; height: 56px; border-radius: var(--r-xl); display: grid; place-items: center; background: var(--surface-2); color: var(--muted); margin-bottom: 8px; }
