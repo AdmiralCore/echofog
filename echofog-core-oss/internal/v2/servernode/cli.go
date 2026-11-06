@@ -145,9 +145,14 @@ func cmdInit(args []string, env func(string) string, out io.Writer) error {
 		return err
 	}
 	cfg := DefaultConfig()
-	if *roles != "" {
-		cfg.Roles = strings.Split(*roles, ",")
-	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "roles" { // given, even empty: --roles "" switches every role off
+			cfg.Roles = []string{}
+			if *roles != "" {
+				cfg.Roles = strings.Split(*roles, ",")
+			}
+		}
+	})
 	cfg.Cover = *cover
 	spec := func(v string) (ListenSpec, error) {
 		suite, bind, ok := strings.Cut(v, "=")

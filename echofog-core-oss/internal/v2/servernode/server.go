@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -58,16 +59,46 @@ type identityFile struct {
 	DeviceListNotAfter uint64 `json:"device_list_not_after"`
 }
 
-func writePrivate(path string, raw []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+// writePrivate replaces path with data, whole or not at all: the data goes to a private temporary
+// file in the same directory, is flushed, and is renamed over the target. A crash or a reader
+// never sees an empty or half-written file (T12.4a acceptance M2).
+func writePrivate(path string, data []byte) error {
+	dir, base := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	f, err := os.CreateTemp(dir, base+".tmp*")
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(raw); err != nil {
+	tmp := f.Name()
+	fail := func(err error) error {
 		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
-	return f.Close()
+	if err := f.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		return fail(err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if d, err := os.Open(filepath.Clean(dir)); err == nil { // make the rename durable; not possible everywhere
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 func readLimited(path string, max int64) ([]byte, error) {
@@ -91,6 +122,9 @@ func readLimited(path string, max int64) ([]byte, error) {
 func Init(dataDir string, cfg Config) (string, error) {
 	if err := cfg.Validate(); err != nil {
 		return "", err
+	}
+	if cfg.Roles == nil {
+		cfg.Roles = []string{} // saved as [], not null: "no roles" is a choice
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, identityFileName)); err == nil {
 		return "", fmt.Errorf("%s already holds a server profile", dataDir)

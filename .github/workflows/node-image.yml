@@ -3,10 +3,11 @@ name: node-image
 # Builds the Docker image of the headless node and publishes it to the GitHub Container Registry
 # as ghcr.io/<owner>/echofog-node, for linux/amd64 and linux/arm64, so a VPS only pulls it instead
 # of compiling (which needs a few GB of disk). Tags: latest on pushes to main (stable), dev on pushes
-# to dev (what is being tested), sha-<commit> on both, 1.2.3 and 1.2 on version tags.
+# to dev (what is being tested), v2-dev on pushes to v2 (the protocol v2 server node, built from
+# deploy/v2/Dockerfile), sha-<commit> on all of them, 1.2.3 and 1.2 on version tags.
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, v2]
     tags: ['v*']
   workflow_dispatch:
 
@@ -45,6 +46,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=v2-dev,enable=${{ github.ref == 'refs/heads/v2' }}
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -54,7 +56,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ./echofog-core-oss
-          file: ./echofog-core-oss/Dockerfile
+          file: ${{ github.ref == 'refs/heads/v2' && './echofog-core-oss/deploy/v2/Dockerfile' || './echofog-core-oss/Dockerfile' }}
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ steps.names.outputs.version }}
           push: true

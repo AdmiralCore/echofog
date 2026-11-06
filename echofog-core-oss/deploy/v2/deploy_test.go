@@ -162,7 +162,7 @@ func TestNoSecretsInLayers(t *testing.T) {
 			}
 		}
 	}
-	ign := read(t, ".dockerignore")
+	ign := read(t, "..", "..", ".dockerignore")
 	for _, must := range []string{".env", "server-identity.json", "operator.token", "*.key", "*.pem", ".git"} {
 		if !strings.Contains(ign, must) {
 			t.Errorf(".dockerignore does not exclude %s", must)
@@ -224,7 +224,7 @@ func TestEntrypointAndHealthcheck(t *testing.T) {
 			continue
 		}
 		for _, p := range strings.Fields(in)[1:] {
-			if p != "4242/udp" && p != "4243/udp" {
+			if p != "443/udp" {
 				t.Errorf("EXPOSE %s", p)
 			}
 		}
@@ -336,7 +336,7 @@ func TestComposeIsClosed(t *testing.T) {
 		if !strings.HasSuffix(p, "/udp") {
 			t.Errorf("published port %q is not UDP: the node serves noise3 over UDP only", p)
 		}
-		if strings.Contains(p, ":8") && !strings.Contains(p, ":4242") && !strings.Contains(p, ":4243") {
+		if strings.HasPrefix(p, "127.") || strings.HasPrefix(p, "0.0.0.0") || strings.Contains(p, "8090") || strings.Contains(p, "6060") {
 			t.Errorf("published port %q", p)
 		}
 		udp++
@@ -425,10 +425,13 @@ func TestEnvExample(t *testing.T) {
 
 func TestWorkflowBuildsTheV2Tag(t *testing.T) {
 	wf := read(t, "..", "..", "..", ".github", "workflows", "node-image.yml")
-	for _, want := range []string{"v2-dev", "refs/heads/v2", "deploy/v2/Dockerfile", "- v2"} {
+	for _, want := range []string{"v2-dev", "refs/heads/v2", "deploy/v2/Dockerfile"} {
 		if !strings.Contains(wf, want) {
 			t.Errorf("node-image.yml lacks %q", want)
 		}
+	}
+	if !regexp.MustCompile(`branches:\s*\[[^\]]*\bv2\b`).MatchString(wf) {
+		t.Error("node-image.yml does not run on pushes to v2")
 	}
 	if !strings.Contains(wf, "type=raw,value=latest,enable={{is_default_branch}}") {
 		t.Error("latest must stay on the default branch only")
