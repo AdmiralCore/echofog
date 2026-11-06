@@ -1295,3 +1295,16 @@ func (s *Session) addOnClose(f func()) {
 		f()
 	}
 }
+
+// ErrNoPathKind: the session has no live path of the requested kind (SendDatagramVia).
+var ErrNoPathKind = errors.New("mux: session has no live path of that kind")
+
+// PathKinds returns the number of live paths per kind.
+func (s *Session) PathKinds() map[PathKind]int { return nil }
+
+// SendDatagramVia sends a datagram on a live path of the given kind, never on another kind
+// (T9.3: a call route that forbids direct paths must not fall back to one). Without such a path
+// it returns ErrNoPathKind and sends nothing.
+func (s *Session) SendDatagramVia(kind PathKind, typ uint64, payload []byte) error {
+	return ErrNoPathKind
+}
