@@ -395,9 +395,14 @@ Rules:
   optional behaviour, a new major version has its own suite).
 - `|time − now| > 600 s`: the responder answers `Reject{clock-skew}` in `P2`; an initiator that finds
   `P2.time` more than 600 s off aborts **without sending message 3** (there is no message in which it
-  could send a Reject). Both `HsInit.time` and `HsResp.time` are always sent;
-  each side keeps the median offset to its last 5 authenticated peers and applies it to the timestamps
-  it puts into L0 first packets (wire.md §2.4, §3.2), whose window is ±300 s.
+  could send a Reject). Both `HsInit.time` and `HsResp.time` are always sent. The handshake check and the
+  card lifetimes use the **raw** clock only, never the offset below. Each side keeps a clock offset: the
+  median of samples from its **outgoing** sessions only (sessions it dialed), at most one sample per /16
+  network, and the median is used only when at least 3 distinct /16 networks have given samples. Incoming
+  sessions give no sample. The offset is applied only to the timestamps of L0 first packets (wire.md §2.4,
+  §3.2), whose window is ±300 s. The offset never exceeds 600 s from the raw clock; one update moves it by
+  at most 120 s; a larger correction is taken only when the clock check below agrees (at least 3 answers,
+  strict majority).
 - **Clock check (Decision D36).** A node with no authenticated peer in the last hour, or whose L0 dials
   all fail, checks its clock against the `Date` headers of HTTPS responses from the clock endpoints of
   [registries.md](registries.md) §12 (configurable by the user). It sends a `HEAD /` request to each of
@@ -443,7 +448,8 @@ message 1 for either key. Initiators always use `hs_key`.
 ## 8. Rejections
 
 - In `P2.reject` (the responder has decrypted message 1, and for hidden nodes the access proof was
-  valid): version, clock skew, overload, policy. The initiator does not send message 3.
+  valid): version, clock skew, overload, policy. The initiator does not send message 3. The clock-skew
+  decision uses the raw clock (§7).
 - As a `REJECT` frame on stream 0 before Noise (public nodes only): `suite`, `overloaded`.
 - As a `REJECT` frame after message 3: `banned`, `rate-limited`, `card-invalid`, `policy`.
 
