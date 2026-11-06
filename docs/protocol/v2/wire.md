@@ -460,8 +460,10 @@ Rules for every inner TLS:
 
 - certificates are not verified (authentication is the Noise handshake, bound to this TLS session by
   the exporter, [handshake.md](handshake.md) §3.2);
-- the noise3 inner certificate is a self-signed Ed25519 certificate with an empty subject and a random
-  serial; ALPN `h3`;
+- the noise3 inner certificate is self-signed with an empty subject and a random serial; ALPN `h3`. Its
+  key is **ECDSA P-256** by default. An Ed25519 key is used only when the cover profile offers `ed25519`
+  in its signature algorithms; otherwise ECDSA P-256 is kept. The server serves only a key type that the
+  ClientHello actually offered;
 - noise3: the key exchange group MUST be `X25519MLKEM768`. REALITY suites: the group mirrors the
   cover (§3.4); when it is classical the path runs in sealed mode (§8.5). Each side checks the
   negotiated group and refuses a classical group on a path that is not in sealed mode;
