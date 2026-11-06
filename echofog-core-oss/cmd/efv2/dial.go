@@ -33,6 +33,7 @@ func cmdDial(args []string) error {
 	fs := flag.NewFlagSet("dial", flag.ContinueOnError)
 	data := fs.String("data", "", "profile data directory")
 	timeout := fs.Duration("timeout", 30*time.Second, "session and RTT timeout")
+	listen := fs.String("listen", "", "noise3=HOST:PORT to bind while dialing (lab: punching sends from the listener socket)")
 	via := fs.String("via", "", "card file of a relay to hold a session with first (the peer is then reached through it)")
 	waitDirect := fs.Duration("wait-direct", 0, "wait up to this long for a hole-punched direct path (lab)")
 	if err := parseInterspersed(fs, args); err != nil {
@@ -55,7 +56,11 @@ func cmdDial(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	a, err := openApp(ctx, *data, nil, nil)
+	listeners, err := parseListen(*listen, "")
+	if err != nil {
+		return err
+	}
+	a, err := openApp(ctx, *data, listeners, nil)
 	if err != nil {
 		return err
 	}

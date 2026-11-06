@@ -26,6 +26,8 @@ type BirthdaySocks struct {
 	Main *Listener
 	// Card is the verified card of the peer: its noise3 address supplies the masking key for Init.
 	Card *objects.Card
+	// CardFunc supplies the card when Card is nil, at the time of the dial.
+	CardFunc func() *objects.Card
 	// Base is the noise3 address to take the masking key from; nil takes the card's own.
 	Base *pb.Addr
 	// Dialer configures the inner QUIC client; the zero value is usable.
@@ -128,11 +130,15 @@ func (b *BirthdaySocks) DialFrom(ctx context.Context, s punch.Sock, target netip
 	if !ok {
 		return nil, errors.New("noise3: DialFrom needs a birthday socket")
 	}
-	if b.Card == nil || b.Card.Body == nil {
+	card := b.Card
+	if card == nil && b.CardFunc != nil {
+		card = b.CardFunc()
+	}
+	if card == nil || card.Body == nil {
 		return nil, errors.New("noise3: birthday dial without the peer card")
 	}
 	base := b.Base
-	for _, a := range b.Card.Addrs() {
+	for _, a := range card.Addrs() {
 		if base == nil && a.GetSuite() == objects.SuiteNoise3 {
 			base = a
 		}
@@ -146,7 +152,7 @@ func (b *BirthdaySocks) DialFrom(ctx context.Context, s punch.Sock, target netip
 	}
 	addr := proto.Clone(base).(*pb.Addr)
 	addr.Host, addr.Port = target.Addr().String(), uint32(target.Port())
-	c, err := sib.DialFrom(ctx, b.Dialer, carrier.DialRequest{Card: b.Card, Addr: addr}, budget)
+	c, err := sib.DialFrom(ctx, b.Dialer, carrier.DialRequest{Card: card, Addr: addr}, budget)
 	if err != nil {
 		_ = sib.Close()
 		return nil, fmt.Errorf("noise3: birthday dial: %w", err)

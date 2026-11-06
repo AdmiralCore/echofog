@@ -37,7 +37,7 @@ ok=0
 round=1
 while [ "$round" -le "$ROUNDS" ]; do
   echo "== round $round: a1 dials b1 through r1"
-  out=$(docker exec efpunch-a1 efv2 dial --data /data --via /shared/r1.json --wait-direct "$WAIT" --timeout 60s /shared/b1.json 2>&1)
+  out=$(docker exec efpunch-a1 efv2 dial --data /data --listen noise3=10.20.1.11:4433 --via /shared/r1.json --wait-direct "$WAIT" --timeout 60s /shared/b1.json 2>&1)
   echo "$out"
   case "$out" in
   *'"direct": true'*) ok=$((ok + 1)) ;;
