@@ -34,12 +34,19 @@ func TestInstallScript(t *testing.T) {
 	if regexp.MustCompile(`https://[a-z0-9.-]+`).MatchString(strings.ReplaceAll(sh, "https://example.org", "")) {
 		t.Error("install.sh hardcodes a download address")
 	}
-	// The downloaded binary is not run before the node binary has verified it: the first execution
-	// of the downloaded file is the install command, which checks the signed manifest first.
-	first := strings.Index(sh, `"$WORK/echofog-node"`)
-	verify := strings.Index(sh, "v2 install")
-	if first < 0 || verify < 0 || first < verify-200 {
-		t.Error("the downloaded binary must be executed only through `v2 install`")
+	// The downloaded binary is executed once, and that is the install command, which verifies the
+	// signed manifest before it does anything.
+	runs := 0
+	for _, line := range strings.Split(sh, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), `"$BIN"`) {
+			runs++
+			if !strings.Contains(line, "v2 install") {
+				t.Errorf("the downloaded binary is run other than through v2 install: %q", line)
+			}
+		}
+	}
+	if runs != 1 {
+		t.Errorf("the downloaded binary is run %d times, want once", runs)
 	}
 	if p, err := exec.LookPath("sh"); err == nil {
 		if out, err := exec.Command(p, "-n", installScript).CombinedOutput(); err != nil {
@@ -60,7 +67,8 @@ func hasCyr(s string) bool {
 func TestVPSGuides(t *testing.T) {
 	en := read(t, "..", "..", "..", "docs", "deploy-vps-v2.md")
 	ru := read(t, "..", "..", "..", "docs", "deploy-vps-v2.ru.md")
-	if !hasCyr(ru) || hasCyr(en) {
+	_, enBody, _ := strings.Cut(en, "\n") // the first line is the link to the Russian version
+	if !hasCyr(ru) || hasCyr(enBody) {
 		t.Error("language of the guides")
 	}
 	if !strings.Contains(en, "deploy-vps-v2.ru.md") || !strings.Contains(ru, "deploy-vps-v2.md") {
