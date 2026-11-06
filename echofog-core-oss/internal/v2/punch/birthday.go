@@ -172,14 +172,25 @@ type BirthdayConfig struct {
 	Rand func(n int64) int64
 	// Gates yields the conditions at the time of use; nil means all closed.
 	Gates func() Gates
+	// Shared is the node-wide state (the cap on concurrent attempts and the counters) when several
+	// sessions each have a Birthday; nil gives this Birthday its own.
+	Shared *BirthdayShared
 }
 
-// Birthday runs the three modes and keeps their counters.
-type Birthday struct {
-	cfg       BirthdayConfig
+// BirthdayShared is the part of birthday punching that belongs to the node, not to a session.
+type BirthdayShared struct {
 	mu        sync.Mutex
 	active    int
 	tried, ok atomic.Int64
+}
+
+// Stats returns the attempts started and the ones that found a mapping (counts only).
+func (s *BirthdayShared) Stats() (tried, ok int64) { return s.tried.Load(), s.ok.Load() }
+
+// Birthday runs the three modes and keeps their counters.
+type Birthday struct {
+	cfg BirthdayConfig
+	*BirthdayShared
 }
 
 // NewBirthday returns a Birthday.
@@ -187,7 +198,11 @@ func NewBirthday(cfg BirthdayConfig) *Birthday {
 	if cfg.Rand == nil {
 		cfg.Rand = func(n int64) int64 { return mrand.Int64N(n) }
 	}
-	return &Birthday{cfg: cfg}
+	sh := cfg.Shared
+	if sh == nil {
+		sh = &BirthdayShared{}
+	}
+	return &Birthday{cfg: cfg, BirthdayShared: sh}
 }
 
 // Enabled reports whether the gates are open now.
@@ -195,9 +210,6 @@ func (b *Birthday) Enabled() bool { return b.cfg.Gates != nil && b.cfg.Gates().O
 
 // Net is the socket side the modes run on.
 func (b *Birthday) Net() SockNet { return b.cfg.Net }
-
-// Stats returns the attempts started and the ones that found a mapping (counts only).
-func (b *Birthday) Stats() (tried, ok int64) { return b.tried.Load(), b.ok.Load() }
 
 // begin takes an attempt slot; it fails when punching is off or the node is busy.
 func (b *Birthday) begin() error {
