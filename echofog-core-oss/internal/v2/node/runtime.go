@@ -14,6 +14,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/chat"
+	chatcrypto "github.com/echofog/echofog-core/internal/v2/chat/crypto"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -198,6 +199,8 @@ type Runtime struct {
 	dhtServer  *dht.Server
 	dhtClient  *dht.Client
 	devList    ownDevices
+	chat       *chat.Service
+	chatKeys   *chatcrypto.Crypto
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
 	modules     sync.Once

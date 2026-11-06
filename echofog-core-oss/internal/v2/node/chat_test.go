@@ -88,7 +88,7 @@ func openChat(t *testing.T, a, b *testNode, queue *carrierQueue) (*mux.Stream, e
 // BUNDLE_GET over a real direct session answers with a prekeys/2 that has one one-time prekey.
 func TestChatServesBundleGetOverASession(t *testing.T) {
 	queue := newCarrierQueue()
-	a := newTestNode(t, cards.Hidden, false, nil, nil)
+	a := chatNode(t, cards.Hidden, nil) // a node offers a service only if it has a handler for it
 	b := chatNode(t, cards.Visible, []carrier.Listener{queue})
 	b.start(t)
 	a.start(t)
@@ -113,5 +113,33 @@ func TestChatServesBundleGetOverASession(t *testing.T) {
 	}
 	if p.DeviceID != [32]byte(b.id.DeviceID) || len(p.Body.GetOpks()) != 1 {
 		t.Fatalf("device %x, %d one-time prekeys", p.DeviceID, len(p.Body.GetOpks()))
+	}
+}
+
+// DELIVER over a real session reaches the service: an envelope that is not for this node gets
+// DELIVERED{refused}, like every other refusal.
+func TestChatDeliverOverASessionIsRefusedForGarbage(t *testing.T) {
+	queue := newCarrierQueue()
+	a := chatNode(t, cards.Hidden, nil)
+	b := chatNode(t, cards.Visible, []carrier.Listener{queue})
+	b.start(t)
+	a.start(t)
+
+	st, err := openChat(t, a, b, queue)
+	if err != nil {
+		t.Fatalf("Open chat: %v", err)
+	}
+	defer st.Close()
+	body, _ := objects.Marshal(&chatpb.Deliver{Req: 9, Envelope: bytes.Repeat([]byte{1}, 200)})
+	typ, payload := ask(t, st, 0x40, body)
+	if typ != 0x41 {
+		t.Fatalf("frame type 0x%x, want DELIVERED", typ)
+	}
+	m, err := chatpb.ParseDelivered(payload)
+	if err != nil || m.Req != 9 || m.Status != chatpb.StatusRefused {
+		t.Fatalf("DELIVERED: %v %v", m, err)
+	}
+	if a.rt.Chat() == nil || b.rt.Chat() == nil {
+		t.Fatal("Runtime.Chat is nil with Config.Chat")
 	}
 }
