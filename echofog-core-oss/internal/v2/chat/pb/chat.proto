@@ -50,3 +50,89 @@ message Bundle {
   uint64 req = 1;
   bytes prekeys = 2;
 }
+
+// ---- delivery (T7.2) ----------------------------------------------------------------------
+
+// SealedEnvelope is the DELIVER payload (services.md 4.2): the recipient's node ID, an ephemeral
+// X25519 key and the box that holds an Inner. Nothing else is in the serialised envelope.
+message SealedEnvelope {
+  bytes to = 1;
+  bytes eph = 2;
+  bytes box = 3;
+}
+
+// Inner is what the box holds.
+message Inner {
+  bytes sender = 1;  // akey of the sender's account key
+  bytes id = 2;      // 16-byte message ID
+  uint64 time = 3;
+  // Exactly one of pqxdh_init and ratchet is set (the parser checks it). They are plain fields, not
+  // a oneof: the Go encoder writes oneof members last, after device (6), which the canonical
+  // encoding forbids. The wire format is the same as the spec's oneof.
+  bytes pqxdh_init = 4; // an X3DHInit message
+  bytes ratchet = 5;    // a SecureMessage
+  bytes device = 6;  // akey of the sending device key
+}
+
+// PersonalMessageType, PersonalMessageProto: copies of v1's messenger/personal_messages.proto with
+// the same numbers (checked against bytes made by v1), plus control (11) and pad (15)
+// (services.md 4.3). The serialised plaintext is padded to a bucket with pad.
+enum PersonalMessageType {
+  MSG_TYPE_TEXT = 0;
+  MSG_TYPE_PHOTO = 1;
+  MSG_TYPE_VOICE = 2;
+  MSG_TYPE_CIRCLE = 3;
+  MSG_TYPE_FILE = 4;
+  MSG_TYPE_LOCATION = 5;
+}
+
+message PersonalMessageProto {
+  string id = 1;
+  string sender_id = 2;
+  PersonalMessageType type = 3;
+  string text = 4;
+  string content_hash = 5;
+  string metadata = 6;
+  int64 timestamp = 7;
+  string reply_to_id = 8;
+  bytes conv_event = 9;
+  bytes conv_sync = 10;
+  Control control = 11;
+  bytes pad = 15;
+}
+
+// Control replaces v1's text prefixes fogknock1:, fogreset1: and fogack1: (K3).
+message Control {
+  oneof kind {
+    Knock knock = 1;
+    Reset reset = 2;
+    Receipt read = 3;
+    Receipt delivered = 4;
+  }
+}
+
+// Knock asks (ask = true) or answers with a card; card is a card/2 envelope.
+message Knock {
+  bool ask = 1;
+  bytes card = 2;
+}
+
+// Reset says the sender's session with the receiver is broken and a new one is coming.
+message Reset {}
+
+// Receipt names the messages it confirms.
+message Receipt {
+  repeated bytes ids = 1;
+}
+
+// DELIVER body (0x40): a SealedEnvelope of at most 61440 bytes.
+message Deliver {
+  uint64 req = 1;
+  bytes envelope = 2;
+}
+
+// DELIVERED body (0x41): 0 ok, 1 duplicate (also ok), 2 no-session, 3 too-large, 4 refused.
+message Delivered {
+  uint64 req = 1;
+  uint32 status = 2;
+}

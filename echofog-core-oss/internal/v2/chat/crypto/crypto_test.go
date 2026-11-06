@@ -583,3 +583,71 @@ func TestClassicInitRefused(t *testing.T) {
 		t.Fatalf("Accept: %v", err)
 	}
 }
+
+// A fresh session replaces the old one, which is kept 7 days for messages still on the way
+// (services.md 4.4).
+func TestReplacedSessionKeptForLateMessages(t *testing.T) {
+	a, b, init, clock := pair(t)
+	if _, err := accept(t, b, a, init); err != nil {
+		t.Fatal(err)
+	}
+	late, _ := b.c.Encrypt(a.device(), []byte("late, old session"))
+	lateBack, _ := a.c.Encrypt(b.device(), []byte("late, old session, other way"))
+
+	// b starts a fresh session and a accepts it
+	raw, _ := a.c.Prekeys()
+	pa, _ := objects.VerifyPrekeys(raw, clock.Now())
+	init2, err := b.c.Start(pa, a.dl, []byte("fresh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := accept(t, a, b, init2); err != nil || string(got) != "fresh" {
+		t.Fatalf("fresh session: %q %v", got, err)
+	}
+
+	if p, err := a.c.Decrypt(b.device(), late); err != nil || string(p) != "late, old session" {
+		t.Fatalf("a late message of the replaced session: %q %v", p, err)
+	}
+	if p, err := b.c.Decrypt(a.device(), lateBack); err != nil || string(p) != "late, old session, other way" {
+		t.Fatalf("a late message to the starter: %q %v", p, err)
+	}
+	// the new session is the current one and keeps working
+	m, _ := a.c.Encrypt(b.device(), []byte("on the new session"))
+	if p, err := b.c.Decrypt(a.device(), m); err != nil || string(p) != "on the new session" {
+		t.Fatalf("%q %v", p, err)
+	}
+	// and a late message does not move it
+	m2, _ := b.c.Encrypt(a.device(), []byte("new, from b"))
+	if p, err := a.c.Decrypt(b.device(), m2); err != nil || string(p) != "new, from b" {
+		t.Fatalf("%q %v", p, err)
+	}
+}
+
+func TestReplacedSessionExpiresAfterSevenDays(t *testing.T) {
+	a, b, init, clock := pair(t)
+	if _, err := accept(t, b, a, init); err != nil {
+		t.Fatal(err)
+	}
+	late, _ := b.c.Encrypt(a.device(), []byte("late"))
+	raw, _ := a.c.Prekeys()
+	pa, _ := objects.VerifyPrekeys(raw, clock.Now())
+	init2, _ := b.c.Start(pa, a.dl, []byte("fresh"))
+	if _, err := accept(t, a, b, init2); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(7*24*time.Hour + time.Minute)
+	if _, err := a.c.Decrypt(b.device(), late); !errors.Is(err, ErrRejected) {
+		t.Fatalf("a message of a session replaced more than 7 days ago: %v", err)
+	}
+	// the old session is gone from the store
+	entries, _ := a.st.Store(SessionsNamespace).Scan(nil, 1000)
+	var prev int
+	for _, e := range entries {
+		if strings.HasPrefix(string(e.Key), "prev:") {
+			prev++
+		}
+	}
+	if prev != 0 {
+		t.Fatalf("%d records of the expired session are left", prev)
+	}
+}

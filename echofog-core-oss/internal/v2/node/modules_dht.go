@@ -212,6 +212,9 @@ func (r *Runtime) ownDHTRecords() [][]byte {
 	if raw, ok := r.cards.Own(objects.ScopePublic); ok {
 		out = append(out, raw)
 	}
+	if raw := r.chatPrekeys(); raw != nil {
+		out = append(out, raw)
+	}
 	return out
 }
 
