@@ -15,6 +15,9 @@ type Datagram struct {
 	Peer    Peer
 	Type    uint64
 	Payload []byte
+	// PathKind is the kind of the path this datagram arrived on (a session may have a direct and
+	// a relay path at once).
+	PathKind mux.PathKind
 }
 
 // DatagramPort is a module's view of datagram types it owns (registries.md §2: types belong to

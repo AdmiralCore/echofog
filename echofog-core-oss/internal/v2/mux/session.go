@@ -121,6 +121,8 @@ type Datagram struct {
 	Type    uint64
 	Payload []byte
 	Path    uint64
+	// Kind is the kind of the path the datagram arrived on.
+	Kind PathKind
 }
 
 // SessionStats counts dropped input.

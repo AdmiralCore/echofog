@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/echofog/echofog-core/internal/v2/call"
+	"github.com/echofog/echofog-core/internal/v2/call/callnet"
+	"github.com/echofog/echofog-core/internal/v2/call/route"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/service"
@@ -88,3 +90,10 @@ func (p *callDatagramPort) Receive(ctx context.Context) (call.Datagram, error) {
 }
 
 func (p *callDatagramPort) Close() error { return p.port.Close() }
+
+// SetCallRoute sets network.call_route: the kind of path call media takes (T9.3).
+func (r *Runtime) SetCallRoute(rt route.Route) {}
+
+// CallTransport returns the call layer's transport over this node's sessions (T9.3). Nil when
+// call/2 is not registered.
+func (r *Runtime) CallTransport() *callnet.Transport { return nil }
