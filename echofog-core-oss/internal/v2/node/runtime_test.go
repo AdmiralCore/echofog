@@ -338,6 +338,17 @@ func (c *captureEvents) Emit(e node.Event) {
 	c.mu.Unlock()
 }
 
+func (c *captureEvents) find(kind node.EventKind) (node.Event, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.list {
+		if e.Kind == kind {
+			return e, true
+		}
+	}
+	return node.Event{}, false
+}
+
 func (c *captureEvents) has(kind node.EventKind) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

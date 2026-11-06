@@ -1,6 +1,7 @@
 package clock
 
 import (
+	"net/http"
 	"net/netip"
 	"testing"
 	"time"
@@ -88,5 +89,47 @@ func TestCDNMayExceedThePeerCap(t *testing.T) {
 	}
 	if got := c.Offset(); got < 780*time.Second {
 		t.Fatalf("one round of peers moved a CDN offset by %v", 900*time.Second-got)
+	}
+}
+
+// TestPeersDoNotUndoACDNCorrection: an offset beyond 600 s belongs to the CDN check; honest peers,
+// who report the real time, must not wear it down one step at a time (T3.8-fix1 acceptance, finding 1).
+func TestPeersDoNotUndoACDNCorrection(t *testing.T) {
+	c, _ := newT(t)
+	c.mu.Lock()
+	c.setOffsetLocked(900 * time.Second)
+	c.mu.Unlock()
+	for round := 0; round < 4; round++ {
+		for n := 1; n <= 3; n++ {
+			c.AddOutgoingSample(netAddr(n), base.Add(900*time.Second)) // peers agree with the CDN
+		}
+	}
+	if got := c.Offset(); got != 900*time.Second {
+		t.Fatalf("offset %v after agreeing peers, want the CDN's 900 s", got)
+	}
+	// Disagreeing peers (real time = raw clock + 0) do not erase it either.
+	for round := 0; round < 4; round++ {
+		for n := 1; n <= 3; n++ {
+			c.AddOutgoingSample(netAddr(n), base)
+		}
+	}
+	if got := c.Offset(); got != 900*time.Second {
+		t.Fatalf("offset %v after peers that disagree, want the CDN's 900 s kept", got)
+	}
+}
+
+// TestUnusableAddressIsNotAPeer: a session whose address is unknown gives no sample, and does not
+// count as a recent peer that suppresses the CDN check (acceptance finding 3).
+func TestUnusableAddressIsNotAPeer(t *testing.T) {
+	fc := newFakeClock(base)
+	client := &fakeHTTP{fn: func(*http.Request) (*http.Response, error) { return dateAt(fc.Now()), nil }}
+	c, err := New(Config{Now: fc.Now, HTTP: client, Endpoints: endpoints(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.AddOutgoingSample(netip.Addr{}, base.Add(5*time.Second))
+	res, err := c.MaybeCheckCDN(t.Context(), false)
+	if err != nil || !res.Ran {
+		t.Fatalf("CDN check suppressed by a sample without an address: res=%+v err=%v", res, err)
 	}
 }
