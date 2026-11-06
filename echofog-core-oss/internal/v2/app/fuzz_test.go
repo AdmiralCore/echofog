@@ -12,7 +12,7 @@ import (
 func FuzzExtractLink(f *testing.F) {
 	for _, s := range []string{
 		"echofog://join?v=2&card=AAAA", "см. echofog://join/?v=2&card=AAAA&s=BB, ок",
-		"https://join.example.org/join/#v=2&card=AAAA", "", "echofog://", "https://", "(\"echofog://join?x\")",
+		"https://join.example.org/join/#join?v=2&card=AAAA", "", "echofog://", "https://", "(\"echofog://join?x\")",
 		strings.Repeat("echofog://", 50), "echofog://\x00\xff", "https://a/join/#" + strings.Repeat("A", 1<<16),
 	} {
 		f.Add(s)

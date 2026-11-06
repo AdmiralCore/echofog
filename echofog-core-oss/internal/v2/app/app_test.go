@@ -168,7 +168,7 @@ func (f *fakeLinks) Invite(_ context.Context, o access.MintOptions) (*links.Invi
 	f.inviteOpt = o
 	f.invited++
 	return &links.Invitation{PassID: access.PassID{1, 2, 3, 4, 5, 6, 7, 8}, URL: "echofog://join?v=2&card=SECRETCARD&s=SECRETSECRET",
-		Web: "https://join.example.org/join/#v=2&card=SECRETCARD&s=SECRETSECRET", Expires: testNow.Add(24 * time.Hour), MaxEntries: o.MaxEntries}, nil
+		Web: "https://join.example.org/join/#join?v=2&card=SECRETCARD&s=SECRETSECRET", Expires: testNow.Add(24 * time.Hour), MaxEntries: o.MaxEntries}, nil
 }
 func (f *fakeLinks) Open(l string) (*links.Preview, error) {
 	if p, ok := f.preview[strings.TrimSpace(l)]; ok {
@@ -202,7 +202,7 @@ func newRig(t *testing.T, mode app.Mode) *rig {
 	t.Helper()
 	r := &rig{rt: &fakeRuntime{}, kv: newKV()}
 	r.ln = &fakeLinks{
-		contact: &links.Link{URL: "echofog://join?v=2&card=SELF", Web: "https://join.example.org/join/#v=2&card=SELF", Expires: testNow.Add(48 * time.Hour)},
+		contact: &links.Link{URL: "echofog://join?v=2&card=SELF", Web: "https://join.example.org/join/#join?v=2&card=SELF", Expires: testNow.Add(48 * time.Hour)},
 		preview: map[string]*links.Preview{
 			contactURL:                   {Kind: links.KindContact, Node: nid(7), Device: nid(8), NotAfter: testNow.Add(time.Hour)},
 			inviteURL:                    {Kind: links.KindInvitation, Node: nid(9), Device: nid(10), NotAfter: testNow.Add(time.Hour)},
@@ -607,11 +607,11 @@ func TestExtractLink(t *testing.T) {
 		{"in brackets", "(echofog://join?v=2&card=AAAA)", "echofog://join?v=2&card=AAAA", true},
 		{"quoted", `"echofog://join?v=2&card=AAAA".`, "echofog://join?v=2&card=AAAA", true},
 		{"slash form", "echofog://join/?v=2&card=AAAA", "echofog://join/?v=2&card=AAAA", true},
-		{"web form", "https://join.example.org/join/#v=2&card=AAAA!", "https://join.example.org/join/#v=2&card=AAAA", true},
+		{"web form", "https://join.example.org/join/#join?v=2&card=AAAA!", "https://join.example.org/join/#join?v=2&card=AAAA", true},
 		{"newline ends it", "echofog://join?v=2&card=AAAA\nвторая строка", "echofog://join?v=2&card=AAAA", true},
 		{"first of two", "echofog://join?v=2&card=A1 echofog://join?v=2&card=A2", "echofog://join?v=2&card=A1", true},
 		{"other web page", "https://example.org/page", "", false},
-		{"other scheme", "http://join.example.org/join/#v=2&card=AAAA", "", false},
+		{"other scheme", "http://join.example.org/join/#join?v=2&card=AAAA", "", false},
 		{"nothing", "привет", "", false},
 		{"empty", "", "", false},
 		{"too long", "echofog://join?v=2&card=" + strings.Repeat("A", 1<<20), "", false},

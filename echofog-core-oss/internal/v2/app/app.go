@@ -10,6 +10,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
@@ -38,8 +41,6 @@ var (
 	ErrNoPass = errors.New("app: no such pass")
 	// ErrRequest reports a request with a bad term or count.
 	ErrRequest = errors.New("app: bad request")
-
-	errNotImplemented = errors.New("app: not implemented")
 )
 
 // Mode is the access mode of the node (the desktop offers these two).
@@ -90,16 +91,61 @@ type Config struct {
 }
 
 // App is the application layer of one node. It is safe for concurrent use.
-type App struct{ cfg Config }
+type App struct {
+	cfg Config
+
+	lc      sync.Mutex // serializes Start and Stop
+	running atomic.Bool
+	cmu     sync.Mutex // contacts: read-modify-write
+}
 
 // New creates an App.
-func New(cfg Config) (*App, error) { return &App{cfg: cfg}, nil }
+func New(cfg Config) (*App, error) {
+	switch {
+	case cfg.Runtime == nil:
+		return nil, errors.New("app: a runtime is required")
+	case cfg.Links == nil:
+		return nil, errors.New("app: a link service is required")
+	case cfg.Store == nil:
+		return nil, errors.New("app: a store is required")
+	case cfg.Clock == nil:
+		return nil, errors.New("app: a clock is required")
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = ModePublic
+	}
+	if !cfg.Mode.valid() {
+		return nil, fmt.Errorf("%w: %q", ErrMode, cfg.Mode)
+	}
+	return &App{cfg: cfg}, nil
+}
 
-// Start starts the runtime.
-func (a *App) Start(ctx context.Context) error { return errNotImplemented }
+func (m Mode) valid() bool { return m == ModePublic || m == ModeHidden }
 
-// Stop stops the runtime.
-func (a *App) Stop(ctx context.Context) error { return errNotImplemented }
+// Start starts the runtime. A failed start leaves the app stopped.
+func (a *App) Start(ctx context.Context) error {
+	a.lc.Lock()
+	defer a.lc.Unlock()
+	if a.running.Load() {
+		return ErrRunning
+	}
+	if err := a.cfg.Runtime.Start(ctx); err != nil {
+		return err
+	}
+	a.running.Store(true)
+	return nil
+}
+
+// Stop stops the runtime. Stopping a stopped app does nothing.
+func (a *App) Stop(ctx context.Context) error {
+	a.lc.Lock()
+	defer a.lc.Unlock()
+	if !a.running.Load() {
+		return nil
+	}
+	a.running.Store(false)
+	return a.cfg.Runtime.Stop(ctx)
+}
 
 // Running reports whether the app started the runtime.
-func (a *App) Running() bool { return false }
+func (a *App) Running() bool { return a.running.Load() }
