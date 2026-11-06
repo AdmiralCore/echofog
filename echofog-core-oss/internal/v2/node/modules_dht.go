@@ -48,7 +48,7 @@ func (r *Runtime) registerDHT() {
 		Self:         dht.DeviceID(r.identity.DeviceID),
 		Table:        tbl,
 		Reached:      r.peers.Serve,
-		ReleaseCheck: r.cfg.ReleaseCheck,
+		ReleaseCheck: r.releaseCheck(),
 		Now:          r.clock.Now,
 		MemCapMB:     r.cfg.Profile.MemCapMB,
 		Log:          r.log,
