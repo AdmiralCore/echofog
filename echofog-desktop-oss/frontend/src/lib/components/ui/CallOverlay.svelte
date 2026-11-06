@@ -31,25 +31,24 @@
     import VideoView from '../call/VideoView.svelte';
     import { t } from '../../i18n/index.js';
 
+    // the card rests in one of the corners (bottom ones by default, clear of page buttons at the top);
+    // dragging moves it freely, releasing snaps it to the nearest corner, which is remembered
+    const CORNER_KEY = 'echofog.callMiniCorner';
+    const CORNERS = ['br', 'bl', 'tr', 'tl'];
+    let corner = 'br';
+    try { const c = localStorage.getItem(CORNER_KEY); if (CORNERS.includes(c)) corner = c; } catch (_) { /* private mode */ }
     let pos = { x: 0, y: 0 };
     let drag = null;
     let moved = false;
     let miniH = 0;
+    let miniW = 320;
     let winH = 800;
     let winW = 1280;
+    let card;
 
-    // keep the card fully on screen when it grows (stream preview) or the window shrinks
-    $: if (miniH && !drag) {
-        pos = {
-            x: Math.max(8, Math.min(pos.x, winW - 328)),
-            y: Math.max(8, Math.min(pos.y, winH - miniH - 16)),
-        };
-    }
+    onMount(() => { initCallEvents(); });
 
-    onMount(() => {
-        initCallEvents();
-        pos = { x: window.innerWidth - 340, y: 68 }; // top-right, clear of the message composer
-    });
+    $: cornerStyle = (corner[0] === 'b' ? `bottom:${winW < 640 ? 72 : 16}px;` : 'top:16px;') + (corner[1] === 'r' ? 'right:16px;' : 'left:72px;');
 
     $: s = $callState;
     $: stageVisible = $view === 'chats' && $activeId === $peerInfo.chatId && $stageExpanded;
@@ -60,19 +59,25 @@
 
     function onDown(e) {
         if (e.target.closest('button')) return;
-        drag = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+        const r = card.getBoundingClientRect();
+        drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+        pos = { x: r.left, y: r.top };
         moved = false;
     }
     function onMove(e) {
         if (!drag) return;
         moved = true;
         pos = {
-            x: Math.max(8, Math.min(e.clientX - drag.dx, window.innerWidth - 328)),
-            y: Math.max(8, Math.min(e.clientY - drag.dy, window.innerHeight - miniH - 8)),
+            x: Math.max(8, Math.min(e.clientX - drag.dx, winW - miniW - 8)),
+            y: Math.max(8, Math.min(e.clientY - drag.dy, winH - miniH - 8)),
         };
     }
     function onUp() {
         if (drag && !moved) openStage();
+        else if (drag) {
+            corner = (pos.y + miniH / 2 > winH / 2 ? 'b' : 't') + (pos.x + miniW / 2 > winW / 2 ? 'r' : 'l');
+            try { localStorage.setItem(CORNER_KEY, corner); } catch (_) { /* private mode */ }
+        }
         drag = null;
     }
     // answering takes you to the caller's chat, where the call stage lives
@@ -139,8 +144,10 @@
     <div
         class="mini-card"
         class:dragging={!!drag}
-        style="left:{pos.x}px;top:{pos.y}px"
+        style={drag ? `left:${pos.x}px;top:${pos.y}px` : cornerStyle}
+        bind:this={card}
         bind:offsetHeight={miniH}
+        bind:offsetWidth={miniW}
         on:mousedown={onDown}
         transition:scale={{ duration: 180, start: 0.94 }}
     >
