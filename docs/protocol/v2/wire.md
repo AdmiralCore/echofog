@@ -810,6 +810,11 @@ Built-in profiles:
 The initiator SHOULD use the responder's profile for what it sends to that address, so both directions
 match what the address's network is expected to look like.
 
+**Buckets and pad.** When `buckets` is set, `pad` is not used: each packet or TLS record is padded up to
+the next bucket size and nothing more. `pad_budget` is counted per stream direction, not per sender. The
+`default-tls` row above lists both `pad` and `buckets`; which of the two it keeps is an open question for
+the architect (see SPEC-FIX-1106b report), so the row is unchanged here.
+
 ## 10. Limits and timeouts
 
 | Item | Value |
