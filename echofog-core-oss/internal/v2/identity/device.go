@@ -233,3 +233,42 @@ func (t *Throwaway) Destroy() {
 		t.Device.Destroy()
 	}
 }
+
+// ThrowawaySeeds is the secret material of one per-exit client identity, as the store keeps it
+// (services.md §7: "stored locally, never derived from the mnemonic"). It is random, so it only
+// ever restores the same exit identity, never the messenger one.
+type ThrowawaySeeds struct {
+	Account   [32]byte
+	Device    [32]byte
+	Handshake [32]byte
+	Mask      [32]byte
+}
+
+// NewThrowawaySeeds draws fresh random seeds.
+func NewThrowawaySeeds() (ThrowawaySeeds, error) {
+	var s ThrowawaySeeds
+	for _, b := range [][]byte{s.Account[:], s.Device[:], s.Handshake[:], s.Mask[:]} {
+		if _, err := rand.Read(b); err != nil {
+			return ThrowawaySeeds{}, err
+		}
+	}
+	return s, nil
+}
+
+// Wipe overwrites the seeds.
+func (s *ThrowawaySeeds) Wipe() { *s = ThrowawaySeeds{} }
+
+// ThrowawayFromSeeds rebuilds a throwaway identity from its seeds. The account storage key is
+// derived from the account seed; a throwaway never stores anything under it.
+func ThrowawayFromSeeds(s ThrowawaySeeds) (*Throwaway, error) {
+	account, err := accountFromSeeds(DefaultAccount, s.Account[:], s.Account[:])
+	if err != nil {
+		return nil, err
+	}
+	device, err := DeviceFromKeys(s.Device[:], s.Handshake[:], s.Mask[:])
+	if err != nil {
+		account.Destroy()
+		return nil, err
+	}
+	return &Throwaway{Account: account, Device: device}, nil
+}

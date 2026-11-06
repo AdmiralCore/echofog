@@ -569,3 +569,48 @@ func TestDestroyedIdentity(t *testing.T) {
 		t.Fatalf("device signing after destroy: %v", err)
 	}
 }
+
+// The per-exit identity is stored as seeds and restored bit-for-bit (services.md §7).
+func TestThrowawayFromSeeds(t *testing.T) {
+	seeds, err := identity.NewThrowawaySeeds()
+	if err != nil {
+		t.Fatalf("NewThrowawaySeeds: %v", err)
+	}
+	a, err := identity.ThrowawayFromSeeds(seeds)
+	if err != nil {
+		t.Fatalf("ThrowawayFromSeeds: %v", err)
+	}
+	defer a.Destroy()
+	b, err := identity.ThrowawayFromSeeds(seeds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Destroy()
+	if a.Account.NodeID() != b.Account.NodeID() || a.Device.ID() != b.Device.ID() ||
+		!bytes.Equal(a.Device.Handshake().Public(), b.Device.Handshake().Public()) ||
+		!bytes.Equal(a.Device.Masking().Public(), b.Device.Masking().Public()) {
+		t.Fatal("the same seeds restored a different identity")
+	}
+	other, err := identity.NewThrowawaySeeds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == seeds {
+		t.Fatal("two draws gave the same seeds")
+	}
+	c, err := identity.ThrowawayFromSeeds(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Destroy()
+	if c.Account.NodeID() == a.Account.NodeID() || c.Device.ID() == a.Device.ID() {
+		t.Fatal("different seeds gave the same identity")
+	}
+	// The account key must not be the device key, nor the main account of the phrase.
+	if a.Account.NodeID() == a.Device.ID() {
+		t.Fatal("account and device share a key")
+	}
+	if _, err := a.DeviceList(1, time.Now()); err != nil {
+		t.Fatalf("restored identity cannot sign its device list: %v", err)
+	}
+}

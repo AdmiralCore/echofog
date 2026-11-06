@@ -24,7 +24,7 @@ func (r *Runtime) registerExit() {
 	}
 	srv, err := exit.NewServer(exit.ServerConfig{
 		Clock:   r.carrierClock,
-		Shape:   r.cfg.ShapeProfile,
+		Shape:   exitShape(r.cfg),
 		SelfIPs: r.exitSelfIPs,
 	})
 	if err != nil {
