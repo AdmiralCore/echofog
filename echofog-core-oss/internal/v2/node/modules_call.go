@@ -3,10 +3,13 @@ package node
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/echofog/echofog-core/internal/v2/call"
 	"github.com/echofog/echofog-core/internal/v2/call/callnet"
+	pb "github.com/echofog/echofog-core/internal/v2/call/pb"
 	"github.com/echofog/echofog-core/internal/v2/call/route"
+	"github.com/echofog/echofog-core/internal/v2/call/sigbridge"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/service"
@@ -23,6 +26,16 @@ func (r *Runtime) registerCall() {
 		return
 	}
 	port := r.Datagrams(frame.DgramCallSignal)
+	r.initCallTransport()
+	late := &lateCallService{}
+	bridge := sigbridge.New(sigbridge.Config{
+		Self:    [32]byte(r.cfg.Device.ID()),
+		Service: late,
+		Guard:   call.NewJoinGuard(call.JoinGuardConfig{Now: r.clock.Now}),
+		Deliver: r.callTr.DeliverSignal,
+		Context: r.ctx,
+		Now:     r.clock.Now,
+	})
 	srv, err := call.New(call.Config{
 		Origin:    r.cfg.Device.Public(),
 		Sign:      r.cfg.Device.Sign,
@@ -30,6 +43,7 @@ func (r *Runtime) registerCall() {
 		Now:       r.clock.Now,
 		Open:      r.openCallStream,
 		Datagrams: &callDatagramPort{port: port},
+		OnSignal:  bridge.OnSignal,
 		Log:       r.log,
 	})
 	if err != nil {
@@ -37,6 +51,9 @@ func (r *Runtime) registerCall() {
 		_ = port.Close()
 		return
 	}
+	late.set(srv)
+	r.callSvc = srv
+	r.SetCallSignals(bridge)
 	r.Register(spec, func(ctx context.Context, p Peer, st *mux.Stream) {
 		srv.Handle(ctx, callPeer(p), st)
 	})
@@ -110,7 +127,7 @@ func (r *Runtime) SetCallSignals(p callnet.SignalPort) {
 }
 
 // Call returns the call/2 signalling service (T9.1); nil when it is not registered.
-func (r *Runtime) Call() *call.Service { return nil }
+func (r *Runtime) Call() *call.Service { return r.callSvc }
 
 // CallTransport returns the call layer's transport over this node's sessions (T9.3). Nil when
 // call/2 is not registered.
@@ -143,12 +160,15 @@ func (l callLinks) Link(device [32]byte) (route.Link, bool) {
 }
 
 // startCallMedia builds the call transport and pumps CALL_AUDIO / CALL_VIDEO datagrams into it.
-func (r *Runtime) startCallMedia() {
+func (r *Runtime) initCallTransport() {
 	r.callTr = callnet.New(callnet.Config{
 		Links:   callLinks{r},
 		Signals: callSignalPort{r},
 		Route:   r.CallRoute,
 	})
+}
+
+func (r *Runtime) startCallMedia() {
 	port := r.Datagrams(frame.DgramCallAudio, frame.DgramCallVideo)
 	r.wg.Add(1)
 	go func() {
@@ -164,4 +184,26 @@ func (r *Runtime) startCallMedia() {
 			})
 		}
 	}()
+}
+
+// lateCallService lets the bridge be built before the service it sends through (the service's
+// OnSignal is the bridge).
+type lateCallService struct{ svc atomic.Pointer[call.Service] }
+
+func (l *lateCallService) set(s *call.Service) { l.svc.Store(s) }
+
+func (l *lateCallService) Send(ctx context.Context, p call.Peer, m *pb.CallSignal) error {
+	s := l.svc.Load()
+	if s == nil {
+		return call.ErrClosed
+	}
+	return s.Send(ctx, p, m)
+}
+
+func (l *lateCallService) Forward(ctx context.Context, p call.Peer, raw []byte) error {
+	s := l.svc.Load()
+	if s == nil {
+		return call.ErrClosed
+	}
+	return s.Forward(ctx, p, raw)
 }

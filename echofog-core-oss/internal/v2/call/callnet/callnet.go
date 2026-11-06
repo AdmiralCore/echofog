@@ -250,7 +250,20 @@ func (t *Transport) Deliver(in Inbound) {
 }
 
 // DeliverSignal hands a verified call/2 signal, as a v1 envelope, to the call layer.
-func (t *Transport) DeliverSignal(from [32]byte, v1 []byte) {}
+func (t *Transport) DeliverSignal(from [32]byte, v1 []byte) {
+	if !t.admitRate(from) {
+		return
+	}
+	t.mu.RLock()
+	h := t.handlers[transport.Signal]
+	if h == nil {
+		h = t.handlers[transport.SignalLossy]
+	}
+	t.mu.RUnlock()
+	if h != nil {
+		_ = h(v1, types.PeerID(from))
+	}
+}
 
 // Relayed reports whether the participant is reached only through a relay, so the call layer
 // stretches its watchdogs for the extra hop. Under call_route=direct a relay path carries no

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/echofog/echofog-core/internal/v2/call"
 	"github.com/echofog/echofog-core/internal/v2/call/callnet"
 	"log/slog"
 	"net"
@@ -190,6 +191,7 @@ type Runtime struct {
 	dgrams     *datagramBroker
 	// call media (T9.3): the transport over live sessions, call_route and the signal port
 	callTr      *callnet.Transport
+	callSvc     *call.Service
 	callRoute   atomic.Uint32
 	callSignals atomic.Pointer[signalHolder]
 	dht         *dht.Table
