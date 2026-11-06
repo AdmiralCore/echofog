@@ -3,6 +3,7 @@
   import { activeChannel, openChannel } from '../../stores/chats.js';
   import { me } from '../../stores/session.js';
   import { callState } from '../../services/call.service.js';
+  import { isCallActive, peerInfo, stageExpanded } from '../../stores/call.store.js';
   import { t } from '../../i18n/index.js';
   import Avatar from '../../components/ui/Avatar.svelte';
   import Icon from '../../components/ui/Icon.svelte';
@@ -24,18 +25,30 @@
     ? [...new Set([$me.id, ...($callState.members?.length ? $callState.members : ch.call?.members || [])])]
     : ch.call?.members || [];
   $: people = members.length;
+
+  // a text channel opens its feed and folds a live call of this space into the small window;
+  // the room of that call (its row or its people) brings the stage back
+  const callHere = () => $isCallActive && $peerInfo.chatId === conv.id;
+  function openText() {
+    if (callHere()) stageExpanded.set(false);
+    openChannel(ch.id);
+  }
+  function enterRoom() {
+    if (inRoom === ch.id) stageExpanded.set(true);
+    else dispatch('room', ch);
+  }
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div class="chan-row" class:over draggable={manage} on:dragstart on:dragover on:dragleave on:drop on:contextmenu={(e) => dispatch('edit', e)}>
   {#if ch.voice}
     <button class="chan room" class:here={inRoom === ch.id} disabled={!(ch.canJoin ?? conv.can.call)}
-      title={inRoom === ch.id ? $t('chats.inRoom') : $t('chats.joinRoom')} on:click={() => inRoom !== ch.id && dispatch('room', ch)}>
+      title={inRoom === ch.id ? $t('chats.inRoom') : $t('chats.joinRoom')} on:click={enterRoom}>
       <span class="ci" class:stream={ch.stream}><Icon name={ch.stream ? 'live' : 'volume'} size={16} /></span>
       <span class="cb"><span class="nm">{ch.name}</span><span class="pv">{ch.stream ? $t('layout.roomStream') : people ? $t('layout.roomPeople', { n: people }) : $t('layout.roomEmpty')}</span></span>
     </button>
   {:else}
-    <button class="chan" class:on={$activeChannel === ch.id} class:unread={ch.unread > 0} title={ch.topic || ch.name} on:click={() => openChannel(ch.id)}>
+    <button class="chan" class:on={$activeChannel === ch.id} class:unread={ch.unread > 0} title={ch.topic || ch.name} on:click={openText}>
       <span class="ci"><Icon name="hash" size={16} /></span>
       <span class="cb"><span class="nm">{ch.name}</span>{#if ch.topic}<span class="pv">{ch.topic}</span>{/if}</span>
       {#if ch.unread > 0 && $activeChannel !== ch.id}<span class="badge">{ch.unread}</span>
@@ -47,7 +60,7 @@
 </div>
 {#if ch.voice && members.length}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="in-room" class:joinable={inRoom !== ch.id && (ch.canJoin ?? conv.can.call)} on:click={() => inRoom !== ch.id && (ch.canJoin ?? conv.can.call) && dispatch('room', ch)}>
+  <div class="in-room" class:joinable={inRoom === ch.id || (ch.canJoin ?? conv.can.call)} on:click={() => (inRoom === ch.id || (ch.canJoin ?? conv.can.call)) && enterRoom()}>
     {#each members as id (id)}
       <div class="who-in"><Avatar {id} name={id === $me.id ? $t('chats.You') : $nameOf(id)} size={18} /><span class="nm">{id === $me.id ? $t('chats.You') : $nameOf(id)}</span></div>
     {/each}

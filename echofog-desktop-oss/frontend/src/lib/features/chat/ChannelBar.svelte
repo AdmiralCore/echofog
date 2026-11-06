@@ -1,7 +1,7 @@
 <script>
   import { createEventDispatcher, tick } from 'svelte';
   import { chats, activeId, openChat, channels, activeChannel, mainChannel, openChannel, createChannel, createCategory, removeChannel, saveChannel, saveMainChannel, moveChannel, placeChannel, setupCategories } from '../../stores/chats.js';
-  import { isCallActive, peerInfo } from '../../stores/call.store.js';
+  import { isCallActive, peerInfo, stageExpanded } from '../../stores/call.store.js';
   import { t } from '../../i18n/index.js';
   import { ask } from '../../stores/dialog.js';
   import Icon from '../../components/ui/Icon.svelte';
@@ -47,6 +47,10 @@
         { key: 'v:voice', virtual: 'voice', name: $t('layout.headVoice'), items: $channels.filter((c) => c.voice) },
       ];
   $: textChannels = $channels.filter((c) => !c.voice && !c.category);
+  function openMain() {
+    if ($isCallActive && $peerInfo.chatId === conv.id) stageExpanded.set(false);
+    openChannel('');
+  }
   $: inRoom = $isCallActive && $peerInfo.chatId === conv.id ? $peerInfo.room || '' : '';
   $: manage = !!(conv.can.channels ?? conv.can.manage);
   $: mainName = $mainChannel.name || $t('chats.mainChannel');
@@ -265,7 +269,7 @@
         {#if ch.main}
           <!-- svelte-ignore a11y-no-static-element-interactions -->
           <div class="chan-row" draggable={manage} on:dragstart={(e) => dragStart(e, MAIN)} on:contextmenu={(e) => edit(e, MAIN)}>
-            <button class="chan" class:on={$activeChannel === ''} title={$mainChannel.topic || mainName} on:click={() => openChannel('')}>
+            <button class="chan" class:on={$activeChannel === ''} title={$mainChannel.topic || mainName} on:click={openMain}>
               <span class="ci"><Icon name="hash" size={16} /></span>
               <span class="cb"><span class="nm">{mainName}</span>{#if $mainChannel.topic}<span class="pv">{$mainChannel.topic}</span>{/if}</span>
               {#if $mainChannel.readOnly}<span class="ro-ic" title={$t('chats.readOnlyChannel')}><Icon name="lock" size={12} /></span>

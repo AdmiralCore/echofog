@@ -31,12 +31,14 @@
     import VideoView from '../call/VideoView.svelte';
     import { t } from '../../i18n/index.js';
 
-    // the card rests in one of the corners (bottom ones by default, clear of page buttons at the top);
-    // dragging moves it freely, releasing snaps it to the nearest corner, which is remembered
-    const CORNER_KEY = 'echofog.callMiniCorner';
+    // the card rests in one of the corners and never covers the message input. In a chat the corners
+    // belong to the feed (under the header and the strips, above the input), by default the top right;
+    // on the other pages they belong to the window, by default the bottom right. Each place remembers
+    // its own corner. Dragging moves the card freely, releasing snaps it to the nearest corner.
+    const KEYS = { chat: 'echofog.callMiniCornerChat', page: 'echofog.callMiniCorner' };
     const CORNERS = ['br', 'bl', 'tr', 'tl'];
-    let corner = 'br';
-    try { const c = localStorage.getItem(CORNER_KEY); if (CORNERS.includes(c)) corner = c; } catch (_) { /* private mode */ }
+    const load = (key, def) => { try { const c = localStorage.getItem(key); if (CORNERS.includes(c)) return c; } catch (_) { /* private mode */ } return def; };
+    let corners = { chat: load(KEYS.chat, 'tr'), page: load(KEYS.page, 'br') };
     let pos = { x: 0, y: 0 };
     let drag = null;
     let moved = false;
@@ -45,10 +47,34 @@
     let winH = 800;
     let winW = 1280;
     let card;
+    let area = { left: 0, top: 0, right: 1280, bottom: 800 };
+    const GAP = 16;
 
-    onMount(() => { initCallEvents(); });
+    // the free area: the whole window (minus the rail on the left), or in a chat the feed above the input
+    function measure() {
+        const rail = winW < 640 ? 0 : 56;
+        let a = { left: rail, top: 0, right: winW, bottom: winH - (winW < 640 ? 56 : 0) };
+        if ($view === 'chats') {
+            const feed = document.querySelector('.main .messages');
+            if (feed) {
+                const r = feed.getBoundingClientRect();
+                const inputs = [...document.querySelectorAll('.composer:not(.thread-composer)')].map((e) => e.getBoundingClientRect().top).filter((y) => y > r.top);
+                a = { left: r.left, top: r.top, right: r.right, bottom: Math.min(r.bottom, ...inputs) };
+            }
+        }
+        if (a.left !== area.left || a.top !== area.top || a.right !== area.right || a.bottom !== area.bottom) area = a;
+    }
+    let timer;
+    onMount(() => { initCallEvents(); timer = setInterval(measure, 250); return () => clearInterval(timer); });
 
-    $: cornerStyle = (corner[0] === 'b' ? `bottom:${winW < 640 ? 72 : 16}px;` : 'top:16px;') + (corner[1] === 'r' ? 'right:16px;' : 'left:72px;');
+    $: place = $view === 'chats' ? 'chat' : 'page';
+    $: corner = corners[place];
+    $: winW, winH, $view, showMini, measure();
+    $: cornerStyle = (() => {
+        const y = corner[0] === 'b' ? `top:${Math.max(area.top + 8, area.bottom - miniH - GAP)}px;` : `top:${area.top + (place === 'chat' ? 8 : GAP)}px;`;
+        const x = corner[1] === 'r' ? `left:${Math.max(area.left + 8, area.right - miniW - GAP)}px;` : `left:${area.left + GAP}px;`;
+        return y + x;
+    })();
 
     $: s = $callState;
     $: stageVisible = $view === 'chats' && $activeId === $peerInfo.chatId && $stageExpanded;
@@ -75,8 +101,10 @@
     function onUp() {
         if (drag && !moved) openStage();
         else if (drag) {
-            corner = (pos.y + miniH / 2 > winH / 2 ? 'b' : 't') + (pos.x + miniW / 2 > winW / 2 ? 'r' : 'l');
-            try { localStorage.setItem(CORNER_KEY, corner); } catch (_) { /* private mode */ }
+            measure();
+            const c = (pos.y + miniH / 2 > (area.top + area.bottom) / 2 ? 'b' : 't') + (pos.x + miniW / 2 > (area.left + area.right) / 2 ? 'r' : 'l');
+            corners = { ...corners, [place]: c };
+            try { localStorage.setItem(KEYS[place], c); } catch (_) { /* private mode */ }
         }
         drag = null;
     }
