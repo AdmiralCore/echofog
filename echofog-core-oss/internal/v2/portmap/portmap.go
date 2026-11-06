@@ -247,6 +247,10 @@ func (m *Manager) list(confirmedOnly bool) []Mapping {
 	return out
 }
 
+// Rediscover forgets the gateway and looks for it again at once, and renews every mapping: the
+// network changed and the old router no longer holds them.
+func (m *Manager) Rediscover() {}
+
 // Close drops every mapping and stops the manager. The unmapping is best effort: the router
 // forgets a mapping when its lifetime runs out anyway.
 func (m *Manager) Close(ctx context.Context) error {

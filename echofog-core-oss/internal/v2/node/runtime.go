@@ -24,6 +24,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/pex"
+	"github.com/echofog/echofog-core/internal/v2/portmap"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"github.com/echofog/echofog-core/internal/v2/shape"
@@ -138,6 +139,9 @@ type Config struct {
 	// PunchNet supplies the datagram side of hole punching (T6.2). Nil disables punching: sessions
 	// through a relay stay relayed.
 	PunchNet PunchNetwork
+	// PortMap holds the test seams and tuning of port mapping (T6.5b). Whether it runs is
+	// Profile.PortMapping; Enabled here is ignored. Zero values select the production gateway.
+	PortMap portmap.Config
 }
 
 // Runtime is one running v2 node (02-architecture AD5).

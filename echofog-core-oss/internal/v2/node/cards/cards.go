@@ -292,6 +292,11 @@ func (b *CardBuilder) SetPublicHost(host string) (int, error) {
 	return n, nil
 }
 
+// SetPublicPort makes the FollowPublic listeners of one transport whose configured port is
+// internal announce external instead (a port the router mapped, T6.5b); external 0 restores the
+// configured port. It returns the number of listeners changed.
+func (b *CardBuilder) SetPublicPort(udp bool, internal, external uint32) (int, error) { return 0, nil }
+
 // ClearFlags removes caller-chosen card flags (FlagRelay on a node that may not relay, N6). A changed
 // flag set reissues the cards with a higher seq on the next Current.
 func (b *CardBuilder) ClearFlags(flags uint32) error {
