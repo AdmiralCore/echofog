@@ -35,6 +35,9 @@ const (
 	// (wire.md §7.2) and its cards were pointed at it. Event.PublicAddr carries the address:
 	// it is the node's own public IP, shown to its operator only.
 	EventPublicAddr EventKind = "node.public-addr"
+	// EventPortMapping: the set of ports the router forwards for this node changed and the cards
+	// follow it (T6.5b). The message never carries addresses.
+	EventPortMapping EventKind = "node.port-mapping"
 	// EventListenerStopped: an accept loop stopped on a local error and the node no longer
 	// accepts on that listener (T3.7a risk 3).
 	EventListenerStopped EventKind = "node.listener-stopped"

@@ -545,3 +545,32 @@ func TestConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRediscoverLooksForTheGatewayAgainAndRenews(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	pcpGateway(h)
+	m := h.start()
+	_ = m.Add(portmap.UDP, udpPort)
+	h.eventually(mapped(m, 1))
+	if h.count("pcp_announce_req.hex") != 1 {
+		t.Fatal("setup: one discovery expected")
+	}
+
+	m.Rediscover() // the network changed
+	h.eventually(func() bool { return h.count("pcp_announce_req.hex") == 2 })
+	h.eventually(func() bool { return h.count("pcp_map_req_udp.hex") == 2 })
+	h.eventually(mapped(m, 1))
+}
+
+func TestRediscoverWhenDisabledSendsNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.cfg.Enabled = false
+	m := h.start()
+	m.Rediscover()
+	settle()
+	if h.traffic() != 0 {
+		t.Fatal("traffic from a disabled manager")
+	}
+}
