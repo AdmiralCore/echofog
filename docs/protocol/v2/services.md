@@ -297,7 +297,95 @@ noise3 is allowed (same country, Decision D21) and needs feature `path-migration
    on its stream 0 ([wire.md](wire.md) §8.2). No new Noise handshake is needed.
 6. Each attempt has 5 s; at most 2 attempts, then the session stays relayed and may try again after
    `uniform(90, 150)` s. PUNCH_OFFER at most once per 30 s per session.
-7. Symmetric NATs (birthday-style punching with many ports) are the reserved feature `birthday-punch`.
+7. Symmetric NATs (birthday-style punching with many ports) use the feature `birthday-punch`, §6.4.1.
+   Without it, or when it is not chosen, the steps above are the whole algorithm.
+
+#### 6.4.1 Birthday punching (feature `birthday-punch`)
+
+A symmetric NAT (endpoint-dependent mapping) gives every destination a different external port, so
+the address in `PEER_ADDR` is not the one a packet to the peer leaves from, and steps 3–4 fail.
+Birthday punching lets the symmetric side open many sockets (each gets its own external port) while
+the other side sends cheap datagrams across many ports of the symmetric side's IP; with enough of
+each, one datagram lands on an open mapping. It runs inside the same end-to-end session and the same
+step 1–2 frames; only the addition below is new.
+
+**Offer fields.** `PunchOffer` ([registries.md](registries.md) §4) gains these fields. They are
+additive: a peer that does not know them ignores them, and a peer that sends none is treated as
+`nat = cone` with no range, so nobody sprays at it and it is never chosen as a birthday partner.
+
+| Field | Meaning |
+|---|---|
+| `nat = 3` | 1 cone, 2 symmetric, 3 unknown; 0 or absent = not stated (counts as cone). The class comes from OBSERVED_ADDR ([wire.md](wire.md) §7.2); there is no STUN |
+| `port_lo = 4`, `port_hi = 5` | the lowest and highest external port seen for the sender's noise3 socket, in 1024..65535; 0 when unknown or wider than 8000. Meaningful for `nat = 2` only |
+| `samples = 6` | how many observations the range rests on |
+| `mode = 7` | the mode the sender will run: 0 ordinary (steps 3–4), 1 dial, 2 spray, 3 mutual, 4 none |
+
+**Mode choice.** Each side computes the mode from its own class and the peer's offer, with the same
+function, and states it in `mode`. A range is *narrow* when `1024 ≤ port_lo ≤ port_hi`,
+`port_hi − port_lo ≤ 8000` and `samples ≥ 2`.
+
+| Own | Peer | Own mode |
+|---|---|---|
+| cone or unknown | cone, unknown or not stated | ordinary |
+| cone | symmetric | spray |
+| unknown | symmetric | spray (if the NAT turns out symmetric the attempt fails and the session stays relayed) |
+| symmetric | cone | dial |
+| symmetric | unknown or not stated | none (the peer would not spray back) |
+| symmetric | symmetric | mutual if both ranges are narrow, else none |
+
+A side runs its mode only when the peer's offered `mode` is the counterpart (dial ↔ spray, mutual ↔
+mutual, ordinary ↔ ordinary). Any other pair, or a missing `mode`, means ordinary if both are
+cone/unknown, else none. `mode` is a statement, not a command: it never makes a side send anything
+that its own function would not choose.
+
+**Targets.** Every target IP still obeys step 2: the IP of `PEER_ADDR` or of the peer's card. Only
+the ports are new, and only the sender of datagrams chooses them. Ports below 1024 are never targets.
+
+**Roles.** dial and spray: the noise3 initiator is still the session initiator (step 4), whichever
+side is symmetric. mutual: neither side has a stable address, and the end with the **lower node ID**
+is the noise3 initiator (it sends Init), the other answers; if it lacks the other's noise3 key the
+mode is none.
+
+**Datagrams.** Every punching datagram is a junk datagram of step 4 (`uniform(32, 256)` bytes of
+random content) until a flow is found; then the usual Init (≤ 24, step 4) follows. Nothing else is
+ever sent and no fixed-size or fixed-content packet appears.
+
+- *dial* (symmetric side): opens up to 256 UDP sockets, each sends junk to the cone peer's address
+  from `PEER_ADDR` and listens for the peer's datagrams. A socket that receives a datagram from the
+  peer's IP is the hit: the others are closed. If this side is the noise3 initiator, it sends Init from
+  the hit socket to the peer's listener; otherwise it answers with junk from the hit socket, and the
+  peer takes that datagram's source address as the target for its Init.
+- *spray* (cone side): from the socket of its noise3 listener sends junk to the symmetric side's IP
+  across up to 900 ports: a narrow range swept after widening it by 4000 on each side (clamped to
+  1024..65535), otherwise random over 1024..65535, in shuffled order. The source address of the
+  first datagram it receives from that IP is the target for step 4.
+- *mutual*: each side opens up to 64 sockets; each socket sends junk to exactly one guessed port of
+  the other's range (one destination per socket keeps a symmetric mapping stable). The socket pair
+  where both guessed right is the hit; the lower-ID side then sends Init from its hit socket.
+
+Once a flow completes its inner QUIC handshake, step 5 applies: PATH_BIND on stream 0, no new Noise
+handshake.
+
+**Limits.** Per attempt: punching phase 3 s, then the Init phase of step 4 within the 5 s of step 6;
+at most 960 punching datagrams in all from one node (an average of 320 per second with ±3 % jitter
+on absolute deadlines, so late wake-ups do not accumulate), of which spray at most 900; at most 256
+sockets (64 in mutual); at most 2 birthday attempts running on a node at once. Attempts per session,
+retry delay and PUNCH_OFFER interval are those of step 6.
+
+**Where it is off.** Birthday punching sends no datagram, and the mode is not offered (`nat` and
+`mode` omitted), when any of these holds: noise3 is not allowed to this peer (not the same country,
+D21); the feature `birthday-punch` or `path-migration` was not negotiated; the node is in guard mode
+or anonymous mode; traffic goes through a proxy; the profile flag `birthday` is off (it is off on
+mobile under battery saver, [platforms.md](platforms.md) §2).
+
+**Reports.** The node counts birthday attempts and successes in the connection report; the report
+carries counts only, never an address or port of a peer.
+
+**Security notes.** The sender's cost is bounded by the limits above; a peer cannot raise it by
+offering a wide range (the spray budget is fixed) and the target IP can never be chosen by the peer
+(step 2), so the spray cannot be pointed at a third party (V4). The ports in an offer are visible to
+the peer only (end-to-end session). The packets look like step 4's junk, which they already are on
+every noise3 path.
 
 ### 6.5 Limits
 
