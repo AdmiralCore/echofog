@@ -278,6 +278,7 @@ func (a *App) startEventListeners(nodeAPI *api.NodeApi, ctx context.Context) {
 	if nodeAPI == nil {
 		return
 	}
+	a.wireNotices(ctx, nodeAPI)
 
 	msgCh := nodeAPI.MessageHandler()
 	go func() {

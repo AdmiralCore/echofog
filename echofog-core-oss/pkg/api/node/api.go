@@ -61,6 +61,8 @@ type NodeApi struct {
 	// the not-built v2 backends at protocol 2 (T11.1b-e replace the bodies with delegation).
 	backends backends
 
+	v2n v2Notices // the protocol 2 notices for the UI (v2_notices.go)
+
 	Logger *slog.Logger
 }
 

@@ -89,3 +89,15 @@ func TestUpdateInfoFromTheManifest(t *testing.T) {
 		t.Fatalf("latest %q", got.Latest)
 	}
 }
+
+func TestNoticePayload(t *testing.T) {
+	p := noticePayload("clock-skew", "Часы", nil)
+	if p["kind"] != "clock-skew" || p["text"] != "Часы" || p["update"] != nil {
+		t.Fatalf("payload: %+v", p)
+	}
+	p = noticePayload("update", "x", &api.UpdateNotice{Version: "0.3.1", NotesURL: "https://example.org/n", Important: true})
+	u, ok := p["update"].(UpdateInfo)
+	if !ok || u.Latest != "0.3.1" || !u.Manifest || !u.Important || u.URL != "https://example.org/n" {
+		t.Fatalf("payload: %+v", p)
+	}
+}

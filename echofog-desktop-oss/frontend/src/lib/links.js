@@ -15,6 +15,9 @@ import { parseContactInput, parseRelayLink } from './contact.js';
 // page (and the OS, which hands echofog:// links to the app) can open them.
 export const WEB_LINK_BASE = 'https://admiralcore.github.io/echofog/join/#';
 
+/** The longest link the app takes (a v2 card link with its secret fits); the core has the same limit. */
+export const MAX_LINK = 16 * 1024;
+
 // an EchoFog link somewhere in a text (a messenger adds words around it, or a dot after it)
 const FIND = /(https?:\/\/[^\s#]+#\S+|echofog:\/\/\S+|fogcontact1:\S+|fogroup[12]:\S+)/i;
 
@@ -59,7 +62,7 @@ export function webLinkOf(link) {
 /** What a pasted text is: { kind: 'join' | 'node' | 'contact' | 'group', … } or null. */
 export function classifyLink(text) {
   text = fromWebLink((text || '').trim()).trim();
-  if (!text) return null;
+  if (!text || text.length > MAX_LINK) return null;
   if (/^echofog:\/\/join\?/i.test(text)) return { kind: 'join', text };
   if (/^fogroup[12]:/i.test(text)) return { kind: 'group', text };
   const node = parseRelayLink(text);
@@ -72,7 +75,9 @@ export function classifyLink(text) {
 /** Whether the text looks like a link worth offering to open (not a bare key typed in a chat). */
 export const looksLikeLink = (text) => {
   const t = (text || '').trim();
-  return t.length < 64 * 1024 && /^(echofog:\/\/|fogcontact1:|fogroup[12]:)/i.test(fromWebLink(t).trim());
+  if (t.length >= 64 * 1024) return false;
+  const l = fromWebLink(t).trim();
+  return l.length <= MAX_LINK && /^(echofog:\/\/|fogcontact1:|fogroup[12]:)/i.test(l);
 };
 
 /** The open-link dialog: null when closed, else { text } (the text may be empty). */
@@ -94,10 +99,20 @@ export function findGroupLink(text) {
   return '';
 }
 
-/** The longest link the app takes (a v2 card link with its secret fits). */
-export const MAX_LINK = 16 * 1024;
-
-/** Which version a join link is and whether it carries a secret: { version, hasSecret } or null. */
+/**
+ * Which version an echofog://join link is and whether it carries a secret (an invitation):
+ * { version, hasSecret }, or null when the text is not a join link. Version 1 has no "v"; "v=2" is
+ * the card link of protocol 2; a "v" that is not a number gives 0. The secret itself is never
+ * returned, so the result is safe to show or log.
+ */
 export function joinInfo(text) {
-  return null;
+  if (typeof text !== 'string') return null;
+  const t = fromWebLink(text.trim()).trim();
+  if (!t || t.length > MAX_LINK) return null;
+  const m = /^echofog:\/\/join\?(.*)$/is.exec(t);
+  if (!m) return null;
+  const q = new URLSearchParams(m[1]);
+  const v = q.get('v');
+  const version = v === null ? 1 : /^\d{1,3}$/.test(v) ? Number(v) : 0;
+  return { version, hasSecret: q.has('s') || q.has('token') };
 }

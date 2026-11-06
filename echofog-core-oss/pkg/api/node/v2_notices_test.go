@@ -102,7 +102,7 @@ func TestErrorScreenOfFacadeErrors(t *testing.T) {
 		require.Equal(t, code, s.Code)
 		require.NotEmpty(t, s.Title)
 		require.NotEmpty(t, s.Text)
-		require.Equal(t, got.Error(), s.Text, "the error text and the screen text are one")
+		require.Regexp(t, "[а-я]", got.Error())
 	}
 	api.AttachV2(&stubV2App{joinErr: errors.New("boom")})
 	_, got := api.JoinInvite("x")

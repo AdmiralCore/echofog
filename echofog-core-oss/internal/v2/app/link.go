@@ -166,6 +166,9 @@ func UserMessage(err error) string {
 		errors.Is(err, links.ErrNoInviter):
 		return links.UserMessage(err)
 	default:
+		if sc, ok := Screen(err); ok {
+			return sc.Text
+		}
 		return "Не удалось выполнить действие"
 	}
 }

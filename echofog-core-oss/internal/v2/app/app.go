@@ -98,6 +98,7 @@ type App struct {
 	lc      sync.Mutex // serializes Start and Stop
 	running atomic.Bool
 	cmu     sync.Mutex // contacts: read-modify-write
+	ntc     notices    // notices for the UI (notice.go)
 }
 
 // New creates an App.

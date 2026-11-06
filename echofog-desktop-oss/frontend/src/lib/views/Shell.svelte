@@ -3,6 +3,8 @@
   import { App, openURL, on } from '../api.js';
   import { openLinkDialog, looksLikeLink } from '../links.js';
   import OpenLink from '../components/OpenLink.svelte';
+  import ErrorScreen from '../components/ErrorScreen.svelte';
+  import { errorScreen, notice, noticeKey } from '../errscreen.js';
   import CrashDialog from '../components/CrashDialog.svelte';
   import { profile } from '../stores/session.js';
   import { chats } from '../stores/chats.js';
@@ -44,6 +46,17 @@
       try { seen = localStorage.getItem(UPDATE_SEEN) || ''; } catch (_) { /* private mode */ }
       if (u?.newer && u.latest !== seen) update = u;
     } catch (_) { /* offline or GitHub unreachable: nothing to say */ }
+  }
+  // protocol 2: the node tells when its signed release manifest says an update exists, and what
+  // else is worth saying (no entry node in the country, a wrong clock); the screens of failed actions
+  function onNotice(n) {
+    if (n?.kind === 'update' && n.update) {
+      let seen = '';
+      try { seen = localStorage.getItem(UPDATE_SEEN) || ''; } catch (_) { /* private mode */ }
+      if (n.update.latest !== seen || n.update.important) update = n.update;
+    } else if (n && noticeKey(n.kind)) {
+      notice.set({ kind: n.kind, text: n.text });
+    }
   }
   function dismissUpdate() {
     try { localStorage.setItem(UPDATE_SEEN, update.latest); } catch (_) { /* private mode */ }
@@ -100,6 +113,8 @@
 
   let offSounds = () => {};
   let offLink = () => {};
+  let offNotice = () => {};
+  let offScreen = () => {};
 
   // EchoFog links: Ctrl+L opens the dialog; a link pasted outside a text field, a link clicked in a
   // browser while the app runs, and the link that started the app all open it with the link in it
@@ -120,6 +135,8 @@
 
   onMount(() => {
     offLink = on('link:open', (link) => openLinkDialog(link || ''));
+    offNotice = on('app:notice', onNotice);
+    offScreen = on('app:error-screen', (s) => errorScreen.set(s));
     App.TakeStartLink().then((link) => { if (link) openLinkDialog(link); }).catch(() => {});
     checkUpdate();
     checkCrash();
@@ -130,11 +147,12 @@
     refresh();
     poll = setInterval(() => { now = Date.now(); refresh(); }, 5000);
   });
-  onDestroy(() => { clearInterval(poll); offSounds(); offLink(); });
+  onDestroy(() => { clearInterval(poll); offSounds(); offLink(); offNotice(); offScreen(); });
 </script>
 
 <svelte:window bind:innerWidth={width} on:keydown={onKey} on:paste={onPaste} />
 <OpenLink />
+<ErrorScreen />
 {#if crash && crashOpen}<CrashDialog {crash} on:close={forgetCrash} />{/if}
 
 <div class="shell" class:bottom>
@@ -208,12 +226,19 @@
       <div class="banner update" role="status" transition:fly={{ y: -16, duration: 300 }}>
         <span class="off-ic up-ic"><Icon name="download" size={17} /></span>
         <div class="grow off-text">
-          <b>{$t('update.title', { v: update.latest })}</b>
-          <span>{$t('update.text', { current: update.current })}</span>
+          <b>{update.important ? $t('update.important') + ' · ' : ''}{$t('update.title', { v: update.latest })}</b>
+          <span>{update.manifest ? $t('update.textV2', { current: update.current }) : $t('update.text', { current: update.current })}</span>
         </div>
-        <button class="primary small" on:click={() => openURL(update.url)}>{$t('update.download')}</button>
-        <button class="small tg" on:click={() => openURL(TELEGRAM)}>{$t('update.telegram')}</button>
+        <button class="primary small" on:click={() => openURL(update.url)}>{update.manifest ? $t('update.notes') : $t('update.download')}</button>
+        {#if !update.manifest}<button class="small tg" on:click={() => openURL(TELEGRAM)}>{$t('update.telegram')}</button>{/if}
         <button class="icon off-x" title={$t('boot.dismiss')} aria-label={$t('boot.dismiss')} on:click={dismissUpdate}><Icon name="close" size={15} /></button>
+      </div>
+    {/if}
+    {#if $notice}
+      <div class="banner offline" role="status" transition:fly={{ y: -16, duration: 300 }}>
+        <span class="off-ic"><Icon name="info" size={17} /></span>
+        <div class="grow off-text"><span>{$t(noticeKey($notice.kind))}</span></div>
+        <button class="icon off-x" title={$t('boot.dismiss')} aria-label={$t('boot.dismiss')} on:click={() => notice.set(null)}><Icon name="close" size={15} /></button>
       </div>
     {/if}
     {#if showOffline}

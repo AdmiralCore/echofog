@@ -40,7 +40,10 @@ const v2OpTimeout = 60 * time.Second
 
 // v2UserError turns an error of the app layer into one the UI can show as it is: a Russian text in
 // a neutral form that never repeats an internal error.
-type v2UserError struct{ msg string }
+type v2UserError struct {
+	msg    string
+	screen *app.ErrorScreen // the full-screen error this error has, if any
+}
 
 func (e *v2UserError) Error() string { return e.msg }
 
@@ -48,7 +51,11 @@ func v2Err(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &v2UserError{app.UserMessage(err)}
+	e := &v2UserError{msg: app.UserMessage(err)}
+	if sc, ok := app.Screen(err); ok {
+		e.screen = &sc
+	}
+	return e
 }
 
 // v2NetBackend is the protocol 2 network and access backend. The methods the app layer does not
@@ -72,6 +79,7 @@ func (n *NodeApi) AttachV2(a v2App) {
 	}
 	n.backends.net = &v2NetBackend{app: a}
 	n.backends.contact = &v2ContactBackend{app: a}
+	n.v2n.attach(a)
 }
 
 func v2Ctx() (context.Context, context.CancelFunc) {
@@ -99,7 +107,7 @@ func (b *v2NetBackend) SetAccessMode(mode string) error {
 	case app.ModePublic, app.ModeHidden:
 		return v2Err(b.app.SetMode(m))
 	}
-	return &v2UserError{"Этот режим доступа недоступен в протоколе 2"}
+	return &v2UserError{msg: "Этот режим доступа недоступен в протоколе 2"}
 }
 
 func (b *v2NetBackend) ParseInvite(link string) (InviteInfo, error) {

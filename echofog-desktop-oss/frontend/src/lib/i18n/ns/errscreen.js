@@ -1,2 +1,31 @@
-// Error screens and runtime notices (T11.5).
-export default { en: {}, ru: {} };
+// Error screens and runtime notices (T11.5). Russian texts are in a neutral form.
+export default {
+  en: {
+    'errscreen.close': 'Close',
+    'errscreen.other-version.title': 'Made by another version',
+    'errscreen.other-version.text': 'This link was made by a version of EchoFog this app does not support. Update the app or get a new link.',
+    'errscreen.no-cover.title': 'The server has no cover',
+    'errscreen.no-cover.text': 'The server does not disguise its traffic, so it cannot be reached. Choose another server.',
+    'errscreen.free-quota-used.title': 'Today’s free volume is used up',
+    'errscreen.free-quota-used.text': 'This server’s free traffic for today is spent and renews tomorrow. Meanwhile another server can be chosen.',
+    'notice.update': 'A new version of EchoFog is available.',
+    'notice.no-domestic-entry': 'There is no suitable entry node in the country, so a connection over this network is not possible.',
+    'notice.release-unavailable': 'The update data is damaged, so update checks are off. Everything else works.',
+    'notice.no-cover': 'This node has no cover: it has no public card and can be reached only by invitation.',
+    'notice.clock-skew': 'The device clock differs from the network’s by more than 10 minutes, so no connection was made. Fix the date and time in the system settings.',
+  },
+  ru: {
+    'errscreen.close': 'Закрыть',
+    'errscreen.other-version.title': 'Создано другой версией',
+    'errscreen.other-version.text': 'Эта ссылка создана версией EchoFog, которую приложение не поддерживает. Нужно обновить приложение или получить новую ссылку.',
+    'errscreen.no-cover.title': 'У сервера нет обложки',
+    'errscreen.no-cover.text': 'Сервер не маскирует свой трафик, поэтому подключиться к нему нельзя. Нужно выбрать другой сервер.',
+    'errscreen.free-quota-used.title': 'Бесплатный объём на сегодня закончился',
+    'errscreen.free-quota-used.text': 'Бесплатный трафик этого сервера на сегодня исчерпан и обновится завтра. Пока можно выбрать другой сервер.',
+    'notice.update': 'Доступна новая версия EchoFog.',
+    'notice.no-domestic-entry': 'В стране нет подходящего входного узла: подключение по этой сети невозможно.',
+    'notice.release-unavailable': 'Данные об обновлениях повреждены, поэтому проверка обновлений отключена. Остальные функции работают.',
+    'notice.no-cover': 'У этого узла нет обложки: публичной карточки нет, и подключиться к нему можно только по приглашению.',
+    'notice.clock-skew': 'Часы устройства отличаются от часов сети больше чем на 10 минут, поэтому соединение не установлено. Нужно исправить дату и время в настройках системы.',
+  },
+};
