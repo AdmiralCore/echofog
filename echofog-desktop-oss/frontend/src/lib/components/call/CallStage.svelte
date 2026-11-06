@@ -12,6 +12,7 @@
     import Icon from '../ui/Icon.svelte';
     import IconButton from '../ui/IconButton.svelte';
     import Badge from '../ui/Badge.svelte';
+    import Menu from '../ui/Menu.svelte';
     import './call-icons.js';
     import './call-ui.css';
     import { t } from '../../i18n/index.js';
@@ -21,6 +22,10 @@
     export let maximized = false;
     /** the chat beside the stage is shown (the button in the head opens and closes it) */
     export let chatOpen = false;
+    /** unread messages of the room chat while it is closed (a count on the chat button) */
+    export let unread = 0;
+    /** a narrow window: the space's channels open from a button in the head */
+    export let channelsButton = false;
 
     const dispatch = createEventDispatcher();
 
@@ -66,6 +71,7 @@
     // the people beside the picture: full tiles while the picture keeps PIC_MIN, else faces only
     $: railFolded = railPref ?? (stageW > 0 && stageW - 32 - 176 - 12 < PIC_MIN);
     $: isRoom = !!$peerInfo.room;
+    $: tight = stageW > 0 && stageW < 720; // the layout buttons move into More
     $: wide = stageW > 1000; // below this the badges that the video tags repeat are left out of the header
     $: qualityBadge = main ? qualityLabel(main) : screens[0] ? qualityLabel(screens[0]) : '';
     $: anyLive = screens.length > 0;
@@ -112,6 +118,27 @@
         return out;
     }
 
+    // "More": the people column, the microphone, theatre and full screen with their keys
+    $: moreItems = [
+        ...(tight ? [
+            { id: 'l:grid', icon: 'layout', label: $t('call.layout.grid') },
+            { id: 'l:side', icon: 'panel', label: $t('call.layout.side') },
+            { id: 'l:bottom', icon: 'panelBottom', label: $t('call.layout.bottom') },
+            { separator: true },
+        ] : []),
+        ...(main && rail === 'side' ? [{ id: 'rail', icon: railFolded ? 'chevronLeft' : 'chevronRight', label: railFolded ? $t('call.rail.unfold') : $t('call.rail.fold') }] : []),
+        { id: 'mic', icon: s.isMicMuted ? 'micOff' : 'mic', label: s.isMicMuted ? $t('call.unmute') : $t('call.mute'), hint: 'M' },
+        { id: 'theatre', icon: maximized ? 'collapse' : 'theater', label: maximized ? $t('call.showChat') : $t('call.theater'), hint: 'T' },
+        { id: 'full', icon: 'fullscreen', label: $t('call.fullscreen'), hint: 'F' },
+    ];
+    function onMore(e) {
+        if (String(e.detail).startsWith('l:')) setLayout(e.detail.slice(2));
+        else if (e.detail === 'rail') foldRail();
+        else if (e.detail === 'mic') toggleMute();
+        else if (e.detail === 'theatre') maximized = !maximized;
+        else if (e.detail === 'full') fullscreenMain();
+    }
+
     function openMenu(e) {
         menu = e.detail;
     }
@@ -150,6 +177,7 @@
 <section bind:this={root} bind:clientWidth={stageW} class="call-stage relative flex flex-col w-full h-full min-h-0 select-none" aria-label={$t('call.call')}>
     <header class="head shrink-0 flex items-center justify-between px-4 gap-3 border-b" style="border-color:var(--border)">
         <div class="flex items-center gap-2.5 min-w-0">
+            {#if channelsButton}<IconButton size="sm" icon="panel" label={$t('chats.channels')} on:click={() => dispatch('channels')} />{/if}
             <span class="head-ic shrink-0 {s.inCall ? '' : 'animate-pulse'}" class:wait={!s.inCall}><Icon name={isRoom ? 'volume' : 'phone'} size={17} /></span>
             <span class="font-bold truncate text-fg" style="font-size:var(--fs-lg)">{title || $t('call.call')}</span>
             <span class="shrink-0 tabular-nums" style="font-size:var(--fs-sm);color:var(--muted)">
@@ -163,17 +191,17 @@
             {#if qualityBadge && wide}<Badge kind="quality" size="sm">{qualityBadge}</Badge>{/if}
         </div>
         <div class="flex items-center gap-0.5 shrink-0">
-            <div class="seg" role="group" aria-label={$t('call.layout')}>
+            {#if !tight}<div class="seg" role="group" aria-label={$t('call.layout')}>
                 <IconButton size="sm" icon="layout" label={$t('call.layout.grid')} pressed={layout === 'grid' || !main} on:click={() => setLayout('grid')} />
                 <IconButton size="sm" icon="panel" label={$t('call.layout.side')} pressed={layout === 'side' && !!main} on:click={() => setLayout('side')} />
                 <IconButton size="sm" icon="panelBottom" label={$t('call.layout.bottom')} pressed={layout === 'bottom' && !!main} on:click={() => setLayout('bottom')} />
-            </div>
-            {#if main && rail === 'side'}
-                <IconButton size="sm" icon={railFolded ? 'chevronLeft' : 'chevronRight'} label={railFolded ? $t('call.rail.unfold') : $t('call.rail.fold')} on:click={foldRail} />
-            {/if}
-            <IconButton size="sm" icon="message" label={chatOpen ? $t('call.chatHide') : $t('call.chatShow')} pressed={chatOpen} on:click={() => dispatch('togglechat')} />
+            </div>{/if}
+            <IconButton size="sm" icon="message" label={chatOpen ? $t('call.chatHide') : $t('call.chatShow')} pressed={chatOpen} badge={chatOpen ? 0 : unread} on:click={() => dispatch('togglechat')} />
             <IconButton size="sm" icon={maximized ? 'collapse' : 'theater'} label="{maximized ? $t('call.showChat') : $t('call.theater')} (T)" pressed={maximized} on:click={() => (maximized = !maximized)} />
             <IconButton size="sm" icon="fullscreen" label="{$t('call.fullscreen')} (F)" on:click={fullscreenMain} />
+            <Menu align="end" width={300} label={$t('call.more')} items={moreItems} on:select={onMore}>
+                <IconButton slot="trigger" let:toggle let:open size="sm" icon="moreH" label={$t('call.more')} pressed={open} on:click={toggle} />
+            </Menu>
             <IconButton size="sm" icon="chevronUp" label={$t('call.minimize')} on:click={() => stageExpanded.set(false)} />
         </div>
     </header>

@@ -4,7 +4,7 @@
   import QRCode from 'qrcode';
   import { me, profile } from '../stores/session.js';
   import { openLinkDialog } from '../links.js';
-  import { chats, activeId, activeGroupCalls, loadChats, openChat, addContact, createGroup, joinGroup } from '../stores/chats.js';
+  import { chats, activeId, activeChannel, messages, activeGroupCalls, loadChats, openChat, addContact, createGroup, joinGroup } from '../stores/chats.js';
   import { isCallActive, peerInfo, stageExpanded } from '../stores/call.store.js';
   import CallStage from '../components/call/CallStage.svelte';
   import { errText, copy } from '../api.js';
@@ -21,6 +21,7 @@
   import Popover from '../components/ui/Popover.svelte';
   import Skeleton from '../components/ui/Skeleton.svelte';
   import SelfCard from '../features/chat/SelfCard.svelte';
+  import { chatsAction } from '../stores/nav.js';
 
   let panel = ''; // '' | 'contact' | 'group' | 'join' | 'me'
   let contactInput = '';
@@ -104,6 +105,29 @@
     chatPref = !chatOpen;
     try { localStorage.setItem('echofog.call.chat', chatPref ? '1' : '0'); } catch (_) {}
   }
+  // messages that came to the room chat while it was closed: a count on the chat button of the stage
+  let seen = new Set();
+  let baseKey = '';
+  let baseAt = 0;
+  let missed = 0;
+  function trackMissed(list, open, stage, key) {
+    const closed = stage && !open;
+    if (!closed || key !== baseKey) {
+      // a baseline: what is there now is not missed
+      baseKey = closed ? key : '';
+      baseAt = Date.now();
+      seen = new Set(list.map((m) => m.id));
+      missed = 0;
+      return;
+    }
+    for (const m of list) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      // a list that is still loading after a switch is not news
+      if (!m.mine && !m.system && Date.now() - baseAt > 1500) missed++;
+    }
+  }
+  $: trackMissed($messages, chatOpen, showCall, $activeId + '/' + $activeChannel);
   // a voice room's call is named after the room, a chat's after the person or the group
   const stageTitle = (c) => ($peerInfo.room ? String($peerInfo.alias || '').split(' \u00b7 ').pop() : c.name);
   $: parsed = parseContactInput(contactInput);
@@ -124,6 +148,16 @@
     if (panel === 'me' && myLink) {
       qr = await QRCode.toDataURL(myLink, { margin: 1, width: 200, color: { dark: '#000000', light: '#ffffff' } });
     }
+  }
+
+  // "+" on the spaces rail: the list shows with the form of what was asked for
+  $: if ($chatsAction) {
+    const what = $chatsAction;
+    chatsAction.set('');
+    activeId.set('');
+    listCollapsed = false;
+    panel = '';
+    toggle(what);
   }
 
   async function run(fn) {
@@ -310,8 +344,8 @@
     {#if showSaved}
       <Saved back={narrow} indent={listCollapsed && !narrow} on:back={() => activeId.set('')} />
     {:else if active}
-      <Conversation conv={active} back={narrow} indent={listCollapsed && !narrow && !isSpace} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')}>
-        {#if showCall}<CallStage title={stageTitle(active)} bind:maximized {chatOpen} on:togglechat={toggleCallChat} />{/if}
+      <Conversation conv={active} back={narrow} indent={listCollapsed && !narrow && !isSpace} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')} let:compact let:toggleChannels>
+        {#if showCall}<CallStage title={stageTitle(active)} bind:maximized {chatOpen} unread={missed} channelsButton={compact && isSpace} on:channels={toggleChannels} on:togglechat={toggleCallChat} />{/if}
       </Conversation>
     {:else}
       <div class="placeholder">

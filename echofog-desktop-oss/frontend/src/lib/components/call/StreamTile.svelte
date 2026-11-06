@@ -77,7 +77,7 @@
     {/if}
 
     <!-- tags that say what this is: always on, small -->
-    <div class="absolute left-2 top-2 flex items-center gap-1">
+    <div class="tags absolute left-2 top-2 flex items-center gap-1">
         {#if !compact}<span class="vtag who"><Icon name="monitor" size={12} /><span class="truncate">{isOwn ? (stream.mediaType === 'camera' ? $t('call.yourCamera') : $t('call.yourScreen')) : stream.mediaType === 'camera' ? name : $t('call.screenOf', { name })}</span></span>{/if}
         <span class="vtag live">{$t('call.live')}</span>
         {#if label}<span class="vtag">{label}</span>{/if}

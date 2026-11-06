@@ -1,6 +1,9 @@
 // The window layout: the channels column of a space, the "you" card, the call stage's chat toggle.
 export default {
   en: {
+    'spaces.title': 'Spaces',
+    'spaces.personal': 'Personal chats',
+    'spaces.add': 'Create or join a space',
     'layout.filter.all': 'All',
     'layout.searchChannels': 'Search channels',
     'layout.membersLine': { one: '{n} member', other: '{n} members' },
@@ -19,6 +22,7 @@ export default {
     'call.screenShort': 'Screen',
     'call.screenOf': '{name} — screen',
     'call.leaveShort': 'Leave',
+    'call.more': 'More',
     'call.roomChat': 'Room chat',
     'call.chatShow': 'Show chat',
     'call.chatHide': 'Hide chat',
@@ -35,6 +39,9 @@ export default {
     'call.ch.relays': { one: '{n} relay', other: '{n} relays' },
   },
   ru: {
+    'spaces.title': 'Пространства',
+    'spaces.personal': 'Личные чаты',
+    'spaces.add': 'Создать или вступить',
     'layout.filter.all': 'Все',
     'layout.searchChannels': 'Поиск по каналам',
     'layout.membersLine': { one: '{n} участник', few: '{n} участника', many: '{n} участников', other: '{n} участника' },
@@ -53,6 +60,7 @@ export default {
     'call.screenShort': 'Экран',
     'call.screenOf': '{name} — экран',
     'call.leaveShort': 'Выйти',
+    'call.more': 'Ещё',
     'call.roomChat': 'Чат комнаты',
     'call.chatShow': 'Показать чат',
     'call.chatHide': 'Скрыть чат',

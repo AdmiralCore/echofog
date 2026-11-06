@@ -23,6 +23,7 @@
   import Logs from './Logs.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import SpacesRail from '../features/chat/SpacesRail.svelte';
   import { t } from '../i18n/index.js';
 
   const views = [
@@ -70,7 +71,16 @@
   // the sections sit on a narrow icon rail (the space goes to the channels, the call and the chat);
   // a very narrow window moves it to a bottom tab bar
   $: bottom = width < 640;
-  $: rail = !bottom;
+  // the rail is narrow (icons) unless the user widened it (names beside the icons); a window under 980 px
+  // keeps it narrow whatever was chosen. The choice is remembered under the old key: '0' = wide
+  let wideNav = false;
+  try { wideNav = localStorage.getItem('echofog.navCollapsed') === '0'; } catch (_) {}
+  function toggleWide() {
+    wideNav = !wideNav;
+    try { localStorage.setItem('echofog.navCollapsed', wideNav ? '0' : '1'); } catch (_) {}
+  }
+  $: rail = !bottom && !(wideNav && width >= 980);
+  $: showSpaces = !bottom;
   $: activeIndex = Math.max(0, views.findIndex((v) => v.id === $view));
   $: myName = ($displayName || '').trim() || $profile || $t('shell.me');
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
@@ -155,9 +165,19 @@
       {/each}
     </div>
 
+    {#if showSpaces}
+      <div class="spaces-slot"><SpacesRail wide={!rail} /></div>
+    {/if}
+
     {#if !bottom}
       <div class="grow" />
       <div class="foot">
+        {#if width >= 980}
+          <button class="theme widen" title={rail ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} aria-label={rail ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')} aria-pressed={!rail} on:click={toggleWide}>
+            <Icon name={rail ? 'chevronRight' : 'chevronLeft'} size={17} />
+            <span class="label">{$t('shell.collapse')}</span>
+          </button>
+        {/if}
         <button class="theme" title={$resolvedTheme === 'dark' ? $t('shell.lightTheme') : $t('shell.darkTheme')} aria-label={$t('shell.toggleTheme')} on:click={toggleTheme}>
           <span class="swap" class:dark={$resolvedTheme === 'dark'}>
             <span class="i sun"><Icon name="sun" size={17} /></span>
@@ -239,7 +259,7 @@
   .shell.bottom { flex-direction: column-reverse; }
 
   nav {
-    width: 56px; flex: none; display: flex; flex-direction: column; gap: 2px;
+    width: 56px; transition: width var(--dur-slow) var(--ease); flex: none; display: flex; flex-direction: column; gap: 2px;
     padding: 12px 8px 8px; background: var(--surface-1); border-right: 1px solid var(--border);
     overflow: hidden; position: relative; z-index: 2;
   }
@@ -288,6 +308,9 @@
   }
   @keyframes live { 50% { opacity: 0.4; } }
 
+  nav:not(.rail):not(.bottom) { width: 208px; }
+  .spaces-slot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); min-height: 0; flex: 0 1 auto; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+  .spaces-slot::-webkit-scrollbar { display: none; }
   .foot { display: flex; flex-direction: column; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); }
   .theme, .me {
     display: flex; align-items: center; gap: 12px; padding: 0 10px; height: 36px; border: none; background: transparent;

@@ -343,5 +343,7 @@
 .chat-screen .stage-slot { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .chat-screen.stage .main { flex: none; width: var(--room-chat-w); border-left: 1px solid var(--border); background: var(--surface-1); }
 .chat-screen.chat-off .main { display: none; }
+/* a narrow area: the chat beside a call opens as a sheet over the stage, not beside it */
+.chat-screen.stage.sheet .main { position: absolute; z-index: 25; top: 0; right: 0; bottom: 0; width: min(var(--room-chat-w), 100%); box-shadow: var(--shadow-lg); }
 
 .chat-screen.stage .main .upg { flex-wrap: wrap; white-space: normal; text-align: left; }

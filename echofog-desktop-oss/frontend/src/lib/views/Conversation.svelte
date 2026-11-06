@@ -209,7 +209,9 @@
   // goes once a channel is picked
   let screenW = 1200;
   let chansOpen = false;
-  $: compact = conv.kind === 'group' && screenW > 0 && screenW < 680;
+  $: compact = conv.kind === 'group' && screenW > 0 && screenW < (stage ? 900 : 680);
+  // beside a call the chat is a sheet over the stage when the area is narrow
+  $: sheet = stage && screenW > 0 && screenW < 1000;
   $: if (!compact) chansOpen = false;
   $: $activeChannel, conv.id, (chansOpen = false);
   // slow mode: how long until my next message here may go (who moderates is not held back); the
@@ -285,7 +287,7 @@
 
 <svelte:window on:keydown={windowKey} />
 
-<div class="chat-screen" class:compact class:stage class:chat-off={stage && (!chatOpen || theatre)} class:theatre={stage && theatre} bind:clientWidth={screenW}>
+<div class="chat-screen" class:compact class:stage class:sheet class:chat-off={stage && (!chatOpen || theatre)} class:theatre={stage && theatre} bind:clientWidth={screenW}>
   {#if conv.kind === 'group' && (!compact || chansOpen) && !(stage && theatre)}
     <ChannelBar {conv} indent={indent && !compact} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
   {/if}
@@ -293,7 +295,7 @@
     <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
     <div class="chan-scrim" transition:fade={{ duration: 150 }} on:click={() => (chansOpen = false)}></div>
   {/if}
-  {#if stage}<div class="stage-slot"><slot /></div>{/if}
+  {#if stage}<div class="stage-slot"><slot {compact} toggleChannels={() => (chansOpen = !chansOpen)} /></div>{/if}
   <div class="main">
     <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />

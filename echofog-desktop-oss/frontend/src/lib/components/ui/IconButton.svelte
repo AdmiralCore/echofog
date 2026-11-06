@@ -12,6 +12,8 @@
     export let tooltip = true;
     export let placement = 'top';
     export let type = 'button';
+    /** a count on the corner (unread messages, say); 0 or empty shows nothing */
+    export let badge = 0;
 
     $: iconSize = size === 'lg' ? 20 : size === 'sm' ? 16 : 18;
 </script>
@@ -28,6 +30,7 @@
         {...$$restProps}
     >
         <Icon name={icon} size={iconSize} />
+        {#if badge}<span class="ib-badge" aria-hidden="true">{badge > 99 ? '99+' : badge}</span>{/if}
     </button>
 </Tooltip>
 
@@ -37,6 +40,12 @@
         width: var(--ctl-md); height: var(--ctl-md); border-radius: var(--r-md);
         border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer;
         transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+    }
+    .ui-ib { position: relative; }
+    .ib-badge {
+        position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-pill);
+        background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: var(--fw-bold); line-height: 1;
+        display: grid; place-items: center; box-shadow: 0 0 0 2px var(--stage, var(--surface-1)); pointer-events: none;
     }
     .sm { width: var(--ctl-sm); height: var(--ctl-sm); }
     .lg { width: var(--ctl-lg); height: var(--ctl-lg); }

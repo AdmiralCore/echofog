@@ -11,6 +11,7 @@
     border-radius: var(--r-lg);
     background: #000;
     contain: layout paint;
+    container-type: inline-size;
 }
 
 /* panels that appear on hover and for 3 s after the pointer moves (see autohide.js) */
@@ -88,3 +89,8 @@
 /* the picture's own name tag: who shows what */
 .vtag.who { height: 26px; padding: 0 10px; gap: 6px; font-size: var(--fs-xs); max-width: 60%; }
 .vtag.who .truncate { overflow: hidden; text-overflow: ellipsis; }
+
+/* a narrow picture: while the buttons are shown they take the place of the tags (which come back after) */
+@container (max-width: 560px) {
+    .vframe[data-active='true'] .tags, .vframe:focus-within .tags { opacity: 0; transition: opacity var(--dur) var(--ease); pointer-events: none; }
+}
