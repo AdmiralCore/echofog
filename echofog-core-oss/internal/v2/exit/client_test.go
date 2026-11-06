@@ -26,6 +26,11 @@ type clientRig struct {
 
 func newClientRig(t *testing.T, rc rigConfig) *clientRig {
 	t.Helper()
+	return newClientRigWith(t, rc, nil, func(time.Duration) {})
+}
+
+func newClientRigWith(t *testing.T, rc rigConfig, prof *shape.Profile, sleep func(time.Duration)) *clientRig {
+	t.Helper()
 	r := newRig(t, rc)
 	cfg := ClientConfig{
 		OpenStream: func(ctx context.Context) (*mux.Stream, error) {
@@ -36,7 +41,8 @@ func newClientRig(t *testing.T, rc rigConfig) *clientRig {
 			st.SetLimiter(limiter())
 			return st, nil
 		},
-		Sleep: func(time.Duration) {},
+		Shape: prof,
+		Sleep: sleep,
 	}
 	if !rc.NoDatagrams {
 		cfg.SendDatagram = r.client.SendDatagram
@@ -176,9 +182,10 @@ func TestClientTCPRefusals(t *testing.T) {
 		name   string
 		cfg    ServerConfig
 		target string
+		want   error
 	}{
-		{"private target", ServerConfig{}, "127.0.0.1:9"},
-		{"closed port", ServerConfig{AllowPrivateTargets: true}, "127.0.0.1:1"},
+		{"private target", ServerConfig{}, "127.0.0.1:9", core.ErrExitDenied},
+		{"closed port", ServerConfig{AllowPrivateTargets: true}, "127.0.0.1:1", core.ErrExitDialFailed},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,9 +197,8 @@ func TestClientTCPRefusals(t *testing.T) {
 				defer conn.Close()
 				_, err = conn.Read(make([]byte, 1))
 			}
-			// D19: every refusal is "unreachable".
-			if !errors.Is(err, core.ErrExitDialFailed) {
-				t.Fatalf("error = %v, want %v", err, core.ErrExitDialFailed)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
 		})
 	}

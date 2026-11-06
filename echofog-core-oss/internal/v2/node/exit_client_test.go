@@ -11,8 +11,15 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/service"
 )
+
+type freeExit struct{}
+
+func (freeExit) ExitOffer() *pb.ExitOffer { return &pb.ExitOffer{} }
+
+func asExit(c *cards.Config) { c.Exit = freeExit{} }
 
 // fakeExit is an exit that only records who connected.
 type fakeExit struct{ peers chan node.Peer }
@@ -48,8 +55,8 @@ func (fe *fakeExit) seen(t *testing.T) node.Peer {
 func TestExitClientUsesPerExitIdentity(t *testing.T) {
 	client := newTestNode(t, cards.Hidden, false, nil, nil)
 	qb, qc := newCarrierQueue(), newCarrierQueue()
-	b := newTestNode(t, cards.Visible, true, []carrier.Listener{qb}, nil)
-	c := newTestNode(t, cards.Visible, true, []carrier.Listener{qc}, nil)
+	b := newTestNodeFull(t, cards.Visible, true, []carrier.Listener{qb}, nil, asExit, nil)
+	c := newTestNodeFull(t, cards.Visible, true, []carrier.Listener{qc}, nil, asExit, nil)
 	exitB, exitC := registerFakeExit(t, b.rt), registerFakeExit(t, c.rt)
 	b.start(t)
 	c.start(t)

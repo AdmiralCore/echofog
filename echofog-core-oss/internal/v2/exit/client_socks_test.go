@@ -167,7 +167,7 @@ func TestSOCKS5ExitRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// With fast open the SOCKS reply may be success followed by a reset; either way no data comes.
-	var h [4]byte
+	var h [10]byte // VER REP RSV ATYP(1) IPv4 PORT
 	if _, err := io.ReadFull(c, h[:]); err != nil {
 		return
 	}

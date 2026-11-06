@@ -4,7 +4,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"time"
 
@@ -246,9 +245,30 @@ type ThrowawaySeeds struct {
 }
 
 // NewThrowawaySeeds draws fresh random seeds.
-func NewThrowawaySeeds() (ThrowawaySeeds, error) { return ThrowawaySeeds{}, errNotImplemented }
+func NewThrowawaySeeds() (ThrowawaySeeds, error) {
+	var s ThrowawaySeeds
+	for _, b := range [][]byte{s.Account[:], s.Device[:], s.Handshake[:], s.Mask[:]} {
+		if _, err := rand.Read(b); err != nil {
+			return ThrowawaySeeds{}, err
+		}
+	}
+	return s, nil
+}
 
-// ThrowawayFromSeeds rebuilds a throwaway identity from its seeds.
-func ThrowawayFromSeeds(ThrowawaySeeds) (*Throwaway, error) { return nil, errNotImplemented }
+// Wipe overwrites the seeds.
+func (s *ThrowawaySeeds) Wipe() { *s = ThrowawaySeeds{} }
 
-var errNotImplemented = errors.New("identity: not implemented")
+// ThrowawayFromSeeds rebuilds a throwaway identity from its seeds. The account storage key is
+// derived from the account seed; a throwaway never stores anything under it.
+func ThrowawayFromSeeds(s ThrowawaySeeds) (*Throwaway, error) {
+	account, err := accountFromSeeds(DefaultAccount, s.Account[:], s.Account[:])
+	if err != nil {
+		return nil, err
+	}
+	device, err := DeviceFromKeys(s.Device[:], s.Handshake[:], s.Mask[:])
+	if err != nil {
+		account.Destroy()
+		return nil, err
+	}
+	return &Throwaway{Account: account, Device: device}, nil
+}
