@@ -14,6 +14,13 @@ const MaxPunchAddrs = 4
 type PunchOffer struct {
 	Addrs []netip.AddrPort
 	Nonce uint64
+	// The birthday-punch additions (services.md §6.4.1), fields 3–7. Zero means "not stated": the
+	// peer counts as a cone NAT and is never sprayed at.
+	Nat     uint32
+	PortLo  uint32
+	PortHi  uint32
+	Samples uint32
+	Mode    uint32
 }
 
 // Append encodes the offer canonically: addresses in order, then the nonce (omitted when zero).
