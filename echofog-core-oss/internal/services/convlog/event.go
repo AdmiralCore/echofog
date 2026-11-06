@@ -44,6 +44,12 @@ const (
 	// maxLamportJump is how far an event may push the conversation clock in one step; more is
 	// clock-inflation spam (it would pin the author's messages to the bottom forever).
 	maxLamportJump = 1 << 24
+	// MaxUnknownFields bounds the protobuf fields an event carries that this build does not know
+	// (the signature does not cover them, a relay could append more).
+	MaxUnknownFields = 1 << 10
+	// MaxUnknownPerAuthor bounds the events of a kind this build does not know that one author may
+	// have in one conversation.
+	MaxUnknownPerAuthor = 1000
 )
 
 // ConvID names a conversation.
