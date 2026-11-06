@@ -78,7 +78,7 @@
   // without a choice made, the list is open when the chat is wide enough for it
   let membersPref = null;
   try { const v = localStorage.getItem('echofog.membersPanel'); membersPref = v === '1' ? true : v === '0' ? false : null; } catch (_) {}
-  $: membersOpen = membersPref ?? (!stage && screenW >= 1100);
+  $: membersOpen = membersPref ?? (!stage && screenW >= 1400);
   function toggleMembers() {
     membersPref = !membersOpen;
     try { localStorage.setItem('echofog.membersPanel', membersPref ? '1' : '0'); } catch (_) {}

@@ -78,15 +78,16 @@
 
     <!-- tags that say what this is: always on, small -->
     <div class="absolute left-2 top-2 flex items-center gap-1">
+        {#if !compact}<span class="vtag who"><Icon name="monitor" size={12} /><span class="truncate">{isOwn ? (stream.mediaType === 'camera' ? $t('call.yourCamera') : $t('call.yourScreen')) : stream.mediaType === 'camera' ? name : $t('call.screenOf', { name })}</span></span>{/if}
         <span class="vtag live">{$t('call.live')}</span>
         {#if label}<span class="vtag">{label}</span>{/if}
         {#if rec}<span class="vtag rec-tag" title={$t('call.log.recording')}>{$t('call.log.rec')} {recTime}</span>{/if}
         {#if hasSound || ownSound}<span class="vtag" title={$t('call.streamHasSound')}><Icon name={hasSound && !soundOn ? 'volumeOff' : 'volume'} size={12} /></span>{/if}
     </div>
 
-    <div class="ov absolute left-2 bottom-2 max-w-[70%] vtag name" style="height:24px;font-size:var(--fs-xs)">
+    {#if compact}<div class="ov absolute left-2 bottom-2 max-w-[70%] vtag name" style="height:24px;font-size:var(--fs-xs)">
         <span class="truncate">{isOwn ? (stream.mediaType === 'camera' ? $t('call.yourCamera') : $t('call.yourScreen')) : name}</span>
-    </div>
+    </div>{/if}
 
     {#if pipOn}<CameraPip media={camera} mirror={isOwn} />{/if}
 

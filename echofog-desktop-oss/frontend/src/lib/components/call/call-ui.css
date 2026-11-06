@@ -84,3 +84,7 @@
 @media (prefers-reduced-motion: reduce) {
     .vframe .ov { transition: none; }
 }
+
+/* the picture's own name tag: who shows what */
+.vtag.who { height: 26px; padding: 0 10px; gap: 6px; font-size: var(--fs-xs); max-width: 60%; }
+.vtag.who .truncate { overflow: hidden; text-overflow: ellipsis; }

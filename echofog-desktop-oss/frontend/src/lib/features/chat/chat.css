@@ -343,3 +343,5 @@
 .chat-screen .stage-slot { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .chat-screen.stage .main { flex: none; width: var(--room-chat-w); border-left: 1px solid var(--border); background: var(--surface-1); }
 .chat-screen.chat-off .main { display: none; }
+
+.chat-screen.stage .main .upg { flex-wrap: wrap; white-space: normal; text-align: left; }

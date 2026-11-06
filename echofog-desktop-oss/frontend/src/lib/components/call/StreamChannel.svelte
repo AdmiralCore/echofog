@@ -27,11 +27,12 @@
     let me = 'viewer'; // viewer | booster | moderator | owner
     let chatPos = 'right'; // right | bottom | hidden ("theatre")
     let cam = 'overlay'; // overlay | tile
-    let camState = { x: 1, y: 1, w: 0.2, shape: 'circle', hidden: false };
+    let camState = { x: 1, y: 1, w: 0.2, shape: 'rounded', hidden: false };
     let slow = 0; // seconds between messages; 0 is off
     let draft = '';
     let cooldown = 0;
     let viewers = data.viewers;
+    let elapsed = 2 * 3600 + 14 * 60 + 8; // the stream's running time, seconds
     let unread = 0;
     let messages = data.messages.map((m, i) => ({ id: i, ...m }));
     let banned = new Set();
@@ -113,6 +114,7 @@
     const LINES = ['gg', 'that dodge was clean', 'which preset is this?', 'phase 2 is the hard one', 'first time here, hello!', 'how many attempts so far?'];
     let chatTimer;
     let viewTimer;
+    let clockTimer;
     onMount(() => {
         timer = drawScene(sceneCanvas, false);
         const cc = document.createElement('canvas');
@@ -124,6 +126,7 @@
             const p = data.people.filter((x) => x.id !== 'alice' && !banned.has(x.id))[Math.floor(Math.random() * 4)] || data.people[2];
             push({ from: p.id, text: LINES[Math.floor(Math.random() * LINES.length)] });
         }, 4500);
+        clockTimer = setInterval(() => (elapsed += 1), 1000);
         viewTimer = setInterval(() => (viewers = Math.max(1, viewers + Math.round((Math.random() - 0.45) * 9))), 3000);
     });
     onDestroy(() => {
@@ -131,6 +134,7 @@
         clearInterval(camTimer);
         clearInterval(chatTimer);
         clearInterval(viewTimer);
+        clearInterval(clockTimer);
     });
 
     function push(m) {
@@ -180,6 +184,7 @@
         }
     }
 
+    const clock = (sec) => [Math.floor(sec / 3600), Math.floor(sec / 60) % 60, sec % 60].map((n) => String(n).padStart(2, '0')).join(':');
     const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nameOf = (id) => (id === 'me' ? $t('call.ch.you') : data.people.find((p) => p.id === id)?.name || id);
     const roleIdOf = (id) => (id === 'me' ? me : data.people.find((p) => p.id === id)?.role);
@@ -190,34 +195,44 @@
 <div class="ch" role="region" aria-label={$t('call.ch.title')}>
     <header class="top">
         <div class="ttl">
-            <Icon name="live" size={16} />
-            <b class="ell">{data.title}</b>
-            <Badge kind="live" size="sm" />
-            <Badge kind="quality" size="sm">1440p60</Badge>
-            <span class="viewers tabular-nums" title={$t('call.ch.viewers')}><Icon name="eye" size={14} /> {viewers.toLocaleString()}</span>
+            <Icon name="live" size={17} />
+            <b class="ell">{data.channel || data.title}</b>
+            <span class="st ell">
+                {data.space || ''}<span class="sep">·</span><span class="enc"><Icon name="lock" size={13} />{$t('call.e2e')}</span><span class="sep">·</span>{$t('callpath.badgeDirect')}
+            </span>
         </div>
         <div class="tools">
-            <label class="as">
-                <span>{$t('call.ch.viewAs')}</span>
-                <select bind:value={me} aria-label={$t('call.ch.viewAs')}>
-                    <option value="viewer">{$t('call.ch.role.viewer')}</option>
-                    <option value="booster">{$t('call.ch.role.booster')}</option>
-                    <option value="moderator">{$t('call.ch.role.moderator')}</option>
-                    <option value="owner">{$t('call.ch.role.owner')}</option>
-                </select>
-            </label>
-            <div class="seg" role="group" aria-label={$t('call.ch.camera')}>
-                <IconButton size="sm" icon="pip" label={$t('call.ch.camOverlay')} pressed={cam === 'overlay'} on:click={() => (cam = 'overlay')} />
-                <IconButton size="sm" icon="layout" label={$t('call.ch.camTile')} pressed={cam === 'tile'} on:click={() => (cam = 'tile')} />
-            </div>
-            <div class="seg" role="group" aria-label={$t('call.ch.chat')}>
-                <IconButton size="sm" icon="panel" label={$t('call.ch.chatRight')} pressed={chatPos === 'right'} on:click={() => (chatPos = 'right')} />
-                <IconButton size="sm" icon="panelBottom" label={$t('call.ch.chatBottom')} pressed={chatPos === 'bottom'} on:click={() => (chatPos = 'bottom')} />
-                <IconButton size="sm" icon="theater" label="{$t('call.ch.chatHidden')} (T)" pressed={chatPos === 'hidden'} on:click={() => (chatPos = chatPos === 'hidden' ? 'right' : 'hidden')} />
-            </div>
+            <Badge kind="live" size="sm" />
+            <Badge kind="quality" size="sm">1440p60</Badge>
             <IconButton size="sm" icon="close" label="{$t('call.ch.close')} (Esc)" on:click={onClose} />
         </div>
     </header>
+
+    <div class="bar2">
+        <div class="grp"><span class="lab">{$t('call.ch.camLabel')}</span>
+            <div class="seg" role="group" aria-label={$t('call.ch.camera')}>
+                <button class:on={cam === 'overlay'} aria-pressed={cam === 'overlay'} title={$t('call.ch.camOverlay')} on:click={() => (cam = 'overlay')}>{$t('call.ch.camOver')}</button>
+                <button class:on={cam === 'tile'} aria-pressed={cam === 'tile'} title={$t('call.ch.camTile')} on:click={() => (cam = 'tile')}>{$t('call.ch.camTileShort')}</button>
+            </div>
+        </div>
+        <div class="grp"><span class="lab">{$t('call.ch.chatLabel')}</span>
+            <div class="seg" role="group" aria-label={$t('call.ch.chat')}>
+                <button class:on={chatPos === 'right'} aria-pressed={chatPos === 'right'} title={$t('call.ch.chatRight')} on:click={() => (chatPos = 'right')}>{$t('call.ch.posRight')}</button>
+                <button class:on={chatPos === 'bottom'} aria-pressed={chatPos === 'bottom'} title={$t('call.ch.chatBottom')} on:click={() => (chatPos = 'bottom')}>{$t('call.ch.posBottom')}</button>
+                <button class:on={chatPos === 'hidden'} aria-pressed={chatPos === 'hidden'} title="{$t('call.ch.chatHidden')} (T)" on:click={() => (chatPos = chatPos === 'hidden' ? 'right' : 'hidden')}>{$t('call.ch.posHidden')}</button>
+            </div>
+        </div>
+        <span class="grow"></span>
+        <label class="as">
+            <span>{$t('call.ch.viewAs')}</span>
+            <select bind:value={me} aria-label={$t('call.ch.viewAs')}>
+                <option value="viewer">{$t('call.ch.role.viewer')}</option>
+                <option value="booster">{$t('call.ch.role.booster')}</option>
+                <option value="moderator">{$t('call.ch.role.moderator')}</option>
+                <option value="owner">{$t('call.ch.role.owner')}</option>
+            </select>
+        </label>
+    </div>
 
     <div class="main" data-chat={chatPos}>
         <div class="viewer">
@@ -225,9 +240,8 @@
                 <div class="vframe speak-ring" bind:this={videoBox} use:autohide data-main-frame>
                     <canvas bind:this={sceneCanvas} width="1600" height="900" class="scene" aria-label={$t('call.ch.placeholder')}></canvas>
                     <div class="absolute left-2 top-2 flex items-center gap-1">
-                        <span class="vtag live">{$t('call.live')}</span>
-                        <span class="vtag">1440p60</span>
                         <span class="vtag"><Icon name="eye" size={12} /> {viewers.toLocaleString()}</span>
+                        <span class="vtag">{clock(elapsed)}</span>
                     </div>
                     {#if cam === 'overlay' && camMedia}
                         <CameraPip media={camMedia} state={camState} onChange={(patch) => (camState = { ...camState, ...patch })} />
@@ -245,11 +259,16 @@
 
             <div class="info">
                 <div class="who">
-                    <Avatar id="alice" name={data.host} size={32} />
+                    <Avatar id="alice" name={data.host} size={40} />
                     <div class="min-w-0">
-                        <div class="name ell">{data.host}</div>
-                        <div class="sub ell">{$t('call.ch.onStage', { n: stage.length })}</div>
+                        <div class="name ell">{data.title}</div>
+                        <div class="sub ell">{data.host} · {$t('call.ch.onStage', { n: stage.length })}</div>
                     </div>
+                </div>
+                <div class="pills">
+                    <span class="pill tabular-nums" title={$t('call.ch.viewers')}><Icon name="eye" size={14} /> {$t('call.ch.viewersN', { n: viewers.toLocaleString() })}</span>
+                    <span class="pill tabular-nums"><Icon name="clock" size={14} /> {clock(elapsed)}</span>
+                    <span class="pill"><Icon name="shield" size={14} /> {$t('call.ch.relays', { n: 2 })}</span>
                 </div>
                 <div class="stage-row">
                     {#each stage as p (p.id)}
@@ -339,42 +358,55 @@
 
 <style>
     .ch { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--stage); color: var(--text); font-size: var(--fs-md); }
-    .top { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+    .top { height: var(--top-h, 56px); flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+    .ttl b { font-size: var(--fs-lg); font-weight: var(--fw-bold); }
+    .st { color: var(--muted); font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 6px; }
+    .st .enc { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; }
+    .bar2 { flex: none; display: flex; align-items: center; gap: 18px; padding: 10px 16px 0; }
+    .grp { display: inline-flex; align-items: center; gap: 8px; }
+    .lab { font-size: var(--fs-sm); color: var(--muted); }
+    .bar2 .seg button { height: 28px; padding: 0 13px; border: none; border-radius: var(--r-pill); background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: var(--fw-semibold); }
+    .bar2 .seg button:hover:not(:disabled) { background: var(--hover); border: none; color: var(--text); }
+    .bar2 .seg button.on, .bar2 .seg button.on:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+    .pills { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--text); font-size: var(--fs-sm); font-weight: var(--fw-semibold); }
     .ttl { display: flex; align-items: center; gap: 8px; min-width: 0; }
     .ttl b { font-weight: var(--fw-semibold); }
     .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .viewers { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--fs-sm); }
     .tools { display: flex; align-items: center; gap: 8px; flex: none; }
-    .seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-md); background: var(--surface-2); }
+    .seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-pill); background: var(--surface-2); }
     .as, .slow { white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
     select { height: var(--ctl-sm); padding: 0 8px; font-size: var(--fs-xs); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text); }
 
     .main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 0; position: relative; }
     .main[data-chat='bottom'] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 240px; }
     .main[data-chat='hidden'] { grid-template-columns: minmax(0, 1fr); position: relative; }
-    .viewer { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 8px; gap: 8px; }
+    .viewer { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px 16px; gap: 12px; }
     .vidwrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
     .vidwrap { container-type: size; }
     .vidwrap :global(.vframe) { width: min(100cqw, 100cqh * 16 / 9); height: min(100cqh, 100cqw * 9 / 16); }
     .scene { width: 100%; height: 100%; display: block; }
     .info { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-    .who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .who { flex: 1 1 220px; display: flex; align-items: center; gap: 10px; min-width: 0; }
     .name { font-weight: var(--fw-semibold); }
     .sub { font-size: var(--fs-xs); color: var(--muted); }
-    .stage-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .stage-row { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 4px; border-radius: var(--r-md); background: var(--surface-2); font-size: var(--fs-xs); }
     .camtile { width: 48px; height: 36px; border-radius: var(--r-md); overflow: hidden; background: #000; }
     .rule { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--faint); }
 
     .chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--surface-1); }
     .main[data-chat='bottom'] .chat { border-left: none; border-top: 1px solid var(--border); }
-    .chat-head { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+    .chat-head { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
     .slow { margin-left: auto; }
     .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 4px 8px 12px; display: flex; flex-direction: column; gap: 2px; }
     .cm { position: relative; display: flex; gap: 8px; padding: 4px 6px 4px 0; border-radius: var(--r-md); }
-    .cm:hover { background: var(--hover); }
+    .cm:hover { background: transparent; }
     .cm.sys { align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--faint); padding-left: 2px; }
-    .body { min-width: 0; flex: 1; }
+    .body { min-width: 0; flex: 0 1 auto; background: var(--surface-2); padding: 7px 12px 8px; border-radius: 16px 16px 16px 5px; }
+    .cm { align-items: flex-end; }
+    .cm.sys { align-items: center; justify-content: center; }
     .nm { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); }
     .nm b { font-weight: var(--fw-semibold); }
     .nm time { color: var(--faint); }
@@ -383,8 +415,8 @@
     .cm:hover .acts, .cm:focus-within .acts { display: flex; }
     .vb { width: 24px; height: 24px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
     .vb:hover:not(:disabled) { background: var(--hover); color: var(--danger-fg); border: none; }
-    .compose { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
-    .compose input { flex: 1; height: var(--ctl-md); font-size: var(--fs-sm); }
+    .compose { flex: none; display: flex; align-items: center; gap: 6px; margin: 0 10px 10px; padding: 4px 6px 4px 14px; border-radius: 24px; background: var(--surface-2); }
+    .compose input { flex: 1; height: 38px; font-size: var(--fs-md); border: none; background: transparent; box-shadow: none; padding: 0; }
     .legend { padding: 0 12px 6px; font-size: var(--fs-2xs); color: var(--faint); }
     .unread { position: absolute; right: 12px; bottom: 12px; height: 28px; padding: 0 10px; border: none; border-radius: var(--r-md); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: var(--fw-semibold); }
 </style>

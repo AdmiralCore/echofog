@@ -66,7 +66,7 @@
     // the people beside the picture: full tiles while the picture keeps PIC_MIN, else faces only
     $: railFolded = railPref ?? (stageW > 0 && stageW - 32 - 176 - 12 < PIC_MIN);
     $: isRoom = !!$peerInfo.room;
-    $: wide = stageW > 900; // below this the badges that the video tags repeat are left out of the header
+    $: wide = stageW > 1000; // below this the badges that the video tags repeat are left out of the header
     $: qualityBadge = main ? qualityLabel(main) : screens[0] ? qualityLabel(screens[0]) : '';
     $: anyLive = screens.length > 0;
 
@@ -200,7 +200,7 @@
                                 <div class="aspect-video shrink-0"><StreamTile stream={st} compact /></div>
                             {/each}
                             {#each members as peer (peer)}
-                                <div class="aspect-square shrink-0"><ParticipantTile {peer} camera={cameraOf[peer]} compact on:menu={openMenu} /></div>
+                                <div class="shrink-0" style="aspect-ratio:5/4"><ParticipantTile {peer} camera={cameraOf[peer]} compact on:menu={openMenu} /></div>
                             {/each}
                         </div>
                     {/if}

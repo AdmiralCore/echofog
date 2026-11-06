@@ -1297,7 +1297,7 @@ const spaceChans = {
     { id: 'design', name: 'design', voice: false, position: 1, slowSecs: 30 },
     { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
     { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
-    { id: 'stream', name: 'Stream', voice: true, position: 1 },
+    { id: 'stream', name: 'Stream', voice: true, stream: true, position: 1 },
   ],
 };
 // the main channel's settings, and the roles a group defined, by group
@@ -1631,11 +1631,19 @@ if (new URLSearchParams(location.search).has('streamchannel')) {
   ];
   const at = Date.now();
   const messages = lines.map(([from, text], i) => ({ from, text, at: at - (lines.length - i) * 40000 }));
-  import('../components/call/StreamChannel.svelte').then(({ default: StreamChannel }) => {
+  Promise.all([import('../components/call/StreamChannel.svelte'), import('../stores/chats.js'), import('svelte/store')]).then(async ([{ default: StreamChannel }, chatStore, { get }]) => {
+    // the model sits where the chat does: the group's channels column stays at the left
+    for (let i = 0; i < 40 && !get(chatStore.chats).some((c) => c.kind === 'group'); i++) await new Promise((r) => setTimeout(r, 100));
+    const group = get(chatStore.chats).find((c) => c.kind === 'group');
+    if (group) await chatStore.openChat(group.id);
     const host = document.createElement('div');
-    host.style.cssText = 'position:fixed;inset:0;z-index:9000';
+    host.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:9000';
     document.body.appendChild(host);
-    const view = new StreamChannel({ target: host, props: { data: { title: 'Boss raid, phase 2 · attempt 12', host: 'Alice Moreau', viewers: 1248, roles, people, messages }, onClose: () => { view.$destroy(); host.remove(); } } });
+    const place = () => { const bar = document.querySelector('.chanbar'); host.style.left = bar ? Math.round(bar.getBoundingClientRect().right) + 'px' : '0'; };
+    await new Promise((r) => setTimeout(r, 400));
+    place();
+    window.addEventListener('resize', place);
+    const view = new StreamChannel({ target: host, props: { data: { title: 'Boss raid, phase 2 · attempt 12', channel: 'Game night', space: group ? group.name : '', host: 'Alice Moreau', viewers: 1248, roles, people, messages }, onClose: () => { window.removeEventListener('resize', place); view.$destroy(); host.remove(); } } });
   });
 }
 
