@@ -311,6 +311,11 @@ func (l *Listener) readLoop() {
 		if err != nil {
 			return
 		}
+		if tap := l.tap.Load(); tap != nil {
+			if src, ok := addrPort(addr); ok {
+				(*tap)(src, buf[:n])
+			}
+		}
 		pkt := append([]byte(nil), buf[:n]...)
 		l.handle(pkt, addr, l.clock.Now())
 	}
