@@ -573,45 +573,52 @@ func (s *Service) build(it *item, pk *objects.Prekeys, dl *objects.DeviceList) (
 // Receive handles one incoming envelope (from a DELIVER or from a mailbox) and returns the DELIVERED
 // status. Every refusal is the same status 4: which check failed is not told (AD20).
 func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
+	status, _ := s.receive(ctx, envelope)
+	return status
+}
+
+// receive is Receive; transient says the refusal may pass (the sender could not be looked up now), so
+// an item taken from a mailbox queue is kept.
+func (s *Service) receive(ctx context.Context, envelope []byte) (status uint32, transient bool) {
 	if len(envelope) > chatpb.MaxEnvelope {
-		return chatpb.StatusTooLarge
+		return chatpb.StatusTooLarge, false
 	}
 	raw, err := s.cfg.Crypto.OpenEnvelope(s.cfg.Self.Node, envelope)
 	if err != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	in, err := chatpb.ParseInner(raw)
 	if err != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	senderKey, err1 := keys.Parse(in.Sender)
 	deviceKey, err2 := keys.Parse(in.Device)
 	if err1 != nil || err2 != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	node, device := senderKey.ID(), deviceKey.ID()
 	var id [16]byte
 	copy(id[:], in.Id)
 
 	if s.seenBefore(device, in.Id) {
-		return chatpb.StatusDuplicate
+		return chatpb.StatusDuplicate, false
 	}
 
 	var plain []byte
 	if len(in.PqxdhInit) > 0 {
 		key := lookupKey{node, device}
 		if s.lookupFailed(key) {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, true
 		}
 		res, err := s.cfg.Dir.Resolve(ctx, node)
 		if err != nil {
 			// only a failed lookup is remembered, per (account, device): an envelope that names a device
 			// the account does not have must not keep the account's real init out
 			s.noteLookupFailed(key)
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, true
 		}
 		if res == nil || res.Devices == nil || res.Devices.NodeID != node {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		var pk *objects.Prekeys
 		for _, p := range res.Prekeys {
@@ -620,18 +627,18 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 			}
 		}
 		if pk == nil {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		plain, err = s.cfg.Crypto.Accept(pk, res.Devices, in.PqxdhInit)
 		switch {
 		case errors.Is(err, chatcrypto.ErrDuplicate):
-			return chatpb.StatusDuplicate
+			return chatpb.StatusDuplicate, false
 		case err != nil:
 			s.noteFailure(device, node, id)
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		if bound, ok := s.cfg.Crypto.Peer(device); !ok || bound != node {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		s.invalidate(node) // what waits for this account was made for the old session
 	} else {
@@ -644,30 +651,47 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 		case !ok:
 			// no session: counted apart, against one small budget (noteUnbound)
 			s.noteUnbound(device, node, id)
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		case bound != node:
 			// a device we have a session with, named by another account: an impersonation, never a
 			// reason to start anything
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		plain, err = s.cfg.Crypto.Decrypt(device, in.Ratchet)
 		if err != nil {
 			s.noteFailure(device, node, id)
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 	}
 
 	pm, err := chatpb.ParsePersonal(plain)
 	if err != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	s.rememberSeen(device, in.Id)
 	s.dispatch(node, device, id, pm)
-	return chatpb.StatusOK
+	return chatpb.StatusOK, false
 }
 
 func (s *Service) dispatch(node, device [32]byte, id [16]byte, pm *chatpb.PersonalMessageProto) {
 	if c := pm.GetControl(); c != nil {
+		if q := c.GetMailbox(); q != nil {
+			// where the contact receives mail while away; the newest announcement wins, one that has
+			// ended is ignored
+			if s.cfg.MailDir != nil {
+				var t MailTarget
+				copy(t.Relay[:], q.GetRelay())
+				copy(t.Queue[:], q.GetQueue())
+				t.NotAfter = time.Unix(int64(q.GetNotAfter()), 0)
+				t.RelayCard = q.GetRelayCard()
+				if s.cfg.Now().Before(t.NotAfter) {
+					if old, ok := s.cfg.MailDir.Get(node); !ok || !t.NotAfter.Before(old.NotAfter) {
+						_ = s.cfg.MailDir.Put(node, t)
+					}
+				}
+			}
+			return
+		}
 		if d := c.GetDelivered(); d != nil {
 			for _, raw := range d.GetIds() {
 				var mid [16]byte
@@ -880,14 +904,32 @@ func (s *Service) invalidate(node [32]byte) {
 // AnnounceQueue tells a contact where this node receives mail while away (services.md 5.2). It is
 // sent as an end-to-end message like any other, and again whenever the queue rotates.
 func (s *Service) AnnounceQueue(to [32]byte, q mailbox.QueueRef, card []byte) error {
-	return errNotImplemented
+	msg := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Mailbox{Mailbox: &chatpb.MailboxQueue{
+		Relay: q.Relay[:], Queue: q.Queue[:], NotAfter: uint64(q.Expires.Unix()), RelayCard: card,
+	}}}}
+	_, err := s.enqueue(to, msg, false)
+	return err
 }
 
 // ReceiveItem handles an envelope taken from a mailbox queue and says whether the item may be
 // acknowledged: true once the envelope was handled or can never be, false when handling failed for a
 // reason that may pass (a lookup that failed), so that the relay keeps the item.
-func (s *Service) ReceiveItem(ctx context.Context, envelope []byte) bool { return false }
+func (s *Service) ReceiveItem(ctx context.Context, envelope []byte) bool {
+	_, transient := s.receive(ctx, envelope)
+	return !transient
+}
 
 // Expires says when an outgoing message that is not delivered by then is given up: seven days after it
 // was queued, or after it was handed to a mailbox.
-func (s *Service) Expires(id [16]byte) (time.Time, bool) { return time.Time{}, false }
+func (s *Service) Expires(id [16]byte) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, ok := s.items[id]
+	if !ok || !it.active() {
+		return time.Time{}, false
+	}
+	if it.State == StateMailbox {
+		return time.Unix(it.Since, 0).Add(mailboxFor), true
+	}
+	return time.Unix(it.Created, 0).Add(outboxLife), true
+}
