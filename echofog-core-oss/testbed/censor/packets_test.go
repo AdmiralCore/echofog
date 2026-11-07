@@ -250,3 +250,35 @@ func TestRecorderTurnsAConnectionIntoAFlow(t *testing.T) {
 	assert.GreaterOrEqual(t, len(f.Pkts), 4)
 	assert.Equal(t, 600, f.PayDn)
 }
+
+// N2 of the T15.0b acceptance: the number of flows is bounded, and what did not fit is counted.
+func TestAnalyzerCapsTheFlowsAndCountsTheRest(t *testing.T) {
+	b := newPcap()
+	for i := 0; i < 50; i++ {
+		src := netip.AddrPortFrom(netip.MustParseAddr("203.0.113.21"), uint16(30000+i))
+		b.tcp(time.Duration(i)*time.Millisecond, src, srvAP, 100, 0, 0x02, nil)
+		b.tcp(time.Duration(i)*time.Millisecond+500*time.Microsecond, src, srvAP, 101, 1, 0x18, tlsRecord(22, 100))
+	}
+	an := newAnalyzer()
+	an.maxFlows = 10
+	require.NoError(t, streamPcap(bytes.NewReader(b.buf.Bytes()), an.add))
+	flows := an.finish()
+	assert.Len(t, flows, 10, "the first ten flows are kept whole")
+	assert.Equal(t, 40, an.dropped, "forty flows past the bound are counted, not analysed")
+	for _, f := range flows {
+		assert.Equal(t, 2, f.Packets)
+	}
+
+	w, wait := AnalyzeStreamStats()
+	_, err := w.Write(b.buf.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	res, err := wait()
+	require.NoError(t, err)
+	assert.Len(t, res.Flows, 50, "under the default bound nothing is dropped")
+	assert.Zero(t, res.DroppedFlows)
+}
+
+func TestTheDefaultFlowBoundIsLarge(t *testing.T) {
+	assert.GreaterOrEqual(t, MaxFlows, 100_000)
+}

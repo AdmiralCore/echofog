@@ -335,6 +335,9 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 		v.check(false, "analyze the capture of %s: %v", gw, err)
 		return nil, cap, carrier
 	}
+	if n := cap.sink.dropped; n > 0 {
+		v.check(false, "the capture has more than %d flows: %d flows past that were not analysed", censor.MaxFlows, n)
+	}
 	hosted := labHosted()
 	censor.CheckSNI(flows, hosted)
 	labeled := make([]censor.LabeledFlow, 0, len(flows))
@@ -769,7 +772,9 @@ type captureSink struct {
 
 	// A streaming sink hands the bytes to the censor's stream analyzer instead of keeping them.
 	an   io.WriteCloser
-	wait func() ([]censor.Flow, error)
+	wait func() (censor.Analysis, error)
+
+	dropped int // new flows past censor.MaxFlows
 }
 
 func newCaptureSink(limit int64, file *os.File) *captureSink {
@@ -1008,7 +1013,7 @@ func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
 // still obey the budget and still reach the -pcap file when there is one.
 func newStreamingSink(limit int64, file *os.File) *captureSink {
 	s := newCaptureSink(limit, file)
-	s.an, s.wait = censor.AnalyzeStream()
+	s.an, s.wait = censor.AnalyzeStreamStats()
 	return s
 }
 
@@ -1026,5 +1031,7 @@ func (s *captureSink) Finish() ([]censor.Flow, error) {
 		return nil, errors.New("not a streaming sink")
 	}
 	_ = s.an.Close()
-	return s.wait()
+	a, err := s.wait()
+	s.dropped = a.DroppedFlows
+	return a.Flows, err
 }
