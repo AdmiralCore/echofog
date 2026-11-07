@@ -80,9 +80,21 @@ func epoch32(u uint) (uint32, error) {
 
 func cmdInstallFingerprint(args []string, stdout io.Writer) error {
 	fs := newFlags("install-fingerprint")
-	keyList := fs.String("keys", "", "comma-separated release public keys")
+	keyList := fs.String("keys", "", "comma-separated release public keys (fingerprint of the key block)")
 	epoch := epochFlag(fs, "key-epoch")
+	script := fs.String("script", "", "an install.sh: print the SHA-256 of the whole file instead")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if given(fs)["script"] {
+		if given(fs)["keys"] || given(fs)["key-epoch"] {
+			return errors.New("--script is given alone")
+		}
+		raw, err := os.ReadFile(*script)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(stdout, installkit.FileFingerprint(string(raw)))
 		return err
 	}
 	if err := need(fs, "keys", "key-epoch"); err != nil {
@@ -140,7 +152,7 @@ func cmdInstallStamp(args []string, stdout io.Writer) error {
 	if err := os.WriteFile(*out, []byte(stamped), 0o755); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "stamped %s; key fingerprint (publish it on the site and in the README):\n%s\n", *out, fp)
+	_, err = fmt.Fprintf(stdout, "stamped %s\nfile %s\nkeys %s\nPublish the file value on the site and in the README before the announcement: users compare sha256sum install.sh. The keys value belongs to the key rotation record.\n", *out, installkit.FileFingerprint(stamped), fp)
 	return err
 }
 
@@ -214,4 +226,10 @@ func cmdInstallRotation(args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "rotation.txt to epoch %d signed by %d old keys in %s\n", *epoch, len(signers), *dir)
 	return err
+}
+
+func given(fs *flag.FlagSet) map[string]bool {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
 }

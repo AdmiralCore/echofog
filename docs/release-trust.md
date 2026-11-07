@@ -22,34 +22,42 @@ three must sign).
 - The node's own installer (`echofog-node v2 install`) checks the binary once more against the signed
   manifest. It is a second layer, no longer the first check.
 
-The fingerprint of the key block is the SHA-256 of the exact text between the two marker lines
-(markers included). An operator gets it in two ways that must agree:
+What users compare is the SHA-256 of the **whole `install.sh`**, not of the key block alone: the key block
+says which keys are trusted, but the rest of the file is the logic that uses them (the checks, their order,
+the version floor), and a changed script with the same key block must not pass. The command runs no code
+from the file:
 
 ```
-sh install.sh --fingerprint
-sed -n '/^# BEGIN RELEASE KEYS$/,/^# END RELEASE KEYS$/p' install.sh | sha256sum
+sha256sum install.sh
 ```
 
-The fingerprint covers the keys and the key epoch, and nothing else, so it stays the same from release
-to release until the keys change. The version floor of the script is outside it on purpose.
+The value changes with every release, because `install-stamp` writes the version floor of the release
+into the file. It is published for each release in two independent places before the announcement.
+`sh install.sh --fingerprint` prints the same value and, on a second line, the fingerprint of the key
+block alone; it is **not** a proof, because a changed script can print anything.
+
+The key block has its own value, the SHA-256 of the exact text between the two marker lines (markers
+included). It covers the keys and the key epoch, stays the same until the keys change, and is what the
+key rotation record names (section 6). It is printed by `install-stamp`, `install-fingerprint --keys ...
+--key-epoch N` and, on the `keys` line, by `sh install.sh --fingerprint`.
 
 ## 2. Text for the website page
 
-The fingerprint is published in two independent places, the website and the repository README. The
+The value is published in two independent places, the website and the repository README. The
 release owner fills in the value that `efv2-release install-stamp` printed. This text is for the site
 page:
 
 > **Check install.sh before running it.** Download the file (`curl --proto '=https' --tlsv1.2 -fsSL -o
-> install.sh <address>`), then run `sh install.sh --fingerprint`. The value must be exactly:
+> install.sh <address>`), then run `sha256sum install.sh`. The value must be exactly:
 > `<FINGERPRINT>`. The same value is published in the README of the repository on GitHub; if the two
 > places differ, do not run the script and tell the project. Never pipe the download into a shell.
 
 ## 3. Text for the repository README
 
-> **Release key fingerprint.** Installation of a server node uses `install.sh`, which carries the
-> release public keys. Its key block has the SHA-256 fingerprint `<FINGERPRINT>` (key epoch
-> `<EPOCH>`). Compare it with the value on the project website before the first run: `sh install.sh
-> --fingerprint`. See [docs/release-trust.md](release-trust.md) for what is verified and how the keys
+> **install.sh fingerprint.** Installation of a server node uses `install.sh`, which carries the
+> release public keys. For release `<VERSION>` the SHA-256 of the whole file is `<FINGERPRINT>` (key
+> epoch `<EPOCH>`). Compare it with the value on the project website before the first run:
+> `sha256sum install.sh`. See [docs/release-trust.md](release-trust.md) for what is verified and how the keys
 > are replaced.
 
 ## 4. min_version and rollback
@@ -85,8 +93,10 @@ efv2-release install-stamp  --template deploy/v2/install.sh --keys PUB1,PUB2,PUB
 Publish in the release folder: `release.bin` as `manifest.bin`, `release.txt`, `release.txt.sigs` and
 the binaries `echofog-node-linux-amd64` and `echofog-node-linux-arm64`; publish `install.sh` beside them.
 `install-record` refuses fewer than two different keys; `install-stamp` refuses a script that was already
-stamped and prints the fingerprint. Check the stamped script once with `sh out/install.sh --fingerprint`
-and put the value on the website and in the README **before** announcing the release.
+stamped and prints two values: `file` (the SHA-256 of the whole script) and `keys` (the key block). Check
+the stamped script once with `sha256sum out/install.sh` and put the `file` value on the website and in
+the README **before** announcing the release. A script stamped again for another release has another
+value.
 
 ## 6. Replacing the release keys
 
@@ -105,7 +115,7 @@ The old keys vouch for the new ones, so that nobody has to trust a new key blind
    Publish `rotation.txt` and `rotation.txt.sigs` in the release folder and keep them there as long as
    old copies of `install.sh` are in use.
 4. Stamp the new script with the new keys and the new epoch (`install-stamp ... --key-epoch 2`), publish
-   its fingerprint on the website and in the README, then publish the first release signed by the new
+   its `file` value on the website and in the README, then publish the first release signed by the new
    keys with `install-record ... --key-epoch 2`.
 
 What the scripts do: an **old** script (epoch 1) that finds a valid rotation record stops, prints the
@@ -119,8 +129,8 @@ tell operators to replace `install.sh` by hand.
 
 ## 7. What this does not cover
 
-- Someone who controls both the place where `install.sh` is downloaded and the place where the
-  fingerprint is published (two independent places are the defence).
+- Someone who controls both the place where `install.sh` is downloaded and the places where the
+  value is published (two independent places are the defence).
 - A compromised build machine or release key before the owner notices; rotation limits the damage.
 - A system with a tampered `ssh-keygen` or `sha256sum`: they are part of the base system and trusted
   as such.

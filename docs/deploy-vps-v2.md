@@ -38,19 +38,20 @@ sign it) and compares the size and SHA-256 of the binary with that record. The d
 executable and is started only after that; if any check fails, it is deleted and nothing is installed.
 The node's own installer then checks the binary once more against the signed manifest.
 
-So the one thing to check by hand is that `install.sh` itself is the genuine file: its key block must
-have the published fingerprint. Never pipe a download into a shell. Download the file, compare the
-fingerprint, and only then run it as root:
+So the one thing to check by hand is that `install.sh` itself is the genuine file: the SHA-256 of the
+**whole file** must be the value published for the release. Never pipe a download into a shell.
+Download the file, compare the value, and only then run it as root:
 
 ```
 curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://example.org/install.sh
-sh install.sh --fingerprint
-sed -n '/^# BEGIN RELEASE KEYS$/,/^# END RELEASE KEYS$/p' install.sh | sha256sum
+sha256sum install.sh
 ```
 
-Both of the last two commands must print the same value, and it must be the fingerprint published on
-the project's website **and** in the README of the repository (two independent places; if they differ,
-stop). The second command does not run any code from the file. Then:
+The printed value must be exactly the one published on the project's website **and** in the README of
+the repository (two independent places; if they differ, stop). `sha256sum` runs no code from the file.
+The value changes with every release, because the version floor is part of the file: take the one
+published for the release that is installed. The script's own `sh install.sh --fingerprint` is not a
+check, since a changed script can print anything. Then:
 
 ```
 ECHOFOG_RELEASE_URL=https://example.org/releases/v2 sh install.sh --preset relay --advertise 203.0.113.10 --lang en

@@ -239,4 +239,7 @@ func Rotation(next []keys.AKey, nextEpoch uint32) (string, error) {
 }
 
 // FileFingerprint is the lower-case hex SHA-256 of the whole script: the value that users compare.
-func FileFingerprint(script string) string { return "" }
+func FileFingerprint(script string) string {
+	sum := sha256.Sum256([]byte(script))
+	return hex.EncodeToString(sum[:])
+}

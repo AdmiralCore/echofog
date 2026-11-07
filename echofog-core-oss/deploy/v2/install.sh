@@ -12,13 +12,15 @@
 # Nothing is sent anywhere except the downloads.
 #
 #   curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://example.org/install.sh
-#   sh install.sh --fingerprint        # compare with the site and the README, then:
+#   sha256sum install.sh               # compare with the site and the README, then:
 #   ECHOFOG_RELEASE_URL=https://example.org/releases/v2 sh install.sh --preset relay --advertise 203.0.113.10
 #
-# Download this file, read it and compare the key fingerprint. Do not pipe a download into a shell.
+# Download this file, read it and compare the SHA-256 of the whole file (sha256sum install.sh) with
+# the value published on the website and in the README. Do not pipe a download into a shell.
 #
 # Options of the script itself (every other argument goes to "echofog-node v2 install"):
-#   --fingerprint     print the SHA-256 of the key block below and exit (nothing is downloaded)
+#   --fingerprint     print the SHA-256 of this file and of the key block below, and exit (nothing is
+#                     downloaded). It is not a proof: a changed script can print anything.
 #   --allow-rollback  allow a version below the installed one (a warning is printed); a version below
 #                     the signed min_version, or below the floor of this script, is never allowed
 #
@@ -58,7 +60,9 @@ done
 if [ "$FINGERPRINT" = 1 ]; then
 	[ -f "$0" ] || die "run the script from a file (sh install.sh --fingerprint), not from a pipe"
 	command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
-	sed -n '/^# BEGIN RELEASE KEYS$/,/^# END RELEASE KEYS$/p' "$0" | sha256sum | cut -d' ' -f1
+	echo "file $(sha256sum "$0" | cut -d' ' -f1)"
+	echo "keys $(sed -n '/^# BEGIN RELEASE KEYS$/,/^# END RELEASE KEYS$/p' "$0" | sha256sum | cut -d' ' -f1)"
+	echo "This is not a proof: a changed script can print anything. Compare the value of: sha256sum install.sh" >&2
 	exit 0
 fi
 
@@ -236,7 +240,7 @@ verify_release() {
 			new_epoch=$(sed -n 's/^new_epoch \([0-9][0-9]*\)$/\1/p' "$WORK/rotation.txt" | head -n 1)
 			new_fp=$(sed -n 's/^new_keys_fingerprint \([0-9a-f]\{64\}\)$/\1/p' "$WORK/rotation.txt" | head -n 1)
 			if [ -n "$new_epoch" ] && [ -n "$new_fp" ] && [ "${#new_epoch}" -le 9 ] && [ "$new_epoch" -gt "$KEY_EPOCH" ]; then
-				die "the release keys were rotated (key epoch $new_epoch). This install.sh is out of date: download the current install.sh from the release pages and compare its fingerprint (sh install.sh --fingerprint) with the published one; the new key block must have $new_fp. Nothing was installed"
+				die "the release keys were rotated (key epoch $new_epoch). This install.sh is out of date: download the current install.sh from the release pages and compare the SHA-256 of the whole file (sha256sum install.sh) with the published one; its key block must have the value $new_fp on the keys line of sh install.sh --fingerprint. Nothing was installed"
 			fi
 		fi
 	fi
