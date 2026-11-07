@@ -108,6 +108,11 @@ type Config struct {
 	// PubOf finds the account key behind a node ID (the directory); chats need it to open a
 	// direct conversation.
 	PubOf func(ctx context.Context, node [32]byte) ([32]byte, error)
+	// Groups is the register of the groups this node is in; the conversation engine is built with its
+	// rules (Rules, Conv, Members, SharedGroups). Nil turns the group calls off.
+	Groups *GroupBook
+	// Voice is the live roster of the voice rooms; nil turns GroupVoice off.
+	Voice VoiceRooms
 	// States tells the delivery state of the own messages; nil leaves them without one.
 	States StateSource
 	// Self is this node's account node ID, to refuse a link to oneself.
@@ -138,6 +143,8 @@ type App struct {
 	knocked map[[32]byte]time.Time
 	ntc     notices // notices for the UI (notice.go)
 	chats   chatState
+	hmu     sync.Mutex // history handed to newcomers: when, per group and key
+	handed  map[string]time.Time
 	fx      fileState
 }
 
@@ -159,7 +166,12 @@ func New(cfg Config) (*App, error) {
 	if !cfg.Mode.valid() {
 		return nil, fmt.Errorf("%w: %q", ErrMode, cfg.Mode)
 	}
-	return &App{cfg: cfg}, nil
+	a := &App{cfg: cfg}
+	if cfg.Groups != nil && cfg.Convs != nil {
+		cfg.Groups.attach(cfg.Convs.Log())
+		cfg.Convs.Log().OnChange(a.onGroupChange)
+	}
+	return a, nil
 }
 
 func (m Mode) valid() bool { return m == ModePublic || m == ModeHidden }

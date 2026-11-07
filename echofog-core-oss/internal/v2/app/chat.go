@@ -235,6 +235,9 @@ func (a *App) resolve(ctx context.Context, ref ChatRef, write bool) (convlog.Con
 	if err != nil {
 		return convlog.Conv{}, err
 	}
+	if ref.Kind == KindGroup {
+		return a.resolveGroup(cv, ref)
+	}
 	if ref.Kind != KindDM {
 		return convlog.Conv{}, ErrNoChat
 	}
@@ -371,6 +374,14 @@ func (a *App) entry(c convlog.Conv, meta convlog.Meta) (ConvEntry, bool) {
 		}
 	} else {
 		e.Kind = "group"
+		if a.cfg.Groups == nil {
+			return ConvEntry{}, false
+		}
+		r, ok := a.cfg.Groups.rec(c.Group)
+		if !ok {
+			return ConvEntry{}, false
+		}
+		e.Name = r.Genesis.Title
 	}
 	return e, true
 }
@@ -621,4 +632,23 @@ func (a *App) onChatChange(ch convlog.Change) {
 	for _, f := range subs {
 		f(out)
 	}
+}
+
+// resolveGroup turns a group reference into its conversation. A group this node does not keep, one
+// it was never let into and a name that is none look the same: ErrNoChat.
+func (a *App) resolveGroup(cv Convs, ref ChatRef) (convlog.Conv, error) {
+	if a.cfg.Groups == nil {
+		return convlog.Conv{}, ErrNoChat
+	}
+	if _, ok := a.cfg.Groups.rec(ref.ID); !ok {
+		return convlog.Conv{}, ErrNoChat
+	}
+	c := convlog.Group(ref.ID)
+	if err := cv.Log().Open(c); err != nil {
+		return convlog.Conv{}, ErrNoChat
+	}
+	if !cv.Log().Participant(c, cv.Log().Self()) {
+		return convlog.Conv{}, ErrNoChat
+	}
+	return c, nil
 }
