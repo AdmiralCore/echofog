@@ -125,8 +125,8 @@ func TestSignAndVerify(t *testing.T) {
 	}
 	late := strconv.Itoa(now + 31*24*3600)
 	expired, err := do(t, "verify", "--pub", r.pub, "--in", out, "--now", late)
-	if err != nil || !strings.Contains(strings.ToLower(expired), "expired") {
-		t.Errorf("an expired file must be reported as expired (the signature is still good): %v\n%s", err, expired)
+	if err == nil || !strings.Contains(strings.ToLower(expired), "expired") {
+		t.Errorf("an expired file must be reported as expired and exit nonzero (L4): %v\n%s", err, expired)
 	}
 }
 
@@ -237,5 +237,20 @@ func TestFirstFileTemplate(t *testing.T) {
 	}
 	if got := rules.Classify("RU", "KZ"); got != rp.DestNeighbor {
 		t.Errorf("RU to KZ is %v: the neighbours of the table belong in the first file", got)
+	}
+}
+
+// L2: the tool refuses a range that would make the whole internet a verified entry.
+func TestToolRefusesWideRanges(t *testing.T) {
+	r := newRig(t)
+	for _, c := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/7", "2000::/15"} {
+		out := filepath.Join(r.dir, "w.bin")
+		if _, err := do(t, "sign", "--key", r.key, "--body", r.body(t, `{"allowed_cidrs":["`+c+`"]}`), "--out", out, "--now", strconv.Itoa(now)); err == nil {
+			t.Errorf("%s was signed", c)
+		}
+		if _, err := os.Stat(out); err == nil {
+			t.Errorf("%s: an output file exists", c)
+			_ = os.Remove(out)
+		}
 	}
 }

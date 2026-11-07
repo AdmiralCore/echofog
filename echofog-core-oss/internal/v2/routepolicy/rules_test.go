@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -267,4 +269,54 @@ func FuzzParseAt(f *testing.F) {
 			t.Fatal("at valid_until the file must be expired and verify no entry")
 		}
 	})
+}
+
+// M1: the 45-day bound is compared as integers; a value near MaxInt64 must not wrap around it.
+func TestValidUntilNearMaxInt64IsRefused(t *testing.T) {
+	pub, priv := keys(t)
+	clk := &clockAt{rulesNow}
+	for _, vu := range []int64{9223372036854774784, 9223372036854775807, 9223372036854775806, 1 << 62} {
+		body := fmt.Sprintf(`{"seq":1,"valid_until":%d}`, vu)
+		if r, err := rp.ParseAt(rp.Sign(priv, []byte(body)), pub, 0, clk.now); !errors.Is(err, rp.ErrRules) {
+			t.Errorf("valid_until %d accepted: %v (%v)", vu, err, r != nil)
+		}
+	}
+	// The bound itself: exactly MaxValidity ahead passes, one second more does not.
+	edge := rulesNow.Add(rp.MaxValidity).Unix()
+	if _, err := rp.ParseAt(rp.Sign(priv, []byte(fmt.Sprintf(`{"seq":1,"valid_until":%d}`, edge))), pub, 0, clk.now); err != nil {
+		t.Errorf("the edge: %v", err)
+	}
+	if _, err := rp.ParseAt(rp.Sign(priv, []byte(fmt.Sprintf(`{"seq":1,"valid_until":%d}`, edge+1))), pub, 0, clk.now); !errors.Is(err, rp.ErrRules) {
+		t.Errorf("one second past the edge: %v", err)
+	}
+}
+
+// L2: no range that makes "the whole internet" a verified entry.
+func TestAllowedCIDRsMustBeSpecific(t *testing.T) {
+	pub, priv := keys(t)
+	clk := &clockAt{rulesNow}
+	vu := rulesNow.Add(time.Hour).Unix()
+	for _, c := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/7", "128.0.0.0/1", "2000::/15", "::/1", "8000::/8"} {
+		body := fmt.Sprintf(`{"seq":1,"valid_until":%d,"allowed_cidrs":[%q]}`, vu, c)
+		if _, err := rp.ParseAt(rp.Sign(priv, []byte(body)), pub, 0, clk.now); !errors.Is(err, rp.ErrRules) {
+			t.Errorf("%s accepted: %v", c, err)
+		}
+	}
+	for _, c := range []string{"10.0.0.0/8", "198.51.100.0/24", "2001:db8::/16", "2001:db8::/32", "203.0.113.7/32"} {
+		body := fmt.Sprintf(`{"seq":1,"valid_until":%d,"allowed_cidrs":[%q]}`, vu, c)
+		if _, err := rp.ParseAt(rp.Sign(priv, []byte(body)), pub, 0, clk.now); err != nil {
+			t.Errorf("%s refused: %v", c, err)
+		}
+	}
+}
+
+// L1: the only way to read a deployed rules file is ParseAt, which knows about expiry.
+func TestNoExportedParseWithoutExpiry(t *testing.T) {
+	src, err := os.ReadFile("rules.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`(?m)^func Parse\(`).Match(src) {
+		t.Fatal("routepolicy still exports Parse: a file read with it never expires")
+	}
 }
