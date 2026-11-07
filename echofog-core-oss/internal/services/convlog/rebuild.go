@@ -219,7 +219,7 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	}
 	l.countUnread(bc, meta)
 	for id, st := range meta.Chans {
-		st.Unread = l.countAbove(chanOrderPrefix(bc, id), st.ReadLamport, bc, meta.Conv)
+		st.Unread, st.Mentions = l.countAbove(chanOrderPrefix(bc, id), st.ReadLamport, bc, meta.Conv)
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -240,7 +240,7 @@ func (l *Log) countUnread(bc string, meta *Meta) {
 	if err != nil {
 		return
 	}
-	n := 0
+	n, named := 0, 0
 	p := len(orderPrefix(bc))
 	for _, e := range entries {
 		if len(e.Key) < p+8 {
@@ -251,7 +251,10 @@ func (l *Log) countUnread(bc string, meta *Meta) {
 		}
 		if m, ok := l.render(bc, meta.Conv, string(e.Value)); ok && !m.Mine {
 			n++
+			if m.Mentioned {
+				named++
+			}
 		}
 	}
-	meta.Unread = n
+	meta.Unread, meta.Mentions = n, named
 }

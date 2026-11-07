@@ -315,7 +315,7 @@ func (l *Log) MarkReadIn(c Conv, channel string, upTo EventID) error {
 	if v.Lamport > st.ReadLamport {
 		st.ReadLamport = v.Lamport
 	}
-	st.Unread = l.countAbove(chanOrderPrefix(bc, channel), st.ReadLamport, bc, meta.Conv)
+	st.Unread, st.Mentions = l.countAbove(chanOrderPrefix(bc, channel), st.ReadLamport, bc, meta.Conv)
 	t.views, t.order = map[string]*View{}, nil
 	err := t.commit(nil, "")
 	ch := &Change{Conv: c, Meta: *meta, Rev: l.nextRev()}
@@ -327,12 +327,12 @@ func (l *Log) MarkReadIn(c Conv, channel string, upTo EventID) error {
 }
 
 // countAbove counts the messages of others in an order index above the read point.
-func (l *Log) countAbove(prefix []byte, read uint64, bc, conv string) int {
+func (l *Log) countAbove(prefix []byte, read uint64, bc, conv string) (int, int) {
 	entries, err := l.st.FindValuesSeek(prefix, prefix, 10000)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	n := 0
+	n, named := 0, 0
 	p := len(prefix)
 	for _, e := range entries {
 		if len(e.Key) < p+8 {
@@ -343,7 +343,10 @@ func (l *Log) countAbove(prefix []byte, read uint64, bc, conv string) int {
 		}
 		if m, ok := l.render(bc, conv, string(e.Value)); ok && !m.Mine {
 			n++
+			if m.Mentioned {
+				named++
+			}
 		}
 	}
-	return n
+	return n, named
 }

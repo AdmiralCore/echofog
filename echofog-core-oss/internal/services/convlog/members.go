@@ -48,7 +48,7 @@ const (
 	PermInvite         uint32 = 1 << 13 // hand out invitations
 	PermManageChannels uint32 = 1 << 14 // create, change and order channels and categories
 
-	PermAll uint32 = 1<<15 - 1
+	PermAll uint32 = 1<<16 - 1
 )
 
 // ownerRank is the rank of a group's owner: nobody acts on them.
@@ -94,7 +94,7 @@ func PermRights(perms uint32) Rights {
 	return Rights{Member: true, Send: has(PermSend), Media: has(PermMedia), Links: has(PermLinks),
 		Threads: has(PermThreads), React: has(PermReact), Pin: has(PermPin), Moderate: has(PermDelete),
 		Manage: has(PermManageChannels), Invite: has(PermInvite), Voice: has(PermVoice), Stream: has(PermStream),
-		Roles: has(PermManageRoles)}
+		Roles: has(PermManageRoles), MentionAll: has(PermMentionAll)}
 }
 
 func rightsOf(r Role) Rights { return PermRights(r.Perms) }

@@ -78,7 +78,7 @@ func (w *voiceWorld) advance(d time.Duration) {
 }
 
 // newVoiceWorld makes a group of size members with a voice room "lounge" known to all.
-func newVoiceWorld(t *testing.T, size int, roles map[int]string) *voiceWorld {
+func newVoiceWorld(t testing.TB, size int, roles map[int]string) *voiceWorld {
 	t.Helper()
 	w := &voiceWorld{cluster: newCluster(t, size, size), now: time.Unix(1_800_000_000, 0)}
 	w.net = &liveNet{rost: map[[32]byte]*VoiceRoster{}, down: map[[32]byte]bool{}}
@@ -202,8 +202,14 @@ func TestVoiceRosterNeedsALiveSessionAndCatchesUp(t *testing.T) {
 // A stranger, a member without the voice right and a payload for a room that is no voice room are ignored.
 func TestVoiceRosterIgnoresThoseWhoMayNotBeThere(t *testing.T) {
 	w := newVoiceWorld(t, 4, map[int]string{3: "subscriber"})
-	w.join(t, 3, VoiceState{Mic: true}) // a reader: no voice right
-	w.net.drain(t)
+	// a reader has no voice right: its own roster refuses, and a message it makes by hand is dropped by the others
+	if err := w.rost[3].Join(context.Background(), w.group, "lounge", VoiceState{Mic: true}); err != ErrNoVoice {
+		t.Fatalf("a reader joined a voice room: %v", err)
+	}
+	forged := encodeRoster(rosterState, w.group.ID, 1, VoiceState{Mic: true}, "lounge")
+	for _, i := range []int{0, 1, 2} {
+		w.rost[i].Receive(context.Background(), w.members[3].a.node, forged)
+	}
 	if len(w.who(0)) != 0 || len(w.who(1)) != 0 {
 		t.Fatal("a member without the voice right is listed")
 	}
@@ -216,16 +222,15 @@ func TestVoiceRosterIgnoresThoseWhoMayNotBeThere(t *testing.T) {
 	// somebody outside the group: its payload is not taken
 	outsider := newAcct(t)
 	w.cluster.n.pubs[outsider.node] = outsider.pub
-	stray := NewVoiceRoster(VoiceConfig{
-		Pub: outsider.pub, Log: w.members[0].e.Log(), Dir: w.n, Net: livePort{w.net, outsider.node},
-		Groups:  func(id convlog.ConvID) (convlog.Conv, bool) { return w.group, true },
-		Members: func(convlog.Conv) [][32]byte { return [][32]byte{w.members[0].a.pub} },
-		Now:     w.clock,
-	})
-	_ = stray.Join(context.Background(), w.group, "lounge", VoiceState{Mic: true})
-	w.net.drain(t)
+	w.rost[0].Receive(context.Background(), outsider.node, encodeRoster(rosterState, w.group.ID, 1, VoiceState{Mic: true}, "lounge"))
 	if len(w.who(0)) != 0 {
 		t.Fatal("an outsider is listed")
+	}
+	// a payload that is not a roster message is not one
+	for _, junk := range [][]byte{nil, {1}, make([]byte, 28), make([]byte, 61)} {
+		if w.rost[0].Receive(context.Background(), w.members[1].a.node, junk) {
+			t.Fatalf("%d bytes of junk taken for a roster message", len(junk))
+		}
 	}
 }
 
@@ -280,9 +285,26 @@ func TestVoiceRosterIsNotFinalWhileTheMembershipIsIncomplete(t *testing.T) {
 	if _, complete := r.Who(c.group, "lounge"); complete {
 		t.Fatal("a member that never got the roster shows the room as final")
 	}
-	c.n.cut = nil
-	c.syncAll(3)
+	// the roster reaches the member (an invitation carries it; a sync brings it once the group service knows the member)
+	if _, _, err := c.members[2].e.Log().Ingest(c.group, c.roster); err != nil {
+		t.Fatal(err)
+	}
 	if _, complete := r.Who(c.group, "lounge"); !complete {
 		t.Fatal("still incomplete after the sync")
 	}
+}
+
+// Whatever a peer sends, nothing panics and the list stays within its bounds.
+func FuzzVoiceReceive(f *testing.F) {
+	w := newVoiceWorld(f, 3, nil)
+	f.Add(encodeRoster(rosterState, w.group.ID, 5, VoiceState{Mic: true}, "lounge"))
+	f.Add(encodeRoster(rosterLeave, w.group.ID, 6, VoiceState{}, "lounge"))
+	f.Add([]byte{})
+	f.Add(bytesOf(0xff, 60))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		w.rost[0].Receive(context.Background(), w.members[1].a.node, b)
+		if list, _ := w.rost[0].Who(w.group, "lounge"); len(list) > 2 {
+			t.Fatalf("%d participants in a room of a group of three", len(list))
+		}
+	})
 }

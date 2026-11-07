@@ -37,7 +37,8 @@ var _ = [1]struct{}{}[uint32(groups.PermAll)^convlog.PermAll|uint32(groups.PermS
 	uint32(groups.PermJoinVoice)^convlog.PermVoice|uint32(groups.PermPublishStream)^convlog.PermStream|
 	uint32(groups.PermLinks)^convlog.PermLinks|uint32(groups.PermThreads)^convlog.PermThreads|
 	uint32(groups.PermPin)^convlog.PermPin|uint32(groups.PermReact)^convlog.PermReact|
-	uint32(groups.PermInvite)^convlog.PermInvite|uint32(groups.PermManageChannels)^convlog.PermManageChannels]
+	uint32(groups.PermInvite)^convlog.PermInvite|uint32(groups.PermManageChannels)^convlog.PermManageChannels|
+	uint32(groups.PermMentionAll)^convlog.PermMentionAll]
 
 func roleOfLog(r convlog.Role) groups.Role {
 	return groups.Role{Name: r.Name, Rank: r.Rank, Permissions: groups.PermissionMask(r.Perms), Title: r.Title, Color: r.Color}

@@ -34,7 +34,9 @@ const (
 	PermInvite         PermissionMask = 1 << 13 // Hand out invitations
 	PermManageChannels PermissionMask = 1 << 14 // Create, change and order channels and categories
 
-	PermAll PermissionMask = 1<<15 - 1
+	PermMentionAll PermissionMask = 1 << 15 // Write @all: a message that names everybody
+
+	PermAll PermissionMask = 1<<16 - 1
 
 	// permWriter is what a member who takes part may do
 	permWriter = PermSendMessages | PermSendMedia | PermJoinVoice | PermLinks | PermThreads | PermReact | PermInvite
@@ -65,7 +67,7 @@ var (
 	RoleModerator = Role{
 		Name:        "moderator",
 		Rank:        25,
-		Permissions: permWriter | PermDeleteMessages | PermKickMembers | PermPin,
+		Permissions: permWriter | PermDeleteMessages | PermKickMembers | PermPin | PermMentionAll,
 	}
 
 	RoleMember = Role{

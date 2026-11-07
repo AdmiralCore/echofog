@@ -47,7 +47,7 @@ func TestMentionsAreMarkedAndCountedApart(t *testing.T) {
 	rules := testRules{founder: f.id}
 	c := Group("mentions2")
 	lf, lx := groupReplica(t, f, rules), groupReplica(t, x, rules)
-	ingest(t, lx, c, member(t, lf, c, roster(f, "owner", x, "member")))
+	ingest(t, lx, c, member(t, lf, c, roster(f, "owner", x, "moderator"))) // a moderator may write @all
 	talk, _, err := lf.AppendChannel(c, ChannelSpec{ID: "talk", Name: "talk"})
 	if err != nil {
 		t.Fatal(err)

@@ -52,6 +52,9 @@ type View struct {
 	Thread   string `json:"thread,omitempty"`
 	Channel  string `json:"channel,omitempty"`  // a group's channel ("" the main one)
 	Withheld bool   `json:"withheld,omitempty"` // arrived without its body and no delete explains it
+	// Mentions are the peer ids (hex) the message names, MentionsAll that it names everybody.
+	Mentions    []string `json:"mentions,omitempty"`
+	MentionsAll bool     `json:"mentions_all,omitempty"`
 
 	// Edits keeps each editor's latest edit; only the author's counts (see Render), but the author
 	// is not known while this is a stub.
@@ -289,6 +292,7 @@ func (v *View) Render(conv, self string) Message {
 	if v.ThreadTitle != nil {
 		m.ThreadTitle = v.ThreadTitle.Text
 	}
+	m.Mentions, m.MentionsAll, m.Mentioned = v.Mentions, v.MentionsAll, !m.Mine && v.names(self)
 	m.Kind = "text"
 	switch {
 	case v.Type == MsgTypeSystem:
@@ -303,6 +307,7 @@ func (v *View) Render(conv, self string) Message {
 	if del, by := v.deleted(); del {
 		m.Deleted, m.DeletedBy = true, by
 		m.Text, m.Metadata, m.Withheld, m.File = "", "", false, nil
+		m.Mentions, m.MentionsAll, m.Mentioned = nil, false, false
 	} else if e, ok := v.edit(); ok {
 		m.Text, m.Edited, m.EditedAt = e.Text, true, e.TS
 	}
