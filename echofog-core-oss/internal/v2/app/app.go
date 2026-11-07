@@ -108,6 +108,9 @@ type Config struct {
 	// PubOf finds the account key behind a node ID (the directory); chats need it to open a
 	// direct conversation.
 	PubOf func(ctx context.Context, node [32]byte) ([32]byte, error)
+	// Groups is the register of the groups this node is in; the conversation engine is built with its
+	// rules (Rules, Conv, Members, SharedGroups). Nil turns the group calls off.
+	Groups *GroupBook
 	// States tells the delivery state of the own messages; nil leaves them without one.
 	States StateSource
 	// Self is this node's account node ID, to refuse a link to oneself.
