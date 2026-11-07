@@ -321,3 +321,23 @@ DHT/relay/выхода; нет — если работает только с л�
 правок. Не сделаны (остаются `ErrV2NotBuilt`): звонки групп и комнат (ждут чаты v2), `GetCallPath`,
 `GetCallRelays`, `SwitchCallRelay`, `InviteToCall`. Медиа принимается только от участников комнаты,
 в которой находится узел (`Runtime.SetCallAdmit` из состава комнаты, кэш 100 мс).
+
+## T11.3d: домены «чаты», «группы и каналы», «файлы» при `protocol: 2`
+
+`NodeApi.AttachV2Messenger(app)` (после `AttachV2`) подставляет `v2MsgBackend` (`backends_v2_chat.go`, `_group.go`, `_file.go`) на
+место `chat`, `group` и `file`. DTO — те же, что у v1 (`ChatMessage`, `ConversationDTO`, `ConvChange`, `GroupDTO`, `GroupMemberDTO`,
+`GroupInviteDTO`, `GroupRoleDTO`, `ChannelDTO`, `GroupEvent`, `dto.FileTransferDTO`); события десктоп отдаёт прежними именами:
+`conv:change` (`SubscribeConversations`), `group:event` (`SubscribeGroupEvents`), `file:transfer` (`OnFileTransfer`), `new_message` и
+`message:state` в v2 молчат (статус сообщения и новое сообщение приходят в `conv:change`). Подписки, сделанные до `AttachV2Messenger`,
+запоминаются и повторяются при подключении; новая подписка заменяет прежнюю (`SubscribeConversations`, `SubscribeGroupEvents`).
+
+- **Имена людей.** Сообщение называет автора peer ID v1 (хеш ключа), а контакты и участники — node ID. Бэкенд переводит `Author`,
+  `DeletedBy`, `PinnedBy`, `Mentions`, `Reactions[].By`, журнал модерации в node ID (`app.NodeOfPeer`); неизвестный остаётся как есть.
+- **Виды групп:** v1 `group`/`channel`/`swarm` ↔ app `private`/`channel`/`open`.
+- **Работают:** все методы чатов (кроме сохранённых и `ResetEncryptionSession`), каналы/категории/треды, роли, приглашения и заявки,
+  модерация, файлы (отправка, приём, группа), `GetMessages`, `SendMessage`, `GetGroupMessages`, `SendGroupMessage`.
+- **ErrV2NotBuilt:** `ListSavedMessages`, `SaveMessage`, `UnsaveMessage`, `ResetEncryptionSession`, `AddGroupMember` (вход по приглашению),
+  `DeleteGroup` (удалить для всех), `GroupSnapshotExport`/`GroupSnapshotImport`.
+- **Новые методы фасада (T7.7), только при v2:** `ChatNotify`/`SetChatNotify` (`all|mentions|none`, на устройстве), `ChatFollow`/
+  `ChatFollowing` (подписка на тред), `GroupVoice` (`VoiceMemberDTO`, состав голосовой комнаты). При `protocol: 1` — `ErrV2NotBuilt`.
+- **Не передаётся по сети:** канал и тред файла группы (в предложении файла нет такого поля) — только в ответе вызова.
