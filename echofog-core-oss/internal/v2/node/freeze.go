@@ -8,16 +8,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 )
 
 // The freeze of a network (T6.4d). A network that freezes TCP stops a flow to a foreign address once
 // the server has sent 12 to 20 KiB. The watcher below sees that on the sockets of the carriers; two
-// such stops at one address mark the network, by its identifier, for a day; and from then on the
-// row of a mobile network towards abroad applies to every new path on it.
+// such stops at one address mark the network, by its identifier; and from then on the row of a
+// mobile network towards abroad applies to every new path on it.
+//
+// The mark costs the direct foreign paths, and a peer chooses which addresses the client dials, so
+// three limits keep a hostile or slow server from earning it: only a young flow counts (the
+// handshake and the first data, not a long request), a stop does not count while the same address
+// answers on another flow, and without a verified entry the mark lasts an hour, not a day.
 
-// defaultFreezeStall is how long a flow that wrote and heard nothing back counts as stopped.
-const defaultFreezeStall = 10 * time.Second
+const (
+	// defaultFreezeStall is how long a flow that wrote and heard nothing back counts as stopped.
+	defaultFreezeStall = 10 * time.Second
+	// defaultFreezeFlowAge is the oldest a flow may be, from its open, for its stop to count.
+	defaultFreezeFlowAge = 30 * time.Second
+)
 
 // SetNetworkID tells the runtime which network the client is on now. A change forgets what was
 // learned about the old one and about the new one: a freeze belongs to a network, not to the device.
@@ -48,10 +58,24 @@ func (r *Runtime) decide(own string, dest routepolicy.DestClass) routepolicy.Dec
 	return r.rules.DecideFrozen(own, r.NetClass(), dest, r.frozen())
 }
 
-// noteStall records a stalled flow to ip. It returns true when it marked the network, and then
-// tells the application.
+// freezeTTL is how long a mark lasts: a day when the client knows a verified entry to go through,
+// an hour when it does not.
+func (r *Runtime) freezeTTL() time.Duration {
+	if r.rules.HasVerifiedEntries() {
+		return routepolicy.FreezeTTL
+	}
+	return routepolicy.FreezeTTLNoEntry
+}
+
+// noteStall records a stalled flow to ip on the current network, with no flow identity.
 func (r *Runtime) noteStall(ip netip.Addr, bytes int) bool {
-	if !r.freeze.NoteStall(r.NetworkID(), ip, bytes) {
+	return r.noteStallFlow(r.NetworkID(), ip, bytes, 0, time.Time{})
+}
+
+// noteStallFlow records a stalled flow of network netID. It returns true when it marked the
+// network, and then tells the application.
+func (r *Runtime) noteStallFlow(netID string, ip netip.Addr, bytes int, flow uint64, waitingSince time.Time) bool {
+	if !r.freeze.NoteStallFlow(netID, ip, bytes, flow, waitingSince, r.freezeTTL()) {
 		return false
 	}
 	r.events.Emit(Event{Kind: EventNetworkFrozen, At: time.Now(),
@@ -94,24 +118,36 @@ func (r *Runtime) freezeConn(c net.Conn, ip netip.Addr) net.Conn {
 	if stall <= 0 {
 		stall = defaultFreezeStall
 	}
-	return &watchConn{Conn: c, r: r, ip: ip, stall: stall}
+	maxAge := r.cfg.FreezeFlowAge
+	if maxAge <= 0 {
+		maxAge = defaultFreezeFlowAge
+	}
+	return &watchConn{Conn: c, r: r, ip: ip, stall: stall, maxAge: maxAge,
+		id: r.flowSeq.Add(1), netID: r.NetworkID(), opened: r.carrierClock.Now()}
 }
 
 // watchConn counts the bytes a flow heard. When it has written something and heard nothing for the
 // stall time, it says the flow stopped, with the bytes heard so far; the tracker decides whether
-// that is the freeze. A flow that is only quiet, with nothing waiting for an answer, says nothing.
+// that is the freeze. A flow that is only quiet, with nothing waiting for an answer, says nothing;
+// neither does one older than maxAge, or one that outlived its network. Every byte heard is told to
+// the tracker, because an address that answers one flow has not frozen the others.
 type watchConn struct {
 	net.Conn
-	r     *Runtime
-	ip    netip.Addr
-	stall time.Duration
+	r      *Runtime
+	ip     netip.Addr
+	stall  time.Duration
+	maxAge time.Duration
+	id     uint64
+	netID  string
+	opened time.Time
 
-	mu      sync.Mutex
-	heard   int
-	waiting bool // something was written and no answer has come since
-	timer   *time.Timer
-	noted   bool
-	closed  bool
+	mu       sync.Mutex
+	heard    int
+	waiting  bool      // something was written and no answer has come since
+	waitFrom time.Time // when that wait began
+	timer    carrier.Timer
+	noted    bool
+	closed   bool
 }
 
 func (c *watchConn) Read(p []byte) (int, error) {
@@ -125,6 +161,7 @@ func (c *watchConn) Read(p []byte) (int, error) {
 			c.timer = nil
 		}
 		c.mu.Unlock()
+		c.r.freeze.NoteData(c.netID, c.ip, c.id)
 	}
 	return n, err
 }
@@ -133,9 +170,11 @@ func (c *watchConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
 		c.mu.Lock()
-		c.waiting = true
+		if !c.waiting {
+			c.waiting, c.waitFrom = true, c.r.carrierClock.Now()
+		}
 		if c.timer == nil && !c.noted && !c.closed {
-			c.timer = time.AfterFunc(c.stall, c.fire)
+			c.timer = c.r.carrierClock.AfterFunc(c.stall, c.fire)
 		}
 		c.mu.Unlock()
 	}
@@ -149,9 +188,12 @@ func (c *watchConn) fire() {
 		return
 	}
 	c.noted = true
-	heard := c.heard
+	heard, from := c.heard, c.waitFrom
 	c.mu.Unlock()
-	c.r.noteStall(c.ip, heard)
+	if c.r.carrierClock.Now().Sub(c.opened) > c.maxAge || c.r.NetworkID() != c.netID {
+		return // an old flow is a long request, and a flow of another network says nothing about this one
+	}
+	c.r.noteStallFlow(c.netID, c.ip, heard, c.id, from)
 }
 
 func (c *watchConn) Close() error {

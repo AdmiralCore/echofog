@@ -225,6 +225,8 @@ type Runtime struct {
 	freeze *routepolicy.FreezeTracker
 	netMu  sync.Mutex
 	netID  string
+	// flowSeq numbers the flows the freeze watcher sees.
+	flowSeq atomic.Uint64
 
 	// The sources of the own country (T6.4c); countryLast is the one last reported.
 	countryMu   sync.Mutex
@@ -384,7 +386,7 @@ func New(cfg Config) (*Runtime, error) {
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}
-	r.freeze = routepolicy.NewFreezeTracker(nil)
+	r.freeze = routepolicy.NewFreezeTracker(carrierClock.Now)
 	if r.rules == nil {
 		r.rules = routepolicy.Default()
 	}
