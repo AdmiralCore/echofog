@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/v2/convsync"
@@ -179,5 +181,55 @@ type GroupEvent struct {
 	Kind, Group, Title, From, Reason string
 }
 
-// SubscribeGroupEvents calls fn for every such event until cancel is called (stub).
-func (a *App) SubscribeGroupEvents(fn func(GroupEvent)) (cancel func()) { return func() {} }
+// groupEvents holds the subscribers of group events.
+type groupEvents struct {
+	mu   sync.Mutex
+	subs map[int]func(GroupEvent)
+	next int
+	// addedAt: when this node was let into a group, for the window in which its history arrives
+	addedAt map[string]time.Time
+}
+
+// historyWindow is how long after being let in a group the messages of others count as its earlier history.
+const historyWindow = 30 * time.Second
+
+func (a *App) catchingUp(group string) bool {
+	a.gev.mu.Lock()
+	defer a.gev.mu.Unlock()
+	t, ok := a.gev.addedAt[group]
+	return ok && a.cfg.Clock.Now().Sub(t) < historyWindow
+}
+
+// SubscribeGroupEvents calls fn for every such event until cancel is called.
+func (a *App) SubscribeGroupEvents(fn func(GroupEvent)) (cancel func()) {
+	a.gev.mu.Lock()
+	defer a.gev.mu.Unlock()
+	if a.gev.subs == nil {
+		a.gev.subs = map[int]func(GroupEvent){}
+	}
+	a.gev.next++
+	id := a.gev.next
+	a.gev.subs[id] = fn
+	return func() {
+		a.gev.mu.Lock()
+		delete(a.gev.subs, id)
+		a.gev.mu.Unlock()
+	}
+}
+
+func (a *App) emitGroup(ev GroupEvent) {
+	if ev.Title == "" {
+		if g, err := a.GroupInfoOf(ev.Group); err == nil {
+			ev.Title = g.Title
+		}
+	}
+	a.gev.mu.Lock()
+	subs := make([]func(GroupEvent), 0, len(a.gev.subs))
+	for _, f := range a.gev.subs {
+		subs = append(subs, f)
+	}
+	a.gev.mu.Unlock()
+	for _, f := range subs {
+		f(ev)
+	}
+}

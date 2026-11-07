@@ -153,6 +153,7 @@ type App struct {
 	hmu     sync.Mutex // history handed to newcomers: when, per group and key
 	handed  map[string]time.Time
 	fx      fileState
+	gev     groupEvents
 }
 
 // New creates an App.

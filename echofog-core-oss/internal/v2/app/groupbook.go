@@ -72,6 +72,8 @@ type groupRec struct {
 	// JoinSent: our own join event was written for the invitation we hold; it is written once, so that a
 	// member who was removed does not come back by themselves.
 	JoinSent bool `json:"joinSent,omitempty"`
+	// Added: this node was let in and the screen was told of it, once.
+	Added bool `json:"added,omitempty"`
 }
 
 // GroupBook is the register of the groups this node is in and the group rules the conversation

@@ -497,7 +497,21 @@ func (b *v2MsgBackend) SubscribeGroupEvents(cb func(GroupEvent)) {
 	if cb == nil {
 		return
 	}
-	b.cancelGroup = b.app.SubscribeChats(func(c app.ConvChange) {
+	cancelEv := b.app.SubscribeGroupEvents(func(ev app.GroupEvent) {
+		switch ev.Kind {
+		case "requests", "added", "removed", "history":
+		default:
+			return
+		}
+		title := ev.Title
+		if title == "" {
+			if g, err := b.app.GroupInfoOf(ev.Group); err == nil {
+				title = g.Title
+			}
+		}
+		cb(GroupEvent{Kind: ev.Kind, GroupID: ev.Group, Title: title, From: ev.From, Reason: ev.Reason})
+	})
+	cancelChats := b.app.SubscribeChats(func(c app.ConvChange) {
 		if c.Ref.Kind != app.KindGroup {
 			return
 		}
@@ -515,4 +529,5 @@ func (b *v2MsgBackend) SubscribeGroupEvents(cb func(GroupEvent)) {
 			}
 		}
 	})
+	b.cancelGroup = func() { cancelEv(); cancelChats() }
 }
