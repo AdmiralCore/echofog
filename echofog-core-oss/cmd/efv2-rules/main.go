@@ -217,7 +217,7 @@ func cmdSign(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		prev, err := rp.Parse(raw, pub, 0)
+		prev, err := rp.ParseAt(raw, pub, 0, now)
 		if err != nil {
 			return fmt.Errorf("--prev is not a file of this key: %w", err)
 		}
@@ -293,9 +293,10 @@ func cmdVerify(args []string, stdout io.Writer) error {
 		return err
 	}
 	if rules.Expired() {
-		_, err = fmt.Fprintf(stdout, "seq %d, EXPIRED on %s: the signature is good; verified entries no longer count and the restrictions of the file stay\n",
+		// Printed for the curator, and a nonzero exit for the scripts: a monthly update is overdue.
+		fmt.Fprintf(stdout, "seq %d, EXPIRED on %s: the signature is good; verified entries no longer count and the restrictions of the file stay\n",
 			rules.Seq, rules.ValidUntil().UTC().Format(time.RFC3339))
-		return err
+		return errors.New("the rules file has expired")
 	}
 	left := int(rules.ValidUntil().Sub(now()).Hours() / 24)
 	_, err = fmt.Fprintf(stdout, "seq %d, valid until %s (%d days left)\n", rules.Seq, rules.ValidUntil().UTC().Format(time.RFC3339), left)

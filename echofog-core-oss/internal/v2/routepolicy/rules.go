@@ -20,6 +20,10 @@ const (
 	// MaxRulesFile bounds the file before anything is decoded.
 	MaxRulesFile = 64 << 10
 	maxCIDRs     = 256
+	// minBits4 and minBits6 are the widest verified range a file may name: "the whole internet" is
+	// not an entry list.
+	minBits4     = 8
+	minBits6     = 16
 	maxASN       = 1024
 	maxNeighbors = 64
 )
@@ -42,15 +46,10 @@ func bad(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrRules, fmt.Sprintf(format, a...))
 }
 
-// Parse verifies and decodes a signed rules file (signature 64 bytes, then the JSON body). minSeq is
+// parse verifies and decodes a signed rules file (signature 64 bytes, then the JSON body). minSeq is
 // the highest sequence number seen before: an older file is refused. The file can only tighten the
 // built-in table: a neighbour listed in it still decides like a foreign country, a limit above the
 // table's own does nothing and nothing in it enables a carrier.
-func Parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, error) {
-	r, _, err := parse(data, pub, minSeq)
-	return r, err
-}
-
 func parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, *rulesBody, error) {
 	if len(pub) != ed25519.PublicKeySize {
 		return nil, nil, bad("no rules key")
@@ -81,6 +80,9 @@ func parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, *rulesBod
 		p, err := netip.ParsePrefix(s)
 		if err != nil {
 			return nil, nil, bad("allowed_cidrs %q", s)
+		}
+		if (p.Addr().Is4() && p.Bits() < minBits4) || (!p.Addr().Is4() && p.Bits() < minBits6) {
+			return nil, nil, bad("allowed_cidrs %q is too wide (at least /%d for IPv4, /%d for IPv6)", s, minBits4, minBits6)
 		}
 		r.allowed = append(r.allowed, p.Masked())
 	}
@@ -138,10 +140,11 @@ func ParseAt(data []byte, pub ed25519.PublicKey, minSeq uint64, now func() time.
 	if b.ValidUntil <= 0 {
 		return nil, bad("valid_until is required")
 	}
-	until := time.Unix(b.ValidUntil, 0)
-	if until.After(now().Add(MaxValidity)) {
+	// Integers, not times: time.Unix wraps near MaxInt64 and would slip past a time comparison.
+	if b.ValidUntil > now().Unix()+int64(MaxValidity/time.Second) {
 		return nil, bad("valid_until is more than %s ahead", MaxValidity)
 	}
+	until := time.Unix(b.ValidUntil, 0)
 	r.validUntil, r.now = until, now
 	return r, nil
 }
