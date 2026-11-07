@@ -997,3 +997,134 @@ func TestVoiceRosterComesFromTheRuntimeOnly(t *testing.T) {
 		t.Errorf("the room's log holds %d messages", len(page.Messages))
 	}
 }
+
+func letters(w *gWorld, n *gNode) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.toNode[n.node]
+}
+
+func TestBannedFounderGetsNothingMore(t *testing.T) {
+	w, ns, id := team(t, 3)
+	alice, bob, carol := ns[0], ns[1], ns[2]
+	ctx := context.Background()
+	if err := alice.app.GroupTransfer(ctx, id, bob.nodeHex()); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if err := bob.app.GroupRemove(ctx, id, alice.nodeHex(), true); err != nil {
+		t.Fatalf("ban the founder: %v", err)
+	}
+	w.drain()
+	before := letters(w, alice)
+	for _, text := range []string{"раз", "два", "три"} {
+		if _, err := carol.app.ChatSend(ctx, gref(id, ""), app.SendReq{Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.drain()
+	if got := letters(w, alice); got != before {
+		t.Fatalf("the banned founder got %d letters after the ban", got-before)
+	}
+	for _, n := range []*gNode{bob, carol} {
+		for _, m := range n.book.Members(convlog.Group(id)) {
+			if m == alice.pub {
+				t.Fatal("the member list still names the banned founder")
+			}
+		}
+	}
+}
+
+func TestRemovedIssuerIsNotAMemberAnyMore(t *testing.T) {
+	w, ns := newGroupWorld(t, 3)
+	alice, bob, carol := ns[0], ns[1], ns[2]
+	ctx := context.Background()
+	g, _ := alice.app.CreateGroup(ctx, "Команда", "", app.GroupPrivate)
+	i1, _ := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: time.Hour})
+	if _, err := bob.app.JoinGroup(ctx, i1.Link); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	i2, err := bob.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("a member's invitation: %v", err)
+	}
+	if _, err := carol.app.JoinGroup(ctx, i2.Link); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if len(memberRoles(t, carol, g.ID)) != 3 {
+		t.Fatal("carol is not in")
+	}
+	if err := alice.app.GroupRemove(ctx, g.ID, bob.nodeHex(), true); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	for _, m := range carol.book.Members(convlog.Group(g.ID)) {
+		if m == bob.pub {
+			t.Fatal("the member list names the removed one who let carol in")
+		}
+	}
+}
+
+func TestRepeatedJoinMessagesSendTheHistoryOnce(t *testing.T) {
+	w, ns := newGroupWorld(t, 2)
+	alice, bob := ns[0], ns[1]
+	ctx := context.Background()
+	g, _ := alice.app.CreateGroup(ctx, "Закрытая", "", app.GroupPrivate)
+	for i := 0; i < 20; i++ {
+		if _, err := alice.app.ChatSend(ctx, gref(g.ID, ""), app.SendReq{Text: "сообщение"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv, _ := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: time.Hour})
+	pm := &chatpb.PersonalMessageProto{Metadata: `fogjoin2:{"v":1,"g":"` + g.ID + `","n":"` + inv.Nonce + `","p":"` + hex.EncodeToString(bob.pub[:]) + `"}`}
+	base := letters(w, bob)
+	alice.app.OnGroupMessage(ctx, bob.node, pm)
+	first := letters(w, bob) - base
+	if first == 0 {
+		t.Fatal("the first request got no history")
+	}
+	for i := 0; i < 29; i++ {
+		alice.app.OnGroupMessage(ctx, bob.node, pm)
+	}
+	if got := letters(w, bob) - base; got != first {
+		t.Fatalf("30 requests brought %d letters, the first one %d", got, first)
+	}
+	w.clk.off.Store(int64(11 * time.Minute))
+	alice.app.OnGroupMessage(ctx, bob.node, pm)
+	if got := letters(w, bob) - base; got <= first {
+		t.Fatal("after the pause a new request got nothing")
+	}
+}
+
+func TestWaitingEntriesExpire(t *testing.T) {
+	w, ns := newGroupWorld(t, 3)
+	alice, bob, carol := ns[0], ns[1], ns[2]
+	ctx := context.Background()
+	g, _ := alice.app.CreateGroup(ctx, "Закрытая", "", app.GroupPrivate)
+	ask, _ := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: 20 * 24 * time.Hour, Approval: true})
+	gone, _ := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: 20 * 24 * time.Hour})
+	_ = alice.app.GroupInviteRevoke(ctx, g.ID, gone.Nonce)
+	w.drain()
+	if _, err := bob.app.JoinGroup(ctx, ask.Link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := carol.app.JoinGroup(ctx, gone.Link); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if reqs, _ := alice.app.GroupJoinRequests(g.ID); len(reqs) != 1 {
+		t.Fatalf("requests: %+v", reqs)
+	}
+	w.clk.off.Store(int64(8 * 24 * time.Hour))
+	if reqs, _ := alice.app.GroupJoinRequests(g.ID); len(reqs) != 0 {
+		t.Fatalf("a week-old request is still waiting: %+v", reqs)
+	}
+	if err := alice.app.GroupJoinDecide(ctx, g.ID, bob.nodeHex(), true); !errors.Is(err, app.ErrRequest) {
+		t.Fatalf("deciding on an expired request: %v", err)
+	}
+	if list, _ := carol.app.Groups(); len(list) != 0 {
+		t.Fatalf("a pending group that nobody answered is still listed: %+v", list)
+	}
+}
