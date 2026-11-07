@@ -239,3 +239,32 @@ func TestParseWithoutValidUntilNeverExpires(t *testing.T) {
 		t.Fatalf("Parse: %v expired=%v", err, r != nil && r.Expired())
 	}
 }
+
+// FuzzParseAt: any signed body either fails with ErrRules or yields rules whose validity lies within
+// the cap and whose expiry follows the clock; an expired file never verifies an entry.
+func FuzzParseAt(f *testing.F) {
+	f.Add([]byte(`{"seq":1,"valid_until":1800000100,"allowed_cidrs":["198.51.100.0/24"]}`), int64(1800000000))
+	f.Add([]byte(`{"seq":1}`), int64(0))
+	f.Add([]byte(`not json`), int64(5))
+	pub, priv := func() (ed25519.PublicKey, ed25519.PrivateKey) {
+		p, k, _ := ed25519.GenerateKey(rand.Reader)
+		return p, k
+	}()
+	f.Fuzz(func(t *testing.T, body []byte, nowSec int64) {
+		clk := &clockAt{time.Unix(nowSec%4_000_000_000, 0)}
+		r, err := rp.ParseAt(rp.Sign(priv, body), pub, 0, clk.now)
+		if err != nil {
+			if !errors.Is(err, rp.ErrRules) {
+				t.Fatalf("error %v is not ErrRules", err)
+			}
+			return
+		}
+		if r.ValidUntil().After(clk.t.Add(rp.MaxValidity)) || r.ValidUntil().IsZero() {
+			t.Fatalf("valid until %v at %v", r.ValidUntil(), clk.t)
+		}
+		clk.t = r.ValidUntil()
+		if !r.Expired() || r.HasVerifiedEntries() || r.EntryAllowed("RU", rp.NetMobile, netip.MustParseAddr("198.51.100.1")) {
+			t.Fatal("at valid_until the file must be expired and verify no entry")
+		}
+	})
+}

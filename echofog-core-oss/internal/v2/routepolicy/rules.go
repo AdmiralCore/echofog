@@ -35,6 +35,7 @@ type rulesBody struct {
 	Neighbors    map[string][]string `json:"neighbors"`
 	TCPLimit     int                 `json:"tcp_limit"`
 	UDPDenied    []string            `json:"udp_denied"`
+	ValidUntil   int64               `json:"valid_until"`
 }
 
 func bad(format string, a ...any) error {
@@ -46,35 +47,40 @@ func bad(format string, a ...any) error {
 // built-in table: a neighbour listed in it still decides like a foreign country, a limit above the
 // table's own does nothing and nothing in it enables a carrier.
 func Parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, error) {
+	r, _, err := parse(data, pub, minSeq)
+	return r, err
+}
+
+func parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, *rulesBody, error) {
 	if len(pub) != ed25519.PublicKeySize {
-		return nil, bad("no rules key")
+		return nil, nil, bad("no rules key")
 	}
 	if len(data) <= ed25519.SignatureSize || len(data) > MaxRulesFile {
-		return nil, bad("size %d", len(data))
+		return nil, nil, bad("size %d", len(data))
 	}
 	sig, body := data[:ed25519.SignatureSize], data[ed25519.SignatureSize:]
 	if !ed25519.Verify(pub, append([]byte(rulesLabel), body...), sig) {
-		return nil, bad("signature")
+		return nil, nil, bad("signature")
 	}
 	var b rulesBody
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&b); err != nil {
-		return nil, bad("json: %v", err)
+		return nil, nil, bad("json: %v", err)
 	}
 	if b.Seq < minSeq {
-		return nil, bad("seq %d is older than %d", b.Seq, minSeq)
+		return nil, nil, bad("seq %d is older than %d", b.Seq, minSeq)
 	}
 	r := &Rules{Seq: b.Seq, Version: b.Version, mobileASN: b.MobileASN}
 	if len(b.Version) > 64 {
-		return nil, bad("version too long")
+		return nil, nil, bad("version too long")
 	}
 	if len(b.AllowedCIDRs) > maxCIDRs || len(b.MobileASN) > maxASN || len(b.Neighbors) > maxNeighbors {
-		return nil, bad("too many entries")
+		return nil, nil, bad("too many entries")
 	}
 	for _, s := range b.AllowedCIDRs {
 		p, err := netip.ParsePrefix(s)
 		if err != nil {
-			return nil, bad("allowed_cidrs %q", s)
+			return nil, nil, bad("allowed_cidrs %q", s)
 		}
 		r.allowed = append(r.allowed, p.Masked())
 	}
@@ -83,28 +89,28 @@ func Parse(data []byte, pub ed25519.PublicKey, minSeq uint64) (*Rules, error) {
 	}
 	for c, list := range b.Neighbors {
 		if !countryRE.MatchString(c) || len(list) > maxNeighbors {
-			return nil, bad("neighbors of %q", c)
+			return nil, nil, bad("neighbors of %q", c)
 		}
 		for _, n := range list {
 			if !countryRE.MatchString(n) {
-				return nil, bad("neighbor %q", n)
+				return nil, nil, bad("neighbor %q", n)
 			}
 		}
 		r.neighbors[c] = append([]string(nil), list...)
 	}
 	for _, c := range b.UDPDenied {
 		if !countryRE.MatchString(c) {
-			return nil, bad("udp_denied %q", c)
+			return nil, nil, bad("udp_denied %q", c)
 		}
 	}
 	if len(b.UDPDenied) > maxNeighbors {
-		return nil, bad("too many entries")
+		return nil, nil, bad("too many entries")
 	}
 	if b.TCPLimit < 0 {
-		return nil, bad("tcp_limit %d", b.TCPLimit)
+		return nil, nil, bad("tcp_limit %d", b.TCPLimit)
 	}
 	r.tcpLimit, r.udpDenied = b.TCPLimit, append([]string(nil), b.UDPDenied...)
-	return r, nil
+	return r, &b, nil
 }
 
 // Sign produces a rules file for body (the owner's offline tool and the tests).
@@ -122,11 +128,33 @@ const MaxValidity = 45 * 24 * time.Hour
 // stops counting when it passes. An expired file never loosens anything: its tcp_limit and
 // udp_denied stay in force.
 func ParseAt(data []byte, pub ed25519.PublicKey, minSeq uint64, now func() time.Time) (*Rules, error) {
-	return nil, bad("not implemented")
+	if now == nil {
+		now = time.Now
+	}
+	r, b, err := parse(data, pub, minSeq)
+	if err != nil {
+		return nil, err
+	}
+	if b.ValidUntil <= 0 {
+		return nil, bad("valid_until is required")
+	}
+	until := time.Unix(b.ValidUntil, 0)
+	if until.After(now().Add(MaxValidity)) {
+		return nil, bad("valid_until is more than %s ahead", MaxValidity)
+	}
+	r.validUntil, r.now = until, now
+	return r, nil
 }
 
 // ValidUntil is the end of the file's validity; zero for a file read with Parse.
-func (r *Rules) ValidUntil() time.Time { return time.Time{} }
+func (r *Rules) ValidUntil() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	return r.validUntil
+}
 
-// Expired reports whether the file is past valid_until.
-func (r *Rules) Expired() bool { return false }
+// Expired reports whether the file is past valid_until (at that moment or later).
+func (r *Rules) Expired() bool {
+	return r != nil && !r.validUntil.IsZero() && r.now != nil && !r.now().Before(r.validUntil)
+}
