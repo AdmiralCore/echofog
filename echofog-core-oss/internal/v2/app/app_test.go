@@ -69,6 +69,9 @@ func (k *memKV) Scan(prefix []byte, limit int) ([]store.Entry, error) {
 	return k.ScanFrom(prefix, nil, limit)
 }
 func (k *memKV) ScanFrom(prefix, start []byte, limit int) ([]store.Entry, error) {
+	if limit <= 0 || limit > store.MaxScanLimit { // like the real store
+		return nil, store.ErrBadLimit
+	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	var keys []string
