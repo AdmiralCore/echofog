@@ -127,6 +127,7 @@ type App struct {
 	kmu     sync.Mutex // knock answers: last answer per contact
 	knocked map[[32]byte]time.Time
 	ntc     notices // notices for the UI (notice.go)
+	chats   chatState
 }
 
 // New creates an App.
