@@ -341,6 +341,12 @@ func (b *v2MsgBackend) GroupJoinDecide(groupID, peerID string, accept bool) erro
 
 func (b *v2MsgBackend) channelView(groupID string, ch convlog.Channel) ChannelDTO {
 	d := channelDTO(ch)
+	if ch.Voice {
+		if i, ok := b.app.ActiveGroupCall(groupID, ch.ID); ok {
+			c := groupCall(i)
+			d.Call = &c
+		}
+	}
 	if r, err := b.app.GroupRights(groupID, ch.ID); err == nil {
 		d.CanSend = r.Send && !ch.Voice && !ch.Category
 		d.CanJoin = r.Voice && ch.Voice
@@ -499,7 +505,7 @@ func (b *v2MsgBackend) SubscribeGroupEvents(cb func(GroupEvent)) {
 	}
 	cancelEv := b.app.SubscribeGroupEvents(func(ev app.GroupEvent) {
 		switch ev.Kind {
-		case "requests", "added", "removed", "history":
+		case "requests", "added", "removed", "history", "call", "callactive", "callend":
 		default:
 			return
 		}
@@ -509,7 +515,7 @@ func (b *v2MsgBackend) SubscribeGroupEvents(cb func(GroupEvent)) {
 				title = g.Title
 			}
 		}
-		cb(GroupEvent{Kind: ev.Kind, GroupID: ev.Group, Title: title, From: ev.From, Reason: ev.Reason})
+		cb(GroupEvent{Kind: ev.Kind, GroupID: ev.Group, Title: title, From: ev.From, Reason: ev.Reason, CallID: ev.CallID, Coordinator: ev.Coordinator, Room: ev.Room})
 	})
 	cancelChats := b.app.SubscribeChats(func(c app.ConvChange) {
 		if c.Ref.Kind != app.KindGroup {

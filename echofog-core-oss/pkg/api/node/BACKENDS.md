@@ -341,3 +341,21 @@ DHT/relay/выхода; нет — если работает только с л�
 - **Новые методы фасада (T7.7), только при v2:** `ChatNotify`/`SetChatNotify` (`all|mentions|none`, на устройстве), `ChatFollow`/
   `ChatFollowing` (подписка на тред), `GroupVoice` (`VoiceMemberDTO`, состав голосовой комнаты). При `protocol: 1` — `ErrV2NotBuilt`.
 - **Не передаётся по сети:** канал и тред файла группы (в предложении файла нет такого поля) — только в ответе вызова.
+
+## T11.4: звонки групп, приглашение в звонок и бесплатный VPN при `protocol: 2`
+
+- **Звонки групп и комнат** (`AttachV2GroupCalls(app)` после `AttachV2Calls`): `StartGroupCall`, `StartRoomCall`, `ActiveGroupCall`,
+  `KeepGroupCallAlive`, `KeepRoomCallAlive`, `EndGroupCall`, `EndRoomCall`, `LeaveRoomCall`; `ChannelDTO.Call` у голосовой комнаты.
+  Событие `group:event` получило виды `call` (звонит; только своя группа), `callactive` (звонок уже идёт; комната не звонит) и
+  `callend` с полями `callId`, `coordinator`, `room`. Состав звонка не в журнале: участники раз в 45 с повторяют анонс по chat/2
+  (сообщение с метаданными `fogcall2:` + JSON `{v,k,g,r,c,o}`, видов `call|alive|end|leave`); звонок без анонса 150 с закончен.
+  Анонс принимается только от участника группы с правом голоса (и в комнате — по её правам), координатор должен быть участником;
+  остальное молчание. Анонсы заблокированного контакта отбрасываются.
+- **`InviteToCall`**: сообщение личного чата `fogcall://<секрет>/<координатор>` (формат v1, чат показывает его как звонок).
+- **VPN без оплаты** (`AttachV2VPN(app)` после `AttachV2`): `StartVPNVia(ссылка выхода)`, `StartVPN(node)`, `StopVPN`, `StopVPNForSwitch`,
+  `ConnectLastExit`, `GetVPNStatus`, `GetSavedExits`, `ListExitNodes` (сохранённые), `SetExitName`, `SetExitFavorite`, `ForgetExit`,
+  `GetVPNHistory`, `ClearVPNHistory`. Локальный SOCKS5 через exit/2; все выходы бесплатные (`PriceKnown: true`, цена 0).
+  Причины отказа T10.4 идут в `VPNStatus.LastRefusalReason` и `VPNSession.RefusedBy` кодами `no-camouflage`, `unreachable`, `busy`,
+  `policy`, `rate-limited`, `no-path`; `VPNStatus.ExitState`: `checking`, `ok`, `unreachable` (нет пути), `no-camouflage`.
+  Остаются `ErrV2NotBuilt`: оплата, рынок, пробы, режим всего компьютера, автопереключение, `StartVPNAt`, `GetCallPath`,
+  `GetCallRelays`, `SwitchCallRelay`.
