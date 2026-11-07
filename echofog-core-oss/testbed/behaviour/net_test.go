@@ -189,6 +189,7 @@ func TestReportSaysWhatItDidNotCheck(t *testing.T) {
 	require.NotEmpty(t, r.Dial)
 	require.NotEmpty(t, r.Net)
 	assert.NotZero(t, r.Penalty.FirstBackoff)
+	assert.GreaterOrEqual(t, len(r.PenaltyNever.Attempts), 5, "the never-lifted block is played too (H15)")
 	assert.NotZero(t, r.Crowd.Clients)
 	assert.True(t, r.ECH.Present)
 	assert.NotZero(t, r.Soak.Cycles)

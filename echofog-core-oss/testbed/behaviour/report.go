@@ -22,16 +22,18 @@ type Options struct {
 
 // Report is what a run measured, what it found and, as important, what it did not check.
 type Report struct {
-	Freeze     []FreezeResult
-	Dial       map[string]DialResult
-	Parallel   map[string]ParallelResult
-	Penalty    PenaltyResult
-	Crowd      CrowdResult
-	ECH        ECHResult
-	Net        map[string]TransferResult
-	Soak       SoakResult
-	NotChecked []string
-	Findings   []string
+	Freeze   []FreezeResult
+	Dial     map[string]DialResult
+	Parallel map[string]ParallelResult
+	Penalty  PenaltyResult
+	// PenaltyNever is a block that is never lifted, played for two hours: the attempts H15 allows.
+	PenaltyNever PenaltyResult
+	Crowd        CrowdResult
+	ECH          ECHResult
+	Net          map[string]TransferResult
+	Soak         SoakResult
+	NotChecked   []string
+	Findings     []string
 }
 
 // tcpPorts is a card with a reality2-tcp address on each port.
@@ -80,6 +82,7 @@ func RunAll(ctx context.Context, o Options) Report {
 	r.Parallel["product"] = MeasureParallel(CensorConfig{And: rule}, 50, false)
 	r.Parallel["naive"] = MeasureParallel(CensorConfig{And: rule}, 8, true)
 	r.Penalty = MeasurePenalty(300*time.Second, 2*time.Hour)
+	r.PenaltyNever = MeasurePenalty(0, 2*time.Hour)
 	if r.Penalty.Grows {
 		r.Findings = append(r.Findings, "penalty: the backoff doubles with every failed handshake (120 s, 240 s, ... up to 30 min), as H15 says; the design table's 'at most 120 s, no growth with retries' cannot hold for a block that lasts: the two texts disagree")
 	}
