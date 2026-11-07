@@ -170,3 +170,14 @@ func (r liveRooms) Roster(group, channel string) []VoiceMember {
 	}
 	return out
 }
+
+// GroupEvent is something that happened in a group that the screen has to hear of. Kind is
+// "requests" (a request to join waits or was decided; From names a new one), "added" (this node was let
+// in), "removed" (this node was removed or banned; Reason says which) or "history" (earlier messages
+// came in at once).
+type GroupEvent struct {
+	Kind, Group, Title, From, Reason string
+}
+
+// SubscribeGroupEvents calls fn for every such event until cancel is called (stub).
+func (a *App) SubscribeGroupEvents(fn func(GroupEvent)) (cancel func()) { return func() {} }

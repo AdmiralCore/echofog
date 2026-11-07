@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -541,4 +542,138 @@ func hasCyrillic(s string) bool {
 		}
 	}
 	return false
+}
+
+// ---- group events the screen listens to -----------------------------------------------------------------------
+
+type evLog struct {
+	mu  sync.Mutex
+	got []app.GroupEvent
+}
+
+func (e *evLog) add(ev app.GroupEvent) { e.mu.Lock(); e.got = append(e.got, ev); e.mu.Unlock() }
+
+func (e *evLog) of(kind string) []app.GroupEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []app.GroupEvent
+	for _, g := range e.got {
+		if g.Kind == kind {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+func approvalGroup(t *testing.T) (*gWorld, *gNode, *gNode, string) {
+	t.Helper()
+	w, ns := newGroupWorld(t, 2)
+	alice, bob := ns[0], ns[1]
+	ctx := context.Background()
+	g, err := alice.app.CreateGroup(ctx, "Закрытая", "", app.GroupPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: time.Hour, Approval: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.app.JoinGroup(ctx, inv.Link); err != nil {
+		t.Fatal(err)
+	}
+	return w, alice, bob, g.ID
+}
+
+func TestGroupEventRequestsForANewRequestAndItsDecision(t *testing.T) {
+	w, alice, bob, id := approvalGroup(t)
+	var ev evLog
+	cancel := alice.app.SubscribeGroupEvents(ev.add)
+	defer cancel()
+	w.drain()
+	req := ev.of("requests")
+	if len(req) != 1 || req[0].Group != id || req[0].From != bob.nodeHex() {
+		t.Fatalf("a new request: %+v", ev.got)
+	}
+	if err := alice.app.GroupJoinDecide(context.Background(), id, bob.nodeHex(), true); err != nil {
+		t.Fatal(err)
+	}
+	req = ev.of("requests")
+	if len(req) != 2 || req[1].From != "" || req[1].Group != id {
+		t.Fatalf("a decided request is told without a name: %+v", req)
+	}
+}
+
+func TestGroupEventAddedWhenThisNodeIsLetIn(t *testing.T) {
+	w, alice, bob, id := approvalGroup(t)
+	var ev evLog
+	cancel := bob.app.SubscribeGroupEvents(ev.add)
+	defer cancel()
+	w.drain()
+	if got := ev.of("added"); len(got) != 0 {
+		t.Fatalf("added before the decision: %+v", got)
+	}
+	if err := alice.app.GroupJoinDecide(context.Background(), id, bob.nodeHex(), true); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if got := ev.of("added"); len(got) != 1 || got[0].Group != id {
+		t.Fatalf("added: %+v (all %+v)", got, ev.got)
+	}
+}
+
+func TestGroupEventRemovedWithTheReason(t *testing.T) {
+	for _, ban := range []bool{false, true} {
+		w, ns, id := team(t, 2)
+		alice, bob := ns[0], ns[1]
+		var ev evLog
+		cancel := bob.app.SubscribeGroupEvents(ev.add)
+		if err := alice.app.GroupRemove(context.Background(), id, bob.nodeHex(), ban); err != nil {
+			t.Fatal(err)
+		}
+		w.drain()
+		cancel()
+		want := "removed"
+		if ban {
+			want = "banned"
+		}
+		got := ev.of("removed")
+		if len(got) != 1 || got[0].Group != id || got[0].Reason != want {
+			t.Fatalf("ban=%v: %+v", ban, ev.got)
+		}
+	}
+	// somebody else's removal is no event for this node
+	w, ns, id := team(t, 3)
+	var ev evLog
+	cancel := ns[2].app.SubscribeGroupEvents(ev.add)
+	defer cancel()
+	if err := ns[0].app.GroupRemove(context.Background(), id, ns[1].nodeHex(), false); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if got := ev.of("removed"); len(got) != 0 {
+		t.Fatalf("a removal of another member: %+v", got)
+	}
+}
+
+func TestGroupEventHistoryWhenEarlierMessagesComeAtOnce(t *testing.T) {
+	w, ns := newGroupWorld(t, 2)
+	alice, bob := ns[0], ns[1]
+	ctx := context.Background()
+	g, _ := alice.app.CreateGroup(ctx, "Г", "", app.GroupPrivate)
+	for _, s := range []string{"раз", "два", "три"} {
+		if _, err := alice.app.ChatSend(ctx, gref(g.ID, ""), app.SendReq{Text: s}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv, _ := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: time.Hour})
+	var ev evLog
+	cancel := bob.app.SubscribeGroupEvents(ev.add)
+	defer cancel()
+	if _, err := bob.app.JoinGroup(ctx, inv.Link); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if got := ev.of("history"); len(got) == 0 || got[0].Group != g.ID {
+		t.Fatalf("history: %+v", ev.got)
+	}
 }

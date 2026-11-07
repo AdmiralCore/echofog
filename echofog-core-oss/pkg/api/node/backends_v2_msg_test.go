@@ -43,6 +43,7 @@ type fakeMsg struct {
 	noNext   bool
 	mod      []convlog.ModEntry
 	chatSubs []func(app.ConvChange)
+	grpSubs  []func(app.GroupEvent)
 	fileCb   func(app.Transfer)
 	transfer app.Transfer
 	filePeer string
@@ -841,4 +842,57 @@ func TestAttachV2MessengerDoesNothingAtProtocol1(t *testing.T) {
 	require.IsType(t, &v1ChatBackend{}, api.backends.chat)
 	require.IsType(t, &v1GroupBackend{}, api.backends.group)
 	require.IsType(t, &v1FileBackend{}, api.backends.file)
+}
+
+func (f *fakeMsg) SubscribeGroupEvents(fn func(app.GroupEvent)) func() {
+	f.mu.Lock()
+	f.grpSubs = append(f.grpSubs, fn)
+	n := len(f.grpSubs) - 1
+	f.mu.Unlock()
+	return func() { f.mu.Lock(); f.grpSubs[n] = nil; f.mu.Unlock() }
+}
+
+func (f *fakeMsg) pushGroup(ev app.GroupEvent) {
+	f.mu.Lock()
+	subs := append([]func(app.GroupEvent){}, f.grpSubs...)
+	f.mu.Unlock()
+	for _, s := range subs {
+		if s != nil {
+			s(ev)
+		}
+	}
+}
+
+// Every kind of group event the frontend listens to (stores/chats.js) is told, with the fields it reads.
+func TestV2GroupEventsOfTheAppReachTheFrontendKinds(t *testing.T) {
+	api, f := newMsgApi(t)
+	f.groups = []app.GroupInfo{{ID: groupID, Title: "Команда"}}
+	var got []GroupEvent
+	var mu sync.Mutex
+	api.SubscribeGroupEvents(func(e GroupEvent) { mu.Lock(); got = append(got, e); mu.Unlock() })
+	f.pushGroup(app.GroupEvent{Kind: "requests", Group: groupID, From: nodeBob})
+	f.pushGroup(app.GroupEvent{Kind: "requests", Group: groupID})
+	f.pushGroup(app.GroupEvent{Kind: "added", Group: groupID})
+	f.pushGroup(app.GroupEvent{Kind: "removed", Group: groupID, Reason: "banned"})
+	f.pushGroup(app.GroupEvent{Kind: "history", Group: groupID})
+	f.pushGroup(app.GroupEvent{Kind: "bogus", Group: groupID})
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []GroupEvent{
+		{Kind: "requests", GroupID: groupID, Title: "Команда", From: nodeBob},
+		{Kind: "requests", GroupID: groupID, Title: "Команда"},
+		{Kind: "added", GroupID: groupID, Title: "Команда"},
+		{Kind: "removed", GroupID: groupID, Title: "Команда", Reason: "banned"},
+		{Kind: "history", GroupID: groupID, Title: "Команда"},
+	}, got, "an unknown kind is not passed on")
+}
+
+// A group that is gone still names itself in the removed event: the app told the title before it forgot it.
+func TestV2RemovedEventKeepsTheTitleOfAGroupThatIsGone(t *testing.T) {
+	api, f := newMsgApi(t)
+	f.groups = nil
+	var got []GroupEvent
+	api.SubscribeGroupEvents(func(e GroupEvent) { got = append(got, e) })
+	f.pushGroup(app.GroupEvent{Kind: "removed", Group: groupID, Title: "Команда", Reason: "removed"})
+	require.Equal(t, []GroupEvent{{Kind: "removed", GroupID: groupID, Title: "Команда", Reason: "removed"}}, got)
 }
