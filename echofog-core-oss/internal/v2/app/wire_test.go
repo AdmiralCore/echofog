@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -508,4 +509,36 @@ func TestNodeOfPeerJoinsTheTwoIdNames(t *testing.T) {
 			t.Errorf("NodeOfPeer(%q) = %q for nobody", bad, n)
 		}
 	}
+}
+
+// Every refusal of the chat, group and file calls reaches the screen as a Russian text in the neutral
+// form, never as the internal sentence, and the refusals the sender must not tell apart read alike.
+func TestUserMessageSpeaksOfChatsGroupsAndFiles(t *testing.T) {
+	generic := app.UserMessage(errors.New("anything else"))
+	errs := []error{app.ErrNoChat, app.ErrChatOff, app.ErrBadMessage, app.ErrEmptyMessage, app.ErrMessageTooLong, app.ErrBadMode,
+		app.ErrGroupOff, app.ErrInvite, app.ErrNoGroup, app.ErrBadGroup, app.ErrNoRight, app.ErrOwnerStays, app.ErrNoMember, app.ErrStillIn,
+		app.ErrNoVoice, app.ErrFilesOff, app.ErrNoTransfer, app.ErrBadFile, app.ErrFileTooLarge, app.ErrTooManyTransfers, app.ErrBadState,
+		convlog.ErrForbidden, convlog.ErrNotParticipant}
+	for _, err := range errs {
+		msg := app.UserMessage(err)
+		if msg == generic || msg == "" || strings.Contains(msg, "app:") || !hasCyrillic(msg) {
+			t.Errorf("%v: the screen says %q", err, msg)
+		}
+	}
+	// an unknown group, a chat that is not there and a chat one is not in are one answer
+	if app.UserMessage(app.ErrNoChat) != app.UserMessage(app.ErrNoGroup) || app.UserMessage(app.ErrNoChat) != app.UserMessage(convlog.ErrNotParticipant) {
+		t.Error("the refusals that must look alike read differently")
+	}
+	if app.UserMessage(fmt.Errorf("wrapped: %w", app.ErrNoRight)) != app.UserMessage(app.ErrNoRight) {
+		t.Error("a wrapped error is not recognised")
+	}
+}
+
+func hasCyrillic(s string) bool {
+	for _, r := range s {
+		if r >= 'А' && r <= 'я' {
+			return true
+		}
+	}
+	return false
 }
