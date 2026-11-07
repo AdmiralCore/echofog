@@ -384,14 +384,14 @@ func TestSpeeds(t *testing.T) {
 func TestInboxDedupByID(t *testing.T) {
 	d, _ := Compose(rec(t, 5), alice, [][32]byte{bob})
 	in := NewInbox(16)
-	e1, fresh, err := in.Add(d.Message)
+	e1, fresh, err := in.Add(alice, d.Message)
 	if err != nil || !fresh {
 		t.Fatalf("first: fresh=%v err=%v", fresh, err)
 	}
 	if a, ok := e1.Audio(); !ok || !bytes.Equal(a, d.Audio) {
 		t.Fatal("an inline clip must be playable at once")
 	}
-	e2, fresh, err := in.Add(d.Message)
+	e2, fresh, err := in.Add(alice, d.Message)
 	if err != nil || fresh || e2 != e1 {
 		t.Fatalf("a repeated message: fresh=%v same=%v err=%v", fresh, e2 == e1, err)
 	}
@@ -401,12 +401,12 @@ func TestInboxDedupByID(t *testing.T) {
 	// the same ID from another sender is another message: an ID of someone else cannot be taken over
 	m2 := proto.Clone(d.Message).(*chatpb.PersonalMessageProto)
 	m2.SenderId = hex.EncodeToString(carol[:])
-	if e3, fresh, err := in.Add(m2); err != nil || !fresh || e3 == e1 {
+	if e3, fresh, err := in.Add(carol, m2); err != nil || !fresh || e3 == e1 {
 		t.Fatalf("same ID, another sender: fresh=%v err=%v", fresh, err)
 	}
 	// another message from the same sender with a repeated body is still a new ID
 	d2, _ := Compose(rec(t, 5), alice, [][32]byte{bob})
-	if _, fresh, _ := in.Add(d2.Message); !fresh || in.Len() != 3 {
+	if _, fresh, _ := in.Add(alice, d2.Message); !fresh || in.Len() != 3 {
 		t.Fatalf("a new message was taken as a repeat (len %d)", in.Len())
 	}
 }
@@ -426,7 +426,7 @@ func TestInboxRefuses(t *testing.T) {
 	for name, f := range cases {
 		m := proto.Clone(d.Message).(*chatpb.PersonalMessageProto)
 		f(m)
-		if _, _, err := in.Add(m); err == nil {
+		if _, _, err := in.Add(alice, m); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
@@ -438,12 +438,13 @@ func TestInboxRefuses(t *testing.T) {
 func TestInboxIsBounded(t *testing.T) {
 	in := NewInbox(8)
 	for i := 0; i < 100; i++ {
-		d, err := Compose(rec(t, 3), alice, [][32]byte{bob})
+		from := [32]byte{0: byte(i % 5), 31: 9} // five senders take turns: no one of them is over its share
+		d, err := Compose(rec(t, 3), from, [][32]byte{bob})
 		if err != nil {
 			t.Fatal(err)
 		}
 		d.Message.Id = fmt.Sprintf("%032x", i+1)
-		if _, _, err := in.Add(d.Message); err != nil {
+		if _, _, err := in.Add(from, d.Message); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -462,7 +463,7 @@ func TestInboxConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, f, err := in.Add(d.Message); err == nil && f {
+			if _, f, err := in.Add(alice, d.Message); err == nil && f {
 				mu.Lock()
 				fresh++
 				mu.Unlock()
@@ -480,7 +481,7 @@ func TestInboxConcurrent(t *testing.T) {
 func TestFinishChecksTheFile(t *testing.T) {
 	d, _ := Compose(rec(t, 40), alice, [][32]byte{bob})
 	in := NewInbox(4)
-	e, _, err := in.Add(d.Message)
+	e, _, err := in.Add(alice, d.Message)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +507,7 @@ func TestFinishChecksTheFile(t *testing.T) {
 		t.Fatal("the clip was changed")
 	}
 	// the receiver never plays the sender's headers: a clip with tags is cleaned
-	e2, _, _ := in.Add(func() *chatpb.PersonalMessageProto {
+	e2, _, _ := in.Add(alice, func() *chatpb.PersonalMessageProto {
 		m := proto.Clone(d.Message).(*chatpb.PersonalMessageProto)
 		m.Id = strings.Repeat("b", 32)
 		return m

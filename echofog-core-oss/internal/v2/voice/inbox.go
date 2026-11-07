@@ -88,7 +88,7 @@ func (b *Inbox) Len() int {
 // Add checks a voice message and registers it. fresh is false when the same message was added
 // before; the earlier entry is returned. The sender named in the message is the one the chat layer
 // authenticated for it.
-func (b *Inbox) Add(m *chatpb.PersonalMessageProto) (e *Entry, fresh bool, err error) {
+func (b *Inbox) Add(from [32]byte, m *chatpb.PersonalMessageProto) (e *Entry, fresh bool, err error) {
 	if m == nil || m.Type != chatpb.PersonalMessageType_MSG_TYPE_VOICE {
 		return nil, false, invalid("not a voice message")
 	}

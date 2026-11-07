@@ -234,7 +234,7 @@ func TestVoiceReachesAnOfflineRecipient(t *testing.T) {
 				if err != nil {
 					t.Fatalf("ParsePersonal: %v", err)
 				}
-				e, fresh, err := in.Add(m)
+				e, fresh, err := in.Add(nodeA.node(), m)
 				if err != nil {
 					t.Fatalf("Add: %v", err)
 				}

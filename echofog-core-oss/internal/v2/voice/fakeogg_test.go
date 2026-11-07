@@ -105,12 +105,14 @@ func opusTags(o fakeOpts) []byte {
 	return append(t, bytes.Repeat([]byte("x"), o.tagsPad)...)
 }
 
-// audioPacket i of a clip: recognisable and different for every i.
+// audioPacket i of a clip: recognisable and different for every i. The first byte is the Opus TOC
+// byte of one 20 ms CELT fullband frame (config 31, one frame).
 func audioPacket(i, size int) []byte {
 	p := make([]byte, size)
 	for k := range p {
 		p[k] = byte(i*31 + k*7 + 1)
 	}
+	p[0] = 0xF8
 	return p
 }
 
