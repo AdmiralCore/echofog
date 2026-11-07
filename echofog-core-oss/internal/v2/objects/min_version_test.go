@@ -2,6 +2,8 @@ package objects
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
@@ -43,4 +45,25 @@ func TestReleaseMinVersionIsSigned(t *testing.T) {
 	if err != nil || mf.Release.GetMinVersion() != "2.0.0" {
 		t.Fatalf("manifest: %v %v", mf, err)
 	}
+}
+
+// ParseSemver accepts exactly the canonical form: what it accepts, it prints back unchanged (after
+// the optional "v"), so a bound that passed the check means one precise version.
+func FuzzParseSemver(f *testing.F) {
+	for _, s := range []string{"", "1.2.3", "v1.2.3", "01.2.3", "1.2", "1.2.3.4", "999999.0.0", "1000000.0.0", "-1.0.0", "1.2.3\n", "1..3", "٣.٣.٣"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		v, ok := ParseSemver(s)
+		if !ok {
+			return
+		}
+		got := fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
+		if got != strings.TrimPrefix(s, "v") {
+			t.Fatalf("%q parsed as %v but prints as %q", s, v, got)
+		}
+		if CompareSemver(v, v) != 0 {
+			t.Fatal("a version differs from itself")
+		}
+	})
 }

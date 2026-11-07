@@ -139,16 +139,30 @@ func CheckUpdate(ctx context.Context, d UpdateDeps) (*UpdateInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: the manifest has version %q", ErrArtifact, rel.GetVersion())
 	}
+	// The signed lower bound comes first and no flag overrides it: below it a version is revoked.
+	if m := rel.GetMinVersion(); m != "" {
+		mv, ok := parseVersion(m)
+		if !ok {
+			return nil, fmt.Errorf("%w: the manifest has min_version %q", ErrArtifact, m)
+		}
+		if cmpVersion(offered, mv) < 0 {
+			return nil, ErrBelowMin
+		}
+	}
+	rollback := false
 	switch c := cmpVersion(offered, cur); {
 	case c < 0:
-		return nil, ErrDowngrade
+		if !d.AllowRollback {
+			return nil, ErrDowngrade
+		}
+		rollback = true
 	case c == 0:
 		return nil, nil
 	}
 	for _, a := range rel.GetArtifacts() {
 		if a.GetPlatform() == d.Platform {
 			return &UpdateInfo{Version: strings.TrimPrefix(rel.GetVersion(), "v"), Artifact: a.GetName(), URL: a.GetUrl(), Size: a.GetSize(),
-				SHA256: append([]byte(nil), a.GetSha256()...), NotesURL: rel.GetNotesUrl()}, nil
+				SHA256: append([]byte(nil), a.GetSha256()...), NotesURL: rel.GetNotesUrl(), MinVersion: strings.TrimPrefix(rel.GetMinVersion(), "v"), Rollback: rollback}, nil
 		}
 	}
 	return nil, ErrNoArtifact
@@ -171,7 +185,8 @@ func defaultSelfTest(ctx context.Context, exe string) (string, error) {
 // ApplyUpdate downloads, verifies and installs an update after the operator confirmed it. The
 // download is checked against the size and SHA-256 of the signed manifest and run once before the
 // swap; the old binary stays beside the new one as <exe>.previous and is put back when the new one
-// does not start. It installs a newer version only: never a rollback.
+// does not start. It installs a newer version only; a rollback needs UpdateDeps.AllowRollback and
+// never goes below the signed min_version.
 func ApplyUpdate(ctx context.Context, d UpdateDeps, info UpdateInfo) error {
 	cur, ok := parseVersion(d.CurrentVersion)
 	if !ok {
@@ -181,7 +196,19 @@ func ApplyUpdate(ctx context.Context, d UpdateDeps, info UpdateInfo) error {
 	if !ok {
 		return fmt.Errorf("%w: version %q", ErrArtifact, info.Version)
 	}
-	if cmpVersion(offered, cur) <= 0 {
+	if info.MinVersion != "" {
+		mv, ok := parseVersion(info.MinVersion)
+		if !ok {
+			return fmt.Errorf("%w: min_version %q", ErrArtifact, info.MinVersion)
+		}
+		if cmpVersion(offered, mv) < 0 {
+			return ErrBelowMin
+		}
+	}
+	switch c := cmpVersion(offered, cur); {
+	case c == 0:
+		return ErrDowngrade
+	case c < 0 && !(d.AllowRollback && info.Rollback):
 		return ErrDowngrade
 	}
 	u, err := url.Parse(info.URL)

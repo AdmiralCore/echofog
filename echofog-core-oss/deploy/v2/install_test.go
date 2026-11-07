@@ -10,6 +10,9 @@ import (
 
 const installScript = "install.sh"
 
+// pipeToShell finds "| sh" and "| bash" but not "| sha256sum".
+var pipeToShell = regexp.MustCompile(`\|\s*(sudo\s+)?(sh|bash|zsh|dash)(\s|$)`)
+
 // The bootstrap script only fetches over https into a private temporary folder and hands the
 // verification to the node binary: no curl | sh, no checks done in shell.
 func TestInstallScript(t *testing.T) {
@@ -26,10 +29,13 @@ func TestInstallScript(t *testing.T) {
 			t.Errorf("install.sh lacks %q", must)
 		}
 	}
-	for _, bad := range []string{"set -x", "eval ", "| sh", "|sh", "| bash", "|bash", "http://", "--insecure", " -k ", "chmod 777", "sudo "} {
+	for _, bad := range []string{"set -x", "eval ", "http://", "--insecure", " -k ", "chmod 777", "sudo "} {
 		if strings.Contains(sh, bad) {
 			t.Errorf("install.sh contains %q", bad)
 		}
+	}
+	if pipeToShell.MatchString(sh) {
+		t.Error("install.sh pipes into a shell")
 	}
 	// The script must not carry a default download address: the operator names the release.
 	if regexp.MustCompile(`https://[a-z0-9.-]+`).MatchString(strings.ReplaceAll(sh, "https://example.org", "")) {
@@ -104,7 +110,7 @@ func TestVPSGuides(t *testing.T) {
 		if regexp.MustCompile(`[0-9a-fA-F]{40,}`).MatchString(doc) {
 			t.Errorf("%s guide contains a key-like string", name)
 		}
-		if strings.Contains(doc, "| sh") || strings.Contains(doc, "|sh") || strings.Contains(doc, "| bash") {
+		if pipeToShell.MatchString(doc) {
 			t.Errorf("%s guide teaches piping a download into a shell", name)
 		}
 	}

@@ -195,9 +195,11 @@ func (r *scriptRig) runPath(script, path string, args ...string) result {
 	r.t.Helper()
 	cmd := exec.Command("sh", append([]string{script}, args...)...)
 	env := []string{"PATH=" + path, "TMPDIR=" + r.tmp, "ECHOFOG_RELEASE_URL=https://example.org/releases/v2", "HOME=" + r.dir}
-	if r.installed != "" {
-		env = append(env, "ECHOFOG_INSTALLED_BIN="+r.installed)
+	installed := r.installed
+	if installed == "" {
+		installed = filepath.Join(r.dir, "no-such-installed-node")
 	}
+	env = append(env, "ECHOFOG_INSTALLED_BIN="+installed)
 	cmd.Env = env
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf

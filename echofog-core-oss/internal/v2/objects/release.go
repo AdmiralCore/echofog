@@ -3,6 +3,7 @@ package objects
 import (
 	"crypto/sha256"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -241,6 +242,17 @@ func (s *ReleaseState) check(b []byte, now time.Time) (*Manifest, error) {
 }
 
 func checkReleaseFields(rel *pb.Release) error {
+	if m := rel.GetMinVersion(); m != "" {
+		mv, ok := ParseSemver(m)
+		if !ok {
+			return invalid("min_version %q is not X.Y.Z", m)
+		}
+		// A bound above the manifest's own version would forbid the release it ships in. A manifest
+		// whose version is not X.Y.Z (a development label) carries no bound to compare with.
+		if v, ok := ParseSemver(rel.GetVersion()); ok && CompareSemver(mv, v) > 0 {
+			return invalid("min_version %s is above the version %s", m, rel.GetVersion())
+		}
+	}
 	if u := rel.GetNotesUrl(); u != "" {
 		if err := validateHTTPS(u, "notes_url"); err != nil {
 			return err
@@ -353,4 +365,41 @@ func (s *ReleaseState) Status(component string, own uint32, now time.Time) Updat
 		return UpdateRecommended
 	}
 	return UpToDate
+}
+
+// ParseSemver reads a strict X.Y.Z (an optional leading "v"; no leading zeros, at most six digits
+// per part). It is the one version syntax of releases, min_version and install.sh.
+func ParseSemver(s string) ([3]int, bool) {
+	var v [3]int
+	parts := strings.Split(strings.TrimPrefix(s, "v"), ".")
+	if len(parts) != 3 {
+		return v, false
+	}
+	for i, p := range parts {
+		if p == "" || len(p) > 6 || (len(p) > 1 && p[0] == '0') {
+			return v, false
+		}
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return v, false
+			}
+			n = n*10 + int(c-'0')
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+// CompareSemver returns -1, 0 or 1.
+func CompareSemver(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }

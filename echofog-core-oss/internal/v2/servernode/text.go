@@ -85,14 +85,15 @@ var messages = map[string]msg{
 	"doctor.level.warn":      {"ВНИМАНИЕ", "WARN"},
 	"doctor.level.fail":      {"ОШИБКА", "FAIL"},
 	// ---- status and update
-	"status.title":     {"Состояние ноды EchoFog v2", "EchoFog v2 node status"},
-	"update.available": {"Доступна версия %s (файл %s, %d Б).", "Version %s is available (file %s, %d bytes)."},
-	"update.none":      {"Установлена последняя версия.", "This is the latest version."},
-	"update.confirm":   {"Установить версию %s? Бинарь будет заменён, предыдущий сохранится рядом. (y/n)", "Install version %s? The binary will be replaced and the previous one kept beside it. (y/n)"},
-	"update.done":      {"Версия %s установлена; нужен перезапуск ноды (restart), чтобы она заработала.", "Version %s is installed; restart the node to use it."},
-	"update.declined":  {"Обновление не подтверждено, ничего не изменено.", "The update was not confirmed; nothing was changed."},
-	"update.no-keys":   {"В этой сборке нет ключей релиза (release keys): обновление невозможно. Нужна официальная сборка.", "This build has no release keys: it cannot be updated. Use an official build."},
-	"update.docker":    {"В Docker образ обновляется заменой тега и перезапуском контейнера, а не командой update.", "In Docker the image is updated by changing the tag and restarting the container, not with update."},
+	"status.title":            {"Состояние ноды EchoFog v2", "EchoFog v2 node status"},
+	"update.available":        {"Доступна версия %s (файл %s, %d Б).", "Version %s is available (file %s, %d bytes)."},
+	"update.rollback-warning": {"ВНИМАНИЕ: это откат с версии %s на %s. Старые версии могут содержать исправленные уязвимости. Откат выполняется только по явному флагу и не ниже min_version подписанного манифеста.", "WARNING: this is a rollback from %s to %s. Older versions may carry fixed vulnerabilities. A rollback happens only with the explicit flag and never below the min_version of the signed manifest."},
+	"update.none":             {"Установлена последняя версия.", "This is the latest version."},
+	"update.confirm":          {"Установить версию %s? Бинарь будет заменён, предыдущий сохранится рядом. (y/n)", "Install version %s? The binary will be replaced and the previous one kept beside it. (y/n)"},
+	"update.done":             {"Версия %s установлена; нужен перезапуск ноды (restart), чтобы она заработала.", "Version %s is installed; restart the node to use it."},
+	"update.declined":         {"Обновление не подтверждено, ничего не изменено.", "The update was not confirmed; nothing was changed."},
+	"update.no-keys":          {"В этой сборке нет ключей релиза (release keys): обновление невозможно. Нужна официальная сборка.", "This build has no release keys: it cannot be updated. Use an official build."},
+	"update.docker":           {"В Docker образ обновляется заменой тега и перезапуском контейнера, а не командой update.", "In Docker the image is updated by changing the tag and restarting the container, not with update."},
 }
 
 // Message returns the operator-facing text for a code in a language ("ru" or "en"; anything else

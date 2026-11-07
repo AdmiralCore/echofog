@@ -31,15 +31,37 @@ refuses to start without it. `ECHOFOG_ROLES` chooses the roles; an empty value s
 
 ## 3. Install without Docker
 
-`deploy/v2/install.sh` downloads the binary and the signed release manifest over https and starts the
-node's own installer. **The binary is checked before anything is installed**: the installer verifies it
-against the manifest (two signatures of the three release keys of the build) and writes no file and runs
-no system command until that passes. Download the script, read it, then run it as root. Never pipe a
-download into a shell.
+`deploy/v2/install.sh` downloads the binary over https and starts the node's own installer. **The trust
+root is the release public key block written inside `install.sh`.** The script checks the signatures of
+the signed release record (`release.txt`) with `ssh-keygen -Y verify` (two of the three release keys must
+sign it) and compares the size and SHA-256 of the binary with that record. The downloaded file becomes
+executable and is started only after that; if any check fails, it is deleted and nothing is installed.
+The node's own installer then checks the binary once more against the signed manifest.
+
+So the one thing to check by hand is that `install.sh` itself is the genuine file: its key block must
+have the published fingerprint. Never pipe a download into a shell. Download the file, compare the
+fingerprint, and only then run it as root:
+
+```
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://example.org/install.sh
+sh install.sh --fingerprint
+sed -n '/^# BEGIN RELEASE KEYS$/,/^# END RELEASE KEYS$/p' install.sh | sha256sum
+```
+
+Both of the last two commands must print the same value, and it must be the fingerprint published on
+the project's website **and** in the README of the repository (two independent places; if they differ,
+stop). The second command does not run any code from the file. Then:
 
 ```
 ECHOFOG_RELEASE_URL=https://example.org/releases/v2 sh install.sh --preset relay --advertise 203.0.113.10 --lang en
 ```
+
+The script needs `curl`, `sha256sum` and `ssh-keygen` (OpenSSH 8.0 or newer, package `openssh-client`);
+without `ssh-keygen` it stops before running anything. It never installs a version below the signed
+`min_version` of the release, below the floor stamped into the script, or below the version already
+installed. A deliberate rollback above the first two bounds needs `--allow-rollback` and prints a
+warning. When the release keys are replaced, an old `install.sh` stops and asks for the new one; the
+procedure is in [release-trust.md](release-trust.md).
 
 The installer creates the system user `echofog`, the data folder `/var/lib/echofog` (mode 0700), a
 hardened systemd unit, and prints the commands that open the firewall. It does not change the
@@ -49,16 +71,6 @@ questions in the terminal (language, role, domain, port, address). Presets: `rel
 `home-entry`. The paid and private exits come later.
 
 Then start it: `systemctl enable --now echofog-node`.
-
-**What this check does not cover (the trust anchor).** The check is made by the downloaded binary
-itself, with the release keys built into it, and the script runs that binary as root before any check
-has been made. The signatures protect against a damaged file and against a forged manifest next to an
-honest binary. They do **not** protect against someone who controls the download channel and serves a
-hostile binary together with a matching manifest: such a binary would simply not check anything. The
-trust anchor has to come from outside the download: compare the fingerprints of the release keys with
-the ones published on the project's website through another channel, or verify a signature of
-`install.sh` itself, before running it. If in doubt, build the binary from the source and pass it with
-`--binary` and `--manifest` yourself.
 
 ## 4. First start and the recovery phrase
 

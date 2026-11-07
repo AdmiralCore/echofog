@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func (r *updRig) publishMin(version, min string) {
 	sum := sha256.Sum256(r.artifact)
 	rel := &pb.Release{Version: version, MinVersion: min, ReleasedAt: uint64(updNow.Add(-time.Minute).Unix()), Artifacts: []*pb.Artifact{
 		{Platform: "linux-amd64", Name: "echofog-node", Sha256: sum[:], Size: uint64(len(r.artifact)), Url: r.srv.URL + "/echofog-node"},
+		{Platform: runtime.GOOS + "-" + runtime.GOARCH, Name: "echofog-node", Sha256: sum[:], Size: uint64(len(r.artifact)), Url: r.srv.URL + "/echofog-node"},
 	}}
 	raw, err := objects.SealRelease(r.signers[0], rel.ReleasedAt+399*86400, rel, r.signers[1])
 	if err != nil {
