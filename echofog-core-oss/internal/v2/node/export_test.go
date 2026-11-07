@@ -6,6 +6,7 @@ package node
 import (
 	"context"
 	"errors"
+	"net"
 	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"net/netip"
 
@@ -146,3 +147,12 @@ var MailboxQueues = func(r *Runtime) []mailbox.QueueRef {
 
 // MailboxItems counts the items a mailbox relay holds (private queues).
 var MailboxItems = func(r *Runtime) int { return r.mailboxItems() }
+
+var (
+	// NoteStall tells the runtime that a flow to ip stopped after bytes inbound bytes.
+	NoteStall = func(r *Runtime, ip netip.Addr, bytes int) bool { return r.noteStall(ip, bytes) }
+	// IsFrozen reports whether the runtime has marked its current network frozen.
+	IsFrozen = func(r *Runtime) bool { return r.frozen() }
+	// WrapFreeze wraps a connection to a foreign address the way the dial path does.
+	WrapFreeze = func(r *Runtime, c net.Conn, ip netip.Addr) net.Conn { return r.freezeConn(c, ip) }
+)

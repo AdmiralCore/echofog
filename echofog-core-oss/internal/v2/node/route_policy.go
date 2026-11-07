@@ -31,6 +31,8 @@ type RouteReport struct {
 	// Country and CountrySource: the client's own country at that dial and where it came from.
 	Country       string
 	CountrySource CountrySource
+	// Frozen: the network was marked frozen at that dial (T6.4d).
+	Frozen bool
 }
 
 // SetNetClass changes the kind of the client's network (T6.4).

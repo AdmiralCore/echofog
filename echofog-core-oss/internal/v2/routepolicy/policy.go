@@ -81,6 +81,8 @@ type Decision struct {
 	Rotate bool
 	// EntryInCountry: the first hop must be an entry node in the client's own country.
 	EntryInCountry bool
+	// EntryNeighbor widens the first hop to an entry node in a neighbouring country as well.
+	EntryNeighbor bool
 	// Probe is the budget of a probe connection when Direct is false; 0 means no probe.
 	Probe int
 }

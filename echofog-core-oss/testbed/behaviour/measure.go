@@ -26,6 +26,8 @@ import (
 type Product struct {
 	Country string
 	Net     routepolicy.NetClass
+	// NoEntry: the client knows no entry node at home or next door (T6.4d).
+	NoEntry bool
 }
 
 // ---------------------------------------------------------------------------- D16 freeze
@@ -37,6 +39,11 @@ type FreezeResult struct {
 	Connections int
 	FrozenAt    int    // bytes after which a TCP flow stopped
 	Rule        string // the row of the policy table the product used
+	// After the freeze was detected (T6.4d): the flows it cost, the time and the error a connection
+	// report would carry when there is no entry.
+	Attempts int
+	Elapsed  time.Duration
+	Error    string
 }
 
 // MeasureFreeze reads the product's routepolicy row for a foreign destination and plays a transfer

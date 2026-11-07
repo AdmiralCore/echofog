@@ -92,6 +92,8 @@ type routeOpts struct {
 	punchNet node.PunchNetwork
 	// noLocal leaves A without any public address: its own country is not known.
 	noLocal bool
+	// freezeStall is how long A waits before a silent flow counts as stopped (T6.4d).
+	freezeStall time.Duration
 }
 
 type routeWorld struct {
@@ -120,6 +122,7 @@ func newRouteWorld(t *testing.T, o routeOpts) *routeWorld {
 	a := newTestNodeFull(t, cards.Visible, false, nil, events, nil, func(c *node.Config) {
 		c.Registry, c.Country = reg, routeCountry
 		c.NetClass, c.RoutePolicy = o.net, o.rules
+		c.FreezeStall = o.freezeStall
 		c.DialContext = o.dialCtx
 		if o.features {
 			pathFeatures(c)
