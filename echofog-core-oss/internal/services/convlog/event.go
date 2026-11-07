@@ -44,6 +44,12 @@ const (
 	// maxLamportJump is how far an event may push the conversation clock in one step; more is
 	// clock-inflation spam (it would pin the author's messages to the bottom forever).
 	maxLamportJump = 1 << 24
+	// MaxUnknownFields bounds the protobuf fields an event carries that this build does not know
+	// (the signature does not cover them, a relay could append more).
+	MaxUnknownFields = 1 << 10
+	// MaxUnknownPerAuthor bounds the events of a kind this build does not know that one author may
+	// have in one conversation.
+	MaxUnknownPerAuthor = 1000
 )
 
 // ConvID names a conversation.
@@ -207,7 +213,17 @@ func check(e *Event) error {
 	return nil
 }
 
-// Decode parses and verifies an encoded event.
+// KnownKind reports whether this build has a view of events of kind k.
+func KnownKind(k uint32) bool {
+	switch k {
+	case KindMsg, KindEdit, KindDelete, KindReact, KindPin, KindMember, KindChannel, KindThread, KindProfile:
+		return true
+	}
+	return false
+}
+
+// Decode parses and verifies an encoded event. The fields it does not know stay in the event (they
+// are kept and forwarded), up to MaxUnknownFields: past that the event is refused whole.
 func Decode(raw []byte) (*Event, EventID, error) {
 	if len(raw) > MaxEventSize {
 		return nil, EventID{}, errors.New("event too large")
@@ -215,6 +231,9 @@ func Decode(raw []byte) (*Event, EventID, error) {
 	var e Event
 	if err := proto.Unmarshal(raw, &e); err != nil {
 		return nil, EventID{}, err
+	}
+	if len(e.ProtoReflect().GetUnknown()) > MaxUnknownFields {
+		return nil, EventID{}, errors.New("too many unknown fields")
 	}
 	if err := check(&e); err != nil {
 		return nil, EventID{}, err

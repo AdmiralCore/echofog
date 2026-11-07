@@ -24,6 +24,8 @@ var (
 	ErrClock          = errors.New("the event's clock jumps too far")
 	ErrBadBody        = errors.New("bad event body")
 	ErrNotFound       = errors.New("not found")
+	// ErrQuota: the author has as many events of unknown kinds in the conversation as they may.
+	ErrQuota = errors.New("quota of events of unknown kinds reached")
 )
 
 // maxEmojiPerMessage bounds the distinct reactions on one message.
@@ -487,6 +489,26 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			err = t.applyThread(e, author, rights)
 		case KindProfile:
 			err = t.applyProfile(e, author, rights)
+		default:
+			// a kind this build cannot read is held to what a message is: it takes the right to
+			// write (and no timeout, see above), and an announcements channel is for managers
+			if !rights.Send {
+				return ErrForbidden
+			}
+			if t.c.Kind == KindGroup {
+				if st, ok := t.channel(channelOf(e)); ok && (st.Category || st.ReadOnly && !rights.Manage) {
+					return ErrForbidden
+				}
+			}
+			if mode == modeNew && !own { // what others send; the author's own log is theirs to fill
+				if t.meta.Unknown[author] >= MaxUnknownPerAuthor {
+					return ErrQuota // not kept: a rejected copy would take the room all the same
+				}
+				if t.meta.Unknown == nil {
+					t.meta.Unknown = map[string]uint32{}
+				}
+				t.meta.Unknown[author]++
+			}
 		}
 	}
 	if err != nil {
@@ -832,6 +854,22 @@ func (l *Log) ingest(c Conv, raw []byte, live bool) (EventID, bool, error) {
 	l.mu.Unlock()
 	l.notify(ch)
 	return id, err == nil, err
+}
+
+// Accepted reports whether the log holds the event and gave it effect (not kept as refused).
+func (l *Log) Accepted(c Conv, id EventID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	k := indexKey(l.bc(c.ID), id.String())
+	if !l.st.Exists(k) {
+		return false
+	}
+	raw, err := l.st.Get(k)
+	if err != nil {
+		return false
+	}
+	var ie indexEntry
+	return json.Unmarshal(raw, &ie) == nil && !ie.R
 }
 
 func (l *Log) marker(e *Event, rejected bool) []byte {
