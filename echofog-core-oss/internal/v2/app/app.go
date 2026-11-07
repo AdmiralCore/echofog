@@ -158,6 +158,8 @@ type App struct {
 	handed  map[string]time.Time
 	fx      fileState
 	gev     groupEvents
+	vpn     vpnState
+	vmu     sync.Mutex // the saved exits and the history
 }
 
 // New creates an App.

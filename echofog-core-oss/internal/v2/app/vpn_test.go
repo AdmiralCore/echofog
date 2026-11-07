@@ -13,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/app"
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
@@ -351,4 +352,32 @@ func TestVPNStatusUnderLoad(t *testing.T) {
 	}
 	wg.Wait()
 	_ = v.a.VPNStatus()
+}
+
+type fakeRT struct {
+	card *objects.Card
+	err  error
+}
+
+func (f *fakeRT) ExitClient(_ context.Context, card *objects.Card, _ node.DialOpt) (*exit.Client, error) {
+	f.card = card
+	if f.err != nil {
+		return nil, f.err
+	}
+	return exit.NewClient(exit.ClientConfig{OpenStream: func(context.Context) (*mux.Stream, error) { return nil, errors.New("no session") }})
+}
+
+func TestRuntimeExitDialsThroughTheRuntimeClient(t *testing.T) {
+	rt := &fakeRT{}
+	d := app.RuntimeExit(rt)
+	card := exitCard(t, true)
+	l, err := d.Dial(context.Background(), card)
+	if err != nil || l == nil || rt.card != card {
+		t.Fatalf("Dial: %v %v", l, err)
+	}
+	_ = l.Close()
+	rt.err = errors.New("closed")
+	if l, err := d.Dial(context.Background(), card); err == nil || l != nil {
+		t.Fatalf("a failing runtime: %v %v", l, err)
+	}
 }
