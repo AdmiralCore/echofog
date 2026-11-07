@@ -24,6 +24,8 @@ import (
 var (
 	// ErrDowngrade: the offered version is not newer than the running one.
 	ErrDowngrade = errors.New("servernode: the offered version is not newer; rolling back is not allowed")
+	// ErrBelowMin: the offered version is below the minimum version of the signed manifest.
+	ErrBelowMin = errors.New("servernode: the offered version is below the minimum version of the signed manifest")
 	// ErrNoReleaseKeys: this build has no release keys, so it cannot verify an update.
 	ErrNoReleaseKeys = errors.New("servernode: this build has no release keys")
 	// ErrNotConfirmed: the operator did not agree.
@@ -61,6 +63,10 @@ type UpdateInfo struct {
 	Size     uint64
 	SHA256   []byte
 	NotesURL string
+	// MinVersion is the manifest's lower bound ("" = none).
+	MinVersion string
+	// Rollback marks an offer below the running version (only with UpdateDeps.AllowRollback).
+	Rollback bool
 }
 
 // UpdateDeps are the inputs of the update.
@@ -73,6 +79,8 @@ type UpdateDeps struct {
 	// Platform is "<goos>-<goarch>", the platform field of the manifest's artifacts.
 	Platform string
 	ExePath  string
+	// AllowRollback lets the update install a version below the running one (never below min_version).
+	AllowRollback bool
 	// Confirm is the operator's consent. Nil means no consent: nothing is installed.
 	Confirm func(info UpdateInfo) bool
 	// SelfTest runs the binary at exe and returns the version it reports; nil runs "exe version".
