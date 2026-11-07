@@ -179,6 +179,8 @@ func (r liveRooms) Roster(group, channel string) []VoiceMember {
 // came in at once).
 type GroupEvent struct {
 	Kind, Group, Title, From, Reason string
+	// a call: its secret, who coordinates it, and the voice room it is in ("" the group's own call)
+	CallID, Coordinator, Room string
 }
 
 // groupEvents holds the subscribers of group events.
