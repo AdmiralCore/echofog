@@ -31,15 +31,16 @@ type gclock struct{ off atomic.Int64 }
 func (c *gclock) Now() time.Time { return testNow.Add(time.Duration(c.off.Load())) }
 
 type gNode struct {
-	pub   [32]byte
-	priv  ed25519.PrivateKey
-	node  [32]byte
-	eng   *convsync.Engine
-	app   *app.App
-	book  *app.GroupBook
-	rig   *rig
-	world *gWorld
-	sent  int // letters sent to the node
+	pub       [32]byte
+	priv      ed25519.PrivateKey
+	node      [32]byte
+	eng       *convsync.Engine
+	app       *app.App
+	book      *app.GroupBook
+	rig       *rig
+	bookStore *memKV
+	world     *gWorld
+	sent      int // letters sent to the node
 }
 
 type gLetter struct {
@@ -131,7 +132,8 @@ func newGroupWorld(t *testing.T, n int) (*gWorld, []*gNode) {
 		port := &gPort{w: w, self: g.node}
 		sign := func(b []byte) ([]byte, error) { return ed25519.Sign(g.priv, b), nil }
 		rg := newRig(t, app.ModePublic)
-		book, err := app.NewGroupBook(app.BookConfig{Pub: g.pub, Sign: sign, Store: newKV(), Clock: w.clk})
+		g.bookStore = newKV()
+		book, err := app.NewGroupBook(app.BookConfig{Pub: g.pub, Sign: sign, Store: g.bookStore, Clock: w.clk})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -895,5 +897,103 @@ func TestGroupCallsWithoutABookAreRefused(t *testing.T) {
 	}
 	if _, err := rg.a.JoinGroup(context.Background(), "x"); !errors.Is(err, app.ErrGroupOff) {
 		t.Fatalf("JoinGroup: %v", err)
+	}
+}
+
+func TestJoinMessageFromAnotherNodeChangesNothing(t *testing.T) {
+	w, ns := newGroupWorld(t, 3)
+	alice, bob, mallory := ns[0], ns[1], ns[2]
+	ctx := context.Background()
+	g, _ := alice.app.CreateGroup(ctx, "Закрытая", "", app.GroupPrivate)
+	inv, _ := alice.app.GroupInviteCreate(ctx, g.ID, app.InviteSpec{TTL: time.Hour, Approval: true})
+	// mallory sends a request in bob's name: the sender is not the account named in it
+	raw := `fogjoin2:{"v":1,"g":"` + g.ID + `","n":"` + inv.Nonce + `","p":"` + hex.EncodeToString(bob.pub[:]) + `"}`
+	pm := &chatpb.PersonalMessageProto{Metadata: raw}
+	if !alice.app.OnGroupMessage(ctx, mallory.node, pm) {
+		t.Fatal("a join message must be taken, and ignored")
+	}
+	w.drain()
+	if reqs, _ := alice.app.GroupJoinRequests(g.ID); len(reqs) != 0 {
+		t.Fatalf("a forged request was kept: %+v", reqs)
+	}
+	// the same message from bob himself is kept
+	alice.app.OnGroupMessage(ctx, bob.node, pm)
+	if reqs, _ := alice.app.GroupJoinRequests(g.ID); len(reqs) != 1 {
+		t.Fatalf("bob's request: %+v", reqs)
+	}
+	// text that is no join message is not taken
+	if alice.app.OnGroupMessage(ctx, bob.node, &chatpb.PersonalMessageProto{Text: "привет"}) {
+		t.Fatal("a chat message was taken as a join message")
+	}
+	// a message for a group that is not kept, and a huge one, are taken and ignored
+	big := &chatpb.PersonalMessageProto{Metadata: "fogjoin2:" + string(make([]byte, 5000))}
+	if !alice.app.OnGroupMessage(ctx, bob.node, big) {
+		t.Fatal("a big join message must be taken")
+	}
+}
+
+func TestGroupsSurviveARestart(t *testing.T) {
+	w, ns, id := team(t, 2)
+	alice := ns[0]
+	book2, err := app.NewGroupBook(app.BookConfig{Pub: alice.pub, Sign: func(b []byte) ([]byte, error) { return ed25519.Sign(alice.priv, b), nil }, Store: alice.bookStore, Clock: w.clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := book2.Conv(convlog.GroupConv(id))
+	if !ok || c.Group != id {
+		t.Fatalf("a restarted book lost the group: %+v, %v", c, ok)
+	}
+	rg := newRig(t, app.ModePublic)
+	a2, err := app.New(app.Config{Runtime: rg.rt, Links: rg.ln, Store: rg.kv, Clock: w.clk, Self: alice.node, Mode: app.ModePublic,
+		Convs: alice.eng, Groups: book2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ms, err := a2.GroupMembers(id); err != nil || len(ms) != 2 {
+		t.Fatalf("members after the restart: %+v, %v", ms, err)
+	}
+}
+
+type fakeVoice struct{ got [][2]string }
+
+func (f *fakeVoice) Roster(group, channel string) []app.VoiceMember {
+	f.got = append(f.got, [2]string{group, channel})
+	return []app.VoiceMember{{Node: "n1", Muted: true}}
+}
+
+func TestVoiceRosterComesFromTheRuntimeOnly(t *testing.T) {
+	w, ns, id := team(t, 2)
+	alice := ns[0]
+	ctx := context.Background()
+	if _, err := alice.app.GroupChannelSave(ctx, id, convlog.ChannelSpec{ID: "talk", Name: "Разговоры", Voice: true}); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	if _, err := alice.app.GroupVoice(id, "talk"); !errors.Is(err, app.ErrNoVoice) {
+		t.Fatalf("no roster wired: %v", err)
+	}
+	v := &fakeVoice{}
+	rg := newRig(t, app.ModePublic)
+	a2, err := app.New(app.Config{Runtime: rg.rt, Links: rg.ln, Store: rg.kv, Clock: w.clk, Self: alice.node, Mode: app.ModePublic,
+		Convs: alice.eng, Groups: alice.book, Voice: v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := a2.GroupVoice(id, "talk")
+	if err != nil || len(got) != 1 || got[0].Node != "n1" || len(v.got) != 1 || v.got[0] != [2]string{id, "talk"} {
+		t.Fatalf("roster %+v, %v, asked %v", got, err, v.got)
+	}
+	// a text channel and an unknown one are no voice rooms
+	for _, ch := range []string{"", "nope"} {
+		if _, err := a2.GroupVoice(id, ch); !errors.Is(err, app.ErrNoGroup) {
+			t.Errorf("room %q: %v", ch, err)
+		}
+	}
+	if _, err := a2.GroupVoice("fog_grp_x", "talk"); !errors.Is(err, app.ErrNoGroup) {
+		t.Errorf("unknown group: %v", err)
+	}
+	// the roster never enters the log
+	if page, _ := alice.app.ChatHistory(ctx, gref(id, "talk"), "", 10); len(page.Messages) != 0 {
+		t.Errorf("the room's log holds %d messages", len(page.Messages))
 	}
 }

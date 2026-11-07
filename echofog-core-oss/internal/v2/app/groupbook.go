@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/services/groups"
@@ -70,10 +69,9 @@ type groupRec struct {
 	Joined  int64                        `json:"joined"`
 	Via     string                       `json:"via,omitempty"`
 	Issuer  string                       `json:"issuer,omitempty"` // hex key of who let us in
-	// JoinRaw is our own join event, kept until the log holds the roster and it was announced.
-	JoinRaw   []byte `json:"joinRaw,omitempty"`
-	Announced bool   `json:"announced,omitempty"`
-	Pending   bool   `json:"pending,omitempty"` // asked to join with an invitation that needs approval
+	// JoinSent: our own join event was written for the invitation we hold; it is written once, so that a
+	// member who was removed does not come back by themselves.
+	JoinSent bool `json:"joinSent,omitempty"`
 }
 
 // GroupBook is the register of the groups this node is in and the group rules the conversation
@@ -150,6 +148,23 @@ func (b *GroupBook) put(r groupRec) error {
 	b.recs[id] = &cp
 	b.byConv[convlog.GroupConv(id)] = id
 	return nil
+}
+
+// claimJoin marks the join of a group as written and returns its record; false when it was written
+// already or the group is not kept.
+func (b *GroupBook) claimJoin(id string) (groupRec, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.load()
+	r, ok := b.recs[id]
+	if !ok || r.JoinSent || r.Via == "" {
+		return groupRec{}, false
+	}
+	r.JoinSent = true
+	if raw, err := json.Marshal(r); err == nil {
+		_ = b.cfg.Store.Put([]byte(groupPrefix+id), raw)
+	}
+	return *r, true
 }
 
 // forget removes a record.
@@ -358,5 +373,3 @@ func nodeHexOfPub(pub [32]byte) string {
 	n := convsync.NodeOf(pub)
 	return hex.EncodeToString(n[:])
 }
-
-func nowOf(c Clock) time.Time { return c.Now() }
