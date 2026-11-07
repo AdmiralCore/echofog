@@ -1137,8 +1137,8 @@ func (a *App) noteRequest(c convlog.Conv, pub [32]byte, inv convlog.Invite) {
 		}
 	}
 	raw, err := json.Marshal(requestRec{Pub: hex.EncodeToString(pub[:]), TS: a.cfg.Clock.Now().Unix(), Via: inv.N, Label: inv.Label})
-	if err == nil {
-		_ = a.cfg.Store.PutTTL(key, raw, requestTTL)
+	if err == nil && a.cfg.Store.PutTTL(key, raw, requestTTL) == nil {
+		a.emitGroup(GroupEvent{Kind: "requests", Group: c.Group, From: nodeHexOfPub(pub)})
 	}
 }
 
@@ -1208,7 +1208,9 @@ func (a *App) GroupJoinDecide(ctx context.Context, id, node string, accept bool)
 		return ErrRequest
 	}
 	if !accept {
-		return a.cfg.Store.Delete(key)
+		err := a.cfg.Store.Delete(key)
+		a.emitGroup(GroupEvent{Kind: "requests", Group: id})
+		return err
 	}
 	ev, err := a.memberEvent(cv, c, &convlog.MemberBody{Action: convlog.MemberJoin, Member: pub[:], Via: r.Via})
 	if err != nil {
@@ -1217,6 +1219,7 @@ func (a *App) GroupJoinDecide(ctx context.Context, id, node string, accept bool)
 	_ = a.cfg.Store.Delete(key)
 	a.publishGroup(ctx, cv, c, ev)
 	a.handOver(ctx, cv, c, pub)
+	a.emitGroup(GroupEvent{Kind: "requests", Group: id})
 	return nil
 }
 
@@ -1232,11 +1235,39 @@ func (a *App) onGroupChange(ch convlog.Change) {
 	cv := a.cfg.Convs
 	l := cv.Log()
 	for _, m := range ch.Members {
+		if len(m.Member) == 32 && types.PeerPubKeyToID(types.PeerPublicKey(m.Member)) == l.Self() {
+			switch m.Action {
+			case convlog.MemberRemove:
+				a.emitGroup(GroupEvent{Kind: "removed", Group: ch.Conv.Group, Reason: "removed"})
+			case convlog.MemberBan:
+				a.emitGroup(GroupEvent{Kind: "removed", Group: ch.Conv.Group, Reason: "banned"})
+			}
+		}
 		if (m.Action == convlog.MemberRemove || m.Action == convlog.MemberBan) && len(m.Member) == 32 {
 			a.forgetHanded(ch.Conv.Group, [32]byte(m.Member)) // who left may come back and be given the history again
 		}
 	}
 	r, ok := b.rec(ch.Conv.Group)
+	if ok && r.Via != "" && !r.Added && l.Participant(ch.Conv, l.Self()) {
+		r.Added = true
+		if b.put(r) == nil {
+			a.gev.mu.Lock()
+			if a.gev.addedAt == nil {
+				a.gev.addedAt = map[string]time.Time{}
+			}
+			a.gev.addedAt[ch.Conv.Group] = a.cfg.Clock.Now()
+			a.gev.mu.Unlock()
+			a.emitGroup(GroupEvent{Kind: "added", Group: ch.Conv.Group})
+		}
+	}
+	if a.catchingUp(ch.Conv.Group) || len(ch.Messages) > 1 {
+		for _, m := range ch.Messages {
+			if !m.Mine {
+				a.emitGroup(GroupEvent{Kind: "history", Group: ch.Conv.Group}) // earlier messages came in
+				break
+			}
+		}
+	}
 	if !ok || r.JoinSent || l.Participant(ch.Conv, l.Self()) || !l.HasRoster(ch.Conv) {
 		return
 	}

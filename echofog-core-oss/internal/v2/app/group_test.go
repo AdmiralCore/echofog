@@ -106,9 +106,7 @@ func (w *gWorld) drain() {
 		if dst == nil {
 			continue
 		}
-		if !dst.eng.Receive(context.Background(), l.from, l.pm) {
-			dst.app.OnGroupMessage(context.Background(), l.from, l.pm)
-		}
+		dst.app.OnIncoming(context.Background(), l.from, l.pm)
 	}
 	w.t.Fatal("the network never went quiet")
 }
@@ -153,6 +151,8 @@ func newGroupWorld(t *testing.T, n int) (*gWorld, []*gNode) {
 		a, err := app.New(app.Config{
 			Runtime: rg.rt, Links: rg.ln, Store: rg.kv, Clock: w.clk, Self: g.node, Mode: app.ModePublic, Version: "0.3.0",
 			Convs: eng, Groups: book, Chat: port,
+			Files: &holder{}, FileNet: &fakeFiles{w: newWorld(), self: g.node}, FileDir: t.TempDir(),
+			Prefs: convsync.NewPrefs(newKV()),
 			PubOf: func(ctx context.Context, n [32]byte) ([32]byte, error) { return w.Pub(ctx, n) },
 		})
 		if err != nil {

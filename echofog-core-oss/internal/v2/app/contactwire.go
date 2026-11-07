@@ -7,12 +7,15 @@ import (
 	"time"
 
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
+	"github.com/echofog/echofog-core/internal/v2/objects"
 	apitypes "github.com/echofog/echofog-core/pkg/api/types"
 )
 
 const (
 	// knockInterval is the least time between two answers to one contact's knocks.
 	knockInterval = time.Minute
+	// knockWait is how long a knock waits for its card: a card after that is not an answer.
+	knockWait = 2 * time.Minute
 	// maxKnockCard bounds a card answer handed on: a card envelope is a few KB.
 	maxKnockCard = 32 << 10
 )
@@ -57,9 +60,63 @@ func (a *App) Knock(ctx context.Context, node string) error {
 	if a.cfg.Chat == nil {
 		return errors.New("app: no chat service")
 	}
+	a.noteAsked(id)
 	_, err = a.cfg.Chat.Send(ctx, id, &chatpb.PersonalMessageProto{Control: &chatpb.Control{
 		Kind: &chatpb.Control_Knock{Knock: &chatpb.Knock{Ask: true}}}})
 	return err
+}
+
+// noteAsked remembers that a card was asked of node. The table holds contacts only, so the contact
+// limit bounds it; stale entries are dropped when it is full.
+func (a *App) noteAsked(node [32]byte) {
+	now := a.cfg.Clock.Now()
+	a.kmu.Lock()
+	defer a.kmu.Unlock()
+	if a.asked == nil {
+		a.asked = map[[32]byte]time.Time{}
+	}
+	if len(a.asked) >= a.maxContacts() {
+		for k, t := range a.asked {
+			if now.Sub(t) >= knockWait || now.Before(t) {
+				delete(a.asked, k)
+			}
+		}
+	}
+	a.asked[node] = now
+}
+
+// askedLately reports whether a card was asked of node lately; an old question is forgotten.
+func (a *App) askedLately(node [32]byte) bool {
+	now := a.cfg.Clock.Now()
+	a.kmu.Lock()
+	defer a.kmu.Unlock()
+	t, ok := a.asked[node]
+	if !ok {
+		return false
+	}
+	if now.Before(t) || now.Sub(t) >= knockWait {
+		delete(a.asked, node)
+		return false
+	}
+	return true
+}
+
+// answered forgets the question: one knock takes one card. A card that does not verify does not
+// answer it, so a forged one cannot use the knock up.
+func (a *App) answered(node [32]byte) {
+	a.kmu.Lock()
+	delete(a.asked, node)
+	a.kmu.Unlock()
+}
+
+// cardOK checks the card a contact answered with: a valid node card whose account is the contact.
+// Without a Config.VerifyCard of its own that is objects.VerifyCard and the card's node ID.
+func (a *App) cardOK(from [32]byte, card []byte) bool {
+	if a.cfg.VerifyCard != nil {
+		return a.cfg.VerifyCard(from, card)
+	}
+	c, err := objects.VerifyCard(card, a.cfg.Clock.Now())
+	return err == nil && c.NodeID == from
 }
 
 // OnControl handles a chat/2 control message from an authenticated account. Wire it to
@@ -72,7 +129,11 @@ func (a *App) OnControl(from [32]byte, c *chatpb.Control) {
 		return
 	}
 	if !k.GetAsk() {
-		if card := k.GetCard(); len(card) > 0 && len(card) <= maxKnockCard && a.cfg.IngestCard != nil {
+		// a card is taken only as the answer to a knock of ours, and only a valid card of that very
+		// account (T7.5b): an unasked or forged one is dropped without a word
+		if card := k.GetCard(); len(card) > 0 && len(card) <= maxKnockCard && a.cfg.IngestCard != nil &&
+			a.askedLately(from) && a.cardOK(from, card) {
+			a.answered(from)
 			a.cfg.IngestCard(from, card)
 		}
 		return

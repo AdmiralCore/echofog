@@ -50,6 +50,7 @@ func (n *NodeApi) ListFileTransfers(peerIDHex string) ([]dto.FileTransferDTO, er
 }
 
 func (n *NodeApi) OnFileTransfer(cb func(dto.FileTransferDTO)) func() {
+	n.v2m.rememberFile(cb)
 	return n.fileDomain().OnFileTransfer(cb)
 }
 

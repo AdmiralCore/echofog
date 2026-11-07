@@ -20,6 +20,7 @@ import (
 	chatcrypto "github.com/echofog/echofog-core/internal/v2/chat/crypto"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/dht"
+	"github.com/echofog/echofog-core/internal/v2/files"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/geoip"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
@@ -81,6 +82,12 @@ type Config struct {
 	Chat       bool
 	ChatEvents chat.Events
 	ChatMail   chat.Mail
+	// Files turns files/2 on (T8.1/T11.3d): the node serves the files it offers and the app fetches the
+	// ones it is offered through OpenFiles. FilesLimits bound what the server holds; FilesOnDone is called
+	// when a recipient confirmed it got a whole file.
+	Files       bool
+	FilesLimits files.Limits
+	FilesOnDone func(fid [16]byte, node [32]byte)
 	// MailboxRelays are the mailbox relays M where this node keeps its queues while it is away (T7.4);
 	// nil means the node has no queue. MailboxVia are the forwarding relays F it hands deposits to
 	// (default: the same). ChatContacts lists the accounts told about a new queue.
@@ -265,6 +272,7 @@ type Runtime struct {
 	releaseM          *release.Manager
 	devList           ownDevices
 	chat              *chat.Service
+	files             *files.Server
 	chatKeys          *chatcrypto.Crypto
 	mailRecv          *mailbox.Receiver
 	mailboxClientOpts func([32]byte) DialOpt

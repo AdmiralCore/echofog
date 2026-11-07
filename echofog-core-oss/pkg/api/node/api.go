@@ -62,6 +62,7 @@ type NodeApi struct {
 	backends backends
 
 	v2n v2Notices // the protocol 2 notices for the UI (v2_notices.go)
+	v2m v2Subs    // what the UI subscribed to before AttachV2Messenger (backends_v2_msg.go)
 
 	Logger *slog.Logger
 }

@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
 )
@@ -180,6 +181,40 @@ func UserMessage(err error) string {
 		return "Эта сеть пока не поддерживается без проверенного входного узла"
 	case errors.Is(err, ErrRunning):
 		return "Сеть уже запущена"
+	case errors.Is(err, ErrNoChat), errors.Is(err, ErrNoGroup), errors.Is(err, convlog.ErrNotParticipant):
+		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
+	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff):
+		return "Эта возможность пока недоступна"
+	case errors.Is(err, ErrBadMessage):
+		return "Сообщение не найдено или указано неверно"
+	case errors.Is(err, ErrEmptyMessage):
+		return "Сообщение пустое"
+	case errors.Is(err, ErrMessageTooLong):
+		return "Сообщение слишком длинное"
+	case errors.Is(err, ErrBadMode):
+		return "Неизвестный режим уведомлений"
+	case errors.Is(err, ErrInvite):
+		return "Ссылка-приглашение не подходит" // one text for every reason the link does not work
+	case errors.Is(err, ErrBadGroup):
+		return "Название или вид группы указаны неверно"
+	case errors.Is(err, ErrNoRight), errors.Is(err, convlog.ErrForbidden):
+		return "Для этого действия не хватает прав"
+	case errors.Is(err, ErrOwnerStays):
+		return "Сначала нужно передать группу другому участнику"
+	case errors.Is(err, ErrStillIn):
+		return "Сначала нужно выйти из группы"
+	case errors.Is(err, ErrNoMember):
+		return "Такого участника нет"
+	case errors.Is(err, ErrNoTransfer):
+		return "Такой передачи нет"
+	case errors.Is(err, ErrBadFile):
+		return "Файл не найден или не читается"
+	case errors.Is(err, ErrFileTooLarge):
+		return "Файл слишком большой"
+	case errors.Is(err, ErrTooManyTransfers):
+		return "Слишком много передач: дождитесь завершения текущих"
+	case errors.Is(err, ErrBadState):
+		return "Это действие сейчас недоступно для передачи"
 	case errors.Is(err, links.ErrNotLink), errors.Is(err, links.ErrOtherVersion), errors.Is(err, links.ErrMismatch),
 		errors.Is(err, links.ErrExpired), errors.Is(err, links.ErrRevoked), errors.Is(err, links.ErrNoContactLink),
 		errors.Is(err, links.ErrNoInviter):

@@ -72,6 +72,8 @@ type groupRec struct {
 	// JoinSent: our own join event was written for the invitation we hold; it is written once, so that a
 	// member who was removed does not come back by themselves.
 	JoinSent bool `json:"joinSent,omitempty"`
+	// Added: this node was let in and the screen was told of it, once.
+	Added bool `json:"added,omitempty"`
 }
 
 // GroupBook is the register of the groups this node is in and the group rules the conversation
@@ -376,4 +378,16 @@ func newNonce(rnd func([]byte) (int, error)) (string, error) {
 func nodeHexOfPub(pub [32]byte) string {
 	n := convsync.NodeOf(pub)
 	return hex.EncodeToString(n[:])
+}
+
+// pubOfPeer finds the account key the logs of the groups name behind a peer id.
+func (b *GroupBook) pubOfPeer(p types.PeerID) ([32]byte, bool) {
+	for _, id := range b.ids() {
+		for _, pub := range b.Members(convlog.Group(id)) {
+			if types.PeerPubKeyToID(types.PeerPublicKey(pub)) == p {
+				return pub, true
+			}
+		}
+	}
+	return [32]byte{}, false
 }

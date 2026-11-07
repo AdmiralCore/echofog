@@ -44,6 +44,7 @@ type ingested struct {
 }
 
 type wireRig struct {
+	clk *tclock
 	*rig
 	chat *fakeChat
 	got  []ingested
@@ -54,12 +55,13 @@ var ownCardBytes = []byte("own-peer-card-envelope")
 func newWireRig(t *testing.T, maxContacts int) *wireRig {
 	t.Helper()
 	r := newRig(t, app.ModePublic)
-	w := &wireRig{rig: r, chat: &fakeChat{}}
+	w := &wireRig{rig: r, chat: &fakeChat{}, clk: &tclock{t: testNow}}
 	a, err := app.New(app.Config{
-		Runtime: r.rt, Links: r.ln, Store: r.kv, Clock: clock{}, Self: nid(1), Mode: app.ModePublic, Version: "0.3.0",
+		Runtime: r.rt, Links: r.ln, Store: r.kv, Clock: w.clk, Self: nid(1), Mode: app.ModePublic, Version: "0.3.0",
 		MaxContacts: maxContacts,
 		Chat:        w.chat,
 		OwnCard:     func() ([]byte, bool) { return ownCardBytes, true },
+		VerifyCard:  func(_ [32]byte, env []byte) bool { return string(env) == "card" },
 		IngestCard:  func(from [32]byte, env []byte) { w.got = append(w.got, ingested{from, append([]byte(nil), env...)}) },
 	})
 	if err != nil {
@@ -180,7 +182,11 @@ func TestKnockAnswersAreThrottledPerContact(t *testing.T) {
 
 func TestCardAnswerReachesTheCardBookOnlyFromContactsAndBounded(t *testing.T) {
 	w := newWireRig(t, 0)
-	w.addContact(t, 7)
+	n7 := w.addContact(t, 7)
+	if err := w.a.Knock(context.Background(), n7); err != nil { // only a card that was asked for is taken (T11.3d)
+		t.Fatal(err)
+	}
+	asked := w.chat.count()
 	answer := func(card []byte) *chatpb.Control {
 		return &chatpb.Control{Kind: &chatpb.Control_Knock{Knock: &chatpb.Knock{Card: card}}}
 	}
@@ -194,7 +200,7 @@ func TestCardAnswerReachesTheCardBookOnlyFromContactsAndBounded(t *testing.T) {
 	if len(w.got) != 1 || w.got[0].from != nid(7) || string(w.got[0].env) != "card" {
 		t.Fatalf("ingested %+v", w.got)
 	}
-	if w.chat.count() != 0 {
+	if w.chat.count() != asked {
 		t.Fatal("an answer to a knock was answered again")
 	}
 }

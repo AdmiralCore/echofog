@@ -17,6 +17,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/access"
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
+	"github.com/echofog/echofog-core/internal/v2/convsync"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/routepolicy"
@@ -127,6 +128,11 @@ type Config struct {
 	FileLimits FileLimits
 	FileFree   func(dir string) (uint64, error)
 	FileWait   func(ctx context.Context, d time.Duration) bool
+	// Prefs holds the notification settings and followed threads of this device; nil turns them off.
+	Prefs *convsync.Prefs
+	// VerifyCard checks the card a contact answered a knock with: true when it is a valid card of
+	// that account. Nil: the real check (objects.VerifyCard, the card's account is the sender).
+	VerifyCard func(from [32]byte, envelope []byte) bool
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string
@@ -141,11 +147,13 @@ type App struct {
 	cmu     sync.Mutex // contacts: read-modify-write
 	kmu     sync.Mutex // knock answers: last answer per contact
 	knocked map[[32]byte]time.Time
-	ntc     notices // notices for the UI (notice.go)
+	asked   map[[32]byte]time.Time // knocks sent and not yet answered, by contact
+	ntc     notices                // notices for the UI (notice.go)
 	chats   chatState
 	hmu     sync.Mutex // history handed to newcomers: when, per group and key
 	handed  map[string]time.Time
 	fx      fileState
+	gev     groupEvents
 }
 
 // New creates an App.
