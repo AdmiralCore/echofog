@@ -170,3 +170,70 @@ func TestLoadCensorConfigReadsARuleSet(t *testing.T) {
 		assert.Error(t, err, name)
 	}
 }
+
+// T15.0c acceptance, remark 1: a description with a typo must not load as "no rules".
+func TestLoadCensorConfigRefusesWhatItDoesNotKnow(t *testing.T) {
+	for name, bad := range map[string]string{
+		"typo in a key":     `{"freez_bytes":16384,"udp_dorp":true}`,
+		"unknown key":       `{"freeze_bytes":1,"colour":"red"}`,
+		"unknown in and":    `{"and":{"asns":["A"],"ja4s":["j"],"parallel":3,"penalty_seconds":1,"extra":1}}`,
+		"trailing value":    `{"freeze_bytes":1} {"udp_drop":true}`,
+		"trailing garbage":  `{"freeze_bytes":1} x`,
+		"window backwards":  `{"shutdown_from":"2026-11-01T01:00:00Z","shutdown_to":"2026-11-01T00:00:00Z"}`,
+		"window of nothing": `{"shutdown_from":"2026-11-01T01:00:00Z","shutdown_to":"2026-11-01T01:00:00Z"}`,
+		"only one end":      `{"shutdown_from":"2026-11-01T01:00:00Z"}`,
+	} {
+		_, err := LoadCensorConfig(strings.NewReader(bad))
+		assert.Error(t, err, name)
+	}
+	_, err := LoadCensorConfig(strings.NewReader(`{"freeze_bytes":1}` + "\n  \n"))
+	assert.NoError(t, err, "whitespace after the value is not trailing data")
+}
+
+// T15.0c acceptance, remark 2: the start of a shutdown window cuts the flows that are open.
+func TestShutdownCutsTheFlowsThatAreOpen(t *testing.T) {
+	clk := NewVClock()
+	from := clk.Now().Add(10 * time.Second)
+	c := NewCensor(CensorConfig{ShutdownFrom: from, ShutdownTo: from.Add(time.Minute)}, clk)
+	a := tcpAt(dstA, 1)
+	require.Equal(t, Pass, c.Begin(a).Kind)
+	assert.Equal(t, Pass, c.Judge(a).Kind)
+	clk.Advance(30 * time.Second)
+	v := c.Judge(a)
+	assert.Equal(t, Drop, v.Kind, "the link is down: an open flow gets nothing more")
+	assert.WithinDuration(t, from.Add(time.Minute), v.Until, time.Second)
+	clk.Advance(2 * time.Minute)
+	assert.Equal(t, Pass, c.Judge(a).Kind, "and after the window it goes on")
+}
+
+// H15: the attempts the product may make to a pair that stays blocked.
+func TestTheReportCarriesTheH15Sequence(t *testing.T) {
+	r := MeasurePenalty(0, 2*time.Hour)
+	want := []time.Duration{0, 2 * time.Minute, 6 * time.Minute, 14 * time.Minute, 30 * time.Minute}
+	require.GreaterOrEqual(t, len(r.Attempts), 5)
+	assert.Equal(t, want, r.Attempts[:5], "0, 2, 6, 14 and 30 minutes")
+	for i := 5; i < len(r.Attempts); i++ {
+		assert.LessOrEqual(t, r.Attempts[i]-r.Attempts[i-1], 30*time.Minute+time.Second)
+	}
+	var rep Report
+	rep.PenaltyNever = r // the field exists and is filled by RunAll; see TestReportSaysWhatItDidNotCheck
+	assert.Equal(t, r, rep.PenaltyNever)
+}
+
+// L1 of the T15.0e acceptance: a file that says nothing is not a censor, and a key twice is a typo.
+func TestLoadCensorConfigRefusesEmptyAndDoubledKeys(t *testing.T) {
+	for name, bad := range map[string]string{
+		"empty object":     `{}`,
+		"null":             `null`,
+		"all rules off":    `{"freeze_bytes":0,"udp_drop":false}`,
+		"key twice":        `{"freeze_bytes":16384,"freeze_bytes":1}`,
+		"key twice, udp":   `{"udp_drop":true,"udp_drop":false}`,
+		"key twice in and": `{"and":{"asns":["A"],"asns":["B"],"ja4s":["j"],"parallel":3,"penalty_seconds":1}}`,
+		"and twice":        `{"and":{"asns":["A"],"ja4s":["j"],"parallel":3,"penalty_seconds":1},"and":null}`,
+	} {
+		_, err := LoadCensorConfig(strings.NewReader(bad))
+		assert.Error(t, err, name)
+	}
+	_, err := LoadCensorConfig(strings.NewReader(`{"udp_drop":true}`))
+	assert.NoError(t, err, "one rule is a censor")
+}

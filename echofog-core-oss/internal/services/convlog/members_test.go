@@ -25,7 +25,7 @@ const testWriter = PermSend | PermMedia | PermVoice | PermLinks | PermThreads | 
 var testRoles = map[string]Role{
 	"owner":      {Name: "owner", Rank: 100, Perms: PermAll},
 	"admin":      {Name: "admin", Rank: 50, Perms: PermAll &^ PermManageGroup},
-	"moderator":  {Name: "moderator", Rank: 25, Perms: testWriter | PermDelete | PermKick | PermPin},
+	"moderator":  {Name: "moderator", Rank: 25, Perms: testWriter | PermDelete | PermKick | PermPin | PermMentionAll},
 	"member":     {Name: "member", Rank: 10, Perms: testWriter},
 	"subscriber": {Name: "subscriber", Rank: 10, Perms: PermReact},
 }

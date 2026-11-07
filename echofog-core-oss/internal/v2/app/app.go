@@ -117,6 +117,16 @@ type Config struct {
 	States StateSource
 	// Self is this node's account node ID, to refuse a link to oneself.
 	Self [32]byte
+	// Files holds the files this node sends (*files.Server); nil turns sending off.
+	Files FileHolder
+	// FileNet fetches a file from its sender (FetchOver builds the usual one); nil turns receiving off.
+	FileNet FileNet
+	// FileDir is where received files go. FileLimits bound sizes and numbers; FileFree reports free
+	// disk space (nil: the system's); FileWait waits between retries of a fetch (nil: a timer).
+	FileDir    string
+	FileLimits FileLimits
+	FileFree   func(dir string) (uint64, error)
+	FileWait   func(ctx context.Context, d time.Duration) bool
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string
@@ -135,6 +145,7 @@ type App struct {
 	chats   chatState
 	hmu     sync.Mutex // history handed to newcomers: when, per group and key
 	handed  map[string]time.Time
+	fx      fileState
 }
 
 // New creates an App.
@@ -187,6 +198,7 @@ func (a *App) Stop(ctx context.Context) error {
 		return nil
 	}
 	a.running.Store(false)
+	a.stopFiles()
 	return a.cfg.Runtime.Stop(ctx)
 }
 

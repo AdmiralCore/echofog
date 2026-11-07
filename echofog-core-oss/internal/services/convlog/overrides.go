@@ -170,7 +170,7 @@ func (l *Log) RightsIn(c Conv, peer types.PeerID, channel string) Rights {
 	}
 	if role, _, ok := l.memberAt(c, bc, peer, nil, atEnd); ok {
 		in := PermRights(ch.PermsIn(role))
-		in.Manage, in.Invite, in.Roles = r.Manage, r.Invite, r.Roles // not the channel's to change
+		in.Manage, in.Invite, in.Roles, in.MentionAll = r.Manage, r.Invite, r.Roles, r.MentionAll // not the channel's to change
 		return in
 	}
 	return r

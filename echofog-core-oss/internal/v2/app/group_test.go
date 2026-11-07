@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1126,5 +1128,65 @@ func TestWaitingEntriesExpire(t *testing.T) {
 	}
 	if list, _ := carol.app.Groups(); len(list) != 0 {
 		t.Fatalf("a pending group that nobody answered is still listed: %+v", list)
+	}
+}
+
+// One app does both: group events go to the members, and file transfers go to the subscribers of
+// transfer events (the two used the name emit before they were merged).
+func TestGroupEventsAndTransferEventsInOneApp(t *testing.T) {
+	w, ns, id := team(t, 2)
+	alice, bob := ns[0], ns[1]
+	ctx := context.Background()
+	alice.befriend(t, bob)
+	fw := newWorld()
+	a2, err := app.New(app.Config{
+		Runtime: alice.rig.rt, Links: alice.rig.ln, Store: alice.rig.kv, Clock: w.clk, Self: alice.node, Mode: app.ModePublic,
+		Convs: alice.eng, Groups: alice.book, Chat: &gPort{w: w, self: alice.node},
+		Files: &holder{}, FileNet: &fakeFiles{w: fw, self: alice.node}, FileDir: t.TempDir(),
+		FileFree: func(string) (uint64, error) { return 1 << 40, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = a2.Stop(context.Background())
+		ts, _ := a2.ListFileTransfers("")
+		for _, tr := range ts {
+			_ = a2.CancelFile(tr.ID)
+		}
+	})
+	var mu sync.Mutex
+	var seen []app.Transfer
+	stop := a2.OnFileTransfer(func(tr app.Transfer) { mu.Lock(); seen = append(seen, tr); mu.Unlock() })
+	defer stop()
+
+	// a group event reaches the other member
+	if err := a2.GroupTimeout(ctx, id, bob.nodeHex(), 5); err != nil {
+		t.Fatalf("group event: %v", err)
+	}
+	w.drain()
+	ms, _ := bob.app.GroupMembers(id)
+	var until int64
+	for _, m := range ms {
+		if m.Node == bob.nodeHex() {
+			until = m.Timeout
+		}
+	}
+	if until == 0 {
+		t.Fatal("the group event did not reach bob")
+	}
+	// a transfer event reaches the subscriber
+	p := filepath.Join(t.TempDir(), "f.bin")
+	if err := os.WriteFile(p, []byte("данные"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a2.SendFile(ctx, bob.nodeHex(), p); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+	mu.Lock()
+	n := len(seen)
+	mu.Unlock()
+	if n == 0 {
+		t.Fatal("no transfer event")
 	}
 }

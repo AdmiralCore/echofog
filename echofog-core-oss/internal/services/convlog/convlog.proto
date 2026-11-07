@@ -28,6 +28,10 @@ message MsgBody {
   string text     = 1;
   uint32 type     = 2;  // as messenger.PersonalMessageTypeProto; 100 = system line
   string metadata = 3;  // JSON, as messenger.MessageMetadata (files)
+  // Added later; older readers skip both. The people the message names (32-byte peer ids, at most
+  // MaxMentions), and whether it names everybody (needs PermMentionAll).
+  repeated bytes mentions = 4;
+  bool all = 5;
 }
 
 message EditBody {

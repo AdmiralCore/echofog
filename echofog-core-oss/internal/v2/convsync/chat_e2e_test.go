@@ -51,6 +51,7 @@ type chatWorld struct {
 	clock *clk
 	peers map[[32]byte]*chatPeer // by node
 	byDev map[[32]byte]*chatPeer
+	down  map[[32]byte]bool // devices that cannot be reached
 }
 
 type wDir struct{ w *chatWorld }
@@ -75,7 +76,7 @@ type wLink struct{ w *chatWorld }
 
 func (l wLink) Deliver(ctx context.Context, device [32]byte, env []byte) (uint32, error) {
 	p := l.w.byDev[device]
-	if p == nil {
+	if p == nil || l.w.down[device] {
 		return 0, errors.New("unreachable")
 	}
 	return p.svc.Receive(ctx, env), nil
@@ -93,7 +94,7 @@ func (d wPubs) Pub(ctx context.Context, node [32]byte) ([32]byte, error) {
 func newChatWorld(t *testing.T, n int) (*chatWorld, []*chatPeer) {
 	t.Helper()
 	t.Cleanup(memguard.Purge)
-	w := &chatWorld{t: t, clock: &clk{t: time.Unix(1_800_000_000, 0)}, peers: map[[32]byte]*chatPeer{}, byDev: map[[32]byte]*chatPeer{}}
+	w := &chatWorld{t: t, clock: &clk{t: time.Unix(1_800_000_000, 0)}, peers: map[[32]byte]*chatPeer{}, byDev: map[[32]byte]*chatPeer{}, down: map[[32]byte]bool{}}
 	group := convlog.Group("g1")
 	var all []*chatPeer
 	var pubs [][32]byte
@@ -232,5 +233,49 @@ func TestLogEventsTravelAsChatMessages(t *testing.T) {
 	w.settle(ps)
 	if s := c.eng.Stubs(group); len(s) != 1 || s[0].Text != StubText {
 		t.Fatalf("c's stubs: %+v", s)
+	}
+}
+
+// A mention reaches a member who is offline when it was written, over the same path as any message
+// (the outbox, the mailbox), and is marked and counted when it arrives.
+func TestMentionReachesAnOfflineMember(t *testing.T) {
+	w, ps := newChatWorld(t, 3)
+	a, b, c := ps[0], ps[1], ps[2]
+	group := convlog.Group("g1")
+	body, _ := proto.Marshal(&convlog.MemberBody{Action: convlog.MemberRoster, Roster: []*convlog.RosterEntry{
+		{Member: a.pub[:], Role: "owner"}, {Member: b.pub[:], Role: "member"}, {Member: c.pub[:], Role: "member"},
+	}})
+	roster, _, err := a.eng.Log().AppendKept(group, convlog.Draft{Kind: convlog.KindMember, Body: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = a.eng.Publish(context.Background(), group, roster)
+	w.settle(ps)
+
+	w.down[c.tw.Device.ID()] = true
+	cid := types.PeerPubKeyToID(types.PeerPublicKey(c.pub))
+	raw, _, err := a.eng.Log().AppendMessageMentioning(group, "", "c, look at this", convlog.Mentions{Who: []types.PeerID{cid}}, convlog.EventID{}, convlog.EventID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = a.eng.Publish(context.Background(), group, raw)
+	for round := 0; round < 5; round++ {
+		_ = a.svc.Tick(context.Background())
+		w.clock.Add(3 * time.Second)
+	}
+	if m, _ := c.eng.Log().Meta(group); m.Unread != 0 {
+		t.Fatal("it arrived while c was offline")
+	}
+	delete(w.down, c.tw.Device.ID())
+	w.settle(ps)
+
+	mc, _ := c.eng.Log().Meta(group)
+	mb, _ := b.eng.Log().Meta(group)
+	if mc.Unread != 1 || mc.Mentions != 1 || mb.Unread != 1 || mb.Mentions != 0 {
+		t.Fatalf("c: unread %d mentions %d; b: unread %d mentions %d", mc.Unread, mc.Mentions, mb.Unread, mb.Mentions)
+	}
+	msgs, _, _ := c.eng.Log().History(group, "", 10)
+	if len(msgs) != 1 || !msgs[0].Mentioned {
+		t.Fatalf("c sees %+v", msgs)
 	}
 }

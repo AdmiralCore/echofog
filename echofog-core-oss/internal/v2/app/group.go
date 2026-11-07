@@ -145,9 +145,9 @@ func rightErr(err error) error {
 
 func (a *App) selfPubBytes() []byte { p := a.cfg.Groups.cfg.Pub; return p[:] }
 
-// emit sends an event of ours to the group. An unreachable member is not a failure of the author:
+// publishGroup sends an event of ours to the group. An unreachable member is not a failure of the author:
 // the event is in the log and the sync brings it.
-func (a *App) emit(ctx context.Context, cv Convs, c convlog.Conv, raw []byte) {
+func (a *App) publishGroup(ctx context.Context, cv Convs, c convlog.Conv, raw []byte) {
 	_ = cv.Publish(ctx, c, raw)
 }
 
@@ -338,7 +338,7 @@ func (a *App) LeaveGroup(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		a.emit(ctx, cv, c, raw)
+		a.publishGroup(ctx, cv, c, raw)
 	}
 	b.forget(id)
 	a.dropRequests(id)
@@ -418,7 +418,7 @@ func (a *App) GroupSetRole(ctx context.Context, id, node, role string) error {
 	if err != nil {
 		return err
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	return nil
 }
 
@@ -448,7 +448,7 @@ func (a *App) GroupRemove(ctx context.Context, id, node string, ban bool) error 
 	if err != nil {
 		return err
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	// the member list no longer holds them: they hear of it from us
 	a.sendEvent(ctx, m.Pub, raw)
 	return nil
@@ -482,7 +482,7 @@ func (a *App) GroupTimeout(ctx context.Context, id, node string, minutes int) er
 	if err != nil {
 		return rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	return nil
 }
 
@@ -535,7 +535,7 @@ func (a *App) GroupRoleSave(ctx context.Context, id string, r GroupRole) (GroupR
 		}
 		return GroupRole{}, rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	roles, _ := a.GroupRoles(id)
 	for _, x := range roles {
 		if x.ID == r.ID {
@@ -558,7 +558,7 @@ func (a *App) GroupRoleRemove(ctx context.Context, id, role string) error {
 		}
 		return rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	return nil
 }
 
@@ -614,7 +614,7 @@ func (a *App) saveChannel(ctx context.Context, cv Convs, c convlog.Conv, s convl
 		}
 		return convlog.Channel{}, rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	ch, _ := cv.Log().ChannelOf(c, s.ID)
 	return ch, nil
 }
@@ -776,7 +776,7 @@ func (a *App) GroupPhoto(ctx context.Context, id string, photo []byte) error {
 		}
 		return rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	return nil
 }
 
@@ -826,7 +826,7 @@ func (a *App) GroupInviteCreate(ctx context.Context, id string, s InviteSpec) (G
 		}
 		return GroupInvite{}, rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	link, err := b.signInvite(r.Genesis, nonce, exp, s.Approval)
 	if err != nil {
 		return GroupInvite{}, err
@@ -869,7 +869,7 @@ func (a *App) GroupInviteRevoke(ctx context.Context, id, nonce string) error {
 	if err != nil {
 		return rightErr(err)
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	return nil
 }
 
@@ -998,7 +998,7 @@ func (a *App) joinNow(ctx context.Context, b *GroupBook, cv Convs, c convlog.Con
 	if err != nil {
 		return
 	}
-	a.emit(ctx, cv, c, raw)
+	a.publishGroup(ctx, cv, c, raw)
 	// our own list may not name the one who let us in (we were removed once): they get it directly
 	if p, ok := keyOfHex(r.Issuer); ok {
 		a.sendEvent(ctx, p, raw)
@@ -1215,7 +1215,7 @@ func (a *App) GroupJoinDecide(ctx context.Context, id, node string, accept bool)
 		return err
 	}
 	_ = a.cfg.Store.Delete(key)
-	a.emit(ctx, cv, c, ev)
+	a.publishGroup(ctx, cv, c, ev)
 	a.handOver(ctx, cv, c, pub)
 	return nil
 }
