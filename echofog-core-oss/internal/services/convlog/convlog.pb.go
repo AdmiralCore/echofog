@@ -167,10 +167,14 @@ func (x *Event) GetSig() []byte {
 }
 
 type MsgBody struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
-	Type          uint32                 `protobuf:"varint,2,opt,name=type,proto3" json:"type,omitempty"`        // as messenger.PersonalMessageTypeProto; 100 = system line
-	Metadata      string                 `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"` // JSON, as messenger.MessageMetadata (files)
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Text     string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	Type     uint32                 `protobuf:"varint,2,opt,name=type,proto3" json:"type,omitempty"`        // as messenger.PersonalMessageTypeProto; 100 = system line
+	Metadata string                 `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"` // JSON, as messenger.MessageMetadata (files)
+	// Added later; older readers skip both. The people the message names (32-byte peer ids, at most
+	// MaxMentions), and whether it names everybody (needs PermMentionAll).
+	Mentions      [][]byte `protobuf:"bytes,4,rep,name=mentions,proto3" json:"mentions,omitempty"`
+	All           bool     `protobuf:"varint,5,opt,name=all,proto3" json:"all,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -224,6 +228,20 @@ func (x *MsgBody) GetMetadata() string {
 		return x.Metadata
 	}
 	return ""
+}
+
+func (x *MsgBody) GetMentions() [][]byte {
+	if x != nil {
+		return x.Mentions
+	}
+	return nil
+}
+
+func (x *MsgBody) GetAll() bool {
+	if x != nil {
+		return x.All
+	}
+	return false
 }
 
 type EditBody struct {
@@ -1501,11 +1519,13 @@ const file_internal_services_convlog_convlog_proto_rawDesc = "" +
 	" \x01(\fR\x04body\x12\x10\n" +
 	"\x03ext\x18\v \x01(\fR\x03ext\x12\x1b\n" +
 	"\tbody_hash\x18\f \x01(\fR\bbodyHash\x12\x10\n" +
-	"\x03sig\x18\x0f \x01(\fR\x03sig\"M\n" +
+	"\x03sig\x18\x0f \x01(\fR\x03sig\"{\n" +
 	"\aMsgBody\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\rR\x04type\x12\x1a\n" +
-	"\bmetadata\x18\x03 \x01(\tR\bmetadata\"\x1e\n" +
+	"\bmetadata\x18\x03 \x01(\tR\bmetadata\x12\x1a\n" +
+	"\bmentions\x18\x04 \x03(\fR\bmentions\x12\x10\n" +
+	"\x03all\x18\x05 \x01(\bR\x03all\"\x1e\n" +
 	"\bEditBody\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\"1\n" +
 	"\tReactBody\x12\x14\n" +

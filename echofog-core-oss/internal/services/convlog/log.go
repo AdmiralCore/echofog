@@ -442,7 +442,7 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			if ch, ok := t.channel(t.eventChannel(e)); ok && len(ch.Overrides) > 0 {
 				if role, _, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at); ok {
 					in := PermRights(ch.PermsIn(role))
-					in.Manage, in.Invite, in.Roles = rights.Manage, rights.Invite, rights.Roles
+					in.Manage, in.Invite, in.Roles, in.MentionAll = rights.Manage, rights.Invite, rights.Roles, rights.MentionAll
 					rights = in
 				}
 			}
@@ -459,6 +459,9 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			}
 			if !msgAllowed(e, rights) {
 				return ErrForbidden
+			}
+			if !rights.MentionAll && namesEverybody(e) {
+				return ErrForbidden // @all takes its own right, checked here like the others
 			}
 			err = t.applyMsg(e, idHex, author, &store)
 		case KindEdit:
@@ -630,7 +633,7 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 	var body MsgBody
 	stripped := Stripped(e)
 	if !stripped {
-		if err := proto.Unmarshal(e.Body, &body); err != nil || !validText(body.Text) || len(body.Metadata) > MaxTextLen {
+		if err := proto.Unmarshal(e.Body, &body); err != nil || !validText(body.Text) || len(body.Metadata) > MaxTextLen || !validMentions(&body) {
 			return ErrBadBody
 		}
 	}
@@ -638,6 +641,10 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 	v.Present = true
 	v.Author, v.Seq, v.Lamport, v.TS = author, e.Seq, e.Lamport, e.TsMs
 	v.Type, v.Text, v.Metadata = body.Type, body.Text, body.Metadata
+	v.Mentions, v.MentionsAll = nil, body.All
+	for _, m := range body.Mentions {
+		v.Mentions = append(v.Mentions, hex.EncodeToString(m))
+	}
 	v.ReplyTo, v.Thread = hexRef(e.ReplyTo), hexRef(e.Thread)
 	v.Channel = channelOf(e)
 	v.Stripped = stripped
@@ -667,10 +674,13 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		}
 		if author == t.l.selfHex {
 			if e.Lamport > st.ReadLamport {
-				st.ReadLamport, st.Unread = e.Lamport, 0
+				st.ReadLamport, st.Unread, st.Mentions, st.ThreadMentions = e.Lamport, 0, 0, nil
 			}
 		} else if !t.synced || e.Lamport > st.ReadLamport {
 			st.Unread++
+			if v.names(t.l.selfHex) {
+				st.Mentions++
+			}
 		}
 	} else if v.Thread == "" {
 		t.put(orderKey(t.bc, e.Lamport, idHex), []byte(idHex))
@@ -679,13 +689,16 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		}
 		if author == t.l.selfHex {
 			if e.Lamport > t.meta.ReadLamport {
-				t.meta.ReadLamport, t.meta.Unread = e.Lamport, 0
+				t.meta.ReadLamport, t.meta.Unread, t.meta.Mentions, t.meta.ThreadMentions = e.Lamport, 0, 0, nil
 			}
 		} else if !t.synced || e.Lamport > t.meta.ReadLamport {
 			// new to me whatever its clock: one written without having seen my last message sorts
 			// before it, below the read point, and is still unread (MarkRead counts again). Old
 			// history that came by sync is not news.
 			t.meta.Unread++
+			if v.names(t.l.selfHex) {
+				t.meta.Mentions++
+			}
 		}
 	} else {
 		t.put(threadKey(t.bc, v.Thread, e.Lamport, idHex), []byte(idHex))
@@ -693,6 +706,18 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		root.Replies++
 		if e.TsMs > root.LastReplyTS {
 			root.LastReplyTS = e.TsMs
+		}
+		if v.names(t.l.selfHex) {
+			// a thread has no unread count, so a mention in it is counted on its own
+			if v.Channel != "" {
+				if st := t.meta.chan_(v.Channel); !t.synced || e.Lamport > st.ReadLamport {
+					st.Mentions++
+					st.ThreadMentions = pushMention(st.ThreadMentions, e.Lamport)
+				}
+			} else if !t.synced || e.Lamport > t.meta.ReadLamport {
+				t.meta.Mentions++
+				t.meta.ThreadMentions = pushMention(t.meta.ThreadMentions, e.Lamport)
+			}
 		}
 		t.touch(v.Thread)
 	}
@@ -1250,7 +1275,7 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 		l.mu.Unlock()
 		return err
 	}
-	n := 0
+	n, named := 0, 0
 	p := len(orderPrefix(bc))
 	for _, e := range entries {
 		if len(e.Key) < p+8 {
@@ -1261,8 +1286,12 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 			break
 		}
 		n++
+		if m, ok := l.render(bc, meta.Conv, string(e.Value)); ok && m.Mentioned {
+			named++
+		}
 	}
-	meta.Unread = n
+	inThreads, kept := aboveRead(meta.ThreadMentions, meta.ReadLamport)
+	meta.Unread, meta.Mentions, meta.ThreadMentions = n, named+inThreads, kept
 	t.views = map[string]*View{} // nothing about the message changed
 	t.order = nil
 	err = t.commit(nil, "")
