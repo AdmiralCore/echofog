@@ -133,6 +133,10 @@ type Config struct {
 	// VerifyCard checks the card a contact answered a knock with: true when it is a valid card of
 	// that account. Nil: the real check (objects.VerifyCard, the card's account is the sender).
 	VerifyCard func(from [32]byte, envelope []byte) bool
+	// Exit dials the exit a link names (the runtime's ExitClient behind a card); nil turns the VPN off.
+	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
+	Exit      ExitDialer
+	VPNListen string
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string
