@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 )
 
 // Preset is a ready choice of roles for the setup wizard.
@@ -32,6 +34,9 @@ type PresetOptions struct {
 	Port      int
 	Domain    string
 	SiteDir   string
+	// Rules is the signed country rules file, when the operator has one: it tells whether the
+	// advertised address of a home entry is inside the verified ranges (allowed_cidrs, H14).
+	Rules *routepolicy.Rules
 }
 
 // Note is a remark for the operator: a message code with a level ("info" or "warn").
@@ -115,7 +120,12 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 			return Config{}, nil, badPreset("port %d leaves no port for invitations", o.Port)
 		}
 		cfg.InviteListen = &ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port+1), Advertise: o.Advertise}
-		notes = append(notes, Note{"info", "preset.home-entry-wired"})
+		notes = append(notes, Note{"warn", "preset.home-entry-risk"})
+		if verifiedEntry(o.Rules, o.Advertise) {
+			notes = append(notes, Note{"info", "preset.home-entry-verified"})
+		} else {
+			notes = append(notes, Note{"info", "preset.home-entry-wired"})
+		}
 	}
 	if domain == "" {
 		notes = append(notes, Note{"warn", "preset.no-domain"})
@@ -131,6 +141,14 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		return Config{}, nil, err
 	}
 	return cfg, notes, nil
+}
+
+// verifiedEntry reports whether the advertised address lies inside the verified ranges
+// (allowed_cidrs) of a rules file that has not expired. Only such an address is good for mobile
+// networks that run on allow-lists (H14); any other home entry serves wired networks.
+func verifiedEntry(rules *routepolicy.Rules, advertise string) bool {
+	ip, err := netip.ParseAddr(advertise)
+	return err == nil && rules.HasVerifiedEntries() && rules.EntryAllowed("RU", routepolicy.NetMobile, ip)
 }
 
 // RenderConfig is server.json with comments, ready to be edited by hand. Only whole lines that

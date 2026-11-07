@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -174,7 +175,8 @@ func entryRules(t *testing.T, cidr string) *rp.Rules {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := rp.Parse(rp.Sign(priv, []byte(`{"seq":1,"version":"t6.4-test","allowed_cidrs":["`+cidr+`"]}`)), pub, 0)
+	body := fmt.Sprintf(`{"seq":1,"version":"t6.4-test","valid_until":%d,"allowed_cidrs":[%q]}`, time.Now().Add(time.Hour).Unix(), cidr)
+	r, err := rp.ParseAt(rp.Sign(priv, []byte(body)), pub, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
