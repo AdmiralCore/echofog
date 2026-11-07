@@ -24,6 +24,8 @@ import (
 var (
 	// ErrDowngrade: the offered version is not newer than the running one.
 	ErrDowngrade = errors.New("servernode: the offered version is not newer; rolling back is not allowed")
+	// ErrBelowMin: the offered version is below the minimum version of the signed manifest.
+	ErrBelowMin = errors.New("servernode: the offered version is below the minimum version of the signed manifest")
 	// ErrNoReleaseKeys: this build has no release keys, so it cannot verify an update.
 	ErrNoReleaseKeys = errors.New("servernode: this build has no release keys")
 	// ErrNotConfirmed: the operator did not agree.
@@ -61,6 +63,10 @@ type UpdateInfo struct {
 	Size     uint64
 	SHA256   []byte
 	NotesURL string
+	// MinVersion is the manifest's lower bound ("" = none).
+	MinVersion string
+	// Rollback marks an offer below the running version (only with UpdateDeps.AllowRollback).
+	Rollback bool
 }
 
 // UpdateDeps are the inputs of the update.
@@ -73,6 +79,8 @@ type UpdateDeps struct {
 	// Platform is "<goos>-<goarch>", the platform field of the manifest's artifacts.
 	Platform string
 	ExePath  string
+	// AllowRollback lets the update install a version below the running one (never below min_version).
+	AllowRollback bool
 	// Confirm is the operator's consent. Nil means no consent: nothing is installed.
 	Confirm func(info UpdateInfo) bool
 	// SelfTest runs the binary at exe and returns the version it reports; nil runs "exe version".
@@ -131,16 +139,30 @@ func CheckUpdate(ctx context.Context, d UpdateDeps) (*UpdateInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: the manifest has version %q", ErrArtifact, rel.GetVersion())
 	}
+	// The signed lower bound comes first and no flag overrides it: below it a version is revoked.
+	if m := rel.GetMinVersion(); m != "" {
+		mv, ok := parseVersion(m)
+		if !ok {
+			return nil, fmt.Errorf("%w: the manifest has min_version %q", ErrArtifact, m)
+		}
+		if cmpVersion(offered, mv) < 0 {
+			return nil, ErrBelowMin
+		}
+	}
+	rollback := false
 	switch c := cmpVersion(offered, cur); {
 	case c < 0:
-		return nil, ErrDowngrade
+		if !d.AllowRollback {
+			return nil, ErrDowngrade
+		}
+		rollback = true
 	case c == 0:
 		return nil, nil
 	}
 	for _, a := range rel.GetArtifacts() {
 		if a.GetPlatform() == d.Platform {
 			return &UpdateInfo{Version: strings.TrimPrefix(rel.GetVersion(), "v"), Artifact: a.GetName(), URL: a.GetUrl(), Size: a.GetSize(),
-				SHA256: append([]byte(nil), a.GetSha256()...), NotesURL: rel.GetNotesUrl()}, nil
+				SHA256: append([]byte(nil), a.GetSha256()...), NotesURL: rel.GetNotesUrl(), MinVersion: strings.TrimPrefix(rel.GetMinVersion(), "v"), Rollback: rollback}, nil
 		}
 	}
 	return nil, ErrNoArtifact
@@ -163,7 +185,8 @@ func defaultSelfTest(ctx context.Context, exe string) (string, error) {
 // ApplyUpdate downloads, verifies and installs an update after the operator confirmed it. The
 // download is checked against the size and SHA-256 of the signed manifest and run once before the
 // swap; the old binary stays beside the new one as <exe>.previous and is put back when the new one
-// does not start. It installs a newer version only: never a rollback.
+// does not start. It installs a newer version only; a rollback needs UpdateDeps.AllowRollback and
+// never goes below the signed min_version.
 func ApplyUpdate(ctx context.Context, d UpdateDeps, info UpdateInfo) error {
 	cur, ok := parseVersion(d.CurrentVersion)
 	if !ok {
@@ -173,7 +196,19 @@ func ApplyUpdate(ctx context.Context, d UpdateDeps, info UpdateInfo) error {
 	if !ok {
 		return fmt.Errorf("%w: version %q", ErrArtifact, info.Version)
 	}
-	if cmpVersion(offered, cur) <= 0 {
+	if info.MinVersion != "" {
+		mv, ok := parseVersion(info.MinVersion)
+		if !ok {
+			return fmt.Errorf("%w: min_version %q", ErrArtifact, info.MinVersion)
+		}
+		if cmpVersion(offered, mv) < 0 {
+			return ErrBelowMin
+		}
+	}
+	switch c := cmpVersion(offered, cur); {
+	case c == 0:
+		return ErrDowngrade
+	case c < 0 && !(d.AllowRollback && info.Rollback):
 		return ErrDowngrade
 	}
 	u, err := url.Parse(info.URL)

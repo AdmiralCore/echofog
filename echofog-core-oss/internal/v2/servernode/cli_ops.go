@@ -286,6 +286,7 @@ func cmdUpdate(args []string, env func(string) string, stdin io.Reader, out, err
 	manifest := fs.String("manifest-url", env("ECHOFOG_MANIFEST_URL"), "https URL of the signed release manifest")
 	check := fs.Bool("check", false, "only look, install nothing")
 	yes := fs.Bool("yes", false, "agree to the installation without asking")
+	rollback := fs.Bool("allow-rollback", false, "allow installing a version below the running one (never below the signed min_version)")
 	langFlag := fs.String("lang", "", "ru or en")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -321,7 +322,7 @@ func cmdUpdate(args []string, env func(string) string, stdin io.Reader, out, err
 	in := bufio.NewReader(stdin)
 	deps := UpdateDeps{
 		Manager: mgr, HTTP: hc, ManifestURL: *manifest, CurrentVersion: BuildVersion,
-		Platform: runtime.GOOS + "-" + runtime.GOARCH, ExePath: exe, SelfTest: UpdateSelfTest,
+		Platform: runtime.GOOS + "-" + runtime.GOARCH, ExePath: exe, SelfTest: UpdateSelfTest, AllowRollback: *rollback,
 		Confirm: func(info UpdateInfo) bool {
 			if *yes {
 				return true
@@ -346,6 +347,9 @@ func cmdUpdate(args []string, env func(string) string, stdin io.Reader, out, err
 		return nil
 	}
 	fmt.Fprintln(out, Message(lang, "update.available", info.Version, info.Artifact, info.Size))
+	if info.Rollback {
+		fmt.Fprintln(out, Message(lang, "update.rollback-warning", BuildVersion, info.Version))
+	}
 	if *check {
 		return nil
 	}

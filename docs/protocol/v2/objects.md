@@ -375,6 +375,7 @@ message Release {
   repeated bytes next_keys = 5;         // akeys to add to the release key set, ≤ 3
   string notes_url = 6;                 // https only
   repeated bytes revoked_keys = 7;      // akeys removed from the release key set
+  string min_version = 8;               // "X.Y.Z": the oldest version that may be installed or kept; empty = no bound
 }
 message Policy {
   string component = 1;                 // "proto", "l1:1", "svc:3", "obj:echofog/card/2", "l0:2"
@@ -390,6 +391,8 @@ message Artifact {
   string url = 5;                       // https only
 }
 ```
+
+**`min_version` (T12.4e).** A strict `X.Y.Z` (no leading zeros). It must not be above `version` of the same manifest (a manifest that does so is invalid). The server installer and `update` refuse a version below it and below the installed one; a deliberate rollback needs an explicit flag and never goes below `min_version`. The field is additive: a node that does not know field 8 keeps it as an unknown field, and the signatures cover it.
 
 **Decision D16 (release keys, revised).** Builds carry 3 release public keys (the initial key set). The
 project maintainer holds the three private keys, each on separate offline media.
