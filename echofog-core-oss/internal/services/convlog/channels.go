@@ -74,12 +74,13 @@ func validChannel(id, name, topic, parent, open string, voice, removed, category
 
 // ChanStat is where a channel's history ends and where its reader is.
 type ChanStat struct {
-	LastID      string `json:"last_id,omitempty"`
-	LastLamport uint64 `json:"last_lamport,omitempty"`
-	LastTS      int64  `json:"last_ts,omitempty"`
-	Unread      int    `json:"unread,omitempty"`
-	Mentions    int    `json:"mentions,omitempty"`
-	ReadLamport uint64 `json:"read_lamport,omitempty"`
+	LastID         string   `json:"last_id,omitempty"`
+	LastLamport    uint64   `json:"last_lamport,omitempty"`
+	LastTS         int64    `json:"last_ts,omitempty"`
+	Unread         int      `json:"unread,omitempty"`
+	Mentions       int      `json:"mentions,omitempty"`
+	ThreadMentions []uint64 `json:"thread_mentions,omitempty"`
+	ReadLamport    uint64   `json:"read_lamport,omitempty"`
 }
 
 func validChannelID(s string) bool {
@@ -316,6 +317,9 @@ func (l *Log) MarkReadIn(c Conv, channel string, upTo EventID) error {
 		st.ReadLamport = v.Lamport
 	}
 	st.Unread, st.Mentions = l.countAbove(chanOrderPrefix(bc, channel), st.ReadLamport, bc, meta.Conv)
+	var inThreads int
+	inThreads, st.ThreadMentions = aboveRead(st.ThreadMentions, st.ReadLamport)
+	st.Mentions += inThreads
 	t.views, t.order = map[string]*View{}, nil
 	err := t.commit(nil, "")
 	ch := &Change{Conv: c, Meta: *meta, Rev: l.nextRev()}

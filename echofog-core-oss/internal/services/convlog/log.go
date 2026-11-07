@@ -674,7 +674,7 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		}
 		if author == t.l.selfHex {
 			if e.Lamport > st.ReadLamport {
-				st.ReadLamport, st.Unread, st.Mentions = e.Lamport, 0, 0
+				st.ReadLamport, st.Unread, st.Mentions, st.ThreadMentions = e.Lamport, 0, 0, nil
 			}
 		} else if !t.synced || e.Lamport > st.ReadLamport {
 			st.Unread++
@@ -689,7 +689,7 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		}
 		if author == t.l.selfHex {
 			if e.Lamport > t.meta.ReadLamport {
-				t.meta.ReadLamport, t.meta.Unread, t.meta.Mentions = e.Lamport, 0, 0
+				t.meta.ReadLamport, t.meta.Unread, t.meta.Mentions, t.meta.ThreadMentions = e.Lamport, 0, 0, nil
 			}
 		} else if !t.synced || e.Lamport > t.meta.ReadLamport {
 			// new to me whatever its clock: one written without having seen my last message sorts
@@ -706,6 +706,18 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		root.Replies++
 		if e.TsMs > root.LastReplyTS {
 			root.LastReplyTS = e.TsMs
+		}
+		if v.names(t.l.selfHex) {
+			// a thread has no unread count, so a mention in it is counted on its own
+			if v.Channel != "" {
+				if st := t.meta.chan_(v.Channel); !t.synced || e.Lamport > st.ReadLamport {
+					st.Mentions++
+					st.ThreadMentions = pushMention(st.ThreadMentions, e.Lamport)
+				}
+			} else if !t.synced || e.Lamport > t.meta.ReadLamport {
+				t.meta.Mentions++
+				t.meta.ThreadMentions = pushMention(t.meta.ThreadMentions, e.Lamport)
+			}
 		}
 		t.touch(v.Thread)
 	}
@@ -1278,7 +1290,8 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 			named++
 		}
 	}
-	meta.Unread, meta.Mentions = n, named
+	inThreads, kept := aboveRead(meta.ThreadMentions, meta.ReadLamport)
+	meta.Unread, meta.Mentions, meta.ThreadMentions = n, named+inThreads, kept
 	t.views = map[string]*View{} // nothing about the message changed
 	t.order = nil
 	err = t.commit(nil, "")

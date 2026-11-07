@@ -220,6 +220,9 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	l.countUnread(bc, meta)
 	for id, st := range meta.Chans {
 		st.Unread, st.Mentions = l.countAbove(chanOrderPrefix(bc, id), st.ReadLamport, bc, meta.Conv)
+		var inThreads int
+		inThreads, st.ThreadMentions = aboveRead(st.ThreadMentions, st.ReadLamport)
+		st.Mentions += inThreads
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -256,5 +259,6 @@ func (l *Log) countUnread(bc string, meta *Meta) {
 			}
 		}
 	}
-	meta.Unread, meta.Mentions = n, named
+	inThreads, kept := aboveRead(meta.ThreadMentions, meta.ReadLamport)
+	meta.Unread, meta.Mentions, meta.ThreadMentions = n, named+inThreads, kept
 }

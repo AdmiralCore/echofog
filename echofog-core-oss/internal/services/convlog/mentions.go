@@ -29,6 +29,29 @@ func (l *Log) AppendMessageMentioning(c Conv, channel, text string, m Mentions, 
 	return l.Append(c, Draft{Kind: KindMsg, ReplyTo: replyTo, Thread: thread, Ext: extFor(channel), Body: encodeBody(body)})
 }
 
+// maxThreadMentions bounds the unread mentions kept per conversation (or channel) from threads.
+const maxThreadMentions = 256
+
+// pushMention adds the clock of a mention inside a thread, dropping the oldest past the bound.
+func pushMention(list []uint64, lamport uint64) []uint64 {
+	list = append(list, lamport)
+	if len(list) > maxThreadMentions {
+		list = list[len(list)-maxThreadMentions:]
+	}
+	return list
+}
+
+// aboveRead is how many of the clocks lie above the read point, and those clocks.
+func aboveRead(list []uint64, read uint64) (int, []uint64) {
+	var kept []uint64
+	for _, l := range list {
+		if l > read {
+			kept = append(kept, l)
+		}
+	}
+	return len(kept), kept
+}
+
 // validMentions: whole peer ids, not too many.
 func validMentions(b *MsgBody) bool {
 	if len(b.Mentions) > MaxMentions {

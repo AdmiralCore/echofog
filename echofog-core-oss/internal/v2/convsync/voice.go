@@ -36,9 +36,8 @@ const (
 	RosterBeat = 10 * time.Second
 	// MaxRoomsPerPeer bounds the rooms one peer may be listed in.
 	MaxRoomsPerPeer = 4
-	// MaxRosterEntries bounds all listed participants of all rooms.
-	MaxRosterEntries = 8192
-	// MaxRosterPerGroup bounds the participants listed for one group.
+	// MaxRosterPerGroup bounds the participants listed for one group, so that one group cannot use up the
+	// places of the others.
 	MaxRosterPerGroup = 1024
 	// MaxRosterFanout bounds how many members one change is sent to.
 	MaxRosterFanout = 200
@@ -129,7 +128,7 @@ type VoiceRoster struct {
 
 	mu      sync.Mutex
 	seats   map[roomKey]map[[32]byte]*seat
-	entries int
+	entries map[convlog.ConvID]int // listed places per group
 	own     map[roomKey]*ownSeat
 	lastSeq uint64
 }
@@ -138,9 +137,13 @@ type VoiceRoster struct {
 func NewVoiceRoster(cfg VoiceConfig) *VoiceRoster {
 	v := &VoiceRoster{
 		cfg: cfg, now: cfg.Now,
-		limit: ratelimit.NewKeyed[[32]byte](5, 40, 4096),
-		seats: map[roomKey]map[[32]byte]*seat{},
-		own:   map[roomKey]*ownSeat{},
+		limit:   ratelimit.NewKeyed[[32]byte](5, 40, 4096),
+		seats:   map[roomKey]map[[32]byte]*seat{},
+		own:     map[roomKey]*ownSeat{},
+		entries: map[convlog.ConvID]int{},
+	}
+	if v.cfg.MaxPerGroup <= 0 {
+		v.cfg.MaxPerGroup = MaxRosterPerGroup
 	}
 	if v.now == nil {
 		v.now = time.Now
@@ -207,7 +210,7 @@ func (v *VoiceRoster) Join(ctx context.Context, c convlog.Conv, room string, st 
 	if !v.voiceRoom(c, room) {
 		return ErrNoRoom
 	}
-	if !v.cfg.Log.RightsOf(c, peerIDOf(v.cfg.Pub)).Voice {
+	if !v.cfg.Log.RightsIn(c, peerIDOf(v.cfg.Pub), room).Voice { // the channel's overrides count
 		return ErrNoVoice
 	}
 	k := roomKey{c.ID, room}
@@ -276,7 +279,7 @@ func (v *VoiceRoster) Receive(ctx context.Context, from [32]byte, payload []byte
 	if err != nil || pub == v.cfg.Pub {
 		return true
 	}
-	if !v.cfg.Log.RightsOf(c, peerIDOf(pub)).Voice || !v.voiceRoom(c, m.room) {
+	if !v.voiceRoom(c, m.room) || !v.cfg.Log.RightsIn(c, peerIDOf(pub), m.room).Voice {
 		return true
 	}
 	k := roomKey{m.conv, m.room}
@@ -301,13 +304,13 @@ func (v *VoiceRoster) Receive(ctx context.Context, from [32]byte, payload []byte
 	}
 	fresh := s == nil || s.left || now.Sub(s.seen) > RosterTTL
 	if s == nil {
-		if v.entries >= MaxRosterEntries || v.roomsOf(pub) >= MaxRoomsPerPeer {
+		if v.entries[m.conv] >= v.cfg.MaxPerGroup || v.roomsOf(pub) >= MaxRoomsPerPeer {
 			v.mu.Unlock()
 			return true
 		}
 		s = &seat{}
 		room[pub] = s
-		v.entries++
+		v.entries[m.conv]++
 	}
 	s.state, s.seq, s.seen, s.left = m.state, m.seq, now, false
 	var reply []byte
@@ -346,7 +349,7 @@ func (v *VoiceRoster) Tick(ctx context.Context) error {
 			age := now.Sub(s.seen)
 			if s.left && age > tombstoneKeep || !s.left && age > RosterTTL+tombstoneKeep {
 				delete(room, pub)
-				v.entries--
+				v.entries[k.conv]--
 			}
 		}
 		if len(room) == 0 {
@@ -372,13 +375,20 @@ func (v *VoiceRoster) Who(c convlog.Conv, room string) (list []Participant, comp
 	complete = v.cfg.Log.HasRoster(c)
 	now := v.now()
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	if o := v.own[roomKey{c.ID, room}]; o != nil {
 		list = append(list, Participant{Pub: v.cfg.Pub, State: o.state})
 	}
+	var heard []Participant
 	for pub, s := range v.seats[roomKey{c.ID, room}] {
 		if !s.left && now.Sub(s.seen) <= RosterTTL {
-			list = append(list, Participant{Pub: pub, State: s.state})
+			heard = append(heard, Participant{Pub: pub, State: s.state})
+		}
+	}
+	v.mu.Unlock()
+	// the right is read again now: somebody removed or denied since is not listed, whatever their last beat
+	for _, p := range heard {
+		if v.cfg.Log.RightsIn(c, peerIDOf(p.Pub), room).Voice {
+			list = append(list, p)
 		}
 	}
 	return list, complete
