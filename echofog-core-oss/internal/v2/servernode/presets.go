@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 )
 
 // Preset is a ready choice of roles for the setup wizard.
@@ -32,6 +34,9 @@ type PresetOptions struct {
 	Port      int
 	Domain    string
 	SiteDir   string
+	// Rules is the signed country rules file, when the operator has one: it tells whether the
+	// advertised address of a home entry is inside the verified ranges (allowed_cidrs, H14).
+	Rules *routepolicy.Rules
 }
 
 // Note is a remark for the operator: a message code with a level ("info" or "warn").

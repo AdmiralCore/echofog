@@ -4,9 +4,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
 )
@@ -135,4 +137,105 @@ func FuzzParseRules(f *testing.F) {
 			t.Fatalf("a refusal must wrap ErrRules: %v", err)
 		}
 	})
+}
+
+// ---- T12.5: valid_until (H3a)
+
+type clockAt struct{ t time.Time }
+
+func (c *clockAt) now() time.Time { return c.t }
+
+var rulesNow = time.Unix(1_800_000_000, 0)
+
+func fileBody(seq uint64, validUntil time.Time, extra string) []byte {
+	b := fmt.Sprintf(`{"seq":%d,"version":"2026-11","allowed_cidrs":["198.51.100.0/24"],"tcp_limit":20000,"udp_denied":["RU"]%s`, seq, extra)
+	if !validUntil.IsZero() {
+		b += fmt.Sprintf(`,"valid_until":%d`, validUntil.Unix())
+	}
+	return []byte(b + "}")
+}
+
+func TestParseAtNeedsValidUntil(t *testing.T) {
+	pub, priv := keys(t)
+	clk := &clockAt{rulesNow}
+	if _, err := rp.ParseAt(rp.Sign(priv, fileBody(1, time.Time{}, "")), pub, 0, clk.now); !errors.Is(err, rp.ErrRules) {
+		t.Fatalf("a file without valid_until: %v", err)
+	}
+	r, err := rp.ParseAt(rp.Sign(priv, fileBody(1, rulesNow.Add(30*24*time.Hour), "")), pub, 0, clk.now)
+	if err != nil {
+		t.Fatalf("ParseAt: %v", err)
+	}
+	if !r.ValidUntil().Equal(rulesNow.Add(30*24*time.Hour)) || r.Expired() {
+		t.Fatalf("valid until %v, expired %v", r.ValidUntil(), r.Expired())
+	}
+	for name, vu := range map[string]time.Time{
+		"too far ahead":   rulesNow.Add(rp.MaxValidity + time.Hour),
+		"a century ahead": rulesNow.Add(100 * 365 * 24 * time.Hour),
+		"zero":            time.Unix(0, 0),
+		"negative":        time.Unix(-5, 0),
+	} {
+		body := fmt.Sprintf(`{"seq":2,"valid_until":%d}`, vu.Unix())
+		if _, err := rp.ParseAt(rp.Sign(priv, []byte(body)), pub, 0, clk.now); !errors.Is(err, rp.ErrRules) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// The same checks as Parse still apply: signature, seq.
+	if _, err := rp.ParseAt(rp.Sign(priv, fileBody(1, rulesNow.Add(time.Hour), "")), pub, 5, clk.now); !errors.Is(err, rp.ErrRules) {
+		t.Errorf("an old seq: %v", err)
+	}
+	otherPub, _ := keys(t)
+	if _, err := rp.ParseAt(rp.Sign(priv, fileBody(1, rulesNow.Add(time.Hour), "")), otherPub, 0, clk.now); !errors.Is(err, rp.ErrRules) {
+		t.Errorf("a foreign key: %v", err)
+	}
+	// A file that is already expired when read is accepted: it only tightens.
+	r, err = rp.ParseAt(rp.Sign(priv, fileBody(3, rulesNow.Add(-time.Hour), "")), pub, 0, clk.now)
+	if err != nil || !r.Expired() {
+		t.Errorf("an expired file: %v expired=%v", err, r != nil && r.Expired())
+	}
+}
+
+// H3a: expiry never loosens. A verified entry stops counting; the restrictions of the file stay.
+func TestExpiryNeverLoosens(t *testing.T) {
+	pub, priv := keys(t)
+	clk := &clockAt{rulesNow}
+	r, err := rp.ParseAt(rp.Sign(priv, fileBody(1, rulesNow.Add(30*24*time.Hour), "")), pub, 0, clk.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := netip.MustParseAddr("198.51.100.77")
+	if !r.HasVerifiedEntries() || !r.EntryAllowed("RU", rp.NetMobile, entry) {
+		t.Fatal("a fresh file verifies the entry")
+	}
+	before := r.Decide("RU", rp.NetWired, rp.DestForeign)
+	if before.UDP || before.TCPLimit != 0 && before.TCPLimit > 20000 {
+		t.Fatalf("the file's udp_denied is in force: %+v", before)
+	}
+
+	clk.t = rulesNow.Add(30*24*time.Hour - time.Second)
+	if r.Expired() || !r.EntryAllowed("RU", rp.NetMobile, entry) {
+		t.Fatal("one second before valid_until the file is valid")
+	}
+	clk.t = rulesNow.Add(30 * 24 * time.Hour) // exactly valid_until: expired
+	if !r.Expired() {
+		t.Fatal("at valid_until the file is expired")
+	}
+	if r.EntryAllowed("RU", rp.NetMobile, entry) || r.HasVerifiedEntries() {
+		t.Fatal("an expired file verifies no entry")
+	}
+	after := r.Decide("RU", rp.NetWired, rp.DestForeign)
+	if after.UDP || after.TCPLimit != before.TCPLimit {
+		t.Fatalf("expiry loosened the table: before %+v after %+v", before, after)
+	}
+	m := r.Decide("RU", rp.NetMobile, rp.DestForeign)
+	if m.TCPLimit == 0 || m.TCPLimit > 20000 {
+		t.Fatalf("the mobile cap of the file is gone after expiry: %+v", m)
+	}
+}
+
+func TestParseWithoutValidUntilNeverExpires(t *testing.T) {
+	pub, priv := keys(t)
+	r, err := rp.Parse(rp.Sign(priv, []byte(`{"seq":1,"allowed_cidrs":["198.51.100.0/24"]}`)), pub, 0)
+	if err != nil || r.Expired() || !r.ValidUntil().IsZero() || !r.HasVerifiedEntries() {
+		t.Fatalf("Parse: %v expired=%v", err, r != nil && r.Expired())
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"time"
 )
 
 // ErrRules wraps every refusal of a rules file.
@@ -111,3 +112,21 @@ func Sign(priv ed25519.PrivateKey, body []byte) []byte {
 	sig := ed25519.Sign(priv, append([]byte(rulesLabel), body...))
 	return append(sig, body...)
 }
+
+// MaxValidity is the longest valid_until a deployed rules file may carry, counted from the moment it
+// is read. The curator signs 30 days; the slack covers a late update, a longer term is a mistake.
+const MaxValidity = 45 * 24 * time.Hour
+
+// ParseAt is Parse for a deployed file. valid_until (unix seconds) is required and at most
+// MaxValidity ahead of now(); the file remembers it and now, and a verified entry (allowed_cidrs)
+// stops counting when it passes. An expired file never loosens anything: its tcp_limit and
+// udp_denied stay in force.
+func ParseAt(data []byte, pub ed25519.PublicKey, minSeq uint64, now func() time.Time) (*Rules, error) {
+	return nil, bad("not implemented")
+}
+
+// ValidUntil is the end of the file's validity; zero for a file read with Parse.
+func (r *Rules) ValidUntil() time.Time { return time.Time{} }
+
+// Expired reports whether the file is past valid_until.
+func (r *Rules) Expired() bool { return false }
