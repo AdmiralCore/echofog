@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -408,35 +407,79 @@ func TestScriptKeyEpochAndRotation(t *testing.T) {
 	}
 }
 
-// The fingerprint of the key block is the same three ways: the script's own flag, an independent
-// command of the guide, and the release tool.
+// What the user compares is the SHA-256 of the whole file (M1): the guide's command
+// "sha256sum install.sh" runs no code from the file. The script's own --fingerprint prints it too,
+// and the fingerprint of the key block on its own line (used by the key rotation), but it is not
+// a proof: a tampered script can print anything.
 func TestScriptFingerprint(t *testing.T) {
 	r := newScriptRig(t)
 	s := r.script(1, "2.0.0")
 	res := r.run(s, "--fingerprint")
-	got := strings.TrimSpace(res.out)
-	if res.code != 0 || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(got) {
+	if res.code != 0 {
 		t.Fatalf("--fingerprint: exit %d: %q", res.code, res.out)
 	}
 	body, _ := os.ReadFile(s)
+	whole := sha256.Sum256(body)
 	i, j := bytes.Index(body, []byte("# BEGIN RELEASE KEYS\n")), bytes.Index(body, []byte("# END RELEASE KEYS\n"))
-	sum := sha256.Sum256(body[i : j+len("# END RELEASE KEYS\n")])
-	if got != hex.EncodeToString(sum[:]) {
-		t.Errorf("the script prints %s, the block hashes to %x", got, sum)
+	blk := sha256.Sum256(body[i : j+len("# END RELEASE KEYS\n")])
+	if !strings.Contains(res.out, "file "+hex.EncodeToString(whole[:])+"\n") || !strings.Contains(res.out, "keys "+hex.EncodeToString(blk[:])+"\n") {
+		t.Errorf("--fingerprint must print the file and the key block values:\n%s", res.out)
+	}
+	if !strings.Contains(strings.ToLower(res.out), "not a proof") {
+		t.Errorf("--fingerprint must say it is not a proof:\n%s", res.out)
 	}
 	var pubs []keys.AKey
 	for _, sg := range r.signers {
 		pubs = append(pubs, sg.Public())
 	}
-	if want, _ := installkit.Fingerprint(pubs, 1); want != got {
-		t.Errorf("installkit.Fingerprint %s, script %s", want, got)
+	if want, _ := installkit.Fingerprint(pubs, 1); !strings.Contains(res.out, want) {
+		t.Errorf("the key block value differs from installkit.Fingerprint")
 	}
-	// The command that the guide teaches gives the same answer without running the script.
-	if out, err := exec.Command("sh", "-c", `sed -n '/^# BEGIN RELEASE KEYS$/,/^# END RELEASE KEYS$/p' "$1" | sha256sum | cut -d' ' -f1`, "sh", s).Output(); err != nil || strings.TrimSpace(string(out)) != got {
-		t.Errorf("the guide's command: %q %v", out, err)
+	// The command that the guide teaches gives the whole-file value without running the script.
+	out, err := exec.Command("sha256sum", s).Output()
+	if err != nil || strings.Fields(string(out))[0] != hex.EncodeToString(whole[:]) {
+		t.Errorf("sha256sum: %q %v", out, err)
 	}
-	// It needs no root, no curl and no network: nothing is downloaded.
 	if _, err := os.Stat(filepath.Join(r.dir, "urls")); err == nil {
 		t.Error("--fingerprint downloaded something")
+	}
+}
+
+// M1: a script with the key block untouched but other logic changed (a lower floor, a changed command,
+// a skipped check) has another whole-file value, so the comparison the guide teaches refuses it.
+func TestTamperedScriptHasAnotherFingerprint(t *testing.T) {
+	r := newScriptRig(t)
+	s := r.script(1, "2.0.0")
+	good, _ := os.ReadFile(s)
+	goodSum := sha256.Sum256(good)
+	for name, mutate := range map[string]func(string) string{
+		"lower floor": func(x string) string {
+			return strings.Replace(x, "MIN_VERSION_FLOOR=2.0.0", "MIN_VERSION_FLOOR=0.0.0", 1)
+		},
+		"extra command": func(x string) string { return strings.Replace(x, "set -eu\n", "set -eu\ntouch /tmp/pwned\n", 1) },
+		"no threshold":  func(x string) string { return strings.Replace(x, "THRESHOLD=2", "THRESHOLD=0", 1) },
+		"skip verify":   func(x string) string { return strings.Replace(x, "\nverify_release\n", "\n", 1) },
+	} {
+		bad := mutate(string(good))
+		if bad == string(good) {
+			t.Fatalf("%s: the mutation changed nothing", name)
+		}
+		p := filepath.Join(r.dir, "tampered.sh")
+		if err := os.WriteFile(p, []byte(bad), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// The key block is untouched ...
+		a, b := string(good), bad
+		if a[strings.Index(a, "# BEGIN RELEASE KEYS"):strings.Index(a, "# END RELEASE KEYS")] != b[strings.Index(b, "# BEGIN RELEASE KEYS"):strings.Index(b, "# END RELEASE KEYS")] {
+			t.Fatalf("%s: the mutation touched the key block", name)
+		}
+		// ... and the value the guide teaches to compare changes.
+		out, err := exec.Command("sha256sum", p).Output()
+		if err != nil || strings.Fields(string(out))[0] == hex.EncodeToString(goodSum[:]) {
+			t.Errorf("%s: sha256sum install.sh is unchanged by tampering: %q %v", name, out, err)
+		}
+		if got := r.run(p, "--fingerprint").out; !strings.Contains(got, "keys ") || strings.Contains(got, "file "+hex.EncodeToString(goodSum[:])) {
+			t.Errorf("%s: --fingerprint of the tampered script shows the genuine file value:\n%s", name, got)
+		}
 	}
 }

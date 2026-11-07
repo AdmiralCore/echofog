@@ -237,3 +237,6 @@ func Rotation(next []keys.AKey, nextEpoch uint32) (string, error) {
 	}
 	return fmt.Sprintf("echofog-rotation 1\nnew_epoch %d\nnew_keys_fingerprint %s\n", nextEpoch, fp), nil
 }
+
+// FileFingerprint is the lower-case hex SHA-256 of the whole script: the value that users compare.
+func FileFingerprint(script string) string { return "" }

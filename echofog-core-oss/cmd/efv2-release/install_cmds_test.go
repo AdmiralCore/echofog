@@ -143,3 +143,28 @@ func TestInstallRotation(t *testing.T) {
 		t.Error("epoch 0 rotation written")
 	}
 }
+
+// M1: install-stamp prints the SHA-256 of the whole stamped file (what users compare) and the key
+// block value; install-fingerprint --script prints the whole-file value of a script.
+func TestInstallStampPrintsTheFileFingerprint(t *testing.T) {
+	r := newInstallRig(t)
+	tpl := filepath.Join(r.dir, "install.sh")
+	if err := os.WriteFile(tpl, []byte("#!/bin/sh\n# BEGIN RELEASE KEYS\nPLACEHOLDER\n# END RELEASE KEYS\nMIN_VERSION_FLOOR=0.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(r.dir, "stamped.sh")
+	got := mustDo(t, "install-stamp", "--template", tpl, "--keys", r.keyList(), "--key-epoch", "1", "--floor", "2.0.0", "--out", out)
+	raw, _ := os.ReadFile(out)
+	sum := sha256.Sum256(raw)
+	file := hex.EncodeToString(sum[:])
+	keyFP := strings.TrimSpace(mustDo(t, "install-fingerprint", "--keys", r.keyList(), "--key-epoch", "1"))
+	if !strings.Contains(got, "file "+file) || !strings.Contains(got, "keys "+keyFP) {
+		t.Fatalf("install-stamp output:\n%s\nwant file %s and keys %s", got, file, keyFP)
+	}
+	if v := strings.TrimSpace(mustDo(t, "install-fingerprint", "--script", out)); v != file {
+		t.Errorf("install-fingerprint --script %s, want %s", v, file)
+	}
+	if _, err := do(t, "install-fingerprint", "--script", out, "--keys", r.keyList(), "--key-epoch", "1"); err == nil {
+		t.Error("--script together with --keys is ambiguous")
+	}
+}

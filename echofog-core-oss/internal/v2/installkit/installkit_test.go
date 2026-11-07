@@ -197,3 +197,27 @@ func TestSignRecordAndRotation(t *testing.T) {
 		t.Error("epoch 0 rotation")
 	}
 }
+
+// M1: the fingerprint that users compare covers the whole script, not only the key block.
+func TestFileFingerprint(t *testing.T) {
+	ks := pubs(signer(t, 1), signer(t, 2), signer(t, 3))
+	out, err := installkit.Stamp(template, ks, 1, "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(out))
+	if got := installkit.FileFingerprint(out); got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("FileFingerprint %s, want the SHA-256 of the whole file", got)
+	}
+	// Logic or the floor changed, key block untouched: another value (the key block value is the same).
+	lower := strings.Replace(out, "MIN_VERSION_FLOOR=2.0.0", "MIN_VERSION_FLOOR=0.0.0", 1)
+	extra := strings.Replace(out, "echo head\n", "echo head\necho evil\n", 1)
+	for name, bad := range map[string]string{"floor": lower, "logic": extra} {
+		if installkit.FileFingerprint(bad) == installkit.FileFingerprint(out) {
+			t.Errorf("%s: the file fingerprint did not change", name)
+		}
+	}
+	if k, _ := installkit.Fingerprint(ks, 1); k == installkit.FileFingerprint(out) {
+		t.Error("the file and key block values must be different things")
+	}
+}

@@ -117,13 +117,16 @@ func TestVPSGuides(t *testing.T) {
 	// T12.4e: the trust root is the key in install.sh, and the guide teaches to compare its
 	// fingerprint before the first run. The old "trust anchor" caveat is gone.
 	for name, doc := range map[string]string{"en": strings.ToLower(en), "ru": strings.ToLower(ru)} {
-		for _, must := range []string{"fingerprint", "sha256sum", "-o install.sh", "--fingerprint", "release-trust", "--allow-rollback"} {
+		for _, must := range []string{"fingerprint", "sha256sum install.sh", "-o install.sh", "release-trust", "--allow-rollback"} {
 			if name == "ru" && must == "fingerprint" {
 				must = "отпечат"
 			}
 			if !strings.Contains(doc, must) {
 				t.Errorf("%s guide lacks %q", name, must)
 			}
+		}
+		if strings.Contains(doc, "sed -n") || strings.Contains(doc, "begin release keys") {
+			t.Errorf("%s guide teaches to compare the key block only: the whole file is what is compared", name)
 		}
 		if strings.Contains(doc, "trust anchor") || strings.Contains(doc, "якор") {
 			t.Errorf("%s guide still carries the trust-anchor caveat", name)
@@ -150,7 +153,7 @@ func TestReleaseTrustDocs(t *testing.T) {
 	}
 	for name, doc := range map[string]string{"en": en, "ru": ru} {
 		low := strings.ToLower(doc)
-		for _, must := range []string{"install.sh", "min_version", "ssh-keygen", "key_epoch", "install-rotation", "install-stamp", "--allow-rollback", "sha256sum"} {
+		for _, must := range []string{"install.sh", "min_version", "ssh-keygen", "key_epoch", "install-rotation", "install-stamp", "--allow-rollback", "sha256sum install.sh"} {
 			if !strings.Contains(low, must) {
 				t.Errorf("%s doc lacks %q", name, must)
 			}
