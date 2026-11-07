@@ -103,6 +103,13 @@ type Config struct {
 	// (objects.VerifyCard, the account must be the sender); the app only passes bounded bytes
 	// from contacts.
 	IngestCard func(from [32]byte, envelope []byte)
+	// Convs is the conversation engine behind the chats; nil turns the chat calls off.
+	Convs Convs
+	// PubOf finds the account key behind a node ID (the directory); chats need it to open a
+	// direct conversation.
+	PubOf func(ctx context.Context, node [32]byte) ([32]byte, error)
+	// States tells the delivery state of the own messages; nil leaves them without one.
+	States StateSource
 	// Self is this node's account node ID, to refuse a link to oneself.
 	Self [32]byte
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
@@ -120,6 +127,7 @@ type App struct {
 	kmu     sync.Mutex // knock answers: last answer per contact
 	knocked map[[32]byte]time.Time
 	ntc     notices // notices for the UI (notice.go)
+	chats   chatState
 }
 
 // New creates an App.

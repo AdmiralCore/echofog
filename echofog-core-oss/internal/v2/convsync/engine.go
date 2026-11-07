@@ -125,6 +125,15 @@ func (e *Engine) learn(pub [32]byte) {
 	e.mu.Unlock()
 }
 
+// PubOfPeer is the account key behind a peer id of a conversation, as far as this engine has met
+// it.
+func (e *Engine) PubOfPeer(peer types.PeerID) ([32]byte, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	pub, ok := e.byID[peer]
+	return pub, ok
+}
+
 // DM is the direct conversation with an account.
 func (e *Engine) DM(peer [32]byte) convlog.Conv {
 	e.learn(peer)
