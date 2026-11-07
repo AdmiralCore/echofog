@@ -22,16 +22,18 @@ type Options struct {
 
 // Report is what a run measured, what it found and, as important, what it did not check.
 type Report struct {
-	Freeze     []FreezeResult
-	Dial       map[string]DialResult
-	Parallel   map[string]ParallelResult
-	Penalty    PenaltyResult
-	Crowd      CrowdResult
-	ECH        ECHResult
-	Net        map[string]TransferResult
-	Soak       SoakResult
-	NotChecked []string
-	Findings   []string
+	Freeze   []FreezeResult
+	Dial     map[string]DialResult
+	Parallel map[string]ParallelResult
+	Penalty  PenaltyResult
+	// PenaltyNever is a block that is never lifted, played for two hours: the attempts H15 allows.
+	PenaltyNever PenaltyResult
+	Crowd        CrowdResult
+	ECH          ECHResult
+	Net          map[string]TransferResult
+	Soak         SoakResult
+	NotChecked   []string
+	Findings     []string
 }
 
 // tcpPorts is a card with a reality2-tcp address on each port.
