@@ -133,6 +133,8 @@ type App struct {
 	knocked map[[32]byte]time.Time
 	ntc     notices // notices for the UI (notice.go)
 	chats   chatState
+	hmu     sync.Mutex // history handed to newcomers: when, per group and key
+	handed  map[string]time.Time
 }
 
 // New creates an App.

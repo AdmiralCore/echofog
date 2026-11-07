@@ -221,9 +221,13 @@ func (b *GroupBook) Members(c convlog.Conv) [][32]byte {
 			add(m.Pub)
 		}
 	}
-	add([32]byte(r.Genesis.CreatorPub))
-	if p, ok := keyOfHex(r.Issuer); ok {
-		add(p)
+	// until the log holds the roster, the founder and who let us in are the ones to ask; after it
+	// the log alone says who is a member (a banned founder gets nothing)
+	if l := b.log.Load(); l == nil || !l.HasRoster(c) {
+		add([32]byte(r.Genesis.CreatorPub))
+		if p, ok := keyOfHex(r.Issuer); ok {
+			add(p)
+		}
 	}
 	return out
 }

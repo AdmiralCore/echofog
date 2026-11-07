@@ -33,6 +33,11 @@ const (
 	maxJoinRequests = 200
 	// handOverBytes bounds the history sent to a newcomer at once; the sync brings the rest.
 	handOverBytes = 1 << 20
+	// handOverEvery is the least time between two hand-overs of a group's history to one key.
+	handOverEvery = 10 * time.Minute
+	maxHanded     = 4096
+	// requestTTL is how long a join request and a pending group wait for an answer.
+	requestTTL    = 7 * 24 * time.Hour
 	joinPrefix    = "fogjoin2:"
 	maxJoinMsg    = 2 << 10
 	requestPrefix = "jr/"
@@ -281,7 +286,15 @@ func (a *App) Groups() ([]GroupInfo, error) {
 		if cv.Log().Open(c) != nil {
 			continue
 		}
-		out = append(out, a.info(cv, c, r))
+		gi := a.info(cv, c, r)
+		if gi.Pending && a.cfg.Clock.Now().Sub(time.UnixMilli(r.Joined)) >= requestTTL {
+			// nobody answered in a week: the entry goes (a refusal is never told)
+			b.forget(id)
+			a.dropRequests(id)
+			_ = cv.Log().Drop(c)
+			continue
+		}
+		out = append(out, gi)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Created != out[j].Created {
@@ -986,6 +999,10 @@ func (a *App) joinNow(ctx context.Context, b *GroupBook, cv Convs, c convlog.Con
 		return
 	}
 	a.emit(ctx, cv, c, raw)
+	// our own list may not name the one who let us in (we were removed once): they get it directly
+	if p, ok := keyOfHex(r.Issuer); ok {
+		a.sendEvent(ctx, p, raw)
+	}
 }
 
 // hello opens a sync with a peer when the engine can.
@@ -1048,12 +1065,46 @@ func (a *App) OnGroupMessage(ctx context.Context, from [32]byte, pm *chatpb.Pers
 	}
 	switch {
 	case l.Participant(c, peer):
-		a.handOver(ctx, cv, c, pub) // already in: a device that lost its copy
+		if a.mayHandOver(m.Group, pub) {
+			a.handOver(ctx, cv, c, pub) // already in: a device that lost its copy
+		}
 	case inv.Approval:
 		a.noteRequest(c, pub, inv)
 	default:
-		a.handOver(ctx, cv, c, pub)
+		if a.mayHandOver(m.Group, pub) {
+			a.handOver(ctx, cv, c, pub)
+		}
 	}
+	return true
+}
+
+func (a *App) forgetHanded(group string, pub [32]byte) {
+	a.hmu.Lock()
+	delete(a.handed, group+"/"+hex.EncodeToString(pub[:]))
+	a.hmu.Unlock()
+}
+
+// mayHandOver tells whether the history of a group may go to a key now: once per handOverEvery, so
+// that a repeated message costs nothing. The table is bounded.
+func (a *App) mayHandOver(group string, pub [32]byte) bool {
+	now := a.cfg.Clock.Now()
+	k := group + "/" + hex.EncodeToString(pub[:])
+	a.hmu.Lock()
+	defer a.hmu.Unlock()
+	if a.handed == nil || len(a.handed) >= maxHanded {
+		for key, t := range a.handed {
+			if now.Sub(t) >= handOverEvery {
+				delete(a.handed, key)
+			}
+		}
+		if a.handed == nil || len(a.handed) >= maxHanded {
+			a.handed = map[string]time.Time{}
+		}
+	}
+	if t, ok := a.handed[k]; ok && now.Sub(t) < handOverEvery {
+		return false
+	}
+	a.handed[k] = now
 	return true
 }
 
@@ -1079,13 +1130,21 @@ func (a *App) noteRequest(c convlog.Conv, pub [32]byte, inv convlog.Invite) {
 	if es, err := a.cfg.Store.Scan(prefix, maxJoinRequests); err != nil || len(es) >= maxJoinRequests {
 		return
 	}
-	if ok, _ := a.cfg.Store.Has(key); ok {
-		return
+	if old, err := a.cfg.Store.Get(key); err == nil {
+		var r requestRec
+		if json.Unmarshal(old, &r) == nil && !a.expired(r.TS) {
+			return
+		}
 	}
 	raw, err := json.Marshal(requestRec{Pub: hex.EncodeToString(pub[:]), TS: a.cfg.Clock.Now().Unix(), Via: inv.N, Label: inv.Label})
 	if err == nil {
-		_ = a.cfg.Store.Put(key, raw)
+		_ = a.cfg.Store.PutTTL(key, raw, requestTTL)
 	}
+}
+
+// expired tells whether a request made at ts (unix seconds) has waited too long.
+func (a *App) expired(ts int64) bool {
+	return a.cfg.Clock.Now().Sub(time.Unix(ts, 0)) >= requestTTL
 }
 
 func (a *App) dropRequests(group string) {
@@ -1111,6 +1170,10 @@ func (a *App) GroupJoinRequests(id string) ([]JoinRequest, error) {
 	for _, e := range es {
 		var r requestRec
 		if json.Unmarshal(e.Value, &r) != nil {
+			continue
+		}
+		if a.expired(r.TS) {
+			_ = a.cfg.Store.Delete(e.Key)
 			continue
 		}
 		pub, ok := keyOfHex(r.Pub)
@@ -1140,7 +1203,7 @@ func (a *App) GroupJoinDecide(ctx context.Context, id, node string, accept bool)
 		return ErrRequest
 	}
 	pub, ok := keyOfHex(r.Pub)
-	if !ok {
+	if !ok || a.expired(r.TS) {
 		_ = a.cfg.Store.Delete(key)
 		return ErrRequest
 	}
@@ -1168,6 +1231,11 @@ func (a *App) onGroupChange(ch convlog.Change) {
 	b := a.cfg.Groups
 	cv := a.cfg.Convs
 	l := cv.Log()
+	for _, m := range ch.Members {
+		if (m.Action == convlog.MemberRemove || m.Action == convlog.MemberBan) && len(m.Member) == 32 {
+			a.forgetHanded(ch.Conv.Group, [32]byte(m.Member)) // who left may come back and be given the history again
+		}
+	}
 	r, ok := b.rec(ch.Conv.Group)
 	if !ok || r.JoinSent || l.Participant(ch.Conv, l.Self()) || !l.HasRoster(ch.Conv) {
 		return
