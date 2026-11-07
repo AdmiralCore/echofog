@@ -272,6 +272,7 @@ type Runtime struct {
 	releaseM          *release.Manager
 	devList           ownDevices
 	chat              *chat.Service
+	files             *files.Server
 	chatKeys          *chatcrypto.Crypto
 	mailRecv          *mailbox.Receiver
 	mailboxClientOpts func([32]byte) DialOpt
