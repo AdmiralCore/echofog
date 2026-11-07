@@ -1,10 +1,20 @@
 package node
 
-// registerFiles registers files/2 (T8.1).
-//
-// The service package owns the handler and calls r.Register with the built-in spec. Keep this
-// file present even while the service is not implemented: it is the merge point for files/2, so
-// the service branch never edits modules.go or another service's file.
-func (r *Runtime) registerFiles() {
-	// Registered by T8.1 when the service package is merged.
+import (
+	"context"
+	"errors"
+
+	"github.com/echofog/echofog-core/internal/v2/files"
+	"github.com/echofog/echofog-core/internal/v2/mux"
+)
+
+// registerFiles registers files/2 (T8.1) when Config.Files is set (stub of the red commit).
+func (r *Runtime) registerFiles() {}
+
+// Files returns the files/2 server of this node, or nil when Config.Files is not set.
+func (r *Runtime) Files() *files.Server { return nil }
+
+// OpenFiles opens a files/2 stream to a device of the account behind node.
+func (r *Runtime) OpenFiles(ctx context.Context, node [32]byte) (*mux.Stream, error) {
+	return nil, errors.New("node: files are not built")
 }
