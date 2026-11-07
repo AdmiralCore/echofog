@@ -218,6 +218,10 @@ type Runtime struct {
 	netClass  atomic.Uint32
 	routeMu   sync.Mutex
 	routeInfo map[DeviceID]RouteReport
+	// freeze marks a network whose TCP stops at 12-20 KiB (T6.4d); netID names the network.
+	freeze *routepolicy.FreezeTracker
+	netMu  sync.Mutex
+	netID  string
 
 	// The sources of the own country (T6.4c); countryLast is the one last reported.
 	countryMu   sync.Mutex
@@ -377,6 +381,7 @@ func New(cfg Config) (*Runtime, error) {
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}
+	r.freeze = routepolicy.NewFreezeTracker(nil)
 	if r.rules == nil {
 		r.rules = routepolicy.Default()
 	}

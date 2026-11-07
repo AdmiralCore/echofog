@@ -61,7 +61,7 @@ func RunAll(ctx context.Context, o Options) Report {
 			f := MeasureFreeze(p, c, gb)
 			r.Freeze = append(r.Freeze, f)
 			if !f.Completed {
-				r.Findings = append(r.Findings, fmt.Sprintf("freeze: row %s with UDP gone: a 1 GiB TCP transfer stops at %d bytes. The row sets Rotate but has no byte or minute threshold, so nothing rotates before the freeze (H7 has no number yet)", f.Rule, f.FrozenAt))
+				r.Findings = append(r.Findings, fmt.Sprintf("freeze: row %s with UDP gone: a 1 GiB TCP transfer stops at %d bytes and the freeze is outside the 12-20 KiB the product can tell from a slow server", f.Rule, f.FrozenAt))
 			}
 		}
 	}

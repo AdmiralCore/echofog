@@ -6,8 +6,8 @@ package node
 import (
 	"context"
 	"errors"
-	"net"
 	"github.com/echofog/echofog-core/internal/v2/mailbox"
+	"net"
 	"net/netip"
 
 	"github.com/echofog/echofog-core/internal/v2/handshake"

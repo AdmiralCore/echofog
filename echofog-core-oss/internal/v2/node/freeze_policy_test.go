@@ -38,14 +38,16 @@ func foreignDials(w *routeWorld) int {
 // A wired network in a country with no freeze rule of its own: before the mark, the client tries
 // the foreign address directly; after it, no new path does, and the first hop is the home entry.
 func TestAFrozenWiredNetworkGoesThroughTheHomeEntry(t *testing.T) {
-	w := newRouteWorld(t, routeOpts{net: rp.NetWired, rules: entryRules(t, "198.51.100.0/24"), bCover: true})
-	w.a.rt.SetNetworkID("lab-wan")
-	_, _ = w.open(t, node.DialOpt{}) // the direct attempt fails (the fake suites are unreachable) and the relay takes over
-	if foreignDials(w) == 0 {
+	// the control, in a world of its own (an open session is reused, and only new paths are recalculated):
+	// without the mark a wired client dials the foreign address itself
+	c := newRouteWorld(t, routeOpts{net: rp.NetWired, rules: entryRules(t, "198.51.100.0/24"), bCover: true})
+	c.a.rt.SetNetworkID("lab-wan")
+	_, _ = c.open(t, node.DialOpt{}) // the direct attempt fails (the fake suites are unreachable) and the relay takes over
+	if foreignDials(c) == 0 {
 		t.Fatal("before the mark a wired client dials the foreign address itself")
 	}
-	before := foreignDials(w)
 
+	w := newRouteWorld(t, routeOpts{net: rp.NetWired, rules: entryRules(t, "198.51.100.0/24"), bCover: true})
 	freezeNetwork(t, w.a.rt)
 	p, err := w.open(t, node.DialOpt{})
 	if err != nil {
@@ -54,8 +56,8 @@ func TestAFrozenWiredNetworkGoesThroughTheHomeEntry(t *testing.T) {
 	if p.Path != mux.PathRelay {
 		t.Fatalf("path %v, want the relay path through the home entry", p.Path)
 	}
-	if n := foreignDials(w); n != before {
-		t.Fatalf("%d new direct dials to the foreign address after the mark, want none", n-before)
+	if n := foreignDials(w); n != 0 {
+		t.Fatalf("%d direct dials to the foreign address after the mark, want none", n)
 	}
 	rep, ok := w.a.rt.RouteReport(w.b.id.DeviceID)
 	if !ok || rep.RuleID != "frozen-foreign" || !rep.ViaEntry || !rep.Frozen {
@@ -94,7 +96,7 @@ func TestAFrozenNetworkWithoutAnEntryFailsPlainlyAndQuietly(t *testing.T) {
 			t.Errorf("the message must be neutral: %q", ev.Message)
 		}
 	}
-	if !strings.Contains(ev.Message, "замороз") {
+	if !strings.Contains(ev.Message, "замораж") {
 		t.Errorf("the message must say what the network does: %q", ev.Message)
 	}
 }

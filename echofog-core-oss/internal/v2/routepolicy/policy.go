@@ -175,18 +175,25 @@ func (r *Rules) Decide(own string, net NetClass, dest DestClass) Decision {
 	default:
 		d = Decision{RuleID: "foreign", Direct: true, UDP: true, Rotate: true}
 	}
-	if dest != DestDomestic && r != nil {
-		if r.tcpLimit > 0 && (d.TCPLimit == 0 || r.tcpLimit < d.TCPLimit) {
-			d.TCPLimit = r.tcpLimit
-			if d.Probe > 0 {
-				d.Probe = r.tcpLimit
-			}
-		}
-		if slices.Contains(r.udpDenied, own) {
-			d.UDP = false
+	r.overlay(&d, own, dest)
+	return d
+}
+
+// overlay applies the rules file to a row for a foreign destination: an extra cap on TCP and the
+// countries where UDP towards abroad is off.
+func (r *Rules) overlay(d *Decision, own string, dest DestClass) {
+	if dest == DestDomestic || r == nil {
+		return
+	}
+	if r.tcpLimit > 0 && (d.TCPLimit == 0 || r.tcpLimit < d.TCPLimit) {
+		d.TCPLimit = r.tcpLimit
+		if d.Probe > 0 {
+			d.Probe = r.tcpLimit
 		}
 	}
-	return d
+	if slices.Contains(r.udpDenied, own) {
+		d.UDP = false
+	}
 }
 
 // EntryAllowed reports whether ip is a verified entry (allowed_cidrs) for a client in own on net.
