@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"bytes"
 	"encoding/hex"
 	"strings"
 	"sync"
@@ -65,17 +66,21 @@ type inboxKey struct{ sender, id string }
 
 // Inbox is the receiver's list of voice messages, keyed by (sender, message ID): a message that
 // arrives twice (a retry, the mailbox and the direct copy) is one entry, and the ID of one sender
-// cannot take over the ID of another. It holds at most max entries; the oldest goes first.
+// cannot take over the ID of another. It holds at most limit entries and a quarter of that per
+// sender: a sender over its share loses its own oldest message, and a full list drops the oldest
+// message of the sender who holds most, so one sender cannot push the others out.
 type Inbox struct {
-	mu    sync.Mutex
-	max   int
-	m     map[inboxKey]*Entry
-	order []inboxKey
+	mu        sync.Mutex
+	max       int
+	perSender int
+	m         map[inboxKey]*Entry
+	order     []inboxKey
 }
 
 // NewInbox returns a list of at most limit entries (at least one).
 func NewInbox(limit int) *Inbox {
-	return &Inbox{max: max(limit, 1), m: map[inboxKey]*Entry{}}
+	limit = max(limit, 1)
+	return &Inbox{max: limit, perSender: max(limit/4, 1), m: map[inboxKey]*Entry{}}
 }
 
 // Len is the number of entries.
@@ -85,9 +90,10 @@ func (b *Inbox) Len() int {
 	return len(b.m)
 }
 
-// Add checks a voice message and registers it. fresh is false when the same message was added
-// before; the earlier entry is returned. The sender named in the message is the one the chat layer
-// authenticated for it.
+// Add checks a voice message and registers it. from is the sender the chat layer verified for the
+// message; the SenderId inside the message is only the sender's claim and must be the same. A
+// message that is not from the sender it names is refused like any damaged message (AD20). fresh is
+// false when the same message was added before; the earlier entry is returned.
 func (b *Inbox) Add(from [32]byte, m *chatpb.PersonalMessageProto) (e *Entry, fresh bool, err error) {
 	if m == nil || m.Type != chatpb.PersonalMessageType_MSG_TYPE_VOICE {
 		return nil, false, invalid("not a voice message")
@@ -95,10 +101,10 @@ func (b *Inbox) Add(from [32]byte, m *chatpb.PersonalMessageProto) (e *Entry, fr
 	if m.Id == "" || len(m.Id) > 64 || m.Text != "" || len(m.ReplyToId) > 64 {
 		return nil, false, invalid("message fields")
 	}
-	if raw, err := hex.DecodeString(m.SenderId); err != nil || len(raw) != 32 {
+	if raw, err := hex.DecodeString(m.SenderId); err != nil || len(raw) != 32 || !bytes.Equal(raw, from[:]) {
 		return nil, false, invalid("sender")
 	}
-	key := inboxKey{strings.ToLower(m.SenderId), m.Id}
+	key := inboxKey{hex.EncodeToString(from[:]), m.Id}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -111,7 +117,7 @@ func (b *Inbox) Add(from [32]byte, m *chatpb.PersonalMessageProto) (e *Entry, fr
 	}
 	e = &Entry{id: m.Id, meta: meta}
 	if o := meta.Offer; o != nil {
-		if !strings.EqualFold(hex.EncodeToString(o.Sender[:]), m.SenderId) {
+		if o.Sender != from {
 			return nil, false, invalid("the offer is not the sender's")
 		}
 		if m.ContentHash == "" || !strings.EqualFold(m.ContentHash, hex.EncodeToString(o.Root[:])) {
@@ -128,11 +134,40 @@ func (b *Inbox) Add(from [32]byte, m *chatpb.PersonalMessageProto) (e *Entry, fr
 		}
 		e.audio = clean
 	}
-	if len(b.order) >= b.max {
-		delete(b.m, b.order[0])
-		b.order = b.order[1:]
-	}
+	b.makeRoom(key.sender)
 	b.m[key] = e
 	b.order = append(b.order, key)
 	return e, true, nil
+}
+
+// makeRoom drops entries so that one more from sender fits. b.mu is held.
+func (b *Inbox) makeRoom(sender string) {
+	count := map[string]int{}
+	for _, k := range b.order {
+		count[k.sender]++
+	}
+	if count[sender] >= b.perSender {
+		b.dropOldest(sender)
+		return
+	}
+	if len(b.order) < b.max {
+		return
+	}
+	top, most := "", 0
+	for _, k := range b.order { // the oldest message among the senders with the most
+		if count[k.sender] > most {
+			top, most = k.sender, count[k.sender]
+		}
+	}
+	b.dropOldest(top)
+}
+
+func (b *Inbox) dropOldest(sender string) {
+	for i, k := range b.order {
+		if k.sender == sender {
+			delete(b.m, k)
+			b.order = append(b.order[:i], b.order[i+1:]...)
+			return
+		}
+	}
 }

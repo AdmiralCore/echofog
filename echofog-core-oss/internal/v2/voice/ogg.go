@@ -19,6 +19,8 @@ const (
 	maxRawClip  = MaxAudioBytes + 4096 // room for the headers of a clip at the size limit
 	maxSamples  = 48000 * 3600         // a granule beyond an hour is damage, not a long clip
 	opusHeadLen = 19
+
+	maxPacketSamples = 48 * 120 // an Opus packet holds at most 120 ms
 )
 
 var oggTab = func() (t [256]uint32) {
@@ -174,6 +176,15 @@ func Sanitize(ogg []byte) ([]byte, uint32, error) {
 	if samples <= 0 || samples > maxSamples {
 		return nil, 0, oggErr("length")
 	}
+	// the packets must hold the audio the granule position claims: a few packets cannot be a long
+	// clip. The last packet may be cut at its end, by less than the longest Opus packet.
+	held, err := packetSamples(audio)
+	if err != nil {
+		return nil, 0, err
+	}
+	if samples > held || held > last+maxPacketSamples {
+		return nil, 0, oggErr("length does not match the packets")
+	}
 
 	// the canonical headers: Opus version 1, mono, the pre-skip; the input rate, the gain, the
 	// channel mapping family, the vendor and the comment count are zero
@@ -211,4 +222,71 @@ func checkHead(b []byte) (uint16, error) {
 		return 0, oggErr("channel mapping")
 	}
 	return binary.LittleEndian.Uint16(b[10:]), nil
+}
+
+// packetSamples counts the 48 kHz samples in the audio packets, from the TOC byte of each (RFC 6716
+// 3.1). Packets run across pages: a segment of 255 bytes continues in the next one.
+func packetSamples(audio []oggPage) (int64, error) {
+	var total int64
+	var head [2]byte
+	n := 0 // bytes of the open packet
+	for _, p := range audio {
+		body := p.body
+		for _, s := range p.segs {
+			seg := body[:s]
+			body = body[s:]
+			for i := 0; i < len(seg) && n+i < len(head); i++ {
+				head[n+i] = seg[i]
+			}
+			n += int(s)
+			if s == 255 {
+				continue
+			}
+			d, err := packetDuration(head[:min(n, len(head))], n)
+			if err != nil {
+				return 0, err
+			}
+			total += d
+			n = 0
+		}
+	}
+	if n != 0 {
+		return 0, oggErr("unfinished packet")
+	}
+	return total, nil
+}
+
+// packetDuration is the length in 48 kHz samples of a packet whose first bytes are head and whose
+// size is size.
+func packetDuration(head []byte, size int) (int64, error) {
+	if size == 0 {
+		return 0, oggErr("empty packet")
+	}
+	toc := head[0]
+	var frame int64
+	switch cfg := toc >> 3; {
+	case cfg < 12: // SILK: 10, 20, 40, 60 ms
+		frame = [4]int64{480, 960, 1920, 2880}[cfg%4]
+	case cfg < 16: // hybrid: 10, 20 ms
+		frame = [2]int64{480, 960}[cfg%2]
+	default: // CELT: 2.5, 5, 10, 20 ms
+		frame = [4]int64{120, 240, 480, 960}[cfg%4]
+	}
+	frames := int64(1)
+	switch toc & 3 {
+	case 1, 2:
+		frames = 2
+	case 3:
+		if size < 2 {
+			return 0, oggErr("frame count")
+		}
+		frames = int64(head[1] & 0x3f)
+		if frames == 0 {
+			return 0, oggErr("frame count")
+		}
+	}
+	if frames*frame > maxPacketSamples {
+		return 0, oggErr("packet longer than 120 ms")
+	}
+	return frames * frame, nil
 }
