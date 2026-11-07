@@ -69,6 +69,7 @@ func TestGroupCallKeepAliveTellsTheOnesWhoMissedTheStart(t *testing.T) {
 	evC, stop := callEvents(carol)
 	defer stop()
 	carol.app.ForgetGroupCalls()
+	w.clk.off.Add(int64(30 * time.Second)) // the start counted as an announcement: the next one is due later
 	if err := alice.app.KeepGroupCallAlive(ctx, id, "", c.CallID, c.Coordinator); err != nil {
 		t.Fatal(err)
 	}
@@ -282,4 +283,29 @@ func TestBlockedContactsCallAnnouncementIsDropped(t *testing.T) {
 	if len(evA.got) != 0 {
 		t.Fatalf("a blocked contact rang: %+v", evA.got)
 	}
+}
+
+// FuzzOnGroupCall: the announcement comes from any member over chat/2 and is parsed before anything
+// else. It must not panic, must take only what starts with the prefix, and must leave the book of calls
+// bounded.
+func FuzzOnGroupCall(f *testing.F) {
+	f.Add(`{"v":1,"k":"call","g":"g","c":"call_x","o":"` + strings.Repeat("0", 64) + `"}`)
+	f.Add(`{"v":1,"k":"alive","g":"g","r":"room","c":"call_x"}`)
+	f.Add(`{"v":1,"k":"end","g":"g","c":"call_x"}`)
+	f.Add(`{`)
+	f.Add(strings.Repeat("{", 5000))
+	f.Add("\x00\xff")
+	f.Fuzz(func(t *testing.T, payload string) {
+		w, ns, id := team(t, 2)
+		alice, bob := ns[0], ns[1]
+		pm := &chatpb.PersonalMessageProto{Metadata: "fogcall2:" + strings.ReplaceAll(payload, `"g":"g"`, `"g":"`+id+`"`)}
+		if !alice.app.OnGroupCall(context.Background(), bob.node, pm) {
+			t.Fatal("a message with the prefix was not taken")
+		}
+		if alice.app.OnGroupCall(context.Background(), bob.node, &chatpb.PersonalMessageProto{Metadata: "x" + payload}) {
+			t.Fatal("a message without the prefix was taken")
+		}
+		_ = w
+		_, _ = alice.app.ActiveGroupCall(id, "")
+	})
 }

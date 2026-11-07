@@ -43,6 +43,9 @@ func (a *App) OnIncoming(ctx context.Context, from [32]byte, pm *chatpb.Personal
 		}
 		return true
 	}
+	if a.isCallWire(pm) {
+		return a.OnGroupCall(ctx, from, pm)
+	}
 	if blocked {
 		switch raw := pm.GetConvEvent(); {
 		case len(pm.GetConvSync()) > 0:
