@@ -150,6 +150,12 @@ type Config struct {
 	LocalInfo carrier.LocalInfo
 	// DialContext opens carrier sockets through the node's proxy (T11.6).
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	// FreezeStall is how long a flow that wrote and heard nothing back counts as stopped when it
+	// is looking for the freeze of a network (T6.4d); zero means 10 s.
+	FreezeStall time.Duration
+	// FreezeFlowAge is the oldest a flow may be, counted from its open, for its stop to count as the
+	// freeze: the handshake and the first data, not a long request; zero means 30 s.
+	FreezeFlowAge time.Duration
 
 	// Suites are the L1 suites the node offers or accepts. Nil means XK before XX.
 	Suites []uint16
@@ -215,6 +221,12 @@ type Runtime struct {
 	netClass  atomic.Uint32
 	routeMu   sync.Mutex
 	routeInfo map[DeviceID]RouteReport
+	// freeze marks a network whose TCP stops at 12-20 KiB (T6.4d); netID names the network.
+	freeze *routepolicy.FreezeTracker
+	netMu  sync.Mutex
+	netID  string
+	// flowSeq numbers the flows the freeze watcher sees.
+	flowSeq atomic.Uint64
 
 	// The sources of the own country (T6.4c); countryLast is the one last reported.
 	countryMu   sync.Mutex
@@ -374,6 +386,7 @@ func New(cfg Config) (*Runtime, error) {
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}
+	r.freeze = routepolicy.NewFreezeTracker(carrierClock.Now)
 	if r.rules == nil {
 		r.rules = routepolicy.Default()
 	}

@@ -162,7 +162,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		return nil, fmt.Errorf("%w: %s", ErrNoRoute, DeviceID(card.DeviceID))
 	}
 
-	req := carrier.DialRequest{Card: carrierCard, DialContext: r.cfg.DialContext}
+	req := carrier.DialRequest{Card: carrierCard, DialContext: r.watchedDialContext(r.cfg.DialContext)}
 	if probeBudget > 0 {
 		req.DialContext = r.probeDialContext(probeBudget)
 	}

@@ -313,7 +313,7 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 		if len(attempts) == 0 {
 			return 0, fmt.Errorf("%w: %s", ErrNoRoute, est.Peer.DeviceID)
 		}
-		req := carrier.DialRequest{Card: card, DialContext: r.cfg.DialContext}
+		req := carrier.DialRequest{Card: card, DialContext: r.watchedDialContext(r.cfg.DialContext)}
 		dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
 		var last error
 		for _, a := range attempts {

@@ -26,6 +26,8 @@ import (
 type Product struct {
 	Country string
 	Net     routepolicy.NetClass
+	// NoEntry: the client knows no entry node at home or next door (T6.4d).
+	NoEntry bool
 }
 
 // ---------------------------------------------------------------------------- D16 freeze
@@ -37,12 +39,18 @@ type FreezeResult struct {
 	Connections int
 	FrozenAt    int    // bytes after which a TCP flow stopped
 	Rule        string // the row of the policy table the product used
+	// After the freeze was detected (T6.4d): the flows it cost, the time and the error a connection
+	// report would carry when there is no entry.
+	Attempts int
+	Elapsed  time.Duration
+	Error    string
 }
 
 // MeasureFreeze reads the product's routepolicy row for a foreign destination and plays a transfer
 // of total bytes against the censor. The freeze is a TCP rule: it is avoided by a home entry (the
 // long leg stays inside the country), by UDP, or by carriers that each stay under the budget.
-// What is left, a TCP flow with no byte limit, stops at the budget.
+// What is left, a TCP flow with no byte limit, stops at the budget; the product then marks the
+// network after two such stops and goes through an entry, or says plainly that it has none.
 func MeasureFreeze(p Product, c CensorConfig, total int) FreezeResult {
 	d := routepolicy.Default().Decide(p.Country, p.Net, routepolicy.DestForeign)
 	r := FreezeResult{Rule: d.RuleID, Connections: 1}
@@ -57,10 +65,38 @@ func MeasureFreeze(p Product, c CensorConfig, total int) FreezeResult {
 		r.Completed, r.Via = true, "tcp-chunked"
 		r.Connections = (total + d.TCPLimit - 1) / d.TCPLimit
 	default:
-		r.Via, r.FrozenAt = "frozen", c.FreezeBytes
+		// TCP under a freeze with no limit in the row. The product watches its flows: two that stop
+		// at one address inside 12-20 KiB mark the network, and the row of a mobile network towards
+		// abroad applies from then on (T6.4d). A freeze outside that window cannot be told from a slow
+		// server and stays what it was.
+		clk := NewVClock()
+		tr := routepolicy.NewFreezeTracker(clk.Now)
+		dst := netip.MustParseAddr("203.0.113.5")
+		start := clk.Now()
+		for i := 0; i < 2; i++ {
+			r.Attempts++
+			clk.Advance(freezeStall) // a flow is called stopped after the stall time of the watcher
+			tr.NoteStall("lab-wan", dst, c.FreezeBytes)
+		}
+		r.Elapsed = clk.Now().Sub(start)
+		if !tr.Frozen("lab-wan") {
+			r.Via, r.FrozenAt = "frozen", c.FreezeBytes
+			return r
+		}
+		df := routepolicy.Default().DecideFrozen(p.Country, p.Net, routepolicy.DestForeign, true)
+		r.Rule = df.RuleID
+		if p.NoEntry || !df.EntryInCountry {
+			r.Via = "no-entry"
+			r.Error = "Сеть замораживает соединения с зарубежными узлами после нескольких килобайт; входа в своей стране или в соседней нет."
+			return r
+		}
+		r.Completed, r.Via = true, "entry-after-freeze"
 	}
 	return r
 }
+
+// freezeStall is the stall time of the node's watcher (node.Config.FreezeStall defaults to 10 s).
+const freezeStall = 10 * time.Second
 
 // ---------------------------------------------------------------------------- D17, D18, D23, D25: the dial race
 

@@ -31,6 +31,8 @@ type RouteReport struct {
 	// Country and CountrySource: the client's own country at that dial and where it came from.
 	Country       string
 	CountrySource CountrySource
+	// Frozen: the network was marked frozen at that dial (T6.4d).
+	Frozen bool
 }
 
 // SetNetClass changes the kind of the client's network (T6.4).
@@ -63,7 +65,7 @@ func (r *Runtime) noteRoute(peer [32]byte, dec routepolicy.Decision, dest routep
 	}
 	cc, src := r.OwnCountry()
 	r.routeInfo[DeviceID(peer)] = RouteReport{RuleID: dec.RuleID, TableVersion: r.rules.Version,
-		Net: r.NetClass().Effective(), Dest: dest, ViaEntry: viaEntry, Country: cc, CountrySource: src}
+		Net: r.NetClass().Effective(), Dest: dest, ViaEntry: viaEntry, Country: cc, CountrySource: src, Frozen: r.frozen()}
 }
 
 // addrCountry is the country of a card address; a DNS name or an unknown address has none, so it
@@ -92,14 +94,13 @@ func (r *Runtime) cardRoute(card *objects.Card) (own string, dest routepolicy.De
 			dest = d
 		}
 	}
-	return own, dest, r.rules.Decide(own, r.NetClass(), dest)
+	return own, dest, r.decide(own, dest)
 }
 
 // applyRoutePolicy drops the attempts that the country policy forbids. A probe may keep TCP
 // attempts the policy would otherwise drop, with the byte budget of the row.
 func (r *Runtime) applyRoutePolicy(card *objects.Card, attempts []carrier.Attempt, probe bool) (kept []carrier.Attempt, probeBudget int, err error) {
 	own := r.ownCountry()
-	net := r.NetClass()
 	dropped := false
 	for _, at := range attempts {
 		if at.Kind != carrier.AttemptCarrier || at.Addr == nil {
@@ -107,7 +108,7 @@ func (r *Runtime) applyRoutePolicy(card *objects.Card, attempts []carrier.Attemp
 			continue
 		}
 		dest := r.rules.Classify(own, r.addrCountry(at.Addr))
-		dec := r.rules.Decide(own, net, dest)
+		dec := r.decide(own, dest)
 		switch {
 		case !dec.Direct:
 			if probe && dec.Probe > 0 && !routepolicy.IsUDP(at.Suite) {
@@ -144,7 +145,7 @@ func (r *Runtime) udpAllowedTo(ip netip.Addr) bool {
 			dest = r.rules.Classify(own, c)
 		}
 	}
-	return r.rules.Decide(own, r.NetClass(), dest).UDP
+	return r.decide(own, dest).UDP
 }
 
 // errProbeBudget ends a probe connection that used its byte budget.
@@ -228,7 +229,8 @@ func (r *Runtime) entryFilter(dec routepolicy.Decision, own string) func(*object
 			if err != nil {
 				continue
 			}
-			if r.rules.Classify(own, r.addrCountry(a)) == routepolicy.DestDomestic &&
+			cls := r.rules.Classify(own, r.addrCountry(a))
+			if (cls == routepolicy.DestDomestic || (dec.EntryNeighbor && cls == routepolicy.DestNeighbor)) &&
 				r.rules.EntryAllowed(own, net, ip) {
 				return true
 			}
@@ -243,6 +245,10 @@ func (r *Runtime) noEntry() error {
 	err := ErrNoDomesticEntry
 	msg := "Нет входа в своей стране: из этой сети прямое соединение с зарубежными узлами " +
 		"недоступно, нужен домашний вход."
+	if r.frozen() {
+		msg = "Сеть замораживает соединения с зарубежными узлами после нескольких килобайт: " +
+			"нужен вход в своей стране или в соседней, подходящего входа нет."
+	}
 	if !r.rules.HasVerifiedEntries() {
 		err = ErrRouteUnsupported
 		msg = "Версия 2.0 не поддерживает эту сеть: нет проверенного входа в своей стране."

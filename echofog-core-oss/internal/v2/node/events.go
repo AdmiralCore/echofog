@@ -42,6 +42,9 @@ const (
 	// EventCountryChanged: the client's own country was decided or changed (user setting, GeoIP of
 	// the public address, platform hint); new paths follow the new row, live sessions stay (T6.4c).
 	EventCountryChanged EventKind = "node.country-changed"
+	// EventNetworkFrozen: two flows to one foreign address stopped after 12-20 KiB, so the network
+	// is marked frozen for a day and the row of a mobile network towards abroad applies (T6.4d).
+	EventNetworkFrozen EventKind = "node.network-frozen"
 	// EventPortMapping: the set of ports the router forwards for this node changed and the cards
 	// follow it (T6.5b). The message never carries addresses.
 	EventPortMapping EventKind = "node.port-mapping"

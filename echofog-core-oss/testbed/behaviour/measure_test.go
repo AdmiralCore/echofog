@@ -36,13 +36,29 @@ func TestFreezeIsReproducedAndTheProductsAnswerIsMeasured(t *testing.T) {
 	assert.True(t, w.Completed)
 	assert.Equal(t, "udp", w.Via, "TCP freezes, so a wired client with UDP uses it")
 
-	// the finding: UDP gone and the table has a rotation flag but no byte limit, so TCP freezes
+	// T6.4d: UDP gone and TCP frozen. The first two flows stop at the budget, which marks the network
+	// frozen; the transfer then goes through the home entry.
 	both := CensorConfig{FreezeBytes: 16384, UDPDrop: true}
 	for _, p := range []Product{ruWired, cnWired} {
 		r := MeasureFreeze(p, both, gb)
-		assert.False(t, r.Completed, "%s: freeze and no UDP", r.Rule)
-		assert.Equal(t, 16384, r.FrozenAt)
-		assert.Equal(t, "frozen", r.Via)
+		assert.True(t, r.Completed, "%s: %+v", r.Rule, r)
+		assert.Equal(t, "entry-after-freeze", r.Via)
+		assert.Equal(t, 2, r.Attempts, "the flow and its repeat are all it costs")
+		assert.Equal(t, "frozen-foreign", r.Rule)
+	}
+}
+
+// Without an entry the answer is a plain error, quickly, and not a storm of retries.
+func TestFreezeWithoutAnEntryIsAPlainErrorWithoutAStorm(t *testing.T) {
+	const gb = 1 << 30
+	both := CensorConfig{FreezeBytes: 16384, UDPDrop: true}
+	for _, p := range []Product{{Country: "RU", Net: ruWired.Net, NoEntry: true}, {Country: "CN", Net: cnWired.Net, NoEntry: true}} {
+		r := MeasureFreeze(p, both, gb)
+		assert.False(t, r.Completed)
+		assert.Equal(t, "no-entry", r.Via)
+		assert.NotEmpty(t, r.Error, "a connection report has something to say")
+		assert.LessOrEqual(t, r.Elapsed, time.Minute, "the error comes within a minute")
+		assert.LessOrEqual(t, r.Attempts, 3, "the two stalls and nothing after them")
 	}
 }
 
