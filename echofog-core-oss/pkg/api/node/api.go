@@ -61,8 +61,9 @@ type NodeApi struct {
 	// the not-built v2 backends at protocol 2 (T11.1b-e replace the bodies with delegation).
 	backends backends
 
-	v2n v2Notices // the protocol 2 notices for the UI (v2_notices.go)
-	v2m v2Subs    // what the UI subscribed to before AttachV2Messenger (backends_v2_msg.go)
+	v2n v2Notices   // the protocol 2 notices for the UI (v2_notices.go)
+	v2v v2VPNHolder // the attached protocol 2 VPN (backends_v2_vpn.go)
+	v2m v2Subs      // what the UI subscribed to before AttachV2Messenger (backends_v2_msg.go)
 
 	Logger *slog.Logger
 }
