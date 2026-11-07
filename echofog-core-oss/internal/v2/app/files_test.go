@@ -282,7 +282,14 @@ func (n *fileNode) build() {
 		n.t.Fatalf("New: %v", err)
 	}
 	n.app = a
-	n.t.Cleanup(func() { _ = a.Stop(context.Background()) })
+	n.t.Cleanup(func() {
+		_ = a.Stop(context.Background())
+		// give the open source files back: Windows cannot delete a file that is open
+		ts, _ := a.ListFileTransfers("")
+		for _, tr := range ts {
+			_ = a.CancelFile(tr.ID)
+		}
+	})
 }
 
 func (n *fileNode) restart() {
