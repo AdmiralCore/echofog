@@ -2,7 +2,6 @@ package gate
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -68,14 +67,51 @@ func Evaluate(in Input) Result {
 	res.Rows = append(res.Rows, regressionRow(in, res.Changes))
 	res.Rows = append(res.Rows, speedRows(in)...)
 
+	res.Verdict = verdictOf(res.Rows)
 	for _, r := range res.Rows {
-		res.Verdict = worse(res.Verdict, r.Status)
 		if r.Status == Red {
 			res.Blocks = true
 		}
 	}
+	res.Policy = policy
 	res.Checklist = checklist(res)
 	return res
+}
+
+// policy is what the thresholds decide and what they leave to the audit; it is part of every
+// result and of the checklist, so the person who reads a verdict reads the rules with it.
+var policy = []string{
+	"yellow does not block the release; only red does (decision of the M4 audit)",
+	"the yellow bands and the regression tolerances are a proposal that the M4 audit signs; the green limits are the design's",
+	"green means everything the gate reads was measured: anything not measured makes the verdict 'not measured' and the exit code 2, unless -allow-unmeasured says a partial run is wanted",
+	"a run in which no detector, probe or behaviour metric was measured exits 2 whatever is allowed",
+}
+
+// verdictOf is red if any row is red; otherwise 'not measured' if any row could not be measured or
+// nothing was measured at all; otherwise yellow if any row is yellow; otherwise green.
+func verdictOf(rows []Row) Status {
+	var red, yellow, green, missing bool
+	for _, r := range rows {
+		switch r.Status {
+		case Red:
+			red = true
+		case Yellow:
+			yellow = true
+		case Green:
+			green = true
+		case NotMeasured:
+			missing = true
+		}
+	}
+	switch {
+	case red:
+		return Red
+	case missing || !(green || yellow):
+		return NotMeasured
+	case yellow:
+		return Yellow
+	}
+	return Green
 }
 
 func sortedIDs(m map[string]DetectorEntry) []string {
@@ -251,7 +287,7 @@ func probeRows(run *RunReport) []Row {
 var h15 = []time.Duration{0, 2 * time.Minute, 6 * time.Minute, 14 * time.Minute, 30 * time.Minute}
 
 func behaviourRows(b *behaviour.Report) []Row {
-	d24 := Row{ID: "D24", Metric: "attempts", Limit: "attempts at 0, 2, 6, 14 and 30 minutes, then at most 30 minutes apart", Source: srcH15,
+	d24 := Row{ID: "D24", Metric: "attempts", Limit: "attempts no earlier than 0, 2, 6, 14 and 30 minutes, then 30 minutes apart (29 to 31)", Source: srcH15,
 		Status: NotMeasured, Value: "n/a", Note: "no behaviour report, or no never-lifted block played"}
 	d21 := Row{ID: "D21", Metric: "carriers per pair", Limit: "<= 2 open, the AND rule never fires", Source: srcH1a, Status: NotMeasured, Value: "n/a", Note: "no behaviour report"}
 	d25 := Row{ID: "D25", Metric: "443 down", Limit: "first success <= 10 s", Source: srcDesign, Status: NotMeasured, Value: "n/a", Note: "no behaviour report"}
@@ -261,11 +297,18 @@ func behaviourRows(b *behaviour.Report) []Row {
 	if at := b.PenaltyNever.Attempts; len(at) >= len(h15) {
 		d24.Note, d24.Value = "", fmt.Sprint(at)
 		d24.Status = Green
-		if !slices.Equal(at[:len(h15)], h15) {
+		// the first attempt is at the start; each of the next four may be late, never early
+		if at[0] != 0 {
 			d24.Status = Red
 		}
+		for i := 1; i < len(h15); i++ {
+			if at[i] < h15[i] {
+				d24.Status = Red
+			}
+		}
+		// after the fifth, every interval is 30 minutes, a minute either way
 		for i := len(h15); i < len(at); i++ {
-			if at[i]-at[i-1] > 30*time.Minute+time.Second {
+			if d := at[i] - at[i-1]; d < 29*time.Minute || d > 31*time.Minute {
 				d24.Status = Red
 			}
 		}
@@ -362,18 +405,21 @@ func MakeBaseline(run RunReport, speed map[string]float64, now time.Time, commit
 	return Baseline{SignedAt: now, Commit: commit, Run: run, Speed: speed}
 }
 
-// ExitCode is what the nightly command returns: 0 when nothing blocks, 1 when something is red, 2
-// when strict and a required measurement is missing.
-func ExitCode(r Result, strict bool) int {
+// ExitCode is what the nightly command returns: 1 when something is red; 2 when the verdict is
+// 'not measured' (a baseline, a speed, a behaviour report or a probe is missing) unless the person
+// allowed a partial run, and always 2 when nothing at all was measured; 0 otherwise.
+func ExitCode(r Result, allowUnmeasured bool) int {
 	if r.Blocks {
 		return 1
 	}
-	if strict {
-		for _, row := range r.Rows {
-			if row.Status == NotMeasured {
-				return 2
-			}
+	measured := false
+	for _, row := range r.Rows {
+		if row.ID != "visibility" && (row.Status == Green || row.Status == Yellow || row.Status == Red) {
+			measured = true
 		}
+	}
+	if !measured || (r.Verdict == NotMeasured && !allowUnmeasured) {
+		return 2
 	}
 	return 0
 }

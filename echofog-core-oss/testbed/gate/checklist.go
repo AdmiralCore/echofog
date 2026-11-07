@@ -113,7 +113,10 @@ func RenderChecklist(r Result) string {
 		}
 		fmt.Fprintf(&b, "- %s %s — %s (%s)\n", box, it.Text, it.Status, it.Evidence)
 	}
-	fmt.Fprintf(&b, "\nVerdict: %s.\n", r.Verdict)
+	fmt.Fprintf(&b, "\nVerdict: %s.\n\n## Policy\n\n", r.Verdict)
+	for _, p := range r.Policy {
+		fmt.Fprintf(&b, "- %s\n", p)
+	}
 	if r.Blocks {
 		b.WriteString("\n**The gate is red: this blocks the release.**\n")
 		for _, w := range r.Waiting {

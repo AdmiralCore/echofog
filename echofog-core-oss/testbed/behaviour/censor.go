@@ -1,6 +1,7 @@
 package behaviour
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,8 +226,15 @@ type configFile struct {
 // LoadCensorConfig reads a censor described as JSON, so a run can name the rules it measured
 // against. A file that cannot mean anything is refused.
 func LoadCensorConfig(r io.Reader) (CensorConfig, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, 1<<20))
+	if err != nil {
+		return CensorConfig{}, fmt.Errorf("censor config: %w", err)
+	}
+	if err := noDuplicateKeys(raw); err != nil {
+		return CensorConfig{}, fmt.Errorf("censor config: %w", err)
+	}
 	var f configFile
-	dec := json.NewDecoder(r)
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	// a key nobody knows is a typo, and a typo is a censor with no rules: refuse it
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
@@ -289,5 +297,58 @@ func LoadCensorConfig(r io.Reader) (CensorConfig, error) {
 		}
 		c.And = rule
 	}
+	if c.zero() {
+		return CensorConfig{}, errors.New("censor config: no rule is switched on: an empty file is not a censor")
+	}
 	return c, nil
+}
+
+// zero says that no rule is on.
+func (c CensorConfig) zero() bool {
+	return c.FreezeBytes == 0 && !c.UDPDrop && len(c.AllowSNI) == 0 && len(c.AllowCIDR) == 0 && !c.Only443 &&
+		c.ThrottleBps == 0 && c.ShutdownFrom.IsZero() && c.ShutdownTo.IsZero() && c.And == nil && !c.Port443Down
+}
+
+// noDuplicateKeys walks the first JSON value and refuses an object that names a key twice: the
+// decoder would keep the last one and the typo would pass.
+func noDuplicateKeys(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var walk func() error
+	walk = func() error {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		d, ok := t.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch d {
+		case '{':
+			seen := map[string]bool{}
+			for dec.More() {
+				k, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				key, _ := k.(string)
+				if seen[key] {
+					return fmt.Errorf("the key %q is given twice", key)
+				}
+				seen[key] = true
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+		case '[':
+			for dec.More() {
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+		}
+		_, err = dec.Token() // the closing delimiter
+		return err
+	}
+	return walk()
 }

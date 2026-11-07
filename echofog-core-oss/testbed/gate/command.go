@@ -14,8 +14,9 @@ import (
 func (s Status) MarshalText() ([]byte, error) { return []byte(s.String()), nil }
 
 // Command is the whole of the nightly command: flags in, files and an exit code out. It returns 0
-// when nothing blocks, 1 when a metric is red (the release is blocked), 2 when -strict and
-// something was not measured, 3 for bad arguments or unreadable files. The clock and the commit
+// when nothing blocks and everything was measured, 1 when a metric is red (the release is
+// blocked), 2 when something was not measured (unless -allow-unmeasured) or nothing was, 3 for bad
+// arguments or unreadable files. The clock and the commit
 // are the caller's, so a test sets both.
 func Command(args []string, stdout, stderr io.Writer, now func() time.Time, commit func() string) int {
 	fs := flag.NewFlagSet("launchpad-gate", flag.ContinueOnError)
@@ -26,7 +27,7 @@ func Command(args []string, stdout, stderr io.Writer, now func() time.Time, comm
 	fs.StringVar(&f.Baseline, "baseline", "", "signed baseline for the regression check")
 	fs.StringVar(&f.Speed, "speed", "", "JSON of carrier name to Mbit/s of `efv2 echo`")
 	out := fs.String("out", ".", "directory for gate.json and checklist.md")
-	strict := fs.Bool("strict", false, "exit 2 when a metric was not measured")
+	allow := fs.Bool("allow-unmeasured", false, "accept a partial run (exit 0 although something was not measured); an empty run still exits 2")
 	sign := fs.String("write-baseline", "", "sign the report as a baseline and write it here, instead of judging it")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, "launchpad-gate:", err)
@@ -103,5 +104,5 @@ func Command(args []string, stdout, stderr io.Writer, now func() time.Time, comm
 	if res.Blocks {
 		fmt.Fprintln(stdout, "the release is blocked")
 	}
-	return ExitCode(res, *strict)
+	return ExitCode(res, *allow)
 }

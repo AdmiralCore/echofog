@@ -6,8 +6,9 @@
 //	    -baseline testbed/baseline.json -speed speed.json -out reports/gate
 //	launchpad-gate -report report.json -speed speed.json -write-baseline testbed/baseline.json
 //
-// Exit codes: 0 nothing blocks, 1 red (the release is blocked), 2 not measured under -strict,
-// 3 bad arguments or unreadable files.
+// Exit codes: 0 nothing blocks and everything was measured, 1 red (the release is blocked), 2
+// something was not measured (add -allow-unmeasured for a partial run; an empty run is 2 anyway),
+// 3 bad arguments or unreadable files. Run nightly without -allow-unmeasured.
 package main
 
 import (
