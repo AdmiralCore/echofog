@@ -151,6 +151,8 @@ var MailboxItems = func(r *Runtime) int { return r.mailboxItems() }
 var (
 	// NoteStall tells the runtime that a flow to ip stopped after bytes inbound bytes.
 	NoteStall = func(r *Runtime, ip netip.Addr, bytes int) bool { return r.noteStall(ip, bytes) }
+	// FrozenUntil is when the mark of the current network ends.
+	FrozenUntil = func(r *Runtime) time.Time { return r.freeze.Until(r.NetworkID()) }
 	// IsFrozen reports whether the runtime has marked its current network frozen.
 	IsFrozen = func(r *Runtime) bool { return r.frozen() }
 	// WrapFreeze wraps a connection to a foreign address the way the dial path does.

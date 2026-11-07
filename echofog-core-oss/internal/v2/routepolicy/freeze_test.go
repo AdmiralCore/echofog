@@ -4,8 +4,6 @@ import (
 	"net/netip"
 	"testing"
 	"time"
-
-	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
 // The pure function: for every country row, with the freeze mark and without it.
@@ -71,11 +69,6 @@ func TestFrozenRowsOfWiredRUCNIRAndTheRest(t *testing.T) {
 		after := r.DecideFrozen(c.own, NetWired, DestForeign, true)
 		if after.RuleID != "frozen-foreign" || after.Direct || !after.EntryInCountry {
 			t.Errorf("%s with the mark: %+v", c.own, after)
-		}
-		for _, s := range []uint32{objects.SuiteNoise3, objects.SuiteReality2QUIC, objects.SuiteReality2TCP, objects.SuiteWS2} {
-			if after.AllowsSuite(s) && !after.Direct && false {
-				t.Errorf("unreachable")
-			}
 		}
 	}
 }
@@ -192,5 +185,76 @@ func TestTheTrackerIsBounded(t *testing.T) {
 	}
 	if n := tr.size(); n > 4096 {
 		t.Errorf("%d entries kept", n)
+	}
+}
+
+// M2 (b) of the T6.4d acceptance: a stall is not the freeze when the same address answered with
+// data on another flow while the stalled one was waiting.
+func TestAStallWhileAnotherFlowGotDataIsNotTheFreeze(t *testing.T) {
+	clk := &clock{t0}
+	tr := NewFreezeTracker(clk.Now)
+	stall := func(flow uint64, waited, at time.Duration) bool {
+		clk.now = t0.Add(at)
+		return tr.NoteStallFlow("n", addr, 16<<10, flow, t0.Add(waited), FreezeTTL)
+	}
+	// flow 2 hears data at 5 s; flow 1 waited since 3 s and stalls at 13 s: the server is alive
+	clk.now = t0.Add(5 * time.Second)
+	tr.NoteData("n", addr, 2)
+	if stall(1, 3*time.Second, 13*time.Second) || stall(3, 3*time.Second, 14*time.Second) {
+		t.Error("a stall while another flow was being answered must not count")
+	}
+	if tr.Frozen("n") {
+		t.Fatal("two such stalls are not the freeze: the honest flow excuses them")
+	}
+}
+
+func TestAnAnswerBeforeTheWaitOrOnTheSameFlowOrLongAgoExcusesNothing(t *testing.T) {
+	cases := []struct {
+		name         string
+		dataFlow     uint64
+		dataAt       time.Duration
+		waited, stop time.Duration
+	}{
+		{"the answer came before the wait began", 2, 1 * time.Second, 3 * time.Second, 13 * time.Second},
+		{"the answer is on the same flow", 1, 5 * time.Second, 3 * time.Second, 13 * time.Second},
+		{"the answer is older than the window", 2, 0, 0, 70 * time.Second},
+	}
+	for _, c := range cases {
+		clk := &clock{t0}
+		tr := NewFreezeTracker(clk.Now)
+		clk.now = t0.Add(c.dataAt)
+		tr.NoteData("n", addr, c.dataFlow)
+		clk.now = t0.Add(c.stop)
+		tr.NoteStallFlow("n", addr, 16<<10, 1, t0.Add(c.waited), FreezeTTL)
+		if !tr.NoteStallFlow("n", addr, 16<<10, 1, t0.Add(c.waited), FreezeTTL) || !tr.Frozen("n") {
+			t.Errorf("%s: the stalls count, two of them mark the network", c.name)
+		}
+	}
+}
+
+// M2 (c): the mark lasts as long as the caller says; Until tells.
+func TestTheMarkLastsTheTTLItWasGiven(t *testing.T) {
+	clk := &clock{t0}
+	tr := NewFreezeTracker(clk.Now)
+	tr.NoteStallFlow("n", addr, 16<<10, 1, t0, FreezeTTLNoEntry)
+	if !tr.NoteStallFlow("n", addr, 16<<10, 2, t0, FreezeTTLNoEntry) {
+		t.Fatal("the repeat marks the network")
+	}
+	if got := tr.Until("n"); !got.Equal(t0.Add(time.Hour)) {
+		t.Errorf("until %v, want one hour from the mark", got)
+	}
+	clk.now = t0.Add(59 * time.Minute)
+	if !tr.Frozen("n") {
+		t.Error("still marked inside the hour")
+	}
+	clk.now = t0.Add(61 * time.Minute)
+	if tr.Frozen("n") {
+		t.Error("an hour without an entry, not a day")
+	}
+	if !tr.Until("never-seen").IsZero() {
+		t.Error("a network that was never marked has no end")
+	}
+	if FreezeTTLNoEntry != time.Hour || FreezeTTL != 24*time.Hour {
+		t.Error("the two terms are 1 h and 24 h")
 	}
 }

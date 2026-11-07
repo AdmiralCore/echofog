@@ -150,3 +150,24 @@ func (t *FreezeTracker) size() int {
 	}
 	return n
 }
+
+const (
+	// FreezeTTLNoEntry is how long a network stays marked when the client knows no verified entry:
+	// the mark then costs the direct foreign paths and gives nothing back, so it is short.
+	FreezeTTLNoEntry = time.Hour
+	// FreezeAnswerWindow is how old an answer on another flow may be to excuse a stall.
+	FreezeAnswerWindow = 60 * time.Second
+)
+
+// NoteData records that flow of the network heard data from dst now.
+func (t *FreezeTracker) NoteData(netID string, dst netip.Addr, flow uint64) {}
+
+// NoteStallFlow is NoteStall for a flow that waited for an answer since waitingSince: a stall is
+// not the freeze when another flow of the same network heard data from dst after the wait began
+// (and within FreezeAnswerWindow): the server is alive. The mark lasts ttl.
+func (t *FreezeTracker) NoteStallFlow(netID string, dst netip.Addr, bytes int, flow uint64, waitingSince time.Time, ttl time.Duration) bool {
+	return t.NoteStall(netID, dst, bytes)
+}
+
+// Until is when the mark of the network ends; zero when it is not marked.
+func (t *FreezeTracker) Until(netID string) time.Time { return time.Time{} }

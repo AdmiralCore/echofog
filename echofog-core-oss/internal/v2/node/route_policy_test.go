@@ -94,6 +94,8 @@ type routeOpts struct {
 	noLocal bool
 	// freezeStall is how long A waits before a silent flow counts as stopped (T6.4d).
 	freezeStall time.Duration
+	// freezeFlowAge is how old a flow may be for its stop to count (T6.4d).
+	freezeFlowAge time.Duration
 }
 
 type routeWorld struct {
@@ -123,6 +125,7 @@ func newRouteWorld(t *testing.T, o routeOpts) *routeWorld {
 		c.Registry, c.Country = reg, routeCountry
 		c.NetClass, c.RoutePolicy = o.net, o.rules
 		c.FreezeStall = o.freezeStall
+		c.FreezeFlowAge = o.freezeFlowAge
 		c.DialContext = o.dialCtx
 		if o.features {
 			pathFeatures(c)

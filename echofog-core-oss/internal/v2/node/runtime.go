@@ -153,6 +153,9 @@ type Config struct {
 	// FreezeStall is how long a flow that wrote and heard nothing back counts as stopped when it
 	// is looking for the freeze of a network (T6.4d); zero means 10 s.
 	FreezeStall time.Duration
+	// FreezeFlowAge is the oldest a flow may be, counted from its open, for its stop to count as the
+	// freeze: the handshake and the first data, not a long request; zero means 30 s.
+	FreezeFlowAge time.Duration
 
 	// Suites are the L1 suites the node offers or accepts. Nil means XK before XX.
 	Suites []uint16
