@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"sync"
 
@@ -520,6 +521,25 @@ func (a *App) VPNClearHistory() error {
 		if err := a.cfg.Store.Delete(e.Key); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkLoopback refuses a proxy address that is not on the loopback: the SOCKS5 entrance has no password,
+// so "0.0.0.0" would open it to the network. Empty means the default.
+func checkLoopback(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return ErrVPNListen
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return ErrVPNListen
 	}
 	return nil
 }

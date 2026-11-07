@@ -62,8 +62,50 @@ type gcall struct {
 
 // callBook is what this node knows of the calls of its groups.
 type callBook struct {
-	mu sync.Mutex
-	m  map[string]*gcall
+	mu   sync.Mutex
+	m    map[string]*gcall
+	last map[string]time.Time // hex node ID -> when it last started a call here
+}
+
+const maxCallSenders = 4096
+
+// ownsCall says whether the sender may change the call that is going on or end it: who started it, the
+// coordinator named when it was first announced, or a member who may moderate the group.
+func (a *App) ownsCall(g *gcall, fromHex string, peer types.PeerID, moderator bool) bool {
+	return moderator || fromHex == g.From || g.Coordinator == peer.String()
+}
+
+// admit says whether a new call announced by sender may be shown now: not sooner than the cooldown after
+// the sender's last one, and not beyond the cap of calls going on in the group. A refusal is silence.
+// Call with mu held; the clock is the injected one.
+func (b *callBook) admit(a *App, group, key, sender string, now time.Time) bool {
+	cool := a.cfg.CallCooldown
+	if cool == 0 {
+		cool = 30 * time.Second
+	}
+	if cool > 0 {
+		if t, ok := b.last[sender]; ok && now.Sub(t) < cool && !now.Before(t) {
+			return false
+		}
+	}
+	max := a.cfg.MaxGroupCalls
+	if max <= 0 {
+		max = 16
+	}
+	n := 0
+	for k := range b.m {
+		if k != key && strings.HasPrefix(k, callKey(group, "")) && b.live(k, now) != nil {
+			n++
+		}
+	}
+	if n >= max {
+		return false
+	}
+	if b.last == nil || len(b.last) >= maxCallSenders {
+		b.last = map[string]time.Time{}
+	}
+	b.last[sender] = now
+	return true
 }
 
 func callKey(group, room string) string { return group + "\x00" + room }
@@ -357,6 +399,11 @@ func (a *App) OnGroupCall(ctx context.Context, from [32]byte, pm *chatpb.Persona
 		}
 		fresh := g == nil || g.CallID != w.C
 		if fresh {
+			// a call that is going on changes hands only with who owns it; a new one is spaced out and capped
+			if g != nil && !a.ownsCall(g, fromHex, peer, l.RightsIn(c, peer, w.R).Moderate) || !a.gc.admit(a, w.G, key, fromHex, now) {
+				a.gc.mu.Unlock()
+				return true
+			}
 			g = &gcall{GroupCallInfo: GroupCallInfo{Room: w.R, CallID: w.C, Coordinator: w.O, From: fromHex, StartedAt: now.Unix()}, in: map[string]int64{}}
 			if !a.gc.put(key, g, now) {
 				a.gc.mu.Unlock()
@@ -377,8 +424,10 @@ func (a *App) OnGroupCall(ctx context.Context, from [32]byte, pm *chatpb.Persona
 			delete(g.in, fromHex)
 		}
 	case "end":
-		if g != nil && g.CallID == w.C {
+		if g != nil && g.CallID == w.C && a.ownsCall(g, fromHex, peer, l.RightsIn(c, peer, w.R).Moderate) {
 			delete(a.gc.m, key)
+			delete(a.gc.last, g.From) // who started it may start the next one at once
+			delete(a.gc.last, fromHex)
 			ev = &GroupEvent{Kind: "callend", Group: w.G, From: fromHex, CallID: w.C, Room: w.R}
 		}
 	}

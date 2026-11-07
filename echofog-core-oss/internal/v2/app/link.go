@@ -190,6 +190,8 @@ func UserMessage(err error) string {
 		return "Это не ссылка выхода: узел не раздаёт соединение"
 	case errors.Is(err, ErrVPNRunning):
 		return "VPN уже запущен: сначала остановите его"
+	case errors.Is(err, ErrVPNListen):
+		return "Прокси можно открыть только на локальном адресе"
 	case errors.Is(err, ErrNoExit):
 		return "Такого выхода нет в списке"
 	case errors.Is(err, ErrBadMessage):

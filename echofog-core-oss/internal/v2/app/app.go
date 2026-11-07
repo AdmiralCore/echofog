@@ -186,6 +186,9 @@ func New(cfg Config) (*App, error) {
 	if !cfg.Mode.valid() {
 		return nil, fmt.Errorf("%w: %q", ErrMode, cfg.Mode)
 	}
+	if err := checkLoopback(cfg.VPNListen); err != nil {
+		return nil, err
+	}
 	a := &App{cfg: cfg}
 	if cfg.Groups != nil && cfg.Convs != nil {
 		cfg.Groups.attach(cfg.Convs.Log())
