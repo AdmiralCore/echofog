@@ -46,12 +46,12 @@ func (f *fakeVPN) VPNStartSaved(_ context.Context, node string) (app.VPNStatus, 
 	f.note("saved:" + node)
 	return f.status, f.fail
 }
-func (f *fakeVPN) VPNStop() error                { f.note("stop"); return f.fail }
-func (f *fakeVPN) VPNStatus() app.VPNStatus      { return f.status }
-func (f *fakeVPN) VPNExits() []app.SavedExit     { return f.exits }
-func (f *fakeVPN) VPNHistory() []app.VPNSession  { return f.history }
-func (f *fakeVPN) VPNClearHistory() error        { f.note("clear"); return f.fail }
-func (f *fakeVPN) VPNForget(node string) error   { f.note("forget:" + node); return f.fail }
+func (f *fakeVPN) VPNStop() error               { f.note("stop"); return f.fail }
+func (f *fakeVPN) VPNStatus() app.VPNStatus     { return f.status }
+func (f *fakeVPN) VPNExits() []app.SavedExit    { return f.exits }
+func (f *fakeVPN) VPNHistory() []app.VPNSession { return f.history }
+func (f *fakeVPN) VPNClearHistory() error       { f.note("clear"); return f.fail }
+func (f *fakeVPN) VPNForget(node string) error  { f.note("forget:" + node); return f.fail }
 func (f *fakeVPN) VPNName(node, name string) error {
 	f.note("name:" + node + ":" + name)
 	return f.fail
@@ -74,7 +74,7 @@ func newVPNApi(t *testing.T) (*NodeApi, *fakeVPN) {
 type fakeV2App struct{ v2App }
 
 func (*fakeV2App) Subscribe(func(app.Notice)) func() { return func() {} }
-func (*fakeV2App) LastUpdate() *app.UpdateView        { return nil }
+func (*fakeV2App) LastUpdate() *app.UpdateView       { return nil }
 
 func TestV2StartVPNViaStartsTheExitOfALink(t *testing.T) {
 	api, f := newVPNApi(t)

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
+	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
 )
@@ -183,8 +184,14 @@ func UserMessage(err error) string {
 		return "Сеть уже запущена"
 	case errors.Is(err, ErrNoChat), errors.Is(err, ErrNoGroup), errors.Is(err, convlog.ErrNotParticipant):
 		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
-	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff):
+	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff):
 		return "Эта возможность пока недоступна"
+	case errors.Is(err, ErrNotExit):
+		return "Это не ссылка выхода: узел не раздаёт соединение"
+	case errors.Is(err, ErrVPNRunning):
+		return "VPN уже запущен: сначала остановите его"
+	case errors.Is(err, ErrNoExit):
+		return "Такого выхода нет в списке"
 	case errors.Is(err, ErrBadMessage):
 		return "Сообщение не найдено или указано неверно"
 	case errors.Is(err, ErrEmptyMessage):
@@ -222,6 +229,9 @@ func UserMessage(err error) string {
 	default:
 		if sc, ok := Screen(err); ok {
 			return sc.Text
+		}
+		if r := exit.ReasonOf(err); r != exit.ReasonUnknown {
+			return r.Message() // the exit's own refusal, in its fixed words: no target, no address
 		}
 		return "Не удалось выполнить действие"
 	}

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/echofog/echofog-core/internal/v2/app"
@@ -67,3 +68,98 @@ func (n *NodeApi) v2vpn() *v2VPNBackend {
 	defer n.v2v.mu.Unlock()
 	return n.v2v.b
 }
+
+// ---- the methods ---------------------------------------------------------------------------------------------
+
+// StartVPNVia starts the VPN through the exit a link names.
+func (b *v2NetVPN) StartVPNVia(target string) error { return b.vpn.startVia(target) }
+
+func (b *v2VPNBackend) startVia(link string) error {
+	ctx, cancel := v2Ctx()
+	defer cancel()
+	_, err := b.app.VPNStart(ctx, link)
+	return v2Err(err)
+}
+
+// StartVPN connects to an exit of the list (the argument is its node ID).
+func (b *v2VPNBackend) StartVPN(relayPeerID string) error {
+	ctx, cancel := v2Ctx()
+	defer cancel()
+	_, err := b.app.VPNStartSaved(ctx, relayPeerID)
+	return v2Err(err)
+}
+
+func (b *v2VPNBackend) StopVPN() error { return v2Err(b.app.VPNStop()) }
+
+func (b *v2VPNBackend) StopVPNForSwitch() error { return v2Err(b.app.VPNStop()) }
+
+// ConnectLastExit connects to the exit used last.
+func (b *v2VPNBackend) ConnectLastExit() error {
+	var last *app.SavedExit
+	for _, e := range b.app.VPNExits() {
+		if last == nil || e.LastUsed > last.LastUsed {
+			e := e
+			last = &e
+		}
+	}
+	if last == nil {
+		return &v2UserError{msg: "Нет выхода, к которому можно подключиться: откройте ссылку выхода"}
+	}
+	return b.StartVPN(last.Node)
+}
+
+func (b *v2VPNBackend) GetVPNStatus() VPNStatus {
+	st := b.app.VPNStatus()
+	if !st.Running {
+		return VPNStatus{}
+	}
+	return VPNStatus{Running: true, ListenAddr: st.Listen, RelayPeerID: st.Exit, ActiveConns: st.Active, BytesRx: st.Rx, BytesTx: st.Tx,
+		TunnelReady: st.ExitState == app.ExitOK, ExitState: st.ExitState, Refused: st.Refused, LastRefusalReason: st.LastReason,
+		LastRefusalHost: st.LastHost, LastRefusalAt: st.LastAt}
+}
+
+func savedExit(e app.SavedExit) SavedExit {
+	// every exit is free here: the price is known and zero
+	return SavedExit{PeerID: e.Node, Name: e.Name, Favorite: e.Favorite, Active: e.Active, Sessions: e.Sessions, LastUsed: e.LastUsed,
+		BytesRx: e.Rx, BytesTx: e.Tx, Refused: e.Refused, RefusedBy: e.RefusedBy, PriceKnown: true}
+}
+
+func (b *v2VPNBackend) GetSavedExits() []SavedExit {
+	list := b.app.VPNExits()
+	out := make([]SavedExit, 0, len(list))
+	for _, e := range list {
+		out = append(out, savedExit(e))
+	}
+	return out
+}
+
+// ListExitNodes lists the exits the user has: there is no market, so these are the saved ones.
+func (b *v2VPNBackend) ListExitNodes() []ExitNode {
+	list := b.app.VPNExits()
+	out := make([]ExitNode, 0, len(list))
+	for _, e := range list {
+		out = append(out, ExitNode{PeerID: e.Node, LastProbe: e.LastUsed, Connected: e.Active})
+	}
+	return out
+}
+
+func (b *v2VPNBackend) SetExitName(peer, name string) error { return v2Err(b.app.VPNName(peer, name)) }
+
+func (b *v2VPNBackend) SetExitFavorite(peer string, on bool) error {
+	return v2Err(b.app.VPNFavorite(peer, on))
+}
+
+func (b *v2VPNBackend) ForgetExit(peer string) error { return v2Err(b.app.VPNForget(peer)) }
+
+func (b *v2VPNBackend) GetVPNHistory() []VPNSession {
+	list := b.app.VPNHistory()
+	out := make([]VPNSession, 0, len(list))
+	for _, s := range list {
+		out = append(out, VPNSession{ID: fmt.Sprintf("%s-%d", s.Node[:min(8, len(s.Node))], s.StartedAt), PeerID: s.Node, StartedAt: s.StartedAt, EndedAt: s.EndedAt,
+			UpdatedAt: max(s.EndedAt, s.StartedAt), BytesRx: s.Rx, BytesTx: s.Tx, Refused: s.Refused, RefusedBy: s.RefusedBy, PriceKnown: true,
+			EndReason: s.EndReason})
+	}
+	return out
+}
+
+func (b *v2VPNBackend) ClearVPNHistory() error { return v2Err(b.app.VPNClearHistory()) }

@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -379,5 +380,32 @@ func TestRuntimeExitDialsThroughTheRuntimeClient(t *testing.T) {
 	rt.err = errors.New("closed")
 	if l, err := d.Dial(context.Background(), card); err == nil || l != nil {
 		t.Fatalf("a failing runtime: %v %v", l, err)
+	}
+}
+
+// Every refusal of the VPN reaches the screen as a neutral Russian text; the reasons of the exit speak
+// with their own words, never with the target or the address.
+func TestUserMessageSpeaksOfTheVPN(t *testing.T) {
+	generic := app.UserMessage(errors.New("anything else"))
+	for _, err := range []error{app.ErrNotExit, app.ErrVPNRunning, app.ErrVPNOff, app.ErrNoExit} {
+		msg := app.UserMessage(err)
+		if msg == generic || strings.Contains(msg, "app:") || !hasCyrillic(msg) {
+			t.Errorf("%v: the screen says %q", err, msg)
+		}
+	}
+	for _, r := range []exit.Reason{exit.ReasonNoCamouflage, exit.ReasonUnreachable, exit.ReasonBusy, exit.ReasonPolicy, exit.ReasonRateLimited, exit.ReasonNoPath} {
+		err := &exit.Refusal{Reason: r}
+		if r == exit.ReasonNoCamouflage { // has a screen of its own (T11.5): its text, still no address
+			if got := app.UserMessage(fmt.Errorf("dial 203.0.113.9:443: %w", err)); got == generic || strings.Contains(got, "203.0.113.9") {
+				t.Errorf("no-camouflage: %q", got)
+			}
+			continue
+		}
+		if got := app.UserMessage(err); got != r.Message() || got == generic {
+			t.Errorf("%s: the screen says %q, want %q", r, got, r.Message())
+		}
+		if got := app.UserMessage(fmt.Errorf("dial 203.0.113.9:443: %w", err)); got != r.Message() || strings.Contains(got, "203.0.113.9") {
+			t.Errorf("%s wrapped: %q", r, got)
+		}
 	}
 }

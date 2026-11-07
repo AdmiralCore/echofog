@@ -223,6 +223,9 @@ func (n *NodeApi) GetSharingStatus() SharingStatus {
 
 // ListExitNodes returns the verified exits found in the DHT, best rated first
 func (n *NodeApi) ListExitNodes() []ExitNode {
+	if b := n.v2vpn(); b != nil {
+		return b.ListExitNodes()
+	}
 	if n.v2Unavailable() != nil {
 		return nil
 	}
