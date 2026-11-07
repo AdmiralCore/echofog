@@ -137,6 +137,11 @@ type Config struct {
 	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
 	Exit      ExitDialer
 	VPNListen string
+	// CallCooldown is the least time between two new calls announced by one member of a group; zero means
+	// 30 s, negative turns it off. MaxGroupCalls bounds the calls going on at once in one group (its own
+	// and its voice rooms'); zero means 16. A call beyond either is not shown: silence.
+	CallCooldown  time.Duration
+	MaxGroupCalls int
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string

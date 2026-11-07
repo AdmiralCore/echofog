@@ -38,6 +38,8 @@ var (
 	ErrNotExit = errors.New("app: the node is no exit")
 	// ErrVPNOff reports a VPN call on an app built without an exit dialer.
 	ErrVPNOff = errors.New("app: the VPN is not available")
+	// ErrVPNListen reports a proxy address that is not on the loopback: the proxy has no password.
+	ErrVPNListen = errors.New("app: the proxy listens on the loopback only")
 	// ErrNoExit reports an exit that is not in the list.
 	ErrNoExit = errors.New("app: no such exit")
 )
