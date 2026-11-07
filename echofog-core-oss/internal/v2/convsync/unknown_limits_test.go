@@ -119,6 +119,7 @@ func TestPassedKeysAreHashes(t *testing.T) {
 	size := MeshLimit + 10
 	c := newCluster(t, size, size)
 	c.rosterOf(size, nil)
+	c.catchUp(size)
 	c.say(1, "to a large group")
 	c.n.drain(t)
 	var seen int

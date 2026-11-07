@@ -132,6 +132,7 @@ type cluster struct {
 	members []*member
 	group   convlog.Conv
 	clock   time.Time
+	roster  []byte // the last roster rosterOf wrote
 }
 
 func newCluster(t testing.TB, size int, groupMembers int) *cluster {
@@ -203,10 +204,23 @@ func (c *cluster) rosterOf(k int, extra map[int]string) {
 	if err != nil {
 		c.t.Fatalf("roster: %v", err)
 	}
+	c.roster = ev
 	if err := c.members[0].e.Publish(context.Background(), c.group, ev); err != nil {
 		c.t.Fatal(err)
 	}
 	c.n.drain(c.t)
+}
+
+// catchUp hands the roster to the first k members directly, as the invitation that brings a member into a
+// group does. In a group past MeshLimit the roster is pushed to a random few and passed on once, so who
+// has it after rosterOf is chance, and a member without it cannot write (its rules know no member yet).
+func (c *cluster) catchUp(k int) {
+	c.t.Helper()
+	for i := 1; i < k; i++ {
+		if _, _, err := c.members[i].e.Log().Ingest(c.group, c.roster); err != nil {
+			c.t.Fatalf("member %d takes the roster: %v", i, err)
+		}
+	}
 }
 
 func (c *cluster) say(i int, text string) convlog.EventID {
@@ -469,6 +483,7 @@ func TestLargeGroupPushIsBounded(t *testing.T) {
 	size := MeshLimit + 10
 	c := newCluster(t, size, size)
 	c.rosterOf(size, nil)
+	c.catchUp(size)
 	before := c.n.sentBy[c.members[1].a.node]
 	c.say(1, "to a large group")
 	if got := c.n.sentBy[c.members[1].a.node] - before; got != MaxFanout {
