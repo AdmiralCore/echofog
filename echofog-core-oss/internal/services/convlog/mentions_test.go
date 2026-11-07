@@ -145,3 +145,44 @@ func TestMentionListIsBounded(t *testing.T) {
 		}
 	}
 }
+
+// A mention inside a thread counts too (a thread has no unread count of its own), and reading past it
+// clears it.
+func TestMentionInAThreadIsCounted(t *testing.T) {
+	f, x := newAccount(t), newAccount(t)
+	rules := testRules{founder: f.id}
+	c := Group("mentions4")
+	lf, lx := groupReplica(t, f, rules), groupReplica(t, x, rules)
+	ingest(t, lx, c, member(t, lf, c, roster(f, "owner", x, "member")))
+	raw, root, err := lx.AppendMessageMentioning(c, "", "a topic", Mentions{}, EventID{}, EventID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest(t, lf, c, raw)
+	reply, _, err := lx.AppendMessageMentioning(c, "", "f, your view?", Mentions{Who: []types.PeerID{f.id}}, EventID{}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest(t, lf, c, reply)
+	meta, _ := lf.Meta(c)
+	if meta.Unread != 1 || meta.Mentions != 1 {
+		t.Fatalf("unread %d mentions %d, want 1 and 1", meta.Unread, meta.Mentions)
+	}
+	if err := lf.MarkRead(c, root); err != nil {
+		t.Fatal(err)
+	}
+	if meta, _ = lf.Meta(c); meta.Mentions != 1 {
+		t.Fatalf("reading the topic cleared a mention that came after it: %d", meta.Mentions)
+	}
+	raw, later, err := lx.AppendMessageMentioning(c, "", "later", Mentions{}, EventID{}, EventID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest(t, lf, c, raw)
+	if err := lf.MarkRead(c, later); err != nil {
+		t.Fatal(err)
+	}
+	if meta, _ = lf.Meta(c); meta.Mentions != 0 || meta.Unread != 0 {
+		t.Fatalf("after reading everything: unread %d mentions %d", meta.Unread, meta.Mentions)
+	}
+}

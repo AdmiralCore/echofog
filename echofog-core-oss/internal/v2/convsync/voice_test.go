@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
+	"google.golang.org/protobuf/proto"
 )
 
 // ---- live sessions between the members, delivered when the test says so --------------------------------
@@ -117,6 +118,21 @@ func (w *voiceWorld) who(i int) map[[32]byte]VoiceState {
 		out[p.Pub] = p.State
 	}
 	return out
+}
+
+// stageOf adds a voice channel "stage" in which everybody is denied the voice right.
+func (w *voiceWorld) stage(t *testing.T) {
+	t.Helper()
+	ch, _, err := w.members[0].e.Log().AppendChannel(w.group, convlog.ChannelSpec{ID: "stage", Name: "stage", Voice: true,
+		Overrides: []convlog.Override{{Role: convlog.Everyone, Deny: convlog.PermVoice}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < len(w.members); i++ {
+		if _, _, err := w.members[i].e.Log().Ingest(w.group, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func (w *voiceWorld) join(t *testing.T, i int, st VoiceState) {
@@ -307,4 +323,74 @@ func FuzzVoiceReceive(f *testing.F) {
 			t.Fatalf("%d participants in a room of a group of three", len(list))
 		}
 	})
+}
+
+// The right to join is the one the room's channel gives (its overrides count), not the group's.
+func TestVoiceRosterFollowsTheChannelOverrides(t *testing.T) {
+	w := newVoiceWorld(t, 3, nil)
+	w.stage(t)
+	if err := w.rost[1].Join(context.Background(), w.group, "stage", VoiceState{Mic: true}); err != ErrNoVoice {
+		t.Fatalf("joined a room whose channel denies voice: %v", err)
+	}
+	// a message made by hand is dropped by the others, who read the channel's rights
+	forged := encodeRoster(rosterState, w.group.ID, 1, VoiceState{Mic: true}, "stage")
+	w.rost[0].Receive(context.Background(), w.members[1].a.node, forged)
+	w.rost[2].Receive(context.Background(), w.members[1].a.node, forged)
+	for _, i := range []int{0, 2} {
+		if list, _ := w.rost[i].Who(w.group, "stage"); len(list) != 0 {
+			t.Fatalf("member %d lists somebody the channel does not let in", i)
+		}
+	}
+	// the other room is not affected
+	w.join(t, 1, VoiceState{})
+	w.net.drain(t)
+	if len(w.who(0)) != 1 {
+		t.Fatal("the ordinary room stopped working")
+	}
+}
+
+// Somebody removed from the group is no longer listed, at once (not after the TTL).
+func TestVoiceRosterDropsTheRemovedAtOnce(t *testing.T) {
+	w := newVoiceWorld(t, 3, nil)
+	w.join(t, 1, VoiceState{Mic: true})
+	w.net.drain(t)
+	if len(w.who(0)) != 1 {
+		t.Fatal("not listed")
+	}
+	body, _ := proto.Marshal(&convlog.MemberBody{Action: convlog.MemberRemove, Member: w.members[1].a.pub[:]})
+	rm, _, err := w.members[0].e.Log().AppendKept(w.group, convlog.Draft{Kind: convlog.KindMember, Body: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.members[2].e.Log().Ingest(w.group, rm); err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range []int{0, 2} {
+		if got := w.who(i); len(got) != 0 {
+			t.Fatalf("member %d still lists the removed one: %+v", i, got)
+		}
+	}
+}
+
+// One group cannot use up the places of the others: the ceiling is per group.
+func TestVoiceRosterCeilingIsPerGroup(t *testing.T) {
+	c := newCluster(t, 4, 4)
+	c.rosterOf(4, nil)
+	ch, _, err := c.members[0].e.Log().AppendChannel(c.group, convlog.ChannelSpec{ID: "lounge", Name: "lounge", Voice: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.members[3].e.Log().Ingest(c.group, ch); err != nil {
+		t.Fatal(err)
+	}
+	r := NewVoiceRoster(VoiceConfig{
+		Pub: c.members[3].a.pub, Log: c.members[3].e.Log(), Dir: c.n, MaxPerGroup: 1,
+		Groups: func(id convlog.ConvID) (convlog.Conv, bool) { return c.group, id == c.group.ID },
+		Now:    func() time.Time { return time.Unix(1_800_000_000, 0) },
+	})
+	r.Receive(context.Background(), c.members[1].a.node, encodeRoster(rosterState, c.group.ID, 1, VoiceState{Mic: true}, "lounge"))
+	r.Receive(context.Background(), c.members[2].a.node, encodeRoster(rosterState, c.group.ID, 1, VoiceState{Mic: true}, "lounge"))
+	if list, _ := r.Who(c.group, "lounge"); len(list) != 1 {
+		t.Fatalf("a ceiling of 1 left %d listed", len(list))
+	}
 }

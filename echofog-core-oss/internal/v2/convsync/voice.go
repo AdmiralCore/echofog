@@ -38,6 +38,8 @@ const (
 	MaxRoomsPerPeer = 4
 	// MaxRosterEntries bounds all listed participants of all rooms.
 	MaxRosterEntries = 8192
+	// MaxRosterPerGroup bounds the participants listed for one group.
+	MaxRosterPerGroup = 1024
 	// MaxRosterFanout bounds how many members one change is sent to.
 	MaxRosterFanout = 200
 	// tombstoneKeep is how long a leave is remembered, so that an older state is not taken after it.
@@ -96,6 +98,8 @@ type VoiceConfig struct {
 	Groups  func(convlog.ConvID) (convlog.Conv, bool)
 	Members func(convlog.Conv) [][32]byte
 	Now     func() time.Time
+	// MaxPerGroup bounds the participants listed for one group (0: MaxRosterPerGroup).
+	MaxPerGroup int
 }
 
 type roomKey struct {
