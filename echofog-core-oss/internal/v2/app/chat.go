@@ -201,8 +201,9 @@ func (s *ChatStates) OnStatus(id [16]byte, st chat.State) {
 	default:
 		return
 	}
-	if s.state[ev] == StateDelivered {
-		return
+	cur := s.state[ev]
+	if cur == StateDelivered || cur == StateRelayed && v == StateOffline {
+		return // delivered is final; a message in a mailbox does not go back to waiting
 	}
 	s.state[ev] = v
 }
@@ -351,7 +352,7 @@ func (a *App) entry(c convlog.Conv, meta convlog.Meta) (ConvEntry, bool) {
 	if !ok {
 		return ConvEntry{}, false
 	}
-	e := ConvEntry{Ref: ref, Conv: meta.Conv, LastTS: meta.LastTS, Unread: meta.UnreadAll(), Upgraded: true}
+	e := ConvEntry{Ref: ref, Conv: meta.Conv, LastTS: meta.LastTS, Unread: meta.UnreadAll(), Mentions: meta.Mentions, Upgraded: true}
 	cv, _ := a.convs()
 	if meta.LastID != "" {
 		if id, err := convlog.ParseEventID(meta.LastID); err == nil {
@@ -516,7 +517,17 @@ func (a *App) ChatSend(ctx context.Context, ref ChatRef, req SendReq) (convlog.M
 		return convlog.Message{}, err
 	}
 	cv, _ := a.convs()
-	raw, id, err := cv.Log().AppendMessageIn(c, ref.Channel, req.Text, 0, "", reply, thread)
+	var raw []byte
+	var id convlog.EventID
+	if len(req.Mentions) > 0 || req.MentionAll {
+		var m convlog.Mentions
+		if m, err = a.mentionsOf(ctx, req); err != nil {
+			return convlog.Message{}, err
+		}
+		raw, id, err = cv.Log().AppendMessageMentioning(c, ref.Channel, req.Text, m, reply, thread)
+	} else {
+		raw, id, err = cv.Log().AppendMessageIn(c, ref.Channel, req.Text, 0, "", reply, thread)
+	}
 	if err != nil {
 		return convlog.Message{}, err
 	}

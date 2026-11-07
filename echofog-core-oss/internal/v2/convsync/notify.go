@@ -138,3 +138,21 @@ func (p *Prefs) Threads(l *convlog.Log, c convlog.Conv, channel string) []Thread
 	}
 	return out
 }
+
+// maxFollowed bounds the followed threads one list returns.
+const maxFollowed = 1000
+
+// Followed lists the roots of the threads of a conversation the user follows, in key order, up to
+// maxFollowed. A thread can be followed before it has a reply, so this is not the thread list.
+func (p *Prefs) Followed(conv convlog.ConvID) []string {
+	prefix := "follow/" + conv.String() + "/"
+	es, err := p.kv.Scan([]byte(prefix), maxFollowed)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(es))
+	for _, e := range es {
+		out = append(out, string(e.Key[len(prefix):]))
+	}
+	return out
+}

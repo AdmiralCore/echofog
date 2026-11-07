@@ -147,7 +147,8 @@ type App struct {
 	cmu     sync.Mutex // contacts: read-modify-write
 	kmu     sync.Mutex // knock answers: last answer per contact
 	knocked map[[32]byte]time.Time
-	ntc     notices // notices for the UI (notice.go)
+	asked   map[[32]byte]time.Time // knocks sent and not yet answered, by contact
+	ntc     notices                // notices for the UI (notice.go)
 	chats   chatState
 	hmu     sync.Mutex // history handed to newcomers: when, per group and key
 	handed  map[string]time.Time

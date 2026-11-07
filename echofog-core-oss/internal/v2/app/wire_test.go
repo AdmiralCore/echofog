@@ -399,7 +399,7 @@ func TestVoiceRoomsRosterComesFromTheLiveRoster(t *testing.T) {
 	_, ns, id := team(t, 2)
 	alice := ns[0]
 	ctx := context.Background()
-	ch, err := alice.app.GroupChannelSave(ctx, id, convlog.ChannelSpec{Name: "Голос", Voice: true})
+	ch, err := alice.app.GroupChannelSave(ctx, id, convlog.ChannelSpec{ID: "room", Name: "Голос", Voice: true})
 	if err != nil {
 		t.Fatalf("voice channel: %v", err)
 	}
@@ -420,5 +420,58 @@ func TestVoiceRoomsRosterComesFromTheLiveRoster(t *testing.T) {
 	}
 	if got := rooms.Roster("no-such-group", ch.ID); len(got) != 0 {
 		t.Fatalf("an unknown group lists %v", got)
+	}
+}
+
+type idSender struct{ id [16]byte }
+
+func (s idSender) Send(context.Context, [32]byte, *chatpb.PersonalMessageProto) ([16]byte, error) {
+	return s.id, nil
+}
+
+// chat/2 never takes a message back from a mailbox to the waiting state; a status that says so is
+// late or wrong and must not turn "in a mailbox" into "waits for a connection".
+func TestDeliveryStatusNeverGoesBackwards(t *testing.T) {
+	w, ns := newGroupWorld(t, 2)
+	alice, bob := ns[0], ns[1]
+	alice.befriend(t, bob)
+	bob.befriend(t, alice)
+	if _, err := alice.app.ChatSend(context.Background(), dmRef(bob), app.SendReq{Text: "статус"}); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	var pm *chatpb.PersonalMessageProto
+	for _, l := range w.queue {
+		if len(l.pm.GetConvEvent()) > 0 {
+			pm = l.pm
+		}
+	}
+	w.mu.Unlock()
+	if pm == nil {
+		t.Fatal("no event was sent")
+	}
+	_, eid, err := convlog.Decode(pm.GetConvEvent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := app.NewChatStates()
+	id := [16]byte{7}
+	if err := st.Wrap(idSender{id}).Send(context.Background(), bob.node, pm); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := st.StateOf(eid.String()); s != app.StateOffline {
+		t.Fatalf("a fresh message is %q, want offline", s)
+	}
+	st.OnStatus(id, chat.StateMailbox)
+	if s, _ := st.StateOf(eid.String()); s != app.StateRelayed {
+		t.Fatalf("after the mailbox: %q", s)
+	}
+	st.OnStatus(id, chat.StateWaiting)
+	if s, _ := st.StateOf(eid.String()); s != app.StateRelayed {
+		t.Fatalf("a late waiting status turned it into %q", s)
+	}
+	st.OnStatus(id, chat.StateDelivered)
+	if s, _ := st.StateOf(eid.String()); s != app.StateDelivered {
+		t.Fatalf("after the confirmation: %q", s)
 	}
 }
