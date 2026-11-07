@@ -60,6 +60,7 @@ type ConvEntry struct {
 	Last     *convlog.Message
 	LastTS   int64
 	Unread   int
+	Mentions int  // unread messages that name me (apart from Unread)
 	Request  bool // a stranger's chat
 	Upgraded bool
 	Kind     string // "direct" or "group"
@@ -80,6 +81,9 @@ type SendReq struct {
 	Text    string
 	ReplyTo string
 	Thread  string
+	// Mentions are the hex node IDs the message names; MentionAll names everybody (needs the right).
+	Mentions   []string
+	MentionAll bool
 }
 
 // ConvChange is pushed when a chat changes.
