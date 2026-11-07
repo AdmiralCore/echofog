@@ -148,7 +148,8 @@ type Result struct {
 	Commit    string
 	Rows      []Row
 	Changes   []Change
-	Waiting   []Row // red gates that wait for a fix of the product, not of the lab
+	Waiting   []Row    // red gates that wait for a fix of the product, not of the lab
+	Policy    []string // what the thresholds decide and what they leave to the audit
 	Checklist []Item
 	Verdict   Status
 	Blocks    bool

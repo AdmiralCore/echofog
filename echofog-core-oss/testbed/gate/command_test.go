@@ -27,8 +27,11 @@ func TestTheNightlyCommandWritesTheChecklistAndTheVerdict(t *testing.T) {
 	outDir := filepath.Join(dir, "gate-out")
 
 	code, stdout, stderr := runCommand(t, "-report", report, "-behaviour", beh, "-out", outDir)
+	assert.Equal(t, 2, code, "no baseline and no speed: the gate is not green")
+	assert.Contains(t, stderr, "not measured")
+	code, stdout, stderr = runCommand(t, "-report", report, "-behaviour", beh, "-out", outDir, "-allow-unmeasured")
 	assert.Equal(t, 0, code, stderr)
-	assert.Contains(t, stdout, "green")
+	assert.Contains(t, stdout, "not measured")
 	md, err := os.ReadFile(filepath.Join(outDir, "checklist.md"))
 	require.NoError(t, err)
 	assert.Contains(t, string(md), "deadbee")
@@ -58,14 +61,16 @@ func TestTheNightlyCommandFailsOnASwappedReportAndOnProductDefects(t *testing.T)
 	assert.Contains(t, stdout, "waits for a fix of the product")
 }
 
-func TestTheNightlyCommandIsStrictOnRequest(t *testing.T) {
+func TestTheNightlyCommandIsStrictByDefault(t *testing.T) {
 	dir := t.TempDir()
 	report := write(t, dir, "report.json", goodRun(t))
-	code, _, _ := runCommand(t, "-report", report, "-out", dir)
-	assert.Equal(t, 0, code)
-	code, _, stderr := runCommand(t, "-report", report, "-out", dir, "-strict")
+	code, _, stderr := runCommand(t, "-report", report, "-out", dir)
 	assert.Equal(t, 2, code, "no baseline, no behaviour report: not measured")
 	assert.Contains(t, stderr, "not measured")
+	code, _, _ = runCommand(t, "-report", report, "-out", dir, "-allow-unmeasured")
+	assert.Equal(t, 0, code, "a person who wants a partial run says so")
+	code, _, _ = runCommand(t, "-report", report, "-out", dir, "-strict")
+	assert.Equal(t, 3, code, "the old flag is gone: strict is the default now")
 }
 
 func TestTheNightlyCommandSignsABaseline(t *testing.T) {

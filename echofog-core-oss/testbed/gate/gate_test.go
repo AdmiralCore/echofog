@@ -69,7 +69,10 @@ func TestARunInsideEveryThresholdIsGreenAndBlocksNothing(t *testing.T) {
 	assert.False(t, res.Blocks)
 	assert.Equal(t, now, res.SignedAt, "the thresholds are signed with the date of the run of the gate")
 	assert.Equal(t, "deadbee", res.Commit)
-	assert.Equal(t, 0, ExitCode(res, false))
+	// a report alone leaves the baseline, the speed and the behaviour unmeasured: not green, not zero
+	assert.Equal(t, NotMeasured, res.Verdict)
+	assert.Equal(t, 2, ExitCode(res, false))
+	assert.Equal(t, 0, ExitCode(res, true), "unless the person who runs it says that is what they want")
 	for _, id := range []string{"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D10", "D11", "D12", "D13", "D14", "D15", "visibility", "H1a"} {
 		found := false
 		for _, r := range res.Rows {
@@ -153,8 +156,9 @@ func TestTheV2SideOfTheGate(t *testing.T) {
 	assert.Equal(t, NotMeasured, row(res, "D5", "v2 share").Status, "a lab with no v2 TCP carrier proves nothing about D5")
 	assert.Equal(t, NotMeasured, row(res, "D6", "v2 auc").Status)
 	assert.False(t, res.Blocks, "not measured is not red")
-	assert.Equal(t, 2, ExitCode(res, true), "but a strict gate wants it measured")
-	assert.Equal(t, 0, ExitCode(res, false))
+	assert.Equal(t, 2, ExitCode(res, false), "a gate that did not measure D5 and D6 is not a pass")
+	assert.Equal(t, NotMeasured, res.Verdict)
+	assert.Equal(t, 0, ExitCode(res, true))
 
 	noGate := goodRun(t)
 	noGate.V2Gate, noGate.H1a = nil, nil
@@ -216,7 +220,7 @@ func TestWithoutABaselineTheRegressionIsNotMeasured(t *testing.T) {
 	res := Evaluate(Input{Run: goodRun(t), Now: now})
 	assert.Equal(t, NotMeasured, row(res, "regression", "").Status)
 	assert.False(t, res.Blocks)
-	assert.Equal(t, 2, ExitCode(res, true), "a release gate needs a baseline")
+	assert.Equal(t, 2, ExitCode(res, false), "a release gate needs a baseline")
 }
 
 func TestRegressionAgainstTheBaseline(t *testing.T) {
@@ -399,4 +403,126 @@ func TestTheChecklistIsBuiltFromTheNumbers(t *testing.T) {
 	assert.Contains(t, md, "- [x] visibility_pct is 0 %")
 	assert.Contains(t, md, "- [ ] the product is fixed")
 	assert.True(t, strings.Contains(md, "blocks the release"), "a red checklist says so")
+}
+
+// fullInput is a run with everything the gate can read, all inside the thresholds.
+func fullInput(t *testing.T) Input {
+	t.Helper()
+	run := goodRun(t)
+	base := MakeBaseline(*run, map[string]float64{"noise3": 100}, now.Add(-24*time.Hour), "old")
+	return Input{Run: run, Behaviour: behaviourReport(false), Baseline: &base, Speed: map[string]float64{"noise3": 99}, Now: now, Commit: "deadbee"}
+}
+
+func zeroFPR(in *Input) {
+	for id, d := range in.Run.Detectors {
+		d.FPR = 0
+		in.Run.Detectors[id] = d
+	}
+}
+
+// M2 of the T15.0e acceptance: green means measured. Only a complete input is green and exits 0.
+func TestOnlyAFullyMeasuredRunIsGreen(t *testing.T) {
+	res := Evaluate(fullInput(t))
+	assert.Equal(t, Yellow, res.Verdict, "D6 and D7 sit in the yellow band of the false-positive rate")
+	assert.Equal(t, 0, ExitCode(res, false))
+
+	in := fullInput(t)
+	zeroFPR(&in)
+	res = Evaluate(in)
+	assert.Equal(t, Green, res.Verdict)
+	assert.Equal(t, 0, ExitCode(res, false))
+
+	for name, drop := range map[string]func(*Input){
+		"no baseline":  func(i *Input) { i.Baseline = nil },
+		"no behaviour": func(i *Input) { i.Behaviour = nil },
+		"no speed":     func(i *Input) { i.Speed = nil },
+		"no probes":    func(i *Input) { i.Run.Probes = nil },
+		"no h1a":       func(i *Input) { i.Run.H1a = nil },
+	} {
+		in := fullInput(t)
+		zeroFPR(&in)
+		drop(&in)
+		res := Evaluate(in)
+		assert.Equal(t, NotMeasured, res.Verdict, name)
+		assert.Equal(t, 2, ExitCode(res, false), name)
+		assert.Equal(t, 0, ExitCode(res, true), name)
+	}
+}
+
+func TestARunWithNothingMeasuredNeverExitsZero(t *testing.T) {
+	run := goodRun(t)
+	zero := 0
+	for id, d := range run.Detectors {
+		d.Recall, d.Positives, d.BrowserNegatives = nil, 0, &zero
+		run.Detectors[id] = d
+	}
+	run.V2Gate, run.H1a, run.Probes = nil, nil, nil
+	res := Evaluate(Input{Run: run, Now: now})
+	assert.Equal(t, NotMeasured, res.Verdict)
+	assert.Equal(t, 2, ExitCode(res, false))
+	assert.Equal(t, 2, ExitCode(res, true), "an empty set is not a run, whatever the person says")
+}
+
+func TestARedStillBlocksWhateverIsNotMeasured(t *testing.T) {
+	in := fullInput(t)
+	in.Baseline = nil
+	d := in.Run.Detectors["D3"]
+	d.FPR = 0.5
+	in.Run.Detectors["D3"] = d
+	res := Evaluate(in)
+	assert.Equal(t, Red, res.Verdict, "red outranks not measured")
+	assert.Equal(t, 1, ExitCode(res, true))
+}
+
+func d24Status(t *testing.T, at ...time.Duration) Status {
+	t.Helper()
+	b := behaviourReport(false)
+	b.PenaltyNever.Attempts = at
+	return row(Evaluate(Input{Run: goodRun(t), Behaviour: b, Now: now}), "D24", "").Status
+}
+
+// M1 of the acceptance: D24 reads the lower edge of every interval after the fifth attempt too, or
+// a knock every second would pass.
+func TestD24ChecksTheLowerEdgeAfterTheFifthAttempt(t *testing.T) {
+	m := time.Minute
+	hammer := []time.Duration{0, 2 * m, 6 * m, 14 * m, 30 * m, 30*m + time.Second, 30*m + 2*time.Second, 30*m + 3*time.Second}
+	assert.Equal(t, Red, d24Status(t, hammer...), "a knock every second after the fifth attempt is not a backoff")
+	assert.Equal(t, Red, d24Status(t, 0, 2*m, 6*m, 14*m, 30*m, 40*m, 50*m), "ten minutes apart is too fast")
+	assert.Equal(t, Red, d24Status(t, 0, 2*m, 6*m, 14*m, 30*m, 50*m), "twenty minutes after the fifth")
+}
+
+func TestD24LowerEdgeHasAToleranceOfAMinute(t *testing.T) {
+	m := time.Minute
+	assert.Equal(t, Green, d24Status(t, 0, 2*m, 6*m, 14*m, 30*m, 60*m, 90*m, 120*m))
+	assert.Equal(t, Green, d24Status(t, 0, 2*m, 6*m, 14*m, 30*m, 59*m, 89*m), "a minute of slack")
+	assert.Equal(t, Red, d24Status(t, 0, 2*m, 6*m, 14*m, 30*m, 58*m+59*time.Second), "29 minutes less a second")
+	assert.Equal(t, Red, d24Status(t, 0, 2*m, 6*m, 14*m, 30*m, 61*m+time.Second), "30 minutes and a minute and a second: the interval is broken the other way")
+}
+
+// L2: the first five attempts may come late, not early.
+func TestD24FirstFiveAttemptsMayBeLateNotEarly(t *testing.T) {
+	m := time.Minute
+	assert.Equal(t, Green, d24Status(t, 0, 3*m, 9*m, 21*m, 51*m), "later than H15 asks is polite, not a violation")
+	assert.Equal(t, Red, d24Status(t, 0, 1*m, 6*m, 14*m, 30*m), "the second attempt before the 120 s")
+	assert.Equal(t, Red, d24Status(t, 0, 2*m, 6*m, 14*m, 29*m), "the fifth before its 30 minutes")
+	assert.Equal(t, Red, d24Status(t, time.Second, 2*m, 6*m, 14*m, 30*m), "the first is at the start")
+}
+
+// L4.
+func TestD24WithFewerThanFiveAttemptsIsNotMeasured(t *testing.T) {
+	m := time.Minute
+	for _, at := range [][]time.Duration{nil, {0}, {0, 2 * m, 6 * m, 14 * m}} {
+		assert.Equal(t, NotMeasured, d24Status(t, at...), "%d attempts", len(at))
+	}
+}
+
+// L3: yellow does not block, and the table says so.
+func TestThePolicyIsWrittenDown(t *testing.T) {
+	res := Evaluate(fullInput(t))
+	all := strings.Join(res.Policy, "\n")
+	assert.Contains(t, all, "yellow does not block the release")
+	assert.Contains(t, all, "M4 audit")
+	assert.Contains(t, all, "proposal")
+	assert.Contains(t, RenderChecklist(res), "yellow does not block the release")
+	assert.False(t, Evaluate(fullInput(t)).Blocks, "and it does not")
 }

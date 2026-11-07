@@ -219,3 +219,21 @@ func TestTheReportCarriesTheH15Sequence(t *testing.T) {
 	rep.PenaltyNever = r // the field exists and is filled by RunAll; see TestReportSaysWhatItDidNotCheck
 	assert.Equal(t, r, rep.PenaltyNever)
 }
+
+// L1 of the T15.0e acceptance: a file that says nothing is not a censor, and a key twice is a typo.
+func TestLoadCensorConfigRefusesEmptyAndDoubledKeys(t *testing.T) {
+	for name, bad := range map[string]string{
+		"empty object":     `{}`,
+		"null":             `null`,
+		"all rules off":    `{"freeze_bytes":0,"udp_drop":false}`,
+		"key twice":        `{"freeze_bytes":16384,"freeze_bytes":1}`,
+		"key twice, udp":   `{"udp_drop":true,"udp_drop":false}`,
+		"key twice in and": `{"and":{"asns":["A"],"asns":["B"],"ja4s":["j"],"parallel":3,"penalty_seconds":1}}`,
+		"and twice":        `{"and":{"asns":["A"],"ja4s":["j"],"parallel":3,"penalty_seconds":1},"and":null}`,
+	} {
+		_, err := LoadCensorConfig(strings.NewReader(bad))
+		assert.Error(t, err, name)
+	}
+	_, err := LoadCensorConfig(strings.NewReader(`{"udp_drop":true}`))
+	assert.NoError(t, err, "one rule is a censor")
+}
