@@ -18,7 +18,7 @@ func TestInstallScript(t *testing.T) {
 		t.Error("the installer is a POSIX sh script")
 	}
 	for _, must := range []string{
-		"set -eu", "umask 077", "mktemp -d", "trap", "--proto '=https'", "--tlsv1.2", "--fail", "ECHOFOG_RELEASE_URL", "uname -m",
+		"set -eu", "umask 077", "mktemp -d", "trap", "--proto '=https'", "--tlsv1.2", "--proto-redir '=https'", "--connect-timeout", "--max-time", "--fail", "ECHOFOG_RELEASE_URL", "uname -m",
 		"v2 install", "--manifest", "--binary",
 	} {
 		if !strings.Contains(sh, must) {
@@ -94,6 +94,10 @@ func TestVPSGuides(t *testing.T) {
 		if strings.Contains(doc, "| sh") || strings.Contains(doc, "|sh") || strings.Contains(doc, "| bash") {
 			t.Errorf("%s guide teaches piping a download into a shell", name)
 		}
+	}
+	// The honest word about the trust anchor of the bootstrap path.
+	if !strings.Contains(strings.ToLower(en), "trust anchor") || !strings.Contains(strings.ToLower(ru), "якор") {
+		t.Error("the guides must say where the trust of the installer comes from and what it does not cover")
 	}
 	// Same structure in both languages.
 	heads := func(s string) int { return len(regexp.MustCompile(`(?m)^#{1,3} `).FindAllString(s, -1)) }

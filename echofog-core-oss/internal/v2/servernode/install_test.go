@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -322,5 +324,132 @@ func TestCLIInstall(t *testing.T) {
 	args3[2], args3[4] = r3.root, r3.bin
 	if code := servernode.MainIO(args3, nil, strings.NewReader(""), &out, &errb); code != 1 || len(entries(t, r3.root)) != 0 {
 		t.Errorf("no release keys: code %d", code)
+	}
+}
+
+// A (TOCTOU): what is installed is what was verified, however the files change in between.
+func TestInstallInstallsTheVerifiedBytes(t *testing.T) {
+	// The self-test overwrites the file it was given: the installer must notice and refuse.
+	r := newInstRig(t)
+	r.deps.SelfTest = func(_ context.Context, exe string) (string, error) {
+		_ = os.WriteFile(exe, []byte("EVIL, not signed"), 0o755)
+		return "0.4.0", nil
+	}
+	_, err := servernode.Install(context.Background(), r.deps)
+	if err == nil || !errors.Is(err, servernode.ErrNotVerified) {
+		t.Fatalf("a file swapped during the self-test was installed: %v", err)
+	}
+	if e := entries(t, r.root); len(e) != 0 {
+		t.Errorf("files exist after the refusal: %v", e)
+	}
+
+	// The operator's own file is swapped after the check: the installed bytes still are the verified ones.
+	r = newInstRig(t)
+	orig := r.deps.Binary
+	r.deps.SelfTest = func(context.Context, string) (string, error) {
+		_ = os.WriteFile(orig, []byte("EVIL, swapped in the original path"), 0o755)
+		return "0.4.0", nil
+	}
+	if _, err := servernode.Install(context.Background(), r.deps); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(r.root, "usr/local/bin/echofog-node"))
+	if !bytes.Equal(got, r.artifact) {
+		t.Fatalf("installed bytes %q are not the signed artifact", got)
+	}
+}
+
+// C: one changed byte with the same size is caught by the hash, not by the size check.
+func TestInstallCatchesAnEqualSizeSubstitution(t *testing.T) {
+	r := newInstRig(t)
+	evil := append([]byte(nil), r.artifact...)
+	evil[len(evil)/2] ^= 0xff
+	if len(evil) != len(r.artifact) {
+		t.Fatal("test setup")
+	}
+	if err := os.WriteFile(r.deps.Binary, evil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := servernode.Install(context.Background(), r.deps); !errors.Is(err, servernode.ErrNotVerified) {
+		t.Fatalf("Install = %v", err)
+	}
+	if len(entries(t, r.root)) != 0 || r.runner.all() != "" {
+		t.Error("side effects")
+	}
+}
+
+type failRunner struct {
+	recRunner
+	failOn string
+}
+
+func (f *failRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	line := strings.TrimSpace(name + " " + strings.Join(args, " "))
+	if f.failOn != "" && strings.HasPrefix(line, f.failOn) {
+		f.mu.Lock()
+		f.calls = append(f.calls, line+" (failed)")
+		f.mu.Unlock()
+		return []byte("boom"), errors.New("command failed")
+	}
+	return f.recRunner.Run(ctx, name, args...)
+}
+
+// B: a failure at any step leaves nothing of ours behind, says which step failed, and a second
+// attempt is not blocked.
+func TestInstallRollsBackOnEveryFailure(t *testing.T) {
+	for _, step := range []string{"useradd", "chown", "systemctl daemon-reload", "systemctl enable"} {
+		t.Run(step, func(t *testing.T) {
+			r := newInstRig(t)
+			fr := &failRunner{failOn: step}
+			r.deps.Runner = fr
+			r.deps.Start = true
+			_, err := servernode.Install(context.Background(), r.deps)
+			if err == nil {
+				t.Fatal("Install succeeded although a step failed")
+			}
+			if !strings.Contains(err.Error(), strings.Fields(step)[0]) {
+				t.Errorf("the error does not name the failed step: %v", err)
+			}
+			if e := entries(t, r.root); len(e) != 0 {
+				t.Errorf("leftovers after a failed install: %v", e)
+			}
+			r.deps.Runner = &recRunner{}
+			if _, err := servernode.Install(context.Background(), r.deps); err != nil {
+				t.Fatalf("a second install is blocked: %v", err)
+			}
+		})
+	}
+}
+
+// H1: the manifest comes over https only, also through redirects.
+func TestCLIInstallManifestURLIsHTTPSOnly(t *testing.T) {
+	r := newInstRig(t)
+	servernode.ReleaseKeys = []keys.AKey{r.signers[0].Public(), r.signers[1].Public(), r.signers[2].Public()}
+	servernode.InstallRunner = r.runner
+	servernode.InstallEuid = func() int { return 0 }
+	servernode.UpdateNow = func() time.Time { return updNow }
+	servernode.UpdateSelfTest = func(context.Context, string) (string, error) { return "0.4.0", nil }
+	servernode.UpdateHTTPClient = r.srv.Client()
+	t.Cleanup(func() {
+		servernode.ReleaseKeys, servernode.InstallRunner, servernode.InstallEuid, servernode.UpdateNow, servernode.UpdateSelfTest, servernode.UpdateHTTPClient = nil, nil, nil, nil, nil, nil
+	})
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(r.deps.ManifestRaw) }))
+	defer plain.Close()
+	redirect := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, plain.URL+"/manifest", http.StatusFound)
+	}))
+	defer redirect.Close()
+	servernode.UpdateHTTPClient = redirect.Client()
+
+	base := []string{"install", "--root", r.root, "--binary", r.bin, "--preset", "relay", "--advertise", "203.0.113.10", "--yes", "--platform", "linux-amd64"}
+	for name, u := range map[string]string{"plain http": plain.URL + "/manifest", "redirect to http": redirect.URL + "/manifest"} {
+		var out, errb bytes.Buffer
+		code := servernode.MainIO(append(append([]string(nil), base...), "--manifest-url", u), nil, strings.NewReader(""), &out, &errb)
+		if code == 0 {
+			t.Errorf("%s: install succeeded", name)
+		}
+		if e := entries(t, r.root); len(e) != 0 || r.runner.all() != "" {
+			t.Errorf("%s: side effects %v", name, e)
+		}
 	}
 }
