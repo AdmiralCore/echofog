@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -473,5 +474,38 @@ func TestDeliveryStatusNeverGoesBackwards(t *testing.T) {
 	st.OnStatus(id, chat.StateDelivered)
 	if s, _ := st.StateOf(eid.String()); s != app.StateDelivered {
 		t.Fatalf("after the confirmation: %q", s)
+	}
+}
+
+// A message names its author by the v1 peer id; the contacts and the members of a group are known by
+// the node id. NodeOfPeer joins the two, for the author of a direct message and of a group alike.
+func TestNodeOfPeerJoinsTheTwoIdNames(t *testing.T) {
+	w, ns, id := team(t, 2)
+	alice, bob := ns[0], ns[1]
+	ctx := context.Background()
+	if _, err := bob.app.ChatSend(ctx, gref(id, ""), app.SendReq{Text: "я тут"}); err != nil {
+		t.Fatal(err)
+	}
+	w.drain()
+	page, err := alice.app.ChatHistory(ctx, gref(id, ""), "", 10)
+	if err != nil || len(page.Messages) != 1 {
+		t.Fatalf("history %+v, %v", page, err)
+	}
+	author := page.Messages[0].Author
+	if author == bob.nodeHex() {
+		t.Fatal("the author is already a node id: the two names are one, nothing to join")
+	}
+	if n, ok := alice.app.NodeOfPeer(author); !ok || n != bob.nodeHex() {
+		t.Fatalf("NodeOfPeer(author) = %q, %v, want bob's node id", n, ok)
+	}
+	// oneself
+	own, _ := alice.app.ChatSend(ctx, gref(id, ""), app.SendReq{Text: "и я"})
+	if n, ok := alice.app.NodeOfPeer(own.Author); !ok || n != alice.nodeHex() {
+		t.Fatalf("NodeOfPeer(own) = %q, %v", n, ok)
+	}
+	for _, bad := range []string{"", "zz", "00", strings.Repeat("ab", 32)} {
+		if n, ok := alice.app.NodeOfPeer(bad); ok {
+			t.Errorf("NodeOfPeer(%q) = %q for nobody", bad, n)
+		}
 	}
 }

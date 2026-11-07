@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/hex"
 	"sort"
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/v2/chat"
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
+	"github.com/echofog/echofog-core/internal/v2/convsync"
+	"github.com/echofog/echofog-core/pkg/api/types"
 )
 
 // Receiver is the receiving side of the conversation engine (*convsync.Engine).
@@ -114,4 +117,34 @@ func (a *App) ChatEvents(st *ChatStates) chat.Events {
 		},
 		Control: a.OnControl,
 	}
+}
+
+// NodeOfPeer turns the peer id a message names its author by (the v1 id of the account key) into the
+// node ID the contacts and the members are known by. It knows the accounts the engine has met, the keys
+// saved from earlier runs and the keys the groups' logs name; nobody else.
+func (a *App) NodeOfPeer(peer string) (string, bool) {
+	raw, err := hex.DecodeString(peer)
+	if err != nil || len(raw) != 32 {
+		return "", false
+	}
+	p := types.PeerID(raw)
+	cv, err := a.convs()
+	if err != nil {
+		return "", false
+	}
+	if p == cv.Log().Self() {
+		return hex.EncodeToString(a.cfg.Self[:]), true
+	}
+	pub, ok := cv.PubOfPeer(p)
+	if !ok {
+		pub, ok = a.savedPub(p)
+	}
+	if !ok && a.cfg.Groups != nil {
+		pub, ok = a.cfg.Groups.pubOfPeer(p)
+	}
+	if !ok {
+		return "", false
+	}
+	n := convsync.NodeOf(pub)
+	return hex.EncodeToString(n[:]), true
 }

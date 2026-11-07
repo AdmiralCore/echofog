@@ -377,3 +377,15 @@ func nodeHexOfPub(pub [32]byte) string {
 	n := convsync.NodeOf(pub)
 	return hex.EncodeToString(n[:])
 }
+
+// pubOfPeer finds the account key the logs of the groups name behind a peer id.
+func (b *GroupBook) pubOfPeer(p types.PeerID) ([32]byte, bool) {
+	for _, id := range b.ids() {
+		for _, pub := range b.Members(convlog.Group(id)) {
+			if types.PeerPubKeyToID(types.PeerPublicKey(pub)) == p {
+				return pub, true
+			}
+		}
+	}
+	return [32]byte{}, false
+}
