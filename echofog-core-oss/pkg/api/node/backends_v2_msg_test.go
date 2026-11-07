@@ -40,6 +40,8 @@ type fakeMsg struct {
 	roles    []app.GroupRole
 	rights   convlog.Rights
 	fail     error
+	noNext   bool
+	mod      []convlog.ModEntry
 	chatSubs []func(app.ConvChange)
 	fileCb   func(app.Transfer)
 	transfer app.Transfer
@@ -78,7 +80,11 @@ func (f *fakeMsg) NodeOfPeer(p string) (string, bool) {
 func (f *fakeMsg) Conversations() ([]app.ConvEntry, error) { return f.entries, f.fail }
 func (f *fakeMsg) ChatHistory(_ context.Context, ref app.ChatRef, cursor string, limit int) (app.ChatPage, error) {
 	f.note("history:" + ref.Kind + ":" + ref.ID + ":" + ref.Channel + ":" + cursor)
-	return app.ChatPage{Messages: f.msgs, Next: "next"}, f.fail
+	next := "next"
+	if f.noNext {
+		next = ""
+	}
+	return app.ChatPage{Messages: f.msgs, Next: next}, f.fail
 }
 func (f *fakeMsg) ChatThread(_ context.Context, ref app.ChatRef, root, cursor string, limit int) (app.ChatPage, error) {
 	f.note("thread:" + root)
@@ -239,6 +245,7 @@ func (f *fakeMsg) GroupInviteContacts(_ context.Context, id string, nodes []stri
 func (f *fakeMsg) GroupChannels(id string) ([]convlog.Channel, error) {
 	return []convlog.Channel{{ID: "talk", Name: "Разговоры", Voice: true}, {ID: "news", Name: "Новости", ReadOnly: true}}, f.fail
 }
+func (f *fakeMsg) GroupModerationLog(id string) ([]convlog.ModEntry, error) { return f.mod, f.fail }
 func (f *fakeMsg) GroupMainChannel(id string) (convlog.Channel, error) {
 	return convlog.Channel{Name: "Основной", Open: "news"}, f.fail
 }
@@ -505,6 +512,7 @@ func TestV2LegacyMessageCallsGoThroughTheChat(t *testing.T) {
 
 func TestV2ChatAttachmentsSortFilesMediaAndLinks(t *testing.T) {
 	api, f := newMsgApi(t)
+	f.noNext = true
 	f.msgs = []convlog.Message{
 		{ID: "1", Author: peerBob, Kind: "file", File: &convlog.FileRef{Name: "a.png", Mime: "image/png"}},
 		{ID: "2", Author: peerBob, Kind: "file", File: &convlog.FileRef{Name: "b.pdf", Mime: "application/pdf"}},
@@ -653,7 +661,7 @@ func TestV2GroupRolesAndModerationLog(t *testing.T) {
 		{ID: "owner", Rank: 100, Perms: convlog.PermAll, Builtin: true},
 		{ID: "admin", Title: "Админ", Color: 0xff0000, Rank: 50, Perms: convlog.PermKick | convlog.PermManageRoles, Builtin: true},
 		{ID: "helper", Title: "Помощник", Rank: 30, Perms: convlog.PermSend},
-		{ID: "member", Rank: 10},
+		{ID: "member", Rank: 10, Builtin: true},
 	}
 	f.members = []app.GroupMember{{Node: nodeMe, Self: true, Role: "admin", Rank: 50}, {Node: nodeBob, Role: "helper", Rank: 30}}
 	roles, err := api.GroupRoles(groupID)
@@ -669,6 +677,14 @@ func TestV2GroupRolesAndModerationLog(t *testing.T) {
 	require.False(t, byID["owner"].CanEdit || byID["owner"].CanRemove)
 	require.False(t, byID["member"].CanRemove, "a built-in role stays")
 	require.Equal(t, uint32(0xff0000), byID["admin"].Color)
+
+	f.mod = []convlog.ModEntry{{TS: 1, Actor: peerMe, Action: "ban", Target: peerBob}, {TS: 2, Actor: peerBob, Action: "role", Target: strings.Repeat("c3", 32)}}
+	log, err := api.GroupModerationLog(groupID)
+	require.NoError(t, err)
+	require.Equal(t, nodeMe, log[0].Actor)
+	require.Equal(t, nodeBob, log[0].Target)
+	require.Equal(t, strings.Repeat("c3", 32), log[1].Target, "a person the app does not know keeps the id")
+	require.Equal(t, peerMe, f.mod[0].Actor, "the log of the app is not rewritten")
 }
 
 func TestV2ChannelsCarryWhatICanDoInThem(t *testing.T) {
