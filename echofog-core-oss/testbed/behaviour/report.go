@@ -82,6 +82,7 @@ func RunAll(ctx context.Context, o Options) Report {
 	r.Parallel["product"] = MeasureParallel(CensorConfig{And: rule}, 50, false)
 	r.Parallel["naive"] = MeasureParallel(CensorConfig{And: rule}, 8, true)
 	r.Penalty = MeasurePenalty(300*time.Second, 2*time.Hour)
+	r.PenaltyNever = MeasurePenalty(0, 2*time.Hour)
 	if r.Penalty.Grows {
 		r.Findings = append(r.Findings, "penalty: the backoff doubles with every failed handshake (120 s, 240 s, ... up to 30 min), as H15 says; the design table's 'at most 120 s, no growth with retries' cannot hold for a block that lasts: the two texts disagree")
 	}

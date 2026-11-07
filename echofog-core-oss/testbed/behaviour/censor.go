@@ -178,6 +178,10 @@ func (c *Censor) andRule(a Attempt, now time.Time) (Verdict, bool) {
 
 // Judge is asked again about an open flow as it carries data: the freeze and the throttle.
 func (c *Censor) Judge(a Attempt) Verdict {
+	// the start of a shutdown cuts the flows that are open (D20)
+	if cfg, now := c.cfg, c.clk.Now(); !cfg.ShutdownFrom.IsZero() && !now.Before(cfg.ShutdownFrom) && now.Before(cfg.ShutdownTo) {
+		return Verdict{Kind: Drop, Until: cfg.ShutdownTo}
+	}
 	if c.cfg.FreezeBytes > 0 && a.Proto == "tcp" && a.ServerBytes >= c.cfg.FreezeBytes {
 		return Verdict{Kind: Freeze}
 	}
@@ -223,8 +227,14 @@ type configFile struct {
 func LoadCensorConfig(r io.Reader) (CensorConfig, error) {
 	var f configFile
 	dec := json.NewDecoder(r)
+	// a key nobody knows is a typo, and a typo is a censor with no rules: refuse it
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
 		return CensorConfig{}, fmt.Errorf("censor config: %w", err)
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return CensorConfig{}, errors.New("censor config: data after the first JSON value")
 	}
 	if f.FreezeBytes < 0 || f.ThrottleBps < 0 {
 		return CensorConfig{}, errors.New("censor config: a negative size or rate")
@@ -257,6 +267,12 @@ func LoadCensorConfig(r io.Reader) (CensorConfig, error) {
 			return CensorConfig{}, fmt.Errorf("censor config: %s: %w", name, err)
 		}
 		*dst = t
+	}
+	if (f.ShutdownFrom == "") != (f.ShutdownTo == "") {
+		return CensorConfig{}, errors.New("censor config: a shutdown window needs both shutdown_from and shutdown_to")
+	}
+	if !c.ShutdownFrom.IsZero() && !c.ShutdownTo.After(c.ShutdownFrom) {
+		return CensorConfig{}, errors.New("censor config: shutdown_to must be after shutdown_from")
 	}
 	if f.And != nil {
 		a := f.And

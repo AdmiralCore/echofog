@@ -25,7 +25,21 @@ const (
 	Info
 )
 
-func (s Status) String() string { return "?" }
+func (s Status) String() string {
+	switch s {
+	case Green:
+		return "green"
+	case Yellow:
+		return "yellow"
+	case Red:
+		return "red"
+	case NotMeasured:
+		return "not measured"
+	case Info:
+		return "info"
+	}
+	return "?"
+}
 
 // Row is one metric against its threshold.
 type Row struct {
@@ -38,23 +52,28 @@ type Row struct {
 	Note   string
 }
 
+// DetectorEntry is one detector's row of report.json.
+type DetectorEntry struct {
+	Recall    *float64 `json:"recall"`
+	FPR       float64  `json:"fpr"`
+	N         int      `json:"n"`
+	Positives int      `json:"positives"`
+	// BrowserNegatives is nil in a report that does not say; 0 means there was no browser control.
+	BrowserNegatives *int     `json:"browser_negatives"`
+	AUC              *float64 `json:"auc"`
+	TPRAt1           *float64 `json:"tpr_at_1pct_fpr"`
+}
+
 // RunReport is the part of the runner's report.json the gate reads.
 type RunReport struct {
-	Schema    int    `json:"schema"`
-	When      string `json:"when"`
-	Commit    string `json:"commit"`
-	Spec      string `json:"spec"`
-	Scenario  string `json:"scenario"`
-	Profile   string `json:"profile"`
-	Network   string `json:"network"`
-	Detectors map[string]struct {
-		Recall    *float64 `json:"recall"`
-		FPR       float64  `json:"fpr"`
-		N         int      `json:"n"`
-		Positives int      `json:"positives"`
-		AUC       *float64 `json:"auc"`
-		TPRAt1    *float64 `json:"tpr_at_1pct_fpr"`
-	} `json:"detectors"`
+	Schema    int                      `json:"schema"`
+	When      string                   `json:"when"`
+	Commit    string                   `json:"commit"`
+	Spec      string                   `json:"spec"`
+	Scenario  string                   `json:"scenario"`
+	Profile   string                   `json:"profile"`
+	Network   string                   `json:"network"`
+	Detectors map[string]DetectorEntry `json:"detectors"`
 	Aggregate struct {
 		VisibilityPct       float64 `json:"visibility_pct"`
 		StrictVisibilityPct float64 `json:"strict_visibility_pct"`
@@ -134,18 +153,3 @@ type Result struct {
 	Verdict   Status
 	Blocks    bool
 }
-
-// Evaluate puts every metric against its threshold.
-func Evaluate(in Input) Result { return Result{} }
-
-// MakeBaseline signs a run as the reference.
-func MakeBaseline(run RunReport, speed map[string]float64, now time.Time, commit string) Baseline {
-	return Baseline{}
-}
-
-// ExitCode is what the nightly command returns: 0 when nothing blocks, 1 when something is red, 2
-// when strict and a required measurement is missing.
-func ExitCode(r Result, strict bool) int { return -1 }
-
-// RenderChecklist writes the M4 checklist as Markdown.
-func RenderChecklist(r Result) string { return "" }
