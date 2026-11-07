@@ -78,6 +78,7 @@ type ChanStat struct {
 	LastLamport uint64 `json:"last_lamport,omitempty"`
 	LastTS      int64  `json:"last_ts,omitempty"`
 	Unread      int    `json:"unread,omitempty"`
+	Mentions    int    `json:"mentions,omitempty"`
 	ReadLamport uint64 `json:"read_lamport,omitempty"`
 }
 

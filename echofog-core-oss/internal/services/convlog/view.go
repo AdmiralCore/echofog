@@ -182,6 +182,11 @@ type Message struct {
 	LastReplyAt int64      `json:"lastReplyAt,omitempty"`
 	ThreadTitle string     `json:"threadTitle,omitempty"`
 	Legacy      bool       `json:"legacy,omitempty"`
+	// Mentions are the peer ids (hex) the message names; MentionsAll that it names everybody;
+	// Mentioned that it names me (by id, or everybody) and is not mine.
+	Mentions    []string `json:"mentions,omitempty"`
+	MentionsAll bool     `json:"mentionsAll,omitempty"`
+	Mentioned   bool     `json:"mentioned,omitempty"`
 	// State is the delivery state of my own message (keys, offline, relayed, sent, delivered),
 	// filled in by the caller from the outbox.
 	State string `json:"state,omitempty"`

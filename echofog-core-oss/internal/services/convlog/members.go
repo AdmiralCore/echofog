@@ -84,6 +84,8 @@ type Rights struct {
 	Voice    bool // may join calls and voice rooms
 	Stream   bool // may share a screen or a camera
 	Roles    bool // may give roles and define them
+	// MentionAll: may write @all.
+	MentionAll bool
 }
 
 // PermRights are the rights of a member whose role has the permission bits perms.

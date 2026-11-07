@@ -56,6 +56,8 @@ type Meta struct {
 
 	ReadLamport uint64 `json:"read_lamport,omitempty"` // everything up to here was read
 	Unread      int    `json:"unread,omitempty"`
+	// Mentions counts, apart from Unread, the unread messages that name me.
+	Mentions int `json:"mentions,omitempty"`
 
 	// Rebuild: a membership change arrived that sits before events already applied; the views are
 	// computed again from the stored events (see Log.rebuild).
