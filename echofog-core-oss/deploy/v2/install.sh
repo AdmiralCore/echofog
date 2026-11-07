@@ -52,7 +52,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM HUP
 BIN="$WORK/echofog-node"
 
 fetch() {
-	curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 3 --max-filesize 268435456 -o "$2" "$1"
+	curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location --max-redirs 3 --connect-timeout 20 --max-time 900 --max-filesize 268435456 -o "$2" "$1"
 }
 fetch "$ECHOFOG_RELEASE_URL/echofog-node-linux-$ARCH" "$BIN"
 fetch "$ECHOFOG_RELEASE_URL/manifest.bin" "$WORK/manifest.bin"

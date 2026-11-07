@@ -50,6 +50,16 @@ questions in the terminal (language, role, domain, port, address). Presets: `rel
 
 Then start it: `systemctl enable --now echofog-node`.
 
+**What this check does not cover (the trust anchor).** The check is made by the downloaded binary
+itself, with the release keys built into it, and the script runs that binary as root before any check
+has been made. The signatures protect against a damaged file and against a forged manifest next to an
+honest binary. They do **not** protect against someone who controls the download channel and serves a
+hostile binary together with a matching manifest: such a binary would simply not check anything. The
+trust anchor has to come from outside the download: compare the fingerprints of the release keys with
+the ones published on the project's website through another channel, or verify a signature of
+`install.sh` itself, before running it. If in doubt, build the binary from the source and pass it with
+`--binary` and `--manifest` yourself.
+
 ## 4. First start and the recovery phrase
 
 The installer prints the **recovery phrase once**. Write it down and keep it away from the server. With

@@ -1,6 +1,7 @@
 package servernode
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -72,66 +73,132 @@ type InstallResult struct {
 	Advice  []string
 }
 
+// verified is a binary that passed every check, staged in a private folder of its own. The
+// installer copies from the staged file, never from the path the operator gave.
+type verified struct {
+	version string
+	stage   string // the staged copy
+	dir     string // the private folder, removed by cleanup
+	sum     []byte
+	size    int64
+}
+
+func (v *verified) cleanup() {
+	if v != nil && v.dir != "" {
+		_ = os.RemoveAll(v.dir)
+	}
+}
+
 // verifyBinary checks the binary against the signed manifest: two signatures of the build's keys,
 // the artifact for this platform, its size and SHA-256, and a run of the binary that must report
-// the manifest's version. It writes nothing.
-func verifyBinary(ctx context.Context, d InstallDeps) (version string, err error) {
+// the manifest's version. The bytes are copied once into a private staging folder (outside the
+// installation root, mode 0700) while they are hashed, and the self-test runs on that copy, so a
+// file that changes afterwards, or during the test, cannot become the installed binary. Nothing is
+// written to the installation root.
+func verifyBinary(ctx context.Context, d InstallDeps) (*verified, error) {
 	if d.Manager == nil {
-		return "", ErrNoReleaseKeys
+		return nil, ErrNoReleaseKeys
 	}
 	if _, err := d.Manager.Offer(d.ManifestRaw); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrNotVerified, err)
+		return nil, fmt.Errorf("%w: %v", ErrNotVerified, err)
 	}
 	last := d.Manager.Last()
 	if last == nil || last.Release == nil {
-		return "", ErrNotVerified
+		return nil, ErrNotVerified
 	}
 	rel := last.Release
 	if _, ok := parseVersion(rel.GetVersion()); !ok {
-		return "", fmt.Errorf("%w: version %q", ErrNotVerified, rel.GetVersion())
+		return nil, fmt.Errorf("%w: version %q", ErrNotVerified, rel.GetVersion())
 	}
-	version = strings.TrimPrefix(rel.GetVersion(), "v")
-	var art *struct {
-		size uint64
-		sum  []byte
-	}
+	version := strings.TrimPrefix(rel.GetVersion(), "v")
+	var wantSize uint64
+	var wantSum []byte
+	found := false
 	for _, a := range rel.GetArtifacts() {
 		if a.GetPlatform() == d.Platform {
-			art = &struct {
-				size uint64
-				sum  []byte
-			}{a.GetSize(), a.GetSha256()}
+			wantSize, wantSum, found = a.GetSize(), a.GetSha256(), true
 			break
 		}
 	}
-	if art == nil {
-		return "", ErrNoArtifact
+	if !found {
+		return nil, ErrNoArtifact
 	}
-	f, err := os.Open(d.Binary)
+	if wantSize == 0 || wantSize > maxArtifactSize || len(wantSum) != sha256.Size {
+		return nil, fmt.Errorf("%w: size or hash in the manifest", ErrNotVerified)
+	}
+	in, err := os.Open(d.Binary)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrNotVerified, err)
+		return nil, fmt.Errorf("%w: %v", ErrNotVerified, err)
 	}
-	defer f.Close()
-	if art.size == 0 || art.size > maxArtifactSize {
-		return "", fmt.Errorf("%w: size in the manifest", ErrNotVerified)
+	defer in.Close()
+	dir, err := os.MkdirTemp("", "echofog-install-")
+	if err != nil {
+		return nil, err
+	}
+	v := &verified{version: version, dir: dir, stage: filepath.Join(dir, "echofog-node"), sum: wantSum, size: int64(wantSize)}
+	fail := func(err error) (*verified, error) {
+		v.cleanup()
+		return nil, err
+	}
+	out, err := os.OpenFile(v.stage, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	if err != nil {
+		return fail(err)
 	}
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, int64(art.size)+1))
-	if err != nil || uint64(n) != art.size || string(h.Sum(nil)) != string(art.sum) {
-		return "", ErrNotVerified
+	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(in, int64(wantSize)+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil || uint64(n) != wantSize || !bytes.Equal(h.Sum(nil), wantSum) {
+		return fail(ErrNotVerified)
 	}
 	test := d.SelfTest
 	if test == nil {
 		test = defaultSelfTest
 	}
-	if v, err := test(ctx, d.Binary); err != nil || strings.TrimPrefix(v, "v") != version {
-		return "", fmt.Errorf("%w: the binary reported %q (%v)", ErrNotVerified, v, err)
+	if got, err := test(ctx, v.stage); err != nil || strings.TrimPrefix(got, "v") != version {
+		return fail(fmt.Errorf("%w: the binary reported %q (%v)", ErrNotVerified, got, err))
 	}
-	return version, nil
+	return v, nil
+}
+
+// undoStack removes what the installer created, newest first.
+type undoStack []func()
+
+func (u *undoStack) push(f func()) { *u = append(*u, f) }
+
+func (u undoStack) run() {
+	for i := len(u) - 1; i >= 0; i-- {
+		u[i]()
+	}
+}
+
+// topMissing returns the outermost directory of path that does not exist yet ("" if path exists).
+func topMissing(path string) string {
+	top := ""
+	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
+		if _, err := os.Stat(p); err == nil {
+			return top
+		}
+		top = p
+		if filepath.Dir(p) == p {
+			return top
+		}
+	}
+}
+
+// mkdirTracked creates path and records the directories it created for the rollback.
+func mkdirTracked(path string, perm os.FileMode, undo *undoStack) error {
+	if top := topMissing(path); top != "" {
+		undo.push(func() { _ = os.RemoveAll(top) })
+	}
+	return os.MkdirAll(path, perm)
 }
 
 // Install verifies the binary against the signed manifest and only then installs it as a service:
-// nothing is written and no command is run before the verification passes.
+// nothing is written and no command is run before the verification passes. A failure after the
+// first write takes back what this call created (the service user is left in place), so the next
+// attempt starts clean and no half-installed node is left with keys and no recovery phrase shown.
 func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	if !userName.MatchString(d.User) || d.User == "root" {
 		return nil, ErrBadUser
@@ -145,10 +212,11 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	if err := d.Config.Validate(); err != nil {
 		return nil, err
 	}
-	version, err := verifyBinary(ctx, d)
+	v, err := verifyBinary(ctx, d)
 	if err != nil {
 		return nil, err
 	}
+	defer v.cleanup()
 	at := func(p string) string { return filepath.Join(d.Root, filepath.FromSlash(p)) }
 	if _, err := os.Stat(filepath.Join(at(installData), identityFileName)); err == nil {
 		return nil, ErrAlreadyInstalled
@@ -158,47 +226,88 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		return nil, err
 	}
 
+	var undo undoStack
+	failed := func(step string, err error, out []byte) (*InstallResult, error) {
+		undo.run()
+		if len(undo) > 0 {
+			_, _ = d.Runner.Run(ctx, "systemctl", "daemon-reload") // the unit is gone again
+		}
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return nil, fmt.Errorf("install failed at %s and was rolled back: %w (%s)", step, err, msg)
+		}
+		return nil, fmt.Errorf("install failed at %s and was rolled back: %w", step, err)
+	}
+
 	if _, err := d.Runner.Run(ctx, "id", "-u", d.User); err != nil {
 		if out, err := d.Runner.Run(ctx, "useradd", "--system", "--user-group", "--home-dir", installData, "--shell", "/usr/sbin/nologin", d.User); err != nil {
-			return nil, fmt.Errorf("create the service user: %w (%s)", err, strings.TrimSpace(string(out)))
+			return failed("useradd (create the service user)", err, out)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(at(installBin)), 0o755); err != nil {
-		return nil, err
+	if err := mkdirTracked(filepath.Dir(at(installBin)), 0o755, &undo); err != nil {
+		return failed("creating the binary folder", err, nil)
 	}
-	if err := copyExecutable(d.Binary, at(installBin)); err != nil {
-		return nil, fmt.Errorf("install the binary: %w", err)
+	if err := copyVerified(v, at(installBin), &undo); err != nil {
+		return failed("copying the binary", err, nil)
+	}
+	dataBefore := dirNames(at(installData))
+	if top := topMissing(at(installData)); top != "" {
+		undo.push(func() { _ = os.RemoveAll(top) })
+	} else {
+		undo.push(func() { removeNew(at(installData), dataBefore) })
 	}
 	phrase, err := InitLang(at(installData), d.Config, d.Lang)
 	if err != nil {
-		return nil, err
+		return failed("creating the profile", err, nil)
 	}
 	if out, err := d.Runner.Run(ctx, "chown", "-R", d.User+":"+d.User, at(installData)); err != nil {
-		return nil, fmt.Errorf("hand the data folder to %s: %w (%s)", d.User, err, strings.TrimSpace(string(out)))
+		return failed("chown (hand the data folder to "+d.User+")", err, out)
 	}
-	if err := os.MkdirAll(filepath.Dir(at(installUnit)), 0o755); err != nil {
-		return nil, err
+	if err := mkdirTracked(filepath.Dir(at(installUnit)), 0o755, &undo); err != nil {
+		return failed("creating the unit folder", err, nil)
 	}
 	if err := os.WriteFile(at(installUnit), []byte(unit), 0o644); err != nil {
-		return nil, err
+		return failed("writing the unit", err, nil)
 	}
-	if _, err := d.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return nil, fmt.Errorf("systemctl daemon-reload: %w", err)
+	undo.push(func() { _ = os.Remove(at(installUnit)) })
+	if out, err := d.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+		return failed("systemctl daemon-reload", err, out)
 	}
 	if d.Start {
 		if out, err := d.Runner.Run(ctx, "systemctl", "enable", "--now", unitServName); err != nil {
-			return nil, fmt.Errorf("start the service: %w (%s)", err, strings.TrimSpace(string(out)))
+			return failed("systemctl enable (start the service)", err, out)
 		}
 	}
 	advice := FirewallAdvice(d.Lang, d.Config)
 	advice = append(advice,
 		tr(d.Lang, "Запуск: systemctl enable --now echofog-node (если не запущено ключом --start)", "Start: systemctl enable --now echofog-node (if --start was not given)"),
 		tr(d.Lang, "Состояние: "+installBin+" v2 status --data "+installData, "Status: "+installBin+" v2 status --data "+installData))
-	return &InstallResult{Phrase: phrase, Version: version, DataDir: installData, Advice: advice}, nil
+	return &InstallResult{Phrase: phrase, Version: v.version, DataDir: installData, Advice: advice}, nil
 }
 
-func copyExecutable(src, dst string) error {
-	in, err := os.Open(src)
+func dirNames(dir string) map[string]bool {
+	out := map[string]bool{}
+	if es, err := os.ReadDir(dir); err == nil {
+		for _, e := range es {
+			out[e.Name()] = true
+		}
+	}
+	return out
+}
+
+// removeNew deletes what appeared in dir since it was listed as before.
+func removeNew(dir string, before map[string]bool) {
+	for name := range dirNames(dir) {
+		if !before[name] {
+			_ = os.RemoveAll(filepath.Join(dir, name))
+		}
+	}
+}
+
+// copyVerified copies the staged, verified binary to dst (temporary file and rename), hashing the
+// bytes again on the way: if the staged file was touched, nothing is created.
+func copyVerified(v *verified, dst string, undo *undoStack) error {
+	in, err := os.Open(v.stage)
 	if err != nil {
 		return err
 	}
@@ -208,17 +317,18 @@ func copyExecutable(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return err
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(in, v.size+1))
+	if err == nil {
+		err = out.Sync()
 	}
-	if err := out.Sync(); err != nil {
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return err
+	if cerr := out.Close(); err == nil {
+		err = cerr
 	}
-	if err := out.Close(); err != nil {
+	if err == nil && (n != v.size || !bytes.Equal(h.Sum(nil), v.sum)) {
+		err = ErrNotVerified
+	}
+	if err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -226,6 +336,7 @@ func copyExecutable(src, dst string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	undo.push(func() { _ = os.Remove(dst) })
 	return nil
 }
 
