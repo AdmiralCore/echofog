@@ -28,6 +28,8 @@ usage:
                          [--roles relay,mailbox,dht-server,exit] [--cover HOST:PORT]
   echofog-node v2 run    --data DIR
   echofog-node v2 status --data DIR [--json] [--lang ru|en]
+  echofog-node v2 install --binary FILE --manifest FILE [--preset relay|exit-free|home-entry --advertise IP]
+                         [--port N] [--domain NAME] [--start] [--yes] [--lang ru|en]   (root; verifies before installing)
   echofog-node v2 doctor --data DIR [--dns] [--lang ru|en]
   echofog-node v2 update --manifest-url URL [--check] [--yes] [--lang ru|en]
   echofog-node v2 invite create --data DIR [--access 30d] [--link 7d] [--max-entries N]
@@ -108,6 +110,8 @@ func MainIO(args []string, env func(string) string, stdin io.Reader, stdout, std
 		return 0
 	case "init":
 		err = cmdInit(args[1:], env, stdin, stdout)
+	case "install":
+		err = cmdInstall(args[1:], env, stdin, stdout)
 	case "doctor":
 		err = cmdDoctor(args[1:], env, stdout)
 	case "update":
