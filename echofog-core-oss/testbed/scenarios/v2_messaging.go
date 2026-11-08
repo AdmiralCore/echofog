@@ -145,7 +145,7 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) (gate.Row, string
 		got := delivered()
 		at = time.Since(start)
 		samples = append(samples, recoverySample{At: at, Sender: len(a.RT.Status().Sessions), Receiver: len(b.RT.Status().Sessions), Delivered: got})
-		if (got == len(ids) && len(ids) > 0) || at > offlineWatch {
+		if (got == len(ids) && len(ids) > 0) || at > offlineWatchFor(env) {
 			break
 		}
 		time.Sleep(5 * time.Second)
@@ -170,6 +170,9 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) (gate.Row, string
 	finding := "after an 8 s cut of the only path the chat outbox did not deliver within 2 minutes (" + timeline + "). In diagnostic runs under a loaded scheduler (GOMAXPROCS=2 and other work) the receiver dropped its session during the cut, the sender kept a session whose paths were gone for about two minutes and the outbox reused it, and a new dial waited for the pair backoff (H15) that failed attempts during the cut started; the messages came 7 to 8 minutes after an outage of 8 seconds. On a free machine the session survives the cut and the row is green. A finding of the session and path layer (the 10 s rule of a failing path, the session kept without a path, the backoff after a transient failure), not of the scenario"
 	return newRow(id, "offline", value, limit, gate.Red, timeline+"; "+why), finding
 }
+
+// offlineWatchFor is how long the row watches after the limit.
+func offlineWatchFor(Env) time.Duration { return offlineWatch }
 
 const (
 	offlineLimit = 2 * time.Minute
