@@ -434,7 +434,13 @@ func keepSession(a, b *Established) *Established {
 	if !okb {
 		return a
 	}
-	if bytes.Compare(ia[:], ib[:]) <= 0 {
+	switch c := bytes.Compare(ia[:], ib[:]); {
+	case c == 0:
+		// The same initiator dialed again: it left the first session behind (its network went
+		// away, it restarted) and the newer one is the dialer's choice. Keeping the stored one
+		// would refuse a live peer until this side noticed that the old session was dead (T3.13).
+		return b
+	case c < 0:
 		return a
 	}
 	return b

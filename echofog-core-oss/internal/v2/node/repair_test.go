@@ -3,6 +3,7 @@ package node_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -180,7 +181,11 @@ func TestRepairFallsBackToANewSessionWhenThePeerRefusesPaths(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no new session after %d failed path attempts", calls.Load())
+			detail := ""
+			for _, est := range node.TableSessions(a.rt) {
+				detail += fmt.Sprintf(" {sid %x err %v}", est.SID[:2], est.Session.Err())
+			}
+			t.Fatalf("no new session after %d failed path attempts; old %x; a table:%s", calls.Load(), old.SID(), detail)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
