@@ -443,3 +443,26 @@ func TestAttachmentLeavesTheTextOfTheBodyWhereAnOldReaderLooks(t *testing.T) {
 		t.Fatalf("text %q, attachment seen %v", text, att)
 	}
 }
+
+// FuzzAttachmentAndClose: the bodies of a message with a file and of a close come from any member. Reading
+// them must not panic, and what is accepted must be well formed.
+func FuzzAttachmentAndClose(f *testing.F) {
+	f.Add(encodeBody(&MsgBody{Text: "x", Att: goodAtt()}), encodeBody(&CloseBody{Last: []*SeqEntry{{Author: bytes.Repeat([]byte{1}, 32), Seq: 3}}}))
+	f.Add([]byte{0x32, 0x00}, []byte{0x0a, 0x00})
+	f.Add([]byte{0xff, 0xff, 0xff}, []byte(nil))
+	f.Fuzz(func(t *testing.T, msg, closeBody []byte) {
+		var m MsgBody
+		if proto.Unmarshal(msg, &m) == nil && m.Att != nil && checkAttachment(m.Att) == nil {
+			if len(m.Att.Fid) != 16 || len(m.Att.MerkleRoot) != 32 || m.Att.Size == 0 || m.Att.Name == "" || strings.ContainsAny(m.Att.Name, "/\\") {
+				t.Fatalf("a bad attachment passed: %+v", m.Att)
+			}
+		}
+		if last, ok := decodeClose(&Event{Body: closeBody}); ok {
+			for k := range last {
+				if len(k) != 64 {
+					t.Fatalf("a key of the vector has %d characters", len(k))
+				}
+			}
+		}
+	})
+}

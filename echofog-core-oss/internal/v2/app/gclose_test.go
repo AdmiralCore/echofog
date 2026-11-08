@@ -155,6 +155,7 @@ func TestSnapshotCarriesTheFileCardOfAGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = alice.app.CancelFile(tr.ID) })
 	w.drain()
 	snap := filepath.Join(t.TempDir(), "t.fogzip")
 	if err := alice.app.GroupSnapshotExport(ctx, g.ID, snap, "long enough pass"); err != nil {

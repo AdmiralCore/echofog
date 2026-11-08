@@ -62,6 +62,10 @@ func FuzzIngestSigned(f *testing.F) {
 	f.Add(true, uint64(6), uint64(8), KindThread, uint8(1), []byte{0x0a, 0x01, 't'})
 	f.Add(true, uint64(7), uint64(9), KindProfile, uint8(0), []byte{0x0a, 0x03, 1, 2, 3})
 	f.Add(true, uint64(1<<62), uint64(1<<63), uint32(0xffffffff), uint8(7), []byte{0xff})
+	f.Add(true, uint64(8), uint64(10), KindMsg, uint8(0), mustMarshal(&MsgBody{Text: "файл", Att: goodAtt()}))
+	f.Add(false, uint64(4), uint64(11), KindMsg, uint8(0), mustMarshal(&MsgBody{Text: "чужой", Att: goodAtt()}))
+	f.Add(true, uint64(9), uint64(12), KindClose, uint8(0), []byte(nil))
+	f.Add(false, uint64(5), uint64(13), KindClose, uint8(0), mustMarshal(&CloseBody{Last: []*SeqEntry{{Author: make([]byte, 32), Seq: 1}}}))
 	f.Fuzz(func(t *testing.T, byFounder bool, seq, lamport uint64, kind uint32, ref uint8, body []byte) {
 		fz.mu.Lock()
 		defer fz.mu.Unlock()
@@ -74,6 +78,7 @@ func FuzzIngestSigned(f *testing.F) {
 			id := fz.ids[int(ref)%len(fz.ids)]
 			target = id[:]
 		}
+		wasClosed := fz.log.Closed(fz.group)
 		for _, c := range []Conv{fz.group, DM(fz.self, author.id)} {
 			raw := fz.eventIn(c, author, seq, lamport, kind, target, body)
 			if id, ok, _ := fz.log.Ingest(c, raw); ok && len(fz.ids) < 64 {
@@ -84,6 +89,10 @@ func FuzzIngestSigned(f *testing.F) {
 			_ = fz.log.Roles(c)
 			_ = fz.log.RightsOf(c, author.id)
 			_, _ = fz.log.Meta(c)
+		}
+		// a group is closed only by its founder
+		if !wasClosed && !byFounder && fz.log.Closed(fz.group) {
+			t.Fatal("a group was closed by somebody else")
 		}
 	})
 }

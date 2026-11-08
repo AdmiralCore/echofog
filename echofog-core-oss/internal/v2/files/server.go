@@ -174,7 +174,7 @@ func (s *Server) Add(sh Share) error {
 	if sh.Source == nil || sh.Tree == nil || sh.Tree.Leaves() != sh.Offer.Chunks() || [32]byte(sh.Tree.Root()) != sh.Offer.Root {
 		return offerErr("tree does not match the offer")
 	}
-	if len(sh.Recipients) == 0 || len(sh.Recipients) > maxRecipients {
+	if sh.Authorize == nil && len(sh.Recipients) == 0 || len(sh.Recipients) > maxRecipients {
 		return offerErr("recipients")
 	}
 	if int64(sh.Offer.Size) > s.lim.MaxFileSize {
@@ -228,10 +228,17 @@ func (s *Server) SetChunkFilter(f func(fid [16]byte, index uint64) bool) {
 // give the same nil: the answer is no oracle for the existence of a file (AD20).
 func (s *Server) lookup(fid [16]byte, node [32]byte) *shared {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	sh := s.shares[fid]
+	s.mu.Unlock()
 	if sh == nil {
 		return nil
+	}
+	if sh.Authorize != nil {
+		// the group's log decides, now: asked outside the lock, it may take its own
+		if !sh.Authorize(node) {
+			return nil
+		}
+		return sh
 	}
 	if _, member := sh.recipients[node]; !member {
 		return nil

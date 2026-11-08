@@ -141,6 +141,9 @@ func (a *App) GroupSnapshotExport(ctx context.Context, id, path, password string
 	if err != nil {
 		return err
 	}
+	if cv.Log().Closed(c) {
+		return ErrGroupClosed // its invitations are closed with it
+	}
 	inv, err := a.GroupInviteCreate(ctx, id, InviteSpec{TTL: snapInviteTTL, Uses: snapInviteUses, Label: "snapshot"})
 	if err != nil {
 		return err

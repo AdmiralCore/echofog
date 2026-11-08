@@ -161,6 +161,8 @@ type xferRec struct {
 	Error     string   `json:"e,omitempty"`
 	Path      string   `json:"f,omitempty"`
 	Group     string   `json:"g,omitempty"`
+	Channel   string   `json:"h,omitempty"`
+	Thread    string   `json:"t,omitempty"`
 	Size      int64    `json:"z"`
 	Done      int64    `json:"o"`
 	Voice     bool     `json:"v,omitempty"`
@@ -293,7 +295,7 @@ func (a *App) save(x *xfer) {
 func snap(x *xfer) Transfer {
 	r := x.rec
 	t := Transfer{ID: r.ID, Peer: r.Peer, Dir: r.Dir, Name: r.Name, Size: r.Size, Mime: r.Mime, State: r.State,
-		Error: r.Error, Group: r.Group, Done: r.Done, Voice: r.Voice,
+		Error: r.Error, Group: r.Group, Channel: r.Channel, Thread: r.Thread, Done: r.Done, Voice: r.Voice,
 		Created: time.UnixMilli(r.Created), Updated: time.UnixMilli(r.Updated)}
 	switch r.Dir {
 	case DirIn:
@@ -459,11 +461,14 @@ func (a *App) contactOK(peer [32]byte) error {
 
 // publish records the transfer, registers the share and sends msg to every recipient. Nothing stays
 // behind when a step fails.
-func (a *App) publish(ctx context.Context, sh files.Share, src io.Closer, path, peerHex, group string, clip bool, msg *chatpb.PersonalMessageProto) (Transfer, error) {
+func (a *App) publish(ctx context.Context, sh files.Share, src io.Closer, path, peerHex, group string, clip bool, msg *chatpb.PersonalMessageProto, where ...string) (Transfer, error) {
 	o := sh.Offer
 	x := &xfer{offer: o, src: src, members: map[[32]byte]struct{}{}, delivered: map[[32]byte]struct{}{},
 		rec: xferRec{ID: hex.EncodeToString(o.FID[:]), Peer: peerHex, Dir: DirOut, Name: o.Name, Mime: o.Mime, State: FileOffered,
 			Path: path, Group: group, Size: int64(o.Size), Voice: clip, Created: a.now().UnixMilli(), Offer: o.Marshal()}}
+	if len(where) == 2 {
+		x.rec.Channel, x.rec.Thread = where[0], where[1]
+	}
 	for _, r := range sh.Recipients {
 		x.members[r] = struct{}{}
 		x.rec.Members = append(x.rec.Members, hex.EncodeToString(r[:]))
@@ -549,11 +554,6 @@ func (a *App) SendFile(ctx context.Context, peerHex, path string) (Transfer, err
 	return a.publish(ctx, sh, src, path, strings.ToLower(peerHex), "", false, sh.Offer.Message())
 }
 
-// SendGroupFile posts the file at path in a group, to the channel and the thread the sender chose.
-func (a *App) SendGroupFile(ctx context.Context, group, channel, thread, path string) (Transfer, error) {
-	return Transfer{}, errors.New("not built")
-}
-
 // FileServed records that a recipient confirmed the whole file (files.ServerConfig.OnDone). Only a
 // recipient of the offer counts, and once.
 func (a *App) FileServed(fid [16]byte, node [32]byte) {
@@ -590,12 +590,12 @@ func (a *App) FileServed(fid [16]byte, node [32]byte) {
 
 // ---- receiving --------------------------------------------------------------------------------------------------
 
-// OnFileOffer takes a FILE message the chat layer delivered; from is the sender it verified. group is
-// "" for a direct message (the sender must be a contact) or the group the message came in, where the
-// caller has checked that the sender is a member. Every refusal is the same ErrBadOffer and nothing
-// is sent back.
+// OnFileOffer takes a FILE message the chat layer delivered; from is the sender it verified. A contact
+// may offer a file directly. Anybody else is heard only if the log of a group this node and the sender
+// are in holds a message with that file id, written by the sender, who takes part in the group and may
+// post a file in that channel (services.md §8): the group, the channel and the thread come from that
+// message, never from the sender's words. Every refusal is the same ErrBadOffer and nothing is sent back.
 func (a *App) OnFileOffer(from [32]byte, m *chatpb.PersonalMessageProto) error {
-	group := a.groupOfSender(context.Background(), from)
 	if a.cfg.FileNet == nil {
 		return ErrFilesOff
 	}
@@ -606,11 +606,26 @@ func (a *App) OnFileOffer(from [32]byte, m *chatpb.PersonalMessageProto) error {
 	if err != nil {
 		return ErrBadOffer
 	}
-	_, err = a.addIncoming(from, group, o, nil)
+	pl, found, ok := a.attOf(context.Background(), from, o)
+	switch {
+	case found && !ok:
+		return ErrBadOffer // the log holds that file under another author, another root or another size
+	case !found && a.contactOK(from) != nil:
+		return ErrBadOffer // a stranger offers a file only if the log of a group it is in holds it
+	}
+	_, err = a.addIncomingIn(from, pl, o, nil)
 	return err
 }
 
+// place says where in a group an incoming file belongs, as the log's message says it.
+type place struct{ group, channel, thread string }
+
 func (a *App) addIncoming(from [32]byte, group string, o files.Offer, e *voice.Entry) (*xfer, error) {
+	return a.addIncomingIn(from, place{group: group}, o, e)
+}
+
+func (a *App) addIncomingIn(from [32]byte, pl place, o files.Offer, e *voice.Entry) (*xfer, error) {
+	group := pl.group
 	lim := a.limits()
 	if o.Sender != from || len(group) > maxGroupIDLen || int64(o.Size) > lim.MaxFileSize || int64(o.Size) > files.MaxOfferSize {
 		return nil, ErrBadOffer
@@ -652,7 +667,7 @@ func (a *App) addIncoming(from [32]byte, group string, o files.Offer, e *voice.E
 	}
 	x := &xfer{offer: o, entry: e, members: map[[32]byte]struct{}{}, delivered: map[[32]byte]struct{}{},
 		rec: xferRec{ID: id, Peer: peer, Dir: DirIn, Name: o.Name, Mime: o.Mime, State: FileOffered, Group: group,
-			Size: int64(o.Size), Voice: e != nil, Created: a.now().UnixMilli(), Offer: o.Marshal()}}
+			Size: int64(o.Size), Voice: e != nil, Created: a.now().UnixMilli(), Offer: o.Marshal(), Channel: pl.channel, Thread: pl.thread}}
 	s.m[id] = x
 	a.save(x)
 	t := snap(x)

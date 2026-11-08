@@ -108,20 +108,29 @@ func TestBlockedContactsFilesAreDropped(t *testing.T) {
 	}
 }
 
-// A group member who is no contact may offer a file: the group is named by the receiver from its own
-// roster, never by the sender (L2 of the T11.3c acceptance).
-func TestGroupFileOfferFromAMemberIsTakenInThatGroup(t *testing.T) {
+// A group member who is no contact is heard about a file only if the log of the group holds it: the group is
+// named by the receiver from its own log, never by the sender (services.md §8, L2 of the T11.3c acceptance).
+func TestGroupFileOfferFromAMemberIsTakenOnlyWhereTheLogHoldsIt(t *testing.T) {
 	w, ns, id := team(t, 3)
 	alice, bob, carol := ns[0], ns[1], ns[2]
-	_ = w
 	m, _ := offerMessage(t, bob.node, bytes.Repeat([]byte{5}, 300), "g.bin")
 	ctx := context.Background()
 	if !alice.app.OnIncoming(ctx, bob.node, m) {
 		t.Fatal("the offer was not taken as one")
 	}
+	if l, _ := alice.app.ListFileTransfers(""); len(l) != 0 {
+		t.Fatalf("an offer no message of the log stands behind was listed: %+v", l)
+	}
+	path, _ := writeTemp(t, 300)
+	tr, err := bob.app.SendGroupFile(ctx, id, "", "", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bob.app.CancelFile(tr.ID) })
+	w.drain()
 	l, _ := alice.app.ListFileTransfers("")
 	if len(l) != 1 || l[0].Group != id {
-		t.Fatalf("a member's offer: %+v, want it in group %s", l, id)
+		t.Fatalf("a member's file: %+v, want it in group %s", l, id)
 	}
 	// someone who shares no group with alice and is no contact is refused, silently
 	stranger := newStranger(t)

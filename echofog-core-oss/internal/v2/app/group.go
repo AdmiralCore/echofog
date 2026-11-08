@@ -139,6 +139,9 @@ func (a *App) grp(id string) (*GroupBook, Convs, convlog.Conv, groupRec, error) 
 
 // rightErr turns the log's refusal into the app's.
 func rightErr(err error) error {
+	if errors.Is(err, convlog.ErrClosed) {
+		return ErrGroupClosed
+	}
 	if errors.Is(err, convlog.ErrForbidden) || errors.Is(err, convlog.ErrNotParticipant) {
 		return ErrNoRight
 	}
@@ -189,7 +192,8 @@ func groupKind(t groups.GroupType) string {
 // info builds a group's line.
 func (a *App) info(cv Convs, c convlog.Conv, r groupRec) GroupInfo {
 	g := r.Genesis
-	out := GroupInfo{ID: g.GroupID, Title: g.Title, Description: g.Description, Kind: groupKind(g.Type), Created: g.CreatedAt, Pending: true}
+	out := GroupInfo{ID: g.GroupID, Title: g.Title, Description: g.Description, Kind: groupKind(g.Type), Created: g.CreatedAt, Pending: true,
+		Closed: cv.Log().Closed(c)}
 	self := cv.Log().Self()
 	members := cv.Log().Members(c)
 	for _, m := range members {
@@ -323,6 +327,12 @@ func (a *App) LeaveGroup(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if cv.Log().Closed(c) {
+		// a closed group takes no more events: leaving it is deleting the archive here
+		b.forget(id)
+		a.dropRequests(id)
+		return cv.Log().Drop(c)
+	}
 	self := cv.Log().Self()
 	members := cv.Log().Members(c)
 	in := false
@@ -354,7 +364,7 @@ func (a *App) ForgetGroup(id string) error {
 	if err != nil {
 		return err
 	}
-	if cv.Log().Participant(c, cv.Log().Self()) && len(cv.Log().Members(c)) > 1 {
+	if cv.Log().Participant(c, cv.Log().Self()) && len(cv.Log().Members(c)) > 1 && !cv.Log().Closed(c) {
 		return ErrStillIn
 	}
 	b.forget(id)
@@ -572,6 +582,9 @@ func (a *App) GroupRights(id, channel string) (convlog.Rights, error) {
 	}
 	l := cv.Log()
 	r := l.RightsIn(c, l.Self(), channel)
+	if l.Closed(c) {
+		return convlog.Rights{Member: r.Member}, nil // an archive: read, nothing else
+	}
 	// a read-only channel and a slow mode narrow what the role allows
 	r.Send = r.Send && l.MayPost(c, l.Self(), channel, false, false)
 	return r, nil
@@ -993,6 +1006,9 @@ func (a *App) JoinGroup(ctx context.Context, link string) (GroupInfo, error) {
 // joinNow writes our own join event, once per invitation we took, and sends it to the members. A
 // refusal is silent.
 func (a *App) joinNow(ctx context.Context, b *GroupBook, cv Convs, c convlog.Conv) {
+	if cv.Log().Closed(c) {
+		return
+	}
 	r, ok := b.claimJoin(c.Group)
 	if !ok {
 		return
@@ -1053,8 +1069,8 @@ func (a *App) OnGroupMessage(ctx context.Context, from [32]byte, pm *chatpb.Pers
 	}
 	c := convlog.Group(m.Group)
 	l := cv.Log()
-	if l.Open(c) != nil || !l.Participant(c, l.Self()) {
-		return true
+	if l.Open(c) != nil || !l.Participant(c, l.Self()) || l.Closed(c) {
+		return true // a closed group lets nobody in and hands nothing over
 	}
 	inv, ok := l.InviteOf(c, m.Nonce)
 	if !ok || inv.Spent() || inv.Exp <= a.cfg.Clock.Now().Unix() {
@@ -1237,6 +1253,16 @@ func (a *App) onGroupChange(ch convlog.Change) {
 	b := a.cfg.Groups
 	cv := a.cfg.Convs
 	l := cv.Log()
+	if ch.Meta.Closed {
+		// the owner closed the group: the members are told once; the owner, who did it, is not
+		self := false
+		for _, m := range l.Members(ch.Conv) {
+			if m.Peer == l.Self() && m.Role.Rank >= 100 {
+				self = true
+			}
+		}
+		a.noteClosed(ch.Conv, self)
+	}
 	for _, m := range ch.Members {
 		// leaving the group is writing one's own removal: the leaver is not told they were removed
 		if len(m.Member) == 32 && types.PeerPubKeyToID(types.PeerPublicKey(m.Member)) == l.Self() && m.Author != l.Self() {

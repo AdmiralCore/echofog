@@ -81,10 +81,18 @@ func (b *v2MsgBackend) SendFile(pubKeyHex string, path string) (dto.FileTransfer
 func (b *v2MsgBackend) SendGroupFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
 	ctx, cancel := v2Ctx()
 	defer cancel()
-	t, err := b.app.SendGroupFile(ctx, groupID, "", "", path)
+	t, err := b.app.SendGroupFile(ctx, groupID, channel, thread, path)
 	if err != nil {
 		return GroupMessageDTO{}, v2Err(err)
 	}
-	return GroupMessageDTO{ID: t.ID, GroupID: groupID, Text: t.Name, Timestamp: t.Created.UnixMilli(), IsMine: true, Verified: true,
+	var self string
+	if ms, merr := b.app.GroupMembers(groupID); merr == nil {
+		for _, m := range ms {
+			if m.Self {
+				self = m.Node
+			}
+		}
+	}
+	return GroupMessageDTO{ID: t.ID, GroupID: groupID, Sender: self, Text: t.Name, Timestamp: t.Created.UnixMilli(), IsMine: true, Verified: true,
 		File: &GroupFileDTO{ID: t.ID, Name: t.Name, Size: t.Size, Mime: t.Mime, Channel: channel, Thread: thread}}, nil
 }

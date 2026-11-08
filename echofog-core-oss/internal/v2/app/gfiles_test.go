@@ -120,6 +120,7 @@ func TestGroupFileGoesToTheGroupChannelAndThreadTheSenderChose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendGroupFile: %v", err)
 	}
+	t.Cleanup(func() { _ = alice.app.CancelFile(tr.ID) })
 	if tr.Group != g1 || tr.Channel != "dev" || tr.Thread != root.ID || tr.Dir != app.DirOut || tr.Name != "план.bin" {
 		t.Fatalf("transfer %+v", tr)
 	}
@@ -170,6 +171,7 @@ func TestGroupFileOfferIsKeptToTheRuleOfTheLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = alice.app.CancelFile(tr.ID) })
 	w.drain()
 	in := incoming(bob)
 	if len(in) != 1 {
@@ -234,9 +236,11 @@ func TestAFileOfAStrangerOrOfAnAuthorWhoMayNotPostIsNotShown(t *testing.T) {
 		t.Fatalf("the forged message is shown: %+v", page.Messages)
 	}
 	// a read-only member of an announcements channel: the owner may post there
-	if _, err := alice.app.SendGroupFile(ctx, g1, "news", "", path); err != nil {
+	own, err := alice.app.SendGroupFile(ctx, g1, "news", "", path)
+	if err != nil {
 		t.Fatalf("the owner in the announcements channel: %v", err)
 	}
+	t.Cleanup(func() { _ = alice.app.CancelFile(own.ID) })
 }
 
 // the author serves the bytes only to a member of the conversation that holds the event (services.md §8)
@@ -253,6 +257,7 @@ func TestFileBytesAreServedToMembersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = alice.app.CancelFile(tr.ID) })
 	w.drain()
 	fidB, _ := hex.DecodeString(tr.ID)
 	var fid [16]byte

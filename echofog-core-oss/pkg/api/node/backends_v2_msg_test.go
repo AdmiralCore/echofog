@@ -718,8 +718,8 @@ func TestV2GroupMessagesOfV1GoThroughTheChat(t *testing.T) {
 
 func TestV2WhatTheAppCannotDoYetIsNotBuilt(t *testing.T) {
 	api, _ := newMsgApi(t)
-	// closing a group and a file in a group wait for the wire (SPEC-FIX-1108, T11.3e-1): no guess at a format
-	require.ErrorIs(t, api.DeleteGroup(groupID), ErrV2NotBuilt)
+	// the reset of a session has no counterpart in v2: the sessions are not reset by hand
+	require.ErrorIs(t, api.ResetEncryptionSession(nodeBob), ErrV2NotBuilt)
 }
 
 // ---- files ---------------------------------------------------------------------------------------------------
