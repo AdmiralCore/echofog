@@ -53,13 +53,15 @@ type World struct {
 
 // NodeSpec describes a node.
 type NodeSpec struct {
-	Name   string
-	Server bool                   // the server profile: DHT server, mailbox and relay roles, role server in its card
-	Listen bool                   // a real noise3 listener on loopback
-	Hidden bool                   // a card that is not published
-	Chat   bool                   // chat/2 on
-	Cover  bool                   // a card entry for a camouflaged address, so the node has a public card and is listed (the address is not served)
-	Netem  *behaviour.NetemConfig // the listener sits behind an in-process netem
+	Name    string
+	Server  bool                   // the server profile: DHT server, mailbox and relay roles, role server in its card
+	Listen  bool                   // a real noise3 listener on loopback
+	Hidden  bool                   // a card that is not published
+	Chat    bool                   // chat/2 on
+	Cover   bool                   // a card entry for a camouflaged address, so the node has a public card and is listed (the address is not served)
+	Exit    bool                   // the product exit role: the node offers exit/2 with the node module (private targets refused)
+	LabExit bool                   // the exit server of the product on a node without the exit role, with private targets allowed: the lab web server stands on loopback
+	Netem   *behaviour.NetemConfig // the listener sits behind an in-process netem
 	// More are the further noise3 listeners of the node (a second address of the same device, for a
 	// second path), each with its own netem or none.
 	More       []*behaviour.NetemConfig
@@ -187,6 +189,12 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if spec.Server {
 		cardCfg.Flags |= objects.FlagRelay
 	}
+	if spec.Exit || spec.LabExit {
+		cardCfg.Exit = freeExit{}
+	}
+	if spec.Exit {
+		profile.Roles = append(profile.Roles, node.RoleExit)
+	}
 	if spec.CardMutate != nil {
 		spec.CardMutate(&cardCfg)
 	}
@@ -243,6 +251,11 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	n.RT, err = node.New(cfg)
 	if err != nil {
 		return fail(fmt.Errorf("node: %w", err))
+	}
+	if spec.LabExit {
+		if err := registerLabExit(n.RT); err != nil {
+			return fail(err)
+		}
 	}
 	n.ID = node.Identity{NodeID: node.NodeID(tw.Account.NodeID()), DeviceID: node.DeviceID(tw.Device.ID())}
 
@@ -396,3 +409,5 @@ func (n *Node) DialVia(ctx context.Context, to *Node, i int) (node.Peer, *mux.Se
 
 // Skip moves the clock of every node in the world forward.
 func (w *World) Skip(d time.Duration) { w.clk.shift.Add(int64(d)) }
+
+var errNoExitService = errors.New("scenarios: exit/2 is not built in")
