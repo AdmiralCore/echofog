@@ -40,7 +40,7 @@ encapsulation, and signature verification and canonical field order of every sig
 | `handshake.json` | Noise initial `h`/`ck` for both suites, prologues with and without a bound responder ID, pre-message hash, payload encodings with GREASE, access proof, puzzle with HS_RETRY; inputs for the deferred transcripts | handshake.md |
 | `kdf.json` | session secret, `sid`, path binding, a sealed record, relay circuit binding and rendezvous ID, a full chat/2 sealed envelope, a sealed mailbox/2 forward and public-queue proof of work, call/2 keys, two media units and their CALL_AUTH batch authenticator, the chat/2 PQXDH session key under `echofog/chat2/pqxdh`, day-keyed DHT keys for a card and a device list | handshake.md §9, wire.md §8, services.md, dht.md |
 | `negative.json` | inputs that MUST be rejected: non-canonical bodies, `S ≥ L`, a small-order signer, out-of-window and wrong-address first packets | objects.md §2, wire.md §2–§3 |
-| `convlog.json` | conversation-log events: a MSG with an attachment (body field 6) and its signed bytes, a group.close (kind 10), a negative event whose attachment is not covered by the signature; checked against the code by `internal/services/convlog` (`convlog_vectors_test.go`) | conversation-log.md §2.2, §2.5 |
+| `convlog.json` | conversation-log events: a MSG with an attachment (body field 6) and its signed bytes, a group.close (kind 10) with no CloseBody entries, a group.close with CloseBody (last seq per author), a negative event whose attachment is not covered by the signature; checked against the code by `internal/services/convlog` (`convlog_vectors_test.go`) | conversation-log.md §2.2, §2.5 |
 
 ## Transcripts
 

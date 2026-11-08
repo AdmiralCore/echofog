@@ -6,9 +6,11 @@ package main
 // implementation's test (internal/services/convlog, convlog_vectors_test.go) checks these bytes.
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
+	"sort"
 )
 
 // convSeed derives a named seed as every vector file does.
@@ -108,6 +110,21 @@ func genConvlog() any {
 			"sig": hx(e.sig), "id": hx(e.id()),
 		}
 	}
+	// group.close with a vector of last seq per author (conversation-log.md §2.5): the owner's
+	// seq 7 (the msg-att event) and a member's seq 3, sorted by author public key.
+	member := newSigner(convSeed("convlog member"))
+	entries := []seqEntry{{author.pub, 7}, {member.pub, 3}}
+	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].author, entries[j].author) < 0 })
+	vec := convEvent{conv: conv, author: author.pub, seq: 9, lamport: 14, tsMs: 1793664120000, kind: 10,
+		body: closeBody(entries)}
+	vec.sig = ed25519.Sign(author.priv, vec.signedBytes())
+	closeVec := ev("group-close-vector", "group.close with CloseBody: owner seq 7, member seq 3 (sorted by author)", vec)
+	last := []any{}
+	for _, en := range entries {
+		last = append(last, map[string]any{"author": hx(en.author), "seq": en.seq})
+	}
+	closeVec["last_seq"] = last
+
 	return map[string]any{
 		"description": "Conversation-log events (conversation-log.md §2.2, §2.5, versioning §3.9). " +
 			"Positive: an MSG with an attachment (body field 6), a group.close (kind 10). " +
@@ -125,6 +142,7 @@ func genConvlog() any {
 		"events": []any{
 			ev("msg-att", "MSG with att: fid, size 4096, Merkle root, name, mime; ext channel \"files\"", msg),
 			ev("group-close", "group.close (kind 10), empty body, lamport 13, owner-signed", closing),
+			closeVec,
 		},
 		"negative": []any{
 			map[string]any{
@@ -141,3 +159,19 @@ func genConvlog() any {
 }
 
 func sha256Of(b []byte) []byte { h := sha256.Sum256(b); return h[:] }
+
+type seqEntry struct {
+	author []byte
+	seq    uint64
+}
+
+// closeBody is CloseBody: one SeqEntry per author (field 1, repeated), each {author 1, seq 2}.
+func closeBody(entries []seqEntry) []byte {
+	p := &pb{}
+	for _, en := range entries {
+		e := &pb{}
+		e.by(1, en.author).u(2, en.seq)
+		p.by(1, e.b)
+	}
+	return p.b
+}
