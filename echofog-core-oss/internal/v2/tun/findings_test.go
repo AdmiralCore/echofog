@@ -344,3 +344,22 @@ func TestPollingStopsWithClose(t *testing.T) {
 		t.Fatalf("goroutines %d -> %d: the poller outlives Close", before, after)
 	}
 }
+
+// The proxy address of the node is known only once the VPN runs, after a Switch found the filters of
+// an earlier run: Reconnect uses the configuration given last.
+func TestSetTunnelIsUsedByReconnect(t *testing.T) {
+	r := newRig(t)
+	r.start()
+	r.tn.Kill(nil)
+	r.waitState(tun.StateHeld)
+	r.sw.SetTunnel(tun.TunConfig{Name: "echofog0", Resolver: resolver, Socks: "127.0.0.1:1081"})
+	if err := r.sw.Reconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.tn.LastConf.Socks != "127.0.0.1:1081" {
+		t.Fatalf("tunnel config %+v", r.tn.LastConf)
+	}
+	if r.dns.Last.Resolver != resolver || r.dns.Last.Tunnel != "echofog0" {
+		t.Fatalf("DNS config %+v", r.dns.Last)
+	}
+}

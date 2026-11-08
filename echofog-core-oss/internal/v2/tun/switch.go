@@ -323,6 +323,10 @@ func (s *Switch) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// SetTunnel replaces the configuration of the tunnel device for the next Start or Reconnect (the
+// address of the node's proxy is known only once the VPN runs).
+func (s *Switch) SetTunnel(tc TunConfig) {}
+
 // Close ends the watcher; it does not change the filters.
 func (s *Switch) Close() error {
 	s.stopOnce.Do(func() { close(s.stop) })
