@@ -438,6 +438,9 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 	}
 
 	for _, s := range specs {
+		if *v2LiveLab {
+			time.Sleep(pauseBetween) // see liveHarness
+		}
 		peer := fmt.Sprintf("203.0.113.15:%d", s.port) // x1
 		args := []string{"/tmp/v2carrier", "-mode", s.mode, "-peer", peer, "-sni", s.sni,
 			"-duration", "4s", "-conns", strconv.Itoa(s.conns), "-seed", strconv.FormatInt(seed, 10)}
@@ -601,7 +604,8 @@ func labHosted() map[netip.Addr][]string {
 	hosted := map[netip.Addr][]string{}
 	for _, ip := range []string{"203.0.113.11", "203.0.113.12", "203.0.113.13", "203.0.113.14",
 		"203.0.113.15", "203.0.113.16", "203.0.113.17", "203.0.113.30"} {
-		hosted[netip.MustParseAddr(ip)] = []string{"cover.lab"}
+		// x1 also fronts the ws2 node as the CDN name of the live lab
+		hosted[netip.MustParseAddr(ip)] = []string{"cover.lab", "cdn.lab"}
 	}
 	return hosted
 }

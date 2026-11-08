@@ -25,6 +25,8 @@ var (
 	v2Visits  = flag.Int("visits", 8, "v2-censor -live-lab: short sessions of each carrier")
 )
 
+const pauseBetween = 12 * time.Second
+
 const xIP = "203.0.113.15" // x1, the node of the carrier servers
 
 type liveCarrier struct {
@@ -104,8 +106,11 @@ func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierIn
 		logf("live %s %s: %d bytes in %d pages", c.suite, what, res.Bytes, res.Packets)
 	}
 
-	// visits: one carrier after the other, so the sessions of one carrier are not mixed with another
+	// visits: one carrier after the other, so the sessions of one carrier are not mixed with another;
+	// a pause before each keeps the connection count of D8 (a 10-second window per client and
+	// address) from adding two blocks, or a block and a control, into one storm
 	for _, c := range liveCarriers {
+		time.Sleep(pauseBetween)
 		out, err := client(c, max(1, *v2Visits), 0)
 		if err != nil {
 			v.check(false, "live visit of %s: %v %s", c.suite, err, out)
@@ -205,15 +210,21 @@ func byGroup(labeled []censor.LabeledFlow, cfg censor.DetectorConfig) map[string
 
 	for _, g := range groups {
 		for _, kind := range []string{"visit", "long"} {
-			var sel []censor.LabeledFlow
-			var mine []censor.LabeledFlow
+			// sel holds copies without flags: the gate below evaluates them again, and a flag that
+			// depends on the neighbours (D8 counts the connections of the whole run) must not be
+			// recomputed on a subset, nor overwrite the flags of the run
+			var sel, mine []censor.LabeledFlow
 			for _, f := range labeled {
 				switch {
 				case f.Label == censor.LabelBrowser:
-					sel = append(sel, f)
+					c := f
+					c.Flags = nil
+					sel = append(sel, c)
 				case f.Label == g.label && f.Suite == g.suite && !f.Synthetic && (f.Duration >= longFlow) == (kind == "long"):
-					sel = append(sel, f)
 					mine = append(mine, f)
+					c := f
+					c.Flags = nil
+					sel = append(sel, c)
 				}
 			}
 			if len(mine) == 0 {
@@ -222,11 +233,18 @@ func byGroup(labeled []censor.LabeledFlow, cfg censor.DetectorConfig) map[string
 			gate := censor.GateFor(sel, cfg, g.label)
 			row := groupRow{Flows: len(mine), Flagged: map[string]int{}, N: map[string]int{}, Share: map[string]float64{}}
 			for _, id := range []string{"D1", "D2", "D3", "D4", "D5", "D7", "D8", "D9", "D10"} {
-				fl, n := censor.Exposure(sel, g.label, id)
+				fl, n := 0, 0
+				for _, f := range mine {
+					if v, ok := f.Flags[id]; ok {
+						n++
+						if v {
+							fl++
+						}
+					}
+				}
 				if n == 0 {
 					continue
 				}
-				// Exposure counts every flow of the label; the selection has only this group's
 				row.Flagged[id], row.N[id], row.Share[id] = fl, n, float64(fl)/float64(n)
 			}
 			for _, r := range gate.Rows {
