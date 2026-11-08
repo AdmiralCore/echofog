@@ -134,7 +134,17 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) gate.Row {
 	distinct, most := b.Inbox.Count()
 	value := fmt.Sprintf("%d of %d delivered, %d distinct, most times %d", got, len(ids), distinct, most)
 	if len(ids) != 10 || got != 10 || distinct != 10 || most != 1 {
-		return newRow(id, "offline", value, "10 of 10, once each", gate.Red, "")
+		return newRow(id, "offline", value, "10 of 10, once each", gate.Red, offlineWhy(a, b, ids))
 	}
 	return newRow(id, "offline", value, "10 of 10, once each", gate.Green, "")
+}
+
+// offlineWhy says what the sender knew when the messages did not arrive: its sessions and the state of
+// every message (1 waiting, 2 in a mailbox, 3 delivered, 4 failed).
+func offlineWhy(a, b *Node, ids [][16]byte) string {
+	states := map[chat.State]int{}
+	for _, id := range ids {
+		states[a.Inbox.State(id)]++
+	}
+	return fmt.Sprintf("sender has %d session(s), receiver has %d; message states %v", len(a.RT.Status().Sessions), len(b.RT.Status().Sessions), states)
 }
