@@ -41,6 +41,10 @@ type DialConfig struct {
 	Jitter func() time.Duration
 	// Memory, when set, reorders attempts by the suite that last worked and records the winner.
 	Memory *Memory
+	// Narrow and NetworkID (T3.12): a marked network does not try noise3; a noise3 attempt that
+	// stays silent for NoAnswerAfter while another suite wins marks the network.
+	Narrow    *NarrowPath
+	NetworkID func() string
 }
 
 // DialTimeout is the carrier dial timeout of wire.md §10 (QUIC 4 s, TCP 6 s, ws2 8 s). Unknown

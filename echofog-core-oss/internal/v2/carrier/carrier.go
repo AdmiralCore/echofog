@@ -47,4 +47,11 @@ type DialRequest struct {
 	// (T11.6: SOCKS5 for reality2-tcp and ws2). network is "tcp" or "udp", address is host:port.
 	// A nil hook means a direct dial.
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	// DialMSS, when not nil, opens a direct TCP socket with the MSS limited before the SYN (T3.12);
+	// mss 0 means no limit. Nil means the default opener, which sets TCP_MAXSEG where the OS has it.
+	DialMSS func(ctx context.Context, network, address string, mss int) (net.Conn, error)
+	// Narrow holds the narrow-path marks; NetworkID names the current network. Both nil disables
+	// the narrow-path logic.
+	Narrow    *NarrowPath
+	NetworkID func() string
 }
