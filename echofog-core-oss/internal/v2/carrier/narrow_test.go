@@ -195,6 +195,9 @@ func (m *pathModel) dialMSS(_ context.Context, _, _ string, mss int) (net.Conn, 
 
 const helloSize = 1900
 
+// testV6 makes helloAttempt dial an IPv6 literal (set by the table test; the subtests run in turn).
+var testV6 bool
+
 type modelConn struct {
 	net.Conn
 	m   *pathModel
@@ -217,7 +220,11 @@ func (m *pathModel) callsCopy() []int {
 
 // helloAttempt writes the hello through the opener of req and waits for the answer.
 func helloAttempt(ctx context.Context, req DialRequest) (mux.Carrier, error) {
-	c, err := req.DialContext(ctx, "tcp", "192.0.2.1:443")
+	addr := "192.0.2.1:443"
+	if testV6 {
+		addr = "[2001:db8::1]:443"
+	}
+	c, err := req.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +284,8 @@ func TestNarrowRetryOnTheModel(t *testing.T) {
 			clock := newFakeClockRealTimers()
 			narrow := quickNarrow(clock)
 			m := &pathModel{mtu: tc.mtu, icmp: tc.icmp, v6: tc.v6}
+			testV6 = tc.v6
+			defer func() { testV6 = false }()
 			req := DialRequest{DialMSS: m.dialMSS, Narrow: narrow, NetworkID: func() string { return "n1" }}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

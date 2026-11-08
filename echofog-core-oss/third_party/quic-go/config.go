@@ -130,7 +130,13 @@ func populateConfig(config *Config) *Config {
 		initialConnectionReceiveWindow = chromeInitialMaxData
 		maxIncomingStreams = chromeMaxIncomingStreams
 		maxIncomingUniStreams = chromeMaxIncomingUniStreams
-		initialPacketSize = chromeInitialPacketSize
+		// Chrome sends 1250; a caller may ask for less (1232 towards an IPv6 address, which must
+		// fit PMTU 1280: 1232 + 48), never for more.
+		if config.InitialPacketSize > 0 && config.InitialPacketSize < chromeInitialPacketSize {
+			initialPacketSize = config.InitialPacketSize
+		} else {
+			initialPacketSize = chromeInitialPacketSize
+		}
 		// The auto-tuning ceilings must not sit below the starting windows.
 		maxStreamReceiveWindow = max(maxStreamReceiveWindow, initialStreamReceiveWindow)
 		maxConnectionReceiveWindow = max(maxConnectionReceiveWindow, initialConnectionReceiveWindow)

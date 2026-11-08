@@ -147,6 +147,12 @@ it receives against the hello's share, the random on the wire (decrypted from th
 client's Initial packets) and a completed handshake. It runs without any GODEBUG.
 
 
+## 4a. `InitialPacketSize` below Chrome's under ChromeParrot (T3.12)
+
+`config.go`: ChromeParrot pins `initialPacketSize` to Chrome's 1250. A smaller explicit
+`Config.InitialPacketSize` is now kept (never a larger one). The REALITY v2 client asks for 1232
+towards an IPv6 address, so the Initial datagram (1232 + 48) fits a path of PMTU 1280.
+
 ## 5. Earlier local changes (present before patches 1-4)
 
 These two changes were already in EchoFog's copy when the numbered patches were
