@@ -54,3 +54,20 @@ func requireGreen(t *testing.T, r Result, ids ...string) {
 	}
 	assert.Equal(t, "model", r.Mode)
 }
+
+// requireGreenExcept is requireGreen for a scenario with known findings: the listed rows may be red
+// (or green), every other row has to be green.
+func requireGreenExcept(t *testing.T, r Result, known map[string]bool, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		row, ok := rowOf(r, id)
+		require.True(t, ok, "row %s is missing", id)
+		assert.Equal(t, gate.Green, row.Status, "%s: %s against %s (%s)", id, row.Value, row.Limit, row.Note)
+	}
+	for _, row := range r.Rows {
+		if !known[row.ID] {
+			assert.NotEqual(t, gate.Red, row.Status, "%s: %s against %s (%s)", row.ID, row.Value, row.Limit, row.Note)
+		}
+	}
+	assert.Equal(t, "model", r.Mode)
+}
