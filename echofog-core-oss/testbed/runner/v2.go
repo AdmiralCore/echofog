@@ -107,7 +107,7 @@ func v2PhaseList(scenario string) ([]string, error) {
 		switch phases[i] {
 		case "censor", "net", "services", "echo":
 		case "probe":
-			if *v2ProbeSpec == "" {
+			if *v2ProbeSpec == "" && !*v2LiveLab {
 				return nil, fmt.Errorf("phase probe needs -probe-spec: the nodes to ask are not known to the lab")
 			}
 		default:
@@ -166,7 +166,11 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 		case "censor":
 			labeled, capture, carrier = v2CensorPhase(nodes, v, out, seed)
 		case "probe":
-			probes = v2ProbePhase(v, out, *v2ProbeSpec)
+			if *v2LiveLab {
+				probes = liveProbePhase(v, out, seed)
+			} else {
+				probes = v2ProbePhase(v, out, *v2ProbeSpec)
+			}
 		}
 	}
 
@@ -191,6 +195,9 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 				findings = append(findings, fmt.Sprintf("%s not measured on v2: no v2 flow of the kind it reads (TCP with records) was in this run", row.Detector))
 			}
 		}
+	}
+	if *v2LiveLab && len(labeled) > 0 {
+		behaviour["by_group"] = byGroup(labeled, cfg)
 	}
 	agg := aggregateFor(labeled)
 	flows := countFlows(labeled)
@@ -319,7 +326,9 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 		v.check(false, "v2 carrier harness: %v", err)
 	}
 	runBrowserControl(v)
-	runProductTraffic(nodes, v)
+	if !*v2LiveLab { // the live lab runs the v1 product beside the carriers, for as long as they run
+		runProductTraffic(nodes, v)
+	}
 	time.Sleep(2 * time.Second)
 	cap.stop()
 
@@ -390,6 +399,16 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 		{mode: "const-size", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteConstSize, conns: 1, port: 4349, synthetic: true, repeat: 6},
 		{mode: "conn-storm", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteConnStorm, conns: 30, port: 4350, synthetic: true},
 	}
+	if *v2LiveLab {
+		// the live lab drives noise3 through the same page traffic as the other carriers
+		kept := specs[:0]
+		for _, s := range specs {
+			if s.mode != "noise3" {
+				kept = append(kept, s)
+			}
+		}
+		specs = kept
+	}
 	noise3OK := false
 	for _, s := range specs {
 		labels[s.port] = harnessLabel{Suite: s.suite, Label: censor.Label(s.label), Synthetic: s.synthetic}
@@ -451,6 +470,14 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 				logf("carrier mode %s: %d bytes in %d packets", s.mode, res.Bytes, res.Packets)
 			}
 		}
+	}
+	if *v2LiveLab {
+		if err := liveHarness(nodes, v, seed, &info, labels); err != nil {
+			return info, labels, err
+		}
+		noise3OK = true
+		info.Name = "v2carrier (live lab: noise3, reality2-tcp, reality2-quic, ws2 + controls)"
+		info.Note = "the four real v2 carriers of internal/v2 as servers on x1 and clients on b1 across gw_b; the v1 product beside them; the synthetic modes are controls of the detectors"
 	}
 	// without the real carrier the run says so, and D10 is then judged on the stand-in alone
 	info.Synthetic = !noise3OK
