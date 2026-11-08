@@ -336,8 +336,7 @@ DHT/relay/выхода; нет — если работает только с л�
 - **Виды групп:** v1 `group`/`channel`/`swarm` ↔ app `private`/`channel`/`open`.
 - **Работают:** все методы чатов (кроме сохранённых и `ResetEncryptionSession`), каналы/категории/треды, роли, приглашения и заявки,
   модерация, файлы (отправка, приём, группа), `GetMessages`, `SendMessage`, `GetGroupMessages`, `SendGroupMessage`.
-- **ErrV2NotBuilt:** `ListSavedMessages`, `SaveMessage`, `UnsaveMessage`, `ResetEncryptionSession`, `AddGroupMember` (вход по приглашению),
-  `DeleteGroup` (удалить для всех), `GroupSnapshotExport`/`GroupSnapshotImport`.
+- **ErrV2NotBuilt:** `ResetEncryptionSession`, `DeleteGroup` (удалить для всех); сохранённые, `AddGroupMember` и снимок — в T11.3e-2.
 - **Новые методы фасада (T7.7), только при v2:** `ChatNotify`/`SetChatNotify` (`all|mentions|none`, на устройстве), `ChatFollow`/
   `ChatFollowing` (подписка на тред), `GroupVoice` (`VoiceMemberDTO`, состав голосовой комнаты). При `protocol: 1` — `ErrV2NotBuilt`.
 - **Не передаётся по сети:** канал и тред файла группы (в предложении файла нет такого поля) — только в ответе вызова.
@@ -359,3 +358,27 @@ DHT/relay/выхода; нет — если работает только с л�
   `policy`, `rate-limited`, `no-path`; `VPNStatus.ExitState`: `checking`, `ok`, `unreachable` (нет пути), `no-camouflage`.
   Остаются `ErrV2NotBuilt`: оплата, рынок, пробы, режим всего компьютера, автопереключение, `StartVPNAt`, `GetCallPath`,
   `GetCallRelays`, `SwitchCallRelay`.
+
+## T11.3e-2: остаток паритета чата при `protocol: 2` (провод не менялся)
+
+Всё ниже работает в `app` и на фасаде `AttachV2Messenger`; по сети уходит только то, что и так уходит (события журнала, личное сообщение).
+
+- **Сохранённые сообщения** (`ListSavedMessages`, `SaveMessage`, `UnsaveMessage`): только на этом устройстве, в хранилище `app` (префикс `sv/`),
+  ни письма в сеть, ни события в журнал. Предел 5000 записей (`app.MaxSaved`), текст режется по руне на 64 КиБ. Узел отправителя — как в сообщении.
+- **`AddGroupMember(groupID, ключ)`** — личное приглашение контакту сообщением в его чат (обычное приглашение группы, 1 использование, неделя).
+  Аргумент — node ID или ключ аккаунта. Участником он становится только после `JoinGroup`; в составе до ответа ничего не меняется.
+  Отказы: нет такого контакта, заблокирован, уже в группе (`ErrAlreadyMember`), нет права приглашать. Экран пишет «Приглашение отправлено».
+- **Снимок группы** (`GroupSnapshotExport`/`GroupSnapshotImport`): файл `.fogzip`, магия `FOGZIP2
+`, Argon2id + XChaCha20-Poly1305, внутри gzip(JSON)
+  с приглашением и подписанными событиями журнала. Импорт входит по приглашению и принимает каждое событие как при sync; изменённое
+  событие и событие чужой группы отбрасываются. Файл v1 (`FOGZIP1`) не принимается: `ErrSnapshotVersion` («создано другой версией»).
+  Пароль не короче 8 символов. Выгрузка делает приглашение на неделю, 10 использований (нужно право приглашать).
+- **`SetChatMutedUntil(ref, unixSec)` / `ChatMutedUntil(ref)`**: отключение звука на срок, локально; срок не больше года, 0 или прошедшее время снимает.
+  Работает как режим «ничего»: упоминание остаётся громким. В `ConversationDTO.mutedUntil` — для строки списка.
+- **Непрочитанные и последнее по каналам:** `ChannelDTO.unread`, `.mentions`, `.lastTs`, `.last` (последнее сообщение канала) — из журнала и
+  собственных отметок прочтения; для главного канала — `ChatMainChannel`. Своё сообщение читает канал.
+- **`GroupInviteDTO.webLink`** и `InviteSpec.Web`: `https://<хост страницы>/join/#group/<данные>` (данные во фрагменте; хост — `app.Config.JoinHost`,
+  пусто — нет ссылки). `InspectGroupInvite` и `JoinGroup` принимают и такую форму. Страница сайта должна разбирать `#group/…` (отдельной веткой).
+- **`group:event` `message`** идёт только для нового сообщения (`app.ConvChange.Fresh`): правка, удаление, реакция, закреп и ответ на старое
+  сообщение приходят в `conv:change`, без уведомления и без роста непрочитанных. Свой выход из группы не даёт `removed`.
+- **Ждут провода (SPEC-FIX-1108, T11.3e-1):** файл в группе и `DeleteGroup` — остаются `ErrV2NotBuilt`/прежним поведением; формат не придуман.

@@ -183,7 +183,7 @@ func canOf(e app.ConvEntry, rights convlog.Rights, hasRights bool) ConvCan {
 
 // row builds one entry of the chat list; info is the group's line for a group.
 func (b *v2MsgBackend) row(p *peerNames, e app.ConvEntry, info *app.GroupInfo) ConversationDTO {
-	out := ConversationDTO{Ref: chatRef(e.Ref), Conv: e.Conv, LastTS: e.LastTS, Unread: e.Unread, Request: e.Request,
+	out := ConversationDTO{Ref: chatRef(e.Ref), Conv: e.Conv, LastTS: e.LastTS, Unread: e.Unread, MutedUntil: e.MutedUntil, Request: e.Request,
 		Upgraded: e.Upgraded, Kind: e.Kind, Name: e.Name, PeerID: e.PeerID, PubKey: e.PeerID, Online: e.Online, Blocked: e.Blocked}
 	if e.Last != nil {
 		m := p.msg(*e.Last)
@@ -372,6 +372,45 @@ func (b *v2MsgBackend) ChatAttachments(ref ChatRef) (ChatAttachments, error) {
 		}
 	}
 	return out, nil
+}
+
+// ---- saved messages (T11.3e): kept on this device by the app layer, never sent --------------------------------
+
+func savedDTO(m app.SavedMessage) dto.SavedMessageDTO {
+	return dto.SavedMessageDTO{ID: m.ID, ChatID: m.ChatID, ChatName: m.ChatName, MsgID: m.MsgID, Channel: m.Channel, Thread: m.Thread,
+		Sender: m.Sender, Mine: m.Mine, Text: m.Text, FileName: m.FileName, FileSize: m.FileSize, Ts: m.TS, SavedAt: m.SavedAt}
+}
+
+func (b *v2MsgBackend) SaveMessage(m dto.SavedMessageDTO) (dto.SavedMessageDTO, error) {
+	s, err := b.app.SaveMessage(app.SavedMessage{ChatID: m.ChatID, ChatName: m.ChatName, MsgID: m.MsgID, Channel: m.Channel, Thread: m.Thread,
+		Sender: m.Sender, Mine: m.Mine, Text: m.Text, FileName: m.FileName, FileSize: m.FileSize, TS: m.Ts})
+	if err != nil {
+		return dto.SavedMessageDTO{}, v2Err(err)
+	}
+	return savedDTO(s), nil
+}
+
+func (b *v2MsgBackend) UnsaveMessage(id string) error { return v2Err(b.app.UnsaveMessage(id)) }
+
+func (b *v2MsgBackend) ListSavedMessages() ([]dto.SavedMessageDTO, error) {
+	list, err := b.app.ListSavedMessages()
+	if err != nil {
+		return nil, v2Err(err)
+	}
+	out := make([]dto.SavedMessageDTO, 0, len(list))
+	for _, m := range list {
+		out = append(out, savedDTO(m))
+	}
+	return out, nil
+}
+
+func (b *v2MsgBackend) SetChatMutedUntil(ref ChatRef, until int64) error {
+	return v2Err(b.app.ChatMuteUntil(appRef(ref), until))
+}
+
+func (b *v2MsgBackend) ChatMutedUntil(ref ChatRef) (int64, error) {
+	u, err := b.app.ChatMutedUntil(appRef(ref))
+	return u, v2Err(err)
 }
 
 // ---- notifications, followed threads (T7.7) -------------------------------------------------------------------
