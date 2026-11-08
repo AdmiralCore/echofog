@@ -3,6 +3,7 @@ package carrier
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -42,16 +43,28 @@ func TestNarrowMarksTTLAndForget(t *testing.T) {
 	if n.Marked("net-a") {
 		t.Fatal("Forget kept the mark")
 	}
-	for i := 0; i < 200; i++ { // bounded
-		n.Mark(string(rune('A'+i%50))+string(rune('a'+i/50)), ReasonMSS)
+	if NarrowTTL != 24*time.Hour {
+		t.Fatalf("NarrowTTL = %v, want 24 h", NarrowTTL)
+	}
+	for i := 0; i < 500; i++ { // bounded: at most 64 networks are kept
+		n.Mark(fmt.Sprintf("net-%d", i), ReasonMSS)
+	}
+	n.mu.Lock()
+	kept, ordered := len(n.until), len(n.order)
+	n.mu.Unlock()
+	if kept > 64 || ordered > 64 {
+		t.Fatalf("%d networks kept (%d in order), want at most 64", kept, ordered)
+	}
+	if !n.Marked("net-499") || n.Marked("net-0") {
+		t.Fatal("the oldest network must be the one dropped")
 	}
 }
 
-// noise3 stays silent; the fallback starts within a second, and when another suite wins after the
-// 1 s window the network is marked (wire.md section 2.4 path requirement, T3.12).
-func TestDialMarksNarrowWhenNoise3StaysSilent(t *testing.T) {
-	clock := newFakeClock()
-	narrow := NewNarrowPath(clock, nil)
+// silentRound dials one peer (by host) whose noise3 stays silent while reality2-quic wins after the
+// 1 s window, and returns whether the network is marked afterwards. The fallback has to start
+// within a second (wire.md section 2.4 path requirement, T3.12).
+func silentRound(t *testing.T, clock *fakeClock, narrow *NarrowPath, host string) bool {
+	t.Helper()
 	started := make(chan uint32, 4)
 	release := make(chan struct{})
 	r := NewRegistry()
@@ -70,7 +83,7 @@ func TestDialMarksNarrowWhenNoise3StaysSilent(t *testing.T) {
 		}
 	}))
 	cfg := DialConfig{Registry: r, Clock: clock, Jitter: func() time.Duration { return 0 }, Narrow: narrow, NetworkID: func() string { return "n1" }}
-	res := runDial(context.Background(), DialRequest{}, []Attempt{dialAttempt(objects.SuiteNoise3), dialAttempt(objects.SuiteReality2QUIC)}, cfg)
+	res := runDial(context.Background(), DialRequest{}, []Attempt{dialAttemptHost(objects.SuiteNoise3, host), dialAttemptHost(objects.SuiteReality2QUIC, host)}, cfg)
 	if got := waitStarted(t, started); got != objects.SuiteNoise3 {
 		t.Fatalf("first started: %d", got)
 	}
@@ -83,8 +96,40 @@ func TestDialMarksNarrowWhenNoise3StaysSilent(t *testing.T) {
 	if got := waitDial(t, res); got.e != nil || got.a.Suite != objects.SuiteReality2QUIC {
 		t.Fatalf("Dial: %+v", got)
 	}
-	if !narrow.Marked("n1") {
-		t.Fatal("a silent noise3 with a live fallback did not mark the network")
+	return narrow.Marked("n1")
+}
+
+func dialAttemptHost(suite uint32, host string) Attempt {
+	a := dialAttempt(suite)
+	a.Addr.Host = host
+	return a
+}
+
+// M2 (architect's decision): one silent peer proves nothing about the network - its UDP port may
+// be closed or its noise3 down. Two different peers that stay silent within 10 minutes, while a
+// carrier wins to each, mark it.
+func TestDialMarksNarrowOnlyAfterTwoSilentPeers(t *testing.T) {
+	clock := newFakeClock()
+	narrow := NewNarrowPath(clock, nil)
+	if silentRound(t, clock, narrow, "192.0.2.10") {
+		t.Fatal("one silent peer marked the network")
+	}
+	if silentRound(t, clock, narrow, "192.0.2.10") {
+		t.Fatal("the same peer twice marked the network")
+	}
+	if !silentRound(t, clock, narrow, "192.0.2.11") {
+		t.Fatal("two different silent peers did not mark the network")
+	}
+}
+
+// The two silent peers have to be within a 10 minute window.
+func TestSilentPeersOutsideTheWindowDoNotMark(t *testing.T) {
+	clock := newFakeClock()
+	narrow := NewNarrowPath(clock, nil)
+	silentRound(t, clock, narrow, "192.0.2.10")
+	clock.Advance(11 * time.Minute)
+	if silentRound(t, clock, narrow, "192.0.2.11") {
+		t.Fatal("a peer 11 minutes later marked the network")
 	}
 }
 
@@ -157,6 +202,10 @@ type pathModel struct {
 	icmp bool
 	v6   bool
 
+	// slowAfter, when set, makes the server send a progress byte at once and the final one only
+	// after this long (a slow but healthy handshake).
+	slowAfter time.Duration
+
 	mu    sync.Mutex
 	calls []int // the MSS of every opened socket, 0 = not limited
 }
@@ -186,6 +235,10 @@ func (m *pathModel) dialMSS(_ context.Context, _, _ string, mss int) (net.Conn, 
 				return
 			}
 			got += n
+		}
+		if m.slowAfter > 0 {
+			_, _ = s.Write([]byte{1})
+			time.Sleep(m.slowAfter)
 		}
 		_, _ = s.Write([]byte{1})
 		_ = s.Close()
@@ -384,3 +437,69 @@ func TestNarrowBudgets(t *testing.T) {
 // newFakeClockRealTimers is a clock whose timers are real: the budgets of the model tests run in
 // real, short time.
 func newFakeClockRealTimers() Clock { return systemClock{} }
+
+// slowAttempt is a handshake that makes progress at once (the first byte from the server arrives)
+// and ends only after the server's delay: a slow but healthy path.
+func slowAttempt(ctx context.Context, req DialRequest) (mux.Carrier, error) {
+	c, err := req.DialContext(ctx, "tcp", "192.0.2.1:443")
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	if _, err := c.Write(make([]byte, helloSize)); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	var b [2]byte
+	if _, err := io.ReadFull(c, b[:]); err != nil {
+		_ = c.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	return newTestCarrier(), nil
+}
+
+// M1: the retry needs silence. A path of 1500 whose handshake takes longer than the first-try
+// budget, but whose server has answered with a byte, is slow and not black-holed: one socket
+// without a limit, no retry, no mark (acceptance probe "path 1500, handshake 2.5 s").
+func TestSlowHealthyPathIsNotRetriedOrMarked(t *testing.T) {
+	narrow := quickNarrow(systemClock{})
+	m := &pathModel{mtu: 1500, slowAfter: 300 * time.Millisecond} // budget 80 ms, finish after 300 ms
+	req := DialRequest{DialMSS: m.dialMSS, Narrow: narrow, NetworkID: func() string { return "n1" }}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := WithNarrowRetry(ctx, req, slowAttempt)
+	if err != nil {
+		t.Fatalf("WithNarrowRetry: %v (sockets %v)", err, m.callsCopy())
+	}
+	_ = c.Close()
+	if got := m.callsCopy(); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("sockets %v, want a single unlimited one", got)
+	}
+	if narrow.Marked("n1") {
+		t.Fatal("a slow healthy path was marked")
+	}
+}
+
+// L3: ErrMSSUnsupported only where a retry would have been needed. A proxied path that is slow but
+// alive times out without it.
+func TestUnsupportedIsNotReportedForASlowProxiedPath(t *testing.T) {
+	narrow := quickNarrow(systemClock{})
+	m := &pathModel{mtu: 1500, slowAfter: time.Hour}
+	req := DialRequest{
+		DialContext: func(ctx context.Context, n, a string) (net.Conn, error) { return m.dialMSS(ctx, n, a, 0) },
+		Narrow:      narrow, NetworkID: func() string { return "n1" },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	_, err := WithNarrowRetry(ctx, req, slowAttempt)
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+	if errors.Is(err, ErrMSSUnsupported) {
+		t.Fatalf("a slow proxied path with progress was reported as an MSS problem: %v", err)
+	}
+}

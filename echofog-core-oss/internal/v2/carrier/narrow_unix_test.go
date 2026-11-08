@@ -16,6 +16,9 @@ import (
 // maxSeg reads the MSS the kernel settled on for a connected TCP socket.
 func maxSeg(t *testing.T, c net.Conn) int {
 	t.Helper()
+	if u, ok := c.(interface{ NetConn() net.Conn }); ok {
+		c = u.NetConn()
+	}
 	rc, err := c.(*net.TCPConn).SyscallConn()
 	if err != nil {
 		t.Fatal(err)
