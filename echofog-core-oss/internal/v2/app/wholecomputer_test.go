@@ -26,10 +26,13 @@ type remoteExit struct {
 	ap netip.AddrPort
 }
 
-func (r *remoteExit) Remote() (netip.AddrPort, bool) {
+func (r *remoteExit) Remote(context.Context) (netip.AddrPort, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.ap, r.ap.IsValid()
+	if !r.ap.IsValid() {
+		return netip.AddrPort{}, errors.New("no session")
+	}
+	return r.ap, nil
 }
 
 func (r *remoteExit) set(s string) {
