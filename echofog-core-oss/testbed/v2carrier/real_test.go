@@ -69,7 +69,7 @@ func TestRealCarriersCarryPages(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
 			go func() {
-				done <- serveReal(ctx, realServe{suite: suite, listen: addr, advertise: advertise, cover: cl.Addr().String(), seed: 7, ready: ready, caOut: ca, refListen: fmt.Sprintf("127.0.0.1:%d", freePort(t, "tcp"))})
+				done <- serveReal(ctx, realServe{suite: suite, listen: addr, advertise: advertise, cover: cl.Addr().String(), seed: 7, ready: ready, caOut: ca, refListen: fmt.Sprintf("127.0.0.1:%d", freePort(t, network))})
 			}()
 			deadline := time.Now().Add(10 * time.Second)
 			for {
