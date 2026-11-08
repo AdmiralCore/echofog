@@ -141,3 +141,11 @@ func FuzzLoadScenarios(f *testing.F) {
 		_ = scenarioRows(rep.Scenarios)
 	})
 }
+
+// A scenario that measured nothing but information has measured nothing.
+func TestAScenarioOfOnlyInfoRowsIsNotMeasured(t *testing.T) {
+	list := scenarioFixture("model")
+	list[0].Rows = []Row{{ID: "x", Metric: "m", Status: Info}}
+	res := Evaluate(Input{Run: goodRun(t), Scenarios: list, Now: now})
+	assert.Equal(t, NotMeasured, row(res, "scenario:"+list[0].Name, "model runs").Status)
+}
