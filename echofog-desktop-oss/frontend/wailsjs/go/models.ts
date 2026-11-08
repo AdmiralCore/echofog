@@ -668,6 +668,20 @@ export namespace main {
 	        this.blocked = source["blocked"];
 	    }
 	}
+	export class ProtocolDTO {
+	    running: number;
+	    next: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProtocolDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.next = source["next"];
+	    }
+	}
 	export class CrashReport {
 	    reason: string;
 	    where: string;

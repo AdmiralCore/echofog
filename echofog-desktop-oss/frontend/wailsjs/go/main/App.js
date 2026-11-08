@@ -346,6 +346,10 @@ export function GetProfiles() {
   return window['go']['main']['App']['GetProfiles']();
 }
 
+export function GetProtocol() {
+  return window['go']['main']['App']['GetProtocol']();
+}
+
 export function GetProxySettings() {
   return window['go']['main']['App']['GetProxySettings']();
 }
@@ -780,6 +784,10 @@ export function SetProfileService(arg1) {
 
 export function SetProxySettings(arg1, arg2) {
   return window['go']['main']['App']['SetProxySettings'](arg1, arg2);
+}
+
+export function SetProtocol(arg1) {
+  return window['go']['main']['App']['SetProtocol'](arg1);
 }
 
 export function SetRelaySettings(arg1) {
