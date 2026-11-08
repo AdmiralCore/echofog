@@ -2,6 +2,7 @@ package scenarios
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/echofog/echofog-core/testbed/gate"
 )
@@ -15,3 +16,21 @@ func runNat(_ context.Context, env Env) Result {
 	return Result{Name: "v2-nat", Mode: "model", Seed: env.Seed, Rows: []gate.Row{{
 		ID: "v2-nat/implemented", Metric: "scenario", Value: "not written", Limit: "measured", Status: gate.NotMeasured, Source: "T15.1"}}}
 }
+
+// NATType is the behaviour of a NAT towards UDP.
+type NATType int
+
+const (
+	FullCone NATType = iota
+	AddressRestricted
+	PortRestricted
+	Symmetric
+)
+
+func (t NATType) String() string { return "?" }
+
+type natBox struct{}
+
+func newNATBox(NATType, netip.Addr, uint16) *natBox                { return &natBox{} }
+func (n *natBox) Send(netip.AddrPort) netip.AddrPort               { return netip.AddrPort{} }
+func (n *natBox) Accepts(from netip.AddrPort, extPort uint16) bool { return false }
