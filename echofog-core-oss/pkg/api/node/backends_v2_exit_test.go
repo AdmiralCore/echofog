@@ -20,6 +20,7 @@ type fakeExitVPN struct {
 	on        bool
 	log       []string
 	status    app.ExitStatusView
+	settings  app.ExitSettings
 	err       error
 }
 
@@ -34,6 +35,7 @@ func (f *fakeExitVPN) ExitEnable(_ context.Context, s app.ExitSettings) (app.Exi
 	f.mu.Lock()
 	f.on = true
 	f.status.Enabled = true
+	f.settings = s
 	f.mu.Unlock()
 	return app.ExitInfo{Link: "echofog://join?v=2&card=EXITLINK", Web: "https://join.example.org/x"}, nil
 }
@@ -84,6 +86,18 @@ func TestV2SharingStartsAndStopsTheExit(t *testing.T) {
 	require.NoError(t, api.StopSharing())
 	require.False(t, api.GetSharingStatus().Enabled)
 	require.Equal(t, []string{"enable", "disable"}, f.log)
+}
+
+// The exit of a desktop never opens private addresses: the sharing card has no switch for that, and
+// the product must not hand the exit a flag that lets a client reach the owner's LAN or loopback.
+func TestV2SharingKeepsPrivateTargetsOff(t *testing.T) {
+	api, f := newExitApi(t, true)
+	require.NoError(t, api.StartSharing(SharingConfig{UploadKbps: 5000}))
+	f.mu.Lock()
+	got := f.settings
+	f.mu.Unlock()
+	require.False(t, got.AllowPrivateTargets, "the product turned private targets on")
+	require.Equal(t, 5, got.MaxMbps)
 }
 
 // A price is not part of the first exit: a client must not be told it is paying for something free.

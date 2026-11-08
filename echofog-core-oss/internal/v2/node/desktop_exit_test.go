@@ -279,6 +279,22 @@ func TestDesktopExitCarriesTrafficToAConfirmedClient(t *testing.T) {
 	}
 }
 
+// The exit of a desktop serves the internet, not the owner's own network: with the settings the
+// product uses, a confirmed client is still refused when it asks for a loopback or LAN address.
+func TestPrivateTargetsStayClosedInTheProduct(t *testing.T) {
+	a, b := newExitPair(t)
+	info, err := b.a.ExitEnable(bgx, app.ExitSettings{})
+	if err != nil {
+		t.Fatalf("ExitEnable: %v", err)
+	}
+	listen := connect(t, a, info.Link)
+	target := site(t)
+	confirm(t, b, listen, target)
+	if tunnelWorks(t, listen, target) {
+		t.Fatal("the exit reached a loopback target with the default settings")
+	}
+}
+
 // A node that has not turned the exit on is not an exit, and a restart leaves it off.
 func TestDesktopExitIsOffUntilTurnedOn(t *testing.T) {
 	a, b := newExitPair(t)
