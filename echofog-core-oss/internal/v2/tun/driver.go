@@ -30,6 +30,10 @@ type TunConfig struct {
 	Name     string
 	Addrs    []netip.Prefix // IPv4 and IPv6 of the interface
 	Resolver netip.Addr     // the fake DNS answering inside the tunnel
+	// Socks is the loopback address of the node's proxy that the tunnel feeds, and BypassUDPPort the
+	// node's own UDP port that must stay off the tunnel. A driver that needs neither ignores them.
+	Socks         string
+	BypassUDPPort int
 }
 
 // TunEvent says the tunnel is gone: the helper died, the adapter was removed or the control
