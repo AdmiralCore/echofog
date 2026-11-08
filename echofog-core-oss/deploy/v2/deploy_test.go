@@ -329,20 +329,21 @@ func TestComposeIsClosed(t *testing.T) {
 	if len(n.Tmpfs) == 0 {
 		t.Error("a read-only container needs a tmpfs for /tmp")
 	}
-	// Ports: the node's UDP port only, none for the operator API, nothing published on loopback
-	// by accident, no host-wide bind.
-	udp := 0
+	// Ports: the node's public TCP and UDP port (443, the camouflaged pair) and the noise3 spare
+	// port; none for the operator API, nothing published on loopback by accident, no host-wide bind.
+	tcp, udp := 0, 0
 	for _, p := range n.Ports {
-		if !strings.HasSuffix(p, "/udp") {
-			t.Errorf("published port %q is not UDP: the node serves noise3 over UDP only", p)
+		if strings.HasSuffix(p, "/udp") {
+			udp++
+		} else {
+			tcp++
 		}
 		if strings.HasPrefix(p, "127.") || strings.HasPrefix(p, "0.0.0.0") || strings.Contains(p, "8090") || strings.Contains(p, "6060") {
 			t.Errorf("published port %q", p)
 		}
-		udp++
 	}
-	if udp != 1 {
-		t.Errorf("%d published ports, want exactly the node's UDP port (invitations are opt-in)", udp)
+	if tcp != 1 || udp != 2 {
+		t.Errorf("%d TCP and %d UDP published ports, want 443/tcp, 443/udp and the noise3 spare port", tcp, udp)
 	}
 	// Storage: one named volume. No host paths, no Docker socket.
 	if len(n.Volumes) != 1 || !strings.HasSuffix(n.Volumes[0], ":/data") || strings.HasPrefix(n.Volumes[0], "/") || strings.HasPrefix(n.Volumes[0], ".") {
