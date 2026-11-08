@@ -34,3 +34,10 @@ func TestAnUnknownLiveScenarioIsABadArgument(t *testing.T) {
 	var out bytes.Buffer
 	assert.Equal(t, 3, runV2Live("v2-moon", &out))
 }
+
+func TestTheLaunchpadFlagsDoNotRejectALiveScenario(t *testing.T) {
+	for _, n := range v2LiveScenarios {
+		assert.NoError(t, validateV2Flags(n), n)
+	}
+	assert.Error(t, validateV2Flags("v2-moon"), "an unknown v2 scenario is still refused")
+}
