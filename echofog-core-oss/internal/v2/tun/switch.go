@@ -312,7 +312,12 @@ func (s *Switch) Stop(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 	if err := s.cfg.DNS.Restore(ctx); err != nil {
-		errs = append(errs, err)
+		// The policy still points at the resolver of a tunnel that is gone. Taking the filters away
+		// now would hand back a computer that cannot resolve names, declared off. It stays held and
+		// blocked; the next Stop tries again.
+		s.set(StateHeld, err)
+		errs = append(errs, fmt.Errorf("tun: DNS was not restored, the filters stay: %w", err))
+		return errors.Join(errs...)
 	}
 	if err := s.cfg.Firewall.Remove(ctx); err != nil {
 		s.set(StateHeld, err)

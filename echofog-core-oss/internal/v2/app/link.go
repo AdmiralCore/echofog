@@ -193,6 +193,8 @@ func UserMessage(err error) string {
 		return "Режим «весь компьютер» на этой системе пока не поддерживается"
 	case errors.Is(err, tun.ErrNoPrivilege):
 		return "Нужны права администратора: подтвердите запрос системы и повторите"
+	case errors.Is(err, ErrWholeStop):
+		return "Не удалось полностью отключить защиту: интернет остаётся заблокированным. Отключение можно повторить"
 	case errors.Is(err, ErrNeedVPN):
 		return "Сначала запустите VPN"
 	case errors.Is(err, ErrNotExit):

@@ -260,7 +260,8 @@ func (a *App) WholeComputerStop(ctx context.Context) error {
 		_ = sw.Recover(ctx)
 	}
 	if err := sw.Stop(ctx); err != nil {
-		return a.wholeFail(err)
+		// whatever failed, the mode is held and the stop can be repeated
+		return a.wholeFail(fmt.Errorf("%w: %v", ErrWholeStop, err))
 	}
 	w.mu.Lock()
 	w.applied, w.err = nil, ""
