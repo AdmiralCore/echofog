@@ -24,6 +24,7 @@ require (
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/refraction-networking/utls v1.8.2
 	github.com/stretchr/testify v1.12.1
+	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/xjasonlyu/tun2socks/v2 v2.6.0
 	github.com/xssnick/tonutils-go v1.18.0
@@ -70,7 +71,6 @@ require (
 	github.com/pion/transport/v5 v5.1.4 // indirect
 	github.com/pion/turn/v5 v5.1.3 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
