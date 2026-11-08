@@ -528,7 +528,7 @@ func captureReality2TCP(ctx context.Context, sessions, bulk int) (out capturedCa
 	}
 	tg := probe.Target{Name: "reality2-tcp", Network: "tcp", Addr: raw.Addr().String(), Cover: coverAddr, SNI: coverName, AltDial: altDialer("tcp")}
 	in := probe.Inputs{FirstFlight: first, Valid: valid, Foreign: foreign, Window: probeWindow, Wait: advance(clock), Listen: 800 * time.Millisecond}
-	out.Probe = probe.Run(ctx, tg, in)
+	out.Probe = confirmed(probe.Run(ctx, tg, in), func() probe.Report { return probe.Run(ctx, tg, in) })
 	return
 }
 

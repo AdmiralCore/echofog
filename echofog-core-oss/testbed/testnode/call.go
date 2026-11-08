@@ -28,8 +28,8 @@ type callRx struct {
 	sent     map[string]int       // video units handed to the call manager, by stream
 	first    map[string]time.Time // when the first unit of a stream arrived
 	secs     map[string][]int     // units that arrived, by second since the first one
-	talking  chan struct{} // closed to stop the speaker
-	streamer chan struct{} // closed to stop the stream
+	talking  chan struct{}        // closed to stop the speaker
+	streamer chan struct{}        // closed to stop the stream
 }
 
 func (t *testNode) callRoutes(mux *http.ServeMux) {
