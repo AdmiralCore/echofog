@@ -225,6 +225,11 @@ func TestHelperDeath(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the death of the helper was not reported")
 	}
+	select {
+	case <-w.served: // the old helper has finished taking its tunnel down
+	case <-time.After(3 * time.Second):
+		t.Fatal("the old helper did not end")
+	}
 	if w.client.Alive(ctx) {
 		t.Fatal("Alive after the helper died")
 	}
