@@ -82,6 +82,7 @@ func (r *Runtime) recordPair(sid [16]byte, id uint64, pair session.Pair, done <-
 }
 
 func (r *Runtime) releaseSessionPathPairs(sid [16]byte) {
+	r.forgetCard(sid)
 	r.pathsMu.Lock()
 	var pairs []session.Pair
 	for k, pair := range r.pathPairs {

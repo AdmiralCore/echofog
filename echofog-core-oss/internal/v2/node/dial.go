@@ -107,6 +107,7 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	if err != nil {
 		return nil, Peer{}, err
 	}
+	r.rememberCard(est, card)
 	r.ensureServing(est)
 	return est, r.peerOf(est), nil
 }

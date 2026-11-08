@@ -259,8 +259,9 @@ type Runtime struct {
 	pathPairs map[pathKey]session.Pair
 	deadPaths map[pathKey]struct{}
 	// repairing holds the sessions a repair is running for; repairOpt is what a repair dials with.
-	repairing map[[16]byte]bool
-	repairOpt DialOpt
+	repairing    map[[16]byte]bool
+	sessionCards map[[16]byte]*objects.Card
+	repairOpt    DialOpt
 
 	identity Identity
 	vis      cards.Visibility

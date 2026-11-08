@@ -95,6 +95,9 @@ func (r *Runtime) repair(est *session.Established) {
 		}
 		opt := r.repairOpt
 		opt.repair = true
+		if opt.Card == nil {
+			opt.Card = r.repairCard(est.SID)
+		}
 		if est.HasFeature(frame.FeaturePathMigration) {
 			// The new path becomes the active one; the failing path stays a standby until it
 			// recovers or dies.
@@ -133,4 +136,33 @@ func jittered(d time.Duration) time.Duration {
 }
 
 // repairCard is the card the session was dialed with; nil when unknown.
-func (r *Runtime) repairCard(sid [16]byte) *objects.Card { return nil }
+func (r *Runtime) repairCard(sid [16]byte) *objects.Card {
+	r.pathsMu.Lock()
+	defer r.pathsMu.Unlock()
+	return r.sessionCards[sid]
+}
+
+// rememberCard keeps the card a dialed session was opened with until the session ends, so a
+// repair can dial again without finding the card in the card book.
+func (r *Runtime) rememberCard(est *session.Established, card *objects.Card) {
+	if est == nil || est.Session == nil || card == nil || est.Role != session.RoleInitiator {
+		return
+	}
+	r.pathsMu.Lock()
+	if r.sessionCards == nil {
+		r.sessionCards = map[[16]byte]*objects.Card{}
+	}
+	r.sessionCards[est.SID] = card
+	r.pathsMu.Unlock()
+	select {
+	case <-est.Session.Done():
+		r.forgetCard(est.SID)
+	default:
+	}
+}
+
+func (r *Runtime) forgetCard(sid [16]byte) {
+	r.pathsMu.Lock()
+	delete(r.sessionCards, sid)
+	r.pathsMu.Unlock()
+}
