@@ -9,6 +9,7 @@
   import RelayCard from '../components/RelayCard.svelte';
   import AccessCard from '../components/AccessCard.svelte';
   import TestnetNotice from '../components/TestnetNotice.svelte';
+  import ExitAccessCard from '../components/ExitAccessCard.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
   import { ask } from '../stores/dialog.js';
@@ -212,6 +213,10 @@
   const share = () => act('share', async () => {
     if (sharing.enabled) {
       await App.StopSharing();
+    } else if (sharing.access) {
+      // protocol 2: the exit is free; say whose address the traffic leaves with, then turn it on
+      if (!(await ask({ title: $t('proxy.share.title'), message: $t('proxy.share.ipWarning'), confirm: $t('proxy.share.start') }))) return;
+      await App.StartSharing({ pricePerMb: 0, freeTestKb: 0, uploadKbps: 0, freePeers: [] });
     } else {
       await App.StartSharing({
         pricePerMb: microPerMb(form.price),
@@ -682,7 +687,8 @@
           <p class="small muted">{$t('proxy.share.depositNote')}</p>
         </div>
       {/if}
-      {#if !sharing.enabled}
+      <ExitAccessCard access={sharing.access} enabled={sharing.enabled} on:change={refresh} />
+      {#if !sharing.enabled && !sharing.access}
         <div class="row wrap">
           <label>{$t('proxy.share.priceLabel')}<input bind:value={form.price} /></label>
           <label>{$t('proxy.share.freeKb')}<input type="number" min="0" max="1024" bind:value={form.freeKb} /></label>

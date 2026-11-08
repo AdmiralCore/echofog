@@ -2198,6 +2198,7 @@ export namespace node {
 	    paymentsReady: boolean;
 	    payAddress: string;
 	    earnedUsdt: string;
+	    access?: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new SharingStatus(source);
@@ -2217,6 +2218,7 @@ export namespace node {
 	        this.paymentsReady = source["paymentsReady"];
 	        this.payAddress = source["payAddress"];
 	        this.earnedUsdt = source["earnedUsdt"];
+	        this.access = source["access"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

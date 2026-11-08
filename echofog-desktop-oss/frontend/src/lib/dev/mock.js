@@ -616,6 +616,11 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
   DeleteContact: (id) => { contacts.splice(contacts.findIndex((c) => c.peer_id === id), 1); return null; },
   GetSharingStatus: () => ({ ...sharingMock }),
   StartSharing: (cfg) => { Object.assign(sharingMock, { enabled: true, config: { ...cfg, freePeers: cfg.freePeers || sharingMock.config.freePeers }, lastPublish: sec(Date.now()) }); return null; },
+  SharingApprove: () => null,
+  SharingReject: () => null,
+  SharingRevoke: () => null,
+  SharingOpenFor: () => null,
+  SharingCloseOpen: () => null,
   SetExitFreePeers: (ids) => { if (ids.some((x) => !HEX64.test(x))) throw new Error('not a peer ID (64 hex characters)'); sharingMock.config.freePeers = [...ids]; return null; },
   // relays: what this computer does for others, its link, and the relays it uses (?nat=1 shows the no-link case)
   GetRelayStatus: () => relayStatus(),
