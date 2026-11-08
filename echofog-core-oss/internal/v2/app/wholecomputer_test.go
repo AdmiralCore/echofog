@@ -379,3 +379,25 @@ func TestStopThatCannotRestoreDNSStaysHeldAndCanBeRepeated(t *testing.T) {
 		t.Fatalf("after the repeat: %v, %d rules", st.State, len(w.kernel.Rules()))
 	}
 }
+
+// D (decision of the architect): DHCP is permitted so the lease of the link can renew, the LAN is not.
+func TestPlanPermitsDHCPAndNotTheLAN(t *testing.T) {
+	w := newWholeRig(t)
+	w.startVPN(t)
+	if err := w.a.WholeComputerStart(bg); err != nil {
+		t.Fatal(err)
+	}
+	rules := w.kernel.Rules()
+	dhcp := tun.Packet{Dir: tun.Out, Iface: tun.IfacePhysical, Proto: tun.ProtoUDP, Remote: netip.MustParseAddrPort("255.255.255.255:67"), Local: 68}
+	if tun.Evaluate(rules, dhcp) != tun.Permit {
+		t.Error("DHCP is blocked: the lease cannot renew")
+	}
+	for _, lan := range []string{"192.168.1.5:445", "10.0.0.7:80", "169.254.1.1:80"} {
+		for _, d := range []tun.Dir{tun.Out, tun.In} {
+			p := tun.Packet{Dir: d, Iface: tun.IfacePhysical, Proto: tun.ProtoTCP, Remote: netip.MustParseAddrPort(lan), Local: 40000}
+			if tun.Evaluate(rules, p) != tun.Block {
+				t.Errorf("%v %s is permitted: the LAN is off", d, lan)
+			}
+		}
+	}
+}

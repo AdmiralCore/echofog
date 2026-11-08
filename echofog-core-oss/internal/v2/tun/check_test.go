@@ -75,3 +75,32 @@ func TestCheckRulesRefusesAnOpenSet(t *testing.T) {
 		}
 	}
 }
+
+// D: each family of probe is held by a test: delete it from CheckRules and one of these goes green on
+// a set that opens the Internet.
+func TestCheckRulesProbeEveryFamily(t *testing.T) {
+	good := mustRules(t, testPlan())
+	add := func(r tun.Rule) []tun.Rule {
+		r.Persistent, r.Name = true, "extra"
+		return append(append([]tun.Rule(nil), good...), r)
+	}
+	for name, rules := range map[string][]tun.Rule{
+		"a LAN resolver (TCP 53, above the DNS block)": add(tun.Rule{Action: tun.Permit, Dir: tun.Out, Iface: tun.IfacePhysical, Proto: tun.ProtoTCP,
+			Remote: netip.MustParsePrefix("192.168.1.0/24"), RemotePort: 53, Weight: 250}),
+		"a LAN resolver (DoT)": add(tun.Rule{Action: tun.Permit, Dir: tun.In, Iface: tun.IfacePhysical, Proto: tun.ProtoUDP,
+			Remote: netip.MustParsePrefix("10.0.0.0/8"), RemotePort: 853, Weight: 250}),
+		"a ULA resolver": add(tun.Rule{Action: tun.Permit, Dir: tun.Out, V6: true, Iface: tun.IfacePhysical, Proto: tun.ProtoUDP,
+			Remote: netip.MustParsePrefix("fd00::/8"), RemotePort: 53, Weight: 250}),
+		"a public IPv6 range (documentation)": add(tun.Rule{Action: tun.Permit, Dir: tun.Out, V6: true, Iface: tun.IfacePhysical, Proto: tun.ProtoTCP,
+			Remote: netip.MustParsePrefix("2001:db8:ffff::/48"), RemotePort: 443, Weight: 100}),
+		"a public IPv6 range (Cloudflare)": add(tun.Rule{Action: tun.Permit, Dir: tun.In, V6: true, Iface: tun.IfacePhysical, Proto: tun.ProtoUDP,
+			Remote: netip.MustParsePrefix("2606:4700::/32"), Weight: 100}),
+		"ICMPv6 echo to the world": add(tun.Rule{Action: tun.Permit, Dir: tun.Out, V6: true, Iface: tun.IfacePhysical, Proto: tun.ProtoICMP, Weight: 100}),
+		"8.8.8.8": add(tun.Rule{Action: tun.Permit, Dir: tun.Out, Iface: tun.IfacePhysical, Proto: tun.ProtoUDP,
+			Remote: netip.MustParsePrefix("8.8.8.8/32"), Weight: 100}),
+	} {
+		if err := tun.CheckRules(rules); !errors.Is(err, tun.ErrBadRules) {
+			t.Errorf("%s: %v, want ErrBadRules", name, err)
+		}
+	}
+}

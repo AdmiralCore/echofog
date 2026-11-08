@@ -371,6 +371,8 @@ type Client struct {
 	mu     sync.Mutex // guards cc and closed
 	cc     *clientConn
 	closed bool
+
+	deniedAt time.Time // when the prompt for rights was last refused; guarded by connMu
 }
 
 // NewClient returns a Client. The helper is started when the first operation needs it.
@@ -420,10 +422,27 @@ func (c *Client) ensure(ctx context.Context) (*clientConn, error) {
 	if closed || c.cfg.Connect == nil {
 		return nil, ErrHelperGone
 	}
+	// A prompt the user has just refused is not shown again for the next operation of the same action
+	// (restore DNS, then remove the filters): the refusal is answered from memory.
+	now := time.Now
+	if c.cfg.Now != nil {
+		now = c.cfg.Now
+	}
+	window := c.cfg.DenyWindow
+	if window <= 0 {
+		window = 30 * time.Second
+	}
+	if !c.deniedAt.IsZero() && now().Sub(c.deniedAt) < window {
+		return nil, fmt.Errorf("%w: the prompt for administrator rights was refused", tun.ErrNoPrivilege)
+	}
 	conn, err := c.cfg.Connect(ctx)
 	if err != nil {
+		if errors.Is(err, tun.ErrNoPrivilege) {
+			c.deniedAt = now()
+		}
 		return nil, err
 	}
+	c.deniedAt = time.Time{}
 	cc := &clientConn{owner: c, conn: conn, pending: map[uint64]chan response{}}
 	c.mu.Lock()
 	if c.closed {
