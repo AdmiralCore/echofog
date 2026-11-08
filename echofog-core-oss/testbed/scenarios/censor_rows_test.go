@@ -134,3 +134,49 @@ func TestCensorProbeRowReadsTheReport(t *testing.T) {
 	assert.Equal(t, gate.NotMeasured, row.Status, "nothing ran")
 	assert.NotEmpty(t, row.Note)
 }
+
+// A plain Go TLS client naming the site its address hosts: only D4 (a library's ClientHello) flags it.
+func libraryHelloFlows(t *testing.T, sni string) []censor.Flow {
+	t.Helper()
+	return tcpFlowsThrough(t,
+		func(c net.Conn) {
+			s := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{selfSigned(t, sni)}})
+			if s.Handshake() == nil {
+				_, _ = io.Copy(s, s)
+			}
+		},
+		func(addr string) {
+			c, err := net.Dial("tcp", addr)
+			require.NoError(t, err)
+			tc := tls.Client(c, &tls.Config{ServerName: sni, InsecureSkipVerify: true}) // #nosec G402 -- test certificate
+			require.NoError(t, tc.Handshake())
+			_, _ = tc.Write([]byte("hello"))
+			_, _ = io.ReadFull(tc, make([]byte, 5))
+			_ = tc.Close()
+		})
+}
+
+// A detector whose reference is missing (the browser profiles hold no Chrome hello for this wire) is
+// not measured: the row is neither red because of it nor green in spite of it.
+func TestCensorClassifierRowDoesNotCountADetectorWithoutAReference(t *testing.T) {
+	flows := libraryHelloFlows(t, "cover.example")
+	red, _ := classifierRow("tls-go", flows, nil, controlConfig())
+	require.Equal(t, gate.Red, red.Status, "without the exclusion D4 flags the library hello: %s", red.Value)
+	require.Contains(t, red.Value, "D4")
+
+	row, finding := classifierRowWith("tls-go", flows, nil, controlConfig(), map[string]string{"D4": "no Chrome http/1.1 JA4 in browserprofiles"})
+	assert.Equal(t, gate.NotMeasured, row.Status, "%s: %s", row.Value, row.Note)
+	assert.Contains(t, row.Note, "D4")
+	assert.Contains(t, row.Note, "no Chrome http/1.1 JA4")
+	assert.Empty(t, finding, "an artifact of the references is not a finding of the product")
+}
+
+// The exclusion is for the named detector only: another one that flags still makes the row red.
+func TestCensorClassifierRowStaysRedForADetectorThatIsNotExcluded(t *testing.T) {
+	flows := libraryHelloFlows(t, "foreign.example") // D3 flags the SNI too
+	row, finding := classifierRowWith("tls-go", flows, nil, controlConfig(), map[string]string{"D4": "no reference"})
+	assert.Equal(t, gate.Red, row.Status, "%s: %s", row.Value, row.Note)
+	assert.Contains(t, row.Value, "D3")
+	assert.NotEmpty(t, finding)
+	assert.NotContains(t, finding, "D4")
+}

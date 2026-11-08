@@ -187,3 +187,10 @@ func detectorOrder(id string) int {
 	_, _ = fmt.Sscanf(id, "D%d", &n)
 	return n
 }
+
+// classifierRowWith is classifierRow for a carrier whose reference or control is missing for some
+// detectors (name to reason): those are not judged, said so in the row, and a row with nothing else
+// red is not green.
+func classifierRowWith(name string, carrierFlows, browserFlows []censor.Flow, cfg censor.DetectorConfig, inconclusive map[string]string) (gate.Row, string) {
+	return classifierRow(name, carrierFlows, browserFlows, cfg)
+}
