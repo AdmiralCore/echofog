@@ -26,6 +26,7 @@ func Command(args []string, stdout, stderr io.Writer, now func() time.Time, comm
 	fs.StringVar(&f.Behaviour, "behaviour", "", "report of launchpad-behaviour")
 	fs.StringVar(&f.Baseline, "baseline", "", "signed baseline for the regression check")
 	fs.StringVar(&f.Speed, "speed", "", "JSON of carrier name to Mbit/s of `efv2 echo`")
+	fs.StringVar(&f.Scenarios, "scenarios", "", "scenarios.json of launchpad-scenarios (T15.1)")
 	out := fs.String("out", ".", "directory for gate.json and checklist.md")
 	allow := fs.Bool("allow-unmeasured", false, "accept a partial run (exit 0 although something was not measured); an empty run still exits 2")
 	sign := fs.String("write-baseline", "", "sign the report as a baseline and write it here, instead of judging it")

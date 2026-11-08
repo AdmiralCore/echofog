@@ -64,8 +64,8 @@ type RemoteLink interface {
 // The addresses of the tunnel device; the resolver sits inside the pool.
 const (
 	wholeTunName = "EchoFog"
-	// maxSeen bounds the addresses kept per exit; each is permitted for TCP and for UDP.
-	maxSeen = tun.MaxEndpoints / 2
+	// maxExitAddrs bounds the addresses kept per exit; each is permitted for TCP and for UDP.
+	maxExitAddrs = tun.MaxEndpoints / 2
 )
 
 var (
@@ -143,8 +143,8 @@ func (a *App) wholePlan(ctx context.Context, node string, link ExitLink) (tun.Pl
 		ap = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
 		if !slices.Contains(w.seen, ap) {
 			w.seen = append(w.seen, ap)
-			if len(w.seen) > maxSeen {
-				w.seen = w.seen[len(w.seen)-maxSeen:]
+			if len(w.seen) > maxExitAddrs {
+				w.seen = w.seen[len(w.seen)-maxExitAddrs:]
 			}
 		}
 	}

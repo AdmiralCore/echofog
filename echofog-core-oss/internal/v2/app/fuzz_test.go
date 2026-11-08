@@ -33,3 +33,48 @@ func FuzzExtractLink(f *testing.F) {
 		}
 	})
 }
+
+// FuzzUnwebInvite: the web form of a group invitation comes from anywhere. It must not panic, must not
+// grow the input beyond the prefix, and must take only data that sits in the fragment of the join page.
+func FuzzUnwebInvite(f *testing.F) {
+	for _, s := range []string{
+		"https://join.example.org/join/#group/AAAA", "https://join.example.org/join/?group/AAAA", "https://u@h/join/#group/AA",
+		"https://h/join/#group/", "https://h/join/#contact/AA", "echofog-group:2:AAAA", "", "https://", "https:///join/#group/x",
+		"https://h/x/join/#group/y", "https://h\x5c@x/join/#group/y", strings.Repeat("https://", 100),
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		got := app.UnwebInviteForTest(in)
+		if got == in {
+			return
+		}
+		if !strings.HasPrefix(got, "echofog-group:2:") || !strings.HasPrefix(in, "https://") || !strings.Contains(in, "/join/#group/") {
+			t.Fatalf("%q became %q", in, got)
+		}
+		host := in[len("https://"):strings.Index(in, "/join/#group/")]
+		if host == "" || strings.ContainsAny(host, "/?#@\x5c ") {
+			t.Fatalf("a host %q was taken", host)
+		}
+		if len(got) > len(in) {
+			t.Fatalf("the result is longer than the input")
+		}
+	})
+}
+
+// FuzzOpenSnapshot: a group file comes from anywhere. A file that is not sealed with the password never
+// opens, and no input makes the opener panic.
+func FuzzOpenSnapshot(f *testing.F) {
+	for _, s := range []string{"", "FOGZIP1\n", "FOGZIP2\n", "FOGZIP9\n" + strings.Repeat("a", 100), "FOGZIP2\n" + strings.Repeat("\x00", 80),
+		strings.Repeat("FOGZIP2\n", 20), "hello"} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, in []byte) {
+		if len(in) > 4096 {
+			return // keep the key derivation of a long garbage out of the loop
+		}
+		if d, err := app.OpenSnapshotForTest(in, "long enough pass"); err == nil {
+			t.Fatalf("a made-up file opened: %+v", d)
+		}
+	})
+}

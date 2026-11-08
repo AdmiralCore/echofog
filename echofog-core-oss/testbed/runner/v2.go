@@ -63,8 +63,8 @@ func init() {
 func isV2Scenario(s string) bool { return strings.HasPrefix(s, "v2-") }
 
 func validateV2Flags(scenario string) error {
-	if !isV2Scenario(scenario) {
-		return nil
+	if !isV2Scenario(scenario) || isV2LiveScenario(scenario) {
+		return nil // the live scenarios of T15.1 take none of the launchpad flags (v2live.go)
 	}
 	switch *v2Profile {
 	case "desktop", "android":

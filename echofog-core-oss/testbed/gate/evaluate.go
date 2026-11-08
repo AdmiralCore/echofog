@@ -66,6 +66,7 @@ func Evaluate(in Input) Result {
 	}
 	res.Rows = append(res.Rows, regressionRow(in, res.Changes))
 	res.Rows = append(res.Rows, speedRows(in)...)
+	res.Rows = append(res.Rows, scenarioRows(in.Scenarios)...)
 
 	res.Verdict = verdictOf(res.Rows)
 	for _, r := range res.Rows {
@@ -423,3 +424,7 @@ func ExitCode(r Result, allowUnmeasured bool) int {
 	}
 	return 0
 }
+
+// BehaviourRows is the gate's reading of a behaviour report (D24, D21, D25), for the scenarios that
+// take their rows from the same limits instead of keeping a copy.
+func BehaviourRows(b *behaviour.Report) []Row { return behaviourRows(b) }

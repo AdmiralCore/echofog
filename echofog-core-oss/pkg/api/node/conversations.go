@@ -35,13 +35,15 @@ type ChatRef struct {
 
 // ConversationDTO is one entry of the chat list.
 type ConversationDTO struct {
-	Ref     ChatRef      `json:"ref"`
-	Conv    string       `json:"conv"`
-	Title   string       `json:"title,omitempty"` // a group's title (a direct chat is named by the contact)
-	Last    *ChatMessage `json:"last,omitempty"`
-	LastTS  int64        `json:"lastTs"` // ms
-	Unread  int          `json:"unread"`
-	Request bool         `json:"request"` // a stranger's chat: shown among the message requests
+	Ref    ChatRef      `json:"ref"`
+	Conv   string       `json:"conv"`
+	Title  string       `json:"title,omitempty"` // a group's title (a direct chat is named by the contact)
+	Last   *ChatMessage `json:"last,omitempty"`
+	LastTS int64        `json:"lastTs"` // ms
+	Unread int          `json:"unread"`
+	// MutedUntil: notifications of this chat are silenced until then (unix seconds; 0 none)
+	MutedUntil int64 `json:"mutedUntil,omitempty"`
+	Request    bool  `json:"request"` // a stranger's chat: shown among the message requests
 	// Upgraded: the chat runs on the log, so replies, threads, edits, deletes, reactions and pins
 	// work. A group runs on it once every member's app does; until then only plain messages.
 	Upgraded bool `json:"upgraded"`

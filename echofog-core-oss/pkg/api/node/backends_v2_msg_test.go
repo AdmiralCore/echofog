@@ -471,7 +471,7 @@ func TestV2SubscriptionsMadeBeforeTheAttachAreKept(t *testing.T) {
 	api.OnFileTransfer(func(dtoFileTransfer) { mu.Lock(); file++; mu.Unlock() })
 	f := &fakeMsg{}
 	api.AttachV2Messenger(f)
-	f.push(app.ConvChange{Ref: app.ChatRef{Kind: "group", ID: groupID}, Messages: []convlog.Message{{ID: eventAAA, Author: peerBob, Text: "x"}}})
+	f.push(app.ConvChange{Ref: app.ChatRef{Kind: "group", ID: groupID}, Messages: []convlog.Message{{ID: eventAAA, Author: peerBob, Text: "x"}}, Fresh: []string{eventAAA}})
 	f.fileCb(app.Transfer{ID: "f1", State: app.FileDone})
 	mu.Lock()
 	defer mu.Unlock()
@@ -487,10 +487,10 @@ func TestV2SubscribeGroupEventsTellsMessagesAndMembership(t *testing.T) {
 	api.SubscribeGroupEvents(func(e GroupEvent) { mu.Lock(); got = append(got, e); mu.Unlock() })
 	g := app.ChatRef{Kind: "group", ID: groupID}
 	f.groups = []app.GroupInfo{{ID: groupID, Title: "Команда"}}
-	f.push(app.ConvChange{Ref: g, Messages: []convlog.Message{{ID: "m1", Author: peerBob, Text: "привет"}}})
-	f.push(app.ConvChange{Ref: g, Messages: []convlog.Message{{ID: "m2", Author: peerMe, Mine: true}}}) // own: no event
+	f.push(app.ConvChange{Ref: g, Messages: []convlog.Message{{ID: "m1", Author: peerBob, Text: "привет"}}, Fresh: []string{"m1"}})
+	f.push(app.ConvChange{Ref: g, Messages: []convlog.Message{{ID: "m2", Author: peerMe, Mine: true}}, Fresh: []string{"m2"}}) // own: no event
 	f.push(app.ConvChange{Ref: g, Reload: true})
-	f.push(app.ConvChange{Ref: app.ChatRef{Kind: "dm", ID: nodeBob}, Messages: []convlog.Message{{ID: "m3", Author: peerBob}}}) // a direct chat is no group
+	f.push(app.ConvChange{Ref: app.ChatRef{Kind: "dm", ID: nodeBob}, Messages: []convlog.Message{{ID: "m3", Author: peerBob}}, Fresh: []string{"m3"}}) // a direct chat is no group
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, got, 2)
@@ -506,9 +506,7 @@ func TestV2LegacyMessageCallsGoThroughTheChat(t *testing.T) {
 	// the message channel of v1 stays closed: v2 tells of new messages through conv:change
 	_, open := <-api.MessageHandler()
 	require.False(t, open)
-	// saved messages and the reset of a session are not built
-	_, err := api.ListSavedMessages()
-	require.ErrorIs(t, err, ErrV2NotBuilt)
+	// the reset of a session is not built (the sessions of v2 are not reset by hand)
 	require.ErrorIs(t, api.ResetEncryptionSession(nodeBob), ErrV2NotBuilt)
 }
 
@@ -719,10 +717,7 @@ func TestV2GroupMessagesOfV1GoThroughTheChat(t *testing.T) {
 
 func TestV2WhatTheAppCannotDoYetIsNotBuilt(t *testing.T) {
 	api, _ := newMsgApi(t)
-	require.ErrorIs(t, api.GroupSnapshotExport(groupID, "x", "password1"), ErrV2NotBuilt)
-	_, err := api.GroupSnapshotImport("x", "password1")
-	require.ErrorIs(t, err, ErrV2NotBuilt)
-	require.ErrorIs(t, api.AddGroupMember(groupID, nodeBob), ErrV2NotBuilt)
+	// closing a group and a file in a group wait for the wire (SPEC-FIX-1108, T11.3e-1): no guess at a format
 	require.ErrorIs(t, api.DeleteGroup(groupID), ErrV2NotBuilt)
 }
 
@@ -904,3 +899,6 @@ func (f *fakeMsg) ActiveGroupCall(group, room string) (app.GroupCallInfo, bool) 
 	}
 	return app.GroupCallInfo{}, false
 }
+
+// the news of the channels: none unless a test brings them
+func (f *fakeMsg) GroupChannelStats(string) (map[string]app.ChannelStat, error) { return nil, nil }

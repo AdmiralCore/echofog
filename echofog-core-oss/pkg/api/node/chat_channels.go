@@ -32,6 +32,9 @@ type ChannelDTO struct {
 	Overrides []convlog.Override `json:"overrides,omitempty"`
 	Unread    int                `json:"unread"`
 	LastTS    int64              `json:"lastTs"` // ms
+	// Mentions: unread messages that name me; Last: the channel's last message (the column shows it)
+	Mentions int          `json:"mentions,omitempty"`
+	Last     *ChatMessage `json:"last,omitempty"`
 	// CanSend: I may post in it; CanJoin: I may join its call (a voice room)
 	CanSend bool `json:"canSend"`
 	CanJoin bool `json:"canJoin"`

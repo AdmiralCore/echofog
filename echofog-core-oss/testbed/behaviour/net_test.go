@@ -203,3 +203,68 @@ func TestReportSaysWhatItDidNotCheck(t *testing.T) {
 	}
 	assert.NotEmpty(t, r.Findings)
 }
+
+// On Windows a datagram written to a UDP port nobody listens on any more comes back as an ICMP
+// "port unreachable", and the next read on the same socket fails with "connection reset". The netem
+// used to stop forwarding for good at the first such error: a lab path that dies by itself.
+func TestNetemKeepsForwardingAfterADatagramToAClosedPort(t *testing.T) {
+	echo := udpEcho(t)
+	em, err := StartNetem(echo, NetemConfig{Seed: 1})
+	require.NoError(t, err)
+	defer em.Close()
+
+	// a client that sends and goes away before the echo comes back: the netem answers into a closed port
+	gone, err := net.Dial("udp", em.Addr())
+	require.NoError(t, err)
+	_, err = gone.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, gone.Close())
+	time.Sleep(300 * time.Millisecond)
+
+	got, _ := roundTrips(t, em.Addr(), 10, 100)
+	assert.Equal(t, 10, got, "a new client still gets its echo")
+}
+
+// The same on the side of the target: the server's port is closed for a moment, the connected socket
+// of the netem hears "connection reset", and the path must still carry the traffic when it is back.
+func TestNetemKeepsForwardingWhenTheTargetWasUnreachableForAMoment(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	target := pc.LocalAddr().String()
+	require.NoError(t, pc.Close()) // nobody listens yet
+	em, err := StartNetem(target, NetemConfig{Seed: 1})
+	require.NoError(t, err)
+	defer em.Close()
+
+	c, err := net.Dial("udp", em.Addr())
+	require.NoError(t, err)
+	defer c.Close()
+	for i := 0; i < 3; i++ { // each is forwarded into a closed port
+		_, _ = c.Write([]byte("early"))
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	back, err := net.ListenPacket("udp", target)
+	require.NoError(t, err)
+	defer back.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := back.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = back.WriteTo(buf[:n], from)
+		}
+	}()
+	buf := make([]byte, 2048)
+	ok := false
+	for i := 0; i < 10 && !ok; i++ {
+		_, _ = c.Write([]byte("late"))
+		_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		if n, err := c.Read(buf); err == nil && string(buf[:n]) == "late" {
+			ok = true
+		}
+	}
+	assert.True(t, ok, "the same client is answered once the target is back")
+}
