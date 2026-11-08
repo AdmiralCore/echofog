@@ -2,8 +2,10 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -115,5 +117,44 @@ func TestPathAttemptsPrefersAnotherFamily(t *testing.T) {
 		if h := attemptHost(got[i].Addr); h != want[i] {
 			t.Fatalf("attempt %d is %q, want %q (order %v)", i, h, want[i], got)
 		}
+	}
+}
+
+// fakeClock is a virtual clock for the carrier policy (AD13).
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) Now() time.Time                                { return c.now }
+func (c *fakeClock) AfterFunc(time.Duration, func()) carrier.Timer { return nil }
+
+func runtimeWithPair(clk carrier.Clock, sid [16]byte) (*Runtime, session.Pair) {
+	pair := session.Pair{Host: "192.0.2.1", SNI: "cover.example"}
+	r := &Runtime{
+		policy:    session.NewPathPolicy(session.PathPolicyConfig{Clock: clk}),
+		pathPairs: map[pathKey]session.Pair{{sid: sid, id: 0}: pair},
+		deadPaths: map[pathKey]struct{}{},
+	}
+	_ = r.policy.Acquire(pair)
+	return r, pair
+}
+
+// A path that died of silence alone is not the H15 penalty signal (a reset or a handshake timeout):
+// the carrier worked until the network went away, and an outage of seconds must not close the pair
+// for two minutes. A reset still does.
+func TestSilentPathDeathStartsNoBackoff(t *testing.T) {
+	clk := &fakeClock{now: time.Unix(1_800_000_000, 0)}
+	var sid [16]byte
+	r, pair := runtimeWithPair(clk, sid)
+	r.pathFailed(mux.PathFailure{SID: sid, PathID: 0, Cause: fmt.Errorf("%w: %w", mux.ErrPathFailed, mux.ErrPathSilent)})
+	if _, in := r.policy.Backoff(pair); in {
+		t.Fatal("a path that only went silent closed its pair")
+	}
+	if n := r.policy.Open(pair); n != 0 {
+		t.Fatalf("the slot of the dead path was not released: %d open", n)
+	}
+
+	r, pair = runtimeWithPair(clk, sid)
+	r.pathFailed(mux.PathFailure{SID: sid, PathID: 0, Cause: &mux.CloseError{Code: 1, Remote: true}})
+	if _, in := r.policy.Backoff(pair); !in {
+		t.Fatal("a path that was reset did not start the H15 backoff")
 	}
 }
