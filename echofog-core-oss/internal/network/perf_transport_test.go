@@ -513,7 +513,7 @@ func TestPerfTransports(t *testing.T) {
 				"mode": mode, "bulk_MBps": perf.Summarize(mbps), "bulk_cpu_ms_per_MB": perf.Summarize(cpuPerMB),
 				"bulk_core_pct": perf.Summarize(corePct), "paced47_core_pct": perf.Summarize(pacedPct),
 				"paced47_cpu_ms_per_MB": perf.Summarize(pacedCPUPerMB),
-				"rtt_idle_ms": si, "rtt_loaded_ms": sl,
+				"rtt_idle_ms":           si, "rtt_loaded_ms": sl,
 			})
 			t.Logf("%-8s bulk %s MB/s, %s CPU-ms/MB (%s %% core) | 47 Mbit/s: %s %% core, %s CPU-ms/MB | rtt idle p50 %.3f p99 %.3f ms, loaded p50 %.2f p99 %.2f ms",
 				mode, perf.Summarize(mbps), perf.Summarize(cpuPerMB), perf.Summarize(corePct), perf.Summarize(pacedPct),

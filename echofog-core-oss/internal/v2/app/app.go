@@ -137,6 +137,9 @@ type Config struct {
 	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
 	Exit      ExitDialer
 	VPNListen string
+	// WholeComputer holds the drivers of the whole-computer mode with its kill switch (T10.6b); nil
+	// turns the mode off.
+	WholeComputer *WholeComputerConfig
 	// CallCooldown is the least time between two new calls announced by one member of a group; zero means
 	// 30 s, negative turns it off. MaxGroupCalls bounds the calls going on at once in one group (its own
 	// and its voice rooms'); zero means 16. A call beyond either is not shown: silence.
@@ -166,6 +169,7 @@ type App struct {
 	fx        fileState
 	gev       groupEvents
 	vpn       vpnState
+	whole     wholeState
 	gc        callBook
 	vmu       sync.Mutex // the saved exits and the history
 	svmu      sync.Mutex // the saved messages and their count
