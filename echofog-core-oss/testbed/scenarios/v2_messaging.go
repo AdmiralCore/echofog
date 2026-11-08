@@ -2,7 +2,6 @@ package scenarios
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -18,17 +17,14 @@ func messagingScenario() Scenario {
 
 // messagingWorld is two chat nodes; b listens behind a netem with loss and delay. They are linked
 // by a contact link.
-// errNoDirectory marks a world that met but whose directory does not resolve.
-var errNoDirectory = errors.New("the DHT does not resolve")
-
 func messagingWorld(ctx context.Context, dir string, em behaviour.NetemConfig) (*World, *Node, *Node, error) {
 	w := NewWorld(dir)
-	b, err := w.Add(NodeSpec{Name: "b", Server: true, Cover: true, Chat: true, Listen: true, Netem: &em})
+	b, err := w.Add(NodeSpec{Name: "b", Server: true, LabChat: true, Listen: true, Netem: &em})
 	if err != nil {
 		w.Close()
 		return nil, nil, nil, err
 	}
-	a, err := w.Add(NodeSpec{Name: "a", Server: true, Cover: true, Chat: true, Listen: true})
+	a, err := w.Add(NodeSpec{Name: "a", Server: true, LabChat: true, Listen: true})
 	if err != nil {
 		w.Close()
 		return nil, nil, nil, err
@@ -37,20 +33,9 @@ func messagingWorld(ctx context.Context, dir string, em behaviour.NetemConfig) (
 		w.Close()
 		return nil, nil, nil, err
 	}
-	// the world lives on loopback, which the DHT client refuses as a peer address unless told otherwise
-	a.RT.DHT().SetAllowNonRoutable(true)
-	b.RT.DHT().SetAllowNonRoutable(true)
 	if _, _, err := a.Dial(ctx, b); err != nil {
 		w.Close()
 		return nil, nil, nil, err
-	}
-	// The first publication into the DHT ran at start, before the two knew each other, and the
-	// product tries again after five minutes; the world skips them, and the directory is ready
-	// within the minute the republication loop ticks.
-	w.Skip(6 * time.Minute)
-	if err := awaitDirectory(ctx, a, b, 20*time.Second); err != nil {
-		w.Close()
-		return nil, nil, nil, fmt.Errorf("%w: %v", errNoDirectory, err)
 	}
 	return w, a, b, nil
 }
@@ -86,18 +71,6 @@ func runMessaging(ctx context.Context, env Env) (res Result) {
 
 	// both ways over a lossy, slow path
 	w, a, b, err := messagingWorld(ctx, dir, behaviour.NetemConfig{Loss: 0.10, Delay: 40 * time.Millisecond, Seed: env.Seed})
-	if errors.Is(err, errNoDirectory) {
-		// The two nodes met over real noise3, but chat/2 finds a recipient's prekeys through the DHT, and the DHT
-		// of the world does not resolve: the loopback world is not the network the routing tables and the
-		// diversity rules are built for. Nothing of the delivery was measured, and the rows say so.
-		const why = "chat/2 resolves the recipient through the DHT and the lookup stays inconclusive in the loopback world (tried: two nodes, five nodes in a mesh, the clock skipped past the five-minute republication, AllowNonRoutable on); a finding for the DHT in a lab, see the report"
-		res.Rows = append(res.Rows, newRow("v2-messaging/session", "session", "open over noise3", "a real session", gate.Green, ""))
-		for _, id := range []string{"exactly-once", "offline-queue", "state"} {
-			res.Rows = append(res.Rows, newRow("v2-messaging/"+id, "delivery", "not measured", "once each, both ways", gate.NotMeasured, why))
-		}
-		res.NotChecked = append(res.NotChecked, why+": "+err.Error())
-		return res
-	}
 	if err != nil {
 		res.Rows = append(res.Rows, newRow("v2-messaging/session", "session", err.Error(), "a real session", gate.Red, "the two nodes did not meet"))
 		return res
@@ -135,7 +108,7 @@ func runMessaging(ctx context.Context, env Env) (res Result) {
 	res.NotChecked = []string{
 		"a mailbox: a message for a recipient that is away is deposited at a mailbox server; the world has no mailbox server and no DHT, so the outbox's own waiting is what is measured",
 		"restart of a node (kill -9 and start on the same store) and the group chat: need several processes, the stand",
-		"the prekeys come from the contact link, not from the DHT",
+		"the directory: the two chat services share the lab's directory (device list and prekeys of a node of the world) instead of the DHT, whose lookup stays inconclusive on loopback (tried: two and five nodes, AllowNonRoutable, the clock moved past the republication); the DHT, the card/prekeys publication and the bundle fetch are not exercised",
 	}
 	return res
 }
@@ -164,20 +137,4 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) gate.Row {
 		return newRow(id, "offline", value, "10 of 10, once each", gate.Red, "")
 	}
 	return newRow(id, "offline", value, "10 of 10, once each", gate.Green, "")
-}
-
-// awaitDirectory waits until each node finds the other through the DHT.
-func awaitDirectory(ctx context.Context, a, b *Node, within time.Duration) error {
-	deadline := time.Now().Add(within)
-	for {
-		_, errAB := a.RT.DHT().Resolve(ctx, [32]byte(b.ID.NodeID))
-		_, errBA := b.RT.DHT().Resolve(ctx, [32]byte(a.ID.NodeID))
-		if errAB == nil && errBA == nil {
-			return nil
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return fmt.Errorf("the directory does not resolve: a to b %v, b to a %v", errAB, errBA)
-		}
-		time.Sleep(2 * time.Second)
-	}
 }

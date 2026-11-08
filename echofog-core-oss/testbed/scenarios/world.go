@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
-	"github.com/echofog/echofog-core/internal/v2/app"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/chat"
+	chatcrypto "github.com/echofog/echofog-core/internal/v2/chat/crypto"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/identity"
-	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -57,7 +57,7 @@ type NodeSpec struct {
 	Server  bool                   // the server profile: DHT server, mailbox and relay roles, role server in its card
 	Listen  bool                   // a real noise3 listener on loopback
 	Hidden  bool                   // a card that is not published
-	Chat    bool                   // chat/2 on
+	LabChat bool                   // chat/2 with the lab's directory in place of the DHT (world_chat.go)
 	Cover   bool                   // a card entry for a camouflaged address, so the node has a public card and is listed (the address is not served)
 	Exit    bool                   // the product exit role: the node offers exit/2 with the node module (private targets refused)
 	LabExit bool                   // the exit server of the product on a node without the exit role, with private targets allowed: the lab web server stands on loopback
@@ -85,12 +85,15 @@ type Node struct {
 	// Inbox records the chat events when the node has chat.
 	Inbox *Inbox
 
-	tw     *identity.Throwaway
-	app    *app.App
-	access *access.Manager
+	tw       *identity.Throwaway
+	devRaw   []byte // the signed device list of the account
+	chat     *chat.Service
+	chatKeys *chatcrypto.Crypto
+	closers  []func()
+	cancel   context.CancelFunc
+	access   *access.Manager
 	// AccessAddr is where the invitations of a hidden node listen (noise3); empty on other nodes.
 	AccessAddr string
-	links      *links.Service
 	store      *store.Store
 	builder    *cards.CardBuilder
 	started    bool
@@ -233,17 +236,13 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	cfg := node.Config{
 		Clock: clk, CarrierClock: &w.clk,
 		Account: tw.Account, Device: tw.Device, Cards: n.builder, Store: n.store, Profile: profile,
-		ListenerSources: sources, Chat: spec.Chat,
+		ListenerSources: sources,
 		// path migration is what AddPath, NetworkChanged and the punch upgrade need; no production code
 		// sets it yet (finding of T15.1), so the world sets it as the node tests do
 		Features:  []uint32{uint32(frame.FeaturePathMigration), uint32(frame.FeatureCardPush)},
 		Access:    mgr,
 		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr(host)}},
 		Country:   func(netip.Addr) (string, bool) { return "ZZ", true },
-	}
-	if spec.Chat {
-		n.Inbox = newInbox()
-		cfg.ChatEvents = n.Inbox.events()
 	}
 	if spec.Mutate != nil {
 		spec.Mutate(&cfg)
@@ -252,11 +251,19 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err != nil {
 		return fail(fmt.Errorf("node: %w", err))
 	}
+	if spec.LabChat {
+		n.Inbox = newInbox()
+		n.ID = node.Identity{NodeID: node.NodeID(tw.Account.NodeID()), DeviceID: node.DeviceID(tw.Device.ID())}
+		if err := w.attachChat(n); err != nil {
+			return fail(err)
+		}
+	}
 	if spec.LabExit {
 		if err := registerLabExit(n.RT); err != nil {
 			return fail(err)
 		}
 	}
+	n.devRaw = devices
 	n.ID = node.Identity{NodeID: node.NodeID(tw.Account.NodeID()), DeviceID: node.DeviceID(tw.Device.ID())}
 
 	w.mu.Lock()
@@ -302,6 +309,11 @@ func (n *Node) Start(ctx context.Context) error {
 		return err
 	}
 	n.started = true
+	if n.chat != nil {
+		cctx, cancel := context.WithCancel(context.Background())
+		n.cancel = cancel
+		n.tickChat(cctx)
+	}
 	return nil
 }
 
@@ -316,6 +328,9 @@ func (n *Node) Stop(ctx context.Context) error {
 }
 
 func (n *Node) close() {
+	if n.cancel != nil {
+		n.cancel()
+	}
 	if n.RT != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = n.RT.Stop(ctx)
@@ -325,6 +340,9 @@ func (n *Node) close() {
 		if em != nil {
 			em.Close()
 		}
+	}
+	for _, f := range n.closers {
+		f()
 	}
 	if n.access != nil {
 		n.access.Close()
