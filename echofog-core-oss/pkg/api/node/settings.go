@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
@@ -229,4 +230,13 @@ func (n *NodeApi) SetProtocol(protocol int) error {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	return saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.Protocol = protocol })
+}
+
+// forcedProtocol is the mode the launch flag chose for this run (0: none).
+var forcedProtocol atomic.Int32
+
+// ForceProtocol makes protocol (1 or 2) the mode of this run, whatever the profile saved (the launch flag
+// --protocol, T11.7). It saves nothing. Any other value, 0 included, takes the choice back.
+func ForceProtocol(protocol int) {
+	forcedProtocol.Store(0)
 }
