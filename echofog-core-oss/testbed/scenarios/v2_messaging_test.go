@@ -15,7 +15,7 @@ import (
 // loopback world does not resolve; the directory is the test's, the chat service, its crypto, the
 // outbox and the stream to the peer are the product's).
 func TestMessagingScenarioIsGreenInTheModel(t *testing.T) {
-	r := runModel(t, "v2-messaging", 15*time.Minute)
+	r := runModel(t, "v2-messaging", 6*time.Minute)
 	// the offline queue may be red on a loaded machine: a finding of the session layer, reported with
 	// the time the recovery took (see the report); every other row is green
 	requireGreenExcept(t, r, map[string]bool{"v2-messaging/offline-queue": true},

@@ -172,11 +172,18 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) (gate.Row, string
 }
 
 // offlineWatchFor is how long the row watches after the limit.
-func offlineWatchFor(Env) time.Duration { return offlineWatch }
+func offlineWatchFor(env Env) time.Duration {
+	if env.Short {
+		return offlineWatchShort
+	}
+	return offlineWatch
+}
 
 const (
 	offlineLimit = 2 * time.Minute
 	offlineWatch = 9 * time.Minute
+	// offlineWatchShort keeps go test inside its default ten minutes when the row is red.
+	offlineWatchShort = 3 * time.Minute
 )
 
 // offlineWhy says what the two ends knew when the messages did not arrive: every session with its
