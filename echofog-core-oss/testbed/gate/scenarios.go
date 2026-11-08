@@ -98,7 +98,11 @@ func scenarioRows(list []ScenarioResult) []Row {
 				continue
 			}
 			st := Green
+			judged := 0
 			for _, r := range res.Rows {
+				if r.Status == Green || r.Status == Yellow || r.Status == Red {
+					judged++
+				}
 				rr := r
 				rr.ID = "scenario:" + name + "/" + r.ID
 				if rr.Source == "" {
@@ -120,7 +124,7 @@ func scenarioRows(list []ScenarioResult) []Row {
 			case res.Runs < ScenariosNeeded:
 				st = NotMeasured
 				row.Note = fmt.Sprintf("%d of %d runs", res.Runs, ScenariosNeeded)
-			case len(res.Rows) == 0:
+			case judged == 0:
 				st = NotMeasured
 				row.Note = "the scenario measured nothing"
 			}

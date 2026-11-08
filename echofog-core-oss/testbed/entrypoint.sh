@@ -58,7 +58,10 @@ efv2)
   if [ -n "${GATEWAY:-}" ]; then
     ip route replace default via "$GATEWAY"
   fi
-  efv2 init --data /data --profile "${EFV2_PROFILE:-desktop}" >/tmp/init.log 2>&1
+  if ! efv2 init --data /data --profile "${EFV2_PROFILE:-desktop}" >/tmp/init.log 2>&1; then
+    cat /tmp/init.log >&2
+    exit 1
+  fi
   case "${EFV2_MODE:-idle}" in
   serve) exec efv2 run --data /data --listen "${EFV2_LISTEN:?EFV2_LISTEN is required with EFV2_MODE=serve}" ;;
   idle) exec sleep infinity ;;
