@@ -450,3 +450,30 @@ func FuzzServe(f *testing.F) {
 		}
 	})
 }
+
+// B: the helper has administrator rights; a resolver that is not inside the tunnel, or carries an
+// IPv6 zone, is refused before any driver is called, whatever the application sends.
+func TestTheHelperRefusesAForeignResolver(t *testing.T) {
+	for name, resolver := range map[string]string{
+		"zone with a command": "fe80::1%a';calc.exe;'",
+		"public":              "8.8.8.8",
+		"outside the pool":    "10.0.0.2",
+	} {
+		w := newWorld(t)
+		a, b := net.Pipe()
+		go func() { _ = ks.Serve(ctx, b, ks.Backend{Firewall: w.fw, Tunnel: w.tn, DNS: w.dns}) }()
+		req, _ := json.Marshal(map[string]any{"id": 1, "op": "dns.protect",
+			"dns": map[string]any{"Tunnel": "EchoFog", "Resolver": resolver, "DisableSmartNameResolution": true}})
+		_ = a.SetDeadline(time.Now().Add(3 * time.Second))
+		_, _ = a.Write(append(req, '\n'))
+		line, _ := bufio.NewReader(a).ReadString('\n')
+		var resp struct{ Err string }
+		if json.Unmarshal([]byte(line), &resp) != nil || resp.Err == "" {
+			t.Errorf("%s: answer %q: accepted", name, line)
+		}
+		if w.dns.Protects != 0 {
+			t.Errorf("%s: the DNS driver was called", name)
+		}
+		_ = a.Close()
+	}
+}

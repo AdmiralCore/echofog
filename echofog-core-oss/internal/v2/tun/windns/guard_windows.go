@@ -42,7 +42,7 @@ type Guard struct {
 	root      registry.Key
 	policy    string // the DNS client policy key
 	state     string // where the original values are kept until Restore
-	runPS     func(ctx context.Context, script string) error
+	runPS     func(ctx context.Context, script string, env []string) error
 	flush     func()
 	nrptLabel string
 }
@@ -60,7 +60,7 @@ func system32(name string) string {
 	return name
 }
 
-func powershell(ctx context.Context, script string) error {
+func powershell(ctx context.Context, script string, env []string) error {
 	exe := system32(`WindowsPowerShell\v1.0\powershell.exe`)
 	cmd := exec.CommandContext(ctx, exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -127,7 +127,7 @@ func (g *Guard) Protect(ctx context.Context, cfg tun.DNSConfig) error {
 		}
 	}
 	pol.Close()
-	if err := g.runPS(ctx, namespaceRule(cfg.Resolver, g.nrptLabel)); err != nil {
+	if err := g.runPS(ctx, namespaceRule(cfg.Resolver, g.nrptLabel), nil); err != nil {
 		return err
 	}
 	g.flush()
@@ -149,7 +149,7 @@ func removeRule(label string) string {
 
 func (g *Guard) Restore(ctx context.Context) error {
 	var errs []error
-	if err := g.runPS(ctx, removeRule(g.nrptLabel)); err != nil {
+	if err := g.runPS(ctx, removeRule(g.nrptLabel), nil); err != nil {
 		errs = append(errs, err)
 	}
 	st, err := registry.OpenKey(g.root, g.state, registry.QUERY_VALUE)

@@ -23,6 +23,7 @@ type rig struct {
 	state   string
 	mu      sync.Mutex
 	scripts []string
+	envs    [][]string
 	flushes int
 }
 
@@ -37,9 +38,10 @@ func newRig(t *testing.T) *rig {
 	})
 	r.g = &Guard{
 		root: registry.CURRENT_USER, policy: r.policy, state: r.state, nrptLabel: "EchoFog kill switch",
-		runPS: func(_ context.Context, s string) error {
+		runPS: func(_ context.Context, s string, env []string) error {
 			r.mu.Lock()
 			r.scripts = append(r.scripts, s)
+			r.envs = append(r.envs, env)
 			r.mu.Unlock()
 			return nil
 		},
@@ -87,10 +89,17 @@ func TestProtectSetsThePolicyAndTheNamespaceRule(t *testing.T) {
 		t.Fatalf("%d scripts: %v", len(r.scripts), r.scripts)
 	}
 	s := r.scripts[0]
-	for _, want := range []string{"Add-DnsClientNrptRule", "198.18.0.2", "EchoFog kill switch", "-Namespace"} {
+	for _, want := range []string{"Add-DnsClientNrptRule", "EchoFog kill switch", "-Namespace", "$env:EF_RESOLVER"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script lacks %q:\n%s", want, s)
 		}
+	}
+	// B: the address travels in the environment of the child, never inside the text of the script
+	if strings.Contains(s, "198.18.0.2") {
+		t.Errorf("the resolver is pasted into the script: %s", s)
+	}
+	if got := r.envs[0]; len(got) != 1 || got[0] != "EF_RESOLVER=198.18.0.2" {
+		t.Errorf("environment of the script: %v", got)
 	}
 	if r.flushes == 0 {
 		t.Error("the resolver cache was not flushed: cached real addresses would bypass the tunnel resolver")
@@ -180,5 +189,50 @@ func TestRestoreWhenNothingWasProtected(t *testing.T) {
 	}
 	if len(r.scripts) > 1 {
 		t.Errorf("scripts: %v", r.scripts)
+	}
+}
+
+// B: this code runs with administrator rights. A zone, a quote or an address outside the tunnel never
+// reaches PowerShell or the registry.
+func TestProtectRefusesAHostileResolver(t *testing.T) {
+	for name, a := range map[string]string{
+		"zone with a command": "fdfe:dcba:9876::2%a';calc.exe;'",
+		"zone":                "fe80::1%eth0",
+		"public":              "8.8.8.8",
+		"LAN":                 "192.168.1.1",
+	} {
+		r := newRig(t)
+		c := cfg
+		c.Resolver = netip.MustParseAddr(a)
+		if err := r.g.Protect(context.Background(), c); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+		if len(r.scripts) != 0 {
+			t.Errorf("%s: a script ran: %v", name, r.scripts)
+		}
+		if _, ok := r.value(t, "DisableSmartNameResolution"); ok {
+			t.Errorf("%s: the registry was touched", name)
+		}
+	}
+}
+
+// D: Restore ends the state: the key that holds the originals is gone, so a later Protect takes new
+// ones and a later Restore cannot put back stale values.
+func TestRestoreDeletesTheStateKey(t *testing.T) {
+	r := newRig(t)
+	if err := r.g.Protect(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	k, err := registry.OpenKey(registry.CURRENT_USER, r.state, registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatal("no state key while protected")
+	}
+	k.Close()
+	if err := r.g.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := registry.OpenKey(registry.CURRENT_USER, r.state, registry.QUERY_VALUE); err == nil {
+		k.Close()
+		t.Fatal("the state key is still there after Restore")
 	}
 }

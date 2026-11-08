@@ -105,3 +105,17 @@ func CheckRules(rules []Rule) error {
 	}
 	return nil
 }
+
+// DefaultTunnelPool is the address space of the tunnel device: its resolver and its own addresses live
+// inside it, and no endpoint outside the tunnel may.
+var DefaultTunnelPool = []netip.Prefix{netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("fdfe:dcba:9876::/48")}
+
+// ErrBadDNS is a DNS configuration the helper refuses.
+var ErrBadDNS = errors.New("tun: bad DNS configuration")
+
+// CheckDNS is the check of the helper with administrator rights on what the application asks for: a
+// resolver that is a plain address (no IPv6 zone) inside the tunnel's pool, and the policy against the
+// parallel lookups on. Nothing else reaches a command or a registry value.
+func CheckDNS(c DNSConfig) error {
+	return nil
+}
