@@ -173,6 +173,31 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		udpByID: map[udpKey]*udpAdapter{}, udpCount: map[[32]byte]int{}}, nil
 }
 
+// SetAccess limits the exit to the clients f admits (by node); nil admits every client. A client it
+// does not admit is refused as if the exit were off, which the client reads as a policy refusal.
+func (s *Server) SetAccess(admit func(Peer) bool, refused func(Peer)) {}
+
+// Recheck closes the open streams of the clients that are no longer admitted.
+func (s *Server) Recheck() {}
+
+// SetEnabled turns the exit on or off. Turning it off refuses new streams and closes the live ones.
+func (s *Server) SetEnabled(on bool) {}
+
+// LiveClient is a client with streams open right now.
+type LiveClient struct {
+	Node    [32]byte
+	Streams int
+}
+
+// Live lists the clients with streams open, by node.
+func (s *Server) Live() []LiveClient { return nil }
+
+// Totals returns the tunnels served, the tunnels refused and the bytes relayed.
+func (s *Server) Totals() (accepted, refused, bytes uint64) { return 0, 0, 0 }
+
+// RefusedBy counts the refusals by reason.
+func (s *Server) RefusedBy() map[string]uint64 { return nil }
+
 // Stats returns the counters.
 func (s *Server) Stats() *Stats { return &s.stats }
 

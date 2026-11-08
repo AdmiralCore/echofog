@@ -74,6 +74,10 @@ func (r *Registry) Serve(id, version uint64, h Handler) {
 // ServeSpec registers a service version that is not built in (a later or experimental service).
 func (r *Registry) ServeSpec(sp Spec, version uint64, h Handler) { r.add(sp, version, h, true) }
 
+// Remove stops serving and offering a service: its handlers go and it leaves the offer of new
+// sessions. Sessions already open keep what they negotiated.
+func (r *Registry) Remove(id uint64) {}
+
 // Use registers a built-in service version this node opens as a client but does not serve.
 func (r *Registry) Use(id, version uint64) {
 	sp, ok := Builtin(id)
