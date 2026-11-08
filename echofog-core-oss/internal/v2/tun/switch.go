@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // State of the kill switch.
@@ -42,8 +43,11 @@ type Config struct {
 	DNS      DNSGuard
 	Plan     Plan
 	Tun      TunConfig
-	// OnState is called after every state change, outside the lock.
+	// OnState is called after every state change, outside the lock, one call at a time and in the
+	// order of the changes.
 	OnState func(State, error)
+	// PollInterval is how often the Switch asks Tunnel.Alive (0: once per second).
+	PollInterval time.Duration
 }
 
 type change struct {
@@ -233,6 +237,11 @@ func (s *Switch) Stop(ctx context.Context) error {
 	}
 	s.set(StateOff, nil)
 	return errors.Join(errs...)
+}
+
+// Update replaces the rules while the mode runs (the exit changed, the node moved, a key rotated).
+func (s *Switch) Update(ctx context.Context, p Plan) error {
+	return errors.New("tun: Update is not implemented")
 }
 
 // Close ends the watcher; it does not change the filters.

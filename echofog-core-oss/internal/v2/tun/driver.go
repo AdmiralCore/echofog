@@ -42,8 +42,13 @@ type TunEvent struct {
 type Tunnel interface {
 	Up(ctx context.Context, cfg TunConfig) error
 	Down(ctx context.Context) error
-	// Events delivers one event when a running tunnel is lost; it is not used for Down.
+	// Events delivers one event when a running tunnel is lost; it is not used for Down. The driver
+	// never closes the channel (the Switch stops watching a closed one).
 	Events() <-chan TunEvent
+	// Alive asks the device itself whether the tunnel is up. The Switch asks once per
+	// Config.PollInterval, so a lost event (a full buffer, a missed notification) still ends in
+	// StateHeld.
+	Alive(ctx context.Context) bool
 }
 
 // DNSConfig is the DNS protection of the tunnel mode.

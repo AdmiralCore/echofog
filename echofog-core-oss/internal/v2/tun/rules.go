@@ -63,8 +63,10 @@ type Rule struct {
 	V6         bool         // the rule applies to IPv6 (otherwise IPv4)
 	RemotePort uint16       // 0: any
 	LocalPort  uint16       // 0: any
-	Weight     uint8
-	Persistent bool
+	// ICMPLo..ICMPHi limit an ICMP rule to these message types (both 0: any type).
+	ICMPLo, ICMPHi uint8
+	Weight         uint8
+	Persistent     bool
 }
 
 // Packet is what Evaluate decides on.
@@ -74,6 +76,9 @@ type Packet struct {
 	Proto  Proto
 	Remote netip.AddrPort
 	Local  uint16
+	// ICMPType is the message type of an ICMP packet (ICMPv6: 133 router solicitation ... 136
+	// neighbour advertisement).
+	ICMPType uint8
 }
 
 // Plan describes what the kill switch must allow around the tunnel.

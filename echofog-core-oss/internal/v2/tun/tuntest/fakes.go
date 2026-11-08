@@ -36,8 +36,17 @@ func (j *Journal) Entries() []string {
 // Kernel is the firewall state of the fake computer. It survives a new Firewall handle, like the
 // BFE survives a process.
 type Kernel struct {
-	mu    sync.Mutex
-	rules []tun.Rule
+	mu      sync.Mutex
+	rules   []tun.Rule
+	history [][]tun.Rule
+}
+
+// History returns every rule set the kernel held, in order: one entry per Install, and a nil entry
+// per Remove. A test uses it to prove that no moment of a change was open.
+func (k *Kernel) History() [][]tun.Rule {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([][]tun.Rule(nil), k.history...)
 }
 
 // Rules returns the installed rules.
@@ -55,6 +64,10 @@ type Firewall struct {
 	Unprivileged            bool
 	Installs, Removes       int
 	J                       *Journal
+	// RemoveCtxErr is ctx.Err() of the last Remove call; RemoveDeadline whether that context had a
+	// deadline. A rollback must not call the firewall with a context that is already cancelled.
+	RemoveCtxErr   error
+	RemoveDeadline bool
 }
 
 func (f *Firewall) Install(_ context.Context, rules []tun.Rule) error {
@@ -69,18 +82,22 @@ func (f *Firewall) Install(_ context.Context, rules []tun.Rule) error {
 		return f.FailInstall
 	}
 	f.K.rules = append([]tun.Rule(nil), rules...)
+	f.K.history = append(f.K.history, f.K.rules)
 	return nil
 }
 
-func (f *Firewall) Remove(context.Context) error {
+func (f *Firewall) Remove(ctx context.Context) error {
 	f.K.mu.Lock()
 	defer f.K.mu.Unlock()
 	f.Removes++
 	f.J.Add("fw.remove")
+	f.RemoveCtxErr = ctx.Err()
+	_, f.RemoveDeadline = ctx.Deadline()
 	if f.FailRemove != nil {
 		return f.FailRemove
 	}
 	f.K.rules = nil
+	f.K.history = append(f.K.history, nil)
 	return nil
 }
 
@@ -100,12 +117,32 @@ type Tunnel struct {
 	Downs    int
 	LastConf tun.TunConfig
 	J        *Journal
+	// DropEvents makes Kill lose its event, as a driver that does not deliver does; Alive still
+	// tells the truth.
+	DropEvents bool
+	// UpGate, when set, makes Up wait for it (or for the context): a Start that takes a while.
+	UpGate chan struct{}
+	// OnUp, when set, runs inside Up before anything else (a test cancels the context there).
+	OnUp func()
 }
 
 // NewTunnel returns a tunnel that is down.
 func NewTunnel() *Tunnel { return &Tunnel{events: make(chan tun.TunEvent, 4)} }
 
-func (t *Tunnel) Up(_ context.Context, cfg tun.TunConfig) error {
+func (t *Tunnel) Up(ctx context.Context, cfg tun.TunConfig) error {
+	if t.OnUp != nil {
+		t.OnUp()
+	}
+	if t.UpGate != nil {
+		select {
+		case <-t.UpGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.UpCalls++
@@ -128,6 +165,12 @@ func (t *Tunnel) Down(context.Context) error {
 
 func (t *Tunnel) Events() <-chan tun.TunEvent { return t.events }
 
+// Alive reports whether the device is up.
+func (t *Tunnel) Alive(context.Context) bool { return t.IsUp() }
+
+// CloseEvents closes the event channel, which a driver must never do; the switch must survive it.
+func (t *Tunnel) CloseEvents() { close(t.events) }
+
 // IsUp reports whether the device is up.
 func (t *Tunnel) IsUp() bool {
 	t.mu.Lock()
@@ -140,6 +183,9 @@ func (t *Tunnel) Kill(err error) {
 	t.mu.Lock()
 	t.up = false
 	t.mu.Unlock()
+	if t.DropEvents {
+		return
+	}
 	select {
 	case t.events <- tun.TunEvent{Err: err}:
 	default: // nobody is listening: a lost event, as when the watcher is gone
