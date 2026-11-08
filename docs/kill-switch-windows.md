@@ -102,3 +102,8 @@ working or shared computer; use a Hyper-V virtual machine (take a checkpoint fir
 
    Criterion: not one packet leaves on the physical interface except to the exit's address (and DHCP
    and neighbour discovery on the link).
+
+   - close the application window with the mode on: the Internet must come back;
+   - refuse the administrator prompt on Disable protection: one prompt, the state stays held;
+   - after a failed DNS restore: `nslookup` works or not, and what the application shows;
+   - run the application without rights and delete `killswitch.on` by hand: what the banner shows.
