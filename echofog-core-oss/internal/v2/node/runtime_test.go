@@ -38,6 +38,19 @@ func newTestNodeWith(t *testing.T, visibility cards.Visibility, cover bool, list
 	return newTestNodeFull(t, visibility, cover, listeners, events, nil, mutate)
 }
 
+// newNodeErr, when set, receives the error of node.New instead of failing the test (tryNewNode).
+var newNodeErr *error
+
+// tryNewNode builds a test node and returns the error of node.New, if any.
+func tryNewNode(t *testing.T, mutate func(*node.Config)) (*testNode, error) {
+	t.Helper()
+	var e error
+	newNodeErr = &e
+	defer func() { newNodeErr = nil }()
+	n := newTestNodeWith(t, cards.Hidden, false, nil, nil, mutate)
+	return n, e
+}
+
 // newTestNodeFull also lets a test change the card material (roles and flags) before the builder
 // seals its cards, and the runtime configuration.
 func newTestNodeFull(t *testing.T, visibility cards.Visibility, cover bool, listeners []carrier.Listener, events node.EventSink, cardsMutate func(*cards.Config), mutate func(*node.Config)) *testNode {
@@ -111,6 +124,10 @@ func newTestNodeFull(t *testing.T, visibility cards.Visibility, cover bool, list
 	if err != nil {
 		_ = st.Close()
 		tw.Destroy()
+		if newNodeErr != nil { // tryNewNode: the test wants to see the error
+			*newNodeErr = err
+			return nil
+		}
 		t.Fatalf("node.New: %v", err)
 	}
 	t.Cleanup(func() {

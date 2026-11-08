@@ -1,0 +1,318 @@
+package node_test
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/call/route"
+	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
+	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/punch"
+	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
+)
+
+// fakeSocks is a SOCKS5 proxy (no authentication, CONNECT only) that records what it was asked to
+// reach. With refuse set it answers "connection refused" to every request.
+type fakeSocks struct {
+	ln     net.Listener
+	refuse atomic.Bool
+	mu     sync.Mutex
+	asked  []string
+}
+
+func newFakeSocks(t *testing.T) *fakeSocks {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &fakeSocks{ln: ln}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go p.serve(c)
+		}
+	}()
+	return p
+}
+
+func (p *fakeSocks) addr() string { return p.ln.Addr().String() }
+
+func (p *fakeSocks) requests() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.asked...)
+}
+
+func (p *fakeSocks) serve(c net.Conn) {
+	defer c.Close()
+	var hdr [2]byte
+	if _, err := io.ReadFull(c, hdr[:]); err != nil || hdr[0] != 5 {
+		return
+	}
+	methods := make([]byte, hdr[1])
+	if _, err := io.ReadFull(c, methods); err != nil {
+		return
+	}
+	_, _ = c.Write([]byte{5, 0})
+	var req [4]byte
+	if _, err := io.ReadFull(c, req[:]); err != nil || req[1] != 1 {
+		return
+	}
+	var host string
+	switch req[3] {
+	case 1:
+		var b [4]byte
+		_, _ = io.ReadFull(c, b[:])
+		host = net.IP(b[:]).String()
+	case 3:
+		var l [1]byte
+		_, _ = io.ReadFull(c, l[:])
+		b := make([]byte, l[0])
+		_, _ = io.ReadFull(c, b)
+		host = string(b)
+	case 4:
+		var b [16]byte
+		_, _ = io.ReadFull(c, b[:])
+		host = net.IP(b[:]).String()
+	default:
+		return
+	}
+	var pb [2]byte
+	_, _ = io.ReadFull(c, pb[:])
+	target := net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(pb[:]))))
+	p.mu.Lock()
+	p.asked = append(p.asked, target)
+	p.mu.Unlock()
+	if p.refuse.Load() {
+		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	up, err := net.DialTimeout("tcp", target, 3*time.Second)
+	if err != nil {
+		_, _ = c.Write([]byte{5, 4, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer up.Close()
+	_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(up, c); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(c, up); done <- struct{}{} }()
+	<-done
+}
+
+func egressTo(p *fakeSocks, tor bool) *node.Egress { return &node.Egress{Proxy: p.addr(), Tor: tor} }
+
+// A node behind a proxy opens no listener and does not punch: both would show its address.
+func TestEgressRefusesListenersAndPunching(t *testing.T) {
+	px := newFakeSocks(t)
+	for name, mut := range map[string]func(*node.Config){
+		"listener": func(c *node.Config) { c.Listeners = []carrier.Listener{newCarrierQueue()} },
+		"punch":    func(c *node.Config) { c.PunchNet = punchStub{} },
+		"own dial": func(c *node.Config) {
+			c.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, nil }
+		},
+		"bad proxy": func(c *node.Config) { c.Egress = &node.Egress{Proxy: "not-an-address"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() != nil {
+					t.Fatal("panic")
+				}
+			}()
+			if _, err := tryNewNode(t, func(c *node.Config) { c.Egress = egressTo(px, false); mut(c) }); err == nil {
+				t.Fatal("node.New accepted a configuration that would show the address")
+			}
+		})
+	}
+}
+
+type punchStub struct{}
+
+func (punchStub) Net(node.DeviceID, punch.Role) punch.Net { return nil }
+
+// Calls go through a relay only, whatever call_route says: a direct media path is UDP to the peer.
+func TestEgressForcesRelayCalls(t *testing.T) {
+	px := newFakeSocks(t)
+	for _, tor := range []bool{false, true} {
+		a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) { c.Egress = egressTo(px, tor) })
+		if got := a.rt.CallRoute(); got != route.Relay {
+			t.Fatalf("tor=%v: call route %v at start, want relay", tor, got)
+		}
+		a.rt.SetCallRoute(route.Direct)
+		a.rt.SetCallRoute(route.Auto)
+		if got := a.rt.CallRoute(); got != route.Relay {
+			t.Fatalf("tor=%v: call route %v after set, want relay", tor, got)
+		}
+	}
+	b := newTestNode(t, cards.Hidden, false, nil, nil)
+	b.rt.SetCallRoute(route.Direct)
+	if b.rt.CallRoute() != route.Direct {
+		t.Fatal("a node without a proxy lost its call route")
+	}
+}
+
+// The status says what runs.
+func TestEgressStatus(t *testing.T) {
+	px := newFakeSocks(t)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) { c.Egress = egressTo(px, true) })
+	st := a.rt.EgressStatus()
+	if !st.Active || !st.Tor || st.Proxy != px.addr() {
+		t.Fatalf("status %+v", st)
+	}
+	b := newTestNode(t, cards.Hidden, false, nil, nil)
+	if b.rt.EgressStatus().Active {
+		t.Fatal("a node without a proxy reports one")
+	}
+}
+
+// Host.HTTP() goes through the proxy (names unresolved), checks the site's certificate and is not
+// the standard library's client with its environment proxy.
+func TestEgressHTTPGoesThroughTheProxy(t *testing.T) {
+	site := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	defer site.Close()
+	px := newFakeSocks(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(site.Certificate())
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) {
+		c.Egress = egressTo(px, false)
+		c.Egress.RootCAs = roots
+	})
+	cl := a.rt.HTTP()
+	if cl == nil {
+		t.Fatal("no HTTP client behind a proxy")
+	}
+	host, port, _ := net.SplitHostPort(site.Listener.Addr().String())
+	_ = host
+	resp, err := cl.Get("https://localhost:" + port + "/")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(b) != "ok" {
+		t.Fatalf("body %q", b)
+	}
+	asked := px.requests()
+	if len(asked) != 1 || !strings.HasPrefix(asked[0], "localhost:") {
+		t.Fatalf("proxy was asked for %v, want the name localhost sent unresolved", asked)
+	}
+	// A site with a certificate we do not trust is refused.
+	other := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer other.Close()
+	_, oport, _ := net.SplitHostPort(other.Listener.Addr().String())
+	if _, err := cl.Get("https://localhost:" + oport + "/"); err == nil {
+		t.Fatal("the client accepted an untrusted certificate")
+	}
+	_ = tls.VersionTLS13
+}
+
+// The leak test. The peer's card lists all four suites at addresses that are real sockets of the
+// test: a TCP and a UDP sink. Behind the proxy the node asks the proxy for the TCP suites and sends
+// nothing to either sink on its own (no UDP, no direct TCP); with the proxy refusing it connects to
+// no one (fail closed).
+func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
+	tcpSink, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcpSink.Close()
+	var direct atomic.Int32
+	go func() {
+		for {
+			c, err := tcpSink.Accept()
+			if err != nil {
+				return
+			}
+			direct.Add(1)
+			c.Close()
+		}
+	}()
+	udpSink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpSink.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			if _, _, err := udpSink.ReadFromUDP(buf); err != nil {
+				return
+			}
+			direct.Add(1)
+		}
+	}()
+	tcpPort := uint32(tcpSink.Addr().(*net.TCPAddr).Port)
+	udpPort := uint32(udpSink.LocalAddr().(*net.UDPAddr).Port)
+
+	for _, tor := range []bool{false, true} {
+		px := newFakeSocks(t)
+		b := newTestNodeFull(t, cards.Visible, true, nil, nil, func(c *cards.Config) {
+			m := c.Listeners[0].Mask
+			c.Listeners = []cards.Listener{
+				{Suite: objects.SuiteNoise3, Host: "127.0.0.1", Port: udpPort, Mask: m},
+				{Suite: objects.SuiteReality2QUIC, Host: "127.0.0.1", Port: udpPort, SNI: "cover.example", Mask: m},
+				{Suite: objects.SuiteReality2TCP, Host: "127.0.0.1", Port: tcpPort, SNI: "cover.example", Mask: m},
+			}
+		}, nil)
+		a := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) {
+			c.Egress = egressTo(px, tor)
+			c.NetClass, c.RoutePolicy = rp.NetWired, nil
+		})
+		a.start(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t)})
+		cancel()
+		if err == nil {
+			_ = sess.Close()
+			t.Fatalf("tor=%v: a session opened to a sink", tor)
+		}
+		if n := direct.Load(); n != 0 {
+			t.Fatalf("tor=%v: %d packets or connections reached the peer's address without the proxy", tor, n)
+		}
+		asked := px.requests()
+		if len(asked) == 0 {
+			t.Fatalf("tor=%v: the TCP suite was not tried through the proxy (%v)", tor, err)
+		}
+		for _, a := range asked {
+			if !strings.HasSuffix(a, ":"+strconv.Itoa(int(tcpPort))) {
+				t.Fatalf("tor=%v: the proxy was asked for %s, which is not a TCP suite address", tor, a)
+			}
+		}
+
+		// Fail closed: the proxy goes down, nothing else is tried.
+		px.refuse.Store(true)
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 8*time.Second)
+		_, sess2, err2 := a.rt.Session(ctx2, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t)})
+		cancel2()
+		if err2 == nil {
+			_ = sess2.Close()
+			t.Fatalf("tor=%v: a session opened through a refusing proxy", tor)
+		}
+		if n := direct.Load(); n != 0 {
+			t.Fatalf("tor=%v: with the proxy refusing, %d sockets reached the peer directly", tor, n)
+		}
+		if errors.Is(err2, context.DeadlineExceeded) {
+			t.Fatalf("tor=%v: fail closed must be an error, not a wait: %v", tor, err2)
+		}
+	}
+}

@@ -150,6 +150,8 @@ type Config struct {
 	LocalInfo carrier.LocalInfo
 	// DialContext opens carrier sockets through the node's proxy (T11.6).
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	// Egress, when set, sends all of the node's own traffic through a SOCKS5 proxy (T11.6a).
+	Egress *Egress
 	// FreezeStall is how long a flow that wrote and heard nothing back counts as stopped when it
 	// is looking for the freeze of a network (T6.4d); zero means 10 s.
 	FreezeStall time.Duration
