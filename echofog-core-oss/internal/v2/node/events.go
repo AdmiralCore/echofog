@@ -46,6 +46,9 @@ const (
 	// EventCountryChanged: the client's own country was decided or changed (user setting, GeoIP of
 	// the public address, platform hint); new paths follow the new row, live sessions stay (T6.4c).
 	EventCountryChanged EventKind = "node.country-changed"
+	// EventNarrowPath reports that the network cannot carry the first packets of noise3 (PMTU 1280
+	// or less), so it is marked for 24 h (T3.12). Message is Russian, neutral form, for the UI.
+	EventNarrowPath EventKind = "node.narrow-path"
 	// EventNetworkFrozen: two flows to one foreign address stopped after 12-20 KiB, so the network
 	// is marked frozen for a day and the row of a mobile network towards abroad applies (T6.4d).
 	EventNetworkFrozen EventKind = "node.network-frozen"

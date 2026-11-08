@@ -39,6 +39,8 @@ func (r *Runtime) SetNetworkID(id string) {
 	if old != id {
 		r.freeze.Forget(old)
 		r.freeze.Forget(id)
+		r.narrow.Forget(old)
+		r.narrow.Forget(id)
 	}
 }
 
@@ -92,6 +94,25 @@ func (r *Runtime) watchedDialContext(base func(context.Context, string, string) 
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		c, err := base(ctx, network, address)
+		if err != nil || !strings.HasPrefix(network, "tcp") {
+			return c, err
+		}
+		host, _, serr := net.SplitHostPort(address)
+		if serr != nil {
+			return c, nil
+		}
+		if ip, perr := netip.ParseAddr(host); perr == nil {
+			return r.freezeConn(c, ip.Unmap()), nil
+		}
+		return c, nil
+	}
+}
+
+// watchedDialMSS is watchedDialContext for the node's own direct sockets: it can limit the MSS of
+// the socket before the SYN (T3.12). A proxy opens its own sockets, and then there is none.
+func (r *Runtime) watchedDialMSS() func(context.Context, string, string, int) (net.Conn, error) {
+	return func(ctx context.Context, network, address string, mss int) (net.Conn, error) {
+		c, err := carrier.DialTCPMSS(ctx, network, address, mss)
 		if err != nil || !strings.HasPrefix(network, "tcp") {
 			return c, err
 		}
@@ -205,4 +226,16 @@ func (c *watchConn) Close() error {
 	}
 	c.mu.Unlock()
 	return c.Conn.Close()
+}
+
+// narrowMarked tells the user that the current network cannot carry noise3 (T3.12). The message
+// says what the connection does instead; on a path of 1200 bytes only TCP with a limited MSS works.
+func (r *Runtime) narrowMarked(_ string, why carrier.NarrowReason) {
+	msg := "UDP-носитель noise3 на этой сети не отвечает нескольким узлам, поэтому пропускается: " +
+		"соединение идёт через другие носители."
+	if why == carrier.ReasonMSS {
+		msg = "Путь сети узкий (MTU 1280 или меньше): TCP-соединение установлено только с ограниченным MSS. " +
+			"На пути с MTU 1200 работает только TCP с ограничением MSS."
+	}
+	r.events.Emit(Event{Kind: EventNarrowPath, At: time.Now(), Message: msg})
 }

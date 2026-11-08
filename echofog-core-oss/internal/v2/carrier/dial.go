@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
 
 // Happy-eyeballs timing (wire.md §1 rule 5): the second attempt starts after
@@ -41,6 +43,10 @@ type DialConfig struct {
 	Jitter func() time.Duration
 	// Memory, when set, reorders attempts by the suite that last worked and records the winner.
 	Memory *Memory
+	// Narrow and NetworkID (T3.12): a marked network does not try noise3; a noise3 attempt that
+	// stays silent for NoAnswerAfter while another suite wins marks the network.
+	Narrow    *NarrowPath
+	NetworkID func() string
 }
 
 // DialTimeout is the carrier dial timeout of wire.md §10 (QUIC 4 s, TCP 6 s, ws2 8 s). Unknown
@@ -82,6 +88,14 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 	if cfg.Memory != nil {
 		atts = cfg.Memory.prefer(ctx, atts)
 	}
+	netID := ""
+	if cfg.Narrow != nil && cfg.NetworkID != nil {
+		netID = cfg.NetworkID()
+		if req.Narrow == nil {
+			req.Narrow, req.NetworkID = cfg.Narrow, cfg.NetworkID
+		}
+		atts = dropNoise3OnNarrow(atts, cfg.Narrow, netID)
+	}
 	registry := cfg.Registry
 	if registry == nil {
 		registry = defaultRegistry
@@ -102,6 +116,7 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 		c mux.Carrier
 		a Attempt
 		e error
+		i int
 	}
 	// out is unbuffered so a late dial result can choose winnerCh instead of leaking a carrier.
 	out := make(chan outcome)
@@ -130,6 +145,10 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 
 	started := 0
 	done := 0
+	// T3.12: when each attempt began and whether it has finished, to tell a silent noise3 from a
+	// slow one when another suite wins.
+	startedAt := make([]time.Time, len(atts))
+	finished := make([]bool, len(atts))
 	var errs []error
 	var timer Timer
 	timerFor := -1
@@ -156,11 +175,12 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 
 	startAttempt := func(i int) {
 		started++
+		startedAt[i] = clock.Now()
 		a := atts[i]
 		go func() {
 			d, ok := registry.DialerFor(a.Suite)
 			if !ok {
-				deliver(outcome{a: a, e: fmt.Errorf("%w: suite %d", ErrNoDialer, a.Suite)})
+				deliver(outcome{a: a, i: i, e: fmt.Errorf("%w: suite %d", ErrNoDialer, a.Suite)})
 				return
 			}
 			dctx, dcancel := context.WithCancel(runCtx)
@@ -185,10 +205,10 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 				default:
 					err = fmt.Errorf("carrier: suite %d: %w", a.Suite, err)
 				}
-				deliver(outcome{a: a, e: err})
+				deliver(outcome{a: a, i: i, e: err})
 				return
 			}
-			deliver(outcome{c: c, a: a})
+			deliver(outcome{c: c, a: a, i: i})
 		}()
 	}
 
@@ -220,7 +240,17 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 				}
 				return nil, Attempt{}, err
 			}
+			finished[o.i] = true
 			if o.e == nil {
+				if cfg.Narrow != nil && o.a.Suite != objects.SuiteNoise3 {
+					for j, a := range atts {
+						if a.Suite == objects.SuiteNoise3 && !startedAt[j].IsZero() && !finished[j] &&
+							clock.Now().Sub(startedAt[j]) >= NoAnswerAfter {
+							cfg.Narrow.NoteNoise3Silent(netID, peerHost(o.a.Addr))
+							break
+						}
+					}
+				}
 				stopTimer()
 				stopAll()
 				if cfg.Memory != nil {
@@ -245,4 +275,35 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 			}
 		}
 	}
+}
+
+// dropNoise3OnNarrow removes the noise3 attempts on a network marked as a narrow path, as long as
+// another attempt remains (T3.12).
+func dropNoise3OnNarrow(atts []Attempt, n *NarrowPath, netID string) []Attempt {
+	if !n.Marked(netID) {
+		return atts
+	}
+	out := make([]Attempt, 0, len(atts))
+	for _, a := range atts {
+		if a.Suite != objects.SuiteNoise3 {
+			out = append(out, a)
+		}
+	}
+	if len(out) == 0 {
+		return atts
+	}
+	return out
+}
+
+// peerHost is the host of an attempt's address: the peer a silent noise3 is counted against.
+func peerHost(a *pb.Addr) string {
+	key := AddressKey(a)
+	if key == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(key)
+	if err != nil {
+		return key
+	}
+	return host
 }

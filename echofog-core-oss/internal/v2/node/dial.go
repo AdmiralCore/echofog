@@ -162,11 +162,16 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		return nil, fmt.Errorf("%w: %s", ErrNoRoute, DeviceID(card.DeviceID))
 	}
 
-	req := carrier.DialRequest{Card: carrierCard, DialContext: r.watchedDialContext(r.cfg.DialContext)}
+	req := carrier.DialRequest{Card: carrierCard, DialContext: r.watchedDialContext(r.cfg.DialContext),
+		Narrow: r.narrow, NetworkID: r.NetworkID}
+	if r.cfg.DialContext == nil {
+		req.DialMSS = r.watchedDialMSS() // a direct socket can take a limited MSS; a proxy's cannot
+	}
 	if probeBudget > 0 {
 		req.DialContext = r.probeDialContext(probeBudget)
+		req.DialMSS = nil
 	}
-	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
+	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock, Narrow: r.narrow, NetworkID: r.NetworkID}
 
 	var reserved []session.Pair
 	var chosenPair session.Pair

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	quic "github.com/apernet/quic-go"
@@ -73,6 +74,11 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 	}
 
 	conf := quicx.Reality2QUICConfig()
+	if ip, perr := netip.ParseAddr(a.GetHost()); perr == nil && ip.Unmap().Is6() {
+		// An IPv6 path may be as small as 1280 bytes: 1232 + 48 headers fits it, Chrome's 1250
+		// does not (T3.12). The Initial stays a legal 1200 or more.
+		conf.InitialPacketSize = 1232
+	}
 	conf.ClientHelloHook = func(ch0, c []byte) ([32]byte, error) {
 		priv, err := ecdh.X25519().NewPrivateKey(c)
 		if err != nil {

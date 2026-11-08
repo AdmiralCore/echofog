@@ -224,6 +224,8 @@ type Runtime struct {
 	routeInfo map[DeviceID]RouteReport
 	// freeze marks a network whose TCP stops at 12-20 KiB (T6.4d); netID names the network.
 	freeze *routepolicy.FreezeTracker
+	// narrow marks a network that cannot carry the first packets of noise3 (T3.12).
+	narrow *carrier.NarrowPath
 	netMu  sync.Mutex
 	netID  string
 	// flowSeq numbers the flows the freeze watcher sees.
@@ -388,6 +390,7 @@ func New(cfg Config) (*Runtime, error) {
 		rules:        cfg.RoutePolicy,
 	}
 	r.freeze = routepolicy.NewFreezeTracker(carrierClock.Now)
+	r.narrow = carrier.NewNarrowPath(carrierClock, r.narrowMarked)
 	if r.rules == nil {
 		r.rules = routepolicy.Default()
 	}
