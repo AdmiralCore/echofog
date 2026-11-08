@@ -126,3 +126,18 @@ func TestTheChecklistNamesTheScenarios(t *testing.T) {
 	}
 	assert.True(t, found, "a checklist line for the scenarios")
 }
+
+func FuzzLoadScenarios(f *testing.F) {
+	f.Add(`{"schema":1,"commit":"abc","scenarios":[{"name":"v2-nat","mode":"model","runs":3,"rows":[{"ID":"x","Metric":"m","Status":"green"}]}]}`)
+	f.Add(`{"schema":1,"scenarios":[]}`)
+	f.Add(``)
+	f.Add(`{"scenarios":[{"name":"v2-nat","mode":"live","runs":0,"rows":null}]}`)
+	f.Fuzz(func(t *testing.T, in string) {
+		rep, err := LoadScenarios(strings.NewReader(in))
+		if err != nil {
+			return
+		}
+		// whatever loads, the gate can read without panicking
+		_ = scenarioRows(rep.Scenarios)
+	})
+}
