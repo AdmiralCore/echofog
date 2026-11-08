@@ -56,6 +56,7 @@ func main() {
 		os.Args = args
 		startState = options.Minimised
 	}
+	applyProtocolFlag() // --protocol 2: the mode of this run (T11.7)
 	keepCrashes()
 	crashTest(os.Getenv("ECHOFOG_CRASH_TEST"))
 	registerLinkScheme()

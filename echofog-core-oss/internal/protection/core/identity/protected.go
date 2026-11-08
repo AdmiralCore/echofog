@@ -209,3 +209,28 @@ func (p *ProtectedIdentity) GenerateTLSConfig() (*tls.Config, error) {
 func (p *ProtectedIdentity) GenerateEphemeralKey() (types.PeerPublicKey, error) {
 	panic("implement me")
 }
+
+// V2Master returns copies of the SLIP-0010 master key and chain code of the unlocked identity (T11.7:
+// the v2 account is derived from them, AD7). The caller wipes both.
+func (p *ProtectedIdentity) V2Master() (key, chain []byte, err error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if !p.manager.isUnlocked || p.manager.KeyManager == nil {
+		return nil, nil, errors.New("identity is locked")
+	}
+	k, c := p.manager.KeyManager.GetSecretKeys()
+	if k == nil || c == nil {
+		return nil, nil, errors.New("identity is locked")
+	}
+	kb, err := k.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer kb.Destroy()
+	cb, err := c.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cb.Destroy()
+	return append([]byte(nil), kb.Bytes()...), append([]byte(nil), cb.Bytes()...), nil
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/network"
@@ -87,6 +88,14 @@ type persistedSettings struct {
 // loadPersistedSettings applies the settings file to c. It returns what the file holds beyond the
 // config (the exit's free list) and whether it held relay settings.
 func loadPersistedSettings(c *config.AppConfig) (p persistedSettings, relayChosen bool) {
+	p, relayChosen = loadPersistedSettingsFile(c)
+	if f := int(forcedProtocol.Load()); f != 0 {
+		c.Protocol = f // the launch flag: this run only, nothing is saved
+	}
+	return p, relayChosen
+}
+
+func loadPersistedSettingsFile(c *config.AppConfig) (p persistedSettings, relayChosen bool) {
 	p.SettingsDTO = settingsFromConfig(c)
 	path := settingsPath(c)
 	if path == "" {
@@ -229,4 +238,34 @@ func (n *NodeApi) SetProtocol(protocol int) error {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	return saveSettingsLocked(n.node.Cfg, func(p *persistedSettings) { p.Protocol = protocol })
+}
+
+// forcedProtocol is the mode the launch flag chose for this run (0: none).
+var forcedProtocol atomic.Int32
+
+// ForceProtocol makes protocol (1 or 2) the mode of this run, whatever the profile saved (the launch flag
+// --protocol, T11.7). It saves nothing. Any other value, 0 included, takes the choice back.
+func ForceProtocol(protocol int) {
+	if protocol != config.ProtocolV1 && protocol != config.ProtocolV2 {
+		protocol = 0
+	}
+	forcedProtocol.Store(int32(protocol))
+}
+
+// SavedProtocol is the implementation saved for the next start: config.ProtocolV1 when nothing was saved.
+func (n *NodeApi) SavedProtocol() int {
+	if n.node == nil || n.node.Cfg == nil {
+		return config.ProtocolV1
+	}
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	raw, err := os.ReadFile(settingsPath(n.node.Cfg))
+	if err != nil {
+		return n.node.Cfg.ProtocolOrDefault()
+	}
+	var p persistedSettings
+	if json.Unmarshal(raw, &p) != nil || (p.Protocol != config.ProtocolV1 && p.Protocol != config.ProtocolV2) {
+		return n.node.Cfg.ProtocolOrDefault()
+	}
+	return p.Protocol
 }

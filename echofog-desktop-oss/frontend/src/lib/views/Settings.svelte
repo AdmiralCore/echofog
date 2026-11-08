@@ -23,6 +23,7 @@
   import RememberCard from '../components/RememberCard.svelte';
   import PasswordCard from '../components/PasswordCard.svelte';
   import AutostartCard from '../components/AutostartCard.svelte';
+  import ProtocolCard from '../components/ProtocolCard.svelte';
   import { t, locale, LANGUAGES } from '../i18n/index.js';
 
   const THEMES = [
@@ -215,6 +216,7 @@
     <PasswordCard />
     <RememberCard on:state={(e) => (remembered = e.detail.enabled)} />
     <AutostartCard {remembered} />
+    <ProtocolCard />
 
     {#if settings}
       <div class="card stack">
