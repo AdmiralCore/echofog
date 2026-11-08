@@ -116,6 +116,9 @@ func (n *NodeApi) market() (*vpnmarket.Service, error) {
 // StartSharing turns this node into an exit: it applies the offer and accepts tunnels. A public
 // node also keeps an advert in the DHT; a hidden or isolated one serves only the people it invited.
 func (n *NodeApi) StartSharing(cfg SharingConfig) error {
+	if b := n.v2vpn(); b != nil {
+		return b.sharingStart(cfg)
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
@@ -219,6 +222,9 @@ func (n *NodeApi) applyExitFreePeers() {
 
 // StopSharing withdraws the advert and stops serving other peers
 func (n *NodeApi) StopSharing() error {
+	if b := n.v2vpn(); b != nil {
+		return b.sharingStop()
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
@@ -233,6 +239,9 @@ func (n *NodeApi) StopSharing() error {
 }
 
 func (n *NodeApi) GetSharingStatus() SharingStatus {
+	if b := n.v2vpn(); b != nil {
+		return b.sharingStatus()
+	}
 	if n.v2Unavailable() != nil {
 		return SharingStatus{}
 	}

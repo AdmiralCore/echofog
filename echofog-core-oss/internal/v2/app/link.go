@@ -184,10 +184,18 @@ func UserMessage(err error) string {
 		return "Сеть уже запущена"
 	case errors.Is(err, ErrNoChat), errors.Is(err, ErrNoGroup), errors.Is(err, convlog.ErrNotParticipant):
 		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
-	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff):
+	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff), errors.Is(err, ErrExitOff):
 		return "Эта возможность пока недоступна"
-	case errors.Is(err, ErrExitNoEntry), errors.Is(err, ErrExitBadEntry), errors.Is(err, ErrExitFull), errors.Is(err, ErrExitNotOn), errors.Is(err, ErrExitBadTTL):
-		return "Не удалось выполнить действие с выходом"
+	case errors.Is(err, ErrExitNoEntry):
+		return "Такого клиента нет в списке"
+	case errors.Is(err, ErrExitBadEntry):
+		return "Идентификатор клиента или название указаны неверно"
+	case errors.Is(err, ErrExitFull):
+		return "Подтверждённых клиентов слишком много: ненужных можно удалить"
+	case errors.Is(err, ErrExitNotOn):
+		return "Сначала нужно включить выход"
+	case errors.Is(err, ErrExitBadTTL):
+		return "Нужно указать срок открытого доступа"
 	case errors.Is(err, ErrNotExit):
 		return "Это не ссылка выхода: узел не раздаёт соединение"
 	case errors.Is(err, ErrVPNRunning):
