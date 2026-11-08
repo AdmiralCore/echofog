@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/frame"
@@ -67,7 +68,9 @@ func RegisterEcho(n *Node) {
 }
 
 // EchoStream opens the echo service from n to to over the session n already has (or dials one) and
-// sends the bytes through it, reading them back.
+// sends the bytes through it, reading them back. A cancelled context ends the call at once even when
+// a write is stuck on flow control (a cut path); the stream is closed in the background and the
+// goroutines go when the world is closed.
 func (n *Node) EchoStream(ctx context.Context, to *Node, o EchoOptions) EchoRun {
 	var run EchoRun
 	card, err := to.PeerCard()
@@ -80,86 +83,86 @@ func (n *Node) EchoStream(ctx context.Context, to *Node, o EchoOptions) EchoRun 
 		run.Err = fmt.Errorf("open echo: %w", err)
 		return run
 	}
-	defer st.Close()
-	// a cancelled context closes the stream under a blocked read
-	stop := context.AfterFunc(ctx, func() { _ = st.Close() })
-	defer stop()
-
 	chunk := o.Chunk
 	if chunk <= 0 {
 		chunk = 16 << 10
 	}
 	start := time.Now()
-	type got struct {
-		n   int64
-		err error
-	}
-	reads := make(chan got, 1)
+	var sent, received, maxPause atomic.Int64
 	sem := make(chan struct{}, echoWindow)
-	done := make(chan struct{})
-	var received int64
-	var maxPause time.Duration
+	readDone := make(chan error, 1)
+	sendDone := make(chan error, 1)
+
 	go func() {
-		defer close(done)
 		last := time.Now()
-		for received < o.Total {
+		for received.Load() < o.Total {
 			f, err := st.ReadFrame()
 			if err != nil {
-				reads <- got{err: err}
+				readDone <- err
 				return
 			}
 			now := time.Now()
-			if p := now.Sub(last); p > maxPause {
-				maxPause = p
+			if p := int64(now.Sub(last)); p > maxPause.Load() {
+				maxPause.Store(p)
 			}
 			last = now
-			received += int64(len(f.Payload))
+			received.Add(int64(len(f.Payload)))
 			<-sem
 		}
-		reads <- got{n: received}
+		readDone <- nil
+	}()
+	go func() {
+		buf := make([]byte, chunk)
+		for sent.Load() < o.Total {
+			n := int64(chunk)
+			if left := o.Total - sent.Load(); left < n {
+				n = left
+			}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				sendDone <- ctx.Err()
+				return
+			}
+			_, _ = rand.Read(buf[:n])
+			if err := st.WriteFrame(echoFrameData, 0, buf[:n]); err != nil {
+				sendDone <- err
+				return
+			}
+			sent.Add(n)
+			if o.Hook != nil {
+				o.Hook(sent.Load())
+			}
+			if o.Pace > 0 {
+				time.Sleep(o.Pace)
+			}
+		}
+		sendDone <- nil
 	}()
 
-	buf := make([]byte, chunk)
-	var sent int64
-	for sent < o.Total {
-		n := int64(chunk)
-		if o.Total-sent < n {
-			n = o.Total - sent
-		}
+	sending := true
+loop:
+	for {
 		select {
-		case sem <- struct{}{}:
-		case <-done:
-			goto finish
-		case <-ctx.Done():
-			run.Err = ctx.Err()
-			goto finish
-		}
-		_, _ = rand.Read(buf[:n])
-		if err := st.WriteFrame(echoFrameData, 0, buf[:n]); err != nil {
+		case err := <-sendDone:
+			sending = false
+			if err != nil {
+				run.Err = err
+				break loop
+			}
+			sendDone = nil
+		case err := <-readDone:
 			run.Err = err
-			goto finish
-		}
-		sent += n
-		if o.Hook != nil {
-			o.Hook(sent)
-		}
-		if o.Pace > 0 {
-			time.Sleep(o.Pace)
-		}
-	}
-finish:
-	run.Sent = sent
-	if run.Err == nil {
-		select {
-		case r := <-reads:
-			run.Err = r.err
+			break loop
 		case <-ctx.Done():
 			run.Err = ctx.Err()
+			break loop
 		}
 	}
-	_ = st.Close()
-	<-done
-	run.Received, run.MaxPause, run.Elapsed = received, maxPause, time.Since(start)
+	_ = sending
+	go func() { _ = st.Close() }()
+	run.Sent, run.Received = sent.Load(), received.Load()
+	run.MaxPause, run.Elapsed = time.Duration(maxPause.Load()), time.Since(start)
 	if run.Err == nil && run.Received != run.Sent {
 		run.Err = fmt.Errorf("echo returned %d of %d bytes", run.Received, run.Sent)
 	}

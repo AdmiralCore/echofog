@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -160,13 +162,20 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err != nil {
 		return fail(fmt.Errorf("cards: %w", err))
 	}
-	n.store, err = store.Open(store.Options{Dir: fmt.Sprintf("%s/%s-%d", w.dir, spec.Name, len(w.nodes)), Key: tw.Account.StorageKey()})
+	dir, err := os.MkdirTemp(w.dir, spec.Name+"-")
+	if err != nil {
+		return fail(err)
+	}
+	n.store, err = store.Open(store.Options{Dir: dir, Key: tw.Account.StorageKey()})
 	if err != nil {
 		return fail(fmt.Errorf("store: %w", err))
 	}
 	cfg := node.Config{
 		Account: tw.Account, Device: tw.Device, Cards: n.builder, Store: n.store, Profile: profile,
 		ListenerSources: sources, Chat: spec.Chat,
+		// path migration is what AddPath, NetworkChanged and the punch upgrade need; no production code
+		// sets it yet (finding of T15.1), so the world sets it as the node tests do
+		Features:  []uint32{uint32(frame.FeaturePathMigration)},
 		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}},
 		Country:   func(netip.Addr) (string, bool) { return "ZZ", true },
 	}
