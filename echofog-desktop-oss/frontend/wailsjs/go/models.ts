@@ -909,6 +909,8 @@ export namespace node {
 	    restart?: boolean;
 	    hasProxy: boolean;
 	    hasRelay: boolean;
+	    relayAvailable: boolean;
+	    relayNote?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AnonymityStatus(source);

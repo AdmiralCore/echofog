@@ -1,7 +1,9 @@
 package node
 
 import (
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,4 +114,36 @@ func TestV2EgressFromSettingsFailsClosed(t *testing.T) {
 	cfg.Network.Anonymous = config.AnonRelay
 	_, err = EgressFromConfig(cfg)
 	require.Error(t, err, "the own-relay mode does not exist on protocol 2 yet: no silent fallback to open")
+}
+
+// The app's own lookups (updates, location) on protocol 2 go through the proxy as well, names
+// unresolved, and not around it.
+func TestV2OwnHTTPClientUsesTheProxy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	seen := make(chan []byte, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 16)
+		n, _ := c.Read(buf)
+		seen <- buf[:n]
+	}()
+	api := newFacadeNode(t, config.ProtocolV2)
+	api.AttachV2(&egressApp{})
+	api.node.Cfg.Network.Proxy = ln.Addr().String()
+	cl := api.OwnHTTPClient()
+	require.NotNil(t, cl)
+	go func() { _, _ = cl.Get("http://lookup.example.invalid/") }()
+	select {
+	case hello := <-seen:
+		require.NotEmpty(t, hello)
+		assert.Equal(t, byte(5), hello[0], "the first bytes on the wire are a SOCKS5 greeting to the proxy")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lookup did not go through the proxy")
+	}
 }

@@ -25,7 +25,11 @@
   $: dirty = st && (mode !== (st.mode || '') || wallet !== !!st.walletDirect);
   $: needs = mode === 'tor' && st && !st.hasProxy ? 'tor' : mode === 'relay' && st && !st.hasRelay ? 'relay' : '';
 
+  // On protocol 2 the own-relay mode is shown but cannot be chosen yet; the core says why (relayNote).
+  $: relayLater = (m) => m === 'relay' && st && st.relayNote;
+
   function pick(m) {
+    if (relayLater(m)) return;
     mode = m;
     touched = true;
     saved = false;
@@ -67,9 +71,10 @@
 
   <div class="opts" role="radiogroup" aria-label={$t('anon.title')}>
     {#each MODES as m}
-      <button class="opt" class:sel={mode === m} role="radio" aria-checked={mode === m} on:click={() => pick(m)}>
+      <button class="opt" class:sel={mode === m} class:later={relayLater(m)} role="radio" aria-checked={mode === m}
+        aria-disabled={relayLater(m) ? 'true' : 'false'} disabled={!!relayLater(m)} on:click={() => pick(m)}>
         <span class="name">{$t('anon.mode.' + (m || 'off'))}</span>
-        <span class="small muted">{$t('anon.mode.' + (m || 'off') + 'Hint')}</span>
+        <span class="small muted">{relayLater(m) ? st.relayNote : $t('anon.mode.' + (m || 'off') + 'Hint')}</span>
       </button>
     {/each}
   </div>
@@ -110,6 +115,7 @@
   }
   .opt.sel { border-color: var(--accent); background: var(--accent-weak, var(--surface)); }
   .opt .name { font-weight: 600; }
+  .opt.later { opacity: 0.55; cursor: not-allowed; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .ico.on { color: #38c172; }
   .now { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 13px; background: var(--raised); color: var(--muted); }
