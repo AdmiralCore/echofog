@@ -68,7 +68,7 @@ const (
 var (
 	wholeResolver = netip.MustParseAddr("198.18.0.2")
 	wholeAddrs    = []netip.Prefix{netip.MustParsePrefix("198.18.0.1/15"), netip.MustParsePrefix("fdfe:dcba:9876::1/126")}
-	wholePool     = []netip.Prefix{netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("fdfe:dcba:9876::/48")}
+	wholePool     = tun.DefaultTunnelPool
 )
 
 type wholeState struct {

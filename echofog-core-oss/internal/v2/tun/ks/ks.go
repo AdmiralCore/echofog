@@ -226,6 +226,11 @@ func handle(ctx context.Context, b Backend, r request) response {
 		if r.DNS == nil {
 			return fail(errors.New("ks: dns.protect without a configuration"))
 		}
+		// This process has administrator rights: what reaches the DNS driver is checked here, not
+		// taken on the application's word.
+		if err := tun.CheckDNS(*r.DNS); err != nil {
+			return fail(err)
+		}
 		if err := b.DNS.Protect(ctx, *r.DNS); err != nil {
 			return fail(err)
 		}

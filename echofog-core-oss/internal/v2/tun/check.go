@@ -117,5 +117,19 @@ var ErrBadDNS = errors.New("tun: bad DNS configuration")
 // resolver that is a plain address (no IPv6 zone) inside the tunnel's pool, and the policy against the
 // parallel lookups on. Nothing else reaches a command or a registry value.
 func CheckDNS(c DNSConfig) error {
-	return nil
+	r := c.Resolver
+	switch {
+	case !c.DisableSmartNameResolution:
+		return fmt.Errorf("%w: the policy against parallel lookups must be on", ErrBadDNS)
+	case !r.IsValid() || r.Zone() != "":
+		return fmt.Errorf("%w: the resolver must be a plain address without a zone", ErrBadDNS)
+	case r.Is4In6():
+		return fmt.Errorf("%w: the resolver must not be an IPv4-mapped address", ErrBadDNS)
+	}
+	for _, p := range DefaultTunnelPool {
+		if p.Contains(r) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: the resolver is outside the tunnel", ErrBadDNS)
 }

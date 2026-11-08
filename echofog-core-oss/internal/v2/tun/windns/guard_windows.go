@@ -15,7 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -63,6 +63,7 @@ func system32(name string) string {
 func powershell(ctx context.Context, script string, env []string) error {
 	exe := system32(`WindowsPowerShell\v1.0\powershell.exe`)
 	cmd := exec.CommandContext(ctx, exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	cmd.Env = append(os.Environ(), env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -110,8 +111,8 @@ func (g *Guard) snapshot() error {
 }
 
 func (g *Guard) Protect(ctx context.Context, cfg tun.DNSConfig) error {
-	if !cfg.Resolver.IsValid() || cfg.Resolver.IsUnspecified() || !cfg.DisableSmartNameResolution {
-		return errors.New("windns: a resolver inside the tunnel and DisableSmartNameResolution are required")
+	if err := tun.CheckDNS(cfg); err != nil {
+		return err
 	}
 	if err := g.snapshot(); err != nil {
 		return err
@@ -127,19 +128,20 @@ func (g *Guard) Protect(ctx context.Context, cfg tun.DNSConfig) error {
 		}
 	}
 	pol.Close()
-	if err := g.runPS(ctx, namespaceRule(cfg.Resolver, g.nrptLabel), nil); err != nil {
+	if err := g.runPS(ctx, namespaceRule(g.nrptLabel), []string{"EF_RESOLVER=" + cfg.Resolver.String()}); err != nil {
 		return err
 	}
 	g.flush()
 	return nil
 }
 
-// namespaceRule replaces our rule with a catch-all one to the resolver. Both inputs are safe by
-// construction (an address and a fixed label), so they are placed inside single quotes.
-func namespaceRule(resolver netip.Addr, label string) string {
+// namespaceRule replaces our rule with a catch-all one to the resolver. The text is constant but for
+// the fixed label; the address is read from the environment of the child (EF_RESOLVER), so nothing
+// the caller sent is ever part of the script.
+func namespaceRule(label string) string {
 	return "$ErrorActionPreference='Stop'; " +
 		"Get-DnsClientNrptRule | Where-Object { $_.Comment -eq '" + label + "' } | Remove-DnsClientNrptRule -Force; " +
-		"Add-DnsClientNrptRule -Namespace '.' -NameServers '" + resolver.String() + "' -Comment '" + label + "'"
+		"Add-DnsClientNrptRule -Namespace '.' -NameServers $env:EF_RESOLVER -Comment '" + label + "'"
 }
 
 func removeRule(label string) string {
