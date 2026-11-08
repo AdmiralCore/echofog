@@ -9,12 +9,16 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/app"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
@@ -25,11 +29,21 @@ import (
 	"github.com/echofog/echofog-core/testbed/behaviour"
 )
 
+// shiftClock is the clock of every node in a world: the system clock plus an offset that only grows.
+// A scenario skips minutes ahead to reach a timer the product keeps (the DHT republication after a
+// failed first attempt is five minutes); timers still fire on real time.
+type shiftClock struct{ shift atomic.Int64 }
+
+func (c *shiftClock) Now() time.Time { return time.Now().Add(time.Duration(c.shift.Load())) }
+
+func (c *shiftClock) AfterFunc(d time.Duration, f func()) carrier.Timer { return time.AfterFunc(d, f) }
+
 // World is a set of real v2 nodes in one process: the product's own runtime, identity, store and
 // card builder, with real noise3 listeners on loopback. A node can sit behind an in-process netem
 // (loss, delay, MTU, cuts), which stands in for the router of the Docker stand.
 type World struct {
 	dir string
+	clk shiftClock
 
 	mu     sync.Mutex
 	nodes  []*Node
@@ -43,6 +57,7 @@ type NodeSpec struct {
 	Listen bool                   // a real noise3 listener on loopback
 	Hidden bool                   // a card that is not published
 	Chat   bool                   // chat/2 on
+	Cover  bool                   // a card entry for a camouflaged address, so the node has a public card and is listed (the address is not served)
 	Netem  *behaviour.NetemConfig // the listener sits behind an in-process netem
 	// More are the further noise3 listeners of the node (a second address of the same device, for a
 	// second path), each with its own netem or none.
@@ -64,7 +79,12 @@ type Node struct {
 	// node does not listen.
 	Addr string
 
+	// Inbox records the chat events when the node has chat.
+	Inbox *Inbox
+
 	tw      *identity.Throwaway
+	app     *app.App
+	links   *links.Service
 	store   *store.Store
 	builder *cards.CardBuilder
 	started bool
@@ -75,8 +95,8 @@ func NewWorld(dir string) *World { return &World{dir: dir} }
 
 // freeUDPPort asks the kernel for a loopback UDP port. The port is free the moment it is closed and
 // the listener binds it at once; a second process taking it in between is the only risk.
-func freeUDPPort() (int, error) {
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+func freeUDPPort(host string) (int, error) {
+	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		return 0, err
 	}
@@ -106,6 +126,9 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err := tw.Device.Masking().WithPrivate(func(b []byte) error { copy(maskKey.Private[:], b); return nil }); err != nil {
 		return fail(err)
 	}
+	// every node has its own loopback address in its own /16, so the routing tables and the diversity
+	// rules of the DHT see different networks, as they do on the Internet
+	host := fmt.Sprintf("127.%d.0.1", 1+len(w.nodes))
 	if spec.Listen || len(spec.More) > 0 {
 		profile, err := shape.Builtin(shape.IDDefaultUDP)
 		if err != nil {
@@ -114,11 +137,11 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 		cfgs := []*behaviour.NetemConfig{spec.Netem}
 		cfgs = append(cfgs, spec.More...)
 		for _, nc := range cfgs {
-			port, err := freeUDPPort()
+			port, err := freeUDPPort(host)
 			if err != nil {
 				return fail(err)
 			}
-			bind := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			bind := net.JoinHostPort(host, strconv.Itoa(port))
 			adv := bind
 			var em *behaviour.Netem
 			if nc != nil {
@@ -138,6 +161,11 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 		n.Netem, n.Addr = n.Netems[0], n.Addrs[0]
 	}
 
+	if spec.Cover {
+		cardListeners = append(cardListeners, cards.Listener{
+			Suite: objects.SuiteReality2QUIC, Host: host, Port: 443, SNI: "cover.lab", Mask: tw.Device.Masking().Public(),
+		})
+	}
 	vis := cards.Visible
 	if spec.Hidden {
 		vis = cards.Hidden
@@ -170,14 +198,23 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err != nil {
 		return fail(fmt.Errorf("store: %w", err))
 	}
+	clk, err := clock.New(clock.Config{Now: w.clk.Now})
+	if err != nil {
+		return fail(err)
+	}
 	cfg := node.Config{
+		Clock: clk, CarrierClock: &w.clk,
 		Account: tw.Account, Device: tw.Device, Cards: n.builder, Store: n.store, Profile: profile,
 		ListenerSources: sources, Chat: spec.Chat,
 		// path migration is what AddPath, NetworkChanged and the punch upgrade need; no production code
 		// sets it yet (finding of T15.1), so the world sets it as the node tests do
 		Features:  []uint32{uint32(frame.FeaturePathMigration)},
-		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}},
+		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr(host)}},
 		Country:   func(netip.Addr) (string, bool) { return "ZZ", true },
+	}
+	if spec.Chat {
+		n.Inbox = newInbox()
+		cfg.ChatEvents = n.Inbox.events()
 	}
 	if spec.Mutate != nil {
 		spec.Mutate(&cfg)
@@ -332,3 +369,6 @@ func (n *Node) DialVia(ctx context.Context, to *Node, i int) (node.Peer, *mux.Se
 	}
 	return n.RT.Session(ctx, to.ID.DeviceID, node.DialOpt{Card: card, Attempts: []carrier.Attempt{at}})
 }
+
+// Skip moves the clock of every node in the world forward.
+func (w *World) Skip(d time.Duration) { w.clk.shift.Add(int64(d)) }
