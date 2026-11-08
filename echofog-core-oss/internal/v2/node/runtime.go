@@ -262,6 +262,7 @@ type Runtime struct {
 	repairing    map[[16]byte]bool
 	sessionCards map[[16]byte]*objects.Card
 	repairOpt    DialOpt
+	healthyFn    func(*mux.Session) bool
 
 	identity Identity
 	vis      cards.Visibility

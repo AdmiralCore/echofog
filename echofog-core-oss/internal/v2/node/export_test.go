@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	// SetHealthy replaces the check that a session has a working path again.
+	SetHealthy = func(r *Runtime, f func(*mux.Session) bool) { r.healthyFn = f }
 	// RepairCardOf is the card a repair of the session would dial with.
 	RepairCardOf = func(r *Runtime, sid [16]byte) *objects.Card { return r.repairCard(sid) }
 	// TriggerPathFailing runs the reaction to a session left with one failing path.

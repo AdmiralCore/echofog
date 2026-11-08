@@ -90,7 +90,7 @@ func (r *Runtime) repair(est *session.Established) {
 			return
 		default:
 		}
-		if est.Session.GoingAway() || (try > 0 && est.Session.Healthy()) {
+		if est.Session.GoingAway() || (try > 0 && r.sessionHealthy(est.Session)) {
 			return // the path came back, or the session is draining on purpose
 		}
 		opt := r.repairOpt
@@ -165,4 +165,12 @@ func (r *Runtime) forgetCard(sid [16]byte) {
 	r.pathsMu.Lock()
 	delete(r.sessionCards, sid)
 	r.pathsMu.Unlock()
+}
+
+// sessionHealthy says whether some path of the session works again.
+func (r *Runtime) sessionHealthy(s *mux.Session) bool {
+	if r.healthyFn != nil {
+		return r.healthyFn(s)
+	}
+	return s.Healthy()
 }
