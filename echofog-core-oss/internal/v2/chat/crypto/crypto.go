@@ -485,17 +485,16 @@ func (c *Crypto) prevHistory(device [32]byte) []prevEntry {
 		_ = c.sm.Delete(prevID(device, e.seq))
 	}
 	if len(kept) != len(hist) {
-		c.storePrevHistory(device, kept)
+		_ = c.storePrevHistory(device, kept)
 	}
 	return kept
 }
 
-func (c *Crypto) storePrevHistory(device [32]byte, hist []prevEntry) {
+func (c *Crypto) storePrevHistory(device [32]byte, hist []prevEntry) error {
 	if len(hist) == 0 {
-		_ = c.sessKV.Delete(c.prevKey(device))
-		return
+		return c.sessKV.Delete(c.prevKey(device))
 	}
-	_ = c.sessKV.Put(c.prevKey(device), encodePrevHistory(hist))
+	return c.sessKV.Put(c.prevKey(device), encodePrevHistory(hist))
 }
 
 // keepPrev moves the current session with device, if there is one, to the history: a session
@@ -522,8 +521,7 @@ func (c *Crypto) keepPrev(device [32]byte) error {
 		_ = c.sm.Delete(prevID(device, hist[0].seq))
 		hist = hist[1:]
 	}
-	c.storePrevHistory(device, hist)
-	return nil
+	return c.storePrevHistory(device, hist)
 }
 
 // prevSlot is one kept replaced session and the key its state is stored under.
