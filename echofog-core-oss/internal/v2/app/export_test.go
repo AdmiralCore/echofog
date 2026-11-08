@@ -12,3 +12,6 @@ func OpenSnapshotForTest(raw []byte, password string) (*SnapshotDoc, error) {
 func SealSnapshotForTest(d *SnapshotDoc, password string) ([]byte, error) {
 	return sealSnapshot(d, password)
 }
+
+// UnwebInviteForTest turns the web form of an invitation back into the app's.
+func UnwebInviteForTest(s string) string { return unwebInvite(s) }

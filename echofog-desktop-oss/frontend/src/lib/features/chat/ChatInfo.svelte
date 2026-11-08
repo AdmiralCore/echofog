@@ -34,6 +34,7 @@
   let members = [];
   let error = '';
   let newMemberKey = '';
+  let inviteSent = false; // the invitation to a contact went out: they are a member once they accept
   let busy = ''; // the member being changed, or 'add'
   let roles = []; // the group's roles (GroupRoles)
 
@@ -92,8 +93,9 @@
   async function addMember() {
     const key = newMemberKey.trim();
     if (!key) return;
+    inviteSent = false;
     await memberAction('add', () => App.AddGroupMember(conv.groupId, key));
-    if (!error) newMemberKey = '';
+    if (!error) { newMemberKey = ''; inviteSent = true; }
   }
   async function leave() {
     if (!(await ask({ message: $t('chats.confirm.leave', { name: conv.name }), danger: true }))) return;
@@ -270,6 +272,7 @@
           <input class="grow" placeholder={$t('chats.addByKey')} bind:value={newMemberKey} spellcheck="false" />
           <button type="submit" disabled={!newMemberKey.trim() || busy === 'add'}>{$t('common.add')}</button>
         </form>
+        {#if inviteSent}<p class="small">{$t('chats.inviteSent')}</p>{/if}
         <p class="small faint">{$t('chats.addHint')}</p>
       </div>
     {/if}
