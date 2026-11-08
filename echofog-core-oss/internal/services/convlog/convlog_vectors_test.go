@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,6 +25,10 @@ type vectorFile struct {
 		Ext         string `json:"ext"`
 		Sig         string `json:"sig"`
 		ID          string `json:"id"`
+		LastSeq     []struct {
+			Author string `json:"author"`
+			Seq    uint64 `json:"seq"`
+		} `json:"last_seq"`
 	} `json:"events"`
 	Negative []struct {
 		Name        string `json:"name"`
@@ -47,7 +52,7 @@ func TestConvlogVectorsCopyMatchesSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(copyBytes, spec) {
+	if !bytes.Equal(bytes.ReplaceAll(copyBytes, []byte(""), nil), bytes.ReplaceAll(spec, []byte(""), nil)) {
 		t.Fatal("testdata/convlog.json differs from docs/protocol/v2/vectors/convlog.json")
 	}
 }
@@ -193,4 +198,83 @@ func TestConvlogNegativeAttachmentNotCovered(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConvlogGroupCloseVector checks the CloseBody of group-close-vector: entries sorted by author,
+// one per author, the seq values the vector names, and that the close event decodes and is kind 10.
+// Acceptance of later events against the vector is specified (conversation-log.md §2.5) and not
+// implemented in this build yet.
+func TestConvlogGroupCloseVector(t *testing.T) {
+	v := loadVectors(t)
+	for _, ev := range v.Events {
+		if ev.Name != "group-close-vector" {
+			continue
+		}
+		e, _, err := Decode(mustHex(t, ev.Event))
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Kind != 10 {
+			t.Fatalf("kind = %d, want 10", e.Kind)
+		}
+		var got []struct {
+			author string
+			seq    uint64
+		}
+		b := e.Body
+		for len(b) > 0 {
+			num, typ, n := protowire.ConsumeTag(b)
+			if n < 0 || num != 1 || typ != protowire.BytesType {
+				t.Fatalf("CloseBody: bad field at %d", len(got))
+			}
+			b = b[n:]
+			entry, m := protowire.ConsumeBytes(b)
+			if m < 0 {
+				t.Fatal("CloseBody: bad entry")
+			}
+			b = b[m:]
+			var author []byte
+			var seq uint64
+			for len(entry) > 0 {
+				fn, ft, k := protowire.ConsumeTag(entry)
+				if k < 0 {
+					t.Fatal("SeqEntry: bad tag")
+				}
+				entry = entry[k:]
+				switch {
+				case fn == 1 && ft == protowire.BytesType:
+					x, j := protowire.ConsumeBytes(entry)
+					if j < 0 {
+						t.Fatal("SeqEntry: bad author")
+					}
+					author, entry = x, entry[j:]
+				case fn == 2 && ft == protowire.VarintType:
+					x, j := protowire.ConsumeVarint(entry)
+					if j < 0 {
+						t.Fatal("SeqEntry: bad seq")
+					}
+					seq, entry = x, entry[j:]
+				default:
+					t.Fatalf("SeqEntry: unexpected field %d", fn)
+				}
+			}
+			got = append(got, struct {
+				author string
+				seq    uint64
+			}{hex.EncodeToString(author), seq})
+		}
+		if len(got) != len(ev.LastSeq) {
+			t.Fatalf("entries = %d, vector %d", len(got), len(ev.LastSeq))
+		}
+		for i := range got {
+			if got[i].author != ev.LastSeq[i].Author || got[i].seq != ev.LastSeq[i].Seq {
+				t.Errorf("entry %d = %s/%d, vector %s/%d", i, got[i].author, got[i].seq, ev.LastSeq[i].Author, ev.LastSeq[i].Seq)
+			}
+			if i > 0 && got[i-1].author >= got[i].author {
+				t.Errorf("entries not sorted by author at %d", i)
+			}
+		}
+		return
+	}
+	t.Fatal("group-close-vector missing")
 }
