@@ -68,6 +68,8 @@ type Transfer struct {
 	Rate    int64
 	Stalled bool
 	Group   string
+	// Channel and Thread place a file posted in a group, as its message says.
+	Channel, Thread string
 	// Members, Delivered: for a file posted in a group, who it was offered to and who has all of it.
 	Members, Delivered int
 	Voice              bool
@@ -547,32 +549,9 @@ func (a *App) SendFile(ctx context.Context, peerHex, path string) (Transfer, err
 	return a.publish(ctx, sh, src, path, strings.ToLower(peerHex), "", false, sh.Offer.Message())
 }
 
-// SendGroupFile offers the file at path to the members of a group. The group layer names the members;
-// the transfer is done when every one of them has the file.
-func (a *App) SendGroupFile(ctx context.Context, group string, members [][32]byte, path string) (Transfer, error) {
-	if a.cfg.Files == nil || a.cfg.Chat == nil {
-		return Transfer{}, ErrFilesOff
-	}
-	if group == "" || len(group) > maxGroupIDLen {
-		return Transfer{}, ErrBadFile
-	}
-	seen := map[[32]byte]bool{a.cfg.Self: true}
-	var to [][32]byte
-	for _, m := range members {
-		if !seen[m] {
-			seen[m] = true
-			to = append(to, m)
-		}
-	}
-	if len(to) == 0 {
-		return Transfer{}, ErrBadFile
-	}
-	a.sweep()
-	sh, src, err := a.prepare(path, to)
-	if err != nil {
-		return Transfer{}, err
-	}
-	return a.publish(ctx, sh, src, path, "", group, false, sh.Offer.Message())
+// SendGroupFile posts the file at path in a group, to the channel and the thread the sender chose.
+func (a *App) SendGroupFile(ctx context.Context, group, channel, thread, path string) (Transfer, error) {
+	return Transfer{}, errors.New("not built")
 }
 
 // FileServed records that a recipient confirmed the whole file (files.ServerConfig.OnDone). Only a
@@ -615,7 +594,8 @@ func (a *App) FileServed(fid [16]byte, node [32]byte) {
 // "" for a direct message (the sender must be a contact) or the group the message came in, where the
 // caller has checked that the sender is a member. Every refusal is the same ErrBadOffer and nothing
 // is sent back.
-func (a *App) OnFileOffer(from [32]byte, group string, m *chatpb.PersonalMessageProto) error {
+func (a *App) OnFileOffer(from [32]byte, m *chatpb.PersonalMessageProto) error {
+	group := a.groupOfSender(context.Background(), from)
 	if a.cfg.FileNet == nil {
 		return ErrFilesOff
 	}

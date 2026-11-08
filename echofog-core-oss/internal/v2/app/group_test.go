@@ -40,6 +40,7 @@ type gNode struct {
 	app       *app.App
 	book      *app.GroupBook
 	rig       *rig
+	hold      *holder // the files this node shares
 	bookStore *memKV
 	world     *gWorld
 	sent      int // letters sent to the node
@@ -51,14 +52,16 @@ type gLetter struct {
 }
 
 type gWorld struct {
-	t      *testing.T
-	mu     sync.Mutex
-	queue  []gLetter
-	nodes  map[[32]byte]*gNode
-	pubs   map[[32]byte][32]byte
-	seq    uint64
-	clk    *gclock
-	toNode map[[32]byte]int // letters delivered to each node
+	t          *testing.T
+	mu         sync.Mutex
+	queue      []gLetter
+	nodes      map[[32]byte]*gNode
+	pubs       map[[32]byte][32]byte
+	seq        uint64
+	clk        *gclock
+	toNode     map[[32]byte]int // letters delivered to each node
+	fw         *world           // the files of the nodes, for the fake files/2
+	fileOffers int              // personal file offers sent (a file in a group sends none)
 }
 
 type gPort struct {
@@ -72,6 +75,9 @@ func (p *gPort) Send(_ context.Context, to [32]byte, m *chatpb.PersonalMessagePr
 	p.w.seq++
 	var id [16]byte
 	binary.BigEndian.PutUint64(id[8:], p.w.seq)
+	if m.GetType() == chatpb.PersonalMessageType_MSG_TYPE_FILE {
+		p.w.fileOffers++
+	}
 	p.w.queue = append(p.w.queue, gLetter{p.self, to, proto.Clone(m).(*chatpb.PersonalMessageProto)})
 	p.w.toNode[to]++
 	return id, nil
@@ -117,7 +123,7 @@ var groupWorldConfig func(*app.Config)
 
 func newGroupWorld(t *testing.T, n int) (*gWorld, []*gNode) {
 	t.Helper()
-	w := &gWorld{t: t, nodes: map[[32]byte]*gNode{}, pubs: map[[32]byte][32]byte{}, clk: &gclock{}, toNode: map[[32]byte]int{}}
+	w := &gWorld{t: t, nodes: map[[32]byte]*gNode{}, pubs: map[[32]byte][32]byte{}, clk: &gclock{}, toNode: map[[32]byte]int{}, fw: newWorld()}
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
 	sk := secret.New(key)
@@ -143,6 +149,7 @@ func newGroupWorld(t *testing.T, n int) (*gWorld, []*gNode) {
 		}
 		g.book = book
 		g.rig = rg
+		g.hold = &holder{}
 		eng, err := convsync.New(convsync.Config{
 			Pub: g.pub, Sign: sign, Store: newKV(), IDs: ids, Net: engNet{port}, Dir: w,
 			Rules: book.Rules(), Groups: book.Conv, Members: book.Members, SharedGroups: book.SharedGroups,
@@ -155,7 +162,7 @@ func newGroupWorld(t *testing.T, n int) (*gWorld, []*gNode) {
 		cfg := app.Config{
 			Runtime: rg.rt, Links: rg.ln, Store: rg.kv, Clock: w.clk, Self: g.node, Mode: app.ModePublic, Version: "0.3.0",
 			Convs: eng, Groups: book, Chat: port,
-			Files: &holder{}, FileNet: &fakeFiles{w: newWorld(), self: g.node}, FileDir: t.TempDir(),
+			Files: g.hold, FileNet: &fakeFiles{w: w.fw, self: g.node, confirm: true}, FileDir: t.TempDir(),
 			Prefs: convsync.NewPrefs(newKV()),
 			PubOf: func(ctx context.Context, n [32]byte) ([32]byte, error) { return w.Pub(ctx, n) },
 		}
@@ -168,6 +175,9 @@ func newGroupWorld(t *testing.T, n int) (*gWorld, []*gNode) {
 		}
 		g.app = a
 		w.nodes[g.node] = g
+		w.fw.mu.Lock()
+		w.fw.nodes[g.node] = &fileNode{node: g.node, hold: g.hold, app: a}
+		w.fw.mu.Unlock()
 		out = append(out, g)
 	}
 	return w, out

@@ -161,6 +161,9 @@ func (f *fakeFiles) Fetch(ctx context.Context, from [32]byte, o files.Offer, st 
 		return files.ErrUnavailable
 	}
 	allowed := false
+	if sh.Authorize != nil {
+		allowed = sh.Authorize(f.self)
+	}
 	for _, r := range sh.Recipients {
 		allowed = allowed || r == f.self
 	}
@@ -375,7 +378,7 @@ func offerTo(t *testing.T, a, b *fileNode) error {
 	if len(ms) == 0 {
 		t.Fatal("no file message was sent")
 	}
-	return b.app.OnFileOffer(a.node, "", ms[len(ms)-1])
+	return b.app.OnFileOffer(a.node, ms[len(ms)-1])
 }
 
 func offerMessage(t *testing.T, sender [32]byte, data []byte, name string) (*chatpb.PersonalMessageProto, files.Offer) {
@@ -498,38 +501,6 @@ func TestOutgoingOfferExpires(t *testing.T) {
 	}
 }
 
-func TestGroupFileCountsRecipients(t *testing.T) {
-	w := newWorld()
-	a, b, c := w.node(t, 11, app.FileLimits{}), w.node(t, 12, app.FileLimits{}), w.node(t, 13, app.FileLimits{})
-	path, _ := a.file("g.bin", 2000)
-	tr, err := a.app.SendGroupFile(context.Background(), "grp1", [][32]byte{b.node, c.node}, path)
-	if err != nil {
-		t.Fatalf("SendGroupFile: %v", err)
-	}
-	if tr.Group != "grp1" || tr.Members != 2 || tr.Delivered != 0 || tr.Peer != "" || tr.State != app.FileOffered {
-		t.Fatalf("transfer %+v", tr)
-	}
-	for _, m := range []*fileNode{b, c} {
-		if len(a.log.of(chatpb.PersonalMessageType_MSG_TYPE_FILE, m.node)) != 1 {
-			t.Fatalf("member %x got no offer", m.node[:2])
-		}
-	}
-	fid := a.hold.added[0].Offer.FID
-	a.app.FileServed(fid, b.node)
-	a.app.FileServed(fid, b.node)  // twice: one
-	a.app.FileServed(fid, nid(90)) // not a member
-	if got := a.state(tr.ID); got.Delivered != 1 || got.State != app.FileOffered {
-		t.Fatalf("after one member: %+v", got)
-	}
-	a.app.FileServed(fid, c.node)
-	if got := a.state(tr.ID); got.Delivered != 2 || got.State != app.FileDone || got.Done != got.Size {
-		t.Fatalf("after both: %+v", got)
-	}
-	if _, err := a.app.SendGroupFile(context.Background(), "grp1", nil, path); err == nil {
-		t.Fatal("a group file with no members")
-	}
-}
-
 // ---- receiving ----------------------------------------------------------------------------------------------------
 
 func TestIncomingOfferWaitsForTheUser(t *testing.T) {
@@ -572,7 +543,7 @@ func TestIncomingOfferRefusals(t *testing.T) {
 	b.befriend(c)
 	data := bytes.Repeat([]byte{7}, 3000)
 	good, o := offerMessage(t, a.node, data, "a.bin")
-	if err := b.app.OnFileOffer(a.node, "", good); err != nil {
+	if err := b.app.OnFileOffer(a.node, good); err != nil {
 		t.Fatal(err)
 	}
 
@@ -602,22 +573,22 @@ func TestIncomingOfferRefusals(t *testing.T) {
 		{"nil", a.node, nil},
 	}
 	for _, c := range cases {
-		if err := b.app.OnFileOffer(c.from, "", c.m); !errors.Is(err, app.ErrBadOffer) {
+		if err := b.app.OnFileOffer(c.from, c.m); !errors.Is(err, app.ErrBadOffer) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
 	if err := b.app.Block(a.hex()); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.app.OnFileOffer(a.node, "", offerOf(t, a.node, 1)); !errors.Is(err, app.ErrBadOffer) {
+	if err := b.app.OnFileOffer(a.node, offerOf(t, a.node, 1)); !errors.Is(err, app.ErrBadOffer) {
 		t.Errorf("blocked contact: %v", err)
 	}
 	_ = b.app.Unblock(a.hex())
 	// at most MaxPerSender offers wait from one contact
-	if err := b.app.OnFileOffer(a.node, "", offerOf(t, a.node, 2)); err != nil {
+	if err := b.app.OnFileOffer(a.node, offerOf(t, a.node, 2)); err != nil {
 		t.Fatalf("second offer: %v", err)
 	}
-	if err := b.app.OnFileOffer(a.node, "", offerOf(t, a.node, 3)); !errors.Is(err, app.ErrTooManyTransfers) {
+	if err := b.app.OnFileOffer(a.node, offerOf(t, a.node, 3)); !errors.Is(err, app.ErrTooManyTransfers) {
 		t.Errorf("third offer: %v", err)
 	}
 	if list, _ := b.app.ListFileTransfers(""); len(list) != 2 {
@@ -635,24 +606,6 @@ func offerOf(t *testing.T, sender [32]byte, n byte) *chatpb.PersonalMessageProto
 
 func proto3clone(m *chatpb.PersonalMessageProto) *chatpb.PersonalMessageProto {
 	return proto.Clone(m).(*chatpb.PersonalMessageProto)
-}
-
-func TestGroupOfferFromAMemberWhoIsNoContact(t *testing.T) {
-	w := newWorld()
-	b := w.node(t, 12, app.FileLimits{})
-	a := w.node(t, 11, app.FileLimits{})
-	m, _ := offerMessage(t, a.node, bytes.Repeat([]byte{1}, 500), "g.bin")
-	// the group layer vouches for the membership; a direct offer from a stranger stays refused
-	if err := b.app.OnFileOffer(a.node, "", m); !errors.Is(err, app.ErrBadOffer) {
-		t.Fatalf("direct: %v", err)
-	}
-	if err := b.app.OnFileOffer(a.node, "grp1", m); err != nil {
-		t.Fatalf("group: %v", err)
-	}
-	list, _ := b.app.ListFileTransfers("")
-	if len(list) != 1 || list[0].Group != "grp1" || list[0].State != app.FileOffered {
-		t.Fatalf("list %+v", list)
-	}
 }
 
 func TestAcceptDownloadsAndSenderLearnsOnlyFromTheConfirmation(t *testing.T) {
@@ -1134,7 +1087,7 @@ func FuzzOnFileOffer(f *testing.F) {
 	f.Fuzz(func(t *testing.T, meta, group, hash string) {
 		b := newWorld().node(t, 12, app.FileLimits{})
 		m := &chatpb.PersonalMessageProto{Id: "x", Type: chatpb.PersonalMessageType_MSG_TYPE_FILE, Metadata: meta, ContentHash: hash}
-		_ = b.app.OnFileOffer(nid(11), group, m)
+		_ = b.app.OnFileOffer(nid(11), m)
 		if list, err := b.app.ListFileTransfers(""); err != nil || len(list) > 1000 {
 			t.Fatalf("list: %d, %v", len(list), err)
 		}

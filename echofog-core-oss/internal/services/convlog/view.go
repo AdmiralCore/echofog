@@ -208,6 +208,8 @@ type FileRef struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+	// Root is the Merkle root of the file as a group event names it (hex); empty for a file of the old kind.
+	Root string `json:"root,omitempty"`
 	Mime string `json:"mime,omitempty"`
 	// Thumb is a picture's thumbnail (base64 JPEG, sent with the offer), W and H its size.
 	Thumb string `json:"thumb,omitempty"`

@@ -94,6 +94,9 @@ type Share struct {
 	Source     io.ReaderAt
 	Tree       *filexfer.Tree
 	Recipients [][32]byte
+	// Authorize, when set, decides at each WANT whether node may fetch the file, instead of Recipients
+	// (a file posted in a group: the group's log says who is in and may read, and it changes).
+	Authorize func(node [32]byte) bool
 }
 
 // Stats counts what the server did.

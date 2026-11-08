@@ -120,38 +120,43 @@ func TestConvlogVectorsMatchCode(t *testing.T) {
 	}
 }
 
-// TestConvlogAttachmentIsUnknownToThisBuild checks what the vector relies on: this build has no
-// attachment field, so an old client keeps MsgBody field 6 as an unknown field of the signed body.
-func TestConvlogAttachmentIsUnknownToThisBuild(t *testing.T) {
+// TestConvlogAttachmentVectorIsKnown: this build reads the attachment (field 6) of msg-att, and it is
+// valid (fid, size, root, name, mime as the vector says), so the file card is shown.
+func TestConvlogAttachmentVectorIsKnown(t *testing.T) {
 	v := loadVectors(t)
-	var msg *Event
 	for _, ev := range v.Events {
-		if ev.Name == "msg-att" {
-			e, _, err := Decode(mustHex(t, ev.Event))
-			if err != nil {
-				t.Fatal(err)
-			}
-			msg = e
+		if ev.Name != "msg-att" {
+			continue
 		}
+		e, _, err := Decode(mustHex(t, ev.Event))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body MsgBody
+		if err := proto.Unmarshal(e.Body, &body); err != nil {
+			t.Fatalf("body: %v", err)
+		}
+		if body.GetText() != "вот схема" {
+			t.Errorf("text = %q", body.GetText())
+		}
+		if len(body.ProtoReflect().GetUnknown()) != 0 {
+			t.Error("the attachment is still an unknown field")
+		}
+		at := body.GetAtt()
+		if at == nil || len(at.Fid) != 16 || at.Size != 4096 || len(at.MerkleRoot) != 32 || at.Name == "" || at.Mime == "" {
+			t.Fatalf("attachment %+v", at)
+		}
+		if err := checkAttachment(at); err != nil {
+			t.Errorf("the vector's attachment is refused: %v", err)
+		}
+		return
 	}
-	if msg == nil {
-		t.Fatal("msg-att missing")
-	}
-	var body MsgBody
-	if err := proto.Unmarshal(msg.Body, &body); err != nil {
-		t.Fatalf("body: %v", err)
-	}
-	if body.GetText() != "вот схема" {
-		t.Errorf("text = %q", body.GetText())
-	}
-	if len(body.ProtoReflect().GetUnknown()) == 0 {
-		t.Error("attachment (field 6) not kept as an unknown field")
-	}
+	t.Fatal("msg-att missing")
 }
 
-// TestConvlogGroupCloseKindIsUnknownToThisBuild: kind 10 is accepted by Decode but not known to
-// this build, so its events are stored and synced, not shown (versioning §3.9).
-func TestConvlogGroupCloseKindIsUnknownToThisBuild(t *testing.T) {
+// TestConvlogGroupCloseKindIsKnown: kind 10 is a kind of this build (the old-reader behaviour of
+// versioning §3.9 is for builds that do not have it).
+func TestConvlogGroupCloseKindIsKnown(t *testing.T) {
 	v := loadVectors(t)
 	for _, ev := range v.Events {
 		if ev.Name != "group-close" {
@@ -161,11 +166,11 @@ func TestConvlogGroupCloseKindIsUnknownToThisBuild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if e.Kind != 10 {
+		if e.Kind != 10 || KindClose != 10 {
 			t.Errorf("kind = %d, want 10", e.Kind)
 		}
-		if KnownKind(e.Kind) {
-			t.Error("kind 10 is known to this build")
+		if !KnownKind(e.Kind) {
+			t.Error("kind 10 is not known to this build")
 		}
 		return
 	}
@@ -202,8 +207,7 @@ func TestConvlogNegativeAttachmentNotCovered(t *testing.T) {
 
 // TestConvlogGroupCloseVector checks the CloseBody of group-close-vector: entries sorted by author,
 // one per author, the seq values the vector names, and that the close event decodes and is kind 10.
-// Acceptance of later events against the vector is specified (conversation-log.md §2.5) and not
-// implemented in this build yet.
+// Acceptance of later events against the vector is tested in attach_test.go.
 func TestConvlogGroupCloseVector(t *testing.T) {
 	v := loadVectors(t)
 	for _, ev := range v.Events {

@@ -50,6 +50,7 @@ type GroupInfo struct {
 	Owner                        bool
 	Members                      int
 	Created                      int64
+	Closed                       bool // the owner closed it: an archive to read
 	Pending                      bool // asked to join, waiting for a decision or for the group's history
 	Unread                       int
 }
