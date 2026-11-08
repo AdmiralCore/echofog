@@ -22,6 +22,9 @@ const (
 	repairAttempts = 6
 	repairBase     = time.Second
 	repairCap      = 8 * time.Second
+	// repairPathTries is how many times a new path is tried before the session is given up for a
+	// new one: a peer that lost the session during the outage refuses every PATH_BIND.
+	repairPathTries = 2
 )
 
 // pathFailing is the reaction to mux.Session.SetOnPathFailing.
@@ -98,7 +101,7 @@ func (r *Runtime) repair(est *session.Established) {
 		if opt.Card == nil {
 			opt.Card = r.repairCard(est.SID)
 		}
-		if est.HasFeature(frame.FeaturePathMigration) {
+		if est.HasFeature(frame.FeaturePathMigration) && try < repairPathTries {
 			// The new path becomes the active one; the failing path stays a standby until it
 			// recovers or dies.
 			if _, err := r.addPathTo(ctx, est, opt, true); err == nil {
