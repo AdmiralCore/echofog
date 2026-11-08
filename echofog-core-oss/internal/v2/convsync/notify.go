@@ -1,6 +1,7 @@
 package convsync
 
 import (
+	"encoding/binary"
 	"errors"
 
 	"github.com/echofog/echofog-core/internal/services/convlog"
@@ -38,6 +39,30 @@ func NewPrefs(kv store.KV) *Prefs { return &Prefs{kv: kv} }
 
 func modeKey(conv convlog.ConvID, channel string) []byte {
 	return []byte("mode/" + conv.String() + "/" + channel)
+}
+
+func muteKey(conv convlog.ConvID, channel string) []byte {
+	return []byte("muteuntil/" + conv.String() + "/" + channel)
+}
+
+// SetMuteUntil silences a channel until the unix time until; 0 clears it. Like the mode, it is local.
+func (p *Prefs) SetMuteUntil(conv convlog.ConvID, channel string, until int64) error {
+	if until <= 0 {
+		return p.kv.Delete(muteKey(conv, channel))
+	}
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(until))
+	return p.kv.Put(muteKey(conv, channel), b[:])
+}
+
+// MuteUntil is the end of a channel's silence in unix seconds (0: none was set). Whether it has run
+// out is for the caller, who has the clock.
+func (p *Prefs) MuteUntil(conv convlog.ConvID, channel string) int64 {
+	b, err := p.kv.Get(muteKey(conv, channel))
+	if err != nil || len(b) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(b))
 }
 
 func followKey(conv string, root string) []byte { return []byte("follow/" + conv + "/" + root) }

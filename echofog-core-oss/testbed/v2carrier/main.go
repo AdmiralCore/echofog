@@ -56,6 +56,14 @@ func main() {
 	duration := flag.Duration("duration", 5*time.Second, "how long a client mode runs")
 	conns := flag.Int("conns", 5, "tcp-random: how many connections")
 	seed := flag.Int64("seed", 0, "seed for the synthetic payload")
+	suite := flag.String("suite", "", "real-serve, real-client: reality2-tcp, ws2 or reality2-quic")
+	advertise := flag.String("advertise", "", "real-serve: the address the token is bound to (host:port)")
+	cover := flag.String("cover", "", "real-serve reality2-tcp: the cover site host:port")
+	caFile := flag.String("ca", "", "real-serve ws2: write the CDN certificate here; real-client ws2: trust this certificate")
+	sessions := flag.Int("sessions", 0, "real-client: short sessions of five pages each")
+	hexFlight := flag.String("hex", "", "send-hex: the bytes to send, as hex")
+	refPeer := flag.String("ref", "", "ws2-probe: the reference front host:port")
+	refListen := flag.String("ref-listen", ":4453", "real-serve ws2: where the reference front listens")
 	flag.Parse()
 
 	start := time.Now()
@@ -70,6 +78,19 @@ func main() {
 		err = serveNoise3(*listen, *ready, *seed)
 	case "noise3":
 		res, err = noise3Client(*peer, *seed, *duration)
+	case "real-serve":
+		res = result{Mode: *mode, Carrier: *suite}
+		sctx, sstop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err = serveReal(sctx, realServe{suite: *suite, listen: *listen, advertise: *advertise, cover: *cover, seed: *seed, ready: *ready, caOut: *caFile, refListen: *refListen})
+		sstop()
+	case "real-client":
+		res, err = realClient(*suite, *peer, *caFile, *seed, *sessions, *duration)
+	case "send-hex":
+		res, err = sendHex(*peer, *hexFlight)
+	case "ws2-probe":
+		if err = ws2Probe(*peer, *refPeer); err == nil {
+			return
+		}
 	case "udp-noise":
 		res, err = udpNoise(*peer, *duration, *seed)
 	case "tcp-random":

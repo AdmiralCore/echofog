@@ -52,6 +52,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == api.TunHelperFlag {
 		os.Exit(api.RunTunHelper(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == api.KillSwitchHelperFlag {
+		os.Exit(api.RunKillSwitchHelper(os.Args[2:]))
+	}
 	servernode.BuildVersion = version
 	servernode.FreeBytes = freeBytes
 	cmd, args := "run", os.Args[1:]

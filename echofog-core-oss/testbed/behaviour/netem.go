@@ -137,7 +137,10 @@ func (n *Netem) readClients() {
 	for {
 		k, from, err := n.front.ReadFrom(buf)
 		if err != nil {
-			return
+			if n.stopped(err) {
+				return
+			}
+			continue // an ICMP error from a client that went away is not the end of the path
 		}
 		pkt := append([]byte(nil), buf[:k]...)
 		if n.lose(len(pkt)) {
@@ -178,7 +181,10 @@ func (n *Netem) readUpstream(u *upstream) {
 	for {
 		k, err := u.conn.Read(buf)
 		if err != nil {
-			return
+			if n.stopped(err) {
+				return
+			}
+			continue // "connection refused" from a target that was not listening for a moment
 		}
 		pkt := append([]byte(nil), buf[:k]...)
 		if n.lose(len(pkt)) {
@@ -186,4 +192,16 @@ func (n *Netem) readUpstream(u *upstream) {
 		}
 		n.later(func() { _, _ = n.front.WriteTo(pkt, u.client) })
 	}
+}
+
+// stopped reports whether a read error is the end of the socket (closed by Close or Rebind) and not
+// a passing ICMP error of the kind a UDP socket reports on the next read after a datagram hit a
+// closed port.
+func (n *Netem) stopped(err error) bool {
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.closed
 }

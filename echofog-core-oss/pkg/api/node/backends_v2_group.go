@@ -258,7 +258,7 @@ func (b *v2MsgBackend) inviteDTO(i app.GroupInvite, canRevoke bool, p *peerNames
 	}
 	mine := i.Link != ""
 	return GroupInviteDTO{N: i.Nonce, Label: i.Label, Exp: i.Exp, Uses: i.Uses, Used: i.Used, Role: i.Role, Approval: i.Approval,
-		Issuer: p.of(i.Issuer), Mine: mine, State: state, Link: i.Link, CanRevoke: mine || canRevoke}
+		Issuer: p.of(i.Issuer), Mine: mine, State: state, Link: i.Link, WebLink: i.Web, CanRevoke: mine || canRevoke}
 }
 
 func (b *v2MsgBackend) GroupInviteCreate(groupID string, spec GroupInviteSpec) (GroupInviteDTO, error) {
@@ -304,6 +304,32 @@ func (b *v2MsgBackend) GetGroupInvite(groupID string) (string, error) {
 	return i.Link, nil
 }
 
+// AddGroupMember invites a contact: a personal invitation in their chat. They are a member once they
+// accept it. The argument is the contact's node ID (the key of its account is taken too, as in v1).
+func (b *v2MsgBackend) AddGroupMember(groupID, pubKeyHex string) error {
+	ctx, cancel := v2Ctx()
+	defer cancel()
+	return v2Err(asContact(pubKeyHex, func(node string) error { return b.app.GroupAddMember(ctx, groupID, node) }))
+}
+
+// GroupSnapshotExport writes a group file (.fogzip of protocol 2) sealed with the password.
+func (b *v2MsgBackend) GroupSnapshotExport(groupID, path, password string) error {
+	ctx, cancel := v2Ctx()
+	defer cancel()
+	return v2Err(b.app.GroupSnapshotExport(ctx, groupID, path, password))
+}
+
+// GroupSnapshotImport opens a group file; the file of v1 is refused with its own text.
+func (b *v2MsgBackend) GroupSnapshotImport(path, password string) (GroupSnapshotInfo, error) {
+	ctx, cancel := v2Ctx()
+	defer cancel()
+	g, n, err := b.app.GroupSnapshotImport(ctx, path, password)
+	if err != nil {
+		return GroupSnapshotInfo{}, v2Err(err)
+	}
+	return GroupSnapshotInfo{Group: b.groupDTO(g), Events: n}, nil
+}
+
 func (b *v2MsgBackend) GroupInviteContacts(groupID string, peerIDs []string, role string) (int, error) {
 	ctx, cancel := v2Ctx()
 	defer cancel()
@@ -339,8 +365,15 @@ func (b *v2MsgBackend) GroupJoinDecide(groupID, peerID string, accept bool) erro
 
 // ---- channels, categories, threads ---------------------------------------------------------------------------
 
-func (b *v2MsgBackend) channelView(groupID string, ch convlog.Channel) ChannelDTO {
+func (b *v2MsgBackend) channelView(groupID string, ch convlog.Channel, stats map[string]app.ChannelStat) ChannelDTO {
 	d := channelDTO(ch)
+	if st, ok := stats[ch.ID]; ok {
+		d.Unread, d.Mentions, d.LastTS = st.Unread, st.Mentions, st.LastTS
+		if st.Last != nil {
+			m := b.names().msg(*st.Last)
+			d.Last = &m
+		}
+	}
 	if ch.Voice {
 		if i, ok := b.app.ActiveGroupCall(groupID, ch.ID); ok {
 			c := groupCall(i)
@@ -359,9 +392,10 @@ func (b *v2MsgBackend) ChatChannels(ref ChatRef) ([]ChannelDTO, error) {
 	if err != nil {
 		return nil, v2Err(err)
 	}
+	stats, _ := b.app.GroupChannelStats(ref.ID) // the news are a gift: the list stands without them
 	out := make([]ChannelDTO, 0, len(chs))
 	for _, ch := range chs {
-		out = append(out, b.channelView(ref.ID, ch))
+		out = append(out, b.channelView(ref.ID, ch, stats))
 	}
 	return out, nil
 }
@@ -378,7 +412,7 @@ func (b *v2MsgBackend) ChatChannelSave(ref ChatRef, spec ChannelSpec) (ChannelDT
 	if err != nil {
 		return ChannelDTO{}, v2Err(err)
 	}
-	return b.channelView(ref.ID, ch), nil
+	return b.channelView(ref.ID, ch, nil), nil
 }
 
 func (b *v2MsgBackend) ChatChannelRemove(ref ChatRef, id string) error {
@@ -417,7 +451,16 @@ func (b *v2MsgBackend) ChatMainChannel(ref ChatRef) (ChannelDTO, error) {
 	if err != nil {
 		return ChannelDTO{}, v2Err(err)
 	}
-	return b.channelView(ref.ID, ch), nil
+	stats, _ := b.app.GroupChannelStats(ref.ID)
+	d := b.channelView(ref.ID, ch, nil)
+	if st, ok := stats[""]; ok { // the main channel is the chat itself
+		d.Unread, d.Mentions, d.LastTS = st.Unread, st.Mentions, st.LastTS
+		if st.Last != nil {
+			m := b.names().msg(*st.Last)
+			d.Last = &m
+		}
+	}
+	return d, nil
 }
 
 func (b *v2MsgBackend) ChatMainChannelSave(ref ChatRef, spec ChannelSpec) error {
@@ -529,8 +572,13 @@ func (b *v2MsgBackend) SubscribeGroupEvents(cb func(GroupEvent)) {
 			cb(GroupEvent{Kind: "members", GroupID: c.Ref.ID, Title: title})
 		}
 		p := b.names()
+		// only a message that is new tells the user; an edit or a reaction reaches the screen as conv:change
+		fresh := make(map[string]bool, len(c.Fresh))
+		for _, id := range c.Fresh {
+			fresh[id] = true
+		}
 		for _, m := range c.Messages {
-			if !m.Mine {
+			if !m.Mine && fresh[m.ID] {
 				cb(GroupEvent{Kind: "message", GroupID: c.Ref.ID, Title: title, From: p.of(m.Author), MessageID: m.ID})
 			}
 		}

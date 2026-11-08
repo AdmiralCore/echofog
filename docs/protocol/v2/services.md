@@ -411,10 +411,23 @@ ID.
 - Integrity: the Merkle tree of v1 (leaf = SHA-256(0x00 ‖ chunk), node = SHA-256(0x01 ‖ l ‖ r), RFC
   6962 shape); each CHUNK carries its audit path to the offered root.
 - Confidentiality and replay protection come from the session; there is no per-transfer key. The
-  sender serves only sessions whose authenticated peer is a recipient named by the offer (in a group:
-  each member, over its own session). P7: v1 used one key for all group members and a frame handler
-  that did not know the sender.
+  bytes are served only under the WANT rule below. P7: v1 used one key for all group members and a
+  frame handler that did not know the sender.
 - Flow control as in v1 (AIMD window 16–256 chunks, RTO `max(1.5 s, 3·srtt)`), resume from a bitmap.
+- **The offer does not name a group.** A file sent to a group, a channel or a thread is the `att` of a
+  `MSG` event of the conversation log (conversation-log.md §2.5); the group, channel and thread come from
+  that event, never from the sender's words. The offer carries no group, channel or thread.
+- **Accepting an offer from a non-contact.** A node accepts an offer for a file from a sender that is
+  not a contact only if its own log holds a `MSG` event whose `att.fid` is that file, whose author is
+  the sender, the author is a member of that conversation, and the author may write in that channel
+  (`RightsIn`: admins only, slow mode, mute, timeout). Otherwise it refuses silently: the refusal looks
+  the same as for a file it does not have (CANCEL with reason 3, unavailable), so a non-member cannot
+  tell whether the file exists in the group. A file does not appear in a group the sender is not in.
+- **Serving a WANT.** A node serves a WANT for a file only to a requester who is a member of the
+  conversation whose `MSG` event carries that `att.fid`, and who may read that event's channel
+  (`RightsIn`). Otherwise it answers CANCEL with reason 3. Which conversation a file belongs to comes
+  from that event, never from the request or the offer. The author applies this rule, and so does every
+  other node that holds the file.
 - Later: multi-source fetching, encrypted store-and-forward of files through mailboxes.
 
 ## 9. call/2 (service 8)

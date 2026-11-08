@@ -28,6 +28,10 @@ func main() {
 		// started elevated by the node for whole-computer mode: no window, no node
 		os.Exit(api.RunTunHelper(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == api.KillSwitchHelperFlag {
+		// started elevated by the kill switch of protocol 2: no window, no node
+		os.Exit(api.RunKillSwitchHelper(os.Args[2:]))
+	}
 	mime.AddExtensionType(".webm", "video/webm")
 	window := len(os.Args) > 1 && os.Args[1] == appChildFlag // started by the watcher
 	if window {

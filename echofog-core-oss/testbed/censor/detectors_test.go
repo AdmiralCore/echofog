@@ -215,3 +215,21 @@ func TestEntropyAndPopcount(t *testing.T) {
 		t.Errorf("entropy of 0..255 = %f, want 8", e)
 	}
 }
+
+// The TLS controls of D5-D8 are synthetic TCP carriers, but they are not what D1 exists for: a TLS
+// flow is never "fully encrypted", so counting it as a D1 control made recall 0.10 on a live run.
+func TestD1ControlsAreOnlyTheFullyEncryptedPayloads(t *testing.T) {
+	d := fetDetector{}
+	for _, suite := range []string{SuiteTLSInTLS, SuiteConstSize, SuiteBulkTunnel, SuiteConnStorm} {
+		f := LabeledFlow{Label: LabelCarrier, Suite: suite, Synthetic: true}
+		f.Proto = "tcp"
+		if d.Truth(f, DetectorConfig{}) {
+			t.Errorf("%s is a TLS control of D5-D8, not a D1 control", suite)
+		}
+	}
+	f := LabeledFlow{Label: LabelCarrier, Suite: "tcp-random", Synthetic: true}
+	f.Proto = "tcp"
+	if !d.Truth(f, DetectorConfig{}) {
+		t.Error("tcp-random is the D1 control")
+	}
+}

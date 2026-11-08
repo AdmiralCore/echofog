@@ -137,11 +137,16 @@ type Config struct {
 	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
 	Exit      ExitDialer
 	VPNListen string
+	// WholeComputer holds the drivers of the whole-computer mode with its kill switch (T10.6b); nil
+	// turns the mode off.
+	WholeComputer *WholeComputerConfig
 	// CallCooldown is the least time between two new calls announced by one member of a group; zero means
 	// 30 s, negative turns it off. MaxGroupCalls bounds the calls going on at once in one group (its own
 	// and its voice rooms'); zero means 16. A call beyond either is not shown: silence.
 	CallCooldown  time.Duration
 	MaxGroupCalls int
+	// JoinHost is the host of the join page for the https form of group invitations ("": none).
+	JoinHost string
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string
@@ -151,21 +156,26 @@ type Config struct {
 type App struct {
 	cfg Config
 
-	lc      sync.Mutex // serializes Start and Stop
-	running atomic.Bool
-	cmu     sync.Mutex // contacts: read-modify-write
-	kmu     sync.Mutex // knock answers: last answer per contact
-	knocked map[[32]byte]time.Time
-	asked   map[[32]byte]time.Time // knocks sent and not yet answered, by contact
-	ntc     notices                // notices for the UI (notice.go)
-	chats   chatState
-	hmu     sync.Mutex // history handed to newcomers: when, per group and key
-	handed  map[string]time.Time
-	fx      fileState
-	gev     groupEvents
-	vpn     vpnState
-	gc      callBook
-	vmu     sync.Mutex // the saved exits and the history
+	lc        sync.Mutex // serializes Start and Stop
+	running   atomic.Bool
+	cmu       sync.Mutex // contacts: read-modify-write
+	kmu       sync.Mutex // knock answers: last answer per contact
+	knocked   map[[32]byte]time.Time
+	asked     map[[32]byte]time.Time // knocks sent and not yet answered, by contact
+	ntc       notices                // notices for the UI (notice.go)
+	chats     chatState
+	hmu       sync.Mutex // history handed to newcomers: when, per group and key
+	handed    map[string]time.Time
+	fx        fileState
+	gev       groupEvents
+	vpn       vpnState
+	whole     wholeState
+	gc        callBook
+	vmu       sync.Mutex // the saved exits and the history
+	svmu      sync.Mutex // the saved messages and their count
+	svn       int
+	svCounted bool
+	seen      seenSet // messages already told as new
 }
 
 // New creates an App.

@@ -104,6 +104,9 @@ func labVisit(peer, sni string, visits int, seed int64) (result, error) {
 		}
 		_ = u.Close()
 		res.Connections++
+		// a person opens a page every few seconds; 25 connections in a burst would be a storm to D8
+		// in the control itself (found on the first live run)
+		time.Sleep(time.Duration(700+rng.Intn(500)) * time.Millisecond)
 	}
 	return res, nil
 }

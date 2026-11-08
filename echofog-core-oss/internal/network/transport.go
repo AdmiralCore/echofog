@@ -124,8 +124,8 @@ type QuicTransport struct {
 	book        peerBook
 
 	regionMu sync.RWMutex
-	regionFn func(addr string) bool // same-region predicate; nil keeps REALITY for every camouflaged peer
-	guard       atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
+	regionFn func(addr string) bool          // same-region predicate; nil keeps REALITY for every camouflaged peer
+	guard    atomic.Pointer[handshake.Guard] // limits what one address can do before it is authenticated
 
 	retryAlways atomic.Bool         // make every new address prove itself with a QUIC Retry (servers)
 	initials    *handshake.AntiDDoS // new-connection Initials per second: many ask for Retry

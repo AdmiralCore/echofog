@@ -303,6 +303,13 @@ func (a *App) vpnOK() {
 func (a *App) VPNStop() error { return a.vpnStop("stopped") }
 
 func (a *App) vpnStop(reason string) error {
+	// The user ends the VPN: the computer is handed back first (the proxy goes down after it).
+	a.wholeStopIfOn()
+	return a.vpnStopKeepingMode(reason)
+}
+
+// vpnStopKeepingMode stops the proxy and the link and leaves the whole-computer mode as it is.
+func (a *App) vpnStopKeepingMode(reason string) error {
 	v := &a.vpn
 	v.mu.Lock()
 	if !v.running {

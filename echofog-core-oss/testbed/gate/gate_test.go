@@ -410,7 +410,7 @@ func fullInput(t *testing.T) Input {
 	t.Helper()
 	run := goodRun(t)
 	base := MakeBaseline(*run, map[string]float64{"noise3": 100}, now.Add(-24*time.Hour), "old")
-	return Input{Run: run, Behaviour: behaviourReport(false), Baseline: &base, Speed: map[string]float64{"noise3": 99}, Now: now, Commit: "deadbee"}
+	return Input{Run: run, Behaviour: behaviourReport(false), Baseline: &base, Speed: map[string]float64{"noise3": 99}, Scenarios: both(), Now: now, Commit: "deadbee"}
 }
 
 func zeroFPR(in *Input) {

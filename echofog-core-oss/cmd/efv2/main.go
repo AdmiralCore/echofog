@@ -40,6 +40,8 @@ func run(args []string) error {
 		return cmdEcho(args[1:])
 	case "status":
 		return cmdStatus(args[1:])
+	case "killswitch":
+		return cmdKillswitch(args[1:], os.Stdout)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil
@@ -86,6 +88,7 @@ usage:
   efv2 dial   --data DIR <card.json>
   efv2 echo   --data DIR <device-id> [--card card.json] [--bytes N] [--datagrams N]
   efv2 status --data DIR
+  efv2 killswitch remove|status   (remove: elevated terminal; deletes every filter of the kill switch)
 
 init prints the recovery phrase once. The data directory holds the v2 store, the identity file and
 the card/status snapshots the other subcommands read while a node is running.
