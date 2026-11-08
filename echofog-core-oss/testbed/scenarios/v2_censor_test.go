@@ -21,15 +21,11 @@ type knownFinding struct {
 // knownFindings are the red rows. A row that is red and not listed here fails the test: a new red
 // is news. A listed row that is not red any more fails it too, unless it is marginal.
 var knownFindings = map[string]knownFinding{
-	"v2-censor/noise3/classifier": {why: "D10 (UDP shape) flags about a third of the noise3 flows: a flow whose first datagram is the Init " +
-		"(1271 bytes or more, random-looking) is flagged, a flow that opens with the short junk datagram of the shape profile is not; " +
-		"the gate allows 10 %"},
-	"v2-censor/reality2-tcp/classifier": {why: "D7 (record sizes and timings against the browser control) flags a part of the reality2-tcp " +
-		"flows: the record sizes are inside the control's spread, the gaps between records are at the edge of it (the carrier sends small " +
-		"mux frames between pages); the share varies from run to run around the 10 % limit", marginal: true},
-	"v2-censor/ws2/classifier": {why: "D4 flags every ws2 flow: the outer ClientHello offers only http/1.1 (as a WebSocket dial must), " +
-		"its JA4 has h1 where the profile file of browsers has h2, and the file has no Chrome WebSocket hello (needs a real capture); " +
-		"D7 flags every flow too (record sizes and gaps inside the WebSocket framing differ from the control; not analysed further)"},
+	"v2-censor/noise3/classifier": {why: "D10 (UDP shape) flags about a third of the noise3 flows: the default shape profile draws 0 to 2 junk " +
+		"datagrams, and a flow with none opens with the Init (1271 bytes or more, random-looking), which D10 flags; a flow that opens with a " +
+		"junk datagram is not flagged. The gate allows 10 %. A finding of the product (shape/noise3)."},
+	"v2-censor/ws2/classifier": {why: "D6 (cross-layer round trip) flags a persistent WebSocket in some runs (AUC 0.55 to 0.80 against 0.65); " +
+		"it reads the timing of the loopback model, so it is not confirmed as a property of ws2", marginal: true},
 }
 
 var censorCarriers = []string{"noise3", "reality2-quic", "reality2-tcp", "ws2"}

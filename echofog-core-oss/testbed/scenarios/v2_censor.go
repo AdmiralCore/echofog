@@ -50,7 +50,7 @@ func runCensor(ctx context.Context, env Env) Result {
 				newRow("v2-censor/"+c.name+"/probe", "active probe", "not run", probeLimit, gate.NotMeasured, why))
 			continue
 		}
-		crow, cfind := classifierRow(c.name, cc.Flows, browser, cfg)
+		crow, cfind := classifierRowWith(c.name, cc.Flows, browser, cfg, inconclusiveFor(c.name))
 		prow, pfind := probeRow(c.name, cc.Probe)
 		res.Rows = append(res.Rows, crow, prow)
 		for _, f := range []string{cfind, pfind} {
@@ -65,4 +65,23 @@ func runCensor(ctx context.Context, env Env) Result {
 		res.Rows = append(res.Rows, controlRow(browser, cfg))
 	}
 	return res
+}
+
+// inconclusiveFor names the detectors whose reference or control cannot judge a carrier yet. They
+// are an artifact of the lab, not a finding of the product (acceptance of T15.1):
+//   - D7 compares record sizes and gaps with a control of 20 short GETs; reality2-tcp and ws2 carry
+//     long-lived multiplexed sessions, which a control of short pages does not represent (the control
+//     needs a streaming flow and at least 60 flows);
+//   - D4 compares the outer ClientHello with the browser profiles; ws2 offers http/1.1 only, as a
+//     WebSocket dial must, and browserprofiles holds no Chrome http/1.1 hello (it needs a real
+//     capture, T15.2).
+func inconclusiveFor(carrier string) map[string]string {
+	const d7 = "the control is 20 short GETs: no streaming flow, fewer than 60 flows"
+	switch carrier {
+	case "reality2-tcp":
+		return map[string]string{"D7": d7}
+	case "ws2":
+		return map[string]string{"D7": d7, "D4": "browserprofiles holds no Chrome http/1.1 JA4 (a real capture is needed, T15.2)"}
+	}
+	return nil
 }

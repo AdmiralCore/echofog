@@ -33,6 +33,13 @@ func labelFlows(flows []censor.Flow, label censor.Label, suite string, cfg censo
 // flows, D6's AUC against the browser control at most 0.65). A detector with no flow in its scope is
 // named as not measured. The second result is a finding when the row is red.
 func classifierRow(name string, carrierFlows, browserFlows []censor.Flow, cfg censor.DetectorConfig) (gate.Row, string) {
+	return classifierRowWith(name, carrierFlows, browserFlows, cfg, nil)
+}
+
+// classifierRowWith is classifierRow for a carrier whose reference or control is missing for some
+// detectors (detector to reason): those are not judged, the row says so, and a row with nothing else
+// red is not green. What the references lack is not a finding of the product.
+func classifierRowWith(name string, carrierFlows, browserFlows []censor.Flow, cfg censor.DetectorConfig, inconclusive map[string]string) (gate.Row, string) {
 	id := "v2-censor/" + name + "/classifier"
 	if len(carrierFlows) == 0 {
 		return newRow(id, "classifier", "no flows", classifierLimit, gate.NotMeasured, "the capture holds no flow of the carrier"), ""
@@ -41,9 +48,13 @@ func classifierRow(name string, carrierFlows, browserFlows []censor.Flow, cfg ce
 	labeled = append(labeled, labelFlows(browserFlows, censor.LabelBrowser, "utls-chrome", cfg)...)
 	res := censor.V2Gate(labeled, cfg)
 
-	var flagged, clean, unmeasured []string
+	var flagged, clean, unmeasured, excluded []string
 	measured := map[string]bool{}
 	for _, r := range res.Rows {
+		if why, skip := inconclusive[r.Detector]; skip {
+			excluded = append(excluded, fmt.Sprintf("%s (%s)", r.Detector, why))
+			continue
+		}
 		switch {
 		case !r.Measured:
 			unmeasured = append(unmeasured, r.Detector)
@@ -84,10 +95,25 @@ func classifierRow(name string, carrierFlows, browserFlows []censor.Flow, cfg ce
 		}
 		note += fmt.Sprintf("; first datagram of the flow: %d of %d are 1001 bytes or more, the rest are shorter", big, len(carrierFlows))
 	}
+	if len(excluded) > 0 {
+		note += "; not judged, the reference or the control is missing: " + strings.Join(excluded, "; ")
+	}
+	var failures []string
+	for _, f := range res.Failures {
+		skip := false
+		for d := range inconclusive {
+			skip = skip || strings.HasPrefix(f, d+" ")
+		}
+		if !skip {
+			failures = append(failures, f)
+		}
+	}
 	switch {
-	case len(res.Failures) > 0:
+	case len(failures) > 0:
 		return newRow(id, "classifier", value, classifierLimit, gate.Red, note),
-			fmt.Sprintf("%s: %s", name, strings.Join(res.Failures, "; "))
+			fmt.Sprintf("%s: %s", name, strings.Join(failures, "; "))
+	case len(excluded) > 0:
+		return newRow(id, "classifier", value, classifierLimit, gate.NotMeasured, note), ""
 	case !measured[want]:
 		return newRow(id, "classifier", value, classifierLimit, gate.NotMeasured, note+"; "+want+" did not look at the flows"), ""
 	}
@@ -186,11 +212,4 @@ func detectorOrder(id string) int {
 	var n int
 	_, _ = fmt.Sscanf(id, "D%d", &n)
 	return n
-}
-
-// classifierRowWith is classifierRow for a carrier whose reference or control is missing for some
-// detectors (name to reason): those are not judged, said so in the row, and a row with nothing else
-// red is not green.
-func classifierRowWith(name string, carrierFlows, browserFlows []censor.Flow, cfg censor.DetectorConfig, inconclusive map[string]string) (gate.Row, string) {
-	return classifierRow(name, carrierFlows, browserFlows, cfg)
 }
