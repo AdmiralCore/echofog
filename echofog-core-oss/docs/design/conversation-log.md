@@ -65,16 +65,43 @@ message Event {
   bytes  target   = 7;  // event this one acts on (edit, delete, react, pin)
   bytes  reply_to = 8;  // message being answered (quote/reply)
   bytes  thread   = 9;  // root message of the thread this message belongs to (comments)
-  bytes  body     = 10; // kind-specific payload (protobuf)
-  bytes  sig      = 15; // Ed25519 by author over the deterministic encoding of fields 1..10
+  bytes  body     = 10; // kind-specific payload (protobuf), see 2.5
+  bytes  ext      = 11; // envelope-level extension, signed (EventExt: channel = 1, a string)
+  bytes  body_hash = 12; // set instead of body once the body was stripped (a deleted message)
+  bytes  sig      = 15; // Ed25519 by author over the signed bytes below
 }
 ```
 
-- **Event id** = `SHA-256("echofog-ev-v1" ‖ signed bytes)[:16]`, 32 hex characters. Content
+Protobuf encoding is deterministic (fields in ascending order, proto3 defaults omitted). Field numbers
+13 and 14 are not used.
+
+**Signed bytes** (what the signature covers; `internal/services/convlog/event.go`, `signedBytes`).
+It is a canonical encoding, not the protobuf encoding. Concatenated in this order:
+
+| Part | Encoding |
+|---|---|
+| domain | the 17 ASCII bytes `echofog-ev-sig-v1` |
+| `conv` | length-prefixed (below) |
+| `author` | length-prefixed |
+| `seq` | u64 big-endian |
+| `lamport` | u64 big-endian |
+| `ts_ms` | u64 big-endian, two's complement of the int64 |
+| `kind` | u32 big-endian |
+| `target`, `reply_to`, `thread` | each length-prefixed |
+| body hash | length-prefixed `SHA-256(body)` (32 bytes); for a stripped event, the stored `body_hash` |
+| `ext` | length-prefixed (empty when absent) |
+
+A length-prefixed field is a u32 big-endian length followed by the bytes. An absent `target`,
+`reply_to`, `thread` or `ext` is length 0. `body` itself is not in the signed bytes, only its hash.
+The signature is Ed25519 (RFC 8032, pure, no prehash) over the signed bytes, with the author's key.
+
+- **Event id** = `SHA-256("echofog-ev-v1" ‖ signed bytes ‖ sig)[:16]`, 32 hex characters. Content
   addressed: any participant can verify that a reference points to exactly this event; ids cannot
-  collide or be forged.
-- The signature covers everything, so a peer that relays or serves an event during sync cannot
-  change it. Authors are identified by public key, so verification needs no lookup.
+  collide or be forged. A stripped event keeps its id, because the id uses the body hash.
+- The signature covers everything the id depends on, so a peer that relays or serves an event during
+  sync cannot change it. Authors are identified by public key, so verification needs no lookup.
+- Changing any byte of `body` (for example an attachment's file id, §2.5) changes the body hash, so the
+  signature no longer verifies. Vectors: `docs/protocol/v2/vectors/convlog.json`.
 - A duplicate `(conv, author, seq)` with a different id is an **equivocation** (a forked author,
   e.g. a restored backup). Both events are kept (they have different ids) and rendered; the
   author's seq chain is flagged, not trusted for gap detection past the fork.
