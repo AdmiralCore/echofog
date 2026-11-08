@@ -13,6 +13,10 @@ import (
 
 var (
 	ErrPathFailed = errors.New("mux: path failed")
+	// ErrPathSilent is the cause of a path that died of silence alone (PathDead without authenticated
+	// traffic): the carrier gave no error, nothing was reset and no handshake timed out. It also
+	// matches ErrPathFailed.
+	ErrPathSilent = errors.New("mux: path silent")
 	// ErrPathAbandoned marks a path that was ended on purpose, locally or by the peer with
 	// PATH_ABANDON (wire.md §8.3). It matches errors.Is(err, ErrPathFailed) too.
 	ErrPathAbandoned      = fmt.Errorf("%w: path abandoned", ErrPathFailed)
