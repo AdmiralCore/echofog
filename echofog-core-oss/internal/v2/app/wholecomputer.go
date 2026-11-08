@@ -47,6 +47,9 @@ type WholeStatus struct {
 var (
 	// ErrWholeOff reports a call on an app built without drivers for the mode.
 	ErrWholeOff = errors.New("app: the whole-computer mode is not available")
+	// ErrWholeStop reports a stop that did not finish (the DNS policy could not be restored): the mode is
+	// held, the computer stays blocked, and the stop can be repeated.
+	ErrWholeStop = errors.New("app: the protection could not be switched off completely")
 	// ErrNeedVPN reports a start of the mode while the VPN is not running: there is no tunnel to feed.
 	ErrNeedVPN = errors.New("app: the VPN is not running")
 )

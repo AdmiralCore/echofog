@@ -20,6 +20,7 @@ type fakeWholeVPN struct {
 	state     tun.State
 	err       string
 	startErr  error
+	stopErr   error
 	log       []string
 }
 
@@ -38,6 +39,9 @@ func (f *fakeWholeVPN) WholeComputerStart(context.Context) error {
 }
 func (f *fakeWholeVPN) WholeComputerStop(context.Context) error {
 	f.note("whole-stop")
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	f.wmu.Lock()
 	f.state = tun.StateOff
 	f.wmu.Unlock()
@@ -152,4 +156,16 @@ func TestV2StopNodeWithTheModeOffDoesNotAskForRights(t *testing.T) {
 	api, f := newWholeApi(t, true)
 	api.StopNode()
 	require.NotContains(t, f.log, "whole-stop", "nothing to take off: no helper, no prompt")
+}
+
+// V: a stop that did not finish is told as such, in neutral Russian, about switching off.
+func TestV2UnfinishedStopSpeaksOfSwitchingOff(t *testing.T) {
+	api, f := newWholeApi(t, true)
+	require.NoError(t, api.SetWholeComputer(true))
+	f.stopErr = app.ErrWholeStop
+	err := api.SetWholeComputer(false)
+	require.Error(t, err)
+	require.Equal(t, app.UserMessage(app.ErrWholeStop), err.Error())
+	require.Contains(t, err.Error(), "отключ")
+	require.NotContains(t, err.Error(), "включить", "not the text of a failed start")
 }

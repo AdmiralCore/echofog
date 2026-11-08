@@ -363,3 +363,31 @@ func TestSetTunnelIsUsedByReconnect(t *testing.T) {
 		t.Fatalf("DNS config %+v", r.dns.Last)
 	}
 }
+
+// V: a Restore that fails leaves the DNS policy pointing at a tunnel that is gone; removing the
+// filters then would hand back a computer that cannot resolve names, with the mode declared off. The
+// mode stays held, and the next Stop tries again.
+func TestStopWithFailingDNSRestoreStaysHeldAndRetries(t *testing.T) {
+	r := newRig(t)
+	r.start()
+	r.dns.FailRestore = errors.New("powershell failed")
+	if err := r.sw.Stop(context.Background()); err == nil {
+		t.Fatal("Stop reported success although DNS was not restored")
+	}
+	if r.sw.State() != tun.StateHeld {
+		t.Fatalf("state %s, want held", r.sw.State())
+	}
+	if len(r.kernel.Rules()) == 0 || r.fw.Removes != 0 {
+		t.Fatal("the filters left while DNS is still pinned to the dead tunnel")
+	}
+	if l := r.leaks(); len(l) != 0 {
+		t.Fatalf("leaks %v", l)
+	}
+	r.dns.FailRestore = nil
+	if err := r.sw.Stop(context.Background()); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+	if r.sw.State() != tun.StateOff || len(r.kernel.Rules()) != 0 || r.dns.IsProtected() {
+		t.Fatalf("after the retry: %s, %d rules, dns=%v", r.sw.State(), len(r.kernel.Rules()), r.dns.IsProtected())
+	}
+}

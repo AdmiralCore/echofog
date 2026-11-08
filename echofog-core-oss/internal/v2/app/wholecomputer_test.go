@@ -352,3 +352,30 @@ func TestSyncInTheHeldStateCallsNoDriver(t *testing.T) {
 		t.Fatal("Sync called the firewall driver while the mode is held")
 	}
 }
+
+// V: the stop that cannot restore DNS says so with its own error, keeps the mode held and can be repeated.
+func TestStopThatCannotRestoreDNSStaysHeldAndCanBeRepeated(t *testing.T) {
+	w := newWholeRig(t)
+	w.startVPN(t)
+	if err := w.a.WholeComputerStart(bg); err != nil {
+		t.Fatal(err)
+	}
+	w.dns.FailRestore = errors.New("powershell failed")
+	err := w.a.WholeComputerStop(bg)
+	if !errors.Is(err, app.ErrWholeStop) {
+		t.Fatalf("Stop = %v, want ErrWholeStop", err)
+	}
+	if st := w.a.WholeComputerStatus(); st.State != tun.StateHeld {
+		t.Fatalf("state %v", st.State)
+	}
+	if len(w.kernel.Rules()) == 0 {
+		t.Fatal("the filters left")
+	}
+	w.dns.FailRestore = nil
+	if err := w.a.WholeComputerStop(bg); err != nil {
+		t.Fatalf("repeat: %v", err)
+	}
+	if st := w.a.WholeComputerStatus(); st.State != tun.StateOff || len(w.kernel.Rules()) != 0 {
+		t.Fatalf("after the repeat: %v, %d rules", st.State, len(w.kernel.Rules()))
+	}
+}

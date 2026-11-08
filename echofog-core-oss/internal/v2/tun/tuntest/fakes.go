@@ -197,6 +197,7 @@ type DNS struct {
 	mu                 sync.Mutex
 	Protected          bool
 	FailProtect        error
+	FailRestore        error
 	Protects, Restores int
 	Last               tun.DNSConfig
 	J                  *Journal
@@ -219,6 +220,9 @@ func (d *DNS) Restore(context.Context) error {
 	defer d.mu.Unlock()
 	d.Restores++
 	d.J.Add("dns.restore")
+	if d.FailRestore != nil {
+		return d.FailRestore
+	}
 	d.Protected = false
 	return nil
 }
