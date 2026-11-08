@@ -442,3 +442,23 @@ func TestTheMessengerIdentityDoesNotReachTheExit(t *testing.T) {
 		}
 	}
 }
+
+// Turning the exit off takes the offer off the cards: a link made afterwards is no exit link.
+func TestTurnedOffExitLeavesTheCards(t *testing.T) {
+	a, b := newExitPair(t)
+	enable(t, b)
+	if err := b.a.ExitDisable(); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := b.ln.ContactLink(bgx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(bgx, 30*time.Second)
+	defer cancel()
+	if _, err := a.a.VPNStart(ctx, cl.URL); !errors.Is(err, app.ErrNotExit) {
+		t.Fatalf("VPNStart through a link made after the exit was turned off = %v, want ErrNotExit", err)
+	}
+	// and it can be turned on again
+	enable(t, b)
+}
