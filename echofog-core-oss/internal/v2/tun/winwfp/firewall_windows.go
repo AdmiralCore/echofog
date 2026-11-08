@@ -161,6 +161,8 @@ type Firewall struct {
 	// marker is the file whose presence says "filters are installed" to a process that may not read
 	// the BFE (the unelevated app at start-up).
 	marker string
+	// elevated says whether this process may read the BFE; nil means it may.
+	elevated func() bool
 
 	mu   sync.Mutex
 	luid uint64
@@ -170,7 +172,8 @@ type Firewall struct {
 // NewFirewall returns the driver over the real Base Filtering Engine. It needs administrator
 // rights for Install and Remove.
 func NewFirewall() *Firewall {
-	return &Firewall{open: openEngine, newID: randomGUID, marker: MarkerPath()}
+	return &Firewall{open: openEngine, newID: randomGUID, marker: MarkerPath(),
+		elevated: func() bool { return windows.GetCurrentProcessToken().IsElevated() }}
 }
 
 // MarkerPath is where the elevated helper records that the filters stand:
@@ -336,6 +339,11 @@ func (f *Firewall) Installed(ctx context.Context) (bool, error) {
 	if f.marker != "" {
 		if _, err := os.Stat(f.marker); err == nil {
 			return true, nil
+		}
+		// No marker and no right to read the BFE: nothing is known to stand, and the BFE is not
+		// walked (the interface asks on every poll).
+		if f.elevated != nil && !f.elevated() {
+			return false, nil
 		}
 	}
 	e, err := f.open()

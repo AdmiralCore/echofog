@@ -27,6 +27,12 @@ func Drivers(exe string) *ks.Client {
 // RunHelper has nothing to run.
 func RunHelper(args []string) int { return 2 }
 
+// FiltersStand reports no filters: there is no driver.
+func FiltersStand(context.Context) bool { return false }
+
+// Release has nothing to release.
+func Release(context.Context, string) error { return nil }
+
 // Report is what RemoveAll did.
 type Report struct{ Filters int }
 

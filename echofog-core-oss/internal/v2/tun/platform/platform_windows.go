@@ -55,6 +55,22 @@ func RunHelper(args []string) int {
 	})
 }
 
+// FiltersStand reports whether the filters of the kill switch stand: the marker the elevated helper
+// keeps, and the BFE itself when this process may read it. It needs no rights and starts nothing,
+// so it can be asked at start-up and by the interface.
+func FiltersStand(ctx context.Context) bool {
+	ok, _ := winwfp.NewFirewall().Installed(ctx)
+	return ok
+}
+
+// Release removes the filters and restores the DNS policy through the elevated helper (one prompt
+// for rights). It is the "Disable protection" of the interface when no mode is running.
+func Release(ctx context.Context, exe string) error {
+	c := Drivers(exe)
+	defer c.Close()
+	return errors.Join(c.Restore(ctx), c.Remove(ctx))
+}
+
 // Report is what RemoveAll did.
 type Report struct {
 	Filters int // filters of the kill switch removed
