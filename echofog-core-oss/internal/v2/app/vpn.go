@@ -187,10 +187,16 @@ func (a *App) vpnStart(ctx context.Context, text string) (VPNStatus, error) {
 	if [32]byte(peer.Node) != node || [32]byte(peer.Device) != device {
 		return VPNStatus{}, errors.New("app: the session is not with the node of the link")
 	}
-	if peer.Card == nil || peer.Card.ExitOffer() == nil {
+	// The card in the link is the newest the exit gave out; the one of an older session may predate
+	// the moment the owner turned the exit on.
+	card := peer.Card
+	if pv, perr := a.cfg.Links.Open(link); perr == nil && pv.Card != nil && pv.Card.ExitOffer() != nil {
+		card = pv.Card
+	}
+	if card == nil || card.ExitOffer() == nil {
 		return VPNStatus{}, ErrNotExit
 	}
-	el, err := a.cfg.Exit.Dial(ctx, peer.Card)
+	el, err := a.cfg.Exit.Dial(ctx, card)
 	if err != nil {
 		return VPNStatus{}, err
 	}

@@ -104,7 +104,15 @@ func newExitPair(t *testing.T) (a, b *exitApp) {
 // site is a web server on the loopback; the exit may reach it because the tests allow private targets.
 func site(t *testing.T) string {
 	t.Helper()
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "hello from the site") }))
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/hold" {
+			fmt.Fprint(w, "held")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		fmt.Fprint(w, "hello from the site")
+	}))
 	t.Cleanup(s.Close)
 	return s.Listener.Addr().String()
 }
@@ -200,7 +208,7 @@ func exitWait(t *testing.T, what string, f func() bool) {
 // confirm: the client tries once, is turned away and waits; the owner confirms it.
 func confirm(t *testing.T, b *exitApp, listen, target string) {
 	t.Helper()
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("an unknown client was served before the owner confirmed it")
 	}
 	exitWait(t, "a client waits for confirmation", func() bool { return len(b.a.ExitStatus().Pending) == 1 })
@@ -222,6 +230,36 @@ func closed(c net.Conn, within time.Duration) bool {
 	return true
 }
 
+// tunnelWorks opens a tunnel and asks the site for a page: false when the exit turned the client away
+// (SOCKS5 answers before the exit does, the refusal shows on the first read).
+func tunnelWorks(t *testing.T, listen, target string) bool {
+	t.Helper()
+	code, c := socks5(t, listen, target)
+	if code != 0 {
+		return false
+	}
+	return httpGet(t, c) == "hello from the site"
+}
+
+// hold opens a tunnel to a page that stays open and returns the connection once the page began.
+func hold(t *testing.T, listen, target string) net.Conn {
+	t.Helper()
+	code, c := socks5(t, listen, target)
+	if code != 0 {
+		t.Fatalf("reply %d", code)
+	}
+	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+	if _, err := fmt.Fprint(c, "GET /hold HTTP/1.0\r\nHost: site\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(c)
+	line, err := r.ReadString('\n')
+	if err != nil || len(line) < 12 || line[9:12] != "200" {
+		t.Fatalf("the held page did not begin: %q %v", line, err)
+	}
+	return c
+}
+
 // B turns the exit on and gives a link; A opens a site through it with SOCKS5 once B has confirmed it.
 func TestDesktopExitCarriesTrafficToAConfirmedClient(t *testing.T) {
 	a, b := newExitPair(t)
@@ -229,12 +267,8 @@ func TestDesktopExitCarriesTrafficToAConfirmedClient(t *testing.T) {
 	listen := connect(t, a, info.Link)
 	target := site(t)
 	confirm(t, b, listen, target)
-	code, c := socks5(t, listen, target)
-	if code != 0 {
-		t.Fatalf("SOCKS5 reply %d: the confirmed client was refused", code)
-	}
-	if got := httpGet(t, c); got != "hello from the site" {
-		t.Fatalf("the site said %q", got)
+	if !tunnelWorks(t, listen, target) {
+		t.Fatal("the confirmed client was refused")
 	}
 	st := b.a.ExitStatus()
 	if !st.Enabled || st.Accepted == 0 || st.Bytes == 0 {
@@ -278,17 +312,14 @@ func TestTurningTheExitOffRefusesNewAndClosesLive(t *testing.T) {
 	listen := connect(t, a, info.Link)
 	target := site(t)
 	confirm(t, b, listen, target)
-	code, live := socks5(t, listen, target)
-	if code != 0 {
-		t.Fatalf("reply %d", code)
-	}
+	live := hold(t, listen, target)
 	if err := b.a.ExitDisable(); err != nil {
 		t.Fatal(err)
 	}
 	if !closed(live, 10*time.Second) {
 		t.Fatal("a live tunnel is still open after the exit was turned off")
 	}
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("a new tunnel was accepted by an exit that is off")
 	}
 	if st := b.a.ExitStatus(); st.Enabled {
@@ -302,7 +333,7 @@ func TestAnUnknownClientGetsPolicyAndWaits(t *testing.T) {
 	info := enable(t, b)
 	listen := connect(t, a, info.Link)
 	target := site(t)
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("an unknown client was served")
 	}
 	if st := a.a.VPNStatus(); st.LastReason != "policy" {
@@ -316,7 +347,7 @@ func TestAnUnknownClientGetsPolicyAndWaits(t *testing.T) {
 	if err := b.a.ExitReject(st.Pending[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("served after the owner turned the client down")
 	}
 }
@@ -328,17 +359,14 @@ func TestRevokingAConfirmedClientClosesItsStreams(t *testing.T) {
 	listen := connect(t, a, info.Link)
 	target := site(t)
 	confirm(t, b, listen, target)
-	code, live := socks5(t, listen, target)
-	if code != 0 {
-		t.Fatalf("reply %d", code)
-	}
+	live := hold(t, listen, target)
 	if err := b.a.ExitRevoke(b.a.ExitStatus().Approved[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if !closed(live, 10*time.Second) {
 		t.Fatal("the stream of a revoked client was not closed within 10 s")
 	}
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("a revoked client was served")
 	}
 }
@@ -350,7 +378,7 @@ func TestAnyoneWithTheLinkOnlyOnTheOwnersWordAndForATime(t *testing.T) {
 	info := enable(t, b)
 	listen := connect(t, a, info.Link)
 	target := site(t)
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("served without being confirmed and without the open access")
 	}
 
@@ -361,29 +389,25 @@ func TestAnyoneWithTheLinkOnlyOnTheOwnersWordAndForATime(t *testing.T) {
 	if open.Until == 0 {
 		t.Fatal("open access without an end")
 	}
-	code, live := socks5(t, listen, target)
-	if code != 0 {
-		t.Fatalf("refused during the open access: %d", code)
-	}
+	live := hold(t, listen, target)
 	if err := b.a.ExitRevokeAny(); err != nil {
 		t.Fatal(err)
 	}
 	if !closed(live, 10*time.Second) {
 		t.Fatal("a stream admitted by the open access survived its revocation")
 	}
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("served after the access was revoked")
 	}
 
 	if _, err := b.a.ExitAllowAny(bgx, 1*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if code, c := socks5(t, listen, target); code != 0 {
-		t.Fatalf("refused during the second window: %d", code)
-	} else if !closed(c, 5*time.Second) {
+	second := hold(t, listen, target)
+	if !closed(second, 5*time.Second) {
 		t.Fatal("a stream was still open after the window ended")
 	}
-	if code, _ := socks5(t, listen, target); code == 0 {
+	if tunnelWorks(t, listen, target) {
 		t.Fatal("served after the access expired")
 	}
 	if st := b.a.ExitStatus(); st.AnyUntil != 0 {
@@ -398,8 +422,8 @@ func TestTheMessengerIdentityDoesNotReachTheExit(t *testing.T) {
 	listen := connect(t, a, info.Link)
 	target := site(t)
 	confirm(t, b, listen, target)
-	if code, _ := socks5(t, listen, target); code != 0 {
-		t.Fatalf("reply %d", code)
+	if !tunnelWorks(t, listen, target) {
+		t.Fatal("the confirmed client was refused")
 	}
 	st := b.a.ExitStatus()
 	var ids []string

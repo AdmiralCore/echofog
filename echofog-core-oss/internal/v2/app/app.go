@@ -168,6 +168,7 @@ type App struct {
 	fx        fileState
 	gev       groupEvents
 	vpn       vpnState
+	exit      exitState
 	gc        callBook
 	vmu       sync.Mutex // the saved exits and the history
 	svmu      sync.Mutex // the saved messages and their count

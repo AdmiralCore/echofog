@@ -265,8 +265,12 @@ type Runtime struct {
 	peers    *pex.Store
 	pex      *pex.Service
 
-	mu         sync.Mutex
-	handlers   map[[2]uint64]Handler
+	mu       sync.Mutex
+	handlers map[[2]uint64]Handler
+
+	// hostMu guards hosted, the exit a desktop offers while it runs (exit_host.go).
+	hostMu     sync.Mutex
+	hosted     *hostedExit
 	table      *session.Table
 	listeners  []carrier.Listener
 	background Background
