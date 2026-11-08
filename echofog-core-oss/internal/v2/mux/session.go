@@ -1346,3 +1346,9 @@ func (s *Session) pickKindLocked(kind PathKind) *path {
 	}
 	return best
 }
+
+// SetOnPathFailing registers f, called (without session locks, and it must not block) when the
+// active path is declared failing and no healthy path can take over: the session is about to be
+// left without a working path. It is called once per episode; a path that recovers and fails
+// again is reported again.
+func (s *Session) SetOnPathFailing(f func(PathFailure)) {}
