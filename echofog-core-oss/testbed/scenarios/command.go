@@ -67,7 +67,7 @@ func Command(args []string, stdout, stderr io.Writer, reg []Scenario, commit fun
 		fmt.Fprintln(stderr, "launchpad-scenarios:", err)
 		return 3
 	}
-	defer os.RemoveAll(scratch)
+	defer func() { _ = removeTree(scratch) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()

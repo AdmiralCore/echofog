@@ -72,13 +72,13 @@ func awaitDelivered(ctx context.Context, from *Node, ids [][16]byte, within time
 	}
 }
 
-func runMessaging(ctx context.Context, env Env) Result {
-	res := Result{Name: "v2-messaging", Mode: "model", Seed: env.Seed}
+func runMessaging(ctx context.Context, env Env) (res Result) {
+	res = Result{Name: "v2-messaging", Mode: "model", Seed: env.Seed}
 	dir, err := os.MkdirTemp(env.Dir, "messaging-")
 	if err != nil {
 		dir = os.TempDir()
 	}
-	defer os.RemoveAll(dir)
+	defer scratchDone(dir, &res)
 	n := 40
 	if env.Short {
 		n = 20

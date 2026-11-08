@@ -160,13 +160,13 @@ func (l *mediaLeg) share() float64 {
 	return float64(l.got.Load()) / float64(l.sent)
 }
 
-func runCall(ctx context.Context, env Env) Result {
-	res := Result{Name: "v2-call", Mode: "model", Seed: env.Seed}
+func runCall(ctx context.Context, env Env) (res Result) {
+	res = Result{Name: "v2-call", Mode: "model", Seed: env.Seed}
 	dir, err := os.MkdirTemp(env.Dir, "call-")
 	if err != nil {
 		dir = os.TempDir()
 	}
-	defer os.RemoveAll(dir)
+	defer scratchDone(dir, &res)
 	d := 8 * time.Second
 	if env.Short {
 		d = 4 * time.Second

@@ -115,13 +115,13 @@ func headerValue(head, name string) string {
 	return ""
 }
 
-func runExit(ctx context.Context, env Env) Result {
-	res := Result{Name: "v2-exit", Mode: "model", Seed: env.Seed}
+func runExit(ctx context.Context, env Env) (res Result) {
+	res = Result{Name: "v2-exit", Mode: "model", Seed: env.Seed}
 	dir, err := os.MkdirTemp(env.Dir, "exit-")
 	if err != nil {
 		dir = os.TempDir()
 	}
-	defer os.RemoveAll(dir)
+	defer scratchDone(dir, &res)
 	web, err := startLabWeb()
 	if err != nil {
 		res.Rows = append(res.Rows, newRow("v2-exit/download", "web server", err.Error(), "up", gate.Red, ""))

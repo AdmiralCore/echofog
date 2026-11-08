@@ -28,13 +28,13 @@ func (n *Node) redeem(ctx context.Context, link string) (node.Peer, error) {
 	return ln.Redeem(ctx, link)
 }
 
-func runHidden(ctx context.Context, env Env) Result {
-	res := Result{Name: "v2-hidden", Mode: "model", Seed: env.Seed}
+func runHidden(ctx context.Context, env Env) (res Result) {
+	res = Result{Name: "v2-hidden", Mode: "model", Seed: env.Seed}
 	dir, err := os.MkdirTemp(env.Dir, "hidden-")
 	if err != nil {
 		dir = os.TempDir()
 	}
-	defer os.RemoveAll(dir)
+	defer scratchDone(dir, &res)
 	fail := func(id, note string, err error) Result {
 		res.Rows = append(res.Rows, newRow(id, "hidden node", err.Error(), "see the row", gate.Red, note))
 		return res

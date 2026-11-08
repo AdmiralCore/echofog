@@ -12,6 +12,7 @@ package scenarios
 
 import (
 	"context"
+	"os"
 	"slices"
 	"time"
 
@@ -141,5 +142,26 @@ func appendNew(dst, src []string) []string {
 	return dst
 }
 
-// removeTree removes a scratch directory and waits for the files a closing node still holds.
-func removeTree(dir string) error { return nil }
+// removeTree removes a scratch directory and waits for the files a closing node still holds (Windows
+// refuses to remove a directory with an open file).
+func removeTree(dir string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := os.RemoveAll(dir)
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// scratchDone removes the scratch directory of a scenario at its end, whatever it measured, and says
+// so in the result when it could not: a scenario that leaves 99 MiB behind is a defect.
+func scratchDone(dir string, res *Result) {
+	if err := removeTree(dir); err != nil {
+		res.Findings = append(res.Findings, "the scenario could not remove its scratch directory "+dir+": "+err.Error())
+	}
+}

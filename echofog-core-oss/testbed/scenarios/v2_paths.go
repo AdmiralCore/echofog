@@ -51,13 +51,13 @@ func pathsWorld(dir string, second bool) (*World, *Node, *Node, error) {
 	return w, cli, srv, nil
 }
 
-func runPaths(ctx context.Context, env Env) Result {
-	res := Result{Name: "v2-paths", Mode: "model", Seed: env.Seed}
+func runPaths(ctx context.Context, env Env) (res Result) {
+	res = Result{Name: "v2-paths", Mode: "model", Seed: env.Seed}
 	dir, err := os.MkdirTemp(env.Dir, "paths-")
 	if err != nil {
 		dir = os.TempDir()
 	}
-	defer os.RemoveAll(dir)
+	defer scratchDone(dir, &res)
 
 	res.Rows = append(res.Rows, secondPathRow(ctx, dir))
 	res.Rows = append(res.Rows, cutRows(ctx, dir, true)...)
