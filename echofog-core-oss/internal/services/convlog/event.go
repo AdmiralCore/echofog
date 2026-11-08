@@ -216,7 +216,7 @@ func check(e *Event) error {
 // KnownKind reports whether this build has a view of events of kind k.
 func KnownKind(k uint32) bool {
 	switch k {
-	case KindMsg, KindEdit, KindDelete, KindReact, KindPin, KindMember, KindChannel, KindThread, KindProfile:
+	case KindMsg, KindEdit, KindDelete, KindReact, KindPin, KindMember, KindChannel, KindThread, KindProfile, KindClose:
 		return true
 	}
 	return false

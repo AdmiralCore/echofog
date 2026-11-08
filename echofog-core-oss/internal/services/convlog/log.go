@@ -419,6 +419,12 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 	}
 	store := raw
 
+	if t.c.Kind == KindGroup {
+		if cl := l.closeOf(t.bc); cl != nil && !(e.Kind == KindClose && cl.ID == idHex) && !cl.allows(e.Author, e.Seq) {
+			return ErrClosed // a closed group takes only what the owner had seen when closing it
+		}
+	}
+
 	var err error
 	if e.Kind == KindMember {
 		err = l.applyMember(t, e, at, raw, mode)
@@ -488,6 +494,8 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 				actor = &role
 			}
 			err = t.applyChannel(e, author, rights, actor, st)
+		case KindClose:
+			err = l.applyClose(t, e, idHex, at)
 		case KindThread:
 			err = t.applyThread(e, author, rights)
 		case KindProfile:
@@ -613,7 +621,7 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 // sequence (so the version vector moves on and sync stops offering it) and a rebuild weighs it
 // again after a membership change.
 func rejectable(err error) bool {
-	return err == ErrForbidden || err == ErrBadBody || err == ErrClock || err == ErrNotParticipant
+	return err == ErrForbidden || err == ErrBadBody || err == ErrClock || err == ErrNotParticipant || err == ErrClosed
 }
 
 // keepRejected stores an event that was not allowed, without effects.
@@ -636,11 +644,18 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		if err := proto.Unmarshal(e.Body, &body); err != nil || !validText(body.Text) || len(body.Metadata) > MaxTextLen || !validMentions(&body) {
 			return ErrBadBody
 		}
+		if body.Att != nil && (t.c.Kind != KindGroup || checkAttachment(body.Att) != nil) {
+			return ErrBadBody // a file travels as an attachment in a group only; a direct chat offers it over files/2
+		}
 	}
 	v := t.view(idHex)
 	v.Present = true
 	v.Author, v.Seq, v.Lamport, v.TS = author, e.Seq, e.Lamport, e.TsMs
 	v.Type, v.Text, v.Metadata = body.Type, body.Text, body.Metadata
+	v.Att = nil
+	if a := body.Att; a != nil {
+		v.Att = &AttView{Fid: hex.EncodeToString(a.Fid), Size: a.Size, Root: hex.EncodeToString(a.MerkleRoot), Name: a.Name, Mime: a.Mime}
+	}
 	v.Mentions, v.MentionsAll = nil, body.All
 	for _, m := range body.Mentions {
 		v.Mentions = append(v.Mentions, hex.EncodeToString(m))
@@ -656,10 +671,13 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 			}
 			v.Stripped = true
 		}
-		v.Text, v.Metadata = "", ""
+		v.Text, v.Metadata, v.Att = "", "", nil
 		t.stripEdits(v)
 	} else if stripped {
 		v.Withheld = true
+	}
+	if v.Att != nil {
+		t.put(attKey(t.bc, v.Att.Fid, idHex), []byte(idHex)) // the file is found by its id (AttachmentIn)
 	}
 	if v.Thread == "" && v.Channel != "" {
 		// a message in one of a group's channels: that channel's history and reader; the

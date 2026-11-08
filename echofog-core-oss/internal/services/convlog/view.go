@@ -73,6 +73,17 @@ type View struct {
 	// ThreadTitle names the thread under the message (last writer wins).
 	ThreadTitle *Reg `json:"thread_title,omitempty"`
 	Stripped    bool `json:"stripped,omitempty"` // its event no longer carries the body
+	// Att is the file the message carries (T11.3e).
+	Att *AttView `json:"att,omitempty"`
+}
+
+// AttView is a message's attachment as the view keeps it (hex ids).
+type AttView struct {
+	Fid  string `json:"fid"`
+	Size uint64 `json:"size"`
+	Root string `json:"root"`
+	Name string `json:"name"`
+	Mime string `json:"mime,omitempty"`
 }
 
 const maxEditRefs = 64
@@ -301,6 +312,8 @@ func (v *View) Render(conv, self string) Message {
 		m.Kind = "system"
 	case strings.HasPrefix(v.Text, CallInvitePrefix):
 		m.Kind = "call"
+	case v.Att != nil:
+		m.Kind, m.File = "file", &FileRef{ID: v.Att.Fid, Name: v.Att.Name, Size: int64(v.Att.Size), Mime: v.Att.Mime, Root: v.Att.Root}
 	default:
 		if f := fileOf(v.Type, v.Text, v.Metadata); f != nil {
 			m.Kind, m.File = "file", f

@@ -255,7 +255,8 @@ func TestOnlyTheOwnerClosesAGroupAndTheVectorNamesTheSeenSeqs(t *testing.T) {
 		t.Fatalf("AppendClose: %v", err)
 	}
 	vec := closeVector(t, raw)
-	if vec[hex.EncodeToString(tm.x.pub)] != 1 || vec[hex.EncodeToString(tm.f.pub)] == 0 || len(vec) != 2 {
+	// x wrote seq 1 and the owner holds the forged close at seq 2 (kept, without effect): the vector is what is held
+	if vec[hex.EncodeToString(tm.x.pub)] != 2 || vec[hex.EncodeToString(tm.f.pub)] != 1 || len(vec) != 2 {
 		t.Fatalf("vector %v", vec)
 	}
 	if !tm.lf.Closed(tm.c) {
