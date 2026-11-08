@@ -93,6 +93,44 @@ The pcap is taken at `gw_b`, so the carrier, the browser control and the v1 prod
 (`b2` through `x1`) are all seen in the same network. When the real carrier lands, only the body of
 `udp-noise` changes; capture, budget, labels and detectors stay.
 
+## Scenarios (T15.1)
+
+Seven scenarios, each in two modes. The **model** mode runs the product's own code (`internal/v2`: real
+nodes, real noise3 on loopback, the punch engine, the exit client and server, the call transport, the
+access manager) against a model of the network (an in-process netem, a NAT model) and of the censor
+(`testbed/censor`, `testbed/probe`), in one process and without containers. The **live** mode is the
+same scenario on the Docker stand.
+
+| Scenario | Model: what it measures | Live: what it needs |
+|---|---|---|
+| `v2-nat` | the punch engines against four NAT types: direct where the physics allows, relay where not, no port spray | gw_a/gw_b/gw_c, `v2r`, `v2na`..`v2nc` |
+| `v2-paths` | a second path, a cut with failover, an address change, H15 backoff (D24), two carriers per pair (D21) | `v2pa`, `v2pb`, a cut on gw_b |
+| `v2-hidden` | no public card, the invitation opens the node, a stranger gets silence, a revoked pass does not open | `v2h`, `v2ha`, `v2hb` |
+| `v2-messaging` | chat/2 over a lossy path (delivery rows are *not measured* while the DHT of the loopback world does not resolve) | `v2ma`, `v2mb`, `v2mx` |
+| `v2-call` | voice and video frames under 5 % loss and a 150 ms round trip, on the direct path | `v2ca`, `v2cc`, the NAT routers |
+| `v2-exit` | a download through the exit, SSRF refusal, failover to a second exit, resources | `v2xe`, `v2xc`, `web` |
+| `v2-censor` | four carriers against the censor model and the active prober | `x1`, `web`, gw_b |
+
+```
+go run ./testbed/scenarios/cmd/launchpad-scenarios -list
+go run ./testbed/scenarios/cmd/launchpad-scenarios -scenario v2-nat            # three runs in a row
+go run ./testbed/scenarios/cmd/launchpad-scenarios -out reports/scenarios      # all seven
+go run ./testbed/gate/cmd/launchpad-gate -report ... -scenarios reports/scenarios/scenarios.json
+go run ./testbed/runner -scenario v2-nat                                       # the live entry
+```
+
+`launchpad-scenarios` exits 0 when every row is green over the runs, 1 on a red row (the series stops at the
+first red run), 2 when something was not measured (`-allow-unmeasured` accepts a partial run), 3 on bad
+arguments. It writes `scenarios.json`, which `launchpad-gate -scenarios` reads: the model rows are judged
+with the gate's own limits, and the live stand is *not measured* until it has been run.
+
+The live entry (`runner -scenario v2-nat` and the other five) starts nothing today and exits 4: the compose
+services (profile `v2`, so the v1 scenarios' `up -d` leaves them alone) and the `efv2` role of the
+entrypoint (`EFV2_MODE=serve|idle`) are ready and checked statically (`docker compose config`, shellcheck,
+`scenarios/live_test.go`), but the efv2 CLI has no command yet for chat, calls, the exit, hidden access or a
+second path. `scenarios/live.go` lists what each scenario needs. Three green live runs in a row are the
+work of the audit phase.
+
 ## Containers (C4, actual code)
 
 ```mermaid

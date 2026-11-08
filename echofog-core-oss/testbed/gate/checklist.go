@@ -98,6 +98,13 @@ func checklist(res Result) []Item {
 	add("at most two carriers per (address, SNI): the AND rule does not fire (D21)", by("D21"), "no behaviour report", false)
 	add("443 down: a backup port answers in 10 s (D25)", by("D25"), "no behaviour report", false)
 	add("the product is fixed where the lab found it broken (freeze without a limit, PMTU)", by("product:freeze-no-limit", "product:noise3-pmtu"), "no behaviour report", false)
+	var scen []Row
+	for _, r := range res.Rows {
+		if r.ID == "scenarios" || strings.HasPrefix(r.ID, "scenario:") && !strings.Contains(r.ID, "/") {
+			scen = append(scen, r)
+		}
+	}
+	add("T15.1: the scenarios (NAT, paths, hidden, messaging, call, exit, censor) are green three runs in a row, in the model and on the stand", scen, "no scenario report", false)
 	return items
 }
 
