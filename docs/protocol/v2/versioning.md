@@ -172,7 +172,7 @@ forwarded byte-for-byte with its signature, and rendered as the placeholder with
 
 Two examples from the group features (conversation-log.md §2.5):
 
-- `group.close` is a new event kind (10). A client that does not know it applies rule 1 to rule 6 above:
+- `group.close` is a new event kind (10). A client that does not know it applies rules 1 to 6 above:
   it stores, syncs and forwards the event, and shows the placeholder. It does not know the group is
   closed, so it does not apply the close rules (later joins and invitations stay visible to it). The
   close rules bind the clients that know the kind.

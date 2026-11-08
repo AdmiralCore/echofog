@@ -141,7 +141,7 @@ same event applied twice changes nothing (dedup by id first).
 | `DELETE` (3) | — | tombstone; wins over every edit; permanent | target's author; group admins with delete permission |
 | `REACT` (4) | emoji, on/off | LWW per `(target, emoji, reactor)`; reactor = author | participants |
 | `PIN` (5) | on/off | LWW per target, conversation-wide | DM: both; group: members with pin permission (admins by default) |
-| `group.close` (10) | empty; the signature of the group owner is the authority | irreversible close, see below; idempotent | the group owner (the owner role in the log at the event's lamport) |
+| `group.close` (10) | `CloseBody`: the last seq per author (below) | irreversible close, see below; idempotent | the group owner (the owner role in the log) |
 | unknown | opaque | stored, synced, forwarded unchanged with its signature, shown as a placeholder (versioning §3.9) | — |
 
 Kinds 6–9 (`MEMBER`, `CHANNEL`, `THREAD`, `PROFILE`) are defined by the code and are not repeated in
@@ -168,11 +168,27 @@ log: they come over files/2 from the author and from holders that have the same 
 Members who are offline see the file card after sync and fetch the bytes on request.
 
 **Closing a group (`group.close`).** The owner's signed event closes the group. It is irreversible.
-After the close, with `L` the event's lamport:
+Its body is a `CloseBody` (protobuf) that carries the vector of the group's last seq per author:
 
-- events with lamport ≤ `L` are accepted as usual; events with lamport > `L` are rejected, except a
-  repeated `group.close`, which is idempotent;
-- new `MEMBER` join and invite actions are rejected;
+```proto
+message CloseBody {
+  repeated SeqEntry last = 1;  // one entry per author with events in the group at the close
+}
+message SeqEntry {
+  bytes  author = 1; // the author's 32-byte identity public key
+  uint64 seq    = 2; // the author's last seq the closing owner has seen in the conversation
+}
+```
+
+Entries are sorted by `author` ascending, one per author, no duplicates. Once the close is accepted,
+the group takes an event only if its author has an entry and its `seq` is at most that entry's `seq`.
+Events with a larger seq, and events from an author with no entry, are rejected, so new messages,
+joins and invitations are rejected too. The close event's own seq is not in the vector. The
+lamport value does not decide acceptance: an author chooses it, so it cannot bound the events.
+
+A repeated copy of the same close event has the same id and is deduplicated like any event. A second,
+different `group.close` is a new event with a larger seq, so it is rejected.
+
 - members keep the log as a read-only archive; "delete for me" is local and does not change the log.
 
 Copies held by members are not erased by the close; the app must say so.
