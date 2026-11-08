@@ -109,12 +109,46 @@ same event applied twice changes nothing (dedup by id first).
 
 | Kind | Body | Rule | Who may |
 |---|---|---|---|
-| `MSG` (1) | text, type (text/photo/voice/file/location/system), attachment, metadata | append | participants |
+| `MSG` (1) | text, type (text/photo/voice/file/location/system), metadata, optional `att` (field 6, below) | append | participants |
 | `EDIT` (2) | new text | LWW register on the target, ordered by `(lamport, author, seq)` | target's author |
 | `DELETE` (3) | — | tombstone; wins over every edit; permanent | target's author; group admins with delete permission |
 | `REACT` (4) | emoji, on/off | LWW per `(target, emoji, reactor)`; reactor = author | participants |
 | `PIN` (5) | on/off | LWW per target, conversation-wide | DM: both; group: members with pin permission (admins by default) |
-| unknown | opaque | stored, synced, ignored by the view | — |
+| `group.close` (10) | empty; the signature of the group owner is the authority | irreversible close, see below; idempotent | the group owner (the owner role in the log at the event's lamport) |
+| unknown | opaque | stored, synced, forwarded unchanged with its signature, shown as a placeholder (versioning §3.9) | — |
+
+Kinds 6–9 (`MEMBER`, `CHANNEL`, `THREAD`, `PROFILE`) are defined by the code and are not repeated in
+this table yet.
+
+**Attachment (`att`).** An optional field 6 of the `MSG` body, at most one per event (several files are
+several events):
+
+```proto
+message Attachment {
+  bytes  fid         = 1; // 16-byte file id (files/2, services.md §8)
+  uint64 size        = 2; // bytes
+  bytes  merkle_root = 3; // 32-byte root of the file's Merkle tree (files/2)
+  string name        = 4; // at most 255 bytes, UTF-8
+  string mime        = 5; // at most 127 bytes, ASCII
+}
+```
+
+The signature covers `att` through the body hash, so a relay cannot change a file's id, root or name.
+`att` is inside the event size limit (`MaxEventSize`, 64 KiB) and counts against the author's message
+quota, as an ordinary message does. The channel and the thread are the event's own fields: the channel
+in the signed `ext` (`EventExt.channel`), the thread in `thread`. The file's bytes do not travel in the
+log: they come over files/2 from the author and from holders that have the same `fid` and root.
+Members who are offline see the file card after sync and fetch the bytes on request.
+
+**Closing a group (`group.close`).** The owner's signed event closes the group. It is irreversible.
+After the close, with `L` the event's lamport:
+
+- events with lamport ≤ `L` are accepted as usual; events with lamport > `L` are rejected, except a
+  repeated `group.close`, which is idempotent;
+- new `MEMBER` join and invite actions are rejected;
+- members keep the log as a read-only archive; "delete for me" is local and does not change the log.
+
+Copies held by members are not erased by the close; the app must say so.
 
 Replies set `reply_to`; thread messages (comments) set `thread` to the root message. A thread is
 just the messages whose `thread` is the root; the root keeps a reply count and last-activity time.
