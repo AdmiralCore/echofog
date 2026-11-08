@@ -415,6 +415,15 @@ ID.
   each member, over its own session). P7: v1 used one key for all group members and a frame handler
   that did not know the sender.
 - Flow control as in v1 (AIMD window 16–256 chunks, RTO `max(1.5 s, 3·srtt)`), resume from a bitmap.
+- **The offer does not name a group.** A file sent to a group, a channel or a thread is the `att` of a
+  `MSG` event of the conversation log (conversation-log.md §2.5); the group, channel and thread come from
+  that event, never from the sender's words. The offer carries no group, channel or thread.
+- **Receiving from a non-contact.** A node accepts an offer or a WANT for a file from a sender that is
+  not a contact only if its own log holds a `MSG` event whose `att.fid` is that file, the event's author
+  is the sender, the author is a member of that conversation, and the author may write in that channel
+  (`RightsIn`: admins only, slow mode, mute, timeout). Otherwise it does not accept the file and answers
+  CANCEL with reason 3 (unavailable), the answer it gives for a file it does not have, so a non-member
+  cannot tell whether the file exists in the group. A file does not appear in a group the sender is not in.
 - Later: multi-source fetching, encrypted store-and-forward of files through mailboxes.
 
 ## 9. call/2 (service 8)
