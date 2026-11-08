@@ -144,6 +144,10 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	if len(attempts) == 0 && card != nil {
 		attempts = carrier.Plan(card, r.planInfo())
 	}
+	if r.egress != nil {
+		// Behind a proxy only the TCP suites can go out (T11.6a); with none left the dial fails.
+		attempts = tcpOnly(attempts)
+	}
 	// The country policy (T6.4) drops the attempts the network class forbids. A relay circuit, an
 	// injected carrier is not a direct dial to a card address. A bootstrap dial is one, to the address
 	// of the list: it has no card, but the row for that address applies all the same (L6).

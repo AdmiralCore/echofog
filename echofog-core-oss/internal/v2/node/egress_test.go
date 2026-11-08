@@ -2,7 +2,6 @@ package node_test
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
@@ -31,8 +30,10 @@ import (
 type fakeSocks struct {
 	ln     net.Listener
 	refuse atomic.Bool
-	mu     sync.Mutex
-	asked  []string
+	// redirect, when set, is where every CONNECT really goes (the names of the test are not real).
+	redirect string
+	mu       sync.Mutex
+	asked    []string
 }
 
 func newFakeSocks(t *testing.T) *fakeSocks {
@@ -107,7 +108,11 @@ func (p *fakeSocks) serve(c net.Conn) {
 		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
 	}
-	up, err := net.DialTimeout("tcp", target, 3*time.Second)
+	real := target
+	if p.redirect != "" {
+		real = p.redirect
+	}
+	up, err := net.DialTimeout("tcp", real, 3*time.Second)
 	if err != nil {
 		_, _ = c.Write([]byte{5, 4, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
@@ -201,9 +206,9 @@ func TestEgressHTTPGoesThroughTheProxy(t *testing.T) {
 	if cl == nil {
 		t.Fatal("no HTTP client behind a proxy")
 	}
-	host, port, _ := net.SplitHostPort(site.Listener.Addr().String())
-	_ = host
-	resp, err := cl.Get("https://localhost:" + port + "/")
+	_, port, _ := net.SplitHostPort(site.Listener.Addr().String())
+	px.redirect = site.Listener.Addr().String()
+	resp, err := cl.Get("https://example.com:" + port + "/") // the test certificate is valid for example.com
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -213,23 +218,20 @@ func TestEgressHTTPGoesThroughTheProxy(t *testing.T) {
 		t.Fatalf("body %q", b)
 	}
 	asked := px.requests()
-	if len(asked) != 1 || !strings.HasPrefix(asked[0], "localhost:") {
-		t.Fatalf("proxy was asked for %v, want the name localhost sent unresolved", asked)
+	if len(asked) != 1 || !strings.HasPrefix(asked[0], "example.com:") {
+		t.Fatalf("proxy was asked for %v, want the name example.com sent unresolved", asked)
 	}
-	// A site with a certificate we do not trust is refused.
-	other := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	defer other.Close()
-	_, oport, _ := net.SplitHostPort(other.Listener.Addr().String())
-	if _, err := cl.Get("https://localhost:" + oport + "/"); err == nil {
-		t.Fatal("the client accepted an untrusted certificate")
+	// Without the test root the same site is refused: the certificate is checked.
+	c := newTestNodeWith(t, cards.Hidden, false, nil, nil, func(c *node.Config) { c.Egress = egressTo(px, false) })
+	if _, err := c.rt.HTTP().Get("https://example.com:" + port + "/"); err == nil {
+		t.Fatal("the client accepted a certificate its roots do not know")
 	}
-	_ = tls.VersionTLS13
 }
 
-// The leak test. The peer's card lists all four suites at addresses that are real sockets of the
-// test: a TCP and a UDP sink. Behind the proxy the node asks the proxy for the TCP suites and sends
-// nothing to either sink on its own (no UDP, no direct TCP); with the proxy refusing it connects to
-// no one (fail closed).
+// The leak test. The peer's card lists the suites at addresses that are real sockets of the test: a
+// TCP and a UDP sink. Behind the proxy the node asks the proxy for the TCP suite and sends nothing
+// to either sink on its own (no UDP, no direct TCP); with the proxy refusing it connects to no one
+// (fail closed).
 func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
 	tcpSink, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -266,6 +268,7 @@ func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
 
 	for _, tor := range []bool{false, true} {
 		px := newFakeSocks(t)
+		px.refuse.Store(true) // the proxy only records: whatever reaches a sink came around it
 		b := newTestNodeFull(t, cards.Visible, true, nil, nil, func(c *cards.Config) {
 			m := c.Listeners[0].Mask
 			c.Listeners = []cards.Listener{
@@ -299,17 +302,17 @@ func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
 			}
 		}
 
-		// Fail closed: the proxy goes down, nothing else is tried.
-		px.refuse.Store(true)
+		// Fail closed: with the proxy gone altogether nothing else is tried.
+		_ = px.ln.Close()
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 8*time.Second)
 		_, sess2, err2 := a.rt.Session(ctx2, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t)})
 		cancel2()
 		if err2 == nil {
 			_ = sess2.Close()
-			t.Fatalf("tor=%v: a session opened through a refusing proxy", tor)
+			t.Fatalf("tor=%v: a session opened with the proxy gone", tor)
 		}
 		if n := direct.Load(); n != 0 {
-			t.Fatalf("tor=%v: with the proxy refusing, %d sockets reached the peer directly", tor, n)
+			t.Fatalf("tor=%v: with the proxy gone, %d sockets reached the peer directly", tor, n)
 		}
 		if errors.Is(err2, context.DeadlineExceeded) {
 			t.Fatalf("tor=%v: fail closed must be an error, not a wait: %v", tor, err2)

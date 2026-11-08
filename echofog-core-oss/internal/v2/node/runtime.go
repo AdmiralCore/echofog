@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
+	"github.com/echofog/echofog-core/internal/v2/call/route"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/chat"
 	chatcrypto "github.com/echofog/echofog-core/internal/v2/chat/crypto"
@@ -226,6 +227,8 @@ type Runtime struct {
 	routeInfo map[DeviceID]RouteReport
 	// freeze marks a network whose TCP stops at 12-20 KiB (T6.4d); netID names the network.
 	freeze *routepolicy.FreezeTracker
+	// egress is the proxy mode (T11.6a); nil when the node goes out directly.
+	egress *Egress
 	// narrow marks a network that cannot carry the first packets of noise3 (T3.12).
 	narrow *carrier.NarrowPath
 	netMu  sync.Mutex
@@ -371,12 +374,30 @@ func New(cfg Config) (*Runtime, error) {
 	// never builds a Go-TLS client of its own, whose fingerprint and environment proxy would
 	// betray it.
 	httpClient := cfg.HTTP
+	var egress *Egress
+	if cfg.Egress != nil {
+		eg := *cfg.Egress
+		if err := eg.check(&cfg); err != nil {
+			return nil, err
+		}
+		dial, err := eg.dialer()
+		if err != nil {
+			return nil, err
+		}
+		egress = &eg
+		cfg.DialContext = dial
+		cfg.Profile.PortMapping = false // no port is forwarded behind a proxy
+		if httpClient == nil {
+			httpClient = eg.httpClient(dial)
+		}
+	}
 	carrierClock := cfg.CarrierClock
 	if carrierClock == nil {
 		carrierClock = systemClock{}
 	}
 
 	r := &Runtime{
+		egress:       egress,
 		cfg:          cfg,
 		log:          log,
 		events:       events,
@@ -395,6 +416,9 @@ func New(cfg Config) (*Runtime, error) {
 	r.narrow = carrier.NewNarrowPath(carrierClock, r.narrowMarked)
 	if r.rules == nil {
 		r.rules = routepolicy.Default()
+	}
+	if egress != nil {
+		r.callRoute.Store(uint32(route.Relay)) // calls go through a relay behind a proxy
 	}
 	r.netClass.Store(uint32(cfg.NetClass))
 	r.hsSem = make(chan struct{}, maxHandshaking)
