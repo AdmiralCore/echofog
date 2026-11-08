@@ -588,6 +588,7 @@ func main() {
 	writeFile(*out, "handshake-transcript.json", tr)
 	writeFile(*out, "kdf.json", genKDF(co))
 	writeFile(*out, "negative.json", genNegative(co))
+	writeFile(*out, "convlog.json", genConvlog())
 }
 
 // ---------------------------------------------------------------------------------------------
