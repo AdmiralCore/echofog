@@ -5,7 +5,7 @@ package winwfp
 // The integration test of the driver. It installs REAL persistent filters that block the network of
 // the machine it runs on. It is built only with the tag wfpvm and refuses to run anywhere but in a
 // virtual machine, with administrator rights, and only when ECHOFOG_WFP_VM=VM is set. Never run it
-// on a shared or a working computer. Instructions: docs/deploy-vps-v2.md (kill switch), script:
+// on a shared or a working computer. Instructions: docs/kill-switch-windows.md, script:
 // internal/v2/tun/winwfp/vm/run-wfpvm.ps1.
 
 import (

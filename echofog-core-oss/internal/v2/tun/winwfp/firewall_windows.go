@@ -31,9 +31,6 @@ type engine interface {
 	Close() error
 }
 
-// fwpEAccessDenied is FWP_E_ACCESS_DENIED, the answer of the BFE to a caller without the right.
-const fwpEAccessDenied = syscall.Errno(0x80320003)
-
 // openEngine opens a non-dynamic session: what it adds outlives the process.
 func openEngine() (engine, error) {
 	s, err := wf.New(&wf.Options{Name: "EchoFog kill switch", Description: providerDesc})
@@ -48,7 +45,9 @@ func mapErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, fwpEAccessDenied) {
+	// The BFE answers a caller without the right with ERROR_ACCESS_DENIED (seen from an unelevated
+	// process: wf.New itself fails with it) or its HRESULT form.
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, syscall.Errno(0x80070005)) {
 		return fmt.Errorf("%w: %v", tun.ErrNoPrivilege, err)
 	}
 	return err

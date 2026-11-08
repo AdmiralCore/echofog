@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -492,5 +493,30 @@ func TestRemoveAllOver(t *testing.T) {
 	}
 	if n, err := removeAll(e); err != nil || n != 0 {
 		t.Fatalf("removeAll on a clean engine = %d, %v", n, err)
+	}
+}
+
+// The identifiers in the documents a person uses to take the protection off are the ones in the code.
+func TestRemovalScriptAndGuidesNameTheSameIdentifiers(t *testing.T) {
+	for _, rel := range []string{
+		`../../../../deploy/v2/killswitch-remove.ps1`,
+		`../../../../../docs/kill-switch-windows.md`,
+		`../../../../../docs/kill-switch-windows.ru.md`,
+		`vm/run-wfpvm.ps1`,
+	} {
+		raw, err := os.ReadFile(rel)
+		if err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+		text := strings.ToLower(string(raw))
+		want := []string{strings.Trim(strings.ToLower(ProviderKeyString), "{}")}
+		if !strings.HasSuffix(rel, "run-wfpvm.ps1") {
+			want = append(want, strings.Trim(strings.ToLower(SublayerKeyString), "{}"))
+		}
+		for _, id := range want {
+			if !strings.Contains(text, id) {
+				t.Errorf("%s does not contain %s", rel, id)
+			}
+		}
 	}
 }
