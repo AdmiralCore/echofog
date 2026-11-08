@@ -263,6 +263,7 @@ func newCoverCarrierListener(n *selfcover.Node, tcp, quic bool, prof *shape.Prof
 func (l *coverCarrierListener) pumpTCP() {
 	defer l.wg.Done()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		select {
 		case <-l.done:
@@ -303,6 +304,7 @@ func (l *coverCarrierListener) pumpTCP() {
 func (l *coverCarrierListener) pumpQUIC() {
 	defer l.wg.Done()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		select {
 		case <-l.done:
