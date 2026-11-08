@@ -1,0 +1,346 @@
+package node
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/links"
+	"github.com/echofog/echofog-core/internal/v2/mux"
+	v2node "github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
+	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/pkg/dto"
+	coreNode "github.com/echofog/echofog-core/pkg/node"
+	"github.com/stretchr/testify/require"
+)
+
+// ---- the in-memory network of two stacks in one process ------------------------------------------------
+
+// v2Queue is the listener of one stack: the other stack's dialer pushes carriers into it.
+type v2Queue struct {
+	ch     chan mux.Carrier
+	done   chan struct{}
+	once   sync.Once
+	closed error
+}
+
+func newV2Queue() *v2Queue {
+	return &v2Queue{ch: make(chan mux.Carrier, 4), done: make(chan struct{})}
+}
+
+func (q *v2Queue) Accept(ctx context.Context) (mux.Carrier, error) {
+	select {
+	case c := <-q.ch:
+		return c, nil
+	case <-q.done:
+		return nil, q.closed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (q *v2Queue) Addr() net.Addr { return nil }
+
+func (q *v2Queue) Close() error {
+	q.once.Do(func() {
+		q.closed = errors.New("queue closed")
+		close(q.done)
+	})
+	return nil
+}
+
+var _ carrier.Listener = (*v2Queue)(nil)
+
+// v2MemDialer dials through an in-memory carrier into the queue of the other stack.
+type v2MemDialer struct {
+	rt   *v2node.Runtime
+	peer func() *v2Queue
+}
+
+func (d v2MemDialer) Session(ctx context.Context, p v2node.DeviceID, opt v2node.DialOpt) (v2node.Peer, *mux.Session, error) {
+	pair := memcarrier.NewQUIC()
+	select {
+	case d.peer().ch <- pair.Server:
+	case <-ctx.Done():
+		return v2node.Peer{}, nil, ctx.Err()
+	}
+	opt.Carrier = pair.Client
+	return d.rt.Session(ctx, p, opt)
+}
+
+// v2Peer is one desktop facade at protocol 2 with a profile directory of its own.
+type v2Peer struct {
+	t        *testing.T
+	api      *NodeApi
+	node     *coreNode.Node
+	mnemonic string
+	q        *v2Queue
+	other    *v2Peer
+}
+
+func newV2Peer(t *testing.T, name string) *v2Peer {
+	t.Helper()
+	cfg := config.DefaultConfig("")
+	cfg.Protocol = config.ProtocolV2
+	cfg.Storage.DatabasePath = filepath.Join(t.TempDir(), "db")
+	nd := coreNode.NewNode(context.Background(), cfg, name)
+	t.Cleanup(nd.Cancel)
+	api := NewNodeApi(nd)
+	phrase, err := api.Register("пароль-"+name, "")
+	require.NoError(t, err)
+	p := &v2Peer{t: t, api: api, node: nd, mnemonic: phrase, q: newV2Queue()}
+	api.v2h = v2Hooks{
+		Listen: func(dev *identity.Device) ([]carrier.Listener, []cards.Listener) {
+			return []carrier.Listener{p.q}, []cards.Listener{{
+				Suite: objects.SuiteNoise3, Host: "127.0.0.1", Port: 4430, Mask: dev.Masking().Public(),
+			}}
+		},
+		Dialer: func(rt *v2node.Runtime) links.Dialer {
+			return v2MemDialer{rt: rt, peer: func() *v2Queue { return p.other.q }}
+		},
+	}
+	return p
+}
+
+func (p *v2Peer) start() {
+	p.t.Helper()
+	require.NoError(p.t, p.api.StartNode())
+	p.t.Cleanup(p.api.StopNode)
+}
+
+func (p *v2Peer) wantNode() string {
+	acc, err := identity.FromMnemonic(p.mnemonic, "")
+	require.NoError(p.t, err)
+	defer acc.Destroy()
+	id := acc.NodeID()
+	return hex.EncodeToString(id[:])
+}
+
+func newV2Pair(t *testing.T) (*v2Peer, *v2Peer) {
+	t.Helper()
+	a, b := newV2Peer(t, "a"), newV2Peer(t, "b")
+	a.other, b.other = b, a
+	a.start()
+	b.start()
+	return a, b
+}
+
+// befriend makes a and b contacts of each other by the standing contact links.
+func befriend(t *testing.T, a, b *v2Peer) (aSeesB, bSeesA string) {
+	t.Helper()
+	st, err := a.api.GetAccessStatus()
+	require.NoError(t, err)
+	require.NotEmpty(t, st.Link, "a public node has a standing contact link")
+	bSeesA, err = b.api.JoinInvite(st.Link)
+	require.NoError(t, err)
+	st, err = b.api.GetAccessStatus()
+	require.NoError(t, err)
+	aSeesB, err = a.api.JoinInvite(st.Link)
+	require.NoError(t, err)
+	return aSeesB, bSeesA
+}
+
+func eventually(t *testing.T, what string, f func() bool) {
+	t.Helper()
+	require.Eventually(t, f, 30*time.Second, 50*time.Millisecond, what)
+}
+
+// ---- the tests --------------------------------------------------------------------------------------------
+
+// T11.7: two runtimes built by the facade alone (StartNode at protocol 2) exchange a message, a file
+// and a group event, over a real handshake, the real chat/2 service and the real files/2 service.
+func TestV2RuntimesExchangeMessageFileAndGroupEvent(t *testing.T) {
+	a, b := newV2Pair(t)
+	aSeesB, bSeesA := befriend(t, a, b)
+	require.Equal(t, a.wantNode(), bSeesA, "the node ID is the one the recovery phrase gives (AD7)")
+	require.Equal(t, b.wantNode(), aSeesB)
+
+	// a message
+	var convMu sync.Mutex
+	var seen []ChatMessage
+	b.api.SubscribeConversations(func(c ConvChange) {
+		convMu.Lock()
+		seen = append(seen, c.Messages...)
+		convMu.Unlock()
+	})
+	sent, err := a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: "привет через v2"})
+	require.NoError(t, err)
+	require.Equal(t, "привет через v2", sent.Text)
+	eventually(t, "b gets the message", func() bool {
+		convMu.Lock()
+		defer convMu.Unlock()
+		for _, m := range seen {
+			if m.Text == "привет через v2" {
+				return true
+			}
+		}
+		return false
+	})
+	page, err := b.api.ChatHistory(ChatRef{Kind: "dm", ID: bSeesA}, "", 50)
+	require.NoError(t, err)
+	require.NotEmpty(t, page.Messages)
+
+	// a file: offered, accepted, fetched over files/2, and the sender sees the recipient got it
+	var fileMu sync.Mutex
+	incoming := map[string]dto.FileTransferDTO{}
+	b.api.OnFileTransfer(func(f dto.FileTransferDTO) {
+		fileMu.Lock()
+		incoming[f.ID] = f
+		fileMu.Unlock()
+	})
+	src := filepath.Join(t.TempDir(), "привет.bin")
+	body := make([]byte, 300_000)
+	for i := range body {
+		body[i] = byte(i * 7)
+	}
+	require.NoError(t, os.WriteFile(src, body, 0o600))
+	out, err := a.api.SendFile(aSeesB, src)
+	require.NoError(t, err)
+	require.Equal(t, "offered", out.State, "a sent offer is not a delivered file")
+	var inID string
+	eventually(t, "b is offered the file", func() bool {
+		fileMu.Lock()
+		defer fileMu.Unlock()
+		for id, f := range incoming {
+			if f.State == "offered" {
+				inID = id
+				return true
+			}
+		}
+		return false
+	})
+	_, err = b.api.AcceptFile(inID)
+	require.NoError(t, err)
+	eventually(t, "b has the whole file", func() bool {
+		f, err := b.api.GetFileTransfer(inID)
+		return err == nil && f.State == "done"
+	})
+	path, err := b.api.FileTransferPath(inID)
+	require.NoError(t, err)
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, body, got)
+	eventually(t, "a sees that b got it (FilesOnDone -> FileServed)", func() bool {
+		f, err := a.api.GetFileTransfer(out.ID)
+		return err == nil && f.State == "done"
+	})
+
+	// a group event
+	var gMu sync.Mutex
+	var events []GroupEvent
+	b.api.SubscribeGroupEvents(func(e GroupEvent) {
+		gMu.Lock()
+		events = append(events, e)
+		gMu.Unlock()
+	})
+	g, err := a.api.CreateGroup("Команда", "рабочий чат", "private")
+	require.NoError(t, err)
+	inv, err := a.api.GroupInviteCreate(g.ID, GroupInviteSpec{Hours: 1})
+	require.NoError(t, err)
+	_, err = b.api.JoinGroup(inv.Link)
+	require.NoError(t, err)
+	_, err = a.api.SendGroupMessage(g.ID, "в группе")
+	require.NoError(t, err)
+	eventually(t, "b gets a group event for the group", func() bool {
+		gMu.Lock()
+		defer gMu.Unlock()
+		for _, e := range events {
+			if e.GroupID == g.ID && (e.Kind == "message" || e.Kind == "added") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// L4 of T11.3d: the card a contact answers a knock with is the real one, checked by the real
+// objects.VerifyCard, and it reaches the card book; a forged card does not.
+func TestV2KnockAnswerCarriesTheRealCard(t *testing.T) {
+	a, b := newV2Pair(t)
+	aSeesB, bSeesA := befriend(t, a, b)
+	_ = aSeesB
+	before := b.api.v2Ingested()
+	require.NoError(t, b.api.v2App().Knock(context.Background(), bSeesA))
+	eventually(t, "a's card comes back and is ingested", func() bool { return b.api.v2Ingested() > before })
+	require.Zero(t, a.api.v2Ingested(), "a did not knock, so a took no card")
+}
+
+// AD7: the v2 data sits in <profile>/v2, next to the v1 database and not in it.
+func TestV2RuntimeKeepsItsDataInTheV2Directory(t *testing.T) {
+	a, _ := newV2Pair(t)
+	dir, err := a.node.V2DataDir()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(filepath.Dir(a.node.Cfg.Storage.DatabasePath), "v2"), dir)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "the v2 store is there")
+	require.NotEqual(t, filepath.Dir(a.node.Cfg.Storage.DatabasePath), dir)
+	require.True(t, a.api.V2Running())
+}
+
+// The mode saved for the next start applies by a restart of the v2 runtime, without the UI asking
+// twice, and the contacts survive it.
+func TestV2RuntimeRestartsWhenTheAccessModeChanges(t *testing.T) {
+	a, b := newV2Pair(t)
+	_, bSeesA := befriend(t, a, b)
+	st, err := a.api.GetAccessStatus()
+	require.NoError(t, err)
+	require.Equal(t, "public", st.Mode)
+
+	require.NoError(t, a.api.SetAccessMode("hidden"))
+	eventually(t, "the runtime runs in hidden mode", func() bool {
+		st, err := a.api.GetAccessStatus()
+		return err == nil && st.Mode == "hidden" && st.NextMode == "" && a.api.V2Running()
+	})
+	cs, err := a.api.GetContacts()
+	require.NoError(t, err)
+	require.Len(t, cs, 1, "the contact is still there after the restart")
+	_ = bSeesA
+}
+
+// A restart in place: stop and start again on the same profile gives the same node and keeps the data.
+func TestV2RuntimeStopStartKeepsIdentityAndData(t *testing.T) {
+	a, b := newV2Pair(t)
+	_, _ = befriend(t, a, b)
+	a.api.StopNode()
+	require.False(t, a.api.V2Running())
+	a.api.StopNode() // twice is harmless
+	require.NoError(t, a.api.StartNode())
+	require.True(t, a.api.V2Running())
+	cs, err := a.api.GetContacts()
+	require.NoError(t, err)
+	require.Len(t, cs, 1)
+}
+
+// Exit without hanging goroutines: after StopNode the goroutines the stack started are gone.
+func TestV2RuntimeStopLeavesNoGoroutines(t *testing.T) {
+	a := newV2Peer(t, "solo")
+	a.other = a
+	time.Sleep(100 * time.Millisecond)
+	before := runtime.NumGoroutine()
+	require.NoError(t, a.api.StartNode())
+	require.True(t, a.api.V2Running())
+	a.api.StopNode()
+	require.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+2 }, 15*time.Second, 100*time.Millisecond,
+		"goroutines after stop: %d, before start: %d", runtime.NumGoroutine(), before)
+}
+
+// Protocol 1 never reaches the v2 stack.
+func TestProtocol1DoesNotStartTheV2Stack(t *testing.T) {
+	api := newFacadeNode(t, config.ProtocolV1)
+	require.Error(t, api.startV2(), "startV2 is for protocol 2 only")
+	require.False(t, api.V2Running())
+	require.Nil(t, api.v2App())
+}

@@ -64,6 +64,9 @@ type NodeApi struct {
 	v2n v2Notices   // the protocol 2 notices for the UI (v2_notices.go)
 	v2v v2VPNHolder // the attached protocol 2 VPN (backends_v2_vpn.go)
 	v2m v2Subs      // what the UI subscribed to before AttachV2Messenger (backends_v2_msg.go)
+	v2s *v2Stack    // the running protocol 2 runtime (v2_runtime.go)
+	v2h v2Hooks     // test hooks for the edges of the v2 stack
+	v2l sync.Mutex  // serializes start, stop and restart of the v2 stack
 
 	Logger *slog.Logger
 }
