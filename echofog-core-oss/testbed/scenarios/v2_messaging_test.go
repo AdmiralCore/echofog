@@ -3,31 +3,18 @@ package scenarios
 import (
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-
-	"github.com/echofog/echofog-core/testbed/gate"
 )
 
-// v2-messaging: two real nodes meet over noise3 and chat/2 sends messages through the real outbox.
-// The delivery rows are green when the directory resolves and are NOT MEASURED when it does not:
-// never green on a thing that was not measured. In the loopback world the DHT does not resolve (a
-// finding of T15.1, see the report), so the scenario says so, and the test pins that honesty.
-func TestMessagingScenarioIsGreenOrSaysWhatItCouldNotMeasure(t *testing.T) {
-	r := runModel(t, "v2-messaging", 4*time.Minute)
-	requireGreen(t, r, "v2-messaging/session")
-	for _, id := range []string{"v2-messaging/exactly-once", "v2-messaging/offline-queue", "v2-messaging/state"} {
-		row, ok := rowOf(r, id)
-		if !ok {
-			t.Fatalf("row %s is missing", id)
-		}
-		switch row.Status {
-		case gate.Green:
-		case gate.NotMeasured:
-			assert.NotEmpty(t, row.Note, "%s: a row that was not measured says why", id)
-			assert.NotEmpty(t, r.NotChecked)
-		default:
-			t.Errorf("%s: %s (%s %s)", id, row.Status, row.Value, row.Note)
-		}
-	}
+// v2-messaging: two real nodes meet over noise3 and chat/2 delivers messages through the real
+// outbox, with a Directory shared by the two chat services in place of the DHT (the DHT of a
+// loopback world does not resolve; the directory is the test's, the chat service, its crypto, the
+// outbox and the stream to the peer are the product's).
+func TestMessagingScenarioIsGreenInTheModel(t *testing.T) {
+	r := runModel(t, "v2-messaging", 5*time.Minute)
+	requireGreen(t, r,
+		"v2-messaging/session",       // the dial opens a real session
+		"v2-messaging/exactly-once",  // both ways, 10 % loss and a delay: every message arrives once, none twice
+		"v2-messaging/offline-queue", // the recipient cannot be reached for a while: the outbox keeps the messages, they arrive once it can
+		"v2-messaging/state",         // the sender sees every message as delivered
+	)
 }
