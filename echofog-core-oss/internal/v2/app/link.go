@@ -13,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/tun"
 )
 
 const (
@@ -186,6 +187,14 @@ func UserMessage(err error) string {
 		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
 	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff):
 		return "Эта возможность пока недоступна"
+	case errors.Is(err, ErrWholeOff):
+		return "Режим «весь компьютер» недоступен в этой сборке"
+	case errors.Is(err, tun.ErrUnsupported):
+		return "Режим «весь компьютер» на этой системе пока не поддерживается"
+	case errors.Is(err, tun.ErrNoPrivilege):
+		return "Нужны права администратора: подтвердите запрос системы и повторите"
+	case errors.Is(err, ErrNeedVPN):
+		return "Сначала запустите VPN"
 	case errors.Is(err, ErrNotExit):
 		return "Это не ссылка выхода: узел не раздаёт соединение"
 	case errors.Is(err, ErrVPNRunning):

@@ -48,6 +48,10 @@ func (f *fakeWholeVPN) WholeComputerStatus() app.WholeStatus {
 	defer f.wmu.Unlock()
 	return app.WholeStatus{State: f.state, Err: f.err}
 }
+func (f *fakeWholeVPN) WholeComputerRecover(context.Context) error {
+	f.note("whole-recover")
+	return nil
+}
 func (f *fakeWholeVPN) VPNStopForSwitch() error { f.note("stop-for-switch"); return nil }
 
 func newWholeApi(t *testing.T, supported bool) (*NodeApi, *fakeWholeVPN) {
@@ -123,3 +127,12 @@ func TestV2WithoutDriversTheModeIsNotThere(t *testing.T) {
 }
 
 var errGeneric = context.DeadlineExceeded
+
+// Filters of an earlier run are looked for as soon as the VPN backend is attached: a computer that is
+// held must show it before the user touches anything.
+func TestV2AttachRecoversTheHeldState(t *testing.T) {
+	_, f := newWholeApi(t, true)
+	require.Equal(t, []string{"whole-recover"}, f.log)
+	_, g := newWholeApi(t, false)
+	require.Empty(t, g.log, "an app without the mode is not asked")
+}

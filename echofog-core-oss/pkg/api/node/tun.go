@@ -61,6 +61,9 @@ func ReleaseKillSwitch() error {
 
 // KillSwitchOn reports whether the kill switch is on.
 func (n *NodeApi) KillSwitchOn() bool {
+	if b := n.v2vpn(); b != nil {
+		return b.KillSwitchOn()
+	}
 	if n.v2Unavailable() != nil {
 		return false
 	}
@@ -69,6 +72,9 @@ func (n *NodeApi) KillSwitchOn() bool {
 
 // SetKillSwitch saves the kill switch and applies it at once, to a running TUN too.
 func (n *NodeApi) SetKillSwitch(on bool) error {
+	if b := n.v2vpn(); b != nil {
+		return b.SetKillSwitch(on)
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
@@ -117,6 +123,9 @@ func (n *NodeApi) adoptHeldTun() {
 
 // WholeComputerSupported reports whether this OS can route all traffic through EchoFog.
 func (n *NodeApi) WholeComputerSupported() bool {
+	if b := n.v2vpn(); b != nil {
+		return b.WholeComputerSupported()
+	}
 	if n.v2Unavailable() != nil {
 		return false
 	}
@@ -126,6 +135,9 @@ func (n *NodeApi) WholeComputerSupported() bool {
 // SetWholeComputer turns whole-computer mode on or off. Turning it on asks for administrator
 // rights (UAC on Windows, polkit on Linux) and requires the proxy to be running.
 func (n *NodeApi) SetWholeComputer(on bool) error {
+	if b := n.v2vpn(); b != nil {
+		return b.SetWholeComputer(on)
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
