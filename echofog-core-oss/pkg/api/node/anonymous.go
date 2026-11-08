@@ -34,6 +34,10 @@ type AnonymityStatus struct {
 	// HasProxy and HasRelay: what the saved settings give each mode to work with.
 	HasProxy bool `json:"hasProxy"`
 	HasRelay bool `json:"hasRelay"`
+	// RelayAvailable and RelayNote: protocol 2 shows the own-relay mode but cannot run it yet (T11.6b);
+	// RelayNote is the caption under it ("" when the mode works).
+	RelayAvailable bool   `json:"relayAvailable"`
+	RelayNote      string `json:"relayNote,omitempty"`
 }
 
 // GetAnonymity reports the anonymous mode, saved and in effect.

@@ -27,6 +27,11 @@ type NetStatus struct {
 	Direct   int
 	Relay    int
 	Peers    []PeerStatus
+	// Proxy is the SOCKS5 proxy all of the node's traffic goes through ("" none), Tor says it is Tor
+	// (T11.6a); CallRoute is how calls go now ("auto", "direct" or "relay").
+	Proxy     string
+	Tor       bool
+	CallRoute string
 }
 
 func pathName(k mux.PathKind) string {
