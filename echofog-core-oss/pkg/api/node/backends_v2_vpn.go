@@ -125,6 +125,18 @@ func (b *v2VPNBackend) StopVPNForSwitch() error {
 	return v2Err(b.app.VPNStop())
 }
 
+// stopForExit ends the whole-computer mode, if it is on, and then the VPN: the user leaves on
+// purpose, and the computer is handed back instead of being held as after a crash. With the mode
+// off nothing is asked of the drivers.
+func (b *v2VPNBackend) stopForExit() {
+	if w, ok := b.whole(); ok && w.WholeComputerStatus().State != tun.StateOff {
+		ctx, cancel := context.WithTimeout(context.Background(), wholeStartTimeout)
+		_ = w.WholeComputerStop(ctx)
+		cancel()
+	}
+	_ = b.app.VPNStop()
+}
+
 // whole is the whole-computer mode when the app has it.
 func (b *v2VPNBackend) whole() (v2Whole, bool) {
 	w, ok := b.app.(v2Whole)

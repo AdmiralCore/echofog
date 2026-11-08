@@ -145,6 +145,10 @@ func (n *NodeApi) StopNode() {
 	if n.tun.ctl.Running() {
 		_ = n.StopVPN()
 	}
+	// protocol 2: the protection goes first, then the VPN, then the node
+	if b := n.v2vpn(); b != nil {
+		b.stopForExit()
+	}
 	if n.node != nil {
 		n.node.Stop()
 	}
