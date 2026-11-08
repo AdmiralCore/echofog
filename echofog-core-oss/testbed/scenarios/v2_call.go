@@ -27,6 +27,7 @@ const (
 	callDelay   = 75 * time.Millisecond // each way: a 150 ms round trip
 	callMinGood = 0.90                  // the share of frames that must arrive with 5 % loss
 	callMaxLate = callDelay + 60*time.Millisecond
+	halfRateMin = 12 * time.Second
 )
 
 // mediaLeg is one stream of media frames from a to b.
@@ -234,7 +235,9 @@ func runCall(ctx context.Context, env Env) (res Result) {
 		res.Rows = append(res.Rows, newRow("v2-call/direct-path", "video datagrams by path",
 			fmt.Sprintf("direct %d, other %d", direct, other), "all direct", st, ""))
 	}
-	if v, vid, _, _, err := callLeg(ctx, dir, 0.05, env.Seed+3, d, videoSlow); err != nil {
+	// a short run sends few frames, and with 5 % loss a share of 90 % is then about two standard
+	// deviations from the expectation: this row sends for at least halfRateMin so the share is stable
+	if v, vid, _, _, err := callLeg(ctx, dir, 0.05, env.Seed+3, max(d, halfRateMin), videoSlow); err != nil {
 		fail("v2-call/video-call-half-rate", err)
 	} else {
 		a := check("v2-call/video-call-half-rate", "voice frames of a video call at 15 frames a second", v)
