@@ -156,3 +156,41 @@ func TestExitClientReasonWhenUnreachable(t *testing.T) {
 		})
 	}
 }
+
+// The kill switch permits the first hop of the live session. A session over a carrier without an
+// address (the in-memory one) has none, and ExitRemote says so; it does not fail to find the
+// session.
+func TestExitRemoteFindsTheSession(t *testing.T) {
+	client := newTestNode(t, cards.Hidden, false, nil, nil)
+	q := newCarrierQueue()
+	b := newTestNodeFull(t, cards.Visible, true, []carrier.Listener{q}, nil, asExit, nil)
+	registerFakeExit(t, b.rt)
+	b.start(t)
+	client.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pair := memcarrier.NewQUIC()
+	q.push(pair.Server)
+	card := b.peerCard(t)
+	cl, err := client.rt.ExitClient(ctx, card, node.DialOpt{Carrier: pair.Client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	conn, err := cl.DialExitStream(ctx, "192.0.2.1:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ap, err := client.rt.ExitRemote(ctx, card)
+	t.Logf("ExitRemote over the in-memory carrier: %v, %v", ap, err)
+	if err != nil && !errors.Is(err, node.ErrNoRemote) {
+		t.Fatalf("ExitRemote = %v: the session exists, so the answer is an address or ErrNoRemote", err)
+	}
+	if err == nil && !ap.IsValid() {
+		t.Fatal("ExitRemote returned an invalid address without an error")
+	}
+	if _, err := client.rt.ExitRemote(ctx, nil); err == nil {
+		t.Fatal("ExitRemote(nil card) succeeded")
+	}
+}

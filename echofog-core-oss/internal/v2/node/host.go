@@ -53,6 +53,10 @@ type CardSource interface {
 
 // DialOpt changes one Session or Open call.
 type DialOpt struct {
+	// repair marks a dial that replaces a path of a session that lost its working path: its
+	// failures inside the outage are not the H15 penalty signal and do not grow the backoff (T3.13).
+	repair bool
+
 	// Card is the verified peer card to dial. When nil the runtime takes the newest card of the
 	// peer from its card book.
 	Card *objects.Card

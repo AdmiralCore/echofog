@@ -552,13 +552,19 @@ const (
 // control must be at most 0.65. A detector with no v2 flow in its scope is reported as not
 // measured, never as a pass.
 func V2Gate(flows []LabeledFlow, cfg DetectorConfig) V2GateResult {
+	return GateFor(flows, cfg, LabelCarrier)
+}
+
+// GateFor is V2Gate for the flows of another label: the live lab judges the v1 product (LabelProduct)
+// by the same limits, for comparison with the v2 carriers.
+func GateFor(flows []LabeledFlow, cfg DetectorConfig, label Label) V2GateResult {
 	EvaluateDetectors(flows, cfg)
 	var res V2GateResult
 	for _, id := range gateFPR {
 		if id == "D6" {
 			continue
 		}
-		flagged, n := Exposure(flows, LabelCarrier, id)
+		flagged, n := Exposure(flows, label, id)
 		row := V2GateRow{Detector: id, N: n, Flagged: flagged, Measured: n > 0}
 		if n > 0 {
 			row.Share = float64(flagged) / float64(n)
@@ -578,7 +584,7 @@ func V2Gate(flows []LabeledFlow, cfg DetectorConfig) V2GateResult {
 		switch {
 		case f.Label == LabelBrowser:
 			neg = append(neg, d6.Score(f, cfg))
-		case f.Label == LabelCarrier && !f.Synthetic:
+		case f.Label == label && !f.Synthetic:
 			pos = append(pos, d6.Score(f, cfg))
 		}
 	}

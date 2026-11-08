@@ -30,6 +30,10 @@ type TunConfig struct {
 	Name     string
 	Addrs    []netip.Prefix // IPv4 and IPv6 of the interface
 	Resolver netip.Addr     // the fake DNS answering inside the tunnel
+	// Socks is the loopback address of the node's proxy that the tunnel feeds, and BypassUDPPort the
+	// node's own UDP port that must stay off the tunnel. A driver that needs neither ignores them.
+	Socks         string
+	BypassUDPPort int
 }
 
 // TunEvent says the tunnel is gone: the helper died, the adapter was removed or the control
@@ -42,8 +46,13 @@ type TunEvent struct {
 type Tunnel interface {
 	Up(ctx context.Context, cfg TunConfig) error
 	Down(ctx context.Context) error
-	// Events delivers one event when a running tunnel is lost; it is not used for Down.
+	// Events delivers one event when a running tunnel is lost; it is not used for Down. The driver
+	// never closes the channel (the Switch stops watching a closed one).
 	Events() <-chan TunEvent
+	// Alive asks the device itself whether the tunnel is up. The Switch asks once per
+	// Config.PollInterval, so a lost event (a full buffer, a missed notification) still ends in
+	// StateHeld.
+	Alive(ctx context.Context) bool
 }
 
 // DNSConfig is the DNS protection of the tunnel mode.

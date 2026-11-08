@@ -355,7 +355,7 @@
       <div class="card row killed" role="alert">
         <Icon name="lock" size={18} />
         <span class="grow small">{$t(vpn.blocked ? 'proxy.killBlocked' : 'proxy.killHeld')}</span>
-        <button class="ghost" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
+        <button class="killbtn" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
       </div>
     {/if}
 
@@ -819,4 +819,6 @@
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   .killed { gap: 10px; align-items: center; border-color: #c98a00; background: color-mix(in srgb, #c98a00 12%, var(--surface)); }
+  .killbtn { background: #c98a00; color: #fff; border-color: #c98a00; font-weight: 600; padding: 8px 14px; flex: none; }
+  .killbtn:hover:not(:disabled) { filter: brightness(1.08); }
 </style>

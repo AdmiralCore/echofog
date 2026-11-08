@@ -117,8 +117,8 @@ export default {
     'proxy.killSwitchHint': 'Nothing goes out around the exit: if it drops, you switch exits, the network changes or EchoFog crashes, apps stay offline until an exit serves you again.',
     'proxy.killSwitchLimits': 'Kill switch on: apps stay offline rather than go out on your real address when the exit drops, you switch exits, the network changes or EchoFog crashes. Not covered yet: if the helper process itself is killed, or Windows removes the EchoFog adapter, the normal connection comes back. DNS is kept inside the tunnel on a best-effort basis.',
     'proxy.killBlocked': 'The internet is blocked: no exit serves you right now, and the kill switch lets nothing out around it. It comes back once an exit works again.',
-    'proxy.killHeld': 'The internet is blocked: EchoFog stopped without turning whole-computer mode off, and the kill switch kept your apps offline. Connect to an exit and it comes back by itself, or unblock now.',
-    'proxy.killUnblock': 'Unblock the internet',
+    'proxy.killHeld': 'The internet is blocked on purpose: the protection keeps every app offline because the tunnel is gone. Connect again, or disable the protection to go back to your normal network.',
+    'proxy.killUnblock': 'Disable protection',
 
     'proxy.mode.auto': 'Automatic',
     'proxy.mode.manual': 'Choose myself',
@@ -383,8 +383,8 @@ export default {
     'proxy.killSwitchHint': 'Ничего не уходит мимо выхода: если он отвалился, вы меняете выход, сменилась сеть или EchoFog упал, приложения остаются без интернета, пока выход снова не заработает.',
     'proxy.killSwitchLimits': 'Kill switch включён: при обрыве выхода, смене выхода, смене сети или падении EchoFog приложения остаются без интернета, а не выходят с вашего настоящего адреса. Пока не закрыто: если убить сам процесс помощника или Windows удалит адаптер EchoFog, обычное соединение вернётся. DNS удерживается внутри туннеля по мере возможности.',
     'proxy.killBlocked': 'Интернет заблокирован: сейчас ни один выход вас не обслуживает, и kill switch ничего не выпускает мимо него. Доступ вернётся, как только выход заработает.',
-    'proxy.killHeld': 'Интернет заблокирован: EchoFog остановился, не выключив режим «весь компьютер», и kill switch не выпустил приложения в обычную сеть. Подключитесь к выходу, и доступ вернётся сам, или разблокируйте сейчас.',
-    'proxy.killUnblock': 'Разблокировать интернет',
+    'proxy.killHeld': 'Интернет заблокирован намеренно: защита не выпускает приложения мимо туннеля, а туннеля сейчас нет. Подключитесь заново или отключите защиту, чтобы вернуться в обычную сеть.',
+    'proxy.killUnblock': 'Отключить защиту',
 
     'proxy.mode.auto': 'Автоматически',
     'proxy.mode.manual': 'Выбрать самому',

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -24,5 +25,25 @@ func (r runtimeExit) Dial(ctx context.Context, card *objects.Card) (ExitLink, er
 	if err != nil {
 		return nil, err
 	}
+	if src, ok := r.rt.(ExitRemoteSource); ok {
+		return remoteClient{Client: c, src: src, card: card}, nil
+	}
 	return c, nil
+}
+
+// remoteClient is an exit client that tells the first hop of its session (RemoteLink).
+type remoteClient struct {
+	*exit.Client
+	src  ExitRemoteSource
+	card *objects.Card
+}
+
+func (c remoteClient) Remote(ctx context.Context) (netip.AddrPort, error) {
+	return c.src.ExitRemote(ctx, c.card)
+}
+
+// ExitRemoteSource is the part of *node.Runtime that tells the first hop of the session to an exit
+// (node.Runtime.ExitRemote). A runtime that has it makes the links RemoteLinks.
+type ExitRemoteSource interface {
+	ExitRemote(ctx context.Context, card *objects.Card) (netip.AddrPort, error)
 }

@@ -456,6 +456,7 @@ const rememberMock = (() => {
 })();
 // "start with Windows": ?autostart starts it on; ?autostart=other has Windows start another copy,
 // ?autostart=blocked has it switched off in the Windows startup apps
+const protocolMock = { running: 1, next: 1 };
 const autostartMock = (() => {
   const v = new URLSearchParams(location.search).get('autostart');
   return { on: v === '' || v === 'other', other: v === 'other', blocked: v === 'blocked' };
@@ -500,6 +501,8 @@ const impl = {
   ChangePassword: (old) => new Promise((r, j) => setTimeout(() => (old === 'demo' ? r(null) : j(new Error('wrong app password'))), 700)),
   GetAutostart: () => ({ supported: true, enabled: autostartMock.on, blocked: autostartMock.blocked,
     program: autostartMock.on && autostartMock.other ? 'C:\\Users\\demo\\Downloads\\EchoFog-old.exe' : '' }),
+  GetProtocol: () => ({ running: protocolMock.running, next: protocolMock.next }),
+  SetProtocol: (n) => { protocolMock.next = n; return null; },
   SetAutostart: (on) => { Object.assign(autostartMock, { on, other: false, blocked: false }); return null; },
   // ?offline: no peers, to see the offline banner and the bootstrap card
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),

@@ -129,6 +129,9 @@ export namespace convlog {
 	    lastReplyAt?: number;
 	    threadTitle?: string;
 	    legacy?: boolean;
+	    mentions?: string[];
+	    mentionsAll?: boolean;
+	    mentioned?: boolean;
 	    state?: string;
 	    kind: string;
 	    file?: FileRef;
@@ -165,6 +168,9 @@ export namespace convlog {
 	        this.lastReplyAt = source["lastReplyAt"];
 	        this.threadTitle = source["threadTitle"];
 	        this.legacy = source["legacy"];
+	        this.mentions = source["mentions"];
+	        this.mentionsAll = source["mentionsAll"];
+	        this.mentioned = source["mentioned"];
 	        this.state = source["state"];
 	        this.kind = source["kind"];
 	        this.file = this.convertValues(source["file"], FileRef);
@@ -756,6 +762,20 @@ export namespace main {
 	        this.hardware = source["hardware"];
 	        this.temporalLayers = source["temporalLayers"];
 	        this.pacerDelayMs = source["pacerDelayMs"];
+	    }
+	}
+	export class ProtocolDTO {
+	    running: number;
+	    next: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProtocolDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.next = source["next"];
 	    }
 	}
 	export class RememberedUnlockDTO {

@@ -180,6 +180,8 @@ export function GetProbeDomains():Promise<Array<string>>;
 
 export function GetProfiles():Promise<Array<string>>;
 
+export function GetProtocol():Promise<main.ProtocolDTO>;
+
 export function GetProxySettings():Promise<node.ProxyStatus>;
 
 export function GetRelayStatus():Promise<node.RelayStatus>;
@@ -395,6 +397,8 @@ export function SetPrivacy(arg1:node.Privacy):Promise<void>;
 export function SetProbeDomains(arg1:Array<string>):Promise<void>;
 
 export function SetProfileService(arg1:main.ProfileService):Promise<void>;
+
+export function SetProtocol(arg1:number):Promise<void>;
 
 export function SetProxySettings(arg1:string,arg2:string):Promise<void>;
 
