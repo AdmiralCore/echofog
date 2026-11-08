@@ -71,7 +71,32 @@ func loopbackProxy(addr string) bool {
 }
 
 func (t *Tunnel) Up(ctx context.Context, cfg tun.TunConfig) error {
-	return errors.New("not implemented")
+	if !loopbackProxy(cfg.Socks) {
+		return errors.New("wintunnel: the proxy of the node must be on the loopback")
+	}
+	t.mu.Lock()
+	t.stopping = false
+	t.mu.Unlock()
+	t.ctl.SetOnExit(t.exited)
+	// No hold file: the firewall is the kill switch. Two of them would fight over the same traffic.
+	if err := t.ctl.Start(ctx, cfg.Socks, cfg.BypassUDPPort, ""); err != nil {
+		return err
+	}
+	luid, err := t.luidOf()
+	if err == nil {
+		err = t.fw.SetTunnelLUID(luid)
+	}
+	if err != nil {
+		t.mu.Lock()
+		t.stopping = true
+		t.mu.Unlock()
+		t.ctl.Stop()
+		return err
+	}
+	t.mu.Lock()
+	t.up = true
+	t.mu.Unlock()
+	return nil
 }
 
 // exited is the helper of v1 going away without being told to.
@@ -93,14 +118,28 @@ func (t *Tunnel) exited(err error) {
 }
 
 func (t *Tunnel) Down(ctx context.Context) error {
-	return errors.New("not implemented")
+	t.mu.Lock()
+	t.stopping = true
+	t.up = false
+	t.mu.Unlock()
+	// The adapter is going: the filters stop naming it, and stay closed.
+	err := t.fw.SetTunnelLUID(0)
+	t.ctl.Stop()
+	return err
 }
 
 func (t *Tunnel) Events() <-chan tun.TunEvent { return t.events }
 
 // Alive is true while the helper runs and the adapter is there.
 func (t *Tunnel) Alive(context.Context) bool {
-	return false
+	t.mu.Lock()
+	up := t.up
+	t.mu.Unlock()
+	if !up || !t.ctl.Running() {
+		return false
+	}
+	_, err := t.luidOf()
+	return err == nil
 }
 
 var _ tun.Tunnel = (*Tunnel)(nil)
