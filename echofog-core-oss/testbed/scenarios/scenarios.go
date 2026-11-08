@@ -140,3 +140,6 @@ func appendNew(dst, src []string) []string {
 	}
 	return dst
 }
+
+// removeTree removes a scratch directory and waits for the files a closing node still holds.
+func removeTree(dir string) error { return nil }

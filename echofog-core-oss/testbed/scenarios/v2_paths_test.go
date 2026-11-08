@@ -24,6 +24,6 @@ func TestPathsScenarioIsGreenInTheModel(t *testing.T) {
 // The scenario must be able to fail: with a path that is cut for good and no second path, the
 // stream does not finish and the row is red, not skipped.
 func TestPathsScenarioCutRowIsRedWithoutASecondPath(t *testing.T) {
-	row := pathsCutWithoutSecondPath(t.Context())
+	row := pathsCutWithoutSecondPath(t.Context(), t.TempDir())
 	assert.Equal(t, gate.Red, row.Status, "%s: %s", row.Value, row.Note)
 }

@@ -243,10 +243,10 @@ func cutRows(ctx context.Context, dir string, second bool) []gate.Row {
 }
 
 // pathsCutWithoutSecondPath is the control of the cut row: one path, cut for good.
-func pathsCutWithoutSecondPath(ctx context.Context) gate.Row {
-	dir, _ := os.MkdirTemp("", "paths-control-")
-	defer os.RemoveAll(dir)
-	return cutRows(ctx, dir, false)[0]
+func pathsCutWithoutSecondPath(ctx context.Context, dir string) gate.Row {
+	d, _ := os.MkdirTemp(dir, "paths-control-")
+	defer removeTree(d)
+	return cutRows(ctx, d, false)[0]
 }
 
 // addressChangeRow rebinds the netem's client side a quarter of the way: the server sees the same
