@@ -17,6 +17,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/shape"
 	"github.com/echofog/echofog-core/internal/v2/store"
 	"github.com/echofog/echofog-core/testbed/behaviour"
@@ -35,14 +36,17 @@ type World struct {
 
 // NodeSpec describes a node.
 type NodeSpec struct {
-	Name       string
-	Server     bool                   // the server profile: DHT server, mailbox and relay roles, role server in its card
-	Listen     bool                   // a real noise3 listener on loopback
-	Hidden     bool                   // a card that is not published
-	Chat       bool                   // chat/2 on
-	Netem      *behaviour.NetemConfig // the listener sits behind an in-process netem
-	CardMutate func(*cards.Config)    // changes the card material before the builder seals it
-	Mutate     func(*node.Config)     // changes the runtime configuration
+	Name   string
+	Server bool                   // the server profile: DHT server, mailbox and relay roles, role server in its card
+	Listen bool                   // a real noise3 listener on loopback
+	Hidden bool                   // a card that is not published
+	Chat   bool                   // chat/2 on
+	Netem  *behaviour.NetemConfig // the listener sits behind an in-process netem
+	// More are the further noise3 listeners of the node (a second address of the same device, for a
+	// second path), each with its own netem or none.
+	More       []*behaviour.NetemConfig
+	CardMutate func(*cards.Config) // changes the card material before the builder seals it
+	Mutate     func(*node.Config)  // changes the runtime configuration
 }
 
 // Node is one real node.
@@ -50,7 +54,10 @@ type Node struct {
 	Name  string
 	ID    node.Identity
 	RT    *node.Runtime
-	Netem *behaviour.Netem // non-nil when the listener sits behind a netem
+	Netem *behaviour.Netem // non-nil when the first listener sits behind a netem
+	// Netems has one entry per listener, nil where there is no netem; Addrs the advertised addresses.
+	Netems []*behaviour.Netem
+	Addrs  []string
 	// Addr is the address the card advertises (the netem's front when there is one); empty when the
 	// node does not listen.
 	Addr string
@@ -97,31 +104,36 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err := tw.Device.Masking().WithPrivate(func(b []byte) error { copy(maskKey.Private[:], b); return nil }); err != nil {
 		return fail(err)
 	}
-	if spec.Listen {
-		port, err := freeUDPPort()
-		if err != nil {
-			return fail(err)
-		}
-		bind := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-		adv := bind
-		if spec.Netem != nil {
-			em, err := behaviour.StartNetem(bind, *spec.Netem)
-			if err != nil {
-				return fail(err)
-			}
-			n.Netem = em
-			adv = em.Addr()
-		}
-		n.Addr = adv
-		ap := netip.MustParseAddrPort(adv)
-		cardListeners = append(cardListeners, cards.Listener{
-			Suite: objects.SuiteNoise3, Host: ap.Addr().String(), Port: uint32(ap.Port()), Mask: tw.Device.Masking().Public(),
-		})
+	if spec.Listen || len(spec.More) > 0 {
 		profile, err := shape.Builtin(shape.IDDefaultUDP)
 		if err != nil {
 			return fail(err)
 		}
-		sources = append(sources, node.Noise3Listener{Addr: bind, Masks: []noise3.MaskKey{maskKey}, Profile: profile})
+		cfgs := []*behaviour.NetemConfig{spec.Netem}
+		cfgs = append(cfgs, spec.More...)
+		for _, nc := range cfgs {
+			port, err := freeUDPPort()
+			if err != nil {
+				return fail(err)
+			}
+			bind := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			adv := bind
+			var em *behaviour.Netem
+			if nc != nil {
+				if em, err = behaviour.StartNetem(bind, *nc); err != nil {
+					return fail(err)
+				}
+				adv = em.Addr()
+			}
+			n.Netems = append(n.Netems, em)
+			n.Addrs = append(n.Addrs, adv)
+			ap := netip.MustParseAddrPort(adv)
+			cardListeners = append(cardListeners, cards.Listener{
+				Suite: objects.SuiteNoise3, Host: ap.Addr().String(), Port: uint32(ap.Port()), Mask: tw.Device.Masking().Public(),
+			})
+			sources = append(sources, node.Noise3Listener{Addr: bind, Masks: []noise3.MaskKey{maskKey}, Profile: profile})
+		}
+		n.Netem, n.Addr = n.Netems[0], n.Addrs[0]
 	}
 
 	vis := cards.Visible
@@ -229,8 +241,10 @@ func (n *Node) close() {
 		_ = n.RT.Stop(ctx)
 		cancel()
 	}
-	if n.Netem != nil {
-		n.Netem.Close()
+	for _, em := range n.Netems {
+		if em != nil {
+			em.Close()
+		}
 	}
 	if n.store != nil {
 		_ = n.store.Close()
@@ -276,4 +290,36 @@ func (n *Node) SuiteOf(to *Node) string {
 		}
 	}
 	return ""
+}
+
+// AttemptFor is a dial attempt at the i-th noise3 address of to, for DialOpt.Attempts: it picks the
+// listener (and so the netem) a path goes through.
+func (n *Node) AttemptFor(to *Node, i int) (carrier.Attempt, error) {
+	card, err := to.PeerCard()
+	if err != nil {
+		return carrier.Attempt{}, err
+	}
+	var noise []*pb.Addr
+	for _, a := range card.Addrs() {
+		if a.GetSuite() == objects.SuiteNoise3 {
+			noise = append(noise, a)
+		}
+	}
+	if i < 0 || i >= len(noise) {
+		return carrier.Attempt{}, fmt.Errorf("scenarios: %s has %d noise3 addresses, not %d", to.Name, len(noise), i+1)
+	}
+	return carrier.Attempt{Kind: carrier.AttemptCarrier, Suite: objects.SuiteNoise3, Addr: noise[i]}, nil
+}
+
+// DialVia is Dial through the i-th noise3 address of to only.
+func (n *Node) DialVia(ctx context.Context, to *Node, i int) (node.Peer, *mux.Session, error) {
+	card, err := to.PeerCard()
+	if err != nil {
+		return node.Peer{}, nil, err
+	}
+	at, err := n.AttemptFor(to, i)
+	if err != nil {
+		return node.Peer{}, nil, err
+	}
+	return n.RT.Session(ctx, to.ID.DeviceID, node.DialOpt{Card: card, Attempts: []carrier.Attempt{at}})
 }
