@@ -45,6 +45,16 @@ func build(t testing.TB, p tun.Plan) []tun.Rule {
 	return r
 }
 
+// noTunnel is how many filters a rule set gives while there is no adapter.
+func noTunnel(t testing.TB, rules []tun.Rule) int {
+	t.Helper()
+	out, err := Compile(rules, 0, guidSeq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(out)
+}
+
 func find(rs []*wf.Rule, name string) *wf.Rule {
 	for _, r := range rs {
 		if r.Name == "EchoFog: "+name {
@@ -294,8 +304,8 @@ func TestInstallCreatesProviderSublayerAndFilters(t *testing.T) {
 		e.sublayers[0].Weight != SublayerWeight {
 		t.Fatalf("sublayers %+v", e.sublayers)
 	}
-	if ours(e) != len(rules) {
-		t.Fatalf("%d filters installed, want %d", ours(e), len(rules))
+	if ours(e) != noTunnel(t, rules) {
+		t.Fatalf("%d filters installed, want %d", ours(e), noTunnel(t, rules))
 	}
 	if ok, err := f.Installed(context.Background()); err != nil || !ok {
 		t.Fatalf("Installed = %v %v", ok, err)
@@ -317,7 +327,7 @@ func TestInstallReplacesWithoutAGap(t *testing.T) {
 	if err := f.Install(context.Background(), build(t, np)); err != nil {
 		t.Fatal(err)
 	}
-	if want := len(build(t, np)); ours(e) != want {
+	if want := noTunnel(t, build(t, np)); ours(e) != want {
 		t.Fatalf("%d filters after the replacement, want %d (first install had %d)", ours(e), want, first)
 	}
 	lastAdd, firstDel := -1, -1
@@ -474,7 +484,7 @@ func TestRemoveAllOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, err := removeAll(e)
-	if err != nil || n != len(build(t, plan())) {
+	if err != nil || n != noTunnel(t, build(t, plan())) {
 		t.Fatalf("removeAll = %d, %v", n, err)
 	}
 	if ours(e) != 0 || len(e.providers) != 0 || len(e.sublayers) != 0 {
