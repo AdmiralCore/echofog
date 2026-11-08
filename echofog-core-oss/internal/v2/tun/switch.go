@@ -36,6 +36,14 @@ func (s State) String() string {
 // ErrBadState is an operation that does not fit the current state.
 var ErrBadState = errors.New("tun: operation does not fit the kill switch state")
 
+// Timings. A rollback and a driver probe run on contexts of their own, so a cancelled caller
+// cannot leave the computer half set up or a hung driver hold the Switch.
+const (
+	rollbackTimeout = 15 * time.Second
+	aliveTimeout    = 2 * time.Second
+	defaultPoll     = time.Second
+)
+
 // Config wires a Switch.
 type Config struct {
 	Firewall Firewall
@@ -43,7 +51,7 @@ type Config struct {
 	DNS      DNSGuard
 	Plan     Plan
 	Tun      TunConfig
-	// OnState is called after every state change, outside the lock, one call at a time and in the
+	// OnState is called after every state change, outside the locks, one call at a time and in the
 	// order of the changes.
 	OnState func(State, error)
 	// PollInterval is how often the Switch asks Tunnel.Alive (0: once per second).
@@ -58,13 +66,23 @@ type change struct {
 // Switch is the fail-closed state machine of the whole-computer mode. The rule it keeps: the
 // filters go in before the tunnel comes up, they stay when the tunnel is lost or the process dies,
 // and they leave only when the user stops the mode and the firewall confirms it.
+//
+// Locks. opmu serializes the operations (Start, Reconnect, Update, Stop, Recover and the handling
+// of a lost tunnel) and is held across driver calls. mu guards only the state and the queue of
+// notifications and is never held across a driver call, so State() never waits for a driver.
+// dmu serializes the delivery of notifications. Order: opmu, then mu; dmu is taken with neither.
 type Switch struct {
 	cfg    Config
 	events <-chan TunEvent
 
+	opmu sync.Mutex
+	plan Plan // guarded by opmu
+
 	mu      sync.Mutex
 	state   State
 	pending []change
+
+	dmu sync.Mutex
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -73,21 +91,23 @@ type Switch struct {
 
 // New returns a Switch in StateOff and starts watching the tunnel. Call Recover at start-up.
 func New(cfg Config) *Switch {
-	s := &Switch{cfg: cfg, events: cfg.Tunnel.Events(), stop: make(chan struct{})}
+	s := &Switch{cfg: cfg, plan: cfg.Plan, events: cfg.Tunnel.Events(), stop: make(chan struct{})}
 	s.wg.Add(1)
 	go s.watch()
 	return s
 }
 
-// State returns the current state.
+// State returns the current state. It does not wait for a driver call.
 func (s *Switch) State() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state
 }
 
-// set changes the state under mu and queues the notification; flush delivers it after unlock.
+// set changes the state and queues the notification; flush delivers it. The caller holds opmu.
 func (s *Switch) set(st State, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.state == st {
 		return
 	}
@@ -95,7 +115,11 @@ func (s *Switch) set(st State, err error) {
 	s.pending = append(s.pending, change{st, err})
 }
 
+// flush delivers the queued notifications. Deliveries are serialized by dmu and the queue is
+// drained inside it, so they arrive in the order the changes were made, one at a time.
 func (s *Switch) flush() {
+	s.dmu.Lock()
+	defer s.dmu.Unlock()
 	s.mu.Lock()
 	p := s.pending
 	s.pending = nil
@@ -108,36 +132,65 @@ func (s *Switch) flush() {
 	}
 }
 
-// watch turns a lost tunnel into StateHeld. The filters are not touched: they are already
-// persistent, and that is the point.
+// watch turns a lost tunnel into StateHeld, from the driver's events and from a poll of the
+// device. The filters are not touched: they are already persistent, and that is the point.
 func (s *Switch) watch() {
 	defer s.wg.Done()
+	every := s.cfg.PollInterval
+	if every <= 0 {
+		every = defaultPoll
+	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	events := s.events
 	for {
 		select {
 		case <-s.stop:
 			return
-		case ev := <-s.events:
-			s.mu.Lock()
-			if s.state == StateActive {
-				err := ev.Err
-				if err == nil {
-					err = errors.New("tun: the tunnel was lost")
-				}
-				s.set(StateHeld, err)
+		case ev, ok := <-events:
+			if !ok {
+				// A driver must not close the channel. Do not spin on it and do not read it as a loss:
+				// the poll below still sees a dead tunnel.
+				events = nil
+				continue
 			}
-			s.mu.Unlock()
-			s.flush()
+			s.lost(ev.Err)
+		case <-tick.C:
+			if s.State() != StateActive {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), aliveTimeout)
+			alive := s.cfg.Tunnel.Alive(ctx)
+			cancel()
+			if !alive {
+				s.lost(errors.New("tun: the tunnel is not answering"))
+			}
 		}
 	}
+}
+
+// lost moves Active to Held. It waits for a running operation, so an event that arrives during
+// Start is handled right after it; in any other state it is a stale event and is ignored.
+func (s *Switch) lost(err error) {
+	defer s.flush()
+	s.opmu.Lock()
+	defer s.opmu.Unlock()
+	if s.State() != StateActive {
+		return
+	}
+	if err == nil {
+		err = errors.New("tun: the tunnel was lost")
+	}
+	s.set(StateHeld, err)
 }
 
 // Recover looks for filters an earlier process left and, if there are any, enters StateHeld
 // without touching them: a crash never turns into a quiet leak.
 func (s *Switch) Recover(ctx context.Context) error {
 	defer s.flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state != StateOff {
+	s.opmu.Lock()
+	defer s.opmu.Unlock()
+	if s.State() != StateOff {
 		return ErrBadState
 	}
 	installed, err := s.cfg.Firewall.Installed(ctx)
@@ -154,12 +207,12 @@ func (s *Switch) Recover(ctx context.Context) error {
 // rolls back to StateOff, except that a failing rollback of the filters keeps StateHeld.
 func (s *Switch) Start(ctx context.Context) error {
 	defer s.flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state != StateOff {
+	s.opmu.Lock()
+	defer s.opmu.Unlock()
+	if s.State() != StateOff {
 		return ErrBadState
 	}
-	rules, err := BuildRules(s.cfg.Plan)
+	rules, err := BuildRules(s.plan)
 	if err != nil {
 		return err
 	}
@@ -168,10 +221,10 @@ func (s *Switch) Start(ctx context.Context) error {
 		return err
 	}
 	if err := s.cfg.Tunnel.Up(ctx, s.cfg.Tun); err != nil {
-		return s.rollback(ctx, err, false)
+		return s.rollback(ctx, err, false, false)
 	}
 	if err := s.cfg.DNS.Protect(ctx, s.dnsConfig()); err != nil {
-		return s.rollback(ctx, err, true)
+		return s.rollback(ctx, err, true, true)
 	}
 	s.set(StateActive, nil)
 	return nil
@@ -181,13 +234,19 @@ func (s *Switch) dnsConfig() DNSConfig {
 	return DNSConfig{Tunnel: s.cfg.Tun.Name, Resolver: s.cfg.Tun.Resolver, DisableSmartNameResolution: true}
 }
 
-// rollback undoes a failed Start. If the filters cannot be removed the computer stays blocked
-// (held) rather than open.
-func (s *Switch) rollback(ctx context.Context, cause error, tunnelUp bool) error {
-	if tunnelUp {
-		_ = s.cfg.Tunnel.Down(ctx)
+// rollback undoes a failed Start on a context of its own (the caller's may be the reason for the
+// failure and is already cancelled). A half-applied DNS policy is restored too. If the filters
+// cannot be removed the computer stays blocked (held) rather than open.
+func (s *Switch) rollback(ctx context.Context, cause error, tunnelUp, dnsTried bool) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	if dnsTried {
+		_ = s.cfg.DNS.Restore(rctx)
 	}
-	if err := s.cfg.Firewall.Remove(ctx); err != nil {
+	if tunnelUp {
+		_ = s.cfg.Tunnel.Down(rctx)
+	}
+	if err := s.cfg.Firewall.Remove(rctx); err != nil {
 		s.set(StateHeld, err)
 		return errors.Join(cause, fmt.Errorf("tun: the kill switch filters stay: %w", err))
 	}
@@ -197,9 +256,9 @@ func (s *Switch) rollback(ctx context.Context, cause error, tunnelUp bool) error
 // Reconnect brings the tunnel back up from StateHeld.
 func (s *Switch) Reconnect(ctx context.Context) error {
 	defer s.flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state != StateHeld {
+	s.opmu.Lock()
+	defer s.opmu.Unlock()
+	if s.State() != StateHeld {
 		return ErrBadState
 	}
 	if err := s.cfg.Tunnel.Up(ctx, s.cfg.Tun); err != nil {
@@ -207,10 +266,35 @@ func (s *Switch) Reconnect(ctx context.Context) error {
 	}
 	// The adapter is a new one: DNS is pinned again on it.
 	if err := s.cfg.DNS.Protect(ctx, s.dnsConfig()); err != nil {
-		_ = s.cfg.Tunnel.Down(ctx)
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
+		_ = s.cfg.Tunnel.Down(rctx)
 		return err
 	}
 	s.set(StateActive, nil)
+	return nil
+}
+
+// Update replaces the rules while the mode runs (the exit changed, the node moved, a key rotated).
+// The new set goes in through Firewall.Install, which replaces the old one atomically; the filters
+// are never removed, so there is no moment without them. In StateHeld the new plan is installed
+// too (the next Reconnect then goes to the new endpoint). A plan that cannot be built, or an
+// Install that fails, leaves the old rules and the old plan in place.
+func (s *Switch) Update(ctx context.Context, p Plan) error {
+	defer s.flush()
+	s.opmu.Lock()
+	defer s.opmu.Unlock()
+	if st := s.State(); st != StateActive && st != StateHeld {
+		return ErrBadState
+	}
+	rules, err := BuildRules(p)
+	if err != nil {
+		return err
+	}
+	if err := s.cfg.Firewall.Install(ctx, rules); err != nil {
+		return err
+	}
+	s.plan = p
 	return nil
 }
 
@@ -218,9 +302,9 @@ func (s *Switch) Reconnect(ctx context.Context) error {
 // cannot be removed the state stays held.
 func (s *Switch) Stop(ctx context.Context) error {
 	defer s.flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state == StateOff {
+	s.opmu.Lock()
+	defer s.opmu.Unlock()
+	if s.State() == StateOff {
 		return nil
 	}
 	var errs []error
@@ -237,11 +321,6 @@ func (s *Switch) Stop(ctx context.Context) error {
 	}
 	s.set(StateOff, nil)
 	return errors.Join(errs...)
-}
-
-// Update replaces the rules while the mode runs (the exit changed, the node moved, a key rotated).
-func (s *Switch) Update(ctx context.Context, p Plan) error {
-	return errors.New("tun: Update is not implemented")
 }
 
 // Close ends the watcher; it does not change the filters.
