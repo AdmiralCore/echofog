@@ -136,3 +136,20 @@ func TestV2AttachRecoversTheHeldState(t *testing.T) {
 	_, g := newWholeApi(t, false)
 	require.Empty(t, g.log, "an app without the mode is not asked")
 }
+
+// A: leaving the application on purpose (StopNode: closing the window, Logout) takes the protection
+// off before the node stops; otherwise the user's own exit would look like a crash.
+func TestV2StopNodeTakesTheProtectionOff(t *testing.T) {
+	api, f := newWholeApi(t, true)
+	require.NoError(t, api.SetWholeComputer(true))
+	api.StopNode()
+	require.Contains(t, f.log, "whole-stop")
+	require.Equal(t, tun.StateOff, f.WholeComputerStatus().State)
+	require.True(t, f.called("stop"), "the VPN is stopped too")
+}
+
+func TestV2StopNodeWithTheModeOffDoesNotAskForRights(t *testing.T) {
+	api, f := newWholeApi(t, true)
+	api.StopNode()
+	require.NotContains(t, f.log, "whole-stop", "nothing to take off: no helper, no prompt")
+}
