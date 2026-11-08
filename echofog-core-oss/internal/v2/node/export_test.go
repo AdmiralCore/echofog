@@ -158,3 +158,6 @@ var (
 	// WrapFreeze wraps a connection to a foreign address the way the dial path does.
 	WrapFreeze = func(r *Runtime, c net.Conn, ip netip.Addr) net.Conn { return r.freezeConn(c, ip) }
 )
+
+// NarrowPathOf returns the narrow-path marks of the runtime (T3.12).
+var NarrowPathOf = func(r *Runtime) *carrier.NarrowPath { return r.narrow }
