@@ -258,7 +258,10 @@ type Runtime struct {
 	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
 	// this node opened as a carrier client are counted. deadPaths remembers failures that
 	// arrived before the pair was recorded, so a late record cannot resurrect a slot.
-	pathsMu   sync.Mutex
+	pathsMu sync.Mutex
+	// live holds the established sessions until they end: Stop closes what a GOAWAY did not end.
+	liveMu    sync.Mutex
+	live      map[*mux.Session]struct{}
 	pathPairs map[pathKey]session.Pair
 	deadPaths map[pathKey]struct{}
 
@@ -389,6 +392,7 @@ func New(cfg Config) (*Runtime, error) {
 		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
+		live:         map[*mux.Session]struct{}{},
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}
@@ -719,6 +723,8 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	if table != nil {
 		_ = table.Close()
 	}
+	// the GOAWAY above lets a session drain for up to 15 s; a stopping runtime gives it a moment and then ends it
+	r.closeLiveSessions(ctx)
 	r.stopAccess()
 	r.dgrams.close()
 

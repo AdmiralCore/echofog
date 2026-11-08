@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -419,4 +421,76 @@ func TestProtocol1DoesNotStartTheV2Stack(t *testing.T) {
 	require.Error(t, api.startV2(), "startV2 is for protocol 2 only")
 	require.False(t, api.V2Running())
 	require.Nil(t, api.v2App())
+}
+
+// ---- sessions are closed when a runtime stops (F1 of the T11.7 acceptance) ------------------------------------
+
+// sessionGoroutines counts the goroutines of live sessions: the mux loops, the GoAway waiting for a drain.
+func sessionGoroutines() int {
+	buf := make([]byte, 4<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "internal/v2/mux.(*Session)") || strings.Contains(g, "internal/v2/session.(*Established).GoAway") ||
+			strings.Contains(g, "internal/v2/node.(*Runtime).pathHooks") {
+			n++
+		}
+	}
+	return n
+}
+
+func requireNoSessions(t *testing.T, what string) {
+	t.Helper()
+	require.Eventually(t, func() bool { return sessionGoroutines() == 0 }, 5*time.Second, 50*time.Millisecond,
+		"%s: %d session goroutines are still running", what, sessionGoroutines())
+}
+
+// Two runtimes with a live session between them: stopping both leaves no session behind. A stop does not
+// wait for the 15 s drain of a GOAWAY; it closes the sessions.
+func TestV2StoppingBothNodesClosesTheirSessions(t *testing.T) {
+	a, b := newV2Pair(t)
+	aSeesB, _ := befriend(t, a, b)
+	_, err := a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: "сессия открыта"})
+	require.NoError(t, err)
+	eventually(t, "a session is up", func() bool { return sessionGoroutines() > 0 })
+	a.api.StopNode()
+	b.api.StopNode()
+	requireNoSessions(t, "after both nodes stopped")
+}
+
+// A restart (a new access mode) closes the sessions of the old runtime: right after it no session goroutine
+// is left. The peer is stopped first, so that it cannot dial the new runtime again.
+func TestV2RestartClosesTheSessionsOfTheOldRuntime(t *testing.T) {
+	a, b := newV2Pair(t)
+	aSeesB, _ := befriend(t, a, b)
+	_, err := a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: "сессия открыта"})
+	require.NoError(t, err)
+	eventually(t, "a session is up", func() bool { return sessionGoroutines() > 0 })
+	b.api.StopNode()
+	require.NoError(t, a.api.restartV2())
+	requireNoSessions(t, "after the restart of a")
+	require.True(t, a.api.V2Running())
+}
+
+// F2 of the T11.7 acceptance: a restart that cannot start the runtime in the new mode goes back to the old
+// mode, so the facade is not left without a network.
+func TestV2FailedRestartGoesBackToTheOldMode(t *testing.T) {
+	a := newV2Peer(t, "rollback")
+	a.other = a
+	listen := a.api.v2h.Listen
+	var broken atomic.Bool
+	a.api.v2h.Listen = func(dev *identity.Device) ([]carrier.Listener, []cards.Listener) {
+		if broken.Load() {
+			return nil, nil // hidden mode cannot start without an address
+		}
+		return listen(dev)
+	}
+	a.start()
+	broken.Store(true)
+	err := a.api.SetAccessMode("hidden")
+	require.Error(t, err, "the user is told the new mode did not start")
+	require.True(t, a.api.V2Running(), "the runtime runs again, in the old mode")
+	st, err := a.api.GetAccessStatus()
+	require.NoError(t, err)
+	require.Equal(t, "public", st.Mode, "the old mode is saved again")
 }

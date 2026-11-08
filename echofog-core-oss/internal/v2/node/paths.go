@@ -28,8 +28,14 @@ type pathKey struct {
 func (r *Runtime) pathHooks() (func(*mux.Session), func(mux.PathFailure)) {
 	onEstablished := func(s *mux.Session) {
 		r.binder.Add(s)
+		r.liveMu.Lock()
+		r.live[s] = struct{}{}
+		r.liveMu.Unlock()
 		go func() {
 			<-s.Done()
+			r.liveMu.Lock()
+			delete(r.live, s)
+			r.liveMu.Unlock()
 			r.releaseSessionPathPairs(s.SID())
 		}()
 	}
@@ -520,4 +526,30 @@ func penalizeDial(err error) bool {
 		return false
 	}
 	return !errors.Is(err, session.ErrConfig)
+}
+
+// stopGrace is how long Stop lets a session finish after the GOAWAY before it ends the session.
+const stopGrace = time.Second
+
+// closeLiveSessions ends every established session once the grace has passed (or ctx is done): a
+// stopped runtime keeps no session, and the peer sees it end at once, not after the drain.
+func (r *Runtime) closeLiveSessions(ctx context.Context) {
+	r.liveMu.Lock()
+	sessions := make([]*mux.Session, 0, len(r.live))
+	for s := range r.live {
+		sessions = append(sessions, s)
+	}
+	r.liveMu.Unlock()
+	if len(sessions) == 0 {
+		return
+	}
+	grace := time.NewTimer(stopGrace)
+	defer grace.Stop()
+	select {
+	case <-grace.C:
+	case <-ctx.Done():
+	}
+	for _, s := range sessions {
+		_ = s.Close()
+	}
 }

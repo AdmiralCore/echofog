@@ -164,8 +164,18 @@ func (n *NodeApi) restartV2() error {
 	if n.v2s == nil {
 		return nil
 	}
+	prev := n.v2s.mode
 	n.stopV2Locked()
-	return n.startV2Locked()
+	err := n.startV2Locked()
+	if err != nil {
+		// the new mode did not start: go back to the old one, so the facade is not left without a network
+		n.v2force = prev
+		if err2 := n.startV2Locked(); err2 != nil {
+			n.Logger.Error("v2 runtime: the old mode did not start either", "err", err2)
+		}
+		n.v2force = ""
+	}
+	return err
 }
 
 func (s *v2Stack) close() {
@@ -468,6 +478,11 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 	s.mode = app.ModePublic
 	if v, err := appKV.Get([]byte("mode")); err == nil && app.Mode(v) == app.ModeHidden {
 		s.mode = app.ModeHidden
+	}
+	if n.v2force != "" {
+		// a restart that failed goes back to the mode that ran before it, and saves it again
+		s.mode = n.v2force
+		_ = appKV.Put([]byte("mode"), []byte(s.mode))
 	}
 
 	// listeners: the hook (tests), else the settings, else none (a client behind its NAT)
