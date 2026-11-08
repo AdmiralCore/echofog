@@ -76,7 +76,11 @@ func (r *Registry) ServeSpec(sp Spec, version uint64, h Handler) { r.add(sp, ver
 
 // Remove stops serving and offering a service: its handlers go and it leaves the offer of new
 // sessions. Sessions already open keep what they negotiated.
-func (r *Registry) Remove(id uint64) {}
+func (r *Registry) Remove(id uint64) {
+	r.mu.Lock()
+	delete(r.services, id)
+	r.mu.Unlock()
+}
 
 // Use registers a built-in service version this node opens as a client but does not serve.
 func (r *Registry) Use(id, version uint64) {
