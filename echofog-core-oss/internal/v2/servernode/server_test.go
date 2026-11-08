@@ -3,10 +3,16 @@ package servernode_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -182,6 +188,67 @@ func TestServerWithoutCoverServesPeers(t *testing.T) {
 	if strings.Contains(logs.String(), strings.TrimSpace(string(tok))) {
 		t.Error("the operator token is in the log")
 	}
+}
+
+func TestServerWithCoverHasPublicLink(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cover")
+	site := filepath.Join(t.TempDir(), "site")
+	if err := os.MkdirAll(site, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("cover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := writeCertKey(t, "example.org", t.TempDir())
+	port := freeUDPPort(t)
+	cfg := servernode.DefaultConfig()
+	cfg.Roles = []string{"relay"}
+	cfg.Listen = []servernode.ListenSpec{
+		{Suite: "reality2-quic", Bind: fmt.Sprintf("127.0.0.1:%d", port), Advertise: "127.0.0.1"},
+		{Suite: "reality2-tcp", Bind: fmt.Sprintf("127.0.0.1:%d", port), Advertise: "127.0.0.1"},
+	}
+	cfg.Cover, cfg.SiteDir, cfg.CoverCert = fmt.Sprintf("example.org:%d", port), site, bundle
+	if _, err := servernode.Init(dir, cfg); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	srv, err := servernode.Open(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer srv.Close(context.Background())
+	st := srv.Status()
+	if !st.PublicCard {
+		t.Fatal("a camouflaged server has no public card (D37)")
+	}
+	if !strings.HasPrefix(st.PublicLink, "echofog://join?") {
+		t.Fatalf("public link %q", st.PublicLink)
+	}
+}
+
+func writeCertKey(t *testing.T, domain, dir string) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(7), DNSNames: []string{domain},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(90 * 24 * time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: der})
+	_ = pem.Encode(&b, &pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	p := filepath.Join(dir, "cover.pem")
+	if err := os.WriteFile(p, b.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func TestServerInvitations(t *testing.T) {

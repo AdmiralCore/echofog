@@ -25,13 +25,30 @@ if [ ! -f "$DATA/server-identity.json" ]; then
 		;;
 	esac
 	PORT="${ECHOFOG_PORT:-443}"
+	NOISE_PORT="${ECHOFOG_NOISE_PORT:-$((PORT + 1))}"
 	PHRASE_FILE="$DATA/recovery-phrase.txt"
-	set -- init --data "$DATA" --listen "noise3=0.0.0.0:$PORT" --advertise "$ADDR" --roles "${ECHOFOG_ROLES-relay,mailbox,dht-server}"
-	if [ "${ECHOFOG_INVITES:-false}" = "true" ]; then
-		set -- "$@" --invite-listen "noise3=0.0.0.0:$((PORT + 1))"
-	fi
 	if [ -n "${ECHOFOG_COVER:-}" ]; then
-		set -- "$@" --cover "$ECHOFOG_COVER"
+		if [ -z "${ECHOFOG_SITE_DIR:-}" ]; then
+			echo "ECHOFOG_SITE_DIR is required with ECHOFOG_COVER: the node serves the operator's own site, never a foreign one (T2.6e)" >&2
+			exit 1
+		fi
+		set -- init --data "$DATA" \
+			--listen "reality2-quic=0.0.0.0:$PORT" \
+			--listen "reality2-tcp=0.0.0.0:$PORT" \
+			--listen "noise3=0.0.0.0:$NOISE_PORT" \
+			--advertise "$ADDR" --cover "$ECHOFOG_COVER" --site-dir "$ECHOFOG_SITE_DIR" \
+			--roles "${ECHOFOG_ROLES-relay,mailbox,dht-server}"
+		if [ -n "${ECHOFOG_COVER_CERT:-}" ]; then
+			set -- "$@" --cover-cert "$ECHOFOG_COVER_CERT"
+		fi
+		if [ "${ECHOFOG_INVITES:-false}" = "true" ]; then
+			set -- "$@" --invite-listen "noise3=0.0.0.0:$((NOISE_PORT + 1))"
+		fi
+	else
+		set -- init --data "$DATA" --listen "noise3=0.0.0.0:$PORT" --advertise "$ADDR" --roles "${ECHOFOG_ROLES-relay,mailbox,dht-server}"
+		if [ "${ECHOFOG_INVITES:-false}" = "true" ]; then
+			set -- "$@" --invite-listen "noise3=0.0.0.0:$((PORT + 1))"
+		fi
 	fi
 	echofog-node v2 "$@" > "$PHRASE_FILE"
 	echo "echofog-node: profile created. The recovery phrase is in $PHRASE_FILE inside the data volume: copy it somewhere safe, then delete the file." >&2

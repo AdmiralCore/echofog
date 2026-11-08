@@ -105,9 +105,21 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		return Config{}, nil, badPreset("site folder")
 	}
 	cfg := DefaultConfig()
-	cfg.Listen = []ListenSpec{{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise}}
-	if domain != "" {
-		cfg.Cover = domain + ":443"
+	if domain == "" {
+		// No cover: the node works for its own people only, over noise3 on the chosen port.
+		cfg.Listen = []ListenSpec{{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise}}
+	} else {
+		// The own cover preset (T2.6e): reality2-quic and reality2-tcp on the public port, so a
+		// stranger and a probe see the operator's site on 443; noise3 moves to the spare port.
+		if o.Port+1 > 65535 {
+			return Config{}, nil, badPreset("port %d leaves no spare port for noise3", o.Port)
+		}
+		cfg.Listen = []ListenSpec{
+			{Suite: "reality2-quic", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise},
+			{Suite: "reality2-tcp", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise},
+			{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port+1), Advertise: o.Advertise},
+		}
+		cfg.Cover = fmt.Sprintf("%s:%d", domain, o.Port)
 		cfg.SiteDir = o.SiteDir
 	}
 	var notes []Note
@@ -116,10 +128,14 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		cfg.Roles = append(cfg.Roles, "exit")
 		notes = append(notes, Note{"warn", "preset.exit-responsibility"})
 	case PresetHomeEntry:
-		if o.Port+1 > 65535 {
+		invitePort := o.Port + 1
+		if domain != "" {
+			invitePort = o.Port + 2
+		}
+		if invitePort > 65535 {
 			return Config{}, nil, badPreset("port %d leaves no port for invitations", o.Port)
 		}
-		cfg.InviteListen = &ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port+1), Advertise: o.Advertise}
+		cfg.InviteListen = &ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", invitePort), Advertise: o.Advertise}
 		notes = append(notes, Note{"warn", "preset.home-entry-risk"})
 		if verifiedEntry(o.Rules, o.Advertise) {
 			notes = append(notes, Note{"info", "preset.home-entry-verified"})

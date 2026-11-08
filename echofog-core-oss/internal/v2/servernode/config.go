@@ -33,7 +33,8 @@ const maxListeners = 8
 
 // ListenSpec is one carrier listener of the node.
 type ListenSpec struct {
-	// Suite is the carrier suite; this build serves noise3 (reality2 and ws2 wait for T2.6b-3).
+	// Suite is the carrier suite: noise3, reality2-quic, reality2-tcp or ws2. The camouflaged
+	// suites (reality2-*, ws2) need a cover (T2.6e).
 	Suite string `json:"suite"`
 	// Bind is the local host:port. Advertise is the IP literal written into the card.
 	Bind      string `json:"bind"`
@@ -66,6 +67,23 @@ type Config struct {
 }
 
 var allRoles = map[string]bool{"relay": true, "exit": true, "mailbox": true, "dht-server": true}
+
+var allSuites = map[string]bool{"noise3": true, "reality2-quic": true, "reality2-tcp": true, "ws2": true}
+
+// camouflaged reports a suite that speaks to a stranger through the real cover site. Until the
+// own-cover mode exists for it, such a listener needs the site folder: a foreign site is not
+// served (T2.6e, НС-3 fail-closed).
+func camouflaged(suite string) bool { return suite != "noise3" }
+
+// hasCamouflaged reports whether any listener of the configuration is camouflaged.
+func (c *Config) hasCamouflaged() bool {
+	for _, l := range c.Listen {
+		if camouflaged(l.Suite) {
+			return true
+		}
+	}
+	return c.InviteListen != nil && camouflaged(c.InviteListen.Suite)
+}
 
 // DefaultConfig is a server with the default roles and the operator API on loopback. It has no
 // listener: the operator must say where the node is reachable.
@@ -139,10 +157,16 @@ func (c *Config) Validate() error {
 		if err := l.validate(); err != nil {
 			return bad("%s: %v", what, err)
 		}
-		if binds[l.Bind] {
-			return bad("%s: bind %s is used twice", what, l.Bind)
+		// UDP and TCP may share a port number (reality2-quic and reality2-tcp on 443); within one
+		// transport the bind must be unique.
+		key := "tcp|" + l.Bind
+		if udpSuite(l.Suite) {
+			key = "udp|" + l.Bind
 		}
-		binds[l.Bind] = true
+		if binds[key] {
+			return bad("%s: bind %s is used twice on the same transport", what, l.Bind)
+		}
+		binds[key] = true
 		return nil
 	}
 	for i, l := range c.Listen {
@@ -176,6 +200,15 @@ func (c *Config) Validate() error {
 			return bad("%s: a path of at most 4096 bytes without NUL", what)
 		}
 	}
+	// НС-3 (T2.6e): only the node's own cover is served. A camouflaged listener without a cover,
+	// and a cover without the operator's site folder, would either refuse strangers or serve a
+	// site we did not verify (T2.6b-3): both are configuration errors, not runtime surprises.
+	if c.hasCamouflaged() && c.Cover == "" {
+		return bad("a camouflaged listener needs cover: the node serves the operator's own site")
+	}
+	if c.Cover != "" && c.SiteDir == "" {
+		return bad("cover %q: site_dir is required (T2.6e): a foreign cover must not be served before T2.6b-3", c.Cover)
+	}
 	ap, err := netip.ParseAddrPort(c.Operator.Addr)
 	if err != nil || !ap.Addr().IsLoopback() || ap.Addr().Is4In6() {
 		return bad("operator address %q: want a loopback IP literal with a port", c.Operator.Addr)
@@ -184,8 +217,8 @@ func (c *Config) Validate() error {
 }
 
 func (l ListenSpec) validate() error {
-	if l.Suite != "noise3" {
-		return fmt.Errorf("suite %q is not served by this build (noise3 only; reality2 and ws2 wait for T2.6b-3)", l.Suite)
+	if !allSuites[l.Suite] {
+		return fmt.Errorf("suite %q: want noise3, reality2-quic, reality2-tcp or ws2", l.Suite)
 	}
 	host, port, err := net.SplitHostPort(l.Bind)
 	if err != nil {

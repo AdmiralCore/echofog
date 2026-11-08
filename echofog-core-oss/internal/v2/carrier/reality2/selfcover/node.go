@@ -34,6 +34,9 @@ type Config struct {
 	Content Content
 	// ACME configures the certificate.
 	ACME ACMEConfig
+	// Cert is the operator's own certificate for Domain (cover_cert): when set, ACME is not
+	// used and the certificate is renewed by the operator, not by the node.
+	Cert *tls.Certificate
 	// KV stores the certificate, the ACME account and the measured profiles (T4.3).
 	KV carrier.KV
 
@@ -158,7 +161,7 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		}
 	}
 	n.certs, err = NewCerts(CertsConfig{
-		Domain: cfg.Domain, ACME: cfg.ACME, KV: cfg.KV, Now: cfg.Now, Sleep: cfg.Sleep, OnError: cfg.OnError,
+		Domain: cfg.Domain, ACME: cfg.ACME, Static: cfg.Cert, KV: cfg.KV, Now: cfg.Now, Sleep: cfg.Sleep, OnError: cfg.OnError,
 		OnChange: func(*x509.Certificate) {
 			select {
 			case n.changed <- struct{}{}:

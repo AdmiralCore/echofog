@@ -80,7 +80,7 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `efv2 — EchoFog v2 laboratory CLI
 usage:
   efv2 init   --data DIR --profile server|desktop|android
-  efv2 run    --data DIR [--listen noise3=HOST:PORT[,reality2-quic=HOST:PORT --cover HOST:PORT]] [--bootstrap LIST]
+  efv2 run    --data DIR [--listen noise3=HOST:PORT[,reality2-quic=HOST:PORT,reality2-tcp=HOST:PORT,ws2=HOST:PORT --cover HOST:PORT --site-dir DIR]] [--bootstrap LIST]
   efv2 card   --data DIR [--scope public|peer] [--listen ...]
   efv2 link   --data DIR [--join-host HOST]
   efv2 link open <link>
@@ -93,6 +93,7 @@ usage:
 init prints the recovery phrase once. The data directory holds the v2 store, the identity file and
 the card/status snapshots the other subcommands read while a node is running.
 
-reality2-quic listeners wait for T2.6b (the reproducible cover); this build serves noise3.
+reality2-quic, reality2-tcp and ws2 serve the operator's own site (T2.6e): --cover and --site-dir
+are required for them; a certificate is optional in the lab (a self-signed one is generated).
 `)
 }

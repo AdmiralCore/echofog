@@ -20,7 +20,9 @@ func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	data := fs.String("data", "", "profile data directory")
 	listen := fs.String("listen", "", "noise3=HOST:PORT[,reality2-quic=HOST:PORT]")
-	cover := fs.String("cover", "", "cover host:port of reality2-quic (waits for T2.6b)")
+	cover := fs.String("cover", "", "cover host:port of the camouflaged suites (own cover, T2.6e)")
+	siteDir := fs.String("site-dir", "", "folder with the site of the cover")
+	coverCert := fs.String("cover-cert", "", "PEM bundle (certificate chain and key) of the cover domain")
 	bootstrapPath := fs.String("bootstrap", "", "bootstrap list file (cards, device IDs and addresses); saved in the profile")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -41,6 +43,8 @@ func cmdRun(args []string) error {
 	}
 	nf.Listen = splitListen(*listen)
 	nf.Cover = *cover
+	nf.SiteDir = *siteDir
+	nf.CoverCert = *coverCert
 	if *bootstrapPath != "" {
 		nf.Bootstrap = *bootstrapPath
 	}

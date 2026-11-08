@@ -60,6 +60,8 @@ type DoctorDeps struct {
 	FreeBytes func(path string) (uint64, error)
 	// ListenUDP tries to bind addr and releases it at once; nil uses the real network stack.
 	ListenUDP func(addr string) error
+	// ListenTCP is the same for a TCP port (reality2-tcp, ws2); nil uses the real network stack.
+	ListenTCP func(addr string) error
 	// NodeStatus asks the running node; nil or an error means the node is not running.
 	NodeStatus func(ctx context.Context) (*StatusInfo, error)
 	Version    string
@@ -71,6 +73,23 @@ func listenUDP(addr string) error {
 		return err
 	}
 	return pc.Close()
+}
+
+func listenTCP(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return ln.Close()
+}
+
+// udpSuite reports the suites that bind a UDP port.
+func udpSuite(suite string) bool {
+	switch suite {
+	case "noise3", "reality2-quic":
+		return true
+	}
+	return false
 }
 
 // Disk thresholds of the doctor.
@@ -88,6 +107,9 @@ func RunDoctor(ctx context.Context, d DoctorDeps) []CheckResult {
 	}
 	if d.ListenUDP == nil {
 		d.ListenUDP = listenUDP
+	}
+	if d.ListenTCP == nil {
+		d.ListenTCP = listenTCP
 	}
 	var out []CheckResult
 	add := func(id string, l Level, code string, args ...any) {
@@ -127,18 +149,32 @@ func RunDoctor(ctx context.Context, d DoctorDeps) []CheckResult {
 	if cfg != nil {
 		level, code := LevelOK, "port.ok"
 		var args []any
-		for _, l := range cfg.Listen {
-			switch {
-			case st != nil:
-				level, code, args = LevelOK, "port.node", []any{l.Bind}
-			default:
-				if err := d.ListenUDP(l.Bind); err != nil {
+		report := func(suite string) {
+			for _, l := range append(append([]ListenSpec(nil), cfg.Listen...), inviteListens(cfg)...) {
+				if l.Suite != suite {
+					continue
+				}
+				if st != nil {
+					level, code, args = LevelOK, "port.node", []any{l.Bind}
+					continue
+				}
+				var err error
+				if udpSuite(suite) {
+					err = d.ListenUDP(l.Bind)
+				} else {
+					err = d.ListenTCP(l.Bind)
+				}
+				if err != nil {
 					level, code, args = LevelFail, "port.busy", []any{l.Bind, shortErr(err)}
 				} else if level != LevelFail {
 					args = []any{l.Bind}
 				}
 			}
 		}
+		report("noise3")
+		report("reality2-quic")
+		report("reality2-tcp")
+		report("ws2")
 		if len(cfg.Listen) > 0 {
 			add("port", level, code, args...)
 		}
@@ -156,8 +192,15 @@ func RunDoctor(ctx context.Context, d DoctorDeps) []CheckResult {
 	if cfg != nil {
 		out = append(out, dnsCheck(ctx, d, cfg))
 		out = append(out, certCheck(d, cfg))
-		if cfg.Cover == "" {
+		switch {
+		case cfg.hasCamouflaged() && cfg.Cover == "":
+			add("cover", LevelFail, "cover.missing")
+		case cfg.Cover != "" && cfg.SiteDir == "":
+			add("cover", LevelFail, "cover.site-missing", cfg.Cover)
+		case cfg.Cover == "":
 			add("cover", LevelInfo, "cover.none")
+		default:
+			add("cover", LevelOK, "cover.ok", cfg.Cover, cfg.SiteDir)
 		}
 	}
 
@@ -197,6 +240,14 @@ func hasWarning(ws []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+// inviteListens returns the invitation listener, if any, as a slice for the port checks.
+func inviteListens(cfg *Config) []ListenSpec {
+	if cfg.InviteListen == nil {
+		return nil
+	}
+	return []ListenSpec{*cfg.InviteListen}
 }
 
 // shortErr keeps an error to one short line without file contents.

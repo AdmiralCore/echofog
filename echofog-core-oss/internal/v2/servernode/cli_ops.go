@@ -85,10 +85,11 @@ func cmdInit(args []string, env func(string) string, stdin io.Reader, out io.Wri
 	advertise := fs.String("advertise", "", "IP literal the card advertises")
 	invite := fs.String("invite-listen", "", "suite=BIND:PORT of the invitation listener")
 	roles := fs.String("roles", "", "comma-separated roles")
-	cover := fs.String("cover", "", "HOST:PORT of the site the camouflaged suites imitate")
+	cover := fs.String("cover", env("ECHOFOG_COVER"), "HOST:PORT of the site the camouflaged suites imitate")
+	coverCert := fs.String("cover-cert", env("ECHOFOG_COVER_CERT"), "PEM bundle (certificate chain and key) of the cover domain")
 	presetName := fs.String("preset", "", "relay, exit-free or home-entry")
 	domain := fs.String("domain", "", "domain of the node's own cover")
-	siteDir := fs.String("site-dir", "", "folder with the site of the cover")
+	siteDir := fs.String("site-dir", env("ECHOFOG_SITE_DIR"), "folder with the site of the cover")
 	port := fs.Int("port", 443, "UDP port of the node")
 	yes := fs.Bool("yes", false, "do not ask, do not start the node")
 	langFlag := fs.String("lang", "", "ru or en")
@@ -121,12 +122,15 @@ func cmdInit(args []string, env func(string) string, stdin io.Reader, out io.Wri
 		if err != nil {
 			return usageError{err}
 		}
+		if *coverCert != "" {
+			cfg.CoverCert = *coverCert
+		}
 	case len(listens) > 0:
 		if err := needData(dataDir); err != nil {
 			return err
 		}
 		cfg = DefaultConfig()
-		cfg.Cover, cfg.SiteDir = *cover, *siteDir
+		cfg.Cover, cfg.SiteDir, cfg.CoverCert = *cover, *siteDir, *coverCert
 		for _, l := range listens {
 			suite, bind, ok := strings.Cut(l, "=")
 			if !ok {
@@ -215,6 +219,9 @@ func cmdStatus(args []string, env func(string) string, out io.Writer) error {
 		tr(lang, "роли:               ", "roles:       "), strings.Join(st.Roles, ","))
 	for _, l := range st.Listen {
 		fmt.Fprintln(out, tr(lang, "слушает:", "listen:  "), l)
+	}
+	if st.PublicLink != "" {
+		fmt.Fprintln(out, tr(lang, "публичная ссылка:", "public link: "), st.PublicLink)
 	}
 	for _, w := range st.Warnings {
 		fmt.Fprintln(out, tr(lang, "предупреждение:", "warning:       "), w)

@@ -52,6 +52,7 @@ func newDocRig(t *testing.T) *docRig {
 	t.Helper()
 	dir, cfg := profile(t, false)
 	cfg.Cover = "example.org:443"
+	cfg.SiteDir = dir
 	cfg.CoverCert = writeCert(t, t.TempDir(), docNow.Add(-24*time.Hour), docNow.Add(90*24*time.Hour))
 	cfg.Listen[0].Advertise = "203.0.113.10"
 	return &docRig{dir: dir, deps: servernode.DoctorDeps{

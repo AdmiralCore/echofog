@@ -2,6 +2,10 @@ package servernode
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,6 +27,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -362,7 +367,43 @@ func (k cardsKV) Get(_ context.Context, key []byte) ([]byte, bool, error) {
 
 func (k cardsKV) Put(_ context.Context, key, value []byte) error { return k.kv.Put(key, value) }
 
-func cardListener(l ListenSpec, mask []byte) (cards.Listener, error) {
+// coverHost is the host part of the configured cover ("example.org:443" -> "example.org").
+func coverHost(cover string) string {
+	host, _, err := net.SplitHostPort(cover)
+	if err != nil {
+		return cover
+	}
+	return host
+}
+
+// ws2Path derives the unguessable ws2 upgrade path from the profile's masking key: it is stable
+// across restarts and never appears anywhere but the card and the listener.
+func ws2Path(maskPriv []byte) string {
+	sum := sha256.Sum256(append(append([]byte(nil), maskPriv...), []byte("echofog/ws2/path")...))
+	return "/" + hex.EncodeToString(sum[:16])
+}
+
+// suiteShape returns the shape profile a card advertises for a suite.
+func suiteShape(suite string) *pb.ShapeProfile {
+	if udpSuite(suite) {
+		return &pb.ShapeProfile{Id: shape.IDDefaultUDP}
+	}
+	return &pb.ShapeProfile{Id: shape.IDDefaultTLS}
+}
+
+// cardListener builds the card entry of one configured listener. The camouflaged suites carry the
+// cover's SNI; ws2 carries its wss URL and no address.
+func cardListener(l ListenSpec, mask []byte, cover, path string) (cards.Listener, error) {
+	host := coverHost(cover)
+	cl := cards.Listener{Suite: suiteNumber(l.Suite), Mask: mask, Shape: suiteShape(l.Suite)}
+	if l.Suite == "ws2" {
+		if host == "" {
+			return cards.Listener{}, errors.New("ws2 needs a cover domain")
+		}
+		cl.URL = "wss://" + host + path
+		cl.SNI = host
+		return cl, nil
+	}
 	_, port, err := net.SplitHostPort(l.Bind)
 	if err != nil {
 		return cards.Listener{}, err
@@ -375,8 +416,90 @@ func cardListener(l ListenSpec, mask []byte) (cards.Listener, error) {
 	if err != nil {
 		return cards.Listener{}, err
 	}
-	return cards.Listener{Suite: objects.SuiteNoise3, Host: adv.Unmap().String(), Port: uint32(p), Mask: mask,
-		Shape: &pb.ShapeProfile{Id: shape.IDDefaultUDP}}, nil
+	cl.Host = adv.Unmap().String()
+	cl.Port = uint32(p)
+	if l.Suite != "noise3" {
+		if host == "" {
+			return cards.Listener{}, fmt.Errorf("%s needs a cover domain", l.Suite)
+		}
+		cl.SNI = host
+	}
+	return cl, nil
+}
+
+func suiteNumber(name string) uint32 {
+	switch name {
+	case "reality2-quic":
+		return objects.SuiteReality2QUIC
+	case "reality2-tcp":
+		return objects.SuiteReality2TCP
+	case "ws2":
+		return objects.SuiteWS2
+	}
+	return objects.SuiteNoise3
+}
+
+// loadCoverCert reads the operator's certificate bundle: a PEM chain and its private key in one
+// file (the same shape selfcover stores). The doctor watches its expiry.
+func loadCoverCert(path string) (*tls.Certificate, error) {
+	raw, err := readLimited(path, 1<<20)
+	if err != nil {
+		return nil, fmt.Errorf("cover_cert: %w", err)
+	}
+	cert, err := tls.X509KeyPair(raw, raw)
+	if err != nil {
+		return nil, fmt.Errorf("cover_cert: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("cover_cert: %w", err)
+	}
+	cert.Leaf = leaf
+	return &cert, nil
+}
+
+// realityBinds returns the TCP and UDP binds of the reality2 pair that shares bind. Either is
+// empty when that transport is not configured.
+func realityBinds(listens []ListenSpec, bind string) (tcp, udp string) {
+	for _, l := range listens {
+		if l.Bind != bind {
+			continue
+		}
+		switch l.Suite {
+		case "reality2-tcp":
+			tcp = l.Bind
+		case "reality2-quic":
+			udp = l.Bind
+		}
+	}
+	return tcp, udp
+}
+
+// realityMask parses one X25519 masking private key for reality2.
+func realityMask(priv []byte) (reality2.MaskKey, error) {
+	k, err := ecdh.X25519().NewPrivateKey(priv)
+	if err != nil {
+		return reality2.MaskKey{}, fmt.Errorf("masking key: %w", err)
+	}
+	return reality2.MaskKey{Private: k}, nil
+}
+
+// tokenAddr is the exact host:port a card advertises for a listener; tokens bind to it.
+func tokenAddr(l ListenSpec) string {
+	_, port, err := net.SplitHostPort(l.Bind)
+	if err != nil {
+		return l.Bind
+	}
+	return net.JoinHostPort(l.Advertise, port)
+}
+
+// ws2TokenAddr is the address a ws2 token binds to: the CDN-facing host and 443.
+func ws2TokenAddr(cover string) string {
+	host := coverHost(cover)
+	if host == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, "443")
 }
 
 // Open opens the profile of dataDir and builds the runtime without starting it.
@@ -435,9 +558,20 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	}
 
 	maskPub := device.Masking().Public()
+	maskPriv, err := decodeKey(idf.MaskPrivate, "mask key")
+	if err != nil {
+		return nil, err
+	}
+	var coverCert *tls.Certificate
+	if cfg.CoverCert != "" {
+		if coverCert, err = loadCoverCert(cfg.CoverCert); err != nil {
+			return nil, err
+		}
+	}
+	path := ws2Path(maskPriv)
 	var cardListeners []cards.Listener
 	for _, l := range cfg.Listen {
-		cl, err := cardListener(l, maskPub)
+		cl, err := cardListener(l, maskPub, cfg.Cover, path)
 		if err != nil {
 			return nil, err
 		}
@@ -459,23 +593,59 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	}
 	s.builder = builder
 
-	maskPriv, err := decodeKey(idf.MaskPrivate, "mask key")
-	if err != nil {
-		return nil, err
-	}
 	shapeProfile, err := shape.Builtin(shape.IDDefaultUDP)
 	if err != nil {
 		return nil, err
 	}
+	tlsShape, err := shape.Builtin(shape.IDDefaultTLS)
+	if err != nil {
+		return nil, err
+	}
+
 	var sources []node.ListenerSource
 	var local []netip.Addr
+	seenReality := map[string]bool{}
 	for _, l := range cfg.Listen {
-		var mk noise3.MaskKey
-		copy(mk.Private[:], maskPriv)
-		sources = append(sources, node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
-			ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower})
 		if a, err := netip.ParseAddr(l.Advertise); err == nil {
 			local = append(local, a.Unmap())
+		}
+		switch l.Suite {
+		case "noise3":
+			var mk noise3.MaskKey
+			copy(mk.Private[:], maskPriv)
+			sources = append(sources, node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
+				ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower})
+		case "reality2-quic", "reality2-tcp":
+			if seenReality[l.Bind] {
+				continue // the pair shares one cover node and one certificate
+			}
+			seenReality[l.Bind] = true
+			tcpBind, udpBind := realityBinds(cfg.Listen, l.Bind)
+			mk, err := realityMask(maskPriv)
+			if err != nil {
+				return nil, err
+			}
+			src := node.Reality2Listener{
+				Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert,
+				CertKV: st.Store("v2/reality2/self/cert"), ReplayKV: st.Store("v2/reality2/replay"),
+				TCPAddr: tcpBind, UDPAddr: udpBind,
+				Masks: []reality2.MaskKey{mk}, Addrs: []string{tokenAddr(l)},
+				Shape: tlsShape, LowPower: profile.LowPower,
+			}
+			if coverCert == nil {
+				src.HTTPAddr = ":80" // http-01; tls-alpn-01 works on the cover port itself
+			}
+			sources = append(sources, src)
+		case "ws2":
+			mk, err := realityMask(maskPriv)
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, node.WS2Listener{
+				Addr: l.Bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
+				Masks: []reality2.MaskKey{mk}, Addrs: []string{ws2TokenAddr(cfg.Cover)},
+				ReplayKV: st.Store("v2/ws2/replay"), Shape: tlsShape, LowPower: profile.LowPower,
+			})
 		}
 	}
 
@@ -489,7 +659,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		// HTTP stays nil: no CDN clock check from a server until a uTLS client is wired (T11.6).
 	}
 	if cfg.InviteListen != nil {
-		il, err := cardListener(*cfg.InviteListen, nil)
+		il, err := cardListener(*cfg.InviteListen, nil, cfg.Cover, path)
 		if err != nil {
 			return nil, err
 		}
@@ -501,16 +671,50 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		s.access = mgr
 		ncfg.Access = mgr
 		bind := cfg.InviteListen.Bind
+		suite := cfg.InviteListen.Suite
+		advertise := tokenAddr(*cfg.InviteListen)
 		ncfg.AccessListener = func(slot int, ks []node.AccessMaskKey) (carrier.Listener, error) {
-			masks := make([]noise3.MaskKey, 0, len(ks))
+			replayKV := st.Store("v2/reality2/access/" + strconv.Itoa(slot))
+			masks := make([]reality2.MaskKey, 0, len(ks))
 			for _, k := range ks {
-				var mk noise3.MaskKey
-				copy(mk.Private[:], k.Private)
-				mk.NotAfter = k.NotAfter
+				mk, err := realityMask(k.Private)
+				if err != nil {
+					return nil, err
+				}
 				masks = append(masks, mk)
 			}
-			return node.Noise3Listener{Addr: bind, Masks: masks, Profile: shapeProfile, LowPower: profile.LowPower,
-				ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
+			switch suite {
+			case "noise3":
+				n3 := make([]noise3.MaskKey, 0, len(ks))
+				for _, k := range ks {
+					var mk noise3.MaskKey
+					copy(mk.Private[:], k.Private)
+					mk.NotAfter = k.NotAfter
+					n3 = append(n3, mk)
+				}
+				return node.Noise3Listener{Addr: bind, Masks: n3, Profile: shapeProfile, LowPower: profile.LowPower,
+					ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
+			case "reality2-quic", "reality2-tcp":
+				src := node.Reality2Listener{
+					Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert,
+					CertKV: st.Store("v2/reality2/self/access/" + strconv.Itoa(slot)), ReplayKV: replayKV,
+					Masks: masks, Addrs: []string{advertise}, Shape: tlsShape, LowPower: profile.LowPower,
+				}
+				if suite == "reality2-tcp" {
+					src.TCPAddr = bind
+				} else {
+					src.UDPAddr = bind
+				}
+				if coverCert == nil {
+					src.HTTPAddr = ":80"
+				}
+				return src.Listen(context.Background())
+			case "ws2":
+				return node.WS2Listener{Addr: bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
+					Masks: masks, Addrs: []string{ws2TokenAddr(cfg.Cover)}, ReplayKV: replayKV,
+					Shape: tlsShape, LowPower: profile.LowPower}.Listen(context.Background())
+			}
+			return nil, fmt.Errorf("%w: invitation suite %q", ErrConfig, suite)
 		}
 	}
 	rt, err := node.New(ncfg)
@@ -655,6 +859,15 @@ func (s *Server) Status() StatusInfo {
 	}
 	_, perr := s.builder.Current(ctx, objects.ScopePublic)
 	st.PublicCard = perr == nil
+	if perr == nil {
+		// The public link carries the public card only (no access secret, D37): it is what the
+		// operator shows on the site and in "v2 status".
+		if ic, cerr := s.builder.Current(ctx, objects.ScopePublic); cerr == nil {
+			if link, lerr := objects.EncodeLink(ic.Envelope, nil); lerr == nil {
+				st.PublicLink = link
+			}
+		}
+	}
 	s.mu.Lock()
 	for _, w := range s.warnings {
 		st.Warnings = append(st.Warnings, w)

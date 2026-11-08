@@ -69,6 +69,7 @@ func cmdInstall(args []string, env func(string) string, stdin io.Reader, out io.
 	presetName := fs.String("preset", "", "relay, exit-free or home-entry (no flag: ask)")
 	domain := fs.String("domain", "", "domain of the node's own cover")
 	siteDir := fs.String("site-dir", "", "folder with the site of the cover")
+	coverCert := fs.String("cover-cert", "", "PEM bundle (certificate chain and key) of the cover domain")
 	port := fs.Int("port", 443, "UDP port of the node")
 	advertise := fs.String("advertise", "", "public IP address of this server")
 	_ = fs.Bool("yes", false, "do not ask")
@@ -117,6 +118,9 @@ func cmdInstall(args []string, env func(string) string, stdin io.Reader, out io.
 		}
 		if cfg, notes, err = BuildPreset(Preset(*presetName), PresetOptions{Advertise: *advertise, Port: *port, Domain: *domain, SiteDir: *siteDir}); err != nil {
 			return usageError{err}
+		}
+		if *coverCert != "" {
+			cfg.CoverCert = *coverCert
 		}
 	} else {
 		res, err := RunWizard(stdin, out, WizardDefaults{Lang: lang, Advertise: detectAdvertise(), Port: 443, DataDir: installData})

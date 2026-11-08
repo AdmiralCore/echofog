@@ -78,7 +78,7 @@ func TestPresets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exit-free: %v", err)
 	}
-	if !has(cfg.Roles, "exit") || cfg.Cover != "example.org:443" || cfg.Listen[0].Bind != "0.0.0.0:4443" || cfg.SiteDir != "/srv/site" {
+	if !has(cfg.Roles, "exit") || cfg.Cover != "example.org:4443" || cfg.Listen[0].Bind != "0.0.0.0:4443" || cfg.SiteDir != "/srv/site" {
 		t.Errorf("exit-free config %+v", cfg)
 	}
 	if !contains(noteCodes(notes), "preset.exit-responsibility") {
@@ -142,9 +142,9 @@ func TestFreeDDNSIsRecognised(t *testing.T) {
 	if err != nil || !contains(noteCodes(notes), "preset.ddns") {
 		t.Errorf("a free DDNS domain must be warned about: %v %v", notes, err)
 	}
-	_, notes, _ = servernode.BuildPreset(servernode.PresetRelay, servernode.PresetOptions{Advertise: "203.0.113.10", Port: 443, Domain: "example.org"})
-	if !contains(noteCodes(notes), "preset.empty-site") {
-		t.Errorf("a cover domain without site content must be warned about: %v", notes)
+	_, _, err = servernode.BuildPreset(servernode.PresetRelay, servernode.PresetOptions{Advertise: "203.0.113.10", Port: 443, Domain: "example.org"})
+	if !errors.Is(err, servernode.ErrConfig) {
+		t.Errorf("a cover domain without site content must be refused (T2.6e fail-closed): %v", err)
 	}
 }
 
@@ -173,7 +173,7 @@ func TestRenderConfigHasComments(t *testing.T) {
 		}
 	}
 	// Only whole-line comments are comments: a value that contains // is a value.
-	c, err := servernode.ParseConfig([]byte("// hi\n" + strings.Replace(goodConfig, `"roles"`, `"cover": "a//b.example:443", "roles"`, 1)))
+	c, err := servernode.ParseConfig([]byte("// hi\n" + strings.Replace(goodConfig, `"roles"`, `"site_dir": "/srv/site", "cover": "a//b.example:443", "roles"`, 1)))
 	if err != nil || c.Cover != "a//b.example:443" {
 		t.Errorf("comment handling: %v %+v", err, c)
 	}
@@ -217,7 +217,7 @@ func TestWizardAnswers(t *testing.T) {
 	if !hasCyrillic(out.String()) {
 		t.Error("the wizard did not switch to Russian")
 	}
-	if !has(res.Config.Roles, "exit") || res.Config.Cover != "example.org:443" {
+	if !has(res.Config.Roles, "exit") || res.Config.Cover != "example.org:8443" {
 		t.Errorf("config %+v", res.Config)
 	}
 }
@@ -239,12 +239,13 @@ func TestWizardAsksAgainOnBadAnswers(t *testing.T) {
 }
 
 func TestWizardWarnsAboutDDNSAndEmptySite(t *testing.T) {
-	in := "en\n2\nme.duckdns.org\n\n\n\n\n\n\n"
+	in := "en\n2\nme.duckdns.org\n/srv/site\n\n\n\n\n\n"
 	var out bytes.Buffer
 	if _, err := servernode.RunWizard(strings.NewReader(in), &out, wizardDefaults); err != nil {
 		t.Fatalf("RunWizard: %v\n%s", err, out.String())
 	}
-	for _, code := range []string{"preset.ddns", "preset.empty-site", "preset.exit-responsibility"} {
+	// The empty-site note is unreachable now: a cover without site_dir is refused (T2.6e).
+	for _, code := range []string{"preset.ddns", "preset.exit-responsibility"} {
 		if !strings.Contains(out.String(), servernode.Message("en", code)) {
 			t.Errorf("the summary lacks the warning %s", code)
 		}
@@ -294,7 +295,7 @@ func TestCLIInitWizardAndFlags(t *testing.T) {
 		t.Fatalf("init --yes: %d %s", code, errb.String())
 	}
 	raw, _ = os.ReadFile(filepath.Join(dir2, "server.json"))
-	if c, err := servernode.ParseConfig(raw); err != nil || !has(c.Roles, "exit") || c.Cover != "example.org:443" {
+	if c, err := servernode.ParseConfig(raw); err != nil || !has(c.Roles, "exit") || c.Cover != "example.org:4444" {
 		t.Fatalf("flag config: %v %+v", err, c)
 	}
 	// Scripts never wait for a question: without --yes and without a terminal, missing answers fail.
