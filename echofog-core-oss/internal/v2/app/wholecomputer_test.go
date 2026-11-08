@@ -332,3 +332,23 @@ func eventually(t *testing.T, f func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// In the held state the helper may be gone; a timer that called the firewall driver would start it
+// again and put a prompt for rights on the screen every few seconds. Only the user brings it back.
+func TestSyncInTheHeldStateCallsNoDriver(t *testing.T) {
+	w := newWholeRig(t)
+	w.startVPN(t)
+	if err := w.a.WholeComputerStart(bg); err != nil {
+		t.Fatal(err)
+	}
+	w.tn.Kill(errors.New("helper killed"))
+	eventually(t, func() bool { return w.a.WholeComputerStatus().State == tun.StateHeld })
+	w.link.set("203.0.113.77:9000")
+	installs := w.fw.Installs
+	if err := w.a.WholeComputerSync(bg); err != nil {
+		t.Fatal(err)
+	}
+	if w.fw.Installs != installs {
+		t.Fatal("Sync called the firewall driver while the mode is held")
+	}
+}

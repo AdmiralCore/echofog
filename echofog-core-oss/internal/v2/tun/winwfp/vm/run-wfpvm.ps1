@@ -12,7 +12,7 @@
   Copy wfpvm.test.exe and this script into the VM, then in the VM, in an elevated PowerShell:
       .\run-wfpvm.ps1
 
-  If the VM loses its network and the test did not finish: efv2 killswitch remove (elevated), or the
+  If the VM loses its network and the test did not finish: efv2 killswitch remove (elevated), or
   the PowerShell script deploy/v2/killswitch-remove.ps1 (docs/kill-switch-windows.md), or revert the checkpoint.
 #>
 param([string]$Test = (Join-Path $PSScriptRoot 'wfpvm.test.exe'))

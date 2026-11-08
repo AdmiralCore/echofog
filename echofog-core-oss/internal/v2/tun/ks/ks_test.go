@@ -415,3 +415,38 @@ func TestServeHelperRefusesANonLoopbackAddress(t *testing.T) {
 		t.Fatal("exit code 0")
 	}
 }
+
+// Whatever arrives on the control connection, the helper ends without a panic and without touching a
+// driver unless the request is one it knows.
+func FuzzServe(f *testing.F) {
+	f.Add([]byte(`{"id":1,"op":"hello"}` + "\n"))
+	f.Add([]byte(`{"id":2,"op":"fw.install","rules":[{"Name":"x"}]}` + "\n"))
+	f.Add([]byte(`{"id":3,"op":"tun.up"}` + "\n"))
+	f.Add([]byte(`{"id":4,"op":"dns.protect","dns":{"Tunnel":"t"}}` + "\n"))
+	f.Add([]byte("{\n"))
+	f.Fuzz(func(t *testing.T, in []byte) {
+		kernel := &tuntest.Kernel{}
+		fw := &tuntest.Firewall{K: kernel}
+		a, b := net.Pipe()
+		done := make(chan error, 1)
+		go func() {
+			done <- ks.Serve(context.Background(), b, ks.Backend{Firewall: fw, Tunnel: tuntest.NewTunnel(), DNS: &tuntest.DNS{}})
+		}()
+		go func() {
+			_ = a.SetDeadline(time.Now().Add(2 * time.Second))
+			_, _ = a.Write(in)
+			_ = a.Close()
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Serve did not end")
+		}
+		// a rule set that was accepted must close the computer
+		if rules := kernel.Rules(); len(rules) > 0 {
+			if err := tun.CheckRules(rules); err != nil {
+				t.Fatalf("an open rule set reached the firewall: %v", err)
+			}
+		}
+	})
+}
