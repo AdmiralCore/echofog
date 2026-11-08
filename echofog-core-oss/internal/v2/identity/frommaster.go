@@ -10,5 +10,8 @@ var ErrMaster = errors.New("identity: bad master key")
 // v1 identity, never the phrase, and AD7 requires the same account key as v1: the derivation from
 // here on is the one FromMnemonicIndex runs. The caller keeps its slices; FromMaster copies them.
 func FromMaster(key, chain []byte, index uint32) (*Account, error) {
-	return nil, errors.New("identity: FromMaster is not built")
+	if len(key) != 32 || len(chain) != 32 {
+		return nil, ErrMaster
+	}
+	return accountFromMasterOwned(append([]byte(nil), key...), append([]byte(nil), chain...), index)
 }

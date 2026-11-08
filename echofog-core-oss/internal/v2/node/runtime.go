@@ -81,7 +81,10 @@ type Config struct {
 	// mailbox client for recipients that are away (mailbox/2 client, T7.4; nil until then).
 	Chat       bool
 	ChatEvents chat.Events
-	ChatMail   chat.Mail
+	// ChatDir finds the devices, cards and prekeys of an account for chat/2 and files/2. Nil: the DHT. A
+	// host without a DHT network of its own (a test of two runtimes in one process) supplies its own.
+	ChatDir  chat.Directory
+	ChatMail chat.Mail
 	// Files turns files/2 on (T8.1/T11.3d): the node serves the files it offers and the app fetches the
 	// ones it is offered through OpenFiles. FilesLimits bound what the server holds; FilesOnDone is called
 	// when a recipient confirmed it got a whole file.

@@ -6,5 +6,8 @@ import "errors"
 // (T11.7). The v2 runtime derives its account from them, so it has the same account key as v1
 // (AD7) without the recovery phrase ever being kept. The caller wipes both slices.
 func (n *Node) V2Master() (key, chain []byte, err error) {
-	return nil, nil, errors.New("node: V2Master is not built")
+	if n.identity == nil {
+		return nil, nil, errors.New("node: the identity is not loaded")
+	}
+	return n.identity.V2Master()
 }

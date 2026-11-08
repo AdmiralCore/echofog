@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
+	"github.com/echofog/echofog-core/internal/v2/node"
 )
 
 const (
@@ -74,8 +75,8 @@ func (a *App) AccessStatus(ctx context.Context) (AccessStatus, error) {
 		}
 	}
 	list, err := a.cfg.Runtime.AccessList(ctx)
-	if err != nil {
-		return st, err
+	if err != nil && !errors.Is(err, node.ErrNoAccess) {
+		return st, err // a node without a listener has no access manager: nobody joined by an invitation
 	}
 	live := map[[32]byte]bool{}
 	for _, s := range a.cfg.Runtime.Status().Sessions {

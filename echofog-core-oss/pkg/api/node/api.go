@@ -123,7 +123,12 @@ func (n *NodeApi) StartNode() error {
 		return err
 	}
 	if n.node.NetworkOff() {
-		// protocol 2: storage, wallet, profile and settings are up; there is no v1 network to tune
+		// protocol 2: storage, wallet, profile and settings are up; there is no v1 network to tune.
+		// The v2 runtime comes up on top of them (T11.7); when it cannot, the node stops as a whole.
+		if err := n.startV2(); err != nil {
+			n.node.Stop()
+			return err
+		}
 		return nil
 	}
 	if pinned != 0 && n.node.Transport != nil {
@@ -148,6 +153,7 @@ func (n *NodeApi) StopNode() {
 	if n.tun.ctl.Running() {
 		_ = n.StopVPN()
 	}
+	n.stopV2()
 	if n.node != nil {
 		n.node.Stop()
 	}

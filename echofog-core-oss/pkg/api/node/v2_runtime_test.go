@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/mux"
@@ -86,8 +88,15 @@ type v2Peer struct {
 	api      *NodeApi
 	node     *coreNode.Node
 	mnemonic string
+	mu       sync.Mutex
 	q        *v2Queue
 	other    *v2Peer
+}
+
+func (p *v2Peer) queue() *v2Queue {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.q
 }
 
 func newV2Peer(t *testing.T, name string) *v2Peer {
@@ -100,16 +109,25 @@ func newV2Peer(t *testing.T, name string) *v2Peer {
 	api := NewNodeApi(nd)
 	phrase, err := api.Register("пароль-"+name, "")
 	require.NoError(t, err)
-	p := &v2Peer{t: t, api: api, node: nd, mnemonic: phrase, q: newV2Queue()}
+	p := &v2Peer{t: t, api: api, node: nd, mnemonic: phrase}
 	api.v2h = v2Hooks{
 		Listen: func(dev *identity.Device) ([]carrier.Listener, []cards.Listener) {
-			return []carrier.Listener{p.q}, []cards.Listener{{
-				Suite: objects.SuiteNoise3, Host: "127.0.0.1", Port: 4430, Mask: dev.Masking().Public(),
-			}}
+			p.mu.Lock()
+			p.q = newV2Queue() // a restart listens again on a fresh queue
+			q := p.q
+			p.mu.Unlock()
+			mask := dev.Masking().Public()
+			return []carrier.Listener{q}, []cards.Listener{
+				{Suite: objects.SuiteNoise3, Host: "127.0.0.1", Port: 4430, Mask: mask},
+				// the camouflaged address that makes the public card (D37); nothing listens on it here
+				{Suite: objects.SuiteReality2QUIC, Host: "203.0.113.10", Port: 443, SNI: "example.com", Mask: mask},
+			}
 		},
 		Dialer: func(rt *v2node.Runtime) links.Dialer {
-			return v2MemDialer{rt: rt, peer: func() *v2Queue { return p.other.q }}
+			return v2MemDialer{rt: rt, peer: func() *v2Queue { return p.other.queue() }}
 		},
+		ChatDir:        v2TestDir{p: p},
+		AccessListener: func(int, []v2node.AccessMaskKey) (carrier.Listener, error) { return newV2Queue(), nil },
 	}
 	return p
 }
@@ -118,14 +136,66 @@ func (p *v2Peer) start() {
 	p.t.Helper()
 	require.NoError(p.t, p.api.StartNode())
 	p.t.Cleanup(p.api.StopNode)
+
 }
 
+// wantNode is the node ID AD7 gives: SHA-256 of the algorithm-tagged v1 identity key.
 func (p *v2Peer) wantNode() string {
-	acc, err := identity.FromMnemonic(p.mnemonic, "")
+	pub, err := hex.DecodeString(p.api.GetMyPubKey())
 	require.NoError(p.t, err)
-	defer acc.Destroy()
-	id := acc.NodeID()
-	return hex.EncodeToString(id[:])
+	require.Len(p.t, pub, 32, "the v1 identity key")
+	sum := sha256.Sum256(append([]byte{0x01}, pub...))
+	return hex.EncodeToString(sum[:])
+}
+
+// v2TestDir is the directory of two stacks in one process: two nodes are too few for the DHT to conclude a
+// lookup, so an account is looked up in the records the other stack publishes about itself (device
+// list, cards, prekeys), verified as the DHT client would verify them.
+type v2TestDir struct{ p *v2Peer }
+
+func (d v2TestDir) Resolve(_ context.Context, nd [32]byte) (*dht.Resolved, error) {
+	for _, q := range []*v2Peer{d.p, d.p.other} {
+		if q.wantNode() != hex.EncodeToString(nd[:]) {
+			continue
+		}
+		q.api.v2l.Lock()
+		s := q.api.v2s
+		q.api.v2l.Unlock()
+		if s == nil {
+			return nil, errors.New("not running")
+		}
+		res := &dht.Resolved{}
+		now := time.Now()
+		for _, raw := range s.rt.OwnRecords() {
+			env, err := objects.Verify(raw, now)
+			if err != nil {
+				return nil, err
+			}
+			switch env.Label {
+			case objects.LabelDevices:
+				if res.Devices, err = objects.VerifyDeviceList(raw, now); err != nil {
+					return nil, err
+				}
+			case objects.LabelCard:
+				c, err := objects.VerifyCard(raw, now)
+				if err != nil {
+					return nil, err
+				}
+				res.Cards = append(res.Cards, c)
+			case objects.LabelPrekeys:
+				pk, err := objects.VerifyPrekeys(raw, now)
+				if err != nil {
+					return nil, err
+				}
+				res.Prekeys = append(res.Prekeys, pk)
+			}
+		}
+		if res.Devices == nil {
+			return nil, errors.New("no device list")
+		}
+		return res, nil
+	}
+	return nil, errors.New("unknown account")
 }
 
 func newV2Pair(t *testing.T) (*v2Peer, *v2Peer) {
@@ -164,7 +234,7 @@ func eventually(t *testing.T, what string, f func() bool) {
 func TestV2RuntimesExchangeMessageFileAndGroupEvent(t *testing.T) {
 	a, b := newV2Pair(t)
 	aSeesB, bSeesA := befriend(t, a, b)
-	require.Equal(t, a.wantNode(), bSeesA, "the node ID is the one the recovery phrase gives (AD7)")
+	require.Equal(t, a.wantNode(), bSeesA, "the node ID is the one the recovery phrase gives (AD7): SHA-256 of the v1 identity key")
 	require.Equal(t, b.wantNode(), aSeesB)
 
 	// a message
@@ -310,18 +380,24 @@ func TestV2RuntimeRestartsWhenTheAccessModeChanges(t *testing.T) {
 	_ = bSeesA
 }
 
-// A restart in place: stop and start again on the same profile gives the same node and keeps the data.
+// The runtime stops and starts again on the same profile (what the restart for a new mode does): the
+// node, the contacts and the data are the same afterwards.
 func TestV2RuntimeStopStartKeepsIdentityAndData(t *testing.T) {
 	a, b := newV2Pair(t)
 	_, _ = befriend(t, a, b)
-	a.api.StopNode()
+	before := a.wantNode()
+	a.api.stopV2()
 	require.False(t, a.api.V2Running())
-	a.api.StopNode() // twice is harmless
-	require.NoError(t, a.api.StartNode())
+	a.api.stopV2() // twice is harmless
+	require.NoError(t, a.api.startV2())
 	require.True(t, a.api.V2Running())
 	cs, err := a.api.GetContacts()
 	require.NoError(t, err)
 	require.Len(t, cs, 1)
+	st, err := a.api.GetAccessStatus()
+	require.NoError(t, err)
+	require.NotEmpty(t, st.Link)
+	require.Equal(t, before, a.wantNode())
 }
 
 // Exit without hanging goroutines: after StopNode the goroutines the stack started are gone.

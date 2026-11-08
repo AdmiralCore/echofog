@@ -116,6 +116,11 @@ func normalizePhrase(phrase string) (string, error) {
 // BIP-39 seed. A random seed gives a throwaway account (see NewExitIdentity).
 func newAccount(masterSeed []byte, index uint32) (*Account, error) {
 	key, chain := slip10Master(masterSeed)
+	return accountFromMasterOwned(key, chain, index)
+}
+
+// accountFromMasterOwned derives the account from a master pair it owns: both slices are wiped.
+func accountFromMasterOwned(key, chain []byte, index uint32) (*Account, error) {
 	key, chain = slip10Path(key, chain, 44, 999, index)
 	defer secret.Wipe(key)
 	defer secret.Wipe(chain)
