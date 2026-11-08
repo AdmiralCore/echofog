@@ -11,6 +11,7 @@ import (
 	"net/netip"
 
 	"github.com/echofog/echofog-core/internal/v2/handshake"
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	"github.com/echofog/echofog-core/internal/v2/session"
@@ -22,6 +23,10 @@ import (
 )
 
 var (
+	// TriggerPathFailing runs the reaction to a session left with one failing path.
+	TriggerPathFailing = func(r *Runtime, s *mux.Session) { r.pathFailing(s, mux.PathFailure{}) }
+	// SetRepairOpt sets what a repair dials with.
+	SetRepairOpt = func(r *Runtime, opt DialOpt) { r.repairOpt = opt }
 	// OpenSessions counts the live (not closed) sessions in the runtime's session table.
 	OpenSessions = func(r *Runtime) int {
 		n := 0

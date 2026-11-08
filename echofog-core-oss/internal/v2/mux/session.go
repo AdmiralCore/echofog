@@ -1379,3 +1379,10 @@ func (s *Session) SetOnPathFailing(f func(PathFailure)) {
 	}
 	s.onFailing.Store(&f)
 }
+
+// Healthy reports whether some path is neither failing nor dead.
+func (s *Session) Healthy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.healthyPathLocked()
+}

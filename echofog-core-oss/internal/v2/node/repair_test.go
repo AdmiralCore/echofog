@@ -1,0 +1,107 @@
+package node_test
+
+import (
+	"context"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
+	"github.com/echofog/echofog-core/internal/v2/mux"
+	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/node/cards"
+)
+
+// T3.13: a session left with a failing only path is repaired at once, not after the path is dead.
+
+// TestFailingOnlyPathIsReplacedByANewPath: with path-migration the dialer binds a second carrier and
+// makes it the active path.
+func TestFailingOnlyPathIsReplacedByANewPath(t *testing.T) {
+	queue := newCarrierQueue()
+	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{queue}, nil, pathFeatures)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, pathFeatures)
+	b.start(t)
+	a.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	first := memcarrier.NewQUIC()
+	queue.push(first.Server)
+	_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t), Carrier: first.Client})
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	waitPaths(t, b.rt, a.id.DeviceID, []uint64{0})
+
+	node.SetRepairOpt(a.rt, node.DialOpt{CarrierFunc: func(context.Context) (mux.Carrier, error) {
+		pair := memcarrier.NewQUIC()
+		queue.push(pair.Server)
+		return pair.Client, nil
+	}})
+	node.TriggerPathFailing(a.rt, sess)
+
+	waitPaths(t, a.rt, b.id.DeviceID, []uint64{0, 2})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ids, active, _ := a.rt.Paths(b.id.DeviceID)
+		if active == 2 && slices.Contains(ids, 2) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("active path %d of %v, want the new path 2", active, ids)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := sess.Err(); err != nil {
+		t.Fatalf("the session did not survive its repair: %v", err)
+	}
+}
+
+// TestFailingOnlyPathWithoutMigrationIsReplacedByANewSession: without path-migration the session
+// cannot take another carrier, so the dialer ends it and dials a new one.
+func TestFailingOnlyPathWithoutMigrationIsReplacedByANewSession(t *testing.T) {
+	queue := newCarrierQueue()
+	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{queue}, nil, nil)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, nil)
+	b.start(t)
+	a.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	first := memcarrier.NewQUIC()
+	queue.push(first.Server)
+	_, old, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t), Carrier: first.Client})
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	node.SetRepairOpt(a.rt, node.DialOpt{Card: b.peerCard(t), CarrierFunc: func(context.Context) (mux.Carrier, error) {
+		pair := memcarrier.NewQUIC()
+		queue.push(pair.Server)
+		return pair.Client, nil
+	}})
+	node.TriggerPathFailing(a.rt, old)
+
+	select {
+	case <-old.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session with the failing path was not ended")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, est := range node.TableSessions(a.rt) {
+			select {
+			case <-est.Session.Done():
+			default:
+				if est.SID != old.SID() {
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no new session was dialed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

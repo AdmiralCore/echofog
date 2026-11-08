@@ -258,6 +258,9 @@ type Runtime struct {
 	pathsMu   sync.Mutex
 	pathPairs map[pathKey]session.Pair
 	deadPaths map[pathKey]struct{}
+	// repairing holds the sessions a repair is running for; repairOpt is what a repair dials with.
+	repairing map[[16]byte]bool
+	repairOpt DialOpt
 
 	identity Identity
 	vis      cards.Visibility
@@ -386,6 +389,7 @@ func New(cfg Config) (*Runtime, error) {
 		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
+		repairing:    map[[16]byte]bool{},
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}

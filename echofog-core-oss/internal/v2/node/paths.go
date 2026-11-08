@@ -28,6 +28,7 @@ type pathKey struct {
 func (r *Runtime) pathHooks() (func(*mux.Session), func(mux.PathFailure)) {
 	onEstablished := func(s *mux.Session) {
 		r.binder.Add(s)
+		s.SetOnPathFailing(func(f mux.PathFailure) { r.pathFailing(s, f) })
 		go func() {
 			<-s.Done()
 			r.releaseSessionPathPairs(s.SID())
@@ -47,10 +48,16 @@ func (r *Runtime) pathFailed(f mux.PathFailure) {
 	if !ok {
 		return
 	}
-	if errors.Is(f.Cause, mux.ErrPathAbandoned) {
+	switch {
+	case errors.Is(f.Cause, mux.ErrPathAbandoned):
 		r.policy.Release(pair)
-	} else {
-		// A reset, a handshake timeout or a dead path is the penalty signal of H15.
+	case errors.Is(f.Cause, mux.ErrPathSilent):
+		// A path that only went silent is not the penalty signal of H15 (a reset or a handshake
+		// timeout): the carrier worked until the network went away, and an outage of seconds must
+		// not close the pair for two minutes and double that for every failure inside it (T3.13).
+		r.policy.Release(pair)
+	default:
+		// A reset or a handshake timeout is the penalty signal of H15.
 		r.policy.Penalize(pair)
 	}
 }
@@ -329,7 +336,11 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 			// happy eyeballs over several attempts is deliberately not used here (H11).
 			dc, _, err := carrier.Dial(ctx, req, []carrier.Attempt{a}, dialCfg)
 			if err != nil {
-				r.policy.Penalize(p)
+				if opt.repair {
+					r.policy.Release(p)
+				} else {
+					r.policy.Penalize(p)
+				}
 				last = err
 				continue
 			}
@@ -355,7 +366,7 @@ func (r *Runtime) addPathTo(ctx context.Context, est *session.Established, opt D
 	}
 	if err != nil {
 		if counted {
-			if errors.Is(err, mux.ErrSessionClosed) || errors.Is(err, mux.ErrFeatureNotSelected) {
+			if opt.repair || errors.Is(err, mux.ErrSessionClosed) || errors.Is(err, mux.ErrFeatureNotSelected) {
 				r.policy.Release(pair)
 			} else {
 				r.policy.Penalize(pair)
