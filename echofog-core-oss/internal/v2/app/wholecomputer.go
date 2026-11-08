@@ -314,7 +314,9 @@ func (a *App) WholeComputerSync(ctx context.Context) error {
 	w.op.Lock()
 	defer w.op.Unlock()
 	sw := a.wholeCurrent()
-	if sw == nil || sw.State() == tun.StateOff {
+	if sw == nil || sw.State() != tun.StateActive {
+		// Off: nothing to keep in step. Held: the helper may be gone, and a call to the firewall
+		// driver would start it again with a prompt for rights; only the user brings it back.
 		return nil
 	}
 	_, node, link, ok := a.wholeVPN()
