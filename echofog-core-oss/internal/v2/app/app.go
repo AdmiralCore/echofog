@@ -153,21 +153,25 @@ type Config struct {
 type App struct {
 	cfg Config
 
-	lc      sync.Mutex // serializes Start and Stop
-	running atomic.Bool
-	cmu     sync.Mutex // contacts: read-modify-write
-	kmu     sync.Mutex // knock answers: last answer per contact
-	knocked map[[32]byte]time.Time
-	asked   map[[32]byte]time.Time // knocks sent and not yet answered, by contact
-	ntc     notices                // notices for the UI (notice.go)
-	chats   chatState
-	hmu     sync.Mutex // history handed to newcomers: when, per group and key
-	handed  map[string]time.Time
-	fx      fileState
-	gev     groupEvents
-	vpn     vpnState
-	gc      callBook
-	vmu     sync.Mutex // the saved exits and the history
+	lc        sync.Mutex // serializes Start and Stop
+	running   atomic.Bool
+	cmu       sync.Mutex // contacts: read-modify-write
+	kmu       sync.Mutex // knock answers: last answer per contact
+	knocked   map[[32]byte]time.Time
+	asked     map[[32]byte]time.Time // knocks sent and not yet answered, by contact
+	ntc       notices                // notices for the UI (notice.go)
+	chats     chatState
+	hmu       sync.Mutex // history handed to newcomers: when, per group and key
+	handed    map[string]time.Time
+	fx        fileState
+	gev       groupEvents
+	vpn       vpnState
+	gc        callBook
+	vmu       sync.Mutex // the saved exits and the history
+	svmu      sync.Mutex // the saved messages and their count
+	svn       int
+	svCounted bool
+	seen      seenSet // messages already told as new
 }
 
 // New creates an App.

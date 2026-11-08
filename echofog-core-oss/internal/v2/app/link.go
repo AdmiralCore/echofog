@@ -204,6 +204,18 @@ func UserMessage(err error) string {
 		return "Неизвестный режим уведомлений"
 	case errors.Is(err, ErrInvite):
 		return "Ссылка-приглашение не подходит" // one text for every reason the link does not work
+	case errors.Is(err, ErrSavedFull):
+		return "Слишком много сохранённых сообщений: удалите ненужные"
+	case errors.Is(err, ErrBadSaved):
+		return "Сообщение нельзя сохранить: данные указаны неверно"
+	case errors.Is(err, ErrAlreadyMember):
+		return "Этот контакт уже в группе"
+	case errors.Is(err, ErrSnapshotPassword):
+		return "Пароль для файла группы слишком короткий: нужно не меньше 8 символов"
+	case errors.Is(err, ErrSnapshotVersion):
+		return "Файл группы создан другой версией EchoFog и не может быть открыт"
+	case errors.Is(err, ErrSnapshotFile):
+		return "Это не файл группы, или пароль неверный"
 	case errors.Is(err, ErrBadGroup):
 		return "Название или вид группы указаны неверно"
 	case errors.Is(err, ErrNoRight), errors.Is(err, convlog.ErrForbidden):

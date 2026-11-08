@@ -358,6 +358,9 @@ func (a *App) entry(c convlog.Conv, meta convlog.Meta) (ConvEntry, bool) {
 	}
 	e := ConvEntry{Ref: ref, Conv: meta.Conv, LastTS: meta.LastTS, Unread: meta.UnreadAll(), Mentions: meta.Mentions, Upgraded: true}
 	cv, _ := a.convs()
+	if p, err := a.prefs(); err == nil {
+		e.MutedUntil = a.mutedUntil(p, c.ID, "")
+	}
 	if meta.LastID != "" {
 		if id, err := convlog.ParseEventID(meta.LastID); err == nil {
 			if m, ok := cv.Log().Message(c, id); ok {
@@ -647,7 +650,7 @@ func (a *App) onChatChange(ch convlog.Change) {
 		subs = append(subs, f)
 	}
 	a.chats.mu.Unlock()
-	out := ConvChange{Ref: e.Ref, Conversation: e, Messages: a.dress(ch.Messages), Reload: ch.Rebuilt || len(ch.Members) > 0, Rev: ch.Rev}
+	out := ConvChange{Ref: e.Ref, Conversation: e, Messages: a.dress(ch.Messages), Reload: ch.Rebuilt || len(ch.Members) > 0, Rev: ch.Rev, Fresh: a.freshOf(ch.Messages)}
 	for _, f := range subs {
 		f(out)
 	}

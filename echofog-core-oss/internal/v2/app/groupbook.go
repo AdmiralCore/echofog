@@ -348,7 +348,7 @@ func (b *GroupBook) signInvite(g *groups.GroupGenesisManifest, nonce string, exp
 // parseInvite checks a link: its form, the group's genesis and the maker's signature. Whether it
 // has run out is for the caller; every failure is the same ErrInvite.
 func (b *GroupBook) parseInvite(link string) (*invitePayload, error) {
-	link = strings.TrimSpace(link)
+	link = unwebInvite(strings.TrimSpace(link))
 	if len(link) > maxInviteLink || !strings.HasPrefix(link, linkPrefix) {
 		return nil, ErrInvite
 	}
@@ -365,6 +365,34 @@ func (b *GroupBook) parseInvite(link string) (*invitePayload, error) {
 		return nil, ErrInvite
 	}
 	return &p, nil
+}
+
+// groupWebMarker is where the data of the web form of a group invitation starts: the join page, then a fragment.
+// The data sits after the "#", so it never reaches the page's server (the web form of a contact link is the same).
+const groupWebMarker = "/join/#group/"
+
+// webInvite is the https form of an invitation link: https://<join host>/join/#group/<data>. Empty when
+// the node has no join page or the link is none.
+func (a *App) webInvite(link string) string {
+	host := a.cfg.JoinHost
+	if host == "" || strings.ContainsAny(host, "/?#@\\ ") || !strings.HasPrefix(link, linkPrefix) {
+		return ""
+	}
+	return "https://" + host + groupWebMarker + link[len(linkPrefix):]
+}
+
+// unwebInvite turns the web form back into the app's: anything else comes back as it is. The host is
+// any host without a path, query, user part or fragment; the data must be in the fragment alone.
+func unwebInvite(s string) string {
+	if !strings.HasPrefix(s, "https://") {
+		return s
+	}
+	rest := s[len("https://"):]
+	i := strings.Index(rest, groupWebMarker)
+	if i <= 0 || strings.ContainsAny(rest[:i], "/?#@\\ ") {
+		return s
+	}
+	return linkPrefix + rest[i+len(groupWebMarker):]
 }
 
 func newNonce(rnd func([]byte) (int, error)) (string, error) {

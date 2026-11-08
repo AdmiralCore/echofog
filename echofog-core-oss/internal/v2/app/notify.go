@@ -91,6 +91,10 @@ func (a *App) ChatAlert(m convlog.Message) string {
 	case convsync.AlertLoud:
 		return AlertLoud
 	case convsync.AlertQuiet:
+		// a silence for a term works like the mode "nothing": being named still counts, the rest is quiet no more
+		if id, err := convlog.ParseConvID(m.Conv); err == nil && a.mutedUntil(p, id, m.Channel) > 0 {
+			return AlertNone
+		}
 		return AlertQuiet
 	}
 	return AlertNone

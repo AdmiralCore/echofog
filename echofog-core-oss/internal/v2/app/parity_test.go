@@ -474,15 +474,14 @@ func TestChannelStatsCarryUnreadAndTheLastMessage(t *testing.T) {
 	if _, err := bob.app.ChatSend(ctx, gref(id, ""), app.SendReq{Text: "тебе", Mentions: []string{alice.nodeHex()}}); err != nil {
 		t.Fatal(err)
 	}
-	send(t, alice, gref(id, "dev"), "мой ответ") // own messages are not unread
 	w.drain()
 	st, err := alice.app.GroupChannelStats(id)
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
 	dev := st["dev"]
-	if dev.Unread != 3 || dev.Last == nil || dev.Last.Text != "мой ответ" || dev.LastTS == 0 {
-		t.Fatalf("dev: %+v", dev)
+	if dev.Unread != 3 || dev.Last == nil || dev.Last.Text != "три" || dev.LastTS == 0 {
+		t.Fatalf("dev: %+v last=%+v", dev, dev.Last)
 	}
 	if main := st[""]; main.Unread != 2 || main.Mentions != 1 || main.Last == nil || main.Last.Text != "тебе" {
 		t.Fatalf("main: %+v", main)
@@ -495,11 +494,16 @@ func TestChannelStatsCarryUnreadAndTheLastMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ = alice.app.GroupChannelStats(id)
-	if st["dev"].Unread != 0 || st["dev"].Last == nil || st["dev"].Last.Text != "мой ответ" {
+	if st["dev"].Unread != 0 || st["dev"].Last == nil || st["dev"].Last.Text != "три" {
 		t.Fatalf("after reading: %+v", st["dev"])
 	}
 	if st[""].Unread != 2 {
 		t.Fatalf("reading dev touched the main channel: %+v", st[""])
+	}
+	// writing in a channel is reading it: the own message is the last one and nothing is unread
+	own := send(t, alice, gref(id, "dev"), "мой ответ")
+	if st, _ = alice.app.GroupChannelStats(id); st["dev"].Unread != 0 || st["dev"].Last == nil || st["dev"].Last.ID != own.ID {
+		t.Fatalf("after an own message: %+v", st["dev"])
 	}
 	if _, err := alice.app.GroupChannelStats("nothing"); err == nil {
 		t.Fatal("an unknown group")
@@ -611,7 +615,7 @@ func TestOnlyNewMessagesAreFreshNotEditsReactionsOrPins(t *testing.T) {
 	if err := bob.app.ChatReact(ctx, ref, root.ID, "👍", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := bob.app.ChatPin(ctx, ref, root.ID, true); err != nil {
+	if err := alice.app.ChatPin(ctx, ref, root.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	w.drain()
