@@ -149,5 +149,12 @@ func Nightly(f Files, in Input) (Result, error) {
 			return Result{}, err
 		}
 	}
+	if f.Scenarios != "" {
+		rep, err := open(f.Scenarios, LoadScenarios)
+		if err != nil {
+			return Result{}, err
+		}
+		in.Scenarios = rep.Scenarios
+	}
 	return Evaluate(in), nil
 }
