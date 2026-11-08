@@ -632,9 +632,6 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 				Masks: []reality2.MaskKey{mk}, Addrs: []string{tokenAddr(l)},
 				Shape: tlsShape, LowPower: profile.LowPower,
 			}
-			if coverCert == nil {
-				src.HTTPAddr = ":80" // http-01; tls-alpn-01 works on the cover port itself
-			}
 			sources = append(sources, src)
 		case "ws2":
 			mk, err := realityMask(maskPriv)
@@ -704,9 +701,6 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 					src.TCPAddr = bind
 				} else {
 					src.UDPAddr = bind
-				}
-				if coverCert == nil {
-					src.HTTPAddr = ":80"
 				}
 				return src.Listen(context.Background())
 			case "ws2":
@@ -857,15 +851,13 @@ func (s *Server) Status() StatusInfo {
 			st.Invites = len(infos)
 		}
 	}
-	_, perr := s.builder.Current(ctx, objects.ScopePublic)
+	ic, perr := s.builder.Current(ctx, objects.ScopePublic)
 	st.PublicCard = perr == nil
 	if perr == nil {
 		// The public link carries the public card only (no access secret, D37): it is what the
 		// operator shows on the site and in "v2 status".
-		if ic, cerr := s.builder.Current(ctx, objects.ScopePublic); cerr == nil {
-			if link, lerr := objects.EncodeLink(ic.Envelope, nil); lerr == nil {
-				st.PublicLink = link
-			}
+		if link, lerr := objects.EncodeLink(ic.Envelope, nil); lerr == nil {
+			st.PublicLink = link
 		}
 	}
 	s.mu.Lock()
