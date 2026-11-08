@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -165,5 +166,91 @@ func TestBadIdsAreErrors(t *testing.T) {
 	x.Refused(xid(1), "198.51.100.1")
 	if err := x.Approve(xhex(1), strings.Repeat("a", 300)); err == nil {
 		t.Error("a label of 300 characters was accepted")
+	}
+}
+
+// The queue limits are a product decision, not an implementation detail: a change of any number
+// here would change who the owner sees, so the numbers are pinned as numbers.
+func TestQueueHoldsSixteenClients(t *testing.T) {
+	x, _, _ := newAccess(t)
+	for i := 1; i <= 16; i++ {
+		x.Refused(xid(i), fmt.Sprintf("198.51.%d.%d", i/250, i))
+	}
+	if n := len(x.Pending()); n != 16 {
+		t.Fatalf("queue %d, want 16", n)
+	}
+	x.Refused(xid(17), "203.0.113.17")
+	if n := len(x.Pending()); n != 16 {
+		t.Fatalf("queue %d after the 17th client, want 16", n)
+	}
+}
+
+func TestOneSourceHoldsTwoClients(t *testing.T) {
+	x, _, _ := newAccess(t)
+	for i := 1; i <= 2; i++ {
+		x.Refused(xid(i), "198.51.100.9")
+	}
+	x.Refused(xid(3), "198.51.100.9")
+	if n := len(x.Pending()); n != 2 {
+		t.Fatalf("one source holds %d clients, want 2", n)
+	}
+}
+
+// The lifetime counts from the last attempt: a client that tries again stays in the queue for
+// another hour, and one that stops trying leaves after an hour.
+func TestQueueLifetimeIsAnHourFromTheLastTry(t *testing.T) {
+	x, clk, _ := newAccess(t)
+	x.Refused(xid(1), "198.51.100.1")
+	clk.Advance(3599 * time.Second)
+	if n := len(x.Pending()); n != 1 {
+		t.Fatalf("the client left after 3599 s: %d entries", n)
+	}
+	clk.Advance(2 * time.Second)
+	if n := len(x.Pending()); n != 0 {
+		t.Fatalf("the client stayed after 3601 s: %d entries", n)
+	}
+
+	x.Refused(xid(2), "198.51.100.2")
+	clk.Advance(3000 * time.Second)
+	x.Refused(xid(2), "198.51.100.2") // the last attempt, not the first one
+	clk.Advance(3599 * time.Second)
+	if n := len(x.Pending()); n != 1 {
+		t.Fatalf("the lifetime counted from the first attempt: %d entries", n)
+	}
+	clk.Advance(2 * time.Second)
+	if n := len(x.Pending()); n != 0 {
+		t.Fatalf("the client stayed after an hour from the last attempt: %d entries", n)
+	}
+}
+
+// A full queue must make room for the clients that waited out the lifetime before it drops the new
+// one: otherwise a night of strangers hides the person who just tried.
+func TestAFullQueueMakesRoomForTheExpired(t *testing.T) {
+	x, clk, _ := newAccess(t)
+	for i := 1; i <= 16; i++ {
+		x.Refused(xid(i), fmt.Sprintf("198.51.%d.%d", i/250, i))
+	}
+	clk.Advance(3601 * time.Second)
+	x.Refused(xid(99), "203.0.113.99")
+	p := x.Pending()
+	if len(p) != 1 || p[0].ID != xhex(99) {
+		t.Fatalf("the expired queue kept the new client out: %+v", p)
+	}
+}
+
+func TestConfirmedListHasACeiling(t *testing.T) {
+	x, _, _ := newAccess(t)
+	for i := 1; i <= 256; i++ {
+		x.Refused(xid(i), fmt.Sprintf("203.0.%d.%d", i/250, i))
+		if err := x.Approve(xhex(i), "c"); err != nil {
+			t.Fatalf("approve %d: %v", i, err)
+		}
+	}
+	x.Refused(xid(257), "203.0.113.257")
+	if err := x.Approve(xhex(257), "c"); !errors.Is(err, app.ErrExitFull) {
+		t.Fatalf("approve 257 = %v, want ErrExitFull", err)
+	}
+	if n := len(x.Approved()); n != 256 {
+		t.Fatalf("confirmed list %d, want 256", n)
 	}
 }
