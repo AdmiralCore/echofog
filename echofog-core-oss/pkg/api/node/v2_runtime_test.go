@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/config"
+	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
 	"github.com/echofog/echofog-core/internal/v2/dht"
@@ -262,6 +263,17 @@ func v2StepExchange(t *testing.T, a, b *v2Peer, aSeesB, bSeesA string) {
 	page, err := b.api.ChatHistory(ChatRef{Kind: "dm", ID: bSeesA}, "", 50)
 	require.NoError(t, err)
 	require.NotEmpty(t, page.Messages)
+
+	// a call invitation (T11.4b) rings at the other side. The in-memory network has no call transport, so the
+	// invitation is written the way InviteToCall writes it (InviteToCall itself: backends_v2_groupcall_test.go).
+	ring := &ringLog{}
+	b.api.OnIncomingCall(ring.add)
+	_, err = a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: convlog.CallInvitePrefix + "call_in_process/coordinator-a"})
+	require.NoError(t, err)
+	eventually(t, "b is rung", func() bool { return len(ring.all()) > 0 })
+	rung := ring.all()
+	require.Len(t, rung, 1)
+	require.Equal(t, IncomingCall{CallID: "call_in_process", Coordinator: "coordinator-a", From: bSeesA, Timestamp: rung[0].Timestamp}, rung[0])
 
 	// a file: offered, accepted, fetched over files/2, and the sender sees the recipient got it
 	var fileMu sync.Mutex

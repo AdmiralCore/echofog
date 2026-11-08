@@ -267,6 +267,21 @@ func (a *App) emitIncomingCall(ctx context.Context, msg *dto.MessageDTO) {
 	})
 }
 
+// callEventOf is the event the frontend gets for a call invitation of the v2 layer (OnIncomingCall):
+// the same name and fields as emitIncomingCall gives at protocol 1.
+func callEventOf(c api.IncomingCall) (string, map[string]interface{}) {
+	event := "call:incoming"
+	if c.Missed {
+		event = "call:missed"
+	}
+	return event, map[string]interface{}{
+		"callId":      c.CallID,
+		"coordinator": c.Coordinator,
+		"from":        c.From,
+		"timestamp":   c.Timestamp,
+	}
+}
+
 // ringWindow is how old a call invitation may be and still ring (generous for clocks that differ).
 const ringWindow = 2 * time.Minute
 
