@@ -424,3 +424,7 @@ func ExitCode(r Result, allowUnmeasured bool) int {
 	}
 	return 0
 }
+
+// BehaviourRows is the gate's reading of a behaviour report (D24, D21, D25), for the scenarios that
+// take their rows from the same limits instead of keeping a copy.
+func BehaviourRows(b *behaviour.Report) []Row { return behaviourRows(b) }

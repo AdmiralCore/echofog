@@ -52,7 +52,9 @@ type Live struct {
 }
 
 // Registry is the seven scenarios in the order of the task.
-func Registry() []Scenario { return nil }
+func Registry() []Scenario {
+	return []Scenario{natScenario(), pathsScenario(), hiddenScenario(), messagingScenario(), callScenario(), exitScenario(), censorScenario()}
+}
 
 // Verdict is the worst status of the rows: red, else not measured, else yellow, else green. A
 // result with no rows is not measured.
