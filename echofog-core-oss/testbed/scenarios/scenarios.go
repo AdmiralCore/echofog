@@ -12,6 +12,7 @@ package scenarios
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/echofog/echofog-core/testbed/gate"
@@ -55,10 +56,85 @@ func Registry() []Scenario { return nil }
 
 // Verdict is the worst status of the rows: red, else not measured, else yellow, else green. A
 // result with no rows is not measured.
-func (r Result) Verdict() gate.Status { return gate.NotMeasured }
+func (r Result) Verdict() gate.Status {
+	var red, missing, yellow, green bool
+	for _, row := range r.Rows {
+		switch row.Status {
+		case gate.Red:
+			red = true
+		case gate.NotMeasured:
+			missing = true
+		case gate.Yellow:
+			yellow = true
+		case gate.Green:
+			green = true
+		}
+	}
+	switch {
+	case red:
+		return gate.Red
+	case missing || !(green || yellow):
+		return gate.NotMeasured
+	case yellow:
+		return gate.Yellow
+	}
+	return gate.Green
+}
+
+// rank orders statuses for "the worst over the runs".
+func rank(s gate.Status) int {
+	switch s {
+	case gate.Red:
+		return 4
+	case gate.NotMeasured:
+		return 3
+	case gate.Yellow:
+		return 2
+	case gate.Green:
+		return 1
+	}
+	return 0
+}
 
 // RunMany runs a scenario n times in a row and returns the gate's reading: the worst status each
-// row had over the runs. Runs counts the runs made, which stops at the first red run.
+// row had over the runs. Runs counts the runs made, which stops at the first red run (three in a
+// row cannot happen after it) and at a cancelled context.
 func RunMany(ctx context.Context, s Scenario, env Env, n int) (gate.ScenarioResult, []Result) {
-	return gate.ScenarioResult{}, nil
+	out := gate.ScenarioResult{Name: s.Name, Mode: "model"}
+	var runs []Result
+	index := map[string]int{}
+	for i := 0; i < n && ctx.Err() == nil; i++ {
+		e := env
+		e.Seed = env.Seed + int64(i)
+		start := time.Now()
+		r := s.Run(ctx, e)
+		r.Elapsed = time.Since(start)
+		runs = append(runs, r)
+		out.Runs++
+		for _, row := range r.Rows {
+			if at, ok := index[row.ID]; ok {
+				if rank(row.Status) > rank(out.Rows[at].Status) {
+					out.Rows[at] = row
+				}
+				continue
+			}
+			index[row.ID] = len(out.Rows)
+			out.Rows = append(out.Rows, row)
+		}
+		out.Findings = appendNew(out.Findings, r.Findings)
+		out.NotChecked = appendNew(out.NotChecked, r.NotChecked)
+		if r.Verdict() == gate.Red {
+			break
+		}
+	}
+	return out, runs
+}
+
+func appendNew(dst, src []string) []string {
+	for _, s := range src {
+		if !slices.Contains(dst, s) {
+			dst = append(dst, s)
+		}
+	}
+	return dst
 }
