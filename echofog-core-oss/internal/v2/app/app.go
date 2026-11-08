@@ -142,6 +142,8 @@ type Config struct {
 	// and its voice rooms'); zero means 16. A call beyond either is not shown: silence.
 	CallCooldown  time.Duration
 	MaxGroupCalls int
+	// JoinHost is the host of the join page for the https form of group invitations ("": none).
+	JoinHost string
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string

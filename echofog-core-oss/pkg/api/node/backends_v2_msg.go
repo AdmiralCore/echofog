@@ -30,6 +30,11 @@ type v2Messenger interface {
 	SetChatNotify(ref app.ChatRef, mode string) error
 	ChatFollow(ref app.ChatRef, root string, on bool) error
 	ChatFollowing(ref app.ChatRef) ([]string, error)
+	ChatMuteUntil(ref app.ChatRef, until int64) error
+	ChatMutedUntil(ref app.ChatRef) (int64, error)
+	SaveMessage(m app.SavedMessage) (app.SavedMessage, error)
+	UnsaveMessage(id string) error
+	ListSavedMessages() ([]app.SavedMessage, error)
 
 	// groups
 	CreateGroup(ctx context.Context, title, desc, kind string) (app.GroupInfo, error)
@@ -66,6 +71,10 @@ type v2Messenger interface {
 	GroupJoinRequests(id string) ([]app.JoinRequest, error)
 	GroupJoinDecide(ctx context.Context, id, node string, accept bool) error
 	GroupVoice(id, channel string) ([]app.VoiceMember, error)
+	GroupAddMember(ctx context.Context, id, node string) error
+	GroupChannelStats(id string) (map[string]app.ChannelStat, error)
+	GroupSnapshotExport(ctx context.Context, id, path, password string) error
+	GroupSnapshotImport(ctx context.Context, path, password string) (app.GroupInfo, int, error)
 	SubscribeGroupEvents(fn func(app.GroupEvent)) (cancel func())
 	ActiveGroupCall(group, room string) (app.GroupCallInfo, bool)
 

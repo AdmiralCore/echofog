@@ -67,3 +67,13 @@ func (n *NodeApi) GroupVoice(groupID, channel string) ([]VoiceMemberDTO, error) 
 	}
 	return b.GroupVoice(groupID, channel)
 }
+
+// SetChatMutedUntil silences a chat's channel until the unix time until (0 clears it). Local to this device.
+func (n *NodeApi) SetChatMutedUntil(ref ChatRef, until int64) error {
+	return ErrV2NotBuilt
+}
+
+// ChatMutedUntil is the end of that silence in unix seconds, 0 when there is none.
+func (n *NodeApi) ChatMutedUntil(ref ChatRef) (int64, error) {
+	return 0, ErrV2NotBuilt
+}

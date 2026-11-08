@@ -55,19 +55,20 @@ type ChatRef struct {
 
 // ConvEntry is one line of the chat list.
 type ConvEntry struct {
-	Ref      ChatRef
-	Conv     string
-	Last     *convlog.Message
-	LastTS   int64
-	Unread   int
-	Mentions int  // unread messages that name me (apart from Unread)
-	Request  bool // a stranger's chat
-	Upgraded bool
-	Kind     string // "direct" or "group"
-	Name     string
-	PeerID   string
-	Online   bool
-	Blocked  bool
+	Ref        ChatRef
+	Conv       string
+	Last       *convlog.Message
+	LastTS     int64
+	Unread     int
+	MutedUntil int64 // unix seconds; 0: not silenced
+	Mentions   int   // unread messages that name me (apart from Unread)
+	Request    bool  // a stranger's chat
+	Upgraded   bool
+	Kind       string // "direct" or "group"
+	Name       string
+	PeerID     string
+	Online     bool
+	Blocked    bool
 }
 
 // ChatPage is one page of a chat or a thread.
@@ -93,6 +94,9 @@ type ConvChange struct {
 	Messages     []convlog.Message
 	Reload       bool
 	Rev          uint64
+	// Fresh are the ids of the messages in Messages that are new to the reader: not an edit, a reaction, a
+	// pin or a reply to an older one.
+	Fresh []string
 }
 
 // Convs is the part of *convsync.Engine the chat uses.

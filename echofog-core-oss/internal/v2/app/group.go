@@ -88,6 +88,7 @@ type GroupInvite struct {
 	Uses, Used                 uint32
 	Revoked, Approval          bool
 	Link                       string // only for one made on this node
+	Web                        string // its https form, when the node has a join page
 }
 
 // InvitePreview is what a link shows before joining.
@@ -1276,4 +1277,13 @@ func (a *App) onGroupChange(ch convlog.Change) {
 		return
 	}
 	a.joinNow(context.Background(), b, cv, ch.Conv)
+}
+
+// ErrAlreadyMember reports an invitation to somebody who is in the group.
+var ErrAlreadyMember = errors.New("app: already in the group")
+
+// GroupAddMember invites a contact to a group: a personal invitation in their chat. They are a member
+// only once they accept it (JoinGroup).
+func (a *App) GroupAddMember(ctx context.Context, id, node string) error {
+	return errors.New("not built")
 }
