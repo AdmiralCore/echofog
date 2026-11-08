@@ -161,3 +161,11 @@ var (
 
 // NarrowPathOf returns the narrow-path marks of the runtime (T3.12).
 var NarrowPathOf = func(r *Runtime) *carrier.NarrowPath { return r.narrow }
+
+// Egress seams (T11.6a).
+var (
+	TCPOnly      = tcpOnly
+	EgressDialer = func(e *Egress) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+		return e.dialer()
+	}
+)

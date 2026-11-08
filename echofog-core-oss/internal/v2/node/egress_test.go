@@ -21,6 +21,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	objpb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
 )
@@ -283,7 +284,7 @@ func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
 		})
 		a.start(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t)})
+		_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t), Attempts: allSuiteAttempts(t, udpPort, tcpPort)})
 		cancel()
 		if err == nil {
 			_ = sess.Close()
@@ -305,7 +306,7 @@ func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
 		// Fail closed: with the proxy gone altogether nothing else is tried.
 		_ = px.ln.Close()
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 8*time.Second)
-		_, sess2, err2 := a.rt.Session(ctx2, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t)})
+		_, sess2, err2 := a.rt.Session(ctx2, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t), Attempts: allSuiteAttempts(t, udpPort, tcpPort)})
 		cancel2()
 		if err2 == nil {
 			_ = sess2.Close()
@@ -317,5 +318,44 @@ func TestEgressNoSocketBypassesTheProxy(t *testing.T) {
 		if errors.Is(err2, context.DeadlineExceeded) {
 			t.Fatalf("tor=%v: fail closed must be an error, not a wait: %v", tor, err2)
 		}
+	}
+}
+
+// allSuiteAttempts is a plan with every direct suite: the UDP ones at the UDP sink, the TCP ones at
+// the TCP sink. Behind a proxy only the TCP attempts may survive.
+func allSuiteAttempts(t *testing.T, udpPort, tcpPort uint32) []carrier.Attempt {
+	t.Helper()
+	params, err := objects.Marshal(&objpb.SuiteParams{Sni: "cover.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(suite uint32, port uint32) carrier.Attempt {
+		return carrier.Attempt{Kind: carrier.AttemptCarrier, Suite: suite,
+			Addr: &objpb.Addr{Suite: suite, Host: "127.0.0.1", Port: port, Mask: 1, Params: params}}
+	}
+	return []carrier.Attempt{mk(objects.SuiteNoise3, udpPort), mk(objects.SuiteReality2QUIC, udpPort), mk(objects.SuiteReality2TCP, tcpPort)}
+}
+
+// The second layer: whatever the plan holds, only the TCP suites leave the filter, and the opener
+// the node hands to every carrier refuses a UDP socket.
+func TestEgressFilterAndOpenerRefuseUDP(t *testing.T) {
+	mk := func(s uint32) carrier.Attempt { return carrier.Attempt{Kind: carrier.AttemptCarrier, Suite: s} }
+	got := node.TCPOnly([]carrier.Attempt{mk(objects.SuiteNoise3), mk(objects.SuiteReality2QUIC), mk(objects.SuiteReality2TCP), mk(objects.SuiteWS2),
+		{Kind: carrier.AttemptRelay}})
+	if len(got) != 3 || got[0].Suite != objects.SuiteReality2TCP || got[1].Suite != objects.SuiteWS2 || got[2].Kind != carrier.AttemptRelay {
+		t.Fatalf("filter left %+v", got)
+	}
+	px := newFakeSocks(t)
+	dial, err := node.EgressDialer(&node.Egress{Proxy: px.addr()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{"udp", "udp4", "ip"} {
+		if _, err := dial(context.Background(), network, "192.0.2.1:443"); !errors.Is(err, node.ErrEgressNetwork) {
+			t.Fatalf("%s: %v, want ErrEgressNetwork", network, err)
+		}
+	}
+	if len(px.requests()) != 0 {
+		t.Fatal("a refused socket still reached the proxy")
 	}
 }
