@@ -17,8 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/echofog/echofog-core/testbed/censor"
 )
 
 var (
@@ -59,7 +57,7 @@ func tlsEcho(t testing.TB, names ...string) string {
 
 // A pcap written by the writer is read back by the censor's analyzer as the packets that were
 // written: protocol, ports, bytes each way.
-func TestPcapWriterRoundTripsUDP(t *testing.T) {
+func TestCensorPcapWriterRoundTripsUDP(t *testing.T) {
 	pw, wait := newCapture()
 	cli := netip.AddrPortFrom(fakeClientIP, 50000)
 	at := time.Now()
@@ -82,7 +80,7 @@ func TestPcapWriterRoundTripsUDP(t *testing.T) {
 	assert.Equal(t, 28+300, f.BytesDn)
 }
 
-func TestPcapWriterRoundTripsATCPConnection(t *testing.T) {
+func TestCensorPcapWriterRoundTripsATCPConnection(t *testing.T) {
 	pw, wait := newCapture()
 	cli := netip.AddrPortFrom(fakeClientIP, 51000)
 	at := time.Now()
@@ -110,7 +108,7 @@ func TestPcapWriterRoundTripsATCPConnection(t *testing.T) {
 
 // The TCP tap carries a real TLS connection through, writes the handshake with the SYN, SYN-ACK and
 // ACK first, and what the analyzer reads is the ClientHello that was sent: its SNI, its records.
-func TestTCPTapShowsTheClientHelloToTheAnalyzer(t *testing.T) {
+func TestCensorTCPTapShowsTheClientHelloToTheAnalyzer(t *testing.T) {
 	target := tlsEcho(t, "cover.example")
 	pw, wait := newCapture()
 	tap, err := NewTCPTap(target, fakeSrv, pw)
@@ -151,7 +149,7 @@ func TestTCPTapShowsTheClientHelloToTheAnalyzer(t *testing.T) {
 	}
 }
 
-func TestUDPTapRelaysAndWritesWhatItSaw(t *testing.T) {
+func TestCensorUDPTapRelaysAndWritesWhatItSaw(t *testing.T) {
 	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = echo.Close() })
@@ -201,5 +199,3 @@ func TestUDPTapRelaysAndWritesWhatItSaw(t *testing.T) {
 	assert.Equal(t, 5*len(msg)+1, f.PayDn)
 	assert.Equal(t, len(first), f.UDPFirst)
 }
-
-var _ = censor.LabelCarrier

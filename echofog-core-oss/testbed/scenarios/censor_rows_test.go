@@ -51,7 +51,7 @@ func tcpFlowsThrough(t *testing.T, serve func(net.Conn), client func(addr string
 
 // The scenario must be able to fail. A carrier that sends random bytes first is what the GFW
 // blocks (D1): the classifier row for it is red, with the detector named, and says it is a finding.
-func TestClassifierRowIsRedForRandomBytes(t *testing.T) {
+func TestCensorClassifierRowIsRedForRandomBytes(t *testing.T) {
 	flows := tcpFlowsThrough(t,
 		func(c net.Conn) { _, _ = io.Copy(c, c) },
 		func(addr string) {
@@ -74,7 +74,7 @@ func TestClassifierRowIsRedForRandomBytes(t *testing.T) {
 
 // A plain Go TLS client that names a site the address does not host: D3 (SNI against the address)
 // and D4 (a library's ClientHello, no GREASE) flag it.
-func TestClassifierRowIsRedForAForeignSNIWithAnOrdinaryTLSStack(t *testing.T) {
+func TestCensorClassifierRowIsRedForAForeignSNIWithAnOrdinaryTLSStack(t *testing.T) {
 	target := tlsEcho(t, "foreign.example")
 	_ = target
 	flows := tcpFlowsThrough(t,
@@ -100,20 +100,20 @@ func TestClassifierRowIsRedForAForeignSNIWithAnOrdinaryTLSStack(t *testing.T) {
 }
 
 // No flow of the carrier: nothing was measured, and an empty capture is never green.
-func TestClassifierRowWithNoFlowsIsNotMeasured(t *testing.T) {
+func TestCensorClassifierRowWithNoFlowsIsNotMeasured(t *testing.T) {
 	row, finding := classifierRow("empty", nil, nil, controlConfig())
 	assert.Equal(t, gate.NotMeasured, row.Status)
 	assert.NotEmpty(t, row.Note)
 	assert.Empty(t, finding)
 }
 
-func TestControlRowWithNoBrowserFlowsIsNotMeasured(t *testing.T) {
+func TestCensorControlRowWithNoBrowserFlowsIsNotMeasured(t *testing.T) {
 	row := controlRow(nil, controlConfig())
 	assert.Equal(t, gate.NotMeasured, row.Status)
 	assert.NotEmpty(t, row.Note)
 }
 
-func TestProbeRowReadsTheReport(t *testing.T) {
+func TestCensorProbeRowReadsTheReport(t *testing.T) {
 	quiet := probe.Answer{Class: "silence"}
 	mk := func(outs ...probe.Outcome) probe.Report { return probe.Report{Target: "x", Outcomes: outs} }
 	ok := probe.Outcome{Detector: "D12", Case: "garbage", Node: quiet, Cover: quiet}
