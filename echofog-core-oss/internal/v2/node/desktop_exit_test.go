@@ -19,9 +19,11 @@ import (
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/service"
 )
 
 // T10.9: a desktop turns its exit on and off while it runs, and others reach it by a link. These
@@ -45,6 +47,7 @@ type exitApp struct {
 	nd *testNode
 	a  *app.App
 	ln *links.Service
+	q  *carrierQueue
 }
 
 func newExitApp(t *testing.T, own, peer *carrierQueue) *exitApp {
@@ -53,7 +56,7 @@ func newExitApp(t *testing.T, own, peer *carrierQueue) *exitApp {
 	if own != nil {
 		ls = []carrier.Listener{own}
 	}
-	x := &exitApp{}
+	x := &exitApp{q: own}
 	x.nd = newTestNodeWith(t, cards.Visible, true, ls, nil, func(c *node.Config) {
 		c.Chat = true
 		c.ChatEvents.Control = func(from [32]byte, ctl *chatpb.Control) {
@@ -477,4 +480,92 @@ func TestTurnedOffExitLeavesTheCards(t *testing.T) {
 	}
 	// and it can be turned on again
 	enable(t, b)
+}
+
+// The exit of a desktop starts once: a second start is a programming mistake, not a quiet restart.
+func TestAHostedExitCannotBeTurnedOnTwice(t *testing.T) {
+	b := newExitApp(t, nil, nil)
+	if _, err := b.a.ExitEnable(bgx, app.ExitSettings{}); err != nil {
+		t.Fatalf("ExitEnable: %v", err)
+	}
+	if _, err := b.a.ExitEnable(bgx, app.ExitSettings{}); !errors.Is(err, node.ErrExitRunning) {
+		t.Fatalf("second ExitEnable = %v, want ErrExitRunning", err)
+	}
+}
+
+// A node whose profile is an exit cannot switch that exit: the role is part of who the node is.
+func TestAnExitOfTheProfileCannotBeTurnedOn(t *testing.T) {
+	n := newTestNodeWith(t, cards.Visible, false, nil, nil, func(c *node.Config) {
+		c.Profile.Roles = []node.Role{node.RoleExit}
+	})
+	n.start(t)
+	if err := n.rt.EnableExit(node.ExitOptions{}); !errors.Is(err, node.ErrExitStatic) {
+		t.Fatalf("EnableExit on a profile exit = %v, want ErrExitStatic", err)
+	}
+}
+
+// rawExitStream opens an exit/2 stream under the messenger identity of the client: that identity is
+// never confirmed, so the exit must turn every kind of request away.
+func rawExitStream(t *testing.T, a, b *exitApp, card *objects.Card) *mux.Stream {
+	t.Helper()
+	if b.q == nil {
+		t.Fatal("the exit has no listener queue")
+	}
+	pair := memcarrier.NewQUIC()
+	b.q.push(pair.Server)
+	ctx, cancel := context.WithTimeout(bgx, 30*time.Second)
+	defer cancel()
+	_, st, err := a.nd.rt.Open(ctx, b.nd.id.DeviceID, service.Exit, node.DialOpt{Card: card, Carrier: pair.Client})
+	if err != nil {
+		t.Fatalf("open exit/2: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
+// An unconfirmed client is refused the same way on every request, not only on a TCP tunnel: UDP,
+// the account frame and a voucher all meet the policy refusal.
+func TestAnUnconfirmedClientIsRefusedForUDPAccountAndVoucher(t *testing.T) {
+	qA, qB := newCarrierQueue(), newCarrierQueue()
+	a, b := newExitApp(t, qA, qB), newExitApp(t, qB, qA)
+	if _, err := b.a.ExitEnable(bgx, app.ExitSettings{}); err != nil {
+		t.Fatalf("ExitEnable: %v", err)
+	}
+	card := b.nd.peerCard(t)
+	if card.ExitOffer() == nil {
+		t.Fatal("the card of the running exit carries no exit offer")
+	}
+	// Creating the client registers exit/2 among the services this runtime offers, without dialing.
+	cl, err := a.nd.rt.ExitClient(bgx, card, node.DialOpt{})
+	if err != nil {
+		t.Fatalf("ExitClient: %v", err)
+	}
+	_ = cl.Close()
+
+	st := rawExitStream(t, a, b, card)
+	if err := st.WriteFrame(exit.TypeUDPOpen, 0, exit.UDPOpen{Req: 7}.Append(nil)); err != nil {
+		t.Fatalf("UDP_OPEN: %v", err)
+	}
+	_ = st.SetReadDeadline(time.Now().Add(10 * time.Second))
+	f, err := st.ReadFrame()
+	if err != nil {
+		t.Fatalf("UDP_OPEN reply: %v", err)
+	}
+	u, err := exit.ParseUDPOK(f.Payload)
+	if f.Type != exit.TypeUDPOK || err != nil || u.Req != 7 || u.Code != exit.ResultDenied {
+		t.Fatalf("UDP_OPEN reply %#x %+v %v, want DENIED for request 7", f.Type, u, err)
+	}
+
+	for _, typ := range []uint64{exit.TypeAccountGet, exit.TypeVoucher} {
+		st := rawExitStream(t, a, b, card)
+		if err := st.WriteFrame(typ, 0, nil); err != nil {
+			t.Fatalf("frame %#x: %v", typ, err)
+		}
+		_ = st.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, err := st.ReadFrame()
+		var ce *mux.CloseError
+		if !errors.As(err, &ce) || ce.Code != exit.CodePolicy {
+			t.Fatalf("frame %#x ended with %v, want a policy close", typ, err)
+		}
+	}
 }
