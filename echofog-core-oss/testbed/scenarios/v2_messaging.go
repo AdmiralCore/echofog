@@ -37,6 +37,9 @@ func messagingWorld(ctx context.Context, dir string, em behaviour.NetemConfig) (
 		w.Close()
 		return nil, nil, nil, err
 	}
+	// the world lives on loopback, which the DHT client refuses as a peer address unless told otherwise
+	a.RT.DHT().SetAllowNonRoutable(true)
+	b.RT.DHT().SetAllowNonRoutable(true)
 	if _, _, err := a.Dial(ctx, b); err != nil {
 		w.Close()
 		return nil, nil, nil, err
@@ -87,7 +90,7 @@ func runMessaging(ctx context.Context, env Env) Result {
 		// The two nodes met over real noise3, but chat/2 finds a recipient's prekeys through the DHT, and the DHT
 		// of the world does not resolve: the loopback world is not the network the routing tables and the
 		// diversity rules are built for. Nothing of the delivery was measured, and the rows say so.
-		const why = "chat/2 resolves the recipient through the DHT and the lookup is inconclusive in the loopback world"
+		const why = "chat/2 resolves the recipient through the DHT and the lookup stays inconclusive in the loopback world (tried: two nodes, five nodes in a mesh, the clock skipped past the five-minute republication, AllowNonRoutable on); a finding for the DHT in a lab, see the report"
 		res.Rows = append(res.Rows, newRow("v2-messaging/session", "session", "open over noise3", "a real session", gate.Green, ""))
 		for _, id := range []string{"exactly-once", "offline-queue", "state"} {
 			res.Rows = append(res.Rows, newRow("v2-messaging/"+id, "delivery", "not measured", "once each, both ways", gate.NotMeasured, why))
