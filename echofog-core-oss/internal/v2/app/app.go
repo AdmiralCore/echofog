@@ -133,6 +133,15 @@ type Config struct {
 	// VerifyCard checks the card a contact answered a knock with: true when it is a valid card of
 	// that account. Nil: the real check (objects.VerifyCard, the card's account is the sender).
 	VerifyCard func(from [32]byte, envelope []byte) bool
+	// Exit dials the exit a link names (the runtime's ExitClient behind a card); nil turns the VPN off.
+	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
+	Exit      ExitDialer
+	VPNListen string
+	// CallCooldown is the least time between two new calls announced by one member of a group; zero means
+	// 30 s, negative turns it off. MaxGroupCalls bounds the calls going on at once in one group (its own
+	// and its voice rooms'); zero means 16. A call beyond either is not shown: silence.
+	CallCooldown  time.Duration
+	MaxGroupCalls int
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string
@@ -154,6 +163,9 @@ type App struct {
 	handed  map[string]time.Time
 	fx      fileState
 	gev     groupEvents
+	vpn     vpnState
+	gc      callBook
+	vmu     sync.Mutex // the saved exits and the history
 }
 
 // New creates an App.
@@ -173,6 +185,9 @@ func New(cfg Config) (*App, error) {
 	}
 	if !cfg.Mode.valid() {
 		return nil, fmt.Errorf("%w: %q", ErrMode, cfg.Mode)
+	}
+	if err := checkLoopback(cfg.VPNListen); err != nil {
+		return nil, err
 	}
 	a := &App{cfg: cfg}
 	if cfg.Groups != nil && cfg.Convs != nil {

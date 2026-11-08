@@ -67,6 +67,7 @@ type v2Messenger interface {
 	GroupJoinDecide(ctx context.Context, id, node string, accept bool) error
 	GroupVoice(id, channel string) ([]app.VoiceMember, error)
 	SubscribeGroupEvents(fn func(app.GroupEvent)) (cancel func())
+	ActiveGroupCall(group, room string) (app.GroupCallInfo, bool)
 
 	// files
 	OnFileTransfer(cb func(app.Transfer)) func()

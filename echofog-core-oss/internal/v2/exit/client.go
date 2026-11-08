@@ -89,7 +89,7 @@ func (c *Client) DialExitStream(ctx context.Context, target string) (io.ReadWrit
 	})
 	conn, err := d.DialExitStream(ctx, target)
 	if err != nil {
-		return nil, c.dialErr(err)
+		return nil, c.dialErr(ctx, err)
 	}
 	if cs == nil {
 		return conn, nil
@@ -102,7 +102,7 @@ func (c *Client) DialExitStream(ctx context.Context, target string) (io.ReadWrit
 func (c *Client) DialExitUDP(ctx context.Context) (*core.UDPSession, error) {
 	u, err := c.dialer.DialExitUDP(ctx)
 	if err != nil {
-		return nil, c.dialErr(err)
+		return nil, c.dialErr(ctx, err)
 	}
 	return u, nil
 }

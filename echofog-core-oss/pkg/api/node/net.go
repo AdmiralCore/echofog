@@ -215,6 +215,9 @@ func (n *NodeApi) relayConnected(hexID string) bool {
 }
 
 func (n *NodeApi) GetVPNStatus() (st VPNStatus) {
+	if b := n.v2vpn(); b != nil {
+		return b.GetVPNStatus()
+	}
 	if n.v2Unavailable() != nil {
 		return VPNStatus{}
 	}
@@ -256,6 +259,9 @@ func (n *NodeApi) GetVPNStatus() (st VPNStatus) {
 }
 
 func (n *NodeApi) StartVPN(relayPeerID string) error {
+	if b := n.v2vpn(); b != nil {
+		return b.StartVPN(relayPeerID)
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
@@ -364,6 +370,9 @@ func (n *NodeApi) GetExitGatewayStatus() ExitGatewayStatus {
 }
 
 func (n *NodeApi) StopVPN() error {
+	if b := n.v2vpn(); b != nil {
+		return b.StopVPN()
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
@@ -379,6 +388,9 @@ func (n *NodeApi) StopVPN() error {
 // instead of every application going out on the real address for the gap (and after it, if the
 // user did not turn whole-computer mode on again).
 func (n *NodeApi) StopVPNForSwitch() error {
+	if b := n.v2vpn(); b != nil {
+		return b.StopVPNForSwitch()
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}

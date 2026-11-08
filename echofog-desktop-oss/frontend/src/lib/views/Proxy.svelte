@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { App, on, errText, copy } from '../api.js';
+  import { EXIT_PROBLEMS, isSiteFailure, refusalKey, historyKey } from '../vpnreason.js';
   import { bytes, price, usdPerGb, microPerMb, when, short, amount, duration, countryName } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
@@ -312,14 +313,13 @@
   $: leftTitle = (x) => $t('proxy.hist.leftTitle', { when: when(x.remainingAt, $lang) });
   // streams that did not open: "dial failed" is the site (not reachable from the exit, often a
   // name with no IPv4), the rest point at the exit or the way to it
-  const SITE_FAIL = 'dial failed';
   $: refusals = (x) => {
     const by = x.refusedBy || {};
-    const site = by[SITE_FAIL] || 0;
-    const exit = Object.entries(by).reduce((n, [k, v]) => (k === SITE_FAIL ? n : n + v), 0);
+    const site = Object.entries(by).reduce((n, [k, v]) => (isSiteFailure(k) ? n + v : n), 0);
+    const exit = Object.entries(by).reduce((n, [k, v]) => (isSiteFailure(k) ? n : n + v), 0);
     const known = site + exit > 0;
     const title = Object.entries(by).sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => `${$t('proxy.hist.why.' + k.replace(' ', '_'))}: ${v}`).join('\n');
+      .map(([k, v]) => `${$t(historyKey(k))}: ${v}`).join('\n');
     return { site, exit, known, title: (title ? title + '\n\n' : '') + $t('proxy.hist.refusedHelp') };
   };
   $: contactName = (id) => contacts.find((c) => (c.peer_id || '').toLowerCase() === id)?.alias || '';
@@ -328,9 +328,9 @@
   // the exit about to be used, to warn before connecting when it is paid
   $: target = mode === 'manual' ? exits.find((e) => e.peerId === selected) : mode === 'auto' ? best : null;
   $: switchedRecently = vpn.running && vpn.lastSwitch?.at && Date.now() / 1000 - vpn.lastSwitch.at < 120;
-  $: exitProblem = vpn.running && ['disabled', 'quota', 'unreachable'].includes(vpn.exitState) ? vpn.exitState : '';
+  $: exitProblem = vpn.running && EXIT_PROBLEMS.has(vpn.exitState) ? vpn.exitState : '';
   $: refusalText = vpn.running && vpn.refused > 0 && vpn.lastRefusalReason
-    ? $t('proxy.refused', { n: vpn.refused, reason: $t('proxy.refusal.' + vpn.lastRefusalReason), host: vpn.lastRefusalHost, when: when(vpn.lastRefusalAt, $lang) })
+    ? $t('proxy.refused', { n: vpn.refused, reason: $t(refusalKey(vpn.lastRefusalReason)), host: vpn.lastRefusalHost, when: when(vpn.lastRefusalAt, $lang) })
     : '';
 </script>
 
@@ -451,6 +451,7 @@
         {:else if mode === 'direct'}
           <div class="auto">
             <p class="small muted">{$t('proxy.directHint')}</p>
+            <p class="small faint">{$t('proxy.externalExit')}</p>
             <input bind:value={direct} placeholder="echofog://join?… / echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
             {#if isInvite && inviteErr}<p class="small error">{inviteErr}</p>
             {:else if isInvite && invite}<p class="small faint">{invite.private ? $t('access.private') : $t('access.publicNode')} · <span class="mono">{short(invite.peerId)}</span></p>

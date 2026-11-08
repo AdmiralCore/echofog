@@ -41,6 +41,7 @@ type fakeMsg struct {
 	rights   convlog.Rights
 	fail     error
 	noNext   bool
+	room     *app.GroupCallInfo
 	mod      []convlog.ModEntry
 	chatSubs []func(app.ConvChange)
 	grpSubs  []func(app.GroupEvent)
@@ -895,4 +896,11 @@ func TestV2RemovedEventKeepsTheTitleOfAGroupThatIsGone(t *testing.T) {
 	api.SubscribeGroupEvents(func(e GroupEvent) { got = append(got, e) })
 	f.pushGroup(app.GroupEvent{Kind: "removed", Group: groupID, Title: "Команда", Reason: "removed"})
 	require.Equal(t, []GroupEvent{{Kind: "removed", GroupID: groupID, Title: "Команда", Reason: "removed"}}, got)
+}
+
+func (f *fakeMsg) ActiveGroupCall(group, room string) (app.GroupCallInfo, bool) {
+	if f.room != nil && room == f.room.Room {
+		return *f.room, true
+	}
+	return app.GroupCallInfo{}, false
 }

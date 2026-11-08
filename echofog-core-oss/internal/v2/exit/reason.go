@@ -146,15 +146,17 @@ func (c *Client) noPath() Reason {
 	return ReasonNoPath
 }
 
-// dialErr turns an error of the dial step into a Refusal. Cancellation, an invalid target and a
-// closed client are the caller's own doing and stay as they are.
-func (c *Client) dialErr(err error) error {
+// dialErr turns an error of the dial step into a Refusal. The caller's own cancellation (its context
+// is done), an invalid target and a closed client stay as they are; a deadline of the session set-up
+// while the caller's context is alive (the node's readiness wait, a carrier timeout) is a missing path.
+func (c *Client) dialErr(ctx context.Context, err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrInvalidTarget), errors.Is(err, ErrClientClosed),
-		errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, core.ErrInvalidTarget), errors.Is(err, ErrClientClosed):
 		return err
+	case ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
+		return err // the caller's own cancellation or deadline
 	}
 	if r := ReasonOf(err); r != ReasonUnknown {
 		return refuse(r, err)
