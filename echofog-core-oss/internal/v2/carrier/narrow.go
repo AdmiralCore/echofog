@@ -72,9 +72,10 @@ type NarrowPath struct {
 	clock  Clock
 	onMark func(netID string, why NarrowReason)
 
-	mu    sync.Mutex
-	until map[string]time.Time
-	order []string
+	mu     sync.Mutex
+	until  map[string]time.Time
+	order  []string
+	silent map[string]map[string]time.Time // network -> peer host -> when noise3 was last silent
 }
 
 // NewNarrowPath builds the marks on an injectable clock (AD13). onMark, when set, is called once
@@ -84,7 +85,58 @@ func NewNarrowPath(clock Clock, onMark func(netID string, why NarrowReason)) *Na
 		clock = systemClock{}
 	}
 	return &NarrowPath{FirstTry: defaultFirstTry, Rung: defaultRung, clock: clock, onMark: onMark,
-		until: map[string]time.Time{}}
+		until: map[string]time.Time{}, silent: map[string]map[string]time.Time{}}
+}
+
+const (
+	// SilentWindow and SilentPeers: a network is marked for a silent noise3 only when noise3 stayed
+	// silent to this many different peers within this window while another carrier won to each. One
+	// peer proves nothing about the network (its UDP port may be closed, its noise3 down).
+	SilentWindow = 10 * time.Minute
+	SilentPeers  = 2
+	maxSilentPer = 8
+)
+
+// NoteNoise3Silent records that noise3 stayed silent to peer (a host) on the network while another
+// carrier won to the same peer. When SilentPeers different peers did so within SilentWindow, the
+// network is marked (ReasonNoise3Silent).
+func (n *NarrowPath) NoteNoise3Silent(netID, peer string) {
+	if n == nil || netID == "" || peer == "" {
+		return
+	}
+	now := n.clock.Now()
+	n.mu.Lock()
+	peers := n.silent[netID]
+	if peers == nil {
+		if len(n.silent) >= maxNarrowNets {
+			for id := range n.silent { // a bounded table: drop an arbitrary old network
+				delete(n.silent, id)
+				break
+			}
+		}
+		peers = map[string]time.Time{}
+		n.silent[netID] = peers
+	}
+	for p, at := range peers {
+		if now.Sub(at) > SilentWindow {
+			delete(peers, p)
+		}
+	}
+	if _, ok := peers[peer]; !ok && len(peers) >= maxSilentPer {
+		for p := range peers {
+			delete(peers, p)
+			break
+		}
+	}
+	peers[peer] = now
+	enough := len(peers) >= SilentPeers
+	if enough {
+		delete(n.silent, netID)
+	}
+	n.mu.Unlock()
+	if enough {
+		n.Mark(netID, ReasonNoise3Silent)
+	}
 }
 
 // Mark marks a network for NarrowTTL. Marking a marked network only extends it and is not reported.
@@ -133,6 +185,7 @@ func (n *NarrowPath) Forget(netID string) {
 		return
 	}
 	delete(n.until, netID)
+	delete(n.silent, netID)
 	for i, id := range n.order {
 		if id == netID {
 			n.order = append(n.order[:i], n.order[i+1:]...)
@@ -172,9 +225,9 @@ func WithNarrowRetry(ctx context.Context, req DialRequest, attempt func(ctx cont
 		rung = 0
 	}
 	for {
-		var connected, expired atomic.Bool
+		var connected, expired, progress atomic.Bool
 		r2 := req
-		r2.DialContext = narrowOpener(req, rung, &connected)
+		r2.DialContext = narrowOpener(req, rung, &connected, &progress)
 		actx, cancel := context.WithCancel(ctx)
 		var timer Timer
 		if canLimit {
@@ -183,7 +236,13 @@ func WithNarrowRetry(ctx context.Context, req DialRequest, attempt func(ctx cont
 				budget = n.FirstTry
 			}
 			if rung < len(mssLadder)-1 && budget > 0 {
-				timer = n.clock.AfterFunc(budget, func() { expired.Store(true); cancel() })
+				timer = n.clock.AfterFunc(budget, func() {
+					if progress.Load() {
+						return // the server has answered: slow, not black-holed, let it finish
+					}
+					expired.Store(true)
+					cancel()
+				})
 			}
 		}
 		res, err := attempt(actx, r2)
@@ -201,9 +260,10 @@ func WithNarrowRetry(ctx context.Context, req DialRequest, attempt func(ctx cont
 			return nil, err
 		}
 		if !canLimit {
-			// Connected, then silent until the deadline: a black hole that cannot be answered
-			// here. Say so; do not work around it.
-			if errors.Is(err, context.DeadlineExceeded) {
+			// Connected, then not one byte from the server until the deadline: a black hole that
+			// cannot be answered here. Say so; do not work around it. A path that answered and
+			// was only slow is an ordinary timeout.
+			if errors.Is(err, context.DeadlineExceeded) && !progress.Load() {
 				return nil, fmt.Errorf("%w: %w", err, ErrMSSUnsupported)
 			}
 			return nil, err
@@ -217,7 +277,7 @@ func WithNarrowRetry(ctx context.Context, req DialRequest, attempt func(ctx cont
 
 // narrowOpener returns the socket opener for one rung (-1 = unlimited). It records that a socket
 // connected: only then is a timeout a black hole and not a lost SYN.
-func narrowOpener(req DialRequest, rung int, connected *atomic.Bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func narrowOpener(req DialRequest, rung int, connected, progress *atomic.Bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		var c net.Conn
 		var err error
@@ -239,10 +299,29 @@ func narrowOpener(req DialRequest, rung int, connected *atomic.Bool) func(ctx co
 		}
 		if err == nil {
 			connected.Store(true)
+			c = &countConn{Conn: c, progress: progress}
 		}
 		return c, err
 	}
 }
+
+// countConn notes the first byte the server sends: any incoming byte is handshake progress, and a
+// path that delivers bytes is not a black hole (T3.12).
+type countConn struct {
+	net.Conn
+	progress *atomic.Bool
+}
+
+func (c *countConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.progress.Store(true)
+	}
+	return n, err
+}
+
+// NetConn returns the socket under the counter.
+func (c *countConn) NetConn() net.Conn { return c.Conn }
 
 // hostIsV6 reports whether addr (host:port) names an IPv6 literal; a DNS name is taken as IPv4
 // here (the default opener decides by the resolved family itself).

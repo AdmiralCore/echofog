@@ -231,8 +231,8 @@ func (c *watchConn) Close() error {
 // narrowMarked tells the user that the current network cannot carry noise3 (T3.12). The message
 // says what the connection does instead; on a path of 1200 bytes only TCP with a limited MSS works.
 func (r *Runtime) narrowMarked(_ string, why carrier.NarrowReason) {
-	msg := "Путь сети узкий (MTU 1280 или меньше): UDP-носитель noise3 пропускается, соединение идёт " +
-		"через носители под прикрытием."
+	msg := "UDP-носитель noise3 на этой сети не отвечает нескольким узлам, поэтому пропускается: " +
+		"соединение идёт через другие носители."
 	if why == carrier.ReasonMSS {
 		msg = "Путь сети узкий (MTU 1280 или меньше): TCP-соединение установлено только с ограниченным MSS. " +
 			"На пути с MTU 1200 работает только TCP с ограничением MSS."

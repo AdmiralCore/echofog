@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
 
 // Happy-eyeballs timing (wire.md §1 rule 5): the second attempt starts after
@@ -244,7 +246,7 @@ func Dial(ctx context.Context, req DialRequest, attempts []Attempt, cfg DialConf
 					for j, a := range atts {
 						if a.Suite == objects.SuiteNoise3 && !startedAt[j].IsZero() && !finished[j] &&
 							clock.Now().Sub(startedAt[j]) >= NoAnswerAfter {
-							cfg.Narrow.Mark(netID, ReasonNoise3Silent)
+							cfg.Narrow.NoteNoise3Silent(netID, peerHost(o.a.Addr))
 							break
 						}
 					}
@@ -291,4 +293,17 @@ func dropNoise3OnNarrow(atts []Attempt, n *NarrowPath, netID string) []Attempt {
 		return atts
 	}
 	return out
+}
+
+// peerHost is the host of an attempt's address: the peer a silent noise3 is counted against.
+func peerHost(a *pb.Addr) string {
+	key := AddressKey(a)
+	if key == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(key)
+	if err != nil {
+		return key
+	}
+	return host
 }
