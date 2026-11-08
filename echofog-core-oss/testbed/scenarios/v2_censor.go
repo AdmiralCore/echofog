@@ -72,16 +72,20 @@ func runCensor(ctx context.Context, env Env) Result {
 //   - D7 compares record sizes and gaps with a control of 20 short GETs; reality2-tcp and ws2 carry
 //     long-lived multiplexed sessions, which a control of short pages does not represent (the control
 //     needs a streaming flow and at least 60 flows);
+//   - D6 (cross-layer round trip) reads the timing of the model and is noise on this many flows;
 //   - D4 compares the outer ClientHello with the browser profiles; ws2 offers http/1.1 only, as a
 //     WebSocket dial must, and browserprofiles holds no Chrome http/1.1 hello (it needs a real
 //     capture, T15.2).
 func inconclusiveFor(carrier string) map[string]string {
+	// the same input gives an AUC from 0.37 to 0.93 between runs: the detector reads the timing of the
+	// loopback model on 24 flows against 20 control flows, not a real path
+	const d6 = "reads the timing of the loopback model: the AUC of the same input varies from 0.37 to 0.93 (a real path in T15.2)"
 	const d7 = "the control is 20 short GETs: no streaming flow, fewer than 60 flows"
 	switch carrier {
 	case "reality2-tcp":
-		return map[string]string{"D7": d7}
+		return map[string]string{"D7": d7, "D6": d6}
 	case "ws2":
-		return map[string]string{"D7": d7, "D4": "browserprofiles holds no Chrome http/1.1 JA4 (a real capture is needed, T15.2)"}
+		return map[string]string{"D7": d7, "D6": d6, "D4": "browserprofiles holds no Chrome http/1.1 JA4 (a real capture is needed, T15.2)"}
 	}
 	return nil
 }

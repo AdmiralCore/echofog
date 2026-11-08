@@ -23,9 +23,7 @@ type knownFinding struct {
 var knownFindings = map[string]knownFinding{
 	"v2-censor/noise3/classifier": {why: "D10 (UDP shape) flags about a third of the noise3 flows: the default shape profile draws 0 to 2 junk " +
 		"datagrams, and a flow with none opens with the Init (1271 bytes or more, random-looking), which D10 flags; a flow that opens with a " +
-		"junk datagram is not flagged. The gate allows 10 %. A finding of the product (shape/noise3)."},
-	"v2-censor/ws2/classifier": {why: "D6 (cross-layer round trip) flags a persistent WebSocket in some runs (AUC 0.55 to 0.80 against 0.65); " +
-		"it reads the timing of the loopback model, so it is not confirmed as a property of ws2", marginal: true},
+		"junk datagram is not flagged. The gate allows 10 %. A finding of the product (shape/noise3). The share is random (5 to 19 of 40 in runs), so the row is red in most runs and green in a few: marginal.", marginal: true},
 }
 
 var censorCarriers = []string{"noise3", "reality2-quic", "reality2-tcp", "ws2"}

@@ -86,6 +86,7 @@ type Node struct {
 	Inbox *Inbox
 
 	tw       *identity.Throwaway
+	events   *eventLog
 	devRaw   []byte // the signed device list of the account
 	chat     *chat.Service
 	chatKeys *chatcrypto.Crypto
@@ -119,7 +120,7 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("identity: %w", err)
 	}
-	n := &Node{Name: spec.Name, tw: tw}
+	n := &Node{Name: spec.Name, tw: tw, events: &eventLog{start: time.Now()}}
 	fail := func(err error) (*Node, error) {
 		n.close()
 		return nil, err
@@ -244,6 +245,7 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr(host)}},
 		Country:   func(netip.Addr) (string, bool) { return "ZZ", true },
 	}
+	cfg.Events = n.events
 	if spec.Mutate != nil {
 		spec.Mutate(&cfg)
 	}
@@ -430,5 +432,33 @@ func (w *World) Skip(d time.Duration) { w.clk.shift.Add(int64(d)) }
 
 var errNoExitService = errors.New("scenarios: exit/2 is not built in")
 
+// eventLog keeps the last events a runtime reported, for the row of a scenario that fails.
+type eventLog struct {
+	mu    sync.Mutex
+	start time.Time
+	list  []string
+}
+
+func (l *eventLog) Emit(e node.Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	line := fmt.Sprintf("+%s %s %s", e.At.Sub(l.start).Round(100*time.Millisecond), e.Kind, e.Message)
+	if e.Err != nil {
+		line += " (" + e.Err.Error() + ")"
+	}
+	l.list = append(l.list, line)
+	if len(l.list) > 200 {
+		l.list = l.list[len(l.list)-200:]
+	}
+}
+
 // EventTail is the last n events the runtime reported, newest last, as text.
-func (n *Node) EventTail(int) []string { return nil }
+func (n *Node) EventTail(k int) []string {
+	n.events.mu.Lock()
+	defer n.events.mu.Unlock()
+	l := n.events.list
+	if len(l) > k {
+		l = l[len(l)-k:]
+	}
+	return append([]string(nil), l...)
+}

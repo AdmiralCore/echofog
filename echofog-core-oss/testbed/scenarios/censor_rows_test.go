@@ -180,3 +180,14 @@ func TestCensorClassifierRowStaysRedForADetectorThatIsNotExcluded(t *testing.T) 
 	assert.NotEmpty(t, finding)
 	assert.NotContains(t, finding, "D4")
 }
+
+// D6 reads the timing of the loopback model: the same input gives an AUC from 0.37 to 0.93, so it
+// cannot judge a carrier here, and it is not counted (T15.2 gives it a real path).
+func TestD6IsNotCountedForTheCarriersItCannotJudge(t *testing.T) {
+	for _, c := range []string{"reality2-tcp", "ws2"} {
+		assert.Contains(t, inconclusiveFor(c), "D6", c)
+		assert.NotEmpty(t, inconclusiveFor(c)["D6"], c)
+	}
+	assert.NotContains(t, inconclusiveFor("noise3"), "D6", "D10 is what judges noise3 and it is not touched")
+	assert.Empty(t, inconclusiveFor("noise3"))
+}

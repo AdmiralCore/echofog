@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/chat"
@@ -134,17 +135,43 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) gate.Row {
 	distinct, most := b.Inbox.Count()
 	value := fmt.Sprintf("%d of %d delivered, %d distinct, most times %d", got, len(ids), distinct, most)
 	if len(ids) != 10 || got != 10 || distinct != 10 || most != 1 {
-		return newRow(id, "offline", value, "10 of 10, once each", gate.Red, offlineWhy(a, b, ids))
+		why := offlineWhy(a, b, ids)
+		// after the verdict: does an explicit dial of the peer's card still work? (told apart: a path that
+		// is gone for good, or a session that is not replaced while the outbox waits)
+		pctx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		_, _, derr := a.Dial(pctx, b)
+		stop()
+		if derr != nil {
+			why += "; explicit re-dial after the verdict: " + derr.Error()
+		} else {
+			why += "; explicit re-dial after the verdict: ok"
+		}
+		return newRow(id, "offline", value, "10 of 10, once each", gate.Red, why)
 	}
 	return newRow(id, "offline", value, "10 of 10, once each", gate.Green, "")
 }
 
-// offlineWhy says what the sender knew when the messages did not arrive: its sessions and the state of
-// every message (1 waiting, 2 in a mailbox, 3 delivered, 4 failed).
+// offlineWhy says what the two ends knew when the messages did not arrive: every session with its
+// paths and idle time, the counters of the lab path, the state of every message (1 waiting, 2 in a
+// mailbox, 3 delivered, 4 failed) and the last events of both runtimes.
 func offlineWhy(a, b *Node, ids [][16]byte) string {
 	states := map[chat.State]int{}
 	for _, id := range ids {
 		states[a.Inbox.State(id)]++
 	}
-	return fmt.Sprintf("sender has %d session(s), receiver has %d; message states %v", len(a.RT.Status().Sessions), len(b.RT.Status().Sessions), states)
+	sessions := func(n *Node) string {
+		var parts []string
+		for _, s := range n.RT.Status().Sessions {
+			parts = append(parts, fmt.Sprintf("{%s paths %v active %d idle %s going-away %v}", s.Remote, s.Paths, s.ActivePath,
+				time.Since(s.LastActivity).Round(time.Second), s.GoingAway))
+		}
+		return fmt.Sprintf("%d %s", len(parts), strings.Join(parts, " "))
+	}
+	em := "no netem"
+	if b.Netem != nil {
+		st := b.Netem.Stats()
+		em = fmt.Sprintf("netem forwarded %d dropped %d", st.Forwarded, st.Dropped)
+	}
+	return fmt.Sprintf("sender sessions %s; receiver sessions %s; %s; message states %v; sender events %q; receiver events %q",
+		sessions(a), sessions(b), em, states, a.EventTail(8), b.EventTail(8))
 }
