@@ -235,14 +235,7 @@ func narrowOpener(req DialRequest, rung int, connected *atomic.Bool) func(ctx co
 		case req.DialContext != nil:
 			return nil, ErrMSSUnsupported
 		default:
-			nd := net.Dialer{Control: func(netw, _ string, rc syscall.RawConn) error {
-				var serr error
-				if err := rc.Control(func(fd uintptr) { serr = setTCPMSS(fd, MSSFor(netw == "tcp6", rung)) }); err != nil {
-					return err
-				}
-				return serr
-			}}
-			c, err = nd.DialContext(ctx, network, addr)
+			c, err = dialTCPRung(ctx, network, addr, rung)
 		}
 		if err == nil {
 			connected.Store(true)
@@ -260,4 +253,36 @@ func hostIsV6(addr string) bool {
 	}
 	ip, err := netip.ParseAddr(host)
 	return err == nil && ip.Unmap().Is6()
+}
+
+// DialTCPMSS opens a direct TCP socket with its MSS limited before the SYN: mss is the value for
+// IPv4 literals and hosts (and the IPv6 one is taken from the ladder when mss names a rung's IPv4
+// value). It exists for the node's own opener; mss 0 is a plain dial. Where the OS has no
+// TCP_MAXSEG it returns ErrMSSUnsupported.
+func DialTCPMSS(ctx context.Context, network, addr string, mss int) (net.Conn, error) {
+	if mss == 0 {
+		var nd net.Dialer
+		return nd.DialContext(ctx, network, addr)
+	}
+	for rung := range mssLadder {
+		if mss == mssLadder[rung][0] || mss == mssLadder[rung][1] {
+			return dialTCPRung(ctx, network, addr, rung)
+		}
+	}
+	return nil, fmt.Errorf("carrier: %d is not a rung of the MSS ladder", mss)
+}
+
+// dialTCPRung dials with the MSS of the rung chosen by the family the socket ends up with.
+func dialTCPRung(ctx context.Context, network, addr string, rung int) (net.Conn, error) {
+	if !mssSupported {
+		return nil, ErrMSSUnsupported
+	}
+	nd := net.Dialer{Control: func(netw, _ string, rc syscall.RawConn) error {
+		var serr error
+		if err := rc.Control(func(fd uintptr) { serr = setTCPMSS(fd, MSSFor(netw == "tcp6", rung)) }); err != nil {
+			return err
+		}
+		return serr
+	}}
+	return nd.DialContext(ctx, network, addr)
 }

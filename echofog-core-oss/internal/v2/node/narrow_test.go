@@ -18,7 +18,7 @@ func TestNarrowPathMarkTellsTheUserAndFollowsTheNetwork(t *testing.T) {
 	a.rt.SetNetworkID("net-a")
 	np := node.NarrowPathOf(a.rt)
 	np.Mark("net-a", carrier.ReasonMSS)
-	e, ok := events.find(node.EventNarrowPath)
+	e, ok := narrowEvent(events)
 	if !ok {
 		t.Fatal("no narrow-path event for the UI")
 	}
@@ -34,4 +34,16 @@ func TestNarrowPathMarkTellsTheUserAndFollowsTheNetwork(t *testing.T) {
 	if np.Marked("net-a") {
 		t.Fatal("the mark survived a change of network")
 	}
+}
+
+// narrowEvent returns the narrow-path event the sink captured.
+func narrowEvent(c *captureEvents) (node.Event, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.list {
+		if e.Kind == node.EventNarrowPath {
+			return e, true
+		}
+	}
+	return node.Event{}, false
 }
