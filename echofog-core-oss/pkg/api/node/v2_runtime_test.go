@@ -25,6 +25,7 @@ import (
 	v2node "github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/pkg/dto"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -231,11 +232,9 @@ func eventually(t *testing.T, what string, f func() bool) {
 
 // ---- the tests --------------------------------------------------------------------------------------------
 
-// T11.7: two runtimes built by the facade alone (StartNode at protocol 2) exchange a message, a file
+// Step 1 of TestV2RuntimesPair. T11.7: two runtimes built by the facade alone (StartNode at protocol 2) exchange a message, a file
 // and a group event, over a real handshake, the real chat/2 service and the real files/2 service.
-func TestV2RuntimesExchangeMessageFileAndGroupEvent(t *testing.T) {
-	a, b := newV2Pair(t)
-	aSeesB, bSeesA := befriend(t, a, b)
+func v2StepExchange(t *testing.T, a, b *v2Peer, aSeesB, bSeesA string) {
 	require.Equal(t, a.wantNode(), bSeesA, "the node ID is the one the recovery phrase gives (AD7): SHA-256 of the v1 identity key")
 	require.Equal(t, b.wantNode(), aSeesB)
 
@@ -337,56 +336,18 @@ func TestV2RuntimesExchangeMessageFileAndGroupEvent(t *testing.T) {
 	})
 }
 
-// L4 of T11.3d: the card a contact answers a knock with is the real one, checked by the real
+// Step 2. L4 of T11.3d: the card a contact answers a knock with is the real one, checked by the real
 // objects.VerifyCard, and it reaches the card book; a forged card does not.
-func TestV2KnockAnswerCarriesTheRealCard(t *testing.T) {
-	a, b := newV2Pair(t)
-	aSeesB, bSeesA := befriend(t, a, b)
-	_ = aSeesB
-	before := b.api.v2Ingested()
+func v2StepKnock(t *testing.T, a, b *v2Peer, bSeesA string) {
+	before, aBefore := b.api.v2Ingested(), a.api.v2Ingested()
 	require.NoError(t, b.api.v2App().Knock(context.Background(), bSeesA))
 	eventually(t, "a's card comes back and is ingested", func() bool { return b.api.v2Ingested() > before })
-	require.Zero(t, a.api.v2Ingested(), "a did not knock, so a took no card")
+	require.Equal(t, aBefore, a.api.v2Ingested(), "a did not knock, so a took no card")
 }
 
-// AD7: the v2 data sits in <profile>/v2, next to the v1 database and not in it.
-func TestV2RuntimeKeepsItsDataInTheV2Directory(t *testing.T) {
-	a, _ := newV2Pair(t)
-	dir, err := a.node.V2DataDir()
-	require.NoError(t, err)
-	require.Equal(t, filepath.Join(filepath.Dir(a.node.Cfg.Storage.DatabasePath), "v2"), dir)
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	require.NotEmpty(t, entries, "the v2 store is there")
-	require.NotEqual(t, filepath.Dir(a.node.Cfg.Storage.DatabasePath), dir)
-	require.True(t, a.api.V2Running())
-}
-
-// The mode saved for the next start applies by a restart of the v2 runtime, without the UI asking
-// twice, and the contacts survive it.
-func TestV2RuntimeRestartsWhenTheAccessModeChanges(t *testing.T) {
-	a, b := newV2Pair(t)
-	_, bSeesA := befriend(t, a, b)
-	st, err := a.api.GetAccessStatus()
-	require.NoError(t, err)
-	require.Equal(t, "public", st.Mode)
-
-	require.NoError(t, a.api.SetAccessMode("hidden"))
-	eventually(t, "the runtime runs in hidden mode", func() bool {
-		st, err := a.api.GetAccessStatus()
-		return err == nil && st.Mode == "hidden" && st.NextMode == "" && a.api.V2Running()
-	})
-	cs, err := a.api.GetContacts()
-	require.NoError(t, err)
-	require.Len(t, cs, 1, "the contact is still there after the restart")
-	_ = bSeesA
-}
-
-// The runtime stops and starts again on the same profile (what the restart for a new mode does): the
+// Step 3. The runtime stops and starts again on the same profile (what the restart for a new mode does): the
 // node, the contacts and the data are the same afterwards.
-func TestV2RuntimeStopStartKeepsIdentityAndData(t *testing.T) {
-	a, b := newV2Pair(t)
-	_, _ = befriend(t, a, b)
+func v2StepStopStart(t *testing.T, a *v2Peer) {
 	before := a.wantNode()
 	a.api.stopV2()
 	require.False(t, a.api.V2Running())
@@ -402,17 +363,114 @@ func TestV2RuntimeStopStartKeepsIdentityAndData(t *testing.T) {
 	require.Equal(t, before, a.wantNode())
 }
 
-// Exit without hanging goroutines: after StopNode the goroutines the stack started are gone.
-func TestV2RuntimeStopLeavesNoGoroutines(t *testing.T) {
+// Step 4. The mode saved for the next start applies by a restart of the v2 runtime, without the UI asking
+// twice, and the contacts survive it.
+func v2StepModeRestart(t *testing.T, a *v2Peer) {
+	st, err := a.api.GetAccessStatus()
+	require.NoError(t, err)
+	require.Equal(t, "public", st.Mode)
+	require.NoError(t, a.api.SetAccessMode("hidden"))
+	eventually(t, "the runtime runs in hidden mode", func() bool {
+		st, err := a.api.GetAccessStatus()
+		return err == nil && st.Mode == "hidden" && st.NextMode == "" && a.api.V2Running()
+	})
+	cs, err := a.api.GetContacts()
+	require.NoError(t, err)
+	require.Len(t, cs, 1, "the contact is still there after the restart")
+}
+
+// Step 5. Sessions in use (a stream is open, as a call or a transfer holds one) are ended when the runtime
+// stops or restarts, not left to drain for the 15 s of a GOAWAY (F1 of the T11.7 acceptance, N2).
+func v2StepSessionsEnd(t *testing.T, a, b *v2Peer, aSeesB string) {
+	_, err := a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: "сессия открыта"})
+	require.NoError(t, err)
+	a.api.v2l.Lock()
+	rt := a.api.v2s.rt
+	a.api.v2l.Unlock()
+	eventually(t, "a has a session to b", func() bool {
+		for _, ss := range rt.Status().Sessions {
+			if ss.Node == v2node.NodeID(b.api.v2s.rt.Status().Node) {
+				return true
+			}
+		}
+		return false
+	})
+	bs := b.api.v2s.rt.Status()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, held, err := rt.Open(ctx, bs.Device, service.Chat, v2node.DialOpt{})
+	require.NoError(t, err, "a stream is held open on the session")
+	_ = held
+	require.Positive(t, sessionGoroutines())
+	b.api.StopNode() // so that b cannot dial the new runtime again
+	require.NoError(t, a.api.restartV2())
+	requireNoSessions(t, "after the restart of a")
+	require.True(t, a.api.V2Running())
+}
+
+// Two runtimes in one process, one scenario: a test per step would register a profile and a node each, and
+// the nodes of one Windows test binary run out of locked memory (memguard).
+func TestV2RuntimesPair(t *testing.T) {
+	a, b := newV2Pair(t)
+	aSeesB, bSeesA := befriend(t, a, b)
+	steps := []struct {
+		name string
+		do   func(t *testing.T)
+	}{
+		{"message, file and group event", func(t *testing.T) { v2StepExchange(t, a, b, aSeesB, bSeesA) }},
+		{"knock answer carries the real card", func(t *testing.T) { v2StepKnock(t, a, b, bSeesA) }},
+		{"stop and restart end the sessions", func(t *testing.T) { v2StepSessionsEnd(t, a, b, aSeesB) }},
+		{"stop and start keep identity and data", func(t *testing.T) { v2StepStopStart(t, a) }},
+		{"access mode change restarts the runtime", func(t *testing.T) { v2StepModeRestart(t, a) }},
+	}
+	for _, st := range steps {
+		if !t.Run(st.name, st.do) {
+			t.FailNow() // the steps build on each other
+		}
+	}
+}
+
+// One runtime on its own: the data directory (AD7), the goroutines after StopNode, and a restart that cannot
+// start the new mode (F2 of the T11.7 acceptance).
+func TestV2RuntimeSolo(t *testing.T) {
 	a := newV2Peer(t, "solo")
 	a.other = a
 	time.Sleep(100 * time.Millisecond)
 	before := runtime.NumGoroutine()
-	require.NoError(t, a.api.StartNode())
-	require.True(t, a.api.V2Running())
-	a.api.StopNode()
-	require.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+2 }, 15*time.Second, 100*time.Millisecond,
-		"goroutines after stop: %d, before start: %d", runtime.NumGoroutine(), before)
+	a.start()
+	t.Run("data sits in the v2 directory", func(t *testing.T) {
+		dir, err := a.node.V2DataDir()
+		require.NoError(t, err)
+		require.Equal(t, filepath.Join(filepath.Dir(a.node.Cfg.Storage.DatabasePath), "v2"), dir)
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		require.NotEmpty(t, entries, "the v2 store is there")
+		require.NotEqual(t, filepath.Dir(a.node.Cfg.Storage.DatabasePath), dir)
+		require.True(t, a.api.V2Running())
+	})
+	t.Run("a failed restart goes back to the old mode", func(t *testing.T) {
+		listen := a.api.v2h.Listen
+		var broken atomic.Bool
+		a.api.v2h.Listen = func(dev *identity.Device) ([]carrier.Listener, []cards.Listener) {
+			if broken.Load() {
+				return nil, nil // hidden mode cannot start without an address
+			}
+			return listen(dev)
+		}
+		broken.Store(true)
+		err := a.api.SetAccessMode("hidden")
+		require.Error(t, err, "the user is told the new mode did not start")
+		require.True(t, a.api.V2Running(), "the runtime runs again, in the old mode")
+		st, err := a.api.GetAccessStatus()
+		require.NoError(t, err)
+		require.Equal(t, "public", st.Mode, "the old mode is saved again")
+		broken.Store(false)
+	})
+	t.Run("stop leaves no goroutines", func(t *testing.T) {
+		a.api.StopNode()
+		require.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+2 }, 15*time.Second, 100*time.Millisecond,
+			"goroutines after stop: %d, before start: %d", runtime.NumGoroutine(), before)
+	})
 }
 
 // Protocol 1 never reaches the v2 stack.
@@ -422,8 +480,6 @@ func TestProtocol1DoesNotStartTheV2Stack(t *testing.T) {
 	require.False(t, api.V2Running())
 	require.Nil(t, api.v2App())
 }
-
-// ---- sessions are closed when a runtime stops (F1 of the T11.7 acceptance) ------------------------------------
 
 // sessionGoroutines counts the goroutines of live sessions: the mux loops, the GoAway waiting for a drain.
 func sessionGoroutines() int {
@@ -443,54 +499,4 @@ func requireNoSessions(t *testing.T, what string) {
 	t.Helper()
 	require.Eventually(t, func() bool { return sessionGoroutines() == 0 }, 5*time.Second, 50*time.Millisecond,
 		"%s: %d session goroutines are still running", what, sessionGoroutines())
-}
-
-// Two runtimes with a live session between them: stopping both leaves no session behind. A stop does not
-// wait for the 15 s drain of a GOAWAY; it closes the sessions.
-func TestV2StoppingBothNodesClosesTheirSessions(t *testing.T) {
-	a, b := newV2Pair(t)
-	aSeesB, _ := befriend(t, a, b)
-	_, err := a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: "сессия открыта"})
-	require.NoError(t, err)
-	eventually(t, "a session is up", func() bool { return sessionGoroutines() > 0 })
-	a.api.StopNode()
-	b.api.StopNode()
-	requireNoSessions(t, "after both nodes stopped")
-}
-
-// A restart (a new access mode) closes the sessions of the old runtime: right after it no session goroutine
-// is left. The peer is stopped first, so that it cannot dial the new runtime again.
-func TestV2RestartClosesTheSessionsOfTheOldRuntime(t *testing.T) {
-	a, b := newV2Pair(t)
-	aSeesB, _ := befriend(t, a, b)
-	_, err := a.api.ChatSend(ChatRef{Kind: "dm", ID: aSeesB}, SendRequest{Text: "сессия открыта"})
-	require.NoError(t, err)
-	eventually(t, "a session is up", func() bool { return sessionGoroutines() > 0 })
-	b.api.StopNode()
-	require.NoError(t, a.api.restartV2())
-	requireNoSessions(t, "after the restart of a")
-	require.True(t, a.api.V2Running())
-}
-
-// F2 of the T11.7 acceptance: a restart that cannot start the runtime in the new mode goes back to the old
-// mode, so the facade is not left without a network.
-func TestV2FailedRestartGoesBackToTheOldMode(t *testing.T) {
-	a := newV2Peer(t, "rollback")
-	a.other = a
-	listen := a.api.v2h.Listen
-	var broken atomic.Bool
-	a.api.v2h.Listen = func(dev *identity.Device) ([]carrier.Listener, []cards.Listener) {
-		if broken.Load() {
-			return nil, nil // hidden mode cannot start without an address
-		}
-		return listen(dev)
-	}
-	a.start()
-	broken.Store(true)
-	err := a.api.SetAccessMode("hidden")
-	require.Error(t, err, "the user is told the new mode did not start")
-	require.True(t, a.api.V2Running(), "the runtime runs again, in the old mode")
-	st, err := a.api.GetAccessStatus()
-	require.NoError(t, err)
-	require.Equal(t, "public", st.Mode, "the old mode is saved again")
 }
