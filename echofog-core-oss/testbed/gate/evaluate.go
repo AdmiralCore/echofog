@@ -66,6 +66,7 @@ func Evaluate(in Input) Result {
 	}
 	res.Rows = append(res.Rows, regressionRow(in, res.Changes))
 	res.Rows = append(res.Rows, speedRows(in)...)
+	res.Rows = append(res.Rows, scenarioRows(in.Scenarios)...)
 
 	res.Verdict = verdictOf(res.Rows)
 	for _, r := range res.Rows {

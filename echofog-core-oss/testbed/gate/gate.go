@@ -138,6 +138,7 @@ type Input struct {
 	Behaviour *behaviour.Report
 	Baseline  *Baseline
 	Speed     map[string]float64 // this run's `efv2 echo` Mbit/s per carrier; nil when efv2 did not run
+	Scenarios []ScenarioResult   // T15.1: the scenarios, model and live
 	Now       time.Time
 	Commit    string
 }

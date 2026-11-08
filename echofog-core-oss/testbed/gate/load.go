@@ -111,7 +111,7 @@ func LoadSpeed(r io.Reader) (map[string]float64, error) {
 
 // Files names what a nightly run reads; empty means "not given".
 type Files struct {
-	Report, Behaviour, Baseline, Speed string
+	Report, Behaviour, Baseline, Speed, Scenarios string
 }
 
 func open[T any](path string, load func(io.Reader) (T, error)) (T, error) {
