@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/app"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
@@ -82,12 +83,15 @@ type Node struct {
 	// Inbox records the chat events when the node has chat.
 	Inbox *Inbox
 
-	tw      *identity.Throwaway
-	app     *app.App
-	links   *links.Service
-	store   *store.Store
-	builder *cards.CardBuilder
-	started bool
+	tw     *identity.Throwaway
+	app    *app.App
+	access *access.Manager
+	// AccessAddr is where the invitations of a hidden node listen (noise3); empty on other nodes.
+	AccessAddr string
+	links      *links.Service
+	store      *store.Store
+	builder    *cards.CardBuilder
+	started    bool
 }
 
 // NewWorld returns an empty world; dir holds the nodes' stores.
@@ -198,6 +202,22 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 	if err != nil {
 		return fail(fmt.Errorf("store: %w", err))
 	}
+	var mgr *access.Manager
+	if spec.Hidden {
+		port, err := freeUDPPort(host)
+		if err != nil {
+			return fail(err)
+		}
+		n.AccessAddr = net.JoinHostPort(host, strconv.Itoa(port))
+		mgr, err = access.New(access.Config{
+			KV: n.store.Store(access.Namespace), Cards: n.builder, ContactsKey: tw.Device.Masking(),
+			Listeners: []cards.Listener{{Suite: objects.SuiteNoise3, Host: host, Port: uint32(port)}},
+		})
+		if err != nil {
+			return fail(fmt.Errorf("access: %w", err))
+		}
+		n.access = mgr
+	}
 	clk, err := clock.New(clock.Config{Now: w.clk.Now})
 	if err != nil {
 		return fail(err)
@@ -208,7 +228,8 @@ func (w *World) Add(spec NodeSpec) (*Node, error) {
 		ListenerSources: sources, Chat: spec.Chat,
 		// path migration is what AddPath, NetworkChanged and the punch upgrade need; no production code
 		// sets it yet (finding of T15.1), so the world sets it as the node tests do
-		Features:  []uint32{uint32(frame.FeaturePathMigration)},
+		Features:  []uint32{uint32(frame.FeaturePathMigration), uint32(frame.FeatureCardPush)},
+		Access:    mgr,
 		LocalInfo: carrier.LocalInfo{Addrs: []netip.Addr{netip.MustParseAddr(host)}},
 		Country:   func(netip.Addr) (string, bool) { return "ZZ", true },
 	}
@@ -291,6 +312,9 @@ func (n *Node) close() {
 		if em != nil {
 			em.Close()
 		}
+	}
+	if n.access != nil {
+		n.access.Close()
 	}
 	if n.store != nil {
 		_ = n.store.Close()
