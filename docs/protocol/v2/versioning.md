@@ -170,6 +170,16 @@ an event's `kind` MUST:
 Conformance for the v2 log is tested in T7.5a: an event with an unknown kind is stored, synced,
 forwarded byte-for-byte with its signature, and rendered as the placeholder without a crash.
 
+Two examples from the group features (conversation-log.md §2.5):
+
+- `group.close` is a new event kind (10). A client that does not know it applies rules 1 to 6 above:
+  it stores, syncs and forwards the event, and shows the placeholder. It does not know the group is
+  closed, so it does not apply the close rules (later joins and invitations stay visible to it). The
+  close rules bind the clients that know the kind.
+- `att` is an optional field 6 of the `MSG` body. A client that does not know `att` keeps the field as an
+  unknown protobuf field (rule 3 of §3.5), keeps the signature valid, and shows the message text without
+  the file card. `MSG` is a known kind, so no placeholder is shown for the event.
+
 ## 4. Dual stack for future major versions
 
 When v3 appears, a node MAY support `{EchoFog/2, EchoFog/3}` suites at once:

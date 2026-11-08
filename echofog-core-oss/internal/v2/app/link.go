@@ -13,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/tun"
 )
 
 const (
@@ -186,6 +187,16 @@ func UserMessage(err error) string {
 		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
 	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff):
 		return "Эта возможность пока недоступна"
+	case errors.Is(err, ErrWholeOff):
+		return "Режим «весь компьютер» недоступен в этой сборке"
+	case errors.Is(err, tun.ErrUnsupported):
+		return "Режим «весь компьютер» на этой системе пока не поддерживается"
+	case errors.Is(err, tun.ErrNoPrivilege):
+		return "Нужны права администратора: подтвердите запрос системы и повторите"
+	case errors.Is(err, ErrWholeStop):
+		return "Не удалось полностью отключить защиту: интернет остаётся заблокированным. Отключение можно повторить"
+	case errors.Is(err, ErrNeedVPN):
+		return "Сначала запустите VPN"
 	case errors.Is(err, ErrNotExit):
 		return "Это не ссылка выхода: узел не раздаёт соединение"
 	case errors.Is(err, ErrVPNRunning):
@@ -204,6 +215,18 @@ func UserMessage(err error) string {
 		return "Неизвестный режим уведомлений"
 	case errors.Is(err, ErrInvite):
 		return "Ссылка-приглашение не подходит" // one text for every reason the link does not work
+	case errors.Is(err, ErrSavedFull):
+		return "Слишком много сохранённых сообщений: удалите ненужные"
+	case errors.Is(err, ErrBadSaved):
+		return "Сообщение нельзя сохранить: данные указаны неверно"
+	case errors.Is(err, ErrAlreadyMember):
+		return "Этот контакт уже в группе"
+	case errors.Is(err, ErrSnapshotPassword):
+		return "Пароль для файла группы слишком короткий: нужно не меньше 8 символов"
+	case errors.Is(err, ErrSnapshotVersion):
+		return "Файл группы создан другой версией EchoFog и не может быть открыт"
+	case errors.Is(err, ErrSnapshotFile):
+		return "Это не файл группы, или пароль неверный"
 	case errors.Is(err, ErrBadGroup):
 		return "Название или вид группы указаны неверно"
 	case errors.Is(err, ErrNoRight), errors.Is(err, convlog.ErrForbidden):

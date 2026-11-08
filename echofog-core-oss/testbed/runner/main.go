@@ -870,6 +870,10 @@ func main() {
 	if err := validateV2Flags(*scenario); err != nil {
 		fatalf("%v", err)
 	}
+	if isV2LiveScenario(*scenario) {
+		// prepared, not runnable until the efv2 CLI can drive it (v2live.go); nothing is started
+		os.Exit(runV2Live(*scenario, os.Stdout))
+	}
 	release, err := acquireRunLock(*runLockPath)
 	if err != nil {
 		fatalf("%v", err)

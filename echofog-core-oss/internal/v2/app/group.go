@@ -88,6 +88,7 @@ type GroupInvite struct {
 	Uses, Used                 uint32
 	Revoked, Approval          bool
 	Link                       string // only for one made on this node
+	Web                        string // its https form, when the node has a join page
 }
 
 // InvitePreview is what a link shows before joining.
@@ -833,7 +834,7 @@ func (a *App) GroupInviteCreate(ctx context.Context, id string, s InviteSpec) (G
 	}
 	inv, _ := cv.Log().InviteOf(c, nonce)
 	out := inviteInfo(inv)
-	out.Link = link
+	out.Link, out.Web = link, a.webInvite(link)
 	return out, nil
 }
 
@@ -849,6 +850,7 @@ func (a *App) GroupInvites(id string) ([]GroupInvite, error) {
 		gi := inviteInfo(i)
 		if i.Issuer == self && !i.Spent() {
 			gi.Link, _ = b.signInvite(r.Genesis, i.N, i.Exp, i.Approval)
+			gi.Web = a.webInvite(gi.Link)
 		}
 		out = append(out, gi)
 	}
@@ -1235,7 +1237,8 @@ func (a *App) onGroupChange(ch convlog.Change) {
 	cv := a.cfg.Convs
 	l := cv.Log()
 	for _, m := range ch.Members {
-		if len(m.Member) == 32 && types.PeerPubKeyToID(types.PeerPublicKey(m.Member)) == l.Self() {
+		// leaving the group is writing one's own removal: the leaver is not told they were removed
+		if len(m.Member) == 32 && types.PeerPubKeyToID(types.PeerPublicKey(m.Member)) == l.Self() && m.Author != l.Self() {
 			switch m.Action {
 			case convlog.MemberRemove:
 				a.emitGroup(GroupEvent{Kind: "removed", Group: ch.Conv.Group, Reason: "removed"})
@@ -1276,4 +1279,44 @@ func (a *App) onGroupChange(ch convlog.Change) {
 		return
 	}
 	a.joinNow(context.Background(), b, cv, ch.Conv)
+}
+
+// ErrAlreadyMember reports an invitation to somebody who is in the group.
+var ErrAlreadyMember = errors.New("app: already in the group")
+
+// GroupAddMember invites a contact to a group: a personal invitation in their chat, made with the
+// existing invitation (one use, a week). They are a member only once they accept it (JoinGroup); until
+// then nothing changes in the group.
+func (a *App) GroupAddMember(ctx context.Context, id, node string) error {
+	_, cv, c, _, err := a.grp(id)
+	if err != nil {
+		return err
+	}
+	nb, ok := nodeBytes(node)
+	if !ok {
+		return ErrNoContact
+	}
+	a.cmu.Lock()
+	rec, lerr := a.loadContact(node)
+	a.cmu.Unlock()
+	switch {
+	case lerr != nil:
+		return ErrNoContact
+	case rec.Blocked:
+		return ErrBlocked
+	}
+	if a.cfg.PubOf != nil {
+		if pub, perr := a.cfg.PubOf(ctx, nb); perr == nil && convsync.NodeOf(pub) == nb && cv.Log().Participant(c, types.PeerPubKeyToID(pub)) {
+			return ErrAlreadyMember
+		}
+	}
+	inv, err := a.GroupInviteCreate(ctx, id, InviteSpec{TTL: 7 * 24 * time.Hour, Uses: 1})
+	if err != nil {
+		return err
+	}
+	// a message that is kept but not yet delivered is sent: the sync or a mailbox takes it on
+	if m, err := a.ChatSend(ctx, ChatRef{Kind: KindDM, ID: node}, SendReq{Text: inv.Link}); err != nil && m.ID == "" {
+		return err
+	}
+	return nil
 }

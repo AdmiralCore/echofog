@@ -48,7 +48,9 @@ func (n *NodeApi) holdPath() string {
 // KillSwitchHeld reports whether a helper from an earlier run holds the computer's traffic: the
 // app went away without turning whole-computer mode off, and with the kill switch on nothing gets
 // out until it reconnects or the user lets the traffic go (ReleaseKillSwitch). Works before login.
-func KillSwitchHeld() bool { return tunmode.Held(tunmode.DefaultHoldFile()) }
+func KillSwitchHeld() bool {
+	return tunmode.Held(tunmode.DefaultHoldFile()) || v2KillSwitchHeld()
+}
 
 // ReleaseKillSwitch lets the computer back on its own network after a held kill switch.
 func ReleaseKillSwitch() error {
@@ -56,11 +58,14 @@ func ReleaseKillSwitch() error {
 		return err
 	}
 	network.SetDirectInterface(0)
-	return nil
+	return v2ReleaseKillSwitch()
 }
 
 // KillSwitchOn reports whether the kill switch is on.
 func (n *NodeApi) KillSwitchOn() bool {
+	if b := n.v2vpn(); b != nil {
+		return b.KillSwitchOn()
+	}
 	if n.v2Unavailable() != nil {
 		return false
 	}
@@ -69,6 +74,9 @@ func (n *NodeApi) KillSwitchOn() bool {
 
 // SetKillSwitch saves the kill switch and applies it at once, to a running TUN too.
 func (n *NodeApi) SetKillSwitch(on bool) error {
+	if b := n.v2vpn(); b != nil {
+		return b.SetKillSwitch(on)
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}
@@ -117,6 +125,9 @@ func (n *NodeApi) adoptHeldTun() {
 
 // WholeComputerSupported reports whether this OS can route all traffic through EchoFog.
 func (n *NodeApi) WholeComputerSupported() bool {
+	if b := n.v2vpn(); b != nil {
+		return b.WholeComputerSupported()
+	}
 	if n.v2Unavailable() != nil {
 		return false
 	}
@@ -126,6 +137,9 @@ func (n *NodeApi) WholeComputerSupported() bool {
 // SetWholeComputer turns whole-computer mode on or off. Turning it on asks for administrator
 // rights (UAC on Windows, polkit on Linux) and requires the proxy to be running.
 func (n *NodeApi) SetWholeComputer(on bool) error {
+	if b := n.v2vpn(); b != nil {
+		return b.SetWholeComputer(on)
+	}
 	if err := n.v2Unavailable(); err != nil {
 		return ErrV2NotBuilt
 	}

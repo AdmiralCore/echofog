@@ -448,6 +448,8 @@ func TestV2RuntimeSolo(t *testing.T) {
 		require.NotEqual(t, filepath.Dir(a.node.Cfg.Storage.DatabasePath), dir)
 		require.True(t, a.api.V2Running())
 	})
+	order := &orderVPN{api: a.api}
+	a.api.AttachV2VPN(order)
 	t.Run("a failed restart goes back to the old mode", func(t *testing.T) {
 		listen := a.api.v2h.Listen
 		var broken atomic.Bool
@@ -468,6 +470,8 @@ func TestV2RuntimeSolo(t *testing.T) {
 	})
 	t.Run("stop leaves no goroutines", func(t *testing.T) {
 		a.api.StopNode()
+		require.Equal(t, []bool{true}, order.seen, "the VPN stopped once, while the v2 runtime still ran (protection, VPN, node)")
+		require.False(t, a.api.V2Running())
 		require.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+2 }, 15*time.Second, 100*time.Millisecond,
 			"goroutines after stop: %d, before start: %d", runtime.NumGoroutine(), before)
 	})
@@ -499,4 +503,17 @@ func requireNoSessions(t *testing.T, what string) {
 	t.Helper()
 	require.Eventually(t, func() bool { return sessionGoroutines() == 0 }, 5*time.Second, 50*time.Millisecond,
 		"%s: %d session goroutines are still running", what, sessionGoroutines())
+}
+
+// orderVPN records whether the v2 runtime still ran when the VPN was stopped: StopNode takes the protection
+// down first, then the VPN, then the node (T10.6b: a stopped runtime cannot lift the kill switch).
+type orderVPN struct {
+	fakeVPN
+	api  *NodeApi
+	seen []bool
+}
+
+func (o *orderVPN) VPNStop() error {
+	o.seen = append(o.seen, o.api.V2Running())
+	return nil
 }

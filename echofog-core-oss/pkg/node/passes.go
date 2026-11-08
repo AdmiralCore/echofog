@@ -90,7 +90,7 @@ type PassView struct {
 	Label      string       `json:"label,omitempty"`
 	Link       string       `json:"link"`
 	WebLink    string       `json:"webLink"` // the https form, which messengers make tappable
-	State      string       `json:"state"` // active, expired, used_up, revoked
+	State      string       `json:"state"`   // active, expired, used_up, revoked
 	Created    int64        `json:"created"`
 	Expires    int64        `json:"expires,omitempty"`
 	MaxDevices int          `json:"maxDevices"`
