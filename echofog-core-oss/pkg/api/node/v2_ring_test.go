@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/services/convlog"
 	"github.com/echofog/echofog-core/internal/v2/app"
-	"github.com/echofog/echofog-core/internal/config"
 	coreNode "github.com/echofog/echofog-core/pkg/node"
 )
 

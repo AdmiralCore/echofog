@@ -287,6 +287,11 @@ func (a *App) startEventListeners(nodeAPI *api.NodeApi, ctx context.Context) {
 			a.emitIncomingCall(ctx, msg)
 		}
 	}()
+	// protocol 2: a personal call invitation arrives as a chat message, not through MessageHandler
+	nodeAPI.OnIncomingCall(func(c api.IncomingCall) {
+		event, payload := callEventOf(c)
+		safeEventsEmit(ctx, event, payload)
+	})
 	// a message of ours was handed to a relay, confirmed by the recipient, or given up
 	nodeAPI.OnMessageState(func(ev api.MessageStateDTO) {
 		safeEventsEmit(ctx, "message:state", ev)
