@@ -356,6 +356,10 @@ type ClientConfig struct {
 	// Installed answers "are there filters" without the helper: a restart of the application asks
 	// before any helper (and any prompt for rights) exists. Nil: ask the helper when there is one.
 	Installed func(ctx context.Context) (bool, error)
+	// Now is the clock of the refusal memory; nil means time.Now. DenyWindow is how long a refused
+	// prompt for rights is remembered (zero: 30 s).
+	Now        func() time.Time
+	DenyWindow time.Duration
 }
 
 // Client implements tun.Firewall, tun.Tunnel and tun.DNSGuard over the helper.

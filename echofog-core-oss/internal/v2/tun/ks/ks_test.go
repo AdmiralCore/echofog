@@ -477,3 +477,73 @@ func TestTheHelperRefusesAForeignResolver(t *testing.T) {
 		_ = a.Close()
 	}
 }
+
+// G: the user refuses the prompt for rights once; the operations that follow within the same action
+// (restore DNS, then remove the filters) do not ask again. Later, a new action asks anew.
+func TestRefusedPromptIsNotAskedTwice(t *testing.T) {
+	var starts atomic.Int32
+	now := time.Unix(1_800_000_000, 0)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	c := ks.NewClient(ks.ClientConfig{
+		Connect: func(context.Context) (net.Conn, error) {
+			starts.Add(1)
+			return nil, tun.ErrNoPrivilege
+		},
+		Now: clock,
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	if err := c.Restore(ctx); !errors.Is(err, tun.ErrNoPrivilege) {
+		t.Fatalf("Restore = %v", err)
+	}
+	if err := c.Remove(ctx); !errors.Is(err, tun.ErrNoPrivilege) {
+		t.Fatalf("Remove = %v", err)
+	}
+	if err := c.Install(ctx, rules(t)); !errors.Is(err, tun.ErrNoPrivilege) {
+		t.Fatalf("Install = %v", err)
+	}
+	if starts.Load() != 1 {
+		t.Fatalf("the prompt was shown %d times for one refusal", starts.Load())
+	}
+	mu.Lock()
+	now = now.Add(5 * time.Minute)
+	mu.Unlock()
+	_ = c.Remove(ctx)
+	if starts.Load() != 2 {
+		t.Fatalf("a new action after the window must ask again: %d starts", starts.Load())
+	}
+}
+
+// Only a refusal is remembered: a helper that failed to start for another reason is tried again.
+func TestOtherFailuresAreRetried(t *testing.T) {
+	var starts atomic.Int32
+	c := ks.NewClient(ks.ClientConfig{Connect: func(context.Context) (net.Conn, error) {
+		starts.Add(1)
+		return nil, errors.New("the helper did not start")
+	}})
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.Restore(ctx)
+	_ = c.Remove(ctx)
+	if starts.Load() != 2 {
+		t.Fatalf("starts %d, want 2", starts.Load())
+	}
+}
+
+// D: Remove lets the helper go: it has nothing left to do and must not stay with administrator rights.
+func TestRemoveReleasesTheHelper(t *testing.T) {
+	w := newWorld(t)
+	if err := w.client.Install(ctx, rules(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.client.Remove(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-w.served:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the helper is still connected after Remove")
+	}
+	if w.client.Alive(ctx) {
+		t.Fatal("alive after Remove")
+	}
+}
