@@ -1150,7 +1150,7 @@ func (s *Session) tick(now time.Time) {
 		if silent >= tm.PathDead {
 			// Dead: abandoned (PATH_ABANDON on another path when there is one).
 			if s.AbandonPath(p.id, frame.CodeTimeout) != nil {
-				s.failPath(p, fmt.Errorf("%w: no authenticated traffic for %v", ErrPathFailed, tm.PathDead))
+				s.failPath(p, fmt.Errorf("%w: %w: no authenticated traffic for %v", ErrPathFailed, ErrPathSilent, tm.PathDead))
 			}
 			continue
 		}
