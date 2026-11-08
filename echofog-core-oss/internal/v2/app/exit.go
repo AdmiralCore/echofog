@@ -83,6 +83,9 @@ type exitState struct {
 	gen     int // bumped by every change of the open window, to stop an old timer
 }
 
+// ExitSupported reports whether this app can host an exit.
+func (a *App) ExitSupported() bool { return a.cfg.ExitHost != nil }
+
 func (a *App) exitAccess() *ExitAccess {
 	e := &a.exit
 	e.mu.Lock()

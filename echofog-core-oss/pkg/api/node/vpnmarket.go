@@ -39,6 +39,42 @@ type SharingStatus struct {
 	PaymentsReady bool   `json:"paymentsReady"`
 	PayAddress    string `json:"payAddress"`
 	EarnedUSDT    string `json:"earnedUsdt"` // credited from clients so far
+	// Access is who the exit serves (protocol 2, T10.9); nil at protocol 1.
+	Access *SharingAccess `json:"access,omitempty"`
+}
+
+// SharingAccess is the part of the sharing status that is about people: the link, who is connected,
+// who waits for the owner and who is confirmed.
+type SharingAccess struct {
+	Link      string          `json:"link"`
+	Web       string          `json:"web"`
+	AnyUntil  int64           `json:"anyUntil"` // the end of the open access, 0 when closed
+	Clients   []ExitClientDTO `json:"clients"`
+	Waiting   []ExitWaitDTO   `json:"waiting"`
+	Confirmed []ExitKnownDTO  `json:"confirmed"`
+}
+
+// ExitClientDTO is a client connected now.
+type ExitClientDTO struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	ByLink  bool   `json:"byLink"`
+	Streams int    `json:"streams"`
+}
+
+// ExitWaitDTO is a client that was turned away and waits for the owner.
+type ExitWaitDTO struct {
+	ID    string `json:"id"`
+	Since int64  `json:"since"`
+	Last  int64  `json:"last"`
+	Tries int    `json:"tries"`
+}
+
+// ExitKnownDTO is a confirmed client.
+type ExitKnownDTO struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Since int64  `json:"since"`
 }
 
 // ExitNode is one exit found in the network, joined with this client's own measurements
