@@ -105,3 +105,33 @@ func TestTurningTheExitOffTakesTheOpenWindowBack(t *testing.T) {
 		t.Fatal("the exit admits a stranger after the window was taken back")
 	}
 }
+
+// A client that came through the open window has no label and is marked as one that came by the
+// link; once the owner confirms the same identity it gets its label and the mark goes away.
+func TestAClientOfTheOpenWindowIsMarkedByLink(t *testing.T) {
+	a, h := newExitHostRig(t)
+	ctx := context.Background()
+	if _, err := a.ExitEnable(ctx, app.ExitSettings{}); err != nil {
+		t.Fatalf("ExitEnable: %v", err)
+	}
+	h.setStatus(node.ExitStatus{Enabled: true, Clients: []node.ExitClient{{Node: xid(2), Streams: 1}}})
+	st := a.ExitStatus()
+	if len(st.Clients) != 1 {
+		t.Fatalf("status %+v", st)
+	}
+	if !st.Clients[0].ByLink || st.Clients[0].Label != "" {
+		t.Fatalf("a client nobody confirmed is not marked by link: %+v", st.Clients[0])
+	}
+	o := h.options()
+	if o.Refused == nil {
+		t.Fatal("the exit does not report a refused client")
+	}
+	o.Refused(xid(2), netip.AddrPort{})
+	if err := a.ExitApprove(xhex(2), "B"); err != nil {
+		t.Fatalf("ExitApprove: %v", err)
+	}
+	st = a.ExitStatus()
+	if len(st.Clients) != 1 || st.Clients[0].ByLink || st.Clients[0].Label != "B" {
+		t.Fatalf("a confirmed client still reads as one by link: %+v", st.Clients)
+	}
+}
