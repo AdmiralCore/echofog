@@ -7,6 +7,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/mux"
+	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/session"
 )
 
@@ -130,3 +131,6 @@ func (r *Runtime) repairWait(ctx context.Context, d time.Duration) bool {
 func jittered(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (0.8 + 0.4*rand.Float64()))
 }
+
+// repairCard is the card the session was dialed with; nil when unknown.
+func (r *Runtime) repairCard(sid [16]byte) *objects.Card { return nil }

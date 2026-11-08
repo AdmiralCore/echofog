@@ -105,3 +105,35 @@ func TestFailingOnlyPathWithoutMigrationIsReplacedByANewSession(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A session dialed with an explicit card (an invitation, a contact link) has no card in the card
+// book; the repair has to dial with the card the session was opened with. The lab found it: the
+// repair failed with "no card for the peer device" in every loaded run.
+func TestRepairDialsWithTheCardTheSessionWasOpenedWith(t *testing.T) {
+	queue := newCarrierQueue()
+	b := newTestNodeWith(t, cards.Visible, true, []carrier.Listener{queue}, nil, pathFeatures)
+	a := newTestNodeWith(t, cards.Hidden, false, nil, nil, pathFeatures)
+	b.start(t)
+	a.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	first := memcarrier.NewQUIC()
+	queue.push(first.Server)
+	card := b.peerCard(t)
+	_, sess, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: card, Carrier: first.Client})
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	got := node.RepairCardOf(a.rt, sess.SID())
+	if got == nil || got.DeviceID != card.DeviceID {
+		t.Fatalf("repair card %v, want the card of the dial", got)
+	}
+	sess.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for node.RepairCardOf(a.rt, sess.SID()) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the card of a closed session is still kept")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

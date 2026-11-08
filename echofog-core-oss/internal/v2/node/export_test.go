@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	// RepairCardOf is the card a repair of the session would dial with.
+	RepairCardOf = func(r *Runtime, sid [16]byte) *objects.Card { return r.repairCard(sid) }
 	// TriggerPathFailing runs the reaction to a session left with one failing path.
 	TriggerPathFailing = func(r *Runtime, s *mux.Session) { r.pathFailing(s, mux.PathFailure{}) }
 	// SetRepairOpt sets what a repair dials with.
