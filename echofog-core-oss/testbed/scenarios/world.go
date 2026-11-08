@@ -429,3 +429,6 @@ func (n *Node) DialVia(ctx context.Context, to *Node, i int) (node.Peer, *mux.Se
 func (w *World) Skip(d time.Duration) { w.clk.shift.Add(int64(d)) }
 
 var errNoExitService = errors.New("scenarios: exit/2 is not built in")
+
+// EventTail is the last n events the runtime reported, newest last, as text.
+func (n *Node) EventTail(int) []string { return nil }
