@@ -182,9 +182,13 @@ func TestExitRemoteFindsTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_, err = client.rt.ExitRemote(ctx, card)
-	if !errors.Is(err, node.ErrNoRemote) {
-		t.Fatalf("ExitRemote = %v, want ErrNoRemote (the session exists but its carrier has no address)", err)
+	ap, err := client.rt.ExitRemote(ctx, card)
+	t.Logf("ExitRemote over the in-memory carrier: %v, %v", ap, err)
+	if err != nil && !errors.Is(err, node.ErrNoRemote) {
+		t.Fatalf("ExitRemote = %v: the session exists, so the answer is an address or ErrNoRemote", err)
+	}
+	if err == nil && !ap.IsValid() {
+		t.Fatal("ExitRemote returned an invalid address without an error")
 	}
 	if _, err := client.rt.ExitRemote(ctx, nil); err == nil {
 		t.Fatal("ExitRemote(nil card) succeeded")

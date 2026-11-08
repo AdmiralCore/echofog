@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -407,5 +408,42 @@ func TestUserMessageSpeaksOfTheVPN(t *testing.T) {
 		if got := app.UserMessage(fmt.Errorf("dial 203.0.113.9:443: %w", err)); got != r.Message() || strings.Contains(got, "203.0.113.9") {
 			t.Errorf("%s wrapped: %q", r, got)
 		}
+	}
+}
+
+type remoteRT struct {
+	fakeRT
+	ap    netip.AddrPort
+	asked *objects.Card
+}
+
+func (r *remoteRT) ExitRemote(_ context.Context, card *objects.Card) (netip.AddrPort, error) {
+	r.asked = card
+	return r.ap, nil
+}
+
+// A runtime that knows the first hop of the session makes its links tell it (the whole-computer mode
+// permits exactly that address); one that does not leaves plain links.
+func TestRuntimeExitLinksTellTheirRemote(t *testing.T) {
+	rt := &remoteRT{ap: netip.MustParseAddrPort("203.0.113.5:4433")}
+	card := exitCard(t, true)
+	l, err := app.RuntimeExit(rt).Dial(context.Background(), card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl, ok := l.(app.RemoteLink)
+	if !ok {
+		t.Fatalf("%T is not a RemoteLink", l)
+	}
+	ap, err := rl.Remote(context.Background())
+	if err != nil || ap != rt.ap || rt.asked != card {
+		t.Fatalf("Remote = %v, %v (asked %v)", ap, err, rt.asked)
+	}
+	plain, err := app.RuntimeExit(&fakeRT{}).Dial(context.Background(), card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plain.(app.RemoteLink); ok {
+		t.Fatal("a link of a runtime that cannot tell its remote claims to")
 	}
 }

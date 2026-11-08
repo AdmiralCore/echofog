@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -25,4 +26,10 @@ func (r runtimeExit) Dial(ctx context.Context, card *objects.Card) (ExitLink, er
 		return nil, err
 	}
 	return c, nil
+}
+
+// ExitRemoteSource is the part of *node.Runtime that tells the first hop of the session to an exit
+// (node.Runtime.ExitRemote). A runtime that has it makes the links RemoteLinks.
+type ExitRemoteSource interface {
+	ExitRemote(ctx context.Context, card *objects.Card) (netip.AddrPort, error)
 }
