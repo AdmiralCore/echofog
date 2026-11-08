@@ -75,7 +75,7 @@ func TestV2WholeComputerFollowsTheApp(t *testing.T) {
 	require.True(t, st.KillSwitch)
 	require.False(t, st.Blocked)
 	require.NoError(t, api.SetWholeComputer(false))
-	require.Equal(t, []string{"whole-start", "whole-stop"}, f.log)
+	require.Equal(t, []string{"whole-recover", "whole-start", "whole-stop"}, f.log)
 	require.False(t, api.GetVPNStatus().WholeComputer)
 }
 
@@ -101,7 +101,7 @@ func TestV2KillSwitchCannotBeSwitchedOffInsideTheMode(t *testing.T) {
 func TestV2SwitchOfExitKeepsTheMode(t *testing.T) {
 	api, f := newWholeApi(t, true)
 	require.NoError(t, api.StopVPNForSwitch())
-	require.Equal(t, []string{"stop-for-switch"}, f.log)
+	require.Equal(t, []string{"whole-recover", "stop-for-switch"}, f.log)
 	require.False(t, f.called("stop"), "a switch is not a stop of the VPN")
 }
 

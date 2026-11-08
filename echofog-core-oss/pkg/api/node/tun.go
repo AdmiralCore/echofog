@@ -48,7 +48,9 @@ func (n *NodeApi) holdPath() string {
 // KillSwitchHeld reports whether a helper from an earlier run holds the computer's traffic: the
 // app went away without turning whole-computer mode off, and with the kill switch on nothing gets
 // out until it reconnects or the user lets the traffic go (ReleaseKillSwitch). Works before login.
-func KillSwitchHeld() bool { return tunmode.Held(tunmode.DefaultHoldFile()) }
+func KillSwitchHeld() bool {
+	return tunmode.Held(tunmode.DefaultHoldFile()) || v2KillSwitchHeld()
+}
 
 // ReleaseKillSwitch lets the computer back on its own network after a held kill switch.
 func ReleaseKillSwitch() error {
@@ -56,7 +58,7 @@ func ReleaseKillSwitch() error {
 		return err
 	}
 	network.SetDirectInterface(0)
-	return nil
+	return v2ReleaseKillSwitch()
 }
 
 // KillSwitchOn reports whether the kill switch is on.

@@ -32,6 +32,7 @@ type v2Whole interface {
 	WholeComputerSupported() bool
 	WholeComputerStart(ctx context.Context) error
 	WholeComputerStop(ctx context.Context) error
+	WholeComputerRecover(ctx context.Context) error
 	WholeComputerStatus() app.WholeStatus
 	VPNStopForSwitch() error
 }
@@ -71,6 +72,13 @@ func (n *NodeApi) AttachV2VPN(a v2VPN) {
 	n.v2v.mu.Lock()
 	n.v2v.b = b
 	n.v2v.mu.Unlock()
+	// Filters of an earlier run that crashed hold the computer closed; the screen must show that
+	// before the user touches anything.
+	if w, ok := b.whole(); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = w.WholeComputerRecover(ctx)
+	}
 }
 
 // v2VPNHolder keeps the attached VPN backend for the facade methods that route to it.
