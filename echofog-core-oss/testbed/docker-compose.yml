@@ -29,6 +29,17 @@ x-node: &node
   restart: "no"
   stop_grace_period: 5s
 
+# a node of the v2 scenarios (T15.1): the image's entrypoint creates the efv2 profile and then either
+# serves (EFV2_MODE=serve, EFV2_LISTEN) or waits for the runner's `docker exec efv2 ...` (idle). These
+# services are in the "v2" profile: the v1 scenarios' `up -d` leaves them alone, and the runner starts
+# the ones a scenario needs by name.
+x-efv2: &efv2
+  <<: *image
+  cap_add: [NET_ADMIN]
+  restart: "no"
+  stop_grace_period: 5s
+  profiles: ["v2"]
+
 x-gateway: &gateway
   <<: *image
   cap_add: [NET_ADMIN]
@@ -185,3 +196,102 @@ services:
     container_name: efbed-c2
     environment: { ECHOFOG_LOG_LEVEL: "${LOG_LEVEL:-info}", NAME: c2, GATEWAY: 10.20.3.2, BOOTSTRAP: "${BOOTSTRAP:-}", GUARD_MODE: "${GUARD_MODE_C2:-${GUARD_MODE_USERS:-}}", TCP_ROTATE: "${TCP_ROTATE_USERS:-}", STUN: "${STUN-}", LISTEN: ":5242" }
     networks: { lan_c: { ipv4_address: 10.20.3.12 } }
+
+  # ---- the nodes of the v2 scenarios (T15.1), profile "v2". The live mode of each scenario is
+  # described in testbed/scenarios/live.go; what it still needs from the efv2 CLI is listed there.
+  # v2-nat, v2-call: a public relay
+  v2r:
+    <<: *efv2
+    container_name: efbed-v2r
+    environment: { ROLE: efv2, EFV2_MODE: serve, EFV2_PROFILE: server, EFV2_LISTEN: "noise3=203.0.113.44:4433" }
+    networks: { wan: { ipv4_address: 203.0.113.44 } }
+  # v2-nat: behind gw_a (port-restricted cone)
+  v2na:
+    <<: *efv2
+    container_name: efbed-v2na
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.1.2 }
+    networks: { lan_a: { ipv4_address: 10.20.1.21 } }
+  # v2-nat: behind gw_b (symmetric, or symmetric-narrow with NAT_B)
+  v2nb:
+    <<: *efv2
+    container_name: efbed-v2nb
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.2.2 }
+    networks: { lan_b: { ipv4_address: 10.20.2.21 } }
+  # v2-nat: behind gw_c (port-restricted cone)
+  v2nc:
+    <<: *efv2
+    container_name: efbed-v2nc
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.3.2 }
+    networks: { lan_c: { ipv4_address: 10.20.3.21 } }
+  # v2-paths: the client, behind gw_b, whose router is cut
+  v2pa:
+    <<: *efv2
+    container_name: efbed-v2pa
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.2.2 }
+    networks: { lan_b: { ipv4_address: 10.20.2.22 } }
+  # v2-paths: a server with two noise3 addresses, two paths
+  v2pb:
+    <<: *efv2
+    container_name: efbed-v2pb
+    environment: { ROLE: efv2, EFV2_MODE: serve, EFV2_PROFILE: server, EFV2_LISTEN: "noise3=203.0.113.46:4433,noise3=203.0.113.46:4434" }
+    networks: { wan: { ipv4_address: 203.0.113.46 } }
+  # v2-hidden: the hidden node (no public card; invitations only)
+  v2h:
+    <<: *efv2
+    container_name: efbed-v2h
+    environment: { ROLE: efv2, EFV2_MODE: serve, EFV2_PROFILE: desktop, EFV2_LISTEN: "noise3=203.0.113.47:4433" }
+    networks: { wan: { ipv4_address: 203.0.113.47 } }
+  # v2-hidden: the guest, with the invitation link
+  v2ha:
+    <<: *efv2
+    container_name: efbed-v2ha
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop }
+    networks: { wan: { ipv4_address: 203.0.113.48 } }
+  # v2-hidden: the stranger, with the address and without the secret
+  v2hb:
+    <<: *efv2
+    container_name: efbed-v2hb
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop }
+    networks: { wan: { ipv4_address: 203.0.113.49 } }
+  # v2-messaging: a sender behind gw_a
+  v2ma:
+    <<: *efv2
+    container_name: efbed-v2ma
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.1.2 }
+    networks: { lan_a: { ipv4_address: 10.20.1.22 } }
+  # v2-messaging: a receiver behind gw_c
+  v2mb:
+    <<: *efv2
+    container_name: efbed-v2mb
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.3.2 }
+    networks: { lan_c: { ipv4_address: 10.20.3.22 } }
+  # v2-messaging: a server for the DHT and the mailbox
+  v2mx:
+    <<: *efv2
+    container_name: efbed-v2mx
+    environment: { ROLE: efv2, EFV2_MODE: serve, EFV2_PROFILE: server, EFV2_LISTEN: "noise3=203.0.113.50:4433" }
+    networks: { wan: { ipv4_address: 203.0.113.50 } }
+  # v2-call: the caller behind gw_a
+  v2ca:
+    <<: *efv2
+    container_name: efbed-v2ca
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.1.2 }
+    networks: { lan_a: { ipv4_address: 10.20.1.23 } }
+  # v2-call: the callee behind gw_c
+  v2cc:
+    <<: *efv2
+    container_name: efbed-v2cc
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop, GATEWAY: 10.20.3.2 }
+    networks: { lan_c: { ipv4_address: 10.20.3.23 } }
+  # v2-exit: the exit (the lab web server `web` stands behind it)
+  v2xe:
+    <<: *efv2
+    container_name: efbed-v2xe
+    environment: { ROLE: efv2, EFV2_MODE: serve, EFV2_PROFILE: server, EFV2_LISTEN: "noise3=203.0.113.53:4433" }
+    networks: { wan: { ipv4_address: 203.0.113.53 } }
+  # v2-exit: the exit client
+  v2xc:
+    <<: *efv2
+    container_name: efbed-v2xc
+    environment: { ROLE: efv2, EFV2_MODE: idle, EFV2_PROFILE: desktop }
+    networks: { wan: { ipv4_address: 203.0.113.54 } }

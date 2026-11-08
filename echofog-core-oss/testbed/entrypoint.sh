@@ -2,6 +2,7 @@
 # One entrypoint for every container of the test bed:
 #   ROLE=gateway  a NAT router between a private network and the "Internet" network
 #   ROLE=node     a node; with GATEWAY set, all its traffic leaves through that router
+#   ROLE=efv2     an efv2 node of the v2 scenarios: EFV2_MODE=serve|idle, EFV2_LISTEN, EFV2_PROFILE
 set -eu
 
 case "${ROLE:-node}" in
@@ -49,6 +50,20 @@ gateway)
 
 web)
   exec testnode -web ":80"
+  ;;
+
+# a node of the v2 scenarios (T15.1): the profile is created, then the node either serves or waits
+# for `docker exec efbed-<name> efv2 ...` from the runner
+efv2)
+  if [ -n "${GATEWAY:-}" ]; then
+    ip route replace default via "$GATEWAY"
+  fi
+  efv2 init --data /data --profile "${EFV2_PROFILE:-desktop}" >/tmp/init.log 2>&1
+  case "${EFV2_MODE:-idle}" in
+  serve) exec efv2 run --data /data --listen "${EFV2_LISTEN:?EFV2_LISTEN is required with EFV2_MODE=serve}" ;;
+  idle) exec sleep infinity ;;
+  *) echo "unknown EFV2_MODE '${EFV2_MODE}'" >&2; exit 1 ;;
+  esac
   ;;
 
 node)
