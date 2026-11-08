@@ -136,11 +136,15 @@ func (c *Clock) Offset() time.Duration {
 // offset never exceeds 600 s from the raw clock; only the CDN check can set a larger one.
 func (c *Clock) AddOutgoingSample(remote netip.Addr, peerTime time.Time) {
 	raw := c.now()
+	key, haveNet := keyOf(remote)
 	c.mu.Lock()
-	c.lastPeer = raw
+	if haveNet {
+		// A session without a usable address proves no peer (and so does not hold back the CDN check).
+		c.lastPeer = raw
+	}
 
 	warn := false
-	if key, ok := keyOf(remote); ok && !peerTime.IsZero() {
+	if haveNet && !peerTime.IsZero() {
 		offset := peerTime.Truncate(time.Second).Sub(raw.Truncate(time.Second))
 		for i := range c.samples {
 			if c.samples[i].net == key {
@@ -153,7 +157,9 @@ func (c *Clock) AddOutgoingSample(remote netip.Addr, peerTime time.Time) {
 			copy(c.samples, c.samples[len(c.samples)-maxPeerSamples:])
 			c.samples = c.samples[:maxPeerSamples]
 		}
-		if len(c.samples) >= minNetworks {
+		// An offset beyond the peer cap was set by the CDN check, which alone may set it: peers,
+		// who can be many liars, neither raise nor wear it down.
+		if len(c.samples) >= minNetworks && absDuration(c.offset) <= maxPeerOffset {
 			target, ok := medianOffset(c.samples)
 			if !ok {
 				// The two central samples disagree: no estimate, drift back to the raw clock.

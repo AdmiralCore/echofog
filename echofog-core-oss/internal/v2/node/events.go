@@ -18,6 +18,10 @@ const (
 	// EventNoCover is D37: the node has no camouflaged listener, so it publishes no public card
 	// and serves only peers and invitees. The operator must be told; start still succeeds.
 	EventNoCover EventKind = "node.no-cover"
+	// EventClockSkew reports that a handshake was refused because the device clock differs from
+	// the peer by more than 10 minutes (handshake.md section 7). Message is Russian, neutral form,
+	// for the UI; Err is the cause. It is raised at most once per 10 minutes.
+	EventClockSkew EventKind = "node.clock-skew"
 	// EventClockWarning is the D36 >60 s clock warning.
 	EventClockWarning EventKind = "node.clock-warning"
 	// EventNetworkChanged reports that the local network changed and live sessions moved to new

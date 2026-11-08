@@ -86,7 +86,7 @@ func (r *Runtime) DialBootstrap(ctx context.Context, t BootstrapTarget, opt Dial
 	if est.Peer == nil {
 		return nil, errors.New("node: bootstrap session has no peer card")
 	}
-	card, err := objects.VerifyCard(est.Peer.Raw, r.clock.Now())
+	card, err := objects.VerifyCard(est.Peer.Raw, r.carrierClock.Now())
 	if err != nil {
 		return nil, fmt.Errorf("node: bootstrap card: %w", err)
 	}

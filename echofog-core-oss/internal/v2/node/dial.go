@@ -249,6 +249,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 
 	est, err := session.Dial(ctx, card, attempt, local, opts...)
 	if err != nil {
+		r.noteClockSkew(err)
 		r.maybeClockCheck()
 		if havePair {
 			if ctx.Err() == nil && penalizeDial(err) {

@@ -204,11 +204,12 @@ type Config struct {
 
 // Runtime is one running v2 node (02-architecture AD5).
 type Runtime struct {
-	cfg    Config
-	log    *slog.Logger
-	events EventSink
-	clock  *clock.Clock
-	http   *http.Client
+	lastSkewEvent atomic.Int64 // unix nanoseconds of the last EventClockSkew
+	cfg           Config
+	log           *slog.Logger
+	events        EventSink
+	clock         *clock.Clock
+	http          *http.Client
 
 	carrierClock carrier.Clock
 	registry     *carrier.Registry
@@ -1103,6 +1104,36 @@ func (r *Runtime) noCoverEvent() {
 		Message: "node has no camouflaged listener: the public card is not published, " +
 			"only peers and invitees are served (wire.md §2.1 D37)",
 		At: time.Now(),
+	})
+}
+
+// clockSkewEvery limits how often the UI is told about a clock that is too far off.
+const clockSkewEvery = 10 * time.Minute
+
+// noteClockSkew tells the UI, once per 10 minutes, that a handshake failed because the device clock
+// differs by more than the 600 s the handshake tolerates (handshake.md section 7). The tolerance
+// itself is not widened and the offset plays no part in the handshake; the user must fix the clock.
+func (r *Runtime) noteClockSkew(err error) {
+	var rej *session.ErrRejected
+	skew := errors.Is(err, handshake.ErrClockSkew) ||
+		(errors.As(err, &rej) && rej.Reason == handshake.ReasonClockSkew)
+	if !skew {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := r.lastSkewEvent.Load()
+	if last != 0 && now-last < int64(clockSkewEvery) {
+		return
+	}
+	if !r.lastSkewEvent.CompareAndSwap(last, now) {
+		return
+	}
+	r.events.Emit(Event{
+		Kind: EventClockSkew,
+		Message: "Часы устройства отличаются от часов сети больше чем на 10 минут, поэтому соединение " +
+			"не установлено. Нужно исправить дату и время в настройках системы.",
+		At:  time.Now(),
+		Err: err,
 	})
 }
 

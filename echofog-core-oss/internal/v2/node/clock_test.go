@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -139,3 +140,32 @@ func TestRuntimeWithoutHTTPClientMakesNoRequest(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestClockSkewRejectionTellsTheUser: when a handshake fails because the device clock is more than
+// 10 minutes off, the UI gets a clear event in Russian (T3.8-fix1 acceptance, finding 1). The
+// tolerance stays at 600 s.
+func TestClockSkewRejectionTellsTheUser(t *testing.T) {
+	queue := newCarrierQueue()
+	b := newTestNode(t, cards.Visible, true, []carrier.Listener{queue}, nil)
+	raw := &fakeRaw{now: time.Now().Add(15 * time.Minute)}
+	events := &captureEvents{}
+	a := newTestNodeWith(t, cards.Hidden, false, nil, events, func(c *node.Config) {
+		c.CarrierClock = fakeCarrierClock{raw: raw}
+	})
+	b.start(t)
+	a.start(t)
+	pair := memcarrier.NewQUIC()
+	queue.push(pair.Server)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, _, err := a.rt.Session(ctx, b.id.DeviceID, node.DialOpt{Card: b.peerCard(t), Carrier: pair.Client}); err == nil {
+		t.Fatal("a clock 15 minutes ahead was admitted")
+	}
+	e, ok := events.find(node.EventClockSkew)
+	if !ok {
+		t.Fatal("no clock-skew event for the UI")
+	}
+	if !strings.Contains(e.Message, "Часы устройства") || !strings.Contains(e.Message, "10 минут") {
+		t.Fatalf("message %q is not the Russian diagnosis", e.Message)
+	}
+}
