@@ -353,6 +353,15 @@ func invalidPow(t *testing.T, queue, blob []byte, bits uint32) uint64 {
 	return 0
 }
 
+func goodPow(t *testing.T, queue, blob []byte, bits uint32) uint64 {
+	t.Helper()
+	for pow := uint64(0); ; pow++ {
+		if ValidPow(queue, blob, pow, bits) {
+			return pow
+		}
+	}
+}
+
 func TestPublicQueueRequiresProofOfWork(t *testing.T) {
 	f := newFixture(t, nil)
 	p := f.peer(1)
@@ -363,20 +372,71 @@ func TestPublicQueueRequiresProofOfWork(t *testing.T) {
 	if status, _ := f.deposit(t, p, blob, 0); status != StatusPowRequired {
 		t.Fatalf("without pow: status %d, want %d", status, StatusPowRequired)
 	}
-	// A wrong proof is a protocol error with the service code.
+	// A wrong proof is refused exactly like every other refusal of an external sender: a separate
+	// code would tell whether the queue exists and its state (AD20, decision Q4).
 	bad := invalidPow(t, f.queue, blob, 16)
-	if _, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: bad}); !errors.Is(err, ErrPowInvalid) {
-		t.Fatalf("wrong pow: %v", err)
+	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: bad}); err != nil || st != StatusRefused {
+		t.Fatalf("wrong pow: status %d err %v, want refused", st, err)
 	}
 	// A valid one is stored.
-	var good uint64
-	for good = 1; ; good++ {
-		if ValidPow(f.queue, blob, good, 16) {
-			break
+	if status, _ := f.deposit(t, p, blob, goodPow(t, f.queue, blob, 16)); status != StatusStored {
+		t.Fatalf("valid pow: status %d", status)
+	}
+}
+
+// One proof of work buys one public queue slot: a repeat of the same blob is answered stored and adds
+// no second item (services.md 5.2).
+func TestPublicQueueDeduplicatesADirectDeposit(t *testing.T) {
+	f := newFixture(t, nil)
+	p := f.peer(1)
+	f.create(t, p, 0, true, 1)
+	blob := []byte("one work")
+	pow := goodPow(t, f.queue, blob, 1)
+
+	st, id, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: pow})
+	if err != nil || st != StatusStored || len(id) != ItemSize {
+		t.Fatalf("first deposit: status %d item %x err %v", st, id, err)
+	}
+	for i := 0; i < 99; i++ { // one work, a hundred more deposits of the same blob
+		st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: pow})
+		if err != nil || st != StatusStored {
+			t.Fatalf("repeat %d: status %d err %v, want stored", i, st, err)
 		}
 	}
-	if status, _ := f.deposit(t, p, blob, good); status != StatusStored {
-		t.Fatalf("valid pow: status %d", status)
+	if items, _ := f.fetch(t, p, nil, 10, 0); len(items) != 1 {
+		t.Fatalf("the public queue holds %d items after 100 deposits of one blob, want 1", len(items))
+	}
+
+	// a different blob takes another slot
+	other := []byte("another work")
+	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: other, Pow: goodPow(t, f.queue, other, 1)}); err != nil || st != StatusStored {
+		t.Fatalf("a different blob: status %d err %v", st, err)
+	}
+	if items, _ := f.fetch(t, p, nil, 10, 0); len(items) != 2 {
+		t.Fatalf("the public queue holds %d items, want 2", len(items))
+	}
+
+	// the memory of a deposit is bound to its queue
+	second := bytes.Repeat([]byte{0x91}, QueueSize)
+	if _, err := f.srv.CreateQueue(p, QueueCreate{Req: 1, Queue: second, AuthKey: f.authKey(), Public: true, PowBits: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: second, Blob: blob, Pow: goodPow(t, second, blob, 1)}); err != nil || st != StatusStored {
+		t.Fatalf("the same blob in another queue: status %d err %v", st, err)
+	}
+	items, _, err := f.srv.Fetch(context.Background(), p, Fetch{Req: 2, Queue: second, Max: 10,
+		Auth: signFor(t, f.signer, OpFetch, p.SID, second, 2)})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("the second queue holds %d items: %v", len(items), err)
+	}
+
+	// the memory lives as long as the item: after its lifetime a repeat is a new deposit
+	f.clock.Advance(8 * 24 * time.Hour)
+	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: pow}); err != nil || st != StatusStored {
+		t.Fatalf("after the item lifetime: status %d err %v", st, err)
+	}
+	if items, _ := f.fetch(t, p, nil, 10, 0); len(items) != 1 {
+		t.Fatalf("the public queue holds %d items after the lifetime, want the one new deposit", len(items))
 	}
 }
 
@@ -395,20 +455,15 @@ func TestPublicQueueFullDoesNotBlockPrivate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	blob := []byte("x")
-	var good uint64
-	for good = 0; ; good++ {
-		if ValidPow(pub, blob, good, 1) {
-			break
-		}
-	}
 	for i := 0; i < 2; i++ {
-		st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: pub, Blob: blob, Pow: good})
+		blob := []byte{byte('x' + i)}
+		st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: pub, Blob: blob, Pow: goodPow(t, pub, blob, 1)})
 		if err != nil || st != StatusStored {
 			t.Fatalf("public deposit %d: status %d err %v", i, st, err)
 		}
 	}
-	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: pub, Blob: blob, Pow: good}); err != nil || st != StatusFull {
+	blob := []byte("over the limit")
+	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: pub, Blob: blob, Pow: goodPow(t, pub, blob, 1)}); err != nil || st != StatusFull {
 		t.Fatalf("full public queue: status %d err %v", st, err)
 	}
 	if st := depositStatus(t, f.srv, p, priv, blob); st != StatusStored {
