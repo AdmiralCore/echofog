@@ -40,6 +40,16 @@ if [ ! -f "$DATA/server-identity.json" ]; then
 			--roles "${ECHOFOG_ROLES-relay,mailbox,dht-server}"
 		if [ -n "${ECHOFOG_COVER_CERT:-}" ]; then
 			set -- "$@" --cover-cert "$ECHOFOG_COVER_CERT"
+		else
+			if [ "${ECHOFOG_ACME_ACCEPT_TOS:-true}" != "false" ]; then
+				set -- "$@" --acme-accept-tos
+			fi
+			if [ -n "${ECHOFOG_ACME_EMAIL:-}" ]; then
+				set -- "$@" --acme-email "$ECHOFOG_ACME_EMAIL"
+			fi
+			if [ -n "${ECHOFOG_ACME_CHALLENGE:-}" ]; then
+				set -- "$@" --acme-challenge "$ECHOFOG_ACME_CHALLENGE"
+			fi
 		fi
 		if [ "${ECHOFOG_INVITES:-false}" = "true" ]; then
 			set -- "$@" --invite-listen "noise3=0.0.0.0:$((NOISE_PORT + 1))"

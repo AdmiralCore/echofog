@@ -87,6 +87,10 @@ func cmdInit(args []string, env func(string) string, stdin io.Reader, out io.Wri
 	roles := fs.String("roles", "", "comma-separated roles")
 	cover := fs.String("cover", env("ECHOFOG_COVER"), "HOST:PORT of the site the camouflaged suites imitate")
 	coverCert := fs.String("cover-cert", env("ECHOFOG_COVER_CERT"), "PEM bundle (certificate chain and key) of the cover domain")
+	acmeTOS := fs.Bool("acme-accept-tos", envBool(env("ECHOFOG_ACME_ACCEPT_TOS")), "accept the ACME certificate authority's terms (empty cover-cert)")
+	acmeEmail := fs.String("acme-email", env("ECHOFOG_ACME_EMAIL"), "optional contact of the ACME account")
+	acmeChallenge := fs.String("acme-challenge", env("ECHOFOG_ACME_CHALLENGE"), "ACME challenge: tls-alpn-01 or http-01 (default: the CA's choice)")
+	acmeDirectory := fs.String("acme-directory", env("ECHOFOG_ACME_DIRECTORY"), "ACME directory URL (default: the production CA)")
 	presetName := fs.String("preset", "", "relay, exit-free or home-entry")
 	domain := fs.String("domain", "", "domain of the node's own cover")
 	siteDir := fs.String("site-dir", env("ECHOFOG_SITE_DIR"), "folder with the site of the cover")
@@ -161,6 +165,17 @@ func cmdInit(args []string, env func(string) string, stdin io.Reader, out io.Wri
 		if *roles != "" {
 			cfg.Roles = strings.Split(*roles, ",")
 		}
+	}
+	// The ACME flags are the operator's act for a hand-written configuration; the presets with a
+	// domain already carry accept_tos.
+	if *acmeTOS || *acmeEmail != "" || *acmeChallenge != "" || *acmeDirectory != "" {
+		if cfg.CoverACME == nil {
+			cfg.CoverACME = &CoverACMESpec{}
+		}
+		cfg.CoverACME.AcceptTOS = cfg.CoverACME.AcceptTOS || *acmeTOS
+		cfg.CoverACME.Email = *acmeEmail
+		cfg.CoverACME.Challenge = *acmeChallenge
+		cfg.CoverACME.DirectoryURL = *acmeDirectory
 	}
 	if err := needData(dataDir); err != nil {
 		return err
@@ -377,4 +392,13 @@ func (wallClock) Now() time.Time {
 		return UpdateNow()
 	}
 	return time.Now()
+}
+
+// envBool reads a boolean environment value: "1", "true", "yes" or "on" (any case).
+func envBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

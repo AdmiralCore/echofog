@@ -32,7 +32,9 @@ docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env up -d
 С обложкой задайте `ECHOFOG_COVER=node.example.org:443` и `ECHOFOG_SITE_DIR` — папку с сайтом оператора
 (index.html и остальное). Оба значения нужны вместе: обложка без сайта отклоняется, чужой сайт не
 раздаётся. `ECHOFOG_COVER_CERT` — необязательный PEM-файл с цепочкой сертификата домена и его ключом;
-пусто означает ACME. Откройте 443/tcp и 443/udp, а также 444/udp для noise3 — так публикует порты
+пусто означает ACME. `ECHOFOG_ACME_ACCEPT_TOS` (по умолчанию `true`) фиксирует согласие оператора с
+условиями центра сертификации; `false` отказывается от ACME и требует сертификат. `ECHOFOG_ACME_EMAIL` —
+необязательный контакт. Откройте 443/tcp и 443/udp, а также 444/udp для noise3 — так публикует порты
 `deploy/v2/docker-compose.yml`.
 
 ## 3. Установка без Docker

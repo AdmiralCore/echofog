@@ -54,6 +54,7 @@ func TestParseConfigCamouflagedSuites(t *testing.T) {
 	  ],
 	  "cover": "example.org:443",
 	  "site_dir": "/srv/site",
+	  "cover_acme": {"accept_tos": true},
 	  "roles": ["relay"],
 	  "operator": {"addr": "127.0.0.1:0"}
 	}`
@@ -153,8 +154,8 @@ func FuzzParseConfig(f *testing.F) {
 	f.Add([]byte("// a comment\n" + goodConfig + "\n// more\n"))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`{"version":1,"listen":[{"suite":"noise3","bind":"[::1]:1","advertise":"::1"}],"operator":{"addr":"[::1]:9"}}`))
-	f.Add([]byte(`{"version":1,"listen":[{"suite":"reality2-quic","bind":"0.0.0.0:443","advertise":"203.0.113.10"},{"suite":"reality2-tcp","bind":"0.0.0.0:443","advertise":"203.0.113.10"}],"cover":"example.org:443","site_dir":"/srv/site","roles":["relay"],"operator":{"addr":"127.0.0.1:0"}}`))
-	f.Add([]byte(`{"version":1,"listen":[{"suite":"ws2","bind":"0.0.0.0:8080","advertise":"203.0.113.10"}],"cover":"example.org:443","site_dir":"/srv/site","roles":[],"operator":{"addr":"127.0.0.1:0"}}`))
+	f.Add([]byte(`{"version":1,"listen":[{"suite":"reality2-quic","bind":"0.0.0.0:443","advertise":"203.0.113.10"},{"suite":"reality2-tcp","bind":"0.0.0.0:443","advertise":"203.0.113.10"}],"cover":"example.org:443","site_dir":"/srv/site","cover_acme":{"accept_tos":true},"roles":["relay"],"operator":{"addr":"127.0.0.1:0"}}`))
+	f.Add([]byte(`{"version":1,"listen":[{"suite":"ws2","bind":"0.0.0.0:8080","advertise":"203.0.113.10"}],"cover":"example.org:443","site_dir":"/srv/site","cover_acme":{"accept_tos":true},"roles":[],"operator":{"addr":"127.0.0.1:0"}}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		c, err := servernode.ParseConfig(b)
 		if err != nil {

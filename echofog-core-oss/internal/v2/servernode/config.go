@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -214,6 +215,27 @@ func (c *Config) Validate() error {
 		if len(v) > 4096 || strings.ContainsRune(v, 0) || !utf8.ValidString(v) {
 			return bad("%s: a path of at most 4096 bytes without NUL", what)
 		}
+	}
+	if c.CoverACME != nil {
+		switch c.CoverACME.Challenge {
+		case "", "http-01", "tls-alpn-01":
+		default:
+			return bad("cover_acme.challenge %q: want http-01 or tls-alpn-01", c.CoverACME.Challenge)
+		}
+		if d := c.CoverACME.DirectoryURL; d != "" {
+			u, err := url.Parse(d)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return bad("cover_acme.directory %q: want an http(s) URL", d)
+			}
+		}
+		if len(c.CoverACME.Email) > 254 || strings.ContainsAny(c.CoverACME.Email, " \t\r\n") {
+			return bad("cover_acme.email: at most 254 characters without spaces")
+		}
+	}
+	// An empty cover_cert means ACME (T2.6e, T12.5). Accepting the CA's terms is the operator's
+	// act, never the code's: without it the operator must provide a certificate.
+	if c.Cover != "" && c.CoverCert == "" && (c.CoverACME == nil || !c.CoverACME.AcceptTOS) {
+		return bad("cover %q: cover_cert is empty and the CA terms are not accepted; set cover_acme.accept_tos or provide cover_cert", c.Cover)
 	}
 	// НС-3 (T2.6e): only the node's own cover is served. A camouflaged listener without a cover,
 	// and a cover without the operator's site folder, would either refuse strangers or serve a

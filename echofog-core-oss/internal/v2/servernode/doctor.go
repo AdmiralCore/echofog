@@ -191,7 +191,7 @@ func RunDoctor(ctx context.Context, d DoctorDeps) []CheckResult {
 
 	if cfg != nil {
 		out = append(out, dnsCheck(ctx, d, cfg))
-		out = append(out, certCheck(d, cfg))
+		out = append(out, certCheck(d, cfg, st))
 		switch {
 		case cfg.hasCamouflaged() && cfg.Cover == "":
 			add("cover", LevelFail, "cover.missing")
@@ -311,11 +311,15 @@ func dnsCheck(ctx context.Context, d DoctorDeps, cfg *Config) CheckResult {
 	return res(LevelFail, "dns.mismatch", host, want.String())
 }
 
-func certCheck(d DoctorDeps, cfg *Config) CheckResult {
+func certCheck(d DoctorDeps, cfg *Config, st *StatusInfo) CheckResult {
 	res := func(l Level, code string, args ...any) CheckResult {
 		return CheckResult{ID: "cert", Level: l, Code: code, Args: args}
 	}
 	if cfg.CoverCert == "" {
+		// With ACME the certificate lives in the profile; the running node reports its expiry.
+		if st != nil && st.CoverCertNotAfter > 0 {
+			return certTerm(res, d.Now(), time.Time{}, time.Unix(st.CoverCertNotAfter, 0))
+		}
 		return res(LevelInfo, "cert.skipped")
 	}
 	f, err := os.Open(cfg.CoverCert)
@@ -335,11 +339,15 @@ func certCheck(d DoctorDeps, cfg *Config) CheckResult {
 	if err != nil {
 		return res(LevelFail, "cert.unreadable", "not a valid certificate")
 	}
-	now := d.Now()
-	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+	return certTerm(res, d.Now(), cert.NotBefore, cert.NotAfter)
+}
+
+// certTerm turns an expiry into the doctor's term line. A zero notBefore means unknown.
+func certTerm(res func(Level, string, ...any) CheckResult, now, notBefore, notAfter time.Time) CheckResult {
+	if (!notBefore.IsZero() && now.Before(notBefore)) || now.After(notAfter) {
 		return res(LevelFail, "cert.expired")
 	}
-	days := int(cert.NotAfter.Sub(now).Hours() / 24)
+	days := int(notAfter.Sub(now).Hours() / 24)
 	if days < certWarnDays {
 		return res(LevelWarn, "cert.soon", days)
 	}

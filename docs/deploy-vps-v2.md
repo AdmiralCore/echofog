@@ -33,8 +33,10 @@ refuses to start without it. `ECHOFOG_ROLES` chooses the roles; an empty value s
 With a cover, set `ECHOFOG_COVER=node.example.org:443` and `ECHOFOG_SITE_DIR` to the folder with the
 operator's site (index.html and the rest). Both are required together: a cover without the site is
 refused, because a foreign site is not served. `ECHOFOG_COVER_CERT` optionally points at a PEM bundle
-with the domain's chain and private key; empty means ACME. Publish both 443/tcp and 443/udp, and the
-noise3 port 444/udp, as `deploy/v2/docker-compose.yml` does.
+with the domain's chain and private key; empty means ACME. `ECHOFOG_ACME_ACCEPT_TOS` (the default,
+`true`) records the operator's acceptance of the CA's terms; set it to `false` to refuse ACME and
+require a certificate. `ECHOFOG_ACME_EMAIL` is an optional contact. Publish both 443/tcp and 443/udp,
+and the noise3 port 444/udp, as `deploy/v2/docker-compose.yml` does.
 
 ## 3. Install without Docker
 

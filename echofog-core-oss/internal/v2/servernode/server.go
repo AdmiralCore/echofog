@@ -30,6 +30,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
 	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
+	"github.com/echofog/echofog-core/internal/v2/carrier/reality2/selfcover"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/keys"
@@ -293,11 +294,14 @@ type Server struct {
 
 	mu       sync.Mutex
 	warnings map[string]string
-	listener net.Listener
-	http     *http.Server
-	started  bool
-	closed   bool
-	startAt  time.Time
+	// coverLeaf is the certificate the cover serves; the operator status and the doctor read its
+	// expiry without opening the profile.
+	coverLeaf *x509.Certificate
+	listener  net.Listener
+	http      *http.Server
+	started   bool
+	closed    bool
+	startAt   time.Time
 }
 
 func rolesOf(names []string) []node.Role {
@@ -601,6 +605,16 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 			return nil, err
 		}
 	}
+	// Empty cover_cert means ACME (T2.6e, T12.5); the operator's acceptance of the terms was
+	// checked by Validate. The test client seam is package-wide, like the other install seams.
+	var acme selfcover.ACMEConfig
+	if cfg.CoverACME != nil {
+		acme = selfcover.ACMEConfig{
+			DirectoryURL: cfg.CoverACME.DirectoryURL, Email: cfg.CoverACME.Email,
+			AcceptTOS: cfg.CoverACME.AcceptTOS, Challenge: cfg.CoverACME.Challenge,
+			HTTPClient: CoverACMEHTTPClient,
+		}
+	}
 	path := ws2Path(coverPriv)
 	var cardListeners []cards.Listener
 	for _, l := range cfg.Listen {
@@ -663,7 +677,8 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 				return nil, err
 			}
 			src := node.Reality2Listener{
-				Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert,
+				Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
+				OnCert: s.onCoverCert,
 				CertKV: st.Store("v2/reality2/self/cert"), ReplayKV: st.Store("v2/reality2/replay"),
 				TCPAddr: tcpBind, UDPAddr: udpBind,
 				Masks: []reality2.MaskKey{mk}, Addrs: []string{tokenAddr(l)},
@@ -730,7 +745,8 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 					ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
 			case "reality2-quic", "reality2-tcp":
 				src := node.Reality2Listener{
-					Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert,
+					Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
+					OnCert: s.onCoverCert,
 					CertKV: st.Store("v2/reality2/self/access/" + strconv.Itoa(slot)), ReplayKV: replayKV,
 					Masks: masks, Addrs: []string{advertise}, Shape: tlsShape, LowPower: profile.LowPower,
 				}
@@ -755,6 +771,17 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	s.rt = rt
 	ok = true
 	return s, nil
+}
+
+// onCoverCert keeps the certificate the cover serves so the status and the doctor report its term.
+func (s *Server) onCoverCert(leaf *x509.Certificate) {
+	if leaf == nil {
+		return
+	}
+	s.mu.Lock()
+	s.coverLeaf = leaf
+	s.mu.Unlock()
+	s.log.Info("cover certificate installed", "not_after", leaf.NotAfter.UTC())
 }
 
 // onEvent keeps the operator warnings: the latest event of each kind that needs attention.
@@ -876,6 +903,9 @@ func (s *Server) Status() StatusInfo {
 	s.mu.Lock()
 	if !s.startAt.IsZero() {
 		st.UptimeSeconds = int64(time.Since(s.startAt).Seconds())
+	}
+	if s.coverLeaf != nil {
+		st.CoverCertNotAfter = s.coverLeaf.NotAfter.Unix()
 	}
 	s.mu.Unlock()
 	if s.rt != nil {

@@ -76,6 +76,9 @@ type Config struct {
 	// OnReport receives every re-measurement. A report that is not OK means the own server
 	// stopped matching its website: the suite must not stay enabled on this card.
 	OnReport func(*Report)
+	// OnCert receives every certificate the cover installs: the static one at Start and each
+	// certificate ACME obtains or renews. Nil ignores them.
+	OnCert func(*x509.Certificate)
 	// OnError receives background errors; nil ignores them.
 	OnError func(error)
 }
@@ -162,7 +165,10 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 	}
 	n.certs, err = NewCerts(CertsConfig{
 		Domain: cfg.Domain, ACME: cfg.ACME, Static: cfg.Cert, KV: cfg.KV, Now: cfg.Now, Sleep: cfg.Sleep, OnError: cfg.OnError,
-		OnChange: func(*x509.Certificate) {
+		OnChange: func(leaf *x509.Certificate) {
+			if cfg.OnCert != nil {
+				cfg.OnCert(leaf)
+			}
 			select {
 			case n.changed <- struct{}{}:
 			default:
@@ -171,6 +177,9 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Cert != nil && cfg.Cert.Leaf != nil && cfg.OnCert != nil {
+		cfg.OnCert(cfg.Cert.Leaf)
 	}
 	n.group = cfg.Group
 	if n.group == 0 {

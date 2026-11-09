@@ -121,6 +121,9 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		}
 		cfg.Cover = fmt.Sprintf("%s:%d", domain, o.Port)
 		cfg.SiteDir = o.SiteDir
+		// The operator chose a domain and no certificate: the node gets one from the CA. The
+		// installer is the operator's act; a hand-written server.json says it with accept_tos.
+		cfg.CoverACME = &CoverACMESpec{AcceptTOS: true}
 	}
 	var notes []Note
 	switch p {
@@ -152,6 +155,7 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		if o.SiteDir == "" {
 			notes = append(notes, Note{"warn", "preset.empty-site"})
 		}
+		notes = append(notes, Note{"info", "preset.acme"})
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, nil, err

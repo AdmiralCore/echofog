@@ -64,6 +64,9 @@ type Reality2Listener struct {
 	Now func() time.Time
 	// OnWarn receives the non-fatal findings of the cover (an empty site folder).
 	OnWarn func(string)
+	// OnCert receives every certificate the cover installs (a static one at start, ACME issues
+	// and renewals); nil ignores them.
+	OnCert func(*x509.Certificate)
 	// OnError receives background errors of the cover; nil ignores them.
 	OnError func(error)
 }
@@ -105,7 +108,7 @@ func (r Reality2Listener) Listen(ctx context.Context) (carrier.Listener, error) 
 		KV: carrierKV{r.CertKV}, Masks: r.Masks, Addrs: r.Addrs, Replay: replay,
 		TCPAddr: r.TCPAddr, UDPAddr: r.UDPAddr, HTTPAddr: r.HTTPAddr,
 		MaxPreToken: r.MaxPreToken, FirstRecordTimeout: r.FirstRecordTimeout,
-		Now: now, OnWarn: r.OnWarn, OnError: r.OnError,
+		Now: now, OnWarn: r.OnWarn, OnError: r.OnError, OnCert: r.OnCert,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: reality2 listener: %w", err)

@@ -173,7 +173,7 @@ func TestRenderConfigHasComments(t *testing.T) {
 		}
 	}
 	// Only whole-line comments are comments: a value that contains // is a value.
-	c, err := servernode.ParseConfig([]byte("// hi\n" + strings.Replace(goodConfig, `"roles"`, `"site_dir": "/srv/site", "cover": "a//b.example:443", "roles"`, 1)))
+	c, err := servernode.ParseConfig([]byte("// hi\n" + strings.Replace(goodConfig, `"roles"`, `"site_dir": "/srv/site", "cover": "a//b.example:443", "cover_acme": {"accept_tos": true}, "roles"`, 1)))
 	if err != nil || c.Cover != "a//b.example:443" {
 		t.Errorf("comment handling: %v %+v", err, c)
 	}
