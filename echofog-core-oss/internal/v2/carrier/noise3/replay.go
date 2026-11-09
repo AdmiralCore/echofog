@@ -1,6 +1,7 @@
 package noise3
 
 import (
+	"log/slog"
 	mrand "math/rand/v2"
 	"sync"
 	"time"
@@ -31,6 +32,9 @@ type replayCache struct {
 	kv        KV
 	nextFlush time.Time
 	rnd       *mrand.Rand
+	// onError receives persistence errors; nil logs them. A failed write keeps the generation
+	// dirty so the next flush retries it and a restart does not reopen the replay window.
+	onError func(error)
 }
 
 func newReplayCache(kv KV, now time.Time, rnd *mrand.Rand) *replayCache {
@@ -109,27 +113,47 @@ func (r *replayCache) flush(now time.Time) {
 }
 
 // persistLocked writes only the changed generations, then the rotation state, and releases the
-// lock before the KV calls. A nothing-changed filter writes nothing (the idle case).
+// lock before the KV calls. A nothing-changed filter writes nothing (the idle case). A generation
+// is marked clean only after its PutTTL succeeded: on error it stays dirty, the next flush retries
+// it, and a restart cannot silently reopen the replay window.
 func (r *replayCache) persistLocked() {
 	if !r.set.anyDirty() {
 		r.mu.Unlock()
 		return
 	}
 	type part struct {
+		gen  int
 		key  []byte
 		data []byte
 	}
 	var parts []part
 	for i := range r.set.gens {
 		if g := &r.set.gens[i]; g.dirty {
-			parts = append(parts, part{genKey(i), g.marshal()})
-			g.dirty = false
+			parts = append(parts, part{gen: i, key: genKey(i), data: g.marshal()})
 		}
 	}
-	parts = append(parts, part{[]byte(bloomKey), r.set.metaMarshal()})
+	meta := r.set.metaMarshal()
 	kv := r.kv
 	r.mu.Unlock()
 	for _, p := range parts {
-		_ = kv.PutTTL(p.key, p.data, replayTTL)
+		if err := kv.PutTTL(p.key, p.data, replayTTL); err != nil {
+			r.report(err)
+			continue
+		}
+		r.mu.Lock()
+		r.set.gens[p.gen].dirty = false
+		r.mu.Unlock()
 	}
+	if err := kv.PutTTL([]byte(bloomKey), meta, replayTTL); err != nil {
+		r.report(err)
+	}
+}
+
+// report sends a persistence error to the journal. It never carries keys or addresses.
+func (r *replayCache) report(err error) {
+	if r.onError != nil {
+		r.onError(err)
+		return
+	}
+	slog.Warn("noise3: replay cache persist failed", "err", err)
 }

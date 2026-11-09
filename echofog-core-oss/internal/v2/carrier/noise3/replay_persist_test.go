@@ -60,3 +60,17 @@ func TestReplayDirtyHeldUntilPutSucceeds(t *testing.T) {
 		t.Fatal("selector lost across a restart after the retry")
 	}
 }
+
+// TestReplayPersistErrorIsReported checks that a failed write reaches the journal hook.
+func TestReplayPersistErrorIsReported(t *testing.T) {
+	kv := &failingKV{mapKV: newMapKV(), failing: true}
+	t0 := time.Unix(94_000, 0)
+	c := newReplayCache(kv, t0, nil)
+	var got error
+	c.onError = func(err error) { got = err }
+	c.seen(selFor("report"), t0)
+	c.flush(t0)
+	if got == nil {
+		t.Fatal("a persistence error was not reported")
+	}
+}
