@@ -98,6 +98,28 @@ the stamped script once with `sha256sum out/install.sh` and put the `file` value
 the README **before** announcing the release. A script stamped again for another release has another
 value.
 
+### The same keys in the binary
+
+`install.sh` carries the keys as text; the binary carries the same public keys compiled in. Both lists
+must match, otherwise the script accepts a release that the node then refuses (or the reverse). The
+build receives them as a comma-separated list in `RELEASE_KEYS`:
+
+```
+make build VERSION=0.3.0 RELEASE_KEYS='<KEY1>,<KEY2>,<KEY3>'
+```
+
+In CI the same value comes from the repository secret `RELEASE_KEYS`; without it the build is an OSS
+build. Each item is an Ed25519 public key in base64 or hex; the `ed25519:<base64url>` text form of
+`efv2-release` is accepted too. Keys are public. Private keys never leave the offline machine.
+
+An OSS build compiles an empty set: `echofog-node v2 setup` and `v2 update` answer "this build has no
+release keys", and no signed entry list is trusted. That is the intended fail-closed behaviour. A
+non-empty but malformed list does not silently become empty: the binary panics at startup with the
+offending key number, so a broken release build cannot ship.
+
+For 0.3.0 the built-in entry list is signed by one release key; the update manifest already requires two
+distinct release-key signatures. Moving the entry list to a 2-of-3 signature is planned after 0.3.0.
+
 ## 6. Replacing the release keys
 
 The old keys vouch for the new ones, so that nobody has to trust a new key blindly:
