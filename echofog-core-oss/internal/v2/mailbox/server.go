@@ -57,6 +57,10 @@ type Limits struct {
 	QuotaItemsPerDay int
 	QuotaBytesPerDay int64
 	QuotaFactor      int
+	// DedupeItems bounds the memories of direct DEPOSITs into public queues (p/) across the whole
+	// relay. They outlive the acknowledged item by design, so they are not part of TotalItems and
+	// need their own cap; the oldest are evicted first when it is reached.
+	DedupeItems int
 	// Lifetimes.
 	QueueTTL  time.Duration // at most 30 days (services.md §5.2)
 	ItemTTL   time.Duration // unacknowledged items live 7 days (services.md §5.3)
