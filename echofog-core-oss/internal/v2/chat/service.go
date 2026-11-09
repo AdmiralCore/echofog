@@ -103,6 +103,12 @@ type ServiceConfig struct {
 	IsContact func(node [32]byte) bool
 	// NoJitter turns the +-20 % of the retry pauses off (tests, AD13).
 	NoJitter bool
+	// ResolveTimeout bounds one directory lookup made for an incoming envelope (ЧМ-2); zero means
+	// the default of 5 s.
+	ResolveTimeout time.Duration
+	// MaxResolvePerMinute bounds the directory lookups caused by incoming envelopes (ЧМ-2); zero
+	// means the default of 120.
+	MaxResolvePerMinute int
 
 	// Limits; zero means the default below.
 	MaxOutbox        int // all outgoing items
