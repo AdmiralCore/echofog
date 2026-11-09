@@ -70,7 +70,7 @@ type NodeApi struct {
 	v2l     sync.Mutex  // serializes start, stop and restart of the v2 stack
 	v2force app.Mode    // set under v2l by a failed restart: build in this mode (v2_runtime.go)
 
-	Logger *slog.Logger
+	Logger *slog.Logger // the log the v2 runtime is built with (v2_runtime.go); node.Logger serves the v1 paths
 }
 
 func NewNodeApi(node *node.Node) *NodeApi {
@@ -80,6 +80,8 @@ func NewNodeApi(node *node.Node) *NodeApi {
 		_ = node.SetPrivacy(*saved.Privacy) // an invalid hand edit keeps the defaults
 	}
 	node.SetBootstrapNodes(bootstrapList(builtIn, saved.BootstrapNodes))
+	// The v2 runtime is built from Logger, not from node.Logger, so a caller that swaps the log
+	// after this point must set this field too.
 	api := &NodeApi{node: node, Logger: node.Logger, relayChosen: chosen, startPort: relaySettingsFromConfig(node.Cfg).ListenPort,
 		exitFreePeers: saved.ExitFreePeers, noAutoSwitch: saved.VPNNoAutoSwitch, bootstrapBuiltIn: builtIn, bootstrapCustom: saved.BootstrapNodes,
 		nextAccessMode: saved.AccessMode}

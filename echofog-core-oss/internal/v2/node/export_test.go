@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"github.com/echofog/echofog-core/internal/v2/mailbox"
+	"log/slog"
 	"net"
 	"net/netip"
 
@@ -183,3 +184,10 @@ var (
 	// PortMapAdd exposes the manager the runtime built, to check it was built disabled.
 	PortMapAdd = func(r *Runtime, proto portmap.Proto, port uint16) error { return r.pm.Add(proto, port) }
 )
+
+// PeerOfForLog runs the accept loop's peer view on a runtime that carries only what the branch
+// reads: the log and the raw carrier clock.
+var PeerOfForLog = func(log *slog.Logger, est *session.Established) Peer {
+	r := &Runtime{log: log, carrierClock: systemClock{}}
+	return r.peerOf(est)
+}

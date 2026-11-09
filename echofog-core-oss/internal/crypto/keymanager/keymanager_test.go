@@ -59,7 +59,7 @@ func TestKeyManager_FullSecureFlow(t *testing.T) {
 	store := &mockStorage{data: make(map[string][]byte)}
 
 	rawMnemonic := []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
-	rawPassphrase := []byte("echo_duress_123")
+	rawPassphrase := []byte("echo_test_123")
 
 	fmt.Println("==================================================")
 	fmt.Printf("[ВИЗУАЛЬНЫЙ КОНТРОЛЬ] Входящая мнемоника: %s\n", string(rawMnemonic))

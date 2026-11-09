@@ -114,7 +114,7 @@ func (n *Node) TonRecoveryPhrase(appPassword []byte) ([]string, error) {
 		return nil, errors.New("log in first")
 	}
 	probe := identity.NewProtectedIdentity(n.Storage)
-	if err := probe.Load(appPassword, false); err != nil {
+	if err := probe.Load(appPassword); err != nil {
 		return nil, ErrWrongPassword
 	}
 	return tonwallet.DeriveRecoveryPhrase(n.identity)

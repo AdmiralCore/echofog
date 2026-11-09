@@ -80,7 +80,7 @@ func TestIdentityManager_Lifecycle(t *testing.T) {
 	im.PanicButton()
 
 	im2 := newIdentityManager(st)
-	err = im2.LoadFromStorage(append([]byte(nil), savePass...), false)
+	err = im2.LoadFromStorage(append([]byte(nil), savePass...))
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
@@ -130,46 +130,6 @@ func TestIdentityManager_Security_WipeBytes(t *testing.T) {
 	}
 }
 
-func TestIdentityManager_Security_DuressFlow(t *testing.T) {
-	defer memguard.Purge()
-
-	st := NewMockStorage()
-	im := newIdentityManager(st)
-
-	mCopy := []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
-	err := im.RestoreFromMnemonic(mCopy, []byte("real_pass"))
-	if err != nil {
-		t.Fatalf("failed to restore: %v", err)
-	}
-
-	savePass := []byte("storage_pass")
-	err = im.SaveToStorage(append([]byte(nil), savePass...))
-	if err != nil {
-		t.Fatalf("failed to save: %v", err)
-	}
-
-	realPeerID, _ := im.GetOwnPeerID()
-
-	imDuress := newIdentityManager(st)
-	err = imDuress.LoadFromStorage(append([]byte(nil), savePass...), true)
-	if err != nil {
-		t.Fatalf("duress load failed: %v", err)
-	}
-
-	if !imDuress.isUnlocked {
-		t.Fatalf("identity should appear unlocked during duress")
-	}
-
-	duressPeerID, err := imDuress.GetOwnPeerID()
-	if err != nil {
-		t.Fatalf("failed to get duress peer ID: %v", err)
-	}
-
-	if realPeerID == duressPeerID {
-		t.Fatalf("CRITICAL: Duress flow yielded the real PeerID")
-	}
-}
-
 func TestIdentityManager_Security_PanicButton(t *testing.T) {
 	defer memguard.Purge()
 
@@ -211,7 +171,7 @@ func TestIdentityManager_Security_InvalidLoad(t *testing.T) {
 	im.PanicButton()
 
 	im2 := newIdentityManager(st)
-	err := im2.LoadFromStorage([]byte("wrong_password"), false)
+	err := im2.LoadFromStorage([]byte("wrong_password"))
 
 	if err == nil {
 		t.Fatalf("CRITICAL: successfully loaded with wrong password")

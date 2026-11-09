@@ -43,10 +43,10 @@ func (p *ProtectedIdentity) GenerateNewIdentity(passphrase []byte) (*ProtectedMn
 	return p.manager.GenerateNewIdentity(passphrase)
 }
 
-func (p *ProtectedIdentity) Load(passphrase []byte, isDuress bool) error {
+func (p *ProtectedIdentity) Load(passphrase []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.manager.LoadFromStorage(passphrase, isDuress)
+	return p.manager.LoadFromStorage(passphrase)
 }
 
 // UnlockKey checks the password and returns the key it becomes for the stored root, which

@@ -32,7 +32,7 @@ func SetupTestIdentity(t *testing.T) (*identity.ProtectedIdentity, *TestingBadge
 	}
 
 	passphraseToLoad := []byte("super_pro_max_secret_test_password")
-	if err = im.Load(passphraseToLoad, false); err != nil {
+	if err = im.Load(passphraseToLoad); err != nil {
 		t.Fatalf("Failed to unlock test identity: %v", err)
 	}
 
