@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -48,6 +49,7 @@ func TestParseSpec(t *testing.T) {
 		{name: "empty entry", spec: std(k1) + ",,", wantErr: true},
 		{name: "bad hex length", spec: strings.Repeat("ab", 31), wantErr: true},
 		{name: "small order key", spec: base64.StdEncoding.EncodeToString(identityPoint()), wantErr: true},
+		{name: "small order text form", spec: smallOrderText(), wantErr: true},
 	}
 
 	for _, tc := range cases {
@@ -80,6 +82,34 @@ func identityPoint() []byte {
 	b := make([]byte, 32)
 	b[0] = 1
 	return b
+}
+
+// smallOrderText is the identity point in the akey text form "ed25519:<base64url>". The text form
+// must be checked exactly like base64 and hex: a small-order key in any form is a broken spec.
+func smallOrderText() string { return keys.New(keys.Ed25519, identityPoint()).Text() }
+
+// TestSmallOrderKeyRejectedInEveryForm pins the contract of ParseKey: a small-order key is refused
+// whichever encoding carries it, so a release build cannot compile a key that Verify will reject.
+func TestSmallOrderKeyRejectedInEveryForm(t *testing.T) {
+	cases := []struct {
+		name string
+		spec string
+	}{
+		{name: "standard base64", spec: base64.StdEncoding.EncodeToString(identityPoint())},
+		{name: "hex", spec: hex.EncodeToString(identityPoint())},
+		{name: "akey text form", spec: smallOrderText()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := releasekeys.ParseSpec(tc.spec)
+			if err == nil {
+				t.Fatalf("ParseSpec accepted a small-order key of %d bytes", len(got))
+			}
+			if !errors.Is(err, keys.ErrSmallOrder) {
+				t.Fatalf("error %v is not ErrSmallOrder", err)
+			}
+		})
+	}
 }
 
 func TestMustParseSpecPanicsOnInvalidSpec(t *testing.T) {
