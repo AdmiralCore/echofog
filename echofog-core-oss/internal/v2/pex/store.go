@@ -509,23 +509,17 @@ func decodeRecord(b []byte) (*entry, bool) {
 	}, true
 }
 
-// pexCGNAT and pexDocPrefixes are address ranges a PEX answerer must not send the node to: they
-// are not public unicast endpoints of an independent peer.
-var (
-	pexCGNAT       = netip.MustParsePrefix("100.64.0.0/10")
-	pexDocPrefixes = []netip.Prefix{
-		netip.MustParsePrefix("192.0.2.0/24"),
-		netip.MustParsePrefix("198.51.100.0/24"),
-		netip.MustParsePrefix("203.0.113.0/24"),
-		netip.MustParsePrefix("2001:db8::/32"),
-	}
-)
+// pexCGNAT is the shared address space of RFC 6598: carrier-grade NAT addresses are not an
+// endpoint of an independent peer and must not be dialed from a PEX answer.
+var pexCGNAT = netip.MustParsePrefix("100.64.0.0/10")
 
 // routableCard reports whether every IP address of a card is a public unicast address. A card
 // received from PEX is chosen by whoever answered: loopback, private, link-local (cloud
-// metadata), CGNAT, ULA and documentation ranges would make the node probe its own network or
-// someone else's (ДР-2, the same rule as dht/routableCard). Host names cannot be judged before
-// resolution and pass.
+// metadata), CGNAT and ULA would make the node probe its own network or someone else's (ДР-2, the
+// same rule as dht/routableCard). Host names cannot be judged before resolution and pass.
+//
+// Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32) are
+// reserved and not routed, so dialing them cannot reach a local service; they stay routable here.
 func routableCard(c *objects.Card) bool {
 	for _, a := range c.Addrs() {
 		host := a.GetHost()
@@ -542,11 +536,6 @@ func routableCard(c *objects.Card) bool {
 		}
 		if pexCGNAT.Contains(ip) {
 			return false
-		}
-		for _, p := range pexDocPrefixes {
-			if p.Contains(ip) {
-				return false
-			}
 		}
 	}
 	return true
