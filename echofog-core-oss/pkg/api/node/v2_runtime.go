@@ -29,6 +29,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/convsync"
 	"github.com/echofog/echofog-core/internal/v2/files"
 	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -55,6 +56,9 @@ type v2Hooks struct {
 	Roles []node.Role
 	// ChatDir replaces the DHT as the place accounts are looked up (two stacks of one process).
 	ChatDir chat.Directory
+	// ReleaseKeys are the release public keys of the build (tests). Nil leaves the release
+	// manager off, as in a build without release keys.
+	ReleaseKeys []keys.AKey
 }
 
 // v2Settings is <profile>/v2/node.json: where this desktop listens, which address it advertises and
@@ -159,6 +163,9 @@ type v2Stack struct {
 	dir string
 	// boot is the official entry list and the user's entries (T5.6).
 	boot *bootstrap.Manager
+	// bootMu serialises the delivery of the list from a manifest (T5.6).
+	bootMu sync.Mutex
+	log    *slog.Logger
 
 	ctx      context.Context
 	cancel   context.CancelFunc // stops the goroutines of the stack (the bootstrap, the publication)
@@ -548,6 +555,7 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 		return nil, err
 	}
 	s.dir = dir
+	s.log = n.Logger
 	s.boot = openV2Bootstrap(dir, set.Bootstrap, s.st.Store("v2/bootstrap"), clk.Now, n.Logger)
 
 	// the mode saved by the last SetMode decides how the cards are built
@@ -623,6 +631,9 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 		LocalInfo: carrier.LocalInfo{Addrs: local},
 		Chat:      true,
 		ChatDir:   n.v2h.ChatDir,
+		// the release manifest carries the signed entry list (T5.6)
+		ReleaseKeys:      n.v2h.ReleaseKeys,
+		ReleaseBootstrap: s.applyBootstrapList,
 		ChatEvents: chat.Events{
 			Message: func(in chat.Incoming) {
 				if a := getApp(); a != nil {

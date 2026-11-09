@@ -128,6 +128,9 @@ type Config struct {
 	// ReleaseSiteURL is the https URL of the manifest on the download page; empty disables that
 	// source (the DHT and pex/2 remain).
 	ReleaseSiteURL string
+	// ReleaseBootstrap receives the signed entry list carried by an applied manifest (T5.6). Nil
+	// ignores it.
+	ReleaseBootstrap func([]byte)
 	// ReleasePoll overrides the 24-hour poll interval of the DHT and the download page (tests).
 	ReleasePoll time.Duration
 	// GreaseInterval returns the delay before the next GREASE frame of a session (D18). Nil

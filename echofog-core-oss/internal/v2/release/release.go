@@ -110,6 +110,10 @@ type Config struct {
 	// OnEvent receives "update available" events. It is called without internal locks and must not
 	// block for long.
 	OnEvent func(Event)
+	// OnBootstrapList receives the signed official entry list carried by an applied manifest
+	// (Release.bootstrap_list, T5.6). It is called without internal locks after the manifest is
+	// applied, and must not block for long.
+	OnBootstrapList func([]byte)
 	// Log receives diagnostics. Nil is silent.
 	Log *slog.Logger
 }

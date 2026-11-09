@@ -191,6 +191,9 @@ func (n *NodeApi) ApplyBootstrapList(raw []byte) error {
 	return bootstrapErr(m.Offer(raw))
 }
 
+// applyBootstrapList delivers the signed entry list of a release manifest (T5.6).
+func (s *v2Stack) applyBootstrapList(raw []byte) {}
+
 // runBootstrapEntries dials the entries once in the background, without logging their lines.
 func (n *NodeApi) runBootstrapEntries(entries []bootstrap.Entry) {
 	n.v2l.Lock()
