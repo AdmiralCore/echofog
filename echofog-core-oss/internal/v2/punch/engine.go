@@ -1,6 +1,7 @@
 package punch
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
@@ -78,6 +79,15 @@ type Config struct {
 	HasDirect func() bool
 	// Bind attaches the punched carrier to the session (PATH_BIND).
 	Bind func(ctx context.Context, c mux.Carrier) error
+
+	// Birthday punching (services.md §6.4.1). A nil Birthday keeps the engine on the ordinary
+	// algorithm and out of the new offer fields.
+	Birthday *Birthday
+	// OwnNAT is this node's NAT class and observed port range (from OBSERVED_ADDR).
+	OwnNAT func() NATInfo
+	// OwnID and PeerID are the node IDs of the session ends: in mutual the lower one is the noise3
+	// initiator.
+	OwnID, PeerID [32]byte
 }
 
 // Engine coordinates hole punching on one relayed session. The initiator runs Run; both ends feed
@@ -103,6 +113,9 @@ type pending struct {
 	targets []netip.AddrPort
 	expires time.Time
 	syncs   int
+	// birthday: the mode this end runs on PUNCH_SYNC and the peer's NAT as it stated it.
+	mode    Mode
+	peerNAT NATInfo
 }
 
 // New returns an engine.
@@ -208,7 +221,7 @@ func (e *Engine) round(ctx context.Context) (bool, error) {
 	if len(own) > frame.MaxPunchAddrs {
 		own = own[:frame.MaxPunchAddrs]
 	}
-	if err := e.cfg.Link.SendControl(frame.TypePunchOffer, 0, frame.PunchOffer{Addrs: own, Nonce: nonce}.Append(nil)); err != nil {
+	if err := e.cfg.Link.SendControl(frame.TypePunchOffer, 0, e.withNAT(frame.PunchOffer{Addrs: own, Nonce: nonce}, false, ModeOrdinary).Append(nil)); err != nil {
 		return false, nil // the session cannot carry it now; the next round retries
 	}
 	// The peer's answer: the same nonce, within one attempt time.
@@ -231,6 +244,13 @@ func (e *Engine) round(ctx context.Context) (bool, error) {
 	if len(targets) == 0 {
 		return false, nil
 	}
+	mode := ModeOrdinary
+	if e.bdOn() {
+		mode = e.pickMode(peer)
+		if mode == ModeNone {
+			return false, nil
+		}
+	}
 	for attempt := 0; attempt < MaxAttempts; attempt++ {
 		pctx, cancelPing := context.WithTimeout(ctx, AttemptTime)
 		rtt, err := e.cfg.Link.Ping(pctx)
@@ -246,10 +266,17 @@ func (e *Engine) round(ctx context.Context) (bool, error) {
 			return false, err
 		}
 		actx, cancel := context.WithCancel(ctx)
-		stop := e.cfg.Clock.AfterFunc(AttemptTime, cancel)
-		c, err := e.cfg.Net.Dial(actx, targets, MaxInitDatagrams)
+		limit := AttemptTime
+		if mode != ModeOrdinary {
+			limit += PunchWindow
+		}
+		stop := e.cfg.Clock.AfterFunc(limit, cancel)
+		c, accepted, err := e.punchAttempt(actx, mode, targets, peer)
 		stop.Stop()
 		cancel()
+		if accepted {
+			return true, nil
+		}
 		if err == nil && c != nil {
 			if berr := e.cfg.Bind(ctx, c); berr != nil {
 				_ = c.Close()
@@ -325,13 +352,17 @@ func (e *Engine) onOffer(o frame.PunchOffer) {
 		return
 	}
 	e.answered, e.lastPeer = true, now
-	e.pend = pending{nonce: o.Nonce, targets: FilterTargets(o.Addrs, e.cfg.Rules()), expires: now.Add(OfferInterval)}
+	mode, peerNAT := ModeOrdinary, natOf(o)
+	if e.bdOn() {
+		mode = Choose(e.ownNAT(), peerNAT)
+	}
+	e.pend = pending{nonce: o.Nonce, targets: FilterTargets(o.Addrs, e.cfg.Rules()), expires: now.Add(OfferInterval), mode: mode, peerNAT: peerNAT}
 	e.mu.Unlock()
 	own := e.cfg.Net.OwnAddrs()
 	if len(own) > frame.MaxPunchAddrs {
 		own = own[:frame.MaxPunchAddrs]
 	}
-	_ = e.cfg.Link.SendControl(frame.TypePunchOffer, 0, frame.PunchOffer{Addrs: own, Nonce: o.Nonce}.Append(nil))
+	_ = e.cfg.Link.SendControl(frame.TypePunchOffer, 0, e.withNAT(frame.PunchOffer{Addrs: own, Nonce: o.Nonce}, true, mode).Append(nil))
 }
 
 func (e *Engine) onSync(nonce uint64) {
@@ -354,11 +385,20 @@ func (e *Engine) onSync(nonce uint64) {
 		e.mu.Unlock()
 		return
 	}
+	mode, peerNAT := p.mode, p.peerNAT
+	if mode == ModeNone {
+		e.mu.Unlock()
+		return
+	}
 	p.syncs++
 	e.junking = true
 	targets := append([]netip.AddrPort(nil), p.targets...)
 	e.mu.Unlock()
-	go e.junk(targets)
+	if mode == ModeOrdinary {
+		go e.junk(targets)
+		return
+	}
+	go e.birthdayResponder(mode, targets, peerNAT)
 }
 
 // junk opens this end's NAT towards every target: JunkMin..JunkMax random datagrams, JunkGapMin..
@@ -384,4 +424,161 @@ func (e *Engine) junk(targets []netip.AddrPort) {
 	e.mu.Lock()
 	e.junking = false
 	e.mu.Unlock()
+}
+
+// --- birthday punching (services.md §6.4.1) ---
+
+func (e *Engine) bdOn() bool { return e.cfg.Birthday != nil && e.cfg.Birthday.Enabled() }
+
+func (e *Engine) ownNAT() NATInfo {
+	if e.cfg.OwnNAT == nil {
+		return NATInfo{Class: NATUnknown}
+	}
+	n := e.cfg.OwnNAT()
+	if n.Class == NATUnstated {
+		n.Class = NATUnknown
+	}
+	return n
+}
+
+// withNAT adds the birthday fields to an offer when punching is on; the answer also states the mode.
+func (e *Engine) withNAT(o frame.PunchOffer, answer bool, mode Mode) frame.PunchOffer {
+	if !e.bdOn() {
+		return o
+	}
+	n := e.ownNAT()
+	o.Nat = uint32(n.Class)
+	if n.Class == NATSymmetric && n.Narrow() {
+		o.PortLo, o.PortHi = uint32(n.Lo), uint32(n.Hi)
+	}
+	if n.Samples > 0 {
+		o.Samples = uint32(n.Samples)
+	}
+	if answer {
+		o.Mode = uint32(mode)
+	}
+	return o
+}
+
+// natOf is the NAT a peer's offer states; an offer without the fields states nothing.
+func natOf(o frame.PunchOffer) NATInfo {
+	n := NATInfo{Class: NATUnstated, Samples: int(min(o.Samples, 1<<20))}
+	if o.Nat <= uint32(NATUnknown) {
+		n.Class = NAT(o.Nat)
+	}
+	if o.PortLo <= 65535 && o.PortHi <= 65535 {
+		n.Lo, n.Hi = uint16(o.PortLo), uint16(o.PortHi)
+	}
+	return n
+}
+
+// pickMode is the initiator's mode once the answer is in: the table's choice, run only when the
+// responder's stated mode is the counterpart.
+func (e *Engine) pickMode(answer frame.PunchOffer) Mode {
+	m := Choose(e.ownNAT(), natOf(answer))
+	if m == ModeOrdinary || m == ModeNone {
+		return m
+	}
+	if !Counterpart(m, Mode(min(answer.Mode, uint32(ModeNone)))) {
+		return ModeNone
+	}
+	return m
+}
+
+func (e *Engine) lowerID() bool { return bytes.Compare(e.cfg.OwnID[:], e.cfg.PeerID[:]) < 0 }
+
+// initAfterHit wraps ctx with the deadline of the Init that follows a hit. The deadline runs from the
+// hit and is separate from the general AttemptTime of step 6 (services.md §6.4.1): a hit caused by a
+// spoofed datagram then fails within it instead of borrowing the rest of the attempt.
+func (e *Engine) initAfterHit(ctx context.Context) (context.Context, context.CancelFunc) {
+	ictx, cancel := context.WithCancel(ctx)
+	stop := e.cfg.Clock.AfterFunc(InitAfterHit, cancel)
+	return ictx, func() { stop.Stop(); cancel() }
+}
+
+// punchAttempt makes one attempt in mode. It returns the carrier to bind, or accepted when this end
+// was the noise3 responder of a birthday flow (the other end binds).
+func (e *Engine) punchAttempt(ctx context.Context, mode Mode, targets []netip.AddrPort, peer frame.PunchOffer) (c mux.Carrier, accepted bool, err error) {
+	bd := e.cfg.Birthday
+	lo, hi := uint16(min(peer.PortLo, 65535)), uint16(min(peer.PortHi, 65535))
+	switch mode {
+	case ModeDial:
+		h, err := bd.Dial(ctx, targets[0], false)
+		if err != nil {
+			return nil, false, err
+		}
+		ictx, stopInit := e.initAfterHit(ctx)
+		defer stopInit()
+		c, err = bd.Net().DialFrom(ictx, h.Sock, h.Target, MaxInitDatagrams)
+		return c, false, err
+	case ModeSpray:
+		h, err := bd.Spray(ctx, targets[0].Addr(), lo, hi)
+		if err != nil {
+			return nil, false, err
+		}
+		ictx, stopInit := e.initAfterHit(ctx)
+		defer stopInit()
+		c, err = e.cfg.Net.Dial(ictx, []netip.AddrPort{h.Target}, MaxInitDatagrams)
+		return c, false, err
+	case ModeMutual:
+		h, err := bd.Mutual(ctx, targets[0].Addr(), lo, hi)
+		if err != nil {
+			return nil, false, err
+		}
+		if e.lowerID() {
+			ictx, stopInit := e.initAfterHit(ctx)
+			defer stopInit()
+			c, err = bd.Net().DialFrom(ictx, h.Sock, h.Target, MaxInitDatagrams)
+			return c, false, err
+		}
+		return nil, bd.Net().AcceptOn(ctx, h.Sock) == nil, nil
+	}
+	c, err = e.cfg.Net.Dial(ctx, targets, MaxInitDatagrams)
+	return c, false, err
+}
+
+// birthdayResponder is the responder's half of a birthday attempt, started by PUNCH_SYNC.
+func (e *Engine) birthdayResponder(mode Mode, targets []netip.AddrPort, peerNAT NATInfo) {
+	defer func() {
+		e.mu.Lock()
+		e.junking = false
+		e.mu.Unlock()
+	}()
+	if len(targets) == 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	stop := e.cfg.Clock.AfterFunc(PunchWindow+AttemptTime, cancel)
+	defer stop.Stop()
+	bd := e.cfg.Birthday
+	switch mode {
+	case ModeDial:
+		// We are symmetric, the initiator is a cone: open sockets, and run the noise3 listener on the
+		// one the initiator's spray reaches.
+		if h, err := bd.Dial(ctx, targets[0], true); err == nil {
+			_ = bd.Net().AcceptOn(ctx, h.Sock)
+		}
+	case ModeSpray:
+		// We are the cone: spray the initiator's range. Its Init arrives on our listener.
+		_, _ = bd.Spray(ctx, targets[0].Addr(), peerNAT.Lo, peerNAT.Hi)
+	case ModeMutual:
+		h, err := bd.Mutual(ctx, targets[0].Addr(), peerNAT.Lo, peerNAT.Hi)
+		if err != nil {
+			return
+		}
+		if !e.lowerID() {
+			_ = bd.Net().AcceptOn(ctx, h.Sock)
+			return
+		}
+		// The Init after the hit gets its own 3 s from the hit (services.md §6.4.1), not the rest of
+		// this responder's PunchWindow+AttemptTime.
+		ictx, stopInit := e.initAfterHit(ctx)
+		defer stopInit()
+		if c, err := bd.Net().DialFrom(ictx, h.Sock, h.Target, MaxInitDatagrams); err == nil && c != nil && e.cfg.Bind != nil {
+			if e.cfg.Bind(ctx, c) != nil {
+				_ = c.Close()
+			}
+		}
+	}
 }

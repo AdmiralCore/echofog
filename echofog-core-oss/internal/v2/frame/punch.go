@@ -14,6 +14,13 @@ const MaxPunchAddrs = 4
 type PunchOffer struct {
 	Addrs []netip.AddrPort
 	Nonce uint64
+	// The birthday-punch additions (services.md §6.4.1), fields 3–7. Zero means "not stated": the
+	// peer counts as a cone NAT and is never sprayed at.
+	Nat     uint32
+	PortLo  uint32
+	PortHi  uint32
+	Samples uint32
+	Mode    uint32
 }
 
 // Append encodes the offer canonically: addresses in order, then the nonce (omitted when zero).
@@ -26,7 +33,12 @@ func (o PunchOffer) Append(b []byte) []byte {
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
 		b = protowire.AppendBytes(b, AppendObservedAddr(nil, a))
 	}
-	return pbUint(b, 2, o.Nonce)
+	b = pbUint(b, 2, o.Nonce)
+	b = pbUint(b, 3, uint64(o.Nat))
+	b = pbUint(b, 4, uint64(o.PortLo))
+	b = pbUint(b, 5, uint64(o.PortHi))
+	b = pbUint(b, 6, uint64(o.Samples))
+	return pbUint(b, 7, uint64(o.Mode))
 }
 
 // ParsePunchOffer decodes PUNCH_OFFER. Field numbers must not decrease (the only repeated field
@@ -67,6 +79,27 @@ func ParsePunchOffer(p []byte) (PunchOffer, error) {
 			}
 			p = p[n:]
 			o.Nonce = v
+		case 3, 4, 5, 6, 7:
+			if typ != protowire.VarintType {
+				return PunchOffer{}, malformed("punch_offer birthday field")
+			}
+			v, n := protowire.ConsumeVarint(p)
+			if n < 0 || v > 0xffffffff {
+				return PunchOffer{}, malformed("punch_offer birthday field")
+			}
+			p = p[n:]
+			switch num {
+			case 3:
+				o.Nat = uint32(v)
+			case 4:
+				o.PortLo = uint32(v)
+			case 5:
+				o.PortHi = uint32(v)
+			case 6:
+				o.Samples = uint32(v)
+			case 7:
+				o.Mode = uint32(v)
+			}
 		default:
 			n := protowire.ConsumeFieldValue(num, typ, p)
 			if n < 0 {

@@ -88,6 +88,11 @@ type Profile struct {
 	LocalAddrs func() []netip.Addr
 	// PortMapping enables UPnP, NAT-PMP and PCP.
 	PortMapping bool
+	// Birthday enables birthday punching through symmetric NATs (flag birthday, platforms.md §2). It
+	// is off by default on mobile and always off under LowPower.
+	Birthday bool
+	// Guard is set by the application in guard mode: no birthday punching (services.md §6.4.1).
+	Guard bool
 	// STUN enables active STUN. v2 never uses STUN on carrier sockets (wire.md §7.2).
 	STUN bool
 	// MemCapMB caps the memory the node may use; a positive value also selects the mobile
@@ -124,9 +129,11 @@ func DefaultProfile(p Platform) Profile {
 	case PlatformServer:
 		prof.Roles = []Role{RoleDHTServer, RoleMailbox, RoleRelay}
 		prof.UDP = UDPFull
+		prof.Birthday = true
 	default:
 		prof.Platform = PlatformDesktop
 		prof.UDP = UDPFull
+		prof.Birthday = true
 	}
 	return prof
 }

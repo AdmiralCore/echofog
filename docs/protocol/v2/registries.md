@@ -36,7 +36,7 @@ is given by the service of the stream they appear on (§4).
 | 0x10 | PATH_BIND | H (instead of HS_HELLO) | `sid(16) ‖ varint path_id ‖ mac(32)` | 56 | wire.md §8.2 |
 | 0x11 | PATH_BIND_OK | H | `varint path_id` | 8 | wire.md §8.2 |
 | 0x12 | PATH_ABANDON | S | `varint path_id ‖ varint code` | 16 | wire.md §8.3 |
-| 0x13 | PUNCH_OFFER | S | `PunchOffer { repeated bytes addrs = 1; uint64 nonce = 2; }`, each addr `family(1) ‖ ip ‖ port(2)`, ≤ 4 used | 256 | services.md §6.4 |
+| 0x13 | PUNCH_OFFER | S | `PunchOffer { repeated bytes addrs = 1; uint64 nonce = 2; uint32 nat = 3; uint32 port_lo = 4; uint32 port_hi = 5; uint32 samples = 6; uint32 mode = 7; }`, each addr `family(1) ‖ ip ‖ port(2)`, ≤ 4 used; fields 3–7 are the `birthday-punch` additions | 256 | services.md §6.4 |
 | 0x14 | PUNCH_SYNC | S | `u64 nonce` echoed; the sender starts RTT/2 later, the receiver at once | 8 | services.md §6.4 |
 | 0x18 | MUX_STREAM | B | `varint stream_id ‖ u8 flags ‖ data` | 16400 | wire.md §5.2 |
 | 0x19 | MUX_RESET | B | `varint stream_id ‖ varint code` | 16 | wire.md §5.2 |
@@ -125,7 +125,7 @@ negotiated set is the intersection ([handshake.md](handshake.md) §7).
 | 0x0005 | `early-data` | the responder processes 0-RTT data in HsInit.early |
 | 0x0006 | `card-push` | either side may push a newer card with CARD_UPDATE |
 | 0x0007 | `stream-resume` | reserved: streams that survive a path change by offset (successor of v1 TCP rotation) |
-| 0x0008 | `birthday-punch` | reserved: hole punching through symmetric NATs with many ports (later) |
+| 0x0008 | `birthday-punch` | hole punching through symmetric NATs with many ports; PUNCH_OFFER fields 3–7 (services.md §6.4.1) |
 | 0x0009 | `wake-push` | reserved: a mailbox relay wakes a suspended mobile node through a push path (later, platforms.md §2) |
 | 0x0010 | `spqr` | reserved: post-quantum ratchet in chat/2 (later) |
 | 0x0011 | `sealed-header` | reserved: encrypted ratchet headers in chat/2 (later) |

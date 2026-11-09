@@ -54,6 +54,7 @@ const (
 	FeatureIdlePadding   uint16 = 0x0003
 	FeatureObservedAddr  uint16 = 0x0004
 	FeatureCardPush      uint16 = 0x0006
+	FeatureBirthdayPunch uint16 = 0x0008
 )
 
 // TypeInfo describes a known session-level frame type.

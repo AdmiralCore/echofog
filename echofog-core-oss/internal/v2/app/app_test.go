@@ -692,3 +692,16 @@ func TestAddByLinkKeepsAPolicyRefusalVisible(t *testing.T) {
 		}
 	}
 }
+
+func TestReportCountsBirthdayWithoutAddresses(t *testing.T) {
+	r := newRig(t, app.ModeHidden)
+	r.rt.status = node.Status{Sessions: sessions(), Birthday: node.BirthdayStatus{Tried: 7, OK: 2}}
+	_ = r.a.Start(context.Background())
+	rep := r.a.Report()
+	if !strings.Contains(rep, "birthday punch: tried 7, direct 2") {
+		t.Fatalf("report lacks the birthday counts:\n%s", rep)
+	}
+	if ipv4.MatchString(rep) {
+		t.Fatalf("the report leaks an address:\n%s", rep)
+	}
+}

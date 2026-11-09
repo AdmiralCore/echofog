@@ -49,7 +49,12 @@ type Status struct {
 	StartedAt  time.Time
 	Sessions   []SessionStatus
 	Abuse      []AbuseStatus
+	// Birthday counts birthday punch attempts and the ones that found a direct path (T6.7).
+	Birthday BirthdayStatus
 }
+
+// BirthdayStatus is the birthday punch counters of the connection report: counts only.
+type BirthdayStatus struct{ Tried, OK int64 }
 
 // Status returns a snapshot of the node: identity, profile, live sessions and persisted abuse
 // counters. It never starts or stops anything and takes only the locks needed to copy the state.
@@ -62,6 +67,7 @@ func (r *Runtime) Status() Status {
 		Background: r.background,
 		StartedAt:  r.startedAt,
 	}
+	st.Birthday.Tried, st.Birthday.OK = r.bd.Stats()
 	st.Profile.Roles = append([]Role(nil), st.Profile.Roles...)
 	table := r.table
 	r.mu.Unlock()

@@ -62,6 +62,7 @@ func TestDefaultProfiles(t *testing.T) {
 				Background: node.BackgroundForeground,
 				TunFD:      -1,
 				UDP:        node.UDPFull,
+				Birthday:   true,
 			},
 		},
 		{
@@ -72,6 +73,7 @@ func TestDefaultProfiles(t *testing.T) {
 				Background: node.BackgroundForeground,
 				TunFD:      -1,
 				UDP:        node.UDPFull,
+				Birthday:   true,
 			},
 		},
 	}

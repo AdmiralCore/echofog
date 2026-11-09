@@ -100,6 +100,10 @@ var SetDHTDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) {
 // OwnDHTRecords returns what the runtime asks the DHT client to publish by itself.
 var OwnDHTRecords = func(r *Runtime) [][]byte { return r.ownDHTRecords() }
 
+// PeerCardOf returns the card the runtime uses for punching to peer: the card book first, then the
+// card of a live session with that peer.
+var PeerCardOf = func(r *Runtime, peer [32]byte) *objects.Card { return r.peerCard(DeviceID(peer)) }
+
 // PunchRulesOf returns the target rules the runtime builds for a relayed session whose peer card is
 // raw and whose PEER_ADDR is peer.
 var PunchRulesOf = func(r *Runtime, raw []byte, peer netip.AddrPort) punch.Rules {

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/bootstrap"
+	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/objects"
 )
 
 func cmdRun(args []string) error {
@@ -23,6 +25,7 @@ func cmdRun(args []string) error {
 	cover := fs.String("cover", "", "cover host:port of the camouflaged suites (own cover, T2.6e)")
 	siteDir := fs.String("site-dir", "", "folder with the site of the cover")
 	coverCert := fs.String("cover-cert", "", "PEM bundle (certificate chain and key) of the cover domain")
+	join := fs.String("join", "", "card file of a node to keep a session with (lab: the relay of a NAT test)")
 	bootstrapPath := fs.String("bootstrap", "", "bootstrap list file (cards, device IDs and addresses); saved in the profile")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -78,6 +81,9 @@ func cmdRun(args []string) error {
 		log.Warn("could not write the status snapshot", "err", err)
 	}
 	startDatagramEcho(ctx, a.rt)
+	if *join != "" {
+		go joinCard(ctx, a, *join, log)
+	}
 	if len(entries) > 0 {
 		go runBootstrap(ctx, a, entries, log)
 	}
@@ -132,4 +138,25 @@ func listenText(spec string) string {
 		return "none (client only)"
 	}
 	return spec
+}
+
+// joinCard opens a session to the node whose card file is path, retrying until it holds one. A node
+// behind a NAT does this to be reachable through a relay.
+func joinCard(ctx context.Context, a *app, path string, log *slog.Logger) {
+	for ctx.Err() == nil {
+		doc, err := readCardFile(path)
+		if err == nil {
+			var card *objects.Card
+			if card, _, err = verifyCardDoc(doc, "", a.clock.Now()); err == nil {
+				if _, _, err = a.rt.Session(ctx, node.DeviceID(card.DeviceID), node.DialOpt{Card: card}); err == nil {
+					log.Info("joined the node of the card file")
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
 }

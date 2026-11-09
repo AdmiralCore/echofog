@@ -33,6 +33,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/pex"
 	"github.com/echofog/echofog-core/internal/v2/portmap"
+	"github.com/echofog/echofog-core/internal/v2/punch"
 	"github.com/echofog/echofog-core/internal/v2/release"
 	"github.com/echofog/echofog-core/internal/v2/routepolicy"
 	"github.com/echofog/echofog-core/internal/v2/service"
@@ -206,6 +207,9 @@ type Config struct {
 	// PortMap holds the test seams and tuning of port mapping (T6.5b). Whether it runs is
 	// Profile.PortMapping; Enabled here is ignored. Zero values select the production gateway.
 	PortMap portmap.Config
+	// NATOverride replaces the NAT that peers' reports imply (lab and tests: a lab with every public
+	// node in one /16 never reaches the three networks the classification needs).
+	NATOverride func() punch.NATInfo
 }
 
 // Runtime is one running v2 node (02-architecture AD5).
@@ -251,6 +255,7 @@ type Runtime struct {
 	limits   *session.Limits
 	control  *session.Control
 	observer *session.Observer
+	bd       *punch.BirthdayShared
 	// pm forwards the listener ports at the home router (T6.5b); pmApply serializes the cards
 	// following it, pmPorts is what Start asked for.
 	pm      *portmap.Manager
@@ -485,6 +490,7 @@ func New(cfg Config) (*Runtime, error) {
 		Now:      r.clock.Now,
 		OnChange: r.publicAddrChanged,
 	})
+	r.bd = &punch.BirthdayShared{}
 	pmCfg := cfg.PortMap
 	pmCfg.Enabled = cfg.Profile.PortMapping
 	if pmCfg.Clock == nil {
@@ -1088,6 +1094,9 @@ func (r *Runtime) mainLocal(ctx context.Context) (session.LocalIdentity, error) 
 		// A low_power node does not offer idle padding (platforms.md §2).
 		features = withoutFeature(features, idlePaddingFeature)
 	}
+	if r.cfg.Profile.Birthday && !r.cfg.Profile.LowPower && r.cfg.PunchNet != nil {
+		features = withFeature(features, uint32(frame.FeatureBirthdayPunch))
+	}
 	return session.LocalIdentity{
 		Device:   r.cfg.Device,
 		Card:     peer.Envelope,
@@ -1255,4 +1264,14 @@ func (c cardSource) Peer(device DeviceID) *objects.Card {
 
 func (c cardSource) Devices(node NodeID) *objects.DeviceList {
 	return c.book.DeviceList([32]byte(node))
+}
+
+// withFeature returns features with id added when it is missing.
+func withFeature(features []uint32, id uint32) []uint32 {
+	for _, f := range features {
+		if f == id {
+			return features
+		}
+	}
+	return append(features, id)
 }

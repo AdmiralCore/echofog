@@ -78,10 +78,14 @@ func (p *Noise3Punch) Net(peer DeviceID, _ punch.Role) punch.Net {
 	case p.Card != nil:
 		card = p.Card(peer)
 	case rt != nil:
-		card = rt.cardBook.Latest([32]byte(peer))
+		card = rt.peerCard(peer)
 	}
 	if l == nil {
 		return unavailableNet{}
+	}
+	if card == nil && rt != nil {
+		// The session that starts the engine is not in the table yet: the card is looked up when used.
+		return &lazyNet{p: p, l: l, peer: peer, rt: rt}
 	}
 	return &noise3.PunchNet{Listener: l, Own: p.own, Card: card}
 }
@@ -95,4 +99,65 @@ func (unavailableNet) SendJunk(netip.AddrPort, []byte) error {
 }
 func (unavailableNet) Dial(context.Context, []netip.AddrPort, int) (mux.Carrier, error) {
 	return nil, errors.New("node: no noise3 listener")
+}
+
+var _ BirthdayNetwork = (*Noise3Punch)(nil)
+
+// Socks implements BirthdayNetwork: extra UDP sockets for the symmetric side, the listener's socket
+// for the spray, Init and accept on the socket a mapping was found for (T6.7).
+func (p *Noise3Punch) Socks(peer DeviceID, deliver func(mux.Carrier)) punch.SockNet {
+	p.mu.Lock()
+	l, rt := p.listener, p.rt
+	p.mu.Unlock()
+	if l == nil {
+		return nil
+	}
+	var card *objects.Card
+	switch {
+	case p.Card != nil:
+		card = p.Card(peer)
+	case rt != nil:
+		card = rt.peerCard(peer)
+	}
+	bs := &noise3.BirthdaySocks{Main: l, Card: card, Deliver: deliver}
+	if card == nil && rt != nil {
+		bs.CardFunc = func() *objects.Card { return rt.peerCard(peer) }
+	}
+	return bs
+}
+
+// peerCard is the card of a peer for punching: the card book first, then the card the live session
+// with the peer carried (a card given to Session directly is not in the book).
+func (r *Runtime) peerCard(peer DeviceID) *objects.Card {
+	if c := r.cardBook.Latest([32]byte(peer)); c != nil {
+		return c
+	}
+	if r.table == nil {
+		return nil
+	}
+	for _, est := range r.table.Sessions() {
+		if est == nil || est.Peer == nil || est.Peer.DeviceID != [32]byte(peer) {
+			continue
+		}
+		if c, err := objects.VerifyCard(est.Peer.Raw, r.clock.Now()); err == nil {
+			return c
+		}
+	}
+	return nil
+}
+
+// lazyNet is the noise3 punch network of a peer whose card is not known yet when the engine starts.
+type lazyNet struct {
+	p    *Noise3Punch
+	l    *noise3.Listener
+	peer DeviceID
+	rt   *Runtime
+}
+
+func (n *lazyNet) OwnAddrs() []netip.AddrPort { return n.p.own() }
+func (n *lazyNet) SendJunk(to netip.AddrPort, b []byte) error {
+	return n.l.SendRaw(to, b)
+}
+func (n *lazyNet) Dial(ctx context.Context, targets []netip.AddrPort, budget int) (mux.Carrier, error) {
+	return (&noise3.PunchNet{Listener: n.l, Own: n.p.own, Card: n.rt.peerCard(n.peer)}).Dial(ctx, targets, budget)
 }

@@ -78,6 +78,7 @@ which roles are offered, which addresses are listed), never a different wire for
 | `protect` | callback | every peer socket is protected before use, so the core's traffic bypasses its own VPN | local |
 | `local_addrs` | callback | the app reports local addresses and network changes (replaces `net.Interfaces()`) | addresses still reach peers only through cards, OBSERVED_ADDR and hole punching |
 | `port_mapping` | on/off (off) | UPnP, NAT-PMP and PCP disabled | port mapping is invisible to peers |
+| `birthday` | on/off (on on desktop; off on mobile under battery saver) | no birthday punching: no extra sockets and no spray datagrams, `nat` and `mode` omitted from PUNCH_OFFER | the offer fields are additive (services.md §6.4.1) |
 | `stun` | on/off (off) | no STUN from any socket; public address from OBSERVED_ADDR only | already required for carrier sockets (wire.md §7.2) |
 | `mem_cap_mb` | integer (Android: 128, iOS extension: 40) | BadgerDB options of §1.2; DHT cache ≤ 200 records; routing table limited to 32 buckets' worth of cards in memory, the rest on disk; at most 32 sessions, 16 relay circuits | sizes of local caches and session counts are not on the wire; refusals use the normal REJECT/CLOSE codes |
 | `udp` | `full`, `restricted`, `blocked` | `restricted`: no GSO/recvmmsg/ECN, smaller noise3 padding range; `blocked`: only TCP suites (`reality2-tcp`, `ws2`) and relays | suite choice from the card is already the initiator's (wire.md §1) |

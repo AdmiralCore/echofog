@@ -425,3 +425,27 @@ func TestObserverConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestNATDetailPortRange(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:41500", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:40200", "s"))
+	if d := r.o.NATDetail(); d.Class != session.NATUnknown || d.Lo != 0 || d.Hi != 0 {
+		t.Fatalf("detail with 2 reports = %+v", d)
+	}
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:40900", "s"))
+	d := r.o.NATDetail()
+	if d.Class != session.NATSymmetric || d.Lo != 40200 || d.Hi != 41500 || d.Samples != 3 {
+		t.Fatalf("detail = %+v, want symmetric 40200..41500 from 3", d)
+	}
+}
+
+func TestNATDetailConeHasNoRange(t *testing.T) {
+	r := newObsRig(t)
+	r.o.Observe(obs(1, "198.51.100.1", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(2, "192.0.2.9", "8.8.8.8:4000", "s"))
+	r.o.Observe(obs(3, "100.64.0.1", "8.8.8.8:4000", "s"))
+	if d := r.o.NATDetail(); d.Class != session.NATCone || d.Lo != 0 || d.Hi != 0 {
+		t.Fatalf("detail = %+v", d)
+	}
+}
