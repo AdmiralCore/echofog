@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/echofog/echofog-core/internal/v2/bootstrap"
 )
 
 // ErrConfig is a configuration that is refused.
@@ -80,6 +82,10 @@ type Config struct {
 	// CoverACME configures the certificate when CoverCert is empty (T2.6e).
 	CoverACME *CoverACMESpec `json:"cover_acme,omitempty"`
 	Operator  OperatorSpec   `json:"operator"`
+	// Bootstrap are the entry nodes this server joins the network through, one T5.5 line each
+	// (T5.6): a card link or reality2-*/noise3 address. The server does not trust a line until the
+	// runtime verifies it.
+	Bootstrap []string `json:"bootstrap,omitempty"`
 }
 
 var allRoles = map[string]bool{"relay": true, "exit": true, "mailbox": true, "dht-server": true}
@@ -216,6 +222,14 @@ func (c *Config) Validate() error {
 			return bad("role %q twice", r)
 		}
 		seen[r] = true
+	}
+	if len(c.Bootstrap) > bootstrap.MaxEntries {
+		return bad("%d bootstrap entries, want at most %d", len(c.Bootstrap), bootstrap.MaxEntries)
+	}
+	for i, line := range c.Bootstrap {
+		if strings.TrimSpace(line) == "" || len(line) > bootstrap.MaxLineBytes {
+			return bad("bootstrap entry %d: an empty or oversized line", i+1)
+		}
 	}
 	if c.Cover != "" {
 		host, port, err := net.SplitHostPort(c.Cover)

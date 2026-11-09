@@ -175,6 +175,7 @@ message Release {
   string notes_url = 6;                 // https only
   repeated bytes revoked_keys = 7;
   string min_version = 8;               // "X.Y.Z": the oldest version that may be installed or kept; empty = no bound
+  bytes bootstrap_list = 9;             // signed official entry list of the release (T5.6); additive
 }
 message Policy {
   string component = 1;

@@ -955,6 +955,10 @@ export namespace node {
 	    peerId: string;
 	    link: string;
 	    connected: boolean;
+	    builtin?: boolean;
+	    index?: number;
+	    enabled: boolean;
+	    kind?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new BootstrapNode(source);
@@ -966,12 +970,19 @@ export namespace node {
 	        this.peerId = source["peerId"];
 	        this.link = source["link"];
 	        this.connected = source["connected"];
+	        this.builtin = source["builtin"];
+	        this.index = source["index"];
+	        this.enabled = source["enabled"];
+	        this.kind = source["kind"];
 	    }
 	}
 	export class BootstrapStatus {
 	    builtIn: BootstrapNode[];
 	    custom: BootstrapNode[];
 	    peers: number;
+	    protocol?: number;
+	    seq?: number;
+	    expires?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new BootstrapStatus(source);
@@ -982,6 +993,9 @@ export namespace node {
 	        this.builtIn = this.convertValues(source["builtIn"], BootstrapNode);
 	        this.custom = this.convertValues(source["custom"], BootstrapNode);
 	        this.peers = source["peers"];
+	        this.protocol = source["protocol"];
+	        this.seq = source["seq"];
+	        this.expires = source["expires"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

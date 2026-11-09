@@ -29,6 +29,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/convsync"
 	"github.com/echofog/echofog-core/internal/v2/files"
 	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -55,6 +56,9 @@ type v2Hooks struct {
 	Roles []node.Role
 	// ChatDir replaces the DHT as the place accounts are looked up (two stacks of one process).
 	ChatDir chat.Directory
+	// ReleaseKeys are the release public keys of the build (tests). Nil leaves the release
+	// manager off, as in a build without release keys.
+	ReleaseKeys []keys.AKey
 }
 
 // v2Settings is <profile>/v2/node.json: where this desktop listens, which address it advertises and
@@ -64,9 +68,50 @@ type v2Settings struct {
 	// Listen is the UDP address to bind ("0.0.0.0:4430"); Advertise the host written into the cards.
 	Listen    string `json:"listen,omitempty"`
 	Advertise string `json:"advertise,omitempty"`
-	// Bootstrap is the path of a bootstrap list (T5.5); relative paths are inside the v2 directory.
-	// The build carries no addresses of its own.
-	Bootstrap string `json:"bootstrap,omitempty"`
+	// Bootstrap is the path of a bootstrap list (T5.5) or the user's entries (T5.6), or both.
+	Bootstrap bootstrapSetting `json:"bootstrap,omitempty"`
+}
+
+// bootstrapSetting is node.json "bootstrap": a file path (the T5.5 list), the user's own entries
+// (T5.6), or an object {"path": …, "entries": […]} when both are used.
+type bootstrapSetting struct {
+	Path    string
+	Entries []string
+}
+
+func (b *bootstrapSetting) UnmarshalJSON(raw []byte) error {
+	var path string
+	if err := json.Unmarshal(raw, &path); err == nil {
+		b.Path, b.Entries = path, nil
+		return nil
+	}
+	var entries []string
+	if err := json.Unmarshal(raw, &entries); err == nil {
+		b.Path, b.Entries = "", entries
+		return nil
+	}
+	var both struct {
+		Path    string   `json:"path"`
+		Entries []string `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &both); err != nil {
+		return err
+	}
+	b.Path, b.Entries = both.Path, both.Entries
+	return nil
+}
+
+func (b bootstrapSetting) MarshalJSON() ([]byte, error) {
+	if b.Path != "" && len(b.Entries) > 0 {
+		return json.Marshal(struct {
+			Path    string   `json:"path"`
+			Entries []string `json:"entries"`
+		}{b.Path, b.Entries})
+	}
+	if b.Path != "" {
+		return json.Marshal(b.Path)
+	}
+	return json.Marshal(b.Entries)
 }
 
 // clockProxy is the route of the clock's CDN check: the same SOCKS5 proxy or VPN exit the
@@ -96,7 +141,6 @@ func (n *NodeApi) clockProxy() (proxy *url.URL, allowed bool) {
 
 const (
 	v2SettingsFile  = "node.json"
-	v2DefaultList   = "bootstrap.txt"
 	v2DeviceNS      = "v2/desktop"
 	v2DeviceKey     = "device"
 	v2DeviceListSeq = "devlist-seq"
@@ -115,6 +159,13 @@ type v2Stack struct {
 	ap      *app.App
 	calls   *app.Calls
 	mode    app.Mode
+	// dir is the profile's v2 directory (node.json, the bootstrap update file).
+	dir string
+	// boot is the official entry list and the user's entries (T5.6).
+	boot *bootstrap.Manager
+	// bootMu serialises the delivery of the list from a manifest (T5.6).
+	bootMu sync.Mutex
+	log    *slog.Logger
 
 	ctx      context.Context
 	cancel   context.CancelFunc // stops the goroutines of the stack (the bootstrap, the publication)
@@ -503,6 +554,9 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.dir = dir
+	s.log = n.Logger
+	s.boot = openV2Bootstrap(dir, set.Bootstrap, s.st.Store("v2/bootstrap"), clk.Now, n.Logger)
 
 	// the mode saved by the last SetMode decides how the cards are built
 	appKV := s.st.Store(v2AppNS)
@@ -577,6 +631,9 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 		LocalInfo: carrier.LocalInfo{Addrs: local},
 		Chat:      true,
 		ChatDir:   n.v2h.ChatDir,
+		// the release manifest carries the signed entry list (T5.6)
+		ReleaseKeys:      n.v2h.ReleaseKeys,
+		ReleaseBootstrap: s.applyBootstrapList,
 		ChatEvents: chat.Events{
 			Message: func(in chat.Incoming) {
 				if a := getApp(); a != nil {
@@ -752,35 +809,30 @@ func contactNodes(a *app.App) [][32]byte {
 	return out
 }
 
-// runBootstrap dials the bootstrap list of the profile, if it has one, once and in the background.
+// runBootstrap applies a signed list update that came with the release manifest and dials the
+// effective list once, in the background. Only counts are logged: never an address, a card or a
+// list line.
 func (s *v2Stack) runBootstrap(ctx context.Context, dir string, log *slog.Logger) {
-	if dir == "" {
+	if s.boot == nil {
 		return
 	}
-	set, _ := loadV2Settings(dir)
-	path := set.Bootstrap
-	if path == "" {
-		path = v2DefaultList
+	if dir != "" {
+		if ok, err := s.boot.OfferFile(filepath.Join(dir, v2BootstrapUpdate)); err != nil {
+			if log != nil {
+				log.Warn("v2 bootstrap: the signed list update was refused", "err", err)
+			}
+		} else if ok && log != nil {
+			log.Info("v2 bootstrap: signed list updated", "seq", s.boot.Seq())
+		}
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(dir, path)
-	}
-	info, err := os.Stat(path)
-	if err != nil || info.Size() > bootstrap.MaxListBytes {
-		return
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	entries, err := bootstrap.Parse(string(raw), time.Now())
-	if err != nil || len(entries) == 0 {
+	entries := s.boot.Entries()
+	if len(entries) == 0 {
 		return
 	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		rep := bootstrap.New(s.rt, entries, s.rt.Clock().Now).Run(ctx)
+		rep := bootstrap.New(s.rt, entries, s.rt.Clock().Now).Log(log).Run(ctx)
 		if log != nil {
 			log.Info("v2 bootstrap finished", "entries", len(entries), "joined", rep.Joined, "failed", rep.Failed)
 		}

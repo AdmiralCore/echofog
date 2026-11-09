@@ -75,6 +75,13 @@ type Entry struct {
 	// Addr and Mask are set for KindDevice and KindAddr.
 	Addr *pb.Addr
 	Mask keys.AKey
+	// Line is the entry as written in the list. It is kept for the UI and for de-duplication and
+	// is never logged.
+	Line string
+	// Builtin is true for an entry of the signed official list; Index is then its 1-based number.
+	// A log may name the number, never the line.
+	Builtin bool
+	Index   int
 }
 
 // Host is what the service needs from the runtime. *node.Runtime satisfies it.
@@ -106,6 +113,7 @@ func Parse(text string, now time.Time) ([]Entry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: line %d: %v", ErrList, i+1, err)
 		}
+		e.Line = line
 		if len(out) == MaxEntries {
 			return nil, fmt.Errorf("%w: more than %d entries", ErrList, MaxEntries)
 		}
@@ -218,6 +226,14 @@ func New(host Host, entries []Entry, _ func() time.Time) *Service {
 	return &Service{host: host, entries: entries, log: slog.Default()}
 }
 
+// Log sets the logger of the service (nil keeps the default).
+func (s *Service) Log(l *slog.Logger) *Service {
+	if l != nil {
+		s.log = l
+	}
+	return s
+}
+
 // Run dials every entry once, at most four at a time, each under a 30 s limit.
 func (s *Service) Run(ctx context.Context) Report {
 	var (
@@ -240,6 +256,7 @@ loop:
 			ectx, cancel := context.WithTimeout(ctx, entryTimeout)
 			defer cancel()
 			cand, joined := s.one(ectx, e)
+			s.logOutcome(e, cand != nil, joined)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -256,6 +273,44 @@ loop:
 	return rep
 }
 
+// logOutcome records what one entry gave. A built-in entry is named by its number only; the list
+// line, an address or a card id never reaches the log.
+func (s *Service) logOutcome(e Entry, candidate, joined bool) {
+	if s.log == nil {
+		return
+	}
+	attrs := []any{}
+	if e.Builtin {
+		attrs = append(attrs, "builtin", e.Index)
+	}
+	switch {
+	case joined:
+		s.log.Info("bootstrap: joined", attrs...)
+	case candidate:
+		s.log.Debug("bootstrap: a bare address answered with a candidate", attrs...)
+	default:
+		s.log.Debug("bootstrap: entry gave nothing", attrs...)
+	}
+}
+
+// Check dials one entry and reports whether it answered. It writes no address to the log.
+func (s *Service) Check(ctx context.Context, e Entry) bool {
+	ectx, cancel := context.WithTimeout(ctx, entryTimeout)
+	defer cancel()
+	switch e.Kind {
+	case KindCard:
+		return s.join(ectx, e.Card)
+	case KindDevice:
+		dev := node.DeviceID(e.Device)
+		res, err := s.host.DialBootstrap(ectx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask, Expected: &dev}, node.DialOpt{})
+		return err == nil && res != nil && res.Verified && res.Card != nil && res.Card.DeviceID == e.Device
+	case KindAddr:
+		res, err := s.host.DialBootstrap(ectx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask}, node.DialOpt{})
+		return err == nil && res != nil && res.Card != nil
+	}
+	return false
+}
+
 // one dials one entry. It returns the candidate card of a bare address, or joined for an
 // authenticated session.
 func (s *Service) one(ctx context.Context, e Entry) (cand *objects.Card, joined bool) {
@@ -266,14 +321,12 @@ func (s *Service) one(ctx context.Context, e Entry) (cand *objects.Card, joined 
 		dev := node.DeviceID(e.Device)
 		res, err := s.host.DialBootstrap(ctx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask, Expected: &dev}, node.DialOpt{})
 		if err != nil || res == nil || !res.Verified || res.Card == nil || res.Card.DeviceID != e.Device {
-			s.log.Debug("bootstrap: device entry gave nothing", "err", err)
 			return nil, false
 		}
 		return nil, s.join(ctx, res.Card)
 	case KindAddr:
 		res, err := s.host.DialBootstrap(ctx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask}, node.DialOpt{})
 		if err != nil || res == nil || res.Card == nil {
-			s.log.Debug("bootstrap: bare address gave nothing", "err", err)
 			return nil, false
 		}
 		// Not verified, whatever the result says.
@@ -287,9 +340,5 @@ func (s *Service) join(ctx context.Context, card *objects.Card) bool {
 		return false
 	}
 	_, _, err := s.host.Session(ctx, node.DeviceID(card.DeviceID), node.DialOpt{Card: card})
-	if err != nil {
-		s.log.Debug("bootstrap: session failed", "err", err)
-		return false
-	}
-	return true
+	return err == nil
 }

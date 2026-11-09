@@ -45,7 +45,8 @@ func (r *Runtime) newReleaseManager() (*release.Manager, error) {
 				Update:  &ev,
 			})
 		},
-		Log: r.log,
+		OnBootstrapList: r.cfg.ReleaseBootstrap,
+		Log:             r.log,
 	})
 }
 

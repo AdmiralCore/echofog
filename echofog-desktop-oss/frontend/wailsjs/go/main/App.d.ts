@@ -86,6 +86,8 @@ export function ChatThreads(arg1:node.ChatRef):Promise<Array<convlog.Message>>;
 
 export function CheckForUpdate():Promise<main.UpdateInfo>;
 
+export function CheckBootstrapNode(arg1:string):Promise<boolean>;
+
 export function CheckProxy(arg1:string):Promise<void>;
 
 export function CheckRecoveryPhrase(arg1:string):Promise<string>;
@@ -371,6 +373,8 @@ export function SetAnonymity(arg1:string,arg2:boolean):Promise<void>;
 export function SetAutoPay(arg1:boolean,arg2:string,arg3:string):Promise<void>;
 
 export function SetAutostart(arg1:boolean):Promise<void>;
+
+export function SetBootstrapNodeEnabled(arg1:number,arg2:boolean):Promise<void>;
 
 export function SetCallBackdrop(arg1:string):Promise<void>;
 
