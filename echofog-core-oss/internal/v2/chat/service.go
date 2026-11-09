@@ -525,7 +525,12 @@ func (s *Service) attempt(ctx context.Context, it *item, lookups map[[32]byte]lo
 		return
 	}
 	if s.cfg.Mail != nil {
-		if err := s.cfg.Mail.Deposit(ctx, it.To, it.Env); err == nil {
+		// The same writers (invalidate, forceFresh) may drop the envelope between the failed
+		// delivery and the mailbox hand-off: read what Mail gets under s.mu (ЧМ-6).
+		s.mu.Lock()
+		to, env := it.To, it.Env
+		s.mu.Unlock()
+		if err := s.cfg.Mail.Deposit(ctx, to, env); err == nil {
 			s.mu.Lock()
 			it.State = StateWaiting // so that set stamps the time of this deposit
 			s.mu.Unlock()
