@@ -220,10 +220,6 @@ type CallManager struct {
 	// plainSignals sends every signal unsealed: on call/2 the session already seals them end to end
 	// and each signal is a typed, signed CallSignal that sealed bytes could not be mapped to.
 	plainSignals bool
-	// sessionAuth says inbound signals arrive over an authenticated call/2 session: the bridge hands
-	// them over as v1 envelopes without a v1 signature, because that signature covered bytes the
-	// bridge no longer has. The sender is still checked against the session device (ЧМ-1, ЗВ-1).
-	sessionAuth bool
 	// olderNode makes this node act as a version before media key rotation (tests only).
 	olderNode bool
 	// unsignedNode makes it act as a version with rotation but before unit signatures (tests only).
@@ -321,16 +317,6 @@ func newCallManager(sender media.FrameSender, signer signaling.Signer, selfID ty
 func (m *CallManager) SetPlainSignals(on bool) {
 	m.mu.Lock()
 	m.plainSignals = on
-	m.mu.Unlock()
-}
-
-// SetSessionAuthenticatedSignals makes inbound signals trust the session that carried them: the
-// bridge hands the call layer a v1 envelope rebuilt from a CallSignal it verified on call/2, so the
-// v1 signature is gone. The sender check against the session device stays. It must be set before
-// joining a room and is for the call/2 path only; a v1 manager verifies every envelope.
-func (m *CallManager) SetSessionAuthenticatedSignals(on bool) {
-	m.mu.Lock()
-	m.sessionAuth = on
 	m.mu.Unlock()
 }
 

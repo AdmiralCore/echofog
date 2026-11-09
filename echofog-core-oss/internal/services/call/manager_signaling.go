@@ -31,14 +31,15 @@ func (m *CallManager) handleIncomingSignaling(payload []byte, from types.PeerID)
 	if err != nil {
 		return err
 	}
-	if m.signer != nil && !m.sessionAuth {
+	if m.signer != nil && !m.plainSignals {
 		if err := env.Verify(); err != nil {
 			return fmt.Errorf("%s from %s: %w", env.Action, calllog.Peer(env.Sender), err)
 		}
 	}
-	// On the call/2 path the session authenticated the envelope (v1 signature absent by design);
-	// the sender is still checked against it below: a hop-local signal must name the session's
-	// device, a flooded one carries its origin's signature on call/2 (services.md 9.1, ЗВ-1).
+	// On the call/2 path plainSignals is set (app.NewCalls): the session authenticated the envelope,
+	// so the v1 signature is absent by design. The sender is still checked against it below: a
+	// hop-local signal must name the session's device, a flooded one carries its origin's signature
+	// on call/2 (services.md 9.1, ЗВ-1). A v1 manager leaves plainSignals off and verifies as before.
 	flooded := signaling.IsFlooded(env.Action)
 	if !flooded && from != env.Sender {
 		return fmt.Errorf("%s claims sender %s: %w", env.Action, calllog.Peer(env.Sender), ErrSpoofedSender)

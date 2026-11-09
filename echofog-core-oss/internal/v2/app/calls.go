@@ -74,7 +74,6 @@ func NewCalls(cfg CallsConfig) (*Calls, error) {
 	}
 	c.cm = call.NewCallManager(cfg.Host.CallTransport(), cfg.Signer, cfg.Self)
 	c.cm.SetPlainSignals(true)
-	c.cm.SetSessionAuthenticatedSignals(true)
 	c.cm.SetPeerConnector(c.connect)
 	return c, nil
 }
