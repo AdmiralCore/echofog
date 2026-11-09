@@ -19,7 +19,7 @@ three must sign).
   the script stops before anything is downloaded or run.
 - Only then does it fetch the binary, compare size and SHA-256 with the signed record, make the file
   executable and start it. On any mismatch the file is deleted and the script stops.
-- The node's own installer (`echofog-node v2 install`) checks the binary once more against the signed
+- The node's own installer (`echofog-node v2 setup`) checks the binary once more against the signed
   manifest. It is a second layer, no longer the first check.
 
 What users compare is the SHA-256 of the **whole `install.sh`**, not of the key block alone: the key block

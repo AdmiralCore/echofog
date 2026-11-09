@@ -43,9 +43,14 @@ type CheckResult struct {
 	Args  []any
 }
 
-// Text is the line for the operator: the level, then the message with its advice.
+// Text is the line for the operator: the level, then the message with its advice. The setup
+// checks carry full codes ("setup.check..."), the doctor ones a short name ("config.ok").
 func (r CheckResult) Text(lang string) string {
-	return "[" + Message(lang, r.Level.code()) + "] " + Message(lang, "doctor."+r.Code, r.Args...)
+	text := Message(lang, r.Code, r.Args...)
+	if text == "" {
+		text = Message(lang, "doctor."+r.Code, r.Args...)
+	}
+	return "[" + Message(lang, r.Level.code()) + "] " + text
 }
 
 // DoctorDeps are the doctor's inputs. A nil probe means the check is skipped: nothing leaves the

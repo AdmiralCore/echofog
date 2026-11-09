@@ -433,6 +433,48 @@ func TestInstallRollsBackOnEveryFailure(t *testing.T) {
 	}
 }
 
+type cancelRunner struct {
+	recRunner
+	cancel context.CancelFunc
+	on     string
+}
+
+func (c *cancelRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, err := c.recRunner.Run(ctx, name, args...)
+	if strings.HasPrefix(strings.TrimSpace(name+" "+strings.Join(args, " ")), c.on) {
+		c.cancel()
+	}
+	return out, err
+}
+
+// N1: the operator stops the installation on a real step. Everything the attempt created (the
+// copied binary, the profile, the unit) is taken back and Install reports ErrInstallStopped. A
+// mutation that drops undo.run() from stopped() leaves the files behind and reds this test.
+func TestInstallStopsAndRollsBackOnCancel(t *testing.T) {
+	for name, on := range map[string]string{
+		"chown":  "chown",
+		"enable": "systemctl enable",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newInstRig(t)
+			r.deps.Start = true
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cr := &cancelRunner{cancel: cancel, on: on}
+			r.deps.Runner = cr
+			if _, err := servernode.Install(ctx, r.deps); !errors.Is(err, servernode.ErrInstallStopped) {
+				t.Fatalf("Install after the operator stopped = %v, want ErrInstallStopped", err)
+			}
+			if calls := cr.all(); !strings.Contains(calls, on) {
+				t.Fatalf("the installation never reached %q:\n%s", on, calls)
+			}
+			if e := entries(t, r.root); len(e) != 0 {
+				t.Errorf("leftovers after the operator stopped the installation: %v", e)
+			}
+		})
+	}
+}
+
 // H1: the manifest comes over https only, also through redirects.
 func TestCLIInstallManifestURLIsHTTPSOnly(t *testing.T) {
 	r := newInstRig(t)

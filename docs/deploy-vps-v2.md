@@ -45,7 +45,10 @@ root is the release public key block written inside `install.sh`.** The script c
 the signed release record (`release.txt`) with `ssh-keygen -Y verify` (two of the three release keys must
 sign it) and compares the size and SHA-256 of the binary with that record. The downloaded file becomes
 executable and is started only after that; if any check fails, it is deleted and nothing is installed.
-The node's own installer then checks the binary once more against the signed manifest.
+The node's own installer (`echofog-node v2 setup`) then checks the binary once more against the signed
+manifest. With a terminal, `setup` shows the full-screen installer (presets, system check, one summary
+screen); over a pipe or `ssh -T` it falls back to the same questions one line at a time and never
+prints the recovery phrase or the operator token — they are left in files under the data folder.
 
 So the one thing to check by hand is that `install.sh` itself is the genuine file: the SHA-256 of the
 **whole file** must be the value published for the release. Never pipe a download into a shell.

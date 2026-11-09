@@ -299,11 +299,13 @@ type Server struct {
 	// coverLeaf is the certificate the cover serves; the operator status and the doctor read its
 	// expiry without opening the profile.
 	coverLeaf *x509.Certificate
-	listener  net.Listener
-	http      *http.Server
-	started   bool
-	closed    bool
-	startAt   time.Time
+	// meter counts carrier bytes for the operator panel (T12.4f).
+	meter    *trafficMeter
+	listener net.Listener
+	http     *http.Server
+	started  bool
+	closed   bool
+	startAt  time.Time
 }
 
 func rolesOf(names []string) []node.Role {
@@ -342,6 +344,15 @@ func serviceOffers(names []string) []*pb.ServiceOffer {
 	return out
 }
 
+// visibilityOf maps the server policy to the card builder's visibility.
+func visibilityOf(cfg *Config) cards.Visibility {
+	if cfg.Visibility == "hidden" {
+		return cards.Hidden
+	}
+	return cards.Visible
+}
+
+// roleAndFlags turns the profile roles into the card flags.
 func roleAndFlags(p node.Profile) (uint32, uint32) {
 	var flags uint32
 	for _, r := range p.Roles {
@@ -554,7 +565,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{dir: dataDir, cfg: cfg, log: log, account: account, device: device, warnings: map[string]string{}}
+	s := &Server{dir: dataDir, cfg: cfg, log: log, account: account, device: device, warnings: map[string]string{}, meter: newTrafficMeter()}
 	ok := false
 	defer func() {
 		if !ok {
@@ -639,7 +650,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		Exit:    exitOffer,
 		Account: account.Public(), Device: device, HsKey: device.Handshake().Public(),
 		Role: role, Flags: flags, Services: serviceOffers(cfg.Roles), Listeners: cardListeners, Devices: devices,
-		Release: "echofog-node/v2", Visibility: cards.Visible, Clock: clk, KV: cardsKV{st.Store("v2/node/cards")},
+		Release: "echofog-node/v2", Visibility: visibilityOf(cfg), Clock: clk, KV: cardsKV{st.Store("v2/node/cards")},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("card builder: %w", err)
@@ -657,6 +668,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 
 	var sources []node.ListenerSource
 	var local []netip.Addr
+	gate := newGate(cfg.Limits, s.meter)
 	seenReality := map[string]bool{}
 	for _, l := range cfg.Listen {
 		if a, err := netip.ParseAddr(l.Advertise); err == nil {
@@ -666,8 +678,8 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		case "noise3":
 			var mk noise3.MaskKey
 			copy(mk.Private[:], maskPriv)
-			sources = append(sources, node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
-				ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower})
+			sources = append(sources, countingSource{src: node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
+				ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower}, gate: gate})
 		case "reality2-quic", "reality2-tcp":
 			if seenReality[l.Bind] {
 				continue // the pair shares one cover node and one certificate
@@ -686,18 +698,18 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 				Masks: []reality2.MaskKey{mk}, Addrs: []string{tokenAddr(l)},
 				Shape: tlsShape, LowPower: profile.LowPower,
 			}
-			sources = append(sources, src)
+			sources = append(sources, countingSource{src: src, gate: gate})
 		case "ws2":
 			mk, err := realityMask(coverPriv)
 			if err != nil {
 				return nil, err
 			}
-			sources = append(sources, node.WS2Listener{
+			sources = append(sources, countingSource{src: node.WS2Listener{
 				Addr: l.Bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
 				Masks: []reality2.MaskKey{mk}, Addrs: []string{ws2TokenAddr(cfg.Cover)},
 				ReplayKV: st.Store("v2/ws2/replay"), Shape: tlsShape, LowPower: profile.LowPower,
 				OnWarn: s.onCoverWarn,
-			})
+			}, gate: gate})
 		}
 	}
 
@@ -744,8 +756,9 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 					mk.NotAfter = k.NotAfter
 					n3 = append(n3, mk)
 				}
-				return node.Noise3Listener{Addr: bind, Masks: n3, Profile: shapeProfile, LowPower: profile.LowPower,
+				l, err := node.Noise3Listener{Addr: bind, Masks: n3, Profile: shapeProfile, LowPower: profile.LowPower,
 					ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
+				return wrapAccess(l, err, gate)
 			case "reality2-quic", "reality2-tcp":
 				src := node.Reality2Listener{
 					Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
@@ -758,11 +771,13 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 				} else {
 					src.UDPAddr = bind
 				}
-				return src.Listen(context.Background())
+				l, err := src.Listen(context.Background())
+				return wrapAccess(l, err, gate)
 			case "ws2":
-				return node.WS2Listener{Addr: bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
+				l, err := node.WS2Listener{Addr: bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
 					Masks: masks, Addrs: []string{ws2TokenAddr(cfg.Cover)}, ReplayKV: replayKV,
 					Shape: tlsShape, LowPower: profile.LowPower}.Listen(context.Background())
+				return wrapAccess(l, err, gate)
 			}
 			return nil, fmt.Errorf("%w: invitation suite %q", ErrConfig, suite)
 		}
@@ -941,6 +956,18 @@ func (s *Server) Status() StatusInfo {
 	s.mu.Unlock()
 	if s.rt != nil {
 		st.Sessions = len(s.rt.Status().Sessions)
+	}
+	if s.meter != nil {
+		t := s.meter.snapshot()
+		st.TrafficIn, st.TrafficOut = t.In, t.Out
+		st.TrafficDayIn, st.TrafficDayOut = t.DayIn, t.DayOut
+	}
+	st.Visibility = s.cfg.Visibility
+	if st.Visibility == "" {
+		st.Visibility = "visible"
+	}
+	if s.cfg.Limits != nil {
+		st.Limits = *s.cfg.Limits
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

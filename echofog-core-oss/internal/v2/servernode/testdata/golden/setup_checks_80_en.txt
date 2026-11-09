@@ -1,0 +1,16 @@
+System check
+[ok] fine · [!] warning · [x] stop, fix before installing
+
+[ok] [OK] Root rights are present: the installer creates the service and its
+files.
+[ok] [OK] systemd is running: the service will start after a reboot.
+[ok] [OK] Ports 443 are free on TCP and UDP.
+[!] [WARN] The clock is not synchronised. Enable chrony or systemd-timesyncd.
+[ok] [OK] Free disk space: 20480 MiB.
+[--] [INFO] No IPv6: the node works over IPv4 only. This is not an error.
+[ok] [OK] The ufw firewall was found: its ports can be opened with the
+operator's consent.
+[--] [INFO] Docker is not installed, which is fine: the service goes on the
+host.
+
+↑/↓ choose · Enter next · Esc cancels

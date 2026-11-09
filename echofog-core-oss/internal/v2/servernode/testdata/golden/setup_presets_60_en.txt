@@ -1,0 +1,43 @@
+Node role
+↑/↓ choose · Enter next. Each card says what the node does,
+how much traffic to expect and what the operator risks.
+
+> Relay and mailbox for friends
+  Carries session traffic between peers and keeps offline
+  messages. The internet exit is off.
+  traffic: moderate, grows with the number of friends ·
+  risk: minimal, content is not readable
+
+  Free exit
+  Besides relay and mailbox, it lets other people's
+  traffic out to the internet for free. An own domain and
+  a cover site are needed.
+  traffic: high, capped by the bandwidth limit · risk: the
+  operator answers for the traffic of others
+
+  Home entry RU/IR
+  An entry inside the country for mobile networks with
+  allow-lists: relay and invitations, the exit is off.
+  Details: docs/domestic-entry.md.
+  traffic: moderate, own people only · risk: the addresses
+  and traffic volume of people are visible; data requests
+  are possible
+
+  Private exit by invitation
+  An exit without a public card: reachable only through an
+  invitation link. Invitations and terms are the invite
+  commands.
+  traffic: as many as invited · risk: the operator answers
+  for the traffic of the invited
+
+  Own set
+  Roles are ticked by hand: relay, mailbox, dht-server,
+  exit. The other settings follow the common presets.
+  traffic: depends on the roles · risk: depends on the
+  roles
+
+  Paid exit
+  Paid exit — after 0.3.0: payments and vouchers are not
+  ready yet.
+
+↑/↓ choose · Enter next · Esc cancels

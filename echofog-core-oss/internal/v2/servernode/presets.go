@@ -22,6 +22,8 @@ const (
 	PresetHomeEntry   Preset = "home-entry"
 	PresetExitPaid    Preset = "exit-paid"
 	PresetExitPrivate Preset = "exit-private"
+	// PresetOwn is the operator's own set of roles (checkboxes in the setup TUI).
+	PresetOwn Preset = "own"
 )
 
 // ErrPresetUnavailable: the preset needs something this build does not have yet (payments for the
@@ -37,6 +39,18 @@ type PresetOptions struct {
 	// Rules is the signed country rules file, when the operator has one: it tells whether the
 	// advertised address of a home entry is inside the verified ranges (allowed_cidrs, H14).
 	Rules *routepolicy.Rules
+	// Carriers is the chosen set (noise3, reality2-quic, reality2-tcp, ws2). Empty means the
+	// preset's own default: reality2-quic and reality2-tcp on the public port when a cover domain
+	// is given, noise3 alone otherwise (T2.6e).
+	Carriers []string
+	// Invites adds the separate invitation listener. Home-entry and private-exit always have it.
+	Invites bool
+	// Roles overrides the roles of the preset (the "own" preset takes them from here).
+	Roles []string
+	// Limits caps bandwidth and sessions; nil means no cap.
+	Limits *LimitsSpec
+	// Visibility is "visible" (default) or "hidden".
+	Visibility string
 }
 
 // Note is a remark for the operator: a message code with a level ("info" or "warn").
@@ -90,7 +104,7 @@ func badPreset(format string, a ...any) error {
 // BuildPreset turns a preset and the answers into a configuration and the notes to show.
 func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 	switch p {
-	case PresetRelay, PresetExitFree, PresetHomeEntry:
+	case PresetRelay, PresetExitFree, PresetHomeEntry, PresetExitPrivate, PresetOwn:
 	default:
 		return Config{}, nil, fmt.Errorf("%w: %q", ErrPresetUnavailable, p)
 	}
@@ -105,20 +119,20 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		return Config{}, nil, badPreset("site folder")
 	}
 	cfg := DefaultConfig()
-	if domain == "" {
-		// No cover: the node works for its own people only, over noise3 on the chosen port.
-		cfg.Listen = []ListenSpec{{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise}}
-	} else {
-		// The own cover preset (T2.6e): reality2-quic and reality2-tcp on the public port, so a
-		// stranger and a probe see the operator's site on 443; noise3 moves to the spare port.
-		if o.Port+1 > 65535 {
-			return Config{}, nil, badPreset("port %d leaves no spare port for noise3", o.Port)
-		}
-		cfg.Listen = []ListenSpec{
-			{Suite: "reality2-quic", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise},
-			{Suite: "reality2-tcp", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port), Advertise: o.Advertise},
-			{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", o.Port+1), Advertise: o.Advertise},
-		}
+	cfg.Visibility = o.Visibility
+	if cfg.Visibility == "" {
+		cfg.Visibility = "visible"
+	}
+	cfg.Limits = o.Limits
+	carriers, err := chooseCarriers(o.Carriers, domain != "")
+	if err != nil {
+		return Config{}, nil, err
+	}
+	invites := o.Invites || p == PresetHomeEntry || p == PresetExitPrivate
+	if _, err := buildListeners(&cfg, carriers, domain != "", invites, o.Advertise, o.Port); err != nil {
+		return Config{}, nil, err
+	}
+	if domain != "" {
 		cfg.Cover = fmt.Sprintf("%s:%d", domain, o.Port)
 		cfg.SiteDir = o.SiteDir
 		// The operator chose a domain and no certificate: the node gets one from the CA. The
@@ -130,21 +144,22 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 	case PresetExitFree:
 		cfg.Roles = append(cfg.Roles, "exit")
 		notes = append(notes, Note{"warn", "preset.exit-responsibility"})
+	case PresetExitPrivate:
+		cfg.Roles = append(cfg.Roles, "exit")
+		cfg.Visibility = "hidden"
+		notes = append(notes, Note{"warn", "preset.exit-responsibility"}, Note{"info", "preset.private-invites"})
 	case PresetHomeEntry:
-		invitePort := o.Port + 1
-		if domain != "" {
-			invitePort = o.Port + 2
-		}
-		if invitePort > 65535 {
-			return Config{}, nil, badPreset("port %d leaves no port for invitations", o.Port)
-		}
-		cfg.InviteListen = &ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", invitePort), Advertise: o.Advertise}
 		notes = append(notes, Note{"warn", "preset.home-entry-risk"})
 		if verifiedEntry(o.Rules, o.Advertise) {
 			notes = append(notes, Note{"info", "preset.home-entry-verified"})
 		} else {
 			notes = append(notes, Note{"info", "preset.home-entry-wired"})
 		}
+	case PresetOwn:
+		if len(o.Roles) == 0 {
+			return Config{}, nil, badPreset("the own preset needs at least one role")
+		}
+		cfg.Roles = append([]string(nil), o.Roles...)
 	}
 	if domain == "" {
 		notes = append(notes, Note{"warn", "preset.no-domain"})
@@ -161,6 +176,137 @@ func BuildPreset(p Preset, o PresetOptions) (Config, []Note, error) {
 		return Config{}, nil, err
 	}
 	return cfg, notes, nil
+}
+
+// chooseCarriers validates the chosen carriers and returns the preset default when none were
+// given: a covered node listens on reality2-quic and reality2-tcp (the T2.6e preset); a node
+// without a cover has only noise3, and ws2 (a CDN-facing listener) needs a cover domain.
+func chooseCarriers(chosen []string, hasCover bool) ([]string, error) {
+	if len(chosen) == 0 {
+		if hasCover {
+			return []string{"reality2-quic", "reality2-tcp"}, nil
+		}
+		return []string{"noise3"}, nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range chosen {
+		if !allSuites[c] {
+			return nil, badPreset("carrier %q: want noise3, reality2-quic, reality2-tcp or ws2", c)
+		}
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		if c == "ws2" && !hasCover {
+			return nil, badPreset("ws2 needs a cover domain")
+		}
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return nil, badPreset("no carriers chosen")
+	}
+	return out, nil
+}
+
+// buildListeners lays the chosen carriers out on the port: reality2-quic and reality2-tcp share
+// the public port (UDP and TCP), ws2 takes the next TCP port, noise3 the next UDP one, and the
+// invitation listener one more. Ports of different transports may coincide.
+func buildListeners(cfg *Config, carriers []string, hasCover bool, invites bool, advertise string, port int) (int, error) {
+	next := port
+	take := func() (int, error) {
+		if next > 65535 {
+			return 0, badPreset("port %d leaves no free port", port)
+		}
+		p := next
+		next++
+		return p, nil
+	}
+	var listens []ListenSpec
+	hasReality := false
+	udpUsed := map[int]bool{}
+	tcpUsed := map[int]bool{}
+	for _, c := range carriers {
+		if c == "reality2-quic" || c == "reality2-tcp" {
+			hasReality = true
+		}
+	}
+	if hasReality {
+		// The public port is taken by the reality2 pair on both transports.
+		udpUsed[port], tcpUsed[port] = true, true
+		next = port + 1
+	}
+	for _, c := range carriers {
+		switch c {
+		case "reality2-quic", "reality2-tcp":
+			listens = append(listens, ListenSpec{Suite: c, Bind: fmt.Sprintf("0.0.0.0:%d", port), Advertise: advertise})
+		case "ws2":
+			p, err := take()
+			if err != nil {
+				return 0, err
+			}
+			for tcpUsed[p] {
+				if p, err = take(); err != nil {
+					return 0, err
+				}
+			}
+			tcpUsed[p] = true
+			listens = append(listens, ListenSpec{Suite: "ws2", Bind: fmt.Sprintf("0.0.0.0:%d", p), Advertise: advertise})
+		case "noise3":
+			p, err := take()
+			if err != nil {
+				return 0, err
+			}
+			for udpUsed[p] {
+				if p, err = take(); err != nil {
+					return 0, err
+				}
+			}
+			udpUsed[p] = true
+			listens = append(listens, ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", p), Advertise: advertise})
+		}
+	}
+	if hasReality && !contains(carriers, "noise3") {
+		// A spare noise3 port keeps the node reachable when a probe blocks TLS (T2.6e).
+		p, err := take()
+		if err != nil {
+			return 0, err
+		}
+		for udpUsed[p] {
+			if p, err = take(); err != nil {
+				return 0, err
+			}
+		}
+		udpUsed[p] = true
+		listens = append(listens, ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", p), Advertise: advertise})
+	}
+	if !hasCover && hasReality {
+		return 0, badPreset("the camouflaged carriers need a cover domain")
+	}
+	cfg.Listen = listens
+	if invites {
+		p, err := take()
+		if err != nil {
+			return 0, err
+		}
+		for udpUsed[p] {
+			if p, err = take(); err != nil {
+				return 0, err
+			}
+		}
+		udpUsed[p] = true
+		cfg.InviteListen = &ListenSpec{Suite: "noise3", Bind: fmt.Sprintf("0.0.0.0:%d", p), Advertise: advertise}
+	}
+	return next, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // verifiedEntry reports whether the advertised address lies inside the verified ranges

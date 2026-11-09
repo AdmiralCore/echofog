@@ -93,10 +93,26 @@ func TestPresets(t *testing.T) {
 		t.Errorf("home-entry %+v %v", cfg, notes)
 	}
 
-	for _, p := range []servernode.Preset{servernode.PresetExitPaid, servernode.PresetExitPrivate, "nonsense"} {
+	for _, p := range []servernode.Preset{servernode.PresetExitPaid, "nonsense"} {
 		if _, _, err := servernode.BuildPreset(p, opts); !errors.Is(err, servernode.ErrPresetUnavailable) {
 			t.Errorf("preset %q: %v", p, err)
 		}
+	}
+	// The private exit is an active preset of the TUI (T12.4f): an exit with invitations, hidden.
+	cfg, notes, err = servernode.BuildPreset(servernode.PresetExitPrivate, opts)
+	if err != nil {
+		t.Fatalf("exit-private: %v", err)
+	}
+	if !has(cfg.Roles, "exit") || cfg.InviteListen == nil || cfg.Visibility != "hidden" || !contains(noteCodes(notes), "preset.private-invites") {
+		t.Errorf("exit-private config %+v %v", cfg, notes)
+	}
+	// The own preset takes its roles from the answers and has no roles by default.
+	cfg, _, err = servernode.BuildPreset(servernode.PresetOwn, servernode.PresetOptions{Advertise: "203.0.113.10", Port: 443, Roles: []string{"relay", "exit"}})
+	if err != nil || len(cfg.Roles) != 2 || !has(cfg.Roles, "exit") {
+		t.Errorf("own preset: %v %+v", err, cfg)
+	}
+	if _, _, err := servernode.BuildPreset(servernode.PresetOwn, opts); !errors.Is(err, servernode.ErrConfig) {
+		t.Errorf("own preset without roles: %v", err)
 	}
 	for name, o := range map[string]servernode.PresetOptions{
 		"no address": {Port: 443}, "hostname address": {Advertise: "example.org", Port: 443}, "port 0": {Advertise: "203.0.113.10"},

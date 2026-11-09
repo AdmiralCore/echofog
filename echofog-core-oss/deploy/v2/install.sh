@@ -6,7 +6,7 @@
 # its signatures with the base-system tool "ssh-keygen -Y verify", and only then looks at the binary:
 # the binary must have the size and SHA-256 of the record. The downloaded file is made executable and
 # started only after that; a failed check deletes it and stops. The node's own installer
-# (echofog-node v2 install) then checks the binary once more against the signed manifest.
+# (echofog-node v2 setup) then checks the binary once more against the signed manifest.
 #
 # Two of the three release keys must sign the record (the same rule as the application's update).
 # Nothing is sent anywhere except the downloads.
@@ -282,4 +282,4 @@ verify_release() {
 verify_release
 chmod 0700 "$BIN"
 
-"$BIN" v2 install --binary "$BIN" --manifest "$WORK/manifest.bin" --platform "linux-$ARCH" "$@"
+"$BIN" v2 setup --binary "$BIN" --manifest "$WORK/manifest.bin" --platform "linux-$ARCH" "$@"

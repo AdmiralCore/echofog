@@ -21,15 +21,20 @@ import (
 
 const usageText = `echofog-node v2 — EchoFog v2 server node
 usage:
+  echofog-node v2 setup  [--lang ru|en] [--plain]                 full-screen installer
+  echofog-node v2 setup  --preset relay|exit-free|home-entry|exit-private|own --advertise IP
+                         --binary FILE --manifest FILE [--port N] [--domain NAME] [--site-dir DIR]
+                         [--open-ports] [--yes] [--lang ru|en]
   echofog-node v2 init   [--lang ru|en]                    interactive setup (questions in the terminal)
-  echofog-node v2 init   --preset relay|exit-free|home-entry --advertise IP --data DIR [--port N]
+  echofog-node v2 init   --preset relay|exit-free|home-entry|exit-private --advertise IP --data DIR [--port N]
                          [--domain NAME] [--site-dir DIR] [--cover-cert FILE] [--yes] [--lang ru|en]
   echofog-node v2 init   --data DIR --listen noise3=BIND:PORT --advertise IP [--invite-listen ...]
                          [--roles relay,mailbox,dht-server,exit] [--cover HOST:PORT --site-dir DIR]
   echofog-node v2 run    --data DIR
-  echofog-node v2 status --data DIR [--json] [--lang ru|en]
-  echofog-node v2 install --binary FILE --manifest FILE [--preset relay|exit-free|home-entry --advertise IP]
+  echofog-node v2 status --data DIR [--json] [--watch [--interval 2s]] [--check-update] [--lang ru|en]
+  echofog-node v2 install --binary FILE --manifest FILE [--preset ... --advertise IP]
                          [--port N] [--domain NAME] [--start] [--yes] [--lang ru|en]   (root; verifies before installing)
+  echofog-node v2 uninstall [--data DIR] [--purge [--yes]] [--lang ru|en]            (root)
   echofog-node v2 doctor --data DIR [--dns] [--lang ru|en]
   echofog-node v2 update --manifest-url URL [--check] [--yes] [--lang ru|en]
   echofog-node v2 invite create --data DIR [--access 30d] [--link 7d] [--max-entries N]
@@ -37,7 +42,8 @@ usage:
   echofog-node v2 invite extend --data DIR ID --access 7d
   echofog-node v2 rotate-keys   --data DIR
 
-init prints the recovery phrase once. Write it down and keep it offline.
+setup prints the recovery phrase once and keeps it in recovery-phrase.txt until the operator
+confirms; the plain mode (no terminal, CI, ssh -T) never prints it or the operator token.
 status, invite and rotate-keys talk to the running node through its operator API on 127.0.0.1 with
 the token in DIR/operator.token. doctor sends nothing out unless --dns is given. update installs
 nothing without a yes from the operator and never goes back to an older version.
@@ -110,8 +116,12 @@ func MainIO(args []string, env func(string) string, stdin io.Reader, stdout, std
 		return 0
 	case "init":
 		err = cmdInit(args[1:], env, stdin, stdout)
+	case "setup":
+		err = cmdSetup(args[1:], env, stdin, stdout, stderr)
 	case "install":
 		err = cmdInstall(args[1:], env, stdin, stdout)
+	case "uninstall":
+		err = cmdUninstall(args[1:], env, stdin, stdout)
 	case "doctor":
 		err = cmdDoctor(args[1:], env, stdout)
 	case "update":
