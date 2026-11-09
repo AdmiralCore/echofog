@@ -108,7 +108,7 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	var dels [][]byte
 	var legacyOrder []storage.Entry
 	for _, pfx := range [][]byte{bs(pfxView + bc + "/"), bs(pfxThread + bc + "/"), bs(pfxPin + bc + "/"), bs(pfxIndex + bc + "/"),
-		bs(pfxChanO + bc + "/"), channelPrefix(bc), profileKey(bc)} {
+		bs(pfxChanO + bc + "/"), bs(pfxAtt + bc + "/"), channelPrefix(bc), profileKey(bc)} {
 		entries, err := l.st.FindValues(pfx, 0)
 		if err != nil {
 			return nil, err
@@ -219,7 +219,10 @@ func (l *Log) rebuildLocked(c Conv, bc string) (*Change, error) {
 	}
 	l.countUnread(bc, meta)
 	for id, st := range meta.Chans {
-		st.Unread = l.countAbove(chanOrderPrefix(bc, id), st.ReadLamport, bc, meta.Conv)
+		st.Unread, st.Mentions = l.countAbove(chanOrderPrefix(bc, id), st.ReadLamport, bc, meta.Conv)
+		var inThreads int
+		inThreads, st.ThreadMentions = aboveRead(st.ThreadMentions, st.ReadLamport)
+		st.Mentions += inThreads
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -240,7 +243,7 @@ func (l *Log) countUnread(bc string, meta *Meta) {
 	if err != nil {
 		return
 	}
-	n := 0
+	n, named := 0, 0
 	p := len(orderPrefix(bc))
 	for _, e := range entries {
 		if len(e.Key) < p+8 {
@@ -251,7 +254,11 @@ func (l *Log) countUnread(bc string, meta *Meta) {
 		}
 		if m, ok := l.render(bc, meta.Conv, string(e.Value)); ok && !m.Mine {
 			n++
+			if m.Mentioned {
+				named++
+			}
 		}
 	}
-	meta.Unread = n
+	inThreads, kept := aboveRead(meta.ThreadMentions, meta.ReadLamport)
+	meta.Unread, meta.Mentions, meta.ThreadMentions = n, named+inThreads, kept
 }

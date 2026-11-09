@@ -28,6 +28,32 @@ message MsgBody {
   string text     = 1;
   uint32 type     = 2;  // as messenger.PersonalMessageTypeProto; 100 = system line
   string metadata = 3;  // JSON, as messenger.MessageMetadata (files)
+  // Added later; older readers skip both. The people the message names (32-byte peer ids, at most
+  // MaxMentions), and whether it names everybody (needs PermMentionAll).
+  repeated bytes mentions = 4;
+  bool all = 5;
+  // Added later (T11.3e): one file the message carries; older readers keep the field as unknown.
+  Attachment att = 6;
+}
+
+// Attachment is a file in a MSG event: its bytes come over files/2 from the author and from holders.
+message Attachment {
+  bytes  fid         = 1; // 16-byte file id
+  uint64 size        = 2;
+  bytes  merkle_root = 3; // 32 bytes
+  string name        = 4; // at most 255 bytes, UTF-8
+  string mime        = 5; // at most 127 bytes, ASCII
+}
+
+// CloseBody closes a group (kind group.close): the last seq per author the owner had seen. Entries are
+// sorted by author ascending, one per author.
+message CloseBody {
+  repeated SeqEntry last = 1;
+}
+
+message SeqEntry {
+  bytes  author = 1; // 32-byte identity public key
+  uint64 seq    = 2;
 }
 
 message EditBody {

@@ -1,0 +1,36 @@
+# The EchoFog v2 server node, closed by default: a read-only root file system, no capabilities,
+# no privilege escalation, an unprivileged user, one named volume, one UDP port, no operator or
+# debug port published (the operator API listens on loopback inside the container and the
+# commands reach it through "docker compose exec").
+#
+#   cp deploy/v2/.env.example deploy/v2/.env      # set ECHOFOG_ADVERTISE_ADDR
+#   docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env up -d
+services:
+  node:
+    image: ${ECHOFOG_IMAGE:-ghcr.io/admiralcore/echofog-node:v2-dev}
+    restart: unless-stopped
+    env_file: .env
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 1g
+    ports:
+      - "${ECHOFOG_PORT:-443}:${ECHOFOG_PORT:-443}/tcp"
+      - "${ECHOFOG_PORT:-443}:${ECHOFOG_PORT:-443}/udp"
+      # noise3 lives on the spare port when a cover takes 443.
+      - "${ECHOFOG_NOISE_PORT:-444}:${ECHOFOG_NOISE_PORT:-444}/udp"
+    volumes:
+      - echofog-v2-data:/data
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+volumes:
+  echofog-v2-data:

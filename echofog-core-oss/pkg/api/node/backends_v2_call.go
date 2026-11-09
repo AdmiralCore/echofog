@@ -34,6 +34,7 @@ var _ v2Calls = (*app.Calls)(nil)
 type v2CallBackend struct {
 	v2PendingBackend
 	calls v2Calls
+	gc    v2GroupCalls // the calls of groups, once attached (backends_v2_groupcall.go)
 
 	mu       sync.Mutex
 	upload   int    // declared upstream bandwidth used to size call streams

@@ -33,7 +33,10 @@ identity ([handshake.md](handshake.md) §4.2), and nothing learned through it is
    with a noise3 address (§2.1), it MAY use `noise3` on a path that meets the path requirement of §2.4.
 3. "Same country" requires positive knowledge: both public addresses map to the same country in the
    node's built-in offline GeoIP database. An unknown country counts as a border. A node MUST NOT query
-   an online GeoIP service with peer addresses (K7).
+   an online GeoIP service with peer addresses (K7). The initiator's **own** country may come from the
+   user's explicit setting (desktop) or the platform hint (Android); when neither is set, GeoIP of the
+   client's first public address is the default. The **responder's** country always comes from the
+   built-in offline GeoIP database; a peer's own claim never overrides it.
 4. Across a border, or when unknown, the initiator MUST use a camouflaged suite; if the responder has
    none (an ordinary user), the link goes through a relay that has one (guard mode, as in v1).
 5. Happy eyeballs: the preferred suite is tried first; the second starts after
@@ -195,11 +198,13 @@ InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner
 
 **Path requirement (`ErrPathTooSmall`).** An Init carries 71 bytes of header and a 1200-byte inner QUIC
 Initial, so noise3 needs a path that carries at least **1271 bytes** of UDP payload: an IPv4 path MTU of
-at least 1299, or an IPv6 path MTU of at least 1319. The floor of 1232 bytes applies to the other
-carriers only. An Init is never split across datagrams. If the initiator learns that the path cannot
-carry 1271 bytes (an ICMP Packet Too Big message, a known path MTU below that, or no answer to an Init
-after its retries), it marks noise3 unusable on that path. A sender whose datagram ceiling is below
-1271 bytes fails with `ErrPathTooSmall` for noise3. The session then uses `reality2-*` or `ws2` (§1).
+at least 1299, or an IPv6 path MTU of at least 1319. The universal floor of **1232 bytes** of UDP
+payload applies to the other carriers only. It is not a reason to shrink the inner Initial or the path
+requirement: 1271 stands. An Init is never split across datagrams. If the initiator learns that the path
+cannot carry 1271 bytes (an ICMP Packet Too Big message, a known path MTU below that, or no answer to an
+Init after its retries), it marks noise3 unusable on that path and **falls back to the TCP carriers**
+(`reality2-tcp` or `ws2`, §1) without waiting for a full handshake timeout. A sender whose datagram
+ceiling is below 1271 bytes fails with `ErrPathTooSmall` for noise3.
 
 Until it has received an authenticated responder packet, the initiator sends every outgoing inner
 datagram as a **fresh** Init (new ephemeral key, new `repr`), so retransmissions never repeat bytes
@@ -320,11 +325,12 @@ pt    = 0x01 ‖ ts(u32, unix seconds) ‖ 0x00 × 11                      16 by
 token = AES-256-GCM(k_tok, nonce = 0^12, pt, aad)                     16 + 16 = 32 bytes
 ```
 
-- `a` is the address the client dialed, exactly as written in the card: `host:port` for reality2-quic
-  and reality2-tcp (`Addr.host`, `":"`, decimal `Addr.port`), the URL for ws2. The token is therefore
-  valid only for that address: a captured hello cannot be replayed at another address of the same node
-  to link the two. The server tries each address of its live cards that uses the masking key (z is
-  computed once; each try is one HKDF).
+- `a` is the address the client dialed, exactly as written in the card: `host:port` for
+  reality2-quic, reality2-tcp and ws2 (`Addr.host`, `":"`, decimal `Addr.port`). For ws2 this is the
+  `host:port` component of `Addr.url`; the scheme, path and query are not part of `a`. The token is
+  therefore valid only for that address: a captured hello cannot be replayed at another address of the
+  same node to link the two. The server tries each address of its live cards that uses the masking key
+  (z is computed once; each try is one HKDF).
 - `CH0` is the ClientHello handshake message (handshake type, 3-byte length, body: the bytes that
   enter the TLS transcript) with the 32-byte token field set to zero. The fixed nonce is safe because
   `k_tok` is used once: `c` is fresh per ClientHello. Binding `aad` to the whole ClientHello stops an
@@ -334,8 +340,12 @@ token = AES-256-GCM(k_tok, nonce = 0^12, pt, aad)                     16 + 16 = 
 
 For every UDP packet:
 
-1. A short-header packet whose Destination Connection ID belongs to a live admitted connection, or any
-   packet from an admitted 4-tuple: to the node's QUIC stack.
+1. A packet from an **admitted 4-tuple** (source address and port) goes to the node's QUIC stack.
+   Admission is by the 4-tuple only; the Destination Connection ID does not admit a packet from
+   another source. A live connection whose source port changes (NAT rebinding) is therefore not
+   admitted by its DCID: its packets go to the cover, and the flow does not survive the change. Binding
+   the gate to the DCID of a live admitted connection would keep such a flow alive; that is a known
+   limitation for the audit, not a rule of v2.0.
 2. A QUIC v1 Initial from an unadmitted source: buffer the flight (at most 256 pending hellos, 8 KiB per
    source, 500 ms) until the ClientHello is complete. For each live masking key (≤ 8): compute `z`,
    then `k_tok` for each candidate address, and open the token. Valid, `pt[0] = 0x01`, zero padding,
@@ -470,8 +480,10 @@ Rules for every inner TLS:
 - TLS and QUIC early data (0-RTT) MUST NOT be used. 0-RTT exists at L1 instead
   ([handshake.md](handshake.md) §10);
 - QUIC transport parameters (noise3): idle timeout 60 s, `max_udp_payload_size` reduced by the L0
-  overhead plus the profile's maximum padding, datagrams enabled, at most 256 bidirectional and 64
-  unidirectional streams. QUIC's own keepalive is off; L2 PING is used instead (§7.1).
+  overhead plus the profile's maximum padding, datagrams enabled, at most 256 bidirectional and
+  **64 unidirectional** streams. The 64 is the Chrome value: a limit of 0 would be a visible
+  difference from the browser's transport parameters. QUIC's own keepalive is off; L2 PING is used
+  instead (§7.1).
 
 On QUIC carriers, v2 streams are QUIC streams (stream 0 is the first client bidirectional stream) and
 v2 datagrams are QUIC DATAGRAM frames.

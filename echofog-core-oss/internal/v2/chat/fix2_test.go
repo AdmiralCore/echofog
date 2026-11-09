@@ -125,8 +125,9 @@ func TestForgedAccountOfAKnownDeviceStartsNoRecovery(t *testing.T) {
 	}
 }
 
-// Failures of a device without a session count apart, against one small budget for all of them.
-func TestUnboundFailuresShareASmallBudget(t *testing.T) {
+// Refusals of a device we have no session with are unauthenticated: however many arrive, they never
+// start a recovery or replace a session (ЧМ-1).
+func TestUnauthenticatedFailuresStartNoRecovery(t *testing.T) {
 	w := newWorld(t)
 	b, c := w.newPeer(), w.newPeer()
 	storm := func(n int) {
@@ -136,39 +137,37 @@ func TestUnboundFailuresShareASmallBudget(t *testing.T) {
 			b.svc.Receive(context.Background(), env)
 		}
 	}
-	// a hundred devices with two envelopes each: none reaches three
+	// a hundred devices with two envelopes each, then six with three: none is authenticated
 	for i := 0; i < 100; i++ {
 		storm(2)
 	}
-	if st := b.svc.Stats(); st.Outbox != 0 {
-		t.Fatalf("%d recoveries from devices with two failures each", st.Outbox)
-	}
-	// devices with three: the first two start a recovery, the budget (2 an hour) refuses the rest
 	for i := 0; i < 6; i++ {
 		storm(3)
 	}
-	if st := b.svc.Stats(); st.Outbox != 2 {
-		t.Fatalf("%d recoveries within the budget of 2 an hour", st.Outbox)
+	w.tick(b)
+	if st := b.svc.Stats(); st.Outbox != 0 {
+		t.Fatalf("%d recoveries from unauthenticated envelopes", st.Outbox)
 	}
 	w.clock.Add(61 * time.Minute)
 	storm(3)
-	if st := b.svc.Stats(); st.Outbox != 3 {
-		t.Fatalf("%d recoveries after the hour, want 3", st.Outbox)
+	w.tick(b)
+	if st := b.svc.Stats(); st.Outbox != 0 {
+		t.Fatalf("%d recoveries after the hour", st.Outbox)
 	}
 }
 
-func TestUnboundTableIsBounded(t *testing.T) {
+func TestUnauthenticatedEnvelopeTableIsBounded(t *testing.T) {
 	w := newWorld(t)
 	b, c := w.newPeer(), w.newPeer()
-	for i := 0; i < 5*maxUnboundDevices; i++ {
+	for i := 0; i < 5*maxUnauthDevices; i++ {
 		env := craft(t, b, c, c.self.Account, fakeDevice(), []byte("some ratchet bytes of enough length to parse...."), false)
 		b.svc.Receive(context.Background(), env)
 	}
 	b.svc.mu.Lock()
-	n := len(b.svc.unbound)
+	n := len(b.svc.unauth)
 	b.svc.mu.Unlock()
-	if n == 0 || n > maxUnboundDevices {
-		t.Fatalf("%d devices in the unbound table, want 1..%d", n, maxUnboundDevices)
+	if n == 0 || n > maxUnauthDevices {
+		t.Fatalf("%d devices in the unauthenticated table, want 1..%d", n, maxUnauthDevices)
 	}
 }
 
@@ -192,7 +191,7 @@ func TestInitWithAnUnlistedDeviceDoesNotBlockTheAccount(t *testing.T) {
 	}
 }
 
-func TestLookupErrorIsRememberedPerDevice(t *testing.T) {
+func TestLookupErrorIsRememberedPerAccount(t *testing.T) {
 	w := newWorld(t)
 	b := w.newPeer()
 	ghost := fakeAccount()
@@ -201,11 +200,18 @@ func TestLookupErrorIsRememberedPerDevice(t *testing.T) {
 		b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev1, []byte("init bytes"), true))
 	}
 	if n := w.resolves[ghost.ID()]; n != 1 {
-		t.Fatalf("%d lookups for four inits of one (account, device)", n)
+		t.Fatalf("%d lookups for four inits of one account", n)
 	}
+	// another device of the same account does not make a second search: one search per contact per
+	// TTL bounds what the recipient asks the DHT (ЧМ-2)
+	b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev2, []byte("init bytes"), true))
+	if n := w.resolves[ghost.ID()]; n != 1 {
+		t.Fatalf("%d lookups for a second device within the TTL, want 1", n)
+	}
+	w.clock.Add(2 * time.Minute)
 	b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev2, []byte("init bytes"), true))
 	if n := w.resolves[ghost.ID()]; n != 2 {
-		t.Fatalf("%d lookups, another device of the account is its own case", n)
+		t.Fatalf("%d lookups after the TTL, want 2", n)
 	}
 }
 

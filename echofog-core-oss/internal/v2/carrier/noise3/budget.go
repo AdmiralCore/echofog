@@ -117,6 +117,9 @@ type bloom struct {
 	bits [bloomGenWords]uint64
 	// used is true when any bit may be set; dirty is true when the persisted copy differs.
 	used, dirty bool
+	// ver increases on every mutation of the persisted bits. A flush snapshots it and clears
+	// dirty only if the generation did not change while the KV write was in flight.
+	ver uint64
 }
 
 func (b *bloom) indexes(sel []byte) [bloomHash]uint64 {
@@ -146,6 +149,7 @@ func (b *bloom) add(sel []byte) {
 		b.bits[i/64] |= 1 << (i % 64)
 	}
 	b.used, b.dirty = true, true
+	b.ver++
 }
 
 func (b *bloom) clear() {
@@ -154,6 +158,7 @@ func (b *bloom) clear() {
 	}
 	b.bits = [bloomGenWords]uint64{}
 	b.used = false
+	b.ver++
 }
 
 func (b *bloom) marshal() []byte {

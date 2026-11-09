@@ -76,3 +76,48 @@ func (a *App) RemoveBootstrapNode(entry string) error {
 	}
 	return nodeAPI.RemoveBootstrapNode(entry)
 }
+
+// SharingApprove confirms a client waiting for the owner of the shared connection.
+func (a *App) SharingApprove(id, label string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SharingApprove(id, label)
+}
+
+// SharingReject turns a waiting client down.
+func (a *App) SharingReject(id string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SharingReject(id)
+}
+
+// SharingRevoke takes a confirmed client's access back.
+func (a *App) SharingRevoke(id string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SharingRevoke(id)
+}
+
+// SharingOpenFor lets anyone with the link use the shared connection for the given minutes.
+func (a *App) SharingOpenFor(minutes int) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SharingOpenFor(minutes)
+}
+
+// SharingCloseOpen ends the open access.
+func (a *App) SharingCloseOpen() error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SharingCloseOpen()
+}

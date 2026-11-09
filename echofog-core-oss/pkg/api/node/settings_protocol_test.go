@@ -84,3 +84,28 @@ func TestProtocolFromEnvIsTheDefaultAndProfileOverrides(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ui_settings.json"), []byte(`{"protocol":2}`), 0o600))
 	require.Equal(t, config.ProtocolV2, GetConfiguredConfig("saved-v2").Protocol)
 }
+
+// T11.7: the launch flag (--protocol 2) chooses the mode of this run only: it wins over what the profile
+// saved and over ECHOFOG_PROTOCOL, and it saves nothing, so the next start without it is as before.
+func TestForcedProtocolWinsForOneRunAndSavesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".echofog", "profiles", "forced")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ui_settings.json"), []byte(`{"protocol":1}`), 0o600))
+
+	ForceProtocol(config.ProtocolV2)
+	t.Cleanup(func() { ForceProtocol(0) })
+	require.Equal(t, config.ProtocolV2, GetConfiguredConfig("forced").Protocol, "the flag wins over the saved v1")
+
+	ForceProtocol(0)
+	require.Equal(t, config.ProtocolV1, GetConfiguredConfig("forced").Protocol, "without the flag the profile decides")
+	raw, err := os.ReadFile(filepath.Join(dir, "ui_settings.json"))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"protocol":1}`, string(raw), "the flag saved nothing")
+
+	// a value that is not a protocol is ignored
+	ForceProtocol(7)
+	require.Equal(t, config.ProtocolV1, GetConfiguredConfig("forced").Protocol)
+}

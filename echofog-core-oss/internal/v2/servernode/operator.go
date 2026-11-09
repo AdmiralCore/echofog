@@ -31,8 +31,19 @@ type StatusInfo struct {
 	Roles      []string `json:"roles"`
 	Sessions   int      `json:"sessions"`
 	PublicCard bool     `json:"public_card"`
+	// PublicLink is the join link of the public card (D37): set only when a camouflaged
+	// listener made the node publishable.
+	PublicLink string   `json:"public_link,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
 	Listen     []string `json:"listen,omitempty"`
+	// CoverCertNotAfter is the expiry of the cover certificate the running node serves, as Unix
+	// seconds; zero when no certificate is installed yet. The doctor reports its term.
+	CoverCertNotAfter int64 `json:"cover_cert_not_after,omitempty"`
+	// Version is the build version, UptimeSeconds how long the node runs, Invites how many
+	// invitations and passes it keeps.
+	Version       string `json:"version,omitempty"`
+	UptimeSeconds int64  `json:"uptime_seconds,omitempty"`
+	Invites       int    `json:"invites,omitempty"`
 }
 
 // ErrNoInvites: invitations are off (no invite listener configured).

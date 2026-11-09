@@ -129,6 +129,9 @@ export namespace convlog {
 	    lastReplyAt?: number;
 	    threadTitle?: string;
 	    legacy?: boolean;
+	    mentions?: string[];
+	    mentionsAll?: boolean;
+	    mentioned?: boolean;
 	    state?: string;
 	    kind: string;
 	    file?: FileRef;
@@ -165,6 +168,9 @@ export namespace convlog {
 	        this.lastReplyAt = source["lastReplyAt"];
 	        this.threadTitle = source["threadTitle"];
 	        this.legacy = source["legacy"];
+	        this.mentions = source["mentions"];
+	        this.mentionsAll = source["mentionsAll"];
+	        this.mentioned = source["mentioned"];
 	        this.state = source["state"];
 	        this.kind = source["kind"];
 	        this.file = this.convertValues(source["file"], FileRef);
@@ -758,6 +764,20 @@ export namespace main {
 	        this.pacerDelayMs = source["pacerDelayMs"];
 	    }
 	}
+	export class ProtocolDTO {
+	    running: number;
+	    next: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProtocolDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.next = source["next"];
+	    }
+	}
 	export class RememberedUnlockDTO {
 	    supported: boolean;
 	    enabled: boolean;
@@ -909,6 +929,8 @@ export namespace node {
 	    restart?: boolean;
 	    hasProxy: boolean;
 	    hasRelay: boolean;
+	    relayAvailable: boolean;
+	    relayNote?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AnonymityStatus(source);
@@ -2198,6 +2220,7 @@ export namespace node {
 	    paymentsReady: boolean;
 	    payAddress: string;
 	    earnedUsdt: string;
+	    access?: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new SharingStatus(source);
@@ -2217,6 +2240,7 @@ export namespace node {
 	        this.paymentsReady = source["paymentsReady"];
 	        this.payAddress = source["payAddress"];
 	        this.earnedUsdt = source["earnedUsdt"];
+	        this.access = source["access"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

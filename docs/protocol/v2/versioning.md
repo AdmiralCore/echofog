@@ -38,6 +38,8 @@ name (`EchoFog/3/…`).
    - Unknown frame type without IGNORABLE → `CLOSE{unknown-frame}` of that stream only.
    - Unknown protobuf field → skipped (and preserved in signed bodies).
    - Unknown feature, suite, algorithm tag, DHT record kind → ignored, or stored under quota (DHT).
+   - Unknown conversation-log event kind → stored, synced, forwarded unchanged, shown as a
+     placeholder (§3.9).
    - None of these may raise an abuse score. Abuse scoring applies only to frames that are
      malformed for a *known* type.
 3. **Refusals are explained** inside the encrypted channel before closing:
@@ -145,6 +147,39 @@ name (`EchoFog/3/…`).
   identity vouches for the new one with a device list (`echofog/devices/2`) signed by both. The
   details are left to the version that introduces the algorithm.
 
+### 3.9 Unknown event kinds of the conversation log
+
+Later versions add event kinds to the conversation log (polls, tags, wiki pages). The event layout and
+the kinds are in `echofog-core-oss/docs/design/conversation-log.md` (§2.5). A client that does not know
+an event's `kind` MUST:
+
+1. **Store** the event with all its fields, its `body` bytes as received, and its signature.
+2. **Sync** it as an ordinary event: it counts in the version vector and in the digest exactly as a
+   known event does, and anti-entropy transfers it the same way.
+3. **Forward** it unchanged to other participants and to holders (mailboxes, relays, stores). It sends
+   the stored bytes: it MUST NOT re-encode the event, drop unknown fields, or alter the signature
+   (rule 3 of §3.5).
+4. **Show a placeholder, not the content.** The view renders the neutral text
+   «Сообщение из новой версии приложения — обновите приложение» and offers a way to hide it. The
+   `body` is neither decoded nor displayed.
+5. **Not fail.** An unknown `kind` or unknown field never makes parsing or the view fail, never drops
+   the event, and never raises an abuse score (§2, rule 2).
+6. **Keep the limits.** Size limits and per-conversation quotas apply to an unknown kind exactly as to
+   a known one.
+
+Conformance for the v2 log is tested in T7.5a: an event with an unknown kind is stored, synced,
+forwarded byte-for-byte with its signature, and rendered as the placeholder without a crash.
+
+Two examples from the group features (conversation-log.md §2.5):
+
+- `group.close` is a new event kind (10). A client that does not know it applies rules 1 to 6 above:
+  it stores, syncs and forwards the event, and shows the placeholder. It does not know the group is
+  closed, so it does not apply the close rules (later joins and invitations stay visible to it). The
+  close rules bind the clients that know the kind.
+- `att` is an optional field 6 of the `MSG` body. A client that does not know `att` keeps the field as an
+  unknown protobuf field (rule 3 of §3.5), keeps the signature valid, and shows the message text without
+  the file card. `MSG` is a known kind, so no placeholder is shown for the event.
+
 ## 4. Dual stack for future major versions
 
 When v3 appears, a node MAY support `{EchoFog/2, EchoFog/3}` suites at once:
@@ -179,6 +214,11 @@ Rules:
 - A node applies a manifest only if it is valid under the current key set (threshold, objects.md §9),
   its `released_at` is later than that of the last applied manifest and not more than one day in the
   future, and its `not_after` has not passed.
+- **Absence is a prohibition.** A manifest defines the whole policy set. A component that the latest
+  applied manifest does not name has no effective policy and is **not permitted** (fail-closed): no
+  earlier policy is revived, and peers that use that component are refused. The never-lock-out rules
+  below still protect the version the reading node runs itself. A publisher that wants a component to
+  stay allowed must name it in every manifest.
 - **Never lock out.** A manifest never makes a node refuse the versions it runs itself:
   - `min_supported` and `deprecated_after` refusals apply only to peer versions strictly **below the
     reading node's own** version of that component; an entry that would cover the node's own version is

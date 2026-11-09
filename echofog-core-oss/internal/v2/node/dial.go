@@ -107,6 +107,7 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	if err != nil {
 		return nil, Peer{}, err
 	}
+	r.rememberCard(est, card)
 	r.ensureServing(est)
 	return est, r.peerOf(est), nil
 }
@@ -144,6 +145,10 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 	if len(attempts) == 0 && card != nil {
 		attempts = carrier.Plan(card, r.planInfo())
 	}
+	if r.egress != nil {
+		// Behind a proxy only the TCP suites can go out (T11.6a); with none left the dial fails.
+		attempts = tcpOnly(attempts)
+	}
 	// The country policy (T6.4) drops the attempts the network class forbids. A relay circuit, an
 	// injected carrier is not a direct dial to a card address. A bootstrap dial is one, to the address
 	// of the list: it has no card, but the row for that address applies all the same (L6).
@@ -162,11 +167,16 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		return nil, fmt.Errorf("%w: %s", ErrNoRoute, DeviceID(card.DeviceID))
 	}
 
-	req := carrier.DialRequest{Card: carrierCard, DialContext: r.cfg.DialContext}
+	req := carrier.DialRequest{Card: carrierCard, DialContext: r.watchedDialContext(r.cfg.DialContext),
+		Narrow: r.narrow, NetworkID: r.NetworkID}
+	if r.cfg.DialContext == nil {
+		req.DialMSS = r.watchedDialMSS() // a direct socket can take a limited MSS; a proxy's cannot
+	}
 	if probeBudget > 0 {
 		req.DialContext = r.probeDialContext(probeBudget)
+		req.DialMSS = nil
 	}
-	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock}
+	dialCfg := carrier.DialConfig{Registry: r.registry, Clock: r.carrierClock, Narrow: r.narrow, NetworkID: r.NetworkID}
 
 	var reserved []session.Pair
 	var chosenPair session.Pair
@@ -189,7 +199,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		attempt = firstAttempt(attempts)
 		c, chosen, err := carrier.Dial(ctx, req, attempts, dialCfg)
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || opt.repair {
 				r.releaseReservations(reserved)
 			} else {
 				r.failReservations(reserved)
@@ -249,9 +259,10 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 
 	est, err := session.Dial(ctx, card, attempt, local, opts...)
 	if err != nil {
+		r.noteClockSkew(err)
 		r.maybeClockCheck()
 		if havePair {
-			if ctx.Err() == nil && penalizeDial(err) {
+			if ctx.Err() == nil && !opt.repair && penalizeDial(err) {
 				r.policy.Penalize(chosenPair)
 			} else {
 				r.policy.Release(chosenPair)

@@ -42,6 +42,9 @@ type fabric struct {
 	sentOn   map[mux.PathKind]int // CALL_AUDIO / CALL_VIDEO datagrams by path kind
 	shapers  map[[2]types.PeerID]*shaper
 	relayHop int
+	extra    time.Duration        // added to every datagram's delay (T9.5 gate: artificial latency)
+	sentBy   map[types.PeerID]int // CALL_AUDIO / CALL_VIDEO datagrams by sender (T9.5 gate)
+	sentTo   map[types.PeerID]int // ... by receiver
 }
 
 // shaper is a bottleneck: it sends kbps and drops what waits longer than queue.
@@ -76,6 +79,8 @@ func newFabric() *fabric {
 		kinds:   map[[2]types.PeerID]map[mux.PathKind]int{},
 		sentOn:  map[mux.PathKind]int{},
 		shapers: map[[2]types.PeerID]*shaper{},
+		sentBy:  map[types.PeerID]int{},
+		sentTo:  map[types.PeerID]int{},
 	}
 }
 
@@ -111,6 +116,8 @@ func (l link) SendDatagramVia(kind mux.PathKind, typ uint64, payload []byte) err
 	}
 	if typ == frame.DgramCallAudio || typ == frame.DgramCallVideo {
 		f.sentOn[kind]++
+		f.sentBy[l.from]++
+		f.sentTo[l.to]++
 	}
 	target := f.nodes[l.to]
 	sh := f.shapers[[2]types.PeerID{l.from, l.to}]
@@ -119,7 +126,7 @@ func (l link) SendDatagramVia(kind mux.PathKind, typ uint64, payload []byte) err
 		return nil
 	}
 	data := append([]byte(nil), payload...)
-	delay := 2 * time.Millisecond
+	delay := 2*time.Millisecond + f.extra
 	if kind == mux.PathRelay {
 		delay += 8 * time.Millisecond // the extra hop
 	}
@@ -159,9 +166,13 @@ type signalBus struct {
 func (b signalBus) SendSignal(to [32]byte, lossy bool, payload []byte) error {
 	b.f.mu.Lock()
 	target := b.f.nodes[to]
+	_, session := b.f.kinds[[2]types.PeerID{b.self, to}]
 	b.f.mu.Unlock()
+	if !session {
+		return callnet.ErrNoLink // no session with that participant: the runtime's signal port fails too
+	}
 	if target == nil {
-		return nil
+		return callnet.ErrNoLink // no session with that participant: the runtime's signal port fails too (T9.5)
 	}
 	data := append([]byte(nil), payload...)
 	time.AfterFunc(2*time.Millisecond, func() {

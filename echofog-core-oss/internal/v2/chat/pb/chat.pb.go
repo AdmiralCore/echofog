@@ -698,6 +698,7 @@ type Control struct {
 	//	*Control_Reset_
 	//	*Control_Read
 	//	*Control_Delivered
+	//	*Control_Mailbox
 	Kind          isControl_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -776,6 +777,15 @@ func (x *Control) GetDelivered() *Receipt {
 	return nil
 }
 
+func (x *Control) GetMailbox() *MailboxQueue {
+	if x != nil {
+		if x, ok := x.Kind.(*Control_Mailbox); ok {
+			return x.Mailbox
+		}
+	}
+	return nil
+}
+
 type isControl_Kind interface {
 	isControl_Kind()
 }
@@ -796,6 +806,10 @@ type Control_Delivered struct {
 	Delivered *Receipt `protobuf:"bytes,4,opt,name=delivered,proto3,oneof"`
 }
 
+type Control_Mailbox struct {
+	Mailbox *MailboxQueue `protobuf:"bytes,5,opt,name=mailbox,proto3,oneof"`
+}
+
 func (*Control_Knock) isControl_Kind() {}
 
 func (*Control_Reset_) isControl_Kind() {}
@@ -803,6 +817,79 @@ func (*Control_Reset_) isControl_Kind() {}
 func (*Control_Read) isControl_Kind() {}
 
 func (*Control_Delivered) isControl_Kind() {}
+
+func (*Control_Mailbox) isControl_Kind() {}
+
+// MailboxQueue tells a contact where the sender receives mail while away: a private queue on a mailbox
+// relay (services.md 5.2: contacts learn (M, queue) inside end-to-end messages). A new one is sent when
+// the queue rotates; the contact keeps the newest.
+type MailboxQueue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Relay         []byte                 `protobuf:"bytes,1,opt,name=relay,proto3" json:"relay,omitempty"`                          // device ID of the mailbox relay M (32 bytes)
+	Queue         []byte                 `protobuf:"bytes,2,opt,name=queue,proto3" json:"queue,omitempty"`                          // 16-byte queue ID
+	NotAfter      uint64                 `protobuf:"varint,3,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`   // unix seconds the queue ends
+	RelayCard     []byte                 `protobuf:"bytes,4,opt,name=relay_card,json=relayCard,proto3" json:"relay_card,omitempty"` // optional: M's card, for a relay that is not listed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MailboxQueue) Reset() {
+	*x = MailboxQueue{}
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MailboxQueue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MailboxQueue) ProtoMessage() {}
+
+func (x *MailboxQueue) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MailboxQueue.ProtoReflect.Descriptor instead.
+func (*MailboxQueue) Descriptor() ([]byte, []int) {
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *MailboxQueue) GetRelay() []byte {
+	if x != nil {
+		return x.Relay
+	}
+	return nil
+}
+
+func (x *MailboxQueue) GetQueue() []byte {
+	if x != nil {
+		return x.Queue
+	}
+	return nil
+}
+
+func (x *MailboxQueue) GetNotAfter() uint64 {
+	if x != nil {
+		return x.NotAfter
+	}
+	return 0
+}
+
+func (x *MailboxQueue) GetRelayCard() []byte {
+	if x != nil {
+		return x.RelayCard
+	}
+	return nil
+}
 
 // Knock asks (ask = true) or answers with a card; card is a card/2 envelope.
 type Knock struct {
@@ -815,7 +902,7 @@ type Knock struct {
 
 func (x *Knock) Reset() {
 	*x = Knock{}
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[9]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -827,7 +914,7 @@ func (x *Knock) String() string {
 func (*Knock) ProtoMessage() {}
 
 func (x *Knock) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[9]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -840,7 +927,7 @@ func (x *Knock) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Knock.ProtoReflect.Descriptor instead.
 func (*Knock) Descriptor() ([]byte, []int) {
-	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{9}
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Knock) GetAsk() bool {
@@ -866,7 +953,7 @@ type Reset struct {
 
 func (x *Reset) Reset() {
 	*x = Reset{}
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[10]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -878,7 +965,7 @@ func (x *Reset) String() string {
 func (*Reset) ProtoMessage() {}
 
 func (x *Reset) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[10]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -891,7 +978,7 @@ func (x *Reset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Reset.ProtoReflect.Descriptor instead.
 func (*Reset) Descriptor() ([]byte, []int) {
-	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{10}
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{11}
 }
 
 // Receipt names the messages it confirms.
@@ -904,7 +991,7 @@ type Receipt struct {
 
 func (x *Receipt) Reset() {
 	*x = Receipt{}
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[11]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -916,7 +1003,7 @@ func (x *Receipt) String() string {
 func (*Receipt) ProtoMessage() {}
 
 func (x *Receipt) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[11]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -929,7 +1016,7 @@ func (x *Receipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Receipt.ProtoReflect.Descriptor instead.
 func (*Receipt) Descriptor() ([]byte, []int) {
-	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{11}
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Receipt) GetIds() [][]byte {
@@ -950,7 +1037,7 @@ type Deliver struct {
 
 func (x *Deliver) Reset() {
 	*x = Deliver{}
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[12]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -962,7 +1049,7 @@ func (x *Deliver) String() string {
 func (*Deliver) ProtoMessage() {}
 
 func (x *Deliver) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[12]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -975,7 +1062,7 @@ func (x *Deliver) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Deliver.ProtoReflect.Descriptor instead.
 func (*Deliver) Descriptor() ([]byte, []int) {
-	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{12}
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Deliver) GetReq() uint64 {
@@ -1003,7 +1090,7 @@ type Delivered struct {
 
 func (x *Delivered) Reset() {
 	*x = Delivered{}
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[13]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1015,7 +1102,7 @@ func (x *Delivered) String() string {
 func (*Delivered) ProtoMessage() {}
 
 func (x *Delivered) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[13]
+	mi := &file_internal_v2_chat_pb_chat_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1028,7 +1115,7 @@ func (x *Delivered) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Delivered.ProtoReflect.Descriptor instead.
 func (*Delivered) Descriptor() ([]byte, []int) {
-	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{13}
+	return file_internal_v2_chat_pb_chat_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Delivered) GetReq() uint64 {
@@ -1101,13 +1188,20 @@ const file_internal_v2_chat_pb_chat_proto_rawDesc = "" +
 	"\tconv_sync\x18\n" +
 	" \x01(\fR\bconvSync\x122\n" +
 	"\acontrol\x18\v \x01(\v2\x18.echofog.v2.chat.ControlR\acontrol\x12\x10\n" +
-	"\x03pad\x18\x0f \x01(\fR\x03pad\"\xdb\x01\n" +
+	"\x03pad\x18\x0f \x01(\fR\x03pad\"\x96\x02\n" +
 	"\aControl\x12.\n" +
 	"\x05knock\x18\x01 \x01(\v2\x16.echofog.v2.chat.KnockH\x00R\x05knock\x12.\n" +
 	"\x05reset\x18\x02 \x01(\v2\x16.echofog.v2.chat.ResetH\x00R\x05reset\x12.\n" +
 	"\x04read\x18\x03 \x01(\v2\x18.echofog.v2.chat.ReceiptH\x00R\x04read\x128\n" +
-	"\tdelivered\x18\x04 \x01(\v2\x18.echofog.v2.chat.ReceiptH\x00R\tdeliveredB\x06\n" +
-	"\x04kind\"-\n" +
+	"\tdelivered\x18\x04 \x01(\v2\x18.echofog.v2.chat.ReceiptH\x00R\tdelivered\x129\n" +
+	"\amailbox\x18\x05 \x01(\v2\x1d.echofog.v2.chat.MailboxQueueH\x00R\amailboxB\x06\n" +
+	"\x04kind\"v\n" +
+	"\fMailboxQueue\x12\x14\n" +
+	"\x05relay\x18\x01 \x01(\fR\x05relay\x12\x14\n" +
+	"\x05queue\x18\x02 \x01(\fR\x05queue\x12\x1b\n" +
+	"\tnot_after\x18\x03 \x01(\x04R\bnotAfter\x12\x1d\n" +
+	"\n" +
+	"relay_card\x18\x04 \x01(\fR\trelayCard\"-\n" +
 	"\x05Knock\x12\x10\n" +
 	"\x03ask\x18\x01 \x01(\bR\x03ask\x12\x12\n" +
 	"\x04card\x18\x02 \x01(\fR\x04card\"\a\n" +
@@ -1141,7 +1235,7 @@ func file_internal_v2_chat_pb_chat_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_v2_chat_pb_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_v2_chat_pb_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_internal_v2_chat_pb_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_internal_v2_chat_pb_chat_proto_goTypes = []any{
 	(PersonalMessageType)(0),     // 0: echofog.v2.chat.PersonalMessageType
 	(*RatchetHeader)(nil),        // 1: echofog.v2.chat.RatchetHeader
@@ -1153,26 +1247,28 @@ var file_internal_v2_chat_pb_chat_proto_goTypes = []any{
 	(*Inner)(nil),                // 7: echofog.v2.chat.Inner
 	(*PersonalMessageProto)(nil), // 8: echofog.v2.chat.PersonalMessageProto
 	(*Control)(nil),              // 9: echofog.v2.chat.Control
-	(*Knock)(nil),                // 10: echofog.v2.chat.Knock
-	(*Reset)(nil),                // 11: echofog.v2.chat.Reset
-	(*Receipt)(nil),              // 12: echofog.v2.chat.Receipt
-	(*Deliver)(nil),              // 13: echofog.v2.chat.Deliver
-	(*Delivered)(nil),            // 14: echofog.v2.chat.Delivered
+	(*MailboxQueue)(nil),         // 10: echofog.v2.chat.MailboxQueue
+	(*Knock)(nil),                // 11: echofog.v2.chat.Knock
+	(*Reset)(nil),                // 12: echofog.v2.chat.Reset
+	(*Receipt)(nil),              // 13: echofog.v2.chat.Receipt
+	(*Deliver)(nil),              // 14: echofog.v2.chat.Deliver
+	(*Delivered)(nil),            // 15: echofog.v2.chat.Delivered
 }
 var file_internal_v2_chat_pb_chat_proto_depIdxs = []int32{
 	1,  // 0: echofog.v2.chat.SecureMessage.header:type_name -> echofog.v2.chat.RatchetHeader
 	2,  // 1: echofog.v2.chat.X3DHInit.initial_ciphertext:type_name -> echofog.v2.chat.SecureMessage
 	0,  // 2: echofog.v2.chat.PersonalMessageProto.type:type_name -> echofog.v2.chat.PersonalMessageType
 	9,  // 3: echofog.v2.chat.PersonalMessageProto.control:type_name -> echofog.v2.chat.Control
-	10, // 4: echofog.v2.chat.Control.knock:type_name -> echofog.v2.chat.Knock
-	11, // 5: echofog.v2.chat.Control.reset:type_name -> echofog.v2.chat.Reset
-	12, // 6: echofog.v2.chat.Control.read:type_name -> echofog.v2.chat.Receipt
-	12, // 7: echofog.v2.chat.Control.delivered:type_name -> echofog.v2.chat.Receipt
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	11, // 4: echofog.v2.chat.Control.knock:type_name -> echofog.v2.chat.Knock
+	12, // 5: echofog.v2.chat.Control.reset:type_name -> echofog.v2.chat.Reset
+	13, // 6: echofog.v2.chat.Control.read:type_name -> echofog.v2.chat.Receipt
+	13, // 7: echofog.v2.chat.Control.delivered:type_name -> echofog.v2.chat.Receipt
+	10, // 8: echofog.v2.chat.Control.mailbox:type_name -> echofog.v2.chat.MailboxQueue
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_internal_v2_chat_pb_chat_proto_init() }
@@ -1185,6 +1281,7 @@ func file_internal_v2_chat_pb_chat_proto_init() {
 		(*Control_Reset_)(nil),
 		(*Control_Read)(nil),
 		(*Control_Delivered)(nil),
+		(*Control_Mailbox)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1192,7 +1289,7 @@ func file_internal_v2_chat_pb_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_v2_chat_pb_chat_proto_rawDesc), len(file_internal_v2_chat_pb_chat_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

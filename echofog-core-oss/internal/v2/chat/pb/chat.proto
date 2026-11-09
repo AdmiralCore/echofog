@@ -108,7 +108,18 @@ message Control {
     Reset reset = 2;
     Receipt read = 3;
     Receipt delivered = 4;
+    MailboxQueue mailbox = 5;
   }
+}
+
+// MailboxQueue tells a contact where the sender receives mail while away: a private queue on a mailbox
+// relay (services.md 5.2: contacts learn (M, queue) inside end-to-end messages). A new one is sent when
+// the queue rotates; the contact keeps the newest.
+message MailboxQueue {
+  bytes relay = 1;       // device ID of the mailbox relay M (32 bytes)
+  bytes queue = 2;       // 16-byte queue ID
+  uint64 not_after = 3;  // unix seconds the queue ends
+  bytes relay_card = 4;  // optional: M's card, for a relay that is not listed
 }
 
 // Knock asks (ask = true) or answers with a card; card is a card/2 envelope.

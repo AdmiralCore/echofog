@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { App, on, errText, copy } from '../api.js';
+  import { EXIT_PROBLEMS, isSiteFailure, refusalKey, historyKey } from '../vpnreason.js';
   import { bytes, price, usdPerGb, microPerMb, when, short, amount, duration, countryName } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
@@ -8,6 +9,7 @@
   import RelayCard from '../components/RelayCard.svelte';
   import AccessCard from '../components/AccessCard.svelte';
   import TestnetNotice from '../components/TestnetNotice.svelte';
+  import ExitAccessCard from '../components/ExitAccessCard.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
   import { ask } from '../stores/dialog.js';
@@ -211,6 +213,10 @@
   const share = () => act('share', async () => {
     if (sharing.enabled) {
       await App.StopSharing();
+    } else if (sharing.access) {
+      // protocol 2: the exit is free; say whose address the traffic leaves with, then turn it on
+      if (!(await ask({ title: $t('proxy.share.title'), message: $t('proxy.share.ipWarning'), confirm: $t('proxy.share.start') }))) return;
+      await App.StartSharing({ pricePerMb: 0, freeTestKb: 0, uploadKbps: 0, freePeers: [] });
     } else {
       await App.StartSharing({
         pricePerMb: microPerMb(form.price),
@@ -312,14 +318,13 @@
   $: leftTitle = (x) => $t('proxy.hist.leftTitle', { when: when(x.remainingAt, $lang) });
   // streams that did not open: "dial failed" is the site (not reachable from the exit, often a
   // name with no IPv4), the rest point at the exit or the way to it
-  const SITE_FAIL = 'dial failed';
   $: refusals = (x) => {
     const by = x.refusedBy || {};
-    const site = by[SITE_FAIL] || 0;
-    const exit = Object.entries(by).reduce((n, [k, v]) => (k === SITE_FAIL ? n : n + v), 0);
+    const site = Object.entries(by).reduce((n, [k, v]) => (isSiteFailure(k) ? n + v : n), 0);
+    const exit = Object.entries(by).reduce((n, [k, v]) => (isSiteFailure(k) ? n : n + v), 0);
     const known = site + exit > 0;
     const title = Object.entries(by).sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => `${$t('proxy.hist.why.' + k.replace(' ', '_'))}: ${v}`).join('\n');
+      .map(([k, v]) => `${$t(historyKey(k))}: ${v}`).join('\n');
     return { site, exit, known, title: (title ? title + '\n\n' : '') + $t('proxy.hist.refusedHelp') };
   };
   $: contactName = (id) => contacts.find((c) => (c.peer_id || '').toLowerCase() === id)?.alias || '';
@@ -328,9 +333,9 @@
   // the exit about to be used, to warn before connecting when it is paid
   $: target = mode === 'manual' ? exits.find((e) => e.peerId === selected) : mode === 'auto' ? best : null;
   $: switchedRecently = vpn.running && vpn.lastSwitch?.at && Date.now() / 1000 - vpn.lastSwitch.at < 120;
-  $: exitProblem = vpn.running && ['disabled', 'quota', 'unreachable'].includes(vpn.exitState) ? vpn.exitState : '';
+  $: exitProblem = vpn.running && EXIT_PROBLEMS.has(vpn.exitState) ? vpn.exitState : '';
   $: refusalText = vpn.running && vpn.refused > 0 && vpn.lastRefusalReason
-    ? $t('proxy.refused', { n: vpn.refused, reason: $t('proxy.refusal.' + vpn.lastRefusalReason), host: vpn.lastRefusalHost, when: when(vpn.lastRefusalAt, $lang) })
+    ? $t('proxy.refused', { n: vpn.refused, reason: $t(refusalKey(vpn.lastRefusalReason)), host: vpn.lastRefusalHost, when: when(vpn.lastRefusalAt, $lang) })
     : '';
 </script>
 
@@ -350,7 +355,7 @@
       <div class="card row killed" role="alert">
         <Icon name="lock" size={18} />
         <span class="grow small">{$t(vpn.blocked ? 'proxy.killBlocked' : 'proxy.killHeld')}</span>
-        <button class="ghost" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
+        <button class="killbtn" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
       </div>
     {/if}
 
@@ -451,6 +456,7 @@
         {:else if mode === 'direct'}
           <div class="auto">
             <p class="small muted">{$t('proxy.directHint')}</p>
+            <p class="small faint">{$t('proxy.externalExit')}</p>
             <input bind:value={direct} placeholder="echofog://join?… / echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
             {#if isInvite && inviteErr}<p class="small error">{inviteErr}</p>
             {:else if isInvite && invite}<p class="small faint">{invite.private ? $t('access.private') : $t('access.publicNode')} · <span class="mono">{short(invite.peerId)}</span></p>
@@ -681,7 +687,8 @@
           <p class="small muted">{$t('proxy.share.depositNote')}</p>
         </div>
       {/if}
-      {#if !sharing.enabled}
+      <ExitAccessCard access={sharing.access} enabled={sharing.enabled} on:change={refresh} />
+      {#if !sharing.enabled && !sharing.access}
         <div class="row wrap">
           <label>{$t('proxy.share.priceLabel')}<input bind:value={form.price} /></label>
           <label>{$t('proxy.share.freeKb')}<input type="number" min="0" max="1024" bind:value={form.freeKb} /></label>
@@ -812,4 +819,6 @@
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   .killed { gap: 10px; align-items: center; border-color: #c98a00; background: color-mix(in srgb, #c98a00 12%, var(--surface)); }
+  .killbtn { background: #c98a00; color: #fff; border-color: #c98a00; font-weight: 600; padding: 8px 14px; flex: none; }
+  .killbtn:hover:not(:disabled) { filter: brightness(1.08); }
 </style>

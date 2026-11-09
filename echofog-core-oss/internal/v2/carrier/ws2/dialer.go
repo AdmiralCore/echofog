@@ -17,6 +17,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
 
 const upgradeTimeout = 15 * time.Second
@@ -68,6 +69,14 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 		return nil, fmt.Errorf("%w: %v", reality2.ErrCard, err)
 	}
 	u, _ := url.Parse(a.GetUrl()) // ParseURL accepted it
+	// The TCP socket is opened inside the WebSocket library through the request's opener, so a
+	// black-holed path is answered with a retry on a limited MSS (T3.12).
+	return carrier.WithNarrowRetry(ctx, req, func(ctx context.Context, req carrier.DialRequest) (mux.Carrier, error) {
+		return d.dialOnce(ctx, req, a, u, hostPort)
+	})
+}
+
+func (d *Dialer) dialOnce(ctx context.Context, req carrier.DialRequest, a *pb.Addr, u *url.URL, hostPort string) (mux.Carrier, error) {
 	wd := websocket.Dialer{
 		HandshakeTimeout:  upgradeTimeout,
 		ReadBufferSize:    MaxMessage,

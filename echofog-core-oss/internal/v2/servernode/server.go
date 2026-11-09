@@ -2,6 +2,10 @@ package servernode
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,17 +17,23 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/hkdf"
+
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
+	"github.com/echofog/echofog-core/internal/v2/carrier/reality2/selfcover"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -58,16 +68,46 @@ type identityFile struct {
 	DeviceListNotAfter uint64 `json:"device_list_not_after"`
 }
 
-func writePrivate(path string, raw []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+// writePrivate replaces path with data, whole or not at all: the data goes to a private temporary
+// file in the same directory, is flushed, and is renamed over the target. A crash or a reader
+// never sees an empty or half-written file (T12.4a acceptance M2).
+func writePrivate(path string, data []byte) error {
+	dir, base := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	f, err := os.CreateTemp(dir, base+".tmp*")
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(raw); err != nil {
+	tmp := f.Name()
+	fail := func(err error) error {
 		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
-	return f.Close()
+	if err := f.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		return fail(err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if d, err := os.Open(filepath.Clean(dir)); err == nil { // make the rename durable; not possible everywhere
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 func readLimited(path string, max int64) ([]byte, error) {
@@ -88,9 +128,15 @@ func readLimited(path string, max int64) ([]byte, error) {
 
 // Init creates the profile in dataDir: identity (recovery phrase returned once), store, server.json
 // and the operator token. It refuses a directory that already holds a profile.
-func Init(dataDir string, cfg Config) (string, error) {
+func Init(dataDir string, cfg Config) (string, error) { return InitLang(dataDir, cfg, "en") }
+
+// InitLang is Init with the comments of server.json in the given language ("ru" or "en").
+func InitLang(dataDir string, cfg Config, lang string) (string, error) {
 	if err := cfg.Validate(); err != nil {
 		return "", err
+	}
+	if cfg.Roles == nil {
+		cfg.Roles = []string{} // saved as [], not null: "no roles" is a choice
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, identityFileName)); err == nil {
 		return "", fmt.Errorf("%s already holds a server profile", dataDir)
@@ -144,7 +190,7 @@ func Init(dataDir string, cfg Config) (string, error) {
 	if err := saveIdentity(dataDir, idf); err != nil {
 		return "", err
 	}
-	raw, err := json.MarshalIndent(cfg, "", "  ")
+	raw, err := RenderConfig(cfg, lang)
 	if err != nil {
 		return "", err
 	}
@@ -248,10 +294,14 @@ type Server struct {
 
 	mu       sync.Mutex
 	warnings map[string]string
-	listener net.Listener
-	http     *http.Server
-	started  bool
-	closed   bool
+	// coverLeaf is the certificate the cover serves; the operator status and the doctor read its
+	// expiry without opening the profile.
+	coverLeaf *x509.Certificate
+	listener  net.Listener
+	http      *http.Server
+	started   bool
+	closed    bool
+	startAt   time.Time
 }
 
 func rolesOf(names []string) []node.Role {
@@ -324,7 +374,43 @@ func (k cardsKV) Get(_ context.Context, key []byte) ([]byte, bool, error) {
 
 func (k cardsKV) Put(_ context.Context, key, value []byte) error { return k.kv.Put(key, value) }
 
-func cardListener(l ListenSpec, mask []byte) (cards.Listener, error) {
+// coverHost is the host part of the configured cover ("example.org:443" -> "example.org").
+func coverHost(cover string) string {
+	host, _, err := net.SplitHostPort(cover)
+	if err != nil {
+		return cover
+	}
+	return host
+}
+
+// ws2Path derives the unguessable ws2 upgrade path from the profile's masking key: it is stable
+// across restarts and never appears anywhere but the card and the listener.
+func ws2Path(maskPriv []byte) string {
+	sum := sha256.Sum256(append(append([]byte(nil), maskPriv...), []byte("echofog/ws2/path")...))
+	return "/" + hex.EncodeToString(sum[:16])
+}
+
+// suiteShape returns the shape profile a card advertises for a suite.
+func suiteShape(suite string) *pb.ShapeProfile {
+	if udpSuite(suite) {
+		return &pb.ShapeProfile{Id: shape.IDDefaultUDP}
+	}
+	return &pb.ShapeProfile{Id: shape.IDDefaultTLS}
+}
+
+// cardListener builds the card entry of one configured listener. The camouflaged suites carry the
+// cover's SNI; ws2 carries its wss URL and no address.
+func cardListener(l ListenSpec, mask []byte, cover, path string) (cards.Listener, error) {
+	host := coverHost(cover)
+	cl := cards.Listener{Suite: suiteNumber(l.Suite), Mask: mask, Shape: suiteShape(l.Suite)}
+	if l.Suite == "ws2" {
+		if host == "" {
+			return cards.Listener{}, errors.New("ws2 needs a cover domain")
+		}
+		cl.URL = "wss://" + cover + path
+		cl.SNI = host
+		return cl, nil
+	}
 	_, port, err := net.SplitHostPort(l.Bind)
 	if err != nil {
 		return cards.Listener{}, err
@@ -337,8 +423,109 @@ func cardListener(l ListenSpec, mask []byte) (cards.Listener, error) {
 	if err != nil {
 		return cards.Listener{}, err
 	}
-	return cards.Listener{Suite: objects.SuiteNoise3, Host: adv.Unmap().String(), Port: uint32(p), Mask: mask,
-		Shape: &pb.ShapeProfile{Id: shape.IDDefaultUDP}}, nil
+	cl.Host = adv.Unmap().String()
+	cl.Port = uint32(p)
+	if l.Suite != "noise3" {
+		if host == "" {
+			return cards.Listener{}, fmt.Errorf("%s needs a cover domain", l.Suite)
+		}
+		cl.SNI = host
+	}
+	return cl, nil
+}
+
+func suiteNumber(name string) uint32 {
+	switch name {
+	case "reality2-quic":
+		return objects.SuiteReality2QUIC
+	case "reality2-tcp":
+		return objects.SuiteReality2TCP
+	case "ws2":
+		return objects.SuiteWS2
+	}
+	return objects.SuiteNoise3
+}
+
+// CoverACMEHTTPClient is the HTTP client of the ACME account and orders; nil means a client with
+// a 30 s timeout. Tests point it at their own CA.
+var CoverACMEHTTPClient *http.Client
+
+// loadCoverCert reads the operator's certificate bundle: a PEM chain and its private key in one
+// file (the same shape selfcover stores). The doctor watches its expiry.
+func loadCoverCert(path string) (*tls.Certificate, error) {
+	raw, err := readLimited(path, 1<<20)
+	if err != nil {
+		return nil, fmt.Errorf("cover_cert: %w", err)
+	}
+	cert, err := tls.X509KeyPair(raw, raw)
+	if err != nil {
+		return nil, fmt.Errorf("cover_cert: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("cover_cert: %w", err)
+	}
+	cert.Leaf = leaf
+	return &cert, nil
+}
+
+// realityBinds returns the TCP and UDP binds of the reality2 pair that shares bind. Either is
+// empty when that transport is not configured.
+func realityBinds(listens []ListenSpec, bind string) (tcp, udp string) {
+	for _, l := range listens {
+		if l.Bind != bind {
+			continue
+		}
+		switch l.Suite {
+		case "reality2-tcp":
+			tcp = l.Bind
+		case "reality2-quic":
+			udp = l.Bind
+		}
+	}
+	return tcp, udp
+}
+
+// realityMask parses one X25519 masking private key for reality2.
+func realityMask(priv []byte) (reality2.MaskKey, error) {
+	k, err := ecdh.X25519().NewPrivateKey(priv)
+	if err != nil {
+		return reality2.MaskKey{}, fmt.Errorf("masking key: %w", err)
+	}
+	return reality2.MaskKey{Private: k}, nil
+}
+
+// coverMaskLabel separates the masking key of the camouflaged listeners from the profile's
+// masking key, which noise3 uses. wire.md §2.1: noise3 keys are never published; the public card
+// carries the camouflaged key alone.
+const coverMaskLabel = "echofog/v2/cover-mask"
+
+// deriveCoverMask derives the masking key of the camouflaged carriers (reality2, ws2) from the
+// profile's masking key. It is stable across restarts and independent of the noise3 key.
+func deriveCoverMask(mask []byte) ([]byte, error) {
+	out := make([]byte, 32)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, mask, nil, []byte(coverMaskLabel)), out); err != nil {
+		return nil, fmt.Errorf("cover masking key: %w", err)
+	}
+	return out, nil
+}
+
+// tokenAddr is the exact host:port a card advertises for a listener; tokens bind to it.
+func tokenAddr(l ListenSpec) string {
+	_, port, err := net.SplitHostPort(l.Bind)
+	if err != nil {
+		return l.Bind
+	}
+	return net.JoinHostPort(l.Advertise, port)
+}
+
+// ws2TokenAddr is the address a ws2 token binds to: the CDN-facing host and port of the cover.
+func ws2TokenAddr(cover string) string {
+	host, port, err := net.SplitHostPort(cover)
+	if err != nil || host == "" || port == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // Open opens the profile of dataDir and builds the runtime without starting it.
@@ -391,15 +578,51 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		return nil, fmt.Errorf("open the v2 store: %w", err)
 	}
 	s.store = st
-	clk, err := clock.New(clock.Config{})
+	clk, err := clock.New(clock.StartupConfig(nil, 30*time.Second))
 	if err != nil {
 		return nil, err
 	}
 
 	maskPub := device.Masking().Public()
+	maskPriv, err := decodeKey(idf.MaskPrivate, "mask key")
+	if err != nil {
+		return nil, err
+	}
+	// The camouflaged carriers use their own masking key: the public card publishes it, and the
+	// profile's key (which noise3 accepts) must never leave the node (wire.md §2.1).
+	coverPriv, err := deriveCoverMask(maskPriv)
+	if err != nil {
+		return nil, err
+	}
+	coverKey, err := ecdh.X25519().NewPrivateKey(coverPriv)
+	if err != nil {
+		return nil, err
+	}
+	coverPub := keys.New(keys.X25519, coverKey.PublicKey().Bytes())
+	var coverCert *tls.Certificate
+	if cfg.CoverCert != "" {
+		if coverCert, err = loadCoverCert(cfg.CoverCert); err != nil {
+			return nil, err
+		}
+	}
+	// Empty cover_cert means ACME (T2.6e, T12.5); the operator's acceptance of the terms was
+	// checked by Validate. The test client seam is package-wide, like the other install seams.
+	var acme selfcover.ACMEConfig
+	if cfg.CoverACME != nil {
+		acme = selfcover.ACMEConfig{
+			DirectoryURL: cfg.CoverACME.DirectoryURL, Email: cfg.CoverACME.Email,
+			AcceptTOS: cfg.CoverACME.AcceptTOS, Challenge: cfg.CoverACME.Challenge,
+			HTTPClient: CoverACMEHTTPClient,
+		}
+	}
+	path := ws2Path(coverPriv)
 	var cardListeners []cards.Listener
 	for _, l := range cfg.Listen {
-		cl, err := cardListener(l, maskPub)
+		mask := maskPub
+		if l.Suite != "noise3" {
+			mask = coverPub
+		}
+		cl, err := cardListener(l, mask, cfg.Cover, path)
 		if err != nil {
 			return nil, err
 		}
@@ -421,23 +644,58 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	}
 	s.builder = builder
 
-	maskPriv, err := decodeKey(idf.MaskPrivate, "mask key")
-	if err != nil {
-		return nil, err
-	}
 	shapeProfile, err := shape.Builtin(shape.IDDefaultUDP)
 	if err != nil {
 		return nil, err
 	}
+	tlsShape, err := shape.Builtin(shape.IDDefaultTLS)
+	if err != nil {
+		return nil, err
+	}
+
 	var sources []node.ListenerSource
 	var local []netip.Addr
+	seenReality := map[string]bool{}
 	for _, l := range cfg.Listen {
-		var mk noise3.MaskKey
-		copy(mk.Private[:], maskPriv)
-		sources = append(sources, node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
-			ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower})
 		if a, err := netip.ParseAddr(l.Advertise); err == nil {
 			local = append(local, a.Unmap())
+		}
+		switch l.Suite {
+		case "noise3":
+			var mk noise3.MaskKey
+			copy(mk.Private[:], maskPriv)
+			sources = append(sources, node.Noise3Listener{Addr: l.Bind, Masks: []noise3.MaskKey{mk}, Profile: shapeProfile,
+				ReplayKV: st.Store("v2/carrier/noise3/replay"), LowPower: profile.LowPower})
+		case "reality2-quic", "reality2-tcp":
+			if seenReality[l.Bind] {
+				continue // the pair shares one cover node and one certificate
+			}
+			seenReality[l.Bind] = true
+			tcpBind, udpBind := realityBinds(cfg.Listen, l.Bind)
+			mk, err := realityMask(coverPriv)
+			if err != nil {
+				return nil, err
+			}
+			src := node.Reality2Listener{
+				Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
+				OnCert: s.onCoverCert, OnWarn: s.onCoverWarn,
+				CertKV: st.Store("v2/reality2/self/cert"), ReplayKV: st.Store("v2/reality2/replay"),
+				TCPAddr: tcpBind, UDPAddr: udpBind,
+				Masks: []reality2.MaskKey{mk}, Addrs: []string{tokenAddr(l)},
+				Shape: tlsShape, LowPower: profile.LowPower,
+			}
+			sources = append(sources, src)
+		case "ws2":
+			mk, err := realityMask(coverPriv)
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, node.WS2Listener{
+				Addr: l.Bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
+				Masks: []reality2.MaskKey{mk}, Addrs: []string{ws2TokenAddr(cfg.Cover)},
+				ReplayKV: st.Store("v2/ws2/replay"), Shape: tlsShape, LowPower: profile.LowPower,
+				OnWarn: s.onCoverWarn,
+			})
 		}
 	}
 
@@ -451,7 +709,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		// HTTP stays nil: no CDN clock check from a server until a uTLS client is wired (T11.6).
 	}
 	if cfg.InviteListen != nil {
-		il, err := cardListener(*cfg.InviteListen, nil)
+		il, err := cardListener(*cfg.InviteListen, nil, cfg.Cover, path)
 		if err != nil {
 			return nil, err
 		}
@@ -463,16 +721,48 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		s.access = mgr
 		ncfg.Access = mgr
 		bind := cfg.InviteListen.Bind
+		suite := cfg.InviteListen.Suite
+		advertise := tokenAddr(*cfg.InviteListen)
 		ncfg.AccessListener = func(slot int, ks []node.AccessMaskKey) (carrier.Listener, error) {
-			masks := make([]noise3.MaskKey, 0, len(ks))
+			replayKV := st.Store("v2/reality2/access/" + strconv.Itoa(slot))
+			masks := make([]reality2.MaskKey, 0, len(ks))
 			for _, k := range ks {
-				var mk noise3.MaskKey
-				copy(mk.Private[:], k.Private)
-				mk.NotAfter = k.NotAfter
+				mk, err := realityMask(k.Private)
+				if err != nil {
+					return nil, err
+				}
 				masks = append(masks, mk)
 			}
-			return node.Noise3Listener{Addr: bind, Masks: masks, Profile: shapeProfile, LowPower: profile.LowPower,
-				ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
+			switch suite {
+			case "noise3":
+				n3 := make([]noise3.MaskKey, 0, len(ks))
+				for _, k := range ks {
+					var mk noise3.MaskKey
+					copy(mk.Private[:], k.Private)
+					mk.NotAfter = k.NotAfter
+					n3 = append(n3, mk)
+				}
+				return node.Noise3Listener{Addr: bind, Masks: n3, Profile: shapeProfile, LowPower: profile.LowPower,
+					ReplayKV: st.Store("v2/carrier/noise3/access/" + strconv.Itoa(slot))}.Listen(context.Background())
+			case "reality2-quic", "reality2-tcp":
+				src := node.Reality2Listener{
+					Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
+					OnCert: s.onCoverCert, OnWarn: s.onCoverWarn,
+					CertKV: st.Store("v2/reality2/self/access/" + strconv.Itoa(slot)), ReplayKV: replayKV,
+					Masks: masks, Addrs: []string{advertise}, Shape: tlsShape, LowPower: profile.LowPower,
+				}
+				if suite == "reality2-tcp" {
+					src.TCPAddr = bind
+				} else {
+					src.UDPAddr = bind
+				}
+				return src.Listen(context.Background())
+			case "ws2":
+				return node.WS2Listener{Addr: bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
+					Masks: masks, Addrs: []string{ws2TokenAddr(cfg.Cover)}, ReplayKV: replayKV,
+					Shape: tlsShape, LowPower: profile.LowPower}.Listen(context.Background())
+			}
+			return nil, fmt.Errorf("%w: invitation suite %q", ErrConfig, suite)
 		}
 	}
 	rt, err := node.New(ncfg)
@@ -482,6 +772,25 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	s.rt = rt
 	ok = true
 	return s, nil
+}
+
+// onCoverWarn keeps a non-fatal cover finding for the operator status and the log.
+func (s *Server) onCoverWarn(message string) {
+	s.mu.Lock()
+	s.warnings["cover"] = "cover: " + message
+	s.mu.Unlock()
+	s.log.Warn("cover", "message", message)
+}
+
+// onCoverCert keeps the certificate the cover serves so the status and the doctor report its term.
+func (s *Server) onCoverCert(leaf *x509.Certificate) {
+	if leaf == nil {
+		return
+	}
+	s.mu.Lock()
+	s.coverLeaf = leaf
+	s.mu.Unlock()
+	s.log.Info("cover certificate installed", "not_after", leaf.NotAfter.UTC())
 }
 
 // onEvent keeps the operator warnings: the latest event of each kind that needs attention.
@@ -511,6 +820,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("servernode: already started or closed")
 	}
 	s.started = true
+	s.startAt = time.Now()
 	s.mu.Unlock()
 
 	tok, err := NewTokenFile(filepath.Join(s.dir, tokenFileName))
@@ -598,14 +908,34 @@ func (s *Server) Close(ctx context.Context) error {
 // Status implements Backend.
 func (s *Server) Status() StatusInfo {
 	nid, did := s.account.NodeID(), s.device.ID()
-	st := StatusInfo{NodeID: hex.EncodeToString(nid[:]), DeviceID: hex.EncodeToString(did[:]), Roles: s.cfg.Roles}
+	st := StatusInfo{NodeID: hex.EncodeToString(nid[:]), DeviceID: hex.EncodeToString(did[:]), Roles: s.cfg.Roles, Version: BuildVersion}
+	s.mu.Lock()
+	if !s.startAt.IsZero() {
+		st.UptimeSeconds = int64(time.Since(s.startAt).Seconds())
+	}
+	if s.coverLeaf != nil {
+		st.CoverCertNotAfter = s.coverLeaf.NotAfter.Unix()
+	}
+	s.mu.Unlock()
 	if s.rt != nil {
 		st.Sessions = len(s.rt.Status().Sessions)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, perr := s.builder.Current(ctx, objects.ScopePublic)
+	if s.access != nil {
+		if infos, err := s.rt.AccessList(ctx); err == nil {
+			st.Invites = len(infos)
+		}
+	}
+	ic, perr := s.builder.Current(ctx, objects.ScopePublic)
 	st.PublicCard = perr == nil
+	if perr == nil {
+		// The public link carries the public card only (no access secret, D37): it is what the
+		// operator shows on the site and in "v2 status".
+		if link, lerr := objects.EncodeLink(ic.Envelope, nil); lerr == nil {
+			st.PublicLink = link
+		}
+	}
 	s.mu.Lock()
 	for _, w := range s.warnings {
 		st.Warnings = append(st.Warnings, w)

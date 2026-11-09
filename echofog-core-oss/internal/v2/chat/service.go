@@ -15,6 +15,7 @@ import (
 	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
 	"github.com/echofog/echofog-core/internal/v2/dht"
 	"github.com/echofog/echofog-core/internal/v2/keys"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/store"
 	"google.golang.org/protobuf/proto"
@@ -95,8 +96,19 @@ type ServiceConfig struct {
 	Store  store.KV
 	Now    func() time.Time
 	Events Events
+	// MailDir remembers the queues contacts announce (Control.mailbox); nil ignores announcements.
+	MailDir MailDirectory
+	// IsContact says whether an account may announce a queue; nil accepts every account that got through
+	// the authentication of a session (the directory is bounded either way).
+	IsContact func(node [32]byte) bool
 	// NoJitter turns the +-20 % of the retry pauses off (tests, AD13).
 	NoJitter bool
+	// ResolveTimeout bounds one directory lookup made for an incoming envelope (ЧМ-2); zero means
+	// the default of 5 s.
+	ResolveTimeout time.Duration
+	// MaxResolvePerMinute bounds the directory lookups caused by incoming envelopes (ЧМ-2); zero
+	// means the default of 120.
+	MaxResolvePerMinute int
 
 	// Limits; zero means the default below.
 	MaxOutbox        int // all outgoing items
@@ -118,11 +130,11 @@ const (
 	MaxReceiptsPerPeer = 16
 )
 
-// maxTrackedDevices bounds each of the failure tables (one entry per sender device).
+// maxTrackedDevices bounds the lookup-failure and pending-reset tables (one entry per peer).
 const maxTrackedDevices = 1024
 
-// maxUnboundDevices bounds the table of failing devices we have no session with.
-const maxUnboundDevices = 64
+// maxUnauthDevices bounds the table of unauthenticated refusals (one entry per named device).
+const maxUnauthDevices = 64
 
 // ErrOutboxFull is Send with the outbox at a limit.
 var ErrOutboxFull = errors.New("chat: outbox full")
@@ -140,11 +152,10 @@ type Service struct {
 	cfg ServiceConfig
 
 	tickMu sync.Mutex // one Tick at a time
+	dirMu  sync.Mutex // one directory lookup for a cache miss at a time
 
 	mu    sync.Mutex
 	items map[[16]byte]*item
-	fails map[[32]byte][]failure // by sender device, at most maxTrackedDevices
-	recov map[[32]byte]time.Time // last recovery start by sender device, at most maxTrackedDevices
 
 	// counters (accounting.go): active outbox items, by account, receipts by account, bytes
 	count    int
@@ -154,22 +165,34 @@ type Service struct {
 	// remembered incoming IDs: in all and by sender device
 	seenN   int
 	seenDev map[[32]byte]int
-	// lookups of accounts that failed, until when they are not tried again (finding 6)
-	lookupFail map[lookupKey]time.Time
-	unbound    map[[32]byte][]failure // failures of devices we have no session with
-	unboundAt  []time.Time            // recoveries started for them in the last hour
-	receiptN   int
-	seq        uint64
+	// resolveCache answers incoming init envelopes for an account: one DHT search per contact per
+	// resolveCacheTTL (ЧМ-2).
+	resolveCache map[[32]byte]resolveEntry
+	// resolveAt holds the incoming lookups of the current window: the incoming flow has a budget
+	// (bounded amplification, ЧМ-2).
+	resolveAt []time.Time
+	// unauth counts refusals of envelopes whose sender is not authenticated (a sealed envelope can
+	// be made by anybody). It is bounded bookkeeping only: it never starts a reset (ЧМ-1).
+	unauth map[[32]byte][]failure
+	// fresh marks accounts whose peer asked for a new session inside a message that opened
+	// (control Reset): the next attempt with them starts a fresh PQXDH (services.md 4.4).
+	fresh    map[[32]byte]bool
+	receiptN int
+	seq      uint64
 }
 
 type failure struct {
 	id   [16]byte
 	at   time.Time
-	node [32]byte // the account the envelope named (unbound failures only)
+	node [32]byte // the account the envelope named
 }
 
-// lookupKey is an (account, device) pair named by an incoming init.
-type lookupKey struct{ node, device [32]byte }
+// resolveEntry is the remembered answer of one incoming directory lookup.
+type resolveEntry struct {
+	res *dht.Resolved
+	err error
+	at  time.Time
+}
 
 // item is one outgoing message in the outbox.
 type item struct {
@@ -203,8 +226,7 @@ const (
 	mailboxFor   = 7 * 24 * time.Hour
 	mailboxRetry = 5 * time.Minute
 
-	failWindow    = 10 * time.Minute
-	failThreshold = 3
+	failWindow = 10 * time.Minute
 )
 
 // backoff is the pause after the n-th attempt: 2 s, 5 s, 15 s, 45 s, then every minute (v1's pace).
@@ -227,8 +249,9 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 	if cfg.Crypto == nil || cfg.Dir == nil || cfg.Link == nil || cfg.Store == nil || cfg.Now == nil {
 		return nil, errors.New("chat: Crypto, Dir, Link, Store and Now are required")
 	}
-	s := &Service{cfg: cfg, items: map[[16]byte]*item{}, fails: map[[32]byte][]failure{}, recov: map[[32]byte]time.Time{},
-		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, lookupFail: map[lookupKey]time.Time{}, unbound: map[[32]byte][]failure{}}
+	s := &Service{cfg: cfg, items: map[[16]byte]*item{},
+		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, resolveCache: map[[32]byte]resolveEntry{},
+		unauth: map[[32]byte][]failure{}, fresh: map[[32]byte]bool{}}
 	var after []byte
 	for {
 		var (
@@ -347,6 +370,9 @@ func (s *Service) Tick(ctx context.Context) error {
 	now := s.cfg.Now()
 
 	s.expireSeen(now)
+	if p, ok := s.cfg.MailDir.(interface{ Prune(time.Time) }); ok {
+		p.Prune(now)
+	}
 
 	s.mu.Lock()
 	var due, failed []*item
@@ -362,11 +388,6 @@ func (s *Service) Tick(ctx context.Context) error {
 			failed = append(failed, it)
 		case it.Next <= now.UnixNano():
 			due = append(due, it)
-		}
-	}
-	for k, until := range s.lookupFail {
-		if !now.Before(until) {
-			delete(s.lookupFail, k)
 		}
 	}
 	s.mu.Unlock()
@@ -447,6 +468,12 @@ func (s *Service) attempt(ctx context.Context, it *item, lookups map[[32]byte]lo
 	}
 	s.mu.Lock()
 	needBuild := len(it.Env) == 0 || it.Device != pk.DeviceID
+	if needBuild && s.fresh[it.To] {
+		// an authenticated Reset asked for a new session: the first item starts it, the rest of
+		// the items for the account go over the session it makes
+		it.ForceInit = true
+		delete(s.fresh, it.To)
+	}
 	s.mu.Unlock()
 	if needBuild {
 		env, err := s.build(it, pk, res.Devices)
@@ -464,7 +491,12 @@ func (s *Service) attempt(ctx context.Context, it *item, lookups map[[32]byte]lo
 		_ = s.persist(it)
 		s.mu.Unlock()
 	}
-	status, err := s.cfg.Link.Deliver(ctx, it.Device, it.Env)
+	// A received Reset (forceFresh) or a new session (invalidate) may drop the envelope concurrently:
+	// read the device and the envelope under the same lock they are written with (ЧМ-6).
+	s.mu.Lock()
+	device, env := it.Device, it.Env
+	s.mu.Unlock()
+	status, err := s.cfg.Link.Deliver(ctx, device, env)
 	if err == nil {
 		switch status {
 		case chatpb.StatusOK, chatpb.StatusDuplicate:
@@ -493,7 +525,12 @@ func (s *Service) attempt(ctx context.Context, it *item, lookups map[[32]byte]lo
 		return
 	}
 	if s.cfg.Mail != nil {
-		if err := s.cfg.Mail.Deposit(ctx, it.To, it.Env); err == nil {
+		// The same writers (invalidate, forceFresh) may drop the envelope between the failed
+		// delivery and the mailbox hand-off: read what Mail gets under s.mu (ЧМ-6).
+		s.mu.Lock()
+		to, env := it.To, it.Env
+		s.mu.Unlock()
+		if err := s.cfg.Mail.Deposit(ctx, to, env); err == nil {
 			s.mu.Lock()
 			it.State = StateWaiting // so that set stamps the time of this deposit
 			s.mu.Unlock()
@@ -570,45 +607,48 @@ func (s *Service) build(it *item, pk *objects.Prekeys, dl *objects.DeviceList) (
 // Receive handles one incoming envelope (from a DELIVER or from a mailbox) and returns the DELIVERED
 // status. Every refusal is the same status 4: which check failed is not told (AD20).
 func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
+	status, _ := s.receive(ctx, envelope)
+	return status
+}
+
+// receive is Receive; transient says the refusal may pass (the sender could not be looked up now), so
+// an item taken from a mailbox queue is kept.
+func (s *Service) receive(ctx context.Context, envelope []byte) (status uint32, transient bool) {
 	if len(envelope) > chatpb.MaxEnvelope {
-		return chatpb.StatusTooLarge
+		return chatpb.StatusTooLarge, false
 	}
 	raw, err := s.cfg.Crypto.OpenEnvelope(s.cfg.Self.Node, envelope)
 	if err != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	in, err := chatpb.ParseInner(raw)
 	if err != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	senderKey, err1 := keys.Parse(in.Sender)
 	deviceKey, err2 := keys.Parse(in.Device)
 	if err1 != nil || err2 != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	node, device := senderKey.ID(), deviceKey.ID()
 	var id [16]byte
 	copy(id[:], in.Id)
 
 	if s.seenBefore(device, in.Id) {
-		return chatpb.StatusDuplicate
+		return chatpb.StatusDuplicate, false
 	}
 
 	var plain []byte
 	if len(in.PqxdhInit) > 0 {
-		key := lookupKey{node, device}
-		if s.lookupFailed(key) {
-			return chatpb.StatusRefused
-		}
-		res, err := s.cfg.Dir.Resolve(ctx, node)
+		// The answer is remembered per account and the incoming flow has a budget: repeated init
+		// envelopes must not turn into repeated DHT searches that reveal whom the recipient is
+		// interested in (ЧМ-2).
+		res, err := s.resolveForIncoming(ctx, node)
 		if err != nil {
-			// only a failed lookup is remembered, per (account, device): an envelope that names a device
-			// the account does not have must not keep the account's real init out
-			s.noteLookupFailed(key)
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, true
 		}
 		if res == nil || res.Devices == nil || res.Devices.NodeID != node {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		var pk *objects.Prekeys
 		for _, p := range res.Prekeys {
@@ -617,54 +657,73 @@ func (s *Service) Receive(ctx context.Context, envelope []byte) uint32 {
 			}
 		}
 		if pk == nil {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		plain, err = s.cfg.Crypto.Accept(pk, res.Devices, in.PqxdhInit)
 		switch {
 		case errors.Is(err, chatcrypto.ErrDuplicate):
-			return chatpb.StatusDuplicate
+			return chatpb.StatusDuplicate, false
 		case err != nil:
-			s.noteFailure(device, node, id)
-			return chatpb.StatusRefused
+			s.noteUnauthenticated(device, node, id)
+			return chatpb.StatusRefused, false
 		}
 		if bound, ok := s.cfg.Crypto.Peer(device); !ok || bound != node {
-			return chatpb.StatusRefused
+			return chatpb.StatusRefused, false
 		}
 		s.invalidate(node) // what waits for this account was made for the old session
 	} else {
 		// A ratchet message from a device we have no session with and one that fails to open get the
 		// same answer: an envelope can be sealed by anybody, so a different answer would tell whether
-		// this node talks to the device (AD20). The sender is helped by the recovery after three
-		// failures (noteFailure), not by a status.
+		// this node talks to the device (AD20). None of these refusals is attributed to the device
+		// named inside: that claim is not authenticated until a message from it opens (ЧМ-1).
 		bound, ok := s.cfg.Crypto.Peer(device)
 		switch {
 		case !ok:
-			// no session: counted apart, against one small budget (noteUnbound)
-			s.noteUnbound(device, node, id)
-			return chatpb.StatusRefused
+			// no session: an unauthenticated refusal, counted apart and never a reason to reset
+			s.noteUnauthenticated(device, node, id)
+			return chatpb.StatusRefused, false
 		case bound != node:
 			// a device we have a session with, named by another account: an impersonation, never a
 			// reason to start anything
-			return chatpb.StatusRefused
+			s.noteUnauthenticated(device, node, id)
+			return chatpb.StatusRefused, false
 		}
 		plain, err = s.cfg.Crypto.Decrypt(device, in.Ratchet)
 		if err != nil {
-			s.noteFailure(device, node, id)
-			return chatpb.StatusRefused
+			s.noteUnauthenticated(device, node, id)
+			return chatpb.StatusRefused, false
 		}
 	}
 
 	pm, err := chatpb.ParsePersonal(plain)
 	if err != nil {
-		return chatpb.StatusRefused
+		return chatpb.StatusRefused, false
 	}
 	s.rememberSeen(device, in.Id)
 	s.dispatch(node, device, id, pm)
-	return chatpb.StatusOK
+	return chatpb.StatusOK, false
 }
 
 func (s *Service) dispatch(node, device [32]byte, id [16]byte, pm *chatpb.PersonalMessageProto) {
 	if c := pm.GetControl(); c != nil {
+		if q := c.GetMailbox(); q != nil {
+			// where the contact receives mail while away; the newest announcement wins, one that has
+			// ended is ignored
+			if s.cfg.MailDir != nil && (s.cfg.IsContact == nil || s.cfg.IsContact(node)) {
+				var t MailTarget
+				copy(t.Relay[:], q.GetRelay())
+				copy(t.Queue[:], q.GetQueue())
+				t.NotAfter = time.Unix(int64(q.GetNotAfter()), 0)
+				t.RelayCard = q.GetRelayCard()
+				// it must end in the future and within a queue's longest life (30 days)
+				if now := s.cfg.Now(); now.Before(t.NotAfter) && !t.NotAfter.After(now.Add(maxQueueLife)) {
+					if old, ok := s.cfg.MailDir.Get(node); !ok || !t.NotAfter.Before(old.NotAfter) {
+						_ = s.cfg.MailDir.Put(node, t)
+					}
+				}
+			}
+			return
+		}
 		if d := c.GetDelivered(); d != nil {
 			for _, raw := range d.GetIds() {
 				var mid [16]byte
@@ -679,6 +738,11 @@ func (s *Service) dispatch(node, device [32]byte, id [16]byte, pm *chatpb.Person
 			}
 			return
 		}
+		if c.GetReset_() != nil {
+			// It came inside a message that opened, so this device is authenticated: only such a
+			// signal may start a fresh PQXDH (ЧМ-1).
+			s.forceFresh(node)
+		}
 		if f := s.cfg.Events.Control; f != nil {
 			f(node, c)
 		}
@@ -692,46 +756,126 @@ func (s *Service) dispatch(node, device [32]byte, id [16]byte, pm *chatpb.Person
 	_, _ = s.enqueue(node, receipt, false)
 }
 
-// noteFailure records a message that did not open. Three distinct ones from one device within ten
-// minutes make this side start a fresh PQXDH session itself (services.md 4.4).
-func (s *Service) noteFailure(device, node [32]byte, id [16]byte) {
-	now := s.cfg.Now()
+// forceFresh asks for a new PQXDH session with node on the next attempt. It is called only for a
+// control Reset that arrived inside a message that opened: the device that sent it proved it holds
+// the session, so its request is trusted (services.md 4.4, ЧМ-1).
+func (s *Service) forceFresh(node [32]byte) {
 	s.mu.Lock()
-	s.pruneFailuresLocked(now)
-	var list []failure
-	seen := false
-	for _, f := range s.fails[device] {
-		list = append(list, f)
-		if f.id == id {
-			seen = true
+	defer s.mu.Unlock()
+	if _, known := s.fresh[node]; !known && len(s.fresh) >= maxTrackedDevices {
+		// full: forget an arbitrary entry, never grow
+		for k := range s.fresh {
+			delete(s.fresh, k)
+			break
 		}
 	}
-	if _, known := s.fails[device]; !known && len(s.fails) >= maxTrackedDevices {
-		s.evictOldestFailureLocked()
-	}
-	if !seen {
-		list = append(list, failure{id: id, at: now})
-	}
-	s.fails[device] = list
-	start := len(list) >= failThreshold && now.Sub(s.recov[device]) >= failWindow
-	if start {
-		if _, known := s.recov[device]; !known && len(s.recov) >= maxTrackedDevices {
-			s.evictOldestRecoveryLocked()
+	s.fresh[node] = true
+	for _, it := range s.items {
+		if it.To == node && it.active() && len(it.Env) > 0 {
+			it.Env = nil
+			s.resizeLocked(it)
+			_ = s.persist(it)
 		}
-		s.recov[device] = now
-		delete(s.fails, device)
-	}
-	s.mu.Unlock()
-	if start {
-		// the first message of the new session says so; the old session is kept 7 days
-		reset := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Reset_{Reset_: &chatpb.Reset{}}}}
-		_, _ = s.enqueue(node, reset, true)
 	}
 }
 
-// pruneFailuresLocked drops what is older than the window. s.mu is held.
-func (s *Service) pruneFailuresLocked(now time.Time) {
-	for dev, list := range s.fails {
+const (
+	// resolveCacheTTL is how long one answer serves incoming init envelopes for an account, and the
+	// window of the incoming lookup budget (ЧМ-2).
+	resolveCacheTTL = time.Minute
+	// resolveTimeoutFallback bounds one incoming lookup when the config gives no limit.
+	resolveTimeoutFallback = 5 * time.Second
+	// resolveBudgetFallback bounds the incoming lookups of one window when the config gives no limit.
+	resolveBudgetFallback = 120
+)
+
+// errResolveLimited says the incoming flow spent its lookup budget for this window.
+var errResolveLimited = errors.New("chat: incoming directory lookups are limited")
+
+// resolveForIncoming finds an account named by an incoming init. An answer, including a failure,
+// is remembered for resolveCacheTTL, so a flood of envelopes for one contact causes at most one DHT
+// search per window: the DHT must not learn, beyond that, whom the recipient is interested in. The
+// lookup has a time limit of its own, and the whole incoming flow has a budget (ЧМ-2, bounded
+// amplification).
+func (s *Service) resolveForIncoming(ctx context.Context, node [32]byte) (*dht.Resolved, error) {
+	if res, err, ok := s.cachedResolve(node); ok {
+		return res, err
+	}
+	// One cache miss at a time: two inits for one account must not become two searches.
+	s.dirMu.Lock()
+	defer s.dirMu.Unlock()
+	if res, err, ok := s.cachedResolve(node); ok {
+		return res, err
+	}
+	if !s.takeResolveSlot() {
+		return nil, errResolveLimited
+	}
+	timeout := s.cfg.ResolveTimeout
+	if timeout <= 0 {
+		timeout = resolveTimeoutFallback
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	res, err := s.cfg.Dir.Resolve(rctx, node)
+	s.cacheResolve(node, res, err)
+	return res, err
+}
+
+func (s *Service) cachedResolve(node [32]byte) (*dht.Resolved, error, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.resolveCache[node]
+	if !ok || !s.cfg.Now().Before(e.at.Add(resolveCacheTTL)) {
+		return nil, nil, false
+	}
+	return e.res, e.err, true
+}
+
+func (s *Service) cacheResolve(node [32]byte, res *dht.Resolved, err error) {
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.resolveCache[node]; !ok && len(s.resolveCache) >= maxTrackedDevices {
+		for k := range s.resolveCache { // full: forget an arbitrary entry, never grow
+			delete(s.resolveCache, k)
+			break
+		}
+	}
+	s.resolveCache[node] = resolveEntry{res: res, err: err, at: now}
+}
+
+// takeResolveSlot spends one lookup of the incoming flow's window.
+func (s *Service) takeResolveSlot() bool {
+	now := s.cfg.Now()
+	limit := s.cfg.MaxResolvePerMinute
+	if limit <= 0 {
+		limit = resolveBudgetFallback
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.resolveAt[:0:0]
+	for _, at := range s.resolveAt {
+		if now.Sub(at) < resolveCacheTTL {
+			kept = append(kept, at)
+		}
+	}
+	s.resolveAt = kept
+	if len(s.resolveAt) >= limit {
+		return false
+	}
+	s.resolveAt = append(s.resolveAt, now)
+	return true
+}
+
+// noteUnauthenticated records a refusal of an envelope whose sender is not authenticated. An
+// envelope is sealed to the receiver by whoever makes it, so anybody with the public prekeys can
+// make one that names a contact: such refusals are kept apart, bounded, and never start a Reset or
+// replace a session (services.md 4.4, ЧМ-1). All named devices share one table and one budget.
+func (s *Service) noteUnauthenticated(device, node [32]byte, id [16]byte) {
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for dev, list := range s.unauth {
 		kept := list[:0:0]
 		for _, f := range list {
 			if now.Sub(f.at) < failWindow {
@@ -739,125 +883,29 @@ func (s *Service) pruneFailuresLocked(now time.Time) {
 			}
 		}
 		if len(kept) == 0 {
-			delete(s.fails, dev)
+			delete(s.unauth, dev)
 		} else {
-			s.fails[dev] = kept
+			s.unauth[dev] = kept
 		}
 	}
-	for dev, at := range s.recov {
-		if now.Sub(at) >= failWindow {
-			delete(s.recov, dev)
-		}
-	}
-}
-
-func (s *Service) evictOldestFailureLocked() {
-	var oldest [32]byte
-	var at time.Time
-	first := true
-	for dev, list := range s.fails {
-		last := list[len(list)-1].at
-		if first || last.Before(at) {
-			oldest, at, first = dev, last, false
-		}
-	}
-	delete(s.fails, oldest)
-}
-
-func (s *Service) evictOldestRecoveryLocked() {
-	var oldest [32]byte
-	var at time.Time
-	first := true
-	for dev, t := range s.recov {
-		if first || t.Before(at) {
-			oldest, at, first = dev, t, false
-		}
-	}
-	delete(s.recov, oldest)
-}
-
-// lookupPause is how long an account whose lookup failed is not looked up again for an incoming init.
-const lookupPause = time.Minute
-
-func (s *Service) lookupFailed(key lookupKey) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	until, ok := s.lookupFail[key]
-	return ok && s.cfg.Now().Before(until)
-}
-
-func (s *Service) noteLookupFailed(key lookupKey) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.lookupFail[key]; !ok && len(s.lookupFail) >= maxTrackedDevices {
-		return // full: skip remembering, never grow
-	}
-	s.lookupFail[key] = s.cfg.Now().Add(lookupPause)
-}
-
-// unboundBudget is how many recoveries may be started in an hour for devices we have no session with
-// (all of them together): the envelope that names such a device is not authenticated, so this is
-// small. The recovery of a lost state needs no more.
-const unboundBudget = 2
-
-// noteUnbound records a ratchet message from a device we have no session with. Three distinct ones
-// within ten minutes start a recovery, if the shared budget of the hour allows.
-func (s *Service) noteUnbound(device, node [32]byte, id [16]byte) {
-	now := s.cfg.Now()
-	s.mu.Lock()
-	for dev, list := range s.unbound {
-		kept := list[:0:0]
-		for _, f := range list {
-			if now.Sub(f.at) < failWindow {
-				kept = append(kept, f)
-			}
-		}
-		if len(kept) == 0 {
-			delete(s.unbound, dev)
-		} else {
-			s.unbound[dev] = kept
-		}
-	}
-	list := s.unbound[device]
+	list := s.unauth[device]
 	for _, f := range list {
 		if f.id == id {
-			s.mu.Unlock()
 			return
 		}
 	}
-	if _, known := s.unbound[device]; !known && len(s.unbound) >= maxUnboundDevices {
+	if _, known := s.unauth[device]; !known && len(s.unauth) >= maxUnauthDevices {
 		var oldest [32]byte
 		var at time.Time
 		first := true
-		for dev, l := range s.unbound {
+		for dev, l := range s.unauth {
 			if last := l[len(l)-1].at; first || last.Before(at) {
 				oldest, at, first = dev, last, false
 			}
 		}
-		delete(s.unbound, oldest)
+		delete(s.unauth, oldest)
 	}
-	list = append(list, failure{id: id, at: now, node: node})
-	s.unbound[device] = list
-	start := false
-	if len(list) >= failThreshold {
-		delete(s.unbound, device)
-		kept := s.unboundAt[:0:0]
-		for _, t := range s.unboundAt {
-			if now.Sub(t) < time.Hour {
-				kept = append(kept, t)
-			}
-		}
-		s.unboundAt = kept
-		if len(kept) < unboundBudget {
-			s.unboundAt = append(s.unboundAt, now)
-			start = true
-		}
-	}
-	s.mu.Unlock()
-	if start {
-		reset := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Reset_{Reset_: &chatpb.Reset{}}}}
-		_, _ = s.enqueue(node, reset, true)
-	}
+	s.unauth[device] = append(list, failure{id: id, at: now, node: node})
 }
 
 // invalidate drops the envelopes made for an account before its session was replaced: they cannot be
@@ -872,4 +920,37 @@ func (s *Service) invalidate(node [32]byte) {
 			_ = s.persist(it)
 		}
 	}
+}
+
+// AnnounceQueue tells a contact where this node receives mail while away (services.md 5.2). It is
+// sent as an end-to-end message like any other, and again whenever the queue rotates.
+func (s *Service) AnnounceQueue(to [32]byte, q mailbox.QueueRef, card []byte) error {
+	msg := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Mailbox{Mailbox: &chatpb.MailboxQueue{
+		Relay: q.Relay[:], Queue: q.Queue[:], NotAfter: uint64(q.Expires.Unix()), RelayCard: card,
+	}}}}
+	_, err := s.enqueue(to, msg, false)
+	return err
+}
+
+// ReceiveItem handles an envelope taken from a mailbox queue and says whether the item may be
+// acknowledged: true once the envelope was handled or can never be, false when handling failed for a
+// reason that may pass (a lookup that failed), so that the relay keeps the item.
+func (s *Service) ReceiveItem(ctx context.Context, envelope []byte) bool {
+	_, transient := s.receive(ctx, envelope)
+	return !transient
+}
+
+// Expires says when an outgoing message that is not delivered by then is given up: seven days after it
+// was queued, or after it was handed to a mailbox.
+func (s *Service) Expires(id [16]byte) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, ok := s.items[id]
+	if !ok || !it.active() {
+		return time.Time{}, false
+	}
+	if it.State == StateMailbox {
+		return time.Unix(it.Since, 0).Add(mailboxFor), true
+	}
+	return time.Unix(it.Created, 0).Add(outboxLife), true
 }

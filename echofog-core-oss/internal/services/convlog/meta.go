@@ -56,13 +56,23 @@ type Meta struct {
 
 	ReadLamport uint64 `json:"read_lamport,omitempty"` // everything up to here was read
 	Unread      int    `json:"unread,omitempty"`
+	// Mentions counts, apart from Unread, the unread messages that name me.
+	Mentions int `json:"mentions,omitempty"`
+	// ThreadMentions are the clocks of the unread mentions inside threads (a thread has no unread count
+	// of its own); they are part of Mentions and drop out once the reader passes them.
+	ThreadMentions []uint64 `json:"thread_mentions,omitempty"`
 
 	// Rebuild: a membership change arrived that sits before events already applied; the views are
 	// computed again from the stored events (see Log.rebuild).
 	Rebuild bool `json:"rebuild,omitempty"`
+	// Closed: the owner closed the group (group.close); it takes nothing beyond the close vector.
+	Closed bool `json:"closed,omitempty"`
 	// HeldLamport is the highest clock of an event kept without effects (not allowed, yet): a
 	// membership event at or below it may change what that event was allowed to do.
 	HeldLamport uint64 `json:"held_lamport,omitempty"`
+
+	// Unknown counts, per author, the events of kinds this build does not know that were taken.
+	Unknown map[string]uint32 `json:"unknown,omitempty"`
 
 	// Chans: a group's channels other than the main one, where each ends and where its reader is.
 	Chans map[string]*ChanStat `json:"chans,omitempty"`

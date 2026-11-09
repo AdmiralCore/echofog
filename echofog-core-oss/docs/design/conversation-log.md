@@ -65,16 +65,43 @@ message Event {
   bytes  target   = 7;  // event this one acts on (edit, delete, react, pin)
   bytes  reply_to = 8;  // message being answered (quote/reply)
   bytes  thread   = 9;  // root message of the thread this message belongs to (comments)
-  bytes  body     = 10; // kind-specific payload (protobuf)
-  bytes  sig      = 15; // Ed25519 by author over the deterministic encoding of fields 1..10
+  bytes  body     = 10; // kind-specific payload (protobuf), see 2.5
+  bytes  ext      = 11; // envelope-level extension, signed (EventExt: channel = 1, a string)
+  bytes  body_hash = 12; // set instead of body once the body was stripped (a deleted message)
+  bytes  sig      = 15; // Ed25519 by author over the signed bytes below
 }
 ```
 
-- **Event id** = `SHA-256("echofog-ev-v1" ‖ signed bytes)[:16]`, 32 hex characters. Content
+Protobuf encoding is deterministic (fields in ascending order, proto3 defaults omitted). Field numbers
+13 and 14 are not used.
+
+**Signed bytes** (what the signature covers; `internal/services/convlog/event.go`, `signedBytes`).
+It is a canonical encoding, not the protobuf encoding. Concatenated in this order:
+
+| Part | Encoding |
+|---|---|
+| domain | the 17 ASCII bytes `echofog-ev-sig-v1` |
+| `conv` | length-prefixed (below) |
+| `author` | length-prefixed |
+| `seq` | u64 big-endian |
+| `lamport` | u64 big-endian |
+| `ts_ms` | u64 big-endian, two's complement of the int64 |
+| `kind` | u32 big-endian |
+| `target`, `reply_to`, `thread` | each length-prefixed |
+| body hash | length-prefixed `SHA-256(body)` (32 bytes); for a stripped event, the stored `body_hash` |
+| `ext` | length-prefixed (empty when absent) |
+
+A length-prefixed field is a u32 big-endian length followed by the bytes. An absent `target`,
+`reply_to`, `thread` or `ext` is length 0. `body` itself is not in the signed bytes, only its hash.
+The signature is Ed25519 (RFC 8032, pure, no prehash) over the signed bytes, with the author's key.
+
+- **Event id** = `SHA-256("echofog-ev-v1" ‖ signed bytes ‖ sig)[:16]`, 32 hex characters. Content
   addressed: any participant can verify that a reference points to exactly this event; ids cannot
-  collide or be forged.
-- The signature covers everything, so a peer that relays or serves an event during sync cannot
-  change it. Authors are identified by public key, so verification needs no lookup.
+  collide or be forged. A stripped event keeps its id, because the id uses the body hash.
+- The signature covers everything the id depends on, so a peer that relays or serves an event during
+  sync cannot change it. Authors are identified by public key, so verification needs no lookup.
+- Changing any byte of `body` (for example an attachment's file id, §2.5) changes the body hash, so the
+  signature no longer verifies. Vectors: `docs/protocol/v2/vectors/convlog.json`.
 - A duplicate `(conv, author, seq)` with a different id is an **equivocation** (a forked author,
   e.g. a restored backup). Both events are kept (they have different ids) and rendered; the
   author's seq chain is flagged, not trusted for gap detection past the fork.
@@ -109,12 +136,62 @@ same event applied twice changes nothing (dedup by id first).
 
 | Kind | Body | Rule | Who may |
 |---|---|---|---|
-| `MSG` (1) | text, type (text/photo/voice/file/location/system), attachment, metadata | append | participants |
+| `MSG` (1) | text, type (text/photo/voice/file/location/system), metadata, optional `att` (field 6, below) | append | participants |
 | `EDIT` (2) | new text | LWW register on the target, ordered by `(lamport, author, seq)` | target's author |
 | `DELETE` (3) | — | tombstone; wins over every edit; permanent | target's author; group admins with delete permission |
 | `REACT` (4) | emoji, on/off | LWW per `(target, emoji, reactor)`; reactor = author | participants |
 | `PIN` (5) | on/off | LWW per target, conversation-wide | DM: both; group: members with pin permission (admins by default) |
-| unknown | opaque | stored, synced, ignored by the view | — |
+| `group.close` (10) | `CloseBody`: the last seq per author (below) | irreversible close, see below; idempotent | the group owner (the owner role in the log) |
+| unknown | opaque | stored, synced, forwarded unchanged with its signature, shown as a placeholder (versioning §3.9) | — |
+
+Kinds 6–9 (`MEMBER`, `CHANNEL`, `THREAD`, `PROFILE`) are defined by the code and are not repeated in
+this table yet.
+
+**Attachment (`att`).** An optional field 6 of the `MSG` body, at most one per event (several files are
+several events):
+
+```proto
+message Attachment {
+  bytes  fid         = 1; // 16-byte file id (files/2, services.md §8)
+  uint64 size        = 2; // bytes
+  bytes  merkle_root = 3; // 32-byte root of the file's Merkle tree (files/2)
+  string name        = 4; // at most 255 bytes, UTF-8
+  string mime        = 5; // at most 127 bytes, ASCII
+}
+```
+
+The signature covers `att` through the body hash, so a relay cannot change a file's id, root or name.
+`att` is inside the event size limit (`MaxEventSize`, 64 KiB) and counts against the author's message
+quota, as an ordinary message does. The channel and the thread are the event's own fields: the channel
+in the signed `ext` (`EventExt.channel`), the thread in `thread`. The file's bytes do not travel in the
+log: they come over files/2 from the author and from holders that have the same `fid` and root.
+Members who are offline see the file card after sync and fetch the bytes on request.
+
+**Closing a group (`group.close`).** The owner's signed event closes the group. It is irreversible.
+Its body is a `CloseBody` (protobuf) that carries the vector of the group's last seq per author:
+
+```proto
+message CloseBody {
+  repeated SeqEntry last = 1;  // one entry per author with events in the group at the close
+}
+message SeqEntry {
+  bytes  author = 1; // the author's 32-byte identity public key
+  uint64 seq    = 2; // the author's last seq the closing owner has seen in the conversation
+}
+```
+
+Entries are sorted by `author` ascending, one per author, no duplicates. Once the close is accepted,
+the group takes an event only if its author has an entry and its `seq` is at most that entry's `seq`.
+Events with a larger seq, and events from an author with no entry, are rejected, so new messages,
+joins and invitations are rejected too. The close event's own seq is not in the vector. The
+lamport value does not decide acceptance: an author chooses it, so it cannot bound the events.
+
+A repeated copy of the same close event has the same id and is deduplicated like any event. A second,
+different `group.close` is a new event with a larger seq, so it is rejected.
+
+- members keep the log as a read-only archive; "delete for me" is local and does not change the log.
+
+Copies held by members are not erased by the close; the app must say so.
 
 Replies set `reply_to`; thread messages (comments) set `thread` to the root message. A thread is
 just the messages whose `thread` is the root; the root keeps a reply count and last-activity time.

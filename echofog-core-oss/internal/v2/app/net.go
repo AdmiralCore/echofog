@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/echofog/echofog-core/internal/v2/call/route"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 )
@@ -27,6 +28,11 @@ type NetStatus struct {
 	Direct   int
 	Relay    int
 	Peers    []PeerStatus
+	// Proxy is the SOCKS5 proxy all of the node's traffic goes through ("" none), Tor says it is Tor
+	// (T11.6a); CallRoute is how calls go now ("auto", "direct" or "relay").
+	Proxy     string
+	Tor       bool
+	CallRoute string
 }
 
 func pathName(k mux.PathKind) string {
@@ -50,6 +56,17 @@ func (a *App) NetStatus() NetStatus {
 		out.Peers = append(out.Peers, p)
 	}
 	sort.Slice(out.Peers, func(i, j int) bool { return out.Peers[i].Device < out.Peers[j].Device })
+	// What the runtime runs on: the proxy and the call route (T11.6a). A runtime without the proxy
+	// mode reports none.
+	if er, ok := a.cfg.Runtime.(interface{ EgressStatus() node.EgressStatus }); ok {
+		if eg := er.EgressStatus(); eg.Active {
+			out.Proxy, out.Tor = eg.Proxy, eg.Tor
+		}
+	}
+	out.CallRoute = "auto"
+	if cr, ok := a.cfg.Runtime.(interface{ CallRoute() route.Route }); ok {
+		out.CallRoute = cr.CallRoute().String()
+	}
 	return out
 }
 

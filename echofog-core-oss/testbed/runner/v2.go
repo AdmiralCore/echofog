@@ -63,8 +63,8 @@ func init() {
 func isV2Scenario(s string) bool { return strings.HasPrefix(s, "v2-") }
 
 func validateV2Flags(scenario string) error {
-	if !isV2Scenario(scenario) {
-		return nil
+	if !isV2Scenario(scenario) || isV2LiveScenario(scenario) {
+		return nil // the live scenarios of T15.1 take none of the launchpad flags (v2live.go)
 	}
 	switch *v2Profile {
 	case "desktop", "android":
@@ -107,7 +107,7 @@ func v2PhaseList(scenario string) ([]string, error) {
 		switch phases[i] {
 		case "censor", "net", "services", "echo":
 		case "probe":
-			if *v2ProbeSpec == "" {
+			if *v2ProbeSpec == "" && !*v2LiveLab {
 				return nil, fmt.Errorf("phase probe needs -probe-spec: the nodes to ask are not known to the lab")
 			}
 		default:
@@ -166,7 +166,11 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 		case "censor":
 			labeled, capture, carrier = v2CensorPhase(nodes, v, out, seed)
 		case "probe":
-			probes = v2ProbePhase(v, out, *v2ProbeSpec)
+			if *v2LiveLab {
+				probes = liveProbePhase(v, out, seed)
+			} else {
+				probes = v2ProbePhase(v, out, *v2ProbeSpec)
+			}
 		}
 	}
 
@@ -191,6 +195,9 @@ func runV2(nodes map[string]*node, v *verdict, out string) {
 				findings = append(findings, fmt.Sprintf("%s not measured on v2: no v2 flow of the kind it reads (TCP with records) was in this run", row.Detector))
 			}
 		}
+	}
+	if *v2LiveLab && len(labeled) > 0 {
+		behaviour["by_group"] = byGroup(labeled, cfg)
 	}
 	agg := aggregateFor(labeled)
 	flows := countFlows(labeled)
@@ -319,7 +326,9 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 		v.check(false, "v2 carrier harness: %v", err)
 	}
 	runBrowserControl(v)
-	runProductTraffic(nodes, v)
+	if !*v2LiveLab { // the live lab runs the v1 product beside the carriers, for as long as they run
+		runProductTraffic(nodes, v)
+	}
 	time.Sleep(2 * time.Second)
 	cap.stop()
 
@@ -334,6 +343,9 @@ func v2CensorPhase(nodes map[string]*node, v *verdict, out string, seed int64) (
 	if err != nil {
 		v.check(false, "analyze the capture of %s: %v", gw, err)
 		return nil, cap, carrier
+	}
+	if n := cap.sink.dropped; n > 0 {
+		v.check(false, "the capture has more than %d flows: %d flows past that were not analysed", censor.MaxFlows, n)
 	}
 	hosted := labHosted()
 	censor.CheckSNI(flows, hosted)
@@ -387,6 +399,16 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 		{mode: "const-size", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteConstSize, conns: 1, port: 4349, synthetic: true, repeat: 6},
 		{mode: "conn-storm", sni: "cover.lab", label: string(censor.LabelCarrier), suite: censor.SuiteConnStorm, conns: 30, port: 4350, synthetic: true},
 	}
+	if *v2LiveLab {
+		// the live lab drives noise3 through the same page traffic as the other carriers
+		kept := specs[:0]
+		for _, s := range specs {
+			if s.mode != "noise3" {
+				kept = append(kept, s)
+			}
+		}
+		specs = kept
+	}
 	noise3OK := false
 	for _, s := range specs {
 		labels[s.port] = harnessLabel{Suite: s.suite, Label: censor.Label(s.label), Synthetic: s.synthetic}
@@ -416,6 +438,9 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 	}
 
 	for _, s := range specs {
+		if *v2LiveLab {
+			time.Sleep(pauseBetween) // see liveHarness
+		}
 		peer := fmt.Sprintf("203.0.113.15:%d", s.port) // x1
 		args := []string{"/tmp/v2carrier", "-mode", s.mode, "-peer", peer, "-sni", s.sni,
 			"-duration", "4s", "-conns", strconv.Itoa(s.conns), "-seed", strconv.FormatInt(seed, 10)}
@@ -448,6 +473,14 @@ func runCarrierHarness(nodes map[string]*node, v *verdict, seed int64) (carrierI
 				logf("carrier mode %s: %d bytes in %d packets", s.mode, res.Bytes, res.Packets)
 			}
 		}
+	}
+	if *v2LiveLab {
+		if err := liveHarness(nodes, v, seed, &info, labels); err != nil {
+			return info, labels, err
+		}
+		noise3OK = true
+		info.Name = "v2carrier (live lab: noise3, reality2-tcp, reality2-quic, ws2 + controls)"
+		info.Note = "the four real v2 carriers of internal/v2 as servers on x1 and clients on b1 across gw_b; the v1 product beside them; the synthetic modes are controls of the detectors"
 	}
 	// without the real carrier the run says so, and D10 is then judged on the stand-in alone
 	info.Synthetic = !noise3OK
@@ -571,7 +604,8 @@ func labHosted() map[netip.Addr][]string {
 	hosted := map[netip.Addr][]string{}
 	for _, ip := range []string{"203.0.113.11", "203.0.113.12", "203.0.113.13", "203.0.113.14",
 		"203.0.113.15", "203.0.113.16", "203.0.113.17", "203.0.113.30"} {
-		hosted[netip.MustParseAddr(ip)] = []string{"cover.lab"}
+		// x1 also fronts the ws2 node as the CDN name of the live lab
+		hosted[netip.MustParseAddr(ip)] = []string{"cover.lab", "cdn.lab"}
 	}
 	return hosted
 }
@@ -769,7 +803,9 @@ type captureSink struct {
 
 	// A streaming sink hands the bytes to the censor's stream analyzer instead of keeping them.
 	an   io.WriteCloser
-	wait func() ([]censor.Flow, error)
+	wait func() (censor.Analysis, error)
+
+	dropped int // new flows past censor.MaxFlows
 }
 
 func newCaptureSink(limit int64, file *os.File) *captureSink {
@@ -1008,7 +1044,7 @@ func (c *v2Capture) finalizeInfo(requested, green bool) pcapInfo {
 // still obey the budget and still reach the -pcap file when there is one.
 func newStreamingSink(limit int64, file *os.File) *captureSink {
 	s := newCaptureSink(limit, file)
-	s.an, s.wait = censor.AnalyzeStream()
+	s.an, s.wait = censor.AnalyzeStreamStats()
 	return s
 }
 
@@ -1026,5 +1062,7 @@ func (s *captureSink) Finish() ([]censor.Flow, error) {
 		return nil, errors.New("not a streaming sink")
 	}
 	_ = s.an.Close()
-	return s.wait()
+	a, err := s.wait()
+	s.dropped = a.DroppedFlows
+	return a.Flows, err
 }

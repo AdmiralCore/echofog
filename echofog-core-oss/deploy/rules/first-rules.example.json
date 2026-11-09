@@ -1,0 +1,11 @@
+{
+  "version": "first-example",
+  "allowed_cidrs": [],
+  "mobile_asn": [],
+  "neighbors": {
+    "RU": ["KZ", "BY", "AM", "AZ", "GE", "UZ", "KG", "TJ"],
+    "IR": ["TR", "AM", "AZ", "IQ"]
+  },
+  "tcp_limit": 0,
+  "udp_denied": []
+}

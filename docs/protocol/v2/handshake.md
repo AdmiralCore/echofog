@@ -100,9 +100,10 @@ so the initiator chooses.
   order, plus optionally one GREASE value (§3.4); `chosen` is the first non-GREASE entry. Without a
   card, `offered` is `[0x0002]` (plus optionally GREASE) and `chosen = 0x0002`.
 - A `HS_HELLO` with a repeated value in `offered`, more than one GREASE value, an `offered` made only
-  of GREASE, a `chosen` not in `offered`, GREASE as `chosen`, a `chosen` that is not the first
-  non-GREASE entry of `offered`, a count outside 1..8, or trailing bytes after the payload is malformed
-  (silent close; for public nodes, no REJECT). The responder checks all of these, then the suite rule.
+  of GREASE, a `chosen` not in `offered`, GREASE as `chosen`, a count outside 1..8, or trailing bytes
+  after the payload is malformed (silent close; for public nodes, no REJECT). The responder checks all
+  of these, then the suite rule. A `chosen` that is not the first non-GREASE entry is *not* by itself
+  malformed: it is exactly what a legitimate retry after `REJECT{suite}` sends.
 - Cards of a hidden node (scopes `peer` and `invite`) list only the suites it accepts; because of D22
   they never list `0x0002`.
 - The responder accepts only if `chosen` is its **own most preferred** suite in `offered ∩ supported`.
@@ -110,9 +111,14 @@ so the initiator chooses.
   listed in any of its unexpired cards, a stale card leads to an older suite that still works: hidden
   nodes can add a suite without breaking invitations already issued.
 - Otherwise a public node replies `REJECT{reason = suite, detail}` where `detail` lists its suite IDs
-  as 4-digit lowercase hex values separated by single commas (`0001,0002`), and closes the stream;
-  the initiator may retry once. On retry it MUST send its full original `offered` list again (a forged
-  REJECT before Noise cannot narrow it), choosing the best suite of the intersection.
+  in its own preference order, most preferred first, as 4-digit lowercase hex values separated by
+  single commas (`0001,0002`), and closes the stream;
+  the initiator may retry once. On retry it MUST send its **full original `offered` list in the
+  original order**, byte for byte, without moving `chosen` to the front; a retry that reorders
+  `offered` is malformed (a forged REJECT before Noise cannot narrow the list, and the transcript
+  stays bound to the same list). The rule "`chosen` is the first non-GREASE entry" applies to the
+  first flight; after a `REJECT{suite}` the initiator keeps the same `offered` bytes and sets
+  `chosen` to the first entry of `detail` that is in `offered` (the best suite of the intersection).
 - A hidden node closes silently, with the uniform delay of §5.
 
 Because `HS_HELLO` is in the prologue, an attacker who removes suites from `offered` causes a
@@ -399,7 +405,10 @@ Rules:
   card lifetimes use the **raw** clock only, never the offset below. Each side keeps a clock offset: the
   median of samples from its **outgoing** sessions only (sessions it dialed), at most one sample per /16
   network, and the median is used only when at least 3 distinct /16 networks have given samples. Incoming
-  sessions give no sample. The offset is applied only to the timestamps of L0 first packets (wire.md §2.4,
+  sessions give no sample. A sample is valid for **24 hours**: older samples are discarded and no longer
+  hold the offset. A session that carried no usable `time` is not a "recent authenticated peer" for the
+  clock check (D36) and contributes no sample, even when the session itself is recent. The offset is
+  applied only to the timestamps of L0 first packets (wire.md §2.4,
   §3.2), whose window is ±300 s. The offset never exceeds 600 s from the raw clock; one update moves it by
   at most 120 s; a larger correction is taken only when the clock check below agrees (at least 3 answers,
   strict majority).
@@ -431,9 +440,10 @@ Rules:
   device ID or node ID, `SHA-256(signer akey)` or `SHA-256(account)` equals it. The responder
   checks the initiator card after message 3; the initiator checks a card in `P2` before sending
   message 3.
-- **hs_key ↔ device ID binding.** Each node remembers which device ID each `hs` key it has seen in a
-  valid card belongs to. A card whose `hs_key` (or `prev_hs`) is already bound to a different signer is
-  rejected and counted as abuse against the node that supplied it.
+- **hs_key ↔ device ID binding.** A node binds an `hs` key to a device ID **only when a handshake
+  completes with that key**, as the responder's Noise static key (proof of possession); a card alone
+  never creates a binding. A card whose `hs_key` (or `prev_hs`) is already bound to a different signer
+  is rejected and counted as abuse against the node that supplied it.
 - After message 3 the responder applies admission (bans, per-device, per-account and per-address
   limits, guard policy) to the now-authenticated device and node IDs. A refusal is `REJECT` on the
   control stream, then close.
@@ -482,9 +492,10 @@ DHT lookup to a known node completes in the handshake round trip.
 - `P1.early` holds the frames of **one** stream: `OPEN` with flag `EARLY`, followed by service frames.
   At most 1200 bytes. Only service operations marked 0-RTT safe ([registries.md](registries.md) §3) are
   allowed; anything else makes the responder ignore the early data (`early_status = 2`).
-- The responder processes early data only if `|P1.time − now| ≤ 60 s` (after applying its learned
-  offset) and `e.pub` is not in its 0-RTT replay cache (kept 180 s, keyed by the initiator's ephemeral
-  key). A hidden node processes it only after the access proof.
+- The responder processes early data only if `|P1.time − now| ≤ 60 s` **on the raw clock** (the
+  learned offset is never applied to this check) and `e.pub` is not in its 0-RTT replay cache (kept
+  180 s, keyed by the initiator's ephemeral key). A hidden node processes it only after the access
+  proof. The v2.0 build does not offer `early-data`; the rule applies when it does.
 - The response goes into `P2.early` (≤ 8192 bytes), encrypted after `ee` and `ekem1` and so
   forward-secret. `early_status = 2` tells the initiator to resend the request on a normal stream.
 - Properties the application must accept: early data is not forward-secret against a later theft of

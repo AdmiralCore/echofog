@@ -18,6 +18,10 @@ const (
 	// EventNoCover is D37: the node has no camouflaged listener, so it publishes no public card
 	// and serves only peers and invitees. The operator must be told; start still succeeds.
 	EventNoCover EventKind = "node.no-cover"
+	// EventClockSkew reports that a handshake was refused because the device clock differs from
+	// the peer by more than 10 minutes (handshake.md section 7). Message is Russian, neutral form,
+	// for the UI; Err is the cause. It is raised at most once per 10 minutes.
+	EventClockSkew EventKind = "node.clock-skew"
 	// EventClockWarning is the D36 >60 s clock warning.
 	EventClockWarning EventKind = "node.clock-warning"
 	// EventNetworkChanged reports that the local network changed and live sessions moved to new
@@ -42,6 +46,12 @@ const (
 	// EventCountryChanged: the client's own country was decided or changed (user setting, GeoIP of
 	// the public address, platform hint); new paths follow the new row, live sessions stay (T6.4c).
 	EventCountryChanged EventKind = "node.country-changed"
+	// EventNarrowPath reports that the network cannot carry the first packets of noise3 (PMTU 1280
+	// or less), so it is marked for 24 h (T3.12). Message is Russian, neutral form, for the UI.
+	EventNarrowPath EventKind = "node.narrow-path"
+	// EventNetworkFrozen: two flows to one foreign address stopped after 12-20 KiB, so the network
+	// is marked frozen for a day and the row of a mobile network towards abroad applies (T6.4d).
+	EventNetworkFrozen EventKind = "node.network-frozen"
 	// EventPortMapping: the set of ports the router forwards for this node changed and the cards
 	// follow it (T6.5b). The message never carries addresses.
 	EventPortMapping EventKind = "node.port-mapping"

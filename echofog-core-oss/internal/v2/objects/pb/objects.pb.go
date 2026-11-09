@@ -1443,6 +1443,7 @@ type Release struct {
 	NextKeys      [][]byte               `protobuf:"bytes,5,rep,name=next_keys,json=nextKeys,proto3" json:"next_keys,omitempty"` // <= 3 processed
 	NotesUrl      string                 `protobuf:"bytes,6,opt,name=notes_url,json=notesUrl,proto3" json:"notes_url,omitempty"` // https only
 	RevokedKeys   [][]byte               `protobuf:"bytes,7,rep,name=revoked_keys,json=revokedKeys,proto3" json:"revoked_keys,omitempty"`
+	MinVersion    string                 `protobuf:"bytes,8,opt,name=min_version,json=minVersion,proto3" json:"min_version,omitempty"` // "X.Y.Z": the oldest version that may be installed or kept; empty = no bound
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1524,6 +1525,13 @@ func (x *Release) GetRevokedKeys() [][]byte {
 		return x.RevokedKeys
 	}
 	return nil
+}
+
+func (x *Release) GetMinVersion() string {
+	if x != nil {
+		return x.MinVersion
+	}
+	return ""
 }
 
 type Policy struct {
@@ -1793,7 +1801,7 @@ const file_internal_v2_objects_pb_objects_proto_rawDesc = "" +
 	"\x06cosigs\x18\x02 \x03(\v2\x19.echofog.v2.objects.CoSigR\x06cosigs\"+\n" +
 	"\x05CoSig\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x10\n" +
-	"\x03sig\x18\x02 \x01(\fR\x03sig\"\x95\x02\n" +
+	"\x03sig\x18\x02 \x01(\fR\x03sig\"\xb6\x02\n" +
 	"\aRelease\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x1f\n" +
 	"\vreleased_at\x18\x02 \x01(\x04R\n" +
@@ -1802,7 +1810,9 @@ const file_internal_v2_objects_pb_objects_proto_rawDesc = "" +
 	"\tartifacts\x18\x04 \x03(\v2\x1c.echofog.v2.objects.ArtifactR\tartifacts\x12\x1b\n" +
 	"\tnext_keys\x18\x05 \x03(\fR\bnextKeys\x12\x1b\n" +
 	"\tnotes_url\x18\x06 \x01(\tR\bnotesUrl\x12!\n" +
-	"\frevoked_keys\x18\a \x03(\fR\vrevokedKeys\"\x98\x01\n" +
+	"\frevoked_keys\x18\a \x03(\fR\vrevokedKeys\x12\x1f\n" +
+	"\vmin_version\x18\b \x01(\tR\n" +
+	"minVersion\"\x98\x01\n" +
 	"\x06Policy\x12\x1c\n" +
 	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12#\n" +
 	"\rmin_supported\x18\x02 \x01(\rR\fminSupported\x12 \n" +

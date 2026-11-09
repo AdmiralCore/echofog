@@ -52,6 +52,9 @@ type View struct {
 	Thread   string `json:"thread,omitempty"`
 	Channel  string `json:"channel,omitempty"`  // a group's channel ("" the main one)
 	Withheld bool   `json:"withheld,omitempty"` // arrived without its body and no delete explains it
+	// Mentions are the peer ids (hex) the message names, MentionsAll that it names everybody.
+	Mentions    []string `json:"mentions,omitempty"`
+	MentionsAll bool     `json:"mentions_all,omitempty"`
 
 	// Edits keeps each editor's latest edit; only the author's counts (see Render), but the author
 	// is not known while this is a stub.
@@ -70,6 +73,17 @@ type View struct {
 	// ThreadTitle names the thread under the message (last writer wins).
 	ThreadTitle *Reg `json:"thread_title,omitempty"`
 	Stripped    bool `json:"stripped,omitempty"` // its event no longer carries the body
+	// Att is the file the message carries (T11.3e).
+	Att *AttView `json:"att,omitempty"`
+}
+
+// AttView is a message's attachment as the view keeps it (hex ids).
+type AttView struct {
+	Fid  string `json:"fid"`
+	Size uint64 `json:"size"`
+	Root string `json:"root"`
+	Name string `json:"name"`
+	Mime string `json:"mime,omitempty"`
 }
 
 const maxEditRefs = 64
@@ -182,6 +196,11 @@ type Message struct {
 	LastReplyAt int64      `json:"lastReplyAt,omitempty"`
 	ThreadTitle string     `json:"threadTitle,omitempty"`
 	Legacy      bool       `json:"legacy,omitempty"`
+	// Mentions are the peer ids (hex) the message names; MentionsAll that it names everybody;
+	// Mentioned that it names me (by id, or everybody) and is not mine.
+	Mentions    []string `json:"mentions,omitempty"`
+	MentionsAll bool     `json:"mentionsAll,omitempty"`
+	Mentioned   bool     `json:"mentioned,omitempty"`
 	// State is the delivery state of my own message (keys, offline, relayed, sent, delivered),
 	// filled in by the caller from the outbox.
 	State string `json:"state,omitempty"`
@@ -200,6 +219,8 @@ type FileRef struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+	// Root is the Merkle root of the file as a group event names it (hex); empty for a file of the old kind.
+	Root string `json:"root,omitempty"`
 	Mime string `json:"mime,omitempty"`
 	// Thumb is a picture's thumbnail (base64 JPEG, sent with the offer), W and H its size.
 	Thumb string `json:"thumb,omitempty"`
@@ -284,12 +305,15 @@ func (v *View) Render(conv, self string) Message {
 	if v.ThreadTitle != nil {
 		m.ThreadTitle = v.ThreadTitle.Text
 	}
+	m.Mentions, m.MentionsAll, m.Mentioned = v.Mentions, v.MentionsAll, !m.Mine && v.names(self)
 	m.Kind = "text"
 	switch {
 	case v.Type == MsgTypeSystem:
 		m.Kind = "system"
 	case strings.HasPrefix(v.Text, CallInvitePrefix):
 		m.Kind = "call"
+	case v.Att != nil:
+		m.Kind, m.File = "file", &FileRef{ID: v.Att.Fid, Name: v.Att.Name, Size: int64(v.Att.Size), Mime: v.Att.Mime, Root: v.Att.Root}
 	default:
 		if f := fileOf(v.Type, v.Text, v.Metadata); f != nil {
 			m.Kind, m.File = "file", f
@@ -298,6 +322,7 @@ func (v *View) Render(conv, self string) Message {
 	if del, by := v.deleted(); del {
 		m.Deleted, m.DeletedBy = true, by
 		m.Text, m.Metadata, m.Withheld, m.File = "", "", false, nil
+		m.Mentions, m.MentionsAll, m.Mentioned = nil, false, false
 	} else if e, ok := v.edit(); ok {
 		m.Text, m.Edited, m.EditedAt = e.Text, true, e.TS
 	}

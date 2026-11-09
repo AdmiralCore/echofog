@@ -15,16 +15,19 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
+	"github.com/echofog/echofog-core/internal/v2/call/route"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/chat"
 	chatcrypto "github.com/echofog/echofog-core/internal/v2/chat/crypto"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/dht"
+	"github.com/echofog/echofog-core/internal/v2/files"
 	"github.com/echofog/echofog-core/internal/v2/frame"
 	"github.com/echofog/echofog-core/internal/v2/geoip"
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/keys"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -80,7 +83,24 @@ type Config struct {
 	// mailbox client for recipients that are away (mailbox/2 client, T7.4; nil until then).
 	Chat       bool
 	ChatEvents chat.Events
-	ChatMail   chat.Mail
+	// ChatDir finds the devices, cards and prekeys of an account for chat/2 and files/2. Nil: the DHT. A
+	// host without a DHT network of its own (a test of two runtimes in one process) supplies its own.
+	ChatDir  chat.Directory
+	ChatMail chat.Mail
+	// Files turns files/2 on (T8.1/T11.3d): the node serves the files it offers and the app fetches the
+	// ones it is offered through OpenFiles. FilesLimits bound what the server holds; FilesOnDone is called
+	// when a recipient confirmed it got a whole file.
+	Files       bool
+	FilesLimits files.Limits
+	FilesOnDone func(fid [16]byte, node [32]byte)
+	// MailboxRelays are the mailbox relays M where this node keeps its queues while it is away (T7.4);
+	// nil means the node has no queue. MailboxVia are the forwarding relays F it hands deposits to
+	// (default: the same). ChatContacts lists the accounts told about a new queue.
+	MailboxRelays func() [][32]byte
+	MailboxVia    func() [][32]byte
+	ChatContacts  func() [][32]byte
+	// MailboxWait is the long-poll time of the fetch loop; zero means 30 s.
+	MailboxWait time.Duration
 
 	// Store is the persistent store; the runtime opens its own namespaces in it. It does not
 	// close the store: the owner keeps it across runtime restarts. Required.
@@ -135,6 +155,14 @@ type Config struct {
 	LocalInfo carrier.LocalInfo
 	// DialContext opens carrier sockets through the node's proxy (T11.6).
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	// Egress, when set, sends all of the node's own traffic through a SOCKS5 proxy (T11.6a).
+	Egress *Egress
+	// FreezeStall is how long a flow that wrote and heard nothing back counts as stopped when it
+	// is looking for the freeze of a network (T6.4d); zero means 10 s.
+	FreezeStall time.Duration
+	// FreezeFlowAge is the oldest a flow may be, counted from its open, for its stop to count as the
+	// freeze: the handshake and the first data, not a long request; zero means 30 s.
+	FreezeFlowAge time.Duration
 
 	// Suites are the L1 suites the node offers or accepts. Nil means XK before XX.
 	Suites []uint16
@@ -186,11 +214,12 @@ type Config struct {
 
 // Runtime is one running v2 node (02-architecture AD5).
 type Runtime struct {
-	cfg    Config
-	log    *slog.Logger
-	events EventSink
-	clock  *clock.Clock
-	http   *http.Client
+	lastSkewEvent atomic.Int64 // unix nanoseconds of the last EventClockSkew
+	cfg           Config
+	log           *slog.Logger
+	events        EventSink
+	clock         *clock.Clock
+	http          *http.Client
 
 	carrierClock carrier.Clock
 	registry     *carrier.Registry
@@ -203,6 +232,16 @@ type Runtime struct {
 	netClass  atomic.Uint32
 	routeMu   sync.Mutex
 	routeInfo map[DeviceID]RouteReport
+	// freeze marks a network whose TCP stops at 12-20 KiB (T6.4d); netID names the network.
+	freeze *routepolicy.FreezeTracker
+	// egress is the proxy mode (T11.6a); nil when the node goes out directly.
+	egress *Egress
+	// narrow marks a network that cannot carry the first packets of noise3 (T3.12).
+	narrow *carrier.NarrowPath
+	netMu  sync.Mutex
+	netID  string
+	// flowSeq numbers the flows the freeze watcher sees.
+	flowSeq atomic.Uint64
 
 	// The sources of the own country (T6.4c); countryLast is the one last reported.
 	countryMu   sync.Mutex
@@ -229,9 +268,17 @@ type Runtime struct {
 	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
 	// this node opened as a carrier client are counted. deadPaths remembers failures that
 	// arrived before the pair was recorded, so a late record cannot resurrect a slot.
-	pathsMu   sync.Mutex
+	pathsMu sync.Mutex
+	// live holds the established sessions until they end: Stop closes what a GOAWAY did not end.
+	liveMu    sync.Mutex
+	live      map[*mux.Session]struct{}
 	pathPairs map[pathKey]session.Pair
 	deadPaths map[pathKey]struct{}
+	// repairing holds the sessions a repair is running for; repairOpt is what a repair dials with.
+	repairing    map[[16]byte]bool
+	sessionCards map[[16]byte]*objects.Card
+	repairOpt    DialOpt
+	healthyFn    func(*mux.Session) bool
 
 	identity Identity
 	vis      cards.Visibility
@@ -239,8 +286,12 @@ type Runtime struct {
 	peers    *pex.Store
 	pex      *pex.Service
 
-	mu         sync.Mutex
-	handlers   map[[2]uint64]Handler
+	mu       sync.Mutex
+	handlers map[[2]uint64]Handler
+
+	// hostMu guards hosted, the exit a desktop offers while it runs (exit_host.go).
+	hostMu     sync.Mutex
+	hosted     *hostedExit
 	table      *session.Table
 	listeners  []carrier.Listener
 	background Background
@@ -250,21 +301,27 @@ type Runtime struct {
 	serving    sync.Map
 	dgrams     *datagramBroker
 	// call media (T9.3): the transport over live sessions, call_route and the signal port
-	callTr      *callnet.Transport
-	callSvc     *call.Service
-	callAdmit   atomic.Pointer[func([32]byte) bool]
-	callRoute   atomic.Uint32
-	callSignals atomic.Pointer[signalHolder]
-	dht         *dht.Table
-	dhtServer   *dht.Server
-	dhtClient   *dht.Client
-	releaseM    *release.Manager
-	devList     ownDevices
-	chat        *chat.Service
-	chatKeys    *chatcrypto.Crypto
+	callTr            *callnet.Transport
+	callSvc           *call.Service
+	callAdmit         atomic.Pointer[func([32]byte) bool]
+	callRoute         atomic.Uint32
+	callSignals       atomic.Pointer[signalHolder]
+	dht               *dht.Table
+	dhtServer         *dht.Server
+	dhtClient         *dht.Client
+	releaseM          *release.Manager
+	devList           ownDevices
+	chat              *chat.Service
+	files             *files.Server
+	chatKeys          *chatcrypto.Crypto
+	mailRecv          *mailbox.Receiver
+	mailboxClientOpts func([32]byte) DialOpt
+	mailSrv           *mailbox.Server
 	// dhtDialHook lets a test choose the dial options of a DHT query (in-memory carriers).
 	dhtDialHook func(*objects.Card) DialOpt
-	modules     sync.Once
+	// mailboxDialHook is the same for the dials of the forwarding relay F.
+	mailboxDialHook func(*objects.Card) DialOpt
+	modules         sync.Once
 	// exitMu guards exitIdents, the per-exit client identities loaded in this run (T10.2).
 	exitMu     sync.Mutex
 	exitIdents map[DeviceID]*exitIdent
@@ -337,12 +394,30 @@ func New(cfg Config) (*Runtime, error) {
 	// never builds a Go-TLS client of its own, whose fingerprint and environment proxy would
 	// betray it.
 	httpClient := cfg.HTTP
+	var egress *Egress
+	if cfg.Egress != nil {
+		eg := *cfg.Egress
+		if err := eg.check(&cfg); err != nil {
+			return nil, err
+		}
+		dial, err := eg.dialer()
+		if err != nil {
+			return nil, err
+		}
+		egress = &eg
+		cfg.DialContext = dial
+		cfg.Profile.PortMapping = false // no port is forwarded behind a proxy
+		if httpClient == nil {
+			httpClient = eg.httpClient(dial)
+		}
+	}
 	carrierClock := cfg.CarrierClock
 	if carrierClock == nil {
 		carrierClock = systemClock{}
 	}
 
 	r := &Runtime{
+		egress:       egress,
 		cfg:          cfg,
 		log:          log,
 		events:       events,
@@ -354,11 +429,18 @@ func New(cfg Config) (*Runtime, error) {
 		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
+		live:         map[*mux.Session]struct{}{},
+		repairing:    map[[16]byte]bool{},
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}
+	r.freeze = routepolicy.NewFreezeTracker(carrierClock.Now)
+	r.narrow = carrier.NewNarrowPath(carrierClock, r.narrowMarked)
 	if r.rules == nil {
 		r.rules = routepolicy.Default()
+	}
+	if egress != nil {
+		r.callRoute.Store(uint32(route.Relay)) // calls go through a relay behind a proxy
 	}
 	r.netClass.Store(uint32(cfg.NetClass))
 	r.hsSem = make(chan struct{}, maxHandshaking)
@@ -683,6 +765,8 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	if table != nil {
 		_ = table.Close()
 	}
+	// the GOAWAY above lets a session drain for up to 15 s; a stopping runtime gives it a moment and then ends it
+	r.closeLiveSessions(ctx)
 	r.stopAccess()
 	r.dgrams.close()
 
@@ -1077,6 +1161,36 @@ func (r *Runtime) noCoverEvent() {
 		Message: "node has no camouflaged listener: the public card is not published, " +
 			"only peers and invitees are served (wire.md §2.1 D37)",
 		At: time.Now(),
+	})
+}
+
+// clockSkewEvery limits how often the UI is told about a clock that is too far off.
+const clockSkewEvery = 10 * time.Minute
+
+// noteClockSkew tells the UI, once per 10 minutes, that a handshake failed because the device clock
+// differs by more than the 600 s the handshake tolerates (handshake.md section 7). The tolerance
+// itself is not widened and the offset plays no part in the handshake; the user must fix the clock.
+func (r *Runtime) noteClockSkew(err error) {
+	var rej *session.ErrRejected
+	skew := errors.Is(err, handshake.ErrClockSkew) ||
+		(errors.As(err, &rej) && rej.Reason == handshake.ReasonClockSkew)
+	if !skew {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := r.lastSkewEvent.Load()
+	if last != 0 && now-last < int64(clockSkewEvery) {
+		return
+	}
+	if !r.lastSkewEvent.CompareAndSwap(last, now) {
+		return
+	}
+	r.events.Emit(Event{
+		Kind: EventClockSkew,
+		Message: "Часы устройства отличаются от часов сети больше чем на 10 минут, поэтому соединение " +
+			"не установлено. Нужно исправить дату и время в настройках системы.",
+		At:  time.Now(),
+		Err: err,
 	})
 }
 

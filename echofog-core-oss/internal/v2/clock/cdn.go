@@ -2,13 +2,18 @@ package clock
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
 	"sync"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
+	xproxy "golang.org/x/net/proxy"
 )
 
 const (
@@ -55,26 +60,99 @@ var defaultEndpoints = []string{
 // is configuration, not protocol: users and distributions may replace it.
 func DefaultEndpoints() []string { return slices.Clone(defaultEndpoints) }
 
-// HTTPClient is the single HTTP surface the CDN check needs. In production it is
-// node.Host.HTTP (02-architecture §3.1): one client with browser-shaped TLS that, in
-// anonymous mode, routes requests through the node's proxy. The clock never builds or
-// inspects a transport, so *http.Client satisfies the interface.
+// HTTPClient is the single HTTP surface the CDN check needs. Production passes the client
+// NewHTTPClient builds: browser-shaped TLS that, in anonymous mode, routes requests
+// through the node's proxy (02-architecture §3.1). *http.Client satisfies the interface,
+// and tests inject a fake.
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// NewHTTPClient returns a standard-library client for environments that do not have a
-// node.Host yet. A non-nil proxy sends every request through it; nil means a direct
-// connection, ignoring proxy environment variables, because the node's proxy settings
-// are explicit. TLS shaping (D36's browser-shaped TLS) is owned by the injected client,
-// not by this helper.
+// StartupConfig returns the clock configuration a product starts with: the CDN check is
+// on and uses the browser-shaped HTTP client (handshake.md D36). A non-nil proxy is the
+// node's SOCKS5 proxy (T11.6a); nil means a direct connection.
+func StartupConfig(proxy *url.URL, timeout time.Duration) Config {
+	return Config{HTTP: NewHTTPClient(proxy, timeout)}
+}
+
+// NewHTTPClient returns the client the node uses for its own lookups, the CDN clock check
+// first of all: uTLS with the Chrome ClientHello over HTTP/1.1 and the certificate checked
+// (handshake.md D36, audit M1 B-4). A non-nil SOCKS5 proxy carries every connection with
+// names unresolved; nil means a direct connection. Proxy environment variables are never
+// read, and an unusable proxy fails closed instead of falling back to a direct socket.
+//
+// Tests replace the trust store through the transport's TLSClientConfig.RootCAs, the same
+// field the TLS dialer reads.
 func NewHTTPClient(proxy *url.URL, timeout time.Duration) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
+	dial := (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+	var dialErr error
 	if proxy != nil {
-		transport.Proxy = http.ProxyURL(proxy)
+		var d xproxy.Dialer
+		if proxy.Host == "" {
+			dialErr = ErrInvalidEndpoint
+		} else if d, dialErr = xproxy.SOCKS5("tcp", proxy.Host, nil, &net.Dialer{Timeout: 10 * time.Second}); dialErr == nil {
+			cd, ok := d.(xproxy.ContextDialer)
+			if !ok {
+				dialErr = errors.New("clock: the proxy dialer has no context")
+			} else {
+				dial = cd.DialContext
+			}
+		}
 	}
-	return &http.Client{Transport: transport, Timeout: timeout}
+	dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		return dial(ctx, network, addr)
+	}
+	tr := &http.Transport{
+		Proxy:               nil,
+		DialContext:         dialContext,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSHandshakeTimeout: 30 * time.Second,
+		MaxIdleConns:        4,
+		IdleConnTimeout:     30 * time.Second,
+	}
+	tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+		if err != nil {
+			return nil, err
+		}
+		for _, ext := range spec.Extensions {
+			if alpn, ok := ext.(*utls.ALPNExtension); ok {
+				alpn.AlpnProtocols = []string{"http/1.1"}
+			}
+		}
+		raw, err := dialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+		defer stop()
+		tcfg := tr.TLSClientConfig
+		uc := utls.UClient(raw, &utls.Config{
+			ServerName: host,
+			RootCAs:    tcfg.RootCAs,
+			MinVersion: tcfg.MinVersion,
+		}, utls.HelloCustom)
+		if err := uc.ApplyPreset(&spec); err != nil {
+			_ = raw.Close()
+			return nil, err
+		}
+		if err := uc.HandshakeContext(ctx); err != nil {
+			_ = raw.Close()
+			return nil, err
+		}
+		return uc, nil
+	}
+	return &http.Client{Transport: tr, Timeout: timeout}
 }
 
 // Result describes one CDN check. Offset is the clock's current offset after the call,

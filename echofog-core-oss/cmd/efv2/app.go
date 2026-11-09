@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
+	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/identity"
 	"github.com/echofog/echofog-core/internal/v2/node"
@@ -88,26 +94,49 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 	}
 	a.store = st
 
-	clk, err := clock.New(clock.Config{})
+	clk, err := clock.New(clock.StartupConfig(nil, 30*time.Second))
 	if err != nil {
 		return nil, err
 	}
 	a.clock = clk
 
 	maskPub := device.Masking().Public()
-	shapePB := &pb.ShapeProfile{Id: shape.IDDefaultUDP}
+	maskPriv, err := decode32(idf.MaskPrivate, "mask key")
+	if err != nil {
+		return nil, err
+	}
+	coverHost := efv2CoverHost(nf.Cover)
+	wsPath := efv2WS2Path(maskPriv[:])
+	needsCover := false
 	cardListeners := make([]cards.Listener, 0, len(listeners))
 	for _, l := range listeners {
-		if l.Suite != objects.SuiteNoise3 {
-			return nil, fmt.Errorf("suite %s is not available in this build (T2.6b)", suiteName(l.Suite))
+		cl := cards.Listener{Suite: l.Suite, Mask: maskPub}
+		switch l.Suite {
+		case objects.SuiteNoise3:
+			cl.Host, cl.Port = l.AdvertiseHost, l.Port
+			cl.Shape = &pb.ShapeProfile{Id: shape.IDDefaultUDP}
+		case objects.SuiteReality2QUIC, objects.SuiteReality2TCP:
+			needsCover = true
+			cl.Host, cl.Port, cl.SNI = l.AdvertiseHost, l.Port, coverHost
+			cl.Shape = &pb.ShapeProfile{Id: shape.IDDefaultTLS}
+		case objects.SuiteWS2:
+			needsCover = true
+			cl.URL = "wss://" + coverHost + wsPath
+			cl.SNI = coverHost
+			cl.Shape = &pb.ShapeProfile{Id: shape.IDDefaultTLS}
+		default:
+			return nil, fmt.Errorf("suite %s is not available in this build", suiteName(l.Suite))
 		}
-		cardListeners = append(cardListeners, cards.Listener{
-			Suite: l.Suite,
-			Host:  l.AdvertiseHost,
-			Port:  l.Port,
-			Mask:  maskPub,
-			Shape: shapePB,
-		})
+		cardListeners = append(cardListeners, cl)
+	}
+	if needsCover && (nf.Cover == "" || nf.SiteDir == "") {
+		return nil, fmt.Errorf("--cover and --site-dir are required for reality2 and ws2 listeners")
+	}
+	var coverCert *tls.Certificate
+	if nf.CoverCert != "" {
+		if coverCert, err = loadEFv2Cert(nf.CoverCert); err != nil {
+			return nil, err
+		}
 	}
 
 	role, flags := roleAndFlags(a.profile)
@@ -139,22 +168,63 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 	if err != nil {
 		return nil, err
 	}
-	maskPriv, err := decode32(idf.MaskPrivate, "mask key")
+	tlsShape, err := shape.Builtin(shape.IDDefaultTLS)
+	if err != nil {
+		return nil, err
+	}
+	maskPriv, err = decode32(idf.MaskPrivate, "mask key")
 	if err != nil {
 		return nil, err
 	}
 	localAddrs := make([]netip.Addr, 0, len(listeners))
+	seenReality := map[string]bool{}
 	for _, l := range listeners {
-		sources = append(sources, node.Noise3Listener{
-			Punch:    lab.punch,
-			Addr:     l.Bind,
-			Masks:    []noise3.MaskKey{{Private: maskPriv}},
-			Profile:  shapeProfile,
-			ReplayKV: st.Store("v2/carrier/noise3/replay"),
-			LowPower: a.profile.LowPower,
-		})
 		if ip, err := netip.ParseAddr(l.AdvertiseHost); err == nil {
 			localAddrs = append(localAddrs, ip)
+		}
+		switch l.Suite {
+		case objects.SuiteNoise3:
+			sources = append(sources, node.Noise3Listener{
+				Punch:    lab.punch,
+				Addr:     l.Bind,
+				Masks:    []noise3.MaskKey{{Private: maskPriv}},
+				Profile:  shapeProfile,
+				ReplayKV: st.Store("v2/carrier/noise3/replay"),
+				LowPower: a.profile.LowPower,
+			})
+		case objects.SuiteReality2QUIC, objects.SuiteReality2TCP:
+			if seenReality[l.Bind] {
+				continue
+			}
+			seenReality[l.Bind] = true
+			mk, err := realityMask(maskPriv[:])
+			if err != nil {
+				return nil, err
+			}
+			cert := coverCert
+			if cert == nil {
+				if cert, err = node.SelfSignedCertificate(coverHost); err != nil {
+					return nil, err
+				}
+			}
+			tcpBind, udpBind := realityBinds(listeners, l.Bind)
+			sources = append(sources, node.Reality2Listener{
+				Domain: coverHost, SiteDir: nf.SiteDir, Cert: cert,
+				CertKV: st.Store("v2/reality2/self/cert"), ReplayKV: st.Store("v2/reality2/replay"),
+				TCPAddr: tcpBind, UDPAddr: udpBind,
+				Masks: []reality2.MaskKey{mk}, Addrs: []string{efv2TokenAddr(l)},
+				Shape: tlsShape, LowPower: a.profile.LowPower,
+			})
+		case objects.SuiteWS2:
+			mk, err := realityMask(maskPriv[:])
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, node.WS2Listener{
+				Addr: l.Bind, Path: wsPath, Domain: coverHost, SiteDir: nf.SiteDir,
+				Masks: []reality2.MaskKey{mk}, Addrs: []string{efv2WS2TokenAddr(nf.Cover)},
+				ReplayKV: st.Store("v2/ws2/replay"), Shape: tlsShape, LowPower: a.profile.LowPower,
+			})
 		}
 	}
 	if len(localAddrs) == 0 {
@@ -344,3 +414,65 @@ func (k cardsKV) Get(_ context.Context, key []byte) ([]byte, bool, error) {
 }
 
 func (k cardsKV) Put(_ context.Context, key, value []byte) error { return k.kv.Put(key, value) }
+
+// efv2CoverHost is the host part of the lab cover ("lab.example:443" -> "lab.example").
+func efv2CoverHost(cover string) string {
+	if host, _, err := net.SplitHostPort(cover); err == nil {
+		return host
+	}
+	return cover
+}
+
+// efv2WS2Path derives the unguessable ws2 path from the device masking key, the same rule the
+// server node uses.
+func efv2WS2Path(priv []byte) string {
+	sum := sha256.Sum256(append(append([]byte(nil), priv...), []byte("echofog/ws2/path")...))
+	return "/" + hex.EncodeToString(sum[:16])
+}
+
+func realityMask(priv []byte) (reality2.MaskKey, error) {
+	k, err := ecdh.X25519().NewPrivateKey(priv)
+	if err != nil {
+		return reality2.MaskKey{}, fmt.Errorf("masking key: %w", err)
+	}
+	return reality2.MaskKey{Private: k}, nil
+}
+
+func realityBinds(listeners []listenSpec, bind string) (tcp, udp string) {
+	for _, l := range listeners {
+		if l.Bind != bind {
+			continue
+		}
+		switch l.Suite {
+		case objects.SuiteReality2TCP:
+			tcp = l.Bind
+		case objects.SuiteReality2QUIC:
+			udp = l.Bind
+		}
+	}
+	return tcp, udp
+}
+
+func efv2TokenAddr(l listenSpec) string {
+	return net.JoinHostPort(l.AdvertiseHost, strconv.Itoa(int(l.Port)))
+}
+
+func efv2WS2TokenAddr(cover string) string {
+	host := efv2CoverHost(cover)
+	if host == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, "443")
+}
+
+func loadEFv2Cert(path string) (*tls.Certificate, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("cover cert: %w", err)
+	}
+	cert, err := tls.X509KeyPair(raw, raw)
+	if err != nil {
+		return nil, fmt.Errorf("cover cert: %w", err)
+	}
+	return &cert, nil
+}

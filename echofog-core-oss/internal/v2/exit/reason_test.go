@@ -271,3 +271,79 @@ func TestClientVerdictCallbackCarriesReason(t *testing.T) {
 	}
 	var _ io.Reader = conn
 }
+
+// T10.4 acceptance, finding 1: a deadline of the session set-up (the node's own 10 s readiness wait,
+// the carrier's timeouts) with the caller's context still alive is a missing path, not an unknown
+// error; only the caller's own cancellation stays as it is.
+func TestClientInternalDeadlineIsNoPath(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cover bool
+		want  Reason
+	}{
+		{"exit with a cover", false, ReasonNoPath},
+		{"exit without a cover", true, ReasonNoCamouflage},
+	} {
+		for _, inner := range []error{context.DeadlineExceeded, context.Canceled} {
+			t.Run(tc.name+"/"+inner.Error(), func(t *testing.T) {
+				cfg := failingOpen(fmt.Errorf("session readiness: %w", inner))
+				cfg.NoCamouflage = tc.cover
+				cl, err := NewClient(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				conn, err := cl.DialExitStream(ctx, "192.0.2.1:80")
+				if err == nil {
+					defer conn.Close()
+					_, err = conn.Read(make([]byte, 1))
+				}
+				if got := ReasonOf(err); got != tc.want {
+					t.Fatalf("stream: reason %s (%v)", got, err)
+				}
+				_, err = cl.DialExitUDP(ctx)
+				if got := ReasonOf(err); got != tc.want {
+					t.Fatalf("udp: reason %s (%v)", got, err)
+				}
+			})
+		}
+	}
+}
+
+func TestClientCallersOwnCancellationIsNotARefusal(t *testing.T) {
+	cl, err := NewClient(failingOpen(context.Canceled))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	conn, err := cl.DialExitStream(ctx, "192.0.2.1:80")
+	if err == nil {
+		defer conn.Close()
+		_, err = conn.Read(make([]byte, 1))
+	}
+	if r := ReasonOf(err); r != ReasonUnknown {
+		t.Fatalf("a cancelled caller got reason %s (%v)", r, err)
+	}
+}
+
+// T10.4 acceptance, finding 2: the codes are a contract with the facade and the frontend; they are
+// fixed here, and a new reason goes at the end.
+func TestReasonCodesAreFixed(t *testing.T) {
+	want := map[Reason]string{
+		ReasonUnknown: "unknown", ReasonNoCamouflage: "no-camouflage", ReasonUnreachable: "unreachable", ReasonBusy: "busy",
+		ReasonPolicy: "policy", ReasonRateLimited: "rate-limited", ReasonNoPath: "no-path",
+	}
+	for r, code := range want {
+		if r.String() != code {
+			t.Errorf("reason %d is %q, want %q", r, r.String(), code)
+		}
+	}
+	order := []Reason{ReasonUnknown, ReasonNoCamouflage, ReasonUnreachable, ReasonBusy, ReasonPolicy, ReasonRateLimited, ReasonNoPath}
+	for i, r := range order {
+		if int(r) != i {
+			t.Errorf("%s moved to %d, want %d: new reasons go at the end", r, r, i)
+		}
+	}
+}

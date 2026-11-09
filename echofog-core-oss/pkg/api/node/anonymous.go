@@ -34,6 +34,10 @@ type AnonymityStatus struct {
 	// HasProxy and HasRelay: what the saved settings give each mode to work with.
 	HasProxy bool `json:"hasProxy"`
 	HasRelay bool `json:"hasRelay"`
+	// RelayAvailable and RelayNote: protocol 2 shows the own-relay mode but cannot run it yet (T11.6b);
+	// RelayNote is the caption under it ("" when the mode works).
+	RelayAvailable bool   `json:"relayAvailable"`
+	RelayNote      string `json:"relayNote,omitempty"`
 }
 
 // GetAnonymity reports the anonymous mode, saved and in effect.
@@ -117,7 +121,11 @@ const ownHTTPTimeout = 30 * time.Second
 // rate): through the Tor proxy when one is set, through the VPN exit while it runs, and none (nil)
 // in anonymous mode through the own relay with no VPN on, since the site would see the address.
 func (n *NodeApi) OwnHTTPClient() *http.Client {
-	if p := network.OutboundProxy(); p != "" {
+	p := network.OutboundProxy()
+	if p == "" && n.node != nil && n.node.Cfg != nil && n.node.Cfg.IsV2() {
+		p = n.node.Cfg.Network.Proxy // protocol 2 has no global outbound proxy: the saved setting is the one in effect
+	}
+	if p != "" {
 		d, err := proxy.SOCKS5("tcp", p, nil, network.DirectDialer(10*time.Second))
 		if cd, ok := d.(proxy.ContextDialer); err == nil && ok {
 			// names go to the proxy unresolved: a lookup here would show on this network

@@ -321,3 +321,84 @@ DHT/relay/выхода; нет — если работает только с л�
 правок. Не сделаны (остаются `ErrV2NotBuilt`): звонки групп и комнат (ждут чаты v2), `GetCallPath`,
 `GetCallRelays`, `SwitchCallRelay`, `InviteToCall`. Медиа принимается только от участников комнаты,
 в которой находится узел (`Runtime.SetCallAdmit` из состава комнаты, кэш 100 мс).
+
+## T11.3d: домены «чаты», «группы и каналы», «файлы» при `protocol: 2`
+
+`NodeApi.AttachV2Messenger(app)` (после `AttachV2`) подставляет `v2MsgBackend` (`backends_v2_chat.go`, `_group.go`, `_file.go`) на
+место `chat`, `group` и `file`. DTO — те же, что у v1 (`ChatMessage`, `ConversationDTO`, `ConvChange`, `GroupDTO`, `GroupMemberDTO`,
+`GroupInviteDTO`, `GroupRoleDTO`, `ChannelDTO`, `GroupEvent`, `dto.FileTransferDTO`); события десктоп отдаёт прежними именами:
+`conv:change` (`SubscribeConversations`), `group:event` (`SubscribeGroupEvents`), `file:transfer` (`OnFileTransfer`), `new_message` и
+`message:state` в v2 молчат (статус сообщения и новое сообщение приходят в `conv:change`). Подписки, сделанные до `AttachV2Messenger`,
+запоминаются и повторяются при подключении; новая подписка заменяет прежнюю (`SubscribeConversations`, `SubscribeGroupEvents`).
+
+- **Имена людей.** Сообщение называет автора peer ID v1 (хеш ключа), а контакты и участники — node ID. Бэкенд переводит `Author`,
+  `DeletedBy`, `PinnedBy`, `Mentions`, `Reactions[].By`, журнал модерации в node ID (`app.NodeOfPeer`); неизвестный остаётся как есть.
+- **Виды групп:** v1 `group`/`channel`/`swarm` ↔ app `private`/`channel`/`open`.
+- **Работают:** все методы чатов (кроме сохранённых и `ResetEncryptionSession`), каналы/категории/треды, роли, приглашения и заявки,
+  модерация, файлы (отправка, приём, группа), `GetMessages`, `SendMessage`, `GetGroupMessages`, `SendGroupMessage`.
+- **ErrV2NotBuilt:** `ResetEncryptionSession`, `DeleteGroup` (удалить для всех); сохранённые, `AddGroupMember` и снимок — в T11.3e-2.
+- **Новые методы фасада (T7.7), только при v2:** `ChatNotify`/`SetChatNotify` (`all|mentions|none`, на устройстве), `ChatFollow`/
+  `ChatFollowing` (подписка на тред), `GroupVoice` (`VoiceMemberDTO`, состав голосовой комнаты). При `protocol: 1` — `ErrV2NotBuilt`.
+- **Не передаётся по сети:** канал и тред файла группы (в предложении файла нет такого поля) — только в ответе вызова.
+
+## T11.4: звонки групп, приглашение в звонок и бесплатный VPN при `protocol: 2`
+
+- **Звонки групп и комнат** (`AttachV2GroupCalls(app)` после `AttachV2Calls`): `StartGroupCall`, `StartRoomCall`, `ActiveGroupCall`,
+  `KeepGroupCallAlive`, `KeepRoomCallAlive`, `EndGroupCall`, `EndRoomCall`, `LeaveRoomCall`; `ChannelDTO.Call` у голосовой комнаты.
+  Событие `group:event` получило виды `call` (звонит; только своя группа), `callactive` (звонок уже идёт; комната не звонит) и
+  `callend` с полями `callId`, `coordinator`, `room`. Состав звонка не в журнале: участники раз в 45 с повторяют анонс по chat/2
+  (сообщение с метаданными `fogcall2:` + JSON `{v,k,g,r,c,o}`, видов `call|alive|end|leave`); звонок без анонса 150 с закончен.
+  Анонс принимается только от участника группы с правом голоса (и в комнате — по её правам), координатор должен быть участником;
+  остальное молчание. Анонсы заблокированного контакта отбрасываются.
+- **`InviteToCall`**: сообщение личного чата `fogcall://<секрет>/<координатор>` (формат v1, чат показывает его как звонок).
+- **VPN без оплаты** (`AttachV2VPN(app)` после `AttachV2`): `StartVPNVia(ссылка выхода)`, `StartVPN(node)`, `StopVPN`, `StopVPNForSwitch`,
+  `ConnectLastExit`, `GetVPNStatus`, `GetSavedExits`, `ListExitNodes` (сохранённые), `SetExitName`, `SetExitFavorite`, `ForgetExit`,
+  `GetVPNHistory`, `ClearVPNHistory`. Локальный SOCKS5 через exit/2; все выходы бесплатные (`PriceKnown: true`, цена 0).
+  Причины отказа T10.4 идут в `VPNStatus.LastRefusalReason` и `VPNSession.RefusedBy` кодами `no-camouflage`, `unreachable`, `busy`,
+  `policy`, `rate-limited`, `no-path`; `VPNStatus.ExitState`: `checking`, `ok`, `unreachable` (нет пути), `no-camouflage`.
+  Остаются `ErrV2NotBuilt`: оплата, рынок, пробы, режим всего компьютера, автопереключение, `StartVPNAt`, `GetCallPath`,
+  `GetCallRelays`, `SwitchCallRelay`.
+
+## T11.3e-2: остаток паритета чата при `protocol: 2` (провод не менялся)
+
+Всё ниже работает в `app` и на фасаде `AttachV2Messenger`; по сети уходит только то, что и так уходит (события журнала, личное сообщение).
+
+- **Сохранённые сообщения** (`ListSavedMessages`, `SaveMessage`, `UnsaveMessage`): только на этом устройстве, в хранилище `app` (префикс `sv/`),
+  ни письма в сеть, ни события в журнал. Предел 5000 записей (`app.MaxSaved`), текст режется по руне на 64 КиБ. Узел отправителя — как в сообщении.
+- **`AddGroupMember(groupID, ключ)`** — личное приглашение контакту сообщением в его чат (обычное приглашение группы, 1 использование, неделя).
+  Аргумент — node ID или ключ аккаунта. Участником он становится только после `JoinGroup`; в составе до ответа ничего не меняется.
+  Отказы: нет такого контакта, заблокирован, уже в группе (`ErrAlreadyMember`), нет права приглашать. Экран пишет «Приглашение отправлено».
+- **Снимок группы** (`GroupSnapshotExport`/`GroupSnapshotImport`): файл `.fogzip`, магия `FOGZIP2
+`, Argon2id + XChaCha20-Poly1305, внутри gzip(JSON)
+  с приглашением и подписанными событиями журнала. Импорт входит по приглашению и принимает каждое событие как при sync; изменённое
+  событие и событие чужой группы отбрасываются. Файл v1 (`FOGZIP1`) не принимается: `ErrSnapshotVersion` («создано другой версией»).
+  Пароль не короче 8 символов. Выгрузка делает приглашение на неделю, 10 использований (нужно право приглашать).
+- **`SetChatMutedUntil(ref, unixSec)` / `ChatMutedUntil(ref)`**: отключение звука на срок, локально; срок не больше года, 0 или прошедшее время снимает.
+  Работает как режим «ничего»: упоминание остаётся громким. В `ConversationDTO.mutedUntil` — для строки списка.
+- **Непрочитанные и последнее по каналам:** `ChannelDTO.unread`, `.mentions`, `.lastTs`, `.last` (последнее сообщение канала) — из журнала и
+  собственных отметок прочтения; для главного канала — `ChatMainChannel`. Своё сообщение читает канал.
+- **`GroupInviteDTO.webLink`** и `InviteSpec.Web`: `https://<хост страницы>/join/#group/<данные>` (данные во фрагменте; хост — `app.Config.JoinHost`,
+  пусто — нет ссылки). `InspectGroupInvite` и `JoinGroup` принимают и такую форму. Страница сайта должна разбирать `#group/…` (отдельной веткой).
+- **`group:event` `message`** идёт только для нового сообщения (`app.ConvChange.Fresh`): правка, удаление, реакция, закреп и ответ на старое
+  сообщение приходят в `conv:change`, без уведомления и без роста непрочитанных. Свой выход из группы не даёт `removed`.
+- **Ждут провода (SPEC-FIX-1108, T11.3e-1):** файл в группе и `DeleteGroup` — остаются `ErrV2NotBuilt`/прежним поведением; формат не придуман.
+
+## T11.3e-1: файл в группе и закрытие группы при `protocol: 2`
+
+- **`SendGroupFile(groupID, channel, thread, path)`**: файл в группе — вложение (`att`) события `message` журнала группы; канал и тред — поля
+  события. Личных предложений участникам нет (`fileOffers` = 0). Байты — по files/2 от автора. Нужно право слать файлы в канал
+  (`MayPost`), иначе `ErrNoRight`; в закрытой группе — `ErrGroupClosed`. Карточка файла (`ChatMessage.file`: `id` = fid, `name`, `size`,
+  `mime`, `root`) приходит всем участникам вместе с событием, в том числе офлайн-участникам после sync; у получателя появляется входящая передача
+  (`file:transfer`, `Group`, `Channel`, `Thread` из события), скачивание — `AcceptFile(fid)`.
+- **Правило получателя (services §8):** предложение files/2 от неконтакта принимается, только если в журнале общей группы есть событие с этим fid,
+  автор события — отправитель, корень и размер совпадают, автор в беседе и вправе писать файл в этот канал. Иначе тихий отказ. Контакт по-прежнему
+  может предложить файл лично.
+- **Отдача байтов:** `files.Share.Authorize` решает при каждом WANT: запрашивающий — участник беседы, в журнале которой есть сообщение с этим fid.
+  Удалённый из группы или удалённое сообщение — отказ (CANCEL 3, как для неизвестного файла).
+- **`DeleteGroup(groupID)`** = закрыть группу (`group.close`): только владелец, необратимо, повтор ничего не меняет. Событие несёт вектор «последний seq
+  каждого автора»; всё сверх вектора отвергается (в том числе у тех, кто принял раньше: журнал пересобирается). Участники получают
+  `group:event` `removed` с `reason: "deleted"` (владелец, закрывший группу, — нет). `GroupDTO.closed` и `readOnly` у закрытой; права группы только чтение;
+  `ChatSend` и прочие записи — `ErrGroupClosed`; вход и приглашения отклоняются молча. «Удалить у себя» — `LeaveGroup`/`ForgetGroup`, локально.
+  Копии у участников сами не исчезают (текст в диалоге изменён).
+- **Снимок `.fogzip`** несёт вложения и `group.close` как обычные события журнала; снимок закрытой группы не делается (`ErrGroupClosed`).
+- Файл в группе у держателей, не авторов (раздача с нескольких узлов), не сделан: отдаёт автор.

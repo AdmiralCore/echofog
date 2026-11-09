@@ -53,7 +53,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 | S32 | Two-hop mailbox delivery with receipts and spam limits | A4 mailbox learns both ends; floods a public queue; resets quotas with new sessions | forwarding relay ≠ mailbox relay; queue IDs instead of peer IDs; FETCH/ACK; one hop; per-day quotas per node ID and network; proof of work for public queues; duplicate suppression | K7, K9 |
 | S33 | Relay circuits are end-to-end protected, cannot be hijacked, and are no presence oracle | A4 relay reads inner types; a neighbour claims to be the source; a prober asks relays whether a node is there | end-to-end XK inside circuits, sealed records with one counter per session; uniform delayed refusals; unlisted nodes reachable only by rendezvous IDs | K5, K7, K8 |
 | S34 | Chat sessions are not broken by replays; no classic-only sessions | A4 replays an old message to force a reset; A3 replays a pre-upgrade bundle | silent drop; no resets on failure; KEM prekey mandatory, classic init refused | K8, K10, audit 7-8 P1 |
-| S35 | Call media is authenticated per sender (media v3; 0.3.0 ships v1 without it, §4.26); no nonce reuse | A4 call member forges another's media or "mutes" a sender; a restarted sender reuses nonces | batched Ed25519 authenticators (one signature per ≤ 100 ms batch, every unit hashed, each batch covered twice) with the sender's per-call key; candidates held until verified; marking after verification; per-join keys; rekey on membership change; NACK budgets. **Limit:** forged media can be played for up to ~100–200 ms before detection (§4.17) | P1 |
+| S35 | Call media is authenticated per sender (media v3; 0.3.0 ships v1 with an interim per-unit signature, §4.26); no nonce reuse | A4 call member forges another's media or "mutes" a sender; a restarted sender reuses nonces | batched Ed25519 authenticators (one signature per ≤ 100 ms batch, every unit hashed, each batch covered twice) with the sender's per-call key; candidates held until verified; marking after verification; a per-call signing key and per-join encryption keys; rekey on membership change; NACK budgets. **Limit:** forged media can be played for up to ~100–200 ms before detection (§4.17) | P1 |
 | S36 | Call signals hidden from relays and signed over exact bytes | A4 relay reads the tree, VAD and NAT types | signalling only over end-to-end sessions; originator signature over bytes | P8 |
 | S37 | File transfers bound to the authenticated peer | A4 group member cancels or redirects another's download | session-bound transfers; sender serves only named recipients | P7 |
 | S38 | The exit does not learn the client's messenger identity | A4 exit links a VPN user to his chat identity | per-exit client identity; payment data only to served clients; random pay tags. **Limit:** the vault links a client's payments across exits (§4.8) | K6 (partly) |
@@ -173,10 +173,14 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
     itself and by the signer of the peer's card. The per-unit guarantee holds on direct paths only. Accepted
     as a residual risk ("direct path only"); to be revisited with the relay limits of T6.1.
 26. **Insider forgery of call media in 0.3.0 (known limitation).** 0.3.0 carries calls in media format v1
-    inside SEALED sessions, and CALL_AUTH travels as media. Format v1 has no per-unit signature (D39 batch
-    signatures belong to media v3). A call member who holds the room key can therefore forge media that
-    appears to come from another member. Outsiders see only SEALED datagrams: a relay outside the call and
-    DPI learn nothing about the media beyond that. Closed by T9.3c (media v3, services §9.2–§9.3), which is
+    inside SEALED sessions, and CALL_AUTH travels as media. Format v1 has no per-unit signature of the
+    v3 kind (D39 batch signatures belong to media v3). It does carry an **interim per-unit Ed25519
+    signature** when the media key has `Signers`: every member then signs each unit, so a member who
+    holds the room key cannot forge another member's media on that path. The forgery window is the time
+    before the first rekey and any path with a non-signing (`signers = nil`) or older node. Outsiders see
+    only SEALED datagrams: a relay outside the call and DPI learn nothing about the media beyond that. A
+    v2 node that has not yet connected media v3 **discards** incoming `CALL_AUTH` (0x13) datagrams; it
+    never treats them as media or as a signal. Closed by T9.3c (media v3, services §9.2–§9.3), which is
     outside the 0.3.0 scope.
 
 ## 5. Coverage of the v1 weaknesses
@@ -202,7 +206,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) �
 | V7 | **fixed** | dead mechanisms not specified |
 | N1 | **fixed** | 128-bit selectors and AEAD; signed observations |
 | C12 | **fixed** | roles from signed cards, saved with the routing table |
-| P1 | **fixed in media v3** (0.3.0 ships v1 without it: §4.26) | per-sender signatures, per-join keys, rekey on membership change, verification before marking |
+| P1 | **fixed in media v3** (0.3.0 ships v1 with an interim per-unit signature: §4.26) | per-sender signatures, a per-call signing key and per-join encryption keys, rekey on membership change, verification before marking |
 | P2–P6, P10 | **not fixed (out of scope)** | group membership and log sync are application-level; separate groups work |
 | P7 | **fixed** | session-bound transfers |
 | P8 | **fixed** | signals over end-to-end sessions, signatures over bytes |

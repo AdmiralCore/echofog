@@ -456,6 +456,7 @@ const rememberMock = (() => {
 })();
 // "start with Windows": ?autostart starts it on; ?autostart=other has Windows start another copy,
 // ?autostart=blocked has it switched off in the Windows startup apps
+const protocolMock = { running: 1, next: 1 };
 const autostartMock = (() => {
   const v = new URLSearchParams(location.search).get('autostart');
   return { on: v === '' || v === 'other', other: v === 'other', blocked: v === 'blocked' };
@@ -500,6 +501,8 @@ const impl = {
   ChangePassword: (old) => new Promise((r, j) => setTimeout(() => (old === 'demo' ? r(null) : j(new Error('wrong app password'))), 700)),
   GetAutostart: () => ({ supported: true, enabled: autostartMock.on, blocked: autostartMock.blocked,
     program: autostartMock.on && autostartMock.other ? 'C:\\Users\\demo\\Downloads\\EchoFog-old.exe' : '' }),
+  GetProtocol: () => ({ running: protocolMock.running, next: protocolMock.next }),
+  SetProtocol: (n) => { protocolMock.next = n; return null; },
   SetAutostart: (on) => { Object.assign(autostartMock, { on, other: false, blocked: false }); return null; },
   // ?offline: no peers, to see the offline banner and the bootstrap card
   GetNetworkStatus: () => (OFFLINE && !bootMock.custom.some((n) => n.connected) ? { peerCount: 0, bytesRx: 0, bytesTx: 0, status: 'OFFLINE' } : { peerCount: 7, bytesRx: 0, bytesTx: 0, status: 'ONLINE' }),
@@ -616,6 +619,11 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
   DeleteContact: (id) => { contacts.splice(contacts.findIndex((c) => c.peer_id === id), 1); return null; },
   GetSharingStatus: () => ({ ...sharingMock }),
   StartSharing: (cfg) => { Object.assign(sharingMock, { enabled: true, config: { ...cfg, freePeers: cfg.freePeers || sharingMock.config.freePeers }, lastPublish: sec(Date.now()) }); return null; },
+  SharingApprove: () => null,
+  SharingReject: () => null,
+  SharingRevoke: () => null,
+  SharingOpenFor: () => null,
+  SharingCloseOpen: () => null,
   SetExitFreePeers: (ids) => { if (ids.some((x) => !HEX64.test(x))) throw new Error('not a peer ID (64 hex characters)'); sharingMock.config.freePeers = [...ids]; return null; },
   // relays: what this computer does for others, its link, and the relays it uses (?nat=1 shows the no-link case)
   GetRelayStatus: () => relayStatus(),

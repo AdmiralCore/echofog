@@ -803,3 +803,48 @@ func TestReplaceMaskMovesContactsKey(t *testing.T) {
 		t.Fatalf("second ReplaceMask = %d, %v; want 0, nil", n, err)
 	}
 }
+
+// T10.9: a desktop turns its exit on and off while it runs; the next card carries the flag, or not.
+func TestSetExitTurnsTheOfferOnAndOff(t *testing.T) {
+	m := newMaterial(t)
+	clk := newFakeClock()
+	b, err := New(baseConfig(t, m, newMapKV(), clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := func() (bool, uint64) {
+		t.Helper()
+		issued, err := b.Current(context.Background(), objects.ScopePeer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := verifyBytes(t, issued.Envelope, clk.Now())
+		return c.Body.GetFlags()&objects.FlagExit != 0 && c.Body.GetExit() != nil, issued.Seq
+	}
+	if on, _ := flag(); on {
+		t.Fatal("a node without an exit source carries the flag")
+	}
+	if err := b.SetExit(exitOffer(&pb.ExitOffer{Region: "NL"})); err != nil {
+		t.Fatal(err)
+	}
+	on, seq1 := flag()
+	if !on {
+		t.Fatal("the card does not carry the exit after SetExit")
+	}
+	if err := b.SetExit(nil); err != nil {
+		t.Fatal(err)
+	}
+	off, seq2 := flag()
+	if off {
+		t.Fatal("the card still carries the exit after SetExit(nil)")
+	}
+	if seq2 <= seq1 {
+		t.Fatalf("seq %d then %d: a changed card needs a higher seq", seq1, seq2)
+	}
+	if err := b.SetExit(exitOffer(&pb.ExitOffer{Region: "de"})); err == nil {
+		t.Fatal("an invalid offer was accepted")
+	}
+	if off, _ := flag(); off {
+		t.Fatal("a refused offer changed the card")
+	}
+}

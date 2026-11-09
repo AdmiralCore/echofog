@@ -9,8 +9,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/echofog/echofog-core/internal/services/convlog"
+	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/tun"
 )
 
 const (
@@ -110,6 +113,18 @@ func (a *App) AddByLink(ctx context.Context, text string) (Contact, error) {
 	if oerr == nil && old.Blocked {
 		return Contact{}, ErrBlocked
 	}
+	if oerr != nil {
+		// a new contact needs room; asked before anything is dialed
+		a.cmu.Lock()
+		full, ferr := a.full()
+		a.cmu.Unlock()
+		if ferr != nil {
+			return Contact{}, ferr
+		}
+		if full {
+			return Contact{}, ErrTooManyContacts
+		}
+	}
 	peer, err := a.cfg.Links.Redeem(ctx, link)
 	if err != nil {
 		return Contact{}, err
@@ -122,6 +137,11 @@ func (a *App) AddByLink(ctx context.Context, text string) (Contact, error) {
 	rec, err := a.loadContact(info.Node)
 	switch {
 	case errors.Is(err, ErrNoContact):
+		if full, ferr := a.full(); ferr != nil { // the list may have filled while we dialed
+			return Contact{}, ferr
+		} else if full {
+			return Contact{}, ErrTooManyContacts
+		}
 		rec = contactRec{Alias: "Контакт " + info.Node[:6], Added: a.cfg.Clock.Now().Unix()}
 	case err != nil:
 		return Contact{}, err
@@ -147,6 +167,8 @@ func UserMessage(err error) string {
 		return "Имя должно быть непустым, не длиннее 64 символов и без служебных знаков"
 	case errors.Is(err, ErrNoContact):
 		return "Такого контакта нет"
+	case errors.Is(err, ErrTooManyContacts):
+		return "Слишком много контактов: удалите ненужные и повторите"
 	case errors.Is(err, ErrMode):
 		return "Неизвестный режим доступа"
 	case errors.Is(err, ErrNotHidden):
@@ -161,6 +183,82 @@ func UserMessage(err error) string {
 		return "Эта сеть пока не поддерживается без проверенного входного узла"
 	case errors.Is(err, ErrRunning):
 		return "Сеть уже запущена"
+	case errors.Is(err, ErrNoChat), errors.Is(err, ErrNoGroup), errors.Is(err, convlog.ErrNotParticipant):
+		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
+	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff), errors.Is(err, ErrExitOff):
+		return "Эта возможность пока недоступна"
+	case errors.Is(err, ErrExitNoEntry):
+		return "Такого клиента нет в списке"
+	case errors.Is(err, ErrExitBadEntry):
+		return "Идентификатор клиента или название указаны неверно"
+	case errors.Is(err, ErrExitFull):
+		return "Подтверждённых клиентов слишком много: ненужных можно удалить"
+	case errors.Is(err, ErrExitNotOn):
+		return "Сначала нужно включить выход"
+	case errors.Is(err, ErrExitBadTTL):
+		return "Нужно указать срок открытого доступа"
+	case errors.Is(err, ErrWholeOff):
+		return "Режим «весь компьютер» недоступен в этой сборке"
+	case errors.Is(err, tun.ErrUnsupported):
+		return "Режим «весь компьютер» на этой системе пока не поддерживается"
+	case errors.Is(err, tun.ErrNoPrivilege):
+		return "Нужны права администратора: подтвердите запрос системы и повторите"
+	case errors.Is(err, ErrWholeStop):
+		return "Не удалось полностью отключить защиту: интернет остаётся заблокированным. Отключение можно повторить"
+	case errors.Is(err, ErrNeedVPN):
+		return "Сначала запустите VPN"
+	case errors.Is(err, ErrNotExit):
+		return "Это не ссылка выхода: узел не раздаёт соединение"
+	case errors.Is(err, ErrVPNRunning):
+		return "VPN уже запущен: сначала остановите его"
+	case errors.Is(err, ErrVPNListen):
+		return "Прокси можно открыть только на локальном адресе"
+	case errors.Is(err, ErrNoExit):
+		return "Такого выхода нет в списке"
+	case errors.Is(err, ErrBadMessage):
+		return "Сообщение не найдено или указано неверно"
+	case errors.Is(err, ErrEmptyMessage):
+		return "Сообщение пустое"
+	case errors.Is(err, ErrMessageTooLong):
+		return "Сообщение слишком длинное"
+	case errors.Is(err, ErrBadMode):
+		return "Неизвестный режим уведомлений"
+	case errors.Is(err, ErrInvite):
+		return "Ссылка-приглашение не подходит" // one text for every reason the link does not work
+	case errors.Is(err, ErrGroupClosed):
+		return "Группа закрыта владельцем: её можно только читать"
+	case errors.Is(err, ErrSavedFull):
+		return "Слишком много сохранённых сообщений: удалите ненужные"
+	case errors.Is(err, ErrBadSaved):
+		return "Сообщение нельзя сохранить: данные указаны неверно"
+	case errors.Is(err, ErrAlreadyMember):
+		return "Этот контакт уже в группе"
+	case errors.Is(err, ErrSnapshotPassword):
+		return "Пароль для файла группы слишком короткий: нужно не меньше 8 символов"
+	case errors.Is(err, ErrSnapshotVersion):
+		return "Файл группы создан другой версией EchoFog и не может быть открыт"
+	case errors.Is(err, ErrSnapshotFile):
+		return "Это не файл группы, или пароль неверный"
+	case errors.Is(err, ErrBadGroup):
+		return "Название или вид группы указаны неверно"
+	case errors.Is(err, ErrNoRight), errors.Is(err, convlog.ErrForbidden):
+		return "Для этого действия не хватает прав"
+	case errors.Is(err, ErrOwnerStays):
+		return "Сначала нужно передать группу другому участнику"
+	case errors.Is(err, ErrStillIn):
+		return "Сначала нужно выйти из группы"
+	case errors.Is(err, ErrNoMember):
+		return "Такого участника нет"
+	case errors.Is(err, ErrNoTransfer):
+		return "Такой передачи нет"
+	case errors.Is(err, ErrBadFile):
+		return "Файл не найден или не читается"
+	case errors.Is(err, ErrFileTooLarge):
+		return "Файл слишком большой"
+	case errors.Is(err, ErrTooManyTransfers):
+		return "Слишком много передач: дождитесь завершения текущих"
+	case errors.Is(err, ErrBadState):
+		return "Это действие сейчас недоступно для передачи"
 	case errors.Is(err, links.ErrNotLink), errors.Is(err, links.ErrOtherVersion), errors.Is(err, links.ErrMismatch),
 		errors.Is(err, links.ErrExpired), errors.Is(err, links.ErrRevoked), errors.Is(err, links.ErrNoContactLink),
 		errors.Is(err, links.ErrNoInviter):
@@ -168,6 +266,9 @@ func UserMessage(err error) string {
 	default:
 		if sc, ok := Screen(err); ok {
 			return sc.Text
+		}
+		if r := exit.ReasonOf(err); r != exit.ReasonUnknown {
+			return r.Message() // the exit's own refusal, in its fixed words: no target, no address
 		}
 		return "Не удалось выполнить действие"
 	}

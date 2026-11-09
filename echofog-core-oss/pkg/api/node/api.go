@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/echofog/echofog-core/internal/crypto/keymanager"
+	"github.com/echofog/echofog-core/internal/v2/app"
 	"log/slog"
 	"sync"
 	"time"
@@ -61,7 +62,13 @@ type NodeApi struct {
 	// the not-built v2 backends at protocol 2 (T11.1b-e replace the bodies with delegation).
 	backends backends
 
-	v2n v2Notices // the protocol 2 notices for the UI (v2_notices.go)
+	v2n     v2Notices   // the protocol 2 notices for the UI (v2_notices.go)
+	v2v     v2VPNHolder // the attached protocol 2 VPN (backends_v2_vpn.go)
+	v2m     v2Subs      // what the UI subscribed to before AttachV2Messenger (backends_v2_msg.go)
+	v2s     *v2Stack    // the running protocol 2 runtime (v2_runtime.go)
+	v2h     v2Hooks     // test hooks for the edges of the v2 stack
+	v2l     sync.Mutex  // serializes start, stop and restart of the v2 stack
+	v2force app.Mode    // set under v2l by a failed restart: build in this mode (v2_runtime.go)
 
 	Logger *slog.Logger
 }
@@ -118,7 +125,12 @@ func (n *NodeApi) StartNode() error {
 		return err
 	}
 	if n.node.NetworkOff() {
-		// protocol 2: storage, wallet, profile and settings are up; there is no v1 network to tune
+		// protocol 2: storage, wallet, profile and settings are up; there is no v1 network to tune.
+		// The v2 runtime comes up on top of them (T11.7); when it cannot, the node stops as a whole.
+		if err := n.startV2(); err != nil {
+			n.node.Stop()
+			return err
+		}
 		return nil
 	}
 	if pinned != 0 && n.node.Transport != nil {
@@ -143,6 +155,11 @@ func (n *NodeApi) StopNode() {
 	if n.tun.ctl.Running() {
 		_ = n.StopVPN()
 	}
+	// protocol 2: the protection goes first, then the VPN, then the node
+	if b := n.v2vpn(); b != nil {
+		b.stopForExit()
+	}
+	n.stopV2()
 	if n.node != nil {
 		n.node.Stop()
 	}

@@ -48,7 +48,7 @@ const (
 	PermInvite         uint32 = 1 << 13 // hand out invitations
 	PermManageChannels uint32 = 1 << 14 // create, change and order channels and categories
 
-	PermAll uint32 = 1<<15 - 1
+	PermAll uint32 = 1<<16 - 1
 )
 
 // ownerRank is the rank of a group's owner: nobody acts on them.
@@ -84,6 +84,8 @@ type Rights struct {
 	Voice    bool // may join calls and voice rooms
 	Stream   bool // may share a screen or a camera
 	Roles    bool // may give roles and define them
+	// MentionAll: may write @all.
+	MentionAll bool
 }
 
 // PermRights are the rights of a member whose role has the permission bits perms.
@@ -92,7 +94,7 @@ func PermRights(perms uint32) Rights {
 	return Rights{Member: true, Send: has(PermSend), Media: has(PermMedia), Links: has(PermLinks),
 		Threads: has(PermThreads), React: has(PermReact), Pin: has(PermPin), Moderate: has(PermDelete),
 		Manage: has(PermManageChannels), Invite: has(PermInvite), Voice: has(PermVoice), Stream: has(PermStream),
-		Roles: has(PermManageRoles)}
+		Roles: has(PermManageRoles), MentionAll: has(PermMentionAll)}
 }
 
 func rightsOf(r Role) Rights { return PermRights(r.Perms) }
@@ -643,7 +645,7 @@ func msgAllowed(e *Event, r Rights) bool {
 	if proto.Unmarshal(e.Body, &b) != nil {
 		return true // applyMsg refuses it
 	}
-	return (r.Media || b.Metadata == "") && (r.Links || !HasLink(b.Text))
+	return (r.Media || b.Metadata == "" && b.Att == nil) && (r.Links || !HasLink(b.Text))
 }
 
 // editAllowed: an edit puts in no link its author may not post.

@@ -87,6 +87,7 @@ func (n *NodeApi) MessageHandler() <-chan *dto.MessageDTO {
 }
 
 func (n *NodeApi) OnMessageState(cb func(MessageStateDTO)) {
+	n.v2m.rememberState(cb)
 	n.chatDomain().OnMessageState(cb)
 }
 
@@ -103,6 +104,7 @@ func (n *NodeApi) SendMessage(pubKeyHex string, text string) error {
 }
 
 func (n *NodeApi) SubscribeConversations(cb func(ConvChange)) {
+	n.v2m.rememberConv(cb)
 	n.chatDomain().SubscribeConversations(cb)
 }
 

@@ -123,10 +123,10 @@ func TestPeerSampleUsesRawClock(t *testing.T) {
 	}
 }
 
-// TestZeroPeerTimeCountsAsPeerButNotAsSample: an authenticated peer with an unusable
-// timestamp still proves that a peer was seen, so it suppresses the CDN check, but it
-// must not poison the offset with a 1970 value.
-func TestZeroPeerTimeCountsAsPeerButNotAsSample(t *testing.T) {
+// TestZeroPeerTimeIsNotARecentPeer: handshake.md §7 (question 20) - a session that carried
+// no usable time is not a "recent authenticated peer": it gives no sample and does not
+// suppress the CDN check, even when the session itself is recent.
+func TestZeroPeerTimeIsNotARecentPeer(t *testing.T) {
 	fc := newFakeClock(base)
 	client := &fakeHTTP{fn: func(*http.Request) (*http.Response, error) {
 		return dateAt(fc.Now().Add(2 * time.Minute)), nil
@@ -144,8 +144,11 @@ func TestZeroPeerTimeCountsAsPeerButNotAsSample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaybeCheckCDN: %v", err)
 	}
-	if res.Ran || client.callCount() != 0 {
-		t.Fatalf("CDN check ran %d times with a peer seen just now", client.callCount())
+	if !res.Ran || client.callCount() != 3 {
+		t.Fatalf("CDN check ran %d times after a session without time, want 3 requests", client.callCount())
+	}
+	if got := c.Offset(); got != 2*time.Minute {
+		t.Fatalf("Offset() = %v after the CDN check, want 2m", got)
 	}
 }
 

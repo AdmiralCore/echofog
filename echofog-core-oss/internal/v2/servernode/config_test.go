@@ -42,6 +42,40 @@ func TestParseConfigGood(t *testing.T) {
 	}
 }
 
+// T2.6e: the camouflaged suites are accepted together with the own cover; UDP and TCP may share
+// one port, and a cover without the operator's site folder is refused (НС-3 fail-closed).
+func TestParseConfigCamouflagedSuites(t *testing.T) {
+	cfg := `{
+	  "version": 1,
+	  "listen": [
+	    {"suite": "reality2-quic", "bind": "0.0.0.0:443", "advertise": "203.0.113.10"},
+	    {"suite": "reality2-tcp", "bind": "0.0.0.0:443", "advertise": "203.0.113.10"},
+	    {"suite": "noise3", "bind": "0.0.0.0:444", "advertise": "203.0.113.10"}
+	  ],
+	  "cover": "example.org:443",
+	  "site_dir": "/srv/site",
+	  "cover_acme": {"accept_tos": true},
+	  "roles": ["relay"],
+	  "operator": {"addr": "127.0.0.1:0"}
+	}`
+	c, err := servernode.ParseConfig([]byte(cfg))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if len(c.Listen) != 3 || c.Cover != "example.org:443" || c.SiteDir != "/srv/site" {
+		t.Fatalf("config %+v", c)
+	}
+	// A UDP suite on the same port is a conflict; the TCP pair is not.
+	dup := strings.Replace(cfg, `"bind": "0.0.0.0:444"`, `"bind": "0.0.0.0:443"`, 1)
+	if _, err := servernode.ParseConfig([]byte(dup)); !errors.Is(err, servernode.ErrConfig) {
+		t.Fatalf("two UDP listeners on one port: %v", err)
+	}
+	noSite := strings.Replace(cfg, `"site_dir": "/srv/site",`, ``, 1)
+	if _, err := servernode.ParseConfig([]byte(noSite)); !errors.Is(err, servernode.ErrConfig) {
+		t.Fatalf("a cover without site_dir must fail closed: %v", err)
+	}
+}
+
 func TestParseConfigRefusals(t *testing.T) {
 	with := func(old, new string) string { return strings.Replace(goodConfig, old, new, 1) }
 	tests := map[string]string{
@@ -51,7 +85,7 @@ func TestParseConfigRefusals(t *testing.T) {
 		"trailing document":      goodConfig + goodConfig,
 		"wrong version":          with(`"version": 1`, `"version": 2`),
 		"no listener":            with(`[{"suite": "noise3", "bind": "0.0.0.0:443", "advertise": "203.0.113.10"}]`, `[]`),
-		"reality2 not served":    with(`"noise3"`, `"reality2-quic"`),
+		"reality2 without cover": with(`"noise3"`, `"reality2-quic"`),
 		"unknown suite":          with(`"noise3"`, `"quic"`),
 		"port 0":                 with(`0.0.0.0:443`, `0.0.0.0:0`),
 		"bind without port":      with(`0.0.0.0:443`, `0.0.0.0`),
@@ -117,8 +151,11 @@ func TestParseDuration(t *testing.T) {
 
 func FuzzParseConfig(f *testing.F) {
 	f.Add([]byte(goodConfig))
+	f.Add([]byte("// a comment\n" + goodConfig + "\n// more\n"))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`{"version":1,"listen":[{"suite":"noise3","bind":"[::1]:1","advertise":"::1"}],"operator":{"addr":"[::1]:9"}}`))
+	f.Add([]byte(`{"version":1,"listen":[{"suite":"reality2-quic","bind":"0.0.0.0:443","advertise":"203.0.113.10"},{"suite":"reality2-tcp","bind":"0.0.0.0:443","advertise":"203.0.113.10"}],"cover":"example.org:443","site_dir":"/srv/site","cover_acme":{"accept_tos":true},"roles":["relay"],"operator":{"addr":"127.0.0.1:0"}}`))
+	f.Add([]byte(`{"version":1,"listen":[{"suite":"ws2","bind":"0.0.0.0:8080","advertise":"203.0.113.10"}],"cover":"example.org:443","site_dir":"/srv/site","cover_acme":{"accept_tos":true},"roles":[],"operator":{"addr":"127.0.0.1:0"}}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		c, err := servernode.ParseConfig(b)
 		if err != nil {
@@ -149,4 +186,25 @@ func FuzzParseDuration(f *testing.F) {
 			t.Fatalf("%q = %v", s, d)
 		}
 	})
+}
+
+// T12.4a acceptance M1: an operator who switches every role off gets none, not the defaults.
+func TestEmptyRolesStayEmpty(t *testing.T) {
+	empty := strings.Replace(goodConfig, `"roles": ["relay", "exit"]`, `"roles": []`, 1)
+	c, err := servernode.ParseConfig([]byte(empty))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if len(c.Roles) != 0 {
+		t.Fatalf("roles %v: an explicit empty list became the defaults", c.Roles)
+	}
+	absent := strings.Replace(goodConfig, `  "roles": ["relay", "exit"],`+"\n", ``, 1)
+	c, err = servernode.ParseConfig([]byte(absent))
+	if err != nil || len(c.Roles) != 3 {
+		t.Fatalf("absent roles: %v, %v; want the defaults", c, err)
+	}
+	null := strings.Replace(goodConfig, `["relay", "exit"]`, `null`, 1)
+	if _, err := servernode.ParseConfig([]byte(null)); !errors.Is(err, servernode.ErrConfig) {
+		t.Errorf("null roles: %v", err)
+	}
 }

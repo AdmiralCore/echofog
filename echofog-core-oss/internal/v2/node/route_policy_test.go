@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -91,6 +92,10 @@ type routeOpts struct {
 	punchNet node.PunchNetwork
 	// noLocal leaves A without any public address: its own country is not known.
 	noLocal bool
+	// freezeStall is how long A waits before a silent flow counts as stopped (T6.4d).
+	freezeStall time.Duration
+	// freezeFlowAge is how old a flow may be for its stop to count (T6.4d).
+	freezeFlowAge time.Duration
 }
 
 type routeWorld struct {
@@ -119,6 +124,8 @@ func newRouteWorld(t *testing.T, o routeOpts) *routeWorld {
 	a := newTestNodeFull(t, cards.Visible, false, nil, events, nil, func(c *node.Config) {
 		c.Registry, c.Country = reg, routeCountry
 		c.NetClass, c.RoutePolicy = o.net, o.rules
+		c.FreezeStall = o.freezeStall
+		c.FreezeFlowAge = o.freezeFlowAge
 		c.DialContext = o.dialCtx
 		if o.features {
 			pathFeatures(c)
@@ -174,7 +181,8 @@ func entryRules(t *testing.T, cidr string) *rp.Rules {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := rp.Parse(rp.Sign(priv, []byte(`{"seq":1,"version":"t6.4-test","allowed_cidrs":["`+cidr+`"]}`)), pub, 0)
+	body := fmt.Sprintf(`{"seq":1,"version":"t6.4-test","valid_until":%d,"allowed_cidrs":[%q]}`, time.Now().Add(time.Hour).Unix(), cidr)
+	r, err := rp.ParseAt(rp.Sign(priv, []byte(body)), pub, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

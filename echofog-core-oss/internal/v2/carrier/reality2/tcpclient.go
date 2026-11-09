@@ -65,18 +65,22 @@ func (d *TCPDialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carr
 	}
 	addr := AddressString(a.GetHost(), a.GetPort())
 
-	var raw net.Conn
-	var err error
-	if req.DialContext != nil {
-		raw, err = req.DialContext(ctx, "tcp", addr)
-	} else {
-		var nd net.Dialer
-		raw, err = nd.DialContext(ctx, "tcp", addr)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reality2: dial %s: %w", addr, err)
-	}
-	return d.DialOver(ctx, raw, req.Card, a, addr)
+	// A path that swallows the first big segments is answered with a retry on a limited MSS, on
+	// the retry only (T3.12, wire.md section 2.4).
+	return carrier.WithNarrowRetry(ctx, req, func(ctx context.Context, req carrier.DialRequest) (mux.Carrier, error) {
+		var raw net.Conn
+		var err error
+		if req.DialContext != nil {
+			raw, err = req.DialContext(ctx, "tcp", addr)
+		} else {
+			var nd net.Dialer
+			raw, err = nd.DialContext(ctx, "tcp", addr)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reality2: dial %s: %w", addr, err)
+		}
+		return d.DialOver(ctx, raw, req.Card, a, addr)
+	})
 }
 
 // cardParams extracts the masking key, the SNI and the shape profile of a card address.

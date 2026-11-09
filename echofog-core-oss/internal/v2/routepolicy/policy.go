@@ -8,6 +8,7 @@ package routepolicy
 import (
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/objects"
 )
@@ -80,6 +81,8 @@ type Decision struct {
 	Rotate bool
 	// EntryInCountry: the first hop must be an entry node in the client's own country.
 	EntryInCountry bool
+	// EntryNeighbor widens the first hop to an entry node in a neighbouring country as well.
+	EntryNeighbor bool
 	// Probe is the budget of a probe connection when Direct is false; 0 means no probe.
 	Probe int
 }
@@ -111,6 +114,9 @@ type Rules struct {
 	neighbors map[string][]string // country → neighbouring countries (data for the report only)
 	tcpLimit  int                 // file: extra cap on foreign TCP, 0 = none
 	udpDenied []string            // file: countries where UDP towards abroad is off
+
+	validUntil time.Time        // ParseAt: the end of the file's validity (zero: none)
+	now        func() time.Time // ParseAt: the clock that decides expiry
 }
 
 // Default returns the built-in table.
@@ -169,25 +175,32 @@ func (r *Rules) Decide(own string, net NetClass, dest DestClass) Decision {
 	default:
 		d = Decision{RuleID: "foreign", Direct: true, UDP: true, Rotate: true}
 	}
-	if dest != DestDomestic && r != nil {
-		if r.tcpLimit > 0 && (d.TCPLimit == 0 || r.tcpLimit < d.TCPLimit) {
-			d.TCPLimit = r.tcpLimit
-			if d.Probe > 0 {
-				d.Probe = r.tcpLimit
-			}
-		}
-		if slices.Contains(r.udpDenied, own) {
-			d.UDP = false
+	r.overlay(&d, own, dest)
+	return d
+}
+
+// overlay applies the rules file to a row for a foreign destination: an extra cap on TCP and the
+// countries where UDP towards abroad is off.
+func (r *Rules) overlay(d *Decision, own string, dest DestClass) {
+	if dest == DestDomestic || r == nil {
+		return
+	}
+	if r.tcpLimit > 0 && (d.TCPLimit == 0 || r.tcpLimit < d.TCPLimit) {
+		d.TCPLimit = r.tcpLimit
+		if d.Probe > 0 {
+			d.Probe = r.tcpLimit
 		}
 	}
-	return d
+	if slices.Contains(r.udpDenied, own) {
+		d.UDP = false
+	}
 }
 
 // EntryAllowed reports whether ip is a verified entry (allowed_cidrs) for a client in own on net.
 // Without a verified list nothing is allowed: v2.0 does not support that network (H14).
 func (r *Rules) EntryAllowed(own string, net NetClass, ip netip.Addr) bool {
-	if r == nil || !ip.IsValid() {
-		return false
+	if r == nil || !ip.IsValid() || r.Expired() {
+		return false // an expired file verifies no entry: expiry never loosens
 	}
 	ip = ip.Unmap()
 	for _, p := range r.allowed {
@@ -199,7 +212,7 @@ func (r *Rules) EntryAllowed(own string, net NetClass, ip netip.Addr) bool {
 }
 
 // HasVerifiedEntries reports whether the rules name any verified entry range.
-func (r *Rules) HasVerifiedEntries() bool { return r != nil && len(r.allowed) > 0 }
+func (r *Rules) HasVerifiedEntries() bool { return r != nil && len(r.allowed) > 0 && !r.Expired() }
 
 // MobileASN reports whether the autonomous system is in the list of mobile operators.
 func (r *Rules) MobileASN(asn uint32) bool { return r != nil && slices.Contains(r.mobileASN, asn) }

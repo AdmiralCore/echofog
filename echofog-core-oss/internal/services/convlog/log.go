@@ -24,6 +24,8 @@ var (
 	ErrClock          = errors.New("the event's clock jumps too far")
 	ErrBadBody        = errors.New("bad event body")
 	ErrNotFound       = errors.New("not found")
+	// ErrQuota: the author has as many events of unknown kinds in the conversation as they may.
+	ErrQuota = errors.New("quota of events of unknown kinds reached")
 )
 
 // maxEmojiPerMessage bounds the distinct reactions on one message.
@@ -417,6 +419,12 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 	}
 	store := raw
 
+	if t.c.Kind == KindGroup {
+		if cl := l.closeOf(t.bc); cl != nil && !(e.Kind == KindClose && cl.ID == idHex) && !cl.allows(e.Author, e.Seq) {
+			return ErrClosed // a closed group takes only what the owner had seen when closing it
+		}
+	}
+
 	var err error
 	if e.Kind == KindMember {
 		err = l.applyMember(t, e, at, raw, mode)
@@ -440,7 +448,7 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			if ch, ok := t.channel(t.eventChannel(e)); ok && len(ch.Overrides) > 0 {
 				if role, _, ok := l.memberAt(t.c, t.bc, authorID, e.Author, at); ok {
 					in := PermRights(ch.PermsIn(role))
-					in.Manage, in.Invite, in.Roles = rights.Manage, rights.Invite, rights.Roles
+					in.Manage, in.Invite, in.Roles, in.MentionAll = rights.Manage, rights.Invite, rights.Roles, rights.MentionAll
 					rights = in
 				}
 			}
@@ -457,6 +465,9 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 			}
 			if !msgAllowed(e, rights) {
 				return ErrForbidden
+			}
+			if !rights.MentionAll && namesEverybody(e) {
+				return ErrForbidden // @all takes its own right, checked here like the others
 			}
 			err = t.applyMsg(e, idHex, author, &store)
 		case KindEdit:
@@ -483,10 +494,32 @@ func (l *Log) apply(t *txn, e *Event, id EventID, raw []byte, own bool, mode app
 				actor = &role
 			}
 			err = t.applyChannel(e, author, rights, actor, st)
+		case KindClose:
+			err = l.applyClose(t, e, idHex, at)
 		case KindThread:
 			err = t.applyThread(e, author, rights)
 		case KindProfile:
 			err = t.applyProfile(e, author, rights)
+		default:
+			// a kind this build cannot read is held to what a message is: it takes the right to
+			// write (and no timeout, see above), and an announcements channel is for managers
+			if !rights.Send {
+				return ErrForbidden
+			}
+			if t.c.Kind == KindGroup {
+				if st, ok := t.channel(channelOf(e)); ok && (st.Category || st.ReadOnly && !rights.Manage) {
+					return ErrForbidden
+				}
+			}
+			if mode == modeNew && !own { // what others send; the author's own log is theirs to fill
+				if t.meta.Unknown[author] >= MaxUnknownPerAuthor {
+					return ErrQuota // not kept: a rejected copy would take the room all the same
+				}
+				if t.meta.Unknown == nil {
+					t.meta.Unknown = map[string]uint32{}
+				}
+				t.meta.Unknown[author]++
+			}
 		}
 	}
 	if err != nil {
@@ -588,7 +621,7 @@ func (l *Log) applyMember(t *txn, e *Event, at pos, raw []byte, mode applyMode) 
 // sequence (so the version vector moves on and sync stops offering it) and a rebuild weighs it
 // again after a membership change.
 func rejectable(err error) bool {
-	return err == ErrForbidden || err == ErrBadBody || err == ErrClock || err == ErrNotParticipant
+	return err == ErrForbidden || err == ErrBadBody || err == ErrClock || err == ErrNotParticipant || err == ErrClosed
 }
 
 // keepRejected stores an event that was not allowed, without effects.
@@ -608,14 +641,25 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 	var body MsgBody
 	stripped := Stripped(e)
 	if !stripped {
-		if err := proto.Unmarshal(e.Body, &body); err != nil || !validText(body.Text) || len(body.Metadata) > MaxTextLen {
+		if err := proto.Unmarshal(e.Body, &body); err != nil || !validText(body.Text) || len(body.Metadata) > MaxTextLen || !validMentions(&body) {
 			return ErrBadBody
+		}
+		if body.Att != nil && (t.c.Kind != KindGroup || checkAttachment(body.Att) != nil) {
+			return ErrBadBody // a file travels as an attachment in a group only; a direct chat offers it over files/2
 		}
 	}
 	v := t.view(idHex)
 	v.Present = true
 	v.Author, v.Seq, v.Lamport, v.TS = author, e.Seq, e.Lamport, e.TsMs
 	v.Type, v.Text, v.Metadata = body.Type, body.Text, body.Metadata
+	v.Att = nil
+	if a := body.Att; a != nil {
+		v.Att = &AttView{Fid: hex.EncodeToString(a.Fid), Size: a.Size, Root: hex.EncodeToString(a.MerkleRoot), Name: a.Name, Mime: a.Mime}
+	}
+	v.Mentions, v.MentionsAll = nil, body.All
+	for _, m := range body.Mentions {
+		v.Mentions = append(v.Mentions, hex.EncodeToString(m))
+	}
 	v.ReplyTo, v.Thread = hexRef(e.ReplyTo), hexRef(e.Thread)
 	v.Channel = channelOf(e)
 	v.Stripped = stripped
@@ -627,10 +671,13 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 			}
 			v.Stripped = true
 		}
-		v.Text, v.Metadata = "", ""
+		v.Text, v.Metadata, v.Att = "", "", nil
 		t.stripEdits(v)
 	} else if stripped {
 		v.Withheld = true
+	}
+	if v.Att != nil {
+		t.put(attKey(t.bc, v.Att.Fid, idHex), []byte(idHex)) // the file is found by its id (AttachmentIn)
 	}
 	if v.Thread == "" && v.Channel != "" {
 		// a message in one of a group's channels: that channel's history and reader; the
@@ -645,10 +692,13 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		}
 		if author == t.l.selfHex {
 			if e.Lamport > st.ReadLamport {
-				st.ReadLamport, st.Unread = e.Lamport, 0
+				st.ReadLamport, st.Unread, st.Mentions, st.ThreadMentions = e.Lamport, 0, 0, nil
 			}
 		} else if !t.synced || e.Lamport > st.ReadLamport {
 			st.Unread++
+			if v.names(t.l.selfHex) {
+				st.Mentions++
+			}
 		}
 	} else if v.Thread == "" {
 		t.put(orderKey(t.bc, e.Lamport, idHex), []byte(idHex))
@@ -657,13 +707,16 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		}
 		if author == t.l.selfHex {
 			if e.Lamport > t.meta.ReadLamport {
-				t.meta.ReadLamport, t.meta.Unread = e.Lamport, 0
+				t.meta.ReadLamport, t.meta.Unread, t.meta.Mentions, t.meta.ThreadMentions = e.Lamport, 0, 0, nil
 			}
 		} else if !t.synced || e.Lamport > t.meta.ReadLamport {
 			// new to me whatever its clock: one written without having seen my last message sorts
 			// before it, below the read point, and is still unread (MarkRead counts again). Old
 			// history that came by sync is not news.
 			t.meta.Unread++
+			if v.names(t.l.selfHex) {
+				t.meta.Mentions++
+			}
 		}
 	} else {
 		t.put(threadKey(t.bc, v.Thread, e.Lamport, idHex), []byte(idHex))
@@ -671,6 +724,18 @@ func (t *txn) applyMsg(e *Event, idHex, author string, store *[]byte) error {
 		root.Replies++
 		if e.TsMs > root.LastReplyTS {
 			root.LastReplyTS = e.TsMs
+		}
+		if v.names(t.l.selfHex) {
+			// a thread has no unread count, so a mention in it is counted on its own
+			if v.Channel != "" {
+				if st := t.meta.chan_(v.Channel); !t.synced || e.Lamport > st.ReadLamport {
+					st.Mentions++
+					st.ThreadMentions = pushMention(st.ThreadMentions, e.Lamport)
+				}
+			} else if !t.synced || e.Lamport > t.meta.ReadLamport {
+				t.meta.Mentions++
+				t.meta.ThreadMentions = pushMention(t.meta.ThreadMentions, e.Lamport)
+			}
 		}
 		t.touch(v.Thread)
 	}
@@ -832,6 +897,22 @@ func (l *Log) ingest(c Conv, raw []byte, live bool) (EventID, bool, error) {
 	l.mu.Unlock()
 	l.notify(ch)
 	return id, err == nil, err
+}
+
+// Accepted reports whether the log holds the event and gave it effect (not kept as refused).
+func (l *Log) Accepted(c Conv, id EventID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	k := indexKey(l.bc(c.ID), id.String())
+	if !l.st.Exists(k) {
+		return false
+	}
+	raw, err := l.st.Get(k)
+	if err != nil {
+		return false
+	}
+	var ie indexEntry
+	return json.Unmarshal(raw, &ie) == nil && !ie.R
 }
 
 func (l *Log) marker(e *Event, rejected bool) []byte {
@@ -1212,7 +1293,7 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 		l.mu.Unlock()
 		return err
 	}
-	n := 0
+	n, named := 0, 0
 	p := len(orderPrefix(bc))
 	for _, e := range entries {
 		if len(e.Key) < p+8 {
@@ -1223,8 +1304,12 @@ func (l *Log) MarkRead(c Conv, upTo EventID) error {
 			break
 		}
 		n++
+		if m, ok := l.render(bc, meta.Conv, string(e.Value)); ok && m.Mentioned {
+			named++
+		}
 	}
-	meta.Unread = n
+	inThreads, kept := aboveRead(meta.ThreadMentions, meta.ReadLamport)
+	meta.Unread, meta.Mentions, meta.ThreadMentions = n, named+inThreads, kept
 	t.views = map[string]*View{} // nothing about the message changed
 	t.order = nil
 	err = t.commit(nil, "")

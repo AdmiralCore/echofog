@@ -6,11 +6,14 @@
 //	efv2-release assemble --version V --released-at UNIX [--notes-url URL]
 //	                      [--policy comp=min,rec[,deprecated_after]]...
 //	                      [--artifact platform,name,sha256hex,size,url]...
-//	                      [--next-key KEY]... [--revoke-key KEY]... --out manifest.bin
+//	                      [--next-key KEY]... [--revoke-key KEY]... [--min-version X.Y.Z] --out manifest.bin
 //	efv2-release cosign   --manifest manifest.bin --key K2.key --out K2.cosig
 //	efv2-release sign     --manifest manifest.bin --key K1.key [--cosig K2.cosig]...
 //	                      --not-after UNIX --out release.bin
 //	efv2-release verify   --keys PUB1,PUB2,PUB3 [--now UNIX] release.bin
+//
+// For the install script (T12.4e; see install_cmds.go): install-stamp, install-fingerprint,
+// install-record, install-rotation.
 //
 // A manifest is valid with the envelope signature of one release key and the co-signature of
 // another: the cosigner signs the manifest first, then the signer seals the object around it.
@@ -46,7 +49,7 @@ func main() {
 
 func run(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("a command is required: keygen, assemble, cosign, sign or verify")
+		return errors.New("a command is required: keygen, assemble, cosign, sign, verify, install-stamp, install-fingerprint, install-record or install-rotation")
 	}
 	switch args[0] {
 	case "keygen":
@@ -59,6 +62,14 @@ func run(args []string, stdout io.Writer) error {
 		return cmdSign(args[1:], stdout)
 	case "verify":
 		return cmdVerify(args[1:], stdout)
+	case "install-stamp":
+		return cmdInstallStamp(args[1:], stdout)
+	case "install-fingerprint":
+		return cmdInstallFingerprint(args[1:], stdout)
+	case "install-record":
+		return cmdInstallRecord(args[1:], stdout)
+	case "install-rotation":
+		return cmdInstallRotation(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -174,6 +185,7 @@ func cmdAssemble(args []string, stdout io.Writer) error {
 	version := fs.String("version", "", "release version, e.g. 0.3.1")
 	releasedAt := fs.Uint64("released-at", 0, "release time, unix seconds")
 	notes := fs.String("notes-url", "", "https URL of the release notes")
+	minVersion := fs.String("min-version", "", "oldest version that may be installed or kept, X.Y.Z (default: no bound)")
 	out := fs.String("out", "", "manifest output file")
 	var policies, artifacts, nextKeys, revoked multi
 	fs.Var(&policies, "policy", "component=min_supported,recommended[,deprecated_after]")
@@ -190,6 +202,16 @@ func cmdAssemble(args []string, stdout io.Writer) error {
 		return errors.New("--version is empty")
 	}
 	rel := &pb.Release{Version: *version, ReleasedAt: *releasedAt}
+	if *minVersion != "" {
+		mv, ok := objects.ParseSemver(*minVersion)
+		if !ok {
+			return fmt.Errorf("--min-version %q is not X.Y.Z", *minVersion)
+		}
+		if v, ok := objects.ParseSemver(*version); ok && objects.CompareSemver(mv, v) > 0 {
+			return errors.New("--min-version is above --version")
+		}
+		rel.MinVersion = *minVersion
+	}
 	if *notes != "" {
 		if err := httpsURL(*notes); err != nil {
 			return fmt.Errorf("--notes-url: %w", err)

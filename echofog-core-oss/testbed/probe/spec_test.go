@@ -123,3 +123,64 @@ func TestRunSpecWritesReportsAndCountsLeaks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, own, 0)
 }
+
+// N1 of the T15.0b acceptance: the prober asks lab and private addresses only, unless it is told
+// that a public one is meant.
+func TestLoadSpecRefusesPublicAddressesUnlessAllowed(t *testing.T) {
+	for name, entry := range map[string]string{
+		"loopback":      `{"scenario":"ordinary","addr":"127.0.0.1:443","cover":"127.0.0.1:8443"}`,
+		"private":       `{"scenario":"ordinary","addr":"10.1.2.3:443","cover":"192.168.0.9:443"}`,
+		"documentation": `{"scenario":"ordinary","addr":"203.0.113.15:443","cover":"198.51.100.20:443"}`,
+		"cgnat":         `{"scenario":"hidden","network":"udp","addr":"100.64.1.2:4343"}`,
+		"ipv6 local":    `{"scenario":"hidden","network":"udp","addr":"[::1]:4343"}`,
+	} {
+		_, err := LoadSpec(strings.NewReader("[" + entry + "]"))
+		assert.NoError(t, err, name)
+	}
+	for name, entry := range map[string]string{
+		"public node":  `{"scenario":"ordinary","addr":"8.8.8.8:443","cover":"10.0.0.1:443"}`,
+		"public cover": `{"scenario":"ordinary","addr":"10.0.0.1:443","cover":"1.1.1.1:443"}`,
+		"a name":       `{"scenario":"ordinary","addr":"example.org:443","cover":"10.0.0.1:443"}`,
+		"public ipv6":  `{"scenario":"hidden","network":"udp","addr":"[2001:4860:4860::8888]:443"}`,
+		"no port":      `{"scenario":"hidden","network":"udp","addr":"10.0.0.1"}`,
+	} {
+		_, err := LoadSpec(strings.NewReader("[" + entry + "]"))
+		assert.Error(t, err, name)
+		cases, err := LoadSpecWith(strings.NewReader("["+entry+"]"), SpecOptions{AllowPublic: true})
+		if name == "no port" {
+			assert.Error(t, err, "a missing port is wrong whatever is allowed")
+			continue
+		}
+		assert.NoError(t, err, name)
+		assert.Len(t, cases, 1)
+	}
+}
+
+func TestLoadSpecAltLocalGivesTheReplayFromElsewhereASourceAddress(t *testing.T) {
+	spec := `[{"scenario":"ordinary","network":"tcp","addr":"127.0.0.1:%d","cover":"127.0.0.1:%d","alt_local":"127.0.0.2"}]`
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	seen := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		seen <- c.RemoteAddr().(*net.TCPAddr).IP.String()
+		_ = c.Close()
+	}()
+	cases, err := LoadSpec(strings.NewReader(fmt.Sprintf(spec, port, port)))
+	require.NoError(t, err)
+	require.NotNil(t, cases[0].Target.AltDial, "alt_local must set the second source address")
+	c, err := cases[0].Target.AltDial(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Skipf("this machine cannot bind 127.0.0.2: %v", err)
+	}
+	_ = c.Close()
+	assert.Equal(t, "127.0.0.2", <-seen)
+
+	_, err = LoadSpec(strings.NewReader(`[{"scenario":"ordinary","addr":"127.0.0.1:1","cover":"127.0.0.1:2","alt_local":"not-an-ip"}]`))
+	assert.Error(t, err, "alt_local is an IP literal")
+}

@@ -17,9 +17,11 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrConfig is a configuration that is refused.
@@ -32,7 +34,8 @@ const maxListeners = 8
 
 // ListenSpec is one carrier listener of the node.
 type ListenSpec struct {
-	// Suite is the carrier suite; this build serves noise3 (reality2 and ws2 wait for T2.6b-3).
+	// Suite is the carrier suite: noise3, reality2-quic, reality2-tcp or ws2. The camouflaged
+	// suites (reality2-*, ws2) need a cover (T2.6e).
 	Suite string `json:"suite"`
 	// Bind is the local host:port. Advertise is the IP literal written into the card.
 	Bind      string `json:"bind"`
@@ -43,6 +46,19 @@ type ListenSpec struct {
 type OperatorSpec struct {
 	// Addr is a loopback IP literal with a port ("127.0.0.1:0" picks a free one).
 	Addr string `json:"addr"`
+}
+
+// CoverACMESpec is how the cover obtains its certificate from a CA (RFC 8555) when cover_cert
+// is empty. AcceptTOS records the operator's acceptance of the CA's terms of service.
+type CoverACMESpec struct {
+	// DirectoryURL is the ACME directory; empty means the production CA.
+	DirectoryURL string `json:"directory,omitempty"`
+	// Email is the optional contact of the account.
+	Email string `json:"email,omitempty"`
+	// AcceptTOS records that the operator accepted the CA's terms of service.
+	AcceptTOS bool `json:"accept_tos"`
+	// Challenge is "tls-alpn-01", "http-01" or empty (the CA's choice, tls-alpn-01 first).
+	Challenge string `json:"challenge,omitempty"`
 }
 
 // Config is server.json in the data directory.
@@ -56,11 +72,46 @@ type Config struct {
 	Roles []string `json:"roles"`
 	// Cover is host:port of the site the camouflaged suites imitate. Without a camouflaged listener
 	// the node has no public card (D37) and tells the operator.
-	Cover    string       `json:"cover,omitempty"`
-	Operator OperatorSpec `json:"operator"`
+	Cover string `json:"cover,omitempty"`
+	// SiteDir is the folder with the site the cover imitates (T12.5); CoverCert is the certificate
+	// file of the cover domain, which the doctor watches for expiry.
+	SiteDir   string `json:"site_dir,omitempty"`
+	CoverCert string `json:"cover_cert,omitempty"`
+	// CoverACME configures the certificate when CoverCert is empty (T2.6e).
+	CoverACME *CoverACMESpec `json:"cover_acme,omitempty"`
+	Operator  OperatorSpec   `json:"operator"`
 }
 
 var allRoles = map[string]bool{"relay": true, "exit": true, "mailbox": true, "dht-server": true}
+
+var allSuites = map[string]bool{"noise3": true, "reality2-quic": true, "reality2-tcp": true, "ws2": true}
+
+// camouflaged reports a suite that speaks to a stranger through the real cover site. Until the
+// own-cover mode exists for it, such a listener needs the site folder: a foreign site is not
+// served (T2.6e, НС-3 fail-closed).
+func camouflaged(suite string) bool { return suite != "noise3" }
+
+// hasCamouflaged reports whether any listener of the configuration is camouflaged.
+func (c *Config) hasCamouflaged() bool {
+	for _, l := range c.Listen {
+		if camouflaged(l.Suite) {
+			return true
+		}
+	}
+	return c.InviteListen != nil && camouflaged(c.InviteListen.Suite)
+}
+
+// hasReality2 reports whether the node serves reality2 and therefore needs a certificate for the
+// cover. ws2 terminates TLS at the CDN, so it alone does not.
+func (c *Config) hasReality2() bool {
+	check := func(l ListenSpec) bool { return l.Suite == "reality2-quic" || l.Suite == "reality2-tcp" }
+	for _, l := range c.Listen {
+		if check(l) {
+			return true
+		}
+	}
+	return c.InviteListen != nil && check(*c.InviteListen)
+}
 
 // DefaultConfig is a server with the default roles and the operator API on loopback. It has no
 // listener: the operator must say where the node is reachable.
@@ -74,6 +125,7 @@ func ParseConfig(b []byte) (*Config, error) {
 	if len(b) > MaxConfigSize {
 		return nil, fmt.Errorf("%w: %d bytes, at most %d", ErrConfig, len(b), MaxConfigSize)
 	}
+	b = stripComments(b)
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	var c Config
@@ -83,8 +135,16 @@ func ParseConfig(b []byte) (*Config, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: data after the configuration", ErrConfig)
 	}
-	if len(c.Roles) == 0 {
+	// An absent "roles" means the defaults; a present one, even empty, is what the operator chose
+	// (T12.4a acceptance M1). null is neither.
+	var probe map[string]json.RawMessage
+	_ = json.Unmarshal(b, &probe)
+	if raw, present := probe["roles"]; !present {
 		c.Roles = DefaultConfig().Roles
+	} else if string(bytes.TrimSpace(raw)) == "null" {
+		return nil, fmt.Errorf("%w: roles is null; use [] to switch every role off", ErrConfig)
+	} else if c.Roles == nil {
+		c.Roles = []string{}
 	}
 	if c.Operator.Addr == "" {
 		c.Operator.Addr = DefaultConfig().Operator.Addr
@@ -93,6 +153,19 @@ func ParseConfig(b []byte) (*Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// stripComments blanks the lines that start with // (after white space). A JSON string cannot hold
+// a raw line break, so a value never loses text to this.
+func stripComments(b []byte) []byte {
+	nl := []byte{'\n'}
+	lines := bytes.Split(b, nl)
+	for i, l := range lines {
+		if bytes.HasPrefix(bytes.TrimSpace(l), []byte("//")) {
+			lines[i] = nil
+		}
+	}
+	return bytes.Join(lines, nl)
 }
 
 func bad(format string, a ...any) error {
@@ -112,10 +185,16 @@ func (c *Config) Validate() error {
 		if err := l.validate(); err != nil {
 			return bad("%s: %v", what, err)
 		}
-		if binds[l.Bind] {
-			return bad("%s: bind %s is used twice", what, l.Bind)
+		// UDP and TCP may share a port number (reality2-quic and reality2-tcp on 443); within one
+		// transport the bind must be unique.
+		key := "tcp|" + l.Bind
+		if udpSuite(l.Suite) {
+			key = "udp|" + l.Bind
 		}
-		binds[l.Bind] = true
+		if binds[key] {
+			return bad("%s: bind %s is used twice on the same transport", what, l.Bind)
+		}
+		binds[key] = true
 		return nil
 	}
 	for i, l := range c.Listen {
@@ -144,6 +223,42 @@ func (c *Config) Validate() error {
 			return bad("cover %q: want host:port", c.Cover)
 		}
 	}
+	for what, v := range map[string]string{"site_dir": c.SiteDir, "cover_cert": c.CoverCert} {
+		if len(v) > 4096 || strings.ContainsRune(v, 0) || !utf8.ValidString(v) {
+			return bad("%s: a path of at most 4096 bytes without NUL", what)
+		}
+	}
+	if c.CoverACME != nil {
+		switch c.CoverACME.Challenge {
+		case "", "http-01", "tls-alpn-01":
+		default:
+			return bad("cover_acme.challenge %q: want http-01 or tls-alpn-01", c.CoverACME.Challenge)
+		}
+		if d := c.CoverACME.DirectoryURL; d != "" {
+			u, err := url.Parse(d)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return bad("cover_acme.directory %q: want an http(s) URL", d)
+			}
+		}
+		if len(c.CoverACME.Email) > 254 || strings.ContainsAny(c.CoverACME.Email, " \t\r\n") {
+			return bad("cover_acme.email: at most 254 characters without spaces")
+		}
+	}
+	// An empty cover_cert means ACME (T2.6e, T12.5). Accepting the CA's terms is the operator's
+	// act, never the code's: without it the operator must provide a certificate. ws2 alone needs
+	// none: its inner TLS lives inside the WebSocket and the CDN holds the outer certificate.
+	if c.hasReality2() && c.CoverCert == "" && (c.CoverACME == nil || !c.CoverACME.AcceptTOS) {
+		return bad("cover %q: cover_cert is empty and the CA terms are not accepted; set cover_acme.accept_tos or provide cover_cert", c.Cover)
+	}
+	// НС-3 (T2.6e): only the node's own cover is served. A camouflaged listener without a cover,
+	// and a cover without the operator's site folder, would either refuse strangers or serve a
+	// site we did not verify (T2.6b-3): both are configuration errors, not runtime surprises.
+	if c.hasCamouflaged() && c.Cover == "" {
+		return bad("a camouflaged listener needs cover: the node serves the operator's own site")
+	}
+	if c.Cover != "" && c.SiteDir == "" {
+		return bad("cover %q: site_dir is required (T2.6e): a foreign cover must not be served before T2.6b-3", c.Cover)
+	}
 	ap, err := netip.ParseAddrPort(c.Operator.Addr)
 	if err != nil || !ap.Addr().IsLoopback() || ap.Addr().Is4In6() {
 		return bad("operator address %q: want a loopback IP literal with a port", c.Operator.Addr)
@@ -152,8 +267,8 @@ func (c *Config) Validate() error {
 }
 
 func (l ListenSpec) validate() error {
-	if l.Suite != "noise3" {
-		return fmt.Errorf("suite %q is not served by this build (noise3 only; reality2 and ws2 wait for T2.6b-3)", l.Suite)
+	if !allSuites[l.Suite] {
+		return fmt.Errorf("suite %q: want noise3, reality2-quic, reality2-tcp or ws2", l.Suite)
 	}
 	host, port, err := net.SplitHostPort(l.Bind)
 	if err != nil {

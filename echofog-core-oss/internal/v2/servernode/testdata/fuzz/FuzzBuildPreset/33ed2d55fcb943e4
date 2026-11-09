@@ -1,0 +1,6 @@
+go test fuzz v1
+string("exit-free")
+string("::1")
+int(65535)
+string("0.0")
+string("\xf1")

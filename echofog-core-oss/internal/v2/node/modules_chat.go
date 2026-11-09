@@ -9,7 +9,9 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/chat"
 	chatcrypto "github.com/echofog/echofog-core/internal/v2/chat/crypto"
 	"github.com/echofog/echofog-core/internal/v2/dht"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
 	"github.com/echofog/echofog-core/internal/v2/mux"
+	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/service"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
@@ -17,6 +19,9 @@ import (
 // ChatNamespace is the store namespace of the chat/2 outbox (AD13). The keys and sessions of
 // chat/2 live in the namespaces of internal/v2/chat/crypto.
 const ChatNamespace = "v2/chat/outbox"
+
+// mailboxLimitedPoll is how often a node in background=limited mode looks at its queues.
+const mailboxLimitedPoll = 5 * time.Minute
 
 // chatTick is how often the outbox is looked at; the pauses between attempts are kept by the
 // outbox itself (2 s, 5 s, 15 s, 45 s, then a minute).
@@ -27,6 +32,14 @@ func (r *Runtime) Chat() *chat.Service {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.chat
+}
+
+// chatDirectory is the directory chat/2 and files/2 look accounts up in.
+func (r *Runtime) chatDirectory() chat.Directory {
+	if r.cfg.ChatDir != nil {
+		return r.cfg.ChatDir
+	}
+	return chatDir{r}
 }
 
 // chatDir looks up contacts through the DHT client, which exists only after Start.
@@ -70,7 +83,7 @@ func (r *Runtime) registerChat() {
 			DeviceKey: r.cfg.Device.Public(),
 		},
 		Crypto: cr,
-		Dir:    chatDir{r},
+		Dir:    r.chatDirectory(),
 		Link: &chat.StreamLink{Open: func(ctx context.Context, device [32]byte) (chat.Stream, error) {
 			_, st, err := r.Open(ctx, DeviceID(device), service.Chat, DialOpt{})
 			if err != nil {
@@ -84,6 +97,25 @@ func (r *Runtime) registerChat() {
 	}
 	if r.cfg.ChatMail != nil {
 		cfg.Mail = r.cfg.ChatMail
+	}
+	var (
+		sender  *mailbox.Sender
+		mailDir *chat.KVMailDirectory
+	)
+	if r.cfg.MailboxRelays != nil {
+		// the queues contacts announce, and the mail client that uses them (T7.4)
+		mailDir = &chat.KVMailDirectory{KV: r.cfg.Store.Store("v2/chat/mail"), IDs: ids}
+		cfg.MailDir = mailDir
+		sender = &mailbox.Sender{Dial: mailboxDialer{r: r, opts: func(device [32]byte) DialOpt {
+			return r.clientDialOpt(device)
+		}}}
+		if cfg.Mail == nil {
+			via := r.cfg.MailboxVia
+			if via == nil {
+				via = r.cfg.MailboxRelays
+			}
+			cfg.Mail = &chat.MailboxMail{Sender: sender, Dir: mailDir, Via: via, HS: r.relayHandshakeKey, Now: r.clock.Now}
+		}
 	}
 	svc, err := chat.NewService(cfg)
 	if err != nil {
@@ -100,6 +132,66 @@ func (r *Runtime) registerChat() {
 	r.chat, r.chatKeys = svc, cr
 	r.mu.Unlock()
 	r.chatPrekeys() // the cards carry the hash from the first one
+
+	var recv *mailbox.Receiver
+	if r.cfg.MailboxRelays != nil {
+		recv, err = mailbox.NewReceiver(mailbox.ReceiverConfig{
+			Store:  r.cfg.Store.Store("v2/mailbox/client"),
+			Dial:   mailboxDialer{r: r, opts: r.clientDialOpt},
+			Relays: r.cfg.MailboxRelays,
+			Now:    r.clock.Now,
+			Handle: svc.ReceiveItem,
+			Announce: func(q mailbox.QueueRef) {
+				var contacts [][32]byte
+				if r.cfg.ChatContacts != nil {
+					contacts = r.cfg.ChatContacts()
+				}
+				for _, c := range contacts {
+					var card []byte
+					if rc := r.cardBook.Latest(q.Relay); rc != nil {
+						card = rc.Env.Raw // a contact whose book lacks the relay can still deposit
+					}
+					if err := svc.AnnounceQueue(c, q, card); err != nil {
+						r.log.Warn("node: announcing a mailbox queue", "err", err)
+					}
+				}
+			},
+			Limited: func() bool { return r.Background() == BackgroundLimited },
+			Wait:    r.cfg.MailboxWait,
+		})
+		if err != nil {
+			r.log.Warn("node: mailbox receiver", "err", err)
+			recv = nil
+		}
+		r.mu.Lock()
+		r.mailRecv = recv
+		r.mu.Unlock()
+	}
+
+	if recv != nil {
+		// The fetch loop has its own goroutine: a long-poll takes up to 30 s and must not hold up the
+		// outbox. In background=limited mode it looks only every few minutes, without a long-poll.
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			var pause time.Duration
+			for {
+				var failed bool
+				if r.Background() != BackgroundSuspended {
+					if err := recv.Tick(r.ctx); err != nil {
+						failed = true
+						r.log.Debug("node: mailbox fetch", "err", err)
+					}
+				}
+				pause = nextFetchPause(pause, failed, r.Background() == BackgroundLimited)
+				select {
+				case <-r.ctx.Done():
+					return
+				case <-time.After(pause):
+				}
+			}
+		}()
+	}
 
 	r.wg.Add(1)
 	go func() {
@@ -137,4 +229,55 @@ func (r *Runtime) chatPrekeys() []byte {
 		r.log.Warn("node: prekeys hash for the cards", "err", err)
 	}
 	return raw
+}
+
+// mailboxItems counts the items this node's mailbox relay holds in private queues (tests).
+func (r *Runtime) mailboxItems() int {
+	if r.mailSrv == nil {
+		return -1
+	}
+	return r.mailSrv.PrivateItems()
+}
+
+// relayHandshakeKey is the handshake key of a mailbox relay: from the card this node knows, or from the
+// relay card the contact announced.
+func (r *Runtime) relayHandshakeKey(relay [32]byte, card []byte) ([]byte, error) {
+	if c := r.cardBook.Latest(relay); c != nil {
+		return c.HsKey.Key(), nil
+	}
+	if len(card) > 0 {
+		c, err := objects.VerifyCard(card, r.clock.Now())
+		if err == nil && c.DeviceID == relay {
+			return c.HsKey.Key(), nil
+		}
+	}
+	return nil, errors.New("node: no card of the mailbox relay")
+}
+
+// clientDialOpt is the dial options of the mailbox client; production leaves them empty (the card
+// book decides), a test sets them (in-memory carriers).
+func (r *Runtime) clientDialOpt(device [32]byte) DialOpt {
+	r.mu.Lock()
+	f := r.mailboxClientOpts
+	r.mu.Unlock()
+	if f != nil {
+		return f(device)
+	}
+	return DialOpt{}
+}
+
+// nextFetchPause is the pause after a round of the fetch loop: a second after a success, doubling after
+// each failure up to five minutes, and five minutes in background=limited mode.
+func nextFetchPause(prev time.Duration, failed, limited bool) time.Duration {
+	switch {
+	case limited:
+		return mailboxLimitedPoll
+	case !failed:
+		return time.Second
+	case prev < time.Second:
+		return 2 * time.Second
+	case prev >= mailboxLimitedPoll/2:
+		return mailboxLimitedPoll
+	}
+	return 2 * prev
 }

@@ -42,7 +42,7 @@ func (r *Runtime) PublishOwn(raw []byte) error {
 	if !r.listed() {
 		return ErrNotListed
 	}
-	env, err := objects.Verify(raw, r.clock.Now())
+	env, err := objects.Verify(raw, r.carrierClock.Now())
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrNotOwnRecord, err)
 	}

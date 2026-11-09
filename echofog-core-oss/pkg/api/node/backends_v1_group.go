@@ -167,6 +167,7 @@ func (n *NodeApi) SetGroupRole(groupID, memberID, role string) error {
 }
 
 func (n *NodeApi) SubscribeGroupEvents(cb func(GroupEvent)) {
+	n.v2m.rememberGroup(cb)
 	n.groupDomain().SubscribeGroupEvents(cb)
 }
 

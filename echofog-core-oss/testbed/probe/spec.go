@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
 	"time"
 )
 
@@ -37,12 +39,25 @@ type specEntry struct {
 	Foreign       string `json:"foreign"`
 	WindowSeconds int    `json:"window_seconds"`
 	ListenMillis  int    `json:"listen_ms"`
+	// AltLocal is a second source address of the prober (an IP literal on this machine): the
+	// replay "from another address" binds it. Empty skips that case.
+	AltLocal string `json:"alt_local"`
 }
 
 // LoadSpec reads a JSON list of probe entries: scenario, network, addr, cover, sni, the captured
 // and fresh flights as hex, the replay window in seconds and the listen time in milliseconds. It
 // refuses an entry that cannot run, so a typo costs a message, not a run.
-func LoadSpec(r io.Reader) ([]Case, error) {
+func LoadSpec(r io.Reader) ([]Case, error) { return LoadSpecWith(r, SpecOptions{}) }
+
+// SpecOptions changes what a spec may ask.
+type SpecOptions struct {
+	// AllowPublic lets the spec name public addresses and host names. Without it the prober asks
+	// loopback, private, link-local, CGNAT and documentation addresses only (the lab).
+	AllowPublic bool
+}
+
+// LoadSpecWith is LoadSpec with options.
+func LoadSpecWith(r io.Reader, o SpecOptions) ([]Case, error) {
 	var entries []specEntry
 	if err := json.NewDecoder(r).Decode(&entries); err != nil {
 		return nil, fmt.Errorf("probe spec: %w", err)
@@ -67,6 +82,11 @@ func LoadSpec(r io.Reader) ([]Case, error) {
 		if e.Addr == "" {
 			return nil, fmt.Errorf("probe spec: entry %d has no address", i)
 		}
+		for _, a := range []string{e.Addr, e.Cover} {
+			if err := checkTarget(a, o.AllowPublic); err != nil {
+				return nil, fmt.Errorf("probe spec: entry %d: %w", i, err)
+			}
+		}
 		network := e.Network
 		if network == "" {
 			network = "tcp"
@@ -88,8 +108,16 @@ func LoadSpec(r io.Reader) ([]Case, error) {
 		}
 		in.Window = time.Duration(e.WindowSeconds) * time.Second
 		in.Listen = time.Duration(e.ListenMillis) * time.Millisecond
+		var alt Dialer
+		if e.AltLocal != "" {
+			ip, err := netip.ParseAddr(e.AltLocal)
+			if err != nil {
+				return nil, fmt.Errorf("probe spec: entry %d: alt_local %q is not an IP address", i, e.AltLocal)
+			}
+			alt = boundDialer(network, ip)
+		}
 		out = append(out, Case{
-			Target: Target{Name: e.Scenario, Network: network, Addr: e.Addr, Cover: e.Cover, SNI: e.SNI},
+			Target: Target{Name: e.Scenario, Network: network, Addr: e.Addr, Cover: e.Cover, SNI: e.SNI, AltDial: alt},
 			Inputs: in,
 		})
 	}
@@ -99,7 +127,12 @@ func LoadSpec(r io.Reader) ([]Case, error) {
 // RunSpec reads a spec, runs every case from this machine (the border), writes the reports as JSON
 // to w and returns how many answers of a node's own were not expected.
 func RunSpec(ctx context.Context, r io.Reader, w io.Writer) (own int, err error) {
-	cases, err := LoadSpec(r)
+	return RunSpecWith(ctx, r, w, SpecOptions{})
+}
+
+// RunSpecWith is RunSpec with options.
+func RunSpecWith(ctx context.Context, r io.Reader, w io.Writer, o SpecOptions) (own int, err error) {
+	cases, err := LoadSpecWith(r, o)
 	if err != nil {
 		return 0, err
 	}
@@ -112,4 +145,54 @@ func RunSpec(ctx context.Context, r io.Reader, w io.Writer) (own int, err error)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return own, enc.Encode(reps)
+}
+
+// labNets are the addresses a lab prober may ask without being told otherwise: the documentation
+// ranges the stand uses, CGNAT, and everything netip calls private, loopback or link-local.
+var labNets = []netip.Prefix{
+	netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("100.64.0.0/10"),
+}
+
+// checkTarget refuses an address that is not host:port with an IP literal inside the lab ranges,
+// unless public addresses are allowed (then any host:port will do). An empty address is the cover
+// of a hidden node and is not checked.
+func checkTarget(addr string, allowPublic bool) error {
+	if addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("%q is not host:port", addr)
+	}
+	if allowPublic {
+		return nil
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("%q: a host name is not accepted without -allow-public (the prober asks IP literals of the lab)", addr)
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return nil
+	}
+	for _, p := range labNets {
+		if p.Contains(ip) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is a public address: the prober asks the lab only unless -allow-public says that a public node is meant", addr)
+}
+
+// boundDialer dials from a given local address.
+func boundDialer(network string, ip netip.Addr) Dialer {
+	return func(ctx context.Context, n, addr string) (net.Conn, error) {
+		d := &net.Dialer{Timeout: 3 * time.Second}
+		if network == "udp" {
+			d.LocalAddr = &net.UDPAddr{IP: ip.AsSlice()}
+		} else {
+			d.LocalAddr = &net.TCPAddr{IP: ip.AsSlice()}
+		}
+		return d.DialContext(ctx, n, addr)
+	}
 }

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
+	chatpb "github.com/echofog/echofog-core/internal/v2/chat/pb"
+	"github.com/echofog/echofog-core/internal/v2/convsync"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/routepolicy"
@@ -39,6 +41,8 @@ var (
 	ErrNoContact = errors.New("app: no such contact")
 	// ErrNoPass reports an unknown pass.
 	ErrNoPass = errors.New("app: no such pass")
+	// ErrTooManyContacts reports a new contact beyond the limit.
+	ErrTooManyContacts = errors.New("app: too many contacts")
 	// ErrRequest reports a request with a bad term or count.
 	ErrRequest = errors.New("app: bad request")
 )
@@ -74,6 +78,11 @@ type Links interface {
 	Redeem(ctx context.Context, link string) (node.Peer, error)
 }
 
+// Chat is the part of the chat service the contact knock uses.
+type Chat interface {
+	Send(ctx context.Context, to [32]byte, m *chatpb.PersonalMessageProto) ([16]byte, error)
+}
+
 // Clock is the node's corrected clock.
 type Clock interface{ Now() time.Time }
 
@@ -84,8 +93,62 @@ type Config struct {
 	// Store keeps the app's own records (contacts, the saved mode). Required.
 	Store store.KV
 	Clock Clock
+	// MaxContacts bounds the contact list; zero means 10000. A link beyond it is refused before
+	// anything is dialed.
+	MaxContacts int
+	// Chat sends knocks; nil disables Knock and the answers to knocks.
+	Chat Chat
+	// OwnCard returns the node's current peer card envelope, the answer to a knock.
+	OwnCard func() ([]byte, bool)
+	// IngestCard receives the card a contact answered a knock with. The receiver verifies it
+	// (objects.VerifyCard, the account must be the sender); the app only passes bounded bytes
+	// from contacts.
+	IngestCard func(from [32]byte, envelope []byte)
+	// Convs is the conversation engine behind the chats; nil turns the chat calls off.
+	Convs Convs
+	// PubOf finds the account key behind a node ID (the directory); chats need it to open a
+	// direct conversation.
+	PubOf func(ctx context.Context, node [32]byte) ([32]byte, error)
+	// Groups is the register of the groups this node is in; the conversation engine is built with its
+	// rules (Rules, Conv, Members, SharedGroups). Nil turns the group calls off.
+	Groups *GroupBook
+	// Voice is the live roster of the voice rooms; nil turns GroupVoice off.
+	Voice VoiceRooms
+	// States tells the delivery state of the own messages; nil leaves them without one.
+	States StateSource
 	// Self is this node's account node ID, to refuse a link to oneself.
 	Self [32]byte
+	// Files holds the files this node sends (*files.Server); nil turns sending off.
+	Files FileHolder
+	// FileNet fetches a file from its sender (FetchOver builds the usual one); nil turns receiving off.
+	FileNet FileNet
+	// FileDir is where received files go. FileLimits bound sizes and numbers; FileFree reports free
+	// disk space (nil: the system's); FileWait waits between retries of a fetch (nil: a timer).
+	FileDir    string
+	FileLimits FileLimits
+	FileFree   func(dir string) (uint64, error)
+	FileWait   func(ctx context.Context, d time.Duration) bool
+	// Prefs holds the notification settings and followed threads of this device; nil turns them off.
+	Prefs *convsync.Prefs
+	// VerifyCard checks the card a contact answered a knock with: true when it is a valid card of
+	// that account. Nil: the real check (objects.VerifyCard, the card's account is the sender).
+	VerifyCard func(from [32]byte, envelope []byte) bool
+	// Exit dials the exit a link names (the runtime's ExitClient behind a card); nil turns the VPN off.
+	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
+	Exit      ExitDialer
+	VPNListen string
+	// ExitHost runs the exit of this node (T10.9); nil turns it off.
+	ExitHost ExitHost
+	// WholeComputer holds the drivers of the whole-computer mode with its kill switch (T10.6b); nil
+	// turns the mode off.
+	WholeComputer *WholeComputerConfig
+	// CallCooldown is the least time between two new calls announced by one member of a group; zero means
+	// 30 s, negative turns it off. MaxGroupCalls bounds the calls going on at once in one group (its own
+	// and its voice rooms'); zero means 16. A call beyond either is not shown: silence.
+	CallCooldown  time.Duration
+	MaxGroupCalls int
+	// JoinHost is the host of the join page for the https form of group invitations ("": none).
+	JoinHost string
 	// Mode is the mode the node was built in; Version is the app version shown in the report.
 	Mode    Mode
 	Version string
@@ -95,10 +158,27 @@ type Config struct {
 type App struct {
 	cfg Config
 
-	lc      sync.Mutex // serializes Start and Stop
-	running atomic.Bool
-	cmu     sync.Mutex // contacts: read-modify-write
-	ntc     notices    // notices for the UI (notice.go)
+	lc        sync.Mutex // serializes Start and Stop
+	running   atomic.Bool
+	cmu       sync.Mutex // contacts: read-modify-write
+	kmu       sync.Mutex // knock answers: last answer per contact
+	knocked   map[[32]byte]time.Time
+	asked     map[[32]byte]time.Time // knocks sent and not yet answered, by contact
+	ntc       notices                // notices for the UI (notice.go)
+	chats     chatState
+	hmu       sync.Mutex // history handed to newcomers: when, per group and key
+	handed    map[string]time.Time
+	fx        fileState
+	gev       groupEvents
+	vpn       vpnState
+	exit      exitState
+	whole     wholeState
+	gc        callBook
+	vmu       sync.Mutex // the saved exits and the history
+	svmu      sync.Mutex // the saved messages and their count
+	svn       int
+	svCounted bool
+	seen      seenSet // messages already told as new
 }
 
 // New creates an App.
@@ -119,7 +199,17 @@ func New(cfg Config) (*App, error) {
 	if !cfg.Mode.valid() {
 		return nil, fmt.Errorf("%w: %q", ErrMode, cfg.Mode)
 	}
-	return &App{cfg: cfg}, nil
+	if err := checkLoopback(cfg.VPNListen); err != nil {
+		return nil, err
+	}
+	a := &App{cfg: cfg}
+	if cfg.Groups != nil && cfg.Convs != nil {
+		cfg.Groups.attach(cfg.Convs.Log())
+	}
+	if cfg.Convs != nil {
+		cfg.Convs.Log().OnChange(a.onLogChange)
+	}
+	return a, nil
 }
 
 func (m Mode) valid() bool { return m == ModePublic || m == ModeHidden }
@@ -146,6 +236,7 @@ func (a *App) Stop(ctx context.Context) error {
 		return nil
 	}
 	a.running.Store(false)
+	a.stopFiles()
 	return a.cfg.Runtime.Stop(ctx)
 }
 

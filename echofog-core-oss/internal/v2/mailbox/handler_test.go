@@ -276,6 +276,46 @@ func TestMailboxServiceOverTwoRuntimes(t *testing.T) {
 	}
 }
 
+// A bad proof of work from the queue owner is an authenticated path: the wire answer stays
+// ERROR{0x100 pow-invalid}, not the indistinguishable refused of an external sender
+// (services.md 5.1, AD20). An external sender is covered by the Deposit table test.
+func TestOwnerBadProofOfWorkGetsTheServiceCode(t *testing.T) {
+	q := newCarrierQueue()
+	m := newNode(t, node.Profile{Platform: node.PlatformServer, Roles: []node.Role{node.RoleMailbox}}, []carrier.Listener{q})
+	c := newNode(t, node.Profile{Platform: node.PlatformDesktop}, nil)
+	registerClient(t, c)
+	m.start(t)
+	c.start(t)
+
+	_, st := openMailbox(t, c, m, q)
+	defer st.Close()
+
+	queue := bytes.Repeat([]byte{0x95}, mailbox.QueueSize)
+	send(t, st, mailbox.FrameQueueCreate, mailbox.QueueCreate{
+		Req: 1, Queue: queue, AuthKey: authSigner(t).Public(), TTL: 1, Public: true, PowBits: 1,
+	}.Append(nil))
+	if typ, _ := recv(t, st); typ != mailbox.FrameQueueOK {
+		t.Fatalf("queue create answer 0x%x", typ)
+	}
+
+	blob := []byte("bad work")
+	bad := uint64(1)
+	for mailbox.ValidPow(queue, blob, bad, 1) {
+		bad++
+	}
+
+	send(t, st, mailbox.FrameDeposit, mailbox.Deposit{Req: 2, Queue: queue, Blob: blob, Pow: bad}.Append(nil))
+	typ, payload := recv(t, st)
+	if typ != mailbox.FrameError {
+		t.Fatalf("the owner's bad proof: answer 0x%x, want ERROR", typ)
+	}
+	e, err := mailbox.ParseError(payload)
+	if err != nil || e.Req != 2 || e.Code != mailbox.CodePowInvalid {
+		t.Fatalf("ERROR %+v err %v, want req 2 code 0x%x", e, err, mailbox.CodePowInvalid)
+	}
+}
+
+// TestMailboxWithoutTheRoleIsNotServed checks that a node without the mailbox role serves nothing.
 func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 	q := newCarrierQueue()
 	m := newNode(t, node.Profile{Platform: node.PlatformDesktop}, []carrier.Listener{q})
@@ -288,11 +328,22 @@ func TestMailboxWithoutTheRoleIsNotServed(t *testing.T) {
 	q.push(pair.Server)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, st, err := c.rt.Open(ctx, m.id.DeviceID, service.Mailbox, node.DialOpt{
+	// Since T7.4 every node offers mailbox/2 as a client, so the stream may open; a node without the
+	// role must still store and serve nothing: the stream ends without an answer.
+	_, st, err := c.rt.Open(ctx, m.id.DeviceID, service.Mailbox, node.DialOpt{
 		Card: m.peerCard(t), Carrier: pair.Client,
-	}); err == nil {
-		_ = st.Close()
-		t.Fatal("a node without the mailbox role offered mailbox/2")
+	})
+	if err != nil {
+		return
+	}
+	defer st.Close()
+	body := mailbox.QueueCreate{Req: 1, Queue: bytes.Repeat([]byte{1}, mailbox.QueueSize), AuthKey: bytes.Repeat([]byte{2}, 32)}.Append(nil)
+	if err := st.WriteFrame(mailbox.FrameQueueCreate, 0, body); err != nil {
+		return
+	}
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if f, err := st.ReadFrame(); err == nil {
+		t.Fatalf("a node without the mailbox role answered with frame 0x%x", f.Type)
 	}
 }
 

@@ -2,9 +2,11 @@ package clock
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -593,32 +595,50 @@ func TestCDNParallel(t *testing.T) {
 }
 
 func TestNewHTTPClient(t *testing.T) {
-	proxy, err := url.Parse("http://127.0.0.1:9050")
-	if err != nil {
-		t.Fatal(err)
+	direct := NewHTTPClient(nil, 3*time.Second)
+	if direct.Timeout != 3*time.Second {
+		t.Fatalf("Timeout = %v, want 3s", direct.Timeout)
 	}
-	client := NewHTTPClient(proxy, 3*time.Second)
-	if client.Timeout != 3*time.Second {
-		t.Fatalf("Timeout = %v, want 3s", client.Timeout)
-	}
-	tr, ok := client.Transport.(*http.Transport)
+	tr, ok := direct.Transport.(*http.Transport)
 	if !ok {
-		t.Fatalf("Transport = %T, want *http.Transport", client.Transport)
+		t.Fatalf("Transport = %T, want *http.Transport", direct.Transport)
 	}
-	req, err := http.NewRequest(http.MethodGet, "https://example.test/", nil)
-	if err != nil {
-		t.Fatal(err)
+	if tr.Proxy != nil {
+		t.Fatal("direct client has a proxy function")
 	}
-	got, err := tr.Proxy(req)
-	if err != nil {
-		t.Fatalf("Proxy: %v", err)
-	}
-	if got == nil || got.String() != proxy.String() {
-		t.Fatalf("Proxy = %v, want %v", got, proxy)
+	if tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatal("the client does not pin a modern TLS version")
 	}
 
-	direct := NewHTTPClient(nil, 0)
-	if got := direct.Transport.(*http.Transport).Proxy; got != nil {
-		t.Fatal("direct client has a proxy function")
+	// A proxy carries every connection: the first bytes on the wire are the SOCKS5 greeting.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	seen := make(chan []byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 16)
+		n, _ := conn.Read(buf)
+		seen <- buf[:n]
+	}()
+	proxy, err := url.Parse("socks5://" + ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxied := NewHTTPClient(proxy, 3*time.Second)
+	go func() { _, _ = proxied.Get("https://clock.test/") }()
+	select {
+	case hello := <-seen:
+		if len(hello) == 0 || hello[0] != 5 {
+			t.Fatalf("proxy greeting = %v, want a SOCKS5 greeting", hello)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request did not go through the proxy")
 	}
 }

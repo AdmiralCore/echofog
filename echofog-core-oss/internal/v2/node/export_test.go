@@ -4,10 +4,16 @@ package node
 // that the platform flags and typed events are actually wired, without widening the public API.
 
 import (
+	"context"
+	"errors"
+	"github.com/echofog/echofog-core/internal/v2/mailbox"
+	"net"
 	"net/netip"
 
 	"github.com/echofog/echofog-core/internal/v2/handshake"
+	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/portmap"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"time"
@@ -18,6 +24,14 @@ import (
 )
 
 var (
+	// SetHealthy replaces the check that a session has a working path again.
+	SetHealthy = func(r *Runtime, f func(*mux.Session) bool) { r.healthyFn = f }
+	// RepairCardOf is the card a repair of the session would dial with.
+	RepairCardOf = func(r *Runtime, sid [16]byte) *objects.Card { return r.repairCard(sid) }
+	// TriggerPathFailing runs the reaction to a session left with one failing path.
+	TriggerPathFailing = func(r *Runtime, s *mux.Session) { r.pathFailing(s, mux.PathFailure{}) }
+	// SetRepairOpt sets what a repair dials with.
+	SetRepairOpt = func(r *Runtime, opt DialOpt) { r.repairOpt = opt }
 	// OpenSessions counts the live (not closed) sessions in the runtime's session table.
 	OpenSessions = func(r *Runtime) int {
 		n := 0
@@ -100,3 +114,72 @@ var AdmitVersionOf = func(r *Runtime) func(uint32) bool { return r.admitVersion(
 
 // ReleaseCheckOf returns the release check handed to the DHT server.
 var ReleaseCheckOf = func(r *Runtime) func(raw []byte, now time.Time) error { return r.releaseCheck() }
+
+// RelayCardAddrDefault is the address rule F applies to relay cards.
+var RelayCardAddrDefault = relayCardAddrDefault
+
+// NextFetchPause is the pause of the mailbox fetch loop.
+var NextFetchPause = nextFetchPause
+
+// SetMailboxDialHook lets a test choose the dial options F uses to reach a mailbox relay (in-memory
+// carriers).
+var SetMailboxDialHook = func(r *Runtime, f func(*objects.Card) DialOpt) { r.mailboxDialHook = f }
+
+// AllowRelayCardAddrs replaces the address check of relay cards; it returns the old check.
+var AllowRelayCardAddrs = func(f func(netip.Addr) bool) func(netip.Addr) bool {
+	old := relayCardAddrOK
+	relayCardAddrOK = f
+	return old
+}
+
+// MailboxReceiverTick runs one round of the node's mailbox receiver (the runtime also does it on a timer).
+var MailboxReceiverTick = func(r *Runtime, ctx context.Context) error {
+	if r.mailRecv == nil {
+		return errors.New("no mailbox receiver")
+	}
+	return r.mailRecv.Tick(ctx)
+}
+
+// SetMailboxClientOpts lets a test choose the dial options of the node's mailbox client (in-memory carriers).
+var SetMailboxClientOpts = func(r *Runtime, f func([32]byte) DialOpt) {
+	r.mu.Lock()
+	r.mailboxClientOpts = f
+	r.mu.Unlock()
+}
+
+// MailboxQueues returns the current queues of the node's mailbox receiver.
+var MailboxQueues = func(r *Runtime) []mailbox.QueueRef {
+	if r.mailRecv == nil {
+		return nil
+	}
+	return r.mailRecv.Queues()
+}
+
+// MailboxItems counts the items a mailbox relay holds (private queues).
+var MailboxItems = func(r *Runtime) int { return r.mailboxItems() }
+
+var (
+	// NoteStall tells the runtime that a flow to ip stopped after bytes inbound bytes.
+	NoteStall = func(r *Runtime, ip netip.Addr, bytes int) bool { return r.noteStall(ip, bytes) }
+	// FrozenUntil is when the mark of the current network ends.
+	FrozenUntil = func(r *Runtime) time.Time { return r.freeze.Until(r.NetworkID()) }
+	// IsFrozen reports whether the runtime has marked its current network frozen.
+	IsFrozen = func(r *Runtime) bool { return r.frozen() }
+	// WrapFreeze wraps a connection to a foreign address the way the dial path does.
+	WrapFreeze = func(r *Runtime, c net.Conn, ip netip.Addr) net.Conn { return r.freezeConn(c, ip) }
+)
+
+// NarrowPathOf returns the narrow-path marks of the runtime (T3.12).
+var NarrowPathOf = func(r *Runtime) *carrier.NarrowPath { return r.narrow }
+
+// Egress seams (T11.6a).
+var (
+	TCPOnly      = tcpOnly
+	EgressDialer = func(e *Egress) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+		return e.dialer()
+	}
+	// PortMappingOf reports whether the effective profile still asks the router for ports.
+	PortMappingOf = func(r *Runtime) bool { return r.cfg.Profile.PortMapping }
+	// PortMapAdd exposes the manager the runtime built, to check it was built disabled.
+	PortMapAdd = func(r *Runtime, proto portmap.Proto, port uint16) error { return r.pm.Add(proto, port) }
+)

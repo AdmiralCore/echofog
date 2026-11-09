@@ -186,7 +186,8 @@ func addrOf(t *testing.T, c *objects.Card) netip.AddrPort {
 
 func openTestStore(t *testing.T, kv *memKV) *Store {
 	t.Helper()
-	s, err := Open(Options{KV: kv, Now: func() time.Time { return testNow }})
+	// The fixtures use documentation-range addresses; the filter itself is covered separately.
+	s, err := Open(Options{KV: kv, Now: func() time.Time { return testNow }, AllowNonRoutable: true})
 	if err != nil {
 		t.Fatalf("pex.Open: %v", err)
 	}
@@ -617,7 +618,7 @@ func TestOpenAppliesTableLimitsAndDeduplicates(t *testing.T) {
 		t.Fatalf("put tried: %v", err)
 	}
 
-	limited, err := Open(Options{KV: kv, Now: func() time.Time { return testNow }, MaxNew: 2, MaxTried: 1})
+	limited, err := Open(Options{KV: kv, Now: func() time.Time { return testNow }, MaxNew: 2, MaxTried: 1, AllowNonRoutable: true})
 	if err != nil {
 		t.Fatalf("pex.Open: %v", err)
 	}

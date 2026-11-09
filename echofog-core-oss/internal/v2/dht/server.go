@@ -559,6 +559,12 @@ func (s *Server) insertLocked(p Peer, c *checked, keys [][32]byte) Result {
 		}
 		targets = append(targets, k)
 	}
+	if stale {
+		// The record is older than one already stored under any adjacent day key. It must not be
+		// copied under the keys it lacks either: a reader that lands on this node first would
+		// otherwise accept the older seq (dht.md §3 step 3, ДР-1).
+		return Result{Status: StatusStale}
+	}
 	if same != nil {
 		// The same object is already stored: it only gains the keys it lacks.
 		for _, k := range targets {
@@ -569,9 +575,6 @@ func (s *Server) insertLocked(p Peer, c *checked, keys [][32]byte) Result {
 		return Result{Status: StatusStored}
 	}
 	if len(targets) == 0 {
-		if stale {
-			return Result{Status: StatusStale}
-		}
 		return Result{Status: StatusStored}
 	}
 

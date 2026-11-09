@@ -22,6 +22,8 @@ const (
 	peerAgreement = 2 * time.Second
 	noPeerAfter   = time.Hour
 	warnAfter     = 60 * time.Second
+	// peerSampleTTL is how long a peer sample stays valid (handshake.md §7, question 20).
+	peerSampleTTL = 24 * time.Hour
 )
 
 // Config configures a Clock.
@@ -62,6 +64,8 @@ type netKey [5]byte
 type peerSample struct {
 	net    netKey
 	offset time.Duration
+	// at is when the sample was taken (the raw local clock), not the peer's reported time.
+	at time.Time
 }
 
 func keyOf(a netip.Addr) (netKey, bool) {
@@ -131,33 +135,46 @@ func (c *Clock) Offset() time.Duration {
 
 // AddOutgoingSample records the time reported by the peer of one session this node dialed
 // (HsResp.time, authenticated). Incoming sessions give no sample: anyone can open one (handshake.md
-// section 7). At most one sample counts per /16 network (IPv6: /32), the median is used only when at
-// least 3 networks gave samples, it never moves the offset by more than 120 s at once, and the
-// offset never exceeds 600 s from the raw clock; only the CDN check can set a larger one.
+// section 7). At most one sample counts per /16 network (IPv6: /32), a sample stays valid for 24
+// hours, the median is used only when at least 3 networks gave samples, it never moves the offset
+// by more than 120 s at once, and the offset never exceeds 600 s from the raw clock; only the CDN
+// check can set a larger one.
 func (c *Clock) AddOutgoingSample(remote netip.Addr, peerTime time.Time) {
 	raw := c.now()
+	key, haveNet := keyOf(remote)
+	// A session that carried no usable time is not a "recent authenticated peer" and gives no
+	// sample, even when the session itself is recent (handshake.md §7, question 20).
+	usable := haveNet && !peerTime.IsZero()
 	c.mu.Lock()
-	c.lastPeer = raw
+	if usable {
+		c.lastPeer = raw
+	}
 
 	warn := false
-	if key, ok := keyOf(remote); ok && !peerTime.IsZero() {
+	if usable {
 		offset := peerTime.Truncate(time.Second).Sub(raw.Truncate(time.Second))
+		c.pruneSamplesLocked(raw)
 		for i := range c.samples {
 			if c.samples[i].net == key {
 				c.samples = append(c.samples[:i], c.samples[i+1:]...)
 				break
 			}
 		}
-		c.samples = append(c.samples, peerSample{net: key, offset: offset})
+		c.samples = append(c.samples, peerSample{net: key, offset: offset, at: raw})
 		if len(c.samples) > maxPeerSamples {
 			copy(c.samples, c.samples[len(c.samples)-maxPeerSamples:])
 			c.samples = c.samples[:maxPeerSamples]
 		}
-		if len(c.samples) >= minNetworks {
-			target, ok := medianOffset(c.samples)
-			if !ok {
-				// The two central samples disagree: no estimate, drift back to the raw clock.
-				target = 0
+		// An offset beyond the peer cap was set by the CDN check, which alone may set it: peers,
+		// who can be many liars, neither raise nor wear it down.
+		if absDuration(c.offset) <= maxPeerOffset {
+			// Fewer than 3 live networks is no estimate: expired samples no longer hold the
+			// offset, so the clock drifts back to the raw clock by one step, like a split set.
+			target := time.Duration(0)
+			if len(c.samples) >= minNetworks {
+				if median, ok := medianOffset(c.samples); ok {
+					target = median
+				}
 			}
 			target = clampDuration(target, maxPeerOffset)
 			next := c.offset + clampDuration(target-c.offset, maxPeerStep)
@@ -170,6 +187,17 @@ func (c *Clock) AddOutgoingSample(remote netip.Addr, peerTime time.Time) {
 	if warn && c.warn != nil {
 		c.warn(offset)
 	}
+}
+
+// pruneSamplesLocked drops the samples older than peerSampleTTL. The caller must hold c.mu.
+func (c *Clock) pruneSamplesLocked(now time.Time) {
+	kept := c.samples[:0]
+	for _, s := range c.samples {
+		if now.Sub(s.at) <= peerSampleTTL {
+			kept = append(kept, s)
+		}
+	}
+	c.samples = kept
 }
 
 func clampDuration(d, limit time.Duration) time.Duration {
