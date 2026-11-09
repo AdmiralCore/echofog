@@ -59,6 +59,7 @@ type Bridge struct {
 	mu      sync.Mutex
 	wrapper map[wkey]wentry
 	order   []wkey
+	bytes   int
 	joined  map[pair]struct{}
 	jorder  []pair
 }
@@ -128,17 +129,28 @@ func (b *Bridge) wrapperOf(k wkey) ([]byte, bool) {
 }
 
 func (b *Bridge) remember(k wkey, raw []byte) {
+	if len(raw) > maxWrapperBytes {
+		return // one wrapper never fits: it can only be signed again, and the bridge never signs
+	}
 	now := b.cfg.Now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.wrapper[k]; ok {
+	if e, ok := b.wrapper[k]; ok {
+		// A stalled path can carry the same signal again long after the first copy: keeping the
+		// arrival time fresh is what lets the forward that follows still find its wrapper.
+		e.at = now
+		b.wrapper[k] = e
 		return
 	}
-	for len(b.order) > 0 && (len(b.order) >= maxCache || now.Sub(b.wrapper[b.order[0]].at) > wrapperTTL) {
+	for len(b.order) > 0 &&
+		(len(b.order) >= maxCache || b.bytes+len(raw) > maxWrapperBytes || now.Sub(b.wrapper[b.order[0]].at) > wrapperTTL) {
+		e := b.wrapper[b.order[0]]
+		b.bytes -= len(e.raw)
 		delete(b.wrapper, b.order[0])
 		b.order = b.order[1:]
 	}
 	b.wrapper[k] = wentry{raw: append([]byte(nil), raw...), at: now}
+	b.bytes += len(raw)
 	b.order = append(b.order, k)
 }
 
