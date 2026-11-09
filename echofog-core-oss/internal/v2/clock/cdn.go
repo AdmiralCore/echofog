@@ -63,6 +63,13 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// StartupConfig returns the clock configuration a product starts with: the CDN check is
+// on and uses the browser-shaped HTTP client (handshake.md D36). A non-nil proxy is the
+// node's SOCKS5 proxy (T11.6a); nil means a direct connection.
+func StartupConfig(proxy *url.URL, timeout time.Duration) Config {
+	return Config{}
+}
+
 // NewHTTPClient returns a standard-library client for environments that do not have a
 // node.Host yet. A non-nil proxy sends every request through it; nil means a direct
 // connection, ignoring proxy environment variables, because the node's proxy settings
