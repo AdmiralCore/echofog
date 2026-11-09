@@ -123,6 +123,14 @@ func (f *fixture) peer(sid byte) Peer {
 
 func (f *fixture) authKey() []byte { return f.signer.Public().Key() }
 
+// otherPeer is a peer of another account: the queue was not created by it, so it is external to
+// every queue f.peer creates.
+func (f *fixture) otherPeer(sid byte) Peer {
+	p := f.peer(sid)
+	p.Node = [32]byte{0xe0 + sid}
+	return p
+}
+
 func (f *fixture) create(t *testing.T, p Peer, ttl uint32, public bool, powBits uint32) uint64 {
 	t.Helper()
 	exp, err := f.srv.CreateQueue(p, QueueCreate{
@@ -372,16 +380,89 @@ func TestPublicQueueRequiresProofOfWork(t *testing.T) {
 	if status, _ := f.deposit(t, p, blob, 0); status != StatusPowRequired {
 		t.Fatalf("without pow: status %d, want %d", status, StatusPowRequired)
 	}
-	// A wrong proof is refused exactly like every other refusal of an external sender: a separate
-	// code would tell whether the queue exists and its state (AD20, decision Q4).
+	// The owner is on the authenticated path: a wrong proof is the service error 0x100, not the
+	// indistinguishable refusal that an external sender gets (services.md 5.1, AD20).
 	bad := invalidPow(t, f.queue, blob, 16)
-	if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: bad}); err != nil || st != StatusRefused {
-		t.Fatalf("wrong pow: status %d err %v, want refused", st, err)
+	if _, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: bad}); !errors.Is(err, ErrPowInvalid) {
+		t.Fatalf("wrong pow of the owner: err %v, want %v", err, ErrPowInvalid)
 	}
 	// A valid one is stored.
 	if status, _ := f.deposit(t, p, blob, goodPow(t, f.queue, blob, 16)); status != StatusStored {
 		t.Fatalf("valid pow: status %d", status)
 	}
+}
+
+// TestDepositRefusalDependsOnQueueOwnership covers the AD20 table of services.md 5.1: an external
+// sender (not rec.Owner) sees one refused for "no such queue", "full", "no proof" and "bad proof";
+// the owner keeps the real codes and ERROR{0x100}. Status 3 (too-large) is the only exception.
+func TestDepositRefusalDependsOnQueueOwnership(t *testing.T) {
+	t.Run("public", func(t *testing.T) {
+		f := newFixture(t, func(c *Config) { c.Limits = &Limits{PublicItems: 2} })
+		owner, external := f.peer(1), f.otherPeer(2)
+		f.create(t, owner, 0, true, 1)
+
+		// No queue record means no owner can be authenticated: refused to both.
+		unknown := bytes.Repeat([]byte{0x7a}, QueueSize)
+		for _, p := range []Peer{external, owner} {
+			if st, _, err := f.srv.Deposit(p, Deposit{Req: 1, Queue: unknown, Blob: []byte("x")}); err != nil || st != StatusRefused {
+				t.Fatalf("unknown queue for node %x: status %d err %v, want refused", p.Node[:2], st, err)
+			}
+		}
+
+		blob := []byte("first contact")
+		// Missing proof: the owner is told to compute one, the external sender only sees refused.
+		if st, _, err := f.srv.Deposit(external, Deposit{Req: 1, Queue: f.queue, Blob: blob}); err != nil || st != StatusRefused {
+			t.Fatalf("external without pow: status %d err %v, want refused", st, err)
+		}
+		if st, _, err := f.srv.Deposit(owner, Deposit{Req: 1, Queue: f.queue, Blob: blob}); err != nil || st != StatusPowRequired {
+			t.Fatalf("owner without pow: status %d err %v, want %d", st, err, StatusPowRequired)
+		}
+
+		// Bad proof: the service code only on the authenticated path (handler.go maps it to 0x100).
+		bad := invalidPow(t, f.queue, blob, 1)
+		if st, _, err := f.srv.Deposit(external, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: bad}); err != nil || st != StatusRefused {
+			t.Fatalf("external with a bad pow: status %d err %v, want refused", st, err)
+		}
+		if _, _, err := f.srv.Deposit(owner, Deposit{Req: 1, Queue: f.queue, Blob: blob, Pow: bad}); !errors.Is(err, ErrPowInvalid) {
+			t.Fatalf("owner with a bad pow: err %v, want %v", err, ErrPowInvalid)
+		}
+
+		// Success fills the two slots, one by each sender.
+		for _, tc := range []struct {
+			name string
+			p    Peer
+			blob []byte
+		}{{"owner", owner, []byte("owner work")}, {"external", external, []byte("external work")}} {
+			if st, _, err := f.srv.Deposit(tc.p, Deposit{Req: 1, Queue: f.queue, Blob: tc.blob, Pow: goodPow(t, f.queue, tc.blob, 1)}); err != nil || st != StatusStored {
+				t.Fatalf("%s deposit: status %d err %v, want stored", tc.name, st, err)
+			}
+		}
+
+		// Full: the owner keeps 2, the external sender still sees 4.
+		ownerBlob := []byte("owner over the limit")
+		if st, _, err := f.srv.Deposit(owner, Deposit{Req: 1, Queue: f.queue, Blob: ownerBlob, Pow: goodPow(t, f.queue, ownerBlob, 1)}); err != nil || st != StatusFull {
+			t.Fatalf("full queue for the owner: status %d err %v, want %d", st, err, StatusFull)
+		}
+		externalBlob := []byte("external over the limit")
+		if st, _, err := f.srv.Deposit(external, Deposit{Req: 1, Queue: f.queue, Blob: externalBlob, Pow: goodPow(t, f.queue, externalBlob, 1)}); err != nil || st != StatusRefused {
+			t.Fatalf("full queue for the external sender: status %d err %v, want refused", st, err)
+		}
+	})
+
+	t.Run("private", func(t *testing.T) {
+		f := newFixture(t, func(c *Config) { c.Limits = &Limits{PrivateItems: 1} })
+		owner, external := f.peer(1), f.otherPeer(2)
+		f.create(t, owner, 0, false, 0)
+		if st, _ := f.deposit(t, owner, []byte("the one"), 0); st != StatusStored {
+			t.Fatalf("owner deposit: status %d", st)
+		}
+		if st, _ := f.deposit(t, owner, []byte("over the limit"), 0); st != StatusFull {
+			t.Fatalf("full queue for the owner: status %d, want %d", st, StatusFull)
+		}
+		if st, _, err := f.srv.Deposit(external, Deposit{Req: 1, Queue: f.queue, Blob: []byte("over the limit")}); err != nil || st != StatusRefused {
+			t.Fatalf("full queue for the external sender: status %d err %v, want refused", st, err)
+		}
+	})
 }
 
 // One proof of work buys one public queue slot: a repeat of the same blob is answered stored and adds
@@ -488,8 +569,10 @@ func TestPrivateQueueLimits(t *testing.T) {
 func TestDepositRejections(t *testing.T) {
 	f := newFixture(t, nil)
 	p := f.peer(1)
-	if st, _ := f.deposit(t, p, []byte("x"), 0); st != StatusUnknownQueue {
-		t.Fatalf("deposit to an unknown queue: %d", st)
+	// Without a queue record there is no owner to authenticate, so even the creator of the queue
+	// sees the external refusal: it must not become an oracle for whether a queue exists.
+	if st, _ := f.deposit(t, p, []byte("x"), 0); st != StatusRefused {
+		t.Fatalf("deposit to an unknown queue: %d, want refused", st)
 	}
 	f.create(t, p, 0, false, 0)
 	if st, _ := f.deposit(t, p, bytes.Repeat([]byte{1}, MaxBlob+1), 0); st != StatusTooLarge {
@@ -593,8 +676,56 @@ func TestForwardRequiresRelaySelf(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := f.srv.Forward(context.Background(), p, Forward{Req: 1, Relay: bytes.Repeat([]byte{0xff}, 32), Sealed: sealed})
-	if st != StatusRelayUnreachable {
-		t.Fatalf("relay != self: status %d", st)
+	// F is the external sender's view: its own relay-unreachable (5) is the same refusal as every
+	// other failure of the forwarding path (services.md 5.3, AD20).
+	if st != StatusRefused {
+		t.Fatalf("relay != self: status %d, want refused", st)
+	}
+}
+
+type forwarderFake struct {
+	connected bool
+	status    uint32
+	err       error
+}
+
+func (f *forwarderFake) Connected([]byte) bool { return f.connected }
+
+func (f *forwarderFake) Forward(context.Context, Forward) (uint32, error) {
+	return f.status, f.err
+}
+
+// F passes on what M answered, but the caller is the external sender: only stored and too-large keep
+// their meaning; 1, 2, 4, 5 and 6 all become refused (services.md 5.3, AD20).
+func TestForwarderMapsTheExternalRefusals(t *testing.T) {
+	cases := []struct {
+		name   string
+		status uint32
+		err    error
+		want   uint32
+	}{
+		{"stored", StatusStored, nil, StatusStored},
+		{"too-large", StatusTooLarge, nil, StatusTooLarge},
+		{"unknown-queue", StatusUnknownQueue, nil, StatusRefused},
+		{"full", StatusFull, nil, StatusRefused},
+		{"relay-unreachable", StatusRelayUnreachable, nil, StatusRefused},
+		{"pow-required", StatusPowRequired, nil, StatusRefused},
+		{"refused", StatusRefused, nil, StatusRefused},
+		{"dial error", 0, errors.New("no route"), StatusRefused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, func(c *Config) {
+				c.Forwarder = &forwarderFake{connected: true, status: tc.status, err: tc.err}
+			})
+			p := f.peer(1)
+			st, err := f.srv.Forward(context.Background(), p, Forward{
+				Req: 1, Relay: bytes.Repeat([]byte{0xaa}, 32), Sealed: []byte("sealed body"),
+			})
+			if err != nil || st != tc.want {
+				t.Fatalf("status %d err %v, want %d", st, err, tc.want)
+			}
+		})
 	}
 }
 
